@@ -11,6 +11,6 @@ The implementation was designed after auditing mature open-source SillyTavern ex
 - WTracker — MIT. Structured schema and tracker editing patterns.
 - 3d-force-graph — MIT. Loaded at runtime from the configured CDN URL when available.
 
-Amily2 was examined only for interaction placement and workflow. Its source, CSS, assets and derivative UI code are not included.
+Amily2 (CC BY-NC-ND 4.0) was examined only as a non-code interaction and workflow reference. Its source, CSS, assets, prompts and derivative UI code are not included.
 
 See `UPSTREAM_SOURCES.md` for repository locations and usage scope. Copyright remains with the respective authors.

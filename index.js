@@ -3,7 +3,7 @@
 
     const MODULE_NAME = 'mirrorAbyss';
     const DISPLAY_NAME = '镜渊';
-    const VERSION = '1.0.0-rc.1';
+    const VERSION = '1.0.0-rc.3';
     const EXTENSION_PATH = 'third-party/MA';
     const GRAPH_LIB_URL = 'https://unpkg.com/3d-force-graph@1.79.1/dist/3d-force-graph.min.js';
     const TABLE_KEYS = ['focus', 'spacetime', 'characters', 'relationships', 'items', 'events', 'regions', 'foundations'];
@@ -27,9 +27,26 @@
         largeSummaryCount: 6,
         graphLibraryUrl: GRAPH_LIB_URL,
         showMessagePanels: true,
+        showFloatingButton: false,
+        showTopButton: true,
+
+        generationMode: 'independent',
+        apiProvider: 'openai-compatible',
+        apiBaseUrl: '',
+        apiKey: '',
+        apiModel: '',
+        apiTemperature: 0.1,
+        apiMaxTokens: 4096,
+        apiJsonMode: false,
         stateProfile: '',
         smallSummaryProfile: '',
         largeSummaryProfile: '',
+        auditProfile: '',
+
+        ruleAuditEnabled: false,
+        ruleAuditPrompt: '',
+        ruleAuditFailAction: 'withdraw',
+
         lorebookSync: true,
         lorebookName: '',
         autoCreateChatLorebook: true,
@@ -47,6 +64,9 @@
     let lorebookSyncTimer = null;
     let worldInfoModulePromise = null;
     let graphSearch = '';
+    const messageProcessPromises = new Map();
+    const pipelineTimers = new Map();
+    let controlCenterTab = 'overview';
 
     function ctx() {
         return window.SillyTavern?.getContext?.();
@@ -72,7 +92,17 @@
         const context = ctx();
         if (!context) return {};
         context.chatMetadata ||= {};
-        context.chatMetadata[MODULE_NAME] ||= { schemaVersion: 1, lorebookName: '', lastSyncAt: null, lastSyncError: null };
+        context.chatMetadata[MODULE_NAME] ||= {
+            schemaVersion: 2,
+            lorebookName: '',
+            lastSyncAt: null,
+            lastSyncError: null,
+            lastSyncState: 'idle',
+            lastAuditFailure: null,
+        };
+        const meta = context.chatMetadata[MODULE_NAME];
+        if (!Object.hasOwn(meta, 'lastSyncState')) meta.lastSyncState = meta.lastSyncError ? 'error' : meta.lastSyncAt ? 'success' : 'idle';
+        if (!Object.hasOwn(meta, 'lastAuditFailure')) meta.lastAuditFailure = null;
         return context.chatMetadata[MODULE_NAME];
     }
 
@@ -96,14 +126,112 @@
     }
 
     function safeProfileName(value) {
-        return String(value || '').replace(/[\"|\r\n]/g, '').trim();
+        return String(value || '').replace(/["|\r\n]/g, '').trim();
     }
 
-    async function generateTask(task, options) {
+    function normalizeApiBaseUrl(value, provider = settings().apiProvider) {
+        let url = String(value || '').trim().replace(/\/+$/, '');
+        if (provider === 'openai-compatible') {
+            url = url.replace(/\/chat\/completions$/i, '').replace(/\/models$/i, '');
+        }
+        if (provider === 'anthropic') url = url.replace(/\/messages$/i, '');
+        return url;
+    }
+
+    function independentApiConfigured() {
+        const cfg = settings();
+        return Boolean(cfg.apiProvider && cfg.apiKey && cfg.apiModel && (cfg.apiProvider === 'gemini' || normalizeApiBaseUrl(cfg.apiBaseUrl, cfg.apiProvider)));
+    }
+
+    function textFromOpenAiContent(content) {
+        if (typeof content === 'string') return content;
+        if (Array.isArray(content)) return content.map(part => typeof part === 'string' ? part : part?.text || part?.content || '').join('');
+        return String(content || '');
+    }
+
+    async function callIndependentApi(options = {}) {
+        const cfg = settings();
+        if (!independentApiConfigured()) throw new Error('独立模型尚未配置完整：请填写 API 地址、密钥和模型');
+        const provider = cfg.apiProvider || 'openai-compatible';
+        const systemPrompt = String(options.systemPrompt || '');
+        const prompt = String(options.prompt || '');
+        const temperature = Math.max(0, Math.min(2, Number(cfg.apiTemperature) || 0));
+        const maxTokens = Math.max(128, Math.min(65536, Number(cfg.apiMaxTokens) || 4096));
+        let response;
+
+        try {
+            if (provider === 'gemini') {
+                const base = normalizeApiBaseUrl(cfg.apiBaseUrl || 'https://generativelanguage.googleapis.com/v1beta', provider) || 'https://generativelanguage.googleapis.com/v1beta';
+                const model = String(cfg.apiModel).replace(/^models\//, '');
+                const url = `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.apiKey)}`;
+                const body = {
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: { temperature, maxOutputTokens: maxTokens },
+                };
+                if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
+                if (options.jsonSchema) body.generationConfig.responseMimeType = 'application/json';
+                response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                if (!response.ok) throw new Error(`Gemini 请求失败 ${response.status}: ${(await response.text()).slice(0, 500)}`);
+                const data = await response.json();
+                return data?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('') || '';
+            }
+
+            if (provider === 'anthropic') {
+                const base = normalizeApiBaseUrl(cfg.apiBaseUrl || 'https://api.anthropic.com/v1', provider) || 'https://api.anthropic.com/v1';
+                response = await fetch(`${base}/messages`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': cfg.apiKey,
+                        'anthropic-version': '2023-06-01',
+                        'anthropic-dangerous-direct-browser-access': 'true',
+                    },
+                    body: JSON.stringify({
+                        model: cfg.apiModel,
+                        system: systemPrompt,
+                        messages: [{ role: 'user', content: prompt }],
+                        temperature,
+                        max_tokens: maxTokens,
+                    }),
+                });
+                if (!response.ok) throw new Error(`Anthropic 请求失败 ${response.status}: ${(await response.text()).slice(0, 500)}`);
+                const data = await response.json();
+                return data?.content?.map(part => part?.text || '').join('') || '';
+            }
+
+            const base = normalizeApiBaseUrl(cfg.apiBaseUrl, provider);
+            const body = {
+                model: cfg.apiModel,
+                messages: [
+                    ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+                    { role: 'user', content: prompt },
+                ],
+                temperature,
+                max_tokens: maxTokens,
+                stream: false,
+            };
+            if (options.jsonSchema && cfg.apiJsonMode) body.response_format = { type: 'json_object' };
+            response = await fetch(`${base}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+                body: JSON.stringify(body),
+            });
+            if (!response.ok) throw new Error(`OpenAI 兼容请求失败 ${response.status}: ${(await response.text()).slice(0, 500)}`);
+            const data = await response.json();
+            return textFromOpenAiContent(data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '');
+        } catch (error) {
+            if (/Failed to fetch|NetworkError|CORS/i.test(String(error?.message || error))) {
+                throw new Error('独立 API 无法从浏览器访问，可能被 CORS 阻止。请改用允许跨域的反代，或切换为酒馆连接配置模式。');
+            }
+            throw error;
+        }
+    }
+
+    async function generateWithProfile(task, options) {
         const context = ctx();
         if (!context?.generateRaw) throw new Error('当前酒馆版本未提供 generateRaw');
         const cfg = settings();
-        const key = task === 'state' ? 'stateProfile' : task === 'small' ? 'smallSummaryProfile' : 'largeSummaryProfile';
+        const key = task === 'state' ? 'stateProfile' : task === 'small' ? 'smallSummaryProfile' : task === 'large' ? 'largeSummaryProfile' : 'auditProfile';
         const profile = safeProfileName(cfg[key]);
         if (!profile) return await context.generateRaw(options);
         try {
@@ -122,6 +250,50 @@
             console.warn(`[MirrorAbyss] Profile ${profile} unavailable; falling back to current connection`, error);
             return await context.generateRaw(options);
         }
+    }
+
+    async function generateTask(task, options) {
+        const mode = settings().generationMode || 'independent';
+        if (mode === 'independent') return await callIndependentApi(options);
+        if (mode === 'profile') return await generateWithProfile(task, options);
+        const context = ctx();
+        if (!context?.generateRaw) throw new Error('当前酒馆版本未提供 generateRaw');
+        return await context.generateRaw(options);
+    }
+
+    async function fetchIndependentModels() {
+        const cfg = settings();
+        if (!cfg.apiKey) throw new Error('请先填写 API 密钥');
+        const provider = cfg.apiProvider || 'openai-compatible';
+        if (provider === 'anthropic') throw new Error('Anthropic 未提供通用模型列表接口，请手动填写模型名');
+        try {
+            let response;
+            if (provider === 'gemini') {
+                const base = normalizeApiBaseUrl(cfg.apiBaseUrl || 'https://generativelanguage.googleapis.com/v1beta', provider) || 'https://generativelanguage.googleapis.com/v1beta';
+                response = await fetch(`${base}/models?key=${encodeURIComponent(cfg.apiKey)}`);
+                if (!response.ok) throw new Error(`模型列表请求失败 ${response.status}: ${(await response.text()).slice(0, 300)}`);
+                const data = await response.json();
+                return (data?.models || []).filter(model => model?.supportedGenerationMethods?.includes('generateContent')).map(model => String(model.name || '').replace(/^models\//, '')).filter(Boolean);
+            }
+            const base = normalizeApiBaseUrl(cfg.apiBaseUrl, provider);
+            if (!base) throw new Error('请填写 API 地址');
+            response = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${cfg.apiKey}` } });
+            if (!response.ok) throw new Error(`模型列表请求失败 ${response.status}: ${(await response.text()).slice(0, 300)}`);
+            const data = await response.json();
+            return (data?.data || data?.models || []).map(model => typeof model === 'string' ? model : model?.id || model?.name).filter(Boolean).sort();
+        } catch (error) {
+            if (/Failed to fetch|NetworkError|CORS/i.test(String(error?.message || error))) throw new Error('无法读取模型列表，可能被 CORS 阻止。可手动填写模型名，或改用允许跨域的 API 反代。');
+            throw error;
+        }
+    }
+
+    async function testIndependentApi() {
+        const raw = await callIndependentApi({
+            systemPrompt: '你是连接测试器。',
+            prompt: '只回复 MA_OK',
+        });
+        if (!/MA_OK/i.test(String(raw || ''))) throw new Error(`连接成功，但模型返回异常：${String(raw || '').slice(0, 120)}`);
+        return true;
     }
 
     function toast(kind, text) {
@@ -183,19 +355,31 @@
     function ensureMessageData(message) {
         if (!message) return null;
         message.extra ||= {};
-        message.extra[MODULE_NAME] ||= {
-            schemaVersion: 1,
+        message.extra[MODULE_NAME] ||= {};
+        const data = message.extra[MODULE_NAME];
+        const defaults = {
+            schemaVersion: 2,
             artifactId: makeId('artifact'),
             revision: 0,
             status: 'idle',
             tableSnapshot: null,
+            activeTableKey: 'focus',
             smallSummary: null,
             largeSummary: null,
             error: null,
             updatedAt: null,
+            sourceFingerprint: '',
+            auditStatus: 'idle',
+            auditError: null,
+            auditResult: null,
+            auditFingerprint: '',
             lorebookEntryIds: [],
         };
-        return message.extra[MODULE_NAME];
+        for (const [key, value] of Object.entries(defaults)) {
+            if (!Object.hasOwn(data, key)) data[key] = Array.isArray(value) ? [] : value;
+        }
+        data.schemaVersion = 2;
+        return data;
     }
 
     function previousSnapshot(beforeIndex) {
@@ -225,6 +409,164 @@
         return -1;
     }
 
+    function hashText(value) {
+        const text = String(value || '');
+        let hash = 2166136261;
+        for (let i = 0; i < text.length; i++) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(36);
+    }
+
+    function messageFingerprint(index) {
+        const message = getMessage(index);
+        return hashText(`${previousUserText(index)}
+---MA---
+${String(message?.mes || '')}`);
+    }
+
+    function auditSystemPrompt() {
+        return `你是“镜渊”规则校正器。你只审核给定的AI正文是否违反玩家提供的规则，不续写，不润色。
+
+第一行必须且只能是 MA_OK 或 MA_FAIL。
+第二行开始给出简短、可执行的理由；通过时理由不超过一句。
+不要输出Markdown代码块，不要输出其他标签。
+只有存在明确违规时才判定 MA_FAIL；不确定时判定 MA_OK。`;
+    }
+
+    function parseAuditResult(raw) {
+        const text = String(raw || '').trim().replace(/\r/g, '');
+        const lines = text.split('\n');
+        const first = String(lines[0] || '').trim().toUpperCase();
+        const reason = lines.slice(1).join('\n').trim();
+        if (first === 'MA_OK') return { passed: true, reason: reason || '通过' };
+        if (first === 'MA_FAIL') return { passed: false, reason: reason || '违反规则' };
+        throw new Error('规则校正模型未返回 MA_OK 或 MA_FAIL');
+    }
+
+    async function withdrawAssistantMessage(index, reason) {
+        const messageIndex = Number(index);
+        if (messageIndex !== latestAssistantIndex()) throw new Error('仅能自动撤回最新一条AI消息');
+        const message = getMessage(messageIndex);
+        if (!message || message.is_user) return false;
+        const meta = chatMeta();
+        meta.lastAuditFailure = {
+            at: new Date().toISOString(),
+            reason: String(reason || '规则校正未通过'),
+            excerpt: String(message.mes || '').slice(0, 240),
+        };
+        await persistMetadata();
+
+        const beforeLength = getChat().length;
+        let deletedByCommand = false;
+        try {
+            const slash = await import(/* webpackIgnore: true */ '/scripts/slash-commands.js');
+            if (typeof slash.executeSlashCommands === 'function') {
+                await slash.executeSlashCommands('/del 1');
+                deletedByCommand = getChat().length < beforeLength;
+            }
+        } catch (error) {
+            console.warn('[MirrorAbyss] /del 1 unavailable; using local fallback', error);
+        }
+
+        if (!deletedByCommand) {
+            getChat().splice(messageIndex, 1);
+            messageElement(messageIndex)?.remove();
+            await persistChat();
+            try {
+                const context = ctx();
+                await context?.eventSource?.emit?.(context?.event_types?.MESSAGE_DELETED, messageIndex);
+            } catch (error) {
+                console.warn('[MirrorAbyss] Could not emit MESSAGE_DELETED', error);
+            }
+        }
+        renderAllPanels();
+        scheduleLorebookSync('audit withdrawal');
+        updateUnifiedStatus();
+        toast('warning', `规则校正未通过，已撤回AI消息：${String(reason || '').slice(0, 120)}`);
+        return true;
+    }
+
+    async function auditMessage(index, { force = false } = {}) {
+        const cfg = settings();
+        if (!cfg.ruleAuditEnabled) return { passed: true, skipped: true };
+        if (!String(cfg.ruleAuditPrompt || '').trim()) throw new Error('已启用规则校正，但审核提示词为空');
+        const messageIndex = Number(index);
+        const message = getMessage(messageIndex);
+        if (!message || message.is_user || !String(message.mes || '').trim()) return { passed: true, skipped: true };
+        const data = ensureMessageData(message);
+        const fingerprint = messageFingerprint(messageIndex);
+        if (!force && data.auditFingerprint === fingerprint && data.auditStatus === 'passed') return { passed: true, cached: true };
+
+        data.auditStatus = 'processing';
+        data.auditError = null;
+        renderMessagePanel(messageIndex);
+        updateUnifiedStatus();
+        try {
+            const raw = await generateTask('audit', {
+                systemPrompt: auditSystemPrompt(),
+                prompt: `【玩家审核规则】
+${cfg.ruleAuditPrompt}
+
+【玩家本轮输入】
+${previousUserText(messageIndex) || '（空）'}
+
+【待审核AI正文】
+${String(message.mes || '')}`,
+            });
+            const result = parseAuditResult(raw);
+            const current = getMessage(messageIndex);
+            if (!current || current.is_user || messageFingerprint(messageIndex) !== fingerprint) return { passed: false, stale: true };
+            const currentData = ensureMessageData(current);
+            currentData.auditFingerprint = fingerprint;
+            currentData.auditResult = result.reason;
+            currentData.auditError = result.passed ? null : result.reason;
+            currentData.auditStatus = result.passed ? 'passed' : 'failed';
+            await persistChat();
+            renderMessagePanel(messageIndex);
+            updateUnifiedStatus();
+            if (!result.passed && cfg.ruleAuditFailAction === 'withdraw') {
+                await withdrawAssistantMessage(messageIndex, result.reason);
+            }
+            return result;
+        } catch (error) {
+            const current = getMessage(messageIndex);
+            if (current && !current.is_user) {
+                const currentData = ensureMessageData(current);
+                currentData.auditStatus = 'error';
+                currentData.auditError = String(error?.message || error);
+                await persistChat();
+                renderMessagePanel(messageIndex);
+            }
+            updateUnifiedStatus();
+            throw error;
+        }
+    }
+
+    async function runMessagePipeline(index, { force = false } = {}) {
+        const messageIndex = Number(index);
+        const message = getMessage(messageIndex);
+        if (!message || message.is_user || !String(message.mes || '').trim() || !settings().enabled) return;
+        try {
+            const audit = await auditMessage(messageIndex, { force });
+            if (!audit?.passed) return;
+            await processMessage(messageIndex, { force });
+        } catch (error) {
+            toast('error', `镜渊处理失败：${error?.message || error}`);
+        }
+    }
+
+    function scheduleMessagePipeline(index, { force = false, delay = 220 } = {}) {
+        const messageIndex = Number(index);
+        if (!Number.isInteger(messageIndex) || messageIndex < 0) return;
+        clearTimeout(pipelineTimers.get(messageIndex));
+        pipelineTimers.set(messageIndex, setTimeout(() => {
+            pipelineTimers.delete(messageIndex);
+            runMessagePipeline(messageIndex, { force });
+        }, delay));
+    }
+
     async function persistChat() {
         const context = ctx();
         try {
@@ -247,12 +589,12 @@
         const jobId = makeId('job');
         const job = async () => {
             activeJobs.set(jobId, { label, startedAt: Date.now() });
-            updateFloatingStatus();
+            updateUnifiedStatus();
             try {
                 return await work(jobId);
             } finally {
                 activeJobs.delete(jobId);
-                updateFloatingStatus();
+                updateUnifiedStatus();
             }
         };
         const result = queueTail.then(job, job);
@@ -309,8 +651,6 @@
     }
 
     async function generateStateSnapshot(index) {
-        const context = ctx();
-        if (!context?.generateRaw) throw new Error('当前酒馆版本未提供 generateRaw');
         const message = getMessage(index);
         const oldSnapshot = previousSnapshot(index);
         const playerText = previousUserText(index);
@@ -338,47 +678,66 @@
         const message = getMessage(messageIndex);
         if (!message || message.is_user || !String(message.mes || '').trim()) return;
         const cfg = settings();
-        if (!cfg.enabled || !cfg.autoState && !force) return;
+        if (!cfg.enabled || (!cfg.autoState && !force)) return;
+        if (messageProcessPromises.has(messageIndex)) return await messageProcessPromises.get(messageIndex);
 
-        const data = ensureMessageData(message);
-        if (!force && data.status === 'synced' && data.tableSnapshot) {
-            renderMessagePanel(messageIndex);
-            return;
-        }
-
-        const revision = Number(data.revision || 0) + 1;
-        data.revision = revision;
-        data.status = 'processing';
-        data.error = null;
-        renderMessagePanel(messageIndex);
-
-        return enqueue(`更新第 ${messageIndex + 1} 条状态`, async () => {
-            try {
-                const snapshot = await generateStateSnapshot(messageIndex);
-                const currentMessage = getMessage(messageIndex);
-                const currentData = currentMessage?.extra?.[MODULE_NAME];
-                if (!currentMessage || currentMessage.is_user || currentData?.revision !== revision) return;
-                currentData.tableSnapshot = snapshot;
-                currentData.status = 'synced';
-                currentData.error = null;
-                currentData.updatedAt = new Date().toISOString();
-                await persistChat();
+        const task = (async () => {
+            const currentMessage = getMessage(messageIndex);
+            if (!currentMessage || currentMessage.is_user) return;
+            const data = ensureMessageData(currentMessage);
+            const fingerprint = messageFingerprint(messageIndex);
+            if (!force && data.status === 'synced' && data.tableSnapshot && data.sourceFingerprint === fingerprint) {
                 renderMessagePanel(messageIndex);
-                await maybeAutoSummaries(messageIndex);
-                scheduleLorebookSync('state updated');
-                refreshWorkspaceIfOpen();
-            } catch (error) {
-                const currentMessage = getMessage(messageIndex);
-                const currentData = currentMessage?.extra?.[MODULE_NAME];
-                if (currentData?.revision === revision) {
-                    currentData.status = 'error';
-                    currentData.error = String(error?.message || error);
+                return;
+            }
+
+            const revision = Number(data.revision || 0) + 1;
+            data.revision = revision;
+            data.status = 'processing';
+            data.error = null;
+            renderMessagePanel(messageIndex);
+            updateUnifiedStatus();
+
+            return await enqueue(`更新第 ${messageIndex + 1} 条状态`, async () => {
+                try {
+                    const snapshot = await generateStateSnapshot(messageIndex);
+                    const latestMessage = getMessage(messageIndex);
+                    const latestData = latestMessage?.extra?.[MODULE_NAME];
+                    if (!latestMessage || latestMessage.is_user || latestData?.revision !== revision) return;
+                    if (messageFingerprint(messageIndex) !== fingerprint) return;
+                    latestData.tableSnapshot = snapshot;
+                    latestData.status = 'synced';
+                    latestData.sourceFingerprint = fingerprint;
+                    latestData.error = null;
+                    latestData.updatedAt = new Date().toISOString();
+                    if (!TABLE_KEYS.includes(latestData.activeTableKey)) latestData.activeTableKey = 'focus';
                     await persistChat();
                     renderMessagePanel(messageIndex);
+                    await maybeAutoSummaries(messageIndex);
+                    scheduleLorebookSync('state updated');
+                    refreshWorkspaceIfOpen();
+                    updateUnifiedStatus();
+                } catch (error) {
+                    const latestMessage = getMessage(messageIndex);
+                    const latestData = latestMessage?.extra?.[MODULE_NAME];
+                    if (latestData?.revision === revision) {
+                        latestData.status = 'error';
+                        latestData.error = String(error?.message || error);
+                        await persistChat();
+                        renderMessagePanel(messageIndex);
+                    }
+                    updateUnifiedStatus();
+                    toast('error', `状态更新失败：${error?.message || error}`);
                 }
-                toast('error', `状态更新失败：${error?.message || error}`);
-            }
-        });
+            });
+        })();
+
+        messageProcessPromises.set(messageIndex, task);
+        try {
+            return await task;
+        } finally {
+            if (messageProcessPromises.get(messageIndex) === task) messageProcessPromises.delete(messageIndex);
+        }
     }
 
     function validSyncedAssistantIndices() {
@@ -509,7 +868,7 @@
         if (cfg.autoLargeSummary && pendingSmallSummaryIndicesForLarge().length >= Math.max(1, Number(cfg.largeSummaryCount) || 6)) {
             await generateLargeSummary(anchorIndex).catch(error => toast('error', `大总结失败：${error.message}`));
         }
-        updateFloatingStatus();
+        updateUnifiedStatus();
     }
 
 
@@ -698,6 +1057,10 @@
     async function reconcileLorebook({ silent = true } = {}) {
         if (!settings().lorebookSync) return { skipped: true };
         const meta = chatMeta();
+        meta.lastSyncState = 'processing';
+        meta.lastSyncError = null;
+        updateUnifiedStatus();
+        await persistMetadata();
         try {
             const wi = await worldInfoApi();
             const name = await resolveLorebookName({ create: true });
@@ -743,13 +1106,17 @@
             meta.lorebookName = name;
             meta.lastSyncAt = new Date().toISOString();
             meta.lastSyncError = null;
+            meta.lastSyncState = 'success';
             await persistChat();
             await persistMetadata();
+            updateUnifiedStatus();
             if (!silent) toast('success', `记忆已同步到世界书：${name}`);
             return { name, changed, desired: desired.size };
         } catch (error) {
+            meta.lastSyncState = 'error';
             meta.lastSyncError = String(error?.message || error);
             await persistMetadata();
+            updateUnifiedStatus();
             if (!silent) toast('error', `世界书同步失败：${meta.lastSyncError}`);
             console.error('[MirrorAbyss] lorebook sync failed', error);
             return { error };
@@ -799,49 +1166,93 @@
         refreshWorkspaceIfOpen();
     }
 
+    function statusLabel(value) {
+        const map = {
+            idle: '待处理', processing: '处理中', synced: '已完成', error: '失败',
+            passed: '校正通过', failed: '校正未通过', success: '同步成功',
+        };
+        return map[value] || String(value || '待处理');
+    }
+
+    function statusTone(value) {
+        if (['error', 'failed'].includes(value)) return 'danger';
+        if (['processing'].includes(value)) return 'working';
+        if (['synced', 'passed', 'success'].includes(value)) return 'success';
+        return 'neutral';
+    }
+
     function renderRows(snapshot, tableKey, messageIndex) {
         const rows = snapshot?.[tableKey] || [];
-        const cards = rows.map(row => `
-            <article class="ma-row" data-row-id="${escapeHtml(row.id)}" data-table-key="${tableKey}">
-                <div class="ma-row-main">
-                    <div class="ma-row-title">${escapeHtml(row.title)}</div>
-                    <div class="ma-row-content">${escapeHtml(row.content)}</div>
-                    <div class="ma-row-meta">${escapeHtml(row.status)}${row.keywords?.length ? ` · ${escapeHtml(row.keywords.join('、'))}` : ''}</div>
-                </div>
-                <div class="ma-row-actions">
-                    <button type="button" data-ma-action="row-edit" data-index="${messageIndex}" data-table-key="${tableKey}" data-row-id="${escapeHtml(row.id)}" title="修改">✎</button>
-                    <button type="button" data-ma-action="row-delete" data-index="${messageIndex}" data-table-key="${tableKey}" data-row-id="${escapeHtml(row.id)}" title="删除">×</button>
-                </div>
-            </article>`).join('');
-        return `${cards || '<div class="ma-empty">暂无记录</div>'}<button type="button" class="ma-add-row" data-ma-action="row-add" data-index="${messageIndex}" data-table-key="${tableKey}">＋ 添加</button>`;
+        const bodyRows = rows.map((row, rowIndex) => `
+            <tr class="ma-row" data-row-id="${escapeHtml(row.id)}" data-table-key="${tableKey}">
+                <td class="ma-row-index">${rowIndex + 1}</td>
+                <td class="ma-row-title">${escapeHtml(row.title)}</td>
+                <td class="ma-row-content">${escapeHtml(row.content)}</td>
+                <td class="ma-row-meta"><span class="ma-state-pill">${escapeHtml(row.status)}</span>${row.keywords?.length ? `<div class="ma-row-keywords">${row.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}</td>
+                <td class="ma-row-actions">
+                    <button type="button" data-ma-action="row-edit" data-index="${messageIndex}" data-table-key="${tableKey}" data-row-id="${escapeHtml(row.id)}" title="修改"><i class="fa-solid fa-pen"></i></button>
+                    <button type="button" data-ma-action="row-delete" data-index="${messageIndex}" data-table-key="${tableKey}" data-row-id="${escapeHtml(row.id)}" title="删除"><i class="fa-solid fa-trash"></i></button>
+                </td>
+            </tr>`).join('');
+        const table = rows.length ? `
+            <div class="ma-table-scroll">
+                <table class="ma-data-table">
+                    <thead>
+                        <tr><th>#</th><th>对象</th><th>当前记录</th><th>状态与关键词</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>${bodyRows}</tbody>
+                </table>
+            </div>` : '<div class="ma-empty ma-table-empty">本分类暂无记录</div>';
+        return `${table}<button type="button" class="ma-add-row" data-ma-action="row-add" data-index="${messageIndex}" data-table-key="${tableKey}"><i class="fa-solid fa-plus"></i> 添加${TABLE_LABELS[tableKey]}</button>`;
     }
 
     function panelHtml(index, data) {
         const snapshot = data?.tableSnapshot;
-        const statusText = data?.status === 'processing' ? '整理中' : data?.status === 'error' ? '未同步' : snapshot ? '已同步' : '等待同步';
-        const sections = snapshot ? TABLE_KEYS.map((key, order) => `
-            <details class="ma-section" ${order < 2 ? 'open' : ''}>
-                <summary><span>${TABLE_LABELS[key]}</span><span>${snapshot[key]?.length || 0}</span></summary>
-                <div class="ma-section-body">${renderRows(snapshot, key, index)}</div>
-            </details>`).join('') : '<div class="ma-empty">本条正文尚未生成状态表。</div>';
+        const meta = chatMeta();
+        const activeKey = TABLE_KEYS.includes(data?.activeTableKey) ? data.activeTableKey : (TABLE_KEYS.find(key => snapshot?.[key]?.length) || 'focus');
+        const stateStatus = data?.status || 'idle';
+        const auditStatus = settings().ruleAuditEnabled ? (data?.auditStatus || 'idle') : 'disabled';
+        const loreStatus = settings().lorebookSync ? (meta.lastSyncState || 'idle') : 'disabled';
+        const tabs = snapshot ? TABLE_KEYS.map(key => `
+            <button type="button" class="ma-table-tab ${key === activeKey ? 'active' : ''}" data-ma-action="table-tab" data-index="${index}" data-table-key="${key}" aria-selected="${key === activeKey}">
+                <span>${TABLE_LABELS[key]}</span><b>${snapshot[key]?.length || 0}</b>
+            </button>`).join('') : '';
+        const workbook = snapshot ? `
+            <div class="ma-workbook">
+                <div class="ma-table-tabs" role="tablist">${tabs}</div>
+                <div class="ma-workbook-head"><b>${TABLE_LABELS[activeKey]}</b><span>当前快照 · 可直接编辑</span></div>
+                <div class="ma-workbook-body">${renderRows(snapshot, activeKey, index)}</div>
+            </div>` : '<div class="ma-empty ma-empty-state">本条正文尚未生成状态表。点击“重新整理”开始。</div>';
+        const syncError = meta.lastSyncError ? `<div class="ma-error"><b>世界书同步失败</b><div>${escapeHtml(meta.lastSyncError)}</div><button type="button" data-ma-action="sync-now">重新同步</button></div>` : '';
         return `
             <div class="ma-panel-head">
-                <button type="button" class="ma-panel-toggle" aria-expanded="false">镜渊状态 · ${statusText}</button>
+                <button type="button" class="ma-panel-toggle" aria-expanded="false">
+                    <span class="ma-panel-title">镜渊状态</span>
+                    <span class="ma-chip ${statusTone(stateStatus)}">${statusLabel(stateStatus)}</span>
+                </button>
                 <div class="ma-panel-actions">
-                    <button type="button" data-ma-action="retry" data-index="${index}" title="重新整理">↻</button>
-                    <button type="button" data-ma-action="edit" data-index="${index}" title="编辑表格">✎</button>
-                    <button type="button" data-ma-action="graph" data-index="${index}" title="打开图谱">◎</button>
+                    <button type="button" data-ma-action="retry" data-index="${index}" title="重新整理"><i class="fa-solid fa-rotate"></i></button>
+                    <button type="button" data-ma-action="edit" data-index="${index}" title="高级编辑"><i class="fa-solid fa-code"></i></button>
+                    <button type="button" data-ma-action="graph" data-index="${index}" title="打开图谱"><i class="fa-solid fa-diagram-project"></i></button>
                 </div>
             </div>
             <div class="ma-panel-body" hidden>
-                ${data?.error ? `<div class="ma-error">${escapeHtml(data.error)}</div>` : ''}
+                <div class="ma-status-strip">
+                    <span>规则校正 <b class="ma-chip ${statusTone(auditStatus)}">${auditStatus === 'disabled' ? '未启用' : statusLabel(auditStatus)}</b></span>
+                    <span>表格整理 <b class="ma-chip ${statusTone(stateStatus)}">${statusLabel(stateStatus)}</b></span>
+                    <span>世界书 <b class="ma-chip ${statusTone(loreStatus)}">${loreStatus === 'disabled' ? '未启用' : statusLabel(loreStatus)}</b></span>
+                </div>
+                ${data?.auditError ? `<div class="ma-error"><b>规则校正异常</b><div>${escapeHtml(data.auditError)}</div></div>` : ''}
+                ${data?.error ? `<div class="ma-error"><b>表格整理失败</b><div>${escapeHtml(data.error)}</div></div>` : ''}
+                ${syncError}
                 <div class="ma-progress-line">小总结 ${pendingSmallTurnIndices().length}/${settings().smallSummaryTurns} · 大总结 ${pendingSmallSummaryIndicesForLarge().length}/${settings().largeSummaryCount}</div>
-                ${sections}
+                ${workbook}
                 ${data?.smallSummary ? `<details class="ma-summary"><summary>小总结：${escapeHtml(data.smallSummary.title)}</summary><pre>${escapeHtml(data.smallSummary.summary)}</pre><div><button data-ma-action="summary-edit" data-kind="small" data-index="${index}">编辑</button><button data-ma-action="summary-delete" data-kind="small" data-index="${index}">删除</button></div></details>` : ''}
                 ${data?.largeSummary ? `<details class="ma-summary"><summary>大总结：${escapeHtml(data.largeSummary.title)}</summary><pre>${escapeHtml(data.largeSummary.summary)}</pre><div><button data-ma-action="summary-edit" data-kind="large" data-index="${index}">编辑</button><button data-ma-action="summary-delete" data-kind="large" data-index="${index}">删除</button></div></details>` : ''}
                 <div class="ma-inline-buttons">
                     <button type="button" data-ma-action="small" data-index="${index}">生成小总结</button>
                     <button type="button" data-ma-action="large" data-index="${index}">生成大总结</button>
+                    <button type="button" data-ma-action="sync-now">同步世界书</button>
                 </div>
             </div>`;
     }
@@ -871,7 +1282,7 @@
         getChat().forEach((message, index) => {
             if (!message?.is_user) renderMessagePanel(index);
         });
-        updateFloatingStatus();
+        updateUnifiedStatus();
     }
 
     function installDelegatedHandlers() {
@@ -889,7 +1300,7 @@
             if (!button) return;
             const action = button.dataset.maAction;
             const index = Number(button.dataset.index ?? latestAssistantIndex());
-            if (action === 'retry') processMessage(index, { force: true });
+            if (action === 'retry') runMessagePipeline(index, { force: true });
             if (action === 'edit') openSnapshotEditor(index);
             if (action === 'graph') openWorkspace(index);
             if (action === 'small') enqueue('生成小总结', () => generateSmallSummary(index, { force: true })).catch(error => toast('error', error.message));
@@ -897,9 +1308,352 @@
             if (action === 'row-add') addRow(index, button.dataset.tableKey);
             if (action === 'row-edit') editRow(index, button.dataset.tableKey, button.dataset.rowId);
             if (action === 'row-delete') deleteRow(index, button.dataset.tableKey, button.dataset.rowId);
+            if (action === 'table-tab') {
+                const message = getMessage(index);
+                const data = ensureMessageData(message);
+                if (data && TABLE_KEYS.includes(button.dataset.tableKey)) {
+                    data.activeTableKey = button.dataset.tableKey;
+                    renderMessagePanel(index);
+                    const body = messageElement(index)?.querySelector('.ma-message-panel .ma-panel-body');
+                    const toggle = messageElement(index)?.querySelector('.ma-message-panel .ma-panel-toggle');
+                    if (body) body.hidden = false;
+                    if (toggle) toggle.setAttribute('aria-expanded', 'true');
+                }
+            }
+            if (action === 'sync-now') enqueue('同步世界书', () => reconcileLorebook({ silent: false }));
             if (action === 'summary-edit') editSummary(index, button.dataset.kind);
             if (action === 'summary-delete') deleteSummary(index, button.dataset.kind);
         });
+    }
+
+    function selected(value, current) {
+        return value === current ? 'selected' : '';
+    }
+
+    function checked(value) {
+        return value ? 'checked' : '';
+    }
+
+    function latestMirrorData() {
+        const index = latestAssistantIndex();
+        return index >= 0 ? getMessage(index)?.extra?.[MODULE_NAME] || null : null;
+    }
+
+    function connectionStatusText() {
+        const cfg = settings();
+        if (cfg.generationMode === 'independent') return independentApiConfigured() ? '独立模型已配置' : '独立模型未完成配置';
+        if (cfg.generationMode === 'profile') return '使用酒馆连接配置';
+        return '跟随当前聊天连接';
+    }
+
+    function controlOverviewHtml() {
+        const cfg = settings();
+        const data = latestMirrorData();
+        const meta = chatMeta();
+        const lastFailure = meta.lastAuditFailure;
+        const cards = [
+            ['独立模型', connectionStatusText(), cfg.generationMode === 'independent' && !independentApiConfigured() ? 'danger' : 'success', 'plug'],
+            ['规则校正', cfg.ruleAuditEnabled ? statusLabel(data?.auditStatus || 'idle') : '未启用', statusTone(cfg.ruleAuditEnabled ? data?.auditStatus : 'neutral'), 'shield-halved'],
+            ['表格状态', statusLabel(data?.status || 'idle'), statusTone(data?.status || 'idle'), 'table-list'],
+            ['世界书同步', cfg.lorebookSync ? statusLabel(meta.lastSyncState || 'idle') : '未启用', statusTone(cfg.lorebookSync ? meta.lastSyncState : 'neutral'), 'book'],
+        ];
+        return `
+            <div class="ma-overview-grid">
+                ${cards.map(([title, value, tone, icon]) => `<div class="ma-status-card ${tone}"><i class="fa-solid fa-${icon}"></i><div><span>${title}</span><b>${escapeHtml(value)}</b></div></div>`).join('')}
+            </div>
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>当前进度</b><span>单聊天独立记录</span></div>
+                <div class="ma-metric-row">
+                    <div><b>${pendingSmallTurnIndices().length}</b><span>/ ${cfg.smallSummaryTurns} 小总结</span></div>
+                    <div><b>${pendingSmallSummaryIndicesForLarge().length}</b><span>/ ${cfg.largeSummaryCount} 大总结</span></div>
+                    <div><b>${validSyncedAssistantIndices().length}</b><span>已整理正文</span></div>
+                </div>
+            </div>
+            ${meta.lastSyncError ? `<div class="ma-alert danger"><b>世界书同步失败</b><p>${escapeHtml(meta.lastSyncError)}</p></div>` : ''}
+            ${data?.error ? `<div class="ma-alert danger"><b>表格整理失败</b><p>${escapeHtml(data.error)}</p></div>` : ''}
+            ${data?.auditError ? `<div class="ma-alert danger"><b>规则校正异常</b><p>${escapeHtml(data.auditError)}</p></div>` : ''}
+            ${lastFailure ? `<div class="ma-alert warning"><b>最近一次自动撤回</b><p>${escapeHtml(lastFailure.reason || '')}</p><small>${escapeHtml(lastFailure.at || '')}</small></div>` : ''}
+            <div class="ma-quick-actions">
+                <button type="button" data-ma-control-action="process-latest"><i class="fa-solid fa-rotate"></i> 整理最新正文</button>
+                <button type="button" data-ma-control-action="audit-latest"><i class="fa-solid fa-shield"></i> 校正最新正文</button>
+                <button type="button" data-ma-control-action="sync"><i class="fa-solid fa-arrows-rotate"></i> 同步世界书</button>
+                <button type="button" data-ma-control-action="graph"><i class="fa-solid fa-diagram-project"></i> 世界图谱</button>
+            </div>`;
+    }
+
+    function controlConnectionHtml() {
+        const cfg = settings();
+        return `
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>模型调用方式</b><span>正文模型与镜渊模型相互独立</span></div>
+                <div class="ma-segmented">
+                    <label><input type="radio" name="ma-generation-mode" data-ma-setting="generationMode" value="independent" ${cfg.generationMode === 'independent' ? 'checked' : ''}><span>独立 API</span></label>
+                    <label><input type="radio" name="ma-generation-mode" data-ma-setting="generationMode" value="profile" ${cfg.generationMode === 'profile' ? 'checked' : ''}><span>连接配置</span></label>
+                    <label><input type="radio" name="ma-generation-mode" data-ma-setting="generationMode" value="current" ${cfg.generationMode === 'current' ? 'checked' : ''}><span>当前连接</span></label>
+                </div>
+            </div>
+            <div class="ma-control-section ${cfg.generationMode === 'independent' ? '' : 'ma-muted-section'}">
+                <div class="ma-section-title"><b>独立 API</b><span>密钥保存在本机酒馆扩展设置中</span></div>
+                <div class="ma-form-grid">
+                    <label><span>接口类型</span><select data-ma-setting="apiProvider">
+                        <option value="openai-compatible" ${selected('openai-compatible', cfg.apiProvider)}>OpenAI 兼容</option>
+                        <option value="gemini" ${selected('gemini', cfg.apiProvider)}>Google Gemini</option>
+                        <option value="anthropic" ${selected('anthropic', cfg.apiProvider)}>Anthropic</option>
+                    </select></label>
+                    <label><span>模型</span><div class="ma-input-button"><input type="text" list="ma-model-list" data-ma-setting="apiModel" value="${escapeHtml(cfg.apiModel)}" placeholder="例如 gpt-4.1-mini"><button type="button" data-ma-control-action="models" title="读取模型列表"><i class="fa-solid fa-list"></i></button></div><datalist id="ma-model-list"></datalist></label>
+                </div>
+                <label><span>API 地址</span><input type="url" data-ma-setting="apiBaseUrl" value="${escapeHtml(cfg.apiBaseUrl)}" placeholder="OpenAI兼容示例：https://api.example.com/v1"></label>
+                <label><span>API 密钥</span><div class="ma-input-button"><input type="password" id="ma-api-key" autocomplete="new-password" data-ma-setting="apiKey" value="${escapeHtml(cfg.apiKey)}" placeholder="sk-..."><button type="button" data-ma-control-action="toggle-key" title="显示或隐藏密钥"><i class="fa-solid fa-eye"></i></button></div></label>
+                <div class="ma-form-grid">
+                    <label><span>温度</span><input type="number" min="0" max="2" step="0.05" data-ma-setting="apiTemperature" value="${Number(cfg.apiTemperature)}"></label>
+                    <label><span>最大输出 Token</span><input type="number" min="128" max="65536" step="128" data-ma-setting="apiMaxTokens" value="${Number(cfg.apiMaxTokens)}"></label>
+                </div>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="apiJsonMode" ${checked(cfg.apiJsonMode)}>OpenAI兼容接口支持 JSON Object 模式</label>
+                <div class="ma-quick-actions"><button type="button" data-ma-control-action="test-api"><i class="fa-solid fa-vial"></i> 测试独立模型</button></div>
+                <p class="ma-help">部分官方接口禁止浏览器跨域请求。出现 CORS 错误时，可使用允许跨域的反向代理，或切换到“连接配置”。</p>
+            </div>
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>酒馆连接配置回退</b><span>仅在“连接配置”模式下生效</span></div>
+                <div class="ma-form-grid">
+                    <label><span>表格整理</span><input type="text" data-ma-setting="stateProfile" value="${escapeHtml(cfg.stateProfile)}" placeholder="Connection Profile 名称"></label>
+                    <label><span>规则校正</span><input type="text" data-ma-setting="auditProfile" value="${escapeHtml(cfg.auditProfile)}"></label>
+                    <label><span>小总结</span><input type="text" data-ma-setting="smallSummaryProfile" value="${escapeHtml(cfg.smallSummaryProfile)}"></label>
+                    <label><span>大总结</span><input type="text" data-ma-setting="largeSummaryProfile" value="${escapeHtml(cfg.largeSummaryProfile)}"></label>
+                </div>
+            </div>`;
+    }
+
+    function controlStateHtml() {
+        const cfg = settings();
+        return `
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>状态表</b><span>每条 AI 正文对应一份可编辑快照</span></div>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="autoState" ${checked(cfg.autoState)}>每轮自动整理表格</label>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showMessagePanels" ${checked(cfg.showMessagePanels)}>在正文下显示表格面板</label>
+            </div>
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>分层总结</b><span>回合数可自行调整</span></div>
+                <div class="ma-form-grid">
+                    <label><span>小总结回合数</span><input type="number" min="1" max="100" data-ma-setting="smallSummaryTurns" value="${cfg.smallSummaryTurns}"></label>
+                    <label><span>大总结所需小总结数</span><input type="number" min="1" max="30" data-ma-setting="largeSummaryCount" value="${cfg.largeSummaryCount}"></label>
+                </div>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="autoSmallSummary" ${checked(cfg.autoSmallSummary)}>自动生成小总结</label>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="autoLargeSummary" ${checked(cfg.autoLargeSummary)}>自动生成大总结</label>
+                <div class="ma-quick-actions"><button type="button" data-ma-control-action="small">立即生成小总结</button><button type="button" data-ma-control-action="large">立即生成大总结</button></div>
+            </div>`;
+    }
+
+    function controlAuditHtml() {
+        const cfg = settings();
+        return `
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>规则校正</b><span>在状态整理前执行，避免违规正文进入记忆</span></div>
+                <label class="checkbox_label ma-primary-toggle"><input type="checkbox" data-ma-setting="ruleAuditEnabled" ${checked(cfg.ruleAuditEnabled)}>启用规则校正</label>
+                <label><span>审核提示词</span><textarea data-ma-setting="ruleAuditPrompt" rows="14" placeholder="粘贴需要审核的硬性规则。模型只判断本轮 AI 正文是否违反这些规则。">${escapeHtml(cfg.ruleAuditPrompt)}</textarea></label>
+                <label><span>未通过时</span><select data-ma-setting="ruleAuditFailAction">
+                    <option value="withdraw" ${selected('withdraw', cfg.ruleAuditFailAction)}>自动撤回最新 AI 消息</option>
+                    <option value="mark" ${selected('mark', cfg.ruleAuditFailAction)}>保留消息并标记失败</option>
+                </select></label>
+                <div class="ma-alert warning"><b>撤回边界</b><p>插件只自动撤回最新一条 AI 消息。审核接口异常时不会撤回，以免误删正文。</p></div>
+                <div class="ma-quick-actions"><button type="button" data-ma-control-action="audit-latest"><i class="fa-solid fa-shield"></i> 校正最新正文</button></div>
+            </div>`;
+    }
+
+    function controlMemoryHtml() {
+        const cfg = settings();
+        const meta = chatMeta();
+        return `
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>世界书同步</b><span class="ma-chip ${statusTone(meta.lastSyncState)}">${statusLabel(meta.lastSyncState)}</span></div>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="lorebookSync" ${checked(cfg.lorebookSync)}>自动同步聊天世界书</label>
+                <label><span>聊天世界书名称</span><input type="text" data-ma-meta="lorebookName" value="${escapeHtml(meta.lorebookName || cfg.lorebookName)}" placeholder="留空自动创建"></label>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="vectorizeStateRows" ${checked(cfg.vectorizeStateRows)}>活跃状态同时启用向量</label>
+                ${meta.lastSyncError ? `<div class="ma-alert danger"><b>同步失败</b><p>${escapeHtml(meta.lastSyncError)}</p></div>` : ''}
+                <div class="ma-quick-actions"><button type="button" data-ma-control-action="sync">立即同步</button><button type="button" data-ma-control-action="graph">打开世界图谱</button></div>
+            </div>
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>图谱显示</b><span>图谱只负责查看，不生成状态</span></div>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showExternalLorebookNodes" ${checked(cfg.showExternalLorebookNodes)}>显示非镜渊世界书条目</label>
+            </div>`;
+    }
+
+    function controlAdvancedHtml() {
+        const cfg = settings();
+        return `
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>界面入口</b><span>顶部按钮为默认入口</span></div>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showTopButton" ${checked(cfg.showTopButton)}>在酒馆顶部显示镜渊按钮</label>
+                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showFloatingButton" ${checked(cfg.showFloatingButton)}>显示右下角浮动按钮</label>
+            </div>
+            <div class="ma-control-section">
+                <div class="ma-section-title"><b>维护工具</b><span>用于迁移、诊断和备份</span></div>
+                <div class="ma-quick-actions">
+                    <button type="button" data-ma-control-action="import">导入旧版快照</button>
+                    <button type="button" data-ma-control-action="migrate">迁移旧世界书</button>
+                    <button type="button" data-ma-control-action="export">导出镜渊数据</button>
+                </div>
+                <p class="ma-help">当前构建 v${VERSION}。独立 API 密钥会随酒馆扩展设置保存在本机数据目录中，请勿在共享账号中使用私人密钥。</p>
+            </div>`;
+    }
+
+    function controlTabContent(tab) {
+        if (tab === 'connection') return controlConnectionHtml();
+        if (tab === 'state') return controlStateHtml();
+        if (tab === 'audit') return controlAuditHtml();
+        if (tab === 'memory') return controlMemoryHtml();
+        if (tab === 'advanced') return controlAdvancedHtml();
+        return controlOverviewHtml();
+    }
+
+    function createControlCenter() {
+        if (document.getElementById('ma-control-center')) return;
+        const root = document.createElement('div');
+        root.id = 'ma-control-center';
+        root.hidden = true;
+        root.innerHTML = '<div class="ma-control-shell"></div>';
+        root.addEventListener('click', event => {
+            if (event.target === root) closeControlCenter();
+        });
+        document.body.appendChild(root);
+    }
+
+    function renderControlCenter() {
+        createControlCenter();
+        const root = document.getElementById('ma-control-center');
+        const shell = root.querySelector('.ma-control-shell');
+        const tabs = [
+            ['overview', '总览', 'gauge-high'], ['connection', '独立模型', 'plug'], ['state', '表格与总结', 'table-list'],
+            ['audit', '规则校正', 'shield-halved'], ['memory', '世界书与图谱', 'book'], ['advanced', '高级', 'sliders'],
+        ];
+        shell.innerHTML = `
+            <header class="ma-control-head">
+                <div class="ma-brand"><span class="ma-brand-mark">渊</span><div><b>镜渊控制台</b><small>Mirror Abyss v${VERSION}</small></div></div>
+                <button type="button" class="ma-icon-button" data-ma-control-action="close" aria-label="关闭">×</button>
+            </header>
+            <div class="ma-control-layout">
+                <nav class="ma-control-tabs">${tabs.map(([id, label, icon]) => `<button type="button" class="${controlCenterTab === id ? 'active' : ''}" data-ma-control-tab="${id}"><i class="fa-solid fa-${icon}"></i><span>${label}</span></button>`).join('')}</nav>
+                <main class="ma-control-content" data-tab="${controlCenterTab}">${controlTabContent(controlCenterTab)}</main>
+            </div>`;
+        bindControlCenterHandlers(root);
+    }
+
+    function openControlCenter(tab = controlCenterTab) {
+        controlCenterTab = tab || 'overview';
+        renderControlCenter();
+        const root = document.getElementById('ma-control-center');
+        root.hidden = false;
+        document.body.classList.add('ma-control-open');
+        updateUnifiedStatus();
+    }
+
+    function closeControlCenter() {
+        const root = document.getElementById('ma-control-center');
+        if (root) root.hidden = true;
+        document.body.classList.remove('ma-control-open');
+    }
+
+    function saveControlSetting(input) {
+        const key = input.dataset.maSetting;
+        if (!key) return;
+        const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+        settings()[key] = value;
+        if (key === 'apiProvider' && !settings().apiBaseUrl) {
+            if (value === 'gemini') settings().apiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+            if (value === 'anthropic') settings().apiBaseUrl = 'https://api.anthropic.com/v1';
+        }
+        saveSettings();
+        if (['showMessagePanels'].includes(key)) renderAllPanels();
+        if (['showTopButton', 'showFloatingButton'].includes(key)) applyInterfaceVisibility();
+        updateUnifiedStatus();
+    }
+
+    function bindControlCenterHandlers(root) {
+        root.querySelectorAll('[data-ma-control-tab]').forEach(button => button.addEventListener('click', () => {
+            controlCenterTab = button.dataset.maControlTab;
+            renderControlCenter();
+        }));
+        root.querySelectorAll('[data-ma-setting]').forEach(input => {
+            input.addEventListener('change', () => {
+                saveControlSetting(input);
+                if (['generationMode', 'apiProvider'].includes(input.dataset.maSetting)) renderControlCenter();
+            });
+        });
+        root.querySelectorAll('[data-ma-meta]').forEach(input => input.addEventListener('change', () => {
+            if (input.dataset.maMeta === 'lorebookName') {
+                chatMeta().lorebookName = sanitizedBookName(input.value);
+                persistMetadata();
+                scheduleLorebookSync('lorebook changed');
+            }
+        }));
+        root.querySelectorAll('[data-ma-control-action]').forEach(button => button.addEventListener('click', async () => {
+            const action = button.dataset.maControlAction;
+            try {
+                if (action === 'close') return closeControlCenter();
+                if (action === 'toggle-key') {
+                    const field = root.querySelector('#ma-api-key');
+                    if (field) field.type = field.type === 'password' ? 'text' : 'password';
+                    return;
+                }
+                if (action === 'test-api') {
+                    button.disabled = true;
+                    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 测试中';
+                    await testIndependentApi();
+                    toast('success', '独立模型连接正常');
+                    return renderControlCenter();
+                }
+                if (action === 'models') {
+                    button.disabled = true;
+                    const models = await fetchIndependentModels();
+                    const list = root.querySelector('#ma-model-list');
+                    if (list) list.innerHTML = models.slice(0, 300).map(model => `<option value="${escapeHtml(model)}"></option>`).join('');
+                    toast('success', `已读取 ${models.length} 个模型`);
+                    button.disabled = false;
+                    return;
+                }
+                if (action === 'process-latest') return runMessagePipeline(latestAssistantIndex(), { force: true });
+                if (action === 'audit-latest') return auditMessage(latestAssistantIndex(), { force: true });
+                if (action === 'sync') return enqueue('同步世界书', () => reconcileLorebook({ silent: false }));
+                if (action === 'graph') return openWorkspace(latestAssistantIndex());
+                if (action === 'small') return enqueue('生成小总结', () => generateSmallSummary(latestAssistantIndex(), { force: true }));
+                if (action === 'large') return enqueue('生成大总结', () => generateLargeSummary(latestAssistantIndex(), { force: true }));
+                if (action === 'import') return openLegacyImporter();
+                if (action === 'migrate') return enqueue('迁移旧世界书', migrateLegacyLorebook);
+                if (action === 'export') return exportMirrorData();
+            } catch (error) {
+                toast('error', error?.message || String(error));
+                renderControlCenter();
+            }
+        }));
+    }
+
+    function createTopBarButton() {
+        if (document.getElementById('ma-top-button')) return;
+        const button = document.createElement('button');
+        button.id = 'ma-top-button';
+        button.type = 'button';
+        button.className = 'right_menu_button interactable';
+        button.title = '镜渊控制台';
+        button.setAttribute('aria-label', '打开镜渊控制台');
+        button.innerHTML = '<i class="fa-solid fa-table-list"></i><span class="ma-top-dot"></span>';
+        button.addEventListener('click', () => openControlCenter('overview'));
+        const anchors = ['#persona-management-button', '#persona_management_button', '#user-settings-button', '#user_settings_button'];
+        const anchor = anchors.map(selector => document.querySelector(selector)).find(Boolean);
+        const host = anchor?.parentElement || document.querySelector('#top-settings-holder') || document.querySelector('#top-bar') || document.querySelector('#sheld');
+        if (anchor) anchor.insertAdjacentElement('afterend', button);
+        else if (host) host.appendChild(button);
+        else {
+            setTimeout(createTopBarButton, 600);
+            return;
+        }
+        applyInterfaceVisibility();
+    }
+
+    function applyInterfaceVisibility() {
+        const cfg = settings();
+        const top = document.getElementById('ma-top-button');
+        const floating = document.getElementById('ma-floating-button');
+        if (top) top.hidden = !cfg.showTopButton;
+        if (floating) floating.hidden = !cfg.showFloatingButton;
     }
 
     function createFloatingButton() {
@@ -913,12 +1667,38 @@
         document.body.appendChild(button);
     }
 
+    function overallStatus() {
+        const latest = latestMirrorData();
+        const meta = chatMeta();
+        const hasError = Boolean(meta.lastSyncError || latest?.status === 'error' || latest?.auditStatus === 'error' || latest?.auditStatus === 'failed');
+        if (hasError) return { tone: 'danger', label: '镜渊存在失败状态' };
+        if (activeJobs.size || latest?.status === 'processing' || latest?.auditStatus === 'processing' || meta.lastSyncState === 'processing') return { tone: 'working', label: '镜渊正在处理' };
+        if (latest?.status === 'synced') return { tone: 'success', label: '镜渊运行正常' };
+        return { tone: 'neutral', label: '镜渊等待处理' };
+    }
+
     function updateFloatingStatus() {
         const badge = document.getElementById('ma-floating-badge');
         if (!badge) return;
-        const errors = getChat().filter(m => m?.extra?.[MODULE_NAME]?.status === 'error').length;
-        badge.textContent = activeJobs.size ? String(activeJobs.size) : errors ? '!' : '';
-        badge.classList.toggle('error', Boolean(errors && !activeJobs.size));
+        const state = overallStatus();
+        badge.textContent = activeJobs.size ? String(activeJobs.size) : state.tone === 'danger' ? '!' : '';
+        badge.classList.toggle('error', state.tone === 'danger' && !activeJobs.size);
+    }
+
+    function updateTopStatus() {
+        const button = document.getElementById('ma-top-button');
+        if (!button) return;
+        const state = overallStatus();
+        button.dataset.tone = state.tone;
+        button.title = state.label;
+        const dot = button.querySelector('.ma-top-dot');
+        if (dot) dot.dataset.tone = state.tone;
+    }
+
+    function updateUnifiedStatus() {
+        updateFloatingStatus();
+        updateTopStatus();
+        applyInterfaceVisibility();
     }
 
     function createWorkspace() {
@@ -1179,11 +1959,11 @@
         const rows = snapshot?.[node.tableKey];
         const rowIndex = rows?.findIndex(row => row.id === (node.rowId || node.id)) ?? -1;
         if (rowIndex < 0) return toast('warning', '该节点不在当前表格中');
-        openEditorModal({
+        openRowEditor({
             title: `修改：${node.name}`,
-            value: JSON.stringify(rows[rowIndex], null, 2),
-            onSave: async text => {
-                rows[rowIndex] = cleanRecord(JSON.parse(text), node.tableKey, rowIndex);
+            row: rows[rowIndex],
+            onSave: async value => {
+                rows[rowIndex] = cleanRecord(value, node.tableKey, rowIndex);
                 await persistChat();
                 scheduleLorebookSync('node edited');
                 renderMessagePanel(index);
@@ -1197,11 +1977,12 @@
         const message = getMessage(index);
         const data = ensureMessageData(message);
         data.tableSnapshot ||= previousSnapshot(index + 1);
-        openEditorModal({
+        openRowEditor({
             title: `添加${TABLE_LABELS[tableKey]}`,
-            value: JSON.stringify({ id: makeId(tableKey), title: '', content: '', keywords: [], status: 'active' }, null, 2),
-            onSave: async text => {
-                data.tableSnapshot[tableKey].push(cleanRecord(JSON.parse(text), tableKey, data.tableSnapshot[tableKey].length));
+            row: { id: makeId(tableKey), title: '', content: '', keywords: [], status: 'active' },
+            onSave: async value => {
+                data.tableSnapshot[tableKey].push(cleanRecord(value, tableKey, data.tableSnapshot[tableKey].length));
+                data.activeTableKey = tableKey;
                 data.status = 'synced';
                 await persistChat();
                 scheduleLorebookSync('row added');
@@ -1215,11 +1996,11 @@
         const rows = getMessage(index)?.extra?.[MODULE_NAME]?.tableSnapshot?.[tableKey];
         const rowIndex = rows?.findIndex(row => row.id === rowId) ?? -1;
         if (rowIndex < 0) return toast('warning', '记录已不存在');
-        openEditorModal({
+        openRowEditor({
             title: `修改${TABLE_LABELS[tableKey]}`,
-            value: JSON.stringify(rows[rowIndex], null, 2),
-            onSave: async text => {
-                rows[rowIndex] = cleanRecord(JSON.parse(text), tableKey, rowIndex);
+            row: rows[rowIndex],
+            onSave: async value => {
+                rows[rowIndex] = cleanRecord(value, tableKey, rowIndex);
                 await persistChat();
                 scheduleLorebookSync('row edited');
                 renderMessagePanel(index);
@@ -1287,6 +2068,53 @@
         modal.querySelector('[data-save]').addEventListener('click', async () => {
             try {
                 await onSave(modal.querySelector('textarea').value);
+                close();
+            } catch (error) {
+                toast('error', `保存失败：${error.message}`);
+            }
+        });
+        document.body.appendChild(modal);
+    }
+
+    function openRowEditor({ title, row, onSave }) {
+        document.getElementById('ma-row-editor-modal')?.remove();
+        const source = {
+            id: String(row?.id || makeId('row')),
+            title: String(row?.title || row?.name || ''),
+            content: String(row?.content || row?.summary || ''),
+            status: String(row?.status || 'active'),
+            keywords: Array.isArray(row?.keywords) ? row.keywords.map(String) : [],
+        };
+        const modal = document.createElement('div');
+        modal.id = 'ma-row-editor-modal';
+        modal.innerHTML = `
+            <div class="ma-editor-card ma-form-editor">
+                <header><b>${escapeHtml(title)}</b><button type="button" data-close>×</button></header>
+                <div class="ma-form-body">
+                    <label><span>对象／项目</span><input type="text" name="title" value="${escapeHtml(source.title)}" placeholder="例如：林晚、宿舍楼、调查流程"></label>
+                    <label><span>当前记录</span><textarea name="content" placeholder="只填写当前有效事实"></textarea></label>
+                    <div class="ma-form-grid">
+                        <label><span>状态</span><input type="text" name="status" value="${escapeHtml(source.status)}" placeholder="active / pending / closed"></label>
+                        <label><span>关键词</span><input type="text" name="keywords" value="${escapeHtml((source.keywords || []).join('、'))}" placeholder="使用逗号或顿号分隔"></label>
+                    </div>
+                </div>
+                <footer><button type="button" data-cancel>取消</button><button type="button" class="menu_button" data-save>保存</button></footer>
+            </div>`;
+        modal.querySelector('[name="content"]').value = source.content;
+        const close = () => modal.remove();
+        modal.querySelector('[data-close]').addEventListener('click', close);
+        modal.querySelector('[data-cancel]').addEventListener('click', close);
+        modal.querySelector('[data-save]').addEventListener('click', async () => {
+            try {
+                const value = {
+                    ...source,
+                    title: modal.querySelector('[name="title"]').value.trim(),
+                    content: modal.querySelector('[name="content"]').value.trim(),
+                    status: modal.querySelector('[name="status"]').value.trim() || 'active',
+                    keywords: modal.querySelector('[name="keywords"]').value.split(/[,，、]/).map(x => x.trim()).filter(Boolean),
+                };
+                if (!value.title) throw new Error('对象／项目不能为空');
+                await onSave(value);
                 close();
             } catch (error) {
                 toast('error', `保存失败：${error.message}`);
@@ -1421,54 +2249,19 @@
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
-                    <label class="checkbox_label"><input type="checkbox" data-setting="enabled" ${cfg.enabled ? 'checked' : ''}>启用镜渊</label>
-                    <label class="checkbox_label"><input type="checkbox" data-setting="autoState" ${cfg.autoState ? 'checked' : ''}>每轮自动更新表格</label>
-                    <label class="checkbox_label"><input type="checkbox" data-setting="showMessagePanels" ${cfg.showMessagePanels ? 'checked' : ''}>在正文下显示折叠表格</label>
-                    <label class="checkbox_label"><input type="checkbox" data-setting="autoSmallSummary" ${cfg.autoSmallSummary ? 'checked' : ''}>自动小总结</label>
-                    <label>小总结回合数 <input type="number" min="1" max="100" data-setting="smallSummaryTurns" value="${cfg.smallSummaryTurns}"></label>
-                    <label class="checkbox_label"><input type="checkbox" data-setting="autoLargeSummary" ${cfg.autoLargeSummary ? 'checked' : ''}>自动大总结</label>
-                    <label>大总结所需小总结数 <input type="number" min="1" max="30" data-setting="largeSummaryCount" value="${cfg.largeSummaryCount}"></label>
-                    <hr>
-                    <label>表格连接配置（留空跟随当前）<input type="text" data-setting="stateProfile" value="${escapeHtml(cfg.stateProfile)}"></label>
-                    <label>小总结连接配置<input type="text" data-setting="smallSummaryProfile" value="${escapeHtml(cfg.smallSummaryProfile)}"></label>
-                    <label>大总结连接配置<input type="text" data-setting="largeSummaryProfile" value="${escapeHtml(cfg.largeSummaryProfile)}"></label>
-                    <label class="checkbox_label"><input type="checkbox" data-setting="lorebookSync" ${cfg.lorebookSync ? 'checked' : ''}>自动同步聊天世界书</label>
-                    <label>聊天世界书名称（留空自动创建）<input type="text" data-setting="lorebookName" value="${escapeHtml(chatMeta().lorebookName || cfg.lorebookName)}"></label>
-                    <label class="checkbox_label"><input type="checkbox" data-setting="vectorizeStateRows" ${cfg.vectorizeStateRows ? 'checked' : ''}>人物等活跃状态同时启用向量</label>
-                    <label class="checkbox_label"><input type="checkbox" data-setting="showExternalLorebookNodes" ${cfg.showExternalLorebookNodes ? 'checked' : ''}>图谱显示非镜渊世界书条目</label>
-                    <div class="ma-settings-buttons">
-                        <button type="button" id="ma-settings-open">打开世界图谱</button>
-                        <button type="button" id="ma-settings-import">导入旧版快照</button>
-                        <button type="button" id="ma-settings-migrate">迁移旧世界书</button>
-                        <button type="button" id="ma-settings-retry">整理最新正文</button>
-                        <button type="button" id="ma-settings-sync">同步世界书</button>
-                        <button type="button" id="ma-settings-export">导出镜渊数据</button>
-                    </div>
-                    <small>当前构建：v${VERSION}。状态数据附着于对应正文；正文删除后，该条附属数据一并消失。</small>
+                    <label class="checkbox_label"><input type="checkbox" id="ma-compact-enabled" ${cfg.enabled ? 'checked' : ''}>启用镜渊</label>
+                    <p class="ma-help">主要设置已移动到酒馆顶部的镜渊按钮，便于手机与桌面统一使用。</p>
+                    <button type="button" class="menu_button" id="ma-settings-control"><i class="fa-solid fa-table-list"></i> 打开镜渊控制台</button>
+                    <small>v${VERSION}</small>
                 </div>
             </div>`;
         host.appendChild(panel);
-        panel.querySelectorAll('[data-setting]').forEach(input => {
-            input.addEventListener('change', () => {
-                const key = input.dataset.setting;
-                const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
-                if (key === 'lorebookName') {
-                    chatMeta().lorebookName = sanitizedBookName(value);
-                    persistMetadata();
-                    scheduleLorebookSync('lorebook changed');
-                } else {
-                    settings()[key] = value;
-                    saveSettings();
-                }
-                if (key === 'showMessagePanels') renderAllPanels();
-            });
+        panel.querySelector('#ma-compact-enabled').addEventListener('change', event => {
+            settings().enabled = event.target.checked;
+            saveSettings();
+            updateUnifiedStatus();
         });
-        panel.querySelector('#ma-settings-open').addEventListener('click', () => openWorkspace(latestAssistantIndex()));
-        panel.querySelector('#ma-settings-import').addEventListener('click', openLegacyImporter);
-        panel.querySelector('#ma-settings-migrate').addEventListener('click', () => enqueue('迁移旧世界书', migrateLegacyLorebook).catch(error => toast('error', error.message)));
-        panel.querySelector('#ma-settings-retry').addEventListener('click', () => processMessage(latestAssistantIndex(), { force: true }));
-        panel.querySelector('#ma-settings-sync').addEventListener('click', () => enqueue('同步世界书', () => reconcileLorebook({ silent: false })));
-        panel.querySelector('#ma-settings-export').addEventListener('click', exportMirrorData);
+        panel.querySelector('#ma-settings-control').addEventListener('click', () => openControlCenter('overview'));
     }
 
     function resolveMessageIndex(data) {
@@ -1492,21 +2285,17 @@
         });
         eventSource.on(event_types.MESSAGE_RECEIVED, data => {
             const index = resolveMessageIndex(data);
-            setTimeout(() => processMessage(index), 150);
-        });
-        eventSource.on(event_types.GENERATION_ENDED, () => {
-            const index = latestAssistantIndex();
-            setTimeout(() => processMessage(index), 180);
+            scheduleMessagePipeline(index, { delay: 260 });
         });
         eventSource.on(event_types.MESSAGE_EDITED, data => {
             const index = resolveMessageIndex(data);
             const message = getMessage(index);
-            if (message && !message.is_user) setTimeout(() => processMessage(index, { force: true }), 100);
+            if (message && !message.is_user) scheduleMessagePipeline(index, { force: true, delay: 180 });
             renderSoon();
         });
         eventSource.on(event_types.MESSAGE_SWIPED, () => {
             const index = latestAssistantIndex();
-            setTimeout(() => processMessage(index, { force: true }), 180);
+            scheduleMessagePipeline(index, { force: true, delay: 260 });
             renderSoon();
         });
         eventSource.on(event_types.MESSAGE_DELETED, () => {
@@ -1514,13 +2303,14 @@
             renderSoon();
             scheduleLorebookSync('message deleted');
             refreshWorkspaceIfOpen();
+            updateUnifiedStatus();
         });
         eventSource.on(event_types.CHAT_CHANGED, () => {
             closeWorkspace();
+            closeControlCenter();
             renderSoon();
-            const bookInput = document.querySelector('#ma-settings [data-setting="lorebookName"]');
-            if (bookInput) bookInput.value = chatMeta().lorebookName || settings().lorebookName || '';
             setTimeout(() => scheduleLorebookSync('chat changed'), 500);
+            updateUnifiedStatus();
         });
     }
 
@@ -1528,12 +2318,15 @@
         if (initialized || !ctx()) return;
         initialized = true;
         settings();
+        createTopBarButton();
         createFloatingButton();
+        createControlCenter();
         createWorkspace();
         createSettingsPanel();
+        applyInterfaceVisibility();
         installDelegatedHandlers();
         bindSillyTavernEvents();
-        setTimeout(renderAllPanels, 300);
+        setTimeout(() => { renderAllPanels(); updateUnifiedStatus(); }, 300);
         setTimeout(() => scheduleLorebookSync('initial'), 1200);
         console.info(`[MirrorAbyss] v${VERSION} initialized`);
     }

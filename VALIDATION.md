@@ -6,13 +6,17 @@ Performed in the build environment:
 - JSON parse of `manifest.json`
 - Required root file check
 - ZIP root layout check
+- Duplicate event-listener static check
+- Independent API provider branch static review
+- Audit/withdraw pipeline static review
 
 Not yet performed:
 
 - Live SillyTavern installation test
 - Cloud-hosted SillyTavern permission test
-- Provider-specific Connection Profile test
+- Provider-specific CORS and authentication test
+- Automatic withdrawal test against a real chat
 - iOS/Android browser touch regression
 - Long-chat stress test
 
-This is why the package is marked `1.0.0-rc.1`.
+This is why the package remains a Release Candidate.

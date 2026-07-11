@@ -11,7 +11,7 @@
 
 ## Non-code behavioral reference
 
-Amily2 (`Wx-2025/ST-Amily2-Chat-Optimisation`) was used only to study where a compact, collapsible table is comfortable in the chat flow. No Amily2 code, styling, icons, or assets are included.
+Amily2 (`Wx-2025/ST-Amily2-Chat-Optimisation`, CC BY-NC-ND 4.0) was used only as a non-code behavioral reference for table readability and workflow. Mirror Abyss does not copy, adapt, redistribute, or derive from its source code, CSS, icons, assets, prompts, or exact interface composition.
 
 ## Mirror Abyss original layer
 
