@@ -508,3 +508,52 @@ button.danger { color: #ffb0b8; }
   .ma11-editor-grid { grid-template-columns: 1fr; }
   .ma11-editor { max-height: calc(100dvh - 2rem); overflow: auto; }
 }
+
+/* alpha.5 isolated audit and directed revision */
+.ma11-audit-hidden-message .mes_text {
+  display: none !important;
+}
+.ma11-audit-hidden-message .mes_block::before {
+  content: "镜渊正在审核或修正本轮正文…";
+  display: block;
+  padding: 0.8rem 0.95rem;
+  margin: 0.25rem 0;
+  border: 1px dashed var(--ma11-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ma11-panel) 82%, transparent);
+  color: var(--ma11-text);
+  font-size: 0.92rem;
+}
+.ma11-message-notice {
+  padding: 0.55rem 0.75rem;
+  border-top: 1px solid var(--ma11-border);
+  background: color-mix(in srgb, var(--ma11-accent) 10%, transparent);
+  color: var(--ma11-text);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.ma11-violation-list {
+  margin: 0.65rem 0 0;
+  padding-left: 1.35rem;
+}
+.ma11-violation-list li {
+  margin: 0.55rem 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--ma11-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ma11-panel) 88%, transparent);
+}
+.ma11-violation-list p,
+.ma11-violation-list small {
+  display: block;
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+html.ma11-generation-locked #send_textarea {
+  opacity: 0.72;
+}
+html.ma11-generation-locked #send_but,
+html.ma11-generation-locked #send_button {
+  cursor: wait !important;
+}

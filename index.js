@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.1.0-alpha.4";
-var PIPELINE_VERSION = "ma-pipeline-3";
+var VERSION = "1.1.0-alpha.5";
+var PIPELINE_VERSION = "ma-pipeline-4";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
@@ -33,7 +33,12 @@ var DEFAULT_SETTINGS = {
   showTopButton: true,
   auditEnabled: false,
   auditPrompt: "",
-  auditFailAction: "mark",
+  auditFailAction: "revise",
+  revisionPrompt: "",
+  maxRevisionAttempts: 1,
+  stopOnRepeatedViolation: true,
+  revisionFallbackAction: "hide",
+  lockGenerationDuringAudit: true,
   autoSmallSummary: true,
   smallSummaryTurns: 15,
   autoLargeSummary: true,
@@ -48,6 +53,7 @@ var DEFAULT_SETTINGS = {
   requestTimeoutMs: 9e4,
   connections: {
     audit: { mode: "current", profile: "" },
+    revision: { mode: "current", profile: "" },
     state: { mode: "current", profile: "" },
     smallSummary: { mode: "current", profile: "" },
     largeSummary: { mode: "current", profile: "" }
@@ -195,6 +201,11 @@ function migrateLegacySettings(legacy) {
     auditEnabled: legacy.ruleAuditEnabled ?? false,
     auditPrompt: safeText(legacy.ruleAuditPrompt ?? ""),
     auditFailAction: legacy.ruleAuditFailAction === "withdraw" ? "delete" : "mark",
+    revisionPrompt: safeText(legacy.revisionPrompt ?? ""),
+    maxRevisionAttempts: Number(legacy.maxRevisionAttempts) || 1,
+    stopOnRepeatedViolation: legacy.stopOnRepeatedViolation ?? true,
+    revisionFallbackAction: legacy.revisionFallbackAction ?? "hide",
+    lockGenerationDuringAudit: legacy.lockGenerationDuringAudit ?? true,
     autoSmallSummary: legacy.autoSmallSummary ?? true,
     smallSummaryTurns: Number(legacy.smallSummaryTurns) || 15,
     autoLargeSummary: legacy.autoLargeSummary ?? true,
@@ -206,6 +217,7 @@ function migrateLegacySettings(legacy) {
     latestContinuityConstant: legacy.latestContinuityConstant ?? true,
     connections: {
       audit: { mode: legacy.auditProfile ? "profile" : "current", profile: safeText(legacy.auditProfile ?? "", 120) },
+      revision: { mode: legacy.revisionProfile ? "profile" : "current", profile: safeText(legacy.revisionProfile ?? legacy.auditProfile ?? "", 120) },
       state: { mode: legacy.stateProfile ? "profile" : "current", profile: safeText(legacy.stateProfile ?? "", 120) },
       smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profile: safeText(legacy.smallSummaryProfile ?? "", 120) },
       largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profile: safeText(legacy.largeSummaryProfile ?? "", 120) }
@@ -371,6 +383,7 @@ function createArtifact(message, messageIndex) {
     updatedAt: now,
     stages: {
       audit: idleStage(),
+      revision: idleStage(),
       state: idleStage(),
       summary: idleStage(),
       sync: idleStage()
@@ -399,6 +412,121 @@ function markStage(artifact, stage, status, error) {
   artifact.updatedAt = now;
 }
 
+// src/pipeline/quarantine.ts
+var gates = /* @__PURE__ */ new Map();
+var internalGenerationDepth = 0;
+var scriptModulePromise = null;
+function gateKey(chatKey, index, fingerprint) {
+  return `${chatKey}:${index}:${fingerprint}`;
+}
+async function getScriptModule() {
+  if (typeof process !== "undefined" && Boolean(process.versions?.node)) return null;
+  if (!scriptModulePromise) {
+    scriptModulePromise = import(
+      /* @vite-ignore */
+      String("/script.js")
+    ).catch((error) => {
+      console.warn("[MirrorAbyss] script adapter unavailable", error);
+      return null;
+    });
+  }
+  return scriptModulePromise;
+}
+function applyDomLock(locked) {
+  document.documentElement.classList.toggle("ma11-generation-locked", locked);
+  const send = document.querySelector("#send_but, #send_button");
+  if (send) {
+    send.disabled = locked;
+    send.setAttribute("aria-disabled", String(locked));
+  }
+  const textarea = document.querySelector("#send_textarea");
+  if (textarea) {
+    textarea.readOnly = locked;
+    textarea.setAttribute("aria-busy", String(locked));
+  }
+}
+async function syncNativeGenerationLock() {
+  const locked = gates.size > 0;
+  applyDomLock(locked);
+  const module = await getScriptModule();
+  try {
+    if (typeof module?.setSendButtonState === "function") module.setSendButtonState(locked);
+    if (!locked && typeof module?.showSwipeButtons === "function") module.showSwipeButtons();
+  } catch (error) {
+    console.warn("[MirrorAbyss] native generation lock failed", error);
+  }
+}
+function isQuarantineActive() {
+  return gates.size > 0;
+}
+function isInternalGeneration() {
+  return internalGenerationDepth > 0;
+}
+async function withInternalGeneration(work) {
+  internalGenerationDepth += 1;
+  try {
+    return await work();
+  } finally {
+    internalGenerationDepth = Math.max(0, internalGenerationDepth - 1);
+  }
+}
+function primeQuarantine(index) {
+  const settings = getSettings();
+  if (!settings.enabled || !settings.auditEnabled || settings.auditFailAction === "mark") return null;
+  const message = getMessage(index);
+  if (!message || message.is_user || !String(message.mes || "").trim()) return null;
+  const fingerprint = messageFingerprint(index);
+  let artifact = getAttachedArtifact(message);
+  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint) {
+    artifact = createArtifact(message, index);
+  }
+  artifact.hiddenByAudit = true;
+  artifact.quarantined = true;
+  markStage(artifact, "audit", "queued");
+  if (settings.auditFailAction === "revise") markStage(artifact, "revision", "queued");
+  attachArtifactToMessage(message, artifact);
+  if (settings.lockGenerationDuringAudit) {
+    const record = {
+      key: gateKey(artifact.chatKey, index, fingerprint),
+      chatKey: artifact.chatKey,
+      messageIndex: index,
+      fingerprint
+    };
+    gates.set(record.key, record);
+    applyDomLock(true);
+    void syncNativeGenerationLock();
+  }
+  return artifact;
+}
+function ensureQuarantine(artifact) {
+  if (!getSettings().lockGenerationDuringAudit) return;
+  const key = gateKey(artifact.chatKey, artifact.messageIndex, artifact.sourceFingerprint);
+  gates.set(key, {
+    key,
+    chatKey: artifact.chatKey,
+    messageIndex: artifact.messageIndex,
+    fingerprint: artifact.sourceFingerprint
+  });
+  applyDomLock(true);
+  void syncNativeGenerationLock();
+}
+function releaseQuarantine(artifact) {
+  for (const [key, gate] of gates) {
+    if (gate.chatKey === artifact.chatKey && gate.messageIndex === artifact.messageIndex) gates.delete(key);
+  }
+  artifact.quarantined = false;
+  void syncNativeGenerationLock();
+}
+function clearAllQuarantines() {
+  gates.clear();
+  void syncNativeGenerationLock();
+}
+async function generationInterceptor(_chat, _contextSize, abort, _type) {
+  if (!isQuarantineActive() || isInternalGeneration()) return;
+  abort(true);
+  toast("warning", "\u4E0A\u4E00\u6761\u6B63\u6587\u4ECD\u5728\u5BA1\u6838\u6216\u4FEE\u6B63\uFF0C\u5DF2\u963B\u6B62\u65B0\u4E00\u8F6E\u751F\u6210\u4EE5\u907F\u514D\u4E0A\u4E0B\u6587\u6C61\u67D3");
+}
+
 // src/llm/generator.ts
 var profileMutex = Promise.resolve();
 function slashResultText(result) {
@@ -416,7 +544,7 @@ async function generateCurrent(options) {
   if (typeof context.generateRaw !== "function") throw new Error("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BgenerateRaw");
   const settings = getSettings();
   const result = await withTimeout(
-    Promise.resolve(context.generateRaw({ systemPrompt: options.systemPrompt, prompt: options.prompt })),
+    withInternalGeneration(() => Promise.resolve(context.generateRaw({ systemPrompt: options.systemPrompt, prompt: options.prompt, jsonSchema: options.jsonSchema }))),
     Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
     `${options.task}\u6A21\u578B\u8C03\u7528`
   );
@@ -475,10 +603,34 @@ async function testConnection(task) {
 function auditSystemPrompt() {
   return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u89C4\u5219\u5BA1\u6838\u5668\u3002\u4F60\u53EA\u68C0\u67E5\u7ED9\u5B9AAI\u6B63\u6587\u662F\u5426\u8FDD\u53CD\u73A9\u5BB6\u63D0\u4F9B\u7684\u786C\u6027\u89C4\u5219\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u6DA6\u8272\uFF0C\u4E0D\u66FF\u6B63\u6587\u8FA9\u62A4\u3002
 
-\u7B2C\u4E00\u884C\u5FC5\u987B\u4E14\u53EA\u80FD\u662F MA_OK \u6216 MA_FAIL\u3002
-\u7B2C\u4E8C\u884C\u5F00\u59CB\u7ED9\u51FA\u7B80\u77ED\u3001\u53EF\u6267\u884C\u7684\u7406\u7531\uFF1B\u901A\u8FC7\u65F6\u7406\u7531\u4E0D\u8D85\u8FC7\u4E00\u53E5\u3002
-\u4E0D\u8981\u8F93\u51FAMarkdown\u4EE3\u7801\u5757\uFF0C\u4E0D\u8981\u8F93\u51FA\u5176\u4ED6\u6807\u7B7E\u3002
-\u53EA\u6709\u5B58\u5728\u660E\u786E\u8FDD\u89C4\u65F6\u624D\u5224\u5B9A MA_FAIL\uFF1B\u8BC1\u636E\u4E0D\u8DB3\u65F6\u5224\u5B9A MA_OK\u3002`;
+\u5FC5\u987B\u53EA\u8F93\u51FA\u4E00\u4E2AJSON\u5BF9\u8C61\uFF0C\u7ED3\u6784\u5982\u4E0B\uFF1A
+{
+  "result": "pass | revise | block",
+  "reason": "\u4E00\u53E5\u8BDD\u7ED3\u8BBA",
+  "violations": [
+    {
+      "ruleId": "\u7A33\u5B9A\u3001\u7B80\u77ED\u7684\u89C4\u5219\u7F16\u53F7",
+      "rule": "\u88AB\u8FDD\u53CD\u7684\u89C4\u5219",
+      "evidence": "\u6B63\u6587\u4E2D\u7684\u5177\u4F53\u8FDD\u89C4\u7247\u6BB5\u6216\u51C6\u786E\u6982\u8FF0",
+      "action": "\u5E94\u5982\u4F55\u4FEE\u6539\uFF0C\u5FC5\u987B\u5177\u4F53\u53EF\u6267\u884C"
+    }
+  ],
+  "preserve": ["\u4FEE\u6B63\u65F6\u5FC5\u987B\u4FDD\u7559\u7684\u5916\u90E8\u4E8B\u5B9E"],
+  "rewriteInstruction": "\u7ED9\u4FEE\u6B63\u6587\u6A21\u578B\u7684\u4E00\u6BB5\u5B8C\u6574\u6307\u4EE4"
+}
+
+\u5224\u5B9A\u6807\u51C6\uFF1A
+- pass\uFF1A\u6CA1\u6709\u660E\u786E\u8FDD\u89C4\u3002
+- revise\uFF1A\u53EF\u4EE5\u5728\u4E0D\u6539\u53D8\u5DF2\u7ECF\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u4EF6\u3001NPC\u884C\u4E3A\u548C\u4E8B\u4EF6\u987A\u5E8F\u7684\u524D\u63D0\u4E0B\u5B9A\u5411\u4FEE\u6B63\u3002
+- block\uFF1A\u6574\u6BB5\u5185\u5BB9\u5EFA\u7ACB\u5728\u8FDD\u89C4\u524D\u63D0\u4E0A\uFF0C\u65E0\u6CD5\u5C40\u90E8\u4FEE\u6B63\u800C\u4E0D\u91CD\u6784\u5267\u60C5\u3002
+
+\u89C4\u5219\uFF1A
+1. \u53EA\u5217\u51FA\u6709\u660E\u786E\u8BC1\u636E\u7684\u8FDD\u89C4\u3002
+2. evidence\u5FC5\u987B\u8DB3\u4EE5\u8BA9\u4FEE\u6B63\u6587\u6A21\u578B\u5B9A\u4F4D\u95EE\u9898\u3002
+3. action\u5FC5\u987B\u8BF4\u660E\u201C\u5220\u4EC0\u4E48\u3001\u4FDD\u7559\u4EC0\u4E48\u3001\u7528\u4EC0\u4E48\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u66FF\u4EE3\u201D\uFF0C\u4E0D\u80FD\u53EA\u5199\u201C\u4E0D\u8981\u8FDD\u89C4\u201D\u3002
+4. preserve\u53EA\u5199\u5DF2\u7ECF\u6210\u7ACB\u4E14\u4E0D\u80FD\u88AB\u4FEE\u6B63\u6A21\u578B\u6539\u52A8\u7684\u5916\u90E8\u4E8B\u5B9E\u3002
+5. pass\u65F6violations\u5FC5\u987B\u4E3A\u7A7A\uFF0CrewriteInstruction\u53EF\u4E3A\u7A7A\u3002
+6. \u4E0D\u8F93\u51FAMarkdown\u4EE3\u7801\u5757\uFF0C\u4E0D\u8F93\u51FAJSON\u4EE5\u5916\u7684\u6587\u5B57\u3002`;
 }
 function auditUserPrompt(rulePrompt, playerText, assistantText) {
   return `\u3010\u73A9\u5BB6\u5BA1\u6838\u89C4\u5219\u3011
@@ -490,16 +642,195 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u5F85\u5BA1\u6838AI\u6B63\u6587\u3011
 ${assistantText}`;
 }
+function auditJsonSchema() {
+  return {
+    name: "MirrorAbyssAuditResult",
+    description: "\u955C\u6E0A\u89C4\u5219\u5BA1\u6838\u7ED3\u679C",
+    strict: true,
+    value: {
+      $schema: "http://json-schema.org/draft-04/schema#",
+      type: "object",
+      properties: {
+        result: { type: "string", enum: ["pass", "revise", "block"] },
+        reason: { type: "string" },
+        violations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              ruleId: { type: "string" },
+              rule: { type: "string" },
+              evidence: { type: "string" },
+              action: { type: "string" }
+            },
+            required: ["ruleId", "rule", "evidence", "action"],
+            additionalProperties: false
+          }
+        },
+        preserve: { type: "array", items: { type: "string" } },
+        rewriteInstruction: { type: "string" }
+      },
+      required: ["result", "reason", "violations", "preserve", "rewriteInstruction"],
+      additionalProperties: false
+    }
+  };
+}
+
+// src/core/message-update.ts
+var scriptModulePromise2 = null;
+async function scriptModule() {
+  if (typeof process !== "undefined" && Boolean(process.versions?.node)) return null;
+  if (!scriptModulePromise2) {
+    scriptModulePromise2 = import(
+      /* @vite-ignore */
+      String("/script.js")
+    ).catch((error) => {
+      console.warn("[MirrorAbyss] message adapter unavailable", error);
+      return null;
+    });
+  }
+  return scriptModulePromise2;
+}
+function updateActiveSwipe(message, text) {
+  if (!Array.isArray(message?.swipes)) return;
+  const id = Number(message.swipe_id);
+  if (Number.isInteger(id) && id >= 0 && id < message.swipes.length) message.swipes[id] = text;
+}
+async function refreshMessageDisplay(index) {
+  const message = getMessage(index);
+  if (!message) return;
+  const module = await scriptModule();
+  try {
+    if (typeof module?.updateMessageBlock === "function") {
+      module.updateMessageBlock(index, message);
+      return;
+    }
+    if (typeof module?.redisplayChat === "function") {
+      await module.redisplayChat({ startIndex: index, fade: false });
+    }
+  } catch (error) {
+    console.warn("[MirrorAbyss] message display refresh failed", error);
+  }
+}
+async function replaceMessageInPlace(artifact, text) {
+  if (currentChatKey() !== artifact.chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u53D6\u6D88\u63D0\u4EA4\u65E7\u4FEE\u6B63\u7248");
+  const message = getMessage(artifact.messageIndex);
+  if (!message || message.is_user) throw new Error("\u539FAI\u6D88\u606F\u5DF2\u4E0D\u5B58\u5728");
+  if (messageFingerprint(artifact.messageIndex) !== artifact.sourceFingerprint) {
+    throw new Error("\u539F\u6B63\u6587\u5DF2\u53D1\u751F\u53D8\u5316\uFF0C\u53D6\u6D88\u63D0\u4EA4\u65E7\u4FEE\u6B63\u7248");
+  }
+  const finalText = String(text || "").trim();
+  if (!finalText) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u8FD4\u56DE\u7A7A\u6B63\u6587");
+  message.mes = finalText;
+  updateActiveSwipe(message, finalText);
+  artifact.assistantText = finalText;
+  artifact.sourceFingerprint = messageFingerprint(artifact.messageIndex);
+  artifact.approvedFingerprint = artifact.sourceFingerprint;
+  artifact.hiddenByAudit = false;
+  artifact.quarantined = false;
+  attachArtifactToMessage(message, artifact);
+  await persistChat();
+  await refreshMessageDisplay(artifact.messageIndex);
+  return artifact.sourceFingerprint;
+}
+async function deleteLatestMessageSafely(artifact) {
+  if (currentChatKey() !== artifact.chatKey) return false;
+  const chat = getChat();
+  if (artifact.messageIndex !== chat.length - 1) return false;
+  if (messageFingerprint(artifact.messageIndex) !== artifact.sourceFingerprint) return false;
+  const before = chat.length;
+  const module = await scriptModule();
+  try {
+    if (typeof module?.deleteLastMessage === "function") {
+      await module.deleteLastMessage();
+      await persistChat();
+      return getChat().length < before;
+    }
+  } catch (error) {
+    console.warn("[MirrorAbyss] deleteLastMessage failed", error);
+  }
+  try {
+    const slashModule = await import(
+      /* @vite-ignore */
+      String("/scripts/slash-commands.js")
+    );
+    if (typeof slashModule?.executeSlashCommands !== "function") return false;
+    await slashModule.executeSlashCommands("/del 1");
+    return getChat().length < before;
+  } catch (error) {
+    console.warn("[MirrorAbyss] slash delete unavailable", error);
+    return false;
+  }
+}
 
 // src/pipeline/audit.ts
+function list(value, maxItems = 24) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => safeText(item, 2e3).trim()).filter(Boolean).slice(0, maxItems);
+}
+function violationList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => ({
+    ruleId: safeText(item?.ruleId || `rule_${index + 1}`, 120).trim() || `rule_${index + 1}`,
+    rule: safeText(item?.rule, 1e3).trim(),
+    evidence: safeText(item?.evidence, 3e3).trim(),
+    action: safeText(item?.action, 3e3).trim()
+  })).filter((item) => item.rule || item.evidence || item.action).slice(0, 24);
+}
+function resultFingerprint(violations) {
+  const normalized = violations.map((item) => `${item.ruleId}|${item.rule}`.toLowerCase().replace(/\s+/g, " ").trim()).sort().join("\n");
+  return normalized ? hashText(normalized) : "";
+}
 function parseAuditResult(raw) {
-  const text = safeText(raw).trim().replace(/\r/g, "");
-  const lines = text.split("\n");
-  const first = (lines[0] || "").trim().toUpperCase();
-  const reason = lines.slice(1).join("\n").trim();
-  if (first === "MA_OK") return { passed: true, reason: reason || "\u901A\u8FC7" };
-  if (first === "MA_FAIL") return { passed: false, reason: reason || "\u8FDD\u53CD\u89C4\u5219" };
-  throw new Error("\u89C4\u5219\u5BA1\u6838\u6A21\u578B\u672A\u8FD4\u56DE MA_OK \u6216 MA_FAIL");
+  const text = safeText(raw, 1e5).trim();
+  try {
+    const data = parseJsonObject(text);
+    const decision = ["pass", "revise", "block"].includes(String(data.result)) ? String(data.result) : "revise";
+    const violations = violationList(data.violations);
+    const passed = decision === "pass";
+    return {
+      passed,
+      decision,
+      reason: safeText(data.reason, 3e3).trim() || (passed ? "\u901A\u8FC7" : "\u8FDD\u53CD\u89C4\u5219"),
+      violations: passed ? [] : violations,
+      preserve: list(data.preserve),
+      rewriteInstruction: safeText(data.rewriteInstruction, 6e3).trim(),
+      violationFingerprint: passed ? "" : resultFingerprint(violations)
+    };
+  } catch {
+    const lines = text.replace(/\r/g, "").split("\n");
+    const first = (lines[0] || "").trim().toUpperCase();
+    const reason = lines.slice(1).join("\n").trim();
+    if (first === "MA_OK") {
+      return {
+        passed: true,
+        decision: "pass",
+        reason: reason || "\u901A\u8FC7",
+        violations: [],
+        preserve: [],
+        rewriteInstruction: "",
+        violationFingerprint: ""
+      };
+    }
+    if (first === "MA_FAIL") {
+      const violations = [{
+        ruleId: "legacy_failure",
+        rule: "\u5BA1\u6838\u6A21\u578B\u5224\u5B9A\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219",
+        evidence: reason || "\u672A\u7ED9\u51FA\u5177\u4F53\u8BC1\u636E",
+        action: reason || "\u4F9D\u636E\u73A9\u5BB6\u89C4\u5219\u5B9A\u5411\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9"
+      }];
+      return {
+        passed: false,
+        decision: "revise",
+        reason: reason || "\u8FDD\u53CD\u89C4\u5219",
+        violations,
+        preserve: [],
+        rewriteInstruction: reason || "\u53EA\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9\uFF0C\u4E0D\u6539\u53D8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E\u3002",
+        violationFingerprint: resultFingerprint(violations)
+      };
+    }
+    throw new Error("\u89C4\u5219\u5BA1\u6838\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548JSON\u3001MA_OK\u6216MA_FAIL");
+  }
 }
 function findMessageElement(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
@@ -508,61 +839,80 @@ function applyAuditVisibility(index, hidden) {
   const element = findMessageElement(index);
   element?.classList.toggle("ma11-audit-hidden-message", hidden);
 }
-async function safeDeleteLatest(index, fingerprint) {
-  if (index !== latestAssistantIndex()) return false;
-  if (messageFingerprint(index) !== fingerprint) return false;
-  const beforeLength = getChat().length;
+async function auditText(playerRules, playerText, assistantText) {
+  const request = {
+    task: "audit",
+    systemPrompt: auditSystemPrompt(),
+    prompt: auditUserPrompt(playerRules, playerText, assistantText)
+  };
+  const raw = await generateTask({ ...request, jsonSchema: auditJsonSchema() });
   try {
-    const moduleUrl = "/scripts/slash-commands.js";
-    const slashModule = await import(
-      /* @vite-ignore */
-      moduleUrl
-    );
-    if (typeof slashModule?.executeSlashCommands !== "function") return false;
-    await slashModule.executeSlashCommands("/del 1");
-    return getChat().length < beforeLength;
-  } catch (error) {
-    console.warn("[MirrorAbyss] safe delete unavailable", error);
-    return false;
+    return parseAuditResult(raw);
+  } catch (firstError) {
+    if (!getSettings().repairInvalidJsonOnce) throw firstError;
+    const repaired = await generateTask({
+      ...request,
+      systemPrompt: `${auditSystemPrompt()}
+
+\u4E0A\u4E00\u6B21\u8F93\u51FA\u672A\u80FD\u89E3\u6790\u3002\u518D\u6B21\u6267\u884C\u5BA1\u6838\uFF0C\u5E76\u4E25\u683C\u53EA\u8F93\u51FA\u8981\u6C42\u7684JSON\u5BF9\u8C61\u3002`
+    });
+    return parseAuditResult(repaired);
+  }
+}
+async function applyAuditFailureAction(artifact, action) {
+  if (action === "mark") {
+    artifact.hiddenByAudit = false;
+    applyAuditVisibility(artifact.messageIndex, false);
+    return;
+  }
+  if (action === "hide") {
+    artifact.hiddenByAudit = true;
+    applyAuditVisibility(artifact.messageIndex, true);
+    return;
+  }
+  const deleted = await deleteLatestMessageSafely(artifact);
+  if (!deleted) {
+    artifact.hiddenByAudit = true;
+    applyAuditVisibility(artifact.messageIndex, true);
+    toast("warning", "\u5BA1\u6838\u672A\u901A\u8FC7\uFF0C\u4F46\u5B89\u5168\u64A4\u56DE\u6761\u4EF6\u4E0D\u6210\u7ACB\uFF1B\u5DF2\u6539\u4E3A\u9690\u85CF\u5E76\u4FDD\u7559\u8BB0\u5F55");
   }
 }
 async function runAudit(artifact, force = false) {
   const settings = getSettings();
+  artifact.stages.revision ||= { status: "idle", attempts: 0 };
   if (!settings.auditEnabled) {
     markStage(artifact, "audit", "skipped");
-    artifact.audit = { passed: true, reason: "\u672A\u542F\u7528\u89C4\u5219\u5BA1\u6838" };
+    markStage(artifact, "revision", "skipped");
+    artifact.audit = {
+      passed: true,
+      decision: "pass",
+      reason: "\u672A\u542F\u7528\u89C4\u5219\u5BA1\u6838",
+      violations: [],
+      preserve: [],
+      rewriteInstruction: "",
+      violationFingerprint: ""
+    };
     await putArtifact(artifact);
     return artifact.audit;
   }
   if (!settings.auditPrompt.trim()) throw new Error("\u5DF2\u542F\u7528\u89C4\u5219\u5BA1\u6838\uFF0C\u4F46\u5BA1\u6838\u63D0\u793A\u8BCD\u4E3A\u7A7A");
-  if (!force && artifact.stages.audit.status === "success" && artifact.audit?.passed) return artifact.audit;
+  if (!force && artifact.stages.audit.status === "success" && artifact.audit?.passed && artifact.approvedFingerprint === artifact.sourceFingerprint) {
+    return artifact.audit;
+  }
   markStage(artifact, "audit", "running");
   await putArtifact(artifact);
   try {
-    const raw = await generateTask({
-      task: "audit",
-      systemPrompt: auditSystemPrompt(),
-      prompt: auditUserPrompt(settings.auditPrompt, artifact.playerText, artifact.assistantText)
-    });
-    const result = parseAuditResult(raw);
+    const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText);
     artifact.audit = result;
     if (result.passed) {
+      artifact.approvedFingerprint = artifact.sourceFingerprint;
       artifact.hiddenByAudit = false;
+      artifact.quarantined = false;
       applyAuditVisibility(artifact.messageIndex, false);
       markStage(artifact, "audit", "success");
+      markStage(artifact, "revision", "skipped");
     } else {
       markStage(artifact, "audit", "blocked", result.reason);
-      if (settings.auditFailAction === "hide") {
-        artifact.hiddenByAudit = true;
-        applyAuditVisibility(artifact.messageIndex, true);
-      } else if (settings.auditFailAction === "delete") {
-        const deleted = await safeDeleteLatest(artifact.messageIndex, artifact.sourceFingerprint);
-        if (!deleted) {
-          artifact.hiddenByAudit = true;
-          applyAuditVisibility(artifact.messageIndex, true);
-          toast("warning", "\u5BA1\u6838\u672A\u901A\u8FC7\uFF0C\u4F46\u5B89\u5168\u64A4\u56DE\u6761\u4EF6\u4E0D\u6210\u7ACB\uFF1B\u5DF2\u6539\u4E3A\u9690\u85CF\u5E76\u4FDD\u7559\u8BB0\u5F55");
-        }
-      }
     }
     const message = getMessage(artifact.messageIndex);
     if (message && messageFingerprint(artifact.messageIndex) === artifact.sourceFingerprint) {
@@ -575,6 +925,152 @@ async function runAudit(artifact, force = false) {
     markStage(artifact, "audit", "failed", toErrorMessage(error));
     await putArtifact(artifact);
     throw error;
+  }
+}
+
+// src/prompts/revision.ts
+function revisionSystemPrompt(customPrompt = "") {
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u6B63\u6587\u5B9A\u5411\u4FEE\u6B63\u5668\u3002\u4F60\u7684\u4EFB\u52A1\u662F\u4FEE\u6B63\u5DF2\u6709\u6B63\u6587\uFF0C\u4E0D\u662F\u91CD\u65B0\u521B\u4F5C\u3002
+
+\u786C\u6027\u8981\u6C42\uFF1A
+1. \u53EA\u4FEE\u6539\u5BA1\u6838\u6307\u51FA\u7684\u8FDD\u89C4\u90E8\u5206\u3002
+2. \u4FDD\u7559\u539F\u6709\u65F6\u95F4\u3001\u5730\u70B9\u3001\u4E8B\u4EF6\u987A\u5E8F\u3001NPC\u5DF2\u7ECF\u53D1\u751F\u7684\u52A8\u4F5C\u4E0E\u5BF9\u767D\u3001\u7269\u54C1\u72B6\u6001\u548C\u5DF2\u7ECF\u6210\u7ACB\u7684\u5916\u90E8\u7ED3\u679C\u3002
+3. \u4E0D\u589E\u52A0\u65B0\u4EBA\u7269\u3001\u65B0\u4E8B\u4EF6\u3001\u65B0\u7EBF\u7D22\u3001\u65B0\u5BF9\u767D\u3001\u65B0\u884C\u52A8\u6216\u65B0\u7ED3\u679C\u3002
+4. \u4E0D\u66FF\u73A9\u5BB6\u7126\u70B9\u8865\u5145\u672A\u58F0\u660E\u7684\u5FC3\u7406\u3001\u5224\u65AD\u3001\u51B3\u5B9A\u3001\u76EE\u6807\u3001\u6CE8\u610F\u529B\u6216\u884C\u52A8\u7406\u7531\u3002
+5. \u82E5\u5220\u9664\u8FDD\u89C4\u53E5\u4F1A\u9020\u6210\u8BED\u6CD5\u65AD\u88C2\uFF0C\u53EF\u7528\u6700\u5C0F\u91CF\u7684\u5916\u90E8\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u8FDE\u63A5\uFF0C\u4F46\u4E0D\u5F97\u6269\u5C55\u5267\u60C5\u3002
+6. \u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u5B8C\u6574\u6B63\u6587\uFF0C\u4E0D\u8F93\u51FA\u6807\u9898\u3001\u8BF4\u660E\u3001\u5BA1\u6838\u62A5\u544A\u3001\u524D\u540E\u5BF9\u6BD4\u6216Markdown\u4EE3\u7801\u5757\u3002
+${customPrompt.trim() ? `
+\u3010\u73A9\u5BB6\u9644\u52A0\u4FEE\u6B63\u8981\u6C42\u3011
+${customPrompt.trim()}` : ""}`;
+}
+function revisionUserPrompt(playerRules, playerText, sourceText, audit, attempt) {
+  const violations = audit.violations.map((item, index) => `${index + 1}. \u89C4\u5219\uFF1A${item.rule}
+   \u8BC1\u636E\uFF1A${item.evidence}
+   \u4FEE\u6539\uFF1A${item.action}`).join("\n");
+  const preserve = audit.preserve.length ? audit.preserve.map((item) => `- ${item}`).join("\n") : "- \u539F\u6B63\u6587\u4E2D\u5168\u90E8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E";
+  return `\u3010\u4FEE\u6B63\u8F6E\u6B21\u3011
+\u7B2C${attempt}\u6B21
+
+\u3010\u73A9\u5BB6\u786C\u6027\u89C4\u5219\u3011
+${playerRules}
+
+\u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
+${playerText || "\uFF08\u7A7A\uFF09"}
+
+\u3010\u5FC5\u987B\u4FEE\u6B63\u7684\u95EE\u9898\u3011
+${violations || audit.reason}
+
+\u3010\u5FC5\u987B\u4FDD\u7559\u3011
+${preserve}
+
+\u3010\u5BA1\u6838\u5668\u7EFC\u5408\u4FEE\u6539\u6307\u4EE4\u3011
+${audit.rewriteInstruction || audit.reason}
+
+\u3010\u5F85\u4FEE\u6B63\u6587\u3011
+${sourceText}
+
+\u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u5B8C\u6574\u6B63\u6587\u3002`;
+}
+
+// src/pipeline/revision.ts
+function cleanRevisionText(raw) {
+  let text = safeText(raw, 2e5).trim();
+  const fenced = text.match(/^```(?:markdown|text)?\s*([\s\S]*?)```$/i);
+  if (fenced) text = fenced[1].trim();
+  text = text.replace(/^(?:【?修正版(?:正文)?】?|修正后的完整正文)\s*[:：]?\s*/i, "").trim();
+  return text;
+}
+function initialRevisionRecord(artifact) {
+  return artifact.revision ?? {
+    status: "idle",
+    originalText: artifact.assistantText,
+    originalFingerprint: artifact.sourceFingerprint,
+    attempts: []
+  };
+}
+async function runRevisionFlow(artifact) {
+  const settings = getSettings();
+  const firstAudit = artifact.audit;
+  if (!firstAudit || firstAudit.passed) throw new Error("\u6CA1\u6709\u53EF\u4FEE\u6B63\u7684\u5BA1\u6838\u5931\u8D25\u7ED3\u679C");
+  artifact.revision = initialRevisionRecord(artifact);
+  if (firstAudit.decision === "block") {
+    artifact.revision.status = "blocked";
+    artifact.revision.stoppedReason = firstAudit.reason || "\u5BA1\u6838\u5224\u5B9A\u65E0\u6CD5\u5C40\u90E8\u4FEE\u6B63";
+    markStage(artifact, "revision", "blocked", artifact.revision.stoppedReason);
+    await putArtifact(artifact);
+    return { approved: false, audit: firstAudit };
+  }
+  ensureQuarantine(artifact);
+  artifact.hiddenByAudit = true;
+  artifact.quarantined = true;
+  applyAuditVisibility(artifact.messageIndex, true);
+  artifact.revision.status = "running";
+  markStage(artifact, "revision", "running");
+  await putArtifact(artifact);
+  let sourceText = artifact.assistantText;
+  let currentAudit = firstAudit;
+  let previousViolationFingerprint = firstAudit.violationFingerprint;
+  const maxAttempts = Math.min(2, Math.max(1, Number(settings.maxRevisionAttempts) || 1));
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const raw = await generateTask({
+        task: "revision",
+        systemPrompt: revisionSystemPrompt(settings.revisionPrompt),
+        prompt: revisionUserPrompt(settings.auditPrompt, artifact.playerText, sourceText, currentAudit, attempt)
+      });
+      const candidate = cleanRevisionText(raw);
+      if (!candidate) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u8FD4\u56DE\u7A7A\u6B63\u6587");
+      if (hashText(candidate) === hashText(sourceText)) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u672A\u6539\u53D8\u6B63\u6587");
+      const candidateAudit = await auditText(settings.auditPrompt, artifact.playerText, candidate);
+      artifact.revision.attempts.push({
+        attempt,
+        sourceFingerprint: hashText(sourceText),
+        candidateFingerprint: hashText(candidate),
+        audit: candidateAudit,
+        createdAt: nowIso()
+      });
+      if (candidateAudit.passed) {
+        artifact.audit = candidateAudit;
+        await replaceMessageInPlace(artifact, candidate);
+        artifact.revision.status = "success";
+        artifact.revision.finalFingerprint = artifact.sourceFingerprint;
+        artifact.revision.committedAt = nowIso();
+        artifact.revision.originalText = "";
+        artifact.hiddenByAudit = false;
+        artifact.quarantined = false;
+        markStage(artifact, "audit", "success");
+        markStage(artifact, "revision", "success");
+        await putArtifact(artifact);
+        return { approved: true, audit: candidateAudit };
+      }
+      const sameViolation = Boolean(
+        settings.stopOnRepeatedViolation && candidateAudit.violationFingerprint && candidateAudit.violationFingerprint === previousViolationFingerprint
+      );
+      if (candidateAudit.decision === "block" || sameViolation) {
+        artifact.audit = candidateAudit;
+        artifact.revision.status = "blocked";
+        artifact.revision.stoppedReason = candidateAudit.decision === "block" ? candidateAudit.reason : "\u4FEE\u6B63\u540E\u91CD\u590D\u51FA\u73B0\u76F8\u540C\u8FDD\u89C4\uFF0C\u5DF2\u505C\u6B62\u5FAA\u73AF";
+        markStage(artifact, "revision", "blocked", artifact.revision.stoppedReason);
+        await putArtifact(artifact);
+        return { approved: false, audit: candidateAudit };
+      }
+      sourceText = candidate;
+      currentAudit = candidateAudit;
+      previousViolationFingerprint = candidateAudit.violationFingerprint;
+      artifact.audit = candidateAudit;
+      await putArtifact(artifact);
+    }
+    artifact.revision.status = "failed";
+    artifact.revision.stoppedReason = `\u8FBE\u5230\u6700\u5927\u81EA\u52A8\u4FEE\u6B63\u6B21\u6570\uFF08${maxAttempts}\uFF09`;
+    markStage(artifact, "revision", "failed", artifact.revision.stoppedReason);
+    await putArtifact(artifact);
+    return { approved: false, audit: artifact.audit ?? firstAudit };
+  } catch (error) {
+    artifact.revision.status = "failed";
+    artifact.revision.stoppedReason = toErrorMessage(error);
+    markStage(artifact, "revision", "failed", artifact.revision.stoppedReason);
+    await putArtifact(artifact);
+    return { approved: false, audit: artifact.audit ?? firstAudit };
   }
 }
 
@@ -634,8 +1130,8 @@ function cleanPrefixedTitle(title, prefixes) {
 }
 function eventKind(row) {
   const text = `${row.title} ${row.status} ${row.keywords.join(" ")}`;
-  const process = /(^|[｜|])流程|手续|登记|申请|审批|调查程序|制度流程|process/i.test(text);
-  return process ? { label: "\u6D41\u7A0B", name: cleanPrefixedTitle(row.title, ["\u6D41\u7A0B"]) } : { label: "\u4E8B\u4EF6", name: cleanPrefixedTitle(row.title, ["\u4E8B\u4EF6"]) };
+  const process2 = /(^|[｜|])流程|手续|登记|申请|审批|调查程序|制度流程|process/i.test(text);
+  return process2 ? { label: "\u6D41\u7A0B", name: cleanPrefixedTitle(row.title, ["\u6D41\u7A0B"]) } : { label: "\u4E8B\u4EF6", name: cleanPrefixedTitle(row.title, ["\u4E8B\u4EF6"]) };
 }
 function ownerEntry(row, kind) {
   const escaped = kind.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1662,6 +2158,7 @@ async function loadOrCreateArtifact(index, force) {
     await persistChat();
     await putArtifact(artifact);
   }
+  artifact.stages.revision ||= { status: "idle", attempts: 0 };
   return artifact;
 }
 async function processMessage(index, force = false) {
@@ -1675,15 +2172,24 @@ async function processMessage(index, force = false) {
     const artifact = await loadOrCreateArtifact(index, force);
     notify(index, artifact);
     try {
-      const audit = await runAudit(artifact, force);
+      let audit = await runAudit(artifact, force);
       await saveArtifactToMessage(index, artifact);
+      if (!audit.passed && settings.auditFailAction === "revise") {
+        const revised = await runRevisionFlow(artifact);
+        audit = revised.audit;
+        await saveArtifactToMessage(index, artifact);
+      }
       if (!audit.passed) {
+        const failureAction = settings.auditFailAction === "revise" ? settings.revisionFallbackAction : settings.auditFailAction;
+        await applyAuditFailureAction(artifact, failureAction);
+        releaseQuarantine(artifact);
         markStage(artifact, "state", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "sync", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         await saveArtifactToMessage(index, artifact);
         return artifact;
       }
+      releaseQuarantine(artifact);
       if (settings.autoState || force) {
         await runStateExtraction(artifact, force);
         await saveArtifactToMessage(index, artifact);
@@ -1705,22 +2211,27 @@ async function processMessage(index, force = false) {
     } catch (error) {
       const messageText = toErrorMessage(error);
       console.error("[MirrorAbyss] pipeline failed", error);
+      releaseQuarantine(artifact);
       toast("error", `\u5904\u7406\u5931\u8D25\uFF1A${messageText}`);
       await saveArtifactToMessage(index, artifact);
       return artifact;
     }
   });
 }
-function scheduleMessage(payload, force = false, delay = 180) {
+function scheduleMessage(payload, force = false, delay = 0) {
   const index = resolveMessageIndex(payload);
   if (index < 0) return;
+  if (!force) {
+    const primed = primeQuarantine(index);
+    if (primed) notify(index, primed);
+  }
   window.setTimeout(() => void processMessage(index, force), delay);
 }
 async function retryStage(index, stage) {
+  if (stage === "audit" || stage === "revision") return processMessage(index, true);
   const artifact = await loadOrCreateArtifact(index, false);
   const key = `${PIPELINE_VERSION}:retry:${stage}:${artifact.chatKey}:${artifact.messageKey}`;
   return taskQueue.run(key, `\u91CD\u8BD5${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async () => {
-    if (stage === "audit") await runAudit(artifact, true);
     if (stage === "state") await runStateExtraction(artifact, true);
     if (stage === "summary") await maybeRunSummaries(artifact, true, true);
     if (stage === "sync") await syncLorebook(artifact);
@@ -1772,16 +2283,22 @@ function installPipelineEventHandlers() {
   const onReceived = (payload) => scheduleMessage(payload, false);
   const onEdited = (payload) => scheduleMessage(payload, true, 300);
   const onSwiped = (payload) => scheduleMessage(payload, true, 300);
-  const onDeleted = (payload) => void removeMessageArtifact(payload);
+  const onDeleted = (payload) => {
+    clearAllQuarantines();
+    void removeMessageArtifact(payload);
+  };
+  const onChatChanged = () => clearAllQuarantines();
   eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
   eventSource.on(event_types.MESSAGE_EDITED, onEdited);
   eventSource.on(event_types.MESSAGE_SWIPED, onSwiped);
   eventSource.on(event_types.MESSAGE_DELETED, onDeleted);
+  eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
   return () => {
     eventSource.removeListener?.(event_types.MESSAGE_RECEIVED, onReceived);
     eventSource.removeListener?.(event_types.MESSAGE_EDITED, onEdited);
     eventSource.removeListener?.(event_types.MESSAGE_SWIPED, onSwiped);
     eventSource.removeListener?.(event_types.MESSAGE_DELETED, onDeleted);
+    eventSource.removeListener?.(event_types.CHAT_CHANGED, onChatChanged);
   };
 }
 
@@ -1946,6 +2463,15 @@ async function runDiagnostics() {
     status: settings?.auditEnabled && !settings.auditPrompt.trim() ? "error" : "ok",
     detail: settings?.auditEnabled ? settings.auditPrompt.trim() ? "\u5DF2\u542F\u7528\u5E76\u586B\u5199\u89C4\u5219" : "\u5DF2\u542F\u7528\u4F46\u89C4\u5219\u4E3A\u7A7A" : "\u672A\u542F\u7528"
   });
+  const revisionProfileMissing = Boolean(
+    settings?.auditEnabled && settings.auditFailAction === "revise" && settings.connections.revision.mode === "profile" && !settings.connections.revision.profile.trim()
+  );
+  checks.push({
+    id: "revision",
+    label: "\u5B9A\u5411\u4FEE\u6B63\u914D\u7F6E",
+    status: revisionProfileMissing ? "error" : "ok",
+    detail: settings?.auditFailAction === "revise" ? revisionProfileMissing ? "\u4FEE\u6B63\u6A21\u578B\u9009\u62E9\u4E86\u8FDE\u63A5\u914D\u7F6E\uFF0C\u4F46\u914D\u7F6E\u540D\u79F0\u4E3A\u7A7A" : `\u5DF2\u542F\u7528\uFF0C\u6700\u591A${settings.maxRevisionAttempts}\u6B21\uFF0C\u5931\u8D25\u540E${settings.revisionFallbackAction}` : "\u672A\u542F\u7528\u81EA\u52A8\u4FEE\u6B63"
+  });
   if (context) {
     const state2 = await getChatState(currentChatKey());
     checks.push({
@@ -1967,7 +2493,7 @@ async function diagnosticReport() {
     location: location.origin,
     chatKey,
     checks: await runDiagnostics(),
-    settings: context ? { ...getSettings(), auditPrompt: getSettings().auditPrompt ? "[\u5DF2\u586B\u5199]" : "" } : null,
+    settings: context ? { ...getSettings(), auditPrompt: getSettings().auditPrompt ? "[\u5DF2\u586B\u5199]" : "", revisionPrompt: getSettings().revisionPrompt ? "[\u5DF2\u586B\u5199]" : "" } : null,
     chatState: context ? await getChatState(chatKey) : null,
     taskLog: context ? await getTaskLog(chatKey) : []
   };
@@ -2078,6 +2604,7 @@ function stageCards(artifact) {
   const stages = artifact?.stages;
   const rows2 = [
     ["audit", "\u89C4\u5219\u5BA1\u6838"],
+    ["revision", "\u5B9A\u5411\u4FEE\u6B63"],
     ["state", "\u72B6\u6001\u63D0\u53D6"],
     ["summary", "\u5206\u5C42\u603B\u7ED3"],
     ["sync", "\u4E16\u754C\u4E66\u540C\u6B65"]
@@ -2261,18 +2788,33 @@ async function summariesHtml() {
 }
 function auditHtml() {
   const settings = getSettings();
+  const info = currentArtifact();
+  const audit = info?.artifact.audit;
+  const revision = info?.artifact.revision;
+  const violationHtml = audit && !audit.passed && audit.violations.length ? `<ol class="ma11-violation-list">${audit.violations.map((item) => `<li><b>${escapeHtml(item.rule)}</b><p>${escapeHtml(item.evidence)}</p><small>\u4FEE\u6539\uFF1A${escapeHtml(item.action)}</small></li>`).join("")}</ol>` : "";
   return `
     <section class="ma11-card ma11-form-card">
-      <header><b>\u89C4\u5219\u5BA1\u6838</b><span>\u5728\u72B6\u6001\u63D0\u53D6\u524D\u8FD0\u884C</span></header>
+      <header><b>\u89C4\u5219\u5BA1\u6838\u4E0E\u5B9A\u5411\u4FEE\u6B63</b><span>\u6700\u7EC8\u901A\u8FC7\u7684\u6B63\u6587\u624D\u8FDB\u5165\u72B6\u6001\u8868\u4E0E\u4E16\u754C\u4E66</span></header>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="auditEnabled" ${settings.auditEnabled ? "checked" : ""}/><span>\u542F\u7528\u89C4\u5219\u5BA1\u6838</span></label>
       <label>\u5BA1\u6838\u5931\u8D25\u5904\u7406<select data-ma11-setting="auditFailAction">
+        <option value="revise" ${settings.auditFailAction === "revise" ? "selected" : ""}>\u5B9A\u5411\u4FEE\u6B63\u5E76\u539F\u4F4D\u66FF\u6362\uFF08\u63A8\u8350\uFF09</option>
         <option value="mark" ${settings.auditFailAction === "mark" ? "selected" : ""}>\u4FDD\u7559\u5E76\u6807\u7EA2</option>
         <option value="hide" ${settings.auditFailAction === "hide" ? "selected" : ""}>\u9690\u85CF\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u5904\u7406</option>
         <option value="delete" ${settings.auditFailAction === "delete" ? "selected" : ""}>\u5B89\u5168\u64A4\u56DE\u6700\u65B0AI\u6D88\u606F</option>
       </select></label>
+      <label>\u81EA\u52A8\u4FEE\u6B63\u4ECD\u5931\u8D25\u540E\u7684\u5904\u7406<select data-ma11-setting="revisionFallbackAction">
+        <option value="hide" ${settings.revisionFallbackAction === "hide" ? "selected" : ""}>\u9690\u85CF\u5E76\u7B49\u5F85\u4EBA\u5DE5\u5904\u7406\uFF08\u63A8\u8350\uFF09</option>
+        <option value="mark" ${settings.revisionFallbackAction === "mark" ? "selected" : ""}>\u4FDD\u7559\u5E76\u6807\u7EA2</option>
+        <option value="delete" ${settings.revisionFallbackAction === "delete" ? "selected" : ""}>\u5B89\u5168\u64A4\u56DE\u539F\u6B63\u6587</option>
+      </select></label>
+      <label>\u6700\u5927\u81EA\u52A8\u4FEE\u6B63\u6B21\u6570<input type="number" min="1" max="2" data-ma11-setting="maxRevisionAttempts" value="${settings.maxRevisionAttempts}" /></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="stopOnRepeatedViolation" ${settings.stopOnRepeatedViolation ? "checked" : ""}/><span>\u76F8\u540C\u8FDD\u89C4\u91CD\u590D\u51FA\u73B0\u65F6\u7ACB\u5373\u505C\u6B62\uFF0C\u9632\u6B62\u5FAA\u73AF</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lockGenerationDuringAudit" ${settings.lockGenerationDuringAudit ? "checked" : ""}/><span>\u5BA1\u6838\u4E0E\u4FEE\u6B63\u671F\u95F4\u963B\u6B62\u4E0B\u4E00\u8F6E\u751F\u6210\uFF0C\u907F\u514D\u9519\u8BEF\u6B63\u6587\u8FDB\u5165\u4E0A\u4E0B\u6587</span></label>
       <label>\u5BA1\u6838\u63D0\u793A\u8BCD<textarea rows="14" data-ma11-setting="auditPrompt" placeholder="\u586B\u5199\u5FC5\u987B\u68C0\u67E5\u7684\u786C\u89C4\u5219\u3002">${escapeHtml(settings.auditPrompt)}</textarea></label>
-      <p class="ma11-help">\u81EA\u52A8\u64A4\u56DE\u53EA\u5728\u76EE\u6807\u4ECD\u662F\u5F53\u524D\u804A\u5929\u6700\u65B0AI\u6D88\u606F\u3001\u4E14\u6B63\u6587\u6307\u7EB9\u672A\u53D8\u5316\u65F6\u6267\u884C\uFF1B\u6761\u4EF6\u4E0D\u6210\u7ACB\u4F1A\u964D\u7EA7\u4E3A\u9690\u85CF\u3002</p>
-    </section>`;
+      <label>\u9644\u52A0\u4FEE\u6B63\u8981\u6C42\uFF08\u53EF\u9009\uFF09<textarea rows="6" data-ma11-setting="revisionPrompt" placeholder="\u4F8B\u5982\uFF1A\u53EA\u505A\u6700\u5C0F\u6539\u52A8\uFF1B\u4FDD\u7559\u539F\u6709\u6587\u98CE\u548C\u6BB5\u843D\u957F\u5EA6\u3002">${escapeHtml(settings.revisionPrompt)}</textarea></label>
+      <p class="ma11-help">\u5BA1\u6838\u8BF4\u660E\u548C\u4FEE\u6B63\u6307\u4EE4\u53EA\u5728\u9694\u79BB\u4EFB\u52A1\u4E2D\u4F20\u9012\uFF0C\u4E0D\u4F1A\u4F5C\u4E3A\u804A\u5929\u6D88\u606F\u5199\u5165\u4E0A\u4E0B\u6587\u3002\u4FEE\u6B63\u901A\u8FC7\u540E\uFF0C\u63D2\u4EF6\u76F4\u63A5\u5728\u539F\u6D88\u606F\u4F4D\u7F6E\u66FF\u6362\u6B63\u6587\uFF1B\u4E0D\u4F1A\u65B0\u589E\u4E00\u6761\u201C\u4FEE\u6B63\u8BF4\u660E\u201D\u3002</p>
+    </section>
+    ${audit ? `<section class="ma11-card"><header><b>\u6700\u8FD1\u5BA1\u6838\u7ED3\u679C</b><span class="ma11-badge ${audit.passed ? "success" : "danger"}">${audit.passed ? "\u901A\u8FC7" : audit.decision === "block" ? "\u963B\u65AD" : "\u9700\u4FEE\u6B63"}</span></header><p>${escapeHtml(audit.reason)}</p>${violationHtml}${revision ? `<dl class="ma11-meta"><dt>\u4FEE\u6B63\u72B6\u6001</dt><dd>${escapeHtml(revision.status)}</dd><dt>\u4FEE\u6B63\u6B21\u6570</dt><dd>${revision.attempts.length}</dd><dt>\u505C\u6B62\u539F\u56E0</dt><dd>${escapeHtml(revision.stoppedReason || "\u2014")}</dd></dl>` : ""}</section>` : ""}`;
 }
 async function syncHtml() {
   const info = currentArtifact();
@@ -2308,6 +2850,7 @@ function settingsHtml() {
     <section class="ma11-card ma11-form-card">
       <header><b>\u6A21\u578B\u8FDE\u63A5</b><span>\u5BC6\u94A5\u7531SillyTavern\u7BA1\u7406\uFF0C\u955C\u6E0A\u4E0D\u4FDD\u5B58API Key</span></header>
       ${connectionBlock("audit", "\u89C4\u5219\u5BA1\u6838")}
+      ${connectionBlock("revision", "\u5B9A\u5411\u4FEE\u6B63")}
       ${connectionBlock("state", "\u72B6\u6001\u8868")}
       ${connectionBlock("smallSummary", "\u5C0F\u603B\u7ED3")}
       ${connectionBlock("largeSummary", "\u5927\u603B\u7ED3")}
@@ -2578,7 +3121,7 @@ function bindWorkspace(workspace) {
   });
   workspace.addEventListener("input", (event) => {
     const target = event.target;
-    if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "lorebookName")
+    if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "revisionPrompt" || target.dataset.ma11Setting === "lorebookName")
       updateSetting(target);
     if (target.dataset.ma11ConnectionProfile) updateConnection(target);
   });
@@ -2624,20 +3167,23 @@ function findMessageElement2(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
 }
 function panelHtml(index, artifact) {
-  const rows2 = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list) => sum + list.length, 0) : 0;
+  const rows2 = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list2) => sum + list2.length, 0) : 0;
   const error = Object.values(artifact.stages).find((stage) => stage.error)?.error;
   return `
     <div class="ma11-message-panel" data-ma-index="${index}">
       <button class="ma11-message-summary" type="button" data-ma-action="open">
         <span class="ma11-message-title">\u955C\u6E0A\u72B6\u6001</span>
         <span class="ma11-badge ${tone(artifact.stages.audit)}">\u5BA1\u6838 ${stageLabel(artifact.stages.audit)}</span>
+        <span class="ma11-badge ${tone(artifact.stages.revision)}">\u4FEE\u6B63 ${stageLabel(artifact.stages.revision)}</span>
         <span class="ma11-badge ${tone(artifact.stages.state)}">\u8868\u683C ${stageLabel(artifact.stages.state)}</span>
         <span class="ma11-badge ${tone(artifact.stages.sync)}">\u540C\u6B65 ${stageLabel(artifact.stages.sync)}</span>
         <span class="ma11-message-count">${rows2} \u6761</span>
       </button>
-      ${error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
+      ${artifact.quarantined ? '<div class="ma11-message-notice">\u539F\u6B63\u6587\u5904\u4E8E\u9694\u79BB\u533A\uFF1B\u5BA1\u6838\u6216\u4FEE\u6B63\u901A\u8FC7\u524D\u4E0D\u4F1A\u8FDB\u5165\u8868\u683C\u3001\u603B\u7ED3\u548C\u4E16\u754C\u4E66\u3002</div>' : ""}
+      ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
       <div class="ma11-message-actions">
         ${artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
+        ${["failed", "blocked"].includes(artifact.stages.revision?.status ?? "idle") ? '<button data-ma-retry="revision">\u91CD\u8BD5\u5B9A\u5411\u4FEE\u6B63</button>' : ""}
         ${artifact.stages.state.status === "failed" ? '<button data-ma-retry="state">\u91CD\u8BD5\u8868\u683C</button>' : ""}
         ${artifact.stages.summary.status === "failed" ? '<button data-ma-retry="summary">\u91CD\u8BD5\u603B\u7ED3</button>' : ""}
         ${artifact.stages.sync.status === "failed" ? '<button data-ma-retry="sync">\u91CD\u8BD5\u540C\u6B65</button>' : ""}
@@ -2848,8 +3394,7 @@ function onEnable() {
   if (tryGetContext()) void initialize();
 }
 function onDisable() {
-  getSettings().enabled = false;
-  saveSettings();
+  clearAllQuarantines();
 }
 function onActivate() {
   exposeApi();
@@ -2869,6 +3414,7 @@ async function onClean() {
   await cleanData();
 }
 async function onDelete() {
+  clearAllQuarantines();
   cleanupPipeline?.();
   cleanupPanels?.();
   cleanupUiEvents?.();
@@ -2879,6 +3425,7 @@ async function onDelete() {
 }
 
 // src/index.ts
+globalThis.MirrorAbyssGenerationInterceptor = generationInterceptor;
 installAppReadyHandler();
 export {
   onActivate,
