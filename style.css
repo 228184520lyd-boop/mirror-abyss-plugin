@@ -1,14 +1,21 @@
 :root {
-  --ma11-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor, #121418) 92%, transparent);
-  --ma11-panel: color-mix(in srgb, var(--SmartThemeBodyColor, #20242b) 94%, #000 6%);
-  --ma11-panel-2: color-mix(in srgb, var(--SmartThemeBodyColor, #20242b) 82%, #fff 4%);
+  /* SillyTavern theme variables have different roles: BodyColor is text, BlurTint/ChatTint are surfaces. */
   --ma11-text: var(--SmartThemeBodyColor, #eceff4);
-  --ma11-border: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 22%, transparent);
+  --ma11-muted-text: color-mix(in srgb, var(--ma11-text) 72%, transparent);
+  --ma11-surface-base: var(--SmartThemeBlurTintColor, #171b22);
+  --ma11-surface-chat: var(--SmartThemeChatTintColor, var(--ma11-surface-base));
+  --ma11-bg: color-mix(in srgb, var(--ma11-surface-base) 96%, #000 4%);
+  --ma11-panel: color-mix(in srgb, var(--ma11-surface-chat) 92%, var(--ma11-surface-base) 8%);
+  --ma11-panel-2: color-mix(in srgb, var(--ma11-surface-chat) 82%, var(--ma11-text) 18%);
+  --ma11-input: color-mix(in srgb, var(--ma11-surface-base) 90%, #000 10%);
+  --ma11-border: color-mix(in srgb, var(--ma11-text) 24%, transparent);
+  --ma11-border-strong: color-mix(in srgb, var(--ma11-text) 38%, transparent);
   --ma11-accent: var(--SmartThemeQuoteColor, #7aa2f7);
   --ma11-danger: #d95f6a;
   --ma11-success: #57a773;
   --ma11-warning: #c9973e;
   --ma11-shadow: 0 18px 55px rgb(0 0 0 / 38%);
+  color-scheme: light dark;
 }
 
 .ma11-settings-root { margin-top: 0.5rem; }
@@ -34,7 +41,7 @@
   display: grid;
   grid-template-rows: auto auto 1fr;
   overflow: hidden;
-  color: var(--SmartThemeBodyColor, #eceff4);
+  color: var(--ma11-text);
   background: var(--ma11-bg);
   border: 1px solid var(--ma11-border);
   border-radius: 16px;
@@ -49,9 +56,9 @@
   border-bottom: 1px solid var(--ma11-border);
   background: var(--ma11-panel);
 }
-.ma11-brand { font-size: 1.25rem; font-weight: 700; letter-spacing: 0.03em; }
+.ma11-brand { color: var(--ma11-text); font-size: 1.25rem; font-weight: 700; letter-spacing: 0.03em; }
 .ma11-brand span { font-size: 0.68rem; font-weight: 500; opacity: 0.6; margin-left: 0.4rem; }
-.ma11-subtitle { margin-top: 0.2rem; font-size: 0.82rem; opacity: 0.65; }
+.ma11-subtitle { color: var(--ma11-muted-text); margin-top: 0.2rem; font-size: 0.82rem; opacity: 0.65; }
 .ma11-icon-button {
   width: 2.4rem;
   height: 2.4rem;
@@ -71,6 +78,7 @@
   background: var(--ma11-panel);
 }
 .ma11-tabs button, .ma11-table-tabs button {
+  color: var(--ma11-text);
   flex: 0 0 auto;
   border: 1px solid transparent;
   border-radius: 9px;
@@ -84,7 +92,7 @@
   background: color-mix(in srgb, var(--ma11-accent) 18%, transparent);
 }
 .ma11-content { overflow: auto; padding: 1rem; }
-.ma11-content h2, .ma11-content h3, .ma11-content p { margin-top: 0; }
+.ma11-content h2, .ma11-content h3, .ma11-content p { margin-top: 0; color: inherit; }
 .ma11-hero, .ma11-toolbar {
   display: flex;
   justify-content: space-between;
@@ -94,6 +102,7 @@
   padding: 1rem;
   border: 1px solid var(--ma11-border);
   border-radius: 12px;
+  color: var(--ma11-text);
   background: var(--ma11-panel);
 }
 .ma11-hero h2, .ma11-toolbar h2 { margin-bottom: 0.35rem; }
@@ -119,6 +128,7 @@ button.danger { color: #ffb0b8; }
 .ma11-stage-card, .ma11-check, .ma11-card {
   border: 1px solid var(--ma11-border);
   border-radius: 12px;
+  color: var(--ma11-text);
   background: var(--ma11-panel);
 }
 .ma11-stage-card { padding: 0.85rem; border-left: 4px solid var(--ma11-border); }
@@ -138,7 +148,7 @@ button.danger { color: #ffb0b8; }
 .ma11-table-tabs span { margin-left: 0.35rem; opacity: 0.55; }
 .ma11-table-wrap { overflow: auto; border: 1px solid var(--ma11-border); border-radius: 10px; background: var(--ma11-panel); }
 .ma11-table { width: 100%; min-width: 940px; border-collapse: collapse; table-layout: fixed; }
-.ma11-table th, .ma11-table td { border: 1px solid var(--ma11-border); padding: 0.62rem; vertical-align: top; text-align: left; }
+.ma11-table th, .ma11-table td { color: var(--ma11-text); border: 1px solid var(--ma11-border); padding: 0.62rem; vertical-align: top; text-align: left; }
 .ma11-table th { position: sticky; top: 0; z-index: 1; background: var(--ma11-panel-2); }
 .ma11-table th:nth-child(1), .ma11-table td:nth-child(1) { width: 4rem; text-align: center; }
 .ma11-table th:nth-child(2) { width: 10rem; }
@@ -174,7 +184,7 @@ button.danger { color: #ffb0b8; }
   border: 1px solid var(--ma11-border);
   border-radius: 8px;
   padding: 0.6rem;
-  background: color-mix(in srgb, var(--ma11-panel) 88%, #000 12%);
+  background: var(--ma11-input);
   color: inherit;
 }
 .ma11-switch { display: flex !important; grid-template-columns: auto 1fr !important; align-items: center; gap: 0.55rem !important; }
@@ -200,7 +210,7 @@ button.danger { color: #ffb0b8; }
 .ma11-fatal { position: fixed; right: 1rem; top: 1rem; z-index: 12000; padding: 0.7rem 1rem; border: 1px solid var(--ma11-danger); border-radius: 9px; background: #2a1619; color: #ffd8dc; box-shadow: var(--ma11-shadow); }
 
 .ma11-message-panel { margin: 0.45rem 0 0.2rem; border: 1px solid var(--ma11-border); border-radius: 9px; background: color-mix(in srgb, var(--ma11-panel) 74%, transparent); overflow: hidden; }
-.ma11-message-summary { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0.48rem 0.6rem; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.ma11-message-summary { color: var(--ma11-text); width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0.48rem 0.6rem; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .ma11-message-title { font-weight: 700; margin-right: 0.25rem; }
 .ma11-message-count { margin-left: auto; opacity: 0.6; font-size: 0.78rem; }
 .ma11-message-error { padding: 0.45rem 0.65rem; border-top: 1px solid var(--ma11-border); color: #ffb0b8; white-space: pre-wrap; font-size: 0.82rem; }
@@ -208,13 +218,31 @@ button.danger { color: #ffb0b8; }
 .ma11-audit-hidden-message .mes_text { filter: blur(12px); opacity: 0.32; user-select: none; }
 .ma11-audit-hidden-message .ma11-message-panel { filter: none; opacity: 1; }
 
+
+/* Keep the workspace readable under highly customized themes/forks. */
+.ma11-shell, .ma11-shell * { box-sizing: border-box; }
+.ma11-shell input, .ma11-shell select, .ma11-shell textarea, .ma11-shell button {
+  font: inherit;
+}
+.ma11-shell input::placeholder, .ma11-shell textarea::placeholder { color: var(--ma11-muted-text); }
+.ma11-shell option { color: CanvasText; background: Canvas; }
+.ma11-card, .ma11-stage-card, .ma11-hero, .ma11-toolbar, .ma11-table-wrap,
+.ma11-header, .ma11-tabs, .ma11-editor { color: var(--ma11-text); }
+.ma11-card header span, .ma11-stage-card small, .ma11-help, .ma11-empty,
+.ma11-empty-panel, .ma11-summary small { color: var(--ma11-muted-text); opacity: 1; }
+.ma11-actions button:focus-visible, .ma11-icon-button:focus-visible,
+.ma11-tabs button:focus-visible, .ma11-table-tabs button:focus-visible {
+  outline: 2px solid var(--ma11-accent);
+  outline-offset: 2px;
+}
+
 @media (max-width: 820px) {
   .ma11-workspace { padding: 0; place-items: stretch; }
-  .ma11-shell { width: 100vw; height: 100dvh; border-radius: 0; border: 0; }
+  .ma11-shell { width: 100vw; height: 100dvh; border-radius: 0; border: 0; padding-top: env(safe-area-inset-top, 0); padding-bottom: env(safe-area-inset-bottom, 0); }
   .ma11-content { padding: 0.75rem; }
   .ma11-header { padding: 0.75rem; }
   .ma11-subtitle { display: none; }
-  .ma11-tabs { order: 3; padding: 0.5rem; border-top: 1px solid var(--ma11-border); border-bottom: 0; }
+  .ma11-tabs { order: 3; padding: 0.5rem max(0.5rem, env(safe-area-inset-right, 0)) max(0.5rem, env(safe-area-inset-bottom, 0)) max(0.5rem, env(safe-area-inset-left, 0)); border-top: 1px solid var(--ma11-border); border-bottom: 0; }
   .ma11-shell { grid-template-rows: auto 1fr auto; }
   .ma11-content { grid-row: 2; }
   .ma11-tabs { grid-row: 3; }

@@ -2,7 +2,7 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.1.0-alpha.1";
+var VERSION = "1.1.0-alpha.2";
 var PIPELINE_VERSION = "ma-pipeline-1";
 var TABLE_KEYS = [
   "focus",

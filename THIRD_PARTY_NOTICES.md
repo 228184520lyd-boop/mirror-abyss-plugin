@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Mirror Abyss 1.1.0-alpha.1 contains no bundled third-party runtime library.
+Mirror Abyss 1.1.0-alpha.2 contains no bundled third-party runtime library.
 
 The production bundle is generated from this repository's TypeScript source using esbuild. Development-only dependencies are listed in package.json and are not required by SillyTavern at runtime.
 
