@@ -251,6 +251,20 @@
     color: inherit;
 }
 #ma-top-button[hidden] { display: none !important; }
+#ma-top-button.ma-top-fallback {
+    position: fixed;
+    top: max(10px, env(safe-area-inset-top));
+    right: max(10px, env(safe-area-inset-right));
+    z-index: 30120;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--ma-border);
+    border-radius: 10px;
+    background: var(--ma-surface);
+    box-shadow: 0 8px 26px rgba(0,0,0,.35);
+}
+.ma-control-fallback .ma-control-content { overflow: auto; }
+
 #ma-top-button > i { font-size: 16px; }
 .ma-top-dot {
     position: absolute;

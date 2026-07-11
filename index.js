@@ -3,7 +3,7 @@
 
     const MODULE_NAME = 'mirrorAbyss';
     const DISPLAY_NAME = '镜渊';
-    const VERSION = '1.0.0-rc.3';
+    const VERSION = '1.0.0-rc.3.1';
     const EXTENSION_PATH = 'third-party/MA';
     const GRAPH_LIB_URL = 'https://unpkg.com/3d-force-graph@1.79.1/dist/3d-force-graph.min.js';
     const TABLE_KEYS = ['focus', 'spacetime', 'characters', 'relationships', 'items', 'events', 'regions', 'foundations'];
@@ -27,7 +27,7 @@
         largeSummaryCount: 6,
         graphLibraryUrl: GRAPH_LIB_URL,
         showMessagePanels: true,
-        showFloatingButton: false,
+        showFloatingButton: true,
         showTopButton: true,
 
         generationMode: 'independent',
@@ -67,6 +67,22 @@
     const messageProcessPromises = new Map();
     const pipelineTimers = new Map();
     let controlCenterTab = 'overview';
+    const fallbackChatMetadata = {};
+    let settingsPanelRetryTimer = null;
+    let interfaceObserver = null;
+
+    function cloneDefaults(value) {
+        try {
+            if (typeof structuredClone === 'function') return structuredClone(value);
+        } catch (error) {
+            console.warn('[MirrorAbyss] structuredClone unavailable, using JSON clone', error);
+        }
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    function hasOwn(object, key) {
+        return typeof Object.hasOwn === 'function' ? Object.hasOwn(object, key) : Object.prototype.hasOwnProperty.call(object, key);
+    }
 
     function ctx() {
         return window.SillyTavern?.getContext?.();
@@ -74,11 +90,11 @@
 
     function settings() {
         const context = ctx();
-        if (!context) return structuredClone(DEFAULT_SETTINGS);
+        if (!context) return cloneDefaults(DEFAULT_SETTINGS);
         const all = context.extensionSettings;
-        if (!all[MODULE_NAME]) all[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
+        if (!all[MODULE_NAME]) all[MODULE_NAME] = cloneDefaults(DEFAULT_SETTINGS);
         for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-            if (!Object.hasOwn(all[MODULE_NAME], key)) all[MODULE_NAME][key] = value;
+            if (!hasOwn(all[MODULE_NAME], key)) all[MODULE_NAME][key] = value;
         }
         return all[MODULE_NAME];
     }
@@ -90,9 +106,10 @@
 
     function chatMeta() {
         const context = ctx();
-        if (!context) return {};
-        context.chatMetadata ||= {};
-        context.chatMetadata[MODULE_NAME] ||= {
+        const metadata = context?.chatMetadata && typeof context.chatMetadata === 'object'
+            ? context.chatMetadata
+            : fallbackChatMetadata;
+        metadata[MODULE_NAME] ||= {
             schemaVersion: 2,
             lorebookName: '',
             lastSyncAt: null,
@@ -100,10 +117,10 @@
             lastSyncState: 'idle',
             lastAuditFailure: null,
         };
-        const meta = context.chatMetadata[MODULE_NAME];
-        if (!Object.hasOwn(meta, 'lastSyncState')) meta.lastSyncState = meta.lastSyncError ? 'error' : meta.lastSyncAt ? 'success' : 'idle';
-        if (!Object.hasOwn(meta, 'lastAuditFailure')) meta.lastAuditFailure = null;
-        return context.chatMetadata[MODULE_NAME];
+        const meta = metadata[MODULE_NAME];
+        if (!hasOwn(meta, 'lastSyncState')) meta.lastSyncState = meta.lastSyncError ? 'error' : meta.lastSyncAt ? 'success' : 'idle';
+        if (!hasOwn(meta, 'lastAuditFailure')) meta.lastAuditFailure = null;
+        return meta;
     }
 
     async function persistMetadata() {
@@ -376,7 +393,7 @@
             lorebookEntryIds: [],
         };
         for (const [key, value] of Object.entries(defaults)) {
-            if (!Object.hasOwn(data, key)) data[key] = Array.isArray(value) ? [] : value;
+            if (!hasOwn(data, key)) data[key] = Array.isArray(value) ? [] : value;
         }
         data.schemaVersion = 2;
         return data;
@@ -1150,7 +1167,7 @@ ${String(message.mes || '')}`,
         const entry = data?.entries?.[node.uid];
         if (!entry) throw new Error('世界书条目已不存在');
         for (const field of ['comment', 'content', 'key', 'constant', 'vectorized', 'disable', 'order', 'position']) {
-            if (Object.hasOwn(parsed, field)) entry[field] = parsed[field];
+            if (hasOwn(parsed, field)) entry[field] = parsed[field];
         }
         await wi.saveWorldInfo(name, data, true);
         refreshWorkspaceIfOpen();
@@ -1539,11 +1556,27 @@ ${String(message.mes || '')}`,
 
     function openControlCenter(tab = controlCenterTab) {
         controlCenterTab = tab || 'overview';
-        renderControlCenter();
-        const root = document.getElementById('ma-control-center');
-        root.hidden = false;
-        document.body.classList.add('ma-control-open');
-        updateUnifiedStatus();
+        try {
+            renderControlCenter();
+            const root = document.getElementById('ma-control-center');
+            if (!root) throw new Error('控制台容器创建失败');
+            root.hidden = false;
+            root.removeAttribute('hidden');
+            document.body.classList.add('ma-control-open');
+            updateUnifiedStatus();
+        } catch (error) {
+            console.error('[MirrorAbyss] Failed to open control center', error);
+            createControlCenter();
+            const root = document.getElementById('ma-control-center');
+            if (root) {
+                root.hidden = false;
+                root.removeAttribute('hidden');
+                root.innerHTML = `<div class="ma-control-shell ma-control-fallback"><header class="ma-control-head"><div class="ma-brand"><span class="ma-brand-mark">渊</span><div><b>镜渊控制台启动失败</b><small>Mirror Abyss v${VERSION}</small></div></div><button type="button" class="ma-icon-button" id="ma-control-fallback-close">×</button></header><main class="ma-control-content"><div class="ma-alert danger"><b>控制台渲染异常</b><p>${escapeHtml(error?.message || String(error))}</p></div><p class="ma-help">请完全刷新酒馆页面；若仍出现此页，请保留这段错误信息。</p></main></div>`;
+                root.querySelector('#ma-control-fallback-close')?.addEventListener('click', closeControlCenter);
+                document.body.classList.add('ma-control-open');
+            }
+            toast('error', `控制台打开失败：${error?.message || error}`);
+        }
     }
 
     function closeControlCenter() {
@@ -1635,15 +1668,23 @@ ${String(message.mes || '')}`,
         button.title = '镜渊控制台';
         button.setAttribute('aria-label', '打开镜渊控制台');
         button.innerHTML = '<i class="fa-solid fa-table-list"></i><span class="ma-top-dot"></span>';
-        button.addEventListener('click', () => openControlCenter('overview'));
-        const anchors = ['#persona-management-button', '#persona_management_button', '#user-settings-button', '#user_settings_button'];
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            openControlCenter('overview');
+        });
+        const anchors = ['#persona-management-button', '#persona_management_button', '#user-settings-button', '#user_settings_button', '#account-button', '#account_button'];
         const anchor = anchors.map(selector => document.querySelector(selector)).find(Boolean);
-        const host = anchor?.parentElement || document.querySelector('#top-settings-holder') || document.querySelector('#top-bar') || document.querySelector('#sheld');
+        const host = anchor?.parentElement
+            || document.querySelector('#top-settings-holder')
+            || document.querySelector('#top-bar')
+            || document.querySelector('#sheld')
+            || document.querySelector('.top-bar');
         if (anchor) anchor.insertAdjacentElement('afterend', button);
         else if (host) host.appendChild(button);
         else {
-            setTimeout(createTopBarButton, 600);
-            return;
+            button.classList.add('ma-top-fallback');
+            document.body.appendChild(button);
         }
         applyInterfaceVisibility();
     }
@@ -1653,7 +1694,8 @@ ${String(message.mes || '')}`,
         const top = document.getElementById('ma-top-button');
         const floating = document.getElementById('ma-floating-button');
         if (top) top.hidden = !cfg.showTopButton;
-        if (floating) floating.hidden = !cfg.showFloatingButton;
+        const topVisible = Boolean(top && cfg.showTopButton && top.isConnected && getComputedStyle(top).display !== 'none' && getComputedStyle(top).visibility !== 'hidden');
+        if (floating) floating.hidden = !cfg.showFloatingButton && topVisible;
     }
 
     function createFloatingButton() {
@@ -1661,9 +1703,9 @@ ${String(message.mes || '')}`,
         const button = document.createElement('button');
         button.id = 'ma-floating-button';
         button.type = 'button';
-        button.title = '打开镜渊';
+        button.title = '打开镜渊控制台';
         button.innerHTML = '<span class="ma-orb">渊</span><span id="ma-floating-badge"></span>';
-        button.addEventListener('click', () => openWorkspace(latestAssistantIndex()));
+        button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openControlCenter('overview'); });
         document.body.appendChild(button);
     }
 
@@ -2237,7 +2279,12 @@ ${String(message.mes || '')}`,
     function createSettingsPanel() {
         if (document.getElementById('ma-settings')) return;
         const host = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
-        if (!host) return;
+        if (!host) {
+            clearTimeout(settingsPanelRetryTimer);
+            settingsPanelRetryTimer = setTimeout(createSettingsPanel, 700);
+            return;
+        }
+        clearTimeout(settingsPanelRetryTimer);
         const cfg = settings();
         const panel = document.createElement('div');
         panel.id = 'ma-settings';
@@ -2314,6 +2361,24 @@ ${String(message.mes || '')}`,
         });
     }
 
+    function observeInterfaceHosts() {
+        if (interfaceObserver) return;
+        interfaceObserver = new MutationObserver(() => {
+            if (!document.getElementById('ma-top-button')) createTopBarButton();
+            if (!document.getElementById('ma-settings')) createSettingsPanel();
+        });
+        interfaceObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    function exposeEmergencyApi() {
+        window.MirrorAbyss = Object.assign(window.MirrorAbyss || {}, {
+            version: VERSION,
+            openControlCenter: tab => openControlCenter(tab || 'overview'),
+            closeControlCenter,
+            openGraph: () => openWorkspace(latestAssistantIndex()),
+        });
+    }
+
     function init() {
         if (initialized || !ctx()) return;
         initialized = true;
@@ -2323,6 +2388,8 @@ ${String(message.mes || '')}`,
         createControlCenter();
         createWorkspace();
         createSettingsPanel();
+        observeInterfaceHosts();
+        exposeEmergencyApi();
         applyInterfaceVisibility();
         installDelegatedHandlers();
         bindSillyTavernEvents();

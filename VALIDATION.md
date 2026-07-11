@@ -20,3 +20,12 @@ Not yet performed:
 - Long-chat stress test
 
 This is why the package remains a Release Candidate.
+
+
+## rc.3.1 hotfix checks
+
+- [x] JavaScript syntax check
+- [x] manifest version check
+- [x] control center has visible error fallback
+- [x] top/floating/settings entries target the control center
+- [x] delayed settings host retries

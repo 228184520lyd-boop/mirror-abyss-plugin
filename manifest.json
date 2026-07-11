@@ -7,7 +7,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.3.1",
   "homePage": "https://github.com/228184520lyd-boop/MA",
   "auto_update": true,
   "minimum_client_version": "1.14.0"
