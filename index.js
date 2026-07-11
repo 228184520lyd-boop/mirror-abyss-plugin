@@ -2,14 +2,15 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.1.0-alpha.2";
-var PIPELINE_VERSION = "ma-pipeline-1";
+var VERSION = "1.1.0-alpha.4";
+var PIPELINE_VERSION = "ma-pipeline-3";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
   "characters",
   "relationships",
   "items",
+  "skills",
   "events",
   "regions",
   "foundations"
@@ -20,6 +21,7 @@ var TABLE_LABELS = {
   characters: "\u4EBA\u7269",
   relationships: "\u5173\u7CFB",
   items: "\u7269\u54C1",
+  skills: "\u6280\u80FD\u4E0E\u80FD\u529B",
   events: "\u4E8B\u4EF6\u4E0E\u6D41\u7A0B",
   regions: "\u533A\u57DF\u72B6\u6001",
   foundations: "\u57FA\u7840\u8BBE\u5B9A"
@@ -41,6 +43,7 @@ var DEFAULT_SETTINGS = {
   lorebookName: "",
   vectorizeRows: false,
   latestContinuityConstant: true,
+  lorebookLayout: "semantic",
   repairInvalidJsonOnce: true,
   requestTimeoutMs: 9e4,
   connections: {
@@ -51,7 +54,8 @@ var DEFAULT_SETTINGS = {
   },
   ui: {
     activeTab: "overview",
-    activeTable: "focus"
+    activeTable: "focus",
+    graphScope: "relations"
   },
   migration: {
     legacyChecked: false
@@ -177,7 +181,9 @@ function getSettings() {
   const current = context.extensionSettings[MODULE_NAME];
   const migrated = current ?? migrateLegacySettings(legacy);
   context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
-  return context.extensionSettings[MODULE_NAME];
+  const settings = context.extensionSettings[MODULE_NAME];
+  if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
+  return settings;
 }
 function migrateLegacySettings(legacy) {
   if (!legacy || typeof legacy !== "object") return void 0;
@@ -572,6 +578,296 @@ async function runAudit(artifact, force = false) {
   }
 }
 
+// src/domain/lorebook-publish.ts
+function rows(snapshot, key) {
+  return snapshot[key] ?? [];
+}
+function uniq(values, limit = 32) {
+  return [...new Set(values.map((item) => String(item || "").trim()).filter((item) => item.length >= 2))].slice(0, limit);
+}
+function titleKeywords(row) {
+  return uniq([row.title, ...row.keywords], 20);
+}
+function lifecycleLines(lifecycle) {
+  if (!lifecycle) return [];
+  const lines = [
+    `\u5B58\u5728\u72B6\u6001\uFF1A${lifecycle.existence}`,
+    `\u6D3B\u8DC3\u72B6\u6001\uFF1A${lifecycle.activity}`,
+    `\u8BB0\u5FC6\u72B6\u6001\uFF1A${lifecycle.memory}`,
+    `\u8BC1\u636E\u7B49\u7EA7\uFF1A${lifecycle.evidenceLevel}`
+  ];
+  if (lifecycle.evidence) lines.push(`\u5224\u65AD\u4F9D\u636E\uFF1A${lifecycle.evidence}`);
+  if (lifecycle.returnConditions.length) lines.push(`\u53EF\u80FD\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnConditions.join("\uFF1B")}`);
+  if (lifecycle.returnBlockers.length) lines.push(`\u963B\u6B62\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnBlockers.join("\uFF1B")}`);
+  return lines;
+}
+function rowContent(sectionName, row) {
+  const lines = [`[${sectionName}\uFF1A${row.title}]`];
+  lines.push(...lifecycleLines(row.lifecycle));
+  if (row.status) lines.push(`\u5F53\u524D\u72B6\u6001\uFF1A${row.status}`);
+  if (row.content) lines.push(`\u5F53\u524D\u8BB0\u5F55\uFF1A${row.content}`);
+  if (row.keywords.length) lines.push(`\u5173\u952E\u8BCD\uFF1A${row.keywords.join("\u3001")}`);
+  if (row.source === "manual" || row.locked) lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u9501\u5B9A\uFF1B\u81EA\u52A8\u6574\u7406\u4E0D\u5F97\u8986\u76D6\u6216\u5220\u9664\u3002");
+  lines.push(`\u66F4\u65B0\u65F6\u95F4\uFF1A${row.updatedAt}`);
+  return lines.join("\n");
+}
+function groupedContent(title, tableLabel, sourceRows) {
+  const blocks = sourceRows.map((row) => rowContent(tableLabel, row));
+  return `[${title}]
+${blocks.length ? blocks.join("\n\n") : "\u6682\u65E0\u53EF\u53D1\u5E03\u8BB0\u5F55\u3002"}`;
+}
+function isCurrentCharacter(row) {
+  const activity = row.lifecycle?.activity;
+  return activity === "\u5F53\u524D\u5728\u573A" || activity === "\u5F53\u524D\u76F8\u5173";
+}
+function isGlobalRow(row) {
+  const text = `${row.title} ${row.status} ${row.keywords.join(" ")}`;
+  return /(全局|跨区域|公共|社会|制度|世界态势|global)/i.test(text);
+}
+function cleanPrefixedTitle(title, prefixes) {
+  let output = String(title || "").trim();
+  for (const prefix of prefixes) {
+    const pattern = new RegExp(`^${prefix}[\uFF5C|:\uFF1A\\s-]*`, "i");
+    output = output.replace(pattern, "").trim();
+  }
+  return output || title;
+}
+function eventKind(row) {
+  const text = `${row.title} ${row.status} ${row.keywords.join(" ")}`;
+  const process = /(^|[｜|])流程|手续|登记|申请|审批|调查程序|制度流程|process/i.test(text);
+  return process ? { label: "\u6D41\u7A0B", name: cleanPrefixedTitle(row.title, ["\u6D41\u7A0B"]) } : { label: "\u4E8B\u4EF6", name: cleanPrefixedTitle(row.title, ["\u4E8B\u4EF6"]) };
+}
+function ownerEntry(row, kind) {
+  const escaped = kind.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = row.title.match(new RegExp(`^(.*?)[\uFF5C|:\uFF1A\\s-]*${escaped}$`));
+  if (match?.[1]?.trim()) {
+    const owner = match[1].trim();
+    return { comment: `MA\uFF5C${kind}\uFF5C${owner}`, name: owner, label: kind };
+  }
+  return kind === "\u7269\u54C1\u4E0E\u8D44\u6E90" ? { comment: `MA\uFF5C\u7269\u54C1\uFF5C${row.title}`, name: row.title, label: "\u7269\u54C1" } : { comment: `MA\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\uFF5C${row.title}`, name: row.title, label: "\u6280\u80FD\u4E0E\u80FD\u529B" };
+}
+function makeDocument(key, comment, content, keywords, constant, vectorized, order, kind) {
+  return {
+    key,
+    comment: `[MA11] ${comment}`,
+    content,
+    keywords: uniq(keywords),
+    constant,
+    vectorized: constant ? false : vectorized,
+    order,
+    kind
+  };
+}
+function unconsumedSmallSummaries(small, large) {
+  const consumed = new Set(large.flatMap((item) => item.sourceKeys));
+  return small.filter((item) => !consumed.has(item.id));
+}
+function currentSmallSummaryContent(summaries) {
+  const blocks = summaries.map((item) => {
+    const notes = item.sedimentation?.notes?.length ? `
+\u6C89\u964D\u5904\u7406\uFF1A${item.sedimentation.notes.join("\uFF1B")}` : "";
+    return `\u3010${item.title}\u3011
+${item.summary}${notes}`;
+  });
+  return `[\u5C0F\u603B\u7ED3\uFF1A\u5F53\u524D\u5468\u671F]
+${blocks.join("\n\n")}`;
+}
+function buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
+  const documents = [];
+  if (snapshot) {
+    const foundationRows = rows(snapshot, "foundations");
+    documents.push(makeDocument(
+      "semantic:foundations",
+      "MA\uFF5C\u57FA\u7840\u8BBE\u5B9A",
+      groupedContent("\u57FA\u7840\u8BBE\u5B9A", TABLE_LABELS.foundations, foundationRows),
+      ["\u57FA\u7840\u8BBE\u5B9A", ...foundationRows.flatMap(titleKeywords)],
+      true,
+      false,
+      170,
+      "semantic:foundations"
+    ));
+    const globalRows = [
+      ...rows(snapshot, "spacetime"),
+      ...rows(snapshot, "events").filter(isGlobalRow),
+      ...rows(snapshot, "regions").filter(isGlobalRow)
+    ];
+    documents.push(makeDocument(
+      "semantic:global",
+      "MA\uFF5C\u5168\u5C40\u6001\u52BF",
+      groupedContent("\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u6001\u52BF", globalRows),
+      ["\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u65F6\u95F4", "\u5F53\u524D\u5730\u70B9", ...globalRows.flatMap(titleKeywords)],
+      options.latestContinuityConstant,
+      false,
+      165,
+      "semantic:global"
+    ));
+    for (const row of rows(snapshot, "focus")) {
+      documents.push(makeDocument(
+        `semantic:focus:${row.id}`,
+        `MA\uFF5C\u7126\u70B9\uFF5C${row.title}`,
+        rowContent("\u7126\u70B9", row),
+        titleKeywords(row),
+        options.latestContinuityConstant,
+        false,
+        160,
+        "semantic:focus"
+      ));
+    }
+    for (const row of rows(snapshot, "characters")) {
+      documents.push(makeDocument(
+        `semantic:character:${row.id}`,
+        `MA\uFF5C\u4EBA\u7269\uFF5C${row.title}`,
+        rowContent("\u4EBA\u7269", row),
+        titleKeywords(row),
+        options.latestContinuityConstant && isCurrentCharacter(row),
+        options.vectorize,
+        isCurrentCharacter(row) ? 155 : 125,
+        "semantic:character"
+      ));
+    }
+    const relationRows = rows(snapshot, "relationships");
+    if (relationRows.length) {
+      documents.push(makeDocument(
+        "semantic:relationships",
+        "MA\uFF5C\u5173\u7CFB\u7F51\u7EDC",
+        groupedContent("\u5173\u7CFB\u7F51\u7EDC", TABLE_LABELS.relationships, relationRows),
+        ["\u5173\u7CFB\u7F51\u7EDC", ...relationRows.flatMap(titleKeywords)],
+        false,
+        options.vectorize,
+        145,
+        "semantic:relationships"
+      ));
+    }
+    for (const row of rows(snapshot, "regions")) {
+      documents.push(makeDocument(
+        `semantic:region:${row.id}`,
+        `MA\uFF5C\u533A\u57DF\uFF5C${row.title}`,
+        rowContent("\u533A\u57DF", row),
+        titleKeywords(row),
+        false,
+        options.vectorize,
+        130,
+        "semantic:region"
+      ));
+    }
+    for (const row of rows(snapshot, "events")) {
+      const classified = eventKind(row);
+      documents.push(makeDocument(
+        `semantic:${classified.label === "\u6D41\u7A0B" ? "process" : "event"}:${row.id}`,
+        `MA\uFF5C${classified.label}\uFF5C${classified.name}`,
+        rowContent(classified.label, row),
+        titleKeywords(row),
+        false,
+        options.vectorize,
+        135,
+        classified.label === "\u6D41\u7A0B" ? "semantic:process" : "semantic:event"
+      ));
+    }
+    for (const row of rows(snapshot, "items")) {
+      const info = ownerEntry(row, "\u7269\u54C1\u4E0E\u8D44\u6E90");
+      documents.push(makeDocument(
+        `semantic:item:${row.id}`,
+        info.comment,
+        rowContent(info.label, row),
+        titleKeywords(row),
+        false,
+        options.vectorize,
+        120,
+        "semantic:item"
+      ));
+    }
+    for (const row of rows(snapshot, "skills")) {
+      const info = ownerEntry(row, "\u6280\u80FD\u4E0E\u80FD\u529B");
+      documents.push(makeDocument(
+        `semantic:skill:${row.id}`,
+        info.comment,
+        rowContent(info.label, row),
+        titleKeywords(row),
+        false,
+        options.vectorize,
+        118,
+        "semantic:skill"
+      ));
+    }
+  }
+  const pendingSmall = unconsumedSmallSummaries(smallSummaries, largeSummaries);
+  if (pendingSmall.length) {
+    documents.push(makeDocument(
+      "semantic:small:current",
+      "MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C\u5F53\u524D\u5468\u671F",
+      currentSmallSummaryContent(pendingSmall),
+      ["\u5C0F\u603B\u7ED3", "\u5F53\u524D\u5468\u671F", ...pendingSmall.flatMap((item) => [item.title, ...item.keywords])],
+      options.latestContinuityConstant,
+      options.vectorize,
+      150,
+      "semantic:small"
+    ));
+  }
+  const latestLarge = largeSummaries.at(-1);
+  if (latestLarge) {
+    documents.push(makeDocument(
+      "semantic:large:current",
+      "MA\uFF5C\u5927\u603B\u7ED3\uFF5C\u957F\u671F\u6C89\u964D",
+      `[\u5927\u603B\u7ED3\uFF1A\u957F\u671F\u6C89\u964D]
+${latestLarge.summary}`,
+      ["\u5927\u603B\u7ED3", "\u957F\u671F\u6C89\u964D", latestLarge.title, ...latestLarge.keywords],
+      options.latestContinuityConstant,
+      options.vectorize,
+      148,
+      "semantic:large"
+    ));
+  }
+  return documents;
+}
+function buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
+  const documents = [];
+  if (snapshot) {
+    for (const tableKey of TABLE_KEYS) {
+      for (const row of rows(snapshot, tableKey)) {
+        const constant = ["focus", "spacetime", "foundations"].includes(tableKey);
+        documents.push(makeDocument(
+          `state:${tableKey}:${row.id}`,
+          `MA\uFF5C${TABLE_LABELS[tableKey]}\uFF5C${row.title}`,
+          rowContent(TABLE_LABELS[tableKey], row),
+          titleKeywords(row),
+          constant,
+          options.vectorize,
+          constant ? 140 : 100,
+          `state:${tableKey}`
+        ));
+      }
+    }
+  }
+  for (const item of smallSummaries) {
+    documents.push(makeDocument(
+      `small:${item.id}`,
+      `MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item.title}`,
+      item.summary,
+      [item.title, ...item.keywords],
+      false,
+      options.vectorize,
+      110,
+      "small"
+    ));
+  }
+  for (const item of largeSummaries) {
+    documents.push(makeDocument(
+      `large:${item.id}`,
+      `MA\uFF5C\u5927\u603B\u7ED3\uFF5C${item.title}`,
+      item.summary,
+      [item.title, ...item.keywords],
+      false,
+      options.vectorize,
+      120,
+      "large"
+    ));
+  }
+  return documents;
+}
+function buildLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
+  return options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) : buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options);
+}
+
 // src/pipeline/lorebook.ts
 var worldInfoModulePromise = null;
 async function worldInfoApi() {
@@ -614,9 +910,6 @@ async function resolveBookName(create) {
   }
   return name;
 }
-function rowKeywords(row) {
-  return [...new Set([row.title, ...row.keywords].map((item) => String(item || "").trim()).filter((item) => item.length >= 2))].slice(0, 16);
-}
 function managedInfo(entry) {
   return entry?.extensions?.mirrorAbyssV11 ?? null;
 }
@@ -645,62 +938,17 @@ function applyEntry(entry, key, spec, wi) {
 async function desiredSpecs(artifact) {
   const settings = getSettings();
   const state2 = await getChatState(artifact.chatKey);
-  const desired = /* @__PURE__ */ new Map();
-  if (artifact.snapshot) {
-    for (const tableKey of TABLE_KEYS) {
-      for (const row of artifact.snapshot[tableKey]) {
-        const constant = ["focus", "spacetime", "foundations"].includes(tableKey);
-        desired.set(`state:${tableKey}:${row.id}`, {
-          comment: `[MA11][${TABLE_LABELS[tableKey]}] ${row.title}`,
-          content: `[${TABLE_LABELS[tableKey]}\uFF1A${row.title}]
-${row.content}${row.status ? `
-\u72B6\u6001\uFF1A${row.status}` : ""}`,
-          keywords: rowKeywords(row),
-          constant,
-          vectorized: !constant && settings.vectorizeRows,
-          order: constant ? 140 : 100,
-          kind: `state:${tableKey}`
-        });
-      }
+  const documents = buildLorebookDocuments(
+    artifact.snapshot,
+    state2.smallSummaries,
+    state2.largeSummaries,
+    {
+      layout: settings.lorebookLayout,
+      vectorize: settings.vectorizeRows,
+      latestContinuityConstant: settings.latestContinuityConstant
     }
-  }
-  for (const item of state2.smallSummaries) {
-    desired.set(`small:${item.id}`, {
-      comment: `[MA11][\u5C0F\u603B\u7ED3] ${item.title}`,
-      content: item.summary,
-      keywords: [item.title, ...item.keywords].filter(Boolean).slice(0, 16),
-      constant: false,
-      vectorized: true,
-      order: 110,
-      kind: "small"
-    });
-  }
-  for (const item of state2.largeSummaries) {
-    desired.set(`large:${item.id}`, {
-      comment: `[MA11][\u5927\u603B\u7ED3] ${item.title}`,
-      content: item.summary,
-      keywords: [item.title, ...item.keywords].filter(Boolean).slice(0, 16),
-      constant: false,
-      vectorized: true,
-      order: 120,
-      kind: "large"
-    });
-  }
-  if (settings.latestContinuityConstant) {
-    const latest = state2.largeSummaries.at(-1) ?? state2.smallSummaries.at(-1);
-    if (latest) {
-      desired.set("core:latest", {
-        comment: "[MA11][\u5F53\u524D\u8FDE\u7EED\u6027\u6838\u5FC3]",
-        content: latest.summary,
-        keywords: ["\u5F53\u524D\u8FDE\u7EED\u6027", "\u5F53\u524D\u72B6\u6001"],
-        constant: true,
-        vectorized: false,
-        order: 150,
-        kind: "core"
-      });
-    }
-  }
-  return desired;
+  );
+  return new Map(documents.map((document2) => [document2.key, document2]));
 }
 async function syncLorebook(artifact) {
   const settings = getSettings();
@@ -771,25 +1019,321 @@ async function syncLorebook(artifact) {
   }
 }
 
+// src/domain/snapshot.ts
+var EXISTENCE_STATES = /* @__PURE__ */ new Set([
+  "\u5B58\u6D3B",
+  "\u6B7B\u4EA1\u5DF2\u786E\u8BA4",
+  "\u5B58\u5728\u672A\u77E5",
+  "\u5931\u8E2A",
+  "\u8EAB\u4EFD\u5B58\u7591",
+  "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4",
+  "\u5B58\u5728\u88AB\u62B9\u9664",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var ACTIVITY_STATES = /* @__PURE__ */ new Set([
+  "\u5F53\u524D\u5728\u573A",
+  "\u5F53\u524D\u76F8\u5173",
+  "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3",
+  "\u4F11\u7720",
+  "\u957F\u671F\u4F11\u7720",
+  "\u5DF2\u5F52\u6863",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var MEMORY_STATES = /* @__PURE__ */ new Set([
+  "\u5E7F\u6CDB\u8BB0\u5F97",
+  "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97",
+  "\u4EC5\u8BB0\u5F55\u7559\u5B58",
+  "\u4EC5\u75D5\u8FF9\u7559\u5B58",
+  "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97",
+  "\u8BB0\u5FC6\u88AB\u7BE1\u6539",
+  "\u8BB0\u5FC6\u88AB\u62B9\u9664",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var EVIDENCE_LEVELS = /* @__PURE__ */ new Set(["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"]);
+function emptySnapshot() {
+  return Object.fromEntries(TABLE_KEYS.map((key) => [key, []]));
+}
+function normalizeKeywords(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 16);
+}
+function normalizeStringList(value, limit = 12) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => safeText(item, 240).trim()).filter(Boolean))].slice(0, limit);
+}
+function enumValue(value, allowed, fallback) {
+  const text = safeText(value, 80).trim();
+  return allowed.has(text) ? text : fallback;
+}
+function defaultLifecycle() {
+  return {
+    existence: "\u672A\u6807\u6CE8",
+    activity: "\u672A\u6807\u6CE8",
+    memory: "\u672A\u6807\u6CE8",
+    evidenceLevel: "\u672A\u77E5",
+    evidence: "",
+    returnConditions: [],
+    returnBlockers: []
+  };
+}
+function normalizeLifecycle(value, previous) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = previous ?? defaultLifecycle();
+  return {
+    existence: enumValue(source.existence ?? base.existence, EXISTENCE_STATES, base.existence),
+    activity: enumValue(source.activity ?? base.activity, ACTIVITY_STATES, base.activity),
+    memory: enumValue(source.memory ?? base.memory, MEMORY_STATES, base.memory),
+    evidenceLevel: enumValue(source.evidenceLevel ?? base.evidenceLevel, EVIDENCE_LEVELS, base.evidenceLevel),
+    evidence: safeText(source.evidence ?? base.evidence, 4e3).trim(),
+    returnConditions: normalizeStringList(source.returnConditions ?? base.returnConditions),
+    returnBlockers: normalizeStringList(source.returnBlockers ?? base.returnBlockers)
+  };
+}
+function normalizeRow(value, tableKey, index, previous) {
+  const source = value && typeof value === "object" ? value : {};
+  const now = nowIso();
+  const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
+  const manual = source.source === "manual" || previous?.source === "manual";
+  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
+  const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
+  return {
+    id,
+    title: safeText(source.title || source.name || previous?.title || `${TABLE_LABELS[tableKey]} ${index + 1}`, 240).trim(),
+    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
+    keywords: normalizeKeywords(source.keywords ?? previous?.keywords ?? []),
+    status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
+    source: manual ? "manual" : "auto",
+    locked: Boolean(source.locked ?? previous?.locked ?? manual),
+    lifecycle: supportsLifecycle && lifecycleInput ? normalizeLifecycle(lifecycleInput, previous?.lifecycle) : void 0,
+    updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now
+  };
+}
+function normalizeSnapshot(value, previousSnapshot2) {
+  const source = value && typeof value === "object" ? value : {};
+  const output = emptySnapshot();
+  for (const key of TABLE_KEYS) {
+    const rows2 = Array.isArray(source[key]) ? source[key] : [];
+    const previousMap = new Map((previousSnapshot2?.[key] ?? []).map((row) => [row.id, row]));
+    const used = /* @__PURE__ */ new Set();
+    output[key] = rows2.map((row, index) => {
+      const rawId = row && typeof row === "object" ? safeText(row.id, 160) : "";
+      const normalized = normalizeRow(row, key, index, rawId ? previousMap.get(rawId) : void 0);
+      if (used.has(normalized.id)) normalized.id = makeId(key);
+      used.add(normalized.id);
+      return normalized;
+    });
+  }
+  return output;
+}
+function identityTitle(value) {
+  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+}
+function preservePersistentCharacters(previous, next) {
+  const byId = new Map((next.characters ?? []).map((row) => [row.id, row]));
+  const byTitle = new Map((next.characters ?? []).map((row) => [identityTitle(row.title), row]));
+  for (const oldRow of previous.characters ?? []) {
+    if (byId.has(oldRow.id)) continue;
+    const titleMatch = byTitle.get(identityTitle(oldRow.title));
+    if (titleMatch) {
+      titleMatch.id = oldRow.id;
+      if (oldRow.source === "manual" || oldRow.locked) {
+        Object.assign(titleMatch, { ...oldRow, id: oldRow.id });
+      } else if (!titleMatch.lifecycle && oldRow.lifecycle) {
+        titleMatch.lifecycle = { ...oldRow.lifecycle };
+      }
+      byId.set(oldRow.id, titleMatch);
+      continue;
+    }
+    const restored = { ...oldRow, lifecycle: oldRow.lifecycle ? { ...oldRow.lifecycle } : void 0 };
+    next.characters.push(restored);
+    byId.set(restored.id, restored);
+    byTitle.set(identityTitle(restored.title), restored);
+  }
+  const seenTitles = /* @__PURE__ */ new Set();
+  next.characters = next.characters.filter((row) => {
+    const key = identityTitle(row.title);
+    if (!key || !seenTitles.has(key)) {
+      if (key) seenTitles.add(key);
+      return true;
+    }
+    return false;
+  });
+  return next;
+}
+function snapshotRowCount(snapshot) {
+  if (!snapshot) return 0;
+  return TABLE_KEYS.reduce((sum, key) => sum + (snapshot[key]?.length ?? 0), 0);
+}
+function upsertManualRow(snapshot, tableKey, row) {
+  const next = normalizeSnapshot(snapshot, snapshot);
+  const index = next[tableKey].findIndex((item) => item.id === row.id);
+  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? true, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0);
+  if (index >= 0) next[tableKey][index] = normalized;
+  else next[tableKey].push(normalized);
+  return next;
+}
+function deleteRow(snapshot, tableKey, rowId) {
+  const next = normalizeSnapshot(snapshot, snapshot);
+  next[tableKey] = next[tableKey].filter((row) => row.id !== rowId);
+  return next;
+}
+function stateSchemaDescription() {
+  return JSON.stringify({
+    focus: [{
+      id: "focus-linwan",
+      title: "\u6797\u665A",
+      content: "\u5F53\u524D\u5916\u90E8\u4E8B\u5B9E\u3001\u8EAB\u4EFD\u3001\u8D44\u6E90\u4E0E\u63A5\u89E6\u9762",
+      keywords: ["\u6797\u665A"],
+      status: "\u5F53\u524D\u7126\u70B9",
+      lifecycle: {
+        existence: "\u5B58\u6D3B",
+        activity: "\u5F53\u524D\u5728\u573A",
+        memory: "\u5E7F\u6CDB\u8BB0\u5F97",
+        evidenceLevel: "\u5DF2\u786E\u8BA4",
+        evidence: "\u5F53\u524D\u53EF\u89C2\u5BDF",
+        returnConditions: [],
+        returnBlockers: []
+      }
+    }],
+    spacetime: [],
+    characters: [],
+    relationships: [],
+    items: [],
+    skills: [],
+    events: [],
+    regions: [],
+    foundations: []
+  }, null, 2);
+}
+
+// src/domain/sedimentation.ts
+var REMOVABLE_TABLES = /* @__PURE__ */ new Set(["spacetime", "events", "regions"]);
+var SETTLED_STATUS = /(已结束|已完成|已关闭|已失效|已归档|已替代|resolved|closed|completed|expired|archived|superseded|historical)/i;
+function canRemoveRow(table, row, snapshot) {
+  if (!REMOVABLE_TABLES.has(table)) return false;
+  if (row.source === "manual" || row.locked) return false;
+  if (!SETTLED_STATUS.test(`${row.status} ${row.content}`)) return false;
+  if (table === "spacetime" && snapshot.spacetime.length <= 1) return false;
+  return true;
+}
+function canAdvanceActivity(current, target, row) {
+  if (row.source === "manual" || row.locked) return false;
+  if (current === "\u5F53\u524D\u5728\u573A" || current === "\u5F53\u524D\u76F8\u5173") return false;
+  const order = ["\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3", "\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863"];
+  const from = order.indexOf(current ?? "\u672A\u6807\u6CE8");
+  const to = order.indexOf(target);
+  if (to < 0) return false;
+  if (current === "\u672A\u6807\u6CE8") return target === "\u4F11\u7720";
+  return from >= 0 && to === Math.min(from + 1, order.length - 1);
+}
+function applySedimentation(snapshot, summary) {
+  const plan = summary.sedimentation;
+  if (!plan) return normalizeSnapshot(snapshot, snapshot);
+  const next = normalizeSnapshot(snapshot, snapshot);
+  const requested = new Set(plan.removeRowIds);
+  const applied = [];
+  const ignored = [];
+  for (const table of ["spacetime", "events", "regions"]) {
+    next[table] = next[table].filter((row) => {
+      if (!requested.has(row.id)) return true;
+      if (canRemoveRow(table, row, next)) {
+        applied.push(row.id);
+        return false;
+      }
+      ignored.push(row.id);
+      return true;
+    });
+  }
+  for (const update of plan.characterActivityUpdates) {
+    const row = next.characters.find((item) => item.id === update.rowId);
+    if (!row) {
+      ignored.push(update.rowId);
+      continue;
+    }
+    const current = row.lifecycle?.activity;
+    if (!canAdvanceActivity(current, update.activity, row)) {
+      ignored.push(update.rowId);
+      continue;
+    }
+    row.lifecycle ||= {
+      existence: "\u672A\u6807\u6CE8",
+      activity: "\u672A\u6807\u6CE8",
+      memory: "\u672A\u6807\u6CE8",
+      evidenceLevel: "\u672A\u77E5",
+      evidence: "",
+      returnConditions: [],
+      returnBlockers: []
+    };
+    row.lifecycle.activity = update.activity;
+    row.status = update.activity;
+    applied.push(update.rowId);
+  }
+  const normalizedPlan = {
+    ...plan,
+    appliedRowIds: [...new Set(applied)],
+    ignoredRowIds: [...new Set(ignored)]
+  };
+  summary.sedimentation = normalizedPlan;
+  return next;
+}
+
 // src/domain/summary.ts
-function normalizeSummary(value, kind, sourceKeys) {
+function stringList(value, limit = 40, itemLimit = 300) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+}
+function normalizeActivityUpdates(value) {
+  if (!Array.isArray(value)) return [];
+  const allowed = /* @__PURE__ */ new Set(["\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863"]);
+  return value.map((item) => item && typeof item === "object" ? item : {}).map((item) => ({
+    rowId: safeText(item.rowId, 160).trim(),
+    activity: safeText(item.activity, 40).trim(),
+    reason: safeText(item.reason, 500).trim()
+  })).filter((item) => item.rowId && allowed.has(item.activity)).slice(0, 30);
+}
+function normalizeSedimentation(value) {
+  if (!value || typeof value !== "object") return void 0;
+  const source = value;
+  return {
+    removeRowIds: stringList(source.removeRowIds, 50, 160),
+    characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates),
+    notes: stringList(source.notes, 30, 500)
+  };
+}
+function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId) {
   return {
     id: makeId(kind),
     kind,
-    title: safeText(value.title || (kind === "small" ? "\u9636\u6BB5\u5FEB\u7167" : "\u957F\u671F\u5FEB\u7167"), 240).trim(),
+    title: safeText(value.title || (kind === "small" ? "\u9636\u6BB5\u6C89\u964D" : "\u957F\u671F\u6C89\u964D"), 240).trim(),
     summary: safeText(value.summary || "", 3e4).trim(),
     keywords: Array.isArray(value.keywords) ? [...new Set(value.keywords.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 24) : [],
     sourceKeys,
-    createdAt: nowIso()
+    createdAt: nowIso(),
+    sedimentation: kind === "small" ? normalizeSedimentation(value.sedimentation) : void 0,
+    previousLargeSummaryId: kind === "large" ? previousLargeSummaryId : void 0
   };
 }
 
 // src/prompts/summary.ts
 function smallSummarySystemPrompt() {
-  return "\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u5FEB\u7167\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002\u4E0D\u8981\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u4E8B\u5B9E\u3002";
+  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u4E8B\u5B9E\u3002
+\u8F93\u51FA\u5B57\u6BB5\uFF1Atitle\u3001summary\u3001keywords\u3001sedimentation\u3002
+sedimentation\u5305\u542B\uFF1AremoveRowIds\u3001characterActivityUpdates\u3001notes\u3002
+\u4F60\u53EA\u63D0\u51FA\u5B89\u5168\u6C89\u964D\uFF1A
+- removeRowIds\u53EA\u80FD\u9009\u62E9\u5DF2\u7ECF\u7ED3\u675F\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684spacetime/events/regions\u884Cid\u3002
+- \u4E0D\u5F97\u5220\u9664focus\u3001characters\u3001relationships\u3001items\u3001skills\u3001foundations\u3002
+- \u6B63\u5F0F\u4EBA\u7269\u6C38\u4E0D\u56E0\u79BB\u573A\u3001\u9057\u5FD8\u3001\u6B7B\u4EA1\u6216\u957F\u671F\u672A\u51FA\u73B0\u800C\u5220\u9664\u3002
+- characterActivityUpdates\u53EA\u5141\u8BB8\u628A\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\uFF0C\u4E0D\u5F97\u6539\u53D8\u5B58\u5728\u72B6\u6001\u548C\u8BB0\u5FC6\u72B6\u6001\u3002
+- \u73A9\u5BB6\u624B\u52A8\u6216\u9501\u5B9A\u8BB0\u5F55\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
+- summary\u6B63\u6587\u5FC5\u987B\u660E\u786E\u5199\u5165\u88AB\u6C89\u964D\u7684\u4E8B\u5B9E\u3001\u4ECD\u4FDD\u7559\u7684\u672A\u51B3\u4E8B\u9879\u548C\u4EBA\u7269\u56DE\u6D41\u6761\u4EF6\u3002`;
 }
 function smallSummaryPrompt(transcript, snapshot) {
-  return `\u5C06\u4EE5\u4E0B\u56DE\u5408\u538B\u7F29\u6210\u201C\u5F53\u524D\u4E16\u754C\u5FEB\u7167\u5F0F\u5C0F\u603B\u7ED3\u201D\u3002\u4E0D\u662F\u6D41\u6C34\u8D26\u3002\u91CD\u70B9\u4FDD\u7559\uFF1A\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u5F53\u524D\u4EBA\u7269/\u5173\u7CFB/\u7269\u54C1/\u533A\u57DF\u72B6\u6001\u3001\u4ECD\u5728\u8FDB\u884C\u7684\u6D41\u7A0B\u3001\u672A\u51B3\u4E0E\u51B2\u7A81\u3002\u5DF2\u7ECF\u88AB\u6700\u7EC8\u7ED3\u679C\u66FF\u4EE3\u7684\u4E2D\u95F4\u52A8\u4F5C\u4E0D\u5C55\u5F00\u3002
+  return `\u5C06\u4EE5\u4E0B\u56DE\u5408\u538B\u7F29\u6210\u201C\u5F53\u524D\u5468\u671F\u5C0F\u603B\u7ED3\u201D\uFF0C\u627F\u62C5\u9636\u6BB5\u6C89\u964D\uFF0C\u4E0D\u662F\u6D41\u6C34\u8D26\u3002
+\u91CD\u70B9\u4FDD\u7559\uFF1A\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u5F53\u524D\u4EBA\u7269/\u5173\u7CFB/\u7269\u54C1/\u6280\u80FD/\u533A\u57DF\u72B6\u6001\u3001\u4ECD\u5728\u8FDB\u884C\u7684\u6D41\u7A0B\u3001\u672A\u51B3\u4E0E\u51B2\u7A81\u3002
+\u5DF2\u7ECF\u88AB\u6700\u7EC8\u7ED3\u679C\u66FF\u4EE3\u7684\u4E2D\u95F4\u52A8\u4F5C\u4E0D\u5C55\u5F00\u3002
 
 \u3010\u56DE\u5408\u3011
 ${transcript}
@@ -797,16 +1341,24 @@ ${transcript}
 \u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
 ${JSON.stringify(snapshot, null, 2)}
 
-\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
+\u53EA\u8F93\u51FA\u4EE5\u4E0B\u7ED3\u6784\uFF1A
+{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["\u5DF2\u7ED3\u675F\u72B6\u6001\u884Cid"],"characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884Cid","activity":"\u4F11\u7720\u6216\u957F\u671F\u4F11\u7720\u6216\u5DF2\u5F52\u6863","reason":"\u4F9D\u636E"}],"notes":["\u6C89\u964D\u8BF4\u660E"]}}`;
 }
 function largeSummarySystemPrompt() {
-  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u5FEB\u7167\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002";
+  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002\u8F93\u51FA\u5FC5\u987B\u662F\u7D2F\u8BA1\u957F\u671F\u5FEB\u7167\uFF0C\u800C\u4E0D\u662F\u53EA\u590D\u8FF0\u672C\u6279\u5C0F\u603B\u7ED3\u3002";
 }
-function largeSummaryPrompt(summaries, snapshot) {
+function largeSummaryPrompt(summaries, snapshot, previousLarge) {
   const source = summaries.map((item) => `\u3010${item.title}\u3011
 ${item.summary}`).join("\n\n");
-  return `\u5C06\u4E0B\u5217\u5C0F\u603B\u7ED3\u518D\u6B21\u538B\u7F29\u6210\u957F\u671F\u5FEB\u7167\u3002\u4FDD\u7559\u957F\u671F\u4ECD\u6210\u7ACB\u7684\u4EBA\u7269\u3001\u5173\u7CFB\u3001\u533A\u57DF\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7ED3\u679C\u548C\u672A\u51B3\u4E8B\u9879\uFF1B\u4E0D\u8981\u590D\u8FF0\u9636\u6BB5\u6D41\u6C34\u8D26\uFF0C\u4E0D\u8981\u5F3A\u884C\u95ED\u5408\u5F00\u653E\u4E8B\u4EF6\u3002
+  const previous = previousLarge ? `\u3010\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u3011
+${previousLarge.summary}
 
+` : "";
+  return `\u628A\u201C\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u201D\u548C\u672C\u6279\u5C0F\u603B\u7ED3\u5408\u5E76\u4E3A\u4E00\u4EFD\u65B0\u7684\u7D2F\u8BA1\u957F\u671F\u6C89\u964D\u3002
+\u4FDD\u7559\u957F\u671F\u4ECD\u6210\u7ACB\u7684\u4EBA\u7269\u3001\u5173\u7CFB\u3001\u533A\u57DF\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u4E8B\u4EF6\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u540E\u679C\u4E0E\u672A\u51B3\u4E8B\u9879\uFF1B\u5220\u9664\u5DF2\u7ECF\u5931\u53BB\u610F\u4E49\u7684\u9636\u6BB5\u8FC7\u7A0B\u3002
+\u4EBA\u7269\u6B7B\u4EA1\u3001\u5931\u8E2A\u3001\u88AB\u9057\u5FD8\u3001\u8EAB\u4EFD\u5B58\u7591\u7B49\u5FC5\u987B\u4FDD\u7559\u8BC1\u636E\u7B49\u7EA7\u548C\u9057\u7559\u56E0\u679C\uFF0C\u4E0D\u5F97\u7528\u957F\u671F\u672A\u51FA\u73B0\u66FF\u4EE3\u6B7B\u4EA1\u5224\u65AD\u3002
+
+${previous}\u3010\u672C\u6279\u5C0F\u603B\u7ED3\u3011
 ${source}
 
 \u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
@@ -827,6 +1379,10 @@ function transcriptFor(artifacts) {
 function allConsumedKeys(summaries) {
   return new Set(summaries.flatMap((item) => item.sourceKeys));
 }
+function pendingSmallSummaries(small, large) {
+  const consumed = new Set(large.flatMap((item) => item.sourceKeys));
+  return small.filter((item) => !consumed.has(item.id));
+}
 async function generateSmallSummary(artifact, force = false) {
   const settings = getSettings();
   const chatState = await getChatState(artifact.chatKey);
@@ -844,26 +1400,33 @@ async function generateSmallSummary(artifact, force = false) {
   });
   const summary = normalizeSummary(parseJsonObject(raw), "small", selected.map((item) => item.messageKey));
   chatState.smallSummaries.push(summary);
+  if (artifact.snapshot) artifact.snapshot = applySedimentation(artifact.snapshot, summary);
+  await putArtifact(artifact);
   await putChatState(chatState);
   return summary;
 }
 async function generateLargeSummary(artifact, force = false) {
   const settings = getSettings();
   const chatState = await getChatState(artifact.chatKey);
-  const consumed = allConsumedKeys(chatState.largeSummaries);
-  const pending = chatState.smallSummaries.filter((item) => !consumed.has(item.id));
+  const pending = pendingSmallSummaries(chatState.smallSummaries, chatState.largeSummaries);
   const threshold = Math.max(1, Number(settings.largeSummaryCount) || 6);
   if (!force && pending.length < threshold) return null;
   if (!pending.length) return null;
   const selected = force ? pending : pending.slice(0, threshold);
   const snapshot = artifact.snapshot;
   if (!snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u7684\u72B6\u6001\u8868");
+  const previousLarge = chatState.largeSummaries.at(-1);
   const raw = await generateTask({
     task: "largeSummary",
     systemPrompt: largeSummarySystemPrompt(),
-    prompt: largeSummaryPrompt(selected, snapshot)
+    prompt: largeSummaryPrompt(selected, snapshot, previousLarge)
   });
-  const summary = normalizeSummary(parseJsonObject(raw), "large", selected.map((item) => item.id));
+  const summary = normalizeSummary(
+    parseJsonObject(raw),
+    "large",
+    selected.map((item) => item.id),
+    previousLarge?.id
+  );
   chatState.largeSummaries.push(summary);
   await putChatState(chatState);
   return summary;
@@ -884,91 +1447,36 @@ async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = fals
   }
 }
 
-// src/domain/snapshot.ts
-function emptySnapshot() {
-  return Object.fromEntries(TABLE_KEYS.map((key) => [key, []]));
-}
-function normalizeKeywords(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 16);
-}
-function normalizeRow(value, tableKey, index, previous) {
-  const source = value && typeof value === "object" ? value : {};
-  const now = nowIso();
-  const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
-  return {
-    id,
-    title: safeText(source.title || source.name || previous?.title || `${TABLE_LABELS[tableKey]} ${index + 1}`, 240).trim(),
-    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
-    keywords: normalizeKeywords(source.keywords ?? previous?.keywords ?? []),
-    status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
-    source: source.source === "manual" || previous?.source === "manual" ? "manual" : "auto",
-    updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now
-  };
-}
-function normalizeSnapshot(value, previousSnapshot2) {
-  const source = value && typeof value === "object" ? value : {};
-  const output = emptySnapshot();
-  for (const key of TABLE_KEYS) {
-    const rows = Array.isArray(source[key]) ? source[key] : [];
-    const previousMap = new Map((previousSnapshot2?.[key] ?? []).map((row) => [row.id, row]));
-    const used = /* @__PURE__ */ new Set();
-    output[key] = rows.map((row, index) => {
-      const rawId = row && typeof row === "object" ? safeText(row.id, 160) : "";
-      const normalized = normalizeRow(row, key, index, rawId ? previousMap.get(rawId) : void 0);
-      if (used.has(normalized.id)) normalized.id = makeId(key);
-      used.add(normalized.id);
-      return normalized;
-    });
-  }
-  return output;
-}
-function snapshotRowCount(snapshot) {
-  if (!snapshot) return 0;
-  return TABLE_KEYS.reduce((sum, key) => sum + (snapshot[key]?.length ?? 0), 0);
-}
-function upsertManualRow(snapshot, tableKey, row) {
-  const next = normalizeSnapshot(snapshot, snapshot);
-  const index = next[tableKey].findIndex((item) => item.id === row.id);
-  const normalized = normalizeRow({ ...row, source: "manual", updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0);
-  if (index >= 0) next[tableKey][index] = normalized;
-  else next[tableKey].push(normalized);
-  return next;
-}
-function deleteRow(snapshot, tableKey, rowId) {
-  const next = normalizeSnapshot(snapshot, snapshot);
-  next[tableKey] = next[tableKey].filter((row) => row.id !== rowId);
-  return next;
-}
-function stateSchemaDescription() {
-  return JSON.stringify({
-    focus: [{ id: "stable-id", title: "\u5BF9\u8C61", content: "\u5F53\u524D\u4E8B\u5B9E", keywords: ["\u5173\u952E\u8BCD"], status: "active" }],
-    spacetime: [],
-    characters: [],
-    relationships: [],
-    items: [],
-    events: [],
-    regions: [],
-    foundations: []
-  }, null, 2);
-}
-
 // src/prompts/state.ts
 function stateSystemPrompt() {
   return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u72B6\u6001\u7EF4\u62A4\u5668\u3002\u4F60\u53EA\u7EF4\u62A4\u5F53\u524D\u4E16\u754C\u72B6\u6001\u5FEB\u7167\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
 
 \u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u88AB JSON.parse \u89E3\u6790\u7684\u5B8C\u6574JSON\u5BF9\u8C61\uFF0C\u4E0D\u8981\u8F93\u51FAMarkdown\u3001\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\u3002
-\u5FC5\u987B\u5305\u542B\u516B\u4E2A\u6570\u7EC4\uFF1Afocus\u3001spacetime\u3001characters\u3001relationships\u3001items\u3001events\u3001regions\u3001foundations\u3002
-\u6BCF\u884C\u53EA\u5141\u8BB8\u5B57\u6BB5\uFF1Aid\u3001title\u3001content\u3001keywords\u3001status\u3002
+\u5FC5\u987B\u5305\u542B\u4E5D\u4E2A\u6570\u7EC4\uFF1Afocus\u3001spacetime\u3001characters\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\u3001foundations\u3002
+\u6BCF\u884C\u5141\u8BB8\u5B57\u6BB5\uFF1Aid\u3001title\u3001content\u3001keywords\u3001status\uFF1Bfocus\u4E0Echaracters\u8FD8\u5141\u8BB8 lifecycle\u3002
 
 \u7EF4\u62A4\u89C4\u5219\uFF1A
-1. \u4FDD\u7559\u672A\u53D7\u672C\u8F6E\u5F71\u54CD\u3001\u4ECD\u6210\u7ACB\u7684\u72B6\u6001\u3002
-2. \u53EA\u6709\u672C\u8F6E\u660E\u786E\u6539\u53D8\u7684\u72B6\u6001\u624D\u66F4\u65B0\u3002
-3. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u6D41\u6C34\u8D26\u3002
-4. \u672A\u786E\u8BA4\u3001\u51B2\u7A81\u548C\u8FDB\u884C\u4E2D\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
-5. \u5C3D\u91CF\u4FDD\u7559\u4E0A\u4E00\u4EFD\u5FEB\u7167\u7684\u7A33\u5B9Aid\uFF1B\u65B0\u589E\u5BF9\u8C61\u624D\u521B\u5EFA\u65B0id\u3002
-6. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u548C\u5BF9\u767D\u53EF\u4F5C\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF0C\u4F46\u73A9\u5BB6\u9884\u8BBE\u7684\u5916\u90E8\u7ED3\u679C\u4E0D\u80FD\u5355\u72EC\u5F53\u6210\u5DF2\u786E\u8BA4\u7ED3\u679C\uFF1B\u5916\u90E8\u7ED3\u679C\u4EE5AI\u6B63\u6587\u4E0E\u5DF2\u6709\u72B6\u6001\u4E2D\u7684\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u4E3A\u51C6\u3002
-7. \u73A9\u5BB6\u624B\u5DE5\u52A0\u5165\u7684\u72B6\u6001\u4E0E\u5176\u4ED6\u72B6\u6001\u540C\u7B49\u53C2\u4E0E\u7EF4\u62A4\uFF0C\u4E0D\u5F97\u65E0\u6545\u5220\u9664\u3002
+1. \u4FDD\u7559\u672A\u53D7\u672C\u8F6E\u5F71\u54CD\u3001\u4ECD\u6210\u7ACB\u7684\u72B6\u6001\u3002\u53EA\u6709\u672C\u8F6E\u660E\u786E\u6539\u53D8\u7684\u72B6\u6001\u624D\u66F4\u65B0\u3002
+2. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u6D41\u6C34\u8D26\u3002\u672A\u786E\u8BA4\u3001\u51B2\u7A81\u548C\u8FDB\u884C\u4E2D\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
+3. \u5C3D\u91CF\u4FDD\u7559\u4E0A\u4E00\u4EFD\u5FEB\u7167\u7684\u7A33\u5B9Aid\uFF1B\u65B0\u589E\u5BF9\u8C61\u624D\u521B\u5EFA\u65B0id\u3002
+4. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u548C\u5BF9\u767D\u53EF\u4F5C\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF0C\u4F46\u73A9\u5BB6\u9884\u8BBE\u7684\u5916\u90E8\u7ED3\u679C\u4E0D\u80FD\u5355\u72EC\u5F53\u6210\u5DF2\u786E\u8BA4\u7ED3\u679C\uFF1B\u5916\u90E8\u7ED3\u679C\u4EE5AI\u6B63\u6587\u4E0E\u5DF2\u6709\u72B6\u6001\u4E2D\u7684\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u4E3A\u51C6\u3002
+5. source=manual\u6216locked=true\u7684\u73A9\u5BB6\u8BB0\u5F55\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u6539\u5199\u3002
+6. relationships \u4E2D\u6BCF\u884C title \u5FC5\u987B\u660E\u786E\u5199\u51FA\u5173\u7CFB\u4E24\u7AEF\uFF0C\u4F18\u5148\u4F7F\u7528\u201C\u5BF9\u8C61A \u2194 \u5BF9\u8C61B\u201D\u683C\u5F0F\uFF1Bcontent\u53EA\u5199\u5DF2\u663E\u5F71\u7684\u5173\u7CFB\u4E8B\u5B9E\uFF0Cstatus\u5199\u5173\u7CFB\u5F53\u524D\u72B6\u6001\u3002
+7. characters \u53EA\u4E3A\u6B63\u5F0F\u663E\u5F71\u7684\u4EBA\u7269\u5EFA\u7ACB\u72EC\u7ACB\u884C\u3002\u4EC5\u88AB\u63D0\u53CA\u3001\u6CA1\u6709\u8FDB\u5165\u53EF\u89C2\u5BDF\u63A5\u89E6\u9762\u7684\u4EBA\u7269\uFF0C\u5148\u5199\u5728\u76F8\u5173\u4E8B\u4EF6\u6216\u4EBA\u7269\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5355\u72EC\u5EFA\u884C\u3002
+8. \u5DF2\u5EFA\u7ACB\u7684\u6B63\u5F0F\u4EBA\u7269\u4E0D\u5F97\u4EC5\u56E0\u79BB\u573A\u3001\u957F\u671F\u672A\u51FA\u73B0\u3001\u88AB\u9057\u5FD8\u6216\u6B7B\u4EA1\u800C\u5220\u9664\u3002\u4EBA\u7269\u79BB\u5F00\u63A5\u89E6\u9762\u53EA\u6539\u53D8activity\uFF1B\u6B7B\u4EA1\u53EA\u6539\u53D8existence\uFF1B\u88AB\u9057\u5FD8\u53EA\u6539\u53D8memory\u3002
+9. lifecycle\u5B57\u6BB5\u56FA\u5B9A\u4E3A\uFF1A
+   - existence\uFF1A\u5B58\u6D3B\u3001\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u672A\u77E5\u3001\u5931\u8E2A\u3001\u8EAB\u4EFD\u5B58\u7591\u3001\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
+   - activity\uFF1A\u5F53\u524D\u5728\u573A\u3001\u5F53\u524D\u76F8\u5173\u3001\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u3001\u4F11\u7720\u3001\u957F\u671F\u4F11\u7720\u3001\u5DF2\u5F52\u6863\u3001\u672A\u6807\u6CE8\u3002
+   - memory\uFF1A\u5E7F\u6CDB\u8BB0\u5F97\u3001\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97\u3001\u4EC5\u8BB0\u5F55\u7559\u5B58\u3001\u4EC5\u75D5\u8FF9\u7559\u5B58\u3001\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97\u3001\u8BB0\u5FC6\u88AB\u7BE1\u6539\u3001\u8BB0\u5FC6\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
+   - evidenceLevel\uFF1A\u5DF2\u786E\u8BA4\u3001\u53EF\u9760\u8BB0\u5F55\u3001\u591A\u65B9\u9648\u8FF0\u3001\u5355\u65B9\u9648\u8FF0\u3001\u63A8\u6D4B\u3001\u672A\u77E5\u3002
+   - evidence\uFF1A\u652F\u6301\u4E0A\u8FF0\u5224\u65AD\u7684\u53EF\u9A8C\u8BC1\u4F9D\u636E\u3002
+   - returnConditions\uFF1A\u4EBA\u7269\u53EF\u80FD\u91CD\u65B0\u8FDB\u5165\u63A5\u89E6\u9762\u7684\u73B0\u5B9E\u6761\u4EF6\uFF0C\u4E0D\u4EE3\u8868\u4E00\u5B9A\u56DE\u6765\u3002
+   - returnBlockers\uFF1A\u963B\u6B62\u56DE\u6D41\u7684\u5DF2\u786E\u8BA4\u6761\u4EF6\uFF1B\u6CA1\u6709\u53EF\u9760\u8BC1\u636E\u65F6\u7559\u7A7A\u3002
+10. \u4E0D\u5F97\u56E0\u201C\u5F88\u4E45\u6CA1\u51FA\u73B0\u201D\u63A8\u5B9A\u6B7B\u4EA1\uFF1B\u4ED6\u4EBA\u9648\u8FF0\u6B7B\u4EA1\u53EA\u80FD\u6309\u8BC1\u636E\u7B49\u7EA7\u8BB0\u5F55\u3002\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u7684\u4EBA\u7269\u4ECD\u4FDD\u7559\u9057\u7559\u5173\u7CFB\u3001\u7269\u54C1\u3001\u6D41\u7A0B\u548C\u540E\u679C\u3002
+11. items\uFF1A\u666E\u901A\u7269\u54C1\u6309\u6240\u6709\u8005\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u7269\u54C1\u4E0E\u8D44\u6E90\u201D\uFF1B\u62E5\u6709\u72EC\u7ACB\u8EAB\u4EFD\u3001\u72B6\u6001\u3001\u56E0\u679C\u6216\u8FFD\u8E2A\u4EF7\u503C\u7684\u91CD\u8981\u7269\u54C1\u624D\u5355\u72EC\u4E00\u884C\u3002
+12. skills\uFF1A\u6309\u4EBA\u7269\u6216\u4E3B\u4F53\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\u201D\uFF0C\u53EA\u8BB0\u5F55\u5DF2\u663E\u5F71\u80FD\u529B\u3001\u6761\u4EF6\u3001\u6D88\u8017\u548C\u8FB9\u754C\uFF0C\u4E0D\u751F\u6210\u9690\u85CF\u80FD\u529B\u3002
+13. events\u4E2D\u72EC\u7ACB\u4E8B\u4EF6\u4F7F\u7528\u201C\u4E8B\u4EF6\uFF5C\u540D\u79F0\u201D\uFF0C\u5236\u5EA6\u6216\u624B\u7EED\u4F7F\u7528\u201C\u6D41\u7A0B\uFF5C\u540D\u79F0\u201D\u3002\u5C0F\u4E8B\u4EF6\u53EF\u7559\u5728\u4EBA\u7269\u6216\u533A\u57DF\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5FC5\u62C6\u884C\u3002
+14. foundations\u53EA\u4FDD\u7559\u957F\u671F\u627F\u91CD\u8BBE\u5B9A\uFF1B\u5F53\u524D\u5C40\u52BF\u3001\u4EBA\u7269\u53D8\u5316\u548C\u4E8B\u4EF6\u8FDB\u5C55\u4E0D\u5F97\u5199\u5165\u57FA\u7840\u8BBE\u5B9A\u3002
 
 \u7ED3\u6784\u793A\u4F8B\uFF1A
 ${stateSchemaDescription()}`;
@@ -1031,7 +1539,7 @@ async function runStateExtraction(artifact, force = false) {
       });
       parsed = parseJsonObject(raw);
     }
-    const normalized = restoreManualRows(previous, normalizeSnapshot(parsed, previous));
+    const normalized = preservePersistentCharacters(previous, restoreManualRows(previous, normalizeSnapshot(parsed, previous)));
     artifact.snapshot = normalized;
     markStage(artifact, "state", "success");
     await putArtifact(artifact);
@@ -1226,6 +1734,10 @@ async function forceSummary(index, kind) {
   return taskQueue.run(key, `\u7ACB\u5373${kind === "small" ? "\u5C0F" : "\u5927"}\u603B\u7ED3`, kind === "small" ? "smallSummary" : "largeSummary", async () => {
     await maybeRunSummaries(artifact, kind === "small", kind === "large");
     await saveArtifactToMessage(index, artifact);
+    if (getSettings().lorebookSync) {
+      await syncLorebook(artifact);
+      await saveArtifactToMessage(index, artifact);
+    }
     return artifact;
   });
 }
@@ -1271,6 +1783,132 @@ function installPipelineEventHandlers() {
     eventSource.removeListener?.(event_types.MESSAGE_SWIPED, onSwiped);
     eventSource.removeListener?.(event_types.MESSAGE_DELETED, onDeleted);
   };
+}
+
+// src/domain/graph.ts
+function nodeTypeFor(table) {
+  if (table === "focus") return "focus";
+  if (table === "characters") return "character";
+  if (table === "items") return "item";
+  if (table === "events") return "event";
+  if (table === "regions" || table === "spacetime") return "region";
+  return null;
+}
+function compactLabel(value) {
+  const text = String(value || "").trim();
+  return text.length > 24 ? `${text.slice(0, 23)}\u2026` : text;
+}
+function relationText(row) {
+  return `${row.title}
+${row.content}
+${row.status}
+${row.keywords.join(" ")}`.toLowerCase();
+}
+function mentions(row, node) {
+  const label = node.label.trim().toLowerCase();
+  return label.length >= 2 && relationText(row).includes(label);
+}
+function uniquePairKey(a, b, label) {
+  const [left, right] = [a, b].sort();
+  return `${left}|${right}|${label}`;
+}
+function buildRelationshipGraph(snapshot, scope = "relations") {
+  if (!snapshot) return { nodes: [], edges: [] };
+  const nodes = [];
+  const nodeById = /* @__PURE__ */ new Map();
+  const rowsByNode = /* @__PURE__ */ new Map();
+  const tables = scope === "relations" ? ["focus", "characters"] : ["focus", "characters", "items", "events", "regions", "spacetime"];
+  for (const table of tables) {
+    const type = nodeTypeFor(table);
+    if (!type) continue;
+    for (const row of snapshot[table]) {
+      const id = `${table}:${row.id}`;
+      const node = {
+        id,
+        label: String(row.title || "\u672A\u547D\u540D").trim(),
+        type,
+        detail: row.content,
+        status: row.status,
+        existence: row.lifecycle?.existence,
+        activity: row.lifecycle?.activity,
+        memory: row.lifecycle?.memory
+      };
+      nodes.push(node);
+      nodeById.set(id, node);
+      rowsByNode.set(id, row);
+    }
+  }
+  const edges = [];
+  const seenEdges = /* @__PURE__ */ new Set();
+  let relationIndex = 0;
+  for (const row of snapshot.relationships) {
+    const matched = nodes.filter((node) => mentions(row, node));
+    if (matched.length >= 2) {
+      const source = matched[0];
+      for (const target of matched.slice(1, 4)) {
+        const key = uniquePairKey(source.id, target.id, row.title);
+        if (seenEdges.has(key)) continue;
+        seenEdges.add(key);
+        edges.push({
+          id: `edge:${row.id}:${target.id}`,
+          source: source.id,
+          target: target.id,
+          label: compactLabel(row.title),
+          detail: row.content
+        });
+      }
+      continue;
+    }
+    const relationNode = {
+      id: `relationship:${row.id}`,
+      label: compactLabel(row.title || `\u5173\u7CFB${relationIndex + 1}`),
+      type: "relationship",
+      detail: row.content,
+      status: row.status,
+      existence: row.lifecycle?.existence,
+      activity: row.lifecycle?.activity,
+      memory: row.lifecycle?.memory
+    };
+    relationIndex += 1;
+    nodes.push(relationNode);
+    nodeById.set(relationNode.id, relationNode);
+    if (matched.length === 1) {
+      edges.push({
+        id: `edge:${row.id}:single`,
+        source: matched[0].id,
+        target: relationNode.id,
+        label: compactLabel(row.status || "\u5173\u7CFB"),
+        detail: row.content
+      });
+    }
+  }
+  if (scope === "world") {
+    const contextualTypes = /* @__PURE__ */ new Set(["item", "event", "region"]);
+    const characters = nodes.filter(
+      (node) => node.type === "character" || node.type === "focus"
+    );
+    const contextual = nodes.filter((node) => contextualTypes.has(node.type));
+    for (const character of characters) {
+      const row = rowsByNode.get(character.id);
+      if (!row) continue;
+      const text = relationText(row);
+      for (const target of contextual) {
+        const label = target.label.toLowerCase();
+        if (label.length < 2 || !text.includes(label)) continue;
+        const key = uniquePairKey(character.id, target.id, "\u5173\u8054");
+        if (seenEdges.has(key)) continue;
+        seenEdges.add(key);
+        edges.push({
+          id: `context:${character.id}:${target.id}`,
+          source: character.id,
+          target: target.id,
+          label: "\u5173\u8054",
+          detail: row.content
+        });
+      }
+    }
+  }
+  return { nodes, edges };
 }
 
 // src/ui/diagnostics.ts
@@ -1339,10 +1977,13 @@ async function diagnosticReport() {
 var selectedMessageIndex = null;
 var rendering = false;
 var queueUnsubscribe = null;
+var selectedGraphNodeId = null;
 function root() {
   let element = document.querySelector("#ma11-workspace");
   if (element) return element;
-  document.body.insertAdjacentHTML("beforeend", `
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
     <div id="ma11-workspace" class="ma11-workspace" hidden>
       <div class="ma11-shell" role="dialog" aria-modal="true" aria-label="\u955C\u6E0A\u63A7\u5236\u4E2D\u5FC3">
         <header class="ma11-header">
@@ -1354,14 +1995,17 @@ function root() {
         </header>
         <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">
           ${[
-    ["overview", "\u603B\u89C8"],
-    ["tables", "\u72B6\u6001\u8868"],
-    ["summaries", "\u603B\u7ED3"],
-    ["audit", "\u89C4\u5219\u5BA1\u6838"],
-    ["sync", "\u4E16\u754C\u4E66"],
-    ["settings", "\u6A21\u578B\u4E0E\u8BBE\u7F6E"],
-    ["diagnostics", "\u8BCA\u65AD"]
-  ].map(([key, label]) => `<button data-ma11-tab="${key}">${label}</button>`).join("")}
+      ["overview", "\u603B\u89C8"],
+      ["tables", "\u72B6\u6001\u8868"],
+      ["graph", "\u5173\u7CFB\u56FE\u8C31"],
+      ["summaries", "\u603B\u7ED3"],
+      ["audit", "\u89C4\u5219\u5BA1\u6838"],
+      ["sync", "\u4E16\u754C\u4E66"],
+      ["settings", "\u6A21\u578B\u4E0E\u8BBE\u7F6E"],
+      ["diagnostics", "\u8BCA\u65AD"]
+    ].map(
+      ([key, label]) => `<button data-ma11-tab="${key}">${label}</button>`
+    ).join("")}
         </nav>
         <main id="ma11-workspace-content" class="ma11-content"></main>
       </div>
@@ -1374,10 +2018,32 @@ function root() {
           <label>\u5F53\u524D\u4E8B\u5B9E<textarea name="content" rows="6" maxlength="12000"></textarea></label>
           <label>\u72B6\u6001<input name="status" maxlength="120" /></label>
           <label>\u5173\u952E\u8BCD\uFF08\u9017\u53F7\u5206\u9694\uFF09<input name="keywords" maxlength="800" /></label>
+          <label class="ma11-switch"><input type="checkbox" name="locked" /><span>\u73A9\u5BB6\u9501\u5B9A\uFF08\u81EA\u52A8\u6574\u7406\u4E0D\u5F97\u8986\u76D6\uFF09</span></label>
+          <fieldset class="ma11-lifecycle-editor" data-ma11-lifecycle-fields hidden>
+            <legend>\u4EBA\u7269\u751F\u547D\u5468\u671F</legend>
+            <div class="ma11-editor-grid">
+              <label>\u5B58\u5728\u72B6\u6001<select name="existence">
+                ${["\u5B58\u6D3B", "\u6B7B\u4EA1\u5DF2\u786E\u8BA4", "\u5B58\u5728\u672A\u77E5", "\u5931\u8E2A", "\u8EAB\u4EFD\u5B58\u7591", "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4", "\u5B58\u5728\u88AB\u62B9\u9664", "\u672A\u6807\u6CE8"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+              </select></label>
+              <label>\u6D3B\u8DC3\u72B6\u6001<select name="activity">
+                ${["\u5F53\u524D\u5728\u573A", "\u5F53\u524D\u76F8\u5173", "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3", "\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863", "\u672A\u6807\u6CE8"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+              </select></label>
+              <label>\u8BB0\u5FC6\u72B6\u6001<select name="memory">
+                ${["\u5E7F\u6CDB\u8BB0\u5F97", "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97", "\u4EC5\u8BB0\u5F55\u7559\u5B58", "\u4EC5\u75D5\u8FF9\u7559\u5B58", "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97", "\u8BB0\u5FC6\u88AB\u7BE1\u6539", "\u8BB0\u5FC6\u88AB\u62B9\u9664", "\u672A\u6807\u6CE8"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+              </select></label>
+              <label>\u8BC1\u636E\u7B49\u7EA7<select name="evidenceLevel">
+                ${["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+              </select></label>
+            </div>
+            <label>\u5224\u65AD\u4F9D\u636E<textarea name="evidence" rows="3" maxlength="4000"></textarea></label>
+            <label>\u53EF\u80FD\u56DE\u6D41\u6761\u4EF6\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="returnConditions" rows="3" maxlength="3000"></textarea></label>
+            <label>\u963B\u6B62\u56DE\u6D41\u6761\u4EF6\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="returnBlockers" rows="3" maxlength="3000"></textarea></label>
+          </fieldset>
           <footer><button type="button" data-ma11-action="close-editor">\u53D6\u6D88</button><button type="submit">\u4FDD\u5B58</button></footer>
         </form>
       </div>
-    </div>`);
+    </div>`
+  );
   element = document.querySelector("#ma11-workspace");
   bindWorkspace(element);
   queueUnsubscribe ||= taskQueue.subscribe(() => void renderWorkspace());
@@ -1410,13 +2076,13 @@ function statusClass(value) {
 }
 function stageCards(artifact) {
   const stages = artifact?.stages;
-  const rows = [
+  const rows2 = [
     ["audit", "\u89C4\u5219\u5BA1\u6838"],
     ["state", "\u72B6\u6001\u63D0\u53D6"],
     ["summary", "\u5206\u5C42\u603B\u7ED3"],
     ["sync", "\u4E16\u754C\u4E66\u540C\u6B65"]
   ];
-  return `<div class="ma11-stage-grid">${rows.map(([key, label]) => {
+  return `<div class="ma11-stage-grid">${rows2.map(([key, label]) => {
     const stage = stages?.[key] ?? { status: "idle", attempts: 0 };
     return `<article class="ma11-stage-card ${statusClass(stage.status)}">
       <div><b>${label}</b><span>${statusText(stage.status)}</span></div>
@@ -1427,17 +2093,18 @@ function stageCards(artifact) {
 }
 function overviewHtml(artifactInfo) {
   const artifact = artifactInfo?.artifact;
-  const rows = snapshotRowCount(artifact?.snapshot);
+  const rows2 = snapshotRowCount(artifact?.snapshot);
   const jobs = taskQueue.list().slice(0, 5);
   return `
     <section class="ma11-hero">
       <div>
         <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
-        <p>${artifact ? `\u72B6\u6001\u8868 ${rows} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
+        <p>${artifact ? `\u72B6\u6001\u8868 ${rows2} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
       </div>
       <div class="ma11-actions">
         <button data-ma11-action="process-latest">\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
         <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}>\u67E5\u770B\u72B6\u6001\u8868</button>
+        <button data-ma11-action="open-graph" ${artifact?.snapshot ? "" : "disabled"}>\u5173\u7CFB\u56FE\u8C31</button>
       </div>
     </section>
     ${stageCards(artifact)}
@@ -1452,30 +2119,129 @@ function overviewHtml(artifactInfo) {
       <p>\u6BCF\u6761AI\u6B63\u6587\u53EA\u521B\u5EFA\u4E00\u4E2A\u552F\u4E00\u4EFB\u52A1\uFF1B\u5BA1\u6838\u3001\u8868\u683C\u3001\u603B\u7ED3\u3001\u540C\u6B65\u5206\u9636\u6BB5\u4FDD\u5B58\u3002\u5355\u4E00\u9636\u6BB5\u5931\u8D25\u65F6\u53EA\u91CD\u8BD5\u8BE5\u9636\u6BB5\uFF0C\u4E0D\u91CD\u65B0\u8C03\u7528\u6574\u6761\u7BA1\u7EBF\u3002</p>
     </section>`;
 }
+function lifecycleHtml(row) {
+  const life = row.lifecycle;
+  if (!life) return "";
+  const chips = [
+    ["\u5B58\u5728", life.existence],
+    ["\u6D3B\u8DC3", life.activity],
+    ["\u8BB0\u5FC6", life.memory],
+    ["\u8BC1\u636E", life.evidenceLevel]
+  ].map(([label, value]) => `<span class="ma11-life-chip"><small>${label}</small>${escapeHtml(value)}</span>`).join("");
+  const conditions = [
+    life.returnConditions.length ? `<p><b>\u56DE\u6D41\uFF1A</b>${escapeHtml(life.returnConditions.join("\uFF1B"))}</p>` : "",
+    life.returnBlockers.length ? `<p><b>\u963B\u6B62\uFF1A</b>${escapeHtml(life.returnBlockers.join("\uFF1B"))}</p>` : ""
+  ].join("");
+  return `<div class="ma11-lifecycle-inline">${chips}${conditions}</div>`;
+}
 function tableHtml(artifactInfo) {
   const settings = getSettings();
   const artifact = artifactInfo?.artifact;
   const active = settings.ui.activeTable;
-  const rows = artifact?.snapshot?.[active] ?? [];
+  const rows2 = artifact?.snapshot?.[active] ?? [];
   return `
-    <section class="ma11-toolbar">
+    <section class="ma11-toolbar ma11-table-toolbar">
       <div class="ma11-table-tabs">${TABLE_KEYS.map((key) => `<button class="${key === active ? "active" : ""}" data-ma11-table="${key}">${TABLE_LABELS[key]} <span>${artifact?.snapshot?.[key]?.length ?? 0}</span></button>`).join("")}</div>
       <div class="ma11-actions"><button data-ma11-action="add-row" ${artifact?.snapshot ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="retry-state" ${artifactInfo ? "" : "disabled"}>\u91CD\u65B0\u6574\u7406</button></div>
     </section>
-    <section class="ma11-table-wrap">
+    <p class="ma11-table-hint">\u8868\u683C\u4FDD\u6301\u6A2A\u5411\u6392\u7248\u3002\u624B\u673A\u7AEF\u8BF7\u5728\u8868\u683C\u533A\u57DF\u5DE6\u53F3\u6ED1\u52A8\uFF0C\u4E0D\u4F1A\u518D\u628A\u4E2D\u6587\u538B\u6210\u7AD6\u6392\u3002</p>
+    <section class="ma11-table-wrap" role="region" aria-label="${TABLE_LABELS[active]}\u72B6\u6001\u8868" tabindex="0">
       ${artifact?.snapshot ? `<table class="ma11-table">
-        <thead><tr><th>\u5E8F\u53F7</th><th>\u5BF9\u8C61</th><th>\u5F53\u524D\u4E8B\u5B9E</th><th>\u72B6\u6001</th><th>\u5173\u952E\u8BCD</th><th>\u6765\u6E90</th><th>\u64CD\u4F5C</th></tr></thead>
-        <tbody>${rows.length ? rows.map((row, index) => `<tr>
+        <colgroup><col class="ma11-col-index"/><col class="ma11-col-title"/><col class="ma11-col-content"/><col class="ma11-col-state"/><col class="ma11-col-meta"/><col class="ma11-col-actions"/></colgroup>
+        <thead><tr><th>\u5E8F\u53F7</th><th>\u5BF9\u8C61</th><th>\u5F53\u524D\u8BB0\u5F55</th><th>\u72B6\u6001\u4E0E\u5173\u952E\u8BCD</th><th>\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4</th><th>\u64CD\u4F5C</th></tr></thead>
+        <tbody>${rows2.length ? rows2.map(
+    (row, index) => `<tr>
           <td>${index + 1}</td>
-          <td><b>${escapeHtml(row.title)}</b></td>
+          <td class="ma11-cell-title"><b>${escapeHtml(row.title)}</b></td>
           <td class="ma11-cell-content">${escapeHtml(row.content)}</td>
-          <td>${escapeHtml(row.status)}</td>
-          <td>${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</td>
-          <td><span class="ma11-source ${row.source}">${row.source === "manual" ? "\u624B\u52A8" : "\u81EA\u52A8"}</span></td>
-          <td><button data-ma11-edit-row="${escapeHtml(row.id)}">\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}">\u5220\u9664</button></td>
-        </tr>`).join("") : `<tr><td colspan="7" class="ma11-empty">\u8BE5\u5206\u7C7B\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
+          <td><div class="ma11-cell-status">${row.status ? `<span class="ma11-status-text">${escapeHtml(row.status)}</span>` : ""}${lifecycleHtml(row)}<div class="ma11-keyword-list">${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</div></div></td>
+          <td><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.source === "manual" || row.locked ? "\u73A9\u5BB6\u9501\u5B9A" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
+          <td><div class="ma11-row-actions"><button data-ma11-edit-row="${escapeHtml(row.id)}">\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}">\u5220\u9664</button></div></td>
+        </tr>`
+  ).join("") : `<tr><td colspan="6" class="ma11-empty">\u8BE5\u5206\u7C7B\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
       </table>` : '<div class="ma11-empty-panel">\u5C1A\u65E0\u72B6\u6001\u8868\u3002\u70B9\u51FB\u201C\u6574\u7406\u6700\u65B0\u6B63\u6587\u201D\u3002</div>'}
     </section>`;
+}
+function graphNodePositions(graph) {
+  const width = 1e3;
+  const height = 680;
+  const center = { x: width / 2, y: height / 2 };
+  const groups = /* @__PURE__ */ new Map();
+  for (const node of graph.nodes) {
+    const key = node.type === "focus" ? "focus" : node.type === "character" ? "character" : node.type === "relationship" ? "relationship" : "world";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(node);
+  }
+  const output = [];
+  const focus = groups.get("focus") ?? [];
+  focus.forEach(
+    (node, index) => output.push({ ...node, x: center.x + index * 56, y: center.y })
+  );
+  const ring = (key, radiusX, radiusY, offset = 0) => {
+    const nodes = groups.get(key) ?? [];
+    nodes.forEach((node, index) => {
+      const angle = offset + Math.PI * 2 * index / Math.max(nodes.length, 1);
+      output.push({
+        ...node,
+        x: center.x + Math.cos(angle) * radiusX,
+        y: center.y + Math.sin(angle) * radiusY
+      });
+    });
+  };
+  ring("character", 250, 185, -Math.PI / 2);
+  ring("relationship", 365, 250, Math.PI / 6);
+  ring("world", 455, 300, 0);
+  if (!focus.length && output.length) {
+    output[0].x = center.x;
+    output[0].y = center.y;
+  }
+  return output;
+}
+function graphTypeLabel(type) {
+  const labels = {
+    focus: "\u7126\u70B9",
+    character: "\u4EBA\u7269",
+    relationship: "\u5173\u7CFB",
+    item: "\u7269\u54C1",
+    event: "\u4E8B\u4EF6",
+    region: "\u533A\u57DF"
+  };
+  return labels[type];
+}
+function graphLifecycleClass(node) {
+  if (node.existence === "\u6B7B\u4EA1\u5DF2\u786E\u8BA4") return "dead";
+  if (node.existence === "\u5B58\u5728\u672A\u77E5" || node.existence === "\u8EAB\u4EFD\u5B58\u7591" || node.existence === "\u5931\u8E2A") return "uncertain";
+  if (node.activity === "\u5DF2\u5F52\u6863") return "archived";
+  if (node.activity === "\u957F\u671F\u4F11\u7720") return "long-dormant";
+  if (node.activity === "\u4F11\u7720") return "dormant";
+  return "";
+}
+function graphHtml(artifactInfo) {
+  const settings = getSettings();
+  const snapshot = artifactInfo?.artifact.snapshot;
+  const graph = buildRelationshipGraph(snapshot, settings.ui.graphScope);
+  const positioned = graphNodePositions(graph);
+  const positions = new Map(positioned.map((node) => [node.id, node]));
+  const selected = positioned.find((node) => node.id === selectedGraphNodeId) ?? positioned[0];
+  if (selected && !selectedGraphNodeId) selectedGraphNodeId = selected.id;
+  const edgeSvg = graph.edges.map((edge) => {
+    const source = positions.get(edge.source);
+    const target = positions.get(edge.target);
+    if (!source || !target) return "";
+    const mx = (source.x + target.x) / 2;
+    const my = (source.y + target.y) / 2;
+    return `<g class="ma11-graph-edge"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"><title>${escapeHtml(`${edge.label}\uFF1A${edge.detail}`)}</title></line>${graph.edges.length <= 18 ? `<text x="${mx}" y="${my}">${escapeHtml(edge.label)}</text>` : ""}</g>`;
+  }).join("");
+  const nodeSvg = positioned.map(
+    (node) => `<g class="ma11-graph-node ${node.type} ${graphLifecycleClass(node)} ${selected?.id === node.id ? "selected" : ""}" data-ma11-graph-node="${escapeHtml(node.id)}" transform="translate(${node.x} ${node.y})" tabindex="0" role="button"><circle r="34"></circle><text text-anchor="middle" y="4">${escapeHtml(node.label.length > 10 ? `${node.label.slice(0, 9)}\u2026` : node.label)}</text><title>${escapeHtml(`${node.label}
+${node.detail}`)}</title></g>`
+  ).join("");
+  return `
+    <section class="ma11-toolbar ma11-graph-toolbar">
+      <div><h2>\u5173\u7CFB\u56FE\u8C31</h2><p>\u7531\u5F53\u524D\u72B6\u6001\u8868\u751F\u6210\uFF0C\u53EA\u8BFB\u5C55\u793A\uFF0C\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002</p></div>
+      <div class="ma11-segmented"><button class="${settings.ui.graphScope === "relations" ? "active" : ""}" data-ma11-graph-scope="relations">\u4EBA\u7269\u5173\u7CFB</button><button class="${settings.ui.graphScope === "world" ? "active" : ""}" data-ma11-graph-scope="world">\u5168\u5C40\u7F51\u7EDC</button></div>
+    </section>
+    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5173\u7CFB\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
 }
 async function summariesHtml() {
   const info = currentArtifact();
@@ -1483,10 +2249,14 @@ async function summariesHtml() {
   const small = state2?.smallSummaries ?? [];
   const large = state2?.largeSummaries ?? [];
   return `
-    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u4FDD\u7559\u9636\u6BB5\u72B6\u6001\uFF0C\u5927\u603B\u7ED3\u538B\u7F29\u957F\u671F\u8FDE\u7EED\u6027\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
+    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u8D1F\u8D23\u5B89\u5168\u6C89\u964D\u5DF2\u7ED3\u675F\u5185\u5BB9\uFF1B\u5927\u603B\u7ED3\u628A\u5DF2\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u5185\u63A8\u4E3A\u7D2F\u8BA1\u957F\u671F\u8BB0\u5FC6\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
     <div class="ma11-summary-columns">
-      <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5C0F\u603B\u7ED3\u3002</p>'}</section>
-      <section class="ma11-card"><header><b>\u5927\u603B\u7ED3</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5927\u603B\u7ED3\u3002</p>'}</section>
+      <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map(
+    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
+  ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5C0F\u603B\u7ED3\u3002</p>'}</section>
+      <section class="ma11-card"><header><b>\u5927\u603B\u7ED3</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map(
+    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
+  ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5927\u603B\u7ED3\u3002</p>'}</section>
     </div>`;
 }
 function auditHtml() {
@@ -1513,10 +2283,12 @@ async function syncHtml() {
       <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(state2?.lastSyncStatus || "idle")}">${statusText(state2?.lastSyncStatus || "idle")}</span></header>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
+      <label>\u53D1\u5E03\u7ED3\u6784<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u5BF9\u8C61\u8BED\u4E49\u6A21\u5F0F\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u884C\u8C03\u8BD5\u6A21\u5F0F</option></select></label>
+      <p class="ma11-help">\u5BF9\u8C61\u8BED\u4E49\u6A21\u5F0F\u6309\u73B0\u5B9E\u5BF9\u8C61\u5EFA\u7ACB\u6761\u76EE\uFF1A\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u6BCF\u4E2A\u7126\u70B9\u3001\u6BCF\u4E2A\u6B63\u5F0F\u4EBA\u7269\u3001\u5173\u7CFB\u7F51\u7EDC\u3001\u533A\u57DF\u3001\u4E8B\u4EF6/\u6D41\u7A0B\u3001\u7269\u54C1/\u8D44\u6E90\u3001\u6280\u80FD\uFF0C\u4EE5\u53CA\u5F53\u524D\u5C0F\u603B\u7ED3\u548C\u7D2F\u8BA1\u5927\u603B\u7ED3\u3002\u65E7\u7684\u955C\u6E0A\u7BA1\u7406\u6761\u76EE\u4F1A\u5728\u91CD\u65B0\u53D1\u5E03\u65F6\u81EA\u52A8\u66FF\u6362\u3002</p>
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="vectorizeRows" ${settings.vectorizeRows ? "checked" : ""}/><span>\u4EBA\u7269\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7B49\u72B6\u6001\u884C\u542F\u7528\u5411\u91CF</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u4FDD\u7559\u201C\u5F53\u524D\u8FDE\u7EED\u6027\u6838\u5FC3\u201D\u5E38\u9A7B\u6761\u76EE</span></label>
-      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>\u7ACB\u5373\u540C\u6B65</button></div>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u5F53\u524D\u7126\u70B9\u4E0E\u5F53\u524D\u603B\u7ED3\u5E38\u9A7B</span></label>
+      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
     </section>`;
@@ -1560,7 +2332,9 @@ async function diagnosticsHtml() {
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
-    <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map((log) => `<div><time>${escapeHtml(new Date(log.createdAt).toLocaleString())}</time><span>${escapeHtml(log.label)}</span><em class="${log.state}">${escapeHtml(log.state)}</em>${log.error ? `<small>${escapeHtml(log.error)}</small>` : ""}</div>`).join("") : '<p class="ma11-empty">\u6682\u65E0\u65E5\u5FD7\u3002</p>'}</div></section>`;
+    <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(
+    (log) => `<div><time>${escapeHtml(new Date(log.createdAt).toLocaleString())}</time><span>${escapeHtml(log.label)}</span><em class="${log.state}">${escapeHtml(log.state)}</em>${log.error ? `<small>${escapeHtml(log.error)}</small>` : ""}</div>`
+  ).join("") : '<p class="ma11-empty">\u6682\u65E0\u65E5\u5FD7\u3002</p>'}</div></section>`;
 }
 async function renderWorkspace() {
   const workspace = document.querySelector("#ma11-workspace");
@@ -1569,15 +2343,27 @@ async function renderWorkspace() {
   try {
     const settings = getSettings();
     const info = currentArtifact();
-    workspace.querySelectorAll("[data-ma11-tab]").forEach((button) => button.classList.toggle("active", button.dataset.ma11Tab === settings.ui.activeTab));
-    const content = workspace.querySelector("#ma11-workspace-content");
-    if (settings.ui.activeTab === "overview") content.innerHTML = overviewHtml(info);
+    workspace.querySelectorAll("[data-ma11-tab]").forEach(
+      (button) => button.classList.toggle(
+        "active",
+        button.dataset.ma11Tab === settings.ui.activeTab
+      )
+    );
+    const content = workspace.querySelector(
+      "#ma11-workspace-content"
+    );
+    if (settings.ui.activeTab === "overview")
+      content.innerHTML = overviewHtml(info);
     if (settings.ui.activeTab === "tables") content.innerHTML = tableHtml(info);
-    if (settings.ui.activeTab === "summaries") content.innerHTML = await summariesHtml();
+    if (settings.ui.activeTab === "graph") content.innerHTML = graphHtml(info);
+    if (settings.ui.activeTab === "summaries")
+      content.innerHTML = await summariesHtml();
     if (settings.ui.activeTab === "audit") content.innerHTML = auditHtml();
     if (settings.ui.activeTab === "sync") content.innerHTML = await syncHtml();
-    if (settings.ui.activeTab === "settings") content.innerHTML = settingsHtml();
-    if (settings.ui.activeTab === "diagnostics") content.innerHTML = await diagnosticsHtml();
+    if (settings.ui.activeTab === "settings")
+      content.innerHTML = settingsHtml();
+    if (settings.ui.activeTab === "diagnostics")
+      content.innerHTML = await diagnosticsHtml();
   } finally {
     rendering = false;
   }
@@ -1590,7 +2376,9 @@ function setTab(tab) {
 }
 function openRowEditor(tableKey, row) {
   const workspace = root();
-  const backdrop = workspace.querySelector(".ma11-editor-backdrop");
+  const backdrop = workspace.querySelector(
+    ".ma11-editor-backdrop"
+  );
   const form = workspace.querySelector("#ma11-row-editor");
   form.elements.namedItem("tableKey").value = tableKey;
   form.elements.namedItem("rowId").value = row?.id || "";
@@ -1598,12 +2386,28 @@ function openRowEditor(tableKey, row) {
   form.elements.namedItem("content").value = row?.content || "";
   form.elements.namedItem("status").value = row?.status || "active";
   form.elements.namedItem("keywords").value = row?.keywords.join(", ") || "";
+  form.elements.namedItem("locked").checked = row?.locked ?? true;
+  const lifecycleFields = form.querySelector("[data-ma11-lifecycle-fields]");
+  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
+  if (lifecycleFields) lifecycleFields.hidden = !supportsLifecycle;
+  if (supportsLifecycle) {
+    const life = row?.lifecycle;
+    form.elements.namedItem("existence").value = life?.existence || "\u672A\u6807\u6CE8";
+    form.elements.namedItem("activity").value = life?.activity || "\u672A\u6807\u6CE8";
+    form.elements.namedItem("memory").value = life?.memory || "\u672A\u6807\u6CE8";
+    form.elements.namedItem("evidenceLevel").value = life?.evidenceLevel || "\u672A\u77E5";
+    form.elements.namedItem("evidence").value = life?.evidence || "";
+    form.elements.namedItem("returnConditions").value = life?.returnConditions.join("\n") || "";
+    form.elements.namedItem("returnBlockers").value = life?.returnBlockers.join("\n") || "";
+  }
   backdrop.hidden = false;
   form.elements.namedItem("title").focus();
 }
 function closeEditor() {
   const workspace = document.querySelector("#ma11-workspace");
-  const backdrop = workspace?.querySelector(".ma11-editor-backdrop");
+  const backdrop = workspace?.querySelector(
+    ".ma11-editor-backdrop"
+  );
   if (backdrop) backdrop.hidden = true;
 }
 async function saveRow(form) {
@@ -1615,11 +2419,32 @@ async function saveRow(form) {
   const content = form.elements.namedItem("content").value.trim();
   const status = form.elements.namedItem("status").value.trim();
   const keywords = form.elements.namedItem("keywords").value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
-  info.artifact.snapshot = upsertManualRow(info.artifact.snapshot, tableKey, { id: rowId || void 0, title, content, status, keywords });
+  const locked = form.elements.namedItem("locked").checked;
+  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
+  const listFrom = (name) => form.elements.namedItem(name).value.split(/\n|[；;]/).map((item) => item.trim()).filter(Boolean);
+  const lifecycle = supportsLifecycle ? {
+    existence: form.elements.namedItem("existence").value,
+    activity: form.elements.namedItem("activity").value,
+    memory: form.elements.namedItem("memory").value,
+    evidenceLevel: form.elements.namedItem("evidenceLevel").value,
+    evidence: form.elements.namedItem("evidence").value.trim(),
+    returnConditions: listFrom("returnConditions"),
+    returnBlockers: listFrom("returnBlockers")
+  } : void 0;
+  info.artifact.snapshot = upsertManualRow(info.artifact.snapshot, tableKey, {
+    id: rowId || void 0,
+    title,
+    content,
+    status,
+    keywords,
+    locked,
+    lifecycle
+  });
   const message = getMessage(info.index);
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
   await persistChat();
+  if (getSettings().lorebookSync) await retryStage(info.index, "sync");
   closeEditor();
   await renderWorkspace();
 }
@@ -1633,6 +2458,7 @@ async function deleteRowAction(rowId) {
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
   await persistChat();
+  if (getSettings().lorebookSync) await retryStage(info.index, "sync");
   await renderWorkspace();
 }
 function updateSetting(target) {
@@ -1642,6 +2468,7 @@ function updateSetting(target) {
   const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target instanceof HTMLInputElement && target.type === "number" ? Number(target.value) : target.value;
   settings[key] = value;
   saveSettings();
+  if (key === "lorebookLayout") void renderWorkspace();
 }
 function updateConnection(target) {
   const modeTask = target.dataset.ma11ConnectionMode;
@@ -1652,7 +2479,11 @@ function updateConnection(target) {
     settings.connections[modeTask].mode = target.value;
     shouldRender = true;
   }
-  if (profileTask) settings.connections[profileTask].profile = safeText(target.value, 160).trim();
+  if (profileTask)
+    settings.connections[profileTask].profile = safeText(
+      target.value,
+      160
+    ).trim();
   saveSettings();
   if (shouldRender) void renderWorkspace();
 }
@@ -1665,6 +2496,7 @@ function bindWorkspace(workspace) {
     try {
       if (action === "close") workspace.hidden = true;
       if (action === "open-tables") setTab("tables");
+      if (action === "open-graph") setTab("graph");
       if (action === "process-latest") {
         const index = latestAssistantIndex();
         if (index < 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
@@ -1680,7 +2512,10 @@ function bindWorkspace(workspace) {
       if (action === "force-small" || action === "force-large") {
         const info = currentArtifact();
         if (!info) throw new Error("\u5C1A\u65E0\u53EF\u603B\u7ED3\u7684\u72B6\u6001");
-        await forceSummary(info.index, action === "force-small" ? "small" : "large");
+        await forceSummary(
+          info.index,
+          action === "force-small" ? "small" : "large"
+        );
         await renderWorkspace();
       }
       if (action === "retry-sync") {
@@ -1697,6 +2532,18 @@ function bindWorkspace(workspace) {
         await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
         toast("success", "\u8BCA\u65AD\u4FE1\u606F\u5DF2\u590D\u5236");
       }
+      const graphScope = target.closest("[data-ma11-graph-scope]")?.dataset.ma11GraphScope;
+      if (graphScope) {
+        getSettings().ui.graphScope = graphScope;
+        selectedGraphNodeId = null;
+        saveSettings();
+        await renderWorkspace();
+      }
+      const graphNodeId = target.closest("[data-ma11-graph-node]")?.dataset.ma11GraphNode;
+      if (graphNodeId) {
+        selectedGraphNodeId = graphNodeId;
+        await renderWorkspace();
+      }
       const table = target.closest("[data-ma11-table]")?.dataset.ma11Table;
       if (table) {
         getSettings().ui.activeTable = table;
@@ -1707,7 +2554,9 @@ function bindWorkspace(workspace) {
       if (editId) {
         const info = currentArtifact();
         const key = getSettings().ui.activeTable;
-        const row = info?.artifact.snapshot?.[key].find((item) => item.id === editId);
+        const row = info?.artifact.snapshot?.[key].find(
+          (item) => item.id === editId
+        );
         if (row) openRowEditor(key, row);
       }
       const deleteId = target.closest("[data-ma11-delete-row]")?.dataset.ma11DeleteRow;
@@ -1724,21 +2573,26 @@ function bindWorkspace(workspace) {
   workspace.addEventListener("change", (event) => {
     const target = event.target;
     if (target.dataset.ma11Setting) updateSetting(target);
-    if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfile) updateConnection(target);
+    if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfile)
+      updateConnection(target);
   });
   workspace.addEventListener("input", (event) => {
     const target = event.target;
-    if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "lorebookName") updateSetting(target);
+    if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "lorebookName")
+      updateSetting(target);
     if (target.dataset.ma11ConnectionProfile) updateConnection(target);
   });
   workspace.querySelector("#ma11-row-editor")?.addEventListener("submit", (event) => {
     event.preventDefault();
-    void saveRow(event.currentTarget).catch((error) => toast("error", toErrorMessage(error)));
+    void saveRow(event.currentTarget).catch(
+      (error) => toast("error", toErrorMessage(error))
+    );
   });
 }
 function openWorkspace(tab, messageIndex) {
   const workspace = root();
-  if (Number.isInteger(messageIndex)) selectedMessageIndex = Number(messageIndex);
+  if (Number.isInteger(messageIndex))
+    selectedMessageIndex = Number(messageIndex);
   if (tab) getSettings().ui.activeTab = tab;
   workspace.hidden = false;
   void renderWorkspace();
@@ -1770,7 +2624,7 @@ function findMessageElement2(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
 }
 function panelHtml(index, artifact) {
-  const rows = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list) => sum + list.length, 0) : 0;
+  const rows2 = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list) => sum + list.length, 0) : 0;
   const error = Object.values(artifact.stages).find((stage) => stage.error)?.error;
   return `
     <div class="ma11-message-panel" data-ma-index="${index}">
@@ -1779,7 +2633,7 @@ function panelHtml(index, artifact) {
         <span class="ma11-badge ${tone(artifact.stages.audit)}">\u5BA1\u6838 ${stageLabel(artifact.stages.audit)}</span>
         <span class="ma11-badge ${tone(artifact.stages.state)}">\u8868\u683C ${stageLabel(artifact.stages.state)}</span>
         <span class="ma11-badge ${tone(artifact.stages.sync)}">\u540C\u6B65 ${stageLabel(artifact.stages.sync)}</span>
-        <span class="ma11-message-count">${rows} \u6761</span>
+        <span class="ma11-message-count">${rows2} \u6761</span>
       </button>
       ${error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
       <div class="ma11-message-actions">
