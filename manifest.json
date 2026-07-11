@@ -7,8 +7,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.0.0-rc.3.1",
-  "homePage": "https://github.com/228184520lyd-boop/MA",
+  "version": "1.0.0-rc.3.2",
+  "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": true,
-  "minimum_client_version": "1.14.0"
+  "minimum_client_version": "1.12.0"
 }

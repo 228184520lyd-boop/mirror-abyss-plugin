@@ -3,7 +3,7 @@
 
     const MODULE_NAME = 'mirrorAbyss';
     const DISPLAY_NAME = '镜渊';
-    const VERSION = '1.0.0-rc.3.1';
+    const VERSION = '1.0.0-rc.3.2';
     const EXTENSION_PATH = 'third-party/MA';
     const GRAPH_LIB_URL = 'https://unpkg.com/3d-force-graph@1.79.1/dist/3d-force-graph.min.js';
     const TABLE_KEYS = ['focus', 'spacetime', 'characters', 'relationships', 'items', 'events', 'regions', 'foundations'];
@@ -70,6 +70,11 @@
     const fallbackChatMetadata = {};
     let settingsPanelRetryTimer = null;
     let interfaceObserver = null;
+    let delegatedHandlersInstalled = false;
+    let sillyTavernEventsBound = false;
+    let bootTimer = null;
+    let bootAttempts = 0;
+    let lastInitError = null;
 
     function cloneDefaults(value) {
         try {
@@ -91,8 +96,11 @@
     function settings() {
         const context = ctx();
         if (!context) return cloneDefaults(DEFAULT_SETTINGS);
+        if (!context.extensionSettings || typeof context.extensionSettings !== 'object') {
+            context.extensionSettings = {};
+        }
         const all = context.extensionSettings;
-        if (!all[MODULE_NAME]) all[MODULE_NAME] = cloneDefaults(DEFAULT_SETTINGS);
+        if (!all[MODULE_NAME] || typeof all[MODULE_NAME] !== 'object') all[MODULE_NAME] = cloneDefaults(DEFAULT_SETTINGS);
         for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
             if (!hasOwn(all[MODULE_NAME], key)) all[MODULE_NAME][key] = value;
         }
@@ -1303,6 +1311,8 @@ ${String(message.mes || '')}`,
     }
 
     function installDelegatedHandlers() {
+        if (delegatedHandlersInstalled) return;
+        delegatedHandlersInstalled = true;
         document.addEventListener('click', async event => {
             const toggle = event.target.closest('.ma-panel-toggle');
             if (toggle) {
@@ -2321,8 +2331,10 @@ ${String(message.mes || '')}`,
     }
 
     function bindSillyTavernEvents() {
+        if (sillyTavernEventsBound) return;
         const context = ctx();
         if (!context?.eventSource || !context?.event_types) return;
+        sillyTavernEventsBound = true;
         const { eventSource, event_types } = context;
         const renderSoon = () => setTimeout(renderAllPanels, 80);
 
@@ -2379,28 +2391,89 @@ ${String(message.mes || '')}`,
         });
     }
 
-    function init() {
-        if (initialized || !ctx()) return;
-        initialized = true;
-        settings();
-        createTopBarButton();
-        createFloatingButton();
-        createControlCenter();
-        createWorkspace();
-        createSettingsPanel();
-        observeInterfaceHosts();
-        exposeEmergencyApi();
-        applyInterfaceVisibility();
-        installDelegatedHandlers();
-        bindSillyTavernEvents();
-        setTimeout(() => { renderAllPanels(); updateUnifiedStatus(); }, 300);
-        setTimeout(() => scheduleLorebookSync('initial'), 1200);
-        console.info(`[MirrorAbyss] v${VERSION} initialized`);
+    function removeBootNotice() {
+        document.getElementById('ma-boot-notice')?.remove();
     }
 
-    const boot = () => {
-        if (window.SillyTavern?.getContext?.()) init();
-        else setTimeout(boot, 250);
-    };
-    boot();
+    function showBootNotice(message, tone = 'warning') {
+        if (!document.body) return;
+        let notice = document.getElementById('ma-boot-notice');
+        if (!notice) {
+            notice = document.createElement('button');
+            notice.id = 'ma-boot-notice';
+            notice.type = 'button';
+            notice.addEventListener('click', () => {
+                if (initialized) return openControlCenter('overview');
+                const ok = init();
+                if (!ok) {
+                    const detail = lastInitError?.message || message || '酒馆上下文尚未就绪';
+                    window.alert(`镜渊尚未启动：${detail}`);
+                }
+            });
+            document.body.appendChild(notice);
+        }
+        notice.dataset.tone = tone;
+        notice.innerHTML = `<b>镜渊</b><span>${escapeHtml(message || '正在等待酒馆加载')}</span>`;
+    }
+
+    function init() {
+        if (initialized) return true;
+        const context = ctx();
+        if (!context) return false;
+        try {
+            settings();
+            createTopBarButton();
+            createFloatingButton();
+            createControlCenter();
+            createWorkspace();
+            createSettingsPanel();
+            observeInterfaceHosts();
+            exposeEmergencyApi();
+            applyInterfaceVisibility();
+            installDelegatedHandlers();
+            bindSillyTavernEvents();
+            initialized = true;
+            lastInitError = null;
+            removeBootNotice();
+            setTimeout(() => { renderAllPanels(); updateUnifiedStatus(); }, 300);
+            setTimeout(() => scheduleLorebookSync('initial'), 1200);
+            console.info(`[MirrorAbyss] v${VERSION} initialized`);
+            return true;
+        } catch (error) {
+            initialized = false;
+            lastInitError = error;
+            console.error('[MirrorAbyss] initialization failed', error);
+            showBootNotice(`启动失败：${error?.message || error}`, 'danger');
+            return false;
+        }
+    }
+
+    function scheduleBoot(delay = 250) {
+        clearTimeout(bootTimer);
+        bootTimer = setTimeout(boot, delay);
+    }
+
+    function boot() {
+        bootAttempts += 1;
+        if (init()) return;
+        if (bootAttempts >= 12) {
+            showBootNotice(lastInitError ? `启动失败：${lastInitError.message || lastInitError}` : '等待酒馆完成加载', lastInitError ? 'danger' : 'warning');
+        }
+        scheduleBoot(bootAttempts < 40 ? 250 : 1000);
+    }
+
+    function startBoot() {
+        scheduleBoot(0);
+        const context = ctx();
+        const readyEvent = context?.event_types?.APP_READY;
+        if (readyEvent && context?.eventSource?.on) {
+            context.eventSource.on(readyEvent, () => scheduleBoot(0));
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startBoot, { once: true });
+    } else {
+        startBoot();
+    }
 })();

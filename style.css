@@ -549,3 +549,25 @@
     .ma-panel-actions button { min-width: 38px; min-height: 38px; }
     .ma-form-body textarea { min-height: 180px; }
 }
+
+/* rc.3.2 visible boot diagnostics */
+#ma-boot-notice {
+    position: fixed;
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    z-index: 30250;
+    display: grid;
+    gap: 2px;
+    max-width: min(280px, calc(100vw - 24px));
+    padding: 9px 12px;
+    border: 1px solid rgba(255,255,255,.2);
+    border-radius: 10px;
+    background: rgba(35,37,48,.96);
+    color: #fff;
+    text-align: left;
+    box-shadow: 0 8px 28px rgba(0,0,0,.45);
+}
+#ma-boot-notice b { font-size: 13px; }
+#ma-boot-notice span { font-size: 11px; opacity: .82; overflow-wrap: anywhere; }
+#ma-boot-notice[data-tone="danger"] { border-color: rgba(224,111,120,.75); }
+#ma-boot-notice[data-tone="warning"] { border-color: rgba(213,168,91,.75); }
