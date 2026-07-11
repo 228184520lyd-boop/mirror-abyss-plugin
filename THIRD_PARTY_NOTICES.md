@@ -1,16 +1,9 @@
 # Third-Party Notices
 
-Mirror Abyss is distributed under AGPL-3.0.
+Mirror Abyss 1.1.0-alpha.1 contains no bundled third-party runtime library.
 
-The implementation was designed after auditing mature open-source SillyTavern extensions and the SillyTavern client. Relevant upstream projects include:
+The production bundle is generated from this repository's TypeScript source using esbuild. Development-only dependencies are listed in package.json and are not required by SillyTavern at runtime.
 
-- SillyTavern — AGPL-3.0. Native extension context, message events, chat metadata and World Info APIs.
-- SillyTavern Memory Books — AGPL-3.0. Job, structured memory, summary consolidation and lorebook synchronization patterns.
-- SillyTavern Lorebook Studio — AGPL-3.0. Fullscreen graph workspace, lorebook node and mobile graph interaction patterns.
-- SillyTavern MessageSummarize — AGPL-3.0. Message-attached derived data lifecycle patterns.
-- WTracker — MIT. Structured schema and tracker editing patterns.
-- 3d-force-graph — MIT. Loaded at runtime from the configured CDN URL when available.
+SillyTavern provides runtime APIs and shared browser libraries such as localforage. Mirror Abyss accesses those through the SillyTavern global context.
 
-Amily2 (CC BY-NC-ND 4.0) was examined only as a non-code interaction and workflow reference. Its source, CSS, assets, prompts and derivative UI code are not included.
-
-See `UPSTREAM_SOURCES.md` for repository locations and usage scope. Copyright remains with the respective authors.
+Other extensions were studied only as architectural references. Their code, prompts, CSS, icons, screenshots, and assets are not redistributed.

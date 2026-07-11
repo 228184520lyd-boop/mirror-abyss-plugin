@@ -1,31 +1,30 @@
 # Validation
 
-Performed in the build environment:
+版本：`1.1.0-alpha.1`
 
-- `node --check index.js`
-- JSON parse of `manifest.json`
-- Required root file check
-- ZIP root layout check
-- Duplicate event-listener static check
-- Independent API provider branch static review
-- Audit/withdraw pipeline static review
+已完成：
 
-Not yet performed:
+- TypeScript `strict` 静态检查通过。
+- 生产 ESM bundle 构建通过。
+- `node --check index.js` 通过。
+- 8 个领域测试通过：状态表结构、重复 ID、人工行编辑、JSON 解析、审核协议、总结、默认设置合并、哈希。
+- 1 个模拟浏览器集成测试通过：
+  - APP_READY 初始化；
+  - 设置面板只挂载一次；
+  - MESSAGE_RECEIVED 只注册一次；
+  - 同一正文重复触发两次时，状态模型只调用一次；
+  - 状态结果写入消息 extra。
+- 静态确认未监听 `GENERATION_ENDED` 执行业务任务。
+- 静态确认插件设置中没有 API Key 字段。
+- 初始化重试不会重复注册消息面板或界面刷新事件。
+- 消息删除后会按仍存活的消息工件清理聊天索引与本地工件。
 
-- Live SillyTavern installation test
-- Cloud-hosted SillyTavern permission test
-- Provider-specific CORS and authentication test
-- Automatic withdrawal test against a real chat
-- iOS/Android browser touch regression
-- Long-chat stress test
+尚未完成：
 
-This is why the package remains a Release Candidate.
+- 真实 SillyTavern 云部署实机启动测试。
+- 不同 API / Connection Profile 真实调用测试。
+- 世界书模块真实写入与删除测试。
+- 群聊、复杂删除序列、跨设备并发测试。
+- 手机浏览器 100 回合长测。
 
-
-## rc.3.1 hotfix checks
-
-- [x] JavaScript syntax check
-- [x] manifest version check
-- [x] control center has visible error fallback
-- [x] top/floating/settings entries target the control center
-- [x] delayed settings host retries
+因此本版本标记为 alpha，不宣称长期稳定版。

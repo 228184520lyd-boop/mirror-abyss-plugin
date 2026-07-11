@@ -1,2479 +1,2038 @@
-(() => {
-    'use strict';
+// src/constants.ts
+var MODULE_NAME = "mirrorAbyssV11";
+var LEGACY_MODULE_NAME = "mirrorAbyss";
+var DISPLAY_NAME = "\u955C\u6E0A";
+var VERSION = "1.1.0-alpha.1";
+var PIPELINE_VERSION = "ma-pipeline-1";
+var TABLE_KEYS = [
+  "focus",
+  "spacetime",
+  "characters",
+  "relationships",
+  "items",
+  "events",
+  "regions",
+  "foundations"
+];
+var TABLE_LABELS = {
+  focus: "\u5F53\u524D\u7126\u70B9",
+  spacetime: "\u65F6\u95F4\u4E0E\u5730\u70B9",
+  characters: "\u4EBA\u7269",
+  relationships: "\u5173\u7CFB",
+  items: "\u7269\u54C1",
+  events: "\u4E8B\u4EF6\u4E0E\u6D41\u7A0B",
+  regions: "\u533A\u57DF\u72B6\u6001",
+  foundations: "\u57FA\u7840\u8BBE\u5B9A"
+};
+var DEFAULT_SETTINGS = {
+  enabled: true,
+  autoState: true,
+  showMessagePanel: true,
+  showTopButton: true,
+  auditEnabled: false,
+  auditPrompt: "",
+  auditFailAction: "mark",
+  autoSmallSummary: true,
+  smallSummaryTurns: 15,
+  autoLargeSummary: true,
+  largeSummaryCount: 6,
+  lorebookSync: true,
+  autoCreateLorebook: true,
+  lorebookName: "",
+  vectorizeRows: false,
+  latestContinuityConstant: true,
+  repairInvalidJsonOnce: true,
+  requestTimeoutMs: 9e4,
+  connections: {
+    audit: { mode: "current", profile: "" },
+    state: { mode: "current", profile: "" },
+    smallSummary: { mode: "current", profile: "" },
+    largeSummary: { mode: "current", profile: "" }
+  },
+  ui: {
+    activeTab: "overview",
+    activeTable: "focus"
+  },
+  migration: {
+    legacyChecked: false
+  }
+};
+var STORAGE_DB_NAME = "mirror-abyss-v11";
+var STORAGE_CHAT_PREFIX = "ma11:chat:";
+var STORAGE_ARTIFACT_PREFIX = "ma11:artifact:";
+var STORAGE_LOG_PREFIX = "ma11:log:";
 
-    const MODULE_NAME = 'mirrorAbyss';
-    const DISPLAY_NAME = '镜渊';
-    const VERSION = '1.0.0-rc.3.2';
-    const EXTENSION_PATH = 'third-party/MA';
-    const GRAPH_LIB_URL = 'https://unpkg.com/3d-force-graph@1.79.1/dist/3d-force-graph.min.js';
-    const TABLE_KEYS = ['focus', 'spacetime', 'characters', 'relationships', 'items', 'events', 'regions', 'foundations'];
-    const TABLE_LABELS = {
-        focus: '当前焦点',
-        spacetime: '时间与地点',
-        characters: '人物',
-        relationships: '关系',
-        items: '物品',
-        events: '事件与流程',
-        regions: '区域状态',
-        foundations: '基础设定',
-    };
+// src/core/utils.ts
+function deepClone(value) {
+  if (typeof structuredClone === "function") {
+    try {
+      return structuredClone(value);
+    } catch {
+    }
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+function mergeDefaults(defaults, current) {
+  const output = deepClone(defaults);
+  const merge = (target, source) => {
+    if (!source) return;
+    for (const [key, value] of Object.entries(source)) {
+      if (value && typeof value === "object" && !Array.isArray(value) && target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
+        merge(target[key], value);
+      } else if (value !== void 0) {
+        target[key] = value;
+      }
+    }
+  };
+  merge(output, current);
+  return output;
+}
+function hashText(value) {
+  const text = String(value ?? "");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+function makeId(prefix = "ma") {
+  if (globalThis.crypto?.randomUUID) return `${prefix}_${globalThis.crypto.randomUUID()}`;
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+function nowIso() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function escapeHtml(value) {
+  const element = document.createElement("div");
+  element.textContent = String(value ?? "");
+  return element.innerHTML;
+}
+function withTimeout(promise, ms, label, controller) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      controller?.abort();
+      reject(new Error(`${label}\u8D85\u65F6\uFF08${Math.round(ms / 1e3)}\u79D2\uFF09`));
+    }, ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+function safeText(value, max = 1e5) {
+  return String(value ?? "").replace(/\u0000/g, "").slice(0, max);
+}
+function parseJsonObject(raw) {
+  const text = safeText(raw).trim();
+  if (!text || text === "{}") throw new Error("\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A");
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced?.[1] ?? text).trim();
+  try {
+    const parsed = JSON.parse(candidate);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61");
+    return parsed;
+  } catch (error) {
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(candidate.slice(start, end + 1));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61");
+      return parsed;
+    }
+    throw error instanceof Error ? error : new Error("\u65E0\u6CD5\u89E3\u6790\u6A21\u578B\u8FD4\u56DE\u7684JSON");
+  }
+}
+function sanitizeBookName(value) {
+  return String(value ?? "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+function toErrorMessage(error) {
+  if (error instanceof Error) return error.message;
+  return String(error ?? "\u672A\u77E5\u9519\u8BEF");
+}
 
-    const DEFAULT_SETTINGS = Object.freeze({
-        enabled: true,
-        autoState: true,
-        autoSmallSummary: true,
-        smallSummaryTurns: 15,
-        autoLargeSummary: true,
-        largeSummaryCount: 6,
-        graphLibraryUrl: GRAPH_LIB_URL,
-        showMessagePanels: true,
-        showFloatingButton: true,
-        showTopButton: true,
+// src/core/context.ts
+function getContext() {
+  const context = globalThis.SillyTavern?.getContext?.();
+  if (!context) throw new Error("SillyTavern\u4E0A\u4E0B\u6587\u5C1A\u672A\u5C31\u7EEA");
+  return context;
+}
+function tryGetContext() {
+  try {
+    return globalThis.SillyTavern?.getContext?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+function getSettings() {
+  const context = getContext();
+  context.extensionSettings ||= {};
+  const legacy = context.extensionSettings[LEGACY_MODULE_NAME];
+  const current = context.extensionSettings[MODULE_NAME];
+  const migrated = current ?? migrateLegacySettings(legacy);
+  context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
+  return context.extensionSettings[MODULE_NAME];
+}
+function migrateLegacySettings(legacy) {
+  if (!legacy || typeof legacy !== "object") return void 0;
+  return {
+    enabled: legacy.enabled ?? true,
+    autoState: legacy.autoState ?? true,
+    showMessagePanel: legacy.showMessagePanels ?? true,
+    showTopButton: legacy.showTopButton ?? true,
+    auditEnabled: legacy.ruleAuditEnabled ?? false,
+    auditPrompt: safeText(legacy.ruleAuditPrompt ?? ""),
+    auditFailAction: legacy.ruleAuditFailAction === "withdraw" ? "delete" : "mark",
+    autoSmallSummary: legacy.autoSmallSummary ?? true,
+    smallSummaryTurns: Number(legacy.smallSummaryTurns) || 15,
+    autoLargeSummary: legacy.autoLargeSummary ?? true,
+    largeSummaryCount: Number(legacy.largeSummaryCount) || 6,
+    lorebookSync: legacy.lorebookSync ?? true,
+    autoCreateLorebook: legacy.autoCreateChatLorebook ?? true,
+    lorebookName: safeText(legacy.lorebookName ?? "", 80),
+    vectorizeRows: legacy.vectorizeStateRows ?? false,
+    latestContinuityConstant: legacy.latestContinuityConstant ?? true,
+    connections: {
+      audit: { mode: legacy.auditProfile ? "profile" : "current", profile: safeText(legacy.auditProfile ?? "", 120) },
+      state: { mode: legacy.stateProfile ? "profile" : "current", profile: safeText(legacy.stateProfile ?? "", 120) },
+      smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profile: safeText(legacy.smallSummaryProfile ?? "", 120) },
+      largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profile: safeText(legacy.largeSummaryProfile ?? "", 120) }
+    }
+  };
+}
+function saveSettings() {
+  getContext().saveSettingsDebounced?.();
+}
+function getChat() {
+  return getContext().chat ?? [];
+}
+function getMessage(index) {
+  return getChat()[index] ?? null;
+}
+function latestAssistantIndex() {
+  const chat = getChat();
+  for (let i = chat.length - 1; i >= 0; i -= 1) {
+    if (!chat[i]?.is_user && safeText(chat[i]?.mes).trim()) return i;
+  }
+  return -1;
+}
+function previousUserText(beforeIndex) {
+  const chat = getChat();
+  for (let i = beforeIndex - 1; i >= 0; i -= 1) {
+    if (chat[i]?.is_user) return safeText(chat[i]?.mes).trim();
+  }
+  return "";
+}
+function currentChatKey() {
+  const context = getContext();
+  const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? "";
+  const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? "unknown"}`;
+  const seed = `${scope}|${chatId || context.name1 || "chat"}|${context.name2 || ""}`;
+  return `${scope}:${hashText(seed)}`;
+}
+function messageFingerprint(index) {
+  const message = getMessage(index);
+  return hashText(`${previousUserText(index)}
+---MA11---
+${safeText(message?.mes)}`);
+}
+function messageIdentity(index) {
+  const message = getMessage(index);
+  const stable = message?.id ?? message?.send_date ?? message?.extra?.gen_id ?? index;
+  return `${String(stable)}:${messageFingerprint(index)}`;
+}
+function getChatMetadataNamespace() {
+  const context = getContext();
+  context.chatMetadata ||= {};
+  context.chatMetadata[MODULE_NAME] ||= {
+    schemaVersion: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  return context.chatMetadata[MODULE_NAME];
+}
+async function persistMetadata() {
+  const context = getContext();
+  if (typeof context.saveMetadata === "function") {
+    await context.saveMetadata();
+    return;
+  }
+  context.saveMetadataDebounced?.();
+}
+async function persistChat() {
+  const context = getContext();
+  if (typeof context.saveChat === "function") {
+    await context.saveChat();
+    return;
+  }
+  if (typeof context.saveChatConditional === "function") {
+    await context.saveChatConditional();
+  }
+}
+function toast(kind, message) {
+  const toastr = globalThis.toastr;
+  if (toastr?.[kind]) toastr[kind](message, DISPLAY_NAME);
+  else console[kind === "error" ? "error" : "log"](`[${DISPLAY_NAME}] ${message}`);
+}
 
-        generationMode: 'independent',
-        apiProvider: 'openai-compatible',
-        apiBaseUrl: '',
-        apiKey: '',
-        apiModel: '',
-        apiTemperature: 0.1,
-        apiMaxTokens: 4096,
-        apiJsonMode: false,
-        stateProfile: '',
-        smallSummaryProfile: '',
-        largeSummaryProfile: '',
-        auditProfile: '',
+// src/storage/repository.ts
+var adapter = null;
+function getAdapter() {
+  if (adapter) return adapter;
+  const localforage = globalThis.SillyTavern?.libs?.localforage;
+  if (localforage?.createInstance) {
+    adapter = localforage.createInstance({ name: STORAGE_DB_NAME, storeName: "mirror_abyss" });
+    return adapter;
+  }
+  adapter = {
+    async getItem(key) {
+      const raw = localStorage.getItem(`${STORAGE_DB_NAME}:${key}`);
+      return raw ? JSON.parse(raw) : null;
+    },
+    async setItem(key, value) {
+      localStorage.setItem(`${STORAGE_DB_NAME}:${key}`, JSON.stringify(value));
+      return value;
+    },
+    async removeItem(key) {
+      localStorage.removeItem(`${STORAGE_DB_NAME}:${key}`);
+    },
+    async keys() {
+      return Object.keys(localStorage).filter((key) => key.startsWith(`${STORAGE_DB_NAME}:`)).map((key) => key.slice(STORAGE_DB_NAME.length + 1));
+    }
+  };
+  return adapter;
+}
+async function getChatState(chatKey) {
+  const key = `${STORAGE_CHAT_PREFIX}${chatKey}`;
+  const existing = await getAdapter().getItem(key);
+  return existing ?? {
+    schemaVersion: 1,
+    chatKey,
+    processedMessageKeys: [],
+    smallSummaries: [],
+    largeSummaries: [],
+    lastSyncStatus: "idle",
+    updatedAt: nowIso()
+  };
+}
+async function putChatState(state2) {
+  state2.updatedAt = nowIso();
+  await getAdapter().setItem(`${STORAGE_CHAT_PREFIX}${state2.chatKey}`, state2);
+}
+async function putArtifact(artifact) {
+  artifact.updatedAt = nowIso();
+  await getAdapter().setItem(`${STORAGE_ARTIFACT_PREFIX}${artifact.chatKey}:${artifact.messageKey}`, artifact);
+}
+async function removeArtifact(chatKey, messageKey) {
+  await getAdapter().removeItem(`${STORAGE_ARTIFACT_PREFIX}${chatKey}:${messageKey}`);
+}
+async function appendTaskLog(chatKey, task) {
+  const key = `${STORAGE_LOG_PREFIX}${chatKey}`;
+  const logs = await getAdapter().getItem(key) ?? [];
+  logs.unshift(task);
+  await getAdapter().setItem(key, logs.slice(0, 200));
+}
+async function getTaskLog(chatKey) {
+  return await getAdapter().getItem(`${STORAGE_LOG_PREFIX}${chatKey}`) ?? [];
+}
+async function clearAllStorage() {
+  const storage = getAdapter();
+  const keys = await storage.keys();
+  await Promise.all(keys.filter((key) => key.startsWith("ma11:")).map((key) => storage.removeItem(key)));
+}
 
-        ruleAuditEnabled: false,
-        ruleAuditPrompt: '',
-        ruleAuditFailAction: 'withdraw',
+// src/domain/artifact.ts
+function idleStage() {
+  return { status: "idle", attempts: 0 };
+}
+function createArtifact(message, messageIndex) {
+  const now = nowIso();
+  return {
+    schemaVersion: 1,
+    chatKey: currentChatKey(),
+    messageKey: messageIdentity(messageIndex),
+    messageIndex,
+    sourceFingerprint: messageFingerprint(messageIndex),
+    playerText: previousUserText(messageIndex),
+    assistantText: safeText(message.mes),
+    createdAt: now,
+    updatedAt: now,
+    stages: {
+      audit: idleStage(),
+      state: idleStage(),
+      summary: idleStage(),
+      sync: idleStage()
+    }
+  };
+}
+function attachArtifactToMessage(message, artifact) {
+  message.extra ||= {};
+  message.extra[MODULE_NAME] = artifact;
+}
+function getAttachedArtifact(message) {
+  const value = message?.extra?.[MODULE_NAME];
+  return value && typeof value === "object" ? value : null;
+}
+function markStage(artifact, stage, status, error) {
+  const current = artifact.stages[stage] ?? idleStage();
+  const now = nowIso();
+  artifact.stages[stage] = {
+    ...current,
+    status,
+    attempts: status === "running" ? current.attempts + 1 : current.attempts,
+    startedAt: status === "running" ? now : current.startedAt,
+    finishedAt: ["success", "failed", "skipped", "blocked"].includes(status) ? now : void 0,
+    error: error || void 0
+  };
+  artifact.updatedAt = now;
+}
 
-        lorebookSync: true,
-        lorebookName: '',
-        autoCreateChatLorebook: true,
-        vectorizeStateRows: false,
-        showExternalLorebookNodes: true,
-        latestContinuityConstant: true,
+// src/llm/generator.ts
+var profileMutex = Promise.resolve();
+function slashResultText(result) {
+  if (typeof result === "string") return result.trim();
+  for (const key of ["pipe", "output", "result", "text", "value"]) {
+    if (typeof result?.[key] === "string") return result[key].trim();
+  }
+  return "";
+}
+function cleanProfileName(value) {
+  return safeText(value, 160).replace(/["|\r\n]/g, "").trim();
+}
+async function generateCurrent(options) {
+  const context = getContext();
+  if (typeof context.generateRaw !== "function") throw new Error("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BgenerateRaw");
+  const settings = getSettings();
+  const result = await withTimeout(
+    Promise.resolve(context.generateRaw({ systemPrompt: options.systemPrompt, prompt: options.prompt })),
+    Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
+    `${options.task}\u6A21\u578B\u8C03\u7528`
+  );
+  return safeText(result, 2e5);
+}
+async function generateWithProfile(options, profileName) {
+  const profile = cleanProfileName(profileName);
+  if (!profile) throw new Error("\u8FDE\u63A5\u914D\u7F6E\u540D\u79F0\u4E3A\u7A7A");
+  const run = async () => {
+    let slashModule;
+    try {
+      const moduleUrl = "/scripts/slash-commands.js";
+      slashModule = await import(
+        /* @vite-ignore */
+        moduleUrl
+      );
+    } catch (error) {
+      throw new Error(`\u65E0\u6CD5\u52A0\u8F7D\u8FDE\u63A5\u914D\u7F6E\u5207\u6362\u5668\uFF1A${toErrorMessage(error)}`);
+    }
+    const execute = slashModule?.executeSlashCommands;
+    if (typeof execute !== "function") throw new Error("\u5F53\u524DSillyTavern\u4E0D\u652F\u6301\u8FDE\u63A5\u914D\u7F6E\u547D\u4EE4");
+    const original = slashResultText(await execute("/profile"));
+    await execute(`/profile "${profile}"`);
+    try {
+      return await generateCurrent(options);
+    } finally {
+      if (original && original !== profile) {
+        try {
+          await execute(`/profile "${cleanProfileName(original)}"`);
+        } catch (error) {
+          console.warn("[MirrorAbyss] failed to restore profile", error);
+        }
+      }
+    }
+  };
+  const chained = profileMutex.then(run, run);
+  profileMutex = chained.catch(() => void 0);
+  return chained;
+}
+async function generateTask(options) {
+  const connection = getSettings().connections[options.task];
+  if (connection?.mode === "profile") return generateWithProfile(options, connection.profile);
+  return generateCurrent(options);
+}
+async function testConnection(task) {
+  const raw = await generateTask({
+    task,
+    systemPrompt: "\u4F60\u662F\u8FDE\u63A5\u6D4B\u8BD5\u5668\u3002",
+    prompt: "\u53EA\u56DE\u590D MA_OK"
+  });
+  if (!/MA_OK/i.test(raw)) throw new Error(`\u8FDE\u63A5\u53EF\u7528\uFF0C\u4F46\u8FD4\u56DE\u5185\u5BB9\u5F02\u5E38\uFF1A${raw.slice(0, 120)}`);
+  return "MA_OK";
+}
+
+// src/prompts/audit.ts
+function auditSystemPrompt() {
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u89C4\u5219\u5BA1\u6838\u5668\u3002\u4F60\u53EA\u68C0\u67E5\u7ED9\u5B9AAI\u6B63\u6587\u662F\u5426\u8FDD\u53CD\u73A9\u5BB6\u63D0\u4F9B\u7684\u786C\u6027\u89C4\u5219\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u6DA6\u8272\uFF0C\u4E0D\u66FF\u6B63\u6587\u8FA9\u62A4\u3002
+
+\u7B2C\u4E00\u884C\u5FC5\u987B\u4E14\u53EA\u80FD\u662F MA_OK \u6216 MA_FAIL\u3002
+\u7B2C\u4E8C\u884C\u5F00\u59CB\u7ED9\u51FA\u7B80\u77ED\u3001\u53EF\u6267\u884C\u7684\u7406\u7531\uFF1B\u901A\u8FC7\u65F6\u7406\u7531\u4E0D\u8D85\u8FC7\u4E00\u53E5\u3002
+\u4E0D\u8981\u8F93\u51FAMarkdown\u4EE3\u7801\u5757\uFF0C\u4E0D\u8981\u8F93\u51FA\u5176\u4ED6\u6807\u7B7E\u3002
+\u53EA\u6709\u5B58\u5728\u660E\u786E\u8FDD\u89C4\u65F6\u624D\u5224\u5B9A MA_FAIL\uFF1B\u8BC1\u636E\u4E0D\u8DB3\u65F6\u5224\u5B9A MA_OK\u3002`;
+}
+function auditUserPrompt(rulePrompt, playerText, assistantText) {
+  return `\u3010\u73A9\u5BB6\u5BA1\u6838\u89C4\u5219\u3011
+${rulePrompt}
+
+\u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
+${playerText || "\uFF08\u7A7A\uFF09"}
+
+\u3010\u5F85\u5BA1\u6838AI\u6B63\u6587\u3011
+${assistantText}`;
+}
+
+// src/pipeline/audit.ts
+function parseAuditResult(raw) {
+  const text = safeText(raw).trim().replace(/\r/g, "");
+  const lines = text.split("\n");
+  const first = (lines[0] || "").trim().toUpperCase();
+  const reason = lines.slice(1).join("\n").trim();
+  if (first === "MA_OK") return { passed: true, reason: reason || "\u901A\u8FC7" };
+  if (first === "MA_FAIL") return { passed: false, reason: reason || "\u8FDD\u53CD\u89C4\u5219" };
+  throw new Error("\u89C4\u5219\u5BA1\u6838\u6A21\u578B\u672A\u8FD4\u56DE MA_OK \u6216 MA_FAIL");
+}
+function findMessageElement(index) {
+  return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
+}
+function applyAuditVisibility(index, hidden) {
+  const element = findMessageElement(index);
+  element?.classList.toggle("ma11-audit-hidden-message", hidden);
+}
+async function safeDeleteLatest(index, fingerprint) {
+  if (index !== latestAssistantIndex()) return false;
+  if (messageFingerprint(index) !== fingerprint) return false;
+  const beforeLength = getChat().length;
+  try {
+    const moduleUrl = "/scripts/slash-commands.js";
+    const slashModule = await import(
+      /* @vite-ignore */
+      moduleUrl
+    );
+    if (typeof slashModule?.executeSlashCommands !== "function") return false;
+    await slashModule.executeSlashCommands("/del 1");
+    return getChat().length < beforeLength;
+  } catch (error) {
+    console.warn("[MirrorAbyss] safe delete unavailable", error);
+    return false;
+  }
+}
+async function runAudit(artifact, force = false) {
+  const settings = getSettings();
+  if (!settings.auditEnabled) {
+    markStage(artifact, "audit", "skipped");
+    artifact.audit = { passed: true, reason: "\u672A\u542F\u7528\u89C4\u5219\u5BA1\u6838" };
+    await putArtifact(artifact);
+    return artifact.audit;
+  }
+  if (!settings.auditPrompt.trim()) throw new Error("\u5DF2\u542F\u7528\u89C4\u5219\u5BA1\u6838\uFF0C\u4F46\u5BA1\u6838\u63D0\u793A\u8BCD\u4E3A\u7A7A");
+  if (!force && artifact.stages.audit.status === "success" && artifact.audit?.passed) return artifact.audit;
+  markStage(artifact, "audit", "running");
+  await putArtifact(artifact);
+  try {
+    const raw = await generateTask({
+      task: "audit",
+      systemPrompt: auditSystemPrompt(),
+      prompt: auditUserPrompt(settings.auditPrompt, artifact.playerText, artifact.assistantText)
     });
-
-    let initialized = false;
-    let queueTail = Promise.resolve();
-    const activeJobs = new Map();
-    let graphInstance = null;
-    let graphResizeObserver = null;
-    let graphScriptPromise = null;
-    let lorebookSyncTimer = null;
-    let worldInfoModulePromise = null;
-    let graphSearch = '';
-    const messageProcessPromises = new Map();
-    const pipelineTimers = new Map();
-    let controlCenterTab = 'overview';
-    const fallbackChatMetadata = {};
-    let settingsPanelRetryTimer = null;
-    let interfaceObserver = null;
-    let delegatedHandlersInstalled = false;
-    let sillyTavernEventsBound = false;
-    let bootTimer = null;
-    let bootAttempts = 0;
-    let lastInitError = null;
-
-    function cloneDefaults(value) {
-        try {
-            if (typeof structuredClone === 'function') return structuredClone(value);
-        } catch (error) {
-            console.warn('[MirrorAbyss] structuredClone unavailable, using JSON clone', error);
-        }
-        return JSON.parse(JSON.stringify(value));
-    }
-
-    function hasOwn(object, key) {
-        return typeof Object.hasOwn === 'function' ? Object.hasOwn(object, key) : Object.prototype.hasOwnProperty.call(object, key);
-    }
-
-    function ctx() {
-        return window.SillyTavern?.getContext?.();
-    }
-
-    function settings() {
-        const context = ctx();
-        if (!context) return cloneDefaults(DEFAULT_SETTINGS);
-        if (!context.extensionSettings || typeof context.extensionSettings !== 'object') {
-            context.extensionSettings = {};
-        }
-        const all = context.extensionSettings;
-        if (!all[MODULE_NAME] || typeof all[MODULE_NAME] !== 'object') all[MODULE_NAME] = cloneDefaults(DEFAULT_SETTINGS);
-        for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-            if (!hasOwn(all[MODULE_NAME], key)) all[MODULE_NAME][key] = value;
-        }
-        return all[MODULE_NAME];
-    }
-
-    function saveSettings() {
-        ctx()?.saveSettingsDebounced?.();
-    }
-
-
-    function chatMeta() {
-        const context = ctx();
-        const metadata = context?.chatMetadata && typeof context.chatMetadata === 'object'
-            ? context.chatMetadata
-            : fallbackChatMetadata;
-        metadata[MODULE_NAME] ||= {
-            schemaVersion: 2,
-            lorebookName: '',
-            lastSyncAt: null,
-            lastSyncError: null,
-            lastSyncState: 'idle',
-            lastAuditFailure: null,
-        };
-        const meta = metadata[MODULE_NAME];
-        if (!hasOwn(meta, 'lastSyncState')) meta.lastSyncState = meta.lastSyncError ? 'error' : meta.lastSyncAt ? 'success' : 'idle';
-        if (!hasOwn(meta, 'lastAuditFailure')) meta.lastAuditFailure = null;
-        return meta;
-    }
-
-    async function persistMetadata() {
-        const context = ctx();
-        try {
-            context?.saveMetadataDebounced?.();
-            const script = await import(/* webpackIgnore: true */ '/script.js');
-            if (typeof script.saveMetadata === 'function') await script.saveMetadata();
-        } catch (error) {
-            console.warn('[MirrorAbyss] Could not persist metadata immediately', error);
-        }
-    }
-
-    function slashResultText(result) {
-        if (typeof result === 'string') return result.trim();
-        for (const key of ['pipe', 'output', 'result', 'text', 'value']) {
-            if (typeof result?.[key] === 'string') return result[key].trim();
-        }
-        return '';
-    }
-
-    function safeProfileName(value) {
-        return String(value || '').replace(/["|\r\n]/g, '').trim();
-    }
-
-    function normalizeApiBaseUrl(value, provider = settings().apiProvider) {
-        let url = String(value || '').trim().replace(/\/+$/, '');
-        if (provider === 'openai-compatible') {
-            url = url.replace(/\/chat\/completions$/i, '').replace(/\/models$/i, '');
-        }
-        if (provider === 'anthropic') url = url.replace(/\/messages$/i, '');
-        return url;
-    }
-
-    function independentApiConfigured() {
-        const cfg = settings();
-        return Boolean(cfg.apiProvider && cfg.apiKey && cfg.apiModel && (cfg.apiProvider === 'gemini' || normalizeApiBaseUrl(cfg.apiBaseUrl, cfg.apiProvider)));
-    }
-
-    function textFromOpenAiContent(content) {
-        if (typeof content === 'string') return content;
-        if (Array.isArray(content)) return content.map(part => typeof part === 'string' ? part : part?.text || part?.content || '').join('');
-        return String(content || '');
-    }
-
-    async function callIndependentApi(options = {}) {
-        const cfg = settings();
-        if (!independentApiConfigured()) throw new Error('独立模型尚未配置完整：请填写 API 地址、密钥和模型');
-        const provider = cfg.apiProvider || 'openai-compatible';
-        const systemPrompt = String(options.systemPrompt || '');
-        const prompt = String(options.prompt || '');
-        const temperature = Math.max(0, Math.min(2, Number(cfg.apiTemperature) || 0));
-        const maxTokens = Math.max(128, Math.min(65536, Number(cfg.apiMaxTokens) || 4096));
-        let response;
-
-        try {
-            if (provider === 'gemini') {
-                const base = normalizeApiBaseUrl(cfg.apiBaseUrl || 'https://generativelanguage.googleapis.com/v1beta', provider) || 'https://generativelanguage.googleapis.com/v1beta';
-                const model = String(cfg.apiModel).replace(/^models\//, '');
-                const url = `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.apiKey)}`;
-                const body = {
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: { temperature, maxOutputTokens: maxTokens },
-                };
-                if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
-                if (options.jsonSchema) body.generationConfig.responseMimeType = 'application/json';
-                response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                if (!response.ok) throw new Error(`Gemini 请求失败 ${response.status}: ${(await response.text()).slice(0, 500)}`);
-                const data = await response.json();
-                return data?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('') || '';
-            }
-
-            if (provider === 'anthropic') {
-                const base = normalizeApiBaseUrl(cfg.apiBaseUrl || 'https://api.anthropic.com/v1', provider) || 'https://api.anthropic.com/v1';
-                response = await fetch(`${base}/messages`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': cfg.apiKey,
-                        'anthropic-version': '2023-06-01',
-                        'anthropic-dangerous-direct-browser-access': 'true',
-                    },
-                    body: JSON.stringify({
-                        model: cfg.apiModel,
-                        system: systemPrompt,
-                        messages: [{ role: 'user', content: prompt }],
-                        temperature,
-                        max_tokens: maxTokens,
-                    }),
-                });
-                if (!response.ok) throw new Error(`Anthropic 请求失败 ${response.status}: ${(await response.text()).slice(0, 500)}`);
-                const data = await response.json();
-                return data?.content?.map(part => part?.text || '').join('') || '';
-            }
-
-            const base = normalizeApiBaseUrl(cfg.apiBaseUrl, provider);
-            const body = {
-                model: cfg.apiModel,
-                messages: [
-                    ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-                    { role: 'user', content: prompt },
-                ],
-                temperature,
-                max_tokens: maxTokens,
-                stream: false,
-            };
-            if (options.jsonSchema && cfg.apiJsonMode) body.response_format = { type: 'json_object' };
-            response = await fetch(`${base}/chat/completions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-                body: JSON.stringify(body),
-            });
-            if (!response.ok) throw new Error(`OpenAI 兼容请求失败 ${response.status}: ${(await response.text()).slice(0, 500)}`);
-            const data = await response.json();
-            return textFromOpenAiContent(data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '');
-        } catch (error) {
-            if (/Failed to fetch|NetworkError|CORS/i.test(String(error?.message || error))) {
-                throw new Error('独立 API 无法从浏览器访问，可能被 CORS 阻止。请改用允许跨域的反代，或切换为酒馆连接配置模式。');
-            }
-            throw error;
-        }
-    }
-
-    async function generateWithProfile(task, options) {
-        const context = ctx();
-        if (!context?.generateRaw) throw new Error('当前酒馆版本未提供 generateRaw');
-        const cfg = settings();
-        const key = task === 'state' ? 'stateProfile' : task === 'small' ? 'smallSummaryProfile' : task === 'large' ? 'largeSummaryProfile' : 'auditProfile';
-        const profile = safeProfileName(cfg[key]);
-        if (!profile) return await context.generateRaw(options);
-        try {
-            const slash = await import(/* webpackIgnore: true */ '/scripts/slash-commands.js');
-            if (typeof slash.executeSlashCommands !== 'function') return await context.generateRaw(options);
-            const original = slashResultText(await slash.executeSlashCommands('/profile'));
-            await slash.executeSlashCommands(`/profile "${profile}"`);
-            try {
-                return await context.generateRaw(options);
-            } finally {
-                if (original && original !== profile) {
-                    await slash.executeSlashCommands(`/profile "${safeProfileName(original)}"`).catch(() => {});
-                }
-            }
-        } catch (error) {
-            console.warn(`[MirrorAbyss] Profile ${profile} unavailable; falling back to current connection`, error);
-            return await context.generateRaw(options);
-        }
-    }
-
-    async function generateTask(task, options) {
-        const mode = settings().generationMode || 'independent';
-        if (mode === 'independent') return await callIndependentApi(options);
-        if (mode === 'profile') return await generateWithProfile(task, options);
-        const context = ctx();
-        if (!context?.generateRaw) throw new Error('当前酒馆版本未提供 generateRaw');
-        return await context.generateRaw(options);
-    }
-
-    async function fetchIndependentModels() {
-        const cfg = settings();
-        if (!cfg.apiKey) throw new Error('请先填写 API 密钥');
-        const provider = cfg.apiProvider || 'openai-compatible';
-        if (provider === 'anthropic') throw new Error('Anthropic 未提供通用模型列表接口，请手动填写模型名');
-        try {
-            let response;
-            if (provider === 'gemini') {
-                const base = normalizeApiBaseUrl(cfg.apiBaseUrl || 'https://generativelanguage.googleapis.com/v1beta', provider) || 'https://generativelanguage.googleapis.com/v1beta';
-                response = await fetch(`${base}/models?key=${encodeURIComponent(cfg.apiKey)}`);
-                if (!response.ok) throw new Error(`模型列表请求失败 ${response.status}: ${(await response.text()).slice(0, 300)}`);
-                const data = await response.json();
-                return (data?.models || []).filter(model => model?.supportedGenerationMethods?.includes('generateContent')).map(model => String(model.name || '').replace(/^models\//, '')).filter(Boolean);
-            }
-            const base = normalizeApiBaseUrl(cfg.apiBaseUrl, provider);
-            if (!base) throw new Error('请填写 API 地址');
-            response = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${cfg.apiKey}` } });
-            if (!response.ok) throw new Error(`模型列表请求失败 ${response.status}: ${(await response.text()).slice(0, 300)}`);
-            const data = await response.json();
-            return (data?.data || data?.models || []).map(model => typeof model === 'string' ? model : model?.id || model?.name).filter(Boolean).sort();
-        } catch (error) {
-            if (/Failed to fetch|NetworkError|CORS/i.test(String(error?.message || error))) throw new Error('无法读取模型列表，可能被 CORS 阻止。可手动填写模型名，或改用允许跨域的 API 反代。');
-            throw error;
-        }
-    }
-
-    async function testIndependentApi() {
-        const raw = await callIndependentApi({
-            systemPrompt: '你是连接测试器。',
-            prompt: '只回复 MA_OK',
-        });
-        if (!/MA_OK/i.test(String(raw || ''))) throw new Error(`连接成功，但模型返回异常：${String(raw || '').slice(0, 120)}`);
-        return true;
-    }
-
-    function toast(kind, text) {
-        if (window.toastr?.[kind]) window.toastr[kind](text, DISPLAY_NAME);
-        else console[kind === 'error' ? 'error' : 'log'](`[${DISPLAY_NAME}] ${text}`);
-    }
-
-    function escapeHtml(value) {
-        const text = String(value ?? '');
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    function makeId(prefix = 'ma') {
-        if (crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
-        return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-    }
-
-    function cleanRecord(record, tableKey, index) {
-        const source = record && typeof record === 'object' ? record : {};
-        return {
-            id: String(source.id || makeId(tableKey)),
-            title: String(source.title || source.name || `${TABLE_LABELS[tableKey]} ${index + 1}`).trim(),
-            content: String(source.content || source.summary || '').trim(),
-            keywords: Array.isArray(source.keywords)
-                ? source.keywords.map(String).map(x => x.trim()).filter(Boolean).slice(0, 12)
-                : [],
-            status: String(source.status || 'active').trim(),
-        };
-    }
-
-    function normalizeSnapshot(snapshot) {
-        const out = {};
-        for (const key of TABLE_KEYS) {
-            const rows = Array.isArray(snapshot?.[key]) ? snapshot[key] : [];
-            const used = new Set();
-            out[key] = rows.map((row, index) => cleanRecord(row, key, index)).map(row => {
-                if (used.has(row.id)) row.id = makeId(key);
-                used.add(row.id);
-                return row;
-            });
-        }
-        return out;
-    }
-
-    function emptySnapshot() {
-        return normalizeSnapshot({});
-    }
-
-    function getChat() {
-        return ctx()?.chat || [];
-    }
-
-    function getMessage(index) {
-        return getChat()[Number(index)] || null;
-    }
-
-    function ensureMessageData(message) {
-        if (!message) return null;
-        message.extra ||= {};
-        message.extra[MODULE_NAME] ||= {};
-        const data = message.extra[MODULE_NAME];
-        const defaults = {
-            schemaVersion: 2,
-            artifactId: makeId('artifact'),
-            revision: 0,
-            status: 'idle',
-            tableSnapshot: null,
-            activeTableKey: 'focus',
-            smallSummary: null,
-            largeSummary: null,
-            error: null,
-            updatedAt: null,
-            sourceFingerprint: '',
-            auditStatus: 'idle',
-            auditError: null,
-            auditResult: null,
-            auditFingerprint: '',
-            lorebookEntryIds: [],
-        };
-        for (const [key, value] of Object.entries(defaults)) {
-            if (!hasOwn(data, key)) data[key] = Array.isArray(value) ? [] : value;
-        }
-        data.schemaVersion = 2;
-        return data;
-    }
-
-    function previousSnapshot(beforeIndex) {
-        const chat = getChat();
-        for (let i = Number(beforeIndex) - 1; i >= 0; i--) {
-            const item = chat[i];
-            if (item?.is_user) continue;
-            const snap = item?.extra?.[MODULE_NAME]?.tableSnapshot;
-            if (snap) return normalizeSnapshot(snap);
-        }
-        return emptySnapshot();
-    }
-
-    function previousUserText(beforeIndex) {
-        const chat = getChat();
-        for (let i = Number(beforeIndex) - 1; i >= 0; i--) {
-            if (chat[i]?.is_user) return String(chat[i].mes || '').trim();
-        }
-        return '';
-    }
-
-    function latestAssistantIndex() {
-        const chat = getChat();
-        for (let i = chat.length - 1; i >= 0; i--) {
-            if (!chat[i]?.is_user && String(chat[i]?.mes || '').trim()) return i;
-        }
-        return -1;
-    }
-
-    function hashText(value) {
-        const text = String(value || '');
-        let hash = 2166136261;
-        for (let i = 0; i < text.length; i++) {
-            hash ^= text.charCodeAt(i);
-            hash = Math.imul(hash, 16777619);
-        }
-        return (hash >>> 0).toString(36);
-    }
-
-    function messageFingerprint(index) {
-        const message = getMessage(index);
-        return hashText(`${previousUserText(index)}
----MA---
-${String(message?.mes || '')}`);
-    }
-
-    function auditSystemPrompt() {
-        return `你是“镜渊”规则校正器。你只审核给定的AI正文是否违反玩家提供的规则，不续写，不润色。
-
-第一行必须且只能是 MA_OK 或 MA_FAIL。
-第二行开始给出简短、可执行的理由；通过时理由不超过一句。
-不要输出Markdown代码块，不要输出其他标签。
-只有存在明确违规时才判定 MA_FAIL；不确定时判定 MA_OK。`;
-    }
-
-    function parseAuditResult(raw) {
-        const text = String(raw || '').trim().replace(/\r/g, '');
-        const lines = text.split('\n');
-        const first = String(lines[0] || '').trim().toUpperCase();
-        const reason = lines.slice(1).join('\n').trim();
-        if (first === 'MA_OK') return { passed: true, reason: reason || '通过' };
-        if (first === 'MA_FAIL') return { passed: false, reason: reason || '违反规则' };
-        throw new Error('规则校正模型未返回 MA_OK 或 MA_FAIL');
-    }
-
-    async function withdrawAssistantMessage(index, reason) {
-        const messageIndex = Number(index);
-        if (messageIndex !== latestAssistantIndex()) throw new Error('仅能自动撤回最新一条AI消息');
-        const message = getMessage(messageIndex);
-        if (!message || message.is_user) return false;
-        const meta = chatMeta();
-        meta.lastAuditFailure = {
-            at: new Date().toISOString(),
-            reason: String(reason || '规则校正未通过'),
-            excerpt: String(message.mes || '').slice(0, 240),
-        };
-        await persistMetadata();
-
-        const beforeLength = getChat().length;
-        let deletedByCommand = false;
-        try {
-            const slash = await import(/* webpackIgnore: true */ '/scripts/slash-commands.js');
-            if (typeof slash.executeSlashCommands === 'function') {
-                await slash.executeSlashCommands('/del 1');
-                deletedByCommand = getChat().length < beforeLength;
-            }
-        } catch (error) {
-            console.warn('[MirrorAbyss] /del 1 unavailable; using local fallback', error);
-        }
-
-        if (!deletedByCommand) {
-            getChat().splice(messageIndex, 1);
-            messageElement(messageIndex)?.remove();
-            await persistChat();
-            try {
-                const context = ctx();
-                await context?.eventSource?.emit?.(context?.event_types?.MESSAGE_DELETED, messageIndex);
-            } catch (error) {
-                console.warn('[MirrorAbyss] Could not emit MESSAGE_DELETED', error);
-            }
-        }
-        renderAllPanels();
-        scheduleLorebookSync('audit withdrawal');
-        updateUnifiedStatus();
-        toast('warning', `规则校正未通过，已撤回AI消息：${String(reason || '').slice(0, 120)}`);
-        return true;
-    }
-
-    async function auditMessage(index, { force = false } = {}) {
-        const cfg = settings();
-        if (!cfg.ruleAuditEnabled) return { passed: true, skipped: true };
-        if (!String(cfg.ruleAuditPrompt || '').trim()) throw new Error('已启用规则校正，但审核提示词为空');
-        const messageIndex = Number(index);
-        const message = getMessage(messageIndex);
-        if (!message || message.is_user || !String(message.mes || '').trim()) return { passed: true, skipped: true };
-        const data = ensureMessageData(message);
-        const fingerprint = messageFingerprint(messageIndex);
-        if (!force && data.auditFingerprint === fingerprint && data.auditStatus === 'passed') return { passed: true, cached: true };
-
-        data.auditStatus = 'processing';
-        data.auditError = null;
-        renderMessagePanel(messageIndex);
-        updateUnifiedStatus();
-        try {
-            const raw = await generateTask('audit', {
-                systemPrompt: auditSystemPrompt(),
-                prompt: `【玩家审核规则】
-${cfg.ruleAuditPrompt}
-
-【玩家本轮输入】
-${previousUserText(messageIndex) || '（空）'}
-
-【待审核AI正文】
-${String(message.mes || '')}`,
-            });
-            const result = parseAuditResult(raw);
-            const current = getMessage(messageIndex);
-            if (!current || current.is_user || messageFingerprint(messageIndex) !== fingerprint) return { passed: false, stale: true };
-            const currentData = ensureMessageData(current);
-            currentData.auditFingerprint = fingerprint;
-            currentData.auditResult = result.reason;
-            currentData.auditError = result.passed ? null : result.reason;
-            currentData.auditStatus = result.passed ? 'passed' : 'failed';
-            await persistChat();
-            renderMessagePanel(messageIndex);
-            updateUnifiedStatus();
-            if (!result.passed && cfg.ruleAuditFailAction === 'withdraw') {
-                await withdrawAssistantMessage(messageIndex, result.reason);
-            }
-            return result;
-        } catch (error) {
-            const current = getMessage(messageIndex);
-            if (current && !current.is_user) {
-                const currentData = ensureMessageData(current);
-                currentData.auditStatus = 'error';
-                currentData.auditError = String(error?.message || error);
-                await persistChat();
-                renderMessagePanel(messageIndex);
-            }
-            updateUnifiedStatus();
-            throw error;
-        }
-    }
-
-    async function runMessagePipeline(index, { force = false } = {}) {
-        const messageIndex = Number(index);
-        const message = getMessage(messageIndex);
-        if (!message || message.is_user || !String(message.mes || '').trim() || !settings().enabled) return;
-        try {
-            const audit = await auditMessage(messageIndex, { force });
-            if (!audit?.passed) return;
-            await processMessage(messageIndex, { force });
-        } catch (error) {
-            toast('error', `镜渊处理失败：${error?.message || error}`);
-        }
-    }
-
-    function scheduleMessagePipeline(index, { force = false, delay = 220 } = {}) {
-        const messageIndex = Number(index);
-        if (!Number.isInteger(messageIndex) || messageIndex < 0) return;
-        clearTimeout(pipelineTimers.get(messageIndex));
-        pipelineTimers.set(messageIndex, setTimeout(() => {
-            pipelineTimers.delete(messageIndex);
-            runMessagePipeline(messageIndex, { force });
-        }, delay));
-    }
-
-    async function persistChat() {
-        const context = ctx();
-        try {
-            if (typeof context?.saveChat === 'function') {
-                await context.saveChat();
-                return;
-            }
-            const script = await import(/* webpackIgnore: true */ '/script.js');
-            if (typeof script.saveChatConditional === 'function') {
-                await script.saveChatConditional();
-                return;
-            }
-            if (typeof script.saveChat === 'function') await script.saveChat();
-        } catch (error) {
-            console.warn('[MirrorAbyss] Could not persist chat immediately', error);
-        }
-    }
-
-    function enqueue(label, work) {
-        const jobId = makeId('job');
-        const job = async () => {
-            activeJobs.set(jobId, { label, startedAt: Date.now() });
-            updateUnifiedStatus();
-            try {
-                return await work(jobId);
-            } finally {
-                activeJobs.delete(jobId);
-                updateUnifiedStatus();
-            }
-        };
-        const result = queueTail.then(job, job);
-        queueTail = result.catch(() => {});
-        return result;
-    }
-
-    function extractJson(text) {
-        const raw = String(text || '').trim();
-        if (!raw || raw === '{}') throw new Error('模型返回为空');
-        const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-        const candidate = fenced ? fenced[1].trim() : raw;
-        try {
-            return JSON.parse(candidate);
-        } catch (_) {
-            const start = candidate.indexOf('{');
-            const end = candidate.lastIndexOf('}');
-            if (start >= 0 && end > start) return JSON.parse(candidate.slice(start, end + 1));
-            throw new Error('无法解析模型返回的 JSON');
-        }
-    }
-
-    function stateJsonSchema() {
-        const rowSchema = {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-                id: { type: 'string' },
-                title: { type: 'string' },
-                content: { type: 'string' },
-                keywords: { type: 'array', items: { type: 'string' } },
-                status: { type: 'string' },
-            },
-            required: ['id', 'title', 'content', 'keywords', 'status'],
-        };
-        const properties = {};
-        for (const key of TABLE_KEYS) properties[key] = { type: 'array', items: rowSchema };
-        return {
-            name: 'MirrorAbyssStateSnapshot',
-            description: '镜渊当前世界状态快照',
-            strict: true,
-            value: {
-                $schema: 'http://json-schema.org/draft-04/schema#',
-                type: 'object',
-                additionalProperties: false,
-                properties,
-                required: TABLE_KEYS,
-            },
-        };
-    }
-
-    function stateSystemPrompt() {
-        return `你是“镜渊”状态维护器。你只维护当前世界状态快照，不续写故事。\n\n输入包括：上一份状态表、玩家本轮输入、AI本轮正文。三者都是混合运算变量。玩家输入中的动作和对白可作为已声明行为，但输入中预设的外部结果不能单独当成已确认结果；外部结果以AI正文和已有状态的可观察事实为依据。\n\n输出必须是完整JSON快照，包含八个数组：focus、spacetime、characters、relationships、items、events、regions、foundations。每行包含 id、title、content、keywords、status。\n\n规则：\n1. 保留未受本轮影响的有效状态。\n2. 本轮明确改变的状态才更新。\n3. 过程压缩为当前结果，不写流水账。\n4. 未确认、冲突和进行中事项不得强行闭合。\n5. 尽量保留上一份快照的稳定id；新增对象才创建新id。\n6. 玩家手工加入的表格内容与其他状态同等参与运算，不特殊标注，也不默认锁定。\n7. 不输出解释、Markdown或JSON以外文字。`;
-    }
-
-    async function generateStateSnapshot(index) {
-        const message = getMessage(index);
-        const oldSnapshot = previousSnapshot(index);
-        const playerText = previousUserText(index);
-        const assistantText = String(message?.mes || '').trim();
-        const prompt = `【上一份状态表】\n${JSON.stringify(oldSnapshot, null, 2)}\n\n【玩家本轮输入】\n${playerText || '（空）'}\n\n【AI本轮正文】\n${assistantText}\n\n输出更新后的完整状态快照。`;
-
-        let raw = await generateTask('state', {
-            systemPrompt: stateSystemPrompt(),
-            prompt,
-            jsonSchema: stateJsonSchema(),
-        });
-        try {
-            return normalizeSnapshot(extractJson(raw));
-        } catch (firstError) {
-            raw = await generateTask('state', {
-                systemPrompt: stateSystemPrompt(),
-                prompt: `${prompt}\n\n上一次结构化输出失败。请只输出一个可被JSON.parse解析的JSON对象。`,
-            });
-            return normalizeSnapshot(extractJson(raw));
-        }
-    }
-
-    async function processMessage(index, { force = false } = {}) {
-        const messageIndex = Number(index);
-        const message = getMessage(messageIndex);
-        if (!message || message.is_user || !String(message.mes || '').trim()) return;
-        const cfg = settings();
-        if (!cfg.enabled || (!cfg.autoState && !force)) return;
-        if (messageProcessPromises.has(messageIndex)) return await messageProcessPromises.get(messageIndex);
-
-        const task = (async () => {
-            const currentMessage = getMessage(messageIndex);
-            if (!currentMessage || currentMessage.is_user) return;
-            const data = ensureMessageData(currentMessage);
-            const fingerprint = messageFingerprint(messageIndex);
-            if (!force && data.status === 'synced' && data.tableSnapshot && data.sourceFingerprint === fingerprint) {
-                renderMessagePanel(messageIndex);
-                return;
-            }
-
-            const revision = Number(data.revision || 0) + 1;
-            data.revision = revision;
-            data.status = 'processing';
-            data.error = null;
-            renderMessagePanel(messageIndex);
-            updateUnifiedStatus();
-
-            return await enqueue(`更新第 ${messageIndex + 1} 条状态`, async () => {
-                try {
-                    const snapshot = await generateStateSnapshot(messageIndex);
-                    const latestMessage = getMessage(messageIndex);
-                    const latestData = latestMessage?.extra?.[MODULE_NAME];
-                    if (!latestMessage || latestMessage.is_user || latestData?.revision !== revision) return;
-                    if (messageFingerprint(messageIndex) !== fingerprint) return;
-                    latestData.tableSnapshot = snapshot;
-                    latestData.status = 'synced';
-                    latestData.sourceFingerprint = fingerprint;
-                    latestData.error = null;
-                    latestData.updatedAt = new Date().toISOString();
-                    if (!TABLE_KEYS.includes(latestData.activeTableKey)) latestData.activeTableKey = 'focus';
-                    await persistChat();
-                    renderMessagePanel(messageIndex);
-                    await maybeAutoSummaries(messageIndex);
-                    scheduleLorebookSync('state updated');
-                    refreshWorkspaceIfOpen();
-                    updateUnifiedStatus();
-                } catch (error) {
-                    const latestMessage = getMessage(messageIndex);
-                    const latestData = latestMessage?.extra?.[MODULE_NAME];
-                    if (latestData?.revision === revision) {
-                        latestData.status = 'error';
-                        latestData.error = String(error?.message || error);
-                        await persistChat();
-                        renderMessagePanel(messageIndex);
-                    }
-                    updateUnifiedStatus();
-                    toast('error', `状态更新失败：${error?.message || error}`);
-                }
-            });
-        })();
-
-        messageProcessPromises.set(messageIndex, task);
-        try {
-            return await task;
-        } finally {
-            if (messageProcessPromises.get(messageIndex) === task) messageProcessPromises.delete(messageIndex);
-        }
-    }
-
-    function validSyncedAssistantIndices() {
-        const out = [];
-        getChat().forEach((message, index) => {
-            if (!message?.is_user && String(message?.mes || '').trim() && message?.extra?.[MODULE_NAME]?.tableSnapshot) out.push(index);
-        });
-        return out;
-    }
-
-    function lastArtifactIndex(field) {
-        const chat = getChat();
-        for (let i = chat.length - 1; i >= 0; i--) {
-            if (chat[i]?.extra?.[MODULE_NAME]?.[field]) return i;
-        }
-        return -1;
-    }
-
-    function pendingSmallTurnIndices() {
-        const after = lastArtifactIndex('smallSummary');
-        return validSyncedAssistantIndices().filter(index => index > after);
-    }
-
-    function pendingSmallSummaryIndicesForLarge() {
-        const after = lastArtifactIndex('largeSummary');
-        const out = [];
-        getChat().forEach((message, index) => {
-            if (index > after && message?.extra?.[MODULE_NAME]?.smallSummary) out.push(index);
-        });
-        return out;
-    }
-
-    function summaryJsonSchema(name) {
-        return {
-            name,
-            description: '镜渊快照式总结',
-            strict: true,
-            value: {
-                $schema: 'http://json-schema.org/draft-04/schema#',
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    title: { type: 'string' },
-                    summary: { type: 'string' },
-                    keywords: { type: 'array', items: { type: 'string' } },
-                },
-                required: ['title', 'summary', 'keywords'],
-            },
-        };
-    }
-
-    async function generateSmallSummary(anchorIndex, { force = false } = {}) {
-        const indices = pendingSmallTurnIndices();
-        if (!indices.length) throw new Error('没有可结算的有效回合');
-        const context = ctx();
-        const anchor = getMessage(anchorIndex);
-        if (!anchor || anchor.is_user) throw new Error('未找到总结锚点正文');
-        const data = ensureMessageData(anchor);
-        if (data.smallSummary && !force) return;
-
-        const transcript = indices.map(index => {
-            const assistant = getMessage(index);
-            return `【回合 ${index + 1}】\n玩家：${previousUserText(index)}\n正文：${assistant?.mes || ''}`;
-        }).join('\n\n');
-        const snapshot = getMessage(indices.at(-1))?.extra?.[MODULE_NAME]?.tableSnapshot || emptySnapshot();
-        const prompt = `将以下回合压缩成“当前世界快照式小总结”。不是流水账。重点保留：确定结果、不可逆变化、当前人物/关系/物品/区域状态、仍在进行的流程、未决与冲突。已经被最终结果替代的中间动作不展开。\n\n${transcript}\n\n【当前状态表】\n${JSON.stringify(snapshot, null, 2)}`;
-        const raw = await generateTask('small', {
-            systemPrompt: '你是镜渊快照结算器。只输出结构化结果，不续写故事，不把未确认事项写成事实。',
-            prompt,
-            jsonSchema: summaryJsonSchema('MirrorAbyssSmallSummary'),
-        });
-        const parsed = extractJson(raw);
-        data.smallSummary = {
-            id: makeId('small'),
-            title: String(parsed.title || '阶段快照'),
-            summary: String(parsed.summary || ''),
-            keywords: Array.isArray(parsed.keywords) ? parsed.keywords.map(String) : [],
-            turnCount: indices.length,
-            sourceArtifactIds: indices.map(index => getMessage(index)?.extra?.[MODULE_NAME]?.artifactId).filter(Boolean),
-            createdAt: new Date().toISOString(),
-        };
-        await persistChat();
-        renderMessagePanel(anchorIndex);
-        scheduleLorebookSync('small summary updated');
-        refreshWorkspaceIfOpen();
-    }
-
-    async function generateLargeSummary(anchorIndex, { force = false } = {}) {
-        const indices = pendingSmallSummaryIndicesForLarge();
-        if (!indices.length) throw new Error('没有可结算的小总结');
-        const context = ctx();
-        const anchor = getMessage(anchorIndex);
-        if (!anchor || anchor.is_user) throw new Error('未找到总结锚点正文');
-        const data = ensureMessageData(anchor);
-        if (data.largeSummary && !force) return;
-        const source = indices.map(index => {
-            const item = getMessage(index)?.extra?.[MODULE_NAME]?.smallSummary;
-            return `【${item?.title || `小总结 ${index + 1}`}】\n${item?.summary || ''}`;
-        }).join('\n\n');
-        const latestSnapshot = getMessage(latestAssistantIndex())?.extra?.[MODULE_NAME]?.tableSnapshot || emptySnapshot();
-        const prompt = `将下列小总结再次压缩成长期快照。保留长期仍成立的人物、关系、区域、物品、事件结果和未决事项；不要复述阶段流水账，不要强行闭合开放事件。\n\n${source}\n\n【当前状态表】\n${JSON.stringify(latestSnapshot, null, 2)}`;
-        const raw = await generateTask('large', {
-            systemPrompt: '你是镜渊长期快照结算器。只输出结构化结果。',
-            prompt,
-            jsonSchema: summaryJsonSchema('MirrorAbyssLargeSummary'),
-        });
-        const parsed = extractJson(raw);
-        data.largeSummary = {
-            id: makeId('large'),
-            title: String(parsed.title || '长期快照'),
-            summary: String(parsed.summary || ''),
-            keywords: Array.isArray(parsed.keywords) ? parsed.keywords.map(String) : [],
-            sourceCount: indices.length,
-            sourceSummaryIds: indices.map(index => getMessage(index)?.extra?.[MODULE_NAME]?.smallSummary?.id).filter(Boolean),
-            createdAt: new Date().toISOString(),
-        };
-        await persistChat();
-        renderMessagePanel(anchorIndex);
-        scheduleLorebookSync('large summary updated');
-        refreshWorkspaceIfOpen();
-    }
-
-    async function maybeAutoSummaries(anchorIndex) {
-        const cfg = settings();
-        if (cfg.autoSmallSummary && pendingSmallTurnIndices().length >= Math.max(1, Number(cfg.smallSummaryTurns) || 15)) {
-            await generateSmallSummary(anchorIndex).catch(error => toast('error', `小总结失败：${error.message}`));
-        }
-        if (cfg.autoLargeSummary && pendingSmallSummaryIndicesForLarge().length >= Math.max(1, Number(cfg.largeSummaryCount) || 6)) {
-            await generateLargeSummary(anchorIndex).catch(error => toast('error', `大总结失败：${error.message}`));
-        }
-        updateUnifiedStatus();
-    }
-
-
-    async function worldInfoApi() {
-        if (!worldInfoModulePromise) {
-            worldInfoModulePromise = import(/* webpackIgnore: true */ '/scripts/world-info.js');
-        }
-        return await worldInfoModulePromise;
-    }
-
-    function sanitizedBookName(value) {
-        return String(value || '').replace(/[\\/:*?\"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80);
-    }
-
-    function generatedLorebookName() {
-        const context = ctx();
-        const seed = context?.name2 || context?.characterId || context?.chatId || context?.getCurrentChatId?.() || 'Chat';
-        return sanitizedBookName(`MA_${seed}`) || 'MA_Chat';
-    }
-
-    async function resolveLorebookName({ create = false } = {}) {
-        const cfg = settings();
-        const meta = chatMeta();
-        const context = ctx();
-        let name = sanitizedBookName(meta.lorebookName || cfg.lorebookName || context?.chatMetadata?.world_info || '');
-        if (!name && create && cfg.autoCreateChatLorebook) name = generatedLorebookName();
-        if (!name) return '';
-        if (create) {
-            const wi = await worldInfoApi();
-            let data = await wi.loadWorldInfo(name);
-            if (!data) {
-                if (typeof wi.createNewWorldInfo === 'function') await wi.createNewWorldInfo(name, { interactive: false });
-                data = await wi.loadWorldInfo(name);
-                if (!data) {
-                    data = { entries: {} };
-                    await wi.saveWorldInfo(name, data, true);
-                }
-            }
-            context.chatMetadata ||= {};
-            context.chatMetadata[wi.METADATA_KEY || 'world_info'] = name;
-            meta.lorebookName = name;
-            await persistMetadata();
-        }
-        return name;
-    }
-
-    function rowKeywords(row) {
-        return [...new Set([row.title, ...(row.keywords || [])]
-            .map(x => String(x || '').trim())
-            .filter(x => x.length >= 2 && !/^(他|她|它|我|你|他们|她们)$/.test(x)))]
-            .slice(0, 16);
-    }
-
-    function rowLoreContent(tableKey, row) {
-        return `[${TABLE_LABELS[tableKey]}：${row.title}]\n${row.content || ''}${row.status ? `\n状态：${row.status}` : ''}`.trim();
-    }
-
-    function pruneInvalidSummaries() {
-        const artifactIds = new Set();
-        const smallIds = new Set();
-        for (const message of getChat()) {
-            const data = message?.extra?.[MODULE_NAME];
-            if (!data || message.is_user) continue;
-            artifactIds.add(data.artifactId);
-            if (data.smallSummary?.id) smallIds.add(data.smallSummary.id);
-        }
-        let changed = false;
-        for (const message of getChat()) {
-            const data = message?.extra?.[MODULE_NAME];
-            if (!data || message.is_user) continue;
-            const smallSources = data.smallSummary?.sourceArtifactIds;
-            if (Array.isArray(smallSources) && smallSources.some(id => !artifactIds.has(id))) {
-                data.smallSummary = null;
-                changed = true;
-            }
-        }
-        const remainingSmallIds = new Set();
-        for (const message of getChat()) {
-            const id = message?.extra?.[MODULE_NAME]?.smallSummary?.id;
-            if (id) remainingSmallIds.add(id);
-        }
-        for (const message of getChat()) {
-            const data = message?.extra?.[MODULE_NAME];
-            if (!data || message.is_user) continue;
-            const largeSources = data.largeSummary?.sourceSummaryIds;
-            if (Array.isArray(largeSources) && largeSources.some(id => !remainingSmallIds.has(id))) {
-                data.largeSummary = null;
-                changed = true;
-            }
-        }
-        return changed;
-    }
-
-    function collectArtifactSummaries() {
-        const out = [];
-        getChat().forEach((message, index) => {
-            const data = message?.extra?.[MODULE_NAME];
-            if (!data || message.is_user) return;
-            if (data.smallSummary) out.push({ kind: 'small', index, artifactId: data.artifactId, value: data.smallSummary });
-            if (data.largeSummary) out.push({ kind: 'large', index, artifactId: data.artifactId, value: data.largeSummary });
-        });
-        return out;
-    }
-
-    function desiredLorebookSpecs() {
-        pruneInvalidSummaries();
-        const desired = new Map();
-        const latestIndex = latestAssistantIndex();
-        const latestData = getMessage(latestIndex)?.extra?.[MODULE_NAME];
-        const snapshot = latestData?.tableSnapshot;
-        if (snapshot) {
-            for (const tableKey of TABLE_KEYS) {
-                for (const row of snapshot[tableKey] || []) {
-                    const constant = ['focus', 'spacetime', 'foundations'].includes(tableKey);
-                    desired.set(`state:${tableKey}:${row.id}`, {
-                        title: row.title,
-                        comment: `[MA][${TABLE_LABELS[tableKey]}] ${row.title}`,
-                        content: rowLoreContent(tableKey, row),
-                        keywords: rowKeywords(row),
-                        constant,
-                        vectorized: !constant && Boolean(settings().vectorizeStateRows),
-                        sourceArtifactId: latestData.artifactId,
-                        kind: `state:${tableKey}`,
-                    });
-                }
-            }
-        }
-        const summaries = collectArtifactSummaries();
-        for (const item of summaries) {
-            const value = item.value;
-            desired.set(`${item.kind}:${value.id}`, {
-                title: value.title,
-                comment: `[MA][${item.kind === 'small' ? '小总结' : '大总结'}] ${value.title}`,
-                content: value.summary,
-                keywords: [...new Set([value.title, ...(value.keywords || [])])].filter(Boolean).slice(0, 16),
-                constant: false,
-                vectorized: true,
-                sourceArtifactId: item.artifactId,
-                kind: item.kind,
-            });
-        }
-        if (settings().latestContinuityConstant && summaries.length) {
-            const latest = summaries.at(-1);
-            desired.set('core:latest', {
-                title: '当前连续性核心',
-                comment: '[MA][当前连续性核心]',
-                content: latest.value.summary,
-                keywords: ['当前连续性', '当前状态'],
-                constant: true,
-                vectorized: false,
-                sourceArtifactId: latest.artifactId,
-                kind: 'core',
-            });
-        }
-        return desired;
-    }
-
-    function managedEntryInfo(entry) {
-        return entry?.extensions?.mirrorAbyss || null;
-    }
-
-    function applyLoreSpec(entry, key, spec, wi) {
-        entry.comment = spec.comment;
-        entry.content = spec.content;
-        entry.key = spec.keywords;
-        entry.constant = Boolean(spec.constant);
-        entry.vectorized = Boolean(spec.vectorized);
-        entry.selective = !entry.constant;
-        entry.disable = false;
-        entry.addMemo = true;
-        entry.position = wi.world_info_position?.after ?? 1;
-        entry.order = spec.constant ? 140 : spec.kind === 'large' ? 115 : spec.kind === 'small' ? 110 : 100;
-        entry.preventRecursion = false;
-        entry.excludeRecursion = false;
-        entry.delayUntilRecursion = 0;
-        entry.extensions ||= {};
-        entry.extensions.mirrorAbyss = {
-            managed: true,
-            key,
-            sourceArtifactId: spec.sourceArtifactId,
-            kind: spec.kind,
-            version: VERSION,
-        };
-    }
-
-    async function reconcileLorebook({ silent = true } = {}) {
-        if (!settings().lorebookSync) return { skipped: true };
-        const meta = chatMeta();
-        meta.lastSyncState = 'processing';
-        meta.lastSyncError = null;
-        updateUnifiedStatus();
-        await persistMetadata();
-        try {
-            const wi = await worldInfoApi();
-            const name = await resolveLorebookName({ create: true });
-            if (!name) throw new Error('没有可用的聊天世界书');
-            const data = await wi.loadWorldInfo(name) || { entries: {} };
-            data.entries ||= {};
-            const desired = desiredLorebookSpecs();
-            const existing = new Map();
-            for (const [uid, entry] of Object.entries(data.entries)) {
-                const info = managedEntryInfo(entry);
-                if (info?.managed && info.key) existing.set(info.key, { uid, entry });
-            }
-            const sourceUidMap = new Map();
-            let changed = false;
-            for (const [key, spec] of desired) {
-                let pair = existing.get(key);
-                let entry = pair?.entry;
-                if (!entry) {
-                    entry = wi.createWorldInfoEntry(name, data);
-                    if (!entry) continue;
-                    pair = { uid: String(entry.uid), entry };
-                    changed = true;
-                }
-                const before = JSON.stringify(entry);
-                applyLoreSpec(entry, key, spec, wi);
-                if (before !== JSON.stringify(entry)) changed = true;
-                existing.delete(key);
-                if (!sourceUidMap.has(spec.sourceArtifactId)) sourceUidMap.set(spec.sourceArtifactId, []);
-                sourceUidMap.get(spec.sourceArtifactId).push(Number(entry.uid));
-            }
-            for (const { uid } of existing.values()) {
-                delete data.entries[uid];
-                changed = true;
-            }
-            if (changed) {
-                await wi.saveWorldInfo(name, data, true);
-                if (typeof wi.reloadEditor === 'function') wi.reloadEditor(name);
-            }
-            for (const message of getChat()) {
-                const artifact = message?.extra?.[MODULE_NAME];
-                if (artifact) artifact.lorebookEntryIds = sourceUidMap.get(artifact.artifactId) || [];
-            }
-            meta.lorebookName = name;
-            meta.lastSyncAt = new Date().toISOString();
-            meta.lastSyncError = null;
-            meta.lastSyncState = 'success';
-            await persistChat();
-            await persistMetadata();
-            updateUnifiedStatus();
-            if (!silent) toast('success', `记忆已同步到世界书：${name}`);
-            return { name, changed, desired: desired.size };
-        } catch (error) {
-            meta.lastSyncState = 'error';
-            meta.lastSyncError = String(error?.message || error);
-            await persistMetadata();
-            updateUnifiedStatus();
-            if (!silent) toast('error', `世界书同步失败：${meta.lastSyncError}`);
-            console.error('[MirrorAbyss] lorebook sync failed', error);
-            return { error };
-        }
-    }
-
-    function scheduleLorebookSync(reason = '') {
-        if (!settings().lorebookSync) return;
-        clearTimeout(lorebookSyncTimer);
-        lorebookSyncTimer = setTimeout(() => enqueue(`同步世界书 ${reason}`, () => reconcileLorebook({ silent: true })), 350);
-    }
-
-    async function readLorebookEntries({ externalOnly = false } = {}) {
-        try {
-            const wi = await worldInfoApi();
-            const name = await resolveLorebookName({ create: false });
-            if (!name) return [];
-            const data = await wi.loadWorldInfo(name);
-            return Object.values(data?.entries || {}).filter(entry => !externalOnly || !managedEntryInfo(entry)).map(entry => ({ ...entry, world: name }));
-        } catch (error) {
-            console.warn('[MirrorAbyss] Unable to read lorebook', error);
-            return [];
-        }
-    }
-
-    async function editExternalLorebookEntry(node, text) {
-        const parsed = JSON.parse(text);
-        const wi = await worldInfoApi();
-        const name = node.world || await resolveLorebookName({ create: false });
-        const data = await wi.loadWorldInfo(name);
-        const entry = data?.entries?.[node.uid];
-        if (!entry) throw new Error('世界书条目已不存在');
-        for (const field of ['comment', 'content', 'key', 'constant', 'vectorized', 'disable', 'order', 'position']) {
-            if (hasOwn(parsed, field)) entry[field] = parsed[field];
-        }
-        await wi.saveWorldInfo(name, data, true);
-        refreshWorkspaceIfOpen();
-    }
-
-    async function deleteExternalLorebookEntry(node) {
-        const wi = await worldInfoApi();
-        const name = node.world || await resolveLorebookName({ create: false });
-        const data = await wi.loadWorldInfo(name);
-        if (!data?.entries?.[node.uid]) return;
-        delete data.entries[node.uid];
-        await wi.saveWorldInfo(name, data, true);
-        refreshWorkspaceIfOpen();
-    }
-
-    function statusLabel(value) {
-        const map = {
-            idle: '待处理', processing: '处理中', synced: '已完成', error: '失败',
-            passed: '校正通过', failed: '校正未通过', success: '同步成功',
-        };
-        return map[value] || String(value || '待处理');
-    }
-
-    function statusTone(value) {
-        if (['error', 'failed'].includes(value)) return 'danger';
-        if (['processing'].includes(value)) return 'working';
-        if (['synced', 'passed', 'success'].includes(value)) return 'success';
-        return 'neutral';
-    }
-
-    function renderRows(snapshot, tableKey, messageIndex) {
-        const rows = snapshot?.[tableKey] || [];
-        const bodyRows = rows.map((row, rowIndex) => `
-            <tr class="ma-row" data-row-id="${escapeHtml(row.id)}" data-table-key="${tableKey}">
-                <td class="ma-row-index">${rowIndex + 1}</td>
-                <td class="ma-row-title">${escapeHtml(row.title)}</td>
-                <td class="ma-row-content">${escapeHtml(row.content)}</td>
-                <td class="ma-row-meta"><span class="ma-state-pill">${escapeHtml(row.status)}</span>${row.keywords?.length ? `<div class="ma-row-keywords">${row.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}</td>
-                <td class="ma-row-actions">
-                    <button type="button" data-ma-action="row-edit" data-index="${messageIndex}" data-table-key="${tableKey}" data-row-id="${escapeHtml(row.id)}" title="修改"><i class="fa-solid fa-pen"></i></button>
-                    <button type="button" data-ma-action="row-delete" data-index="${messageIndex}" data-table-key="${tableKey}" data-row-id="${escapeHtml(row.id)}" title="删除"><i class="fa-solid fa-trash"></i></button>
-                </td>
-            </tr>`).join('');
-        const table = rows.length ? `
-            <div class="ma-table-scroll">
-                <table class="ma-data-table">
-                    <thead>
-                        <tr><th>#</th><th>对象</th><th>当前记录</th><th>状态与关键词</th><th>操作</th></tr>
-                    </thead>
-                    <tbody>${bodyRows}</tbody>
-                </table>
-            </div>` : '<div class="ma-empty ma-table-empty">本分类暂无记录</div>';
-        return `${table}<button type="button" class="ma-add-row" data-ma-action="row-add" data-index="${messageIndex}" data-table-key="${tableKey}"><i class="fa-solid fa-plus"></i> 添加${TABLE_LABELS[tableKey]}</button>`;
-    }
-
-    function panelHtml(index, data) {
-        const snapshot = data?.tableSnapshot;
-        const meta = chatMeta();
-        const activeKey = TABLE_KEYS.includes(data?.activeTableKey) ? data.activeTableKey : (TABLE_KEYS.find(key => snapshot?.[key]?.length) || 'focus');
-        const stateStatus = data?.status || 'idle';
-        const auditStatus = settings().ruleAuditEnabled ? (data?.auditStatus || 'idle') : 'disabled';
-        const loreStatus = settings().lorebookSync ? (meta.lastSyncState || 'idle') : 'disabled';
-        const tabs = snapshot ? TABLE_KEYS.map(key => `
-            <button type="button" class="ma-table-tab ${key === activeKey ? 'active' : ''}" data-ma-action="table-tab" data-index="${index}" data-table-key="${key}" aria-selected="${key === activeKey}">
-                <span>${TABLE_LABELS[key]}</span><b>${snapshot[key]?.length || 0}</b>
-            </button>`).join('') : '';
-        const workbook = snapshot ? `
-            <div class="ma-workbook">
-                <div class="ma-table-tabs" role="tablist">${tabs}</div>
-                <div class="ma-workbook-head"><b>${TABLE_LABELS[activeKey]}</b><span>当前快照 · 可直接编辑</span></div>
-                <div class="ma-workbook-body">${renderRows(snapshot, activeKey, index)}</div>
-            </div>` : '<div class="ma-empty ma-empty-state">本条正文尚未生成状态表。点击“重新整理”开始。</div>';
-        const syncError = meta.lastSyncError ? `<div class="ma-error"><b>世界书同步失败</b><div>${escapeHtml(meta.lastSyncError)}</div><button type="button" data-ma-action="sync-now">重新同步</button></div>` : '';
-        return `
-            <div class="ma-panel-head">
-                <button type="button" class="ma-panel-toggle" aria-expanded="false">
-                    <span class="ma-panel-title">镜渊状态</span>
-                    <span class="ma-chip ${statusTone(stateStatus)}">${statusLabel(stateStatus)}</span>
-                </button>
-                <div class="ma-panel-actions">
-                    <button type="button" data-ma-action="retry" data-index="${index}" title="重新整理"><i class="fa-solid fa-rotate"></i></button>
-                    <button type="button" data-ma-action="edit" data-index="${index}" title="高级编辑"><i class="fa-solid fa-code"></i></button>
-                    <button type="button" data-ma-action="graph" data-index="${index}" title="打开图谱"><i class="fa-solid fa-diagram-project"></i></button>
-                </div>
-            </div>
-            <div class="ma-panel-body" hidden>
-                <div class="ma-status-strip">
-                    <span>规则校正 <b class="ma-chip ${statusTone(auditStatus)}">${auditStatus === 'disabled' ? '未启用' : statusLabel(auditStatus)}</b></span>
-                    <span>表格整理 <b class="ma-chip ${statusTone(stateStatus)}">${statusLabel(stateStatus)}</b></span>
-                    <span>世界书 <b class="ma-chip ${statusTone(loreStatus)}">${loreStatus === 'disabled' ? '未启用' : statusLabel(loreStatus)}</b></span>
-                </div>
-                ${data?.auditError ? `<div class="ma-error"><b>规则校正异常</b><div>${escapeHtml(data.auditError)}</div></div>` : ''}
-                ${data?.error ? `<div class="ma-error"><b>表格整理失败</b><div>${escapeHtml(data.error)}</div></div>` : ''}
-                ${syncError}
-                <div class="ma-progress-line">小总结 ${pendingSmallTurnIndices().length}/${settings().smallSummaryTurns} · 大总结 ${pendingSmallSummaryIndicesForLarge().length}/${settings().largeSummaryCount}</div>
-                ${workbook}
-                ${data?.smallSummary ? `<details class="ma-summary"><summary>小总结：${escapeHtml(data.smallSummary.title)}</summary><pre>${escapeHtml(data.smallSummary.summary)}</pre><div><button data-ma-action="summary-edit" data-kind="small" data-index="${index}">编辑</button><button data-ma-action="summary-delete" data-kind="small" data-index="${index}">删除</button></div></details>` : ''}
-                ${data?.largeSummary ? `<details class="ma-summary"><summary>大总结：${escapeHtml(data.largeSummary.title)}</summary><pre>${escapeHtml(data.largeSummary.summary)}</pre><div><button data-ma-action="summary-edit" data-kind="large" data-index="${index}">编辑</button><button data-ma-action="summary-delete" data-kind="large" data-index="${index}">删除</button></div></details>` : ''}
-                <div class="ma-inline-buttons">
-                    <button type="button" data-ma-action="small" data-index="${index}">生成小总结</button>
-                    <button type="button" data-ma-action="large" data-index="${index}">生成大总结</button>
-                    <button type="button" data-ma-action="sync-now">同步世界书</button>
-                </div>
-            </div>`;
-    }
-
-    function messageElement(index) {
-        return document.querySelector(`.mes[mesid="${index}"]`) || document.querySelector(`.mes[data-message-id="${index}"]`);
-    }
-
-    function renderMessagePanel(index) {
-        if (!settings().showMessagePanels) return;
-        const message = getMessage(index);
-        if (!message || message.is_user) return;
-        const root = messageElement(index);
-        if (!root) return;
-        const host = root.querySelector('.mes_text') || root.querySelector('.mes_block') || root;
-        let panel = root.querySelector(':scope .ma-message-panel');
-        if (!panel) {
-            panel = document.createElement('section');
-            panel.className = 'ma-message-panel';
-            host.insertAdjacentElement('afterend', panel);
-        }
-        panel.innerHTML = panelHtml(index, message.extra?.[MODULE_NAME]);
-    }
-
-    function renderAllPanels() {
-        document.querySelectorAll('.ma-message-panel').forEach(el => el.remove());
-        getChat().forEach((message, index) => {
-            if (!message?.is_user) renderMessagePanel(index);
-        });
-        updateUnifiedStatus();
-    }
-
-    function installDelegatedHandlers() {
-        if (delegatedHandlersInstalled) return;
-        delegatedHandlersInstalled = true;
-        document.addEventListener('click', async event => {
-            const toggle = event.target.closest('.ma-panel-toggle');
-            if (toggle) {
-                const body = toggle.closest('.ma-message-panel')?.querySelector('.ma-panel-body');
-                if (body) {
-                    body.hidden = !body.hidden;
-                    toggle.setAttribute('aria-expanded', String(!body.hidden));
-                }
-                return;
-            }
-            const button = event.target.closest('[data-ma-action]');
-            if (!button) return;
-            const action = button.dataset.maAction;
-            const index = Number(button.dataset.index ?? latestAssistantIndex());
-            if (action === 'retry') runMessagePipeline(index, { force: true });
-            if (action === 'edit') openSnapshotEditor(index);
-            if (action === 'graph') openWorkspace(index);
-            if (action === 'small') enqueue('生成小总结', () => generateSmallSummary(index, { force: true })).catch(error => toast('error', error.message));
-            if (action === 'large') enqueue('生成大总结', () => generateLargeSummary(index, { force: true })).catch(error => toast('error', error.message));
-            if (action === 'row-add') addRow(index, button.dataset.tableKey);
-            if (action === 'row-edit') editRow(index, button.dataset.tableKey, button.dataset.rowId);
-            if (action === 'row-delete') deleteRow(index, button.dataset.tableKey, button.dataset.rowId);
-            if (action === 'table-tab') {
-                const message = getMessage(index);
-                const data = ensureMessageData(message);
-                if (data && TABLE_KEYS.includes(button.dataset.tableKey)) {
-                    data.activeTableKey = button.dataset.tableKey;
-                    renderMessagePanel(index);
-                    const body = messageElement(index)?.querySelector('.ma-message-panel .ma-panel-body');
-                    const toggle = messageElement(index)?.querySelector('.ma-message-panel .ma-panel-toggle');
-                    if (body) body.hidden = false;
-                    if (toggle) toggle.setAttribute('aria-expanded', 'true');
-                }
-            }
-            if (action === 'sync-now') enqueue('同步世界书', () => reconcileLorebook({ silent: false }));
-            if (action === 'summary-edit') editSummary(index, button.dataset.kind);
-            if (action === 'summary-delete') deleteSummary(index, button.dataset.kind);
-        });
-    }
-
-    function selected(value, current) {
-        return value === current ? 'selected' : '';
-    }
-
-    function checked(value) {
-        return value ? 'checked' : '';
-    }
-
-    function latestMirrorData() {
-        const index = latestAssistantIndex();
-        return index >= 0 ? getMessage(index)?.extra?.[MODULE_NAME] || null : null;
-    }
-
-    function connectionStatusText() {
-        const cfg = settings();
-        if (cfg.generationMode === 'independent') return independentApiConfigured() ? '独立模型已配置' : '独立模型未完成配置';
-        if (cfg.generationMode === 'profile') return '使用酒馆连接配置';
-        return '跟随当前聊天连接';
-    }
-
-    function controlOverviewHtml() {
-        const cfg = settings();
-        const data = latestMirrorData();
-        const meta = chatMeta();
-        const lastFailure = meta.lastAuditFailure;
-        const cards = [
-            ['独立模型', connectionStatusText(), cfg.generationMode === 'independent' && !independentApiConfigured() ? 'danger' : 'success', 'plug'],
-            ['规则校正', cfg.ruleAuditEnabled ? statusLabel(data?.auditStatus || 'idle') : '未启用', statusTone(cfg.ruleAuditEnabled ? data?.auditStatus : 'neutral'), 'shield-halved'],
-            ['表格状态', statusLabel(data?.status || 'idle'), statusTone(data?.status || 'idle'), 'table-list'],
-            ['世界书同步', cfg.lorebookSync ? statusLabel(meta.lastSyncState || 'idle') : '未启用', statusTone(cfg.lorebookSync ? meta.lastSyncState : 'neutral'), 'book'],
-        ];
-        return `
-            <div class="ma-overview-grid">
-                ${cards.map(([title, value, tone, icon]) => `<div class="ma-status-card ${tone}"><i class="fa-solid fa-${icon}"></i><div><span>${title}</span><b>${escapeHtml(value)}</b></div></div>`).join('')}
-            </div>
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>当前进度</b><span>单聊天独立记录</span></div>
-                <div class="ma-metric-row">
-                    <div><b>${pendingSmallTurnIndices().length}</b><span>/ ${cfg.smallSummaryTurns} 小总结</span></div>
-                    <div><b>${pendingSmallSummaryIndicesForLarge().length}</b><span>/ ${cfg.largeSummaryCount} 大总结</span></div>
-                    <div><b>${validSyncedAssistantIndices().length}</b><span>已整理正文</span></div>
-                </div>
-            </div>
-            ${meta.lastSyncError ? `<div class="ma-alert danger"><b>世界书同步失败</b><p>${escapeHtml(meta.lastSyncError)}</p></div>` : ''}
-            ${data?.error ? `<div class="ma-alert danger"><b>表格整理失败</b><p>${escapeHtml(data.error)}</p></div>` : ''}
-            ${data?.auditError ? `<div class="ma-alert danger"><b>规则校正异常</b><p>${escapeHtml(data.auditError)}</p></div>` : ''}
-            ${lastFailure ? `<div class="ma-alert warning"><b>最近一次自动撤回</b><p>${escapeHtml(lastFailure.reason || '')}</p><small>${escapeHtml(lastFailure.at || '')}</small></div>` : ''}
-            <div class="ma-quick-actions">
-                <button type="button" data-ma-control-action="process-latest"><i class="fa-solid fa-rotate"></i> 整理最新正文</button>
-                <button type="button" data-ma-control-action="audit-latest"><i class="fa-solid fa-shield"></i> 校正最新正文</button>
-                <button type="button" data-ma-control-action="sync"><i class="fa-solid fa-arrows-rotate"></i> 同步世界书</button>
-                <button type="button" data-ma-control-action="graph"><i class="fa-solid fa-diagram-project"></i> 世界图谱</button>
-            </div>`;
-    }
-
-    function controlConnectionHtml() {
-        const cfg = settings();
-        return `
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>模型调用方式</b><span>正文模型与镜渊模型相互独立</span></div>
-                <div class="ma-segmented">
-                    <label><input type="radio" name="ma-generation-mode" data-ma-setting="generationMode" value="independent" ${cfg.generationMode === 'independent' ? 'checked' : ''}><span>独立 API</span></label>
-                    <label><input type="radio" name="ma-generation-mode" data-ma-setting="generationMode" value="profile" ${cfg.generationMode === 'profile' ? 'checked' : ''}><span>连接配置</span></label>
-                    <label><input type="radio" name="ma-generation-mode" data-ma-setting="generationMode" value="current" ${cfg.generationMode === 'current' ? 'checked' : ''}><span>当前连接</span></label>
-                </div>
-            </div>
-            <div class="ma-control-section ${cfg.generationMode === 'independent' ? '' : 'ma-muted-section'}">
-                <div class="ma-section-title"><b>独立 API</b><span>密钥保存在本机酒馆扩展设置中</span></div>
-                <div class="ma-form-grid">
-                    <label><span>接口类型</span><select data-ma-setting="apiProvider">
-                        <option value="openai-compatible" ${selected('openai-compatible', cfg.apiProvider)}>OpenAI 兼容</option>
-                        <option value="gemini" ${selected('gemini', cfg.apiProvider)}>Google Gemini</option>
-                        <option value="anthropic" ${selected('anthropic', cfg.apiProvider)}>Anthropic</option>
-                    </select></label>
-                    <label><span>模型</span><div class="ma-input-button"><input type="text" list="ma-model-list" data-ma-setting="apiModel" value="${escapeHtml(cfg.apiModel)}" placeholder="例如 gpt-4.1-mini"><button type="button" data-ma-control-action="models" title="读取模型列表"><i class="fa-solid fa-list"></i></button></div><datalist id="ma-model-list"></datalist></label>
-                </div>
-                <label><span>API 地址</span><input type="url" data-ma-setting="apiBaseUrl" value="${escapeHtml(cfg.apiBaseUrl)}" placeholder="OpenAI兼容示例：https://api.example.com/v1"></label>
-                <label><span>API 密钥</span><div class="ma-input-button"><input type="password" id="ma-api-key" autocomplete="new-password" data-ma-setting="apiKey" value="${escapeHtml(cfg.apiKey)}" placeholder="sk-..."><button type="button" data-ma-control-action="toggle-key" title="显示或隐藏密钥"><i class="fa-solid fa-eye"></i></button></div></label>
-                <div class="ma-form-grid">
-                    <label><span>温度</span><input type="number" min="0" max="2" step="0.05" data-ma-setting="apiTemperature" value="${Number(cfg.apiTemperature)}"></label>
-                    <label><span>最大输出 Token</span><input type="number" min="128" max="65536" step="128" data-ma-setting="apiMaxTokens" value="${Number(cfg.apiMaxTokens)}"></label>
-                </div>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="apiJsonMode" ${checked(cfg.apiJsonMode)}>OpenAI兼容接口支持 JSON Object 模式</label>
-                <div class="ma-quick-actions"><button type="button" data-ma-control-action="test-api"><i class="fa-solid fa-vial"></i> 测试独立模型</button></div>
-                <p class="ma-help">部分官方接口禁止浏览器跨域请求。出现 CORS 错误时，可使用允许跨域的反向代理，或切换到“连接配置”。</p>
-            </div>
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>酒馆连接配置回退</b><span>仅在“连接配置”模式下生效</span></div>
-                <div class="ma-form-grid">
-                    <label><span>表格整理</span><input type="text" data-ma-setting="stateProfile" value="${escapeHtml(cfg.stateProfile)}" placeholder="Connection Profile 名称"></label>
-                    <label><span>规则校正</span><input type="text" data-ma-setting="auditProfile" value="${escapeHtml(cfg.auditProfile)}"></label>
-                    <label><span>小总结</span><input type="text" data-ma-setting="smallSummaryProfile" value="${escapeHtml(cfg.smallSummaryProfile)}"></label>
-                    <label><span>大总结</span><input type="text" data-ma-setting="largeSummaryProfile" value="${escapeHtml(cfg.largeSummaryProfile)}"></label>
-                </div>
-            </div>`;
-    }
-
-    function controlStateHtml() {
-        const cfg = settings();
-        return `
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>状态表</b><span>每条 AI 正文对应一份可编辑快照</span></div>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="autoState" ${checked(cfg.autoState)}>每轮自动整理表格</label>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showMessagePanels" ${checked(cfg.showMessagePanels)}>在正文下显示表格面板</label>
-            </div>
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>分层总结</b><span>回合数可自行调整</span></div>
-                <div class="ma-form-grid">
-                    <label><span>小总结回合数</span><input type="number" min="1" max="100" data-ma-setting="smallSummaryTurns" value="${cfg.smallSummaryTurns}"></label>
-                    <label><span>大总结所需小总结数</span><input type="number" min="1" max="30" data-ma-setting="largeSummaryCount" value="${cfg.largeSummaryCount}"></label>
-                </div>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="autoSmallSummary" ${checked(cfg.autoSmallSummary)}>自动生成小总结</label>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="autoLargeSummary" ${checked(cfg.autoLargeSummary)}>自动生成大总结</label>
-                <div class="ma-quick-actions"><button type="button" data-ma-control-action="small">立即生成小总结</button><button type="button" data-ma-control-action="large">立即生成大总结</button></div>
-            </div>`;
-    }
-
-    function controlAuditHtml() {
-        const cfg = settings();
-        return `
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>规则校正</b><span>在状态整理前执行，避免违规正文进入记忆</span></div>
-                <label class="checkbox_label ma-primary-toggle"><input type="checkbox" data-ma-setting="ruleAuditEnabled" ${checked(cfg.ruleAuditEnabled)}>启用规则校正</label>
-                <label><span>审核提示词</span><textarea data-ma-setting="ruleAuditPrompt" rows="14" placeholder="粘贴需要审核的硬性规则。模型只判断本轮 AI 正文是否违反这些规则。">${escapeHtml(cfg.ruleAuditPrompt)}</textarea></label>
-                <label><span>未通过时</span><select data-ma-setting="ruleAuditFailAction">
-                    <option value="withdraw" ${selected('withdraw', cfg.ruleAuditFailAction)}>自动撤回最新 AI 消息</option>
-                    <option value="mark" ${selected('mark', cfg.ruleAuditFailAction)}>保留消息并标记失败</option>
-                </select></label>
-                <div class="ma-alert warning"><b>撤回边界</b><p>插件只自动撤回最新一条 AI 消息。审核接口异常时不会撤回，以免误删正文。</p></div>
-                <div class="ma-quick-actions"><button type="button" data-ma-control-action="audit-latest"><i class="fa-solid fa-shield"></i> 校正最新正文</button></div>
-            </div>`;
-    }
-
-    function controlMemoryHtml() {
-        const cfg = settings();
-        const meta = chatMeta();
-        return `
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>世界书同步</b><span class="ma-chip ${statusTone(meta.lastSyncState)}">${statusLabel(meta.lastSyncState)}</span></div>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="lorebookSync" ${checked(cfg.lorebookSync)}>自动同步聊天世界书</label>
-                <label><span>聊天世界书名称</span><input type="text" data-ma-meta="lorebookName" value="${escapeHtml(meta.lorebookName || cfg.lorebookName)}" placeholder="留空自动创建"></label>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="vectorizeStateRows" ${checked(cfg.vectorizeStateRows)}>活跃状态同时启用向量</label>
-                ${meta.lastSyncError ? `<div class="ma-alert danger"><b>同步失败</b><p>${escapeHtml(meta.lastSyncError)}</p></div>` : ''}
-                <div class="ma-quick-actions"><button type="button" data-ma-control-action="sync">立即同步</button><button type="button" data-ma-control-action="graph">打开世界图谱</button></div>
-            </div>
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>图谱显示</b><span>图谱只负责查看，不生成状态</span></div>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showExternalLorebookNodes" ${checked(cfg.showExternalLorebookNodes)}>显示非镜渊世界书条目</label>
-            </div>`;
-    }
-
-    function controlAdvancedHtml() {
-        const cfg = settings();
-        return `
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>界面入口</b><span>顶部按钮为默认入口</span></div>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showTopButton" ${checked(cfg.showTopButton)}>在酒馆顶部显示镜渊按钮</label>
-                <label class="checkbox_label"><input type="checkbox" data-ma-setting="showFloatingButton" ${checked(cfg.showFloatingButton)}>显示右下角浮动按钮</label>
-            </div>
-            <div class="ma-control-section">
-                <div class="ma-section-title"><b>维护工具</b><span>用于迁移、诊断和备份</span></div>
-                <div class="ma-quick-actions">
-                    <button type="button" data-ma-control-action="import">导入旧版快照</button>
-                    <button type="button" data-ma-control-action="migrate">迁移旧世界书</button>
-                    <button type="button" data-ma-control-action="export">导出镜渊数据</button>
-                </div>
-                <p class="ma-help">当前构建 v${VERSION}。独立 API 密钥会随酒馆扩展设置保存在本机数据目录中，请勿在共享账号中使用私人密钥。</p>
-            </div>`;
-    }
-
-    function controlTabContent(tab) {
-        if (tab === 'connection') return controlConnectionHtml();
-        if (tab === 'state') return controlStateHtml();
-        if (tab === 'audit') return controlAuditHtml();
-        if (tab === 'memory') return controlMemoryHtml();
-        if (tab === 'advanced') return controlAdvancedHtml();
-        return controlOverviewHtml();
-    }
-
-    function createControlCenter() {
-        if (document.getElementById('ma-control-center')) return;
-        const root = document.createElement('div');
-        root.id = 'ma-control-center';
-        root.hidden = true;
-        root.innerHTML = '<div class="ma-control-shell"></div>';
-        root.addEventListener('click', event => {
-            if (event.target === root) closeControlCenter();
-        });
-        document.body.appendChild(root);
-    }
-
-    function renderControlCenter() {
-        createControlCenter();
-        const root = document.getElementById('ma-control-center');
-        const shell = root.querySelector('.ma-control-shell');
-        const tabs = [
-            ['overview', '总览', 'gauge-high'], ['connection', '独立模型', 'plug'], ['state', '表格与总结', 'table-list'],
-            ['audit', '规则校正', 'shield-halved'], ['memory', '世界书与图谱', 'book'], ['advanced', '高级', 'sliders'],
-        ];
-        shell.innerHTML = `
-            <header class="ma-control-head">
-                <div class="ma-brand"><span class="ma-brand-mark">渊</span><div><b>镜渊控制台</b><small>Mirror Abyss v${VERSION}</small></div></div>
-                <button type="button" class="ma-icon-button" data-ma-control-action="close" aria-label="关闭">×</button>
-            </header>
-            <div class="ma-control-layout">
-                <nav class="ma-control-tabs">${tabs.map(([id, label, icon]) => `<button type="button" class="${controlCenterTab === id ? 'active' : ''}" data-ma-control-tab="${id}"><i class="fa-solid fa-${icon}"></i><span>${label}</span></button>`).join('')}</nav>
-                <main class="ma-control-content" data-tab="${controlCenterTab}">${controlTabContent(controlCenterTab)}</main>
-            </div>`;
-        bindControlCenterHandlers(root);
-    }
-
-    function openControlCenter(tab = controlCenterTab) {
-        controlCenterTab = tab || 'overview';
-        try {
-            renderControlCenter();
-            const root = document.getElementById('ma-control-center');
-            if (!root) throw new Error('控制台容器创建失败');
-            root.hidden = false;
-            root.removeAttribute('hidden');
-            document.body.classList.add('ma-control-open');
-            updateUnifiedStatus();
-        } catch (error) {
-            console.error('[MirrorAbyss] Failed to open control center', error);
-            createControlCenter();
-            const root = document.getElementById('ma-control-center');
-            if (root) {
-                root.hidden = false;
-                root.removeAttribute('hidden');
-                root.innerHTML = `<div class="ma-control-shell ma-control-fallback"><header class="ma-control-head"><div class="ma-brand"><span class="ma-brand-mark">渊</span><div><b>镜渊控制台启动失败</b><small>Mirror Abyss v${VERSION}</small></div></div><button type="button" class="ma-icon-button" id="ma-control-fallback-close">×</button></header><main class="ma-control-content"><div class="ma-alert danger"><b>控制台渲染异常</b><p>${escapeHtml(error?.message || String(error))}</p></div><p class="ma-help">请完全刷新酒馆页面；若仍出现此页，请保留这段错误信息。</p></main></div>`;
-                root.querySelector('#ma-control-fallback-close')?.addEventListener('click', closeControlCenter);
-                document.body.classList.add('ma-control-open');
-            }
-            toast('error', `控制台打开失败：${error?.message || error}`);
-        }
-    }
-
-    function closeControlCenter() {
-        const root = document.getElementById('ma-control-center');
-        if (root) root.hidden = true;
-        document.body.classList.remove('ma-control-open');
-    }
-
-    function saveControlSetting(input) {
-        const key = input.dataset.maSetting;
-        if (!key) return;
-        const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
-        settings()[key] = value;
-        if (key === 'apiProvider' && !settings().apiBaseUrl) {
-            if (value === 'gemini') settings().apiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta';
-            if (value === 'anthropic') settings().apiBaseUrl = 'https://api.anthropic.com/v1';
-        }
-        saveSettings();
-        if (['showMessagePanels'].includes(key)) renderAllPanels();
-        if (['showTopButton', 'showFloatingButton'].includes(key)) applyInterfaceVisibility();
-        updateUnifiedStatus();
-    }
-
-    function bindControlCenterHandlers(root) {
-        root.querySelectorAll('[data-ma-control-tab]').forEach(button => button.addEventListener('click', () => {
-            controlCenterTab = button.dataset.maControlTab;
-            renderControlCenter();
-        }));
-        root.querySelectorAll('[data-ma-setting]').forEach(input => {
-            input.addEventListener('change', () => {
-                saveControlSetting(input);
-                if (['generationMode', 'apiProvider'].includes(input.dataset.maSetting)) renderControlCenter();
-            });
-        });
-        root.querySelectorAll('[data-ma-meta]').forEach(input => input.addEventListener('change', () => {
-            if (input.dataset.maMeta === 'lorebookName') {
-                chatMeta().lorebookName = sanitizedBookName(input.value);
-                persistMetadata();
-                scheduleLorebookSync('lorebook changed');
-            }
-        }));
-        root.querySelectorAll('[data-ma-control-action]').forEach(button => button.addEventListener('click', async () => {
-            const action = button.dataset.maControlAction;
-            try {
-                if (action === 'close') return closeControlCenter();
-                if (action === 'toggle-key') {
-                    const field = root.querySelector('#ma-api-key');
-                    if (field) field.type = field.type === 'password' ? 'text' : 'password';
-                    return;
-                }
-                if (action === 'test-api') {
-                    button.disabled = true;
-                    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 测试中';
-                    await testIndependentApi();
-                    toast('success', '独立模型连接正常');
-                    return renderControlCenter();
-                }
-                if (action === 'models') {
-                    button.disabled = true;
-                    const models = await fetchIndependentModels();
-                    const list = root.querySelector('#ma-model-list');
-                    if (list) list.innerHTML = models.slice(0, 300).map(model => `<option value="${escapeHtml(model)}"></option>`).join('');
-                    toast('success', `已读取 ${models.length} 个模型`);
-                    button.disabled = false;
-                    return;
-                }
-                if (action === 'process-latest') return runMessagePipeline(latestAssistantIndex(), { force: true });
-                if (action === 'audit-latest') return auditMessage(latestAssistantIndex(), { force: true });
-                if (action === 'sync') return enqueue('同步世界书', () => reconcileLorebook({ silent: false }));
-                if (action === 'graph') return openWorkspace(latestAssistantIndex());
-                if (action === 'small') return enqueue('生成小总结', () => generateSmallSummary(latestAssistantIndex(), { force: true }));
-                if (action === 'large') return enqueue('生成大总结', () => generateLargeSummary(latestAssistantIndex(), { force: true }));
-                if (action === 'import') return openLegacyImporter();
-                if (action === 'migrate') return enqueue('迁移旧世界书', migrateLegacyLorebook);
-                if (action === 'export') return exportMirrorData();
-            } catch (error) {
-                toast('error', error?.message || String(error));
-                renderControlCenter();
-            }
-        }));
-    }
-
-    function createTopBarButton() {
-        if (document.getElementById('ma-top-button')) return;
-        const button = document.createElement('button');
-        button.id = 'ma-top-button';
-        button.type = 'button';
-        button.className = 'right_menu_button interactable';
-        button.title = '镜渊控制台';
-        button.setAttribute('aria-label', '打开镜渊控制台');
-        button.innerHTML = '<i class="fa-solid fa-table-list"></i><span class="ma-top-dot"></span>';
-        button.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            openControlCenter('overview');
-        });
-        const anchors = ['#persona-management-button', '#persona_management_button', '#user-settings-button', '#user_settings_button', '#account-button', '#account_button'];
-        const anchor = anchors.map(selector => document.querySelector(selector)).find(Boolean);
-        const host = anchor?.parentElement
-            || document.querySelector('#top-settings-holder')
-            || document.querySelector('#top-bar')
-            || document.querySelector('#sheld')
-            || document.querySelector('.top-bar');
-        if (anchor) anchor.insertAdjacentElement('afterend', button);
-        else if (host) host.appendChild(button);
-        else {
-            button.classList.add('ma-top-fallback');
-            document.body.appendChild(button);
-        }
-        applyInterfaceVisibility();
-    }
-
-    function applyInterfaceVisibility() {
-        const cfg = settings();
-        const top = document.getElementById('ma-top-button');
-        const floating = document.getElementById('ma-floating-button');
-        if (top) top.hidden = !cfg.showTopButton;
-        const topVisible = Boolean(top && cfg.showTopButton && top.isConnected && getComputedStyle(top).display !== 'none' && getComputedStyle(top).visibility !== 'hidden');
-        if (floating) floating.hidden = !cfg.showFloatingButton && topVisible;
-    }
-
-    function createFloatingButton() {
-        if (document.getElementById('ma-floating-button')) return;
-        const button = document.createElement('button');
-        button.id = 'ma-floating-button';
-        button.type = 'button';
-        button.title = '打开镜渊控制台';
-        button.innerHTML = '<span class="ma-orb">渊</span><span id="ma-floating-badge"></span>';
-        button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openControlCenter('overview'); });
-        document.body.appendChild(button);
-    }
-
-    function overallStatus() {
-        const latest = latestMirrorData();
-        const meta = chatMeta();
-        const hasError = Boolean(meta.lastSyncError || latest?.status === 'error' || latest?.auditStatus === 'error' || latest?.auditStatus === 'failed');
-        if (hasError) return { tone: 'danger', label: '镜渊存在失败状态' };
-        if (activeJobs.size || latest?.status === 'processing' || latest?.auditStatus === 'processing' || meta.lastSyncState === 'processing') return { tone: 'working', label: '镜渊正在处理' };
-        if (latest?.status === 'synced') return { tone: 'success', label: '镜渊运行正常' };
-        return { tone: 'neutral', label: '镜渊等待处理' };
-    }
-
-    function updateFloatingStatus() {
-        const badge = document.getElementById('ma-floating-badge');
-        if (!badge) return;
-        const state = overallStatus();
-        badge.textContent = activeJobs.size ? String(activeJobs.size) : state.tone === 'danger' ? '!' : '';
-        badge.classList.toggle('error', state.tone === 'danger' && !activeJobs.size);
-    }
-
-    function updateTopStatus() {
-        const button = document.getElementById('ma-top-button');
-        if (!button) return;
-        const state = overallStatus();
-        button.dataset.tone = state.tone;
-        button.title = state.label;
-        const dot = button.querySelector('.ma-top-dot');
-        if (dot) dot.dataset.tone = state.tone;
-    }
-
-    function updateUnifiedStatus() {
-        updateFloatingStatus();
-        updateTopStatus();
-        applyInterfaceVisibility();
-    }
-
-    function createWorkspace() {
-        if (document.getElementById('ma-workspace')) return;
-        const root = document.createElement('div');
-        root.id = 'ma-workspace';
-        root.hidden = true;
-        root.innerHTML = `
-            <header class="ma-workspace-head">
-                <div><b>镜渊世界图谱</b><small> v${VERSION}</small></div>
-                <div class="ma-workspace-actions">
-                    <input type="search" id="ma-graph-search" placeholder="搜索节点">
-                    <button type="button" id="ma-workspace-sync">同步世界书</button>
-                    <button type="button" id="ma-workspace-edit">编辑当前表格</button>
-                    <button type="button" id="ma-workspace-small">小总结</button>
-                    <button type="button" id="ma-workspace-large">大总结</button>
-                    <button type="button" id="ma-workspace-close" aria-label="关闭">×</button>
-                </div>
-            </header>
-            <div class="ma-workspace-body">
-                <div id="ma-graph"></div>
-                <aside id="ma-node-sheet" hidden>
-                    <button type="button" id="ma-node-sheet-close">×</button>
-                    <div id="ma-node-sheet-content"></div>
-                </aside>
-            </div>`;
-        document.body.appendChild(root);
-        root.querySelector('#ma-workspace-close').addEventListener('click', closeWorkspace);
-        root.querySelector('#ma-workspace-sync').addEventListener('click', () => enqueue('同步世界书', () => reconcileLorebook({ silent: false })));
-        root.querySelector('#ma-graph-search').addEventListener('input', event => { graphSearch = event.target.value.trim().toLowerCase(); renderGraph(); });
-        root.querySelector('#ma-node-sheet-close').addEventListener('click', () => root.querySelector('#ma-node-sheet').hidden = true);
-        root.querySelector('#ma-workspace-edit').addEventListener('click', () => openSnapshotEditor(Number(root.dataset.anchorIndex || latestAssistantIndex())));
-        root.querySelector('#ma-workspace-small').addEventListener('click', () => {
-            const index = latestAssistantIndex();
-            enqueue('生成小总结', () => generateSmallSummary(index, { force: true })).catch(error => toast('error', error.message));
-        });
-        root.querySelector('#ma-workspace-large').addEventListener('click', () => {
-            const index = latestAssistantIndex();
-            enqueue('生成大总结', () => generateLargeSummary(index, { force: true })).catch(error => toast('error', error.message));
-        });
-    }
-
-    function loadGraphLibrary() {
-        if (window.ForceGraph3D) return Promise.resolve(window.ForceGraph3D);
-        if (graphScriptPromise) return graphScriptPromise;
-        graphScriptPromise = new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            script.src = settings().graphLibraryUrl || GRAPH_LIB_URL;
-            script.async = true;
-            script.onload = () => window.ForceGraph3D ? resolve(window.ForceGraph3D) : reject(new Error('3D图库未加载'));
-            script.onerror = () => reject(new Error('无法加载3D图库'));
-            document.head.appendChild(script);
-        });
-        return graphScriptPromise;
-    }
-
-    function currentGraphSnapshot() {
-        const index = latestAssistantIndex();
-        return getMessage(index)?.extra?.[MODULE_NAME]?.tableSnapshot || emptySnapshot();
-    }
-
-    async function buildGraphData(snapshot) {
-        const nodes = [];
-        for (const key of TABLE_KEYS) {
-            for (const row of snapshot[key] || []) {
-                nodes.push({
-                    id: `state:${key}:${row.id}`,
-                    rowId: row.id,
-                    name: row.title,
-                    type: key,
-                    sourceKind: 'state',
-                    tableKey: key,
-                    content: row.content,
-                    keywords: row.keywords || [],
-                    status: row.status,
-                });
-            }
-        }
-        for (const item of collectArtifactSummaries()) {
-            nodes.push({
-                id: `${item.kind}:${item.value.id}`,
-                name: item.value.title,
-                type: item.kind,
-                sourceKind: 'summary',
-                messageIndex: item.index,
-                summaryKind: item.kind,
-                content: item.value.summary,
-                keywords: item.value.keywords || [],
-                status: 'snapshot',
-            });
-        }
-        if (settings().showExternalLorebookNodes) {
-            const entries = await readLorebookEntries({ externalOnly: true });
-            for (const entry of entries) {
-                nodes.push({
-                    id: `worldbook:${entry.uid}`,
-                    uid: entry.uid,
-                    world: entry.world,
-                    name: entry.comment || entry.key?.[0] || `世界书 ${entry.uid}`,
-                    type: 'worldbook',
-                    sourceKind: 'worldbook',
-                    content: entry.content || '',
-                    keywords: Array.isArray(entry.key) ? entry.key : [],
-                    status: entry.disable ? 'disabled' : entry.constant ? 'constant' : entry.vectorized ? 'vectorized' : 'normal',
-                    entry,
-                });
-            }
-        }
-        const query = graphSearch;
-        const filtered = query ? nodes.filter(node => `${node.name} ${node.content} ${(node.keywords || []).join(' ')}`.toLowerCase().includes(query)) : nodes;
-        const allowed = new Set(filtered.map(node => node.id));
-        const links = [];
-        const seen = new Set();
-        for (const source of filtered) {
-            const haystack = `${source.content} ${(source.keywords || []).join(' ')}`;
-            for (const target of filtered) {
-                if (source.id === target.id || !target.name || target.name.length < 2 || !allowed.has(target.id)) continue;
-                if (!haystack.includes(target.name)) continue;
-                const key = `${source.id}->${target.id}`;
-                if (seen.has(key)) continue;
-                seen.add(key);
-                links.push({ source: source.id, target: target.id, label: target.name });
-            }
-        }
-        return { nodes: filtered, links };
-    }
-
-    function showNodeSheet(node) {
-        const sheet = document.getElementById('ma-node-sheet');
-        const body = document.getElementById('ma-node-sheet-content');
-        if (!sheet || !body) return;
-        const label = node.type === 'worldbook' ? '世界书条目' : node.type === 'small' ? '小总结' : node.type === 'large' ? '大总结' : TABLE_LABELS[node.type] || node.type;
-        body.innerHTML = `
-            <div class="ma-node-kind">${escapeHtml(label)}</div>
-            <h3>${escapeHtml(node.name)}</h3>
-            <p>${escapeHtml(node.content)}</p>
-            <div class="ma-node-meta">${escapeHtml(node.status || '')}${node.keywords?.length ? ` · ${escapeHtml(node.keywords.join('、'))}` : ''}</div>
-            <div class="ma-node-buttons"><button type="button" id="ma-node-edit">修改此条目</button>${node.sourceKind === 'worldbook' ? '<button type="button" id="ma-node-delete">删除条目</button>' : ''}</div>`;
-        sheet.hidden = false;
-        body.querySelector('#ma-node-edit').addEventListener('click', () => openNodeEditor(node));
-        body.querySelector('#ma-node-delete')?.addEventListener('click', async () => {
-            if (!confirm('确定删除该世界书条目？')) return;
-            await deleteExternalLorebookEntry(node);
-            sheet.hidden = true;
-        });
-    }
-
-    async function renderGraph() {
-        const container = document.getElementById('ma-graph');
-        if (!container) return;
-        const data = await buildGraphData(currentGraphSnapshot());
-        container.innerHTML = '';
-        if (!data.nodes.length) {
-            container.innerHTML = '<div class="ma-graph-empty">当前没有可显示的状态节点。生成或导入表格后再打开。</div>';
-            return;
-        }
-        try {
-            const ForceGraph3D = await loadGraphLibrary();
-            if (!document.getElementById('ma-workspace') || document.getElementById('ma-workspace').hidden) return;
-            graphInstance = ForceGraph3D()(container)
-                .backgroundColor('rgba(0,0,0,0)')
-                .graphData(data)
-                .nodeLabel(node => `${TABLE_LABELS[node.type] || node.type}｜${node.name}`)
-                .nodeAutoColorBy('type')
-                .nodeVal(node => node.type === 'focus' ? 9 : node.type === 'foundations' || node.type === 'large' ? 7 : node.type === 'worldbook' ? 5 : 4)
-                .linkDirectionalArrowLength(3)
-                .linkDirectionalArrowRelPos(1)
-                .linkOpacity(0.45)
-                .onNodeClick(showNodeSheet)
-                .cooldownTicks(80)
-                .warmupTicks(20);
-            const controls = graphInstance.controls?.();
-            if (controls) {
-                controls.autoRotate = false;
-                controls.enableDamping = true;
-                controls.dampingFactor = 0.08;
-            }
-            graphInstance.d3Force?.('charge')?.strength?.(-80);
-            graphResizeObserver?.disconnect();
-            graphResizeObserver = new ResizeObserver(entries => {
-                const box = entries[0]?.contentRect;
-                if (box && graphInstance) graphInstance.width(box.width).height(box.height);
-            });
-            graphResizeObserver.observe(container);
-            setTimeout(() => graphInstance?.zoomToFit?.(600, 60), 250);
-        } catch (error) {
-            container.innerHTML = `<div class="ma-graph-empty">3D图库加载失败，已使用列表回退。<br>${escapeHtml(error.message)}</div>` +
-                data.nodes.map(node => `<button class="ma-fallback-node" data-node-id="${escapeHtml(node.id)}">${escapeHtml(node.name)}</button>`).join('');
-            container.querySelectorAll('.ma-fallback-node').forEach(button => {
-                button.addEventListener('click', () => showNodeSheet(data.nodes.find(node => node.id === button.dataset.nodeId)));
-            });
-        }
-    }
-
-    function openWorkspace(anchorIndex = latestAssistantIndex()) {
-        createWorkspace();
-        const root = document.getElementById('ma-workspace');
-        root.dataset.anchorIndex = String(anchorIndex);
-        root.hidden = false;
-        document.body.classList.add('ma-workspace-open');
-        renderGraph();
-    }
-
-    function closeWorkspace() {
-        const root = document.getElementById('ma-workspace');
-        if (root) root.hidden = true;
-        document.body.classList.remove('ma-workspace-open');
-        graphResizeObserver?.disconnect();
-        graphResizeObserver = null;
-        graphInstance = null;
-    }
-
-    function refreshWorkspaceIfOpen() {
-        const root = document.getElementById('ma-workspace');
-        if (root && !root.hidden) renderGraph();
-    }
-
-    function openSnapshotEditor(index) {
-        const message = getMessage(index);
-        if (!message || message.is_user) return toast('warning', '未找到可编辑的AI正文');
-        const data = ensureMessageData(message);
-        const snapshot = data.tableSnapshot || previousSnapshot(index + 1);
-        openEditorModal({
-            title: `编辑第 ${index + 1} 条状态表`,
-            value: JSON.stringify(snapshot, null, 2),
-            onSave: async text => {
-                const parsed = normalizeSnapshot(JSON.parse(text));
-                data.tableSnapshot = parsed;
-                data.status = 'synced';
-                data.error = null;
-                data.updatedAt = new Date().toISOString();
-                await persistChat();
-                scheduleLorebookSync('snapshot edited');
-                renderMessagePanel(index);
-                refreshWorkspaceIfOpen();
-            },
-        });
-    }
-
-    function openNodeEditor(node) {
-        if (node.sourceKind === 'worldbook') {
-            const value = JSON.stringify({
-                comment: node.entry.comment || '',
-                content: node.entry.content || '',
-                key: node.entry.key || [],
-                constant: Boolean(node.entry.constant),
-                vectorized: Boolean(node.entry.vectorized),
-                disable: Boolean(node.entry.disable),
-                order: Number(node.entry.order || 100),
-                position: Number(node.entry.position || 0),
-            }, null, 2);
-            return openEditorModal({ title: `修改世界书：${node.name}`, value, onSave: text => editExternalLorebookEntry(node, text) });
-        }
-        if (node.sourceKind === 'summary') return editSummary(node.messageIndex, node.summaryKind);
-        const index = latestAssistantIndex();
-        const message = getMessage(index);
-        const snapshot = message?.extra?.[MODULE_NAME]?.tableSnapshot;
-        const rows = snapshot?.[node.tableKey];
-        const rowIndex = rows?.findIndex(row => row.id === (node.rowId || node.id)) ?? -1;
-        if (rowIndex < 0) return toast('warning', '该节点不在当前表格中');
-        openRowEditor({
-            title: `修改：${node.name}`,
-            row: rows[rowIndex],
-            onSave: async value => {
-                rows[rowIndex] = cleanRecord(value, node.tableKey, rowIndex);
-                await persistChat();
-                scheduleLorebookSync('node edited');
-                renderMessagePanel(index);
-                refreshWorkspaceIfOpen();
-                document.getElementById('ma-node-sheet').hidden = true;
-            },
-        });
-    }
-
-    function addRow(index, tableKey) {
-        const message = getMessage(index);
-        const data = ensureMessageData(message);
-        data.tableSnapshot ||= previousSnapshot(index + 1);
-        openRowEditor({
-            title: `添加${TABLE_LABELS[tableKey]}`,
-            row: { id: makeId(tableKey), title: '', content: '', keywords: [], status: 'active' },
-            onSave: async value => {
-                data.tableSnapshot[tableKey].push(cleanRecord(value, tableKey, data.tableSnapshot[tableKey].length));
-                data.activeTableKey = tableKey;
-                data.status = 'synced';
-                await persistChat();
-                scheduleLorebookSync('row added');
-                renderMessagePanel(index);
-                refreshWorkspaceIfOpen();
-            },
-        });
-    }
-
-    function editRow(index, tableKey, rowId) {
-        const rows = getMessage(index)?.extra?.[MODULE_NAME]?.tableSnapshot?.[tableKey];
-        const rowIndex = rows?.findIndex(row => row.id === rowId) ?? -1;
-        if (rowIndex < 0) return toast('warning', '记录已不存在');
-        openRowEditor({
-            title: `修改${TABLE_LABELS[tableKey]}`,
-            row: rows[rowIndex],
-            onSave: async value => {
-                rows[rowIndex] = cleanRecord(value, tableKey, rowIndex);
-                await persistChat();
-                scheduleLorebookSync('row edited');
-                renderMessagePanel(index);
-                refreshWorkspaceIfOpen();
-            },
-        });
-    }
-
-    async function deleteRow(index, tableKey, rowId) {
-        if (!confirm('确定删除这条状态记录？')) return;
-        const rows = getMessage(index)?.extra?.[MODULE_NAME]?.tableSnapshot?.[tableKey];
-        const rowIndex = rows?.findIndex(row => row.id === rowId) ?? -1;
-        if (rowIndex < 0) return;
-        rows.splice(rowIndex, 1);
-        await persistChat();
-        scheduleLorebookSync('row deleted');
-        renderMessagePanel(index);
-        refreshWorkspaceIfOpen();
-    }
-
-    function editSummary(index, kind) {
-        const field = kind === 'large' ? 'largeSummary' : 'smallSummary';
-        const data = getMessage(index)?.extra?.[MODULE_NAME];
-        const summary = data?.[field];
-        if (!summary) return toast('warning', '总结已不存在');
-        openEditorModal({
-            title: `编辑${kind === 'large' ? '大总结' : '小总结'}`,
-            value: JSON.stringify(summary, null, 2),
-            onSave: async text => {
-                const parsed = JSON.parse(text);
-                data[field] = { ...summary, ...parsed, id: summary.id };
-                await persistChat();
-                scheduleLorebookSync('summary edited');
-                renderMessagePanel(index);
-                refreshWorkspaceIfOpen();
-            },
-        });
-    }
-
-    async function deleteSummary(index, kind) {
-        if (!confirm(`确定删除${kind === 'large' ? '大总结' : '小总结'}？`)) return;
-        const data = getMessage(index)?.extra?.[MODULE_NAME];
-        if (!data) return;
-        data[kind === 'large' ? 'largeSummary' : 'smallSummary'] = null;
-        await persistChat();
-        scheduleLorebookSync('summary deleted');
-        renderAllPanels();
-        refreshWorkspaceIfOpen();
-    }
-
-    function openEditorModal({ title, value, onSave }) {
-        document.getElementById('ma-editor-modal')?.remove();
-        const modal = document.createElement('div');
-        modal.id = 'ma-editor-modal';
-        modal.innerHTML = `
-            <div class="ma-editor-card">
-                <header><b>${escapeHtml(title)}</b><button type="button" data-close>×</button></header>
-                <textarea spellcheck="false"></textarea>
-                <footer><button type="button" data-cancel>取消</button><button type="button" data-save>保存</button></footer>
-            </div>`;
-        modal.querySelector('textarea').value = value;
-        const close = () => modal.remove();
-        modal.querySelector('[data-close]').addEventListener('click', close);
-        modal.querySelector('[data-cancel]').addEventListener('click', close);
-        modal.querySelector('[data-save]').addEventListener('click', async () => {
-            try {
-                await onSave(modal.querySelector('textarea').value);
-                close();
-            } catch (error) {
-                toast('error', `保存失败：${error.message}`);
-            }
-        });
-        document.body.appendChild(modal);
-    }
-
-    function openRowEditor({ title, row, onSave }) {
-        document.getElementById('ma-row-editor-modal')?.remove();
-        const source = {
-            id: String(row?.id || makeId('row')),
-            title: String(row?.title || row?.name || ''),
-            content: String(row?.content || row?.summary || ''),
-            status: String(row?.status || 'active'),
-            keywords: Array.isArray(row?.keywords) ? row.keywords.map(String) : [],
-        };
-        const modal = document.createElement('div');
-        modal.id = 'ma-row-editor-modal';
-        modal.innerHTML = `
-            <div class="ma-editor-card ma-form-editor">
-                <header><b>${escapeHtml(title)}</b><button type="button" data-close>×</button></header>
-                <div class="ma-form-body">
-                    <label><span>对象／项目</span><input type="text" name="title" value="${escapeHtml(source.title)}" placeholder="例如：林晚、宿舍楼、调查流程"></label>
-                    <label><span>当前记录</span><textarea name="content" placeholder="只填写当前有效事实"></textarea></label>
-                    <div class="ma-form-grid">
-                        <label><span>状态</span><input type="text" name="status" value="${escapeHtml(source.status)}" placeholder="active / pending / closed"></label>
-                        <label><span>关键词</span><input type="text" name="keywords" value="${escapeHtml((source.keywords || []).join('、'))}" placeholder="使用逗号或顿号分隔"></label>
-                    </div>
-                </div>
-                <footer><button type="button" data-cancel>取消</button><button type="button" class="menu_button" data-save>保存</button></footer>
-            </div>`;
-        modal.querySelector('[name="content"]').value = source.content;
-        const close = () => modal.remove();
-        modal.querySelector('[data-close]').addEventListener('click', close);
-        modal.querySelector('[data-cancel]').addEventListener('click', close);
-        modal.querySelector('[data-save]').addEventListener('click', async () => {
-            try {
-                const value = {
-                    ...source,
-                    title: modal.querySelector('[name="title"]').value.trim(),
-                    content: modal.querySelector('[name="content"]').value.trim(),
-                    status: modal.querySelector('[name="status"]').value.trim() || 'active',
-                    keywords: modal.querySelector('[name="keywords"]').value.split(/[,，、]/).map(x => x.trim()).filter(Boolean),
-                };
-                if (!value.title) throw new Error('对象／项目不能为空');
-                await onSave(value);
-                close();
-            } catch (error) {
-                toast('error', `保存失败：${error.message}`);
-            }
-        });
-        document.body.appendChild(modal);
-    }
-
-    function parseLegacySnapshot(text) {
-        const snapshot = emptySnapshot();
-        const source = String(text || '');
-        const add = (key, title, content, keywords = []) => snapshot[key].push(cleanRecord({
-            id: makeId(key), title, content, keywords, status: 'active',
-        }, key, snapshot[key].length));
-
-        const global = source.match(/\[全局\][\s\S]*?【全局卡结束】/);
-        if (global) add('foundations', '世界全局', global[0], ['全局', '世界']);
-
-        const collect = (regex, key) => {
-            let match;
-            while ((match = regex.exec(source))) {
-                const name = String(match[1] || '').trim();
-                const card = match[0];
-                const aliasLine = card.match(/别名[：:]\s*([^\n]+)/)?.[1]?.trim();
-                const aliases = aliasLine && aliasLine !== '无' ? aliasLine.split(/[,，、]/).map(x => x.trim()).filter(Boolean) : [];
-                add(key, name, card, [name, ...aliases]);
-            }
-        };
-        collect(/\[焦点：([^\]]+)\][\s\S]*?【焦点卡结束：[^\n]*】/g, 'focus');
-        collect(/\[区域：([^\]]+)\][\s\S]*?【区域卡结束：[^\n]*】/g, 'regions');
-        collect(/\[角色：([^\]]+)\][\s\S]*?【角色卡结束：[^\n]*】/g, 'characters');
-        return snapshot;
-    }
-
-    async function migrateLegacyLorebook() {
-        const wi = await worldInfoApi();
-        const name = await resolveLorebookName({ create: false });
-        if (!name) throw new Error('当前聊天没有关联世界书');
-        const data = await wi.loadWorldInfo(name);
-        if (!data?.entries) throw new Error('无法读取聊天世界书');
-        let snapshot = emptySnapshot();
-        let count = 0;
-        const add = (tableKey, title, content, keywords = []) => {
-            snapshot[tableKey].push(cleanRecord({ id: makeId(tableKey), title, content, keywords, status: 'active' }, tableKey, snapshot[tableKey].length));
-            count++;
-        };
-        for (const entry of Object.values(data.entries)) {
-            const comment = String(entry.comment || '');
-            if (comment === 'MA_Backup_LastSnapshot' && entry.content) {
-                const parsed = parseLegacySnapshot(entry.content);
-                for (const key of TABLE_KEYS) snapshot[key].push(...parsed[key]);
-                count += TABLE_KEYS.reduce((sum, key) => sum + parsed[key].length, 0);
-                entry.disable = true;
-                continue;
-            }
-            let match;
-            if (comment === 'MA_世界全局') add('foundations', '世界全局', entry.content || '', entry.key || []);
-            else if ((match = comment.match(/^MA_焦点_(.+)$/))) add('focus', match[1], entry.content || '', entry.key || []);
-            else if ((match = comment.match(/^MA_区域_(.+)$/))) add('regions', match[1], entry.content || '', entry.key || []);
-            else if ((match = comment.match(/^MA_角色_(.+)$/))) add('characters', match[1], entry.content || '', entry.key || []);
-            else continue;
-            entry.disable = true;
-        }
-        if (!count) throw new Error('未发现旧版 MA 世界书条目');
-        snapshot = normalizeSnapshot(snapshot);
-        const index = latestAssistantIndex();
-        if (index < 0) throw new Error('当前聊天没有可绑定的AI正文');
-        const artifact = ensureMessageData(getMessage(index));
-        artifact.tableSnapshot = snapshot;
-        artifact.status = 'synced';
-        artifact.error = null;
-        artifact.updatedAt = new Date().toISOString();
-        await wi.saveWorldInfo(name, data, true);
-        await persistChat();
-        scheduleLorebookSync('legacy lorebook migrated');
-        renderMessagePanel(index);
-        refreshWorkspaceIfOpen();
-        toast('success', `已迁移 ${count} 条旧版状态；旧条目已停用`);
-    }
-
-    function openLegacyImporter() {
-        openEditorModal({
-            title: '导入旧版快照',
-            value: '',
-            onSave: async text => {
-                const index = latestAssistantIndex();
-                if (index < 0) throw new Error('当前聊天没有可绑定的AI正文');
-                const snapshot = parseLegacySnapshot(text);
-                if (!TABLE_KEYS.some(key => snapshot[key].length)) throw new Error('未识别到旧版卡片');
-                const data = ensureMessageData(getMessage(index));
-                data.tableSnapshot = snapshot;
-                data.status = 'synced';
-                data.error = null;
-                data.updatedAt = new Date().toISOString();
-                await persistChat();
-                scheduleLorebookSync('legacy imported');
-                renderMessagePanel(index);
-                refreshWorkspaceIfOpen();
-                toast('success', '旧版快照已导入当前正文');
-            },
-        });
-    }
-
-    function exportMirrorData() {
-        const payload = {
-            format: 'MirrorAbyssExport',
-            version: VERSION,
-            exportedAt: new Date().toISOString(),
-            lorebookName: chatMeta().lorebookName || settings().lorebookName || '',
-            artifacts: getChat().map((message, index) => ({ index, is_user: Boolean(message?.is_user), data: message?.extra?.[MODULE_NAME] || null })).filter(item => item.data),
-        };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `Mirror-Abyss-${Date.now()}.json`;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    }
-
-    function createSettingsPanel() {
-        if (document.getElementById('ma-settings')) return;
-        const host = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
-        if (!host) {
-            clearTimeout(settingsPanelRetryTimer);
-            settingsPanelRetryTimer = setTimeout(createSettingsPanel, 700);
-            return;
-        }
-        clearTimeout(settingsPanelRetryTimer);
-        const cfg = settings();
-        const panel = document.createElement('div');
-        panel.id = 'ma-settings';
-        panel.className = 'extension_container';
-        panel.innerHTML = `
-            <div class="inline-drawer">
-                <div class="inline-drawer-toggle inline-drawer-header">
-                    <b>镜渊 Mirror Abyss</b>
-                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-                </div>
-                <div class="inline-drawer-content">
-                    <label class="checkbox_label"><input type="checkbox" id="ma-compact-enabled" ${cfg.enabled ? 'checked' : ''}>启用镜渊</label>
-                    <p class="ma-help">主要设置已移动到酒馆顶部的镜渊按钮，便于手机与桌面统一使用。</p>
-                    <button type="button" class="menu_button" id="ma-settings-control"><i class="fa-solid fa-table-list"></i> 打开镜渊控制台</button>
-                    <small>v${VERSION}</small>
-                </div>
-            </div>`;
-        host.appendChild(panel);
-        panel.querySelector('#ma-compact-enabled').addEventListener('change', event => {
-            settings().enabled = event.target.checked;
-            saveSettings();
-            updateUnifiedStatus();
-        });
-        panel.querySelector('#ma-settings-control').addEventListener('click', () => openControlCenter('overview'));
-    }
-
-    function resolveMessageIndex(data) {
-        if (Number.isInteger(data)) return data;
-        for (const key of ['messageId', 'message_id', 'mesId', 'index']) {
-            if (Number.isInteger(data?.[key])) return data[key];
-            if (/^\d+$/.test(String(data?.[key] ?? ''))) return Number(data[key]);
-        }
-        return latestAssistantIndex();
-    }
-
-    function bindSillyTavernEvents() {
-        if (sillyTavernEventsBound) return;
-        const context = ctx();
-        if (!context?.eventSource || !context?.event_types) return;
-        sillyTavernEventsBound = true;
-        const { eventSource, event_types } = context;
-        const renderSoon = () => setTimeout(renderAllPanels, 80);
-
-        eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, data => {
-            const index = resolveMessageIndex(data);
-            renderMessagePanel(index);
-        });
-        eventSource.on(event_types.MESSAGE_RECEIVED, data => {
-            const index = resolveMessageIndex(data);
-            scheduleMessagePipeline(index, { delay: 260 });
-        });
-        eventSource.on(event_types.MESSAGE_EDITED, data => {
-            const index = resolveMessageIndex(data);
-            const message = getMessage(index);
-            if (message && !message.is_user) scheduleMessagePipeline(index, { force: true, delay: 180 });
-            renderSoon();
-        });
-        eventSource.on(event_types.MESSAGE_SWIPED, () => {
-            const index = latestAssistantIndex();
-            scheduleMessagePipeline(index, { force: true, delay: 260 });
-            renderSoon();
-        });
-        eventSource.on(event_types.MESSAGE_DELETED, () => {
-            if (pruneInvalidSummaries()) persistChat();
-            renderSoon();
-            scheduleLorebookSync('message deleted');
-            refreshWorkspaceIfOpen();
-            updateUnifiedStatus();
-        });
-        eventSource.on(event_types.CHAT_CHANGED, () => {
-            closeWorkspace();
-            closeControlCenter();
-            renderSoon();
-            setTimeout(() => scheduleLorebookSync('chat changed'), 500);
-            updateUnifiedStatus();
-        });
-    }
-
-    function observeInterfaceHosts() {
-        if (interfaceObserver) return;
-        interfaceObserver = new MutationObserver(() => {
-            if (!document.getElementById('ma-top-button')) createTopBarButton();
-            if (!document.getElementById('ma-settings')) createSettingsPanel();
-        });
-        interfaceObserver.observe(document.documentElement, { childList: true, subtree: true });
-    }
-
-    function exposeEmergencyApi() {
-        window.MirrorAbyss = Object.assign(window.MirrorAbyss || {}, {
-            version: VERSION,
-            openControlCenter: tab => openControlCenter(tab || 'overview'),
-            closeControlCenter,
-            openGraph: () => openWorkspace(latestAssistantIndex()),
-        });
-    }
-
-    function removeBootNotice() {
-        document.getElementById('ma-boot-notice')?.remove();
-    }
-
-    function showBootNotice(message, tone = 'warning') {
-        if (!document.body) return;
-        let notice = document.getElementById('ma-boot-notice');
-        if (!notice) {
-            notice = document.createElement('button');
-            notice.id = 'ma-boot-notice';
-            notice.type = 'button';
-            notice.addEventListener('click', () => {
-                if (initialized) return openControlCenter('overview');
-                const ok = init();
-                if (!ok) {
-                    const detail = lastInitError?.message || message || '酒馆上下文尚未就绪';
-                    window.alert(`镜渊尚未启动：${detail}`);
-                }
-            });
-            document.body.appendChild(notice);
-        }
-        notice.dataset.tone = tone;
-        notice.innerHTML = `<b>镜渊</b><span>${escapeHtml(message || '正在等待酒馆加载')}</span>`;
-    }
-
-    function init() {
-        if (initialized) return true;
-        const context = ctx();
-        if (!context) return false;
-        try {
-            settings();
-            createTopBarButton();
-            createFloatingButton();
-            createControlCenter();
-            createWorkspace();
-            createSettingsPanel();
-            observeInterfaceHosts();
-            exposeEmergencyApi();
-            applyInterfaceVisibility();
-            installDelegatedHandlers();
-            bindSillyTavernEvents();
-            initialized = true;
-            lastInitError = null;
-            removeBootNotice();
-            setTimeout(() => { renderAllPanels(); updateUnifiedStatus(); }, 300);
-            setTimeout(() => scheduleLorebookSync('initial'), 1200);
-            console.info(`[MirrorAbyss] v${VERSION} initialized`);
-            return true;
-        } catch (error) {
-            initialized = false;
-            lastInitError = error;
-            console.error('[MirrorAbyss] initialization failed', error);
-            showBootNotice(`启动失败：${error?.message || error}`, 'danger');
-            return false;
-        }
-    }
-
-    function scheduleBoot(delay = 250) {
-        clearTimeout(bootTimer);
-        bootTimer = setTimeout(boot, delay);
-    }
-
-    function boot() {
-        bootAttempts += 1;
-        if (init()) return;
-        if (bootAttempts >= 12) {
-            showBootNotice(lastInitError ? `启动失败：${lastInitError.message || lastInitError}` : '等待酒馆完成加载', lastInitError ? 'danger' : 'warning');
-        }
-        scheduleBoot(bootAttempts < 40 ? 250 : 1000);
-    }
-
-    function startBoot() {
-        scheduleBoot(0);
-        const context = ctx();
-        const readyEvent = context?.event_types?.APP_READY;
-        if (readyEvent && context?.eventSource?.on) {
-            context.eventSource.on(readyEvent, () => scheduleBoot(0));
-        }
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startBoot, { once: true });
+    const result = parseAuditResult(raw);
+    artifact.audit = result;
+    if (result.passed) {
+      artifact.hiddenByAudit = false;
+      applyAuditVisibility(artifact.messageIndex, false);
+      markStage(artifact, "audit", "success");
     } else {
-        startBoot();
+      markStage(artifact, "audit", "blocked", result.reason);
+      if (settings.auditFailAction === "hide") {
+        artifact.hiddenByAudit = true;
+        applyAuditVisibility(artifact.messageIndex, true);
+      } else if (settings.auditFailAction === "delete") {
+        const deleted = await safeDeleteLatest(artifact.messageIndex, artifact.sourceFingerprint);
+        if (!deleted) {
+          artifact.hiddenByAudit = true;
+          applyAuditVisibility(artifact.messageIndex, true);
+          toast("warning", "\u5BA1\u6838\u672A\u901A\u8FC7\uFF0C\u4F46\u5B89\u5168\u64A4\u56DE\u6761\u4EF6\u4E0D\u6210\u7ACB\uFF1B\u5DF2\u6539\u4E3A\u9690\u85CF\u5E76\u4FDD\u7559\u8BB0\u5F55");
+        }
+      }
     }
-})();
+    const message = getMessage(artifact.messageIndex);
+    if (message && messageFingerprint(artifact.messageIndex) === artifact.sourceFingerprint) {
+      attachArtifactToMessage(message, artifact);
+      await persistChat();
+    }
+    await putArtifact(artifact);
+    return result;
+  } catch (error) {
+    markStage(artifact, "audit", "failed", toErrorMessage(error));
+    await putArtifact(artifact);
+    throw error;
+  }
+}
+
+// src/pipeline/lorebook.ts
+var worldInfoModulePromise = null;
+async function worldInfoApi() {
+  if (!worldInfoModulePromise) {
+    const moduleUrl = "/scripts/world-info.js";
+    worldInfoModulePromise = import(
+      /* @vite-ignore */
+      moduleUrl
+    );
+  }
+  return worldInfoModulePromise;
+}
+function generatedBookName() {
+  const context = getContext();
+  const display = sanitizeBookName(context.name2 || context.name1 || "Chat") || "Chat";
+  return sanitizeBookName(`MA_${display}_${hashText(currentChatKey()).slice(0, 8)}`);
+}
+async function resolveBookName(create) {
+  const settings = getSettings();
+  const meta = getChatMetadataNamespace();
+  const context = getContext();
+  let name = sanitizeBookName(settings.lorebookName || meta.lorebookName || context.chatMetadata?.world_info || "");
+  if (!name && create && settings.autoCreateLorebook) name = generatedBookName();
+  if (!name) return "";
+  if (create) {
+    const wi = await worldInfoApi();
+    let data = await wi.loadWorldInfo(name);
+    if (!data && typeof wi.createNewWorldInfo === "function") {
+      await wi.createNewWorldInfo(name, { interactive: false });
+      data = await wi.loadWorldInfo(name);
+    }
+    if (!data) {
+      data = { entries: {} };
+      await wi.saveWorldInfo(name, data, true);
+    }
+    context.chatMetadata ||= {};
+    context.chatMetadata[wi.METADATA_KEY || "world_info"] = name;
+    meta.lorebookName = name;
+    await persistMetadata();
+  }
+  return name;
+}
+function rowKeywords(row) {
+  return [...new Set([row.title, ...row.keywords].map((item) => String(item || "").trim()).filter((item) => item.length >= 2))].slice(0, 16);
+}
+function managedInfo(entry) {
+  return entry?.extensions?.mirrorAbyssV11 ?? null;
+}
+function applyEntry(entry, key, spec, wi) {
+  entry.comment = spec.comment;
+  entry.content = spec.content;
+  entry.key = spec.keywords;
+  entry.constant = Boolean(spec.constant);
+  entry.vectorized = Boolean(spec.vectorized);
+  entry.selective = !entry.constant;
+  entry.disable = false;
+  entry.addMemo = true;
+  entry.position = wi.world_info_position?.after ?? 1;
+  entry.order = spec.order;
+  entry.preventRecursion = false;
+  entry.excludeRecursion = false;
+  entry.delayUntilRecursion = 0;
+  entry.extensions ||= {};
+  entry.extensions.mirrorAbyssV11 = {
+    managed: true,
+    key,
+    kind: spec.kind,
+    version: VERSION
+  };
+}
+async function desiredSpecs(artifact) {
+  const settings = getSettings();
+  const state2 = await getChatState(artifact.chatKey);
+  const desired = /* @__PURE__ */ new Map();
+  if (artifact.snapshot) {
+    for (const tableKey of TABLE_KEYS) {
+      for (const row of artifact.snapshot[tableKey]) {
+        const constant = ["focus", "spacetime", "foundations"].includes(tableKey);
+        desired.set(`state:${tableKey}:${row.id}`, {
+          comment: `[MA11][${TABLE_LABELS[tableKey]}] ${row.title}`,
+          content: `[${TABLE_LABELS[tableKey]}\uFF1A${row.title}]
+${row.content}${row.status ? `
+\u72B6\u6001\uFF1A${row.status}` : ""}`,
+          keywords: rowKeywords(row),
+          constant,
+          vectorized: !constant && settings.vectorizeRows,
+          order: constant ? 140 : 100,
+          kind: `state:${tableKey}`
+        });
+      }
+    }
+  }
+  for (const item of state2.smallSummaries) {
+    desired.set(`small:${item.id}`, {
+      comment: `[MA11][\u5C0F\u603B\u7ED3] ${item.title}`,
+      content: item.summary,
+      keywords: [item.title, ...item.keywords].filter(Boolean).slice(0, 16),
+      constant: false,
+      vectorized: true,
+      order: 110,
+      kind: "small"
+    });
+  }
+  for (const item of state2.largeSummaries) {
+    desired.set(`large:${item.id}`, {
+      comment: `[MA11][\u5927\u603B\u7ED3] ${item.title}`,
+      content: item.summary,
+      keywords: [item.title, ...item.keywords].filter(Boolean).slice(0, 16),
+      constant: false,
+      vectorized: true,
+      order: 120,
+      kind: "large"
+    });
+  }
+  if (settings.latestContinuityConstant) {
+    const latest = state2.largeSummaries.at(-1) ?? state2.smallSummaries.at(-1);
+    if (latest) {
+      desired.set("core:latest", {
+        comment: "[MA11][\u5F53\u524D\u8FDE\u7EED\u6027\u6838\u5FC3]",
+        content: latest.summary,
+        keywords: ["\u5F53\u524D\u8FDE\u7EED\u6027", "\u5F53\u524D\u72B6\u6001"],
+        constant: true,
+        vectorized: false,
+        order: 150,
+        kind: "core"
+      });
+    }
+  }
+  return desired;
+}
+async function syncLorebook(artifact) {
+  const settings = getSettings();
+  if (!settings.lorebookSync) {
+    markStage(artifact, "sync", "skipped");
+    await putArtifact(artifact);
+    return;
+  }
+  markStage(artifact, "sync", "running");
+  await putArtifact(artifact);
+  const chatState = await getChatState(artifact.chatKey);
+  chatState.lastSyncStatus = "running";
+  chatState.lastSyncError = void 0;
+  await putChatState(chatState);
+  try {
+    const wi = await worldInfoApi();
+    const name = await resolveBookName(true);
+    if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
+    const data = await wi.loadWorldInfo(name) || { entries: {} };
+    data.entries ||= {};
+    const desired = await desiredSpecs(artifact);
+    const existing = /* @__PURE__ */ new Map();
+    for (const [uid, entry] of Object.entries(data.entries)) {
+      const info = managedInfo(entry);
+      if (info?.managed && info.key) existing.set(info.key, { uid, entry });
+    }
+    let changed = false;
+    const entryIds = [];
+    for (const [key, spec] of desired) {
+      let pair = existing.get(key);
+      let entry = pair?.entry;
+      if (!entry) {
+        entry = wi.createWorldInfoEntry(name, data);
+        if (!entry) continue;
+        pair = { uid: String(entry.uid), entry };
+        changed = true;
+      }
+      const before = JSON.stringify(entry);
+      applyEntry(entry, key, spec, wi);
+      if (before !== JSON.stringify(entry)) changed = true;
+      existing.delete(key);
+      if (Number.isFinite(Number(entry.uid))) entryIds.push(Number(entry.uid));
+    }
+    for (const { uid } of existing.values()) {
+      delete data.entries[uid];
+      changed = true;
+    }
+    if (changed) {
+      await wi.saveWorldInfo(name, data, true);
+      wi.reloadEditor?.(name);
+    }
+    artifact.lorebookEntryIds = entryIds;
+    markStage(artifact, "sync", "success");
+    chatState.lastLorebookName = name;
+    chatState.lastSyncAt = (/* @__PURE__ */ new Date()).toISOString();
+    chatState.lastSyncStatus = "success";
+    chatState.lastSyncError = void 0;
+    await putArtifact(artifact);
+    await putChatState(chatState);
+  } catch (error) {
+    const message = toErrorMessage(error);
+    markStage(artifact, "sync", "failed", message);
+    chatState.lastSyncStatus = "failed";
+    chatState.lastSyncError = message;
+    await putArtifact(artifact);
+    await putChatState(chatState);
+    throw error;
+  }
+}
+
+// src/domain/summary.ts
+function normalizeSummary(value, kind, sourceKeys) {
+  return {
+    id: makeId(kind),
+    kind,
+    title: safeText(value.title || (kind === "small" ? "\u9636\u6BB5\u5FEB\u7167" : "\u957F\u671F\u5FEB\u7167"), 240).trim(),
+    summary: safeText(value.summary || "", 3e4).trim(),
+    keywords: Array.isArray(value.keywords) ? [...new Set(value.keywords.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 24) : [],
+    sourceKeys,
+    createdAt: nowIso()
+  };
+}
+
+// src/prompts/summary.ts
+function smallSummarySystemPrompt() {
+  return "\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u5FEB\u7167\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002\u4E0D\u8981\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u4E8B\u5B9E\u3002";
+}
+function smallSummaryPrompt(transcript, snapshot) {
+  return `\u5C06\u4EE5\u4E0B\u56DE\u5408\u538B\u7F29\u6210\u201C\u5F53\u524D\u4E16\u754C\u5FEB\u7167\u5F0F\u5C0F\u603B\u7ED3\u201D\u3002\u4E0D\u662F\u6D41\u6C34\u8D26\u3002\u91CD\u70B9\u4FDD\u7559\uFF1A\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u5F53\u524D\u4EBA\u7269/\u5173\u7CFB/\u7269\u54C1/\u533A\u57DF\u72B6\u6001\u3001\u4ECD\u5728\u8FDB\u884C\u7684\u6D41\u7A0B\u3001\u672A\u51B3\u4E0E\u51B2\u7A81\u3002\u5DF2\u7ECF\u88AB\u6700\u7EC8\u7ED3\u679C\u66FF\u4EE3\u7684\u4E2D\u95F4\u52A8\u4F5C\u4E0D\u5C55\u5F00\u3002
+
+\u3010\u56DE\u5408\u3011
+${transcript}
+
+\u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
+${JSON.stringify(snapshot, null, 2)}
+
+\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
+}
+function largeSummarySystemPrompt() {
+  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u5FEB\u7167\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002";
+}
+function largeSummaryPrompt(summaries, snapshot) {
+  const source = summaries.map((item) => `\u3010${item.title}\u3011
+${item.summary}`).join("\n\n");
+  return `\u5C06\u4E0B\u5217\u5C0F\u603B\u7ED3\u518D\u6B21\u538B\u7F29\u6210\u957F\u671F\u5FEB\u7167\u3002\u4FDD\u7559\u957F\u671F\u4ECD\u6210\u7ACB\u7684\u4EBA\u7269\u3001\u5173\u7CFB\u3001\u533A\u57DF\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7ED3\u679C\u548C\u672A\u51B3\u4E8B\u9879\uFF1B\u4E0D\u8981\u590D\u8FF0\u9636\u6BB5\u6D41\u6C34\u8D26\uFF0C\u4E0D\u8981\u5F3A\u884C\u95ED\u5408\u5F00\u653E\u4E8B\u4EF6\u3002
+
+${source}
+
+\u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
+${JSON.stringify(snapshot, null, 2)}
+
+\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
+}
+
+// src/pipeline/summary.ts
+function successfulArtifacts() {
+  return getChat().filter((message) => !message?.is_user).map((message) => message?.extra?.mirrorAbyssV11).filter((artifact) => Boolean(artifact?.snapshot && artifact.stages.state.status === "success"));
+}
+function transcriptFor(artifacts) {
+  return artifacts.map((artifact) => `\u3010\u56DE\u5408 ${artifact.messageIndex + 1}\u3011
+\u73A9\u5BB6\uFF1A${artifact.playerText || "\uFF08\u7A7A\uFF09"}
+\u6B63\u6587\uFF1A${artifact.assistantText}`).join("\n\n");
+}
+function allConsumedKeys(summaries) {
+  return new Set(summaries.flatMap((item) => item.sourceKeys));
+}
+async function generateSmallSummary(artifact, force = false) {
+  const settings = getSettings();
+  const chatState = await getChatState(artifact.chatKey);
+  const consumed = allConsumedKeys(chatState.smallSummaries);
+  const pending = successfulArtifacts().filter((item) => !consumed.has(item.messageKey));
+  const threshold = Math.max(1, Number(settings.smallSummaryTurns) || 15);
+  if (!force && pending.length < threshold) return null;
+  if (!pending.length) return null;
+  const selected = force ? pending : pending.slice(0, threshold);
+  const latestSnapshot = selected.at(-1)?.snapshot;
+  const raw = await generateTask({
+    task: "smallSummary",
+    systemPrompt: smallSummarySystemPrompt(),
+    prompt: smallSummaryPrompt(transcriptFor(selected), latestSnapshot)
+  });
+  const summary = normalizeSummary(parseJsonObject(raw), "small", selected.map((item) => item.messageKey));
+  chatState.smallSummaries.push(summary);
+  await putChatState(chatState);
+  return summary;
+}
+async function generateLargeSummary(artifact, force = false) {
+  const settings = getSettings();
+  const chatState = await getChatState(artifact.chatKey);
+  const consumed = allConsumedKeys(chatState.largeSummaries);
+  const pending = chatState.smallSummaries.filter((item) => !consumed.has(item.id));
+  const threshold = Math.max(1, Number(settings.largeSummaryCount) || 6);
+  if (!force && pending.length < threshold) return null;
+  if (!pending.length) return null;
+  const selected = force ? pending : pending.slice(0, threshold);
+  const snapshot = artifact.snapshot;
+  if (!snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u7684\u72B6\u6001\u8868");
+  const raw = await generateTask({
+    task: "largeSummary",
+    systemPrompt: largeSummarySystemPrompt(),
+    prompt: largeSummaryPrompt(selected, snapshot)
+  });
+  const summary = normalizeSummary(parseJsonObject(raw), "large", selected.map((item) => item.id));
+  chatState.largeSummaries.push(summary);
+  await putChatState(chatState);
+  return summary;
+}
+async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = false) {
+  const settings = getSettings();
+  markStage(artifact, "summary", "running");
+  await putArtifact(artifact);
+  try {
+    if (settings.autoSmallSummary || forceSmall) await generateSmallSummary(artifact, forceSmall);
+    if (settings.autoLargeSummary || forceLarge) await generateLargeSummary(artifact, forceLarge);
+    markStage(artifact, "summary", "success");
+    await putArtifact(artifact);
+  } catch (error) {
+    markStage(artifact, "summary", "failed", toErrorMessage(error));
+    await putArtifact(artifact);
+    throw error;
+  }
+}
+
+// src/domain/snapshot.ts
+function emptySnapshot() {
+  return Object.fromEntries(TABLE_KEYS.map((key) => [key, []]));
+}
+function normalizeKeywords(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 16);
+}
+function normalizeRow(value, tableKey, index, previous) {
+  const source = value && typeof value === "object" ? value : {};
+  const now = nowIso();
+  const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
+  return {
+    id,
+    title: safeText(source.title || source.name || previous?.title || `${TABLE_LABELS[tableKey]} ${index + 1}`, 240).trim(),
+    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
+    keywords: normalizeKeywords(source.keywords ?? previous?.keywords ?? []),
+    status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
+    source: source.source === "manual" || previous?.source === "manual" ? "manual" : "auto",
+    updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now
+  };
+}
+function normalizeSnapshot(value, previousSnapshot2) {
+  const source = value && typeof value === "object" ? value : {};
+  const output = emptySnapshot();
+  for (const key of TABLE_KEYS) {
+    const rows = Array.isArray(source[key]) ? source[key] : [];
+    const previousMap = new Map((previousSnapshot2?.[key] ?? []).map((row) => [row.id, row]));
+    const used = /* @__PURE__ */ new Set();
+    output[key] = rows.map((row, index) => {
+      const rawId = row && typeof row === "object" ? safeText(row.id, 160) : "";
+      const normalized = normalizeRow(row, key, index, rawId ? previousMap.get(rawId) : void 0);
+      if (used.has(normalized.id)) normalized.id = makeId(key);
+      used.add(normalized.id);
+      return normalized;
+    });
+  }
+  return output;
+}
+function snapshotRowCount(snapshot) {
+  if (!snapshot) return 0;
+  return TABLE_KEYS.reduce((sum, key) => sum + (snapshot[key]?.length ?? 0), 0);
+}
+function upsertManualRow(snapshot, tableKey, row) {
+  const next = normalizeSnapshot(snapshot, snapshot);
+  const index = next[tableKey].findIndex((item) => item.id === row.id);
+  const normalized = normalizeRow({ ...row, source: "manual", updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0);
+  if (index >= 0) next[tableKey][index] = normalized;
+  else next[tableKey].push(normalized);
+  return next;
+}
+function deleteRow(snapshot, tableKey, rowId) {
+  const next = normalizeSnapshot(snapshot, snapshot);
+  next[tableKey] = next[tableKey].filter((row) => row.id !== rowId);
+  return next;
+}
+function stateSchemaDescription() {
+  return JSON.stringify({
+    focus: [{ id: "stable-id", title: "\u5BF9\u8C61", content: "\u5F53\u524D\u4E8B\u5B9E", keywords: ["\u5173\u952E\u8BCD"], status: "active" }],
+    spacetime: [],
+    characters: [],
+    relationships: [],
+    items: [],
+    events: [],
+    regions: [],
+    foundations: []
+  }, null, 2);
+}
+
+// src/prompts/state.ts
+function stateSystemPrompt() {
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u72B6\u6001\u7EF4\u62A4\u5668\u3002\u4F60\u53EA\u7EF4\u62A4\u5F53\u524D\u4E16\u754C\u72B6\u6001\u5FEB\u7167\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+
+\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u88AB JSON.parse \u89E3\u6790\u7684\u5B8C\u6574JSON\u5BF9\u8C61\uFF0C\u4E0D\u8981\u8F93\u51FAMarkdown\u3001\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\u3002
+\u5FC5\u987B\u5305\u542B\u516B\u4E2A\u6570\u7EC4\uFF1Afocus\u3001spacetime\u3001characters\u3001relationships\u3001items\u3001events\u3001regions\u3001foundations\u3002
+\u6BCF\u884C\u53EA\u5141\u8BB8\u5B57\u6BB5\uFF1Aid\u3001title\u3001content\u3001keywords\u3001status\u3002
+
+\u7EF4\u62A4\u89C4\u5219\uFF1A
+1. \u4FDD\u7559\u672A\u53D7\u672C\u8F6E\u5F71\u54CD\u3001\u4ECD\u6210\u7ACB\u7684\u72B6\u6001\u3002
+2. \u53EA\u6709\u672C\u8F6E\u660E\u786E\u6539\u53D8\u7684\u72B6\u6001\u624D\u66F4\u65B0\u3002
+3. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u6D41\u6C34\u8D26\u3002
+4. \u672A\u786E\u8BA4\u3001\u51B2\u7A81\u548C\u8FDB\u884C\u4E2D\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
+5. \u5C3D\u91CF\u4FDD\u7559\u4E0A\u4E00\u4EFD\u5FEB\u7167\u7684\u7A33\u5B9Aid\uFF1B\u65B0\u589E\u5BF9\u8C61\u624D\u521B\u5EFA\u65B0id\u3002
+6. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u548C\u5BF9\u767D\u53EF\u4F5C\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF0C\u4F46\u73A9\u5BB6\u9884\u8BBE\u7684\u5916\u90E8\u7ED3\u679C\u4E0D\u80FD\u5355\u72EC\u5F53\u6210\u5DF2\u786E\u8BA4\u7ED3\u679C\uFF1B\u5916\u90E8\u7ED3\u679C\u4EE5AI\u6B63\u6587\u4E0E\u5DF2\u6709\u72B6\u6001\u4E2D\u7684\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u4E3A\u51C6\u3002
+7. \u73A9\u5BB6\u624B\u5DE5\u52A0\u5165\u7684\u72B6\u6001\u4E0E\u5176\u4ED6\u72B6\u6001\u540C\u7B49\u53C2\u4E0E\u7EF4\u62A4\uFF0C\u4E0D\u5F97\u65E0\u6545\u5220\u9664\u3002
+
+\u7ED3\u6784\u793A\u4F8B\uFF1A
+${stateSchemaDescription()}`;
+}
+function stateUserPrompt(previous, playerText, assistantText, repair = false) {
+  return `\u3010\u4E0A\u4E00\u4EFD\u72B6\u6001\u8868\u3011
+${JSON.stringify(previous, null, 2)}
+
+\u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
+${playerText || "\uFF08\u7A7A\uFF09"}
+
+\u3010AI\u672C\u8F6E\u6B63\u6587\u3011
+${assistantText}
+
+\u8F93\u51FA\u66F4\u65B0\u540E\u7684\u5B8C\u6574\u72B6\u6001\u5FEB\u7167\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
+}
+
+// src/pipeline/state.ts
+function previousSnapshot(beforeIndex) {
+  const chat = getChat();
+  for (let i = beforeIndex - 1; i >= 0; i -= 1) {
+    if (chat[i]?.is_user) continue;
+    const snapshot = chat[i]?.extra?.mirrorAbyssV11?.snapshot;
+    if (snapshot) return normalizeSnapshot(snapshot, snapshot);
+    const legacy = chat[i]?.extra?.mirrorAbyss?.tableSnapshot;
+    if (legacy) return normalizeSnapshot(legacy, legacy);
+  }
+  return emptySnapshot();
+}
+function restoreManualRows(previous, next) {
+  for (const key of TABLE_KEYS) {
+    const existing = new Set(next[key].map((row) => row.id));
+    for (const row of previous[key]) {
+      if (row.source === "manual" && !existing.has(row.id)) next[key].push({ ...row });
+    }
+  }
+  return next;
+}
+async function runStateExtraction(artifact, force = false) {
+  if (!force && artifact.stages.state.status === "success" && artifact.snapshot) return artifact.snapshot;
+  const settings = getSettings();
+  const previous = previousSnapshot(artifact.messageIndex);
+  markStage(artifact, "state", "running");
+  await putArtifact(artifact);
+  try {
+    let raw = await generateTask({
+      task: "state",
+      systemPrompt: stateSystemPrompt(),
+      prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText)
+    });
+    let parsed;
+    try {
+      parsed = parseJsonObject(raw);
+    } catch (firstError) {
+      if (!settings.repairInvalidJsonOnce) throw firstError;
+      raw = await generateTask({
+        task: "state",
+        systemPrompt: stateSystemPrompt(),
+        prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, true)
+      });
+      parsed = parseJsonObject(raw);
+    }
+    const normalized = restoreManualRows(previous, normalizeSnapshot(parsed, previous));
+    artifact.snapshot = normalized;
+    markStage(artifact, "state", "success");
+    await putArtifact(artifact);
+    return normalized;
+  } catch (error) {
+    markStage(artifact, "state", "failed", toErrorMessage(error));
+    await putArtifact(artifact);
+    throw error;
+  }
+}
+
+// src/pipeline/task-queue.ts
+var TaskQueue = class {
+  tail = Promise.resolve();
+  inFlight = /* @__PURE__ */ new Map();
+  tasks = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  notify() {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn("[MirrorAbyss] task listener failed", error);
+      }
+    }
+  }
+  list() {
+    return [...this.tasks.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  has(key) {
+    return this.inFlight.has(key);
+  }
+  run(key, label, kind, work) {
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+    const task = {
+      id: makeId("task"),
+      key,
+      label,
+      kind,
+      state: "queued",
+      createdAt: nowIso()
+    };
+    this.tasks.set(task.id, task);
+    this.notify();
+    const execute = async () => {
+      task.state = "running";
+      task.startedAt = nowIso();
+      this.notify();
+      try {
+        const result = await work();
+        task.state = "success";
+        return result;
+      } catch (error) {
+        task.state = "failed";
+        task.error = toErrorMessage(error);
+        throw error;
+      } finally {
+        task.finishedAt = nowIso();
+        this.inFlight.delete(key);
+        try {
+          await appendTaskLog(currentChatKey(), { ...task });
+        } catch (error) {
+          console.warn("[MirrorAbyss] task log save failed", error);
+        }
+        this.notify();
+      }
+    };
+    const promise = this.tail.then(execute, execute);
+    this.tail = promise.catch(() => void 0);
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+};
+var taskQueue = new TaskQueue();
+
+// src/pipeline/pipeline.ts
+var listeners = /* @__PURE__ */ new Set();
+function subscribePipeline(listener) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+function notify(index, artifact) {
+  for (const listener of listeners) {
+    try {
+      listener(index, artifact);
+    } catch (error) {
+      console.warn("[MirrorAbyss] pipeline listener failed", error);
+    }
+  }
+}
+function resolveMessageIndex(payload) {
+  if (Number.isInteger(payload)) return Number(payload);
+  const candidates = [payload?.messageId, payload?.message_id, payload?.mesId, payload?.mesid, payload?.index];
+  for (const candidate of candidates) if (Number.isInteger(Number(candidate))) return Number(candidate);
+  const chat = getChat();
+  return chat.length ? chat.length - 1 : -1;
+}
+async function saveArtifactToMessage(index, artifact) {
+  const message = getMessage(index);
+  if (!message || message.is_user) return;
+  if (messageFingerprint(index) !== artifact.sourceFingerprint) return;
+  attachArtifactToMessage(message, artifact);
+  await putArtifact(artifact);
+  await persistChat();
+  notify(index, artifact);
+}
+async function loadOrCreateArtifact(index, force) {
+  const message = getMessage(index);
+  if (!message || message.is_user || !String(message.mes || "").trim()) throw new Error("\u76EE\u6807\u4E0D\u662F\u6709\u6548AI\u6B63\u6587");
+  const fingerprint = messageFingerprint(index);
+  let artifact = getAttachedArtifact(message);
+  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint || force) {
+    artifact = createArtifact(message, index);
+    attachArtifactToMessage(message, artifact);
+    await persistChat();
+    await putArtifact(artifact);
+  }
+  return artifact;
+}
+async function processMessage(index, force = false) {
+  const settings = getSettings();
+  if (!settings.enabled) return null;
+  const message = getMessage(index);
+  if (!message || message.is_user || !String(message.mes || "").trim()) return null;
+  const identity = messageIdentity(index);
+  const key = `${PIPELINE_VERSION}:${currentChatKey()}:${identity}`;
+  return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async () => {
+    const artifact = await loadOrCreateArtifact(index, force);
+    notify(index, artifact);
+    try {
+      const audit = await runAudit(artifact, force);
+      await saveArtifactToMessage(index, artifact);
+      if (!audit.passed) {
+        markStage(artifact, "state", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
+        markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
+        markStage(artifact, "sync", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
+        await saveArtifactToMessage(index, artifact);
+        return artifact;
+      }
+      if (settings.autoState || force) {
+        await runStateExtraction(artifact, force);
+        await saveArtifactToMessage(index, artifact);
+      } else {
+        markStage(artifact, "state", "skipped");
+      }
+      if (artifact.snapshot) {
+        const chatState = await getChatState(artifact.chatKey);
+        if (!chatState.processedMessageKeys.includes(artifact.messageKey)) chatState.processedMessageKeys.push(artifact.messageKey);
+        chatState.latestSnapshotMessageKey = artifact.messageKey;
+        chatState.updatedAt = nowIso();
+        await putChatState(chatState);
+        await maybeRunSummaries(artifact);
+        await saveArtifactToMessage(index, artifact);
+        await syncLorebook(artifact);
+        await saveArtifactToMessage(index, artifact);
+      }
+      return artifact;
+    } catch (error) {
+      const messageText = toErrorMessage(error);
+      console.error("[MirrorAbyss] pipeline failed", error);
+      toast("error", `\u5904\u7406\u5931\u8D25\uFF1A${messageText}`);
+      await saveArtifactToMessage(index, artifact);
+      return artifact;
+    }
+  });
+}
+function scheduleMessage(payload, force = false, delay = 180) {
+  const index = resolveMessageIndex(payload);
+  if (index < 0) return;
+  window.setTimeout(() => void processMessage(index, force), delay);
+}
+async function retryStage(index, stage) {
+  const artifact = await loadOrCreateArtifact(index, false);
+  const key = `${PIPELINE_VERSION}:retry:${stage}:${artifact.chatKey}:${artifact.messageKey}`;
+  return taskQueue.run(key, `\u91CD\u8BD5${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async () => {
+    if (stage === "audit") await runAudit(artifact, true);
+    if (stage === "state") await runStateExtraction(artifact, true);
+    if (stage === "summary") await maybeRunSummaries(artifact, true, true);
+    if (stage === "sync") await syncLorebook(artifact);
+    await saveArtifactToMessage(index, artifact);
+    return artifact;
+  });
+}
+async function forceSummary(index, kind) {
+  const artifact = await loadOrCreateArtifact(index, false);
+  const key = `${PIPELINE_VERSION}:force-summary:${kind}:${artifact.chatKey}:${artifact.messageKey}`;
+  return taskQueue.run(key, `\u7ACB\u5373${kind === "small" ? "\u5C0F" : "\u5927"}\u603B\u7ED3`, kind === "small" ? "smallSummary" : "largeSummary", async () => {
+    await maybeRunSummaries(artifact, kind === "small", kind === "large");
+    await saveArtifactToMessage(index, artifact);
+    return artifact;
+  });
+}
+async function removeMessageArtifact(_payload) {
+  const chatKey = currentChatKey();
+  const chatState = await getChatState(chatKey);
+  const liveKeys = new Set(
+    getChat().map((message) => getAttachedArtifact(message)?.messageKey).filter((key) => Boolean(key))
+  );
+  const staleKeys = chatState.processedMessageKeys.filter((key) => !liveKeys.has(key));
+  await Promise.all(staleKeys.map((key) => removeArtifact(chatKey, key)));
+  chatState.processedMessageKeys = chatState.processedMessageKeys.filter((key) => liveKeys.has(key));
+  if (chatState.latestSnapshotMessageKey && !liveKeys.has(chatState.latestSnapshotMessageKey)) {
+    chatState.latestSnapshotMessageKey = [...liveKeys].at(-1);
+  }
+  await putChatState(chatState);
+}
+function getArtifactAt(index) {
+  return getAttachedArtifact(getMessage(index));
+}
+function latestArtifact() {
+  const chat = getChat();
+  for (let i = chat.length - 1; i >= 0; i -= 1) {
+    const artifact = getAttachedArtifact(chat[i]);
+    if (artifact) return { index: i, artifact };
+  }
+  return null;
+}
+function installPipelineEventHandlers() {
+  const context = globalThis.SillyTavern.getContext();
+  const { eventSource, event_types } = context;
+  const onReceived = (payload) => scheduleMessage(payload, false);
+  const onEdited = (payload) => scheduleMessage(payload, true, 300);
+  const onSwiped = (payload) => scheduleMessage(payload, true, 300);
+  const onDeleted = (payload) => void removeMessageArtifact(payload);
+  eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
+  eventSource.on(event_types.MESSAGE_EDITED, onEdited);
+  eventSource.on(event_types.MESSAGE_SWIPED, onSwiped);
+  eventSource.on(event_types.MESSAGE_DELETED, onDeleted);
+  return () => {
+    eventSource.removeListener?.(event_types.MESSAGE_RECEIVED, onReceived);
+    eventSource.removeListener?.(event_types.MESSAGE_EDITED, onEdited);
+    eventSource.removeListener?.(event_types.MESSAGE_SWIPED, onSwiped);
+    eventSource.removeListener?.(event_types.MESSAGE_DELETED, onDeleted);
+  };
+}
+
+// src/ui/diagnostics.ts
+async function runDiagnostics() {
+  const checks = [];
+  const context = tryGetContext();
+  checks.push({
+    id: "context",
+    label: "SillyTavern\u4E0A\u4E0B\u6587",
+    status: context ? "ok" : "error",
+    detail: context ? "\u5DF2\u8FDE\u63A5" : "\u4E0D\u53EF\u7528"
+  });
+  checks.push({
+    id: "generateRaw",
+    label: "\u540E\u53F0\u6A21\u578B\u8C03\u7528",
+    status: typeof context?.generateRaw === "function" ? "ok" : "error",
+    detail: typeof context?.generateRaw === "function" ? "generateRaw\u53EF\u7528" : "\u5F53\u524D\u7248\u672C\u672A\u63D0\u4F9BgenerateRaw"
+  });
+  checks.push({
+    id: "settingsPanel",
+    label: "\u6269\u5C55\u8BBE\u7F6E\u5165\u53E3",
+    status: document.querySelector("#ma11-settings-root") ? "ok" : "warn",
+    detail: document.querySelector("#ma11-settings-root") ? "\u5DF2\u6302\u8F7D" : "\u5C1A\u672A\u6302\u8F7D"
+  });
+  checks.push({
+    id: "storage",
+    label: "\u6D4F\u89C8\u5668\u6570\u636E\u5B58\u50A8",
+    status: globalThis.SillyTavern?.libs?.localforage ? "ok" : "warn",
+    detail: globalThis.SillyTavern?.libs?.localforage ? "\u4F7F\u7528localforage" : "\u4F7F\u7528localStorage\u964D\u7EA7"
+  });
+  const settings = context ? getSettings() : null;
+  checks.push({
+    id: "audit",
+    label: "\u89C4\u5219\u5BA1\u6838\u914D\u7F6E",
+    status: settings?.auditEnabled && !settings.auditPrompt.trim() ? "error" : "ok",
+    detail: settings?.auditEnabled ? settings.auditPrompt.trim() ? "\u5DF2\u542F\u7528\u5E76\u586B\u5199\u89C4\u5219" : "\u5DF2\u542F\u7528\u4F46\u89C4\u5219\u4E3A\u7A7A" : "\u672A\u542F\u7528"
+  });
+  if (context) {
+    const state2 = await getChatState(currentChatKey());
+    checks.push({
+      id: "sync",
+      label: "\u6700\u8FD1\u4E16\u754C\u4E66\u540C\u6B65",
+      status: state2.lastSyncStatus === "failed" ? "error" : state2.lastSyncStatus === "success" ? "ok" : "warn",
+      detail: state2.lastSyncError || state2.lastSyncAt || "\u5C1A\u672A\u540C\u6B65"
+    });
+  }
+  return checks;
+}
+async function diagnosticReport() {
+  const context = tryGetContext();
+  const chatKey = context ? currentChatKey() : "unavailable";
+  return {
+    version: VERSION,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    userAgent: navigator.userAgent,
+    location: location.origin,
+    chatKey,
+    checks: await runDiagnostics(),
+    settings: context ? { ...getSettings(), auditPrompt: getSettings().auditPrompt ? "[\u5DF2\u586B\u5199]" : "" } : null,
+    chatState: context ? await getChatState(chatKey) : null,
+    taskLog: context ? await getTaskLog(chatKey) : []
+  };
+}
+
+// src/ui/workspace.ts
+var selectedMessageIndex = null;
+var rendering = false;
+var queueUnsubscribe = null;
+function root() {
+  let element = document.querySelector("#ma11-workspace");
+  if (element) return element;
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="ma11-workspace" class="ma11-workspace" hidden>
+      <div class="ma11-shell" role="dialog" aria-modal="true" aria-label="\u955C\u6E0A\u63A7\u5236\u4E2D\u5FC3">
+        <header class="ma11-header">
+          <div>
+            <div class="ma11-brand">\u955C\u6E0A <span>${VERSION}</span></div>
+            <div class="ma11-subtitle">\u7ED3\u6784\u5316\u72B6\u6001\u3001\u5206\u5C42\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
+          </div>
+          <button class="ma11-icon-button" data-ma11-action="close" aria-label="\u5173\u95ED">\xD7</button>
+        </header>
+        <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">
+          ${[
+    ["overview", "\u603B\u89C8"],
+    ["tables", "\u72B6\u6001\u8868"],
+    ["summaries", "\u603B\u7ED3"],
+    ["audit", "\u89C4\u5219\u5BA1\u6838"],
+    ["sync", "\u4E16\u754C\u4E66"],
+    ["settings", "\u6A21\u578B\u4E0E\u8BBE\u7F6E"],
+    ["diagnostics", "\u8BCA\u65AD"]
+  ].map(([key, label]) => `<button data-ma11-tab="${key}">${label}</button>`).join("")}
+        </nav>
+        <main id="ma11-workspace-content" class="ma11-content"></main>
+      </div>
+      <div class="ma11-editor-backdrop" hidden>
+        <form class="ma11-editor" id="ma11-row-editor">
+          <header><b>\u7F16\u8F91\u72B6\u6001\u884C</b><button type="button" data-ma11-action="close-editor">\xD7</button></header>
+          <input type="hidden" name="tableKey" />
+          <input type="hidden" name="rowId" />
+          <label>\u5BF9\u8C61<input name="title" required maxlength="240" /></label>
+          <label>\u5F53\u524D\u4E8B\u5B9E<textarea name="content" rows="6" maxlength="12000"></textarea></label>
+          <label>\u72B6\u6001<input name="status" maxlength="120" /></label>
+          <label>\u5173\u952E\u8BCD\uFF08\u9017\u53F7\u5206\u9694\uFF09<input name="keywords" maxlength="800" /></label>
+          <footer><button type="button" data-ma11-action="close-editor">\u53D6\u6D88</button><button type="submit">\u4FDD\u5B58</button></footer>
+        </form>
+      </div>
+    </div>`);
+  element = document.querySelector("#ma11-workspace");
+  bindWorkspace(element);
+  queueUnsubscribe ||= taskQueue.subscribe(() => void renderWorkspace());
+  return element;
+}
+function currentArtifact() {
+  if (selectedMessageIndex !== null) {
+    const artifact = getArtifactAt(selectedMessageIndex);
+    if (artifact) return { index: selectedMessageIndex, artifact };
+  }
+  return latestArtifact();
+}
+function statusText(value) {
+  const map = {
+    idle: "\u7B49\u5F85",
+    queued: "\u6392\u961F",
+    running: "\u5904\u7406\u4E2D",
+    success: "\u6210\u529F",
+    failed: "\u5931\u8D25",
+    skipped: "\u8DF3\u8FC7",
+    blocked: "\u963B\u65AD"
+  };
+  return map[value] || value;
+}
+function statusClass(value) {
+  if (value === "success" || value === "skipped") return "success";
+  if (value === "failed" || value === "blocked") return "danger";
+  if (value === "running" || value === "queued") return "working";
+  return "neutral";
+}
+function stageCards(artifact) {
+  const stages = artifact?.stages;
+  const rows = [
+    ["audit", "\u89C4\u5219\u5BA1\u6838"],
+    ["state", "\u72B6\u6001\u63D0\u53D6"],
+    ["summary", "\u5206\u5C42\u603B\u7ED3"],
+    ["sync", "\u4E16\u754C\u4E66\u540C\u6B65"]
+  ];
+  return `<div class="ma11-stage-grid">${rows.map(([key, label]) => {
+    const stage = stages?.[key] ?? { status: "idle", attempts: 0 };
+    return `<article class="ma11-stage-card ${statusClass(stage.status)}">
+      <div><b>${label}</b><span>${statusText(stage.status)}</span></div>
+      <small>\u5C1D\u8BD5 ${stage.attempts || 0} \u6B21</small>
+      ${stage.error ? `<p>${escapeHtml(stage.error)}</p>` : ""}
+    </article>`;
+  }).join("")}</div>`;
+}
+function overviewHtml(artifactInfo) {
+  const artifact = artifactInfo?.artifact;
+  const rows = snapshotRowCount(artifact?.snapshot);
+  const jobs = taskQueue.list().slice(0, 5);
+  return `
+    <section class="ma11-hero">
+      <div>
+        <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
+        <p>${artifact ? `\u72B6\u6001\u8868 ${rows} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
+      </div>
+      <div class="ma11-actions">
+        <button data-ma11-action="process-latest">\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
+        <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}>\u67E5\u770B\u72B6\u6001\u8868</button>
+      </div>
+    </section>
+    ${stageCards(artifact)}
+    <section class="ma11-card">
+      <header><b>\u4EFB\u52A1\u961F\u5217</b><span>${jobs.length ? `${jobs.length} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2"}</span></header>
+      <div class="ma11-task-list">
+        ${jobs.length ? jobs.map((task) => `<div><span>${escapeHtml(task.label)}</span><em class="${task.state}">${escapeHtml(task.state)}</em></div>`).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'}
+      </div>
+    </section>
+    <section class="ma11-card ma11-note">
+      <b>\u672C\u7248\u67B6\u6784\u539F\u5219</b>
+      <p>\u6BCF\u6761AI\u6B63\u6587\u53EA\u521B\u5EFA\u4E00\u4E2A\u552F\u4E00\u4EFB\u52A1\uFF1B\u5BA1\u6838\u3001\u8868\u683C\u3001\u603B\u7ED3\u3001\u540C\u6B65\u5206\u9636\u6BB5\u4FDD\u5B58\u3002\u5355\u4E00\u9636\u6BB5\u5931\u8D25\u65F6\u53EA\u91CD\u8BD5\u8BE5\u9636\u6BB5\uFF0C\u4E0D\u91CD\u65B0\u8C03\u7528\u6574\u6761\u7BA1\u7EBF\u3002</p>
+    </section>`;
+}
+function tableHtml(artifactInfo) {
+  const settings = getSettings();
+  const artifact = artifactInfo?.artifact;
+  const active = settings.ui.activeTable;
+  const rows = artifact?.snapshot?.[active] ?? [];
+  return `
+    <section class="ma11-toolbar">
+      <div class="ma11-table-tabs">${TABLE_KEYS.map((key) => `<button class="${key === active ? "active" : ""}" data-ma11-table="${key}">${TABLE_LABELS[key]} <span>${artifact?.snapshot?.[key]?.length ?? 0}</span></button>`).join("")}</div>
+      <div class="ma11-actions"><button data-ma11-action="add-row" ${artifact?.snapshot ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="retry-state" ${artifactInfo ? "" : "disabled"}>\u91CD\u65B0\u6574\u7406</button></div>
+    </section>
+    <section class="ma11-table-wrap">
+      ${artifact?.snapshot ? `<table class="ma11-table">
+        <thead><tr><th>\u5E8F\u53F7</th><th>\u5BF9\u8C61</th><th>\u5F53\u524D\u4E8B\u5B9E</th><th>\u72B6\u6001</th><th>\u5173\u952E\u8BCD</th><th>\u6765\u6E90</th><th>\u64CD\u4F5C</th></tr></thead>
+        <tbody>${rows.length ? rows.map((row, index) => `<tr>
+          <td>${index + 1}</td>
+          <td><b>${escapeHtml(row.title)}</b></td>
+          <td class="ma11-cell-content">${escapeHtml(row.content)}</td>
+          <td>${escapeHtml(row.status)}</td>
+          <td>${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</td>
+          <td><span class="ma11-source ${row.source}">${row.source === "manual" ? "\u624B\u52A8" : "\u81EA\u52A8"}</span></td>
+          <td><button data-ma11-edit-row="${escapeHtml(row.id)}">\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}">\u5220\u9664</button></td>
+        </tr>`).join("") : `<tr><td colspan="7" class="ma11-empty">\u8BE5\u5206\u7C7B\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
+      </table>` : '<div class="ma11-empty-panel">\u5C1A\u65E0\u72B6\u6001\u8868\u3002\u70B9\u51FB\u201C\u6574\u7406\u6700\u65B0\u6B63\u6587\u201D\u3002</div>'}
+    </section>`;
+}
+async function summariesHtml() {
+  const info = currentArtifact();
+  const state2 = info ? await getChatState(info.artifact.chatKey) : null;
+  const small = state2?.smallSummaries ?? [];
+  const large = state2?.largeSummaries ?? [];
+  return `
+    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u4FDD\u7559\u9636\u6BB5\u72B6\u6001\uFF0C\u5927\u603B\u7ED3\u538B\u7F29\u957F\u671F\u8FDE\u7EED\u6027\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
+    <div class="ma11-summary-columns">
+      <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5C0F\u603B\u7ED3\u3002</p>'}</section>
+      <section class="ma11-card"><header><b>\u5927\u603B\u7ED3</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5927\u603B\u7ED3\u3002</p>'}</section>
+    </div>`;
+}
+function auditHtml() {
+  const settings = getSettings();
+  return `
+    <section class="ma11-card ma11-form-card">
+      <header><b>\u89C4\u5219\u5BA1\u6838</b><span>\u5728\u72B6\u6001\u63D0\u53D6\u524D\u8FD0\u884C</span></header>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="auditEnabled" ${settings.auditEnabled ? "checked" : ""}/><span>\u542F\u7528\u89C4\u5219\u5BA1\u6838</span></label>
+      <label>\u5BA1\u6838\u5931\u8D25\u5904\u7406<select data-ma11-setting="auditFailAction">
+        <option value="mark" ${settings.auditFailAction === "mark" ? "selected" : ""}>\u4FDD\u7559\u5E76\u6807\u7EA2</option>
+        <option value="hide" ${settings.auditFailAction === "hide" ? "selected" : ""}>\u9690\u85CF\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u5904\u7406</option>
+        <option value="delete" ${settings.auditFailAction === "delete" ? "selected" : ""}>\u5B89\u5168\u64A4\u56DE\u6700\u65B0AI\u6D88\u606F</option>
+      </select></label>
+      <label>\u5BA1\u6838\u63D0\u793A\u8BCD<textarea rows="14" data-ma11-setting="auditPrompt" placeholder="\u586B\u5199\u5FC5\u987B\u68C0\u67E5\u7684\u786C\u89C4\u5219\u3002">${escapeHtml(settings.auditPrompt)}</textarea></label>
+      <p class="ma11-help">\u81EA\u52A8\u64A4\u56DE\u53EA\u5728\u76EE\u6807\u4ECD\u662F\u5F53\u524D\u804A\u5929\u6700\u65B0AI\u6D88\u606F\u3001\u4E14\u6B63\u6587\u6307\u7EB9\u672A\u53D8\u5316\u65F6\u6267\u884C\uFF1B\u6761\u4EF6\u4E0D\u6210\u7ACB\u4F1A\u964D\u7EA7\u4E3A\u9690\u85CF\u3002</p>
+    </section>`;
+}
+async function syncHtml() {
+  const info = currentArtifact();
+  const state2 = info ? await getChatState(info.artifact.chatKey) : null;
+  const settings = getSettings();
+  return `
+    <section class="ma11-card ma11-form-card">
+      <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(state2?.lastSyncStatus || "idle")}">${statusText(state2?.lastSyncStatus || "idle")}</span></header>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
+      <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="vectorizeRows" ${settings.vectorizeRows ? "checked" : ""}/><span>\u4EBA\u7269\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7B49\u72B6\u6001\u884C\u542F\u7528\u5411\u91CF</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u4FDD\u7559\u201C\u5F53\u524D\u8FDE\u7EED\u6027\u6838\u5FC3\u201D\u5E38\u9A7B\u6761\u76EE</span></label>
+      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>\u7ACB\u5373\u540C\u6B65</button></div>
+      ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
+      <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
+    </section>`;
+}
+function connectionBlock(task, label) {
+  const value = getSettings().connections[task];
+  return `<div class="ma11-connection-row" data-ma11-connection="${task}">
+    <b>${label}</b>
+    <select data-ma11-connection-mode="${task}"><option value="current" ${value.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option><option value="profile" ${value.mode === "profile" ? "selected" : ""}>Connection Profile</option></select>
+    <input data-ma11-connection-profile="${task}" value="${escapeHtml(value.profile)}" placeholder="\u8FDE\u63A5\u914D\u7F6E\u540D\u79F0" ${value.mode === "profile" ? "" : "disabled"} />
+    <button data-ma11-test="${task}">\u6D4B\u8BD5</button>
+  </div>`;
+}
+function settingsHtml() {
+  const settings = getSettings();
+  return `
+    <section class="ma11-card ma11-form-card">
+      <header><b>\u6A21\u578B\u8FDE\u63A5</b><span>\u5BC6\u94A5\u7531SillyTavern\u7BA1\u7406\uFF0C\u955C\u6E0A\u4E0D\u4FDD\u5B58API Key</span></header>
+      ${connectionBlock("audit", "\u89C4\u5219\u5BA1\u6838")}
+      ${connectionBlock("state", "\u72B6\u6001\u8868")}
+      ${connectionBlock("smallSummary", "\u5C0F\u603B\u7ED3")}
+      ${connectionBlock("largeSummary", "\u5927\u603B\u7ED3")}
+    </section>
+    <section class="ma11-card ma11-form-card">
+      <header><b>\u81EA\u52A8\u5316</b></header>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span>\u542F\u7528\u955C\u6E0A</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span>\u6BCF\u6761\u65B0AI\u6B63\u6587\u81EA\u52A8\u6574\u7406\u8868\u683C</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="showMessagePanel" ${settings.showMessagePanel ? "checked" : ""}/><span>\u5728\u6B63\u6587\u4E0B\u663E\u793A\u72B6\u6001\u6761</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5C0F\u603B\u7ED3</span></label>
+      <label>\u5C0F\u603B\u7ED3\u56DE\u5408\u6570<input type="number" min="1" max="100" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
+      <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
+      <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>JSON\u65E0\u6548\u65F6\u5141\u8BB8\u4E00\u6B21\u4FEE\u590D\u8C03\u7528</span></label>
+    </section>`;
+}
+async function diagnosticsHtml() {
+  const checks = await runDiagnostics();
+  const info = currentArtifact();
+  const logs = info ? await getTaskLog(info.artifact.chatKey) : [];
+  return `
+    <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
+    <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
+    <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map((log) => `<div><time>${escapeHtml(new Date(log.createdAt).toLocaleString())}</time><span>${escapeHtml(log.label)}</span><em class="${log.state}">${escapeHtml(log.state)}</em>${log.error ? `<small>${escapeHtml(log.error)}</small>` : ""}</div>`).join("") : '<p class="ma11-empty">\u6682\u65E0\u65E5\u5FD7\u3002</p>'}</div></section>`;
+}
+async function renderWorkspace() {
+  const workspace = document.querySelector("#ma11-workspace");
+  if (!workspace || workspace.hidden || rendering) return;
+  rendering = true;
+  try {
+    const settings = getSettings();
+    const info = currentArtifact();
+    workspace.querySelectorAll("[data-ma11-tab]").forEach((button) => button.classList.toggle("active", button.dataset.ma11Tab === settings.ui.activeTab));
+    const content = workspace.querySelector("#ma11-workspace-content");
+    if (settings.ui.activeTab === "overview") content.innerHTML = overviewHtml(info);
+    if (settings.ui.activeTab === "tables") content.innerHTML = tableHtml(info);
+    if (settings.ui.activeTab === "summaries") content.innerHTML = await summariesHtml();
+    if (settings.ui.activeTab === "audit") content.innerHTML = auditHtml();
+    if (settings.ui.activeTab === "sync") content.innerHTML = await syncHtml();
+    if (settings.ui.activeTab === "settings") content.innerHTML = settingsHtml();
+    if (settings.ui.activeTab === "diagnostics") content.innerHTML = await diagnosticsHtml();
+  } finally {
+    rendering = false;
+  }
+}
+function setTab(tab) {
+  const settings = getSettings();
+  settings.ui.activeTab = tab;
+  saveSettings();
+  void renderWorkspace();
+}
+function openRowEditor(tableKey, row) {
+  const workspace = root();
+  const backdrop = workspace.querySelector(".ma11-editor-backdrop");
+  const form = workspace.querySelector("#ma11-row-editor");
+  form.elements.namedItem("tableKey").value = tableKey;
+  form.elements.namedItem("rowId").value = row?.id || "";
+  form.elements.namedItem("title").value = row?.title || "";
+  form.elements.namedItem("content").value = row?.content || "";
+  form.elements.namedItem("status").value = row?.status || "active";
+  form.elements.namedItem("keywords").value = row?.keywords.join(", ") || "";
+  backdrop.hidden = false;
+  form.elements.namedItem("title").focus();
+}
+function closeEditor() {
+  const workspace = document.querySelector("#ma11-workspace");
+  const backdrop = workspace?.querySelector(".ma11-editor-backdrop");
+  if (backdrop) backdrop.hidden = true;
+}
+async function saveRow(form) {
+  const info = currentArtifact();
+  if (!info?.artifact.snapshot) throw new Error("\u5F53\u524D\u6CA1\u6709\u53EF\u7F16\u8F91\u7684\u72B6\u6001\u8868");
+  const tableKey = form.elements.namedItem("tableKey").value;
+  const rowId = form.elements.namedItem("rowId").value;
+  const title = form.elements.namedItem("title").value.trim();
+  const content = form.elements.namedItem("content").value.trim();
+  const status = form.elements.namedItem("status").value.trim();
+  const keywords = form.elements.namedItem("keywords").value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+  info.artifact.snapshot = upsertManualRow(info.artifact.snapshot, tableKey, { id: rowId || void 0, title, content, status, keywords });
+  const message = getMessage(info.index);
+  if (message) attachArtifactToMessage(message, info.artifact);
+  await putArtifact(info.artifact);
+  await persistChat();
+  closeEditor();
+  await renderWorkspace();
+}
+async function deleteRowAction(rowId) {
+  const info = currentArtifact();
+  if (!info?.artifact.snapshot) return;
+  const tableKey = getSettings().ui.activeTable;
+  if (!confirm("\u786E\u5B9A\u5220\u9664\u8FD9\u6761\u72B6\u6001\u5417\uFF1F")) return;
+  info.artifact.snapshot = deleteRow(info.artifact.snapshot, tableKey, rowId);
+  const message = getMessage(info.index);
+  if (message) attachArtifactToMessage(message, info.artifact);
+  await putArtifact(info.artifact);
+  await persistChat();
+  await renderWorkspace();
+}
+function updateSetting(target) {
+  const key = target.dataset.ma11Setting;
+  if (!key) return;
+  const settings = getSettings();
+  const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target instanceof HTMLInputElement && target.type === "number" ? Number(target.value) : target.value;
+  settings[key] = value;
+  saveSettings();
+}
+function updateConnection(target) {
+  const modeTask = target.dataset.ma11ConnectionMode;
+  const profileTask = target.dataset.ma11ConnectionProfile;
+  const settings = getSettings();
+  let shouldRender = false;
+  if (modeTask) {
+    settings.connections[modeTask].mode = target.value;
+    shouldRender = true;
+  }
+  if (profileTask) settings.connections[profileTask].profile = safeText(target.value, 160).trim();
+  saveSettings();
+  if (shouldRender) void renderWorkspace();
+}
+function bindWorkspace(workspace) {
+  workspace.addEventListener("click", async (event) => {
+    const target = event.target;
+    const tab = target.closest("[data-ma11-tab]")?.dataset.ma11Tab;
+    if (tab) return setTab(tab);
+    const action = target.closest("[data-ma11-action]")?.dataset.ma11Action;
+    try {
+      if (action === "close") workspace.hidden = true;
+      if (action === "open-tables") setTab("tables");
+      if (action === "process-latest") {
+        const index = latestAssistantIndex();
+        if (index < 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
+        selectedMessageIndex = index;
+        await processMessage(index, true);
+        await renderWorkspace();
+      }
+      if (action === "retry-state") {
+        const info = currentArtifact();
+        if (info) await retryStage(info.index, "state");
+        await renderWorkspace();
+      }
+      if (action === "force-small" || action === "force-large") {
+        const info = currentArtifact();
+        if (!info) throw new Error("\u5C1A\u65E0\u53EF\u603B\u7ED3\u7684\u72B6\u6001");
+        await forceSummary(info.index, action === "force-small" ? "small" : "large");
+        await renderWorkspace();
+      }
+      if (action === "retry-sync") {
+        const info = currentArtifact();
+        if (!info) throw new Error("\u5C1A\u65E0\u53EF\u540C\u6B65\u7684\u72B6\u6001");
+        await retryStage(info.index, "sync");
+        await renderWorkspace();
+      }
+      if (action === "add-row") openRowEditor(getSettings().ui.activeTable);
+      if (action === "close-editor") closeEditor();
+      if (action === "refresh-diagnostics") await renderWorkspace();
+      if (action === "copy-diagnostics") {
+        const report = await diagnosticReport();
+        await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+        toast("success", "\u8BCA\u65AD\u4FE1\u606F\u5DF2\u590D\u5236");
+      }
+      const table = target.closest("[data-ma11-table]")?.dataset.ma11Table;
+      if (table) {
+        getSettings().ui.activeTable = table;
+        saveSettings();
+        await renderWorkspace();
+      }
+      const editId = target.closest("[data-ma11-edit-row]")?.dataset.ma11EditRow;
+      if (editId) {
+        const info = currentArtifact();
+        const key = getSettings().ui.activeTable;
+        const row = info?.artifact.snapshot?.[key].find((item) => item.id === editId);
+        if (row) openRowEditor(key, row);
+      }
+      const deleteId = target.closest("[data-ma11-delete-row]")?.dataset.ma11DeleteRow;
+      if (deleteId) await deleteRowAction(deleteId);
+      const testTask = target.closest("[data-ma11-test]")?.dataset.ma11Test;
+      if (testTask) {
+        await testConnection(testTask);
+        toast("success", `${testTask}\u8FDE\u63A5\u6B63\u5E38`);
+      }
+    } catch (error) {
+      toast("error", toErrorMessage(error));
+    }
+  });
+  workspace.addEventListener("change", (event) => {
+    const target = event.target;
+    if (target.dataset.ma11Setting) updateSetting(target);
+    if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfile) updateConnection(target);
+  });
+  workspace.addEventListener("input", (event) => {
+    const target = event.target;
+    if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "lorebookName") updateSetting(target);
+    if (target.dataset.ma11ConnectionProfile) updateConnection(target);
+  });
+  workspace.querySelector("#ma11-row-editor")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveRow(event.currentTarget).catch((error) => toast("error", toErrorMessage(error)));
+  });
+}
+function openWorkspace(tab, messageIndex) {
+  const workspace = root();
+  if (Number.isInteger(messageIndex)) selectedMessageIndex = Number(messageIndex);
+  if (tab) getSettings().ui.activeTab = tab;
+  workspace.hidden = false;
+  void renderWorkspace();
+}
+function refreshWorkspace() {
+  void renderWorkspace();
+}
+
+// src/ui/message-panel.ts
+function stageLabel(stage) {
+  const map = {
+    idle: "\u7B49\u5F85",
+    queued: "\u6392\u961F",
+    running: "\u5904\u7406\u4E2D",
+    success: "\u6210\u529F",
+    failed: "\u5931\u8D25",
+    skipped: "\u8DF3\u8FC7",
+    blocked: "\u963B\u65AD"
+  };
+  return map[stage?.status] || "\u7B49\u5F85";
+}
+function tone(stage) {
+  if (stage?.status === "success" || stage?.status === "skipped") return "success";
+  if (stage?.status === "failed" || stage?.status === "blocked") return "danger";
+  if (stage?.status === "running" || stage?.status === "queued") return "working";
+  return "neutral";
+}
+function findMessageElement2(index) {
+  return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
+}
+function panelHtml(index, artifact) {
+  const rows = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list) => sum + list.length, 0) : 0;
+  const error = Object.values(artifact.stages).find((stage) => stage.error)?.error;
+  return `
+    <div class="ma11-message-panel" data-ma-index="${index}">
+      <button class="ma11-message-summary" type="button" data-ma-action="open">
+        <span class="ma11-message-title">\u955C\u6E0A\u72B6\u6001</span>
+        <span class="ma11-badge ${tone(artifact.stages.audit)}">\u5BA1\u6838 ${stageLabel(artifact.stages.audit)}</span>
+        <span class="ma11-badge ${tone(artifact.stages.state)}">\u8868\u683C ${stageLabel(artifact.stages.state)}</span>
+        <span class="ma11-badge ${tone(artifact.stages.sync)}">\u540C\u6B65 ${stageLabel(artifact.stages.sync)}</span>
+        <span class="ma11-message-count">${rows} \u6761</span>
+      </button>
+      ${error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
+      <div class="ma11-message-actions">
+        ${artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
+        ${artifact.stages.state.status === "failed" ? '<button data-ma-retry="state">\u91CD\u8BD5\u8868\u683C</button>' : ""}
+        ${artifact.stages.summary.status === "failed" ? '<button data-ma-retry="summary">\u91CD\u8BD5\u603B\u7ED3</button>' : ""}
+        ${artifact.stages.sync.status === "failed" ? '<button data-ma-retry="sync">\u91CD\u8BD5\u540C\u6B65</button>' : ""}
+      </div>
+    </div>`;
+}
+function renderMessagePanel(index) {
+  if (!getSettings().showMessagePanel) return;
+  const artifact = getArtifactAt(index);
+  const messageElement = findMessageElement2(index);
+  if (!messageElement) return;
+  messageElement.querySelector(":scope > .ma11-message-panel")?.remove();
+  if (!artifact) return;
+  messageElement.insertAdjacentHTML("beforeend", panelHtml(index, artifact));
+  applyAuditVisibility(index, Boolean(artifact.hiddenByAudit));
+}
+function renderAllMessagePanels() {
+  getChat().forEach((message, index) => {
+    if (!message?.is_user) renderMessagePanel(index);
+  });
+}
+var installed = false;
+function installMessagePanelHandlers() {
+  if (installed) return () => void 0;
+  installed = true;
+  const click = (event) => {
+    const target = event.target;
+    const panel = target.closest(".ma11-message-panel");
+    if (!panel) return;
+    const index = Number(panel.dataset.maIndex);
+    if (target.closest('[data-ma-action="open"]')) openWorkspace("tables", index);
+    const retry = target.closest("[data-ma-retry]")?.dataset.maRetry;
+    if (retry) void retryStage(index, retry);
+  };
+  document.addEventListener("click", click);
+  const unsubscribe = subscribePipeline((index) => renderMessagePanel(index));
+  return () => {
+    installed = false;
+    document.removeEventListener("click", click);
+    unsubscribe();
+  };
+}
+
+// src/ui/settings-panel.ts
+function extensionPathFromUrl() {
+  const url = new URL(import.meta.url);
+  const marker = "/scripts/extensions/";
+  const index = url.pathname.indexOf(marker);
+  if (index < 0) return "third-party/mirror-abyss-plugin";
+  const remainder = url.pathname.slice(index + marker.length);
+  const parts = remainder.split("/").filter(Boolean);
+  if (parts[0] === "third-party" && parts[1]) return `third-party/${parts[1]}`;
+  return parts[0] || "third-party/mirror-abyss-plugin";
+}
+async function waitForElement(selector, timeoutMs = 15e3) {
+  const immediate = document.querySelector(selector);
+  if (immediate) return immediate;
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      observer.disconnect();
+      reject(new Error(`\u672A\u627E\u5230\u754C\u9762\u6302\u8F7D\u70B9\uFF1A${selector}`));
+    }, timeoutMs);
+    const observer = new MutationObserver(() => {
+      const element = document.querySelector(selector);
+      if (element) {
+        window.clearTimeout(timer);
+        observer.disconnect();
+        resolve(element);
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  });
+}
+async function mountSettingsPanel() {
+  if (document.querySelector("#ma11-settings-root")) return;
+  const context = getContext();
+  const host = await waitForElement("#extensions_settings2");
+  const html = await context.renderExtensionTemplateAsync(extensionPathFromUrl(), "settings", {
+    title: DISPLAY_NAME,
+    version: VERSION
+  });
+  host.insertAdjacentHTML("beforeend", html);
+  const root2 = document.querySelector("#ma11-settings-root");
+  if (!root2) throw new Error("\u8BBE\u7F6E\u6A21\u677F\u52A0\u8F7D\u540E\u672A\u627E\u5230\u6839\u8282\u70B9");
+  root2.querySelector('[data-ma11-quick-setting="enabled"]').checked = getSettings().enabled;
+  root2.querySelector('[data-ma11-action="open"]')?.addEventListener("click", () => openWorkspace("overview"));
+  root2.querySelector('[data-ma11-action="diagnostics"]')?.addEventListener("click", () => openWorkspace("diagnostics"));
+  root2.querySelector('[data-ma11-quick-setting="enabled"]')?.addEventListener("change", (event) => {
+    getSettings().enabled = event.target.checked;
+    saveSettings();
+  });
+}
+function mountOptionalTopButton() {
+  const settings = getSettings();
+  document.querySelector("#ma11-top-button")?.remove();
+  if (!settings.showTopButton) return;
+  const candidates = ["#top-settings-holder", "#rightNavHolder", "#top-bar", "#top-bar-left"];
+  const host = candidates.map((selector) => document.querySelector(selector)).find(Boolean);
+  if (!host) return;
+  const button = document.createElement("button");
+  button.id = "ma11-top-button";
+  button.className = "menu_button ma11-top-button fa-solid fa-table-list";
+  button.type = "button";
+  button.title = "\u6253\u5F00\u955C\u6E0A";
+  button.setAttribute("aria-label", "\u6253\u5F00\u955C\u6E0A");
+  button.addEventListener("click", () => openWorkspace("overview"));
+  host.appendChild(button);
+}
+
+// src/bootstrap/app.ts
+var state = "idle";
+var cleanupPipeline = null;
+var cleanupPanels = null;
+var cleanupUiEvents = null;
+var appReadyHandlerInstalled = false;
+var lastError = null;
+function exposeApi() {
+  globalThis.MirrorAbyss = {
+    version: VERSION,
+    open: (tab = "overview") => openWorkspace(tab),
+    processLatest: async () => {
+      const context = getContext();
+      const index = [...context.chat ?? []].map((_, i) => i).reverse().find((i) => !context.chat[i]?.is_user && String(context.chat[i]?.mes || "").trim());
+      if (index === void 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
+      return processMessage(index, true);
+    },
+    diagnostics: diagnosticReport,
+    getState: () => ({ state, lastError: lastError instanceof Error ? lastError.message : String(lastError || "") })
+  };
+}
+function showFatal(error) {
+  document.querySelector("#ma11-fatal")?.remove();
+  const button = document.createElement("button");
+  button.id = "ma11-fatal";
+  button.className = "ma11-fatal";
+  button.type = "button";
+  button.textContent = "\u955C\u6E0A\u542F\u52A8\u5931\u8D25\uFF5C\u67E5\u770B\u8BCA\u65AD";
+  button.title = error instanceof Error ? error.message : String(error);
+  button.addEventListener("click", () => openWorkspace("diagnostics"));
+  document.body.appendChild(button);
+}
+async function initialize() {
+  if (state === "ready" || state === "initializing") return;
+  state = "initializing";
+  lastError = null;
+  exposeApi();
+  try {
+    getSettings();
+    await mountSettingsPanel();
+    mountOptionalTopButton();
+    cleanupPipeline ||= installPipelineEventHandlers();
+    cleanupPanels ||= installMessagePanelHandlers();
+    renderAllMessagePanels();
+    const context = getContext();
+    if (!cleanupUiEvents) {
+      const rerender = () => {
+        renderAllMessagePanels();
+        refreshWorkspace();
+      };
+      context.eventSource.on(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
+      context.eventSource.on(context.event_types.CHAT_CHANGED, rerender);
+      context.eventSource.on(context.event_types.MESSAGE_DELETED, rerender);
+      cleanupUiEvents = () => {
+        context.eventSource.removeListener?.(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
+        context.eventSource.removeListener?.(context.event_types.CHAT_CHANGED, rerender);
+        context.eventSource.removeListener?.(context.event_types.MESSAGE_DELETED, rerender);
+      };
+    }
+    if (typeof context.registerDebugFunction === "function") {
+      context.registerDebugFunction(
+        "mirror_abyss_diagnostics",
+        "Mirror Abyss Diagnostics",
+        "Open the Mirror Abyss diagnostics panel",
+        () => openWorkspace("diagnostics")
+      );
+    }
+    document.querySelector("#ma11-fatal")?.remove();
+    state = "ready";
+    toast("success", `\u5DF2\u542F\u52A8 ${VERSION}`);
+  } catch (error) {
+    state = "error";
+    lastError = error;
+    console.error("[MirrorAbyss] initialization failed", error);
+    showFatal(error);
+  }
+}
+function installAppReadyHandler() {
+  if (appReadyHandlerInstalled) return;
+  appReadyHandlerInstalled = true;
+  const context = tryGetContext();
+  if (!context) {
+    window.setTimeout(installAppReadyHandler, 250);
+    appReadyHandlerInstalled = false;
+    return;
+  }
+  context.eventSource.on(context.event_types.APP_READY, () => {
+    window.setTimeout(() => void initialize(), 0);
+  });
+  window.setTimeout(() => void initialize(), 1200);
+}
+async function cleanData() {
+  await clearAllStorage();
+  const context = tryGetContext();
+  if (context?.extensionSettings?.[MODULE_NAME]) delete context.extensionSettings[MODULE_NAME];
+  context?.saveSettingsDebounced?.();
+}
+function onEnable() {
+  if (tryGetContext()) void initialize();
+}
+function onDisable() {
+  getSettings().enabled = false;
+  saveSettings();
+}
+function onActivate() {
+  exposeApi();
+  installAppReadyHandler();
+}
+async function onInstall() {
+  exposeApi();
+}
+async function onUpdate() {
+  const settings = tryGetContext() ? getSettings() : null;
+  if (settings) {
+    settings.migration.legacyChecked = false;
+    saveSettings();
+  }
+}
+async function onClean() {
+  await cleanData();
+}
+async function onDelete() {
+  cleanupPipeline?.();
+  cleanupPanels?.();
+  cleanupUiEvents?.();
+  cleanupPipeline = null;
+  cleanupPanels = null;
+  cleanupUiEvents = null;
+  state = "idle";
+}
+
+// src/index.ts
+installAppReadyHandler();
+export {
+  onActivate,
+  onClean,
+  onDelete,
+  onDisable,
+  onEnable,
+  onInstall,
+  onUpdate
+};
+//# sourceMappingURL=index.js.map

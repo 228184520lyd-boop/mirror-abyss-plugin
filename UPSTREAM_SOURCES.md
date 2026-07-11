@@ -1,26 +1,21 @@
-# Upstream Sources
+# Upstream Sources and Design References
 
-| Project | Repository | License | Use in Mirror Abyss |
-|---|---|---|---|
-| SillyTavern | https://github.com/SillyTavern/SillyTavern | AGPL-3.0 | Extension context, events, message data, chat metadata, World Info module interfaces |
-| Memory Books | https://github.com/aikohanasaki/SillyTavern-MemoryBooks | AGPL-3.0 | Mature lorebook CRUD/sync and summary task architecture reference |
-| Lorebook Studio | https://github.com/hype-hosting/SillyTavern-Lorebook-Studio | AGPL-3.0 | 3D graph workspace, mobile interaction and lorebook editing architecture reference |
-| MessageSummarize | https://github.com/qvink/SillyTavern-MessageSummarize | AGPL-3.0 | Message-attached derived-memory lifecycle reference |
-| WTracker | https://github.com/bmen25124/SillyTavern-WTracker | MIT | Structured tracker/schema and editing reference |
-| 3d-force-graph | https://github.com/vasturiano/3d-force-graph | MIT | Runtime 3D graph renderer |
+Mirror Abyss is an independent implementation. The following projects and documents were reviewed for architecture and interoperability patterns:
 
-## Non-code behavioral reference
+- SillyTavern UI Extensions documentation
+  - lifecycle hooks and APP_READY
+  - renderExtensionTemplateAsync
+  - extensionSettings, chatMetadata and localforage
+  - events and generateRaw
+- SillyTavern Extension React/Webpack template
+  - source/build separation and distributable bundle
+- st-memory-enhancement
+  - structured editable table workflow and configurable schemas
+- SillyTavern Memory Books
+  - memory task states, multi-tier consolidation and lorebook publication
+- SillyTavern Message Summarize
+  - message-bound memory and edit/delete consistency
+- CharMemory
+  - setup/health diagnostics, storage/publication separation, single LLM dispatch and mobile dashboard patterns
 
-Amily2 (`Wx-2025/ST-Amily2-Chat-Optimisation`, CC BY-NC-ND 4.0) was used only as a non-code behavioral reference for table readability and workflow. Mirror Abyss does not copy, adapt, redistribute, or derive from its source code, CSS, icons, assets, prompts, or exact interface composition.
-
-## Mirror Abyss original layer
-
-The following behavior is specific to this project:
-
-- Eight-table Mirror Abyss state schema.
-- Mixed calculation of current snapshot + player input + AI response.
-- Snapshot-style small summary by valid state turns.
-- Large summary by existing small-summary count.
-- Shared message lifecycle and irreversible deletion semantics.
-- Table/summary-to-lorebook compilation policy.
-- Legacy Mirror Abyss card and lorebook migration.
+No source code, prompts, CSS, icons, or visual assets from these projects are copied into Mirror Abyss.
