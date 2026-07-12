@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.1.0-alpha.7";
-var PIPELINE_VERSION = "ma-pipeline-6";
+var VERSION = "1.1.0-alpha.9.7";
+var PIPELINE_VERSION = "ma-pipeline-9.7";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
@@ -73,6 +73,13 @@ var STORAGE_DB_NAME = "mirror-abyss-v11";
 var STORAGE_CHAT_PREFIX = "ma11:chat:";
 var STORAGE_ARTIFACT_PREFIX = "ma11:artifact:";
 var STORAGE_LOG_PREFIX = "ma11:log:";
+var STORAGE_TASK_PREFIX = "ma11:task:";
+var STORAGE_OUTBOX_PREFIX = "ma11:outbox:";
+var STORAGE_LOCAL_COMMIT_PREFIX = "ma11:local-commit:";
+var STORAGE_OPERATION_LOG_PREFIX = "ma11:operation-log:";
+var STORAGE_BACKUP_PREFIX = "ma11:backup:";
+var CROSS_TAB_CHANNEL = "mirror-abyss-v11-coordination";
+var CROSS_TAB_LEASE_PREFIX = "mirror-abyss-v11:lease:";
 
 // src/core/utils.ts
 function deepClone(value) {
@@ -253,7 +260,7 @@ function parseJsonObject(raw) {
   const fenced = fencedCandidates(clean);
   const balanced = balancedObjectCandidates(clean).reverse();
   const candidates = [...fenced, clean, ...balanced];
-  const uniqueCandidates = [...new Set(candidates.map((item) => item.trim()).filter(Boolean))];
+  const uniqueCandidates = [...new Set(candidates.map((item2) => item2.trim()).filter(Boolean))];
   const attempts = [];
   for (const candidate of uniqueCandidates) {
     for (const repaired of commonJsonRepairs(candidate)) {
@@ -292,6 +299,255 @@ function toErrorMessage(error) {
   }
   return String(error ?? "\u672A\u77E5\u9519\u8BEF");
 }
+
+// src/foundation/account-scope.ts
+var ACCOUNT_ID_STORAGE_KEY = `${MODULE_NAME}:account-instance-id`;
+var sessionAccountIds = /* @__PURE__ */ new WeakMap();
+function newAccountInstanceId(context) {
+  try {
+    if (typeof context?.uuidv4 === "function") return String(context.uuidv4());
+    if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+  } catch {
+  }
+  return makeId("ma-account");
+}
+function accountStorageValue(context) {
+  try {
+    return safeText(context?.accountStorage?.getItem?.(ACCOUNT_ID_STORAGE_KEY), 300).trim();
+  } catch {
+    return "";
+  }
+}
+function persistAccountStorageValue(context, value) {
+  try {
+    if (typeof context?.accountStorage?.setItem !== "function") return false;
+    context.accountStorage.setItem(ACCOUNT_ID_STORAGE_KEY, value);
+    return true;
+  } catch (error) {
+    console.warn("[MirrorAbyss] accountStorage identity save failed", error);
+    return false;
+  }
+}
+function accountScopeFromContext(context) {
+  const objectContext = context && typeof context === "object" ? context : null;
+  let instanceId = accountStorageValue(context);
+  let persistent = Boolean(instanceId);
+  if (!instanceId && objectContext) instanceId = sessionAccountIds.get(objectContext) ?? "";
+  if (!instanceId) {
+    instanceId = newAccountInstanceId(context);
+    persistent = persistAccountStorageValue(context, instanceId);
+    if (!persistent && objectContext) sessionAccountIds.set(objectContext, instanceId);
+  }
+  return {
+    instanceId,
+    storageKey: hashText(instanceId),
+    persistent
+  };
+}
+
+// src/foundation/chat-scope.ts
+function contextOrThrow() {
+  const context = globalThis.SillyTavern?.getContext?.();
+  if (!context) throw new Error("SillyTavern \u4E0A\u4E0B\u6587\u5C1A\u672A\u5C31\u7EEA");
+  return context;
+}
+function rawChatIdFromContext(context) {
+  return safeText(
+    context?.getCurrentChatId?.() ?? context?.chatId ?? context?.chat_metadata?.chat_id ?? context?.chatMetadata?.chat_id ?? "",
+    300
+  ).trim();
+}
+function newPersistentInstanceId(context) {
+  try {
+    if (typeof context?.uuidv4 === "function") return String(context.uuidv4());
+    if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+  } catch {
+  }
+  return makeId("ma-chat");
+}
+function stableCharacterToken(context) {
+  const character = Number.isInteger(Number(context?.characterId)) ? context?.characters?.[Number(context.characterId)] : void 0;
+  const candidates = [
+    character?.avatar,
+    character?.data?.avatar,
+    character?.name,
+    context?.character?.avatar,
+    context?.character?.name,
+    context?.avatar,
+    context?.name2,
+    context?.name1
+  ];
+  const value = candidates.map((item2) => safeText(item2, 300).trim()).find(Boolean) || "unknown";
+  return hashText(value);
+}
+function stableOwnerKey(context) {
+  if (context?.groupId !== void 0 && context?.groupId !== null && String(context.groupId).trim()) {
+    return `group:${String(context.groupId)}`;
+  }
+  return `character:${stableCharacterToken(context)}`;
+}
+function phase4OwnerKey(context) {
+  if (context?.groupId !== void 0 && context?.groupId !== null && String(context.groupId).trim()) {
+    return `group:${String(context.groupId)}`;
+  }
+  const character = context?.characterId ?? context?.name2 ?? context?.name1 ?? "unknown";
+  return `character:${String(character)}`;
+}
+function alpha95StableKey(context, rawId) {
+  return rawId ? `chat:${hashText(`${stableOwnerKey(context)}|${rawId}`)}` : "";
+}
+function scopedChatKey(accountKey, instanceId) {
+  return `chat:${accountKey}:${hashText(instanceId)}`;
+}
+function attachedArtifactChatKeys(context) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const message of context?.chat ?? []) {
+    const key = safeText(message?.extra?.[MODULE_NAME]?.chatKey, 500).trim();
+    if (key) keys.add(key);
+  }
+  return [...keys];
+}
+function uniqueAliases(values, currentKey = "") {
+  return [...new Set(values.map((value) => safeText(value, 500).trim()).filter(Boolean))].filter((value) => value !== currentKey);
+}
+function namespaceFromContext(context) {
+  const metadata = context?.chatMetadata ?? context?.chat_metadata;
+  return metadata?.[MODULE_NAME] ?? {};
+}
+function deterministicPreviewInstance(context, rawId) {
+  const account = accountScopeFromContext(context);
+  return `ma-chat-${hashText(`${account.instanceId}|${stableOwnerKey(context)}|${rawId || "unsaved"}`)}`;
+}
+function legacyAliases(context, rawId, instanceId, currentKey) {
+  const namespace2 = namespaceFromContext(context);
+  const oldOwner = phase4OwnerKey(context);
+  const phase4Key = rawId ? `${oldOwner}:${hashText(`${oldOwner}|${rawId}`)}` : "";
+  const legacyInstanceKey = rawId ? `${oldOwner}:${hashText(`${oldOwner}|${rawId}|${instanceId}`)}` : "";
+  return uniqueAliases([
+    ...Array.isArray(namespace2.chatKeyAliases) ? namespace2.chatKeyAliases : [],
+    alpha95StableKey(context, rawId),
+    phase4Key,
+    legacyInstanceKey,
+    ...attachedArtifactChatKeys(context)
+  ], currentKey);
+}
+function identityView(context) {
+  const rawId = rawChatIdFromContext(context);
+  const namespace2 = namespaceFromContext(context);
+  const storedInstance = safeText(namespace2.chatInstanceId, 300).trim();
+  const instanceId = storedInstance || deterministicPreviewInstance(context, rawId);
+  const account = accountScopeFromContext(context);
+  const currentKey = rawId ? scopedChatKey(account.storageKey, instanceId) : "";
+  return {
+    instanceId,
+    aliases: legacyAliases(context, rawId, instanceId, currentKey),
+    changed: false
+  };
+}
+function ensureChatIdentityForContext(context, options = {}) {
+  context.chatMetadata ||= context.chat_metadata || {};
+  context.chat_metadata = context.chatMetadata;
+  const rawId = rawChatIdFromContext(context);
+  if (!rawId) return { instanceId: "", aliases: [], changed: false };
+  const existingNamespace = context.chatMetadata[MODULE_NAME];
+  const namespace2 = existingNamespace || {
+    schemaVersion: 2,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  context.chatMetadata[MODULE_NAME] = namespace2;
+  const previousInstance = safeText(namespace2.chatInstanceId, 300).trim();
+  const previousRawId = safeText(namespace2.sourceChatId, 300).trim();
+  const account = accountScopeFromContext(context);
+  const previousKey = previousInstance ? scopedChatKey(account.storageKey, previousInstance) : "";
+  const instanceId = options.forceNew ? newPersistentInstanceId(context) : previousInstance || deterministicPreviewInstance(context, rawId);
+  const currentKey = scopedChatKey(account.storageKey, instanceId);
+  const aliases = uniqueAliases([
+    ...Array.isArray(namespace2.chatKeyAliases) ? namespace2.chatKeyAliases : [],
+    previousKey,
+    previousRawId ? alpha95StableKey(context, previousRawId) : "",
+    ...legacyAliases(context, rawId, instanceId, currentKey)
+  ], currentKey);
+  let changed = !existingNamespace;
+  if (namespace2.schemaVersion !== 2) {
+    namespace2.schemaVersion = 2;
+    changed = true;
+  }
+  if (namespace2.chatInstanceId !== instanceId) {
+    namespace2.chatInstanceId = instanceId;
+    namespace2.createdAt = nowIso();
+    changed = true;
+  }
+  if (namespace2.accountKey !== account.storageKey) {
+    namespace2.accountKey = account.storageKey;
+    changed = true;
+  }
+  if (namespace2.sourceChatId !== rawId) {
+    namespace2.sourceChatId = rawId;
+    changed = true;
+  }
+  if (namespace2.ownerKey !== stableOwnerKey(context)) {
+    namespace2.ownerKey = stableOwnerKey(context);
+    changed = true;
+  }
+  const previousAliases = uniqueAliases(Array.isArray(namespace2.chatKeyAliases) ? namespace2.chatKeyAliases : []);
+  if (JSON.stringify(previousAliases) !== JSON.stringify(aliases)) {
+    namespace2.chatKeyAliases = aliases;
+    changed = true;
+  }
+  if (changed) {
+    namespace2.updatedAt = nowIso();
+    context.saveMetadataDebounced?.();
+  }
+  return { instanceId, aliases, changed };
+}
+function rotateChatIdentityForContext(context) {
+  return ensureChatIdentityForContext(context, { forceNew: true });
+}
+var ChatScopeManager = class {
+  revision = 0;
+  ephemeralId = makeId("ephemeral-chat");
+  lastChatKey = "";
+  lastRawId = "";
+  current() {
+    const context = contextOrThrow();
+    const rawId = rawChatIdFromContext(context);
+    const owner = stableOwnerKey(context);
+    const account = accountScopeFromContext(context);
+    const persistent = Boolean(rawId);
+    const identity = persistent ? identityView(context) : { instanceId: this.ephemeralId, aliases: [], changed: false };
+    const chatKey = persistent ? scopedChatKey(account.storageKey, identity.instanceId) : `ephemeral:${account.storageKey}:${hashText(`${owner}|${this.ephemeralId}`)}`;
+    if (chatKey !== this.lastChatKey || rawId !== this.lastRawId) {
+      this.revision += 1;
+      this.lastChatKey = chatKey;
+      this.lastRawId = rawId;
+      if (!rawId) this.ephemeralId = identity.instanceId;
+    }
+    return {
+      chatKey,
+      rawChatId: rawId,
+      ownerKey: owner,
+      accountKey: account.storageKey,
+      revision: this.revision,
+      persistent,
+      capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      aliases: identity.aliases,
+      instanceId: identity.instanceId
+    };
+  }
+  invalidate() {
+    this.revision += 1;
+    this.ephemeralId = makeId("ephemeral-chat");
+    this.lastChatKey = "";
+    this.lastRawId = "";
+    return this.current();
+  }
+  isCurrent(snapshot) {
+    const current = this.current();
+    return current.chatKey === snapshot.chatKey && current.revision === snapshot.revision;
+  }
+};
+var chatScopeManager = new ChatScopeManager();
 
 // src/core/context.ts
 function getContext() {
@@ -385,12 +641,21 @@ function previousUserText(beforeIndex) {
   }
   return "";
 }
-function currentChatKey() {
+function currentRawChatId(context = getContext()) {
+  return rawChatIdFromContext(context);
+}
+function ensureChatInstanceId() {
+  return ensureChatIdentityForContext(getContext()).instanceId;
+}
+function legacyCurrentChatKey() {
   const context = getContext();
-  const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? "";
+  const rawChatId = currentRawChatId(context);
+  const instanceId = ensureChatInstanceId();
   const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? "unknown"}`;
-  const seed = `${scope}|${chatId || context.name1 || "chat"}|${context.name2 || ""}`;
-  return `${scope}:${hashText(seed)}`;
+  return `${scope}:${hashText(`${scope}|${rawChatId || "unsaved"}|${instanceId}`)}`;
+}
+function currentChatKey() {
+  return chatScopeManager.current().chatKey;
 }
 function messageFingerprint(index) {
   const message = getMessage(index);
@@ -398,19 +663,24 @@ function messageFingerprint(index) {
 ---MA11---
 ${safeText(message?.mes)}`);
 }
-function messageIdentity(index) {
+function messageStableIdentity(index) {
   const message = getMessage(index);
-  const stable = message?.id ?? message?.send_date ?? message?.extra?.gen_id ?? index;
-  return `${String(stable)}:${messageFingerprint(index)}`;
+  const stable = message?.id ?? message?.extra?.gen_id ?? message?.send_date ?? index;
+  return String(stable);
+}
+function messageIdentity(index) {
+  return `${messageStableIdentity(index)}:${messageFingerprint(index)}`;
 }
 function getChatMetadataNamespace() {
   const context = getContext();
-  context.chatMetadata ||= {};
+  context.chatMetadata ||= context.chat_metadata || {};
+  context.chat_metadata = context.chatMetadata;
   context.chatMetadata[MODULE_NAME] ||= {
     schemaVersion: 1,
     createdAt: nowIso(),
     updatedAt: nowIso()
   };
+  ensureChatInstanceId();
   return context.chatMetadata[MODULE_NAME];
 }
 async function persistMetadata() {
@@ -438,36 +708,142 @@ function toast(kind, message) {
 }
 
 // src/storage/repository.ts
-var adapter = null;
-function getAdapter() {
-  if (adapter) return adapter;
-  const localforage = globalThis.SillyTavern?.libs?.localforage;
-  if (localforage?.createInstance) {
-    adapter = localforage.createInstance({ name: STORAGE_DB_NAME, storeName: "mirror_abyss" });
-    return adapter;
+var portableChatStateBridge = null;
+var persistentAdapters = /* @__PURE__ */ new Map();
+var ephemeralMap = /* @__PURE__ */ new Map();
+var ephemeralAdapter = {
+  async getItem(key) {
+    return ephemeralMap.has(key) ? structuredClone(ephemeralMap.get(key)) : null;
+  },
+  async setItem(key, value) {
+    ephemeralMap.set(key, structuredClone(value));
+    return value;
+  },
+  async removeItem(key) {
+    ephemeralMap.delete(key);
+  },
+  async keys() {
+    return [...ephemeralMap.keys()];
   }
-  adapter = {
+};
+function configurePortableChatStateBridge(bridge) {
+  portableChatStateBridge = bridge;
+}
+function storageNamespaceFromChatKey(chatKey) {
+  if (chatKey.startsWith("chat:")) {
+    const [, accountKey] = chatKey.split(":");
+    if (accountKey) return accountKey;
+  }
+  return "legacy";
+}
+function localStorageAdapter(databaseName) {
+  return {
     async getItem(key) {
-      const raw = localStorage.getItem(`${STORAGE_DB_NAME}:${key}`);
+      const raw = localStorage.getItem(`${databaseName}:${key}`);
       return raw ? JSON.parse(raw) : null;
     },
     async setItem(key, value) {
-      localStorage.setItem(`${STORAGE_DB_NAME}:${key}`, JSON.stringify(value));
+      localStorage.setItem(`${databaseName}:${key}`, JSON.stringify(value));
       return value;
     },
     async removeItem(key) {
-      localStorage.removeItem(`${STORAGE_DB_NAME}:${key}`);
+      localStorage.removeItem(`${databaseName}:${key}`);
     },
     async keys() {
-      return Object.keys(localStorage).filter((key) => key.startsWith(`${STORAGE_DB_NAME}:`)).map((key) => key.slice(STORAGE_DB_NAME.length + 1));
+      return Object.keys(localStorage).filter((key) => key.startsWith(`${databaseName}:`)).map((key) => key.slice(databaseName.length + 1));
     }
   };
+}
+function getPersistentAdapter(namespace2 = "legacy") {
+  const existing = persistentAdapters.get(namespace2);
+  if (existing) return existing;
+  const databaseName = namespace2 === "legacy" ? STORAGE_DB_NAME : `${STORAGE_DB_NAME}-${namespace2}`;
+  const localforage = globalThis.SillyTavern?.libs?.localforage;
+  const adapter = localforage?.createInstance ? localforage.createInstance({ name: databaseName, storeName: "mirror_abyss" }) : localStorageAdapter(databaseName);
+  persistentAdapters.set(namespace2, adapter);
   return adapter;
 }
+function isEphemeralChatKey(chatKey) {
+  return chatKey.startsWith("ephemeral:");
+}
+function adapterForChat(chatKey) {
+  return isEphemeralChatKey(chatKey) ? ephemeralAdapter : getPersistentAdapter(storageNamespaceFromChatKey(chatKey));
+}
+async function readStored(prefix, chatKey, suffix = "") {
+  return adapterForChat(chatKey).getItem(`${prefix}${chatKey}${suffix}`);
+}
+function remapStorageKey(key, alias, chatKey) {
+  const exactPrefixes = [STORAGE_CHAT_PREFIX, STORAGE_LOG_PREFIX, STORAGE_OPERATION_LOG_PREFIX];
+  for (const prefix of exactPrefixes) {
+    if (key === `${prefix}${alias}`) return `${prefix}${chatKey}`;
+  }
+  const scopedPrefixes = [
+    STORAGE_ARTIFACT_PREFIX,
+    STORAGE_TASK_PREFIX,
+    STORAGE_OUTBOX_PREFIX,
+    STORAGE_LOCAL_COMMIT_PREFIX,
+    STORAGE_BACKUP_PREFIX
+  ];
+  for (const prefix of scopedPrefixes) {
+    const oldPrefix = `${prefix}${alias}:`;
+    if (key.startsWith(oldPrefix)) return `${prefix}${chatKey}:${key.slice(oldPrefix.length)}`;
+  }
+  return null;
+}
+function rewriteStoredChatKey(value, chatKey) {
+  const clone = structuredClone(value);
+  if (Array.isArray(clone)) {
+    for (const item2 of clone) if (item2 && typeof item2 === "object" && "chatKey" in item2) item2.chatKey = chatKey;
+  } else if (clone && typeof clone === "object" && "chatKey" in clone) {
+    clone.chatKey = chatKey;
+  }
+  return clone;
+}
+async function migrateChatStorageAliases(chatKey, aliases) {
+  if (isEphemeralChatKey(chatKey)) return 0;
+  const targetStorage = adapterForChat(chatKey);
+  const sourceStorages = [.../* @__PURE__ */ new Set([
+    targetStorage,
+    getPersistentAdapter("legacy")
+  ])];
+  let copied = 0;
+  for (const alias of [...new Set(aliases.filter((value) => value && value !== chatKey))]) {
+    for (const sourceStorage of sourceStorages) {
+      const keys = await sourceStorage.keys();
+      for (const key of keys) {
+        const target = remapStorageKey(key, alias, chatKey);
+        if (!target || await targetStorage.getItem(target)) continue;
+        const value = await sourceStorage.getItem(key);
+        if (value === null) continue;
+        await targetStorage.setItem(target, rewriteStoredChatKey(value, chatKey));
+        copied += 1;
+      }
+    }
+  }
+  return copied;
+}
+async function getChatStateExact(chatKey) {
+  return adapterForChat(chatKey).getItem(`${STORAGE_CHAT_PREFIX}${chatKey}`);
+}
 async function getChatState(chatKey) {
-  const key = `${STORAGE_CHAT_PREFIX}${chatKey}`;
-  const existing = await getAdapter().getItem(key);
-  return existing ?? {
+  let existing = await readStored(STORAGE_CHAT_PREFIX, chatKey);
+  if (!existing && portableChatStateBridge) {
+    existing = await portableChatStateBridge.read(chatKey);
+    if (existing) {
+      existing = structuredClone(existing);
+      existing.chatKey = chatKey;
+      await adapterForChat(chatKey).setItem(`${STORAGE_CHAT_PREFIX}${chatKey}`, existing);
+    }
+  }
+  if (existing) {
+    if (existing.chatKey !== chatKey) {
+      existing.chatKey = chatKey;
+      existing.updatedAt = nowIso();
+      await putChatState(existing);
+    }
+    return existing;
+  }
+  return {
     schemaVersion: 1,
     chatKey,
     processedMessageKeys: [],
@@ -479,44 +855,206 @@ async function getChatState(chatKey) {
 }
 async function putChatState(state2) {
   state2.updatedAt = nowIso();
-  await getAdapter().setItem(`${STORAGE_CHAT_PREFIX}${state2.chatKey}`, state2);
+  await adapterForChat(state2.chatKey).setItem(`${STORAGE_CHAT_PREFIX}${state2.chatKey}`, state2);
+  await portableChatStateBridge?.write(structuredClone(state2));
+}
+async function getArtifact(chatKey, messageKey) {
+  const artifact = await readStored(STORAGE_ARTIFACT_PREFIX, chatKey, `:${messageKey}`);
+  if (artifact && artifact.chatKey !== chatKey) {
+    artifact.chatKey = chatKey;
+    artifact.updatedAt = nowIso();
+    await putArtifact(artifact);
+  }
+  return artifact;
 }
 async function putArtifact(artifact) {
   artifact.updatedAt = nowIso();
-  await getAdapter().setItem(`${STORAGE_ARTIFACT_PREFIX}${artifact.chatKey}:${artifact.messageKey}`, artifact);
+  await adapterForChat(artifact.chatKey).setItem(`${STORAGE_ARTIFACT_PREFIX}${artifact.chatKey}:${artifact.messageKey}`, artifact);
 }
 async function removeArtifact(chatKey, messageKey) {
-  await getAdapter().removeItem(`${STORAGE_ARTIFACT_PREFIX}${chatKey}:${messageKey}`);
+  await adapterForChat(chatKey).removeItem(`${STORAGE_ARTIFACT_PREFIX}${chatKey}:${messageKey}`);
+}
+async function putLorebookOutbox(record) {
+  record.updatedAt = nowIso();
+  await adapterForChat(record.chatKey).setItem(`${STORAGE_OUTBOX_PREFIX}${record.chatKey}:${record.id}`, record);
+}
+async function getLorebookOutbox(chatKey, id) {
+  return readStored(STORAGE_OUTBOX_PREFIX, chatKey, `:${id}`);
+}
+async function getLorebookOutboxRecords(chatKey) {
+  const storage = adapterForChat(chatKey);
+  const keys = await storage.keys();
+  const prefix = `${STORAGE_OUTBOX_PREFIX}${chatKey}:`;
+  const records = await Promise.all(
+    keys.filter((key) => key.startsWith(prefix)).map((key) => storage.getItem(key))
+  );
+  return records.filter((record) => Boolean(record)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+async function findLorebookOutboxByIntent(chatKey, intentKey) {
+  const records = await getLorebookOutboxRecords(chatKey);
+  return records.find((record) => record.intentKey === intentKey) ?? null;
+}
+async function removeLorebookOutbox(chatKey, id) {
+  await adapterForChat(chatKey).removeItem(`${STORAGE_OUTBOX_PREFIX}${chatKey}:${id}`);
+}
+async function pruneLorebookOutbox(chatKey, keep = 50) {
+  const terminal = /* @__PURE__ */ new Set(["committed", "rolled_back", "cancelled"]);
+  const records = (await getLorebookOutboxRecords(chatKey)).filter((record) => terminal.has(record.state)).slice(keep);
+  await Promise.all(records.map((record) => removeLorebookOutbox(chatKey, record.id)));
+  return records.length;
+}
+async function putLocalCommit(record) {
+  record.updatedAt = nowIso();
+  await adapterForChat(record.chatKey).setItem(`${STORAGE_LOCAL_COMMIT_PREFIX}${record.chatKey}:${record.id}`, record);
+}
+async function getLocalCommit(chatKey, id) {
+  return readStored(STORAGE_LOCAL_COMMIT_PREFIX, chatKey, `:${id}`);
+}
+async function getLocalCommitRecords(chatKey) {
+  const storage = adapterForChat(chatKey);
+  const keys = await storage.keys();
+  const prefix = `${STORAGE_LOCAL_COMMIT_PREFIX}${chatKey}:`;
+  const records = await Promise.all(
+    keys.filter((key) => key.startsWith(prefix)).map((key) => storage.getItem(key))
+  );
+  return records.filter((record) => Boolean(record)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+async function findLocalCommitByIntent(chatKey, intentKey) {
+  const records = await getLocalCommitRecords(chatKey);
+  return records.find((record) => record.intentKey === intentKey) ?? null;
+}
+async function removeLocalCommit(chatKey, id) {
+  await adapterForChat(chatKey).removeItem(`${STORAGE_LOCAL_COMMIT_PREFIX}${chatKey}:${id}`);
+}
+async function pruneLocalCommits(chatKey, keep = 50) {
+  const terminal = /* @__PURE__ */ new Set(["committed", "cancelled"]);
+  const records = (await getLocalCommitRecords(chatKey)).filter((record) => terminal.has(record.state) && record.messageAttached !== false).slice(keep);
+  await Promise.all(records.map((record) => removeLocalCommit(chatKey, record.id)));
+  return records.length;
+}
+async function appendOperationLog(chatKey, input) {
+  const record = {
+    id: `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    chatKey,
+    createdAt: nowIso(),
+    ...input
+  };
+  const storage = adapterForChat(chatKey);
+  const key = `${STORAGE_OPERATION_LOG_PREFIX}${chatKey}`;
+  const logs = await storage.getItem(key) ?? [];
+  logs.unshift(record);
+  await storage.setItem(key, logs.slice(0, 500));
+  return record;
+}
+async function getOperationLog(chatKey) {
+  return await adapterForChat(chatKey).getItem(`${STORAGE_OPERATION_LOG_PREFIX}${chatKey}`) ?? [];
+}
+async function safeAppendOperationLog(chatKey, input) {
+  try {
+    await appendOperationLog(chatKey, input);
+  } catch (error) {
+    console.warn("[MirrorAbyss] operation log save failed", error);
+  }
+}
+async function putMigrationBackup(backup) {
+  await adapterForChat(backup.chatKey).setItem(`${STORAGE_BACKUP_PREFIX}${backup.chatKey}:${backup.id}`, backup);
+}
+async function getMigrationBackups(chatKey) {
+  const storage = adapterForChat(chatKey);
+  const keys = await storage.keys();
+  const prefix = `${STORAGE_BACKUP_PREFIX}${chatKey}:`;
+  const backups = await Promise.all(
+    keys.filter((key) => key.startsWith(prefix)).map((key) => storage.getItem(key))
+  );
+  return backups.filter((backup) => Boolean(backup)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+async function removeMigrationBackup(chatKey, id) {
+  await adapterForChat(chatKey).removeItem(`${STORAGE_BACKUP_PREFIX}${chatKey}:${id}`);
+}
+async function putQueueTask(task) {
+  task.updatedAt = nowIso();
+  await adapterForChat(task.chatKey).setItem(`${STORAGE_TASK_PREFIX}${task.chatKey}:${task.id}`, task);
+}
+async function getQueueTasks(chatKey) {
+  const storage = adapterForChat(chatKey);
+  const keys = await storage.keys();
+  const prefix = `${STORAGE_TASK_PREFIX}${chatKey}:`;
+  const tasks = await Promise.all(keys.filter((key) => key.startsWith(prefix)).map((key) => storage.getItem(key)));
+  return tasks.filter((task) => Boolean(task)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+async function markInterruptedTasksStale(chatKey) {
+  const tasks = await getQueueTasks(chatKey);
+  let count = 0;
+  for (const task of tasks) {
+    if (task.state === "queued" || task.state === "running") {
+      task.state = "stale";
+      task.error = "\u9875\u9762\u91CD\u8F7D\u6216\u63D2\u4EF6\u91CD\u542F\uFF0C\u65E7\u4EFB\u52A1\u5DF2\u5B89\u5168\u505C\u6B62";
+      task.finishedAt = nowIso();
+      await putQueueTask(task);
+      count += 1;
+    }
+  }
+  return count;
 }
 async function appendTaskLog(chatKey, task) {
+  const storage = adapterForChat(chatKey);
   const key = `${STORAGE_LOG_PREFIX}${chatKey}`;
-  const logs = await getAdapter().getItem(key) ?? [];
+  const logs = await storage.getItem(key) ?? [];
   logs.unshift(task);
-  await getAdapter().setItem(key, logs.slice(0, 200));
+  await storage.setItem(key, logs.slice(0, 200));
 }
 async function getTaskLog(chatKey) {
-  return await getAdapter().getItem(`${STORAGE_LOG_PREFIX}${chatKey}`) ?? [];
+  return await adapterForChat(chatKey).getItem(`${STORAGE_LOG_PREFIX}${chatKey}`) ?? [];
+}
+async function clearChatStorage(chatKey, options = {}) {
+  const storage = adapterForChat(chatKey);
+  const keys = await storage.keys();
+  const exactChatKey = `${STORAGE_CHAT_PREFIX}${chatKey}`;
+  const artifactPrefix = `${STORAGE_ARTIFACT_PREFIX}${chatKey}:`;
+  const exactLogKey = `${STORAGE_LOG_PREFIX}${chatKey}`;
+  const taskPrefix = `${STORAGE_TASK_PREFIX}${chatKey}:`;
+  const outboxPrefix = `${STORAGE_OUTBOX_PREFIX}${chatKey}:`;
+  const localCommitPrefix = `${STORAGE_LOCAL_COMMIT_PREFIX}${chatKey}:`;
+  const operationLogKey = `${STORAGE_OPERATION_LOG_PREFIX}${chatKey}`;
+  const backupPrefix = `${STORAGE_BACKUP_PREFIX}${chatKey}:`;
+  await Promise.all(
+    keys.filter(
+      (key) => key === exactChatKey || key === exactLogKey || key === operationLogKey || key.startsWith(artifactPrefix) || key.startsWith(taskPrefix) || !options.preserveOutbox && key.startsWith(outboxPrefix) || !options.preserveLocalCommits && key.startsWith(localCommitPrefix) || !options.preserveBackups && key.startsWith(backupPrefix)
+    ).map((key) => storage.removeItem(key))
+  );
+  await portableChatStateBridge?.clear?.(chatKey);
+}
+async function listMirrorAbyssStorageKeys() {
+  const adapters = [.../* @__PURE__ */ new Set([...persistentAdapters.values(), getPersistentAdapter("legacy")])];
+  const persistentKeys = (await Promise.all(adapters.map((adapter) => adapter.keys()))).flat();
+  const ephemeralKeys = await ephemeralAdapter.keys();
+  return [.../* @__PURE__ */ new Set([...persistentKeys, ...ephemeralKeys])].filter((key) => key.startsWith("ma11:"));
 }
 async function clearAllStorage() {
-  const storage = getAdapter();
-  const keys = await storage.keys();
-  await Promise.all(keys.filter((key) => key.startsWith("ma11:")).map((key) => storage.removeItem(key)));
+  const adapters = [.../* @__PURE__ */ new Set([...persistentAdapters.values(), getPersistentAdapter("legacy")])];
+  for (const adapter of adapters) {
+    const keys = await adapter.keys();
+    await Promise.all(keys.filter((key) => key.startsWith("ma11:")).map((key) => adapter.removeItem(key)));
+  }
+  const ephemeralKeys = await ephemeralAdapter.keys();
+  await Promise.all(ephemeralKeys.filter((key) => key.startsWith("ma11:")).map((key) => ephemeralAdapter.removeItem(key)));
 }
 
 // src/domain/artifact.ts
 function idleStage() {
   return { status: "idle", attempts: 0 };
 }
-function createArtifact(message, messageIndex) {
+function createArtifact(seed) {
   const now = nowIso();
   return {
     schemaVersion: 1,
-    chatKey: currentChatKey(),
-    messageKey: messageIdentity(messageIndex),
-    messageIndex,
-    sourceFingerprint: messageFingerprint(messageIndex),
-    playerText: previousUserText(messageIndex),
-    assistantText: safeText(message.mes),
+    chatKey: seed.chatKey,
+    stableMessageId: seed.stableMessageId,
+    messageKey: seed.messageKey,
+    messageIndex: seed.messageIndex,
+    sourceFingerprint: seed.sourceFingerprint,
+    playerText: safeText(seed.playerText),
+    assistantText: safeText(seed.assistantText),
     createdAt: now,
     updatedAt: now,
     stages: {
@@ -550,53 +1088,388 @@ function markStage(artifact, stage, status, error) {
   artifact.updatedAt = now;
 }
 
-// src/pipeline/quarantine.ts
-var gates = /* @__PURE__ */ new Map();
-var internalGenerationDepth = 0;
-var scriptModulePromise = null;
-function gateKey(chatKey, index, fingerprint) {
-  return `${chatKey}:${index}:${fingerprint}`;
+// src/application/artifact-factory.ts
+function createArtifactForMessage(messageIndex) {
+  const message = getMessage(messageIndex);
+  if (!message || message.is_user) throw new Error("\u76EE\u6807\u4E0D\u662F\u6709\u6548AI\u6B63\u6587");
+  return createArtifact({
+    chatKey: currentChatKey(),
+    stableMessageId: messageStableIdentity(messageIndex),
+    messageKey: messageIdentity(messageIndex),
+    messageIndex,
+    sourceFingerprint: messageFingerprint(messageIndex),
+    playerText: previousUserText(messageIndex),
+    assistantText: safeText(message.mes)
+  });
 }
-async function getScriptModule() {
-  if (typeof process !== "undefined" && Boolean(process.versions?.node)) return null;
-  if (!scriptModulePromise) {
-    scriptModulePromise = import(
-      /* @vite-ignore */
-      String("/script.js")
-    ).catch((error) => {
-      console.warn("[MirrorAbyss] script adapter unavailable", error);
-      return null;
+
+// src/foundation/connection-broker.ts
+var ConnectionRequestError = class extends Error {
+  kind;
+  status;
+  responsePreview;
+  retryAfterMs;
+  attempts;
+  connectionKey;
+  constructor(message, kind, options = {}) {
+    super(message, options.cause ? { cause: options.cause } : void 0);
+    this.name = "ConnectionRequestError";
+    this.kind = kind;
+    this.status = options.status;
+    this.responsePreview = options.responsePreview;
+    this.retryAfterMs = options.retryAfterMs;
+    this.attempts = options.attempts;
+    this.connectionKey = options.connectionKey;
+  }
+};
+var DEFAULT_POLICY = {
+  maxConcurrent: 1,
+  maxRetries: 2,
+  baseBackoffMs: 750,
+  maxBackoffMs: 12e3,
+  jitterRatio: 0.2,
+  circuitFailureThreshold: 3,
+  circuitOpenMs: 3e4
+};
+function makeRequestId() {
+  return `ma-conn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error ?? "\u672A\u77E5\u9519\u8BEF");
+}
+function copyError(error, patch) {
+  return new ConnectionRequestError(error.message, error.kind, {
+    status: error.status,
+    responsePreview: error.responsePreview,
+    retryAfterMs: error.retryAfterMs,
+    attempts: error.attempts,
+    connectionKey: error.connectionKey,
+    cause: error.cause,
+    ...patch
+  });
+}
+function normalizeConnectionError(error) {
+  if (error instanceof ConnectionRequestError) return error;
+  const message = errorMessage(error);
+  const candidate = error;
+  const statusValue = Number(candidate?.status ?? candidate?.response?.status);
+  const status = Number.isInteger(statusValue) && statusValue > 0 ? statusValue : void 0;
+  const options = { status, cause: error };
+  if (/abort|cancel|取消/i.test(message)) return new ConnectionRequestError(message || "\u8BF7\u6C42\u5DF2\u53D6\u6D88", "cancelled", options);
+  if (status === 408 || status === 504 || /timeout|timed out|超时/i.test(message)) return new ConnectionRequestError(message, "timeout", options);
+  if (status === 429 || /429|rate.?limit|too many requests|限流/i.test(message)) return new ConnectionRequestError(message, "rate_limit", options);
+  if (status === 401 || status === 403 || /401|403|unauthori[sz]ed|forbidden|密钥|鉴权|认证/i.test(message)) return new ConnectionRequestError(message, "authentication", options);
+  if (status === 404 || /(?:^|\D)404(?:\D|$)|not found/i.test(message)) return new ConnectionRequestError(message, "not_found", options);
+  if (status === 400 || status === 409 || status === 422 || /bad request|invalid request|unprocessable/i.test(message)) {
+    return new ConnectionRequestError(message, "configuration", options);
+  }
+  if (/network|fetch|socket|ECONN|ENOTFOUND|网络/i.test(message)) return new ConnectionRequestError(message, "network", options);
+  return new ConnectionRequestError(message, "upstream", options);
+}
+function isRetryable(error) {
+  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream";
+}
+function countsTowardCircuit(error) {
+  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream" || error.kind === "timeout";
+}
+var ConnectionBroker = class {
+  lanes = /* @__PURE__ */ new Map();
+  circuits = /* @__PURE__ */ new Map();
+  requests = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  subscribe(listener) {
+    this.listeners.add(listener);
+    listener(this.snapshot());
+    return () => this.listeners.delete(listener);
+  }
+  snapshot() {
+    return {
+      active: [...this.requests.values()].map(({ controller: _controller, ...record }) => ({ ...record })),
+      lanes: [...this.lanes.entries()].map(([connectionKey, lane]) => ({
+        connectionKey,
+        active: lane.active,
+        queued: lane.waiters.length,
+        maxConcurrent: lane.maxConcurrent
+      })),
+      circuits: [...this.circuits.entries()].map(([connectionKey, circuit]) => ({ connectionKey, ...circuit }))
+    };
+  }
+  async request(request) {
+    const policy = this.resolvePolicy(request.policy);
+    const id = request.id || makeRequestId();
+    if (this.requests.has(id)) {
+      throw new ConnectionRequestError(`\u8FDE\u63A5\u8BF7\u6C42ID\u91CD\u590D\uFF1A${id}`, "configuration", { connectionKey: request.connectionKey });
+    }
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort(request.signal?.reason);
+    request.signal?.addEventListener("abort", forwardAbort, { once: true });
+    if (request.signal?.aborted) controller.abort(request.signal.reason);
+    const record = {
+      id,
+      connectionKey: request.connectionKey,
+      scopeKey: request.scopeKey || "",
+      label: request.label,
+      state: "queued",
+      attempt: 0,
+      controller,
+      startedAt: Date.now()
+    };
+    this.requests.set(id, record);
+    this.emit();
+    let release;
+    try {
+      release = await this.acquire(request.connectionKey, policy.maxConcurrent, controller.signal);
+      record.state = "running";
+      this.emit();
+      this.assertCircuitAvailable(request.connectionKey, policy);
+      let lastError2 = null;
+      for (let attempt = 1; attempt <= policy.maxRetries + 1; attempt += 1) {
+        record.attempt = attempt;
+        record.state = attempt === 1 ? "running" : "retrying";
+        this.emit();
+        try {
+          const value = await this.executeAttempt(request, controller.signal, attempt);
+          this.recordSuccess(request.connectionKey);
+          return value;
+        } catch (error) {
+          let normalized = normalizeConnectionError(error);
+          if (controller.signal.aborted && normalized.kind !== "timeout") {
+            normalized = new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
+              cause: error,
+              connectionKey: request.connectionKey,
+              attempts: attempt
+            });
+          }
+          lastError2 = copyError(normalized, { attempts: attempt, connectionKey: request.connectionKey });
+          if (!isRetryable(lastError2) || attempt > policy.maxRetries || controller.signal.aborted) break;
+          const delay = this.retryDelay(lastError2, attempt, policy);
+          await this.wait(delay, controller.signal, request.label);
+        }
+      }
+      const finalError = lastError2 ?? new ConnectionRequestError(`${request.label}\u5931\u8D25`, "upstream");
+      this.recordFailure(request.connectionKey, finalError, policy);
+      throw finalError;
+    } finally {
+      release?.();
+      request.signal?.removeEventListener("abort", forwardAbort);
+      this.requests.delete(id);
+      this.emit();
+    }
+  }
+  cancel(requestId, reason = "\u8BF7\u6C42\u5DF2\u53D6\u6D88") {
+    const record = this.requests.get(requestId);
+    if (!record) return false;
+    record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+    this.emit();
+    return true;
+  }
+  cancelScope(scopeKey, reason = "\u804A\u5929\u4F5C\u7528\u57DF\u5DF2\u5931\u6548") {
+    let count = 0;
+    for (const record of this.requests.values()) {
+      if (record.scopeKey !== scopeKey) continue;
+      record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+      count += 1;
+    }
+    if (count) this.emit();
+    return count;
+  }
+  cancelAllExceptScope(scopeKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+    let count = 0;
+    for (const record of this.requests.values()) {
+      if (record.scopeKey === scopeKey) continue;
+      record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+      count += 1;
+    }
+    if (count) this.emit();
+    return count;
+  }
+  cancelAll(reason = "\u8FDE\u63A5\u670D\u52A1\u5DF2\u505C\u6B62") {
+    let count = 0;
+    for (const record of this.requests.values()) {
+      record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+      count += 1;
+    }
+    if (count) this.emit();
+    return count;
+  }
+  resetCircuit(connectionKey) {
+    if (connectionKey) this.circuits.delete(connectionKey);
+    else this.circuits.clear();
+    this.emit();
+  }
+  resolvePolicy(patch) {
+    return {
+      maxConcurrent: Math.max(1, Math.floor(patch?.maxConcurrent ?? DEFAULT_POLICY.maxConcurrent)),
+      maxRetries: Math.max(0, Math.floor(patch?.maxRetries ?? DEFAULT_POLICY.maxRetries)),
+      baseBackoffMs: Math.max(0, Math.floor(patch?.baseBackoffMs ?? DEFAULT_POLICY.baseBackoffMs)),
+      maxBackoffMs: Math.max(0, Math.floor(patch?.maxBackoffMs ?? DEFAULT_POLICY.maxBackoffMs)),
+      jitterRatio: Math.min(1, Math.max(0, Number(patch?.jitterRatio ?? DEFAULT_POLICY.jitterRatio))),
+      circuitFailureThreshold: Math.max(1, Math.floor(patch?.circuitFailureThreshold ?? DEFAULT_POLICY.circuitFailureThreshold)),
+      circuitOpenMs: Math.max(100, Math.floor(patch?.circuitOpenMs ?? DEFAULT_POLICY.circuitOpenMs))
+    };
+  }
+  async acquire(connectionKey, maxConcurrent, signal) {
+    let lane = this.lanes.get(connectionKey);
+    if (!lane) {
+      lane = { active: 0, maxConcurrent, waiters: [] };
+      this.lanes.set(connectionKey, lane);
+    }
+    lane.maxConcurrent = maxConcurrent;
+    if (signal.aborted) throw new ConnectionRequestError("\u8BF7\u6C42\u5728\u6392\u961F\u524D\u5DF2\u53D6\u6D88", "cancelled", { connectionKey });
+    if (lane.active < lane.maxConcurrent) {
+      lane.active += 1;
+      this.emit();
+      return this.releaseFactory(connectionKey, lane);
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        signal,
+        resolve,
+        reject,
+        onAbort: () => {
+          const index = lane.waiters.indexOf(waiter);
+          if (index >= 0) lane.waiters.splice(index, 1);
+          reject(new ConnectionRequestError("\u8BF7\u6C42\u5728\u961F\u5217\u4E2D\u88AB\u53D6\u6D88", "cancelled", { connectionKey }));
+          this.emit();
+        }
+      };
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+      lane.waiters.push(waiter);
+      this.emit();
     });
   }
-  return scriptModulePromise;
-}
-function applyDomLock(locked) {
-  document.documentElement.classList.toggle("ma11-generation-locked", locked);
-  const send = document.querySelector("#send_but, #send_button");
-  if (send) {
-    send.disabled = locked;
-    send.setAttribute("aria-disabled", String(locked));
+  releaseFactory(connectionKey, lane) {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      lane.active = Math.max(0, lane.active - 1);
+      while (lane.waiters.length) {
+        const waiter = lane.waiters.shift();
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+        if (waiter.signal.aborted) continue;
+        lane.active += 1;
+        waiter.resolve(this.releaseFactory(connectionKey, lane));
+        break;
+      }
+      if (lane.active === 0 && lane.waiters.length === 0) this.lanes.delete(connectionKey);
+      this.emit();
+    };
   }
-  const textarea = document.querySelector("#send_textarea");
-  if (textarea) {
-    textarea.readOnly = locked;
-    textarea.setAttribute("aria-busy", String(locked));
+  executeAttempt(request, parentSignal, attempt) {
+    if (parentSignal.aborted) {
+      return Promise.reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", { connectionKey: request.connectionKey }));
+    }
+    const attemptController = new AbortController();
+    const forwardAbort = () => attemptController.abort(parentSignal.reason);
+    parentSignal.addEventListener("abort", forwardAbort, { once: true });
+    let timer;
+    let onAttemptAbort;
+    const timeoutPromise = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const timeoutError = new ConnectionRequestError(`${request.label}\u8D85\u65F6`, "timeout", {
+          connectionKey: request.connectionKey,
+          attempts: attempt
+        });
+        attemptController.abort(timeoutError);
+        reject(timeoutError);
+      }, Math.max(1, request.timeoutMs));
+    });
+    const abortPromise = new Promise((_resolve, reject) => {
+      onAttemptAbort = () => {
+        if (parentSignal.aborted) {
+          reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
+            connectionKey: request.connectionKey,
+            attempts: attempt,
+            cause: parentSignal.reason
+          }));
+        }
+      };
+      attemptController.signal.addEventListener("abort", onAttemptAbort, { once: true });
+    });
+    const operation = Promise.resolve().then(() => request.execute(attemptController.signal, attempt));
+    return Promise.race([operation, timeoutPromise, abortPromise]).finally(() => {
+      if (timer) clearTimeout(timer);
+      parentSignal.removeEventListener("abort", forwardAbort);
+      if (onAttemptAbort) attemptController.signal.removeEventListener("abort", onAttemptAbort);
+    });
   }
-}
-async function syncNativeGenerationLock() {
-  const locked = gates.size > 0;
-  applyDomLock(locked);
-  const module = await getScriptModule();
-  try {
-    if (typeof module?.setSendButtonState === "function") module.setSendButtonState(locked);
-    if (!locked && typeof module?.showSwipeButtons === "function") module.showSwipeButtons();
-  } catch (error) {
-    console.warn("[MirrorAbyss] native generation lock failed", error);
+  assertCircuitAvailable(connectionKey, policy) {
+    const circuit = this.circuits.get(connectionKey);
+    if (!circuit) return;
+    const now = Date.now();
+    if (circuit.openUntil > now) {
+      throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
+        connectionKey,
+        retryAfterMs: circuit.openUntil - now
+      });
+    }
+    if (circuit.openUntil > 0) {
+      if (circuit.halfOpen) {
+        throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6B63\u5728\u534A\u5F00\u63A2\u6D4B`, "circuit_open", { connectionKey });
+      }
+      circuit.halfOpen = true;
+      circuit.openUntil = 0;
+      this.emit();
+    }
+    if (circuit.failures >= policy.circuitFailureThreshold && circuit.openUntil === 0 && !circuit.halfOpen) {
+      circuit.openUntil = now + policy.circuitOpenMs;
+      this.emit();
+      throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
+        connectionKey,
+        retryAfterMs: policy.circuitOpenMs
+      });
+    }
   }
-}
-function isQuarantineActive() {
-  return gates.size > 0;
-}
+  recordSuccess(connectionKey) {
+    if (this.circuits.delete(connectionKey)) this.emit();
+  }
+  recordFailure(connectionKey, error, policy) {
+    const tracked = countsTowardCircuit(error);
+    const existing = this.circuits.get(connectionKey);
+    if (!tracked && !existing) return;
+    const circuit = existing ?? { failures: 0, openUntil: 0, halfOpen: false };
+    circuit.halfOpen = false;
+    if (tracked) circuit.failures += 1;
+    if (circuit.failures >= policy.circuitFailureThreshold) circuit.openUntil = Date.now() + policy.circuitOpenMs;
+    this.circuits.set(connectionKey, circuit);
+    this.emit();
+  }
+  retryDelay(error, attempt, policy) {
+    if (typeof error.retryAfterMs === "number" && error.retryAfterMs >= 0) return Math.min(policy.maxBackoffMs, error.retryAfterMs);
+    const base = Math.min(policy.maxBackoffMs, policy.baseBackoffMs * 2 ** Math.max(0, attempt - 1));
+    const jitter = base * policy.jitterRatio * (Math.random() * 2 - 1);
+    return Math.max(0, Math.round(base + jitter));
+  }
+  wait(ms, signal, label) {
+    if (ms <= 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new ConnectionRequestError(`${label}\u91CD\u8BD5\u7B49\u5F85\u5DF2\u53D6\u6D88`, "cancelled", { cause: signal.reason }));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  emit() {
+    if (!this.listeners.size) return;
+    const snapshot = this.snapshot();
+    for (const listener of this.listeners) {
+      try {
+        listener(snapshot);
+      } catch {
+      }
+    }
+  }
+};
+var connectionBroker = new ConnectionBroker();
+
+// src/foundation/generation-guard.ts
+var internalGenerationDepth = 0;
 function isInternalGeneration() {
   return internalGenerationDepth > 0;
 }
@@ -608,75 +1481,13 @@ async function withInternalGeneration(work) {
     internalGenerationDepth = Math.max(0, internalGenerationDepth - 1);
   }
 }
-function primeQuarantine(index) {
-  const settings = getSettings();
-  if (!settings.enabled || !settings.auditEnabled || settings.auditFailAction === "mark") return null;
-  const message = getMessage(index);
-  if (!message || message.is_user || !String(message.mes || "").trim()) return null;
-  const fingerprint = messageFingerprint(index);
-  let artifact = getAttachedArtifact(message);
-  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint) {
-    artifact = createArtifact(message, index);
-  }
-  artifact.hiddenByAudit = true;
-  artifact.quarantined = true;
-  markStage(artifact, "audit", "queued");
-  if (settings.auditFailAction === "revise") markStage(artifact, "revision", "queued");
-  attachArtifactToMessage(message, artifact);
-  if (settings.lockGenerationDuringAudit) {
-    const record = {
-      key: gateKey(artifact.chatKey, index, fingerprint),
-      chatKey: artifact.chatKey,
-      messageIndex: index,
-      fingerprint
-    };
-    gates.set(record.key, record);
-    applyDomLock(true);
-    void syncNativeGenerationLock();
-  }
-  return artifact;
-}
-function ensureQuarantine(artifact) {
-  if (!getSettings().lockGenerationDuringAudit) return;
-  const key = gateKey(artifact.chatKey, artifact.messageIndex, artifact.sourceFingerprint);
-  gates.set(key, {
-    key,
-    chatKey: artifact.chatKey,
-    messageIndex: artifact.messageIndex,
-    fingerprint: artifact.sourceFingerprint
-  });
-  applyDomLock(true);
-  void syncNativeGenerationLock();
-}
-function releaseQuarantine(artifact) {
-  for (const [key, gate] of gates) {
-    if (gate.chatKey === artifact.chatKey && gate.messageIndex === artifact.messageIndex) gates.delete(key);
-  }
-  artifact.quarantined = false;
-  void syncNativeGenerationLock();
-}
-function clearAllQuarantines() {
-  gates.clear();
-  void syncNativeGenerationLock();
-}
-async function generationInterceptor(_chat, _contextSize, abort, _type) {
-  if (!isQuarantineActive() || isInternalGeneration()) return;
-  abort(true);
-  toast("warning", "\u4E0A\u4E00\u6761\u6B63\u6587\u4ECD\u5728\u5BA1\u6838\u6216\u4FEE\u6B63\uFF0C\u5DF2\u963B\u6B62\u65B0\u4E00\u8F6E\u751F\u6210\u4EE5\u907F\u514D\u4E0A\u4E0B\u6587\u6C61\u67D3");
-}
 
 // src/llm/api-profiles.ts
 var SECRET_PREFIX = "ma11:independent-api-key:";
-var ApiRequestError = class extends Error {
-  kind;
-  status;
-  responsePreview;
+var ApiRequestError = class extends ConnectionRequestError {
   constructor(message, kind, options = {}) {
-    super(message, options.cause ? { cause: options.cause } : void 0);
+    super(message, kind, options);
     this.name = "ApiRequestError";
-    this.kind = kind;
-    this.status = options.status;
-    this.responsePreview = options.responsePreview;
   }
 };
 function makeId2() {
@@ -743,7 +1554,7 @@ function updateIndependentApiProfile(profileId, patch) {
   profile.maxTokens = Math.min(131072, Math.max(64, Number(profile.maxTokens) || 4096));
   profile.temperature = Math.min(2, Math.max(0, Number(profile.temperature) || 0));
   profile.topP = Math.min(1, Math.max(0, Number(profile.topP) || 1));
-  profile.cachedModels = Array.isArray(profile.cachedModels) ? profile.cachedModels.map((item) => safeText(item, 240).trim()).filter(Boolean).slice(0, 2e3) : [];
+  profile.cachedModels = Array.isArray(profile.cachedModels) ? profile.cachedModels.map((item2) => safeText(item2, 240).trim()).filter(Boolean).slice(0, 2e3) : [];
   saveSettings();
   return profile;
 }
@@ -797,9 +1608,6 @@ async function requestIndependentApi(profileId, options) {
   const profile = getIndependentApiProfile(profileId);
   if (!profile) throw new ApiRequestError("\u9009\u62E9\u7684\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728", "configuration");
   const apiKey = validateProfile(profile);
-  const controller = new AbortController();
-  const abort = () => controller.abort(options.signal?.reason);
-  options.signal?.addEventListener("abort", abort, { once: true });
   const body = {
     chat_completion_source: "openai",
     messages: options.messages,
@@ -816,23 +1624,24 @@ async function requestIndependentApi(profileId, options) {
     request_images: false
   };
   try {
-    const response = await withTimeout(
-      fetch("/api/backends/chat-completions/generate", {
-        method: "POST",
-        headers: requestHeaders(),
-        body: JSON.stringify(body),
-        signal: controller.signal
-      }),
-      options.timeoutMs,
-      `\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42`,
-      controller
-    );
+    const response = await fetch("/api/backends/chat-completions/generate", {
+      method: "POST",
+      headers: requestHeaders(),
+      body: JSON.stringify(body),
+      signal: options.signal
+    });
     const rawText = await response.text();
     if (!response.ok) {
+      const retryAfter = response.headers.get("retry-after");
+      const retryAfterMs = retryAfter ? /^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Math.max(0, Math.round(Number(retryAfter) * 1e3)) : Math.max(0, Date.parse(retryAfter) - Date.now()) : void 0;
       throw new ApiRequestError(
         `\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42\u5931\u8D25\uFF1AHTTP ${response.status}`,
         classifyHttp(response.status),
-        { status: response.status, responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500) }
+        {
+          status: response.status,
+          responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500),
+          retryAfterMs
+        }
       );
     }
     let data;
@@ -854,15 +1663,13 @@ async function requestIndependentApi(profileId, options) {
     }
     return content;
   } catch (error) {
-    if (error instanceof ApiRequestError) throw error;
-    if (controller.signal.aborted || options.signal?.aborted) {
-      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "timeout", { cause: error });
+    if (error instanceof ApiRequestError || error instanceof ConnectionRequestError) throw error;
+    if (options.signal?.aborted) {
+      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", { cause: error });
     }
     const message = toErrorMessage(error);
     if (/超时|timeout/i.test(message)) throw new ApiRequestError(message, "timeout", { cause: error });
     throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF1A${message}`, "network", { cause: error });
-  } finally {
-    options.signal?.removeEventListener("abort", abort);
   }
 }
 async function fetchIndependentModels(profileId, timeoutMs) {
@@ -905,7 +1712,7 @@ async function fetchIndependentModels(profileId, timeoutMs) {
   if (!Array.isArray(source)) {
     throw new ApiRequestError("API\u672A\u8FD4\u56DE\u53EF\u8BC6\u522B\u7684\u6A21\u578B\u5217\u8868", "response_format", { responsePreview: safeText(data, 500) });
   }
-  const models = source.map((item) => safeText(item?.id ?? item?.name ?? item?.model ?? item, 240).replace(/^models\//, "").trim()).filter(Boolean).filter((value, index, list2) => list2.indexOf(value) === index).sort((a, b) => a.localeCompare(b));
+  const models = source.map((item2) => safeText(item2?.id ?? item2?.name ?? item2?.model ?? item2, 240).replace(/^models\//, "").trim()).filter(Boolean).filter((value, index, list2) => list2.indexOf(value) === index).sort((a, b) => a.localeCompare(b));
   updateIndependentApiProfile(profile.id, { cachedModels: models });
   return models;
 }
@@ -954,9 +1761,9 @@ function messagesFromOptions(options) {
   const messages = [];
   if (options.systemPrompt.trim()) messages.push({ role: "system", content: options.systemPrompt });
   if (Array.isArray(options.prompt)) {
-    for (const item of options.prompt) {
-      const role = safeText(item?.role, 30).trim() || "user";
-      const content = safeText(item?.content, 2e5);
+    for (const item2 of options.prompt) {
+      const role = safeText(item2?.role, 30).trim() || "user";
+      const content = safeText(item2?.content, 2e5);
       if (content.trim()) messages.push({ role, content });
     }
   } else {
@@ -964,59 +1771,59 @@ function messagesFromOptions(options) {
   }
   return messages;
 }
-async function generateCurrent(options) {
+async function generateCurrent(options, signal) {
   const context = getContext();
-  if (typeof context.generateRaw !== "function") throw new Error("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BgenerateRaw");
-  const settings = getSettings();
-  const result = await withTimeout(
-    withInternalGeneration(() => Promise.resolve(context.generateRaw({
+  if (typeof context.generateRaw !== "function") {
+    throw new ConnectionRequestError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BgenerateRaw", "configuration");
+  }
+  try {
+    const result = await withInternalGeneration(() => Promise.resolve(context.generateRaw({
       systemPrompt: options.systemPrompt,
       prompt: options.prompt,
-      jsonSchema: options.jsonSchema
-    }))),
-    Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
-    `${options.task}\u6A21\u578B\u8C03\u7528`
-  );
-  const text = generationText(result);
-  if (!text) throw new Error(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`);
-  return text;
+      jsonSchema: options.jsonSchema,
+      signal
+    })));
+    const text = generationText(result);
+    if (!text) throw new ConnectionRequestError(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
+    return text;
+  } catch (error) {
+    if (signal.aborted) throw new ConnectionRequestError(`${options.task}\u6A21\u578B\u8C03\u7528\u5DF2\u53D6\u6D88`, "cancelled", { cause: error });
+    throw normalizeConnectionError(error);
+  }
 }
-async function generateWithNativeProfile(options, profileId) {
+async function generateWithNativeProfile(options, profileId, signal) {
   const context = getContext();
   const service = context.ConnectionManagerRequestService;
   if (typeof service?.sendRequest !== "function") {
-    throw new Error("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BConnectionManagerRequestService");
+    throw new ConnectionRequestError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BConnectionManagerRequestService", "configuration");
   }
-  const settings = getSettings();
-  const messages = messagesFromOptions(options);
-  const result = await withTimeout(
-    withInternalGeneration(() => Promise.resolve(service.sendRequest(
+  try {
+    const result = await withInternalGeneration(() => Promise.resolve(service.sendRequest(
       profileId,
-      messages,
+      messagesFromOptions(options),
       void 0,
       {
         stream: false,
         extractData: true,
         includePreset: false,
         includeInstruct: false,
-        signal: null
+        signal
       },
-      {
-        stream: false
-      }
-    ))),
-    Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
-    `${options.task} Connection Profile\u8BF7\u6C42`
-  );
-  const text = generationText(result);
-  if (!text) throw new Error(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`);
-  return text;
+      { stream: false }
+    )));
+    const text = generationText(result);
+    if (!text) throw new ConnectionRequestError(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
+    return text;
+  } catch (error) {
+    if (signal.aborted) throw new ConnectionRequestError(`${options.task} Connection Profile\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", { cause: error });
+    throw normalizeConnectionError(error);
+  }
 }
-async function generateWithIndependentProfile(options, profileId) {
-  const settings = getSettings();
+async function generateWithIndependentProfile(options, profileId, signal) {
   return withInternalGeneration(() => requestIndependentApi(profileId, {
     messages: messagesFromOptions(options),
-    timeoutMs: Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4)
+    timeoutMs: Math.max(1e4, Number(getSettings().requestTimeoutMs) || 9e4),
+    signal
   }));
 }
 function listSupportedConnectionProfiles() {
@@ -1031,7 +1838,7 @@ function describeTaskConnection(task) {
   const connection = getSettings().connections[task];
   if (connection?.mode === "profile") {
     const id = resolveProfileId(connection);
-    const profile = listSupportedConnectionProfiles().find((item) => item.id === id);
+    const profile = listSupportedConnectionProfiles().find((item2) => item2.id === id);
     return `Connection Profile\uFF1A${profile?.name || cleanProfileName(connection.profile) || "\u672A\u9009\u62E9"}`;
   }
   if (connection?.mode === "independent") {
@@ -1040,18 +1847,41 @@ function describeTaskConnection(task) {
   }
   return "\u5F53\u524D\u804A\u5929\u8FDE\u63A5";
 }
-async function generateTask(options) {
+function taskAdapter(options) {
   const connection = getSettings().connections[options.task];
   if (connection?.mode === "profile") {
     const profileId = resolveProfileId(connection);
-    if (!profileId) throw new Error(`${options.task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`);
-    return generateWithNativeProfile(options, profileId);
+    if (!profileId) throw new ApiRequestError(`${options.task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`, "configuration");
+    return {
+      connectionKey: `profile:${profileId}`,
+      execute: (signal) => generateWithNativeProfile(options, profileId, signal)
+    };
   }
   if (connection?.mode === "independent") {
-    if (!connection.independentProfileId) throw new Error(`${options.task}\u672A\u9009\u62E9\u955C\u6E0A\u72EC\u7ACBAPI`);
-    return generateWithIndependentProfile(options, connection.independentProfileId);
+    if (!connection.independentProfileId) throw new ApiRequestError(`${options.task}\u672A\u9009\u62E9\u955C\u6E0A\u72EC\u7ACBAPI`, "configuration");
+    return {
+      connectionKey: `independent:${connection.independentProfileId}`,
+      execute: (signal) => generateWithIndependentProfile(options, connection.independentProfileId, signal)
+    };
   }
-  return generateCurrent(options);
+  return {
+    connectionKey: "current",
+    execute: (signal) => generateCurrent(options, signal)
+  };
+}
+async function generateTask(options) {
+  const adapter = taskAdapter(options);
+  const scope = chatScopeManager.current();
+  const timeoutMs = Math.max(1e4, Number(getSettings().requestTimeoutMs) || 9e4);
+  return connectionBroker.request({
+    id: options.requestId,
+    connectionKey: adapter.connectionKey,
+    scopeKey: scope.chatKey,
+    label: `${options.task}\u6A21\u578B\u8BF7\u6C42`,
+    timeoutMs,
+    signal: options.signal,
+    execute: (signal) => adapter.execute(signal)
+  });
 }
 async function testConnection(task) {
   const started = performance.now();
@@ -1071,7 +1901,7 @@ async function testConnection(task) {
       }
     });
   } catch (error) {
-    if (error instanceof ApiRequestError) {
+    if (error instanceof ConnectionRequestError) {
       throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25 [${error.kind}]\uFF1A${error.message}${error.responsePreview ? `\uFF1B\u4E0A\u6E38\u7247\u6BB5\uFF1A${error.responsePreview}` : ""}`);
     }
     throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
@@ -1125,12 +1955,13 @@ function structuredError(task, error, raw) {
   const detail = toErrorMessage(error);
   return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
 }
-async function repairStructuredOutput(task, raw, structureDescription, jsonSchema) {
+async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, signal) {
   const repaired = await generateTask({
     task,
     systemPrompt: repairSystemPrompt(structureDescription),
     prompt: repairUserPrompt(raw),
-    jsonSchema
+    jsonSchema,
+    signal
   });
   return parseJsonObject(repaired);
 }
@@ -1142,7 +1973,7 @@ async function generateStructuredTask(options) {
     const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
     if (!allowRepair) throw structuredError(options.task, firstError, raw);
     try {
-      return await repairStructuredOutput(options.task, raw, options.structureDescription, options.jsonSchema);
+      return await repairStructuredOutput(options.task, raw, options.structureDescription, options.jsonSchema, options.signal);
     } catch (repairError) {
       throw structuredError(options.task, repairError, raw);
     }
@@ -1227,11 +2058,11 @@ function auditJsonSchema() {
 }
 
 // src/core/message-update.ts
-var scriptModulePromise2 = null;
+var scriptModulePromise = null;
 async function scriptModule() {
   if (typeof process !== "undefined" && Boolean(process.versions?.node)) return null;
-  if (!scriptModulePromise2) {
-    scriptModulePromise2 = import(
+  if (!scriptModulePromise) {
+    scriptModulePromise = import(
       /* @vite-ignore */
       String("/script.js")
     ).catch((error) => {
@@ -1239,7 +2070,7 @@ async function scriptModule() {
       return null;
     });
   }
-  return scriptModulePromise2;
+  return scriptModulePromise;
 }
 function updateActiveSwipe(message, text) {
   if (!Array.isArray(message?.swipes)) return;
@@ -1316,19 +2147,19 @@ async function deleteLatestMessageSafely(artifact) {
 // src/pipeline/audit.ts
 function list(value, maxItems = 24) {
   if (!Array.isArray(value)) return [];
-  return value.map((item) => safeText(item, 2e3).trim()).filter(Boolean).slice(0, maxItems);
+  return value.map((item2) => safeText(item2, 2e3).trim()).filter(Boolean).slice(0, maxItems);
 }
 function violationList(value) {
   if (!Array.isArray(value)) return [];
-  return value.map((item, index) => ({
-    ruleId: safeText(item?.ruleId || `rule_${index + 1}`, 120).trim() || `rule_${index + 1}`,
-    rule: safeText(item?.rule, 1e3).trim(),
-    evidence: safeText(item?.evidence, 3e3).trim(),
-    action: safeText(item?.action, 3e3).trim()
-  })).filter((item) => item.rule || item.evidence || item.action).slice(0, 24);
+  return value.map((item2, index) => ({
+    ruleId: safeText(item2?.ruleId || `rule_${index + 1}`, 120).trim() || `rule_${index + 1}`,
+    rule: safeText(item2?.rule, 1e3).trim(),
+    evidence: safeText(item2?.evidence, 3e3).trim(),
+    action: safeText(item2?.action, 3e3).trim()
+  })).filter((item2) => item2.rule || item2.evidence || item2.action).slice(0, 24);
 }
 function resultFingerprint(violations) {
-  const normalized = violations.map((item) => `${item.ruleId}|${item.rule}`.toLowerCase().replace(/\s+/g, " ").trim()).sort().join("\n");
+  const normalized = violations.map((item2) => `${item2.ruleId}|${item2.rule}`.toLowerCase().replace(/\s+/g, " ").trim()).sort().join("\n");
   return normalized ? hashText(normalized) : "";
 }
 function parseAuditResult(raw) {
@@ -1389,13 +2220,13 @@ function applyAuditVisibility(index, hidden) {
   const element = findMessageElement(index);
   element?.classList.toggle("ma11-audit-hidden-message", hidden);
 }
-async function auditText(playerRules, playerText, assistantText) {
+async function auditText(playerRules, playerText, assistantText, signal) {
   const request = {
     task: "audit",
     systemPrompt: auditSystemPrompt(),
     prompt: auditUserPrompt(playerRules, playerText, assistantText)
   };
-  const raw = await generateTask({ ...request, jsonSchema: auditJsonSchema() });
+  const raw = await generateTask({ ...request, jsonSchema: auditJsonSchema(), signal });
   try {
     return parseAuditResult(raw);
   } catch (firstError) {
@@ -1407,7 +2238,8 @@ async function auditText(playerRules, playerText, assistantText) {
         "audit",
         raw,
         '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"..."}',
-        auditJsonSchema()
+        auditJsonSchema(),
+        signal
       );
       return parseAuditResult(JSON.stringify(repaired));
     } catch (repairError) {
@@ -1433,7 +2265,7 @@ async function applyAuditFailureAction(artifact, action) {
     toast("warning", "\u5BA1\u6838\u672A\u901A\u8FC7\uFF0C\u4F46\u5B89\u5168\u64A4\u56DE\u6761\u4EF6\u4E0D\u6210\u7ACB\uFF1B\u5DF2\u6539\u4E3A\u9690\u85CF\u5E76\u4FDD\u7559\u8BB0\u5F55");
   }
 }
-async function runAudit(artifact, force = false) {
+async function runAudit(artifact, force = false, signal) {
   const settings = getSettings();
   artifact.stages.revision ||= { status: "idle", attempts: 0 };
   if (!settings.auditEnabled) {
@@ -1458,7 +2290,7 @@ async function runAudit(artifact, force = false) {
   markStage(artifact, "audit", "running");
   await putArtifact(artifact);
   try {
-    const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText);
+    const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText, signal);
     artifact.audit = result;
     if (result.passed) {
       artifact.approvedFingerprint = artifact.sourceFingerprint;
@@ -1473,7 +2305,6 @@ async function runAudit(artifact, force = false) {
     const message = getMessage(artifact.messageIndex);
     if (message && messageFingerprint(artifact.messageIndex) === artifact.sourceFingerprint) {
       attachArtifactToMessage(message, artifact);
-      await persistChat();
     }
     await putArtifact(artifact);
     return result;
@@ -1500,10 +2331,10 @@ ${customPrompt.trim() ? `
 ${customPrompt.trim()}` : ""}`;
 }
 function revisionUserPrompt(playerRules, playerText, sourceText, audit, attempt) {
-  const violations = audit.violations.map((item, index) => `${index + 1}. \u89C4\u5219\uFF1A${item.rule}
-   \u8BC1\u636E\uFF1A${item.evidence}
-   \u4FEE\u6539\uFF1A${item.action}`).join("\n");
-  const preserve = audit.preserve.length ? audit.preserve.map((item) => `- ${item}`).join("\n") : "- \u539F\u6B63\u6587\u4E2D\u5168\u90E8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E";
+  const violations = audit.violations.map((item2, index) => `${index + 1}. \u89C4\u5219\uFF1A${item2.rule}
+   \u8BC1\u636E\uFF1A${item2.evidence}
+   \u4FEE\u6539\uFF1A${item2.action}`).join("\n");
+  const preserve = audit.preserve.length ? audit.preserve.map((item2) => `- ${item2}`).join("\n") : "- \u539F\u6B63\u6587\u4E2D\u5168\u90E8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E";
   return `\u3010\u4FEE\u6B63\u8F6E\u6B21\u3011
 \u7B2C${attempt}\u6B21
 
@@ -1528,6 +2359,120 @@ ${sourceText}
 \u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u5B8C\u6574\u6B63\u6587\u3002`;
 }
 
+// src/pipeline/quarantine.ts
+var LOCK_TOKEN = "mirror-abyss-audit";
+var gates = /* @__PURE__ */ new Map();
+var lockedElements = [];
+function gateKey(chatKey, index, fingerprint3) {
+  return `${chatKey}:${index}:${fingerprint3}`;
+}
+function captureAndLockElement(element) {
+  const state2 = {
+    element,
+    ariaDisabled: element.getAttribute("aria-disabled"),
+    ariaBusy: element.getAttribute("aria-busy")
+  };
+  if (element instanceof HTMLButtonElement) {
+    state2.disabled = element.disabled;
+    element.disabled = true;
+    element.setAttribute("aria-disabled", "true");
+  }
+  if (element instanceof HTMLTextAreaElement) {
+    state2.readOnly = element.readOnly;
+    element.readOnly = true;
+    element.setAttribute("aria-busy", "true");
+  }
+  element.dataset.ma11LockOwner = LOCK_TOKEN;
+  return state2;
+}
+function restoreAttribute(element, name, value) {
+  if (value === null) element.removeAttribute(name);
+  else element.setAttribute(name, value);
+}
+function syncDomLock() {
+  const locked = gates.size > 0;
+  if (typeof document === "undefined") {
+    if (!locked) lockedElements = [];
+    return;
+  }
+  document.documentElement.classList.toggle("ma11-generation-locked", locked);
+  if (locked) {
+    if (lockedElements.length) return;
+    const candidates = [
+      document.querySelector("#send_but, #send_button"),
+      document.querySelector("#send_textarea")
+    ].filter((element) => Boolean(element));
+    lockedElements = candidates.map(captureAndLockElement);
+    return;
+  }
+  for (const state2 of lockedElements.splice(0)) {
+    const element = state2.element;
+    if (element.dataset.ma11LockOwner !== LOCK_TOKEN) continue;
+    if (element instanceof HTMLButtonElement && state2.disabled !== void 0) element.disabled = state2.disabled;
+    if (element instanceof HTMLTextAreaElement && state2.readOnly !== void 0) element.readOnly = state2.readOnly;
+    restoreAttribute(element, "aria-disabled", state2.ariaDisabled);
+    restoreAttribute(element, "aria-busy", state2.ariaBusy);
+    delete element.dataset.ma11LockOwner;
+  }
+}
+function isQuarantineActive() {
+  return gates.size > 0;
+}
+function primeQuarantine(index) {
+  const settings = getSettings();
+  if (!settings.enabled || !settings.auditEnabled || settings.auditFailAction === "mark") return null;
+  const message = getMessage(index);
+  if (!message || message.is_user || !String(message.mes || "").trim()) return null;
+  const fingerprint3 = messageFingerprint(index);
+  let artifact = getAttachedArtifact(message);
+  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint3) {
+    artifact = createArtifactForMessage(index);
+  }
+  artifact.hiddenByAudit = true;
+  artifact.quarantined = true;
+  markStage(artifact, "audit", "queued");
+  if (settings.auditFailAction === "revise") markStage(artifact, "revision", "queued");
+  attachArtifactToMessage(message, artifact);
+  if (settings.lockGenerationDuringAudit) {
+    const record = {
+      key: gateKey(artifact.chatKey, index, fingerprint3),
+      chatKey: artifact.chatKey,
+      messageIndex: index,
+      fingerprint: fingerprint3
+    };
+    gates.set(record.key, record);
+    syncDomLock();
+  }
+  return artifact;
+}
+function ensureQuarantine(artifact) {
+  if (!getSettings().lockGenerationDuringAudit) return;
+  const key = gateKey(artifact.chatKey, artifact.messageIndex, artifact.sourceFingerprint);
+  gates.set(key, {
+    key,
+    chatKey: artifact.chatKey,
+    messageIndex: artifact.messageIndex,
+    fingerprint: artifact.sourceFingerprint
+  });
+  syncDomLock();
+}
+function releaseQuarantine(artifact) {
+  for (const [key, gate] of gates) {
+    if (gate.chatKey === artifact.chatKey && gate.messageIndex === artifact.messageIndex) gates.delete(key);
+  }
+  artifact.quarantined = false;
+  syncDomLock();
+}
+function clearAllQuarantines() {
+  gates.clear();
+  syncDomLock();
+}
+async function generationInterceptor(_chat, _contextSize, abort, _type) {
+  if (!isQuarantineActive() || isInternalGeneration()) return;
+  abort(true);
+  toast("warning", "\u4E0A\u4E00\u6761\u6B63\u6587\u4ECD\u5728\u5BA1\u6838\u6216\u4FEE\u6B63\uFF0C\u5DF2\u963B\u6B62\u65B0\u4E00\u8F6E\u751F\u6210\u4EE5\u907F\u514D\u4E0A\u4E0B\u6587\u6C61\u67D3");
+}
+
 // src/pipeline/revision.ts
 function cleanRevisionText(raw) {
   let text = safeText(raw, 2e5).trim();
@@ -1544,7 +2489,7 @@ function initialRevisionRecord(artifact) {
     attempts: []
   };
 }
-async function runRevisionFlow(artifact) {
+async function runRevisionFlow(artifact, signal) {
   const settings = getSettings();
   const firstAudit = artifact.audit;
   if (!firstAudit || firstAudit.passed) throw new Error("\u6CA1\u6709\u53EF\u4FEE\u6B63\u7684\u5BA1\u6838\u5931\u8D25\u7ED3\u679C");
@@ -1572,12 +2517,13 @@ async function runRevisionFlow(artifact) {
       const raw = await generateTask({
         task: "revision",
         systemPrompt: revisionSystemPrompt(settings.revisionPrompt),
-        prompt: revisionUserPrompt(settings.auditPrompt, artifact.playerText, sourceText, currentAudit, attempt)
+        prompt: revisionUserPrompt(settings.auditPrompt, artifact.playerText, sourceText, currentAudit, attempt),
+        signal
       });
       const candidate = cleanRevisionText(raw);
       if (!candidate) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u8FD4\u56DE\u7A7A\u6B63\u6587");
       if (hashText(candidate) === hashText(sourceText)) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u672A\u6539\u53D8\u6B63\u6587");
-      const candidateAudit = await auditText(settings.auditPrompt, artifact.playerText, candidate);
+      const candidateAudit = await auditText(settings.auditPrompt, artifact.playerText, candidate, signal);
       artifact.revision.attempts.push({
         attempt,
         sourceFingerprint: hashText(sourceText),
@@ -1622,6 +2568,7 @@ async function runRevisionFlow(artifact) {
     await putArtifact(artifact);
     return { approved: false, audit: artifact.audit ?? firstAudit };
   } catch (error) {
+    if (signal?.aborted) throw error;
     artifact.revision.status = "failed";
     artifact.revision.stoppedReason = toErrorMessage(error);
     markStage(artifact, "revision", "failed", artifact.revision.stoppedReason);
@@ -1635,7 +2582,7 @@ function rows(snapshot, key) {
   return snapshot[key] ?? [];
 }
 function uniq(values, limit = 32) {
-  return [...new Set(values.map((item) => String(item || "").trim()).filter((item) => item.length >= 2))].slice(0, limit);
+  return [...new Set(values.map((item2) => String(item2 || "").trim()).filter((item2) => item2.length >= 2))].slice(0, limit);
 }
 function titleKeywords(row) {
   return uniq([row.title, ...row.keywords], 20);
@@ -1711,15 +2658,15 @@ function makeDocument(key, comment, content, keywords, constant, vectorized, ord
   };
 }
 function unconsumedSmallSummaries(small, large) {
-  const consumed = new Set(large.flatMap((item) => item.sourceKeys));
-  return small.filter((item) => !consumed.has(item.id));
+  const consumed = new Set(large.flatMap((item2) => item2.sourceKeys));
+  return small.filter((item2) => !consumed.has(item2.id));
 }
 function currentSmallSummaryContent(summaries) {
-  const blocks = summaries.map((item) => {
-    const notes = item.sedimentation?.notes?.length ? `
-\u6C89\u964D\u5904\u7406\uFF1A${item.sedimentation.notes.join("\uFF1B")}` : "";
-    return `\u3010${item.title}\u3011
-${item.summary}${notes}`;
+  const blocks = summaries.map((item2) => {
+    const notes = item2.sedimentation?.notes?.length ? `
+\u6C89\u964D\u5904\u7406\uFF1A${item2.sedimentation.notes.join("\uFF1B")}` : "";
+    return `\u3010${item2.title}\u3011
+${item2.summary}${notes}`;
   });
   return `[\u5C0F\u603B\u7ED3\uFF1A\u5F53\u524D\u5468\u671F]
 ${blocks.join("\n\n")}`;
@@ -1848,7 +2795,7 @@ function buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries
       "semantic:small:current",
       "MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C\u5F53\u524D\u5468\u671F",
       currentSmallSummaryContent(pendingSmall),
-      ["\u5C0F\u603B\u7ED3", "\u5F53\u524D\u5468\u671F", ...pendingSmall.flatMap((item) => [item.title, ...item.keywords])],
+      ["\u5C0F\u603B\u7ED3", "\u5F53\u524D\u5468\u671F", ...pendingSmall.flatMap((item2) => [item2.title, ...item2.keywords])],
       options.latestContinuityConstant,
       options.vectorize,
       150,
@@ -1890,24 +2837,24 @@ function buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries
       }
     }
   }
-  for (const item of smallSummaries) {
+  for (const item2 of smallSummaries) {
     documents.push(makeDocument(
-      `small:${item.id}`,
-      `MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item.title}`,
-      item.summary,
-      [item.title, ...item.keywords],
+      `small:${item2.id}`,
+      `MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item2.title}`,
+      item2.summary,
+      [item2.title, ...item2.keywords],
       false,
       options.vectorize,
       110,
       "small"
     ));
   }
-  for (const item of largeSummaries) {
+  for (const item2 of largeSummaries) {
     documents.push(makeDocument(
-      `large:${item.id}`,
-      `MA\uFF5C\u5927\u603B\u7ED3\uFF5C${item.title}`,
-      item.summary,
-      [item.title, ...item.keywords],
+      `large:${item2.id}`,
+      `MA\uFF5C\u5927\u603B\u7ED3\uFF5C${item2.title}`,
+      item2.summary,
+      [item2.title, ...item2.keywords],
       false,
       options.vectorize,
       120,
@@ -1920,9 +2867,686 @@ function buildLorebookDocuments(snapshot, smallSummaries, largeSummaries, option
   return options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) : buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options);
 }
 
-// src/pipeline/lorebook.ts
+// src/foundation/capabilities.ts
+function item(id, label, value, required, availableDetail, missingDetail) {
+  const available = Boolean(value);
+  return {
+    id,
+    label,
+    state: available ? "available" : required ? "missing" : "degraded",
+    required,
+    detail: available ? availableDetail : missingDetail
+  };
+}
+function detectCapabilities(context) {
+  const items = [
+    item("eventSource", "\u4E8B\u4EF6\u603B\u7EBF", context?.eventSource?.on, true, "eventSource \u53EF\u7528", "\u7F3A\u5C11 eventSource.on"),
+    item("eventTypes", "\u4E8B\u4EF6\u7C7B\u578B", context?.event_types, true, "event_types \u53EF\u7528", "\u7F3A\u5C11 event_types"),
+    item("settings", "\u6269\u5C55\u8BBE\u7F6E", context?.extensionSettings, true, "extensionSettings \u53EF\u7528", "\u7F3A\u5C11 extensionSettings"),
+    item("accountStorage", "\u8D26\u6237\u7EA7\u5B58\u50A8", context?.accountStorage?.getItem && context?.accountStorage?.setItem, false, "accountStorage \u53EF\u7528", "\u5C06\u4F7F\u7528\u4EC5\u5F53\u524D\u9875\u9762\u6709\u6548\u7684\u8D26\u6237\u9694\u79BB\u6807\u8BC6"),
+    item("metadata", "\u804A\u5929\u5143\u6570\u636E", context?.chatMetadata ?? context?.chat_metadata, true, "chatMetadata \u53EF\u7528", "\u7F3A\u5C11 chatMetadata"),
+    item("saveMetadata", "\u804A\u5929\u5143\u6570\u636E\u4FDD\u5B58", context?.saveMetadata ?? context?.saveMetadataDebounced, true, "\u5143\u6570\u636E\u4FDD\u5B58\u63A5\u53E3\u53EF\u7528", "\u7F3A\u5C11\u5143\u6570\u636E\u4FDD\u5B58\u63A5\u53E3"),
+    item("saveChat", "\u804A\u5929\u4FDD\u5B58", context?.saveChat ?? context?.saveChatConditional, true, "\u804A\u5929\u4FDD\u5B58\u63A5\u53E3\u53EF\u7528", "\u7F3A\u5C11\u804A\u5929\u4FDD\u5B58\u63A5\u53E3"),
+    item("templates", "\u5F02\u6B65\u6A21\u677F\u6E32\u67D3", context?.renderExtensionTemplateAsync, false, "\u5F02\u6B65\u6A21\u677F\u63A5\u53E3\u53EF\u7528", "\u5C06\u4F7F\u7528\u5185\u7F6E\u6A21\u677F\u964D\u7EA7"),
+    item("localforage", "\u6D4F\u89C8\u5668\u6301\u4E45\u5B58\u50A8", globalThis.SillyTavern?.libs?.localforage?.createInstance, false, "localforage \u53EF\u7528", "\u5C06\u964D\u7EA7\u5230 localStorage"),
+    item("profileRequest", "Connection Profile \u9694\u79BB\u8BF7\u6C42", context?.ConnectionManagerRequestService?.sendRequest, false, "\u539F\u751F\u9694\u79BB\u8BF7\u6C42\u53EF\u7528", "\u53EA\u80FD\u4F7F\u7528\u5F53\u524D\u8FDE\u63A5\u6216\u72EC\u7ACB API"),
+    item("generateRaw", "\u5F53\u524D\u8FDE\u63A5\u539F\u59CB\u751F\u6210", context?.generateRaw, false, "generateRaw \u53EF\u7528", "\u5F53\u524D\u8FDE\u63A5\u6A21\u5F0F\u4E0D\u53EF\u7528"),
+    item("requestHeaders", "\u670D\u52A1\u5668\u8BF7\u6C42\u5934", context?.getRequestHeaders, false, "\u53EF\u53D6\u5F97 CSRF \u8BF7\u6C42\u5934", "\u670D\u52A1\u5668\u5199\u5165\u5C06\u8FDB\u884C\u517C\u5BB9\u964D\u7EA7"),
+    item("debugFunction", "\u8C03\u8BD5\u83DC\u5355", context?.registerDebugFunction, false, "\u8C03\u8BD5\u51FD\u6570\u6CE8\u518C\u53EF\u7528", "\u4E0D\u5F71\u54CD\u6838\u5FC3\u8FD0\u884C")
+  ];
+  return {
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    ready: !items.some((entry) => entry.required && entry.state === "missing"),
+    degraded: items.some((entry) => entry.state === "degraded"),
+    items
+  };
+}
+
+// src/foundation/event-router.ts
+var EventRouter = class {
+  subscribers = /* @__PURE__ */ new Map();
+  cleanup = [];
+  installed = false;
+  sequence = 0;
+  subscribe(type, subscriber) {
+    const set = this.subscribers.get(type) ?? /* @__PURE__ */ new Set();
+    set.add(subscriber);
+    this.subscribers.set(type, set);
+    return () => set.delete(subscriber);
+  }
+  emit(type, payload, sourceEvent) {
+    const event = {
+      id: ++this.sequence,
+      type,
+      payload,
+      scope: chatScopeManager.current(),
+      occurredAt: (/* @__PURE__ */ new Date()).toISOString(),
+      sourceEvent
+    };
+    for (const subscriber of this.subscribers.get(type) ?? []) {
+      try {
+        const result = subscriber(event);
+        if (result && typeof result.catch === "function") {
+          void result.catch((error) => console.error("[MirrorAbyss] event subscriber failed", error));
+        }
+      } catch (error) {
+        console.error("[MirrorAbyss] event subscriber failed", error);
+      }
+    }
+  }
+  install(context) {
+    if (this.installed) return;
+    const eventSource = context?.eventSource;
+    const types = context?.event_types;
+    if (!eventSource?.on || !types) throw new Error("\u4E8B\u4EF6\u8DEF\u7531\u5668\u65E0\u6CD5\u5B89\u88C5\uFF1A\u7F3A\u5C11 eventSource \u6216 event_types");
+    const bind = (rawType, normalized, before) => {
+      if (!rawType) return;
+      const handler = (payload) => {
+        before?.();
+        this.emit(normalized, payload, rawType);
+      };
+      eventSource.on(rawType, handler);
+      this.cleanup.push(() => eventSource.removeListener?.(rawType, handler));
+    };
+    bind(types.APP_READY, "app-ready");
+    bind(types.CHAT_CHANGED, "chat-changed", () => chatScopeManager.invalidate());
+    bind(types.CHAT_CREATED, "chat-created", () => {
+      rotateChatIdentityForContext(context);
+      chatScopeManager.invalidate();
+    });
+    bind(types.GROUP_CHAT_CREATED, "chat-created", () => {
+      rotateChatIdentityForContext(context);
+      chatScopeManager.invalidate();
+    });
+    bind(types.MESSAGE_RECEIVED, "message-created");
+    bind(types.CHARACTER_MESSAGE_RENDERED, "message-rendered");
+    bind(types.MESSAGE_EDITED, "message-changed");
+    bind(types.MESSAGE_UPDATED, "message-changed");
+    bind(types.MESSAGE_SWIPED, "message-changed");
+    bind(types.MESSAGE_SWIPE_DELETED, "message-changed");
+    bind(types.MESSAGE_DELETED, "message-removed");
+    bind(types.GENERATION_STARTED, "generation-started");
+    bind(types.GENERATION_ENDED, "generation-finished");
+    bind(types.WORLDINFO_UPDATED, "worldinfo-updated");
+    this.installed = true;
+  }
+  uninstall() {
+    for (const dispose of this.cleanup.splice(0)) {
+      try {
+        dispose();
+      } catch (error) {
+        console.warn("[MirrorAbyss] event unbind failed", error);
+      }
+    }
+    this.installed = false;
+  }
+  isInstalled() {
+    return this.installed;
+  }
+};
+
+// src/foundation/lock-manager.ts
+var LockManager = class {
+  tails = /* @__PURE__ */ new Map();
+  async withLock(key, work) {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.catch(() => void 0).then(() => current);
+    this.tails.set(key, queued);
+    await previous.catch(() => void 0);
+    try {
+      return await work();
+    } finally {
+      release();
+      if (this.tails.get(key) === queued) this.tails.delete(key);
+    }
+  }
+  isLocked(key) {
+    return this.tails.has(key);
+  }
+};
+
+// src/foundation/service-container.ts
+function createServiceToken(description) {
+  return Symbol(description);
+}
+var ServiceContainer = class {
+  services = /* @__PURE__ */ new Map();
+  register(token, service) {
+    if (this.services.has(token)) throw new Error(`\u670D\u52A1\u5DF2\u6CE8\u518C\uFF1A${String(token.description || token)}`);
+    this.services.set(token, service);
+    return service;
+  }
+  replace(token, service) {
+    this.services.set(token, service);
+    return service;
+  }
+  has(token) {
+    return this.services.has(token);
+  }
+  get(token) {
+    if (!this.services.has(token)) throw new Error(`\u670D\u52A1\u672A\u6CE8\u518C\uFF1A${String(token.description || token)}`);
+    return this.services.get(token);
+  }
+  tryGet(token) {
+    return this.services.get(token) ?? null;
+  }
+  clear() {
+    this.services.clear();
+  }
+};
+
+// src/foundation/cross-tab-coordinator.ts
+function abortError(signal) {
+  const reason = signal?.reason;
+  if (reason instanceof Error) return reason;
+  const error = new Error(reason ? String(reason) : "\u534F\u8C03\u79DF\u7EA6\u5DF2\u53D6\u6D88");
+  error.name = "AbortError";
+  return error;
+}
+function defaultSleep(ms, signal) {
+  if (signal?.aborted) return Promise.reject(abortError(signal));
+  return new Promise((resolve, reject) => {
+    const finish = (callback) => {
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const timer = setTimeout(() => finish(resolve), ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      finish(() => reject(abortError(signal)));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+function safeParse(raw) {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw);
+    if (!value?.ownerId || !value?.token || !Number.isFinite(value.expiresAt)) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+var CrossTabCoordinator = class {
+  ownerId;
+  storage;
+  navigatorLike;
+  now;
+  sleep;
+  leaseTtlMs;
+  heartbeatMs;
+  acquireTimeoutMs;
+  channel;
+  active = /* @__PURE__ */ new Map();
+  memoryTails = /* @__PURE__ */ new Map();
+  stopped = false;
+  constructor(options = {}) {
+    this.ownerId = options.ownerId ?? makeId("tab");
+    this.storage = options.storage !== void 0 ? options.storage : (() => {
+      try {
+        return globalThis.localStorage ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    this.navigatorLike = options.navigatorLike !== void 0 ? options.navigatorLike : globalThis.navigator;
+    this.now = options.now ?? (() => Date.now());
+    this.sleep = options.sleep ?? defaultSleep;
+    this.leaseTtlMs = Math.max(2e3, options.leaseTtlMs ?? 15e3);
+    this.heartbeatMs = Math.max(500, Math.min(this.leaseTtlMs / 3, options.heartbeatMs ?? 4e3));
+    this.acquireTimeoutMs = Math.max(1e3, options.acquireTimeoutMs ?? 2e4);
+    const factory = options.channelFactory !== void 0 ? options.channelFactory : typeof globalThis.window !== "undefined" && typeof globalThis.BroadcastChannel === "function" ? (name) => new BroadcastChannel(name) : null;
+    this.channel = factory ? factory(CROSS_TAB_CHANNEL) : null;
+    this.channel?.unref?.();
+    if (this.channel) this.channel.onmessage = () => void 0;
+  }
+  storageKey(key) {
+    return `${CROSS_TAB_LEASE_PREFIX}${encodeURIComponent(key)}`;
+  }
+  assertRunning(signal) {
+    if (this.stopped) throw new Error("\u8DE8\u6807\u7B7E\u534F\u8C03\u5668\u5DF2\u505C\u6B62");
+    if (signal?.aborted) throw abortError(signal);
+  }
+  readStored(key) {
+    if (!this.storage) return null;
+    try {
+      return safeParse(this.storage.getItem(this.storageKey(key)));
+    } catch {
+      return null;
+    }
+  }
+  writeStored(key, value) {
+    if (!this.storage) return;
+    this.storage.setItem(this.storageKey(key), JSON.stringify(value));
+    this.channel?.postMessage({ type: "lease-change", key, ownerId: value.ownerId, expiresAt: value.expiresAt });
+  }
+  removeStoredIfOwned(key, ownerId, token) {
+    if (!this.storage) return;
+    try {
+      const current = this.readStored(key);
+      if (current?.ownerId === ownerId && current.token === token) {
+        this.storage.removeItem(this.storageKey(key));
+        this.channel?.postMessage({ type: "lease-release", key, ownerId });
+      }
+    } catch {
+    }
+  }
+  async waitForTail(previous, signal) {
+    if (!signal) {
+      await previous.catch(() => void 0);
+      return;
+    }
+    if (signal.aborted) throw abortError(signal);
+    await Promise.race([
+      previous.catch(() => void 0),
+      new Promise((_, reject) => {
+        const onAbort = () => reject(abortError(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+        previous.finally(() => signal.removeEventListener("abort", onAbort)).catch(() => void 0);
+      })
+    ]);
+  }
+  makeHandle(snapshot) {
+    return {
+      key: snapshot.key,
+      ownerId: snapshot.ownerId,
+      token: snapshot.token,
+      mode: snapshot.mode,
+      assertOwner: () => {
+        if (this.stopped) throw new Error("\u8DE8\u6807\u7B7E\u534F\u8C03\u5668\u5DF2\u505C\u6B62");
+        if (snapshot.mode === "storage") {
+          const current = this.readStored(snapshot.key);
+          if (!current || current.ownerId !== snapshot.ownerId || current.token !== snapshot.token || current.expiresAt <= this.now()) {
+            throw new Error(`\u8DE8\u6807\u7B7E\u79DF\u7EA6\u5DF2\u4E22\u5931\uFF1A${snapshot.key}`);
+          }
+          snapshot.heartbeatAt = current.heartbeatAt;
+          snapshot.expiresAt = current.expiresAt;
+        }
+      },
+      snapshot: () => structuredClone(snapshot)
+    };
+  }
+  async withStorageLease(key, work, signal) {
+    if (!this.storage) {
+      const previous = this.memoryTails.get(key) ?? Promise.resolve();
+      let release;
+      const current = new Promise((resolve) => {
+        release = resolve;
+      });
+      const queued = previous.catch(() => void 0).then(() => current);
+      this.memoryTails.set(key, queued);
+      await this.waitForTail(previous, signal);
+      this.assertRunning(signal);
+      const now = this.now();
+      const snapshot2 = {
+        key,
+        ownerId: this.ownerId,
+        token: makeId("memory-lease"),
+        mode: "memory",
+        acquiredAt: now,
+        heartbeatAt: now,
+        expiresAt: Number.POSITIVE_INFINITY
+      };
+      this.active.set(key, snapshot2);
+      try {
+        return await work(this.makeHandle(snapshot2));
+      } finally {
+        this.active.delete(key);
+        release();
+        if (this.memoryTails.get(key) === queued) this.memoryTails.delete(key);
+      }
+    }
+    const deadline = this.now() + this.acquireTimeoutMs;
+    const token = makeId("lease");
+    let stored;
+    while (true) {
+      this.assertRunning(signal);
+      const now = this.now();
+      if (now >= deadline) throw new Error(`\u7B49\u5F85\u8DE8\u6807\u7B7E\u79DF\u7EA6\u8D85\u65F6\uFF1A${key}`);
+      const current = this.readStored(key);
+      if (!current || current.expiresAt <= now || current.ownerId === this.ownerId && current.token === token) {
+        stored = { ownerId: this.ownerId, token, acquiredAt: now, heartbeatAt: now, expiresAt: now + this.leaseTtlMs };
+        this.writeStored(key, stored);
+        await this.sleep(8, signal);
+        const verified = this.readStored(key);
+        if (verified?.ownerId === this.ownerId && verified.token === token) break;
+      }
+      await this.sleep(40 + Math.floor(Math.random() * 40), signal);
+    }
+    const snapshot = { key, ...stored, mode: "storage" };
+    const handle = this.makeHandle(snapshot);
+    this.active.set(key, snapshot);
+    const heartbeat = setInterval(() => {
+      try {
+        const current = this.readStored(key);
+        if (current?.ownerId !== this.ownerId || current.token !== token) return;
+        const now = this.now();
+        stored = { ...current, heartbeatAt: now, expiresAt: now + this.leaseTtlMs };
+        this.writeStored(key, stored);
+        snapshot.heartbeatAt = stored.heartbeatAt;
+        snapshot.expiresAt = stored.expiresAt;
+      } catch {
+      }
+    }, this.heartbeatMs);
+    try {
+      return await work(handle);
+    } finally {
+      clearInterval(heartbeat);
+      this.active.delete(key);
+      this.removeStoredIfOwned(key, this.ownerId, token);
+    }
+  }
+  async withLease(key, work, signal) {
+    this.assertRunning(signal);
+    const lockManager = this.navigatorLike?.locks;
+    if (lockManager?.request) {
+      const lockName = `mirror-abyss:${key}`;
+      return lockManager.request(lockName, { mode: "exclusive", signal }, async (lock) => {
+        if (!lock) throw new Error(`\u65E0\u6CD5\u53D6\u5F97\u8DE8\u6807\u7B7E\u9501\uFF1A${key}`);
+        const now = this.now();
+        const snapshot = {
+          key,
+          ownerId: this.ownerId,
+          token: makeId("web-lock"),
+          mode: "web-locks",
+          acquiredAt: now,
+          heartbeatAt: now,
+          expiresAt: Number.POSITIVE_INFINITY
+        };
+        this.active.set(key, snapshot);
+        try {
+          return await work(this.makeHandle(snapshot));
+        } finally {
+          this.active.delete(key);
+        }
+      });
+    }
+    return this.withStorageLease(key, work, signal);
+  }
+  snapshot() {
+    return {
+      ownerId: this.ownerId,
+      mode: this.navigatorLike?.locks?.request ? "web-locks" : this.storage ? "storage" : "memory",
+      active: [...this.active.values()].map((item2) => structuredClone(item2))
+    };
+  }
+  stop() {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const lease of this.active.values()) {
+      if (lease.mode === "storage") this.removeStoredIfOwned(lease.key, lease.ownerId, lease.token);
+    }
+    this.active.clear();
+    if (this.channel) {
+      this.channel.onmessage = null;
+      this.channel.close();
+    }
+  }
+};
+var crossTabCoordinator = new CrossTabCoordinator();
+
+// src/foundation/kernel.ts
+var EVENT_ROUTER = createServiceToken("EventRouter");
+var LOCK_MANAGER = createServiceToken("LockManager");
+var CHAT_SCOPE = createServiceToken("ChatScopeManager");
+var CONNECTION_BROKER = createServiceToken("ConnectionBroker");
+var CROSS_TAB_COORDINATOR = createServiceToken("CrossTabCoordinator");
+var FoundationKernel = class {
+  services = new ServiceContainer();
+  snapshot = { state: "idle", stage: "idle" };
+  startPromise = null;
+  status() {
+    return structuredClone(this.snapshot);
+  }
+  async start(context) {
+    if (this.snapshot.state === "ready" || this.snapshot.state === "degraded") return this.status();
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this.startInternal(context).finally(() => {
+      this.startPromise = null;
+    });
+    return this.startPromise;
+  }
+  async startInternal(context) {
+    this.snapshot = { state: "starting", stage: "capability-detection", startedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    try {
+      const capabilities = detectCapabilities(context);
+      this.snapshot.capabilities = capabilities;
+      if (!capabilities.ready) throw new Error("\u7F3A\u5C11\u955C\u6E0A\u8FD0\u884C\u6240\u9700\u7684 SillyTavern \u6838\u5FC3\u80FD\u529B");
+      this.snapshot.stage = "service-registration";
+      const router = this.services.tryGet(EVENT_ROUTER) ?? this.services.register(EVENT_ROUTER, new EventRouter());
+      if (!this.services.tryGet(LOCK_MANAGER)) this.services.register(LOCK_MANAGER, new LockManager());
+      if (!this.services.tryGet(CHAT_SCOPE)) this.services.register(CHAT_SCOPE, chatScopeManager);
+      if (!this.services.tryGet(CONNECTION_BROKER)) this.services.register(CONNECTION_BROKER, connectionBroker);
+      if (!this.services.tryGet(CROSS_TAB_COORDINATOR)) {
+        this.services.register(CROSS_TAB_COORDINATOR, new CrossTabCoordinator());
+      }
+      this.snapshot.stage = "event-router";
+      router.install(context);
+      this.snapshot = {
+        ...this.snapshot,
+        state: capabilities.degraded ? "degraded" : "ready",
+        stage: "ready",
+        readyAt: (/* @__PURE__ */ new Date()).toISOString(),
+        lastError: void 0
+      };
+      return this.status();
+    } catch (error) {
+      this.snapshot = {
+        ...this.snapshot,
+        state: "failed",
+        stage: this.snapshot.stage || "unknown",
+        lastError: error instanceof Error ? error.message : String(error)
+      };
+      throw error;
+    }
+  }
+  stop() {
+    this.services.tryGet(CONNECTION_BROKER)?.cancelAll();
+    this.services.tryGet(CROSS_TAB_COORDINATOR)?.stop();
+    this.services.tryGet(EVENT_ROUTER)?.uninstall();
+    this.services.clear();
+    this.snapshot = { state: "stopped", stage: "stopped" };
+  }
+};
+var foundationKernel = new FoundationKernel();
+
+// src/foundation/task-errors.ts
+var StaleTaskError = class extends Error {
+  constructor(message = "\u4EFB\u52A1\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8\uFF0C\u65E7\u4EFB\u52A1\u5DF2\u505C\u6B62") {
+    super(message);
+    this.name = "StaleTaskError";
+  }
+};
+var TaskCancelledError = class extends Error {
+  constructor(message = "\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
+    super(message);
+    this.name = "TaskCancelledError";
+  }
+};
+
+// src/pipeline/task-queue.ts
+var TaskQueue = class {
+  laneTails = /* @__PURE__ */ new Map();
+  inFlight = /* @__PURE__ */ new Map();
+  tasks = /* @__PURE__ */ new Map();
+  active = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  notify() {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn("[MirrorAbyss] task listener failed", error);
+      }
+    }
+  }
+  async persist(task) {
+    try {
+      await putQueueTask({ ...task });
+    } catch (error) {
+      console.warn("[MirrorAbyss] task persistence failed", error);
+    }
+  }
+  async finalize(key, scopeChatKey, task) {
+    task.finishedAt ||= nowIso();
+    task.updatedAt = task.finishedAt;
+    this.inFlight.delete(key);
+    this.active.delete(task.id);
+    await this.persist(task);
+    try {
+      await appendTaskLog(scopeChatKey, { ...task });
+    } catch (error) {
+      console.warn("[MirrorAbyss] task log save failed", error);
+    }
+    this.notify();
+  }
+  list() {
+    return [...this.tasks.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  has(key) {
+    return this.inFlight.has(key);
+  }
+  run(key, label, kind, work, options = {}) {
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+    const scope = chatScopeManager.current();
+    const laneKey = options.laneKey?.trim() || `chat:${scope.chatKey}`;
+    const controller = new AbortController();
+    const createdAt = nowIso();
+    const task = {
+      id: makeId("task"),
+      key,
+      chatKey: scope.chatKey,
+      scopeRevision: scope.revision,
+      laneKey,
+      label,
+      kind,
+      state: "queued",
+      createdAt,
+      updatedAt: createdAt
+    };
+    this.tasks.set(task.id, task);
+    this.active.set(task.id, { task, controller });
+    void this.persist(task);
+    this.notify();
+    const execute = async () => {
+      try {
+        if (controller.signal.aborted) {
+          throw controller.signal.reason instanceof StaleTaskError ? controller.signal.reason : new TaskCancelledError(toErrorMessage(controller.signal.reason || "\u4EFB\u52A1\u5728\u6392\u961F\u671F\u95F4\u88AB\u53D6\u6D88"));
+        }
+        if (!chatScopeManager.isCurrent(scope)) {
+          throw new StaleTaskError("\u4EFB\u52A1\u6392\u961F\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362");
+        }
+        task.state = "running";
+        task.startedAt = nowIso();
+        task.updatedAt = task.startedAt;
+        await this.persist(task);
+        this.notify();
+        const result = await work(controller.signal);
+        if (controller.signal.aborted) {
+          if (!chatScopeManager.isCurrent(scope) || controller.signal.reason instanceof StaleTaskError) {
+            throw controller.signal.reason instanceof StaleTaskError ? controller.signal.reason : new StaleTaskError("\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362");
+          }
+          throw controller.signal.reason instanceof TaskCancelledError ? controller.signal.reason : new TaskCancelledError(toErrorMessage(controller.signal.reason || "\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u88AB\u53D6\u6D88"));
+        }
+        if (!chatScopeManager.isCurrent(scope)) {
+          throw new StaleTaskError("\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u7ED3\u679C\u672A\u63D0\u4EA4\u5230\u65B0\u804A\u5929");
+        }
+        task.state = "success";
+        task.error = void 0;
+        return result;
+      } catch (error) {
+        let finalError = error;
+        if (error instanceof StaleTaskError || !chatScopeManager.isCurrent(scope)) {
+          task.state = "stale";
+          task.error = error instanceof StaleTaskError ? error.message : "\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362";
+          if (!(error instanceof StaleTaskError)) finalError = new StaleTaskError(task.error);
+        } else if (error instanceof TaskCancelledError || error instanceof ConnectionRequestError && error.kind === "cancelled" || controller.signal.aborted) {
+          task.state = "cancelled";
+          task.error = toErrorMessage(error);
+          if (!(error instanceof TaskCancelledError)) finalError = new TaskCancelledError(task.error);
+        } else {
+          task.state = "failed";
+          task.error = toErrorMessage(error);
+        }
+        throw finalError;
+      } finally {
+        await this.finalize(key, scope.chatKey, task);
+      }
+    };
+    const previous = this.laneTails.get(laneKey) ?? Promise.resolve();
+    const promise = previous.then(execute, execute);
+    const settledTail = promise.catch(() => void 0);
+    this.laneTails.set(laneKey, settledTail);
+    void settledTail.finally(() => {
+      if (this.laneTails.get(laneKey) === settledTail) this.laneTails.delete(laneKey);
+    });
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+  cancel(taskId, reason = "\u7528\u6237\u53D6\u6D88\u4EFB\u52A1") {
+    const active = this.active.get(taskId);
+    if (!active) return false;
+    active.controller.abort(new TaskCancelledError(reason));
+    this.notify();
+    return true;
+  }
+  cancelByKey(key, reason = "\u4EFB\u52A1\u5DF2\u88AB\u66FF\u6362") {
+    let count = 0;
+    for (const active of this.active.values()) {
+      if (active.task.key !== key) continue;
+      active.controller.abort(new TaskCancelledError(reason));
+      count += 1;
+    }
+    if (count) this.notify();
+    return count;
+  }
+  cancelChat(chatKey, reason = "\u804A\u5929\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
+    let count = 0;
+    for (const active of this.active.values()) {
+      if (active.task.chatKey !== chatKey) continue;
+      active.controller.abort(new TaskCancelledError(reason));
+      count += 1;
+    }
+    if (count) this.notify();
+    return count;
+  }
+  cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+    let count = 0;
+    for (const active of this.active.values()) {
+      if (active.task.chatKey === chatKey) continue;
+      active.controller.abort(new StaleTaskError(reason));
+      count += 1;
+    }
+    if (count) this.notify();
+    return count;
+  }
+  cancelAll(reason = "\u4EFB\u52A1\u961F\u5217\u5DF2\u505C\u6B62") {
+    let count = 0;
+    for (const active of this.active.values()) {
+      active.controller.abort(new TaskCancelledError(reason));
+      count += 1;
+    }
+    if (count) this.notify();
+    return count;
+  }
+};
+var taskQueue = new TaskQueue();
+
+// src/integrations/sillytavern-worldinfo.ts
 var worldInfoModulePromise = null;
 async function worldInfoApi() {
+  const testApi = globalThis.__MirrorAbyssWorldInfoApi;
+  if (testApi) return testApi;
   if (!worldInfoModulePromise) {
     const moduleUrl = "/scripts/world-info.js";
     worldInfoModulePromise = import(
@@ -1932,40 +3556,191 @@ async function worldInfoApi() {
   }
   return worldInfoModulePromise;
 }
-function generatedBookName() {
-  const context = getContext();
-  const display = sanitizeBookName(context.name2 || context.name1 || "Chat") || "Chat";
-  return sanitizeBookName(`MA_${display}_${hashText(currentChatKey()).slice(0, 8)}`);
+function requestHeaders2() {
+  const headers = getContext().getRequestHeaders?.();
+  if (headers && typeof headers === "object") return headers;
+  return { "Content-Type": "application/json" };
 }
-async function resolveBookName(create) {
+async function responseDetail(response) {
+  try {
+    return (await response.text()).trim().slice(0, 500);
+  } catch {
+    return "";
+  }
+}
+function serverErrorLabel(status) {
+  if (status === 401 || status === 403) return "\u670D\u52A1\u5668\u4F1A\u8BDD\u6216CSRF\u6821\u9A8C\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\u6216\u5237\u65B0\u9152\u9986\u540E\u91CD\u8BD5";
+  if (status === 404) return "\u4E16\u754C\u4E66\u63A5\u53E3\u4E0D\u5B58\u5728";
+  if (status >= 500) return "\u9152\u9986\u670D\u52A1\u5668\u4FDD\u5B58\u5931\u8D25";
+  return "\u9152\u9986\u670D\u52A1\u5668\u62D2\u7EDD\u4E86\u8BF7\u6C42";
+}
+async function strictPost(path, body, signal) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: requestHeaders2(),
+      body: JSON.stringify(body),
+      cache: "no-store",
+      signal
+    });
+  } catch (error) {
+    if (signal?.aborted) throw new TaskCancelledError(toErrorMessage(signal.reason || error));
+    throw new Error(`\u65E0\u6CD5\u8FDE\u63A5\u9152\u9986\u670D\u52A1\u5668\uFF1A${toErrorMessage(error)}`);
+  }
+  if (!response.ok) {
+    const detail = await responseDetail(response);
+    throw new Error(`${serverErrorLabel(response.status)}\uFF08HTTP ${response.status}\uFF09${detail ? `\uFF1A${detail}` : ""}`);
+  }
+  return response;
+}
+async function loadWorldInfoStrict(name, signal) {
+  let response;
+  try {
+    response = await strictPost("/api/worldinfo/get", { name }, signal);
+  } catch (error) {
+    if (/HTTP 404/.test(toErrorMessage(error))) return { entries: {} };
+    throw error;
+  }
+  try {
+    const data = await response.json();
+    return data && typeof data === "object" ? data : { entries: {} };
+  } catch (error) {
+    throw new Error(`\u4E16\u754C\u4E66\u670D\u52A1\u5668\u8FD4\u56DE\u4E86\u65E0\u6548JSON\uFF1A${toErrorMessage(error)}`);
+  }
+}
+async function saveWorldInfoStrict(name, data, signal) {
+  await strictPost("/api/worldinfo/edit", { name, data }, signal);
+}
+async function emitWorldInfoUpdated(name, data, wi) {
+  const context = getContext();
+  try {
+    await context.eventSource?.emit?.(context.event_types?.WORLDINFO_UPDATED, name, data);
+  } catch (error) {
+    console.warn("[MirrorAbyss] WORLDINFO_UPDATED emit failed after verified commit", error);
+  }
+  try {
+    await wi.updateWorldInfoList?.();
+  } catch (error) {
+    console.warn("[MirrorAbyss] world info list refresh failed after verified commit", error);
+  }
+  try {
+    wi.reloadEditor?.(name, true);
+  } catch (error) {
+    console.warn("[MirrorAbyss] world info editor refresh failed after verified commit", error);
+  }
+}
+async function checkServerConnection() {
+  try {
+    await strictPost("/api/settings/get", {});
+    return { ok: true, detail: "\u9152\u9986\u670D\u52A1\u5668\u8FDE\u63A5\u4E0E\u4F1A\u8BDD\u6821\u9A8C\u6B63\u5E38" };
+  } catch (error) {
+    return { ok: false, detail: toErrorMessage(error) };
+  }
+}
+
+// src/pipeline/lorebook.ts
+var fallbackLocks = new LockManager();
+var TERMINAL_OUTBOX_STATES = /* @__PURE__ */ new Set([
+  "committed",
+  "rolled_back",
+  "conflict",
+  "cancelled"
+]);
+function lorebookLocks() {
+  return foundationKernel.services.tryGet(LOCK_MANAGER) ?? fallbackLocks;
+}
+function lorebookCoordinator() {
+  return foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR) ?? crossTabCoordinator;
+}
+function assertScope(scope, chatKey, signal) {
+  if (signal?.aborted) {
+    throw new TaskCancelledError(toErrorMessage(signal.reason || "\u4E16\u754C\u4E66\u4EFB\u52A1\u5DF2\u53D6\u6D88"));
+  }
+  if (scope.chatKey !== chatKey || !chatScopeManager.isCurrent(scope)) {
+    throw new StaleTaskError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u7981\u6B62\u628A\u65E7\u804A\u5929\u7684\u4E16\u754C\u4E66\u4E8B\u52A1\u63D0\u4EA4\u5230\u5F53\u524D\u804A\u5929");
+  }
+}
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, stableValue(value[key])])
+    );
+  }
+  return value;
+}
+function fingerprint(value) {
+  return hashText(JSON.stringify(stableValue(value)));
+}
+function generatedBookName(chatKey) {
+  const context = getContext();
+  const settings = getSettings();
+  const display = sanitizeBookName(context.name2 || context.name1 || "Chat") || "Chat";
+  const base = sanitizeBookName(settings.lorebookName || `MA_${display}`) || `MA_${display}`;
+  return sanitizeBookName(`${base}_${hashText(chatKey).slice(0, 10)}`);
+}
+function resolveBookName(scope, create) {
+  assertScope(scope, scope.chatKey);
   const settings = getSettings();
   const meta = getChatMetadataNamespace();
   const context = getContext();
-  let name = sanitizeBookName(settings.lorebookName || meta.lorebookName || context.chatMetadata?.world_info || "");
-  if (!name && create && settings.autoCreateLorebook) name = generatedBookName();
-  if (!name) return "";
-  if (create) {
-    const wi = await worldInfoApi();
-    let data = await wi.loadWorldInfo(name);
-    if (!data && typeof wi.createNewWorldInfo === "function") {
-      await wi.createNewWorldInfo(name, { interactive: false });
-      data = await wi.loadWorldInfo(name);
-    }
-    if (!data) {
-      data = { entries: {} };
-      await wi.saveWorldInfo(name, data, true);
-    }
-    context.chatMetadata ||= {};
-    context.chatMetadata[wi.METADATA_KEY || "world_info"] = name;
-    meta.lorebookName = name;
-    await persistMetadata();
-  }
+  let name = sanitizeBookName(
+    meta.lorebookName || context.chatMetadata?.world_info || ""
+  );
+  if (!name && create && settings.autoCreateLorebook)
+    name = generatedBookName(scope.chatKey);
   return name;
 }
 function managedInfo(entry) {
   return entry?.extensions?.mirrorAbyssV11 ?? null;
 }
-function applyEntry(entry, key, spec, wi) {
+function isOwnedEntry(entry, chatKey) {
+  const info = managedInfo(entry);
+  return Boolean(info?.managed && info.key && info.chatKey === chatKey);
+}
+function isLegacyEntry(entry, legacyKeys) {
+  const info = managedInfo(entry);
+  return Boolean(
+    info?.managed && info.key && !info.chatKey && legacyKeys.has(String(info.key))
+  );
+}
+function subjectEntries(data, chatKey, legacyKeys) {
+  const output = [];
+  for (const [uid, entry] of Object.entries(data?.entries ?? {})) {
+    if (!isOwnedEntry(entry, chatKey) && !isLegacyEntry(entry, legacyKeys))
+      continue;
+    output.push({ uid, entry: deepClone(entry) });
+  }
+  return output.sort((a, b) => {
+    const aKey = String(managedInfo(a.entry)?.key || "");
+    const bKey = String(managedInfo(b.entry)?.key || "");
+    return aKey.localeCompare(bKey) || a.uid.localeCompare(b.uid);
+  });
+}
+function subjectFingerprint(data, chatKey, legacyKeys) {
+  const normalized = subjectEntries(data, chatKey, legacyKeys).map(
+    ({ entry }) => {
+      const copy = deepClone(entry);
+      delete copy.uid;
+      return copy;
+    }
+  );
+  return fingerprint(normalized);
+}
+function nextUid(data) {
+  const used = Object.keys(data.entries ?? {}).map((key) => Number(key)).filter((value) => Number.isFinite(value));
+  return used.length ? Math.max(...used) + 1 : 0;
+}
+function createEntry(wi, name, data) {
+  const entry = wi.createWorldInfoEntry?.(name, data);
+  if (entry) return entry;
+  const uid = nextUid(data);
+  const fallback = { uid };
+  data.entries[String(uid)] = fallback;
+  return fallback;
+}
+function applyEntry(entry, key, spec, wi, recordId, intentKey, chatKey) {
   entry.comment = spec.comment;
   entry.content = spec.content;
   entry.key = spec.keywords;
@@ -1984,13 +3759,164 @@ function applyEntry(entry, key, spec, wi) {
     managed: true,
     key,
     kind: spec.kind,
-    version: VERSION
+    version: VERSION,
+    chatKey,
+    transactionId: recordId,
+    intentKey
   };
 }
-async function desiredSpecs(artifact) {
+function buildPlan(baseData, recordId, intentKey, chatKey, documents, legacyKeys, wi, name) {
+  const data = deepClone(
+    baseData && typeof baseData === "object" ? baseData : { entries: {} }
+  );
+  data.entries ||= {};
+  const beforeEntries = subjectEntries(data, chatKey, legacyKeys);
+  const desired = new Map(
+    documents.map((document2) => [document2.key, document2])
+  );
+  const ownedByKey = /* @__PURE__ */ new Map();
+  const legacyByKey = /* @__PURE__ */ new Map();
+  for (const [uid, entry] of Object.entries(data.entries)) {
+    const info = managedInfo(entry);
+    if (!info?.managed || !info.key) continue;
+    const key = String(info.key);
+    if (info.chatKey === chatKey) {
+      const values = ownedByKey.get(key) ?? [];
+      values.push({ uid, entry });
+      ownedByKey.set(key, values);
+    } else if (!info.chatKey && legacyKeys.has(key)) {
+      const values = legacyByKey.get(key) ?? [];
+      values.push({ uid, entry });
+      legacyByKey.set(key, values);
+    }
+  }
+  const retained = /* @__PURE__ */ new Set();
+  const entryIds = [];
+  for (const [key, spec] of desired) {
+    const owned = ownedByKey.get(key) ?? [];
+    const legacy = legacyByKey.get(key) ?? [];
+    const pair = owned[0] ?? legacy[0];
+    const entry = pair?.entry ?? createEntry(wi, name, data);
+    const uid = pair?.uid ?? String(entry.uid);
+    retained.add(uid);
+    applyEntry(entry, key, spec, wi, recordId, intentKey, chatKey);
+    if (Number.isFinite(Number(entry.uid))) entryIds.push(Number(entry.uid));
+    for (const duplicate of [
+      ...owned.slice(pair && owned[0] === pair ? 1 : 0),
+      ...legacy.slice(pair && legacy[0] === pair ? 1 : 0)
+    ]) {
+      delete data.entries[duplicate.uid];
+    }
+  }
+  for (const [uid, entry] of Object.entries(data.entries)) {
+    if (retained.has(uid)) continue;
+    if (isOwnedEntry(entry, chatKey) || isLegacyEntry(entry, legacyKeys)) {
+      delete data.entries[uid];
+    }
+  }
+  return {
+    data,
+    beforeEntries,
+    entryIds,
+    intendedFingerprint: subjectFingerprint(data, chatKey, legacyKeys)
+  };
+}
+function compareEntry(entry, key, spec, record, wi) {
+  const expected = { uid: entry.uid };
+  applyEntry(
+    expected,
+    key,
+    spec,
+    wi,
+    record.id,
+    record.intentKey,
+    record.chatKey
+  );
+  const fields = [
+    "comment",
+    "content",
+    "key",
+    "constant",
+    "vectorized",
+    "selective",
+    "disable",
+    "addMemo",
+    "position",
+    "order",
+    "preventRecursion",
+    "excludeRecursion",
+    "delayUntilRecursion"
+  ];
+  for (const field of fields) {
+    if (fingerprint(entry?.[field]) !== fingerprint(expected?.[field])) {
+      throw new Error(
+        `\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u6761\u76EE\u201C${spec.comment || key}\u201D\u5B57\u6BB5 ${field} \u672A\u6309\u4E8B\u52A1\u5199\u5165`
+      );
+    }
+  }
+  if (fingerprint(managedInfo(entry)) !== fingerprint(managedInfo(expected))) {
+    throw new Error(
+      `\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u6761\u76EE\u201C${spec.comment || key}\u201D\u4E8B\u52A1\u6807\u8BB0\u4E0D\u4E00\u81F4`
+    );
+  }
+}
+function verifyServerState(record, data, wi) {
+  const legacyKeys = new Set(record.legacyKeys);
+  const owned = /* @__PURE__ */ new Map();
+  for (const entry of Object.values(data?.entries ?? {})) {
+    if (!isOwnedEntry(entry, record.chatKey)) continue;
+    const key = String(managedInfo(entry)?.key || "");
+    const list2 = owned.get(key) ?? [];
+    list2.push(entry);
+    owned.set(key, list2);
+  }
+  const desired = new Map(
+    record.desiredDocuments.map((document2) => [document2.key, document2])
+  );
+  for (const [key, entries] of owned) {
+    if (!desired.has(key))
+      throw new Error(`\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u65E7\u6258\u7BA1\u6761\u76EE\u201C${key}\u201D\u672A\u5220\u9664`);
+    if (entries.length !== 1)
+      throw new Error(`\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u6761\u76EE\u201C${key}\u201D\u51FA\u73B0\u91CD\u590D`);
+  }
+  const entryIds = [];
+  for (const [key, spec] of desired) {
+    const entries = owned.get(key) ?? [];
+    if (entries.length !== 1)
+      throw new Error(`\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u7F3A\u5C11\u6761\u76EE\u201C${spec.comment || key}\u201D`);
+    compareEntry(entries[0], key, spec, record, wi);
+    if (Number.isFinite(Number(entries[0].uid)))
+      entryIds.push(Number(entries[0].uid));
+  }
+  const actualFingerprint = subjectFingerprint(
+    data,
+    record.chatKey,
+    legacyKeys
+  );
+  if (actualFingerprint !== record.intendedSubjectFingerprint) {
+    throw new Error("\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u6258\u7BA1\u6761\u76EE\u96C6\u5408\u4E0E\u51C6\u5907\u9636\u6BB5\u4E0D\u4E00\u81F4");
+  }
+  return entryIds;
+}
+function dedicatedLegacyBook(name, scope) {
+  const meta = getChatMetadataNamespace();
+  if (meta.lorebookManaged === true && (!meta.lorebookChatKey || meta.lorebookChatKey === scope.chatKey))
+    return true;
+  const suffix = hashText(scope.chatKey);
+  return name.endsWith(suffix.slice(0, 8)) || name.endsWith(suffix.slice(0, 10));
+}
+function legacyKeysForClear(data, name, scope) {
+  if (!dedicatedLegacyBook(name, scope)) return [];
+  return [
+    ...new Set(
+      Object.values(data?.entries ?? {}).map((entry) => managedInfo(entry)).filter((info) => info?.managed && info.key && !info.chatKey).map((info) => String(info.key))
+    )
+  ];
+}
+async function desiredDocuments(artifact) {
   const settings = getSettings();
   const state2 = await getChatState(artifact.chatKey);
-  const documents = buildLorebookDocuments(
+  return buildLorebookDocuments(
     artifact.snapshot,
     state2.smallSummaries,
     state2.largeSummaries,
@@ -1999,76 +3925,479 @@ async function desiredSpecs(artifact) {
       vectorize: settings.vectorizeRows,
       latestContinuityConstant: settings.latestContinuityConstant
     }
-  );
-  return new Map(documents.map((document2) => [document2.key, document2]));
+  ).map((document2) => deepClone(document2));
 }
-async function syncLorebook(artifact) {
+async function prepareOutbox(operation, scope, bookName, documents, artifactMessageKey, signal) {
+  assertScope(scope, scope.chatKey, signal);
+  const wi = await worldInfoApi();
+  const baseData = await loadWorldInfoStrict(bookName, signal);
+  assertScope(scope, scope.chatKey, signal);
+  const legacyKeys = operation === "sync" ? documents.map((document2) => document2.key) : legacyKeysForClear(baseData, bookName, scope);
+  const baseIntentKey = `${operation}:${bookName}:${artifactMessageKey || "maintenance"}:${fingerprint({ documents, legacyKeys })}`;
+  let intentKey = baseIntentKey;
+  let existing = await findLorebookOutboxByIntent(scope.chatKey, intentKey);
+  if (existing?.state === "committed" && existing.metadataAttached) {
+    const currentFingerprint = subjectFingerprint(
+      baseData,
+      scope.chatKey,
+      new Set(existing.legacyKeys)
+    );
+    if (currentFingerprint === existing.intendedSubjectFingerprint)
+      return existing;
+    if (operation === "sync" && artifactMessageKey) {
+      const state2 = await getChatState(scope.chatKey);
+      if (state2.latestSnapshotMessageKey && state2.latestSnapshotMessageKey !== artifactMessageKey) {
+        throw new StaleTaskError(
+          "\u65E7\u6D88\u606F\u7684\u4E16\u754C\u4E66\u4E8B\u52A1\u5DF2\u88AB\u66F4\u65B0\u5FEB\u7167\u53D6\u4EE3\uFF0C\u7981\u6B62\u53CD\u5411\u8986\u76D6\u5F53\u524D\u4E16\u754C\u4E66"
+        );
+      }
+      intentKey = `${baseIntentKey}:reconcile:${currentFingerprint}`;
+      existing = await findLorebookOutboxByIntent(scope.chatKey, intentKey);
+    }
+  }
+  if (existing?.state === "committed") return existing;
+  if (existing && !TERMINAL_OUTBOX_STATES.has(existing.state)) return existing;
+  const id = makeId("lorebook-outbox");
+  const plan = buildPlan(
+    baseData,
+    id,
+    intentKey,
+    scope.chatKey,
+    documents,
+    new Set(legacyKeys),
+    wi,
+    bookName
+  );
+  const createdAt = nowIso();
+  const record = {
+    schemaVersion: 1,
+    id,
+    intentKey,
+    operation,
+    chatKey: scope.chatKey,
+    scopeRevision: scope.revision,
+    artifactMessageKey,
+    bookName,
+    state: "prepared",
+    attempts: 0,
+    desiredDocuments: documents,
+    legacyKeys,
+    beforeEntries: plan.beforeEntries,
+    baseSubjectFingerprint: subjectFingerprint(
+      baseData,
+      scope.chatKey,
+      new Set(legacyKeys)
+    ),
+    intendedSubjectFingerprint: plan.intendedFingerprint,
+    intendedEntryIds: plan.entryIds,
+    createdAt,
+    updatedAt: createdAt
+  };
+  await putLorebookOutbox(record);
+  await safeAppendOperationLog(record.chatKey, {
+    category: "lorebook",
+    action: record.operation,
+    resourceId: record.id,
+    state: record.state
+  });
+  return record;
+}
+function restoreBeforeEntries(currentData, record) {
+  const data = deepClone(currentData);
+  data.entries ||= {};
+  const legacyKeys = new Set(record.legacyKeys);
+  for (const [uid, entry] of Object.entries(data.entries)) {
+    if (isOwnedEntry(entry, record.chatKey) || isLegacyEntry(entry, legacyKeys)) {
+      delete data.entries[uid];
+    }
+  }
+  for (const snapshot of record.beforeEntries) {
+    let uid = snapshot.uid;
+    if (Object.hasOwn(data.entries, uid)) uid = String(nextUid(data));
+    const entry = deepClone(snapshot.entry);
+    entry.uid = Number.isFinite(Number(uid)) ? Number(uid) : uid;
+    data.entries[uid] = entry;
+  }
+  return data;
+}
+async function markConflict(record, detail) {
+  record.state = "conflict";
+  record.conflictDetail = detail;
+  record.error = detail;
+  await putLorebookOutbox(record);
+  await safeAppendOperationLog(record.chatKey, {
+    category: "lorebook",
+    action: record.operation,
+    resourceId: record.id,
+    state: record.state,
+    detail
+  });
+  throw new Error(`\u4E16\u754C\u4E66\u4E8B\u52A1\u51B2\u7A81\uFF1A${detail}`);
+}
+async function finalizeMetadata(record, scope, lease) {
+  assertScope(scope, record.chatKey);
+  lease?.assertOwner();
+  const wi = await worldInfoApi();
+  const context = getContext();
+  const meta = getChatMetadataNamespace();
+  const metadataKey = wi.METADATA_KEY || "world_info";
+  context.chatMetadata ||= {};
+  const metadataBefore = deepClone(context.chatMetadata);
+  try {
+    if (record.operation === "sync") {
+      context.chatMetadata[metadataKey] = record.bookName;
+      meta.lorebookName = record.bookName;
+      meta.lorebookChatKey = record.chatKey;
+      meta.lorebookManaged = true;
+    } else {
+      if (context.chatMetadata?.[metadataKey] === record.bookName)
+        delete context.chatMetadata[metadataKey];
+      delete meta.lorebookName;
+      delete meta.lorebookChatKey;
+      delete meta.lorebookManaged;
+    }
+    await persistMetadata();
+  } catch (error) {
+    for (const key of Object.keys(context.chatMetadata))
+      delete context.chatMetadata[key];
+    Object.assign(context.chatMetadata, metadataBefore);
+    throw error;
+  }
+  record.metadataAttached = true;
+  record.error = void 0;
+  await putLorebookOutbox(record);
+}
+async function finalizeCommit(record, scope, serverData, wi, lease) {
+  const ids = verifyServerState(record, serverData, wi);
+  record.intendedEntryIds = ids;
+  record.state = "committed";
+  record.committedAt ||= nowIso();
+  record.verifiedAt = nowIso();
+  record.error = void 0;
+  await putLorebookOutbox(record);
+  await safeAppendOperationLog(record.chatKey, {
+    category: "lorebook",
+    action: record.operation,
+    resourceId: record.id,
+    state: record.state
+  });
+  await finalizeMetadata(record, scope, lease);
+  await emitWorldInfoUpdated(record.bookName, serverData, wi);
+  return record;
+}
+async function conditionalRollback(record, scope, signal, lease) {
+  assertScope(scope, record.chatKey, signal);
+  lease?.assertOwner();
+  const current = await loadWorldInfoStrict(record.bookName, signal);
+  assertScope(scope, record.chatKey, signal);
+  const legacyKeys = new Set(record.legacyKeys);
+  const currentFingerprint = subjectFingerprint(
+    current,
+    record.chatKey,
+    legacyKeys
+  );
+  if (currentFingerprint !== record.intendedSubjectFingerprint) {
+    await markConflict(
+      record,
+      "\u670D\u52A1\u5668\u4E0A\u7684\u6258\u7BA1\u6761\u76EE\u5728\u5199\u5165\u540E\u53C8\u53D1\u751F\u53D8\u5316\uFF0C\u5DF2\u505C\u6B62\u81EA\u52A8\u56DE\u6EDA\u4EE5\u907F\u514D\u8986\u76D6\u7528\u6237\u6216\u5176\u4ED6\u6269\u5C55\u7684\u4FEE\u6539"
+    );
+  }
+  const restored = restoreBeforeEntries(current, record);
+  record.state = "rollback_pending";
+  await putLorebookOutbox(record);
+  try {
+    assertScope(scope, record.chatKey, signal);
+    lease?.assertOwner();
+    await saveWorldInfoStrict(record.bookName, restored, signal);
+    assertScope(scope, record.chatKey, signal);
+    const verified = await loadWorldInfoStrict(record.bookName, signal);
+    assertScope(scope, record.chatKey, signal);
+    if (subjectFingerprint(verified, record.chatKey, legacyKeys) !== record.baseSubjectFingerprint) {
+      await markConflict(record, "\u56DE\u6EDA\u540E\u7684\u670D\u52A1\u5668\u72B6\u6001\u4E0E\u4E8B\u52A1\u524D\u5FEB\u7167\u4E0D\u4E00\u81F4");
+    }
+    record.state = "rolled_back";
+    record.rolledBackAt = nowIso();
+    await putLorebookOutbox(record);
+  } catch (error) {
+    if (toErrorMessage(error).startsWith("\u4E16\u754C\u4E66\u4E8B\u52A1\u51B2\u7A81\uFF1A")) throw error;
+    record.state = "rollback_pending";
+    record.error = `\u56DE\u6EDA\u5C1A\u672A\u786E\u8BA4\uFF1A${toErrorMessage(error)}`;
+    await putLorebookOutbox(record);
+    throw error;
+  }
+}
+async function executeOutbox(record, scope, signal) {
+  assertScope(scope, record.chatKey, signal);
+  return lorebookCoordinator().withLease(
+    `worldinfo:${record.bookName}`,
+    async (lease) => lorebookLocks().withLock(`worldinfo:${record.bookName}`, async () => {
+      assertScope(scope, record.chatKey, signal);
+      lease.assertOwner();
+      const wi = await worldInfoApi();
+      let current = await loadWorldInfoStrict(record.bookName, signal);
+      assertScope(scope, record.chatKey, signal);
+      const legacyKeys = new Set(record.legacyKeys);
+      if (record.state === "committed" && record.metadataAttached)
+        return record;
+      if (record.state === "rollback_pending") {
+        const rollbackFingerprint = subjectFingerprint(
+          current,
+          record.chatKey,
+          legacyKeys
+        );
+        if (rollbackFingerprint === record.baseSubjectFingerprint) {
+          record.state = "rolled_back";
+          record.rolledBackAt ||= nowIso();
+          await putLorebookOutbox(record);
+          return record;
+        }
+        if (rollbackFingerprint === record.intendedSubjectFingerprint) {
+          await conditionalRollback(record, scope, signal, lease);
+          return record;
+        }
+        return markConflict(record, "\u5F85\u56DE\u6EDA\u4E8B\u52A1\u7684\u670D\u52A1\u5668\u72B6\u6001\u5DF2\u53D1\u751F\u7B2C\u4E09\u65B9\u53D8\u5316");
+      }
+      try {
+        verifyServerState(record, current, wi);
+        return await finalizeCommit(record, scope, current, wi, lease);
+      } catch {
+      }
+      const currentFingerprint = subjectFingerprint(
+        current,
+        record.chatKey,
+        legacyKeys
+      );
+      if (currentFingerprint !== record.baseSubjectFingerprint) {
+        return markConflict(
+          record,
+          "\u51C6\u5907\u9636\u6BB5\u4E4B\u540E\u6258\u7BA1\u6761\u76EE\u5DF2\u88AB\u5176\u4ED6\u64CD\u4F5C\u4FEE\u6539\uFF1B\u955C\u6E0A\u6CA1\u6709\u8986\u76D6\u8BE5\u53D8\u5316"
+        );
+      }
+      const plan = buildPlan(
+        current,
+        record.id,
+        record.intentKey,
+        record.chatKey,
+        record.desiredDocuments,
+        legacyKeys,
+        wi,
+        record.bookName
+      );
+      record.beforeEntries = plan.beforeEntries;
+      record.baseSubjectFingerprint = currentFingerprint;
+      record.intendedSubjectFingerprint = plan.intendedFingerprint;
+      record.intendedEntryIds = plan.entryIds;
+      record.state = "committing";
+      record.attempts += 1;
+      record.lastAttemptAt = nowIso();
+      record.error = void 0;
+      await putLorebookOutbox(record);
+      let saveStarted = false;
+      try {
+        assertScope(scope, record.chatKey, signal);
+        lease.assertOwner();
+        saveStarted = true;
+        await saveWorldInfoStrict(record.bookName, plan.data, signal);
+        assertScope(scope, record.chatKey, signal);
+      } catch (error) {
+        if (!saveStarted && (error instanceof TaskCancelledError || error instanceof StaleTaskError)) {
+          record.state = "cancelled";
+          record.error = toErrorMessage(error);
+        } else {
+          record.state = "verify_pending";
+          record.error = `\u63D0\u4EA4\u7ED3\u679C\u5F85\u786E\u8BA4\uFF1A${toErrorMessage(error)}`;
+        }
+        await putLorebookOutbox(record);
+        throw error;
+      }
+      record.state = "verify_pending";
+      await putLorebookOutbox(record);
+      try {
+        current = await loadWorldInfoStrict(record.bookName, signal);
+      } catch (error) {
+        record.error = `\u670D\u52A1\u5668\u5DF2\u63A5\u53D7\u5199\u5165\uFF0C\u4F46\u56DE\u8BFB\u5C1A\u672A\u5B8C\u6210\uFF1A${toErrorMessage(error)}`;
+        await putLorebookOutbox(record);
+        throw error;
+      }
+      try {
+        return await finalizeCommit(record, scope, current, wi, lease);
+      } catch (verificationError) {
+        record.state = "rollback_pending";
+        record.error = toErrorMessage(verificationError);
+        await putLorebookOutbox(record);
+        await conditionalRollback(record, scope, signal, lease);
+        throw verificationError;
+      }
+    }),
+    signal
+  );
+}
+async function updateSyncStateFromRecord(record, error) {
+  const state2 = await getChatState(record.chatKey);
+  state2.lastOutboxId = record.id;
+  state2.lastOutboxState = record.state;
+  state2.lastLorebookName = record.bookName;
+  if (record.state === "committed" && record.metadataAttached) {
+    state2.lastSyncStatus = "success";
+    state2.lastSyncAt = record.verifiedAt || record.committedAt || nowIso();
+    state2.lastSyncError = void 0;
+  } else if (error || record.state === "conflict" || record.state === "rollback_pending" || record.state === "rolled_back") {
+    state2.lastSyncStatus = "failed";
+    state2.lastSyncError = error || record.error || record.conflictDetail || `Outbox ${record.state}`;
+  } else {
+    state2.lastSyncStatus = "running";
+    state2.lastSyncError = record.error;
+  }
+  await putChatState(state2);
+}
+async function syncLorebook(artifact, signal) {
   const settings = getSettings();
   if (!settings.lorebookSync) {
     markStage(artifact, "sync", "skipped");
     await putArtifact(artifact);
     return;
   }
+  const scope = chatScopeManager.current();
+  assertScope(scope, artifact.chatKey, signal);
   markStage(artifact, "sync", "running");
   await putArtifact(artifact);
   const chatState = await getChatState(artifact.chatKey);
   chatState.lastSyncStatus = "running";
   chatState.lastSyncError = void 0;
   await putChatState(chatState);
+  let record = null;
   try {
-    const wi = await worldInfoApi();
-    const name = await resolveBookName(true);
+    const name = resolveBookName(scope, true);
     if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
-    const data = await wi.loadWorldInfo(name) || { entries: {} };
-    data.entries ||= {};
-    const desired = await desiredSpecs(artifact);
-    const existing = /* @__PURE__ */ new Map();
-    for (const [uid, entry] of Object.entries(data.entries)) {
-      const info = managedInfo(entry);
-      if (info?.managed && info.key) existing.set(info.key, { uid, entry });
+    const documents = await desiredDocuments(artifact);
+    record = await prepareOutbox(
+      "sync",
+      scope,
+      name,
+      documents,
+      artifact.messageKey,
+      signal
+    );
+    await updateSyncStateFromRecord(record);
+    record = await executeOutbox(record, scope, signal);
+    if (record.state !== "committed" || !record.metadataAttached) {
+      throw new Error(record.error || "\u4E16\u754C\u4E66\u4E8B\u52A1\u5C1A\u672A\u5B8C\u6210");
     }
-    let changed = false;
-    const entryIds = [];
-    for (const [key, spec] of desired) {
-      let pair = existing.get(key);
-      let entry = pair?.entry;
-      if (!entry) {
-        entry = wi.createWorldInfoEntry(name, data);
-        if (!entry) continue;
-        pair = { uid: String(entry.uid), entry };
-        changed = true;
-      }
-      const before = JSON.stringify(entry);
-      applyEntry(entry, key, spec, wi);
-      if (before !== JSON.stringify(entry)) changed = true;
-      existing.delete(key);
-      if (Number.isFinite(Number(entry.uid))) entryIds.push(Number(entry.uid));
-    }
-    for (const { uid } of existing.values()) {
-      delete data.entries[uid];
-      changed = true;
-    }
-    if (changed) {
-      await wi.saveWorldInfo(name, data, true);
-      wi.reloadEditor?.(name);
-    }
-    artifact.lorebookEntryIds = entryIds;
+    artifact.lorebookEntryIds = record.intendedEntryIds;
     markStage(artifact, "sync", "success");
-    chatState.lastLorebookName = name;
-    chatState.lastSyncAt = (/* @__PURE__ */ new Date()).toISOString();
-    chatState.lastSyncStatus = "success";
-    chatState.lastSyncError = void 0;
     await putArtifact(artifact);
-    await putChatState(chatState);
+    await updateSyncStateFromRecord(record);
+    await pruneLorebookOutbox(artifact.chatKey);
   } catch (error) {
     const message = toErrorMessage(error);
+    if (record?.state === "prepared" && (error instanceof TaskCancelledError || error instanceof StaleTaskError)) {
+      record.state = "cancelled";
+      record.error = message;
+      await putLorebookOutbox(record);
+    }
     markStage(artifact, "sync", "failed", message);
-    chatState.lastSyncStatus = "failed";
-    chatState.lastSyncError = message;
     await putArtifact(artifact);
-    await putChatState(chatState);
+    if (record) await updateSyncStateFromRecord(record, message);
+    else {
+      chatState.lastSyncStatus = "failed";
+      chatState.lastSyncError = message;
+      await putChatState(chatState);
+    }
     throw error;
   }
+}
+async function recoverLorebookOutboxForCurrentChat(signal) {
+  const scope = chatScopeManager.current();
+  const records = (await getLorebookOutboxRecords(scope.chatKey)).filter(
+    (record) => !TERMINAL_OUTBOX_STATES.has(record.state) || record.state === "committed" && !record.metadataAttached
+  ).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, 20);
+  let recovered = 0;
+  let conflicts = 0;
+  let failed = 0;
+  for (const original of records) {
+    assertScope(scope, scope.chatKey, signal);
+    let record = original;
+    try {
+      record = await executeOutbox(record, scope, signal);
+      await updateSyncStateFromRecord(record);
+      if (record.state === "committed" && record.metadataAttached) {
+        recovered += 1;
+        if (record.artifactMessageKey) {
+          const artifact = await getArtifact(
+            record.chatKey,
+            record.artifactMessageKey
+          );
+          if (artifact) {
+            artifact.lorebookEntryIds = record.intendedEntryIds;
+            markStage(artifact, "sync", "success");
+            await putArtifact(artifact);
+          }
+        }
+      }
+    } catch (error) {
+      await updateSyncStateFromRecord(record, toErrorMessage(error));
+      if (record.state === "conflict") conflicts += 1;
+      else failed += 1;
+    }
+  }
+  await pruneLorebookOutbox(scope.chatKey);
+  return { recovered, conflicts, failed };
+}
+async function resolveLorebookConflictForCurrentChat(id, action, signal) {
+  const scope = chatScopeManager.current();
+  const record = await getLorebookOutbox(scope.chatKey, id);
+  if (!record) throw new Error("\u672A\u627E\u5230\u4E16\u754C\u4E66\u4E8B\u52A1\u8BB0\u5F55");
+  if (record.state !== "conflict") throw new Error("\u53EA\u6709\u51B2\u7A81\u4E8B\u52A1\u53EF\u4EE5\u4EBA\u5DE5\u5904\u7406");
+  record.state = "cancelled";
+  record.error = action === "cancel" ? "\u7528\u6237\u786E\u8BA4\u4FDD\u7559\u5F53\u524D\u4E16\u754C\u4E66\u72B6\u6001" : "\u65E7\u51B2\u7A81\u5DF2\u53D6\u6D88\uFF0C\u5C06\u4EE5\u6700\u65B0\u4EA7\u7269\u91CD\u65B0\u5EFA\u7ACB\u4E8B\u52A1";
+  await putLorebookOutbox(record);
+  await safeAppendOperationLog(record.chatKey, {
+    category: "lorebook",
+    action: `manual-${action}`,
+    resourceId: record.id,
+    state: record.state
+  });
+  if (action === "retry-latest") {
+    const state2 = await getChatState(scope.chatKey);
+    const messageKey = state2.latestSnapshotMessageKey || record.artifactMessageKey;
+    if (!messageKey) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u91CD\u65B0\u540C\u6B65\u7684\u6700\u65B0\u72B6\u6001\u4EA7\u7269");
+    const artifact = await getArtifact(scope.chatKey, messageKey);
+    if (!artifact?.snapshot) throw new Error("\u6700\u65B0\u72B6\u6001\u4EA7\u7269\u4E0D\u5B58\u5728\u6216\u6CA1\u6709\u72B6\u6001\u8868");
+    await syncLorebook(artifact, signal);
+  }
+  return record;
+}
+async function clearManagedLorebookForCurrentChat(detach = true, signal) {
+  const scope = chatScopeManager.current();
+  assertScope(scope, scope.chatKey, signal);
+  const name = resolveBookName(scope, false);
+  if (!name) return { name: "", removed: 0 };
+  const record = await prepareOutbox(
+    "clear",
+    scope,
+    name,
+    [],
+    void 0,
+    signal
+  );
+  const removed = record.beforeEntries.length;
+  const committed = await executeOutbox(record, scope, signal);
+  if (committed.state !== "committed") {
+    throw new Error(committed.error || "\u4E16\u754C\u4E66\u6E05\u7406\u4E8B\u52A1\u5C1A\u672A\u5B8C\u6210");
+  }
+  if (!detach) {
+    const wi = await worldInfoApi();
+    const context = getContext();
+    const meta = getChatMetadataNamespace();
+    context.chatMetadata ||= {};
+    context.chatMetadata[wi.METADATA_KEY || "world_info"] = name;
+    meta.lorebookName = name;
+    meta.lorebookChatKey = scope.chatKey;
+    meta.lorebookManaged = true;
+    await persistMetadata();
+  }
+  await pruneLorebookOutbox(scope.chatKey);
+  return { name, removed };
 }
 
 // src/domain/snapshot.ts
@@ -2110,11 +4439,11 @@ function emptySnapshot() {
 }
 function normalizeKeywords(value) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 16);
+  return [...new Set(value.map((item2) => safeText(item2, 80).trim()).filter(Boolean))].slice(0, 16);
 }
 function normalizeStringList(value, limit = 12) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, 240).trim()).filter(Boolean))].slice(0, limit);
+  return [...new Set(value.map((item2) => safeText(item2, 240).trim()).filter(Boolean))].slice(0, limit);
 }
 function enumValue(value, allowed, fallback) {
   const text = safeText(value, 80).trim();
@@ -2181,7 +4510,7 @@ function normalizeSnapshot(value, previousSnapshot2) {
   return output;
 }
 function identityTitle(value) {
-  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+  return String(value || "").toLowerCase().replace(/[\s·•._—–|｜:：()（）【】[\]]+/g, "");
 }
 function preservePersistentCharacters(previous, next) {
   const byId = new Map((next.characters ?? []).map((row) => [row.id, row]));
@@ -2221,7 +4550,7 @@ function snapshotRowCount(snapshot) {
 }
 function upsertManualRow(snapshot, tableKey, row) {
   const next = normalizeSnapshot(snapshot, snapshot);
-  const index = next[tableKey].findIndex((item) => item.id === row.id);
+  const index = next[tableKey].findIndex((item2) => item2.id === row.id);
   const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? true, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0);
   if (index >= 0) next[tableKey][index] = normalized;
   else next[tableKey].push(normalized);
@@ -2300,7 +4629,7 @@ function applySedimentation(snapshot, summary) {
     });
   }
   for (const update of plan.characterActivityUpdates) {
-    const row = next.characters.find((item) => item.id === update.rowId);
+    const row = next.characters.find((item2) => item2.id === update.rowId);
     if (!row) {
       ignored.push(update.rowId);
       continue;
@@ -2335,16 +4664,16 @@ function applySedimentation(snapshot, summary) {
 // src/domain/summary.ts
 function stringList(value, limit = 40, itemLimit = 300) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+  return [...new Set(value.map((item2) => safeText(item2, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
 function normalizeActivityUpdates(value) {
   if (!Array.isArray(value)) return [];
   const allowed = /* @__PURE__ */ new Set(["\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863"]);
-  return value.map((item) => item && typeof item === "object" ? item : {}).map((item) => ({
-    rowId: safeText(item.rowId, 160).trim(),
-    activity: safeText(item.activity, 40).trim(),
-    reason: safeText(item.reason, 500).trim()
-  })).filter((item) => item.rowId && allowed.has(item.activity)).slice(0, 30);
+  return value.map((item2) => item2 && typeof item2 === "object" ? item2 : {}).map((item2) => ({
+    rowId: safeText(item2.rowId, 160).trim(),
+    activity: safeText(item2.activity, 40).trim(),
+    reason: safeText(item2.reason, 500).trim()
+  })).filter((item2) => item2.rowId && allowed.has(item2.activity)).slice(0, 30);
 }
 function normalizeSedimentation(value) {
   if (!value || typeof value !== "object") return void 0;
@@ -2361,7 +4690,7 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId) {
     kind,
     title: safeText(value.title || (kind === "small" ? "\u9636\u6BB5\u6C89\u964D" : "\u957F\u671F\u6C89\u964D"), 240).trim(),
     summary: safeText(value.summary || "", 3e4).trim(),
-    keywords: Array.isArray(value.keywords) ? [...new Set(value.keywords.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 24) : [],
+    keywords: Array.isArray(value.keywords) ? [...new Set(value.keywords.map((item2) => safeText(item2, 80).trim()).filter(Boolean))].slice(0, 24) : [],
     sourceKeys,
     createdAt: nowIso(),
     sedimentation: kind === "small" ? normalizeSedimentation(value.sedimentation) : void 0,
@@ -2400,8 +4729,8 @@ function largeSummarySystemPrompt() {
   return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002\u8F93\u51FA\u5FC5\u987B\u662F\u7D2F\u8BA1\u957F\u671F\u5FEB\u7167\uFF0C\u800C\u4E0D\u662F\u53EA\u590D\u8FF0\u672C\u6279\u5C0F\u603B\u7ED3\u3002";
 }
 function largeSummaryPrompt(summaries, snapshot, previousLarge) {
-  const source = summaries.map((item) => `\u3010${item.title}\u3011
-${item.summary}`).join("\n\n");
+  const source = summaries.map((item2) => `\u3010${item2.title}\u3011
+${item2.summary}`).join("\n\n");
   const previous = previousLarge ? `\u3010\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u3011
 ${previousLarge.summary}
 
@@ -2419,9 +4748,462 @@ ${JSON.stringify(snapshot, null, 2)}
 \u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
 }
 
+// src/pipeline/local-commit.ts
+function stableValue2(value) {
+  if (Array.isArray(value)) return value.map(stableValue2);
+  if (value && typeof value === "object") {
+    return Object.keys(value).filter((key) => key !== "updatedAt").sort().reduce((result, key) => {
+      result[key] = stableValue2(value[key]);
+      return result;
+    }, {});
+  }
+  return value;
+}
+function fingerprint2(value) {
+  return hashText(JSON.stringify(stableValue2(value)));
+}
+function assertScope2(scope, chatKey, signal) {
+  if (signal?.aborted) throw new TaskCancelledError(toErrorMessage(signal.reason || "\u672C\u5730\u63D0\u4EA4\u5DF2\u53D6\u6D88"));
+  if (scope.chatKey !== chatKey || !chatScopeManager.isCurrent(scope)) {
+    throw new StaleTaskError("\u672C\u5730\u63D0\u4EA4\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+  }
+}
+function localLocks() {
+  return foundationKernel.services.get(LOCK_MANAGER);
+}
+function coordinator() {
+  return foundationKernel.services.get(CROSS_TAB_COORDINATOR);
+}
+function matchingMessageIndex(artifact) {
+  if (currentChatKey() !== artifact.chatKey) return -1;
+  const chat = getChat();
+  for (let index = 0; index < chat.length; index += 1) {
+    const message = chat[index];
+    if (!message || message.is_user) continue;
+    const attached = getAttachedArtifact(message);
+    if (attached?.messageKey === artifact.messageKey) return index;
+    try {
+      if (messageIdentity(index) === artifact.messageKey && messageFingerprint(index) === artifact.sourceFingerprint) return index;
+    } catch {
+    }
+  }
+  return -1;
+}
+async function attachCommittedArtifact(record, scope, persistImmediately = true) {
+  if (record.messageAttached) return;
+  assertScope2(scope, record.chatKey);
+  const index = matchingMessageIndex(record.afterArtifact);
+  if (index < 0) return;
+  const message = getChat()[index];
+  attachArtifactToMessage(message, deepClone(record.afterArtifact));
+  if (!persistImmediately) return;
+  await persistChat();
+  record.messageAttached = true;
+  record.attachedAt = nowIso();
+  await putLocalCommit(record);
+}
+async function markConflict2(record, detail) {
+  record.state = "conflict";
+  record.error = detail;
+  record.conflictDetail = detail;
+  await putLocalCommit(record);
+  await safeAppendOperationLog(record.chatKey, {
+    category: "local_commit",
+    action: record.operation,
+    resourceId: record.id,
+    state: record.state,
+    detail
+  });
+  throw new Error(`\u672C\u5730\u63D0\u4EA4\u51B2\u7A81\uFF1A${detail}`);
+}
+async function executeRecord(record, scope, signal, deferMessageSave = false) {
+  assertScope2(scope, record.chatKey, signal);
+  return coordinator().withLease(`chat-state:${record.chatKey}`, async (lease) => localLocks().withLock(`chat-state:${record.chatKey}`, async () => {
+    assertScope2(scope, record.chatKey, signal);
+    lease.assertOwner();
+    if (record.state === "committed") {
+      await attachCommittedArtifact(record, scope, !deferMessageSave);
+      return record;
+    }
+    if (record.state === "cancelled" || record.state === "conflict") return record;
+    const currentArtifact2 = await getArtifact(record.chatKey, record.artifactMessageKey);
+    const currentState = await getChatState(record.chatKey);
+    if (!currentArtifact2) return markConflict2(record, "\u76EE\u6807\u6D88\u606F\u4EA7\u7269\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5\u6062\u590D\u603B\u7ED3\u4E8B\u52A1");
+    const artifactFp = fingerprint2(currentArtifact2);
+    const stateFp = fingerprint2(currentState);
+    const artifactIsBefore = artifactFp === record.beforeArtifactFingerprint;
+    const artifactIsAfter = artifactFp === record.afterArtifactFingerprint;
+    const stateIsBefore = stateFp === record.beforeChatStateFingerprint;
+    const stateIsAfter = stateFp === record.afterChatStateFingerprint;
+    if (!(artifactIsBefore || artifactIsAfter) || !(stateIsBefore || stateIsAfter)) {
+      return markConflict2(record, "\u804A\u5929\u72B6\u6001\u6216\u6D88\u606F\u4EA7\u7269\u5DF2\u88AB\u5176\u4ED6\u64CD\u4F5C\u4FEE\u6539\uFF0C\u672A\u8986\u76D6\u8BE5\u53D8\u5316");
+    }
+    record.state = "committing";
+    record.attempts += 1;
+    record.error = void 0;
+    await putLocalCommit(record);
+    await safeAppendOperationLog(record.chatKey, {
+      category: "local_commit",
+      action: record.operation,
+      resourceId: record.id,
+      state: record.state
+    });
+    assertScope2(scope, record.chatKey, signal);
+    lease.assertOwner();
+    if (!artifactIsAfter) await putArtifact(deepClone(record.afterArtifact));
+    assertScope2(scope, record.chatKey, signal);
+    lease.assertOwner();
+    if (!stateIsAfter) await putChatState(deepClone(record.afterChatState));
+    const verifiedArtifact = await getArtifact(record.chatKey, record.artifactMessageKey);
+    const verifiedState = await getChatState(record.chatKey);
+    if (!verifiedArtifact || fingerprint2(verifiedArtifact) !== record.afterArtifactFingerprint || fingerprint2(verifiedState) !== record.afterChatStateFingerprint) {
+      return markConflict2(record, "\u672C\u5730\u5199\u5165\u56DE\u8BFB\u4E0E\u76EE\u6807\u72B6\u6001\u4E0D\u4E00\u81F4");
+    }
+    record.state = "committed";
+    record.committedAt ||= nowIso();
+    record.error = void 0;
+    await putLocalCommit(record);
+    await attachCommittedArtifact(record, scope, !deferMessageSave);
+    await safeAppendOperationLog(record.chatKey, {
+      category: "local_commit",
+      action: record.operation,
+      resourceId: record.id,
+      state: record.state
+    });
+    return record;
+  }), signal);
+}
+async function commitSummaryMutation(input) {
+  const scope = chatScopeManager.current();
+  assertScope2(scope, input.artifact.chatKey, input.signal);
+  let record = await findLocalCommitByIntent(input.artifact.chatKey, input.intentKey);
+  if (!record || record.state === "cancelled" || record.state === "conflict") {
+    const createdAt = nowIso();
+    record = {
+      schemaVersion: 1,
+      id: makeId("local-commit"),
+      intentKey: input.intentKey,
+      operation: input.operation,
+      chatKey: input.artifact.chatKey,
+      scopeRevision: scope.revision,
+      artifactMessageKey: input.artifact.messageKey,
+      state: "prepared",
+      attempts: 0,
+      beforeArtifact: deepClone(input.beforeArtifact),
+      afterArtifact: deepClone(input.afterArtifact),
+      beforeChatState: deepClone(input.beforeChatState),
+      afterChatState: deepClone(input.afterChatState),
+      beforeArtifactFingerprint: fingerprint2(input.beforeArtifact),
+      afterArtifactFingerprint: fingerprint2(input.afterArtifact),
+      beforeChatStateFingerprint: fingerprint2(input.beforeChatState),
+      afterChatStateFingerprint: fingerprint2(input.afterChatState),
+      messageAttached: false,
+      createdAt,
+      updatedAt: createdAt
+    };
+    await putLocalCommit(record);
+    await safeAppendOperationLog(record.chatKey, {
+      category: "local_commit",
+      action: record.operation,
+      resourceId: record.id,
+      state: record.state
+    });
+  }
+  const committed = await executeRecord(record, scope, input.signal, true);
+  Object.assign(input.artifact, deepClone(committed.afterArtifact));
+  await pruneLocalCommits(input.artifact.chatKey);
+  return committed;
+}
+async function confirmLocalCommitsAttachedForArtifact(artifact) {
+  const records = (await getLocalCommitRecords(artifact.chatKey)).filter((record) => record.state === "committed" && !record.messageAttached && record.artifactMessageKey === artifact.messageKey);
+  if (!records.length) return 0;
+  const index = matchingMessageIndex(artifact);
+  if (index < 0) return 0;
+  const attached = getAttachedArtifact(getChat()[index]);
+  if (!attached || attached.chatKey !== artifact.chatKey || attached.messageKey !== artifact.messageKey) return 0;
+  for (const record of records) {
+    record.messageAttached = true;
+    record.attachedAt = nowIso();
+    await putLocalCommit(record);
+  }
+  return records.length;
+}
+async function recoverLocalCommitsForCurrentChat(signal) {
+  const scope = chatScopeManager.current();
+  const records = (await getLocalCommitRecords(scope.chatKey)).filter((record) => record.state === "prepared" || record.state === "committing" || record.state === "committed" && !record.messageAttached).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, 30);
+  let recovered = 0;
+  let conflicts = 0;
+  let failed = 0;
+  for (const original of records) {
+    assertScope2(scope, scope.chatKey, signal);
+    try {
+      const record = await executeRecord(original, scope, signal);
+      if (record.state === "committed") recovered += 1;
+      if (record.state === "conflict") conflicts += 1;
+    } catch (error) {
+      if (original.state === "conflict") conflicts += 1;
+      else failed += 1;
+      await safeAppendOperationLog(scope.chatKey, {
+        category: "recovery",
+        action: "local_commit",
+        resourceId: original.id,
+        state: original.state,
+        detail: toErrorMessage(error)
+      });
+    }
+  }
+  await pruneLocalCommits(scope.chatKey);
+  return { recovered, conflicts, failed };
+}
+async function cancelLocalCommitConflict(id) {
+  const scope = chatScopeManager.current();
+  const record = await getLocalCommit(scope.chatKey, id);
+  if (!record) throw new Error("\u672A\u627E\u5230\u672C\u5730\u63D0\u4EA4\u8BB0\u5F55");
+  if (record.state !== "conflict") throw new Error("\u53EA\u6709\u51B2\u7A81\u8BB0\u5F55\u53EF\u4EE5\u4EBA\u5DE5\u53D6\u6D88");
+  record.state = "cancelled";
+  record.error = "\u7528\u6237\u786E\u8BA4\u4FDD\u7559\u5F53\u524D\u672C\u5730\u72B6\u6001";
+  await putLocalCommit(record);
+  await safeAppendOperationLog(record.chatKey, {
+    category: "local_commit",
+    action: "manual-cancel",
+    resourceId: record.id,
+    state: record.state
+  });
+  return record;
+}
+
+// src/pipeline/summary-consistency.ts
+var rebuildOwnerId = makeId("history-rebuild-owner");
+function intersects(values, keys) {
+  return values.some((value) => keys.has(value));
+}
+function invalidateSummaryDependencies(smallSummaries, largeSummaries, affectedMessageKeys) {
+  const affected = new Set(affectedMessageKeys);
+  const invalidatedSmall = smallSummaries.filter((summary) => intersects(summary.sourceKeys, affected));
+  const invalidatedSmallIds = new Set(invalidatedSmall.map((summary) => summary.id));
+  const keptSmall = smallSummaries.filter((summary) => !invalidatedSmallIds.has(summary.id));
+  let firstInvalidLarge = -1;
+  const invalidatedLargeIds = /* @__PURE__ */ new Set();
+  for (let index = 0; index < largeSummaries.length; index += 1) {
+    const summary = largeSummaries[index];
+    const directDependencyChanged = intersects(summary.sourceKeys, invalidatedSmallIds);
+    const previousChainChanged = Boolean(summary.previousLargeSummaryId && invalidatedLargeIds.has(summary.previousLargeSummaryId));
+    if (firstInvalidLarge < 0 && (directDependencyChanged || previousChainChanged)) firstInvalidLarge = index;
+    if (firstInvalidLarge >= 0) invalidatedLargeIds.add(summary.id);
+  }
+  return {
+    smallSummaries: keptSmall,
+    largeSummaries: firstInvalidLarge < 0 ? [...largeSummaries] : largeSummaries.slice(0, firstInvalidLarge),
+    invalidatedSmallSummaryIds: [...invalidatedSmallIds],
+    invalidatedLargeSummaryIds: [...invalidatedLargeIds]
+  };
+}
+function assertCurrent(chatKey, signal) {
+  if (signal?.aborted) throw new TaskCancelledError(toErrorMessage(signal.reason || "\u5386\u53F2\u91CD\u5EFA\u5DF2\u53D6\u6D88"));
+  if (chatKey !== currentChatKey()) throw new StaleTaskError("\u5386\u53F2\u91CD\u5EFA\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+}
+function coordinator2() {
+  return foundationKernel.services.get(CROSS_TAB_COORDINATOR);
+}
+function locks() {
+  return foundationKernel.services.get(LOCK_MANAGER);
+}
+function assistantIndexesFrom(startIndex) {
+  const chat = getChat();
+  const output = [];
+  for (let index = Math.max(0, startIndex); index < chat.length; index += 1) {
+    const message = chat[index];
+    if (!message?.is_user && String(message?.mes || "").trim()) output.push(index);
+  }
+  return output;
+}
+function latestValidArtifactBefore(startIndex, chatKey) {
+  for (let index = Math.min(startIndex - 1, getChat().length - 1); index >= 0; index -= 1) {
+    const artifact = getAttachedArtifact(getMessage(index));
+    if (artifact?.chatKey === chatKey && artifact.snapshot && artifact.messageKey === messageIdentity(index) && artifact.sourceFingerprint === messageFingerprint(index)) return artifact;
+  }
+  return null;
+}
+function allLiveRevisionKeys() {
+  return new Set(assistantIndexesFrom(0).map((index) => messageIdentity(index)));
+}
+function affectedRevisionKeys(startIndex, state2) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const index of assistantIndexesFrom(startIndex)) {
+    keys.add(messageIdentity(index));
+    const attached = getAttachedArtifact(getMessage(index));
+    if (attached?.messageKey) keys.add(attached.messageKey);
+  }
+  const live = allLiveRevisionKeys();
+  for (const key of state2.processedMessageKeys) {
+    if (!live.has(key)) keys.add(key);
+  }
+  return keys;
+}
+async function prepareHistoryRebuild(startIndex, reason, signal) {
+  const scope = chatScopeManager.current();
+  const chatKey = scope.chatKey;
+  assertCurrent(chatKey, signal);
+  return coordinator2().withLease(`history-rebuild-prepare:${chatKey}`, async (lease) => locks().withLock(`history-rebuild-prepare:${chatKey}`, async () => {
+    assertCurrent(chatKey, signal);
+    lease.assertOwner();
+    const state2 = await getChatState(chatKey);
+    const normalizedStart = Math.max(0, Math.min(startIndex, getChat().length));
+    const affectedKeys = affectedRevisionKeys(normalizedStart, state2);
+    const invalidation = invalidateSummaryDependencies(state2.smallSummaries, state2.largeSummaries, affectedKeys);
+    const previous = latestValidArtifactBefore(normalizedStart, chatKey);
+    const now = nowIso();
+    const record = {
+      schemaVersion: 1,
+      id: makeId("history-rebuild"),
+      chatKey,
+      startIndex: normalizedStart,
+      reason,
+      state: "pending",
+      ownerId: rebuildOwnerId,
+      invalidatedMessageKeys: [...affectedKeys].slice(0, 200),
+      invalidatedSmallSummaryIds: invalidation.invalidatedSmallSummaryIds.slice(0, 200),
+      invalidatedLargeSummaryIds: invalidation.invalidatedLargeSummaryIds.slice(0, 200),
+      createdAt: now,
+      updatedAt: now
+    };
+    const affectedIndexes = assistantIndexesFrom(normalizedStart);
+    const artifactsToRemove = /* @__PURE__ */ new Set();
+    for (const index of affectedIndexes) {
+      const message = getMessage(index);
+      const attached = getAttachedArtifact(message);
+      if (attached?.chatKey === chatKey) artifactsToRemove.add(attached.messageKey);
+      if (message?.extra?.[MODULE_NAME]) delete message.extra[MODULE_NAME];
+    }
+    state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => !affectedKeys.has(key));
+    state2.smallSummaries = invalidation.smallSummaries;
+    state2.largeSummaries = invalidation.largeSummaries;
+    state2.latestSnapshotMessageKey = previous?.messageKey;
+    state2.lastSyncStatus = "queued";
+    state2.lastSyncError = `\u5386\u53F2\u4F9D\u8D56\u5DF2\u5931\u6548\uFF0C\u7B49\u5F85\u4ECE\u7B2C ${normalizedStart + 1} \u6761\u6D88\u606F\u91CD\u5EFA`;
+    state2.historyRevision = Math.max(0, state2.historyRevision ?? 0) + 1;
+    state2.historyRebuild = record;
+    await putChatState(state2);
+    await Promise.all([...artifactsToRemove].map((messageKey) => removeArtifact(chatKey, messageKey)));
+    await persistChat();
+    await safeAppendOperationLog(chatKey, {
+      category: "recovery",
+      action: "history-rebuild-prepared",
+      resourceId: record.id,
+      state: record.state,
+      detail: `${reason}; start=${normalizedStart}; messages=${affectedKeys.size}; small=${record.invalidatedSmallSummaryIds.length}; large=${record.invalidatedLargeSummaryIds.length}`
+    });
+    return record;
+  }), signal);
+}
+async function updateHistoryRebuild(record, patch) {
+  const state2 = await getChatState(record.chatKey);
+  const current = state2.historyRebuild;
+  if (!current || current.id !== record.id) return;
+  state2.historyRebuild = { ...current, ...patch, updatedAt: nowIso() };
+  await putChatState(state2);
+}
+async function completeHistoryRebuild(record) {
+  const state2 = await getChatState(record.chatKey);
+  if (state2.historyRebuild?.id === record.id) delete state2.historyRebuild;
+  state2.lastSyncError = void 0;
+  await putChatState(state2);
+  await safeAppendOperationLog(record.chatKey, {
+    category: "recovery",
+    action: "history-rebuild-completed",
+    resourceId: record.id,
+    state: "committed"
+  });
+}
+function assertHistoryRebuildAccess(state2) {
+  const rebuild = state2.historyRebuild;
+  if (!rebuild) return;
+  if (rebuild.state === "failed") {
+    throw new TaskCancelledError("\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5931\u8D25\uFF0C\u5FC5\u987B\u5148\u6062\u590D\u540E\u624D\u80FD\u7EE7\u7EED\u603B\u7ED3\u6216\u540C\u6B65");
+  }
+  if (rebuild.ownerId && rebuild.ownerId !== rebuildOwnerId) {
+    throw new TaskCancelledError("\u53E6\u4E00\u4E2A\u6807\u7B7E\u9875\u6B63\u5728\u91CD\u5EFA\u8BE5\u804A\u5929\u7684\u603B\u7ED3\u4E0E\u72B6\u6001\u4F9D\u8D56");
+  }
+}
+async function rebuildHistoryFrom(input) {
+  const chatKey = currentChatKey();
+  return coordinator2().withLease(`history-rebuild:${chatKey}`, async (lease) => {
+    assertCurrent(chatKey, input.signal);
+    lease.assertOwner();
+    const record = await prepareHistoryRebuild(input.startIndex, input.reason, input.signal);
+    record.state = "rebuilding";
+    record.ownerId = rebuildOwnerId;
+    await updateHistoryRebuild(record, { state: "rebuilding", ownerId: rebuildOwnerId, error: void 0 });
+    let rebuilt = 0;
+    let latest = latestValidArtifactBefore(record.startIndex, chatKey);
+    try {
+      for (const index of assistantIndexesFrom(record.startIndex)) {
+        assertCurrent(chatKey, input.signal);
+        lease.assertOwner();
+        const artifact = await input.processMessage(index, true, { deferLorebookSync: true });
+        if (artifact) {
+          latest = deepClone(artifact);
+          rebuilt += 1;
+        }
+      }
+      assertCurrent(chatKey, input.signal);
+      lease.assertOwner();
+      if (latest?.snapshot) await input.syncLatest(latest);
+      await completeHistoryRebuild(record);
+      return { record, rebuilt, latestArtifact: latest };
+    } catch (error) {
+      record.state = "failed";
+      record.error = toErrorMessage(error);
+      await updateHistoryRebuild(record, { state: "failed", error: record.error });
+      await safeAppendOperationLog(chatKey, {
+        category: "recovery",
+        action: "history-rebuild-failed",
+        resourceId: record.id,
+        state: "failed",
+        detail: record.error
+      });
+      throw error;
+    }
+  }, input.signal);
+}
+async function detectHistoryConsistencyStart() {
+  const chatKey = currentChatKey();
+  const state2 = await getChatState(chatKey);
+  const liveKeys = allLiveRevisionKeys();
+  const summaryKeys = new Set(state2.smallSummaries.flatMap((summary) => summary.sourceKeys));
+  const trackedKeys = /* @__PURE__ */ new Set([...state2.processedMessageKeys, ...summaryKeys]);
+  for (const index of assistantIndexesFrom(0)) {
+    const liveKey = messageIdentity(index);
+    const attached = getAttachedArtifact(getMessage(index));
+    if (attached?.messageKey && attached.messageKey !== liveKey && trackedKeys.has(attached.messageKey)) return index;
+  }
+  for (const key of trackedKeys) {
+    if (!liveKeys.has(key)) return 0;
+  }
+  return null;
+}
+async function recoverPendingHistoryRebuild(input) {
+  const chatKey = currentChatKey();
+  const state2 = await getChatState(chatKey);
+  const record = state2.historyRebuild;
+  const detectedStart = record ? record.startIndex : await detectHistoryConsistencyStart();
+  if (detectedStart === null) return false;
+  await rebuildHistoryFrom({
+    startIndex: detectedStart,
+    reason: record ? "recovery" : "branch",
+    processMessage: input.processMessage,
+    syncLatest: input.syncLatest,
+    signal: input.signal
+  });
+  return true;
+}
+
 // src/pipeline/summary.ts
 function successfulArtifacts() {
-  return getChat().filter((message) => !message?.is_user).map((message) => message?.extra?.mirrorAbyssV11).filter((artifact) => Boolean(artifact?.snapshot && artifact.stages.state.status === "success"));
+  const chatKey = currentChatKey();
+  return getChat().filter((message) => !message?.is_user).map((message) => message?.extra?.mirrorAbyssV11).filter((artifact) => Boolean(
+    artifact?.chatKey === chatKey && artifact?.snapshot && artifact.stages.state.status === "success"
+  ));
 }
 function transcriptFor(artifacts) {
   return artifacts.map((artifact) => `\u3010\u56DE\u5408 ${artifact.messageIndex + 1}\u3011
@@ -2429,69 +5211,121 @@ function transcriptFor(artifacts) {
 \u6B63\u6587\uFF1A${artifact.assistantText}`).join("\n\n");
 }
 function allConsumedKeys(summaries) {
-  return new Set(summaries.flatMap((item) => item.sourceKeys));
+  return new Set(summaries.flatMap((item2) => item2.sourceKeys));
+}
+function assertSummaryScope(artifact, signal) {
+  if (signal?.aborted) throw new TaskCancelledError("\u603B\u7ED3\u4EFB\u52A1\u5DF2\u53D6\u6D88");
+  if (artifact.chatKey !== currentChatKey()) throw new StaleTaskError("\u603B\u7ED3\u4EFB\u52A1\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+}
+function summaryCoordinator() {
+  return foundationKernel.services.get(CROSS_TAB_COORDINATOR);
 }
 function pendingSmallSummaries(small, large) {
-  const consumed = new Set(large.flatMap((item) => item.sourceKeys));
-  return small.filter((item) => !consumed.has(item.id));
+  const consumed = new Set(large.flatMap((item2) => item2.sourceKeys));
+  return small.filter((item2) => !consumed.has(item2.id));
 }
-async function generateSmallSummary(artifact, force = false) {
-  const settings = getSettings();
-  const chatState = await getChatState(artifact.chatKey);
-  const consumed = allConsumedKeys(chatState.smallSummaries);
-  const pending = successfulArtifacts().filter((item) => !consumed.has(item.messageKey));
-  const threshold = Math.max(1, Number(settings.smallSummaryTurns) || 15);
-  if (!force && pending.length < threshold) return null;
-  if (!pending.length) return null;
-  const selected = force ? pending : pending.slice(0, threshold);
-  const latestSnapshot = selected.at(-1)?.snapshot;
-  const parsed = await generateStructuredTask({
-    task: "smallSummary",
-    systemPrompt: smallSummarySystemPrompt(),
-    prompt: smallSummaryPrompt(transcriptFor(selected), latestSnapshot),
-    structureDescription: '{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["..."],"characterActivityUpdates":[{"rowId":"...","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"..."}],"notes":["..."]}}'
-  });
-  const summary = normalizeSummary(parsed, "small", selected.map((item) => item.messageKey));
-  chatState.smallSummaries.push(summary);
-  if (artifact.snapshot) artifact.snapshot = applySedimentation(artifact.snapshot, summary);
-  await putArtifact(artifact);
-  await putChatState(chatState);
-  return summary;
+async function generateSmallSummary(artifact, force = false, signal) {
+  assertSummaryScope(artifact, signal);
+  return summaryCoordinator().withLease(`summary:${artifact.chatKey}`, async (lease) => {
+    assertSummaryScope(artifact, signal);
+    lease.assertOwner();
+    const settings = getSettings();
+    const chatState = await getChatState(artifact.chatKey);
+    assertHistoryRebuildAccess(chatState);
+    const consumed = allConsumedKeys(chatState.smallSummaries);
+    const pending = successfulArtifacts().filter((item2) => !consumed.has(item2.messageKey));
+    const threshold = Math.max(1, Number(settings.smallSummaryTurns) || 15);
+    if (!force && pending.length < threshold) return null;
+    if (!pending.length) return null;
+    const selected = force ? pending : pending.slice(0, threshold);
+    const latestSnapshot = selected.at(-1)?.snapshot;
+    const intentKey = `small:${artifact.chatKey}:${hashText(JSON.stringify(selected.map((item2) => item2.messageKey)))}`;
+    const parsed = await generateStructuredTask({
+      task: "smallSummary",
+      systemPrompt: smallSummarySystemPrompt(),
+      prompt: smallSummaryPrompt(transcriptFor(selected), latestSnapshot),
+      structureDescription: '{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["..."],"characterActivityUpdates":[{"rowId":"...","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"..."}],"notes":["..."]}}',
+      signal
+    });
+    assertSummaryScope(artifact, signal);
+    lease.assertOwner();
+    const summary = normalizeSummary(parsed, "small", selected.map((item2) => item2.messageKey));
+    const beforeArtifact = deepClone(artifact);
+    const beforeChatState = deepClone(chatState);
+    const afterArtifact = deepClone(artifact);
+    const afterChatState = deepClone(chatState);
+    afterChatState.smallSummaries.push(summary);
+    if (afterArtifact.snapshot) afterArtifact.snapshot = applySedimentation(afterArtifact.snapshot, summary);
+    await commitSummaryMutation({
+      operation: "small_summary",
+      intentKey,
+      artifact,
+      beforeArtifact,
+      afterArtifact,
+      beforeChatState,
+      afterChatState,
+      signal
+    });
+    return summary;
+  }, signal);
 }
-async function generateLargeSummary(artifact, force = false) {
-  const settings = getSettings();
-  const chatState = await getChatState(artifact.chatKey);
-  const pending = pendingSmallSummaries(chatState.smallSummaries, chatState.largeSummaries);
-  const threshold = Math.max(1, Number(settings.largeSummaryCount) || 6);
-  if (!force && pending.length < threshold) return null;
-  if (!pending.length) return null;
-  const selected = force ? pending : pending.slice(0, threshold);
-  const snapshot = artifact.snapshot;
-  if (!snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u7684\u72B6\u6001\u8868");
-  const previousLarge = chatState.largeSummaries.at(-1);
-  const parsed = await generateStructuredTask({
-    task: "largeSummary",
-    systemPrompt: largeSummarySystemPrompt(),
-    prompt: largeSummaryPrompt(selected, snapshot, previousLarge),
-    structureDescription: '{"title":"...","summary":"...","keywords":["..."]}'
-  });
-  const summary = normalizeSummary(
-    parsed,
-    "large",
-    selected.map((item) => item.id),
-    previousLarge?.id
-  );
-  chatState.largeSummaries.push(summary);
-  await putChatState(chatState);
-  return summary;
+async function generateLargeSummary(artifact, force = false, signal) {
+  assertSummaryScope(artifact, signal);
+  return summaryCoordinator().withLease(`summary:${artifact.chatKey}`, async (lease) => {
+    assertSummaryScope(artifact, signal);
+    lease.assertOwner();
+    const settings = getSettings();
+    const chatState = await getChatState(artifact.chatKey);
+    assertHistoryRebuildAccess(chatState);
+    const pending = pendingSmallSummaries(chatState.smallSummaries, chatState.largeSummaries);
+    const threshold = Math.max(1, Number(settings.largeSummaryCount) || 6);
+    if (!force && pending.length < threshold) return null;
+    if (!pending.length) return null;
+    const selected = force ? pending : pending.slice(0, threshold);
+    const snapshot = artifact.snapshot;
+    if (!snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u7684\u72B6\u6001\u8868");
+    const previousLarge = chatState.largeSummaries.at(-1);
+    const intentKey = `large:${artifact.chatKey}:${hashText(JSON.stringify(selected.map((item2) => item2.id)))}`;
+    const parsed = await generateStructuredTask({
+      task: "largeSummary",
+      systemPrompt: largeSummarySystemPrompt(),
+      prompt: largeSummaryPrompt(selected, snapshot, previousLarge),
+      structureDescription: '{"title":"...","summary":"...","keywords":["..."]}',
+      signal
+    });
+    assertSummaryScope(artifact, signal);
+    lease.assertOwner();
+    const summary = normalizeSummary(
+      parsed,
+      "large",
+      selected.map((item2) => item2.id),
+      previousLarge?.id
+    );
+    const beforeArtifact = deepClone(artifact);
+    const beforeChatState = deepClone(chatState);
+    const afterArtifact = deepClone(artifact);
+    const afterChatState = deepClone(chatState);
+    afterChatState.largeSummaries.push(summary);
+    await commitSummaryMutation({
+      operation: "large_summary",
+      intentKey,
+      artifact,
+      beforeArtifact,
+      afterArtifact,
+      beforeChatState,
+      afterChatState,
+      signal
+    });
+    return summary;
+  }, signal);
 }
-async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = false) {
+async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = false, signal) {
   const settings = getSettings();
   markStage(artifact, "summary", "running");
   await putArtifact(artifact);
   try {
-    if (settings.autoSmallSummary || forceSmall) await generateSmallSummary(artifact, forceSmall);
-    if (settings.autoLargeSummary || forceLarge) await generateLargeSummary(artifact, forceLarge);
+    if (settings.autoSmallSummary || forceSmall) await generateSmallSummary(artifact, forceSmall, signal);
+    if (settings.autoLargeSummary || forceLarge) await generateLargeSummary(artifact, forceLarge, signal);
     markStage(artifact, "summary", "success");
     await putArtifact(artifact);
   } catch (error) {
@@ -2569,7 +5403,7 @@ function restoreManualRows(previous, next) {
   }
   return next;
 }
-async function runStateExtraction(artifact, force = false) {
+async function runStateExtraction(artifact, force = false, signal) {
   if (!force && artifact.stages.state.status === "success" && artifact.snapshot) return artifact.snapshot;
   const settings = getSettings();
   const previous = previousSnapshot(artifact.messageIndex);
@@ -2581,7 +5415,8 @@ async function runStateExtraction(artifact, force = false) {
       systemPrompt: stateSystemPrompt(),
       prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText),
       structureDescription: stateSchemaDescription(),
-      allowRepair: settings.repairInvalidJsonOnce
+      allowRepair: settings.repairInvalidJsonOnce,
+      signal
     });
     const normalized = preservePersistentCharacters(previous, restoreManualRows(previous, normalizeSnapshot(parsed, previous)));
     artifact.snapshot = normalized;
@@ -2595,74 +5430,19 @@ async function runStateExtraction(artifact, force = false) {
   }
 }
 
-// src/pipeline/task-queue.ts
-var TaskQueue = class {
-  tail = Promise.resolve();
-  inFlight = /* @__PURE__ */ new Map();
-  tasks = /* @__PURE__ */ new Map();
-  listeners = /* @__PURE__ */ new Set();
-  subscribe(listener) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-  notify() {
-    for (const listener of this.listeners) {
-      try {
-        listener();
-      } catch (error) {
-        console.warn("[MirrorAbyss] task listener failed", error);
-      }
-    }
-  }
-  list() {
-    return [...this.tasks.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-  has(key) {
-    return this.inFlight.has(key);
-  }
-  run(key, label, kind, work) {
-    const existing = this.inFlight.get(key);
-    if (existing) return existing;
-    const task = {
-      id: makeId("task"),
-      key,
-      label,
-      kind,
-      state: "queued",
-      createdAt: nowIso()
-    };
-    this.tasks.set(task.id, task);
-    this.notify();
-    const execute = async () => {
-      task.state = "running";
-      task.startedAt = nowIso();
-      this.notify();
-      try {
-        const result = await work();
-        task.state = "success";
-        return result;
-      } catch (error) {
-        task.state = "failed";
-        task.error = toErrorMessage(error);
-        throw error;
-      } finally {
-        task.finishedAt = nowIso();
-        this.inFlight.delete(key);
-        try {
-          await appendTaskLog(currentChatKey(), { ...task });
-        } catch (error) {
-          console.warn("[MirrorAbyss] task log save failed", error);
-        }
-        this.notify();
-      }
-    };
-    const promise = this.tail.then(execute, execute);
-    this.tail = promise.catch(() => void 0);
-    this.inFlight.set(key, promise);
-    return promise;
+// src/pipeline/errors.ts
+var PipelineStageError = class extends Error {
+  artifact;
+  cause;
+  constructor(artifact, cause) {
+    const failedStages = Object.entries(artifact.stages).filter(([, record]) => record.status === "failed").map(([stage]) => stage);
+    const prefix = failedStages.length ? `\u9636\u6BB5 ${failedStages.join(", ")}` : "\u5904\u7406\u7BA1\u7EBF";
+    super(`${prefix}\u5931\u8D25\uFF1A${toErrorMessage(cause)}`);
+    this.name = "PipelineStageError";
+    this.artifact = artifact;
+    this.cause = cause;
   }
 };
-var taskQueue = new TaskQueue();
 
 // src/pipeline/pipeline.ts
 var listeners = /* @__PURE__ */ new Set();
@@ -2686,83 +5466,123 @@ function resolveMessageIndex(payload) {
   const chat = getChat();
   return chat.length ? chat.length - 1 : -1;
 }
-async function saveArtifactToMessage(index, artifact) {
+function assertArtifactScope(artifact, signal) {
+  if (signal?.aborted) throw new TaskCancelledError("\u4EFB\u52A1\u4FE1\u53F7\u5DF2\u53D6\u6D88");
+  if (artifact.chatKey !== currentChatKey()) {
+    throw new StaleTaskError("\u4EA7\u7269\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8\uFF0C\u7981\u6B62\u63D0\u4EA4\u526F\u4F5C\u7528");
+  }
+}
+async function stageArtifact(index, artifact) {
+  assertArtifactScope(artifact);
   const message = getMessage(index);
-  if (!message || message.is_user) return;
-  if (messageFingerprint(index) !== artifact.sourceFingerprint) return;
+  if (!message || message.is_user) return false;
+  if (messageFingerprint(index) !== artifact.sourceFingerprint) return false;
   attachArtifactToMessage(message, artifact);
   await putArtifact(artifact);
-  await persistChat();
   notify(index, artifact);
+  return true;
+}
+async function commitArtifact(index, artifact) {
+  const staged = await stageArtifact(index, artifact);
+  if (!staged) return false;
+  await persistChat();
+  await confirmLocalCommitsAttachedForArtifact(artifact);
+  return true;
 }
 async function loadOrCreateArtifact(index, force) {
   const message = getMessage(index);
   if (!message || message.is_user || !String(message.mes || "").trim()) throw new Error("\u76EE\u6807\u4E0D\u662F\u6709\u6548AI\u6B63\u6587");
-  const fingerprint = messageFingerprint(index);
+  const fingerprint3 = messageFingerprint(index);
   let artifact = getAttachedArtifact(message);
-  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint || force) {
-    artifact = createArtifact(message, index);
+  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint3 || force) {
+    artifact = createArtifactForMessage(index);
     attachArtifactToMessage(message, artifact);
-    await persistChat();
     await putArtifact(artifact);
   }
+  artifact.stableMessageId ||= messageStableIdentity(index);
   artifact.stages.revision ||= { status: "idle", attempts: 0 };
   return artifact;
 }
-async function processMessage(index, force = false) {
+async function processMessage(index, force = false, options = {}) {
   const settings = getSettings();
   if (!settings.enabled) return null;
   const message = getMessage(index);
   if (!message || message.is_user || !String(message.mes || "").trim()) return null;
   const identity = messageIdentity(index);
   const key = `${PIPELINE_VERSION}:${currentChatKey()}:${identity}`;
-  return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async () => {
+  return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async (signal) => {
+    const initialState = await getChatState(currentChatKey());
+    assertHistoryRebuildAccess(initialState);
     const artifact = await loadOrCreateArtifact(index, force);
     notify(index, artifact);
     try {
-      let audit = await runAudit(artifact, force);
-      await saveArtifactToMessage(index, artifact);
+      assertArtifactScope(artifact, signal);
+      let audit = await runAudit(artifact, force, signal);
+      await stageArtifact(index, artifact);
       if (!audit.passed && settings.auditFailAction === "revise") {
-        const revised = await runRevisionFlow(artifact);
+        assertArtifactScope(artifact, signal);
+        const revised = await runRevisionFlow(artifact, signal);
         audit = revised.audit;
-        await saveArtifactToMessage(index, artifact);
+        await stageArtifact(index, artifact);
       }
       if (!audit.passed) {
         const failureAction = settings.auditFailAction === "revise" ? settings.revisionFallbackAction : settings.auditFailAction;
+        assertArtifactScope(artifact, signal);
         await applyAuditFailureAction(artifact, failureAction);
         releaseQuarantine(artifact);
         markStage(artifact, "state", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "sync", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
-        await saveArtifactToMessage(index, artifact);
+        await stageArtifact(index, artifact);
         return artifact;
       }
       releaseQuarantine(artifact);
       if (settings.autoState || force) {
-        await runStateExtraction(artifact, force);
-        await saveArtifactToMessage(index, artifact);
+        assertArtifactScope(artifact, signal);
+        await runStateExtraction(artifact, force, signal);
+        await stageArtifact(index, artifact);
       } else {
         markStage(artifact, "state", "skipped");
       }
       if (artifact.snapshot) {
+        assertArtifactScope(artifact, signal);
         const chatState = await getChatState(artifact.chatKey);
+        assertHistoryRebuildAccess(chatState);
         if (!chatState.processedMessageKeys.includes(artifact.messageKey)) chatState.processedMessageKeys.push(artifact.messageKey);
         chatState.latestSnapshotMessageKey = artifact.messageKey;
         chatState.updatedAt = nowIso();
         await putChatState(chatState);
-        await maybeRunSummaries(artifact);
-        await saveArtifactToMessage(index, artifact);
-        await syncLorebook(artifact);
-        await saveArtifactToMessage(index, artifact);
+        assertArtifactScope(artifact, signal);
+        await maybeRunSummaries(artifact, false, false, signal);
+        await stageArtifact(index, artifact);
+        assertArtifactScope(artifact, signal);
+        if (options.deferLorebookSync) {
+          markStage(artifact, "sync", "skipped", "\u5386\u53F2\u91CD\u5EFA\u671F\u95F4\u5EF6\u8FDF\u5230\u672B\u5C3E\u7EDF\u4E00\u540C\u6B65");
+          await putArtifact(artifact);
+        } else {
+          await syncLorebook(artifact, signal);
+        }
+        assertArtifactScope(artifact, signal);
+        await stageArtifact(index, artifact);
       }
       return artifact;
     } catch (error) {
+      if (signal.aborted || error instanceof StaleTaskError || error instanceof TaskCancelledError || artifact.chatKey !== currentChatKey()) {
+        throw error;
+      }
       const messageText = toErrorMessage(error);
       console.error("[MirrorAbyss] pipeline failed", error);
       releaseQuarantine(artifact);
       toast("error", `\u5904\u7406\u5931\u8D25\uFF1A${messageText}`);
-      await saveArtifactToMessage(index, artifact);
-      return artifact;
+      await stageArtifact(index, artifact);
+      throw new PipelineStageError(artifact, error);
+    } finally {
+      if (artifact.chatKey === currentChatKey()) {
+        await commitArtifact(index, artifact).catch((error) => {
+          console.error("[MirrorAbyss] final chat commit failed", error);
+          throw error;
+        });
+      }
     }
   });
 }
@@ -2773,80 +5593,143 @@ function scheduleMessage(payload, force = false, delay = 0) {
     const primed = primeQuarantine(index);
     if (primed) notify(index, primed);
   }
-  window.setTimeout(() => void processMessage(index, force), delay);
+  const scheduledScope = chatScopeManager.current();
+  window.setTimeout(() => {
+    if (!chatScopeManager.isCurrent(scheduledScope)) return;
+    void processMessage(index, force).catch((error) => {
+      if (error instanceof PipelineStageError || error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
+      console.error("[MirrorAbyss] scheduled pipeline failed", error);
+    });
+  }, delay);
 }
 async function retryStage(index, stage) {
   if (stage === "audit" || stage === "revision") return processMessage(index, true);
   const artifact = await loadOrCreateArtifact(index, false);
   const key = `${PIPELINE_VERSION}:retry:${stage}:${artifact.chatKey}:${artifact.messageKey}`;
-  return taskQueue.run(key, `\u91CD\u8BD5${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async () => {
-    if (stage === "state") await runStateExtraction(artifact, true);
-    if (stage === "summary") await maybeRunSummaries(artifact, true, true);
-    if (stage === "sync") await syncLorebook(artifact);
-    await saveArtifactToMessage(index, artifact);
-    return artifact;
+  return taskQueue.run(key, `\u91CD\u8BD5${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async (signal) => {
+    try {
+      assertArtifactScope(artifact, signal);
+      if (stage === "state") await runStateExtraction(artifact, true, signal);
+      if (stage === "summary") await maybeRunSummaries(artifact, true, true, signal);
+      if (stage === "sync") await syncLorebook(artifact, signal);
+      await stageArtifact(index, artifact);
+      return artifact;
+    } finally {
+      if (artifact.chatKey === currentChatKey()) await commitArtifact(index, artifact);
+    }
   });
 }
 async function forceSummary(index, kind) {
   const artifact = await loadOrCreateArtifact(index, false);
   const key = `${PIPELINE_VERSION}:force-summary:${kind}:${artifact.chatKey}:${artifact.messageKey}`;
-  return taskQueue.run(key, `\u7ACB\u5373${kind === "small" ? "\u5C0F" : "\u5927"}\u603B\u7ED3`, kind === "small" ? "smallSummary" : "largeSummary", async () => {
-    await maybeRunSummaries(artifact, kind === "small", kind === "large");
-    await saveArtifactToMessage(index, artifact);
-    if (getSettings().lorebookSync) {
-      await syncLorebook(artifact);
-      await saveArtifactToMessage(index, artifact);
+  return taskQueue.run(key, `\u7ACB\u5373${kind === "small" ? "\u5C0F" : "\u5927"}\u603B\u7ED3`, kind === "small" ? "smallSummary" : "largeSummary", async (signal) => {
+    try {
+      assertArtifactScope(artifact, signal);
+      await maybeRunSummaries(artifact, kind === "small", kind === "large", signal);
+      await stageArtifact(index, artifact);
+      if (getSettings().lorebookSync) {
+        await syncLorebook(artifact, signal);
+        await stageArtifact(index, artifact);
+      }
+      return artifact;
+    } finally {
+      if (artifact.chatKey === currentChatKey()) await commitArtifact(index, artifact);
     }
-    return artifact;
   });
 }
-async function removeMessageArtifact(_payload) {
-  const chatKey = currentChatKey();
-  const chatState = await getChatState(chatKey);
-  const liveKeys = new Set(
-    getChat().map((message) => getAttachedArtifact(message)?.messageKey).filter((key) => Boolean(key))
-  );
-  const staleKeys = chatState.processedMessageKeys.filter((key) => !liveKeys.has(key));
-  await Promise.all(staleKeys.map((key) => removeArtifact(chatKey, key)));
-  chatState.processedMessageKeys = chatState.processedMessageKeys.filter((key) => liveKeys.has(key));
-  if (chatState.latestSnapshotMessageKey && !liveKeys.has(chatState.latestSnapshotMessageKey)) {
-    chatState.latestSnapshotMessageKey = [...liveKeys].at(-1);
+var historyRebuildTimers = /* @__PURE__ */ new Map();
+var pendingHistoryStarts = /* @__PURE__ */ new Map();
+function reasonForChangedEvent(sourceEvent) {
+  if (/SWIP/i.test(sourceEvent)) return "swiped";
+  if (/UPDATED/i.test(sourceEvent)) return "continued";
+  return "edited";
+}
+function scheduleHistoryRebuild(payload, reason, delay = 300, sourceEvent = "") {
+  const startIndex = Math.max(0, resolveMessageIndex(payload));
+  const scope = chatScopeManager.current();
+  const previous = pendingHistoryStarts.get(scope.chatKey);
+  if (/MESSAGE_UPDATED/i.test(sourceEvent)) {
+    if (previous) return;
+    const message = getMessage(startIndex);
+    const attached = getAttachedArtifact(message);
+    if (message?.is_user || !attached || attached.chatKey !== scope.chatKey) return;
+    if (attached.messageKey === messageIdentity(startIndex) && attached.sourceFingerprint === messageFingerprint(startIndex)) return;
   }
-  await putChatState(chatState);
+  pendingHistoryStarts.set(scope.chatKey, {
+    startIndex: previous ? Math.min(previous.startIndex, startIndex) : startIndex,
+    reason
+  });
+  const existingTimer = historyRebuildTimers.get(scope.chatKey);
+  if (existingTimer !== void 0) window.clearTimeout(existingTimer);
+  const timer = window.setTimeout(() => {
+    historyRebuildTimers.delete(scope.chatKey);
+    const pending = pendingHistoryStarts.get(scope.chatKey);
+    pendingHistoryStarts.delete(scope.chatKey);
+    if (!pending || !chatScopeManager.isCurrent(scope)) return;
+    clearAllQuarantines();
+    taskQueue.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u4EFB\u52A1\u5E76\u91CD\u5EFA\u4F9D\u8D56");
+    connectionBroker.cancelScope(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u8BF7\u6C42\u5E76\u91CD\u5EFA\u4F9D\u8D56");
+    void rebuildHistoryFrom({
+      startIndex: pending.startIndex,
+      reason: pending.reason,
+      processMessage,
+      syncLatest: async (artifact) => syncLorebook(artifact)
+    }).catch((error) => {
+      if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
+      console.error("[MirrorAbyss] history rebuild failed", error);
+      toast("error", `\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    });
+  }, delay);
+  historyRebuildTimers.set(scope.chatKey, timer);
+}
+async function removeMessageArtifact(payload) {
+  scheduleHistoryRebuild(payload, "deleted", 0);
+}
+async function recoverHistoryConsistencyForCurrentChat() {
+  return recoverPendingHistoryRebuild({
+    processMessage,
+    syncLatest: async (artifact) => syncLorebook(artifact)
+  });
 }
 function getArtifactAt(index) {
-  return getAttachedArtifact(getMessage(index));
+  const artifact = getAttachedArtifact(getMessage(index));
+  return artifact?.chatKey === currentChatKey() ? artifact : null;
 }
 function latestArtifact() {
+  const chatKey = currentChatKey();
   const chat = getChat();
   for (let i = chat.length - 1; i >= 0; i -= 1) {
     const artifact = getAttachedArtifact(chat[i]);
-    if (artifact) return { index: i, artifact };
+    if (artifact?.chatKey === chatKey) return { index: i, artifact };
   }
   return null;
 }
 function installPipelineEventHandlers() {
-  const context = globalThis.SillyTavern.getContext();
-  const { eventSource, event_types } = context;
-  const onReceived = (payload) => scheduleMessage(payload, false);
-  const onEdited = (payload) => scheduleMessage(payload, true, 300);
-  const onSwiped = (payload) => scheduleMessage(payload, true, 300);
-  const onDeleted = (payload) => {
-    clearAllQuarantines();
-    void removeMessageArtifact(payload);
-  };
-  const onChatChanged = () => clearAllQuarantines();
-  eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
-  eventSource.on(event_types.MESSAGE_EDITED, onEdited);
-  eventSource.on(event_types.MESSAGE_SWIPED, onSwiped);
-  eventSource.on(event_types.MESSAGE_DELETED, onDeleted);
-  eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
+  const router = foundationKernel.services.get(EVENT_ROUTER);
+  const cleanups = [
+    router.subscribe("message-created", (event) => scheduleMessage(event.payload, false)),
+    router.subscribe("message-changed", (event) => {
+      scheduleHistoryRebuild(event.payload, reasonForChangedEvent(event.sourceEvent), 300, event.sourceEvent);
+    }),
+    router.subscribe("message-removed", (event) => {
+      void removeMessageArtifact(event.payload);
+    }),
+    router.subscribe("chat-changed", (event) => {
+      clearAllQuarantines();
+      taskQueue.cancelAllExceptChat(event.scope.chatKey);
+      connectionBroker.cancelAllExceptScope(event.scope.chatKey);
+    }),
+    router.subscribe("chat-created", (event) => {
+      clearAllQuarantines();
+      taskQueue.cancelAllExceptChat(event.scope.chatKey);
+      connectionBroker.cancelAllExceptScope(event.scope.chatKey);
+    })
+  ];
   return () => {
-    eventSource.removeListener?.(event_types.MESSAGE_RECEIVED, onReceived);
-    eventSource.removeListener?.(event_types.MESSAGE_EDITED, onEdited);
-    eventSource.removeListener?.(event_types.MESSAGE_SWIPED, onSwiped);
-    eventSource.removeListener?.(event_types.MESSAGE_DELETED, onDeleted);
-    eventSource.removeListener?.(event_types.CHAT_CHANGED, onChatChanged);
+    cleanups.splice(0).forEach((cleanup) => cleanup());
+    for (const timer of historyRebuildTimers.values()) window.clearTimeout(timer);
+    historyRebuildTimers.clear();
+    pendingHistoryStarts.clear();
   };
 }
 
@@ -2976,10 +5859,125 @@ function buildRelationshipGraph(snapshot, scope = "relations") {
   return { nodes, edges };
 }
 
+// src/maintenance/recovery.ts
+async function buildRecoveryBundleForCurrentChat() {
+  const chatKey = currentChatKey();
+  return {
+    format: "mirror-abyss-recovery-bundle",
+    version: VERSION,
+    exportedAt: nowIso(),
+    chatKey,
+    chatState: await getChatState(chatKey),
+    lorebookOutbox: await getLorebookOutboxRecords(chatKey),
+    localCommits: await getLocalCommitRecords(chatKey),
+    operationLog: await getOperationLog(chatKey),
+    migrationBackups: await getMigrationBackups(chatKey)
+  };
+}
+async function downloadRecoveryBundleForCurrentChat() {
+  const bundle = await buildRecoveryBundleForCurrentChat();
+  const filename = `mirror-abyss-recovery-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}.json`;
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  await safeAppendOperationLog(bundle.chatKey, {
+    category: "recovery",
+    action: "export",
+    state: "success",
+    detail: filename
+  });
+  return filename;
+}
+async function cleanupRecoveryHistoryForCurrentChat(options = {}) {
+  const chatKey = currentChatKey();
+  const outbox = await pruneLorebookOutbox(chatKey, Math.max(0, options.keepOutbox ?? 50));
+  const localCommits = await pruneLocalCommits(chatKey, Math.max(0, options.keepLocalCommits ?? 50));
+  const backups = await getMigrationBackups(chatKey);
+  const remove = backups.slice(Math.max(0, options.keepBackups ?? 5));
+  await Promise.all(remove.map((backup) => removeMigrationBackup(chatKey, backup.id)));
+  await safeAppendOperationLog(chatKey, {
+    category: "recovery",
+    action: "cleanup",
+    state: "success",
+    detail: `outbox=${outbox}; local=${localCommits}; backups=${remove.length}`
+  });
+  return { outbox, localCommits, backups: remove.length };
+}
+
+// src/maintenance/reset.ts
+function clearArtifactsFromCurrentMessages() {
+  let count = 0;
+  for (const message of getChat()) {
+    if (message?.extra?.[MODULE_NAME]) {
+      delete message.extra[MODULE_NAME];
+      count += 1;
+    }
+  }
+  return count;
+}
+async function resetCurrentGame() {
+  const context = getContext();
+  const oldChatKey = currentChatKey();
+  clearAllQuarantines();
+  let lorebook = { name: "", removed: 0 };
+  let lorebookError;
+  try {
+    lorebook = await clearManagedLorebookForCurrentChat(true);
+  } catch (error) {
+    lorebookError = toErrorMessage(error);
+  }
+  const clearedMessages = clearArtifactsFromCurrentMessages();
+  const localCommits = await getLocalCommitRecords(oldChatKey);
+  const unresolvedLocalCommit = localCommits.some((record) => record.state === "prepared" || record.state === "committing");
+  await clearChatStorage(oldChatKey, {
+    preserveOutbox: Boolean(lorebookError),
+    preserveLocalCommits: unresolvedLocalCommit,
+    preserveBackups: true
+  });
+  if (context.chatMetadata?.[MODULE_NAME]) delete context.chatMetadata[MODULE_NAME];
+  await persistChat();
+  await persistMetadata();
+  return {
+    chatKey: oldChatKey,
+    clearedMessages,
+    removedLorebookEntries: lorebook.removed,
+    lorebookName: lorebook.name,
+    lorebookError
+  };
+}
+async function clearAllLocalMirrorAbyssCache() {
+  const context = getContext();
+  clearAllQuarantines();
+  const clearedMessages = clearArtifactsFromCurrentMessages();
+  await clearAllStorage();
+  if (context.chatMetadata?.[MODULE_NAME]) delete context.chatMetadata[MODULE_NAME];
+  await persistChat();
+  await persistMetadata();
+  return { clearedMessages };
+}
+
 // src/ui/diagnostics.ts
 async function runDiagnostics() {
   const checks = [];
   const context = tryGetContext();
+  const kernel = foundationKernel.status();
+  checks.push({
+    id: "foundationKernel",
+    label: "Foundation Kernel",
+    status: kernel.state === "ready" ? "ok" : kernel.state === "degraded" ? "warn" : "error",
+    detail: `${kernel.state} / ${kernel.stage}${kernel.lastError ? `\uFF1A${kernel.lastError}` : ""}`
+  });
+  const scope = context ? chatScopeManager.current() : null;
+  checks.push({
+    id: "chatScope",
+    label: "\u804A\u5929\u4F5C\u7528\u57DF",
+    status: scope?.persistent ? "ok" : "warn",
+    detail: scope ? `${scope.persistent ? "\u5DF2\u4FDD\u5B58\u804A\u5929" : "\u672A\u4FDD\u5B58\u804A\u5929\uFF0C\u4EC5\u5185\u5B58\u6682\u5B58"}\uFF1Brevision=${scope.revision}` : "\u4E0D\u53EF\u7528"
+  });
   checks.push({
     id: "context",
     label: "SillyTavern\u4E0A\u4E0B\u6587",
@@ -2991,6 +5989,21 @@ async function runDiagnostics() {
     label: "\u5F53\u524D\u8FDE\u63A5\u539F\u59CB\u8C03\u7528",
     status: typeof context?.generateRaw === "function" ? "ok" : "warn",
     detail: typeof context?.generateRaw === "function" ? "generateRaw\u53EF\u7528" : "\u5F53\u524D\u8FDE\u63A5\u6A21\u5F0F\u4E0D\u53EF\u7528\uFF1B\u4ECD\u53EF\u4F7F\u7528\u72EC\u7ACBAPI"
+  });
+  const coordinator3 = foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR);
+  const coordination = coordinator3?.snapshot();
+  checks.push({
+    id: "crossTabCoordinator",
+    label: "\u8DE8\u6807\u7B7E\u534F\u8C03",
+    status: coordination?.mode === "memory" ? "warn" : coordination ? "ok" : "error",
+    detail: coordination ? `${coordination.mode}\uFF1B\u6D3B\u52A8\u79DF\u7EA6 ${coordination.active.length}` : "\u4E0D\u53EF\u7528"
+  });
+  const broker = connectionBroker.snapshot();
+  checks.push({
+    id: "connectionBroker",
+    label: "Connection Broker",
+    status: broker.circuits.some((item2) => item2.openUntil > Date.now()) ? "warn" : "ok",
+    detail: `\u6D3B\u52A8 ${broker.active.length}\uFF1B\u6392\u961F ${broker.lanes.reduce((sum, lane) => sum + lane.queued, 0)}\uFF1B\u7194\u65AD ${broker.circuits.filter((item2) => item2.openUntil > Date.now()).length}`
   });
   checks.push({
     id: "connectionService",
@@ -3010,6 +6023,65 @@ async function runDiagnostics() {
     status: globalThis.SillyTavern?.libs?.localforage ? "ok" : "warn",
     detail: globalThis.SillyTavern?.libs?.localforage ? "\u4F7F\u7528localforage" : "\u4F7F\u7528localStorage\u964D\u7EA7"
   });
+  const server = context ? await checkServerConnection() : { ok: false, detail: "\u4E0A\u4E0B\u6587\u4E0D\u53EF\u7528" };
+  checks.push({
+    id: "server",
+    label: "\u9152\u9986\u670D\u52A1\u5668\u4E0E\u4F1A\u8BDD",
+    status: server.ok ? "ok" : "error",
+    detail: server.detail
+  });
+  const storageKeys = await listMirrorAbyssStorageKeys().catch(() => []);
+  checks.push({
+    id: "storageKeys",
+    label: "\u955C\u6E0A\u672C\u5730\u7F13\u5B58",
+    status: "ok",
+    detail: `${storageKeys.length} \u4E2A\u672C\u5730\u8BB0\u5F55\u952E`
+  });
+  if (context) {
+    const queueTasks = await getQueueTasks(currentChatKey()).catch(() => []);
+    checks.push({
+      id: "persistentTasks",
+      label: "\u6301\u4E45\u5316\u4EFB\u52A1\u8BB0\u5F55",
+      status: queueTasks.some((task) => task.state === "failed") ? "warn" : "ok",
+      detail: `${queueTasks.length} \u6761\u4EFB\u52A1\u8BB0\u5F55\uFF1B\u8FD0\u884C\u4E2D ${queueTasks.filter((task) => task.state === "running" || task.state === "queued").length} \u6761`
+    });
+  }
+  if (context) {
+    const outbox = await getLorebookOutboxRecords(currentChatKey()).catch(() => []);
+    const active = outbox.filter((record) => !["committed", "rolled_back", "cancelled", "conflict"].includes(record.state));
+    const conflicts = outbox.filter((record) => record.state === "conflict");
+    checks.push({
+      id: "lorebookOutbox",
+      label: "\u4E16\u754C\u4E66\u4E8B\u52A1 Outbox",
+      status: conflicts.length ? "error" : active.length ? "warn" : "ok",
+      detail: `${outbox.length} \u6761\u4E8B\u52A1\uFF1B\u5F85\u6062\u590D ${active.length}\uFF1B\u51B2\u7A81 ${conflicts.length}`
+    });
+  }
+  if (context) {
+    const localCommits = await getLocalCommitRecords(currentChatKey()).catch(() => []);
+    const pending = localCommits.filter((record) => record.state === "prepared" || record.state === "committing" || record.state === "committed" && !record.messageAttached);
+    const conflicts = localCommits.filter((record) => record.state === "conflict");
+    checks.push({
+      id: "localCommitJournal",
+      label: "\u603B\u7ED3\u4E0E\u6C89\u964D\u63D0\u4EA4\u65E5\u5FD7",
+      status: conflicts.length ? "error" : pending.length ? "warn" : "ok",
+      detail: `${localCommits.length} \u6761\u63D0\u4EA4\uFF1B\u5F85\u6062\u590D ${pending.length}\uFF1B\u51B2\u7A81 ${conflicts.length}`
+    });
+    const state2 = await getChatState(currentChatKey());
+    const rebuild = state2.historyRebuild;
+    checks.push({
+      id: "historyConsistency",
+      label: "\u603B\u7ED3\u4F9D\u8D56\u4E00\u81F4\u6027",
+      status: rebuild?.state === "failed" ? "error" : rebuild ? "warn" : "ok",
+      detail: rebuild ? `${rebuild.state}\uFF1B\u4ECE\u7B2C ${rebuild.startIndex + 1} \u6761\u6D88\u606F\u91CD\u5EFA\uFF1B\u539F\u56E0 ${rebuild.reason}${rebuild.error ? `\uFF1B${rebuild.error}` : ""}` : `\u4E00\u81F4\uFF1Brevision=${state2.historyRevision ?? 0}`
+    });
+    checks.push({
+      id: "migration",
+      label: "\u65E7\u7248\u6570\u636E\u8FC1\u79FB",
+      status: (state2.migrationVersion ?? 0) >= 4 ? "ok" : "warn",
+      detail: (state2.migrationVersion ?? 0) >= 4 ? `\u8FC1\u79FB\u7248\u672C ${state2.migrationVersion}` : "\u5C1A\u672A\u5B8C\u6210\u5F53\u524D\u804A\u5929\u7684\u4FDD\u5B88\u8FC1\u79FB\u68C0\u67E5"
+    });
+  }
   const settings = context ? getSettings() : null;
   if (settings) {
     const independentCount = settings.independentApiProfiles.length;
@@ -3059,10 +6131,29 @@ async function diagnosticReport() {
     userAgent: navigator.userAgent,
     location: location.origin,
     chatKey,
+    kernel: foundationKernel.status(),
+    scope: context ? chatScopeManager.current() : null,
+    connectionBroker: connectionBroker.snapshot(),
+    crossTabCoordinator: foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR)?.snapshot() ?? null,
     checks: await runDiagnostics(),
     settings: context ? { ...getSettings(), auditPrompt: getSettings().auditPrompt ? "[\u5DF2\u586B\u5199]" : "", revisionPrompt: getSettings().revisionPrompt ? "[\u5DF2\u586B\u5199]" : "" } : null,
     chatState: context ? await getChatState(chatKey) : null,
-    taskLog: context ? await getTaskLog(chatKey) : []
+    taskLog: context ? await getTaskLog(chatKey) : [],
+    localCommits: context ? await getLocalCommitRecords(chatKey) : [],
+    operationLog: context ? await getOperationLog(chatKey) : [],
+    migrationBackups: context ? (await getMigrationBackups(chatKey)).map((item2) => ({ id: item2.id, createdAt: item2.createdAt, preview: item2.preview })) : [],
+    lorebookOutbox: context ? (await getLorebookOutboxRecords(chatKey)).map((record) => ({
+      id: record.id,
+      intentKey: record.intentKey,
+      operation: record.operation,
+      bookName: record.bookName,
+      state: record.state,
+      attempts: record.attempts,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      error: record.error,
+      conflictDetail: record.conflictDetail
+    })) : []
   };
 }
 
@@ -3172,6 +6263,20 @@ function statusClass(value) {
   if (value === "running" || value === "queued") return "working";
   return "neutral";
 }
+function outboxStateText(value) {
+  const map = {
+    prepared: "\u5DF2\u51C6\u5907",
+    committing: "\u6B63\u5728\u63D0\u4EA4",
+    verify_pending: "\u7B49\u5F85\u56DE\u8BFB\u786E\u8BA4",
+    committed: "\u5DF2\u63D0\u4EA4\u5E76\u6821\u9A8C",
+    rollback_pending: "\u7B49\u5F85\u56DE\u6EDA\u786E\u8BA4",
+    rolled_back: "\u5DF2\u5B89\u5168\u56DE\u6EDA",
+    failed: "\u5931\u8D25",
+    conflict: "\u68C0\u6D4B\u5230\u51B2\u7A81",
+    cancelled: "\u5DF2\u53D6\u6D88"
+  };
+  return value ? map[value] || value : "\u5C1A\u65E0\u4E8B\u52A1";
+}
 function stageCards(artifact) {
   const stages = artifact?.stages;
   const rows2 = [
@@ -3193,7 +6298,7 @@ function stageCards(artifact) {
 function overviewHtml(artifactInfo) {
   const artifact = artifactInfo?.artifact;
   const rows2 = snapshotRowCount(artifact?.snapshot);
-  const jobs = taskQueue.list().slice(0, 5);
+  const jobs = taskQueue.list().filter((task) => task.chatKey === currentChatKey()).slice(0, 5);
   return `
     <section class="ma11-hero">
       <div>
@@ -3210,7 +6315,7 @@ function overviewHtml(artifactInfo) {
     <section class="ma11-card">
       <header><b>\u4EFB\u52A1\u961F\u5217</b><span>${jobs.length ? `${jobs.length} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2"}</span></header>
       <div class="ma11-task-list">
-        ${jobs.length ? jobs.map((task) => `<div><span>${escapeHtml(task.label)}</span><em class="${task.state}">${escapeHtml(task.state)}</em></div>`).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'}
+        ${jobs.length ? jobs.map((task) => `<div><span>${escapeHtml(task.label)}</span><em class="${task.state}">${escapeHtml(task.state)}</em>${task.state === "queued" || task.state === "running" ? `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">\u53D6\u6D88</button>` : ""}</div>`).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'}
       </div>
     </section>
     <section class="ma11-card ma11-note">
@@ -3365,10 +6470,10 @@ async function summariesHtml() {
     <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u8D1F\u8D23\u5B89\u5168\u6C89\u964D\u5DF2\u7ED3\u675F\u5185\u5BB9\uFF1B\u5927\u603B\u7ED3\u628A\u5DF2\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u5185\u63A8\u4E3A\u7D2F\u8BA1\u957F\u671F\u8BB0\u5FC6\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
     <div class="ma11-summary-columns">
       <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map(
-    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
+    (item2) => `<article class="ma11-summary"><h3>${escapeHtml(item2.title)}</h3><p>${escapeHtml(item2.summary)}</p>${item2.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item2.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item2.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item2.createdAt).toLocaleString())}</small></article>`
   ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5C0F\u603B\u7ED3\u3002</p>'}</section>
       <section class="ma11-card"><header><b>\u5927\u603B\u7ED3</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map(
-    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
+    (item2) => `<article class="ma11-summary"><h3>${escapeHtml(item2.title)}</h3><p>${escapeHtml(item2.summary)}</p>${item2.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item2.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item2.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item2.createdAt).toLocaleString())}</small></article>`
   ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5927\u603B\u7ED3\u3002</p>'}</section>
     </div>`;
 }
@@ -3377,7 +6482,7 @@ function auditHtml() {
   const info = currentArtifact();
   const audit = info?.artifact.audit;
   const revision = info?.artifact.revision;
-  const violationHtml = audit && !audit.passed && audit.violations.length ? `<ol class="ma11-violation-list">${audit.violations.map((item) => `<li><b>${escapeHtml(item.rule)}</b><p>${escapeHtml(item.evidence)}</p><small>\u4FEE\u6539\uFF1A${escapeHtml(item.action)}</small></li>`).join("")}</ol>` : "";
+  const violationHtml = audit && !audit.passed && audit.violations.length ? `<ol class="ma11-violation-list">${audit.violations.map((item2) => `<li><b>${escapeHtml(item2.rule)}</b><p>${escapeHtml(item2.evidence)}</p><small>\u4FEE\u6539\uFF1A${escapeHtml(item2.action)}</small></li>`).join("")}</ol>` : "";
   return `
     <section class="ma11-card ma11-form-card">
       <header><b>\u89C4\u5219\u5BA1\u6838\u4E0E\u5B9A\u5411\u4FEE\u6B63</b><span>\u6700\u7EC8\u901A\u8FC7\u7684\u6B63\u6587\u624D\u8FDB\u5165\u72B6\u6001\u8868\u4E0E\u4E16\u754C\u4E66</span></header>
@@ -3416,9 +6521,14 @@ async function syncHtml() {
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="vectorizeRows" ${settings.vectorizeRows ? "checked" : ""}/><span>\u4EBA\u7269\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7B49\u72B6\u6001\u884C\u542F\u7528\u5411\u91CF</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u5F53\u524D\u7126\u70B9\u4E0E\u5F53\u524D\u603B\u7ED3\u5E38\u9A7B</span></label>
-      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
+      <div class="ma11-actions"><button data-ma11-action="check-server">\u68C0\u6D4B\u670D\u52A1\u5668</button><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6821\u9A8C\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
-      <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
+      <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u4E8B\u52A1</dt><dd>${escapeHtml(outboxStateText(state2?.lastOutboxState))}${state2?.lastOutboxId ? ` \xB7 ${escapeHtml(state2.lastOutboxId.slice(-10))}` : ""}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
+    </section>
+    <section class="ma11-card ma11-form-card">
+      <header><b>\u65B0\u6E38\u620F\u4E0E\u7F13\u5B58</b><span>\u53EA\u5F71\u54CD\u955C\u6E0A\u6570\u636E\uFF0C\u4E0D\u5220\u9664\u804A\u5929\u6B63\u6587</span></header>
+      <p class="ma11-help">\u201C\u91CD\u7F6E\u5F53\u524D\u6E38\u620F\u201D\u4F1A\u6E05\u9664\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u8868\u3001\u603B\u7ED3\u3001\u4EFB\u52A1\u8BB0\u5F55\u4E0E\u955C\u6E0A\u7BA1\u7406\u7684\u4E16\u754C\u4E66\u6761\u76EE\uFF0C\u5E76\u4E3A\u540C\u4E00\u804A\u5929\u5EFA\u7ACB\u65B0\u7684\u9694\u79BB\u6570\u636E\u4F5C\u7528\u57DF\u3002API\u914D\u7F6E\u4E0E\u5176\u4ED6\u804A\u5929\u4E0D\u53D7\u5F71\u54CD\u3002</p>
+      <div class="ma11-actions"><button class="danger" data-ma11-action="reset-current-game">\u91CD\u7F6E\u5F53\u524D\u6E38\u620F</button><button class="danger" data-ma11-action="clear-all-cache">\u6E05\u7A7A\u5168\u90E8\u672C\u5730\u955C\u6E0A\u7F13\u5B58</button></div>
     </section>`;
 }
 function connectionProfiles() {
@@ -3512,10 +6622,48 @@ function settingsHtml() {
 }
 async function diagnosticsHtml() {
   const checks = await runDiagnostics();
+  const chatKey = currentChatKey();
   const info = currentArtifact();
-  const logs = info ? await getTaskLog(info.artifact.chatKey) : [];
+  const [logs, outbox, localCommits, chatState] = await Promise.all([
+    getTaskLog(chatKey),
+    getLorebookOutboxRecords(chatKey),
+    getLocalCommitRecords(chatKey),
+    getChatState(chatKey)
+  ]);
+  const lorebookConflicts = outbox.filter((record) => record.state === "conflict");
+  const localConflicts = localCommits.filter((record) => record.state === "conflict");
+  const conflictCount = lorebookConflicts.length + localConflicts.length;
+  const conflictHtml = conflictCount ? `
+      <section class="ma11-card">
+        <header><b>\u9700\u8981\u4EBA\u5DE5\u5904\u7406\u7684\u51B2\u7A81</b><span class="ma11-badge danger">${conflictCount}</span></header>
+        ${lorebookConflicts.map(
+    (record) => `
+              <article class="ma11-error-box">
+                <b>\u4E16\u754C\u4E66\u4E8B\u52A1 \xB7 ${escapeHtml(record.bookName)}</b>
+                <p>${escapeHtml(record.conflictDetail || record.error || "\u670D\u52A1\u5668\u5185\u5BB9\u4E0E\u4E8B\u52A1\u57FA\u7EBF\u4E0D\u4E00\u81F4")}</p>
+                <small>${escapeHtml(record.id)} \xB7 ${escapeHtml(new Date(record.updatedAt).toLocaleString())}</small>
+                <div class="ma11-actions">
+                  <button data-ma11-action="cancel-lorebook-conflict" data-ma11-record-id="${escapeHtml(record.id)}">\u4FDD\u7559\u670D\u52A1\u5668\u73B0\u72B6</button>
+                  <button data-ma11-action="retry-lorebook-conflict" data-ma11-record-id="${escapeHtml(record.id)}">\u4EE5\u6700\u65B0\u72B6\u6001\u91CD\u65B0\u53D1\u5E03</button>
+                </div>
+              </article>`
+  ).join("")}
+        ${localConflicts.map(
+    (record) => `
+              <article class="ma11-error-box">
+                <b>\u672C\u5730\u603B\u7ED3\u63D0\u4EA4 \xB7 ${escapeHtml(record.operation)}</b>
+                <p>${escapeHtml(record.conflictDetail || record.error || "\u672C\u5730\u72B6\u6001\u4E0E\u63D0\u4EA4\u65E5\u5FD7\u4E0D\u4E00\u81F4")}</p>
+                <small>${escapeHtml(record.id)} \xB7 ${escapeHtml(new Date(record.updatedAt).toLocaleString())}</small>
+                <div class="ma11-actions">
+                  <button data-ma11-action="cancel-local-conflict" data-ma11-record-id="${escapeHtml(record.id)}">\u4FDD\u7559\u5F53\u524D\u672C\u5730\u72B6\u6001</button>
+                </div>
+              </article>`
+  ).join("")}
+      </section>` : "";
   return `
-    <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
+    <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
+    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u6E05\u7406\u53EA\u5220\u9664\u8D85\u8FC7\u4FDD\u7559\u6570\u91CF\u7684\u5DF2\u5B8C\u6210\u5386\u53F2\uFF0C\u4E0D\u5220\u9664\u672A\u89E3\u51B3\u4E8B\u52A1\u3002</p><div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">\u6062\u590D\u603B\u7ED3\u4F9D\u8D56</button>` : ""}</div></section>
+    ${conflictHtml}
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(
     (log) => `<div><time>${escapeHtml(new Date(log.createdAt).toLocaleString())}</time><span>${escapeHtml(log.label)}</span><em class="${log.state}">${escapeHtml(log.state)}</em>${log.error ? `<small>${escapeHtml(log.error)}</small>` : ""}</div>`
@@ -3603,10 +6751,10 @@ async function saveRow(form) {
   const title = form.elements.namedItem("title").value.trim();
   const content = form.elements.namedItem("content").value.trim();
   const status = form.elements.namedItem("status").value.trim();
-  const keywords = form.elements.namedItem("keywords").value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+  const keywords = form.elements.namedItem("keywords").value.split(/[,，]/).map((item2) => item2.trim()).filter(Boolean);
   const locked = form.elements.namedItem("locked").checked;
   const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
-  const listFrom = (name) => form.elements.namedItem(name).value.split(/\n|[；;]/).map((item) => item.trim()).filter(Boolean);
+  const listFrom = (name) => form.elements.namedItem(name).value.split(/\n|[；;]/).map((item2) => item2.trim()).filter(Boolean);
   const lifecycle = supportsLifecycle ? {
     existence: form.elements.namedItem("existence").value,
     activity: form.elements.namedItem("activity").value,
@@ -3720,6 +6868,26 @@ function bindWorkspace(workspace) {
         await retryStage(info.index, "sync");
         await renderWorkspace();
       }
+      if (action === "check-server") {
+        const result = await checkServerConnection();
+        toast(result.ok ? "success" : "error", result.detail);
+      }
+      if (action === "reset-current-game") {
+        if (!confirm("\u786E\u5B9A\u91CD\u7F6E\u5F53\u524D\u6E38\u620F\u5417\uFF1F\u8FD9\u4F1A\u6E05\u9664\u5F53\u524D\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u4EFB\u52A1\u8BB0\u5F55\u548C\u955C\u6E0A\u7BA1\u7406\u7684\u4E16\u754C\u4E66\u6761\u76EE\uFF0C\u4F46\u4E0D\u4F1A\u5220\u9664\u804A\u5929\u6B63\u6587\u3002")) return;
+        if (!confirm("\u518D\u6B21\u786E\u8BA4\uFF1A\u5F53\u524D\u804A\u5929\u7684\u955C\u6E0A\u6570\u636E\u5C06\u4E0D\u53EF\u4ECE\u754C\u9762\u6062\u590D\u3002\u7EE7\u7EED\u5417\uFF1F")) return;
+        const result = await resetCurrentGame();
+        resetWorkspaceChatSelection();
+        toast(result.lorebookError ? "warning" : "success", result.lorebookError ? `\u5F53\u524D\u672C\u5730\u6E38\u620F\u6570\u636E\u5DF2\u91CD\u7F6E\uFF0C\u4F46\u4E16\u754C\u4E66\u6E05\u7406\u5931\u8D25\uFF1A${result.lorebookError}` : `\u5F53\u524D\u6E38\u620F\u5DF2\u91CD\u7F6E\uFF1A\u6E05\u9664${result.clearedMessages}\u6761\u6D88\u606F\u8BB0\u5F55\uFF0C\u79FB\u9664${result.removedLorebookEntries}\u4E2A\u4E16\u754C\u4E66\u6761\u76EE`);
+        await renderWorkspace();
+      }
+      if (action === "clear-all-cache") {
+        if (!confirm("\u786E\u5B9A\u6E05\u7A7A\u5168\u90E8\u672C\u5730\u955C\u6E0A\u7F13\u5B58\u5417\uFF1F\u8FD9\u4F1A\u6E05\u9664\u6240\u6709\u804A\u5929\u7684\u672C\u5730\u8868\u683C\u3001\u603B\u7ED3\u548C\u4EFB\u52A1\u65E5\u5FD7\uFF0C\u4F46\u4E0D\u4F1A\u81EA\u52A8\u5220\u9664\u5176\u4ED6\u804A\u5929\u7684\u4E16\u754C\u4E66\u3002")) return;
+        if (!confirm("\u6B64\u64CD\u4F5C\u8303\u56F4\u5927\u4E8E\u201C\u91CD\u7F6E\u5F53\u524D\u6E38\u620F\u201D\u3002\u518D\u6B21\u786E\u8BA4\u7EE7\u7EED\u3002")) return;
+        const result = await clearAllLocalMirrorAbyssCache();
+        resetWorkspaceChatSelection();
+        toast("success", `\u5168\u90E8\u672C\u5730\u955C\u6E0A\u7F13\u5B58\u5DF2\u6E05\u7A7A\uFF1B\u5F53\u524D\u804A\u5929\u79FB\u9664${result.clearedMessages}\u6761\u9644\u52A0\u8BB0\u5F55`);
+        await renderWorkspace();
+      }
       if (action === "add-row") openRowEditor(getSettings().ui.activeTable);
       if (action === "close-editor") closeEditor();
       if (action === "refresh-diagnostics") await renderWorkspace();
@@ -3728,8 +6896,48 @@ function bindWorkspace(workspace) {
         await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
         toast("success", "\u8BCA\u65AD\u4FE1\u606F\u5DF2\u590D\u5236");
       }
+      if (action === "export-recovery") {
+        const filename = await downloadRecoveryBundleForCurrentChat();
+        toast("success", `\u6062\u590D\u5305\u5DF2\u5BFC\u51FA\uFF1A${filename}`);
+      }
+      if (action === "retry-history-rebuild") {
+        const rebuilt = await recoverHistoryConsistencyForCurrentChat();
+        toast(rebuilt ? "success" : "info", rebuilt ? "\u603B\u7ED3\u3001\u72B6\u6001\u4E0E\u4E16\u754C\u4E66\u4F9D\u8D56\u5DF2\u91CD\u5EFA" : "\u5F53\u524D\u804A\u5929\u6CA1\u6709\u5F85\u6062\u590D\u7684\u5386\u53F2\u4F9D\u8D56");
+        await renderWorkspace();
+      }
+      if (action === "cleanup-recovery") {
+        if (!confirm("\u6E05\u7406\u5F53\u524D\u804A\u5929\u4E2D\u8FC7\u91CF\u7684\u5DF2\u5B8C\u6210\u4E8B\u52A1\u548C\u65E7\u8FC1\u79FB\u5907\u4EFD\uFF1F\u672A\u89E3\u51B3\u4E8B\u52A1\u4E0D\u4F1A\u5220\u9664\u3002")) return;
+        const result = await cleanupRecoveryHistoryForCurrentChat();
+        toast("success", `\u5DF2\u6E05\u7406\uFF1A\u4E16\u754C\u4E66 ${result.outbox}\uFF0C\u672C\u5730\u63D0\u4EA4 ${result.localCommits}\uFF0C\u8FC1\u79FB\u5907\u4EFD ${result.backups}`);
+        await renderWorkspace();
+      }
+      if (action === "cancel-lorebook-conflict" || action === "retry-lorebook-conflict") {
+        const recordId = target.closest("[data-ma11-record-id]")?.dataset.ma11RecordId;
+        if (!recordId) throw new Error("\u4E16\u754C\u4E66\u51B2\u7A81\u8BB0\u5F55 ID \u7F3A\u5931");
+        if (action === "cancel-lorebook-conflict" && !confirm("\u786E\u8BA4\u4FDD\u7559\u670D\u52A1\u5668\u5F53\u524D\u4E16\u754C\u4E66\u5185\u5BB9\uFF0C\u5E76\u53D6\u6D88\u8FD9\u6761\u51B2\u7A81\u4E8B\u52A1\uFF1F")) return;
+        await resolveLorebookConflictForCurrentChat(
+          recordId,
+          action === "retry-lorebook-conflict" ? "retry-latest" : "cancel"
+        );
+        toast("success", action === "retry-lorebook-conflict" ? "\u5DF2\u57FA\u4E8E\u6700\u65B0\u72B6\u6001\u91CD\u65B0\u5EFA\u7ACB\u53D1\u5E03\u4E8B\u52A1" : "\u5DF2\u4FDD\u7559\u670D\u52A1\u5668\u73B0\u72B6\u5E76\u53D6\u6D88\u51B2\u7A81\u4E8B\u52A1");
+        await renderWorkspace();
+      }
+      if (action === "cancel-local-conflict") {
+        const recordId = target.closest("[data-ma11-record-id]")?.dataset.ma11RecordId;
+        if (!recordId) throw new Error("\u672C\u5730\u51B2\u7A81\u8BB0\u5F55 ID \u7F3A\u5931");
+        if (!confirm("\u786E\u8BA4\u4FDD\u7559\u5F53\u524D\u672C\u5730\u72B6\u6001\uFF0C\u5E76\u53D6\u6D88\u8FD9\u6761\u51B2\u7A81\u63D0\u4EA4\uFF1F")) return;
+        await cancelLocalCommitConflict(recordId);
+        toast("success", "\u5DF2\u4FDD\u7559\u5F53\u524D\u672C\u5730\u72B6\u6001\u5E76\u53D6\u6D88\u51B2\u7A81\u63D0\u4EA4");
+        await renderWorkspace();
+      }
       if (action === "add-api-profile") {
         createIndependentApiProfile();
+        await renderWorkspace();
+      }
+      const cancelTaskId = target.closest("[data-ma11-cancel-task]")?.dataset.ma11CancelTask;
+      if (cancelTaskId) {
+        const cancelled = taskQueue.cancel(cancelTaskId, "\u7528\u6237\u4ECE\u5DE5\u4F5C\u53F0\u53D6\u6D88\u4EFB\u52A1");
+        toast(cancelled ? "success" : "warning", cancelled ? "\u5DF2\u53D1\u9001\u53D6\u6D88\u8BF7\u6C42" : "\u4EFB\u52A1\u5DF2\u7ED3\u675F\u6216\u4E0D\u5B58\u5728");
         await renderWorkspace();
       }
       const apiDeleteId = target.closest("[data-ma11-api-delete]")?.dataset.ma11ApiDelete;
@@ -3807,7 +7015,7 @@ function bindWorkspace(workspace) {
         const info = currentArtifact();
         const key = getSettings().ui.activeTable;
         const row = info?.artifact.snapshot?.[key].find(
-          (item) => item.id === editId
+          (item2) => item2.id === editId
         );
         if (row) openRowEditor(key, row);
       }
@@ -3861,6 +7069,10 @@ function bindWorkspace(workspace) {
     );
   });
 }
+function resetWorkspaceChatSelection() {
+  selectedMessageIndex = null;
+  selectedGraphNodeId = null;
+}
 function openWorkspace(tab, messageIndex) {
   const workspace = root();
   if (Number.isInteger(messageIndex))
@@ -3871,6 +7083,14 @@ function openWorkspace(tab, messageIndex) {
 }
 function refreshWorkspace() {
   void renderWorkspace();
+}
+function unmountWorkspace() {
+  queueUnsubscribe?.();
+  queueUnsubscribe = null;
+  selectedMessageIndex = null;
+  selectedGraphNodeId = null;
+  rendering = false;
+  document.querySelector("#ma11-workspace")?.remove();
 }
 
 // src/ui/message-panel.ts
@@ -3934,6 +7154,9 @@ function renderAllMessagePanels() {
     if (!message?.is_user) renderMessagePanel(index);
   });
 }
+function removeAllMessagePanels() {
+  document.querySelectorAll(".ma11-message-panel").forEach((panel) => panel.remove());
+}
 var installed = false;
 function installMessagePanelHandlers() {
   if (installed) return () => void 0;
@@ -3986,14 +7209,35 @@ async function waitForElement(selector, timeoutMs = 15e3) {
     observer.observe(document.documentElement, { childList: true, subtree: true });
   });
 }
+function fallbackTemplate() {
+  return `
+<div id="ma11-settings-root" class="ma11-settings-root">
+  <div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+      <b>${DISPLAY_NAME}</b>
+      <span class="ma11-settings-version">${VERSION}</span>
+      <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content ma11-settings-content">
+      <p>\u7ED3\u6784\u5316\u72B6\u6001\u8868\u3001\u5206\u5C42\u603B\u7ED3\u3001\u89C4\u5219\u5BA1\u6838\u4E0E\u804A\u5929\u4E16\u754C\u4E66\u53D1\u5E03\u3002</p>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-quick-setting="enabled" /><span>\u542F\u7528\u955C\u6E0A</span></label>
+      <div class="ma11-settings-buttons">
+        <button type="button" class="menu_button" data-ma11-action="open">\u6253\u5F00\u955C\u6E0A\u63A7\u5236\u4E2D\u5FC3</button>
+        <button type="button" class="menu_button" data-ma11-action="diagnostics">\u8FD0\u884C\u8BCA\u65AD</button>
+      </div>
+      <small>\u6A21\u578B\u5BC6\u94A5\u7531 SillyTavern Connection Profile \u7BA1\u7406\u3002\u955C\u6E0A\u4E0D\u4FDD\u5B58 API Key\u3002</small>
+    </div>
+  </div>
+</div>`;
+}
 async function mountSettingsPanel() {
   if (document.querySelector("#ma11-settings-root")) return;
   const context = getContext();
   const host = await waitForElement("#extensions_settings2");
-  const html = await context.renderExtensionTemplateAsync(extensionPathFromUrl(), "settings", {
+  const html = typeof context.renderExtensionTemplateAsync === "function" ? await context.renderExtensionTemplateAsync(extensionPathFromUrl(), "settings", {
     title: DISPLAY_NAME,
     version: VERSION
-  });
+  }) : fallbackTemplate();
   host.insertAdjacentHTML("beforeend", html);
   const root2 = document.querySelector("#ma11-settings-root");
   if (!root2) throw new Error("\u8BBE\u7F6E\u6A21\u677F\u52A0\u8F7D\u540E\u672A\u627E\u5230\u6839\u8282\u70B9");
@@ -4005,9 +7249,12 @@ async function mountSettingsPanel() {
     saveSettings();
   });
 }
+function unmountSettingsPanel() {
+  document.querySelector("#ma11-settings-root")?.remove();
+}
 function mountOptionalTopButton() {
   const settings = getSettings();
-  document.querySelector("#ma11-top-button")?.remove();
+  unmountOptionalTopButton();
   if (!settings.showTopButton) return;
   const candidates = ["#top-settings-holder", "#rightNavHolder", "#top-bar", "#top-bar-left"];
   const host = candidates.map((selector) => document.querySelector(selector)).find(Boolean);
@@ -4021,27 +7268,386 @@ function mountOptionalTopButton() {
   button.addEventListener("click", () => openWorkspace("overview"));
   host.appendChild(button);
 }
+function unmountOptionalTopButton() {
+  document.querySelector("#ma11-top-button")?.remove();
+}
+
+// src/migration/legacy-migration.ts
+var MIGRATION_VERSION = 4;
+var fallbackMigrationLocks = new LockManager();
+function migrationLocks() {
+  return foundationKernel.services.tryGet(LOCK_MANAGER) ?? fallbackMigrationLocks;
+}
+function migrationCoordinator() {
+  return foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR) ?? crossTabCoordinator;
+}
+function assertMigrationChat(chatKey, lease) {
+  if (currentChatKey() !== chatKey) throw new Error("\u8FC1\u79FB\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+  lease?.assertOwner();
+}
+function alpha67ChatKey() {
+  const context = getContext();
+  const chatId = String(
+    context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? context.chatMetadata?.chat_id ?? ""
+  );
+  const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? "unknown"}`;
+  const seed = `${scope}|${chatId || context.name1 || "chat"}|${context.name2 || ""}`;
+  return `${scope}:${hashText(seed)}`;
+}
+function legacyChatKeys() {
+  const current = currentChatKey();
+  return [...new Set([legacyCurrentChatKey(), alpha67ChatKey()].filter((key) => key && key !== current))];
+}
+function mergeById(current, legacy) {
+  const result = current.map((item2) => deepClone(item2));
+  const ids = new Set(result.map((item2) => item2.id));
+  for (const item2 of legacy) {
+    if (!item2?.id || ids.has(item2.id)) continue;
+    result.push(deepClone(item2));
+    ids.add(item2.id);
+  }
+  return result;
+}
+function normalizeOldArtifact(value, index, chatKey) {
+  if (!value || typeof value !== "object") return null;
+  const message = getChat()[index];
+  if (!message || message.is_user) return null;
+  const artifact = deepClone(value);
+  artifact.schemaVersion = 1;
+  artifact.chatKey = chatKey;
+  artifact.messageIndex = index;
+  artifact.messageKey = messageIdentity(index);
+  artifact.sourceFingerprint = messageFingerprint(index);
+  artifact.createdAt ||= nowIso();
+  artifact.updatedAt = nowIso();
+  artifact.stages ||= createArtifactForMessage(index).stages;
+  artifact.stages.revision ||= { status: "idle", attempts: 0 };
+  if (artifact.snapshot) artifact.snapshot = normalizeSnapshot(artifact.snapshot, artifact.snapshot);
+  return artifact;
+}
+function artifactFromLegacySnapshot(index, snapshot) {
+  const artifact = createArtifactForMessage(index);
+  artifact.snapshot = normalizeSnapshot(snapshot, snapshot);
+  markStage(artifact, "audit", "skipped");
+  markStage(artifact, "state", "success");
+  return artifact;
+}
+async function previewLegacyMigrationForCurrentChat() {
+  const chatKey = currentChatKey();
+  const keys = legacyChatKeys();
+  const legacyStates = await Promise.all(keys.map((key) => getChatStateExact(key)));
+  let currentArtifactCount = 0;
+  let oldArtifactCount = 0;
+  let legacySnapshotCount = 0;
+  for (const message of getChat()) {
+    if (message?.is_user) continue;
+    const current = message?.extra?.[MODULE_NAME];
+    if (current?.chatKey === chatKey) currentArtifactCount += 1;
+    else if (current && typeof current === "object") oldArtifactCount += 1;
+    if (message?.extra?.[LEGACY_MODULE_NAME]?.tableSnapshot) legacySnapshotCount += 1;
+  }
+  const context = getContext();
+  const legacySettingsFound = Boolean(context.extensionSettings?.[LEGACY_MODULE_NAME]);
+  const legacyMetadataFound = Boolean(context.chatMetadata?.[LEGACY_MODULE_NAME]);
+  const legacyChatStateFound = legacyStates.some(Boolean);
+  const changes = oldArtifactCount + legacySnapshotCount + Number(legacyChatStateFound) + Number(legacySettingsFound) + Number(legacyMetadataFound);
+  return {
+    chatKey,
+    legacyChatKey: keys.join(","),
+    currentArtifactCount,
+    oldArtifactCount,
+    legacySnapshotCount,
+    legacyChatStateFound,
+    legacySettingsFound,
+    legacyMetadataFound,
+    changes,
+    createdAt: nowIso()
+  };
+}
+async function createBackup(preview) {
+  const context = getContext();
+  const states = {};
+  for (const key of legacyChatKeys()) states[key] = await getChatStateExact(key);
+  const payload = {
+    extensionSettings: {
+      [LEGACY_MODULE_NAME]: deepClone(context.extensionSettings?.[LEGACY_MODULE_NAME] ?? null),
+      [MODULE_NAME]: deepClone(context.extensionSettings?.[MODULE_NAME] ?? null)
+    },
+    chatMetadata: {
+      [LEGACY_MODULE_NAME]: deepClone(context.chatMetadata?.[LEGACY_MODULE_NAME] ?? null),
+      [MODULE_NAME]: deepClone(context.chatMetadata?.[MODULE_NAME] ?? null)
+    },
+    legacyChatStates: states,
+    messageExtras: getChat().map((message, index) => ({
+      index,
+      module: deepClone(message?.extra?.[MODULE_NAME] ?? null),
+      legacy: deepClone(message?.extra?.[LEGACY_MODULE_NAME] ?? null)
+    }))
+  };
+  const backup = {
+    schemaVersion: 1,
+    id: makeId("migration-backup"),
+    chatKey: preview.chatKey,
+    preview: deepClone(preview),
+    payload,
+    createdAt: nowIso()
+  };
+  await putMigrationBackup(backup);
+  return backup;
+}
+async function applyLegacyMigrationUnlocked(requestedPreview, lease) {
+  const chatKey = currentChatKey();
+  assertMigrationChat(chatKey, lease);
+  const preview = requestedPreview?.chatKey === chatKey ? await previewLegacyMigrationForCurrentChat() : await previewLegacyMigrationForCurrentChat();
+  const currentState = await getChatState(chatKey);
+  if (currentState.migrationVersion && currentState.migrationVersion >= MIGRATION_VERSION) {
+    return { migratedArtifacts: 0, backupId: currentState.migrationBackupId, preview };
+  }
+  const backup = preview.changes > 0 ? await createBackup(preview) : null;
+  let migratedArtifacts = 0;
+  const migratedKeys = [];
+  const chat = getChat();
+  for (let index = 0; index < chat.length; index += 1) {
+    assertMigrationChat(chatKey, lease);
+    const message = chat[index];
+    if (!message || message.is_user) continue;
+    const attached = getAttachedArtifact(message);
+    let artifact = null;
+    if (attached?.chatKey === chatKey) {
+      artifact = attached;
+    } else if (attached) {
+      artifact = normalizeOldArtifact(attached, index, chatKey);
+    } else {
+      const legacySnapshot = message.extra?.[LEGACY_MODULE_NAME]?.tableSnapshot;
+      if (legacySnapshot) artifact = artifactFromLegacySnapshot(index, legacySnapshot);
+    }
+    if (!artifact) continue;
+    if (artifact !== attached || attached?.chatKey !== chatKey) migratedArtifacts += 1;
+    attachArtifactToMessage(message, artifact);
+    await putArtifact(artifact);
+    const verifiedArtifact = await getArtifact(chatKey, artifact.messageKey);
+    if (!verifiedArtifact || verifiedArtifact.chatKey !== chatKey || verifiedArtifact.messageKey !== artifact.messageKey) {
+      throw new Error(`\u65E7\u6D88\u606F\u4EA7\u7269\u8FC1\u79FB\u56DE\u8BFB\u5931\u8D25\uFF1A${artifact.messageKey}`);
+    }
+    if (!migratedKeys.includes(artifact.messageKey)) migratedKeys.push(artifact.messageKey);
+  }
+  for (const key of legacyChatKeys()) {
+    assertMigrationChat(chatKey, lease);
+    const legacyState = await getChatStateExact(key);
+    if (!legacyState) continue;
+    currentState.smallSummaries = mergeById(currentState.smallSummaries, legacyState.smallSummaries ?? []);
+    currentState.largeSummaries = mergeById(currentState.largeSummaries, legacyState.largeSummaries ?? []);
+    currentState.processedMessageKeys = [.../* @__PURE__ */ new Set([...currentState.processedMessageKeys, ...legacyState.processedMessageKeys ?? []])];
+    currentState.lastLorebookName ||= legacyState.lastLorebookName;
+    currentState.lastSyncAt ||= legacyState.lastSyncAt;
+  }
+  currentState.processedMessageKeys = [.../* @__PURE__ */ new Set([...currentState.processedMessageKeys, ...migratedKeys])];
+  if (migratedKeys.length) currentState.latestSnapshotMessageKey = migratedKeys.at(-1);
+  const context = getContext();
+  const legacyMeta = context.chatMetadata?.[LEGACY_MODULE_NAME];
+  if (legacyMeta && typeof legacyMeta === "object") {
+    context.chatMetadata ||= {};
+    context.chatMetadata[MODULE_NAME] ||= {};
+    const currentMeta = context.chatMetadata[MODULE_NAME];
+    currentMeta.lorebookName ||= legacyMeta.lorebookName;
+    currentMeta.updatedAt = nowIso();
+    assertMigrationChat(chatKey, lease);
+    await persistMetadata();
+  }
+  if (migratedArtifacts) {
+    assertMigrationChat(chatKey, lease);
+    await persistChat();
+  }
+  currentState.migrationVersion = MIGRATION_VERSION;
+  currentState.migrationBackupId = backup?.id;
+  assertMigrationChat(chatKey, lease);
+  await putChatState(currentState);
+  const verifiedState = await getChatState(chatKey);
+  if (verifiedState.migrationVersion !== MIGRATION_VERSION || verifiedState.migrationBackupId !== backup?.id) {
+    throw new Error("\u65E7\u804A\u5929\u72B6\u6001\u8FC1\u79FB\u56DE\u8BFB\u5931\u8D25");
+  }
+  const settings = getSettings();
+  settings.migration.legacyChecked = true;
+  saveSettings();
+  await safeAppendOperationLog(chatKey, {
+    category: "migration",
+    action: "legacy-import",
+    resourceId: backup?.id,
+    state: "committed",
+    detail: `${migratedArtifacts} \u6761\u6D88\u606F\u4EA7\u7269\uFF1B${preview.legacyChatStateFound ? "\u5DF2\u5408\u5E76\u65E7\u804A\u5929\u72B6\u6001" : "\u65E0\u65E7\u804A\u5929\u72B6\u6001"}`
+  });
+  return { migratedArtifacts, backupId: backup?.id, preview };
+}
+async function applyLegacyMigrationForCurrentChat(preview) {
+  const chatKey = currentChatKey();
+  return migrationCoordinator().withLease(
+    `migration:${chatKey}`,
+    async (lease) => migrationLocks().withLock(`migration:${chatKey}`, async () => {
+      assertMigrationChat(chatKey, lease);
+      return applyLegacyMigrationUnlocked(preview, lease);
+    })
+  );
+}
+async function migrateLegacyDataForCurrentChat() {
+  const state2 = await getChatState(currentChatKey());
+  if (state2.migrationVersion && state2.migrationVersion >= MIGRATION_VERSION) {
+    return { migratedArtifacts: 0, backupId: state2.migrationBackupId, preview: await previewLegacyMigrationForCurrentChat() };
+  }
+  return applyLegacyMigrationForCurrentChat();
+}
+
+// src/migration/chat-scope-migration.ts
+async function migrateCurrentChatScopeIdentity() {
+  ensureChatIdentityForContext(getContext());
+  const scope = chatScopeManager.current();
+  if (!scope.persistent) {
+    return { chatKey: scope.chatKey, aliases: [], copiedStorageRecords: 0, updatedMessages: 0 };
+  }
+  const artifactAliases = getChat().map((message) => getAttachedArtifact(message)?.chatKey).filter((value) => Boolean(value && value !== scope.chatKey));
+  const aliases = [.../* @__PURE__ */ new Set([...scope.aliases, ...artifactAliases])];
+  const copiedStorageRecords = await migrateChatStorageAliases(scope.chatKey, aliases);
+  let updatedMessages = 0;
+  for (const message of getChat()) {
+    const artifact = getAttachedArtifact(message);
+    if (!artifact || artifact.chatKey === scope.chatKey || !aliases.includes(artifact.chatKey)) continue;
+    artifact.chatKey = scope.chatKey;
+    artifact.updatedAt = nowIso();
+    message.extra ||= {};
+    message.extra[MODULE_NAME] = artifact;
+    await putArtifact(artifact);
+    updatedMessages += 1;
+  }
+  if (updatedMessages) await persistChat();
+  return { chatKey: scope.chatKey, aliases, copiedStorageRecords, updatedMessages };
+}
+
+// src/integrations/chat-metadata.ts
+function currentContext() {
+  try {
+    return globalThis.SillyTavern?.getContext?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+function namespace(context, create = false) {
+  const metadata = context?.chatMetadata ?? context?.chat_metadata;
+  if (!metadata) return null;
+  if (!metadata[MODULE_NAME] && create) {
+    metadata[MODULE_NAME] = {
+      schemaVersion: 2,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+  }
+  return metadata[MODULE_NAME] ?? null;
+}
+function isCurrentChat(chatKey) {
+  try {
+    return chatScopeManager.current().chatKey === chatKey;
+  } catch {
+    return false;
+  }
+}
+var chatMetadataStateBridge = {
+  read(chatKey) {
+    if (!isCurrentChat(chatKey)) return null;
+    const context = currentContext();
+    const envelope = namespace(context)?.portableChatState;
+    if (!envelope || envelope.schemaVersion !== 1 || !envelope.state) return null;
+    const state2 = structuredClone(envelope.state);
+    state2.chatKey = chatKey;
+    return state2;
+  },
+  write(state2) {
+    if (!isCurrentChat(state2.chatKey)) return;
+    const context = currentContext();
+    const target = namespace(context, true);
+    if (!context || !target) return;
+    const portableState = structuredClone(state2);
+    portableState.chatKey = state2.chatKey;
+    const next = {
+      schemaVersion: 1,
+      state: portableState,
+      updatedAt: nowIso()
+    };
+    const previous = target.portableChatState;
+    if (previous && JSON.stringify(previous.state) === JSON.stringify(next.state)) return;
+    target.portableChatState = next;
+    target.updatedAt = next.updatedAt;
+    context.saveMetadataDebounced?.();
+  },
+  clear(chatKey) {
+    if (!isCurrentChat(chatKey)) return;
+    const context = currentContext();
+    const target = namespace(context);
+    if (!context || !target || !target.portableChatState) return;
+    delete target.portableChatState;
+    target.updatedAt = nowIso();
+    context.saveMetadataDebounced?.();
+  }
+};
 
 // src/bootstrap/app.ts
 var state = "idle";
 var cleanupPipeline = null;
 var cleanupPanels = null;
 var cleanupUiEvents = null;
-var appReadyHandlerInstalled = false;
+var cleanupAppReady = null;
+var startupRetryTimer = null;
+var startupFallbackTimer = null;
+var extensionActive = true;
+var lifecycleEpoch = 0;
 var lastError = null;
+var debugRegisteredContexts = /* @__PURE__ */ new WeakSet();
+var InitializationCancelledError = class extends Error {
+  constructor() {
+    super("\u6269\u5C55\u751F\u547D\u5468\u671F\u5DF2\u6539\u53D8\uFF0C\u542F\u52A8\u6D41\u7A0B\u5DF2\u53D6\u6D88");
+    this.name = "InitializationCancelledError";
+  }
+};
+function assertActive(epoch) {
+  if (!extensionActive || epoch !== lifecycleEpoch) throw new InitializationCancelledError();
+}
 function exposeApi() {
   globalThis.MirrorAbyss = {
     version: VERSION,
-    open: (tab = "overview") => openWorkspace(tab),
+    open: (tab = "overview") => {
+      if (!extensionActive || state !== "ready") throw new Error("\u955C\u6E0A\u5F53\u524D\u672A\u542F\u7528");
+      return openWorkspace(tab);
+    },
     processLatest: async () => {
+      if (!extensionActive || state !== "ready") throw new Error("\u955C\u6E0A\u5F53\u524D\u672A\u542F\u7528");
       const context = getContext();
       const index = [...context.chat ?? []].map((_, i) => i).reverse().find((i) => !context.chat[i]?.is_user && String(context.chat[i]?.mes || "").trim());
       if (index === void 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
       return processMessage(index, true);
     },
     diagnostics: diagnosticReport,
-    getState: () => ({ state, lastError: lastError instanceof Error ? lastError.message : String(lastError || "") })
+    getState: () => ({
+      state,
+      active: extensionActive,
+      kernel: foundationKernel.status(),
+      scope: tryGetContext() ? chatScopeManager.current() : null,
+      lastError: lastError instanceof Error ? lastError.message : String(lastError || "")
+    }),
+    recovery: {
+      previewMigration: previewLegacyMigrationForCurrentChat,
+      migrate: migrateLegacyDataForCurrentChat,
+      bundle: buildRecoveryBundleForCurrentChat,
+      download: downloadRecoveryBundleForCurrentChat,
+      cleanup: cleanupRecoveryHistoryForCurrentChat,
+      resolveLorebookConflict: resolveLorebookConflictForCurrentChat,
+      cancelLocalCommitConflict,
+      retryHistoryRebuild: recoverHistoryConsistencyForCurrentChat
+    }
   };
+  globalThis.MirrorAbyssGenerationInterceptor = generationInterceptor;
+}
+function hideApi() {
+  if (globalThis.MirrorAbyssGenerationInterceptor === generationInterceptor) {
+    delete globalThis.MirrorAbyssGenerationInterceptor;
+  }
+  delete globalThis.MirrorAbyss;
 }
 function showFatal(error) {
   document.querySelector("#ma11-fatal")?.remove();
@@ -4054,64 +7660,153 @@ function showFatal(error) {
   button.addEventListener("click", () => openWorkspace("diagnostics"));
   document.body.appendChild(button);
 }
+function clearStartupTimers() {
+  if (startupRetryTimer !== null) window.clearTimeout(startupRetryTimer);
+  if (startupFallbackTimer !== null) window.clearTimeout(startupFallbackTimer);
+  startupRetryTimer = null;
+  startupFallbackTimer = null;
+}
+function uninstallAppReadyHandler() {
+  clearStartupTimers();
+  cleanupAppReady?.();
+  cleanupAppReady = null;
+}
+function teardownRuntime(reason = "\u6269\u5C55\u5DF2\u505C\u6B62") {
+  clearAllQuarantines();
+  taskQueue.cancelAll(reason);
+  connectionBroker.cancelAll(reason);
+  cleanupPipeline?.();
+  cleanupPanels?.();
+  cleanupUiEvents?.();
+  cleanupPipeline = null;
+  cleanupPanels = null;
+  cleanupUiEvents = null;
+  foundationKernel.stop();
+  configurePortableChatStateBridge(null);
+  removeAllMessagePanels();
+  unmountWorkspace();
+  unmountSettingsPanel();
+  unmountOptionalTopButton();
+  document.querySelector("#ma11-fatal")?.remove();
+  document.documentElement.classList.remove("ma11-generation-locked");
+}
 async function initialize() {
-  if (state === "ready" || state === "initializing") return;
+  if (!extensionActive || state === "ready" || state === "initializing") return;
+  const epoch = lifecycleEpoch;
   state = "initializing";
   lastError = null;
   exposeApi();
   try {
     getSettings();
+    configurePortableChatStateBridge(chatMetadataStateBridge);
+    await foundationKernel.start(getContext());
+    assertActive(epoch);
+    await migrateCurrentChatScopeIdentity();
+    assertActive(epoch);
+    await markInterruptedTasksStale(chatScopeManager.current().chatKey);
+    await migrateLegacyDataForCurrentChat().catch((error) => {
+      console.warn("[MirrorAbyss] legacy migration deferred", error);
+    });
+    assertActive(epoch);
+    await recoverLocalCommitsForCurrentChat().catch((error) => {
+      console.warn("[MirrorAbyss] local commit recovery deferred", error);
+    });
+    assertActive(epoch);
+    await recoverHistoryConsistencyForCurrentChat().catch((error) => {
+      console.warn("[MirrorAbyss] history consistency recovery deferred", error);
+    });
+    assertActive(epoch);
+    await recoverLorebookOutboxForCurrentChat().catch((error) => {
+      console.warn("[MirrorAbyss] lorebook outbox recovery deferred", error);
+    });
+    assertActive(epoch);
     await mountSettingsPanel();
+    assertActive(epoch);
     mountOptionalTopButton();
     cleanupPipeline ||= installPipelineEventHandlers();
     cleanupPanels ||= installMessagePanelHandlers();
     renderAllMessagePanels();
     const context = getContext();
     if (!cleanupUiEvents) {
+      const router = foundationKernel.services.get(EVENT_ROUTER);
       const rerender = () => {
+        if (!extensionActive) return;
         renderAllMessagePanels();
         refreshWorkspace();
       };
-      context.eventSource.on(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-      context.eventSource.on(context.event_types.CHAT_CHANGED, rerender);
-      context.eventSource.on(context.event_types.MESSAGE_DELETED, rerender);
-      cleanupUiEvents = () => {
-        context.eventSource.removeListener?.(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-        context.eventSource.removeListener?.(context.event_types.CHAT_CHANGED, rerender);
-        context.eventSource.removeListener?.(context.event_types.MESSAGE_DELETED, rerender);
+      const onChatChanged = () => {
+        if (!extensionActive) return;
+        resetWorkspaceChatSelection();
+        window.setTimeout(() => {
+          if (!extensionActive) return;
+          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).finally(() => {
+            if (!extensionActive) return;
+            renderAllMessagePanels();
+            refreshWorkspace();
+          });
+        }, 0);
       };
+      const cleanups = [
+        router.subscribe("message-rendered", rerender),
+        router.subscribe("message-removed", rerender),
+        router.subscribe("chat-changed", onChatChanged),
+        router.subscribe("chat-created", onChatChanged)
+      ];
+      cleanupUiEvents = () => cleanups.splice(0).forEach((cleanup) => cleanup());
     }
-    if (typeof context.registerDebugFunction === "function") {
+    if (typeof context.registerDebugFunction === "function" && !debugRegisteredContexts.has(context)) {
       context.registerDebugFunction(
         "mirror_abyss_diagnostics",
         "Mirror Abyss Diagnostics",
         "Open the Mirror Abyss diagnostics panel",
-        () => openWorkspace("diagnostics")
+        () => {
+          if (extensionActive && state === "ready") openWorkspace("diagnostics");
+        }
       );
+      debugRegisteredContexts.add(context);
     }
+    assertActive(epoch);
     document.querySelector("#ma11-fatal")?.remove();
     state = "ready";
     toast("success", `\u5DF2\u542F\u52A8 ${VERSION}`);
   } catch (error) {
+    if (error instanceof InitializationCancelledError) {
+      teardownRuntime("\u542F\u52A8\u5DF2\u53D6\u6D88");
+      state = "idle";
+      return;
+    }
     state = "error";
     lastError = error;
     console.error("[MirrorAbyss] initialization failed", error);
-    showFatal(error);
+    teardownRuntime("\u542F\u52A8\u5931\u8D25");
+    if (extensionActive) showFatal(error);
   }
 }
 function installAppReadyHandler() {
-  if (appReadyHandlerInstalled) return;
-  appReadyHandlerInstalled = true;
+  if (!extensionActive || cleanupAppReady || startupRetryTimer !== null) return;
   const context = tryGetContext();
   if (!context) {
-    window.setTimeout(installAppReadyHandler, 250);
-    appReadyHandlerInstalled = false;
+    startupRetryTimer = window.setTimeout(() => {
+      startupRetryTimer = null;
+      installAppReadyHandler();
+    }, 250);
     return;
   }
-  context.eventSource.on(context.event_types.APP_READY, () => {
+  const rawType = context.event_types?.APP_READY;
+  const handler = () => {
+    if (!extensionActive) return;
     window.setTimeout(() => void initialize(), 0);
-  });
-  window.setTimeout(() => void initialize(), 1200);
+  };
+  if (rawType && context.eventSource?.on) {
+    context.eventSource.on(rawType, handler);
+    cleanupAppReady = () => context.eventSource?.removeListener?.(rawType, handler);
+  } else {
+    cleanupAppReady = () => void 0;
+  }
+  startupFallbackTimer = window.setTimeout(() => {
+    startupFallbackTimer = null;
+    if (extensionActive) void initialize();
+  }, 1200);
 }
 async function cleanData() {
   await clearAllStorage();
@@ -4120,12 +7815,24 @@ async function cleanData() {
   context?.saveSettingsDebounced?.();
 }
 function onEnable() {
+  if (extensionActive && state === "ready") return;
+  extensionActive = true;
+  lifecycleEpoch += 1;
+  exposeApi();
+  installAppReadyHandler();
   if (tryGetContext()) void initialize();
 }
 function onDisable() {
-  clearAllQuarantines();
+  if (!extensionActive && state === "idle") return;
+  extensionActive = false;
+  lifecycleEpoch += 1;
+  uninstallAppReadyHandler();
+  teardownRuntime("\u6269\u5C55\u5DF2\u7981\u7528");
+  hideApi();
+  state = "idle";
 }
 function onActivate() {
+  extensionActive = true;
   exposeApi();
   installAppReadyHandler();
 }
@@ -4143,18 +7850,15 @@ async function onClean() {
   await cleanData();
 }
 async function onDelete() {
-  clearAllQuarantines();
-  cleanupPipeline?.();
-  cleanupPanels?.();
-  cleanupUiEvents?.();
-  cleanupPipeline = null;
-  cleanupPanels = null;
-  cleanupUiEvents = null;
+  extensionActive = false;
+  lifecycleEpoch += 1;
+  uninstallAppReadyHandler();
+  teardownRuntime("\u6269\u5C55\u5DF2\u5220\u9664");
+  hideApi();
   state = "idle";
 }
 
 // src/index.ts
-globalThis.MirrorAbyssGenerationInterceptor = generationInterceptor;
 installAppReadyHandler();
 export {
   onActivate,
@@ -4165,4 +7869,3 @@ export {
   onInstall,
   onUpdate
 };
-//# sourceMappingURL=index.js.map

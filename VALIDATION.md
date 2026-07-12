@@ -1,30 +1,113 @@
-# Validation
+# Validation — 1.1.0-alpha.9.7 Summary Consistency / Phase 5 Candidate
 
-版本：`1.1.0-alpha.7`
+执行日期：2026-07-12
 
-已完成：
+## 可复现命令
 
-- TypeScript `strict` 静态检查通过。
-- ESM 生产构建通过。
-- `node --check index.js` 通过。
-- 28 项自动测试全部通过。
-- 同一正文重复事件只创建一个任务。
-- 审核、定向修正、再审核和状态提取顺序保持不变。
-- Connection Profile 通过稳定 ID 和官方 Request Service 请求；测试确认当前选中 Profile 不发生变化。
-- Profile 请求强制 `includePreset=false`、`includeInstruct=false`、`stream=false`。
-- 独立 API 经 `/api/backends/chat-completions/generate` 后端代理发送。
-- 独立 API 测试确认 reverse proxy、密钥、模型和消息正确进入请求体。
-- 独立 API 密钥不进入 `extensionSettings`。
-- 连接测试能分别报告连接、JSON 和精确指令遵循状态。
-- 结构解析、专用格式修复、人物生命周期、对象语义世界书、安全沉降、玩家锁定行、移动端横向表格和图谱缩放原有测试继续通过。
+```bash
+npm ci
+npm test
+npm run validate
+npm audit --audit-level=low
+```
 
-尚未完成：
+`npm test` 与静态/构建验证分开运行，避免把测试结果隐藏在复合脚本中。
 
-- 真实 SillyTavern 1.14 云部署中多个 OpenAI 兼容代理的实机回归。
-- 不同服务商对 `/api/backends/chat-completions/generate` 可选字段的兼容测试。
-- ST 1.14 Connection Profile 使用不同独立密钥时的厂商级验证；此场景推荐独立 API。
-- 401、403、404、429、超时、代理 HTML 错误页和空响应的真实故障注入。
-- 标签页休眠、网络切换、多个设备、群聊、Swipe、消息编辑与删除组合测试。
-- 100 回合以上长期沉降与数百图谱节点性能测试。
+## 自动检查
 
-因此本版本仍标记为 alpha，不宣称长期稳定版。
+- 发布源码内 `tsconfig.json`：存在
+- TypeScript strict：通过
+- 依赖边界检查：通过
+- ESLint：通过
+- 自动测试：72/72 通过
+- 生产 ESM 构建：通过
+- `node --check index.js`：通过
+- 生产 `index.js.map`：不存在
+- `npm audit --audit-level=low`：0 个已知漏洞
+
+## Foundation 回归
+
+- Connection Broker 串行/并行、429、超时、取消、熔断：通过
+- 按聊天 TaskQueue lane 与任务终态：通过
+- 账户隔离与稳定聊天身份：通过
+- Worldbook Outbox prepare、回读、冲突、回滚和恢复：通过
+- LocalCommit 双对象崩溃恢复：通过
+- Web Locks/localStorage 降级协调：通过
+- alpha.6/alpha.7 迁移与备份：通过
+- 生命周期完整卸载与单实例重启：通过
+- 正常管线单回合一次完整聊天保存：通过
+- 可移植 ChatState 恢复：通过
+- 审核锁所有权：通过
+
+## alpha.9.7 新增回归
+
+- 消息稳定身份与 revision key 分离：通过
+- 受影响小总结递归失效：通过
+- 大总结依赖后缀失效：通过
+- 总结后编辑消息并重建：通过
+- 总结后删除消息并重建：通过
+- swipe 替换旧 revision：通过
+- `MESSAGE_SWIPE_DELETED` 事件路由：通过
+- `MESSAGE_UPDATED` 事件路由：通过
+- 无正文变化的 `MESSAGE_UPDATED` 不重建：通过
+- 分支携带旧 portable ChatState 时自动识别并重建：通过
+- 重建中断写入 failed 记录：通过
+- 启动/人工恢复 failed 重建：通过
+- 重放期间只在结尾同步最新世界书快照：通过
+- 历史重建诊断与人工恢复入口：通过
+
+## 模拟结果
+
+### 100 回合状态提取
+
+```text
+turns: 100
+generateCalls: 100
+saveChatCalls: 100
+saveChatCallsPerTurn: 1
+```
+
+### 30 回合完整功能链
+
+```text
+audit: 30
+state: 30
+small summaries: 6
+large summaries: 3
+saveChatCalls: 30
+worldbook Outbox committed: 30
+LocalCommit committed: 9
+world entries: 4
+```
+
+### 历史变更链
+
+```text
+编辑：新 revision 存在，旧 revision 不存在
+swipe：新 revision 存在，旧 revision 不存在
+删除：被删 revision 不存在，小/大总结归零
+分支：自动恢复，旧 revision 数量 0
+未解决 HistoryRebuild：false
+```
+
+## 发布结构
+
+- source ZIP 包含 `tsconfig.json`、`eslint.config.mjs`、源码、测试、模拟、脚本、研究和 Phase 5 文档；
+- source ZIP 不包含 `node_modules`、`.git`；
+- deploy ZIP 不包含 TypeScript、测试、开发依赖或 source map；
+- source/deploy `index.js` 哈希必须一致；
+- package、manifest 与运行时版本必须一致。
+
+## 仍需真实环境验证
+
+- 从公开 alpha.7 安装仓库原位升级；
+- 真实 SillyTavern install/update/enable/disable/delete hooks；
+- 当前连接和 Connection Profile 的真实取消、401/secret-id 情况；
+- 编辑、删除、swipe、继续生成和分支事件的真实宿主顺序；
+- 后台标签页休眠、页面刷新/关闭和浏览器页面回收；
+- 双标签页真实 Web Locks 与 localStorage 降级竞争；
+- 移动端弱网、Wi-Fi/移动数据切换与长期运行；
+- 100 回合以上存档中 portable ChatState 元数据体积；
+- 多设备同时编辑同一个世界书。
+
+本版本是 Phase 5 实机验收候选，不能标记为 stable 或 beta。

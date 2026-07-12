@@ -1,90 +1,101 @@
 # Changelog
 
-## 1.1.0-alpha.7
+## 1.1.0-alpha.9.7 — Summary Consistency / Phase 5 Candidate
 
-- 彻底移除通过 DOM、`/profile` 命令和固定延迟临时切换酒馆全局连接的旧路径。
-- Connection Profile 改为使用 SillyTavern 1.14 官方 `ConnectionManagerRequestService.sendRequest()`，按稳定 Profile ID 请求，并强制关闭角色预设、Instruct 与流式输出。
-- 新增镜渊独立 API 配置槽：OpenAI 兼容地址、模型、温度、Top P 与最大输出可复用分配给审核、修正、状态表、小总结和大总结。
-- 独立 API 参考成熟插件的后端代理请求模式，经 `/api/backends/chat-completions/generate` 发送，不切换正文连接，也规避浏览器 CORS。
-- 独立 API 密钥默认只保存在当前浏览器标签页的 `sessionStorage`，不写入扩展设置、聊天、世界书、导出文件或诊断报告。
-- 新增独立 API 模型列表读取、配置测试、稳定 ID、删除后任务自动回退以及每任务连接方式下拉选择。
-- 连接测试改为一次请求同时区分：网络/鉴权是否成功、返回是否为 JSON、是否精确遵循结构指令；不再把所有失败统称为 JSON 错误。
-- 错误分类新增配置缺失、鉴权失败、模型/地址不存在、限流、超时、网络失败、上游失败、空响应与代理响应格式错误。
-- Profile 旧名称会自动迁移为稳定 ID，Profile 改名不再导致任务失联。
-- 诊断页新增官方 Profile 隔离能力与独立 API 就绪数量检查。
-- 新增原生 Profile 无全局切换测试、独立 API 后端代理测试与密钥不进入 extensionSettings 测试。自动测试增至 28 项。
+- Added a deterministic per-file Node test runner that exits after all file summaries, preventing open test handles from stalling release validation.
 
-## 1.1.0-alpha.6
+- 将消息稳定身份与内容 revision 指纹分离；编辑、swipe、继续生成时保留逻辑消息身份但更新 revision key。
+- 根据消息 revision → 小总结 → 大总结依赖链递归废弃旧派生数据，修复撤回/修正正文后错误事实继续污染长期记忆的问题。
+- 删除消息、删除 swipe、编辑、swipe、MESSAGE_UPDATED 与分支差异统一进入历史重建通道。
+- 新增持久 `HistoryRebuildRecord`，重建中断会进入 failed 并阻止后续总结/世界书写入；启动、切换聊天、诊断页和公开 recovery API 均可恢复。
+- 历史重放按聊天取得跨标签租约，取消旧任务与连接；重放期间延迟世界书同步，只发布最后一个重建快照。
+- 诊断页新增“总结依赖一致性”检查及“恢复总结依赖”入口。
+- 新增编辑、删除、swipe、分支、重建中断/恢复、无变化更新过滤和 SillyTavern MESSAGE_UPDATED/MESSAGE_SWIPE_DELETED 事件回归；总计 72/72。
+- 新增 `docs/PHASE5_ACCEPTANCE.md`，版本进入真实 SillyTavern 实机验收候选阶段，仍不标记 stable。
 
-- 修复审核、修正、表格和总结使用不同 Connection Profile 时，任务结束后没有稳定恢复原连接的问题。
-- Profile 切换改为事务式执行：精确匹配已保存配置、等待加载完成、串行调用并在成功或失败后恢复任务前连接；支持恢复到原本“未选择 Profile”的状态。
-- 模型设置中的 Profile 名称改为酒馆现有配置下拉框，缺失配置会明确标注，避免手输名称和隐藏空格造成切换错误。
-- 结构化输出解析支持 Markdown 代码围栏、说明文字、`<think>/<analysis>`、多个对象、全角 JSON 标点、尾随逗号和末尾分号。
-- 本地解析失败后不再重跑完整语义任务；只允许一次专用 JSON 格式修复调用，保留原输出语义而不重新审核或提取事实。
-- “未返回有效 JSON 结构”错误现在显示具体任务、实际连接配置和紧凑返回片段。
-- 关系图谱新增 50%～250% 缩放滑杆、放大、缩小、恢复 100% 和适应窗口；手机端支持双向滚动画布。
-- 新增 Connection Profile 恢复测试、结构输出容错测试、专用格式修复测试和图谱缩放回归测试。自动测试增至 27 项。
+## 1.1.0-alpha.9.6 — Foundation Correction
 
-## 1.1.0-alpha.5
+- 以 SillyTavern 官方 `accountStorage` 和聊天元数据接口为账户/可移植状态边界，不新增猜测性的账户 API。
+- TaskQueue 所有取消、过期、失败和成功路径统一 finalize；排队取消不再残留 `inFlight`，同一任务键可重新提交。
+- 模型阶段失败改为抛出携带 artifact 的 `PipelineStageError`，队列、诊断和恢复器统一记录真实 `failed` 终态。
+- 本地数据库按匿名账户实例 ID 分命名空间；缺少 `accountStorage` 时仅会话内降级，不再使用 origin-wide 持久回退。
+- 聊天主键改为 `accountKey + persistent chatInstanceId`；角色排序、角色/聊天改名不改变主键，`CHAT_CREATED`/`GROUP_CHAT_CREATED` 明确轮换身份。
+- ChatState 增加版本化聊天元数据副本，本地数据库缺失时可恢复总结、processed keys 和同步状态。
+- 审核隔离锁记录控件精确原状态和所有权，只恢复镜渊自己取得的锁，不覆盖酒馆或其他扩展的禁用状态。
+- 清理依赖反转：领域层移除宿主上下文，Repository 不再隐式读取当前聊天，LLM 不再反向依赖 Pipeline。
+- 把 SillyTavern 世界书 HTTP、事件与编辑器刷新适配移入 `integrations/sillytavern-worldinfo.ts`，保留原 Outbox 事务。
+- 加入 ESLint、依赖边界检查、发布契约测试；生产构建不再生成或分发 `index.js.map`。
+- manifest 最低 SillyTavern 版本提升至 1.17.0，package/manifest/运行时版本统一为 1.1.0-alpha.9.6。
+- 修正 Memory Books 上游仓库记录，不再声称无法复核的提交 SHA；外部插件仍只作为行为/架构参考。
+- 新增任务终态、账户隔离、聊天身份事件、可移植状态、锁所有权、发布契约等回归；自动测试增至 68/68。
 
-- 新增结构化审核协议：审核模型输出 `pass / revise / block`、违规证据、具体改法、保留事实和完整修正指令。
-- 新增独立的定向修正模型连接，可使用当前连接或单独的 Connection Profile。
-- 审核失败可选择“定向修正并原位替换”；修正文不会作为新聊天消息追加。
-- 修正版通过二次审核后直接覆盖原消息，并同步更新当前 Swipe；错误正文副本随成功提交清空。
-- 审核说明、修改点和修正草稿只在隔离任务中传递，不进入状态表、总结、世界书或向量发布。
-- 新增 Prompt Interceptor 生成闸门；审核和修正期间阻止下一轮生成，防止未通过正文进入下一次提示词。
-- 拦截器提前到较低加载顺序；切换聊天、删除消息或停用扩展时自动释放生成锁。
-- 新增最大自动修正次数、相同违规指纹停止、`block` 立即停止和修正失败回退动作。
-- 违规指纹按稳定规则编号与规则内容计算，修正文改变措辞时仍能识别同类循环。
-- JSON Schema 审核输出无法解析时，允许按设置执行一次无 Schema 修复调用。
-- 消息面板、控制中心和诊断页新增“定向修正”阶段与错误信息。
-- 默认审核失败动作为定向修正；旧设置不会被强制覆盖。
-- 自动测试扩展至 21 项，新增原位替换、无说明消息、完整审核修正管线和重复违规停机测试；生产 bundle 通过模拟浏览器启动烟雾测试。
+## 1.1.0-alpha.9.5 — Phase 4 Architecture Repair
 
-## 1.1.0-alpha.4
+- 补回源码包遗漏的 `tsconfig.json`，`npm run check` 现在可在发布源码中真实复现严格 TypeScript 检查。
+- 重构扩展启用/禁用生命周期：禁用时取消启动计时器、任务与连接请求，卸载宿主事件、Router 订阅、消息面板、工作区、设置面板、顶部按钮、全局 API 与生成拦截器；重新启用只恢复一套监听器。
+- 聊天主键不再使用可变 `characterId` 列表索引，改为稳定角色标识/群组标识与真实聊天 ID；读取聊天作用域不再隐式写入新聊天元数据。
+- 增加 Phase 4 旧聊天键别名迁移：复制 ChatState、artifact、任务、Outbox、本地提交、日志与备份到稳定键，旧来源保留用于回滚。
+- TaskQueue 从全局单 tail 改为按聊天 lane 排队；同聊天保持顺序，不同聊天可并行，连接层限流继续由 Connection Broker 负责。
+- 正常管线把多阶段 artifact 更新合并为回合末一次完整聊天保存；LocalCommit 在最终聊天保存后确认消息附着，崩溃恢复路径仍可独立补齐。
+- 设置模板增加真实内置降级版本，不依赖 `renderExtensionTemplateAsync` 也能挂载基本控制入口。
+- 新增生命周期、稳定聊天身份、旧键迁移、按聊天任务 lane、保存合并和模板降级回归测试；自动测试增至 59/59。
+- 100 回合状态提取模拟从 500 次完整聊天保存降为 100 次；30 回合审核＋状态＋总结＋世界书全链保持 30 次保存、全部 Outbox/LocalCommit committed。
 
-- 世界书改为“对象语义模式”：按基础设定、全局态势、焦点、人物、关系网络、区域、事件/流程、物品/资源、技能与能力、小总结、大总结建立对应条目。
-- 条目名称与内容对象一致，不再把所有状态压成四个模糊条目。
-- 新增技能与能力表，普通技能按主体聚合，重要能力保留条件、消耗和失败边界。
-- 人物状态拆为存在、活跃、记忆、证据四个轴，并记录可能回流条件与阻止回流条件。
-- 正式人物不会因模型漏写、离场、长期未出现、死亡或被遗忘而自动删除；同名人物保留旧稳定 ID，避免重复建档。
-- 小总结新增安全沉降计划：只自动移除已结束的时空、事件和区域行；人物只允许按一阶状态逐步休眠或归档。
-- 大总结改为累计长期沉降：以上一版大总结为基础吸收新小总结；已吸收的小总结不再发布到“当前周期”条目。
-- 玩家编辑的表格行自动转为玩家锁定，后续模型整理和自动沉降不得覆盖或删除；编辑后自动重新发布世界书。
-- 关系图谱显示人物的死亡、失踪、休眠、长期休眠和归档状态。
-- 旧 `compact` 设置自动迁移为 `semantic`，更新后重新同步会清理旧的镜渊管理条目。
-- 自动测试扩展至 18 项。
+## 1.1.0-alpha.9.4 — Foundation Kernel Phase 4
 
-## 1.1.0-alpha.3
+- 复核 Phase 3 并保留已通过的 Chat Scope、Connection Broker 和 Worldbook Outbox；新增复核报告 `docs/PHASE3_AUDIT.md`。
+- 新增 CrossTabCoordinator：优先使用 Web Locks，同源不支持时降级为带 token、TTL、心跳和 fencing 的 localStorage 租约。
+- Foundation Kernel 每次重新启动创建新的协调器实例，避免扩展删除/重载后复用已停止的 channel 与租约状态。
+- 世界书提交按 `worldinfo:<bookName>` 取得跨标签独占协调，同时继续执行 Phase 3 的服务器基线指纹与回读校验。
+- 小总结与大总结按 `summary:<chatKey>` 串行；artifact 与 ChatState 改为持久 LocalCommitRecord 双对象提交。
+- 页面在 artifact/ChatState 两次写入之间退出时，启动或切回聊天可依据 before/after 指纹补齐；未知第三状态进入 conflict，不静默覆盖。
+- 从用户提供的 alpha.6/alpha.7 部署 source map 提取真实旧数据库、键前缀、聊天键和消息 extra 结构，建立 preview → backup → conservative import 迁移链。
+- 迁移按 `migration:<chatKey>` 取得跨标签锁；消息、元数据和 ChatState 均持久化并回读后才写入 migrationVersion 完成标记。
+- 兼容 `mirrorAbyssV11` 旧 artifact、`mirrorAbyss.tableSnapshot` 更早快照、旧 ChatState、设置与聊天元数据；迁移不删除旧来源。
+- 诊断页新增恢复包导出、已完成历史清理、世界书冲突取消/按最新状态重试、本地提交冲突取消。
+- 操作日志改为 best-effort，日志配额或 IndexedDB 异常不会反向导致已完成事务失败。
+- 重置流程保留未解决本地提交、Outbox 和迁移备份。
+- 新增跨标签租约、本地崩溃恢复和旧版迁移测试；自动断言由 48 项增至 52 项。
 
-- 世界书默认改为紧凑发布：约 3～4 个条目，不再为每一行状态创建独立条目。
-- 新增文本化“关系图谱”世界书条目。
-- 重新加入关系图谱界面，支持人物关系与全局网络两种视图。
-- 状态表改为 6 列宽表，手机端横向滚动，禁止竖排和字符重叠。
-- 重新同步时会自动移除旧的镜渊细碎条目。
-- 新增紧凑世界书、关系图谱和移动端表格回归测试。
+## 1.1.0-alpha.9.3 — Foundation Kernel Phase 3
 
-## 1.1.0-alpha.2
+- 将世界书同步替换为持久 Outbox 事务：`prepared → committing → verify_pending → committed`，并记录回滚、冲突和取消状态。
+- 所有世界书 GET/EDIT 请求贯穿任务 `AbortSignal`；写请求发出前取消即终止，发出后中断按未知结果回读恢复。
+- 以捕获的聊天 `chatKey + scopeRevision` 约束整条发布链，修复读取与保存之间切换聊天导致的新聊天元数据污染。
+- 使用每世界书锁和托管条目基线指纹进行乐观并发控制；检测到外部变化时拒绝覆盖。
+- 服务器回读逐字段校验内容、关键词、常驻/向量设置、排序、托管集合、事务 ID 与 intent key。
+- 同一已提交 intent 幂等重放，不重复调用世界书编辑接口，也不允许迟到旧快照覆盖较新状态。
+- 写入成功但聊天元数据提交失败时，恢复实时元数据并条件回滚；回滚只恢复本聊天的镜渊托管条目，保留共享世界书中的无关条目。
+- 页面启动和聊天切换后自动恢复未完成事务；已取消和冲突事务不会自动重放。
+- alpha.7 旧托管条目按目标 key 选择性认领，补充聊天所有权和事务标记；未匹配旧条目不删除。
+- 重置游戏若世界书结果未确认，会保留 Outbox 供恢复，不再把唯一恢复记录随缓存一起清除。
+- 诊断报告增加 Outbox 状态、尝试次数、错误和冲突摘要；世界书页显示最近事务状态。
+- 新增 10 个 Phase 3 故障注入场景；总自动断言测试由 37 项增至 48 项。
 
-- 修复 SillyTavern 1.14 与自定义主题下控制中心前景色、面板色使用同一主题变量，导致文字与卡片几乎同色的问题。
-- 面板背景改用 BlurTint/ChatTint，文字改用 BodyColor，并增加自定义主题隔离。
-- 增加手机安全区、底部导航和输入控件的主题兼容。
-- 新增 CSS 回归测试，防止再次把文字变量用作面板背景。
+## 1.1.0-alpha.9.2 — Foundation Kernel Phase 2
 
-## 1.1.0-alpha.1
+- 保留 Phase 1 与全部既有镜渊领域/产品模块，在三种模型适配器上增加统一 Connection Broker。
+- 当前连接、ST Connection Profile、镜渊独立 API 使用稳定 connection key 和统一请求入口。
+- 同一连接默认 FIFO 单并发，不同连接允许并行，避免共享上游被多个任务同时压满。
+- TaskQueue 增加任务级 AbortController；信号贯穿审核、修正、结构化修复、状态表、总结和连接适配器。
+- 聊天切换、扩展禁用、内核停止和工作台取消都会主动中止旧任务及连接请求。
+- Broker 统一请求超时；只对 rate_limit、network、upstream 做有界重试，支持 Retry-After、指数退避和抖动。
+- 增加按连接熔断与半开恢复，避免持续故障造成请求风暴。
+- 统一连接错误分类，并在诊断报告中加入活动请求、排队与熔断状态。
+- 强化 stale-result gate：消息副作用前核对聊天作用域；延迟调度捕获原始作用域。
+- 工作台任务队列为 queued/running 任务增加取消按钮。
+- 新增 5 项 Connection Broker 故障注入测试；自动测试由 32 项增至 37 项。
+- 将 `happy-dom` 从 17.6.3 升级到 20.10.6；当前 `npm audit` 为 0 个已知漏洞。
+- 新增 `research/` 源码供应链记录、许可证矩阵、架构比较和 ADR。
 
-- 从旧版单文件原型重新构建模块化 TypeScript 源码。
-- 使用 SillyTavern 生命周期 hooks 与 APP_READY 初始化。
-- 设置界面通过 `renderExtensionTemplateAsync()` 加载。
-- 增加固定扩展设置入口、可选顶部入口和启动失败诊断入口。
-- 每条 AI 正文只创建一个唯一任务；移除生成结束事件作为业务触发源。
-- 审核、状态表、总结和世界书同步分别保存状态与错误。
-- 增加任务队列、Promise 去重、日志与阶段重试。
-- 模型连接改为当前连接或 Connection Profile；不再保存独立 API Key。
-- 状态表使用八分类标准表格，支持手动行、编辑和删除。
-- 手动状态行在自动整理后强制保留。
-- 增加小总结、大总结与 localforage 聊天状态。
-- 世界书改为派生发布层，并按聊天哈希生成独立名称。
-- 审核自动撤回加入聊天、消息和正文指纹校验；失败时降级为隐藏。
-- 暂时移除 3D 世界图谱，避免其依赖影响核心启动。
-- 增加 TypeScript 静态检查、8 个领域单元测试和 1 个浏览器集成测试。
+## 1.1.0-alpha.9 — Foundation Kernel Phase 1
+
+- 新增 Service Container、Capability Registry、Event Router、Chat Scope Manager 和 Lock Manager。
+- 业务事件统一通过 Event Router，不再由管线和 UI 各自重复监听酒馆原始事件。
+- 持久聊天键以 SillyTavern 真实聊天 ID 为权威；同角色不同聊天不再依赖角色名或临时 UUID 区分。
+- 未保存聊天的数据只保存在内存，关闭或切换后不进入持久缓存。
+- 兼容读取 alpha.8 旧聊天键，并在访问时迁移到新聊天键。
+- 任务新增持久化记录与 scopeRevision；聊天切换后旧任务标记 stale，结果不得写入新聊天。
+- 页面重载后将遗留的 queued/running 任务安全标记为 stale。
+- 诊断面板新增 Foundation Kernel、聊天作用域和持久任务检查。
+- 保留 alpha.8 的审核、修正、表格、总结、独立 API、世界书和图谱功能。

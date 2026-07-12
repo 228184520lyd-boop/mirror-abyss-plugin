@@ -1,159 +1,83 @@
-# Mirror Abyss / 镜渊
+# Mirror Abyss / 镜渊 1.1.0-alpha.9.7
 
-SillyTavern 的结构化状态表、规则审核、定向修正、分层总结、关系图谱与对象语义世界书扩展。
+这是 Summary Consistency 修复版，也是 Phase 5 真实 SillyTavern 验收候选。它保留 `alpha.9.6` 的 Connection Broker、任务终态、账户/聊天隔离、世界书 Outbox、跨标签协调、本地提交日志、旧数据迁移和镜渊领域逻辑，并修复“已总结消息在编辑、删除、swipe 或分支变化后，旧事实仍留在长期记忆”的一致性问题。
 
-当前版本：`1.1.0-alpha.7`。最低 SillyTavern 版本：`1.14.0`。
+本次继续遵循“证据先行、最小修复”：消息事件以 SillyTavern 官方事件为准；总结与消息绑定、编辑/swipe/继续生成后的重新总结行为参考成熟 AGPL 总结插件的公开设计；没有复制外部插件的提示词、界面、CSS 或产品命名。
 
-## alpha.7 的重点
+## alpha.9.7 主要修复
 
-本版只重构模型连接层，不新增叙事功能。旧版会临时切换酒馆全局 Connection Profile，再调用 `generateRaw()`，这会让审核、修正和状态表请求受到正文预设、Instruct、密钥或尚未完成的连接切换影响。
+- 消息身份拆分为稳定逻辑身份与内容 revision 指纹；文本或 swipe 变化只更换 revision key。
+- 建立 `消息 revision → 小总结 → 大总结` 依赖链失效：受影响的小总结被删除，依赖它的大总结后缀同步废弃。
+- 编辑、删除、swipe、删除 swipe、继续生成/更新和分支差异统一进入历史重建通道。
+- 重建从最早受影响位置向后按顺序重放状态和总结；重放期间不逐条写世界书，只在最后发布最新快照。
+- 增加持久 `HistoryRebuildRecord`。中断或失败会保留可恢复状态，并阻止旧/新派生数据继续混合。
+- 启动和切换聊天会自动恢复未完成重建；诊断页和 `MirrorAbyss.recovery.retryHistoryRebuild()` 提供人工恢复入口。
+- 历史重建取得同聊天跨标签租约，开始前取消旧聊天任务和连接请求。
+- 对 `MESSAGE_UPDATED` 增加 revision 对比；SillyTavern 编辑完成后的重复更新事件或非正文刷新不会再次触发重建。
+- 新增 Phase 5 实机验收清单：`docs/PHASE5_ACCEPTANCE.md`。
 
-现在提供三种互相隔离的连接方式：
+## 已保留的可靠机制
 
-```text
-当前聊天连接
-ST 原生 Connection Profile（按稳定 ID 直接请求）
-镜渊独立 API（经 SillyTavern 后端代理）
-```
-
-两种独立方式都不会再操作 `#connection_profiles`、执行 `/profile` 或改变正文模型。
+- 三种模型连接适配器与 Connection Broker；
+- 取消、超时、429 退避、熔断和按连接限流；
+- 按聊天任务 lane 与真实任务终态；
+- 稳定聊天身份、账户命名空间和可移植 ChatState；
+- 世界书 Outbox、服务器回读、乐观冲突与条件回滚；
+- Web Locks / localStorage 降级跨标签协调；
+- LocalCommit 双对象崩溃恢复；
+- alpha.6/alpha.7 旧数据预览、备份和保守迁移；
+- 审核、定向修正、状态表、总结、沉降、图谱和世界书领域逻辑。
 
 ## 安装
 
-仓库根目录直接放置：
+将部署包内容放入现有 `mirror-abyss-plugin` 扩展目录，更新扩展后完全刷新 SillyTavern 页面。不要同时启用两个镜渊版本。
 
-```text
-manifest.json
-index.js
-style.css
-settings.html
-```
+最低 SillyTavern 版本：`1.17.0`。
 
-在 SillyTavern 中打开“扩展 → 安装扩展”，输入 Git 仓库地址。更新后关闭旧页面并重新打开，只启用一个镜渊版本。
+升级长期存档前，应先备份 SillyTavern 数据、聊天文件和相关世界书。`alpha.9.7` 仍是实机验收候选，不是稳定版。
 
-## 推荐的首次配置
+## 验证
 
-1. 打开“镜渊 → 模型与设置”。
-2. 点击“新建独立 API 配置”。
-3. 填写 OpenAI 兼容 API 地址、密钥和模型。
-4. 点击“测试配置”。
-5. 将“规则审核、定向修正、状态表、小总结、大总结”分配到该独立 API。
-6. 逐项点击任务右侧“测试”，确认连接、JSON 和指令遵循均通过。
-7. 再开启规则审核和自动世界书同步。
-
-API 密钥只保存于当前浏览器标签页的 `sessionStorage`。刷新同一标签页通常仍在；关闭标签页或浏览器会清除，需要重新填写。密钥不会写入镜渊设置、聊天、世界书或诊断导出。
-
-## 独立 API 请求方式
-
-镜渊独立 API 通过 SillyTavern 后端代理发送：
-
-```text
-/api/backends/chat-completions/generate
-```
-
-请求只包含镜渊构造的 system/user 消息、模型和生成参数，不加载当前角色卡、聊天历史、世界书、正文预设或 Instruct。当前版本支持 OpenAI 兼容接口；Google 等提供 OpenAI 兼容入口的服务也可使用这一模式。
-
-“读取模型”会尝试调用酒馆后端的模型状态接口。部分代理不提供模型列表，此时可直接手动填写模型名，不影响正常请求。
-
-## ST 原生 Connection Profile
-
-该模式使用 SillyTavern 1.14 的 `ConnectionManagerRequestService.sendRequest()`：
-
-```text
-Profile ID
-→ 直接请求
-→ includePreset: false
-→ includeInstruct: false
-→ stream: false
-```
-
-它不会临时切换全局 Profile。旧版按名称保存的配置会自动迁移为稳定 ID，因此 Profile 改名不再让任务失效。
-
-需要注意：SillyTavern 1.14 的某些 Profile/密钥组合仍可能依赖酒馆当前密钥状态。需要完全独立的第二密钥时，优先使用“镜渊独立 API”。
-
-## 连接测试与错误分类
-
-每个任务的“测试”只发送一次最小请求，并分别检查：
-
-```text
-网络与鉴权
-是否返回非空内容
-是否能解析为 JSON
-是否精确返回指定结构
-```
-
-错误会明确区分：
-
-```text
-配置缺失
-鉴权失败
-地址或模型不存在
-限流
-超时
-网络失败
-上游错误
-空响应
-代理响应格式错误
-JSON 结构失败
-```
-
-只有真正取得模型正文但无法解析时，才会显示 JSON 结构错误。
-
-## 审核与定向修正
-
-```text
-候选正文
-→ 隔离并锁住下一轮生成
-→ 规则审核
-├─ 通过：放行
-├─ 可修正：发送具体修改点给修正模型
-│           → 再审核
-│           → 通过后原位替换
-└─ 阻断：按设置标红、隐藏或安全撤回
-→ 状态提取
-→ 总结
-→ 世界书
-```
-
-审核说明、修改点和修正草稿不会作为聊天消息写入上下文。未通过正文不能进入状态表、总结、世界书或向量发布。
-
-## 状态、总结与世界书
-
-九类状态表：当前焦点、时间地点、人物、关系、物品、技能能力、事件流程、区域状态、基础设定。玩家可以编辑并锁定记录。
-
-对象语义世界书按实际对象发布：
-
-```text
-MA｜基础设定
-MA｜全局态势
-MA｜焦点｜人物名
-MA｜人物｜人物名
-MA｜关系网络
-MA｜区域｜区域名
-MA｜事件｜事件名
-MA｜流程｜流程名
-MA｜物品与资源｜所有者
-MA｜物品｜重要物品名
-MA｜技能与能力｜主体
-MA｜小总结｜当前周期
-MA｜大总结｜长期沉降
-```
-
-小总结负责安全沉降已结束内容，大总结累计吸收小总结。人物离场、遗忘、失踪和死亡使用独立生命周期状态，不会因长期未出现而被自动删除。
-
-## 关系图谱
-
-关系图谱直接读取状态表，不调用模型。支持人物关系/全局网络、50%～250% 缩放、恢复 100% 和适应窗口。手机端可双向滚动画布。
-
-## 开发与验证
+源码包中执行：
 
 ```bash
-npm install
+npm ci
+npm test
 npm run validate
+npm audit --audit-level=low
 ```
 
-源码位于 `src/`，生产入口为构建后的根目录 `index.js`。
+`npm test` 运行 72 项功能/故障断言；`npm run validate` 运行严格 TypeScript、依赖边界、ESLint、生产构建和产物语法检查。详细结果见 `VALIDATION.md`。
 
-## 许可证
+## Phase 5
 
-AGPL-3.0。参考来源与独立实现边界见 `UPSTREAM_SOURCES.md` 和 `THIRD_PARTY_NOTICES.md`。
+本版本已经进入真实 SillyTavern 验收阶段，不再继续增加功能。实机验收覆盖：
+
+- 从公开 alpha.7 原位升级；
+- install/update/enable/disable/delete 生命周期；
+- 当前连接、Connection Profile 和独立 API；
+- 编辑/删除/swipe/分支后的总结重建；
+- 真实世界书断网、回读、冲突和双标签竞争；
+- 移动端后台休眠、页面回收和网络切换；
+- 100 回合以上长期运行与元数据体积。
+
+完整步骤见 `docs/PHASE5_ACCEPTANCE.md`。
+
+## 当前风险边界
+
+- 尚未在用户真实 SillyTavern 安装中完成 alpha.7 原位升级；
+- 尚未验证移动端后台冻结和浏览器页面回收；
+- 多设备写同一世界书仍依赖服务器回读与乐观冲突，不是分布式共识；
+- Web Locks 不可用时的 localStorage 租约属于 advisory lease；
+- 可移植 ChatState 会增加聊天元数据体积，需在长存档实机测试中监测；
+- `pipeline/lorebook.ts` 与 `ui/workspace.ts` 仍较大，只能继续在测试保护下拆分。
+
+## 文档
+
+- `docs/SUMMARY_CONSISTENCY_ALPHA9_7.md`
+- `docs/PHASE5_ACCEPTANCE.md`
+- `docs/FOUNDATION_CORRECTION_ALPHA9_6.md`
+- `docs/REFERENCE_MATRIX.md`
+- `docs/ROADMAP.md`
+- `research/`
+- `VALIDATION.md`
