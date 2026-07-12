@@ -1,25 +1,27 @@
 # Upstream Sources and Design References
 
-Mirror Abyss is an independent implementation. The following projects and documents were reviewed for architecture and interoperability patterns:
+Mirror Abyss is an independent implementation. The following primary sources were reviewed for architecture and interoperability patterns:
 
-- SillyTavern UI Extensions documentation
-  - lifecycle hooks and `APP_READY`
-  - `renderExtensionTemplateAsync`
-  - `extensionSettings`, `chatMetadata` and `localforage`
-  - events, `generateRaw`, JSON Schema and Prompt Interceptors
-- SillyTavern official interceptor extensions
-  - global `generate_interceptor` registration and abort behavior
+- SillyTavern 1.14 source and UI extension documentation
+  - `APP_READY`, extension settings, events, `generateRaw`
+  - `ConnectionManagerRequestService.sendRequest()`
+  - `getRequestHeaders()` and backend chat-completion proxy endpoints
+  - world info, localforage, Prompt Interceptors and message update APIs
+- Amily2 public repository
+  - reusable API profile/slot assignment
+  - direct use of SillyTavern backend proxy for OpenAI-compatible endpoints
+  - separate model-list and generation requests
 - Recast Post-Processing
-  - independent post-processing passes, Connection Profiles and in-place final output replacement
+  - stable Connection Profile IDs, bounded post-processing passes and in-place output replacement
 - Stepped Thinking
   - bounded multi-step generation and per-step model selection
 - st-memory-enhancement
-  - structured editable table workflow and configurable schemas
+  - editable structured tables
 - SillyTavern Memory Books
-  - memory task states, multi-tier consolidation and lorebook publication
+  - task states, consolidation and lorebook publication
 - SillyTavern Message Summarize
-  - message-bound memory and edit/delete consistency
+  - message-bound memory consistency
 - CharMemory
-  - health diagnostics, storage/publication separation and mobile dashboard patterns
+  - diagnostics and storage/publication separation
 
 No source code, prompts, CSS, icons, screenshots, or visual assets from these projects are copied into Mirror Abyss.

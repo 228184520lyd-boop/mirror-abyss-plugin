@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.0-alpha.7
+
+- 彻底移除通过 DOM、`/profile` 命令和固定延迟临时切换酒馆全局连接的旧路径。
+- Connection Profile 改为使用 SillyTavern 1.14 官方 `ConnectionManagerRequestService.sendRequest()`，按稳定 Profile ID 请求，并强制关闭角色预设、Instruct 与流式输出。
+- 新增镜渊独立 API 配置槽：OpenAI 兼容地址、模型、温度、Top P 与最大输出可复用分配给审核、修正、状态表、小总结和大总结。
+- 独立 API 参考成熟插件的后端代理请求模式，经 `/api/backends/chat-completions/generate` 发送，不切换正文连接，也规避浏览器 CORS。
+- 独立 API 密钥默认只保存在当前浏览器标签页的 `sessionStorage`，不写入扩展设置、聊天、世界书、导出文件或诊断报告。
+- 新增独立 API 模型列表读取、配置测试、稳定 ID、删除后任务自动回退以及每任务连接方式下拉选择。
+- 连接测试改为一次请求同时区分：网络/鉴权是否成功、返回是否为 JSON、是否精确遵循结构指令；不再把所有失败统称为 JSON 错误。
+- 错误分类新增配置缺失、鉴权失败、模型/地址不存在、限流、超时、网络失败、上游失败、空响应与代理响应格式错误。
+- Profile 旧名称会自动迁移为稳定 ID，Profile 改名不再导致任务失联。
+- 诊断页新增官方 Profile 隔离能力与独立 API 就绪数量检查。
+- 新增原生 Profile 无全局切换测试、独立 API 后端代理测试与密钥不进入 extensionSettings 测试。自动测试增至 28 项。
+
 ## 1.1.0-alpha.6
 
 - 修复审核、修正、表格和总结使用不同 Connection Profile 时，任务结束后没有稳定恢复原连接的问题。

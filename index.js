@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.1.0-alpha.6";
-var PIPELINE_VERSION = "ma-pipeline-5";
+var VERSION = "1.1.0-alpha.7";
+var PIPELINE_VERSION = "ma-pipeline-6";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
@@ -52,12 +52,13 @@ var DEFAULT_SETTINGS = {
   repairInvalidJsonOnce: true,
   requestTimeoutMs: 9e4,
   connections: {
-    audit: { mode: "current", profile: "" },
-    revision: { mode: "current", profile: "" },
-    state: { mode: "current", profile: "" },
-    smallSummary: { mode: "current", profile: "" },
-    largeSummary: { mode: "current", profile: "" }
+    audit: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+    revision: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+    state: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+    smallSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+    largeSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" }
   },
+  independentApiProfiles: [],
   ui: {
     activeTab: "overview",
     activeTable: "focus",
@@ -269,7 +270,26 @@ function sanitizeBookName(value) {
   return String(value ?? "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
 }
 function toErrorMessage(error) {
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) {
+    const parts = [];
+    const seen = /* @__PURE__ */ new Set();
+    let current = error;
+    while (current instanceof Error && !seen.has(current)) {
+      seen.add(current);
+      if (current.message && !parts.includes(current.message)) parts.push(current.message);
+      current = current.cause;
+    }
+    return parts.join("\uFF1A") || error.name || "\u672A\u77E5\u9519\u8BEF";
+  }
+  if (error && typeof error === "object") {
+    try {
+      const message = error.message ?? error.error?.message;
+      if (message) return String(message);
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
   return String(error ?? "\u672A\u77E5\u9519\u8BEF");
 }
 
@@ -295,6 +315,17 @@ function getSettings() {
   context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
   const settings = context.extensionSettings[MODULE_NAME];
   if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
+  settings.independentApiProfiles ||= [];
+  const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles) ? context.extensionSettings.connectionManager.profiles : [];
+  for (const connection of Object.values(settings.connections ?? {})) {
+    connection.profileId ||= "";
+    connection.profile ||= "";
+    connection.independentProfileId ||= "";
+    if (!connection.profileId && connection.profile) {
+      const matched = savedProfiles.find((profile) => safeText(profile?.name, 160).trim() === safeText(connection.profile, 160).trim());
+      if (matched?.id) connection.profileId = String(matched.id);
+    }
+  }
   return settings;
 }
 function migrateLegacySettings(legacy) {
@@ -322,12 +353,13 @@ function migrateLegacySettings(legacy) {
     vectorizeRows: legacy.vectorizeStateRows ?? false,
     latestContinuityConstant: legacy.latestContinuityConstant ?? true,
     connections: {
-      audit: { mode: legacy.auditProfile ? "profile" : "current", profile: safeText(legacy.auditProfile ?? "", 120) },
-      revision: { mode: legacy.revisionProfile ? "profile" : "current", profile: safeText(legacy.revisionProfile ?? legacy.auditProfile ?? "", 120) },
-      state: { mode: legacy.stateProfile ? "profile" : "current", profile: safeText(legacy.stateProfile ?? "", 120) },
-      smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profile: safeText(legacy.smallSummaryProfile ?? "", 120) },
-      largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profile: safeText(legacy.largeSummaryProfile ?? "", 120) }
-    }
+      audit: { mode: legacy.auditProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.auditProfile ?? "", 120), independentProfileId: "" },
+      revision: { mode: legacy.revisionProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.revisionProfile ?? legacy.auditProfile ?? "", 120), independentProfileId: "" },
+      state: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120), independentProfileId: "" },
+      smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.smallSummaryProfile ?? "", 120), independentProfileId: "" },
+      largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.largeSummaryProfile ?? "", 120), independentProfileId: "" }
+    },
+    independentApiProfiles: []
   };
 }
 function saveSettings() {
@@ -633,8 +665,252 @@ async function generationInterceptor(_chat, _contextSize, abort, _type) {
   toast("warning", "\u4E0A\u4E00\u6761\u6B63\u6587\u4ECD\u5728\u5BA1\u6838\u6216\u4FEE\u6B63\uFF0C\u5DF2\u963B\u6B62\u65B0\u4E00\u8F6E\u751F\u6210\u4EE5\u907F\u514D\u4E0A\u4E0B\u6587\u6C61\u67D3");
 }
 
+// src/llm/api-profiles.ts
+var SECRET_PREFIX = "ma11:independent-api-key:";
+var ApiRequestError = class extends Error {
+  kind;
+  status;
+  responsePreview;
+  constructor(message, kind, options = {}) {
+    super(message, options.cause ? { cause: options.cause } : void 0);
+    this.name = "ApiRequestError";
+    this.kind = kind;
+    this.status = options.status;
+    this.responsePreview = options.responsePreview;
+  }
+};
+function makeId2() {
+  try {
+    const value = getContext().uuidv4?.();
+    if (value) return String(value);
+  } catch {
+  }
+  return `ma-api-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+function apiKeyStorageKey(profileId) {
+  return `${SECRET_PREFIX}${profileId}`;
+}
+function getSessionApiKey(profileId) {
+  try {
+    return sessionStorage.getItem(apiKeyStorageKey(profileId)) || "";
+  } catch {
+    return "";
+  }
+}
+function setSessionApiKey(profileId, apiKey) {
+  try {
+    if (apiKey) sessionStorage.setItem(apiKeyStorageKey(profileId), apiKey);
+    else sessionStorage.removeItem(apiKeyStorageKey(profileId));
+  } catch {
+    throw new ApiRequestError("\u6D4F\u89C8\u5668\u62D2\u7EDD\u4FDD\u5B58\u672C\u6B21\u4F1A\u8BDD\u5BC6\u94A5", "configuration");
+  }
+}
+function clearSessionApiKey(profileId) {
+  try {
+    sessionStorage.removeItem(apiKeyStorageKey(profileId));
+  } catch {
+  }
+}
+function listIndependentApiProfiles() {
+  return getSettings().independentApiProfiles;
+}
+function getIndependentApiProfile(profileId) {
+  return listIndependentApiProfiles().find((profile) => profile.id === profileId) ?? null;
+}
+function createIndependentApiProfile() {
+  const profile = {
+    id: makeId2(),
+    name: `\u955C\u6E0AAPI ${listIndependentApiProfiles().length + 1}`,
+    provider: "openai-compatible",
+    apiUrl: "",
+    model: "",
+    maxTokens: 4096,
+    temperature: 0.1,
+    topP: 1,
+    cachedModels: []
+  };
+  getSettings().independentApiProfiles.push(profile);
+  saveSettings();
+  return profile;
+}
+function updateIndependentApiProfile(profileId, patch) {
+  const profile = getIndependentApiProfile(profileId);
+  if (!profile) throw new ApiRequestError("\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728\u6216\u5DF2\u88AB\u5220\u9664", "configuration");
+  Object.assign(profile, patch, { id: profile.id, provider: "openai-compatible" });
+  profile.name = safeText(profile.name, 120).trim() || "\u672A\u547D\u540DAPI";
+  profile.apiUrl = safeText(profile.apiUrl, 2e3).trim();
+  profile.model = safeText(profile.model, 240).trim();
+  profile.maxTokens = Math.min(131072, Math.max(64, Number(profile.maxTokens) || 4096));
+  profile.temperature = Math.min(2, Math.max(0, Number(profile.temperature) || 0));
+  profile.topP = Math.min(1, Math.max(0, Number(profile.topP) || 1));
+  profile.cachedModels = Array.isArray(profile.cachedModels) ? profile.cachedModels.map((item) => safeText(item, 240).trim()).filter(Boolean).slice(0, 2e3) : [];
+  saveSettings();
+  return profile;
+}
+function deleteIndependentApiProfile(profileId) {
+  const settings = getSettings();
+  settings.independentApiProfiles = settings.independentApiProfiles.filter((profile) => profile.id !== profileId);
+  for (const connection of Object.values(settings.connections)) {
+    if (connection.independentProfileId === profileId) {
+      connection.independentProfileId = "";
+      connection.mode = "current";
+    }
+  }
+  clearSessionApiKey(profileId);
+  saveSettings();
+}
+function classifyHttp(status) {
+  if (status === 401 || status === 403) return "authentication";
+  if (status === 404) return "not_found";
+  if (status === 408 || status === 504) return "timeout";
+  if (status === 429) return "rate_limit";
+  return "upstream";
+}
+function responseText(data) {
+  if (typeof data === "string") return data.trim();
+  const candidates = [
+    data?.choices?.[0]?.message?.content,
+    data?.choices?.[0]?.text,
+    data?.message?.content,
+    data?.content,
+    data?.text,
+    data?.output,
+    data?.result
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return "";
+}
+function requestHeaders() {
+  const headers = getContext().getRequestHeaders?.();
+  return headers && typeof headers === "object" ? { ...headers, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+}
+function validateProfile(profile, requireModel = true) {
+  if (!profile.apiUrl) throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u672A\u586B\u5199API\u5730\u5740`, "configuration");
+  if (requireModel && !profile.model) throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u672A\u586B\u5199\u6A21\u578B`, "configuration");
+  const key = getSessionApiKey(profile.id);
+  if (!key) throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u672A\u586B\u5199\u672C\u6B21\u4F1A\u8BDD\u5BC6\u94A5`, "configuration");
+  return key;
+}
+async function requestIndependentApi(profileId, options) {
+  const profile = getIndependentApiProfile(profileId);
+  if (!profile) throw new ApiRequestError("\u9009\u62E9\u7684\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728", "configuration");
+  const apiKey = validateProfile(profile);
+  const controller = new AbortController();
+  const abort = () => controller.abort(options.signal?.reason);
+  options.signal?.addEventListener("abort", abort, { once: true });
+  const body = {
+    chat_completion_source: "openai",
+    messages: options.messages,
+    model: profile.model,
+    reverse_proxy: profile.apiUrl,
+    proxy_password: apiKey,
+    stream: false,
+    max_tokens: Math.max(64, Number(options.maxTokens) || profile.maxTokens || 4096),
+    temperature: Number.isFinite(options.temperature) ? options.temperature : profile.temperature,
+    top_p: Number.isFinite(options.topP) ? options.topP : profile.topP,
+    custom_prompt_post_processing: "strict",
+    enable_web_search: false,
+    include_reasoning: false,
+    request_images: false
+  };
+  try {
+    const response = await withTimeout(
+      fetch("/api/backends/chat-completions/generate", {
+        method: "POST",
+        headers: requestHeaders(),
+        body: JSON.stringify(body),
+        signal: controller.signal
+      }),
+      options.timeoutMs,
+      `\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42`,
+      controller
+    );
+    const rawText = await response.text();
+    if (!response.ok) {
+      throw new ApiRequestError(
+        `\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42\u5931\u8D25\uFF1AHTTP ${response.status}`,
+        classifyHttp(response.status),
+        { status: response.status, responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500) }
+      );
+    }
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (error) {
+      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8FD4\u56DE\u4E86\u975EJSON\u7684\u4EE3\u7406\u54CD\u5E94`, "response_format", {
+        status: response.status,
+        responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500),
+        cause: error
+      });
+    }
+    const content = responseText(data);
+    if (!content) {
+      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response", {
+        status: response.status,
+        responsePreview: safeText(data, 500)
+      });
+    }
+    return content;
+  } catch (error) {
+    if (error instanceof ApiRequestError) throw error;
+    if (controller.signal.aborted || options.signal?.aborted) {
+      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "timeout", { cause: error });
+    }
+    const message = toErrorMessage(error);
+    if (/超时|timeout/i.test(message)) throw new ApiRequestError(message, "timeout", { cause: error });
+    throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF1A${message}`, "network", { cause: error });
+  } finally {
+    options.signal?.removeEventListener("abort", abort);
+  }
+}
+async function fetchIndependentModels(profileId, timeoutMs) {
+  const profile = getIndependentApiProfile(profileId);
+  if (!profile) throw new ApiRequestError("\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728", "configuration");
+  const apiKey = validateProfile(profile, false);
+  const controller = new AbortController();
+  const response = await withTimeout(
+    fetch("/api/backends/chat-completions/status", {
+      method: "POST",
+      headers: requestHeaders(),
+      body: JSON.stringify({
+        reverse_proxy: profile.apiUrl,
+        proxy_password: apiKey,
+        chat_completion_source: "openai"
+      }),
+      signal: controller.signal
+    }),
+    timeoutMs,
+    `\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u6A21\u578B\u5217\u8868`,
+    controller
+  );
+  const rawText = await response.text();
+  if (!response.ok) {
+    throw new ApiRequestError(`\u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1AHTTP ${response.status}`, classifyHttp(response.status), {
+      status: response.status,
+      responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500)
+    });
+  }
+  let data;
+  try {
+    data = JSON.parse(rawText);
+  } catch (error) {
+    throw new ApiRequestError("\u6A21\u578B\u5217\u8868\u63A5\u53E3\u8FD4\u56DE\u4E86\u975EJSON\u5185\u5BB9", "response_format", {
+      responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500),
+      cause: error
+    });
+  }
+  const source = Array.isArray(data) ? data : data?.data ?? data?.models ?? [];
+  if (!Array.isArray(source)) {
+    throw new ApiRequestError("API\u672A\u8FD4\u56DE\u53EF\u8BC6\u522B\u7684\u6A21\u578B\u5217\u8868", "response_format", { responsePreview: safeText(data, 500) });
+  }
+  const models = source.map((item) => safeText(item?.id ?? item?.name ?? item?.model ?? item, 240).replace(/^models\//, "").trim()).filter(Boolean).filter((value, index, list2) => list2.indexOf(value) === index).sort((a, b) => a.localeCompare(b));
+  updateIndependentApiProfile(profile.id, { cachedModels: models });
+  return models;
+}
+
 // src/llm/generator.ts
-var profileMutex = Promise.resolve();
 function generationText(result) {
   if (typeof result === "string") return result.trim();
   for (const key of ["content", "text", "output", "result", "value", "pipe"]) {
@@ -645,103 +921,48 @@ function generationText(result) {
   if (typeof result?.choices?.[0]?.text === "string") return result.choices[0].text.trim();
   return safeText(result, 2e5).trim();
 }
-function slashResultText(result) {
-  if (typeof result === "string") return result.trim();
-  if (result?.isError || result?.errorMessage) {
-    throw new Error(safeText(result.errorMessage || "STScript\u6267\u884C\u5931\u8D25", 1e3));
-  }
-  for (const key of ["pipe", "output", "result", "text", "value"]) {
-    if (typeof result?.[key] === "string") return result[key].trim();
-  }
-  return "";
-}
 function cleanProfileName(value) {
   return safeText(value, 160).replace(/["|\r\n]/g, "").trim();
 }
-function profileStore() {
+function connectionManagerStore() {
   const context = getContext();
   const store = context.extensionSettings?.connectionManager;
   if (!store || !Array.isArray(store.profiles)) return null;
   return store;
 }
-function findProfileByName(name) {
-  const store = profileStore();
-  if (!store) return null;
-  return store.profiles.find((profile) => cleanProfileName(profile?.name) === name) ?? null;
-}
-function wait(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-async function importSlashModule() {
-  try {
-    const moduleUrl = "/scripts/slash-commands.js";
-    return await import(
-      /* @vite-ignore */
-      moduleUrl
-    );
-  } catch (error) {
-    throw new Error(`\u65E0\u6CD5\u52A0\u8F7D\u8FDE\u63A5\u914D\u7F6E\u5207\u6362\u5668\uFF1A${toErrorMessage(error)}`);
-  }
-}
-async function executeSlash(command) {
-  const slashModule = await importSlashModule();
-  if (typeof slashModule?.executeSlashCommandsWithOptions === "function") {
-    const result = await slashModule.executeSlashCommandsWithOptions(command, {
-      handleParserErrors: true,
-      handleExecutionErrors: true,
-      source: "mirror-abyss"
-    });
-    return slashResultText(result);
-  }
-  if (typeof slashModule?.executeSlashCommands === "function") {
-    return slashResultText(await slashModule.executeSlashCommands(command));
-  }
-  throw new Error("\u5F53\u524DSillyTavern\u4E0D\u652F\u6301\u8FDE\u63A5\u914D\u7F6E\u547D\u4EE4");
-}
-async function applyProfileViaDom(profileId) {
+function supportedProfiles() {
   const context = getContext();
-  const select = document.querySelector("#connection_profiles");
-  if (!select) return false;
-  const value = profileId ?? "";
-  if (!Array.from(select.options).some((option) => option.value === value)) return false;
-  const store = profileStore();
-  if (select.value === value && (store?.selectedProfile ?? "") === value) return true;
-  const loadedEvent = context.event_types?.CONNECTION_PROFILE_LOADED;
-  const loaded = new Promise((resolve) => {
-    if (!loadedEvent || typeof context.eventSource?.once !== "function") {
-      window.setTimeout(resolve, 350);
-      return;
-    }
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    context.eventSource.once(loadedEvent, finish);
-    window.setTimeout(finish, 1e4);
-  });
-  select.value = value;
-  select.dispatchEvent(new Event("change", { bubbles: true }));
-  await loaded;
-  await wait(120);
-  const selected = profileStore()?.selectedProfile ?? null;
-  if ((selected ?? "") !== value) throw new Error("\u8FDE\u63A5\u914D\u7F6E\u754C\u9762\u672A\u80FD\u5B8C\u6210\u5207\u6362");
-  return true;
-}
-async function applyProfile(profileId, profileName = "") {
-  if (await applyProfileViaDom(profileId)) return;
-  if (profileId) {
-    const name = cleanProfileName(profileName);
-    const switched = await executeSlash(`/profile await=true timeout=8000 "${name}"`);
-    if (!switched) throw new Error(`\u627E\u4E0D\u5230\u8FDE\u63A5\u914D\u7F6E\u201C${name}\u201D`);
-    const current2 = cleanProfileName(await executeSlash("/profile"));
-    if (current2 !== name) throw new Error(`\u8FDE\u63A5\u914D\u7F6E\u5207\u6362\u5931\u8D25\uFF1A\u671F\u671B\u201C${name}\u201D\uFF0C\u5B9E\u9645\u201C${current2 || "\u65E0"}\u201D`);
-    return;
+  try {
+    const service = context.ConnectionManagerRequestService;
+    if (typeof service?.getSupportedProfiles === "function") return service.getSupportedProfiles();
+  } catch {
   }
-  await executeSlash("/profile await=true timeout=8000 <None>");
-  const current = cleanProfileName(await executeSlash("/profile"));
-  if (current) throw new Error(`\u65E0\u6CD5\u6062\u590D\u5230\u539F\u59CB\u201C\u65E0\u8FDE\u63A5\u914D\u7F6E\u201D\u72B6\u6001\uFF0C\u5F53\u524D\u4ECD\u4E3A\u201C${current}\u201D`);
+  return connectionManagerStore()?.profiles ?? [];
+}
+function resolveProfileId(connection) {
+  const profiles = supportedProfiles();
+  if (connection.profileId && profiles.some((profile) => profile?.id === connection.profileId)) return connection.profileId;
+  const legacyName = cleanProfileName(connection.profile);
+  const match = profiles.find((profile) => cleanProfileName(profile?.name) === legacyName);
+  if (match?.id) {
+    connection.profileId = String(match.id);
+    return String(match.id);
+  }
+  return "";
+}
+function messagesFromOptions(options) {
+  const messages = [];
+  if (options.systemPrompt.trim()) messages.push({ role: "system", content: options.systemPrompt });
+  if (Array.isArray(options.prompt)) {
+    for (const item of options.prompt) {
+      const role = safeText(item?.role, 30).trim() || "user";
+      const content = safeText(item?.content, 2e5);
+      if (content.trim()) messages.push({ role, content });
+    }
+  } else {
+    messages.push({ role: "user", content: options.prompt });
+  }
+  return messages;
 }
 async function generateCurrent(options) {
   const context = getContext();
@@ -760,66 +981,117 @@ async function generateCurrent(options) {
   if (!text) throw new Error(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`);
   return text;
 }
-async function generateWithProfile(options, profileName) {
-  const profile = cleanProfileName(profileName);
-  if (!profile) throw new Error("\u8FDE\u63A5\u914D\u7F6E\u540D\u79F0\u4E3A\u7A7A");
-  const run = async () => {
-    const store = profileStore();
-    if (!store) throw new Error("\u672A\u68C0\u6D4B\u5230SillyTavern Connection Manager");
-    const target = findProfileByName(profile);
-    if (!target) {
-      const available = store.profiles.map((item) => cleanProfileName(item?.name)).filter(Boolean).join("\u3001");
-      throw new Error(`\u627E\u4E0D\u5230\u8FDE\u63A5\u914D\u7F6E\u201C${profile}\u201D${available ? `\u3002\u73B0\u6709\uFF1A${available}` : ""}`);
-    }
-    const originalId = store.selectedProfile ?? null;
-    const original = store.profiles.find((item) => item?.id === originalId) ?? null;
-    await applyProfile(target.id, target.name);
-    let output;
-    let generationError;
-    try {
-      output = await generateCurrent(options);
-    } catch (error) {
-      generationError = error;
-    }
-    let restoreError;
-    try {
-      await applyProfile(originalId, original?.name ?? "");
-    } catch (error) {
-      restoreError = error;
-      console.error("[MirrorAbyss] failed to restore connection profile", error);
-    }
-    if (generationError) {
-      if (restoreError) {
-        throw new Error(`\u6A21\u578B\u8C03\u7528\u5931\u8D25\uFF1A${toErrorMessage(generationError)}\uFF1B\u540C\u65F6\u6062\u590D\u539F\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(restoreError)}`);
+async function generateWithNativeProfile(options, profileId) {
+  const context = getContext();
+  const service = context.ConnectionManagerRequestService;
+  if (typeof service?.sendRequest !== "function") {
+    throw new Error("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BConnectionManagerRequestService");
+  }
+  const settings = getSettings();
+  const messages = messagesFromOptions(options);
+  const result = await withTimeout(
+    withInternalGeneration(() => Promise.resolve(service.sendRequest(
+      profileId,
+      messages,
+      void 0,
+      {
+        stream: false,
+        extractData: true,
+        includePreset: false,
+        includeInstruct: false,
+        signal: null
+      },
+      {
+        stream: false
       }
-      throw generationError;
-    }
-    if (restoreError) throw new Error(`\u6A21\u578B\u8C03\u7528\u5B8C\u6210\uFF0C\u4F46\u6062\u590D\u539F\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(restoreError)}`);
-    return output;
-  };
-  const chained = profileMutex.then(run, run);
-  profileMutex = chained.catch(() => void 0);
-  return chained;
+    ))),
+    Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
+    `${options.task} Connection Profile\u8BF7\u6C42`
+  );
+  const text = generationText(result);
+  if (!text) throw new Error(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`);
+  return text;
+}
+async function generateWithIndependentProfile(options, profileId) {
+  const settings = getSettings();
+  return withInternalGeneration(() => requestIndependentApi(profileId, {
+    messages: messagesFromOptions(options),
+    timeoutMs: Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4)
+  }));
+}
+function listSupportedConnectionProfiles() {
+  return supportedProfiles().map((profile) => ({
+    id: safeText(profile?.id, 160),
+    name: cleanProfileName(profile?.name) || "\u672A\u547D\u540D\u914D\u7F6E",
+    api: safeText(profile?.api, 80),
+    model: safeText(profile?.model, 240)
+  })).filter((profile) => profile.id);
 }
 function describeTaskConnection(task) {
   const connection = getSettings().connections[task];
-  return connection?.mode === "profile" ? `Connection Profile\uFF1A${cleanProfileName(connection.profile) || "\u672A\u586B\u5199"}` : "\u5F53\u524D\u804A\u5929\u8FDE\u63A5";
+  if (connection?.mode === "profile") {
+    const id = resolveProfileId(connection);
+    const profile = listSupportedConnectionProfiles().find((item) => item.id === id);
+    return `Connection Profile\uFF1A${profile?.name || cleanProfileName(connection.profile) || "\u672A\u9009\u62E9"}`;
+  }
+  if (connection?.mode === "independent") {
+    const profile = getIndependentApiProfile(connection.independentProfileId);
+    return `\u955C\u6E0A\u72EC\u7ACBAPI\uFF1A${profile?.name || "\u672A\u9009\u62E9"}`;
+  }
+  return "\u5F53\u524D\u804A\u5929\u8FDE\u63A5";
 }
 async function generateTask(options) {
   const connection = getSettings().connections[options.task];
-  if (connection?.mode === "profile") return generateWithProfile(options, connection.profile);
+  if (connection?.mode === "profile") {
+    const profileId = resolveProfileId(connection);
+    if (!profileId) throw new Error(`${options.task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`);
+    return generateWithNativeProfile(options, profileId);
+  }
+  if (connection?.mode === "independent") {
+    if (!connection.independentProfileId) throw new Error(`${options.task}\u672A\u9009\u62E9\u955C\u6E0A\u72EC\u7ACBAPI`);
+    return generateWithIndependentProfile(options, connection.independentProfileId);
+  }
   return generateCurrent(options);
 }
 async function testConnection(task) {
-  const raw = await generateTask({
-    task,
-    systemPrompt: "\u4F60\u662F\u8FDE\u63A5\u6D4B\u8BD5\u5668\u3002\u4E0D\u8981\u89E3\u91CA\uFF0C\u53EA\u56DE\u590D MA_OK\u3002",
-    prompt: "\u53EA\u56DE\u590D MA_OK"
-  });
-  if (!/\bMA_OK\b/i.test(raw)) {
-    throw new Error(`\u8FDE\u63A5\u5DF2\u54CD\u5E94\uFF0C\u4F46\u6CA1\u6709\u6309\u6D4B\u8BD5\u683C\u5F0F\u8FD4\u56DE\u3002\u8FD4\u56DE\uFF1A${raw.replace(/\s+/g, " ").slice(0, 160)}`);
+  const started = performance.now();
+  let raw = "";
+  try {
+    raw = await generateTask({
+      task,
+      systemPrompt: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
+      prompt: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}',
+      jsonSchema: {
+        type: "object",
+        required: ["ok", "source"],
+        properties: {
+          ok: { type: "boolean" },
+          source: { type: "string" }
+        }
+      }
+    });
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25 [${error.kind}]\uFF1A${error.message}${error.responsePreview ? `\uFF1B\u4E0A\u6E38\u7247\u6BB5\uFF1A${error.responsePreview}` : ""}`);
+    }
+    throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
   }
-  return "MA_OK";
+  let jsonValid = false;
+  let instructionFollowed = false;
+  try {
+    const parsed = parseJsonObject(raw);
+    jsonValid = true;
+    instructionFollowed = parsed.ok === true && parsed.source === "mirror-abyss";
+  } catch {
+  }
+  return {
+    connected: Boolean(raw.trim()),
+    instructionFollowed,
+    jsonValid,
+    method: describeTaskConnection(task),
+    elapsedMs: Math.round(performance.now() - started),
+    responsePreview: raw.replace(/\s+/g, " ").slice(0, 240)
+  };
 }
 
 // src/llm/structured.ts
@@ -2716,9 +2988,15 @@ async function runDiagnostics() {
   });
   checks.push({
     id: "generateRaw",
-    label: "\u540E\u53F0\u6A21\u578B\u8C03\u7528",
-    status: typeof context?.generateRaw === "function" ? "ok" : "error",
-    detail: typeof context?.generateRaw === "function" ? "generateRaw\u53EF\u7528" : "\u5F53\u524D\u7248\u672C\u672A\u63D0\u4F9BgenerateRaw"
+    label: "\u5F53\u524D\u8FDE\u63A5\u539F\u59CB\u8C03\u7528",
+    status: typeof context?.generateRaw === "function" ? "ok" : "warn",
+    detail: typeof context?.generateRaw === "function" ? "generateRaw\u53EF\u7528" : "\u5F53\u524D\u8FDE\u63A5\u6A21\u5F0F\u4E0D\u53EF\u7528\uFF1B\u4ECD\u53EF\u4F7F\u7528\u72EC\u7ACBAPI"
+  });
+  checks.push({
+    id: "connectionService",
+    label: "Connection Profile\u9694\u79BB\u8C03\u7528",
+    status: typeof context?.ConnectionManagerRequestService?.sendRequest === "function" ? "ok" : "warn",
+    detail: typeof context?.ConnectionManagerRequestService?.sendRequest === "function" ? "ConnectionManagerRequestService\u53EF\u7528\uFF0C\u4E0D\u9700\u8981\u5207\u6362\u5168\u5C40\u8FDE\u63A5" : "\u4E0D\u53EF\u7528\uFF1B\u8BF7\u4F7F\u7528\u955C\u6E0A\u72EC\u7ACBAPI\u6216\u5F53\u524D\u8FDE\u63A5"
   });
   checks.push({
     id: "settingsPanel",
@@ -2733,20 +3011,33 @@ async function runDiagnostics() {
     detail: globalThis.SillyTavern?.libs?.localforage ? "\u4F7F\u7528localforage" : "\u4F7F\u7528localStorage\u964D\u7EA7"
   });
   const settings = context ? getSettings() : null;
+  if (settings) {
+    const independentCount = settings.independentApiProfiles.length;
+    const readyCount = settings.independentApiProfiles.filter(
+      (profile) => Boolean(profile.apiUrl && profile.model && getSessionApiKey(profile.id))
+    ).length;
+    checks.push({
+      id: "independentApi",
+      label: "\u955C\u6E0A\u72EC\u7ACBAPI",
+      status: independentCount === 0 ? "warn" : readyCount === independentCount ? "ok" : "warn",
+      detail: independentCount === 0 ? "\u5C1A\u672A\u521B\u5EFA\uFF1B\u4EFB\u52A1\u53EF\u7EE7\u7EED\u4F7F\u7528\u5F53\u524D\u8FDE\u63A5\u6216ST Profile" : `${readyCount}/${independentCount} \u4E2A\u914D\u7F6E\u5DF2\u5177\u5907\u5730\u5740\u3001\u6A21\u578B\u548C\u672C\u6B21\u4F1A\u8BDD\u5BC6\u94A5`
+    });
+  }
   checks.push({
     id: "audit",
     label: "\u89C4\u5219\u5BA1\u6838\u914D\u7F6E",
     status: settings?.auditEnabled && !settings.auditPrompt.trim() ? "error" : "ok",
     detail: settings?.auditEnabled ? settings.auditPrompt.trim() ? "\u5DF2\u542F\u7528\u5E76\u586B\u5199\u89C4\u5219" : "\u5DF2\u542F\u7528\u4F46\u89C4\u5219\u4E3A\u7A7A" : "\u672A\u542F\u7528"
   });
+  const revisionConnection = settings?.connections.revision;
   const revisionProfileMissing = Boolean(
-    settings?.auditEnabled && settings.auditFailAction === "revise" && settings.connections.revision.mode === "profile" && !settings.connections.revision.profile.trim()
+    settings?.auditEnabled && settings.auditFailAction === "revise" && (revisionConnection?.mode === "profile" && !revisionConnection.profileId.trim() || revisionConnection?.mode === "independent" && !revisionConnection.independentProfileId.trim())
   );
   checks.push({
     id: "revision",
     label: "\u5B9A\u5411\u4FEE\u6B63\u914D\u7F6E",
     status: revisionProfileMissing ? "error" : "ok",
-    detail: settings?.auditFailAction === "revise" ? revisionProfileMissing ? "\u4FEE\u6B63\u6A21\u578B\u9009\u62E9\u4E86\u8FDE\u63A5\u914D\u7F6E\uFF0C\u4F46\u914D\u7F6E\u540D\u79F0\u4E3A\u7A7A" : `\u5DF2\u542F\u7528\uFF0C\u6700\u591A${settings.maxRevisionAttempts}\u6B21\uFF0C\u5931\u8D25\u540E${settings.revisionFallbackAction}` : "\u672A\u542F\u7528\u81EA\u52A8\u4FEE\u6B63"
+    detail: settings?.auditFailAction === "revise" ? revisionProfileMissing ? "\u4FEE\u6B63\u6A21\u578B\u5DF2\u9009\u62E9\u72EC\u7ACB\u8FDE\u63A5\u65B9\u5F0F\uFF0C\u4F46\u5C1A\u672A\u9009\u62E9\u6709\u6548\u914D\u7F6E" : `\u5DF2\u542F\u7528\uFF0C\u6700\u591A${settings.maxRevisionAttempts}\u6B21\uFF0C\u5931\u8D25\u540E${settings.revisionFallbackAction}` : "\u672A\u542F\u7528\u81EA\u52A8\u4FEE\u6B63"
   });
   if (context) {
     const state2 = await getChatState(currentChatKey());
@@ -3132,36 +3423,79 @@ async function syncHtml() {
 }
 function connectionProfiles() {
   try {
-    const profiles = getContext().extensionSettings?.connectionManager?.profiles;
-    if (!Array.isArray(profiles)) return [];
-    return profiles.map((profile) => safeText(profile?.name, 160).trim()).filter(Boolean);
+    return listSupportedConnectionProfiles();
   } catch {
     return [];
   }
 }
+function independentProfilesOptions(selectedId) {
+  const profiles = listIndependentApiProfiles();
+  const options = profiles.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === selectedId ? "selected" : ""}>${escapeHtml(profile.name)}${profile.model ? ` \xB7 ${escapeHtml(profile.model)}` : ""}</option>`).join("");
+  const missing = selectedId && !profiles.some((profile) => profile.id === selectedId) ? `<option value="${escapeHtml(selectedId)}" selected>\u5DF2\u5220\u9664\u7684\u72EC\u7ACBAPI</option>` : "";
+  return `<option value="">\u8BF7\u9009\u62E9\u72EC\u7ACBAPI</option>${missing}${options}`;
+}
 function connectionBlock(task, label) {
   const value = getSettings().connections[task];
   const profiles = connectionProfiles();
-  const options = profiles.map((name) => `<option value="${escapeHtml(name)}" ${name === value.profile ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
-  const missing = value.profile && !profiles.includes(value.profile) ? `<option value="${escapeHtml(value.profile)}" selected>${escapeHtml(value.profile)}\uFF08\u672A\u627E\u5230\uFF09</option>` : "";
+  const profileOptions = profiles.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === value.profileId ? "selected" : ""}>${escapeHtml(profile.name)}${profile.model ? ` \xB7 ${escapeHtml(profile.model)}` : ""}</option>`).join("");
+  const missingProfile = value.profileId && !profiles.some((profile) => profile.id === value.profileId) ? `<option value="${escapeHtml(value.profileId)}" selected>\u5DF2\u5220\u9664\u6216\u4E0D\u53D7\u652F\u6301\u7684\u914D\u7F6E</option>` : "";
   return `<div class="ma11-connection-row" data-ma11-connection="${task}">
     <b>${label}</b>
-    <select data-ma11-connection-mode="${task}"><option value="current" ${value.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option><option value="profile" ${value.mode === "profile" ? "selected" : ""}>Connection Profile</option></select>
-    <select data-ma11-connection-profile="${task}" ${value.mode === "profile" ? "" : "disabled"}><option value="">\u8BF7\u9009\u62E9\u8FDE\u63A5\u914D\u7F6E</option>${missing}${options}</select>
+    <select data-ma11-connection-mode="${task}">
+      <option value="current" ${value.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option>
+      <option value="profile" ${value.mode === "profile" ? "selected" : ""}>ST\u539F\u751F Profile\uFF08\u9694\u79BB\u8BF7\u6C42\uFF09</option>
+      <option value="independent" ${value.mode === "independent" ? "selected" : ""}>\u955C\u6E0A\u72EC\u7ACBAPI</option>
+    </select>
+    <select data-ma11-connection-profile-id="${task}" ${value.mode === "profile" ? "" : "hidden disabled"}><option value="">\u8BF7\u9009\u62E9Connection Profile</option>${missingProfile}${profileOptions}</select>
+    <select data-ma11-connection-independent="${task}" ${value.mode === "independent" ? "" : "hidden disabled"}>${independentProfilesOptions(value.independentProfileId)}</select>
     <button data-ma11-test="${task}">\u6D4B\u8BD5</button>
   </div>`;
+}
+function independentApiProfilesHtml() {
+  const profiles = listIndependentApiProfiles();
+  const cards = profiles.map((profile) => {
+    const hasKey = Boolean(getSessionApiKey(profile.id));
+    const listId = `ma11-models-${profile.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+    const modelOptions = profile.cachedModels.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
+    return `<article class="ma11-api-profile" data-ma11-api-profile="${escapeHtml(profile.id)}">
+      <header><b>${escapeHtml(profile.name)}</b><span class="ma11-badge ${hasKey ? "success" : "warning"}">${hasKey ? "\u5BC6\u94A5\u5DF2\u8F7D\u5165\u672C\u6807\u7B7E\u9875" : "\u672A\u586B\u5199\u4F1A\u8BDD\u5BC6\u94A5"}</span></header>
+      <div class="ma11-api-profile-grid">
+        <label>\u914D\u7F6E\u540D\u79F0<input data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="name" value="${escapeHtml(profile.name)}" maxlength="120" /></label>
+        <label>\u63A5\u53E3\u7C7B\u578B<select disabled><option>OpenAI\u517C\u5BB9\uFF08ST\u540E\u7AEF\u4EE3\u7406\uFF09</option></select></label>
+        <label class="ma11-api-wide">API\u5730\u5740<input data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="apiUrl" value="${escapeHtml(profile.apiUrl)}" placeholder="https://api.example.com/v1" /></label>
+        <label class="ma11-api-wide">API\u5BC6\u94A5\uFF08\u4EC5\u5F53\u524D\u6807\u7B7E\u9875\uFF09<input type="password" autocomplete="off" data-ma11-api-key="${escapeHtml(profile.id)}" value="" placeholder="${hasKey ? "\u5DF2\u4FDD\u5B58\u4E8E\u5F53\u524D\u6807\u7B7E\u9875\uFF1B\u7559\u7A7A\u4E0D\u53D8" : "\u8F93\u5165\u540E\u4EC5\u4FDD\u5B58\u5728 sessionStorage"}" /></label>
+        <label>\u6A21\u578B<input list="${listId}" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="model" value="${escapeHtml(profile.model)}" placeholder="\u6A21\u578B\u540D\u79F0" /><datalist id="${listId}">${modelOptions}</datalist></label>
+        <label>\u6700\u5927\u8F93\u51FA<input type="number" min="64" max="131072" step="64" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="maxTokens" value="${profile.maxTokens}" /></label>
+        <label>\u6E29\u5EA6<input type="number" min="0" max="2" step="0.05" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="temperature" value="${profile.temperature}" /></label>
+        <label>Top P<input type="number" min="0" max="1" step="0.05" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="topP" value="${profile.topP}" /></label>
+      </div>
+      <footer class="ma11-actions">
+        <button data-ma11-api-models="${escapeHtml(profile.id)}">\u8BFB\u53D6\u6A21\u578B</button>
+        <button data-ma11-api-test="${escapeHtml(profile.id)}">\u6D4B\u8BD5\u914D\u7F6E</button>
+        <button class="danger" data-ma11-api-delete="${escapeHtml(profile.id)}">\u5220\u9664</button>
+      </footer>
+    </article>`;
+  }).join("");
+  return `<section class="ma11-card ma11-form-card">
+    <header><b>\u955C\u6E0A\u72EC\u7ACBAPI\u914D\u7F6E</b><span>\u53C2\u8003\u6210\u719F\u63D2\u4EF6\u7684\u72EC\u7ACB\u69FD\u4F4D\uFF1A\u76F4\u63A5\u7ECFSillyTavern\u540E\u7AEF\u4EE3\u7406\u8BF7\u6C42\uFF0C\u4E0D\u5207\u6362\u5F53\u524D\u804A\u5929\u8FDE\u63A5\u3002</span></header>
+    <p class="ma11-help">API\u5730\u5740\u3001\u6A21\u578B\u548C\u53C2\u6570\u4FDD\u5B58\u5728\u955C\u6E0A\u8BBE\u7F6E\u4E2D\uFF1BAPI\u5BC6\u94A5\u9ED8\u8BA4\u53EA\u4FDD\u5B58\u5728\u5F53\u524D\u6D4F\u89C8\u5668\u6807\u7B7E\u9875\uFF0C\u5173\u95ED\u5F53\u524D\u6807\u7B7E\u9875\u540E\u9700\u8981\u91CD\u65B0\u586B\u5199\uFF0C\u907F\u514D\u660E\u6587\u957F\u671F\u5199\u5165\u6269\u5C55\u8BBE\u7F6E\u3002</p>
+    <div class="ma11-api-profile-list">${cards || '<p class="ma11-empty">\u5C1A\u672A\u521B\u5EFA\u72EC\u7ACBAPI\u914D\u7F6E\u3002</p>'}</div>
+    <div class="ma11-actions"><button data-ma11-action="add-api-profile">\uFF0B \u65B0\u5EFA\u72EC\u7ACBAPI\u914D\u7F6E</button></div>
+  </section>`;
 }
 function settingsHtml() {
   const settings = getSettings();
   return `
     <section class="ma11-card ma11-form-card">
-      <header><b>\u6A21\u578B\u8FDE\u63A5</b><span>\u4ECE\u9152\u9986\u5DF2\u4FDD\u5B58\u7684 Connection Profile \u4E2D\u9009\u62E9\uFF1B\u6BCF\u6B21\u4EFB\u52A1\u5B8C\u6210\u540E\u81EA\u52A8\u6062\u590D\u539F\u8FDE\u63A5</span></header>
+      <header><b>\u4EFB\u52A1\u6A21\u578B\u5206\u914D</b><span>\u4E09\u79CD\u65B9\u5F0F\u5747\u4E0D\u4F1A\u518D\u901A\u8FC7DOM\u4E34\u65F6\u5207\u6362\u9152\u9986\u5168\u5C40\u8FDE\u63A5\u3002</span></header>
       ${connectionBlock("audit", "\u89C4\u5219\u5BA1\u6838")}
       ${connectionBlock("revision", "\u5B9A\u5411\u4FEE\u6B63")}
       ${connectionBlock("state", "\u72B6\u6001\u8868")}
       ${connectionBlock("smallSummary", "\u5C0F\u603B\u7ED3")}
       ${connectionBlock("largeSummary", "\u5927\u603B\u7ED3")}
+      <p class="ma11-help">ST\u539F\u751F Profile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u5E76\u5F3A\u5236\u5173\u95ED\u89D2\u8272\u9884\u8BBE\u4E0E Instruct\uFF1B\u72EC\u7ACBAPI\u76F4\u63A5\u901A\u8FC7\u9152\u9986\u540E\u7AEF\u4EE3\u7406\u53D1\u9001\u3002\u8FDE\u63A5\u9519\u8BEF\u4E0EJSON\u7ED3\u6784\u9519\u8BEF\u4F1A\u5206\u522B\u62A5\u544A\u3002</p>
     </section>
+    ${independentApiProfilesHtml()}
     <section class="ma11-card ma11-form-card">
       <header><b>\u81EA\u52A8\u5316</b></header>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span>\u542F\u7528\u955C\u6E0A</span></label>
@@ -3323,20 +3657,31 @@ function updateSetting(target) {
 }
 function updateConnection(target) {
   const modeTask = target.dataset.ma11ConnectionMode;
-  const profileTask = target.dataset.ma11ConnectionProfile;
+  const profileTask = target.dataset.ma11ConnectionProfileId;
+  const independentTask = target.dataset.ma11ConnectionIndependent;
   const settings = getSettings();
   let shouldRender = false;
   if (modeTask) {
     settings.connections[modeTask].mode = target.value;
     shouldRender = true;
   }
-  if (profileTask)
-    settings.connections[profileTask].profile = safeText(
-      target.value,
-      160
-    ).trim();
+  if (profileTask) {
+    settings.connections[profileTask].profileId = safeText(target.value, 160).trim();
+    const selected = connectionProfiles().find((profile) => profile.id === settings.connections[profileTask].profileId);
+    settings.connections[profileTask].profile = selected?.name || "";
+  }
+  if (independentTask) settings.connections[independentTask].independentProfileId = safeText(target.value, 160).trim();
   saveSettings();
   if (shouldRender) void renderWorkspace();
+}
+function updateIndependentProfileField(target) {
+  const profileId = target.dataset.ma11ApiProfileId;
+  const field = target.dataset.ma11ApiProfileField;
+  if (!profileId || !field) return;
+  const numericFields = /* @__PURE__ */ new Set(["maxTokens", "temperature", "topP"]);
+  updateIndependentApiProfile(profileId, {
+    [field]: numericFields.has(field) ? Number(target.value) : target.value
+  });
 }
 function bindWorkspace(workspace) {
   workspace.addEventListener("click", async (event) => {
@@ -3382,6 +3727,46 @@ function bindWorkspace(workspace) {
         const report = await diagnosticReport();
         await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
         toast("success", "\u8BCA\u65AD\u4FE1\u606F\u5DF2\u590D\u5236");
+      }
+      if (action === "add-api-profile") {
+        createIndependentApiProfile();
+        await renderWorkspace();
+      }
+      const apiDeleteId = target.closest("[data-ma11-api-delete]")?.dataset.ma11ApiDelete;
+      if (apiDeleteId) {
+        const profile = getIndependentApiProfile(apiDeleteId);
+        if (confirm(`\u786E\u5B9A\u5220\u9664\u72EC\u7ACBAPI\u201C${profile?.name || "\u672A\u547D\u540D"}\u201D\u5417\uFF1F`)) {
+          deleteIndependentApiProfile(apiDeleteId);
+          await renderWorkspace();
+        }
+      }
+      const apiModelsId = target.closest("[data-ma11-api-models]")?.dataset.ma11ApiModels;
+      if (apiModelsId) {
+        const models = await fetchIndependentModels(apiModelsId, getSettings().requestTimeoutMs);
+        toast("success", `\u8BFB\u53D6\u5230 ${models.length} \u4E2A\u6A21\u578B`);
+        await renderWorkspace();
+      }
+      const apiTestId = target.closest("[data-ma11-api-test]")?.dataset.ma11ApiTest;
+      if (apiTestId) {
+        const profile = getIndependentApiProfile(apiTestId);
+        if (!profile) throw new Error("\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728");
+        const started = performance.now();
+        const raw = await requestIndependentApi(apiTestId, {
+          messages: [
+            { role: "system", content: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001Markdown\u548C\u601D\u8003\u6807\u7B7E\u3002" },
+            { role: "user", content: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}' }
+          ],
+          timeoutMs: getSettings().requestTimeoutMs,
+          maxTokens: 128,
+          temperature: 0
+        });
+        let structured = false;
+        try {
+          const parsed = JSON.parse(raw.trim());
+          structured = parsed?.ok === true && parsed?.source === "mirror-abyss";
+        } catch {
+        }
+        toast(structured ? "success" : "warning", `${profile.name}\u8FDE\u63A5\u6210\u529F\uFF0C${structured ? "\u7ED3\u6784\u8F93\u51FA\u6B63\u5E38" : `\u4F46\u7ED3\u6784\u6D4B\u8BD5\u5931\u8D25\uFF1A${raw.replace(/\s+/g, " ").slice(0, 120)}`}\uFF08${Math.round(performance.now() - started)}ms\uFF09`);
       }
       const graphScope = target.closest("[data-ma11-graph-scope]")?.dataset.ma11GraphScope;
       if (graphScope) {
@@ -3430,8 +3815,9 @@ function bindWorkspace(workspace) {
       if (deleteId) await deleteRowAction(deleteId);
       const testTask = target.closest("[data-ma11-test]")?.dataset.ma11Test;
       if (testTask) {
-        await testConnection(testTask);
-        toast("success", `${testTask}\u8FDE\u63A5\u6B63\u5E38`);
+        const result = await testConnection(testTask);
+        const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1BJSON${result.jsonValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
+        toast(result.instructionFollowed ? "success" : "warning", result.instructionFollowed ? detail : `${detail}\uFF1B\u8FD4\u56DE\uFF1A${result.responsePreview}`);
       }
     } catch (error) {
       toast("error", toErrorMessage(error));
@@ -3440,8 +3826,13 @@ function bindWorkspace(workspace) {
   workspace.addEventListener("change", (event) => {
     const target = event.target;
     if (target.dataset.ma11Setting) updateSetting(target);
-    if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfile)
-      updateConnection(target);
+    if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfileId || target.dataset.ma11ConnectionIndependent) updateConnection(target);
+    if (target.dataset.ma11ApiProfileField) updateIndependentProfileField(target);
+    if (target.dataset.ma11ApiKey) {
+      setSessionApiKey(target.dataset.ma11ApiKey, target.value.trim());
+      target.value = "";
+      void renderWorkspace();
+    }
   });
   workspace.addEventListener("input", (event) => {
     const target = event.target;
@@ -3461,7 +3852,7 @@ function bindWorkspace(workspace) {
     }
     if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "revisionPrompt" || target.dataset.ma11Setting === "lorebookName")
       updateSetting(target);
-    if (target.dataset.ma11ConnectionProfile) updateConnection(target);
+    if (target.dataset.ma11ConnectionProfileId || target.dataset.ma11ConnectionIndependent) updateConnection(target);
   });
   workspace.querySelector("#ma11-row-editor")?.addEventListener("submit", (event) => {
     event.preventDefault();

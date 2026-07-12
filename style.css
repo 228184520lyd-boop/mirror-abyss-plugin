@@ -621,3 +621,42 @@ html.ma11-generation-locked #send_button {
   .ma11-graph-canvas { min-height: 360px; }
   .ma11-graph-canvas svg { min-width: 0; min-height: 0; }
 }
+
+/* alpha.7 isolated API profiles */
+.ma11-connection-row {
+  grid-template-columns: 8rem minmax(12rem, 14rem) minmax(13rem, 1fr) minmax(13rem, 1fr) auto;
+}
+.ma11-connection-row [hidden] { display: none !important; }
+.ma11-api-profile-list { display: grid; gap: 0.9rem; }
+.ma11-api-profile {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid var(--ma11-border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--ma11-panel) 90%, transparent);
+}
+.ma11-api-profile > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.ma11-api-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.ma11-api-profile-grid label { min-width: 0; }
+.ma11-api-profile-grid input,
+.ma11-api-profile-grid select { width: 100%; min-width: 0; }
+.ma11-api-wide { grid-column: 1 / -1; }
+.ma11-actions .danger { border-color: color-mix(in srgb, #d85a68 65%, var(--ma11-border)); }
+
+@media (max-width: 760px) {
+  .ma11-connection-row { grid-template-columns: 1fr; }
+  .ma11-connection-row b { margin-bottom: 0.1rem; }
+  .ma11-api-profile-grid { grid-template-columns: 1fr; }
+  .ma11-api-wide { grid-column: auto; }
+}

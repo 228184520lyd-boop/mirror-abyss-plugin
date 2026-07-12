@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.1.0-alpha.6",
+  "version": "1.1.0-alpha.7",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": true,
   "minimum_client_version": "1.14.0",
