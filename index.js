@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.1.0-alpha.5";
-var PIPELINE_VERSION = "ma-pipeline-4";
+var VERSION = "1.1.0-alpha.6";
+var PIPELINE_VERSION = "ma-pipeline-5";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
@@ -61,7 +61,8 @@ var DEFAULT_SETTINGS = {
   ui: {
     activeTab: "overview",
     activeTable: "focus",
-    graphScope: "relations"
+    graphScope: "relations",
+    graphZoom: 1
   },
   migration: {
     legacyChecked: false
@@ -139,25 +140,130 @@ function withTimeout(promise, ms, label, controller) {
 function safeText(value, max = 1e5) {
   return String(value ?? "").replace(/\u0000/g, "").slice(0, max);
 }
-function parseJsonObject(raw) {
-  const text = safeText(raw).trim();
-  if (!text || text === "{}") throw new Error("\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A");
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = (fenced?.[1] ?? text).trim();
-  try {
-    const parsed = JSON.parse(candidate);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61");
-    return parsed;
-  } catch (error) {
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      const parsed = JSON.parse(candidate.slice(start, end + 1));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61");
-      return parsed;
-    }
-    throw error instanceof Error ? error : new Error("\u65E0\u6CD5\u89E3\u6790\u6A21\u578B\u8FD4\u56DE\u7684JSON");
+var JsonObjectParseError = class extends Error {
+  preview;
+  attempts;
+  constructor(message, raw, attempts = []) {
+    super(message);
+    this.name = "JsonObjectParseError";
+    this.preview = jsonPreview(raw);
+    this.attempts = attempts;
   }
+};
+function jsonPreview(raw, max = 360) {
+  return safeText(raw, 1e5).replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+function stripReasoningAndBom(text) {
+  return text.replace(/^\uFEFF/, "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+function fencedCandidates(text) {
+  const output = [];
+  const regex = /```(?:json|javascript|js|text)?\s*([\s\S]*?)```/gi;
+  let match;
+  while (match = regex.exec(text)) {
+    if (match[1]?.trim()) output.push(match[1].trim());
+  }
+  return output;
+}
+function balancedObjectCandidates(text) {
+  const output = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+    if (char === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        output.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return output;
+}
+function normalizeJsonPunctuationOutsideStrings(text) {
+  let output = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      output += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      output += char;
+      continue;
+    }
+    const replacement = {
+      "\uFF5B": "{",
+      "\uFF5D": "}",
+      "\uFF3B": "[",
+      "\uFF3D": "]",
+      "\uFF1A": ":",
+      "\uFF0C": ","
+    };
+    output += replacement[char] ?? char;
+  }
+  return output;
+}
+function commonJsonRepairs(text) {
+  const base = normalizeJsonPunctuationOutsideStrings(text).replace(/^\s*(?:json|JSON)\s*[:：]?\s*/, "").trim();
+  const withoutTrailingCommas = base.replace(/,\s*([}\]])/g, "$1");
+  const withoutSemicolon = withoutTrailingCommas.replace(/;\s*$/, "").trim();
+  return [.../* @__PURE__ */ new Set([base, withoutTrailingCommas, withoutSemicolon])].filter(Boolean);
+}
+function parseObjectCandidate(candidate) {
+  const parsed = JSON.parse(candidate);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("JSON\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61");
+  }
+  return parsed;
+}
+function parseJsonObject(raw) {
+  const original = safeText(raw).trim();
+  if (!original || original === "{}") throw new JsonObjectParseError("\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A", raw);
+  const clean = stripReasoningAndBom(original);
+  const fenced = fencedCandidates(clean);
+  const balanced = balancedObjectCandidates(clean).reverse();
+  const candidates = [...fenced, clean, ...balanced];
+  const uniqueCandidates = [...new Set(candidates.map((item) => item.trim()).filter(Boolean))];
+  const attempts = [];
+  for (const candidate of uniqueCandidates) {
+    for (const repaired of commonJsonRepairs(candidate)) {
+      try {
+        return parseObjectCandidate(repaired);
+      } catch (error) {
+        attempts.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+  throw new JsonObjectParseError("\u6A21\u578B\u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684JSON\u5BF9\u8C61", raw, attempts.slice(-6));
 }
 function sanitizeBookName(value) {
   return String(value ?? "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
@@ -529,8 +635,21 @@ async function generationInterceptor(_chat, _contextSize, abort, _type) {
 
 // src/llm/generator.ts
 var profileMutex = Promise.resolve();
+function generationText(result) {
+  if (typeof result === "string") return result.trim();
+  for (const key of ["content", "text", "output", "result", "value", "pipe"]) {
+    if (typeof result?.[key] === "string") return result[key].trim();
+  }
+  if (typeof result?.message?.content === "string") return result.message.content.trim();
+  if (typeof result?.choices?.[0]?.message?.content === "string") return result.choices[0].message.content.trim();
+  if (typeof result?.choices?.[0]?.text === "string") return result.choices[0].text.trim();
+  return safeText(result, 2e5).trim();
+}
 function slashResultText(result) {
   if (typeof result === "string") return result.trim();
+  if (result?.isError || result?.errorMessage) {
+    throw new Error(safeText(result.errorMessage || "STScript\u6267\u884C\u5931\u8D25", 1e3));
+  }
   for (const key of ["pipe", "output", "result", "text", "value"]) {
     if (typeof result?.[key] === "string") return result[key].trim();
   }
@@ -539,50 +658,152 @@ function slashResultText(result) {
 function cleanProfileName(value) {
   return safeText(value, 160).replace(/["|\r\n]/g, "").trim();
 }
+function profileStore() {
+  const context = getContext();
+  const store = context.extensionSettings?.connectionManager;
+  if (!store || !Array.isArray(store.profiles)) return null;
+  return store;
+}
+function findProfileByName(name) {
+  const store = profileStore();
+  if (!store) return null;
+  return store.profiles.find((profile) => cleanProfileName(profile?.name) === name) ?? null;
+}
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+async function importSlashModule() {
+  try {
+    const moduleUrl = "/scripts/slash-commands.js";
+    return await import(
+      /* @vite-ignore */
+      moduleUrl
+    );
+  } catch (error) {
+    throw new Error(`\u65E0\u6CD5\u52A0\u8F7D\u8FDE\u63A5\u914D\u7F6E\u5207\u6362\u5668\uFF1A${toErrorMessage(error)}`);
+  }
+}
+async function executeSlash(command) {
+  const slashModule = await importSlashModule();
+  if (typeof slashModule?.executeSlashCommandsWithOptions === "function") {
+    const result = await slashModule.executeSlashCommandsWithOptions(command, {
+      handleParserErrors: true,
+      handleExecutionErrors: true,
+      source: "mirror-abyss"
+    });
+    return slashResultText(result);
+  }
+  if (typeof slashModule?.executeSlashCommands === "function") {
+    return slashResultText(await slashModule.executeSlashCommands(command));
+  }
+  throw new Error("\u5F53\u524DSillyTavern\u4E0D\u652F\u6301\u8FDE\u63A5\u914D\u7F6E\u547D\u4EE4");
+}
+async function applyProfileViaDom(profileId) {
+  const context = getContext();
+  const select = document.querySelector("#connection_profiles");
+  if (!select) return false;
+  const value = profileId ?? "";
+  if (!Array.from(select.options).some((option) => option.value === value)) return false;
+  const store = profileStore();
+  if (select.value === value && (store?.selectedProfile ?? "") === value) return true;
+  const loadedEvent = context.event_types?.CONNECTION_PROFILE_LOADED;
+  const loaded = new Promise((resolve) => {
+    if (!loadedEvent || typeof context.eventSource?.once !== "function") {
+      window.setTimeout(resolve, 350);
+      return;
+    }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    context.eventSource.once(loadedEvent, finish);
+    window.setTimeout(finish, 1e4);
+  });
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await loaded;
+  await wait(120);
+  const selected = profileStore()?.selectedProfile ?? null;
+  if ((selected ?? "") !== value) throw new Error("\u8FDE\u63A5\u914D\u7F6E\u754C\u9762\u672A\u80FD\u5B8C\u6210\u5207\u6362");
+  return true;
+}
+async function applyProfile(profileId, profileName = "") {
+  if (await applyProfileViaDom(profileId)) return;
+  if (profileId) {
+    const name = cleanProfileName(profileName);
+    const switched = await executeSlash(`/profile await=true timeout=8000 "${name}"`);
+    if (!switched) throw new Error(`\u627E\u4E0D\u5230\u8FDE\u63A5\u914D\u7F6E\u201C${name}\u201D`);
+    const current2 = cleanProfileName(await executeSlash("/profile"));
+    if (current2 !== name) throw new Error(`\u8FDE\u63A5\u914D\u7F6E\u5207\u6362\u5931\u8D25\uFF1A\u671F\u671B\u201C${name}\u201D\uFF0C\u5B9E\u9645\u201C${current2 || "\u65E0"}\u201D`);
+    return;
+  }
+  await executeSlash("/profile await=true timeout=8000 <None>");
+  const current = cleanProfileName(await executeSlash("/profile"));
+  if (current) throw new Error(`\u65E0\u6CD5\u6062\u590D\u5230\u539F\u59CB\u201C\u65E0\u8FDE\u63A5\u914D\u7F6E\u201D\u72B6\u6001\uFF0C\u5F53\u524D\u4ECD\u4E3A\u201C${current}\u201D`);
+}
 async function generateCurrent(options) {
   const context = getContext();
   if (typeof context.generateRaw !== "function") throw new Error("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BgenerateRaw");
   const settings = getSettings();
   const result = await withTimeout(
-    withInternalGeneration(() => Promise.resolve(context.generateRaw({ systemPrompt: options.systemPrompt, prompt: options.prompt, jsonSchema: options.jsonSchema }))),
+    withInternalGeneration(() => Promise.resolve(context.generateRaw({
+      systemPrompt: options.systemPrompt,
+      prompt: options.prompt,
+      jsonSchema: options.jsonSchema
+    }))),
     Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
     `${options.task}\u6A21\u578B\u8C03\u7528`
   );
-  return safeText(result, 2e5);
+  const text = generationText(result);
+  if (!text) throw new Error(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`);
+  return text;
 }
 async function generateWithProfile(options, profileName) {
   const profile = cleanProfileName(profileName);
   if (!profile) throw new Error("\u8FDE\u63A5\u914D\u7F6E\u540D\u79F0\u4E3A\u7A7A");
   const run = async () => {
-    let slashModule;
+    const store = profileStore();
+    if (!store) throw new Error("\u672A\u68C0\u6D4B\u5230SillyTavern Connection Manager");
+    const target = findProfileByName(profile);
+    if (!target) {
+      const available = store.profiles.map((item) => cleanProfileName(item?.name)).filter(Boolean).join("\u3001");
+      throw new Error(`\u627E\u4E0D\u5230\u8FDE\u63A5\u914D\u7F6E\u201C${profile}\u201D${available ? `\u3002\u73B0\u6709\uFF1A${available}` : ""}`);
+    }
+    const originalId = store.selectedProfile ?? null;
+    const original = store.profiles.find((item) => item?.id === originalId) ?? null;
+    await applyProfile(target.id, target.name);
+    let output;
+    let generationError;
     try {
-      const moduleUrl = "/scripts/slash-commands.js";
-      slashModule = await import(
-        /* @vite-ignore */
-        moduleUrl
-      );
+      output = await generateCurrent(options);
     } catch (error) {
-      throw new Error(`\u65E0\u6CD5\u52A0\u8F7D\u8FDE\u63A5\u914D\u7F6E\u5207\u6362\u5668\uFF1A${toErrorMessage(error)}`);
+      generationError = error;
     }
-    const execute = slashModule?.executeSlashCommands;
-    if (typeof execute !== "function") throw new Error("\u5F53\u524DSillyTavern\u4E0D\u652F\u6301\u8FDE\u63A5\u914D\u7F6E\u547D\u4EE4");
-    const original = slashResultText(await execute("/profile"));
-    await execute(`/profile "${profile}"`);
+    let restoreError;
     try {
-      return await generateCurrent(options);
-    } finally {
-      if (original && original !== profile) {
-        try {
-          await execute(`/profile "${cleanProfileName(original)}"`);
-        } catch (error) {
-          console.warn("[MirrorAbyss] failed to restore profile", error);
-        }
-      }
+      await applyProfile(originalId, original?.name ?? "");
+    } catch (error) {
+      restoreError = error;
+      console.error("[MirrorAbyss] failed to restore connection profile", error);
     }
+    if (generationError) {
+      if (restoreError) {
+        throw new Error(`\u6A21\u578B\u8C03\u7528\u5931\u8D25\uFF1A${toErrorMessage(generationError)}\uFF1B\u540C\u65F6\u6062\u590D\u539F\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(restoreError)}`);
+      }
+      throw generationError;
+    }
+    if (restoreError) throw new Error(`\u6A21\u578B\u8C03\u7528\u5B8C\u6210\uFF0C\u4F46\u6062\u590D\u539F\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(restoreError)}`);
+    return output;
   };
   const chained = profileMutex.then(run, run);
   profileMutex = chained.catch(() => void 0);
   return chained;
+}
+function describeTaskConnection(task) {
+  const connection = getSettings().connections[task];
+  return connection?.mode === "profile" ? `Connection Profile\uFF1A${cleanProfileName(connection.profile) || "\u672A\u586B\u5199"}` : "\u5F53\u524D\u804A\u5929\u8FDE\u63A5";
 }
 async function generateTask(options) {
   const connection = getSettings().connections[options.task];
@@ -592,11 +813,68 @@ async function generateTask(options) {
 async function testConnection(task) {
   const raw = await generateTask({
     task,
-    systemPrompt: "\u4F60\u662F\u8FDE\u63A5\u6D4B\u8BD5\u5668\u3002",
+    systemPrompt: "\u4F60\u662F\u8FDE\u63A5\u6D4B\u8BD5\u5668\u3002\u4E0D\u8981\u89E3\u91CA\uFF0C\u53EA\u56DE\u590D MA_OK\u3002",
     prompt: "\u53EA\u56DE\u590D MA_OK"
   });
-  if (!/MA_OK/i.test(raw)) throw new Error(`\u8FDE\u63A5\u53EF\u7528\uFF0C\u4F46\u8FD4\u56DE\u5185\u5BB9\u5F02\u5E38\uFF1A${raw.slice(0, 120)}`);
+  if (!/\bMA_OK\b/i.test(raw)) {
+    throw new Error(`\u8FDE\u63A5\u5DF2\u54CD\u5E94\uFF0C\u4F46\u6CA1\u6709\u6309\u6D4B\u8BD5\u683C\u5F0F\u8FD4\u56DE\u3002\u8FD4\u56DE\uFF1A${raw.replace(/\s+/g, " ").slice(0, 160)}`);
+  }
   return "MA_OK";
+}
+
+// src/llm/structured.ts
+function repairSystemPrompt(structureDescription) {
+  return `\u4F60\u662FJSON\u683C\u5F0F\u4FEE\u590D\u5668\u3002\u4F60\u4E0D\u6267\u884C\u539F\u4EFB\u52A1\u3001\u4E0D\u8865\u5145\u65B0\u4E8B\u5B9E\u3001\u4E0D\u89E3\u91CA\u5185\u5BB9\uFF0C\u53EA\u628A\u7ED9\u5B9A\u6A21\u578B\u8F93\u51FA\u8F6C\u6362\u6210\u4E00\u4E2A\u5408\u6CD5JSON\u5BF9\u8C61\u3002
+
+\u8981\u6C42\uFF1A
+1. \u4FDD\u7559\u539F\u8F93\u51FA\u4E2D\u5DF2\u7ECF\u8868\u8FBE\u7684\u8BED\u4E49\uFF0C\u4E0D\u81EA\u884C\u91CD\u505A\u5BA1\u6838\u3001\u603B\u7ED3\u6216\u72B6\u6001\u63D0\u53D6\u3002
+2. \u5220\u9664Markdown\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u548C\u601D\u8003\u6807\u7B7E\u3002
+3. \u4FEE\u590D\u7F3A\u5931\u5F15\u53F7\u3001\u5C3E\u968F\u9017\u53F7\u3001\u5168\u89D2\u6807\u70B9\u7B49\u683C\u5F0F\u95EE\u9898\u3002
+4. \u8F93\u51FA\u5FC5\u987B\u80FD\u88ABJSON.parse\u76F4\u63A5\u89E3\u6790\uFF0C\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61\u3002
+5. \u53EA\u8F93\u51FAJSON\u5BF9\u8C61\uFF0C\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u989D\u5916\u6587\u5B57\u3002
+
+\u3010\u76EE\u6807\u7ED3\u6784\u3011
+${structureDescription}`;
+}
+function repairUserPrompt(raw) {
+  return `\u3010\u9700\u8981\u4FEE\u590D\u7684\u539F\u59CB\u8F93\u51FA\u3011
+${safeText(raw, 8e4)}`;
+}
+var TASK_LABELS = {
+  audit: "\u89C4\u5219\u5BA1\u6838",
+  revision: "\u5B9A\u5411\u4FEE\u6B63",
+  state: "\u72B6\u6001\u8868",
+  smallSummary: "\u5C0F\u603B\u7ED3",
+  largeSummary: "\u5927\u603B\u7ED3"
+};
+function structuredError(task, error, raw) {
+  const connection = describeTaskConnection(task);
+  const preview = error instanceof JsonObjectParseError ? error.preview : jsonPreview(raw);
+  const detail = toErrorMessage(error);
+  return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
+}
+async function repairStructuredOutput(task, raw, structureDescription, jsonSchema) {
+  const repaired = await generateTask({
+    task,
+    systemPrompt: repairSystemPrompt(structureDescription),
+    prompt: repairUserPrompt(raw),
+    jsonSchema
+  });
+  return parseJsonObject(repaired);
+}
+async function generateStructuredTask(options) {
+  const raw = await generateTask(options);
+  try {
+    return parseJsonObject(raw);
+  } catch (firstError) {
+    const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
+    if (!allowRepair) throw structuredError(options.task, firstError, raw);
+    try {
+      return await repairStructuredOutput(options.task, raw, options.structureDescription, options.jsonSchema);
+    } catch (repairError) {
+      throw structuredError(options.task, repairError, raw);
+    }
+  }
 }
 
 // src/prompts/audit.ts
@@ -849,14 +1127,20 @@ async function auditText(playerRules, playerText, assistantText) {
   try {
     return parseAuditResult(raw);
   } catch (firstError) {
-    if (!getSettings().repairInvalidJsonOnce) throw firstError;
-    const repaired = await generateTask({
-      ...request,
-      systemPrompt: `${auditSystemPrompt()}
-
-\u4E0A\u4E00\u6B21\u8F93\u51FA\u672A\u80FD\u89E3\u6790\u3002\u518D\u6B21\u6267\u884C\u5BA1\u6838\uFF0C\u5E76\u4E25\u683C\u53EA\u8F93\u51FA\u8981\u6C42\u7684JSON\u5BF9\u8C61\u3002`
-    });
-    return parseAuditResult(repaired);
+    if (!getSettings().repairInvalidJsonOnce) {
+      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(firstError)}\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
+    }
+    try {
+      const repaired = await repairStructuredOutput(
+        "audit",
+        raw,
+        '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"..."}',
+        auditJsonSchema()
+      );
+      return parseAuditResult(JSON.stringify(repaired));
+    } catch (repairError) {
+      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(repairError)}\uFF1B\u539F\u59CB\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
+    }
   }
 }
 async function applyAuditFailureAction(artifact, action) {
@@ -1889,12 +2173,13 @@ async function generateSmallSummary(artifact, force = false) {
   if (!pending.length) return null;
   const selected = force ? pending : pending.slice(0, threshold);
   const latestSnapshot = selected.at(-1)?.snapshot;
-  const raw = await generateTask({
+  const parsed = await generateStructuredTask({
     task: "smallSummary",
     systemPrompt: smallSummarySystemPrompt(),
-    prompt: smallSummaryPrompt(transcriptFor(selected), latestSnapshot)
+    prompt: smallSummaryPrompt(transcriptFor(selected), latestSnapshot),
+    structureDescription: '{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["..."],"characterActivityUpdates":[{"rowId":"...","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"..."}],"notes":["..."]}}'
   });
-  const summary = normalizeSummary(parseJsonObject(raw), "small", selected.map((item) => item.messageKey));
+  const summary = normalizeSummary(parsed, "small", selected.map((item) => item.messageKey));
   chatState.smallSummaries.push(summary);
   if (artifact.snapshot) artifact.snapshot = applySedimentation(artifact.snapshot, summary);
   await putArtifact(artifact);
@@ -1912,13 +2197,14 @@ async function generateLargeSummary(artifact, force = false) {
   const snapshot = artifact.snapshot;
   if (!snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u7684\u72B6\u6001\u8868");
   const previousLarge = chatState.largeSummaries.at(-1);
-  const raw = await generateTask({
+  const parsed = await generateStructuredTask({
     task: "largeSummary",
     systemPrompt: largeSummarySystemPrompt(),
-    prompt: largeSummaryPrompt(selected, snapshot, previousLarge)
+    prompt: largeSummaryPrompt(selected, snapshot, previousLarge),
+    structureDescription: '{"title":"...","summary":"...","keywords":["..."]}'
   });
   const summary = normalizeSummary(
-    parseJsonObject(raw),
+    parsed,
     "large",
     selected.map((item) => item.id),
     previousLarge?.id
@@ -2018,23 +2304,13 @@ async function runStateExtraction(artifact, force = false) {
   markStage(artifact, "state", "running");
   await putArtifact(artifact);
   try {
-    let raw = await generateTask({
+    const parsed = await generateStructuredTask({
       task: "state",
       systemPrompt: stateSystemPrompt(),
-      prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText)
+      prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText),
+      structureDescription: stateSchemaDescription(),
+      allowRepair: settings.repairInvalidJsonOnce
     });
-    let parsed;
-    try {
-      parsed = parseJsonObject(raw);
-    } catch (firstError) {
-      if (!settings.repairInvalidJsonOnce) throw firstError;
-      raw = await generateTask({
-        task: "state",
-        systemPrompt: stateSystemPrompt(),
-        prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, true)
-      });
-      parsed = parseJsonObject(raw);
-    }
     const normalized = preservePersistentCharacters(previous, restoreManualRows(previous, normalizeSnapshot(parsed, previous)));
     artifact.snapshot = normalized;
     markStage(artifact, "state", "success");
@@ -2504,6 +2780,11 @@ var selectedMessageIndex = null;
 var rendering = false;
 var queueUnsubscribe = null;
 var selectedGraphNodeId = null;
+function clampGraphZoom(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.min(2.5, Math.max(0.5, Math.round(numeric * 20) / 20));
+}
 function root() {
   let element = document.querySelector("#ma11-workspace");
   if (element) return element;
@@ -2751,6 +3032,8 @@ function graphHtml(artifactInfo) {
   const positions = new Map(positioned.map((node) => [node.id, node]));
   const selected = positioned.find((node) => node.id === selectedGraphNodeId) ?? positioned[0];
   if (selected && !selectedGraphNodeId) selectedGraphNodeId = selected.id;
+  const zoom = clampGraphZoom(settings.ui.graphZoom);
+  settings.ui.graphZoom = zoom;
   const edgeSvg = graph.edges.map((edge) => {
     const source = positions.get(edge.source);
     const target = positions.get(edge.target);
@@ -2763,12 +3046,24 @@ function graphHtml(artifactInfo) {
     (node) => `<g class="ma11-graph-node ${node.type} ${graphLifecycleClass(node)} ${selected?.id === node.id ? "selected" : ""}" data-ma11-graph-node="${escapeHtml(node.id)}" transform="translate(${node.x} ${node.y})" tabindex="0" role="button"><circle r="34"></circle><text text-anchor="middle" y="4">${escapeHtml(node.label.length > 10 ? `${node.label.slice(0, 9)}\u2026` : node.label)}</text><title>${escapeHtml(`${node.label}
 ${node.detail}`)}</title></g>`
   ).join("");
+  const graphWidth = Math.round(1e3 * zoom);
+  const graphHeight = Math.round(680 * zoom);
   return `
     <section class="ma11-toolbar ma11-graph-toolbar">
       <div><h2>\u5173\u7CFB\u56FE\u8C31</h2><p>\u7531\u5F53\u524D\u72B6\u6001\u8868\u751F\u6210\uFF0C\u53EA\u8BFB\u5C55\u793A\uFF0C\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002</p></div>
-      <div class="ma11-segmented"><button class="${settings.ui.graphScope === "relations" ? "active" : ""}" data-ma11-graph-scope="relations">\u4EBA\u7269\u5173\u7CFB</button><button class="${settings.ui.graphScope === "world" ? "active" : ""}" data-ma11-graph-scope="world">\u5168\u5C40\u7F51\u7EDC</button></div>
+      <div class="ma11-graph-toolbar-actions">
+        <div class="ma11-segmented"><button class="${settings.ui.graphScope === "relations" ? "active" : ""}" data-ma11-graph-scope="relations">\u4EBA\u7269\u5173\u7CFB</button><button class="${settings.ui.graphScope === "world" ? "active" : ""}" data-ma11-graph-scope="world">\u5168\u5C40\u7F51\u7EDC</button></div>
+        <div class="ma11-graph-zoom" aria-label="\u56FE\u8C31\u7F29\u653E">
+          <button type="button" data-ma11-graph-zoom="out" title="\u7F29\u5C0F">\u2212</button>
+          <input type="range" min="50" max="250" step="5" value="${Math.round(zoom * 100)}" data-ma11-graph-zoom-range aria-label="\u7F29\u653E\u6BD4\u4F8B" />
+          <button type="button" data-ma11-graph-zoom="in" title="\u653E\u5927">\uFF0B</button>
+          <button type="button" data-ma11-graph-zoom="reset">100%</button>
+          <button type="button" data-ma11-graph-zoom="fit">\u9002\u5E94</button>
+          <output>${Math.round(zoom * 100)}%</output>
+        </div>
+      </div>
     </section>
-    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5173\u7CFB\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
+    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5173\u7CFB\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
 }
 async function summariesHtml() {
   const info = currentArtifact();
@@ -2835,12 +3130,24 @@ async function syncHtml() {
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
     </section>`;
 }
+function connectionProfiles() {
+  try {
+    const profiles = getContext().extensionSettings?.connectionManager?.profiles;
+    if (!Array.isArray(profiles)) return [];
+    return profiles.map((profile) => safeText(profile?.name, 160).trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
 function connectionBlock(task, label) {
   const value = getSettings().connections[task];
+  const profiles = connectionProfiles();
+  const options = profiles.map((name) => `<option value="${escapeHtml(name)}" ${name === value.profile ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
+  const missing = value.profile && !profiles.includes(value.profile) ? `<option value="${escapeHtml(value.profile)}" selected>${escapeHtml(value.profile)}\uFF08\u672A\u627E\u5230\uFF09</option>` : "";
   return `<div class="ma11-connection-row" data-ma11-connection="${task}">
     <b>${label}</b>
     <select data-ma11-connection-mode="${task}"><option value="current" ${value.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option><option value="profile" ${value.mode === "profile" ? "selected" : ""}>Connection Profile</option></select>
-    <input data-ma11-connection-profile="${task}" value="${escapeHtml(value.profile)}" placeholder="\u8FDE\u63A5\u914D\u7F6E\u540D\u79F0" ${value.mode === "profile" ? "" : "disabled"} />
+    <select data-ma11-connection-profile="${task}" ${value.mode === "profile" ? "" : "disabled"}><option value="">\u8BF7\u9009\u62E9\u8FDE\u63A5\u914D\u7F6E</option>${missing}${options}</select>
     <button data-ma11-test="${task}">\u6D4B\u8BD5</button>
   </div>`;
 }
@@ -2848,7 +3155,7 @@ function settingsHtml() {
   const settings = getSettings();
   return `
     <section class="ma11-card ma11-form-card">
-      <header><b>\u6A21\u578B\u8FDE\u63A5</b><span>\u5BC6\u94A5\u7531SillyTavern\u7BA1\u7406\uFF0C\u955C\u6E0A\u4E0D\u4FDD\u5B58API Key</span></header>
+      <header><b>\u6A21\u578B\u8FDE\u63A5</b><span>\u4ECE\u9152\u9986\u5DF2\u4FDD\u5B58\u7684 Connection Profile \u4E2D\u9009\u62E9\uFF1B\u6BCF\u6B21\u4EFB\u52A1\u5B8C\u6210\u540E\u81EA\u52A8\u6062\u590D\u539F\u8FDE\u63A5</span></header>
       ${connectionBlock("audit", "\u89C4\u5219\u5BA1\u6838")}
       ${connectionBlock("revision", "\u5B9A\u5411\u4FEE\u6B63")}
       ${connectionBlock("state", "\u72B6\u6001\u8868")}
@@ -2865,7 +3172,8 @@ function settingsHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
       <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>JSON\u65E0\u6548\u65F6\u5141\u8BB8\u4E00\u6B21\u4FEE\u590D\u8C03\u7528</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>\u7ED3\u6784\u8F93\u51FA\u65E0\u6CD5\u672C\u5730\u89E3\u6790\u65F6\uFF0C\u5141\u8BB8\u4E00\u6B21\u4E13\u7528JSON\u683C\u5F0F\u4FEE\u590D</span></label>
+      <p class="ma11-help">\u683C\u5F0F\u4FEE\u590D\u53EA\u6574\u7406\u539F\u59CB\u8FD4\u56DE\uFF0C\u4E0D\u91CD\u65B0\u6267\u884C\u5BA1\u6838\u3001\u72B6\u6001\u63D0\u53D6\u6216\u603B\u7ED3\uFF1B\u5931\u8D25\u65F6\u4F1A\u663E\u793A\u5B9E\u9645\u4F7F\u7528\u7684\u8FDE\u63A5\u914D\u7F6E\u4E0E\u8FD4\u56DE\u7247\u6BB5\u3002</p>
     </section>`;
 }
 async function diagnosticsHtml() {
@@ -3082,6 +3390,22 @@ function bindWorkspace(workspace) {
         saveSettings();
         await renderWorkspace();
       }
+      const graphZoomAction = target.closest("[data-ma11-graph-zoom]")?.dataset.ma11GraphZoom;
+      if (graphZoomAction) {
+        const settings = getSettings();
+        const current = clampGraphZoom(settings.ui.graphZoom);
+        if (graphZoomAction === "in") settings.ui.graphZoom = clampGraphZoom(current + 0.15);
+        if (graphZoomAction === "out") settings.ui.graphZoom = clampGraphZoom(current - 0.15);
+        if (graphZoomAction === "reset") settings.ui.graphZoom = 1;
+        if (graphZoomAction === "fit") {
+          const canvas = workspace.querySelector(".ma11-graph-canvas");
+          const availableWidth = Math.max(320, canvas?.clientWidth || 760);
+          const availableHeight = Math.max(280, canvas?.clientHeight || 560);
+          settings.ui.graphZoom = clampGraphZoom(Math.min(availableWidth / 1e3, availableHeight / 680));
+        }
+        saveSettings();
+        await renderWorkspace();
+      }
       const graphNodeId = target.closest("[data-ma11-graph-node]")?.dataset.ma11GraphNode;
       if (graphNodeId) {
         selectedGraphNodeId = graphNodeId;
@@ -3121,6 +3445,20 @@ function bindWorkspace(workspace) {
   });
   workspace.addEventListener("input", (event) => {
     const target = event.target;
+    if (target.dataset.ma11GraphZoomRange !== void 0) {
+      getSettings().ui.graphZoom = clampGraphZoom(Number(target.value) / 100);
+      saveSettings();
+      const output = workspace.querySelector(".ma11-graph-zoom output");
+      if (output) output.value = `${Math.round(getSettings().ui.graphZoom * 100)}%`;
+      const svg = workspace.querySelector(".ma11-graph-canvas svg");
+      if (svg) {
+        const zoom = getSettings().ui.graphZoom;
+        svg.setAttribute("width", String(Math.round(1e3 * zoom)));
+        svg.setAttribute("height", String(Math.round(680 * zoom)));
+        svg.setAttribute("style", `width:${Math.round(1e3 * zoom)}px;height:${Math.round(680 * zoom)}px`);
+      }
+      return;
+    }
     if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "revisionPrompt" || target.dataset.ma11Setting === "lorebookName")
       updateSetting(target);
     if (target.dataset.ma11ConnectionProfile) updateConnection(target);
