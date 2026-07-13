@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Mirror Abyss 1.1.0-alpha.10.5.3 does not bundle third-party runtime libraries.
+Mirror Abyss 1.1.0-alpha.10.5.4 does not bundle third-party runtime libraries.
 
 The production bundle is generated from this repository's TypeScript source using esbuild. Development-only dependencies include TypeScript, tsx, esbuild, happy-dom, ESLint, `@eslint/js`, `globals`, and `typescript-eslint`. They are not required by SillyTavern at runtime; their license metadata remains in the npm packages and lockfile.
 

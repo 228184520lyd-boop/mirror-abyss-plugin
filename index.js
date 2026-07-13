@@ -21,8 +21,8 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.5.3";
-    PIPELINE_VERSION = "ma-pipeline-10.5.3";
+    VERSION = "1.1.0-alpha.10.5.4";
+    PIPELINE_VERSION = "ma-pipeline-10.5.4";
     TABLE_KEYS = [
       "focus",
       "spacetime",
@@ -673,6 +673,9 @@ async function migrateChatStorageAliases(chatKey, aliases) {
 }
 async function getChatStateExact(chatKey) {
   return adapterForChat(chatKey).getItem(`${STORAGE_CHAT_PREFIX}${chatKey}`);
+}
+async function getArtifactExact(chatKey, messageKey) {
+  return adapterForChat(chatKey).getItem(`${STORAGE_ARTIFACT_PREFIX}${chatKey}:${messageKey}`);
 }
 async function getChatState(chatKey) {
   let existing = await readStored(STORAGE_CHAT_PREFIX, chatKey);
@@ -5390,21 +5393,104 @@ function latestValidArtifactBefore(startIndex, chatKey) {
 function allLiveRevisionKeys() {
   return new Set(assistantIndexesFrom(0).map((index) => messageIdentity(index)));
 }
-function affectedRevisionKeys(startIndex, state2) {
-  const keys = /* @__PURE__ */ new Set();
-  for (const index of assistantIndexesFrom(startIndex)) {
-    keys.add(messageIdentity(index));
-    const attached = getAttachedArtifact(getMessage(index));
-    if (attached?.messageKey) keys.add(attached.messageKey);
-  }
-  const live = allLiveRevisionKeys();
-  for (const key of state2.processedMessageKeys) if (!live.has(key)) keys.add(key);
-  return keys;
+function currentArtifactCandidate(index, chatKey) {
+  const attached = getAttachedArtifact(getMessage(index));
+  if (attached?.chatKey === chatKey && attached.messageKey === messageIdentity(index) && attached.sourceFingerprint === messageFingerprint(index)) return attached;
+  return null;
 }
-function chunk(values, size) {
-  const output = [];
-  for (let index = 0; index < values.length; index += size) output.push(values.slice(index, index + size));
-  return output;
+async function storedArtifactCandidate(index, chatKey) {
+  const attached = currentArtifactCandidate(index, chatKey);
+  if (attached) return attached;
+  const stored = await getArtifactExact(chatKey, messageIdentity(index));
+  if (stored?.chatKey === chatKey && stored.messageKey === messageIdentity(index) && stored.sourceFingerprint === messageFingerprint(index)) return stored;
+  return null;
+}
+function packageIndexes(packageValue, liveIndexByKey) {
+  const indexes = packageValue.sourceRange.messageKeys.map((key) => liveIndexByKey.get(key)).filter((index) => index !== void 0);
+  return indexes.length === packageValue.sourceRange.messageKeys.length ? indexes : [];
+}
+function packageMatchesCurrentChat(packageValue, indexes, chatKey) {
+  if (packageValue.chatKey !== chatKey || !indexes.length) return false;
+  if (packageValue.sourceRange.messageKeys.length !== indexes.length) return false;
+  if (packageValue.sourceRevisions.length !== indexes.length) return false;
+  return indexes.every((index, ordinal) => packageValue.sourceRange.messageKeys[ordinal] === messageIdentity(index) && packageValue.sourceRevisions[ordinal] === messageFingerprint(index));
+}
+async function inspectHistoryRebuildSources(startIndex, batchSize, state2) {
+  const chatKey = state2.chatKey;
+  const indexes = assistantIndexesFrom(startIndex);
+  const byStart = /* @__PURE__ */ new Map();
+  const artifactKeysToRemove = /* @__PURE__ */ new Set();
+  const liveIndexByKey = new Map(assistantIndexesFrom(0).map((index) => [messageIdentity(index), index]));
+  for (const index of indexes) {
+    const message = getMessage(index);
+    const attached = getAttachedArtifact(message);
+    if (attached?.chatKey === chatKey && (attached.messageKey !== messageIdentity(index) || attached.sourceFingerprint !== messageFingerprint(index))) artifactKeysToRemove.add(attached.messageKey);
+    const artifact = await storedArtifactCandidate(index, chatKey);
+    const packageValue = artifact?.factPackage;
+    if (!artifact || !packageValue || artifact.stages.state?.status !== "success") continue;
+    const sourceIndexes = packageIndexes(packageValue, liveIndexByKey);
+    if (sourceIndexes[0] < startIndex || !packageMatchesCurrentChat(packageValue, sourceIndexes, chatKey)) continue;
+    const existing = byStart.get(sourceIndexes[0]);
+    if (!existing || existing.indexes.length < sourceIndexes.length) {
+      byStart.set(sourceIndexes[0], {
+        indexes: sourceIndexes,
+        artifact,
+        factPackage: packageValue
+      });
+    }
+  }
+  const steps = [];
+  const invalidKeys = /* @__PURE__ */ new Set();
+  const covered = /* @__PURE__ */ new Set();
+  let raw = [];
+  const flushRaw = () => {
+    if (!raw.length) return;
+    for (let offset = 0; offset < raw.length; offset += batchSize) {
+      steps.push({ kind: "raw", indexes: raw.slice(offset, offset + batchSize) });
+    }
+    raw = [];
+  };
+  let cursor = 0;
+  while (cursor < indexes.length) {
+    const index = indexes[cursor];
+    const cached = byStart.get(index);
+    if (cached && cached.indexes.every((value) => indexes.includes(value) && !covered.has(value))) {
+      flushRaw();
+      const previous = steps.at(-1);
+      if (previous?.kind === "cached") {
+        previous.indexes.push(...cached.indexes);
+        previous.factPackages ||= [];
+        previous.factPackages.push(cached.factPackage);
+      } else {
+        steps.push({ kind: "cached", indexes: [...cached.indexes], factPackages: [cached.factPackage] });
+      }
+      for (const value of cached.indexes) covered.add(value);
+      cursor += cached.indexes.length;
+      continue;
+    }
+    raw.push(index);
+    invalidKeys.add(messageIdentity(index));
+    const attached = getAttachedArtifact(getMessage(index));
+    if (attached?.chatKey === chatKey) artifactKeysToRemove.add(attached.messageKey);
+    covered.add(index);
+    cursor += 1;
+  }
+  flushRaw();
+  const live = allLiveRevisionKeys();
+  for (const key of state2.processedMessageKeys) {
+    if (!live.has(key)) invalidKeys.add(key);
+  }
+  const reusedMessages = steps.filter((step) => step.kind === "cached").reduce((sum, step) => sum + step.indexes.length, 0);
+  const rereadMessages = steps.filter((step) => step.kind === "raw").reduce((sum, step) => sum + step.indexes.length, 0);
+  return {
+    steps,
+    invalidKeys,
+    artifactKeysToRemove,
+    reusedMessages,
+    rereadMessages,
+    reusedFactPackages: steps.filter((step) => step.kind === "cached").reduce((sum, step) => sum + (step.factPackages?.length ?? 0), 0),
+    rawBatches: steps.filter((step) => step.kind === "raw").length
+  };
 }
 async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
   const scope = chatScopeManager.current();
@@ -5415,12 +5501,13 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
     lease.assertOwner();
     const state2 = await getChatState(chatKey);
     const normalizedStart = Math.max(0, Math.min(startIndex, getChat().length));
-    const affectedKeys = affectedRevisionKeys(normalizedStart, state2);
+    const normalizedBatchSize = Math.min(20, Math.max(10, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
+    const inspection = await inspectHistoryRebuildSources(normalizedStart, normalizedBatchSize, state2);
+    const affectedKeys = inspection.invalidKeys;
     const invalidation = invalidateSummaryDependencies(state2.smallSummaries, state2.largeSummaries, affectedKeys);
     const previous = latestValidArtifactBefore(normalizedStart, chatKey);
     const affectedIndexes = assistantIndexesFrom(normalizedStart);
     const now = nowIso();
-    const normalizedBatchSize = Math.min(20, Math.max(10, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
     const record = {
       schemaVersion: 2,
       id: makeId("history-rebuild"),
@@ -5430,9 +5517,14 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
       nextIndex: affectedIndexes[0] ?? normalizedStart,
       batchSize: normalizedBatchSize,
       completedBatches: 0,
-      totalBatches: Math.ceil(affectedIndexes.length / normalizedBatchSize),
+      totalBatches: inspection.steps.length,
       processedMessages: 0,
       totalMessages: affectedIndexes.length,
+      reusedMessages: inspection.reusedMessages,
+      rereadMessages: inspection.rereadMessages,
+      reusedFactPackages: inspection.reusedFactPackages,
+      rawBatches: inspection.rawBatches,
+      phase: "planning",
       reason,
       state: "pending",
       ownerId: rebuildOwnerId,
@@ -5444,12 +5536,13 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
       createdAt: now,
       updatedAt: now
     };
-    const artifactsToRemove = /* @__PURE__ */ new Set();
+    const artifactsToRemove = inspection.artifactKeysToRemove;
     for (const index of affectedIndexes) {
       const message = getMessage(index);
       const attached = getAttachedArtifact(message);
-      if (attached?.chatKey === chatKey) artifactsToRemove.add(attached.messageKey);
-      if (message?.extra?.[MODULE_NAME]) delete message.extra[MODULE_NAME];
+      if (attached?.chatKey === chatKey && artifactsToRemove.has(attached.messageKey) && message?.extra?.[MODULE_NAME]) {
+        delete message.extra[MODULE_NAME];
+      }
     }
     state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => !affectedKeys.has(key));
     state2.smallSummaries = invalidation.smallSummaries;
@@ -5470,7 +5563,7 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
       action: "history-rebuild-prepared",
       resourceId: record.id,
       state: record.state,
-      detail: `${reason}; start=${normalizedStart}; messages=${affectedIndexes.length}; batch=${normalizedBatchSize}`
+      detail: `${reason}; start=${normalizedStart}; messages=${affectedIndexes.length}; reuse=${inspection.reusedMessages}; reread=${inspection.rereadMessages}; steps=${inspection.steps.length}`
     });
     return record;
   }), signal);
@@ -5572,19 +5665,31 @@ async function rebuildHistoryFrom(input) {
     await updateHistoryRebuild(record, record);
     const allIndexes = assistantIndexesFrom(record.startIndex);
     const nextIndex = record.nextIndex ?? record.startIndex;
-    const remaining = allIndexes.filter((index) => index >= nextIndex);
+    const stateForPlan = await getChatState(chatKey);
+    const inspection = await inspectHistoryRebuildSources(nextIndex, record.batchSize, stateForPlan);
+    const steps = inspection.steps;
     record.totalMessages = allIndexes.length;
-    record.totalBatches = Math.ceil(allIndexes.length / record.batchSize);
+    record.totalBatches = (record.completedBatches ?? 0) + steps.length;
+    record.reusedMessages = inspection.reusedMessages;
+    record.rereadMessages = inspection.rereadMessages;
+    record.reusedFactPackages = inspection.reusedFactPackages;
+    record.rawBatches = inspection.rawBatches;
+    record.phase = "planning";
     await updateHistoryRebuild(record, {
       totalMessages: record.totalMessages,
-      totalBatches: record.totalBatches
+      totalBatches: record.totalBatches,
+      reusedMessages: record.reusedMessages,
+      rereadMessages: record.rereadMessages,
+      reusedFactPackages: record.reusedFactPackages,
+      rawBatches: record.rawBatches,
+      phase: record.phase
     });
-    input.onProgress?.({ current: record.processedMessages ?? 0, total: record.totalMessages, label: `\u51C6\u5907\u91CD\u5EFA\uFF0C\u5171 ${record.totalBatches} \u6279` });
+    input.onProgress?.({ current: record.processedMessages ?? 0, total: record.totalMessages, label: `\u7F13\u5B58\u4F18\u5148\uFF1A\u590D\u7528 ${inspection.reusedMessages} \u6761\uFF0C\u56DE\u8BFB ${inspection.rereadMessages} \u6761` });
     let rebuilt = record.processedMessages ?? 0;
     let latest = latestValidArtifactBefore(nextIndex, chatKey);
     try {
-      const batches = chunk(remaining, record.batchSize);
-      for (const indexes of batches) {
+      for (const step of steps) {
+        const indexes = step.indexes;
         assertCurrent(chatKey, input.signal);
         lease.assertOwner();
         const live = await currentRecord(record);
@@ -5600,8 +5705,17 @@ async function rebuildHistoryFrom(input) {
         record.failedBatchStart = indexes[0];
         await updateHistoryRebuild(record, { failedBatchStart: indexes[0], error: void 0 });
         let batchArtifact = null;
+        const cached = step.kind === "cached";
+        await updateHistoryRebuild(record, { phase: cached ? "replaying-cache" : "reading-missing" });
+        input.onProgress?.({
+          current: rebuilt,
+          total: record.totalMessages ?? allIndexes.length,
+          label: cached ? `\u590D\u7528\u4E8B\u5B9E\u5305\uFF1A\u6D88\u606F ${indexes[0] + 1}\u2013${indexes.at(-1) + 1}` : `\u4EC5\u56DE\u8BFB\u7F3A\u5931\u6B63\u6587\uFF1A\u6D88\u606F ${indexes[0] + 1}\u2013${indexes.at(-1) + 1}`
+        });
         await runBatchWithRetry(async () => {
-          if (input.processBatch) {
+          if (cached && input.replayBatch && step.factPackages?.length) {
+            batchArtifact = await input.replayBatch(indexes, step.factPackages, { deferLorebookSync: true, holdDerived: true });
+          } else if (input.processBatch) {
             batchArtifact = await input.processBatch(indexes, { deferLorebookSync: true, holdDerived: true });
           } else if (input.processMessage) {
             for (const index of indexes) {
@@ -5612,7 +5726,7 @@ async function rebuildHistoryFrom(input) {
             throw new Error("\u5386\u53F2\u91CD\u5EFA\u6CA1\u6709\u53EF\u7528\u7684\u6279\u5904\u7406\u5668");
           }
         }, async (attempt, error) => {
-          input.onProgress?.({ current: rebuilt, total: record.totalMessages ?? allIndexes.length, label: `\u6279\u6B21 ${indexes[0] + 1}\u2013${indexes.at(-1) + 1} \u91CD\u8BD5`, retries: attempt });
+          input.onProgress?.({ current: rebuilt, total: record.totalMessages ?? allIndexes.length, label: `${cached ? "\u4E8B\u5B9E\u590D\u7528" : "\u6B63\u6587\u56DE\u8BFB"}\u6279\u6B21 ${indexes[0] + 1}\u2013${indexes.at(-1) + 1} \u91CD\u8BD5`, retries: attempt });
           await updateHistoryRebuild(record, {
             error: `\u6279\u6B21 ${indexes[0] + 1}\u2013${indexes.at(-1) + 1} \u7B2C ${attempt} \u6B21\u5931\u8D25\uFF0C\u6B63\u5728\u91CD\u8BD5\uFF1A${toErrorMessage(error)}`
           });
@@ -5625,17 +5739,29 @@ async function rebuildHistoryFrom(input) {
           processedMessages: rebuilt,
           completedBatches,
           failedBatchStart: void 0,
-          error: void 0
+          error: void 0,
+          phase: cached ? "replaying-cache" : "reading-missing"
         });
-        input.onProgress?.({ current: rebuilt, total: record.totalMessages ?? allIndexes.length, label: `\u5DF2\u5B8C\u6210 ${completedBatches}/${record.totalBatches ?? 0} \u6279` });
+        input.onProgress?.({ current: rebuilt, total: record.totalMessages ?? allIndexes.length, label: `\u5DF2\u5B8C\u6210 ${completedBatches}/${record.totalBatches ?? 0} \u6279 \xB7 ${cached ? "\u590D\u7528" : "\u56DE\u8BFB"}` });
       }
       assertCurrent(chatKey, input.signal);
       lease.assertOwner();
       if (latest?.snapshot) {
-        await input.finalizeDerived?.(latest);
+        const needsLongTermUpdate = Boolean(
+          (record.rereadMessages ?? 0) > 0 || record.invalidatedSmallSummaryIds.length || record.invalidatedLargeSummaryIds.length
+        );
+        if (needsLongTermUpdate) {
+          await updateHistoryRebuild(record, { phase: "updating-long-term" });
+          input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u66F4\u65B0\u957F\u671F\u8109\u7EDC" });
+          await input.finalizeDerived?.(latest);
+        } else {
+          input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u957F\u671F\u603B\u7ED3\u4FDD\u6301\u6709\u6548\uFF0C\u65E0\u9700\u6A21\u578B\u66F4\u65B0" });
+        }
+        await updateHistoryRebuild(record, { phase: "syncing" });
+        input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u53D1\u5E03\u6700\u7EC8\u4E16\u754C\u4E66" });
         await input.syncLatest(latest);
       }
-      input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u91CD\u5EFA\u5B8C\u6210\uFF0C\u4E16\u754C\u4E66\u5DF2\u540C\u6B65" });
+      input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: `\u91CD\u5EFA\u5B8C\u6210\uFF1A\u590D\u7528 ${record.reusedMessages ?? 0} \u6761\uFF0C\u56DE\u8BFB ${record.rereadMessages ?? 0} \u6761\uFF0C\u4E16\u754C\u4E66\u5DF2\u540C\u6B65` });
       await completeHistoryRebuild(record);
       return { record, rebuilt, latestArtifact: latest };
     } catch (error) {
@@ -6416,6 +6542,96 @@ async function dispatchUnifiedFactPackage(input) {
   await confirmLocalCommitsAttachedForArtifact(latest);
   return latest;
 }
+async function replayUnifiedFactPackages(input) {
+  const artifacts = [...input.artifacts].sort((a, b) => a.messageIndex - b.messageIndex);
+  const packages = [...input.factPackages].sort((a, b) => a.sourceRange.startIndex - b.sourceRange.startIndex);
+  const latest = artifacts.at(-1);
+  if (!latest || !packages.length) throw new Error("\u7F13\u5B58\u4E8B\u5B9E\u91CD\u653E\u6CA1\u6709\u53EF\u7528\u8F93\u5165");
+  for (const artifact of artifacts) assertArtifactCurrent(artifact, input.signal);
+  const state2 = await getChatState(latest.chatKey);
+  assertHistoryRebuildAccess(state2);
+  const byKey = new Map(artifacts.map((artifact) => [artifact.messageKey, artifact]));
+  const coveredSummaryKeys = new Set(state2.smallSummaries.flatMap((summary) => summary.sourceKeys));
+  const recoveredMaterials = [];
+  let workingSnapshot = previousSnapshot(artifacts[0].messageIndex);
+  let lastPackage;
+  for (const sourcePackage of packages) {
+    const factPackage = deepClone(sourcePackage);
+    delete factPackage.stageSummary;
+    const projection = projectUnifiedFacts({
+      previousSnapshot: workingSnapshot,
+      factPackage,
+      focusRegistry: state2.focusRegistry,
+      currentFocusId: state2.currentFocusId
+    });
+    factPackage.projectionMode = projection.mode;
+    workingSnapshot = deepClone(projection.snapshot);
+    state2.focusRegistry = deepClone(projection.focusRegistry);
+    state2.currentFocusId = projection.currentFocusId;
+    const packageArtifacts = factPackage.sourceRange.messageKeys.map((key) => byKey.get(key)).filter((artifact) => Boolean(artifact));
+    const currentIndexByKey = new Map(packageArtifacts.map((artifact) => [artifact.messageKey, artifact.messageIndex]));
+    if (packageArtifacts.length) {
+      factPackage.sourceRange.startIndex = packageArtifacts[0].messageIndex;
+      factPackage.sourceRange.endIndex = packageArtifacts.at(-1).messageIndex;
+      for (const material of factPackage.turnMaterials) {
+        material.sourceMessageIndex = currentIndexByKey.get(material.sourceMessageKey) ?? material.sourceMessageIndex;
+      }
+      for (const fact of factPackage.facts) {
+        fact.sourceMessageIndexes = fact.sourceMessageKeys.map((key) => currentIndexByKey.get(key)).filter((index) => index !== void 0);
+      }
+      for (const operation of factPackage.tableOperations ?? []) {
+        operation.sourceMessageIndexes = operation.sourceMessageKeys.map((key) => currentIndexByKey.get(key)).filter((index) => index !== void 0);
+      }
+    }
+    for (const artifact of packageArtifacts) {
+      artifact.factPackageId = factPackage.packageId;
+      markStage(artifact, "state", "success", "\u5DF2\u590D\u7528\u65E2\u6709\u4E8B\u5B9E\u5305");
+      if (!state2.processedMessageKeys.includes(artifact.messageKey)) state2.processedMessageKeys.push(artifact.messageKey);
+    }
+    const packageTail = packageArtifacts.at(-1);
+    if (packageTail) {
+      packageTail.snapshot = deepClone(workingSnapshot);
+      const storedPackage = deepClone(factPackage);
+      delete storedPackage.finalSnapshot;
+      packageTail.factPackage = storedPackage;
+    }
+    recoveredMaterials.push(...factPackage.turnMaterials.filter((material) => !coveredSummaryKeys.has(material.sourceMessageKey)));
+    lastPackage = factPackage;
+  }
+  latest.snapshot = deepClone(workingSnapshot);
+  if (getSettings().autoSmallSummary && recoveredMaterials.length) {
+    const sourceKeys = [...new Set(recoveredMaterials.map((material) => material.sourceMessageKey))];
+    const summary = {
+      id: `small-cache:${hashText(sourceKeys.join("|"))}`,
+      kind: "small",
+      title: `\u590D\u7528\u9636\u6BB5\u8BB0\u5FC6 \xB7 \u6D88\u606F ${artifacts[0].messageIndex + 1}\u2013${latest.messageIndex + 1}`,
+      summary: recoveredMaterials.map((material) => material.summary).filter(Boolean).join("\n"),
+      keywords: [...new Set(recoveredMaterials.flatMap((material) => material.keywords))].slice(0, 24),
+      sourceKeys,
+      createdAt: nowIso()
+    };
+    if (!state2.smallSummaries.some((item2) => item2.id === summary.id)) state2.smallSummaries.push(summary);
+    markStage(latest, "summary", "success", `\u590D\u7528 ${sourceKeys.length} \u6761\u65E2\u6709\u9636\u6BB5\u8BB0\u5FC6`);
+  } else {
+    markStage(latest, "summary", "skipped", "\u65E2\u6709\u9636\u6BB5\u603B\u7ED3\u4FDD\u6301\u6709\u6548");
+  }
+  for (const artifact of artifacts) {
+    if (artifact !== latest) {
+      markStage(artifact, "summary", "skipped", "\u7F13\u5B58\u4E8B\u5B9E\u7531\u533A\u6BB5\u672B\u6761\u7EDF\u4E00\u6D3E\u751F");
+      markStage(artifact, "sync", "skipped", "\u5386\u53F2\u91CD\u5EFA\u7ED3\u675F\u540E\u7EDF\u4E00\u53D1\u5E03");
+    }
+  }
+  markStage(latest, "sync", input.deferLorebookSync ? "skipped" : "queued", input.deferLorebookSync ? "\u5386\u53F2\u91CD\u5EFA\u7ED3\u675F\u540E\u7EDF\u4E00\u53D1\u5E03" : void 0);
+  state2.latestSnapshotMessageKey = latest.messageKey;
+  state2.lastFactMessageIndex = latest.messageIndex;
+  state2.lastFactPackageId = lastPackage?.packageId;
+  state2.factSchemaVersion = lastPackage?.schemaVersion ?? state2.factSchemaVersion;
+  state2.updatedAt = nowIso();
+  await putChatState(state2);
+  for (const artifact of artifacts) await attachAndStore(artifact);
+  await persistChat();
+  return latest;
+}
 var UnifiedFactScheduler = class {
   pending = /* @__PURE__ */ new Map();
   running = /* @__PURE__ */ new Set();
@@ -6480,13 +6696,13 @@ var UnifiedFactScheduler = class {
         async (signal) => {
           let latestResult = null;
           for (let index = 0; index < chunks.length; index += 1) {
-            const chunk2 = chunks[index];
-            const factPackage = await extractUnifiedFacts(chunk2, signal, batch.connectionSnapshot, { includeStageSummary: batch.includeStageSummary });
+            const chunk = chunks[index];
+            const factPackage = await extractUnifiedFacts(chunk, signal, batch.connectionSnapshot, { includeStageSummary: batch.includeStageSummary });
             const backlogContinues = this.pending.has(chatKey);
             const isLastChunk = index === chunks.length - 1;
             const deferDerived = !isLastChunk || batch.holdDerived || artifacts.length >= 5 || backlogContinues;
             latestResult = await dispatchUnifiedFactPackage({
-              artifacts: chunk2,
+              artifacts: chunk,
               factPackage,
               deferLorebookSync: batch.deferLorebookSync,
               deferDerived,
@@ -6788,7 +7004,7 @@ async function processHistoryBatch(indexes, options) {
     if (!message || message.is_user || !String(message.mes || "").trim()) continue;
     const artifact = await loadOrCreateArtifact(index, true);
     releaseQuarantine(artifact);
-    markStage(artifact, "audit", "skipped", "\u5386\u53F2\u91CD\u5EFA\u76F4\u63A5\u8BFB\u53D6\u65E2\u6709\u6B63\u6587");
+    markStage(artifact, "audit", "skipped", "\u5386\u53F2\u91CD\u5EFA\u4EC5\u56DE\u8BFB\u7F3A\u5931\u6216\u5931\u6548\u6B63\u6587");
     markStage(artifact, "revision", "skipped", "\u5386\u53F2\u91CD\u5EFA\u8DF3\u8FC7\u4FEE\u6B63");
     markStage(artifact, "state", "queued");
     await stageArtifact(index, artifact);
@@ -6800,6 +7016,25 @@ async function processHistoryBatch(indexes, options) {
     force: true,
     holdDerived: options.holdDerived,
     includeStageSummary: true
+  });
+}
+async function replayHistoryBatch(indexes, factPackages, options) {
+  const artifacts = [];
+  for (const index of indexes) {
+    const message = getMessage(index);
+    if (!message || message.is_user || !String(message.mes || "").trim()) continue;
+    const artifact = await loadOrCreateArtifact(index, true);
+    releaseQuarantine(artifact);
+    markStage(artifact, "audit", "skipped", "\u5386\u53F2\u91CD\u5EFA\u590D\u7528\u65E2\u6709\u4E8B\u5B9E\u5305\uFF0C\u4E0D\u91CD\u65B0\u8BFB\u53D6\u6B63\u6587");
+    markStage(artifact, "revision", "skipped", "\u4E8B\u5B9E\u590D\u7528\u65E0\u9700\u4FEE\u6B63");
+    markStage(artifact, "state", "queued", "\u7B49\u5F85\u672C\u5730\u6279\u91CF\u91CD\u653E\u65E2\u6709\u4E8B\u5B9E");
+    artifacts.push(artifact);
+  }
+  if (!artifacts.length) return null;
+  return replayUnifiedFactPackages({
+    artifacts,
+    factPackages,
+    deferLorebookSync: options.deferLorebookSync
   });
 }
 async function finalizeHistoryDerived(artifact) {
@@ -6885,6 +7120,7 @@ function launchHistoryRebuild(startIndex, reason) {
       startIndex,
       reason,
       processBatch: processHistoryBatch,
+      replayBatch: replayHistoryBatch,
       finalizeDerived: finalizeHistoryDerived,
       syncLatest: async (artifact) => syncLorebook(artifact, signal, { forceRefresh: true }),
       signal,
@@ -7590,6 +7826,44 @@ function queueStateClass(value) {
   if (value === "running" || value === "queued") return "working";
   return "neutral";
 }
+function queueStateIcon(value) {
+  if (value === "success") return "fa-circle-check";
+  if (value === "failed") return "fa-circle-exclamation";
+  if (value === "running") return "fa-spinner fa-spin";
+  if (value === "queued") return "fa-clock";
+  if (value === "cancelled") return "fa-ban";
+  return "fa-circle-minus";
+}
+function rebuildPhaseText(value) {
+  const map = {
+    planning: "\u68C0\u67E5\u7F13\u5B58\u4E0E\u5931\u6548\u533A\u6BB5",
+    "replaying-cache": "\u590D\u7528\u65E2\u6709\u4E8B\u5B9E\u5305",
+    "reading-missing": "\u56DE\u8BFB\u7F3A\u5931\u6216\u5DF2\u4FEE\u6539\u6B63\u6587",
+    "updating-long-term": "\u66F4\u65B0\u957F\u671F\u8109\u7EDC",
+    syncing: "\u53D1\u5E03\u6700\u7EC8\u4E16\u754C\u4E66"
+  };
+  return value ? map[value] || value : "\u51C6\u5907\u4E2D";
+}
+function historyRebuildStatusHtml(record) {
+  const total = record.totalMessages ?? 0;
+  const processed = record.processedMessages ?? 0;
+  const progress = total ? Math.max(0, Math.min(100, Math.round(processed / total * 100))) : 0;
+  return `<div class="ma11-status-strip ${record.state === "failed" ? "danger" : "working"}">
+    <div class="ma11-status-strip-main">
+      <span class="ma11-status-icon"><i class="fa-solid ${record.state === "failed" ? "fa-circle-exclamation" : "fa-arrows-rotate"}"></i></span>
+      <div><b>\u5386\u53F2\u91CD\u5EFA \xB7 ${escapeHtml(rebuildPhaseText(record.phase))}</b><span>${processed}/${total} \u6761 \xB7 ${record.completedBatches ?? 0}/${record.totalBatches ?? 0} \u6279</span></div>
+      <strong>${progress}%</strong>
+    </div>
+    <div class="ma11-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div>
+    <div class="ma11-rebuild-metrics">
+      <span><i class="fa-solid fa-database"></i> \u590D\u7528\u4E8B\u5B9E ${record.reusedMessages ?? 0} \u6761</span>
+      <span><i class="fa-solid fa-file-lines"></i> \u56DE\u8BFB\u6B63\u6587 ${record.rereadMessages ?? 0} \u6761</span>
+      <span><i class="fa-solid fa-layer-group"></i> \u7F13\u5B58\u5305 ${record.reusedFactPackages ?? 0} \u4E2A</span>
+      <span><i class="fa-solid fa-wand-magic-sparkles"></i> \u6A21\u578B\u6279\u6B21 ${record.rawBatches ?? 0} \u4E2A</span>
+    </div>
+    ${record.error ? `<div class="ma11-inline-error">${escapeHtml(record.error)}</div>` : ""}
+  </div>`;
+}
 function taskDurationText(task) {
   const start = Date.parse(task.startedAt || task.createdAt);
   const end = Date.parse(task.finishedAt || (/* @__PURE__ */ new Date()).toISOString());
@@ -7611,7 +7885,7 @@ function taskCardHtml(task) {
   const isHistory = task.key.startsWith("history-rebuild:");
   const actions = active ? isHistory ? `<button type="button" data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button type="button" class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">\u53D6\u6D88</button>` : task.state === "failed" && isHistory ? `<button type="button" data-ma11-action="retry-history-rebuild">\u4ECE\u5931\u8D25\u6279\u6B21\u7EE7\u7EED</button>` : "";
   return `<article class="ma11-task-card ${queueStateClass(task.state)}">
-    <header><div><b>${escapeHtml(task.label)}</b><span class="ma11-badge ${queueStateClass(task.state)}">${queueStateText(task.state)}</span></div><time>${escapeHtml(new Date(task.updatedAt).toLocaleString())}</time></header>
+    <header><div class="ma11-task-heading"><span class="ma11-task-state-icon"><i class="fa-solid ${queueStateIcon(task.state)}"></i></span><div><b>${escapeHtml(task.label)}</b><span class="ma11-task-substate">${queueStateText(task.state)}</span></div></div><time>${escapeHtml(new Date(task.updatedAt).toLocaleString())}</time></header>
     <div class="ma11-task-meta">
       ${taskRangeText(task) ? `<span>${escapeHtml(taskRangeText(task))}</span>` : ""}
       <span>${task.blocking ? "\u963B\u585E\u73A9\u5BB6" : "\u540E\u53F0\u4EFB\u52A1"}</span>
@@ -7619,7 +7893,7 @@ function taskCardHtml(task) {
       ${task.retries ? `<span>\u91CD\u8BD5 ${task.retries} \u6B21</span>` : ""}
       ${task.startedAt ? `<span>\u8017\u65F6\uFF1A${escapeHtml(taskDurationText(task))}</span>` : ""}
     </div>
-    ${task.progressLabel ? `<p class="ma11-task-progress-label">${escapeHtml(task.progressLabel)}</p>` : ""}
+    ${task.progressLabel ? `<p class="ma11-task-progress-label"><i class="fa-solid fa-wave-square"></i>${escapeHtml(task.progressLabel)}</p>` : ""}
     ${progress !== void 0 ? `<div class="ma11-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div><small>${task.progressCurrent ?? 0}/${task.progressTotal} \xB7 ${progress}%</small>` : ""}
     ${task.error ? `<div class="ma11-error-box"><b>\u5931\u8D25\u539F\u56E0</b><p>${escapeHtml(task.error)}</p></div>` : ""}
     ${actions ? `<footer class="ma11-actions">${actions}</footer>` : ""}
@@ -8016,7 +8290,7 @@ async function diagnosticsHtml() {
       </section>` : "";
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
-    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u6309 10\u201320 \u6761\u6B63\u6587\u5206\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? `<div class="ma11-status-strip"><b>\u5386\u53F2\u91CD\u5EFA\uFF1A${escapeHtml(chatState.historyRebuild.state)}</b><span>${chatState.historyRebuild.processedMessages ?? 0}/${chatState.historyRebuild.totalMessages ?? 0} \u6761 \xB7 ${chatState.historyRebuild.completedBatches ?? 0}/${chatState.historyRebuild.totalBatches ?? 0} \u6279${chatState.historyRebuild.error ? ` \xB7 ${escapeHtml(chatState.historyRebuild.error)}` : ""}</span></div>` : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${chatState.historyRebuild.state === "paused" || chatState.historyRebuild.state === "failed" ? "\u7EE7\u7EED\u91CD\u5EFA" : "\u6062\u590D\u91CD\u5EFA"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
+    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u6309 10\u201320 \u6761\u6B63\u6587\u5206\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${chatState.historyRebuild.state === "paused" || chatState.historyRebuild.state === "failed" ? "\u7EE7\u7EED\u91CD\u5EFA" : "\u6062\u590D\u91CD\u5EFA"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
     ${conflictHtml}
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(
