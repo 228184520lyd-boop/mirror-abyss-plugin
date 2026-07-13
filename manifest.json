@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.1.0-alpha.10.5.5",
+  "version": "1.1.0-alpha.10.7.0",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": true,
   "minimum_client_version": "1.17.0",
@@ -18,5 +18,6 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "generate_interceptor": "MirrorAbyssGenerationInterceptor"
+  "generate_interceptor": "MirrorAbyssGenerationInterceptor",
+  "description": "Mirror Abyss 事件条目记忆层：正文准入后更新表格，表格生成独立事件条目，事件沉降为长期大总结。"
 }

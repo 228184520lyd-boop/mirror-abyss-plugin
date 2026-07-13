@@ -21,8 +21,8 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.5.5";
-    PIPELINE_VERSION = "ma-pipeline-10.5.5";
+    VERSION = "1.1.0-alpha.10.7.0";
+    PIPELINE_VERSION = "ma-pipeline-10.7.0";
     TABLE_KEYS = [
       "focus",
       "spacetime",
@@ -687,6 +687,9 @@ async function getChatState(chatKey) {
     }
   }
   if (existing) {
+    existing.smallSummaries ||= [];
+    existing.largeSummaries ||= [];
+    existing.eventEntries ||= [];
     if (existing.chatKey !== chatKey) {
       existing.chatKey = chatKey;
       existing.updatedAt = nowIso();
@@ -700,6 +703,7 @@ async function getChatState(chatKey) {
     processedMessageKeys: [],
     smallSummaries: [],
     largeSummaries: [],
+    eventEntries: [],
     lastSyncStatus: "idle",
     updatedAt: nowIso()
   };
@@ -1340,6 +1344,18 @@ function createArtifact(seed) {
     assistantText: safeText(seed.assistantText),
     createdAt: now,
     updatedAt: now,
+    admission: {
+      status: "pending",
+      mode: "pending",
+      detail: "等待正文准入确认"
+    },
+    lineage: {
+      source: "assistant_final_text",
+      tableSource: "approved_final_text",
+      smallSummarySource: "fact_packages_active_table_and_event_registry",
+      largeSummarySource: "small_summary_events_and_previous_large_summary",
+      graphMode: "read_only"
+    },
     stages: {
       audit: idleStage(),
       revision: idleStage(),
@@ -1990,6 +2006,33 @@ function applyAuditVisibility(index, hidden) {
   const element = findMessageElement(index);
   element?.classList.toggle("ma11-audit-hidden-message", hidden);
 }
+function markAdmissionApproved(artifact, mode, detail) {
+  artifact.approvedFingerprint = artifact.sourceFingerprint;
+  artifact.admission = {
+    status: "approved",
+    mode,
+    detail: detail || "正文已准入记忆链",
+    approvedFingerprint: artifact.sourceFingerprint,
+    approvedAt: nowIso()
+  };
+}
+function markAdmissionBlocked(artifact, detail) {
+  artifact.admission = {
+    status: "blocked",
+    mode: artifact.admission?.mode || "audit",
+    detail: detail || "正文未通过准入",
+    approvedFingerprint: "",
+    approvedAt: void 0
+  };
+}
+function assertApprovedForMemory(artifact, signal) {
+  assertArtifactCurrent(artifact, signal);
+  const approved = artifact.admission?.status === "approved" && artifact.admission?.approvedFingerprint === artifact.sourceFingerprint;
+  const legacyApproved = artifact.approvedFingerprint === artifact.sourceFingerprint && artifact.audit?.passed === true;
+  if (!approved && !legacyApproved) {
+    throw new Error("正文尚未通过准入门，禁止进入表格与总结链");
+  }
+}
 async function auditText(playerRules, playerText, assistantText, signal, invocationSnapshot) {
   const settings = invocationSnapshot?.settings ?? getSettings();
   const connectionSnapshot = invocationSnapshot?.connectionSnapshot ?? captureTaskConnection("audit");
@@ -2039,11 +2082,16 @@ async function runAudit(artifact, force = false, signal, invocationSnapshot) {
       rewriteInstruction: "",
       violationFingerprint: ""
     };
+    markAdmissionApproved(artifact, "bypass", "审核已关闭；原正文直接准入后续记忆链");
     await putArtifact(artifact);
     return artifact.audit;
   }
   if (!settings.auditPrompt.trim()) throw new Error("\u5DF2\u542F\u7528\u89C4\u5219\u5BA1\u6838\uFF0C\u4F46\u5BA1\u6838\u63D0\u793A\u8BCD\u4E3A\u7A7A");
   if (!force && artifact.stages.audit.status === "success" && artifact.audit?.passed && artifact.approvedFingerprint === artifact.sourceFingerprint) {
+    if (artifact.admission?.status !== "approved" || artifact.admission?.approvedFingerprint !== artifact.sourceFingerprint) {
+      markAdmissionApproved(artifact, "audit", "复用已通过的正文审核结果");
+      await putArtifact(artifact);
+    }
     return artifact.audit;
   }
   markStage(artifact, "audit", "running");
@@ -2052,13 +2100,14 @@ async function runAudit(artifact, force = false, signal, invocationSnapshot) {
     const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText, signal, invocationSnapshot);
     artifact.audit = result;
     if (result.passed) {
-      artifact.approvedFingerprint = artifact.sourceFingerprint;
+      markAdmissionApproved(artifact, "audit", "规则审核通过");
       artifact.hiddenByAudit = false;
       artifact.quarantined = false;
       applyAuditVisibility(artifact.messageIndex, false);
       markStage(artifact, "audit", "success");
       markStage(artifact, "revision", "skipped");
     } else {
+      markAdmissionBlocked(artifact, result.reason);
       markStage(artifact, "audit", "blocked", result.reason);
     }
     const message = getMessage(artifact.messageIndex);
@@ -2068,6 +2117,7 @@ async function runAudit(artifact, force = false, signal, invocationSnapshot) {
     await putArtifact(artifact);
     return result;
   } catch (error) {
+    markAdmissionBlocked(artifact, toErrorMessage(error));
     markStage(artifact, "audit", "failed", toErrorMessage(error));
     await putArtifact(artifact);
     throw error;
@@ -2294,6 +2344,7 @@ async function runRevisionFlow(artifact, signal, invocationSnapshot) {
         violationFingerprint: ""
       };
       artifact.audit = passedAudit;
+      markAdmissionApproved(artifact, "revision", "审核模型返回的完整修正版已落地");
       artifact.revision.status = "success";
       artifact.revision.finalFingerprint = artifact.sourceFingerprint;
       artifact.revision.committedAt = nowIso();
@@ -2355,6 +2406,7 @@ async function runRevisionFlow(artifact, signal, invocationSnapshot) {
       if (candidateAudit.passed) {
         artifact.audit = candidateAudit;
         await replaceMessageInPlace(artifact, candidate);
+        markAdmissionApproved(artifact, "revision", "定向修正并复审通过");
         artifact.revision.status = "success";
         artifact.revision.finalFingerprint = artifact.sourceFingerprint;
         artifact.revision.committedAt = nowIso();
@@ -2869,8 +2921,12 @@ function ownerEntry(row, kind) {
   }
   return kind === "\u7269\u54C1\u4E0E\u8D44\u6E90" ? { comment: `MA\uFF5C\u7269\u54C1\uFF5C${row.title}`, name: row.title, label: "\u7269\u54C1" } : { comment: `MA\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\uFF5C${row.title}`, name: row.title, label: "\u6280\u80FD\u4E0E\u80FD\u529B" };
 }
-function makeDocument(key, comment, content, keywords, constant, vectorized, order, kind) {
-  const activation = lorebookActivationPolicy(kind, {
+function makeDocument(key, comment, content, keywords, constant, vectorized, order, kind, activationMode) {
+  const activation = activationMode ? {
+    mode: activationMode,
+    constant: activationMode === "constant",
+    vectorized: activationMode === "vector"
+  } : lorebookActivationPolicy(kind, {
     vectorize: vectorized,
     latestContinuityConstant: constant && kind === "semantic:large"
   });
@@ -3095,8 +3151,36 @@ function buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries
   }
   return documents;
 }
-function buildLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
-  return options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) : buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options);
+function eventMemoryContent(entry) {
+  const lines = [`[事件记忆：${entry.title}]`, `事件ID：${entry.eventId}`, `状态：${entry.status}`, `信息精度：${entry.precision}`, `发生时间：${entry.occurredAt || "未明确"}`, `最后确认：${entry.lastConfirmedAt || "未明确"}`, `已确认事实：${entry.facts}`];
+  if (entry.participants.length) lines.push(`涉及对象：${entry.participants.join("、")}`);
+  if (entry.locations.length) lines.push(`涉及地点：${entry.locations.join("、")}`);
+  if (entry.propagation.scope !== "unknown") lines.push(`传播范围：${entry.propagation.scope}`);
+  if (entry.propagation.knownBy.length) lines.push(`已知者：${entry.propagation.knownBy.join("、")}`);
+  if (entry.propagation.channels.length) lines.push(`传播渠道：${entry.propagation.channels.join("、")}`);
+  if (entry.propagation.distortions.length) lines.push(`误传或偏差：${entry.propagation.distortions.join("；")}`);
+  if (entry.traces.length) lines.push(`留存痕迹：${entry.traces.join("；")}`);
+  if (entry.impacts.length) lines.push(`持续影响：${entry.impacts.join("；")}`);
+  lines.push("时间判断说明：本条目不保存下一次复核时间；被触发时请结合当前时间与最后确认时间判断是否过时或进一步模糊。");
+  return lines.join("\n");
+}
+function buildLorebookDocuments(snapshot, smallSummaries, largeSummaries, eventEntries, options) {
+  const base = options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) : buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options);
+  const documents = base.filter((document2) => document2.kind !== "small" && document2.kind !== "semantic:small");
+  for (const entry of eventEntries ?? []) {
+    documents.push(makeDocument(
+      `event-memory:${entry.eventId}`,
+      `MA｜事件记忆｜${entry.title}`,
+      eventMemoryContent(entry),
+      [entry.title, ...entry.keywords, ...entry.participants, ...entry.locations],
+      entry.activation === "constant",
+      entry.activation === "vector",
+      entry.activation === "constant" ? 158 : entry.status === "active" || entry.status === "unresolved" ? 142 : 112,
+      "event-memory",
+      entry.activation
+    ));
+  }
+  return documents;
 }
 
 // src/pipeline/lorebook.ts
@@ -3976,6 +4060,7 @@ async function desiredDocuments(artifact) {
     artifact.snapshot,
     state2.smallSummaries,
     state2.largeSummaries,
+    state2.eventEntries,
     {
       layout: settings.lorebookLayout,
       vectorize: settings.vectorizeRows,
@@ -4706,6 +4791,205 @@ function normalizeSedimentationPlan(value) {
   if (Array.isArray(source.keepActiveRowIds)) plan.keepActiveRowIds = stringList(source.keepActiveRowIds, 120, 160);
   return plan;
 }
+
+var EVENT_STATUSES = /* @__PURE__ */ new Set(["active", "unresolved", "resolved", "dormant", "historical", "trace"]);
+var EVENT_PRECISIONS = ["exact", "compressed", "fuzzy", "trace"];
+var EVENT_IMPORTANCE = /* @__PURE__ */ new Set(["critical", "high", "normal", "low"]);
+var EVENT_ACTIVATIONS = /* @__PURE__ */ new Set(["constant", "keyword", "vector"]);
+var EVENT_PROPAGATION_SCOPES = /* @__PURE__ */ new Set(["private", "local", "regional", "public", "institutional", "unknown"]);
+function eventEnum(value, allowed, fallback) {
+  const text = safeText(value, 40).trim();
+  return allowed.has(text) ? text : fallback;
+}
+function eventPrecision(value, fallback = "compressed") {
+  const text = safeText(value, 40).trim();
+  return EVENT_PRECISIONS.includes(text) ? text : fallback;
+}
+function eventPrecisionRank(value) {
+  const index = EVENT_PRECISIONS.indexOf(value);
+  return index < 0 ? 1 : index;
+}
+function eventActivation(value, entry) {
+  let activation = eventEnum(value, EVENT_ACTIVATIONS, entry.precision === "fuzzy" || entry.precision === "trace" ? "vector" : "keyword");
+  if (entry.precision === "fuzzy" || entry.precision === "trace") activation = "vector";
+  const constantAllowed = (entry.importance === "critical" || entry.importance === "high") && (entry.status === "active" || entry.status === "unresolved") && eventPrecisionRank(entry.precision) <= 1;
+  if (activation === "constant" && !constantAllowed) activation = entry.precision === "fuzzy" || entry.precision === "trace" ? "vector" : "keyword";
+  return activation;
+}
+function normalizeEventOperation(value, sourceSummaryId, summaryCreatedAt) {
+  if (!value || typeof value !== "object") return null;
+  const source = value;
+  const title = safeText(source.title, 240).trim();
+  const facts = safeText(source.facts || source.content || source.summary, 8e3).trim();
+  if (!title || !facts) return null;
+  const eventId = safeText(source.eventId || source.id, 180).trim() || `event-memory:${hashText(title.toLowerCase())}`;
+  const operationText = safeText(source.operation, 30).trim();
+  const statusText = safeText(source.status, 40).trim();
+  const propagationText = safeText(source.propagation?.scope || source.propagationScope, 40).trim();
+  const precisionText = safeText(source.precision, 40).trim();
+  const importanceText = safeText(source.importance, 40).trim();
+  const activationText = safeText(source.activation, 40).trim();
+  return {
+    operation: ["upsert", "merge", "remove"].includes(operationText) ? operationText : "upsert",
+    eventId,
+    mergeFromIds: stringList(source.mergeFromIds, 40, 180),
+    title,
+    facts,
+    participants: stringList(source.participants, 40, 120),
+    locations: stringList(source.locations, 24, 160),
+    occurredAt: safeText(source.occurredAt, 240).trim(),
+    lastConfirmedAt: safeText(source.lastConfirmedAt, 240).trim(),
+    status: statusText ? eventEnum(statusText, EVENT_STATUSES, "historical") : void 0,
+    propagation: {
+      scope: propagationText ? eventEnum(propagationText, EVENT_PROPAGATION_SCOPES, "unknown") : void 0,
+      knownBy: stringList(source.propagation?.knownBy || source.knownBy, 60, 160),
+      channels: stringList(source.propagation?.channels || source.channels, 40, 160),
+      distortions: stringList(source.propagation?.distortions || source.distortions, 30, 300)
+    },
+    traces: stringList(source.traces, 40, 500),
+    impacts: stringList(source.impacts, 40, 500),
+    precision: precisionText ? eventPrecision(precisionText) : void 0,
+    importance: importanceText ? eventEnum(importanceText, EVENT_IMPORTANCE, "normal") : void 0,
+    activation: activationText ? eventEnum(activationText, EVENT_ACTIVATIONS, "keyword") : void 0,
+    keywords: stringList(source.keywords, 32, 100),
+    sourceRowIds: stringList(source.sourceRowIds, 80, 180),
+    sourceFactIds: stringList(source.sourceFactIds, 120, 180),
+    sourceSummaryId,
+    updatedAt: summaryCreatedAt
+  };
+}
+function normalizeEventOperations(value, sourceSummaryId, summaryCreatedAt) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item2) => normalizeEventOperation(item2, sourceSummaryId, summaryCreatedAt)).filter(Boolean).slice(0, 80);
+}
+function normalizeEventEntry(value, previous, sourceSummaryId, updatedAt) {
+  const source = value && typeof value === "object" ? value : {};
+  const oldFacts = new Set(previous?.sourceFactIds ?? []);
+  const incomingFactIds = stringList(source.sourceFactIds, 120, 180);
+  const hasNewConfirmation = incomingFactIds.some((id) => !oldFacts.has(id));
+  let precision = eventPrecision(source.precision, previous?.precision || "compressed");
+  if (previous && !hasNewConfirmation && eventPrecisionRank(precision) < eventPrecisionRank(previous.precision)) precision = previous.precision;
+  const entry = {
+    eventId: safeText(source.eventId || previous?.eventId, 180).trim(),
+    title: safeText(source.title || previous?.title, 240).trim(),
+    facts: safeText(source.facts || previous?.facts, 8e3).trim(),
+    participants: stringList([...(previous?.participants ?? []), ...(source.participants ?? [])], 60, 120),
+    locations: stringList([...(previous?.locations ?? []), ...(source.locations ?? [])], 32, 160),
+    occurredAt: safeText(source.occurredAt || previous?.occurredAt, 240).trim(),
+    lastConfirmedAt: safeText(source.lastConfirmedAt || previous?.lastConfirmedAt, 240).trim(),
+    status: eventEnum(source.status, EVENT_STATUSES, previous?.status || "historical"),
+    propagation: {
+      scope: eventEnum(source.propagation?.scope || source.propagationScope, EVENT_PROPAGATION_SCOPES, previous?.propagation?.scope || "unknown"),
+      knownBy: stringList([...(previous?.propagation?.knownBy ?? []), ...(source.propagation?.knownBy ?? source.knownBy ?? [])], 80, 160),
+      channels: stringList([...(previous?.propagation?.channels ?? []), ...(source.propagation?.channels ?? source.channels ?? [])], 50, 160),
+      distortions: stringList([...(previous?.propagation?.distortions ?? []), ...(source.propagation?.distortions ?? source.distortions ?? [])], 40, 300)
+    },
+    traces: stringList([...(previous?.traces ?? []), ...(source.traces ?? [])], 60, 500),
+    impacts: stringList([...(previous?.impacts ?? []), ...(source.impacts ?? [])], 60, 500),
+    precision,
+    importance: eventEnum(source.importance, EVENT_IMPORTANCE, previous?.importance || "normal"),
+    activation: "keyword",
+    keywords: stringList([source.title, ...(previous?.keywords ?? []), ...(source.keywords ?? []), ...(source.participants ?? []), ...(source.locations ?? [])], 40, 100),
+    sourceRowIds: stringList([...(previous?.sourceRowIds ?? []), ...(source.sourceRowIds ?? [])], 120, 180),
+    sourceFactIds: stringList([...(previous?.sourceFactIds ?? []), ...incomingFactIds], 180, 180),
+    sourceSummaryIds: stringList([...(previous?.sourceSummaryIds ?? []), sourceSummaryId || source.sourceSummaryId], 120, 180),
+    createdAt: previous?.createdAt || updatedAt || nowIso(),
+    updatedAt: updatedAt || source.updatedAt || nowIso()
+  };
+  entry.activation = eventActivation(source.activation || previous?.activation, entry);
+  return entry.eventId && entry.title && entry.facts ? entry : null;
+}
+function removableEvent(entry) {
+  return entry && entry.importance === "low" && entry.status === "trace" && !entry.impacts.length && entry.precision === "trace";
+}
+function applyEventOperations(registry, operations, sourceSummaryId, updatedAt) {
+  const map = new Map((registry ?? []).map((entry) => [entry.eventId, deepClone(entry)]));
+  for (const operation of operations ?? []) {
+    const existing = map.get(operation.eventId);
+    if (operation.operation === "remove") {
+      if (removableEvent(existing)) map.delete(operation.eventId);
+      continue;
+    }
+    const mergedSources = operation.operation === "merge" ? operation.mergeFromIds.map((id) => map.get(id)).filter(Boolean) : [];
+    const base = existing || mergedSources[0];
+    const combined = {
+      ...operation,
+      participants: [...mergedSources.flatMap((entry) => entry.participants), ...operation.participants],
+      locations: [...mergedSources.flatMap((entry) => entry.locations), ...operation.locations],
+      propagation: {
+        scope: operation.propagation.scope || mergedSources[0]?.propagation?.scope,
+        knownBy: [...mergedSources.flatMap((entry) => entry.propagation.knownBy), ...operation.propagation.knownBy],
+        channels: [...mergedSources.flatMap((entry) => entry.propagation.channels), ...operation.propagation.channels],
+        distortions: [...mergedSources.flatMap((entry) => entry.propagation.distortions), ...operation.propagation.distortions]
+      },
+      traces: [...mergedSources.flatMap((entry) => entry.traces), ...operation.traces],
+      impacts: [...mergedSources.flatMap((entry) => entry.impacts), ...operation.impacts],
+      sourceRowIds: [...mergedSources.flatMap((entry) => entry.sourceRowIds), ...operation.sourceRowIds],
+      sourceFactIds: [...mergedSources.flatMap((entry) => entry.sourceFactIds), ...operation.sourceFactIds]
+    };
+    const entry = normalizeEventEntry(combined, base, sourceSummaryId, updatedAt);
+    if (!entry) continue;
+    for (const id of operation.mergeFromIds) if (id !== entry.eventId) map.delete(id);
+    map.set(entry.eventId, entry);
+  }
+  const values = [...map.values()];
+  const protectedEntries = values.filter((entry) => entry.importance === "critical" || entry.importance === "high" || entry.status === "active" || entry.status === "unresolved");
+  const protectedIds = new Set(protectedEntries.map((entry) => entry.eventId));
+  const remainder = values.filter((entry) => !protectedIds.has(entry.eventId)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return [...protectedEntries, ...remainder].slice(0, 320);
+}
+function normalizeEventUpdates(value) {
+  if (!Array.isArray(value)) return [];
+  const output = [];
+  for (const item2 of value) {
+    const source = item2 && typeof item2 === "object" ? item2 : {};
+    const eventId = safeText(source.eventId, 180).trim();
+    if (!eventId) continue;
+    const actionText = safeText(source.action, 30).trim();
+    const statusText = safeText(source.status, 40).trim();
+    const precisionText = safeText(source.precision, 40).trim();
+    const activationText = safeText(source.activation, 40).trim();
+    output.push({
+      action: ["keep", "sediment", "remove"].includes(actionText) ? actionText : "keep",
+      eventId,
+      facts: safeText(source.facts, 8e3).trim(),
+      status: statusText ? eventEnum(statusText, EVENT_STATUSES, "historical") : void 0,
+      precision: precisionText ? eventPrecision(precisionText) : void 0,
+      activation: activationText ? eventEnum(activationText, EVENT_ACTIVATIONS, "vector") : void 0,
+      reason: safeText(source.reason, 500).trim()
+    });
+  }
+  return output.slice(0, 160);
+}
+function applyEventUpdates(registry, updates, sourceLargeSummaryId, updatedAt) {
+  const map = new Map((registry ?? []).map((entry) => [entry.eventId, deepClone(entry)]));
+  for (const update of updates ?? []) {
+    const existing = map.get(update.eventId);
+    if (!existing) continue;
+    if (update.action === "remove") {
+      if (removableEvent(existing)) map.delete(update.eventId);
+      continue;
+    }
+    if (update.action !== "sediment") continue;
+    const requestedPrecision = eventPrecision(update.precision, existing.precision);
+    const precision = EVENT_PRECISIONS[Math.max(eventPrecisionRank(existing.precision), eventPrecisionRank(requestedPrecision))];
+    const entry = normalizeEventEntry({
+      ...existing,
+      facts: update.facts || existing.facts,
+      status: update.status || existing.status,
+      precision,
+      activation: update.activation || (eventPrecisionRank(precision) >= 2 ? "vector" : existing.activation)
+    }, existing, sourceLargeSummaryId, updatedAt);
+    if (entry) map.set(entry.eventId, entry);
+  }
+  return [...map.values()].slice(0, 320);
+}
+function rebuildEventEntries(smallSummaries, largeSummaries) {
+  let registry = [];
+  for (const summary of smallSummaries ?? []) registry = applyEventOperations(registry, summary.eventOperations ?? [], summary.id, summary.createdAt);
+  for (const summary of largeSummaries ?? []) registry = applyEventUpdates(registry, summary.eventUpdates ?? [], summary.id, summary.createdAt);
+  return registry;
+}
 var CATEGORIES = /* @__PURE__ */ new Set([
   "world",
   "character",
@@ -4897,6 +5181,7 @@ ${values.map((record) => `- ${record.title}\uFF1A${record.content}`).join("\n")}
 }
 function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId) {
   const id = makeId(kind);
+  const createdAt = nowIso();
   return {
     id,
     kind,
@@ -4904,8 +5189,9 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId) {
     summary: safeText(value.summary || "", 3e4).trim(),
     keywords: Array.isArray(value.keywords) ? [...new Set(value.keywords.map((item2) => safeText(item2, 80).trim()).filter(Boolean))].slice(0, 24) : [],
     sourceKeys,
-    createdAt: nowIso(),
+    createdAt,
     sedimentation: kind === "small" ? normalizeSedimentationPlan(value.sedimentation) : void 0,
+    eventOperations: kind === "small" ? normalizeEventOperations(value.eventEntries, id, createdAt) : void 0,
     longTermCandidates: kind === "small" ? normalizeLongTermCandidates(value.longTermCandidates, [id]) : void 0,
     previousLargeSummaryId: kind === "large" ? previousLargeSummaryId : void 0
   };
@@ -4944,6 +5230,7 @@ function normalizeLargeSummaryUpdate(input) {
     createdAt: nowIso(),
     longTermRecords: records,
     longTermOperations: operations,
+    eventUpdates: normalizeEventUpdates(input.value.eventUpdates),
     previousLargeSummaryId: input.previous?.id
   };
 }
@@ -4996,6 +5283,43 @@ function longTermCandidate(block) {
     sourceFactIds: listField(block, "source_fact_ids", "sourceFactIds")
   };
 }
+function eventEntryFromBlock(block) {
+  return {
+    operation: field(block, "operation"),
+    eventId: field(block, "event_id", "eventId"),
+    mergeFromIds: listField(block, "merge_from_ids", "mergeFromIds"),
+    title: field(block, "title"),
+    facts: field(block, "facts", "content"),
+    participants: listField(block, "participants"),
+    locations: listField(block, "locations"),
+    occurredAt: field(block, "occurred_at", "occurredAt"),
+    lastConfirmedAt: field(block, "last_confirmed_at", "lastConfirmedAt"),
+    status: field(block, "status"),
+    propagationScope: field(block, "propagation_scope", "propagationScope"),
+    knownBy: listField(block, "known_by", "knownBy"),
+    channels: listField(block, "channels"),
+    distortions: listField(block, "distortions"),
+    traces: listField(block, "traces"),
+    impacts: listField(block, "impacts"),
+    precision: field(block, "precision"),
+    importance: field(block, "importance"),
+    activation: field(block, "activation"),
+    keywords: listField(block, "keywords"),
+    sourceRowIds: listField(block, "source_row_ids", "sourceRowIds"),
+    sourceFactIds: listField(block, "source_fact_ids", "sourceFactIds")
+  };
+}
+function eventUpdateFromBlock(block) {
+  return {
+    action: field(block, "action"),
+    eventId: field(block, "event_id", "eventId"),
+    facts: field(block, "facts", "content"),
+    status: field(block, "status"),
+    precision: field(block, "precision"),
+    activation: field(block, "activation"),
+    reason: field(block, "reason")
+  };
+}
 function parseSmallSummaryText(raw) {
   const legacy = legacyObject(raw);
   if (legacy) return legacy;
@@ -5007,6 +5331,7 @@ function parseSmallSummaryText(raw) {
     summary: field(root2, "summary"),
     keywords: listField(root2, "keywords"),
     sedimentation: sedimentation ? sedimentationFromBlock(sedimentation) : void 0,
+    eventEntries: blocks(root2, "event_entry").map(eventEntryFromBlock),
     longTermCandidates: blocks(root2, "long_term_candidate").map(longTermCandidate)
   };
 }
@@ -5028,7 +5353,8 @@ function parseLargeSummaryText(raw) {
       keywords: listField(item2, "keywords"),
       permanence: field(item2, "permanence"),
       reason: field(item2, "reason")
-    }))
+    })),
+    eventUpdates: blocks(root2, "event_update").map(eventUpdateFromBlock)
   };
 }
 function parseUnifiedFactsText(raw) {
@@ -5121,119 +5447,151 @@ function formatSnapshot(snapshot) {
   }
   return lines.join("\n");
 }
+function formatEventRegistry(entries) {
+  if (!entries?.length) return "（无既有事件条目）";
+  return entries.map((entry) => `- ID=${entry.eventId}；标题=${entry.title}；状态=${entry.status}；精度=${entry.precision}；注入=${entry.activation}；事实=${entry.facts}；已知者=${join(entry.propagation?.knownBy)}；痕迹=${join(entry.traces)}`).join("\n");
+}
 function smallSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u5DF2\u63D0\u53D6\u4E8B\u5B9E\u4E0E\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\uFF0C\u4E0D\u91CD\u65B0\u89E3\u91CA\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+  return `你是镜渊“表格 → 事件记忆”沉降结算器。你只读取已提取事实、当前活跃表格与既有事件条目，不重新解释原始正文，不续写故事，不创造后台变化。
 
-\u7981\u6B62\u8F93\u51FA JSON\u3001JSON Schema\u3001Markdown \u4EE3\u7801\u5757\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u6216\u601D\u8003\u8FC7\u7A0B\u3002
-\u8F93\u51FA\u5FC5\u987B\u4F7F\u7528\u4EE5\u4E0B\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF1A
+禁止输出 JSON、Markdown 代码块、解释、前言、结语或思考过程。只输出以下纯文本标签协议：
 
 <small_summary>
-<title>\u9636\u6BB5\u6807\u9898</title>
-<summary>\u771F\u6B63\u7684\u9636\u6BB5\u538B\u7F29\u6B63\u6587\uFF0C\u4E0D\u6309\u56DE\u5408\u9010\u6761\u590D\u8FF0</summary>
-<keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<title>阶段标题</title>
+<summary>阶段概览，只用于玩家查看，不作为世界书发布单元</summary>
+<keywords>关键词1｜关键词2</keywords>
+<event_entry>
+<operation>upsert|merge|remove</operation>
+<event_id>稳定事件ID；延续旧事件必须复用既有ID</event_id>
+<merge_from_ids>仅 merge 填写，使用｜分隔</merge_from_ids>
+<title>事件标题</title>
+<facts>正文和表格已经确认的事件事实；不得写猜测或隐藏真相</facts>
+<participants>涉及对象，使用｜分隔</participants>
+<locations>地点，使用｜分隔</locations>
+<occurred_at>发生时间或时间范围；未知则留空</occurred_at>
+<last_confirmed_at>最后由本批事实确认的时间；未知则留空</last_confirmed_at>
+<status>active|unresolved|resolved|dormant|historical|trace</status>
+<propagation_scope>private|local|regional|public|institutional|unknown</propagation_scope>
+<known_by>正文明确知道该信息的人或组织</known_by>
+<channels>正文明确发生的传播渠道</channels>
+<distortions>正文明确出现的误传、偏差或版本差异</distortions>
+<traces>留下的记录、物证、传言、流程痕迹或可观察余波</traces>
+<impacts>仍持续成立的影响</impacts>
+<precision>exact|compressed|fuzzy|trace</precision>
+<importance>critical|high|normal|low</importance>
+<activation>constant|keyword|vector</activation>
+<keywords>触发关键词</keywords>
+<source_row_ids>来源表格行ID</source_row_ids>
+<source_fact_ids>来源事实ID</source_fact_ids>
+</event_entry>
 <sedimentation>
-<absorbed_row_ids>\u5DF2\u5728\u603B\u7ED3\u4E2D\u4FDD\u5B58\u7ED3\u679C\u7684\u884CID</absorbed_row_ids>
-<keep_active_row_ids>\u4ECD\u53C2\u4E0E\u5F53\u524D\u4E16\u754C\u7684\u884CID</keep_active_row_ids>
-<remove_row_ids>\u5DF2\u5438\u6536\u4E14\u53EF\u9000\u51FA\u7684\u884CID</remove_row_ids>
-<character_activity><row_id>\u4EBA\u7269\u884CID</row_id><activity>\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863</activity><reason>\u4F9D\u636E</reason></character_activity>
-<notes>\u8BF4\u660E1\uFF5C\u8BF4\u660E2</notes>
+<absorbed_row_ids>已被事件条目或阶段概览明确保存结果的行ID</absorbed_row_ids>
+<keep_active_row_ids>仍参与当前世界的行ID</keep_active_row_ids>
+<remove_row_ids>已吸收且可以退出活跃表格的行ID</remove_row_ids>
+<character_activity><row_id>人物行ID</row_id><activity>休眠|长期休眠|已归档</activity><reason>依据</reason></character_activity>
+<notes>说明1｜说明2</notes>
 </sedimentation>
 <long_term_candidate>
-<record_id>\u7A33\u5B9A\u5BF9\u8C61ID\u6216\u4E8B\u5B9EID</record_id>
+<record_id>稳定对象ID或事件ID</record_id>
 <category>world|character|relationship|event|region|item|skill|historical|unresolved|other</category>
-<title>\u6807\u9898</title><content>\u957F\u671F\u6709\u6548\u786E\u5B9A\u4E8B\u5B9E</content><keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<title>标题</title><content>长期有效确定事实</content><keywords>关键词</keywords>
 <permanence>stable|irreversible|long-term|unresolved</permanence>
-<source_row_ids>\u6765\u6E90\u8868\u683C\u884CID</source_row_ids><source_fact_ids>\u6765\u6E90\u4E8B\u5B9EID</source_fact_ids>
+<source_row_ids>来源表格行ID</source_row_ids><source_fact_ids>来源事实ID</source_fact_ids>
 </long_term_candidate>
 </small_summary>
 
-\u804C\u8D23\uFF1A
-1. \u538B\u7F29\u9636\u6BB5\u4E8B\u5B9E\uFF0C\u4FDD\u7559\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u5173\u7CFB\u6210\u7ACB\u6216\u65AD\u88C2\u3001\u672A\u89E3\u51B3\u4E8B\u9879\u548C\u56DE\u6D41\u6761\u4EF6\u3002
-2. absorbed_row_ids \u5FC5\u987B\u662F summary \u5DF2\u660E\u786E\u4FDD\u5B58\u7ED3\u679C\u7684\u884C\u3002
-3. remove_row_ids \u5FC5\u987B\u540C\u65F6\u5728 absorbed_row_ids \u4E2D\uFF0C\u4E14\u4E0D\u80FD\u5728 keep_active_row_ids \u4E2D\u3002
-4. \u53EF\u9000\u51FA\u8868\u683C\u4EC5\u9650 spacetime\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\uFF1B\u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002
-5. \u624B\u5DE5\u6216\u9501\u5B9A\u884C\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
-6. \u4ECD\u5728\u8FDB\u884C\u3001\u4ECD\u5F71\u54CD\u5F53\u524D\u884C\u52A8\u6216\u53EF\u80FD\u7ACB\u5373\u8C03\u7528\u7684\u5185\u5BB9\u4E0D\u5F97\u6C89\u964D\u3002
-7. \u6B7B\u4EA1\u3001\u7269\u54C1\u9500\u6BC1\u3001\u5173\u7CFB\u65AD\u88C2\u3001\u80FD\u529B\u6C38\u4E45\u5931\u53BB\u7B49\u5FC5\u987B\u5148\u5199\u5165 summary \u4E0E\u957F\u671F\u5019\u9009\uFF0C\u4E0D\u80FD\u53EA\u5220\u9664\u8868\u683C\u3002
-8. character_activity \u53EA\u80FD\u9010\u7EA7\u8FDB\u5165\u4F11\u7720\u3001\u957F\u671F\u4F11\u7720\u3001\u5DF2\u5F52\u6863\uFF0C\u4E0D\u5F97\u6539\u53D8\u5B58\u5728\u72B6\u6001\u6216\u6B7B\u4EA1\u5224\u65AD\u3002
-9. long_term_candidate \u53EA\u4FDD\u7559\u771F\u6B63\u957F\u671F\u6709\u6548\u3001\u4E0D\u53EF\u9006\u6216\u957F\u671F\u672A\u51B3\u5185\u5BB9\uFF1B\u77ED\u6682\u4F4D\u7F6E\u548C\u8FC7\u7A0B\u4E0D\u8FDB\u5165\u3002
-10. \u5217\u8868\u4F7F\u7528\u201C\uFF5C\u201D\u5206\u9694\u3002`;
+规则：
+1. 阶段概览不是实际发布单元；每个可独立触发、更新或沉降的事件必须单独输出 event_entry。
+2. 同一事件延续时复用既有 event_id；只有确实属于同一因果对象才 merge。
+3. 传播、已知者、渠道、误传、痕迹和影响都必须有本批事实或表格依据；不得后台自动演算。
+4. 不输出“下一次复核时间”。只记录发生时间和最后确认时间；后续由正文 AI 对比当前时间判断。
+5. 没有新确认时不得把 fuzzy/trace 恢复成 exact；正文出现新的明确证据时可以提高精度。
+6. constant 只用于当前仍活跃、重要且必须持续注入的极少数事件；一般事件用 keyword；模糊历史、风声和痕迹用 vector。
+7. remove 只用于低重要度、无持续影响、已成为 trace 的条目；否则改为沉降而不是删除。
+8. 可退出表格仅限 spacetime、relationships、items、skills、events、regions；不得删除 focus、characters、foundations。
+9. 手工或锁定行不得删除、覆盖或降级。仍在进行、影响当前行动或可立即调用的内容不得沉降。
+10. 死亡、永久失去、关系断裂等不可逆结果必须先进入事件条目和长期候选，不能只删表格。
+11. 列表使用“｜”分隔。`;
 }
-function smallSummaryPrompt(packages, snapshot) {
-  return `\u8BF7\u5C06\u4EE5\u4E0B\u4E8B\u5B9E\u7D20\u6750\u538B\u7F29\u4E3A\u4E00\u4EFD\u9636\u6BB5\u5C0F\u603B\u7ED3\uFF0C\u5E76\u7ED9\u51FA\u53EF\u9A8C\u8BC1\u7684\u5438\u6536\u51ED\u8BC1\u548C\u5B89\u5168\u6C89\u964D\u8BA1\u5212\u3002
+function smallSummaryPrompt(packages, snapshot, existingEvents) {
+  return `请把以下事实素材与活跃表格整理为阶段概览和独立事件条目，并给出安全沉降计划。
 
-\u3010\u9636\u6BB5\u4E8B\u5B9E\u7D20\u6750\u3011
+【阶段事实素材】
 ${formatPackages(packages)}
 
-\u3010\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
+【当前活跃表格】
 ${formatSnapshot(snapshot)}
 
-\u53EA\u8F93\u51FA <small_summary> \u6807\u7B7E\u5757\u3002\u4E0D\u8981\u8F93\u51FA JSON\u3002`;
+【既有事件条目；仅用于稳定ID、延续、传播和精度比较】
+${formatEventRegistry(existingEvents)}
+
+只输出 <small_summary> 标签块。`;
 }
 function largeSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u3001\u672C\u6279\u5C0F\u603B\u7ED3\u548C\u957F\u671F\u5019\u9009\uFF0C\u4E0D\u8BFB\u53D6\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+  return `你是镜渊“事件总结 → 长期大总结”沉降结算器。你只读取上一版长期记录、本批小总结中的事件条目和长期候选，不读取原始正文或当前表格，不续写故事。
 
-\u7981\u6B62\u8F93\u51FA JSON\u3001JSON Schema\u3001Markdown \u4EE3\u7801\u5757\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u6216\u601D\u8003\u8FC7\u7A0B\u3002
-\u8F93\u51FA\u5FC5\u987B\u4F7F\u7528\u4EE5\u4E0B\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF1A
+禁止输出 JSON、Markdown 代码块、解释或思考过程。只输出：
 
 <large_summary>
-<title>\u957F\u671F\u8109\u7EDC\u6807\u9898</title>
-<keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<title>长期脉络标题</title>
+<keywords>关键词1｜关键词2</keywords>
 <operation>
 <action>upsert|remove|merge</action>
-<record_id>\u7A33\u5B9A\u8BB0\u5F55ID</record_id>
-<source_record_ids>\u4EC5 merge \u586B\u5199\uFF0C\u4F7F\u7528\uFF5C\u5206\u9694</source_record_ids>
+<record_id>稳定长期记录ID</record_id>
+<source_record_ids>仅 merge 填写</source_record_ids>
 <category>world|character|relationship|event|region|item|skill|historical|unresolved|other</category>
-<title>\u8BB0\u5F55\u6807\u9898</title><content>\u957F\u671F\u6709\u6548\u5185\u5BB9</content><keywords>\u5173\u952E\u8BCD</keywords>
+<title>记录标题</title><content>长期有效内容</content><keywords>关键词</keywords>
 <permanence>stable|irreversible|long-term|unresolved</permanence>
-<reason>\u4FEE\u6539\u4F9D\u636E</reason>
+<reason>修改依据</reason>
 </operation>
+<event_update>
+<action>keep|sediment|remove</action>
+<event_id>本批小总结中的事件ID</event_id>
+<facts>仅 sediment 时填写降精度后的事实，不得补回已模糊细节</facts>
+<status>resolved|dormant|historical|trace</status>
+<precision>compressed|fuzzy|trace</precision>
+<activation>keyword|vector</activation>
+<reason>沉降依据</reason>
+</event_update>
 </large_summary>
 
-\u89C4\u5219\uFF1A
-1. \u6CA1\u6709\u53D8\u5316\u7684\u65E7\u8BB0\u5F55\u65E0\u9700\u8F93\u51FA\uFF0C\u4EE3\u7801\u81EA\u52A8\u4FDD\u7559\u3002
-2. upsert \u65B0\u589E\u6216\u66F4\u65B0\u540C\u4E00 record_id\uFF1Bremove \u5220\u9664\u771F\u6B63\u5931\u53BB\u957F\u671F\u610F\u4E49\u7684\u8BB0\u5F55\uFF1Bmerge \u5408\u5E76\u91CD\u590D\u6216\u88AB\u66FF\u4EE3\u8BB0\u5F55\u3002
-3. irreversible \u4E0D\u80FD\u76F4\u63A5 remove\uFF0C\u53EA\u80FD\u4FEE\u6B63\u6216\u5408\u5E76\u5230\u4ECD\u4FDD\u5B58\u540C\u4E00\u4E0D\u53EF\u9006\u4E8B\u5B9E\u7684\u8BB0\u5F55\u3002
-4. \u4FDD\u7559\u957F\u671F\u8EAB\u4EFD\u3001\u5173\u7CFB\u3001\u4E16\u754C\u89C4\u5219\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u4E0D\u53EF\u9006\u540E\u679C\u3001\u91CD\u8981\u5386\u53F2\u7ED3\u679C\u548C\u957F\u671F\u672A\u51B3\u4E8B\u9879\u3002
-5. \u4E34\u65F6\u4F4D\u7F6E\u3001\u77ED\u671F\u4F24\u52BF\u548C\u5F53\u524D\u4E8B\u4EF6\u9636\u6BB5\u4E0D\u8FDB\u5165\u957F\u671F\u5C42\uFF0C\u9664\u975E\u5F62\u6210\u957F\u671F\u5F71\u54CD\u3002
-6. \u4E0D\u5F97\u56E0\u957F\u671F\u672A\u51FA\u73B0\u64C5\u81EA\u5224\u5B9A\u6B7B\u4EA1\u3001\u5931\u8E2A\u6216\u5173\u7CFB\u7EC8\u6B62\u3002
-7. \u5217\u8868\u4F7F\u7528\u201C\uFF5C\u201D\u5206\u9694\u3002`;
+规则：
+1. 没变化的旧长期记录无需输出，代码自动保留。
+2. 大总结只继承小总结事件条目保留的精度，不得恢复姓名、数字、时间、地点等已沉降细节。
+3. event_update 只处理本批事件。仍 active/unresolved 或仍影响当前行动的事件必须 keep。
+4. 已结束事件可从 exact 降为 compressed；远离当前接触面且仅留风声或痕迹时可降为 fuzzy/trace，并改为 vector。
+5. remove 只允许低重要度、无持续影响、已经是 trace 的事件。不可逆事实不得删除。
+6. 不得因长期未出现自行判定死亡、失踪、关系终止或传播变化。
+7. 临时位置、短期伤势和当前阶段不进入长期层，除非形成长期影响。
+8. 列表使用“｜”分隔。`;
 }
 function formatPrevious(records) {
-  if (!records.length) return "\uFF08\u65E0\uFF09";
-  return records.map((record) => `- ID=${record.recordId}\uFF1B\u7C7B\u522B=${record.category}\uFF1B\u6807\u9898=${record.title}\uFF1B\u6C38\u4E45\u6027=${record.permanence}\uFF1B\u5185\u5BB9=${record.content}\uFF1B\u5173\u952E\u8BCD=${join(record.keywords)}`).join("\n");
+  if (!records.length) return "（无）";
+  return records.map((record) => `- ID=${record.recordId}；类别=${record.category}；标题=${record.title}；永久性=${record.permanence}；内容=${record.content}；关键词=${join(record.keywords)}`).join("\n");
 }
 function formatSummaries(summaries) {
-  return summaries.map((item2) => `- ID=${item2.id}\uFF1B\u6807\u9898=${item2.title}\uFF1B\u6458\u8981=${item2.summary}\uFF1B\u5173\u952E\u8BCD=${join(item2.keywords)}`).join("\n");
+  return summaries.map((item2) => {
+    const events = (item2.eventOperations ?? []).map((event) => `  · 事件ID=${event.eventId}；标题=${event.title}；状态=${event.status}；精度=${event.precision}；重要度=${event.importance}；事实=${event.facts}；传播=${event.propagation.scope}；痕迹=${join(event.traces)}；影响=${join(event.impacts)}`).join("\n");
+    return `- 小总结ID=${item2.id}；标题=${item2.title}；概览=${item2.summary}\n${events || "  · 无独立事件条目"}`;
+  }).join("\n");
 }
 function formatCandidates(candidates) {
-  if (!candidates.length) return "\uFF08\u65E0\uFF09";
-  return candidates.map((record) => `- ID=${record.recordId}\uFF1B\u7C7B\u522B=${record.category}\uFF1B\u6807\u9898=${record.title}\uFF1B\u6C38\u4E45\u6027=${record.permanence}\uFF1B\u5185\u5BB9=${record.content}\uFF1B\u5173\u952E\u8BCD=${join(record.keywords)}`).join("\n");
+  if (!candidates.length) return "（无）";
+  return candidates.map((record) => `- ID=${record.recordId}；类别=${record.category}；标题=${record.title}；永久性=${record.permanence}；内容=${record.content}；关键词=${join(record.keywords)}`).join("\n");
 }
-function formatAnchors(snapshot) {
-  const lines = [];
-  for (const [table, rows2] of Object.entries(snapshot)) {
-    if (!rows2.length) continue;
-    lines.push(`\u3010${TABLE_LABELS[table]}\u3011${rows2.map((row) => `${row.id}:${row.title}:${row.status || "\u672A\u6807\u6CE8"}`).join("\uFF5C")}`);
-  }
-  return lines.join("\n") || "\uFF08\u65E0\uFF09";
-}
-function largeSummaryPrompt(summaries, snapshot, previousRecords, candidates) {
-  return `\u8BF7\u6839\u636E\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u4E0E\u672C\u6279\u9636\u6BB5\u603B\u7ED3\uFF0C\u8F93\u51FA\u957F\u671F\u8BB0\u5F55\u7684\u589E\u5220\u6539\u5408\u5E76\u64CD\u4F5C\u3002
+function largeSummaryPrompt(summaries, previousRecords, candidates) {
+  return `请根据上一版长期记录与本批小总结中的事件条目，输出长期记录操作和必要的事件沉降操作。
 
-\u3010\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u3011
+【上一版长期记录】
 ${formatPrevious(previousRecords)}
 
-\u3010\u672C\u6279\u5C0F\u603B\u7ED3\u3011
+【本批小总结与事件条目】
 ${formatSummaries(summaries)}
 
-\u3010\u672C\u6279\u957F\u671F\u5019\u9009\u3011
+【本批长期候选】
 ${formatCandidates(candidates)}
 
-\u3010\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u951A\u70B9\u3011
-${formatAnchors(snapshot)}
-
-\u53EA\u8F93\u51FA <large_summary> \u6807\u7B7E\u5757\u3002\u4E0D\u8981\u8F93\u51FA JSON\u3002`;
+只输出 <large_summary> 标签块。`;
 }
 
 // src/pipeline/summary.ts
@@ -5683,6 +6041,7 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
     state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => !affectedKeys.has(key));
     state2.smallSummaries = invalidation.smallSummaries;
     state2.largeSummaries = invalidation.largeSummaries;
+    state2.eventEntries = rebuildEventEntries(state2.smallSummaries, state2.largeSummaries);
     state2.latestSnapshotMessageKey = previous?.messageKey;
     state2.lastFactMessageIndex = previous?.messageIndex;
     state2.lastFactPackageId = previous?.factPackageId;
@@ -5976,25 +6335,41 @@ function fallbackLongTermCandidates(summaries) {
     if (item2.longTermCandidates?.length) {
       candidates.push(...item2.longTermCandidates.map((record) => ({
         ...record,
-        sourceSummaryIds: [.../* @__PURE__ */ new Set([...record.sourceSummaryIds, item2.id])]
+        sourceSummaryIds: [...new Set([...record.sourceSummaryIds, item2.id])]
       })));
-      continue;
     }
-    if (!item2.summary.trim()) continue;
-    candidates.push({
-      recordId: `stage:${item2.id}`,
-      category: "historical",
-      title: item2.title,
-      content: item2.summary,
-      keywords: [...item2.keywords],
-      permanence: "long-term",
-      sourceRowIds: [],
-      sourceFactIds: [],
-      sourceSummaryIds: [item2.id],
-      updatedAt: item2.createdAt
-    });
+    for (const event of item2.eventOperations ?? []) {
+      const longTerm = event.importance === "critical" || event.importance === "high" || event.status === "unresolved" || event.status === "historical" || event.status === "trace" || event.impacts.length;
+      if (!longTerm || event.operation === "remove") continue;
+      candidates.push({
+        recordId: `event:${event.eventId}`,
+        category: event.status === "unresolved" ? "unresolved" : "event",
+        title: event.title,
+        content: event.facts,
+        keywords: [...event.keywords],
+        permanence: event.status === "unresolved" ? "unresolved" : "long-term",
+        sourceRowIds: [...event.sourceRowIds],
+        sourceFactIds: [...event.sourceFactIds],
+        sourceSummaryIds: [item2.id],
+        updatedAt: item2.createdAt
+      });
+    }
+    if (!item2.eventOperations?.length && !item2.longTermCandidates?.length && item2.summary.trim()) {
+      candidates.push({
+        recordId: `stage:${item2.id}`,
+        category: "historical",
+        title: item2.title,
+        content: item2.summary,
+        keywords: [...item2.keywords],
+        permanence: "long-term",
+        sourceRowIds: [],
+        sourceFactIds: [],
+        sourceSummaryIds: [item2.id],
+        updatedAt: item2.createdAt
+      });
+    }
   }
-  const byId = /* @__PURE__ */ new Map();
+  const byId = new Map();
   for (const candidate of candidates) byId.set(candidate.recordId, candidate);
   return [...byId.values()].slice(0, 160);
 }
@@ -6018,7 +6393,7 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
     for (const pack of pending) {
       selected.push(pack);
       count += pack.turnMaterials.length;
-      if (!force && count >= threshold) break;
+      if (count >= threshold) break;
     }
     if (!selected.length || !force && count < threshold) return null;
     if (!artifact.snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5C0F\u603B\u7ED3\u6C89\u964D\u7684\u5F53\u524D\u6D3B\u8DC3\u8868\u683C");
@@ -6031,7 +6406,7 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
     const raw = await generateTask({
       task: "smallSummary",
       systemPrompt: smallSummarySystemPrompt(),
-      prompt: smallSummaryPrompt(selected, artifact.snapshot),
+      prompt: smallSummaryPrompt(selected, artifact.snapshot, chatState.eventEntries ?? []),
       signal,
       invocation: {
         sourceRange,
@@ -6055,6 +6430,7 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
     if (!afterChatState.smallSummaries.some((item2) => item2.sourceKeys.join("|") === summary.sourceKeys.join("|"))) {
       afterChatState.smallSummaries.push(deepClone(summary));
     }
+    afterChatState.eventEntries = rebuildEventEntries(afterChatState.smallSummaries, afterChatState.largeSummaries);
     await commitSummaryMutation({
       operation: "small_summary",
       intentKey,
@@ -6079,7 +6455,6 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
     const pending = pendingSmallSummaries(chatState.smallSummaries, chatState.largeSummaries);
     const threshold = Math.max(1, Number(settings.largeSummaryCount) || 6);
     if (!pending.length || !force && pending.length < threshold) return null;
-    if (!artifact.snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u6821\u51C6\u7684\u5F53\u524D\u6D3B\u8DC3\u8868\u683C");
     const selected = force ? pending : pending.slice(0, threshold);
     const previousLarge = chatState.largeSummaries.at(-1);
     const sourceKeys = selected.map((item2) => item2.id);
@@ -6088,7 +6463,6 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
       systemPrompt: largeSummarySystemPrompt(),
       prompt: largeSummaryPrompt(
         selected,
-        artifact.snapshot,
         longTermRecordsFromPrevious(previousLarge),
         fallbackLongTermCandidates(selected)
       ),
@@ -6125,6 +6499,7 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
     if (!afterChatState.largeSummaries.some((item2) => item2.sourceKeys.join("|") === summary.sourceKeys.join("|"))) {
       afterChatState.largeSummaries.push(deepClone(summary));
     }
+    afterChatState.eventEntries = rebuildEventEntries(afterChatState.smallSummaries, afterChatState.largeSummaries);
     await commitSummaryMutation({
       operation: "large_summary",
       intentKey,
@@ -6617,7 +6992,7 @@ async function attachAndStore(artifact) {
 async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, options = {}) {
   if (!artifacts.length) throw new Error("\u6CA1\u6709\u53EF\u63D0\u53D6\u7684\u6B63\u6587");
   for (const artifact of artifacts) {
-    assertArtifactCurrent(artifact, signal);
+    assertApprovedForMemory(artifact, signal);
     markStage(artifact, "state", "running");
     await putArtifact(artifact);
   }
@@ -6651,7 +7026,7 @@ async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, option
       }
       throw error;
     }
-    for (const artifact of artifacts) assertArtifactCurrent(artifact, signal);
+    for (const artifact of artifacts) assertApprovedForMemory(artifact, signal);
     return normalizeUnifiedFactPackage({
       raw: parsed,
       artifacts,
@@ -6671,7 +7046,7 @@ async function dispatchUnifiedFactPackage(input) {
   const { artifacts, factPackage, signal } = input;
   const latest = artifacts.at(-1);
   if (!latest) throw new Error("\u7EDF\u4E00\u4E8B\u5B9E\u5305\u6CA1\u6709\u76EE\u6807\u4EA7\u7269");
-  for (const artifact of artifacts) assertArtifactCurrent(artifact, signal);
+  for (const artifact of artifacts) assertApprovedForMemory(artifact, signal);
   const state2 = await getChatState(latest.chatKey);
   assertHistoryRebuildAccess(state2);
   for (const artifact of artifacts) {
@@ -6695,6 +7070,7 @@ async function dispatchUnifiedFactPackage(input) {
     const signature = factPackage.stageSummary.sourceKeys.join("|");
     if (!state2.smallSummaries.some((summary) => summary.sourceKeys.join("|") === signature)) {
       state2.smallSummaries.push(deepClone(factPackage.stageSummary));
+      state2.eventEntries = rebuildEventEntries(state2.smallSummaries, state2.largeSummaries);
     }
     markStage(latest, "summary", "success", `\u5386\u53F2\u6279\u6B21\u5DF2\u5F62\u6210\u9636\u6BB5\u603B\u7ED3\uFF1A${factPackage.stageSummary.title}`);
   }
@@ -6743,7 +7119,7 @@ async function replayUnifiedFactPackages(input) {
   const packages = [...input.factPackages].sort((a, b) => a.sourceRange.startIndex - b.sourceRange.startIndex);
   const latest = artifacts.at(-1);
   if (!latest || !packages.length) throw new Error("\u7F13\u5B58\u4E8B\u5B9E\u91CD\u653E\u6CA1\u6709\u53EF\u7528\u8F93\u5165");
-  for (const artifact of artifacts) assertArtifactCurrent(artifact, input.signal);
+  for (const artifact of artifacts) assertApprovedForMemory(artifact, input.signal);
   const state2 = await getChatState(latest.chatKey);
   assertHistoryRebuildAccess(state2);
   const byKey = new Map(artifacts.map((artifact) => [artifact.messageKey, artifact]));
@@ -6796,20 +7172,9 @@ async function replayUnifiedFactPackages(input) {
   }
   latest.snapshot = deepClone(workingSnapshot);
   if (getSettings().autoSmallSummary && recoveredMaterials.length) {
-    const sourceKeys = [...new Set(recoveredMaterials.map((material) => material.sourceMessageKey))];
-    const summary = {
-      id: `small-cache:${hashText(sourceKeys.join("|"))}`,
-      kind: "small",
-      title: `\u590D\u7528\u9636\u6BB5\u8BB0\u5FC6 \xB7 \u6D88\u606F ${artifacts[0].messageIndex + 1}\u2013${latest.messageIndex + 1}`,
-      summary: recoveredMaterials.map((material) => material.summary).filter(Boolean).join("\n"),
-      keywords: [...new Set(recoveredMaterials.flatMap((material) => material.keywords))].slice(0, 24),
-      sourceKeys,
-      createdAt: nowIso()
-    };
-    if (!state2.smallSummaries.some((item2) => item2.id === summary.id)) state2.smallSummaries.push(summary);
-    markStage(latest, "summary", "success", `\u590D\u7528 ${sourceKeys.length} \u6761\u65E2\u6709\u9636\u6BB5\u8BB0\u5FC6`);
+    markStage(latest, "summary", "queued", `已复用 ${recoveredMaterials.length} 条事实素材；等待按“表格 → 事件条目”链重新生成`);
   } else {
-    markStage(latest, "summary", "skipped", "\u65E2\u6709\u9636\u6BB5\u603B\u7ED3\u4FDD\u6301\u6709\u6548");
+    markStage(latest, "summary", "skipped", "既有事件总结保持有效");
   }
   for (const artifact of artifacts) {
     if (artifact !== latest) {
@@ -6887,7 +7252,7 @@ var UnifiedFactScheduler = class {
       const { taskQueue: taskQueue2 } = await Promise.resolve().then(() => (init_task_queue(), task_queue_exports));
       const result = await taskQueue2.run(
         key,
-        chunks.length > 1 ? `\u6309\u4F53\u79EF\u5206 ${chunks.length} \u6279\u7EDF\u4E00\u63D0\u53D6 ${artifacts.length} \u6761\u6B63\u6587\u4E8B\u5B9E` : artifacts.length > 1 ? `\u7EDF\u4E00\u63D0\u53D6 ${artifacts.length} \u6761\u6B63\u6587\u4E8B\u5B9E` : `\u7EDF\u4E00\u63D0\u53D6\u7B2C ${artifacts[0].messageIndex + 1} \u6761\u6B63\u6587\u4E8B\u5B9E`,
+        chunks.length > 1 ? `按体积分 ${chunks.length} 批：正文 → 表格（${artifacts.length} 条）` : artifacts.length > 1 ? `正文 → 表格（合并 ${artifacts.length} 条）` : `正文 → 表格 · 消息 ${artifacts[0].messageIndex + 1}`,
         "factExtraction",
         async (signal) => {
           let latestResult = null;
@@ -6916,7 +7281,7 @@ var UnifiedFactScheduler = class {
           blocking: false,
           sourceRange: { startIndex: artifacts[0].messageIndex, endIndex: artifacts.at(-1).messageIndex },
           progressTotal: artifacts.length,
-          progressLabel: chunks.length > 1 ? `\u6309\u4F53\u79EF\u5206 ${chunks.length} \u6279` : artifacts.length > 1 ? `\u5408\u5E76 ${artifacts.length} \u8F6E` : "\u63D0\u53D6\u4E8B\u5B9E"
+          progressLabel: chunks.length > 1 ? `分 ${chunks.length} 批更新活跃表格` : artifacts.length > 1 ? `合并 ${artifacts.length} 轮更新表格` : "提取事实并更新表格"
         }
       );
       for (const waiter of batch.waiters) waiter.resolve(result);
@@ -6956,7 +7321,7 @@ var UnifiedFactScheduler = class {
       const { taskQueue: taskQueue2 } = await Promise.resolve().then(() => (init_task_queue(), task_queue_exports));
       await taskQueue2.run(
         `derived:${chatKey}:${artifact.messageKey}`,
-        "\u8FFD\u5E73\u9636\u6BB5\u603B\u7ED3\u4E0E\u6700\u65B0\u4E16\u754C\u4E66",
+        "表格 → 事件条目 → 大总结 → 世界书",
         "smallSummary",
         async (signal) => {
           if (chatKey !== currentChatKey()) throw new StaleTaskError("\u6D3E\u751F\u4EFB\u52A1\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
@@ -6980,7 +7345,7 @@ var UnifiedFactScheduler = class {
           priority: "background-derived",
           blocking: false,
           sourceRange: { startIndex: artifact.messageIndex, endIndex: artifact.messageIndex },
-          progressLabel: "\u603B\u7ED3\u4E0E\u53D1\u5E03\u8BA1\u5212"
+          progressLabel: "生成分层总结并安排发布"
         }
       );
     } catch (error) {
@@ -7111,7 +7476,8 @@ async function processMessage(index, force = false, options = {}) {
   const key = `${PIPELINE_VERSION}:foreground:${chatKey}:${identity}`;
   const awaitBackground = options.awaitBackground ?? true;
   const auditConnectionSnapshot = settings.auditEnabled ? captureTaskConnection("audit") : void 0;
-  const foreground = await taskQueue.run(key, `\u524D\u53F0\u5BA1\u6838 \xB7 \u6D88\u606F ${index + 1}`, "audit", async (signal) => {
+  const foregroundLabel = settings.auditEnabled ? `正文准入与审核 · 消息 ${index + 1}` : `正文准入（审核关闭） · 消息 ${index + 1}`;
+  const foreground = await taskQueue.run(key, foregroundLabel, "admission", async (signal) => {
     const initialState = await getChatState(chatKey);
     assertHistoryRebuildAccess(initialState);
     const artifact = await loadOrCreateArtifact(index, force);
@@ -7142,6 +7508,7 @@ async function processMessage(index, force = false, options = {}) {
         assertArtifactScope(artifact, signal);
         await applyAuditFailureAction(artifact, failureAction);
         releaseQuarantine(artifact);
+        markAdmissionBlocked(artifact, audit.reason || "规则审核未通过");
         markStage(artifact, "state", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "sync", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
@@ -7202,6 +7569,7 @@ async function processHistoryBatch(indexes, options) {
     releaseQuarantine(artifact);
     markStage(artifact, "audit", "skipped", "\u5386\u53F2\u91CD\u5EFA\u4EC5\u56DE\u8BFB\u7F3A\u5931\u6216\u5931\u6548\u6B63\u6587");
     markStage(artifact, "revision", "skipped", "\u5386\u53F2\u91CD\u5EFA\u8DF3\u8FC7\u4FEE\u6B63");
+    markAdmissionApproved(artifact, "history-rebuild", "历史重建按已保存正文回读，不重新执行审核");
     markStage(artifact, "state", "queued");
     await stageArtifact(index, artifact);
     artifacts.push(artifact);
@@ -7211,7 +7579,7 @@ async function processHistoryBatch(indexes, options) {
     deferLorebookSync: options.deferLorebookSync,
     force: true,
     holdDerived: options.holdDerived,
-    includeStageSummary: true
+    includeStageSummary: false
   });
 }
 async function replayHistoryBatch(indexes, factPackages, options) {
@@ -7223,6 +7591,7 @@ async function replayHistoryBatch(indexes, factPackages, options) {
     releaseQuarantine(artifact);
     markStage(artifact, "audit", "skipped", "\u5386\u53F2\u91CD\u5EFA\u590D\u7528\u65E2\u6709\u4E8B\u5B9E\u5305\uFF0C\u4E0D\u91CD\u65B0\u8BFB\u53D6\u6B63\u6587");
     markStage(artifact, "revision", "skipped", "\u4E8B\u5B9E\u590D\u7528\u65E0\u9700\u4FEE\u6B63");
+    markAdmissionApproved(artifact, "history-cache", "历史重建复用已确认的事实包");
     markStage(artifact, "state", "queued", "\u7B49\u5F85\u672C\u5730\u6279\u91CF\u91CD\u653E\u65E2\u6709\u4E8B\u5B9E");
     artifacts.push(artifact);
   }
@@ -7235,10 +7604,18 @@ async function replayHistoryBatch(indexes, factPackages, options) {
 }
 async function finalizeHistoryDerived(artifact) {
   unifiedFactScheduler.clearDeferred(artifact.chatKey);
-  markStage(artifact, "summary", "running", "\u5386\u53F2\u6279\u6B21\u5C0F\u603B\u7ED3\u5DF2\u751F\u6210\uFF0C\u6B63\u5728\u66F4\u65B0\u957F\u671F\u8109\u7EDC");
+  markStage(artifact, "summary", "running", "历史事实已投影到表格，正在按阈值生成事件总结");
+  await stageArtifact(artifact.messageIndex, artifact);
+  let generatedSmall = 0;
+  for (let guard = 0; guard < 200; guard += 1) {
+    const summary = await generateSmallSummary(artifact, true);
+    if (!summary) break;
+    generatedSmall += 1;
+  }
+  markStage(artifact, "summary", "running", `已生成 ${generatedSmall} 份事件总结，正在更新长期大总结`);
   await stageArtifact(artifact.messageIndex, artifact);
   await generateLargeSummary(artifact, true);
-  markStage(artifact, "summary", "success", "\u5386\u53F2\u91CD\u5EFA\u957F\u671F\u8109\u7EDC\u5DF2\u66F4\u65B0");
+  markStage(artifact, "summary", "success", `历史重建完成：${generatedSmall} 份事件总结已汇入长期大总结`);
   await commitArtifact(artifact.messageIndex, artifact);
 }
 function scheduleMessage(payload, force = false, delay = 0) {
@@ -7909,7 +8286,7 @@ function root() {
         <header class="ma11-header">
           <div>
             <div class="ma11-brand">\u955C\u6E0A <span>${VERSION}</span></div>
-            <div class="ma11-subtitle">\u7ED3\u6784\u5316\u72B6\u6001\u3001\u5206\u5C42\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
+            <div class="ma11-subtitle">正文准入 → 活跃表格 → 事件条目 → 长期总结</div>
           </div>
           <div class="ma11-header-actions">
             <button class="menu_button ma11-header-task-button" data-ma11-action="open-tasks" type="button" title="\u67E5\u770B\u4EFB\u52A1\u72B6\u6001">
@@ -8106,7 +8483,7 @@ async function tasksHtml() {
   const active = latestStates.filter((task) => task.state === "queued" || task.state === "running");
   const failed = latestStates.filter((task) => task.state === "failed");
   const completed = latestStates.filter((task) => task.state === "success");
-  return `<section class="ma11-toolbar"><div><h2>\u4EFB\u52A1\u4E2D\u5FC3</h2><p>\u6A21\u578B\u8C03\u7528\u7531 SillyTavern \u6267\u884C\uFF1B\u8FD9\u91CC\u4EC5\u663E\u793A\u955C\u6E0A\u4E1A\u52A1\u4EFB\u52A1\u7684\u6392\u961F\u3001\u8FDB\u5EA6\u548C\u7ED3\u679C\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-tasks">\u5237\u65B0</button><button data-ma11-action="open-diagnostics">\u8BCA\u65AD</button></div></section>
+  return `<section class="ma11-toolbar"><div><h2>\u4EFB\u52A1\u4E2D\u5FC3</h2><p>模型调用由 SillyTavern 异步执行；这里显示正文准入、表格、总结与发布的真实排队、进度和结果。</p></div><div class="ma11-actions"><button data-ma11-action="refresh-tasks">\u5237\u65B0</button><button data-ma11-action="open-diagnostics">\u8BCA\u65AD</button></div></section>
     <section class="ma11-task-summary-grid">
       <article class="ma11-card working"><b>${active.length}</b><span>\u8FD0\u884C\u6216\u6392\u961F</span></article>
       <article class="ma11-card danger"><b>${failed.length}</b><span>\u5931\u8D25</span></article>
@@ -8149,10 +8526,10 @@ function outboxStateText(value) {
 function stageCards(artifact) {
   const stages = artifact?.stages;
   const rows2 = [
-    ["audit", "\u89C4\u5219\u5BA1\u6838"],
-    ["revision", "\u5B9A\u5411\u4FEE\u6B63"],
-    ["state", "\u72B6\u6001\u63D0\u53D6"],
-    ["summary", "\u5206\u5C42\u603B\u7ED3"],
+    ["audit", "正文准入 / 审核"],
+    ["revision", "违规正文修正"],
+    ["state", "正文 → 活跃表格"],
+    ["summary", "表格 → 事件条目 → 大总结"],
     ["sync", "\u4E16\u754C\u4E66\u540C\u6B65"]
   ];
   return `<div class="ma11-stage-grid">${rows2.map(([key, label]) => {
@@ -8172,7 +8549,7 @@ function overviewHtml(artifactInfo) {
     <section class="ma11-hero">
       <div>
         <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
-        <p>${artifact ? `\u72B6\u6001\u8868 ${rows2} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
+        <p>${artifact ? `准入 ${escapeHtml(artifact.admission?.status === "approved" ? "已确认" : artifact.admission?.status || "待确认")} · 状态表 ${rows2} 条 · 更新时间 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "生成一条AI正文，或手动整理最新正文。"}</p>
       </div>
       <div class="ma11-actions">
         <button data-ma11-action="process-latest">\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
@@ -8188,8 +8565,8 @@ function overviewHtml(artifactInfo) {
       </div>
     </section>
     <section class="ma11-card ma11-note">
-      <b>\u672C\u7248\u67B6\u6784\u539F\u5219</b>
-      <p>\u6BCF\u6761AI\u6B63\u6587\u53EA\u521B\u5EFA\u4E00\u4E2A\u552F\u4E00\u4EFB\u52A1\uFF1B\u5BA1\u6838\u3001\u8868\u683C\u3001\u603B\u7ED3\u3001\u540C\u6B65\u5206\u9636\u6BB5\u4FDD\u5B58\u3002\u5355\u4E00\u9636\u6BB5\u5931\u8D25\u65F6\u53EA\u91CD\u8BD5\u8BE5\u9636\u6BB5\uFF0C\u4E0D\u91CD\u65B0\u8C03\u7528\u6574\u6761\u7BA1\u7EBF\u3002</p>
+      <b>本版数据链</b>
+      <p>正文是唯一事实源。审核可关闭；开启时只有通过或完成修正的最终正文才能进入后台表格任务。事件总结只读取事实包、活跃表格与既有事件ID；大总结只读取事件总结和上一版长期记录。关系图谱只读现有表格，供玩家观察，不调用模型、不写回数据，也不参与正文生成。</p>
     </section>`;
 }
 function lifecycleHtml(row) {
@@ -8335,15 +8712,14 @@ async function summariesHtml() {
   const state2 = info ? await getChatState(info.artifact.chatKey) : null;
   const small = state2?.smallSummaries ?? [];
   const large = state2?.largeSummaries ?? [];
+  const events = state2?.eventEntries ?? [];
+  const eventCards = events.length ? events.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((entry) => `<article class="ma11-summary"><h3>${escapeHtml(entry.title)}</h3><div class="ma11-summary-settlement"><span>${escapeHtml(entry.status)}</span><span>${escapeHtml(entry.precision)}</span><span>${escapeHtml(entry.activation)}</span><span>${escapeHtml(entry.propagation?.scope || "unknown")}</span></div><p>${escapeHtml(entry.facts)}</p>${entry.traces?.length ? `<small>痕迹：${escapeHtml(entry.traces.join("；"))}</small>` : ""}<small>最后确认：${escapeHtml(entry.lastConfirmedAt || "未明确")} · 更新：${escapeHtml(new Date(entry.updatedAt).toLocaleString())}</small></article>`).join("") : '<p class="ma11-empty">尚无独立事件条目。</p>';
   return `
-    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u8D1F\u8D23\u5B89\u5168\u6C89\u964D\u5DF2\u7ED3\u675F\u5185\u5BB9\uFF1B\u5927\u603B\u7ED3\u628A\u5DF2\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u5185\u63A8\u4E3A\u7D2F\u8BA1\u957F\u671F\u8BB0\u5FC6\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
+    <section class="ma11-toolbar"><div><h2>分层记忆</h2><p>最终正文先更新活跃表格；小总结把表格变化拆成独立事件条目；大总结只从事件总结形成长期记忆并降低旧事件精度。</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${info ? "" : "disabled"}>立即事件总结</button><button data-ma11-action="force-large" ${info ? "" : "disabled"}>立即长期沉降</button></div></section>
+    <section class="ma11-card"><header><b>事件条目</b><span>${events.length} · 常驻 ${events.filter((entry) => entry.activation === "constant").length} / 触发 ${events.filter((entry) => entry.activation === "keyword").length} / 向量 ${events.filter((entry) => entry.activation === "vector").length}</span></header>${eventCards}</section>
     <div class="ma11-summary-columns">
-      <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map(
-    (item2) => `<article class="ma11-summary"><h3>${escapeHtml(item2.title)}</h3><p>${escapeHtml(item2.summary)}</p>${item2.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item2.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item2.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item2.createdAt).toLocaleString())}</small></article>`
-  ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5C0F\u603B\u7ED3\u3002</p>'}</section>
-      <section class="ma11-card"><header><b>\u5927\u603B\u7ED3</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map(
-    (item2) => `<article class="ma11-summary"><h3>${escapeHtml(item2.title)}</h3><p>${escapeHtml(item2.summary)}</p>${item2.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item2.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item2.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item2.createdAt).toLocaleString())}</small></article>`
-  ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5927\u603B\u7ED3\u3002</p>'}</section>
+      <section class="ma11-card"><header><b>阶段概览</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map((item2) => `<article class="ma11-summary"><h3>${escapeHtml(item2.title)}</h3><p>${escapeHtml(item2.summary)}</p><div class="ma11-summary-settlement"><span>事件 ${item2.eventOperations?.length ?? 0}</span><span>沉降 ${item2.sedimentation?.appliedRowIds?.length ?? 0}</span></div><small>${escapeHtml(new Date(item2.createdAt).toLocaleString())}</small></article>`).join("") : '<p class="ma11-empty">尚无阶段概览。</p>'}</section>
+      <section class="ma11-card"><header><b>长期大总结</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map((item2) => `<article class="ma11-summary"><h3>${escapeHtml(item2.title)}</h3><p>${escapeHtml(item2.summary)}</p><div class="ma11-summary-settlement"><span>长期记录 ${item2.longTermRecords?.length ?? 0}</span><span>事件沉降 ${item2.eventUpdates?.length ?? 0}</span></div><small>${escapeHtml(new Date(item2.createdAt).toLocaleString())}</small></article>`).join("") : '<p class="ma11-empty">尚无长期大总结。</p>'}</section>
     </div>`;
 }
 function auditHtml() {
@@ -8436,8 +8812,8 @@ function settingsHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span>\u542F\u7528\u955C\u6E0A</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span>\u6BCF\u6761\u65B0AI\u6B63\u6587\u540E\u53F0\u7EDF\u4E00\u63D0\u53D6\u4E8B\u5B9E</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="showMessagePanel" ${settings.showMessagePanel ? "checked" : ""}/><span>\u5728\u6B63\u6587\u4E0B\u663E\u793A\u72B6\u6001\u6761</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5C0F\u603B\u7ED3</span></label>
-      <label>\u5C0F\u603B\u7ED3\u56DE\u5408\u6570<input type="number" min="1" max="100" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span>\u81EA\u52A8\u4E8B\u4EF6\u603B\u7ED3</span></label>
+      <label>\u4E8B\u4EF6\u603B\u7ED3\u56DE\u5408\u6570<input type="number" min="1" max="100" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
       <p class="ma11-help">\u4E8B\u5B9E\u3001\u8868\u683C\u4E0E\u603B\u7ED3\u4F7F\u7528\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF0C\u4E0D\u542F\u7528 JSON Schema\uFF0C\u4E5F\u4E0D\u4F1A\u8FFD\u52A0 JSON \u683C\u5F0F\u4FEE\u590D\u8C03\u7528\u3002\u8BF7\u6C42\u8D85\u65F6\u3001\u91CD\u8BD5\u3001\u9650\u6D41\u548C\u4F9B\u5E94\u5546\u9519\u8BEF\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216 Connection Profile \u7EDF\u4E00\u5904\u7406\u3002</p>
@@ -8918,7 +9294,7 @@ function panelHtml(index, artifact) {
     <div class="ma11-message-panel" data-ma-index="${index}">
       <button class="ma11-message-summary" type="button" data-ma-action="open">
         <span class="ma11-message-title">\u955C\u6E0A\u72B6\u6001</span>
-        <span class="ma11-badge ${tone(artifact.stages.audit)}">\u5BA1\u6838 ${stageLabel(artifact.stages.audit)}</span>
+        <span class="ma11-badge ${tone(artifact.stages.audit)}">准入/审核 ${stageLabel(artifact.stages.audit)}</span>
         <span class="ma11-badge ${tone(artifact.stages.revision)}">\u4FEE\u6B63 ${stageLabel(artifact.stages.revision)}</span>
         <span class="ma11-badge ${tone(artifact.stages.state)}">\u8868\u683C ${stageLabel(artifact.stages.state)}</span>
         <span class="ma11-badge ${tone(artifact.stages.sync)}">\u540C\u6B65 ${stageLabel(artifact.stages.sync)}</span>
@@ -9277,6 +9653,7 @@ async function applyLegacyMigrationUnlocked(requestedPreview, lease) {
     currentState.lastLorebookName ||= legacyState.lastLorebookName;
     currentState.lastSyncAt ||= legacyState.lastSyncAt;
   }
+  currentState.eventEntries = rebuildEventEntries(currentState.smallSummaries, currentState.largeSummaries);
   currentState.processedMessageKeys = [.../* @__PURE__ */ new Set([...currentState.processedMessageKeys, ...migratedKeys])];
   if (migratedKeys.length) currentState.latestSnapshotMessageKey = migratedKeys.at(-1);
   const context = getContext();

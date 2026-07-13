@@ -1,0 +1,30 @@
+{
+  "name": "Mirror Abyss / 镜渊",
+  "version": "1.1.0-alpha.10.7.0",
+  "baseline": "1.1.0-alpha.10.6.0 admission strict lineage deploy",
+  "build_date": "2026-07-14",
+  "build_type": "recovered deploy-bundle development",
+  "pipeline_contract": [
+    "assistant_final_text",
+    "admission_gate_optional_audit",
+    "active_tables",
+    "event_operations_and_stage_overview",
+    "derived_event_registry",
+    "large_summary_and_event_sedimentation",
+    "entry_level_lorebook_publish"
+  ],
+  "event_activation_modes": [
+    "constant",
+    "keyword",
+    "vector"
+  ],
+  "event_precision_order": [
+    "exact",
+    "compressed",
+    "fuzzy",
+    "trace"
+  ],
+  "graph_mode": "read_only",
+  "validation": "63/63 deploy-artifact checks and 10/10 event-domain tests passed",
+  "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive."
+}
