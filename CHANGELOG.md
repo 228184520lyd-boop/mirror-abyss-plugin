@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0-alpha.10.7.1 — Upstream HTML Diagnostics
+
+- 修复 `factExtraction` 上游返回 HTML 页面时，UI 同时显示外层诊断与底层 `Unexpected token '<'` JSON 解析异常的问题。
+- 错误信息现在标明当前聊天连接或具体 Connection Profile，并安全显示 API 类型、模型名、HTTP 状态和页面标题。
+- 按 401/403、404、429、502/503/504、登录页和网关页提供针对性的端点、代理、鉴权或服务状态提示。
+- 明确将该故障分类为 `upstream_html`，避免误判为事实提取协议、事件 JSON 或提示词格式错误。
+- 非瞬时 HTML 配置错误不再触发历史重建批次自动重试；502/503/504 仍允许按瞬时网关故障重试。
+- 正文准入、事件记忆、世界书事务、关系图谱和现有异步 UI 流程保持不变。
+
 ## 1.1.0-alpha.10.7.0 — Event Memory, Propagation & Sedimentation
 
 - 将整块小总结降为玩家可见的阶段概览；新增独立事件条目作为实际记忆、更新和世界书发布单元。

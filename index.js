@@ -21,8 +21,8 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.0";
-    PIPELINE_VERSION = "ma-pipeline-10.7.0";
+    VERSION = "1.1.0-alpha.10.7.1";
+    PIPELINE_VERSION = "ma-pipeline-10.7.1";
     TABLE_KEYS = [
       "focus",
       "spacetime",
@@ -275,6 +275,7 @@ function toErrorMessage(error) {
     while (current instanceof Error && !seen.has(current)) {
       seen.add(current);
       if (current.message && !parts.includes(current.message)) parts.push(current.message);
+      if (current.suppressCauseDetails === true) break;
       current = current.cause;
     }
     return parts.join("\uFF1A") || error.name || "\u672A\u77E5\u9519\u8BEF";
@@ -1512,26 +1513,93 @@ var NativeGenerationError = class extends Error {
     this.kind = kind;
     this.status = status;
     this.responsePreview = responsePreview;
+    this.suppressCauseDetails = Boolean(options?.suppressCauseDetails);
     this.name = "NativeGenerationError";
   }
   kind;
   status;
   responsePreview;
+  suppressCauseDetails;
 };
-function normalizeNativeGenerationError(error, task) {
-  if (error instanceof NativeGenerationError) return error;
-  if (error instanceof DOMException && error.name === "AbortError") {
-    return new NativeGenerationError(`${task}\u6A21\u578B\u8C03\u7528\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error });
+function nestedGenerationErrorText(error) {
+  const chunks = [];
+  const seen = /* @__PURE__ */ new Set();
+  let current = error;
+  for (let depth = 0; depth < 5 && current && !seen.has(current); depth += 1) {
+    seen.add(current);
+    if (current instanceof Error && current.message) chunks.push(current.message);
+    else if (typeof current === "string") chunks.push(current);
+    for (const value of [current?.responsePreview, current?.responseText, current?.response?.data, current?.body, current?.data]) {
+      if (typeof value === "string" && value.trim()) chunks.push(value);
+    }
+    current = current?.cause;
   }
-  const anyError = error;
-  const status = Number(anyError?.status ?? anyError?.statusCode ?? anyError?.response?.status);
+  return chunks.join("\n").slice(0, 6e3);
+}
+function generationErrorStatus(error, text) {
+  const direct = Number(error?.status ?? error?.statusCode ?? error?.response?.status);
+  if (Number.isFinite(direct) && direct >= 100 && direct <= 599) return direct;
+  const source = safeText(text, 6e3);
+  const match = source.match(/(?:HTTP(?:\s+status)?|status(?:Code)?|code)\D{0,8}([1-5]\d{2})/i)
+    ?? source.match(/\b([1-5]\d{2})\s+(?:bad gateway|not found|forbidden|unauthorized|service unavailable|gateway timeout|too many requests)/i);
+  return match ? Number(match[1]) : void 0;
+}
+function htmlPageLabel(text) {
+  const source = safeText(text, 6e3);
+  const match = source.match(/<(?:title|h1)[^>]*>([\s\S]{1,240}?)<\/(?:title|h1)>/i);
+  if (!match?.[1]) return "";
+  return match[1].replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim().slice(0, 160);
+}
+function generationConnectionLabel(context = {}) {
+  if (context.mode === "profile") {
+    const name = safeText(context.profileName, 120).trim() || "未命名配置";
+    const api = safeText(context.api, 80).trim();
+    const model = safeText(context.model, 160).trim();
+    const detail = [api, model].filter(Boolean).join(" / ");
+    return `Connection Profile「${name}」${detail ? `（${detail}）` : ""}`;
+  }
+  return "当前聊天连接";
+}
+function htmlFailureHint(status, text) {
+  if (status === 401 || status === 403) return "鉴权、登录会话或代理访问权限失效";
+  if (status === 404) return "API Base URL 或接口路径指向了网页/不存在的端点";
+  if (status === 429) return "上游限流页替代了标准 API 响应";
+  if (status === 502 || status === 503 || status === 504) return "反向代理或模型上游暂时不可用";
+  if (/cloudflare|nginx|gateway|bad gateway|service unavailable/i.test(text)) return "网关或反向代理没有连通模型服务";
+  if (/login|sign[ -]?in|unauthorized|forbidden/i.test(text)) return "请求被重定向到登录页或鉴权页";
+  return "API 类型、Base URL、反向代理路径、鉴权或上游服务状态异常";
+}
+function normalizeNativeGenerationError(error, task, connectionContext = {}) {
+  if (error instanceof NativeGenerationError) {
+    const nativeEvidence = `${error.message}\n${error.responsePreview ?? ""}`;
+    if (!/unexpected token ['"]?<['"]?|not valid json|<!doctype\s+html|<html(?:\s|>)/i.test(nativeEvidence)) return error;
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new NativeGenerationError(`${task}模型调用已取消`, "cancelled", void 0, void 0, { cause: error });
+  }
+  const evidence = nestedGenerationErrorText(error);
+  const status = generationErrorStatus(error, evidence);
   const message = toErrorMessage(error);
-  const preview = safeText(anyError?.responseText ?? anyError?.response?.data ?? anyError?.body ?? "", 500).trim();
-  const htmlFailure = /unexpected token ['"]?<['"]?|not valid json|<!doctype\s+html|<html/i.test(`${message} ${preview}`);
+  const htmlFailure = /unexpected token ['"]?<['"]?|not valid json|<!doctype\s+html|<html(?:\s|>)/i.test(evidence || message);
+  if (htmlFailure) {
+    const connection = generationConnectionLabel(connectionContext);
+    const hint = htmlFailureHint(status, evidence);
+    const page = htmlPageLabel(evidence);
+    const statusText = status ? `HTTP ${status}；` : "";
+    const pageText = page ? `页面：${page}；` : "";
+    return new NativeGenerationError(
+      `${task} 使用的${connection}返回了 HTML 页面，而不是模型 API 的 JSON 响应。${statusText}${pageText}${hint}。这不是事实提取协议或事件 JSON 的格式错误，请先在连接设置中修正并重新测试`,
+      "upstream_html",
+      status,
+      [status ? `HTTP ${status}` : "", page ? `页面：${page}` : ""].filter(Boolean).join("；") || void 0,
+      { cause: error instanceof Error ? error : void 0, suppressCauseDetails: true }
+    );
+  }
+  const preview = protocolPreview(evidence, 500).trim();
   return new NativeGenerationError(
-    htmlFailure ? `${task}\u4E0A\u6E38\u8FD4\u56DE\u4E86HTML\u9519\u8BEF\u9875` : message || `${task}\u6A21\u578B\u8C03\u7528\u5931\u8D25`,
+    message || `${task}模型调用失败`,
     "upstream",
-    Number.isFinite(status) ? status : void 0,
+    status,
     preview || void 0,
     { cause: error instanceof Error ? error : void 0 }
   );
@@ -1615,12 +1683,18 @@ async function generateCurrent(options, signal) {
     return text;
   } catch (error) {
     if (signal.aborted) throw new NativeGenerationError(`${options.task}\u6A21\u578B\u8C03\u7528\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
-    throw normalizeNativeGenerationError(error, options.task);
+    throw normalizeNativeGenerationError(error, options.task, { mode: "current" });
   }
 }
-async function generateWithNativeProfile(options, profileId, signal) {
+async function generateWithNativeProfile(options, profileId, signal, profileSnapshot = {}) {
   const context = getContext();
   const service = context.ConnectionManagerRequestService;
+  const liveProfile = listSupportedConnectionProfiles().find((item2) => item2.id === profileId);
+  const profileDescriptor = {
+    name: safeText(profileSnapshot.profileName ?? liveProfile?.name, 120),
+    api: safeText(profileSnapshot.profileApi ?? liveProfile?.api, 80),
+    model: safeText(profileSnapshot.profileModel ?? liveProfile?.model, 240)
+  };
   if (typeof service?.sendRequest !== "function") {
     throw new NativeGenerationError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9B ConnectionManagerRequestService", "configuration");
   }
@@ -1646,7 +1720,12 @@ async function generateWithNativeProfile(options, profileId, signal) {
     return text;
   } catch (error) {
     if (signal.aborted) throw new NativeGenerationError(`${options.task} Connection Profile\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
-    throw normalizeNativeGenerationError(error, options.task);
+    throw normalizeNativeGenerationError(error, options.task, {
+      mode: "profile",
+      profileName: profileDescriptor?.name,
+      api: profileDescriptor?.api,
+      model: profileDescriptor?.model
+    });
   }
 }
 function listSupportedConnectionProfiles() {
@@ -1685,6 +1764,8 @@ function captureTaskConnection(task) {
       credentialKey: `native-profile:${profileId}`,
       profileId,
       profileName: profile?.name || cleanProfileName(connection.profile),
+      profileApi: profile?.api || "",
+      profileModel: profile?.model || "",
       timeoutMs,
       capturedAt: nowIso()
     };
@@ -1730,7 +1811,7 @@ async function generateTask(options) {
   options.signal?.addEventListener("abort", forwardAbort, { once: true });
   if (options.signal?.aborted) controller.abort(options.signal.reason);
   try {
-    const result = spec.connection.mode === "profile" ? await generateWithNativeProfile(options, spec.connection.profileId, controller.signal) : await generateCurrent(options, controller.signal);
+    const result = spec.connection.mode === "profile" ? await generateWithNativeProfile(options, spec.connection.profileId, controller.signal, spec.connection) : await generateCurrent(options, controller.signal);
     assertInvocationScope(spec.chatKey, spec.scopeRevision, options.signal);
     return result;
   } finally {
@@ -6091,7 +6172,9 @@ async function currentRecord(record) {
   return state2.historyRebuild?.id === record.id ? state2.historyRebuild : record;
 }
 function retryableBatchError(error) {
-  return /504|timeout|timed out|network|fetch|socket|429|rate.?limit|上游|超时|网络|限流/i.test(toErrorMessage(error));
+  const message = toErrorMessage(error);
+  if (/HTML 页面|upstream_html/i.test(message) && !/HTTP (?:502|503|504)/i.test(message)) return false;
+  return /502|503|504|timeout|timed out|network|fetch|socket|429|rate.?limit|上游|超时|网络|限流/i.test(message);
 }
 async function runBatchWithRetry(work, onRetry) {
   let lastError2;
