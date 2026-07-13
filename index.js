@@ -1,85 +1,107 @@
-// src/constants.ts
-var MODULE_NAME = "mirrorAbyssV11";
-var LEGACY_MODULE_NAME = "mirrorAbyss";
-var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.1.0-alpha.9.7";
-var PIPELINE_VERSION = "ma-pipeline-9.7";
-var TABLE_KEYS = [
-  "focus",
-  "spacetime",
-  "characters",
-  "relationships",
-  "items",
-  "skills",
-  "events",
-  "regions",
-  "foundations"
-];
-var TABLE_LABELS = {
-  focus: "\u5F53\u524D\u7126\u70B9",
-  spacetime: "\u65F6\u95F4\u4E0E\u5730\u70B9",
-  characters: "\u4EBA\u7269",
-  relationships: "\u5173\u7CFB",
-  items: "\u7269\u54C1",
-  skills: "\u6280\u80FD\u4E0E\u80FD\u529B",
-  events: "\u4E8B\u4EF6\u4E0E\u6D41\u7A0B",
-  regions: "\u533A\u57DF\u72B6\u6001",
-  foundations: "\u57FA\u7840\u8BBE\u5B9A"
-};
-var DEFAULT_SETTINGS = {
-  enabled: true,
-  autoState: true,
-  showMessagePanel: true,
-  showTopButton: true,
-  auditEnabled: false,
-  auditPrompt: "",
-  auditFailAction: "revise",
-  revisionPrompt: "",
-  maxRevisionAttempts: 1,
-  stopOnRepeatedViolation: true,
-  revisionFallbackAction: "hide",
-  lockGenerationDuringAudit: true,
-  autoSmallSummary: true,
-  smallSummaryTurns: 15,
-  autoLargeSummary: true,
-  largeSummaryCount: 6,
-  lorebookSync: true,
-  autoCreateLorebook: true,
-  lorebookName: "",
-  vectorizeRows: false,
-  latestContinuityConstant: true,
-  lorebookLayout: "semantic",
-  repairInvalidJsonOnce: true,
-  requestTimeoutMs: 9e4,
-  connections: {
-    audit: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-    revision: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-    state: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-    smallSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-    largeSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" }
-  },
-  independentApiProfiles: [],
-  ui: {
-    activeTab: "overview",
-    activeTable: "focus",
-    graphScope: "relations",
-    graphZoom: 1
-  },
-  migration: {
-    legacyChecked: false
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
   }
 };
-var STORAGE_DB_NAME = "mirror-abyss-v11";
-var STORAGE_CHAT_PREFIX = "ma11:chat:";
-var STORAGE_ARTIFACT_PREFIX = "ma11:artifact:";
-var STORAGE_LOG_PREFIX = "ma11:log:";
-var STORAGE_TASK_PREFIX = "ma11:task:";
-var STORAGE_OUTBOX_PREFIX = "ma11:outbox:";
-var STORAGE_LOCAL_COMMIT_PREFIX = "ma11:local-commit:";
-var STORAGE_OPERATION_LOG_PREFIX = "ma11:operation-log:";
-var STORAGE_BACKUP_PREFIX = "ma11:backup:";
-var CROSS_TAB_CHANNEL = "mirror-abyss-v11-coordination";
-var CROSS_TAB_LEASE_PREFIX = "mirror-abyss-v11:lease:";
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/constants.ts
+var MODULE_NAME, LEGACY_MODULE_NAME, DISPLAY_NAME, VERSION, PIPELINE_VERSION, TABLE_KEYS, TABLE_LABELS, DEFAULT_SETTINGS, STORAGE_DB_NAME, STORAGE_CHAT_PREFIX, STORAGE_ARTIFACT_PREFIX, STORAGE_LOG_PREFIX, STORAGE_TASK_PREFIX, STORAGE_OUTBOX_PREFIX, STORAGE_LOCAL_COMMIT_PREFIX, STORAGE_OPERATION_LOG_PREFIX, STORAGE_BACKUP_PREFIX, CROSS_TAB_CHANNEL, CROSS_TAB_LEASE_PREFIX;
+var init_constants = __esm({
+  "src/constants.ts"() {
+    "use strict";
+    MODULE_NAME = "mirrorAbyssV11";
+    LEGACY_MODULE_NAME = "mirrorAbyss";
+    DISPLAY_NAME = "\u955C\u6E0A";
+    VERSION = "1.1.0-alpha.10.5.2";
+    PIPELINE_VERSION = "ma-pipeline-10.5.2";
+    TABLE_KEYS = [
+      "focus",
+      "spacetime",
+      "characters",
+      "relationships",
+      "items",
+      "skills",
+      "events",
+      "regions",
+      "foundations"
+    ];
+    TABLE_LABELS = {
+      focus: "\u5F53\u524D\u7126\u70B9",
+      spacetime: "\u65F6\u95F4\u4E0E\u5730\u70B9",
+      characters: "\u4EBA\u7269",
+      relationships: "\u5173\u7CFB",
+      items: "\u7269\u54C1",
+      skills: "\u6280\u80FD\u4E0E\u80FD\u529B",
+      events: "\u4E8B\u4EF6\u4E0E\u6D41\u7A0B",
+      regions: "\u533A\u57DF\u72B6\u6001",
+      foundations: "\u57FA\u7840\u8BBE\u5B9A"
+    };
+    DEFAULT_SETTINGS = {
+      enabled: true,
+      autoState: true,
+      showMessagePanel: true,
+      showTopButton: true,
+      auditEnabled: false,
+      auditPrompt: "",
+      auditFailAction: "revise",
+      revisionPrompt: "",
+      maxRevisionAttempts: 1,
+      stopOnRepeatedViolation: true,
+      revisionFallbackAction: "hide",
+      lockGenerationDuringAudit: true,
+      autoSmallSummary: true,
+      smallSummaryTurns: 15,
+      autoLargeSummary: true,
+      largeSummaryCount: 6,
+      lorebookSync: true,
+      autoCreateLorebook: true,
+      lorebookName: "",
+      vectorizeRows: false,
+      latestContinuityConstant: false,
+      lorebookLayout: "semantic",
+      repairInvalidJsonOnce: true,
+      requestTimeoutMs: 9e4,
+      connections: {
+        audit: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+        revision: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+        factExtraction: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+        state: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+        smallSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
+        largeSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" }
+      },
+      independentApiProfiles: [],
+      ui: {
+        activeTab: "overview",
+        activeTable: "focus",
+        graphScope: "relations",
+        graphZoom: 1
+      },
+      migration: {
+        legacyChecked: false
+      }
+    };
+    STORAGE_DB_NAME = "mirror-abyss-v11";
+    STORAGE_CHAT_PREFIX = "ma11:chat:";
+    STORAGE_ARTIFACT_PREFIX = "ma11:artifact:";
+    STORAGE_LOG_PREFIX = "ma11:log:";
+    STORAGE_TASK_PREFIX = "ma11:task:";
+    STORAGE_OUTBOX_PREFIX = "ma11:outbox:";
+    STORAGE_LOCAL_COMMIT_PREFIX = "ma11:local-commit:";
+    STORAGE_OPERATION_LOG_PREFIX = "ma11:operation-log:";
+    STORAGE_BACKUP_PREFIX = "ma11:backup:";
+    CROSS_TAB_CHANNEL = "mirror-abyss-v11-coordination";
+    CROSS_TAB_LEASE_PREFIX = "mirror-abyss-v11:lease:";
+  }
+});
 
 // src/core/utils.ts
 function deepClone(value) {
@@ -148,16 +170,6 @@ function withTimeout(promise, ms, label, controller) {
 function safeText(value, max = 1e5) {
   return String(value ?? "").replace(/\u0000/g, "").slice(0, max);
 }
-var JsonObjectParseError = class extends Error {
-  preview;
-  attempts;
-  constructor(message, raw, attempts = []) {
-    super(message);
-    this.name = "JsonObjectParseError";
-    this.preview = jsonPreview(raw);
-    this.attempts = attempts;
-  }
-};
 function jsonPreview(raw, max = 360) {
   return safeText(raw, 1e5).replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -299,10 +311,24 @@ function toErrorMessage(error) {
   }
   return String(error ?? "\u672A\u77E5\u9519\u8BEF");
 }
+var JsonObjectParseError;
+var init_utils = __esm({
+  "src/core/utils.ts"() {
+    "use strict";
+    JsonObjectParseError = class extends Error {
+      preview;
+      attempts;
+      constructor(message, raw, attempts = []) {
+        super(message);
+        this.name = "JsonObjectParseError";
+        this.preview = jsonPreview(raw);
+        this.attempts = attempts;
+      }
+    };
+  }
+});
 
 // src/foundation/account-scope.ts
-var ACCOUNT_ID_STORAGE_KEY = `${MODULE_NAME}:account-instance-id`;
-var sessionAccountIds = /* @__PURE__ */ new WeakMap();
 function newAccountInstanceId(context) {
   try {
     if (typeof context?.uuidv4 === "function") return String(context.uuidv4());
@@ -344,6 +370,16 @@ function accountScopeFromContext(context) {
     persistent
   };
 }
+var ACCOUNT_ID_STORAGE_KEY, sessionAccountIds;
+var init_account_scope = __esm({
+  "src/foundation/account-scope.ts"() {
+    "use strict";
+    init_constants();
+    init_utils();
+    ACCOUNT_ID_STORAGE_KEY = `${MODULE_NAME}:account-instance-id`;
+    sessionAccountIds = /* @__PURE__ */ new WeakMap();
+  }
+});
 
 // src/foundation/chat-scope.ts
 function contextOrThrow() {
@@ -504,228 +540,61 @@ function ensureChatIdentityForContext(context, options = {}) {
 function rotateChatIdentityForContext(context) {
   return ensureChatIdentityForContext(context, { forceNew: true });
 }
-var ChatScopeManager = class {
-  revision = 0;
-  ephemeralId = makeId("ephemeral-chat");
-  lastChatKey = "";
-  lastRawId = "";
-  current() {
-    const context = contextOrThrow();
-    const rawId = rawChatIdFromContext(context);
-    const owner = stableOwnerKey(context);
-    const account = accountScopeFromContext(context);
-    const persistent = Boolean(rawId);
-    const identity = persistent ? identityView(context) : { instanceId: this.ephemeralId, aliases: [], changed: false };
-    const chatKey = persistent ? scopedChatKey(account.storageKey, identity.instanceId) : `ephemeral:${account.storageKey}:${hashText(`${owner}|${this.ephemeralId}`)}`;
-    if (chatKey !== this.lastChatKey || rawId !== this.lastRawId) {
-      this.revision += 1;
-      this.lastChatKey = chatKey;
-      this.lastRawId = rawId;
-      if (!rawId) this.ephemeralId = identity.instanceId;
-    }
-    return {
-      chatKey,
-      rawChatId: rawId,
-      ownerKey: owner,
-      accountKey: account.storageKey,
-      revision: this.revision,
-      persistent,
-      capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      aliases: identity.aliases,
-      instanceId: identity.instanceId
+var ChatScopeManager, chatScopeManager;
+var init_chat_scope = __esm({
+  "src/foundation/chat-scope.ts"() {
+    "use strict";
+    init_constants();
+    init_utils();
+    init_account_scope();
+    ChatScopeManager = class {
+      revision = 0;
+      ephemeralId = makeId("ephemeral-chat");
+      lastChatKey = "";
+      lastRawId = "";
+      current() {
+        const context = contextOrThrow();
+        const rawId = rawChatIdFromContext(context);
+        const owner = stableOwnerKey(context);
+        const account = accountScopeFromContext(context);
+        const persistent = Boolean(rawId);
+        const identity = persistent ? identityView(context) : { instanceId: this.ephemeralId, aliases: [], changed: false };
+        const chatKey = persistent ? scopedChatKey(account.storageKey, identity.instanceId) : `ephemeral:${account.storageKey}:${hashText(`${owner}|${this.ephemeralId}`)}`;
+        if (chatKey !== this.lastChatKey || rawId !== this.lastRawId) {
+          this.revision += 1;
+          this.lastChatKey = chatKey;
+          this.lastRawId = rawId;
+          if (!rawId) this.ephemeralId = identity.instanceId;
+        }
+        return {
+          chatKey,
+          rawChatId: rawId,
+          ownerKey: owner,
+          accountKey: account.storageKey,
+          revision: this.revision,
+          persistent,
+          capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          aliases: identity.aliases,
+          instanceId: identity.instanceId
+        };
+      }
+      invalidate() {
+        this.revision += 1;
+        this.ephemeralId = makeId("ephemeral-chat");
+        this.lastChatKey = "";
+        this.lastRawId = "";
+        return this.current();
+      }
+      isCurrent(snapshot) {
+        const current = this.current();
+        return current.chatKey === snapshot.chatKey && current.revision === snapshot.revision;
+      }
     };
+    chatScopeManager = new ChatScopeManager();
   }
-  invalidate() {
-    this.revision += 1;
-    this.ephemeralId = makeId("ephemeral-chat");
-    this.lastChatKey = "";
-    this.lastRawId = "";
-    return this.current();
-  }
-  isCurrent(snapshot) {
-    const current = this.current();
-    return current.chatKey === snapshot.chatKey && current.revision === snapshot.revision;
-  }
-};
-var chatScopeManager = new ChatScopeManager();
-
-// src/core/context.ts
-function getContext() {
-  const context = globalThis.SillyTavern?.getContext?.();
-  if (!context) throw new Error("SillyTavern\u4E0A\u4E0B\u6587\u5C1A\u672A\u5C31\u7EEA");
-  return context;
-}
-function tryGetContext() {
-  try {
-    return globalThis.SillyTavern?.getContext?.() ?? null;
-  } catch {
-    return null;
-  }
-}
-function getSettings() {
-  const context = getContext();
-  context.extensionSettings ||= {};
-  const legacy = context.extensionSettings[LEGACY_MODULE_NAME];
-  const current = context.extensionSettings[MODULE_NAME];
-  const migrated = current ?? migrateLegacySettings(legacy);
-  context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
-  const settings = context.extensionSettings[MODULE_NAME];
-  if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
-  settings.independentApiProfiles ||= [];
-  const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles) ? context.extensionSettings.connectionManager.profiles : [];
-  for (const connection of Object.values(settings.connections ?? {})) {
-    connection.profileId ||= "";
-    connection.profile ||= "";
-    connection.independentProfileId ||= "";
-    if (!connection.profileId && connection.profile) {
-      const matched = savedProfiles.find((profile) => safeText(profile?.name, 160).trim() === safeText(connection.profile, 160).trim());
-      if (matched?.id) connection.profileId = String(matched.id);
-    }
-  }
-  return settings;
-}
-function migrateLegacySettings(legacy) {
-  if (!legacy || typeof legacy !== "object") return void 0;
-  return {
-    enabled: legacy.enabled ?? true,
-    autoState: legacy.autoState ?? true,
-    showMessagePanel: legacy.showMessagePanels ?? true,
-    showTopButton: legacy.showTopButton ?? true,
-    auditEnabled: legacy.ruleAuditEnabled ?? false,
-    auditPrompt: safeText(legacy.ruleAuditPrompt ?? ""),
-    auditFailAction: legacy.ruleAuditFailAction === "withdraw" ? "delete" : "mark",
-    revisionPrompt: safeText(legacy.revisionPrompt ?? ""),
-    maxRevisionAttempts: Number(legacy.maxRevisionAttempts) || 1,
-    stopOnRepeatedViolation: legacy.stopOnRepeatedViolation ?? true,
-    revisionFallbackAction: legacy.revisionFallbackAction ?? "hide",
-    lockGenerationDuringAudit: legacy.lockGenerationDuringAudit ?? true,
-    autoSmallSummary: legacy.autoSmallSummary ?? true,
-    smallSummaryTurns: Number(legacy.smallSummaryTurns) || 15,
-    autoLargeSummary: legacy.autoLargeSummary ?? true,
-    largeSummaryCount: Number(legacy.largeSummaryCount) || 6,
-    lorebookSync: legacy.lorebookSync ?? true,
-    autoCreateLorebook: legacy.autoCreateChatLorebook ?? true,
-    lorebookName: safeText(legacy.lorebookName ?? "", 80),
-    vectorizeRows: legacy.vectorizeStateRows ?? false,
-    latestContinuityConstant: legacy.latestContinuityConstant ?? true,
-    connections: {
-      audit: { mode: legacy.auditProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.auditProfile ?? "", 120), independentProfileId: "" },
-      revision: { mode: legacy.revisionProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.revisionProfile ?? legacy.auditProfile ?? "", 120), independentProfileId: "" },
-      state: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120), independentProfileId: "" },
-      smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.smallSummaryProfile ?? "", 120), independentProfileId: "" },
-      largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.largeSummaryProfile ?? "", 120), independentProfileId: "" }
-    },
-    independentApiProfiles: []
-  };
-}
-function saveSettings() {
-  getContext().saveSettingsDebounced?.();
-}
-function getChat() {
-  return getContext().chat ?? [];
-}
-function getMessage(index) {
-  return getChat()[index] ?? null;
-}
-function latestAssistantIndex() {
-  const chat = getChat();
-  for (let i = chat.length - 1; i >= 0; i -= 1) {
-    if (!chat[i]?.is_user && safeText(chat[i]?.mes).trim()) return i;
-  }
-  return -1;
-}
-function previousUserText(beforeIndex) {
-  const chat = getChat();
-  for (let i = beforeIndex - 1; i >= 0; i -= 1) {
-    if (chat[i]?.is_user) return safeText(chat[i]?.mes).trim();
-  }
-  return "";
-}
-function currentRawChatId(context = getContext()) {
-  return rawChatIdFromContext(context);
-}
-function ensureChatInstanceId() {
-  return ensureChatIdentityForContext(getContext()).instanceId;
-}
-function legacyCurrentChatKey() {
-  const context = getContext();
-  const rawChatId = currentRawChatId(context);
-  const instanceId = ensureChatInstanceId();
-  const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? "unknown"}`;
-  return `${scope}:${hashText(`${scope}|${rawChatId || "unsaved"}|${instanceId}`)}`;
-}
-function currentChatKey() {
-  return chatScopeManager.current().chatKey;
-}
-function messageFingerprint(index) {
-  const message = getMessage(index);
-  return hashText(`${previousUserText(index)}
----MA11---
-${safeText(message?.mes)}`);
-}
-function messageStableIdentity(index) {
-  const message = getMessage(index);
-  const stable = message?.id ?? message?.extra?.gen_id ?? message?.send_date ?? index;
-  return String(stable);
-}
-function messageIdentity(index) {
-  return `${messageStableIdentity(index)}:${messageFingerprint(index)}`;
-}
-function getChatMetadataNamespace() {
-  const context = getContext();
-  context.chatMetadata ||= context.chat_metadata || {};
-  context.chat_metadata = context.chatMetadata;
-  context.chatMetadata[MODULE_NAME] ||= {
-    schemaVersion: 1,
-    createdAt: nowIso(),
-    updatedAt: nowIso()
-  };
-  ensureChatInstanceId();
-  return context.chatMetadata[MODULE_NAME];
-}
-async function persistMetadata() {
-  const context = getContext();
-  if (typeof context.saveMetadata === "function") {
-    await context.saveMetadata();
-    return;
-  }
-  context.saveMetadataDebounced?.();
-}
-async function persistChat() {
-  const context = getContext();
-  if (typeof context.saveChat === "function") {
-    await context.saveChat();
-    return;
-  }
-  if (typeof context.saveChatConditional === "function") {
-    await context.saveChatConditional();
-  }
-}
-function toast(kind, message) {
-  const toastr = globalThis.toastr;
-  if (toastr?.[kind]) toastr[kind](message, DISPLAY_NAME);
-  else console[kind === "error" ? "error" : "log"](`[${DISPLAY_NAME}] ${message}`);
-}
+});
 
 // src/storage/repository.ts
-var portableChatStateBridge = null;
-var persistentAdapters = /* @__PURE__ */ new Map();
-var ephemeralMap = /* @__PURE__ */ new Map();
-var ephemeralAdapter = {
-  async getItem(key) {
-    return ephemeralMap.has(key) ? structuredClone(ephemeralMap.get(key)) : null;
-  },
-  async setItem(key, value) {
-    ephemeralMap.set(key, structuredClone(value));
-    return value;
-  },
-  async removeItem(key) {
-    ephemeralMap.delete(key);
-  },
-  async keys() {
-    return [...ephemeralMap.keys()];
-  }
-};
 function configurePortableChatStateBridge(bridge) {
   portableChatStateBridge = bridge;
 }
@@ -1039,8 +908,831 @@ async function clearAllStorage() {
   const ephemeralKeys = await ephemeralAdapter.keys();
   await Promise.all(ephemeralKeys.filter((key) => key.startsWith("ma11:")).map((key) => ephemeralAdapter.removeItem(key)));
 }
+var portableChatStateBridge, persistentAdapters, ephemeralMap, ephemeralAdapter;
+var init_repository = __esm({
+  "src/storage/repository.ts"() {
+    "use strict";
+    init_constants();
+    init_utils();
+    portableChatStateBridge = null;
+    persistentAdapters = /* @__PURE__ */ new Map();
+    ephemeralMap = /* @__PURE__ */ new Map();
+    ephemeralAdapter = {
+      async getItem(key) {
+        return ephemeralMap.has(key) ? structuredClone(ephemeralMap.get(key)) : null;
+      },
+      async setItem(key, value) {
+        ephemeralMap.set(key, structuredClone(value));
+        return value;
+      },
+      async removeItem(key) {
+        ephemeralMap.delete(key);
+      },
+      async keys() {
+        return [...ephemeralMap.keys()];
+      }
+    };
+  }
+});
+
+// src/foundation/connection-broker.ts
+function makeRequestId() {
+  return `ma-conn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error ?? "\u672A\u77E5\u9519\u8BEF");
+}
+function copyError(error, patch) {
+  return new ConnectionRequestError(error.message, error.kind, {
+    status: error.status,
+    responsePreview: error.responsePreview,
+    retryAfterMs: error.retryAfterMs,
+    attempts: error.attempts,
+    connectionKey: error.connectionKey,
+    cause: error.cause,
+    ...patch
+  });
+}
+function normalizeConnectionError(error) {
+  if (error instanceof ConnectionRequestError) return error;
+  const message = errorMessage(error);
+  const candidate = error;
+  const statusValue = Number(candidate?.status ?? candidate?.response?.status);
+  const status = Number.isInteger(statusValue) && statusValue > 0 ? statusValue : void 0;
+  const options = { status, cause: error };
+  if (/abort|cancel|取消/i.test(message)) return new ConnectionRequestError(message || "\u8BF7\u6C42\u5DF2\u53D6\u6D88", "cancelled", options);
+  if (status === 408 || status === 504 || /timeout|timed out|超时/i.test(message)) return new ConnectionRequestError(message, "timeout", options);
+  if (status === 429 || /429|rate.?limit|too many requests|限流/i.test(message)) return new ConnectionRequestError(message, "rate_limit", options);
+  if (status === 401 || status === 403 || /401|403|unauthori[sz]ed|forbidden|密钥|鉴权|认证/i.test(message)) return new ConnectionRequestError(message, "authentication", options);
+  if (status === 404 || /(?:^|\D)404(?:\D|$)|not found/i.test(message)) return new ConnectionRequestError(message, "not_found", options);
+  if (status === 400 || status === 409 || status === 422 || /bad request|invalid request|unprocessable/i.test(message)) {
+    return new ConnectionRequestError(message, "configuration", options);
+  }
+  if (/network|fetch|socket|ECONN|ENOTFOUND|网络/i.test(message)) return new ConnectionRequestError(message, "network", options);
+  return new ConnectionRequestError(message, "upstream", options);
+}
+function isRetryable(error) {
+  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream";
+}
+function countsTowardCircuit(error) {
+  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream" || error.kind === "timeout";
+}
+var ConnectionRequestError, DEFAULT_POLICY, CONNECTION_PRIORITY_WEIGHT, ConnectionBroker, connectionBroker;
+var init_connection_broker = __esm({
+  "src/foundation/connection-broker.ts"() {
+    "use strict";
+    ConnectionRequestError = class extends Error {
+      kind;
+      status;
+      responsePreview;
+      retryAfterMs;
+      attempts;
+      connectionKey;
+      constructor(message, kind, options = {}) {
+        super(message, options.cause ? { cause: options.cause } : void 0);
+        this.name = "ConnectionRequestError";
+        this.kind = kind;
+        this.status = options.status;
+        this.responsePreview = options.responsePreview;
+        this.retryAfterMs = options.retryAfterMs;
+        this.attempts = options.attempts;
+        this.connectionKey = options.connectionKey;
+      }
+    };
+    DEFAULT_POLICY = {
+      maxConcurrent: 1,
+      maxRetries: 2,
+      baseBackoffMs: 750,
+      maxBackoffMs: 12e3,
+      jitterRatio: 0.2,
+      circuitFailureThreshold: 3,
+      circuitOpenMs: 3e4
+    };
+    CONNECTION_PRIORITY_WEIGHT = {
+      foreground: 0,
+      "background-critical": 10,
+      "background-derived": 20,
+      "background-io": 30
+    };
+    ConnectionBroker = class {
+      lanes = /* @__PURE__ */ new Map();
+      circuits = /* @__PURE__ */ new Map();
+      requests = /* @__PURE__ */ new Map();
+      listeners = /* @__PURE__ */ new Set();
+      waiterSequence = 0;
+      subscribe(listener) {
+        this.listeners.add(listener);
+        listener(this.snapshot());
+        return () => this.listeners.delete(listener);
+      }
+      snapshot() {
+        return {
+          active: [...this.requests.values()].map(({ controller: _controller, ...record }) => ({ ...record })),
+          lanes: [...this.lanes.entries()].map(([connectionKey, lane]) => ({
+            connectionKey,
+            active: lane.active,
+            queued: lane.waiters.length,
+            maxConcurrent: lane.maxConcurrent
+          })),
+          circuits: [...this.circuits.entries()].map(([connectionKey, circuit]) => ({ connectionKey, ...circuit }))
+        };
+      }
+      async request(request) {
+        const policy = this.resolvePolicy(request.policy);
+        const id = request.id || makeRequestId();
+        if (this.requests.has(id)) {
+          throw new ConnectionRequestError(`\u8FDE\u63A5\u8BF7\u6C42ID\u91CD\u590D\uFF1A${id}`, "configuration", { connectionKey: request.connectionKey });
+        }
+        const controller = new AbortController();
+        const forwardAbort = () => controller.abort(request.signal?.reason);
+        request.signal?.addEventListener("abort", forwardAbort, { once: true });
+        if (request.signal?.aborted) controller.abort(request.signal.reason);
+        const record = {
+          id,
+          priority: request.priority ?? "background-critical",
+          connectionKey: request.connectionKey,
+          scopeKey: request.scopeKey || "",
+          label: request.label,
+          state: "queued",
+          attempt: 0,
+          controller,
+          startedAt: Date.now()
+        };
+        this.requests.set(id, record);
+        this.emit();
+        let release;
+        try {
+          release = await this.acquire(
+            request.connectionKey,
+            policy.maxConcurrent,
+            request.priority ?? "background-critical",
+            controller.signal
+          );
+          record.state = "running";
+          this.emit();
+          this.assertCircuitAvailable(request.connectionKey, policy);
+          let lastError2 = null;
+          for (let attempt = 1; attempt <= policy.maxRetries + 1; attempt += 1) {
+            record.attempt = attempt;
+            record.state = attempt === 1 ? "running" : "retrying";
+            this.emit();
+            try {
+              const value = await this.executeAttempt(request, controller.signal, attempt);
+              this.recordSuccess(request.connectionKey);
+              return value;
+            } catch (error) {
+              let normalized = normalizeConnectionError(error);
+              if (controller.signal.aborted && normalized.kind !== "timeout") {
+                normalized = new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
+                  cause: error,
+                  connectionKey: request.connectionKey,
+                  attempts: attempt
+                });
+              }
+              lastError2 = copyError(normalized, { attempts: attempt, connectionKey: request.connectionKey });
+              if (!isRetryable(lastError2) || attempt > policy.maxRetries || controller.signal.aborted) break;
+              const delay = this.retryDelay(lastError2, attempt, policy);
+              await this.wait(delay, controller.signal, request.label);
+            }
+          }
+          const finalError = lastError2 ?? new ConnectionRequestError(`${request.label}\u5931\u8D25`, "upstream");
+          this.recordFailure(request.connectionKey, finalError, policy);
+          throw finalError;
+        } finally {
+          release?.();
+          request.signal?.removeEventListener("abort", forwardAbort);
+          this.requests.delete(id);
+          this.emit();
+        }
+      }
+      cancel(requestId, reason = "\u8BF7\u6C42\u5DF2\u53D6\u6D88") {
+        const record = this.requests.get(requestId);
+        if (!record) return false;
+        record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+        this.emit();
+        return true;
+      }
+      cancelScope(scopeKey, reason = "\u804A\u5929\u4F5C\u7528\u57DF\u5DF2\u5931\u6548") {
+        let count = 0;
+        for (const record of this.requests.values()) {
+          if (record.scopeKey !== scopeKey) continue;
+          record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+          count += 1;
+        }
+        if (count) this.emit();
+        return count;
+      }
+      cancelAllExceptScope(scopeKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+        let count = 0;
+        for (const record of this.requests.values()) {
+          if (record.scopeKey === scopeKey) continue;
+          record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+          count += 1;
+        }
+        if (count) this.emit();
+        return count;
+      }
+      cancelAll(reason = "\u8FDE\u63A5\u670D\u52A1\u5DF2\u505C\u6B62") {
+        let count = 0;
+        for (const record of this.requests.values()) {
+          record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
+          count += 1;
+        }
+        if (count) this.emit();
+        return count;
+      }
+      resetCircuit(connectionKey) {
+        if (connectionKey) this.circuits.delete(connectionKey);
+        else this.circuits.clear();
+        this.emit();
+      }
+      resolvePolicy(patch) {
+        return {
+          maxConcurrent: Math.max(1, Math.floor(patch?.maxConcurrent ?? DEFAULT_POLICY.maxConcurrent)),
+          maxRetries: Math.max(0, Math.floor(patch?.maxRetries ?? DEFAULT_POLICY.maxRetries)),
+          baseBackoffMs: Math.max(0, Math.floor(patch?.baseBackoffMs ?? DEFAULT_POLICY.baseBackoffMs)),
+          maxBackoffMs: Math.max(0, Math.floor(patch?.maxBackoffMs ?? DEFAULT_POLICY.maxBackoffMs)),
+          jitterRatio: Math.min(1, Math.max(0, Number(patch?.jitterRatio ?? DEFAULT_POLICY.jitterRatio))),
+          circuitFailureThreshold: Math.max(1, Math.floor(patch?.circuitFailureThreshold ?? DEFAULT_POLICY.circuitFailureThreshold)),
+          circuitOpenMs: Math.max(100, Math.floor(patch?.circuitOpenMs ?? DEFAULT_POLICY.circuitOpenMs))
+        };
+      }
+      async acquire(connectionKey, maxConcurrent, priority, signal) {
+        let lane = this.lanes.get(connectionKey);
+        if (!lane) {
+          lane = { active: 0, maxConcurrent, waiters: [] };
+          this.lanes.set(connectionKey, lane);
+        }
+        lane.maxConcurrent = maxConcurrent;
+        if (signal.aborted) throw new ConnectionRequestError("\u8BF7\u6C42\u5728\u6392\u961F\u524D\u5DF2\u53D6\u6D88", "cancelled", { connectionKey });
+        if (lane.active < lane.maxConcurrent) {
+          lane.active += 1;
+          this.emit();
+          return this.releaseFactory(connectionKey, lane);
+        }
+        return new Promise((resolve, reject) => {
+          const waiter = {
+            sequence: this.waiterSequence += 1,
+            priority,
+            signal,
+            resolve,
+            reject,
+            onAbort: () => {
+              const index = lane.waiters.indexOf(waiter);
+              if (index >= 0) lane.waiters.splice(index, 1);
+              reject(new ConnectionRequestError("\u8BF7\u6C42\u5728\u961F\u5217\u4E2D\u88AB\u53D6\u6D88", "cancelled", { connectionKey }));
+              this.emit();
+            }
+          };
+          signal.addEventListener("abort", waiter.onAbort, { once: true });
+          lane.waiters.push(waiter);
+          lane.waiters.sort((a, b) => {
+            const priorityDelta = CONNECTION_PRIORITY_WEIGHT[a.priority] - CONNECTION_PRIORITY_WEIGHT[b.priority];
+            return priorityDelta || a.sequence - b.sequence;
+          });
+          this.emit();
+        });
+      }
+      releaseFactory(connectionKey, lane) {
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          lane.active = Math.max(0, lane.active - 1);
+          while (lane.waiters.length) {
+            const waiter = lane.waiters.shift();
+            waiter.signal.removeEventListener("abort", waiter.onAbort);
+            if (waiter.signal.aborted) continue;
+            lane.active += 1;
+            waiter.resolve(this.releaseFactory(connectionKey, lane));
+            break;
+          }
+          if (lane.active === 0 && lane.waiters.length === 0) this.lanes.delete(connectionKey);
+          this.emit();
+        };
+      }
+      executeAttempt(request, parentSignal, attempt) {
+        if (parentSignal.aborted) {
+          return Promise.reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", { connectionKey: request.connectionKey }));
+        }
+        const attemptController = new AbortController();
+        const forwardAbort = () => attemptController.abort(parentSignal.reason);
+        parentSignal.addEventListener("abort", forwardAbort, { once: true });
+        let timer;
+        let onAttemptAbort;
+        const timeoutPromise = new Promise((_resolve, reject) => {
+          timer = setTimeout(() => {
+            const timeoutError = new ConnectionRequestError(`${request.label}\u8D85\u65F6`, "timeout", {
+              connectionKey: request.connectionKey,
+              attempts: attempt
+            });
+            attemptController.abort(timeoutError);
+            reject(timeoutError);
+          }, Math.max(1, request.timeoutMs));
+        });
+        const abortPromise = new Promise((_resolve, reject) => {
+          onAttemptAbort = () => {
+            if (parentSignal.aborted) {
+              reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
+                connectionKey: request.connectionKey,
+                attempts: attempt,
+                cause: parentSignal.reason
+              }));
+            }
+          };
+          attemptController.signal.addEventListener("abort", onAttemptAbort, { once: true });
+        });
+        const operation = Promise.resolve().then(() => request.execute(attemptController.signal, attempt));
+        return Promise.race([operation, timeoutPromise, abortPromise]).finally(() => {
+          if (timer) clearTimeout(timer);
+          parentSignal.removeEventListener("abort", forwardAbort);
+          if (onAttemptAbort) attemptController.signal.removeEventListener("abort", onAttemptAbort);
+        });
+      }
+      assertCircuitAvailable(connectionKey, policy) {
+        const circuit = this.circuits.get(connectionKey);
+        if (!circuit) return;
+        const now = Date.now();
+        if (circuit.openUntil > now) {
+          throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
+            connectionKey,
+            retryAfterMs: circuit.openUntil - now
+          });
+        }
+        if (circuit.openUntil > 0) {
+          if (circuit.halfOpen) {
+            throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6B63\u5728\u534A\u5F00\u63A2\u6D4B`, "circuit_open", { connectionKey });
+          }
+          circuit.halfOpen = true;
+          circuit.openUntil = 0;
+          this.emit();
+        }
+        if (circuit.failures >= policy.circuitFailureThreshold && circuit.openUntil === 0 && !circuit.halfOpen) {
+          circuit.openUntil = now + policy.circuitOpenMs;
+          this.emit();
+          throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
+            connectionKey,
+            retryAfterMs: policy.circuitOpenMs
+          });
+        }
+      }
+      recordSuccess(connectionKey) {
+        if (this.circuits.delete(connectionKey)) this.emit();
+      }
+      recordFailure(connectionKey, error, policy) {
+        const tracked = countsTowardCircuit(error);
+        const existing = this.circuits.get(connectionKey);
+        if (!tracked && !existing) return;
+        const circuit = existing ?? { failures: 0, openUntil: 0, halfOpen: false };
+        circuit.halfOpen = false;
+        if (tracked) circuit.failures += 1;
+        if (circuit.failures >= policy.circuitFailureThreshold) circuit.openUntil = Date.now() + policy.circuitOpenMs;
+        this.circuits.set(connectionKey, circuit);
+        this.emit();
+      }
+      retryDelay(error, attempt, policy) {
+        if (typeof error.retryAfterMs === "number" && error.retryAfterMs >= 0) return Math.min(policy.maxBackoffMs, error.retryAfterMs);
+        const base = Math.min(policy.maxBackoffMs, policy.baseBackoffMs * 2 ** Math.max(0, attempt - 1));
+        const jitter = base * policy.jitterRatio * (Math.random() * 2 - 1);
+        return Math.max(0, Math.round(base + jitter));
+      }
+      wait(ms, signal, label) {
+        if (ms <= 0) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+          }, ms);
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(new ConnectionRequestError(`${label}\u91CD\u8BD5\u7B49\u5F85\u5DF2\u53D6\u6D88`, "cancelled", { cause: signal.reason }));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+      emit() {
+        if (!this.listeners.size) return;
+        const snapshot = this.snapshot();
+        for (const listener of this.listeners) {
+          try {
+            listener(snapshot);
+          } catch {
+          }
+        }
+      }
+    };
+    connectionBroker = new ConnectionBroker();
+  }
+});
+
+// src/foundation/task-errors.ts
+var StaleTaskError, TaskCancelledError;
+var init_task_errors = __esm({
+  "src/foundation/task-errors.ts"() {
+    "use strict";
+    StaleTaskError = class extends Error {
+      constructor(message = "\u4EFB\u52A1\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8\uFF0C\u65E7\u4EFB\u52A1\u5DF2\u505C\u6B62") {
+        super(message);
+        this.name = "StaleTaskError";
+      }
+    };
+    TaskCancelledError = class extends Error {
+      constructor(message = "\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
+        super(message);
+        this.name = "TaskCancelledError";
+      }
+    };
+  }
+});
+
+// src/pipeline/task-queue.ts
+var task_queue_exports = {};
+__export(task_queue_exports, {
+  StaleTaskError: () => StaleTaskError,
+  TaskCancelledError: () => TaskCancelledError,
+  TaskQueue: () => TaskQueue,
+  taskQueue: () => taskQueue
+});
+var TaskQueue, taskQueue;
+var init_task_queue = __esm({
+  "src/pipeline/task-queue.ts"() {
+    "use strict";
+    init_repository();
+    init_chat_scope();
+    init_utils();
+    init_connection_broker();
+    init_task_errors();
+    init_task_errors();
+    TaskQueue = class {
+      laneTails = /* @__PURE__ */ new Map();
+      inFlight = /* @__PURE__ */ new Map();
+      tasks = /* @__PURE__ */ new Map();
+      active = /* @__PURE__ */ new Map();
+      listeners = /* @__PURE__ */ new Set();
+      subscribe(listener) {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+      }
+      notify() {
+        for (const listener of this.listeners) {
+          try {
+            listener();
+          } catch (error) {
+            console.warn("[MirrorAbyss] task listener failed", error);
+          }
+        }
+      }
+      async persist(task) {
+        try {
+          await putQueueTask({ ...task });
+        } catch (error) {
+          console.warn("[MirrorAbyss] task persistence failed", error);
+        }
+      }
+      async finalize(key, scopeChatKey, task) {
+        task.finishedAt ||= nowIso();
+        task.updatedAt = task.finishedAt;
+        this.inFlight.delete(key);
+        this.active.delete(task.id);
+        await this.persist(task);
+        try {
+          await appendTaskLog(scopeChatKey, { ...task });
+        } catch (error) {
+          console.warn("[MirrorAbyss] task log save failed", error);
+        }
+        this.notify();
+      }
+      list() {
+        return [...this.tasks.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      }
+      has(key) {
+        return this.inFlight.has(key);
+      }
+      run(key, label, kind, work, options = {}) {
+        const existing = this.inFlight.get(key);
+        if (existing) return existing;
+        const scope = chatScopeManager.current();
+        const laneKey = options.laneKey?.trim() || `chat:${scope.chatKey}`;
+        const controller = new AbortController();
+        const createdAt = nowIso();
+        const task = {
+          id: makeId("task"),
+          key,
+          chatKey: scope.chatKey,
+          scopeRevision: scope.revision,
+          laneKey,
+          label,
+          kind,
+          state: "queued",
+          priority: options.priority,
+          blocking: options.blocking,
+          sourceStartIndex: options.sourceRange?.startIndex,
+          sourceEndIndex: options.sourceRange?.endIndex,
+          progressCurrent: options.progressTotal ? 0 : void 0,
+          progressTotal: options.progressTotal,
+          progressLabel: options.progressLabel,
+          retries: 0,
+          createdAt,
+          updatedAt: createdAt
+        };
+        this.tasks.set(task.id, task);
+        this.active.set(task.id, { task, controller });
+        void this.persist(task);
+        this.notify();
+        const execute = async () => {
+          try {
+            if (controller.signal.aborted) {
+              throw controller.signal.reason instanceof StaleTaskError ? controller.signal.reason : new TaskCancelledError(toErrorMessage(controller.signal.reason || "\u4EFB\u52A1\u5728\u6392\u961F\u671F\u95F4\u88AB\u53D6\u6D88"));
+            }
+            if (!chatScopeManager.isCurrent(scope)) {
+              throw new StaleTaskError("\u4EFB\u52A1\u6392\u961F\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362");
+            }
+            task.state = "running";
+            task.startedAt = nowIso();
+            task.updatedAt = task.startedAt;
+            await this.persist(task);
+            this.notify();
+            const result = await work(controller.signal);
+            if (controller.signal.aborted) {
+              if (!chatScopeManager.isCurrent(scope) || controller.signal.reason instanceof StaleTaskError) {
+                throw controller.signal.reason instanceof StaleTaskError ? controller.signal.reason : new StaleTaskError("\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362");
+              }
+              throw controller.signal.reason instanceof TaskCancelledError ? controller.signal.reason : new TaskCancelledError(toErrorMessage(controller.signal.reason || "\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u88AB\u53D6\u6D88"));
+            }
+            if (!chatScopeManager.isCurrent(scope)) {
+              throw new StaleTaskError("\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u7ED3\u679C\u672A\u63D0\u4EA4\u5230\u65B0\u804A\u5929");
+            }
+            task.state = "success";
+            task.error = void 0;
+            return result;
+          } catch (error) {
+            let finalError = error;
+            if (error instanceof StaleTaskError || !chatScopeManager.isCurrent(scope)) {
+              task.state = "stale";
+              task.error = error instanceof StaleTaskError ? error.message : "\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362";
+              if (!(error instanceof StaleTaskError)) finalError = new StaleTaskError(task.error);
+            } else if (error instanceof TaskCancelledError || error instanceof ConnectionRequestError && error.kind === "cancelled" || controller.signal.aborted) {
+              task.state = "cancelled";
+              task.error = toErrorMessage(error);
+              if (!(error instanceof TaskCancelledError)) finalError = new TaskCancelledError(task.error);
+            } else {
+              task.state = "failed";
+              task.error = toErrorMessage(error);
+            }
+            throw finalError;
+          } finally {
+            await this.finalize(key, scope.chatKey, task);
+          }
+        };
+        const previous = this.laneTails.get(laneKey) ?? Promise.resolve();
+        const promise = previous.then(execute, execute);
+        const settledTail = promise.catch(() => void 0);
+        this.laneTails.set(laneKey, settledTail);
+        void settledTail.finally(() => {
+          if (this.laneTails.get(laneKey) === settledTail) this.laneTails.delete(laneKey);
+        });
+        this.inFlight.set(key, promise);
+        return promise;
+      }
+      updateByKey(key, patch) {
+        const active = [...this.active.values()].find((item2) => item2.task.key === key);
+        if (!active) return false;
+        Object.assign(active.task, patch, { updatedAt: nowIso() });
+        void this.persist(active.task);
+        this.notify();
+        return true;
+      }
+      cancel(taskId, reason = "\u7528\u6237\u53D6\u6D88\u4EFB\u52A1") {
+        const active = this.active.get(taskId);
+        if (!active) return false;
+        active.controller.abort(new TaskCancelledError(reason));
+        this.notify();
+        return true;
+      }
+      cancelByKey(key, reason = "\u4EFB\u52A1\u5DF2\u88AB\u66FF\u6362") {
+        let count = 0;
+        for (const active of this.active.values()) {
+          if (active.task.key !== key) continue;
+          active.controller.abort(new TaskCancelledError(reason));
+          count += 1;
+        }
+        if (count) this.notify();
+        return count;
+      }
+      cancelChat(chatKey, reason = "\u804A\u5929\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
+        let count = 0;
+        for (const active of this.active.values()) {
+          if (active.task.chatKey !== chatKey) continue;
+          active.controller.abort(new TaskCancelledError(reason));
+          count += 1;
+        }
+        if (count) this.notify();
+        return count;
+      }
+      cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+        let count = 0;
+        for (const active of this.active.values()) {
+          if (active.task.chatKey === chatKey) continue;
+          active.controller.abort(new StaleTaskError(reason));
+          count += 1;
+        }
+        if (count) this.notify();
+        return count;
+      }
+      cancelAll(reason = "\u4EFB\u52A1\u961F\u5217\u5DF2\u505C\u6B62") {
+        let count = 0;
+        for (const active of this.active.values()) {
+          active.controller.abort(new TaskCancelledError(reason));
+          count += 1;
+        }
+        if (count) this.notify();
+        return count;
+      }
+    };
+    taskQueue = new TaskQueue();
+  }
+});
+
+// src/bootstrap/app.ts
+init_constants();
+
+// src/core/context.ts
+init_constants();
+init_utils();
+init_chat_scope();
+function getContext() {
+  const context = globalThis.SillyTavern?.getContext?.();
+  if (!context) throw new Error("SillyTavern\u4E0A\u4E0B\u6587\u5C1A\u672A\u5C31\u7EEA");
+  return context;
+}
+function tryGetContext() {
+  try {
+    return globalThis.SillyTavern?.getContext?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+function getSettings() {
+  const context = getContext();
+  context.extensionSettings ||= {};
+  const legacy = context.extensionSettings[LEGACY_MODULE_NAME];
+  const current = context.extensionSettings[MODULE_NAME];
+  const migrated = current ?? migrateLegacySettings(legacy);
+  const hadFactConnection = Boolean(migrated?.connections?.factExtraction);
+  context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
+  const settings = context.extensionSettings[MODULE_NAME];
+  if (!hadFactConnection && migrated?.connections?.state) {
+    settings.connections.factExtraction = deepClone(migrated.connections.state);
+  }
+  if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
+  settings.latestContinuityConstant = false;
+  settings.independentApiProfiles ||= [];
+  const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles) ? context.extensionSettings.connectionManager.profiles : [];
+  for (const connection of Object.values(settings.connections ?? {})) {
+    connection.profileId ||= "";
+    connection.profile ||= "";
+    connection.independentProfileId ||= "";
+    if (!connection.profileId && connection.profile) {
+      const matched = savedProfiles.find((profile) => safeText(profile?.name, 160).trim() === safeText(connection.profile, 160).trim());
+      if (matched?.id) connection.profileId = String(matched.id);
+    }
+  }
+  return settings;
+}
+function migrateLegacySettings(legacy) {
+  if (!legacy || typeof legacy !== "object") return void 0;
+  return {
+    enabled: legacy.enabled ?? true,
+    autoState: legacy.autoState ?? true,
+    showMessagePanel: legacy.showMessagePanels ?? true,
+    showTopButton: legacy.showTopButton ?? true,
+    auditEnabled: legacy.ruleAuditEnabled ?? false,
+    auditPrompt: safeText(legacy.ruleAuditPrompt ?? ""),
+    auditFailAction: legacy.ruleAuditFailAction === "withdraw" ? "delete" : "mark",
+    revisionPrompt: safeText(legacy.revisionPrompt ?? ""),
+    maxRevisionAttempts: Number(legacy.maxRevisionAttempts) || 1,
+    stopOnRepeatedViolation: legacy.stopOnRepeatedViolation ?? true,
+    revisionFallbackAction: legacy.revisionFallbackAction ?? "hide",
+    lockGenerationDuringAudit: legacy.lockGenerationDuringAudit ?? true,
+    autoSmallSummary: legacy.autoSmallSummary ?? true,
+    smallSummaryTurns: Number(legacy.smallSummaryTurns) || 15,
+    autoLargeSummary: legacy.autoLargeSummary ?? true,
+    largeSummaryCount: Number(legacy.largeSummaryCount) || 6,
+    lorebookSync: legacy.lorebookSync ?? true,
+    autoCreateLorebook: legacy.autoCreateChatLorebook ?? true,
+    lorebookName: safeText(legacy.lorebookName ?? "", 80),
+    vectorizeRows: legacy.vectorizeStateRows ?? false,
+    latestContinuityConstant: legacy.latestContinuityConstant ?? false,
+    connections: {
+      audit: { mode: legacy.auditProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.auditProfile ?? "", 120), independentProfileId: "" },
+      revision: { mode: legacy.revisionProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.revisionProfile ?? legacy.auditProfile ?? "", 120), independentProfileId: "" },
+      factExtraction: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120), independentProfileId: "" },
+      state: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120), independentProfileId: "" },
+      smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.smallSummaryProfile ?? "", 120), independentProfileId: "" },
+      largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.largeSummaryProfile ?? "", 120), independentProfileId: "" }
+    },
+    independentApiProfiles: []
+  };
+}
+function saveSettings() {
+  getContext().saveSettingsDebounced?.();
+}
+function getChat() {
+  return getContext().chat ?? [];
+}
+function getMessage(index) {
+  return getChat()[index] ?? null;
+}
+function latestAssistantIndex() {
+  const chat = getChat();
+  for (let i = chat.length - 1; i >= 0; i -= 1) {
+    if (!chat[i]?.is_user && safeText(chat[i]?.mes).trim()) return i;
+  }
+  return -1;
+}
+function previousUserText(beforeIndex) {
+  const chat = getChat();
+  for (let i = beforeIndex - 1; i >= 0; i -= 1) {
+    if (chat[i]?.is_user) return safeText(chat[i]?.mes).trim();
+  }
+  return "";
+}
+function currentRawChatId(context = getContext()) {
+  return rawChatIdFromContext(context);
+}
+function ensureChatInstanceId() {
+  return ensureChatIdentityForContext(getContext()).instanceId;
+}
+function legacyCurrentChatKey() {
+  const context = getContext();
+  const rawChatId = currentRawChatId(context);
+  const instanceId = ensureChatInstanceId();
+  const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? "unknown"}`;
+  return `${scope}:${hashText(`${scope}|${rawChatId || "unsaved"}|${instanceId}`)}`;
+}
+function currentChatKey() {
+  return chatScopeManager.current().chatKey;
+}
+function messageFingerprint(index) {
+  const message = getMessage(index);
+  return hashText(`${previousUserText(index)}
+---MA11---
+${safeText(message?.mes)}`);
+}
+function messageStableIdentity(index) {
+  const message = getMessage(index);
+  const stable = message?.id ?? message?.extra?.gen_id ?? message?.send_date ?? index;
+  return String(stable);
+}
+function messageIdentity(index) {
+  return `${messageStableIdentity(index)}:${messageFingerprint(index)}`;
+}
+function getChatMetadataNamespace() {
+  const context = getContext();
+  context.chatMetadata ||= context.chat_metadata || {};
+  context.chat_metadata = context.chatMetadata;
+  context.chatMetadata[MODULE_NAME] ||= {
+    schemaVersion: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  ensureChatInstanceId();
+  return context.chatMetadata[MODULE_NAME];
+}
+async function persistMetadata() {
+  const context = getContext();
+  if (typeof context.saveMetadata === "function") {
+    await context.saveMetadata();
+    return;
+  }
+  context.saveMetadataDebounced?.();
+}
+async function persistChat() {
+  const context = getContext();
+  if (typeof context.saveChat === "function") {
+    await context.saveChat();
+    return;
+  }
+  if (typeof context.saveChatConditional === "function") {
+    await context.saveChatConditional();
+  }
+}
+function toast(kind, message) {
+  const toastr = globalThis.toastr;
+  if (toastr?.[kind]) toastr[kind](message, DISPLAY_NAME);
+  else console[kind === "error" ? "error" : "log"](`[${DISPLAY_NAME}] ${message}`);
+}
+
+// src/bootstrap/app.ts
+init_repository();
+
+// src/pipeline/pipeline.ts
+init_constants();
+init_utils();
 
 // src/domain/artifact.ts
+init_constants();
+init_utils();
 function idleStage() {
   return { status: "idle", attempts: 0 };
 }
@@ -1089,6 +1781,7 @@ function markStage(artifact, stage, status, error) {
 }
 
 // src/application/artifact-factory.ts
+init_utils();
 function createArtifactForMessage(messageIndex) {
   const message = getMessage(messageIndex);
   if (!message || message.is_user) throw new Error("\u76EE\u6807\u4E0D\u662F\u6709\u6548AI\u6B63\u6587");
@@ -1103,370 +1796,13 @@ function createArtifactForMessage(messageIndex) {
   });
 }
 
-// src/foundation/connection-broker.ts
-var ConnectionRequestError = class extends Error {
-  kind;
-  status;
-  responsePreview;
-  retryAfterMs;
-  attempts;
-  connectionKey;
-  constructor(message, kind, options = {}) {
-    super(message, options.cause ? { cause: options.cause } : void 0);
-    this.name = "ConnectionRequestError";
-    this.kind = kind;
-    this.status = options.status;
-    this.responsePreview = options.responsePreview;
-    this.retryAfterMs = options.retryAfterMs;
-    this.attempts = options.attempts;
-    this.connectionKey = options.connectionKey;
-  }
-};
-var DEFAULT_POLICY = {
-  maxConcurrent: 1,
-  maxRetries: 2,
-  baseBackoffMs: 750,
-  maxBackoffMs: 12e3,
-  jitterRatio: 0.2,
-  circuitFailureThreshold: 3,
-  circuitOpenMs: 3e4
-};
-function makeRequestId() {
-  return `ma-conn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error ?? "\u672A\u77E5\u9519\u8BEF");
-}
-function copyError(error, patch) {
-  return new ConnectionRequestError(error.message, error.kind, {
-    status: error.status,
-    responsePreview: error.responsePreview,
-    retryAfterMs: error.retryAfterMs,
-    attempts: error.attempts,
-    connectionKey: error.connectionKey,
-    cause: error.cause,
-    ...patch
-  });
-}
-function normalizeConnectionError(error) {
-  if (error instanceof ConnectionRequestError) return error;
-  const message = errorMessage(error);
-  const candidate = error;
-  const statusValue = Number(candidate?.status ?? candidate?.response?.status);
-  const status = Number.isInteger(statusValue) && statusValue > 0 ? statusValue : void 0;
-  const options = { status, cause: error };
-  if (/abort|cancel|取消/i.test(message)) return new ConnectionRequestError(message || "\u8BF7\u6C42\u5DF2\u53D6\u6D88", "cancelled", options);
-  if (status === 408 || status === 504 || /timeout|timed out|超时/i.test(message)) return new ConnectionRequestError(message, "timeout", options);
-  if (status === 429 || /429|rate.?limit|too many requests|限流/i.test(message)) return new ConnectionRequestError(message, "rate_limit", options);
-  if (status === 401 || status === 403 || /401|403|unauthori[sz]ed|forbidden|密钥|鉴权|认证/i.test(message)) return new ConnectionRequestError(message, "authentication", options);
-  if (status === 404 || /(?:^|\D)404(?:\D|$)|not found/i.test(message)) return new ConnectionRequestError(message, "not_found", options);
-  if (status === 400 || status === 409 || status === 422 || /bad request|invalid request|unprocessable/i.test(message)) {
-    return new ConnectionRequestError(message, "configuration", options);
-  }
-  if (/network|fetch|socket|ECONN|ENOTFOUND|网络/i.test(message)) return new ConnectionRequestError(message, "network", options);
-  return new ConnectionRequestError(message, "upstream", options);
-}
-function isRetryable(error) {
-  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream";
-}
-function countsTowardCircuit(error) {
-  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream" || error.kind === "timeout";
-}
-var ConnectionBroker = class {
-  lanes = /* @__PURE__ */ new Map();
-  circuits = /* @__PURE__ */ new Map();
-  requests = /* @__PURE__ */ new Map();
-  listeners = /* @__PURE__ */ new Set();
-  subscribe(listener) {
-    this.listeners.add(listener);
-    listener(this.snapshot());
-    return () => this.listeners.delete(listener);
-  }
-  snapshot() {
-    return {
-      active: [...this.requests.values()].map(({ controller: _controller, ...record }) => ({ ...record })),
-      lanes: [...this.lanes.entries()].map(([connectionKey, lane]) => ({
-        connectionKey,
-        active: lane.active,
-        queued: lane.waiters.length,
-        maxConcurrent: lane.maxConcurrent
-      })),
-      circuits: [...this.circuits.entries()].map(([connectionKey, circuit]) => ({ connectionKey, ...circuit }))
-    };
-  }
-  async request(request) {
-    const policy = this.resolvePolicy(request.policy);
-    const id = request.id || makeRequestId();
-    if (this.requests.has(id)) {
-      throw new ConnectionRequestError(`\u8FDE\u63A5\u8BF7\u6C42ID\u91CD\u590D\uFF1A${id}`, "configuration", { connectionKey: request.connectionKey });
-    }
-    const controller = new AbortController();
-    const forwardAbort = () => controller.abort(request.signal?.reason);
-    request.signal?.addEventListener("abort", forwardAbort, { once: true });
-    if (request.signal?.aborted) controller.abort(request.signal.reason);
-    const record = {
-      id,
-      connectionKey: request.connectionKey,
-      scopeKey: request.scopeKey || "",
-      label: request.label,
-      state: "queued",
-      attempt: 0,
-      controller,
-      startedAt: Date.now()
-    };
-    this.requests.set(id, record);
-    this.emit();
-    let release;
-    try {
-      release = await this.acquire(request.connectionKey, policy.maxConcurrent, controller.signal);
-      record.state = "running";
-      this.emit();
-      this.assertCircuitAvailable(request.connectionKey, policy);
-      let lastError2 = null;
-      for (let attempt = 1; attempt <= policy.maxRetries + 1; attempt += 1) {
-        record.attempt = attempt;
-        record.state = attempt === 1 ? "running" : "retrying";
-        this.emit();
-        try {
-          const value = await this.executeAttempt(request, controller.signal, attempt);
-          this.recordSuccess(request.connectionKey);
-          return value;
-        } catch (error) {
-          let normalized = normalizeConnectionError(error);
-          if (controller.signal.aborted && normalized.kind !== "timeout") {
-            normalized = new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
-              cause: error,
-              connectionKey: request.connectionKey,
-              attempts: attempt
-            });
-          }
-          lastError2 = copyError(normalized, { attempts: attempt, connectionKey: request.connectionKey });
-          if (!isRetryable(lastError2) || attempt > policy.maxRetries || controller.signal.aborted) break;
-          const delay = this.retryDelay(lastError2, attempt, policy);
-          await this.wait(delay, controller.signal, request.label);
-        }
-      }
-      const finalError = lastError2 ?? new ConnectionRequestError(`${request.label}\u5931\u8D25`, "upstream");
-      this.recordFailure(request.connectionKey, finalError, policy);
-      throw finalError;
-    } finally {
-      release?.();
-      request.signal?.removeEventListener("abort", forwardAbort);
-      this.requests.delete(id);
-      this.emit();
-    }
-  }
-  cancel(requestId, reason = "\u8BF7\u6C42\u5DF2\u53D6\u6D88") {
-    const record = this.requests.get(requestId);
-    if (!record) return false;
-    record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-    this.emit();
-    return true;
-  }
-  cancelScope(scopeKey, reason = "\u804A\u5929\u4F5C\u7528\u57DF\u5DF2\u5931\u6548") {
-    let count = 0;
-    for (const record of this.requests.values()) {
-      if (record.scopeKey !== scopeKey) continue;
-      record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-      count += 1;
-    }
-    if (count) this.emit();
-    return count;
-  }
-  cancelAllExceptScope(scopeKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
-    let count = 0;
-    for (const record of this.requests.values()) {
-      if (record.scopeKey === scopeKey) continue;
-      record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-      count += 1;
-    }
-    if (count) this.emit();
-    return count;
-  }
-  cancelAll(reason = "\u8FDE\u63A5\u670D\u52A1\u5DF2\u505C\u6B62") {
-    let count = 0;
-    for (const record of this.requests.values()) {
-      record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-      count += 1;
-    }
-    if (count) this.emit();
-    return count;
-  }
-  resetCircuit(connectionKey) {
-    if (connectionKey) this.circuits.delete(connectionKey);
-    else this.circuits.clear();
-    this.emit();
-  }
-  resolvePolicy(patch) {
-    return {
-      maxConcurrent: Math.max(1, Math.floor(patch?.maxConcurrent ?? DEFAULT_POLICY.maxConcurrent)),
-      maxRetries: Math.max(0, Math.floor(patch?.maxRetries ?? DEFAULT_POLICY.maxRetries)),
-      baseBackoffMs: Math.max(0, Math.floor(patch?.baseBackoffMs ?? DEFAULT_POLICY.baseBackoffMs)),
-      maxBackoffMs: Math.max(0, Math.floor(patch?.maxBackoffMs ?? DEFAULT_POLICY.maxBackoffMs)),
-      jitterRatio: Math.min(1, Math.max(0, Number(patch?.jitterRatio ?? DEFAULT_POLICY.jitterRatio))),
-      circuitFailureThreshold: Math.max(1, Math.floor(patch?.circuitFailureThreshold ?? DEFAULT_POLICY.circuitFailureThreshold)),
-      circuitOpenMs: Math.max(100, Math.floor(patch?.circuitOpenMs ?? DEFAULT_POLICY.circuitOpenMs))
-    };
-  }
-  async acquire(connectionKey, maxConcurrent, signal) {
-    let lane = this.lanes.get(connectionKey);
-    if (!lane) {
-      lane = { active: 0, maxConcurrent, waiters: [] };
-      this.lanes.set(connectionKey, lane);
-    }
-    lane.maxConcurrent = maxConcurrent;
-    if (signal.aborted) throw new ConnectionRequestError("\u8BF7\u6C42\u5728\u6392\u961F\u524D\u5DF2\u53D6\u6D88", "cancelled", { connectionKey });
-    if (lane.active < lane.maxConcurrent) {
-      lane.active += 1;
-      this.emit();
-      return this.releaseFactory(connectionKey, lane);
-    }
-    return new Promise((resolve, reject) => {
-      const waiter = {
-        signal,
-        resolve,
-        reject,
-        onAbort: () => {
-          const index = lane.waiters.indexOf(waiter);
-          if (index >= 0) lane.waiters.splice(index, 1);
-          reject(new ConnectionRequestError("\u8BF7\u6C42\u5728\u961F\u5217\u4E2D\u88AB\u53D6\u6D88", "cancelled", { connectionKey }));
-          this.emit();
-        }
-      };
-      signal.addEventListener("abort", waiter.onAbort, { once: true });
-      lane.waiters.push(waiter);
-      this.emit();
-    });
-  }
-  releaseFactory(connectionKey, lane) {
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      lane.active = Math.max(0, lane.active - 1);
-      while (lane.waiters.length) {
-        const waiter = lane.waiters.shift();
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-        if (waiter.signal.aborted) continue;
-        lane.active += 1;
-        waiter.resolve(this.releaseFactory(connectionKey, lane));
-        break;
-      }
-      if (lane.active === 0 && lane.waiters.length === 0) this.lanes.delete(connectionKey);
-      this.emit();
-    };
-  }
-  executeAttempt(request, parentSignal, attempt) {
-    if (parentSignal.aborted) {
-      return Promise.reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", { connectionKey: request.connectionKey }));
-    }
-    const attemptController = new AbortController();
-    const forwardAbort = () => attemptController.abort(parentSignal.reason);
-    parentSignal.addEventListener("abort", forwardAbort, { once: true });
-    let timer;
-    let onAttemptAbort;
-    const timeoutPromise = new Promise((_resolve, reject) => {
-      timer = setTimeout(() => {
-        const timeoutError = new ConnectionRequestError(`${request.label}\u8D85\u65F6`, "timeout", {
-          connectionKey: request.connectionKey,
-          attempts: attempt
-        });
-        attemptController.abort(timeoutError);
-        reject(timeoutError);
-      }, Math.max(1, request.timeoutMs));
-    });
-    const abortPromise = new Promise((_resolve, reject) => {
-      onAttemptAbort = () => {
-        if (parentSignal.aborted) {
-          reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
-            connectionKey: request.connectionKey,
-            attempts: attempt,
-            cause: parentSignal.reason
-          }));
-        }
-      };
-      attemptController.signal.addEventListener("abort", onAttemptAbort, { once: true });
-    });
-    const operation = Promise.resolve().then(() => request.execute(attemptController.signal, attempt));
-    return Promise.race([operation, timeoutPromise, abortPromise]).finally(() => {
-      if (timer) clearTimeout(timer);
-      parentSignal.removeEventListener("abort", forwardAbort);
-      if (onAttemptAbort) attemptController.signal.removeEventListener("abort", onAttemptAbort);
-    });
-  }
-  assertCircuitAvailable(connectionKey, policy) {
-    const circuit = this.circuits.get(connectionKey);
-    if (!circuit) return;
-    const now = Date.now();
-    if (circuit.openUntil > now) {
-      throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
-        connectionKey,
-        retryAfterMs: circuit.openUntil - now
-      });
-    }
-    if (circuit.openUntil > 0) {
-      if (circuit.halfOpen) {
-        throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6B63\u5728\u534A\u5F00\u63A2\u6D4B`, "circuit_open", { connectionKey });
-      }
-      circuit.halfOpen = true;
-      circuit.openUntil = 0;
-      this.emit();
-    }
-    if (circuit.failures >= policy.circuitFailureThreshold && circuit.openUntil === 0 && !circuit.halfOpen) {
-      circuit.openUntil = now + policy.circuitOpenMs;
-      this.emit();
-      throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
-        connectionKey,
-        retryAfterMs: policy.circuitOpenMs
-      });
-    }
-  }
-  recordSuccess(connectionKey) {
-    if (this.circuits.delete(connectionKey)) this.emit();
-  }
-  recordFailure(connectionKey, error, policy) {
-    const tracked = countsTowardCircuit(error);
-    const existing = this.circuits.get(connectionKey);
-    if (!tracked && !existing) return;
-    const circuit = existing ?? { failures: 0, openUntil: 0, halfOpen: false };
-    circuit.halfOpen = false;
-    if (tracked) circuit.failures += 1;
-    if (circuit.failures >= policy.circuitFailureThreshold) circuit.openUntil = Date.now() + policy.circuitOpenMs;
-    this.circuits.set(connectionKey, circuit);
-    this.emit();
-  }
-  retryDelay(error, attempt, policy) {
-    if (typeof error.retryAfterMs === "number" && error.retryAfterMs >= 0) return Math.min(policy.maxBackoffMs, error.retryAfterMs);
-    const base = Math.min(policy.maxBackoffMs, policy.baseBackoffMs * 2 ** Math.max(0, attempt - 1));
-    const jitter = base * policy.jitterRatio * (Math.random() * 2 - 1);
-    return Math.max(0, Math.round(base + jitter));
-  }
-  wait(ms, signal, label) {
-    if (ms <= 0) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      const onAbort = () => {
-        clearTimeout(timer);
-        reject(new ConnectionRequestError(`${label}\u91CD\u8BD5\u7B49\u5F85\u5DF2\u53D6\u6D88`, "cancelled", { cause: signal.reason }));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-  emit() {
-    if (!this.listeners.size) return;
-    const snapshot = this.snapshot();
-    for (const listener of this.listeners) {
-      try {
-        listener(snapshot);
-      } catch {
-      }
-    }
-  }
-};
-var connectionBroker = new ConnectionBroker();
+// src/pipeline/audit.ts
+init_utils();
+
+// src/llm/generator.ts
+init_utils();
+init_chat_scope();
+init_connection_broker();
 
 // src/foundation/generation-guard.ts
 var internalGenerationDepth = 0;
@@ -1482,7 +1818,143 @@ async function withInternalGeneration(work) {
   }
 }
 
+// src/foundation/invocation-router.ts
+init_chat_scope();
+init_task_errors();
+var PRIORITY_WEIGHT = {
+  foreground: 0,
+  "background-critical": 10,
+  "background-derived": 20,
+  "background-io": 30
+};
+function connectionIdentity(spec) {
+  if (spec.connection.credentialKey) return spec.connection.credentialKey;
+  if (spec.connection.mode === "profile") return `profile:${spec.connection.profileId || "missing"}`;
+  if (spec.connection.mode === "independent") return `independent:${spec.connection.independentProfileId || "missing"}`;
+  return "current";
+}
+var InvocationRouter = class {
+  queues = /* @__PURE__ */ new Map();
+  runningLanes = /* @__PURE__ */ new Set();
+  activeControllers = /* @__PURE__ */ new Map();
+  activeSpecs = /* @__PURE__ */ new Map();
+  sequence = 0;
+  submit(spec, execute, externalSignal) {
+    if (externalSignal?.aborted) {
+      return Promise.reject(new TaskCancelledError("\u8C03\u7528\u5728\u5165\u961F\u524D\u5DF2\u53D6\u6D88"));
+    }
+    const laneKey = `${spec.chatKey}:${connectionIdentity(spec)}`;
+    return new Promise((resolve, reject) => {
+      const queue = this.queues.get(laneKey) ?? [];
+      queue.push({
+        sequence: this.sequence += 1,
+        laneKey,
+        spec,
+        externalSignal,
+        execute,
+        resolve,
+        reject
+      });
+      queue.sort((a, b) => {
+        const priority = PRIORITY_WEIGHT[a.spec.priority] - PRIORITY_WEIGHT[b.spec.priority];
+        return priority || a.sequence - b.sequence;
+      });
+      this.queues.set(laneKey, queue);
+      void this.pump(laneKey);
+    });
+  }
+  async pump(laneKey) {
+    if (this.runningLanes.has(laneKey)) return;
+    this.runningLanes.add(laneKey);
+    try {
+      while (true) {
+        const queue = this.queues.get(laneKey);
+        const pending = queue?.shift();
+        if (!pending) break;
+        if (!queue?.length) this.queues.delete(laneKey);
+        const controller = new AbortController();
+        this.activeControllers.set(pending.spec.id, controller);
+        this.activeSpecs.set(pending.spec.id, pending.spec);
+        const abort = () => controller.abort(
+          pending.externalSignal?.reason instanceof Error ? pending.externalSignal.reason : new TaskCancelledError("\u8C03\u7528\u5DF2\u53D6\u6D88")
+        );
+        pending.externalSignal?.addEventListener("abort", abort, { once: true });
+        try {
+          if (pending.externalSignal?.aborted) throw new TaskCancelledError("\u8C03\u7528\u5728\u6267\u884C\u524D\u5DF2\u53D6\u6D88");
+          const scope = chatScopeManager.current();
+          if (scope.chatKey !== pending.spec.chatKey || scope.revision !== pending.spec.scopeRevision) {
+            throw new StaleTaskError("\u8C03\u7528\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+          }
+          const result = await pending.execute(controller.signal);
+          const after = chatScopeManager.current();
+          if (after.chatKey !== pending.spec.chatKey || after.revision !== pending.spec.scopeRevision) {
+            throw new StaleTaskError("\u8C03\u7528\u5B8C\u6210\u65F6\u804A\u5929\u4F5C\u7528\u57DF\u5DF2\u6539\u53D8");
+          }
+          pending.resolve(result);
+        } catch (error) {
+          pending.reject(error);
+        } finally {
+          pending.externalSignal?.removeEventListener("abort", abort);
+          this.activeControllers.delete(pending.spec.id);
+          this.activeSpecs.delete(pending.spec.id);
+        }
+      }
+    } finally {
+      this.runningLanes.delete(laneKey);
+      if ((this.queues.get(laneKey)?.length ?? 0) > 0) void this.pump(laneKey);
+    }
+  }
+  cancelChat(chatKey, reason = "\u804A\u5929\u8C03\u7528\u5DF2\u53D6\u6D88") {
+    let count = 0;
+    for (const [laneKey, queue] of [...this.queues.entries()]) {
+      const retained = [];
+      for (const pending of queue) {
+        if (pending.spec.chatKey === chatKey) {
+          pending.reject(new TaskCancelledError(reason));
+          count += 1;
+        } else retained.push(pending);
+      }
+      if (retained.length) this.queues.set(laneKey, retained);
+      else this.queues.delete(laneKey);
+    }
+    for (const [id, controller] of this.activeControllers) {
+      if (this.activeSpecs.get(id)?.chatKey !== chatKey || controller.signal.aborted) continue;
+      controller.abort(new TaskCancelledError(reason));
+      count += 1;
+    }
+    return count;
+  }
+  cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+    let count = 0;
+    const chats = /* @__PURE__ */ new Set();
+    for (const queue of this.queues.values()) {
+      for (const pending of queue) if (pending.spec.chatKey !== chatKey) chats.add(pending.spec.chatKey);
+    }
+    for (const spec of this.activeSpecs.values()) if (spec.chatKey !== chatKey) chats.add(spec.chatKey);
+    for (const other of chats) count += this.cancelChat(other, reason);
+    return count;
+  }
+  cancelAll(reason = "\u8C03\u7528\u8DEF\u7531\u5DF2\u505C\u6B62") {
+    let count = 0;
+    const chats = /* @__PURE__ */ new Set();
+    for (const queue of this.queues.values()) for (const pending of queue) chats.add(pending.spec.chatKey);
+    for (const spec of this.activeSpecs.values()) chats.add(spec.chatKey);
+    for (const chatKey of chats) count += this.cancelChat(chatKey, reason);
+    return count;
+  }
+  pendingCount(chatKey) {
+    let total = 0;
+    for (const queue of this.queues.values()) {
+      total += chatKey ? queue.filter((pending) => pending.spec.chatKey === chatKey).length : queue.length;
+    }
+    return total;
+  }
+};
+var invocationRouter = new InvocationRouter();
+
 // src/llm/api-profiles.ts
+init_utils();
+init_connection_broker();
 var SECRET_PREFIX = "ma11:independent-api-key:";
 var ApiRequestError = class extends ConnectionRequestError {
   constructor(message, kind, options = {}) {
@@ -1757,6 +2229,64 @@ function resolveProfileId(connection) {
   }
   return "";
 }
+var PROFILE_CREDENTIAL_OMIT_KEYS = /* @__PURE__ */ new Set([
+  "id",
+  "name",
+  "model",
+  "model_id",
+  "preset",
+  "preset_name",
+  "temperature",
+  "top_p",
+  "top_k",
+  "max_tokens",
+  "max_new_tokens",
+  "context_length",
+  "stream",
+  "seed",
+  "frequency_penalty",
+  "presence_penalty",
+  "repetition_penalty",
+  "min_p",
+  "reasoning_effort",
+  "maxtokens",
+  "maxnewtokens",
+  "contextlength",
+  "topp",
+  "topk",
+  "minp",
+  "frequencypenalty",
+  "presencepenalty",
+  "repetitionpenalty",
+  "reasoningeffort"
+]);
+function stableCredentialMaterial(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
+  if (Array.isArray(value)) return value.map((item2) => stableCredentialMaterial(item2, seen));
+  if (typeof value !== "object") return String(value ?? "");
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+  const output = {};
+  for (const key of Object.keys(value).sort()) {
+    if (PROFILE_CREDENTIAL_OMIT_KEYS.has(key.toLowerCase())) continue;
+    const item2 = value[key];
+    if (typeof item2 === "function" || item2 === void 0) continue;
+    output[key] = stableCredentialMaterial(item2, seen);
+  }
+  return output;
+}
+function nativeProfileCredentialKey(profileId) {
+  const profile = supportedProfiles().find((item2) => String(item2?.id) === profileId);
+  const material = stableCredentialMaterial(profile ?? { provider: "unknown", profileId });
+  return `credential:native:${hashText(JSON.stringify(material))}`;
+}
+function independentCredentialKey(profileId) {
+  const profile = getIndependentApiProfile(profileId);
+  const endpoint = String(profile?.apiUrl || "").trim().replace(/\/+$/, "").toLowerCase();
+  const key = getSessionApiKey(profileId);
+  const material = `${profile?.provider || "openai-compatible"}|${endpoint}|${key || `missing:${profileId}`}`;
+  return `credential:independent:${hashText(material)}`;
+}
 function messagesFromOptions(options) {
   const messages = [];
   if (options.systemPrompt.trim()) messages.push({ role: "system", content: options.systemPrompt });
@@ -1819,10 +2349,10 @@ async function generateWithNativeProfile(options, profileId, signal) {
     throw normalizeConnectionError(error);
   }
 }
-async function generateWithIndependentProfile(options, profileId, signal) {
+async function generateWithIndependentProfile(options, profileId, timeoutMs, signal) {
   return withInternalGeneration(() => requestIndependentApi(profileId, {
     messages: messagesFromOptions(options),
-    timeoutMs: Math.max(1e4, Number(getSettings().requestTimeoutMs) || 9e4),
+    timeoutMs,
     signal
   }));
 }
@@ -1834,8 +2364,13 @@ function listSupportedConnectionProfiles() {
     model: safeText(profile?.model, 240)
   })).filter((profile) => profile.id);
 }
+function effectiveConnectionTask(task) {
+  if (task === "revision") return "audit";
+  if (task === "state" || task === "smallSummary" || task === "largeSummary") return "factExtraction";
+  return task;
+}
 function describeTaskConnection(task) {
-  const connection = getSettings().connections[task];
+  const connection = getSettings().connections[effectiveConnectionTask(task)];
   if (connection?.mode === "profile") {
     const id = resolveProfileId(connection);
     const profile = listSupportedConnectionProfiles().find((item2) => item2.id === id);
@@ -1847,41 +2382,105 @@ function describeTaskConnection(task) {
   }
   return "\u5F53\u524D\u804A\u5929\u8FDE\u63A5";
 }
-function taskAdapter(options) {
-  const connection = getSettings().connections[options.task];
+function captureTaskConnection(task) {
+  const settings = getSettings();
+  const effectiveTask = effectiveConnectionTask(task);
+  const connection = settings.connections[effectiveTask] ?? settings.connections.factExtraction ?? settings.connections.state;
+  const timeoutMs = Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4);
   if (connection?.mode === "profile") {
     const profileId = resolveProfileId(connection);
-    if (!profileId) throw new ApiRequestError(`${options.task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`, "configuration");
+    if (!profileId) throw new ApiRequestError(`${task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`, "configuration");
+    const profile = listSupportedConnectionProfiles().find((item2) => item2.id === profileId);
     return {
-      connectionKey: `profile:${profileId}`,
-      execute: (signal) => generateWithNativeProfile(options, profileId, signal)
+      mode: "profile",
+      credentialKey: nativeProfileCredentialKey(profileId),
+      profileId,
+      profileName: profile?.name || cleanProfileName(connection.profile),
+      independentProfileId: "",
+      timeoutMs,
+      capturedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
   }
   if (connection?.mode === "independent") {
-    if (!connection.independentProfileId) throw new ApiRequestError(`${options.task}\u672A\u9009\u62E9\u955C\u6E0A\u72EC\u7ACBAPI`, "configuration");
+    if (!connection.independentProfileId) throw new ApiRequestError(`${task}\u672A\u9009\u62E9\u955C\u6E0A\u72EC\u7ACBAPI`, "configuration");
     return {
-      connectionKey: `independent:${connection.independentProfileId}`,
-      execute: (signal) => generateWithIndependentProfile(options, connection.independentProfileId, signal)
+      mode: "independent",
+      credentialKey: independentCredentialKey(connection.independentProfileId),
+      profileId: "",
+      profileName: getIndependentApiProfile(connection.independentProfileId)?.name || "",
+      independentProfileId: connection.independentProfileId,
+      timeoutMs,
+      capturedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
   }
   return {
-    connectionKey: "current",
+    mode: "current",
+    credentialKey: "credential:current",
+    profileId: "",
+    profileName: "\u5F53\u524D\u804A\u5929\u8FDE\u63A5",
+    independentProfileId: "",
+    timeoutMs,
+    capturedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+function taskAdapter(options, snapshot) {
+  if (snapshot.mode === "profile") {
+    return {
+      connectionKey: snapshot.credentialKey || `profile:${snapshot.profileId}`,
+      execute: (signal) => generateWithNativeProfile(options, snapshot.profileId, signal)
+    };
+  }
+  if (snapshot.mode === "independent") {
+    return {
+      connectionKey: snapshot.credentialKey || `independent:${snapshot.independentProfileId}`,
+      execute: (signal) => generateWithIndependentProfile(options, snapshot.independentProfileId, snapshot.timeoutMs, signal)
+    };
+  }
+  return {
+    connectionKey: snapshot.credentialKey || "current",
     execute: (signal) => generateCurrent(options, signal)
   };
 }
-async function generateTask(options) {
-  const adapter = taskAdapter(options);
+function defaultPriority(task) {
+  if (task === "audit" || task === "revision") return "foreground";
+  if (task === "factExtraction" || task === "state") return "background-critical";
+  return "background-derived";
+}
+function createInvocationSpec(options) {
   const scope = chatScopeManager.current();
-  const timeoutMs = Math.max(1e4, Number(getSettings().requestTimeoutMs) || 9e4);
-  return connectionBroker.request({
-    id: options.requestId,
+  const connection = options.connectionSnapshot ?? captureTaskConnection(options.task);
+  return {
+    schemaVersion: 1,
+    id: `${makeId("inv")}:${scope.chatKey}:${options.task}`,
+    taskType: options.task,
+    chatKey: scope.chatKey,
+    scopeRevision: scope.revision,
+    sourceRange: options.invocation?.sourceRange ?? { startIndex: -1, endIndex: -1, messageKeys: [] },
+    priority: options.invocation?.priority ?? defaultPriority(options.task),
+    blocking: options.invocation?.blocking ?? (options.task === "audit" || options.task === "revision"),
+    coalesceKey: options.invocation?.coalesceKey,
+    connection,
+    retryPolicy: {
+      maxAttempts: 3,
+      retryableKinds: ["rate_limit", "network", "upstream"]
+    },
+    outputSchema: options.invocation?.outputSchema ?? "",
+    createdAt: nowIso()
+  };
+}
+async function generateTask(options) {
+  const spec = createInvocationSpec(options);
+  const adapter = taskAdapter(options, spec.connection);
+  return invocationRouter.submit(spec, (routerSignal) => connectionBroker.request({
+    id: options.requestId ?? spec.id,
     connectionKey: adapter.connectionKey,
-    scopeKey: scope.chatKey,
+    priority: spec.priority,
+    scopeKey: spec.chatKey,
     label: `${options.task}\u6A21\u578B\u8BF7\u6C42`,
-    timeoutMs,
-    signal: options.signal,
+    timeoutMs: spec.connection.timeoutMs,
+    signal: routerSignal,
     execute: (signal) => adapter.execute(signal)
-  });
+  }), options.signal);
 }
 async function testConnection(task) {
   const started = performance.now();
@@ -1924,138 +2523,46 @@ async function testConnection(task) {
   };
 }
 
-// src/llm/structured.ts
-function repairSystemPrompt(structureDescription) {
-  return `\u4F60\u662FJSON\u683C\u5F0F\u4FEE\u590D\u5668\u3002\u4F60\u4E0D\u6267\u884C\u539F\u4EFB\u52A1\u3001\u4E0D\u8865\u5145\u65B0\u4E8B\u5B9E\u3001\u4E0D\u89E3\u91CA\u5185\u5BB9\uFF0C\u53EA\u628A\u7ED9\u5B9A\u6A21\u578B\u8F93\u51FA\u8F6C\u6362\u6210\u4E00\u4E2A\u5408\u6CD5JSON\u5BF9\u8C61\u3002
-
-\u8981\u6C42\uFF1A
-1. \u4FDD\u7559\u539F\u8F93\u51FA\u4E2D\u5DF2\u7ECF\u8868\u8FBE\u7684\u8BED\u4E49\uFF0C\u4E0D\u81EA\u884C\u91CD\u505A\u5BA1\u6838\u3001\u603B\u7ED3\u6216\u72B6\u6001\u63D0\u53D6\u3002
-2. \u5220\u9664Markdown\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u548C\u601D\u8003\u6807\u7B7E\u3002
-3. \u4FEE\u590D\u7F3A\u5931\u5F15\u53F7\u3001\u5C3E\u968F\u9017\u53F7\u3001\u5168\u89D2\u6807\u70B9\u7B49\u683C\u5F0F\u95EE\u9898\u3002
-4. \u8F93\u51FA\u5FC5\u987B\u80FD\u88ABJSON.parse\u76F4\u63A5\u89E3\u6790\uFF0C\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61\u3002
-5. \u53EA\u8F93\u51FAJSON\u5BF9\u8C61\uFF0C\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u989D\u5916\u6587\u5B57\u3002
-
-\u3010\u76EE\u6807\u7ED3\u6784\u3011
-${structureDescription}`;
-}
-function repairUserPrompt(raw) {
-  return `\u3010\u9700\u8981\u4FEE\u590D\u7684\u539F\u59CB\u8F93\u51FA\u3011
-${safeText(raw, 8e4)}`;
-}
-var TASK_LABELS = {
-  audit: "\u89C4\u5219\u5BA1\u6838",
-  revision: "\u5B9A\u5411\u4FEE\u6B63",
-  state: "\u72B6\u6001\u8868",
-  smallSummary: "\u5C0F\u603B\u7ED3",
-  largeSummary: "\u5927\u603B\u7ED3"
-};
-function structuredError(task, error, raw) {
-  const connection = describeTaskConnection(task);
-  const preview = error instanceof JsonObjectParseError ? error.preview : jsonPreview(raw);
-  const detail = toErrorMessage(error);
-  return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
-}
-async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, signal) {
-  const repaired = await generateTask({
-    task,
-    systemPrompt: repairSystemPrompt(structureDescription),
-    prompt: repairUserPrompt(raw),
-    jsonSchema,
-    signal
-  });
-  return parseJsonObject(repaired);
-}
-async function generateStructuredTask(options) {
-  const raw = await generateTask(options);
-  try {
-    return parseJsonObject(raw);
-  } catch (firstError) {
-    const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
-    if (!allowRepair) throw structuredError(options.task, firstError, raw);
-    try {
-      return await repairStructuredOutput(options.task, raw, options.structureDescription, options.jsonSchema, options.signal);
-    } catch (repairError) {
-      throw structuredError(options.task, repairError, raw);
-    }
-  }
-}
-
 // src/prompts/audit.ts
 function auditSystemPrompt() {
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u89C4\u5219\u5BA1\u6838\u5668\u3002\u4F60\u53EA\u68C0\u67E5\u7ED9\u5B9AAI\u6B63\u6587\u662F\u5426\u8FDD\u53CD\u73A9\u5BB6\u63D0\u4F9B\u7684\u786C\u6027\u89C4\u5219\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u6DA6\u8272\uFF0C\u4E0D\u66FF\u6B63\u6587\u8FA9\u62A4\u3002
+  return `\u4F60\u662F\u6587\u672C\u89C4\u5219\u6267\u884C\u5668\u3002\u4F60\u53EA\u6267\u884C\u73A9\u5BB6\u63D0\u4F9B\u7684\u89C4\u5219\uFF0C\u4E0D\u81EA\u884C\u589E\u52A0\u5BA1\u6838\u6807\u51C6\uFF0C\u4E0D\u505A\u4E0E\u89C4\u5219\u65E0\u5173\u7684\u6DA6\u8272\u3001\u6269\u5199\u6216\u5267\u60C5\u4F18\u5316\u3002
 
-\u5FC5\u987B\u53EA\u8F93\u51FA\u4E00\u4E2AJSON\u5BF9\u8C61\uFF0C\u7ED3\u6784\u5982\u4E0B\uFF1A
-{
-  "result": "pass | revise | block",
-  "reason": "\u4E00\u53E5\u8BDD\u7ED3\u8BBA",
-  "violations": [
-    {
-      "ruleId": "\u7A33\u5B9A\u3001\u7B80\u77ED\u7684\u89C4\u5219\u7F16\u53F7",
-      "rule": "\u88AB\u8FDD\u53CD\u7684\u89C4\u5219",
-      "evidence": "\u6B63\u6587\u4E2D\u7684\u5177\u4F53\u8FDD\u89C4\u7247\u6BB5\u6216\u51C6\u786E\u6982\u8FF0",
-      "action": "\u5E94\u5982\u4F55\u4FEE\u6539\uFF0C\u5FC5\u987B\u5177\u4F53\u53EF\u6267\u884C"
-    }
-  ],
-  "preserve": ["\u4FEE\u6B63\u65F6\u5FC5\u987B\u4FDD\u7559\u7684\u5916\u90E8\u4E8B\u5B9E"],
-  "rewriteInstruction": "\u7ED9\u4FEE\u6B63\u6587\u6A21\u578B\u7684\u4E00\u6BB5\u5B8C\u6574\u6307\u4EE4"
+\u4F60\u5FC5\u987B\u4ECE\u4EE5\u4E0B\u4E09\u79CD\u534F\u8BAE\u4E2D\u9009\u62E9\u4E00\u79CD\u8F93\u51FA\uFF1A
+
+1. \u6B63\u6587\u6CA1\u6709\u660E\u786E\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219\uFF1A
+MA_OK
+
+2. \u6B63\u6587\u660E\u786E\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219\uFF0C\u4E14\u53EF\u4EE5\u6309\u73A9\u5BB6\u89C4\u5219\u4FEE\u6B63\uFF1A
+MA_REVISE
+\u968F\u540E\u76F4\u63A5\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u5B8C\u6574\u6B63\u6587\u3002
+
+3. \u6B63\u6587\u660E\u786E\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219\uFF0C\u4F46\u65E0\u6CD5\u751F\u6210\u7B26\u5408\u89C4\u5219\u7684\u5B8C\u6574\u4FEE\u6B63\u7248\uFF1A
+MA_BLOCK
+\u968F\u540E\u7528\u4E00\u53E5\u8BDD\u8BF4\u660E\u539F\u56E0\u3002
+
+\u6267\u884C\u8981\u6C42\uFF1A
+- \u53EA\u6709\u5B58\u5728\u660E\u786E\u8FDD\u89C4\u65F6\u624D\u5141\u8BB8\u4FEE\u6539\u6B63\u6587\u3002
+- \u4FEE\u6B63\u53EA\u4E3A\u6D88\u9664\u73A9\u5BB6\u89C4\u5219\u6307\u51FA\u7684\u8FDD\u89C4\uFF0C\u4E0D\u6DFB\u52A0\u7528\u6237\u672A\u8981\u6C42\u7684\u76EE\u6807\u3002
+- \u82E5\u73A9\u5BB6\u63D0\u4F9B\u9644\u52A0\u4FEE\u6B63\u8981\u6C42\uFF0C\u4FEE\u6B63\u7248\u540C\u65F6\u9075\u5B88\u8BE5\u8981\u6C42\u3002
+- MA_REVISE \u540E\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u66FF\u6362\u539F\u6B63\u6587\u7684\u5B8C\u6574\u6587\u672C\uFF0C\u4E0D\u5F97\u9644\u52A0\u6807\u9898\u3001\u8BF4\u660E\u3001\u5BF9\u6BD4\u3001\u5BA1\u6838\u62A5\u544A\u6216 Markdown \u4EE3\u7801\u5757\u3002
+- \u4E0D\u5F97\u8F93\u51FA JSON\uFF0C\u4E0D\u5F97\u8F93\u51FA\u534F\u8BAE\u4E4B\u5916\u7684\u524D\u8A00\u6216\u7ED3\u8BED\u3002`;
 }
-
-\u5224\u5B9A\u6807\u51C6\uFF1A
-- pass\uFF1A\u6CA1\u6709\u660E\u786E\u8FDD\u89C4\u3002
-- revise\uFF1A\u53EF\u4EE5\u5728\u4E0D\u6539\u53D8\u5DF2\u7ECF\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u4EF6\u3001NPC\u884C\u4E3A\u548C\u4E8B\u4EF6\u987A\u5E8F\u7684\u524D\u63D0\u4E0B\u5B9A\u5411\u4FEE\u6B63\u3002
-- block\uFF1A\u6574\u6BB5\u5185\u5BB9\u5EFA\u7ACB\u5728\u8FDD\u89C4\u524D\u63D0\u4E0A\uFF0C\u65E0\u6CD5\u5C40\u90E8\u4FEE\u6B63\u800C\u4E0D\u91CD\u6784\u5267\u60C5\u3002
-
-\u89C4\u5219\uFF1A
-1. \u53EA\u5217\u51FA\u6709\u660E\u786E\u8BC1\u636E\u7684\u8FDD\u89C4\u3002
-2. evidence\u5FC5\u987B\u8DB3\u4EE5\u8BA9\u4FEE\u6B63\u6587\u6A21\u578B\u5B9A\u4F4D\u95EE\u9898\u3002
-3. action\u5FC5\u987B\u8BF4\u660E\u201C\u5220\u4EC0\u4E48\u3001\u4FDD\u7559\u4EC0\u4E48\u3001\u7528\u4EC0\u4E48\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u66FF\u4EE3\u201D\uFF0C\u4E0D\u80FD\u53EA\u5199\u201C\u4E0D\u8981\u8FDD\u89C4\u201D\u3002
-4. preserve\u53EA\u5199\u5DF2\u7ECF\u6210\u7ACB\u4E14\u4E0D\u80FD\u88AB\u4FEE\u6B63\u6A21\u578B\u6539\u52A8\u7684\u5916\u90E8\u4E8B\u5B9E\u3002
-5. pass\u65F6violations\u5FC5\u987B\u4E3A\u7A7A\uFF0CrewriteInstruction\u53EF\u4E3A\u7A7A\u3002
-6. \u4E0D\u8F93\u51FAMarkdown\u4EE3\u7801\u5757\uFF0C\u4E0D\u8F93\u51FAJSON\u4EE5\u5916\u7684\u6587\u5B57\u3002`;
-}
-function auditUserPrompt(rulePrompt, playerText, assistantText) {
-  return `\u3010\u73A9\u5BB6\u5BA1\u6838\u89C4\u5219\u3011
+function auditUserPrompt(rulePrompt, revisionPrompt, playerText, assistantText) {
+  return `\u3010\u73A9\u5BB6\u89C4\u5219\u3011
 ${rulePrompt}
 
-\u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
+${revisionPrompt.trim() ? `\u3010\u73A9\u5BB6\u9644\u52A0\u4FEE\u6B63\u8981\u6C42\u3011
+${revisionPrompt.trim()}
+
+` : ""}\u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
 ${playerText || "\uFF08\u7A7A\uFF09"}
 
-\u3010\u5F85\u5BA1\u6838AI\u6B63\u6587\u3011
+\u3010\u5F85\u5904\u7406AI\u6B63\u6587\u3011
 ${assistantText}`;
 }
-function auditJsonSchema() {
-  return {
-    name: "MirrorAbyssAuditResult",
-    description: "\u955C\u6E0A\u89C4\u5219\u5BA1\u6838\u7ED3\u679C",
-    strict: true,
-    value: {
-      $schema: "http://json-schema.org/draft-04/schema#",
-      type: "object",
-      properties: {
-        result: { type: "string", enum: ["pass", "revise", "block"] },
-        reason: { type: "string" },
-        violations: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              ruleId: { type: "string" },
-              rule: { type: "string" },
-              evidence: { type: "string" },
-              action: { type: "string" }
-            },
-            required: ["ruleId", "rule", "evidence", "action"],
-            additionalProperties: false
-          }
-        },
-        preserve: { type: "array", items: { type: "string" } },
-        rewriteInstruction: { type: "string" }
-      },
-      required: ["result", "reason", "violations", "preserve", "rewriteInstruction"],
-      additionalProperties: false
-    }
-  };
-}
+
+// src/pipeline/audit.ts
+init_repository();
 
 // src/core/message-update.ts
 var scriptModulePromise = null;
@@ -2163,12 +2670,63 @@ function resultFingerprint(violations) {
   return normalized ? hashText(normalized) : "";
 }
 function parseAuditResult(raw) {
-  const text = safeText(raw, 1e5).trim();
+  const text = safeText(raw, 2e5).trim();
+  const lines = text.replace(/\r/g, "").split("\n");
+  const first = (lines[0] || "").trim().toUpperCase();
+  const remainder = lines.slice(1).join("\n").trim();
+  if (first === "MA_OK") {
+    return {
+      passed: true,
+      decision: "pass",
+      reason: remainder || "\u901A\u8FC7",
+      violations: [],
+      preserve: [],
+      rewriteInstruction: "",
+      violationFingerprint: ""
+    };
+  }
+  if (first === "MA_REVISE") {
+    if (!remainder) throw new Error("MA_REVISE \u540E\u7F3A\u5C11\u5B8C\u6574\u4FEE\u6B63\u7248\u6B63\u6587");
+    const violations = [{
+      ruleId: "player_rule_violation",
+      rule: "\u73A9\u5BB6\u63D0\u4F9B\u7684\u89C4\u5219",
+      evidence: "\u89C4\u5219\u6267\u884C\u6A21\u578B\u5224\u5B9A\u539F\u6B63\u6587\u5B58\u5728\u660E\u786E\u8FDD\u89C4",
+      action: "\u91C7\u7528\u540C\u4E00\u6B21\u8C03\u7528\u8FD4\u56DE\u7684\u5B8C\u6574\u4FEE\u6B63\u7248\u6B63\u6587"
+    }];
+    return {
+      passed: false,
+      decision: "revise",
+      reason: "\u539F\u6B63\u6587\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219\uFF0C\u5DF2\u8FD4\u56DE\u5B8C\u6574\u4FEE\u6B63\u7248",
+      violations,
+      preserve: [],
+      rewriteInstruction: "",
+      violationFingerprint: resultFingerprint(violations),
+      replacementText: remainder
+    };
+  }
+  if (first === "MA_BLOCK") {
+    const violations = [{
+      ruleId: "player_rule_block",
+      rule: "\u73A9\u5BB6\u63D0\u4F9B\u7684\u89C4\u5219",
+      evidence: remainder || "\u65E0\u6CD5\u751F\u6210\u7B26\u5408\u89C4\u5219\u7684\u5B8C\u6574\u4FEE\u6B63\u7248",
+      action: "\u963B\u65AD\u6B63\u6587\u5E76\u6309\u73A9\u5BB6\u8BBE\u7F6E\u5904\u7406"
+    }];
+    return {
+      passed: false,
+      decision: "block",
+      reason: remainder || "\u65E0\u6CD5\u751F\u6210\u7B26\u5408\u89C4\u5219\u7684\u5B8C\u6574\u4FEE\u6B63\u7248",
+      violations,
+      preserve: [],
+      rewriteInstruction: "",
+      violationFingerprint: resultFingerprint(violations)
+    };
+  }
   try {
     const data = parseJsonObject(text);
     const decision = ["pass", "revise", "block"].includes(String(data.result)) ? String(data.result) : "revise";
     const violations = violationList(data.violations);
     const passed = decision === "pass";
+    const replacementText = safeText(data.finalText ?? data.replacementText, 2e5).trim();
     return {
       passed,
       decision,
@@ -2176,41 +2734,28 @@ function parseAuditResult(raw) {
       violations: passed ? [] : violations,
       preserve: list(data.preserve),
       rewriteInstruction: safeText(data.rewriteInstruction, 6e3).trim(),
-      violationFingerprint: passed ? "" : resultFingerprint(violations)
+      violationFingerprint: passed ? "" : resultFingerprint(violations),
+      replacementText: decision === "revise" && replacementText ? replacementText : void 0
     };
   } catch {
-    const lines = text.replace(/\r/g, "").split("\n");
-    const first = (lines[0] || "").trim().toUpperCase();
-    const reason = lines.slice(1).join("\n").trim();
-    if (first === "MA_OK") {
-      return {
-        passed: true,
-        decision: "pass",
-        reason: reason || "\u901A\u8FC7",
-        violations: [],
-        preserve: [],
-        rewriteInstruction: "",
-        violationFingerprint: ""
-      };
-    }
     if (first === "MA_FAIL") {
       const violations = [{
         ruleId: "legacy_failure",
         rule: "\u5BA1\u6838\u6A21\u578B\u5224\u5B9A\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219",
-        evidence: reason || "\u672A\u7ED9\u51FA\u5177\u4F53\u8BC1\u636E",
-        action: reason || "\u4F9D\u636E\u73A9\u5BB6\u89C4\u5219\u5B9A\u5411\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9"
+        evidence: remainder || "\u672A\u7ED9\u51FA\u5177\u4F53\u8BC1\u636E",
+        action: remainder || "\u4F9D\u636E\u73A9\u5BB6\u89C4\u5219\u5B9A\u5411\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9"
       }];
       return {
         passed: false,
         decision: "revise",
-        reason: reason || "\u8FDD\u53CD\u89C4\u5219",
+        reason: remainder || "\u8FDD\u53CD\u89C4\u5219",
         violations,
         preserve: [],
-        rewriteInstruction: reason || "\u53EA\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9\uFF0C\u4E0D\u6539\u53D8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E\u3002",
+        rewriteInstruction: remainder || "\u53EA\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9\u3002",
         violationFingerprint: resultFingerprint(violations)
       };
     }
-    throw new Error("\u89C4\u5219\u5BA1\u6838\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548JSON\u3001MA_OK\u6216MA_FAIL");
+    throw new Error("\u89C4\u5219\u6267\u884C\u6A21\u578B\u672A\u8FD4\u56DE MA_OK\u3001MA_REVISE\u3001MA_BLOCK \u6216\u517C\u5BB9JSON");
   }
 }
 function findMessageElement(index) {
@@ -2220,31 +2765,20 @@ function applyAuditVisibility(index, hidden) {
   const element = findMessageElement(index);
   element?.classList.toggle("ma11-audit-hidden-message", hidden);
 }
-async function auditText(playerRules, playerText, assistantText, signal) {
-  const request = {
+async function auditText(playerRules, playerText, assistantText, signal, invocationSnapshot) {
+  const settings = invocationSnapshot?.settings ?? getSettings();
+  const connectionSnapshot = invocationSnapshot?.connectionSnapshot ?? captureTaskConnection("audit");
+  const raw = await generateTask({
     task: "audit",
     systemPrompt: auditSystemPrompt(),
-    prompt: auditUserPrompt(playerRules, playerText, assistantText)
-  };
-  const raw = await generateTask({ ...request, jsonSchema: auditJsonSchema(), signal });
+    prompt: auditUserPrompt(playerRules, settings.revisionPrompt, playerText, assistantText),
+    signal,
+    connectionSnapshot
+  });
   try {
     return parseAuditResult(raw);
-  } catch (firstError) {
-    if (!getSettings().repairInvalidJsonOnce) {
-      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(firstError)}\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
-    }
-    try {
-      const repaired = await repairStructuredOutput(
-        "audit",
-        raw,
-        '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"..."}',
-        auditJsonSchema(),
-        signal
-      );
-      return parseAuditResult(JSON.stringify(repaired));
-    } catch (repairError) {
-      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(repairError)}\uFF1B\u539F\u59CB\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
-    }
+  } catch (error) {
+    throw new Error(`\u89C4\u5219\u6267\u884C\u672A\u8FD4\u56DE\u6709\u6548\u534F\u8BAE\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(error)}\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
   }
 }
 async function applyAuditFailureAction(artifact, action) {
@@ -2265,8 +2799,8 @@ async function applyAuditFailureAction(artifact, action) {
     toast("warning", "\u5BA1\u6838\u672A\u901A\u8FC7\uFF0C\u4F46\u5B89\u5168\u64A4\u56DE\u6761\u4EF6\u4E0D\u6210\u7ACB\uFF1B\u5DF2\u6539\u4E3A\u9690\u85CF\u5E76\u4FDD\u7559\u8BB0\u5F55");
   }
 }
-async function runAudit(artifact, force = false, signal) {
-  const settings = getSettings();
+async function runAudit(artifact, force = false, signal, invocationSnapshot) {
+  const settings = invocationSnapshot?.settings ?? getSettings();
   artifact.stages.revision ||= { status: "idle", attempts: 0 };
   if (!settings.auditEnabled) {
     markStage(artifact, "audit", "skipped");
@@ -2290,7 +2824,7 @@ async function runAudit(artifact, force = false, signal) {
   markStage(artifact, "audit", "running");
   await putArtifact(artifact);
   try {
-    const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText, signal);
+    const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText, signal, invocationSnapshot);
     artifact.audit = result;
     if (result.passed) {
       artifact.approvedFingerprint = artifact.sourceFingerprint;
@@ -2315,17 +2849,18 @@ async function runAudit(artifact, force = false, signal) {
   }
 }
 
+// src/pipeline/revision.ts
+init_utils();
+
 // src/prompts/revision.ts
 function revisionSystemPrompt(customPrompt = "") {
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u6B63\u6587\u5B9A\u5411\u4FEE\u6B63\u5668\u3002\u4F60\u7684\u4EFB\u52A1\u662F\u4FEE\u6B63\u5DF2\u6709\u6B63\u6587\uFF0C\u4E0D\u662F\u91CD\u65B0\u521B\u4F5C\u3002
+  return `\u4F60\u662F\u6587\u672C\u89C4\u5219\u4FEE\u6B63\u5668\u3002\u4F60\u53EA\u4F9D\u636E\u73A9\u5BB6\u63D0\u4F9B\u7684\u89C4\u5219\u548C\u5BA1\u6838\u7ED3\u679C\u4FEE\u6B63\u5DF2\u6709\u6B63\u6587\uFF0C\u4E0D\u81EA\u884C\u589E\u52A0\u5BA1\u6838\u6807\u51C6\uFF0C\u4E0D\u505A\u4E0E\u89C4\u5219\u65E0\u5173\u7684\u6DA6\u8272\u3001\u6269\u5199\u6216\u5267\u60C5\u4F18\u5316\u3002
 
-\u786C\u6027\u8981\u6C42\uFF1A
-1. \u53EA\u4FEE\u6539\u5BA1\u6838\u6307\u51FA\u7684\u8FDD\u89C4\u90E8\u5206\u3002
-2. \u4FDD\u7559\u539F\u6709\u65F6\u95F4\u3001\u5730\u70B9\u3001\u4E8B\u4EF6\u987A\u5E8F\u3001NPC\u5DF2\u7ECF\u53D1\u751F\u7684\u52A8\u4F5C\u4E0E\u5BF9\u767D\u3001\u7269\u54C1\u72B6\u6001\u548C\u5DF2\u7ECF\u6210\u7ACB\u7684\u5916\u90E8\u7ED3\u679C\u3002
-3. \u4E0D\u589E\u52A0\u65B0\u4EBA\u7269\u3001\u65B0\u4E8B\u4EF6\u3001\u65B0\u7EBF\u7D22\u3001\u65B0\u5BF9\u767D\u3001\u65B0\u884C\u52A8\u6216\u65B0\u7ED3\u679C\u3002
-4. \u4E0D\u66FF\u73A9\u5BB6\u7126\u70B9\u8865\u5145\u672A\u58F0\u660E\u7684\u5FC3\u7406\u3001\u5224\u65AD\u3001\u51B3\u5B9A\u3001\u76EE\u6807\u3001\u6CE8\u610F\u529B\u6216\u884C\u52A8\u7406\u7531\u3002
-5. \u82E5\u5220\u9664\u8FDD\u89C4\u53E5\u4F1A\u9020\u6210\u8BED\u6CD5\u65AD\u88C2\uFF0C\u53EF\u7528\u6700\u5C0F\u91CF\u7684\u5916\u90E8\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u8FDE\u63A5\uFF0C\u4F46\u4E0D\u5F97\u6269\u5C55\u5267\u60C5\u3002
-6. \u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u5B8C\u6574\u6B63\u6587\uFF0C\u4E0D\u8F93\u51FA\u6807\u9898\u3001\u8BF4\u660E\u3001\u5BA1\u6838\u62A5\u544A\u3001\u524D\u540E\u5BF9\u6BD4\u6216Markdown\u4EE3\u7801\u5757\u3002
+\u6267\u884C\u8981\u6C42\uFF1A
+1. \u4FEE\u6B63\u5BA1\u6838\u660E\u786E\u6307\u51FA\u7684\u8FDD\u89C4\u5185\u5BB9\u3002
+2. \u9664\u975E\u73A9\u5BB6\u89C4\u5219\u6216\u9644\u52A0\u8981\u6C42\u660E\u786E\u8981\u6C42\uFF0C\u4E0D\u4E3B\u52A8\u6539\u53D8\u5176\u4ED6\u5185\u5BB9\u3002
+3. \u4E0D\u8F93\u51FA\u5BA1\u6838\u8FC7\u7A0B\u3001\u4FEE\u6539\u8BF4\u660E\u3001\u524D\u540E\u5BF9\u6BD4\u3001\u6807\u9898\u6216 Markdown \u4EE3\u7801\u5757\u3002
+4. \u53EA\u8F93\u51FA\u53EF\u76F4\u63A5\u66FF\u6362\u539F\u6587\u7684\u5B8C\u6574\u4FEE\u6B63\u7248\u6B63\u6587\u3002
 ${customPrompt.trim() ? `
 \u3010\u73A9\u5BB6\u9644\u52A0\u4FEE\u6B63\u8981\u6C42\u3011
 ${customPrompt.trim()}` : ""}`;
@@ -2334,11 +2869,11 @@ function revisionUserPrompt(playerRules, playerText, sourceText, audit, attempt)
   const violations = audit.violations.map((item2, index) => `${index + 1}. \u89C4\u5219\uFF1A${item2.rule}
    \u8BC1\u636E\uFF1A${item2.evidence}
    \u4FEE\u6539\uFF1A${item2.action}`).join("\n");
-  const preserve = audit.preserve.length ? audit.preserve.map((item2) => `- ${item2}`).join("\n") : "- \u539F\u6B63\u6587\u4E2D\u5168\u90E8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E";
+  const preserve = audit.preserve.length ? audit.preserve.map((item2) => `- ${item2}`).join("\n") : "- \u9664\u660E\u786E\u8FDD\u89C4\u90E8\u5206\u5916\u7684\u539F\u6B63\u6587\u5185\u5BB9";
   return `\u3010\u4FEE\u6B63\u8F6E\u6B21\u3011
 \u7B2C${attempt}\u6B21
 
-\u3010\u73A9\u5BB6\u786C\u6027\u89C4\u5219\u3011
+\u3010\u73A9\u5BB6\u89C4\u5219\u3011
 ${playerRules}
 
 \u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
@@ -2347,10 +2882,10 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u5FC5\u987B\u4FEE\u6B63\u7684\u95EE\u9898\u3011
 ${violations || audit.reason}
 
-\u3010\u5FC5\u987B\u4FDD\u7559\u3011
+\u3010\u9700\u8981\u4FDD\u7559\u3011
 ${preserve}
 
-\u3010\u5BA1\u6838\u5668\u7EFC\u5408\u4FEE\u6539\u6307\u4EE4\u3011
+\u3010\u5BA1\u6838\u7ED3\u679C\u4E2D\u7684\u4FEE\u6B63\u8981\u6C42\u3011
 ${audit.rewriteInstruction || audit.reason}
 
 \u3010\u5F85\u4FEE\u6B63\u6587\u3011
@@ -2358,6 +2893,9 @@ ${sourceText}
 
 \u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u5B8C\u6574\u6B63\u6587\u3002`;
 }
+
+// src/pipeline/revision.ts
+init_repository();
 
 // src/pipeline/quarantine.ts
 var LOCK_TOKEN = "mirror-abyss-audit";
@@ -2489,18 +3027,69 @@ function initialRevisionRecord(artifact) {
     attempts: []
   };
 }
-async function runRevisionFlow(artifact, signal) {
-  const settings = getSettings();
+async function runRevisionFlow(artifact, signal, invocationSnapshot) {
+  const settings = invocationSnapshot?.settings ?? getSettings();
   const firstAudit = artifact.audit;
   if (!firstAudit || firstAudit.passed) throw new Error("\u6CA1\u6709\u53EF\u4FEE\u6B63\u7684\u5BA1\u6838\u5931\u8D25\u7ED3\u679C");
   artifact.revision = initialRevisionRecord(artifact);
   if (firstAudit.decision === "block") {
     artifact.revision.status = "blocked";
-    artifact.revision.stoppedReason = firstAudit.reason || "\u5BA1\u6838\u5224\u5B9A\u65E0\u6CD5\u5C40\u90E8\u4FEE\u6B63";
+    artifact.revision.stoppedReason = firstAudit.reason || "\u89C4\u5219\u6267\u884C\u5224\u5B9A\u65E0\u6CD5\u751F\u6210\u5408\u89C4\u6B63\u6587";
     markStage(artifact, "revision", "blocked", artifact.revision.stoppedReason);
     await putArtifact(artifact);
     return { approved: false, audit: firstAudit };
   }
+  if (firstAudit.replacementText) {
+    ensureQuarantine(artifact);
+    artifact.hiddenByAudit = true;
+    artifact.quarantined = true;
+    applyAuditVisibility(artifact.messageIndex, true);
+    artifact.revision.status = "running";
+    markStage(artifact, "revision", "running");
+    await putArtifact(artifact);
+    try {
+      const candidate = cleanRevisionText(firstAudit.replacementText);
+      if (!candidate) throw new Error("\u89C4\u5219\u6267\u884C\u6A21\u578B\u8FD4\u56DE\u7A7A\u4FEE\u6B63\u7248");
+      if (hashText(candidate) === hashText(artifact.assistantText)) throw new Error("\u89C4\u5219\u6267\u884C\u6A21\u578B\u8FD4\u56DE\u7684\u4FEE\u6B63\u7248\u4E0E\u539F\u6587\u76F8\u540C");
+      artifact.revision.attempts.push({
+        attempt: 1,
+        sourceFingerprint: hashText(artifact.assistantText),
+        candidateFingerprint: hashText(candidate),
+        audit: firstAudit,
+        createdAt: nowIso()
+      });
+      await replaceMessageInPlace(artifact, candidate);
+      const passedAudit = {
+        passed: true,
+        decision: "pass",
+        reason: "\u5DF2\u6309\u73A9\u5BB6\u89C4\u5219\u5B8C\u6210\u5355\u6B21\u6821\u6B63",
+        violations: [],
+        preserve: [],
+        rewriteInstruction: "",
+        violationFingerprint: ""
+      };
+      artifact.audit = passedAudit;
+      artifact.revision.status = "success";
+      artifact.revision.finalFingerprint = artifact.sourceFingerprint;
+      artifact.revision.committedAt = nowIso();
+      artifact.revision.originalText = "";
+      artifact.hiddenByAudit = false;
+      artifact.quarantined = false;
+      markStage(artifact, "audit", "success");
+      markStage(artifact, "revision", "success");
+      await putArtifact(artifact);
+      return { approved: true, audit: passedAudit };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      artifact.revision.status = "failed";
+      artifact.revision.stoppedReason = toErrorMessage(error);
+      markStage(artifact, "revision", "failed", artifact.revision.stoppedReason);
+      await putArtifact(artifact);
+      return { approved: false, audit: firstAudit };
+    }
+  }
+  const revisionConnectionSnapshot = invocationSnapshot?.revisionConnectionSnapshot ?? captureTaskConnection("revision");
+  const auditConnectionSnapshot = invocationSnapshot?.auditConnectionSnapshot ?? captureTaskConnection("audit");
   ensureQuarantine(artifact);
   artifact.hiddenByAudit = true;
   artifact.quarantined = true;
@@ -2518,12 +3107,19 @@ async function runRevisionFlow(artifact, signal) {
         task: "revision",
         systemPrompt: revisionSystemPrompt(settings.revisionPrompt),
         prompt: revisionUserPrompt(settings.auditPrompt, artifact.playerText, sourceText, currentAudit, attempt),
-        signal
+        signal,
+        connectionSnapshot: revisionConnectionSnapshot
       });
       const candidate = cleanRevisionText(raw);
       if (!candidate) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u8FD4\u56DE\u7A7A\u6B63\u6587");
       if (hashText(candidate) === hashText(sourceText)) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u672A\u6539\u53D8\u6B63\u6587");
-      const candidateAudit = await auditText(settings.auditPrompt, artifact.playerText, candidate, signal);
+      const candidateAudit = await auditText(
+        settings.auditPrompt,
+        artifact.playerText,
+        candidate,
+        signal,
+        { settings, connectionSnapshot: auditConnectionSnapshot }
+      );
       artifact.revision.attempts.push({
         attempt,
         sourceFingerprint: hashText(sourceText),
@@ -2577,12 +3173,415 @@ async function runRevisionFlow(artifact, signal) {
   }
 }
 
+// src/pipeline/lorebook.ts
+init_constants();
+init_utils();
+init_repository();
+
 // src/domain/lorebook-publish.ts
+init_constants();
+
+// src/domain/fact-projection.ts
+init_utils();
+
+// src/domain/snapshot.ts
+init_constants();
+init_utils();
+var EXISTENCE_STATES = /* @__PURE__ */ new Set([
+  "\u5B58\u6D3B",
+  "\u6B7B\u4EA1\u5DF2\u786E\u8BA4",
+  "\u5B58\u5728\u672A\u77E5",
+  "\u5931\u8E2A",
+  "\u8EAB\u4EFD\u5B58\u7591",
+  "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4",
+  "\u5B58\u5728\u88AB\u62B9\u9664",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var ACTIVITY_STATES = /* @__PURE__ */ new Set([
+  "\u5F53\u524D\u5728\u573A",
+  "\u5F53\u524D\u76F8\u5173",
+  "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3",
+  "\u4F11\u7720",
+  "\u957F\u671F\u4F11\u7720",
+  "\u5DF2\u5F52\u6863",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var MEMORY_STATES = /* @__PURE__ */ new Set([
+  "\u5E7F\u6CDB\u8BB0\u5F97",
+  "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97",
+  "\u4EC5\u8BB0\u5F55\u7559\u5B58",
+  "\u4EC5\u75D5\u8FF9\u7559\u5B58",
+  "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97",
+  "\u8BB0\u5FC6\u88AB\u7BE1\u6539",
+  "\u8BB0\u5FC6\u88AB\u62B9\u9664",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var EVIDENCE_LEVELS = /* @__PURE__ */ new Set(["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"]);
+function emptySnapshot() {
+  return Object.fromEntries(TABLE_KEYS.map((key) => [key, []]));
+}
+function normalizeKeywords(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item2) => safeText(item2, 80).trim()).filter(Boolean))].slice(0, 16);
+}
+function normalizeStringList(value, limit = 12) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item2) => safeText(item2, 240).trim()).filter(Boolean))].slice(0, limit);
+}
+function enumValue(value, allowed, fallback) {
+  const text = safeText(value, 80).trim();
+  return allowed.has(text) ? text : fallback;
+}
+function defaultLifecycle() {
+  return {
+    existence: "\u672A\u6807\u6CE8",
+    activity: "\u672A\u6807\u6CE8",
+    memory: "\u672A\u6807\u6CE8",
+    evidenceLevel: "\u672A\u77E5",
+    evidence: "",
+    returnConditions: [],
+    returnBlockers: []
+  };
+}
+function normalizeLifecycle(value, previous) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = previous ?? defaultLifecycle();
+  return {
+    existence: enumValue(source.existence ?? base.existence, EXISTENCE_STATES, base.existence),
+    activity: enumValue(source.activity ?? base.activity, ACTIVITY_STATES, base.activity),
+    memory: enumValue(source.memory ?? base.memory, MEMORY_STATES, base.memory),
+    evidenceLevel: enumValue(source.evidenceLevel ?? base.evidenceLevel, EVIDENCE_LEVELS, base.evidenceLevel),
+    evidence: safeText(source.evidence ?? base.evidence, 4e3).trim(),
+    returnConditions: normalizeStringList(source.returnConditions ?? base.returnConditions),
+    returnBlockers: normalizeStringList(source.returnBlockers ?? base.returnBlockers)
+  };
+}
+function normalizeRow(value, tableKey, index, previous) {
+  const source = value && typeof value === "object" ? value : {};
+  const now = nowIso();
+  const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
+  const manual = source.source === "manual" || previous?.source === "manual";
+  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
+  const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
+  return {
+    id,
+    title: safeText(source.title || source.name || previous?.title || `${TABLE_LABELS[tableKey]} ${index + 1}`, 240).trim(),
+    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
+    keywords: normalizeKeywords(source.keywords ?? previous?.keywords ?? []),
+    status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
+    source: manual ? "manual" : "auto",
+    locked: Boolean(source.locked ?? previous?.locked ?? manual),
+    lifecycle: supportsLifecycle && lifecycleInput ? normalizeLifecycle(lifecycleInput, previous?.lifecycle) : void 0,
+    sourceEntityId: tableKey === "relationships" ? safeText(source.sourceEntityId || previous?.sourceEntityId, 180).trim() || void 0 : void 0,
+    targetEntityId: tableKey === "relationships" ? safeText(source.targetEntityId || previous?.targetEntityId, 180).trim() || void 0 : void 0,
+    updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now
+  };
+}
+function normalizeSnapshot(value, previousSnapshot2) {
+  const source = value && typeof value === "object" ? value : {};
+  const output = emptySnapshot();
+  for (const key of TABLE_KEYS) {
+    const rows2 = Array.isArray(source[key]) ? source[key] : [];
+    const previousMap = new Map((previousSnapshot2?.[key] ?? []).map((row) => [row.id, row]));
+    const used = /* @__PURE__ */ new Set();
+    output[key] = rows2.map((row, index) => {
+      const rawId = row && typeof row === "object" ? safeText(row.id, 160) : "";
+      const normalized = normalizeRow(row, key, index, rawId ? previousMap.get(rawId) : void 0);
+      if (used.has(normalized.id)) normalized.id = makeId(key);
+      used.add(normalized.id);
+      return normalized;
+    });
+  }
+  return output;
+}
+function identityTitle(value) {
+  return String(value || "").toLowerCase().replace(/[\s·•._—–|｜:：()（）【】[\]]+/g, "");
+}
+function preserveSnapshotContinuity(previous, next) {
+  for (const key of TABLE_KEYS) {
+    const byId = new Map(next[key].map((row) => [row.id, row]));
+    const byTitle = new Map(next[key].map((row) => [identityTitle(row.title), row]));
+    for (const oldRow of previous[key] ?? []) {
+      if (byId.has(oldRow.id)) continue;
+      const titleKey = identityTitle(oldRow.title);
+      const titleMatch = titleKey ? byTitle.get(titleKey) : void 0;
+      if (titleMatch) {
+        titleMatch.id = oldRow.id;
+        titleMatch.source = oldRow.source === "manual" ? "manual" : titleMatch.source;
+        titleMatch.locked = Boolean(oldRow.locked || titleMatch.locked);
+        if ((oldRow.source === "manual" || oldRow.locked) && titleMatch.content !== oldRow.content) {
+          Object.assign(titleMatch, { ...oldRow, id: oldRow.id });
+        }
+        byId.set(oldRow.id, titleMatch);
+        continue;
+      }
+      const restored = { ...oldRow, lifecycle: oldRow.lifecycle ? { ...oldRow.lifecycle } : void 0 };
+      next[key].push(restored);
+      byId.set(restored.id, restored);
+      if (titleKey) byTitle.set(titleKey, restored);
+    }
+  }
+  return next;
+}
+function preservePersistentCharacters(previous, next) {
+  const byId = new Map((next.characters ?? []).map((row) => [row.id, row]));
+  const byTitle = new Map((next.characters ?? []).map((row) => [identityTitle(row.title), row]));
+  for (const oldRow of previous.characters ?? []) {
+    if (byId.has(oldRow.id)) continue;
+    const titleMatch = byTitle.get(identityTitle(oldRow.title));
+    if (titleMatch) {
+      titleMatch.id = oldRow.id;
+      if (oldRow.source === "manual" || oldRow.locked) {
+        Object.assign(titleMatch, { ...oldRow, id: oldRow.id });
+      } else if (!titleMatch.lifecycle && oldRow.lifecycle) {
+        titleMatch.lifecycle = { ...oldRow.lifecycle };
+      }
+      byId.set(oldRow.id, titleMatch);
+      continue;
+    }
+    const restored = { ...oldRow, lifecycle: oldRow.lifecycle ? { ...oldRow.lifecycle } : void 0 };
+    next.characters.push(restored);
+    byId.set(restored.id, restored);
+    byTitle.set(identityTitle(restored.title), restored);
+  }
+  const seenTitles = /* @__PURE__ */ new Set();
+  next.characters = next.characters.filter((row) => {
+    const key = identityTitle(row.title);
+    if (!key || !seenTitles.has(key)) {
+      if (key) seenTitles.add(key);
+      return true;
+    }
+    return false;
+  });
+  return next;
+}
+function snapshotRowCount(snapshot) {
+  if (!snapshot) return 0;
+  return TABLE_KEYS.reduce((sum, key) => sum + (snapshot[key]?.length ?? 0), 0);
+}
+function upsertManualRow(snapshot, tableKey, row) {
+  const next = normalizeSnapshot(snapshot, snapshot);
+  const index = next[tableKey].findIndex((item2) => item2.id === row.id);
+  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? true, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0);
+  if (index >= 0) next[tableKey][index] = normalized;
+  else next[tableKey].push(normalized);
+  return next;
+}
+function deleteRow(snapshot, tableKey, rowId) {
+  const next = normalizeSnapshot(snapshot, snapshot);
+  next[tableKey] = next[tableKey].filter((row) => row.id !== rowId);
+  return next;
+}
+
+// src/domain/fact-projection.ts
+function normalizeIdentityName(value) {
+  return String(value || "").toLowerCase().replace(/[\s·•._—–|｜:：()（）【】[\]“”‘’'"-]+/g, "");
+}
+function unique(values, limit = 32) {
+  return [...new Set(values.map((item2) => String(item2 || "").trim()).filter(Boolean))].slice(0, limit);
+}
+function findRow(rows2, operation) {
+  const byId = rows2.find((row) => row.id === operation.rowId);
+  if (byId) return byId;
+  const titleKey = normalizeIdentityName(operation.title);
+  return titleKey ? rows2.find((row) => normalizeIdentityName(row.title) === titleKey) : void 0;
+}
+function applyOperation(snapshot, operation) {
+  const rows2 = snapshot[operation.table];
+  const existing = findRow(rows2, operation);
+  if (existing?.source === "manual" || existing?.locked) return;
+  const rowId = existing?.id || operation.rowId;
+  const source = {
+    ...existing ?? {},
+    id: rowId,
+    title: operation.title || existing?.title || rowId,
+    content: operation.content || existing?.content || "",
+    keywords: unique([...existing?.keywords ?? [], ...operation.keywords], 16),
+    status: operation.operation === "retire" ? operation.status || "\u5F85\u9636\u6BB5\u6C89\u964D" : operation.status || existing?.status || "active",
+    lifecycle: operation.lifecycle ?? existing?.lifecycle,
+    sourceEntityId: operation.table === "relationships" ? operation.sourceEntityId || existing?.sourceEntityId : void 0,
+    targetEntityId: operation.table === "relationships" ? operation.targetEntityId || existing?.targetEntityId : void 0,
+    source: "auto",
+    locked: false,
+    updatedAt: nowIso()
+  };
+  if (operation.operation === "retire" && source.lifecycle) {
+    const activity = source.lifecycle.activity;
+    if (activity === "\u5F53\u524D\u5728\u573A" || activity === "\u5F53\u524D\u76F8\u5173") {
+      source.lifecycle = { ...source.lifecycle, activity: "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3" };
+    }
+  }
+  const normalized = normalizeRow(source, operation.table, existing ? rows2.indexOf(existing) : rows2.length, existing);
+  if (existing) rows2[rows2.indexOf(existing)] = normalized;
+  else rows2.push(normalized);
+}
+function mergeFocusRows(primary, rows2) {
+  const protectedRow = rows2.find((row) => row.source === "manual" || row.locked);
+  if (protectedRow) return deepClone(protectedRow);
+  const latest = rows2.at(-1) ?? primary;
+  return {
+    ...deepClone(primary),
+    title: latest.title || primary.title,
+    content: latest.content || primary.content,
+    status: latest.status || primary.status,
+    keywords: unique(rows2.flatMap((row) => [row.title, ...row.keywords]), 16),
+    lifecycle: deepClone(latest.lifecycle ?? primary.lifecycle),
+    updatedAt: latest.updatedAt || primary.updatedAt
+  };
+}
+function dedupeExactFocusRows(snapshot) {
+  const mergedIdsByIdentity = /* @__PURE__ */ new Map();
+  const groups = /* @__PURE__ */ new Map();
+  for (const row of snapshot.focus) {
+    const key = normalizeIdentityName(row.title) || `id:${row.id}`;
+    const values = groups.get(key) ?? [];
+    values.push(row);
+    groups.set(key, values);
+  }
+  const output = [];
+  for (const [identity, rows2] of groups.entries()) {
+    const primary = rows2.find((row) => row.source === "manual" || row.locked) ?? rows2[0];
+    const merged = mergeFocusRows(primary, rows2);
+    merged.id = primary.id;
+    output.push(merged);
+    mergedIdsByIdentity.set(identity, rows2.filter((row) => row.id !== primary.id).map((row) => row.id));
+  }
+  snapshot.focus = output;
+  return mergedIdsByIdentity;
+}
+function recordAliases(record) {
+  return new Set([record.canonicalName, ...record.aliases].map(normalizeIdentityName).filter(Boolean));
+}
+function hintAliases(hint) {
+  return new Set([hint.canonicalName, ...hint.aliases].map(normalizeIdentityName).filter(Boolean));
+}
+function matchingRecord(registry, hint) {
+  if (hint.focusId) {
+    const byId = registry.find((record) => record.focusId === hint.focusId);
+    if (byId) return byId;
+  }
+  const names = hintAliases(hint);
+  return registry.find((record) => {
+    const aliases = recordAliases(record);
+    return [...names].some((name) => aliases.has(name));
+  });
+}
+function currentFocusCandidate(snapshot, hint) {
+  if (hint) {
+    const aliases = hintAliases(hint);
+    return snapshot.focus.find((row) => aliases.has(normalizeIdentityName(row.title)));
+  }
+  return snapshot.focus.find((row) => /当前焦点|current/i.test(row.status)) ?? snapshot.focus[0];
+}
+function normalizeFocusIdentity(snapshot, registryInput, currentFocusId, hint) {
+  const registry = deepClone(registryInput ?? []);
+  const exactMergedIdsByIdentity = dedupeExactFocusRows(snapshot);
+  const candidate = currentFocusCandidate(snapshot, hint);
+  if (!candidate) return { registry, currentFocusId };
+  const now = nowIso();
+  let record = hint ? matchingRecord(registry, hint) : registry.find((item2) => item2.focusId === currentFocusId || item2.rowId === candidate.id);
+  if (!record) {
+    const canonicalName = hint?.canonicalName || candidate.title;
+    const focusId = hint?.focusId || `focus:${hashText(normalizeIdentityName(canonicalName) || candidate.id).slice(0, 16)}`;
+    record = {
+      focusId,
+      rowId: candidate.id,
+      canonicalName,
+      aliases: unique([canonicalName, candidate.title, ...hint?.aliases ?? []], 24),
+      mergedRowIds: [],
+      createdAt: now,
+      updatedAt: now
+    };
+    registry.push(record);
+  }
+  const aliases = new Set([
+    ...recordAliases(record),
+    ...hint ? hintAliases(hint) : [],
+    normalizeIdentityName(candidate.title)
+  ].filter(Boolean));
+  const duplicates = snapshot.focus.filter((row) => aliases.has(normalizeIdentityName(row.title)) || row.id === record.rowId);
+  const primary = duplicates.find((row) => row.id === record.rowId) ?? candidate;
+  const merged = mergeFocusRows(primary, duplicates);
+  const mergedRowIds = unique([
+    ...record.mergedRowIds,
+    ...exactMergedIdsByIdentity.get(normalizeIdentityName(candidate.title)) ?? [],
+    ...duplicates.filter((row) => row.id !== primary.id).map((row) => row.id)
+  ], 80);
+  merged.id = record.rowId || primary.id;
+  merged.status = "\u5F53\u524D\u7126\u70B9";
+  record.rowId = merged.id;
+  record.canonicalName = hint?.canonicalName || record.canonicalName || merged.title;
+  record.aliases = unique([record.canonicalName, merged.title, ...record.aliases, ...hint?.aliases ?? []], 24);
+  record.mergedRowIds = mergedRowIds;
+  record.updatedAt = now;
+  const duplicateIds = new Set(duplicates.map((row) => row.id));
+  snapshot.focus = snapshot.focus.filter((row) => !duplicateIds.has(row.id)).map((row) => /当前焦点|current/i.test(row.status) ? { ...row, status: "\u975E\u5F53\u524D\u7126\u70B9" } : row);
+  snapshot.focus.push(merged);
+  return { registry, currentFocusId: record.focusId };
+}
+function projectUnifiedFacts(input) {
+  const operations = input.factPackage.tableOperations ?? [];
+  let snapshot;
+  let mode;
+  if (operations.length) {
+    snapshot = normalizeSnapshot(input.previousSnapshot, input.previousSnapshot);
+    for (const operation of operations) applyOperation(snapshot, operation);
+    mode = "operations";
+  } else if (input.factPackage.finalSnapshot) {
+    const normalized = normalizeSnapshot(input.factPackage.finalSnapshot, input.previousSnapshot);
+    snapshot = preservePersistentCharacters(
+      input.previousSnapshot,
+      preserveSnapshotContinuity(input.previousSnapshot, normalized)
+    );
+    mode = "compatibility-snapshot";
+  } else {
+    snapshot = normalizeSnapshot(input.previousSnapshot, input.previousSnapshot);
+    mode = "no-change";
+  }
+  const focus = normalizeFocusIdentity(
+    snapshot,
+    input.focusRegistry,
+    input.currentFocusId,
+    input.factPackage.focusIdentity
+  );
+  return {
+    snapshot,
+    focusRegistry: focus.registry,
+    currentFocusId: focus.currentFocusId,
+    mode
+  };
+}
+
+// src/domain/lorebook-publish.ts
+function lorebookActivationPolicy(kind, options) {
+  const foundation = kind === "semantic:foundations" || kind === "state:foundations";
+  const latestContinuity = kind === "semantic:large" && Boolean(options.latestContinuityConstant);
+  if (foundation || latestContinuity) return { mode: "constant", constant: true, vectorized: false };
+  if (options.vectorize) return { mode: "keyword-vector", constant: false, vectorized: true };
+  return { mode: "keyword", constant: false, vectorized: false };
+}
+function dedupeFocusRows(sourceRows) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const row of sourceRows) {
+    const key = normalizeIdentityName(row.title) || `id:${row.id}`;
+    const values = groups.get(key) ?? [];
+    values.push(row);
+    groups.set(key, values);
+  }
+  return [...groups.values()].map((values) => {
+    const protectedRow = values.find((row) => row.source === "manual" || row.locked);
+    const current = values.find((row) => /当前焦点|current/i.test(row.status));
+    return protectedRow ?? current ?? values.at(-1);
+  });
+}
 function rows(snapshot, key) {
   return snapshot[key] ?? [];
 }
 function uniq(values, limit = 32) {
-  return [...new Set(values.map((item2) => String(item2 || "").trim()).filter((item2) => item2.length >= 2))].slice(0, limit);
+  return [...new Set(values.map((item2) => String(item2 || "").trim()).filter((item2) => item2.length >= 2 || /[\p{L}\p{N}]/u.test(item2)))].slice(0, limit);
 }
 function titleKeywords(row) {
   return uniq([row.title, ...row.keywords], 20);
@@ -2646,13 +3645,17 @@ function ownerEntry(row, kind) {
   return kind === "\u7269\u54C1\u4E0E\u8D44\u6E90" ? { comment: `MA\uFF5C\u7269\u54C1\uFF5C${row.title}`, name: row.title, label: "\u7269\u54C1" } : { comment: `MA\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\uFF5C${row.title}`, name: row.title, label: "\u6280\u80FD\u4E0E\u80FD\u529B" };
 }
 function makeDocument(key, comment, content, keywords, constant, vectorized, order, kind) {
+  const activation = lorebookActivationPolicy(kind, {
+    vectorize: vectorized,
+    latestContinuityConstant: constant && kind === "semantic:large"
+  });
   return {
     key,
     comment: `[MA11] ${comment}`,
     content,
     keywords: uniq(keywords),
-    constant,
-    vectorized: constant ? false : vectorized,
+    constant: activation.constant,
+    vectorized: activation.vectorized,
     order,
     kind
   };
@@ -2675,39 +3678,43 @@ function buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries
   const documents = [];
   if (snapshot) {
     const foundationRows = rows(snapshot, "foundations");
-    documents.push(makeDocument(
-      "semantic:foundations",
-      "MA\uFF5C\u57FA\u7840\u8BBE\u5B9A",
-      groupedContent("\u57FA\u7840\u8BBE\u5B9A", TABLE_LABELS.foundations, foundationRows),
-      ["\u57FA\u7840\u8BBE\u5B9A", ...foundationRows.flatMap(titleKeywords)],
-      true,
-      false,
-      170,
-      "semantic:foundations"
-    ));
+    if (foundationRows.length) {
+      documents.push(makeDocument(
+        "semantic:foundations",
+        "MA\uFF5C\u57FA\u7840\u8BBE\u5B9A",
+        groupedContent("\u57FA\u7840\u8BBE\u5B9A", TABLE_LABELS.foundations, foundationRows),
+        ["\u57FA\u7840\u8BBE\u5B9A", ...foundationRows.flatMap(titleKeywords)],
+        true,
+        false,
+        170,
+        "semantic:foundations"
+      ));
+    }
     const globalRows = [
       ...rows(snapshot, "spacetime"),
       ...rows(snapshot, "events").filter(isGlobalRow),
       ...rows(snapshot, "regions").filter(isGlobalRow)
     ];
-    documents.push(makeDocument(
-      "semantic:global",
-      "MA\uFF5C\u5168\u5C40\u6001\u52BF",
-      groupedContent("\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u6001\u52BF", globalRows),
-      ["\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u65F6\u95F4", "\u5F53\u524D\u5730\u70B9", ...globalRows.flatMap(titleKeywords)],
-      options.latestContinuityConstant,
-      false,
-      165,
-      "semantic:global"
-    ));
-    for (const row of rows(snapshot, "focus")) {
+    if (globalRows.length) {
+      documents.push(makeDocument(
+        "semantic:global",
+        "MA\uFF5C\u5168\u5C40\u6001\u52BF",
+        groupedContent("\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u6001\u52BF", globalRows),
+        ["\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u65F6\u95F4", "\u5F53\u524D\u5730\u70B9", ...globalRows.flatMap(titleKeywords)],
+        false,
+        options.vectorize,
+        165,
+        "semantic:global"
+      ));
+    }
+    for (const row of dedupeFocusRows(rows(snapshot, "focus"))) {
       documents.push(makeDocument(
         `semantic:focus:${row.id}`,
         `MA\uFF5C\u7126\u70B9\uFF5C${row.title}`,
         rowContent("\u7126\u70B9", row),
         titleKeywords(row),
-        options.latestContinuityConstant,
         false,
+        options.vectorize,
         160,
         "semantic:focus"
       ));
@@ -2718,7 +3725,7 @@ function buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries
         `MA\uFF5C\u4EBA\u7269\uFF5C${row.title}`,
         rowContent("\u4EBA\u7269", row),
         titleKeywords(row),
-        options.latestContinuityConstant && isCurrentCharacter(row),
+        false,
         options.vectorize,
         isCurrentCharacter(row) ? 155 : 125,
         "semantic:character"
@@ -2796,7 +3803,7 @@ function buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries
       "MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C\u5F53\u524D\u5468\u671F",
       currentSmallSummaryContent(pendingSmall),
       ["\u5C0F\u603B\u7ED3", "\u5F53\u524D\u5468\u671F", ...pendingSmall.flatMap((item2) => [item2.title, ...item2.keywords])],
-      options.latestContinuityConstant,
+      false,
       options.vectorize,
       150,
       "semantic:small"
@@ -2823,7 +3830,7 @@ function buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries
   if (snapshot) {
     for (const tableKey of TABLE_KEYS) {
       for (const row of rows(snapshot, tableKey)) {
-        const constant = ["focus", "spacetime", "foundations"].includes(tableKey);
+        const constant = tableKey === "foundations";
         documents.push(makeDocument(
           `state:${tableKey}:${row.id}`,
           `MA\uFF5C${TABLE_LABELS[tableKey]}\uFF5C${row.title}`,
@@ -2867,6 +3874,9 @@ function buildLorebookDocuments(snapshot, smallSummaries, largeSummaries, option
   return options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) : buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options);
 }
 
+// src/pipeline/lorebook.ts
+init_chat_scope();
+
 // src/foundation/capabilities.ts
 function item(id, label, value, required, availableDetail, missingDetail) {
   const available = Boolean(value);
@@ -2903,6 +3913,7 @@ function detectCapabilities(context) {
 }
 
 // src/foundation/event-router.ts
+init_chat_scope();
 var EventRouter = class {
   subscribers = /* @__PURE__ */ new Map();
   cleanup = [];
@@ -3039,7 +4050,13 @@ var ServiceContainer = class {
   }
 };
 
+// src/foundation/kernel.ts
+init_chat_scope();
+init_connection_broker();
+
 // src/foundation/cross-tab-coordinator.ts
+init_constants();
+init_utils();
 function abortError(signal) {
   const reason = signal?.reason;
   if (reason instanceof Error) return reason;
@@ -3355,194 +4372,12 @@ var FoundationKernel = class {
 };
 var foundationKernel = new FoundationKernel();
 
-// src/foundation/task-errors.ts
-var StaleTaskError = class extends Error {
-  constructor(message = "\u4EFB\u52A1\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8\uFF0C\u65E7\u4EFB\u52A1\u5DF2\u505C\u6B62") {
-    super(message);
-    this.name = "StaleTaskError";
-  }
-};
-var TaskCancelledError = class extends Error {
-  constructor(message = "\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
-    super(message);
-    this.name = "TaskCancelledError";
-  }
-};
-
-// src/pipeline/task-queue.ts
-var TaskQueue = class {
-  laneTails = /* @__PURE__ */ new Map();
-  inFlight = /* @__PURE__ */ new Map();
-  tasks = /* @__PURE__ */ new Map();
-  active = /* @__PURE__ */ new Map();
-  listeners = /* @__PURE__ */ new Set();
-  subscribe(listener) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-  notify() {
-    for (const listener of this.listeners) {
-      try {
-        listener();
-      } catch (error) {
-        console.warn("[MirrorAbyss] task listener failed", error);
-      }
-    }
-  }
-  async persist(task) {
-    try {
-      await putQueueTask({ ...task });
-    } catch (error) {
-      console.warn("[MirrorAbyss] task persistence failed", error);
-    }
-  }
-  async finalize(key, scopeChatKey, task) {
-    task.finishedAt ||= nowIso();
-    task.updatedAt = task.finishedAt;
-    this.inFlight.delete(key);
-    this.active.delete(task.id);
-    await this.persist(task);
-    try {
-      await appendTaskLog(scopeChatKey, { ...task });
-    } catch (error) {
-      console.warn("[MirrorAbyss] task log save failed", error);
-    }
-    this.notify();
-  }
-  list() {
-    return [...this.tasks.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-  has(key) {
-    return this.inFlight.has(key);
-  }
-  run(key, label, kind, work, options = {}) {
-    const existing = this.inFlight.get(key);
-    if (existing) return existing;
-    const scope = chatScopeManager.current();
-    const laneKey = options.laneKey?.trim() || `chat:${scope.chatKey}`;
-    const controller = new AbortController();
-    const createdAt = nowIso();
-    const task = {
-      id: makeId("task"),
-      key,
-      chatKey: scope.chatKey,
-      scopeRevision: scope.revision,
-      laneKey,
-      label,
-      kind,
-      state: "queued",
-      createdAt,
-      updatedAt: createdAt
-    };
-    this.tasks.set(task.id, task);
-    this.active.set(task.id, { task, controller });
-    void this.persist(task);
-    this.notify();
-    const execute = async () => {
-      try {
-        if (controller.signal.aborted) {
-          throw controller.signal.reason instanceof StaleTaskError ? controller.signal.reason : new TaskCancelledError(toErrorMessage(controller.signal.reason || "\u4EFB\u52A1\u5728\u6392\u961F\u671F\u95F4\u88AB\u53D6\u6D88"));
-        }
-        if (!chatScopeManager.isCurrent(scope)) {
-          throw new StaleTaskError("\u4EFB\u52A1\u6392\u961F\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362");
-        }
-        task.state = "running";
-        task.startedAt = nowIso();
-        task.updatedAt = task.startedAt;
-        await this.persist(task);
-        this.notify();
-        const result = await work(controller.signal);
-        if (controller.signal.aborted) {
-          if (!chatScopeManager.isCurrent(scope) || controller.signal.reason instanceof StaleTaskError) {
-            throw controller.signal.reason instanceof StaleTaskError ? controller.signal.reason : new StaleTaskError("\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362");
-          }
-          throw controller.signal.reason instanceof TaskCancelledError ? controller.signal.reason : new TaskCancelledError(toErrorMessage(controller.signal.reason || "\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u88AB\u53D6\u6D88"));
-        }
-        if (!chatScopeManager.isCurrent(scope)) {
-          throw new StaleTaskError("\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u7ED3\u679C\u672A\u63D0\u4EA4\u5230\u65B0\u804A\u5929");
-        }
-        task.state = "success";
-        task.error = void 0;
-        return result;
-      } catch (error) {
-        let finalError = error;
-        if (error instanceof StaleTaskError || !chatScopeManager.isCurrent(scope)) {
-          task.state = "stale";
-          task.error = error instanceof StaleTaskError ? error.message : "\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362";
-          if (!(error instanceof StaleTaskError)) finalError = new StaleTaskError(task.error);
-        } else if (error instanceof TaskCancelledError || error instanceof ConnectionRequestError && error.kind === "cancelled" || controller.signal.aborted) {
-          task.state = "cancelled";
-          task.error = toErrorMessage(error);
-          if (!(error instanceof TaskCancelledError)) finalError = new TaskCancelledError(task.error);
-        } else {
-          task.state = "failed";
-          task.error = toErrorMessage(error);
-        }
-        throw finalError;
-      } finally {
-        await this.finalize(key, scope.chatKey, task);
-      }
-    };
-    const previous = this.laneTails.get(laneKey) ?? Promise.resolve();
-    const promise = previous.then(execute, execute);
-    const settledTail = promise.catch(() => void 0);
-    this.laneTails.set(laneKey, settledTail);
-    void settledTail.finally(() => {
-      if (this.laneTails.get(laneKey) === settledTail) this.laneTails.delete(laneKey);
-    });
-    this.inFlight.set(key, promise);
-    return promise;
-  }
-  cancel(taskId, reason = "\u7528\u6237\u53D6\u6D88\u4EFB\u52A1") {
-    const active = this.active.get(taskId);
-    if (!active) return false;
-    active.controller.abort(new TaskCancelledError(reason));
-    this.notify();
-    return true;
-  }
-  cancelByKey(key, reason = "\u4EFB\u52A1\u5DF2\u88AB\u66FF\u6362") {
-    let count = 0;
-    for (const active of this.active.values()) {
-      if (active.task.key !== key) continue;
-      active.controller.abort(new TaskCancelledError(reason));
-      count += 1;
-    }
-    if (count) this.notify();
-    return count;
-  }
-  cancelChat(chatKey, reason = "\u804A\u5929\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
-    let count = 0;
-    for (const active of this.active.values()) {
-      if (active.task.chatKey !== chatKey) continue;
-      active.controller.abort(new TaskCancelledError(reason));
-      count += 1;
-    }
-    if (count) this.notify();
-    return count;
-  }
-  cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
-    let count = 0;
-    for (const active of this.active.values()) {
-      if (active.task.chatKey === chatKey) continue;
-      active.controller.abort(new StaleTaskError(reason));
-      count += 1;
-    }
-    if (count) this.notify();
-    return count;
-  }
-  cancelAll(reason = "\u4EFB\u52A1\u961F\u5217\u5DF2\u505C\u6B62") {
-    let count = 0;
-    for (const active of this.active.values()) {
-      active.controller.abort(new TaskCancelledError(reason));
-      count += 1;
-    }
-    if (count) this.notify();
-    return count;
-  }
-};
-var taskQueue = new TaskQueue();
+// src/pipeline/lorebook.ts
+init_task_queue();
 
 // src/integrations/sillytavern-worldinfo.ts
+init_utils();
+init_task_errors();
 var worldInfoModulePromise = null;
 async function worldInfoApi() {
   const testApi = globalThis.__MirrorAbyssWorldInfoApi;
@@ -4049,14 +4884,18 @@ async function finalizeMetadata(record, scope, lease) {
       meta.lorebookName = record.bookName;
       meta.lorebookChatKey = record.chatKey;
       meta.lorebookManaged = true;
+      meta.lorebookBindingFingerprint = hashText(`${record.chatKey}|${record.bookName}|managed`);
     } else {
       if (context.chatMetadata?.[metadataKey] === record.bookName)
         delete context.chatMetadata[metadataKey];
       delete meta.lorebookName;
       delete meta.lorebookChatKey;
       delete meta.lorebookManaged;
+      delete meta.lorebookBindingFingerprint;
     }
-    await persistMetadata();
+    if (fingerprint(context.chatMetadata) !== fingerprint(metadataBefore)) {
+      await persistMetadata();
+    }
   } catch (error) {
     for (const key of Object.keys(context.chatMetadata))
       delete context.chatMetadata[key];
@@ -4250,7 +5089,7 @@ async function updateSyncStateFromRecord(record, error) {
   }
   await putChatState(state2);
 }
-async function syncLorebook(artifact, signal) {
+async function syncLorebook(artifact, signal, options = {}) {
   const settings = getSettings();
   if (!settings.lorebookSync) {
     markStage(artifact, "sync", "skipped");
@@ -4278,10 +5117,17 @@ async function syncLorebook(artifact, signal) {
       artifact.messageKey,
       signal
     );
+    const alreadyCommitted = record.state === "committed" && Boolean(record.metadataAttached);
     await updateSyncStateFromRecord(record);
     record = await executeOutbox(record, scope, signal);
     if (record.state !== "committed" || !record.metadataAttached) {
       throw new Error(record.error || "\u4E16\u754C\u4E66\u4E8B\u52A1\u5C1A\u672A\u5B8C\u6210");
+    }
+    if (options.forceRefresh && alreadyCommitted) {
+      const wi = await worldInfoApi();
+      const latestServerData = await loadWorldInfoStrict(record.bookName, signal);
+      assertScope(scope, record.chatKey, signal);
+      await emitWorldInfoUpdated(record.bookName, latestServerData, wi);
     }
     artifact.lorebookEntryIds = record.intendedEntryIds;
     markStage(artifact, "sync", "success");
@@ -4400,204 +5246,146 @@ async function clearManagedLorebookForCurrentChat(detach = true, signal) {
   return { name, removed };
 }
 
-// src/domain/snapshot.ts
-var EXISTENCE_STATES = /* @__PURE__ */ new Set([
-  "\u5B58\u6D3B",
-  "\u6B7B\u4EA1\u5DF2\u786E\u8BA4",
-  "\u5B58\u5728\u672A\u77E5",
-  "\u5931\u8E2A",
-  "\u8EAB\u4EFD\u5B58\u7591",
-  "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4",
-  "\u5B58\u5728\u88AB\u62B9\u9664",
-  "\u672A\u6807\u6CE8",
-  "\u4E0D\u9002\u7528"
-]);
-var ACTIVITY_STATES = /* @__PURE__ */ new Set([
-  "\u5F53\u524D\u5728\u573A",
-  "\u5F53\u524D\u76F8\u5173",
-  "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3",
-  "\u4F11\u7720",
-  "\u957F\u671F\u4F11\u7720",
-  "\u5DF2\u5F52\u6863",
-  "\u672A\u6807\u6CE8",
-  "\u4E0D\u9002\u7528"
-]);
-var MEMORY_STATES = /* @__PURE__ */ new Set([
-  "\u5E7F\u6CDB\u8BB0\u5F97",
-  "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97",
-  "\u4EC5\u8BB0\u5F55\u7559\u5B58",
-  "\u4EC5\u75D5\u8FF9\u7559\u5B58",
-  "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97",
-  "\u8BB0\u5FC6\u88AB\u7BE1\u6539",
-  "\u8BB0\u5FC6\u88AB\u62B9\u9664",
-  "\u672A\u6807\u6CE8",
-  "\u4E0D\u9002\u7528"
-]);
-var EVIDENCE_LEVELS = /* @__PURE__ */ new Set(["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"]);
-function emptySnapshot() {
-  return Object.fromEntries(TABLE_KEYS.map((key) => [key, []]));
-}
-function normalizeKeywords(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item2) => safeText(item2, 80).trim()).filter(Boolean))].slice(0, 16);
-}
-function normalizeStringList(value, limit = 12) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item2) => safeText(item2, 240).trim()).filter(Boolean))].slice(0, limit);
-}
-function enumValue(value, allowed, fallback) {
-  const text = safeText(value, 80).trim();
-  return allowed.has(text) ? text : fallback;
-}
-function defaultLifecycle() {
-  return {
-    existence: "\u672A\u6807\u6CE8",
-    activity: "\u672A\u6807\u6CE8",
-    memory: "\u672A\u6807\u6CE8",
-    evidenceLevel: "\u672A\u77E5",
-    evidence: "",
-    returnConditions: [],
-    returnBlockers: []
-  };
-}
-function normalizeLifecycle(value, previous) {
-  const source = value && typeof value === "object" ? value : {};
-  const base = previous ?? defaultLifecycle();
-  return {
-    existence: enumValue(source.existence ?? base.existence, EXISTENCE_STATES, base.existence),
-    activity: enumValue(source.activity ?? base.activity, ACTIVITY_STATES, base.activity),
-    memory: enumValue(source.memory ?? base.memory, MEMORY_STATES, base.memory),
-    evidenceLevel: enumValue(source.evidenceLevel ?? base.evidenceLevel, EVIDENCE_LEVELS, base.evidenceLevel),
-    evidence: safeText(source.evidence ?? base.evidence, 4e3).trim(),
-    returnConditions: normalizeStringList(source.returnConditions ?? base.returnConditions),
-    returnBlockers: normalizeStringList(source.returnBlockers ?? base.returnBlockers)
-  };
-}
-function normalizeRow(value, tableKey, index, previous) {
-  const source = value && typeof value === "object" ? value : {};
-  const now = nowIso();
-  const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
-  const manual = source.source === "manual" || previous?.source === "manual";
-  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
-  const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
-  return {
-    id,
-    title: safeText(source.title || source.name || previous?.title || `${TABLE_LABELS[tableKey]} ${index + 1}`, 240).trim(),
-    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
-    keywords: normalizeKeywords(source.keywords ?? previous?.keywords ?? []),
-    status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
-    source: manual ? "manual" : "auto",
-    locked: Boolean(source.locked ?? previous?.locked ?? manual),
-    lifecycle: supportsLifecycle && lifecycleInput ? normalizeLifecycle(lifecycleInput, previous?.lifecycle) : void 0,
-    updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now
-  };
-}
-function normalizeSnapshot(value, previousSnapshot2) {
-  const source = value && typeof value === "object" ? value : {};
-  const output = emptySnapshot();
-  for (const key of TABLE_KEYS) {
-    const rows2 = Array.isArray(source[key]) ? source[key] : [];
-    const previousMap = new Map((previousSnapshot2?.[key] ?? []).map((row) => [row.id, row]));
-    const used = /* @__PURE__ */ new Set();
-    output[key] = rows2.map((row, index) => {
-      const rawId = row && typeof row === "object" ? safeText(row.id, 160) : "";
-      const normalized = normalizeRow(row, key, index, rawId ? previousMap.get(rawId) : void 0);
-      if (used.has(normalized.id)) normalized.id = makeId(key);
-      used.add(normalized.id);
-      return normalized;
-    });
+// src/pipeline/lorebook-scheduler.ts
+init_utils();
+init_repository();
+init_task_queue();
+async function persistArtifact(artifact) {
+  const message = getMessage(artifact.messageIndex);
+  if (message && !message.is_user && messageFingerprint(artifact.messageIndex) === artifact.sourceFingerprint) {
+    attachArtifactToMessage(message, artifact);
   }
-  return output;
+  await putArtifact(artifact);
+  await persistChat().catch(() => void 0);
 }
-function identityTitle(value) {
-  return String(value || "").toLowerCase().replace(/[\s·•._—–|｜:：()（）【】[\]]+/g, "");
-}
-function preservePersistentCharacters(previous, next) {
-  const byId = new Map((next.characters ?? []).map((row) => [row.id, row]));
-  const byTitle = new Map((next.characters ?? []).map((row) => [identityTitle(row.title), row]));
-  for (const oldRow of previous.characters ?? []) {
-    if (byId.has(oldRow.id)) continue;
-    const titleMatch = byTitle.get(identityTitle(oldRow.title));
-    if (titleMatch) {
-      titleMatch.id = oldRow.id;
-      if (oldRow.source === "manual" || oldRow.locked) {
-        Object.assign(titleMatch, { ...oldRow, id: oldRow.id });
-      } else if (!titleMatch.lifecycle && oldRow.lifecycle) {
-        titleMatch.lifecycle = { ...oldRow.lifecycle };
-      }
-      byId.set(oldRow.id, titleMatch);
-      continue;
+var LorebookPublishScheduler = class {
+  pending = /* @__PURE__ */ new Map();
+  running = /* @__PURE__ */ new Set();
+  schedule(artifact, options = {}) {
+    const chatKey = artifact.chatKey;
+    const previous = this.pending.get(chatKey);
+    if (previous?.timer !== void 0) clearTimeout(previous.timer);
+    if (previous && previous.artifact.messageKey !== artifact.messageKey) {
+      markStage(previous.artifact, "sync", "skipped", "\u5DF2\u5408\u5E76\u5230\u66F4\u65B0\u7684\u4E16\u754C\u4E66\u53D1\u5E03\u4EFB\u52A1");
+      void putArtifact(previous.artifact);
     }
-    const restored = { ...oldRow, lifecycle: oldRow.lifecycle ? { ...oldRow.lifecycle } : void 0 };
-    next.characters.push(restored);
-    byId.set(restored.id, restored);
-    byTitle.set(identityTitle(restored.title), restored);
+    const pending = {
+      artifact,
+      forceRefresh: Boolean(options.forceRefresh || previous?.forceRefresh)
+    };
+    this.pending.set(chatKey, pending);
+    markStage(artifact, "sync", "queued", "\u7B49\u5F85\u53D1\u5E03\u6700\u65B0\u4E16\u754C\u4E66\u7248\u672C");
+    void putArtifact(artifact);
+    if (!this.running.has(chatKey)) {
+      pending.timer = setTimeout(() => {
+        pending.timer = void 0;
+        void this.flush(chatKey);
+      }, Math.max(0, options.delayMs ?? 750));
+    }
   }
-  const seenTitles = /* @__PURE__ */ new Set();
-  next.characters = next.characters.filter((row) => {
-    const key = identityTitle(row.title);
-    if (!key || !seenTitles.has(key)) {
-      if (key) seenTitles.add(key);
-      return true;
+  async flush(chatKey) {
+    if (this.running.has(chatKey)) return;
+    const pending = this.pending.get(chatKey);
+    if (!pending) return;
+    this.pending.delete(chatKey);
+    this.running.add(chatKey);
+    const artifact = pending.artifact;
+    const key = `lorebook-publish:${chatKey}:${artifact.messageKey}`;
+    try {
+      await taskQueue.run(
+        key,
+        `\u53D1\u5E03\u6700\u65B0\u4E16\u754C\u4E66 \xB7 \u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587`,
+        "sync",
+        async (signal) => {
+          if (chatKey !== currentChatKey()) throw new StaleTaskError("\u4E16\u754C\u4E66\u53D1\u5E03\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+          const state2 = await getChatState(chatKey);
+          if (state2.latestSnapshotMessageKey && state2.latestSnapshotMessageKey !== artifact.messageKey) {
+            markStage(artifact, "sync", "skipped", "\u5DF2\u6709\u66F4\u65B0\u7684\u72B6\u6001\u7248\u672C\uFF0C\u65E7\u53D1\u5E03\u4EFB\u52A1\u5DF2\u5408\u5E76");
+            await persistArtifact(artifact);
+            return;
+          }
+          try {
+            await syncLorebook(artifact, signal, { forceRefresh: pending.forceRefresh });
+            await persistArtifact(artifact);
+          } catch (error) {
+            if (error instanceof StaleTaskError || error instanceof TaskCancelledError) throw error;
+            markStage(artifact, "sync", "failed", toErrorMessage(error));
+            await persistArtifact(artifact);
+            toast("warning", `\u6B63\u6587\u4E0D\u53D7\u5F71\u54CD\uFF1B\u4E16\u754C\u4E66\u53D1\u5E03\u5F85\u91CD\u8BD5\uFF1A${toErrorMessage(error)}`);
+          }
+        },
+        {
+          laneKey: `background-io:${chatKey}`,
+          priority: "background-io",
+          blocking: false,
+          sourceRange: { startIndex: artifact.messageIndex, endIndex: artifact.messageIndex },
+          progressLabel: "\u5199\u5165\u3001\u56DE\u8BFB\u4E0E\u5237\u65B0"
+        }
+      );
+    } finally {
+      this.running.delete(chatKey);
+      if (this.pending.has(chatKey)) void this.flush(chatKey);
     }
-    return false;
-  });
-  return next;
-}
-function snapshotRowCount(snapshot) {
-  if (!snapshot) return 0;
-  return TABLE_KEYS.reduce((sum, key) => sum + (snapshot[key]?.length ?? 0), 0);
-}
-function upsertManualRow(snapshot, tableKey, row) {
-  const next = normalizeSnapshot(snapshot, snapshot);
-  const index = next[tableKey].findIndex((item2) => item2.id === row.id);
-  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? true, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0);
-  if (index >= 0) next[tableKey][index] = normalized;
-  else next[tableKey].push(normalized);
-  return next;
-}
-function deleteRow(snapshot, tableKey, rowId) {
-  const next = normalizeSnapshot(snapshot, snapshot);
-  next[tableKey] = next[tableKey].filter((row) => row.id !== rowId);
-  return next;
-}
-function stateSchemaDescription() {
-  return JSON.stringify({
-    focus: [{
-      id: "focus-linwan",
-      title: "\u6797\u665A",
-      content: "\u5F53\u524D\u5916\u90E8\u4E8B\u5B9E\u3001\u8EAB\u4EFD\u3001\u8D44\u6E90\u4E0E\u63A5\u89E6\u9762",
-      keywords: ["\u6797\u665A"],
-      status: "\u5F53\u524D\u7126\u70B9",
-      lifecycle: {
-        existence: "\u5B58\u6D3B",
-        activity: "\u5F53\u524D\u5728\u573A",
-        memory: "\u5E7F\u6CDB\u8BB0\u5F97",
-        evidenceLevel: "\u5DF2\u786E\u8BA4",
-        evidence: "\u5F53\u524D\u53EF\u89C2\u5BDF",
-        returnConditions: [],
-        returnBlockers: []
-      }
-    }],
-    spacetime: [],
-    characters: [],
-    relationships: [],
-    items: [],
-    skills: [],
-    events: [],
-    regions: [],
-    foundations: []
-  }, null, 2);
-}
+  }
+  cancelChat(chatKey, reason = "\u4E16\u754C\u4E66\u53D1\u5E03\u5DF2\u53D6\u6D88") {
+    const pending = this.pending.get(chatKey);
+    if (!pending) return 0;
+    if (pending.timer !== void 0) clearTimeout(pending.timer);
+    this.pending.delete(chatKey);
+    markStage(pending.artifact, "sync", "skipped", reason);
+    void putArtifact(pending.artifact);
+    return 1;
+  }
+  cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+    let count = 0;
+    for (const key of [...this.pending.keys()]) if (key !== chatKey) count += this.cancelChat(key, reason);
+    return count;
+  }
+  pendingCount(chatKey) {
+    if (chatKey) return Number(this.pending.has(chatKey)) + Number(this.running.has(chatKey));
+    return this.pending.size + this.running.size;
+  }
+  async waitForIdle(chatKey, timeoutMs = 1e4) {
+    const started = Date.now();
+    while (this.pending.has(chatKey) || this.running.has(chatKey)) {
+      if (Date.now() - started > timeoutMs) throw new Error("\u7B49\u5F85\u4E16\u754C\u4E66\u540E\u53F0\u53D1\u5E03\u5B8C\u6210\u8D85\u65F6");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+};
+var lorebookPublishScheduler = new LorebookPublishScheduler();
+
+// src/pipeline/summary.ts
+init_utils();
 
 // src/domain/sedimentation.ts
-var REMOVABLE_TABLES = /* @__PURE__ */ new Set(["spacetime", "events", "regions"]);
-var SETTLED_STATUS = /(已结束|已完成|已关闭|已失效|已归档|已替代|resolved|closed|completed|expired|archived|superseded|historical)/i;
-function canRemoveRow(table, row, snapshot) {
+var REMOVABLE_TABLES = /* @__PURE__ */ new Set([
+  "spacetime",
+  "relationships",
+  "items",
+  "skills",
+  "events",
+  "regions"
+]);
+var SETTLED_STATUS = /(待阶段沉降|不再活跃|已结束|已完成|已关闭|已失效|已销毁|已遗失|已消耗|已解除|已中止|已归档|已替代|resolved|closed|completed|expired|destroyed|lost|consumed|archived|superseded|historical|inactive)/i;
+function summaryAbsorbsRow(summary, row) {
+  const absorbed = summary.sedimentation?.absorbedRowIds;
+  if (absorbed !== void 0) return absorbed.includes(row.id);
+  const body = `${summary.title}
+${summary.summary}
+${summary.sedimentation?.notes.join("\n") ?? ""}`;
+  const title = row.title.trim();
+  if (title && body.includes(title)) return true;
+  const titleParts = title.split(/[｜|↔⇄→←·:：/\\]+/).map((item2) => item2.trim()).filter(Boolean);
+  const tokens = [title, ...titleParts, ...row.keywords].map((item2) => item2.trim()).filter((item2) => item2.length >= 2).slice(0, 8);
+  return tokens.some((token) => body.includes(token));
+}
+function canRemoveRow(table, row, snapshot, summary) {
   if (!REMOVABLE_TABLES.has(table)) return false;
   if (row.source === "manual" || row.locked) return false;
+  if (summary.sedimentation?.keepActiveRowIds?.includes(row.id)) return false;
   if (!SETTLED_STATUS.test(`${row.status} ${row.content}`)) return false;
-  if (table === "spacetime" && snapshot.spacetime.length <= 1) return false;
+  if (!summaryAbsorbsRow(summary, row)) return false;
   return true;
 }
 function canAdvanceActivity(current, target, row) {
@@ -4617,10 +5405,16 @@ function applySedimentation(snapshot, summary) {
   const requested = new Set(plan.removeRowIds);
   const applied = [];
   const ignored = [];
-  for (const table of ["spacetime", "events", "regions"]) {
+  let remainingSpacetimeRows = next.spacetime.length;
+  for (const table of REMOVABLE_TABLES) {
     next[table] = next[table].filter((row) => {
       if (!requested.has(row.id)) return true;
-      if (canRemoveRow(table, row, next)) {
+      if (canRemoveRow(table, row, next, summary)) {
+        if (table === "spacetime" && remainingSpacetimeRows <= 1) {
+          ignored.push(row.id);
+          return true;
+        }
+        if (table === "spacetime") remainingSpacetimeRows -= 1;
         applied.push(row.id);
         return false;
       }
@@ -4652,6 +5446,9 @@ function applySedimentation(snapshot, summary) {
     row.status = update.activity;
     applied.push(update.rowId);
   }
+  for (const rowId of requested) {
+    if (!applied.includes(rowId) && !ignored.includes(rowId)) ignored.push(rowId);
+  }
   const normalizedPlan = {
     ...plan,
     appliedRowIds: [...new Set(applied)],
@@ -4662,6 +5459,7 @@ function applySedimentation(snapshot, summary) {
 }
 
 // src/domain/summary.ts
+init_utils();
 function stringList(value, limit = 40, itemLimit = 300) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item2) => safeText(item2, itemLimit).trim()).filter(Boolean))].slice(0, limit);
@@ -4675,80 +5473,492 @@ function normalizeActivityUpdates(value) {
     reason: safeText(item2.reason, 500).trim()
   })).filter((item2) => item2.rowId && allowed.has(item2.activity)).slice(0, 30);
 }
-function normalizeSedimentation(value) {
+function normalizeSedimentationPlan(value) {
   if (!value || typeof value !== "object") return void 0;
   const source = value;
-  return {
-    removeRowIds: stringList(source.removeRowIds, 50, 160),
+  const plan = {
+    removeRowIds: stringList(source.removeRowIds, 80, 160),
     characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates),
-    notes: stringList(source.notes, 30, 500)
+    notes: stringList(source.notes, 40, 500)
+  };
+  if (Array.isArray(source.absorbedRowIds)) plan.absorbedRowIds = stringList(source.absorbedRowIds, 120, 160);
+  if (Array.isArray(source.keepActiveRowIds)) plan.keepActiveRowIds = stringList(source.keepActiveRowIds, 120, 160);
+  return plan;
+}
+var CATEGORIES = /* @__PURE__ */ new Set([
+  "world",
+  "character",
+  "relationship",
+  "event",
+  "region",
+  "item",
+  "skill",
+  "historical",
+  "unresolved",
+  "other"
+]);
+var PERMANENCE = /* @__PURE__ */ new Set(["stable", "irreversible", "long-term", "unresolved"]);
+function normalizeCategory(value) {
+  const category = safeText(value, 40).trim();
+  return CATEGORIES.has(category) ? category : "other";
+}
+function normalizePermanence(value) {
+  const permanence = safeText(value, 40).trim();
+  return PERMANENCE.has(permanence) ? permanence : "long-term";
+}
+function normalizeLongTermRecord(value, fallbackSourceSummaryIds = []) {
+  if (!value || typeof value !== "object") return null;
+  const source = value;
+  const title = safeText(source.title, 240).trim();
+  const content = safeText(source.content, 4e3).trim();
+  if (!title || !content) return null;
+  const requestedId = safeText(source.recordId, 180).trim();
+  const recordId = requestedId || `long:${hashText(`${normalizeCategory(source.category)}|${title}`)}`;
+  return {
+    recordId,
+    category: normalizeCategory(source.category),
+    title,
+    content,
+    keywords: stringList(source.keywords, 24, 80),
+    permanence: normalizePermanence(source.permanence),
+    sourceRowIds: stringList(source.sourceRowIds, 40, 180),
+    sourceFactIds: stringList(source.sourceFactIds, 80, 180),
+    sourceSummaryIds: stringList(source.sourceSummaryIds, 80, 180).length ? stringList(source.sourceSummaryIds, 80, 180) : [...fallbackSourceSummaryIds],
+    updatedAt: safeText(source.updatedAt, 80).trim() || nowIso()
   };
 }
-function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId) {
+function normalizeLongTermCandidates(value, sourceSummaryIds) {
+  if (!Array.isArray(value)) return [];
+  const byId = /* @__PURE__ */ new Map();
+  for (const item2 of value) {
+    const record = normalizeLongTermRecord(item2, sourceSummaryIds);
+    if (record) byId.set(record.recordId, record);
+  }
+  return [...byId.values()].slice(0, 80);
+}
+function normalizeLongTermOperations(value) {
+  if (!Array.isArray(value)) return [];
+  const output = [];
+  for (const item2 of value) {
+    if (!item2 || typeof item2 !== "object") continue;
+    const source = item2;
+    const action = safeText(source.action, 30).trim();
+    if (!["upsert", "remove", "merge"].includes(action)) continue;
+    const recordId = safeText(source.recordId, 180).trim();
+    if (!recordId) continue;
+    output.push({
+      action,
+      recordId,
+      sourceRecordIds: stringList(source.sourceRecordIds, 40, 180),
+      category: source.category === void 0 ? void 0 : normalizeCategory(source.category),
+      title: safeText(source.title, 240).trim() || void 0,
+      content: safeText(source.content, 4e3).trim() || void 0,
+      keywords: Array.isArray(source.keywords) ? stringList(source.keywords, 24, 80) : void 0,
+      permanence: source.permanence === void 0 ? void 0 : normalizePermanence(source.permanence),
+      reason: safeText(source.reason, 500).trim() || void 0
+    });
+  }
+  return output.slice(0, 160);
+}
+function legacyLongTermRecord(previous) {
+  if (!previous?.summary.trim()) return [];
+  return [{
+    recordId: `legacy:${previous.id}`,
+    category: "historical",
+    title: previous.title || "\u65E2\u6709\u957F\u671F\u8109\u7EDC",
+    content: previous.summary,
+    keywords: [...previous.keywords],
+    permanence: "long-term",
+    sourceRowIds: [],
+    sourceFactIds: [],
+    sourceSummaryIds: [...previous.sourceKeys],
+    updatedAt: previous.createdAt
+  }];
+}
+function longTermRecordsFromPrevious(previous) {
+  const records = previous?.longTermRecords?.length ? previous.longTermRecords : legacyLongTermRecord(previous);
+  return records.map((record) => ({ ...record, keywords: [...record.keywords], sourceRowIds: [...record.sourceRowIds], sourceFactIds: [...record.sourceFactIds], sourceSummaryIds: [...record.sourceSummaryIds] }));
+}
+function operationRecord(operation, existing, sourceSummaryIds) {
+  const title = operation.title || existing?.title || "";
+  const content = operation.content || existing?.content || "";
+  if (!title || !content) return null;
   return {
-    id: makeId(kind),
+    recordId: operation.recordId,
+    category: operation.category || existing?.category || "other",
+    title,
+    content,
+    keywords: operation.keywords ? [...operation.keywords] : [...existing?.keywords ?? []],
+    permanence: operation.permanence || existing?.permanence || "long-term",
+    sourceRowIds: [...existing?.sourceRowIds ?? []],
+    sourceFactIds: [...existing?.sourceFactIds ?? []],
+    sourceSummaryIds: [.../* @__PURE__ */ new Set([...existing?.sourceSummaryIds ?? [], ...sourceSummaryIds])],
+    updatedAt: nowIso()
+  };
+}
+function applyLongTermOperations(input) {
+  const records = new Map(longTermRecordsFromPrevious(input.previous).map((record) => [record.recordId, record]));
+  const candidatesById = new Map(input.candidates.map((record) => [record.recordId, record]));
+  const handled = /* @__PURE__ */ new Set();
+  for (const operation of input.operations) {
+    if (operation.action === "remove") {
+      const existing2 = records.get(operation.recordId) ?? candidatesById.get(operation.recordId);
+      if (existing2?.permanence === "irreversible") {
+        records.set(existing2.recordId, { ...existing2, sourceSummaryIds: [.../* @__PURE__ */ new Set([...existing2.sourceSummaryIds, ...input.sourceSummaryIds])] });
+      } else {
+        records.delete(operation.recordId);
+      }
+      handled.add(operation.recordId);
+      continue;
+    }
+    if (operation.action === "merge") {
+      const sources = operation.sourceRecordIds ?? [];
+      const mergedFrom = sources.map((id) => records.get(id) ?? candidatesById.get(id)).filter((item2) => Boolean(item2));
+      const existing2 = records.get(operation.recordId) ?? candidatesById.get(operation.recordId) ?? mergedFrom[0];
+      const record2 = operationRecord(operation, existing2, input.sourceSummaryIds);
+      if (!record2) continue;
+      record2.sourceRowIds = [...new Set(mergedFrom.flatMap((item2) => item2.sourceRowIds))];
+      record2.sourceFactIds = [...new Set(mergedFrom.flatMap((item2) => item2.sourceFactIds))];
+      record2.sourceSummaryIds = [.../* @__PURE__ */ new Set([...record2.sourceSummaryIds, ...mergedFrom.flatMap((item2) => item2.sourceSummaryIds)])];
+      if (mergedFrom.some((item2) => item2.permanence === "irreversible")) record2.permanence = "irreversible";
+      for (const id of sources) records.delete(id);
+      records.set(record2.recordId, record2);
+      sources.forEach((id) => handled.add(id));
+      handled.add(record2.recordId);
+      continue;
+    }
+    const existing = records.get(operation.recordId) ?? candidatesById.get(operation.recordId);
+    const record = operationRecord(operation, existing, input.sourceSummaryIds);
+    if (record) records.set(record.recordId, record);
+    handled.add(operation.recordId);
+  }
+  for (const candidate of input.candidates) {
+    if (!records.has(candidate.recordId) && !handled.has(candidate.recordId)) {
+      records.set(candidate.recordId, {
+        ...candidate,
+        sourceSummaryIds: [.../* @__PURE__ */ new Set([...candidate.sourceSummaryIds, ...input.sourceSummaryIds])],
+        updatedAt: nowIso()
+      });
+    }
+  }
+  const values = [...records.values()];
+  if (values.length <= 320) return values;
+  const protectedRecords = values.filter((record) => record.permanence === "irreversible" || record.permanence === "stable");
+  const protectedIds = new Set(protectedRecords.map((record) => record.recordId));
+  const remainder = values.filter((record) => !protectedIds.has(record.recordId)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return [...protectedRecords, ...remainder].slice(0, 320);
+}
+var CATEGORY_LABELS = {
+  world: "\u4E16\u754C\u4E0E\u957F\u671F\u89C4\u5219",
+  character: "\u4EBA\u7269\u957F\u671F\u72B6\u6001",
+  relationship: "\u957F\u671F\u5173\u7CFB",
+  event: "\u4E8B\u4EF6\u4E0E\u6D41\u7A0B\u7ED3\u679C",
+  region: "\u533A\u57DF\u957F\u671F\u53D8\u5316",
+  item: "\u7269\u54C1\u4E0E\u8D44\u6E90\u7ED3\u679C",
+  skill: "\u6280\u80FD\u4E0E\u80FD\u529B\u7ED3\u679C",
+  historical: "\u5386\u53F2\u7ED3\u679C",
+  unresolved: "\u957F\u671F\u672A\u51B3\u4E8B\u9879",
+  other: "\u5176\u4ED6\u957F\u671F\u4E8B\u5B9E"
+};
+function renderLongTermSummary(records) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    const values = groups.get(record.category) ?? [];
+    values.push(record);
+    groups.set(record.category, values);
+  }
+  return Object.keys(CATEGORY_LABELS).map((category) => {
+    const values = groups.get(category);
+    if (!values?.length) return "";
+    return `\u3010${CATEGORY_LABELS[category]}\u3011
+${values.map((record) => `- ${record.title}\uFF1A${record.content}`).join("\n")}`;
+  }).filter(Boolean).join("\n\n");
+}
+function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId) {
+  const id = makeId(kind);
+  return {
+    id,
     kind,
     title: safeText(value.title || (kind === "small" ? "\u9636\u6BB5\u6C89\u964D" : "\u957F\u671F\u6C89\u964D"), 240).trim(),
     summary: safeText(value.summary || "", 3e4).trim(),
     keywords: Array.isArray(value.keywords) ? [...new Set(value.keywords.map((item2) => safeText(item2, 80).trim()).filter(Boolean))].slice(0, 24) : [],
     sourceKeys,
     createdAt: nowIso(),
-    sedimentation: kind === "small" ? normalizeSedimentation(value.sedimentation) : void 0,
+    sedimentation: kind === "small" ? normalizeSedimentationPlan(value.sedimentation) : void 0,
+    longTermCandidates: kind === "small" ? normalizeLongTermCandidates(value.longTermCandidates, [id]) : void 0,
     previousLargeSummaryId: kind === "large" ? previousLargeSummaryId : void 0
   };
 }
+function normalizeLargeSummaryUpdate(input) {
+  const operations = normalizeLongTermOperations(input.value.operations);
+  const records = operations.length ? applyLongTermOperations({ previous: input.previous, operations, candidates: input.candidates, sourceSummaryIds: input.sourceKeys }) : (() => {
+    const summary = safeText(input.value.summary, 3e4).trim();
+    if (summary && !input.candidates.length) {
+      const fallback = {
+        recordId: `legacy-generated:${hashText(summary)}`,
+        category: "historical",
+        title: safeText(input.value.title || "\u957F\u671F\u6C89\u964D", 240).trim(),
+        content: summary,
+        keywords: stringList(input.value.keywords, 24, 80),
+        permanence: "long-term",
+        sourceRowIds: [],
+        sourceFactIds: [],
+        sourceSummaryIds: [...input.sourceKeys],
+        updatedAt: nowIso()
+      };
+      return applyLongTermOperations({ previous: input.previous, operations: [], candidates: [fallback], sourceSummaryIds: input.sourceKeys });
+    }
+    return applyLongTermOperations({ previous: input.previous, operations: [], candidates: input.candidates, sourceSummaryIds: input.sourceKeys });
+  })();
+  return {
+    id: makeId("large"),
+    kind: "large",
+    title: safeText(input.value.title || "\u7D2F\u8BA1\u957F\u671F\u6C89\u964D", 240).trim(),
+    summary: renderLongTermSummary(records),
+    keywords: [.../* @__PURE__ */ new Set([
+      ...stringList(input.value.keywords, 24, 80),
+      ...records.flatMap((record) => record.keywords)
+    ])].slice(0, 24),
+    sourceKeys: [...input.sourceKeys],
+    createdAt: nowIso(),
+    longTermRecords: records,
+    longTermOperations: operations,
+    previousLargeSummaryId: input.previous?.id
+  };
+}
+
+// src/llm/structured.ts
+init_utils();
+function repairSystemPrompt(structureDescription) {
+  return `\u4F60\u662FJSON\u683C\u5F0F\u4FEE\u590D\u5668\u3002\u4F60\u4E0D\u6267\u884C\u539F\u4EFB\u52A1\u3001\u4E0D\u8865\u5145\u65B0\u4E8B\u5B9E\u3001\u4E0D\u89E3\u91CA\u5185\u5BB9\uFF0C\u53EA\u628A\u7ED9\u5B9A\u6A21\u578B\u8F93\u51FA\u8F6C\u6362\u6210\u4E00\u4E2A\u5408\u6CD5JSON\u5BF9\u8C61\u3002
+
+\u8981\u6C42\uFF1A
+1. \u4FDD\u7559\u539F\u8F93\u51FA\u4E2D\u5DF2\u7ECF\u8868\u8FBE\u7684\u8BED\u4E49\uFF0C\u4E0D\u81EA\u884C\u91CD\u505A\u5BA1\u6838\u3001\u603B\u7ED3\u6216\u72B6\u6001\u63D0\u53D6\u3002
+2. \u5220\u9664Markdown\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u548C\u601D\u8003\u6807\u7B7E\u3002
+3. \u4FEE\u590D\u7F3A\u5931\u5F15\u53F7\u3001\u5C3E\u968F\u9017\u53F7\u3001\u5168\u89D2\u6807\u70B9\u7B49\u683C\u5F0F\u95EE\u9898\u3002
+4. \u8F93\u51FA\u5FC5\u987B\u80FD\u88ABJSON.parse\u76F4\u63A5\u89E3\u6790\uFF0C\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61\u3002
+5. \u53EA\u8F93\u51FAJSON\u5BF9\u8C61\uFF0C\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u989D\u5916\u6587\u5B57\u3002
+
+\u3010\u76EE\u6807\u7ED3\u6784\u3011
+${structureDescription}`;
+}
+function repairUserPrompt(raw) {
+  return `\u3010\u9700\u8981\u4FEE\u590D\u7684\u539F\u59CB\u8F93\u51FA\u3011
+${safeText(raw, 8e4)}`;
+}
+var TASK_LABELS = {
+  audit: "\u89C4\u5219\u5BA1\u6838",
+  revision: "\u5B9A\u5411\u4FEE\u6B63",
+  factExtraction: "\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6",
+  state: "\u72B6\u6001\u8868",
+  smallSummary: "\u5C0F\u603B\u7ED3",
+  largeSummary: "\u5927\u603B\u7ED3"
+};
+function structuredError(task, error, raw) {
+  const connection = describeTaskConnection(task);
+  const preview = error instanceof JsonObjectParseError ? error.preview : jsonPreview(raw);
+  const detail = toErrorMessage(error);
+  return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
+}
+async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, signal, connectionSnapshot, invocation) {
+  const repaired = await generateTask({
+    task,
+    systemPrompt: repairSystemPrompt(structureDescription),
+    prompt: repairUserPrompt(raw),
+    jsonSchema,
+    signal,
+    connectionSnapshot,
+    invocation
+  });
+  return parseJsonObject(repaired);
+}
+async function generateStructuredTask(options) {
+  const connectionSnapshot = options.connectionSnapshot ?? captureTaskConnection(options.task);
+  const raw = await generateTask({ ...options, connectionSnapshot });
+  try {
+    return parseJsonObject(raw);
+  } catch (firstError) {
+    const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
+    if (!allowRepair) throw structuredError(options.task, firstError, raw);
+    try {
+      return await repairStructuredOutput(
+        options.task,
+        raw,
+        options.structureDescription,
+        options.jsonSchema,
+        options.signal,
+        connectionSnapshot,
+        options.invocation
+      );
+    } catch (repairError) {
+      throw structuredError(options.task, repairError, raw);
+    }
+  }
+}
 
 // src/prompts/summary.ts
-function smallSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u4E8B\u5B9E\u3002
-\u8F93\u51FA\u5B57\u6BB5\uFF1Atitle\u3001summary\u3001keywords\u3001sedimentation\u3002
-sedimentation\u5305\u542B\uFF1AremoveRowIds\u3001characterActivityUpdates\u3001notes\u3002
-\u4F60\u53EA\u63D0\u51FA\u5B89\u5168\u6C89\u964D\uFF1A
-- removeRowIds\u53EA\u80FD\u9009\u62E9\u5DF2\u7ECF\u7ED3\u675F\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684spacetime/events/regions\u884Cid\u3002
-- \u4E0D\u5F97\u5220\u9664focus\u3001characters\u3001relationships\u3001items\u3001skills\u3001foundations\u3002
-- \u6B63\u5F0F\u4EBA\u7269\u6C38\u4E0D\u56E0\u79BB\u573A\u3001\u9057\u5FD8\u3001\u6B7B\u4EA1\u6216\u957F\u671F\u672A\u51FA\u73B0\u800C\u5220\u9664\u3002
-- characterActivityUpdates\u53EA\u5141\u8BB8\u628A\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\uFF0C\u4E0D\u5F97\u6539\u53D8\u5B58\u5728\u72B6\u6001\u548C\u8BB0\u5FC6\u72B6\u6001\u3002
-- \u73A9\u5BB6\u624B\u52A8\u6216\u9501\u5B9A\u8BB0\u5F55\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
-- summary\u6B63\u6587\u5FC5\u987B\u660E\u786E\u5199\u5165\u88AB\u6C89\u964D\u7684\u4E8B\u5B9E\u3001\u4ECD\u4FDD\u7559\u7684\u672A\u51B3\u4E8B\u9879\u548C\u4EBA\u7269\u56DE\u6D41\u6761\u4EF6\u3002`;
+function compactPackages(packages) {
+  return packages.map((pack) => ({
+    packageId: pack.packageId,
+    sourceRange: pack.sourceRange,
+    turnMaterials: pack.turnMaterials,
+    facts: pack.facts.map((fact) => ({
+      factId: fact.factId,
+      entityId: fact.entityId,
+      entityType: fact.entityType,
+      factType: fact.factType,
+      title: fact.title,
+      status: fact.status,
+      operation: fact.operation,
+      lifecycle: fact.lifecycle,
+      content: fact.content,
+      keywords: fact.keywords,
+      sourceEntityId: fact.sourceEntityId,
+      targetEntityId: fact.targetEntityId,
+      confidence: fact.confidence
+    })),
+    sedimentationCandidates: pack.sedimentation
+  }));
 }
-function smallSummaryPrompt(transcript, snapshot) {
-  return `\u5C06\u4EE5\u4E0B\u56DE\u5408\u538B\u7F29\u6210\u201C\u5F53\u524D\u5468\u671F\u5C0F\u603B\u7ED3\u201D\uFF0C\u627F\u62C5\u9636\u6BB5\u6C89\u964D\uFF0C\u4E0D\u662F\u6D41\u6C34\u8D26\u3002
-\u91CD\u70B9\u4FDD\u7559\uFF1A\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u5F53\u524D\u4EBA\u7269/\u5173\u7CFB/\u7269\u54C1/\u6280\u80FD/\u533A\u57DF\u72B6\u6001\u3001\u4ECD\u5728\u8FDB\u884C\u7684\u6D41\u7A0B\u3001\u672A\u51B3\u4E0E\u51B2\u7A81\u3002
-\u5DF2\u7ECF\u88AB\u6700\u7EC8\u7ED3\u679C\u66FF\u4EE3\u7684\u4E2D\u95F4\u52A8\u4F5C\u4E0D\u5C55\u5F00\u3002
+function compactSnapshot(snapshot) {
+  return Object.fromEntries(Object.entries(snapshot).map(([table, rows2]) => [table, rows2.map((row) => ({
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    status: row.status,
+    keywords: row.keywords,
+    source: row.source,
+    locked: row.locked,
+    lifecycle: row.lifecycle,
+    sourceEntityId: row.sourceEntityId,
+    targetEntityId: row.targetEntityId
+  }))]));
+}
+function smallSummarySystemPrompt() {
+  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u5DF2\u7ECF\u63D0\u53D6\u51FA\u7684\u7ED3\u6784\u5316\u4E8B\u5B9E\u4E0E\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\uFF0C\u4E0D\u91CD\u65B0\u89E3\u91CA\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
 
-\u3010\u56DE\u5408\u3011
-${transcript}
+\u53EA\u8F93\u51FA\u53EF\u88AB JSON.parse \u76F4\u63A5\u89E3\u6790\u7684\u5355\u4E2A JSON \u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3001sedimentation\u3001longTermCandidates\u3002
+sedimentation \u5305\u542B absorbedRowIds\u3001keepActiveRowIds\u3001removeRowIds\u3001characterActivityUpdates\u3001notes\u3002
 
-\u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
-${JSON.stringify(snapshot, null, 2)}
+\u804C\u8D23\uFF1A
+1. \u628A\u672C\u9636\u6BB5\u4E8B\u5B9E\u538B\u7F29\u6210\u771F\u6B63\u7684\u5C0F\u603B\u7ED3\uFF0C\u4E0D\u6309\u56DE\u5408\u9010\u6761\u590D\u8FF0\u3002
+2. \u4FDD\u7559\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u5173\u7CFB\u6210\u7ACB\u6216\u65AD\u88C2\u3001\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\u53CA\u4EBA\u7269\u56DE\u6D41\u6761\u4EF6\u3002
+3. \u5224\u65AD\u54EA\u4E9B\u5185\u5BB9\u4ECD\u5E94\u7559\u5728\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\uFF0C\u54EA\u4E9B\u5DF2\u7ECF\u88AB\u672C\u6B21\u5C0F\u603B\u7ED3\u5B8C\u6574\u5438\u6536\u5E76\u53EF\u9000\u51FA\u6D3B\u8DC3\u8868\u683C\u3002
+4. \u628A\u9700\u8981\u8FDB\u5165\u957F\u671F\u53D1\u5C55\u8109\u7EDC\u7684\u5185\u5BB9\u6574\u7406\u4E3A longTermCandidates\uFF1B\u77ED\u6682\u4F4D\u7F6E\u548C\u65E0\u957F\u671F\u5F71\u54CD\u7684\u8FC7\u7A0B\u4E0D\u8981\u5217\u5165\u3002
 
-\u53EA\u8F93\u51FA\u4EE5\u4E0B\u7ED3\u6784\uFF1A
-{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["\u5DF2\u7ED3\u675F\u72B6\u6001\u884Cid"],"characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884Cid","activity":"\u4F11\u7720\u6216\u957F\u671F\u4F11\u7720\u6216\u5DF2\u5F52\u6863","reason":"\u4F9D\u636E"}],"notes":["\u6C89\u964D\u8BF4\u660E"]}}`;
+\u5438\u6536\u51ED\u8BC1\u89C4\u5219\uFF1A
+- absorbedRowIds \u5FC5\u987B\u5217\u51FA summary \u4E2D\u5DF2\u7ECF\u660E\u786E\u4FDD\u5B58\u7ED3\u679C\u7684\u8868\u683C\u884CID\u3002
+- keepActiveRowIds \u5FC5\u987B\u5217\u51FA\u4ECD\u53C2\u4E0E\u5F53\u524D\u4E16\u754C\u3001\u4E0D\u80FD\u9000\u51FA\u7684\u8868\u683C\u884CID\u3002
+- removeRowIds \u5FC5\u987B\u540C\u65F6\u51FA\u73B0\u5728 absorbedRowIds\uFF0C\u4E14\u4E0D\u80FD\u51FA\u73B0\u5728 keepActiveRowIds\u3002
+- \u4E0D\u80FD\u4EC5\u51ED\u201C\u672C\u9636\u6BB5\u6CA1\u63D0\u5230\u201D\u5224\u65AD\u9000\u51FA\u3002
+
+\u5B89\u5168\u6C89\u964D\u89C4\u5219\uFF1A
+- removeRowIds \u53EA\u80FD\u9009\u62E9\u5F53\u524D\u8868\u683C\u4E2D\u5DF2\u7ECF\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684\u81EA\u52A8\u884C\u3002
+- \u53EF\u9000\u51FA\u7684\u8868\u683C\u4EC5\u9650 spacetime\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\u3002
+- \u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002
+- \u73A9\u5BB6\u624B\u52A8\u884C\u6216\u9501\u5B9A\u884C\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
+- \u4ECD\u5728\u8FDB\u884C\u3001\u4ECD\u5F71\u54CD\u5F53\u524D\u884C\u52A8\u3001\u53EF\u80FD\u9A6C\u4E0A\u88AB\u8C03\u7528\u7684\u5185\u5BB9\u4E0D\u5F97\u6C89\u964D\u3002
+- \u6BCF\u4E2A\u51C6\u5907\u79FB\u51FA\u7684\u884C\uFF0C\u5176\u786E\u5B9A\u7ED3\u679C\u5FC5\u987B\u5148\u5199\u5165 summary\uFF1B\u6B7B\u4EA1\u3001\u7269\u54C1\u9500\u6BC1\u3001\u5173\u7CFB\u65AD\u88C2\u3001\u80FD\u529B\u6C38\u4E45\u5931\u53BB\u7B49\u4E0D\u80FD\u53EA\u5220\u9664\u8868\u683C\u800C\u4E0D\u8FDB\u5165\u603B\u7ED3\u3002
+- characterActivityUpdates \u53EA\u5141\u8BB8\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\uFF0C\u4E0D\u5F97\u6539\u53D8\u4EBA\u7269\u5B58\u5728\u72B6\u6001\u3001\u6B7B\u4EA1\u5224\u65AD\u6216\u8BC1\u636E\u7B49\u7EA7\u3002
+- \u4E0D\u5F97\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u5DF2\u786E\u8BA4\u4E8B\u5B9E\u3002
+
+longTermCandidates \u6BCF\u9879\u5B57\u6BB5\uFF1ArecordId\u3001category\u3001title\u3001content\u3001keywords\u3001permanence\u3001sourceRowIds\u3001sourceFactIds\u3002
+- recordId \u4F18\u5148\u4F7F\u7528\u65E2\u6709\u5BF9\u8C61/\u8868\u683C\u884CID\uFF1B\u5386\u53F2\u7ED3\u679C\u53EF\u4F7F\u7528 factId\u3002
+- category \u53EA\u80FD\u4E3A world\u3001character\u3001relationship\u3001event\u3001region\u3001item\u3001skill\u3001historical\u3001unresolved\u3001other\u3002
+- permanence \u53EA\u80FD\u4E3A stable\u3001irreversible\u3001long-term\u3001unresolved\u3002
+- \u6B7B\u4EA1\u3001\u6C38\u4E45\u635F\u6BC1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u4E0D\u53EF\u9006\u5173\u7CFB\u53D8\u5316\u4F7F\u7528 irreversible\u3002
+
+\u8F93\u51FA\u4E4B\u5916\u4E0D\u5F97\u5305\u542B\u89E3\u91CA\u3001Markdown \u6216\u524D\u540E\u6587\u3002`;
+}
+function smallSummaryPrompt(packages, snapshot) {
+  return `\u5C06\u4EE5\u4E0B\u9636\u6BB5\u4E8B\u5B9E\u7D20\u6750\u538B\u7F29\u4E3A\u4E00\u4EFD\u5F53\u524D\u5468\u671F\u5C0F\u603B\u7ED3\uFF0C\u5E76\u7ED9\u51FA\u53EF\u9A8C\u8BC1\u7684\u5438\u6536\u4E0E\u5B89\u5168\u6C89\u964D\u8BA1\u5212\u3002
+
+\u3010\u9636\u6BB5\u4E8B\u5B9E\u7D20\u6750\u3011
+${JSON.stringify(compactPackages(packages), null, 2)}
+
+\u3010\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
+${JSON.stringify(compactSnapshot(snapshot), null, 2)}
+
+\u53EA\u8F93\u51FA\uFF1A
+{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":["\u5DF2\u5728summary\u4E2D\u4FDD\u5B58\u7ED3\u679C\u7684\u884CID"],"keepActiveRowIds":["\u4ECD\u6D3B\u8DC3\u7684\u884CID"],"removeRowIds":["\u5DF2\u5438\u6536\u4E14\u53EF\u9000\u51FA\u7684\u884CID"],"characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884CID","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"\u53EF\u89C2\u5BDF\u4F9D\u636E"}],"notes":["\u6C89\u964D\u8BF4\u660E"]},"longTermCandidates":[{"recordId":"\u7A33\u5B9A\u5BF9\u8C61ID\u6216\u4E8B\u5B9EID","category":"world|character|relationship|event|region|item|skill|historical|unresolved|other","title":"...","content":"\u957F\u671F\u6709\u6548\u7684\u786E\u5B9A\u4E8B\u5B9E","keywords":["..."],"permanence":"stable|irreversible|long-term|unresolved","sourceRowIds":["..."],"sourceFactIds":["..."]}]}`;
 }
 function largeSummarySystemPrompt() {
-  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002\u8F93\u51FA\u5FC5\u987B\u662F\u7D2F\u8BA1\u957F\u671F\u5FEB\u7167\uFF0C\u800C\u4E0D\u662F\u53EA\u590D\u8FF0\u672C\u6279\u5C0F\u603B\u7ED3\u3002";
+  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\uFF0C\u4E5F\u662F\u957F\u671F\u8109\u7EDC\u7EF4\u62A4\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u548C\u672C\u6279\u5C0F\u603B\u7ED3\u5019\u9009\uFF0C\u4E0D\u8BFB\u53D6\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+
+\u4F60\u4E0D\u81EA\u7531\u91CD\u5199\u6574\u7BC7\u5927\u603B\u7ED3\uFF0C\u800C\u662F\u8F93\u51FA\u5BF9\u957F\u671F\u8BB0\u5F55\u7684\u5BF9\u8C61\u5316\u64CD\u4F5C\u3002\u4EE3\u7801\u4F1A\u786E\u5B9A\u6027\u5E94\u7528\u64CD\u4F5C\u5E76\u751F\u6210\u6700\u7EC8\u5927\u603B\u7ED3\u3002
+
+\u53EA\u8F93\u51FA\u53EF\u88AB JSON.parse \u76F4\u63A5\u89E3\u6790\u7684\u5355\u4E2A JSON \u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001keywords\u3001operations\u3002
+operations \u652F\u6301\uFF1A
+- upsert\uFF1A\u65B0\u589E\u8BB0\u5F55\uFF0C\u6216\u7528\u540C\u4E00\u4E2A recordId \u66F4\u65B0\u65E2\u6709\u8BB0\u5F55\u3002
+- remove\uFF1A\u5220\u9664\u771F\u6B63\u5931\u53BB\u957F\u671F\u610F\u4E49\u4E14\u672A\u88AB\u65B0\u4E8B\u5B9E\u66FF\u4EE3\u7684\u8BB0\u5F55\u3002
+- merge\uFF1A\u5C06 sourceRecordIds \u5408\u5E76\u4E3A\u4E00\u4E2A recordId\u3002
+
+\u89C4\u5219\uFF1A
+- \u6CA1\u6709\u53D8\u5316\u7684\u65E7\u8BB0\u5F55\u65E0\u9700\u8F93\u51FA\u64CD\u4F5C\uFF0C\u4EE3\u7801\u4F1A\u81EA\u52A8\u4FDD\u7559\u3002
+- \u4FDD\u7559\u4ECD\u7136\u6210\u7ACB\u7684\u957F\u671F\u8EAB\u4EFD\u3001\u5173\u7CFB\u3001\u4E16\u754C\u89C4\u5219\u3001\u4E0D\u53EF\u9006\u540E\u679C\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u91CD\u8981\u5386\u53F2\u7ED3\u679C\u548C\u957F\u671F\u672A\u51B3\u4E8B\u9879\u3002
+- \u65B0\u4E8B\u5B9E\u6539\u53D8\u65E7\u4E8B\u5B9E\u65F6\uFF0C\u7528\u76F8\u540C recordId \u6267\u884C upsert\uFF0C\u4E0D\u540C\u65F6\u4FDD\u7559\u51B2\u7A81\u7248\u672C\u3002
+- \u5DF2\u88AB\u7ED3\u679C\u53D6\u4EE3\u7684\u8FC7\u7A0B\u5E94\u5408\u5E76\u6216\u5220\u9664\u3002
+- irreversible \u8BB0\u5F55\u4E0D\u5F97\u7528\u5355\u72EC remove \u5220\u9664\uFF1B\u53EA\u80FD\u7528 upsert \u4FEE\u6B63\uFF0C\u6216 merge \u8FDB\u5305\u542B\u540C\u4E00\u4E0D\u53EF\u9006\u4E8B\u5B9E\u7684\u65B0\u8BB0\u5F55\u3002
+- \u4E34\u65F6\u4F4D\u7F6E\u3001\u77ED\u671F\u4F24\u52BF\u3001\u5F53\u524D\u4E8B\u4EF6\u9636\u6BB5\u7B49\u4E0D\u8981\u8FDB\u5165\u957F\u671F\u8BB0\u5F55\uFF0C\u9664\u975E\u5F62\u6210\u957F\u671F\u5F71\u54CD\u3002
+- \u4E0D\u5F97\u56E0\u957F\u671F\u672A\u51FA\u73B0\u800C\u64C5\u81EA\u5224\u5B9A\u4EBA\u7269\u6B7B\u4EA1\u3001\u5931\u8E2A\u6216\u5173\u7CFB\u7EC8\u6B62\u3002
+
+\u6BCF\u4E2A upsert/merge \u8BB0\u5F55\u5B57\u6BB5\u53EF\u5305\u542B recordId\u3001sourceRecordIds\u3001category\u3001title\u3001content\u3001keywords\u3001permanence\u3001reason\u3002
+\u8F93\u51FA\u4E4B\u5916\u4E0D\u5F97\u5305\u542B\u89E3\u91CA\u3001Markdown \u6216\u524D\u540E\u6587\u3002`;
 }
-function largeSummaryPrompt(summaries, snapshot, previousLarge) {
-  const source = summaries.map((item2) => `\u3010${item2.title}\u3011
-${item2.summary}`).join("\n\n");
-  const previous = previousLarge ? `\u3010\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u3011
-${previousLarge.summary}
+function largeSummaryPrompt(summaries, snapshot, previousRecords, candidates) {
+  const source = summaries.map((item2) => ({
+    id: item2.id,
+    title: item2.title,
+    summary: item2.summary,
+    keywords: item2.keywords
+  }));
+  const compactPrevious = previousRecords.map((record) => ({
+    recordId: record.recordId,
+    category: record.category,
+    title: record.title,
+    content: record.content,
+    keywords: record.keywords,
+    permanence: record.permanence
+  }));
+  const compactCandidates = candidates.map((record) => ({
+    recordId: record.recordId,
+    category: record.category,
+    title: record.title,
+    content: record.content,
+    keywords: record.keywords,
+    permanence: record.permanence
+  }));
+  const currentAnchors = Object.fromEntries(Object.entries(snapshot).map(([table, rows2]) => [table, rows2.map((row) => ({
+    id: row.id,
+    title: row.title,
+    status: row.status
+  }))]));
+  return `\u6839\u636E\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u4E0E\u672C\u6279\u5C0F\u603B\u7ED3\u5019\u9009\uFF0C\u8F93\u51FA\u957F\u671F\u8BB0\u5F55\u7684\u589E\u5220\u6539\u5408\u5E76\u64CD\u4F5C\u3002
 
-` : "";
-  return `\u628A\u201C\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u201D\u548C\u672C\u6279\u5C0F\u603B\u7ED3\u5408\u5E76\u4E3A\u4E00\u4EFD\u65B0\u7684\u7D2F\u8BA1\u957F\u671F\u6C89\u964D\u3002
-\u4FDD\u7559\u957F\u671F\u4ECD\u6210\u7ACB\u7684\u4EBA\u7269\u3001\u5173\u7CFB\u3001\u533A\u57DF\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u4E8B\u4EF6\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u540E\u679C\u4E0E\u672A\u51B3\u4E8B\u9879\uFF1B\u5220\u9664\u5DF2\u7ECF\u5931\u53BB\u610F\u4E49\u7684\u9636\u6BB5\u8FC7\u7A0B\u3002
-\u4EBA\u7269\u6B7B\u4EA1\u3001\u5931\u8E2A\u3001\u88AB\u9057\u5FD8\u3001\u8EAB\u4EFD\u5B58\u7591\u7B49\u5FC5\u987B\u4FDD\u7559\u8BC1\u636E\u7B49\u7EA7\u548C\u9057\u7559\u56E0\u679C\uFF0C\u4E0D\u5F97\u7528\u957F\u671F\u672A\u51FA\u73B0\u66FF\u4EE3\u6B7B\u4EA1\u5224\u65AD\u3002
+\u3010\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u3011
+${compactPrevious.length ? JSON.stringify(compactPrevious, null, 2) : "\uFF08\u65E0\uFF09"}
 
-${previous}\u3010\u672C\u6279\u5C0F\u603B\u7ED3\u3011
-${source}
+\u3010\u672C\u6279\u5C0F\u603B\u7ED3\u3011
+${JSON.stringify(source, null, 2)}
 
-\u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
-${JSON.stringify(snapshot, null, 2)}
+\u3010\u672C\u6279\u957F\u671F\u5019\u9009\u3011
+${JSON.stringify(compactCandidates, null, 2)}
 
-\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
+\u3010\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u951A\u70B9\uFF0C\u4EC5\u7528\u4E8E\u907F\u514D\u628A\u4E34\u65F6\u72B6\u6001\u8BEF\u5199\u5165\u957F\u671F\u5C42\u3011
+${JSON.stringify(currentAnchors, null, 2)}
+
+\u53EA\u8F93\u51FA\uFF1A
+{"title":"...","keywords":["..."],"operations":[{"action":"upsert|remove|merge","recordId":"\u7A33\u5B9A\u8BB0\u5F55ID","sourceRecordIds":["merge\u65F6\u586B\u5199"],"category":"world|character|relationship|event|region|item|skill|historical|unresolved|other","title":"...","content":"...","keywords":["..."],"permanence":"stable|irreversible|long-term|unresolved","reason":"\u4FEE\u6539\u4F9D\u636E"}]}`;
 }
+
+// src/pipeline/summary.ts
+init_repository();
 
 // src/pipeline/local-commit.ts
+init_utils();
+init_chat_scope();
+init_repository();
+init_task_queue();
 function stableValue2(value) {
   if (Array.isArray(value)) return value.map(stableValue2);
   if (value && typeof value === "object") {
@@ -4973,7 +6183,14 @@ async function cancelLocalCommitConflict(id) {
 }
 
 // src/pipeline/summary-consistency.ts
+init_constants();
+init_utils();
+init_chat_scope();
+init_repository();
+init_task_queue();
 var rebuildOwnerId = makeId("history-rebuild-owner");
+var DEFAULT_REBUILD_BATCH_SIZE = 12;
+var MAX_BATCH_ATTEMPTS = 2;
 function intersects(values, keys) {
   return values.some((value) => keys.has(value));
 }
@@ -5035,12 +6252,15 @@ function affectedRevisionKeys(startIndex, state2) {
     if (attached?.messageKey) keys.add(attached.messageKey);
   }
   const live = allLiveRevisionKeys();
-  for (const key of state2.processedMessageKeys) {
-    if (!live.has(key)) keys.add(key);
-  }
+  for (const key of state2.processedMessageKeys) if (!live.has(key)) keys.add(key);
   return keys;
 }
-async function prepareHistoryRebuild(startIndex, reason, signal) {
+function chunk(values, size) {
+  const output = [];
+  for (let index = 0; index < values.length; index += size) output.push(values.slice(index, index + size));
+  return output;
+}
+async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
   const scope = chatScopeManager.current();
   const chatKey = scope.chatKey;
   assertCurrent(chatKey, signal);
@@ -5052,22 +6272,32 @@ async function prepareHistoryRebuild(startIndex, reason, signal) {
     const affectedKeys = affectedRevisionKeys(normalizedStart, state2);
     const invalidation = invalidateSummaryDependencies(state2.smallSummaries, state2.largeSummaries, affectedKeys);
     const previous = latestValidArtifactBefore(normalizedStart, chatKey);
+    const affectedIndexes = assistantIndexesFrom(normalizedStart);
     const now = nowIso();
+    const normalizedBatchSize = Math.min(20, Math.max(10, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
     const record = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: makeId("history-rebuild"),
       chatKey,
       startIndex: normalizedStart,
+      endIndex: affectedIndexes.at(-1) ?? normalizedStart,
+      nextIndex: affectedIndexes[0] ?? normalizedStart,
+      batchSize: normalizedBatchSize,
+      completedBatches: 0,
+      totalBatches: Math.ceil(affectedIndexes.length / normalizedBatchSize),
+      processedMessages: 0,
+      totalMessages: affectedIndexes.length,
       reason,
       state: "pending",
       ownerId: rebuildOwnerId,
+      pauseRequested: false,
+      cancelRequested: false,
       invalidatedMessageKeys: [...affectedKeys].slice(0, 200),
       invalidatedSmallSummaryIds: invalidation.invalidatedSmallSummaryIds.slice(0, 200),
       invalidatedLargeSummaryIds: invalidation.invalidatedLargeSummaryIds.slice(0, 200),
       createdAt: now,
       updatedAt: now
     };
-    const affectedIndexes = assistantIndexesFrom(normalizedStart);
     const artifactsToRemove = /* @__PURE__ */ new Set();
     for (const index of affectedIndexes) {
       const message = getMessage(index);
@@ -5079,8 +6309,11 @@ async function prepareHistoryRebuild(startIndex, reason, signal) {
     state2.smallSummaries = invalidation.smallSummaries;
     state2.largeSummaries = invalidation.largeSummaries;
     state2.latestSnapshotMessageKey = previous?.messageKey;
+    state2.lastFactMessageIndex = previous?.messageIndex;
+    state2.lastFactPackageId = previous?.factPackageId;
+    state2.factSchemaVersion = previous?.factPackage?.schemaVersion ?? state2.factSchemaVersion;
     state2.lastSyncStatus = "queued";
-    state2.lastSyncError = `\u5386\u53F2\u4F9D\u8D56\u5DF2\u5931\u6548\uFF0C\u7B49\u5F85\u4ECE\u7B2C ${normalizedStart + 1} \u6761\u6D88\u606F\u91CD\u5EFA`;
+    state2.lastSyncError = `\u5386\u53F2\u4F9D\u8D56\u5DF2\u5931\u6548\uFF0C\u7B49\u5F85\u4ECE\u7B2C ${normalizedStart + 1} \u6761\u6D88\u606F\u5206\u6279\u91CD\u5EFA`;
     state2.historyRevision = Math.max(0, state2.historyRevision ?? 0) + 1;
     state2.historyRebuild = record;
     await putChatState(state2);
@@ -5091,7 +6324,7 @@ async function prepareHistoryRebuild(startIndex, reason, signal) {
       action: "history-rebuild-prepared",
       resourceId: record.id,
       state: record.state,
-      detail: `${reason}; start=${normalizedStart}; messages=${affectedKeys.size}; small=${record.invalidatedSmallSummaryIds.length}; large=${record.invalidatedLargeSummaryIds.length}`
+      detail: `${reason}; start=${normalizedStart}; messages=${affectedIndexes.length}; batch=${normalizedBatchSize}`
     });
     return record;
   }), signal);
@@ -5099,9 +6332,12 @@ async function prepareHistoryRebuild(startIndex, reason, signal) {
 async function updateHistoryRebuild(record, patch) {
   const state2 = await getChatState(record.chatKey);
   const current = state2.historyRebuild;
-  if (!current || current.id !== record.id) return;
-  state2.historyRebuild = { ...current, ...patch, updatedAt: nowIso() };
+  if (!current || current.id !== record.id) return record;
+  const updated = { ...current, ...patch, updatedAt: nowIso() };
+  state2.historyRebuild = updated;
   await putChatState(state2);
+  Object.assign(record, updated);
+  return record;
 }
 async function completeHistoryRebuild(record) {
   const state2 = await getChatState(record.chatKey);
@@ -5112,8 +6348,30 @@ async function completeHistoryRebuild(record) {
     category: "recovery",
     action: "history-rebuild-completed",
     resourceId: record.id,
-    state: "committed"
+    state: "committed",
+    detail: `messages=${record.processedMessages ?? 0}; batches=${record.completedBatches ?? 0}`
   });
+}
+async function currentRecord(record) {
+  const state2 = await getChatState(record.chatKey);
+  return state2.historyRebuild?.id === record.id ? state2.historyRebuild : record;
+}
+function retryableBatchError(error) {
+  return /504|timeout|timed out|network|fetch|socket|429|rate.?limit|上游|超时|网络|限流/i.test(toErrorMessage(error));
+}
+async function runBatchWithRetry(work, onRetry) {
+  let lastError2;
+  for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      lastError2 = error;
+      if (attempt >= MAX_BATCH_ATTEMPTS || !retryableBatchError(error)) throw error;
+      await onRetry(attempt, error);
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
+  throw lastError2;
 }
 function assertHistoryRebuildAccess(state2) {
   const rebuild = state2.historyRebuild;
@@ -5121,37 +6379,117 @@ function assertHistoryRebuildAccess(state2) {
   if (rebuild.state === "failed") {
     throw new TaskCancelledError("\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5931\u8D25\uFF0C\u5FC5\u987B\u5148\u6062\u590D\u540E\u624D\u80FD\u7EE7\u7EED\u603B\u7ED3\u6216\u540C\u6B65");
   }
+  if (rebuild.state === "paused") {
+    throw new TaskCancelledError("\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5DF2\u6682\u505C\uFF0C\u6062\u590D\u540E\u624D\u80FD\u7EE7\u7EED\u603B\u7ED3\u6216\u540C\u6B65");
+  }
   if (rebuild.ownerId && rebuild.ownerId !== rebuildOwnerId) {
     throw new TaskCancelledError("\u53E6\u4E00\u4E2A\u6807\u7B7E\u9875\u6B63\u5728\u91CD\u5EFA\u8BE5\u804A\u5929\u7684\u603B\u7ED3\u4E0E\u72B6\u6001\u4F9D\u8D56");
   }
+}
+async function requestHistoryRebuildPause() {
+  const state2 = await getChatState(currentChatKey());
+  if (!state2.historyRebuild) return false;
+  state2.historyRebuild.pauseRequested = true;
+  state2.historyRebuild.updatedAt = nowIso();
+  await putChatState(state2);
+  return true;
+}
+async function requestHistoryRebuildCancel() {
+  const state2 = await getChatState(currentChatKey());
+  if (!state2.historyRebuild) return false;
+  state2.historyRebuild.cancelRequested = true;
+  state2.historyRebuild.pauseRequested = true;
+  state2.historyRebuild.updatedAt = nowIso();
+  await putChatState(state2);
+  return true;
 }
 async function rebuildHistoryFrom(input) {
   const chatKey = currentChatKey();
   return coordinator2().withLease(`history-rebuild:${chatKey}`, async (lease) => {
     assertCurrent(chatKey, input.signal);
     lease.assertOwner();
-    const record = await prepareHistoryRebuild(input.startIndex, input.reason, input.signal);
+    const existingState = await getChatState(chatKey);
+    const resumable = input.reason === "recovery" ? existingState.historyRebuild : void 0;
+    const record = resumable ?? await prepareHistoryRebuild(
+      input.startIndex,
+      input.reason,
+      input.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE,
+      input.signal
+    );
+    record.schemaVersion = 2;
+    record.batchSize = Math.min(20, Math.max(10, record.batchSize ?? input.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE));
     record.state = "rebuilding";
     record.ownerId = rebuildOwnerId;
-    await updateHistoryRebuild(record, { state: "rebuilding", ownerId: rebuildOwnerId, error: void 0 });
-    let rebuilt = 0;
-    let latest = latestValidArtifactBefore(record.startIndex, chatKey);
+    record.pauseRequested = false;
+    record.cancelRequested = false;
+    record.error = void 0;
+    await updateHistoryRebuild(record, record);
+    const allIndexes = assistantIndexesFrom(record.startIndex);
+    const nextIndex = record.nextIndex ?? record.startIndex;
+    const remaining = allIndexes.filter((index) => index >= nextIndex);
+    record.totalMessages = allIndexes.length;
+    record.totalBatches = Math.ceil(allIndexes.length / record.batchSize);
+    await updateHistoryRebuild(record, {
+      totalMessages: record.totalMessages,
+      totalBatches: record.totalBatches
+    });
+    let rebuilt = record.processedMessages ?? 0;
+    let latest = latestValidArtifactBefore(nextIndex, chatKey);
     try {
-      for (const index of assistantIndexesFrom(record.startIndex)) {
+      const batches = chunk(remaining, record.batchSize);
+      for (const indexes of batches) {
         assertCurrent(chatKey, input.signal);
         lease.assertOwner();
-        const artifact = await input.processMessage(index, true, { deferLorebookSync: true });
-        if (artifact) {
-          latest = deepClone(artifact);
-          rebuilt += 1;
+        const live = await currentRecord(record);
+        if (live.pauseRequested || live.cancelRequested) {
+          await updateHistoryRebuild(record, {
+            state: "paused",
+            pauseRequested: false,
+            cancelRequested: false,
+            error: live.cancelRequested ? "\u5386\u53F2\u91CD\u5EFA\u5DF2\u53D6\u6D88\uFF1B\u53EF\u4ECE\u68C0\u67E5\u70B9\u91CD\u65B0\u5F00\u59CB" : void 0
+          });
+          return { record, rebuilt, latestArtifact: latest, paused: true };
         }
+        record.failedBatchStart = indexes[0];
+        await updateHistoryRebuild(record, { failedBatchStart: indexes[0], error: void 0 });
+        let batchArtifact = null;
+        await runBatchWithRetry(async () => {
+          if (input.processBatch) {
+            batchArtifact = await input.processBatch(indexes, { deferLorebookSync: true, holdDerived: true });
+          } else if (input.processMessage) {
+            for (const index of indexes) {
+              const artifact = await input.processMessage(index, true, { deferLorebookSync: true });
+              if (artifact) batchArtifact = artifact;
+            }
+          } else {
+            throw new Error("\u5386\u53F2\u91CD\u5EFA\u6CA1\u6709\u53EF\u7528\u7684\u6279\u5904\u7406\u5668");
+          }
+        }, async (attempt, error) => {
+          await updateHistoryRebuild(record, {
+            error: `\u6279\u6B21 ${indexes[0] + 1}\u2013${indexes.at(-1) + 1} \u7B2C ${attempt} \u6B21\u5931\u8D25\uFF0C\u6B63\u5728\u91CD\u8BD5\uFF1A${toErrorMessage(error)}`
+          });
+        });
+        if (batchArtifact) latest = deepClone(batchArtifact);
+        rebuilt += indexes.length;
+        const completedBatches = (record.completedBatches ?? 0) + 1;
+        await updateHistoryRebuild(record, {
+          nextIndex: indexes.at(-1) + 1,
+          processedMessages: rebuilt,
+          completedBatches,
+          failedBatchStart: void 0,
+          error: void 0
+        });
       }
       assertCurrent(chatKey, input.signal);
       lease.assertOwner();
-      if (latest?.snapshot) await input.syncLatest(latest);
+      if (latest?.snapshot) {
+        await input.finalizeDerived?.(latest);
+        await input.syncLatest(latest);
+      }
       await completeHistoryRebuild(record);
       return { record, rebuilt, latestArtifact: latest };
     } catch (error) {
+      if (error instanceof TaskCancelledError || error instanceof StaleTaskError) throw error;
       record.state = "failed";
       record.error = toErrorMessage(error);
       await updateHistoryRebuild(record, { state: "failed", error: record.error });
@@ -5177,8 +6515,15 @@ async function detectHistoryConsistencyStart() {
     const attached = getAttachedArtifact(getMessage(index));
     if (attached?.messageKey && attached.messageKey !== liveKey && trackedKeys.has(attached.messageKey)) return index;
   }
-  for (const key of trackedKeys) {
-    if (!liveKeys.has(key)) return 0;
+  for (const key of trackedKeys) if (!liveKeys.has(key)) return 0;
+  const hasExistingMemory = Boolean(
+    state2.latestSnapshotMessageKey || state2.processedMessageKeys.length || state2.lastFactMessageIndex !== void 0
+  );
+  if (hasExistingMemory) {
+    const tailStart = Math.max(0, (state2.lastFactMessageIndex ?? -1) + 1);
+    for (const index of assistantIndexesFrom(tailStart)) {
+      if (!state2.processedMessageKeys.includes(messageIdentity(index))) return index;
+    }
   }
   return null;
 }
@@ -5191,7 +6536,9 @@ async function recoverPendingHistoryRebuild(input) {
   await rebuildHistoryFrom({
     startIndex: detectedStart,
     reason: record ? "recovery" : "branch",
+    processBatch: input.processBatch,
     processMessage: input.processMessage,
+    finalizeDerived: input.finalizeDerived,
     syncLatest: input.syncLatest,
     signal: input.signal
   });
@@ -5199,16 +6546,24 @@ async function recoverPendingHistoryRebuild(input) {
 }
 
 // src/pipeline/summary.ts
-function successfulArtifacts() {
+init_task_queue();
+function successfulFactPackageIndex() {
   const chatKey = currentChatKey();
-  return getChat().filter((message) => !message?.is_user).map((message) => message?.extra?.mirrorAbyssV11).filter((artifact) => Boolean(
-    artifact?.chatKey === chatKey && artifact?.snapshot && artifact.stages.state.status === "success"
-  ));
-}
-function transcriptFor(artifacts) {
-  return artifacts.map((artifact) => `\u3010\u56DE\u5408 ${artifact.messageIndex + 1}\u3011
-\u73A9\u5BB6\uFF1A${artifact.playerText || "\uFF08\u7A7A\uFF09"}
-\u6B63\u6587\uFF1A${artifact.assistantText}`).join("\n\n");
+  const byId = /* @__PURE__ */ new Map();
+  const byMessageKey = /* @__PURE__ */ new Map();
+  for (const message of getChat()) {
+    if (message?.is_user) continue;
+    const artifact = message?.extra?.mirrorAbyssV11;
+    const pack = artifact?.factPackage;
+    if (artifact?.chatKey === chatKey && pack?.chatKey === chatKey && artifact.stages.state.status === "success") {
+      byId.set(pack.packageId, pack);
+    }
+  }
+  const packages = [...byId.values()].sort((a, b) => a.sourceRange.startIndex - b.sourceRange.startIndex);
+  for (const pack of packages) {
+    for (const messageKey of pack.sourceRange.messageKeys) byMessageKey.set(messageKey, pack);
+  }
+  return { packages, byMessageKey };
 }
 function allConsumedKeys(summaries) {
   return new Set(summaries.flatMap((item2) => item2.sourceKeys));
@@ -5220,11 +6575,39 @@ function assertSummaryScope(artifact, signal) {
 function summaryCoordinator() {
   return foundationKernel.services.get(CROSS_TAB_COORDINATOR);
 }
+function fallbackLongTermCandidates(summaries) {
+  const candidates = [];
+  for (const item2 of summaries) {
+    if (item2.longTermCandidates?.length) {
+      candidates.push(...item2.longTermCandidates.map((record) => ({
+        ...record,
+        sourceSummaryIds: [.../* @__PURE__ */ new Set([...record.sourceSummaryIds, item2.id])]
+      })));
+      continue;
+    }
+    if (!item2.summary.trim()) continue;
+    candidates.push({
+      recordId: `stage:${item2.id}`,
+      category: "historical",
+      title: item2.title,
+      content: item2.summary,
+      keywords: [...item2.keywords],
+      permanence: "long-term",
+      sourceRowIds: [],
+      sourceFactIds: [],
+      sourceSummaryIds: [item2.id],
+      updatedAt: item2.createdAt
+    });
+  }
+  const byId = /* @__PURE__ */ new Map();
+  for (const candidate of candidates) byId.set(candidate.recordId, candidate);
+  return [...byId.values()].slice(0, 160);
+}
 function pendingSmallSummaries(small, large) {
   const consumed = new Set(large.flatMap((item2) => item2.sourceKeys));
   return small.filter((item2) => !consumed.has(item2.id));
 }
-async function generateSmallSummary(artifact, force = false, signal) {
+async function generateSmallSummary(artifact, force = false, signal, factIndex = successfulFactPackageIndex()) {
   assertSummaryScope(artifact, signal);
   return summaryCoordinator().withLease(`summary:${artifact.chatKey}`, async (lease) => {
     assertSummaryScope(artifact, signal);
@@ -5233,29 +6616,51 @@ async function generateSmallSummary(artifact, force = false, signal) {
     const chatState = await getChatState(artifact.chatKey);
     assertHistoryRebuildAccess(chatState);
     const consumed = allConsumedKeys(chatState.smallSummaries);
-    const pending = successfulArtifacts().filter((item2) => !consumed.has(item2.messageKey));
+    const pending = factIndex.packages.filter((pack) => pack.sourceRange.messageKeys.some((key) => !consumed.has(key)));
     const threshold = Math.max(1, Number(settings.smallSummaryTurns) || 15);
-    if (!force && pending.length < threshold) return null;
-    if (!pending.length) return null;
-    const selected = force ? pending : pending.slice(0, threshold);
-    const latestSnapshot = selected.at(-1)?.snapshot;
-    const intentKey = `small:${artifact.chatKey}:${hashText(JSON.stringify(selected.map((item2) => item2.messageKey)))}`;
+    const selected = [];
+    let count = 0;
+    for (const pack of pending) {
+      selected.push(pack);
+      count += pack.turnMaterials.length;
+      if (!force && count >= threshold) break;
+    }
+    if (!selected.length || !force && count < threshold) return null;
+    if (!artifact.snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5C0F\u603B\u7ED3\u6C89\u964D\u7684\u5F53\u524D\u6D3B\u8DC3\u8868\u683C");
+    const sourceKeys = selected.flatMap((pack) => pack.turnMaterials.map((item2) => item2.sourceMessageKey));
+    const sourceRange = {
+      startIndex: selected[0].sourceRange.startIndex,
+      endIndex: selected.at(-1).sourceRange.endIndex,
+      messageKeys: sourceKeys
+    };
     const parsed = await generateStructuredTask({
       task: "smallSummary",
       systemPrompt: smallSummarySystemPrompt(),
-      prompt: smallSummaryPrompt(transcriptFor(selected), latestSnapshot),
-      structureDescription: '{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["..."],"characterActivityUpdates":[{"rowId":"...","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"..."}],"notes":["..."]}}',
-      signal
+      prompt: smallSummaryPrompt(selected, artifact.snapshot),
+      structureDescription: '{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":["..."],"keepActiveRowIds":["..."],"removeRowIds":["..."],"characterActivityUpdates":[{"rowId":"...","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"..."}],"notes":["..."]},"longTermCandidates":[{"recordId":"...","category":"historical","title":"...","content":"...","keywords":["..."],"permanence":"irreversible","sourceRowIds":["..."],"sourceFactIds":["..."]}]}',
+      allowRepair: settings.repairInvalidJsonOnce,
+      signal,
+      invocation: {
+        sourceRange,
+        priority: "background-derived",
+        blocking: false,
+        coalesceKey: `small-summary:${artifact.chatKey}`,
+        outputSchema: "SummaryArtifact.small.v2"
+      }
     });
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
-    const summary = normalizeSummary(parsed, "small", selected.map((item2) => item2.messageKey));
+    const summary = normalizeSummary(parsed, "small", sourceKeys);
+    if (!summary.summary) throw new Error("\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u4E86\u7A7A\u603B\u7ED3");
+    const intentKey = `small-model:${artifact.chatKey}:${hashText(sourceKeys.join("|"))}`;
     const beforeArtifact = deepClone(artifact);
     const beforeChatState = deepClone(chatState);
     const afterArtifact = deepClone(artifact);
     const afterChatState = deepClone(chatState);
-    afterChatState.smallSummaries.push(summary);
-    if (afterArtifact.snapshot) afterArtifact.snapshot = applySedimentation(afterArtifact.snapshot, summary);
+    afterArtifact.snapshot = applySedimentation(afterArtifact.snapshot, summary);
+    if (!afterChatState.smallSummaries.some((item2) => item2.sourceKeys.join("|") === summary.sourceKeys.join("|"))) {
+      afterChatState.smallSummaries.push(deepClone(summary));
+    }
     await commitSummaryMutation({
       operation: "small_summary",
       intentKey,
@@ -5269,7 +6674,7 @@ async function generateSmallSummary(artifact, force = false, signal) {
     return summary;
   }, signal);
 }
-async function generateLargeSummary(artifact, force = false, signal) {
+async function generateLargeSummary(artifact, force = false, signal, factIndex = successfulFactPackageIndex()) {
   assertSummaryScope(artifact, signal);
   return summaryCoordinator().withLease(`summary:${artifact.chatKey}`, async (lease) => {
     assertSummaryScope(artifact, signal);
@@ -5279,33 +6684,54 @@ async function generateLargeSummary(artifact, force = false, signal) {
     assertHistoryRebuildAccess(chatState);
     const pending = pendingSmallSummaries(chatState.smallSummaries, chatState.largeSummaries);
     const threshold = Math.max(1, Number(settings.largeSummaryCount) || 6);
-    if (!force && pending.length < threshold) return null;
-    if (!pending.length) return null;
+    if (!pending.length || !force && pending.length < threshold) return null;
+    if (!artifact.snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u6821\u51C6\u7684\u5F53\u524D\u6D3B\u8DC3\u8868\u683C");
     const selected = force ? pending : pending.slice(0, threshold);
-    const snapshot = artifact.snapshot;
-    if (!snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u7684\u72B6\u6001\u8868");
     const previousLarge = chatState.largeSummaries.at(-1);
-    const intentKey = `large:${artifact.chatKey}:${hashText(JSON.stringify(selected.map((item2) => item2.id)))}`;
+    const sourceKeys = selected.map((item2) => item2.id);
     const parsed = await generateStructuredTask({
       task: "largeSummary",
       systemPrompt: largeSummarySystemPrompt(),
-      prompt: largeSummaryPrompt(selected, snapshot, previousLarge),
-      structureDescription: '{"title":"...","summary":"...","keywords":["..."]}',
-      signal
+      prompt: largeSummaryPrompt(
+        selected,
+        artifact.snapshot,
+        longTermRecordsFromPrevious(previousLarge),
+        fallbackLongTermCandidates(selected)
+      ),
+      structureDescription: '{"title":"...","keywords":["..."],"operations":[{"action":"upsert|remove|merge","recordId":"...","sourceRecordIds":["..."],"category":"historical","title":"...","content":"...","keywords":["..."],"permanence":"long-term","reason":"..."}]}',
+      allowRepair: settings.repairInvalidJsonOnce,
+      signal,
+      invocation: {
+        sourceRange: {
+          startIndex: Math.min(...selected.flatMap((item2) => item2.sourceKeys.map((key) => {
+            return factIndex.byMessageKey.get(key)?.sourceRange.startIndex ?? artifact.messageIndex;
+          }))),
+          endIndex: artifact.messageIndex,
+          messageKeys: selected.flatMap((item2) => item2.sourceKeys)
+        },
+        priority: "background-derived",
+        blocking: false,
+        coalesceKey: `large-summary:${artifact.chatKey}`,
+        outputSchema: "SummaryArtifact.large.v2"
+      }
     });
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
-    const summary = normalizeSummary(
-      parsed,
-      "large",
-      selected.map((item2) => item2.id),
-      previousLarge?.id
-    );
+    const summary = normalizeLargeSummaryUpdate({
+      value: parsed,
+      sourceKeys,
+      previous: previousLarge,
+      candidates: fallbackLongTermCandidates(selected)
+    });
+    if (!summary.summary) throw new Error("\u5927\u603B\u7ED3\u6CA1\u6709\u5F62\u6210\u53EF\u7528\u7684\u957F\u671F\u8BB0\u5F55");
+    const intentKey = `large-model:${artifact.chatKey}:${hashText(sourceKeys.join("|"))}`;
     const beforeArtifact = deepClone(artifact);
     const beforeChatState = deepClone(chatState);
     const afterArtifact = deepClone(artifact);
     const afterChatState = deepClone(chatState);
-    afterChatState.largeSummaries.push(summary);
+    if (!afterChatState.largeSummaries.some((item2) => item2.sourceKeys.join("|") === summary.sourceKeys.join("|"))) {
+      afterChatState.largeSummaries.push(deepClone(summary));
+    }
     await commitSummaryMutation({
       operation: "large_summary",
       intentKey,
@@ -5319,13 +6745,42 @@ async function generateLargeSummary(artifact, force = false, signal) {
     return summary;
   }, signal);
 }
-async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = false, signal) {
+async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = false, signal, deferArtifactPersist = false) {
   const settings = getSettings();
   markStage(artifact, "summary", "running");
   await putArtifact(artifact);
+  const factIndex = successfulFactPackageIndex();
   try {
-    if (settings.autoSmallSummary || forceSmall) await generateSmallSummary(artifact, forceSmall, signal);
-    if (settings.autoLargeSummary || forceLarge) await generateLargeSummary(artifact, forceLarge, signal);
+    if (settings.autoSmallSummary || forceSmall) await generateSmallSummary(artifact, forceSmall, signal, factIndex);
+    if (settings.autoLargeSummary || forceLarge) await generateLargeSummary(artifact, forceLarge, signal, factIndex);
+    markStage(artifact, "summary", "success");
+    if (!deferArtifactPersist) await putArtifact(artifact);
+  } catch (error) {
+    markStage(artifact, "summary", "failed", toErrorMessage(error));
+    if (!deferArtifactPersist) await putArtifact(artifact);
+    throw error;
+  }
+}
+async function rebuildAllSummaries(artifact, signal) {
+  const settings = getSettings();
+  markStage(artifact, "summary", "running");
+  await putArtifact(artifact);
+  const factIndex = successfulFactPackageIndex();
+  try {
+    if (settings.autoSmallSummary) {
+      for (let guard = 0; guard < 200; guard += 1) {
+        const created = await generateSmallSummary(artifact, false, signal, factIndex);
+        if (!created) break;
+      }
+      await generateSmallSummary(artifact, true, signal, factIndex);
+    }
+    if (settings.autoLargeSummary) {
+      for (let guard = 0; guard < 100; guard += 1) {
+        const created = await generateLargeSummary(artifact, false, signal, factIndex);
+        if (!created) break;
+      }
+      await generateLargeSummary(artifact, true, signal, factIndex);
+    }
     markStage(artifact, "summary", "success");
     await putArtifact(artifact);
   } catch (error) {
@@ -5335,54 +6790,353 @@ async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = fals
   }
 }
 
-// src/prompts/state.ts
-function stateSystemPrompt() {
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u72B6\u6001\u7EF4\u62A4\u5668\u3002\u4F60\u53EA\u7EF4\u62A4\u5F53\u524D\u4E16\u754C\u72B6\u6001\u5FEB\u7167\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+// src/pipeline/facts.ts
+init_utils();
 
-\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u88AB JSON.parse \u89E3\u6790\u7684\u5B8C\u6574JSON\u5BF9\u8C61\uFF0C\u4E0D\u8981\u8F93\u51FAMarkdown\u3001\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\u3002
-\u5FC5\u987B\u5305\u542B\u4E5D\u4E2A\u6570\u7EC4\uFF1Afocus\u3001spacetime\u3001characters\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\u3001foundations\u3002
-\u6BCF\u884C\u5141\u8BB8\u5B57\u6BB5\uFF1Aid\u3001title\u3001content\u3001keywords\u3001status\uFF1Bfocus\u4E0Echaracters\u8FD8\u5141\u8BB8 lifecycle\u3002
-
-\u7EF4\u62A4\u89C4\u5219\uFF1A
-1. \u4FDD\u7559\u672A\u53D7\u672C\u8F6E\u5F71\u54CD\u3001\u4ECD\u6210\u7ACB\u7684\u72B6\u6001\u3002\u53EA\u6709\u672C\u8F6E\u660E\u786E\u6539\u53D8\u7684\u72B6\u6001\u624D\u66F4\u65B0\u3002
-2. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u6D41\u6C34\u8D26\u3002\u672A\u786E\u8BA4\u3001\u51B2\u7A81\u548C\u8FDB\u884C\u4E2D\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
-3. \u5C3D\u91CF\u4FDD\u7559\u4E0A\u4E00\u4EFD\u5FEB\u7167\u7684\u7A33\u5B9Aid\uFF1B\u65B0\u589E\u5BF9\u8C61\u624D\u521B\u5EFA\u65B0id\u3002
-4. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u548C\u5BF9\u767D\u53EF\u4F5C\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF0C\u4F46\u73A9\u5BB6\u9884\u8BBE\u7684\u5916\u90E8\u7ED3\u679C\u4E0D\u80FD\u5355\u72EC\u5F53\u6210\u5DF2\u786E\u8BA4\u7ED3\u679C\uFF1B\u5916\u90E8\u7ED3\u679C\u4EE5AI\u6B63\u6587\u4E0E\u5DF2\u6709\u72B6\u6001\u4E2D\u7684\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u4E3A\u51C6\u3002
-5. source=manual\u6216locked=true\u7684\u73A9\u5BB6\u8BB0\u5F55\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u6539\u5199\u3002
-6. relationships \u4E2D\u6BCF\u884C title \u5FC5\u987B\u660E\u786E\u5199\u51FA\u5173\u7CFB\u4E24\u7AEF\uFF0C\u4F18\u5148\u4F7F\u7528\u201C\u5BF9\u8C61A \u2194 \u5BF9\u8C61B\u201D\u683C\u5F0F\uFF1Bcontent\u53EA\u5199\u5DF2\u663E\u5F71\u7684\u5173\u7CFB\u4E8B\u5B9E\uFF0Cstatus\u5199\u5173\u7CFB\u5F53\u524D\u72B6\u6001\u3002
-7. characters \u53EA\u4E3A\u6B63\u5F0F\u663E\u5F71\u7684\u4EBA\u7269\u5EFA\u7ACB\u72EC\u7ACB\u884C\u3002\u4EC5\u88AB\u63D0\u53CA\u3001\u6CA1\u6709\u8FDB\u5165\u53EF\u89C2\u5BDF\u63A5\u89E6\u9762\u7684\u4EBA\u7269\uFF0C\u5148\u5199\u5728\u76F8\u5173\u4E8B\u4EF6\u6216\u4EBA\u7269\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5355\u72EC\u5EFA\u884C\u3002
-8. \u5DF2\u5EFA\u7ACB\u7684\u6B63\u5F0F\u4EBA\u7269\u4E0D\u5F97\u4EC5\u56E0\u79BB\u573A\u3001\u957F\u671F\u672A\u51FA\u73B0\u3001\u88AB\u9057\u5FD8\u6216\u6B7B\u4EA1\u800C\u5220\u9664\u3002\u4EBA\u7269\u79BB\u5F00\u63A5\u89E6\u9762\u53EA\u6539\u53D8activity\uFF1B\u6B7B\u4EA1\u53EA\u6539\u53D8existence\uFF1B\u88AB\u9057\u5FD8\u53EA\u6539\u53D8memory\u3002
-9. lifecycle\u5B57\u6BB5\u56FA\u5B9A\u4E3A\uFF1A
-   - existence\uFF1A\u5B58\u6D3B\u3001\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u672A\u77E5\u3001\u5931\u8E2A\u3001\u8EAB\u4EFD\u5B58\u7591\u3001\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
-   - activity\uFF1A\u5F53\u524D\u5728\u573A\u3001\u5F53\u524D\u76F8\u5173\u3001\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u3001\u4F11\u7720\u3001\u957F\u671F\u4F11\u7720\u3001\u5DF2\u5F52\u6863\u3001\u672A\u6807\u6CE8\u3002
-   - memory\uFF1A\u5E7F\u6CDB\u8BB0\u5F97\u3001\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97\u3001\u4EC5\u8BB0\u5F55\u7559\u5B58\u3001\u4EC5\u75D5\u8FF9\u7559\u5B58\u3001\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97\u3001\u8BB0\u5FC6\u88AB\u7BE1\u6539\u3001\u8BB0\u5FC6\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
-   - evidenceLevel\uFF1A\u5DF2\u786E\u8BA4\u3001\u53EF\u9760\u8BB0\u5F55\u3001\u591A\u65B9\u9648\u8FF0\u3001\u5355\u65B9\u9648\u8FF0\u3001\u63A8\u6D4B\u3001\u672A\u77E5\u3002
-   - evidence\uFF1A\u652F\u6301\u4E0A\u8FF0\u5224\u65AD\u7684\u53EF\u9A8C\u8BC1\u4F9D\u636E\u3002
-   - returnConditions\uFF1A\u4EBA\u7269\u53EF\u80FD\u91CD\u65B0\u8FDB\u5165\u63A5\u89E6\u9762\u7684\u73B0\u5B9E\u6761\u4EF6\uFF0C\u4E0D\u4EE3\u8868\u4E00\u5B9A\u56DE\u6765\u3002
-   - returnBlockers\uFF1A\u963B\u6B62\u56DE\u6D41\u7684\u5DF2\u786E\u8BA4\u6761\u4EF6\uFF1B\u6CA1\u6709\u53EF\u9760\u8BC1\u636E\u65F6\u7559\u7A7A\u3002
-10. \u4E0D\u5F97\u56E0\u201C\u5F88\u4E45\u6CA1\u51FA\u73B0\u201D\u63A8\u5B9A\u6B7B\u4EA1\uFF1B\u4ED6\u4EBA\u9648\u8FF0\u6B7B\u4EA1\u53EA\u80FD\u6309\u8BC1\u636E\u7B49\u7EA7\u8BB0\u5F55\u3002\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u7684\u4EBA\u7269\u4ECD\u4FDD\u7559\u9057\u7559\u5173\u7CFB\u3001\u7269\u54C1\u3001\u6D41\u7A0B\u548C\u540E\u679C\u3002
-11. items\uFF1A\u666E\u901A\u7269\u54C1\u6309\u6240\u6709\u8005\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u7269\u54C1\u4E0E\u8D44\u6E90\u201D\uFF1B\u62E5\u6709\u72EC\u7ACB\u8EAB\u4EFD\u3001\u72B6\u6001\u3001\u56E0\u679C\u6216\u8FFD\u8E2A\u4EF7\u503C\u7684\u91CD\u8981\u7269\u54C1\u624D\u5355\u72EC\u4E00\u884C\u3002
-12. skills\uFF1A\u6309\u4EBA\u7269\u6216\u4E3B\u4F53\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\u201D\uFF0C\u53EA\u8BB0\u5F55\u5DF2\u663E\u5F71\u80FD\u529B\u3001\u6761\u4EF6\u3001\u6D88\u8017\u548C\u8FB9\u754C\uFF0C\u4E0D\u751F\u6210\u9690\u85CF\u80FD\u529B\u3002
-13. events\u4E2D\u72EC\u7ACB\u4E8B\u4EF6\u4F7F\u7528\u201C\u4E8B\u4EF6\uFF5C\u540D\u79F0\u201D\uFF0C\u5236\u5EA6\u6216\u624B\u7EED\u4F7F\u7528\u201C\u6D41\u7A0B\uFF5C\u540D\u79F0\u201D\u3002\u5C0F\u4E8B\u4EF6\u53EF\u7559\u5728\u4EBA\u7269\u6216\u533A\u57DF\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5FC5\u62C6\u884C\u3002
-14. foundations\u53EA\u4FDD\u7559\u957F\u671F\u627F\u91CD\u8BBE\u5B9A\uFF1B\u5F53\u524D\u5C40\u52BF\u3001\u4EBA\u7269\u53D8\u5316\u548C\u4E8B\u4EF6\u8FDB\u5C55\u4E0D\u5F97\u5199\u5165\u57FA\u7840\u8BBE\u5B9A\u3002
-
-\u7ED3\u6784\u793A\u4F8B\uFF1A
-${stateSchemaDescription()}`;
+// src/domain/facts.ts
+init_constants();
+init_utils();
+var ENTITY_TYPES = /* @__PURE__ */ new Set([
+  "world_rule",
+  "focus",
+  "character",
+  "relationship",
+  "event",
+  "region",
+  "item",
+  "skill",
+  "process",
+  "historical_result",
+  "trace",
+  "spacetime"
+]);
+var OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "remove", "close", "supersede", "merge"]);
+var LIFECYCLES = /* @__PURE__ */ new Set(["stable", "active", "temporary", "historical", "trace"]);
+var RESIDENCIES = /* @__PURE__ */ new Set(["global", "keyword", "contextual", "regional", "process", "historical", "trace", "never"]);
+var CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
+function enumValue2(value, allowed, fallback) {
+  const text = safeText(value, 80).trim();
+  return allowed.has(text) ? text : fallback;
 }
-function stateUserPrompt(previous, playerText, assistantText, repair = false) {
-  return `\u3010\u4E0A\u4E00\u4EFD\u72B6\u6001\u8868\u3011
-${JSON.stringify(previous, null, 2)}
-
-\u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
-${playerText || "\uFF08\u7A7A\uFF09"}
-
-\u3010AI\u672C\u8F6E\u6B63\u6587\u3011
-${assistantText}
-
-\u8F93\u51FA\u66F4\u65B0\u540E\u7684\u5B8C\u6574\u72B6\u6001\u5FEB\u7167\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
+function ordinals(value, max) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(Number).filter((item2) => Number.isInteger(item2) && item2 >= 0 && item2 < max))];
 }
+var TABLE_SET = new Set(TABLE_KEYS);
+function normalizeTableOperations(raw, artifacts) {
+  if (!Array.isArray(raw)) return [];
+  const output = [];
+  for (const value of raw.slice(0, 240)) {
+    if (!value || typeof value !== "object") continue;
+    const source = value;
+    const table = safeText(source.table, 80).trim();
+    if (!TABLE_SET.has(table)) continue;
+    const sourceOrdinals = ordinals(source.sourceOrdinals, artifacts.length);
+    const selected = sourceOrdinals.length ? sourceOrdinals.map((index) => artifacts[index]) : [artifacts.at(-1)];
+    const rowId = safeText(source.rowId || source.entityId, 160).trim();
+    const title = safeText(source.title || source.name, 240).trim();
+    if (!rowId && !title) continue;
+    const operation = safeText(source.operation, 40).trim() === "retire" ? "retire" : "upsert";
+    const sourceMessageKeys = selected.map((artifact) => artifact.messageKey);
+    const sourceMessageIndexes = selected.map((artifact) => artifact.messageIndex);
+    output.push({
+      operationId: `table-op:${hashText(`${table}|${rowId}|${title}|${operation}|${sourceMessageKeys.join(",")}`)}`,
+      table,
+      operation,
+      rowId: rowId || `${table}:${hashText(title).slice(0, 12)}`,
+      title: title || rowId,
+      content: safeText(source.content, 12e3).trim(),
+      keywords: normalizeKeywords(source.keywords),
+      status: safeText(source.status, 120).trim() || (operation === "retire" ? "\u5F85\u9636\u6BB5\u6C89\u964D" : "active"),
+      lifecycle: (table === "characters" || table === "focus") && source.lifecycle ? normalizeLifecycle(source.lifecycle) : void 0,
+      sourceEntityId: table === "relationships" ? safeText(source.sourceEntityId, 180).trim() || void 0 : void 0,
+      targetEntityId: table === "relationships" ? safeText(source.targetEntityId, 180).trim() || void 0 : void 0,
+      sourceMessageKeys,
+      sourceMessageIndexes
+    });
+  }
+  return output;
+}
+function normalizeFocusIdentity2(raw) {
+  if (!raw || typeof raw !== "object") return void 0;
+  const source = raw;
+  const canonicalName = safeText(source.canonicalName || source.name, 240).trim();
+  if (!canonicalName) return void 0;
+  const aliases = Array.isArray(source.aliases) ? [...new Set(source.aliases.map((item2) => safeText(item2, 160).trim()).filter(Boolean))].slice(0, 24) : [];
+  if (!aliases.includes(canonicalName)) aliases.unshift(canonicalName);
+  return {
+    focusId: safeText(source.focusId, 160).trim() || void 0,
+    canonicalName,
+    aliases
+  };
+}
+function normalizeTurnMaterials(raw, artifacts) {
+  const rows2 = Array.isArray(raw) ? raw : [];
+  const byOrdinal = /* @__PURE__ */ new Map();
+  for (const row of rows2) {
+    if (!row || typeof row !== "object") continue;
+    const ordinal = Number(row.sourceOrdinal);
+    if (Number.isInteger(ordinal) && ordinal >= 0 && ordinal < artifacts.length) byOrdinal.set(ordinal, row);
+  }
+  return artifacts.map((artifact, ordinal) => {
+    const row = byOrdinal.get(ordinal) ?? {};
+    return {
+      sourceMessageKey: artifact.messageKey,
+      sourceMessageIndex: artifact.messageIndex,
+      summary: safeText(row.summary, 4e3).trim() || `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587\u5DF2\u5B8C\u6210\u4E8B\u5B9E\u63D0\u53D6\u3002`,
+      keywords: normalizeKeywords(row.keywords),
+      factIds: []
+    };
+  });
+}
+function normalizeFacts(raw, artifacts) {
+  if (!Array.isArray(raw)) return [];
+  const output = [];
+  for (const value of raw.slice(0, 400)) {
+    if (!value || typeof value !== "object") continue;
+    const source = value;
+    const sourceOrdinals = ordinals(source.sourceOrdinals, artifacts.length);
+    const selected = sourceOrdinals.length ? sourceOrdinals.map((index) => artifacts[index]) : [artifacts.at(-1)];
+    const content = safeText(source.content, 6e3).trim();
+    if (!content) continue;
+    const entityType = enumValue2(source.entityType, ENTITY_TYPES, "event");
+    const lifecycle = enumValue2(source.lifecycle, LIFECYCLES, "active");
+    let residency = enumValue2(source.residency, RESIDENCIES, "contextual");
+    const entityId = safeText(source.entityId, 180).trim() || `${entityType}:${hashText(content).slice(0, 12)}`;
+    const operation = enumValue2(source.operation, OPERATIONS, "update");
+    const allowConstant = entityType === "world_rule" && lifecycle === "stable" && residency === "global";
+    if (!allowConstant && residency === "global") residency = "contextual";
+    const sourceMessageKeys = selected.map((artifact) => artifact.messageKey);
+    const sourceMessageIndexes = selected.map((artifact) => artifact.messageIndex);
+    const factType = safeText(source.factType, 160).trim() || entityType;
+    output.push({
+      factId: `fact:${hashText(`${entityId}|${factType}|${operation}|${content}|${sourceMessageKeys.join(",")}`)}`,
+      entityId,
+      entityType,
+      factType,
+      title: safeText(source.title || source.name, 240).trim() || void 0,
+      status: safeText(source.status, 120).trim() || void 0,
+      rowLifecycle: (entityType === "character" || entityType === "focus") && source.rowLifecycle ? normalizeLifecycle(source.rowLifecycle) : void 0,
+      sourceEntityId: entityType === "relationship" ? safeText(source.sourceEntityId, 180).trim() || void 0 : void 0,
+      targetEntityId: entityType === "relationship" ? safeText(source.targetEntityId, 180).trim() || void 0 : void 0,
+      operation,
+      scope: safeText(source.scope, 240).trim() || "chat",
+      lifecycle,
+      content,
+      keywords: normalizeKeywords(source.keywords),
+      residency,
+      allowConstant,
+      playerBindingEvidence: Array.isArray(source.playerBindingEvidence) ? source.playerBindingEvidence.map((item2) => safeText(item2, 500).trim()).filter(Boolean).slice(0, 16) : [],
+      sourceMessageKeys,
+      sourceMessageIndexes,
+      confidence: enumValue2(source.confidence, CONFIDENCE, "confirmed")
+    });
+  }
+  return output;
+}
+function tableForEntityType(entityType) {
+  const mapping = {
+    world_rule: "foundations",
+    focus: "focus",
+    character: "characters",
+    relationship: "relationships",
+    event: "events",
+    process: "events",
+    region: "regions",
+    item: "items",
+    skill: "skills",
+    spacetime: "spacetime"
+  };
+  return mapping[entityType];
+}
+function deriveTableOperations(facts, previousSnapshot2) {
+  const output = [];
+  for (const fact of facts) {
+    if (fact.entityType === "world_rule" && fact.lifecycle !== "stable") continue;
+    const table = tableForEntityType(fact.entityType);
+    if (!table) continue;
+    const retiring = fact.lifecycle === "historical" || fact.lifecycle === "trace" || ["remove", "close", "supersede"].includes(fact.operation);
+    const existing = previousSnapshot2?.[table]?.find((row) => row.id === fact.entityId);
+    const title = safeText(fact.title, 240).trim() || existing?.title || "";
+    if (!title) continue;
+    output.push({
+      operationId: `table-op:${hashText(`${fact.factId}|${table}`)}`,
+      table,
+      operation: retiring ? "retire" : "upsert",
+      rowId: fact.entityId,
+      title: title || fact.entityId,
+      content: fact.content,
+      keywords: fact.keywords,
+      status: fact.status || (retiring ? "\u5F85\u9636\u6BB5\u6C89\u964D" : "active"),
+      lifecycle: fact.rowLifecycle,
+      sourceEntityId: fact.sourceEntityId,
+      targetEntityId: fact.targetEntityId,
+      sourceMessageKeys: fact.sourceMessageKeys,
+      sourceMessageIndexes: fact.sourceMessageIndexes
+    });
+  }
+  return output;
+}
+function normalizeUnifiedFactPackage(input) {
+  const { raw, artifacts, previousSnapshot: previousSnapshot2, extractorVersion } = input;
+  if (!artifacts.length) throw new Error("\u7EDF\u4E00\u4E8B\u5B9E\u5305\u6CA1\u6709\u6765\u6E90\u6B63\u6587");
+  const turnMaterials = normalizeTurnMaterials(raw.turnMaterials, artifacts);
+  const facts = normalizeFacts(raw.facts, artifacts);
+  const explicitTableOperations = normalizeTableOperations(raw.tableOperations, artifacts);
+  const tableOperations = facts.length ? deriveTableOperations(facts, previousSnapshot2) : explicitTableOperations;
+  const focusIdentity = normalizeFocusIdentity2(raw.focusIdentity);
+  const factIdsByKey = /* @__PURE__ */ new Map();
+  for (const fact of facts) {
+    for (const key of fact.sourceMessageKeys) {
+      const list2 = factIdsByKey.get(key) ?? [];
+      list2.push(fact.factId);
+      factIdsByKey.set(key, list2);
+    }
+  }
+  for (const material of turnMaterials) material.factIds = factIdsByKey.get(material.sourceMessageKey) ?? [];
+  const hasCompatibilitySnapshot = Boolean(raw.finalSnapshot || Array.isArray(raw.focus));
+  const finalSnapshotInput = raw.finalSnapshot ?? (Array.isArray(raw.focus) ? raw : void 0);
+  const finalSnapshot = hasCompatibilitySnapshot ? preservePersistentCharacters(
+    previousSnapshot2,
+    preserveSnapshotContinuity(previousSnapshot2, normalizeSnapshot(finalSnapshotInput, previousSnapshot2))
+  ) : void 0;
+  const sedimentation = normalizeSedimentationPlan(raw.sedimentation);
+  const sourceRange = {
+    startIndex: artifacts[0].messageIndex,
+    endIndex: artifacts.at(-1).messageIndex,
+    messageKeys: artifacts.map((artifact) => artifact.messageKey)
+  };
+  return {
+    schemaVersion: 2,
+    packageId: makeId("facts"),
+    extractorVersion,
+    chatKey: artifacts[0].chatKey,
+    sourceRange,
+    sourceRevisions: artifacts.map((artifact) => artifact.sourceFingerprint),
+    turnMaterials,
+    facts,
+    tableOperations,
+    focusIdentity,
+    sedimentation,
+    finalSnapshot,
+    createdAt: nowIso()
+  };
+}
+
+// src/prompts/facts.ts
+function compactRowForFactPrompt(row) {
+  const compact = {
+    id: row.id,
+    title: row.title,
+    content: row.content
+  };
+  if (row.status) compact.status = row.status;
+  if (row.keywords.length) compact.keywords = row.keywords;
+  if (row.source === "manual" || row.locked) compact.protected = true;
+  if (row.lifecycle) compact.lifecycle = row.lifecycle;
+  if (row.sourceEntityId) compact.sourceEntityId = row.sourceEntityId;
+  if (row.targetEntityId) compact.targetEntityId = row.targetEntityId;
+  return compact;
+}
+function compactSnapshotForFactPrompt(previous) {
+  return Object.fromEntries(
+    Object.entries(previous).map(([key, rows2]) => [key, rows2.map(compactRowForFactPrompt)])
+  );
+}
+function estimateFactPromptCharacters(previous, artifacts) {
+  const turns = artifacts.map((artifact) => ({
+    sourceOrdinal: 0,
+    messageIndex: artifact.messageIndex,
+    player: artifact.playerText || "\uFF08\u7A7A\uFF09",
+    assistant: artifact.assistantText
+  }));
+  return JSON.stringify(compactSnapshotForFactPrompt(previous)).length + JSON.stringify(turns).length;
+}
+var UNIFIED_FACT_EXTRACTOR_VERSION = "ma-facts-v3";
+function unifiedFactSystemPrompt() {
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u7ED9\u5B9A\u6B63\u6587\u533A\u6BB5\u4E00\u6B21\uFF0C\u8F93\u51FA\u4E8B\u5B9E\u3001\u603B\u7ED3\u7D20\u6750\u548C\u9636\u6BB5\u6C89\u964D\u5019\u9009\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+
+\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u88AB JSON.parse \u76F4\u63A5\u89E3\u6790\u7684\u5355\u4E2A JSON \u5BF9\u8C61\uFF0C\u7981\u6B62 Markdown\u3001\u89E3\u91CA\u3001\u524D\u8A00\u548C\u7ED3\u8BED\u3002
+
+\u6839\u7ED3\u6784\uFF1A
+{
+  "schemaVersion":2,
+  "turnMaterials":[{"sourceOrdinal":0,"summary":"\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981","keywords":["\u5173\u952E\u8BCD"]}],
+  "facts":[{
+    "entityId":"\u7A33\u5B9A\u5BF9\u8C61ID",
+    "entityType":"world_rule|focus|character|relationship|event|region|item|skill|process|historical_result|trace|spacetime",
+    "factType":"\u4E8B\u5B9E\u7C7B\u522B",
+    "title":"\u5BF9\u8C61\u6216\u8868\u683C\u884C\u540D\u79F0",
+    "status":"\u5F53\u524D\u72B6\u6001",
+    "rowLifecycle":{"existence":"\u5B58\u6D3B","activity":"\u5F53\u524D\u76F8\u5173","memory":"\u5E7F\u6CDB\u8BB0\u5F97","evidenceLevel":"\u5DF2\u786E\u8BA4","evidence":"\u4F9D\u636E","returnConditions":[],"returnBlockers":[]},
+    "sourceEntityId":"\u5173\u7CFB\u6765\u6E90\u5BF9\u8C61\u7A33\u5B9AID\uFF0C\u4EC5 relationship \u4F7F\u7528",
+    "targetEntityId":"\u5173\u7CFB\u76EE\u6807\u5BF9\u8C61\u7A33\u5B9AID\uFF0C\u4EC5 relationship \u4F7F\u7528",
+    "operation":"create|update|append|remove|close|supersede|merge",
+    "scope":"\u4F5C\u7528\u57DF",
+    "lifecycle":"stable|active|temporary|historical|trace",
+    "content":"\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u6216\u66F4\u65B0\u540E\u7684\u5F53\u524D\u6D3B\u8DC3\u8BB0\u5F55",
+    "keywords":["\u6FC0\u6D3B\u5173\u952E\u8BCD"],
+    "residency":"global|keyword|contextual|regional|process|historical|trace|never",
+    "playerBindingEvidence":["\u73A9\u5BB6\u4E3B\u52A8\u4ECB\u5165\u3001\u8D44\u6E90\u3001\u4EE3\u4EF7\u6216\u957F\u671F\u5173\u7CFB\u7B49\u53EF\u89C2\u5BDF\u4F9D\u636E"],
+    "sourceOrdinals":[0],
+    "confidence":"confirmed|recorded|reported|uncertain"
+  }],
+  "focusIdentity":{"focusId":"\u5DF2\u77E5\u7A33\u5B9A\u7126\u70B9ID\u6216\u7A7A\u5B57\u7B26\u4E32","canonicalName":"\u5F53\u524D\u7126\u70B9\u6807\u51C6\u540D\u79F0","aliases":["\u79F0\u547C","\u522B\u540D"]},
+  "sedimentation":{
+    "removeRowIds":["\u4EC5\u9650\u5DF2\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684 spacetime/relationships/items/skills/events/regions \u884CID"],
+    "characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884CID","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"\u53EF\u89C2\u5BDF\u4F9D\u636E"}],
+    "notes":["\u6C89\u964D\u4F9D\u636E"]
+  }
+}
+
+\u89C4\u5219\uFF1A
+1. turnMaterials \u5FC5\u987B\u8986\u76D6\u8F93\u5165\u4E2D\u7684\u6BCF\u4E2A sourceOrdinal\uFF0C\u53EA\u6982\u62EC\u8BE5\u8F6E\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u5B9E\u3002
+2. facts \u662F\u552F\u4E00\u4E8B\u5B9E\u8F93\u51FA\u3002\u4EE3\u7801\u4F1A\u6839\u636E entityType \u81EA\u52A8\u5206\u53D1\u5230\u4E5D\u7C7B\u8868\u683C\u3001\u5C0F\u603B\u7ED3\u3001\u5927\u603B\u7ED3\u3001\u4E16\u754C\u4E66\u548C\u56FE\u8C31\uFF1B\u4E0D\u8981\u53E6\u5199 tableOperations \u6216 finalSnapshot\u3002
+3. \u5BF9\u5F53\u524D\u4ECD\u6D3B\u8DC3\u3001\u9700\u8981\u8FDB\u5165\u8868\u683C\u7684\u5BF9\u8C61\uFF0C\u5FC5\u987B\u586B\u5199\u7A33\u5B9A entityId\u3001title\u3001content\u3001status\uFF1A
+   - world_rule \u53EA\u7528\u4E8E lifecycle=stable \u7684\u957F\u671F\u4E16\u754C\u5E95\u5C42\u89C4\u5219\u5E76\u8FDB\u5165\u57FA\u7840\u8BBE\u5B9A\uFF1B\u4E34\u65F6\u5236\u5EA6\u3001\u5C01\u9501\u6216\u5C40\u90E8\u89C4\u5219\u5FC5\u987B\u4F7F\u7528 process/event\u3002focus\u2192\u7126\u70B9\uFF1Bcharacter\u2192\u4EBA\u7269\uFF1Brelationship\u2192\u5173\u7CFB\uFF1Bitem\u2192\u7269\u54C1\uFF1Bskill\u2192\u80FD\u529B\uFF1Bevent/process\u2192\u4E8B\u4EF6\u4E0E\u6D41\u7A0B\uFF1Bregion\u2192\u533A\u57DF\uFF1Bspacetime\u2192\u65F6\u95F4\u5730\u70B9\u3002
+   - relationship \u5FC5\u987B\u586B\u5199 sourceEntityId \u548C targetEntityId\uFF0C\u5F15\u7528\u53CC\u65B9\u5DF2\u7ECF\u4F7F\u7528\u7684\u7A33\u5B9A entityId\uFF1B\u5173\u7CFB\u6807\u9898\u5373\u4F7F\u4E0D\u5199\u53CC\u65B9\u59D3\u540D\uFF0C\u56FE\u8C31\u4E5F\u80FD\u6309 ID \u8FDE\u7EBF\u3002
+   - historical_result \u548C trace \u53EA\u8FDB\u5165\u603B\u7ED3\u7D20\u6750\uFF0C\u4E0D\u76F4\u63A5\u521B\u5EFA\u6D3B\u8DC3\u8868\u683C\u884C\u3002
+   - \u540D\u79F0\u3001\u522B\u540D\u6216\u79F0\u547C\u53D8\u5316\u5FC5\u987B\u6CBF\u7528\u539F entityId\uFF0C\u4E0D\u80FD\u521B\u5EFA\u91CD\u590D\u5BF9\u8C61\u3002
+   - \u5DF2\u7ECF\u7ED3\u675F\u6216\u4E0D\u518D\u6D3B\u8DC3\u7684\u5BF9\u8C61\u4F7F\u7528 close/remove/supersede \u6216 lifecycle=historical/trace\uFF1B\u4EE3\u7801\u4F1A\u5148\u6807\u4E3A\u5F85\u9636\u6BB5\u6C89\u964D\uFF0C\u4E0D\u4F1A\u7ACB\u5373\u5220\u9664\u3002
+   - \u4E0A\u4E00\u4EFD\u6D3B\u8DC3\u8868\u683C\u4E2D protected=true \u7684\u884C\u4EE3\u8868\u73A9\u5BB6\u624B\u5DE5\u6216\u9501\u5B9A\u8BB0\u5F55\uFF0C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
+4. focusIdentity \u5FC5\u987B\u63CF\u8FF0\u5F53\u524D\u7126\u70B9\u3002\u5DF2\u77E5 focusId \u65F6\u6CBF\u7528\uFF1B\u6539\u79F0\u547C\u6216\u4F7F\u7528\u522B\u540D\u4E0D\u80FD\u65B0\u5EFA\u7126\u70B9\u5361\u3002
+5. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u4E0E\u5BF9\u767D\u53EF\u4F5C\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF0C\u5916\u90E8\u7ED3\u679C\u4EE5\u6B63\u6587\u4E2D\u7684\u53EF\u89C2\u5BDF\u56DE\u5E94\u4E3A\u51C6\u3002
+6. \u201C\u91CD\u8981\u201D\u4E0D\u7B49\u4E8E\u5168\u5C40\u5E38\u9A7B\u3002\u53EA\u6709\u957F\u671F\u4E16\u754C\u5E95\u5C42\u89C4\u5219\u53EF\u4EE5 residency=global\uFF1B\u4EBA\u7269\u4F4D\u7F6E\u3001\u4F24\u52BF\u3001\u4E8B\u4EF6\u9636\u6BB5\u3001\u8C03\u67E5\u8FDB\u5EA6\u548C\u77ED\u671F\u4EFB\u52A1\u4E0D\u5F97\u8BBE\u4E3A global\u3002
+7. \u4E34\u65F6\u4E8B\u5B9E lifecycle=temporary\uFF1B\u7ED3\u675F\u540E\u7684\u7ED3\u679C\u4F7F\u7528 historical\uFF1B\u4F4E\u4F18\u5148\u7EA7\u6B8B\u7559\u75D5\u8FF9\u4F7F\u7528 trace\u3002
+8. sourceOrdinals \u4F7F\u7528\u8F93\u5165\u4E2D\u7684\u5E8F\u53F7\uFF0C\u4E0D\u8981\u8F93\u51FA\u6D88\u606FID\u3002
+9. rowLifecycle \u53EA\u7528\u4E8E focus \u548C character\uFF1BsourceEntityId/targetEntityId \u53EA\u7528\u4E8E relationship\uFF1B\u5176\u4ED6\u7C7B\u578B\u7701\u7565\u3002
+10. sedimentation \u53EA\u63D0\u51FA\u9636\u6BB5\u8282\u70B9\u53EF\u6267\u884C\u7684\u5B89\u5168\u6C89\u964D\uFF1A
+   - removeRowIds \u53EA\u5141\u8BB8\u9009\u62E9\u5DF2\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684 spacetime/relationships/items/skills/events/regions \u884C\u3002
+   - \u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002\u5173\u7CFB\u3001\u7269\u54C1\u3001\u6280\u80FD\u53EA\u6709\u5728\u660E\u786E\u4E0D\u518D\u6D3B\u8DC3\u4E14\u5176\u7ED3\u679C\u53EF\u88AB\u9636\u6BB5\u603B\u7ED3\u4FDD\u5B58\u65F6\u624D\u53EF\u5217\u4E3A\u5019\u9009\u3002
+   - characterActivityUpdates \u53EA\u5141\u8BB8\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\u3002
+11. \u4E0D\u8F93\u51FA\u4EFB\u4F55\u4EE3\u7801\u65E0\u6CD5\u9A8C\u8BC1\u7684\u81EA\u7531\u7ED3\u6784\u5B57\u6BB5\u3002`;
+}
+function unifiedFactUserPrompt(previous, artifacts) {
+  const turns = artifacts.map((artifact, sourceOrdinal) => ({
+    sourceOrdinal,
+    messageIndex: artifact.messageIndex,
+    player: artifact.playerText || "\uFF08\u7A7A\uFF09",
+    assistant: artifact.assistantText
+  }));
+  return `\u3010\u4E0A\u4E00\u4EFD\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
+${JSON.stringify(compactSnapshotForFactPrompt(previous))}
+
+\u3010\u5F85\u63D0\u53D6\u6B63\u6587\u533A\u6BB5\u3011
+${JSON.stringify(turns)}
+
+\u53EA\u8F93\u51FA UnifiedFactPackage v2 JSON\u3002`;
+}
+function unifiedFactStructureDescription() {
+  return '{"schemaVersion":2,"turnMaterials":[{"sourceOrdinal":0,"summary":"...","keywords":["..."]}],"facts":[{"entityId":"character:stable-id","entityType":"character","factType":"\u5F53\u524D\u72B6\u6001","title":"...","status":"\u5F53\u524D\u76F8\u5173","rowLifecycle":{"existence":"\u5B58\u6D3B","activity":"\u5F53\u524D\u76F8\u5173","memory":"\u5E7F\u6CDB\u8BB0\u5F97","evidenceLevel":"\u5DF2\u786E\u8BA4","evidence":"...","returnConditions":[],"returnBlockers":[]},"sourceEntityId":"","targetEntityId":"","operation":"update","scope":"chat","lifecycle":"active","content":"...","keywords":["..."],"residency":"keyword","playerBindingEvidence":[],"sourceOrdinals":[0],"confidence":"confirmed"}],"focusIdentity":{"focusId":"","canonicalName":"...","aliases":["..."]},"sedimentation":{"removeRowIds":[],"characterActivityUpdates":[],"notes":[]}}';
+}
+
+// src/pipeline/facts.ts
+init_repository();
 
 // src/pipeline/state.ts
+init_constants();
+init_utils();
+init_repository();
 function previousSnapshot(beforeIndex) {
   const chat = getChat();
   for (let i = beforeIndex - 1; i >= 0; i -= 1) {
@@ -5394,43 +7148,350 @@ function previousSnapshot(beforeIndex) {
   }
   return emptySnapshot();
 }
-function restoreManualRows(previous, next) {
-  for (const key of TABLE_KEYS) {
-    const existing = new Set(next[key].map((row) => row.id));
-    for (const row of previous[key]) {
-      if (row.source === "manual" && !existing.has(row.id)) next[key].push({ ...row });
+
+// src/pipeline/facts.ts
+init_task_queue();
+var DEFAULT_FACT_BATCH_CHARACTER_BUDGET = 52e3;
+function partitionFactArtifactsBySize(artifacts, characterBudget = DEFAULT_FACT_BATCH_CHARACTER_BUDGET, initialSnapshot) {
+  if (!artifacts.length) return [];
+  const ordered = [...artifacts].sort((a, b) => a.messageIndex - b.messageIndex);
+  const chunks = [];
+  let current = [];
+  for (const artifact of ordered) {
+    const candidate = [...current, artifact];
+    const previous = initialSnapshot ?? previousSnapshot(candidate[0].messageIndex);
+    const size = estimateFactPromptCharacters(previous, candidate);
+    if (current.length && size > Math.max(8e3, characterBudget)) {
+      chunks.push(current);
+      current = [artifact];
+    } else {
+      current = candidate;
     }
   }
-  return next;
+  if (current.length) chunks.push(current);
+  return chunks;
 }
-async function runStateExtraction(artifact, force = false, signal) {
-  if (!force && artifact.stages.state.status === "success" && artifact.snapshot) return artifact.snapshot;
-  const settings = getSettings();
-  const previous = previousSnapshot(artifact.messageIndex);
-  markStage(artifact, "state", "running");
+function assertArtifactCurrent(artifact, signal) {
+  if (signal?.aborted) throw new TaskCancelledError("\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u5DF2\u53D6\u6D88");
+  if (artifact.chatKey !== currentChatKey()) throw new StaleTaskError("\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+  if (messageFingerprint(artifact.messageIndex) !== artifact.sourceFingerprint) {
+    throw new StaleTaskError("\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u6765\u6E90\u6B63\u6587\u5DF2\u53D8\u5316");
+  }
+}
+async function attachAndStore(artifact) {
+  const message = getMessage(artifact.messageIndex);
+  if (!message || message.is_user || messageFingerprint(artifact.messageIndex) !== artifact.sourceFingerprint) {
+    throw new StaleTaskError("\u7EDF\u4E00\u4E8B\u5B9E\u4EA7\u7269\u65E0\u6CD5\u9644\u7740\u5230\u5F53\u524D\u6B63\u6587");
+  }
+  attachArtifactToMessage(message, artifact);
   await putArtifact(artifact);
+}
+async function extractUnifiedFacts(artifacts, signal, connectionSnapshot) {
+  if (!artifacts.length) throw new Error("\u6CA1\u6709\u53EF\u63D0\u53D6\u7684\u6B63\u6587");
+  for (const artifact of artifacts) {
+    assertArtifactCurrent(artifact, signal);
+    markStage(artifact, "state", "running");
+    await putArtifact(artifact);
+  }
+  const previous = previousSnapshot(artifacts[0].messageIndex);
+  const sourceRange = {
+    startIndex: artifacts[0].messageIndex,
+    endIndex: artifacts.at(-1).messageIndex,
+    messageKeys: artifacts.map((artifact) => artifact.messageKey)
+  };
   try {
     const parsed = await generateStructuredTask({
-      task: "state",
-      systemPrompt: stateSystemPrompt(),
-      prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText),
-      structureDescription: stateSchemaDescription(),
-      allowRepair: settings.repairInvalidJsonOnce,
-      signal
+      task: "factExtraction",
+      systemPrompt: unifiedFactSystemPrompt(),
+      prompt: unifiedFactUserPrompt(previous, artifacts),
+      structureDescription: unifiedFactStructureDescription(),
+      allowRepair: getSettings().repairInvalidJsonOnce,
+      signal,
+      connectionSnapshot,
+      invocation: {
+        sourceRange,
+        priority: "background-critical",
+        blocking: false,
+        coalesceKey: `facts:${artifacts[0].chatKey}`,
+        outputSchema: "UnifiedFactPackage.v2"
+      }
     });
-    const normalized = preservePersistentCharacters(previous, restoreManualRows(previous, normalizeSnapshot(parsed, previous)));
-    artifact.snapshot = normalized;
-    markStage(artifact, "state", "success");
-    await putArtifact(artifact);
-    return normalized;
+    for (const artifact of artifacts) assertArtifactCurrent(artifact, signal);
+    return normalizeUnifiedFactPackage({
+      raw: parsed,
+      artifacts,
+      previousSnapshot: previous,
+      extractorVersion: UNIFIED_FACT_EXTRACTOR_VERSION
+    });
   } catch (error) {
-    markStage(artifact, "state", "failed", toErrorMessage(error));
-    await putArtifact(artifact);
+    for (const artifact of artifacts) {
+      markStage(artifact, "state", "failed", toErrorMessage(error));
+      await attachAndStore(artifact).catch(() => putArtifact(artifact));
+    }
+    await persistChat().catch(() => void 0);
     throw error;
   }
 }
+async function dispatchUnifiedFactPackage(input) {
+  const { artifacts, factPackage, signal } = input;
+  const latest = artifacts.at(-1);
+  if (!latest) throw new Error("\u7EDF\u4E00\u4E8B\u5B9E\u5305\u6CA1\u6709\u76EE\u6807\u4EA7\u7269");
+  for (const artifact of artifacts) assertArtifactCurrent(artifact, signal);
+  const state2 = await getChatState(latest.chatKey);
+  assertHistoryRebuildAccess(state2);
+  for (const artifact of artifacts) {
+    artifact.factPackageId = factPackage.packageId;
+    markStage(artifact, "state", "success");
+    if (artifact !== latest) {
+      markStage(artifact, "summary", "skipped", "\u6279\u91CF\u4E8B\u5B9E\u63D0\u53D6\u7531\u533A\u6BB5\u672B\u6761\u7EDF\u4E00\u6D3E\u751F");
+      markStage(artifact, "sync", "skipped", "\u6279\u91CF\u4E8B\u5B9E\u63D0\u53D6\u7531\u533A\u6BB5\u672B\u6761\u7EDF\u4E00\u53D1\u5E03");
+    }
+  }
+  const projection = projectUnifiedFacts({
+    previousSnapshot: previousSnapshot(artifacts[0].messageIndex),
+    factPackage,
+    focusRegistry: state2.focusRegistry,
+    currentFocusId: state2.currentFocusId
+  });
+  factPackage.projectionMode = projection.mode;
+  latest.snapshot = deepClone(projection.snapshot);
+  state2.focusRegistry = deepClone(projection.focusRegistry);
+  state2.currentFocusId = projection.currentFocusId;
+  const storedFactPackage = deepClone(factPackage);
+  delete storedFactPackage.finalSnapshot;
+  latest.factPackage = storedFactPackage;
+  for (const key of factPackage.sourceRange.messageKeys) {
+    if (!state2.processedMessageKeys.includes(key)) state2.processedMessageKeys.push(key);
+  }
+  state2.latestSnapshotMessageKey = latest.messageKey;
+  state2.lastFactMessageIndex = latest.messageIndex;
+  state2.lastFactPackageId = factPackage.packageId;
+  state2.factSchemaVersion = factPackage.schemaVersion;
+  state2.updatedAt = factPackage.createdAt;
+  await putChatState(state2);
+  for (const artifact of artifacts) await attachAndStore(artifact);
+  if (input.deferDerived) {
+    markStage(latest, "summary", "queued", "\u540E\u53F0\u79EF\u538B\u4E2D\uFF0C\u9636\u6BB5\u603B\u7ED3\u5EF6\u8FDF\u5230\u6700\u65B0\u72B6\u6001");
+    markStage(latest, "sync", "queued", "\u540E\u53F0\u79EF\u538B\u4E2D\uFF0C\u53EA\u53D1\u5E03\u8FFD\u5E73\u540E\u7684\u6700\u65B0\u4E16\u754C\u4E66");
+  } else {
+    try {
+      await maybeRunSummaries(latest, false, false, signal, true);
+    } catch (error) {
+      console.error("[MirrorAbyss] local summary dispatch failed", error);
+      markStage(latest, "summary", "failed", toErrorMessage(error));
+    }
+    if (input.deferLorebookSync) {
+      markStage(latest, "sync", "skipped", "\u5386\u53F2\u91CD\u5EFA\u671F\u95F4\u5EF6\u8FDF\u5230\u672B\u5C3E\u7EDF\u4E00\u540C\u6B65");
+    } else if (getSettings().lorebookSync) {
+      lorebookPublishScheduler.schedule(latest);
+    } else {
+      markStage(latest, "sync", "skipped");
+    }
+  }
+  await attachAndStore(latest);
+  await persistChat();
+  await confirmLocalCommitsAttachedForArtifact(latest);
+  return latest;
+}
+var UnifiedFactScheduler = class {
+  pending = /* @__PURE__ */ new Map();
+  running = /* @__PURE__ */ new Set();
+  deferredLatest = /* @__PURE__ */ new Map();
+  enqueue(artifact, options = {}) {
+    return this.enqueueBatch([artifact], options);
+  }
+  enqueueBatch(artifacts, options = {}) {
+    if (!artifacts.length) return Promise.reject(new Error("\u6CA1\u6709\u53EF\u8FDB\u5165\u7EDF\u4E00\u4E8B\u5B9E\u961F\u5217\u7684\u6B63\u6587"));
+    return new Promise((resolve, reject) => {
+      const chatKey = artifacts[0].chatKey;
+      if (artifacts.some((artifact) => artifact.chatKey !== chatKey)) {
+        reject(new Error("\u7EDF\u4E00\u4E8B\u5B9E\u6279\u6B21\u4E0D\u80FD\u8DE8\u804A\u5929"));
+        return;
+      }
+      const batch = this.pending.get(chatKey) ?? {
+        artifacts: /* @__PURE__ */ new Map(),
+        deferLorebookSync: false,
+        force: false,
+        holdDerived: false,
+        waiters: [],
+        connectionSnapshot: captureTaskConnection("factExtraction"),
+        queuedAt: Date.now()
+      };
+      for (const artifact of artifacts) batch.artifacts.set(artifact.messageIndex, deepClone(artifact));
+      batch.deferLorebookSync ||= Boolean(options.deferLorebookSync);
+      batch.force ||= Boolean(options.force);
+      batch.holdDerived ||= Boolean(options.holdDerived);
+      batch.waiters.push({ resolve, reject });
+      this.pending.set(chatKey, batch);
+      this.scheduleFlush(chatKey, batch);
+    });
+  }
+  scheduleFlush(chatKey, batch) {
+    if (this.running.has(chatKey)) return;
+    if (batch.timer !== void 0) clearTimeout(batch.timer);
+    const count = batch.artifacts.size;
+    const delay = batch.force ? 0 : count >= 5 ? 0 : count >= 2 ? 60 : 180;
+    batch.timer = globalThis.setTimeout(() => {
+      batch.timer = void 0;
+      void this.flush(chatKey);
+    }, delay);
+  }
+  async flush(chatKey) {
+    if (this.running.has(chatKey)) return;
+    const batch = this.pending.get(chatKey);
+    if (!batch) return;
+    this.pending.delete(chatKey);
+    if (batch.timer !== void 0) globalThis.clearTimeout(batch.timer);
+    this.running.add(chatKey);
+    const artifacts = [...batch.artifacts.values()].sort((a, b) => a.messageIndex - b.messageIndex);
+    const chunks = partitionFactArtifactsBySize(artifacts);
+    const key = `facts:${chatKey}:${hashText(artifacts.map((artifact) => artifact.messageKey).join("|"))}`;
+    try {
+      const { taskQueue: taskQueue2 } = await Promise.resolve().then(() => (init_task_queue(), task_queue_exports));
+      const result = await taskQueue2.run(
+        key,
+        chunks.length > 1 ? `\u6309\u4F53\u79EF\u5206 ${chunks.length} \u6279\u7EDF\u4E00\u63D0\u53D6 ${artifacts.length} \u6761\u6B63\u6587\u4E8B\u5B9E` : artifacts.length > 1 ? `\u7EDF\u4E00\u63D0\u53D6 ${artifacts.length} \u6761\u6B63\u6587\u4E8B\u5B9E` : `\u7EDF\u4E00\u63D0\u53D6\u7B2C ${artifacts[0].messageIndex + 1} \u6761\u6B63\u6587\u4E8B\u5B9E`,
+        "factExtraction",
+        async (signal) => {
+          let latestResult = null;
+          for (let index = 0; index < chunks.length; index += 1) {
+            const chunk2 = chunks[index];
+            const factPackage = await extractUnifiedFacts(chunk2, signal, batch.connectionSnapshot);
+            const backlogContinues = this.pending.has(chatKey);
+            const isLastChunk = index === chunks.length - 1;
+            const deferDerived = !isLastChunk || batch.holdDerived || artifacts.length >= 5 || backlogContinues;
+            latestResult = await dispatchUnifiedFactPackage({
+              artifacts: chunk2,
+              factPackage,
+              deferLorebookSync: batch.deferLorebookSync,
+              deferDerived,
+              signal
+            });
+            await this.replaceDeferredLatest(chatKey, latestResult, deferDerived);
+          }
+          if (!latestResult) throw new Error("\u7EDF\u4E00\u4E8B\u5B9E\u6279\u6B21\u6CA1\u6709\u5F62\u6210\u7ED3\u679C");
+          return latestResult;
+        },
+        {
+          laneKey: `background-critical:${chatKey}`,
+          priority: "background-critical",
+          blocking: false,
+          sourceRange: { startIndex: artifacts[0].messageIndex, endIndex: artifacts.at(-1).messageIndex },
+          progressTotal: artifacts.length,
+          progressLabel: chunks.length > 1 ? `\u6309\u4F53\u79EF\u5206 ${chunks.length} \u6279` : artifacts.length > 1 ? `\u5408\u5E76 ${artifacts.length} \u8F6E` : "\u63D0\u53D6\u4E8B\u5B9E"
+        }
+      );
+      for (const waiter of batch.waiters) waiter.resolve(result);
+    } catch (error) {
+      for (const waiter of batch.waiters) waiter.reject(error);
+    } finally {
+      this.running.delete(chatKey);
+      if (this.pending.has(chatKey)) {
+        const next = this.pending.get(chatKey);
+        this.scheduleFlush(chatKey, next);
+      } else if (!batch.holdDerived) {
+        void this.flushDeferredDerived(chatKey, batch.deferLorebookSync);
+      }
+    }
+  }
+  async replaceDeferredLatest(chatKey, latest, keepLatestDeferred) {
+    const previous = this.deferredLatest.get(chatKey);
+    if (previous && previous.messageKey !== latest.messageKey) {
+      markStage(previous, "summary", "skipped", "\u5DF2\u7531\u66F4\u65B0\u7684\u4E8B\u5B9E\u533A\u6BB5\u7EDF\u4E00\u6D3E\u751F");
+      markStage(previous, "sync", "skipped", "\u5DF2\u7531\u66F4\u65B0\u7684\u4E16\u754C\u4E66\u7248\u672C\u53D6\u4EE3");
+      await attachAndStore(previous).catch(() => putArtifact(previous));
+    }
+    if (keepLatestDeferred) this.deferredLatest.set(chatKey, deepClone(latest));
+    else this.deferredLatest.delete(chatKey);
+  }
+  async flushDerived(chatKey, deferLorebookSync = false) {
+    await this.flushDeferredDerived(chatKey, deferLorebookSync);
+  }
+  clearDeferred(chatKey) {
+    this.deferredLatest.delete(chatKey);
+  }
+  async flushDeferredDerived(chatKey, deferLorebookSync) {
+    const artifact = this.deferredLatest.get(chatKey);
+    if (!artifact) return;
+    this.deferredLatest.delete(chatKey);
+    try {
+      const { taskQueue: taskQueue2 } = await Promise.resolve().then(() => (init_task_queue(), task_queue_exports));
+      await taskQueue2.run(
+        `derived:${chatKey}:${artifact.messageKey}`,
+        "\u8FFD\u5E73\u9636\u6BB5\u603B\u7ED3\u4E0E\u6700\u65B0\u4E16\u754C\u4E66",
+        "smallSummary",
+        async (signal) => {
+          if (chatKey !== currentChatKey()) throw new StaleTaskError("\u6D3E\u751F\u4EFB\u52A1\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+          try {
+            await maybeRunSummaries(artifact, false, false, signal, true);
+          } catch (error) {
+            markStage(artifact, "summary", "failed", toErrorMessage(error));
+          }
+          if (deferLorebookSync) {
+            markStage(artifact, "sync", "skipped", "\u5386\u53F2\u91CD\u5EFA\u671F\u95F4\u5EF6\u8FDF\u5230\u672B\u5C3E\u7EDF\u4E00\u540C\u6B65");
+          } else if (getSettings().lorebookSync) {
+            lorebookPublishScheduler.schedule(artifact);
+          } else {
+            markStage(artifact, "sync", "skipped");
+          }
+          await attachAndStore(artifact);
+          await persistChat();
+        },
+        {
+          laneKey: `background-derived:${chatKey}`,
+          priority: "background-derived",
+          blocking: false,
+          sourceRange: { startIndex: artifact.messageIndex, endIndex: artifact.messageIndex },
+          progressLabel: "\u603B\u7ED3\u4E0E\u53D1\u5E03\u8BA1\u5212"
+        }
+      );
+    } catch (error) {
+      if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
+      console.error("[MirrorAbyss] deferred derived dispatch failed", error);
+    }
+  }
+  cancelChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+    let count = 0;
+    const batch = this.pending.get(chatKey);
+    if (batch) {
+      if (batch.timer !== void 0) globalThis.clearTimeout(batch.timer);
+      this.pending.delete(chatKey);
+      const error = new TaskCancelledError(reason);
+      for (const waiter of batch.waiters) waiter.reject(error);
+      count += batch.waiters.length;
+    }
+    this.deferredLatest.delete(chatKey);
+    return count;
+  }
+  cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
+    let count = 0;
+    for (const key of [...this.pending.keys()]) {
+      if (key !== chatKey) count += this.cancelChat(key, reason);
+    }
+    for (const key of [...this.deferredLatest.keys()]) if (key !== chatKey) this.deferredLatest.delete(key);
+    return count;
+  }
+  cancelAll(reason = "\u7EDF\u4E00\u4E8B\u5B9E\u8C03\u5EA6\u5668\u5DF2\u505C\u6B62") {
+    let count = 0;
+    for (const key of [...this.pending.keys()]) count += this.cancelChat(key, reason);
+    this.deferredLatest.clear();
+    return count;
+  }
+  pendingCount(chatKey) {
+    if (chatKey) return (this.pending.get(chatKey)?.artifacts.size ?? 0) + Number(this.deferredLatest.has(chatKey));
+    return [...this.pending.values()].reduce((sum, batch) => sum + batch.artifacts.size, 0) + this.deferredLatest.size;
+  }
+};
+var unifiedFactScheduler = new UnifiedFactScheduler();
+
+// src/pipeline/pipeline.ts
+init_task_queue();
+init_repository();
+init_connection_broker();
+init_chat_scope();
 
 // src/pipeline/errors.ts
+init_utils();
 var PipelineStageError = class extends Error {
   artifact;
   cause;
@@ -5504,25 +7565,39 @@ async function loadOrCreateArtifact(index, force) {
   return artifact;
 }
 async function processMessage(index, force = false, options = {}) {
-  const settings = getSettings();
+  const settings = deepClone(getSettings());
   if (!settings.enabled) return null;
   const message = getMessage(index);
   if (!message || message.is_user || !String(message.mes || "").trim()) return null;
   const identity = messageIdentity(index);
-  const key = `${PIPELINE_VERSION}:${currentChatKey()}:${identity}`;
-  return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async (signal) => {
-    const initialState = await getChatState(currentChatKey());
+  const chatKey = currentChatKey();
+  const key = `${PIPELINE_VERSION}:foreground:${chatKey}:${identity}`;
+  const awaitBackground = options.awaitBackground ?? true;
+  const auditConnectionSnapshot = settings.auditEnabled ? captureTaskConnection("audit") : void 0;
+  const foreground = await taskQueue.run(key, `\u524D\u53F0\u5BA1\u6838 \xB7 \u6D88\u606F ${index + 1}`, "audit", async (signal) => {
+    const initialState = await getChatState(chatKey);
     assertHistoryRebuildAccess(initialState);
     const artifact = await loadOrCreateArtifact(index, force);
     notify(index, artifact);
+    let shouldPersistForeground = false;
     try {
       assertArtifactScope(artifact, signal);
-      let audit = await runAudit(artifact, force, signal);
+      let audit = await runAudit(
+        artifact,
+        force,
+        signal,
+        auditConnectionSnapshot ? { settings, connectionSnapshot: auditConnectionSnapshot } : void 0
+      );
       await stageArtifact(index, artifact);
       if (!audit.passed && settings.auditFailAction === "revise") {
         assertArtifactScope(artifact, signal);
-        const revised = await runRevisionFlow(artifact, signal);
+        const revised = await runRevisionFlow(
+          artifact,
+          signal,
+          auditConnectionSnapshot ? { settings, auditConnectionSnapshot } : void 0
+        );
         audit = revised.audit;
+        shouldPersistForeground = true;
         await stageArtifact(index, artifact);
       }
       if (!audit.passed) {
@@ -5534,57 +7609,78 @@ async function processMessage(index, force = false, options = {}) {
         markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "sync", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         await stageArtifact(index, artifact);
-        return artifact;
+        await commitArtifact(index, artifact);
+        return { artifact, approved: false };
       }
       releaseQuarantine(artifact);
-      if (settings.autoState || force) {
-        assertArtifactScope(artifact, signal);
-        await runStateExtraction(artifact, force, signal);
-        await stageArtifact(index, artifact);
-      } else {
-        markStage(artifact, "state", "skipped");
-      }
-      if (artifact.snapshot) {
-        assertArtifactScope(artifact, signal);
-        const chatState = await getChatState(artifact.chatKey);
-        assertHistoryRebuildAccess(chatState);
-        if (!chatState.processedMessageKeys.includes(artifact.messageKey)) chatState.processedMessageKeys.push(artifact.messageKey);
-        chatState.latestSnapshotMessageKey = artifact.messageKey;
-        chatState.updatedAt = nowIso();
-        await putChatState(chatState);
-        assertArtifactScope(artifact, signal);
-        await maybeRunSummaries(artifact, false, false, signal);
-        await stageArtifact(index, artifact);
-        assertArtifactScope(artifact, signal);
-        if (options.deferLorebookSync) {
-          markStage(artifact, "sync", "skipped", "\u5386\u53F2\u91CD\u5EFA\u671F\u95F4\u5EF6\u8FDF\u5230\u672B\u5C3E\u7EDF\u4E00\u540C\u6B65");
-          await putArtifact(artifact);
-        } else {
-          await syncLorebook(artifact, signal);
-        }
-        assertArtifactScope(artifact, signal);
-        await stageArtifact(index, artifact);
-      }
-      return artifact;
+      if (settings.autoState || force) markStage(artifact, "state", "queued");
+      else markStage(artifact, "state", "skipped");
+      await stageArtifact(index, artifact);
+      if (shouldPersistForeground) await commitArtifact(index, artifact);
+      return { artifact, approved: true };
     } catch (error) {
       if (signal.aborted || error instanceof StaleTaskError || error instanceof TaskCancelledError || artifact.chatKey !== currentChatKey()) {
         throw error;
       }
       const messageText = toErrorMessage(error);
-      console.error("[MirrorAbyss] pipeline failed", error);
+      console.error("[MirrorAbyss] foreground pipeline failed", error);
       releaseQuarantine(artifact);
-      toast("error", `\u5904\u7406\u5931\u8D25\uFF1A${messageText}`);
+      toast("error", `\u5BA1\u6838\u6216\u4FEE\u6B63\u5931\u8D25\uFF1A${messageText}`);
       await stageArtifact(index, artifact);
+      await commitArtifact(index, artifact);
       throw new PipelineStageError(artifact, error);
-    } finally {
-      if (artifact.chatKey === currentChatKey()) {
-        await commitArtifact(index, artifact).catch((error) => {
-          console.error("[MirrorAbyss] final chat commit failed", error);
-          throw error;
-        });
-      }
     }
+  }, {
+    laneKey: `foreground:${chatKey}`,
+    priority: "foreground",
+    blocking: true,
+    sourceRange: { startIndex: index, endIndex: index }
   });
+  if (!foreground.approved || !settings.autoState && !force) return foreground.artifact;
+  const background = unifiedFactScheduler.enqueue(foreground.artifact, {
+    deferLorebookSync: options.deferLorebookSync,
+    force
+  });
+  if (!awaitBackground) {
+    void background.catch((error) => {
+      if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
+      console.error("[MirrorAbyss] background fact pipeline failed", error);
+      toast("warning", `\u6B63\u6587\u5DF2\u653E\u884C\uFF1B\u540E\u53F0\u4E8B\u5B9E\u63D0\u53D6\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    });
+    return foreground.artifact;
+  }
+  try {
+    return await background;
+  } catch (error) {
+    if (error instanceof StaleTaskError || error instanceof TaskCancelledError) throw error;
+    throw new PipelineStageError(getAttachedArtifact(getMessage(index)) ?? foreground.artifact, error);
+  }
+}
+async function processHistoryBatch(indexes, options) {
+  const artifacts = [];
+  for (const index of indexes) {
+    const message = getMessage(index);
+    if (!message || message.is_user || !String(message.mes || "").trim()) continue;
+    const artifact = await loadOrCreateArtifact(index, true);
+    releaseQuarantine(artifact);
+    markStage(artifact, "audit", "skipped", "\u5386\u53F2\u91CD\u5EFA\u76F4\u63A5\u8BFB\u53D6\u65E2\u6709\u6B63\u6587");
+    markStage(artifact, "revision", "skipped", "\u5386\u53F2\u91CD\u5EFA\u8DF3\u8FC7\u4FEE\u6B63");
+    markStage(artifact, "state", "queued");
+    await stageArtifact(index, artifact);
+    artifacts.push(artifact);
+  }
+  if (!artifacts.length) return null;
+  return unifiedFactScheduler.enqueueBatch(artifacts, {
+    deferLorebookSync: options.deferLorebookSync,
+    force: true,
+    holdDerived: options.holdDerived
+  });
+}
+async function finalizeHistoryDerived(artifact) {
+  unifiedFactScheduler.clearDeferred(artifact.chatKey);
+  await rebuildAllSummaries(artifact);
+  await stageArtifact(artifact.messageIndex, artifact);
+  await commitArtifact(artifact.messageIndex, artifact);
 }
 function scheduleMessage(payload, force = false, delay = 0) {
   const index = resolveMessageIndex(payload);
@@ -5596,7 +7692,7 @@ function scheduleMessage(payload, force = false, delay = 0) {
   const scheduledScope = chatScopeManager.current();
   window.setTimeout(() => {
     if (!chatScopeManager.isCurrent(scheduledScope)) return;
-    void processMessage(index, force).catch((error) => {
+    void processMessage(index, force, { awaitBackground: false }).catch((error) => {
       if (error instanceof PipelineStageError || error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
       console.error("[MirrorAbyss] scheduled pipeline failed", error);
     });
@@ -5605,13 +7701,13 @@ function scheduleMessage(payload, force = false, delay = 0) {
 async function retryStage(index, stage) {
   if (stage === "audit" || stage === "revision") return processMessage(index, true);
   const artifact = await loadOrCreateArtifact(index, false);
+  if (stage === "state") return unifiedFactScheduler.enqueue(artifact, { force: true });
   const key = `${PIPELINE_VERSION}:retry:${stage}:${artifact.chatKey}:${artifact.messageKey}`;
   return taskQueue.run(key, `\u91CD\u8BD5${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async (signal) => {
     try {
       assertArtifactScope(artifact, signal);
-      if (stage === "state") await runStateExtraction(artifact, true, signal);
       if (stage === "summary") await maybeRunSummaries(artifact, true, true, signal);
-      if (stage === "sync") await syncLorebook(artifact, signal);
+      if (stage === "sync") await syncLorebook(artifact, signal, { forceRefresh: true });
       await stageArtifact(index, artifact);
       return artifact;
     } finally {
@@ -5628,7 +7724,7 @@ async function forceSummary(index, kind) {
       await maybeRunSummaries(artifact, kind === "small", kind === "large", signal);
       await stageArtifact(index, artifact);
       if (getSettings().lorebookSync) {
-        await syncLorebook(artifact, signal);
+        await syncLorebook(artifact, signal, { forceRefresh: true });
         await stageArtifact(index, artifact);
       }
       return artifact;
@@ -5669,11 +7765,15 @@ function scheduleHistoryRebuild(payload, reason, delay = 300, sourceEvent = "") 
     clearAllQuarantines();
     taskQueue.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u4EFB\u52A1\u5E76\u91CD\u5EFA\u4F9D\u8D56");
     connectionBroker.cancelScope(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u8BF7\u6C42\u5E76\u91CD\u5EFA\u4F9D\u8D56");
+    unifiedFactScheduler.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u5F85\u63D0\u53D6\u533A\u6BB5");
+    lorebookPublishScheduler.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u4E16\u754C\u4E66\u53D1\u5E03");
+    invocationRouter.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u8C03\u7528");
     void rebuildHistoryFrom({
       startIndex: pending.startIndex,
       reason: pending.reason,
-      processMessage,
-      syncLatest: async (artifact) => syncLorebook(artifact)
+      processBatch: processHistoryBatch,
+      finalizeDerived: finalizeHistoryDerived,
+      syncLatest: async (artifact) => syncLorebook(artifact, void 0, { forceRefresh: true })
     }).catch((error) => {
       if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
       console.error("[MirrorAbyss] history rebuild failed", error);
@@ -5687,8 +7787,9 @@ async function removeMessageArtifact(payload) {
 }
 async function recoverHistoryConsistencyForCurrentChat() {
   return recoverPendingHistoryRebuild({
-    processMessage,
-    syncLatest: async (artifact) => syncLorebook(artifact)
+    processBatch: processHistoryBatch,
+    finalizeDerived: finalizeHistoryDerived,
+    syncLatest: async (artifact) => syncLorebook(artifact, void 0, { forceRefresh: true })
   });
 }
 function getArtifactAt(index) {
@@ -5718,11 +7819,17 @@ function installPipelineEventHandlers() {
       clearAllQuarantines();
       taskQueue.cancelAllExceptChat(event.scope.chatKey);
       connectionBroker.cancelAllExceptScope(event.scope.chatKey);
+      unifiedFactScheduler.cancelAllExceptChat(event.scope.chatKey);
+      lorebookPublishScheduler.cancelAllExceptChat(event.scope.chatKey);
+      invocationRouter.cancelAllExceptChat(event.scope.chatKey);
     }),
     router.subscribe("chat-created", (event) => {
       clearAllQuarantines();
       taskQueue.cancelAllExceptChat(event.scope.chatKey);
       connectionBroker.cancelAllExceptScope(event.scope.chatKey);
+      unifiedFactScheduler.cancelAllExceptChat(event.scope.chatKey);
+      lorebookPublishScheduler.cancelAllExceptChat(event.scope.chatKey);
+      invocationRouter.cancelAllExceptChat(event.scope.chatKey);
     })
   ];
   return () => {
@@ -5732,6 +7839,13 @@ function installPipelineEventHandlers() {
     pendingHistoryStarts.clear();
   };
 }
+
+// src/ui/message-panel.ts
+init_utils();
+
+// src/ui/workspace.ts
+init_constants();
+init_utils();
 
 // src/domain/graph.ts
 function nodeTypeFor(table) {
@@ -5765,11 +7879,18 @@ function buildRelationshipGraph(snapshot, scope = "relations") {
   const nodes = [];
   const nodeById = /* @__PURE__ */ new Map();
   const rowsByNode = /* @__PURE__ */ new Map();
+  const nodeByEntityId = /* @__PURE__ */ new Map();
   const tables = scope === "relations" ? ["focus", "characters"] : ["focus", "characters", "items", "events", "regions", "spacetime"];
   for (const table of tables) {
     const type = nodeTypeFor(table);
     if (!type) continue;
+    const seenFocusNames = /* @__PURE__ */ new Set();
     for (const row of snapshot[table]) {
+      if (table === "focus") {
+        const identity = normalizeIdentityName(row.title);
+        if (identity && seenFocusNames.has(identity)) continue;
+        if (identity) seenFocusNames.add(identity);
+      }
       const id = `${table}:${row.id}`;
       const node = {
         id,
@@ -5784,12 +7905,29 @@ function buildRelationshipGraph(snapshot, scope = "relations") {
       nodes.push(node);
       nodeById.set(id, node);
       rowsByNode.set(id, row);
+      nodeByEntityId.set(row.id, node);
     }
   }
   const edges = [];
   const seenEdges = /* @__PURE__ */ new Set();
   let relationIndex = 0;
   for (const row of snapshot.relationships) {
+    const explicitSource = row.sourceEntityId ? nodeByEntityId.get(row.sourceEntityId) : void 0;
+    const explicitTarget = row.targetEntityId ? nodeByEntityId.get(row.targetEntityId) : void 0;
+    if (explicitSource && explicitTarget && explicitSource.id !== explicitTarget.id) {
+      const key = uniquePairKey(explicitSource.id, explicitTarget.id, row.title);
+      if (!seenEdges.has(key)) {
+        seenEdges.add(key);
+        edges.push({
+          id: `edge:${row.id}:explicit`,
+          source: explicitSource.id,
+          target: explicitTarget.id,
+          label: compactLabel(row.title),
+          detail: row.content
+        });
+      }
+      continue;
+    }
     const matched = nodes.filter((node) => mentions(row, node));
     if (matched.length >= 2) {
       const source = matched[0];
@@ -5859,7 +7997,14 @@ function buildRelationshipGraph(snapshot, scope = "relations") {
   return { nodes, edges };
 }
 
+// src/ui/workspace.ts
+init_task_queue();
+init_repository();
+
 // src/maintenance/recovery.ts
+init_constants();
+init_utils();
+init_repository();
 async function buildRecoveryBundleForCurrentChat() {
   const chatKey = currentChatKey();
   return {
@@ -5909,6 +8054,9 @@ async function cleanupRecoveryHistoryForCurrentChat(options = {}) {
 }
 
 // src/maintenance/reset.ts
+init_constants();
+init_utils();
+init_repository();
 function clearArtifactsFromCurrentMessages() {
   let count = 0;
   for (const message of getChat()) {
@@ -5961,6 +8109,11 @@ async function clearAllLocalMirrorAbyssCache() {
 }
 
 // src/ui/diagnostics.ts
+init_constants();
+init_repository();
+init_repository();
+init_chat_scope();
+init_connection_broker();
 async function runDiagnostics() {
   const checks = [];
   const context = tryGetContext();
@@ -6080,6 +8233,19 @@ async function runDiagnostics() {
       label: "\u65E7\u7248\u6570\u636E\u8FC1\u79FB",
       status: (state2.migrationVersion ?? 0) >= 4 ? "ok" : "warn",
       detail: (state2.migrationVersion ?? 0) >= 4 ? `\u8FC1\u79FB\u7248\u672C ${state2.migrationVersion}` : "\u5C1A\u672A\u5B8C\u6210\u5F53\u524D\u804A\u5929\u7684\u4FDD\u5B88\u8FC1\u79FB\u68C0\u67E5"
+    });
+    checks.push({
+      id: "factProjection",
+      label: "\u7EDF\u4E00\u4E8B\u5B9E\u786E\u5B9A\u6027\u5206\u53D1",
+      status: (state2.factSchemaVersion ?? 0) >= 2 ? "ok" : "warn",
+      detail: (state2.factSchemaVersion ?? 0) >= 2 ? `\u4E8B\u5B9E\u5305 v${state2.factSchemaVersion}\uFF1B\u7126\u70B9\u8EAB\u4EFD ${state2.focusRegistry?.length ?? 0} \u6761` : "\u5F53\u524D\u804A\u5929\u5C1A\u672A\u7531 v2 \u4E8B\u5B9E\u5305\u66F4\u65B0\uFF1B\u4E0B\u4E00\u8F6E\u6216\u5386\u53F2\u91CD\u5EFA\u540E\u81EA\u52A8\u8FC1\u79FB"
+    });
+    const currentFocusMatches = (state2.focusRegistry ?? []).filter((item2) => item2.focusId === state2.currentFocusId);
+    checks.push({
+      id: "focusIdentity",
+      label: "\u7126\u70B9\u5361\u552F\u4E00\u6027",
+      status: state2.currentFocusId && currentFocusMatches.length !== 1 ? "warn" : "ok",
+      detail: state2.currentFocusId ? `\u5F53\u524D\u7126\u70B9 ${state2.currentFocusId}\uFF1B\u6CE8\u518C\u8868 ${state2.focusRegistry?.length ?? 0} \u6761` : "\u5C1A\u672A\u5EFA\u7ACB\u7A33\u5B9A\u7126\u70B9\u8EAB\u4EFD\uFF1B\u4E0B\u4E00\u6B21\u4E8B\u5B9E\u63D0\u53D6\u65F6\u5EFA\u7ACB"
     });
   }
   const settings = context ? getSettings() : null;
@@ -6315,7 +8481,7 @@ function overviewHtml(artifactInfo) {
     <section class="ma11-card">
       <header><b>\u4EFB\u52A1\u961F\u5217</b><span>${jobs.length ? `${jobs.length} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2"}</span></header>
       <div class="ma11-task-list">
-        ${jobs.length ? jobs.map((task) => `<div><span>${escapeHtml(task.label)}</span><em class="${task.state}">${escapeHtml(task.state)}</em>${task.state === "queued" || task.state === "running" ? `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">\u53D6\u6D88</button>` : ""}</div>`).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'}
+        ${jobs.length ? jobs.map((task) => `<div><span>${escapeHtml(task.label)}${task.sourceStartIndex !== void 0 ? ` \xB7 \u6D88\u606F ${task.sourceStartIndex + 1}${task.sourceEndIndex !== void 0 && task.sourceEndIndex !== task.sourceStartIndex ? `\u2013${task.sourceEndIndex + 1}` : ""}` : ""}${task.progressTotal ? ` \xB7 ${task.progressCurrent ?? 0}/${task.progressTotal}` : ""}${task.blocking ? " \xB7 \u963B\u585E\u73A9\u5BB6" : " \xB7 \u540E\u53F0"}</span><em class="${task.state}">${escapeHtml(task.progressLabel || task.state)}</em>${task.state === "queued" || task.state === "running" ? `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">\u53D6\u6D88</button>` : ""}</div>`).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'}
       </div>
     </section>
     <section class="ma11-card ma11-note">
@@ -6520,7 +8686,7 @@ async function syncHtml() {
       <p class="ma11-help">\u5BF9\u8C61\u8BED\u4E49\u6A21\u5F0F\u6309\u73B0\u5B9E\u5BF9\u8C61\u5EFA\u7ACB\u6761\u76EE\uFF1A\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u6BCF\u4E2A\u7126\u70B9\u3001\u6BCF\u4E2A\u6B63\u5F0F\u4EBA\u7269\u3001\u5173\u7CFB\u7F51\u7EDC\u3001\u533A\u57DF\u3001\u4E8B\u4EF6/\u6D41\u7A0B\u3001\u7269\u54C1/\u8D44\u6E90\u3001\u6280\u80FD\uFF0C\u4EE5\u53CA\u5F53\u524D\u5C0F\u603B\u7ED3\u548C\u7D2F\u8BA1\u5927\u603B\u7ED3\u3002\u65E7\u7684\u955C\u6E0A\u7BA1\u7406\u6761\u76EE\u4F1A\u5728\u91CD\u65B0\u53D1\u5E03\u65F6\u81EA\u52A8\u66FF\u6362\u3002</p>
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="vectorizeRows" ${settings.vectorizeRows ? "checked" : ""}/><span>\u4EBA\u7269\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7B49\u72B6\u6001\u884C\u542F\u7528\u5411\u91CF</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u5F53\u524D\u7126\u70B9\u4E0E\u5F53\u524D\u603B\u7ED3\u5E38\u9A7B</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" disabled/><span>\u4EC5\u57FA\u7840\u8BBE\u5B9A\u5141\u8BB8\u5E38\u9A7B\uFF1B\u5176\u4ED6\u5185\u5BB9\u6309\u5173\u952E\u8BCD\u89E6\u53D1</span></label>
       <div class="ma11-actions"><button data-ma11-action="check-server">\u68C0\u6D4B\u670D\u52A1\u5668</button><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6821\u9A8C\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u4E8B\u52A1</dt><dd>${escapeHtml(outboxStateText(state2?.lastOutboxState))}${state2?.lastOutboxId ? ` \xB7 ${escapeHtml(state2.lastOutboxId.slice(-10))}` : ""}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
@@ -6598,18 +8764,15 @@ function settingsHtml() {
   return `
     <section class="ma11-card ma11-form-card">
       <header><b>\u4EFB\u52A1\u6A21\u578B\u5206\u914D</b><span>\u4E09\u79CD\u65B9\u5F0F\u5747\u4E0D\u4F1A\u518D\u901A\u8FC7DOM\u4E34\u65F6\u5207\u6362\u9152\u9986\u5168\u5C40\u8FDE\u63A5\u3002</span></header>
-      ${connectionBlock("audit", "\u89C4\u5219\u5BA1\u6838")}
-      ${connectionBlock("revision", "\u5B9A\u5411\u4FEE\u6B63")}
-      ${connectionBlock("state", "\u72B6\u6001\u8868")}
-      ${connectionBlock("smallSummary", "\u5C0F\u603B\u7ED3")}
-      ${connectionBlock("largeSummary", "\u5927\u603B\u7ED3")}
-      <p class="ma11-help">ST\u539F\u751F Profile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u5E76\u5F3A\u5236\u5173\u95ED\u89D2\u8272\u9884\u8BBE\u4E0E Instruct\uFF1B\u72EC\u7ACBAPI\u76F4\u63A5\u901A\u8FC7\u9152\u9986\u540E\u7AEF\u4EE3\u7406\u53D1\u9001\u3002\u8FDE\u63A5\u9519\u8BEF\u4E0EJSON\u7ED3\u6784\u9519\u8BEF\u4F1A\u5206\u522B\u62A5\u544A\u3002</p>
+      ${connectionBlock("audit", "\u5BA1\u6838\u4E0E\u5FC5\u8981\u4FEE\u6B63")}
+      ${connectionBlock("factExtraction", "\u8BB0\u5FC6\u6A21\u578B\uFF08\u8868\u683C\uFF0B\u5C0F\u603B\u7ED3\uFF0B\u5927\u603B\u7ED3\uFF09")}
+      <p class="ma11-help">\u955C\u6E0A\u53EA\u4F7F\u7528\u4E24\u4E2A\u6A21\u578B\u89D2\u8272\uFF1A\u5BA1\u6838\u4E0E\u5FC5\u8981\u4FEE\u6B63\u5171\u4EAB\u524D\u53F0\u8FDE\u63A5\uFF1B\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u3001\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u5171\u4EAB\u540E\u53F0\u8BB0\u5FC6\u8FDE\u63A5\u3002\u6B63\u6587\u53EA\u5728\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u65F6\u88AB\u7406\u89E3\u4E00\u6B21\uFF0C\u5C0F\u603B\u7ED3\u8BFB\u53D6\u4E8B\u5B9E\u5305\u4E0E\u6D3B\u8DC3\u8868\u683C\uFF0C\u5927\u603B\u7ED3\u8BFB\u53D6\u65E7\u5927\u603B\u7ED3\u4E0E\u65B0\u5C0F\u603B\u7ED3\uFF0C\u4E0D\u91CD\u65B0\u53D1\u9001\u539F\u59CB\u6B63\u6587\u3002ST\u539F\u751F Profile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u4E0D\u5207\u6362\u5F53\u524D\u804A\u5929\u8FDE\u63A5\u3002</p>
     </section>
     ${independentApiProfilesHtml()}
     <section class="ma11-card ma11-form-card">
       <header><b>\u81EA\u52A8\u5316</b></header>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span>\u542F\u7528\u955C\u6E0A</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span>\u6BCF\u6761\u65B0AI\u6B63\u6587\u81EA\u52A8\u6574\u7406\u8868\u683C</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span>\u6BCF\u6761\u65B0AI\u6B63\u6587\u540E\u53F0\u7EDF\u4E00\u63D0\u53D6\u4E8B\u5B9E</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="showMessagePanel" ${settings.showMessagePanel ? "checked" : ""}/><span>\u5728\u6B63\u6587\u4E0B\u663E\u793A\u72B6\u6001\u6761</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5C0F\u603B\u7ED3</span></label>
       <label>\u5C0F\u603B\u7ED3\u56DE\u5408\u6570<input type="number" min="1" max="100" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
@@ -6651,7 +8814,7 @@ async function diagnosticsHtml() {
         ${localConflicts.map(
     (record) => `
               <article class="ma11-error-box">
-                <b>\u672C\u5730\u603B\u7ED3\u63D0\u4EA4 \xB7 ${escapeHtml(record.operation)}</b>
+                <b>\u603B\u7ED3\u4E8B\u52A1\u63D0\u4EA4 \xB7 ${escapeHtml(record.operation)}</b>
                 <p>${escapeHtml(record.conflictDetail || record.error || "\u672C\u5730\u72B6\u6001\u4E0E\u63D0\u4EA4\u65E5\u5FD7\u4E0D\u4E00\u81F4")}</p>
                 <small>${escapeHtml(record.id)} \xB7 ${escapeHtml(new Date(record.updatedAt).toLocaleString())}</small>
                 <div class="ma11-actions">
@@ -6662,7 +8825,7 @@ async function diagnosticsHtml() {
       </section>` : "";
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
-    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u6E05\u7406\u53EA\u5220\u9664\u8D85\u8FC7\u4FDD\u7559\u6570\u91CF\u7684\u5DF2\u5B8C\u6210\u5386\u53F2\uFF0C\u4E0D\u5220\u9664\u672A\u89E3\u51B3\u4E8B\u52A1\u3002</p><div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">\u6062\u590D\u603B\u7ED3\u4F9D\u8D56</button>` : ""}</div></section>
+    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u6309 10\u201320 \u6761\u6B63\u6587\u5206\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? `<div class="ma11-status-strip"><b>\u5386\u53F2\u91CD\u5EFA\uFF1A${escapeHtml(chatState.historyRebuild.state)}</b><span>${chatState.historyRebuild.processedMessages ?? 0}/${chatState.historyRebuild.totalMessages ?? 0} \u6761 \xB7 ${chatState.historyRebuild.completedBatches ?? 0}/${chatState.historyRebuild.totalBatches ?? 0} \u6279${chatState.historyRebuild.error ? ` \xB7 ${escapeHtml(chatState.historyRebuild.error)}` : ""}</span></div>` : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${chatState.historyRebuild.state === "paused" || chatState.historyRebuild.state === "failed" ? "\u7EE7\u7EED\u91CD\u5EFA" : "\u6062\u590D\u91CD\u5EFA"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
     ${conflictHtml}
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(
@@ -6837,6 +9000,14 @@ function bindWorkspace(workspace) {
     const tab = target.closest("[data-ma11-tab]")?.dataset.ma11Tab;
     if (tab) return setTab(tab);
     const action = target.closest("[data-ma11-action]")?.dataset.ma11Action;
+    const actionButton = target.closest("button");
+    const longAction = Boolean(action || target.closest("[data-ma11-test], [data-ma11-api-models], [data-ma11-api-test]"));
+    const originalButtonText = actionButton?.textContent ?? "";
+    if (actionButton && longAction) {
+      actionButton.disabled = true;
+      actionButton.setAttribute("aria-busy", "true");
+      actionButton.textContent = "\u6267\u884C\u4E2D\u2026";
+    }
     try {
       if (action === "close") workspace.hidden = true;
       if (action === "open-tables") setTab("tables");
@@ -6903,6 +9074,17 @@ function bindWorkspace(workspace) {
       if (action === "retry-history-rebuild") {
         const rebuilt = await recoverHistoryConsistencyForCurrentChat();
         toast(rebuilt ? "success" : "info", rebuilt ? "\u603B\u7ED3\u3001\u72B6\u6001\u4E0E\u4E16\u754C\u4E66\u4F9D\u8D56\u5DF2\u91CD\u5EFA" : "\u5F53\u524D\u804A\u5929\u6CA1\u6709\u5F85\u6062\u590D\u7684\u5386\u53F2\u4F9D\u8D56");
+        await renderWorkspace();
+      }
+      if (action === "pause-history-rebuild") {
+        const requested = await requestHistoryRebuildPause();
+        toast(requested ? "success" : "info", requested ? "\u5C06\u5728\u5F53\u524D\u6279\u6B21\u7ED3\u675F\u540E\u6682\u505C\u5386\u53F2\u91CD\u5EFA" : "\u5F53\u524D\u6CA1\u6709\u5386\u53F2\u91CD\u5EFA\u4EFB\u52A1");
+        await renderWorkspace();
+      }
+      if (action === "cancel-history-rebuild") {
+        if (!confirm("\u53D6\u6D88\u540E\u4F1A\u4FDD\u7559\u5F53\u524D\u68C0\u67E5\u70B9\uFF0C\u53EF\u7A0D\u540E\u4ECE\u68C0\u67E5\u70B9\u91CD\u65B0\u5F00\u59CB\u3002\u7EE7\u7EED\u5417\uFF1F")) return;
+        const requested = await requestHistoryRebuildCancel();
+        toast(requested ? "warning" : "info", requested ? "\u5DF2\u8BF7\u6C42\u53D6\u6D88\u5386\u53F2\u91CD\u5EFA" : "\u5F53\u524D\u6CA1\u6709\u5386\u53F2\u91CD\u5EFA\u4EFB\u52A1");
         await renderWorkspace();
       }
       if (action === "cleanup-recovery") {
@@ -7029,6 +9211,12 @@ function bindWorkspace(workspace) {
       }
     } catch (error) {
       toast("error", toErrorMessage(error));
+    } finally {
+      if (actionButton?.isConnected && longAction) {
+        actionButton.disabled = false;
+        actionButton.removeAttribute("aria-busy");
+        actionButton.textContent = originalButtonText;
+      }
     }
   });
   workspace.addEventListener("change", (event) => {
@@ -7180,6 +9368,7 @@ function installMessagePanelHandlers() {
 }
 
 // src/ui/settings-panel.ts
+init_constants();
 function extensionPathFromUrl() {
   const url = new URL(import.meta.url);
   const marker = "/scripts/extensions/";
@@ -7272,7 +9461,15 @@ function unmountOptionalTopButton() {
   document.querySelector("#ma11-top-button")?.remove();
 }
 
+// src/bootstrap/app.ts
+init_chat_scope();
+init_task_queue();
+init_connection_broker();
+
 // src/migration/legacy-migration.ts
+init_constants();
+init_utils();
+init_repository();
 var MIGRATION_VERSION = 4;
 var fallbackMigrationLocks = new LockManager();
 function migrationLocks() {
@@ -7497,6 +9694,10 @@ async function migrateLegacyDataForCurrentChat() {
 }
 
 // src/migration/chat-scope-migration.ts
+init_constants();
+init_utils();
+init_chat_scope();
+init_repository();
 async function migrateCurrentChatScopeIdentity() {
   ensureChatIdentityForContext(getContext());
   const scope = chatScopeManager.current();
@@ -7522,6 +9723,9 @@ async function migrateCurrentChatScopeIdentity() {
 }
 
 // src/integrations/chat-metadata.ts
+init_constants();
+init_chat_scope();
+init_utils();
 function currentContext() {
   try {
     return globalThis.SillyTavern?.getContext?.() ?? null;
@@ -7675,6 +9879,8 @@ function teardownRuntime(reason = "\u6269\u5C55\u5DF2\u505C\u6B62") {
   clearAllQuarantines();
   taskQueue.cancelAll(reason);
   connectionBroker.cancelAll(reason);
+  invocationRouter.cancelAll(reason);
+  unifiedFactScheduler.cancelAll(reason);
   cleanupPipeline?.();
   cleanupPanels?.();
   cleanupUiEvents?.();

@@ -1,6 +1,108 @@
-# Validation — 1.1.0-alpha.9.7 Summary Consistency / Phase 5 Candidate
+# Validation — 1.1.0-alpha.10.5.2 Frozen Performance Patch
 
-执行日期：2026-07-12
+## alpha.10.5.2 验证摘要
+
+### 自动与工程验证
+
+- 自动测试：106/106 通过。
+- 洁净源码 `npm ci` 后自动测试：106/106 通过。
+- TypeScript strict：通过。
+- 依赖边界检查：通过。
+- ESLint：通过。
+- 生产构建与 `node --check index.js`：通过。
+- npm 已知漏洞：0。
+- package、manifest 与运行时版本：统一为 `1.1.0-alpha.10.5.2`。
+
+
+### alpha.10.5.2 性能冻结验证
+
+- 相同独立 API 端点与会话密钥的不同配置捕获相同脱敏 credential lane；哈希中不出现明文密钥。
+- 同一 credential lane 中，已排队 foreground 在运行请求结束后先于 background-derived 执行。
+- 事实提示词裁剪后仍保留手工/锁定保护、生命周期和关系双方 ID。
+- 10 条短正文保持单批；超过 52,000 字符预算的正文区段按体积拆批，正文数量与顺序保持完整。
+- 中间派生状态被更新区段替代时结束为 skipped，不长期显示 queued。
+- 小总结和大总结共享一次构建的 fact-package 索引，大总结来源范围不再逐 key 扫描全聊天。
+- 30/100 轮模型调用仍为 69/230；没有增加普通轮次或总结节点调用。
+- 108 行活跃表格合成样本：事实提示词 57,577 bytes → 39,106 bytes，减少 32.1%。
+
+### alpha.10.5.1 缺陷复现与修复验证
+
+- 同一沉降计划请求删除多个时间地点行时，代码始终保留至少一个锚点；1–100 行随机规模全部通过。
+- 当前事实包即使夹带冲突 `tableOperations`，九表仍只按 `facts.entityType` 由代码映射；100 个冲突样本全部进入人物表、0 个误入物品表。
+- 已有稳定对象漏写重复标题时，可复用旧行标题更新，不再静默跳过。
+- 单字符对象名“剑”等保留为世界书触发关键词。
+- 多组重复焦点卡的 mergedRowIds 按身份隔离，不再串号。
+- 被更新版本替代的待发布世界书任务明确终态为 skipped/已合并。
+- 已初始化聊天切换返回时，可检测未处理正文尾部；从未初始化的旧聊天不会自动回扫。
+
+### 玩家流程验证
+
+30 轮完整流程（小总结每 5 轮，大总结每 2 个小总结）：
+
+```text
+审核：30
+统一事实提取：30
+小总结：6
+大总结：3
+JSON 修复：0
+其他模型调用：0
+世界书 EDIT：1
+最终长期记录 event:progress 已更新到第 3 个长期阶段
+```
+
+100 轮长流程：
+
+```text
+审核：100
+统一事实提取：100
+小总结：20
+大总结：10
+JSON 修复与其他调用：0
+世界书 EDIT：1
+最终长期记录 event:progress 已更新到第 10 个长期阶段
+```
+
+10 轮快速推进：
+
+```text
+前台放行约 10ms（本地模拟）
+事实提取合并为 1 次
+中间正文全部进入同一事实区段
+旧活跃人物在下一次模型漏写时仍被保留
+```
+
+### 记忆迁移验证
+
+- 精确吸收凭证：只有 `absorbedRowIds` 中的已结束行可退出；`keepActiveRowIds` 可阻止误删。
+- 不可逆保护：死亡、永久销毁、永久失去和不可逆关系结果进入长期候选；`irreversible` 长期记录拒绝裸删除。
+- 对象化大总结：未变化旧记录自动保留，`upsert/remove/merge` 由代码确定性应用。
+- 模型遗漏保护：小总结已经标记为长期候选的记录，即使大总结操作中漏写，也不会静默丢失。
+- 旧数据兼容：缺少吸收凭证的小总结继续使用文字校验；缺少对象操作的大总结继续使用完整 summary 兼容路径。
+- 世界书映射：基础设定常驻，其余现有类别关键词触发；现有向量开关开启时非常驻条目同时向量化。
+
+### 阶段输入体积样本
+
+在 108 行活跃表格、18 条阶段事实、40 条长期记录的合成样本中：
+
+```text
+当前小总结提示词：47,943 bytes
+alpha.10.4 近似输入：57,134 bytes
+当前大总结提示词：22,263 bytes
+alpha.10.4 近似输入：42,276 bytes
+```
+
+这是合成样本，只证明本次字段裁剪没有增加阶段输入，不代表所有实际聊天都获得同一比例。
+
+### 已知验收边界
+
+- 尚未在真实 SillyTavern 长存档中验证不同模型对新 JSON 协议的长期遵循。
+- 尚未完成移动端后台回收、真实弱网与真实 504 的人工体验测试。
+- 旧大总结首次进入对象记录模式时会保留一个 legacy 长期记录，后续模型可通过 merge/remove 逐步整理；不会自动猜测拆分旧文本。
+- 当前仍为 alpha 候选，不标记 stable。
+
+
+
+执行日期：2026-07-13
 
 ## 可复现命令
 
@@ -9,105 +111,196 @@ npm ci
 npm test
 npm run validate
 npm audit --audit-level=low
+node --import tsx simulations/invocation-coalescing.ts
+node --import tsx simulations/player-backpressure-and-continuity.ts
+node --import tsx simulations/audit-one-pass-30turn.ts
+node --import tsx simulations/full-30turn.ts
+node --import tsx simulations/fact-package-v2-size.ts
+node --import tsx simulations/history-mutation-chain.ts
+node --import tsx simulations/memory-sedimentation-scenario.ts
+node --import tsx simulations/long-100turn.ts
+node --import tsx simulations/summary-prompt-footprint.ts
+node --import tsx simulations/performance-freeze-alpha10_5_2.ts
 ```
 
-`npm test` 与静态/构建验证分开运行，避免把测试结果隐藏在复合脚本中。
+## 工程检查
 
-## 自动检查
-
-- 发布源码内 `tsconfig.json`：存在
 - TypeScript strict：通过
 - 依赖边界检查：通过
 - ESLint：通过
-- 自动测试：72/72 通过
+- 自动测试：106/106 通过
+- 测试运行器：逐文件隔离、文件级超时、完成后强制退出
 - 生产 ESM 构建：通过
 - `node --check index.js`：通过
-- 生产 `index.js.map`：不存在
+- 生产 source map：未生成
 - `npm audit --audit-level=low`：0 个已知漏洞
+- package、manifest 与运行时版本：统一为 `1.1.0-alpha.10.5.2`
 
-## Foundation 回归
+## Phase 3 现有功能收尾回归
 
-- Connection Broker 串行/并行、429、超时、取消、熔断：通过
-- 按聊天 TaskQueue lane 与任务终态：通过
-- 账户隔离与稳定聊天身份：通过
-- Worldbook Outbox prepare、回读、冲突、回滚和恢复：通过
-- LocalCommit 双对象崩溃恢复：通过
-- Web Locks/localStorage 降级协调：通过
-- alpha.6/alpha.7 迁移与备份：通过
-- 生命周期完整卸载与单实例重启：通过
-- 正常管线单回合一次完整聊天保存：通过
-- 可移植 ChatState 恢复：通过
-- 审核锁所有权：通过
+- 小总结由模型读取事实包与当前活跃表格生成：通过
+- 小总结提示词不重新发送原始正文：通过
+- 大总结读取上一版大总结和新小总结进行累计更新：通过
+- 大总结不使用本地行追加作为正常路径：通过
+- 关系、物件、技能已结束行在被小总结吸收后可以退出：通过
+- 未被小总结吸收的沉降请求会被拒绝：通过
+- 玩家手工行与锁定行不被自动沉降：通过
+- 焦点、正式人物和基础设定不被沉降器直接删除：通过
+- 死亡人物正式记录保留，死亡结果可进入阶段与长期总结：通过
+- 关系事实稳定端点随事实、表格和快照持久保存：通过
+- 图谱优先按 `sourceEntityId/targetEntityId` 连线：通过
+- 旧关系行继续使用名称匹配回退：通过
+- 审核与修正共享前台连接：通过
+- 事实、表格、小总结与大总结共享后台记忆连接：通过
 
-## alpha.9.7 新增回归
+## 保留的 Phase 2 数据语义回归
 
-- 消息稳定身份与 revision key 分离：通过
-- 受影响小总结递归失效：通过
-- 大总结依赖后缀失效：通过
-- 总结后编辑消息并重建：通过
-- 总结后删除消息并重建：通过
-- swipe 替换旧 revision：通过
-- `MESSAGE_SWIPE_DELETED` 事件路由：通过
-- `MESSAGE_UPDATED` 事件路由：通过
-- 无正文变化的 `MESSAGE_UPDATED` 不重建：通过
-- 分支携带旧 portable ChatState 时自动识别并重建：通过
-- 重建中断写入 failed 记录：通过
-- 启动/人工恢复 failed 重建：通过
-- 重放期间只在结尾同步最新世界书快照：通过
-- 历史重建诊断与人工恢复入口：通过
+- UnifiedFactPackage v2 无需完整 `finalSnapshot` 即可更新九类活跃表格：通过
+- 事实按 `entityType` 由代码确定性映射到表格：通过
+- `historical_result` 和 `trace` 不创建活跃表格行：通过
+- 普通轮次未提及的旧活跃行不会静默消失：通过
+- 关闭、替代和历史化事实先标记为待阶段沉降：通过
+- alpha.10.2 无标题事实包继续使用旧 `finalSnapshot` 兼容回退：通过
+- 焦点 focusId、别名、稳定行 ID 和标准化名称复用：通过
+- 重复焦点卡合并与单一当前焦点：通过
+- 世界书仅基础设定允许全局常驻：通过
 
-## 模拟结果
+## 保留的 Phase 1 稳定性回归
 
-### 100 回合状态提取
+- 同聊天、同连接保持顺序：通过
+- 同聊天、不同连接允许并发：通过
+- 前台任务越过排队后台任务：通过
+- 2–4 轮正文合并事实提取：通过
+- 5 轮以上批处理全部未处理正文：通过
+- 旧世界书发布任务由最新版本取代：通过
+- 手动相同内容重发仍刷新缓存、列表和编辑器：通过
+- 历史重建每 10–20 条一个批次：通过
+- 批次检查点、暂停、取消和刷新续建：通过
+- 504 只重试失败批次：通过
+- 历史重建末尾只发布一次最终世界书：通过
+
+## 玩家视角模拟
+
+### 4 轮快速推进
 
 ```text
-turns: 100
-generateCalls: 100
-saveChatCalls: 100
-saveChatCallsPerTurn: 1
+前台返回：6ms
+事实模型调用：1
+小总结调用：1
+大总结调用：1
+合并来源正文：4
+聊天完整保存：1
 ```
 
-### 30 回合完整功能链
+### 10 轮突发推进与表格连续性
 
 ```text
-audit: 30
-state: 30
-small summaries: 6
-large summaries: 3
-saveChatCalls: 30
-worldbook Outbox committed: 30
-LocalCommit committed: 9
-world entries: 4
+前台返回：11ms
+突发阶段事实模型调用：1
+合并来源正文：10
+小总结调用：1
+大总结调用：1
+后续模型漏写“向导”：旧活跃人物仍保留
+总事实模型调用：2（10 轮批次＋后续单轮）
 ```
 
-### 历史变更链
+### 30 轮完整链
 
 ```text
-编辑：新 revision 存在，旧 revision 不存在
-swipe：新 revision 存在，旧 revision 不存在
-删除：被删 revision 不存在，小/大总结归零
+审核调用：30
+事实调用：30
+小总结调用：6
+大总结调用：3
+独立修正调用：0
+JSON 修复：0
+其他模型调用：0
+总模型调用：69
+世界书 GET：3
+世界书 EDIT：1
+世界书 committed Outbox：1
+聊天元数据保存：1
+```
+
+含 6 个违规轮次的 30 轮测试仍为审核 30、事实 30、小总结 6、大总结 3；6 条正文都在审核调用内完成修正，没有独立修正或复审调用。
+
+### 不可逆事实沉降场景
+
+```text
+旧地点退出：true
+已断裂关系退出：true
+已销毁物件退出：true
+永久失去技能退出：true
+当前地点保留：true
+死亡人物正式记录保留：true
+死亡结果已进入小总结：true
+```
+
+### 100 轮长流程
+
+```text
+审核调用：100
+事实调用：100
+小总结调用：20
+大总结调用：10
+JSON 修复及其他调用：0
+聊天保存：101
+世界书 EDIT：1
+小总结：20
+大总结：10
+未提交事务：0
+运行时间：约 21.8 秒（本地模拟环境）
+```
+
+### 历史变化链
+
+```text
+编辑：新 revision 存在，旧 revision 移除
+Swipe：新 revision 存在，旧 revision 移除
+删除：被删 revision 移除，受影响总结失效
 分支：自动恢复，旧 revision 数量 0
-未解决 HistoryRebuild：false
+状态调用：6
+小总结调用：3
+大总结调用：3
+未解决历史重建：false
 ```
 
-## 发布结构
+### 统一事实包体积样本
 
-- source ZIP 包含 `tsconfig.json`、`eslint.config.mjs`、源码、测试、模拟、脚本、研究和 Phase 5 文档；
-- source ZIP 不包含 `node_modules`、`.git`；
-- deploy ZIP 不包含 TypeScript、测试、开发依赖或 source map；
-- source/deploy `index.js` 哈希必须一致；
-- package、manifest 与运行时版本必须一致。
+使用 108 行模拟旧快照、仅有少量本轮变化的合成样本：
 
-## 仍需真实环境验证
+```text
+旧完整快照输出：47,471 bytes
+增量事实输出：1,004 bytes
+该样本输出减少：97.9%
+```
 
-- 从公开 alpha.7 安装仓库原位升级；
-- 真实 SillyTavern install/update/enable/disable/delete hooks；
-- 当前连接和 Connection Profile 的真实取消、401/secret-id 情况；
-- 编辑、删除、swipe、继续生成和分支事件的真实宿主顺序；
-- 后台标签页休眠、页面刷新/关闭和浏览器页面回收；
-- 双标签页真实 Web Locks 与 localStorage 降级竞争；
-- 移动端弱网、Wi-Fi/移动数据切换与长期运行；
-- 100 回合以上存档中 portable ChatState 元数据体积；
-- 多设备同时编辑同一个世界书。
+这是特定合成样本，不代表所有实际剧情都能获得相同比例。
 
-本版本是 Phase 5 实机验收候选，不能标记为 stable 或 beta。
+## 玩家视角结论
+
+- 玩家正文仍只等待审核与必要修正。
+- 表格、总结、沉降、图谱和世界书继续在后台运行。
+- 快速推进不会丢弃中间正文，后台会合并事实理解。
+- 不活跃关系、物件和技能可以在小总结记录结果后退出当前表格与世界书。
+- 死亡、永久失去和关系断裂不会因清理表格而从记忆中消失。
+- 图谱稳定 ID 连线提高准确性，但不会反向影响正文或记忆。
+
+## 专业视角结论
+
+- 最终正文只进入一次事实提取；阶段与长期总结不重新读取正文。
+- 总结恢复模型语义压缩，因此阶段节点会产生额外模型调用；30 轮测试增加 6 次小总结和 3 次大总结。
+- 安全沉降同时依赖模型计划、行状态、来源/锁定保护和总结吸收校验。
+- 大总结是累计更新，不再存在旧内容在前、新内容因固定行数上限被直接截断的正常路径。
+- 关系端点使用稳定 ID；名称匹配仅作为旧存档兼容方案。
+- 聊天正文仍是原始事实，全部派生数据可通过历史重建恢复。
+
+## 仍需真实 SillyTavern 验收
+
+- 真实模型是否稳定输出有效事实端点和沉降计划；
+- 真实小总结是否能可靠覆盖不可逆结果后再申请移除表格行；
+- 100 回合以上大总结是否正确修改和删除过期长期事实；
+- 移动端后台冻结、页面回收、弱网和真实 504；
+- 多聊天、多标签竞争和不同 SillyTavern 小版本世界书刷新；
+- alpha.9.7/alpha.10.2 旧关系行的名称回退与逐步升级。
+
+本版本只能标记为 alpha 候选。
