@@ -21,8 +21,8 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.5.2";
-    PIPELINE_VERSION = "ma-pipeline-10.5.2";
+    VERSION = "1.1.0-alpha.10.5.3";
+    PIPELINE_VERSION = "ma-pipeline-10.5.3";
     TABLE_KEYS = [
       "focus",
       "spacetime",
@@ -69,16 +69,14 @@ var init_constants = __esm({
       latestContinuityConstant: false,
       lorebookLayout: "semantic",
       repairInvalidJsonOnce: true,
-      requestTimeoutMs: 9e4,
       connections: {
-        audit: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-        revision: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-        factExtraction: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-        state: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-        smallSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" },
-        largeSummary: { mode: "current", profileId: "", profile: "", independentProfileId: "" }
+        audit: { mode: "current", profileId: "", profile: "" },
+        revision: { mode: "current", profileId: "", profile: "" },
+        factExtraction: { mode: "current", profileId: "", profile: "" },
+        state: { mode: "current", profileId: "", profile: "" },
+        smallSummary: { mode: "current", profileId: "", profile: "" },
+        largeSummary: { mode: "current", profileId: "", profile: "" }
       },
-      independentApiProfiles: [],
       ui: {
         activeTab: "overview",
         activeTable: "focus",
@@ -148,24 +146,6 @@ function escapeHtml(value) {
   const element = document.createElement("div");
   element.textContent = String(value ?? "");
   return element.innerHTML;
-}
-function withTimeout(promise, ms, label, controller) {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      controller?.abort();
-      reject(new Error(`${label}\u8D85\u65F6\uFF08${Math.round(ms / 1e3)}\u79D2\uFF09`));
-    }, ms);
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
 }
 function safeText(value, max = 1e5) {
   return String(value ?? "").replace(/\u0000/g, "").slice(0, max);
@@ -935,396 +915,6 @@ var init_repository = __esm({
   }
 });
 
-// src/foundation/connection-broker.ts
-function makeRequestId() {
-  return `ma-conn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error ?? "\u672A\u77E5\u9519\u8BEF");
-}
-function copyError(error, patch) {
-  return new ConnectionRequestError(error.message, error.kind, {
-    status: error.status,
-    responsePreview: error.responsePreview,
-    retryAfterMs: error.retryAfterMs,
-    attempts: error.attempts,
-    connectionKey: error.connectionKey,
-    cause: error.cause,
-    ...patch
-  });
-}
-function normalizeConnectionError(error) {
-  if (error instanceof ConnectionRequestError) return error;
-  const message = errorMessage(error);
-  const candidate = error;
-  const statusValue = Number(candidate?.status ?? candidate?.response?.status);
-  const status = Number.isInteger(statusValue) && statusValue > 0 ? statusValue : void 0;
-  const options = { status, cause: error };
-  if (/abort|cancel|取消/i.test(message)) return new ConnectionRequestError(message || "\u8BF7\u6C42\u5DF2\u53D6\u6D88", "cancelled", options);
-  if (status === 408 || status === 504 || /timeout|timed out|超时/i.test(message)) return new ConnectionRequestError(message, "timeout", options);
-  if (status === 429 || /429|rate.?limit|too many requests|限流/i.test(message)) return new ConnectionRequestError(message, "rate_limit", options);
-  if (status === 401 || status === 403 || /401|403|unauthori[sz]ed|forbidden|密钥|鉴权|认证/i.test(message)) return new ConnectionRequestError(message, "authentication", options);
-  if (status === 404 || /(?:^|\D)404(?:\D|$)|not found/i.test(message)) return new ConnectionRequestError(message, "not_found", options);
-  if (status === 400 || status === 409 || status === 422 || /bad request|invalid request|unprocessable/i.test(message)) {
-    return new ConnectionRequestError(message, "configuration", options);
-  }
-  if (/network|fetch|socket|ECONN|ENOTFOUND|网络/i.test(message)) return new ConnectionRequestError(message, "network", options);
-  return new ConnectionRequestError(message, "upstream", options);
-}
-function isRetryable(error) {
-  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream";
-}
-function countsTowardCircuit(error) {
-  return error.kind === "rate_limit" || error.kind === "network" || error.kind === "upstream" || error.kind === "timeout";
-}
-var ConnectionRequestError, DEFAULT_POLICY, CONNECTION_PRIORITY_WEIGHT, ConnectionBroker, connectionBroker;
-var init_connection_broker = __esm({
-  "src/foundation/connection-broker.ts"() {
-    "use strict";
-    ConnectionRequestError = class extends Error {
-      kind;
-      status;
-      responsePreview;
-      retryAfterMs;
-      attempts;
-      connectionKey;
-      constructor(message, kind, options = {}) {
-        super(message, options.cause ? { cause: options.cause } : void 0);
-        this.name = "ConnectionRequestError";
-        this.kind = kind;
-        this.status = options.status;
-        this.responsePreview = options.responsePreview;
-        this.retryAfterMs = options.retryAfterMs;
-        this.attempts = options.attempts;
-        this.connectionKey = options.connectionKey;
-      }
-    };
-    DEFAULT_POLICY = {
-      maxConcurrent: 1,
-      maxRetries: 2,
-      baseBackoffMs: 750,
-      maxBackoffMs: 12e3,
-      jitterRatio: 0.2,
-      circuitFailureThreshold: 3,
-      circuitOpenMs: 3e4
-    };
-    CONNECTION_PRIORITY_WEIGHT = {
-      foreground: 0,
-      "background-critical": 10,
-      "background-derived": 20,
-      "background-io": 30
-    };
-    ConnectionBroker = class {
-      lanes = /* @__PURE__ */ new Map();
-      circuits = /* @__PURE__ */ new Map();
-      requests = /* @__PURE__ */ new Map();
-      listeners = /* @__PURE__ */ new Set();
-      waiterSequence = 0;
-      subscribe(listener) {
-        this.listeners.add(listener);
-        listener(this.snapshot());
-        return () => this.listeners.delete(listener);
-      }
-      snapshot() {
-        return {
-          active: [...this.requests.values()].map(({ controller: _controller, ...record }) => ({ ...record })),
-          lanes: [...this.lanes.entries()].map(([connectionKey, lane]) => ({
-            connectionKey,
-            active: lane.active,
-            queued: lane.waiters.length,
-            maxConcurrent: lane.maxConcurrent
-          })),
-          circuits: [...this.circuits.entries()].map(([connectionKey, circuit]) => ({ connectionKey, ...circuit }))
-        };
-      }
-      async request(request) {
-        const policy = this.resolvePolicy(request.policy);
-        const id = request.id || makeRequestId();
-        if (this.requests.has(id)) {
-          throw new ConnectionRequestError(`\u8FDE\u63A5\u8BF7\u6C42ID\u91CD\u590D\uFF1A${id}`, "configuration", { connectionKey: request.connectionKey });
-        }
-        const controller = new AbortController();
-        const forwardAbort = () => controller.abort(request.signal?.reason);
-        request.signal?.addEventListener("abort", forwardAbort, { once: true });
-        if (request.signal?.aborted) controller.abort(request.signal.reason);
-        const record = {
-          id,
-          priority: request.priority ?? "background-critical",
-          connectionKey: request.connectionKey,
-          scopeKey: request.scopeKey || "",
-          label: request.label,
-          state: "queued",
-          attempt: 0,
-          controller,
-          startedAt: Date.now()
-        };
-        this.requests.set(id, record);
-        this.emit();
-        let release;
-        try {
-          release = await this.acquire(
-            request.connectionKey,
-            policy.maxConcurrent,
-            request.priority ?? "background-critical",
-            controller.signal
-          );
-          record.state = "running";
-          this.emit();
-          this.assertCircuitAvailable(request.connectionKey, policy);
-          let lastError2 = null;
-          for (let attempt = 1; attempt <= policy.maxRetries + 1; attempt += 1) {
-            record.attempt = attempt;
-            record.state = attempt === 1 ? "running" : "retrying";
-            this.emit();
-            try {
-              const value = await this.executeAttempt(request, controller.signal, attempt);
-              this.recordSuccess(request.connectionKey);
-              return value;
-            } catch (error) {
-              let normalized = normalizeConnectionError(error);
-              if (controller.signal.aborted && normalized.kind !== "timeout") {
-                normalized = new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
-                  cause: error,
-                  connectionKey: request.connectionKey,
-                  attempts: attempt
-                });
-              }
-              lastError2 = copyError(normalized, { attempts: attempt, connectionKey: request.connectionKey });
-              if (!isRetryable(lastError2) || attempt > policy.maxRetries || controller.signal.aborted) break;
-              const delay = this.retryDelay(lastError2, attempt, policy);
-              await this.wait(delay, controller.signal, request.label);
-            }
-          }
-          const finalError = lastError2 ?? new ConnectionRequestError(`${request.label}\u5931\u8D25`, "upstream");
-          this.recordFailure(request.connectionKey, finalError, policy);
-          throw finalError;
-        } finally {
-          release?.();
-          request.signal?.removeEventListener("abort", forwardAbort);
-          this.requests.delete(id);
-          this.emit();
-        }
-      }
-      cancel(requestId, reason = "\u8BF7\u6C42\u5DF2\u53D6\u6D88") {
-        const record = this.requests.get(requestId);
-        if (!record) return false;
-        record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-        this.emit();
-        return true;
-      }
-      cancelScope(scopeKey, reason = "\u804A\u5929\u4F5C\u7528\u57DF\u5DF2\u5931\u6548") {
-        let count = 0;
-        for (const record of this.requests.values()) {
-          if (record.scopeKey !== scopeKey) continue;
-          record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-          count += 1;
-        }
-        if (count) this.emit();
-        return count;
-      }
-      cancelAllExceptScope(scopeKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
-        let count = 0;
-        for (const record of this.requests.values()) {
-          if (record.scopeKey === scopeKey) continue;
-          record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-          count += 1;
-        }
-        if (count) this.emit();
-        return count;
-      }
-      cancelAll(reason = "\u8FDE\u63A5\u670D\u52A1\u5DF2\u505C\u6B62") {
-        let count = 0;
-        for (const record of this.requests.values()) {
-          record.controller.abort(new ConnectionRequestError(reason, "cancelled", { connectionKey: record.connectionKey }));
-          count += 1;
-        }
-        if (count) this.emit();
-        return count;
-      }
-      resetCircuit(connectionKey) {
-        if (connectionKey) this.circuits.delete(connectionKey);
-        else this.circuits.clear();
-        this.emit();
-      }
-      resolvePolicy(patch) {
-        return {
-          maxConcurrent: Math.max(1, Math.floor(patch?.maxConcurrent ?? DEFAULT_POLICY.maxConcurrent)),
-          maxRetries: Math.max(0, Math.floor(patch?.maxRetries ?? DEFAULT_POLICY.maxRetries)),
-          baseBackoffMs: Math.max(0, Math.floor(patch?.baseBackoffMs ?? DEFAULT_POLICY.baseBackoffMs)),
-          maxBackoffMs: Math.max(0, Math.floor(patch?.maxBackoffMs ?? DEFAULT_POLICY.maxBackoffMs)),
-          jitterRatio: Math.min(1, Math.max(0, Number(patch?.jitterRatio ?? DEFAULT_POLICY.jitterRatio))),
-          circuitFailureThreshold: Math.max(1, Math.floor(patch?.circuitFailureThreshold ?? DEFAULT_POLICY.circuitFailureThreshold)),
-          circuitOpenMs: Math.max(100, Math.floor(patch?.circuitOpenMs ?? DEFAULT_POLICY.circuitOpenMs))
-        };
-      }
-      async acquire(connectionKey, maxConcurrent, priority, signal) {
-        let lane = this.lanes.get(connectionKey);
-        if (!lane) {
-          lane = { active: 0, maxConcurrent, waiters: [] };
-          this.lanes.set(connectionKey, lane);
-        }
-        lane.maxConcurrent = maxConcurrent;
-        if (signal.aborted) throw new ConnectionRequestError("\u8BF7\u6C42\u5728\u6392\u961F\u524D\u5DF2\u53D6\u6D88", "cancelled", { connectionKey });
-        if (lane.active < lane.maxConcurrent) {
-          lane.active += 1;
-          this.emit();
-          return this.releaseFactory(connectionKey, lane);
-        }
-        return new Promise((resolve, reject) => {
-          const waiter = {
-            sequence: this.waiterSequence += 1,
-            priority,
-            signal,
-            resolve,
-            reject,
-            onAbort: () => {
-              const index = lane.waiters.indexOf(waiter);
-              if (index >= 0) lane.waiters.splice(index, 1);
-              reject(new ConnectionRequestError("\u8BF7\u6C42\u5728\u961F\u5217\u4E2D\u88AB\u53D6\u6D88", "cancelled", { connectionKey }));
-              this.emit();
-            }
-          };
-          signal.addEventListener("abort", waiter.onAbort, { once: true });
-          lane.waiters.push(waiter);
-          lane.waiters.sort((a, b) => {
-            const priorityDelta = CONNECTION_PRIORITY_WEIGHT[a.priority] - CONNECTION_PRIORITY_WEIGHT[b.priority];
-            return priorityDelta || a.sequence - b.sequence;
-          });
-          this.emit();
-        });
-      }
-      releaseFactory(connectionKey, lane) {
-        let released = false;
-        return () => {
-          if (released) return;
-          released = true;
-          lane.active = Math.max(0, lane.active - 1);
-          while (lane.waiters.length) {
-            const waiter = lane.waiters.shift();
-            waiter.signal.removeEventListener("abort", waiter.onAbort);
-            if (waiter.signal.aborted) continue;
-            lane.active += 1;
-            waiter.resolve(this.releaseFactory(connectionKey, lane));
-            break;
-          }
-          if (lane.active === 0 && lane.waiters.length === 0) this.lanes.delete(connectionKey);
-          this.emit();
-        };
-      }
-      executeAttempt(request, parentSignal, attempt) {
-        if (parentSignal.aborted) {
-          return Promise.reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", { connectionKey: request.connectionKey }));
-        }
-        const attemptController = new AbortController();
-        const forwardAbort = () => attemptController.abort(parentSignal.reason);
-        parentSignal.addEventListener("abort", forwardAbort, { once: true });
-        let timer;
-        let onAttemptAbort;
-        const timeoutPromise = new Promise((_resolve, reject) => {
-          timer = setTimeout(() => {
-            const timeoutError = new ConnectionRequestError(`${request.label}\u8D85\u65F6`, "timeout", {
-              connectionKey: request.connectionKey,
-              attempts: attempt
-            });
-            attemptController.abort(timeoutError);
-            reject(timeoutError);
-          }, Math.max(1, request.timeoutMs));
-        });
-        const abortPromise = new Promise((_resolve, reject) => {
-          onAttemptAbort = () => {
-            if (parentSignal.aborted) {
-              reject(new ConnectionRequestError(`${request.label}\u5DF2\u53D6\u6D88`, "cancelled", {
-                connectionKey: request.connectionKey,
-                attempts: attempt,
-                cause: parentSignal.reason
-              }));
-            }
-          };
-          attemptController.signal.addEventListener("abort", onAttemptAbort, { once: true });
-        });
-        const operation = Promise.resolve().then(() => request.execute(attemptController.signal, attempt));
-        return Promise.race([operation, timeoutPromise, abortPromise]).finally(() => {
-          if (timer) clearTimeout(timer);
-          parentSignal.removeEventListener("abort", forwardAbort);
-          if (onAttemptAbort) attemptController.signal.removeEventListener("abort", onAttemptAbort);
-        });
-      }
-      assertCircuitAvailable(connectionKey, policy) {
-        const circuit = this.circuits.get(connectionKey);
-        if (!circuit) return;
-        const now = Date.now();
-        if (circuit.openUntil > now) {
-          throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
-            connectionKey,
-            retryAfterMs: circuit.openUntil - now
-          });
-        }
-        if (circuit.openUntil > 0) {
-          if (circuit.halfOpen) {
-            throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6B63\u5728\u534A\u5F00\u63A2\u6D4B`, "circuit_open", { connectionKey });
-          }
-          circuit.halfOpen = true;
-          circuit.openUntil = 0;
-          this.emit();
-        }
-        if (circuit.failures >= policy.circuitFailureThreshold && circuit.openUntil === 0 && !circuit.halfOpen) {
-          circuit.openUntil = now + policy.circuitOpenMs;
-          this.emit();
-          throw new ConnectionRequestError(`\u8FDE\u63A5\u201C${connectionKey}\u201D\u6682\u65F6\u7194\u65AD`, "circuit_open", {
-            connectionKey,
-            retryAfterMs: policy.circuitOpenMs
-          });
-        }
-      }
-      recordSuccess(connectionKey) {
-        if (this.circuits.delete(connectionKey)) this.emit();
-      }
-      recordFailure(connectionKey, error, policy) {
-        const tracked = countsTowardCircuit(error);
-        const existing = this.circuits.get(connectionKey);
-        if (!tracked && !existing) return;
-        const circuit = existing ?? { failures: 0, openUntil: 0, halfOpen: false };
-        circuit.halfOpen = false;
-        if (tracked) circuit.failures += 1;
-        if (circuit.failures >= policy.circuitFailureThreshold) circuit.openUntil = Date.now() + policy.circuitOpenMs;
-        this.circuits.set(connectionKey, circuit);
-        this.emit();
-      }
-      retryDelay(error, attempt, policy) {
-        if (typeof error.retryAfterMs === "number" && error.retryAfterMs >= 0) return Math.min(policy.maxBackoffMs, error.retryAfterMs);
-        const base = Math.min(policy.maxBackoffMs, policy.baseBackoffMs * 2 ** Math.max(0, attempt - 1));
-        const jitter = base * policy.jitterRatio * (Math.random() * 2 - 1);
-        return Math.max(0, Math.round(base + jitter));
-      }
-      wait(ms, signal, label) {
-        if (ms <= 0) return Promise.resolve();
-        return new Promise((resolve, reject) => {
-          const timer = setTimeout(() => {
-            signal.removeEventListener("abort", onAbort);
-            resolve();
-          }, ms);
-          const onAbort = () => {
-            clearTimeout(timer);
-            reject(new ConnectionRequestError(`${label}\u91CD\u8BD5\u7B49\u5F85\u5DF2\u53D6\u6D88`, "cancelled", { cause: signal.reason }));
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-        });
-      }
-      emit() {
-        if (!this.listeners.size) return;
-        const snapshot = this.snapshot();
-        for (const listener of this.listeners) {
-          try {
-            listener(snapshot);
-          } catch {
-          }
-        }
-      }
-    };
-    connectionBroker = new ConnectionBroker();
-  }
-});
-
 // src/foundation/task-errors.ts
 var StaleTaskError, TaskCancelledError;
 var init_task_errors = __esm({
@@ -1360,7 +950,6 @@ var init_task_queue = __esm({
     init_repository();
     init_chat_scope();
     init_utils();
-    init_connection_broker();
     init_task_errors();
     init_task_errors();
     TaskQueue = class {
@@ -1471,7 +1060,7 @@ var init_task_queue = __esm({
               task.state = "stale";
               task.error = error instanceof StaleTaskError ? error.message : "\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362";
               if (!(error instanceof StaleTaskError)) finalError = new StaleTaskError(task.error);
-            } else if (error instanceof TaskCancelledError || error instanceof ConnectionRequestError && error.kind === "cancelled" || controller.signal.aborted) {
+            } else if (error instanceof TaskCancelledError || error instanceof DOMException && error.name === "AbortError" || controller.signal.aborted) {
               task.state = "cancelled";
               task.error = toErrorMessage(error);
               if (!(error instanceof TaskCancelledError)) finalError = new TaskCancelledError(task.error);
@@ -1586,12 +1175,12 @@ function getSettings() {
   }
   if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
   settings.latestContinuityConstant = false;
-  settings.independentApiProfiles ||= [];
   const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles) ? context.extensionSettings.connectionManager.profiles : [];
   for (const connection of Object.values(settings.connections ?? {})) {
     connection.profileId ||= "";
     connection.profile ||= "";
-    connection.independentProfileId ||= "";
+    if (connection.mode === "independent") connection.mode = "current";
+    connection.independentProfileId = "";
     if (!connection.profileId && connection.profile) {
       const matched = savedProfiles.find((profile) => safeText(profile?.name, 160).trim() === safeText(connection.profile, 160).trim());
       if (matched?.id) connection.profileId = String(matched.id);
@@ -1624,14 +1213,13 @@ function migrateLegacySettings(legacy) {
     vectorizeRows: legacy.vectorizeStateRows ?? false,
     latestContinuityConstant: legacy.latestContinuityConstant ?? false,
     connections: {
-      audit: { mode: legacy.auditProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.auditProfile ?? "", 120), independentProfileId: "" },
-      revision: { mode: legacy.revisionProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.revisionProfile ?? legacy.auditProfile ?? "", 120), independentProfileId: "" },
-      factExtraction: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120), independentProfileId: "" },
-      state: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120), independentProfileId: "" },
-      smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.smallSummaryProfile ?? "", 120), independentProfileId: "" },
-      largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.largeSummaryProfile ?? "", 120), independentProfileId: "" }
-    },
-    independentApiProfiles: []
+      audit: { mode: legacy.auditProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.auditProfile ?? "", 120) },
+      revision: { mode: legacy.revisionProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.revisionProfile ?? legacy.auditProfile ?? "", 120) },
+      factExtraction: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120) },
+      state: { mode: legacy.stateProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.stateProfile ?? "", 120) },
+      smallSummary: { mode: legacy.smallSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.smallSummaryProfile ?? "", 120) },
+      largeSummary: { mode: legacy.largeSummaryProfile ? "profile" : "current", profileId: "", profile: safeText(legacy.largeSummaryProfile ?? "", 120) }
+    }
   };
 }
 function saveSettings() {
@@ -1802,7 +1390,6 @@ init_utils();
 // src/llm/generator.ts
 init_utils();
 init_chat_scope();
-init_connection_broker();
 
 // src/foundation/generation-guard.ts
 var internalGenerationDepth = 0;
@@ -1818,378 +1405,37 @@ async function withInternalGeneration(work) {
   }
 }
 
-// src/foundation/invocation-router.ts
-init_chat_scope();
-init_task_errors();
-var PRIORITY_WEIGHT = {
-  foreground: 0,
-  "background-critical": 10,
-  "background-derived": 20,
-  "background-io": 30
-};
-function connectionIdentity(spec) {
-  if (spec.connection.credentialKey) return spec.connection.credentialKey;
-  if (spec.connection.mode === "profile") return `profile:${spec.connection.profileId || "missing"}`;
-  if (spec.connection.mode === "independent") return `independent:${spec.connection.independentProfileId || "missing"}`;
-  return "current";
-}
-var InvocationRouter = class {
-  queues = /* @__PURE__ */ new Map();
-  runningLanes = /* @__PURE__ */ new Set();
-  activeControllers = /* @__PURE__ */ new Map();
-  activeSpecs = /* @__PURE__ */ new Map();
-  sequence = 0;
-  submit(spec, execute, externalSignal) {
-    if (externalSignal?.aborted) {
-      return Promise.reject(new TaskCancelledError("\u8C03\u7528\u5728\u5165\u961F\u524D\u5DF2\u53D6\u6D88"));
-    }
-    const laneKey = `${spec.chatKey}:${connectionIdentity(spec)}`;
-    return new Promise((resolve, reject) => {
-      const queue = this.queues.get(laneKey) ?? [];
-      queue.push({
-        sequence: this.sequence += 1,
-        laneKey,
-        spec,
-        externalSignal,
-        execute,
-        resolve,
-        reject
-      });
-      queue.sort((a, b) => {
-        const priority = PRIORITY_WEIGHT[a.spec.priority] - PRIORITY_WEIGHT[b.spec.priority];
-        return priority || a.sequence - b.sequence;
-      });
-      this.queues.set(laneKey, queue);
-      void this.pump(laneKey);
-    });
-  }
-  async pump(laneKey) {
-    if (this.runningLanes.has(laneKey)) return;
-    this.runningLanes.add(laneKey);
-    try {
-      while (true) {
-        const queue = this.queues.get(laneKey);
-        const pending = queue?.shift();
-        if (!pending) break;
-        if (!queue?.length) this.queues.delete(laneKey);
-        const controller = new AbortController();
-        this.activeControllers.set(pending.spec.id, controller);
-        this.activeSpecs.set(pending.spec.id, pending.spec);
-        const abort = () => controller.abort(
-          pending.externalSignal?.reason instanceof Error ? pending.externalSignal.reason : new TaskCancelledError("\u8C03\u7528\u5DF2\u53D6\u6D88")
-        );
-        pending.externalSignal?.addEventListener("abort", abort, { once: true });
-        try {
-          if (pending.externalSignal?.aborted) throw new TaskCancelledError("\u8C03\u7528\u5728\u6267\u884C\u524D\u5DF2\u53D6\u6D88");
-          const scope = chatScopeManager.current();
-          if (scope.chatKey !== pending.spec.chatKey || scope.revision !== pending.spec.scopeRevision) {
-            throw new StaleTaskError("\u8C03\u7528\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
-          }
-          const result = await pending.execute(controller.signal);
-          const after = chatScopeManager.current();
-          if (after.chatKey !== pending.spec.chatKey || after.revision !== pending.spec.scopeRevision) {
-            throw new StaleTaskError("\u8C03\u7528\u5B8C\u6210\u65F6\u804A\u5929\u4F5C\u7528\u57DF\u5DF2\u6539\u53D8");
-          }
-          pending.resolve(result);
-        } catch (error) {
-          pending.reject(error);
-        } finally {
-          pending.externalSignal?.removeEventListener("abort", abort);
-          this.activeControllers.delete(pending.spec.id);
-          this.activeSpecs.delete(pending.spec.id);
-        }
-      }
-    } finally {
-      this.runningLanes.delete(laneKey);
-      if ((this.queues.get(laneKey)?.length ?? 0) > 0) void this.pump(laneKey);
-    }
-  }
-  cancelChat(chatKey, reason = "\u804A\u5929\u8C03\u7528\u5DF2\u53D6\u6D88") {
-    let count = 0;
-    for (const [laneKey, queue] of [...this.queues.entries()]) {
-      const retained = [];
-      for (const pending of queue) {
-        if (pending.spec.chatKey === chatKey) {
-          pending.reject(new TaskCancelledError(reason));
-          count += 1;
-        } else retained.push(pending);
-      }
-      if (retained.length) this.queues.set(laneKey, retained);
-      else this.queues.delete(laneKey);
-    }
-    for (const [id, controller] of this.activeControllers) {
-      if (this.activeSpecs.get(id)?.chatKey !== chatKey || controller.signal.aborted) continue;
-      controller.abort(new TaskCancelledError(reason));
-      count += 1;
-    }
-    return count;
-  }
-  cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
-    let count = 0;
-    const chats = /* @__PURE__ */ new Set();
-    for (const queue of this.queues.values()) {
-      for (const pending of queue) if (pending.spec.chatKey !== chatKey) chats.add(pending.spec.chatKey);
-    }
-    for (const spec of this.activeSpecs.values()) if (spec.chatKey !== chatKey) chats.add(spec.chatKey);
-    for (const other of chats) count += this.cancelChat(other, reason);
-    return count;
-  }
-  cancelAll(reason = "\u8C03\u7528\u8DEF\u7531\u5DF2\u505C\u6B62") {
-    let count = 0;
-    const chats = /* @__PURE__ */ new Set();
-    for (const queue of this.queues.values()) for (const pending of queue) chats.add(pending.spec.chatKey);
-    for (const spec of this.activeSpecs.values()) chats.add(spec.chatKey);
-    for (const chatKey of chats) count += this.cancelChat(chatKey, reason);
-    return count;
-  }
-  pendingCount(chatKey) {
-    let total = 0;
-    for (const queue of this.queues.values()) {
-      total += chatKey ? queue.filter((pending) => pending.spec.chatKey === chatKey).length : queue.length;
-    }
-    return total;
-  }
-};
-var invocationRouter = new InvocationRouter();
-
-// src/llm/api-profiles.ts
-init_utils();
-init_connection_broker();
-var SECRET_PREFIX = "ma11:independent-api-key:";
-var ApiRequestError = class extends ConnectionRequestError {
-  constructor(message, kind, options = {}) {
-    super(message, kind, options);
-    this.name = "ApiRequestError";
-  }
-};
-function makeId2() {
-  try {
-    const value = getContext().uuidv4?.();
-    if (value) return String(value);
-  } catch {
-  }
-  return `ma-api-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-function apiKeyStorageKey(profileId) {
-  return `${SECRET_PREFIX}${profileId}`;
-}
-function getSessionApiKey(profileId) {
-  try {
-    return sessionStorage.getItem(apiKeyStorageKey(profileId)) || "";
-  } catch {
-    return "";
-  }
-}
-function setSessionApiKey(profileId, apiKey) {
-  try {
-    if (apiKey) sessionStorage.setItem(apiKeyStorageKey(profileId), apiKey);
-    else sessionStorage.removeItem(apiKeyStorageKey(profileId));
-  } catch {
-    throw new ApiRequestError("\u6D4F\u89C8\u5668\u62D2\u7EDD\u4FDD\u5B58\u672C\u6B21\u4F1A\u8BDD\u5BC6\u94A5", "configuration");
-  }
-}
-function clearSessionApiKey(profileId) {
-  try {
-    sessionStorage.removeItem(apiKeyStorageKey(profileId));
-  } catch {
-  }
-}
-function listIndependentApiProfiles() {
-  return getSettings().independentApiProfiles;
-}
-function getIndependentApiProfile(profileId) {
-  return listIndependentApiProfiles().find((profile) => profile.id === profileId) ?? null;
-}
-function createIndependentApiProfile() {
-  const profile = {
-    id: makeId2(),
-    name: `\u955C\u6E0AAPI ${listIndependentApiProfiles().length + 1}`,
-    provider: "openai-compatible",
-    apiUrl: "",
-    model: "",
-    maxTokens: 4096,
-    temperature: 0.1,
-    topP: 1,
-    cachedModels: []
-  };
-  getSettings().independentApiProfiles.push(profile);
-  saveSettings();
-  return profile;
-}
-function updateIndependentApiProfile(profileId, patch) {
-  const profile = getIndependentApiProfile(profileId);
-  if (!profile) throw new ApiRequestError("\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728\u6216\u5DF2\u88AB\u5220\u9664", "configuration");
-  Object.assign(profile, patch, { id: profile.id, provider: "openai-compatible" });
-  profile.name = safeText(profile.name, 120).trim() || "\u672A\u547D\u540DAPI";
-  profile.apiUrl = safeText(profile.apiUrl, 2e3).trim();
-  profile.model = safeText(profile.model, 240).trim();
-  profile.maxTokens = Math.min(131072, Math.max(64, Number(profile.maxTokens) || 4096));
-  profile.temperature = Math.min(2, Math.max(0, Number(profile.temperature) || 0));
-  profile.topP = Math.min(1, Math.max(0, Number(profile.topP) || 1));
-  profile.cachedModels = Array.isArray(profile.cachedModels) ? profile.cachedModels.map((item2) => safeText(item2, 240).trim()).filter(Boolean).slice(0, 2e3) : [];
-  saveSettings();
-  return profile;
-}
-function deleteIndependentApiProfile(profileId) {
-  const settings = getSettings();
-  settings.independentApiProfiles = settings.independentApiProfiles.filter((profile) => profile.id !== profileId);
-  for (const connection of Object.values(settings.connections)) {
-    if (connection.independentProfileId === profileId) {
-      connection.independentProfileId = "";
-      connection.mode = "current";
-    }
-  }
-  clearSessionApiKey(profileId);
-  saveSettings();
-}
-function classifyHttp(status) {
-  if (status === 401 || status === 403) return "authentication";
-  if (status === 404) return "not_found";
-  if (status === 408 || status === 504) return "timeout";
-  if (status === 429) return "rate_limit";
-  return "upstream";
-}
-function responseText(data) {
-  if (typeof data === "string") return data.trim();
-  const candidates = [
-    data?.choices?.[0]?.message?.content,
-    data?.choices?.[0]?.text,
-    data?.message?.content,
-    data?.content,
-    data?.text,
-    data?.output,
-    data?.result
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-  }
-  return "";
-}
-function requestHeaders() {
-  const headers = getContext().getRequestHeaders?.();
-  return headers && typeof headers === "object" ? { ...headers, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
-}
-function validateProfile(profile, requireModel = true) {
-  if (!profile.apiUrl) throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u672A\u586B\u5199API\u5730\u5740`, "configuration");
-  if (requireModel && !profile.model) throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u672A\u586B\u5199\u6A21\u578B`, "configuration");
-  const key = getSessionApiKey(profile.id);
-  if (!key) throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u672A\u586B\u5199\u672C\u6B21\u4F1A\u8BDD\u5BC6\u94A5`, "configuration");
-  return key;
-}
-async function requestIndependentApi(profileId, options) {
-  const profile = getIndependentApiProfile(profileId);
-  if (!profile) throw new ApiRequestError("\u9009\u62E9\u7684\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728", "configuration");
-  const apiKey = validateProfile(profile);
-  const body = {
-    chat_completion_source: "openai",
-    messages: options.messages,
-    model: profile.model,
-    reverse_proxy: profile.apiUrl,
-    proxy_password: apiKey,
-    stream: false,
-    max_tokens: Math.max(64, Number(options.maxTokens) || profile.maxTokens || 4096),
-    temperature: Number.isFinite(options.temperature) ? options.temperature : profile.temperature,
-    top_p: Number.isFinite(options.topP) ? options.topP : profile.topP,
-    custom_prompt_post_processing: "strict",
-    enable_web_search: false,
-    include_reasoning: false,
-    request_images: false
-  };
-  try {
-    const response = await fetch("/api/backends/chat-completions/generate", {
-      method: "POST",
-      headers: requestHeaders(),
-      body: JSON.stringify(body),
-      signal: options.signal
-    });
-    const rawText = await response.text();
-    if (!response.ok) {
-      const retryAfter = response.headers.get("retry-after");
-      const retryAfterMs = retryAfter ? /^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Math.max(0, Math.round(Number(retryAfter) * 1e3)) : Math.max(0, Date.parse(retryAfter) - Date.now()) : void 0;
-      throw new ApiRequestError(
-        `\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42\u5931\u8D25\uFF1AHTTP ${response.status}`,
-        classifyHttp(response.status),
-        {
-          status: response.status,
-          responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500),
-          retryAfterMs
-        }
-      );
-    }
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch (error) {
-      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8FD4\u56DE\u4E86\u975EJSON\u7684\u4EE3\u7406\u54CD\u5E94`, "response_format", {
-        status: response.status,
-        responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500),
-        cause: error
-      });
-    }
-    const content = responseText(data);
-    if (!content) {
-      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response", {
-        status: response.status,
-        responsePreview: safeText(data, 500)
-      });
-    }
-    return content;
-  } catch (error) {
-    if (error instanceof ApiRequestError || error instanceof ConnectionRequestError) throw error;
-    if (options.signal?.aborted) {
-      throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", { cause: error });
-    }
-    const message = toErrorMessage(error);
-    if (/超时|timeout/i.test(message)) throw new ApiRequestError(message, "timeout", { cause: error });
-    throw new ApiRequestError(`\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF1A${message}`, "network", { cause: error });
-  }
-}
-async function fetchIndependentModels(profileId, timeoutMs) {
-  const profile = getIndependentApiProfile(profileId);
-  if (!profile) throw new ApiRequestError("\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728", "configuration");
-  const apiKey = validateProfile(profile, false);
-  const controller = new AbortController();
-  const response = await withTimeout(
-    fetch("/api/backends/chat-completions/status", {
-      method: "POST",
-      headers: requestHeaders(),
-      body: JSON.stringify({
-        reverse_proxy: profile.apiUrl,
-        proxy_password: apiKey,
-        chat_completion_source: "openai"
-      }),
-      signal: controller.signal
-    }),
-    timeoutMs,
-    `\u72EC\u7ACBAPI\u201C${profile.name}\u201D\u6A21\u578B\u5217\u8868`,
-    controller
-  );
-  const rawText = await response.text();
-  if (!response.ok) {
-    throw new ApiRequestError(`\u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1AHTTP ${response.status}`, classifyHttp(response.status), {
-      status: response.status,
-      responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500)
-    });
-  }
-  let data;
-  try {
-    data = JSON.parse(rawText);
-  } catch (error) {
-    throw new ApiRequestError("\u6A21\u578B\u5217\u8868\u63A5\u53E3\u8FD4\u56DE\u4E86\u975EJSON\u5185\u5BB9", "response_format", {
-      responsePreview: rawText.replace(/\s+/g, " ").slice(0, 500),
-      cause: error
-    });
-  }
-  const source = Array.isArray(data) ? data : data?.data ?? data?.models ?? [];
-  if (!Array.isArray(source)) {
-    throw new ApiRequestError("API\u672A\u8FD4\u56DE\u53EF\u8BC6\u522B\u7684\u6A21\u578B\u5217\u8868", "response_format", { responsePreview: safeText(data, 500) });
-  }
-  const models = source.map((item2) => safeText(item2?.id ?? item2?.name ?? item2?.model ?? item2, 240).replace(/^models\//, "").trim()).filter(Boolean).filter((value, index, list2) => list2.indexOf(value) === index).sort((a, b) => a.localeCompare(b));
-  updateIndependentApiProfile(profile.id, { cachedModels: models });
-  return models;
-}
-
 // src/llm/generator.ts
+init_task_errors();
+var NativeGenerationError = class extends Error {
+  constructor(message, kind, status, responsePreview, options) {
+    super(message, options);
+    this.kind = kind;
+    this.status = status;
+    this.responsePreview = responsePreview;
+    this.name = "NativeGenerationError";
+  }
+  kind;
+  status;
+  responsePreview;
+};
+function normalizeNativeGenerationError(error, task) {
+  if (error instanceof NativeGenerationError) return error;
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new NativeGenerationError(`${task}\u6A21\u578B\u8C03\u7528\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error });
+  }
+  const anyError = error;
+  const status = Number(anyError?.status ?? anyError?.statusCode ?? anyError?.response?.status);
+  const message = toErrorMessage(error);
+  const preview = safeText(anyError?.responseText ?? anyError?.response?.data ?? anyError?.body ?? "", 500).trim();
+  return new NativeGenerationError(
+    message || `${task}\u6A21\u578B\u8C03\u7528\u5931\u8D25`,
+    "upstream",
+    Number.isFinite(status) ? status : void 0,
+    preview || void 0,
+    { cause: error instanceof Error ? error : void 0 }
+  );
+}
 function generationText(result) {
   if (typeof result === "string") return result.trim();
   for (const key of ["content", "text", "output", "result", "value", "pipe"]) {
@@ -2229,64 +1475,6 @@ function resolveProfileId(connection) {
   }
   return "";
 }
-var PROFILE_CREDENTIAL_OMIT_KEYS = /* @__PURE__ */ new Set([
-  "id",
-  "name",
-  "model",
-  "model_id",
-  "preset",
-  "preset_name",
-  "temperature",
-  "top_p",
-  "top_k",
-  "max_tokens",
-  "max_new_tokens",
-  "context_length",
-  "stream",
-  "seed",
-  "frequency_penalty",
-  "presence_penalty",
-  "repetition_penalty",
-  "min_p",
-  "reasoning_effort",
-  "maxtokens",
-  "maxnewtokens",
-  "contextlength",
-  "topp",
-  "topk",
-  "minp",
-  "frequencypenalty",
-  "presencepenalty",
-  "repetitionpenalty",
-  "reasoningeffort"
-]);
-function stableCredentialMaterial(value, seen = /* @__PURE__ */ new WeakSet()) {
-  if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
-  if (Array.isArray(value)) return value.map((item2) => stableCredentialMaterial(item2, seen));
-  if (typeof value !== "object") return String(value ?? "");
-  if (seen.has(value)) return "[circular]";
-  seen.add(value);
-  const output = {};
-  for (const key of Object.keys(value).sort()) {
-    if (PROFILE_CREDENTIAL_OMIT_KEYS.has(key.toLowerCase())) continue;
-    const item2 = value[key];
-    if (typeof item2 === "function" || item2 === void 0) continue;
-    output[key] = stableCredentialMaterial(item2, seen);
-  }
-  return output;
-}
-function nativeProfileCredentialKey(profileId) {
-  const profile = supportedProfiles().find((item2) => String(item2?.id) === profileId);
-  const material = stableCredentialMaterial(profile ?? { provider: "unknown", profileId });
-  return `credential:native:${hashText(JSON.stringify(material))}`;
-}
-function independentCredentialKey(profileId) {
-  const profile = getIndependentApiProfile(profileId);
-  const endpoint = String(profile?.apiUrl || "").trim().replace(/\/+$/, "").toLowerCase();
-  const key = getSessionApiKey(profileId);
-  const material = `${profile?.provider || "openai-compatible"}|${endpoint}|${key || `missing:${profileId}`}`;
-  return `credential:independent:${hashText(material)}`;
-}
 function messagesFromOptions(options) {
   const messages = [];
   if (options.systemPrompt.trim()) messages.push({ role: "system", content: options.systemPrompt });
@@ -2301,10 +1489,17 @@ function messagesFromOptions(options) {
   }
   return messages;
 }
+function assertInvocationScope(chatKey, revision, signal) {
+  if (signal?.aborted) throw new TaskCancelledError("\u9152\u9986\u751F\u6210\u8BF7\u6C42\u5DF2\u53D6\u6D88");
+  const current = chatScopeManager.current();
+  if (current.chatKey !== chatKey || current.revision !== revision) {
+    throw new StaleTaskError("\u9152\u9986\u751F\u6210\u8BF7\u6C42\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
+  }
+}
 async function generateCurrent(options, signal) {
   const context = getContext();
   if (typeof context.generateRaw !== "function") {
-    throw new ConnectionRequestError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BgenerateRaw", "configuration");
+    throw new NativeGenerationError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9B generateRaw", "configuration");
   }
   try {
     const result = await withInternalGeneration(() => Promise.resolve(context.generateRaw({
@@ -2314,18 +1509,18 @@ async function generateCurrent(options, signal) {
       signal
     })));
     const text = generationText(result);
-    if (!text) throw new ConnectionRequestError(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
+    if (!text) throw new NativeGenerationError(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
     return text;
   } catch (error) {
-    if (signal.aborted) throw new ConnectionRequestError(`${options.task}\u6A21\u578B\u8C03\u7528\u5DF2\u53D6\u6D88`, "cancelled", { cause: error });
-    throw normalizeConnectionError(error);
+    if (signal.aborted) throw new NativeGenerationError(`${options.task}\u6A21\u578B\u8C03\u7528\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
+    throw normalizeNativeGenerationError(error, options.task);
   }
 }
 async function generateWithNativeProfile(options, profileId, signal) {
   const context = getContext();
   const service = context.ConnectionManagerRequestService;
   if (typeof service?.sendRequest !== "function") {
-    throw new ConnectionRequestError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9BConnectionManagerRequestService", "configuration");
+    throw new NativeGenerationError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9B ConnectionManagerRequestService", "configuration");
   }
   try {
     const result = await withInternalGeneration(() => Promise.resolve(service.sendRequest(
@@ -2342,19 +1537,12 @@ async function generateWithNativeProfile(options, profileId, signal) {
       { stream: false }
     )));
     const text = generationText(result);
-    if (!text) throw new ConnectionRequestError(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
+    if (!text) throw new NativeGenerationError(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
     return text;
   } catch (error) {
-    if (signal.aborted) throw new ConnectionRequestError(`${options.task} Connection Profile\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", { cause: error });
-    throw normalizeConnectionError(error);
+    if (signal.aborted) throw new NativeGenerationError(`${options.task} Connection Profile\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
+    throw normalizeNativeGenerationError(error, options.task);
   }
-}
-async function generateWithIndependentProfile(options, profileId, timeoutMs, signal) {
-  return withInternalGeneration(() => requestIndependentApi(profileId, {
-    messages: messagesFromOptions(options),
-    timeoutMs,
-    signal
-  }));
 }
 function listSupportedConnectionProfiles() {
   return supportedProfiles().map((profile) => ({
@@ -2376,69 +1564,33 @@ function describeTaskConnection(task) {
     const profile = listSupportedConnectionProfiles().find((item2) => item2.id === id);
     return `Connection Profile\uFF1A${profile?.name || cleanProfileName(connection.profile) || "\u672A\u9009\u62E9"}`;
   }
-  if (connection?.mode === "independent") {
-    const profile = getIndependentApiProfile(connection.independentProfileId);
-    return `\u955C\u6E0A\u72EC\u7ACBAPI\uFF1A${profile?.name || "\u672A\u9009\u62E9"}`;
-  }
   return "\u5F53\u524D\u804A\u5929\u8FDE\u63A5";
 }
 function captureTaskConnection(task) {
   const settings = getSettings();
   const effectiveTask = effectiveConnectionTask(task);
   const connection = settings.connections[effectiveTask] ?? settings.connections.factExtraction ?? settings.connections.state;
-  const timeoutMs = Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4);
+  const timeoutMs = 0;
   if (connection?.mode === "profile") {
     const profileId = resolveProfileId(connection);
-    if (!profileId) throw new ApiRequestError(`${task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`, "configuration");
+    if (!profileId) throw new NativeGenerationError(`${task}\u672A\u9009\u62E9\u6709\u6548\u7684 Connection Profile`, "configuration");
     const profile = listSupportedConnectionProfiles().find((item2) => item2.id === profileId);
     return {
       mode: "profile",
-      credentialKey: nativeProfileCredentialKey(profileId),
+      credentialKey: `native-profile:${profileId}`,
       profileId,
       profileName: profile?.name || cleanProfileName(connection.profile),
-      independentProfileId: "",
       timeoutMs,
-      capturedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-  }
-  if (connection?.mode === "independent") {
-    if (!connection.independentProfileId) throw new ApiRequestError(`${task}\u672A\u9009\u62E9\u955C\u6E0A\u72EC\u7ACBAPI`, "configuration");
-    return {
-      mode: "independent",
-      credentialKey: independentCredentialKey(connection.independentProfileId),
-      profileId: "",
-      profileName: getIndependentApiProfile(connection.independentProfileId)?.name || "",
-      independentProfileId: connection.independentProfileId,
-      timeoutMs,
-      capturedAt: (/* @__PURE__ */ new Date()).toISOString()
+      capturedAt: nowIso()
     };
   }
   return {
     mode: "current",
-    credentialKey: "credential:current",
+    credentialKey: "native-current",
     profileId: "",
     profileName: "\u5F53\u524D\u804A\u5929\u8FDE\u63A5",
-    independentProfileId: "",
     timeoutMs,
-    capturedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-function taskAdapter(options, snapshot) {
-  if (snapshot.mode === "profile") {
-    return {
-      connectionKey: snapshot.credentialKey || `profile:${snapshot.profileId}`,
-      execute: (signal) => generateWithNativeProfile(options, snapshot.profileId, signal)
-    };
-  }
-  if (snapshot.mode === "independent") {
-    return {
-      connectionKey: snapshot.credentialKey || `independent:${snapshot.independentProfileId}`,
-      execute: (signal) => generateWithIndependentProfile(options, snapshot.independentProfileId, snapshot.timeoutMs, signal)
-    };
-  }
-  return {
-    connectionKey: snapshot.credentialKey || "current",
-    execute: (signal) => generateCurrent(options, signal)
+    capturedAt: nowIso()
   };
 }
 function defaultPriority(task) {
@@ -2460,27 +1612,25 @@ function createInvocationSpec(options) {
     blocking: options.invocation?.blocking ?? (options.task === "audit" || options.task === "revision"),
     coalesceKey: options.invocation?.coalesceKey,
     connection,
-    retryPolicy: {
-      maxAttempts: 3,
-      retryableKinds: ["rate_limit", "network", "upstream"]
-    },
+    retryPolicy: { maxAttempts: 1, retryableKinds: [] },
     outputSchema: options.invocation?.outputSchema ?? "",
     createdAt: nowIso()
   };
 }
 async function generateTask(options) {
   const spec = createInvocationSpec(options);
-  const adapter = taskAdapter(options, spec.connection);
-  return invocationRouter.submit(spec, (routerSignal) => connectionBroker.request({
-    id: options.requestId ?? spec.id,
-    connectionKey: adapter.connectionKey,
-    priority: spec.priority,
-    scopeKey: spec.chatKey,
-    label: `${options.task}\u6A21\u578B\u8BF7\u6C42`,
-    timeoutMs: spec.connection.timeoutMs,
-    signal: routerSignal,
-    execute: (signal) => adapter.execute(signal)
-  }), options.signal);
+  assertInvocationScope(spec.chatKey, spec.scopeRevision, options.signal);
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(options.signal?.reason);
+  options.signal?.addEventListener("abort", forwardAbort, { once: true });
+  if (options.signal?.aborted) controller.abort(options.signal.reason);
+  try {
+    const result = spec.connection.mode === "profile" ? await generateWithNativeProfile(options, spec.connection.profileId, controller.signal) : await generateCurrent(options, controller.signal);
+    assertInvocationScope(spec.chatKey, spec.scopeRevision, options.signal);
+    return result;
+  } finally {
+    options.signal?.removeEventListener("abort", forwardAbort);
+  }
 }
 async function testConnection(task) {
   const started = performance.now();
@@ -2500,7 +1650,7 @@ async function testConnection(task) {
       }
     });
   } catch (error) {
-    if (error instanceof ConnectionRequestError) {
+    if (error instanceof NativeGenerationError) {
       throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25 [${error.kind}]\uFF1A${error.message}${error.responsePreview ? `\uFF1B\u4E0A\u6E38\u7247\u6BB5\uFF1A${error.responsePreview}` : ""}`);
     }
     throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
@@ -3899,7 +3049,7 @@ function detectCapabilities(context) {
     item("saveChat", "\u804A\u5929\u4FDD\u5B58", context?.saveChat ?? context?.saveChatConditional, true, "\u804A\u5929\u4FDD\u5B58\u63A5\u53E3\u53EF\u7528", "\u7F3A\u5C11\u804A\u5929\u4FDD\u5B58\u63A5\u53E3"),
     item("templates", "\u5F02\u6B65\u6A21\u677F\u6E32\u67D3", context?.renderExtensionTemplateAsync, false, "\u5F02\u6B65\u6A21\u677F\u63A5\u53E3\u53EF\u7528", "\u5C06\u4F7F\u7528\u5185\u7F6E\u6A21\u677F\u964D\u7EA7"),
     item("localforage", "\u6D4F\u89C8\u5668\u6301\u4E45\u5B58\u50A8", globalThis.SillyTavern?.libs?.localforage?.createInstance, false, "localforage \u53EF\u7528", "\u5C06\u964D\u7EA7\u5230 localStorage"),
-    item("profileRequest", "Connection Profile \u9694\u79BB\u8BF7\u6C42", context?.ConnectionManagerRequestService?.sendRequest, false, "\u539F\u751F\u9694\u79BB\u8BF7\u6C42\u53EF\u7528", "\u53EA\u80FD\u4F7F\u7528\u5F53\u524D\u8FDE\u63A5\u6216\u72EC\u7ACB API"),
+    item("profileRequest", "Connection Profile \u9694\u79BB\u8BF7\u6C42", context?.ConnectionManagerRequestService?.sendRequest, false, "\u539F\u751F\u9694\u79BB\u8BF7\u6C42\u53EF\u7528", "\u53EA\u80FD\u4F7F\u7528\u5F53\u524D\u804A\u5929\u8FDE\u63A5"),
     item("generateRaw", "\u5F53\u524D\u8FDE\u63A5\u539F\u59CB\u751F\u6210", context?.generateRaw, false, "generateRaw \u53EF\u7528", "\u5F53\u524D\u8FDE\u63A5\u6A21\u5F0F\u4E0D\u53EF\u7528"),
     item("requestHeaders", "\u670D\u52A1\u5668\u8BF7\u6C42\u5934", context?.getRequestHeaders, false, "\u53EF\u53D6\u5F97 CSRF \u8BF7\u6C42\u5934", "\u670D\u52A1\u5668\u5199\u5165\u5C06\u8FDB\u884C\u517C\u5BB9\u964D\u7EA7"),
     item("debugFunction", "\u8C03\u8BD5\u83DC\u5355", context?.registerDebugFunction, false, "\u8C03\u8BD5\u51FD\u6570\u6CE8\u518C\u53EF\u7528", "\u4E0D\u5F71\u54CD\u6838\u5FC3\u8FD0\u884C")
@@ -4052,7 +3202,6 @@ var ServiceContainer = class {
 
 // src/foundation/kernel.ts
 init_chat_scope();
-init_connection_broker();
 
 // src/foundation/cross-tab-coordinator.ts
 init_constants();
@@ -4311,7 +3460,6 @@ var crossTabCoordinator = new CrossTabCoordinator();
 var EVENT_ROUTER = createServiceToken("EventRouter");
 var LOCK_MANAGER = createServiceToken("LockManager");
 var CHAT_SCOPE = createServiceToken("ChatScopeManager");
-var CONNECTION_BROKER = createServiceToken("ConnectionBroker");
 var CROSS_TAB_COORDINATOR = createServiceToken("CrossTabCoordinator");
 var FoundationKernel = class {
   services = new ServiceContainer();
@@ -4338,7 +3486,6 @@ var FoundationKernel = class {
       const router = this.services.tryGet(EVENT_ROUTER) ?? this.services.register(EVENT_ROUTER, new EventRouter());
       if (!this.services.tryGet(LOCK_MANAGER)) this.services.register(LOCK_MANAGER, new LockManager());
       if (!this.services.tryGet(CHAT_SCOPE)) this.services.register(CHAT_SCOPE, chatScopeManager);
-      if (!this.services.tryGet(CONNECTION_BROKER)) this.services.register(CONNECTION_BROKER, connectionBroker);
       if (!this.services.tryGet(CROSS_TAB_COORDINATOR)) {
         this.services.register(CROSS_TAB_COORDINATOR, new CrossTabCoordinator());
       }
@@ -4363,7 +3510,6 @@ var FoundationKernel = class {
     }
   }
   stop() {
-    this.services.tryGet(CONNECTION_BROKER)?.cancelAll();
     this.services.tryGet(CROSS_TAB_COORDINATOR)?.stop();
     this.services.tryGet(EVENT_ROUTER)?.uninstall();
     this.services.clear();
@@ -4391,7 +3537,7 @@ async function worldInfoApi() {
   }
   return worldInfoModulePromise;
 }
-function requestHeaders2() {
+function requestHeaders() {
   const headers = getContext().getRequestHeaders?.();
   if (headers && typeof headers === "object") return headers;
   return { "Content-Type": "application/json" };
@@ -4414,7 +3560,7 @@ async function strictPost(path, body, signal) {
   try {
     response = await fetch(path, {
       method: "POST",
-      headers: requestHeaders2(),
+      headers: requestHeaders(),
       body: JSON.stringify(body),
       cache: "no-store",
       signal
@@ -6433,6 +5579,7 @@ async function rebuildHistoryFrom(input) {
       totalMessages: record.totalMessages,
       totalBatches: record.totalBatches
     });
+    input.onProgress?.({ current: record.processedMessages ?? 0, total: record.totalMessages, label: `\u51C6\u5907\u91CD\u5EFA\uFF0C\u5171 ${record.totalBatches} \u6279` });
     let rebuilt = record.processedMessages ?? 0;
     let latest = latestValidArtifactBefore(nextIndex, chatKey);
     try {
@@ -6465,6 +5612,7 @@ async function rebuildHistoryFrom(input) {
             throw new Error("\u5386\u53F2\u91CD\u5EFA\u6CA1\u6709\u53EF\u7528\u7684\u6279\u5904\u7406\u5668");
           }
         }, async (attempt, error) => {
+          input.onProgress?.({ current: rebuilt, total: record.totalMessages ?? allIndexes.length, label: `\u6279\u6B21 ${indexes[0] + 1}\u2013${indexes.at(-1) + 1} \u91CD\u8BD5`, retries: attempt });
           await updateHistoryRebuild(record, {
             error: `\u6279\u6B21 ${indexes[0] + 1}\u2013${indexes.at(-1) + 1} \u7B2C ${attempt} \u6B21\u5931\u8D25\uFF0C\u6B63\u5728\u91CD\u8BD5\uFF1A${toErrorMessage(error)}`
           });
@@ -6479,6 +5627,7 @@ async function rebuildHistoryFrom(input) {
           failedBatchStart: void 0,
           error: void 0
         });
+        input.onProgress?.({ current: rebuilt, total: record.totalMessages ?? allIndexes.length, label: `\u5DF2\u5B8C\u6210 ${completedBatches}/${record.totalBatches ?? 0} \u6279` });
       }
       assertCurrent(chatKey, input.signal);
       lease.assertOwner();
@@ -6486,6 +5635,7 @@ async function rebuildHistoryFrom(input) {
         await input.finalizeDerived?.(latest);
         await input.syncLatest(latest);
       }
+      input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u91CD\u5EFA\u5B8C\u6210\uFF0C\u4E16\u754C\u4E66\u5DF2\u540C\u6B65" });
       await completeHistoryRebuild(record);
       return { record, rebuilt, latestArtifact: latest };
     } catch (error) {
@@ -6526,23 +5676,6 @@ async function detectHistoryConsistencyStart() {
     }
   }
   return null;
-}
-async function recoverPendingHistoryRebuild(input) {
-  const chatKey = currentChatKey();
-  const state2 = await getChatState(chatKey);
-  const record = state2.historyRebuild;
-  const detectedStart = record ? record.startIndex : await detectHistoryConsistencyStart();
-  if (detectedStart === null) return false;
-  await rebuildHistoryFrom({
-    startIndex: detectedStart,
-    reason: record ? "recovery" : "branch",
-    processBatch: input.processBatch,
-    processMessage: input.processMessage,
-    finalizeDerived: input.finalizeDerived,
-    syncLatest: input.syncLatest,
-    signal: input.signal
-  });
-  return true;
 }
 
 // src/pipeline/summary.ts
@@ -6761,34 +5894,6 @@ async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = fals
     throw error;
   }
 }
-async function rebuildAllSummaries(artifact, signal) {
-  const settings = getSettings();
-  markStage(artifact, "summary", "running");
-  await putArtifact(artifact);
-  const factIndex = successfulFactPackageIndex();
-  try {
-    if (settings.autoSmallSummary) {
-      for (let guard = 0; guard < 200; guard += 1) {
-        const created = await generateSmallSummary(artifact, false, signal, factIndex);
-        if (!created) break;
-      }
-      await generateSmallSummary(artifact, true, signal, factIndex);
-    }
-    if (settings.autoLargeSummary) {
-      for (let guard = 0; guard < 100; guard += 1) {
-        const created = await generateLargeSummary(artifact, false, signal, factIndex);
-        if (!created) break;
-      }
-      await generateLargeSummary(artifact, true, signal, factIndex);
-    }
-    markStage(artifact, "summary", "success");
-    await putArtifact(artifact);
-  } catch (error) {
-    markStage(artifact, "summary", "failed", toErrorMessage(error));
-    await putArtifact(artifact);
-    throw error;
-  }
-}
 
 // src/pipeline/facts.ts
 init_utils();
@@ -6985,6 +6090,7 @@ function normalizeUnifiedFactPackage(input) {
   const explicitTableOperations = normalizeTableOperations(raw.tableOperations, artifacts);
   const tableOperations = facts.length ? deriveTableOperations(facts, previousSnapshot2) : explicitTableOperations;
   const focusIdentity = normalizeFocusIdentity2(raw.focusIdentity);
+  const stageSummary = raw.stageSummary && typeof raw.stageSummary === "object" ? normalizeSummary(raw.stageSummary, "small", artifacts.map((artifact) => artifact.messageKey)) : void 0;
   const factIdsByKey = /* @__PURE__ */ new Map();
   for (const fact of facts) {
     for (const key of fact.sourceMessageKeys) {
@@ -7018,6 +6124,7 @@ function normalizeUnifiedFactPackage(input) {
     tableOperations,
     focusIdentity,
     sedimentation,
+    stageSummary,
     finalSnapshot,
     createdAt: nowIso()
   };
@@ -7053,7 +6160,9 @@ function estimateFactPromptCharacters(previous, artifacts) {
   return JSON.stringify(compactSnapshotForFactPrompt(previous)).length + JSON.stringify(turns).length;
 }
 var UNIFIED_FACT_EXTRACTOR_VERSION = "ma-facts-v3";
-function unifiedFactSystemPrompt() {
+function unifiedFactSystemPrompt(options = {}) {
+  const stageSummaryRoot = options.includeStageSummary ? ',\n  "stageSummary":{"title":"\u672C\u6279\u9636\u6BB5\u603B\u7ED3","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":["..."],"keepActiveRowIds":["..."],"removeRowIds":["..."],"characterActivityUpdates":[],"notes":[]},"longTermCandidates":[]}' : "";
+  const rebuildRules = options.includeStageSummary ? "\n12. \u5386\u53F2\u91CD\u5EFA\u6A21\u5F0F\u5FC5\u987B\u540C\u65F6\u8F93\u51FA stageSummary\u3002\u5B83\u662F\u672C\u6279\u4E8B\u5B9E\u7684\u9636\u6BB5\u538B\u7F29\u4E0E\u5438\u6536\u51ED\u8BC1\uFF1B\u4E0D\u5F97\u91CD\u65B0\u590D\u8FF0\u5168\u90E8\u539F\u6587\u3002stageSummary.sedimentation \u53EA\u80FD\u5F15\u7528\u672C\u6279\u7ED3\u675F\u65F6\u786E\u5B9E\u53EF\u9000\u51FA\u7684\u73B0\u6709\u8868\u683C\u884C\u3002" : "";
   return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u7ED9\u5B9A\u6B63\u6587\u533A\u6BB5\u4E00\u6B21\uFF0C\u8F93\u51FA\u4E8B\u5B9E\u3001\u603B\u7ED3\u7D20\u6750\u548C\u9636\u6BB5\u6C89\u964D\u5019\u9009\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
 
 \u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u88AB JSON.parse \u76F4\u63A5\u89E3\u6790\u7684\u5355\u4E2A JSON \u5BF9\u8C61\uFF0C\u7981\u6B62 Markdown\u3001\u89E3\u91CA\u3001\u524D\u8A00\u548C\u7ED3\u8BED\u3002
@@ -7086,7 +6195,7 @@ function unifiedFactSystemPrompt() {
     "removeRowIds":["\u4EC5\u9650\u5DF2\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684 spacetime/relationships/items/skills/events/regions \u884CID"],
     "characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884CID","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"\u53EF\u89C2\u5BDF\u4F9D\u636E"}],
     "notes":["\u6C89\u964D\u4F9D\u636E"]
-  }
+  }${stageSummaryRoot}
 }
 
 \u89C4\u5219\uFF1A
@@ -7109,16 +6218,19 @@ function unifiedFactSystemPrompt() {
    - removeRowIds \u53EA\u5141\u8BB8\u9009\u62E9\u5DF2\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684 spacetime/relationships/items/skills/events/regions \u884C\u3002
    - \u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002\u5173\u7CFB\u3001\u7269\u54C1\u3001\u6280\u80FD\u53EA\u6709\u5728\u660E\u786E\u4E0D\u518D\u6D3B\u8DC3\u4E14\u5176\u7ED3\u679C\u53EF\u88AB\u9636\u6BB5\u603B\u7ED3\u4FDD\u5B58\u65F6\u624D\u53EF\u5217\u4E3A\u5019\u9009\u3002
    - characterActivityUpdates \u53EA\u5141\u8BB8\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\u3002
-11. \u4E0D\u8F93\u51FA\u4EFB\u4F55\u4EE3\u7801\u65E0\u6CD5\u9A8C\u8BC1\u7684\u81EA\u7531\u7ED3\u6784\u5B57\u6BB5\u3002`;
+11. \u4E0D\u8F93\u51FA\u4EFB\u4F55\u4EE3\u7801\u65E0\u6CD5\u9A8C\u8BC1\u7684\u81EA\u7531\u7ED3\u6784\u5B57\u6BB5\u3002${rebuildRules}`;
 }
-function unifiedFactUserPrompt(previous, artifacts) {
+function unifiedFactUserPrompt(previous, artifacts, options = {}) {
   const turns = artifacts.map((artifact, sourceOrdinal) => ({
     sourceOrdinal,
     messageIndex: artifact.messageIndex,
     player: artifact.playerText || "\uFF08\u7A7A\uFF09",
     assistant: artifact.assistantText
   }));
-  return `\u3010\u4E0A\u4E00\u4EFD\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
+  const mode = options.includeStageSummary ? "\u5386\u53F2\u91CD\u5EFA\u6279\u6B21\uFF1A\u540C\u65F6\u8F93\u51FA stageSummary" : "\u666E\u901A\u4E8B\u5B9E\u63D0\u53D6";
+  return `\u3010\u6A21\u5F0F\u3011${mode}
+
+\u3010\u4E0A\u4E00\u4EFD\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
 ${JSON.stringify(compactSnapshotForFactPrompt(previous))}
 
 \u3010\u5F85\u63D0\u53D6\u6B63\u6587\u533A\u6BB5\u3011
@@ -7126,8 +6238,9 @@ ${JSON.stringify(turns)}
 
 \u53EA\u8F93\u51FA UnifiedFactPackage v2 JSON\u3002`;
 }
-function unifiedFactStructureDescription() {
-  return '{"schemaVersion":2,"turnMaterials":[{"sourceOrdinal":0,"summary":"...","keywords":["..."]}],"facts":[{"entityId":"character:stable-id","entityType":"character","factType":"\u5F53\u524D\u72B6\u6001","title":"...","status":"\u5F53\u524D\u76F8\u5173","rowLifecycle":{"existence":"\u5B58\u6D3B","activity":"\u5F53\u524D\u76F8\u5173","memory":"\u5E7F\u6CDB\u8BB0\u5F97","evidenceLevel":"\u5DF2\u786E\u8BA4","evidence":"...","returnConditions":[],"returnBlockers":[]},"sourceEntityId":"","targetEntityId":"","operation":"update","scope":"chat","lifecycle":"active","content":"...","keywords":["..."],"residency":"keyword","playerBindingEvidence":[],"sourceOrdinals":[0],"confidence":"confirmed"}],"focusIdentity":{"focusId":"","canonicalName":"...","aliases":["..."]},"sedimentation":{"removeRowIds":[],"characterActivityUpdates":[],"notes":[]}}';
+function unifiedFactStructureDescription(options = {}) {
+  const stage = options.includeStageSummary ? ' ,"stageSummary":{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":[],"keepActiveRowIds":[],"removeRowIds":[],"characterActivityUpdates":[],"notes":[]},"longTermCandidates":[]}' : "";
+  return '{"schemaVersion":2,"turnMaterials":[{"sourceOrdinal":0,"summary":"...","keywords":["..."]}],"facts":[{"entityId":"character:stable-id","entityType":"character","factType":"\u5F53\u524D\u72B6\u6001","title":"...","status":"\u5F53\u524D\u76F8\u5173","rowLifecycle":{"existence":"\u5B58\u6D3B","activity":"\u5F53\u524D\u76F8\u5173","memory":"\u5E7F\u6CDB\u8BB0\u5F97","evidenceLevel":"\u5DF2\u786E\u8BA4","evidence":"...","returnConditions":[],"returnBlockers":[]},"sourceEntityId":"","targetEntityId":"","operation":"update","scope":"chat","lifecycle":"active","content":"...","keywords":["..."],"residency":"keyword","playerBindingEvidence":[],"sourceOrdinals":[0],"confidence":"confirmed"}],"focusIdentity":{"focusId":"","canonicalName":"...","aliases":["..."]},"sedimentation":{"removeRowIds":[],"characterActivityUpdates":[],"notes":[]}' + stage + "}";
 }
 
 // src/pipeline/facts.ts
@@ -7186,7 +6299,7 @@ async function attachAndStore(artifact) {
   attachArtifactToMessage(message, artifact);
   await putArtifact(artifact);
 }
-async function extractUnifiedFacts(artifacts, signal, connectionSnapshot) {
+async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, options = {}) {
   if (!artifacts.length) throw new Error("\u6CA1\u6709\u53EF\u63D0\u53D6\u7684\u6B63\u6587");
   for (const artifact of artifacts) {
     assertArtifactCurrent(artifact, signal);
@@ -7202,9 +6315,9 @@ async function extractUnifiedFacts(artifacts, signal, connectionSnapshot) {
   try {
     const parsed = await generateStructuredTask({
       task: "factExtraction",
-      systemPrompt: unifiedFactSystemPrompt(),
-      prompt: unifiedFactUserPrompt(previous, artifacts),
-      structureDescription: unifiedFactStructureDescription(),
+      systemPrompt: unifiedFactSystemPrompt(options),
+      prompt: unifiedFactUserPrompt(previous, artifacts, options),
+      structureDescription: unifiedFactStructureDescription(options),
       allowRepair: getSettings().repairInvalidJsonOnce,
       signal,
       connectionSnapshot,
@@ -7255,6 +6368,14 @@ async function dispatchUnifiedFactPackage(input) {
   });
   factPackage.projectionMode = projection.mode;
   latest.snapshot = deepClone(projection.snapshot);
+  if (input.rebuildStageSummary && factPackage.stageSummary) {
+    latest.snapshot = applySedimentation(latest.snapshot, factPackage.stageSummary);
+    const signature = factPackage.stageSummary.sourceKeys.join("|");
+    if (!state2.smallSummaries.some((summary) => summary.sourceKeys.join("|") === signature)) {
+      state2.smallSummaries.push(deepClone(factPackage.stageSummary));
+    }
+    markStage(latest, "summary", "success", `\u5386\u53F2\u6279\u6B21\u5DF2\u5F62\u6210\u9636\u6BB5\u603B\u7ED3\uFF1A${factPackage.stageSummary.title}`);
+  }
   state2.focusRegistry = deepClone(projection.focusRegistry);
   state2.currentFocusId = projection.currentFocusId;
   const storedFactPackage = deepClone(factPackage);
@@ -7271,7 +6392,9 @@ async function dispatchUnifiedFactPackage(input) {
   await putChatState(state2);
   for (const artifact of artifacts) await attachAndStore(artifact);
   if (input.deferDerived) {
-    markStage(latest, "summary", "queued", "\u540E\u53F0\u79EF\u538B\u4E2D\uFF0C\u9636\u6BB5\u603B\u7ED3\u5EF6\u8FDF\u5230\u6700\u65B0\u72B6\u6001");
+    if (!(input.rebuildStageSummary && factPackage.stageSummary)) {
+      markStage(latest, "summary", "queued", "\u540E\u53F0\u79EF\u538B\u4E2D\uFF0C\u9636\u6BB5\u603B\u7ED3\u5EF6\u8FDF\u5230\u6700\u65B0\u72B6\u6001");
+    }
     markStage(latest, "sync", "queued", "\u540E\u53F0\u79EF\u538B\u4E2D\uFF0C\u53EA\u53D1\u5E03\u8FFD\u5E73\u540E\u7684\u6700\u65B0\u4E16\u754C\u4E66");
   } else {
     try {
@@ -7313,6 +6436,7 @@ var UnifiedFactScheduler = class {
         deferLorebookSync: false,
         force: false,
         holdDerived: false,
+        includeStageSummary: false,
         waiters: [],
         connectionSnapshot: captureTaskConnection("factExtraction"),
         queuedAt: Date.now()
@@ -7321,6 +6445,7 @@ var UnifiedFactScheduler = class {
       batch.deferLorebookSync ||= Boolean(options.deferLorebookSync);
       batch.force ||= Boolean(options.force);
       batch.holdDerived ||= Boolean(options.holdDerived);
+      batch.includeStageSummary ||= Boolean(options.includeStageSummary);
       batch.waiters.push({ resolve, reject });
       this.pending.set(chatKey, batch);
       this.scheduleFlush(chatKey, batch);
@@ -7356,7 +6481,7 @@ var UnifiedFactScheduler = class {
           let latestResult = null;
           for (let index = 0; index < chunks.length; index += 1) {
             const chunk2 = chunks[index];
-            const factPackage = await extractUnifiedFacts(chunk2, signal, batch.connectionSnapshot);
+            const factPackage = await extractUnifiedFacts(chunk2, signal, batch.connectionSnapshot, { includeStageSummary: batch.includeStageSummary });
             const backlogContinues = this.pending.has(chatKey);
             const isLastChunk = index === chunks.length - 1;
             const deferDerived = !isLastChunk || batch.holdDerived || artifacts.length >= 5 || backlogContinues;
@@ -7365,6 +6490,7 @@ var UnifiedFactScheduler = class {
               factPackage,
               deferLorebookSync: batch.deferLorebookSync,
               deferDerived,
+              rebuildStageSummary: batch.includeStageSummary,
               signal
             });
             await this.replaceDeferredLatest(chatKey, latestResult, deferDerived);
@@ -7487,7 +6613,6 @@ var unifiedFactScheduler = new UnifiedFactScheduler();
 // src/pipeline/pipeline.ts
 init_task_queue();
 init_repository();
-init_connection_broker();
 init_chat_scope();
 
 // src/pipeline/errors.ts
@@ -7673,13 +6798,16 @@ async function processHistoryBatch(indexes, options) {
   return unifiedFactScheduler.enqueueBatch(artifacts, {
     deferLorebookSync: options.deferLorebookSync,
     force: true,
-    holdDerived: options.holdDerived
+    holdDerived: options.holdDerived,
+    includeStageSummary: true
   });
 }
 async function finalizeHistoryDerived(artifact) {
   unifiedFactScheduler.clearDeferred(artifact.chatKey);
-  await rebuildAllSummaries(artifact);
+  markStage(artifact, "summary", "running", "\u5386\u53F2\u6279\u6B21\u5C0F\u603B\u7ED3\u5DF2\u751F\u6210\uFF0C\u6B63\u5728\u66F4\u65B0\u957F\u671F\u8109\u7EDC");
   await stageArtifact(artifact.messageIndex, artifact);
+  await generateLargeSummary(artifact, true);
+  markStage(artifact, "summary", "success", "\u5386\u53F2\u91CD\u5EFA\u957F\u671F\u8109\u7EDC\u5DF2\u66F4\u65B0");
   await commitArtifact(artifact.messageIndex, artifact);
 }
 function scheduleMessage(payload, force = false, delay = 0) {
@@ -7740,6 +6868,50 @@ function reasonForChangedEvent(sourceEvent) {
   if (/UPDATED/i.test(sourceEvent)) return "continued";
   return "edited";
 }
+function launchHistoryRebuild(startIndex, reason) {
+  const scope = chatScopeManager.current();
+  const taskKey = `history-rebuild:${scope.chatKey}`;
+  if (taskQueue.has(taskKey)) return false;
+  clearAllQuarantines();
+  taskQueue.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u4EFB\u52A1\u5E76\u91CD\u5EFA\u4F9D\u8D56");
+  unifiedFactScheduler.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u5F85\u63D0\u53D6\u533A\u6BB5");
+  lorebookPublishScheduler.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u4E16\u754C\u4E66\u53D1\u5E03");
+  const total = Math.max(1, getChat().length - startIndex);
+  void taskQueue.run(
+    taskKey,
+    `\u540E\u53F0\u91CD\u5EFA\uFF1A\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB`,
+    "factExtraction",
+    async (signal) => rebuildHistoryFrom({
+      startIndex,
+      reason,
+      processBatch: processHistoryBatch,
+      finalizeDerived: finalizeHistoryDerived,
+      syncLatest: async (artifact) => syncLorebook(artifact, signal, { forceRefresh: true }),
+      signal,
+      onProgress: (progress) => taskQueue.updateByKey(taskKey, {
+        progressCurrent: progress.current,
+        progressTotal: progress.total,
+        progressLabel: progress.label,
+        retries: progress.retries
+      })
+    }),
+    {
+      laneKey: `history-rebuild:${scope.chatKey}`,
+      priority: "background-critical",
+      blocking: false,
+      sourceRange: { startIndex, endIndex: getChat().length - 1 },
+      progressTotal: total,
+      progressLabel: "\u7B49\u5F85\u6279\u6B21\u5212\u5206"
+    }
+  ).then(() => {
+    toast("success", "\u5386\u53F2\u91CD\u5EFA\u5B8C\u6210\uFF0C\u8868\u683C\u3001\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u5DF2\u66F4\u65B0");
+  }).catch((error) => {
+    if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
+    console.error("[MirrorAbyss] history rebuild failed", error);
+    toast("error", `\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+  });
+  return true;
+}
 function scheduleHistoryRebuild(payload, reason, delay = 300, sourceEvent = "") {
   const startIndex = Math.max(0, resolveMessageIndex(payload));
   const scope = chatScopeManager.current();
@@ -7762,23 +6934,7 @@ function scheduleHistoryRebuild(payload, reason, delay = 300, sourceEvent = "") 
     const pending = pendingHistoryStarts.get(scope.chatKey);
     pendingHistoryStarts.delete(scope.chatKey);
     if (!pending || !chatScopeManager.isCurrent(scope)) return;
-    clearAllQuarantines();
-    taskQueue.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u4EFB\u52A1\u5E76\u91CD\u5EFA\u4F9D\u8D56");
-    connectionBroker.cancelScope(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u8BF7\u6C42\u5E76\u91CD\u5EFA\u4F9D\u8D56");
-    unifiedFactScheduler.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u5F85\u63D0\u53D6\u533A\u6BB5");
-    lorebookPublishScheduler.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u4E16\u754C\u4E66\u53D1\u5E03");
-    invocationRouter.cancelChat(scope.chatKey, "\u804A\u5929\u5386\u53F2\u5DF2\u4FEE\u6539\uFF0C\u53D6\u6D88\u65E7\u8C03\u7528");
-    void rebuildHistoryFrom({
-      startIndex: pending.startIndex,
-      reason: pending.reason,
-      processBatch: processHistoryBatch,
-      finalizeDerived: finalizeHistoryDerived,
-      syncLatest: async (artifact) => syncLorebook(artifact, void 0, { forceRefresh: true })
-    }).catch((error) => {
-      if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
-      console.error("[MirrorAbyss] history rebuild failed", error);
-      toast("error", `\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
-    });
+    launchHistoryRebuild(pending.startIndex, pending.reason);
   }, delay);
   historyRebuildTimers.set(scope.chatKey, timer);
 }
@@ -7786,11 +6942,10 @@ async function removeMessageArtifact(payload) {
   scheduleHistoryRebuild(payload, "deleted", 0);
 }
 async function recoverHistoryConsistencyForCurrentChat() {
-  return recoverPendingHistoryRebuild({
-    processBatch: processHistoryBatch,
-    finalizeDerived: finalizeHistoryDerived,
-    syncLatest: async (artifact) => syncLorebook(artifact, void 0, { forceRefresh: true })
-  });
+  const state2 = await getChatState(currentChatKey());
+  const startIndex = state2.historyRebuild?.startIndex ?? await detectHistoryConsistencyStart();
+  if (startIndex === null) return false;
+  return launchHistoryRebuild(startIndex, state2.historyRebuild ? "recovery" : "branch");
 }
 function getArtifactAt(index) {
   const artifact = getAttachedArtifact(getMessage(index));
@@ -7818,18 +6973,14 @@ function installPipelineEventHandlers() {
     router.subscribe("chat-changed", (event) => {
       clearAllQuarantines();
       taskQueue.cancelAllExceptChat(event.scope.chatKey);
-      connectionBroker.cancelAllExceptScope(event.scope.chatKey);
       unifiedFactScheduler.cancelAllExceptChat(event.scope.chatKey);
       lorebookPublishScheduler.cancelAllExceptChat(event.scope.chatKey);
-      invocationRouter.cancelAllExceptChat(event.scope.chatKey);
     }),
     router.subscribe("chat-created", (event) => {
       clearAllQuarantines();
       taskQueue.cancelAllExceptChat(event.scope.chatKey);
-      connectionBroker.cancelAllExceptScope(event.scope.chatKey);
       unifiedFactScheduler.cancelAllExceptChat(event.scope.chatKey);
       lorebookPublishScheduler.cancelAllExceptChat(event.scope.chatKey);
-      invocationRouter.cancelAllExceptChat(event.scope.chatKey);
     })
   ];
   return () => {
@@ -8113,7 +7264,6 @@ init_constants();
 init_repository();
 init_repository();
 init_chat_scope();
-init_connection_broker();
 async function runDiagnostics() {
   const checks = [];
   const context = tryGetContext();
@@ -8141,7 +7291,7 @@ async function runDiagnostics() {
     id: "generateRaw",
     label: "\u5F53\u524D\u8FDE\u63A5\u539F\u59CB\u8C03\u7528",
     status: typeof context?.generateRaw === "function" ? "ok" : "warn",
-    detail: typeof context?.generateRaw === "function" ? "generateRaw\u53EF\u7528" : "\u5F53\u524D\u8FDE\u63A5\u6A21\u5F0F\u4E0D\u53EF\u7528\uFF1B\u4ECD\u53EF\u4F7F\u7528\u72EC\u7ACBAPI"
+    detail: typeof context?.generateRaw === "function" ? "generateRaw\u53EF\u7528" : "\u5F53\u524D\u8FDE\u63A5\u4E0D\u53EF\u7528\uFF0C\u8BF7\u914D\u7F6E SillyTavern Connection Profile"
   });
   const coordinator3 = foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR);
   const coordination = coordinator3?.snapshot();
@@ -8151,18 +7301,17 @@ async function runDiagnostics() {
     status: coordination?.mode === "memory" ? "warn" : coordination ? "ok" : "error",
     detail: coordination ? `${coordination.mode}\uFF1B\u6D3B\u52A8\u79DF\u7EA6 ${coordination.active.length}` : "\u4E0D\u53EF\u7528"
   });
-  const broker = connectionBroker.snapshot();
   checks.push({
-    id: "connectionBroker",
-    label: "Connection Broker",
-    status: broker.circuits.some((item2) => item2.openUntil > Date.now()) ? "warn" : "ok",
-    detail: `\u6D3B\u52A8 ${broker.active.length}\uFF1B\u6392\u961F ${broker.lanes.reduce((sum, lane) => sum + lane.queued, 0)}\uFF1B\u7194\u65AD ${broker.circuits.filter((item2) => item2.openUntil > Date.now()).length}`
+    id: "nativeInvocation",
+    label: "SillyTavern \u539F\u751F\u6A21\u578B\u8C03\u7528",
+    status: typeof context?.generateRaw === "function" ? "ok" : "warn",
+    detail: "\u955C\u6E0A\u53EA\u7EC4\u88C5\u63D0\u793A\u8BCD\u4E0E\u4EFB\u52A1\u72B6\u6001\uFF1B\u6A21\u578B\u4F20\u8F93\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216 Connection Profile \u6267\u884C"
   });
   checks.push({
     id: "connectionService",
     label: "Connection Profile\u9694\u79BB\u8C03\u7528",
     status: typeof context?.ConnectionManagerRequestService?.sendRequest === "function" ? "ok" : "warn",
-    detail: typeof context?.ConnectionManagerRequestService?.sendRequest === "function" ? "ConnectionManagerRequestService\u53EF\u7528\uFF0C\u4E0D\u9700\u8981\u5207\u6362\u5168\u5C40\u8FDE\u63A5" : "\u4E0D\u53EF\u7528\uFF1B\u8BF7\u4F7F\u7528\u955C\u6E0A\u72EC\u7ACBAPI\u6216\u5F53\u524D\u8FDE\u63A5"
+    detail: typeof context?.ConnectionManagerRequestService?.sendRequest === "function" ? "ConnectionManagerRequestService\u53EF\u7528\uFF0C\u4E0D\u9700\u8981\u5207\u6362\u5168\u5C40\u8FDE\u63A5" : "\u4E0D\u53EF\u7528\uFF1B\u5C06\u4F7F\u7528\u5F53\u524D SillyTavern \u8FDE\u63A5"
   });
   checks.push({
     id: "settingsPanel",
@@ -8250,33 +7399,17 @@ async function runDiagnostics() {
   }
   const settings = context ? getSettings() : null;
   if (settings) {
-    const independentCount = settings.independentApiProfiles.length;
-    const readyCount = settings.independentApiProfiles.filter(
-      (profile) => Boolean(profile.apiUrl && profile.model && getSessionApiKey(profile.id))
-    ).length;
+    const revisionConnection = settings?.connections.revision;
+    const revisionProfileMissing = Boolean(
+      settings.auditEnabled && settings.auditFailAction === "revise" && revisionConnection?.mode === "profile" && !revisionConnection.profileId.trim()
+    );
     checks.push({
-      id: "independentApi",
-      label: "\u955C\u6E0A\u72EC\u7ACBAPI",
-      status: independentCount === 0 ? "warn" : readyCount === independentCount ? "ok" : "warn",
-      detail: independentCount === 0 ? "\u5C1A\u672A\u521B\u5EFA\uFF1B\u4EFB\u52A1\u53EF\u7EE7\u7EED\u4F7F\u7528\u5F53\u524D\u8FDE\u63A5\u6216ST Profile" : `${readyCount}/${independentCount} \u4E2A\u914D\u7F6E\u5DF2\u5177\u5907\u5730\u5740\u3001\u6A21\u578B\u548C\u672C\u6B21\u4F1A\u8BDD\u5BC6\u94A5`
+      id: "revision",
+      label: "\u5B9A\u5411\u4FEE\u6B63\u914D\u7F6E",
+      status: revisionProfileMissing ? "error" : "ok",
+      detail: settings?.auditFailAction === "revise" ? revisionProfileMissing ? "\u4FEE\u6B63\u6A21\u578B\u5DF2\u9009\u62E9 Connection Profile\uFF0C\u4F46\u5C1A\u672A\u9009\u62E9\u6709\u6548\u914D\u7F6E" : `\u5DF2\u542F\u7528\uFF0C\u6700\u591A${settings.maxRevisionAttempts}\u6B21\uFF0C\u5931\u8D25\u540E${settings.revisionFallbackAction}` : "\u672A\u542F\u7528\u81EA\u52A8\u4FEE\u6B63"
     });
   }
-  checks.push({
-    id: "audit",
-    label: "\u89C4\u5219\u5BA1\u6838\u914D\u7F6E",
-    status: settings?.auditEnabled && !settings.auditPrompt.trim() ? "error" : "ok",
-    detail: settings?.auditEnabled ? settings.auditPrompt.trim() ? "\u5DF2\u542F\u7528\u5E76\u586B\u5199\u89C4\u5219" : "\u5DF2\u542F\u7528\u4F46\u89C4\u5219\u4E3A\u7A7A" : "\u672A\u542F\u7528"
-  });
-  const revisionConnection = settings?.connections.revision;
-  const revisionProfileMissing = Boolean(
-    settings?.auditEnabled && settings.auditFailAction === "revise" && (revisionConnection?.mode === "profile" && !revisionConnection.profileId.trim() || revisionConnection?.mode === "independent" && !revisionConnection.independentProfileId.trim())
-  );
-  checks.push({
-    id: "revision",
-    label: "\u5B9A\u5411\u4FEE\u6B63\u914D\u7F6E",
-    status: revisionProfileMissing ? "error" : "ok",
-    detail: settings?.auditFailAction === "revise" ? revisionProfileMissing ? "\u4FEE\u6B63\u6A21\u578B\u5DF2\u9009\u62E9\u72EC\u7ACB\u8FDE\u63A5\u65B9\u5F0F\uFF0C\u4F46\u5C1A\u672A\u9009\u62E9\u6709\u6548\u914D\u7F6E" : `\u5DF2\u542F\u7528\uFF0C\u6700\u591A${settings.maxRevisionAttempts}\u6B21\uFF0C\u5931\u8D25\u540E${settings.revisionFallbackAction}` : "\u672A\u542F\u7528\u81EA\u52A8\u4FEE\u6B63"
-  });
   if (context) {
     const state2 = await getChatState(currentChatKey());
     checks.push({
@@ -8299,7 +7432,7 @@ async function diagnosticReport() {
     chatKey,
     kernel: foundationKernel.status(),
     scope: context ? chatScopeManager.current() : null,
-    connectionBroker: connectionBroker.snapshot(),
+    nativeInvocation: { current: typeof context?.generateRaw === "function", profiles: typeof context?.ConnectionManagerRequestService?.sendRequest === "function" },
     crossTabCoordinator: foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR)?.snapshot() ?? null,
     checks: await runDiagnostics(),
     settings: context ? { ...getSettings(), auditPrompt: getSettings().auditPrompt ? "[\u5DF2\u586B\u5199]" : "", revisionPrompt: getSettings().revisionPrompt ? "[\u5DF2\u586B\u5199]" : "" } : null,
@@ -8346,11 +7479,17 @@ function root() {
             <div class="ma11-brand">\u955C\u6E0A <span>${VERSION}</span></div>
             <div class="ma11-subtitle">\u7ED3\u6784\u5316\u72B6\u6001\u3001\u5206\u5C42\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
           </div>
-          <button class="ma11-icon-button" data-ma11-action="close" aria-label="\u5173\u95ED">\xD7</button>
+          <div class="ma11-header-actions">
+            <button class="menu_button ma11-header-task-button" data-ma11-action="open-tasks" type="button" title="\u67E5\u770B\u4EFB\u52A1\u72B6\u6001">
+              <i class="fa-solid fa-list-check"></i><span>\u4EFB\u52A1</span><b data-ma11-task-badge hidden>0</b>
+            </button>
+            <button class="ma11-icon-button" data-ma11-action="close" aria-label="\u5173\u95ED">\xD7</button>
+          </div>
         </header>
         <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">
           ${[
       ["overview", "\u603B\u89C8"],
+      ["tasks", "\u4EFB\u52A1"],
       ["tables", "\u72B6\u6001\u8868"],
       ["graph", "\u5173\u7CFB\u56FE\u8C31"],
       ["summaries", "\u603B\u7ED3"],
@@ -8428,6 +7567,100 @@ function statusClass(value) {
   if (value === "failed" || value === "blocked") return "danger";
   if (value === "running" || value === "queued") return "working";
   return "neutral";
+}
+function latestTasksByKey(tasks) {
+  const latest = /* @__PURE__ */ new Map();
+  for (const task of [...tasks].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))) latest.set(task.key, task);
+  return [...latest.values()];
+}
+function queueStateText(value) {
+  const map = {
+    queued: "\u7B49\u5F85\u6267\u884C",
+    running: "\u8FD0\u884C\u4E2D",
+    success: "\u5DF2\u5B8C\u6210",
+    failed: "\u5931\u8D25",
+    cancelled: "\u5DF2\u53D6\u6D88",
+    stale: "\u5DF2\u5931\u6548"
+  };
+  return map[value];
+}
+function queueStateClass(value) {
+  if (value === "success") return "success";
+  if (value === "failed") return "danger";
+  if (value === "running" || value === "queued") return "working";
+  return "neutral";
+}
+function taskDurationText(task) {
+  const start = Date.parse(task.startedAt || task.createdAt);
+  const end = Date.parse(task.finishedAt || (/* @__PURE__ */ new Date()).toISOString());
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "";
+  const seconds = Math.max(0, Math.round((end - start) / 1e3));
+  if (seconds < 60) return `${seconds} \u79D2`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${minutes} \u5206 ${rest} \u79D2`;
+}
+function taskRangeText(task) {
+  if (task.sourceStartIndex === void 0) return "";
+  const end = task.sourceEndIndex ?? task.sourceStartIndex;
+  return `\u6D88\u606F ${task.sourceStartIndex + 1}${end !== task.sourceStartIndex ? `\u2013${end + 1}` : ""}`;
+}
+function taskCardHtml(task) {
+  const progress = task.progressTotal ? Math.max(0, Math.min(100, Math.round((task.progressCurrent ?? 0) / task.progressTotal * 100))) : void 0;
+  const active = task.state === "queued" || task.state === "running";
+  const isHistory = task.key.startsWith("history-rebuild:");
+  const actions = active ? isHistory ? `<button type="button" data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button type="button" class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">\u53D6\u6D88</button>` : task.state === "failed" && isHistory ? `<button type="button" data-ma11-action="retry-history-rebuild">\u4ECE\u5931\u8D25\u6279\u6B21\u7EE7\u7EED</button>` : "";
+  return `<article class="ma11-task-card ${queueStateClass(task.state)}">
+    <header><div><b>${escapeHtml(task.label)}</b><span class="ma11-badge ${queueStateClass(task.state)}">${queueStateText(task.state)}</span></div><time>${escapeHtml(new Date(task.updatedAt).toLocaleString())}</time></header>
+    <div class="ma11-task-meta">
+      ${taskRangeText(task) ? `<span>${escapeHtml(taskRangeText(task))}</span>` : ""}
+      <span>${task.blocking ? "\u963B\u585E\u73A9\u5BB6" : "\u540E\u53F0\u4EFB\u52A1"}</span>
+      <span>\u4F18\u5148\u7EA7\uFF1A${escapeHtml(task.priority || "\u9ED8\u8BA4")}</span>
+      ${task.retries ? `<span>\u91CD\u8BD5 ${task.retries} \u6B21</span>` : ""}
+      ${task.startedAt ? `<span>\u8017\u65F6\uFF1A${escapeHtml(taskDurationText(task))}</span>` : ""}
+    </div>
+    ${task.progressLabel ? `<p class="ma11-task-progress-label">${escapeHtml(task.progressLabel)}</p>` : ""}
+    ${progress !== void 0 ? `<div class="ma11-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div><small>${task.progressCurrent ?? 0}/${task.progressTotal} \xB7 ${progress}%</small>` : ""}
+    ${task.error ? `<div class="ma11-error-box"><b>\u5931\u8D25\u539F\u56E0</b><p>${escapeHtml(task.error)}</p></div>` : ""}
+    ${actions ? `<footer class="ma11-actions">${actions}</footer>` : ""}
+  </article>`;
+}
+async function tasksHtml() {
+  const chatKey = currentChatKey();
+  const live = taskQueue.list().filter((task) => task.chatKey === chatKey);
+  const logs = await getTaskLog(chatKey);
+  const byId = /* @__PURE__ */ new Map();
+  for (const task of [...logs, ...live]) byId.set(task.id, task);
+  const tasks = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const latestStates = latestTasksByKey(tasks);
+  const active = latestStates.filter((task) => task.state === "queued" || task.state === "running");
+  const failed = latestStates.filter((task) => task.state === "failed");
+  const completed = latestStates.filter((task) => task.state === "success");
+  return `<section class="ma11-toolbar"><div><h2>\u4EFB\u52A1\u4E2D\u5FC3</h2><p>\u6A21\u578B\u8C03\u7528\u7531 SillyTavern \u6267\u884C\uFF1B\u8FD9\u91CC\u4EC5\u663E\u793A\u955C\u6E0A\u4E1A\u52A1\u4EFB\u52A1\u7684\u6392\u961F\u3001\u8FDB\u5EA6\u548C\u7ED3\u679C\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-tasks">\u5237\u65B0</button><button data-ma11-action="open-diagnostics">\u8BCA\u65AD</button></div></section>
+    <section class="ma11-task-summary-grid">
+      <article class="ma11-card working"><b>${active.length}</b><span>\u8FD0\u884C\u6216\u6392\u961F</span></article>
+      <article class="ma11-card danger"><b>${failed.length}</b><span>\u5931\u8D25</span></article>
+      <article class="ma11-card success"><b>${completed.length}</b><span>\u5DF2\u5B8C\u6210</span></article>
+    </section>
+    <section class="ma11-card"><header><b>\u5F53\u524D\u4E0E\u6700\u8FD1\u4EFB\u52A1</b><span>${tasks.length} \u6761</span></header>
+      <div class="ma11-task-center-list">${tasks.length ? tasks.slice(0, 40).map(taskCardHtml).join("") : '<p class="ma11-empty">\u5F53\u524D\u6CA1\u6709\u4EFB\u52A1\u8BB0\u5F55\u3002</p>'}</div>
+    </section>`;
+}
+function updateWorkspaceTaskIndicator() {
+  const workspace = document.querySelector("#ma11-workspace");
+  if (!workspace) return;
+  const tasks = latestTasksByKey(taskQueue.list().filter((task) => task.chatKey === currentChatKey()));
+  const active = tasks.filter((task) => task.state === "queued" || task.state === "running").length;
+  const failed = tasks.filter((task) => task.state === "failed").length;
+  const button = workspace.querySelector(".ma11-header-task-button");
+  const badge = workspace.querySelector("[data-ma11-task-badge]");
+  if (!button || !badge) return;
+  const count = active || failed;
+  badge.hidden = count === 0;
+  badge.textContent = String(count);
+  button.classList.toggle("working", active > 0);
+  button.classList.toggle("danger", active === 0 && failed > 0);
+  button.title = active > 0 ? `${active} \u4E2A\u4EFB\u52A1\u8FD0\u884C\u4E2D` : failed > 0 ? `${failed} \u4E2A\u4EFB\u52A1\u5931\u8D25` : "\u4EFB\u52A1\u7A7A\u95F2";
 }
 function outboxStateText(value) {
   const map = {
@@ -8704,12 +7937,6 @@ function connectionProfiles() {
     return [];
   }
 }
-function independentProfilesOptions(selectedId) {
-  const profiles = listIndependentApiProfiles();
-  const options = profiles.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === selectedId ? "selected" : ""}>${escapeHtml(profile.name)}${profile.model ? ` \xB7 ${escapeHtml(profile.model)}` : ""}</option>`).join("");
-  const missing = selectedId && !profiles.some((profile) => profile.id === selectedId) ? `<option value="${escapeHtml(selectedId)}" selected>\u5DF2\u5220\u9664\u7684\u72EC\u7ACBAPI</option>` : "";
-  return `<option value="">\u8BF7\u9009\u62E9\u72EC\u7ACBAPI</option>${missing}${options}`;
-}
 function connectionBlock(task, label) {
   const value = getSettings().connections[task];
   const profiles = connectionProfiles();
@@ -8720,55 +7947,20 @@ function connectionBlock(task, label) {
     <select data-ma11-connection-mode="${task}">
       <option value="current" ${value.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option>
       <option value="profile" ${value.mode === "profile" ? "selected" : ""}>ST\u539F\u751F Profile\uFF08\u9694\u79BB\u8BF7\u6C42\uFF09</option>
-      <option value="independent" ${value.mode === "independent" ? "selected" : ""}>\u955C\u6E0A\u72EC\u7ACBAPI</option>
     </select>
     <select data-ma11-connection-profile-id="${task}" ${value.mode === "profile" ? "" : "hidden disabled"}><option value="">\u8BF7\u9009\u62E9Connection Profile</option>${missingProfile}${profileOptions}</select>
-    <select data-ma11-connection-independent="${task}" ${value.mode === "independent" ? "" : "hidden disabled"}>${independentProfilesOptions(value.independentProfileId)}</select>
     <button data-ma11-test="${task}">\u6D4B\u8BD5</button>
   </div>`;
-}
-function independentApiProfilesHtml() {
-  const profiles = listIndependentApiProfiles();
-  const cards = profiles.map((profile) => {
-    const hasKey = Boolean(getSessionApiKey(profile.id));
-    const listId = `ma11-models-${profile.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
-    const modelOptions = profile.cachedModels.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
-    return `<article class="ma11-api-profile" data-ma11-api-profile="${escapeHtml(profile.id)}">
-      <header><b>${escapeHtml(profile.name)}</b><span class="ma11-badge ${hasKey ? "success" : "warning"}">${hasKey ? "\u5BC6\u94A5\u5DF2\u8F7D\u5165\u672C\u6807\u7B7E\u9875" : "\u672A\u586B\u5199\u4F1A\u8BDD\u5BC6\u94A5"}</span></header>
-      <div class="ma11-api-profile-grid">
-        <label>\u914D\u7F6E\u540D\u79F0<input data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="name" value="${escapeHtml(profile.name)}" maxlength="120" /></label>
-        <label>\u63A5\u53E3\u7C7B\u578B<select disabled><option>OpenAI\u517C\u5BB9\uFF08ST\u540E\u7AEF\u4EE3\u7406\uFF09</option></select></label>
-        <label class="ma11-api-wide">API\u5730\u5740<input data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="apiUrl" value="${escapeHtml(profile.apiUrl)}" placeholder="https://api.example.com/v1" /></label>
-        <label class="ma11-api-wide">API\u5BC6\u94A5\uFF08\u4EC5\u5F53\u524D\u6807\u7B7E\u9875\uFF09<input type="password" autocomplete="off" data-ma11-api-key="${escapeHtml(profile.id)}" value="" placeholder="${hasKey ? "\u5DF2\u4FDD\u5B58\u4E8E\u5F53\u524D\u6807\u7B7E\u9875\uFF1B\u7559\u7A7A\u4E0D\u53D8" : "\u8F93\u5165\u540E\u4EC5\u4FDD\u5B58\u5728 sessionStorage"}" /></label>
-        <label>\u6A21\u578B<input list="${listId}" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="model" value="${escapeHtml(profile.model)}" placeholder="\u6A21\u578B\u540D\u79F0" /><datalist id="${listId}">${modelOptions}</datalist></label>
-        <label>\u6700\u5927\u8F93\u51FA<input type="number" min="64" max="131072" step="64" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="maxTokens" value="${profile.maxTokens}" /></label>
-        <label>\u6E29\u5EA6<input type="number" min="0" max="2" step="0.05" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="temperature" value="${profile.temperature}" /></label>
-        <label>Top P<input type="number" min="0" max="1" step="0.05" data-ma11-api-profile-id="${escapeHtml(profile.id)}" data-ma11-api-profile-field="topP" value="${profile.topP}" /></label>
-      </div>
-      <footer class="ma11-actions">
-        <button data-ma11-api-models="${escapeHtml(profile.id)}">\u8BFB\u53D6\u6A21\u578B</button>
-        <button data-ma11-api-test="${escapeHtml(profile.id)}">\u6D4B\u8BD5\u914D\u7F6E</button>
-        <button class="danger" data-ma11-api-delete="${escapeHtml(profile.id)}">\u5220\u9664</button>
-      </footer>
-    </article>`;
-  }).join("");
-  return `<section class="ma11-card ma11-form-card">
-    <header><b>\u955C\u6E0A\u72EC\u7ACBAPI\u914D\u7F6E</b><span>\u53C2\u8003\u6210\u719F\u63D2\u4EF6\u7684\u72EC\u7ACB\u69FD\u4F4D\uFF1A\u76F4\u63A5\u7ECFSillyTavern\u540E\u7AEF\u4EE3\u7406\u8BF7\u6C42\uFF0C\u4E0D\u5207\u6362\u5F53\u524D\u804A\u5929\u8FDE\u63A5\u3002</span></header>
-    <p class="ma11-help">API\u5730\u5740\u3001\u6A21\u578B\u548C\u53C2\u6570\u4FDD\u5B58\u5728\u955C\u6E0A\u8BBE\u7F6E\u4E2D\uFF1BAPI\u5BC6\u94A5\u9ED8\u8BA4\u53EA\u4FDD\u5B58\u5728\u5F53\u524D\u6D4F\u89C8\u5668\u6807\u7B7E\u9875\uFF0C\u5173\u95ED\u5F53\u524D\u6807\u7B7E\u9875\u540E\u9700\u8981\u91CD\u65B0\u586B\u5199\uFF0C\u907F\u514D\u660E\u6587\u957F\u671F\u5199\u5165\u6269\u5C55\u8BBE\u7F6E\u3002</p>
-    <div class="ma11-api-profile-list">${cards || '<p class="ma11-empty">\u5C1A\u672A\u521B\u5EFA\u72EC\u7ACBAPI\u914D\u7F6E\u3002</p>'}</div>
-    <div class="ma11-actions"><button data-ma11-action="add-api-profile">\uFF0B \u65B0\u5EFA\u72EC\u7ACBAPI\u914D\u7F6E</button></div>
-  </section>`;
 }
 function settingsHtml() {
   const settings = getSettings();
   return `
     <section class="ma11-card ma11-form-card">
-      <header><b>\u4EFB\u52A1\u6A21\u578B\u5206\u914D</b><span>\u4E09\u79CD\u65B9\u5F0F\u5747\u4E0D\u4F1A\u518D\u901A\u8FC7DOM\u4E34\u65F6\u5207\u6362\u9152\u9986\u5168\u5C40\u8FDE\u63A5\u3002</span></header>
+      <header><b>\u4EFB\u52A1\u6A21\u578B\u5206\u914D</b><span>\u6240\u6709\u8BF7\u6C42\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216\u539F\u751F Connection Profile \u6267\u884C\u3002</span></header>
       ${connectionBlock("audit", "\u5BA1\u6838\u4E0E\u5FC5\u8981\u4FEE\u6B63")}
       ${connectionBlock("factExtraction", "\u8BB0\u5FC6\u6A21\u578B\uFF08\u8868\u683C\uFF0B\u5C0F\u603B\u7ED3\uFF0B\u5927\u603B\u7ED3\uFF09")}
-      <p class="ma11-help">\u955C\u6E0A\u53EA\u4F7F\u7528\u4E24\u4E2A\u6A21\u578B\u89D2\u8272\uFF1A\u5BA1\u6838\u4E0E\u5FC5\u8981\u4FEE\u6B63\u5171\u4EAB\u524D\u53F0\u8FDE\u63A5\uFF1B\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u3001\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u5171\u4EAB\u540E\u53F0\u8BB0\u5FC6\u8FDE\u63A5\u3002\u6B63\u6587\u53EA\u5728\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u65F6\u88AB\u7406\u89E3\u4E00\u6B21\uFF0C\u5C0F\u603B\u7ED3\u8BFB\u53D6\u4E8B\u5B9E\u5305\u4E0E\u6D3B\u8DC3\u8868\u683C\uFF0C\u5927\u603B\u7ED3\u8BFB\u53D6\u65E7\u5927\u603B\u7ED3\u4E0E\u65B0\u5C0F\u603B\u7ED3\uFF0C\u4E0D\u91CD\u65B0\u53D1\u9001\u539F\u59CB\u6B63\u6587\u3002ST\u539F\u751F Profile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u4E0D\u5207\u6362\u5F53\u524D\u804A\u5929\u8FDE\u63A5\u3002</p>
+      <p class="ma11-help">\u955C\u6E0A\u53EA\u4F7F\u7528\u4E24\u4E2A\u6A21\u578B\u89D2\u8272\uFF1A\u5BA1\u6838\u4E0E\u5FC5\u8981\u4FEE\u6B63\u5171\u4EAB\u524D\u53F0\u8FDE\u63A5\uFF1B\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u3001\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u5171\u4EAB\u540E\u53F0\u8BB0\u5FC6\u8FDE\u63A5\u3002\u6B63\u6587\u53EA\u5728\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u65F6\u88AB\u7406\u89E3\u4E00\u6B21\uFF0C\u5C0F\u603B\u7ED3\u8BFB\u53D6\u4E8B\u5B9E\u5305\u4E0E\u6D3B\u8DC3\u8868\u683C\uFF0C\u5927\u603B\u7ED3\u8BFB\u53D6\u65E7\u5927\u603B\u7ED3\u4E0E\u65B0\u5C0F\u603B\u7ED3\uFF0C\u4E0D\u91CD\u65B0\u53D1\u9001\u539F\u59CB\u6B63\u6587\u3002ST \u539F\u751F Profile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u4E0D\u5207\u6362\u5F53\u524D\u804A\u5929\u8FDE\u63A5\uFF1B\u955C\u6E0A\u4E0D\u4FDD\u5B58\u5BC6\u94A5\u3001\u4E0D\u76F4\u63A5\u8BF7\u6C42\u6A21\u578B\u4F9B\u5E94\u5546\u3002</p>
     </section>
-    ${independentApiProfilesHtml()}
     <section class="ma11-card ma11-form-card">
       <header><b>\u81EA\u52A8\u5316</b></header>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span>\u542F\u7528\u955C\u6E0A</span></label>
@@ -8778,9 +7970,8 @@ function settingsHtml() {
       <label>\u5C0F\u603B\u7ED3\u56DE\u5408\u6570<input type="number" min="1" max="100" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
-      <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>\u7ED3\u6784\u8F93\u51FA\u65E0\u6CD5\u672C\u5730\u89E3\u6790\u65F6\uFF0C\u5141\u8BB8\u4E00\u6B21\u4E13\u7528JSON\u683C\u5F0F\u4FEE\u590D</span></label>
-      <p class="ma11-help">\u683C\u5F0F\u4FEE\u590D\u53EA\u6574\u7406\u539F\u59CB\u8FD4\u56DE\uFF0C\u4E0D\u91CD\u65B0\u6267\u884C\u5BA1\u6838\u3001\u72B6\u6001\u63D0\u53D6\u6216\u603B\u7ED3\uFF1B\u5931\u8D25\u65F6\u4F1A\u663E\u793A\u5B9E\u9645\u4F7F\u7528\u7684\u8FDE\u63A5\u914D\u7F6E\u4E0E\u8FD4\u56DE\u7247\u6BB5\u3002</p>
+      <p class="ma11-help">\u683C\u5F0F\u4FEE\u590D\u53EA\u6574\u7406\u539F\u59CB\u8FD4\u56DE\uFF0C\u4E0D\u91CD\u65B0\u6267\u884C\u5BA1\u6838\u3001\u72B6\u6001\u63D0\u53D6\u6216\u603B\u7ED3\u3002\u8BF7\u6C42\u8D85\u65F6\u3001\u91CD\u8BD5\u3001\u9650\u6D41\u548C\u4F9B\u5E94\u5546\u9519\u8BEF\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216 Connection Profile \u7EDF\u4E00\u5904\u7406\u3002</p>
     </section>`;
 }
 async function diagnosticsHtml() {
@@ -8848,8 +8039,10 @@ async function renderWorkspace() {
     const content = workspace.querySelector(
       "#ma11-workspace-content"
     );
+    updateWorkspaceTaskIndicator();
     if (settings.ui.activeTab === "overview")
       content.innerHTML = overviewHtml(info);
+    if (settings.ui.activeTab === "tasks") content.innerHTML = await tasksHtml();
     if (settings.ui.activeTab === "tables") content.innerHTML = tableHtml(info);
     if (settings.ui.activeTab === "graph") content.innerHTML = graphHtml(info);
     if (settings.ui.activeTab === "summaries")
@@ -8969,7 +8162,6 @@ function updateSetting(target) {
 function updateConnection(target) {
   const modeTask = target.dataset.ma11ConnectionMode;
   const profileTask = target.dataset.ma11ConnectionProfileId;
-  const independentTask = target.dataset.ma11ConnectionIndependent;
   const settings = getSettings();
   let shouldRender = false;
   if (modeTask) {
@@ -8981,18 +8173,8 @@ function updateConnection(target) {
     const selected = connectionProfiles().find((profile) => profile.id === settings.connections[profileTask].profileId);
     settings.connections[profileTask].profile = selected?.name || "";
   }
-  if (independentTask) settings.connections[independentTask].independentProfileId = safeText(target.value, 160).trim();
   saveSettings();
   if (shouldRender) void renderWorkspace();
-}
-function updateIndependentProfileField(target) {
-  const profileId = target.dataset.ma11ApiProfileId;
-  const field = target.dataset.ma11ApiProfileField;
-  if (!profileId || !field) return;
-  const numericFields = /* @__PURE__ */ new Set(["maxTokens", "temperature", "topP"]);
-  updateIndependentApiProfile(profileId, {
-    [field]: numericFields.has(field) ? Number(target.value) : target.value
-  });
 }
 function bindWorkspace(workspace) {
   workspace.addEventListener("click", async (event) => {
@@ -9001,7 +8183,7 @@ function bindWorkspace(workspace) {
     if (tab) return setTab(tab);
     const action = target.closest("[data-ma11-action]")?.dataset.ma11Action;
     const actionButton = target.closest("button");
-    const longAction = Boolean(action || target.closest("[data-ma11-test], [data-ma11-api-models], [data-ma11-api-test]"));
+    const longAction = Boolean(action || target.closest("[data-ma11-test]"));
     const originalButtonText = actionButton?.textContent ?? "";
     if (actionButton && longAction) {
       actionButton.disabled = true;
@@ -9010,6 +8192,9 @@ function bindWorkspace(workspace) {
     }
     try {
       if (action === "close") workspace.hidden = true;
+      if (action === "open-tasks") setTab("tasks");
+      if (action === "open-diagnostics") setTab("diagnostics");
+      if (action === "refresh-tasks") await renderWorkspace();
       if (action === "open-tables") setTab("tables");
       if (action === "open-graph") setTab("graph");
       if (action === "process-latest") {
@@ -9073,7 +8258,7 @@ function bindWorkspace(workspace) {
       }
       if (action === "retry-history-rebuild") {
         const rebuilt = await recoverHistoryConsistencyForCurrentChat();
-        toast(rebuilt ? "success" : "info", rebuilt ? "\u603B\u7ED3\u3001\u72B6\u6001\u4E0E\u4E16\u754C\u4E66\u4F9D\u8D56\u5DF2\u91CD\u5EFA" : "\u5F53\u524D\u804A\u5929\u6CA1\u6709\u5F85\u6062\u590D\u7684\u5386\u53F2\u4F9D\u8D56");
+        toast(rebuilt ? "success" : "info", rebuilt ? "\u5386\u53F2\u91CD\u5EFA\u5DF2\u8FDB\u5165\u540E\u53F0\u4EFB\u52A1\uFF0C\u53EF\u5728\u4EFB\u52A1\u4E2D\u5FC3\u67E5\u770B\u8FDB\u5EA6" : "\u5F53\u524D\u804A\u5929\u6CA1\u6709\u5F85\u6062\u590D\u7684\u5386\u53F2\u4F9D\u8D56");
         await renderWorkspace();
       }
       if (action === "pause-history-rebuild") {
@@ -9112,51 +8297,11 @@ function bindWorkspace(workspace) {
         toast("success", "\u5DF2\u4FDD\u7559\u5F53\u524D\u672C\u5730\u72B6\u6001\u5E76\u53D6\u6D88\u51B2\u7A81\u63D0\u4EA4");
         await renderWorkspace();
       }
-      if (action === "add-api-profile") {
-        createIndependentApiProfile();
-        await renderWorkspace();
-      }
       const cancelTaskId = target.closest("[data-ma11-cancel-task]")?.dataset.ma11CancelTask;
       if (cancelTaskId) {
         const cancelled = taskQueue.cancel(cancelTaskId, "\u7528\u6237\u4ECE\u5DE5\u4F5C\u53F0\u53D6\u6D88\u4EFB\u52A1");
         toast(cancelled ? "success" : "warning", cancelled ? "\u5DF2\u53D1\u9001\u53D6\u6D88\u8BF7\u6C42" : "\u4EFB\u52A1\u5DF2\u7ED3\u675F\u6216\u4E0D\u5B58\u5728");
         await renderWorkspace();
-      }
-      const apiDeleteId = target.closest("[data-ma11-api-delete]")?.dataset.ma11ApiDelete;
-      if (apiDeleteId) {
-        const profile = getIndependentApiProfile(apiDeleteId);
-        if (confirm(`\u786E\u5B9A\u5220\u9664\u72EC\u7ACBAPI\u201C${profile?.name || "\u672A\u547D\u540D"}\u201D\u5417\uFF1F`)) {
-          deleteIndependentApiProfile(apiDeleteId);
-          await renderWorkspace();
-        }
-      }
-      const apiModelsId = target.closest("[data-ma11-api-models]")?.dataset.ma11ApiModels;
-      if (apiModelsId) {
-        const models = await fetchIndependentModels(apiModelsId, getSettings().requestTimeoutMs);
-        toast("success", `\u8BFB\u53D6\u5230 ${models.length} \u4E2A\u6A21\u578B`);
-        await renderWorkspace();
-      }
-      const apiTestId = target.closest("[data-ma11-api-test]")?.dataset.ma11ApiTest;
-      if (apiTestId) {
-        const profile = getIndependentApiProfile(apiTestId);
-        if (!profile) throw new Error("\u72EC\u7ACBAPI\u914D\u7F6E\u4E0D\u5B58\u5728");
-        const started = performance.now();
-        const raw = await requestIndependentApi(apiTestId, {
-          messages: [
-            { role: "system", content: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001Markdown\u548C\u601D\u8003\u6807\u7B7E\u3002" },
-            { role: "user", content: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}' }
-          ],
-          timeoutMs: getSettings().requestTimeoutMs,
-          maxTokens: 128,
-          temperature: 0
-        });
-        let structured = false;
-        try {
-          const parsed = JSON.parse(raw.trim());
-          structured = parsed?.ok === true && parsed?.source === "mirror-abyss";
-        } catch {
-        }
-        toast(structured ? "success" : "warning", `${profile.name}\u8FDE\u63A5\u6210\u529F\uFF0C${structured ? "\u7ED3\u6784\u8F93\u51FA\u6B63\u5E38" : `\u4F46\u7ED3\u6784\u6D4B\u8BD5\u5931\u8D25\uFF1A${raw.replace(/\s+/g, " ").slice(0, 120)}`}\uFF08${Math.round(performance.now() - started)}ms\uFF09`);
       }
       const graphScope = target.closest("[data-ma11-graph-scope]")?.dataset.ma11GraphScope;
       if (graphScope) {
@@ -9222,13 +8367,7 @@ function bindWorkspace(workspace) {
   workspace.addEventListener("change", (event) => {
     const target = event.target;
     if (target.dataset.ma11Setting) updateSetting(target);
-    if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfileId || target.dataset.ma11ConnectionIndependent) updateConnection(target);
-    if (target.dataset.ma11ApiProfileField) updateIndependentProfileField(target);
-    if (target.dataset.ma11ApiKey) {
-      setSessionApiKey(target.dataset.ma11ApiKey, target.value.trim());
-      target.value = "";
-      void renderWorkspace();
-    }
+    if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfileId) updateConnection(target);
   });
   workspace.addEventListener("input", (event) => {
     const target = event.target;
@@ -9248,7 +8387,7 @@ function bindWorkspace(workspace) {
     }
     if (target.dataset.ma11Setting === "auditPrompt" || target.dataset.ma11Setting === "revisionPrompt" || target.dataset.ma11Setting === "lorebookName")
       updateSetting(target);
-    if (target.dataset.ma11ConnectionProfileId || target.dataset.ma11ConnectionIndependent) updateConnection(target);
+    if (target.dataset.ma11ConnectionProfileId) updateConnection(target);
   });
   workspace.querySelector("#ma11-row-editor")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -9369,6 +8508,7 @@ function installMessagePanelHandlers() {
 
 // src/ui/settings-panel.ts
 init_constants();
+init_task_queue();
 function extensionPathFromUrl() {
   const url = new URL(import.meta.url);
   const marker = "/scripts/extensions/";
@@ -9379,6 +8519,7 @@ function extensionPathFromUrl() {
   if (parts[0] === "third-party" && parts[1]) return `third-party/${parts[1]}`;
   return parts[0] || "third-party/mirror-abyss-plugin";
 }
+var topTaskUnsubscribe = null;
 async function waitForElement(selector, timeoutMs = 15e3) {
   const immediate = document.querySelector(selector);
   if (immediate) return immediate;
@@ -9441,6 +8582,26 @@ async function mountSettingsPanel() {
 function unmountSettingsPanel() {
   document.querySelector("#ma11-settings-root")?.remove();
 }
+function updateTopTaskButton() {
+  const button = document.querySelector("#ma11-top-button");
+  if (!button) return;
+  const latest = /* @__PURE__ */ new Map();
+  for (const task of taskQueue.list().filter((item2) => item2.chatKey === currentChatKey()).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))) latest.set(task.key, task);
+  const tasks = [...latest.values()];
+  const active = tasks.filter((task) => task.state === "queued" || task.state === "running").length;
+  const failed = tasks.filter((task) => task.state === "failed").length;
+  const badge = button.querySelector("[data-ma11-top-task-badge]");
+  const icon = button.querySelector("i");
+  const count = active || failed;
+  if (badge) {
+    badge.hidden = count === 0;
+    badge.textContent = String(count);
+  }
+  button.classList.toggle("working", active > 0);
+  button.classList.toggle("danger", active === 0 && failed > 0);
+  if (icon) icon.className = active > 0 ? "fa-solid fa-spinner fa-spin" : failed > 0 ? "fa-solid fa-triangle-exclamation" : "fa-solid fa-table-list";
+  button.title = active > 0 ? `\u955C\u6E0A\uFF1A${active} \u4E2A\u4EFB\u52A1\u8FD0\u884C\u4E2D` : failed > 0 ? `\u955C\u6E0A\uFF1A${failed} \u4E2A\u4EFB\u52A1\u5931\u8D25` : "\u6253\u5F00\u955C\u6E0A";
+}
 function mountOptionalTopButton() {
   const settings = getSettings();
   unmountOptionalTopButton();
@@ -9450,21 +8611,30 @@ function mountOptionalTopButton() {
   if (!host) return;
   const button = document.createElement("button");
   button.id = "ma11-top-button";
-  button.className = "menu_button ma11-top-button fa-solid fa-table-list";
+  button.className = "menu_button ma11-top-button";
   button.type = "button";
   button.title = "\u6253\u5F00\u955C\u6E0A";
   button.setAttribute("aria-label", "\u6253\u5F00\u955C\u6E0A");
-  button.addEventListener("click", () => openWorkspace("overview"));
+  button.innerHTML = '<i class="fa-solid fa-table-list"></i><span data-ma11-top-task-badge hidden>0</span>';
+  button.addEventListener("click", () => {
+    const latest = /* @__PURE__ */ new Map();
+    for (const task of taskQueue.list().filter((item2) => item2.chatKey === currentChatKey()).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))) latest.set(task.key, task);
+    const hasAttention = [...latest.values()].some((task) => task.state === "queued" || task.state === "running" || task.state === "failed");
+    openWorkspace(hasAttention ? "tasks" : "overview");
+  });
   host.appendChild(button);
+  topTaskUnsubscribe = taskQueue.subscribe(updateTopTaskButton);
+  updateTopTaskButton();
 }
 function unmountOptionalTopButton() {
+  topTaskUnsubscribe?.();
+  topTaskUnsubscribe = null;
   document.querySelector("#ma11-top-button")?.remove();
 }
 
 // src/bootstrap/app.ts
 init_chat_scope();
 init_task_queue();
-init_connection_broker();
 
 // src/migration/legacy-migration.ts
 init_constants();
@@ -9878,8 +9048,6 @@ function uninstallAppReadyHandler() {
 function teardownRuntime(reason = "\u6269\u5C55\u5DF2\u505C\u6B62") {
   clearAllQuarantines();
   taskQueue.cancelAll(reason);
-  connectionBroker.cancelAll(reason);
-  invocationRouter.cancelAll(reason);
   unifiedFactScheduler.cancelAll(reason);
   cleanupPipeline?.();
   cleanupPanels?.();

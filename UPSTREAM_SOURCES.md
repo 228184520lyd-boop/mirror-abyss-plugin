@@ -1,6 +1,6 @@
 # Upstream Sources and Design References
 
-Mirror Abyss alpha.9.6 is an independent Foundation Correction built on SillyTavern public extension/server capabilities, browser standards, the existing Mirror Abyss foundation codebase, and project-owned alpha.6/alpha.7 migration evidence.
+Mirror Abyss alpha.10.5.3 is an independent Foundation Correction built on SillyTavern public extension/server capabilities, browser standards, the existing Mirror Abyss foundation codebase, and project-owned alpha.6/alpha.7 migration evidence.
 
 ## Locked primary references
 
@@ -54,4 +54,4 @@ Amily2 public behavior was reviewed for API-slot and request-flow behavior only.
 
 ## Code provenance statement
 
-No external extension source code, prompts, CSS, icons, screenshots or visual assets are copied into alpha.9.6. Cross-tab coordination, local commit recovery, migration, conflict UI and tests are independently written. Browser standards define API semantics; SillyTavern APIs are invoked as host interfaces. Exact records are in `research/inventory.md`, `research/license-matrix.md`, `research/architecture-comparison.md`, ADR files and `docs/REFERENCE_MATRIX.md`.
+No external extension source code, prompts, CSS, icons, screenshots or visual assets are copied into alpha.10.5.3. Cross-tab coordination, local commit recovery, migration, conflict UI and tests are independently written. Browser standards define API semantics; SillyTavern APIs are invoked as host interfaces. Exact records are in `research/inventory.md`, `research/license-matrix.md`, `research/architecture-comparison.md`, ADR files and `docs/REFERENCE_MATRIX.md`.

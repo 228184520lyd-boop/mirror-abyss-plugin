@@ -660,3 +660,42 @@ html.ma11-generation-locked #send_button {
   .ma11-api-profile-grid { grid-template-columns: 1fr; }
   .ma11-api-wide { grid-column: auto; }
 }
+
+
+/* Native-task feedback: mirrors SillyTavern's compact menu-button language while
+   keeping long-running rebuild status visible and non-blocking. */
+.ma11-header-actions { display: flex; align-items: center; gap: 0.5rem; }
+.ma11-header-task-button { display: inline-flex; align-items: center; gap: 0.4rem; min-width: auto; }
+.ma11-header-task-button b, .ma11-top-button [data-ma11-top-task-badge] {
+  min-width: 1.2rem; height: 1.2rem; padding: 0 0.25rem; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 0.72rem;
+  background: var(--ma11-accent); color: #fff;
+}
+.ma11-header-task-button.working, .ma11-top-button.working { color: var(--ma11-warning); }
+.ma11-header-task-button.danger, .ma11-top-button.danger { color: var(--ma11-danger); }
+.ma11-top-button { position: relative; display: inline-flex !important; align-items: center; justify-content: center; }
+.ma11-top-button [data-ma11-top-task-badge] { position: absolute; right: -0.35rem; top: -0.35rem; }
+.ma11-task-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+.ma11-task-summary-grid .ma11-card { display: flex; flex-direction: column; gap: 0.25rem; margin: 0; border-left: 4px solid var(--ma11-border); }
+.ma11-task-summary-grid .ma11-card b { font-size: 1.45rem; }
+.ma11-task-summary-grid .ma11-card.working { border-left-color: var(--ma11-warning); }
+.ma11-task-summary-grid .ma11-card.danger { border-left-color: var(--ma11-danger); }
+.ma11-task-summary-grid .ma11-card.success { border-left-color: var(--ma11-success); }
+.ma11-task-center-list { display: grid; gap: 0.75rem; }
+.ma11-task-card { border: 1px solid var(--ma11-border); border-left: 4px solid var(--ma11-border); border-radius: 10px; padding: 0.85rem; background: var(--ma11-panel-2); }
+.ma11-task-card.working { border-left-color: var(--ma11-warning); }
+.ma11-task-card.danger { border-left-color: var(--ma11-danger); }
+.ma11-task-card.success { border-left-color: var(--ma11-success); }
+.ma11-task-card > header { display: flex; justify-content: space-between; gap: 0.75rem; align-items: flex-start; }
+.ma11-task-card > header > div { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.ma11-task-card time { opacity: 0.58; font-size: 0.78rem; }
+.ma11-task-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; margin: 0.65rem 0; opacity: 0.72; font-size: 0.82rem; }
+.ma11-task-progress-label { margin: 0.35rem 0; }
+.ma11-progress { height: 0.5rem; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--ma11-border) 70%, transparent); }
+.ma11-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--ma11-accent); transition: width 160ms ease; }
+.ma11-task-card > small { display: block; margin-top: 0.35rem; opacity: 0.65; }
+@media (max-width: 760px) {
+  .ma11-task-summary-grid { grid-template-columns: 1fr; }
+  .ma11-header-task-button span { display: none; }
+  .ma11-task-card > header { flex-direction: column; }
+}

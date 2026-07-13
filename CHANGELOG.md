@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0-alpha.10.5.3 — Native Invocation & Rebuild Task Feedback
+
+- 所有模型请求收缩为 SillyTavern 原生调用：当前连接使用 `generateRaw`，指定 Connection Profile 使用 `ConnectionManagerRequestService.sendRequest`。
+- 删除运行时自建模型 fetch、独立 API 配置、Connection Broker、Invocation Router、网络重试、超时、限流与熔断；镜渊仅保留提示词、业务任务、检查点和结果落盘。
+- 历史重建改为非阻塞后台父任务，入口立即返回；批次进度、消息范围、耗时、重试、成功与失败持续显示在顶部入口和任务中心。
+- 历史批次在一次原生模型调用中同时形成统一事实、活跃表格更新、阶段小总结与沉降凭证；全部批次结束后只更新一次大总结。
+- 成功批次原子更新表格和重建检查点；失败不覆盖已成功表格，可从失败批次继续；中间世界书发布继续暂停，末尾只发布最终版本。
+- 修复 `stageSummary` 归一化后未返回，导致批次小总结实际丢失；修复最终大总结开始前未持久化 running 阶段造成的本地提交冲突。
+- 顶部按钮显示任务运行/失败徽标；任务中心保留错误全文与重试入口，同一任务重跑成功后旧失败告警不再持续。
+- 新增原生历史重建与任务反馈端到端测试；自动测试 97/97，生产构建与边界检查通过。
+
 ## 1.1.0-alpha.10.5.2 — Frozen Performance Patch / No Feature Expansion
 
 - 调用路由与连接代理统一使用脱敏凭据级通道；多个配置共用同一端点与密钥时不再并发压测同一上游。
