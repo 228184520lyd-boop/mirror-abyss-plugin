@@ -21,8 +21,8 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.5.4";
-    PIPELINE_VERSION = "ma-pipeline-10.5.4";
+    VERSION = "1.1.0-alpha.10.5.5";
+    PIPELINE_VERSION = "ma-pipeline-10.5.5";
     TABLE_KEYS = [
       "focus",
       "spacetime",
@@ -68,7 +68,6 @@ var init_constants = __esm({
       vectorizeRows: false,
       latestContinuityConstant: false,
       lorebookLayout: "semantic",
-      repairInvalidJsonOnce: true,
       connections: {
         audit: { mode: "current", profileId: "", profile: "" },
         revision: { mode: "current", profileId: "", profile: "" },
@@ -170,14 +169,14 @@ function balancedObjectCandidates(text) {
   let depth = 0;
   let start = -1;
   let inString = false;
-  let escaped = false;
+  let escaped2 = false;
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
     if (inString) {
-      if (escaped) {
-        escaped = false;
+      if (escaped2) {
+        escaped2 = false;
       } else if (char === "\\") {
-        escaped = true;
+        escaped2 = true;
       } else if (char === '"') {
         inString = false;
       }
@@ -205,13 +204,13 @@ function balancedObjectCandidates(text) {
 function normalizeJsonPunctuationOutsideStrings(text) {
   let output = "";
   let inString = false;
-  let escaped = false;
+  let escaped2 = false;
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
     if (inString) {
       output += char;
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
+      if (escaped2) escaped2 = false;
+      else if (char === "\\") escaped2 = true;
       else if (char === '"') inString = false;
       continue;
     }
@@ -1178,6 +1177,7 @@ function getSettings() {
   }
   if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
   settings.latestContinuityConstant = false;
+  delete settings.repairInvalidJsonOnce;
   const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles) ? context.extensionSettings.connectionManager.profiles : [];
   for (const connection of Object.values(settings.connections ?? {})) {
     connection.profileId ||= "";
@@ -1392,6 +1392,86 @@ init_utils();
 
 // src/llm/generator.ts
 init_utils();
+
+// src/llm/plain-protocol.ts
+init_utils();
+var PlainProtocolError = class extends Error {
+  preview;
+  constructor(message, raw) {
+    super(message);
+    this.name = "PlainProtocolError";
+    this.preview = protocolPreview(raw);
+  }
+};
+function protocolPreview(raw, max = 420) {
+  return safeText(raw, 12e4).replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+function cleanProtocolText(raw) {
+  let text = safeText(raw, 24e4).replace(/^\uFEFF/, "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/<!--[\s\S]*?-->/g, "").trim();
+  const fence = text.match(/^```(?:xml|text|plaintext)?\s*([\s\S]*?)```$/i);
+  if (fence?.[1]) text = fence[1].trim();
+  return text;
+}
+function looksLikeHtmlDocument(raw) {
+  const text = cleanProtocolText(raw).slice(0, 1200).toLowerCase();
+  return /^\s*<!doctype\s+html/.test(text) || /^\s*<html(?:\s|>)/.test(text) || /^\s*<(?:head|body)(?:\s|>)/.test(text) && /<\/(?:head|body)>/.test(text);
+}
+function escaped(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function blocks(raw, tag) {
+  const text = cleanProtocolText(raw);
+  const name = escaped(tag);
+  const regex = new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`, "gi");
+  const output = [];
+  let match;
+  while (match = regex.exec(text)) {
+    if (match[1]?.trim()) output.push(match[1].trim());
+  }
+  return output;
+}
+function firstBlock(raw, tag) {
+  return blocks(raw, tag)[0] ?? "";
+}
+function field(raw, ...names) {
+  const text = cleanProtocolText(raw);
+  for (const name of names) {
+    const escapedName = escaped(name);
+    const tagMatch = text.match(new RegExp(`<${escapedName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escapedName}>`, "i"));
+    if (tagMatch?.[1] !== void 0) return tagMatch[1].trim();
+    const lineMatch = text.match(new RegExp(`(?:^|\\n)\\s*${escapedName}\\s*[:\uFF1A]\\s*(.+?)(?=\\n|$)`, "i"));
+    if (lineMatch?.[1] !== void 0) return lineMatch[1].trim();
+  }
+  return "";
+}
+function listField(raw, ...names) {
+  const value = field(raw, ...names);
+  if (!value) return [];
+  return [...new Set(value.split(/(?:\r?\n|[|｜,，;；])/).map((item2) => item2.replace(/^[-*•]\s*/, "").trim()).filter((item2) => item2 && item2 !== "\u65E0" && item2 !== "\uFF08\u65E0\uFF09"))];
+}
+function numberListField(raw, ...names) {
+  return [...new Set(listField(raw, ...names).flatMap((item2) => item2.split(/\s+/)).map((item2) => Number(item2)).filter((item2) => Number.isInteger(item2)))];
+}
+function booleanField(raw, names, fallback = false) {
+  const value = field(raw, ...names).toLowerCase();
+  if (!value) return fallback;
+  if (["true", "yes", "1", "\u662F", "\u5141\u8BB8", "\u542F\u7528"].includes(value)) return true;
+  if (["false", "no", "0", "\u5426", "\u4E0D\u5141\u8BB8", "\u7981\u7528"].includes(value)) return false;
+  return fallback;
+}
+function requireProtocol(raw, expectedTags, label) {
+  const text = cleanProtocolText(raw);
+  if (!text) throw new PlainProtocolError(`${label}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`, raw);
+  if (looksLikeHtmlDocument(text)) {
+    throw new PlainProtocolError(`${label}\u4E0A\u6E38\u8FD4\u56DE\u4E86HTML\u9519\u8BEF\u9875\uFF0C\u800C\u4E0D\u662F\u6A21\u578B\u6587\u672C`, raw);
+  }
+  if (!expectedTags.some((tag) => blocks(text, tag).length || new RegExp(`<${escaped(tag)}(?:\\s|>)`, "i").test(text))) {
+    throw new PlainProtocolError(`${label}\u672A\u8FD4\u56DE\u53EF\u8BC6\u522B\u7684\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE`, raw);
+  }
+  return text;
+}
+
+// src/llm/generator.ts
 init_chat_scope();
 
 // src/foundation/generation-guard.ts
@@ -1431,8 +1511,9 @@ function normalizeNativeGenerationError(error, task) {
   const status = Number(anyError?.status ?? anyError?.statusCode ?? anyError?.response?.status);
   const message = toErrorMessage(error);
   const preview = safeText(anyError?.responseText ?? anyError?.response?.data ?? anyError?.body ?? "", 500).trim();
+  const htmlFailure = /unexpected token ['"]?<['"]?|not valid json|<!doctype\s+html|<html/i.test(`${message} ${preview}`);
   return new NativeGenerationError(
-    message || `${task}\u6A21\u578B\u8C03\u7528\u5931\u8D25`,
+    htmlFailure ? `${task}\u4E0A\u6E38\u8FD4\u56DE\u4E86HTML\u9519\u8BEF\u9875` : message || `${task}\u6A21\u578B\u8C03\u7528\u5931\u8D25`,
     "upstream",
     Number.isFinite(status) ? status : void 0,
     preview || void 0,
@@ -1508,11 +1589,13 @@ async function generateCurrent(options, signal) {
     const result = await withInternalGeneration(() => Promise.resolve(context.generateRaw({
       systemPrompt: options.systemPrompt,
       prompt: options.prompt,
-      jsonSchema: options.jsonSchema,
       signal
     })));
     const text = generationText(result);
     if (!text) throw new NativeGenerationError(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
+    if (looksLikeHtmlDocument(text)) {
+      throw new NativeGenerationError(`${options.task}\u4E0A\u6E38\u8FD4\u56DE\u4E86HTML\u9519\u8BEF\u9875`, "upstream", void 0, protocolPreview(text));
+    }
     return text;
   } catch (error) {
     if (signal.aborted) throw new NativeGenerationError(`${options.task}\u6A21\u578B\u8C03\u7528\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
@@ -1541,6 +1624,9 @@ async function generateWithNativeProfile(options, profileId, signal) {
     )));
     const text = generationText(result);
     if (!text) throw new NativeGenerationError(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
+    if (looksLikeHtmlDocument(text)) {
+      throw new NativeGenerationError(`${options.task} Connection Profile\u8FD4\u56DE\u4E86HTML\u9519\u8BEF\u9875`, "upstream", void 0, protocolPreview(text));
+    }
     return text;
   } catch (error) {
     if (signal.aborted) throw new NativeGenerationError(`${options.task} Connection Profile\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
@@ -1641,16 +1727,8 @@ async function testConnection(task) {
   try {
     raw = await generateTask({
       task,
-      systemPrompt: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
-      prompt: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}',
-      jsonSchema: {
-        type: "object",
-        required: ["ok", "source"],
-        properties: {
-          ok: { type: "boolean" },
-          source: { type: "string" }
-        }
-      }
+      systemPrompt: "\u4F60\u662F\u8FDE\u63A5\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
+      prompt: "\u53EA\u8F93\u51FA\uFF1AMA_CONNECTION_OK"
     });
   } catch (error) {
     if (error instanceof NativeGenerationError) {
@@ -1658,18 +1736,12 @@ async function testConnection(task) {
     }
     throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
   }
-  let jsonValid = false;
-  let instructionFollowed = false;
-  try {
-    const parsed = parseJsonObject(raw);
-    jsonValid = true;
-    instructionFollowed = parsed.ok === true && parsed.source === "mirror-abyss";
-  } catch {
-  }
+  const normalized = raw.trim().replace(/^```(?:text)?\s*/i, "").replace(/```$/i, "").trim();
+  const protocolValid = normalized === "MA_CONNECTION_OK";
   return {
     connected: Boolean(raw.trim()),
-    instructionFollowed,
-    jsonValid,
+    instructionFollowed: protocolValid,
+    protocolValid,
     method: describeTaskConnection(task),
     elapsedMs: Math.round(performance.now() - started),
     responsePreview: raw.replace(/\s+/g, " ").slice(0, 240)
@@ -2763,9 +2835,9 @@ function rowContent(sectionName, row) {
   return lines.join("\n");
 }
 function groupedContent(title, tableLabel, sourceRows) {
-  const blocks = sourceRows.map((row) => rowContent(tableLabel, row));
+  const blocks2 = sourceRows.map((row) => rowContent(tableLabel, row));
   return `[${title}]
-${blocks.length ? blocks.join("\n\n") : "\u6682\u65E0\u53EF\u53D1\u5E03\u8BB0\u5F55\u3002"}`;
+${blocks2.length ? blocks2.join("\n\n") : "\u6682\u65E0\u53EF\u53D1\u5E03\u8BB0\u5F55\u3002"}`;
 }
 function isCurrentCharacter(row) {
   const activity = row.lifecycle?.activity;
@@ -2789,8 +2861,8 @@ function eventKind(row) {
   return process2 ? { label: "\u6D41\u7A0B", name: cleanPrefixedTitle(row.title, ["\u6D41\u7A0B"]) } : { label: "\u4E8B\u4EF6", name: cleanPrefixedTitle(row.title, ["\u4E8B\u4EF6"]) };
 }
 function ownerEntry(row, kind) {
-  const escaped = kind.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = row.title.match(new RegExp(`^(.*?)[\uFF5C|:\uFF1A\\s-]*${escaped}$`));
+  const escaped2 = kind.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = row.title.match(new RegExp(`^(.*?)[\uFF5C|:\uFF1A\\s-]*${escaped2}$`));
   if (match?.[1]?.trim()) {
     const owner = match[1].trim();
     return { comment: `MA\uFF5C${kind}\uFF5C${owner}`, name: owner, label: kind };
@@ -2818,14 +2890,14 @@ function unconsumedSmallSummaries(small, large) {
   return small.filter((item2) => !consumed.has(item2.id));
 }
 function currentSmallSummaryContent(summaries) {
-  const blocks = summaries.map((item2) => {
+  const blocks2 = summaries.map((item2) => {
     const notes = item2.sedimentation?.notes?.length ? `
 \u6C89\u964D\u5904\u7406\uFF1A${item2.sedimentation.notes.join("\uFF1B")}` : "";
     return `\u3010${item2.title}\u3011
 ${item2.summary}${notes}`;
   });
   return `[\u5C0F\u603B\u7ED3\uFF1A\u5F53\u524D\u5468\u671F]
-${blocks.join("\n\n")}`;
+${blocks2.join("\n\n")}`;
 }
 function buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
   const documents = [];
@@ -3831,10 +3903,10 @@ function compareEntry(entry, key, spec, record, wi) {
     "excludeRecursion",
     "delayUntilRecursion"
   ];
-  for (const field of fields) {
-    if (fingerprint(entry?.[field]) !== fingerprint(expected?.[field])) {
+  for (const field2 of fields) {
+    if (fingerprint(entry?.[field2]) !== fingerprint(expected?.[field2])) {
       throw new Error(
-        `\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u6761\u76EE\u201C${spec.comment || key}\u201D\u5B57\u6BB5 ${field} \u672A\u6309\u4E8B\u52A1\u5199\u5165`
+        `\u4E16\u754C\u4E66\u670D\u52A1\u5668\u6821\u9A8C\u5931\u8D25\uFF1A\u6761\u76EE\u201C${spec.comment || key}\u201D\u5B57\u6BB5 ${field2} \u672A\u6309\u4E8B\u52A1\u5199\u5165`
       );
     }
   }
@@ -4876,228 +4948,292 @@ function normalizeLargeSummaryUpdate(input) {
   };
 }
 
-// src/llm/structured.ts
+// src/llm/plain-parsers.ts
 init_utils();
-function repairSystemPrompt(structureDescription) {
-  return `\u4F60\u662FJSON\u683C\u5F0F\u4FEE\u590D\u5668\u3002\u4F60\u4E0D\u6267\u884C\u539F\u4EFB\u52A1\u3001\u4E0D\u8865\u5145\u65B0\u4E8B\u5B9E\u3001\u4E0D\u89E3\u91CA\u5185\u5BB9\uFF0C\u53EA\u628A\u7ED9\u5B9A\u6A21\u578B\u8F93\u51FA\u8F6C\u6362\u6210\u4E00\u4E2A\u5408\u6CD5JSON\u5BF9\u8C61\u3002
-
-\u8981\u6C42\uFF1A
-1. \u4FDD\u7559\u539F\u8F93\u51FA\u4E2D\u5DF2\u7ECF\u8868\u8FBE\u7684\u8BED\u4E49\uFF0C\u4E0D\u81EA\u884C\u91CD\u505A\u5BA1\u6838\u3001\u603B\u7ED3\u6216\u72B6\u6001\u63D0\u53D6\u3002
-2. \u5220\u9664Markdown\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u548C\u601D\u8003\u6807\u7B7E\u3002
-3. \u4FEE\u590D\u7F3A\u5931\u5F15\u53F7\u3001\u5C3E\u968F\u9017\u53F7\u3001\u5168\u89D2\u6807\u70B9\u7B49\u683C\u5F0F\u95EE\u9898\u3002
-4. \u8F93\u51FA\u5FC5\u987B\u80FD\u88ABJSON.parse\u76F4\u63A5\u89E3\u6790\uFF0C\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61\u3002
-5. \u53EA\u8F93\u51FAJSON\u5BF9\u8C61\uFF0C\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u989D\u5916\u6587\u5B57\u3002
-
-\u3010\u76EE\u6807\u7ED3\u6784\u3011
-${structureDescription}`;
-}
-function repairUserPrompt(raw) {
-  return `\u3010\u9700\u8981\u4FEE\u590D\u7684\u539F\u59CB\u8F93\u51FA\u3011
-${safeText(raw, 8e4)}`;
-}
-var TASK_LABELS = {
-  audit: "\u89C4\u5219\u5BA1\u6838",
-  revision: "\u5B9A\u5411\u4FEE\u6B63",
-  factExtraction: "\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6",
-  state: "\u72B6\u6001\u8868",
-  smallSummary: "\u5C0F\u603B\u7ED3",
-  largeSummary: "\u5927\u603B\u7ED3"
-};
-function structuredError(task, error, raw) {
-  const connection = describeTaskConnection(task);
-  const preview = error instanceof JsonObjectParseError ? error.preview : jsonPreview(raw);
-  const detail = toErrorMessage(error);
-  return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
-}
-async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, signal, connectionSnapshot, invocation) {
-  const repaired = await generateTask({
-    task,
-    systemPrompt: repairSystemPrompt(structureDescription),
-    prompt: repairUserPrompt(raw),
-    jsonSchema,
-    signal,
-    connectionSnapshot,
-    invocation
-  });
-  return parseJsonObject(repaired);
-}
-async function generateStructuredTask(options) {
-  const connectionSnapshot = options.connectionSnapshot ?? captureTaskConnection(options.task);
-  const raw = await generateTask({ ...options, connectionSnapshot });
+function legacyObject(raw) {
+  const text = cleanProtocolText(raw);
+  if (!text.startsWith("{")) return null;
   try {
-    return parseJsonObject(raw);
-  } catch (firstError) {
-    const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
-    if (!allowRepair) throw structuredError(options.task, firstError, raw);
-    try {
-      return await repairStructuredOutput(
-        options.task,
-        raw,
-        options.structureDescription,
-        options.jsonSchema,
-        options.signal,
-        connectionSnapshot,
-        options.invocation
-      );
-    } catch (repairError) {
-      throw structuredError(options.task, repairError, raw);
-    }
+    return parseJsonObject(text);
+  } catch {
+    return null;
   }
+}
+function lifecycleFromBlock(block) {
+  const values = {
+    existence: field(block, "existence"),
+    activity: field(block, "activity"),
+    memory: field(block, "memory"),
+    evidenceLevel: field(block, "evidence_level", "evidenceLevel"),
+    evidence: field(block, "evidence"),
+    returnConditions: listField(block, "return_conditions", "returnConditions"),
+    returnBlockers: listField(block, "return_blockers", "returnBlockers")
+  };
+  return Object.values(values).some((value) => Array.isArray(value) ? value.length : Boolean(value)) ? values : void 0;
+}
+function sedimentationFromBlock(block) {
+  return {
+    absorbedRowIds: listField(block, "absorbed_row_ids", "absorbedRowIds"),
+    keepActiveRowIds: listField(block, "keep_active_row_ids", "keepActiveRowIds"),
+    removeRowIds: listField(block, "remove_row_ids", "removeRowIds"),
+    characterActivityUpdates: blocks(block, "character_activity").map((item2) => ({
+      rowId: field(item2, "row_id", "rowId"),
+      activity: field(item2, "activity"),
+      reason: field(item2, "reason")
+    })),
+    notes: listField(block, "notes", "note")
+  };
+}
+function longTermCandidate(block) {
+  return {
+    recordId: field(block, "record_id", "recordId"),
+    category: field(block, "category"),
+    title: field(block, "title"),
+    content: field(block, "content"),
+    keywords: listField(block, "keywords"),
+    permanence: field(block, "permanence"),
+    sourceRowIds: listField(block, "source_row_ids", "sourceRowIds"),
+    sourceFactIds: listField(block, "source_fact_ids", "sourceFactIds")
+  };
+}
+function parseSmallSummaryText(raw) {
+  const legacy = legacyObject(raw);
+  if (legacy) return legacy;
+  const text = requireProtocol(raw, ["small_summary", "stage_summary"], "\u5C0F\u603B\u7ED3");
+  const root2 = firstBlock(text, "small_summary") || firstBlock(text, "stage_summary") || text;
+  const sedimentation = firstBlock(root2, "sedimentation");
+  return {
+    title: field(root2, "title"),
+    summary: field(root2, "summary"),
+    keywords: listField(root2, "keywords"),
+    sedimentation: sedimentation ? sedimentationFromBlock(sedimentation) : void 0,
+    longTermCandidates: blocks(root2, "long_term_candidate").map(longTermCandidate)
+  };
+}
+function parseLargeSummaryText(raw) {
+  const legacy = legacyObject(raw);
+  if (legacy) return legacy;
+  const text = requireProtocol(raw, ["large_summary"], "\u5927\u603B\u7ED3");
+  const root2 = firstBlock(text, "large_summary") || text;
+  return {
+    title: field(root2, "title"),
+    keywords: listField(root2, "keywords"),
+    operations: blocks(root2, "operation").map((item2) => ({
+      action: field(item2, "action"),
+      recordId: field(item2, "record_id", "recordId"),
+      sourceRecordIds: listField(item2, "source_record_ids", "sourceRecordIds"),
+      category: field(item2, "category"),
+      title: field(item2, "title"),
+      content: field(item2, "content"),
+      keywords: listField(item2, "keywords"),
+      permanence: field(item2, "permanence"),
+      reason: field(item2, "reason")
+    }))
+  };
+}
+function parseUnifiedFactsText(raw) {
+  const legacy = legacyObject(raw);
+  if (legacy) return legacy;
+  const text = requireProtocol(raw, ["ma_facts", "turn", "fact"], "\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6");
+  const root2 = firstBlock(text, "ma_facts") || text;
+  const focus = firstBlock(root2, "focus_identity");
+  const sedimentation = firstBlock(root2, "sedimentation");
+  const stage = firstBlock(root2, "stage_summary");
+  return {
+    schemaVersion: 2,
+    turnMaterials: blocks(root2, "turn").map((item2) => ({
+      sourceOrdinal: Number(field(item2, "source_ordinal", "sourceOrdinal")),
+      summary: field(item2, "summary"),
+      keywords: listField(item2, "keywords")
+    })),
+    facts: blocks(root2, "fact").map((item2) => ({
+      entityId: field(item2, "entity_id", "entityId"),
+      entityType: field(item2, "entity_type", "entityType"),
+      factType: field(item2, "fact_type", "factType"),
+      title: field(item2, "title"),
+      status: field(item2, "status"),
+      rowLifecycle: lifecycleFromBlock(item2),
+      sourceEntityId: field(item2, "source_entity_id", "sourceEntityId"),
+      targetEntityId: field(item2, "target_entity_id", "targetEntityId"),
+      operation: field(item2, "operation"),
+      scope: field(item2, "scope"),
+      lifecycle: field(item2, "lifecycle"),
+      content: field(item2, "content"),
+      keywords: listField(item2, "keywords"),
+      residency: field(item2, "residency"),
+      allowConstant: booleanField(item2, ["allow_constant", "allowConstant"]),
+      playerBindingEvidence: listField(item2, "player_binding_evidence", "playerBindingEvidence"),
+      sourceOrdinals: numberListField(item2, "source_ordinals", "sourceOrdinals"),
+      confidence: field(item2, "confidence")
+    })),
+    focusIdentity: focus ? {
+      focusId: field(focus, "focus_id", "focusId"),
+      canonicalName: field(focus, "canonical_name", "canonicalName", "name"),
+      aliases: listField(focus, "aliases")
+    } : void 0,
+    sedimentation: sedimentation ? sedimentationFromBlock(sedimentation) : void 0,
+    stageSummary: stage ? parseSmallSummaryText(`<stage_summary>${stage}</stage_summary>`) : void 0
+  };
 }
 
 // src/prompts/summary.ts
-function compactPackages(packages) {
-  return packages.map((pack) => ({
-    packageId: pack.packageId,
-    sourceRange: pack.sourceRange,
-    turnMaterials: pack.turnMaterials,
-    facts: pack.facts.map((fact) => ({
-      factId: fact.factId,
-      entityId: fact.entityId,
-      entityType: fact.entityType,
-      factType: fact.factType,
-      title: fact.title,
-      status: fact.status,
-      operation: fact.operation,
-      lifecycle: fact.lifecycle,
-      content: fact.content,
-      keywords: fact.keywords,
-      sourceEntityId: fact.sourceEntityId,
-      targetEntityId: fact.targetEntityId,
-      confidence: fact.confidence
-    })),
-    sedimentationCandidates: pack.sedimentation
-  }));
+init_constants();
+function join(values) {
+  return values?.length ? values.join("\uFF5C") : "\u65E0";
 }
-function compactSnapshot(snapshot) {
-  return Object.fromEntries(Object.entries(snapshot).map(([table, rows2]) => [table, rows2.map((row) => ({
-    id: row.id,
-    title: row.title,
-    content: row.content,
-    status: row.status,
-    keywords: row.keywords,
-    source: row.source,
-    locked: row.locked,
-    lifecycle: row.lifecycle,
-    sourceEntityId: row.sourceEntityId,
-    targetEntityId: row.targetEntityId
-  }))]));
+function formatPackages(packages) {
+  const lines = [];
+  for (const pack of packages) {
+    lines.push(`\u3010\u4E8B\u5B9E\u5305 ${pack.packageId}\uFF5C\u6D88\u606F ${pack.sourceRange.startIndex + 1}\u2013${pack.sourceRange.endIndex + 1}\u3011`);
+    for (const material of pack.turnMaterials) {
+      lines.push(`- \u8F6E\u6B21 ${material.sourceMessageIndex + 1}\uFF1A${material.summary}\uFF5C\u5173\u952E\u8BCD=${join(material.keywords)}`);
+    }
+    for (const fact of pack.facts) {
+      lines.push([
+        `- \u4E8B\u5B9E ${fact.factId}`,
+        `\u5BF9\u8C61=${fact.entityId}`,
+        `\u7C7B\u578B=${fact.entityType}/${fact.factType}`,
+        fact.title ? `\u540D\u79F0=${fact.title}` : "",
+        `\u64CD\u4F5C=${fact.operation}`,
+        `\u751F\u547D\u5468\u671F=${fact.lifecycle}`,
+        fact.status ? `\u72B6\u6001=${fact.status}` : "",
+        `\u5185\u5BB9=${fact.content}`,
+        `\u5173\u952E\u8BCD=${join(fact.keywords)}`,
+        fact.sourceEntityId ? `\u5173\u7CFB\u8D77\u70B9=${fact.sourceEntityId}` : "",
+        fact.targetEntityId ? `\u5173\u7CFB\u7EC8\u70B9=${fact.targetEntityId}` : "",
+        `\u53EF\u4FE1\u5EA6=${fact.confidence}`
+      ].filter(Boolean).join("\uFF1B"));
+    }
+  }
+  return lines.join("\n");
+}
+function formatSnapshot(snapshot) {
+  const lines = [];
+  for (const [table, rows2] of Object.entries(snapshot)) {
+    lines.push(`\u3010${TABLE_LABELS[table]} / ${table}\u3011`);
+    if (!rows2.length) {
+      lines.push("\uFF08\u65E0\uFF09");
+      continue;
+    }
+    for (const row of rows2) {
+      lines.push(`- ID=${row.id}\uFF1B\u540D\u79F0=${row.title}\uFF1B\u72B6\u6001=${row.status || "\u672A\u6807\u6CE8"}\uFF1B\u5185\u5BB9=${row.content}\uFF1B\u5173\u952E\u8BCD=${join(row.keywords)}\uFF1B\u4FDD\u62A4=${row.source === "manual" || row.locked ? "\u662F" : "\u5426"}`);
+    }
+  }
+  return lines.join("\n");
 }
 function smallSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u5DF2\u7ECF\u63D0\u53D6\u51FA\u7684\u7ED3\u6784\u5316\u4E8B\u5B9E\u4E0E\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\uFF0C\u4E0D\u91CD\u65B0\u89E3\u91CA\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u5DF2\u63D0\u53D6\u4E8B\u5B9E\u4E0E\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\uFF0C\u4E0D\u91CD\u65B0\u89E3\u91CA\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
 
-\u53EA\u8F93\u51FA\u53EF\u88AB JSON.parse \u76F4\u63A5\u89E3\u6790\u7684\u5355\u4E2A JSON \u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3001sedimentation\u3001longTermCandidates\u3002
-sedimentation \u5305\u542B absorbedRowIds\u3001keepActiveRowIds\u3001removeRowIds\u3001characterActivityUpdates\u3001notes\u3002
+\u7981\u6B62\u8F93\u51FA JSON\u3001JSON Schema\u3001Markdown \u4EE3\u7801\u5757\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u6216\u601D\u8003\u8FC7\u7A0B\u3002
+\u8F93\u51FA\u5FC5\u987B\u4F7F\u7528\u4EE5\u4E0B\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF1A
+
+<small_summary>
+<title>\u9636\u6BB5\u6807\u9898</title>
+<summary>\u771F\u6B63\u7684\u9636\u6BB5\u538B\u7F29\u6B63\u6587\uFF0C\u4E0D\u6309\u56DE\u5408\u9010\u6761\u590D\u8FF0</summary>
+<keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<sedimentation>
+<absorbed_row_ids>\u5DF2\u5728\u603B\u7ED3\u4E2D\u4FDD\u5B58\u7ED3\u679C\u7684\u884CID</absorbed_row_ids>
+<keep_active_row_ids>\u4ECD\u53C2\u4E0E\u5F53\u524D\u4E16\u754C\u7684\u884CID</keep_active_row_ids>
+<remove_row_ids>\u5DF2\u5438\u6536\u4E14\u53EF\u9000\u51FA\u7684\u884CID</remove_row_ids>
+<character_activity><row_id>\u4EBA\u7269\u884CID</row_id><activity>\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863</activity><reason>\u4F9D\u636E</reason></character_activity>
+<notes>\u8BF4\u660E1\uFF5C\u8BF4\u660E2</notes>
+</sedimentation>
+<long_term_candidate>
+<record_id>\u7A33\u5B9A\u5BF9\u8C61ID\u6216\u4E8B\u5B9EID</record_id>
+<category>world|character|relationship|event|region|item|skill|historical|unresolved|other</category>
+<title>\u6807\u9898</title><content>\u957F\u671F\u6709\u6548\u786E\u5B9A\u4E8B\u5B9E</content><keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<permanence>stable|irreversible|long-term|unresolved</permanence>
+<source_row_ids>\u6765\u6E90\u8868\u683C\u884CID</source_row_ids><source_fact_ids>\u6765\u6E90\u4E8B\u5B9EID</source_fact_ids>
+</long_term_candidate>
+</small_summary>
 
 \u804C\u8D23\uFF1A
-1. \u628A\u672C\u9636\u6BB5\u4E8B\u5B9E\u538B\u7F29\u6210\u771F\u6B63\u7684\u5C0F\u603B\u7ED3\uFF0C\u4E0D\u6309\u56DE\u5408\u9010\u6761\u590D\u8FF0\u3002
-2. \u4FDD\u7559\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u5173\u7CFB\u6210\u7ACB\u6216\u65AD\u88C2\u3001\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\u53CA\u4EBA\u7269\u56DE\u6D41\u6761\u4EF6\u3002
-3. \u5224\u65AD\u54EA\u4E9B\u5185\u5BB9\u4ECD\u5E94\u7559\u5728\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\uFF0C\u54EA\u4E9B\u5DF2\u7ECF\u88AB\u672C\u6B21\u5C0F\u603B\u7ED3\u5B8C\u6574\u5438\u6536\u5E76\u53EF\u9000\u51FA\u6D3B\u8DC3\u8868\u683C\u3002
-4. \u628A\u9700\u8981\u8FDB\u5165\u957F\u671F\u53D1\u5C55\u8109\u7EDC\u7684\u5185\u5BB9\u6574\u7406\u4E3A longTermCandidates\uFF1B\u77ED\u6682\u4F4D\u7F6E\u548C\u65E0\u957F\u671F\u5F71\u54CD\u7684\u8FC7\u7A0B\u4E0D\u8981\u5217\u5165\u3002
-
-\u5438\u6536\u51ED\u8BC1\u89C4\u5219\uFF1A
-- absorbedRowIds \u5FC5\u987B\u5217\u51FA summary \u4E2D\u5DF2\u7ECF\u660E\u786E\u4FDD\u5B58\u7ED3\u679C\u7684\u8868\u683C\u884CID\u3002
-- keepActiveRowIds \u5FC5\u987B\u5217\u51FA\u4ECD\u53C2\u4E0E\u5F53\u524D\u4E16\u754C\u3001\u4E0D\u80FD\u9000\u51FA\u7684\u8868\u683C\u884CID\u3002
-- removeRowIds \u5FC5\u987B\u540C\u65F6\u51FA\u73B0\u5728 absorbedRowIds\uFF0C\u4E14\u4E0D\u80FD\u51FA\u73B0\u5728 keepActiveRowIds\u3002
-- \u4E0D\u80FD\u4EC5\u51ED\u201C\u672C\u9636\u6BB5\u6CA1\u63D0\u5230\u201D\u5224\u65AD\u9000\u51FA\u3002
-
-\u5B89\u5168\u6C89\u964D\u89C4\u5219\uFF1A
-- removeRowIds \u53EA\u80FD\u9009\u62E9\u5F53\u524D\u8868\u683C\u4E2D\u5DF2\u7ECF\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684\u81EA\u52A8\u884C\u3002
-- \u53EF\u9000\u51FA\u7684\u8868\u683C\u4EC5\u9650 spacetime\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\u3002
-- \u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002
-- \u73A9\u5BB6\u624B\u52A8\u884C\u6216\u9501\u5B9A\u884C\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
-- \u4ECD\u5728\u8FDB\u884C\u3001\u4ECD\u5F71\u54CD\u5F53\u524D\u884C\u52A8\u3001\u53EF\u80FD\u9A6C\u4E0A\u88AB\u8C03\u7528\u7684\u5185\u5BB9\u4E0D\u5F97\u6C89\u964D\u3002
-- \u6BCF\u4E2A\u51C6\u5907\u79FB\u51FA\u7684\u884C\uFF0C\u5176\u786E\u5B9A\u7ED3\u679C\u5FC5\u987B\u5148\u5199\u5165 summary\uFF1B\u6B7B\u4EA1\u3001\u7269\u54C1\u9500\u6BC1\u3001\u5173\u7CFB\u65AD\u88C2\u3001\u80FD\u529B\u6C38\u4E45\u5931\u53BB\u7B49\u4E0D\u80FD\u53EA\u5220\u9664\u8868\u683C\u800C\u4E0D\u8FDB\u5165\u603B\u7ED3\u3002
-- characterActivityUpdates \u53EA\u5141\u8BB8\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\uFF0C\u4E0D\u5F97\u6539\u53D8\u4EBA\u7269\u5B58\u5728\u72B6\u6001\u3001\u6B7B\u4EA1\u5224\u65AD\u6216\u8BC1\u636E\u7B49\u7EA7\u3002
-- \u4E0D\u5F97\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u5DF2\u786E\u8BA4\u4E8B\u5B9E\u3002
-
-longTermCandidates \u6BCF\u9879\u5B57\u6BB5\uFF1ArecordId\u3001category\u3001title\u3001content\u3001keywords\u3001permanence\u3001sourceRowIds\u3001sourceFactIds\u3002
-- recordId \u4F18\u5148\u4F7F\u7528\u65E2\u6709\u5BF9\u8C61/\u8868\u683C\u884CID\uFF1B\u5386\u53F2\u7ED3\u679C\u53EF\u4F7F\u7528 factId\u3002
-- category \u53EA\u80FD\u4E3A world\u3001character\u3001relationship\u3001event\u3001region\u3001item\u3001skill\u3001historical\u3001unresolved\u3001other\u3002
-- permanence \u53EA\u80FD\u4E3A stable\u3001irreversible\u3001long-term\u3001unresolved\u3002
-- \u6B7B\u4EA1\u3001\u6C38\u4E45\u635F\u6BC1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u4E0D\u53EF\u9006\u5173\u7CFB\u53D8\u5316\u4F7F\u7528 irreversible\u3002
-
-\u8F93\u51FA\u4E4B\u5916\u4E0D\u5F97\u5305\u542B\u89E3\u91CA\u3001Markdown \u6216\u524D\u540E\u6587\u3002`;
+1. \u538B\u7F29\u9636\u6BB5\u4E8B\u5B9E\uFF0C\u4FDD\u7559\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u5173\u7CFB\u6210\u7ACB\u6216\u65AD\u88C2\u3001\u672A\u89E3\u51B3\u4E8B\u9879\u548C\u56DE\u6D41\u6761\u4EF6\u3002
+2. absorbed_row_ids \u5FC5\u987B\u662F summary \u5DF2\u660E\u786E\u4FDD\u5B58\u7ED3\u679C\u7684\u884C\u3002
+3. remove_row_ids \u5FC5\u987B\u540C\u65F6\u5728 absorbed_row_ids \u4E2D\uFF0C\u4E14\u4E0D\u80FD\u5728 keep_active_row_ids \u4E2D\u3002
+4. \u53EF\u9000\u51FA\u8868\u683C\u4EC5\u9650 spacetime\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\uFF1B\u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002
+5. \u624B\u5DE5\u6216\u9501\u5B9A\u884C\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
+6. \u4ECD\u5728\u8FDB\u884C\u3001\u4ECD\u5F71\u54CD\u5F53\u524D\u884C\u52A8\u6216\u53EF\u80FD\u7ACB\u5373\u8C03\u7528\u7684\u5185\u5BB9\u4E0D\u5F97\u6C89\u964D\u3002
+7. \u6B7B\u4EA1\u3001\u7269\u54C1\u9500\u6BC1\u3001\u5173\u7CFB\u65AD\u88C2\u3001\u80FD\u529B\u6C38\u4E45\u5931\u53BB\u7B49\u5FC5\u987B\u5148\u5199\u5165 summary \u4E0E\u957F\u671F\u5019\u9009\uFF0C\u4E0D\u80FD\u53EA\u5220\u9664\u8868\u683C\u3002
+8. character_activity \u53EA\u80FD\u9010\u7EA7\u8FDB\u5165\u4F11\u7720\u3001\u957F\u671F\u4F11\u7720\u3001\u5DF2\u5F52\u6863\uFF0C\u4E0D\u5F97\u6539\u53D8\u5B58\u5728\u72B6\u6001\u6216\u6B7B\u4EA1\u5224\u65AD\u3002
+9. long_term_candidate \u53EA\u4FDD\u7559\u771F\u6B63\u957F\u671F\u6709\u6548\u3001\u4E0D\u53EF\u9006\u6216\u957F\u671F\u672A\u51B3\u5185\u5BB9\uFF1B\u77ED\u6682\u4F4D\u7F6E\u548C\u8FC7\u7A0B\u4E0D\u8FDB\u5165\u3002
+10. \u5217\u8868\u4F7F\u7528\u201C\uFF5C\u201D\u5206\u9694\u3002`;
 }
 function smallSummaryPrompt(packages, snapshot) {
-  return `\u5C06\u4EE5\u4E0B\u9636\u6BB5\u4E8B\u5B9E\u7D20\u6750\u538B\u7F29\u4E3A\u4E00\u4EFD\u5F53\u524D\u5468\u671F\u5C0F\u603B\u7ED3\uFF0C\u5E76\u7ED9\u51FA\u53EF\u9A8C\u8BC1\u7684\u5438\u6536\u4E0E\u5B89\u5168\u6C89\u964D\u8BA1\u5212\u3002
+  return `\u8BF7\u5C06\u4EE5\u4E0B\u4E8B\u5B9E\u7D20\u6750\u538B\u7F29\u4E3A\u4E00\u4EFD\u9636\u6BB5\u5C0F\u603B\u7ED3\uFF0C\u5E76\u7ED9\u51FA\u53EF\u9A8C\u8BC1\u7684\u5438\u6536\u51ED\u8BC1\u548C\u5B89\u5168\u6C89\u964D\u8BA1\u5212\u3002
 
 \u3010\u9636\u6BB5\u4E8B\u5B9E\u7D20\u6750\u3011
-${JSON.stringify(compactPackages(packages), null, 2)}
+${formatPackages(packages)}
 
 \u3010\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
-${JSON.stringify(compactSnapshot(snapshot), null, 2)}
+${formatSnapshot(snapshot)}
 
-\u53EA\u8F93\u51FA\uFF1A
-{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":["\u5DF2\u5728summary\u4E2D\u4FDD\u5B58\u7ED3\u679C\u7684\u884CID"],"keepActiveRowIds":["\u4ECD\u6D3B\u8DC3\u7684\u884CID"],"removeRowIds":["\u5DF2\u5438\u6536\u4E14\u53EF\u9000\u51FA\u7684\u884CID"],"characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884CID","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"\u53EF\u89C2\u5BDF\u4F9D\u636E"}],"notes":["\u6C89\u964D\u8BF4\u660E"]},"longTermCandidates":[{"recordId":"\u7A33\u5B9A\u5BF9\u8C61ID\u6216\u4E8B\u5B9EID","category":"world|character|relationship|event|region|item|skill|historical|unresolved|other","title":"...","content":"\u957F\u671F\u6709\u6548\u7684\u786E\u5B9A\u4E8B\u5B9E","keywords":["..."],"permanence":"stable|irreversible|long-term|unresolved","sourceRowIds":["..."],"sourceFactIds":["..."]}]}`;
+\u53EA\u8F93\u51FA <small_summary> \u6807\u7B7E\u5757\u3002\u4E0D\u8981\u8F93\u51FA JSON\u3002`;
 }
 function largeSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\uFF0C\u4E5F\u662F\u957F\u671F\u8109\u7EDC\u7EF4\u62A4\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u548C\u672C\u6279\u5C0F\u603B\u7ED3\u5019\u9009\uFF0C\u4E0D\u8BFB\u53D6\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u3001\u672C\u6279\u5C0F\u603B\u7ED3\u548C\u957F\u671F\u5019\u9009\uFF0C\u4E0D\u8BFB\u53D6\u539F\u59CB\u6B63\u6587\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
 
-\u4F60\u4E0D\u81EA\u7531\u91CD\u5199\u6574\u7BC7\u5927\u603B\u7ED3\uFF0C\u800C\u662F\u8F93\u51FA\u5BF9\u957F\u671F\u8BB0\u5F55\u7684\u5BF9\u8C61\u5316\u64CD\u4F5C\u3002\u4EE3\u7801\u4F1A\u786E\u5B9A\u6027\u5E94\u7528\u64CD\u4F5C\u5E76\u751F\u6210\u6700\u7EC8\u5927\u603B\u7ED3\u3002
+\u7981\u6B62\u8F93\u51FA JSON\u3001JSON Schema\u3001Markdown \u4EE3\u7801\u5757\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u6216\u601D\u8003\u8FC7\u7A0B\u3002
+\u8F93\u51FA\u5FC5\u987B\u4F7F\u7528\u4EE5\u4E0B\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF1A
 
-\u53EA\u8F93\u51FA\u53EF\u88AB JSON.parse \u76F4\u63A5\u89E3\u6790\u7684\u5355\u4E2A JSON \u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001keywords\u3001operations\u3002
-operations \u652F\u6301\uFF1A
-- upsert\uFF1A\u65B0\u589E\u8BB0\u5F55\uFF0C\u6216\u7528\u540C\u4E00\u4E2A recordId \u66F4\u65B0\u65E2\u6709\u8BB0\u5F55\u3002
-- remove\uFF1A\u5220\u9664\u771F\u6B63\u5931\u53BB\u957F\u671F\u610F\u4E49\u4E14\u672A\u88AB\u65B0\u4E8B\u5B9E\u66FF\u4EE3\u7684\u8BB0\u5F55\u3002
-- merge\uFF1A\u5C06 sourceRecordIds \u5408\u5E76\u4E3A\u4E00\u4E2A recordId\u3002
+<large_summary>
+<title>\u957F\u671F\u8109\u7EDC\u6807\u9898</title>
+<keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<operation>
+<action>upsert|remove|merge</action>
+<record_id>\u7A33\u5B9A\u8BB0\u5F55ID</record_id>
+<source_record_ids>\u4EC5 merge \u586B\u5199\uFF0C\u4F7F\u7528\uFF5C\u5206\u9694</source_record_ids>
+<category>world|character|relationship|event|region|item|skill|historical|unresolved|other</category>
+<title>\u8BB0\u5F55\u6807\u9898</title><content>\u957F\u671F\u6709\u6548\u5185\u5BB9</content><keywords>\u5173\u952E\u8BCD</keywords>
+<permanence>stable|irreversible|long-term|unresolved</permanence>
+<reason>\u4FEE\u6539\u4F9D\u636E</reason>
+</operation>
+</large_summary>
 
 \u89C4\u5219\uFF1A
-- \u6CA1\u6709\u53D8\u5316\u7684\u65E7\u8BB0\u5F55\u65E0\u9700\u8F93\u51FA\u64CD\u4F5C\uFF0C\u4EE3\u7801\u4F1A\u81EA\u52A8\u4FDD\u7559\u3002
-- \u4FDD\u7559\u4ECD\u7136\u6210\u7ACB\u7684\u957F\u671F\u8EAB\u4EFD\u3001\u5173\u7CFB\u3001\u4E16\u754C\u89C4\u5219\u3001\u4E0D\u53EF\u9006\u540E\u679C\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u91CD\u8981\u5386\u53F2\u7ED3\u679C\u548C\u957F\u671F\u672A\u51B3\u4E8B\u9879\u3002
-- \u65B0\u4E8B\u5B9E\u6539\u53D8\u65E7\u4E8B\u5B9E\u65F6\uFF0C\u7528\u76F8\u540C recordId \u6267\u884C upsert\uFF0C\u4E0D\u540C\u65F6\u4FDD\u7559\u51B2\u7A81\u7248\u672C\u3002
-- \u5DF2\u88AB\u7ED3\u679C\u53D6\u4EE3\u7684\u8FC7\u7A0B\u5E94\u5408\u5E76\u6216\u5220\u9664\u3002
-- irreversible \u8BB0\u5F55\u4E0D\u5F97\u7528\u5355\u72EC remove \u5220\u9664\uFF1B\u53EA\u80FD\u7528 upsert \u4FEE\u6B63\uFF0C\u6216 merge \u8FDB\u5305\u542B\u540C\u4E00\u4E0D\u53EF\u9006\u4E8B\u5B9E\u7684\u65B0\u8BB0\u5F55\u3002
-- \u4E34\u65F6\u4F4D\u7F6E\u3001\u77ED\u671F\u4F24\u52BF\u3001\u5F53\u524D\u4E8B\u4EF6\u9636\u6BB5\u7B49\u4E0D\u8981\u8FDB\u5165\u957F\u671F\u8BB0\u5F55\uFF0C\u9664\u975E\u5F62\u6210\u957F\u671F\u5F71\u54CD\u3002
-- \u4E0D\u5F97\u56E0\u957F\u671F\u672A\u51FA\u73B0\u800C\u64C5\u81EA\u5224\u5B9A\u4EBA\u7269\u6B7B\u4EA1\u3001\u5931\u8E2A\u6216\u5173\u7CFB\u7EC8\u6B62\u3002
-
-\u6BCF\u4E2A upsert/merge \u8BB0\u5F55\u5B57\u6BB5\u53EF\u5305\u542B recordId\u3001sourceRecordIds\u3001category\u3001title\u3001content\u3001keywords\u3001permanence\u3001reason\u3002
-\u8F93\u51FA\u4E4B\u5916\u4E0D\u5F97\u5305\u542B\u89E3\u91CA\u3001Markdown \u6216\u524D\u540E\u6587\u3002`;
+1. \u6CA1\u6709\u53D8\u5316\u7684\u65E7\u8BB0\u5F55\u65E0\u9700\u8F93\u51FA\uFF0C\u4EE3\u7801\u81EA\u52A8\u4FDD\u7559\u3002
+2. upsert \u65B0\u589E\u6216\u66F4\u65B0\u540C\u4E00 record_id\uFF1Bremove \u5220\u9664\u771F\u6B63\u5931\u53BB\u957F\u671F\u610F\u4E49\u7684\u8BB0\u5F55\uFF1Bmerge \u5408\u5E76\u91CD\u590D\u6216\u88AB\u66FF\u4EE3\u8BB0\u5F55\u3002
+3. irreversible \u4E0D\u80FD\u76F4\u63A5 remove\uFF0C\u53EA\u80FD\u4FEE\u6B63\u6216\u5408\u5E76\u5230\u4ECD\u4FDD\u5B58\u540C\u4E00\u4E0D\u53EF\u9006\u4E8B\u5B9E\u7684\u8BB0\u5F55\u3002
+4. \u4FDD\u7559\u957F\u671F\u8EAB\u4EFD\u3001\u5173\u7CFB\u3001\u4E16\u754C\u89C4\u5219\u3001\u6B7B\u4EA1\u3001\u6C38\u4E45\u5931\u53BB\u3001\u4E0D\u53EF\u9006\u540E\u679C\u3001\u91CD\u8981\u5386\u53F2\u7ED3\u679C\u548C\u957F\u671F\u672A\u51B3\u4E8B\u9879\u3002
+5. \u4E34\u65F6\u4F4D\u7F6E\u3001\u77ED\u671F\u4F24\u52BF\u548C\u5F53\u524D\u4E8B\u4EF6\u9636\u6BB5\u4E0D\u8FDB\u5165\u957F\u671F\u5C42\uFF0C\u9664\u975E\u5F62\u6210\u957F\u671F\u5F71\u54CD\u3002
+6. \u4E0D\u5F97\u56E0\u957F\u671F\u672A\u51FA\u73B0\u64C5\u81EA\u5224\u5B9A\u6B7B\u4EA1\u3001\u5931\u8E2A\u6216\u5173\u7CFB\u7EC8\u6B62\u3002
+7. \u5217\u8868\u4F7F\u7528\u201C\uFF5C\u201D\u5206\u9694\u3002`;
+}
+function formatPrevious(records) {
+  if (!records.length) return "\uFF08\u65E0\uFF09";
+  return records.map((record) => `- ID=${record.recordId}\uFF1B\u7C7B\u522B=${record.category}\uFF1B\u6807\u9898=${record.title}\uFF1B\u6C38\u4E45\u6027=${record.permanence}\uFF1B\u5185\u5BB9=${record.content}\uFF1B\u5173\u952E\u8BCD=${join(record.keywords)}`).join("\n");
+}
+function formatSummaries(summaries) {
+  return summaries.map((item2) => `- ID=${item2.id}\uFF1B\u6807\u9898=${item2.title}\uFF1B\u6458\u8981=${item2.summary}\uFF1B\u5173\u952E\u8BCD=${join(item2.keywords)}`).join("\n");
+}
+function formatCandidates(candidates) {
+  if (!candidates.length) return "\uFF08\u65E0\uFF09";
+  return candidates.map((record) => `- ID=${record.recordId}\uFF1B\u7C7B\u522B=${record.category}\uFF1B\u6807\u9898=${record.title}\uFF1B\u6C38\u4E45\u6027=${record.permanence}\uFF1B\u5185\u5BB9=${record.content}\uFF1B\u5173\u952E\u8BCD=${join(record.keywords)}`).join("\n");
+}
+function formatAnchors(snapshot) {
+  const lines = [];
+  for (const [table, rows2] of Object.entries(snapshot)) {
+    if (!rows2.length) continue;
+    lines.push(`\u3010${TABLE_LABELS[table]}\u3011${rows2.map((row) => `${row.id}:${row.title}:${row.status || "\u672A\u6807\u6CE8"}`).join("\uFF5C")}`);
+  }
+  return lines.join("\n") || "\uFF08\u65E0\uFF09";
 }
 function largeSummaryPrompt(summaries, snapshot, previousRecords, candidates) {
-  const source = summaries.map((item2) => ({
-    id: item2.id,
-    title: item2.title,
-    summary: item2.summary,
-    keywords: item2.keywords
-  }));
-  const compactPrevious = previousRecords.map((record) => ({
-    recordId: record.recordId,
-    category: record.category,
-    title: record.title,
-    content: record.content,
-    keywords: record.keywords,
-    permanence: record.permanence
-  }));
-  const compactCandidates = candidates.map((record) => ({
-    recordId: record.recordId,
-    category: record.category,
-    title: record.title,
-    content: record.content,
-    keywords: record.keywords,
-    permanence: record.permanence
-  }));
-  const currentAnchors = Object.fromEntries(Object.entries(snapshot).map(([table, rows2]) => [table, rows2.map((row) => ({
-    id: row.id,
-    title: row.title,
-    status: row.status
-  }))]));
-  return `\u6839\u636E\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u4E0E\u672C\u6279\u5C0F\u603B\u7ED3\u5019\u9009\uFF0C\u8F93\u51FA\u957F\u671F\u8BB0\u5F55\u7684\u589E\u5220\u6539\u5408\u5E76\u64CD\u4F5C\u3002
+  return `\u8BF7\u6839\u636E\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u4E0E\u672C\u6279\u9636\u6BB5\u603B\u7ED3\uFF0C\u8F93\u51FA\u957F\u671F\u8BB0\u5F55\u7684\u589E\u5220\u6539\u5408\u5E76\u64CD\u4F5C\u3002
 
 \u3010\u4E0A\u4E00\u7248\u957F\u671F\u8BB0\u5F55\u3011
-${compactPrevious.length ? JSON.stringify(compactPrevious, null, 2) : "\uFF08\u65E0\uFF09"}
+${formatPrevious(previousRecords)}
 
 \u3010\u672C\u6279\u5C0F\u603B\u7ED3\u3011
-${JSON.stringify(source, null, 2)}
+${formatSummaries(summaries)}
 
 \u3010\u672C\u6279\u957F\u671F\u5019\u9009\u3011
-${JSON.stringify(compactCandidates, null, 2)}
+${formatCandidates(candidates)}
 
-\u3010\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u951A\u70B9\uFF0C\u4EC5\u7528\u4E8E\u907F\u514D\u628A\u4E34\u65F6\u72B6\u6001\u8BEF\u5199\u5165\u957F\u671F\u5C42\u3011
-${JSON.stringify(currentAnchors, null, 2)}
+\u3010\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u951A\u70B9\u3011
+${formatAnchors(snapshot)}
 
-\u53EA\u8F93\u51FA\uFF1A
-{"title":"...","keywords":["..."],"operations":[{"action":"upsert|remove|merge","recordId":"\u7A33\u5B9A\u8BB0\u5F55ID","sourceRecordIds":["merge\u65F6\u586B\u5199"],"category":"world|character|relationship|event|region|item|skill|historical|unresolved|other","title":"...","content":"...","keywords":["..."],"permanence":"stable|irreversible|long-term|unresolved","reason":"\u4FEE\u6539\u4F9D\u636E"}]}`;
+\u53EA\u8F93\u51FA <large_summary> \u6807\u7B7E\u5757\u3002\u4E0D\u8981\u8F93\u51FA JSON\u3002`;
 }
 
 // src/pipeline/summary.ts
@@ -5892,21 +6028,20 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
       endIndex: selected.at(-1).sourceRange.endIndex,
       messageKeys: sourceKeys
     };
-    const parsed = await generateStructuredTask({
+    const raw = await generateTask({
       task: "smallSummary",
       systemPrompt: smallSummarySystemPrompt(),
       prompt: smallSummaryPrompt(selected, artifact.snapshot),
-      structureDescription: '{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":["..."],"keepActiveRowIds":["..."],"removeRowIds":["..."],"characterActivityUpdates":[{"rowId":"...","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"..."}],"notes":["..."]},"longTermCandidates":[{"recordId":"...","category":"historical","title":"...","content":"...","keywords":["..."],"permanence":"irreversible","sourceRowIds":["..."],"sourceFactIds":["..."]}]}',
-      allowRepair: settings.repairInvalidJsonOnce,
       signal,
       invocation: {
         sourceRange,
         priority: "background-derived",
         blocking: false,
         coalesceKey: `small-summary:${artifact.chatKey}`,
-        outputSchema: "SummaryArtifact.small.v2"
+        outputSchema: "MA_SMALL_SUMMARY_TEXT_V1"
       }
     });
+    const parsed = parseSmallSummaryText(raw);
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
     const summary = normalizeSummary(parsed, "small", sourceKeys);
@@ -5948,7 +6083,7 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
     const selected = force ? pending : pending.slice(0, threshold);
     const previousLarge = chatState.largeSummaries.at(-1);
     const sourceKeys = selected.map((item2) => item2.id);
-    const parsed = await generateStructuredTask({
+    const raw = await generateTask({
       task: "largeSummary",
       systemPrompt: largeSummarySystemPrompt(),
       prompt: largeSummaryPrompt(
@@ -5957,8 +6092,6 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
         longTermRecordsFromPrevious(previousLarge),
         fallbackLongTermCandidates(selected)
       ),
-      structureDescription: '{"title":"...","keywords":["..."],"operations":[{"action":"upsert|remove|merge","recordId":"...","sourceRecordIds":["..."],"category":"historical","title":"...","content":"...","keywords":["..."],"permanence":"long-term","reason":"..."}]}',
-      allowRepair: settings.repairInvalidJsonOnce,
       signal,
       invocation: {
         sourceRange: {
@@ -5971,9 +6104,10 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
         priority: "background-derived",
         blocking: false,
         coalesceKey: `large-summary:${artifact.chatKey}`,
-        outputSchema: "SummaryArtifact.large.v2"
+        outputSchema: "MA_LARGE_SUMMARY_TEXT_V1"
       }
     });
+    const parsed = parseLargeSummaryText(raw);
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
     const summary = normalizeLargeSummaryUpdate({
@@ -6257,12 +6391,9 @@ function normalizeUnifiedFactPackage(input) {
 }
 
 // src/prompts/facts.ts
+init_constants();
 function compactRowForFactPrompt(row) {
-  const compact = {
-    id: row.id,
-    title: row.title,
-    content: row.content
-  };
+  const compact = { id: row.id, title: row.title, content: row.content };
   if (row.status) compact.status = row.status;
   if (row.keywords.length) compact.keywords = row.keywords;
   if (row.source === "manual" || row.locked) compact.protected = true;
@@ -6276,97 +6407,150 @@ function compactSnapshotForFactPrompt(previous) {
     Object.entries(previous).map(([key, rows2]) => [key, rows2.map(compactRowForFactPrompt)])
   );
 }
+function joinList(values) {
+  return values?.length ? values.join("\uFF5C") : "\u65E0";
+}
+function formatLifecycle(row) {
+  const life = row.lifecycle;
+  if (!life) return "";
+  return [
+    `\u5B58\u5728=${life.existence}`,
+    `\u6D3B\u8DC3=${life.activity}`,
+    `\u8BB0\u5FC6=${life.memory}`,
+    `\u8BC1\u636E\u7B49\u7EA7=${life.evidenceLevel}`,
+    life.evidence ? `\u4F9D\u636E=${life.evidence}` : "",
+    life.returnConditions.length ? `\u56DE\u6D41\u6761\u4EF6=${joinList(life.returnConditions)}` : "",
+    life.returnBlockers.length ? `\u56DE\u6D41\u963B\u788D=${joinList(life.returnBlockers)}` : ""
+  ].filter(Boolean).join("\uFF1B");
+}
+function formatFactPromptSnapshot(previous) {
+  const compact = compactSnapshotForFactPrompt(previous);
+  const sections = [];
+  for (const [key, rows2] of Object.entries(compact)) {
+    sections.push(`\u3010${TABLE_LABELS[key]} / ${key}\u3011`);
+    if (!rows2.length) {
+      sections.push("\uFF08\u65E0\uFF09");
+      continue;
+    }
+    for (const row of rows2) {
+      const meta = [
+        `ID=${row.id}`,
+        row.status ? `\u72B6\u6001=${row.status}` : "",
+        row.protected ? "\u4FDD\u62A4=\u662F" : "",
+        row.keywords?.length ? `\u5173\u952E\u8BCD=${joinList(row.keywords)}` : "",
+        row.sourceEntityId ? `\u5173\u7CFB\u8D77\u70B9=${row.sourceEntityId}` : "",
+        row.targetEntityId ? `\u5173\u7CFB\u7EC8\u70B9=${row.targetEntityId}` : "",
+        formatLifecycle(row)
+      ].filter(Boolean).join("\uFF1B");
+      sections.push(`- ${row.title}
+  ${meta}
+  \u5185\u5BB9=${row.content}`);
+    }
+  }
+  return sections.join("\n");
+}
+function formatTurns(artifacts) {
+  return artifacts.map((artifact, sourceOrdinal) => [
+    `<source_turn>`,
+    `<source_ordinal>${sourceOrdinal}</source_ordinal>`,
+    `<message_index>${artifact.messageIndex}</message_index>`,
+    `<player>${artifact.playerText || "\uFF08\u7A7A\uFF09"}</player>`,
+    `<assistant>${artifact.assistantText}</assistant>`,
+    `</source_turn>`
+  ].join("\n")).join("\n\n");
+}
 function estimateFactPromptCharacters(previous, artifacts) {
-  const turns = artifacts.map((artifact) => ({
-    sourceOrdinal: 0,
-    messageIndex: artifact.messageIndex,
-    player: artifact.playerText || "\uFF08\u7A7A\uFF09",
-    assistant: artifact.assistantText
-  }));
-  return JSON.stringify(compactSnapshotForFactPrompt(previous)).length + JSON.stringify(turns).length;
+  return formatFactPromptSnapshot(previous).length + formatTurns(artifacts).length;
 }
-var UNIFIED_FACT_EXTRACTOR_VERSION = "ma-facts-v3";
+var UNIFIED_FACT_EXTRACTOR_VERSION = "ma-facts-text-v1";
+var FACT_BLOCK = `<fact>
+<entity_id>\u7A33\u5B9A\u5BF9\u8C61ID</entity_id>
+<entity_type>world_rule|focus|character|relationship|event|region|item|skill|process|historical_result|trace|spacetime</entity_type>
+<fact_type>\u4E8B\u5B9E\u7C7B\u522B</fact_type>
+<title>\u5BF9\u8C61\u6216\u8868\u683C\u884C\u540D\u79F0\uFF1B\u6CBF\u7528\u65E7ID\u65F6\u53EF\u7701\u7565\u91CD\u590D\u540D\u79F0</title>
+<status>\u5F53\u524D\u72B6\u6001</status>
+<operation>create|update|append|remove|close|supersede|merge</operation>
+<scope>\u4F5C\u7528\u57DF</scope>
+<lifecycle>stable|active|temporary|historical|trace</lifecycle>
+<content>\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u6216\u66F4\u65B0\u540E\u7684\u5F53\u524D\u6D3B\u8DC3\u8BB0\u5F55</content>
+<keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<residency>global|keyword|contextual|regional|process|historical|trace|never</residency>
+<source_ordinals>0\uFF5C1</source_ordinals>
+<confidence>confirmed|recorded|reported|uncertain</confidence>
+<source_entity_id>\u4EC5\u5173\u7CFB\u586B\u5199</source_entity_id>
+<target_entity_id>\u4EC5\u5173\u7CFB\u586B\u5199</target_entity_id>
+<existence>\u4EC5\u7126\u70B9/\u4EBA\u7269\u586B\u5199</existence>
+<activity>\u4EC5\u7126\u70B9/\u4EBA\u7269\u586B\u5199</activity>
+<memory>\u4EC5\u7126\u70B9/\u4EBA\u7269\u586B\u5199</memory>
+<evidence_level>\u4EC5\u7126\u70B9/\u4EBA\u7269\u586B\u5199</evidence_level>
+<evidence>\u4F9D\u636E</evidence>
+<return_conditions>\u6761\u4EF61\uFF5C\u6761\u4EF62</return_conditions>
+<return_blockers>\u963B\u788D1\uFF5C\u963B\u788D2</return_blockers>
+</fact>`;
+function stageProtocol() {
+  return `<stage_summary>
+<title>\u672C\u6279\u9636\u6BB5\u603B\u7ED3\u6807\u9898</title>
+<summary>\u9636\u6BB5\u538B\u7F29\u6B63\u6587</summary>
+<keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords>
+<sedimentation>
+<absorbed_row_ids>\u5DF2\u88AB\u603B\u7ED3\u4FDD\u5B58\u7684\u884CID</absorbed_row_ids>
+<keep_active_row_ids>\u4ECD\u9700\u6D3B\u8DC3\u7684\u884CID</keep_active_row_ids>
+<remove_row_ids>\u5DF2\u5438\u6536\u4E14\u53EF\u9000\u51FA\u7684\u884CID</remove_row_ids>
+<character_activity><row_id>\u4EBA\u7269\u884CID</row_id><activity>\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863</activity><reason>\u4F9D\u636E</reason></character_activity>
+<notes>\u8BF4\u660E1\uFF5C\u8BF4\u660E2</notes>
+</sedimentation>
+<long_term_candidate>
+<record_id>\u7A33\u5B9A\u8BB0\u5F55ID</record_id><category>world|character|relationship|event|region|item|skill|historical|unresolved|other</category>
+<title>\u6807\u9898</title><content>\u957F\u671F\u6709\u6548\u4E8B\u5B9E</content><keywords>\u5173\u952E\u8BCD</keywords><permanence>stable|irreversible|long-term|unresolved</permanence>
+<source_row_ids>\u6765\u6E90\u8868\u683C\u884CID</source_row_ids><source_fact_ids>\u6765\u6E90\u4E8B\u5B9EID\u6216\u5BF9\u8C61ID</source_fact_ids>
+</long_term_candidate>
+</stage_summary>`;
+}
 function unifiedFactSystemPrompt(options = {}) {
-  const stageSummaryRoot = options.includeStageSummary ? ',\n  "stageSummary":{"title":"\u672C\u6279\u9636\u6BB5\u603B\u7ED3","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":["..."],"keepActiveRowIds":["..."],"removeRowIds":["..."],"characterActivityUpdates":[],"notes":[]},"longTermCandidates":[]}' : "";
-  const rebuildRules = options.includeStageSummary ? "\n12. \u5386\u53F2\u91CD\u5EFA\u6A21\u5F0F\u5FC5\u987B\u540C\u65F6\u8F93\u51FA stageSummary\u3002\u5B83\u662F\u672C\u6279\u4E8B\u5B9E\u7684\u9636\u6BB5\u538B\u7F29\u4E0E\u5438\u6536\u51ED\u8BC1\uFF1B\u4E0D\u5F97\u91CD\u65B0\u590D\u8FF0\u5168\u90E8\u539F\u6587\u3002stageSummary.sedimentation \u53EA\u80FD\u5F15\u7528\u672C\u6279\u7ED3\u675F\u65F6\u786E\u5B9E\u53EF\u9000\u51FA\u7684\u73B0\u6709\u8868\u683C\u884C\u3002" : "";
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u7ED9\u5B9A\u6B63\u6587\u533A\u6BB5\u4E00\u6B21\uFF0C\u8F93\u51FA\u4E8B\u5B9E\u3001\u603B\u7ED3\u7D20\u6750\u548C\u9636\u6BB5\u6C89\u964D\u5019\u9009\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u5668\u3002\u4F60\u53EA\u8BFB\u53D6\u7ED9\u5B9A\u6B63\u6587\u533A\u6BB5\u4E00\u6B21\uFF0C\u8F93\u51FA\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
 
-\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u88AB JSON.parse \u76F4\u63A5\u89E3\u6790\u7684\u5355\u4E2A JSON \u5BF9\u8C61\uFF0C\u7981\u6B62 Markdown\u3001\u89E3\u91CA\u3001\u524D\u8A00\u548C\u7ED3\u8BED\u3002
+\u7981\u6B62\u8F93\u51FA JSON\u3001JSON Schema\u3001Markdown \u4EE3\u7801\u5757\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u6216\u601D\u8003\u8FC7\u7A0B\u3002
+\u8F93\u51FA\u5FC5\u987B\u4EE5 <ma_facts> \u5F00\u59CB\uFF0C\u4EE5 </ma_facts> \u7ED3\u675F\u3002\u5B57\u6BB5\u503C\u76F4\u63A5\u5199\u81EA\u7136\u6587\u672C\uFF1B\u5217\u8868\u4F7F\u7528\u5168\u89D2\u7AD6\u7EBF\u201C\uFF5C\u201D\u5206\u9694\u3002
 
-\u6839\u7ED3\u6784\uFF1A
-{
-  "schemaVersion":2,
-  "turnMaterials":[{"sourceOrdinal":0,"summary":"\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981","keywords":["\u5173\u952E\u8BCD"]}],
-  "facts":[{
-    "entityId":"\u7A33\u5B9A\u5BF9\u8C61ID",
-    "entityType":"world_rule|focus|character|relationship|event|region|item|skill|process|historical_result|trace|spacetime",
-    "factType":"\u4E8B\u5B9E\u7C7B\u522B",
-    "title":"\u5BF9\u8C61\u6216\u8868\u683C\u884C\u540D\u79F0",
-    "status":"\u5F53\u524D\u72B6\u6001",
-    "rowLifecycle":{"existence":"\u5B58\u6D3B","activity":"\u5F53\u524D\u76F8\u5173","memory":"\u5E7F\u6CDB\u8BB0\u5F97","evidenceLevel":"\u5DF2\u786E\u8BA4","evidence":"\u4F9D\u636E","returnConditions":[],"returnBlockers":[]},
-    "sourceEntityId":"\u5173\u7CFB\u6765\u6E90\u5BF9\u8C61\u7A33\u5B9AID\uFF0C\u4EC5 relationship \u4F7F\u7528",
-    "targetEntityId":"\u5173\u7CFB\u76EE\u6807\u5BF9\u8C61\u7A33\u5B9AID\uFF0C\u4EC5 relationship \u4F7F\u7528",
-    "operation":"create|update|append|remove|close|supersede|merge",
-    "scope":"\u4F5C\u7528\u57DF",
-    "lifecycle":"stable|active|temporary|historical|trace",
-    "content":"\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u6216\u66F4\u65B0\u540E\u7684\u5F53\u524D\u6D3B\u8DC3\u8BB0\u5F55",
-    "keywords":["\u6FC0\u6D3B\u5173\u952E\u8BCD"],
-    "residency":"global|keyword|contextual|regional|process|historical|trace|never",
-    "playerBindingEvidence":["\u73A9\u5BB6\u4E3B\u52A8\u4ECB\u5165\u3001\u8D44\u6E90\u3001\u4EE3\u4EF7\u6216\u957F\u671F\u5173\u7CFB\u7B49\u53EF\u89C2\u5BDF\u4F9D\u636E"],
-    "sourceOrdinals":[0],
-    "confidence":"confirmed|recorded|reported|uncertain"
-  }],
-  "focusIdentity":{"focusId":"\u5DF2\u77E5\u7A33\u5B9A\u7126\u70B9ID\u6216\u7A7A\u5B57\u7B26\u4E32","canonicalName":"\u5F53\u524D\u7126\u70B9\u6807\u51C6\u540D\u79F0","aliases":["\u79F0\u547C","\u522B\u540D"]},
-  "sedimentation":{
-    "removeRowIds":["\u4EC5\u9650\u5DF2\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684 spacetime/relationships/items/skills/events/regions \u884CID"],
-    "characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884CID","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"\u53EF\u89C2\u5BDF\u4F9D\u636E"}],
-    "notes":["\u6C89\u964D\u4F9D\u636E"]
-  }${stageSummaryRoot}
-}
+\u6BCF\u4E2A\u8F93\u5165\u8F6E\u6B21\u8F93\u51FA\u4E00\u4E2A\uFF1A
+<turn><source_ordinal>0</source_ordinal><summary>\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981</summary><keywords>\u5173\u952E\u8BCD1\uFF5C\u5173\u952E\u8BCD2</keywords></turn>
+
+\u6BCF\u6761\u4E8B\u5B9E\u8F93\u51FA\u4E00\u4E2A\uFF1A
+${FACT_BLOCK}
+
+\u5F53\u524D\u7126\u70B9\u8F93\u51FA\u4E00\u6B21\uFF1A
+<focus_identity><focus_id>\u5DF2\u77E5\u7A33\u5B9AID\u6216\u7A7A</focus_id><canonical_name>\u6807\u51C6\u540D\u79F0</canonical_name><aliases>\u79F0\u547C1\uFF5C\u79F0\u547C2</aliases></focus_identity>
+
+\u9636\u6BB5\u6C89\u964D\u5019\u9009\u8F93\u51FA\u4E00\u6B21\uFF1A
+<sedimentation><remove_row_ids>\u5019\u9009\u884CID</remove_row_ids><character_activity><row_id>\u4EBA\u7269\u884CID</row_id><activity>\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863</activity><reason>\u4F9D\u636E</reason></character_activity><notes>\u8BF4\u660E</notes></sedimentation>
 
 \u89C4\u5219\uFF1A
-1. turnMaterials \u5FC5\u987B\u8986\u76D6\u8F93\u5165\u4E2D\u7684\u6BCF\u4E2A sourceOrdinal\uFF0C\u53EA\u6982\u62EC\u8BE5\u8F6E\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u5B9E\u3002
-2. facts \u662F\u552F\u4E00\u4E8B\u5B9E\u8F93\u51FA\u3002\u4EE3\u7801\u4F1A\u6839\u636E entityType \u81EA\u52A8\u5206\u53D1\u5230\u4E5D\u7C7B\u8868\u683C\u3001\u5C0F\u603B\u7ED3\u3001\u5927\u603B\u7ED3\u3001\u4E16\u754C\u4E66\u548C\u56FE\u8C31\uFF1B\u4E0D\u8981\u53E6\u5199 tableOperations \u6216 finalSnapshot\u3002
-3. \u5BF9\u5F53\u524D\u4ECD\u6D3B\u8DC3\u3001\u9700\u8981\u8FDB\u5165\u8868\u683C\u7684\u5BF9\u8C61\uFF0C\u5FC5\u987B\u586B\u5199\u7A33\u5B9A entityId\u3001title\u3001content\u3001status\uFF1A
-   - world_rule \u53EA\u7528\u4E8E lifecycle=stable \u7684\u957F\u671F\u4E16\u754C\u5E95\u5C42\u89C4\u5219\u5E76\u8FDB\u5165\u57FA\u7840\u8BBE\u5B9A\uFF1B\u4E34\u65F6\u5236\u5EA6\u3001\u5C01\u9501\u6216\u5C40\u90E8\u89C4\u5219\u5FC5\u987B\u4F7F\u7528 process/event\u3002focus\u2192\u7126\u70B9\uFF1Bcharacter\u2192\u4EBA\u7269\uFF1Brelationship\u2192\u5173\u7CFB\uFF1Bitem\u2192\u7269\u54C1\uFF1Bskill\u2192\u80FD\u529B\uFF1Bevent/process\u2192\u4E8B\u4EF6\u4E0E\u6D41\u7A0B\uFF1Bregion\u2192\u533A\u57DF\uFF1Bspacetime\u2192\u65F6\u95F4\u5730\u70B9\u3002
-   - relationship \u5FC5\u987B\u586B\u5199 sourceEntityId \u548C targetEntityId\uFF0C\u5F15\u7528\u53CC\u65B9\u5DF2\u7ECF\u4F7F\u7528\u7684\u7A33\u5B9A entityId\uFF1B\u5173\u7CFB\u6807\u9898\u5373\u4F7F\u4E0D\u5199\u53CC\u65B9\u59D3\u540D\uFF0C\u56FE\u8C31\u4E5F\u80FD\u6309 ID \u8FDE\u7EBF\u3002
-   - historical_result \u548C trace \u53EA\u8FDB\u5165\u603B\u7ED3\u7D20\u6750\uFF0C\u4E0D\u76F4\u63A5\u521B\u5EFA\u6D3B\u8DC3\u8868\u683C\u884C\u3002
-   - \u540D\u79F0\u3001\u522B\u540D\u6216\u79F0\u547C\u53D8\u5316\u5FC5\u987B\u6CBF\u7528\u539F entityId\uFF0C\u4E0D\u80FD\u521B\u5EFA\u91CD\u590D\u5BF9\u8C61\u3002
-   - \u5DF2\u7ECF\u7ED3\u675F\u6216\u4E0D\u518D\u6D3B\u8DC3\u7684\u5BF9\u8C61\u4F7F\u7528 close/remove/supersede \u6216 lifecycle=historical/trace\uFF1B\u4EE3\u7801\u4F1A\u5148\u6807\u4E3A\u5F85\u9636\u6BB5\u6C89\u964D\uFF0C\u4E0D\u4F1A\u7ACB\u5373\u5220\u9664\u3002
-   - \u4E0A\u4E00\u4EFD\u6D3B\u8DC3\u8868\u683C\u4E2D protected=true \u7684\u884C\u4EE3\u8868\u73A9\u5BB6\u624B\u5DE5\u6216\u9501\u5B9A\u8BB0\u5F55\uFF0C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
-4. focusIdentity \u5FC5\u987B\u63CF\u8FF0\u5F53\u524D\u7126\u70B9\u3002\u5DF2\u77E5 focusId \u65F6\u6CBF\u7528\uFF1B\u6539\u79F0\u547C\u6216\u4F7F\u7528\u522B\u540D\u4E0D\u80FD\u65B0\u5EFA\u7126\u70B9\u5361\u3002
-5. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u4E0E\u5BF9\u767D\u53EF\u4F5C\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF0C\u5916\u90E8\u7ED3\u679C\u4EE5\u6B63\u6587\u4E2D\u7684\u53EF\u89C2\u5BDF\u56DE\u5E94\u4E3A\u51C6\u3002
-6. \u201C\u91CD\u8981\u201D\u4E0D\u7B49\u4E8E\u5168\u5C40\u5E38\u9A7B\u3002\u53EA\u6709\u957F\u671F\u4E16\u754C\u5E95\u5C42\u89C4\u5219\u53EF\u4EE5 residency=global\uFF1B\u4EBA\u7269\u4F4D\u7F6E\u3001\u4F24\u52BF\u3001\u4E8B\u4EF6\u9636\u6BB5\u3001\u8C03\u67E5\u8FDB\u5EA6\u548C\u77ED\u671F\u4EFB\u52A1\u4E0D\u5F97\u8BBE\u4E3A global\u3002
-7. \u4E34\u65F6\u4E8B\u5B9E lifecycle=temporary\uFF1B\u7ED3\u675F\u540E\u7684\u7ED3\u679C\u4F7F\u7528 historical\uFF1B\u4F4E\u4F18\u5148\u7EA7\u6B8B\u7559\u75D5\u8FF9\u4F7F\u7528 trace\u3002
-8. sourceOrdinals \u4F7F\u7528\u8F93\u5165\u4E2D\u7684\u5E8F\u53F7\uFF0C\u4E0D\u8981\u8F93\u51FA\u6D88\u606FID\u3002
-9. rowLifecycle \u53EA\u7528\u4E8E focus \u548C character\uFF1BsourceEntityId/targetEntityId \u53EA\u7528\u4E8E relationship\uFF1B\u5176\u4ED6\u7C7B\u578B\u7701\u7565\u3002
-10. sedimentation \u53EA\u63D0\u51FA\u9636\u6BB5\u8282\u70B9\u53EF\u6267\u884C\u7684\u5B89\u5168\u6C89\u964D\uFF1A
-   - removeRowIds \u53EA\u5141\u8BB8\u9009\u62E9\u5DF2\u7ED3\u675F\u3001\u4E0D\u518D\u6D3B\u8DC3\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u9500\u6BC1\u3001\u9057\u5931\u3001\u6D88\u8017\u3001\u89E3\u9664\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684 spacetime/relationships/items/skills/events/regions \u884C\u3002
-   - \u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002\u5173\u7CFB\u3001\u7269\u54C1\u3001\u6280\u80FD\u53EA\u6709\u5728\u660E\u786E\u4E0D\u518D\u6D3B\u8DC3\u4E14\u5176\u7ED3\u679C\u53EF\u88AB\u9636\u6BB5\u603B\u7ED3\u4FDD\u5B58\u65F6\u624D\u53EF\u5217\u4E3A\u5019\u9009\u3002
-   - characterActivityUpdates \u53EA\u5141\u8BB8\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\u3002
-11. \u4E0D\u8F93\u51FA\u4EFB\u4F55\u4EE3\u7801\u65E0\u6CD5\u9A8C\u8BC1\u7684\u81EA\u7531\u7ED3\u6784\u5B57\u6BB5\u3002${rebuildRules}`;
+1. <turn> \u5FC5\u987B\u8986\u76D6\u6BCF\u4E2A source_ordinal\uFF0C\u53EA\u6982\u62EC\u8BE5\u8F6E\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u5B9E\u3002
+2. <fact> \u662F\u552F\u4E00\u4E8B\u5B9E\u8F93\u51FA\u3002\u4EE3\u7801\u6309 entity_type \u81EA\u52A8\u5206\u53D1\u5230\u8868\u683C\u3001\u603B\u7ED3\u3001\u4E16\u754C\u4E66\u548C\u56FE\u8C31\uFF1B\u4E0D\u8981\u8F93\u51FA\u5B8C\u6574\u8868\u683C\u5FEB\u7167\u3002
+3. \u6D3B\u8DC3\u5BF9\u8C61\u5FC5\u987B\u5C3D\u91CF\u6CBF\u7528\u4E0A\u4E00\u8868\u683C\u7684\u7A33\u5B9A entity_id\u3002\u540D\u79F0\u6216\u522B\u540D\u53D8\u5316\u4E0D\u80FD\u65B0\u5EFA\u91CD\u590D\u5BF9\u8C61\u3002
+4. relationship \u5FC5\u987B\u586B\u5199 source_entity_id \u4E0E target_entity_id\u3002historical_result \u548C trace \u53EA\u8FDB\u5165\u603B\u7ED3\u7D20\u6750\u3002
+5. world_rule \u53EA\u7528\u4E8E\u7A33\u5B9A\u4E16\u754C\u5E95\u5C42\u89C4\u5219\uFF1B\u4E34\u65F6\u5236\u5EA6\u3001\u5C01\u9501\u6216\u5C40\u90E8\u89C4\u5219\u7528 process/event\u3002
+6. \u5DF2\u7ED3\u675F\u5BF9\u8C61\u4F7F\u7528 close/remove/supersede \u6216 historical/trace\uFF1B\u666E\u901A\u8F6E\u6B21\u53EA\u6807\u8BB0\u5F85\u6C89\u964D\uFF0C\u4E0D\u76F4\u63A5\u5220\u9664\u3002
+7. protected=\u662F\u7684\u65E7\u884C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
+8. \u53EA\u6709\u7A33\u5B9A world_rule \u53EF\u4EE5 residency=global\uFF1B\u4EBA\u7269\u4F4D\u7F6E\u3001\u4F24\u52BF\u3001\u4E8B\u4EF6\u9636\u6BB5\u548C\u77ED\u671F\u4EFB\u52A1\u4E0D\u5F97\u5E38\u9A7B\u3002
+9. source_ordinals \u4F7F\u7528\u8F93\u5165\u5E8F\u53F7\uFF0C\u4E0D\u8F93\u51FA\u6D88\u606FID\u3002
+10. \u6C89\u964D\u5019\u9009\u53EA\u5141\u8BB8\u5DF2\u7ED3\u675F\u7684 spacetime/relationships/items/skills/events/regions\uFF1B\u4E0D\u5F97\u5220\u9664 focus\u3001characters\u3001foundations\u3002
+11. \u4EBA\u7269\u6D3B\u52A8\u964D\u7EA7\u53EA\u80FD\u9010\u7EA7\u8FDB\u5165\u4F11\u7720\u3001\u957F\u671F\u4F11\u7720\u3001\u5DF2\u5F52\u6863\uFF0C\u4E0D\u5F97\u6539\u53D8\u6B7B\u4EA1\u6216\u8BC1\u636E\u5224\u65AD\u3002
+12. \u5B57\u6BB5\u4E0D\u9002\u7528\u65F6\u4FDD\u7559\u7A7A\u6807\u7B7E\u6216\u7701\u7565\u8BE5\u6807\u7B7E\u3002${options.includeStageSummary ? `
+13. \u5386\u53F2\u91CD\u5EFA\u6A21\u5F0F\u8FD8\u5FC5\u987B\u8F93\u51FA\u4EE5\u4E0B\u9636\u6BB5\u603B\u7ED3\u5757\uFF1A
+${stageProtocol()}` : ""}`;
 }
 function unifiedFactUserPrompt(previous, artifacts, options = {}) {
-  const turns = artifacts.map((artifact, sourceOrdinal) => ({
-    sourceOrdinal,
-    messageIndex: artifact.messageIndex,
-    player: artifact.playerText || "\uFF08\u7A7A\uFF09",
-    assistant: artifact.assistantText
-  }));
-  const mode = options.includeStageSummary ? "\u5386\u53F2\u91CD\u5EFA\u6279\u6B21\uFF1A\u540C\u65F6\u8F93\u51FA stageSummary" : "\u666E\u901A\u4E8B\u5B9E\u63D0\u53D6";
+  const mode = options.includeStageSummary ? "\u5386\u53F2\u91CD\u5EFA\u6279\u6B21\uFF1A\u540C\u65F6\u8F93\u51FA stage_summary" : "\u666E\u901A\u4E8B\u5B9E\u63D0\u53D6";
   return `\u3010\u6A21\u5F0F\u3011${mode}
 
 \u3010\u4E0A\u4E00\u4EFD\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
-${JSON.stringify(compactSnapshotForFactPrompt(previous))}
+${formatFactPromptSnapshot(previous)}
 
 \u3010\u5F85\u63D0\u53D6\u6B63\u6587\u533A\u6BB5\u3011
-${JSON.stringify(turns)}
+${formatTurns(artifacts)}
 
-\u53EA\u8F93\u51FA UnifiedFactPackage v2 JSON\u3002`;
-}
-function unifiedFactStructureDescription(options = {}) {
-  const stage = options.includeStageSummary ? ' ,"stageSummary":{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"absorbedRowIds":[],"keepActiveRowIds":[],"removeRowIds":[],"characterActivityUpdates":[],"notes":[]},"longTermCandidates":[]}' : "";
-  return '{"schemaVersion":2,"turnMaterials":[{"sourceOrdinal":0,"summary":"...","keywords":["..."]}],"facts":[{"entityId":"character:stable-id","entityType":"character","factType":"\u5F53\u524D\u72B6\u6001","title":"...","status":"\u5F53\u524D\u76F8\u5173","rowLifecycle":{"existence":"\u5B58\u6D3B","activity":"\u5F53\u524D\u76F8\u5173","memory":"\u5E7F\u6CDB\u8BB0\u5F97","evidenceLevel":"\u5DF2\u786E\u8BA4","evidence":"...","returnConditions":[],"returnBlockers":[]},"sourceEntityId":"","targetEntityId":"","operation":"update","scope":"chat","lifecycle":"active","content":"...","keywords":["..."],"residency":"keyword","playerBindingEvidence":[],"sourceOrdinals":[0],"confidence":"confirmed"}],"focusIdentity":{"focusId":"","canonicalName":"...","aliases":["..."]},"sedimentation":{"removeRowIds":[],"characterActivityUpdates":[],"notes":[]}' + stage + "}";
+\u8BF7\u6309\u7CFB\u7EDF\u6307\u5B9A\u7684\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\u8F93\u51FA\u3002\u4E0D\u8981\u8F93\u51FA JSON\u3002`;
 }
 
 // src/pipeline/facts.ts
@@ -6375,6 +6559,11 @@ init_repository();
 // src/pipeline/state.ts
 init_constants();
 init_utils();
+
+// src/prompts/state.ts
+init_constants();
+
+// src/pipeline/state.ts
 init_repository();
 function previousSnapshot(beforeIndex) {
   const chat = getChat();
@@ -6439,12 +6628,10 @@ async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, option
     messageKeys: artifacts.map((artifact) => artifact.messageKey)
   };
   try {
-    const parsed = await generateStructuredTask({
+    const raw = await generateTask({
       task: "factExtraction",
       systemPrompt: unifiedFactSystemPrompt(options),
       prompt: unifiedFactUserPrompt(previous, artifacts, options),
-      structureDescription: unifiedFactStructureDescription(options),
-      allowRepair: getSettings().repairInvalidJsonOnce,
       signal,
       connectionSnapshot,
       invocation: {
@@ -6452,9 +6639,18 @@ async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, option
         priority: "background-critical",
         blocking: false,
         coalesceKey: `facts:${artifacts[0].chatKey}`,
-        outputSchema: "UnifiedFactPackage.v2"
+        outputSchema: "MA_FACTS_TEXT_V1"
       }
     });
+    let parsed;
+    try {
+      parsed = parseUnifiedFactsText(raw);
+    } catch (error) {
+      if (error instanceof PlainProtocolError) {
+        throw new Error(`\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u672A\u8FD4\u56DE\u6709\u6548\u7EAF\u6587\u672C\u534F\u8BAE\uFF1A${error.message}${error.preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${error.preview}` : ""}`);
+      }
+      throw error;
+    }
     for (const artifact of artifacts) assertArtifactCurrent(artifact, signal);
     return normalizeUnifiedFactPackage({
       raw: parsed,
@@ -8244,8 +8440,7 @@ function settingsHtml() {
       <label>\u5C0F\u603B\u7ED3\u56DE\u5408\u6570<input type="number" min="1" max="100" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>\u7ED3\u6784\u8F93\u51FA\u65E0\u6CD5\u672C\u5730\u89E3\u6790\u65F6\uFF0C\u5141\u8BB8\u4E00\u6B21\u4E13\u7528JSON\u683C\u5F0F\u4FEE\u590D</span></label>
-      <p class="ma11-help">\u683C\u5F0F\u4FEE\u590D\u53EA\u6574\u7406\u539F\u59CB\u8FD4\u56DE\uFF0C\u4E0D\u91CD\u65B0\u6267\u884C\u5BA1\u6838\u3001\u72B6\u6001\u63D0\u53D6\u6216\u603B\u7ED3\u3002\u8BF7\u6C42\u8D85\u65F6\u3001\u91CD\u8BD5\u3001\u9650\u6D41\u548C\u4F9B\u5E94\u5546\u9519\u8BEF\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216 Connection Profile \u7EDF\u4E00\u5904\u7406\u3002</p>
+      <p class="ma11-help">\u4E8B\u5B9E\u3001\u8868\u683C\u4E0E\u603B\u7ED3\u4F7F\u7528\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF0C\u4E0D\u542F\u7528 JSON Schema\uFF0C\u4E5F\u4E0D\u4F1A\u8FFD\u52A0 JSON \u683C\u5F0F\u4FEE\u590D\u8C03\u7528\u3002\u8BF7\u6C42\u8D85\u65F6\u3001\u91CD\u8BD5\u3001\u9650\u6D41\u548C\u4F9B\u5E94\u5546\u9519\u8BEF\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216 Connection Profile \u7EDF\u4E00\u5904\u7406\u3002</p>
     </section>`;
 }
 async function diagnosticsHtml() {
@@ -8625,7 +8820,7 @@ function bindWorkspace(workspace) {
       const testTask = target.closest("[data-ma11-test]")?.dataset.ma11Test;
       if (testTask) {
         const result = await testConnection(testTask);
-        const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1BJSON${result.jsonValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
+        const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1B\u6587\u672C\u534F\u8BAE${result.protocolValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
         toast(result.instructionFollowed ? "success" : "warning", result.instructionFollowed ? detail : `${detail}\uFF1B\u8FD4\u56DE\uFF1A${result.responsePreview}`);
       }
     } catch (error) {

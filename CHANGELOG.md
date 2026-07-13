@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0-alpha.10.5.5 — Plain-Text Native Protocol
+
+- 统一事实提取、状态表、小总结和大总结取消模型端 JSON Schema 与强制 JSON 输出，统一改为 `<ma_facts>`、`<ma_state>`、`<small_summary>`、`<large_summary>` 纯文本标签协议。
+- 删除运行时 JSON 格式修复模型和对应设置；结构无法解析时直接显示任务失败，不追加第二次模型调用。
+- 当前连接调用不再向 `generateRaw` 传入 `jsonSchema`；Connection Profile 继续使用 SillyTavern 原生请求服务。
+- 输入侧也取消整块 JSON 序列化：活跃表格、事实素材和长期记录改为紧凑自然文本区段，降低 Token 与生成负担。
+- 上游返回 HTML 错误页或抛出 `Unexpected token '<' ... not valid JSON` 时，直接报告“上游返回HTML错误页”，不再误报为事实包 JSON 解析失败。
+- 保留旧 JSON 模型返回的只读兼容解析，便于旧测试、旧代理和过渡存档，但新提示词不会要求 JSON，也不会执行 JSON 修复。
+- 连接测试改为固定文本 `MA_CONNECTION_OK`，UI 显示“文本协议有效/无效”。
+- 30/100 轮与 120 条历史重建调用次数不变；纯文本端到端、HTML 错误、无 Schema 请求和旧返回兼容测试通过。
+- 修复测试聚合器在带 ANSI 颜色输出时误统计为 0/0；洁净源码现在稳定汇总为 103/103。
+
 ## 1.1.0-alpha.10.5.4 — Cache-First Rebuild & Task UI
 
 - 历史重建改为缓存优先：稳定统一事实包、表格检查点和有效总结先本地复用，只有缺失或失效区段才回读正文。
