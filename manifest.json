@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.1.0-alpha.10.7.8",
+  "version": "1.1.0-alpha.10.7.11",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": true,
   "minimum_client_version": "1.17.0",
@@ -19,5 +19,5 @@
     "clean": "onClean"
   },
   "generate_interceptor": "MirrorAbyssGenerationInterceptor",
-  "description": "Mirror Abyss 手动历史重建版：进入聊天只做本地一致性检测，默认不调用 API、不自动重建；检测到旧正文变化后由玩家手动启动。"
+  "description": "Mirror Abyss 测试版：严格限制流式兼容降级，保留后台调用计时、同 Profile 有限并发、优先级调度和现有数据管线。"
 }

@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.8";
+    VERSION = "1.1.0-alpha.10.7.11";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -949,6 +949,171 @@ var init_task_errors = __esm({
   }
 });
 
+// src/foundation/invocation-telemetry.ts
+var invocationTelemetry = [];
+var taskTimingContextBySignal = /* @__PURE__ */ new WeakMap();
+var latestInvocationBySignal = /* @__PURE__ */ new WeakMap();
+var invocationTimingsByTask = /* @__PURE__ */ new Map();
+function timingNow() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+function timingRound(value) {
+  return Math.max(0, Math.round(Number(value) || 0));
+}
+function publicInvocationTiming(timing) {
+  return {
+    id: timing.id,
+    taskId: timing.taskId,
+    taskType: timing.taskType,
+    priority: timing.priority,
+    chatKey: timing.chatKey,
+    profileId: timing.profileId,
+    taskCreatedAt: timing.taskCreatedAt,
+    createdAt: timing.createdAt,
+    requestSentAt: timing.requestSentAt,
+    firstByteAt: timing.firstByteAt,
+    firstByteMode: timing.firstByteMode || "",
+    responseCompletedAt: timing.responseCompletedAt,
+    phase: timing.phase,
+    queueWaitMs: timingRound(timing.queueWaitMs),
+    transportWaitMs: timingRound(timing.transportWaitMs),
+    requestMs: timingRound(timing.requestMs),
+    firstByteMs: timingRound(timing.firstByteMs),
+    parseMs: timingRound(timing.parseMs),
+    persistMs: timingRound(timing.persistMs),
+    metadataMs: timingRound(timing.metadataMs),
+    lorebookWaitMs: timingRound(timing.lorebookWaitMs),
+    totalMs: timingRound(timing.totalMs),
+    streaming: Boolean(timing.streaming),
+    streamFallback: Boolean(timing.streamFallback),
+    cancelled: Boolean(timing.cancelled),
+    stale: Boolean(timing.stale),
+    errorKind: timing.errorKind || ""
+  };
+}
+function invocationTelemetryForChat(chatKey) {
+  return invocationTelemetry.filter((timing) => !chatKey || timing.chatKey === chatKey).slice(0, 100).map(publicInvocationTiming);
+}
+function syncInvocationTimingToTask(timing) {
+  const context = timing.taskContext;
+  if (!context) return;
+  const list = invocationTimingsByTask.get(context.task.id) ?? [];
+  context.task.currentPhase = timing.phase;
+  context.task.modelTimings = list.map(publicInvocationTiming);
+  context.task.transportWaitMs = timingRound(timing.transportWaitMs);
+  context.task.requestMs = timingRound(timing.requestMs);
+  context.task.firstByteMs = timingRound(timing.firstByteMs);
+  context.task.parseMs = timingRound(timing.parseMs);
+  context.task.persistMs = timingRound(list.reduce((sum, item2) => sum + (item2.persistMs || 0), 0));
+  context.task.metadataMs = timingRound(list.reduce((sum, item2) => sum + (item2.metadataMs || 0), 0));
+  context.notify?.();
+}
+function registerTaskTimingContext(signal, task, notify) {
+  if (!signal) return;
+  taskTimingContextBySignal.set(signal, { task, notify });
+}
+function unregisterTaskTimingContext(signal) {
+  if (signal) taskTimingContextBySignal.delete(signal);
+}
+function createInvocationTiming(spec, signal) {
+  const taskContext = signal ? taskTimingContextBySignal.get(signal) : void 0;
+  const previous = signal ? latestInvocationBySignal.get(signal) : void 0;
+  if (previous && !previous.totalMs) finalizeInvocationTiming(previous);
+  const started = timingNow();
+  const timing = {
+    id: makeId("timing"),
+    taskId: taskContext?.task.id || "",
+    taskType: spec.taskType,
+    priority: spec.priority,
+    chatKey: spec.chatKey,
+    profileId: spec.connection?.profileId || "",
+    taskCreatedAt: taskContext?.task.createdAt || spec.createdAt,
+    createdAt: nowIso(),
+    phase: taskContext ? "task-running" : "created",
+    queueWaitMs: taskContext?.task.queueWaitMs ?? 0,
+    transportWaitMs: 0,
+    requestMs: 0,
+    firstByteMs: 0,
+    parseMs: 0,
+    persistMs: 0,
+    metadataMs: 0,
+    lorebookWaitMs: taskContext?.task.lorebookWaitMs ?? 0,
+    totalMs: 0,
+    streaming: false,
+    streamFallback: false,
+    cancelled: false,
+    stale: false,
+    taskContext,
+    started
+  };
+  invocationTelemetry.unshift(timing);
+  if (invocationTelemetry.length > 200) invocationTelemetry.length = 200;
+  if (taskContext) {
+    const list = invocationTimingsByTask.get(taskContext.task.id) ?? [];
+    list.push(timing);
+    invocationTimingsByTask.set(taskContext.task.id, list);
+  }
+  if (signal) latestInvocationBySignal.set(signal, timing);
+  syncInvocationTimingToTask(timing);
+  return timing;
+}
+function setInvocationPhase(timing, phase, patch = {}) {
+  if (!timing) return;
+  Object.assign(timing, patch, { phase });
+  syncInvocationTimingToTask(timing);
+}
+function latestInvocationTiming(signal) {
+  return signal ? latestInvocationBySignal.get(signal) : void 0;
+}
+function measureInvocationParse(signal, parser) {
+  const timing = latestInvocationTiming(signal);
+  const started = timingNow();
+  setInvocationPhase(timing, "parsing");
+  try {
+    return parser();
+  } catch (error) {
+    finalizeInvocationTiming(timing, error);
+    throw error;
+  } finally {
+    if (timing) timing.parseMs += timingNow() - started;
+    if (!timing?.totalMs) setInvocationPhase(timing, "parsed");
+  }
+}
+async function measureInvocationAsync(signal, field, phase, work) {
+  const timing = latestInvocationTiming(signal);
+  const started = timingNow();
+  setInvocationPhase(timing, phase);
+  try {
+    return await work();
+  } finally {
+    if (timing) timing[field] = (timing[field] || 0) + timingNow() - started;
+    setInvocationPhase(timing, `${phase}-complete`);
+  }
+}
+function finalizeInvocationTiming(timing, error) {
+  if (!timing) return;
+  timing.totalMs = timingNow() - timing.started;
+  timing.cancelled = error instanceof TaskCancelledError || error instanceof DOMException && error.name === "AbortError" || error?.kind === "cancelled" || timing.cancelled;
+  timing.stale = error instanceof StaleTaskError || timing.stale;
+  timing.errorKind ||= error?.kind || "";
+  setInvocationPhase(timing, error ? timing.stale ? "stale" : timing.cancelled ? "cancelled" : "failed" : "complete");
+}
+function finalizeTaskInvocationTimings(task) {
+  const timings = invocationTimingsByTask.get(task.id) ?? [];
+  for (const timing of timings) {
+    if (!timing.totalMs) timing.totalMs = timingNow() - timing.started;
+    timing.cancelled ||= task.state === "cancelled";
+    timing.stale ||= task.state === "stale";
+    if (task.state === "success") timing.phase = "complete";
+    else if (["cancelled", "stale", "failed"].includes(task.state) && timing.phase !== "complete") timing.phase = task.state;
+  }
+  task.modelTimings = timings.map(publicInvocationTiming);
+  task.persistMs = timingRound(timings.reduce((sum, timing) => sum + (timing.persistMs || 0), 0));
+  task.metadataMs = timingRound(timings.reduce((sum, timing) => sum + (timing.metadataMs || 0), 0));
+  for (const timing of timings) timing.taskContext = void 0;
+  invocationTimingsByTask.delete(task.id);
+}
+
 // src/pipeline/task-queue.ts
 var task_queue_exports = {};
 __export(task_queue_exports, {
@@ -995,6 +1160,8 @@ var init_task_queue = __esm({
       async finalize(key, scopeChatKey, task) {
         task.finishedAt ||= nowIso();
         task.updatedAt = task.finishedAt;
+        task.totalMs = Math.max(0, Date.parse(task.finishedAt) - Date.parse(task.createdAt));
+        finalizeTaskInvocationTimings(task);
         this.inFlight.delete(key);
         this.active.delete(task.id);
         await this.persist(task);
@@ -1017,7 +1184,8 @@ var init_task_queue = __esm({
         const scope = chatScopeManager.current();
         const laneKey = options.laneKey?.trim() || `chat:${scope.chatKey}`;
         const controller = new AbortController();
-        const createdAt = nowIso();
+        const enqueuedAtMs = Number.isFinite(Number(options.enqueuedAtMs)) ? Number(options.enqueuedAtMs) : Date.now();
+        const createdAt = new Date(enqueuedAtMs).toISOString();
         const task = {
           id: makeId("task"),
           key,
@@ -1026,7 +1194,17 @@ var init_task_queue = __esm({
           laneKey,
           label,
           kind,
+          taskType: kind,
           state: "queued",
+          currentPhase: "task-queue",
+          queueWaitMs: 0,
+          transportWaitMs: 0,
+          requestMs: 0,
+          firstByteMs: 0,
+          parseMs: 0,
+          persistMs: 0,
+          metadataMs: 0,
+          lorebookWaitMs: kind === "sync" ? Math.max(0, Date.now() - enqueuedAtMs) : 0,
           priority: options.priority,
           blocking: options.blocking,
           sourceStartIndex: options.sourceRange?.startIndex,
@@ -1053,8 +1231,12 @@ var init_task_queue = __esm({
             task.state = "running";
             task.startedAt = nowIso();
             task.updatedAt = task.startedAt;
+            task.queueWaitMs = Math.max(0, Date.parse(task.startedAt) - enqueuedAtMs);
+            if (task.kind === "sync") task.lorebookWaitMs = task.queueWaitMs;
+            task.currentPhase = "task-running";
             await this.persist(task);
             this.notify();
+            registerTaskTimingContext(controller.signal, task, () => this.notify());
             const result = await work(controller.signal);
             if (controller.signal.aborted) {
               if (!chatScopeManager.isCurrent(scope) || controller.signal.reason instanceof StaleTaskError) {
@@ -1066,6 +1248,7 @@ var init_task_queue = __esm({
               throw new StaleTaskError("\u4EFB\u52A1\u6267\u884C\u671F\u95F4\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u7ED3\u679C\u672A\u63D0\u4EA4\u5230\u65B0\u804A\u5929");
             }
             task.state = "success";
+            task.currentPhase = "complete";
             task.error = void 0;
             return result;
           } catch (error) {
@@ -1082,8 +1265,10 @@ var init_task_queue = __esm({
               task.state = "failed";
               task.error = toErrorMessage(error);
             }
+            task.currentPhase = task.state;
             throw finalError;
           } finally {
+            unregisterTaskTimingContext(controller.signal);
             await this.finalize(key, scope.chatKey, task);
           }
         };
@@ -1512,32 +1697,115 @@ async function withInternalGeneration(work) {
     internalGenerationDepth = Math.max(0, internalGenerationDepth - 1);
   }
 }
+var NATIVE_PROFILE_MAX_CONCURRENCY = 2;
+var NATIVE_PROFILE_MAX_DERIVED_CONCURRENCY = 1;
 var nativeProfileTransportLanes = /* @__PURE__ */ new Map();
 var nativeProfileTransportWaiting = 0;
-async function withNativeProfileTransport(profileId, work, signal) {
-  const laneKey = safeText(profileId, 160).trim() || "unknown-profile";
-  nativeProfileTransportWaiting += 1;
-  const previous = nativeProfileTransportLanes.get(laneKey) ?? Promise.resolve();
-  let release;
-  const gate = new Promise((resolve) => {
-    release = resolve;
-  });
-  const laneTail = previous.catch(() => void 0).then(() => gate);
-  nativeProfileTransportLanes.set(laneKey, laneTail);
-  try {
-    await previous.catch(() => void 0);
-    if (signal?.aborted) throw new DOMException("Connection Profile 请求已取消", "AbortError");
-    return await work();
-  } finally {
+var nativeProfileTransportSequence = 0;
+function nativeProfilePriority(taskType, priority) {
+  if (taskType === "audit" || taskType === "revision" || priority === "foreground") return 0;
+  if (taskType === "factExtraction" || taskType === "state" || priority === "background-critical") return 1;
+  if (taskType === "smallSummary") return 2;
+  if (taskType === "largeSummary") return 3;
+  return 4;
+}
+function nativeProfileDerived(taskType) {
+  return taskType === "smallSummary" || taskType === "largeSummary";
+}
+function nativeProfileLane(laneKey) {
+  const existing = nativeProfileTransportLanes.get(laneKey);
+  if (existing) return existing;
+  const lane = { queued: [], running: /* @__PURE__ */ new Set(), derivedRunning: 0 };
+  nativeProfileTransportLanes.set(laneKey, lane);
+  return lane;
+}
+function pumpNativeProfileTransport(laneKey) {
+  const lane = nativeProfileTransportLanes.get(laneKey);
+  if (!lane) return;
+  lane.queued.sort((left, right) => left.rank - right.rank || left.sequence - right.sequence);
+  while (lane.running.size < NATIVE_PROFILE_MAX_CONCURRENCY) {
+    const index = lane.queued.findIndex((job) => {
+      if (job.derived && lane.derivedRunning >= NATIVE_PROFILE_MAX_DERIVED_CONCURRENCY) return false;
+      return ![...lane.running].some((running) => running.chatKey === job.chatKey);
+    });
+    if (index < 0) break;
+    const [job] = lane.queued.splice(index, 1);
     nativeProfileTransportWaiting = Math.max(0, nativeProfileTransportWaiting - 1);
-    release?.();
-    laneTail.finally(() => {
-      if (nativeProfileTransportLanes.get(laneKey) === laneTail) nativeProfileTransportLanes.delete(laneKey);
+    if (job.signal?.aborted) {
+      job.cleanupAbort();
+      job.reject(job.signal.reason instanceof Error ? job.signal.reason : new DOMException("Connection Profile 请求已取消", "AbortError"));
+      continue;
+    }
+    job.started = true;
+    job.cleanupAbort();
+    lane.running.add(job);
+    if (job.derived) lane.derivedRunning += 1;
+    const transportWaitMs = timingNow() - job.enqueued;
+    setInvocationPhase(job.timing, "request-ready", {
+      transportWaitMs,
+      transportStartedAt: nowIso()
+    });
+    Promise.resolve().then(job.work).then(job.resolve, job.reject).finally(() => {
+      lane.running.delete(job);
+      if (job.derived) lane.derivedRunning = Math.max(0, lane.derivedRunning - 1);
+      if (!lane.running.size && !lane.queued.length) nativeProfileTransportLanes.delete(laneKey);
+      else pumpNativeProfileTransport(laneKey);
     });
   }
 }
+function withNativeProfileTransport(profileId, work, signal, options = {}) {
+  const laneKey = safeText(profileId, 160).trim() || "unknown-profile";
+  const lane = nativeProfileLane(laneKey);
+  return new Promise((resolve, reject) => {
+    const job = {
+      sequence: ++nativeProfileTransportSequence,
+      rank: nativeProfilePriority(options.taskType, options.priority),
+      derived: nativeProfileDerived(options.taskType),
+      taskType: options.taskType,
+      chatKey: options.chatKey || "",
+      timing: options.timing,
+      signal,
+      work,
+      resolve,
+      reject,
+      started: false,
+      enqueued: timingNow(),
+      cleanupAbort: () => signal?.removeEventListener("abort", onAbort)
+    };
+    const onAbort = () => {
+      if (job.started) return;
+      const index = lane.queued.indexOf(job);
+      if (index >= 0) {
+        lane.queued.splice(index, 1);
+        nativeProfileTransportWaiting = Math.max(0, nativeProfileTransportWaiting - 1);
+      }
+      job.cleanupAbort();
+      reject(signal?.reason instanceof Error ? signal.reason : new DOMException("Connection Profile 请求已取消", "AbortError"));
+      if (!lane.running.size && !lane.queued.length) nativeProfileTransportLanes.delete(laneKey);
+      else pumpNativeProfileTransport(laneKey);
+    };
+    setInvocationPhase(options.timing, "transport-queue", { transportQueuedAt: nowIso() });
+    lane.queued.push(job);
+    nativeProfileTransportWaiting += 1;
+    if (signal?.aborted) onAbort();
+    else {
+      signal?.addEventListener("abort", onAbort, { once: true });
+      pumpNativeProfileTransport(laneKey);
+    }
+  });
+}
 function nativeProfileTransportStatus() {
-  return { waiting: nativeProfileTransportWaiting, activeLanes: nativeProfileTransportLanes.size };
+  const active = [...nativeProfileTransportLanes.values()].reduce((sum, lane) => sum + lane.running.size, 0);
+  const derivedActive = [...nativeProfileTransportLanes.values()].reduce((sum, lane) => sum + lane.derivedRunning, 0);
+  return {
+    waiting: nativeProfileTransportWaiting,
+    active,
+    derivedActive,
+    activeLanes: nativeProfileTransportLanes.size,
+    maxConcurrencyPerProfile: NATIVE_PROFILE_MAX_CONCURRENCY,
+    maxDerivedConcurrencyPerProfile: NATIVE_PROFILE_MAX_DERIVED_CONCURRENCY,
+    scheduling: "priority"
+  };
 }
 
 // src/llm/generator.ts
@@ -1657,6 +1925,138 @@ function generationText(result) {
   if (typeof result?.choices?.[0]?.text === "string") return result.choices[0].text.trim();
   return safeText(result, 2e5).trim();
 }
+var STREAM_COMPATIBILITY_ERROR_CODES = /* @__PURE__ */ new Set([
+  "MA_STREAM_FACTORY_MISSING",
+  "MA_STREAM_GENERATOR_MISSING",
+  "MA_STREAM_ASYNC_ITERATOR_MISSING",
+  "MA_STREAM_UNSUPPORTED",
+  "MA_STREAM_API_UNAVAILABLE"
+]);
+var STREAM_NON_COMPATIBILITY_ERROR_CODES = /* @__PURE__ */ new Set([
+  "ABORT_ERR",
+  "ERR_ABORTED",
+  "ERR_CANCELED",
+  "ERR_CANCELLED",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENETDOWN",
+  "ENETRESET",
+  "ENETUNREACH",
+  "EPIPE",
+  "ETIMEDOUT"
+]);
+var NativeProfileStreamCompatibilityError = class extends TypeError {
+  constructor(code, message) {
+    super(message);
+    this.name = "NativeProfileStreamCompatibilityError";
+    this.code = code;
+  }
+};
+function streamErrorChain(error) {
+  const chain = [];
+  const seen = /* @__PURE__ */ new Set();
+  let current = error;
+  for (let depth = 0; current && depth < 5 && !seen.has(current); depth += 1) {
+    seen.add(current);
+    chain.push(current);
+    current = current?.cause;
+  }
+  return chain;
+}
+function explicitStreamCompatibilityMessage(message) {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (/^Connection Profile stream did not return (?:a generator factory|an AsyncGenerator)$/i.test(text)) return true;
+  if (/\bstream(?:ing)?\b\s+(?:is\s+)?(?:not supported|unsupported|not implemented)\b/i.test(text)) return true;
+  return /\bstream(?:ing)?\b\s+(?:API|interface)\s+(?:is\s+)?(?:not supported|unsupported|not implemented|unavailable|not available|missing)\b/i.test(text);
+}
+function streamCompatibilityFailure(error) {
+  const chain = streamErrorChain(error);
+  for (const current of chain) {
+    if (current?.name === "AbortError" || current?.name === "TaskCancelledError" || current?.name === "StaleTaskError") return false;
+    if (typeof TaskCancelledError === "function" && current instanceof TaskCancelledError) return false;
+    if (typeof StaleTaskError === "function" && current instanceof StaleTaskError) return false;
+    if (["cancelled", "canceled", "stale", "upstream", "upstream_html", "network", "protocol", "parse", "model"].includes(String(current?.kind ?? "").toLowerCase())) return false;
+    const status = Number(current?.status ?? current?.statusCode ?? current?.response?.status);
+    if (Number.isInteger(status) && status >= 400 && status <= 599) return false;
+    const code = String(current?.code ?? "").toUpperCase();
+    if (STREAM_NON_COMPATIBILITY_ERROR_CODES.has(code)) return false;
+  }
+  const messages = chain.map((current) => current instanceof Error ? current.message : toErrorMessage(current)).filter(Boolean);
+  const combined = messages.join(" ");
+  if (/\b(?:status|HTTP(?:\s+status)?)\s*[:=]?\s*(?:401|403|404|429|5\d{2})\b/i.test(combined)) return false;
+  if (/\b(?:401|403|404|429|500|502|503|504)\b/.test(combined)) return false;
+  if (/\b(?:upstream connect error|API request failed|fetch failed|network (?:error|failure)|model (?:error|failed|failure))\b/i.test(combined)) return false;
+  if (/\b(?:JSON|SSE)\b.{0,40}\b(?:parse|parsing|syntax|unexpected|invalid|error)\b|\b(?:parse|parsing|syntax|unexpected|invalid)\b.{0,40}\b(?:JSON|SSE)\b/i.test(combined)) return false;
+  if (/<!doctype\s+html|<html(?:\s|>)|\bHTML (?:error|page|response)\b/i.test(combined)) return false;
+  if (/\b(?:aborted|cancelled|canceled|stale)\b/i.test(combined)) return false;
+  for (const current of chain) {
+    if (current instanceof NativeProfileStreamCompatibilityError) return true;
+    if (STREAM_COMPATIBILITY_ERROR_CODES.has(String(current?.code ?? "").toUpperCase())) return true;
+  }
+  return messages.some(explicitStreamCompatibilityMessage);
+}
+function shouldFallbackNativeProfileStream(error, signal, timing) {
+  if (signal?.aborted || timing?.firstByteAt) return false;
+  return streamCompatibilityFailure(error);
+}
+function markInvocationRequestStart(timing, streaming) {
+  if (!timing) return;
+  timing.requestStarted ||= timingNow();
+  timing.requestSentAt ||= nowIso();
+  timing.streaming = Boolean(streaming);
+  timing.firstByteMode = streaming ? "stream-data" : "complete-response";
+  setInvocationPhase(timing, "request-first-byte");
+}
+function markInvocationFirstByte(timing) {
+  if (!timing || timing.firstByteAt) return;
+  timing.firstByteAt = nowIso();
+  timing.firstByteMs = timingNow() - timing.requestStarted;
+  setInvocationPhase(timing, "model-generating");
+}
+function markInvocationResponseComplete(timing) {
+  if (!timing) return;
+  if (!timing.firstByteAt && !timing.streaming) markInvocationFirstByte(timing);
+  timing.responseCompletedAt = nowIso();
+  timing.requestMs = timingNow() - timing.requestStarted;
+  setInvocationPhase(timing, "response-complete");
+}
+async function consumeNativeProfileResponse(result, timing, requestedStream) {
+  if (typeof result !== "function") {
+    if (requestedStream) {
+      throw new NativeProfileStreamCompatibilityError(
+        "MA_STREAM_FACTORY_MISSING",
+        "Connection Profile stream did not return a generator factory"
+      );
+    }
+    markInvocationFirstByte(timing);
+    return generationText(result);
+  }
+  const stream = result();
+  if (!stream) {
+    throw new NativeProfileStreamCompatibilityError(
+      "MA_STREAM_GENERATOR_MISSING",
+      "Connection Profile stream did not return an AsyncGenerator"
+    );
+  }
+  if (typeof stream[Symbol.asyncIterator] !== "function") {
+    throw new NativeProfileStreamCompatibilityError(
+      "MA_STREAM_ASYNC_ITERATOR_MISSING",
+      "Connection Profile stream did not return an AsyncGenerator"
+    );
+  }
+  let text = "";
+  for await (const chunk of stream) {
+    markInvocationFirstByte(timing);
+    if (typeof chunk === "string") text += chunk;
+    else {
+      const current = generationText(chunk);
+      if (current) text = current;
+    }
+  }
+  return text.trim();
+}
 function cleanProfileName(value) {
   return safeText(value, 160).replace(/["|\r\n]/g, "").trim();
 }
@@ -1743,17 +2143,34 @@ function assertInvocationScope(chatKey, revision, signal) {
     throw new StaleTaskError("\u9152\u9986\u751F\u6210\u8BF7\u6C42\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
   }
 }
-async function generateCurrent(options, signal) {
+async function generateCurrent(options, signal, timing, priority) {
   const context = getContext();
   if (typeof context.generateRaw !== "function") {
     throw new NativeGenerationError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9B generateRaw", "configuration");
   }
   try {
-    const result = await withInternalGeneration(() => Promise.resolve(context.generateRaw({
-      systemPrompt: options.systemPrompt,
-      prompt: options.prompt,
-      signal
-    })));
+    const result = await withNativeProfileTransport(
+      "native-current",
+      async () => {
+        let completed = false;
+        markInvocationRequestStart(timing, false);
+        try {
+          const value = await withInternalGeneration(() => Promise.resolve(context.generateRaw({
+            systemPrompt: options.systemPrompt,
+            prompt: options.prompt,
+            signal
+          })));
+          markInvocationFirstByte(timing);
+          completed = true;
+          return value;
+        } finally {
+          if (completed && timing?.requestStarted) markInvocationResponseComplete(timing);
+          else if (timing?.requestStarted) timing.requestMs = timingNow() - timing.requestStarted;
+        }
+      },
+      signal,
+      { taskType: options.task, priority, chatKey: timing?.chatKey, timing }
+    );
     const text = generationText(result);
     if (!text) throw new NativeGenerationError(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
     if (looksLikeHtmlDocument(text)) {
@@ -1765,7 +2182,7 @@ async function generateCurrent(options, signal) {
     throw normalizeNativeGenerationError(error, options.task, { mode: "current" });
   }
 }
-async function generateWithNativeProfile(options, profileId, signal, profileSnapshot = {}) {
+async function generateWithNativeProfile(options, profileId, signal, profileSnapshot = {}, timing, priority) {
   const context = getContext();
   const service = context.ConnectionManagerRequestService;
   const liveProfile = rawConnectionProfile(profileId);
@@ -1793,22 +2210,46 @@ async function generateWithNativeProfile(options, profileId, signal, profileSnap
   try {
     const result = await withNativeProfileTransport(
       profileId,
-      () => withInternalGeneration(() => Promise.resolve(service.sendRequest(
-        profileId,
-        messagesFromOptions(options),
-        void 0,
-        {
-          stream: false,
-          extractData: true,
-          includePreset: false,
-          includeInstruct: false,
-          signal
-        },
-        { stream: false }
-      ))),
-      signal
+      async () => {
+        let completed = false;
+        const send = async (stream) => {
+          markInvocationRequestStart(timing, stream);
+          const response = await withInternalGeneration(() => Promise.resolve(service.sendRequest(
+            profileId,
+            messagesFromOptions(options),
+            void 0,
+            {
+              stream,
+              extractData: true,
+              includePreset: false,
+              includeInstruct: false,
+              signal
+            },
+            { stream }
+          )));
+          return consumeNativeProfileResponse(response, timing, stream);
+        };
+        try {
+          const text = await send(true);
+          completed = true;
+          return text;
+        } catch (error) {
+          if (!shouldFallbackNativeProfileStream(error, signal, timing)) throw error;
+          timing.streamFallback = true;
+          timing.streaming = false;
+          setInvocationPhase(timing, "stream-fallback");
+          const text = await send(false);
+          completed = true;
+          return text;
+        } finally {
+          if (completed && timing?.requestStarted) markInvocationResponseComplete(timing);
+          else if (timing?.requestStarted) timing.requestMs = timingNow() - timing.requestStarted;
+        }
+      },
+      signal,
+      { taskType: options.task, priority, chatKey: timing?.chatKey, timing }
     );
-    const text = generationText(result);
+    const text = typeof result === "string" ? result.trim() : generationText(result);
     if (!text) throw new NativeGenerationError(`${options.task} Connection Profile返回为空`, "empty_response");
     if (looksLikeHtmlDocument(text)) {
       throw new NativeGenerationError(`${options.task} Connection Profile返回了HTML错误页`, "upstream", void 0, protocolPreview(text));
@@ -1910,15 +2351,21 @@ function createInvocationSpec(options) {
 }
 async function generateTask(options) {
   const spec = createInvocationSpec(options);
-  assertInvocationScope(spec.chatKey, spec.scopeRevision, options.signal);
+  const timing = createInvocationTiming(spec, options.signal);
   const controller = new AbortController();
   const forwardAbort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", forwardAbort, { once: true });
   if (options.signal?.aborted) controller.abort(options.signal.reason);
   try {
-    const result = spec.connection.mode === "profile" ? await generateWithNativeProfile(options, spec.connection.profileId, controller.signal, spec.connection) : await generateCurrent(options, controller.signal);
     assertInvocationScope(spec.chatKey, spec.scopeRevision, options.signal);
+    const result = spec.connection.mode === "profile" ? await generateWithNativeProfile(options, spec.connection.profileId, controller.signal, spec.connection, timing, spec.priority) : await generateCurrent(options, controller.signal, timing, spec.priority);
+    assertInvocationScope(spec.chatKey, spec.scopeRevision, options.signal);
+    setInvocationPhase(timing, "response-ready");
+    if (!timing.taskContext) finalizeInvocationTiming(timing);
     return result;
+  } catch (error) {
+    finalizeInvocationTiming(timing, error);
+    throw error;
   } finally {
     options.signal?.removeEventListener("abort", forwardAbort);
   }
@@ -2292,7 +2739,7 @@ async function auditText(playerRules, playerText, assistantText, signal, invocat
     connectionSnapshot
   });
   try {
-    return parseAuditResult(raw);
+    return measureInvocationParse(signal, () => parseAuditResult(raw));
   } catch (error) {
     throw new Error(`\u89C4\u5219\u6267\u884C\u672A\u8FD4\u56DE\u6709\u6548\u534F\u8BAE\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(error)}\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
   }
@@ -2571,7 +3018,7 @@ async function runRevisionFlow(artifact, signal, invocationSnapshot) {
     markStage(artifact, "revision", "running");
     await putArtifact(artifact);
     try {
-      const candidate = cleanRevisionText(firstAudit.replacementText);
+      const candidate = measureInvocationParse(signal, () => cleanRevisionText(firstAudit.replacementText));
       if (!candidate) throw new Error("\u89C4\u5219\u6267\u884C\u6A21\u578B\u8FD4\u56DE\u7A7A\u4FEE\u6B63\u7248");
       if (hashText(candidate) === hashText(artifact.assistantText)) throw new Error("\u89C4\u5219\u6267\u884C\u6A21\u578B\u8FD4\u56DE\u7684\u4FEE\u6B63\u7248\u4E0E\u539F\u6587\u76F8\u540C");
       artifact.revision.attempts.push({
@@ -2581,7 +3028,7 @@ async function runRevisionFlow(artifact, signal, invocationSnapshot) {
         audit: firstAudit,
         createdAt: nowIso()
       });
-      await replaceMessageInPlace(artifact, candidate);
+      await measureInvocationAsync(signal, "metadataMs", "chat-save", () => replaceMessageInPlace(artifact, candidate));
       const passedAudit = {
         passed: true,
         decision: "pass",
@@ -2634,7 +3081,7 @@ async function runRevisionFlow(artifact, signal, invocationSnapshot) {
         signal,
         connectionSnapshot: revisionConnectionSnapshot
       });
-      const candidate = cleanRevisionText(raw);
+      const candidate = measureInvocationParse(signal, () => cleanRevisionText(raw));
       if (!candidate) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u8FD4\u56DE\u7A7A\u6B63\u6587");
       if (hashText(candidate) === hashText(sourceText)) throw new Error("\u4FEE\u6B63\u6587\u6A21\u578B\u672A\u6539\u53D8\u6B63\u6587");
       const candidateAudit = await auditText(
@@ -2653,7 +3100,7 @@ async function runRevisionFlow(artifact, signal, invocationSnapshot) {
       });
       if (candidateAudit.passed) {
         artifact.audit = candidateAudit;
-        await replaceMessageInPlace(artifact, candidate);
+        await measureInvocationAsync(signal, "metadataMs", "chat-save", () => replaceMessageInPlace(artifact, candidate));
         markAdmissionApproved(artifact, "revision", "定向修正并复审通过");
         artifact.revision.status = "success";
         artifact.revision.finalFingerprint = artifact.sourceFingerprint;
@@ -5012,7 +5459,8 @@ var LorebookPublishScheduler = class {
     }
     const pending = {
       artifact,
-      forceRefresh: Boolean(options.forceRefresh || previous?.forceRefresh)
+      forceRefresh: Boolean(options.forceRefresh || previous?.forceRefresh),
+      queuedAt: previous?.queuedAt ?? Date.now()
     };
     this.pending.set(chatKey, pending);
     markStage(artifact, "sync", "queued", "\u7B49\u5F85\u53D1\u5E03\u6700\u65B0\u4E16\u754C\u4E66\u7248\u672C");
@@ -5060,7 +5508,8 @@ var LorebookPublishScheduler = class {
           priority: "background-io",
           blocking: false,
           sourceRange: { startIndex: artifact.messageIndex, endIndex: artifact.messageIndex },
-          progressLabel: "\u5199\u5165\u3001\u56DE\u8BFB\u4E0E\u5237\u65B0"
+          progressLabel: "\u5199\u5165\u3001\u56DE\u8BFB\u4E0E\u5237\u65B0",
+          enqueuedAtMs: pending.queuedAt
         }
       );
     } finally {
@@ -7068,7 +7517,7 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
       afterChatState.smallSummaries.push(deepClone(summary));
     }
     afterChatState.eventEntries = rebuildEventEntries(afterChatState.smallSummaries, afterChatState.largeSummaries);
-    await commitSummaryMutation({
+    await measureInvocationAsync(signal, "persistMs", "local-storage", () => commitSummaryMutation({
       operation: "small_summary",
       intentKey,
       artifact,
@@ -7077,7 +7526,7 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
       beforeChatState,
       afterChatState,
       signal
-    });
+    }));
     return summary;
   }, signal);
 }
@@ -7086,6 +7535,9 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
   return summaryCoordinator().withLease(`summary:${artifact.chatKey}`, async (lease) => {
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
+    if (unifiedFactScheduler?.pendingCount(artifact.chatKey)) {
+      return { deferred: true, reason: "新的事实提取正在排队，大总结已安全延后" };
+    }
     const settings = getSettings();
     const chatState = await getChatState(artifact.chatKey);
     assertHistoryRebuildAccess(chatState);
@@ -7136,7 +7588,7 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
       afterChatState.largeSummaries.push(deepClone(summary));
     }
     afterChatState.eventEntries = rebuildEventEntries(afterChatState.smallSummaries, afterChatState.largeSummaries);
-    await commitSummaryMutation({
+    await measureInvocationAsync(signal, "persistMs", "local-storage", () => commitSummaryMutation({
       operation: "large_summary",
       intentKey,
       artifact,
@@ -7145,7 +7597,7 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
       beforeChatState,
       afterChatState,
       signal
-    });
+    }));
     return summary;
   }, signal);
 }
@@ -7156,9 +7608,15 @@ async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = fals
   const factIndex = successfulFactPackageIndex();
   try {
     if (settings.autoSmallSummary || forceSmall) await generateSmallSummary(artifact, forceSmall, signal, factIndex);
-    if (settings.autoLargeSummary || forceLarge) await generateLargeSummary(artifact, forceLarge, signal, factIndex);
+    const largeResult = settings.autoLargeSummary || forceLarge ? await generateLargeSummary(artifact, forceLarge, signal, factIndex) : null;
+    if (largeResult?.deferred) {
+      markStage(artifact, "summary", "queued", largeResult.reason);
+      if (!deferArtifactPersist) await putArtifact(artifact);
+      return largeResult;
+    }
     markStage(artifact, "summary", "success");
     if (!deferArtifactPersist) await putArtifact(artifact);
+    return largeResult;
   } catch (error) {
     markStage(artifact, "summary", "failed", toErrorMessage(error));
     if (!deferArtifactPersist) await putArtifact(artifact);
@@ -7689,7 +8147,7 @@ async function generateParsedDerivedTask(options, parser, signal, label, maxProt
 【协议重试】上一次输出无法解析。只输出系统指定的标签块，不要解释、Markdown 或思考标签。` : "";
     const raw = await generateDerivedTaskWithRetry({ ...options, prompt: `${options.prompt}${retryNotice}` }, signal, 2);
     try {
-      return parser(raw);
+      return measureInvocationParse(signal, () => parser(raw));
     } catch (error) {
       lastError = error;
       const kind = factExtractionFailureKind(error);
@@ -7777,7 +8235,7 @@ async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, option
         });
         let parsed;
         try {
-          parsed = parseUnifiedFactsText(raw);
+          parsed = measureInvocationParse(signal, () => parseUnifiedFactsText(raw));
         } catch (error) {
           if (error instanceof PlainProtocolError) {
             throw new Error(`统一事实提取未返回有效纯文本协议：${error.message}${error.preview ? `；返回片段：${error.preview}` : ""}`);
@@ -7869,8 +8327,10 @@ async function dispatchUnifiedFactPackage(input) {
   state2.lastFactPackageId = factPackage.packageId;
   state2.factSchemaVersion = factPackage.schemaVersion;
   state2.updatedAt = factPackage.createdAt;
-  await putChatState(state2);
-  for (const artifact of artifacts) await attachAndStore(artifact);
+  await measureInvocationAsync(signal, "persistMs", "local-storage", async () => {
+    await putChatState(state2);
+    for (const artifact of artifacts) await attachAndStore(artifact);
+  });
   if (input.deferDerived) {
     if (!(input.rebuildStageSummary && factPackage.stageSummary)) {
       markStage(latest, "summary", "queued", "\u540E\u53F0\u79EF\u538B\u4E2D\uFF0C\u9636\u6BB5\u603B\u7ED3\u5EF6\u8FDF\u5230\u6700\u65B0\u72B6\u6001");
@@ -7891,9 +8351,9 @@ async function dispatchUnifiedFactPackage(input) {
       markStage(latest, "sync", "skipped");
     }
   }
-  await attachAndStore(latest);
-  await persistChat();
-  await confirmLocalCommitsAttachedForArtifact(latest);
+  await measureInvocationAsync(signal, "persistMs", "local-storage", () => attachAndStore(latest));
+  await measureInvocationAsync(signal, "metadataMs", "chat-save", () => persistChat());
+  await measureInvocationAsync(signal, "persistMs", "local-storage", () => confirmLocalCommitsAttachedForArtifact(latest));
   return latest;
 }
 async function replayUnifiedFactPackages(input) {
@@ -7979,6 +8439,7 @@ var UnifiedFactScheduler = class {
   pending = /* @__PURE__ */ new Map();
   running = /* @__PURE__ */ new Set();
   deferredLatest = /* @__PURE__ */ new Map();
+  deferredQueuedAt = /* @__PURE__ */ new Map();
   enqueue(artifact, options = {}) {
     return this.enqueueBatch([artifact], options);
   }
@@ -8057,9 +8518,7 @@ var UnifiedFactScheduler = class {
               }
               throw error;
             }
-            const backlogContinues = this.pending.has(chatKey);
-            const isLastChunk = index === workChunks.length - 1;
-            const deferDerived = !isLastChunk || batch.holdDerived || artifacts.length >= 5 || backlogContinues;
+            const deferDerived = true;
             latestResult = await dispatchUnifiedFactPackage({
               artifacts: chunk,
               factPackage,
@@ -8079,7 +8538,8 @@ var UnifiedFactScheduler = class {
           blocking: false,
           sourceRange: { startIndex: artifacts[0].messageIndex, endIndex: artifacts.at(-1).messageIndex },
           progressTotal: artifacts.length,
-          progressLabel: chunks.length > 1 ? `分 ${chunks.length} 批更新活跃表格` : artifacts.length > 1 ? `合并 ${artifacts.length} 轮更新表格` : "提取事实并更新表格"
+          progressLabel: chunks.length > 1 ? `分 ${chunks.length} 批更新活跃表格` : artifacts.length > 1 ? `合并 ${artifacts.length} 轮更新表格` : "提取事实并更新表格",
+          enqueuedAtMs: batch.queuedAt
         }
       );
       for (const waiter of batch.waiters) waiter.resolve(result);
@@ -8102,19 +8562,28 @@ var UnifiedFactScheduler = class {
       markStage(previous, "sync", "skipped", "\u5DF2\u7531\u66F4\u65B0\u7684\u4E16\u754C\u4E66\u7248\u672C\u53D6\u4EE3");
       await attachAndStore(previous).catch(() => putArtifact(previous));
     }
-    if (keepLatestDeferred) this.deferredLatest.set(chatKey, deepClone(latest));
-    else this.deferredLatest.delete(chatKey);
+    if (keepLatestDeferred) {
+      this.deferredLatest.set(chatKey, deepClone(latest));
+      this.deferredQueuedAt.set(chatKey, Date.now());
+    } else {
+      this.deferredLatest.delete(chatKey);
+      this.deferredQueuedAt.delete(chatKey);
+    }
   }
   async flushDerived(chatKey, deferLorebookSync = false) {
     await this.flushDeferredDerived(chatKey, deferLorebookSync);
   }
   clearDeferred(chatKey) {
     this.deferredLatest.delete(chatKey);
+    this.deferredQueuedAt.delete(chatKey);
   }
   async flushDeferredDerived(chatKey, deferLorebookSync) {
     const artifact = this.deferredLatest.get(chatKey);
     if (!artifact) return;
+    const enqueuedAtMs = this.deferredQueuedAt.get(chatKey) ?? Date.now();
     this.deferredLatest.delete(chatKey);
+    this.deferredQueuedAt.delete(chatKey);
+    let deferredAgain = false;
     try {
       const { taskQueue: taskQueue2 } = await Promise.resolve().then(() => (init_task_queue(), task_queue_exports));
       await taskQueue2.run(
@@ -8124,7 +8593,8 @@ var UnifiedFactScheduler = class {
         async (signal) => {
           if (chatKey !== currentChatKey()) throw new StaleTaskError("\u6D3E\u751F\u4EFB\u52A1\u6240\u5C5E\u804A\u5929\u5DF2\u6539\u53D8");
           try {
-            await maybeRunSummaries(artifact, false, false, signal, true);
+            const summaryResult = await maybeRunSummaries(artifact, false, false, signal, true);
+            deferredAgain = Boolean(summaryResult?.deferred);
           } catch (error) {
             markStage(artifact, "summary", "failed", toErrorMessage(error));
           }
@@ -8135,20 +8605,36 @@ var UnifiedFactScheduler = class {
           } else {
             markStage(artifact, "sync", "skipped");
           }
-          await attachAndStore(artifact);
-          await persistChat();
+          await measureInvocationAsync(signal, "persistMs", "local-storage", () => attachAndStore(artifact));
+          await measureInvocationAsync(signal, "metadataMs", "chat-save", () => persistChat());
         },
         {
           laneKey: `background-derived:${chatKey}`,
           priority: "background-derived",
           blocking: false,
           sourceRange: { startIndex: artifact.messageIndex, endIndex: artifact.messageIndex },
-          progressLabel: "生成分层总结并安排发布"
+          progressLabel: "生成分层总结并安排发布",
+          enqueuedAtMs
         }
       );
     } catch (error) {
       if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
       console.error("[MirrorAbyss] deferred derived dispatch failed", error);
+    } finally {
+      if (deferredAgain) {
+        const current = this.deferredLatest.get(chatKey);
+        if (!current || current.messageIndex < artifact.messageIndex) {
+          this.deferredLatest.set(chatKey, deepClone(artifact));
+          this.deferredQueuedAt.set(chatKey, enqueuedAtMs);
+        }
+      }
+      if (this.deferredLatest.has(chatKey) && !this.pending.has(chatKey) && !this.running.has(chatKey)) {
+        void Promise.resolve().then(() => {
+          if (this.deferredLatest.has(chatKey) && !this.pending.has(chatKey) && !this.running.has(chatKey)) {
+            void this.flushDeferredDerived(chatKey, deferLorebookSync);
+          }
+        });
+      }
     }
   }
   cancelChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
@@ -8162,6 +8648,7 @@ var UnifiedFactScheduler = class {
       count += batch.waiters.length;
     }
     this.deferredLatest.delete(chatKey);
+    this.deferredQueuedAt.delete(chatKey);
     return count;
   }
   cancelAllExceptChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362") {
@@ -8169,18 +8656,23 @@ var UnifiedFactScheduler = class {
     for (const key of [...this.pending.keys()]) {
       if (key !== chatKey) count += this.cancelChat(key, reason);
     }
-    for (const key of [...this.deferredLatest.keys()]) if (key !== chatKey) this.deferredLatest.delete(key);
+    for (const key of [...this.deferredLatest.keys()]) {
+      if (key === chatKey) continue;
+      this.deferredLatest.delete(key);
+      this.deferredQueuedAt.delete(key);
+    }
     return count;
   }
   cancelAll(reason = "\u7EDF\u4E00\u4E8B\u5B9E\u8C03\u5EA6\u5668\u5DF2\u505C\u6B62") {
     let count = 0;
     for (const key of [...this.pending.keys()]) count += this.cancelChat(key, reason);
     this.deferredLatest.clear();
+    this.deferredQueuedAt.clear();
     return count;
   }
   pendingCount(chatKey) {
-    if (chatKey) return (this.pending.get(chatKey)?.artifacts.size ?? 0) + Number(this.deferredLatest.has(chatKey));
-    return [...this.pending.values()].reduce((sum, batch) => sum + batch.artifacts.size, 0) + this.deferredLatest.size;
+    if (chatKey) return (this.pending.get(chatKey)?.artifacts.size ?? 0) + Number(this.deferredLatest.has(chatKey)) + Number(this.running.has(chatKey));
+    return [...this.pending.values()].reduce((sum, batch) => sum + batch.artifacts.size, 0) + this.deferredLatest.size + this.running.size;
   }
 };
 var unifiedFactScheduler = new UnifiedFactScheduler();
@@ -8291,7 +8783,7 @@ async function processMessage(index, force = false, options = {}) {
         signal,
         auditConnectionSnapshot ? { settings, connectionSnapshot: auditConnectionSnapshot } : void 0
       );
-      await stageArtifact(index, artifact);
+      await measureInvocationAsync(signal, "persistMs", "local-storage", () => stageArtifact(index, artifact));
       if (!audit.passed && settings.auditFailAction === "revise") {
         assertArtifactScope(artifact, signal);
         const revised = await runRevisionFlow(
@@ -8301,26 +8793,26 @@ async function processMessage(index, force = false, options = {}) {
         );
         audit = revised.audit;
         shouldPersistForeground = true;
-        await stageArtifact(index, artifact);
+        await measureInvocationAsync(signal, "persistMs", "local-storage", () => stageArtifact(index, artifact));
       }
       if (!audit.passed) {
         const failureAction = settings.auditFailAction === "revise" ? settings.revisionFallbackAction : settings.auditFailAction;
         assertArtifactScope(artifact, signal);
-        await applyAuditFailureAction(artifact, failureAction);
+        await measureInvocationAsync(signal, "metadataMs", "chat-save", () => applyAuditFailureAction(artifact, failureAction));
         releaseQuarantine(artifact);
         markAdmissionBlocked(artifact, audit.reason || "规则审核未通过");
         markStage(artifact, "state", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
         markStage(artifact, "sync", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
-        await stageArtifact(index, artifact);
-        await commitArtifact(index, artifact);
+        await measureInvocationAsync(signal, "persistMs", "local-storage", () => stageArtifact(index, artifact));
+        await measureInvocationAsync(signal, "metadataMs", "chat-save", () => commitArtifact(index, artifact));
         return { artifact, approved: false };
       }
       releaseQuarantine(artifact);
       if (settings.autoState || force) markStage(artifact, "state", "queued");
       else markStage(artifact, "state", "skipped");
-      await stageArtifact(index, artifact);
-      if (shouldPersistForeground) await commitArtifact(index, artifact);
+      await measureInvocationAsync(signal, "persistMs", "local-storage", () => stageArtifact(index, artifact));
+      if (shouldPersistForeground) await measureInvocationAsync(signal, "metadataMs", "chat-save", () => commitArtifact(index, artifact));
       return { artifact, approved: true };
     } catch (error) {
       if (signal.aborted || error instanceof StaleTaskError || error instanceof TaskCancelledError || artifact.chatKey !== currentChatKey()) {
@@ -8330,8 +8822,8 @@ async function processMessage(index, force = false, options = {}) {
       console.error("[MirrorAbyss] foreground pipeline failed", error);
       releaseQuarantine(artifact);
       toast("error", `\u5BA1\u6838\u6216\u4FEE\u6B63\u5931\u8D25\uFF1A${messageText}`);
-      await stageArtifact(index, artifact);
-      await commitArtifact(index, artifact);
+      await measureInvocationAsync(signal, "persistMs", "local-storage", () => stageArtifact(index, artifact));
+      await measureInvocationAsync(signal, "metadataMs", "chat-save", () => commitArtifact(index, artifact));
       throw new PipelineStageError(artifact, error);
     }
   }, {
@@ -8416,19 +8908,19 @@ async function replayHistoryBatch(indexes, factPackages, options) {
     deferLorebookSync: options.deferLorebookSync
   });
 }
-async function finalizeHistoryDerived(artifact) {
+async function finalizeHistoryDerived(artifact, signal) {
   unifiedFactScheduler.clearDeferred(artifact.chatKey);
   markStage(artifact, "summary", "running", "历史事实已投影到表格，正在按阈值生成事件总结");
   await stageArtifact(artifact.messageIndex, artifact);
   let generatedSmall = 0;
   for (let guard = 0; guard < 200; guard += 1) {
-    const summary = await generateSmallSummary(artifact, true);
+    const summary = await generateSmallSummary(artifact, true, signal);
     if (!summary) break;
     generatedSmall += 1;
   }
   markStage(artifact, "summary", "running", `已生成 ${generatedSmall} 份事件总结，正在更新长期大总结`);
   await stageArtifact(artifact.messageIndex, artifact);
-  await generateLargeSummary(artifact, true);
+  await generateLargeSummary(artifact, true, signal);
   markStage(artifact, "summary", "success", `历史重建完成：${generatedSmall} 份事件总结已汇入长期大总结`);
   await commitArtifact(artifact.messageIndex, artifact);
 }
@@ -8563,7 +9055,7 @@ function launchHistoryRebuild(startIndex, reason) {
       reason,
       processBatch: processHistoryBatch,
       replayBatch: replayHistoryBatch,
-      finalizeDerived: finalizeHistoryDerived,
+      finalizeDerived: (artifact) => finalizeHistoryDerived(artifact, signal),
       syncLatest: async (artifact) => syncLorebook(artifact, signal, { forceRefresh: true }),
       signal,
       onProgress: (progress) => taskQueue.updateByKey(taskKey, {
@@ -9260,6 +9752,13 @@ async function runDiagnostics() {
     status: routeFailure ? "error" : routePartial ? "warn" : "ok",
     detail: routeFailure?.summary || routePartial?.summary || (routeResults.length ? "已执行连接对照诊断，未发现 Profile 路由异常" : "尚未执行对照诊断；可在模型设置中分别比较当前连接与指定 Profile")
   });
+  const transport = nativeProfileTransportStatus();
+  checks.push({
+    id: "modelScheduler",
+    label: "模型请求调度",
+    status: transport.waiting > 8 ? "warn" : "ok",
+    detail: `优先级队列；每 Profile 最多 ${transport.maxConcurrencyPerProfile} 个请求；派生总结最多 ${transport.maxDerivedConcurrencyPerProfile} 个槽；当前运行 ${transport.active}，等待 ${transport.waiting}`
+  });
   return checks;
 }
 async function diagnosticReport() {
@@ -9274,6 +9773,7 @@ async function diagnosticReport() {
     kernel: foundationKernel.status(),
     scope: context ? chatScopeManager.current() : null,
     nativeInvocation: { current: typeof context?.generateRaw === "function", profiles: typeof context?.ConnectionManagerRequestService?.sendRequest === "function", profileTransport: nativeProfileTransportStatus(), routeDiagnostics: deepClone(lastConnectionDiagnostics) },
+    modelInvocations: context ? invocationTelemetryForChat(chatKey) : [],
     crossTabCoordinator: foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR)?.snapshot() ?? null,
     checks: await runDiagnostics(),
     ui: { messagePanels: messagePanelUiHealth(), workspace: workspaceUiHealth() },
@@ -9494,6 +9994,41 @@ function taskDurationText(task) {
   const rest = seconds % 60;
   return `${minutes} \u5206 ${rest} \u79D2`;
 }
+function timingDurationText(value) {
+  const milliseconds = timingRound(value);
+  if (milliseconds < 1e3) return `${milliseconds}ms`;
+  return `${Math.round(milliseconds / 100) / 10}s`;
+}
+function taskPhaseText(phase) {
+  const labels = {
+    "task-queue": "等待 TaskQueue",
+    "task-running": "准备模型调用",
+    "transport-queue": "等待同 Profile 请求槽",
+    "request-ready": "已取得 Profile 请求槽",
+    "request-first-byte": "等待 API 首数据",
+    "model-generating": "模型生成中",
+    "stream-fallback": "流式不兼容，单次降级",
+    "response-complete": "响应接收完成",
+    "response-ready": "等待解析",
+    parsing: "解析响应",
+    parsed: "解析完成",
+    "local-storage": "提交本地存储",
+    "local-storage-complete": "本地存储已提交",
+    "chat-save": "保存聊天/元数据",
+    "chat-save-complete": "聊天/元数据已保存",
+    complete: "已完成",
+    queued: "等待队列",
+    running: "运行中",
+    cancelled: "已取消",
+    stale: "作用域已失效",
+    failed: "失败"
+  };
+  return labels[phase] || phase || "等待处理";
+}
+function invocationTimingHtml(timing) {
+  const profile = timing.profileId ? `Profile ${timing.profileId.slice(-8)}` : "当前连接";
+  return `<div class="ma11-task-timing"><b>${escapeHtml(timing.taskType)} · ${escapeHtml(taskPhaseText(timing.phase))}</b><span>${escapeHtml(profile)}</span><small>队列 ${timingDurationText(timing.queueWaitMs)} · Profile ${timingDurationText(timing.transportWaitMs)} · 首数据 ${timingDurationText(timing.firstByteMs)} · 响应 ${timingDurationText(timing.requestMs)} · 解析 ${timingDurationText(timing.parseMs)} · 存储 ${timingDurationText(timing.persistMs)} · 保存 ${timingDurationText(timing.metadataMs)} · 总计 ${timingDurationText(timing.totalMs)}</small></div>`;
+}
 function taskRangeText(task) {
   if (task.sourceStartIndex === void 0) return "";
   const end = task.sourceEndIndex ?? task.sourceStartIndex;
@@ -9516,6 +10051,9 @@ function taskCardHtml(task) {
   const retryIndex = Number.isInteger(task.sourceStartIndex) ? task.sourceStartIndex : void 0;
   const retryAction = retryStageName && retryIndex !== void 0 ? `<button type="button" data-ma11-action="retry-task-stage" data-ma11-retry-stage="${retryStageName}" data-ma11-retry-index="${retryIndex}">重试此任务</button>` : "";
   const actions = active ? isHistory ? `<button type="button" data-ma11-action="pause-history-rebuild">暂停</button><button type="button" class="danger" data-ma11-action="cancel-history-rebuild">取消</button>` : `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">取消</button>` : task.state === "failed" && isHistory ? `<button type="button" data-ma11-action="retry-history-rebuild">从失败批次继续</button>` : retryAction;
+  const queueWaitMs = task.startedAt ? task.queueWaitMs ?? 0 : Math.max(0, Date.now() - Date.parse(task.createdAt));
+  const modelTimings = Array.isArray(task.modelTimings) ? task.modelTimings : [];
+  const timingHtml = modelTimings.length ? modelTimings.slice(-4).map(invocationTimingHtml).join("") : task.kind === "sync" ? `<div class="ma11-task-timing"><b>世界书发布 · ${escapeHtml(taskPhaseText(task.currentPhase))}</b><small>发布等待 ${timingDurationText(task.lorebookWaitMs || queueWaitMs)} · 总计 ${timingDurationText(task.totalMs || 0)}</small></div>` : `<div class="ma11-task-timing"><b>${escapeHtml(taskPhaseText(task.currentPhase))}</b><small>TaskQueue 等待 ${timingDurationText(queueWaitMs)}</small></div>`;
   return `<article class="ma11-task-card ${queueStateClass(task.state)}">
     <header><div class="ma11-task-heading"><span class="ma11-task-state-icon"><i class="fa-solid ${queueStateIcon(task.state)}"></i></span><div><b>${escapeHtml(task.label)}</b><span class="ma11-task-substate">${queueStateText(task.state)}</span></div></div><time>${escapeHtml(new Date(task.updatedAt).toLocaleString())}</time></header>
     <div class="ma11-task-meta">
@@ -9525,6 +10063,7 @@ function taskCardHtml(task) {
       ${task.retries ? `<span>\u91CD\u8BD5 ${task.retries} \u6B21</span>` : ""}
       ${task.startedAt ? `<span>\u8017\u65F6\uFF1A${escapeHtml(taskDurationText(task))}</span>` : ""}
     </div>
+    ${timingHtml}
     ${task.progressLabel ? `<p class="ma11-task-progress-label"><i class="fa-solid fa-wave-square"></i>${escapeHtml(task.progressLabel)}</p>` : ""}
     ${progress !== void 0 ? `<div class="ma11-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div><small>${task.progressCurrent ?? 0}/${task.progressTotal} \xB7 ${progress}%</small>` : ""}
     ${task.error ? `<div class="ma11-error-box"><b>\u5931\u8D25\u539F\u56E0</b><p>${escapeHtml(task.error)}</p></div>` : ""}

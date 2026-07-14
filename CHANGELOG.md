@@ -1,3 +1,22 @@
+# 1.1.0-alpha.10.7.11 — Strict stream fallback whitelist
+
+- 将流式兼容性识别由宽泛关键词改为错误类型、明确错误代码和受限文本白名单，`upstream` 不再因包含 `stream` 子串而误判。
+- Connection Profile 未返回生成器工厂、工厂未返回 AsyncGenerator、对象缺少 `Symbol.asyncIterator`，或明确表示流式接口不支持/未实现/缺失时，最多降级一次。
+- HTTP、上游连接、网络、API、模型、HTML、JSON/SSE 解析、取消、stale 以及收到首段数据后的错误不降级。
+- 新增回归测试，验证不会出现第二次误调用或降级失败后的第三次调用；保留累计 `text` 的最新值聚合。
+- 当前恢复包无法可靠重建与运行代码一致的 `index.js.map`，发布归档明确排除该旧映射。
+- 保持 `ma-pipeline-10.7.4`、优先级策略、每 Profile 两槽、派生任务一槽、同聊天串行及业务协议不变。
+
+# 1.1.0-alpha.10.7.10 — API wait latency and timing diagnostics
+
+- 每次模型调用记录 TaskQueue、请求槽、首数据、完整响应、解析、本地提交与聊天保存耗时；任务中心与诊断导出均可查看，且不保存提示词、响应或密钥。
+- Connection Profile 严格 FIFO 改为集中配置的优先级调度：每 Profile 最多 2 个请求，派生总结最多占 1 个槽，同一聊天仍保持单请求顺序。
+- `audit/revision`、`factExtraction/state`、`smallSummary`、`largeSummary` 依次降级；尚未发送的大总结允许关键事实任务越过。
+- 事实提取完成本地提交后立即释放关键任务 lane，小总结、大总结与世界书改由独立派生任务继续。
+- Profile 请求启用完整流式聚合，收到完整文本后才解析；兼容性失败仅允许一次非流式降级。
+- 不抢占正在生成的大总结；新事实会显示准确的 Profile 等待耗时，并在当前请求释放后优先执行。
+- 保持 `ma-pipeline-10.7.4`，不重新处理已成功正文。
+
 # 1.1.0-alpha.10.7.8
 
 - 历史重建默认改为手动：进入或切换聊天只做本地一致性检测，不调用模型 API。

@@ -1,8 +1,8 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-alpha.10.7.8",
-  "baseline": "1.1.0-alpha.10.7.7 adaptive extraction deploy",
-  "build_date": "2026-07-14",
+  "version": "1.1.0-alpha.10.7.11",
+  "baseline": "1.1.0-alpha.10.7.8 manual history rebuild deploy",
+  "build_date": "2026-07-15",
   "build_type": "recovered deploy-bundle development",
   "pipeline_contract": [
     "assistant_final_text",
@@ -25,7 +25,7 @@
     "trace"
   ],
   "graph_mode": "read_only",
-  "validation": "ES Module parse, startup/chat-entry no-API history detection, manual rebuild transition, auto-rebuild opt-in, deployment syntax/version and ZIP integrity checks passed",
+  "validation": "ES Module parse/import, priority transport release, strict stream-fallback regression, stream aggregation, deployment syntax/version and ZIP integrity checks",
   "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive.",
   "connection_error_handling": [
     "detect_html_before_fact_protocol_parsing",
@@ -35,6 +35,14 @@
     "avoid_retrying_non_transient_html_configuration_failures"
   ],
   "fixes": [
+    "restrict non-stream fallback to explicit Connection Profile stream contract and unsupported-interface failures",
+    "never retry ordinary upstream, HTTP, network, parse, cancellation or stale failures as non-stream requests",
+    "exclude the stale unreproducible source map from deployment archives",
+    "record model-call queue, transport, first-data, response, parse and persistence timing without prompt or response content",
+    "replace per-profile FIFO with a bounded priority scheduler",
+    "limit each profile to two requests and derived summaries to one slot while serializing calls from the same chat",
+    "move derived summaries out of the critical fact-extraction task tail",
+    "aggregate native Connection Profile streams before parsing with one compatibility fallback",
     "disable automatic history rebuild by default",
     "perform local consistency detection only when entering or switching chats",
     "record detected history changes non-destructively without calling the model API",

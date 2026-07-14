@@ -691,6 +691,9 @@ html.ma11-generation-locked #send_button {
 .ma11-task-card > header > div { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .ma11-task-card time { opacity: 0.58; font-size: 0.78rem; }
 .ma11-task-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; margin: 0.65rem 0; opacity: 0.72; font-size: 0.82rem; }
+.ma11-task-timing { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.2rem 0.6rem; margin: 0.45rem 0; padding: 0.55rem 0.65rem; border: 1px solid var(--ma11-border); border-radius: 8px; background: color-mix(in srgb, var(--ma11-panel) 72%, transparent); }
+.ma11-task-timing > span { color: var(--ma11-muted-text); font-size: 0.76rem; overflow-wrap: anywhere; }
+.ma11-task-timing > small { grid-column: 1 / -1; color: var(--ma11-muted-text); line-height: 1.5; overflow-wrap: anywhere; }
 .ma11-task-progress-label { margin: 0.35rem 0; }
 .ma11-progress { height: 0.5rem; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--ma11-border) 70%, transparent); }
 .ma11-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--ma11-accent); transition: width 160ms ease; }
@@ -784,6 +787,8 @@ html.ma11-generation-locked #send_button {
   .ma11-status-strip-main strong { grid-column: 2; }
   .ma11-rebuild-metrics { display: grid; grid-template-columns: 1fr 1fr; }
   .ma11-task-meta { display: grid; grid-template-columns: 1fr 1fr; }
+  .ma11-task-timing { grid-template-columns: 1fr; }
+  .ma11-task-timing > small { grid-column: 1; }
 }
 
 

@@ -1,3 +1,22 @@
+# 1.1.0-alpha.10.7.11 validation
+
+- `node --test tests/stream-fallback-regression.mjs`: 7/7 test blocks passed, covering all eight requested fallback cases plus structural generator codes and cumulative `text` aggregation.
+- `node --check index.js`, ES Module import smoke test and `git diff --check`: passed.
+- Manifest, runtime and `BUILD_INFO.json` agree on `1.1.0-alpha.10.7.11`; the only non-stream fallback send path occurs once.
+- The stale `index.js.map` does not contain the current stream classifier or wait telemetry and cannot be faithfully regenerated from this recovered deploy bundle; deployment archives exclude it.
+- `ma-pipeline-10.7.4`, Profile two-slot cap, one derived slot, same-chat serialization, priority scheduling, diagnostics and memory protocols remain unchanged.
+- SillyTavern mobile streaming/non-stream compatibility and provider billing behavior still require device verification.
+
+# 1.1.0-alpha.10.7.10 validation
+
+- `node --check index.js` and ES Module import smoke test passed.
+- Manifest, runtime and `BUILD_INFO.json` versions agree; pipeline remains `ma-pipeline-10.7.4`.
+- Dynamic transport test passed: foreground/critical priority, two-slot Profile cap, one derived slot, same-chat serialization, queued abort, failure release and final lane cleanup.
+- Dynamic stream test passed: cumulative stream aggregation, exactly one compatibility fallback before first data, and no retry after stream data arrives.
+- All `sendRequest`, `generateRaw`, `withNativeProfileTransport`, `laneKey` and summary dispatch call sites were reviewed.
+- Task Center and diagnostic export expose queue, transport, first-data, complete-response, parse, persistence, metadata-save and lorebook-wait timing without prompts, responses or credentials.
+- Real provider concurrency, mobile background behavior, SSE proxy compatibility and observed latency improvement still require SillyTavern device validation.
+
 # 1.1.0-alpha.10.7.8 validation
 
 - ES Module syntax and import smoke test.
