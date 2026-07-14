@@ -1,7 +1,7 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-alpha.10.7.7",
-  "baseline": "1.1.0-alpha.10.7.6 model routing deploy",
+  "version": "1.1.0-alpha.10.7.8",
+  "baseline": "1.1.0-alpha.10.7.7 adaptive extraction deploy",
   "build_date": "2026-07-14",
   "build_type": "recovered deploy-bundle development",
   "pipeline_contract": [
@@ -25,7 +25,7 @@
     "trace"
   ],
   "graph_mode": "read_only",
-  "validation": "ES Module parse/import, adaptive fact retry/split classification, bounded prompt context, history batch sizing, deployment syntax/version and ZIP integrity checks passed",
+  "validation": "ES Module parse, startup/chat-entry no-API history detection, manual rebuild transition, auto-rebuild opt-in, deployment syntax/version and ZIP integrity checks passed",
   "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive.",
   "connection_error_handling": [
     "detect_html_before_fact_protocol_parsing",
@@ -35,14 +35,14 @@
     "avoid_retrying_non_transient_html_configuration_failures"
   ],
   "fixes": [
-    "reduce fact extraction character budget from 52000 to 18000",
-    "retry single-turn transient and protocol failures with exponential backoff",
-    "split failed multi-turn fact batches automatically instead of repeating the same oversized request",
-    "reduce history rebuild batches from 10-20 messages to 4-10 messages with a default of 6",
-    "cap previous active-table prompt context and prioritize focus, foundations, protected rows, active rows and current-turn mentions",
-    "bound stage fact, event registry, previous long-term record, summary and candidate prompt contexts",
-    "retry small and large summary transient failures and malformed plaintext tag protocols",
-    "keep non-gateway HTML errors non-retryable and preserve existing data on final failure",
-    "preserve model routing, admission, event memory and lorebook consistency behavior"
+    "disable automatic history rebuild by default",
+    "perform local consistency detection only when entering or switching chats",
+    "record detected history changes non-destructively without calling the model API",
+    "pause table, summary and lorebook derivation until the player starts manual rebuild",
+    "add an opt-in automatic history rebuild setting",
+    "change edit, delete and swipe handling to detect-and-prompt when automatic rebuild is disabled",
+    "keep existing memory intact until manual rebuild connection preflight succeeds",
+    "show a dedicated history-change pending status instead of a fake running progress bar",
+    "preserve adaptive extraction, model routing, admission, event memory and lorebook consistency behavior"
   ]
 }

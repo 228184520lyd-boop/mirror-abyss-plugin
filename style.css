@@ -758,6 +758,7 @@ html.ma11-generation-locked #send_button {
   background: linear-gradient(135deg, var(--ma11-panel-2), color-mix(in srgb, var(--ma11-warning) 7%, transparent));
 }
 .ma11-status-strip.danger { border-left-color: var(--ma11-danger); }
+.ma11-status-strip.warning { border-left-color: var(--ma11-warning, #c58a23); }
 .ma11-status-strip-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.7rem; align-items: center; }
 .ma11-status-strip-main > div { display: grid; gap: 0.18rem; }
 .ma11-status-strip-main span { color: var(--ma11-muted-text); font-size: 0.82rem; }

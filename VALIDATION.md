@@ -1,4 +1,4 @@
-# 1.1.0-alpha.10.7.7 validation
+# 1.1.0-alpha.10.7.8 validation
 
 - ES Module syntax and import smoke test.
 - No `/profile` command or assignment to Connection Manager selected profile.
@@ -175,3 +175,11 @@
 - Stage facts, event registry, previous long-term records, summaries and candidates each have bounded prompt budgets.
 - Small/large summaries retry transient failures and retry malformed tag protocols once.
 - Non-gateway HTML remains non-retryable.
+
+## 手动历史重建检查
+
+- 默认设置 `autoHistoryRebuild=false`。
+- 启动与聊天切换调用本地检测函数，不直接调用重建函数。
+- 检测记录状态为 `detected`、`nonDestructive=true`。
+- 手动按钮可从 `detected` 进入连接预检和正式重建。
+- 开启自动开关后，编辑、删除、Swipe 可恢复旧版自动重建行为。

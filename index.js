@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.7";
+    VERSION = "1.1.0-alpha.10.7.8";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -48,6 +48,7 @@ var init_constants = __esm({
     DEFAULT_SETTINGS = {
       enabled: true,
       autoState: true,
+      autoHistoryRebuild: false,
       showMessagePanel: true,
       showTopButton: true,
       auditEnabled: false,
@@ -1207,6 +1208,7 @@ function migrateLegacySettings(legacy) {
   return {
     enabled: legacy.enabled ?? true,
     autoState: legacy.autoState ?? true,
+    autoHistoryRebuild: legacy.autoHistoryRebuild ?? false,
     showMessagePanel: legacy.showMessagePanels ?? true,
     showTopButton: legacy.showTopButton ?? true,
     auditEnabled: legacy.ruleAuditEnabled ?? false,
@@ -6649,6 +6651,9 @@ async function runBatchWithRetry(work, onRetry) {
 function assertHistoryRebuildAccess(state2) {
   const rebuild = state2.historyRebuild;
   if (!rebuild) return;
+  if (rebuild.state === "detected") {
+    throw new TaskCancelledError("检测到历史正文变化：正文审核仍可继续；表格、总结与世界书同步已暂停，请在恢复与维护中手动开始历史重建");
+  }
   if (rebuild.state === "checking-connection" || rebuild.state === "waiting-connection") {
     throw new TaskCancelledError("历史依赖正在等待记忆模型连接恢复：正文审核仍可继续，表格、总结与世界书同步暂缓");
   }
@@ -8587,6 +8592,71 @@ function launchHistoryRebuild(startIndex, reason) {
   });
   return true;
 }
+function historyRebuildIsRunning(record) {
+  return Boolean(record && ["pending", "checking-connection", "waiting-connection", "rebuilding", "paused", "failed"].includes(record.state));
+}
+async function markHistoryRebuildDetected(startIndex, reason, options = {}) {
+  const chatKey = currentChatKey();
+  const state2 = await getChatState(chatKey);
+  const current = state2.historyRebuild;
+  if (historyRebuildIsRunning(current)) return false;
+  const maxIndex = Math.max(0, getChat().length - 1);
+  const normalizedStart = Math.max(0, Math.min(Number(startIndex) || 0, maxIndex));
+  const now = nowIso();
+  const created = !current || current.state !== "detected";
+  const earliestStart = options.replaceStart ? normalizedStart : current?.state === "detected" ? Math.min(current.startIndex ?? normalizedStart, normalizedStart) : normalizedStart;
+  const reasonParts = [...new Set([...(current?.state === "detected" ? String(current.reason || "").split(",") : []), String(reason || "history-change")].map((item) => item.trim()).filter(Boolean))].slice(-8);
+  const record = {
+    schemaVersion: 3,
+    id: current?.state === "detected" ? current.id : makeId("history-detected"),
+    chatKey,
+    startIndex: earliestStart,
+    nextIndex: earliestStart,
+    batchSize: DEFAULT_REBUILD_BATCH_SIZE,
+    totalMessages: assistantIndexesFrom(earliestStart).length,
+    processedMessages: 0,
+    completedBatches: 0,
+    totalBatches: 0,
+    phase: "detected",
+    reason: reasonParts.join(","),
+    state: "detected",
+    nonDestructive: true,
+    createdAt: current?.createdAt || now,
+    updatedAt: now
+  };
+  state2.historyRebuild = record;
+  state2.lastSyncStatus = "queued";
+  state2.lastSyncError = `检测到历史正文变化（从第 ${record.startIndex + 1} 条开始）。现有记忆暂时保留；请手动开始历史重建后再继续表格、总结和世界书同步。`;
+  await putChatState(state2);
+  await persistChat().catch(() => void 0);
+  if (created && options.notifyUser !== false) {
+    toast("warning", "检测到历史正文变化：已暂停后续记忆更新，未自动调用 API。可在“恢复与维护”中手动开始历史重建。");
+  }
+  queueMicrotask(() => {
+    renderAllMessagePanels();
+    refreshWorkspace();
+  });
+  return true;
+}
+async function detectHistoryConsistencyForCurrentChat(options = {}) {
+  const state2 = await getChatState(currentChatKey());
+  const current = state2.historyRebuild;
+  if (historyRebuildIsRunning(current)) return true;
+  const startIndex = await detectHistoryConsistencyStart();
+  if (startIndex === null) {
+    if (current?.state === "detected") {
+      delete state2.historyRebuild;
+      if (/检测到历史正文变化/.test(state2.lastSyncError || "")) state2.lastSyncError = void 0;
+      await putChatState(state2);
+      await persistChat().catch(() => void 0);
+    }
+    return false;
+  }
+  if (getSettings().autoHistoryRebuild) {
+    return launchHistoryRebuild(startIndex, current?.state === "detected" ? "recovery" : "branch");
+  }
+  return markHistoryRebuildDetected(startIndex, options.reason || "consistency-check", { ...options, replaceStart: true });
+}
 function scheduleHistoryRebuild(payload, reason, delay = 300, sourceEvent = "") {
   const startIndex = Math.max(0, resolveMessageIndex(payload));
   const scope = chatScopeManager.current();
@@ -8609,7 +8679,11 @@ function scheduleHistoryRebuild(payload, reason, delay = 300, sourceEvent = "") 
     const pending = pendingHistoryStarts.get(scope.chatKey);
     pendingHistoryStarts.delete(scope.chatKey);
     if (!pending || !chatScopeManager.isCurrent(scope)) return;
-    launchHistoryRebuild(pending.startIndex, pending.reason);
+    if (getSettings().autoHistoryRebuild) {
+      launchHistoryRebuild(pending.startIndex, pending.reason);
+    } else {
+      void markHistoryRebuildDetected(pending.startIndex, pending.reason, { notifyUser: true }).catch((error) => console.warn("[MirrorAbyss] history change detection failed", error));
+    }
   }, delay);
   historyRebuildTimers.set(scope.chatKey, timer);
 }
@@ -9087,7 +9161,7 @@ async function runDiagnostics() {
       id: "historyConsistency",
       label: "\u603B\u7ED3\u4F9D\u8D56\u4E00\u81F4\u6027",
       status: rebuild?.state === "failed" ? "error" : rebuild ? "warn" : "ok",
-      detail: rebuild ? `${rebuild.state}\uFF1B\u4ECE\u7B2C ${rebuild.startIndex + 1} \u6761\u6D88\u606F\u91CD\u5EFA\uFF1B\u539F\u56E0 ${rebuild.reason}${rebuild.error ? `\uFF1B${rebuild.error}` : ""}` : `\u4E00\u81F4\uFF1Brevision=${state2.historyRevision ?? 0}`
+      detail: rebuild ? rebuild.state === "detected" ? `检测到历史变化；从第 ${rebuild.startIndex + 1} 条消息开始；等待玩家手动重建；原因 ${rebuild.reason}` : `${rebuild.state}\uFF1B\u4ECE\u7B2C ${rebuild.startIndex + 1} \u6761\u6D88\u606F\u91CD\u5EFA\uFF1B\u539F\u56E0 ${rebuild.reason}${rebuild.error ? `\uFF1B${rebuild.error}` : ""}` : `\u4E00\u81F4\uFF1Brevision=${state2.historyRevision ?? 0}`
     });
     checks.push({
       id: "migration",
@@ -9374,6 +9448,7 @@ function queueStateIcon(value) {
 }
 function rebuildPhaseText(value) {
   const map = {
+    detected: "检测到历史变化",
     "checking-connection": "验证记忆模型连接",
     planning: "\u68C0\u67E5\u7F13\u5B58\u4E0E\u5931\u6548\u533A\u6BB5",
     "replaying-cache": "\u590D\u7528\u65E2\u6709\u4E8B\u5B9E\u5305",
@@ -9387,21 +9462,25 @@ function historyRebuildStatusHtml(record) {
   const total = record.totalMessages ?? 0;
   const processed = record.processedMessages ?? 0;
   const progress = total ? Math.max(0, Math.min(100, Math.round(processed / total * 100))) : 0;
-  return `<div class="ma11-status-strip ${/failed|waiting-connection/.test(record.state) ? "danger" : "working"}">
+  const detected = record.state === "detected";
+  const danger = /failed|waiting-connection/.test(record.state);
+  const tone = danger ? "danger" : detected ? "warning" : "working";
+  const icon = danger ? "fa-circle-exclamation" : detected ? "fa-clock-rotate-left" : "fa-arrows-rotate";
+  return `<div class="ma11-status-strip ${tone}">
     <div class="ma11-status-strip-main">
-      <span class="ma11-status-icon"><i class="fa-solid ${/failed|waiting-connection/.test(record.state) ? "fa-circle-exclamation" : "fa-arrows-rotate"}"></i></span>
-      <div><b>\u5386\u53F2\u91CD\u5EFA \xB7 ${escapeHtml(rebuildPhaseText(record.phase))}</b><span>${processed}/${total} \u6761 \xB7 ${record.completedBatches ?? 0}/${record.totalBatches ?? 0} \u6279</span></div>
-      <strong>${progress}%</strong>
+      <span class="ma11-status-icon"><i class="fa-solid ${icon}"></i></span>
+      <div><b>${detected ? "历史变化待处理" : `历史重建 · ${escapeHtml(rebuildPhaseText(record.phase))}`}</b><span>${detected ? `从第 ${record.startIndex + 1} 条消息开始；未调用 API，现有记忆尚未删除` : `${processed}/${total} 条 · ${record.completedBatches ?? 0}/${record.totalBatches ?? 0} 批`}</span></div>
+      <strong>${detected ? "待确认" : `${progress}%`}</strong>
     </div>
-    <div class="ma11-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div>
-    <div class="ma11-rebuild-metrics">
-      <span><i class="fa-solid fa-database"></i> \u590D\u7528\u4E8B\u5B9E ${record.reusedMessages ?? 0} \u6761</span>
-      <span><i class="fa-solid fa-file-lines"></i> \u56DE\u8BFB\u6B63\u6587 ${record.rereadMessages ?? 0} \u6761</span>
-      <span><i class="fa-solid fa-layer-group"></i> \u7F13\u5B58\u5305 ${record.reusedFactPackages ?? 0} \u4E2A</span>
-      <span><i class="fa-solid fa-wand-magic-sparkles"></i> \u6A21\u578B\u6279\u6B21 ${record.rawBatches ?? 0} \u4E2A</span>
+    ${detected ? "" : `<div class="ma11-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div>`}
+    ${detected ? `<div class="ma11-help">进入聊天只执行本地一致性检测。你可以继续阅读和生成正文；表格、总结与世界书同步会等待手动重建。</div>` : `<div class="ma11-rebuild-metrics">
+      <span><i class="fa-solid fa-database"></i> 复用事实 ${record.reusedMessages ?? 0} 条</span>
+      <span><i class="fa-solid fa-file-lines"></i> 回读正文 ${record.rereadMessages ?? 0} 条</span>
+      <span><i class="fa-solid fa-layer-group"></i> 缓存包 ${record.reusedFactPackages ?? 0} 个</span>
+      <span><i class="fa-solid fa-wand-magic-sparkles"></i> 模型批次 ${record.rawBatches ?? 0} 个</span>
       ${record.connectionLabel ? `<span><i class="fa-solid fa-plug"></i> ${escapeHtml(record.connectionLabel)}</span>` : ""}
-    </div>
-    ${record.nonDestructive ? `<div class="ma11-help">连接预检完成前不会删除现有表格、事件总结或大总结。</div>` : ""}
+    </div>`}
+    ${record.nonDestructive && !detected ? `<div class="ma11-help">连接预检完成前不会删除现有表格、事件总结或大总结。</div>` : ""}
     ${record.error ? `<div class="ma11-inline-error">${escapeHtml(record.error)}</div>` : ""}
   </div>`;
 }
@@ -9829,6 +9908,8 @@ function settingsHtml() {
       <header><b>\u81EA\u52A8\u5316</b></header>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span>\u542F\u7528\u955C\u6E0A</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span>\u6BCF\u6761\u65B0AI\u6B63\u6587\u540E\u53F0\u7EDF\u4E00\u63D0\u53D6\u4E8B\u5B9E</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoHistoryRebuild" ${settings.autoHistoryRebuild ? "checked" : ""}/><span>检测到旧正文编辑、删除或 Swipe 时自动重建历史（默认关闭）</span></label>
+      <p class="ma11-help">关闭时，进入聊天只进行本地一致性检测，不调用 API；发现变化后会保留现有记忆并提示你手动重建。</p>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="showMessagePanel" ${settings.showMessagePanel ? "checked" : ""}/><span>\u5728\u6B63\u6587\u4E0B\u663E\u793A\u72B6\u6001\u6761</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span>\u81EA\u52A8\u4E8B\u4EF6\u603B\u7ED3</span></label>
       <label>\u4E8B\u4EF6\u603B\u7ED3\u56DE\u5408\u6570<input type="number" min="1" max="100" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
@@ -9854,7 +9935,7 @@ function diagnosticRecoveryAction(check) {
     persistentTasks: ["open-tasks", "查看失败任务"],
     lorebookOutbox: ["open-tasks", "查看发布任务"],
     localCommitJournal: ["refresh-diagnostics", "重新检测"],
-    historyConsistency: ["retry-history-rebuild", "测试连接并继续重建"],
+    historyConsistency: ["retry-history-rebuild", "手动开始历史重建"],
     migration: ["repair-current-chat-state", "重新迁移与修复"],
     factProjection: ["process-latest", "重新提取最新正文"],
     focusIdentity: ["repair-focus-card", "修复焦点卡"],
@@ -9910,7 +9991,7 @@ async function diagnosticsHtml() {
       </section>` : "";
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
-    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u9ED8\u8BA4\u6BCF\u6279 6 \u6761\u3001\u8303\u56F4 4\u201310 \u6761\uFF0C\u5E76\u6309\u5B9E\u9645\u63D0\u793A\u8BCD\u4F53\u79EF\u7EE7\u7EED\u62C6\u5206\uFF1B\u6BCF\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${["paused", "failed", "waiting-connection"].includes(chatState.historyRebuild.state) ? "测试连接并继续重建" : "恢复重建"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
+    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u9ED8\u8BA4\u6BCF\u6279 6 \u6761\u3001\u8303\u56F4 4\u201310 \u6761\uFF0C\u5E76\u6309\u5B9E\u9645\u63D0\u793A\u8BCD\u4F53\u79EF\u7EE7\u7EED\u62C6\u5206\uFF1B\u6BCF\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? chatState.historyRebuild.state === "detected" ? `<button data-ma11-action="retry-history-rebuild">手动开始历史重建</button>` : `<button data-ma11-action="retry-history-rebuild">${["paused", "failed", "waiting-connection"].includes(chatState.historyRebuild.state) ? "测试连接并继续重建" : "恢复重建"}</button><button data-ma11-action="pause-history-rebuild">暂停</button><button class="danger" data-ma11-action="cancel-history-rebuild">取消</button>` : ""}</div></section>
     ${conflictHtml}
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p>${diagnosticRecoveryAction(check)}</div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(
@@ -11223,8 +11304,8 @@ async function initialize() {
       console.warn("[MirrorAbyss] local commit recovery deferred", error);
     });
     assertActive(epoch);
-    await recoverHistoryConsistencyForCurrentChat().catch((error) => {
-      console.warn("[MirrorAbyss] history consistency recovery deferred", error);
+    await detectHistoryConsistencyForCurrentChat({ notifyUser: true, reason: "startup-check" }).catch((error) => {
+      console.warn("[MirrorAbyss] history consistency detection deferred", error);
     });
     await resumeMemoryBlockedByHistory(currentChatKey()).catch((error) => {
       console.warn("[MirrorAbyss] deferred memory resume after startup failed", error);
@@ -11257,7 +11338,7 @@ async function initialize() {
         resetWorkspaceChatSelection();
         window.setTimeout(() => {
           if (!extensionActive) return;
-          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => resumeMemoryBlockedByHistory(currentChatKey())).catch((error) => console.warn("[MirrorAbyss] deferred memory resume after chat change failed", error)).then(() => repairLatestFocusCardForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] focus card repair after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).finally(() => {
+          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => detectHistoryConsistencyForCurrentChat({ notifyUser: true, reason: "chat-entry-check" })).catch((error) => console.warn("[MirrorAbyss] history consistency detection after chat change failed", error)).then(() => resumeMemoryBlockedByHistory(currentChatKey())).catch((error) => console.warn("[MirrorAbyss] deferred memory resume after chat change failed", error)).then(() => repairLatestFocusCardForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] focus card repair after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).finally(() => {
             if (!extensionActive) return;
             renderAllMessagePanels();
             refreshWorkspace();
