@@ -21,8 +21,8 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.1";
-    PIPELINE_VERSION = "ma-pipeline-10.7.1";
+    VERSION = "1.1.0-alpha.10.7.4";
+    PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
       "spacetime",
@@ -35,7 +35,7 @@ var init_constants = __esm({
       "foundations"
     ];
     TABLE_LABELS = {
-      focus: "\u5F53\u524D\u7126\u70B9",
+      focus: "\u7126\u70B9\u5361",
       spacetime: "\u65F6\u95F4\u4E0E\u5730\u70B9",
       characters: "\u4EBA\u7269",
       relationships: "\u5173\u7CFB",
@@ -691,6 +691,9 @@ async function getChatState(chatKey) {
     existing.smallSummaries ||= [];
     existing.largeSummaries ||= [];
     existing.eventEntries ||= [];
+    existing.lastVerificationStatus ||= existing.lastSyncStatus === "success" ? "unknown" : "idle";
+    existing.vectorCapabilityStatus ||= "unknown";
+    existing.vectorFallbackCount ||= 0;
     if (existing.chatKey !== chatKey) {
       existing.chatKey = chatKey;
       existing.updatedAt = nowIso();
@@ -706,6 +709,9 @@ async function getChatState(chatKey) {
     largeSummaries: [],
     eventEntries: [],
     lastSyncStatus: "idle",
+    lastVerificationStatus: "idle",
+    vectorCapabilityStatus: "unknown",
+    vectorFallbackCount: 0,
     updatedAt: nowIso()
   };
 }
@@ -1504,6 +1510,27 @@ async function withInternalGeneration(work) {
     internalGenerationDepth = Math.max(0, internalGenerationDepth - 1);
   }
 }
+var nativeProfileTransportTail = Promise.resolve();
+var nativeProfileTransportWaiting = 0;
+async function withNativeProfileTransport(work, signal) {
+  nativeProfileTransportWaiting += 1;
+  const previous = nativeProfileTransportTail;
+  let release;
+  nativeProfileTransportTail = new Promise((resolve) => {
+    release = resolve;
+  });
+  try {
+    await previous.catch(() => void 0);
+    if (signal?.aborted) throw new DOMException("Connection Profile 请求已取消", "AbortError");
+    return await work();
+  } finally {
+    nativeProfileTransportWaiting = Math.max(0, nativeProfileTransportWaiting - 1);
+    release?.();
+  }
+}
+function nativeProfileTransportStatus() {
+  return { waiting: nativeProfileTransportWaiting };
+}
 
 // src/llm/generator.ts
 init_task_errors();
@@ -1514,12 +1541,16 @@ var NativeGenerationError = class extends Error {
     this.status = status;
     this.responsePreview = responsePreview;
     this.suppressCauseDetails = Boolean(options?.suppressCauseDetails);
+    this.task = options?.task;
+    this.connectionContext = options?.connectionContext;
     this.name = "NativeGenerationError";
   }
   kind;
   status;
   responsePreview;
   suppressCauseDetails;
+  task;
+  connectionContext;
 };
 function nestedGenerationErrorText(error) {
   const chunks = [];
@@ -1572,10 +1603,14 @@ function htmlFailureHint(status, text) {
 function normalizeNativeGenerationError(error, task, connectionContext = {}) {
   if (error instanceof NativeGenerationError) {
     const nativeEvidence = `${error.message}\n${error.responsePreview ?? ""}`;
-    if (!/unexpected token ['"]?<['"]?|not valid json|<!doctype\s+html|<html(?:\s|>)/i.test(nativeEvidence)) return error;
+    if (!/unexpected token ['"]?<['"]?|not valid json|<!doctype\s+html|<html(?:\s|>)/i.test(nativeEvidence)) {
+      error.task ||= task;
+      error.connectionContext ||= deepClone(connectionContext);
+      return error;
+    }
   }
   if (error instanceof DOMException && error.name === "AbortError") {
-    return new NativeGenerationError(`${task}模型调用已取消`, "cancelled", void 0, void 0, { cause: error });
+    return new NativeGenerationError(`${task}模型调用已取消`, "cancelled", void 0, void 0, { cause: error, task, connectionContext: deepClone(connectionContext) });
   }
   const evidence = nestedGenerationErrorText(error);
   const status = generationErrorStatus(error, evidence);
@@ -1592,7 +1627,7 @@ function normalizeNativeGenerationError(error, task, connectionContext = {}) {
       "upstream_html",
       status,
       [status ? `HTTP ${status}` : "", page ? `页面：${page}` : ""].filter(Boolean).join("；") || void 0,
-      { cause: error instanceof Error ? error : void 0, suppressCauseDetails: true }
+      { cause: error instanceof Error ? error : void 0, suppressCauseDetails: true, task, connectionContext: deepClone(connectionContext) }
     );
   }
   const preview = protocolPreview(evidence, 500).trim();
@@ -1601,7 +1636,7 @@ function normalizeNativeGenerationError(error, task, connectionContext = {}) {
     "upstream",
     status,
     preview || void 0,
-    { cause: error instanceof Error ? error : void 0 }
+    { cause: error instanceof Error ? error : void 0, task, connectionContext: deepClone(connectionContext) }
   );
 }
 function generationText(result) {
@@ -1699,19 +1734,22 @@ async function generateWithNativeProfile(options, profileId, signal, profileSnap
     throw new NativeGenerationError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9B ConnectionManagerRequestService", "configuration");
   }
   try {
-    const result = await withInternalGeneration(() => Promise.resolve(service.sendRequest(
-      profileId,
-      messagesFromOptions(options),
-      void 0,
-      {
-        stream: false,
-        extractData: true,
-        includePreset: false,
-        includeInstruct: false,
-        signal
-      },
-      { stream: false }
-    )));
+    const result = await withNativeProfileTransport(
+      () => withInternalGeneration(() => Promise.resolve(service.sendRequest(
+        profileId,
+        messagesFromOptions(options),
+        void 0,
+        {
+          stream: false,
+          extractData: true,
+          includePreset: false,
+          includeInstruct: false,
+          signal
+        },
+        { stream: false }
+      ))),
+      signal
+    );
     const text = generationText(result);
     if (!text) throw new NativeGenerationError(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
     if (looksLikeHtmlDocument(text)) {
@@ -1779,6 +1817,12 @@ function captureTaskConnection(task) {
     capturedAt: nowIso()
   };
 }
+function describeConnectionSnapshot(connection) {
+  if (connection?.mode === "profile") {
+    return `Connection Profile：${connection.profileName || "未命名配置"}${connection.profileModel ? `（${connection.profileModel}）` : ""}`;
+  }
+  return "当前聊天连接";
+}
 function defaultPriority(task) {
   if (task === "audit" || task === "revision") return "foreground";
   if (task === "factExtraction" || task === "state") return "background-critical";
@@ -1820,18 +1864,23 @@ async function generateTask(options) {
 }
 async function testConnection(task) {
   const started = performance.now();
+  const connectionSnapshot = captureTaskConnection(task);
+  const method = describeConnectionSnapshot(connectionSnapshot);
   let raw = "";
   try {
     raw = await generateTask({
       task,
+      connectionSnapshot,
       systemPrompt: "\u4F60\u662F\u8FDE\u63A5\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
       prompt: "\u53EA\u8F93\u51FA\uFF1AMA_CONNECTION_OK"
     });
   } catch (error) {
     if (error instanceof NativeGenerationError) {
-      throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25 [${error.kind}]\uFF1A${error.message}${error.responsePreview ? `\uFF1B\u4E0A\u6E38\u7247\u6BB5\uFF1A${error.responsePreview}` : ""}`);
+      const actual = describeConnectionSnapshot(error.connectionContext || connectionSnapshot);
+      const route = actual === method ? method : `${method}（实际调用：${actual}）`;
+      throw new Error(`${route}\u8FDE\u63A5\u5931\u8D25 [${error.kind}]\uFF1A${error.message}${error.responsePreview ? `\uFF1B\u4E0A\u6E38\u7247\u6BB5\uFF1A${error.responsePreview}` : ""}`);
     }
-    throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    throw new Error(`${method}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
   }
   const normalized = raw.trim().replace(/^```(?:text)?\s*/i, "").replace(/```$/i, "").trim();
   const protocolValid = normalized === "MA_CONNECTION_OK";
@@ -1839,7 +1888,7 @@ async function testConnection(task) {
     connected: Boolean(raw.trim()),
     instructionFollowed: protocolValid,
     protocolValid,
-    method: describeTaskConnection(task),
+    method,
     elapsedMs: Math.round(performance.now() - started),
     responsePreview: raw.replace(/\s+/g, " ").slice(0, 240)
   };
@@ -2827,6 +2876,53 @@ function matchingRecord(registry, hint) {
     return [...names].some((name) => aliases.has(name));
   });
 }
+function focusIdentityNames(registry, currentFocusId, hint) {
+  const record = hint ? matchingRecord(registry, hint) : registry.find((item2) => item2.focusId === currentFocusId);
+  const names = new Set([
+    ...record ? recordAliases(record) : [],
+    ...hint ? hintAliases(hint) : []
+  ].filter(Boolean));
+  return { record, names };
+}
+function promoteCurrentFocusFromCharacters(snapshot, registry, currentFocusId, hint) {
+  const identity = focusIdentityNames(registry, currentFocusId, hint);
+  if (!identity.names.size) return false;
+  const matchesIdentity = (row) => identity.names.has(normalizeIdentityName(row.title));
+  let focusRow = snapshot.focus.find(matchesIdentity);
+  const characterMatches = snapshot.characters.filter(matchesIdentity);
+  if (!focusRow && characterMatches.length) {
+    const source = characterMatches.find((row) => /当前|current/i.test(row.status) || /当前在场|当前相关/.test(row.lifecycle?.activity || "")) ?? characterMatches.at(-1);
+    focusRow = normalizeRow({
+      ...deepClone(source),
+      id: identity.record?.rowId || source.id,
+      title: hint?.canonicalName || identity.record?.canonicalName || source.title,
+      status: "当前焦点",
+      keywords: unique([source.title, hint?.canonicalName, identity.record?.canonicalName, ...source.keywords ?? []], 16),
+      updatedAt: nowIso()
+    }, "focus", snapshot.focus.length);
+    snapshot.focus.push(focusRow);
+  }
+  if (!focusRow && hint?.canonicalName) {
+    const rowId = identity.record?.rowId || hint.focusId || `focus:${hashText(normalizeIdentityName(hint.canonicalName)).slice(0, 16)}`;
+    focusRow = normalizeRow({
+      id: rowId,
+      title: hint.canonicalName,
+      content: `当前焦点身份：${hint.canonicalName}`,
+      status: "当前焦点",
+      keywords: unique([hint.canonicalName, ...hint.aliases ?? []], 16),
+      lifecycle: { ...defaultLifecycle(), activity: "当前相关", evidenceLevel: "已确认" },
+      updatedAt: nowIso()
+    }, "focus", snapshot.focus.length);
+    snapshot.focus.push(focusRow);
+  }
+  if (!focusRow) return false;
+  snapshot.characters = snapshot.characters.filter((row) => {
+    const duplicate = row.id === focusRow.id || matchesIdentity(row);
+    if (!duplicate) return true;
+    return row.source === "manual" || row.locked;
+  });
+  return true;
+}
 function currentFocusCandidate(snapshot, hint) {
   if (hint) {
     const aliases = hintAliases(hint);
@@ -2836,6 +2932,7 @@ function currentFocusCandidate(snapshot, hint) {
 }
 function normalizeFocusIdentity(snapshot, registryInput, currentFocusId, hint) {
   const registry = deepClone(registryInput ?? []);
+  promoteCurrentFocusFromCharacters(snapshot, registry, currentFocusId, hint);
   const exactMergedIdsByIdentity = dedupeExactFocusRows(snapshot);
   const candidate = currentFocusCandidate(snapshot, hint);
   if (!candidate) return { registry, currentFocusId };
@@ -4134,10 +4231,41 @@ function legacyKeysForClear(data, name, scope) {
     )
   ];
 }
+var vectorCapabilityByChat = /* @__PURE__ */ new Map();
+function detectVectorCapability() {
+  const override = globalThis.__MirrorAbyssVectorAvailable;
+  if (typeof override === "boolean") {
+    return { status: override ? "available" : "unavailable", detail: "test-override" };
+  }
+  const context = tryGetContext?.();
+  const extensionSettings = context?.extensionSettings || globalThis.extension_settings || {};
+  const candidates = [
+    extensionSettings?.vectors?.enabled,
+    extensionSettings?.vector?.enabled,
+    extensionSettings?.chromadb?.enabled,
+    context?.modules?.vectors?.enabled,
+    globalThis.SillyTavern?.extensions?.vectors?.enabled
+  ].filter((value) => typeof value === "boolean");
+  if (candidates.includes(true)) return { status: "available", detail: "extension-enabled" };
+  if (candidates.length && candidates.every((value) => value === false)) return { status: "unavailable", detail: "extension-disabled" };
+  return { status: "unknown", detail: "capability-not-exposed" };
+}
+function applyVectorCapabilityFallback(documents, capability) {
+  let downgraded = 0;
+  const output = documents.map((document2) => {
+    const copy = deepClone(document2);
+    if (copy.vectorized && capability.status === "unavailable") {
+      copy.vectorized = false;
+      downgraded += 1;
+    }
+    return copy;
+  });
+  return { documents: output, downgraded };
+}
 async function desiredDocuments(artifact) {
   const settings = getSettings();
   const state2 = await getChatState(artifact.chatKey);
-  return buildLorebookDocuments(
+  const built = buildLorebookDocuments(
     artifact.snapshot,
     state2.smallSummaries,
     state2.largeSummaries,
@@ -4148,6 +4276,15 @@ async function desiredDocuments(artifact) {
       latestContinuityConstant: settings.latestContinuityConstant
     }
   ).map((document2) => deepClone(document2));
+  const capability = detectVectorCapability();
+  const fallback = applyVectorCapabilityFallback(built, capability);
+  vectorCapabilityByChat.set(artifact.chatKey, {
+    status: capability.status,
+    detail: capability.detail,
+    fallbackCount: fallback.downgraded,
+    checkedAt: nowIso()
+  });
+  return fallback.documents;
 }
 async function prepareOutbox(operation, scope, bookName, documents, artifactMessageKey, signal) {
   assertScope(scope, scope.chatKey, signal);
@@ -4295,10 +4432,23 @@ async function finalizeMetadata(record, scope, lease) {
 }
 async function finalizeCommit(record, scope, serverData, wi, lease) {
   const ids = verifyServerState(record, serverData, wi);
+  const legacyKeys = new Set(record.legacyKeys);
+  const actualFingerprint = subjectFingerprint(serverData, record.chatKey, legacyKeys);
+  const actualEntryCount = subjectEntries(serverData, record.chatKey, legacyKeys).length;
   record.intendedEntryIds = ids;
   record.state = "committed";
   record.committedAt ||= nowIso();
   record.verifiedAt = nowIso();
+  record.serverVerifiedAt = record.verifiedAt;
+  record.serverVerifiedFingerprint = actualFingerprint;
+  record.serverVerifiedEntryCount = actualEntryCount;
+  record.serverVerificationVersion = fingerprint({
+    bookName: record.bookName,
+    chatKey: record.chatKey,
+    fingerprint: actualFingerprint,
+    entryCount: actualEntryCount,
+    intentKey: record.intentKey
+  });
   record.error = void 0;
   await putLorebookOutbox(record);
   await safeAppendOperationLog(record.chatKey, {
@@ -4463,18 +4613,102 @@ async function updateSyncStateFromRecord(record, error) {
   state2.lastOutboxId = record.id;
   state2.lastOutboxState = record.state;
   state2.lastLorebookName = record.bookName;
+  const vectorState = vectorCapabilityByChat.get(record.chatKey);
+  if (vectorState) {
+    state2.vectorCapabilityStatus = vectorState.status;
+    state2.vectorCapabilityDetail = vectorState.detail;
+    state2.vectorFallbackCount = vectorState.fallbackCount;
+    state2.vectorCapabilityCheckedAt = vectorState.checkedAt;
+  }
   if (record.state === "committed" && record.metadataAttached) {
     state2.lastSyncStatus = "success";
     state2.lastSyncAt = record.verifiedAt || record.committedAt || nowIso();
     state2.lastSyncError = void 0;
+    state2.lastVerificationStatus = "verified";
+    state2.lastVerificationAt = record.serverVerifiedAt || record.verifiedAt || nowIso();
+    state2.lastVerificationFingerprint = record.serverVerifiedFingerprint || record.intendedSubjectFingerprint;
+    state2.lastVerificationEntryCount = Number(record.serverVerifiedEntryCount ?? record.intendedEntryIds?.length ?? 0);
+    state2.lastVerificationVersion = record.serverVerificationVersion;
+    state2.lastPublishedMessageKey = record.artifactMessageKey;
+    state2.lastPublishedIntentKey = record.intentKey;
+    state2.lastVerificationError = void 0;
   } else if (error || record.state === "conflict" || record.state === "rollback_pending" || record.state === "rolled_back") {
     state2.lastSyncStatus = "failed";
     state2.lastSyncError = error || record.error || record.conflictDetail || `Outbox ${record.state}`;
+    state2.lastVerificationStatus = "unknown";
+    state2.lastVerificationError = "最新发布未完成服务器一致性校验";
   } else {
     state2.lastSyncStatus = "running";
     state2.lastSyncError = record.error;
+    state2.lastVerificationStatus = "unknown";
+    state2.lastVerificationError = "最新世界书版本正在写入或等待服务器回读";
   }
   await putChatState(state2);
+  if (record.chatKey === currentChatKey()) {
+    queueMicrotask(() => {
+      renderAllMessagePanels();
+      refreshWorkspace();
+    });
+  }
+}
+var lorebookVerificationThrottle = /* @__PURE__ */ new Map();
+async function verifyLatestLorebookForCurrentChat(options = {}) {
+  const scope = chatScopeManager.current();
+  const force = Boolean(options.force);
+  const previousAttempt = lorebookVerificationThrottle.get(scope.chatKey) || 0;
+  if (!force && Date.now() - previousAttempt < 15e3) return { skipped: true, reason: "throttled" };
+  lorebookVerificationThrottle.set(scope.chatKey, Date.now());
+  const state2 = await getChatState(scope.chatKey);
+  const records = (await getLorebookOutboxRecords(scope.chatKey)).filter((record) => record.operation === "sync" && record.state === "committed" && record.metadataAttached).sort((a, b) => String(b.verifiedAt || b.updatedAt).localeCompare(String(a.verifiedAt || a.updatedAt)));
+  const record = records[0];
+  if (!record) {
+    state2.lastVerificationStatus = state2.lastLorebookName ? "untracked" : "idle";
+    state2.lastVerificationError = void 0;
+    await putChatState(state2);
+    return { status: state2.lastVerificationStatus };
+  }
+  try {
+    assertScope(scope, record.chatKey, options.signal);
+    const data = await loadWorldInfoStrict(record.bookName, options.signal);
+    assertScope(scope, record.chatKey, options.signal);
+    const actualFingerprint = subjectFingerprint(data, record.chatKey, new Set(record.legacyKeys));
+    const actualEntryCount = subjectEntries(data, record.chatKey, new Set(record.legacyKeys)).length;
+    const matches = actualFingerprint === record.intendedSubjectFingerprint;
+    state2.lastLorebookName = record.bookName;
+    state2.lastVerificationAt = nowIso();
+    state2.lastVerificationFingerprint = actualFingerprint;
+    state2.lastVerificationEntryCount = actualEntryCount;
+    state2.lastVerificationVersion = fingerprint({
+      bookName: record.bookName,
+      chatKey: record.chatKey,
+      fingerprint: actualFingerprint,
+      entryCount: actualEntryCount,
+      intentKey: record.intentKey
+    });
+    state2.lastVerificationStatus = matches ? "verified" : "drift";
+    state2.lastPublishedMessageKey = record.artifactMessageKey;
+    state2.lastPublishedIntentKey = record.intentKey;
+    state2.lastVerificationError = matches ? void 0 : "服务器托管条目与最近一次已提交版本不一致；可能被手动修改、其他标签页覆盖或尚未完成刷新。";
+    await putChatState(state2);
+    if (scope.chatKey === currentChatKey()) {
+      requestAllMessagePanelsRender?.();
+      refreshWorkspace?.();
+    }
+    return {
+      status: state2.lastVerificationStatus,
+      bookName: record.bookName,
+      fingerprint: actualFingerprint,
+      entryCount: actualEntryCount,
+      expectedFingerprint: record.intendedSubjectFingerprint
+    };
+  } catch (error) {
+    state2.lastVerificationStatus = "unavailable";
+    state2.lastVerificationAt = nowIso();
+    state2.lastVerificationError = toErrorMessage(error);
+    await putChatState(state2);
+    if (options.throwOnError) throw error;
+    return { status: "unavailable", error: toErrorMessage(error) };
+  }
 }
 async function syncLorebook(artifact, signal, options = {}) {
   const settings = getSettings();
@@ -4490,6 +4724,8 @@ async function syncLorebook(artifact, signal, options = {}) {
   const chatState = await getChatState(artifact.chatKey);
   chatState.lastSyncStatus = "running";
   chatState.lastSyncError = void 0;
+  chatState.lastVerificationStatus = "unknown";
+  chatState.lastVerificationError = "最新世界书版本正在写入或等待服务器回读";
   await putChatState(chatState);
   let record = null;
   try {
@@ -4974,6 +5210,7 @@ function normalizeEventEntry(value, previous, sourceSummaryId, updatedAt) {
     sourceRowIds: stringList([...(previous?.sourceRowIds ?? []), ...(source.sourceRowIds ?? [])], 120, 180),
     sourceFactIds: stringList([...(previous?.sourceFactIds ?? []), ...incomingFactIds], 180, 180),
     sourceSummaryIds: stringList([...(previous?.sourceSummaryIds ?? []), sourceSummaryId || source.sourceSummaryId], 120, 180),
+    eventIdAliases: stringList([...(previous?.eventIdAliases ?? []), source.generatedEventId], 40, 180),
     createdAt: previous?.createdAt || updatedAt || nowIso(),
     updatedAt: updatedAt || source.updatedAt || nowIso()
   };
@@ -4983,10 +5220,44 @@ function normalizeEventEntry(value, previous, sourceSummaryId, updatedAt) {
 function removableEvent(entry) {
   return entry && entry.importance === "low" && entry.status === "trace" && !entry.impacts.length && entry.precision === "trace";
 }
+function normalizedEventIdentity(value) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+function intersects(values, other) {
+  const set = new Set(values ?? []);
+  return (other ?? []).some((value) => set.has(value));
+}
+function eventContinuityCandidate(registry, operation) {
+  if (!operation || operation.operation === "remove") return null;
+  const titleKey = normalizedEventIdentity(operation.title);
+  const scored = (registry ?? []).map((entry) => {
+    if (entry.eventId === operation.eventId) return { entry, score: -1 };
+    let score = 0;
+    const sameTitle = Boolean(titleKey && normalizedEventIdentity(entry.title) === titleKey);
+    if (sameTitle) score += 2;
+    if (intersects(entry.sourceRowIds, operation.sourceRowIds)) score += 4;
+    if (intersects(entry.sourceFactIds, operation.sourceFactIds)) score += 5;
+    if (intersects(entry.participants, operation.participants)) score += 1;
+    if (intersects(entry.locations, operation.locations)) score += 1;
+    return { entry, score };
+  }).filter((item2) => item2.score >= 3).sort((a, b) => b.score - a.score);
+  if (!scored.length) return null;
+  if (scored.length > 1 && scored[0].score === scored[1].score) return null;
+  return scored[0].entry;
+}
 function applyEventOperations(registry, operations, sourceSummaryId, updatedAt) {
   const map = new Map((registry ?? []).map((entry) => [entry.eventId, deepClone(entry)]));
-  for (const operation of operations ?? []) {
-    const existing = map.get(operation.eventId);
+  for (const rawOperation of operations ?? []) {
+    const operation = deepClone(rawOperation);
+    let existing = map.get(operation.eventId);
+    if (!existing && operation.operation !== "merge") {
+      const continuity = eventContinuityCandidate([...map.values()], operation);
+      if (continuity) {
+        operation.generatedEventId = operation.eventId;
+        operation.eventId = continuity.eventId;
+        existing = continuity;
+      }
+    }
     if (operation.operation === "remove") {
       if (removableEvent(existing)) map.delete(operation.eventId);
       continue;
@@ -6985,6 +7256,7 @@ ${FACT_BLOCK}
 \u89C4\u5219\uFF1A
 1. <turn> \u5FC5\u987B\u8986\u76D6\u6BCF\u4E2A source_ordinal\uFF0C\u53EA\u6982\u62EC\u8BE5\u8F6E\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u5B9E\u3002
 2. <fact> \u662F\u552F\u4E00\u4E8B\u5B9E\u8F93\u51FA\u3002\u4EE3\u7801\u6309 entity_type \u81EA\u52A8\u5206\u53D1\u5230\u8868\u683C\u3001\u603B\u7ED3\u3001\u4E16\u754C\u4E66\u548C\u56FE\u8C31\uFF1B\u4E0D\u8981\u8F93\u51FA\u5B8C\u6574\u8868\u683C\u5FEB\u7167\u3002
+2a. \u5F53\u524D\u7531\u73A9\u5BB6\u63A7\u5236\u7684\u7126\u70B9\u5FC5\u987B\u540C\u65F6\u8F93\u51FA entity_type=focus \u7684 <fact>\uFF1B<focus_identity> \u53EA\u8D1F\u8D23\u7A33\u5B9AID\u3001\u6807\u51C6\u540D\u548C\u522B\u540D\u6620\u5C04\uFF0C\u4E0D\u80FD\u4EE3\u66FF\u7126\u70B9\u8868\u683C\u4E8B\u5B9E\u3002character \u53EA\u7528\u4E8E\u975E\u5F53\u524D\u7126\u70B9\u4EBA\u7269\uFF1B\u540C\u4E00\u4EBA\u4E0D\u5F97\u540C\u65F6\u751F\u6210 focus \u548C character \u91CD\u590D\u884C\u3002\u65E7\u8868\u82E5\u628A\u7126\u70B9\u653E\u5728 characters\uFF0C\u5E94\u6CBF\u7528\u539F entity_id \u6539\u4E3A focus\u3002
 3. \u6D3B\u8DC3\u5BF9\u8C61\u5FC5\u987B\u5C3D\u91CF\u6CBF\u7528\u4E0A\u4E00\u8868\u683C\u7684\u7A33\u5B9A entity_id\u3002\u540D\u79F0\u6216\u522B\u540D\u53D8\u5316\u4E0D\u80FD\u65B0\u5EFA\u91CD\u590D\u5BF9\u8C61\u3002
 4. relationship \u5FC5\u987B\u586B\u5199 source_entity_id \u4E0E target_entity_id\u3002historical_result \u548C trace \u53EA\u8FDB\u5165\u603B\u7ED3\u7D20\u6750\u3002
 5. world_rule \u53EA\u7528\u4E8E\u7A33\u5B9A\u4E16\u754C\u5E95\u5C42\u89C4\u5219\uFF1B\u4E34\u65F6\u5236\u5EA6\u3001\u5C01\u9501\u6216\u5C40\u90E8\u89C4\u5219\u7528 process/event\u3002
@@ -7556,6 +7828,10 @@ async function processMessage(index, force = false, options = {}) {
   if (!message || message.is_user || !String(message.mes || "").trim()) return null;
   const identity = messageIdentity(index);
   const chatKey = currentChatKey();
+  const existingArtifact = getAttachedArtifact(message);
+  if (!force && existingArtifact?.chatKey === chatKey && existingArtifact.sourceFingerprint === messageFingerprint(index) && existingArtifact.admission?.status === "approved" && existingArtifact.stages?.state?.status === "success") {
+    return existingArtifact;
+  }
   const key = `${PIPELINE_VERSION}:foreground:${chatKey}:${identity}`;
   const awaitBackground = options.awaitBackground ?? true;
   const auditConnectionSnapshot = settings.auditEnabled ? captureTaskConnection("audit") : void 0;
@@ -7718,20 +7994,49 @@ function scheduleMessage(payload, force = false, delay = 0) {
   }, delay);
 }
 async function retryStage(index, stage) {
-  if (stage === "audit" || stage === "revision") return processMessage(index, true);
+  const allowed = /* @__PURE__ */ new Set(["audit", "revision", "state", "summary", "sync"]);
+  if (!allowed.has(stage)) throw new Error(`不支持重试阶段：${stage}`);
+  if (stage === "audit" || stage === "revision") {
+    const current = await loadOrCreateArtifact(index, false);
+    markStage(current, stage, "queued", "用户已请求重新执行");
+    await stageArtifact(index, current);
+    return processMessage(index, true);
+  }
   const artifact = await loadOrCreateArtifact(index, false);
-  if (stage === "state") return unifiedFactScheduler.enqueue(artifact, { force: true });
+  markStage(artifact, stage, "queued", "用户已请求重新执行");
+  await stageArtifact(index, artifact);
+  if (stage === "state") {
+    try {
+      return await unifiedFactScheduler.enqueue(artifact, { force: true });
+    } catch (error) {
+      markStage(artifact, "state", "failed", toErrorMessage(error));
+      await stageArtifact(index, artifact);
+      throw error;
+    }
+  }
   const key = `${PIPELINE_VERSION}:retry:${stage}:${artifact.chatKey}:${artifact.messageKey}`;
-  return taskQueue.run(key, `\u91CD\u8BD5${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async (signal) => {
+  return taskQueue.run(key, `重试${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async (signal) => {
     try {
       assertArtifactScope(artifact, signal);
+      markStage(artifact, stage, "running");
+      await stageArtifact(index, artifact);
       if (stage === "summary") await maybeRunSummaries(artifact, true, true, signal);
       if (stage === "sync") await syncLorebook(artifact, signal, { forceRefresh: true });
+      if (artifact.stages[stage]?.status === "running") markStage(artifact, stage, "success");
       await stageArtifact(index, artifact);
       return artifact;
+    } catch (error) {
+      markStage(artifact, stage, "failed", toErrorMessage(error));
+      await stageArtifact(index, artifact);
+      throw error;
     } finally {
       if (artifact.chatKey === currentChatKey()) await commitArtifact(index, artifact);
     }
+  }, {
+    laneKey: `retry:${artifact.chatKey}`,
+    priority: stage === "sync" ? "background-critical" : "background",
+    blocking: false,
+    sourceRange: { startIndex: index, endIndex: index }
   });
 }
 async function forceSummary(index, kind) {
@@ -7838,6 +8143,43 @@ async function recoverHistoryConsistencyForCurrentChat() {
   const startIndex = state2.historyRebuild?.startIndex ?? await detectHistoryConsistencyStart();
   if (startIndex === null) return false;
   return launchHistoryRebuild(startIndex, state2.historyRebuild ? "recovery" : "branch");
+}
+async function repairLatestFocusCardForCurrentChat() {
+  const scope = chatScopeManager.current();
+  const info = latestArtifact();
+  if (!info?.artifact?.snapshot || info.artifact.chatKey !== scope.chatKey) return false;
+  const state2 = await getChatState(scope.chatKey);
+  if (!chatScopeManager.isCurrent(scope)) return false;
+  const record = (state2.focusRegistry ?? []).find((item2) => item2.focusId === state2.currentFocusId);
+  const storedHint = info.artifact.factPackage?.focusIdentity;
+  const hint = record ? {
+    focusId: record.focusId,
+    canonicalName: record.canonicalName,
+    aliases: record.aliases ?? []
+  } : storedHint ? {
+    focusId: storedHint.focusId,
+    canonicalName: storedHint.canonicalName,
+    aliases: storedHint.aliases ?? []
+  } : void 0;
+  if (!hint?.canonicalName) return false;
+  const snapshot = normalizeSnapshot(info.artifact.snapshot, info.artifact.snapshot);
+  const before = fingerprint({ focus: snapshot.focus, characters: snapshot.characters });
+  const normalized = normalizeFocusIdentity(snapshot, state2.focusRegistry, state2.currentFocusId, hint);
+  const after = fingerprint({ focus: snapshot.focus, characters: snapshot.characters });
+  if (before === after) return false;
+  info.artifact.snapshot = snapshot;
+  state2.focusRegistry = deepClone(normalized.registry);
+  state2.currentFocusId = normalized.currentFocusId;
+  attachArtifactToMessage(getMessage(info.index), info.artifact);
+  await putArtifact(info.artifact);
+  await putChatState(state2);
+  await persistChat();
+  if (getSettings().lorebookSync) lorebookPublishScheduler.schedule(info.artifact);
+  queueMicrotask(() => {
+    renderAllMessagePanels();
+    refreshWorkspace();
+  });
+  return true;
 }
 function getArtifactAt(index) {
   const artifact = getAttachedArtifact(getMessage(index));
@@ -8311,6 +8653,52 @@ async function runDiagnostics() {
       detail: state2.lastSyncError || state2.lastSyncAt || "\u5C1A\u672A\u540C\u6B65"
     });
   }
+  const panelHealth = messagePanelUiHealth();
+  const panelMismatch = panelHealth.enabled && panelHealth.expected !== panelHealth.actual;
+  const panelStalled = panelHealth.pendingMs > 2500;
+  checks.push({
+    id: "messagePanelUi",
+    label: "正文下方状态条",
+    status: panelHealth.error ? "error" : panelMismatch || panelStalled ? "warn" : "ok",
+    detail: panelHealth.enabled ? `应显示 ${panelHealth.expected} 个；当前 ${panelHealth.actual} 个；待刷新 ${panelHealth.pending}；已渲染 ${panelHealth.renders} 次${panelHealth.error ? `；${panelHealth.error}` : ""}` : "已由用户关闭正文下方状态条"
+  });
+  const workspaceHealth = workspaceUiHealth();
+  const workspaceStalled = workspaceHealth.runningMs > 5000 || workspaceHealth.pendingMs > 5000;
+  checks.push({
+    id: "workspaceUi",
+    label: "控制台渲染循环",
+    status: workspaceHealth.error ? "error" : workspaceStalled || !workspaceHealth.mounted ? "warn" : "ok",
+    detail: `${workspaceHealth.mounted ? "已挂载" : "未挂载"}；渲染中=${workspaceHealth.rendering}；等待刷新=${workspaceHealth.renderPending}${workspaceHealth.error ? `；${workspaceHealth.error}` : ""}`
+  });
+  const failedArtifacts = getChat().map((message, index) => ({ index, artifact: getAttachedArtifact(message) })).filter((item2) => item2.artifact?.chatKey === currentChatKey()).flatMap((item2) => retryablePanelStages(item2.artifact).map((stage) => ({ index: item2.index, stage })));
+  const failedQueue = (await getQueueTasks(currentChatKey()).catch(() => [])).filter((task) => task.state === "failed");
+  const retryableQueue = failedQueue.filter((task) => task.key.startsWith("history-rebuild:") || retryStageForTask(task) && Number.isInteger(task.sourceStartIndex));
+  checks.push({
+    id: "retryCoverage",
+    label: "失败状态恢复入口",
+    status: failedQueue.length > retryableQueue.length && !failedArtifacts.length ? "warn" : "ok",
+    detail: `正文阶段可重试 ${failedArtifacts.length} 项；失败任务 ${failedQueue.length} 项；任务中心可直接重试 ${retryableQueue.length} 项`
+  });
+  const diagnosticState = context ? await getChatState(currentChatKey()) : { eventEntries: [] };
+  const verificationStatus = effectiveLorebookVerificationStatus(diagnosticState);
+  checks.push({
+    id: "lorebookVerification",
+    label: "世界书服务器回读",
+    status: verificationStatus === "drift" || verificationStatus === "unavailable" ? "error" : verificationStatus === "verified" || !diagnosticState.lastLorebookName ? "ok" : "warn",
+    detail: `${verificationStatusText(verificationStatus)}；条目 ${Number(diagnosticState.lastVerificationEntryCount || 0)}；指纹 ${diagnosticState.lastVerificationFingerprint || "—"}${diagnosticState.lastVerificationError ? `；${diagnosticState.lastVerificationError}` : ""}`
+  });
+  const eventIdentityCounts = new Map();
+  for (const entry of diagnosticState.eventEntries ?? []) {
+    const key = normalizedEventIdentity(entry.title);
+    if (key) eventIdentityCounts.set(key, (eventIdentityCounts.get(key) || 0) + 1);
+  }
+  const duplicateEventTitles = [...eventIdentityCounts.values()].filter((count) => count > 1).length;
+  checks.push({
+    id: "eventIdContinuity",
+    label: "事件 ID 连续性",
+    status: duplicateEventTitles ? "warn" : "ok",
+    detail: duplicateEventTitles ? `发现 ${duplicateEventTitles} 组同名事件；后续事件操作会尝试归并到唯一旧 ID` : `当前 ${diagnosticState.eventEntries?.length ?? 0} 个事件条目未发现同名重复`
+  });
   return checks;
 }
 async function diagnosticReport() {
@@ -8324,9 +8712,10 @@ async function diagnosticReport() {
     chatKey,
     kernel: foundationKernel.status(),
     scope: context ? chatScopeManager.current() : null,
-    nativeInvocation: { current: typeof context?.generateRaw === "function", profiles: typeof context?.ConnectionManagerRequestService?.sendRequest === "function" },
+    nativeInvocation: { current: typeof context?.generateRaw === "function", profiles: typeof context?.ConnectionManagerRequestService?.sendRequest === "function", profileTransport: nativeProfileTransportStatus() },
     crossTabCoordinator: foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR)?.snapshot() ?? null,
     checks: await runDiagnostics(),
+    ui: { messagePanels: messagePanelUiHealth(), workspace: workspaceUiHealth() },
     settings: context ? { ...getSettings(), auditPrompt: getSettings().auditPrompt ? "[\u5DF2\u586B\u5199]" : "", revisionPrompt: getSettings().revisionPrompt ? "[\u5DF2\u586B\u5199]" : "" } : null,
     chatState: context ? await getChatState(chatKey) : null,
     taskLog: context ? await getTaskLog(chatKey) : [],
@@ -8351,6 +8740,11 @@ async function diagnosticReport() {
 // src/ui/workspace.ts
 var selectedMessageIndex = null;
 var rendering = false;
+var renderingSince = 0;
+var renderPending = false;
+var lastWorkspaceRenderRequestedAt = 0;
+var lastWorkspaceRenderedAt = 0;
+var lastWorkspaceRenderError = "";
 var queueUnsubscribe = null;
 var selectedGraphNodeId = null;
 function clampGraphZoom(value) {
@@ -8535,11 +8929,23 @@ function taskRangeText(task) {
   const end = task.sourceEndIndex ?? task.sourceStartIndex;
   return `\u6D88\u606F ${task.sourceStartIndex + 1}${end !== task.sourceStartIndex ? `\u2013${end + 1}` : ""}`;
 }
+function retryStageForTask(task) {
+  if (task.state !== "failed") return "";
+  if (task.kind === "admission" || task.kind === "audit") return "audit";
+  if (task.kind === "revision") return "revision";
+  if (task.kind === "factExtraction" || task.kind === "state") return "state";
+  if (task.kind === "smallSummary" || task.kind === "largeSummary" || task.kind === "summary") return "summary";
+  if (task.kind === "sync") return "sync";
+  return "";
+}
 function taskCardHtml(task) {
   const progress = task.progressTotal ? Math.max(0, Math.min(100, Math.round((task.progressCurrent ?? 0) / task.progressTotal * 100))) : void 0;
   const active = task.state === "queued" || task.state === "running";
   const isHistory = task.key.startsWith("history-rebuild:");
-  const actions = active ? isHistory ? `<button type="button" data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button type="button" class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">\u53D6\u6D88</button>` : task.state === "failed" && isHistory ? `<button type="button" data-ma11-action="retry-history-rebuild">\u4ECE\u5931\u8D25\u6279\u6B21\u7EE7\u7EED</button>` : "";
+  const retryStageName = retryStageForTask(task);
+  const retryIndex = Number.isInteger(task.sourceStartIndex) ? task.sourceStartIndex : void 0;
+  const retryAction = retryStageName && retryIndex !== void 0 ? `<button type="button" data-ma11-action="retry-task-stage" data-ma11-retry-stage="${retryStageName}" data-ma11-retry-index="${retryIndex}">重试此任务</button>` : "";
+  const actions = active ? isHistory ? `<button type="button" data-ma11-action="pause-history-rebuild">暂停</button><button type="button" class="danger" data-ma11-action="cancel-history-rebuild">取消</button>` : `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">取消</button>` : task.state === "failed" && isHistory ? `<button type="button" data-ma11-action="retry-history-rebuild">从失败批次继续</button>` : retryAction;
   return `<article class="ma11-task-card ${queueStateClass(task.state)}">
     <header><div class="ma11-task-heading"><span class="ma11-task-state-icon"><i class="fa-solid ${queueStateIcon(task.state)}"></i></span><div><b>${escapeHtml(task.label)}</b><span class="ma11-task-substate">${queueStateText(task.state)}</span></div></div><time>${escapeHtml(new Date(task.updatedAt).toLocaleString())}</time></header>
     <div class="ma11-task-meta">
@@ -8591,6 +8997,29 @@ function updateWorkspaceTaskIndicator() {
   button.classList.toggle("working", active > 0);
   button.classList.toggle("danger", active === 0 && failed > 0);
   button.title = active > 0 ? `${active} \u4E2A\u4EFB\u52A1\u8FD0\u884C\u4E2D` : failed > 0 ? `${failed} \u4E2A\u4EFB\u52A1\u5931\u8D25` : "\u4EFB\u52A1\u7A7A\u95F2";
+}
+function effectiveLorebookVerificationStatus(state2) {
+  const value = state2?.lastVerificationStatus || "idle";
+  if (value === "verified" && state2?.latestSnapshotMessageKey && state2.latestSnapshotMessageKey !== state2.lastPublishedMessageKey) return "outdated";
+  return value;
+}
+function verificationStatusText(value) {
+  const map = {
+    idle: "尚未校验",
+    unknown: "等待回读",
+    verified: "服务器已验证",
+    outdated: "已验证版本落后于最新表格",
+    drift: "服务器状态有偏移",
+    unavailable: "服务器暂不可读",
+    untracked: "存在世界书但无可追踪事务"
+  };
+  return map[value] || value || "尚未校验";
+}
+function verificationStatusClass(value) {
+  if (value === "verified") return "success";
+  if (value === "drift" || value === "unavailable") return "danger";
+  if (value === "unknown" || value === "outdated") return "working";
+  return "neutral";
 }
 function outboxStateText(value) {
   const map = {
@@ -8841,7 +9270,7 @@ async function syncHtml() {
   const settings = getSettings();
   return `
     <section class="ma11-card ma11-form-card">
-      <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(state2?.lastSyncStatus || "idle")}">${statusText(state2?.lastSyncStatus || "idle")}</span></header>
+      <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(state2?.lastSyncStatus || "idle")}">${statusText(state2?.lastSyncStatus || "idle")}</span><span class="ma11-badge ${verificationStatusClass(effectiveLorebookVerificationStatus(state2))}">${escapeHtml(verificationStatusText(effectiveLorebookVerificationStatus(state2)))}</span></header>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
       <label>\u53D1\u5E03\u7ED3\u6784<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u5BF9\u8C61\u8BED\u4E49\u6A21\u5F0F\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u884C\u8C03\u8BD5\u6A21\u5F0F</option></select></label>
@@ -8849,9 +9278,9 @@ async function syncHtml() {
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="vectorizeRows" ${settings.vectorizeRows ? "checked" : ""}/><span>\u4EBA\u7269\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7B49\u72B6\u6001\u884C\u542F\u7528\u5411\u91CF</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" disabled/><span>\u4EC5\u57FA\u7840\u8BBE\u5B9A\u5141\u8BB8\u5E38\u9A7B\uFF1B\u5176\u4ED6\u5185\u5BB9\u6309\u5173\u952E\u8BCD\u89E6\u53D1</span></label>
-      <div class="ma11-actions"><button data-ma11-action="check-server">\u68C0\u6D4B\u670D\u52A1\u5668</button><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6821\u9A8C\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
+      <div class="ma11-actions"><button data-ma11-action="check-server">\u68C0\u6D4B\u670D\u52A1\u5668</button><button data-ma11-action="verify-lorebook" ${state2?.lastLorebookName ? "" : "disabled"}>\u56DE\u8BFB\u6821\u9A8C\u5B9E\u9645\u4E16\u754C\u4E66</button><button data-ma11-action="retry-sync" ${info ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6821\u9A8C\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
-      <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u4E8B\u52A1</dt><dd>${escapeHtml(outboxStateText(state2?.lastOutboxState))}${state2?.lastOutboxId ? ` \xB7 ${escapeHtml(state2.lastOutboxId.slice(-10))}` : ""}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
+      <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u4E8B\u52A1</dt><dd>${escapeHtml(outboxStateText(state2?.lastOutboxState))}${state2?.lastOutboxId ? ` \xB7 ${escapeHtml(state2.lastOutboxId.slice(-10))}` : ""}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd><dt>\u670D\u52A1\u5668\u56DE\u8BFB</dt><dd>${escapeHtml(state2?.lastVerificationAt ? new Date(state2.lastVerificationAt).toLocaleString() : "\u5C1A\u672A\u56DE\u8BFB")} \xB7 ${Number(state2?.lastVerificationEntryCount || 0)} \u6761</dd><dt>\u7248\u672C\u6307\u7EB9</dt><dd><code>${escapeHtml(state2?.lastVerificationFingerprint || "\u2014")}</code></dd><dt>\u5411\u91CF\u80FD\u529B</dt><dd>${escapeHtml(state2?.vectorCapabilityStatus || "unknown")}${state2?.vectorFallbackCount ? ` \xB7 \u5DF2\u964D\u7EA7 ${state2.vectorFallbackCount} \u6761\u4E3A\u5173\u952E\u8BCD\u89E6\u53D1` : ""}</dd></dl>
     </section>
     <section class="ma11-card ma11-form-card">
       <header><b>\u65B0\u6E38\u620F\u4E0E\u7F13\u5B58</b><span>\u53EA\u5F71\u54CD\u955C\u6E0A\u6570\u636E\uFF0C\u4E0D\u5220\u9664\u804A\u5929\u6B63\u6587</span></header>
@@ -8902,6 +9331,36 @@ function settingsHtml() {
       <p class="ma11-help">\u4E8B\u5B9E\u3001\u8868\u683C\u4E0E\u603B\u7ED3\u4F7F\u7528\u7EAF\u6587\u672C\u6807\u7B7E\u534F\u8BAE\uFF0C\u4E0D\u542F\u7528 JSON Schema\uFF0C\u4E5F\u4E0D\u4F1A\u8FFD\u52A0 JSON \u683C\u5F0F\u4FEE\u590D\u8C03\u7528\u3002\u8BF7\u6C42\u8D85\u65F6\u3001\u91CD\u8BD5\u3001\u9650\u6D41\u548C\u4F9B\u5E94\u5546\u9519\u8BEF\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216 Connection Profile \u7EDF\u4E00\u5904\u7406\u3002</p>
     </section>`;
 }
+function diagnosticRecoveryAction(check) {
+  if (check.status === "ok") return "";
+  const actions = {
+    foundationKernel: ["refresh-diagnostics", "重新检测"],
+    chatScope: ["refresh-diagnostics", "重新检测"],
+    context: ["refresh-diagnostics", "重新检测"],
+    generateRaw: ["open-settings", "检查连接设置"],
+    crossTabCoordinator: ["refresh-diagnostics", "重新检测"],
+    nativeInvocation: ["open-settings", "检查模型设置"],
+    connectionService: ["open-settings", "检查 Profile"],
+    settingsPanel: ["refresh-ui", "重挂界面"],
+    storage: ["refresh-diagnostics", "重新检测"],
+    storageKeys: ["refresh-diagnostics", "重新检测"],
+    server: ["check-server-and-refresh", "重试服务器检测"],
+    persistentTasks: ["open-tasks", "查看失败任务"],
+    lorebookOutbox: ["open-tasks", "查看发布任务"],
+    localCommitJournal: ["refresh-diagnostics", "重新检测"],
+    historyConsistency: ["retry-history-rebuild", "继续历史重建"],
+    migration: ["repair-current-chat-state", "重新迁移与修复"],
+    factProjection: ["process-latest", "重新提取最新正文"],
+    focusIdentity: ["repair-focus-card", "修复焦点卡"],
+    revision: ["open-settings", "检查修正模型"],
+    sync: ["retry-sync", "重试世界书同步"],
+    messagePanelUi: ["refresh-ui", "重建正文状态条"],
+    workspaceUi: ["refresh-ui", "重建控制台界面"],
+    retryCoverage: ["open-tasks", "查看失败任务"]
+  };
+  const entry = actions[check.id] || ["refresh-diagnostics", "重新检测"];
+  return `<div class="ma11-check-actions"><button type="button" data-ma11-action="${entry[0]}">${entry[1]}</button></div>`;
+}
 async function diagnosticsHtml() {
   const checks = await runDiagnostics();
   const chatKey = currentChatKey();
@@ -8946,15 +9405,22 @@ async function diagnosticsHtml() {
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
     <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u6309 10\u201320 \u6761\u6B63\u6587\u5206\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${chatState.historyRebuild.state === "paused" || chatState.historyRebuild.state === "failed" ? "\u7EE7\u7EED\u91CD\u5EFA" : "\u6062\u590D\u91CD\u5EFA"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
     ${conflictHtml}
-    <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
+    <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p>${diagnosticRecoveryAction(check)}</div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(
     (log) => `<div><time>${escapeHtml(new Date(log.createdAt).toLocaleString())}</time><span>${escapeHtml(log.label)}</span><em class="${log.state}">${escapeHtml(log.state)}</em>${log.error ? `<small>${escapeHtml(log.error)}</small>` : ""}</div>`
   ).join("") : '<p class="ma11-empty">\u6682\u65E0\u65E5\u5FD7\u3002</p>'}</div></section>`;
 }
 async function renderWorkspace() {
+  lastWorkspaceRenderRequestedAt = Date.now();
   const workspace = document.querySelector("#ma11-workspace");
-  if (!workspace || workspace.hidden || rendering) return;
+  if (!workspace || workspace.hidden) return;
+  if (rendering) {
+    renderPending = true;
+    return;
+  }
   rendering = true;
+  renderingSince = Date.now();
+  lastWorkspaceRenderError = "";
   try {
     const settings = getSettings();
     const info = currentArtifact();
@@ -8981,8 +9447,19 @@ async function renderWorkspace() {
       content.innerHTML = settingsHtml();
     if (settings.ui.activeTab === "diagnostics")
       content.innerHTML = await diagnosticsHtml();
+    lastWorkspaceRenderedAt = Date.now();
+  } catch (error) {
+    lastWorkspaceRenderError = toErrorMessage(error);
+    const content = workspace.querySelector("#ma11-workspace-content");
+    if (content) content.innerHTML = `<section class="ma11-error-box"><b>界面渲染失败</b><p>${escapeHtml(lastWorkspaceRenderError)}</p><div class="ma11-actions"><button type="button" data-ma11-action="refresh-ui">重新载入界面</button></div></section>`;
+    console.error("[MirrorAbyss] workspace render failed", error);
   } finally {
     rendering = false;
+    renderingSince = 0;
+    if (renderPending) {
+      renderPending = false;
+      queueMicrotask(() => void renderWorkspace());
+    }
   }
 }
 function setTab(tab) {
@@ -9154,7 +9631,14 @@ function bindWorkspace(workspace) {
       }
       if (action === "check-server") {
         const result = await checkServerConnection();
+        if (result.ok) await verifyLatestLorebookForCurrentChat({ force: true }).catch(() => void 0);
         toast(result.ok ? "success" : "error", result.detail);
+        await renderWorkspace();
+      }
+      if (action === "verify-lorebook") {
+        const result = await verifyLatestLorebookForCurrentChat({ force: true, throwOnError: true });
+        toast(result.status === "verified" ? "success" : result.status === "drift" ? "warning" : "info", result.status === "verified" ? `世界书服务器回读一致：${result.entryCount} 条托管条目` : verificationStatusText(result.status));
+        await renderWorkspace();
       }
       if (action === "reset-current-game") {
         if (!confirm("\u786E\u5B9A\u91CD\u7F6E\u5F53\u524D\u6E38\u620F\u5417\uFF1F\u8FD9\u4F1A\u6E05\u9664\u5F53\u524D\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u4EFB\u52A1\u8BB0\u5F55\u548C\u955C\u6E0A\u7BA1\u7406\u7684\u4E16\u754C\u4E66\u6761\u76EE\uFF0C\u4F46\u4E0D\u4F1A\u5220\u9664\u804A\u5929\u6B63\u6587\u3002")) return;
@@ -9175,6 +9659,42 @@ function bindWorkspace(workspace) {
       if (action === "add-row") openRowEditor(getSettings().ui.activeTable);
       if (action === "close-editor") closeEditor();
       if (action === "refresh-diagnostics") await renderWorkspace();
+      if (action === "refresh-ui") {
+        requestAllMessagePanelsRender();
+        await renderWorkspace();
+        toast("success", "界面状态已从当前消息与任务记录重新读取");
+      }
+      if (action === "open-settings") setTab("settings");
+      if (action === "check-server-and-refresh") {
+        const result = await checkServerConnection();
+        if (result.ok) await verifyLatestLorebookForCurrentChat({ force: true }).catch(() => void 0);
+        toast(result.ok ? "success" : "error", result.detail);
+        await renderWorkspace();
+      }
+      if (action === "repair-current-chat-state") {
+        await migrateCurrentChatScopeIdentity();
+        await migrateLegacyDataForCurrentChat();
+        await repairLatestFocusCardForCurrentChat();
+        requestAllMessagePanelsRender();
+        await renderWorkspace();
+        toast("success", "当前聊天的迁移与界面状态已重新检查");
+      }
+      if (action === "repair-focus-card") {
+        const repaired = await repairLatestFocusCardForCurrentChat();
+        requestAllMessagePanelsRender();
+        await renderWorkspace();
+        toast(repaired ? "success" : "info", repaired ? "焦点卡已修复" : "现有数据未发现可本地修复的焦点卡问题");
+      }
+      if (action === "retry-task-stage") {
+        const retryButton = target.closest("[data-ma11-retry-stage]");
+        const stage = retryButton?.dataset.ma11RetryStage;
+        const index = Number(retryButton?.dataset.ma11RetryIndex);
+        if (!stage || !Number.isInteger(index)) throw new Error("失败任务缺少可重试的阶段或消息位置");
+        await retryStage(index, stage);
+        requestAllMessagePanelsRender();
+        await renderWorkspace();
+        toast("success", "失败任务已重新执行");
+      }
       if (action === "copy-diagnostics") {
         const report = await diagnosticReport();
         await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
@@ -9345,21 +9865,30 @@ function unmountWorkspace() {
   selectedMessageIndex = null;
   selectedGraphNodeId = null;
   rendering = false;
+  renderingSince = 0;
+  renderPending = false;
+  lastWorkspaceRenderError = "";
   document.querySelector("#ma11-workspace")?.remove();
 }
 
 // src/ui/message-panel.ts
+var pendingMessagePanelIndexes = /* @__PURE__ */ new Set();
+var messagePanelFrame = 0;
+var lastMessagePanelRenderRequestedAt = 0;
+var lastMessagePanelRenderedAt = 0;
+var lastMessagePanelRenderError = "";
+var messagePanelRenderCount = 0;
 function stageLabel(stage) {
   const map = {
-    idle: "\u7B49\u5F85",
-    queued: "\u6392\u961F",
-    running: "\u5904\u7406\u4E2D",
-    success: "\u6210\u529F",
-    failed: "\u5931\u8D25",
-    skipped: "\u8DF3\u8FC7",
-    blocked: "\u963B\u65AD"
+    idle: "等待",
+    queued: "排队",
+    running: "处理中",
+    success: "成功",
+    failed: "失败",
+    skipped: "跳过",
+    blocked: "阻断"
   };
-  return map[stage?.status] || "\u7B49\u5F85";
+  return map[stage?.status] || "等待";
 }
 function tone(stage) {
   if (stage?.status === "success" || stage?.status === "skipped") return "success";
@@ -9370,67 +9899,229 @@ function tone(stage) {
 function findMessageElement2(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
 }
+function retryablePanelStages(artifact) {
+  if (!artifact?.stages) return [];
+  const stages = [];
+  if (["failed", "blocked"].includes(artifact.stages.audit?.status)) stages.push("audit");
+  if (["failed", "blocked"].includes(artifact.stages.revision?.status)) stages.push("revision");
+  if (artifact.stages.state?.status === "failed") stages.push("state");
+  if (artifact.stages.summary?.status === "failed") stages.push("summary");
+  if (artifact.stages.sync?.status === "failed") stages.push("sync");
+  return [...new Set(stages)];
+}
+function panelRetryLabel(stage) {
+  return {
+    audit: "重新审核",
+    revision: "重试定向修正",
+    state: "重试表格",
+    summary: "重试总结",
+    sync: "重试同步"
+  }[stage] || `重试${stage}`;
+}
+function liveTaskStage(kind) {
+  if (kind === "admission" || kind === "audit") return "audit";
+  if (kind === "revision") return "revision";
+  if (kind === "factExtraction" || kind === "state") return "state";
+  if (kind === "smallSummary" || kind === "largeSummary" || kind === "summary") return "summary";
+  if (kind === "sync") return "sync";
+  return "";
+}
+function artifactWithLiveTaskState(index, artifact) {
+  const view = deepClone(artifact);
+  view.stages ||= {};
+  const tasks = taskQueue.list().filter((task) => task.chatKey === artifact.chatKey && (task.state === "queued" || task.state === "running") && Number.isInteger(task.sourceStartIndex) && index >= task.sourceStartIndex && index <= (task.sourceEndIndex ?? task.sourceStartIndex));
+  for (const task of tasks) {
+    const stage = liveTaskStage(task.kind);
+    if (!stage) continue;
+    view.stages[stage] = {
+      ...(view.stages[stage] || {}),
+      status: task.state,
+      detail: task.progressLabel || task.label,
+      liveTaskId: task.id
+    };
+  }
+  return view;
+}
 function panelHtml(index, artifact) {
   const rows2 = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list2) => sum + list2.length, 0) : 0;
-  const error = Object.values(artifact.stages).find((stage) => stage.error)?.error;
+  const error = Object.values(artifact.stages || {}).find((stage) => stage?.error)?.error;
+  const retryable = retryablePanelStages(artifact);
+  const active = Object.values(artifact.stages || {}).some((stage) => stage?.status === "running" || stage?.status === "queued");
   return `
-    <div class="ma11-message-panel" data-ma-index="${index}">
+    <div class="ma11-message-panel${active ? " is-working" : ""}" data-ma-index="${index}" data-ma-artifact-updated="${escapeHtml(artifact.updatedAt || "")}">
       <button class="ma11-message-summary" type="button" data-ma-action="open">
-        <span class="ma11-message-title">\u955C\u6E0A\u72B6\u6001</span>
+        <span class="ma11-message-title">镜渊状态</span>
         <span class="ma11-badge ${tone(artifact.stages.audit)}">准入/审核 ${stageLabel(artifact.stages.audit)}</span>
-        <span class="ma11-badge ${tone(artifact.stages.revision)}">\u4FEE\u6B63 ${stageLabel(artifact.stages.revision)}</span>
-        <span class="ma11-badge ${tone(artifact.stages.state)}">\u8868\u683C ${stageLabel(artifact.stages.state)}</span>
-        <span class="ma11-badge ${tone(artifact.stages.sync)}">\u540C\u6B65 ${stageLabel(artifact.stages.sync)}</span>
-        <span class="ma11-message-count">${rows2} \u6761</span>
+        <span class="ma11-badge ${tone(artifact.stages.revision)}">修正 ${stageLabel(artifact.stages.revision)}</span>
+        <span class="ma11-badge ${tone(artifact.stages.state)}">表格 ${stageLabel(artifact.stages.state)}</span>
+        <span class="ma11-badge ${tone(artifact.stages.summary)}">总结 ${stageLabel(artifact.stages.summary)}</span>
+        <span class="ma11-badge ${tone(artifact.stages.sync)}">同步 ${stageLabel(artifact.stages.sync)}</span>
+        <span class="ma11-message-count">${rows2} 条</span>
       </button>
-      ${artifact.quarantined ? '<div class="ma11-message-notice">\u539F\u6B63\u6587\u5904\u4E8E\u9694\u79BB\u533A\uFF1B\u5BA1\u6838\u6216\u4FEE\u6B63\u901A\u8FC7\u524D\u4E0D\u4F1A\u8FDB\u5165\u8868\u683C\u3001\u603B\u7ED3\u548C\u4E16\u754C\u4E66\u3002</div>' : ""}
+      ${artifact.quarantined ? '<div class="ma11-message-notice">原正文处于隔离区；审核或修正通过前不会进入表格、总结和世界书。</div>' : ""}
       ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
       <div class="ma11-message-actions">
-        ${artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
-        ${["failed", "blocked"].includes(artifact.stages.revision?.status ?? "idle") ? '<button data-ma-retry="revision">\u91CD\u8BD5\u5B9A\u5411\u4FEE\u6B63</button>' : ""}
-        ${artifact.stages.state.status === "failed" ? '<button data-ma-retry="state">\u91CD\u8BD5\u8868\u683C</button>' : ""}
-        ${artifact.stages.summary.status === "failed" ? '<button data-ma-retry="summary">\u91CD\u8BD5\u603B\u7ED3</button>' : ""}
-        ${artifact.stages.sync.status === "failed" ? '<button data-ma-retry="sync">\u91CD\u8BD5\u540C\u6B65</button>' : ""}
+        ${retryable.map((stage) => `<button type="button" data-ma-retry="${stage}">${panelRetryLabel(stage)}</button>`).join("")}
+        ${retryable.length > 1 ? '<button type="button" data-ma-retry-first="1">从最早失败阶段重试</button>' : ""}
+        <button type="button" data-ma-panel-refresh="1" title="从当前消息重新读取镜渊状态">刷新状态</button>
       </div>
     </div>`;
 }
 function renderMessagePanel(index) {
-  if (!getSettings().showMessagePanel) return;
-  const artifact = getArtifactAt(index);
   const messageElement = findMessageElement2(index);
   if (!messageElement) return;
-  messageElement.querySelector(":scope > .ma11-message-panel")?.remove();
-  if (!artifact) return;
-  messageElement.insertAdjacentHTML("beforeend", panelHtml(index, artifact));
-  applyAuditVisibility(index, Boolean(artifact.hiddenByAudit));
+  if (!getSettings().showMessagePanel) {
+    messageElement.querySelector(":scope > .ma11-message-panel")?.remove();
+    return;
+  }
+  try {
+    const artifact = getArtifactAt(index);
+    messageElement.querySelector(":scope > .ma11-message-panel")?.remove();
+    if (!artifact) return;
+    const view = artifactWithLiveTaskState(index, artifact);
+    messageElement.insertAdjacentHTML("beforeend", panelHtml(index, view));
+    applyAuditVisibility(index, Boolean(artifact.hiddenByAudit));
+    lastMessagePanelRenderedAt = Date.now();
+    lastMessagePanelRenderError = "";
+    messagePanelRenderCount += 1;
+  } catch (error) {
+    lastMessagePanelRenderError = toErrorMessage(error);
+    console.warn("[MirrorAbyss] message panel render failed", error);
+  }
 }
 function renderAllMessagePanels() {
+  lastMessagePanelRenderRequestedAt = Date.now();
+  const valid = /* @__PURE__ */ new Set();
   getChat().forEach((message, index) => {
-    if (!message?.is_user) renderMessagePanel(index);
+    if (!message?.is_user && getAttachedArtifact(message)) {
+      valid.add(String(index));
+      renderMessagePanel(index);
+    }
+  });
+  document.querySelectorAll(".ma11-message-panel").forEach((panel) => {
+    if (!valid.has(String(panel.dataset.maIndex))) panel.remove();
   });
 }
+function flushMessagePanelRenders() {
+  messagePanelFrame = 0;
+  const indexes = [...pendingMessagePanelIndexes];
+  pendingMessagePanelIndexes.clear();
+  if (!indexes.length) return;
+  if (indexes.includes(-1)) renderAllMessagePanels();
+  else indexes.forEach((index) => renderMessagePanel(index));
+}
+function requestMessagePanelRender(index) {
+  lastMessagePanelRenderRequestedAt = Date.now();
+  pendingMessagePanelIndexes.add(Number.isInteger(index) ? index : -1);
+  if (messagePanelFrame) return;
+  const schedule = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback) => window.setTimeout(callback, 0);
+  messagePanelFrame = schedule(flushMessagePanelRenders);
+}
+function requestAllMessagePanelsRender() {
+  requestMessagePanelRender(-1);
+}
+function messagePanelUiHealth() {
+  const settings = getSettings();
+  const expected = settings.showMessagePanel ? getChat().filter((message) => !message?.is_user && Boolean(getAttachedArtifact(message))).length : 0;
+  const actual = document.querySelectorAll(".ma11-message-panel").length;
+  const pendingMs = pendingMessagePanelIndexes.size ? Date.now() - lastMessagePanelRenderRequestedAt : 0;
+  return {
+    enabled: settings.showMessagePanel,
+    expected,
+    actual,
+    pending: pendingMessagePanelIndexes.size,
+    pendingMs,
+    lastRequestedAt: lastMessagePanelRenderRequestedAt,
+    lastRenderedAt: lastMessagePanelRenderedAt,
+    renders: messagePanelRenderCount,
+    error: lastMessagePanelRenderError
+  };
+}
+function workspaceUiHealth() {
+  const pendingMs = renderPending && lastWorkspaceRenderRequestedAt ? Date.now() - lastWorkspaceRenderRequestedAt : 0;
+  const runningMs = rendering && renderingSince ? Date.now() - renderingSince : 0;
+  return {
+    mounted: Boolean(document.querySelector("#ma11-workspace")),
+    rendering,
+    renderPending,
+    pendingMs,
+    runningMs,
+    lastRequestedAt: lastWorkspaceRenderRequestedAt,
+    lastRenderedAt: lastWorkspaceRenderedAt,
+    error: lastWorkspaceRenderError
+  };
+}
 function removeAllMessagePanels() {
+  pendingMessagePanelIndexes.clear();
+  if (messagePanelFrame) {
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(messagePanelFrame);
+    else window.clearTimeout(messagePanelFrame);
+    messagePanelFrame = 0;
+  }
   document.querySelectorAll(".ma11-message-panel").forEach((panel) => panel.remove());
 }
 var installed = false;
 function installMessagePanelHandlers() {
   if (installed) return () => void 0;
   installed = true;
-  const click = (event) => {
+  const click = async (event) => {
     const target = event.target;
     const panel = target.closest(".ma11-message-panel");
     if (!panel) return;
     const index = Number(panel.dataset.maIndex);
-    if (target.closest('[data-ma-action="open"]')) openWorkspace("tables", index);
-    const retry = target.closest("[data-ma-retry]")?.dataset.maRetry;
-    if (retry) void retryStage(index, retry);
+    if (target.closest('[data-ma-action="open"]')) {
+      openWorkspace("tables", index);
+      return;
+    }
+    if (target.closest("[data-ma-panel-refresh]")) {
+      requestMessagePanelRender(index);
+      refreshWorkspace();
+      return;
+    }
+    const artifact = getArtifactAt(index);
+    const stages = target.closest("[data-ma-retry-first]") ? retryablePanelStages(artifact).slice(0, 1) : [target.closest("[data-ma-retry]")?.dataset.maRetry].filter(Boolean);
+    if (!stages.length) return;
+    const button = target.closest("button");
+    const original = button?.textContent || "";
+    if (button) {
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      button.textContent = "正在提交…";
+    }
+    panel.classList.add("is-working");
+    try {
+      for (const stage of stages) await retryStage(index, stage);
+      toast("success", stages.length > 1 ? "失败阶段已重新提交" : `${panelRetryLabel(stages[0])}已提交`);
+    } catch (error) {
+      toast("error", `重试失败：${toErrorMessage(error)}`);
+    } finally {
+      requestMessagePanelRender(index);
+      refreshWorkspace();
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+        button.textContent = original;
+      }
+    }
+  };
+  const resume = () => {
+    if (document.visibilityState === "hidden") return;
+    requestAllMessagePanelsRender();
+    refreshWorkspace();
+    void verifyLatestLorebookForCurrentChat().catch(() => void 0);
   };
   document.addEventListener("click", click);
-  const unsubscribe = subscribePipeline((index) => renderMessagePanel(index));
+  document.addEventListener("visibilitychange", resume);
+  window.addEventListener("focus", resume);
+  const unsubscribePipeline = subscribePipeline((index) => requestMessagePanelRender(index));
+  const unsubscribeTasks = taskQueue.subscribe(() => requestAllMessagePanelsRender());
   return () => {
     installed = false;
     document.removeEventListener("click", click);
-    unsubscribe();
+    document.removeEventListener("visibilitychange", resume);
+    window.removeEventListener("focus", resume);
+    unsubscribePipeline();
+    unsubscribeTasks();
   };
 }
 
@@ -10019,8 +10710,15 @@ async function initialize() {
       console.warn("[MirrorAbyss] history consistency recovery deferred", error);
     });
     assertActive(epoch);
+    await repairLatestFocusCardForCurrentChat().catch((error) => {
+      console.warn("[MirrorAbyss] focus card repair deferred", error);
+    });
+    assertActive(epoch);
     await recoverLorebookOutboxForCurrentChat().catch((error) => {
       console.warn("[MirrorAbyss] lorebook outbox recovery deferred", error);
+    });
+    await verifyLatestLorebookForCurrentChat({ force: true }).catch((error) => {
+      console.warn("[MirrorAbyss] lorebook verification deferred", error);
     });
     assertActive(epoch);
     await mountSettingsPanel();
@@ -10042,7 +10740,7 @@ async function initialize() {
         resetWorkspaceChatSelection();
         window.setTimeout(() => {
           if (!extensionActive) return;
-          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).finally(() => {
+          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => repairLatestFocusCardForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] focus card repair after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).then(() => verifyLatestLorebookForCurrentChat({ force: true })).catch((error) => console.warn("[MirrorAbyss] lorebook verification after chat change failed", error)).finally(() => {
             if (!extensionActive) return;
             renderAllMessagePanels();
             refreshWorkspace();

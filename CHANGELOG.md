@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.1.0-alpha.10.7.4
+
+- Added independent server readback verification with actual lorebook fingerprint, managed entry count and verification timestamp.
+- Revalidates the latest committed lorebook after startup, chat switches, window resume and explicit UI checks.
+- Message panels now merge live task-queue state so queued/running feedback is immediate.
+- Added automatic idempotency guard for already-approved正文 with a successful fact table.
+- Added conservative event-ID continuity recovery for one uniquely matching old event.
+- Added explicit vector capability detection and keyword fallback when vector retrieval is known to be unavailable.
+- Added diagnostics for lorebook drift and duplicate event identities.
+
+## 1.1.0-alpha.10.7.3
+
+- 为诊断失败/警告状态增加对应恢复按钮，不再只显示错误。
+- 为任务中心的审核、修正、事实提取、总结和世界书失败任务增加阶段级重试。
+- 正文下方按钮点击后立即显示忙碌状态，并统一捕获、显示重试结果。
+- 正文状态条订阅流水线与任务队列，并在窗口恢复焦点时回读，减少旧状态。
+- 新增正文状态条数量、渲染积压、控制台渲染循环和重试覆盖诊断。
+- 统一按钮、卡片、状态徽标、焦点样式和移动端布局，不改变原有导航结构。
+
+
+## 1.1.0-alpha.10.7.2
+
+- 串行化底层 Connection Profile 传输，任务与 UI 仍保持异步，避免不同 Profile 首次调用串线。
+- 连接测试冻结所选 Profile 快照，错误标题与实际调用连接保持一致。
+- 世界书事务状态写入后主动回读状态并触发 UI 刷新；渲染期间的新刷新请求不再丢失。
+- 恢复独立“焦点卡”：当前焦点被模型误分类为 character 时，投影层会确定性归位并清理自动重复人物行。
+- 启动与切换聊天时修复最新快照中的旧焦点分类，无需额外 API 调用。
+# Changelog
+
 ## 1.1.0-alpha.10.7.1 — Upstream HTML Diagnostics
 
 - 修复 `factExtraction` 上游返回 HTML 页面时，UI 同时显示外层诊断与底层 `Unexpected token '<'` JSON 解析异常的问题。

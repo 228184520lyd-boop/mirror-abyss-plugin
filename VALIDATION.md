@@ -1,4 +1,4 @@
-# Validation — 1.1.0-alpha.10.7.1
+# Validation — 1.1.0-alpha.10.7.4
 
 执行日期：2026-07-14
 
@@ -100,3 +100,29 @@
 - 长期存档从无事件注册表版本升级后的实际显示。
 
 当前版本仍为 alpha，不应省略长期存档备份。
+
+## alpha.10.7.2
+
+已检查：JavaScript 语法、版本一致性、Profile 底层串行锁、测试连接快照、渲染合并刷新、世界书同步后 UI 刷新、焦点从人物表归位、手工锁定人物行保护、启动修复入口。
+
+## alpha.10.7.3 UI health and retry validation
+
+- `node --check index.js` passed.
+- Version consistency passed for `index.js`, `manifest.json`, and `BUILD_INFO.json`.
+- Diagnostic warning/error cards expose a matching recovery action.
+- Failed admission/audit, revision, fact extraction, summary, sync, and history rebuild tasks expose a safe retry route when a source message is available.
+- Message-panel retry controls enter a busy state immediately and catch rejected retry promises.
+- Message panels subscribe to both pipeline artifacts and task-queue changes, and refresh when the window regains focus.
+- UI diagnostics report expected/actual message panel counts, render backlog, workspace render state, and retry coverage.
+- Multi-stage recovery restarts from the earliest failed stage instead of duplicating downstream work.
+- Standardized button, card, badge, focus, and mobile styles were added without changing the existing tab/navigation structure.
+
+
+## alpha.10.7.4 checks
+
+- Lorebook server-readback fingerprint and entry-count persistence.
+- Startup/chat-switch/focus verification recovery.
+- Live task state overlay below assistant messages.
+- Automatic processing idempotency guard.
+- Event-ID continuity unique-match behavior.
+- Explicit vector-unavailable keyword fallback.

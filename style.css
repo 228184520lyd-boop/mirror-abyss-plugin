@@ -194,6 +194,7 @@ button.danger { color: #ffb0b8; }
 .ma11-error-box { padding: 0.75rem; border: 1px solid var(--ma11-danger); border-radius: 8px; color: #ffb0b8; white-space: pre-wrap; }
 .ma11-meta { display: grid; grid-template-columns: 8rem 1fr; gap: 0.45rem; }
 .ma11-meta dt { opacity: 0.65; }
+.ma11-meta code { overflow-wrap: anywhere; word-break: break-all; font-size: 0.82em; }
 .ma11-check { display: flex; gap: 0.7rem; padding: 0.8rem; }
 .ma11-check > span { width: 0.7rem; height: 0.7rem; flex: 0 0 auto; margin-top: 0.28rem; border-radius: 50%; background: var(--ma11-warning); }
 .ma11-check.ok > span { background: var(--ma11-success); }
@@ -782,4 +783,114 @@ html.ma11-generation-locked #send_button {
   .ma11-status-strip-main strong { grid-column: 2; }
   .ma11-rebuild-metrics { display: grid; grid-template-columns: 1fr 1fr; }
   .ma11-task-meta { display: grid; grid-template-columns: 1fr 1fr; }
+}
+
+
+/* alpha.10.7.3: standardized UI, live feedback and recovery actions */
+:root {
+  --ma11-radius-sm: 8px;
+  --ma11-radius-md: 12px;
+  --ma11-radius-lg: 16px;
+  --ma11-control-height: 2.35rem;
+  --ma11-transition: 140ms ease;
+}
+.ma11-shell { border-color: var(--ma11-border-strong); }
+.ma11-header { min-height: 4.25rem; }
+.ma11-content { scrollbar-gutter: stable; }
+.ma11-card, .ma11-stage-card, .ma11-check, .ma11-toolbar, .ma11-hero {
+  box-shadow: 0 5px 18px rgb(0 0 0 / 8%);
+}
+.ma11-actions button,
+.ma11-message-actions button,
+.ma11-table button,
+.ma11-editor button,
+.ma11-connection-row button,
+.ma11-check-actions button {
+  min-height: var(--ma11-control-height);
+  border-radius: var(--ma11-radius-sm);
+  padding: 0.48rem 0.76rem;
+  font-weight: 620;
+  line-height: 1.15;
+  transition: border-color var(--ma11-transition), background var(--ma11-transition), transform var(--ma11-transition), opacity var(--ma11-transition);
+}
+.ma11-actions button:hover,
+.ma11-message-actions button:hover,
+.ma11-table button:hover,
+.ma11-editor button:hover,
+.ma11-connection-row button:hover,
+.ma11-check-actions button:hover {
+  border-color: color-mix(in srgb, var(--ma11-accent) 68%, var(--ma11-border));
+  background: color-mix(in srgb, var(--ma11-accent) 12%, var(--ma11-panel-2));
+}
+.ma11-actions button:active,
+.ma11-message-actions button:active,
+.ma11-check-actions button:active { transform: translateY(1px); }
+.ma11-shell button:focus-visible,
+.ma11-message-panel button:focus-visible {
+  outline: 2px solid var(--ma11-accent);
+  outline-offset: 2px;
+}
+.ma11-badge {
+  min-height: 1.55rem;
+  margin: 0;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  background: color-mix(in srgb, var(--ma11-panel-2) 72%, transparent);
+  font-weight: 600;
+}
+.ma11-badge.success { color: color-mix(in srgb, var(--ma11-success) 78%, var(--ma11-text)); background: color-mix(in srgb, var(--ma11-success) 11%, transparent); }
+.ma11-badge.danger { color: color-mix(in srgb, var(--ma11-danger) 78%, var(--ma11-text)); background: color-mix(in srgb, var(--ma11-danger) 12%, transparent); }
+.ma11-badge.working { color: color-mix(in srgb, var(--ma11-warning) 82%, var(--ma11-text)); background: color-mix(in srgb, var(--ma11-warning) 12%, transparent); }
+.ma11-message-panel {
+  border-radius: var(--ma11-radius-md);
+  background: color-mix(in srgb, var(--ma11-panel) 88%, transparent);
+  box-shadow: 0 5px 16px rgb(0 0 0 / 9%);
+  transition: border-color var(--ma11-transition), box-shadow var(--ma11-transition), background var(--ma11-transition);
+}
+.ma11-message-panel.is-working {
+  border-color: color-mix(in srgb, var(--ma11-warning) 58%, var(--ma11-border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--ma11-panel) 92%, transparent), color-mix(in srgb, var(--ma11-warning) 7%, transparent));
+}
+.ma11-message-panel.is-working .ma11-message-title::after {
+  content: " · 更新中";
+  color: var(--ma11-warning);
+  font-size: 0.74rem;
+  font-weight: 550;
+}
+.ma11-message-summary { min-height: 2.65rem; padding: 0.56rem 0.68rem; gap: 0.42rem; }
+.ma11-message-title { letter-spacing: 0.01em; }
+.ma11-message-count { padding-left: 0.35rem; font-variant-numeric: tabular-nums; }
+.ma11-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.65rem 0.65rem;
+  border-top: 1px solid color-mix(in srgb, var(--ma11-border) 72%, transparent);
+}
+.ma11-message-actions button:last-child { margin-left: auto; }
+.ma11-message-actions button[aria-busy="true"],
+.ma11-actions button[aria-busy="true"] { opacity: 0.76; }
+.ma11-message-actions button[aria-busy="true"]::before,
+.ma11-actions button[aria-busy="true"]::before {
+  content: "↻";
+  display: inline-block;
+  margin-right: 0.35rem;
+  animation: ma11-spin 850ms linear infinite;
+}
+.ma11-message-error, .ma11-message-notice { line-height: 1.55; }
+.ma11-check { align-items: flex-start; min-height: 7.2rem; }
+.ma11-check > div { width: 100%; min-width: 0; }
+.ma11-check p { line-height: 1.5; overflow-wrap: anywhere; }
+.ma11-check-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem; }
+.ma11-check-actions button { min-height: 2rem; padding: 0.34rem 0.58rem; background: var(--ma11-panel-2); color: inherit; cursor: pointer; }
+.ma11-task-card > header .ma11-actions { justify-content: flex-end; }
+.ma11-error-box p { margin: 0.6rem 0; white-space: pre-wrap; }
+@keyframes ma11-spin { to { transform: rotate(360deg); } }
+@media (max-width: 620px) {
+  .ma11-message-summary { align-items: flex-start; }
+  .ma11-message-count { width: 100%; margin-left: 0; padding-left: 0; }
+  .ma11-message-actions button { flex: 1 1 auto; }
+  .ma11-message-actions button:last-child { margin-left: 0; }
+  .ma11-check { min-height: auto; }
 }
