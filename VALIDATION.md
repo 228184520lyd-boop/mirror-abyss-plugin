@@ -1,4 +1,4 @@
-# Validation — 1.1.0-alpha.10.7.4.1
+# Validation — 1.1.0-alpha.10.7.4.2
 
 执行日期：2026-07-14
 
@@ -134,3 +134,10 @@
 - 运行状态进入 `ready` 后才通过 `setTimeout` 启动后台世界书回读。
 - 聊天切换恢复链不再等待服务器回读后才刷新 UI。
 - 管线版本维持 `ma-pipeline-10.7.4`，防止热修复触发重复事实提取。
+
+
+## alpha.10.7.4.2 module-load validation
+
+- `index.js` copied to `.mjs` and parsed/imported as an ES Module.
+- Checked for the former duplicate top-level `intersects` declaration.
+- Verified manifest/runtime version consistency and unchanged pipeline version.

@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.4.1";
+    VERSION = "1.1.0-alpha.10.7.4.2";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -5223,7 +5223,7 @@ function removableEvent(entry) {
 function normalizedEventIdentity(value) {
   return String(value || "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
 }
-function intersects(values, other) {
+function eventListsIntersect(values, other) {
   const set = new Set(values ?? []);
   return (other ?? []).some((value) => set.has(value));
 }
@@ -5235,10 +5235,10 @@ function eventContinuityCandidate(registry, operation) {
     let score = 0;
     const sameTitle = Boolean(titleKey && normalizedEventIdentity(entry.title) === titleKey);
     if (sameTitle) score += 2;
-    if (intersects(entry.sourceRowIds, operation.sourceRowIds)) score += 4;
-    if (intersects(entry.sourceFactIds, operation.sourceFactIds)) score += 5;
-    if (intersects(entry.participants, operation.participants)) score += 1;
-    if (intersects(entry.locations, operation.locations)) score += 1;
+    if (eventListsIntersect(entry.sourceRowIds, operation.sourceRowIds)) score += 4;
+    if (eventListsIntersect(entry.sourceFactIds, operation.sourceFactIds)) score += 5;
+    if (eventListsIntersect(entry.participants, operation.participants)) score += 1;
+    if (eventListsIntersect(entry.locations, operation.locations)) score += 1;
     return { entry, score };
   }).filter((item2) => item2.score >= 3).sort((a, b) => b.score - a.score);
   if (!scored.length) return null;

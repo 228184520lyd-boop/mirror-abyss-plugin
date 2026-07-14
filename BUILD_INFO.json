@@ -1,6 +1,6 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-alpha.10.7.4.1",
+  "version": "1.1.0-alpha.10.7.4.2",
   "baseline": "1.1.0-alpha.10.7.4 runtime consistency deploy",
   "build_date": "2026-07-14",
   "build_type": "recovered deploy-bundle development",
@@ -25,7 +25,7 @@
     "trace"
   ],
   "graph_mode": "read_only",
-  "validation": "deployment syntax/version checks plus non-blocking startup ordering checks passed",
+  "validation": "ES Module parse/import, deployment syntax/version, non-blocking startup ordering and archive checks passed",
   "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive.",
   "connection_error_handling": [
     "detect_html_before_fact_protocol_parsing",
@@ -38,6 +38,7 @@
     "mount settings panel, top-button icon and event handlers before starting worldbook server readback",
     "run startup worldbook verification as a background task after runtime reaches ready state",
     "restore chat-switch UI immediately and perform worldbook readback in the background",
-    "keep ma-pipeline-10.7.4 unchanged to avoid reprocessing already approved messages"
+    "keep ma-pipeline-10.7.4 unchanged to avoid reprocessing already approved messages",
+    "rename duplicate event-memory intersects helper that prevented ES Module parsing"
   ]
 }
