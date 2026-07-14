@@ -1,4 +1,4 @@
-# 1.1.0-alpha.10.7.6 validation
+# 1.1.0-alpha.10.7.7 validation
 
 - ES Module syntax and import smoke test.
 - No `/profile` command or assignment to Connection Manager selected profile.
@@ -163,3 +163,15 @@
 - `index.js` copied to `.mjs` and parsed/imported as an ES Module.
 - Checked for the former duplicate top-level `intersects` declaration.
 - Verified manifest/runtime version consistency and unchanged pipeline version.
+
+
+## Adaptive extraction checks
+
+- Fact prompt budget is 18,000 characters.
+- Single-turn transient/protocol retry helpers are present.
+- Multi-turn failed batches split adaptively.
+- History rebuild batch range is 4–10 with default 6.
+- Previous active-table context is capped and prioritizes focus, foundations, protected rows, active rows and entities mentioned in the current turn.
+- Stage facts, event registry, previous long-term records, summaries and candidates each have bounded prompt budgets.
+- Small/large summaries retry transient failures and retry malformed tag protocols once.
+- Non-gateway HTML remains non-retryable.

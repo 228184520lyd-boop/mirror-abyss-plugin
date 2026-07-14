@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.6";
+    VERSION = "1.1.0-alpha.10.7.7";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -5875,49 +5875,80 @@ init_constants();
 function join(values) {
   return values?.length ? values.join("\uFF5C") : "\u65E0";
 }
+function summaryFactPriority(fact) {
+  let score = 0;
+  if (fact.entityType === "historical_result" || fact.entityType === "trace") score += 30;
+  if (fact.entityType === "event" || fact.entityType === "relationship") score += 15;
+  if (fact.lifecycle === "historical" || fact.lifecycle === "trace") score += 12;
+  if (fact.operation === "remove" || fact.operation === "close" || fact.operation === "supersede") score += 10;
+  return score;
+}
 function formatPackages(packages) {
   const lines = [];
+  let used = 0;
+  let totalFacts = 0;
+  let includedFacts = 0;
+  const append = (line, limit = 14e3) => {
+    if (used + line.length + 1 > limit) return false;
+    lines.push(line);
+    used += line.length + 1;
+    return true;
+  };
   for (const pack of packages) {
-    lines.push(`\u3010\u4E8B\u5B9E\u5305 ${pack.packageId}\uFF5C\u6D88\u606F ${pack.sourceRange.startIndex + 1}\u2013${pack.sourceRange.endIndex + 1}\u3011`);
+    if (!append(`【事实包 ${pack.packageId}｜消息 ${pack.sourceRange.startIndex + 1}–${pack.sourceRange.endIndex + 1}】`)) break;
     for (const material of pack.turnMaterials) {
-      lines.push(`- \u8F6E\u6B21 ${material.sourceMessageIndex + 1}\uFF1A${material.summary}\uFF5C\u5173\u952E\u8BCD=${join(material.keywords)}`);
+      if (!append(`- 轮次 ${material.sourceMessageIndex + 1}：${safeText(material.summary, 520).trim()}｜关键词=${join((material.keywords ?? []).slice(0, 8))}`)) break;
     }
-    for (const fact of pack.facts) {
-      lines.push([
-        `- \u4E8B\u5B9E ${fact.factId}`,
-        `\u5BF9\u8C61=${fact.entityId}`,
-        `\u7C7B\u578B=${fact.entityType}/${fact.factType}`,
-        fact.title ? `\u540D\u79F0=${fact.title}` : "",
-        `\u64CD\u4F5C=${fact.operation}`,
-        `\u751F\u547D\u5468\u671F=${fact.lifecycle}`,
-        fact.status ? `\u72B6\u6001=${fact.status}` : "",
-        `\u5185\u5BB9=${fact.content}`,
-        `\u5173\u952E\u8BCD=${join(fact.keywords)}`,
-        fact.sourceEntityId ? `\u5173\u7CFB\u8D77\u70B9=${fact.sourceEntityId}` : "",
-        fact.targetEntityId ? `\u5173\u7CFB\u7EC8\u70B9=${fact.targetEntityId}` : "",
-        `\u53EF\u4FE1\u5EA6=${fact.confidence}`
-      ].filter(Boolean).join("\uFF1B"));
+    const facts = [...pack.facts].sort((a, b) => summaryFactPriority(b) - summaryFactPriority(a));
+    totalFacts += facts.length;
+    for (const fact of facts) {
+      const line = [
+        `- 事实 ${fact.factId}`,
+        `对象=${fact.entityId}`,
+        `类型=${fact.entityType}/${fact.factType}`,
+        fact.title ? `名称=${fact.title}` : "",
+        `操作=${fact.operation}`,
+        `生命周期=${fact.lifecycle}`,
+        fact.status ? `状态=${fact.status}` : "",
+        `内容=${safeText(fact.content, 650).trim()}`,
+        `关键词=${join((fact.keywords ?? []).slice(0, 8))}`,
+        fact.sourceEntityId ? `关系起点=${fact.sourceEntityId}` : "",
+        fact.targetEntityId ? `关系终点=${fact.targetEntityId}` : "",
+        `可信度=${fact.confidence}`
+      ].filter(Boolean).join("；");
+      if (!append(line)) break;
+      includedFacts += 1;
     }
   }
+  if (totalFacts > includedFacts) append(`- （另有 ${totalFacts - includedFacts} 条低优先级事实已进入当前表格或由代码保留，本次不重复发送给总结模型）`, 14500);
   return lines.join("\n");
 }
 function formatSnapshot(snapshot) {
-  const lines = [];
-  for (const [table, rows2] of Object.entries(snapshot)) {
-    lines.push(`\u3010${TABLE_LABELS[table]} / ${table}\u3011`);
-    if (!rows2.length) {
-      lines.push("\uFF08\u65E0\uFF09");
-      continue;
-    }
-    for (const row of rows2) {
-      lines.push(`- ID=${row.id}\uFF1B\u540D\u79F0=${row.title}\uFF1B\u72B6\u6001=${row.status || "\u672A\u6807\u6CE8"}\uFF1B\u5185\u5BB9=${row.content}\uFF1B\u5173\u952E\u8BCD=${join(row.keywords)}\uFF1B\u4FDD\u62A4=${row.source === "manual" || row.locked ? "\u662F" : "\u5426"}`);
-    }
-  }
-  return lines.join("\n");
+  return formatFactPromptSnapshot(snapshot, [], 14e3);
+}
+function eventRegistryPriority(entry) {
+  let score = 0;
+  if (entry.status === "active" || entry.status === "unresolved") score += 20;
+  if (entry.importance === "critical") score += 12;
+  else if (entry.importance === "high") score += 8;
+  if (entry.precision === "exact") score += 4;
+  return score;
 }
 function formatEventRegistry(entries) {
   if (!entries?.length) return "（无既有事件条目）";
-  return entries.map((entry) => `- ID=${entry.eventId}；标题=${entry.title}；状态=${entry.status}；精度=${entry.precision}；注入=${entry.activation}；事实=${entry.facts}；已知者=${join(entry.propagation?.knownBy)}；痕迹=${join(entry.traces)}`).join("\n");
+  const ordered = [...entries].sort((a, b) => eventRegistryPriority(b) - eventRegistryPriority(a) || safeText(b.updatedAt, 80).localeCompare(safeText(a.updatedAt, 80)));
+  const lines = [];
+  let used = 0;
+  let included = 0;
+  for (const entry of ordered) {
+    const line = `- ID=${entry.eventId}；标题=${entry.title}；状态=${entry.status}；精度=${entry.precision}；注入=${entry.activation}；事实=${safeText(entry.facts, 420).trim()}；已知者=${join((entry.propagation?.knownBy ?? []).slice(0, 6))}；痕迹=${join((entry.traces ?? []).slice(0, 6))}`;
+    if (included >= 50 || used + line.length + 1 > 1e4) break;
+    lines.push(line);
+    used += line.length + 1;
+    included += 1;
+  }
+  if (entries.length > included) lines.push(`- （另有 ${entries.length - included} 条低优先级历史事件由代码保留，本次不重复发送给模型）`);
+  return lines.join("\n");
 }
 function smallSummarySystemPrompt() {
   return `你是镜渊“表格 → 事件记忆”沉降结算器。你只读取已提取事实、当前活跃表格与既有事件条目，不重新解释原始正文，不续写故事，不创造后台变化。
@@ -6035,17 +6066,55 @@ function largeSummarySystemPrompt() {
 }
 function formatPrevious(records) {
   if (!records.length) return "（无）";
-  return records.map((record) => `- ID=${record.recordId}；类别=${record.category}；标题=${record.title}；永久性=${record.permanence}；内容=${record.content}；关键词=${join(record.keywords)}`).join("\n");
+  const lines = [];
+  let used = 0;
+  let included = 0;
+  for (const record of records) {
+    const line = `- ID=${record.recordId}；类别=${record.category}；标题=${record.title}；永久性=${record.permanence}；内容=${safeText(record.content, 520).trim()}；关键词=${join((record.keywords ?? []).slice(0, 8))}`;
+    if (included >= 60 || used + line.length + 1 > 1e4) break;
+    lines.push(line);
+    used += line.length + 1;
+    included += 1;
+  }
+  if (records.length > included) lines.push(`- （另有 ${records.length - included} 条长期记录由代码原样保留，本次无需模型重述）`);
+  return lines.join("\n");
 }
 function formatSummaries(summaries) {
-  return summaries.map((item2) => {
-    const events = (item2.eventOperations ?? []).map((event) => `  · 事件ID=${event.eventId}；标题=${event.title}；状态=${event.status}；精度=${event.precision}；重要度=${event.importance}；事实=${event.facts}；传播=${event.propagation.scope}；痕迹=${join(event.traces)}；影响=${join(event.impacts)}`).join("\n");
-    return `- 小总结ID=${item2.id}；标题=${item2.title}；概览=${item2.summary}\n${events || "  · 无独立事件条目"}`;
-  }).join("\n");
+  const lines = [];
+  let used = 0;
+  let eventCount = 0;
+  for (const item2 of summaries) {
+    const header = `- 小总结ID=${item2.id}；标题=${item2.title}；概览=${safeText(item2.summary, 1000).trim()}`;
+    if (used + header.length + 1 > 14e3) break;
+    lines.push(header);
+    used += header.length + 1;
+    for (const event of item2.eventOperations ?? []) {
+      const line = `  · 事件ID=${event.eventId}；标题=${event.title}；状态=${event.status}；精度=${event.precision}；重要度=${event.importance}；事实=${safeText(event.facts, 560).trim()}；传播=${event.propagation.scope}；痕迹=${join((event.traces ?? []).slice(0, 6))}；影响=${join((event.impacts ?? []).slice(0, 6))}`;
+      if (eventCount >= 30 || used + line.length + 1 > 14e3) break;
+      lines.push(line);
+      used += line.length + 1;
+      eventCount += 1;
+    }
+  }
+  if (!lines.length) return "（无）";
+  const totalEvents = summaries.reduce((sum, item2) => sum + (item2.eventOperations?.length ?? 0), 0);
+  if (totalEvents > eventCount) lines.push(`  · 另有 ${totalEvents - eventCount} 条事件由代码保留，本次不重复发送`);
+  return lines.join("\n");
 }
 function formatCandidates(candidates) {
   if (!candidates.length) return "（无）";
-  return candidates.map((record) => `- ID=${record.recordId}；类别=${record.category}；标题=${record.title}；永久性=${record.permanence}；内容=${record.content}；关键词=${join(record.keywords)}`).join("\n");
+  const lines = [];
+  let used = 0;
+  let included = 0;
+  for (const record of candidates) {
+    const line = `- ID=${record.recordId}；类别=${record.category}；标题=${record.title}；永久性=${record.permanence}；内容=${safeText(record.content, 460).trim()}；关键词=${join((record.keywords ?? []).slice(0, 8))}`;
+    if (included >= 50 || used + line.length + 1 > 8e3) break;
+    lines.push(line);
+    used += line.length + 1;
+    included += 1;
+  }
+  if (candidates.length > included) lines.push(`- （另有 ${candidates.length - included} 条候选由代码保留）`);
+  return lines.join("\n");
 }
 function largeSummaryPrompt(summaries, previousRecords, candidates) {
   return `请根据上一版长期记录与本批小总结中的事件条目，输出长期记录操作和必要的事件沉降操作。
@@ -6300,7 +6369,7 @@ init_chat_scope();
 init_repository();
 init_task_queue();
 var rebuildOwnerId = makeId("history-rebuild-owner");
-var DEFAULT_REBUILD_BATCH_SIZE = 12;
+var DEFAULT_REBUILD_BATCH_SIZE = 6;
 var MAX_BATCH_ATTEMPTS = 2;
 function intersects(values, keys) {
   return values.some((value) => keys.has(value));
@@ -6463,7 +6532,7 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
     lease.assertOwner();
     const state2 = await getChatState(chatKey);
     const normalizedStart = Math.max(0, Math.min(startIndex, getChat().length));
-    const normalizedBatchSize = Math.min(20, Math.max(10, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
+    const normalizedBatchSize = Math.min(10, Math.max(4, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
     const inspection = await inspectHistoryRebuildSources(normalizedStart, normalizedBatchSize, state2);
     const affectedKeys = inspection.invalidKeys;
     const invalidation = invalidateSummaryDependencies(state2.smallSummaries, state2.largeSummaries, affectedKeys);
@@ -6560,8 +6629,8 @@ async function currentRecord(record) {
 }
 function retryableBatchError(error) {
   const message = toErrorMessage(error);
-  if (/HTML 页面|upstream_html/i.test(message) && !/HTTP (?:502|503|504)/i.test(message)) return false;
-  return /502|503|504|timeout|timed out|network|fetch|socket|429|rate.?limit|上游|超时|网络|限流/i.test(message);
+  if (/HTML 页面|upstream_html/i.test(message) && !/HTTP (?:500|502|503|504|520|522|524)/i.test(message)) return false;
+  return /500|502|503|504|520|522|524|timeout|timed out|network|fetch|socket|408|429|rate.?limit|internal server error|上游|超时|网络|限流/i.test(message);
 }
 async function runBatchWithRetry(work, onRetry) {
   let lastError2;
@@ -6572,7 +6641,7 @@ async function runBatchWithRetry(work, onRetry) {
       lastError2 = error;
       if (attempt >= MAX_BATCH_ATTEMPTS || !retryableBatchError(error)) throw error;
       await onRetry(attempt, error);
-      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      await waitWithAbort(Math.min(6e3, 1200 * 2 ** (attempt - 1)), void 0);
     }
   }
   throw lastError2;
@@ -6614,11 +6683,11 @@ async function preflightHistoryRebuildConnection(chatKey, startIndex, batchSize,
   assertCurrent(chatKey, signal);
   const state2 = await getChatState(chatKey);
   const normalizedStart = Math.max(0, Math.min(startIndex, getChat().length));
-  const normalizedBatchSize = Math.min(20, Math.max(10, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
+  const normalizedBatchSize = Math.min(10, Math.max(4, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
   const inspection = await inspectHistoryRebuildSources(normalizedStart, normalizedBatchSize, state2);
   if (!inspection.rawBatches) return { inspection, connectionSnapshot: void 0 };
   const connectionSnapshot = captureTaskConnection("factExtraction");
-  const raw = await generateTask({
+  const raw = await generateDerivedTaskWithRetry({
     task: "factExtraction",
     connectionSnapshot,
     systemPrompt: "你是镜渊历史依赖重建的连接预检器。禁止解释、禁止Markdown、禁止思考标签。",
@@ -6631,7 +6700,7 @@ async function preflightHistoryRebuildConnection(chatKey, startIndex, batchSize,
       coalesceKey: `history-preflight:${chatKey}`,
       outputSchema: "MA_HISTORY_REBUILD_CONNECTION_OK"
     }
-  });
+  }, signal, 2);
   if (!raw.trim()) throw new NativeGenerationError("历史重建连接预检返回为空", "empty_response", void 0, void 0, { task: "factExtraction", connectionContext: deepClone(connectionSnapshot) });
   return { inspection, connectionSnapshot };
 }
@@ -6706,7 +6775,7 @@ async function rebuildHistoryFrom(input) {
       record.connectionProfileId = connectionSnapshot.profileId || "";
     }
     record.schemaVersion = 3;
-    record.batchSize = Math.min(20, Math.max(10, record.batchSize ?? input.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE));
+    record.batchSize = Math.min(10, Math.max(4, record.batchSize ?? input.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE));
     record.state = "rebuilding";
     record.ownerId = rebuildOwnerId;
     record.pauseRequested = false;
@@ -6967,7 +7036,7 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
       endIndex: selected.at(-1).sourceRange.endIndex,
       messageKeys: sourceKeys
     };
-    const raw = await generateTask({
+    const parsed = await generateParsedDerivedTask({
       task: "smallSummary",
       systemPrompt: smallSummarySystemPrompt(),
       prompt: smallSummaryPrompt(selected, artifact.snapshot, chatState.eventEntries ?? []),
@@ -6979,8 +7048,7 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
         coalesceKey: `small-summary:${artifact.chatKey}`,
         outputSchema: "MA_SMALL_SUMMARY_TEXT_V1"
       }
-    });
-    const parsed = parseSmallSummaryText(raw);
+    }, parseSmallSummaryText, signal, "小总结");
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
     const summary = normalizeSummary(parsed, "small", sourceKeys);
@@ -7022,7 +7090,7 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
     const selected = force ? pending : pending.slice(0, threshold);
     const previousLarge = chatState.largeSummaries.at(-1);
     const sourceKeys = selected.map((item2) => item2.id);
-    const raw = await generateTask({
+    const parsed = await generateParsedDerivedTask({
       task: "largeSummary",
       systemPrompt: largeSummarySystemPrompt(),
       prompt: largeSummaryPrompt(
@@ -7044,8 +7112,7 @@ async function generateLargeSummary(artifact, force = false, signal, factIndex =
         coalesceKey: `large-summary:${artifact.chatKey}`,
         outputSchema: "MA_LARGE_SUMMARY_TEXT_V1"
       }
-    });
-    const parsed = parseLargeSummaryText(raw);
+    }, parseLargeSummaryText, signal, "大总结");
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
     const summary = normalizeLargeSummaryUpdate({
@@ -7332,11 +7399,18 @@ function normalizeUnifiedFactPackage(input) {
 // src/prompts/facts.ts
 init_constants();
 function compactRowForFactPrompt(row) {
-  const compact = { id: row.id, title: row.title, content: row.content };
+  const compact = { id: row.id, title: row.title, content: safeText(row.content, 1600).trim() };
   if (row.status) compact.status = row.status;
-  if (row.keywords.length) compact.keywords = row.keywords;
+  if (row.keywords.length) compact.keywords = row.keywords.slice(0, 10);
   if (row.source === "manual" || row.locked) compact.protected = true;
-  if (row.lifecycle) compact.lifecycle = row.lifecycle;
+  if (row.lifecycle) {
+    compact.lifecycle = {
+      ...row.lifecycle,
+      evidence: safeText(row.lifecycle.evidence, 500).trim(),
+      returnConditions: (row.lifecycle.returnConditions ?? []).slice(0, 6),
+      returnBlockers: (row.lifecycle.returnBlockers ?? []).slice(0, 6)
+    };
+  }
   if (row.sourceEntityId) compact.sourceEntityId = row.sourceEntityId;
   if (row.targetEntityId) compact.targetEntityId = row.targetEntityId;
   return compact;
@@ -7362,31 +7436,68 @@ function formatLifecycle(row) {
     life.returnBlockers.length ? `\u56DE\u6D41\u963B\u788D=${joinList(life.returnBlockers)}` : ""
   ].filter(Boolean).join("\uFF1B");
 }
-function formatFactPromptSnapshot(previous) {
-  const compact = compactSnapshotForFactPrompt(previous);
-  const sections = [];
-  for (const [key, rows2] of Object.entries(compact)) {
-    sections.push(`\u3010${TABLE_LABELS[key]} / ${key}\u3011`);
+function promptRowScore(row, sourceText, tableKey) {
+  let score = 0;
+  if (row.source === "manual" || row.locked) score += 100;
+  if (tableKey === "focus") score += 90;
+  if (tableKey === "foundations") score += 70;
+  if (/当前|active|进行中|未解决|unresolved/i.test(`${row.status || ""} ${row.lifecycle?.activity || ""}`)) score += 35;
+  const title = safeText(row.title, 240).trim().toLowerCase();
+  if (title && sourceText.includes(title)) score += 80;
+  for (const keyword of (row.keywords ?? []).slice(0, 12)) {
+    const key = safeText(keyword, 80).trim().toLowerCase();
+    if (key && sourceText.includes(key)) score += 18;
+  }
+  return score;
+}
+function formatFactPromptSnapshot(previous, artifacts = [], maxCharacters = 12e3) {
+  const tableOrder = ["focus", "foundations", "spacetime", "characters", "relationships", "items", "skills", "events", "regions"];
+  const sourceText = artifacts.map((artifact) => `${artifact.playerText || ""}
+${artifact.assistantText || ""}`).join("\n").toLowerCase();
+  const lines = [];
+  let used = 0;
+  const append = (line) => {
+    const cost = line.length + (lines.length ? 1 : 0);
+    if (used + cost > maxCharacters) return false;
+    lines.push(line);
+    used += cost;
+    return true;
+  };
+  for (const key of tableOrder) {
+    const rows2 = [...(previous[key] ?? [])].sort((a, b) => promptRowScore(b, sourceText, key) - promptRowScore(a, sourceText, key) || safeText(b.updatedAt, 80).localeCompare(safeText(a.updatedAt, 80)));
+    if (!append(`【${TABLE_LABELS[key]} / ${key}】`)) break;
     if (!rows2.length) {
-      sections.push("\uFF08\u65E0\uFF09");
+      append("（无）");
       continue;
     }
+    let omitted = 0;
     for (const row of rows2) {
+      const lifecycle = formatLifecycle({ lifecycle: row.lifecycle ? {
+        ...row.lifecycle,
+        evidence: safeText(row.lifecycle.evidence, 260).trim(),
+        returnConditions: (row.lifecycle.returnConditions ?? []).slice(0, 4),
+        returnBlockers: (row.lifecycle.returnBlockers ?? []).slice(0, 4)
+      } : void 0 });
       const meta = [
         `ID=${row.id}`,
-        row.status ? `\u72B6\u6001=${row.status}` : "",
-        row.protected ? "\u4FDD\u62A4=\u662F" : "",
-        row.keywords?.length ? `\u5173\u952E\u8BCD=${joinList(row.keywords)}` : "",
-        row.sourceEntityId ? `\u5173\u7CFB\u8D77\u70B9=${row.sourceEntityId}` : "",
-        row.targetEntityId ? `\u5173\u7CFB\u7EC8\u70B9=${row.targetEntityId}` : "",
-        formatLifecycle(row)
-      ].filter(Boolean).join("\uFF1B");
-      sections.push(`- ${row.title}
+        row.status ? `状态=${row.status}` : "",
+        row.source === "manual" || row.locked ? "保护=是" : "",
+        row.keywords?.length ? `关键词=${joinList(row.keywords.slice(0, 8))}` : "",
+        row.sourceEntityId ? `关系起点=${row.sourceEntityId}` : "",
+        row.targetEntityId ? `关系终点=${row.targetEntityId}` : "",
+        lifecycle
+      ].filter(Boolean).join("；");
+      const full = `- ${row.title}
   ${meta}
-  \u5185\u5BB9=${row.content}`);
+  内容=${safeText(row.content, 700).trim()}`;
+      if (append(full)) continue;
+      const compact = `- ${row.title}；ID=${row.id}${row.status ? `；状态=${row.status}` : ""}`;
+      if (promptRowScore(row, sourceText, key) >= 70 && append(compact)) continue;
+      omitted += 1;
     }
+    if (omitted) append(`（另有 ${omitted} 条低优先级行未重复发送；代码仍完整保留）`);
   }
-  return sections.join("\n");
+  return lines.join("\n");
 }
 function formatTurns(artifacts) {
   return artifacts.map((artifact, sourceOrdinal) => [
@@ -7399,7 +7510,7 @@ function formatTurns(artifacts) {
   ].join("\n")).join("\n\n");
 }
 function estimateFactPromptCharacters(previous, artifacts) {
-  return formatFactPromptSnapshot(previous).length + formatTurns(artifacts).length;
+  return formatFactPromptSnapshot(previous, artifacts).length + formatTurns(artifacts).length;
 }
 var UNIFIED_FACT_EXTRACTOR_VERSION = "ma-facts-text-v1";
 var FACT_BLOCK = `<fact>
@@ -7485,7 +7596,7 @@ function unifiedFactUserPrompt(previous, artifacts, options = {}) {
   return `\u3010\u6A21\u5F0F\u3011${mode}
 
 \u3010\u4E0A\u4E00\u4EFD\u5F53\u524D\u6D3B\u8DC3\u8868\u683C\u3011
-${formatFactPromptSnapshot(previous)}
+${formatFactPromptSnapshot(previous, artifacts)}
 
 \u3010\u5F85\u63D0\u53D6\u6B63\u6587\u533A\u6BB5\u3011
 ${formatTurns(artifacts)}
@@ -7519,7 +7630,77 @@ function previousSnapshot(beforeIndex) {
 
 // src/pipeline/facts.ts
 init_task_queue();
-var DEFAULT_FACT_BATCH_CHARACTER_BUDGET = 52e3;
+var DEFAULT_FACT_BATCH_CHARACTER_BUDGET = 18e3;
+var FACT_EXTRACTION_SINGLE_MAX_ATTEMPTS = 3;
+function waitWithAbort(ms, signal) {
+  if (!ms) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      reject(signal?.reason instanceof Error ? signal.reason : new TaskCancelledError("事实提取重试已取消"));
+    };
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+function factExtractionFailureKind(error) {
+  const message = toErrorMessage(error);
+  const status = Number(error?.status ?? error?.statusCode ?? error?.response?.status);
+  const html = /HTML 页面|upstream_html|unexpected token ['"]?<['"]?|not valid json/i.test(message);
+  const transientStatus = [408, 429, 500, 502, 503, 504, 520, 522, 524].includes(status);
+  const transientMarker = /\b(?:408|429|500|502|503|504|520|522|524)\b|internal server error|gateway timeout|service unavailable|bad gateway|origin is unreachable|connection timed out|timeout|timed out|network|fetch|socket|rate.?limit|上游暂时|网关|超时|网络|限流/i.test(message);
+  if (transientStatus || transientMarker) return "transient";
+  if (html) return "fatal";
+  if (/纯文本协议|标签协议|未返回有效|未返回可识别|模型返回为空|empty_response/i.test(message)) return "protocol";
+  return "fatal";
+}
+function factRetryDelay(attempt, kind) {
+  const base = kind === "transient" ? 1600 : 700;
+  return Math.min(7e3, base * 2 ** Math.max(0, attempt - 1));
+}
+async function generateDerivedTaskWithRetry(options, signal, maxAttempts = 2) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await generateTask({ ...options, signal });
+    } catch (error) {
+      lastError = error;
+      const kind = factExtractionFailureKind(error);
+      if (attempt >= maxAttempts || kind !== "transient") throw error;
+      await waitWithAbort(factRetryDelay(attempt, kind), signal);
+    }
+  }
+  throw lastError || new Error(`${options.task || "后台"}模型调用失败`);
+}
+async function generateParsedDerivedTask(options, parser, signal, label, maxProtocolAttempts = 2) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxProtocolAttempts; attempt += 1) {
+    const retryNotice = attempt > 1 ? `
+
+【协议重试】上一次输出无法解析。只输出系统指定的标签块，不要解释、Markdown 或思考标签。` : "";
+    const raw = await generateDerivedTaskWithRetry({ ...options, prompt: `${options.prompt}${retryNotice}` }, signal, 2);
+    try {
+      return parser(raw);
+    } catch (error) {
+      lastError = error;
+      const kind = factExtractionFailureKind(error);
+      if (attempt >= maxProtocolAttempts || kind !== "protocol") throw error;
+      await waitWithAbort(factRetryDelay(attempt, kind), signal);
+    }
+  }
+  throw lastError || new Error(`${label}协议解析失败`);
+}
+function canAdaptiveSplitFacts(error, artifacts) {
+  return artifacts.length > 1 && ["transient", "protocol"].includes(factExtractionFailureKind(error));
+}
+function splitFactArtifactBatch(artifacts) {
+  const midpoint = Math.max(1, Math.ceil(artifacts.length / 2));
+  return [artifacts.slice(0, midpoint), artifacts.slice(midpoint)].filter((chunk) => chunk.length);
+}
 function partitionFactArtifactsBySize(artifacts, characterBudget = DEFAULT_FACT_BATCH_CHARACTER_BUDGET, initialSnapshot) {
   if (!artifacts.length) return [];
   const ordered = [...artifacts].sort((a, b) => a.messageIndex - b.messageIndex);
@@ -7555,10 +7736,10 @@ async function attachAndStore(artifact) {
   await putArtifact(artifact);
 }
 async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, options = {}) {
-  if (!artifacts.length) throw new Error("\u6CA1\u6709\u53EF\u63D0\u53D6\u7684\u6B63\u6587");
+  if (!artifacts.length) throw new Error("没有可提取的正文");
   for (const artifact of artifacts) {
     assertApprovedForMemory(artifact, signal);
-    markStage(artifact, "state", "running");
+    markStage(artifact, "state", "running", artifacts.length > 1 ? `正在合并提取 ${artifacts.length} 轮正文` : "正在提取正文事实");
     await putArtifact(artifact);
   }
   const previous = previousSnapshot(artifacts[0].messageIndex);
@@ -7567,41 +7748,72 @@ async function extractUnifiedFacts(artifacts, signal, connectionSnapshot, option
     endIndex: artifacts.at(-1).messageIndex,
     messageKeys: artifacts.map((artifact) => artifact.messageKey)
   };
+  const maxAttempts = artifacts.length > 1 ? 1 : FACT_EXTRACTION_SINGLE_MAX_ATTEMPTS;
+  let lastError;
   try {
-    const raw = await generateTask({
-      task: "factExtraction",
-      systemPrompt: unifiedFactSystemPrompt(options),
-      prompt: unifiedFactUserPrompt(previous, artifacts, options),
-      signal,
-      connectionSnapshot,
-      invocation: {
-        sourceRange,
-        priority: "background-critical",
-        blocking: false,
-        coalesceKey: `facts:${artifacts[0].chatKey}`,
-        outputSchema: "MA_FACTS_TEXT_V1"
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const retryNotice = attempt > 1 ? `
+
+【重试约束】上一次返回未能稳定完成。只输出 <ma_facts> 标签协议，不要解释、不要 Markdown、不要思考标签；必须覆盖 source_ordinal 0。` : "";
+        const raw = await generateTask({
+          task: "factExtraction",
+          systemPrompt: unifiedFactSystemPrompt(options),
+          prompt: `${unifiedFactUserPrompt(previous, artifacts, options)}${retryNotice}`,
+          signal,
+          connectionSnapshot,
+          invocation: {
+            sourceRange,
+            priority: "background-critical",
+            blocking: false,
+            coalesceKey: `facts:${artifacts[0].chatKey}`,
+            outputSchema: "MA_FACTS_TEXT_V1"
+          }
+        });
+        let parsed;
+        try {
+          parsed = parseUnifiedFactsText(raw);
+        } catch (error) {
+          if (error instanceof PlainProtocolError) {
+            throw new Error(`统一事实提取未返回有效纯文本协议：${error.message}${error.preview ? `；返回片段：${error.preview}` : ""}`);
+          }
+          throw error;
+        }
+        const rawOrdinals = new Set((parsed.turnMaterials ?? []).map((item) => Number(item?.sourceOrdinal)).filter((ordinal) => Number.isInteger(ordinal)));
+        const missingOrdinals = artifacts.map((_, ordinal) => ordinal).filter((ordinal) => !rawOrdinals.has(ordinal));
+        if (missingOrdinals.length) {
+          throw new Error(`统一事实提取标签协议不完整：缺少 source_ordinal ${missingOrdinals.join("、")}`);
+        }
+        for (const artifact of artifacts) assertApprovedForMemory(artifact, signal);
+        const normalized = normalizeUnifiedFactPackage({
+          raw: parsed,
+          artifacts,
+          previousSnapshot: previous,
+          extractorVersion: UNIFIED_FACT_EXTRACTOR_VERSION
+        });
+        if (normalized.turnMaterials.length !== artifacts.length) {
+          throw new Error(`统一事实提取标签协议不完整：需要 ${artifacts.length} 个 turn，实际得到 ${normalized.turnMaterials.length} 个`);
+        }
+        return normalized;
+      } catch (error) {
+        lastError = error;
+        const kind = factExtractionFailureKind(error);
+        if (attempt >= maxAttempts || kind === "fatal") throw error;
+        const delay = factRetryDelay(attempt, kind);
+        for (const artifact of artifacts) {
+          markStage(artifact, "state", "running", `${kind === "transient" ? "上游暂时不可用" : "抓取协议不完整"}，${Math.round(delay / 100) / 10} 秒后自动重试 ${attempt + 1}/${maxAttempts}`);
+          await putArtifact(artifact);
+        }
+        await waitWithAbort(delay, signal);
       }
-    });
-    let parsed;
-    try {
-      parsed = parseUnifiedFactsText(raw);
-    } catch (error) {
-      if (error instanceof PlainProtocolError) {
-        throw new Error(`\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u672A\u8FD4\u56DE\u6709\u6548\u7EAF\u6587\u672C\u534F\u8BAE\uFF1A${error.message}${error.preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${error.preview}` : ""}`);
-      }
-      throw error;
     }
-    for (const artifact of artifacts) assertApprovedForMemory(artifact, signal);
-    return normalizeUnifiedFactPackage({
-      raw: parsed,
-      artifacts,
-      previousSnapshot: previous,
-      extractorVersion: UNIFIED_FACT_EXTRACTOR_VERSION
-    });
+    throw lastError || new Error("事实提取失败");
   } catch (error) {
+    const adaptiveSplit = canAdaptiveSplitFacts(error, artifacts);
     for (const artifact of artifacts) {
-      markStage(artifact, "state", "failed", toErrorMessage(error));
-      await attachAndStore(artifact).catch(() => putArtifact(artifact));
+      markStage(artifact, "state", adaptiveSplit ? "queued" : "failed", adaptiveSplit ? "上游或协议不稳定，准备自动缩小批次" : toErrorMessage(error));
+      if (adaptiveSplit) await putArtifact(artifact);
+      else await attachAndStore(artifact).catch(() => putArtifact(artifact));
     }
     await persistChat().catch(() => void 0);
     throw error;
@@ -7821,11 +8033,27 @@ var UnifiedFactScheduler = class {
         "factExtraction",
         async (signal) => {
           let latestResult = null;
-          for (let index = 0; index < chunks.length; index += 1) {
-            const chunk = chunks[index];
-            const factPackage = await extractUnifiedFacts(chunk, signal, batch.connectionSnapshot, { includeStageSummary: batch.includeStageSummary });
+          const workChunks = [...chunks];
+          for (let index = 0; index < workChunks.length; index += 1) {
+            const chunk = workChunks[index];
+            let factPackage;
+            try {
+              factPackage = await extractUnifiedFacts(chunk, signal, batch.connectionSnapshot, { includeStageSummary: batch.includeStageSummary });
+            } catch (error) {
+              if (canAdaptiveSplitFacts(error, chunk)) {
+                const split = splitFactArtifactBatch(chunk);
+                workChunks.splice(index, 1, ...split);
+                for (const artifact of chunk) {
+                  markStage(artifact, "state", "queued", `批次抓取失败，已自动拆为 ${split.length} 个更小批次`);
+                  await putArtifact(artifact);
+                }
+                index -= 1;
+                continue;
+              }
+              throw error;
+            }
             const backlogContinues = this.pending.has(chatKey);
-            const isLastChunk = index === chunks.length - 1;
+            const isLastChunk = index === workChunks.length - 1;
             const deferDerived = !isLastChunk || batch.holdDerived || artifacts.length >= 5 || backlogContinues;
             latestResult = await dispatchUnifiedFactPackage({
               artifacts: chunk,
@@ -9682,7 +9910,7 @@ async function diagnosticsHtml() {
       </section>` : "";
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
-    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u6309 10\u201320 \u6761\u6B63\u6587\u5206\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${["paused", "failed", "waiting-connection"].includes(chatState.historyRebuild.state) ? "测试连接并继续重建" : "恢复重建"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
+    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u9ED8\u8BA4\u6BCF\u6279 6 \u6761\u3001\u8303\u56F4 4\u201310 \u6761\uFF0C\u5E76\u6309\u5B9E\u9645\u63D0\u793A\u8BCD\u4F53\u79EF\u7EE7\u7EED\u62C6\u5206\uFF1B\u6BCF\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${["paused", "failed", "waiting-connection"].includes(chatState.historyRebuild.state) ? "测试连接并继续重建" : "恢复重建"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
     ${conflictHtml}
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p>${diagnosticRecoveryAction(check)}</div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(

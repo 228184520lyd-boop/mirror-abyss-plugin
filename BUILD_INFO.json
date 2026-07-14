@@ -1,7 +1,7 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-alpha.10.7.6",
-  "baseline": "1.1.0-alpha.10.7.5 history rebuild recovery deploy",
+  "version": "1.1.0-alpha.10.7.7",
+  "baseline": "1.1.0-alpha.10.7.6 model routing deploy",
   "build_date": "2026-07-14",
   "build_type": "recovered deploy-bundle development",
   "pipeline_contract": [
@@ -25,7 +25,7 @@
     "trace"
   ],
   "graph_mode": "read_only",
-  "validation": "ES Module parse/import, route snapshot guards, per-profile transport lanes, dual-channel diagnostics, deployment syntax/version and ZIP integrity checks passed",
+  "validation": "ES Module parse/import, adaptive fact retry/split classification, bounded prompt context, history batch sizing, deployment syntax/version and ZIP integrity checks passed",
   "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive.",
   "connection_error_handling": [
     "detect_html_before_fact_protocol_parsing",
@@ -35,12 +35,14 @@
     "avoid_retrying_non_transient_html_configuration_failures"
   ],
   "fixes": [
-    "formalize current-chat connection and named Connection Profile as the only two model routes",
-    "call named profiles directly by profile ID without switching the global SillyTavern connection",
-    "freeze and verify a safe Profile route fingerprint before every queued request",
-    "separate native requests into per-profile lanes so different models can progress independently while duplicate calls to one Profile remain ordered",
-    "add current-vs-Profile comparison diagnostics to distinguish Profile state faults from shared upstream faults",
-    "never silently fall back from a failed selected Profile to another model",
-    "preserve history rebuild recovery, admission, event memory and lorebook consistency behavior"
+    "reduce fact extraction character budget from 52000 to 18000",
+    "retry single-turn transient and protocol failures with exponential backoff",
+    "split failed multi-turn fact batches automatically instead of repeating the same oversized request",
+    "reduce history rebuild batches from 10-20 messages to 4-10 messages with a default of 6",
+    "cap previous active-table prompt context and prioritize focus, foundations, protected rows, active rows and current-turn mentions",
+    "bound stage fact, event registry, previous long-term record, summary and candidate prompt contexts",
+    "retry small and large summary transient failures and malformed plaintext tag protocols",
+    "keep non-gateway HTML errors non-retryable and preserve existing data on final failure",
+    "preserve model routing, admission, event memory and lorebook consistency behavior"
   ]
 }
