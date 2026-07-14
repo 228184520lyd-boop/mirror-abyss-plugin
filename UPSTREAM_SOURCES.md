@@ -1,6 +1,6 @@
 # Upstream Sources and Design References
 
-Mirror Abyss alpha.10.5.3 is an independent Foundation Correction built on SillyTavern public extension/server capabilities, browser standards, the existing Mirror Abyss foundation codebase, and project-owned alpha.6/alpha.7 migration evidence.
+Mirror Abyss alpha.10.7.6 is an independent Foundation Correction built on SillyTavern public extension/server capabilities, browser standards, the existing Mirror Abyss foundation codebase, and project-owned alpha.6/alpha.7 migration evidence.
 
 ## Locked primary references
 
@@ -48,10 +48,21 @@ Mirror Abyss alpha.10.5.3 is an independent Foundation Correction built on Silly
   - Version: `1.1.0-alpha.7`
   - Use: old chat-key formula, artifact/ChatState shape, worldbook ownership marker and in-place upgrade compatibility
 
+
+- `UPSTREAM-ST-CONNECTION-012`
+  - SillyTavern `ConnectionManagerRequestService` on the release branch
+  - Source: `public/scripts/extensions/shared.js`
+  - Rechecked: 2026-07-14
+  - Use: direct `sendRequest(profileId, ...)` routing, Profile-owned model/API URL/secret-id/proxy fields, and no requirement to switch the active global Profile
+- `UPSTREAM-ST-PROFILE-ISSUES-013`
+  - SillyTavern issues #5348 and #5634
+  - Rechecked: 2026-07-14
+  - Use: compatibility diagnostics for saved Profile secret-id faults; not used to justify automatic fallback or direct secret handling
+
 ## Restricted references
 
 Amily2 public behavior was reviewed for API-slot and request-flow behavior only. Its source, modified source, CSS, DOM structure, prompts and assets are excluded from the Mirror Abyss code supply chain.
 
 ## Code provenance statement
 
-No external extension source code, prompts, CSS, icons, screenshots or visual assets are copied into alpha.10.5.3. Cross-tab coordination, local commit recovery, migration, conflict UI and tests are independently written. Browser standards define API semantics; SillyTavern APIs are invoked as host interfaces. Exact records are in `research/inventory.md`, `research/license-matrix.md`, `research/architecture-comparison.md`, ADR files and `docs/REFERENCE_MATRIX.md`.
+No external extension source code, prompts, CSS, icons, screenshots or visual assets are copied into alpha.10.7.6. Cross-tab coordination, local commit recovery, migration, conflict UI and tests are independently written. Browser standards define API semantics; SillyTavern APIs are invoked as host interfaces. Exact records are in `research/inventory.md`, `research/license-matrix.md`, `research/architecture-comparison.md`, ADR files and `docs/REFERENCE_MATRIX.md`.

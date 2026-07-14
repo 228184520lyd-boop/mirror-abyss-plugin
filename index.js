@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.5";
+    VERSION = "1.1.0-alpha.10.7.6";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -1510,15 +1510,18 @@ async function withInternalGeneration(work) {
     internalGenerationDepth = Math.max(0, internalGenerationDepth - 1);
   }
 }
-var nativeProfileTransportTail = Promise.resolve();
+var nativeProfileTransportLanes = /* @__PURE__ */ new Map();
 var nativeProfileTransportWaiting = 0;
-async function withNativeProfileTransport(work, signal) {
+async function withNativeProfileTransport(profileId, work, signal) {
+  const laneKey = safeText(profileId, 160).trim() || "unknown-profile";
   nativeProfileTransportWaiting += 1;
-  const previous = nativeProfileTransportTail;
+  const previous = nativeProfileTransportLanes.get(laneKey) ?? Promise.resolve();
   let release;
-  nativeProfileTransportTail = new Promise((resolve) => {
+  const gate = new Promise((resolve) => {
     release = resolve;
   });
+  const laneTail = previous.catch(() => void 0).then(() => gate);
+  nativeProfileTransportLanes.set(laneKey, laneTail);
   try {
     await previous.catch(() => void 0);
     if (signal?.aborted) throw new DOMException("Connection Profile 请求已取消", "AbortError");
@@ -1526,10 +1529,13 @@ async function withNativeProfileTransport(work, signal) {
   } finally {
     nativeProfileTransportWaiting = Math.max(0, nativeProfileTransportWaiting - 1);
     release?.();
+    laneTail.finally(() => {
+      if (nativeProfileTransportLanes.get(laneKey) === laneTail) nativeProfileTransportLanes.delete(laneKey);
+    });
   }
 }
 function nativeProfileTransportStatus() {
-  return { waiting: nativeProfileTransportWaiting };
+  return { waiting: nativeProfileTransportWaiting, activeLanes: nativeProfileTransportLanes.size };
 }
 
 // src/llm/generator.ts
@@ -1667,6 +1673,42 @@ function supportedProfiles() {
   }
   return connectionManagerStore()?.profiles ?? [];
 }
+function rawConnectionProfile(profileId) {
+  const id = safeText(profileId, 160).trim();
+  if (!id) return null;
+  return supportedProfiles().find((profile) => safeText(profile?.id, 160) === id) ?? null;
+}
+function profileRouteFingerprint(profile) {
+  if (!profile) return "";
+  const route = {
+    id: safeText(profile.id, 160),
+    api: safeText(profile.api, 80),
+    model: safeText(profile.model, 240),
+    apiUrl: safeText(profile["api-url"], 500),
+    proxy: safeText(profile.proxy, 160),
+    preset: safeText(profile.preset, 160),
+    instruct: safeText(profile.instruct, 160),
+    promptPostProcessing: safeText(profile["prompt-post-processing"], 80),
+    secretIdHash: hashText(safeText(profile["secret-id"], 240).trim())
+  };
+  return hashText(JSON.stringify(route));
+}
+function profileRouteHealth(profile) {
+  if (!profile) return { status: "error", detail: "Connection Profile 已不存在" };
+  const api = safeText(profile.api, 80).trim();
+  const model = safeText(profile.model, 240).trim();
+  const apiUrl = safeText(profile["api-url"], 500).trim();
+  const warnings = [];
+  if (!api) warnings.push("缺少 API 类型");
+  if (!model) warnings.push("未保存模型名");
+  if (/custom/i.test(api) && !apiUrl) warnings.push("Custom Profile 未保存 API URL");
+  return {
+    status: warnings.length ? "warn" : "ok",
+    detail: warnings.length ? warnings.join("；") : `${api || "未知 API"} / ${model || "未指定模型"}`,
+    fingerprint: profileRouteFingerprint(profile),
+    hasSecretId: Boolean(safeText(profile["secret-id"], 240).trim())
+  };
+}
 function resolveProfileId(connection) {
   const profiles = supportedProfiles();
   if (connection.profileId && profiles.some((profile) => profile?.id === connection.profileId)) return connection.profileId;
@@ -1724,17 +1766,31 @@ async function generateCurrent(options, signal) {
 async function generateWithNativeProfile(options, profileId, signal, profileSnapshot = {}) {
   const context = getContext();
   const service = context.ConnectionManagerRequestService;
-  const liveProfile = listSupportedConnectionProfiles().find((item2) => item2.id === profileId);
+  const liveProfile = rawConnectionProfile(profileId);
+  const liveFingerprint = profileRouteFingerprint(liveProfile);
   const profileDescriptor = {
     name: safeText(profileSnapshot.profileName ?? liveProfile?.name, 120),
     api: safeText(profileSnapshot.profileApi ?? liveProfile?.api, 80),
     model: safeText(profileSnapshot.profileModel ?? liveProfile?.model, 240)
   };
   if (typeof service?.sendRequest !== "function") {
-    throw new NativeGenerationError("\u5F53\u524DSillyTavern\u672A\u63D0\u4F9B ConnectionManagerRequestService", "configuration");
+    throw new NativeGenerationError("当前SillyTavern未提供 ConnectionManagerRequestService", "configuration");
+  }
+  if (!liveProfile) {
+    throw new NativeGenerationError(`${options.task} 使用的 Connection Profile 已被删除或不再受支持`, "profile_missing", void 0, void 0, {
+      task: options.task,
+      connectionContext: { mode: "profile", profileName: profileDescriptor.name, api: profileDescriptor.api, model: profileDescriptor.model }
+    });
+  }
+  if (profileSnapshot.profileFingerprint && liveFingerprint !== profileSnapshot.profileFingerprint) {
+    throw new NativeGenerationError(`${options.task} 使用的 Connection Profile 在任务排队后发生了变化。为避免调用错误模型，本次任务已停止；请重新执行`, "profile_changed", void 0, void 0, {
+      task: options.task,
+      connectionContext: { mode: "profile", profileName: profileDescriptor.name, api: profileDescriptor.api, model: profileDescriptor.model }
+    });
   }
   try {
     const result = await withNativeProfileTransport(
+      profileId,
       () => withInternalGeneration(() => Promise.resolve(service.sendRequest(
         profileId,
         messagesFromOptions(options),
@@ -1751,13 +1807,13 @@ async function generateWithNativeProfile(options, profileId, signal, profileSnap
       signal
     );
     const text = generationText(result);
-    if (!text) throw new NativeGenerationError(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`, "empty_response");
+    if (!text) throw new NativeGenerationError(`${options.task} Connection Profile返回为空`, "empty_response");
     if (looksLikeHtmlDocument(text)) {
-      throw new NativeGenerationError(`${options.task} Connection Profile\u8FD4\u56DE\u4E86HTML\u9519\u8BEF\u9875`, "upstream", void 0, protocolPreview(text));
+      throw new NativeGenerationError(`${options.task} Connection Profile返回了HTML错误页`, "upstream", void 0, protocolPreview(text));
     }
     return text;
   } catch (error) {
-    if (signal.aborted) throw new NativeGenerationError(`${options.task} Connection Profile\u8BF7\u6C42\u5DF2\u53D6\u6D88`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
+    if (signal.aborted) throw new NativeGenerationError(`${options.task} Connection Profile请求已取消`, "cancelled", void 0, void 0, { cause: error instanceof Error ? error : void 0 });
     throw normalizeNativeGenerationError(error, options.task, {
       mode: "profile",
       profileName: profileDescriptor?.name,
@@ -1769,9 +1825,11 @@ async function generateWithNativeProfile(options, profileId, signal, profileSnap
 function listSupportedConnectionProfiles() {
   return supportedProfiles().map((profile) => ({
     id: safeText(profile?.id, 160),
-    name: cleanProfileName(profile?.name) || "\u672A\u547D\u540D\u914D\u7F6E",
+    name: cleanProfileName(profile?.name) || "未命名配置",
     api: safeText(profile?.api, 80),
-    model: safeText(profile?.model, 240)
+    model: safeText(profile?.model, 240),
+    fingerprint: profileRouteFingerprint(profile),
+    routeHealth: profileRouteHealth(profile)
   })).filter((profile) => profile.id);
 }
 function effectiveConnectionTask(task) {
@@ -1804,6 +1862,7 @@ function captureTaskConnection(task) {
       profileName: profile?.name || cleanProfileName(connection.profile),
       profileApi: profile?.api || "",
       profileModel: profile?.model || "",
+      profileFingerprint: profile?.fingerprint || profileRouteFingerprint(rawConnectionProfile(profileId)),
       timeoutMs,
       capturedAt: nowIso()
     };
@@ -1862,29 +1921,35 @@ async function generateTask(options) {
     options.signal?.removeEventListener("abort", forwardAbort);
   }
 }
-async function testConnection(task) {
+async function probeConnectionSnapshot(task, connectionSnapshot) {
   const started = performance.now();
-  const connectionSnapshot = captureTaskConnection(task);
   const method = describeConnectionSnapshot(connectionSnapshot);
   let raw = "";
   try {
     raw = await generateTask({
       task,
       connectionSnapshot,
-      systemPrompt: "\u4F60\u662F\u8FDE\u63A5\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
-      prompt: "\u53EA\u8F93\u51FA\uFF1AMA_CONNECTION_OK"
+      systemPrompt: "你是连接测试器。禁止解释、禁止Markdown、禁止思考标签。",
+      prompt: "只输出：MA_CONNECTION_OK"
     });
   } catch (error) {
-    if (error instanceof NativeGenerationError) {
-      const actual = describeConnectionSnapshot(error.connectionContext || connectionSnapshot);
-      const route = actual === method ? method : `${method}（实际调用：${actual}）`;
-      throw new Error(`${route}\u8FDE\u63A5\u5931\u8D25 [${error.kind}]\uFF1A${error.message}${error.responsePreview ? `\uFF1B\u4E0A\u6E38\u7247\u6BB5\uFF1A${error.responsePreview}` : ""}`);
-    }
-    throw new Error(`${method}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    const normalizedError = error instanceof NativeGenerationError ? error : normalizeNativeGenerationError(error, task, connectionSnapshot);
+    return {
+      ok: false,
+      connected: false,
+      instructionFollowed: false,
+      protocolValid: false,
+      method,
+      elapsedMs: Math.round(performance.now() - started),
+      errorKind: normalizedError.kind || "upstream",
+      error: normalizedError.message || toErrorMessage(error),
+      responsePreview: normalizedError.responsePreview || ""
+    };
   }
   const normalized = raw.trim().replace(/^```(?:text)?\s*/i, "").replace(/```$/i, "").trim();
   const protocolValid = normalized === "MA_CONNECTION_OK";
   return {
+    ok: Boolean(raw.trim()),
     connected: Boolean(raw.trim()),
     instructionFollowed: protocolValid,
     protocolValid,
@@ -1892,6 +1957,57 @@ async function testConnection(task) {
     elapsedMs: Math.round(performance.now() - started),
     responsePreview: raw.replace(/\s+/g, " ").slice(0, 240)
   };
+}
+async function testConnection(task) {
+  const connectionSnapshot = captureTaskConnection(task);
+  const result = await probeConnectionSnapshot(task, connectionSnapshot);
+  if (!result.ok) {
+    throw new Error(`${result.method}连接失败 [${result.errorKind}]：${result.error}${result.responsePreview ? `；上游片段：${result.responsePreview}` : ""}`);
+  }
+  return result;
+}
+function connectionRouteDiagnosisSummary(result) {
+  if (!result) return "尚未执行对照诊断";
+  if (result.classification === "both_ok") return "当前连接与指定 Profile 均可用；可安全分配不同模型";
+  if (result.classification === "profile_only_failure") return "当前连接正常，但指定 Profile 失败；优先检查 Profile 保存的模型、URL、密钥引用或代理";
+  if (result.classification === "current_only_failure") return "指定 Profile 正常，但当前聊天连接失败；后台可继续使用 Profile";
+  if (result.classification === "shared_failure") return "当前连接与指定 Profile 均失败；更可能是共享上游、代理或服务状态问题";
+  if (result.classification === "current_ok") return "当前聊天连接测试通过";
+  return "连接诊断未完成";
+}
+async function compareConnectionRoutes(task) {
+  const effectiveTask = effectiveConnectionTask(task);
+  const configured = captureTaskConnection(effectiveTask);
+  const currentSnapshot = {
+    mode: "current",
+    credentialKey: "native-current",
+    profileId: "",
+    profileName: "当前聊天连接",
+    timeoutMs: 0,
+    capturedAt: nowIso()
+  };
+  const current = await probeConnectionSnapshot(effectiveTask, currentSnapshot);
+  let profile = null;
+  let classification = current.ok ? "current_ok" : "shared_failure";
+  if (configured.mode === "profile") {
+    profile = await probeConnectionSnapshot(effectiveTask, configured);
+    if (current.ok && profile.ok) classification = "both_ok";
+    else if (current.ok && !profile.ok) classification = "profile_only_failure";
+    else if (!current.ok && profile.ok) classification = "current_only_failure";
+    else classification = "shared_failure";
+  }
+  const result = {
+    task: effectiveTask,
+    configuredMode: configured.mode,
+    classification,
+    checkedAt: nowIso(),
+    current,
+    profile,
+    summary: ""
+  };
+  result.summary = connectionRouteDiagnosisSummary(result);
+  lastConnectionDiagnostics[effectiveTask] = result;
+  return result;
 }
 
 // src/prompts/audit.ts
@@ -8833,6 +8949,15 @@ async function runDiagnostics() {
     status: duplicateEventTitles ? "warn" : "ok",
     detail: duplicateEventTitles ? `发现 ${duplicateEventTitles} 组同名事件；后续事件操作会尝试归并到唯一旧 ID` : `当前 ${diagnosticState.eventEntries?.length ?? 0} 个事件条目未发现同名重复`
   });
+  const routeResults = Object.values(lastConnectionDiagnostics);
+  const routeFailure = routeResults.find((item2) => ["profile_only_failure", "shared_failure"].includes(item2?.classification));
+  const routePartial = routeResults.find((item2) => item2?.classification === "current_only_failure");
+  checks.push({
+    id: "connectionRouteAudit",
+    label: "模型调用路由",
+    status: routeFailure ? "error" : routePartial ? "warn" : "ok",
+    detail: routeFailure?.summary || routePartial?.summary || (routeResults.length ? "已执行连接对照诊断，未发现 Profile 路由异常" : "尚未执行对照诊断；可在模型设置中分别比较当前连接与指定 Profile")
+  });
   return checks;
 }
 async function diagnosticReport() {
@@ -8846,7 +8971,7 @@ async function diagnosticReport() {
     chatKey,
     kernel: foundationKernel.status(),
     scope: context ? chatScopeManager.current() : null,
-    nativeInvocation: { current: typeof context?.generateRaw === "function", profiles: typeof context?.ConnectionManagerRequestService?.sendRequest === "function", profileTransport: nativeProfileTransportStatus() },
+    nativeInvocation: { current: typeof context?.generateRaw === "function", profiles: typeof context?.ConnectionManagerRequestService?.sendRequest === "function", profileTransport: nativeProfileTransportStatus(), routeDiagnostics: deepClone(lastConnectionDiagnostics) },
     crossTabCoordinator: foundationKernel.services.tryGet(CROSS_TAB_COORDINATOR)?.snapshot() ?? null,
     checks: await runDiagnostics(),
     ui: { messagePanels: messagePanelUiHealth(), workspace: workspaceUiHealth() },
@@ -8881,6 +9006,7 @@ var lastWorkspaceRenderedAt = 0;
 var lastWorkspaceRenderError = "";
 var queueUnsubscribe = null;
 var selectedGraphNodeId = null;
+var lastConnectionDiagnostics = {};
 function clampGraphZoom(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 1;
@@ -9432,28 +9558,43 @@ function connectionProfiles() {
     return [];
   }
 }
+function connectionDiagnosticHtml(task) {
+  const result = lastConnectionDiagnostics[effectiveConnectionTask(task)];
+  if (!result) return "";
+  const tone = result.classification === "both_ok" || result.classification === "current_ok" ? "success" : result.classification === "current_only_failure" ? "working" : "danger";
+  const current = result.current ? `当前：${result.current.ok ? "通过" : `失败 ${result.current.errorKind || ""}`}` : "";
+  const profile = result.profile ? `Profile：${result.profile.ok ? "通过" : `失败 ${result.profile.errorKind || ""}`}` : "";
+  return `<div class="ma11-connection-diagnostic ${tone}"><b>${escapeHtml(result.summary)}</b><small>${escapeHtml([current, profile, new Date(result.checkedAt).toLocaleTimeString()].filter(Boolean).join("；"))}</small></div>`;
+}
 function connectionBlock(task, label) {
   const value = getSettings().connections[task];
   const profiles = connectionProfiles();
-  const profileOptions = profiles.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === value.profileId ? "selected" : ""}>${escapeHtml(profile.name)}${profile.model ? ` \xB7 ${escapeHtml(profile.model)}` : ""}</option>`).join("");
-  const missingProfile = value.profileId && !profiles.some((profile) => profile.id === value.profileId) ? `<option value="${escapeHtml(value.profileId)}" selected>\u5DF2\u5220\u9664\u6216\u4E0D\u53D7\u652F\u6301\u7684\u914D\u7F6E</option>` : "";
+  const profileOptions = profiles.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === value.profileId ? "selected" : ""}>${escapeHtml(profile.name)}${profile.model ? ` · ${escapeHtml(profile.model)}` : ""}</option>`).join("");
+  const missingProfile = value.profileId && !profiles.some((profile) => profile.id === value.profileId) ? `<option value="${escapeHtml(value.profileId)}" selected>已删除或不受支持的配置</option>` : "";
+  const selectedProfile = profiles.find((profile) => profile.id === value.profileId);
+  const routeHint = value.mode === "profile" && selectedProfile ? `<small class="ma11-connection-route">${escapeHtml(selectedProfile.api || "未知 API")} / ${escapeHtml(selectedProfile.model || "未指定模型")}</small>` : "";
   return `<div class="ma11-connection-row" data-ma11-connection="${task}">
     <b>${label}</b>
     <select data-ma11-connection-mode="${task}">
-      <option value="current" ${value.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option>
-      <option value="profile" ${value.mode === "profile" ? "selected" : ""}>ST\u539F\u751F Profile\uFF08\u9694\u79BB\u8BF7\u6C42\uFF09</option>
+      <option value="current" ${value.mode === "current" ? "selected" : ""}>当前正文连接（同模型）</option>
+      <option value="profile" ${value.mode === "profile" ? "selected" : ""}>指定 Connection Profile（其他模型）</option>
     </select>
-    <select data-ma11-connection-profile-id="${task}" ${value.mode === "profile" ? "" : "hidden disabled"}><option value="">\u8BF7\u9009\u62E9Connection Profile</option>${missingProfile}${profileOptions}</select>
-    <button data-ma11-test="${task}">\u6D4B\u8BD5</button>
+    <div class="ma11-connection-profile-select">
+      <select data-ma11-connection-profile-id="${task}" ${value.mode === "profile" ? "" : "hidden disabled"}><option value="">请选择Connection Profile</option>${missingProfile}${profileOptions}</select>
+      ${routeHint}
+    </div>
+    <div class="ma11-connection-actions"><button data-ma11-test="${task}">测试所选</button><button data-ma11-compare-test="${task}">对照诊断</button></div>
+    ${connectionDiagnosticHtml(task)}
   </div>`;
 }
 function settingsHtml() {
   const settings = getSettings();
   return `
     <section class="ma11-card ma11-form-card">
-      <header><b>\u4EFB\u52A1\u6A21\u578B\u5206\u914D</b><span>\u6240\u6709\u8BF7\u6C42\u7531 SillyTavern \u5F53\u524D\u8FDE\u63A5\u6216\u539F\u751F Connection Profile \u6267\u884C\u3002</span></header>
+      <header><b>任务模型分配</b><span>同一 API 可建立多个 Connection Profile，为审核与记忆选择不同模型。</span></header>
       ${connectionBlock("audit", "\u5BA1\u6838\u4E0E\u5FC5\u8981\u4FEE\u6B63")}
       ${connectionBlock("factExtraction", "\u8BB0\u5FC6\u6A21\u578B\uFF08\u8868\u683C\uFF0B\u5C0F\u603B\u7ED3\uFF0B\u5927\u603B\u7ED3\uFF09")}
+      <p class="ma11-help ma11-route-help">指定 Profile 会按 ID 直接调用，不切换当前聊天连接。同一 API 可用多个 Profile 选择不同模型；失败时不会静默回退到其他模型。</p>
       <p class="ma11-help">\u955C\u6E0A\u53EA\u4F7F\u7528\u4E24\u4E2A\u6A21\u578B\u89D2\u8272\uFF1A\u5BA1\u6838\u4E0E\u5FC5\u8981\u4FEE\u6B63\u5171\u4EAB\u524D\u53F0\u8FDE\u63A5\uFF1B\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u3001\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u5171\u4EAB\u540E\u53F0\u8BB0\u5FC6\u8FDE\u63A5\u3002\u6B63\u6587\u53EA\u5728\u7EDF\u4E00\u4E8B\u5B9E\u63D0\u53D6\u65F6\u88AB\u7406\u89E3\u4E00\u6B21\uFF0C\u5C0F\u603B\u7ED3\u8BFB\u53D6\u4E8B\u5B9E\u5305\u4E0E\u6D3B\u8DC3\u8868\u683C\uFF0C\u5927\u603B\u7ED3\u8BFB\u53D6\u65E7\u5927\u603B\u7ED3\u4E0E\u65B0\u5C0F\u603B\u7ED3\uFF0C\u4E0D\u91CD\u65B0\u53D1\u9001\u539F\u59CB\u6B63\u6587\u3002ST \u539F\u751F Profile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u4E0D\u5207\u6362\u5F53\u524D\u804A\u5929\u8FDE\u63A5\uFF1B\u955C\u6E0A\u4E0D\u4FDD\u5B58\u5BC6\u94A5\u3001\u4E0D\u76F4\u63A5\u8BF7\u6C42\u6A21\u578B\u4F9B\u5E94\u5546\u3002</p>
     </section>
     <section class="ma11-card ma11-form-card">
@@ -9493,7 +9634,8 @@ function diagnosticRecoveryAction(check) {
     sync: ["retry-sync", "重试世界书同步"],
     messagePanelUi: ["refresh-ui", "重建正文状态条"],
     workspaceUi: ["refresh-ui", "重建控制台界面"],
-    retryCoverage: ["open-tasks", "查看失败任务"]
+    retryCoverage: ["open-tasks", "查看失败任务"],
+    connectionRouteAudit: ["open-settings", "执行对照诊断"]
   };
   const entry = actions[check.id] || ["refresh-diagnostics", "重新检测"];
   return `<div class="ma11-check-actions"><button type="button" data-ma11-action="${entry[0]}">${entry[1]}</button></div>`;
@@ -9708,12 +9850,14 @@ function updateConnection(target) {
   let shouldRender = false;
   if (modeTask) {
     settings.connections[modeTask].mode = target.value;
+    delete lastConnectionDiagnostics[effectiveConnectionTask(modeTask)];
     shouldRender = true;
   }
   if (profileTask) {
     settings.connections[profileTask].profileId = safeText(target.value, 160).trim();
     const selected = connectionProfiles().find((profile) => profile.id === settings.connections[profileTask].profileId);
     settings.connections[profileTask].profile = selected?.name || "";
+    delete lastConnectionDiagnostics[effectiveConnectionTask(profileTask)];
   }
   saveSettings();
   if (shouldRender) void renderWorkspace();
@@ -9725,7 +9869,7 @@ function bindWorkspace(workspace) {
     if (tab) return setTab(tab);
     const action = target.closest("[data-ma11-action]")?.dataset.ma11Action;
     const actionButton = target.closest("button");
-    const longAction = Boolean(action || target.closest("[data-ma11-test]"));
+    const longAction = Boolean(action || target.closest("[data-ma11-test]") || target.closest("[data-ma11-compare-test]"));
     const originalButtonText = actionButton?.textContent ?? "";
     if (actionButton && longAction) {
       actionButton.disabled = true;
@@ -9938,6 +10082,13 @@ function bindWorkspace(workspace) {
         const result = await testConnection(testTask);
         const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1B\u6587\u672C\u534F\u8BAE${result.protocolValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
         toast(result.instructionFollowed ? "success" : "warning", result.instructionFollowed ? detail : `${detail}\uFF1B\u8FD4\u56DE\uFF1A${result.responsePreview}`);
+      }
+      const compareTask = target.closest("[data-ma11-compare-test]")?.dataset.ma11CompareTest;
+      if (compareTask) {
+        const result = await compareConnectionRoutes(compareTask);
+        const tone = ["both_ok", "current_ok"].includes(result.classification) ? "success" : result.classification === "current_only_failure" ? "warning" : "error";
+        toast(tone, result.summary);
+        await renderWorkspace();
       }
     } catch (error) {
       toast("error", toErrorMessage(error));
@@ -10754,6 +10905,7 @@ function exposeApi() {
       return processMessage(index, true);
     },
     diagnostics: diagnosticReport,
+    diagnoseConnectionRoutes: (task = "factExtraction") => compareConnectionRoutes(task),
     getState: () => ({
       state,
       active: extensionActive,

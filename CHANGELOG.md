@@ -1,3 +1,13 @@
+# 1.1.0-alpha.10.7.6 — Model routing and profile diagnostics
+
+- 固定两种模型来源：当前正文连接、指定 Connection Profile。
+- Named Profile 始终通过 `ConnectionManagerRequestService.sendRequest(profileId, ...)` 直调，不切换全局连接。
+- 新增 Profile 路由指纹；任务排队后 Profile 被修改时安全停止。
+- 将全局 Profile 串行锁改为按 Profile 分离的请求通道。
+- 新增当前连接与指定 Profile 的双通道对照诊断。
+- Profile 失败时禁止静默回退到其他模型。
+- 保持 `ma-pipeline-10.7.4`，不重新处理已成功正文。
+
 # 1.1.0-alpha.10.7.5 — History dependency recovery
 
 - 在失效历史真正删除前执行 `factExtraction` 连接预检；返回 HTML 时进入非破坏式等待状态。

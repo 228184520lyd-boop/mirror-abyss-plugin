@@ -1,3 +1,17 @@
+# alpha.10.7.6 模型路由补充
+
+```text
+当前正文连接 ── generateRaw ── 当前活动模型
+
+指定 Connection Profile ── sendRequest(profileId) ── Profile 保存的 API / 模型 / 密钥引用 / 代理
+```
+
+- 两条通道互不隐式回退。
+- Profile 任务创建时冻结 ID 与路由指纹，执行前再次校验。
+- 不同 Profile 使用独立异步 lane；同一 Profile 内保持顺序。
+- 对照诊断用于区分当前连接故障、Profile 独有故障和共享上游故障。
+- 不执行 `/profile`，不写入 `selectedProfile`，不改变正文当前模型。
+
 # Alpha 10.7 架构契约
 
 ## 唯一事实源与准入

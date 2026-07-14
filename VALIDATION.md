@@ -1,3 +1,14 @@
+# 1.1.0-alpha.10.7.6 validation
+
+- ES Module syntax and import smoke test.
+- No `/profile` command or assignment to Connection Manager selected profile.
+- Named Profile calls use frozen `profileId` with `ConnectionManagerRequestService.sendRequest`.
+- Profile route fingerprint mismatch blocks queued requests.
+- Per-profile request lanes permit different profile IDs to progress independently.
+- Dual-channel diagnostics classify current/Profile route outcomes without automatic fallback.
+- Manifest, runtime version and build metadata are consistent.
+- Deployment ZIP integrity and SHA-256 generated.
+
 # alpha.10.7.5 validation
 
 - JavaScript classic syntax check: passed.

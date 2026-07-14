@@ -1,7 +1,7 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-alpha.10.7.5",
-  "baseline": "1.1.0-alpha.10.7.4.2 ES Module startup fix deploy",
+  "version": "1.1.0-alpha.10.7.6",
+  "baseline": "1.1.0-alpha.10.7.5 history rebuild recovery deploy",
   "build_date": "2026-07-14",
   "build_type": "recovered deploy-bundle development",
   "pipeline_contract": [
@@ -25,7 +25,7 @@
     "trace"
   ],
   "graph_mode": "read_only",
-  "validation": "ES Module parse/import, deployment syntax/version, history rebuild transaction guards and archive checks passed",
+  "validation": "ES Module parse/import, route snapshot guards, per-profile transport lanes, dual-channel diagnostics, deployment syntax/version and ZIP integrity checks passed",
   "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive.",
   "connection_error_handling": [
     "detect_html_before_fact_protocol_parsing",
@@ -35,12 +35,12 @@
     "avoid_retrying_non_transient_html_configuration_failures"
   ],
   "fixes": [
-    "run a lightweight factExtraction connection preflight before destructive history invalidation",
-    "keep existing tables and summaries intact while history rebuild waits for a working memory connection",
-    "freeze the verified factExtraction Connection Profile snapshot across raw history batches",
-    "allow optional audit/admission to continue while failed history dependencies block only memory stages",
-    "automatically enqueue admitted messages that were waiting for history recovery after rebuild completion",
-    "persist history rebuild error kind, status and actual connection label for actionable UI diagnostics",
-    "keep ma-pipeline-10.7.4 unchanged to avoid reprocessing already successful messages"
+    "formalize current-chat connection and named Connection Profile as the only two model routes",
+    "call named profiles directly by profile ID without switching the global SillyTavern connection",
+    "freeze and verify a safe Profile route fingerprint before every queued request",
+    "separate native requests into per-profile lanes so different models can progress independently while duplicate calls to one Profile remain ordered",
+    "add current-vs-Profile comparison diagnostics to distinguish Profile state faults from shared upstream faults",
+    "never silently fall back from a failed selected Profile to another model",
+    "preserve history rebuild recovery, admission, event memory and lorebook consistency behavior"
   ]
 }

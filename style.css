@@ -894,3 +894,50 @@ html.ma11-generation-locked #send_button {
   .ma11-message-actions button:last-child { margin-left: 0; }
   .ma11-check { min-height: auto; }
 }
+
+/* alpha.10.7.6 model-route diagnostics */
+.ma11-connection-row {
+  grid-template-columns: minmax(8rem, 10rem) minmax(12rem, 15rem) minmax(14rem, 1fr) auto;
+}
+.ma11-connection-profile-select {
+  display: grid;
+  min-width: 0;
+  gap: 0.28rem;
+}
+.ma11-connection-route {
+  color: var(--ma11-muted-text);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.ma11-connection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.ma11-connection-diagnostic {
+  grid-column: 2 / -1;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.56rem 0.68rem;
+  border: 1px solid var(--ma11-border);
+  border-radius: var(--ma11-radius-sm);
+  background: color-mix(in srgb, var(--ma11-panel-2) 86%, transparent);
+  line-height: 1.45;
+}
+.ma11-connection-diagnostic small { color: var(--ma11-muted-text); }
+.ma11-connection-diagnostic.success { border-color: color-mix(in srgb, var(--ma11-success) 55%, var(--ma11-border)); }
+.ma11-connection-diagnostic.working { border-color: color-mix(in srgb, var(--ma11-warning) 60%, var(--ma11-border)); }
+.ma11-connection-diagnostic.danger { border-color: color-mix(in srgb, var(--ma11-danger) 62%, var(--ma11-border)); }
+.ma11-route-help {
+  padding: 0.62rem 0.72rem;
+  border-left: 3px solid color-mix(in srgb, var(--ma11-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--ma11-accent) 7%, transparent);
+}
+@media (max-width: 860px) {
+  .ma11-connection-row { grid-template-columns: 1fr; }
+  .ma11-connection-actions { justify-content: flex-start; }
+  .ma11-connection-diagnostic { grid-column: 1; }
+}
