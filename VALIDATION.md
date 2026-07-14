@@ -1,3 +1,14 @@
+# alpha.10.7.5 validation
+
+- JavaScript classic syntax check: passed.
+- ES Module parse/import smoke test: passed.
+- History rebuild preflight occurs before `prepareHistoryRebuild`: passed.
+- HTML/preflight failure preserves existing memory via `nonDestructive` waiting state: passed.
+- Audit/admission executes before history-memory gate: passed.
+- Verified connection snapshot is passed to raw history fact batches: passed.
+- Deferred admitted messages are automatically re-enqueued after successful rebuild: passed.
+- Manifest/index/build version agreement: passed.
+
 # Validation — 1.1.0-alpha.10.7.4.2
 
 执行日期：2026-07-14

@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.4.2";
+    VERSION = "1.1.0-alpha.10.7.5";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -6464,11 +6464,14 @@ async function runBatchWithRetry(work, onRetry) {
 function assertHistoryRebuildAccess(state2) {
   const rebuild = state2.historyRebuild;
   if (!rebuild) return;
+  if (rebuild.state === "checking-connection" || rebuild.state === "waiting-connection") {
+    throw new TaskCancelledError("历史依赖正在等待记忆模型连接恢复：正文审核仍可继续，表格、总结与世界书同步暂缓");
+  }
   if (rebuild.state === "failed") {
-    throw new TaskCancelledError("\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5931\u8D25\uFF0C\u5FC5\u987B\u5148\u6062\u590D\u540E\u624D\u80FD\u7EE7\u7EED\u603B\u7ED3\u6216\u540C\u6B65");
+    throw new TaskCancelledError("历史依赖重建失败：正文审核仍可继续，但表格、总结与世界书同步必须在恢复后继续");
   }
   if (rebuild.state === "paused") {
-    throw new TaskCancelledError("\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5DF2\u6682\u505C\uFF0C\u6062\u590D\u540E\u624D\u80FD\u7EE7\u7EED\u603B\u7ED3\u6216\u540C\u6B65");
+    throw new TaskCancelledError("历史依赖重建已暂停：正文审核仍可继续，但表格、总结与世界书同步需要等待恢复");
   }
   if (rebuild.ownerId && rebuild.ownerId !== rebuildOwnerId) {
     throw new TaskCancelledError("\u53E6\u4E00\u4E2A\u6807\u7B7E\u9875\u6B63\u5728\u91CD\u5EFA\u8BE5\u804A\u5929\u7684\u603B\u7ED3\u4E0E\u72B6\u6001\u4F9D\u8D56");
@@ -6491,20 +6494,102 @@ async function requestHistoryRebuildCancel() {
   await putChatState(state2);
   return true;
 }
+async function preflightHistoryRebuildConnection(chatKey, startIndex, batchSize, signal) {
+  assertCurrent(chatKey, signal);
+  const state2 = await getChatState(chatKey);
+  const normalizedStart = Math.max(0, Math.min(startIndex, getChat().length));
+  const normalizedBatchSize = Math.min(20, Math.max(10, Math.floor(batchSize || DEFAULT_REBUILD_BATCH_SIZE)));
+  const inspection = await inspectHistoryRebuildSources(normalizedStart, normalizedBatchSize, state2);
+  if (!inspection.rawBatches) return { inspection, connectionSnapshot: void 0 };
+  const connectionSnapshot = captureTaskConnection("factExtraction");
+  const raw = await generateTask({
+    task: "factExtraction",
+    connectionSnapshot,
+    systemPrompt: "你是镜渊历史依赖重建的连接预检器。禁止解释、禁止Markdown、禁止思考标签。",
+    prompt: "只输出：MA_HISTORY_REBUILD_CONNECTION_OK",
+    signal,
+    invocation: {
+      sourceRange: { startIndex: normalizedStart, endIndex: normalizedStart, messageKeys: [] },
+      priority: "background-critical",
+      blocking: false,
+      coalesceKey: `history-preflight:${chatKey}`,
+      outputSchema: "MA_HISTORY_REBUILD_CONNECTION_OK"
+    }
+  });
+  if (!raw.trim()) throw new NativeGenerationError("历史重建连接预检返回为空", "empty_response", void 0, void 0, { task: "factExtraction", connectionContext: deepClone(connectionSnapshot) });
+  return { inspection, connectionSnapshot };
+}
 async function rebuildHistoryFrom(input) {
   const chatKey = currentChatKey();
   return coordinator2().withLease(`history-rebuild:${chatKey}`, async (lease) => {
     assertCurrent(chatKey, input.signal);
     lease.assertOwner();
     const existingState = await getChatState(chatKey);
-    const resumable = input.reason === "recovery" ? existingState.historyRebuild : void 0;
-    const record = resumable ?? await prepareHistoryRebuild(
-      input.startIndex,
+    let resumable = input.reason === "recovery" ? existingState.historyRebuild : void 0;
+    const batchSize = input.batchSize ?? resumable?.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE;
+    if (!resumable) {
+      const inspection = await inspectHistoryRebuildSources(input.startIndex, batchSize, existingState);
+      if (inspection.rawBatches) {
+        const now = nowIso();
+        resumable = {
+          schemaVersion: 3,
+          id: makeId("history-preflight"),
+          chatKey,
+          startIndex: input.startIndex,
+          nextIndex: input.startIndex,
+          batchSize,
+          totalMessages: assistantIndexesFrom(input.startIndex).length,
+          processedMessages: 0,
+          completedBatches: 0,
+          totalBatches: inspection.steps.length,
+          reusedMessages: inspection.reusedMessages,
+          rereadMessages: inspection.rereadMessages,
+          reusedFactPackages: inspection.reusedFactPackages,
+          rawBatches: inspection.rawBatches,
+          phase: "checking-connection",
+          reason: input.reason,
+          state: "checking-connection",
+          ownerId: rebuildOwnerId,
+          nonDestructive: true,
+          createdAt: now,
+          updatedAt: now
+        };
+        existingState.historyRebuild = resumable;
+        existingState.lastSyncStatus = "queued";
+        existingState.lastSyncError = "历史依赖发生变化，正在验证记忆模型连接；旧表格与总结尚未删除";
+        await putChatState(existingState);
+      }
+    }
+    const preflightStart = resumable?.nextIndex ?? resumable?.startIndex ?? input.startIndex;
+    let preflight;
+    try {
+      preflight = await preflightHistoryRebuildConnection(chatKey, preflightStart, batchSize, input.signal);
+    } catch (error) {
+      if (resumable) {
+        const message = toErrorMessage(error);
+        await updateHistoryRebuild(resumable, {
+          state: resumable.nonDestructive ? "waiting-connection" : "failed",
+          phase: "checking-connection",
+          error: message,
+          errorKind: error instanceof NativeGenerationError ? error.kind : void 0,
+          errorStatus: error instanceof NativeGenerationError ? error.status : void 0,
+          connectionLabel: error instanceof NativeGenerationError ? describeConnectionSnapshot(error.connectionContext) : resumable.connectionLabel
+        });
+      }
+      throw error;
+    }
+    const connectionSnapshot = preflight.connectionSnapshot;
+    const record = !resumable || resumable.nonDestructive ? await prepareHistoryRebuild(
+      resumable?.startIndex ?? input.startIndex,
       input.reason,
-      input.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE,
+      batchSize,
       input.signal
-    );
-    record.schemaVersion = 2;
+    ) : resumable;
+    if (connectionSnapshot) {
+      record.connectionLabel = describeConnectionSnapshot(connectionSnapshot);
+      record.connectionProfileId = connectionSnapshot.profileId || "";
+    }
+    record.schemaVersion = 3;
     record.batchSize = Math.min(20, Math.max(10, record.batchSize ?? input.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE));
     record.state = "rebuilding";
     record.ownerId = rebuildOwnerId;
@@ -6565,7 +6650,7 @@ async function rebuildHistoryFrom(input) {
           if (cached && input.replayBatch && step.factPackages?.length) {
             batchArtifact = await input.replayBatch(indexes, step.factPackages, { deferLorebookSync: true, holdDerived: true });
           } else if (input.processBatch) {
-            batchArtifact = await input.processBatch(indexes, { deferLorebookSync: true, holdDerived: true });
+            batchArtifact = await input.processBatch(indexes, { deferLorebookSync: true, holdDerived: true, connectionSnapshot });
           } else if (input.processMessage) {
             for (const index of indexes) {
               const artifact = await input.processMessage(index, true, { deferLorebookSync: true });
@@ -6617,7 +6702,16 @@ async function rebuildHistoryFrom(input) {
       if (error instanceof TaskCancelledError || error instanceof StaleTaskError) throw error;
       record.state = "failed";
       record.error = toErrorMessage(error);
-      await updateHistoryRebuild(record, { state: "failed", error: record.error });
+      record.errorKind = error instanceof NativeGenerationError ? error.kind : void 0;
+      record.errorStatus = error instanceof NativeGenerationError ? error.status : void 0;
+      record.connectionLabel = error instanceof NativeGenerationError ? describeConnectionSnapshot(error.connectionContext || connectionSnapshot) : record.connectionLabel;
+      await updateHistoryRebuild(record, {
+        state: "failed",
+        error: record.error,
+        errorKind: record.errorKind,
+        errorStatus: record.errorStatus,
+        connectionLabel: record.connectionLabel
+      });
       await safeAppendOperationLog(chatKey, {
         category: "recovery",
         action: "history-rebuild-failed",
@@ -7570,7 +7664,7 @@ var UnifiedFactScheduler = class {
         holdDerived: false,
         includeStageSummary: false,
         waiters: [],
-        connectionSnapshot: captureTaskConnection("factExtraction"),
+        connectionSnapshot: options.connectionSnapshot ?? captureTaskConnection("factExtraction"),
         queuedAt: Date.now()
       };
       for (const artifact of artifacts) batch.artifacts.set(artifact.messageIndex, deepClone(artifact));
@@ -7837,8 +7931,6 @@ async function processMessage(index, force = false, options = {}) {
   const auditConnectionSnapshot = settings.auditEnabled ? captureTaskConnection("audit") : void 0;
   const foregroundLabel = settings.auditEnabled ? `正文准入与审核 · 消息 ${index + 1}` : `正文准入（审核关闭） · 消息 ${index + 1}`;
   const foreground = await taskQueue.run(key, foregroundLabel, "admission", async (signal) => {
-    const initialState = await getChatState(chatKey);
-    assertHistoryRebuildAccess(initialState);
     const artifact = await loadOrCreateArtifact(index, force);
     notify(index, artifact);
     let shouldPersistForeground = false;
@@ -7900,6 +7992,19 @@ async function processMessage(index, force = false, options = {}) {
     sourceRange: { startIndex: index, endIndex: index }
   });
   if (!foreground.approved || !settings.autoState && !force) return foreground.artifact;
+  try {
+    const memoryState = await getChatState(chatKey);
+    assertHistoryRebuildAccess(memoryState);
+  } catch (error) {
+    const artifact = getAttachedArtifact(getMessage(index)) ?? foreground.artifact;
+    const detail = `${toErrorMessage(error)}；正文已通过准入，恢复历史依赖后将自动补做表格、总结与同步`;
+    markStage(artifact, "state", "blocked", detail);
+    markStage(artifact, "summary", "blocked", detail);
+    markStage(artifact, "sync", "blocked", detail);
+    await commitArtifact(index, artifact);
+    toast("warning", detail);
+    return artifact;
+  }
   const background = unifiedFactScheduler.enqueue(foreground.artifact, {
     deferLorebookSync: options.deferLorebookSync,
     force
@@ -7938,7 +8043,8 @@ async function processHistoryBatch(indexes, options) {
     deferLorebookSync: options.deferLorebookSync,
     force: true,
     holdDerived: options.holdDerived,
-    includeStageSummary: false
+    includeStageSummary: false,
+    connectionSnapshot: options.connectionSnapshot
   });
 }
 async function replayHistoryBatch(indexes, factPackages, options) {
@@ -8064,6 +8170,32 @@ function reasonForChangedEvent(sourceEvent) {
   if (/UPDATED/i.test(sourceEvent)) return "continued";
   return "edited";
 }
+function artifactWaitingForHistoryRecovery(artifact) {
+  if (artifact?.admission?.status !== "approved") return false;
+  const stages = [artifact?.stages?.state, artifact?.stages?.summary, artifact?.stages?.sync];
+  return stages.some((stage) => stage?.status === "blocked" && /历史依赖|历史重建/.test(stage?.detail || ""));
+}
+async function resumeMemoryBlockedByHistory(chatKey) {
+  if (chatKey !== currentChatKey()) return 0;
+  const state2 = await getChatState(chatKey);
+  if (state2.historyRebuild) return 0;
+  let resumed = 0;
+  for (const index of assistantIndexesFrom(0)) {
+    const artifact = getAttachedArtifact(getMessage(index));
+    if (!artifact || artifact.chatKey !== chatKey || artifact.messageKey !== messageIdentity(index) || artifact.sourceFingerprint !== messageFingerprint(index)) continue;
+    if (!artifactWaitingForHistoryRecovery(artifact)) continue;
+    markStage(artifact, "state", "queued", "历史依赖已恢复，等待补做事实提取");
+    markStage(artifact, "summary", "queued", "等待表格补齐后派生事件总结");
+    markStage(artifact, "sync", "queued", "等待最新表格与总结完成后发布");
+    await stageArtifact(index, artifact);
+    void unifiedFactScheduler.enqueue(artifact, { force: true }).catch((error) => {
+      console.error("[MirrorAbyss] deferred memory resume failed", error);
+    });
+    resumed += 1;
+  }
+  if (resumed) await persistChat().catch(() => void 0);
+  return resumed;
+}
 function launchHistoryRebuild(startIndex, reason) {
   const scope = chatScopeManager.current();
   const taskKey = `history-rebuild:${scope.chatKey}`;
@@ -8100,12 +8232,14 @@ function launchHistoryRebuild(startIndex, reason) {
       progressTotal: total,
       progressLabel: "\u7B49\u5F85\u6279\u6B21\u5212\u5206"
     }
-  ).then(() => {
-    toast("success", "\u5386\u53F2\u91CD\u5EFA\u5B8C\u6210\uFF0C\u8868\u683C\u3001\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u5DF2\u66F4\u65B0");
+  ).then(async () => {
+    const resumed = await resumeMemoryBlockedByHistory(scope.chatKey);
+    toast("success", resumed ? `历史重建完成；已自动补排 ${resumed} 条审核后正文的表格与总结任务` : "历史重建完成，表格、总结与世界书已更新");
   }).catch((error) => {
     if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
     console.error("[MirrorAbyss] history rebuild failed", error);
-    toast("error", `\u5386\u53F2\u4F9D\u8D56\u91CD\u5EFA\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    const message = toErrorMessage(error);
+    toast("error", /HTML 页面|upstream_html/i.test(message) ? `历史重建尚未开始或已暂停：记忆模型连接返回 HTML。正文审核仍可继续；请修正“记忆模型”连接后点击“测试连接并继续重建”。${message}` : `历史依赖重建失败：${message}`);
   });
   return true;
 }
@@ -8886,6 +9020,7 @@ function queueStateIcon(value) {
 }
 function rebuildPhaseText(value) {
   const map = {
+    "checking-connection": "验证记忆模型连接",
     planning: "\u68C0\u67E5\u7F13\u5B58\u4E0E\u5931\u6548\u533A\u6BB5",
     "replaying-cache": "\u590D\u7528\u65E2\u6709\u4E8B\u5B9E\u5305",
     "reading-missing": "\u56DE\u8BFB\u7F3A\u5931\u6216\u5DF2\u4FEE\u6539\u6B63\u6587",
@@ -8898,9 +9033,9 @@ function historyRebuildStatusHtml(record) {
   const total = record.totalMessages ?? 0;
   const processed = record.processedMessages ?? 0;
   const progress = total ? Math.max(0, Math.min(100, Math.round(processed / total * 100))) : 0;
-  return `<div class="ma11-status-strip ${record.state === "failed" ? "danger" : "working"}">
+  return `<div class="ma11-status-strip ${/failed|waiting-connection/.test(record.state) ? "danger" : "working"}">
     <div class="ma11-status-strip-main">
-      <span class="ma11-status-icon"><i class="fa-solid ${record.state === "failed" ? "fa-circle-exclamation" : "fa-arrows-rotate"}"></i></span>
+      <span class="ma11-status-icon"><i class="fa-solid ${/failed|waiting-connection/.test(record.state) ? "fa-circle-exclamation" : "fa-arrows-rotate"}"></i></span>
       <div><b>\u5386\u53F2\u91CD\u5EFA \xB7 ${escapeHtml(rebuildPhaseText(record.phase))}</b><span>${processed}/${total} \u6761 \xB7 ${record.completedBatches ?? 0}/${record.totalBatches ?? 0} \u6279</span></div>
       <strong>${progress}%</strong>
     </div>
@@ -8910,7 +9045,9 @@ function historyRebuildStatusHtml(record) {
       <span><i class="fa-solid fa-file-lines"></i> \u56DE\u8BFB\u6B63\u6587 ${record.rereadMessages ?? 0} \u6761</span>
       <span><i class="fa-solid fa-layer-group"></i> \u7F13\u5B58\u5305 ${record.reusedFactPackages ?? 0} \u4E2A</span>
       <span><i class="fa-solid fa-wand-magic-sparkles"></i> \u6A21\u578B\u6279\u6B21 ${record.rawBatches ?? 0} \u4E2A</span>
+      ${record.connectionLabel ? `<span><i class="fa-solid fa-plug"></i> ${escapeHtml(record.connectionLabel)}</span>` : ""}
     </div>
+    ${record.nonDestructive ? `<div class="ma11-help">连接预检完成前不会删除现有表格、事件总结或大总结。</div>` : ""}
     ${record.error ? `<div class="ma11-inline-error">${escapeHtml(record.error)}</div>` : ""}
   </div>`;
 }
@@ -9348,7 +9485,7 @@ function diagnosticRecoveryAction(check) {
     persistentTasks: ["open-tasks", "查看失败任务"],
     lorebookOutbox: ["open-tasks", "查看发布任务"],
     localCommitJournal: ["refresh-diagnostics", "重新检测"],
-    historyConsistency: ["retry-history-rebuild", "继续历史重建"],
+    historyConsistency: ["retry-history-rebuild", "测试连接并继续重建"],
     migration: ["repair-current-chat-state", "重新迁移与修复"],
     factProjection: ["process-latest", "重新提取最新正文"],
     focusIdentity: ["repair-focus-card", "修复焦点卡"],
@@ -9403,7 +9540,7 @@ async function diagnosticsHtml() {
       </section>` : "";
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
-    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u6309 10\u201320 \u6761\u6B63\u6587\u5206\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${chatState.historyRebuild.state === "paused" || chatState.historyRebuild.state === "failed" ? "\u7EE7\u7EED\u91CD\u5EFA" : "\u6062\u590D\u91CD\u5EFA"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
+    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u6309 10\u201320 \u6761\u6B63\u6587\u5206\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? `<button data-ma11-action="retry-history-rebuild">${["paused", "failed", "waiting-connection"].includes(chatState.historyRebuild.state) ? "测试连接并继续重建" : "恢复重建"}</button><button data-ma11-action="pause-history-rebuild">\u6682\u505C</button><button class="danger" data-ma11-action="cancel-history-rebuild">\u53D6\u6D88</button>` : ""}</div></section>
     ${conflictHtml}
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p>${diagnosticRecoveryAction(check)}</div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(
@@ -10709,6 +10846,9 @@ async function initialize() {
     await recoverHistoryConsistencyForCurrentChat().catch((error) => {
       console.warn("[MirrorAbyss] history consistency recovery deferred", error);
     });
+    await resumeMemoryBlockedByHistory(currentChatKey()).catch((error) => {
+      console.warn("[MirrorAbyss] deferred memory resume after startup failed", error);
+    });
     assertActive(epoch);
     await repairLatestFocusCardForCurrentChat().catch((error) => {
       console.warn("[MirrorAbyss] focus card repair deferred", error);
@@ -10737,7 +10877,7 @@ async function initialize() {
         resetWorkspaceChatSelection();
         window.setTimeout(() => {
           if (!extensionActive) return;
-          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => repairLatestFocusCardForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] focus card repair after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).finally(() => {
+          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => resumeMemoryBlockedByHistory(currentChatKey())).catch((error) => console.warn("[MirrorAbyss] deferred memory resume after chat change failed", error)).then(() => repairLatestFocusCardForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] focus card repair after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).finally(() => {
             if (!extensionActive) return;
             renderAllMessagePanels();
             refreshWorkspace();
