@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0-alpha.10.7.4.1
+
+- 修复启动被世界书服务器回读阻塞：先挂载设置面板、入口图标和事件监听，再后台回读。
+- 世界书连接慢、代理异常或读取悬挂时，插件仍能正常启动，错误仅进入回读状态。
+- 聊天切换后先刷新焦点卡、正文状态条和工作区，再异步校验世界书。
+- 保持 `ma-pipeline-10.7.4` 不变，避免热修复导致已处理正文被重复提取。
+
 ## 1.1.0-alpha.10.7.4
 
 - Added independent server readback verification with actual lorebook fingerprint, managed entry count and verification timestamp.

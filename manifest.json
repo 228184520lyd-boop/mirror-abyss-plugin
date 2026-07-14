@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.1.0-alpha.10.7.4",
+  "version": "1.1.0-alpha.10.7.4.1",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": true,
   "minimum_client_version": "1.17.0",
@@ -19,5 +19,5 @@
     "clean": "onClean"
   },
   "generate_interceptor": "MirrorAbyssGenerationInterceptor",
-  "description": "Mirror Abyss 运行一致性层：世界书服务器回读指纹、刷新恢复、事件 ID 延续、任务幂等、向量降级与统一实时 UI 状态。"
+  "description": "Mirror Abyss 启动热修复：世界书服务器回读改为 UI 挂载后的后台任务，避免连接慢或异常导致插件入口不出现。"
 }

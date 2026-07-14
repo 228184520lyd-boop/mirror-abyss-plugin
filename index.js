@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.4";
+    VERSION = "1.1.0-alpha.10.7.4.1";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -10717,9 +10717,6 @@ async function initialize() {
     await recoverLorebookOutboxForCurrentChat().catch((error) => {
       console.warn("[MirrorAbyss] lorebook outbox recovery deferred", error);
     });
-    await verifyLatestLorebookForCurrentChat({ force: true }).catch((error) => {
-      console.warn("[MirrorAbyss] lorebook verification deferred", error);
-    });
     assertActive(epoch);
     await mountSettingsPanel();
     assertActive(epoch);
@@ -10740,10 +10737,11 @@ async function initialize() {
         resetWorkspaceChatSelection();
         window.setTimeout(() => {
           if (!extensionActive) return;
-          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => repairLatestFocusCardForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] focus card repair after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).then(() => verifyLatestLorebookForCurrentChat({ force: true })).catch((error) => console.warn("[MirrorAbyss] lorebook verification after chat change failed", error)).finally(() => {
+          void migrateCurrentChatScopeIdentity().then(() => migrateLegacyDataForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] migration after chat change failed", error)).then(() => recoverLocalCommitsForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] local recovery after chat change failed", error)).then(() => recoverHistoryConsistencyForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] history consistency after chat change failed", error)).then(() => repairLatestFocusCardForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] focus card repair after chat change failed", error)).then(() => recoverLorebookOutboxForCurrentChat()).catch((error) => console.warn("[MirrorAbyss] lorebook outbox recovery after chat change failed", error)).finally(() => {
             if (!extensionActive) return;
             renderAllMessagePanels();
             refreshWorkspace();
+            void verifyLatestLorebookForCurrentChat({ force: true }).catch((error) => console.warn("[MirrorAbyss] background lorebook verification after chat change failed", error));
           });
         }, 0);
       };
@@ -10769,7 +10767,11 @@ async function initialize() {
     assertActive(epoch);
     document.querySelector("#ma11-fatal")?.remove();
     state = "ready";
-    toast("success", `\u5DF2\u542F\u52A8 ${VERSION}`);
+    toast("success", `已启动 ${VERSION}`);
+    window.setTimeout(() => {
+      if (!extensionActive || state !== "ready") return;
+      void verifyLatestLorebookForCurrentChat({ force: true }).catch((error) => console.warn("[MirrorAbyss] background lorebook verification deferred", error));
+    }, 0);
   } catch (error) {
     if (error instanceof InitializationCancelledError) {
       teardownRuntime("\u542F\u52A8\u5DF2\u53D6\u6D88");
