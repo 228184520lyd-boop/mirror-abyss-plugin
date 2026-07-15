@@ -1,12 +1,12 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-rc.4",
+  "version": "1.1.0-rc.4.1",
   "core_bundle_version": "1.1.0-rc.3",
   "product_layer": "finalizer.js",
   "style_layer": "final-style.css",
   "baseline_commit": "366a19cc6cbeeb6d4fc1ea2e82d8d81fa988b12f",
   "build_date": "2026-07-15",
-  "build_type": "product closure candidate",
+  "build_type": "product closure hotfix overlay",
   "history_policy": "persisted-state-authoritative-and-future-only",
   "pipeline_contract": [
     "assistant_final_text",
@@ -26,7 +26,9 @@
     "stream_aggregation": true
   },
   "closure_changes": [
-    "add a thin product bootstrap without rewriting the validated core bundle",
+    "load the existing bundled core through a deterministic one-marker hotfix loader",
+    "add the missing byId map to the fact-package index returned to small-summary batching",
+    "refuse startup when the expected marker is ambiguous instead of silently patching an unknown location",
     "remove disabled history rebuild actions from the public recovery API",
     "show the four processing layers and runtime scope in the workspace",
     "improve mobile full-screen layout, touch targets, form sizing and focus visibility",
@@ -34,16 +36,25 @@
     "keep concepts as architectural constraints rather than narrative hard-coding"
   ],
   "validation": [
-    "ES module syntax check for finalizer.js",
-    "manifest JSON parse",
-    "BUILD_INFO JSON parse",
-    "bootstrap export and import-path inspection",
-    "mobile CSS breakpoint inspection",
-    "no new API key or independent transport implementation"
+    "core hotfix fixture test confirms exactly one marker replacement",
+    "idempotency test accepts an already-fixed core without applying a second patch",
+    "ambiguous-marker test refuses startup instead of patching an unknown location",
+    "ES module syntax checks for core-hotfix.js and finalizer.js",
+    "Chromium integration test executes fetch, exact replacement and blob-module import against a mock core",
+    "manifest and build metadata JSON parse",
+    "archive integrity and required-file inspection",
+    "no storage schema, prompt, protocol, API key or transport changes"
   ],
   "limitations": [
     "the repository contains a built deployment bundle rather than the original TypeScript source project",
     "the inactive historical rebuild implementation remains inside the core bundle but has no product UI or public recovery entry",
     "real SillyTavern mobile and provider-network validation is still required"
-  ]
+  ],
+  "hotfix": {
+    "id": "summary-fact-index-by-id",
+    "root_cause": "buildFactPackageIndex created byId but omitted it from the returned fact index; mergeSmallSummaryWorkUnits then called factIndex.byId.get",
+    "fix": "return byId together with packages, byMessageKey and stageSnapshots before loading the bundled core",
+    "data_migration": false,
+    "prompt_or_protocol_change": false
+  }
 }
