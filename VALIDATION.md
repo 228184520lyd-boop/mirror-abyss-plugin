@@ -1,3 +1,22 @@
+# 1.1.0-alpha.10.7.14 validation
+
+- `node --test tests/*.mjs`: 10/10 通过；覆盖精确 sourceKeys 事务续交、仅恢复元数据重基、其他状态漂移拒绝、冲突/取消不覆盖、缺失精确结果失败关闭、模型调用前恢复及提交错误注解。
+- `node --check index.js` 与 ES Module 导入烟雾测试。
+- `manifest.json`、运行时 `VERSION` 与 `BUILD_INFO.json` 一致为 `1.1.0-alpha.10.7.14`；管线保持 `ma-pipeline-10.7.4`。
+- 小总结提示词仍只使用 `changedRows`、`affectedRows`、`contextAnchors`、相关事实和匹配事件，不发送完整 snapshot。
+- `prepared`、`committing`、`committed` 小总结事务可在模型调用前续交；`conflict`、`cancelled` 不自动覆盖当前状态。
+- 手机端 IndexedDB/portable bridge 写入中断、SillyTavern 页面刷新与真实恢复按钮流程仍需实机确认。
+
+# 1.1.0-alpha.10.7.13 validation
+
+- `node --test tests/*.mjs`: 32/32 test blocks passed。新增覆盖：物品持续携带 30 轮只记录首次获得、无变化技能/基础设定/事件不重复进入、物品数量变化、技能升级、语义指纹、阶段快照时间边界、无变化不调模型、失败精确来源续跑、表格检查点保留、沉降竞态防护、匹配事件最小化与世界书隔离。
+- `node --check index.js`、ES Module 导入烟雾测试及 `git diff --check`：通过。
+- `manifest.json`、运行时 `VERSION` 与 `BUILD_INFO.json` 一致为 `1.1.0-alpha.10.7.13`；管线仍为 `ma-pipeline-10.7.4`。
+- 小总结提示词路径已搜索：不再调用完整 snapshot 格式化器，仅输出代码筛选的变化、直接操作、最小锚点和匹配事件。
+- 小总结的结果提交仍在完整模型响应、协议解析、聊天作用域与沉降行安全校验之后；无变化记录不参与事件、大总结或世界书发布。
+- 部署归档继续排除无法由当前恢复源码可靠重建的旧 `index.js.map`。
+- 真实供应商返回属于输入过长、输出截断、标签协议不完整、空总结或本地提交冲突中的哪一类，仍需安装后通过任务卡的原始错误与 timing 实机确认。
+
 # 1.1.0-alpha.10.7.12 validation
 
 - `node --test tests/history-rebuild-resume-regression.mjs`: 6/6 test blocks passed，覆盖六阶段映射、失败批次回退、连接恢复、小/大总结分段续跑、最终同步跳过模型及包装错误透传。

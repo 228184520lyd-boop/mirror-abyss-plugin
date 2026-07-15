@@ -1,3 +1,22 @@
+# 1.1.0-alpha.10.7.14 — Small-summary local-commit recovery
+
+- 将小总结本地提交阶段纳入失败注解，提交冲突继续保留原始错误、精确 `failedSummarySourceKeys`、`smallSummaryInputCounts` 与 `smallSummaryFailureKind`。
+- 续跑时在模型调用前检查相同 intent 的 `prepared`、`committing` 和 `committed` 本地事务；可安全恢复时直接提交并取回对应 sourceKeys 的小总结，不重复请求模型。
+- 修复 `chatState.historyRebuild` 在失败落盘后变化导致待恢复事务被误判冲突：仅当去除该恢复字段后的业务状态仍与事务前态或后态精确一致时，合并最新恢复元数据并重算事务指纹。
+- `conflict`、`cancelled` 或 sourceKeys 不匹配的事务不会覆盖当前聊天状态；缺少精确结果时失败关闭并保留恢复记录。
+- 保持既有事实包、表格、有效总结、大总结、世界书 Outbox、聊天隔离、scope revision、AbortSignal 与旧数据兼容。
+- 保持 `ma-pipeline-10.7.4`、API 优先级调度、流式降级白名单、每 Profile 两槽、派生任务一槽及同聊天串行不变。
+
+# 1.1.0-alpha.10.7.13 — Small-summary semantic boundary and derived recovery
+
+- 用代码根据事实包、表格操作与前后快照生成 `changedRows`、`affectedRows` 和最小 `contextAnchors`，小总结不再接收完整当前活跃表格。
+- 语义指纹忽略 `updatedAt`、普通存储字段、无意义顺序及内部字段，保留内容、状态、生命周期、关系端点、手工/锁定状态等业务变化。
+- 历史重建使用事实包对应的阶段快照，阻止早期小总结观察后续物品、技能、人物或事件状态。
+- 无变化批次以内部幂等记录标记为已消费，不调用模型、不生成空小总结、事件或长期候选。
+- 小总结失败时保留已重建事实与表格检查点，记录失败 `sourceKeys` 并只重试该派生批次；不重做成功的正文事实提取。
+- 任务卡和诊断显示小总结错误分类、输入边界数量和对应检查点，不记录完整提示词或响应。
+- 保持 `ma-pipeline-10.7.4`、API 优先级调度、流式白名单、每 Profile 两槽、派生任务一槽、同聊天串行及现有业务协议不变。
+
 # 1.1.0-alpha.10.7.12 — Resumable history rebuild failures
 
 - 将历史重建失败明确划分为连接预检、缓存事实重放、缺失正文事实提取、小总结重建、大总结重建和最终世界书同步六个阶段。

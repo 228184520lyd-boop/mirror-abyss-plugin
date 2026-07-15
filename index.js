@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.12";
+    VERSION = "1.1.0-alpha.10.7.14";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -690,6 +690,7 @@ async function getChatState(chatKey) {
   }
   if (existing) {
     existing.smallSummaries ||= [];
+    existing.smallSummarySkips ||= [];
     existing.largeSummaries ||= [];
     existing.eventEntries ||= [];
     existing.lastVerificationStatus ||= existing.lastSyncStatus === "success" ? "unknown" : "idle";
@@ -707,6 +708,7 @@ async function getChatState(chatKey) {
     chatKey,
     processedMessageKeys: [],
     smallSummaries: [],
+    smallSummarySkips: [],
     largeSummaries: [],
     eventEntries: [],
     lastSyncStatus: "idle",
@@ -6334,7 +6336,198 @@ function summaryFactPriority(fact) {
   if (fact.operation === "remove" || fact.operation === "close" || fact.operation === "supersede") score += 10;
   return score;
 }
-function formatPackages(packages) {
+var SMALL_SUMMARY_CHARACTER_CHANGE = /(?:身份|identity|存在|existence|死亡|失踪|活动状态|activity|记忆|memory|证据|evidence|长期伤|永久伤|残疾|权限|permission|授权|任命|罢免|公开身份|正式身份)/i;
+var SMALL_SUMMARY_SKILL_CHANGE = /(?:学会|习得|掌握|升级|提升|增强|进阶|等级|熟练|退化|遗忘|永久失去|限制|代价|冷却|权限|授权|禁用|不可用|证实|否定|修正|长期影响|后遗|learn|unlock|upgrade|level|downgrade|lose|restriction|cost|cooldown|permission|unavailable|verified|corrected)/i;
+function summarySortedList(value) {
+  return Array.isArray(value) ? [...new Set(value.map((item2) => safeText(item2, 240).trim()).filter(Boolean))].sort() : [];
+}
+function summarySemanticRow(table, row) {
+  if (!row) return null;
+  const lifecycle = row.lifecycle ? {
+    existence: row.lifecycle.existence || "",
+    activity: row.lifecycle.activity || "",
+    memory: row.lifecycle.memory || "",
+    evidenceLevel: row.lifecycle.evidenceLevel || "",
+    evidence: safeText(row.lifecycle.evidence, 2e3).trim(),
+    returnConditions: summarySortedList(row.lifecycle.returnConditions),
+    returnBlockers: summarySortedList(row.lifecycle.returnBlockers)
+  } : void 0;
+  return {
+    id: safeText(row.id, 180).trim(),
+    title: safeText(row.title, 240).trim(),
+    content: safeText(row.content, 6e3).trim(),
+    status: safeText(row.status, 160).trim(),
+    source: row.source === "manual" ? "manual" : "auto",
+    locked: Boolean(row.locked),
+    lifecycle,
+    sourceEntityId: table === "relationships" ? safeText(row.sourceEntityId, 180).trim() : "",
+    targetEntityId: table === "relationships" ? safeText(row.targetEntityId, 180).trim() : ""
+  };
+}
+function summarySemanticFingerprint(table, row) {
+  return fingerprint(summarySemanticRow(table, row));
+}
+function summaryChangedFields(before, after) {
+  const keys = ["title", "content", "status", "source", "locked", "lifecycle", "sourceEntityId", "targetEntityId"];
+  return keys.filter((key) => fingerprint(before?.[key]) !== fingerprint(after?.[key]));
+}
+function summaryRowChangeRelevant(change) {
+  const table = change.table;
+  if (table === "spacetime") return false;
+  if (["items", "relationships", "events", "regions", "foundations"].includes(table)) return true;
+  if (table === "skills") {
+    if (change.changeType !== "changed" || change.changedFields.some((field) => field !== "content")) return true;
+    return SMALL_SUMMARY_SKILL_CHANGE.test(change.evidenceText);
+  }
+  if (table === "characters" || table === "focus") {
+    if (change.changeType === "added" || change.changeType === "removed") return true;
+    if (change.changedFields.some((field) => ["title", "status", "lifecycle", "source", "locked"].includes(field))) return true;
+    return SMALL_SUMMARY_CHARACTER_CHANGE.test(change.evidenceText);
+  }
+  return false;
+}
+function summaryChangesForPackage(pack, beforeSnapshot2, afterSnapshot) {
+  const changes = [];
+  for (const table of TABLE_KEYS) {
+    const beforeMap = new Map((beforeSnapshot2?.[table] ?? []).map((row) => [row.id, row]));
+    const afterMap = new Map((afterSnapshot?.[table] ?? []).map((row) => [row.id, row]));
+    for (const rowId of new Set([...beforeMap.keys(), ...afterMap.keys()])) {
+      const beforeRow = beforeMap.get(rowId);
+      const afterRow = afterMap.get(rowId);
+      if (beforeRow && afterRow && summarySemanticFingerprint(table, beforeRow) === summarySemanticFingerprint(table, afterRow)) continue;
+      const before = summarySemanticRow(table, beforeRow);
+      const after = summarySemanticRow(table, afterRow);
+      const rowTitles = new Set([before?.title, after?.title].map(identityTitle).filter(Boolean));
+      const operations = (pack.tableOperations ?? []).filter((operation) => operation.table === table && (operation.rowId === rowId || rowTitles.has(identityTitle(operation.title))));
+      const facts = (pack.facts ?? []).filter((fact) => fact.entityId === rowId || fact.title && rowTitles.has(identityTitle(fact.title)));
+      const change = {
+        packageId: pack.packageId,
+        table,
+        rowId,
+        changeType: !beforeRow ? "added" : !afterRow ? "removed" : "changed",
+        changedFields: summaryChangedFields(before, after),
+        before,
+        after,
+        sourceMessageKeys: [...new Set([...operations.flatMap((item2) => item2.sourceMessageKeys ?? []), ...facts.flatMap((item2) => item2.sourceMessageKeys ?? [])])],
+        sourceFactIds: facts.map((fact) => fact.factId),
+        evidenceText: [
+          before?.title,
+          before?.content,
+          before?.status,
+          after?.title,
+          after?.content,
+          after?.status,
+          ...facts.flatMap((fact) => [fact.factType, fact.content, fact.status, fact.operation])
+        ].filter(Boolean).join("｜")
+      };
+      if (summaryRowChangeRelevant(change)) changes.push(change);
+    }
+  }
+  return changes;
+}
+function summaryFactRelevant(fact, changedRowIds, changedFactIds) {
+  if (["historical_result", "trace"].includes(fact.entityType)) return true;
+  if (changedFactIds.has(fact.factId)) return true;
+  if (changedRowIds.has(fact.entityId)) return true;
+  if (["remove", "close", "supersede", "merge"].includes(fact.operation) && ["item", "skill", "relationship", "region", "character", "focus", "world_rule"].includes(fact.entityType)) return true;
+  return false;
+}
+function stageSnapshotForSummaryPackage(pack, factIndex) {
+  const stored = factIndex.stageSnapshots?.get(pack.packageId);
+  if (stored) return normalizeSnapshot(stored, stored);
+  const before = previousSnapshot(pack.sourceRange.startIndex);
+  return projectUnifiedFacts({
+    previousSnapshot: before,
+    factPackage: pack,
+    focusRegistry: [],
+    currentFocusId: void 0
+  }).snapshot;
+}
+function smallSummaryContextAnchors(stageSnapshot, changedRows, relevantFacts) {
+  const anchors = [];
+  const add = (table, row, mode) => {
+    if (!row || anchors.some((item2) => item2.table === table && item2.row.id === row.id)) return;
+    const semantic = summarySemanticRow(table, row);
+    if (mode === "identity") semantic.content = "";
+    anchors.push({ table, row: semantic, mode });
+  };
+  add("focus", stageSnapshot.focus?.find((row) => /当前焦点|current/i.test(row.status)) ?? stageSnapshot.focus?.[0], "identity");
+  for (const row of (stageSnapshot.spacetime ?? []).slice(0, 3)) add("spacetime", row, "time-place");
+  const entityIds = new Set([
+    ...changedRows.map((change) => change.rowId),
+    ...relevantFacts.flatMap((fact) => [fact.entityId, fact.sourceEntityId, fact.targetEntityId]).filter(Boolean)
+  ]);
+  for (const row of stageSnapshot.relationships ?? []) {
+    if (entityIds.has(row.id) || entityIds.has(row.sourceEntityId) || entityIds.has(row.targetEntityId)) add("relationships", row, "direct-relation");
+    if (anchors.length >= 12) break;
+  }
+  for (const row of [...stageSnapshot.focus ?? [], ...stageSnapshot.characters ?? []]) {
+    if (entityIds.has(row.id)) add(stageSnapshot.focus?.includes(row) ? "focus" : "characters", row, "direct-entity");
+    if (anchors.length >= 16) break;
+  }
+  return anchors.slice(0, 16);
+}
+function buildSmallSummaryChangeContext(packages, factIndex) {
+  const changedRows = [];
+  let stageSnapshot = emptySnapshot();
+  for (const pack of packages) {
+    const before = previousSnapshot(pack.sourceRange.startIndex);
+    const after = stageSnapshotForSummaryPackage(pack, factIndex);
+    changedRows.push(...summaryChangesForPackage(pack, before, after));
+    stageSnapshot = after;
+  }
+  const changedRowIds = new Set(changedRows.map((change) => change.rowId));
+  const changedFactIds = new Set(changedRows.flatMap((change) => change.sourceFactIds));
+  const relevantFacts = packages.flatMap((pack) => pack.facts ?? []).filter((fact) => summaryFactRelevant(fact, changedRowIds, changedFactIds));
+  const relevantFactIds = new Set(relevantFacts.map((fact) => fact.factId));
+  const relevantSourceKeys = new Set([
+    ...changedRows.flatMap((change) => change.sourceMessageKeys),
+    ...relevantFacts.flatMap((fact) => fact.sourceMessageKeys ?? [])
+  ]);
+  const affectedRows = packages.flatMap((pack) => (pack.tableOperations ?? []).map((operation) => {
+    const change = changedRows.find((item2) => item2.packageId === pack.packageId && item2.table === operation.table && (item2.rowId === operation.rowId || [item2.before?.title, item2.after?.title].map(identityTitle).includes(identityTitle(operation.title))));
+    if (!change) return null;
+    return {
+      packageId: pack.packageId,
+      operationId: operation.operationId,
+      table: operation.table,
+      operation: operation.operation,
+      rowId: change.rowId,
+      sourceMessageKeys: [...operation.sourceMessageKeys ?? []]
+    };
+  }).filter(Boolean));
+  const contextAnchors = smallSummaryContextAnchors(stageSnapshot, changedRows, relevantFacts);
+  return {
+    changedRows,
+    affectedRows,
+    contextAnchors,
+    relevantFacts,
+    relevantFactIds,
+    relevantSourceKeys,
+    stageSnapshot,
+    hasChanges: Boolean(changedRows.length || relevantFacts.length),
+    changeFingerprint: fingerprint({
+      changedRows: changedRows.map((change) => ({ table: change.table, rowId: change.rowId, changeType: change.changeType, before: change.before, after: change.after })),
+      relevantFacts: relevantFacts.map((fact) => fact.factId)
+    })
+  };
+}
+function summaryEventMatches(entry, context) {
+  const rowIds = new Set(context.changedRows.map((change) => change.rowId));
+  const factIds = context.relevantFactIds;
+  if ((entry.sourceRowIds ?? []).some((id) => rowIds.has(id))) return true;
+  if ((entry.sourceFactIds ?? []).some((id) => factIds.has(id))) return true;
+  if (context.relevantFacts.some((fact) => fact.entityId === entry.eventId)) return true;
+  const terms = new Set([
+    ...context.changedRows.flatMap((change) => [change.before?.title, change.after?.title]),
+    ...context.relevantFacts.flatMap((fact) => [fact.title, ...(fact.keywords ?? [])])
+  ].map(identityTitle).filter((value) => value.length >= 2));
+  return [entry.title, ...(entry.keywords ?? []), ...(entry.participants ?? []), ...(entry.locations ?? [])].map(identityTitle).some((value) => value && terms.has(value));
+}
+function matchingSmallSummaryEvents(entries, context) {
+  return (entries ?? []).filter((entry) => summaryEventMatches(entry, context)).sort((a, b) => eventRegistryPriority(b) - eventRegistryPriority(a)).slice(0, 30);
+}
+function formatPackages(packages, context) {
   const lines = [];
   let used = 0;
   let totalFacts = 0;
@@ -6347,10 +6540,10 @@ function formatPackages(packages) {
   };
   for (const pack of packages) {
     if (!append(`【事实包 ${pack.packageId}｜消息 ${pack.sourceRange.startIndex + 1}–${pack.sourceRange.endIndex + 1}】`)) break;
-    for (const material of pack.turnMaterials) {
+    for (const material of pack.turnMaterials.filter((item2) => context.relevantSourceKeys.has(item2.sourceMessageKey))) {
       if (!append(`- 轮次 ${material.sourceMessageIndex + 1}：${safeText(material.summary, 520).trim()}｜关键词=${join((material.keywords ?? []).slice(0, 8))}`)) break;
     }
-    const facts = [...pack.facts].sort((a, b) => summaryFactPriority(b) - summaryFactPriority(a));
+    const facts = [...pack.facts].filter((fact) => context.relevantFactIds.has(fact.factId)).sort((a, b) => summaryFactPriority(b) - summaryFactPriority(a));
     totalFacts += facts.length;
     for (const fact of facts) {
       const line = [
@@ -6374,8 +6567,46 @@ function formatPackages(packages) {
   if (totalFacts > includedFacts) append(`- （另有 ${totalFacts - includedFacts} 条低优先级事实已进入当前表格或由代码保留，本次不重复发送给总结模型）`, 14500);
   return lines.join("\n");
 }
-function formatSnapshot(snapshot) {
-  return formatFactPromptSnapshot(snapshot, [], 14e3);
+function formatSummaryRow(row) {
+  if (!row) return "（不存在）";
+  return [
+    `ID=${row.id}`,
+    `名称=${row.title}`,
+    row.content ? `事实=${safeText(row.content, 650).trim()}` : "",
+    row.status ? `状态=${row.status}` : "",
+    row.lifecycle ? `生命周期=${JSON.stringify(row.lifecycle)}` : "",
+    row.sourceEntityId ? `关系起点=${row.sourceEntityId}` : "",
+    row.targetEntityId ? `关系终点=${row.targetEntityId}` : "",
+    row.source === "manual" || row.locked ? `保护=${row.source}/${row.locked ? "locked" : "unlocked"}` : ""
+  ].filter(Boolean).join("；");
+}
+function formatSmallSummaryChanges(context) {
+  if (!context.changedRows.length) return "（无表格语义变化；仅存在独立事件或结果事实）";
+  const lines = [];
+  let used = 0;
+  for (const change of context.changedRows) {
+    const line = `- ${change.table}/${change.rowId}；变化=${change.changeType}；字段=${change.changedFields.join("｜") || "existence"}；之前：${formatSummaryRow(change.before)}；之后：${formatSummaryRow(change.after)}；来源事实=${join(change.sourceFactIds)}`;
+    if (lines.length >= 80 || used + line.length + 1 > 1e4) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.join("\n");
+}
+function formatSummaryAffectedRows(context) {
+  if (!context.affectedRows.length) return "（无直接表格操作）";
+  return context.affectedRows.slice(0, 120).map((item2) => `- ${item2.table}/${item2.rowId}；操作=${item2.operation}；operationId=${item2.operationId}；来源消息=${join(item2.sourceMessageKeys)}`).join("\n");
+}
+function formatSummaryContextAnchors(context) {
+  if (!context.contextAnchors.length) return "（无）";
+  const lines = [];
+  let used = 0;
+  for (const anchor of context.contextAnchors) {
+    const line = `- ${anchor.mode}｜${anchor.table}｜${formatSummaryRow(anchor.row)}`;
+    if (lines.length >= 16 || used + line.length + 1 > 4500) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.join("\n");
 }
 function eventRegistryPriority(entry) {
   let score = 0;
@@ -6402,7 +6633,7 @@ function formatEventRegistry(entries) {
   return lines.join("\n");
 }
 function smallSummarySystemPrompt() {
-  return `你是镜渊“表格 → 事件记忆”沉降结算器。你只读取已提取事实、当前活跃表格与既有事件条目，不重新解释原始正文，不续写故事，不创造后台变化。
+  return `你是镜渊“本批变化 → 事件记忆”沉降结算器。代码已经筛出本批新增或改变的事实、语义变化行、最小上下文锚点和直接相关事件。你不得把上下文锚点或未变化状态写成新事件，不重新解释原始正文，不续写故事，不创造后台变化。
 
 禁止输出 JSON、Markdown 代码块、解释、前言、结语或思考过程。只输出以下纯文本标签协议：
 
@@ -6461,18 +6692,26 @@ function smallSummarySystemPrompt() {
 8. 可退出表格仅限 spacetime、relationships、items、skills、events、regions；不得删除 focus、characters、foundations。
 9. 手工或锁定行不得删除、覆盖或降级。仍在进行、影响当前行动或可立即调用的内容不得沉降。
 10. 死亡、永久失去、关系断裂等不可逆结果必须先进入事件条目和长期候选，不能只删表格。
-11. 列表使用“｜”分隔。`;
+11. 只能引用“本批代码确认的语义变化”中的 source_row_ids；最小上下文锚点仅用于理解身份、时空和复用ID，禁止吸收或重复总结。
+12. 常驻物品、已有技能、基础设定和静态人物档案如果不在变化列表中，视为没有变化，禁止补写。
+13. 列表使用“｜”分隔。`;
 }
-function smallSummaryPrompt(packages, snapshot, existingEvents) {
-  return `请把以下事实素材与活跃表格整理为阶段概览和独立事件条目，并给出安全沉降计划。
+function smallSummaryPrompt(packages, context, existingEvents) {
+  return `请仅把以下本批变化整理为阶段概览和独立事件条目，并给出安全沉降计划。未列出的当前状态不属于本批变化。
 
-【阶段事实素材】
-${formatPackages(packages)}
+【本批相关轮次材料与新增/改变事实】
+${formatPackages(packages, context)}
 
-【当前活跃表格】
-${formatSnapshot(snapshot)}
+【本批代码确认的语义变化 changedRows】
+${formatSmallSummaryChanges(context)}
 
-【既有事件条目；仅用于稳定ID、延续、传播和精度比较】
+【本批直接表格操作 affectedRows】
+${formatSummaryAffectedRows(context)}
+
+【最小上下文 contextAnchors；仅辅助理解，不代表新变化】
+${formatSummaryContextAnchors(context)}
+
+【与本批变化直接匹配的既有事件条目；仅用于稳定ID、延续、传播和精度比较】
 ${formatEventRegistry(existingEvents)}
 
 只输出 <small_summary> 标签块。`;
@@ -6755,6 +6994,30 @@ async function commitSummaryMutation(input) {
   await pruneLocalCommits(input.artifact.chatKey);
   return committed;
 }
+function chatStateWithoutHistoryRebuild(state2) {
+  const clone = deepClone(state2);
+  delete clone.historyRebuild;
+  return clone;
+}
+async function rebaseSmallSummaryCommitRecoveryMetadata(record, currentState, scope, signal) {
+  if (record.operation !== "small_summary" || !["prepared", "committing"].includes(record.state)) return false;
+  if (!record.beforeChatState || !record.afterChatState || currentState?.chatKey !== record.chatKey) return false;
+  assertScope2(scope, record.chatKey, signal);
+  const currentCore = fingerprint2(chatStateWithoutHistoryRebuild(currentState));
+  const beforeCore = fingerprint2(chatStateWithoutHistoryRebuild(record.beforeChatState));
+  const afterCore = fingerprint2(chatStateWithoutHistoryRebuild(record.afterChatState));
+  if (currentCore !== beforeCore && currentCore !== afterCore) return false;
+  for (const state2 of [record.beforeChatState, record.afterChatState]) {
+    if (currentState.historyRebuild) state2.historyRebuild = deepClone(currentState.historyRebuild);
+    else delete state2.historyRebuild;
+  }
+  record.scopeRevision = scope.revision;
+  record.beforeChatStateFingerprint = fingerprint2(record.beforeChatState);
+  record.afterChatStateFingerprint = fingerprint2(record.afterChatState);
+  await putLocalCommit(record);
+  assertScope2(scope, record.chatKey, signal);
+  return true;
+}
 async function confirmLocalCommitsAttachedForArtifact(artifact) {
   const records = (await getLocalCommitRecords(artifact.chatKey)).filter((record) => record.state === "committed" && !record.messageAttached && record.artifactMessageKey === artifact.messageKey);
   if (!records.length) return 0;
@@ -6778,6 +7041,11 @@ async function recoverLocalCommitsForCurrentChat(signal) {
   for (const original of records) {
     assertScope2(scope, scope.chatKey, signal);
     try {
+      if (original.operation === "small_summary") {
+        const currentState = await getChatState(scope.chatKey);
+        assertScope2(scope, scope.chatKey, signal);
+        await rebaseSmallSummaryCommitRecoveryMetadata(original, currentState, scope, signal);
+      }
       const record = await executeRecord(original, scope, signal);
       if (record.state === "committed") recovered += 1;
       if (record.state === "conflict") conflicts += 1;
@@ -6987,6 +7255,8 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
     const inspection = await inspectHistoryRebuildSources(normalizedStart, normalizedBatchSize, state2);
     const affectedKeys = inspection.invalidKeys;
     const invalidation = invalidateSummaryDependencies(state2.smallSummaries, state2.largeSummaries, affectedKeys);
+    const invalidatedSmallSummarySkips = (state2.smallSummarySkips ?? []).filter((record2) => intersects(record2.sourceKeys ?? [], affectedKeys));
+    const keptSmallSummarySkips = (state2.smallSummarySkips ?? []).filter((record2) => !invalidatedSmallSummarySkips.includes(record2));
     const previous = latestValidArtifactBefore(normalizedStart, chatKey);
     const affectedIndexes = assistantIndexesFrom(normalizedStart);
     const now = nowIso();
@@ -7010,8 +7280,10 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
       rawBatches: inspection.rawBatches,
       plannedRawBatches: inspection.rawBatches,
       requiresDerivedRebuild: Boolean(
-        inspection.rereadMessages || invalidation.invalidatedSmallSummaryIds.length || invalidation.invalidatedLargeSummaryIds.length
+        inspection.rereadMessages || invalidation.invalidatedSmallSummaryIds.length || invalidation.invalidatedLargeSummaryIds.length || invalidatedSmallSummarySkips.length
       ),
+      checkpoint: "facts-rebuilding",
+      completedCheckpoints: [],
       phase: "planning",
       reason,
       state: "pending",
@@ -7020,6 +7292,7 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
       cancelRequested: false,
       invalidatedMessageKeys: [...affectedKeys].slice(0, 200),
       invalidatedSmallSummaryIds: invalidation.invalidatedSmallSummaryIds.slice(0, 200),
+      invalidatedSmallSummarySkipIds: invalidatedSmallSummarySkips.map((record2) => record2.id).slice(0, 200),
       invalidatedLargeSummaryIds: invalidation.invalidatedLargeSummaryIds.slice(0, 200),
       createdAt: now,
       updatedAt: now
@@ -7034,6 +7307,7 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
     }
     state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => !affectedKeys.has(key));
     state2.smallSummaries = invalidation.smallSummaries;
+    state2.smallSummarySkips = keptSmallSummarySkips;
     state2.largeSummaries = invalidation.largeSummaries;
     state2.eventEntries = rebuildEventEntries(state2.smallSummaries, state2.largeSummaries);
     state2.latestSnapshotMessageKey = previous?.messageKey;
@@ -7069,7 +7343,11 @@ async function updateHistoryRebuild(record, patch) {
 }
 async function completeHistoryRebuild(record) {
   const state2 = await getChatState(record.chatKey);
-  if (state2.historyRebuild?.id === record.id) delete state2.historyRebuild;
+  if (state2.historyRebuild?.id === record.id) {
+    record.checkpoint = "completed";
+    record.completedCheckpoints = [...new Set([...(record.completedCheckpoints ?? []), "completed"])];
+    delete state2.historyRebuild;
+  }
   state2.lastSyncError = void 0;
   await putChatState(state2);
   await safeAppendOperationLog(record.chatKey, {
@@ -7077,7 +7355,7 @@ async function completeHistoryRebuild(record) {
     action: "history-rebuild-completed",
     resourceId: record.id,
     state: "committed",
-    detail: `messages=${record.processedMessages ?? 0}; batches=${record.completedBatches ?? 0}`
+    detail: `messages=${record.processedMessages ?? 0}; batches=${record.completedBatches ?? 0}; checkpoint=completed`
   });
 }
 async function currentRecord(record) {
@@ -7139,8 +7417,10 @@ function historyRebuildFailureDetails(record, error, fallbackConnectionSnapshot)
   const lastModelTiming = latestHistoryRebuildModelTiming(record.chatKey, record.attemptStartedAt, record.lastModelTiming);
   const failureStage = record.phase === "updating-long-term" && lastModelTiming?.taskType === "largeSummary" ? "large-summary-rebuild" : historyRebuildFailureStage(record.phase);
   const errorKind = safeText(native?.kind || chain.find((item2) => item2?.code)?.code || factExtractionFailureKind(chain.at(-1) ?? error), 80);
+  const smallSummaryFailure = chain.find((item2) => Array.isArray(item2?.smallSummarySourceKeys));
   return {
     phase: record.phase || "planning",
+    checkpoint: record.checkpoint,
     failureStage,
     failedBatchStart: Number.isInteger(record.failedBatchStart) ? record.failedBatchStart : void 0,
     nextIndex: Number.isInteger(record.nextIndex) ? record.nextIndex : record.startIndex,
@@ -7149,19 +7429,25 @@ function historyRebuildFailureDetails(record, error, fallbackConnectionSnapshot)
     errorStatus: Number.isFinite(directStatus) ? directStatus : parsedStatus,
     connectionLabel: connectionContext ? describeConnectionSnapshot(connectionContext) : record.connectionLabel,
     errorPreview: responsePreview || void 0,
-    lastModelTiming
+    lastModelTiming,
+    failedSummarySourceKeys: smallSummaryFailure ? [...smallSummaryFailure.smallSummarySourceKeys] : record.failedSummarySourceKeys,
+    smallSummaryInputCounts: smallSummaryFailure?.smallSummaryInputCounts ?? record.smallSummaryInputCounts,
+    smallSummaryFailureKind: smallSummaryFailure?.smallSummaryFailureKind ?? record.smallSummaryFailureKind ?? (failureStage === "small-summary-rebuild" ? classifySmallSummaryFailure(error) : void 0)
   };
 }
 function formatHistoryRebuildFailure(details) {
   const parts = [
     `失败阶段：${historyRebuildFailureStageText(details.failureStage)}（phase=${details.phase || "unknown"}）`,
+    details.checkpoint ? `checkpoint=${details.checkpoint}` : "",
     Number.isInteger(details.failedBatchStart) ? `失败批次从消息 ${details.failedBatchStart + 1} 开始` : "失败批次：不适用",
     Number.isInteger(details.nextIndex) ? `续跑检查点：消息 ${details.nextIndex + 1}` : "",
     details.errorKind ? `errorKind=${details.errorKind}` : "",
     details.errorStatus ? `HTTP ${details.errorStatus}` : "",
     details.connectionLabel ? `连接=${details.connectionLabel}` : "",
     details.error ? `原始错误：${details.error}` : "",
-    details.errorPreview && !details.error?.includes(details.errorPreview) ? `上游片段：${details.errorPreview}` : ""
+    details.errorPreview && !details.error?.includes(details.errorPreview) ? `上游片段：${details.errorPreview}` : "",
+    details.failedSummarySourceKeys?.length ? `失败小总结来源=${details.failedSummarySourceKeys.join("|")}` : "",
+    details.smallSummaryFailureKind ? `小总结错误分类=${details.smallSummaryFailureKind}` : ""
   ].filter(Boolean);
   return parts.join("；");
 }
@@ -7187,7 +7473,8 @@ function historyRebuildResumePlan(record, fallbackIndex = 0) {
     failureStage,
     fromIndex,
     runSmallSummaries: failureStage !== "large-summary-rebuild" && failureStage !== "final-lorebook-sync",
-    runLargeSummary: failureStage !== "final-lorebook-sync"
+    runLargeSummary: failureStage !== "final-lorebook-sync",
+    failedSummarySourceKeys: failureStage === "small-summary-rebuild" ? [...(record?.failedSummarySourceKeys ?? [])] : []
   };
 }
 function historyRebuildBlockingDetail(rebuild) {
@@ -7195,7 +7482,8 @@ function historyRebuildBlockingDetail(rebuild) {
   const stage = historyRebuildFailureStageText(rebuild.failureStage || historyRebuildFailureStage(rebuild.phase));
   const kind = rebuild.errorKind ? `；errorKind=${rebuild.errorKind}` : "";
   const status = rebuild.errorStatus ? `；HTTP ${rebuild.errorStatus}` : "";
-  return `；失败阶段=${stage}${kind}${status}；原始错误：${rebuild.error}`;
+  const checkpoint = rebuild.checkpoint ? `；checkpoint=${rebuild.checkpoint}` : "";
+  return `；失败阶段=${stage}${checkpoint}${kind}${status}；原始错误：${rebuild.error}`;
 }
 function retryableBatchError(error) {
   const message = toErrorMessage(error);
@@ -7227,6 +7515,9 @@ function assertHistoryRebuildAccess(state2) {
   }
   if (rebuild.state === "failed") {
     throw new TaskCancelledError(`历史依赖重建失败：正文审核仍可继续，但表格、总结与世界书同步必须在恢复后继续${historyRebuildBlockingDetail(rebuild)}`);
+  }
+  if (rebuild.state === "checkpoint-pending") {
+    throw new TaskCancelledError(`历史事实与表格检查点已经保留；派生总结或世界书同步仍待从 ${rebuild.checkpoint || "保存的检查点"} 继续${historyRebuildBlockingDetail(rebuild)}`);
   }
   if (rebuild.state === "paused") {
     throw new TaskCancelledError("历史依赖重建已暂停：正文审核仍可继续，但表格、总结与世界书同步需要等待恢复");
@@ -7305,6 +7596,8 @@ async function rebuildHistoryFrom(input) {
           rereadMessages: inspection.rereadMessages,
           reusedFactPackages: inspection.reusedFactPackages,
           rawBatches: inspection.rawBatches,
+          checkpoint: "facts-rebuilding",
+          completedCheckpoints: [],
           phase: "checking-connection",
           resumePhase: "planning",
           reason: input.reason,
@@ -7379,6 +7672,7 @@ async function rebuildHistoryFrom(input) {
     record.nextIndex = continuingPreparedRecord ? continuationPlan.fromIndex : record.nextIndex;
     record.lastFailure = record.error ? {
       phase: record.phase,
+      checkpoint: record.checkpoint,
       failureStage: record.failureStage,
       failedBatchStart: record.failedBatchStart,
       nextIndex: record.nextIndex,
@@ -7388,6 +7682,9 @@ async function rebuildHistoryFrom(input) {
       connectionLabel: record.connectionLabel,
       errorPreview: record.errorPreview,
       lastModelTiming: record.lastModelTiming,
+      failedSummarySourceKeys: record.failedSummarySourceKeys,
+      smallSummaryInputCounts: record.smallSummaryInputCounts,
+      smallSummaryFailureKind: record.smallSummaryFailureKind,
       failedAt: record.updatedAt
     } : record.lastFailure;
     record.error = void 0;
@@ -7397,8 +7694,11 @@ async function rebuildHistoryFrom(input) {
     record.failureStage = void 0;
     record.resumePhase = void 0;
     record.lastModelTiming = void 0;
+    record.failedSummarySourceKeys = void 0;
+    record.smallSummaryInputCounts = void 0;
+    record.smallSummaryFailureKind = void 0;
     record.requiresDerivedRebuild ??= Boolean(
-      record.rereadMessages || record.invalidatedSmallSummaryIds?.length || record.invalidatedLargeSummaryIds?.length
+      record.rereadMessages || record.invalidatedSmallSummaryIds?.length || record.invalidatedSmallSummarySkipIds?.length || record.invalidatedLargeSummaryIds?.length
     );
     await updateHistoryRebuild(record, record);
     const allIndexes = assistantIndexesFrom(record.startIndex);
@@ -7493,19 +7793,27 @@ async function rebuildHistoryFrom(input) {
       }
       assertCurrent(chatKey, input.signal);
       lease.assertOwner();
+      const completedCheckpoints = [...new Set([...(record.completedCheckpoints ?? []), "facts-rebuilt", "tables-projected"])];
+      await updateHistoryRebuild(record, {
+        checkpoint: "small-summaries-pending",
+        completedCheckpoints
+      });
       if (latest?.snapshot) {
         const resumeAtLargeSummary = continuingPreparedRecord && !continuationPlan.runSmallSummaries && continuationPlan.runLargeSummary;
         const resumeAtLorebookSync = continuingPreparedRecord && !continuationPlan.runLargeSummary;
         const needsLongTermUpdate = Boolean(
-          record.requiresDerivedRebuild || record.invalidatedSmallSummaryIds?.length || record.invalidatedLargeSummaryIds?.length ||
+          record.requiresDerivedRebuild || record.invalidatedSmallSummaryIds?.length || record.invalidatedSmallSummarySkipIds?.length || record.invalidatedLargeSummaryIds?.length ||
           continuationPlan.failureStage === "small-summary-rebuild" || continuationPlan.failureStage === "large-summary-rebuild"
         );
         if (!resumeAtLorebookSync && needsLongTermUpdate) {
           await input.finalizeDerived?.(latest, {
             startAt: resumeAtLargeSummary ? "large" : "small",
+            retrySourceKeys: continuationPlan.failedSummarySourceKeys,
             onPhase: async (phase, label) => {
-              await updateHistoryRebuild(record, { phase });
-              input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, phase, label });
+              const checkpoint = phase === "rebuilding-small-summaries" ? "small-summaries-pending" : "large-summary-pending";
+              const completed = phase === "rebuilding-large-summary" ? [...new Set([...(record.completedCheckpoints ?? []), "small-summaries-completed"])] : record.completedCheckpoints;
+              await updateHistoryRebuild(record, { phase, checkpoint, completedCheckpoints: completed });
+              input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, phase, checkpoint, label });
             }
           });
           record.requiresDerivedRebuild = false;
@@ -7518,8 +7826,12 @@ async function rebuildHistoryFrom(input) {
             label: resumeAtLorebookSync ? "事实与总结检查点已完成，仅续跑世界书同步" : "长期总结保持有效，无需模型更新"
           });
         }
-        await updateHistoryRebuild(record, { phase: "syncing" });
-        input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, phase: "syncing", label: "发布最终世界书" });
+        await updateHistoryRebuild(record, {
+          phase: "syncing",
+          checkpoint: "lorebook-sync-pending",
+          completedCheckpoints: [...new Set([...(record.completedCheckpoints ?? []), "small-summaries-completed", "large-summary-completed"])]
+        });
+        input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, phase: "syncing", checkpoint: "lorebook-sync-pending", label: "发布最终世界书" });
         await input.syncLatest(latest);
       }
       input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: `\u91CD\u5EFA\u5B8C\u6210\uFF1A\u590D\u7528 ${record.reusedMessages ?? 0} \u6761\uFF0C\u56DE\u8BFB ${record.rereadMessages ?? 0} \u6761\uFF0C\u4E16\u754C\u4E66\u5DF2\u540C\u6B65` });
@@ -7528,8 +7840,9 @@ async function rebuildHistoryFrom(input) {
     } catch (error) {
       if (error instanceof TaskCancelledError || error instanceof StaleTaskError) throw error;
       const details = historyRebuildFailureDetails(record, error, connectionSnapshot);
+      const checkpointPending = ["small-summary-rebuild", "large-summary-rebuild", "final-lorebook-sync"].includes(details.failureStage);
       await updateHistoryRebuild(record, {
-        state: "failed",
+        state: checkpointPending ? "checkpoint-pending" : "failed",
         ...details
       });
       input.onFailure?.(details);
@@ -7537,7 +7850,7 @@ async function rebuildHistoryFrom(input) {
         category: "recovery",
         action: "history-rebuild-failed",
         resourceId: record.id,
-        state: "failed",
+        state: checkpointPending ? "checkpoint-pending" : "failed",
         detail: formatHistoryRebuildFailure(details)
       });
       throw new HistoryRebuildFailureError(details, error);
@@ -7548,7 +7861,7 @@ async function detectHistoryConsistencyStart() {
   const chatKey = currentChatKey();
   const state2 = await getChatState(chatKey);
   const liveKeys = allLiveRevisionKeys();
-  const summaryKeys = new Set(state2.smallSummaries.flatMap((summary) => summary.sourceKeys));
+  const summaryKeys = allConsumedKeys(state2.smallSummaries, state2.smallSummarySkips);
   const trackedKeys = /* @__PURE__ */ new Set([...state2.processedMessageKeys, ...summaryKeys]);
   for (const index of assistantIndexesFrom(0)) {
     const liveKey = messageIdentity(index);
@@ -7574,6 +7887,7 @@ function successfulFactPackageIndex() {
   const chatKey = currentChatKey();
   const byId = /* @__PURE__ */ new Map();
   const byMessageKey = /* @__PURE__ */ new Map();
+  const stageSnapshots = /* @__PURE__ */ new Map();
   for (const message of getChat()) {
     if (message?.is_user) continue;
     const artifact = message?.extra?.mirrorAbyssV11;
@@ -7584,12 +7898,34 @@ function successfulFactPackageIndex() {
   }
   const packages = [...byId.values()].sort((a, b) => a.sourceRange.startIndex - b.sourceRange.startIndex);
   for (const pack of packages) {
+    const before = previousSnapshot(pack.sourceRange.startIndex);
+    const projection = projectUnifiedFacts({
+      previousSnapshot: before,
+      factPackage: pack,
+      focusRegistry: [],
+      currentFocusId: void 0
+    });
+    stageSnapshots.set(pack.packageId, deepClone(projection.snapshot));
     for (const messageKey of pack.sourceRange.messageKeys) byMessageKey.set(messageKey, pack);
   }
-  return { packages, byMessageKey };
+  return { packages, byMessageKey, stageSnapshots };
 }
-function allConsumedKeys(summaries) {
-  return new Set(summaries.flatMap((item2) => item2.sourceKeys));
+function allConsumedKeys(summaries, skips = []) {
+  return new Set([...summaries, ...skips].flatMap((item2) => item2.sourceKeys ?? []));
+}
+function selectPendingSmallSummaryPackages(pending, threshold, requestedSourceKeys = []) {
+  const requested = new Set(requestedSourceKeys);
+  if (requested.size) {
+    return pending.filter((pack) => pack.sourceRange.messageKeys.some((key) => requested.has(key)));
+  }
+  const selected = [];
+  let count = 0;
+  for (const pack of pending) {
+    selected.push(pack);
+    count += pack.turnMaterials.length;
+    if (count >= threshold) break;
+  }
+  return selected;
 }
 function assertSummaryScope(artifact, signal) {
   if (signal?.aborted) throw new TaskCancelledError("\u603B\u7ED3\u4EFB\u52A1\u5DF2\u53D6\u6D88");
@@ -7646,7 +7982,134 @@ function pendingSmallSummaries(small, large) {
   const consumed = new Set(large.flatMap((item2) => item2.sourceKeys));
   return small.filter((item2) => !consumed.has(item2.id));
 }
-async function generateSmallSummary(artifact, force = false, signal, factIndex = successfulFactPackageIndex()) {
+function smallSummarySkipRecord(sourceKeys, context) {
+  return {
+    id: `small-skip:${hashText(sourceKeys.join("|"))}`,
+    sourceKeys: [...sourceKeys],
+    sourceFactIds: context.relevantFacts.map((fact) => fact.factId),
+    changeFingerprint: context.changeFingerprint,
+    inputBoundary: {
+      packages: context.packageCount ?? 0,
+      changedRows: 0,
+      affectedRows: 0,
+      contextAnchors: context.contextAnchors?.length ?? 0,
+      relevantFacts: 0,
+      promptChars: 0,
+      modelCalled: false
+    },
+    reason: "no-event-change",
+    detail: "无事件变化，已跳过小总结",
+    createdAt: nowIso()
+  };
+}
+async function commitSmallSummarySkip(artifact, chatState, sourceKeys, context, signal) {
+  const signature = sourceKeys.join("|");
+  const existing = (chatState.smallSummarySkips ?? []).find((item2) => item2.sourceKeys?.join("|") === signature);
+  if (existing) return { skipped: true, record: existing, sourceKeys: [...sourceKeys] };
+  const record = smallSummarySkipRecord(sourceKeys, context);
+  const beforeArtifact = deepClone(artifact);
+  const beforeChatState = deepClone(chatState);
+  const afterArtifact = deepClone(artifact);
+  const afterChatState = deepClone(chatState);
+  afterChatState.smallSummarySkips ||= [];
+  afterChatState.smallSummarySkips.push(record);
+  markStage(afterArtifact, "summary", "running", record.detail);
+  await commitSummaryMutation({
+    operation: "small_summary_skip",
+    intentKey: `small-skip:${artifact.chatKey}:${hashText(signature)}`,
+    artifact,
+    beforeArtifact,
+    afterArtifact,
+    beforeChatState,
+    afterChatState,
+    signal
+  });
+  await safeAppendOperationLog(artifact.chatKey, {
+    category: "summary",
+    action: "small-summary-skipped",
+    resourceId: record.id,
+    state: "committed",
+    detail: `${record.detail}; sourceKeys=${sourceKeys.length}; changedRows=0`
+  });
+  return { skipped: true, record, sourceKeys: [...sourceKeys] };
+}
+function classifySmallSummaryFailure(error) {
+  const text = `${toErrorMessage(error)}\n${nestedGenerationErrorText(error)}`;
+  if (/context length|context_length|prompt.{0,20}(?:too long|too large)|input.{0,20}(?:too long|too large)|maximum context|请求.{0,12}(?:过长|过大)|输入.{0,12}(?:过长|过大)|HTTP 413/i.test(text)) return "input-too-long";
+  if (/finish_reason.{0,12}length|output.{0,12}truncat|max(?:imum)? output tokens|响应.{0,12}截断|输出.{0,12}截断/i.test(text)) return "output-truncated";
+  if (/小总结模型返回了空总结|empty summary/i.test(text)) return "empty-summary";
+  if (/标签协议不完整|纯文本协议|未返回有效.*(?:协议|标签)|protocol.{0,20}(?:incomplete|missing|invalid)/i.test(text)) return "protocol-incomplete";
+  if (/本地提交|local commit|写入回读|fingerprint|冲突|conflict/i.test(text)) return "local-commit-conflict";
+  return "model-or-transport";
+}
+function annotateSmallSummaryFailure(error, sourceKeys, context) {
+  const failure = error instanceof Error ? error : new Error(toErrorMessage(error));
+  failure.smallSummarySourceKeys = [...sourceKeys];
+  failure.smallSummaryChangeFingerprint = context.changeFingerprint;
+  failure.smallSummaryFailureKind = classifySmallSummaryFailure(failure);
+  failure.smallSummaryInputCounts = {
+    packages: context.packageCount,
+    changedRows: context.changedRows.length,
+    affectedRows: context.affectedRows.length,
+    contextAnchors: context.contextAnchors.length,
+    relevantFacts: context.relevantFacts.length,
+    matchedEvents: context.matchedEventCount ?? 0,
+    promptChars: context.promptChars ?? 0,
+    stageEndIndex: context.stageEndIndex,
+    usesStageSnapshot: true
+  };
+  return failure;
+}
+function smallSummaryForSourceKeys(summaries, sourceKeys) {
+  const signature = sourceKeys.join("|");
+  return (summaries ?? []).find((summary) => summary.sourceKeys?.join("|") === signature) ?? null;
+}
+async function resumePendingSmallSummaryCommit(artifact, chatState, sourceKeys, signal) {
+  const scope = chatScopeManager.current();
+  assertScope2(scope, artifact.chatKey, signal);
+  const intentKey = `small-model:${artifact.chatKey}:${hashText(sourceKeys.join("|"))}`;
+  const existing = await findLocalCommitByIntent(artifact.chatKey, intentKey);
+  assertScope2(scope, artifact.chatKey, signal);
+  if (!existing || existing.operation !== "small_summary" || !["prepared", "committing", "committed"].includes(existing.state)) return null;
+  await rebaseSmallSummaryCommitRecoveryMetadata(existing, chatState, scope, signal);
+  const committed = await commitSummaryMutation({
+    operation: "small_summary",
+    intentKey,
+    artifact,
+    beforeArtifact: artifact,
+    afterArtifact: artifact,
+    beforeChatState: chatState,
+    afterChatState: chatState,
+    signal
+  });
+  const summary = smallSummaryForSourceKeys(committed.afterChatState?.smallSummaries, sourceKeys);
+  if (!summary) throw new Error("小总结本地提交记录缺少对应 sourceKeys，已停止重复生成");
+  await safeAppendOperationLog(artifact.chatKey, {
+    category: "recovery",
+    action: "small-summary-local-commit-resumed",
+    resourceId: committed.id,
+    state: committed.state,
+    detail: `sourceKeys=${sourceKeys.join("|")}`
+  });
+  return deepClone(summary);
+}
+function summaryForCurrentSedimentation(summary, context, currentSnapshot) {
+  const safeSummary = deepClone(summary);
+  if (!safeSummary.sedimentation) return safeSummary;
+  const allowed = new Set();
+  for (const change of context.changedRows) {
+    const current = currentSnapshot?.[change.table]?.find((row) => row.id === change.rowId);
+    if (!change.after && !current || change.after && current && summarySemanticFingerprint(change.table, current) === fingerprint(change.after)) {
+      allowed.add(change.rowId);
+    }
+  }
+  safeSummary.sedimentation.absorbedRowIds = safeSummary.sedimentation.absorbedRowIds.filter((id) => allowed.has(id));
+  safeSummary.sedimentation.keepActiveRowIds = safeSummary.sedimentation.keepActiveRowIds.filter((id) => allowed.has(id));
+  safeSummary.sedimentation.removeRowIds = safeSummary.sedimentation.removeRowIds.filter((id) => allowed.has(id));
+  safeSummary.sedimentation.characterActivityUpdates = safeSummary.sedimentation.characterActivityUpdates.filter((item2) => allowed.has(item2.rowId));
+  return safeSummary;
+}
+async function generateSmallSummary(artifact, force = false, signal, factIndex = successfulFactPackageIndex(), options = {}) {
   assertSummaryScope(artifact, signal);
   return summaryCoordinator().withLease(`summary:${artifact.chatKey}`, async (lease) => {
     assertSummaryScope(artifact, signal);
@@ -7654,62 +8117,110 @@ async function generateSmallSummary(artifact, force = false, signal, factIndex =
     const settings = getSettings();
     const chatState = await getChatState(artifact.chatKey);
     assertHistoryRebuildAccess(chatState);
-    const consumed = allConsumedKeys(chatState.smallSummaries);
+    const consumed = allConsumedKeys(chatState.smallSummaries, chatState.smallSummarySkips);
     const pending = factIndex.packages.filter((pack) => pack.sourceRange.messageKeys.some((key) => !consumed.has(key)));
     const threshold = Math.max(1, Number(settings.smallSummaryTurns) || 15);
-    const selected = [];
-    let count = 0;
-    for (const pack of pending) {
-      selected.push(pack);
-      count += pack.turnMaterials.length;
-      if (count >= threshold) break;
-    }
-    if (!selected.length || !force && count < threshold) return null;
-    if (!artifact.snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5C0F\u603B\u7ED3\u6C89\u964D\u7684\u5F53\u524D\u6D3B\u8DC3\u8868\u683C");
+    const requestedSourceKeys = options.sourceKeys ?? [];
+    const selected = selectPendingSmallSummaryPackages(pending, threshold, requestedSourceKeys);
+    const count = selected.reduce((sum, pack) => sum + pack.turnMaterials.length, 0);
+    if (!selected.length) return requestedSourceKeys.length ? { skipped: true, retryAlreadyConsumed: true, sourceKeys: [...requestedSourceKeys] } : null;
+    if (!force && count < threshold) return null;
     const sourceKeys = selected.flatMap((pack) => pack.turnMaterials.map((item2) => item2.sourceMessageKey));
+    const changeContext = buildSmallSummaryChangeContext(selected, factIndex);
+    changeContext.packageCount = selected.length;
+    if (!changeContext.hasChanges) {
+      return commitSmallSummarySkip(artifact, chatState, sourceKeys, changeContext, signal);
+    }
+    if (!artifact.snapshot) throw annotateSmallSummaryFailure(new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5C0F\u603B\u7ED3\u6C89\u964D\u7684\u5F53\u524D\u6D3B\u8DC3\u8868\u683C"), sourceKeys, changeContext);
     const sourceRange = {
       startIndex: selected[0].sourceRange.startIndex,
       endIndex: selected.at(-1).sourceRange.endIndex,
       messageKeys: sourceKeys
     };
-    const parsed = await generateParsedDerivedTask({
-      task: "smallSummary",
-      systemPrompt: smallSummarySystemPrompt(),
-      prompt: smallSummaryPrompt(selected, artifact.snapshot, chatState.eventEntries ?? []),
-      signal,
-      invocation: {
-        sourceRange,
-        priority: "background-derived",
-        blocking: false,
-        coalesceKey: `small-summary:${artifact.chatKey}`,
-        outputSchema: "MA_SMALL_SUMMARY_TEXT_V1"
+    const intentKey = `small-model:${artifact.chatKey}:${hashText(sourceKeys.join("|"))}`;
+    try {
+      const resumed = await resumePendingSmallSummaryCommit(artifact, chatState, sourceKeys, signal);
+      assertSummaryScope(artifact, signal);
+      lease.assertOwner();
+      if (resumed) {
+        return resumed;
       }
-    }, parseSmallSummaryText, signal, "小总结");
+    } catch (error) {
+      if (error instanceof TaskCancelledError || error instanceof StaleTaskError || signal?.aborted) throw error;
+      const failure = annotateSmallSummaryFailure(error, sourceKeys, changeContext);
+      failure.smallSummaryFailureKind = "local-commit-conflict";
+      throw failure;
+    }
+    const matchedEvents = matchingSmallSummaryEvents(chatState.eventEntries ?? [], changeContext);
+    const prompt = smallSummaryPrompt(selected, changeContext, matchedEvents);
+    changeContext.matchedEventCount = matchedEvents.length;
+    changeContext.promptChars = prompt.length;
+    changeContext.stageEndIndex = sourceRange.endIndex;
+    let parsed;
+    try {
+      parsed = await generateParsedDerivedTask({
+        task: "smallSummary",
+        systemPrompt: smallSummarySystemPrompt(),
+        prompt,
+        signal,
+        invocation: {
+          sourceRange,
+          priority: "background-derived",
+          blocking: false,
+          coalesceKey: `small-summary:${artifact.chatKey}`,
+          outputSchema: "MA_SMALL_SUMMARY_TEXT_V1"
+        }
+      }, parseSmallSummaryText, signal, "小总结");
+    } catch (error) {
+      throw annotateSmallSummaryFailure(error, sourceKeys, changeContext);
+    }
     assertSummaryScope(artifact, signal);
     lease.assertOwner();
     const summary = normalizeSummary(parsed, "small", sourceKeys);
-    if (!summary.summary) throw new Error("\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u4E86\u7A7A\u603B\u7ED3");
-    const intentKey = `small-model:${artifact.chatKey}:${hashText(sourceKeys.join("|"))}`;
+    if (!summary.summary) throw annotateSmallSummaryFailure(new Error("\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u4E86\u7A7A\u603B\u7ED3"), sourceKeys, changeContext);
+    summary.changeFingerprint = changeContext.changeFingerprint;
+    summary.changedRowIds = [...new Set(changeContext.changedRows.map((change) => change.rowId))];
+    summary.stageEndIndex = sourceRange.endIndex;
+    summary.inputBoundary = {
+      packages: selected.length,
+      changedRows: changeContext.changedRows.length,
+      affectedRows: changeContext.affectedRows.length,
+      contextAnchors: changeContext.contextAnchors.length,
+      relevantFacts: changeContext.relevantFacts.length,
+      matchedEvents: matchedEvents.length,
+      promptChars: prompt.length,
+      stageEndIndex: sourceRange.endIndex,
+      usesStageSnapshot: true,
+      modelCalled: true
+    };
     const beforeArtifact = deepClone(artifact);
     const beforeChatState = deepClone(chatState);
     const afterArtifact = deepClone(artifact);
     const afterChatState = deepClone(chatState);
-    afterArtifact.snapshot = applySedimentation(afterArtifact.snapshot, summary);
-    if (!afterChatState.smallSummaries.some((item2) => item2.sourceKeys.join("|") === summary.sourceKeys.join("|"))) {
-      afterChatState.smallSummaries.push(deepClone(summary));
+    const safeSummary = summaryForCurrentSedimentation(summary, changeContext, afterArtifact.snapshot);
+    afterArtifact.snapshot = applySedimentation(afterArtifact.snapshot, safeSummary);
+    if (!afterChatState.smallSummaries.some((item2) => item2.sourceKeys.join("|") === safeSummary.sourceKeys.join("|"))) {
+      afterChatState.smallSummaries.push(deepClone(safeSummary));
     }
     afterChatState.eventEntries = rebuildEventEntries(afterChatState.smallSummaries, afterChatState.largeSummaries);
-    await measureInvocationAsync(signal, "persistMs", "local-storage", () => commitSummaryMutation({
-      operation: "small_summary",
-      intentKey,
-      artifact,
-      beforeArtifact,
-      afterArtifact,
-      beforeChatState,
-      afterChatState,
-      signal
-    }));
-    return summary;
+    try {
+      await measureInvocationAsync(signal, "persistMs", "local-storage", () => commitSummaryMutation({
+        operation: "small_summary",
+        intentKey,
+        artifact,
+        beforeArtifact,
+        afterArtifact,
+        beforeChatState,
+        afterChatState,
+        signal
+      }));
+    } catch (error) {
+      if (error instanceof TaskCancelledError || error instanceof StaleTaskError || signal?.aborted) throw error;
+      const failure = annotateSmallSummaryFailure(error, sourceKeys, changeContext);
+      failure.smallSummaryFailureKind = "local-commit-conflict";
+      throw failure;
+    }
+    return safeSummary;
   }, signal);
 }
 async function generateLargeSummary(artifact, force = false, signal, factIndex = successfulFactPackageIndex()) {
@@ -8547,7 +9058,7 @@ async function replayUnifiedFactPackages(input) {
   const state2 = await getChatState(latest.chatKey);
   assertHistoryRebuildAccess(state2);
   const byKey = new Map(artifacts.map((artifact) => [artifact.messageKey, artifact]));
-  const coveredSummaryKeys = new Set(state2.smallSummaries.flatMap((summary) => summary.sourceKeys));
+  const coveredSummaryKeys = allConsumedKeys(state2.smallSummaries, state2.smallSummarySkips);
   const recoveredMaterials = [];
   let workingSnapshot = previousSnapshot(artifacts[0].messageIndex);
   let lastPackage;
@@ -9093,21 +9604,26 @@ async function replayHistoryBatch(indexes, factPackages, options) {
 async function finalizeHistoryDerived(artifact, signal, options = {}) {
   unifiedFactScheduler.clearDeferred(artifact.chatKey);
   let generatedSmall = 0;
+  let skippedSmall = 0;
+  let retrySourceKeys = [...(options.retrySourceKeys ?? [])];
   if (options.startAt !== "large") {
     await options.onPhase?.("rebuilding-small-summaries", "从未消费事实包继续生成小总结");
     markStage(artifact, "summary", "running", "历史事实已投影到表格，正在从检查点生成事件小总结");
     await stageArtifact(artifact.messageIndex, artifact);
     for (let guard = 0; guard < 200; guard += 1) {
-      const summary = await generateSmallSummary(artifact, true, signal);
+      const summary = await generateSmallSummary(artifact, true, signal, void 0, { sourceKeys: retrySourceKeys });
       if (!summary) break;
-      generatedSmall += 1;
+      retrySourceKeys = [];
+      if (summary.retryAlreadyConsumed) continue;
+      if (summary.skipped) skippedSmall += 1;
+      else generatedSmall += 1;
     }
   }
-  await options.onPhase?.("rebuilding-large-summary", options.startAt === "large" ? "小总结检查点已提交，仅继续大总结重建" : `已生成 ${generatedSmall} 份小总结，继续大总结重建`);
-  markStage(artifact, "summary", "running", options.startAt === "large" ? "已保留完成的小总结，正在继续长期大总结" : `已生成 ${generatedSmall} 份事件总结，正在更新长期大总结`);
+  await options.onPhase?.("rebuilding-large-summary", options.startAt === "large" ? "小总结检查点已提交，仅继续大总结重建" : `已生成 ${generatedSmall} 份小总结、跳过 ${skippedSmall} 个无变化批次，继续大总结重建`);
+  markStage(artifact, "summary", "running", options.startAt === "large" ? "已保留完成的小总结，正在继续长期大总结" : `已生成 ${generatedSmall} 份事件总结、跳过 ${skippedSmall} 个无变化批次，正在更新长期大总结`);
   await stageArtifact(artifact.messageIndex, artifact);
   await generateLargeSummary(artifact, true, signal);
-  markStage(artifact, "summary", "success", options.startAt === "large" ? "历史重建已从大总结检查点继续完成" : `历史重建完成：${generatedSmall} 份事件总结已汇入长期大总结`);
+  markStage(artifact, "summary", "success", options.startAt === "large" ? "历史重建已从大总结检查点继续完成" : `历史重建完成：${generatedSmall} 份事件总结已汇入长期大总结；${skippedSmall} 个无变化批次未调用模型`);
   await commitArtifact(artifact.messageIndex, artifact);
 }
 function scheduleMessage(payload, force = false, delay = 0) {
@@ -9249,10 +9765,12 @@ function launchHistoryRebuild(startIndex, reason) {
         progressTotal: progress.total,
         progressLabel: progress.label,
         historyPhase: progress.phase,
+        historyCheckpoint: progress.checkpoint,
         retries: progress.retries
       }),
       onFailure: (details) => taskQueue.updateByKey(taskKey, {
         historyPhase: details.phase,
+        historyCheckpoint: details.checkpoint,
         historyFailureStage: details.failureStage,
         failedBatchStart: details.failedBatchStart,
         nextIndex: details.nextIndex,
@@ -9261,6 +9779,9 @@ function launchHistoryRebuild(startIndex, reason) {
         connectionLabel: details.connectionLabel,
         errorPreview: details.errorPreview,
         lastModelTiming: details.lastModelTiming,
+        failedSummarySourceKeys: details.failedSummarySourceKeys,
+        smallSummaryInputCounts: details.smallSummaryInputCounts,
+        smallSummaryFailureKind: details.smallSummaryFailureKind,
         progressLabel: `失败：${historyRebuildFailureStageText(details.failureStage)}`
       })
     }),
@@ -9285,7 +9806,7 @@ function launchHistoryRebuild(startIndex, reason) {
   return true;
 }
 function historyRebuildIsRunning(record) {
-  return Boolean(record && ["pending", "checking-connection", "waiting-connection", "rebuilding", "paused", "failed"].includes(record.state));
+  return Boolean(record && ["pending", "checking-connection", "waiting-connection", "rebuilding", "paused", "failed", "checkpoint-pending"].includes(record.state));
 }
 async function markHistoryRebuildDetected(startIndex, reason, options = {}) {
   const chatKey = currentChatKey();
@@ -9851,6 +10372,7 @@ async function runDiagnostics() {
     const rebuild = state2.historyRebuild;
     const rebuildFailure = rebuild?.error ? formatHistoryRebuildFailure({
       phase: rebuild.phase,
+      checkpoint: rebuild.checkpoint,
       failureStage: rebuild.failureStage || historyRebuildFailureStage(rebuild.phase),
       failedBatchStart: rebuild.failedBatchStart,
       nextIndex: rebuild.nextIndex,
@@ -9858,12 +10380,14 @@ async function runDiagnostics() {
       errorKind: rebuild.errorKind,
       errorStatus: rebuild.errorStatus,
       connectionLabel: rebuild.connectionLabel,
-      errorPreview: rebuild.errorPreview
+      errorPreview: rebuild.errorPreview,
+      failedSummarySourceKeys: rebuild.failedSummarySourceKeys,
+      smallSummaryFailureKind: rebuild.smallSummaryFailureKind || (historyRebuildFailureStage(rebuild.phase) === "small-summary-rebuild" ? classifySmallSummaryFailure(new Error(rebuild.error)) : void 0)
     }) : "";
     checks.push({
       id: "historyConsistency",
       label: "\u603B\u7ED3\u4F9D\u8D56\u4E00\u81F4\u6027",
-      status: rebuild && ["failed", "waiting-connection"].includes(rebuild.state) ? "error" : rebuild ? "warn" : "ok",
+      status: rebuild && ["failed", "waiting-connection", "checkpoint-pending"].includes(rebuild.state) ? "error" : rebuild ? "warn" : "ok",
       detail: rebuild ? rebuild.state === "detected" ? `检测到历史变化；从第 ${rebuild.startIndex + 1} 条消息开始；等待玩家手动重建；原因 ${rebuild.reason}` : `${rebuild.state}\uFF1B\u4ECE\u7B2C ${rebuild.startIndex + 1} \u6761\u6D88\u606F\u91CD\u5EFA\uFF1B\u539F\u56E0 ${rebuild.reason}${rebuildFailure ? `\uFF1B${rebuildFailure}` : ""}` : `\u4E00\u81F4\uFF1Brevision=${state2.historyRevision ?? 0}`
     });
     checks.push({
@@ -10176,12 +10700,14 @@ function historyRebuildStatusHtml(record) {
   const processed = record.processedMessages ?? 0;
   const progress = total ? Math.max(0, Math.min(100, Math.round(processed / total * 100))) : 0;
   const detected = record.state === "detected";
-  const danger = /failed|waiting-connection/.test(record.state);
+  const danger = /failed|waiting-connection|checkpoint-pending/.test(record.state);
   const tone = danger ? "danger" : detected ? "warning" : "working";
   const icon = danger ? "fa-circle-exclamation" : detected ? "fa-clock-rotate-left" : "fa-arrows-rotate";
   const failedStage = record.failureStage || (record.error ? historyRebuildFailureStage(record.phase) : "");
+  const inferredSmallSummaryFailureKind = record.smallSummaryFailureKind || (failedStage === "small-summary-rebuild" && record.error ? classifySmallSummaryFailure(new Error(record.error)) : "");
   const failureMeta = record.error ? `<div class="ma11-rebuild-metrics">
       <span><i class="fa-solid fa-location-dot"></i> 失败阶段 ${escapeHtml(historyRebuildFailureStageText(failedStage))}</span>
+      ${record.checkpoint ? `<span>checkpoint ${escapeHtml(record.checkpoint)}</span>` : ""}
       ${Number.isInteger(record.failedBatchStart) ? `<span>失败批次起点 ${record.failedBatchStart + 1}</span>` : ""}
       ${Number.isInteger(record.nextIndex) ? `<span>续跑检查点 ${record.nextIndex + 1}</span>` : ""}
       ${record.errorKind ? `<span>errorKind ${escapeHtml(record.errorKind)}</span>` : ""}
@@ -10203,8 +10729,12 @@ function historyRebuildStatusHtml(record) {
     </div>`}
     ${record.nonDestructive && !detected ? `<div class="ma11-help">连接预检完成前不会删除现有表格、事件总结或大总结。</div>` : ""}
     ${record.state === "waiting-connection" ? `<div class="ma11-help">连接失败只暂停当前尝试；已完成批次、续跑检查点、有效总结和待发布事务均保留。</div>` : ""}
+    ${record.state === "checkpoint-pending" ? `<div class="ma11-help">事实包与表格投影已保留；只需从失败的派生检查点续跑，不会重做已成功的正文事实提取。</div>` : ""}
     ${failureMeta}
     ${record.error ? `<div class="ma11-inline-error">${escapeHtml(record.error)}</div>` : ""}
+    ${record.failedSummarySourceKeys?.length ? `<div class="ma11-help">失败小总结来源：${escapeHtml(record.failedSummarySourceKeys.join("｜"))}</div>` : ""}
+    ${inferredSmallSummaryFailureKind ? `<div class="ma11-help">小总结错误分类：${escapeHtml(inferredSmallSummaryFailureKind)}</div>` : ""}
+    ${record.smallSummaryInputCounts ? `<div class="ma11-help">本次边界：事实包 ${record.smallSummaryInputCounts.packages ?? 0} · 变化行 ${record.smallSummaryInputCounts.changedRows ?? 0} · 直接操作 ${record.smallSummaryInputCounts.affectedRows ?? 0} · 上下文锚 ${record.smallSummaryInputCounts.contextAnchors ?? 0} · 匹配事件 ${record.smallSummaryInputCounts.matchedEvents ?? 0} · 变化事实 ${record.smallSummaryInputCounts.relevantFacts ?? 0} · 输入 ${record.smallSummaryInputCounts.promptChars ?? 0} 字符${Number.isInteger(record.smallSummaryInputCounts.stageEndIndex) ? ` · 阶段末消息 ${record.smallSummaryInputCounts.stageEndIndex + 1}` : ""}</div>` : ""}
     ${record.errorPreview && !record.error?.includes(record.errorPreview) ? `<div class="ma11-inline-error">上游片段：${escapeHtml(record.errorPreview)}</div>` : ""}
     ${record.lastModelTiming ? invocationTimingHtml(record.lastModelTiming) : ""}
   </div>`;
@@ -10293,14 +10823,22 @@ function taskCardHtml(task, historyRecord) {
   const errorKind = task.errorKind || rebuild?.errorKind;
   const errorStatus = task.errorStatus || rebuild?.errorStatus;
   const connectionLabel = task.connectionLabel || rebuild?.connectionLabel;
+  const checkpoint = task.historyCheckpoint || rebuild?.checkpoint;
+  const failedSummarySourceKeys = task.failedSummarySourceKeys || rebuild?.failedSummarySourceKeys;
+  const smallSummaryInputCounts = task.smallSummaryInputCounts || rebuild?.smallSummaryInputCounts;
+  const smallSummaryFailureKind = task.smallSummaryFailureKind || rebuild?.smallSummaryFailureKind || (historyFailureStage === "small-summary-rebuild" && (task.error || rebuild?.error) ? classifySmallSummaryFailure(new Error(task.error || rebuild.error)) : "");
   const historyMeta = isHistory ? `<div class="ma11-task-meta">
       ${historyPhase ? `<span>phase：${escapeHtml(historyPhase)}</span>` : ""}
+      ${checkpoint ? `<span>checkpoint：${escapeHtml(checkpoint)}</span>` : ""}
       ${historyFailureStage ? `<span>失败阶段：${escapeHtml(historyRebuildFailureStageText(historyFailureStage))}</span>` : ""}
       ${Number.isInteger(failedBatchStart) ? `<span>失败批次起点：${failedBatchStart + 1}</span>` : ""}
       ${Number.isInteger(nextIndex) ? `<span>续跑检查点：${nextIndex + 1}</span>` : ""}
       ${errorKind ? `<span>errorKind：${escapeHtml(errorKind)}</span>` : ""}
       ${errorStatus ? `<span>HTTP ${escapeHtml(String(errorStatus))}</span>` : ""}
       ${connectionLabel ? `<span>${escapeHtml(connectionLabel)}</span>` : ""}
+      ${failedSummarySourceKeys?.length ? `<span>失败小总结来源：${escapeHtml(failedSummarySourceKeys.join("｜"))}</span>` : ""}
+      ${smallSummaryFailureKind ? `<span>小总结错误：${escapeHtml(smallSummaryFailureKind)}</span>` : ""}
+      ${smallSummaryInputCounts ? `<span>输入边界：变化行 ${smallSummaryInputCounts.changedRows ?? 0} / 变化事实 ${smallSummaryInputCounts.relevantFacts ?? 0} / 匹配事件 ${smallSummaryInputCounts.matchedEvents ?? 0} / ${smallSummaryInputCounts.promptChars ?? 0} 字符</span>` : ""}
     </div>` : "";
   let errorText = task.error || "";
   if (isHistory && rebuild?.error && !errorText.includes(rebuild.error)) errorText = [errorText, `原始错误：${rebuild.error}`].filter(Boolean).join("\n");
@@ -10784,7 +11322,7 @@ async function diagnosticsHtml() {
       </section>` : "";
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u3001\u8DE8\u6807\u7B7E\u534F\u8C03\u4E0E\u6062\u590D\u4E8B\u52A1\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
-    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u9ED8\u8BA4\u6BCF\u6279 6 \u6761\u3001\u8303\u56F4 4\u201310 \u6761\uFF0C\u5E76\u6309\u5B9E\u9645\u63D0\u793A\u8BCD\u4F53\u79EF\u7EE7\u7EED\u62C6\u5206\uFF1B\u6BCF\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? chatState.historyRebuild.state === "detected" ? `<button data-ma11-action="retry-history-rebuild">手动开始历史重建</button>` : `<button data-ma11-action="retry-history-rebuild">${["paused", "failed", "waiting-connection"].includes(chatState.historyRebuild.state) ? "测试连接并继续重建" : "恢复重建"}</button><button data-ma11-action="pause-history-rebuild">暂停</button><button class="danger" data-ma11-action="cancel-history-rebuild">取消</button>` : ""}</div></section>
+    <section class="ma11-card"><header><b>\u6062\u590D\u4E0E\u7EF4\u62A4</b><span>${escapeHtml(info?.artifact.chatKey.slice(-10) || chatKey.slice(-10))}</span></header><p class="ma11-help">\u5BFC\u51FA\u5305\u5305\u542B\u5F53\u524D\u804A\u5929\u7684\u72B6\u6001\u3001\u4E16\u754C\u4E66\u4E8B\u52A1\u3001\u672C\u5730\u63D0\u4EA4\u65E5\u5FD7\u3001\u64CD\u4F5C\u65E5\u5FD7\u548C\u8FC1\u79FB\u5907\u4EFD\uFF1B\u4E0D\u5305\u542B API \u5BC6\u94A5\u3002\u5386\u53F2\u91CD\u5EFA\u9ED8\u8BA4\u6BCF\u6279 6 \u6761\u3001\u8303\u56F4 4\u201310 \u6761\uFF0C\u5E76\u6309\u5B9E\u9645\u63D0\u793A\u8BCD\u4F53\u79EF\u7EE7\u7EED\u62C6\u5206\uFF1B\u6BCF\u6279\u4FDD\u5B58\u68C0\u67E5\u70B9\uFF0C\u5237\u65B0\u9875\u9762\u540E\u53EF\u7EE7\u7EED\u3002</p>${chatState.historyRebuild ? historyRebuildStatusHtml(chatState.historyRebuild) : ""}<div class="ma11-actions"><button data-ma11-action="export-recovery">\u5BFC\u51FA\u6062\u590D\u5305</button><button data-ma11-action="cleanup-recovery">\u6E05\u7406\u5DF2\u5B8C\u6210\u5386\u53F2</button>${chatState.historyRebuild ? chatState.historyRebuild.state === "detected" ? `<button data-ma11-action="retry-history-rebuild">手动开始历史重建</button>` : `<button data-ma11-action="retry-history-rebuild">${["paused", "failed", "waiting-connection", "checkpoint-pending"].includes(chatState.historyRebuild.state) ? "测试连接并继续重建" : "恢复重建"}</button><button data-ma11-action="pause-history-rebuild">暂停</button><button class="danger" data-ma11-action="cancel-history-rebuild">取消</button>` : ""}</div></section>
     ${conflictHtml}
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p>${diagnosticRecoveryAction(check)}</div></article>`).join("")}</section>
     <section class="ma11-card"><header><b>\u6700\u8FD1\u4EFB\u52A1\u65E5\u5FD7</b><span>${logs.length}</span></header><div class="ma11-log-list">${logs.length ? logs.slice(0, 30).map(

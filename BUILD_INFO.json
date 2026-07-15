@@ -1,7 +1,9 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-alpha.10.7.12",
-  "baseline": "1.1.0-alpha.10.7.8 manual history rebuild deploy",
+  "version": "1.1.0-alpha.10.7.14",
+  "baseline": "1.1.0-alpha.10.7.13 attachment deploy",
+  "baseline_commit": "f5cf0d024228aa1fa1d315fce235463d23de1fdf",
+  "local_branch": "fix/small-summary-local-commit-recovery",
   "build_date": "2026-07-15",
   "build_type": "recovered deploy-bundle development",
   "pipeline_contract": [
@@ -25,7 +27,7 @@
     "trace"
   ],
   "graph_mode": "read_only",
-  "validation": "ES Module parse/import, history rebuild checkpoint regression, wrapped error propagation, strict stream-fallback regression, deployment syntax/version and ZIP integrity checks",
+  "validation": "ES Module parse/import, small-summary local-commit recovery regression, semantic boundary regression, history rebuild derived-checkpoint regression, strict stream-fallback regression, deployment syntax/version and ZIP integrity checks",
   "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive.",
   "connection_error_handling": [
     "detect_html_before_fact_protocol_parsing",
@@ -35,6 +37,15 @@
     "avoid_retrying_non_transient_html_configuration_failures"
   ],
   "fixes": [
+    "preserve exact failed small-summary source keys and input-boundary diagnostics when the local commit stage fails",
+    "resume prepared, committing or committed small-summary transactions before dispatching another model request",
+    "rebase only history-rebuild recovery metadata when the rest of a pending small-summary transaction still matches exactly",
+    "never replay conflicted or cancelled summary transactions over newer chat state",
+    "derive small-summary changed rows, affected operations and minimal context anchors in code instead of sending the complete current table snapshot",
+    "bind historical small summaries to their fact-package stage snapshots so early summaries cannot observe later state",
+    "consume no-event-change fact batches locally without a model call or long-term candidate",
+    "preserve rebuilt facts and tables when a derived summary fails and retry only the exact failed source keys",
+    "classify and expose small-summary input, truncation, empty, protocol and local-commit failures with non-sensitive boundary counts",
     "resume failed history fact batches from the earliest persisted checkpoint without removing completed batches",
     "resume small summary, large summary and final lorebook synchronization as separate stages",
     "preserve native model error kind, status, connection label and latest invocation timing through pipeline wrappers",
