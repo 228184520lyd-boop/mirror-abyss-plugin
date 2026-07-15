@@ -1,3 +1,33 @@
+# 1.1.0-rc.2 validation
+
+- 基线为本地 `1.1.0-rc.1` 稳定候选；独立分支 `product/memory-contract-v1-rc.2`，管线继续为 `ma-pipeline-10.7.4`，未合并 main、未上传服务器。
+- 新增事件/长期候选的本批事实与变化行来源校验；缺失、旧或伪造 ID 在本地提交前失败并进入既有协议修正及小总结检查点恢复路径。
+- 新增严格限长场景锚点、旧事件兼容标记、发布/回读/实际命中分离诊断和向量降级显示测试。
+- manifest 自动更新已关闭，避免从落后的 GitHub `main` 覆盖本地候选版。
+- `node --test tests/*.mjs`：60/60 通过；新增 7 项产品闭环测试，并保留协议、调度、95 事实长局、10 聊天 × 120 事实、恢复、Outbox 与本地提交回归。
+- `node --check index.js`、最小浏览器桩 ES Module 导入、`git diff --check`、manifest/运行时/BUILD_INFO 版本和入口/CSS/settings 路径一致性：通过。
+- 本地 HTTP 浏览器模拟及刷新重载均为 PASS：真实读取 manifest、BUILD_INFO、index、CSS 和 settings；验证伪造来源拒绝、场景锚点限长、向量降级和“实际命中未知”显示。
+- ZIP 根目录、文件清单、无测试/无 `index.js.map`、压缩数据与 SHA-256 将在最终产物生成后记录到本地交付报告。
+- 仍需云服务器真实 SillyTavern 验证逐轮世界书触发效果、Connection Profile/SSE、真实向量扩展、反向代理和长期旧存档升级；宿主不提供命中回执时无法声称某条事件已进入具体一轮正文请求。
+
+# 1.1.0-rc.1 validation
+
+- 基线为用户上传的 `1.1.0-alpha.10.7.15` 部署 ZIP；本地独立分支 `stabilize/1.1.0-rc.1`，未合并 main、未上传服务器。
+- 模拟玩家覆盖：95 条结构化事实长局、12,000 字符/24 事实双预算、无变化本地消费、504 自适应二分、刷新队列冻结、普通游玩逐批排空、检查点分阶段续跑、旧 sourceKeys 兼容、批次账本幂等、取消与 stale 提交边界。
+- `node --test tests/*.mjs`：25/25 通过；其中实际函数链模拟连续两个 15 回合阈值，共处理 30 条事实、10 个预算批次，所有 source IDs 按顺序且仅提交一次。
+- `node --check index.js`、带最小浏览器启动桩的 ES Module 导入、`git diff --check`、版本/管线一致性、入口/CSS/settings 资源路径和无旧 source map 检查：通过。
+- 最终安装 ZIP 根目录直接包含 13 个部署文件与 `manifest.json`，不包含测试目录和 `index.js.map`；SHA-256 记录在本地交付报告中。
+- 仍需在云服务器真实 SillyTavern 中验证 Connection Profile 流式首数据、实际 504、浏览器刷新、跨标签切换和世界书服务器回读去重。
+
+# 1.1.0-alpha.10.7.15 validation
+
+- `node --test tests/*.mjs`: 43/43 通过；新增覆盖 95 条事实/约 36k 字符场景、12,000 字符与 24 事实双预算、全提示词计数、顺序保持、稳定批次键、无变化隔离、单事实超限前置失败、504 自适应拆分、普通网络有限重试、批次检查点续跑、取消保留队列和首数据 N/A。
+- `node --check index.js`、ES Module 导入烟雾测试和 `git diff --check`：通过。
+- `manifest.json`、运行时 `VERSION` 与 `BUILD_INFO.json` 一致为 `1.1.0-alpha.10.7.15`；`PIPELINE_VERSION` 保持 `ma-pipeline-10.7.4`。
+- 搜索确认小总结模型入口使用 `transportMaxAttempts: 1`；504 拆分分支先于普通网络重试，拆分父批次不调用业务提交；每个子批次成功后立即保存检查点。
+- 部署 ZIP 排除无法从恢复部署包可靠重建的旧 `index.js.map`，并排除测试文件；根目录直接包含 manifest、入口脚本、样式与扩展资源。
+- SillyTavern 手机端真实 Connection Profile/当前聊天连接的 504 拆分、流式首数据、页面刷新续跑、世界书最终去重与消息 28 后续生成仍需实机验证。
+
 # 1.1.0-alpha.10.7.14 validation
 
 - `node --test tests/*.mjs`: 10/10 通过；覆盖精确 sourceKeys 事务续交、仅恢复元数据重基、其他状态漂移拒绝、冲突/取消不覆盖、缺失精确结果失败关闭、模型调用前恢复及提交错误注解。

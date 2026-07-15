@@ -5,9 +5,9 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.1.0-alpha.10.7.14",
+  "version": "1.1.0-rc.2",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
-  "auto_update": true,
+  "auto_update": false,
   "minimum_client_version": "1.17.0",
   "hooks": {
     "install": "onInstall",
@@ -19,5 +19,5 @@
     "clean": "onClean"
   },
   "generate_interceptor": "MirrorAbyssGenerationInterceptor",
-  "description": "Mirror Abyss 测试版：小总结本地提交失败保留精确来源，并优先续提交已生成结果。"
+  "description": "Mirror Abyss 产品收口候选版：事件证据边界、最小场景锚点、可解释召回与可恢复分层记忆。"
 }
