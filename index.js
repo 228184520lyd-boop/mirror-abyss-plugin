@@ -21,7 +21,7 @@ var init_constants = __esm({
     MODULE_NAME = "mirrorAbyssV11";
     LEGACY_MODULE_NAME = "mirrorAbyss";
     DISPLAY_NAME = "\u955C\u6E0A";
-    VERSION = "1.1.0-alpha.10.7.11";
+    VERSION = "1.1.0-alpha.10.7.12";
     PIPELINE_VERSION = "ma-pipeline-10.7.4";
     TABLE_KEYS = [
       "focus",
@@ -7004,8 +7004,14 @@ async function prepareHistoryRebuild(startIndex, reason, batchSize, signal) {
       totalMessages: affectedIndexes.length,
       reusedMessages: inspection.reusedMessages,
       rereadMessages: inspection.rereadMessages,
+      plannedReusedMessages: inspection.reusedMessages,
+      plannedRereadMessages: inspection.rereadMessages,
       reusedFactPackages: inspection.reusedFactPackages,
       rawBatches: inspection.rawBatches,
+      plannedRawBatches: inspection.rawBatches,
+      requiresDerivedRebuild: Boolean(
+        inspection.rereadMessages || invalidation.invalidatedSmallSummaryIds.length || invalidation.invalidatedLargeSummaryIds.length
+      ),
       phase: "planning",
       reason,
       state: "pending",
@@ -7078,6 +7084,119 @@ async function currentRecord(record) {
   const state2 = await getChatState(record.chatKey);
   return state2.historyRebuild?.id === record.id ? state2.historyRebuild : record;
 }
+function historyRebuildFailureStage(phase) {
+  const stages = {
+    "checking-connection": "connection-preflight",
+    "replaying-cache": "cached-fact-replay",
+    "reading-missing": "missing-fact-extraction",
+    "updating-long-term": "small-summary-rebuild",
+    "rebuilding-small-summaries": "small-summary-rebuild",
+    "rebuilding-large-summary": "large-summary-rebuild",
+    syncing: "final-lorebook-sync"
+  };
+  return stages[phase] || "planning";
+}
+function historyRebuildFailureStageText(stage) {
+  const labels = {
+    "connection-preflight": "连接预检",
+    "cached-fact-replay": "缓存事实重放",
+    "missing-fact-extraction": "缺失正文事实提取",
+    "small-summary-rebuild": "小总结重建",
+    "large-summary-rebuild": "大总结重建",
+    "final-lorebook-sync": "最终世界书同步",
+    planning: "批次规划"
+  };
+  return labels[stage] || stage || "未知阶段";
+}
+function historyRebuildErrorChain(error) {
+  const chain = [];
+  const seen = /* @__PURE__ */ new Set();
+  let current = error;
+  for (let depth = 0; current && depth < 8 && !seen.has(current); depth += 1) {
+    seen.add(current);
+    chain.push(current);
+    current = current?.cause;
+  }
+  return chain;
+}
+function latestHistoryRebuildModelTiming(chatKey, attemptStartedAt, fallback) {
+  const started = Date.parse(attemptStartedAt || "");
+  const timing = invocationTelemetryForChat(chatKey).find((item2) => {
+    if (!["factExtraction", "state", "smallSummary", "largeSummary"].includes(item2.taskType)) return false;
+    return !Number.isFinite(started) || Date.parse(item2.createdAt || "") >= started;
+  });
+  return timing ? deepClone(timing) : fallback ? deepClone(fallback) : void 0;
+}
+function historyRebuildFailureDetails(record, error, fallbackConnectionSnapshot) {
+  const chain = historyRebuildErrorChain(error);
+  const native = chain.find((item2) => item2 instanceof NativeGenerationError)
+    ?? chain.find((item2) => item2?.kind || item2?.status || item2?.statusCode || item2?.connectionContext);
+  const errorText = toErrorMessage(error);
+  const parsedStatus = generationErrorStatus(native ?? error, nestedGenerationErrorText(error) || errorText);
+  const directStatus = Number(native?.status ?? native?.statusCode ?? native?.response?.status);
+  const connectionContext = native?.connectionContext || fallbackConnectionSnapshot;
+  const responsePreview = chain.map((item2) => safeText(item2?.responsePreview, 800).trim()).find(Boolean);
+  const lastModelTiming = latestHistoryRebuildModelTiming(record.chatKey, record.attemptStartedAt, record.lastModelTiming);
+  const failureStage = record.phase === "updating-long-term" && lastModelTiming?.taskType === "largeSummary" ? "large-summary-rebuild" : historyRebuildFailureStage(record.phase);
+  const errorKind = safeText(native?.kind || chain.find((item2) => item2?.code)?.code || factExtractionFailureKind(chain.at(-1) ?? error), 80);
+  return {
+    phase: record.phase || "planning",
+    failureStage,
+    failedBatchStart: Number.isInteger(record.failedBatchStart) ? record.failedBatchStart : void 0,
+    nextIndex: Number.isInteger(record.nextIndex) ? record.nextIndex : record.startIndex,
+    error: errorText,
+    errorKind,
+    errorStatus: Number.isFinite(directStatus) ? directStatus : parsedStatus,
+    connectionLabel: connectionContext ? describeConnectionSnapshot(connectionContext) : record.connectionLabel,
+    errorPreview: responsePreview || void 0,
+    lastModelTiming
+  };
+}
+function formatHistoryRebuildFailure(details) {
+  const parts = [
+    `失败阶段：${historyRebuildFailureStageText(details.failureStage)}（phase=${details.phase || "unknown"}）`,
+    Number.isInteger(details.failedBatchStart) ? `失败批次从消息 ${details.failedBatchStart + 1} 开始` : "失败批次：不适用",
+    Number.isInteger(details.nextIndex) ? `续跑检查点：消息 ${details.nextIndex + 1}` : "",
+    details.errorKind ? `errorKind=${details.errorKind}` : "",
+    details.errorStatus ? `HTTP ${details.errorStatus}` : "",
+    details.connectionLabel ? `连接=${details.connectionLabel}` : "",
+    details.error ? `原始错误：${details.error}` : "",
+    details.errorPreview && !details.error?.includes(details.errorPreview) ? `上游片段：${details.errorPreview}` : ""
+  ].filter(Boolean);
+  return parts.join("；");
+}
+var HistoryRebuildFailureError = class extends Error {
+  constructor(details, cause) {
+    super(formatHistoryRebuildFailure(details), { cause });
+    this.name = "HistoryRebuildFailureError";
+    this.kind = details.errorKind;
+    this.status = details.errorStatus;
+    this.details = details;
+    this.suppressCauseDetails = true;
+  }
+};
+function historyRebuildResumePlan(record, fallbackIndex = 0) {
+  const phase = record?.resumePhase || record?.phase || "planning";
+  const failureStage = record?.resumePhase ? historyRebuildFailureStage(record.resumePhase) : record?.failureStage || historyRebuildFailureStage(phase);
+  const nextIndex = Number.isInteger(record?.nextIndex) ? record.nextIndex : Number.isInteger(record?.startIndex) ? record.startIndex : fallbackIndex;
+  const failedBatchStart = Number.isInteger(record?.failedBatchStart) ? record.failedBatchStart : void 0;
+  const batchFailure = failureStage === "cached-fact-replay" || failureStage === "missing-fact-extraction";
+  const fromIndex = batchFailure && failedBatchStart !== void 0 ? Math.min(nextIndex, failedBatchStart) : nextIndex;
+  return {
+    phase,
+    failureStage,
+    fromIndex,
+    runSmallSummaries: failureStage !== "large-summary-rebuild" && failureStage !== "final-lorebook-sync",
+    runLargeSummary: failureStage !== "final-lorebook-sync"
+  };
+}
+function historyRebuildBlockingDetail(rebuild) {
+  if (!rebuild?.error) return "";
+  const stage = historyRebuildFailureStageText(rebuild.failureStage || historyRebuildFailureStage(rebuild.phase));
+  const kind = rebuild.errorKind ? `；errorKind=${rebuild.errorKind}` : "";
+  const status = rebuild.errorStatus ? `；HTTP ${rebuild.errorStatus}` : "";
+  return `；失败阶段=${stage}${kind}${status}；原始错误：${rebuild.error}`;
+}
 function retryableBatchError(error) {
   const message = toErrorMessage(error);
   if (/HTML 页面|upstream_html/i.test(message) && !/HTTP (?:500|502|503|504|520|522|524)/i.test(message)) return false;
@@ -7104,10 +7223,10 @@ function assertHistoryRebuildAccess(state2) {
     throw new TaskCancelledError("检测到历史正文变化：正文审核仍可继续；表格、总结与世界书同步已暂停，请在恢复与维护中手动开始历史重建");
   }
   if (rebuild.state === "checking-connection" || rebuild.state === "waiting-connection") {
-    throw new TaskCancelledError("历史依赖正在等待记忆模型连接恢复：正文审核仍可继续，表格、总结与世界书同步暂缓");
+    throw new TaskCancelledError(`历史依赖正在等待记忆模型连接恢复：正文审核仍可继续，表格、总结与世界书同步暂缓${historyRebuildBlockingDetail(rebuild)}`);
   }
   if (rebuild.state === "failed") {
-    throw new TaskCancelledError("历史依赖重建失败：正文审核仍可继续，但表格、总结与世界书同步必须在恢复后继续");
+    throw new TaskCancelledError(`历史依赖重建失败：正文审核仍可继续，但表格、总结与世界书同步必须在恢复后继续${historyRebuildBlockingDetail(rebuild)}`);
   }
   if (rebuild.state === "paused") {
     throw new TaskCancelledError("历史依赖重建已暂停：正文审核仍可继续，但表格、总结与世界书同步需要等待恢复");
@@ -7164,6 +7283,7 @@ async function rebuildHistoryFrom(input) {
     assertCurrent(chatKey, input.signal);
     lease.assertOwner();
     const existingState = await getChatState(chatKey);
+    const attemptStartedAt = nowIso();
     let resumable = input.reason === "recovery" ? existingState.historyRebuild : void 0;
     const batchSize = input.batchSize ?? resumable?.batchSize ?? DEFAULT_REBUILD_BATCH_SIZE;
     if (!resumable) {
@@ -7186,10 +7306,12 @@ async function rebuildHistoryFrom(input) {
           reusedFactPackages: inspection.reusedFactPackages,
           rawBatches: inspection.rawBatches,
           phase: "checking-connection",
+          resumePhase: "planning",
           reason: input.reason,
           state: "checking-connection",
           ownerId: rebuildOwnerId,
           nonDestructive: true,
+          attemptStartedAt,
           createdAt: now,
           updatedAt: now
         };
@@ -7199,25 +7321,42 @@ async function rebuildHistoryFrom(input) {
         await putChatState(existingState);
       }
     }
-    const preflightStart = resumable?.nextIndex ?? resumable?.startIndex ?? input.startIndex;
+    if (resumable) {
+      resumable.attemptStartedAt = attemptStartedAt;
+      await updateHistoryRebuild(resumable, { attemptStartedAt });
+    }
+    const preflightResumePlan = historyRebuildResumePlan(resumable, input.startIndex);
+    const preflightStart = preflightResumePlan.fromIndex;
     let preflight;
     try {
       preflight = await preflightHistoryRebuildConnection(chatKey, preflightStart, batchSize, input.signal);
     } catch (error) {
+      if (error instanceof TaskCancelledError || error instanceof StaleTaskError || input.signal?.aborted) throw error;
       if (resumable) {
-        const message = toErrorMessage(error);
+        const resumePhase = resumable.resumePhase || (resumable.phase === "checking-connection" ? preflightResumePlan.phase : resumable.phase);
+        resumable.phase = "checking-connection";
+        const details = historyRebuildFailureDetails(resumable, error);
         await updateHistoryRebuild(resumable, {
-          state: resumable.nonDestructive ? "waiting-connection" : "failed",
+          state: "waiting-connection",
           phase: "checking-connection",
-          error: message,
-          errorKind: error instanceof NativeGenerationError ? error.kind : void 0,
-          errorStatus: error instanceof NativeGenerationError ? error.status : void 0,
-          connectionLabel: error instanceof NativeGenerationError ? describeConnectionSnapshot(error.connectionContext) : resumable.connectionLabel
+          resumePhase,
+          ...details
         });
+        input.onFailure?.(details);
+        await safeAppendOperationLog(chatKey, {
+          category: "recovery",
+          action: "history-rebuild-connection-wait",
+          resourceId: resumable.id,
+          state: "waiting-connection",
+          detail: formatHistoryRebuildFailure(details)
+        });
+        throw new HistoryRebuildFailureError(details, error);
       }
       throw error;
     }
     const connectionSnapshot = preflight.connectionSnapshot;
+    const continuingPreparedRecord = Boolean(resumable && !resumable.nonDestructive);
+    const continuationPlan = historyRebuildResumePlan(resumable, input.startIndex);
     const record = !resumable || resumable.nonDestructive ? await prepareHistoryRebuild(
       resumable?.startIndex ?? input.startIndex,
       input.reason,
@@ -7234,7 +7373,33 @@ async function rebuildHistoryFrom(input) {
     record.ownerId = rebuildOwnerId;
     record.pauseRequested = false;
     record.cancelRequested = false;
+    record.attemptStartedAt = attemptStartedAt;
+    record.resumeFromStage = continuingPreparedRecord ? continuationPlan.failureStage : void 0;
+    record.resumeFromIndex = continuingPreparedRecord ? continuationPlan.fromIndex : record.nextIndex;
+    record.nextIndex = continuingPreparedRecord ? continuationPlan.fromIndex : record.nextIndex;
+    record.lastFailure = record.error ? {
+      phase: record.phase,
+      failureStage: record.failureStage,
+      failedBatchStart: record.failedBatchStart,
+      nextIndex: record.nextIndex,
+      error: record.error,
+      errorKind: record.errorKind,
+      errorStatus: record.errorStatus,
+      connectionLabel: record.connectionLabel,
+      errorPreview: record.errorPreview,
+      lastModelTiming: record.lastModelTiming,
+      failedAt: record.updatedAt
+    } : record.lastFailure;
     record.error = void 0;
+    record.errorKind = void 0;
+    record.errorStatus = void 0;
+    record.errorPreview = void 0;
+    record.failureStage = void 0;
+    record.resumePhase = void 0;
+    record.lastModelTiming = void 0;
+    record.requiresDerivedRebuild ??= Boolean(
+      record.rereadMessages || record.invalidatedSmallSummaryIds?.length || record.invalidatedLargeSummaryIds?.length
+    );
     await updateHistoryRebuild(record, record);
     const allIndexes = assistantIndexesFrom(record.startIndex);
     const nextIndex = record.nextIndex ?? record.startIndex;
@@ -7243,10 +7408,16 @@ async function rebuildHistoryFrom(input) {
     const steps = inspection.steps;
     record.totalMessages = allIndexes.length;
     record.totalBatches = (record.completedBatches ?? 0) + steps.length;
-    record.reusedMessages = inspection.reusedMessages;
-    record.rereadMessages = inspection.rereadMessages;
-    record.reusedFactPackages = inspection.reusedFactPackages;
-    record.rawBatches = inspection.rawBatches;
+    record.plannedReusedMessages ??= record.reusedMessages ?? inspection.reusedMessages;
+    record.plannedRereadMessages ??= record.rereadMessages ?? inspection.rereadMessages;
+    record.plannedRawBatches ??= record.rawBatches ?? inspection.rawBatches;
+    record.remainingReusedMessages = inspection.reusedMessages;
+    record.remainingRereadMessages = inspection.rereadMessages;
+    record.remainingRawBatches = inspection.rawBatches;
+    record.reusedMessages = record.plannedReusedMessages;
+    record.rereadMessages = record.plannedRereadMessages;
+    record.reusedFactPackages = Math.max(record.reusedFactPackages ?? 0, inspection.reusedFactPackages);
+    record.rawBatches = record.plannedRawBatches;
     record.phase = "planning";
     await updateHistoryRebuild(record, {
       totalMessages: record.totalMessages,
@@ -7255,6 +7426,9 @@ async function rebuildHistoryFrom(input) {
       rereadMessages: record.rereadMessages,
       reusedFactPackages: record.reusedFactPackages,
       rawBatches: record.rawBatches,
+      remainingReusedMessages: record.remainingReusedMessages,
+      remainingRereadMessages: record.remainingRereadMessages,
+      remainingRawBatches: record.remainingRawBatches,
       phase: record.phase
     });
     input.onProgress?.({ current: record.processedMessages ?? 0, total: record.totalMessages, label: `\u7F13\u5B58\u4F18\u5148\uFF1A\u590D\u7528 ${inspection.reusedMessages} \u6761\uFF0C\u56DE\u8BFB ${inspection.rereadMessages} \u6761` });
@@ -7320,18 +7494,32 @@ async function rebuildHistoryFrom(input) {
       assertCurrent(chatKey, input.signal);
       lease.assertOwner();
       if (latest?.snapshot) {
+        const resumeAtLargeSummary = continuingPreparedRecord && !continuationPlan.runSmallSummaries && continuationPlan.runLargeSummary;
+        const resumeAtLorebookSync = continuingPreparedRecord && !continuationPlan.runLargeSummary;
         const needsLongTermUpdate = Boolean(
-          (record.rereadMessages ?? 0) > 0 || record.invalidatedSmallSummaryIds.length || record.invalidatedLargeSummaryIds.length
+          record.requiresDerivedRebuild || record.invalidatedSmallSummaryIds?.length || record.invalidatedLargeSummaryIds?.length ||
+          continuationPlan.failureStage === "small-summary-rebuild" || continuationPlan.failureStage === "large-summary-rebuild"
         );
-        if (needsLongTermUpdate) {
-          await updateHistoryRebuild(record, { phase: "updating-long-term" });
-          input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u66F4\u65B0\u957F\u671F\u8109\u7EDC" });
-          await input.finalizeDerived?.(latest);
+        if (!resumeAtLorebookSync && needsLongTermUpdate) {
+          await input.finalizeDerived?.(latest, {
+            startAt: resumeAtLargeSummary ? "large" : "small",
+            onPhase: async (phase, label) => {
+              await updateHistoryRebuild(record, { phase });
+              input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, phase, label });
+            }
+          });
+          record.requiresDerivedRebuild = false;
+          await updateHistoryRebuild(record, { requiresDerivedRebuild: false });
         } else {
-          input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u957F\u671F\u603B\u7ED3\u4FDD\u6301\u6709\u6548\uFF0C\u65E0\u9700\u6A21\u578B\u66F4\u65B0" });
+          input.onProgress?.({
+            current: record.totalMessages ?? rebuilt,
+            total: record.totalMessages ?? rebuilt,
+            phase: resumeAtLorebookSync ? "syncing" : "planning",
+            label: resumeAtLorebookSync ? "事实与总结检查点已完成，仅续跑世界书同步" : "长期总结保持有效，无需模型更新"
+          });
         }
         await updateHistoryRebuild(record, { phase: "syncing" });
-        input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: "\u53D1\u5E03\u6700\u7EC8\u4E16\u754C\u4E66" });
+        input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, phase: "syncing", label: "发布最终世界书" });
         await input.syncLatest(latest);
       }
       input.onProgress?.({ current: record.totalMessages ?? rebuilt, total: record.totalMessages ?? rebuilt, label: `\u91CD\u5EFA\u5B8C\u6210\uFF1A\u590D\u7528 ${record.reusedMessages ?? 0} \u6761\uFF0C\u56DE\u8BFB ${record.rereadMessages ?? 0} \u6761\uFF0C\u4E16\u754C\u4E66\u5DF2\u540C\u6B65` });
@@ -7339,26 +7527,20 @@ async function rebuildHistoryFrom(input) {
       return { record, rebuilt, latestArtifact: latest };
     } catch (error) {
       if (error instanceof TaskCancelledError || error instanceof StaleTaskError) throw error;
-      record.state = "failed";
-      record.error = toErrorMessage(error);
-      record.errorKind = error instanceof NativeGenerationError ? error.kind : void 0;
-      record.errorStatus = error instanceof NativeGenerationError ? error.status : void 0;
-      record.connectionLabel = error instanceof NativeGenerationError ? describeConnectionSnapshot(error.connectionContext || connectionSnapshot) : record.connectionLabel;
+      const details = historyRebuildFailureDetails(record, error, connectionSnapshot);
       await updateHistoryRebuild(record, {
         state: "failed",
-        error: record.error,
-        errorKind: record.errorKind,
-        errorStatus: record.errorStatus,
-        connectionLabel: record.connectionLabel
+        ...details
       });
+      input.onFailure?.(details);
       await safeAppendOperationLog(chatKey, {
         category: "recovery",
         action: "history-rebuild-failed",
         resourceId: record.id,
         state: "failed",
-        detail: record.error
+        detail: formatHistoryRebuildFailure(details)
       });
-      throw error;
+      throw new HistoryRebuildFailureError(details, error);
     }
   }, input.signal);
 }
@@ -8908,20 +9090,24 @@ async function replayHistoryBatch(indexes, factPackages, options) {
     deferLorebookSync: options.deferLorebookSync
   });
 }
-async function finalizeHistoryDerived(artifact, signal) {
+async function finalizeHistoryDerived(artifact, signal, options = {}) {
   unifiedFactScheduler.clearDeferred(artifact.chatKey);
-  markStage(artifact, "summary", "running", "历史事实已投影到表格，正在按阈值生成事件总结");
-  await stageArtifact(artifact.messageIndex, artifact);
   let generatedSmall = 0;
-  for (let guard = 0; guard < 200; guard += 1) {
-    const summary = await generateSmallSummary(artifact, true, signal);
-    if (!summary) break;
-    generatedSmall += 1;
+  if (options.startAt !== "large") {
+    await options.onPhase?.("rebuilding-small-summaries", "从未消费事实包继续生成小总结");
+    markStage(artifact, "summary", "running", "历史事实已投影到表格，正在从检查点生成事件小总结");
+    await stageArtifact(artifact.messageIndex, artifact);
+    for (let guard = 0; guard < 200; guard += 1) {
+      const summary = await generateSmallSummary(artifact, true, signal);
+      if (!summary) break;
+      generatedSmall += 1;
+    }
   }
-  markStage(artifact, "summary", "running", `已生成 ${generatedSmall} 份事件总结，正在更新长期大总结`);
+  await options.onPhase?.("rebuilding-large-summary", options.startAt === "large" ? "小总结检查点已提交，仅继续大总结重建" : `已生成 ${generatedSmall} 份小总结，继续大总结重建`);
+  markStage(artifact, "summary", "running", options.startAt === "large" ? "已保留完成的小总结，正在继续长期大总结" : `已生成 ${generatedSmall} 份事件总结，正在更新长期大总结`);
   await stageArtifact(artifact.messageIndex, artifact);
   await generateLargeSummary(artifact, true, signal);
-  markStage(artifact, "summary", "success", `历史重建完成：${generatedSmall} 份事件总结已汇入长期大总结`);
+  markStage(artifact, "summary", "success", options.startAt === "large" ? "历史重建已从大总结检查点继续完成" : `历史重建完成：${generatedSmall} 份事件总结已汇入长期大总结`);
   await commitArtifact(artifact.messageIndex, artifact);
 }
 function scheduleMessage(payload, force = false, delay = 0) {
@@ -9055,14 +9241,27 @@ function launchHistoryRebuild(startIndex, reason) {
       reason,
       processBatch: processHistoryBatch,
       replayBatch: replayHistoryBatch,
-      finalizeDerived: (artifact) => finalizeHistoryDerived(artifact, signal),
+      finalizeDerived: (artifact, options) => finalizeHistoryDerived(artifact, signal, options),
       syncLatest: async (artifact) => syncLorebook(artifact, signal, { forceRefresh: true }),
       signal,
       onProgress: (progress) => taskQueue.updateByKey(taskKey, {
         progressCurrent: progress.current,
         progressTotal: progress.total,
         progressLabel: progress.label,
+        historyPhase: progress.phase,
         retries: progress.retries
+      }),
+      onFailure: (details) => taskQueue.updateByKey(taskKey, {
+        historyPhase: details.phase,
+        historyFailureStage: details.failureStage,
+        failedBatchStart: details.failedBatchStart,
+        nextIndex: details.nextIndex,
+        errorKind: details.errorKind,
+        errorStatus: details.errorStatus,
+        connectionLabel: details.connectionLabel,
+        errorPreview: details.errorPreview,
+        lastModelTiming: details.lastModelTiming,
+        progressLabel: `失败：${historyRebuildFailureStageText(details.failureStage)}`
       })
     }),
     {
@@ -9080,7 +9279,8 @@ function launchHistoryRebuild(startIndex, reason) {
     if (error instanceof StaleTaskError || error instanceof TaskCancelledError) return;
     console.error("[MirrorAbyss] history rebuild failed", error);
     const message = toErrorMessage(error);
-    toast("error", /HTML 页面|upstream_html/i.test(message) ? `历史重建尚未开始或已暂停：记忆模型连接返回 HTML。正文审核仍可继续；请修正“记忆模型”连接后点击“测试连接并继续重建”。${message}` : `历史依赖重建失败：${message}`);
+    const connectionWait = error instanceof HistoryRebuildFailureError && error.details?.failureStage === "connection-preflight";
+    toast("error", connectionWait ? `历史重建连接预检失败，现有检查点和记忆未被清除；修正连接后可继续。${message}` : `历史依赖重建失败，可从保存的阶段和批次继续：${message}`);
   });
   return true;
 }
@@ -9649,11 +9849,22 @@ async function runDiagnostics() {
     });
     const state2 = await getChatState(currentChatKey());
     const rebuild = state2.historyRebuild;
+    const rebuildFailure = rebuild?.error ? formatHistoryRebuildFailure({
+      phase: rebuild.phase,
+      failureStage: rebuild.failureStage || historyRebuildFailureStage(rebuild.phase),
+      failedBatchStart: rebuild.failedBatchStart,
+      nextIndex: rebuild.nextIndex,
+      error: rebuild.error,
+      errorKind: rebuild.errorKind,
+      errorStatus: rebuild.errorStatus,
+      connectionLabel: rebuild.connectionLabel,
+      errorPreview: rebuild.errorPreview
+    }) : "";
     checks.push({
       id: "historyConsistency",
       label: "\u603B\u7ED3\u4F9D\u8D56\u4E00\u81F4\u6027",
-      status: rebuild?.state === "failed" ? "error" : rebuild ? "warn" : "ok",
-      detail: rebuild ? rebuild.state === "detected" ? `检测到历史变化；从第 ${rebuild.startIndex + 1} 条消息开始；等待玩家手动重建；原因 ${rebuild.reason}` : `${rebuild.state}\uFF1B\u4ECE\u7B2C ${rebuild.startIndex + 1} \u6761\u6D88\u606F\u91CD\u5EFA\uFF1B\u539F\u56E0 ${rebuild.reason}${rebuild.error ? `\uFF1B${rebuild.error}` : ""}` : `\u4E00\u81F4\uFF1Brevision=${state2.historyRevision ?? 0}`
+      status: rebuild && ["failed", "waiting-connection"].includes(rebuild.state) ? "error" : rebuild ? "warn" : "ok",
+      detail: rebuild ? rebuild.state === "detected" ? `检测到历史变化；从第 ${rebuild.startIndex + 1} 条消息开始；等待玩家手动重建；原因 ${rebuild.reason}` : `${rebuild.state}\uFF1B\u4ECE\u7B2C ${rebuild.startIndex + 1} \u6761\u6D88\u606F\u91CD\u5EFA\uFF1B\u539F\u56E0 ${rebuild.reason}${rebuildFailure ? `\uFF1B${rebuildFailure}` : ""}` : `\u4E00\u81F4\uFF1Brevision=${state2.historyRevision ?? 0}`
     });
     checks.push({
       id: "migration",
@@ -9954,6 +10165,8 @@ function rebuildPhaseText(value) {
     "replaying-cache": "\u590D\u7528\u65E2\u6709\u4E8B\u5B9E\u5305",
     "reading-missing": "\u56DE\u8BFB\u7F3A\u5931\u6216\u5DF2\u4FEE\u6539\u6B63\u6587",
     "updating-long-term": "\u66F4\u65B0\u957F\u671F\u8109\u7EDC",
+    "rebuilding-small-summaries": "从检查点重建小总结",
+    "rebuilding-large-summary": "从检查点重建大总结",
     syncing: "\u53D1\u5E03\u6700\u7EC8\u4E16\u754C\u4E66"
   };
   return value ? map[value] || value : "\u51C6\u5907\u4E2D";
@@ -9966,6 +10179,14 @@ function historyRebuildStatusHtml(record) {
   const danger = /failed|waiting-connection/.test(record.state);
   const tone = danger ? "danger" : detected ? "warning" : "working";
   const icon = danger ? "fa-circle-exclamation" : detected ? "fa-clock-rotate-left" : "fa-arrows-rotate";
+  const failedStage = record.failureStage || (record.error ? historyRebuildFailureStage(record.phase) : "");
+  const failureMeta = record.error ? `<div class="ma11-rebuild-metrics">
+      <span><i class="fa-solid fa-location-dot"></i> 失败阶段 ${escapeHtml(historyRebuildFailureStageText(failedStage))}</span>
+      ${Number.isInteger(record.failedBatchStart) ? `<span>失败批次起点 ${record.failedBatchStart + 1}</span>` : ""}
+      ${Number.isInteger(record.nextIndex) ? `<span>续跑检查点 ${record.nextIndex + 1}</span>` : ""}
+      ${record.errorKind ? `<span>errorKind ${escapeHtml(record.errorKind)}</span>` : ""}
+      ${record.errorStatus ? `<span>HTTP ${escapeHtml(String(record.errorStatus))}</span>` : ""}
+    </div>` : "";
   return `<div class="ma11-status-strip ${tone}">
     <div class="ma11-status-strip-main">
       <span class="ma11-status-icon"><i class="fa-solid ${icon}"></i></span>
@@ -9981,7 +10202,11 @@ function historyRebuildStatusHtml(record) {
       ${record.connectionLabel ? `<span><i class="fa-solid fa-plug"></i> ${escapeHtml(record.connectionLabel)}</span>` : ""}
     </div>`}
     ${record.nonDestructive && !detected ? `<div class="ma11-help">连接预检完成前不会删除现有表格、事件总结或大总结。</div>` : ""}
+    ${record.state === "waiting-connection" ? `<div class="ma11-help">连接失败只暂停当前尝试；已完成批次、续跑检查点、有效总结和待发布事务均保留。</div>` : ""}
+    ${failureMeta}
     ${record.error ? `<div class="ma11-inline-error">${escapeHtml(record.error)}</div>` : ""}
+    ${record.errorPreview && !record.error?.includes(record.errorPreview) ? `<div class="ma11-inline-error">上游片段：${escapeHtml(record.errorPreview)}</div>` : ""}
+    ${record.lastModelTiming ? invocationTimingHtml(record.lastModelTiming) : ""}
   </div>`;
 }
 function taskDurationText(task) {
@@ -10027,7 +10252,8 @@ function taskPhaseText(phase) {
 }
 function invocationTimingHtml(timing) {
   const profile = timing.profileId ? `Profile ${timing.profileId.slice(-8)}` : "当前连接";
-  return `<div class="ma11-task-timing"><b>${escapeHtml(timing.taskType)} · ${escapeHtml(taskPhaseText(timing.phase))}</b><span>${escapeHtml(profile)}</span><small>队列 ${timingDurationText(timing.queueWaitMs)} · Profile ${timingDurationText(timing.transportWaitMs)} · 首数据 ${timingDurationText(timing.firstByteMs)} · 响应 ${timingDurationText(timing.requestMs)} · 解析 ${timingDurationText(timing.parseMs)} · 存储 ${timingDurationText(timing.persistMs)} · 保存 ${timingDurationText(timing.metadataMs)} · 总计 ${timingDurationText(timing.totalMs)}</small></div>`;
+  const outcome = [profile, timing.errorKind ? `errorKind ${timing.errorKind}` : "", timing.cancelled ? "cancelled" : "", timing.stale ? "stale" : ""].filter(Boolean).join(" · ");
+  return `<div class="ma11-task-timing"><b>${escapeHtml(timing.taskType)} · ${escapeHtml(taskPhaseText(timing.phase))}</b><span>${escapeHtml(outcome)}</span><small>队列 ${timingDurationText(timing.queueWaitMs)} · Profile ${timingDurationText(timing.transportWaitMs)} · 首数据 ${timingDurationText(timing.firstByteMs)} · 响应 ${timingDurationText(timing.requestMs)} · 解析 ${timingDurationText(timing.parseMs)} · 存储 ${timingDurationText(timing.persistMs)} · 保存 ${timingDurationText(timing.metadataMs)} · 总计 ${timingDurationText(timing.totalMs)}</small></div>`;
 }
 function taskRangeText(task) {
   if (task.sourceStartIndex === void 0) return "";
@@ -10043,17 +10269,43 @@ function retryStageForTask(task) {
   if (task.kind === "sync") return "sync";
   return "";
 }
-function taskCardHtml(task) {
+function taskCardHtml(task, historyRecord) {
   const progress = task.progressTotal ? Math.max(0, Math.min(100, Math.round((task.progressCurrent ?? 0) / task.progressTotal * 100))) : void 0;
   const active = task.state === "queued" || task.state === "running";
-  const isHistory = task.key.startsWith("history-rebuild:");
+  const isHistory = String(task.key || "").startsWith("history-rebuild:");
+  const rebuild = isHistory ? historyRecord : void 0;
   const retryStageName = retryStageForTask(task);
   const retryIndex = Number.isInteger(task.sourceStartIndex) ? task.sourceStartIndex : void 0;
   const retryAction = retryStageName && retryIndex !== void 0 ? `<button type="button" data-ma11-action="retry-task-stage" data-ma11-retry-stage="${retryStageName}" data-ma11-retry-index="${retryIndex}">重试此任务</button>` : "";
   const actions = active ? isHistory ? `<button type="button" data-ma11-action="pause-history-rebuild">暂停</button><button type="button" class="danger" data-ma11-action="cancel-history-rebuild">取消</button>` : `<button type="button" data-ma11-cancel-task="${escapeHtml(task.id)}">取消</button>` : task.state === "failed" && isHistory ? `<button type="button" data-ma11-action="retry-history-rebuild">从失败批次继续</button>` : retryAction;
   const queueWaitMs = task.startedAt ? task.queueWaitMs ?? 0 : Math.max(0, Date.now() - Date.parse(task.createdAt));
-  const modelTimings = Array.isArray(task.modelTimings) ? task.modelTimings : [];
+  const modelTimingMap = new Map((Array.isArray(task.modelTimings) ? task.modelTimings : []).map((timing) => [timing.id || `${timing.taskType}:${timing.createdAt}`, timing]));
+  const recordedLastModelTiming = task.lastModelTiming || rebuild?.lastModelTiming;
+  if (recordedLastModelTiming) modelTimingMap.set(recordedLastModelTiming.id || `${recordedLastModelTiming.taskType}:${recordedLastModelTiming.createdAt}`, recordedLastModelTiming);
+  const modelTimings = [...modelTimingMap.values()].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  const lastModelTiming = recordedLastModelTiming || modelTimings.at(-1);
   const timingHtml = modelTimings.length ? modelTimings.slice(-4).map(invocationTimingHtml).join("") : task.kind === "sync" ? `<div class="ma11-task-timing"><b>世界书发布 · ${escapeHtml(taskPhaseText(task.currentPhase))}</b><small>发布等待 ${timingDurationText(task.lorebookWaitMs || queueWaitMs)} · 总计 ${timingDurationText(task.totalMs || 0)}</small></div>` : `<div class="ma11-task-timing"><b>${escapeHtml(taskPhaseText(task.currentPhase))}</b><small>TaskQueue 等待 ${timingDurationText(queueWaitMs)}</small></div>`;
+  const historyPhase = task.historyPhase || rebuild?.phase;
+  const legacySummaryStage = historyPhase === "updating-long-term" && lastModelTiming?.taskType === "largeSummary" ? "large-summary-rebuild" : "";
+  const historyFailureStage = task.historyFailureStage || rebuild?.failureStage || legacySummaryStage || (rebuild?.error ? historyRebuildFailureStage(historyPhase) : "");
+  const failedBatchStart = Number.isInteger(task.failedBatchStart) ? task.failedBatchStart : rebuild?.failedBatchStart;
+  const nextIndex = Number.isInteger(task.nextIndex) ? task.nextIndex : rebuild?.nextIndex;
+  const errorKind = task.errorKind || rebuild?.errorKind;
+  const errorStatus = task.errorStatus || rebuild?.errorStatus;
+  const connectionLabel = task.connectionLabel || rebuild?.connectionLabel;
+  const historyMeta = isHistory ? `<div class="ma11-task-meta">
+      ${historyPhase ? `<span>phase：${escapeHtml(historyPhase)}</span>` : ""}
+      ${historyFailureStage ? `<span>失败阶段：${escapeHtml(historyRebuildFailureStageText(historyFailureStage))}</span>` : ""}
+      ${Number.isInteger(failedBatchStart) ? `<span>失败批次起点：${failedBatchStart + 1}</span>` : ""}
+      ${Number.isInteger(nextIndex) ? `<span>续跑检查点：${nextIndex + 1}</span>` : ""}
+      ${errorKind ? `<span>errorKind：${escapeHtml(errorKind)}</span>` : ""}
+      ${errorStatus ? `<span>HTTP ${escapeHtml(String(errorStatus))}</span>` : ""}
+      ${connectionLabel ? `<span>${escapeHtml(connectionLabel)}</span>` : ""}
+    </div>` : "";
+  let errorText = task.error || "";
+  if (isHistory && rebuild?.error && !errorText.includes(rebuild.error)) errorText = [errorText, `原始错误：${rebuild.error}`].filter(Boolean).join("\n");
+  const errorPreview = task.errorPreview || rebuild?.errorPreview;
+  if (errorPreview && !errorText.includes(errorPreview)) errorText = [errorText, `上游片段：${errorPreview}`].filter(Boolean).join("\n");
   return `<article class="ma11-task-card ${queueStateClass(task.state)}">
     <header><div class="ma11-task-heading"><span class="ma11-task-state-icon"><i class="fa-solid ${queueStateIcon(task.state)}"></i></span><div><b>${escapeHtml(task.label)}</b><span class="ma11-task-substate">${queueStateText(task.state)}</span></div></div><time>${escapeHtml(new Date(task.updatedAt).toLocaleString())}</time></header>
     <div class="ma11-task-meta">
@@ -10063,20 +10315,22 @@ function taskCardHtml(task) {
       ${task.retries ? `<span>\u91CD\u8BD5 ${task.retries} \u6B21</span>` : ""}
       ${task.startedAt ? `<span>\u8017\u65F6\uFF1A${escapeHtml(taskDurationText(task))}</span>` : ""}
     </div>
+    ${historyMeta}
     ${timingHtml}
     ${task.progressLabel ? `<p class="ma11-task-progress-label"><i class="fa-solid fa-wave-square"></i>${escapeHtml(task.progressLabel)}</p>` : ""}
     ${progress !== void 0 ? `<div class="ma11-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div><small>${task.progressCurrent ?? 0}/${task.progressTotal} \xB7 ${progress}%</small>` : ""}
-    ${task.error ? `<div class="ma11-error-box"><b>\u5931\u8D25\u539F\u56E0</b><p>${escapeHtml(task.error)}</p></div>` : ""}
+    ${errorText ? `<div class="ma11-error-box"><b>\u5931\u8D25\u539F\u56E0</b><p>${escapeHtml(errorText)}</p></div>` : ""}
     ${actions ? `<footer class="ma11-actions">${actions}</footer>` : ""}
   </article>`;
 }
 async function tasksHtml() {
   const chatKey = currentChatKey();
   const live = taskQueue.list().filter((task) => task.chatKey === chatKey);
-  const logs = await getTaskLog(chatKey);
+  const [logs, chatState] = await Promise.all([getTaskLog(chatKey), getChatState(chatKey)]);
   const byId = /* @__PURE__ */ new Map();
   for (const task of [...logs, ...live]) byId.set(task.id, task);
   const tasks = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const latestHistoryTaskId = tasks.find((task) => String(task.key || "").startsWith("history-rebuild:"))?.id;
   const latestStates = latestTasksByKey(tasks);
   const active = latestStates.filter((task) => task.state === "queued" || task.state === "running");
   const failed = latestStates.filter((task) => task.state === "failed");
@@ -10088,7 +10342,7 @@ async function tasksHtml() {
       <article class="ma11-card success"><b>${completed.length}</b><span>\u5DF2\u5B8C\u6210</span></article>
     </section>
     <section class="ma11-card"><header><b>\u5F53\u524D\u4E0E\u6700\u8FD1\u4EFB\u52A1</b><span>${tasks.length} \u6761</span></header>
-      <div class="ma11-task-center-list">${tasks.length ? tasks.slice(0, 40).map(taskCardHtml).join("") : '<p class="ma11-empty">\u5F53\u524D\u6CA1\u6709\u4EFB\u52A1\u8BB0\u5F55\u3002</p>'}</div>
+      <div class="ma11-task-center-list">${tasks.length ? tasks.slice(0, 40).map((task) => taskCardHtml(task, task.id === latestHistoryTaskId ? chatState.historyRebuild : void 0)).join("") : '<p class="ma11-empty">\u5F53\u524D\u6CA1\u6709\u4EFB\u52A1\u8BB0\u5F55\u3002</p>'}</div>
     </section>`;
 }
 function updateWorkspaceTaskIndicator() {

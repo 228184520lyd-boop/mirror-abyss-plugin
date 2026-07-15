@@ -1,3 +1,12 @@
+# 1.1.0-alpha.10.7.12 validation
+
+- `node --test tests/history-rebuild-resume-regression.mjs`: 6/6 test blocks passed，覆盖六阶段映射、失败批次回退、连接恢复、小/大总结分段续跑、最终同步跳过模型及包装错误透传。
+- `node --test tests/stream-fallback-regression.mjs`: 7/7 test blocks passed，确认上一版本流式降级白名单未退化。
+- `node --check index.js`、ES Module 导入烟雾测试及 `git diff --check`：通过。
+- Manifest、运行时与 `BUILD_INFO.json` 版本一致；管线仍为 `ma-pipeline-10.7.4`。
+- 部署归档继续排除无法由当前恢复源码可靠再生成的旧 `index.js.map`。
+- 手机端真实失败状态识别、Connection Profile 错误显示及世界书服务器续跑仍需要 SillyTavern 实机验证。
+
 # 1.1.0-alpha.10.7.11 validation
 
 - `node --test tests/stream-fallback-regression.mjs`: 7/7 test blocks passed, covering all eight requested fallback cases plus structural generator codes and cumulative `text` aggregation.
