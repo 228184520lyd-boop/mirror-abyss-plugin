@@ -1,4 +1,4 @@
-# 1.1.0-rc.2 validation
+# 1.1.0-rc.3 validation
 
 - 基线为本地 `1.1.0-rc.1` 稳定候选；独立分支 `product/memory-contract-v1-rc.2`，管线继续为 `ma-pipeline-10.7.4`，未合并 main、未上传服务器。
 - 新增事件/长期候选的本批事实与变化行来源校验；缺失、旧或伪造 ID 在本地提交前失败并进入既有协议修正及小总结检查点恢复路径。
@@ -253,10 +253,11 @@
 - Small/large summaries retry transient failures and retry malformed tag protocols once.
 - Non-gateway HTML remains non-retryable.
 
-## 手动历史重建检查
+## 已停用历史重建兼容检查
 
-- 默认设置 `autoHistoryRebuild=false`。
-- 启动与聊天切换调用本地检测函数，不直接调用重建函数。
-- 检测记录状态为 `detected`、`nonDestructive=true`。
-- 手动按钮可从 `detected` 进入连接预检和正式重建。
-- 开启自动开关后，编辑、删除、Swipe 可恢复旧版自动重建行为。
+- `getSettings()` 强制 `autoHistoryRebuild=false`，旧设置不能重新开启。
+- 启动与聊天切换只放弃遗留的 `detected`、`failed`、`paused` 或 `checkpoint-pending` 记录，不调用重建模型。
+- 旧正文编辑、删除和 Swipe 只更新 `historyDependencyPolicy`，不阻塞事实、表格、总结或世界书流水线。
+- 原先被历史依赖标记为 `blocked` 的阶段本地改为 `skipped`，不补跑旧消息。
+- `launchHistoryRebuild()` 仅保留为不可达兼容代码；设置、任务中心、恢复界面和公开恢复 API 均不存在启动入口。
+- 现有表格、小总结、大总结、事件条目、图谱输入、世界书与成功事务必须保持不变。

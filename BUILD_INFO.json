@@ -1,11 +1,11 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-rc.2",
-  "baseline": "1.1.0-rc.1 local stability candidate",
+  "version": "1.1.0-rc.3",
+  "baseline": "1.1.0-rc.2 product candidate",
   "baseline_commit": "417e4231a8c191a5f84e2ad0f81c682f170cfaed",
-  "local_branch": "product/memory-contract-v1-rc.2",
+  "local_branch": "local/persisted-state-authoritative-rc.3",
   "build_date": "2026-07-15",
-  "build_type": "local product-alignment candidate with simulated-player regression",
+  "build_type": "local product candidate: disable historical dependency rebuild",
   "pipeline_contract": [
     "assistant_final_text",
     "admission_gate_optional_audit",
@@ -27,7 +27,7 @@
     "trace"
   ],
   "graph_mode": "read_only",
-  "validation": "ES Module parse/import, strict event-evidence protocol retry, bounded constant scene anchor, honest recall diagnostics, simulated 95-fact player session, live batch drain, refresh queue isolation, 504 adaptive split, checkpoint resume, local-commit recovery, history rebuild stage resume, cancellation/stale release, deployment syntax/version and ZIP integrity checks",
+  "validation": "ES Module syntax, version consistency, history rebuild entry-point scan, persisted-state preservation checks, ZIP integrity checks",
   "limitations": "Original TypeScript project, package manifest and full source test suite were not present in the uploaded deploy archive.",
   "connection_error_handling": [
     "detect_html_before_fact_protocol_parsing",
@@ -37,6 +37,13 @@
     "avoid_retrying_non_transient_html_configuration_failures"
   ],
   "fixes": [
+    "treat existing tables, summaries, event entries, graph inputs and managed lorebook as the authoritative current state",
+    "disable historical dependency rebuild even when an older setting requested automatic rebuild",
+    "abandon stale detected, failed, paused or checkpoint-pending rebuild records during startup or chat entry",
+    "release memory stages previously blocked by history rebuild without replaying old messages or calling the model API",
+    "record old-message edits, deletions and swipes as non-blocking persisted-state policy updates",
+    "remove manual rebuild and retry controls from the current interface while keeping recovery export and logs",
+    "preserve current memory and continue processing only future messages after an abandoned historical checkpoint",
     "disable manifest auto-update while the configured GitHub main branch remains behind this local deployment baseline",
     "reject and protocol-retry newly generated event entries or long-term candidates that do not cite a fact or changed row from the current bounded batch",
     "preserve older unverified event entries for compatibility while exposing their missing provenance in diagnostics instead of deleting them",
@@ -66,7 +73,6 @@
     "resume failed history fact batches from the earliest persisted checkpoint without removing completed batches",
     "resume small summary, large summary and final lorebook synchronization as separate stages",
     "preserve native model error kind, status, connection label and latest invocation timing through pipeline wrappers",
-    "keep connection failures non-destructive and expose actionable history rebuild errors in task diagnostics",
     "restrict non-stream fallback to explicit Connection Profile stream contract and unsupported-interface failures",
     "never retry ordinary upstream, HTTP, network, parse, cancellation or stale failures as non-stream requests",
     "exclude the stale unreproducible source map from deployment archives",
@@ -75,11 +81,9 @@
     "limit each profile to two requests and derived summaries to one slot while serializing calls from the same chat",
     "move derived summaries out of the critical fact-extraction task tail",
     "aggregate native Connection Profile streams before parsing with one compatibility fallback",
-    "disable automatic history rebuild by default",
     "perform local consistency detection only when entering or switching chats",
     "record detected history changes non-destructively without calling the model API",
     "pause table, summary and lorebook derivation until the player starts manual rebuild",
-    "add an opt-in automatic history rebuild setting",
     "change edit, delete and swipe handling to detect-and-prompt when automatic rebuild is disabled",
     "keep existing memory intact until manual rebuild connection preflight succeeds",
     "show a dedicated history-change pending status instead of a fake running progress bar",

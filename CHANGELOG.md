@@ -1,3 +1,12 @@
+# 1.1.0-rc.3 — Persisted state authoritative
+
+- 停用历史依赖重建：旧正文编辑、删除和 Swipe 不再触发旧历史回读或模型调用。
+- 升级或进入聊天时，自动放弃旧的 detected、failed、paused、checkpoint-pending 等重建检查点。
+- 保留现有表格、小总结、大总结、事件条目、关系图谱输入、世界书和已成功事务。
+- 原先因历史依赖而 blocked 的表格、总结和同步阶段改为本地 skipped，不重新处理旧消息。
+- 新消息继续走正常事实提取、表格、总结和世界书流水线。
+- 设置与恢复界面移除自动/手动历史重建入口，只保留恢复包、日志和冲突处理。
+
 # 1.1.0-rc.2 — Memory evidence and recall contract candidate
 
 - 新增小总结事件证据边界：`event_entry` 与 `long_term_candidate` 必须引用本批真实 `source_fact_ids` 或变化行 `source_row_ids`；缺失、伪造、旧来源或上下文锚点 ID 进入纯文本协议修正，不提交到事件注册表。
