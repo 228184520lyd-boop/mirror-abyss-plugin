@@ -1,0 +1,286 @@
+@import url('./style.css');
+
+:root {
+  --ma11-radius-xl: 18px;
+  --ma11-radius-lg: 13px;
+  --ma11-touch: 44px;
+}
+
+.ma11-shell {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  width: min(1240px, 96vw);
+  border-radius: var(--ma11-radius-xl);
+}
+
+.ma11-header {
+  min-height: 3.25rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.ma11-brand {
+  letter-spacing: 0.045em;
+}
+
+.ma11-product-status {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.8fr) minmax(0, 2fr);
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.65rem 0.9rem;
+  border-bottom: 1px solid var(--ma11-border);
+  background: color-mix(in srgb, var(--ma11-panel) 88%, var(--ma11-accent) 12%);
+}
+
+.ma11-product-runtime {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.12rem 0.55rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.ma11-product-kicker {
+  grid-column: 1 / -1;
+  color: var(--ma11-muted-text);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ma11-product-runtime strong {
+  color: var(--ma11-success);
+  font-size: 0.9rem;
+}
+
+.ma11-product-runtime strong[data-state='error'] {
+  color: var(--ma11-danger);
+}
+
+.ma11-product-runtime strong[data-state='initializing'],
+.ma11-product-runtime strong[data-state='waiting'] {
+  color: var(--ma11-warning);
+}
+
+.ma11-product-runtime > span:last-child {
+  overflow: hidden;
+  color: var(--ma11-muted-text);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ma11-product-layers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.ma11-product-chip {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  padding: 0.48rem 0.58rem;
+  border: 1px solid color-mix(in srgb, var(--ma11-accent) 30%, var(--ma11-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ma11-panel-2) 84%, transparent);
+}
+
+.ma11-product-chip b {
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ma11-product-chip small {
+  overflow: hidden;
+  color: var(--ma11-muted-text);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ma11-tabs button,
+.ma11-table-tabs button,
+.ma11-actions button,
+.ma11-message-actions button,
+.ma11-editor button,
+.ma11-connection-row button,
+.ma11-icon-button {
+  min-height: var(--ma11-touch);
+}
+
+.ma11-tabs button:focus-visible,
+.ma11-table-tabs button:focus-visible,
+.ma11-actions button:focus-visible,
+.ma11-message-actions button:focus-visible,
+.ma11-editor button:focus-visible,
+.ma11-connection-row button:focus-visible,
+.ma11-icon-button:focus-visible,
+.ma11-form-card input:focus-visible,
+.ma11-form-card select:focus-visible,
+.ma11-form-card textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ma11-accent) 76%, transparent);
+  outline-offset: 2px;
+}
+
+.ma11-card,
+.ma11-stage-card,
+.ma11-check,
+.ma11-hero,
+.ma11-toolbar {
+  border-radius: var(--ma11-radius-lg);
+}
+
+.ma11-content {
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 900px) {
+  .ma11-workspace {
+    padding: 1.2vh 1vw;
+  }
+
+  .ma11-shell {
+    width: 98vw;
+    height: 97vh;
+  }
+
+  .ma11-product-status {
+    grid-template-columns: 1fr;
+  }
+
+  .ma11-product-layers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ma11-stage-grid,
+  .ma11-check-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ma11-summary-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .ma11-connection-row {
+    grid-template-columns: minmax(7rem, 0.7fr) minmax(8rem, 0.8fr) minmax(12rem, 1.5fr);
+  }
+
+  .ma11-connection-row > button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .ma11-workspace {
+    place-items: stretch;
+    padding: 0;
+    background: var(--ma11-bg);
+    backdrop-filter: none;
+  }
+
+  .ma11-shell {
+    width: 100vw;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .ma11-header {
+    padding: 0.72rem 0.8rem;
+  }
+
+  .ma11-brand {
+    font-size: 1.05rem;
+  }
+
+  .ma11-subtitle,
+  .ma11-brand span {
+    display: none;
+  }
+
+  .ma11-product-status {
+    padding: 0.55rem 0.65rem;
+  }
+
+  .ma11-product-layers {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+    scroll-snap-type: x proximity;
+  }
+
+  .ma11-product-chip {
+    flex: 0 0 min(10rem, 72vw);
+    scroll-snap-align: start;
+  }
+
+  .ma11-tabs {
+    padding: 0.5rem 0.55rem;
+    scrollbar-width: thin;
+  }
+
+  .ma11-tabs button,
+  .ma11-table-tabs button {
+    padding-inline: 0.7rem;
+  }
+
+  .ma11-content {
+    padding: 0.7rem;
+    overscroll-behavior: contain;
+  }
+
+  .ma11-hero,
+  .ma11-toolbar,
+  .ma11-card > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ma11-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .ma11-stage-grid,
+  .ma11-check-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ma11-connection-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ma11-connection-row > button {
+    grid-column: auto;
+  }
+
+  .ma11-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .ma11-form-card input,
+  .ma11-form-card select,
+  .ma11-form-card textarea,
+  .ma11-connection-row input,
+  .ma11-connection-row select,
+  .ma11-editor input,
+  .ma11-editor textarea {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ma11-workspace *,
+  .ma11-workspace *::before,
+  .ma11-workspace *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
