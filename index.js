@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.5";
-var PIPELINE_VERSION = "ma-pipeline-9";
+var VERSION = "1.2.0-rc.10";
+var PIPELINE_VERSION = "ma-pipeline-14";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
@@ -116,17 +116,43 @@ function escapeHtml(value) {
 }
 function withTimeout(promise, ms, label, controller) {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => {
+    let settled = false;
+    let timer;
+    const cleanup = () => {
+      if (timer !== void 0) window.clearTimeout(timer);
+      controller?.signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const error = new Error(`${label}\u5DF2\u53D6\u6D88`);
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (controller?.signal.aborted) {
+      onAbort();
+      return;
+    }
+    controller?.signal.addEventListener("abort", onAbort, { once: true });
+    timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       controller?.abort();
       reject(new Error(`${label}\u8D85\u65F6\uFF08${Math.round(ms / 1e3)}\u79D2\uFF09`));
     }, ms);
     promise.then(
       (value) => {
-        window.clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve(value);
       },
       (error) => {
-        window.clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        cleanup();
         reject(error);
       }
     );
@@ -443,6 +469,7 @@ function emptyChatState(chatKey) {
 async function putArtifact(_artifact) {
 }
 async function getChatState(chatKey) {
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u8BFB\u53D6\u65E7\u804A\u5929\u72B6\u6001");
   const namespace = getChatMetadataNamespace();
   const current = namespace.state;
   if (!current || current.chatKey !== chatKey) {
@@ -451,6 +478,7 @@ async function getChatState(chatKey) {
   return namespace.state;
 }
 async function putChatState(state2) {
+  if (currentChatKey() !== state2.chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u5199\u5165\u65E7\u804A\u5929\u72B6\u6001");
   state2.updatedAt = nowIso();
   const namespace = getChatMetadataNamespace();
   namespace.state = state2;
@@ -563,15 +591,50 @@ function firstInconsistentArtifactIndex(chat, moduleName, identityAt, fingerprin
 }
 
 // src/llm/generator.ts
+var TASK_RESPONSE_TOKENS = {
+  audit: 1800,
+  revision: 4096,
+  state: 4096,
+  smallSummary: 2400,
+  largeSummary: 3200
+};
+function responseTokens(options) {
+  const requested = Number(options.maxTokens);
+  if (Number.isFinite(requested) && requested > 0) {
+    return Math.max(128, Math.min(32768, Math.round(requested)));
+  }
+  return TASK_RESPONSE_TOKENS[options.task];
+}
+function textFromValue(value) {
+  if (typeof value === "string") return value.trim();
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
 function generationText(result) {
   if (typeof result === "string") return result.trim();
-  for (const key of ["content", "text", "output", "result", "value", "pipe"]) {
-    if (typeof result?.[key] === "string") return result[key].trim();
+  const envelopeKeys = ["content", "text", "output", "result", "value", "pipe"];
+  for (const key of envelopeKeys) {
+    const text = textFromValue(result?.[key]);
+    if (text) return text;
   }
-  if (typeof result?.message?.content === "string") return result.message.content.trim();
-  if (typeof result?.choices?.[0]?.message?.content === "string") return result.choices[0].message.content.trim();
-  if (typeof result?.choices?.[0]?.text === "string") return result.choices[0].text.trim();
-  return safeText(result, 2e5).trim();
+  for (const value of [
+    result?.message?.content,
+    result?.choices?.[0]?.message?.content,
+    result?.choices?.[0]?.text
+  ]) {
+    const text = textFromValue(value);
+    if (text) return text;
+  }
+  const hasEnvelope = Boolean(
+    result && typeof result === "object" && (envelopeKeys.some((key) => key in result) || "message" in result || "choices" in result)
+  );
+  return hasEnvelope ? "" : textFromValue(result) || safeText(result, 2e5).trim();
 }
 function cleanProfileName(value) {
   return safeText(value, 160).replace(/["|\r\n]/g, "").trim();
@@ -602,6 +665,12 @@ function resolveProfileId(connection) {
   }
   return "";
 }
+function profileApiMode(profileId) {
+  const context = getContext();
+  const profile = supportedProfiles().find((item) => item?.id === profileId);
+  const selected = context.CONNECT_API_MAP?.[profile?.api]?.selected;
+  return selected === "openai" || selected === "textgenerationwebui" ? selected : "";
+}
 function messagesFromOptions(options) {
   const messages = [];
   if (options.systemPrompt.trim()) messages.push({ role: "system", content: options.systemPrompt });
@@ -625,6 +694,7 @@ async function generateCurrent(options, controller) {
       systemPrompt: options.systemPrompt,
       prompt: options.prompt,
       jsonSchema: options.jsonSchema,
+      responseLength: responseTokens(options),
       signal: options.signal
     })),
     Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
@@ -643,11 +713,15 @@ async function generateWithNativeProfile(options, profileId, controller) {
   }
   const settings = getSettings();
   const messages = messagesFromOptions(options);
+  const overridePayload = { stream: false };
+  if (options.jsonSchema && profileApiMode(profileId) === "openai") {
+    overridePayload.json_schema = options.jsonSchema;
+  }
   const result = await withTimeout(
     Promise.resolve(service.sendRequest(
       profileId,
       messages,
-      void 0,
+      responseTokens(options),
       {
         stream: false,
         extractData: true,
@@ -655,9 +729,7 @@ async function generateWithNativeProfile(options, profileId, controller) {
         includeInstruct: false,
         signal: options.signal
       },
-      {
-        stream: false
-      }
+      overridePayload
     )),
     Math.max(1e4, Number(settings.requestTimeoutMs) || 9e4),
     `${options.task} Connection Profile\u8BF7\u6C42`,
@@ -703,19 +775,29 @@ async function testConnection(task) {
   const started = performance.now();
   let raw = "";
   try {
-    raw = await generateTask({
+    const request = {
       task,
       systemPrompt: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
       prompt: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}',
+      maxTokens: 256,
       jsonSchema: {
-        type: "object",
-        required: ["ok", "source"],
-        properties: {
-          ok: { type: "boolean" },
-          source: { type: "string" }
+        name: "MirrorAbyssConnectionTest",
+        description: "\u955C\u6E0A\u539F\u751F\u8FDE\u63A5\u7ED3\u6784\u5316\u8F93\u51FA\u6D4B\u8BD5",
+        strict: true,
+        value: {
+          $schema: "http://json-schema.org/draft-04/schema#",
+          type: "object",
+          required: ["ok", "source"],
+          properties: {
+            ok: { type: "boolean" },
+            source: { type: "string" }
+          },
+          additionalProperties: false
         }
       }
-    });
+    };
+    raw = await generateTask(request);
+    if (raw.trim() === "{}") raw = await generateTask({ ...request, jsonSchema: void 0 });
   } catch (error) {
     throw new Error(`${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
   }
@@ -768,12 +850,11 @@ function structuredError(task, error, raw) {
   const detail = toErrorMessage(error);
   return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
 }
-async function repairStructuredOutput(task, raw, structureDescription, jsonSchema) {
+async function repairStructuredOutput(task, raw, structureDescription) {
   const repaired = await generateTask({
     task,
     systemPrompt: repairSystemPrompt(structureDescription),
-    prompt: repairUserPrompt(raw),
-    jsonSchema
+    prompt: repairUserPrompt(raw)
   });
   return parseJsonObject(repaired);
 }
@@ -785,8 +866,19 @@ async function generateStructuredTask(options) {
     const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
     if (!allowRepair) throw structuredError(options.task, firstError, raw);
     try {
-      return await repairStructuredOutput(options.task, raw, options.structureDescription, options.jsonSchema);
+      if (raw.trim() === "{}" && options.jsonSchema) {
+        const fallbackRaw = await generateTask({ ...options, jsonSchema: void 0 });
+        try {
+          return parseJsonObject(fallbackRaw);
+        } catch (fallbackError) {
+          throw structuredError(options.task, fallbackError, fallbackRaw);
+        }
+      }
+      return await repairStructuredOutput(options.task, raw, options.structureDescription);
     } catch (repairError) {
+      if (repairError instanceof Error && repairError.message.startsWith(`${TASK_LABELS[options.task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784`)) {
+        throw repairError;
+      }
       throw structuredError(options.task, repairError, raw);
     }
   }
@@ -945,9 +1037,10 @@ function parseAuditResult(raw) {
 function findMessageElement(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
 }
-function applyAuditVisibility(index, hidden) {
+function applyAuditVisibility(index, hidden, marked = false) {
   const element = findMessageElement(index);
   element?.classList.toggle("ma11-audit-hidden-message", hidden);
+  element?.classList.toggle("ma11-audit-marked-message", !hidden && marked);
 }
 async function auditText(playerRules, playerText, assistantText) {
   const request = {
@@ -963,11 +1056,14 @@ async function auditText(playerRules, playerText, assistantText) {
       throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(firstError)}\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
     }
     try {
+      if (raw.trim() === "{}") {
+        const fallback = await generateTask(request);
+        return parseAuditResult(fallback);
+      }
       const repaired = await repairStructuredOutput(
         "audit",
         raw,
-        '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"..."}',
-        auditJsonSchema()
+        '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"..."}'
       );
       return parseAuditResult(JSON.stringify(repaired));
     } catch (repairError) {
@@ -978,7 +1074,7 @@ async function auditText(playerRules, playerText, assistantText) {
 async function applyAuditFailureAction(artifact, action) {
   if (action === "mark") {
     artifact.hiddenByAudit = false;
-    applyAuditVisibility(artifact.messageIndex, false);
+    applyAuditVisibility(artifact.messageIndex, false, true);
     return;
   }
   if (action === "hide") {
@@ -996,6 +1092,8 @@ async function runAudit(artifact, force = false) {
   if (!settings.auditEnabled) {
     markStage(artifact, "audit", "skipped");
     markStage(artifact, "revision", "skipped");
+    artifact.hiddenByAudit = false;
+    applyAuditVisibility(artifact.messageIndex, false, false);
     artifact.audit = {
       passed: true,
       decision: "pass",
@@ -1021,7 +1119,7 @@ async function runAudit(artifact, force = false) {
     if (result.passed) {
       artifact.approvedFingerprint = artifact.sourceFingerprint;
       artifact.hiddenByAudit = false;
-      applyAuditVisibility(artifact.messageIndex, false);
+      applyAuditVisibility(artifact.messageIndex, false, false);
       markStage(artifact, "audit", "success");
       markStage(artifact, "revision", "skipped");
     } else {
@@ -1063,6 +1161,7 @@ async function replaceMessageInPlace(artifact, text) {
   updateActiveSwipe(message, finalText);
   artifact.assistantText = finalText;
   artifact.sourceFingerprint = messageFingerprint(artifact.messageIndex);
+  artifact.messageKey = messageIdentity(artifact.messageIndex);
   artifact.approvedFingerprint = artifact.sourceFingerprint;
   artifact.hiddenByAudit = false;
   attachArtifactToMessage(message, artifact);
@@ -1207,6 +1306,9 @@ async function runRevisionFlow(artifact) {
     await putArtifact(artifact);
     return { approved: false, audit: artifact.audit ?? firstAudit };
   } catch (error) {
+    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) {
+      throw error;
+    }
     artifact.revision.status = "failed";
     artifact.revision.stoppedReason = toErrorMessage(error);
     markStage(artifact, "revision", "failed", artifact.revision.stoppedReason);
@@ -1507,6 +1609,9 @@ function buildLorebookDocuments(snapshot, smallSummaries, largeSummaries, option
 
 // src/pipeline/lorebook.ts
 var worldInfoModulePromise = null;
+function resetLorebookRuntime() {
+  worldInfoModulePromise = null;
+}
 async function worldInfoApi() {
   if (!worldInfoModulePromise) {
     const moduleUrl = "/scripts/world-info.js";
@@ -1517,29 +1622,33 @@ async function worldInfoApi() {
   }
   return worldInfoModulePromise;
 }
-function generatedBookName() {
+function generatedBookName(chatKey = currentChatKey()) {
   const context = getContext();
   const display = sanitizeBookName(context.name2 || context.name1 || "Chat") || "Chat";
-  return sanitizeBookName(`MA_${display}_${hashText(currentChatKey()).slice(0, 8)}`);
+  return sanitizeBookName(`MA_${display}_${hashText(chatKey).slice(0, 8)}`);
 }
-async function resolveBookName(create) {
+async function resolveBookName(create, artifact) {
+  if (artifact) assertArtifactCommitCurrent(artifact);
   const settings = getSettings();
   const meta = getChatMetadataNamespace();
   const context = getContext();
   let name = sanitizeBookName(settings.lorebookName || meta.lorebookName || context.chatMetadata?.world_info || "");
-  if (!name && create && settings.autoCreateLorebook) name = generatedBookName();
+  if (!name && create && settings.autoCreateLorebook) name = generatedBookName(artifact?.chatKey);
   if (!name) return "";
   if (create) {
     const wi = await worldInfoApi();
     let data = await wi.loadWorldInfo(name);
     if (!data && typeof wi.createNewWorldInfo === "function") {
+      if (artifact) assertArtifactCommitCurrent(artifact);
       await wi.createNewWorldInfo(name, { interactive: false });
       data = await wi.loadWorldInfo(name);
     }
     if (!data) {
       data = { entries: {} };
+      if (artifact) assertArtifactCommitCurrent(artifact);
       await wi.saveWorldInfo(name, data, true);
     }
+    if (artifact) assertArtifactCommitCurrent(artifact);
     context.chatMetadata ||= {};
     context.chatMetadata[wi.METADATA_KEY || "world_info"] = name;
     meta.lorebookName = name;
@@ -1549,6 +1658,10 @@ async function resolveBookName(create) {
 }
 function managedInfo(entry) {
   return entry?.extensions?.mirrorAbyssV11 ?? null;
+}
+function reloadWorldInfoEditor(wi, name) {
+  const reload = wi.reloadEditor ?? wi.reloadWorldInfoEditor;
+  if (typeof reload === "function") reload.call(wi, name);
 }
 function applyEntry(entry, chatKey, key, spec, wi) {
   entry.comment = spec.comment;
@@ -1588,10 +1701,13 @@ async function desiredSpecs(artifact) {
   );
   return new Map(documents.map((document2) => [document2.key, document2]));
 }
-async function syncLorebook(artifact) {
+async function syncLorebook(artifact, force = false) {
   assertArtifactCommitCurrent(artifact);
+  if (!artifact.snapshot || artifact.stages.state.status !== "success") {
+    throw new Error("\u6CA1\u6709\u6210\u529F\u72B6\u6001\u8868\uFF0C\u505C\u6B62\u4E16\u754C\u4E66\u540C\u6B65");
+  }
   const settings = getSettings();
-  if (!settings.lorebookSync) {
+  if (!settings.lorebookSync && !force) {
     markStage(artifact, "sync", "skipped");
     await putArtifact(artifact);
     return;
@@ -1609,7 +1725,7 @@ async function syncLorebook(artifact) {
   }
   try {
     const wi = await worldInfoApi();
-    const name = await resolveBookName(true);
+    const name = await resolveBookName(true, artifact);
     if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
     const data = await wi.loadWorldInfo(name) || { entries: {} };
     data.entries ||= {};
@@ -1628,7 +1744,7 @@ async function syncLorebook(artifact) {
       let entry = pair?.entry;
       if (!entry) {
         entry = wi.createWorldInfoEntry(name, data);
-        if (!entry) continue;
+        if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${key}`);
         pair = { uid: String(entry.uid), entry };
         changed = true;
       }
@@ -1645,8 +1761,9 @@ async function syncLorebook(artifact) {
     assertArtifactCommitCurrent(artifact);
     if (changed) {
       await wi.saveWorldInfo(name, data, true);
-      wi.reloadEditor?.(name);
+      reloadWorldInfoEditor(wi, name);
     }
+    assertArtifactCommitCurrent(artifact);
     artifact.lorebookEntryIds = entryIds;
     markStage(artifact, "sync", "success");
     chatState.lastLorebookName = name;
@@ -1665,6 +1782,56 @@ async function syncLorebook(artifact) {
     await putChatState(chatState);
     throw error;
   }
+}
+async function clearCurrentChatLorebookEntries(chatKey = currentChatKey()) {
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  const name = await resolveBookName(false);
+  if (!name) return 0;
+  const wi = await worldInfoApi();
+  const data = await wi.loadWorldInfo(name);
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  if (!data?.entries) return 0;
+  let removed = 0;
+  for (const [uid, entry] of Object.entries(data.entries)) {
+    const info = managedInfo(entry);
+    if (info?.managed && info.chatKey === chatKey) {
+      delete data.entries[uid];
+      removed += 1;
+    }
+  }
+  if (removed) {
+    if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    await wi.saveWorldInfo(name, data, true);
+    reloadWorldInfoEditor(wi, name);
+  }
+  return removed;
+}
+async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  const name = await resolveBookName(false);
+  if (!name) return 0;
+  const wi = await worldInfoApi();
+  const data = await wi.loadWorldInfo(name);
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  if (!data?.entries) return 0;
+  let managed = 0;
+  let changed = false;
+  for (const entry of Object.values(data.entries)) {
+    const info = managedInfo(entry);
+    if (info?.managed && info.chatKey === chatKey) {
+      managed += 1;
+      if (!entry.disable) {
+        entry.disable = true;
+        changed = true;
+      }
+    }
+  }
+  if (changed) {
+    if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    await wi.saveWorldInfo(name, data, true);
+    reloadWorldInfoEditor(wi, name);
+  }
+  return managed;
 }
 
 // src/domain/snapshot.ts
@@ -2086,7 +2253,10 @@ ${JSON.stringify(snapshot, null, 2)}
 
 // src/pipeline/summary.ts
 function successfulArtifacts() {
-  return getChat().filter((message) => !message?.is_user).map((message) => message?.extra?.mirrorAbyssV11).filter((artifact) => Boolean(artifact?.snapshot && artifact.stages.state.status === "success"));
+  const chatKey = currentChatKey();
+  return getChat().filter((message) => !message?.is_user).map((message) => message?.extra?.mirrorAbyssV11).filter((artifact) => Boolean(
+    artifact?.chatKey === chatKey && artifact.snapshot && artifact.stages.state.status === "success"
+  ));
 }
 function transcriptFor(artifacts) {
   return artifacts.map((artifact) => {
@@ -2131,6 +2301,7 @@ async function generateSmallSummary(artifact, force = false) {
   });
   assertArtifactCommitCurrent(artifact);
   const summary = normalizeSummary(parsed, "small", selected.map((item) => item.messageKey));
+  if (!summary.summary) throw new Error("\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981");
   const previousSnapshot2 = artifact.snapshot ? structuredClone(artifact.snapshot) : void 0;
   const previousSummaries = [...chatState.smallSummaries];
   try {
@@ -2143,9 +2314,13 @@ async function generateSmallSummary(artifact, force = false) {
   } catch (error) {
     artifact.snapshot = previousSnapshot2;
     chatState.smallSummaries = previousSummaries;
-    const message = getMessage(artifact.messageIndex);
-    if (message) attachArtifactToMessage(message, artifact);
-    await persistChat().catch(() => void 0);
+    try {
+      assertArtifactCommitCurrent(artifact);
+      const message = getMessage(artifact.messageIndex);
+      if (message) attachArtifactToMessage(message, artifact);
+      await persistChat().catch(() => void 0);
+    } catch {
+    }
     throw error;
   }
   return summary;
@@ -2174,6 +2349,7 @@ async function generateLargeSummary(artifact, force = false) {
     selected.map((item) => item.id),
     previousLarge?.id
   );
+  if (!summary.summary) throw new Error("\u5927\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981");
   chatState.largeSummaries.push(summary);
   await putChatState(chatState);
   return summary;
@@ -2308,6 +2484,88 @@ ${assistantText}
 
 \u8F93\u51FA\u6807\u51C6\u5316\u4E8B\u5B9E\u4E0E\u66F4\u65B0\u540E\u7684\u5B8C\u6574\u72B6\u6001\u5FEB\u7167\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
 }
+function rowSchema(lifecycle = false) {
+  const properties = {
+    id: { type: "string" },
+    title: { type: "string" },
+    content: { type: "string" },
+    keywords: { type: "array", items: { type: "string" } },
+    status: { type: "string" }
+  };
+  if (lifecycle) {
+    properties.lifecycle = {
+      type: "object",
+      properties: {
+        existence: { type: "string" },
+        activity: { type: "string" },
+        memory: { type: "string" },
+        evidenceLevel: { type: "string" },
+        evidence: { type: "string" },
+        returnConditions: { type: "array", items: { type: "string" } },
+        returnBlockers: { type: "array", items: { type: "string" } }
+      },
+      required: ["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"],
+      additionalProperties: false
+    };
+  }
+  return {
+    type: "object",
+    properties,
+    required: ["id", "title", "content", "keywords", "status", ...lifecycle ? ["lifecycle"] : []],
+    additionalProperties: false
+  };
+}
+function stateJsonSchema() {
+  const snapshotProperties = Object.fromEntries([
+    ["focus", rowSchema(true)],
+    ["spacetime", rowSchema()],
+    ["characters", rowSchema(true)],
+    ["relationships", rowSchema()],
+    ["items", rowSchema()],
+    ["skills", rowSchema()],
+    ["events", rowSchema()],
+    ["regions", rowSchema()],
+    ["foundations", rowSchema()]
+  ].map(([key, schema]) => [key, { type: "array", items: schema }]));
+  return {
+    name: "MirrorAbyssStateResult",
+    description: "\u955C\u6E0A\u4E8B\u5B9E\u548C\u5B8C\u6574\u72B6\u6001\u8868",
+    strict: true,
+    value: {
+      type: "object",
+      properties: {
+        turnSummary: { type: "string" },
+        facts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              type: { type: "string" },
+              entityId: { type: "string" },
+              title: { type: "string" },
+              content: { type: "string" },
+              status: { type: "string" },
+              keywords: { type: "array", items: { type: "string" } },
+              operation: { type: "string" },
+              confidence: { type: "string" }
+            },
+            required: ["id", "type", "entityId", "title", "content", "status", "keywords", "operation", "confidence"],
+            additionalProperties: false
+          }
+        },
+        snapshot: {
+          type: "object",
+          properties: snapshotProperties,
+          required: ["focus", "spacetime", "characters", "relationships", "items", "skills", "events", "regions", "foundations"],
+          additionalProperties: false
+        }
+      },
+      required: ["turnSummary", "facts", "snapshot"],
+      additionalProperties: false
+    }
+  };
+}
 
 // src/pipeline/state.ts
 function previousSnapshot(beforeIndex) {
@@ -2342,8 +2600,15 @@ async function runStateExtraction(artifact, force = false) {
       systemPrompt: stateSystemPrompt(),
       prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText),
       structureDescription: `{"turnSummary":"...","facts":[{"id":"...","type":"event","entityId":"...","title":"...","content":"...","status":"...","keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription()}}`,
-      allowRepair: settings.repairInvalidJsonOnce
+      allowRepair: settings.repairInvalidJsonOnce,
+      jsonSchema: stateJsonSchema()
     });
+    if (!parsed.snapshot || typeof parsed.snapshot !== "object") {
+      throw new Error("\u72B6\u6001\u8868\u8FD4\u56DE\u7F3A\u5C11 snapshot \u6839\u5BF9\u8C61");
+    }
+    for (const key of TABLE_KEYS) {
+      if (!Array.isArray(parsed.snapshot[key])) throw new Error(`\u72B6\u6001\u8868\u8FD4\u56DE\u7F3A\u5C11 ${key} \u6570\u7EC4`);
+    }
     assertArtifactCommitCurrent(artifact);
     const normalized = preservePersistentCharacters(previous, restoreManualRows(previous, normalizeSnapshot(parsed.snapshot, previous)));
     artifact.factPackage = normalizeFactPackage(parsed, artifact.messageKey);
@@ -2366,7 +2631,9 @@ var TaskQueue = class _TaskQueue {
   tasks = /* @__PURE__ */ new Map();
   listeners = /* @__PURE__ */ new Set();
   accepting = true;
+  generation = 0;
   setAccepting(accepting) {
+    if (this.accepting && !accepting) this.generation += 1;
     this.accepting = accepting;
   }
   pruneTasks() {
@@ -2395,6 +2662,21 @@ var TaskQueue = class _TaskQueue {
   has(key) {
     return this.inFlight.has(key);
   }
+  clearHistory() {
+    for (const [id, task] of this.tasks) {
+      if (task.state !== "running" && task.state !== "queued") this.tasks.delete(id);
+    }
+    this.notify();
+  }
+  resetRuntime() {
+    this.generation += 1;
+    this.tasks.clear();
+    this.inFlight.clear();
+    this.notify();
+  }
+  async whenIdle() {
+    await this.tail.catch(() => void 0);
+  }
   run(key, label, kind, work) {
     if (!this.accepting) return Promise.reject(new Error("\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u4E0D\u518D\u63A5\u53D7\u65B0\u4EFB\u52A1"));
     const existing = this.inFlight.get(key);
@@ -2410,12 +2692,14 @@ var TaskQueue = class _TaskQueue {
     this.tasks.set(task.id, task);
     this.pruneTasks();
     this.notify();
+    const taskGeneration = this.generation;
+    let promise;
     const execute = async () => {
-      if (!this.accepting) throw new Error("\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u4EFB\u52A1\u5DF2\u505C\u6B62");
-      task.state = "running";
-      task.startedAt = nowIso();
-      this.notify();
       try {
+        if (!this.accepting || taskGeneration !== this.generation) throw new Error("\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u4EFB\u52A1\u5DF2\u505C\u6B62");
+        task.state = "running";
+        task.startedAt = nowIso();
+        this.notify();
         const result = await work();
         task.state = "success";
         return result;
@@ -2425,11 +2709,11 @@ var TaskQueue = class _TaskQueue {
         throw error;
       } finally {
         task.finishedAt = nowIso();
-        this.inFlight.delete(key);
+        if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
         this.notify();
       }
     };
-    const promise = this.tail.then(execute, execute);
+    promise = this.tail.then(execute, execute);
     this.tail = promise.catch(() => void 0);
     this.inFlight.set(key, promise);
     return promise;
@@ -2452,6 +2736,11 @@ function notify(index, artifact) {
     }
   }
 }
+function notifyFrom(startIndex) {
+  for (let index = Math.max(0, startIndex); index < getChat().length; index += 1) {
+    notify(index, getAttachedArtifact(getMessage(index)));
+  }
+}
 function resolveMessageIndex(payload) {
   if (Number.isInteger(payload)) return Number(payload);
   const candidates = [payload?.messageId, payload?.message_id, payload?.mesId, payload?.mesid, payload?.index];
@@ -2467,6 +2756,14 @@ function resolveChangedIndex(payload) {
   }
   return null;
 }
+async function pauseLorebookForHistoryChange(chatKey) {
+  try {
+    await pauseCurrentChatLorebookEntries(chatKey);
+  } catch (error) {
+    console.warn("[MirrorAbyss] failed to pause stale lorebook entries", error);
+    toast("warning", `\u5386\u53F2\u6570\u636E\u5DF2\u6682\u505C\uFF0C\u4F46\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${toErrorMessage(error)}\u3002\u8BF7\u907F\u514D\u7EE7\u7EED\u751F\u6210\u5E76\u624B\u52A8\u91CD\u8BD5\u5386\u53F2\u91CD\u7B97`);
+  }
+}
 async function saveArtifactToMessage(index, artifact) {
   assertArtifactCommitCurrent(artifact);
   const message = getMessage(index);
@@ -2476,29 +2773,48 @@ async function saveArtifactToMessage(index, artifact) {
   await persistChat();
   notify(index, artifact);
 }
-async function loadOrCreateArtifact(index, force) {
+async function loadOrCreateArtifact(index, _force) {
   const message = getMessage(index);
   if (!message || message.is_user || !String(message.mes || "").trim()) throw new Error("\u76EE\u6807\u4E0D\u662F\u6709\u6548AI\u6B63\u6587");
   const fingerprint = messageFingerprint(index);
   let artifact = getAttachedArtifact(message);
-  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint || force) {
+  if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint) {
     artifact = createArtifact(message, index);
     attachArtifactToMessage(message, artifact);
+    assertArtifactCommitCurrent(artifact);
     await persistChat();
     await putArtifact(artifact);
   }
   artifact.stages.revision ||= { status: "idle", attempts: 0 };
   return artifact;
 }
+async function finishStatePipeline(index, artifact) {
+  if (!artifact.snapshot || artifact.stages.state.status !== "success") {
+    throw new Error("\u72B6\u6001\u8868\u5C1A\u672A\u6210\u529F\uFF0C\u4E0D\u80FD\u7EE7\u7EED\u603B\u7ED3\u548C\u4E16\u754C\u4E66\u540C\u6B65");
+  }
+  assertArtifactCommitCurrent(artifact);
+  const chatState = await getChatState(artifact.chatKey);
+  if (!chatState.processedMessageKeys.includes(artifact.messageKey)) {
+    chatState.processedMessageKeys.push(artifact.messageKey);
+  }
+  chatState.latestSnapshotMessageKey = artifact.messageKey;
+  chatState.updatedAt = nowIso();
+  await putChatState(chatState);
+  await maybeRunSummaries(artifact);
+  await saveArtifactToMessage(index, artifact);
+  await syncLorebook(artifact);
+  await saveArtifactToMessage(index, artifact);
+}
 async function processMessage(index, force = false) {
-  const settings = getSettings();
-  if (!settings.enabled) return null;
+  if (!getSettings().enabled) return null;
   const message = getMessage(index);
   if (!message || message.is_user || !String(message.mes || "").trim()) return null;
   const identity = messageIdentity(index);
   const scheduledChatKey = currentChatKey();
   const key = `${PIPELINE_VERSION}:${scheduledChatKey}:${identity}`;
   return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async () => {
+    const settings = getSettings();
+    if (!settings.enabled) return null;
     if (currentChatKey() !== scheduledChatKey) return null;
     const artifact = await loadOrCreateArtifact(index, force);
     notify(index, artifact);
@@ -2523,20 +2839,15 @@ async function processMessage(index, force = false) {
         await runStateExtraction(artifact, force);
         await saveArtifactToMessage(index, artifact);
       } else {
-        markStage(artifact, "state", "skipped");
+        if (!artifact.snapshot || artifact.stages.state.status !== "success") {
+          markStage(artifact, "state", "skipped");
+          markStage(artifact, "summary", "skipped");
+          markStage(artifact, "sync", "skipped");
+        }
+        await saveArtifactToMessage(index, artifact);
       }
-      if (artifact.snapshot) {
-        assertArtifactCommitCurrent(artifact);
-        const chatState = await getChatState(artifact.chatKey);
-        if (!chatState.processedMessageKeys.includes(artifact.messageKey)) chatState.processedMessageKeys.push(artifact.messageKey);
-        chatState.latestSnapshotMessageKey = artifact.messageKey;
-        chatState.updatedAt = nowIso();
-        assertArtifactCommitCurrent(artifact);
-        await putChatState(chatState);
-        await maybeRunSummaries(artifact);
-        await saveArtifactToMessage(index, artifact);
-        await syncLorebook(artifact);
-        await saveArtifactToMessage(index, artifact);
+      if (artifact.snapshot && artifact.stages.state.status === "success") {
+        await finishStatePipeline(index, artifact);
       }
       return artifact;
     } catch (error) {
@@ -2546,41 +2857,50 @@ async function processMessage(index, force = false) {
         toast("warning", messageText);
         throw error;
       }
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (error instanceof Error && error.name === "AbortError") {
         throw error;
       }
-      toast("error", `\u5904\u7406\u5931\u8D25\uFF1A${messageText}`);
       await saveArtifactToMessage(index, artifact);
-      return artifact;
+      throw error;
     }
   });
 }
 function scheduleMessage(payload, force = false, delay = 0) {
+  if (!getSettings().enabled) return;
   const index = resolveMessageIndex(payload);
   if (index < 0) return;
   const scheduledChatKey = currentChatKey();
   window.setTimeout(() => {
     void (async () => {
+      if (!getSettings().enabled) return;
       if (currentChatKey() !== scheduledChatKey) return;
       const state2 = await getChatState(currentChatKey());
       if (!force && state2.historyInvalidation) return;
       await processMessage(index, force);
-    })();
+    })().catch((error) => {
+      if (error instanceof CommitRejectedError || error instanceof Error && error.name === "AbortError") return;
+      if (toErrorMessage(error).includes("\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u4EFB\u52A1\u5DF2\u505C\u6B62")) return;
+      console.error("[MirrorAbyss] scheduled processing failed", error);
+      toast("error", `\u81EA\u52A8\u6574\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    });
   }, delay);
 }
 async function invalidateHistory(payload, reason) {
+  if (!getSettings().enabled) return;
   const eventIndex = resolveChangedIndex(payload);
   const scannedIndex = reason === "deleted" ? firstInconsistentArtifactIndex(getChat(), MODULE_NAME, messageIdentity, messageFingerprint) : null;
-  const detectedIndex = eventIndex ?? (scannedIndex === -1 ? null : scannedIndex);
+  const detectedIndex = reason === "deleted" ? scannedIndex === -1 ? null : scannedIndex : eventIndex;
   const chatKey = currentChatKey();
   const state2 = await getChatState(chatKey);
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u53D8\u5316\u4E0D\u518D\u5199\u5165");
   if (detectedIndex === null) {
     state2.historyInvalidation = { reason, detectedAt: nowIso() };
     state2.lastSyncStatus = "failed";
     state2.lastSyncError = "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u5224\u65AD\u4F4D\u7F6E\uFF1B\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9";
     await putChatState(state2);
+    await pauseLorebookForHistoryChange(chatKey);
     toast("warning", "\u68C0\u6D4B\u5230\u5386\u53F2\u6D88\u606F\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u5224\u65AD\u4F4D\u7F6E\u3002\u73B0\u6709\u8BB0\u5FC6\u5DF2\u4FDD\u7559\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u6682\u505C\uFF1B\u8BF7\u5728\u955C\u6E0A\u4E2D\u9009\u62E9\u91CD\u7B97\u8D77\u70B9");
-    notify(0, null);
+    notifyFrom(0);
     return;
   }
   const index = Math.max(0, detectedIndex);
@@ -2608,36 +2928,56 @@ async function invalidateHistory(payload, reason) {
   state2.latestSnapshotMessageKey = state2.processedMessageKeys.at(-1);
   await persistChat();
   await putChatState(state2);
-  notify(index, null);
+  await pauseLorebookForHistoryChange(chatKey);
+  notifyFrom(index);
   toast("warning", `\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C\uFF1B\u8BF7\u5728\u955C\u6E0A\u4E2D\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB\u91CD\u7B97`);
 }
 async function recalculateInvalidatedHistory() {
+  if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
   const chatKey = currentChatKey();
   const state2 = await getChatState(chatKey);
   const startIndex = state2.historyInvalidation?.startIndex;
   if (startIndex === void 0) throw new Error("\u5C1A\u672A\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9");
+  const endIndex = getChat().length;
   let latest = null;
-  for (let index = startIndex; index < getChat().length; index += 1) {
+  for (let index = startIndex; index < endIndex; index += 1) {
+    if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
     const message = getMessage(index);
     if (!message || message.is_user || !String(message.mes || "").trim()) continue;
     latest = await processMessage(index, true);
+    if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
     if (!latest || latest.stages.state.status === "failed" || latest.stages.state.status === "blocked") {
       throw new Error(`\u7B2C ${index + 1} \u6761\u6D88\u606F\u91CD\u7B97\u5931\u8D25\uFF0C\u4E16\u754C\u4E66\u4ECD\u4FDD\u6301\u6682\u505C`);
     }
   }
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
+  const recoveryInfo = latest ? { index: latest.messageIndex, artifact: latest } : latestSnapshotArtifact();
   const freshState = await getChatState(chatKey);
+  if (!recoveryInfo) {
+    await clearCurrentChatLorebookEntries(chatKey);
+    delete freshState.historyInvalidation;
+    freshState.lastSyncError = void 0;
+    freshState.lastSyncStatus = "success";
+    freshState.lastSyncAt = nowIso();
+    await putChatState(freshState);
+    toast("success", "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF1B\u5F53\u524D\u6CA1\u6709\u53EF\u53D1\u5E03\u72B6\u6001\uFF0C\u5DF2\u6E05\u9664\u672C\u804A\u5929\u7684\u955C\u6E0A\u4E16\u754C\u4E66\u6761\u76EE");
+    return null;
+  }
   delete freshState.historyInvalidation;
   freshState.lastSyncError = void 0;
   freshState.lastSyncStatus = "idle";
   await putChatState(freshState);
-  if (latest && getSettings().lorebookSync) await syncLorebook(latest);
-  if (latest) await saveArtifactToMessage(latest.messageIndex, latest);
-  toast("success", "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6062\u590D");
-  return latest;
+  const shouldSync = getSettings().lorebookSync;
+  if (shouldSync) await syncLorebook(recoveryInfo.artifact);
+  await saveArtifactToMessage(recoveryInfo.index, recoveryInfo.artifact);
+  toast("success", shouldSync ? "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6062\u590D" : "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF1B\u81EA\u52A8\u4E16\u754C\u4E66\u540C\u6B65\u5F53\u524D\u5DF2\u5173\u95ED");
+  return recoveryInfo.artifact;
 }
 async function chooseHistoryRecalculationStart(startIndex) {
+  if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
   const chatKey = currentChatKey();
   const state2 = await getChatState(chatKey);
+  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u518D\u4FEE\u6539\u5386\u53F2\u91CD\u7B97\u8303\u56F4");
   if (!state2.historyInvalidation) throw new Error("\u5F53\u524D\u6CA1\u6709\u5F85\u5904\u7406\u7684\u5386\u53F2\u5931\u6548");
   const index = Math.max(0, Math.min(Math.trunc(startIndex), Math.max(0, getChat().length - 1)));
   state2.historyInvalidation.startIndex = index;
@@ -2662,24 +3002,48 @@ async function chooseHistoryRecalculationStart(startIndex) {
   state2.lastSyncError = `\u5DF2\u9009\u62E9\u4ECE\u7B2C ${index + 1} \u6761\u6D88\u606F\u5F00\u59CB\u91CD\u7B97`;
   await persistChat();
   await putChatState(state2);
-  notify(index, null);
+  notifyFrom(index);
 }
 async function retryStage(index, stage) {
+  if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
+  const latestSnapshot = latestSnapshotArtifact();
+  if (["audit", "revision", "state"].includes(stage) && index !== latestAssistantIndex()) {
+    throw new Error("\u666E\u901A\u91CD\u8BD5\u53EA\u9002\u7528\u4E8E\u6700\u65B0AI\u6B63\u6587\uFF1B\u65E7\u6B63\u6587\u8BF7\u901A\u8FC7\u5386\u53F2\u53D8\u66F4\u63D0\u793A\u4ECE\u8BE5\u6761\u5F00\u59CB\u91CD\u7B97");
+  }
+  if (["summary", "sync"].includes(stage) && latestSnapshot?.index !== index) {
+    throw new Error("\u603B\u7ED3\u548C\u4E16\u754C\u4E66\u53EA\u80FD\u57FA\u4E8E\u6700\u65B0\u6210\u529F\u72B6\u6001\u8868");
+  }
   if (stage === "audit" || stage === "revision") return processMessage(index, true);
-  const artifact = await loadOrCreateArtifact(index, false);
+  const artifact = latestSnapshot?.index === index ? latestSnapshot.artifact : await loadOrCreateArtifact(index, false);
   const key = `${PIPELINE_VERSION}:retry:${stage}:${artifact.chatKey}:${artifact.messageKey}`;
   return taskQueue.run(key, `\u91CD\u8BD5${stage}`, stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage, async () => {
-    if (stage === "state") await runStateExtraction(artifact, true);
-    if (stage === "summary") await maybeRunSummaries(artifact, true, true);
-    if (stage === "sync") await syncLorebook(artifact);
-    await saveArtifactToMessage(index, artifact);
+    if (currentChatKey() !== artifact.chatKey) return null;
+    if (stage === "state") {
+      await runStateExtraction(artifact, true);
+      await saveArtifactToMessage(index, artifact);
+      await finishStatePipeline(index, artifact);
+    }
+    if (stage === "summary") {
+      await maybeRunSummaries(artifact);
+      await saveArtifactToMessage(index, artifact);
+      await syncLorebook(artifact);
+      await saveArtifactToMessage(index, artifact);
+    }
+    if (stage === "sync") {
+      await syncLorebook(artifact, true);
+      await saveArtifactToMessage(index, artifact);
+    }
     return artifact;
   });
 }
-async function forceSummary(index, kind) {
-  const artifact = await loadOrCreateArtifact(index, false);
+async function forceSummary(_index, kind) {
+  if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
+  const latest = latestSnapshotArtifact();
+  if (!latest) throw new Error("\u6CA1\u6709\u6210\u529F\u72B6\u6001\u8868\uFF0C\u4E0D\u80FD\u751F\u6210\u603B\u7ED3");
+  const { index, artifact } = latest;
   const key = `${PIPELINE_VERSION}:force-summary:${kind}:${artifact.chatKey}:${artifact.messageKey}`;
   return taskQueue.run(key, `\u7ACB\u5373${kind === "small" ? "\u5C0F" : "\u5927"}\u603B\u7ED3`, kind === "small" ? "smallSummary" : "largeSummary", async () => {
+    if (currentChatKey() !== artifact.chatKey) return null;
     await maybeRunSummaries(artifact, kind === "small", kind === "large");
     await saveArtifactToMessage(index, artifact);
     if (getSettings().lorebookSync) {
@@ -2692,11 +3056,63 @@ async function forceSummary(index, kind) {
 function getArtifactAt(index) {
   return getAttachedArtifact(getMessage(index));
 }
+async function resetCurrentGame() {
+  const sourceChatKey = currentChatKey();
+  taskQueue.setAccepting(false);
+  abortActiveRequests();
+  taskQueue.resetRuntime();
+  try {
+    await taskQueue.whenIdle();
+    if (currentChatKey() !== sourceChatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5DF2\u505C\u6B62\u91CD\u7F6E\u5F53\u524D\u6E38\u620F");
+    const lorebookEntries = await clearCurrentChatLorebookEntries(sourceChatKey);
+    if (currentChatKey() !== sourceChatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5DF2\u505C\u6B62\u91CD\u7F6E\u5F53\u524D\u6E38\u620F");
+    let messages = 0;
+    for (const message of getChat()) {
+      const extra = message?.extra;
+      const hadCurrent = Boolean(extra?.[MODULE_NAME]);
+      const hadLegacy = Boolean(extra?.[LEGACY_MODULE_NAME]);
+      if (hadCurrent) {
+        delete extra[MODULE_NAME];
+      }
+      if (hadLegacy) {
+        delete extra[LEGACY_MODULE_NAME];
+      }
+      if (hadCurrent || hadLegacy) {
+        messages += 1;
+      }
+    }
+    const namespace = getChatMetadataNamespace();
+    delete namespace.state;
+    delete namespace.lorebookName;
+    namespace.updatedAt = nowIso();
+    const context = getContext();
+    if (context.chatMetadata?.[LEGACY_MODULE_NAME]) delete context.chatMetadata[LEGACY_MODULE_NAME];
+    await persistChat();
+    if (currentChatKey() !== sourceChatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5DF2\u505C\u6B62\u91CD\u7F6E\u5F53\u524D\u6E38\u620F");
+    await persistMetadata();
+    notifyFrom(0);
+    return { messages, lorebookEntries };
+  } finally {
+    taskQueue.setAccepting(getSettings().enabled);
+  }
+}
 function latestArtifact() {
   const chat = getChat();
+  const chatKey = currentChatKey();
   for (let i = chat.length - 1; i >= 0; i -= 1) {
     const artifact = getAttachedArtifact(chat[i]);
-    if (artifact) return { index: i, artifact };
+    if (artifact?.chatKey === chatKey) return { index: i, artifact };
+  }
+  return null;
+}
+function latestSnapshotArtifact() {
+  const chat = getChat();
+  const chatKey = currentChatKey();
+  for (let i = chat.length - 1; i >= 0; i -= 1) {
+    const artifact = getAttachedArtifact(chat[i]);
+    if (artifact?.chatKey === chatKey && artifact.snapshot && artifact.stages.state.status === "success") {
+      return { index: i, artifact };
+    }
   }
   return null;
 }
@@ -2704,9 +3120,16 @@ function installPipelineEventHandlers() {
   const context = globalThis.SillyTavern.getContext();
   const { eventSource, event_types } = context;
   const onReceived = (payload) => scheduleMessage(payload, false);
-  const onEdited = (payload) => void invalidateHistory(payload, "edited");
-  const onSwiped = (payload) => void invalidateHistory(payload, "swiped");
-  const onDeleted = (payload) => void invalidateHistory(payload, "deleted");
+  const handleInvalidation = (payload, reason) => {
+    if (!getSettings().enabled) return;
+    void invalidateHistory(payload, reason).catch((error) => {
+      console.error("[MirrorAbyss] history invalidation failed", error);
+      toast("error", `\u5386\u53F2\u53D8\u5316\u5904\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    });
+  };
+  const onEdited = (payload) => handleInvalidation(payload, "edited");
+  const onSwiped = (payload) => handleInvalidation(payload, "swiped");
+  const onDeleted = (payload) => handleInvalidation(payload, "deleted");
   const onChatChanged = () => abortActiveRequests();
   eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
   eventSource.on(event_types.MESSAGE_EDITED, onEdited);
@@ -2928,8 +3351,12 @@ async function diagnosticReport() {
 // src/ui/workspace.ts
 var selectedMessageIndex = null;
 var rendering = false;
+var renderAgain = false;
 var queueUnsubscribe = null;
 var selectedGraphNodeId = null;
+var editorChatKey = null;
+var editorMessageKey = null;
+var savingRow = false;
 function clampGraphZoom(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 1;
@@ -3003,13 +3430,14 @@ function root() {
   );
   element = document.querySelector("#ma11-workspace");
   bindWorkspace(element);
-  queueUnsubscribe ||= taskQueue.subscribe(() => void renderWorkspace());
+  queueUnsubscribe ||= taskQueue.subscribe(handleQueueChange);
   return element;
 }
 function currentArtifact() {
   if (selectedMessageIndex !== null) {
     const artifact = getArtifactAt(selectedMessageIndex);
     if (artifact) return { index: selectedMessageIndex, artifact };
+    return null;
   }
   return latestArtifact();
 }
@@ -3049,11 +3477,36 @@ function stageCards(artifact) {
     </article>`;
   }).join("")}</div>`;
 }
+function recentTasksHtml() {
+  const jobs = taskQueue.list().slice(0, 5);
+  return {
+    count: jobs.length,
+    html: jobs.length ? jobs.map((task) => `<div><span>${escapeHtml(task.label)}</span><em class="${task.state}">${escapeHtml(task.state)}</em></div>`).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'
+  };
+}
+function refreshTaskList() {
+  const workspace = document.querySelector("#ma11-workspace");
+  const list3 = workspace?.querySelector("[data-ma11-task-list]");
+  const count = workspace?.querySelector("[data-ma11-task-count]");
+  if (!list3 || !count) return;
+  const tasks = recentTasksHtml();
+  count.textContent = tasks.count ? `${tasks.count} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2";
+  list3.innerHTML = tasks.html;
+}
+function handleQueueChange() {
+  refreshTaskList();
+  if (taskQueue.list().some((task) => task.state === "queued" || task.state === "running")) return;
+  const workspace = document.querySelector("#ma11-workspace");
+  const active = document.activeElement;
+  if (workspace?.contains(active) && active?.matches("input, textarea, select, button")) return;
+  void renderWorkspace();
+}
 async function overviewHtml(artifactInfo) {
+  const enabled = getSettings().enabled;
   const artifact = artifactInfo?.artifact;
   const chatState = await getChatState(currentChatKey());
   const rows2 = snapshotRowCount(artifact?.snapshot);
-  const jobs = taskQueue.list().slice(0, 5);
+  const tasks = recentTasksHtml();
   return `
     ${chatState.historyInvalidation ? `<section class="ma11-card ma11-history-warning"><header><b>\u5386\u53F2\u6570\u636E\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u955C\u6E0A\u4E0D\u4F1A\u5728\u540E\u53F0\u81EA\u52A8\u91CD\u653E\u5386\u53F2\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u4ECE\u53D8\u66F4\u4F4D\u7F6E\u5F00\u59CB\u91CD\u7B97"}</button></div></section>` : ""}
     <section class="ma11-hero">
@@ -3062,16 +3515,16 @@ async function overviewHtml(artifactInfo) {
         <p>${artifact ? `\u72B6\u6001\u8868 ${rows2} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
       </div>
       <div class="ma11-actions">
-        <button data-ma11-action="process-latest">\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
+        <button data-ma11-action="process-latest" ${enabled ? "" : "disabled"}>\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
         <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}>\u67E5\u770B\u72B6\u6001\u8868</button>
         <button data-ma11-action="open-graph" ${artifact?.snapshot ? "" : "disabled"}>\u5173\u7CFB\u56FE\u8C31</button>
       </div>
     </section>
     ${stageCards(artifact)}
     <section class="ma11-card">
-      <header><b>\u4EFB\u52A1\u961F\u5217</b><span>${jobs.length ? `${jobs.length} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2"}</span></header>
-      <div class="ma11-task-list">
-        ${jobs.length ? jobs.map((task) => `<div><span>${escapeHtml(task.label)}</span><em class="${task.state}">${escapeHtml(task.state)}</em></div>`).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'}
+      <header><b>\u4EFB\u52A1\u961F\u5217</b><span data-ma11-task-count>${tasks.count ? `${tasks.count} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2"}</span></header>
+      <div class="ma11-task-list" data-ma11-task-list>
+        ${tasks.html}
       </div>
     </section>
     <section class="ma11-card ma11-note">
@@ -3097,12 +3550,16 @@ function lifecycleHtml(row) {
 function tableHtml(artifactInfo) {
   const settings = getSettings();
   const artifact = artifactInfo?.artifact;
+  const latest = latestSnapshotArtifact();
+  const editable = Boolean(
+    settings.enabled && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey
+  );
   const active = settings.ui.activeTable;
   const rows2 = artifact?.snapshot?.[active] ?? [];
   return `
     <section class="ma11-toolbar ma11-table-toolbar">
       <div class="ma11-table-tabs">${TABLE_KEYS.map((key) => `<button class="${key === active ? "active" : ""}" data-ma11-table="${key}">${TABLE_LABELS[key]} <span>${artifact?.snapshot?.[key]?.length ?? 0}</span></button>`).join("")}</div>
-      <div class="ma11-actions"><button data-ma11-action="add-row" ${artifact?.snapshot ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="retry-state" ${artifactInfo ? "" : "disabled"}>\u91CD\u65B0\u6574\u7406</button></div>
+      <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="retry-state" ${settings.enabled && artifactInfo?.index === latestAssistantIndex() ? "" : "disabled"}>\u91CD\u65B0\u6574\u7406</button></div>
     </section>
     <p class="ma11-table-hint">\u8868\u683C\u4FDD\u6301\u6A2A\u5411\u6392\u7248\u3002\u624B\u673A\u7AEF\u8BF7\u5728\u8868\u683C\u533A\u57DF\u5DE6\u53F3\u6ED1\u52A8\uFF0C\u4E0D\u4F1A\u518D\u628A\u4E2D\u6587\u538B\u6210\u7AD6\u6392\u3002</p>
     <section class="ma11-table-wrap" role="region" aria-label="${TABLE_LABELS[active]}\u72B6\u6001\u8868" tabindex="0">
@@ -3116,7 +3573,7 @@ function tableHtml(artifactInfo) {
           <td class="ma11-cell-content">${escapeHtml(row.content)}</td>
           <td><div class="ma11-cell-status">${row.status ? `<span class="ma11-status-text">${escapeHtml(row.status)}</span>` : ""}${lifecycleHtml(row)}<div class="ma11-keyword-list">${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</div></div></td>
           <td><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.source === "manual" || row.locked ? "\u73A9\u5BB6\u9501\u5B9A" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
-          <td><div class="ma11-row-actions"><button data-ma11-edit-row="${escapeHtml(row.id)}">\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}">\u5220\u9664</button></div></td>
+          <td><div class="ma11-row-actions"><button data-ma11-edit-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u5220\u9664</button></div></td>
         </tr>`
   ).join("") : `<tr><td colspan="6" class="ma11-empty">\u8BE5\u5206\u7C7B\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
       </table>` : '<div class="ma11-empty-panel">\u5C1A\u65E0\u72B6\u6001\u8868\u3002\u70B9\u51FB\u201C\u6574\u7406\u6700\u65B0\u6B63\u6587\u201D\u3002</div>'}
@@ -3218,12 +3675,13 @@ ${node.detail}`)}</title></g>`
     ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5173\u7CFB\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
 }
 async function summariesHtml() {
-  const info = currentArtifact();
+  const info = latestSnapshotArtifact();
+  const enabled = getSettings().enabled;
   const state2 = info ? await getChatState(info.artifact.chatKey) : null;
   const small = state2?.smallSummaries ?? [];
   const large = state2?.largeSummaries ?? [];
   return `
-    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u8D1F\u8D23\u5B89\u5168\u6C89\u964D\u5DF2\u7ED3\u675F\u5185\u5BB9\uFF1B\u5927\u603B\u7ED3\u628A\u5DF2\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u5185\u63A8\u4E3A\u7D2F\u8BA1\u957F\u671F\u8BB0\u5FC6\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
+    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u8D1F\u8D23\u5B89\u5168\u6C89\u964D\u5DF2\u7ED3\u675F\u5185\u5BB9\uFF1B\u5927\u603B\u7ED3\u628A\u5DF2\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u5185\u63A8\u4E3A\u7D2F\u8BA1\u957F\u671F\u8BB0\u5FC6\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
     <div class="ma11-summary-columns">
       <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map(
     (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
@@ -3261,7 +3719,7 @@ function auditHtml() {
     ${audit ? `<section class="ma11-card"><header><b>\u6700\u8FD1\u5BA1\u6838\u7ED3\u679C</b><span class="ma11-badge ${audit.passed ? "success" : "danger"}">${audit.passed ? "\u901A\u8FC7" : audit.decision === "block" ? "\u963B\u65AD" : "\u9700\u4FEE\u6B63"}</span></header><p>${escapeHtml(audit.reason)}</p>${violationHtml}${revision ? `<dl class="ma11-meta"><dt>\u4FEE\u6B63\u72B6\u6001</dt><dd>${escapeHtml(revision.status)}</dd><dt>\u4FEE\u6B63\u6B21\u6570</dt><dd>${revision.attempts.length}</dd><dt>\u505C\u6B62\u539F\u56E0</dt><dd>${escapeHtml(revision.stoppedReason || "\u2014")}</dd></dl>` : ""}</section>` : ""}`;
 }
 async function syncHtml() {
-  const info = currentArtifact();
+  const info = latestSnapshotArtifact();
   const state2 = info ? await getChatState(info.artifact.chatKey) : null;
   const settings = getSettings();
   return `
@@ -3275,7 +3733,7 @@ async function syncHtml() {
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="vectorizeRows" ${settings.vectorizeRows ? "checked" : ""}/><span>\u4EBA\u7269\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7B49\u72B6\u6001\u884C\u542F\u7528\u5411\u91CF</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u5F53\u524D\u7126\u70B9\u4E0E\u5F53\u524D\u603B\u7ED3\u5E38\u9A7B</span></label>
-      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${info && !state2?.historyInvalidation ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
+      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${settings.enabled && info && !state2?.historyInvalidation ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
     </section>`;
@@ -3324,8 +3782,16 @@ function settingsHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
       <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>\u7ED3\u6784\u8F93\u51FA\u65E0\u6CD5\u672C\u5730\u89E3\u6790\u65F6\uFF0C\u5141\u8BB8\u4E00\u6B21\u4E13\u7528JSON\u683C\u5F0F\u4FEE\u590D</span></label>
-      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6839\u636E\u5DF2\u7ECF\u63D0\u53D6\u7684\u72B6\u6001\u53D8\u5316\u5224\u65AD\uFF1A\u5267\u60C5\u53D8\u5316\u5BC6\u96C6\u65F6\u53EF\u63D0\u524D\u89E6\u53D1\uFF0C\u53D8\u5316\u5C11\u65F6\u5EF6\u540E\uFF0C\u4F46\u4E0D\u4F1A\u8D85\u8FC7\u201C\u6700\u665A\u56DE\u5408\u6570\u201D\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u683C\u5F0F\u4FEE\u590D\u53EA\u6574\u7406\u539F\u59CB\u8FD4\u56DE\uFF0C\u4E0D\u91CD\u65B0\u6267\u884C\u539F\u4EFB\u52A1\u3002</p>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>\u7ED3\u6784\u5316\u8F93\u51FA\u4E0D\u53EF\u7528\u6216JSON\u683C\u5F0F\u9519\u8BEF\u65F6\uFF0C\u6700\u591A\u989D\u5916\u8C03\u7528\u4E00\u6B21</span></label>
+      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6839\u636E\u5DF2\u7ECF\u63D0\u53D6\u7684\u72B6\u6001\u53D8\u5316\u5224\u65AD\uFF1A\u5267\u60C5\u53D8\u5316\u5BC6\u96C6\u65F6\u53EF\u63D0\u524D\u89E6\u53D1\uFF0C\u53D8\u5316\u5C11\u65F6\u5EF6\u540E\uFF0C\u4F46\u4E0D\u4F1A\u8D85\u8FC7\u201C\u6700\u665A\u56DE\u5408\u6570\u201D\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u517C\u5BB9\u56DE\u9000\u53EA\u6267\u884C\u4E00\u6B21\uFF1B\u7F51\u7EDC\u9519\u8BEF\u4E0D\u4F1A\u89E6\u53D1\uFF0C\u5931\u8D25\u540E\u7531\u7528\u6237\u624B\u52A8\u91CD\u8BD5\u3002</p>
+    </section>
+    <section class="ma11-card ma11-form-card">
+      <header><b>\u91CD\u7F6E\u4E0E\u7EF4\u62A4</b><span>\u4EE5\u4E0B\u64CD\u4F5C\u4E0D\u4F1A\u4FEE\u6539\u5176\u4ED6\u804A\u5929\u3002</span></header>
+      <div class="ma11-actions">
+        <button data-ma11-action="restart-plugin">\u91CD\u5EFA\u63D2\u4EF6\u7F13\u5B58\uFF08\u8F6F\u91CD\u7F6E\uFF09</button>
+        <button class="danger" data-ma11-action="reset-current-game">\u91CD\u7F6E\u5F53\u524D\u6E38\u620F</button>
+      </div>
+      <p class="ma11-help">\u91CD\u5EFA\u63D2\u4EF6\u7F13\u5B58\u4F1A\u53D6\u6D88\u8BF7\u6C42\u3001\u5E9F\u5F03\u4EFB\u52A1\u3001\u6E05\u9664\u4E00\u6B21\u6027\u6A21\u5757\u7F13\u5B58\u3001\u89E3\u9664\u76D1\u542C\u5E76\u91CD\u65B0\u6302\u8F7D\u955C\u6E0A UI\uFF0C\u76F8\u5F53\u4E8E\u8F6F\u91CD\u7F6E\u63D2\u4EF6\uFF0C\u4E0D\u5220\u9664\u8868\u683C\u3001\u603B\u7ED3\u548C\u8BBE\u7F6E\u3002\u91CD\u7F6E\u5F53\u524D\u6E38\u620F\u4F1A\u5220\u9664\u672C\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u5BA1\u6838\u8BB0\u5F55\u53CA\u5176\u4E16\u754C\u4E66\u6761\u76EE\uFF0C\u4F46\u4FDD\u7559\u63D2\u4EF6\u8BBE\u7F6E\u3002</p>
     </section>`;
 }
 async function diagnosticsHtml() {
@@ -3336,8 +3802,13 @@ async function diagnosticsHtml() {
 }
 async function renderWorkspace() {
   const workspace = document.querySelector("#ma11-workspace");
-  if (!workspace || workspace.hidden || rendering) return;
+  if (!workspace || workspace.hidden) return;
+  if (rendering) {
+    renderAgain = true;
+    return;
+  }
   rendering = true;
+  const renderChatKey = currentChatKey();
   try {
     const settings = getSettings();
     const info = currentArtifact();
@@ -3347,23 +3818,38 @@ async function renderWorkspace() {
         button.dataset.ma11Tab === settings.ui.activeTab
       )
     );
-    const content = workspace.querySelector(
-      "#ma11-workspace-content"
-    );
-    if (settings.ui.activeTab === "overview")
-      content.innerHTML = await overviewHtml(info);
-    if (settings.ui.activeTab === "tables") content.innerHTML = tableHtml(info);
-    if (settings.ui.activeTab === "graph") content.innerHTML = graphHtml(info);
-    if (settings.ui.activeTab === "summaries")
-      content.innerHTML = await summariesHtml();
-    if (settings.ui.activeTab === "audit") content.innerHTML = auditHtml();
-    if (settings.ui.activeTab === "sync") content.innerHTML = await syncHtml();
-    if (settings.ui.activeTab === "settings")
-      content.innerHTML = settingsHtml();
-    if (settings.ui.activeTab === "diagnostics")
-      content.innerHTML = await diagnosticsHtml();
+    let html = "";
+    if (settings.ui.activeTab === "overview") html = await overviewHtml(info);
+    if (settings.ui.activeTab === "tables") html = tableHtml(info);
+    if (settings.ui.activeTab === "graph") html = graphHtml(info);
+    if (settings.ui.activeTab === "summaries") html = await summariesHtml();
+    if (settings.ui.activeTab === "audit") html = auditHtml();
+    if (settings.ui.activeTab === "sync") html = await syncHtml();
+    if (settings.ui.activeTab === "settings") html = settingsHtml();
+    if (settings.ui.activeTab === "diagnostics") html = await diagnosticsHtml();
+    if (!workspace.isConnected || currentChatKey() !== renderChatKey) {
+      renderAgain = true;
+      return;
+    }
+    const content = workspace.querySelector("#ma11-workspace-content");
+    if (content) content.innerHTML = html;
+  } catch (error) {
+    if (currentChatKey() !== renderChatKey) {
+      renderAgain = true;
+      return;
+    }
+    const message = toErrorMessage(error);
+    const content = workspace.querySelector("#ma11-workspace-content");
+    if (content) {
+      content.innerHTML = `<section class="ma11-card"><header><b>\u754C\u9762\u52A0\u8F7D\u5931\u8D25</b></header><p class="ma11-message-error">${escapeHtml(message)}</p><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u91CD\u65B0\u52A0\u8F7D</button></div></section>`;
+    }
+    console.error("[MirrorAbyss] workspace render failed", error);
   } finally {
     rendering = false;
+    if (renderAgain) {
+      renderAgain = false;
+      queueMicrotask(() => void renderWorkspace());
+    }
   }
 }
 function setTab(tab) {
@@ -3372,7 +3858,26 @@ function setTab(tab) {
   saveSettings();
   void renderWorkspace();
 }
+function editableArtifact() {
+  if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
+  if (editorChatKey && currentChatKey() !== editorChatKey) {
+    throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u7F16\u8F91\u4E0D\u518D\u4FDD\u5B58");
+  }
+  const info = currentArtifact();
+  const latest = latestSnapshotArtifact();
+  if (!info?.artifact.snapshot || !latest || info.artifact.messageKey !== latest.artifact.messageKey) {
+    throw new Error("\u5386\u53F2\u72B6\u6001\u8868\u53EA\u8BFB\uFF0C\u53EA\u80FD\u7F16\u8F91\u6700\u65B0\u6210\u529F\u72B6\u6001\u8868");
+  }
+  if (editorMessageKey && info.artifact.messageKey !== editorMessageKey) {
+    throw new Error("\u7F16\u8F91\u76EE\u6807\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7F16\u8F91\u5668");
+  }
+  assertArtifactCommitCurrent(info.artifact);
+  return info;
+}
 function openRowEditor(tableKey, row) {
+  const info = currentArtifact();
+  editorChatKey = currentChatKey();
+  editorMessageKey = info?.artifact.messageKey ?? null;
   const workspace = root();
   const backdrop = workspace.querySelector(
     ".ma11-editor-backdrop"
@@ -3407,10 +3912,11 @@ function closeEditor() {
     ".ma11-editor-backdrop"
   );
   if (backdrop) backdrop.hidden = true;
+  editorChatKey = null;
+  editorMessageKey = null;
 }
 async function saveRow(form) {
-  const info = currentArtifact();
-  if (!info?.artifact.snapshot) throw new Error("\u5F53\u524D\u6CA1\u6709\u53EF\u7F16\u8F91\u7684\u72B6\u6001\u8868");
+  const info = editableArtifact();
   const tableKey = form.elements.namedItem("tableKey").value;
   const rowId = form.elements.namedItem("rowId").value;
   const title = form.elements.namedItem("title").value.trim();
@@ -3442,13 +3948,13 @@ async function saveRow(form) {
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
   await persistChat();
+  assertArtifactCommitCurrent(info.artifact);
   if (getSettings().lorebookSync) await retryStage(info.index, "sync");
   closeEditor();
   await renderWorkspace();
 }
 async function deleteRowAction(rowId) {
-  const info = currentArtifact();
-  if (!info?.artifact.snapshot) return;
+  const info = editableArtifact();
   const tableKey = getSettings().ui.activeTable;
   if (!confirm("\u786E\u5B9A\u5220\u9664\u8FD9\u6761\u72B6\u6001\u5417\uFF1F")) return;
   info.artifact.snapshot = deleteRow(info.artifact.snapshot, tableKey, rowId);
@@ -3456,6 +3962,7 @@ async function deleteRowAction(rowId) {
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
   await persistChat();
+  assertArtifactCommitCurrent(info.artifact);
   if (getSettings().lorebookSync) await retryStage(info.index, "sync");
   await renderWorkspace();
 }
@@ -3466,6 +3973,16 @@ function updateSetting(target) {
   const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target instanceof HTMLInputElement && target.type === "number" ? Number(target.value) : target.value;
   settings[key] = value;
   saveSettings();
+  if (key === "enabled") {
+    setRequestAcceptance(Boolean(value));
+    taskQueue.setAccepting(Boolean(value));
+    if (!value) abortActiveRequests();
+    const quick = document.querySelector('[data-ma11-quick-setting="enabled"]');
+    if (quick) quick.checked = Boolean(value);
+    renderAllMessagePanels();
+    void renderWorkspace();
+  }
+  if (key === "showMessagePanel") renderAllMessagePanels();
   if (key === "lorebookLayout") void renderWorkspace();
 }
 function updateConnection(target) {
@@ -3491,11 +4008,21 @@ function bindWorkspace(workspace) {
     const tab = target.closest("[data-ma11-tab]")?.dataset.ma11Tab;
     if (tab) return setTab(tab);
     const action = target.closest("[data-ma11-action]")?.dataset.ma11Action;
+    const actionButton = action ? target.closest("[data-ma11-action]") : null;
+    const testButton = target.closest("[data-ma11-test]");
+    const busyButton = actionButton ?? testButton;
+    const originalButtonText = busyButton?.textContent ?? "";
     try {
+      if (busyButton && !["close", "open-tables", "open-graph", "close-editor"].includes(action || "")) {
+        busyButton.disabled = true;
+        busyButton.setAttribute("aria-busy", "true");
+        busyButton.textContent = "\u5904\u7406\u4E2D\u2026";
+      }
       if (action === "close") workspace.hidden = true;
       if (action === "open-tables") setTab("tables");
       if (action === "open-graph") setTab("graph");
       if (action === "process-latest") {
+        if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
         const index = latestAssistantIndex();
         if (index < 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
         selectedMessageIndex = index;
@@ -3523,7 +4050,7 @@ function bindWorkspace(workspace) {
         await renderWorkspace();
       }
       if (action === "force-small" || action === "force-large") {
-        const info = currentArtifact();
+        const info = latestSnapshotArtifact();
         if (!info) throw new Error("\u5C1A\u65E0\u53EF\u603B\u7ED3\u7684\u72B6\u6001");
         await forceSummary(
           info.index,
@@ -3532,7 +4059,7 @@ function bindWorkspace(workspace) {
         await renderWorkspace();
       }
       if (action === "retry-sync") {
-        const info = currentArtifact();
+        const info = latestSnapshotArtifact();
         if (!info) throw new Error("\u5C1A\u65E0\u53EF\u540C\u6B65\u7684\u72B6\u6001");
         await retryStage(info.index, "sync");
         await renderWorkspace();
@@ -3544,6 +4071,22 @@ function bindWorkspace(workspace) {
         const report = await diagnosticReport();
         await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
         toast("success", "\u8BCA\u65AD\u4FE1\u606F\u5DF2\u590D\u5236");
+      }
+      if (action === "restart-plugin") {
+        const restart = globalThis.MirrorAbyss?.restart;
+        if (typeof restart !== "function") throw new Error("\u63D2\u4EF6\u91CD\u7F6E\u5165\u53E3\u4E0D\u53EF\u7528");
+        toast("info", "\u6B63\u5728\u91CD\u7F6E\u955C\u6E0A\u63D2\u4EF6\u2026");
+        await restart();
+        return;
+      }
+      if (action === "reset-current-game") {
+        if (!window.confirm("\u8FD9\u4F1A\u5220\u9664\u5F53\u524D\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u5BA1\u6838\u8BB0\u5F55\u548C\u955C\u6E0A\u4E16\u754C\u4E66\u6761\u76EE\u3002\u5176\u4ED6\u804A\u5929\u548C\u63D2\u4EF6\u8BBE\u7F6E\u4E0D\u53D7\u5F71\u54CD\u3002\u662F\u5426\u7EE7\u7EED\uFF1F")) return;
+        if (!window.confirm("\u8BF7\u518D\u6B21\u786E\u8BA4\uFF1A\u91CD\u7F6E\u540E\u53EA\u80FD\u91CD\u65B0\u8C03\u7528\u6A21\u578B\u6574\u7406\u5F53\u524D\u804A\u5929\uFF0C\u65E0\u6CD5\u81EA\u52A8\u6062\u590D\u3002")) return;
+        const result = await resetCurrentGame();
+        resetWorkspaceContext();
+        renderAllMessagePanels();
+        toast("success", `\u5F53\u524D\u6E38\u620F\u5DF2\u91CD\u7F6E\uFF1A\u6E05\u9664 ${result.messages} \u6761\u6D88\u606F\u8BB0\u5F55\u3001${result.lorebookEntries} \u4E2A\u4E16\u754C\u4E66\u6761\u76EE`);
+        await renderWorkspace();
       }
       const graphScope = target.closest("[data-ma11-graph-scope]")?.dataset.ma11GraphScope;
       if (graphScope) {
@@ -3598,6 +4141,12 @@ function bindWorkspace(workspace) {
       }
     } catch (error) {
       toast("error", toErrorMessage(error));
+    } finally {
+      if (busyButton?.isConnected) {
+        busyButton.disabled = false;
+        busyButton.removeAttribute("aria-busy");
+        busyButton.textContent = originalButtonText;
+      }
     }
   });
   workspace.addEventListener("change", (event) => {
@@ -3627,9 +4176,21 @@ function bindWorkspace(workspace) {
   });
   workspace.querySelector("#ma11-row-editor")?.addEventListener("submit", (event) => {
     event.preventDefault();
-    void saveRow(event.currentTarget).catch(
-      (error) => toast("error", toErrorMessage(error))
-    );
+    if (savingRow) return;
+    savingRow = true;
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = "\u4FDD\u5B58\u4E2D\u2026";
+    }
+    void saveRow(form).catch((error) => toast("error", toErrorMessage(error))).finally(() => {
+      savingRow = false;
+      if (submit?.isConnected) {
+        submit.disabled = false;
+        submit.textContent = "\u4FDD\u5B58";
+      }
+    });
   });
 }
 function openWorkspace(tab, messageIndex) {
@@ -3639,6 +4200,19 @@ function openWorkspace(tab, messageIndex) {
   if (tab) getSettings().ui.activeTab = tab;
   workspace.hidden = false;
   void renderWorkspace();
+}
+function resetWorkspaceContext() {
+  selectedMessageIndex = null;
+  selectedGraphNodeId = null;
+  closeEditor();
+}
+function disposeWorkspace() {
+  resetWorkspaceContext();
+  queueUnsubscribe?.();
+  queueUnsubscribe = null;
+  savingRow = false;
+  renderAgain = false;
+  document.querySelector("#ma11-workspace")?.remove();
 }
 function refreshWorkspace() {
   void renderWorkspace();
@@ -3666,9 +4240,13 @@ function tone(stage) {
 function findMessageElement2(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
 }
+var pendingRetryIndexes = /* @__PURE__ */ new Set();
 function panelHtml(index, artifact) {
   const rows2 = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list3) => sum + list3.length, 0) : 0;
   const error = Object.values(artifact.stages).find((stage) => stage.error)?.error;
+  const retrying = pendingRetryIndexes.has(index);
+  const latestText = index === latestAssistantIndex();
+  const latestSnapshot = index === latestSnapshotArtifact()?.index;
   return `
     <div class="ma11-message-panel" data-ma-index="${index}">
       <button class="ma11-message-summary" type="button" data-ma-action="open">
@@ -3681,23 +4259,29 @@ function panelHtml(index, artifact) {
       </button>
       ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
       <div class="ma11-message-actions">
-        ${artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
-        ${["failed", "blocked"].includes(artifact.stages.revision?.status ?? "idle") ? '<button data-ma-retry="revision">\u91CD\u8BD5\u5B9A\u5411\u4FEE\u6B63</button>' : ""}
-        ${artifact.stages.state.status === "failed" ? '<button data-ma-retry="state">\u91CD\u8BD5\u8868\u683C</button>' : ""}
-        ${artifact.stages.summary.status === "failed" ? '<button data-ma-retry="summary">\u91CD\u8BD5\u603B\u7ED3</button>' : ""}
-        ${artifact.stages.sync.status === "failed" ? '<button data-ma-retry="sync">\u91CD\u8BD5\u540C\u6B65</button>' : ""}
+        ${retrying ? "<button disabled>\u91CD\u8BD5\u5904\u7406\u4E2D\u2026</button>" : ""}
+        ${!retrying && latestText && artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
+        ${!retrying && latestText && ["failed", "blocked"].includes(artifact.stages.revision?.status ?? "idle") ? '<button data-ma-retry="revision">\u91CD\u8BD5\u5B9A\u5411\u4FEE\u6B63</button>' : ""}
+        ${!retrying && latestText && artifact.stages.state.status === "failed" ? '<button data-ma-retry="state">\u91CD\u8BD5\u8868\u683C</button>' : ""}
+        ${!retrying && latestSnapshot && artifact.stages.summary.status === "failed" ? '<button data-ma-retry="summary">\u91CD\u8BD5\u603B\u7ED3</button>' : ""}
+        ${!retrying && latestSnapshot && artifact.stages.sync.status === "failed" ? '<button data-ma-retry="sync">\u91CD\u8BD5\u540C\u6B65</button>' : ""}
       </div>
     </div>`;
 }
 function renderMessagePanel(index) {
-  if (!getSettings().showMessagePanel) return;
-  const artifact = getArtifactAt(index);
   const messageElement = findMessageElement2(index);
   if (!messageElement) return;
+  const settings = getSettings();
+  const artifact = getArtifactAt(index);
+  applyAuditVisibility(
+    index,
+    Boolean(settings.enabled && artifact?.hiddenByAudit),
+    Boolean(settings.enabled && artifact?.audit && !artifact.audit.passed && !artifact.hiddenByAudit)
+  );
   messageElement.querySelector(":scope > .ma11-message-panel")?.remove();
+  if (!settings.showMessagePanel) return;
   if (!artifact) return;
   messageElement.insertAdjacentHTML("beforeend", panelHtml(index, artifact));
-  applyAuditVisibility(index, Boolean(artifact.hiddenByAudit));
 }
 function renderAllMessagePanels() {
   getChat().forEach((message, index) => {
@@ -3715,12 +4299,24 @@ function installMessagePanelHandlers() {
     const index = Number(panel.dataset.maIndex);
     if (target.closest('[data-ma-action="open"]')) openWorkspace("tables", index);
     const retry = target.closest("[data-ma-retry]")?.dataset.maRetry;
-    if (retry) void retryStage(index, retry);
+    if (retry) {
+      if (pendingRetryIndexes.has(index)) return;
+      pendingRetryIndexes.add(index);
+      renderMessagePanel(index);
+      toast("info", "\u5DF2\u63D0\u4EA4\u91CD\u8BD5\uFF0C\u8BF7\u7A0D\u5019");
+      void retryStage(index, retry).catch((error) => {
+        toast("error", toErrorMessage(error));
+      }).finally(() => {
+        pendingRetryIndexes.delete(index);
+        renderMessagePanel(index);
+      });
+    }
   };
   document.addEventListener("click", click);
   const unsubscribe = subscribePipeline((index) => renderMessagePanel(index));
   return () => {
     installed = false;
+    pendingRetryIndexes.clear();
     document.removeEventListener("click", click);
     unsubscribe();
   };
@@ -3756,14 +4352,16 @@ async function waitForElement(selector, timeoutMs = 15e3) {
     observer.observe(document.documentElement, { childList: true, subtree: true });
   });
 }
-async function mountSettingsPanel() {
+async function mountSettingsPanel(isCurrent = () => true) {
   if (document.querySelector("#ma11-settings-root")) return;
   const context = getContext();
   const host = await waitForElement("#extensions_settings2");
+  if (!isCurrent()) return;
   const html = await context.renderExtensionTemplateAsync(extensionPathFromUrl(), "settings", {
     title: DISPLAY_NAME,
     version: VERSION
   });
+  if (!isCurrent() || document.querySelector("#ma11-settings-root")) return;
   host.insertAdjacentHTML("beforeend", html);
   const root2 = document.querySelector("#ma11-settings-root");
   if (!root2) throw new Error("\u8BBE\u7F6E\u6A21\u677F\u52A0\u8F7D\u540E\u672A\u627E\u5230\u6839\u8282\u70B9");
@@ -3771,8 +4369,16 @@ async function mountSettingsPanel() {
   root2.querySelector('[data-ma11-action="open"]')?.addEventListener("click", () => openWorkspace("overview"));
   root2.querySelector('[data-ma11-action="diagnostics"]')?.addEventListener("click", () => openWorkspace("diagnostics"));
   root2.querySelector('[data-ma11-quick-setting="enabled"]')?.addEventListener("change", (event) => {
-    getSettings().enabled = event.target.checked;
+    const enabled = event.target.checked;
+    getSettings().enabled = enabled;
+    setRequestAcceptance(enabled);
+    taskQueue.setAccepting(enabled);
+    if (!enabled) abortActiveRequests();
     saveSettings();
+    const workspaceToggle = document.querySelector('[data-ma11-setting="enabled"]');
+    if (workspaceToggle) workspaceToggle.checked = enabled;
+    renderAllMessagePanels();
+    refreshWorkspace();
   });
 }
 function mountOptionalTopButton() {
@@ -3801,22 +4407,38 @@ var appReadyHandlerInstalled = false;
 var appReadyContext = null;
 var appReadyHandler = null;
 var extensionEnabled = true;
+var lifecycleGeneration = 0;
+var debugRegistered = false;
 var startupAttempts = 0;
 var lastError = null;
 var MAX_STARTUP_ATTEMPTS = 20;
 function exposeApi() {
   globalThis.MirrorAbyss = {
     version: VERSION,
-    open: (tab = "overview") => openWorkspace(tab),
+    open: (tab = "overview") => {
+      if (!extensionEnabled) throw new Error("\u955C\u6E0A\u63D2\u4EF6\u5F53\u524D\u5DF2\u7981\u7528");
+      return openWorkspace(tab);
+    },
     processLatest: async () => {
+      if (!extensionEnabled) throw new Error("\u955C\u6E0A\u63D2\u4EF6\u5F53\u524D\u5DF2\u7981\u7528");
+      if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
       const context = getContext();
       const index = [...context.chat ?? []].map((_, i) => i).reverse().find((i) => !context.chat[i]?.is_user && String(context.chat[i]?.mes || "").trim());
       if (index === void 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
       return processMessage(index, true);
     },
     diagnostics: diagnosticReport,
+    restart: restartPlugin,
     getState: () => ({ state, lastError: lastError instanceof Error ? lastError.message : String(lastError || "") })
   };
+}
+async function restartPlugin() {
+  shutdown();
+  taskQueue.resetRuntime();
+  resetLorebookRuntime();
+  extensionEnabled = true;
+  startupAttempts = 0;
+  installAppReadyHandler();
 }
 function showFatal(error) {
   document.querySelector("#ma11-fatal")?.remove();
@@ -3832,14 +4454,16 @@ function showFatal(error) {
 async function initialize() {
   if (!extensionEnabled) return;
   if (state === "ready" || state === "initializing") return;
+  const generation = lifecycleGeneration;
   state = "initializing";
   lastError = null;
-  setRequestAcceptance(true);
-  taskQueue.setAccepting(true);
   exposeApi();
   try {
-    getSettings();
-    await mountSettingsPanel();
+    const settings = getSettings();
+    setRequestAcceptance(settings.enabled);
+    taskQueue.setAccepting(settings.enabled);
+    await mountSettingsPanel(() => extensionEnabled && generation === lifecycleGeneration);
+    if (!extensionEnabled || generation !== lifecycleGeneration) return;
     mountOptionalTopButton();
     cleanupPipeline ||= installPipelineEventHandlers();
     cleanupPanels ||= installMessagePanelHandlers();
@@ -3850,27 +4474,36 @@ async function initialize() {
         renderAllMessagePanels();
         refreshWorkspace();
       };
+      const resetAndRerender = () => {
+        resetWorkspaceContext();
+        rerender();
+      };
       context.eventSource.on(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-      context.eventSource.on(context.event_types.CHAT_CHANGED, rerender);
-      context.eventSource.on(context.event_types.MESSAGE_DELETED, rerender);
+      context.eventSource.on(context.event_types.CHAT_CHANGED, resetAndRerender);
+      context.eventSource.on(context.event_types.MESSAGE_DELETED, resetAndRerender);
       cleanupUiEvents = () => {
         context.eventSource.removeListener?.(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-        context.eventSource.removeListener?.(context.event_types.CHAT_CHANGED, rerender);
-        context.eventSource.removeListener?.(context.event_types.MESSAGE_DELETED, rerender);
+        context.eventSource.removeListener?.(context.event_types.CHAT_CHANGED, resetAndRerender);
+        context.eventSource.removeListener?.(context.event_types.MESSAGE_DELETED, resetAndRerender);
       };
     }
-    if (typeof context.registerDebugFunction === "function") {
+    if (!debugRegistered && typeof context.registerDebugFunction === "function") {
       context.registerDebugFunction(
         "mirror_abyss_diagnostics",
         "Mirror Abyss Diagnostics",
         "Open the Mirror Abyss diagnostics panel",
-        () => openWorkspace("diagnostics")
+        () => {
+          if (!extensionEnabled) throw new Error("\u955C\u6E0A\u63D2\u4EF6\u5F53\u524D\u5DF2\u7981\u7528");
+          openWorkspace("diagnostics");
+        }
       );
+      debugRegistered = true;
     }
     document.querySelector("#ma11-fatal")?.remove();
     state = "ready";
     toast("success", `\u5DF2\u542F\u52A8 ${VERSION}`);
   } catch (error) {
+    if (!extensionEnabled || generation !== lifecycleGeneration) return;
     state = "error";
     lastError = error;
     console.error("[MirrorAbyss] initialization failed", error);
@@ -3911,17 +4544,16 @@ async function cleanData() {
 }
 function onEnable() {
   extensionEnabled = true;
-  setRequestAcceptance(true);
-  taskQueue.setAccepting(true);
   startupAttempts = 0;
-  appReadyHandlerInstalled = false;
   installAppReadyHandler();
 }
 function shutdown() {
+  lifecycleGeneration += 1;
   extensionEnabled = false;
   taskQueue.setAccepting(false);
   setRequestAcceptance(false);
   abortActiveRequests();
+  resetLorebookRuntime();
   cleanupPipeline?.();
   cleanupPanels?.();
   cleanupUiEvents?.();
@@ -3935,11 +4567,13 @@ function shutdown() {
   appReadyHandler = null;
   appReadyHandlerInstalled = false;
   document.querySelector("#ma11-top-button")?.remove();
-  document.querySelector("#ma11-workspace")?.remove();
+  disposeWorkspace();
   document.querySelector("#ma11-settings-root")?.remove();
+  document.querySelector("#ma11-fatal")?.remove();
   document.querySelectorAll(".ma11-message-panel").forEach((element) => element.remove());
-  document.querySelectorAll(".ma11-audit-hidden-message").forEach((element) => {
+  document.querySelectorAll(".ma11-audit-hidden-message, .ma11-audit-marked-message").forEach((element) => {
     element.classList.remove("ma11-audit-hidden-message");
+    element.classList.remove("ma11-audit-marked-message");
   });
   state = "idle";
 }

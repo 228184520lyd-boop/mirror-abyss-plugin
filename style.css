@@ -28,6 +28,31 @@
   display: none !important;
 }
 
+.ma11-audit-hidden-message .mes_text,
+.ma11-audit-hidden-message .mes_reasoning,
+.ma11-audit-hidden-message .mes_reasoning_details,
+.ma11-audit-hidden-message .mes_media_wrapper,
+.ma11-audit-hidden-message .mes_file_wrapper {
+  display: none !important;
+}
+
+.ma11-audit-hidden-message .mes_block::before {
+  content: "镜渊审核未通过，正文已隔离。请查看下方状态条处理。";
+  display: block;
+  margin: 0.5rem 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgb(239 68 68 / 45%);
+  border-radius: 0.55rem;
+  color: #fecaca;
+  background: rgb(127 29 29 / 25%);
+}
+
+.ma11-audit-marked-message .mes_text {
+  border-left: 3px solid var(--ma-danger);
+  padding-left: 0.7rem;
+  background: color-mix(in srgb, var(--ma-danger) 10%, transparent);
+}
+
 .ma11-workspace {
   position: fixed;
   inset: 0;

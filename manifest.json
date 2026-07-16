@@ -5,10 +5,10 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.5",
+  "version": "1.2.0-rc.10",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
-  "minimum_client_version": "1.17.0",
+  "minimum_client_version": "1.16.0",
   "hooks": {
     "install": "onInstall",
     "update": "onUpdate",
