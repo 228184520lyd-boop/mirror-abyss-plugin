@@ -22,14 +22,6 @@ export function getSettings() {
     const migrated = current ?? migrateLegacySettings(legacy);
     context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
     const settings = context.extensionSettings[MODULE_NAME];
-    // rc.12 removes the separate revision pipeline. Drop obsolete settings on upgrade.
-    delete settings.auditFailAction;
-    delete settings.revisionPrompt;
-    delete settings.maxRevisionAttempts;
-    delete settings.stopOnRepeatedViolation;
-    delete settings.revisionFallbackAction;
-    if (settings.connections)
-        delete settings.connections.revision;
     if (String(settings.lorebookLayout) === 'compact')
         settings.lorebookLayout = 'semantic';
     const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles)
@@ -58,6 +50,11 @@ function migrateLegacySettings(legacy) {
         showTopButton: legacy.showTopButton ?? true,
         auditEnabled: legacy.ruleAuditEnabled ?? false,
         auditPrompt: safeText(legacy.ruleAuditPrompt ?? ''),
+        auditFailAction: legacy.ruleAuditFailAction === 'withdraw' ? 'hide' : 'mark',
+        revisionPrompt: safeText(legacy.revisionPrompt ?? ''),
+        maxRevisionAttempts: Number(legacy.maxRevisionAttempts) || 1,
+        stopOnRepeatedViolation: legacy.stopOnRepeatedViolation ?? true,
+        revisionFallbackAction: 'hide',
         autoSmallSummary: legacy.autoSmallSummary ?? true,
         smallSummaryTurns: Number(legacy.smallSummaryTurns) || 15,
         autoLargeSummary: legacy.autoLargeSummary ?? true,
@@ -69,6 +66,7 @@ function migrateLegacySettings(legacy) {
         latestContinuityConstant: legacy.latestContinuityConstant ?? true,
         connections: {
             audit: { mode: legacy.auditProfile ? 'profile' : 'current', profileId: '', profile: safeText(legacy.auditProfile ?? '', 120) },
+            revision: { mode: legacy.revisionProfile ? 'profile' : 'current', profileId: '', profile: safeText(legacy.revisionProfile ?? '', 120) },
             state: { mode: legacy.stateProfile ? 'profile' : 'current', profileId: '', profile: safeText(legacy.stateProfile ?? '', 120) },
             smallSummary: { mode: legacy.smallSummaryProfile ? 'profile' : 'current', profileId: '', profile: safeText(legacy.smallSummaryProfile ?? '', 120) },
             largeSummary: { mode: legacy.largeSummaryProfile ? 'profile' : 'current', profileId: '', profile: safeText(legacy.largeSummaryProfile ?? '', 120) },

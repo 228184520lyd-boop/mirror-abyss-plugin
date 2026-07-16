@@ -20,6 +20,7 @@ ${safeText(raw, 80000)}`;
 }
 const TASK_LABELS = {
     audit: '规则审核',
+    revision: '定向修正（兼容）',
     state: '状态表',
     smallSummary: '小总结',
     largeSummary: '大总结',

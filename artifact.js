@@ -18,6 +18,8 @@ export function createArtifact(message, messageIndex) {
         updatedAt: now,
         stages: {
             audit: idleStage(),
+            // Compatibility stage retained for rc.11 cached UI/modules. Not used by rc.13.
+            revision: idleStage(),
             state: idleStage(),
             summary: idleStage(),
             sync: idleStage(),

@@ -3,6 +3,7 @@ import { beginModelRequest, finishModelRequest } from '../core/requests.js';
 import { parseJsonObject, safeText, toErrorMessage, withTimeout } from '../core/utils.js';
 const TASK_RESPONSE_TOKENS = {
     audit: 4096,
+    revision: 4096,
     state: 4096,
     smallSummary: 2400,
     largeSummary: 3200,

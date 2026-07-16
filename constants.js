@@ -1,8 +1,8 @@
 export const MODULE_NAME = 'mirrorAbyssV11';
 export const LEGACY_MODULE_NAME = 'mirrorAbyss';
 export const DISPLAY_NAME = '镜渊';
-export const VERSION = '1.2.0-rc.12';
-export const PIPELINE_VERSION = 'ma-pipeline-16';
+export const VERSION = '1.2.0-rc.13';
+export const PIPELINE_VERSION = 'ma-pipeline-17';
 export const TABLE_KEYS = [
     'focus',
     'spacetime',
@@ -32,6 +32,13 @@ export const DEFAULT_SETTINGS = {
     showTopButton: true,
     auditEnabled: false,
     auditPrompt: '',
+    // Compatibility-only rc.11 fields. The rc.13 pipeline does not use them,
+    // but keeping them prevents mixed cached modules from failing during upgrade.
+    auditFailAction: 'revise',
+    revisionPrompt: '',
+    maxRevisionAttempts: 1,
+    stopOnRepeatedViolation: true,
+    revisionFallbackAction: 'hide',
     autoSmallSummary: true,
     smallSummaryTurns: 12,
     autoLargeSummary: true,
@@ -46,6 +53,8 @@ export const DEFAULT_SETTINGS = {
     requestTimeoutMs: 90000,
     connections: {
         audit: { mode: 'current', profileId: '', profile: '' },
+        // Compatibility-only; no revision request is issued by the rc.13 pipeline.
+        revision: { mode: 'current', profileId: '', profile: '' },
         state: { mode: 'current', profileId: '', profile: '' },
         smallSummary: { mode: 'current', profileId: '', profile: '' },
         largeSummary: { mode: 'current', profileId: '', profile: '' },
