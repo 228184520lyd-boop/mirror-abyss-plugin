@@ -1,21 +1,18 @@
 <div id="ma11-settings-root" class="ma11-settings-root">
   <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
-      <b>{{title}}</b>
-      <span class="ma11-settings-version">{{version}}</span>
+      <b>镜渊</b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
-    <div class="inline-drawer-content ma11-settings-content">
-      <p>正文准入、活跃表格、阶段总结、长期总结与世界书发布。</p>
-      <label class="ma11-switch">
-        <input type="checkbox" data-ma11-quick-setting="enabled" />
-        <span>启用镜渊</span>
-      </label>
-      <div class="ma11-settings-buttons">
-        <button type="button" class="menu_button" data-ma11-action="open">打开镜渊控制中心</button>
-        <button type="button" class="menu_button" data-ma11-action="diagnostics">运行诊断</button>
+    <div class="inline-drawer-content">
+      <div class="ma11-settings-content">
+        <label class="checkbox_label">
+          <input type="checkbox" data-ma11-quick-setting="enabled">
+          <span>启用镜渊</span>
+        </label>
+        <button class="menu_button" type="button" data-ma11-action="open">打开镜渊工作区</button>
+        <button class="menu_button" type="button" data-ma11-action="diagnostics">运行诊断</button>
       </div>
-      <small>模型可使用当前正文连接，或按 Connection Profile ID 调用同一 API 下的其他模型。镜渊不切换全局连接、不保存密钥；关系图谱只读。</small>
     </div>
   </div>
 </div>
