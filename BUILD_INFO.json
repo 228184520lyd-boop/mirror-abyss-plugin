@@ -1,12 +1,12 @@
 {
   "name": "Mirror Abyss / 镜渊",
-  "version": "1.1.0-rc.4.1",
+  "version": "1.1.0-rc.4.2",
   "core_bundle_version": "1.1.0-rc.3",
   "product_layer": "finalizer.js",
   "style_layer": "final-style.css",
   "baseline_commit": "366a19cc6cbeeb6d4fc1ea2e82d8d81fa988b12f",
-  "build_date": "2026-07-15",
-  "build_type": "product closure hotfix overlay",
+  "build_date": "2026-07-16",
+  "build_type": "summary safe-batching hotfix overlay",
   "history_policy": "persisted-state-authoritative-and-future-only",
   "pipeline_contract": [
     "assistant_final_text",
@@ -26,35 +26,45 @@
     "stream_aggregation": true
   },
   "closure_changes": [
-    "load the existing bundled core through a deterministic one-marker hotfix loader",
-    "add the missing byId map to the fact-package index returned to small-summary batching",
-    "refuse startup when the expected marker is ambiguous instead of silently patching an unknown location",
-    "remove disabled history rebuild actions from the public recovery API",
-    "show the four processing layers and runtime scope in the workspace",
-    "improve mobile full-screen layout, touch targets, form sizing and focus visibility",
-    "align manifest, README, build information and product contract",
-    "keep concepts as architectural constraints rather than narrative hard-coding"
+    "preserve the rc.4.1 fact-index byId correction",
+    "reduce the small-summary total input budget from 12000 to 5000 characters",
+    "change the default small-summary trigger from 15 to 7 turns",
+    "change the default large-summary trigger from 6 to 4 committed small summaries",
+    "migrate only the old default 15/6 values once while preserving other user-customized thresholds",
+    "re-budget saved failed small-summary queues under the existing checkpoint restore path",
+    "print the exact current-batch source_fact_ids and source_row_ids allowlist before summary evidence",
+    "keep strict evidence-boundary validation and reject copied old-event or invented source IDs",
+    "preserve storage schema, current summaries, tables, event registry and lorebook state"
   ],
   "validation": [
-    "core hotfix fixture test confirms exactly one marker replacement",
-    "idempotency test accepts an already-fixed core without applying a second patch",
-    "ambiguous-marker test refuses startup instead of patching an unknown location",
+    "all eight exact core patches apply once and are idempotent",
+    "ambiguous or missing patch markers refuse startup",
     "ES module syntax checks for core-hotfix.js and finalizer.js",
-    "Chromium integration test executes fetch, exact replacement and blob-module import against a mock core",
-    "manifest and build metadata JSON parse",
-    "archive integrity and required-file inspection",
-    "no storage schema, prompt, protocol, API key or transport changes"
+    "manifest, build and rollback metadata JSON parse",
+    "fixture confirms 5000-character budget, 7-turn small summary and 4-summary large summary",
+    "fixture confirms exact source ID allowlist is inserted before batch evidence",
+    "archive contains no empty index.js and therefore cannot overwrite the installed core",
+    "no storage deletion, history replay, API credential or worldbook schema change"
   ],
   "limitations": [
-    "the repository contains a built deployment bundle rather than the original TypeScript source project",
-    "the inactive historical rebuild implementation remains inside the core bundle but has no product UI or public recovery entry",
-    "real SillyTavern mobile and provider-network validation is still required"
+    "the patch targets the known rc.3/rc.4 bundled core markers and stops when they do not match",
+    "provider-specific instruction following still requires a real SillyTavern summary run",
+    "custom thresholds other than the old defaults 15/6 are intentionally preserved"
   ],
   "hotfix": {
-    "id": "summary-fact-index-by-id",
-    "root_cause": "buildFactPackageIndex created byId but omitted it from the returned fact index; mergeSmallSummaryWorkUnits then called factIndex.byId.get",
-    "fix": "return byId together with packages, byMessageKey and stageSnapshots before loading the bundled core",
-    "data_migration": false,
-    "prompt_or_protocol_change": false
+    "id": "summary-safe-batching-rc42",
+    "root_causes": [
+      "large small-summary inputs increase source-ID copying and fabrication errors",
+      "the prompt showed valid IDs inside long evidence sections rather than as a single explicit allowlist",
+      "old default thresholds could remain persisted after an overlay update"
+    ],
+    "settings": {
+      "smallSummaryTurns": 7,
+      "largeSummaryCount": 4,
+      "maxInputChars": 5000
+    },
+    "strict_evidence_validation": true,
+    "data_migration": "one-time settings-only migration for exact old defaults 15/6",
+    "storage_schema_change": false
   }
 }

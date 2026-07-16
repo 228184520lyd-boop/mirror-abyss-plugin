@@ -9,7 +9,7 @@ function showHotfixFatal(error) {
     button.id = 'ma11-hotfix-fatal';
     button.className = 'ma11-fatal';
     button.type = 'button';
-    button.textContent = '镜渊总结热修复启动失败｜查看控制台';
+    button.textContent = '镜渊总结安全批次热修复启动失败｜查看控制台';
     button.title = error instanceof Error ? error.message : String(error);
     button.addEventListener('click', () => console.error('[MirrorAbyss] hotfix failure detail', error));
     document.body.appendChild(button);
@@ -26,7 +26,7 @@ try {
   throw error;
 }
 
-const PRODUCT_VERSION = '1.1.0-rc.4.1';
+const PRODUCT_VERSION = '1.1.0-rc.4.2';
 const PRODUCT_STAGE = 'product-closure';
 
 const PRODUCT_CONTRACT = Object.freeze({
@@ -94,7 +94,7 @@ function createStatusRail(shell) {
   rail.setAttribute('aria-label', '镜渊运行结构');
   rail.innerHTML = `
     <div class="ma11-product-runtime">
-      <span class="ma11-product-kicker">镜渊 ${PRODUCT_VERSION} · 总结热修复</span>
+      <span class="ma11-product-kicker">镜渊 ${PRODUCT_VERSION} · 5K 安全批次</span>
       <strong data-ma-runtime aria-live="polite">等待核心</strong>
       <span data-ma-scope>聊天作用域待确认</span>
     </div>
