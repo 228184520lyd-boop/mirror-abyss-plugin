@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.10.1",
+  "version": "1.2.0-rc.10.2",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊 rc.10 最小修复版：单次审核、九表提示词收敛、世界书即时刷新。"
+  "description": "镜渊源码重构版：使用 SillyTavern 原生事件、连接、聊天保存和世界书能力。"
 }

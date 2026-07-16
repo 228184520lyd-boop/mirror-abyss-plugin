@@ -2,7 +2,7 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.10.1";
+var VERSION = "1.2.0-rc.10";
 var PIPELINE_VERSION = "ma-pipeline-14";
 var TABLE_KEYS = [
   "focus",
@@ -886,20 +886,38 @@ async function generateStructuredTask(options) {
 
 // src/prompts/audit.ts
 function auditSystemPrompt() {
-  return `你是“镜渊”正文审核器。审核标准完全由玩家填写的【玩家审核规则】决定；不要增加、删减或解释玩家规则。
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u89C4\u5219\u5BA1\u6838\u5668\u3002\u4F60\u53EA\u68C0\u67E5\u7ED9\u5B9AAI\u6B63\u6587\u662F\u5426\u8FDD\u53CD\u73A9\u5BB6\u63D0\u4F9B\u7684\u786C\u6027\u89C4\u5219\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u6DA6\u8272\uFF0C\u4E0D\u66FF\u6B63\u6587\u8FA9\u62A4\u3002
 
-你的任务只有两种结果：
-1. 正文没有违反玩家规则，只输出：
-MA_OK
-2. 正文违反玩家规则，直接完成必要修正，只输出：
-MA_REVISED
-随后输出修正后的完整正文。
+\u5FC5\u987B\u53EA\u8F93\u51FA\u4E00\u4E2AJSON\u5BF9\u8C61\uFF0C\u7ED3\u6784\u5982\u4E0B\uFF1A
+{
+  "result": "pass | revise | block",
+  "reason": "\u4E00\u53E5\u8BDD\u7ED3\u8BBA",
+  "violations": [
+    {
+      "ruleId": "\u7A33\u5B9A\u3001\u7B80\u77ED\u7684\u89C4\u5219\u7F16\u53F7",
+      "rule": "\u88AB\u8FDD\u53CD\u7684\u89C4\u5219",
+      "evidence": "\u6B63\u6587\u4E2D\u7684\u5177\u4F53\u8FDD\u89C4\u7247\u6BB5\u6216\u51C6\u786E\u6982\u8FF0",
+      "action": "\u5E94\u5982\u4F55\u4FEE\u6539\uFF0C\u5FC5\u987B\u5177\u4F53\u53EF\u6267\u884C"
+    }
+  ],
+  "preserve": ["\u4FEE\u6B63\u65F6\u5FC5\u987B\u4FDD\u7559\u7684\u5916\u90E8\u4E8B\u5B9E"],
+  "rewriteInstruction": "\u7ED9\u4FEE\u6B63\u6587\u6A21\u578B\u7684\u4E00\u6BB5\u5B8C\u6574\u6307\u4EE4",
+  "replacementText": "\u53EF\u9009\uFF1B\u82E5\u80FD\u4E25\u683C\u6700\u5C0F\u4FEE\u6B63\uFF0C\u5219\u76F4\u63A5\u7ED9\u51FA\u53EF\u66FF\u6362\u539F\u6587\u7684\u5B8C\u6574\u6B63\u6587"
+}
 
-要求：
-- 只检查给定的待审核正文，不续写故事，不输出审核过程。
-- 修正时只修改违反玩家规则的部分，保留已经成立的外部事实、NPC行为、事件顺序、文风和段落结构。
-- 修正版必须是可直接替换原消息的完整正文，不能只给修改建议或局部片段。
-- 不输出JSON、Markdown代码块、标题、解释或其他标记。`;
+\u5224\u5B9A\u6807\u51C6\uFF1A
+- pass\uFF1A\u6CA1\u6709\u660E\u786E\u8FDD\u89C4\u3002
+- revise\uFF1A\u53EF\u4EE5\u5728\u4E0D\u6539\u53D8\u5DF2\u7ECF\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u4EF6\u3001NPC\u884C\u4E3A\u548C\u4E8B\u4EF6\u987A\u5E8F\u7684\u524D\u63D0\u4E0B\u5B9A\u5411\u4FEE\u6B63\u3002
+- block\uFF1A\u6574\u6BB5\u5185\u5BB9\u5EFA\u7ACB\u5728\u8FDD\u89C4\u524D\u63D0\u4E0A\uFF0C\u65E0\u6CD5\u5C40\u90E8\u4FEE\u6B63\u800C\u4E0D\u91CD\u6784\u5267\u60C5\u3002
+
+\u89C4\u5219\uFF1A
+1. \u53EA\u5217\u51FA\u6709\u660E\u786E\u8BC1\u636E\u7684\u8FDD\u89C4\u3002
+2. evidence\u5FC5\u987B\u8DB3\u4EE5\u8BA9\u4FEE\u6B63\u6587\u6A21\u578B\u5B9A\u4F4D\u95EE\u9898\u3002
+3. action\u5FC5\u987B\u8BF4\u660E\u201C\u5220\u4EC0\u4E48\u3001\u4FDD\u7559\u4EC0\u4E48\u3001\u7528\u4EC0\u4E48\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u66FF\u4EE3\u201D\uFF0C\u4E0D\u80FD\u53EA\u5199\u201C\u4E0D\u8981\u8FDD\u89C4\u201D\u3002
+4. preserve\u53EA\u5199\u5DF2\u7ECF\u6210\u7ACB\u4E14\u4E0D\u80FD\u88AB\u4FEE\u6B63\u6A21\u578B\u6539\u52A8\u7684\u5916\u90E8\u4E8B\u5B9E\u3002
+5. pass\u65F6violations\u5FC5\u987B\u4E3A\u7A7A\uFF0CrewriteInstruction\u53EF\u4E3A\u7A7A\u3002
+6. revise \u65F6\u53EF\u4EE5\u76F4\u63A5\u63D0\u4F9B replacementText\uFF1B\u5B83\u5FC5\u987B\u662F\u5B8C\u6574\u6B63\u6587\uFF0C\u4E14\u53EA\u80FD\u4FEE\u6539\u8FDD\u89C4\u90E8\u5206\u3002
+7. \u4E0D\u8F93\u51FAMarkdown\u4EE3\u7801\u5757\uFF0C\u4E0D\u8F93\u51FAJSON\u4EE5\u5916\u7684\u6587\u5B57\u3002`;
 }
 function auditUserPrompt(rulePrompt, playerText, assistantText) {
   return `\u3010\u73A9\u5BB6\u5BA1\u6838\u89C4\u5219\u3011
@@ -965,44 +983,56 @@ function resultFingerprint(violations) {
   return normalized ? hashText(normalized) : "";
 }
 function parseAuditResult(raw) {
-  let text = safeText(raw, 2e5).replace(/^\uFEFF/, "").trim();
-  const fenced = text.match(/^```(?:text|markdown)?\s*([\s\S]*?)\s*```$/i);
-  if (fenced) text = fenced[1].trim();
-  const lines = text.replace(/\r/g, "").split("\n");
-  const first = (lines[0] || "").trim();
-  const upper = first.toUpperCase();
-  if (upper === "MA_OK") {
+  const text = safeText(raw, 1e5).trim();
+  try {
+    const data = parseJsonObject(text);
+    const decision = ["pass", "revise", "block"].includes(String(data.result)) ? String(data.result) : "revise";
+    const violations = violationList(data.violations);
+    const passed = decision === "pass";
     return {
-      passed: true,
-      decision: "pass",
-      reason: "通过",
-      violations: [],
-      preserve: [],
-      rewriteInstruction: "",
-      violationFingerprint: ""
+      passed,
+      decision,
+      reason: safeText(data.reason, 3e3).trim() || (passed ? "\u901A\u8FC7" : "\u8FDD\u53CD\u89C4\u5219"),
+      violations: passed ? [] : violations,
+      preserve: list(data.preserve),
+      rewriteInstruction: safeText(data.rewriteInstruction, 6e3).trim(),
+      violationFingerprint: passed ? "" : resultFingerprint(violations),
+      replacementText: !passed && decision === "revise" ? safeText(data.replacementText ?? data.finalText, 2e5).trim() || void 0 : void 0
     };
+  } catch {
+    const lines = text.replace(/\r/g, "").split("\n");
+    const first = (lines[0] || "").trim().toUpperCase();
+    const reason = lines.slice(1).join("\n").trim();
+    if (first === "MA_OK") {
+      return {
+        passed: true,
+        decision: "pass",
+        reason: reason || "\u901A\u8FC7",
+        violations: [],
+        preserve: [],
+        rewriteInstruction: "",
+        violationFingerprint: ""
+      };
+    }
+    if (first === "MA_FAIL") {
+      const violations = [{
+        ruleId: "legacy_failure",
+        rule: "\u5BA1\u6838\u6A21\u578B\u5224\u5B9A\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219",
+        evidence: reason || "\u672A\u7ED9\u51FA\u5177\u4F53\u8BC1\u636E",
+        action: reason || "\u4F9D\u636E\u73A9\u5BB6\u89C4\u5219\u5B9A\u5411\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9"
+      }];
+      return {
+        passed: false,
+        decision: "revise",
+        reason: reason || "\u8FDD\u53CD\u89C4\u5219",
+        violations,
+        preserve: [],
+        rewriteInstruction: reason || "\u53EA\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9\uFF0C\u4E0D\u6539\u53D8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E\u3002",
+        violationFingerprint: resultFingerprint(violations)
+      };
+    }
+    throw new Error("\u89C4\u5219\u5BA1\u6838\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548JSON\u3001MA_OK\u6216MA_FAIL");
   }
-  let replacementText = "";
-  if (upper === "MA_REVISED") {
-    replacementText = lines.slice(1).join("\n").trim();
-  } else if (/^【修正提示】/.test(first)) {
-    replacementText = lines.slice(1).join("\n").trim();
-  } else if (upper === "MA_FAIL") {
-    replacementText = lines.slice(1).join("\n").trim();
-  } else {
-    throw new Error("规则审核模型未返回 MA_OK 或 MA_REVISED");
-  }
-  if (!replacementText) throw new Error("规则审核模型声明需要修正，但没有返回完整修正版正文");
-  return {
-    passed: false,
-    decision: "revise",
-    reason: "发现违规并返回完整修正版",
-    violations: [],
-    preserve: [],
-    rewriteInstruction: "",
-    violationFingerprint: hashText(replacementText),
-    replacementText
-  };
 }
 function findMessageElement(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
@@ -1012,17 +1042,59 @@ function applyAuditVisibility(index, hidden, marked = false) {
   element?.classList.toggle("ma11-audit-hidden-message", hidden);
   element?.classList.toggle("ma11-audit-marked-message", !hidden && marked);
 }
+function cleanSingleAuditOutput(raw) {
+  let text = safeText(raw, 2e5).trim();
+  const fenced = text.match(/^```(?:markdown|text)?\s*([\s\S]*?)```$/i);
+  if (fenced) text = fenced[1].trim();
+  return text;
+}
+function parseSingleAuditOutput(raw) {
+  const text = cleanSingleAuditOutput(raw);
+  if (!text) throw new Error("审核模型返回为空");
+  const lines = text.replace(/\r/g, "").split("\n");
+  const first = (lines[0] || "").trim();
+  const upper = first.toUpperCase();
+  if (upper === "MA_OK" || upper.startsWith("MA_OK ") || upper.startsWith("MA_OK：") || upper.startsWith("MA_OK:")) {
+    return { passed: true, revised: false, reason: lines.slice(1).join("\n").trim() || "审核通过" };
+  }
+  if (upper === "MA_REVISED" || upper.startsWith("MA_REVISED ") || upper.startsWith("MA_REVISED：") || upper.startsWith("MA_REVISED:")) {
+    const replacementText = lines.slice(1).join("\n").trim();
+    if (!replacementText) throw new Error("审核模型声明已修正，但没有返回完整修正版正文");
+    return { passed: true, revised: true, reason: "审核发现问题并已修正", replacementText };
+  }
+  if (/^【?修正提示】?/i.test(first) || /^【?修正版(?:正文)?】?/i.test(first) || /^修正后的完整正文\s*[:：]?/i.test(first)) {
+    const replacementText = lines.slice(1).join("\n").trim();
+    if (!replacementText) throw new Error("审核模型给出了修正提示，但没有返回完整修正版正文");
+    return { passed: true, revised: true, reason: "审核发现问题并已修正", replacementText };
+  }
+  throw new Error(`审核模型返回格式无法识别。必须返回 MA_OK，或 MA_REVISED 后跟完整修正版正文。返回片段：${text.replace(/\s+/g, " ").slice(0, 240)}`);
+}
 async function auditText(playerRules, playerText, assistantText) {
+  const systemPrompt = `${String(playerRules || "").trim()}
+
+【镜渊审核执行协议】
+你只检查下面提供的最新AI正文是否违反上面的玩家审核规则。
+不得续写，不得解释审核过程，不得输出JSON，不得调用其他规则。
+
+没有违反玩家规则时，只输出：
+MA_OK
+
+存在违反玩家规则时，直接完成最小必要修正，并输出：
+MA_REVISED
+随后输出修正后的完整正文。
+
+修正版必须是可以直接替换原正文的完整文本，不能只给意见、片段或说明。`;
+  const prompt = `【玩家本轮输入】
+${playerText || "（空）"}
+
+【待审核的最新AI正文】
+${assistantText}`;
   const raw = await generateTask({
     task: "audit",
-    systemPrompt: auditSystemPrompt(),
-    prompt: auditUserPrompt(playerRules, playerText, assistantText)
+    systemPrompt,
+    prompt
   });
-  try {
-    return parseAuditResult(raw);
-  } catch (error) {
-    throw new Error(`规则审核返回格式无效（${describeTaskConnection("audit")}）。${toErrorMessage(error)}；返回片段：${jsonPreview(raw)}`);
-  }
+  return parseSingleAuditOutput(raw);
 }
 async function applyAuditFailureAction(artifact, action) {
   if (action === "mark") {
@@ -1064,43 +1136,48 @@ async function runAudit(artifact, force = false) {
     return artifact.audit;
   }
   markStage(artifact, "audit", "running");
+  markStage(artifact, "revision", "skipped");
+  artifact.hiddenByAudit = false;
+  applyAuditVisibility(artifact.messageIndex, false, false);
   await putArtifact(artifact);
   try {
-    let result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText);
+    console.info("[MirrorAbyss] single audit started", { messageIndex: artifact.messageIndex });
+    const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText);
     assertArtifactCommitCurrent(artifact);
-    artifact.audit = result;
-    if (!result.passed && result.replacementText) {
+    if (result.revised) {
       await replaceMessageInPlace(artifact, result.replacementText);
-      result = {
-        ...result,
-        passed: true,
-        decision: "revised",
-        reason: "发现违规，已使用审核模型返回的完整正文原位替换",
-        replacementText: void 0
-      };
-      artifact.audit = result;
-    }
-    if (result.passed) {
-      artifact.approvedFingerprint = artifact.sourceFingerprint;
-      artifact.hiddenByAudit = false;
-      applyAuditVisibility(artifact.messageIndex, false, false);
-      markStage(artifact, "audit", "success");
-      markStage(artifact, "revision", "skipped");
     } else {
-      markStage(artifact, "audit", "blocked", result.reason);
+      artifact.approvedFingerprint = artifact.sourceFingerprint;
     }
+    artifact.audit = {
+      passed: true,
+      decision: result.revised ? "revise" : "pass",
+      reason: result.reason,
+      violations: [],
+      preserve: [],
+      rewriteInstruction: "",
+      violationFingerprint: "",
+      replacementText: result.revised ? result.replacementText : void 0
+    };
+    artifact.hiddenByAudit = false;
+    applyAuditVisibility(artifact.messageIndex, false, false);
+    markStage(artifact, "audit", "success");
+    markStage(artifact, "revision", "skipped");
     const message = getMessage(artifact.messageIndex);
     if (!message) throw new Error("原AI正文已不存在，请重新整理");
     attachArtifactToMessage(message, artifact);
     await persistChat();
     await putArtifact(artifact);
-    return result;
+    console.info("[MirrorAbyss] single audit finished", { messageIndex: artifact.messageIndex, revised: result.revised });
+    return artifact.audit;
   } catch (error) {
     markStage(artifact, "audit", "failed", toErrorMessage(error));
+    markStage(artifact, "revision", "skipped");
     await putArtifact(artifact);
     throw error;
   }
 }
+
 // src/core/message-update.ts
 function updateActiveSwipe(message, text) {
   if (!Array.isArray(message?.swipes)) return;
@@ -1622,14 +1699,9 @@ async function resolveBookName(create, artifact) {
 function managedInfo(entry) {
   return entry?.extensions?.mirrorAbyssV11 ?? null;
 }
-async function reloadWorldInfoEditor(wi, name) {
-  if (typeof wi.updateWorldInfoList === "function") {
-    await wi.updateWorldInfoList();
-  }
+function reloadWorldInfoEditor(wi, name) {
   const reload = wi.reloadEditor ?? wi.reloadWorldInfoEditor;
-  if (typeof reload === "function") {
-    await reload.call(wi, name, true);
-  }
+  if (typeof reload === "function") reload.call(wi, name);
 }
 function applyEntry(entry, chatKey, key, spec, wi) {
   entry.comment = spec.comment;
@@ -1729,7 +1801,7 @@ async function syncLorebook(artifact, force = false) {
     assertArtifactCommitCurrent(artifact);
     if (changed) {
       await wi.saveWorldInfo(name, data, true);
-      await reloadWorldInfoEditor(wi, name);
+      reloadWorldInfoEditor(wi, name);
     }
     assertArtifactCommitCurrent(artifact);
     artifact.lorebookEntryIds = entryIds;
@@ -1770,7 +1842,7 @@ async function clearCurrentChatLorebookEntries(chatKey = currentChatKey()) {
   if (removed) {
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
     await wi.saveWorldInfo(name, data, true);
-    await reloadWorldInfoEditor(wi, name);
+    reloadWorldInfoEditor(wi, name);
   }
   return removed;
 }
@@ -1797,7 +1869,7 @@ async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
   if (changed) {
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
     await wi.saveWorldInfo(name, data, true);
-    await reloadWorldInfoEditor(wi, name);
+    reloadWorldInfoEditor(wi, name);
   }
   return managed;
 }
@@ -2171,18 +2243,16 @@ function decideSmallSummary(allArtifacts, pendingArtifacts, configuredMaxTurns) 
 
 // src/prompts/summary.ts
 function smallSummarySystemPrompt() {
-  return `你是镜渊阶段沉降总结器。只输出合法JSON对象，不续写故事，不把未确认事项写成事实。
-输出字段：title、summary、keywords、sedimentation。
-sedimentation包含：removeRowIds、characterActivityUpdates、notes。
-
-小总结负责压缩已经发生的事件和阶段结果，不重新提取九张状态表，也不补写正文没有出现的信息。
-- summary保留：确定结果、不可逆变化、仍未解决的事项、持续影响、人物回流条件和可追溯痕迹。
-- 已被最终结果替代的过程可以压缩；仍在进行、存在冲突或证据不足的事项不得强行闭合。
-- removeRowIds只允许填写当前状态表中确实存在、且已明确结束、失效、被替代或归档的spacetime/events/regions行ID。没有充分依据时返回空数组。
-- 不得删除focus、characters、relationships、items、skills、foundations。
-- characterActivityUpdates只在文本明确表现出时间推进和人物长期离开时使用；不能仅因数轮未出现就自动降级。允许的变化只有“离场但仍活跃→休眠”“休眠→长期休眠”“长期休眠→已归档”。
-- 正式人物不因离场、遗忘、死亡或长期未出现而删除；玩家手动或锁定记录不得修改。
-- 不需要沉降时，removeRowIds和characterActivityUpdates都输出空数组。`;
+  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u4E8B\u5B9E\u3002
+\u8F93\u51FA\u5B57\u6BB5\uFF1Atitle\u3001summary\u3001keywords\u3001sedimentation\u3002
+sedimentation\u5305\u542B\uFF1AremoveRowIds\u3001characterActivityUpdates\u3001notes\u3002
+\u4F60\u53EA\u63D0\u51FA\u5B89\u5168\u6C89\u964D\uFF1A
+- removeRowIds\u53EA\u80FD\u9009\u62E9\u5DF2\u7ECF\u7ED3\u675F\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684spacetime/events/regions\u884Cid\u3002
+- \u4E0D\u5F97\u5220\u9664focus\u3001characters\u3001relationships\u3001items\u3001skills\u3001foundations\u3002
+- \u6B63\u5F0F\u4EBA\u7269\u6C38\u4E0D\u56E0\u79BB\u573A\u3001\u9057\u5FD8\u3001\u6B7B\u4EA1\u6216\u957F\u671F\u672A\u51FA\u73B0\u800C\u5220\u9664\u3002
+- characterActivityUpdates\u53EA\u5141\u8BB8\u628A\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\uFF0C\u4E0D\u5F97\u6539\u53D8\u5B58\u5728\u72B6\u6001\u548C\u8BB0\u5FC6\u72B6\u6001\u3002
+- \u73A9\u5BB6\u624B\u52A8\u6216\u9501\u5B9A\u8BB0\u5F55\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
+- summary\u6B63\u6587\u5FC5\u987B\u660E\u786E\u5199\u5165\u88AB\u6C89\u964D\u7684\u4E8B\u5B9E\u3001\u4ECD\u4FDD\u7559\u7684\u672A\u51B3\u4E8B\u9879\u548C\u4EBA\u7269\u56DE\u6D41\u6761\u4EF6\u3002`;
 }
 function smallSummaryPrompt(transcript, snapshot) {
   return `\u5C06\u4EE5\u4E0B\u56DE\u5408\u538B\u7F29\u6210\u201C\u5F53\u524D\u5468\u671F\u5C0F\u603B\u7ED3\u201D\uFF0C\u627F\u62C5\u9636\u6BB5\u6C89\u964D\uFF0C\u4E0D\u662F\u6D41\u6C34\u8D26\u3002
@@ -2199,28 +2269,28 @@ ${JSON.stringify(snapshot, null, 2)}
 {"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["\u5DF2\u7ED3\u675F\u72B6\u6001\u884Cid"],"characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884Cid","activity":"\u4F11\u7720\u6216\u957F\u671F\u4F11\u7720\u6216\u5DF2\u5F52\u6863","reason":"\u4F9D\u636E"}],"notes":["\u6C89\u964D\u8BF4\u660E"]}}`;
 }
 function largeSummarySystemPrompt() {
-  return "你是镜渊长期沉降总结器。只输出合法JSON对象，字段为 title、summary、keywords。当前状态表和本批小总结优先于旧长期总结；不得把已经沉降、删除或模糊化的旧细节重新恢复。输出必须是累计长期快照，不续写，不猜测。";
+  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002\u8F93\u51FA\u5FC5\u987B\u662F\u7D2F\u8BA1\u957F\u671F\u5FEB\u7167\uFF0C\u800C\u4E0D\u662F\u53EA\u590D\u8FF0\u672C\u6279\u5C0F\u603B\u7ED3\u3002";
 }
 function largeSummaryPrompt(summaries, snapshot, previousLarge) {
-  const source = summaries.map((item) => `【${item.title}】
+  const source = summaries.map((item) => `\u3010${item.title}\u3011
 ${item.summary}`).join("\n\n");
-  const previous = previousLarge ? `【上一版长期沉降】
+  const previous = previousLarge ? `\u3010\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u3011
 ${previousLarge.summary}
 
 ` : "";
-  return `把“上一版长期沉降”和本批小总结合并为一份新的累计长期沉降。
-以当前状态表和本批小总结为最新事实来源：新信息覆盖旧信息；小总结已经压缩或省略的细节不得从旧长期总结中恢复。
-保留长期仍成立的人物、关系、区域、重要物品、已确认技能、事件结果、不可逆后果、未决事项和持续痕迹；删除已失去长期意义的阶段过程。
-人物死亡、失踪、被遗忘、身份存疑等必须保留证据等级和遗留因果，不得用“长期未出现”替代死亡判断。
+  return `\u628A\u201C\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u201D\u548C\u672C\u6279\u5C0F\u603B\u7ED3\u5408\u5E76\u4E3A\u4E00\u4EFD\u65B0\u7684\u7D2F\u8BA1\u957F\u671F\u6C89\u964D\u3002
+\u4FDD\u7559\u957F\u671F\u4ECD\u6210\u7ACB\u7684\u4EBA\u7269\u3001\u5173\u7CFB\u3001\u533A\u57DF\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u4E8B\u4EF6\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u540E\u679C\u4E0E\u672A\u51B3\u4E8B\u9879\uFF1B\u5220\u9664\u5DF2\u7ECF\u5931\u53BB\u610F\u4E49\u7684\u9636\u6BB5\u8FC7\u7A0B\u3002
+\u4EBA\u7269\u6B7B\u4EA1\u3001\u5931\u8E2A\u3001\u88AB\u9057\u5FD8\u3001\u8EAB\u4EFD\u5B58\u7591\u7B49\u5FC5\u987B\u4FDD\u7559\u8BC1\u636E\u7B49\u7EA7\u548C\u9057\u7559\u56E0\u679C\uFF0C\u4E0D\u5F97\u7528\u957F\u671F\u672A\u51FA\u73B0\u66FF\u4EE3\u6B7B\u4EA1\u5224\u65AD\u3002
 
-${previous}【本批小总结】
+${previous}\u3010\u672C\u6279\u5C0F\u603B\u7ED3\u3011
 ${source}
 
-【当前状态表】
+\u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
 ${JSON.stringify(snapshot, null, 2)}
 
-只输出：{"title":"...","summary":"...","keywords":["..."]}`;
+\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
 }
+
 // src/pipeline/summary.ts
 function successfulArtifacts() {
   const chatKey = currentChatKey();
@@ -2394,40 +2464,53 @@ function normalizeFactPackage(value, sourceMessageKey) {
 
 // src/prompts/state.ts
 function stateSystemPrompt() {
-  return `你是“镜渊”状态表维护器，不是正文总结器。根据上一份状态表、玩家本轮输入和AI本轮正文，输出标准化事实与更新后的完整状态快照。只输出合法JSON对象，不续写、不评价、不猜测。
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\u3002\u4F60\u5148\u628A\u672C\u8F6E\u6B63\u6587\u6807\u51C6\u5316\u4E3A\u4E8B\u5B9E\uFF0C\u518D\u4F9D\u636E\u8FD9\u4E9B\u4E8B\u5B9E\u7EF4\u62A4\u5F53\u524D\u4E16\u754C\u72B6\u6001\uFF1B\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
 
-输出根字段固定为：turnSummary、facts、snapshot。
-snapshot必须包含九个数组：focus、spacetime、characters、relationships、items、skills、events、regions、foundations。
-每行沿用字段：id、title、content、keywords、status；focus与characters另含lifecycle。未变化的旧行原样保留；只有明确变化时才更新。不要为了换一种说法而重写旧行。
+\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u88AB JSON.parse \u89E3\u6790\u7684\u5B8C\u6574JSON\u5BF9\u8C61\uFF0C\u4E0D\u8981\u8F93\u51FAMarkdown\u3001\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\u3002
+\u6839\u8282\u70B9\u5FC5\u987B\u5305\u542B turnSummary\u3001facts\u3001snapshot\u3002
+snapshot \u5FC5\u987B\u5305\u542B\u4E5D\u4E2A\u6570\u7EC4\uFF1Afocus\u3001spacetime\u3001characters\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\u3001foundations\u3002
+\u6BCF\u884C\u5141\u8BB8\u5B57\u6BB5\uFF1Aid\u3001title\u3001content\u3001keywords\u3001status\uFF1Bfocus\u4E0Echaracters\u8FD8\u5141\u8BB8 lifecycle\u3002
 
-通用规则：
-1. 表格不是正文摘要。临时动作、环境细节和一次性对白留在turnSummary，不因“出现过”就进入长期表格。
-2. 只记录正文明确呈现、记录明确确认或玩家明确声明的事实。传闻、单方陈述和推测必须降低confidence，不得补全未知信息。
-3. 新对象无法满足对应表的核心条件时，不新增行。已有同一对象时更新原ID，不创建近义重复行。
-4. 玩家输入中的动作和对白可视为已声明行为；玩家预设的外部结果必须以AI正文实际呈现为准。
-5. source=manual或locked=true的记录不得覆盖、删除或改写。
-6. facts只写本轮新增、改变、结束或确认的事实；snapshot则输出九表完整当前状态。
+facts \u4E2D\u6BCF\u6761\u4E8B\u5B9E\u5B57\u6BB5\uFF1A
+- id\uFF1A\u7A33\u5B9A\u4E8B\u5B9EID\u3002
+- type\uFF1Afocus\u3001spacetime\u3001character\u3001relationship\u3001item\u3001skill\u3001event\u3001region\u3001foundation\u3001historical\u3001trace\u3002
+- entityId\uFF1A\u5BF9\u5E94\u5BF9\u8C61\u7684\u7A33\u5B9AID\uFF1B\u540C\u4E00\u5BF9\u8C61\u6CBF\u7528\u65E7ID\u3002
+- title\u3001content\u3001status\u3001keywords\u3002
+- operation\uFF1Acreate\u3001update\u3001append\u3001close\u3001supersede\u3002
+- confidence\uFF1Aconfirmed\u3001recorded\u3001reported\u3001uncertain\u3002
 
-九表填写规则：
-- focus｜当前焦点：最多一行。title写焦点姓名或稳定称呼；content依次写稳定身份、具体位置、外部可观察状态、持有资源、当前现实限制；status写当前行动接触面。不得写心理、意图或替焦点决定。当前焦点不得同时出现在characters。
-- spacetime｜时间与地点：最多一行。title写“日期时间｜具体地点”；content只写在场主体、当前场景或制度接口、仍有效的时间窗口；status写场景是否持续。普通光线、声音、人流等短暂环境细节不长期保存。
-- characters｜人物：title写明确姓名或稳定代号；content依次写稳定身份、当前位置或去向、持续事务、已显影状态、重要已知事实。新增人物至少需要“明确对象＋稳定身份＋持续事务或持续影响”。路人、群体、泛称工作人员、只出现一句话的人、仅被提及的人不单独建行。
-- relationships｜关系：title必须写“主体A ↔ 主体B”；content写关系性质、当前状态、持续影响和显影依据；status写关系是否持续、紧张、断裂或未确认。一次礼貌、争执、拒绝或普通办事接触不自动构成长期关系。
-- items｜物品与资源：title写重要物品或“主体｜物品与资源”；content写持有者、精确位置、数量或状态、关键用途、追踪价值；status写可用、消耗、遗失、损坏、转移等。普通背景物件不建行，只有身份独特、数量/所有权需追踪、作为证据/钥匙/稀缺资源/回流载体的物品才长期记录。
-- skills｜技能与权限：title写“主体｜技能与能力”；content写已确认表现、使用条件、消耗和限制；status写掌握或可用程度。一次偶然成功不证明稳定技能，不生成隐藏能力。
-- events｜事件与流程：title使用“事件｜名称”或“流程｜名称”；content写参与主体、起因、当前阶段、未解决状态、推进或结束条件、外部载体；status写进行中、暂停、结束、失效或被替代。排队、递交材料、一次交谈等普通步骤应合并进同一流程，不拆成多个事件。
-- regions｜区域状态：title写区域或设施名称；content写离开场景后仍持续的区域状态、活跃流程、限制/风险、设施或控制状态、未来再次进入时的影响；status写持续或失效。短暂天气、光线、声音和人群不建行。
-- foundations｜基础设定：title写稳定规则、制度或世界设定；content写适用范围、稳定内容、确认依据、例外和限制；status写已确认或证据等级。人物状态、当前局势、传闻和事件进展不得写入基础设定。
+\u4E8B\u5B9E\u89C4\u5219\uFF1A
+1. \u53EA\u5199\u672C\u8F6E\u6B63\u6587\u5B9E\u9645\u65B0\u589E\u3001\u6539\u53D8\u3001\u7ED3\u675F\u6216\u786E\u8BA4\u7684\u4E8B\u5B9E\uFF0C\u4E0D\u590D\u5236\u5168\u90E8\u65E7\u72B6\u6001\u3002
+2. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u548C\u5BF9\u767D\u53EF\u89C6\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF1B\u73A9\u5BB6\u9884\u8BBE\u7684\u5916\u90E8\u7ED3\u679C\u4E0D\u80FD\u5355\u72EC\u4F5C\u4E3A confirmed\u3002
+3. \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u5FC5\u987B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
+4. historical \u548C trace \u53EA\u4F5C\u4E3A\u603B\u7ED3\u7D20\u6750\uFF0C\u4E0D\u5F3A\u5236\u8FDB\u5165\u5F53\u524D\u6D3B\u8DC3\u72B6\u6001\u8868\u3002
+5. turnSummary \u53EA\u6982\u62EC\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\uFF0C\u4E0D\u7EED\u5199\u3001\u4E0D\u8BC4\u4EF7\u3002
 
-人物lifecycle规则：
-- 已建立的正式人物不因离场、死亡、遗忘或长期未出现而删除；分别更新activity、existence、memory。
-- 不得因“很久没出现”推定死亡。死亡、失踪、身份存疑必须按证据等级记录。
-- returnConditions与returnBlockers只写正文已显影的现实条件；没有依据时保持空数组。
+\u7EF4\u62A4\u89C4\u5219\uFF1A
+1. \u4FDD\u7559\u672A\u53D7\u672C\u8F6E\u5F71\u54CD\u3001\u4ECD\u6210\u7ACB\u7684\u72B6\u6001\u3002\u53EA\u6709\u672C\u8F6E\u660E\u786E\u6539\u53D8\u7684\u72B6\u6001\u624D\u66F4\u65B0\u3002
+2. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u6D41\u6C34\u8D26\u3002\u672A\u786E\u8BA4\u3001\u51B2\u7A81\u548C\u8FDB\u884C\u4E2D\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
+3. \u5C3D\u91CF\u4FDD\u7559\u4E0A\u4E00\u4EFD\u5FEB\u7167\u7684\u7A33\u5B9Aid\uFF1B\u65B0\u589E\u5BF9\u8C61\u624D\u521B\u5EFA\u65B0id\u3002
+4. snapshot \u5FC5\u987B\u4EE5 facts \u548C\u4E0A\u4E00\u4EFD\u72B6\u6001\u8868\u4E3A\u4F9D\u636E\uFF1B\u5916\u90E8\u7ED3\u679C\u4EE5AI\u6B63\u6587\u4E0E\u5DF2\u6709\u72B6\u6001\u4E2D\u7684\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u4E3A\u51C6\u3002
+5. source=manual\u6216locked=true\u7684\u73A9\u5BB6\u8BB0\u5F55\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u6539\u5199\u3002
+6. relationships \u4E2D\u6BCF\u884C title \u5FC5\u987B\u660E\u786E\u5199\u51FA\u5173\u7CFB\u4E24\u7AEF\uFF0C\u4F18\u5148\u4F7F\u7528\u201C\u5BF9\u8C61A \u2194 \u5BF9\u8C61B\u201D\u683C\u5F0F\uFF1Bcontent\u53EA\u5199\u5DF2\u663E\u5F71\u7684\u5173\u7CFB\u4E8B\u5B9E\uFF0Cstatus\u5199\u5173\u7CFB\u5F53\u524D\u72B6\u6001\u3002
+7. characters \u53EA\u4E3A\u6B63\u5F0F\u663E\u5F71\u7684\u4EBA\u7269\u5EFA\u7ACB\u72EC\u7ACB\u884C\u3002\u4EC5\u88AB\u63D0\u53CA\u3001\u6CA1\u6709\u8FDB\u5165\u53EF\u89C2\u5BDF\u63A5\u89E6\u9762\u7684\u4EBA\u7269\uFF0C\u5148\u5199\u5728\u76F8\u5173\u4E8B\u4EF6\u6216\u4EBA\u7269\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5355\u72EC\u5EFA\u884C\u3002
+8. \u5DF2\u5EFA\u7ACB\u7684\u6B63\u5F0F\u4EBA\u7269\u4E0D\u5F97\u4EC5\u56E0\u79BB\u573A\u3001\u957F\u671F\u672A\u51FA\u73B0\u3001\u88AB\u9057\u5FD8\u6216\u6B7B\u4EA1\u800C\u5220\u9664\u3002\u4EBA\u7269\u79BB\u5F00\u63A5\u89E6\u9762\u53EA\u6539\u53D8activity\uFF1B\u6B7B\u4EA1\u53EA\u6539\u53D8existence\uFF1B\u88AB\u9057\u5FD8\u53EA\u6539\u53D8memory\u3002
+9. lifecycle\u5B57\u6BB5\u56FA\u5B9A\u4E3A\uFF1A
+   - existence\uFF1A\u5B58\u6D3B\u3001\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u672A\u77E5\u3001\u5931\u8E2A\u3001\u8EAB\u4EFD\u5B58\u7591\u3001\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
+   - activity\uFF1A\u5F53\u524D\u5728\u573A\u3001\u5F53\u524D\u76F8\u5173\u3001\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u3001\u4F11\u7720\u3001\u957F\u671F\u4F11\u7720\u3001\u5DF2\u5F52\u6863\u3001\u672A\u6807\u6CE8\u3002
+   - memory\uFF1A\u5E7F\u6CDB\u8BB0\u5F97\u3001\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97\u3001\u4EC5\u8BB0\u5F55\u7559\u5B58\u3001\u4EC5\u75D5\u8FF9\u7559\u5B58\u3001\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97\u3001\u8BB0\u5FC6\u88AB\u7BE1\u6539\u3001\u8BB0\u5FC6\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
+   - evidenceLevel\uFF1A\u5DF2\u786E\u8BA4\u3001\u53EF\u9760\u8BB0\u5F55\u3001\u591A\u65B9\u9648\u8FF0\u3001\u5355\u65B9\u9648\u8FF0\u3001\u63A8\u6D4B\u3001\u672A\u77E5\u3002
+   - evidence\uFF1A\u652F\u6301\u4E0A\u8FF0\u5224\u65AD\u7684\u53EF\u9A8C\u8BC1\u4F9D\u636E\u3002
+   - returnConditions\uFF1A\u4EBA\u7269\u53EF\u80FD\u91CD\u65B0\u8FDB\u5165\u63A5\u89E6\u9762\u7684\u73B0\u5B9E\u6761\u4EF6\uFF0C\u4E0D\u4EE3\u8868\u4E00\u5B9A\u56DE\u6765\u3002
+   - returnBlockers\uFF1A\u963B\u6B62\u56DE\u6D41\u7684\u5DF2\u786E\u8BA4\u6761\u4EF6\uFF1B\u6CA1\u6709\u53EF\u9760\u8BC1\u636E\u65F6\u7559\u7A7A\u3002
+10. \u4E0D\u5F97\u56E0\u201C\u5F88\u4E45\u6CA1\u51FA\u73B0\u201D\u63A8\u5B9A\u6B7B\u4EA1\uFF1B\u4ED6\u4EBA\u9648\u8FF0\u6B7B\u4EA1\u53EA\u80FD\u6309\u8BC1\u636E\u7B49\u7EA7\u8BB0\u5F55\u3002\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u7684\u4EBA\u7269\u4ECD\u4FDD\u7559\u9057\u7559\u5173\u7CFB\u3001\u7269\u54C1\u3001\u6D41\u7A0B\u548C\u540E\u679C\u3002
+11. items\uFF1A\u666E\u901A\u7269\u54C1\u6309\u6240\u6709\u8005\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u7269\u54C1\u4E0E\u8D44\u6E90\u201D\uFF1B\u62E5\u6709\u72EC\u7ACB\u8EAB\u4EFD\u3001\u72B6\u6001\u3001\u56E0\u679C\u6216\u8FFD\u8E2A\u4EF7\u503C\u7684\u91CD\u8981\u7269\u54C1\u624D\u5355\u72EC\u4E00\u884C\u3002
+12. skills\uFF1A\u6309\u4EBA\u7269\u6216\u4E3B\u4F53\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\u201D\uFF0C\u53EA\u8BB0\u5F55\u5DF2\u663E\u5F71\u80FD\u529B\u3001\u6761\u4EF6\u3001\u6D88\u8017\u548C\u8FB9\u754C\uFF0C\u4E0D\u751F\u6210\u9690\u85CF\u80FD\u529B\u3002
+13. events\u4E2D\u72EC\u7ACB\u4E8B\u4EF6\u4F7F\u7528\u201C\u4E8B\u4EF6\uFF5C\u540D\u79F0\u201D\uFF0C\u5236\u5EA6\u6216\u624B\u7EED\u4F7F\u7528\u201C\u6D41\u7A0B\uFF5C\u540D\u79F0\u201D\u3002\u5C0F\u4E8B\u4EF6\u53EF\u7559\u5728\u4EBA\u7269\u6216\u533A\u57DF\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5FC5\u62C6\u884C\u3002
+14. foundations\u53EA\u4FDD\u7559\u957F\u671F\u627F\u91CD\u8BBE\u5B9A\uFF1B\u5F53\u524D\u5C40\u52BF\u3001\u4EBA\u7269\u53D8\u5316\u548C\u4E8B\u4EF6\u8FDB\u5C55\u4E0D\u5F97\u5199\u5165\u57FA\u7840\u8BBE\u5B9A\u3002
 
-turnSummary只概括本轮实际发生的事实；长期表格只保存跨回合仍需保持一致的状态。
-
-结构示例：
-{"turnSummary":"本轮事实摘要","facts":[{"id":"fact_1","type":"event","entityId":"event_x","title":"事件名称","content":"本轮新增或改变的可观察事实","status":"进行中","keywords":["关键词"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription()}}`;
+\u7ED3\u6784\u793A\u4F8B\uFF1A
+{"turnSummary":"\u672C\u8F6E\u4E8B\u5B9E\u6458\u8981","facts":[{"id":"fact_1","type":"event","entityId":"event_x","title":"\u4E8B\u4EF6\u540D\u79F0","content":"\u53EF\u89C2\u5BDF\u4E8B\u5B9E","status":"\u8FDB\u884C\u4E2D","keywords":["\u5173\u952E\u8BCD"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription()}}`;
 }
 function stateUserPrompt(previous, playerText, assistantText, repair = false) {
   return `\u3010\u4E0A\u4E00\u4EFD\u72B6\u6001\u8868\u3011
@@ -2776,21 +2859,10 @@ async function processMessage(index, force = false) {
     const artifact = await loadOrCreateArtifact(index, force);
     notify(index, artifact);
     try {
-      let audit = await runAudit(artifact, force);
+      const audit = await runAudit(artifact, force);
       await saveArtifactToMessage(index, artifact);
-      if (!audit.passed && settings.auditFailAction === "revise") {
-        const revised = await runRevisionFlow(artifact);
-        audit = revised.audit;
-        await saveArtifactToMessage(index, artifact);
-      }
       if (!audit.passed) {
-        const failureAction = settings.auditFailAction === "revise" ? settings.revisionFallbackAction : settings.auditFailAction;
-        await applyAuditFailureAction(artifact, failureAction);
-        markStage(artifact, "state", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
-        markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
-        markStage(artifact, "sync", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
-        await saveArtifactToMessage(index, artifact);
-        return artifact;
+        throw new Error("审核未通过且没有返回可直接替换的完整修正版正文");
       }
       if (settings.autoState || force) {
         await runStateExtraction(artifact, force);
@@ -4570,4 +4642,3 @@ export {
   onInstall,
   onUpdate
 };
-//# sourceMappingURL=index.js.map
