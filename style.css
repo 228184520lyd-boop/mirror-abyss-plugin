@@ -231,3 +231,13 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .ma11-connection-row { grid-template-columns: 1fr; }
   .ma11-editor-grid { grid-template-columns: 1fr; }
 }
+
+.ma11-task-list { display: grid; gap: .45rem; }
+.ma11-task-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .55rem .65rem; border: 1px solid var(--ma-border); border-radius: 8px; }
+.ma11-task-row span { min-width: 0; display: grid; gap: .15rem; }
+.ma11-task-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma11-task-row small { color: var(--ma-muted); }
+.ma11-task-row em { flex: 0 0 auto; font-style: normal; font-size: .76rem; }
+.ma11-task-row em.running, .ma11-task-row em.queued { color: var(--ma-warning); }
+.ma11-task-row em.success { color: var(--ma-success); }
+.ma11-task-row em.failed, .ma11-task-row em.cancelled { color: var(--ma-danger); }

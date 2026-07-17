@@ -10,6 +10,17 @@
           <input type="checkbox" data-ma11-quick-setting="enabled">
           <span>启用镜渊</span>
         </label>
+        <label class="checkbox_label">
+          <input type="checkbox" data-ma11-quick-setting="auditEnabled">
+          <span>启用规则审核</span>
+        </label>
+        <label>审核失败处理
+          <select data-ma11-quick-setting="auditFailAction">
+            <option value="revise">定向修正并原位替换</option>
+            <option value="mark">保留并标红</option>
+            <option value="hide">隐藏并人工处理</option>
+          </select>
+        </label>
         <button class="menu_button" type="button" data-ma11-action="open">打开镜渊工作区</button>
         <button class="menu_button" type="button" data-ma11-action="diagnostics">运行诊断</button>
       </div>
