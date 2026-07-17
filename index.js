@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.20";
-var PIPELINE_VERSION = "ma-pipeline-23";
+var VERSION = "1.2.0-rc.21";
+var PIPELINE_VERSION = "ma-pipeline-24";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -2391,9 +2391,19 @@ function defaultTrigger(row) {
 function isEssentialState(row) {
   return /(不可缺失|昏迷|重伤|濒死|死亡|失踪|被拘禁|封印|当前在场|当前相关|核心参与)/i.test(rowSearchText(row));
 }
-function recallModeFor(role, row, options) {
+function isHistoricalSpacetime(row) {
+  return /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(rowSearchText(row));
+}
+function currentSpacetimeRowId(rows) {
+  const active = rows.filter((row) => !isHistoricalSpacetime(row));
+  if (!active.length) return void 0;
+  const explicit = active.filter((row) => /(当前场景|当前位置|当前地点|当前时空|正在此处|当前所在|current|active)/i.test(rowSearchText(row)));
+  return (explicit.at(-1) ?? active.at(-1))?.id;
+}
+function recallModeFor(role, row, options, currentSpacetimeId) {
   if (!options.latestContinuityConstant) return "trigger";
-  if (role === "focus" || role === "spacetime" || role === "globalChanges") return "constant";
+  if (role === "focus" || role === "globalChanges") return "constant";
+  if (role === "spacetime") return row.id === currentSpacetimeId ? "constant" : "trigger";
   if (role === "state" && isEssentialState(row)) return "constant";
   if (role === "foundations" && /(必要|规则|制度|禁止|必须|不可)/i.test(rowSearchText(row))) return "constant";
   return "trigger";
@@ -2428,8 +2438,10 @@ function tableDocuments(snapshot, options) {
   const filtered = filterSnapshotForLorebook(snapshot, tables2);
   const docs = [];
   for (const table of enabledTables(tables2)) {
-    for (const row of filtered[table.key] ?? []) {
-      const mode = recallModeFor(table.role, row, options);
+    const rows = filtered[table.key] ?? [];
+    const currentSpacetimeId = table.role === "spacetime" ? currentSpacetimeRowId(rows) : void 0;
+    for (const row of rows) {
+      const mode = recallModeFor(table.role, row, options, currentSpacetimeId);
       const trigger = defaultTrigger(row);
       docs.push(makeDocument(
         `view:${table.key}:${row.id}`,
@@ -2492,6 +2504,7 @@ function selectLorebookDocuments(documents, options) {
   });
   const seenFacts = /* @__PURE__ */ new Set();
   const seenEvents = /* @__PURE__ */ new Set();
+  const seenContents = /* @__PURE__ */ new Set();
   const output = [];
   let used = 0;
   let vectorCount = 0;
@@ -2499,6 +2512,8 @@ function selectLorebookDocuments(documents, options) {
   const maxVector = Math.max(1, Math.round(Number(options.maxVectorResults) || 8));
   for (const doc of ordered) {
     if (doc.recallMode === "vector" && vectorCount >= maxVector) continue;
+    const contentIdentity = doc.content.replace(/\s+/g, " ").trim();
+    if (contentIdentity && seenContents.has(contentIdentity)) continue;
     const identities = [...doc.factIds.map((id) => `f:${id}`), ...doc.eventIds.map((id) => `e:${id}`)];
     const duplicate = identities.length > 0 && identities.every((id) => id.startsWith("f:") ? seenFacts.has(id.slice(2)) : seenEvents.has(id.slice(2)));
     if (duplicate) continue;
@@ -2507,6 +2522,7 @@ function selectLorebookDocuments(documents, options) {
     output.push({ ...doc, order: output.length + 100 });
     used += size;
     if (doc.recallMode === "vector") vectorCount += 1;
+    if (contentIdentity) seenContents.add(contentIdentity);
     doc.factIds.forEach((id) => seenFacts.add(id));
     doc.eventIds.forEach((id) => seenEvents.add(id));
   }
@@ -2576,6 +2592,9 @@ async function resolveBookName(create, artifact) {
 }
 function managedInfo(entry) {
   return entry?.extensions?.mirrorAbyssV11 ?? null;
+}
+function managedContentIdentity(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 async function reloadWorldInfoEditor(wi, name, loadIfNotSelected = false) {
   const context = getContext();
@@ -2699,32 +2718,47 @@ async function syncLorebook(artifact, force = false) {
     const data = await wi.loadWorldInfo(name) || { entries: {} };
     data.entries ||= {};
     const desired = await desiredSpecs(artifact);
-    const existing = /* @__PURE__ */ new Map();
+    const managedEntries = [];
+    const byKey = /* @__PURE__ */ new Map();
+    const byContent = /* @__PURE__ */ new Map();
     for (const [uid, entry] of Object.entries(data.entries)) {
       const info = managedInfo(entry);
-      if (info?.managed && info.chatKey === artifact.chatKey && info.key) {
-        existing.set(info.key, { uid, entry });
-      }
+      if (!info?.managed || info.chatKey !== artifact.chatKey) continue;
+      const pair = {
+        uid,
+        entry,
+        key: String(info.key || ""),
+        contentIdentity: managedContentIdentity(entry.content)
+      };
+      managedEntries.push(pair);
+      if (pair.key) byKey.set(pair.key, [...byKey.get(pair.key) ?? [], pair]);
+      if (pair.contentIdentity) byContent.set(pair.contentIdentity, [...byContent.get(pair.contentIdentity) ?? [], pair]);
     }
     let changed = false;
+    const claimed = /* @__PURE__ */ new Set();
     const entryIds = [];
+    const takeUnclaimed = (pairs) => pairs?.find((pair) => !claimed.has(pair.uid));
     for (const [key, spec] of desired) {
-      let pair = existing.get(key);
+      const contentIdentity = managedContentIdentity(spec.content);
+      let pair = takeUnclaimed(byKey.get(key)) ?? takeUnclaimed(byContent.get(contentIdentity));
       let entry = pair?.entry;
       if (!entry) {
         entry = wi.createWorldInfoEntry(name, data);
         if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${key}`);
-        pair = { uid: String(entry.uid), entry };
+        const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? "");
+        if (!createdUid) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u7F3A\u5C11UID\uFF1A${key}`);
+        pair = { uid: createdUid, entry, key, contentIdentity };
         changed = true;
       }
+      claimed.add(pair.uid);
       const before = JSON.stringify(entry);
       applyEntry(entry, artifact.chatKey, key, spec, wi);
       if (before !== JSON.stringify(entry)) changed = true;
-      existing.delete(key);
       if (Number.isFinite(Number(entry.uid))) entryIds.push(Number(entry.uid));
     }
-    for (const { uid } of existing.values()) {
-      delete data.entries[uid];
+    for (const pair of managedEntries) {
+      if (claimed.has(pair.uid)) continue;
+      delete data.entries[pair.uid];
       changed = true;
     }
     assertArtifactCommitCurrent(artifact);
@@ -2990,12 +3024,18 @@ function choosePendingEvent(facts, threshold, force) {
     list3.push(fact);
     allByEvent.set(fact.eventId, list3);
   }
-  const groups = [...pendingFactsByEvent(facts).entries()].map(([eventId, eventFacts]) => ({ eventId, facts: eventFacts, closed: eventClosed(allByEvent.get(eventId) ?? eventFacts), messages: new Set(eventFacts.flatMap((fact) => fact.sourceMessageIds)).size })).filter((group) => force || group.closed || group.messages >= threshold || group.facts.length >= Math.max(2, Math.ceil(threshold / 2))).sort((a, b) => Number(b.closed) - Number(a.closed) || b.facts.length - a.facts.length || a.eventId.localeCompare(b.eventId));
+  const groups = [...pendingFactsByEvent(facts).entries()].map(([eventId, eventFacts]) => ({ eventId, facts: eventFacts, closed: eventClosed(allByEvent.get(eventId) ?? eventFacts), messages: new Set(eventFacts.flatMap((fact) => fact.sourceMessageIds)).size })).filter((group) => force || group.closed || group.messages >= threshold).sort((a, b) => Number(b.closed) - Number(a.closed) || b.facts.length - a.facts.length || a.eventId.localeCompare(b.eventId));
   return groups[0] ?? null;
 }
 function pendingSmallSummaries(small, large) {
   const legacyConsumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
   return small.filter((item) => !item.solidifiedByLargeSummaryId && !legacyConsumed.has(item.id));
+}
+function hasEligibleSmallSummary(facts, threshold) {
+  return Boolean(choosePendingEvent(facts, Math.max(1, Math.round(Number(threshold) || 12)), false));
+}
+function hasEligibleLargeSummary(small, large, threshold) {
+  return pendingSmallSummaries(small, large).length >= Math.max(1, Math.round(Number(threshold) || 4));
 }
 async function generateSmallSummary(artifact, force = false) {
   const settings = getSettings();
@@ -3093,15 +3133,16 @@ async function generateLargeSummary(artifact, force = false) {
 async function runSummaryStage(artifact, kind, force = false) {
   const settings = getSettings();
   const enabled = kind === "small" ? settings.autoSmallSummary : settings.autoLargeSummary;
-  if (!enabled && !force) return;
-  const preserveEarlierFailure = !force && artifact.stages.summary.status === "failed";
+  if (!enabled && !force) return false;
+  const previousStatus = artifact.stages.summary.status;
+  const preserveEarlierFailure = !force && previousStatus === "failed";
   if (!preserveEarlierFailure) markStage(artifact, "summary", "running");
   await putArtifact(artifact);
   try {
-    if (kind === "small") await generateSmallSummary(artifact, force);
-    else await generateLargeSummary(artifact, force);
-    if (!preserveEarlierFailure) markStage(artifact, "summary", "success");
+    const generated = kind === "small" ? await generateSmallSummary(artifact, force) : await generateLargeSummary(artifact, force);
+    if (!preserveEarlierFailure) markStage(artifact, "summary", generated || previousStatus === "success" ? "success" : "skipped");
     await putArtifact(artifact);
+    return Boolean(generated);
   } catch (error) {
     if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
     const label = kind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3";
@@ -3286,8 +3327,9 @@ ${tableLines || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u6
 2. \u4FDD\u7559\u672A\u53D7\u5F71\u54CD\u4E14\u4ECD\u6210\u7ACB\u7684\u65E7\u884C\uFF1B\u53EA\u6709\u6B63\u6587\u660E\u786E\u6539\u53D8\u65F6\u624D\u66F4\u65B0\u3002
 3. source=manual \u6216 locked=true \u7684\u65E7\u884C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
 4. \u6B63\u5F0F\u4E3B\u4F53\u4EC5\u5728\u5DF2\u663E\u5F71\u4E14\u5BF9\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u65F6\u8FDB\u5165\u201C\u72B6\u6001\u201D\u89D2\u8272\u8868\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5EFA\u7ACB\u3002
-5. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
-6. keywords \u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u6216\u89E6\u53D1\u8BCD\uFF1Brecall \u53EF\u5305\u542B any/all/exclude\uFF0C\u4E0D\u662F\u6570\u503C\u6743\u91CD\u3002
+5. \u573A\u666F\u6216\u5730\u70B9\u53D1\u751F\u5207\u6362\u65F6\uFF0C\u201C\u65F6\u7A7A\u201D\u4E2D\u53EA\u80FD\u6709\u4E00\u4E2A\u5F53\u524D\u573A\u666F\uFF1B\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u82E5\u4ECD\u6709\u540E\u7EED\u4EF7\u503C\uFF0C\u72B6\u6001\u5FC5\u987B\u6539\u4E3A\u201C\u5DF2\u79BB\u5F00\u201D\u6216\u201C\u5386\u53F2\u573A\u666F\u201D\uFF0C\u5E76\u63D0\u4F9B\u660E\u786E\u89E6\u53D1\u8BCD\uFF0C\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
+6. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
+7. keywords \u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u6216\u89E6\u53D1\u8BCD\uFF1Brecall \u53EF\u5305\u542B any/all/exclude\uFF0C\u4E0D\u662F\u6570\u503C\u6743\u91CD\u3002
 
 \u7ED3\u6784\u793A\u4F8B\uFF1A
 {"turnSummary":"\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981","facts":[{"fact_id":"fact_1","event_id":"event_1","type":"event","title":"\u5BF9\u6218\u5F00\u59CB","occurred":["\u7532\u4E0E\u4E59\u5F00\u59CB\u4EA4\u6218"],"unresolved":["\u80DC\u8D1F\u672A\u5B9A"],"status":"\u8FDB\u884C\u4E2D","time_range":{"start":"\u5F53\u524D","end":"","label":"\u672C\u573A\u5BF9\u6218"},"related_entities":["\u7532","\u4E59"],"keywords":["\u7532","\u4E59","\u5BF9\u6218"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(active)}}`;
@@ -3899,8 +3941,11 @@ function invalidateDerivedForValidMessages(chatState, validMessageIds) {
 async function prepareDerivedStageStatuses(artifact) {
   const settings = getSettings();
   const chatState = await getChatState(artifact.chatKey);
-  const summaryEnabled = Boolean(settings.autoSmallSummary || settings.autoLargeSummary);
-  markStage(artifact, "summary", summaryEnabled ? "queued" : "skipped");
+  const plan = {
+    small: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(chatState.internalFacts ?? [], settings.smallSummaryTurns)),
+    large: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(chatState.smallSummaries ?? [], chatState.largeSummaries ?? [], settings.largeSummaryCount))
+  };
+  markStage(artifact, "summary", plan.small || plan.large ? "queued" : "skipped");
   if (chatState.historyInvalidation) {
     const automatic = Boolean(chatState.historyInvalidation.automatic);
     markStage(
@@ -3913,6 +3958,7 @@ async function prepareDerivedStageStatuses(artifact) {
     markStage(artifact, "sync", settings.lorebookSync ? "queued" : "skipped");
   }
   await saveArtifactToMessage(artifact.messageIndex, artifact);
+  return plan;
 }
 async function clearResolvedLatestHistoryInvalidation(index, artifact) {
   if (!isNarrativeTail(index)) return false;
@@ -3952,7 +3998,7 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
 function derivedTaskError(error) {
   return error instanceof CommitRejectedError || error instanceof Error && error.name === "AbortError";
 }
-function queueAutomaticDerived(index, artifact, historyRevision) {
+function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
   const settings = getSettings();
   const chatKey = artifact.chatKey;
   const messageKey = artifact.messageKey;
@@ -3988,9 +4034,9 @@ function queueAutomaticDerived(index, artifact, historyRevision) {
       toast("warning", `\u6838\u5FC3\u72B6\u6001\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u4E16\u754C\u4E66\u540C\u6B65\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
     });
   };
-  const queueLarge = () => {
+  const queueLarge = (shouldRun) => {
     if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled) return;
-    if (!settings.autoLargeSummary) {
+    if (!settings.autoLargeSummary || !shouldRun) {
       queueSync();
       return;
     }
@@ -4010,8 +4056,8 @@ function queueAutomaticDerived(index, artifact, historyRevision) {
       if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueSync();
     });
   };
-  if (!settings.autoSmallSummary) {
-    queueLarge();
+  if (!settings.autoSmallSummary || !summaryPlan.small) {
+    queueLarge(summaryPlan.large);
     return;
   }
   const key = `${PIPELINE_VERSION}:derived:small:${chatKey}:${messageKey}`;
@@ -4023,11 +4069,11 @@ function queueAutomaticDerived(index, artifact, historyRevision) {
         await saveArtifactToMessage(index, artifact);
       }
     });
-  }, { priority: 30, chatKey }).then(queueLarge, (error) => {
+  }, { priority: 30, chatKey }).then(() => queueLarge(true), (error) => {
     if (derivedTaskError(error)) return;
     console.warn("[MirrorAbyss] derived small summary failed", error);
     toast("warning", `\u6838\u5FC3\u72B6\u6001\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u5C0F\u603B\u7ED3\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
-    if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueLarge();
+    if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueLarge(true);
   });
 }
 async function processMessage(index, force = false, options = {}) {
@@ -4082,10 +4128,10 @@ async function processMessage(index, force = false, options = {}) {
       if (artifact.snapshot && artifact.stages.state.status === "success") {
         await commitCoreState(index, artifact);
         await clearResolvedLatestHistoryInvalidation(index, artifact);
-        await prepareDerivedStageStatuses(artifact);
+        const summaryPlan = await prepareDerivedStageStatuses(artifact);
         if (!options.skipDerived) {
           taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
-          queueAutomaticDerived(index, artifact, scheduledHistoryRevision);
+          queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
         }
       }
       return artifact;
@@ -4372,9 +4418,9 @@ async function retryStage(index, stage) {
         await saveArtifactToMessage(index, artifact);
         await commitCoreState(index, artifact);
         await clearResolvedLatestHistoryInvalidation(index, artifact);
-        await prepareDerivedStageStatuses(artifact);
+        const summaryPlan = await prepareDerivedStageStatuses(artifact);
         taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
-        queueAutomaticDerived(index, artifact, scheduledHistoryRevision);
+        queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
       }
       if (stage === "summary") {
         const errors = [];
