@@ -2,30 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.18";
-var PIPELINE_VERSION = "ma-pipeline-21";
-var TABLE_KEYS = [
-  "focus",
-  "spacetime",
-  "characters",
-  "relationships",
-  "items",
-  "skills",
-  "events",
-  "regions",
-  "foundations"
-];
-var TABLE_LABELS = {
-  focus: "\u5F53\u524D\u7126\u70B9",
-  spacetime: "\u65F6\u95F4\u4E0E\u5730\u70B9",
-  characters: "\u4EBA\u7269",
-  relationships: "\u5173\u7CFB",
-  items: "\u7269\u54C1",
-  skills: "\u6280\u80FD\u4E0E\u80FD\u529B",
-  events: "\u4E8B\u4EF6\u4E0E\u6D41\u7A0B",
-  regions: "\u533A\u57DF\u72B6\u6001",
-  foundations: "\u57FA\u7840\u8BBE\u5B9A"
-};
+var VERSION = "1.2.0-rc.20";
+var PIPELINE_VERSION = "ma-pipeline-23";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -45,11 +23,13 @@ var DEFAULT_SETTINGS = {
   lorebookSync: true,
   autoCreateLorebook: true,
   lorebookName: "",
-  vectorizeRows: false,
+  vectorizeRows: true,
   latestContinuityConstant: true,
   lorebookLayout: "semantic",
+  lorebookRecall: { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 },
   repairInvalidJsonOnce: true,
   requestTimeoutMs: 9e4,
+  tableRegistry: [],
   connections: {
     audit: { mode: "current", profileId: "", profile: "" },
     revision: { mode: "current", profileId: "", profile: "" },
@@ -57,15 +37,8 @@ var DEFAULT_SETTINGS = {
     smallSummary: { mode: "current", profileId: "", profile: "" },
     largeSummary: { mode: "current", profileId: "", profile: "" }
   },
-  ui: {
-    activeTab: "overview",
-    activeTable: "focus",
-    graphScope: "relations",
-    graphZoom: 1
-  },
-  migration: {
-    legacyChecked: false
-  }
+  ui: { activeTab: "overview", activeTable: "focus", graphScope: "relations", graphZoom: 1 },
+  migration: { legacyChecked: false, dynamicTablesV23: false }
 };
 
 // src/core/utils.ts
@@ -78,8 +51,8 @@ function deepClone(value) {
   }
   return JSON.parse(JSON.stringify(value));
 }
-function mergeDefaults(defaults, current) {
-  const output = deepClone(defaults);
+function mergeDefaults(defaults2, current) {
+  const output = deepClone(defaults2);
   const merge = (target, source) => {
     if (!source) return;
     for (const [key, value] of Object.entries(source)) {
@@ -313,6 +286,180 @@ function toErrorMessage(error) {
   return String(error ?? "\u672A\u77E5\u9519\u8BEF");
 }
 
+// src/domain/table-registry.ts
+var CORE_FIELD_KEYS = ["id", "title", "content", "keywords", "status", "factIds", "eventId", "recall"];
+var COMMON_FIELDS = [
+  { key: "id", label: "\u7A33\u5B9AID", description: "\u540C\u4E00\u5BF9\u8C61\u6CBF\u7528\u7A33\u5B9AID", type: "string", required: true },
+  { key: "title", label: "\u5BF9\u8C61", description: "\u7B80\u6D01\u6807\u8BC6\u8BE5\u6761\u4E8B\u5B9E\u89C6\u56FE", type: "string", required: true },
+  { key: "content", label: "\u5F53\u524D\u4E8B\u5B9E", description: "\u53EA\u5199\u5DF2\u663E\u5F71\u4E14\u5BF9\u540E\u7EED\u6709\u7528\u7684\u5F53\u524D\u4E8B\u5B9E", type: "string", required: true },
+  { key: "keywords", label: "\u5173\u952E\u8BCD", description: "\u4EBA\u7269\u540D\u3001\u522B\u540D\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u533A\u57DF\u3001\u4E8B\u4EF6\u3001\u7EC4\u7EC7\u6216\u5236\u5EA6\u7B49\u660E\u786E\u89E6\u53D1\u8BCD", type: "string[]", required: true },
+  { key: "status", label: "\u72B6\u6001", description: "\u5F53\u524D\u6709\u6548\u72B6\u6001\u6216\u9636\u6BB5", type: "string", required: true }
+];
+var LIFECYCLE_FIELD = {
+  key: "lifecycle",
+  label: "\u751F\u547D\u5468\u671F",
+  description: "\u6B63\u5F0F\u4E3B\u4F53\u7684\u5B58\u5728\u3001\u6D3B\u8DC3\u3001\u8BB0\u5FC6\u3001\u8BC1\u636E\u4E0E\u56DE\u6D41\u6761\u4EF6",
+  type: "lifecycle",
+  required: false
+};
+function defaults() {
+  const definitions = [
+    ["focus", "\u7126\u70B9", "\u5F53\u524D\u6838\u5FC3\u51B2\u7A81\u3001\u76EE\u6807\u6216\u5F85\u51B3\u4E8B\u9879\uFF1B\u4E0D\u5F97\u590D\u5236\u4EBA\u7269\u5361\u6216\u5176\u4ED6\u8868\u683C\u4E8B\u5B9E\u3002", "focus", false],
+    ["spacetime", "\u65F6\u7A7A", "\u5F53\u524D\u7126\u70B9\u76F4\u63A5\u76F8\u5173\u7684\u65F6\u95F4\u3001\u5730\u70B9\u4E0E\u573A\u666F\u8FDE\u7EED\u6027\u3002", "spacetime", false],
+    ["state", "\u72B6\u6001", "\u6B63\u5F0F\u663E\u5F71\u4E14\u5BF9\u5F53\u524D\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u7684\u4E3B\u4F53\u72B6\u6001\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5F97\u5EFA\u7ACB\u3002", "state", true],
+    ["items", "\u7269\u54C1", "\u5BF9\u5F53\u524D\u7126\u70B9\u3001\u56E0\u679C\u6216\u540E\u7EED\u751F\u6210\u6709\u4F5C\u7528\u7684\u91CD\u8981\u7269\u54C1\u4E0E\u8D44\u6E90\u3002", "items", false],
+    ["skills", "\u6280\u80FD", "\u5DF2\u663E\u5F71\u7684\u6280\u80FD\u3001\u80FD\u529B\u3001\u6761\u4EF6\u3001\u6D88\u8017\u4E0E\u8FB9\u754C\u3002", "skills", false],
+    ["relationships", "\u663E\u8457\u5173\u7CFB", "\u5DF2\u7ECF\u663E\u5F71\u5E76\u4F1A\u5F71\u54CD\u884C\u4E3A\u6216\u4E8B\u4EF6\u7ED3\u679C\u7684\u5173\u7CFB\u3002", "relationships", false],
+    ["events", "\u6D3B\u8DC3\u4E8B\u4EF6", "\u4ECD\u5728\u63A8\u8FDB\u6216\u5C1A\u6709\u672A\u51B3\u4E8B\u9879\u7684\u4E8B\u4EF6\u7EBF\u4E0E\u6D41\u7A0B\u3002", "events", false],
+    ["regions", "\u76F8\u5173\u533A\u57DF", "\u4E0E\u5F53\u524D\u7126\u70B9\u6216\u672A\u51B3\u4E8B\u4EF6\u76F4\u63A5\u76F8\u5173\u7684\u533A\u57DF\u72B6\u6001\u3002", "regions", false],
+    ["globalChanges", "\u5168\u5C40\u53D8\u5316", "\u5DF2\u7ECF\u53D1\u751F\u5E76\u76F4\u63A5\u5F71\u54CD\u540E\u7EED\u7684\u8DE8\u533A\u57DF\u3001\u5236\u5EA6\u6216\u4E16\u754C\u6001\u52BF\u53D8\u5316\u3002", "globalChanges", false],
+    ["foundations", "\u76F8\u5173\u57FA\u7840\u8BBE\u5B9A", "\u5F53\u524D\u7126\u70B9\u786E\u5B9E\u9700\u8981\u7684\u7A33\u5B9A\u89C4\u5219\u3001\u5236\u5EA6\u548C\u627F\u91CD\u8BBE\u5B9A\u3002", "foundations", false]
+  ];
+  return definitions.map(([key, name, purpose, role, lifecycle], order) => ({
+    key,
+    name,
+    purpose,
+    role,
+    enabled: true,
+    order,
+    isDefault: true,
+    fields: [...deepClone(COMMON_FIELDS), ...lifecycle ? [deepClone(LIFECYCLE_FIELD)] : []]
+  }));
+}
+var DEFAULT_TABLE_REGISTRY = Object.freeze(defaults());
+var LEGACY_TABLE_KEY_MAP = {
+  focus: "focus",
+  spacetime: "spacetime",
+  characters: "state",
+  state: "state",
+  items: "items",
+  skills: "skills",
+  relationships: "relationships",
+  events: "events",
+  regions: "regions",
+  globalChanges: "globalChanges",
+  foundations: "foundations"
+};
+function normalizeField(value, index) {
+  const source = value && typeof value === "object" ? value : {};
+  const key = safeText(source.key, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!key) return null;
+  const type = ["string", "string[]", "lifecycle"].includes(String(source.type)) ? source.type : "string";
+  return {
+    key,
+    label: safeText(source.label || key, 80).trim() || `\u5B57\u6BB5${index + 1}`,
+    description: safeText(source.description, 500).trim(),
+    type,
+    required: Boolean(source.required)
+  };
+}
+function normalizeTableRegistry(value) {
+  const source = Array.isArray(value) && value.length ? value : DEFAULT_TABLE_REGISTRY;
+  const output = [];
+  const used = /* @__PURE__ */ new Set();
+  source.forEach((item, index) => {
+    const row = item && typeof item === "object" ? item : {};
+    let key = safeText(row.key, 80).trim().replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!key) key = `custom_${hashText(`${row.name}|${index}`)}`;
+    if (used.has(key)) key = `${key}_${index + 1}`;
+    used.add(key);
+    const fields = (Array.isArray(row.fields) ? row.fields : COMMON_FIELDS).map(normalizeField).filter((field) => Boolean(field));
+    for (const common of COMMON_FIELDS) if (!fields.some((field) => field.key === common.key)) fields.push(deepClone(common));
+    const role = ["focus", "spacetime", "state", "items", "skills", "relationships", "events", "regions", "globalChanges", "foundations", "custom"].includes(String(row.role)) ? row.role : "custom";
+    if (role === "state" && !fields.some((field) => field.key === "lifecycle")) fields.push(deepClone(LIFECYCLE_FIELD));
+    output.push({
+      key,
+      name: safeText(row.name || DEFAULT_TABLE_REGISTRY.find((table) => table.key === key)?.name || `\u81EA\u5B9A\u4E49\u8868\u683C ${index + 1}`, 80).trim(),
+      purpose: safeText(row.purpose, 1e3).trim() || "\u8BB0\u5F55\u73A9\u5BB6\u5B9A\u4E49\u3001\u5BF9\u540E\u7EED\u751F\u6210\u6709\u7528\u7684\u5DF2\u663E\u5F71\u4E8B\u5B9E\u3002",
+      role,
+      enabled: row.enabled !== false,
+      order: Number.isFinite(Number(row.order)) ? Number(row.order) : index,
+      isDefault: Boolean(row.isDefault || DEFAULT_TABLE_REGISTRY.some((table) => table.key === key)),
+      fields
+    });
+  });
+  return output.sort((a, b) => a.order - b.order).map((table, order) => ({ ...table, order }));
+}
+function enabledTables(registry2) {
+  return normalizeTableRegistry(registry2).filter((table) => table.enabled);
+}
+function tableByKey(registry2, key) {
+  return normalizeTableRegistry(registry2).find((table) => table.key === key);
+}
+function tableByRole(registry2, role, enabledOnly = true) {
+  return normalizeTableRegistry(registry2).find((table) => (!enabledOnly || table.enabled) && table.role === role);
+}
+function restoreDefaultTableRegistry() {
+  return deepClone(DEFAULT_TABLE_REGISTRY);
+}
+function registryFingerprint(registry2) {
+  return hashText(JSON.stringify(normalizeTableRegistry(registry2).map(({ key, name, purpose, role, enabled, order, fields }) => ({ key, name, purpose, role, enabled, order, fields }))));
+}
+function parseCustomFields(fieldText = "") {
+  const used = /* @__PURE__ */ new Set();
+  return fieldText.split(/\n+/).map((value) => value.trim()).filter(Boolean).map((line, index) => {
+    const parts = line.split(/[:：]/).map((part) => part.trim());
+    const rawKey = parts[0] || `field_${index + 1}`;
+    const key = safeText(rawKey, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "") || `field_${index + 1}`;
+    if (CORE_FIELD_KEYS.includes(key) || key === "lifecycle" || used.has(key)) return null;
+    used.add(key);
+    const label = safeText(parts[1] || key, 80).trim() || key;
+    const type = parts[2] === "string[]" ? "string[]" : "string";
+    const description = safeText(parts.slice(3).join("\uFF1A") || label, 500).trim();
+    return { key, label, description, type, required: false };
+  }).filter((field) => Boolean(field));
+}
+function customFieldText(table) {
+  return table.fields.filter((field) => !CORE_FIELD_KEYS.includes(field.key) && field.key !== "lifecycle").map((field) => `${field.key}:${field.label}:${field.type}:${field.description}`).join("\n");
+}
+function updateTableFields(registry2, key, fieldText) {
+  const current = normalizeTableRegistry(registry2).find((table) => table.key === key);
+  if (!current) return normalizeTableRegistry(registry2);
+  const fields = [...deepClone(COMMON_FIELDS), ...current.role === "state" ? [deepClone(LIFECYCLE_FIELD)] : [], ...parseCustomFields(fieldText)];
+  return updateTableDefinition(registry2, key, { fields });
+}
+function createCustomTable(registry2, name, purpose, fieldText = "") {
+  const next = normalizeTableRegistry(registry2);
+  const key = `custom_${hashText(`${name}|${Date.now()}|${next.length}`)}`;
+  next.push({
+    key,
+    name: safeText(name, 80).trim() || "\u81EA\u5B9A\u4E49\u8868\u683C",
+    purpose: safeText(purpose, 1e3).trim() || "\u8BB0\u5F55\u73A9\u5BB6\u5B9A\u4E49\u7684\u5DF2\u663E\u5F71\u4E8B\u5B9E\u3002",
+    role: "custom",
+    enabled: true,
+    order: next.length,
+    isDefault: false,
+    fields: [...deepClone(COMMON_FIELDS), ...parseCustomFields(fieldText)]
+  });
+  return normalizeTableRegistry(next);
+}
+function updateTableDefinition(registry2, key, patch) {
+  return normalizeTableRegistry(registry2).map((table) => table.key === key ? { ...table, ...patch, key: table.key, isDefault: table.isDefault, fields: patch.fields ? patch.fields.map((field, index) => normalizeField(field, index)).filter(Boolean) : table.fields } : table);
+}
+function removeTableDefinition(registry2, key) {
+  return normalizeTableRegistry(registry2).filter((table) => table.key !== key).map((table, order) => ({ ...table, order }));
+}
+function moveTableDefinition(registry2, key, direction) {
+  const next = normalizeTableRegistry(registry2);
+  const index = next.findIndex((table) => table.key === key);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= next.length) return next;
+  [next[index], next[target]] = [next[target], next[index]];
+  return next.map((table, order) => ({ ...table, order }));
+}
+function migrateSnapshotTables(value, registry2) {
+  const source = value && typeof value === "object" ? value : {};
+  const output = {};
+  for (const table of normalizeTableRegistry(registry2)) output[table.key] = [];
+  for (const [sourceKey, rawRows] of Object.entries(source)) {
+    if (!Array.isArray(rawRows)) continue;
+    const targetKey = LEGACY_TABLE_KEY_MAP[sourceKey] ?? sourceKey;
+    if (!(targetKey in output)) continue;
+    output[targetKey].push(...rawRows);
+  }
+  return output;
+}
+
 // src/core/context.ts
 function getContext() {
   const context = globalThis.SillyTavern?.getContext?.();
@@ -335,6 +482,22 @@ function getSettings() {
   context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
   const settings = context.extensionSettings[MODULE_NAME];
   if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
+  settings.migration ||= { legacyChecked: false, dynamicTablesV23: false };
+  settings.lorebookRecall ||= { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 };
+  settings.lorebookRecall.similarityThreshold = Math.min(0.99, Math.max(0, Number(settings.lorebookRecall.similarityThreshold) || 0.72));
+  settings.lorebookRecall.maxVectorResults = Math.min(100, Math.max(1, Math.round(Number(settings.lorebookRecall.maxVectorResults) || 8)));
+  settings.lorebookRecall.totalCapacity = Math.min(2e5, Math.max(2e3, Math.round(Number(settings.lorebookRecall.totalCapacity) || 24e3)));
+  if (!settings.migration.dynamicTablesV23 || !Array.isArray(settings.tableRegistry) || !settings.tableRegistry.length) {
+    settings.tableRegistry = restoreDefaultTableRegistry();
+    settings.vectorizeRows = true;
+    settings.migration.dynamicTablesV23 = true;
+    if (settings.ui?.activeTable === "characters") settings.ui.activeTable = "state";
+  } else {
+    settings.tableRegistry = normalizeTableRegistry(settings.tableRegistry);
+  }
+  if (!tableByKey(settings.tableRegistry, settings.ui?.activeTable || "") || !tableByKey(settings.tableRegistry, settings.ui.activeTable)?.enabled) {
+    settings.ui.activeTable = settings.tableRegistry.find((table) => table.enabled)?.key || settings.tableRegistry[0]?.key || "focus";
+  }
   const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles) ? context.extensionSettings.connectionManager.profiles : [];
   for (const connection of Object.values(settings.connections ?? {})) {
     connection.profileId ||= "";
@@ -521,16 +684,527 @@ function assertArtifactCommitCurrent(artifact) {
   }
 }
 
+// src/domain/internal-facts.ts
+var CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
+function stringList(value, limit = 40, itemLimit = 500) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+}
+function timeRange(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    start: safeText(source.start, 120).trim() || void 0,
+    end: safeText(source.end, 120).trim() || void 0,
+    label: safeText(source.label, 240).trim() || void 0
+  };
+}
+function eventIdFor(source, factId) {
+  const explicit = safeText(source.eventId ?? source.event_id, 160).trim();
+  if (explicit) return explicit;
+  const entity = safeText(source.entityId ?? source.entity_id, 160).trim();
+  const type = safeText(source.type, 80).trim();
+  if (type === "event" && entity) return entity;
+  return `event_${hashText(`${entity}|${source.title}|${factId}`)}`;
+}
+function normalizeInternalFact(value, sourceMessageId = "", index = 0) {
+  const source = value && typeof value === "object" ? value : {};
+  const content = safeText(source.content, 6e3).trim();
+  const occurred = stringList(source.occurredFacts ?? source.occurred ?? (content ? [content] : []), 30, 1e3);
+  if (!content && !occurred.length) return null;
+  const title = safeText(source.title, 240).trim() || `\u4E8B\u5B9E ${index + 1}`;
+  const explicitFactId = safeText(source.factId ?? source.fact_id ?? source.id, 160).trim();
+  const factId = explicitFactId || `fact_${hashText(`${title}|${content}|${index}`)}`;
+  const status = safeText(source.status, 160).trim() || "active";
+  const confidenceText = safeText(source.confidence, 40).trim();
+  const sourceIds = stringList(source.sourceMessageIds ?? source.source_message_ids, 40, 200);
+  if (sourceMessageId && !sourceIds.includes(sourceMessageId)) sourceIds.push(sourceMessageId);
+  return {
+    factId,
+    eventId: eventIdFor(source, factId),
+    sourceMessageIds: sourceIds,
+    occurredFacts: occurred,
+    unresolvedItems: stringList(source.unresolvedItems ?? source.unresolved ?? source.openItems, 30, 1e3),
+    status,
+    timeRange: timeRange(source.timeRange ?? source.time_range),
+    relatedEntities: stringList(source.relatedEntities ?? source.related_entities, 30, 240),
+    title,
+    content: content || occurred.join("\uFF1B"),
+    type: safeText(source.type, 80).trim() || "event",
+    keywords: stringList(source.keywords, 24, 100),
+    confidence: CONFIDENCE.has(confidenceText) ? confidenceText : "uncertain",
+    active: source.active !== false && !/(closed|resolved|ended|archived|结束|已解决|已关闭|已归档)/i.test(status),
+    supersededByFactId: safeText(source.supersededByFactId ?? source.superseded_by_fact_id, 160).trim() || void 0,
+    consumedBySmallSummaryId: safeText(source.consumedBySmallSummaryId, 160).trim() || void 0,
+    solidifiedByLargeSummaryId: safeText(source.solidifiedByLargeSummaryId, 160).trim() || void 0,
+    createdAt: safeText(source.createdAt, 80).trim() || nowIso(),
+    updatedAt: safeText(source.updatedAt, 80).trim() || nowIso()
+  };
+}
+function normalizeInternalFacts(value, sourceMessageId = "") {
+  if (!Array.isArray(value)) return [];
+  const output = [];
+  const seen = /* @__PURE__ */ new Set();
+  value.forEach((item, index) => {
+    const normalized = normalizeInternalFact(item, sourceMessageId, index);
+    if (!normalized) return;
+    if (seen.has(normalized.factId)) {
+      normalized.factId = `${normalized.factId}_${index + 1}`;
+    }
+    seen.add(normalized.factId);
+    output.push(normalized);
+  });
+  return output.slice(0, 2e3);
+}
+function mergeList(left, right, limit = 60) {
+  return [...new Set([...left, ...right].map((item) => item.trim()).filter(Boolean))].slice(0, limit);
+}
+function mergeTimeRange(previous, next) {
+  return {
+    start: next.start || previous.start,
+    end: next.end || previous.end,
+    label: next.label || previous.label
+  };
+}
+function semanticFingerprint(fact) {
+  return JSON.stringify({
+    eventId: fact.eventId,
+    occurredFacts: fact.occurredFacts,
+    unresolvedItems: fact.unresolvedItems,
+    status: fact.status,
+    timeRange: fact.timeRange,
+    relatedEntities: fact.relatedEntities,
+    title: fact.title,
+    content: fact.content,
+    type: fact.type,
+    keywords: fact.keywords,
+    confidence: fact.confidence,
+    active: fact.active,
+    supersededByFactId: fact.supersededByFactId
+  });
+}
+function mergeInternalFacts(existing, incoming, rawFacts = []) {
+  const output = existing.map((fact) => ({
+    ...fact,
+    sourceMessageIds: [...fact.sourceMessageIds],
+    occurredFacts: [...fact.occurredFacts],
+    unresolvedItems: [...fact.unresolvedItems],
+    relatedEntities: [...fact.relatedEntities],
+    keywords: [...fact.keywords],
+    timeRange: { ...fact.timeRange }
+  }));
+  const byId = new Map(output.map((fact, index) => [fact.factId, index]));
+  const rawById = new Map(rawFacts.map((fact) => [fact.factId || fact.id, fact]));
+  for (const next of incoming) {
+    const index = byId.get(next.factId);
+    if (index === void 0) {
+      byId.set(next.factId, output.length);
+      output.push(next);
+      continue;
+    }
+    const previous = output[index];
+    const raw = rawById.get(next.factId);
+    const operation = raw?.operation ?? "update";
+    const unresolved = operation === "close" ? [] : operation === "append" ? mergeList(previous.unresolvedItems, next.unresolvedItems) : next.unresolvedItems.length ? next.unresolvedItems : previous.unresolvedItems;
+    const merged = {
+      ...previous,
+      ...next,
+      sourceMessageIds: mergeList(previous.sourceMessageIds, next.sourceMessageIds),
+      occurredFacts: mergeList(previous.occurredFacts, next.occurredFacts),
+      unresolvedItems: unresolved,
+      relatedEntities: mergeList(previous.relatedEntities, next.relatedEntities),
+      keywords: mergeList(previous.keywords, next.keywords),
+      timeRange: mergeTimeRange(previous.timeRange, next.timeRange),
+      active: operation === "close" || operation === "supersede" ? false : next.active,
+      supersededByFactId: operation === "supersede" ? next.supersededByFactId || previous.supersededByFactId : previous.supersededByFactId,
+      consumedBySmallSummaryId: previous.consumedBySmallSummaryId,
+      solidifiedByLargeSummaryId: previous.solidifiedByLargeSummaryId,
+      createdAt: previous.createdAt,
+      updatedAt: nowIso()
+    };
+    if (semanticFingerprint(merged) !== semanticFingerprint(previous)) {
+      delete merged.consumedBySmallSummaryId;
+      delete merged.solidifiedByLargeSummaryId;
+    }
+    output[index] = merged;
+  }
+  return output.slice(-2e3);
+}
+function pendingFactsByEvent(facts) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const fact of facts) {
+    if (fact.consumedBySmallSummaryId) continue;
+    const list3 = groups.get(fact.eventId) ?? [];
+    list3.push(fact);
+    groups.set(fact.eventId, list3);
+  }
+  return groups;
+}
+function markFactsConsumed(facts, factIds, summaryId) {
+  const selected = new Set(factIds);
+  for (const fact of facts) if (selected.has(fact.factId)) fact.consumedBySmallSummaryId = summaryId;
+}
+function markFactsSolidified(facts, factIds, largeSummaryId) {
+  const selected = new Set(factIds);
+  for (const fact of facts) if (selected.has(fact.factId)) fact.solidifiedByLargeSummaryId = largeSummaryId;
+}
+function migrateLegacyConsumption(facts, smallSummaries, largeSummaries) {
+  for (const summary of smallSummaries) {
+    const directFactIds = new Set(summary.sourceFactIds ?? []);
+    for (const fact of facts) {
+      if (directFactIds.has(fact.factId) || summary.sourceKeys.includes(fact.factId) || fact.sourceMessageIds.some((id) => summary.sourceKeys.includes(id))) {
+        fact.consumedBySmallSummaryId ||= summary.id;
+      }
+    }
+  }
+  const largeBySmall = /* @__PURE__ */ new Map();
+  for (const large of largeSummaries) for (const smallId of large.sourceSummaryIds ?? large.sourceKeys) largeBySmall.set(smallId, large.id);
+  for (const small of smallSummaries) {
+    const largeId = small.solidifiedByLargeSummaryId || largeBySmall.get(small.id);
+    if (!largeId) continue;
+    small.solidifiedByLargeSummaryId = largeId;
+    for (const fact of facts) if (fact.consumedBySmallSummaryId === small.id) fact.solidifiedByLargeSummaryId ||= largeId;
+  }
+}
+function invalidateFactsAfterMessages(facts, validMessageIds) {
+  const removedFactIds = /* @__PURE__ */ new Set();
+  const kept = facts.filter((fact) => {
+    const valid = fact.sourceMessageIds.length > 0 && fact.sourceMessageIds.every((id) => validMessageIds.has(id));
+    if (!valid) removedFactIds.add(fact.factId);
+    return valid;
+  });
+  return { facts: kept, removedFactIds };
+}
+
+// src/domain/snapshot.ts
+var EXISTENCE_STATES = /* @__PURE__ */ new Set([
+  "\u5B58\u6D3B",
+  "\u6B7B\u4EA1\u5DF2\u786E\u8BA4",
+  "\u5B58\u5728\u672A\u77E5",
+  "\u5931\u8E2A",
+  "\u8EAB\u4EFD\u5B58\u7591",
+  "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4",
+  "\u5B58\u5728\u88AB\u62B9\u9664",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var ACTIVITY_STATES = /* @__PURE__ */ new Set([
+  "\u5F53\u524D\u5728\u573A",
+  "\u5F53\u524D\u76F8\u5173",
+  "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3",
+  "\u4F11\u7720",
+  "\u957F\u671F\u4F11\u7720",
+  "\u5DF2\u5F52\u6863",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var MEMORY_STATES = /* @__PURE__ */ new Set([
+  "\u5E7F\u6CDB\u8BB0\u5F97",
+  "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97",
+  "\u4EC5\u8BB0\u5F55\u7559\u5B58",
+  "\u4EC5\u75D5\u8FF9\u7559\u5B58",
+  "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97",
+  "\u8BB0\u5FC6\u88AB\u7BE1\u6539",
+  "\u8BB0\u5FC6\u88AB\u62B9\u9664",
+  "\u672A\u6807\u6CE8",
+  "\u4E0D\u9002\u7528"
+]);
+var EVIDENCE_LEVELS = /* @__PURE__ */ new Set(["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"]);
+var STANDARD_FIELDS = /* @__PURE__ */ new Set(["id", "title", "name", "content", "summary", "keywords", "status", "source", "locked", "lifecycle", "updatedAt", "factIds", "fact_ids", "eventId", "event_id", "recall", "fields"]);
+function registryOrDefault(registry2) {
+  return normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY);
+}
+function attachLegacyAliases(snapshot, registry2) {
+  const stateKey = tableByRole(registry2, "state", false)?.key;
+  if (stateKey && stateKey in snapshot && !Object.prototype.hasOwnProperty.call(snapshot, "characters")) {
+    Object.defineProperty(snapshot, "characters", {
+      configurable: true,
+      enumerable: false,
+      get: () => snapshot[stateKey],
+      set: (value) => {
+        snapshot[stateKey] = Array.isArray(value) ? value : [];
+      }
+    });
+  }
+  return snapshot;
+}
+function emptySnapshot(registry2, includeDisabled = true) {
+  const tables2 = registryOrDefault(registry2).filter((table) => includeDisabled || table.enabled);
+  return attachLegacyAliases(Object.fromEntries(tables2.map((table) => [table.key, []])), tables2);
+}
+function normalizeKeywords(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 24);
+}
+function normalizeStringList(value, limit = 20, itemLimit = 240) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+}
+function enumValue(value, allowed, fallback) {
+  const text = safeText(value, 80).trim();
+  return allowed.has(text) ? text : fallback;
+}
+function defaultLifecycle() {
+  return { existence: "\u672A\u6807\u6CE8", activity: "\u672A\u6807\u6CE8", memory: "\u672A\u6807\u6CE8", evidenceLevel: "\u672A\u77E5", evidence: "", returnConditions: [], returnBlockers: [] };
+}
+function normalizeLifecycle(value, previous) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = previous ?? defaultLifecycle();
+  return {
+    existence: enumValue(source.existence ?? base.existence, EXISTENCE_STATES, base.existence),
+    activity: enumValue(source.activity ?? base.activity, ACTIVITY_STATES, base.activity),
+    memory: enumValue(source.memory ?? base.memory, MEMORY_STATES, base.memory),
+    evidenceLevel: enumValue(source.evidenceLevel ?? base.evidenceLevel, EVIDENCE_LEVELS, base.evidenceLevel),
+    evidence: safeText(source.evidence ?? base.evidence, 4e3).trim(),
+    returnConditions: normalizeStringList(source.returnConditions ?? base.returnConditions),
+    returnBlockers: normalizeStringList(source.returnBlockers ?? base.returnBlockers)
+  };
+}
+function normalizeRecall(value, title, keywords) {
+  const source = value && typeof value === "object" ? value : {};
+  const any = normalizeStringList(source.any, 24, 100);
+  return {
+    any: any.length ? any : normalizeKeywords([title, ...keywords]),
+    all: normalizeStringList(source.all, 16, 100),
+    exclude: normalizeStringList(source.exclude, 16, 100)
+  };
+}
+function normalizeCustomFields(source, table, previous) {
+  const prior = previous?.fields && typeof previous.fields === "object" ? previous.fields : {};
+  const nested = source.fields && typeof source.fields === "object" ? source.fields : {};
+  const output = {};
+  for (const field of table.fields) {
+    if (STANDARD_FIELDS.has(field.key) || field.key === "lifecycle") continue;
+    const raw = source[field.key] ?? nested[field.key] ?? prior[field.key];
+    if (field.type === "string[]") output[field.key] = normalizeStringList(raw, 30, 500);
+    else output[field.key] = safeText(raw, 4e3).trim();
+  }
+  return output;
+}
+function normalizeRow(value, tableKey, index, previous, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  const table = tableByKey(tables2, tableKey) ?? { key: tableKey, name: tableKey, role: "custom", fields: [] };
+  const source = value && typeof value === "object" ? value : {};
+  const now = nowIso();
+  const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
+  const manual = source.source === "manual" || previous?.source === "manual";
+  const title = safeText(source.title || source.name || previous?.title || `${table.name} ${index + 1}`, 240).trim();
+  const keywords = normalizeKeywords(source.keywords ?? previous?.keywords ?? []);
+  const supportsLifecycle = table.role === "state" || table.fields.some((field) => field.type === "lifecycle");
+  const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
+  const factIds = normalizeStringList(source.factIds ?? source.fact_ids ?? previous?.factIds, 40, 160);
+  const eventId = safeText(source.eventId ?? source.event_id ?? previous?.eventId, 160).trim() || void 0;
+  return {
+    id,
+    title,
+    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
+    keywords,
+    status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
+    source: manual ? "manual" : "auto",
+    locked: Boolean(source.locked ?? previous?.locked ?? manual),
+    lifecycle: supportsLifecycle && lifecycleInput ? normalizeLifecycle(lifecycleInput, previous?.lifecycle) : void 0,
+    updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now,
+    fields: normalizeCustomFields(source, table, previous),
+    factIds,
+    eventId,
+    recall: normalizeRecall(source.recall ?? previous?.recall, title, keywords)
+  };
+}
+function normalizeSnapshot(value, previousSnapshot2, registry2, includeDisabled = true) {
+  const tables2 = registryOrDefault(registry2).filter((table) => includeDisabled || table.enabled);
+  const source = migrateSnapshotTables(value, tables2);
+  const previous = previousSnapshot2 ? migrateSnapshotTables(previousSnapshot2, tables2) : {};
+  const output = emptySnapshot(tables2, true);
+  for (const table of tables2) {
+    const key = table.key;
+    const rows = Array.isArray(source[key]) ? source[key] : [];
+    const previousMap = new Map((previous[key] ?? []).map((row) => [row.id, row]));
+    const used = /* @__PURE__ */ new Set();
+    output[key] = rows.map((row, index) => {
+      const rawId = row && typeof row === "object" ? safeText(row.id, 160) : "";
+      const normalized = normalizeRow(row, key, index, rawId ? previousMap.get(rawId) : void 0, tables2);
+      if (used.has(normalized.id)) normalized.id = makeId(key);
+      used.add(normalized.id);
+      return normalized;
+    });
+  }
+  return attachLegacyAliases(output, tables2);
+}
+function identityTitle(value) {
+  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+}
+function stateRows(snapshot, registry2) {
+  const key = tableByRole(registry2, "state", false)?.key;
+  return key ? snapshot[key] ?? [] : [];
+}
+function preservePersistentCharacters(previous, next, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  const key = tableByRole(tables2, "state", false)?.key;
+  if (!key) return next;
+  const nextRows = next[key] ?? (next[key] = []);
+  const oldRows = previous[key] ?? previous.characters ?? [];
+  const byId = new Map(nextRows.map((row) => [row.id, row]));
+  const byTitle = new Map(nextRows.map((row) => [identityTitle(row.title), row]));
+  for (const oldRow of oldRows) {
+    if (byId.has(oldRow.id)) continue;
+    const titleMatch = byTitle.get(identityTitle(oldRow.title));
+    if (titleMatch) {
+      titleMatch.id = oldRow.id;
+      if (oldRow.source === "manual" || oldRow.locked) Object.assign(titleMatch, structuredClone(oldRow));
+      else if (!titleMatch.lifecycle && oldRow.lifecycle) titleMatch.lifecycle = structuredClone(oldRow.lifecycle);
+      byId.set(oldRow.id, titleMatch);
+      continue;
+    }
+    const restored = structuredClone(oldRow);
+    nextRows.push(restored);
+    byId.set(restored.id, restored);
+    byTitle.set(identityTitle(restored.title), restored);
+  }
+  const seenTitles = /* @__PURE__ */ new Set();
+  next[key] = nextRows.filter((row) => {
+    const title = identityTitle(row.title);
+    if (!title || !seenTitles.has(title)) {
+      if (title) seenTitles.add(title);
+      return true;
+    }
+    return false;
+  });
+  return attachLegacyAliases(next, tables2);
+}
+function characterTitleAliases(title) {
+  const raw = String(title || "").trim();
+  const parts = raw.split(/[｜|:：—–-]/).map(identityTitle).filter(Boolean);
+  const stripped = identityTitle(raw.replace(/(?:人物|角色|人物状态|角色状态|档案|信息|当前状态)$/g, ""));
+  return [...new Set([identityTitle(raw), stripped, ...parts].filter(Boolean))];
+}
+function removeFocusCharacterDuplicates(snapshot, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  const focusKey = tableByRole(tables2, "focus", false)?.key;
+  if (!focusKey) return snapshot;
+  const characters = stateRows(snapshot, tables2);
+  const aliases2 = new Set(characters.flatMap((row) => characterTitleAliases(row.title)));
+  const contents = new Set(characters.map((row) => identityTitle(row.content)).filter((value) => value.length >= 12));
+  snapshot[focusKey] = (snapshot[focusKey] ?? []).filter((row) => {
+    if (row.source === "manual" || row.locked) return true;
+    const title = identityTitle(row.title);
+    const content = identityTitle(row.content);
+    return !(title && aliases2.has(title)) && !(content.length >= 12 && contents.has(content));
+  });
+  return snapshot;
+}
+function snapshotRowCount(snapshot, registry2, enabledOnly = false) {
+  if (!snapshot) return 0;
+  const tables2 = registryOrDefault(registry2).filter((table) => !enabledOnly || table.enabled);
+  return tables2.reduce((sum, table) => sum + (snapshot[table.key]?.length ?? 0), 0);
+}
+function upsertManualRow(snapshot, tableKey, row, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  const next = normalizeSnapshot(snapshot, snapshot, tables2);
+  next[tableKey] ||= [];
+  const index = next[tableKey].findIndex((item) => item.id === row.id);
+  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? true, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0, tables2);
+  if (index >= 0) next[tableKey][index] = normalized;
+  else next[tableKey].push(normalized);
+  return next;
+}
+function deleteRow(snapshot, tableKey, rowId, registry2) {
+  const next = normalizeSnapshot(snapshot, snapshot, registry2);
+  next[tableKey] = (next[tableKey] ?? []).filter((row) => row.id !== rowId);
+  return next;
+}
+function stateSchemaDescription(registry2) {
+  const example = {};
+  for (const table of enabledTables(registryOrDefault(registry2))) {
+    const sample = {
+      id: `${table.key}-1`,
+      title: table.name,
+      content: table.purpose,
+      keywords: [table.name],
+      status: "active",
+      factIds: ["fact_1"],
+      eventId: "event_1"
+    };
+    for (const field of table.fields) {
+      if (STANDARD_FIELDS.has(field.key) || field.key === "lifecycle") continue;
+      sample[field.key] = field.type === "string[]" ? [] : "";
+    }
+    example[table.key] = [sample];
+  }
+  return JSON.stringify(example, null, 2);
+}
+function relevanceText(row) {
+  return `${row.title} ${row.content} ${row.status} ${row.keywords.join(" ")}`;
+}
+function isPassiveObserver(row) {
+  if (row.source === "manual" || row.locked) return false;
+  return /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看)/i.test(relevanceText(row));
+}
+function filterPassiveObservers(snapshot, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  for (const table of tables2) {
+    if (!table.enabled) continue;
+    snapshot[table.key] = (snapshot[table.key] ?? []).filter((row) => !isPassiveObserver(row));
+  }
+  return snapshot;
+}
+
 // src/storage/repository.ts
 function emptyChatState(chatKey) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     chatKey,
     processedMessageKeys: [],
+    internalFacts: [],
     smallSummaries: [],
     largeSummaries: [],
     lastSyncStatus: "idle",
+    migration: { dynamicTablesV23: false, internalFactsV23: false },
     updatedAt: nowIso()
+  };
+}
+function normalizeSummaryArrays(value, kind) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => item && typeof item === "object").map((item) => ({
+    ...item,
+    kind,
+    sourceKeys: Array.isArray(item.sourceKeys) ? [...new Set(item.sourceKeys.map(String))] : [],
+    sourceFactIds: Array.isArray(item.sourceFactIds) ? [...new Set(item.sourceFactIds.map(String))] : void 0,
+    sourceSummaryIds: Array.isArray(item.sourceSummaryIds) ? [...new Set(item.sourceSummaryIds.map(String))] : void 0,
+    eventIds: Array.isArray(item.eventIds) ? [...new Set(item.eventIds.map(String))] : void 0,
+    unresolvedItems: Array.isArray(item.unresolvedItems) ? [...new Set(item.unresolvedItems.map(String))] : void 0
+  }));
+}
+function migrateChatState(raw, chatKey) {
+  const state2 = raw && raw.chatKey === chatKey ? raw : emptyChatState(chatKey);
+  const previousSchema = Number(state2.schemaVersion) || 1;
+  const needsViewMigration = state2.migration?.dynamicTablesV23 !== true;
+  const needsFactMigration = state2.migration?.internalFactsV23 !== true;
+  let artifactViewsChanged = false;
+  state2.schemaVersion = 2;
+  state2.processedMessageKeys = Array.isArray(state2.processedMessageKeys) ? [...new Set(state2.processedMessageKeys.map(String))] : [];
+  state2.smallSummaries = normalizeSummaryArrays(state2.smallSummaries, "small");
+  state2.largeSummaries = normalizeSummaryArrays(state2.largeSummaries, "large");
+  let facts = normalizeInternalFacts(state2.internalFacts);
+  const registry2 = getSettings().tableRegistry;
+  for (const message of getChat()) {
+    const artifact = message?.extra?.[MODULE_NAME];
+    if (!artifact || artifact.chatKey !== chatKey) continue;
+    if (needsViewMigration && artifact.snapshot) {
+      const before = JSON.stringify(artifact.snapshot);
+      artifact.snapshot = normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry2);
+      if (JSON.stringify(artifact.snapshot) !== before) artifactViewsChanged = true;
+    }
+    if (!needsFactMigration || !artifact.factPackage?.facts?.length) continue;
+    const incoming = normalizeInternalFacts(artifact.factPackage.facts, artifact.messageKey);
+    facts = mergeInternalFacts(facts, incoming, artifact.factPackage.facts);
+  }
+  migrateLegacyConsumption(facts, state2.smallSummaries, state2.largeSummaries);
+  state2.internalFacts = facts;
+  state2.migration = { ...state2.migration ?? {}, dynamicTablesV23: true, internalFactsV23: true };
+  state2.updatedAt ||= nowIso();
+  return {
+    state: state2,
+    artifactViewsChanged,
+    metadataChanged: previousSchema !== 2 || needsViewMigration || needsFactMigration
   };
 }
 async function putArtifact(_artifact) {
@@ -538,14 +1212,17 @@ async function putArtifact(_artifact) {
 async function getChatState(chatKey) {
   assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u8BFB\u53D6\u65E7\u804A\u5929\u72B6\u6001");
   const namespace = getChatMetadataNamespace();
-  const current = namespace.state;
-  if (!current || current.chatKey !== chatKey) {
-    namespace.state = emptyChatState(chatKey);
-  }
+  const migration = migrateChatState(namespace.state, chatKey);
+  namespace.state = migration.state;
+  if (migration.artifactViewsChanged) await persistChatFor(chatKey);
+  if (migration.metadataChanged) await persistMetadataFor(chatKey);
   return namespace.state;
 }
 async function putChatState(state2) {
   assertChatCommitCurrent(state2.chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u5199\u5165\u65E7\u804A\u5929\u72B6\u6001");
+  state2.schemaVersion = 2;
+  state2.internalFacts = normalizeInternalFacts(state2.internalFacts);
+  migrateLegacyConsumption(state2.internalFacts, state2.smallSummaries, state2.largeSummaries);
   state2.updatedAt = nowIso();
   const namespace = getChatMetadataNamespace();
   namespace.state = state2;
@@ -801,6 +1478,21 @@ var TASK_RESPONSE_TOKENS = {
   smallSummary: 2400,
   largeSummary: 3200
 };
+var schemaUnsupportedConnections = /* @__PURE__ */ new Set();
+function taskConnectionKey(task) {
+  const connection = getSettings().connections[task];
+  if (connection?.mode === "profile") {
+    const profileId = resolveProfileId(connection);
+    return `${task}:profile:${profileId || "unselected"}`;
+  }
+  return `${task}:current-chat`;
+}
+function shouldSkipJsonSchema(task) {
+  return schemaUnsupportedConnections.has(taskConnectionKey(task));
+}
+function rememberJsonSchemaUnsupported(task) {
+  schemaUnsupportedConnections.add(taskConnectionKey(task));
+}
 function responseTokens(options) {
   const requested = Number(options.maxTokens);
   if (Number.isFinite(requested) && requested > 0) {
@@ -1010,18 +1702,23 @@ async function testConnection(task) {
     }
   };
   let schemaFailure;
-  try {
-    raw = await generateTask(request);
-    if (raw.trim() === "{}") {
-      schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
+  if (shouldSkipJsonSchema(task)) {
+    raw = await generateTask({ ...request, jsonSchema: void 0 });
+  } else {
+    try {
+      raw = await generateTask(request);
+      if (raw.trim() === "{}") {
+        schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      schemaFailure = error;
     }
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw error;
-    schemaFailure = error;
   }
   if (schemaFailure) {
     try {
       raw = await generateTask({ ...request, jsonSchema: void 0 });
+      rememberJsonSchemaUnsupported(task);
     } catch (fallbackError) {
       if (fallbackError instanceof Error && fallbackError.name === "AbortError") throw fallbackError;
       throw new Error(
@@ -1090,6 +1787,9 @@ async function repairStructuredOutput(task, raw, structureDescription) {
   return parseJsonObject(repaired);
 }
 async function generateWithSchemaFallback(options) {
+  if (options.jsonSchema && shouldSkipJsonSchema(options.task)) {
+    return generateTask({ ...options, jsonSchema: void 0 });
+  }
   let schemaFailure;
   try {
     const raw = await generateTask(options);
@@ -1100,7 +1800,9 @@ async function generateWithSchemaFallback(options) {
     schemaFailure = error;
   }
   try {
-    return await generateTask({ ...options, jsonSchema: void 0 });
+    const fallback = await generateTask({ ...options, jsonSchema: void 0 });
+    rememberJsonSchemaUnsupported(options.task);
+    return fallback;
   } catch (fallbackError) {
     if (isCancelledRequest(fallbackError)) throw fallbackError;
     throw new Error(
@@ -1298,18 +2000,23 @@ async function auditText(playerRules, playerText, assistantText) {
   };
   let raw = "";
   let structuredRequestError;
-  try {
-    raw = await generateTask({ ...request, jsonSchema: auditJsonSchema() });
-    if (raw.trim() === "{}") {
-      structuredRequestError = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
+  if (shouldSkipJsonSchema("audit")) {
+    raw = await generateTask(request);
+  } else {
+    try {
+      raw = await generateTask({ ...request, jsonSchema: auditJsonSchema() });
+      if (raw.trim() === "{}") {
+        structuredRequestError = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
+      }
+    } catch (error) {
+      if (isCancelledAuditRequest(error)) throw error;
+      structuredRequestError = error;
     }
-  } catch (error) {
-    if (isCancelledAuditRequest(error)) throw error;
-    structuredRequestError = error;
   }
   if (structuredRequestError) {
     try {
       raw = await generateTask(request);
+      rememberJsonSchemaUnsupported("audit");
     } catch (fallbackError) {
       if (isCancelledAuditRequest(fallbackError)) throw fallbackError;
       throw new Error(
@@ -1376,7 +2083,11 @@ async function runAudit(artifact, force = false) {
     return artifact.audit;
   }
   if (!settings.auditPrompt.trim()) throw new Error("\u5DF2\u542F\u7528\u89C4\u5219\u5BA1\u6838\uFF0C\u4F46\u5BA1\u6838\u63D0\u793A\u8BCD\u4E3A\u7A7A");
-  if (!force && artifact.stages.audit.status === "success" && artifact.audit?.passed && artifact.approvedFingerprint === artifact.sourceFingerprint) {
+  const ruleFingerprint = hashText(`${settings.auditPrompt}
+${settings.auditFailAction}
+${settings.maxRevisionAttempts}`);
+  if (!force && artifact.stages.audit.status === "success" && artifact.audit?.passed && artifact.approvedFingerprint === artifact.sourceFingerprint && (!artifact.auditRuleFingerprint || artifact.auditRuleFingerprint === ruleFingerprint)) {
+    artifact.auditRuleFingerprint = ruleFingerprint;
     return artifact.audit;
   }
   markStage(artifact, "audit", "running");
@@ -1385,6 +2096,7 @@ async function runAudit(artifact, force = false) {
     const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText);
     assertArtifactCommitCurrent(artifact);
     artifact.audit = result;
+    artifact.auditRuleFingerprint = ruleFingerprint;
     if (result.passed) {
       artifact.approvedFingerprint = artifact.sourceFingerprint;
       artifact.hiddenByAudit = false;
@@ -1416,10 +2128,16 @@ function updateActiveSwipe(message, text) {
 }
 async function refreshMessageDisplay(index) {
   const context = getContext();
-  if (typeof context.reloadCurrentChat === "function") await context.reloadCurrentChat();
-  else if (context.event_types?.MESSAGE_UPDATED) {
-    context.eventSource?.emit?.(context.event_types.MESSAGE_UPDATED, index);
+  const message = getMessage(index);
+  if (typeof context.updateMessageBlock === "function") {
+    await context.updateMessageBlock(index, message);
+    return;
   }
+  if (context.event_types?.MESSAGE_UPDATED) {
+    context.eventSource?.emit?.(context.event_types.MESSAGE_UPDATED, index);
+    return;
+  }
+  if (typeof context.reloadCurrentChat === "function") await context.reloadCurrentChat();
 }
 async function replaceMessageInPlace(artifact, text) {
   assertArtifactCommitCurrent(artifact);
@@ -1592,293 +2310,216 @@ async function runRevisionFlow(artifact) {
 }
 
 // src/domain/lorebook-publish.ts
-function rows(snapshot, key) {
-  return snapshot[key] ?? [];
+function registry(options) {
+  return normalizeTableRegistry(options?.registry?.length ? options.registry : DEFAULT_TABLE_REGISTRY);
 }
-function uniq(values, limit = 32) {
-  return [...new Set(values.map((item) => String(item || "").trim()).filter((item) => item.length >= 2))].slice(0, limit);
-}
-function titleKeywords(row) {
-  return uniq([row.title, ...row.keywords], 20);
+function uniq(values, limit = 40) {
+  return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, limit);
 }
 function lifecycleLines(lifecycle) {
   if (!lifecycle) return [];
-  const lines = [
-    `\u5B58\u5728\u72B6\u6001\uFF1A${lifecycle.existence}`,
-    `\u6D3B\u8DC3\u72B6\u6001\uFF1A${lifecycle.activity}`,
-    `\u8BB0\u5FC6\u72B6\u6001\uFF1A${lifecycle.memory}`,
-    `\u8BC1\u636E\u7B49\u7EA7\uFF1A${lifecycle.evidenceLevel}`
-  ];
+  const lines = [`\u5B58\u5728\u72B6\u6001\uFF1A${lifecycle.existence}`, `\u6D3B\u8DC3\u72B6\u6001\uFF1A${lifecycle.activity}`, `\u8BB0\u5FC6\u72B6\u6001\uFF1A${lifecycle.memory}`, `\u8BC1\u636E\u7B49\u7EA7\uFF1A${lifecycle.evidenceLevel}`];
   if (lifecycle.evidence) lines.push(`\u5224\u65AD\u4F9D\u636E\uFF1A${lifecycle.evidence}`);
   if (lifecycle.returnConditions.length) lines.push(`\u53EF\u80FD\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnConditions.join("\uFF1B")}`);
   if (lifecycle.returnBlockers.length) lines.push(`\u963B\u6B62\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnBlockers.join("\uFF1B")}`);
   return lines;
 }
-function rowContent(sectionName, row) {
-  const lines = [`[${sectionName}\uFF1A${row.title}]`];
-  lines.push(...lifecycleLines(row.lifecycle));
+function rowContent(table, row) {
+  const lines = [`[${table.name}\uFF1A${row.title}]`, ...lifecycleLines(row.lifecycle)];
   if (row.status) lines.push(`\u5F53\u524D\u72B6\u6001\uFF1A${row.status}`);
   if (row.content) lines.push(`\u5F53\u524D\u8BB0\u5F55\uFF1A${row.content}`);
-  if (row.keywords.length) lines.push(`\u5173\u952E\u8BCD\uFF1A${row.keywords.join("\u3001")}`);
+  for (const field of table.fields) {
+    if (!row.fields || !(field.key in row.fields)) continue;
+    const value = row.fields[field.key];
+    if (Array.isArray(value) && value.length) lines.push(`${field.label}\uFF1A${value.join("\u3001")}`);
+    else if (String(value ?? "").trim()) lines.push(`${field.label}\uFF1A${String(value)}`);
+  }
+  if (row.keywords.length) lines.push(`\u89E6\u53D1\u8BCD\uFF1A${row.keywords.join("\u3001")}`);
+  if (row.factIds?.length) lines.push(`\u4E8B\u5B9EID\uFF1A${row.factIds.join("\u3001")}`);
+  if (row.eventId) lines.push(`\u4E8B\u4EF6ID\uFF1A${row.eventId}`);
   if (row.source === "manual" || row.locked) lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u9501\u5B9A\uFF1B\u81EA\u52A8\u6574\u7406\u4E0D\u5F97\u8986\u76D6\u6216\u5220\u9664\u3002");
-  lines.push(`\u66F4\u65B0\u65F6\u95F4\uFF1A${row.updatedAt}`);
   return lines.join("\n");
 }
-function groupedContent(title, tableLabel, sourceRows) {
-  const blocks = sourceRows.map((row) => rowContent(tableLabel, row));
-  return `[${title}]
-${blocks.length ? blocks.join("\n\n") : "\u6682\u65E0\u53EF\u53D1\u5E03\u8BB0\u5F55\u3002"}`;
+function rowSearchText(row) {
+  return `${row.title} ${row.content} ${row.status} ${row.keywords.join(" ")}`;
 }
-function isCurrentCharacter(row) {
-  const activity = row.lifecycle?.activity;
-  return activity === "\u5F53\u524D\u5728\u573A" || activity === "\u5F53\u524D\u76F8\u5173";
+function isAudienceRow(row) {
+  if (row.source === "manual" || row.locked) return false;
+  return /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|喝彩|起哄|议论|人群反应|站在一旁|远处观看)/i.test(rowSearchText(row));
 }
-function isGlobalRow(row) {
-  const text = `${row.title} ${row.status} ${row.keywords.join(" ")}`;
-  return /(全局|跨区域|公共|社会|制度|世界态势|global)/i.test(text);
+function normalizedName(value) {
+  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
-function cleanPrefixedTitle(title, prefixes) {
-  let output = String(title || "").trim();
-  for (const prefix of prefixes) {
-    const pattern = new RegExp(`^${prefix}[\uFF5C|:\uFF1A\\s-]*`, "i");
-    output = output.replace(pattern, "").trim();
+function aliases(title) {
+  const raw = String(title || "").trim();
+  return uniq([normalizedName(raw), ...raw.split(/[｜|:：—–-]/).map(normalizedName)], 12);
+}
+function filterSnapshotForLorebook(snapshot, customRegistry) {
+  const tables2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
+  const next = filterPassiveObservers(normalizeSnapshot(snapshot, snapshot, tables2), tables2);
+  const stateKey = tableByRole(tables2, "state", false)?.key;
+  const focusKey = tableByRole(tables2, "focus", false)?.key;
+  const eventKey = tableByRole(tables2, "events", false)?.key;
+  const relationKey = tableByRole(tables2, "relationships", false)?.key;
+  if (!stateKey) return next;
+  const relevanceRows = [focusKey, eventKey, relationKey].filter(Boolean).flatMap((key) => next[key] ?? []);
+  const relevance = normalizedName(relevanceRows.map(rowSearchText).join(" "));
+  next[stateKey] = (next[stateKey] ?? []).filter((row) => {
+    if (row.source === "manual" || row.locked) return true;
+    if (isAudienceRow(row)) return false;
+    const named = aliases(row.title).some((name) => name && relevance.includes(name));
+    const direct = /(核心参与|直接相关|交战|对战|行动者|目标|当事人)/i.test(rowSearchText(row));
+    return named || direct || !relevance;
+  });
+  const retainedNames = new Set(next[stateKey].flatMap((row) => aliases(row.title)));
+  for (const table of enabledTables(tables2)) {
+    if (["focus", "spacetime", "state", "events", "globalChanges", "foundations"].includes(table.role)) continue;
+    next[table.key] = (next[table.key] ?? []).filter((row) => {
+      if (row.source === "manual" || row.locked) return true;
+      if (isAudienceRow(row)) return false;
+      const text = normalizedName(rowSearchText(row));
+      return !retainedNames.size || [...retainedNames].some((name) => text.includes(name)) || table.role === "regions";
+    });
   }
-  return output || title;
+  return next;
 }
-function eventKind(row) {
-  const text = `${row.title} ${row.status} ${row.keywords.join(" ")}`;
-  const process = /(^|[｜|])流程|手续|登记|申请|审批|调查程序|制度流程|process/i.test(text);
-  return process ? { label: "\u6D41\u7A0B", name: cleanPrefixedTitle(row.title, ["\u6D41\u7A0B"]) } : { label: "\u4E8B\u4EF6", name: cleanPrefixedTitle(row.title, ["\u4E8B\u4EF6"]) };
+function defaultTrigger(row) {
+  const recall = row.recall ?? { any: [], all: [], exclude: [] };
+  const any = uniq([...recall.any ?? [], row.title, ...row.keywords], 32);
+  return { any, all: uniq(recall.all ?? [], 20), exclude: uniq(recall.exclude ?? [], 20) };
 }
-function ownerEntry(row, kind) {
-  const escaped = kind.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = row.title.match(new RegExp(`^(.*?)[\uFF5C|:\uFF1A\\s-]*${escaped}$`));
-  if (match?.[1]?.trim()) {
-    const owner = match[1].trim();
-    return { comment: `MA\uFF5C${kind}\uFF5C${owner}`, name: owner, label: kind };
-  }
-  return kind === "\u7269\u54C1\u4E0E\u8D44\u6E90" ? { comment: `MA\uFF5C\u7269\u54C1\uFF5C${row.title}`, name: row.title, label: "\u7269\u54C1" } : { comment: `MA\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\uFF5C${row.title}`, name: row.title, label: "\u6280\u80FD\u4E0E\u80FD\u529B" };
+function isEssentialState(row) {
+  return /(不可缺失|昏迷|重伤|濒死|死亡|失踪|被拘禁|封印|当前在场|当前相关|核心参与)/i.test(rowSearchText(row));
 }
-function makeDocument(key, comment, content, keywords, constant, vectorized, order, kind) {
+function recallModeFor(role, row, options) {
+  if (!options.latestContinuityConstant) return "trigger";
+  if (role === "focus" || role === "spacetime" || role === "globalChanges") return "constant";
+  if (role === "state" && isEssentialState(row)) return "constant";
+  if (role === "foundations" && /(必要|规则|制度|禁止|必须|不可)/i.test(rowSearchText(row))) return "constant";
+  return "trigger";
+}
+function makeDocument(key, comment, content, kind, mode, trigger, factIds, eventIds, updatedAt, options) {
+  const actualMode = mode;
   return {
     key,
     comment: `[MA11] ${comment}`,
     content,
-    keywords: uniq(keywords),
-    constant,
-    vectorized: constant ? false : vectorized,
-    order,
-    kind
+    keywords: actualMode === "trigger" ? trigger.any : [],
+    constant: actualMode === "constant",
+    vectorized: actualMode === "vector",
+    order: 0,
+    updatedAt,
+    kind,
+    recallMode: actualMode,
+    trigger,
+    // SillyTavern 的相似度门槛和 Max Entries 是 Vector Storage 全局设置；这里只保存镜渊托管元数据。
+    vector: { similarityThreshold: Math.min(0.99, Math.max(0, Number(options.similarityThreshold) || 0.72)), maxResults: Math.max(1, Math.round(Number(options.maxVectorResults) || 8)) },
+    factIds: uniq(factIds, 100),
+    eventIds: uniq(eventIds, 60)
   };
 }
 function unconsumedSmallSummaries(small, large) {
-  const consumed = new Set(large.flatMap((item) => item.sourceKeys));
-  return small.filter((item) => !consumed.has(item.id));
+  const legacy = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
+  return small.filter((item) => !item.solidifiedByLargeSummaryId && !legacy.has(item.id));
 }
-function currentSmallSummaryContent(summaries) {
-  const blocks = summaries.map((item) => {
-    const notes = item.sedimentation?.notes?.length ? `
-\u6C89\u964D\u5904\u7406\uFF1A${item.sedimentation.notes.join("\uFF1B")}` : "";
-    return `\u3010${item.title}\u3011
-${item.summary}${notes}`;
-  });
-  return `[\u5C0F\u603B\u7ED3\uFF1A\u5F53\u524D\u5468\u671F]
-${blocks.join("\n\n")}`;
+function tableDocuments(snapshot, options) {
+  if (!snapshot) return [];
+  const tables2 = registry(options);
+  const filtered = filterSnapshotForLorebook(snapshot, tables2);
+  const docs = [];
+  for (const table of enabledTables(tables2)) {
+    for (const row of filtered[table.key] ?? []) {
+      const mode = recallModeFor(table.role, row, options);
+      const trigger = defaultTrigger(row);
+      docs.push(makeDocument(
+        `view:${table.key}:${row.id}`,
+        `MA\uFF5C${table.name}\uFF5C${row.title}`,
+        rowContent(table, row),
+        `view:${table.role}`,
+        mode,
+        trigger,
+        row.factIds ?? [],
+        row.eventId ? [row.eventId] : [],
+        row.updatedAt,
+        options
+      ));
+    }
+  }
+  return docs;
 }
-function buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
-  const documents = [];
-  if (snapshot) {
-    const foundationRows = rows(snapshot, "foundations");
-    documents.push(makeDocument(
-      "semantic:foundations",
-      "MA\uFF5C\u57FA\u7840\u8BBE\u5B9A",
-      groupedContent("\u57FA\u7840\u8BBE\u5B9A", TABLE_LABELS.foundations, foundationRows),
-      ["\u57FA\u7840\u8BBE\u5B9A", ...foundationRows.flatMap(titleKeywords)],
-      true,
-      false,
-      170,
-      "semantic:foundations"
-    ));
-    const globalRows = [
-      ...rows(snapshot, "spacetime"),
-      ...rows(snapshot, "events").filter(isGlobalRow),
-      ...rows(snapshot, "regions").filter(isGlobalRow)
-    ];
-    documents.push(makeDocument(
-      "semantic:global",
-      "MA\uFF5C\u5168\u5C40\u6001\u52BF",
-      groupedContent("\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u6001\u52BF", globalRows),
-      ["\u5168\u5C40\u6001\u52BF", "\u5F53\u524D\u65F6\u95F4", "\u5F53\u524D\u5730\u70B9", ...globalRows.flatMap(titleKeywords)],
-      options.latestContinuityConstant,
-      false,
-      165,
-      "semantic:global"
-    ));
-    for (const row of rows(snapshot, "focus")) {
-      documents.push(makeDocument(
-        `semantic:focus:${row.id}`,
-        `MA\uFF5C\u7126\u70B9\uFF5C${row.title}`,
-        rowContent("\u7126\u70B9", row),
-        titleKeywords(row),
-        options.latestContinuityConstant,
-        false,
-        160,
-        "semantic:focus"
-      ));
-    }
-    for (const row of rows(snapshot, "characters")) {
-      documents.push(makeDocument(
-        `semantic:character:${row.id}`,
-        `MA\uFF5C\u4EBA\u7269\uFF5C${row.title}`,
-        rowContent("\u4EBA\u7269", row),
-        titleKeywords(row),
-        options.latestContinuityConstant && isCurrentCharacter(row),
-        options.vectorize,
-        isCurrentCharacter(row) ? 155 : 125,
-        "semantic:character"
-      ));
-    }
-    const relationRows = rows(snapshot, "relationships");
-    if (relationRows.length) {
-      documents.push(makeDocument(
-        "semantic:relationships",
-        "MA\uFF5C\u5173\u7CFB\u7F51\u7EDC",
-        groupedContent("\u5173\u7CFB\u7F51\u7EDC", TABLE_LABELS.relationships, relationRows),
-        ["\u5173\u7CFB\u7F51\u7EDC", ...relationRows.flatMap(titleKeywords)],
-        false,
-        options.vectorize,
-        145,
-        "semantic:relationships"
-      ));
-    }
-    for (const row of rows(snapshot, "regions")) {
-      documents.push(makeDocument(
-        `semantic:region:${row.id}`,
-        `MA\uFF5C\u533A\u57DF\uFF5C${row.title}`,
-        rowContent("\u533A\u57DF", row),
-        titleKeywords(row),
-        false,
-        options.vectorize,
-        130,
-        "semantic:region"
-      ));
-    }
-    for (const row of rows(snapshot, "events")) {
-      const classified = eventKind(row);
-      documents.push(makeDocument(
-        `semantic:${classified.label === "\u6D41\u7A0B" ? "process" : "event"}:${row.id}`,
-        `MA\uFF5C${classified.label}\uFF5C${classified.name}`,
-        rowContent(classified.label, row),
-        titleKeywords(row),
-        false,
-        options.vectorize,
-        135,
-        classified.label === "\u6D41\u7A0B" ? "semantic:process" : "semantic:event"
-      ));
-    }
-    for (const row of rows(snapshot, "items")) {
-      const info = ownerEntry(row, "\u7269\u54C1\u4E0E\u8D44\u6E90");
-      documents.push(makeDocument(
-        `semantic:item:${row.id}`,
-        info.comment,
-        rowContent(info.label, row),
-        titleKeywords(row),
-        false,
-        options.vectorize,
-        120,
-        "semantic:item"
-      ));
-    }
-    for (const row of rows(snapshot, "skills")) {
-      const info = ownerEntry(row, "\u6280\u80FD\u4E0E\u80FD\u529B");
-      documents.push(makeDocument(
-        `semantic:skill:${row.id}`,
-        info.comment,
-        rowContent(info.label, row),
-        titleKeywords(row),
-        false,
-        options.vectorize,
-        118,
-        "semantic:skill"
-      ));
-    }
-  }
-  const pendingSmall = unconsumedSmallSummaries(smallSummaries, largeSummaries);
-  if (pendingSmall.length) {
-    documents.push(makeDocument(
-      "semantic:small:current",
-      "MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C\u5F53\u524D\u5468\u671F",
-      currentSmallSummaryContent(pendingSmall),
-      ["\u5C0F\u603B\u7ED3", "\u5F53\u524D\u5468\u671F", ...pendingSmall.flatMap((item) => [item.title, ...item.keywords])],
-      options.latestContinuityConstant,
-      options.vectorize,
-      150,
-      "semantic:small"
-    ));
-  }
-  const latestLarge = largeSummaries.at(-1);
-  if (latestLarge) {
-    documents.push(makeDocument(
-      "semantic:large:current",
-      "MA\uFF5C\u5927\u603B\u7ED3\uFF5C\u957F\u671F\u6C89\u964D",
-      `[\u5927\u603B\u7ED3\uFF1A\u957F\u671F\u6C89\u964D]
-${latestLarge.summary}`,
-      ["\u5927\u603B\u7ED3", "\u957F\u671F\u6C89\u964D", latestLarge.title, ...latestLarge.keywords],
-      options.latestContinuityConstant,
-      options.vectorize,
-      148,
-      "semantic:large"
-    ));
-  }
-  return documents;
-}
-function buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
-  const documents = [];
-  if (snapshot) {
-    for (const tableKey of TABLE_KEYS) {
-      for (const row of rows(snapshot, tableKey)) {
-        const constant = ["focus", "spacetime", "foundations"].includes(tableKey);
-        documents.push(makeDocument(
-          `state:${tableKey}:${row.id}`,
-          `MA\uFF5C${TABLE_LABELS[tableKey]}\uFF5C${row.title}`,
-          rowContent(TABLE_LABELS[tableKey], row),
-          titleKeywords(row),
-          constant,
-          options.vectorize,
-          constant ? 140 : 100,
-          `state:${tableKey}`
-        ));
-      }
-    }
-  }
-  for (const item of smallSummaries) {
-    documents.push(makeDocument(
+function summaryDocuments(small, large, options) {
+  const docs = [];
+  for (const item of unconsumedSmallSummaries(small, large)) {
+    docs.push(makeDocument(
       `small:${item.id}`,
       `MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item.title}`,
-      item.summary,
-      [item.title, ...item.keywords],
-      false,
-      options.vectorize,
-      110,
-      "small"
+      `[\u4E8B\u4EF6\u7EBF\uFF1A${item.eventId || "\u672A\u5206\u7C7B"}]
+${item.summary}${item.unresolvedItems?.length ? `
+\u672A\u89E3\u51B3\uFF1A${item.unresolvedItems.join("\uFF1B")}` : ""}`,
+      "summary:small",
+      "vector",
+      { any: [], all: [], exclude: [] },
+      item.sourceFactIds ?? item.sourceKeys,
+      item.eventId ? [item.eventId] : [],
+      item.createdAt,
+      options
     ));
   }
-  for (const item of largeSummaries) {
-    documents.push(makeDocument(
-      `large:${item.id}`,
-      `MA\uFF5C\u5927\u603B\u7ED3\uFF5C${item.title}`,
-      item.summary,
-      [item.title, ...item.keywords],
-      false,
-      options.vectorize,
-      120,
-      "large"
+  const latestLarge = large.at(-1);
+  if (latestLarge) {
+    docs.push(makeDocument(
+      `large:${latestLarge.id}`,
+      `MA\uFF5C\u5927\u603B\u7ED3\uFF5C${latestLarge.title}`,
+      latestLarge.summary,
+      "summary:large",
+      "vector",
+      { any: [], all: [], exclude: [] },
+      latestLarge.sourceFactIds ?? [],
+      latestLarge.eventIds ?? [],
+      latestLarge.createdAt,
+      options
     ));
   }
-  return documents;
+  return docs;
 }
-function buildLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) {
-  return options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, smallSummaries, largeSummaries, options) : buildSemanticLorebookDocuments(snapshot, smallSummaries, largeSummaries, options);
+function selectLorebookDocuments(documents, options) {
+  const modeRank = { constant: 0, trigger: 1, vector: 2 };
+  const ordered = [...documents].sort((a, b) => {
+    const modeDifference = modeRank[a.recallMode] - modeRank[b.recallMode];
+    if (modeDifference) return modeDifference;
+    const timeDifference = String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+    return timeDifference || a.key.localeCompare(b.key);
+  });
+  const seenFacts = /* @__PURE__ */ new Set();
+  const seenEvents = /* @__PURE__ */ new Set();
+  const output = [];
+  let used = 0;
+  let vectorCount = 0;
+  const capacity = Math.max(2e3, Math.round(Number(options.totalCapacity) || 24e3));
+  const maxVector = Math.max(1, Math.round(Number(options.maxVectorResults) || 8));
+  for (const doc of ordered) {
+    if (doc.recallMode === "vector" && vectorCount >= maxVector) continue;
+    const identities = [...doc.factIds.map((id) => `f:${id}`), ...doc.eventIds.map((id) => `e:${id}`)];
+    const duplicate = identities.length > 0 && identities.every((id) => id.startsWith("f:") ? seenFacts.has(id.slice(2)) : seenEvents.has(id.slice(2)));
+    if (duplicate) continue;
+    const size = doc.content.length;
+    if (used + size > capacity && output.length) continue;
+    output.push({ ...doc, order: output.length + 100 });
+    used += size;
+    if (doc.recallMode === "vector") vectorCount += 1;
+    doc.factIds.forEach((id) => seenFacts.add(id));
+    doc.eventIds.forEach((id) => seenEvents.add(id));
+  }
+  return output;
+}
+function buildSemanticLorebookDocuments(snapshot, small, large, options) {
+  return selectLorebookDocuments([...tableDocuments(snapshot, options), ...summaryDocuments(small, large, options)], options);
+}
+function buildDetailedLorebookDocuments(snapshot, small, large, options) {
+  return selectLorebookDocuments([...tableDocuments(snapshot, options), ...summaryDocuments(small, large, options)], options);
+}
+function buildLorebookDocuments(snapshot, small, large, options) {
+  return options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, small, large, options) : buildSemanticLorebookDocuments(snapshot, small, large, options);
 }
 
 // src/pipeline/lorebook.ts
@@ -1966,13 +2607,28 @@ function refreshChatLorebookIndicator(name) {
     button.classList.toggle("world_set", linked);
   });
 }
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function triggerKeys(spec) {
+  const trigger = spec.trigger ?? { any: spec.keywords ?? [], all: [], exclude: [] };
+  const any = Array.isArray(trigger.any) ? trigger.any.filter(Boolean) : [];
+  const all = Array.isArray(trigger.all) ? trigger.all.filter(Boolean) : [];
+  const exclude = Array.isArray(trigger.exclude) ? trigger.exclude.filter(Boolean) : [];
+  if (!all.length && !exclude.length) return any;
+  const anyLookahead = any.length ? `(?=[\\s\\S]*(?:${any.map(escapeRegex).join("|")}))` : "";
+  const allLookaheads = all.map((item) => `(?=[\\s\\S]*${escapeRegex(item)})`).join("");
+  const excludeLookahead = exclude.length ? `(?![\\s\\S]*(?:${exclude.map(escapeRegex).join("|")}))` : "";
+  return [`/${excludeLookahead}${allLookaheads}${anyLookahead}[\\s\\S]*/i`];
+}
 function applyEntry(entry, chatKey, key, spec, wi) {
   entry.comment = spec.comment;
   entry.content = spec.content;
-  entry.key = spec.keywords;
-  entry.constant = Boolean(spec.constant);
-  entry.vectorized = Boolean(spec.vectorized);
-  entry.selective = !entry.constant;
+  entry.constant = spec.recallMode === "constant";
+  entry.vectorized = spec.recallMode === "vector";
+  entry.key = spec.recallMode === "trigger" ? triggerKeys(spec) : [];
+  entry.keysecondary = [];
+  entry.selective = false;
   entry.disable = false;
   entry.addMemo = true;
   entry.position = wi.world_info_position?.after ?? 1;
@@ -1986,7 +2642,12 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     chatKey,
     key,
     kind: spec.kind,
-    version: VERSION
+    version: VERSION,
+    recallMode: spec.recallMode,
+    trigger: spec.trigger,
+    vector: spec.vector,
+    factIds: spec.factIds,
+    eventIds: spec.eventIds
   };
 }
 async function desiredSpecs(artifact) {
@@ -1999,7 +2660,12 @@ async function desiredSpecs(artifact) {
     {
       layout: settings.lorebookLayout,
       vectorize: settings.vectorizeRows,
-      latestContinuityConstant: settings.latestContinuityConstant
+      latestContinuityConstant: settings.latestContinuityConstant,
+      registry: settings.tableRegistry,
+      internalFacts: state2.internalFacts,
+      similarityThreshold: settings.lorebookRecall.similarityThreshold,
+      maxVectorResults: settings.lorebookRecall.maxVectorResults,
+      totalCapacity: settings.lorebookRecall.totalCapacity
     }
   );
   return new Map(documents.map((document2) => [document2.key, document2]));
@@ -2143,269 +2809,8 @@ async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
   return managed;
 }
 
-// src/domain/snapshot.ts
-var EXISTENCE_STATES = /* @__PURE__ */ new Set([
-  "\u5B58\u6D3B",
-  "\u6B7B\u4EA1\u5DF2\u786E\u8BA4",
-  "\u5B58\u5728\u672A\u77E5",
-  "\u5931\u8E2A",
-  "\u8EAB\u4EFD\u5B58\u7591",
-  "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4",
-  "\u5B58\u5728\u88AB\u62B9\u9664",
-  "\u672A\u6807\u6CE8",
-  "\u4E0D\u9002\u7528"
-]);
-var ACTIVITY_STATES = /* @__PURE__ */ new Set([
-  "\u5F53\u524D\u5728\u573A",
-  "\u5F53\u524D\u76F8\u5173",
-  "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3",
-  "\u4F11\u7720",
-  "\u957F\u671F\u4F11\u7720",
-  "\u5DF2\u5F52\u6863",
-  "\u672A\u6807\u6CE8",
-  "\u4E0D\u9002\u7528"
-]);
-var MEMORY_STATES = /* @__PURE__ */ new Set([
-  "\u5E7F\u6CDB\u8BB0\u5F97",
-  "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97",
-  "\u4EC5\u8BB0\u5F55\u7559\u5B58",
-  "\u4EC5\u75D5\u8FF9\u7559\u5B58",
-  "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97",
-  "\u8BB0\u5FC6\u88AB\u7BE1\u6539",
-  "\u8BB0\u5FC6\u88AB\u62B9\u9664",
-  "\u672A\u6807\u6CE8",
-  "\u4E0D\u9002\u7528"
-]);
-var EVIDENCE_LEVELS = /* @__PURE__ */ new Set(["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"]);
-function emptySnapshot() {
-  return Object.fromEntries(TABLE_KEYS.map((key) => [key, []]));
-}
-function normalizeKeywords(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 16);
-}
-function normalizeStringList(value, limit = 12) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, 240).trim()).filter(Boolean))].slice(0, limit);
-}
-function enumValue(value, allowed, fallback) {
-  const text = safeText(value, 80).trim();
-  return allowed.has(text) ? text : fallback;
-}
-function defaultLifecycle() {
-  return {
-    existence: "\u672A\u6807\u6CE8",
-    activity: "\u672A\u6807\u6CE8",
-    memory: "\u672A\u6807\u6CE8",
-    evidenceLevel: "\u672A\u77E5",
-    evidence: "",
-    returnConditions: [],
-    returnBlockers: []
-  };
-}
-function normalizeLifecycle(value, previous) {
-  const source = value && typeof value === "object" ? value : {};
-  const base = previous ?? defaultLifecycle();
-  return {
-    existence: enumValue(source.existence ?? base.existence, EXISTENCE_STATES, base.existence),
-    activity: enumValue(source.activity ?? base.activity, ACTIVITY_STATES, base.activity),
-    memory: enumValue(source.memory ?? base.memory, MEMORY_STATES, base.memory),
-    evidenceLevel: enumValue(source.evidenceLevel ?? base.evidenceLevel, EVIDENCE_LEVELS, base.evidenceLevel),
-    evidence: safeText(source.evidence ?? base.evidence, 4e3).trim(),
-    returnConditions: normalizeStringList(source.returnConditions ?? base.returnConditions),
-    returnBlockers: normalizeStringList(source.returnBlockers ?? base.returnBlockers)
-  };
-}
-function normalizeRow(value, tableKey, index, previous) {
-  const source = value && typeof value === "object" ? value : {};
-  const now = nowIso();
-  const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
-  const manual = source.source === "manual" || previous?.source === "manual";
-  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
-  const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
-  return {
-    id,
-    title: safeText(source.title || source.name || previous?.title || `${TABLE_LABELS[tableKey]} ${index + 1}`, 240).trim(),
-    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
-    keywords: normalizeKeywords(source.keywords ?? previous?.keywords ?? []),
-    status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
-    source: manual ? "manual" : "auto",
-    locked: Boolean(source.locked ?? previous?.locked ?? manual),
-    lifecycle: supportsLifecycle && lifecycleInput ? normalizeLifecycle(lifecycleInput, previous?.lifecycle) : void 0,
-    updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now
-  };
-}
-function normalizeSnapshot(value, previousSnapshot2) {
-  const source = value && typeof value === "object" ? value : {};
-  const output = emptySnapshot();
-  for (const key of TABLE_KEYS) {
-    const rows2 = Array.isArray(source[key]) ? source[key] : [];
-    const previousMap = new Map((previousSnapshot2?.[key] ?? []).map((row) => [row.id, row]));
-    const used = /* @__PURE__ */ new Set();
-    output[key] = rows2.map((row, index) => {
-      const rawId = row && typeof row === "object" ? safeText(row.id, 160) : "";
-      const normalized = normalizeRow(row, key, index, rawId ? previousMap.get(rawId) : void 0);
-      if (used.has(normalized.id)) normalized.id = makeId(key);
-      used.add(normalized.id);
-      return normalized;
-    });
-  }
-  return output;
-}
-function identityTitle(value) {
-  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
-}
-function preservePersistentCharacters(previous, next) {
-  const byId = new Map((next.characters ?? []).map((row) => [row.id, row]));
-  const byTitle = new Map((next.characters ?? []).map((row) => [identityTitle(row.title), row]));
-  for (const oldRow of previous.characters ?? []) {
-    if (byId.has(oldRow.id)) continue;
-    const titleMatch = byTitle.get(identityTitle(oldRow.title));
-    if (titleMatch) {
-      titleMatch.id = oldRow.id;
-      if (oldRow.source === "manual" || oldRow.locked) {
-        Object.assign(titleMatch, { ...oldRow, id: oldRow.id });
-      } else if (!titleMatch.lifecycle && oldRow.lifecycle) {
-        titleMatch.lifecycle = { ...oldRow.lifecycle };
-      }
-      byId.set(oldRow.id, titleMatch);
-      continue;
-    }
-    const restored = { ...oldRow, lifecycle: oldRow.lifecycle ? { ...oldRow.lifecycle } : void 0 };
-    next.characters.push(restored);
-    byId.set(restored.id, restored);
-    byTitle.set(identityTitle(restored.title), restored);
-  }
-  const seenTitles = /* @__PURE__ */ new Set();
-  next.characters = next.characters.filter((row) => {
-    const key = identityTitle(row.title);
-    if (!key || !seenTitles.has(key)) {
-      if (key) seenTitles.add(key);
-      return true;
-    }
-    return false;
-  });
-  return next;
-}
-function snapshotRowCount(snapshot) {
-  if (!snapshot) return 0;
-  return TABLE_KEYS.reduce((sum, key) => sum + (snapshot[key]?.length ?? 0), 0);
-}
-function upsertManualRow(snapshot, tableKey, row) {
-  const next = normalizeSnapshot(snapshot, snapshot);
-  const index = next[tableKey].findIndex((item) => item.id === row.id);
-  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? true, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0);
-  if (index >= 0) next[tableKey][index] = normalized;
-  else next[tableKey].push(normalized);
-  return next;
-}
-function deleteRow(snapshot, tableKey, rowId) {
-  const next = normalizeSnapshot(snapshot, snapshot);
-  next[tableKey] = next[tableKey].filter((row) => row.id !== rowId);
-  return next;
-}
-function stateSchemaDescription() {
-  return JSON.stringify({
-    focus: [{
-      id: "focus-linwan",
-      title: "\u6797\u665A",
-      content: "\u5F53\u524D\u5916\u90E8\u4E8B\u5B9E\u3001\u8EAB\u4EFD\u3001\u8D44\u6E90\u4E0E\u63A5\u89E6\u9762",
-      keywords: ["\u6797\u665A"],
-      status: "\u5F53\u524D\u7126\u70B9",
-      lifecycle: {
-        existence: "\u5B58\u6D3B",
-        activity: "\u5F53\u524D\u5728\u573A",
-        memory: "\u5E7F\u6CDB\u8BB0\u5F97",
-        evidenceLevel: "\u5DF2\u786E\u8BA4",
-        evidence: "\u5F53\u524D\u53EF\u89C2\u5BDF",
-        returnConditions: [],
-        returnBlockers: []
-      }
-    }],
-    spacetime: [],
-    characters: [],
-    relationships: [],
-    items: [],
-    skills: [],
-    events: [],
-    regions: [],
-    foundations: []
-  }, null, 2);
-}
-
-// src/domain/sedimentation.ts
-var REMOVABLE_TABLES = /* @__PURE__ */ new Set(["spacetime", "events", "regions"]);
-var SETTLED_STATUS = /(已结束|已完成|已关闭|已失效|已归档|已替代|resolved|closed|completed|expired|archived|superseded|historical)/i;
-function canRemoveRow(table, row, snapshot) {
-  if (!REMOVABLE_TABLES.has(table)) return false;
-  if (row.source === "manual" || row.locked) return false;
-  if (!SETTLED_STATUS.test(`${row.status} ${row.content}`)) return false;
-  if (table === "spacetime" && snapshot.spacetime.length <= 1) return false;
-  return true;
-}
-function canAdvanceActivity(current, target, row) {
-  if (row.source === "manual" || row.locked) return false;
-  if (current === "\u5F53\u524D\u5728\u573A" || current === "\u5F53\u524D\u76F8\u5173") return false;
-  const order = ["\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3", "\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863"];
-  const from = order.indexOf(current ?? "\u672A\u6807\u6CE8");
-  const to = order.indexOf(target);
-  if (to < 0) return false;
-  if (current === "\u672A\u6807\u6CE8") return target === "\u4F11\u7720";
-  return from >= 0 && to === Math.min(from + 1, order.length - 1);
-}
-function applySedimentation(snapshot, summary) {
-  const plan = summary.sedimentation;
-  if (!plan) return normalizeSnapshot(snapshot, snapshot);
-  const next = normalizeSnapshot(snapshot, snapshot);
-  const requested = new Set(plan.removeRowIds);
-  const applied = [];
-  const ignored = [];
-  for (const table of ["spacetime", "events", "regions"]) {
-    next[table] = next[table].filter((row) => {
-      if (!requested.has(row.id)) return true;
-      if (canRemoveRow(table, row, next)) {
-        applied.push(row.id);
-        return false;
-      }
-      ignored.push(row.id);
-      return true;
-    });
-  }
-  for (const update of plan.characterActivityUpdates) {
-    const row = next.characters.find((item) => item.id === update.rowId);
-    if (!row) {
-      ignored.push(update.rowId);
-      continue;
-    }
-    const current = row.lifecycle?.activity;
-    if (!canAdvanceActivity(current, update.activity, row)) {
-      ignored.push(update.rowId);
-      continue;
-    }
-    row.lifecycle ||= {
-      existence: "\u672A\u6807\u6CE8",
-      activity: "\u672A\u6807\u6CE8",
-      memory: "\u672A\u6807\u6CE8",
-      evidenceLevel: "\u672A\u77E5",
-      evidence: "",
-      returnConditions: [],
-      returnBlockers: []
-    };
-    row.lifecycle.activity = update.activity;
-    row.status = update.activity;
-    applied.push(update.rowId);
-  }
-  const normalizedPlan = {
-    ...plan,
-    appliedRowIds: [...new Set(applied)],
-    ignoredRowIds: [...new Set(ignored)]
-  };
-  summary.sedimentation = normalizedPlan;
-  return next;
-}
-
 // src/domain/summary.ts
-function stringList(value, limit = 40, itemLimit = 300) {
+function stringList2(value, limit = 60, itemLimit = 600) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
@@ -2421,212 +2826,218 @@ function normalizeActivityUpdates(value) {
 function normalizeSedimentation(value) {
   if (!value || typeof value !== "object") return void 0;
   const source = value;
-  return {
-    removeRowIds: stringList(source.removeRowIds, 50, 160),
-    characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates),
-    notes: stringList(source.notes, 30, 500)
-  };
+  return { removeRowIds: stringList2(source.removeRowIds, 50, 160), characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates), notes: stringList2(source.notes, 30, 500) };
 }
-function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId) {
+function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
   return {
     id: makeId(kind),
     kind,
-    title: safeText(value.title || (kind === "small" ? "\u9636\u6BB5\u6C89\u964D" : "\u957F\u671F\u6C89\u964D"), 240).trim(),
+    title: safeText(value.title || (kind === "small" ? "\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3" : "\u957F\u671F\u56E0\u679C\u603B\u7ED3"), 240).trim(),
     summary: safeText(value.summary || "", 3e4).trim(),
-    keywords: Array.isArray(value.keywords) ? [...new Set(value.keywords.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 24) : [],
-    sourceKeys,
+    keywords: stringList2(value.keywords, 32, 100),
+    sourceKeys: [...new Set(sourceKeys)],
+    sourceFactIds: metadata.sourceFactIds ? [...new Set(metadata.sourceFactIds)] : kind === "small" ? [...new Set(sourceKeys)] : void 0,
+    sourceSummaryIds: kind === "large" ? [...new Set(metadata.sourceSummaryIds ?? sourceKeys)] : void 0,
+    eventId: kind === "small" ? safeText(metadata.eventId || value.event_id || value.eventId, 160).trim() || void 0 : void 0,
+    eventIds: kind === "large" ? [...new Set(metadata.eventIds ?? [])] : void 0,
+    unresolvedItems: stringList2(value.unresolved ?? value.unresolvedItems, 40, 1e3),
     createdAt: nowIso(),
     sedimentation: kind === "small" ? normalizeSedimentation(value.sedimentation) : void 0,
     previousLargeSummaryId: kind === "large" ? previousLargeSummaryId : void 0
   };
 }
 
-// src/domain/summary-policy.ts
-var TABLE_WEIGHTS = {
-  focus: 2,
-  spacetime: 2,
-  characters: 2,
-  relationships: 2,
-  events: 2,
-  regions: 1,
-  items: 1,
-  skills: 1,
-  foundations: 1
-};
-function comparableRow(row) {
-  return JSON.stringify({
-    title: row.title,
-    content: row.content,
-    status: row.status,
-    lifecycle: row.lifecycle
-  });
+// src/domain/sedimentation.ts
+var REMOVABLE_ROLES = /* @__PURE__ */ new Set(["spacetime", "events", "regions"]);
+var SETTLED_STATUS = /(已结束|已完成|已关闭|已失效|已归档|已替代|resolved|closed|completed|expired|archived|superseded|historical)/i;
+function registryOrDefault2(registry2) {
+  return normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY);
 }
-function changedRows(previous, current) {
-  let score = 0;
-  for (const table of TABLE_KEYS) {
-    const before = new Map((previous?.[table] ?? []).map((row) => [row.id, comparableRow(row)]));
-    const after = new Map(current[table].map((row) => [row.id, comparableRow(row)]));
-    const ids = /* @__PURE__ */ new Set([...before.keys(), ...after.keys()]);
-    for (const id of ids) {
-      if (before.get(id) !== after.get(id)) score += TABLE_WEIGHTS[table];
+function canRemoveRow(table, row, snapshot) {
+  if (!REMOVABLE_ROLES.has(table.role)) return false;
+  if (row.source === "manual" || row.locked || !SETTLED_STATUS.test(`${row.status} ${row.content}`)) return false;
+  if (table.role === "spacetime" && (snapshot[table.key]?.length ?? 0) <= 1) return false;
+  return true;
+}
+function canAdvanceActivity(current, target, row) {
+  if (row.source === "manual" || row.locked || current === "\u5F53\u524D\u5728\u573A" || current === "\u5F53\u524D\u76F8\u5173") return false;
+  const sequence = ["\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3", "\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863"];
+  const from = sequence.indexOf(current ?? "\u672A\u6807\u6CE8");
+  const to = sequence.indexOf(target);
+  if (to < 0) return false;
+  if (current === "\u672A\u6807\u6CE8") return target === "\u4F11\u7720";
+  return from >= 0 && to === Math.min(from + 1, sequence.length - 1);
+}
+function deriveEventSedimentationPlan(snapshot, eventId, factIds, closed, registry2) {
+  if (!closed) return { removeRowIds: [], characterActivityUpdates: [], notes: ["\u4E8B\u4EF6\u5C1A\u672A\u7ED3\u675F\uFF0C\u4E0D\u6267\u884C\u53EF\u89C1\u89C6\u56FE\u9000\u51FA\u3002"] };
+  const tables2 = registryOrDefault2(registry2);
+  const factSet = new Set(factIds);
+  const removeRowIds = [];
+  for (const table of tables2.filter((item) => REMOVABLE_ROLES.has(item.role))) {
+    for (const row of snapshot[table.key] ?? []) {
+      const linked = row.eventId === eventId || (row.factIds ?? []).some((id) => factSet.has(id));
+      if (linked && SETTLED_STATUS.test(`${row.status} ${row.content}`)) removeRowIds.push(row.id);
     }
   }
-  return Math.min(8, score);
-}
-function decideSmallSummary(allArtifacts, pendingArtifacts, configuredMaxTurns) {
-  const maxTurns = Math.min(30, Math.max(8, Number(configuredMaxTurns) || 12));
-  const minTurns = Math.max(4, Math.round(maxTurns * 0.4));
-  const targetScore = Math.max(12, minTurns * 3);
-  const firstIndex = pendingArtifacts.length ? allArtifacts.findIndex((item) => item.messageKey === pendingArtifacts[0].messageKey) : -1;
-  let previous = firstIndex > 0 ? allArtifacts[firstIndex - 1].snapshot : void 0;
-  let score = 0;
-  for (const artifact of pendingArtifacts) {
-    if (!artifact.snapshot) continue;
-    const facts = artifact.factPackage?.facts ?? [];
-    const factScore = facts.reduce((sum, fact) => {
-      if (fact.confidence === "uncertain") return sum;
-      if (["historical", "trace"].includes(fact.type)) return sum + 1;
-      if (["focus", "spacetime", "character", "relationship", "event"].includes(fact.type)) return sum + 2;
-      return sum + 1;
-    }, 0);
-    score += Math.min(8, factScore || changedRows(previous, artifact.snapshot));
-    previous = artifact.snapshot;
-  }
-  const turns = pendingArtifacts.length;
-  if (turns < minTurns) {
-    return { shouldSummarize: false, turns, score, minTurns, maxTurns, targetScore, reason: "below-minimum" };
-  }
-  if (score >= targetScore) {
-    return { shouldSummarize: true, turns, score, minTurns, maxTurns, targetScore, reason: "story-density" };
-  }
   return {
-    shouldSummarize: turns >= maxTurns,
-    turns,
-    score,
-    minTurns,
-    maxTurns,
-    targetScore,
-    reason: turns >= maxTurns ? "maximum-delay" : "waiting-density"
+    removeRowIds: [...new Set(removeRowIds)],
+    characterActivityUpdates: [],
+    notes: ["\u7531\u4EE3\u7801\u6309 event_id / fact_id \u751F\u6210\u5B89\u5168\u6C89\u964D\u5019\u9009\uFF1B\u4EBA\u5DE5\u3001\u9501\u5B9A\u3001\u672A\u7ED3\u7B97\u548C\u5F53\u524D\u76F8\u5173\u884C\u4ECD\u7531\u4FDD\u62A4\u89C4\u5219\u62E6\u622A\u3002"]
   };
+}
+function applySedimentation(snapshot, summary, registry2) {
+  const tables2 = registryOrDefault2(registry2);
+  const plan = summary.sedimentation;
+  if (!plan) return normalizeSnapshot(snapshot, snapshot, tables2);
+  const next = normalizeSnapshot(snapshot, snapshot, tables2);
+  const requested = new Set(plan.removeRowIds);
+  const applied = [];
+  const ignored = [];
+  for (const table of tables2.filter((item) => REMOVABLE_ROLES.has(item.role))) {
+    next[table.key] = (next[table.key] ?? []).filter((row) => {
+      if (!requested.has(row.id)) return true;
+      if (canRemoveRow(table, row, next)) {
+        applied.push(row.id);
+        return false;
+      }
+      ignored.push(row.id);
+      return true;
+    });
+  }
+  const stateKey = tableByRole(tables2, "state", false)?.key;
+  const stateRows2 = stateKey ? next[stateKey] ?? [] : [];
+  for (const update of plan.characterActivityUpdates) {
+    const row = stateRows2.find((item) => item.id === update.rowId);
+    if (!row || !canAdvanceActivity(row.lifecycle?.activity, update.activity, row)) {
+      ignored.push(update.rowId);
+      continue;
+    }
+    row.lifecycle ||= { existence: "\u672A\u6807\u6CE8", activity: "\u672A\u6807\u6CE8", memory: "\u672A\u6807\u6CE8", evidenceLevel: "\u672A\u77E5", evidence: "", returnConditions: [], returnBlockers: [] };
+    row.lifecycle.activity = update.activity;
+    row.status = update.activity;
+    applied.push(update.rowId);
+  }
+  const normalizedPlan = { ...plan, appliedRowIds: [...new Set(applied)], ignoredRowIds: [...new Set(ignored)] };
+  summary.sedimentation = normalizedPlan;
+  return next;
 }
 
 // src/prompts/summary.ts
 function smallSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u628A\u672A\u786E\u8BA4\u4E8B\u9879\u5199\u6210\u4E8B\u5B9E\u3002
-\u8F93\u51FA\u5B57\u6BB5\uFF1Atitle\u3001summary\u3001keywords\u3001sedimentation\u3002
-sedimentation\u5305\u542B\uFF1AremoveRowIds\u3001characterActivityUpdates\u3001notes\u3002
-\u4F60\u53EA\u63D0\u51FA\u5B89\u5168\u6C89\u964D\uFF1A
-- removeRowIds\u53EA\u80FD\u9009\u62E9\u5DF2\u7ECF\u7ED3\u675F\u3001\u5173\u95ED\u3001\u5931\u6548\u3001\u88AB\u66FF\u4EE3\u6216\u5DF2\u5F52\u6863\u7684spacetime/events/regions\u884Cid\u3002
-- \u4E0D\u5F97\u5220\u9664focus\u3001characters\u3001relationships\u3001items\u3001skills\u3001foundations\u3002
-- \u6B63\u5F0F\u4EBA\u7269\u6C38\u4E0D\u56E0\u79BB\u573A\u3001\u9057\u5FD8\u3001\u6B7B\u4EA1\u6216\u957F\u671F\u672A\u51FA\u73B0\u800C\u5220\u9664\u3002
-- characterActivityUpdates\u53EA\u5141\u8BB8\u628A\u201C\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u2192\u4F11\u7720\u201D\u201C\u4F11\u7720\u2192\u957F\u671F\u4F11\u7720\u201D\u201C\u957F\u671F\u4F11\u7720\u2192\u5DF2\u5F52\u6863\u201D\uFF0C\u4E0D\u5F97\u6539\u53D8\u5B58\u5728\u72B6\u6001\u548C\u8BB0\u5FC6\u72B6\u6001\u3002
-- \u73A9\u5BB6\u624B\u52A8\u6216\u9501\u5B9A\u8BB0\u5F55\u4E0D\u5F97\u5220\u9664\u3001\u8986\u76D6\u6216\u964D\u7EA7\u3002
-- summary\u6B63\u6587\u5FC5\u987B\u660E\u786E\u5199\u5165\u88AB\u6C89\u964D\u7684\u4E8B\u5B9E\u3001\u4ECD\u4FDD\u7559\u7684\u672A\u51B3\u4E8B\u9879\u548C\u4EBA\u7269\u56DE\u6D41\u6761\u4EF6\u3002`;
+  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\uFF0C\u4E5F\u662F\u6309 event_id \u5DE5\u4F5C\u7684\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u63A8\u6D4B\uFF0C\u4E0D\u628A\u672A\u53D1\u751F\u7ED3\u679C\u5199\u6B7B\u3002
+\u5C0F\u603B\u7ED3\u6309\u4E00\u4E2A event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF0C\u4E0D\u662F\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\uFF0C\u4E5F\u4E0D\u662F\u5F53\u524D\u8868\u683C\u538B\u7F29\u3002
+\u5FC5\u987B\u4FDD\u7559\uFF1A\u8D77\u56E0\u3001\u5DF2\u53D1\u751F\u7684\u5173\u952E\u7ECF\u8FC7\u3001\u5DF2\u4EA7\u751F\u7684\u53D8\u5316\u3001\u5F53\u524D\u7ED3\u679C\u3001\u5C1A\u672A\u89E3\u51B3\u4E8B\u9879\u3001\u5BF9\u540E\u7EED\u4ECD\u6709\u6548\u7684\u5F71\u54CD\u3002
+\u5FC5\u987B\u5220\u9664\uFF1A\u91CD\u590D\u52A8\u4F5C\u3001\u6C14\u6C1B\u63CF\u5199\u3001\u65E0\u56E0\u679C\u4F5C\u7528\u7684\u65C1\u89C2\u8005\u3001\u65E0\u540E\u7EED\u610F\u4E49\u7684\u4E34\u65F6\u53CD\u5E94\u3001\u5DF2\u88AB\u65B0\u4E8B\u5B9E\u8986\u76D6\u7684\u65E7\u8868\u8FF0\u3002
+\u4E8B\u4EF6\u672A\u7ED3\u675F\u65F6\uFF0C\u53EA\u603B\u7ED3\u5DF2\u786E\u5B9A\u53D1\u751F\u7684\u90E8\u5206\uFF0C\u5E76\u660E\u786E\u672A\u89E3\u51B3\u4E8B\u9879\u3002\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u3001\u559D\u5F69\u3001\u8BAE\u8BBA\u548C\u540C\u573A\u8005\u4E0D\u5F97\u8FDB\u5165\u603B\u7ED3\uFF0C\u9664\u975E\u5176\u884C\u4E3A\u6539\u53D8\u4E8B\u4EF6\u7ED3\u679C\u3002
+\u8F93\u51FA\u5B57\u6BB5\u56FA\u5B9A\u4E3A title\u3001summary\u3001keywords\u3001unresolved\u3002\u53EF\u89C1\u8868\u9000\u51FA\u7531\u4EE3\u7801\u6309 event_id / fact_id \u5B89\u5168\u5904\u7406\uFF0C\u4E0D\u7531\u4F60\u6307\u5B9A\u884C\u53F7\u3002`;
 }
-function smallSummaryPrompt(transcript, snapshot) {
-  return `\u5C06\u4EE5\u4E0B\u56DE\u5408\u538B\u7F29\u6210\u201C\u5F53\u524D\u5468\u671F\u5C0F\u603B\u7ED3\u201D\uFF0C\u627F\u62C5\u9636\u6BB5\u6C89\u964D\uFF0C\u4E0D\u662F\u6D41\u6C34\u8D26\u3002
-\u91CD\u70B9\u4FDD\u7559\uFF1A\u786E\u5B9A\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u53D8\u5316\u3001\u5F53\u524D\u4EBA\u7269/\u5173\u7CFB/\u7269\u54C1/\u6280\u80FD/\u533A\u57DF\u72B6\u6001\u3001\u4ECD\u5728\u8FDB\u884C\u7684\u6D41\u7A0B\u3001\u672A\u51B3\u4E0E\u51B2\u7A81\u3002
-\u5DF2\u7ECF\u88AB\u6700\u7EC8\u7ED3\u679C\u66FF\u4EE3\u7684\u4E2D\u95F4\u52A8\u4F5C\u4E0D\u5C55\u5F00\u3002
+function smallSummaryPrompt(eventId, facts) {
+  const payload = facts.map((fact) => ({
+    fact_id: fact.factId,
+    event_id: fact.eventId,
+    source_message_ids: fact.sourceMessageIds,
+    title: fact.title,
+    occurred: fact.occurredFacts,
+    unresolved: fact.unresolvedItems,
+    status: fact.status,
+    time_range: fact.timeRange,
+    related_entities: fact.relatedEntities,
+    keywords: fact.keywords,
+    confidence: fact.confidence
+  }));
+  return `\u4E3A event_id=${eventId} \u751F\u6210\u4E00\u6761\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3\u3002
+\u53EA\u4F7F\u7528\u4E0B\u5217\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002\u6309\u56E0\u679C\u987A\u5E8F\u5408\u5E76\u540C\u4E49\u4E8B\u5B9E\uFF0C\u4FDD\u7559\u4ECD\u6709\u6548\u7684\u7ED3\u679C\u548C\u672A\u51B3\u4E8B\u9879\u3002
 
-\u3010\u56DE\u5408\u3011
-${transcript}
+\u3010\u5185\u90E8\u4E8B\u5B9E\u3011
+${JSON.stringify(payload, null, 2)}
 
-\u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
-${JSON.stringify(snapshot, null, 2)}
-
-\u53EA\u8F93\u51FA\u4EE5\u4E0B\u7ED3\u6784\uFF1A
-{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["\u5DF2\u7ED3\u675F\u72B6\u6001\u884Cid"],"characterActivityUpdates":[{"rowId":"\u4EBA\u7269\u884Cid","activity":"\u4F11\u7720\u6216\u957F\u671F\u4F11\u7720\u6216\u5DF2\u5F52\u6863","reason":"\u4F9D\u636E"}],"notes":["\u6C89\u964D\u8BF4\u660E"]}}`;
+\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}`;
 }
 function largeSummarySystemPrompt() {
-  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u5B57\u6BB5\u4E3A title\u3001summary\u3001keywords\u3002\u8F93\u51FA\u5FC5\u987B\u662F\u7D2F\u8BA1\u957F\u671F\u5FEB\u7167\uFF0C\u800C\u4E0D\u662F\u53EA\u590D\u8FF0\u672C\u6279\u5C0F\u603B\u7ED3\u3002";
+  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\uFF0C\u4E5F\u662F\u957F\u671F\u56E0\u679C\u56FA\u5316\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002\u8F93\u5165\u53EA\u80FD\u662F\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u548C\u5C1A\u672A\u56FA\u5316\u7684\u5C0F\u603B\u7ED3\uFF1B\u4E0D\u5F97\u91CD\u65B0\u8BFB\u53D6\u804A\u5929\u3001\u5C55\u5F00\u52A8\u4F5C\u7EC6\u8282\u6216\u8865\u5168\u672A\u663E\u5F71\u5185\u5BB9\u3002";
 }
-function largeSummaryPrompt(summaries, snapshot, previousLarge) {
-  const source = summaries.map((item) => `\u3010${item.title}\u3011
-${item.summary}`).join("\n\n");
-  const previous = previousLarge ? `\u3010\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u3011
-${previousLarge.summary}
+function largeSummaryPrompt(summaries, previousLarge) {
+  const source = summaries.map((item) => ({ id: item.id, event_id: item.eventId, title: item.title, summary: item.summary, unresolved: item.unresolvedItems ?? [], keywords: item.keywords })).map((item) => JSON.stringify(item)).join("\n");
+  const previous = previousLarge ? JSON.stringify({ id: previousLarge.id, title: previousLarge.title, summary: previousLarge.summary, keywords: previousLarge.keywords }) : "\uFF08\u65E0\uFF09";
+  return `\u628A\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u4E0E\u672C\u6279\u5C1A\u672A\u56FA\u5316\u7684\u5C0F\u603B\u7ED3\u5408\u5E76\u4E3A\u65B0\u7684\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\u3002
+\u804C\u8D23\uFF1A\u56FA\u5316\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u5B9E\uFF1B\u5408\u5E76\u540C\u4E00\u957F\u671F\u56E0\u679C\u7EBF\uFF1B\u53BB\u91CD\u548C\u8FDB\u4E00\u6B65\u6982\u62EC\uFF1B\u4FDD\u7559\u7A33\u5B9A\u7ED3\u679C\u548C\u672A\u89E3\u51B3\u4E8B\u9879\u3002
+\u4E0D\u5F97\u91CD\u505A\u5168\u90E8\u804A\u5929\u603B\u7ED3\uFF0C\u4E0D\u5F97\u91CD\u65B0\u5C55\u5F00\u52A8\u4F5C\u7EC6\u8282\uFF0C\u4E0D\u5F97\u8865\u5168\u672A\u53D1\u751F\u6216\u672A\u663E\u5F71\u5185\u5BB9\uFF0C\u4E0D\u5F97\u6D88\u8D39\u8F93\u5165\u4E4B\u5916\u7684\u5C0F\u603B\u7ED3\u3002\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u65C1\u89C2\u4FE1\u606F\u5FC5\u987B\u5220\u9664\u3002
 
-` : "";
-  return `\u628A\u201C\u4E0A\u4E00\u7248\u957F\u671F\u6C89\u964D\u201D\u548C\u672C\u6279\u5C0F\u603B\u7ED3\u5408\u5E76\u4E3A\u4E00\u4EFD\u65B0\u7684\u7D2F\u8BA1\u957F\u671F\u6C89\u964D\u3002
-\u4FDD\u7559\u957F\u671F\u4ECD\u6210\u7ACB\u7684\u4EBA\u7269\u3001\u5173\u7CFB\u3001\u533A\u57DF\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u4E8B\u4EF6\u7ED3\u679C\u3001\u4E0D\u53EF\u9006\u540E\u679C\u4E0E\u672A\u51B3\u4E8B\u9879\uFF1B\u5220\u9664\u5DF2\u7ECF\u5931\u53BB\u610F\u4E49\u7684\u9636\u6BB5\u8FC7\u7A0B\u3002
-\u4EBA\u7269\u6B7B\u4EA1\u3001\u5931\u8E2A\u3001\u88AB\u9057\u5FD8\u3001\u8EAB\u4EFD\u5B58\u7591\u7B49\u5FC5\u987B\u4FDD\u7559\u8BC1\u636E\u7B49\u7EA7\u548C\u9057\u7559\u56E0\u679C\uFF0C\u4E0D\u5F97\u7528\u957F\u671F\u672A\u51FA\u73B0\u66FF\u4EE3\u6B7B\u4EA1\u5224\u65AD\u3002
+\u3010\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u3011
+${previous}
 
-${previous}\u3010\u672C\u6279\u5C0F\u603B\u7ED3\u3011
-${source}
-
-\u3010\u5F53\u524D\u72B6\u6001\u8868\u3011
-${JSON.stringify(snapshot, null, 2)}
+\u3010\u5C1A\u672A\u56FA\u5316\u7684\u5C0F\u603B\u7ED3\u3011
+${source || "\uFF08\u65E0\uFF09"}
 
 \u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
 }
 
 // src/pipeline/summary.ts
-function successfulArtifacts() {
-  const chatKey = currentChatKey();
-  return getChat().filter((message) => !message?.is_user).map((message) => message?.extra?.mirrorAbyssV11).filter((artifact) => Boolean(
-    artifact?.chatKey === chatKey && artifact.snapshot && artifact.stages.state.status === "success"
-  ));
+function eventClosed(facts) {
+  if (!facts.length) return false;
+  const latest = facts.reduce((selected, fact, index) => {
+    const selectedTime = Date.parse(selected.fact.updatedAt) || 0;
+    const factTime = Date.parse(fact.updatedAt) || 0;
+    return factTime > selectedTime || factTime === selectedTime && index > selected.index ? { fact, index } : selected;
+  }, { fact: facts[0], index: 0 }).fact;
+  const settled = !latest.active || /(结束|已解决|已关闭|完成|归档|closed|resolved|ended)/i.test(latest.status);
+  return settled && latest.unresolvedItems.length === 0;
 }
-function transcriptFor(artifacts) {
-  return artifacts.map((artifact) => {
-    const packageValue = artifact.factPackage;
-    if (!packageValue) {
-      return `\u3010\u56DE\u5408 ${artifact.messageIndex + 1}\u3011
-\u73A9\u5BB6\uFF1A${artifact.playerText || "\uFF08\u7A7A\uFF09"}
-\u6B63\u6587\uFF1A${artifact.assistantText}`;
-    }
-    const facts = packageValue.facts.map(
-      (fact) => `- [${fact.confidence}] ${fact.type}/${fact.operation}\uFF5C${fact.title}\uFF1A${fact.content}`
-    ).join("\n");
-    return `\u3010\u56DE\u5408 ${artifact.messageIndex + 1}\u3011
-\u4E8B\u5B9E\u6458\u8981\uFF1A${packageValue.turnSummary || "\uFF08\u65E0\uFF09"}
-\u6807\u51C6\u5316\u4E8B\u5B9E\uFF1A
-${facts || "\uFF08\u65E0\u53EF\u6C89\u964D\u4E8B\u5B9E\uFF09"}`;
-  }).join("\n\n");
-}
-function allConsumedKeys(summaries) {
-  return new Set(summaries.flatMap((item) => item.sourceKeys));
+function choosePendingEvent(facts, threshold, force) {
+  const allByEvent = /* @__PURE__ */ new Map();
+  for (const fact of facts) {
+    const list3 = allByEvent.get(fact.eventId) ?? [];
+    list3.push(fact);
+    allByEvent.set(fact.eventId, list3);
+  }
+  const groups = [...pendingFactsByEvent(facts).entries()].map(([eventId, eventFacts]) => ({ eventId, facts: eventFacts, closed: eventClosed(allByEvent.get(eventId) ?? eventFacts), messages: new Set(eventFacts.flatMap((fact) => fact.sourceMessageIds)).size })).filter((group) => force || group.closed || group.messages >= threshold || group.facts.length >= Math.max(2, Math.ceil(threshold / 2))).sort((a, b) => Number(b.closed) - Number(a.closed) || b.facts.length - a.facts.length || a.eventId.localeCompare(b.eventId));
+  return groups[0] ?? null;
 }
 function pendingSmallSummaries(small, large) {
-  const consumed = new Set(large.flatMap((item) => item.sourceKeys));
-  return small.filter((item) => !consumed.has(item.id));
+  const legacyConsumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
+  return small.filter((item) => !item.solidifiedByLargeSummaryId && !legacyConsumed.has(item.id));
 }
 async function generateSmallSummary(artifact, force = false) {
   const settings = getSettings();
   const chatState = await getChatState(artifact.chatKey);
-  const consumed = allConsumedKeys(chatState.smallSummaries);
-  const all = successfulArtifacts();
-  const pending = all.filter((item) => !consumed.has(item.messageKey));
-  const decision = decideSmallSummary(all, pending, settings.smallSummaryTurns);
-  if (!force && !decision.shouldSummarize) return null;
-  if (!pending.length) return null;
-  const selected = force ? pending : pending.slice(0, decision.maxTurns);
-  const latestSnapshot = selected.at(-1)?.snapshot;
+  const threshold = Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12));
+  const selected = choosePendingEvent(chatState.internalFacts ?? [], threshold, force);
+  if (!selected) return null;
   const parsed = await generateStructuredTask({
     task: "smallSummary",
     systemPrompt: smallSummarySystemPrompt(),
-    prompt: smallSummaryPrompt(transcriptFor(selected), latestSnapshot),
-    structureDescription: '{"title":"...","summary":"...","keywords":["..."],"sedimentation":{"removeRowIds":["..."],"characterActivityUpdates":[{"rowId":"...","activity":"\u4F11\u7720|\u957F\u671F\u4F11\u7720|\u5DF2\u5F52\u6863","reason":"..."}],"notes":["..."]}}'
+    prompt: smallSummaryPrompt(selected.eventId, selected.facts),
+    structureDescription: '{"title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}'
   });
   assertArtifactCommitCurrent(artifact);
-  const summary = normalizeSummary(parsed, "small", selected.map((item) => item.messageKey));
+  const factIds = selected.facts.map((fact) => fact.factId);
+  const summary = normalizeSummary(parsed, "small", factIds, void 0, { eventId: selected.eventId, sourceFactIds: factIds });
   if (!summary.summary) throw new Error("\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981");
   const previousSnapshot2 = artifact.snapshot ? structuredClone(artifact.snapshot) : void 0;
+  const previousFacts = structuredClone(chatState.internalFacts);
   const previousSummaries = [...chatState.smallSummaries];
   try {
-    if (artifact.snapshot) artifact.snapshot = applySedimentation(artifact.snapshot, summary);
-    const message = getMessage(artifact.messageIndex);
-    if (message) attachArtifactToMessage(message, artifact);
-    await persistChatFor(artifact.chatKey);
+    if (artifact.snapshot) {
+      summary.sedimentation = deriveEventSedimentationPlan(
+        artifact.snapshot,
+        selected.eventId,
+        factIds,
+        selected.closed,
+        settings.tableRegistry
+      );
+      artifact.snapshot = applySedimentation(artifact.snapshot, summary, settings.tableRegistry);
+      assertArtifactCommitCurrent(artifact);
+      await persistChatFor(artifact.chatKey);
+    }
     chatState.smallSummaries.push(summary);
+    markFactsConsumed(chatState.internalFacts, factIds, summary.id);
     await putChatState(chatState);
   } catch (error) {
     artifact.snapshot = previousSnapshot2;
+    chatState.internalFacts = previousFacts;
     chatState.smallSummaries = previousSummaries;
     try {
       assertArtifactCommitCurrent(artifact);
-      const message = getMessage(artifact.messageIndex);
-      if (message) attachArtifactToMessage(message, artifact);
       await persistChatFor(artifact.chatKey).catch(() => void 0);
     } catch {
     }
@@ -2638,29 +3049,45 @@ async function generateLargeSummary(artifact, force = false) {
   const settings = getSettings();
   const chatState = await getChatState(artifact.chatKey);
   const pending = pendingSmallSummaries(chatState.smallSummaries, chatState.largeSummaries);
-  const threshold = Math.max(1, Number(settings.largeSummaryCount) || 6);
+  const threshold = Math.max(1, Number(settings.largeSummaryCount) || 4);
   if (!force && pending.length < threshold) return null;
   if (!pending.length) return null;
   const selected = force ? pending : pending.slice(0, threshold);
-  const snapshot = artifact.snapshot;
-  if (!snapshot) throw new Error("\u6CA1\u6709\u53EF\u7528\u4E8E\u5927\u603B\u7ED3\u7684\u72B6\u6001\u8868");
   const previousLarge = chatState.largeSummaries.at(-1);
   const parsed = await generateStructuredTask({
     task: "largeSummary",
     systemPrompt: largeSummarySystemPrompt(),
-    prompt: largeSummaryPrompt(selected, snapshot, previousLarge),
+    prompt: largeSummaryPrompt(selected, previousLarge),
     structureDescription: '{"title":"...","summary":"...","keywords":["..."]}'
   });
   assertArtifactCommitCurrent(artifact);
-  const summary = normalizeSummary(
-    parsed,
-    "large",
-    selected.map((item) => item.id),
-    previousLarge?.id
-  );
+  const selectedIds = selected.map((item) => item.id);
+  const sourceFactIds = [...new Set(selected.flatMap((item) => item.sourceFactIds ?? item.sourceKeys))];
+  const eventIds = [...new Set(selected.map((item) => item.eventId).filter((id) => Boolean(id)))];
+  const summary = normalizeSummary(parsed, "large", selectedIds, previousLarge?.id, {
+    sourceSummaryIds: selectedIds,
+    sourceFactIds,
+    eventIds
+  });
   if (!summary.summary) throw new Error("\u5927\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981");
-  chatState.largeSummaries.push(summary);
-  await putChatState(chatState);
+  const previousLargeList = [...chatState.largeSummaries];
+  const previousSmall = structuredClone(chatState.smallSummaries);
+  const previousFacts = structuredClone(chatState.internalFacts);
+  try {
+    chatState.largeSummaries.push(summary);
+    await putChatState(chatState);
+    const readBack = await getChatState(artifact.chatKey);
+    if (!readBack.largeSummaries.some((item) => item.id === summary.id)) throw new Error("\u5927\u603B\u7ED3\u5199\u5165\u540E\u56DE\u8BFB\u6821\u9A8C\u5931\u8D25");
+    for (const item of readBack.smallSummaries) if (selectedIds.includes(item.id)) item.solidifiedByLargeSummaryId = summary.id;
+    const factIds = readBack.smallSummaries.filter((item) => selectedIds.includes(item.id)).flatMap((item) => item.sourceFactIds ?? item.sourceKeys);
+    markFactsSolidified(readBack.internalFacts, factIds, summary.id);
+    await putChatState(readBack);
+  } catch (error) {
+    chatState.largeSummaries = previousLargeList;
+    chatState.smallSummaries = previousSmall;
+    chatState.internalFacts = previousFacts;
+    throw error;
+  }
   return summary;
 }
 async function runSummaryStage(artifact, kind, force = false) {
@@ -2706,131 +3133,202 @@ async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = fals
     throw new Error(combined);
   }
 }
+async function rebuildEligibleSummaries(artifact) {
+  const settings = getSettings();
+  const errors = [];
+  markStage(artifact, "summary", "running");
+  await putArtifact(artifact);
+  if (settings.autoSmallSummary) {
+    try {
+      while (await generateSmallSummary(artifact, false)) {
+      }
+    } catch (error) {
+      if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
+      errors.push(`\u5C0F\u603B\u7ED3\uFF1A${toErrorMessage(error)}`);
+    }
+  }
+  if (settings.autoLargeSummary) {
+    try {
+      while (await generateLargeSummary(artifact, false)) {
+      }
+    } catch (error) {
+      if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
+      errors.push(`\u5927\u603B\u7ED3\uFF1A${toErrorMessage(error)}`);
+    }
+  }
+  if (errors.length) {
+    markStage(artifact, "summary", "failed", errors.join("\uFF1B"));
+    await putArtifact(artifact);
+    throw new Error(errors.join("\uFF1B"));
+  }
+  markStage(artifact, "summary", settings.autoSmallSummary || settings.autoLargeSummary ? "success" : "skipped");
+  await putArtifact(artifact);
+}
 
 // src/domain/facts.ts
-var FACT_TYPES = /* @__PURE__ */ new Set([
-  "focus",
-  "spacetime",
-  "character",
-  "relationship",
-  "item",
-  "skill",
-  "event",
-  "region",
-  "foundation",
-  "historical",
-  "trace"
-]);
 var OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
-var CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
-function list2(value, limit = 16) {
+var CONFIDENCE2 = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
+var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
+var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
+function list2(value, limit = 24, itemLimit = 500) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, limit);
+  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+}
+function normalizeTimeRange(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return { start: safeText(source.start, 120).trim() || void 0, end: safeText(source.end, 120).trim() || void 0, label: safeText(source.label, 240).trim() || void 0 };
 }
 function normalizeFacts(value) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => item && typeof item === "object" ? item : {}).map((item, index) => {
-    const type = safeText(item.type, 40).trim();
     const operation = safeText(item.operation, 40).trim();
     const confidence = safeText(item.confidence, 40).trim();
-    const entityId = safeText(item.entityId, 160).trim();
+    const entityId = safeText(item.entityId ?? item.entity_id, 160).trim();
     const title = safeText(item.title, 240).trim();
-    const content = safeText(item.content, 4e3).trim();
+    const content = safeText(item.content, 6e3).trim();
+    const id = safeText(item.factId ?? item.fact_id ?? item.id, 160).trim() || `fact_${hashText(`${entityId}|${title}|${content}|${index}`)}`;
+    const occurred = list2(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1e3);
+    const unresolved = list2(item.unresolved ?? item.unresolvedItems, 30, 1e3);
     return {
-      id: safeText(item.id, 160).trim() || `fact_${hashText(`${entityId}|${title}|${content}|${index}`)}`,
-      type: FACT_TYPES.has(type) ? type : "event",
+      id,
+      factId: id,
+      type: safeText(item.type, 80).trim() || "event",
       entityId: entityId || `entity_${hashText(`${title}|${content}`)}`,
+      eventId: safeText(item.eventId ?? item.event_id, 160).trim() || void 0,
       title: title || `\u4E8B\u5B9E ${index + 1}`,
-      content,
+      content: content || occurred.join("\uFF1B"),
+      occurred,
+      unresolved,
       status: safeText(item.status, 120).trim() || "active",
-      keywords: list2(item.keywords),
+      timeRange: normalizeTimeRange(item.timeRange ?? item.time_range),
+      relatedEntities: list2(item.relatedEntities ?? item.related_entities, 30, 240),
+      keywords: list2(item.keywords, 24, 100),
       operation: OPERATIONS.has(operation) ? operation : "update",
-      confidence: CONFIDENCE.has(confidence) ? confidence : "uncertain"
+      confidence: CONFIDENCE2.has(confidence) ? confidence : "uncertain"
     };
-  }).filter((fact) => fact.content).slice(0, 40);
+  }).filter((fact) => fact.content).slice(0, 80);
+}
+function filterPassiveObserverFacts(facts) {
+  return facts.filter((fact) => {
+    const text = [
+      fact.type,
+      fact.title,
+      fact.content,
+      fact.status,
+      ...fact.occurred ?? [],
+      ...fact.unresolved ?? [],
+      ...fact.relatedEntities ?? [],
+      ...fact.keywords
+    ].join(" ");
+    return !PASSIVE_OBSERVER.test(text) || CAUSAL_INTERVENTION.test(text);
+  });
 }
 function normalizeFactPackage(value, sourceMessageKey) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceMessageKey,
     turnSummary: safeText(value.turnSummary, 4e3).trim(),
-    facts: normalizeFacts(value.facts),
+    facts: filterPassiveObserverFacts(normalizeFacts(value.facts)),
     createdAt: nowIso()
   };
 }
 
 // src/prompts/state.ts
-function stateSystemPrompt() {
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\u3002\u4F60\u5148\u628A\u672C\u8F6E\u6B63\u6587\u6807\u51C6\u5316\u4E3A\u4E8B\u5B9E\uFF0C\u518D\u4F9D\u636E\u8FD9\u4E9B\u4E8B\u5B9E\u7EF4\u62A4\u5F53\u524D\u4E16\u754C\u72B6\u6001\uFF1B\u4E0D\u7EED\u5199\u6545\u4E8B\u3002
+function tables(registry2) {
+  return enabledTables(normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY));
+}
+function fieldInstruction(field) {
+  return `${field.key}\uFF08${field.label}\uFF09\uFF1A${field.description || "\u6309\u5B57\u6BB5\u540D\u79F0\u586B\u5199"}${field.required ? "\uFF0C\u5FC5\u586B" : "\uFF0C\u65E0\u4E8B\u5B9E\u53EF\u7559\u7A7A"}`;
+}
+function stateSystemPrompt(registry2) {
+  const active = tables(registry2);
+  const tableLines = active.map((table, index) => {
+    const fields = table.fields.map(fieldInstruction).join("\uFF1B");
+    return `${index + 1}. ${table.key}\uFF5C${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}\uFF5C\u5B57\u6BB5\uFF1A${fields}`;
+  }).join("\n");
+  const keys = active.map((table) => table.key).join("\u3001");
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\uFF0C\u4E5F\u662F\u5185\u90E8\u4E8B\u5B9E\u4E0E\u52A8\u6001\u53EF\u89C1\u89C6\u56FE\u7EF4\u62A4\u5668\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
 
-\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u88AB JSON.parse \u89E3\u6790\u7684\u5B8C\u6574JSON\u5BF9\u8C61\uFF0C\u4E0D\u8981\u8F93\u51FAMarkdown\u3001\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\u3002
-\u6839\u8282\u70B9\u5FC5\u987B\u5305\u542B turnSummary\u3001facts\u3001snapshot\u3002
-snapshot \u5FC5\u987B\u5305\u542B\u4E5D\u4E2A\u6570\u7EC4\uFF1Afocus\u3001spacetime\u3001characters\u3001relationships\u3001items\u3001skills\u3001events\u3001regions\u3001foundations\u3002
-\u6BCF\u884C\u5141\u8BB8\u5B57\u6BB5\uFF1Aid\u3001title\u3001content\u3001keywords\u3001status\uFF1Bfocus\u4E0Echaracters\u8FD8\u5141\u8BB8 lifecycle\u3002
+\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5 JSON.parse \u7684\u5B8C\u6574\u5BF9\u8C61\uFF0C\u4E0D\u8981 Markdown\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
+\u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001snapshot\u3002
+snapshot \u53EA\u80FD\u5305\u542B\u5F53\u524D\u542F\u7528\u7684\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\u542F\u7528\u8868\u683C\uFF09"}\u3002\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u672A\u6CE8\u518C\u3001\u5DF2\u5220\u9664\u6216\u5DF2\u505C\u7528\u8868\u683C\u3002
 
-facts \u4E2D\u6BCF\u6761\u4E8B\u5B9E\u5B57\u6BB5\uFF1A
-- id\uFF1A\u7A33\u5B9A\u4E8B\u5B9EID\u3002
-- type\uFF1Afocus\u3001spacetime\u3001character\u3001relationship\u3001item\u3001skill\u3001event\u3001region\u3001foundation\u3001historical\u3001trace\u3002
-- entityId\uFF1A\u5BF9\u5E94\u5BF9\u8C61\u7684\u7A33\u5B9AID\uFF1B\u540C\u4E00\u5BF9\u8C61\u6CBF\u7528\u65E7ID\u3002
-- title\u3001content\u3001status\u3001keywords\u3002
+\u3010\u5185\u90E8\u4E8B\u5B9E\u5C42\u3011
+facts \u6BCF\u6761\u5B57\u6BB5\uFF1A
+- fact_id\uFF1A\u7A33\u5B9A\u4E8B\u5B9EID\uFF1B\u540C\u4E00\u4E8B\u5B9E\u66F4\u65B0\u65F6\u6CBF\u7528\u3002
+- event_id\uFF1A\u6240\u5C5E\u4E8B\u4EF6\u7EBFID\uFF1B\u540C\u4E00\u56E0\u679C\u7EBF\u6CBF\u7528\u3002\u5373\u4F7F\u201C\u6D3B\u8DC3\u4E8B\u4EF6\u201D\u89C6\u56FE\u88AB\u5220\u9664\u4E5F\u5FC5\u987B\u4FDD\u7559\u3002
+- type\uFF1A\u4E8B\u5B9E\u7C7B\u522B\u6216\u8BED\u4E49\u7C7B\u578B\uFF0C\u4E0D\u53D7\u8868\u683C\u6570\u91CF\u9650\u5236\u3002
+- title\uFF1A\u4E8B\u5B9E\u6807\u9898\u3002
+- occurred\uFF1A\u5DF2\u7ECF\u786E\u5B9A\u53D1\u751F\u7684\u4E8B\u5B9E\u53E5\u6570\u7EC4\u3002
+- unresolved\uFF1A\u5C1A\u672A\u89E3\u51B3\u4F46\u6B63\u6587\u5DF2\u660E\u786E\u5B58\u5728\u7684\u4E8B\u9879\u6570\u7EC4\u3002
+- status\uFF1A\u5F53\u524D\u9636\u6BB5\u6216\u6709\u6548\u72B6\u6001\u3002
+- time_range\uFF1Astart\u3001end\u3001label\uFF1B\u672A\u77E5\u53EF\u4E3A\u7A7A\u5B57\u7B26\u4E32\u3002
+- related_entities\uFF1A\u6B63\u6587\u660E\u786E\u5173\u8054\u7684\u4EBA\u7269\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u533A\u57DF\u3001\u7EC4\u7EC7\u3001\u5236\u5EA6\u7B49\u3002
+- keywords\uFF1A\u660E\u786E\u540D\u79F0\u548C\u522B\u540D\u3002
 - operation\uFF1Acreate\u3001update\u3001append\u3001close\u3001supersede\u3002
 - confidence\uFF1Aconfirmed\u3001recorded\u3001reported\u3001uncertain\u3002
 
-\u4E8B\u5B9E\u89C4\u5219\uFF1A
-1. \u53EA\u5199\u672C\u8F6E\u6B63\u6587\u5B9E\u9645\u65B0\u589E\u3001\u6539\u53D8\u3001\u7ED3\u675F\u6216\u786E\u8BA4\u7684\u4E8B\u5B9E\uFF0C\u4E0D\u590D\u5236\u5168\u90E8\u65E7\u72B6\u6001\u3002
-2. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u52A8\u4F5C\u548C\u5BF9\u767D\u53EF\u89C6\u4E3A\u5DF2\u58F0\u660E\u884C\u4E3A\uFF1B\u73A9\u5BB6\u9884\u8BBE\u7684\u5916\u90E8\u7ED3\u679C\u4E0D\u80FD\u5355\u72EC\u4F5C\u4E3A confirmed\u3002
-3. \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u5FC5\u987B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
-4. historical \u548C trace \u53EA\u4F5C\u4E3A\u603B\u7ED3\u7D20\u6750\uFF0C\u4E0D\u5F3A\u5236\u8FDB\u5165\u5F53\u524D\u6D3B\u8DC3\u72B6\u6001\u8868\u3002
-5. turnSummary \u53EA\u6982\u62EC\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\uFF0C\u4E0D\u7EED\u5199\u3001\u4E0D\u8BC4\u4EF7\u3002
+\u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
+1. \u53EA\u4FDD\u5B58\u5F53\u524D\u7126\u70B9\u5468\u56F4\u3001\u5BF9\u540E\u7EED\u751F\u6210\u786E\u6709\u4F5C\u7528\u7684\u6D3B\u8DC3\u4E8B\u5B9E\uFF1B\u4E0D\u590D\u5236\u5168\u90E8\u65E7\u72B6\u6001\u3002
+2. \u7981\u6B62\u56E0\u4EBA\u7269\u4EC5\u4EC5\u51FA\u73B0\u3001\u56F4\u89C2\u3001\u542C\u89C1\u3001\u559D\u5F69\u3001\u8BAE\u8BBA\u3001\u540C\u573A\u6216\u4E34\u65F6\u4F8D\u4ECE\u8EAB\u4EFD\u800C\u5EFA\u7ACB\u72B6\u6001\u3001\u5173\u7CFB\u6216\u4E8B\u4EF6\u3002
+3. \u4E24\u4EBA\u5BF9\u6218\u53EA\u4FDD\u7559\u4EA4\u6218\u53CC\u65B9\u3001\u5BF9\u6218\u4E8B\u5B9E\uFF0C\u4EE5\u53CA\u786E\u5B9E\u4F1A\u6539\u53D8\u6218\u5C40\u6216\u7ED3\u679C\u7684\u7B2C\u4E09\u65B9\u3002\u7EAF\u89C2\u4F17\u53CA\u5176\u5173\u7CFB\u3001\u7269\u54C1\u3001\u53CD\u5E94\u3001\u533A\u57DF\u548C\u8BBE\u5B9A\u4E0D\u5F97\u8FDB\u5165 facts\u3001snapshot \u6216\u4E16\u754C\u4E66\u89C6\u56FE\u3002
+4. \u7126\u70B9\u6807\u9898\u4E0D\u80FD\u53EA\u5199\u5355\u4E2A\u4EBA\u540D\uFF1B\u7981\u6B62\u81EA\u52A8\u8865\u5168 NPC \u9690\u79C1\u3001\u7ECF\u5386\u3001\u80FD\u529B\u3001\u9690\u85CF\u5173\u7CFB\u3001\u771F\u5B9E\u610F\u56FE\u548C\u672A\u53D1\u751F\u7ED3\u679C\u3002
+5. \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
+6. focus \u53EA\u8BB0\u5F55\u5F53\u524D\u6838\u5FC3\u51B2\u7A81\u3001\u76EE\u6807\u6216\u5F85\u51B3\u4E8B\u9879\uFF1B\u540C\u4E00\u4E8B\u5B9E\u53EA\u8FDB\u5165\u6700\u5408\u9002\u7684\u4E00\u5F20\u53EF\u89C1\u8868\uFF0C\u7126\u70B9\u8868\u4E0D\u5F97\u4E0E\u72B6\u6001\u3001\u4E8B\u4EF6\u7B49\u8868\u91CD\u590D\u3002
+7. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u884C\u4E3A\u53EF\u4EE5\u8BB0\u5F55\u4E3A\u5DF2\u58F0\u660E\u52A8\u4F5C\uFF1B\u5916\u90E8\u7ED3\u679C\u5FC5\u987B\u7531\u89D2\u8272\u6B63\u6587\u6216\u5DF2\u6709\u53EF\u9760\u4E8B\u5B9E\u786E\u8BA4\u3002
+8. event_id \u662F\u603B\u7ED3\u548C\u5386\u53F2\u91CD\u5EFA\u7684\u7A33\u5B9A\u4E3B\u7EBF\uFF0C\u4E0D\u5F97\u56E0\u4E8B\u4EF6\u8868\u88AB\u505C\u7528\u800C\u7701\u7565\u3002
 
-\u7EF4\u62A4\u89C4\u5219\uFF1A
-1. \u4FDD\u7559\u672A\u53D7\u672C\u8F6E\u5F71\u54CD\u3001\u4ECD\u6210\u7ACB\u7684\u72B6\u6001\u3002\u53EA\u6709\u672C\u8F6E\u660E\u786E\u6539\u53D8\u7684\u72B6\u6001\u624D\u66F4\u65B0\u3002
-2. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u6D41\u6C34\u8D26\u3002\u672A\u786E\u8BA4\u3001\u51B2\u7A81\u548C\u8FDB\u884C\u4E2D\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
-3. \u5C3D\u91CF\u4FDD\u7559\u4E0A\u4E00\u4EFD\u5FEB\u7167\u7684\u7A33\u5B9Aid\uFF1B\u65B0\u589E\u5BF9\u8C61\u624D\u521B\u5EFA\u65B0id\u3002
-4. snapshot \u5FC5\u987B\u4EE5 facts \u548C\u4E0A\u4E00\u4EFD\u72B6\u6001\u8868\u4E3A\u4F9D\u636E\uFF1B\u5916\u90E8\u7ED3\u679C\u4EE5AI\u6B63\u6587\u4E0E\u5DF2\u6709\u72B6\u6001\u4E2D\u7684\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u4E3A\u51C6\u3002
-5. source=manual\u6216locked=true\u7684\u73A9\u5BB6\u8BB0\u5F55\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u6539\u5199\u3002
-6. relationships \u4E2D\u6BCF\u884C title \u5FC5\u987B\u660E\u786E\u5199\u51FA\u5173\u7CFB\u4E24\u7AEF\uFF0C\u4F18\u5148\u4F7F\u7528\u201C\u5BF9\u8C61A \u2194 \u5BF9\u8C61B\u201D\u683C\u5F0F\uFF1Bcontent\u53EA\u5199\u5DF2\u663E\u5F71\u7684\u5173\u7CFB\u4E8B\u5B9E\uFF0Cstatus\u5199\u5173\u7CFB\u5F53\u524D\u72B6\u6001\u3002
-7. characters \u53EA\u4E3A\u6B63\u5F0F\u663E\u5F71\u7684\u4EBA\u7269\u5EFA\u7ACB\u72EC\u7ACB\u884C\u3002\u4EC5\u88AB\u63D0\u53CA\u3001\u6CA1\u6709\u8FDB\u5165\u53EF\u89C2\u5BDF\u63A5\u89E6\u9762\u7684\u4EBA\u7269\uFF0C\u5148\u5199\u5728\u76F8\u5173\u4E8B\u4EF6\u6216\u4EBA\u7269\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5355\u72EC\u5EFA\u884C\u3002
-8. \u5DF2\u5EFA\u7ACB\u7684\u6B63\u5F0F\u4EBA\u7269\u4E0D\u5F97\u4EC5\u56E0\u79BB\u573A\u3001\u957F\u671F\u672A\u51FA\u73B0\u3001\u88AB\u9057\u5FD8\u6216\u6B7B\u4EA1\u800C\u5220\u9664\u3002\u4EBA\u7269\u79BB\u5F00\u63A5\u89E6\u9762\u53EA\u6539\u53D8activity\uFF1B\u6B7B\u4EA1\u53EA\u6539\u53D8existence\uFF1B\u88AB\u9057\u5FD8\u53EA\u6539\u53D8memory\u3002
-9. lifecycle\u5B57\u6BB5\u56FA\u5B9A\u4E3A\uFF1A
-   - existence\uFF1A\u5B58\u6D3B\u3001\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u672A\u77E5\u3001\u5931\u8E2A\u3001\u8EAB\u4EFD\u5B58\u7591\u3001\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4\u3001\u5B58\u5728\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
-   - activity\uFF1A\u5F53\u524D\u5728\u573A\u3001\u5F53\u524D\u76F8\u5173\u3001\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3\u3001\u4F11\u7720\u3001\u957F\u671F\u4F11\u7720\u3001\u5DF2\u5F52\u6863\u3001\u672A\u6807\u6CE8\u3002
-   - memory\uFF1A\u5E7F\u6CDB\u8BB0\u5F97\u3001\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97\u3001\u4EC5\u8BB0\u5F55\u7559\u5B58\u3001\u4EC5\u75D5\u8FF9\u7559\u5B58\u3001\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97\u3001\u8BB0\u5FC6\u88AB\u7BE1\u6539\u3001\u8BB0\u5FC6\u88AB\u62B9\u9664\u3001\u672A\u6807\u6CE8\u3002
-   - evidenceLevel\uFF1A\u5DF2\u786E\u8BA4\u3001\u53EF\u9760\u8BB0\u5F55\u3001\u591A\u65B9\u9648\u8FF0\u3001\u5355\u65B9\u9648\u8FF0\u3001\u63A8\u6D4B\u3001\u672A\u77E5\u3002
-   - evidence\uFF1A\u652F\u6301\u4E0A\u8FF0\u5224\u65AD\u7684\u53EF\u9A8C\u8BC1\u4F9D\u636E\u3002
-   - returnConditions\uFF1A\u4EBA\u7269\u53EF\u80FD\u91CD\u65B0\u8FDB\u5165\u63A5\u89E6\u9762\u7684\u73B0\u5B9E\u6761\u4EF6\uFF0C\u4E0D\u4EE3\u8868\u4E00\u5B9A\u56DE\u6765\u3002
-   - returnBlockers\uFF1A\u963B\u6B62\u56DE\u6D41\u7684\u5DF2\u786E\u8BA4\u6761\u4EF6\uFF1B\u6CA1\u6709\u53EF\u9760\u8BC1\u636E\u65F6\u7559\u7A7A\u3002
-10. \u4E0D\u5F97\u56E0\u201C\u5F88\u4E45\u6CA1\u51FA\u73B0\u201D\u63A8\u5B9A\u6B7B\u4EA1\uFF1B\u4ED6\u4EBA\u9648\u8FF0\u6B7B\u4EA1\u53EA\u80FD\u6309\u8BC1\u636E\u7B49\u7EA7\u8BB0\u5F55\u3002\u6B7B\u4EA1\u5DF2\u786E\u8BA4\u7684\u4EBA\u7269\u4ECD\u4FDD\u7559\u9057\u7559\u5173\u7CFB\u3001\u7269\u54C1\u3001\u6D41\u7A0B\u548C\u540E\u679C\u3002
-11. items\uFF1A\u666E\u901A\u7269\u54C1\u6309\u6240\u6709\u8005\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u7269\u54C1\u4E0E\u8D44\u6E90\u201D\uFF1B\u62E5\u6709\u72EC\u7ACB\u8EAB\u4EFD\u3001\u72B6\u6001\u3001\u56E0\u679C\u6216\u8FFD\u8E2A\u4EF7\u503C\u7684\u91CD\u8981\u7269\u54C1\u624D\u5355\u72EC\u4E00\u884C\u3002
-12. skills\uFF1A\u6309\u4EBA\u7269\u6216\u4E3B\u4F53\u5408\u5E76\u4E3A\u201C\u4EBA\u7269\u540D\uFF5C\u6280\u80FD\u4E0E\u80FD\u529B\u201D\uFF0C\u53EA\u8BB0\u5F55\u5DF2\u663E\u5F71\u80FD\u529B\u3001\u6761\u4EF6\u3001\u6D88\u8017\u548C\u8FB9\u754C\uFF0C\u4E0D\u751F\u6210\u9690\u85CF\u80FD\u529B\u3002
-13. events\u4E2D\u72EC\u7ACB\u4E8B\u4EF6\u4F7F\u7528\u201C\u4E8B\u4EF6\uFF5C\u540D\u79F0\u201D\uFF0C\u5236\u5EA6\u6216\u624B\u7EED\u4F7F\u7528\u201C\u6D41\u7A0B\uFF5C\u540D\u79F0\u201D\u3002\u5C0F\u4E8B\u4EF6\u53EF\u7559\u5728\u4EBA\u7269\u6216\u533A\u57DF\u5185\u5BB9\u4E2D\uFF0C\u4E0D\u5FC5\u62C6\u884C\u3002
-14. foundations\u53EA\u4FDD\u7559\u957F\u671F\u627F\u91CD\u8BBE\u5B9A\uFF1B\u5F53\u524D\u5C40\u52BF\u3001\u4EBA\u7269\u53D8\u5316\u548C\u4E8B\u4EF6\u8FDB\u5C55\u4E0D\u5F97\u5199\u5165\u57FA\u7840\u8BBE\u5B9A\u3002
+\u3010\u53EF\u89C1\u8868\u683C\u6CE8\u518C\u8868\u3011
+${tableLines || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u683C\uFF1Bsnapshot \u8F93\u51FA\u7A7A\u5BF9\u8C61\uFF0C\u4F46 facts \u4ECD\u6B63\u5E38\u7EF4\u62A4\u3002"}
+
+\u3010\u8868\u683C\u7EF4\u62A4\u3011
+1. snapshot \u662F facts \u7684\u5F53\u524D\u89C6\u56FE\uFF0C\u4E0D\u662F\u552F\u4E00\u6570\u636E\u6E90\u3002\u6BCF\u884C\u4F7F\u7528 factIds \u5173\u8054\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4F7F\u7528 eventId \u5173\u8054\u4E8B\u4EF6\u7EBF\u3002
+2. \u4FDD\u7559\u672A\u53D7\u5F71\u54CD\u4E14\u4ECD\u6210\u7ACB\u7684\u65E7\u884C\uFF1B\u53EA\u6709\u6B63\u6587\u660E\u786E\u6539\u53D8\u65F6\u624D\u66F4\u65B0\u3002
+3. source=manual \u6216 locked=true \u7684\u65E7\u884C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
+4. \u6B63\u5F0F\u4E3B\u4F53\u4EC5\u5728\u5DF2\u663E\u5F71\u4E14\u5BF9\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u65F6\u8FDB\u5165\u201C\u72B6\u6001\u201D\u89D2\u8272\u8868\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5EFA\u7ACB\u3002
+5. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
+6. keywords \u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u6216\u89E6\u53D1\u8BCD\uFF1Brecall \u53EF\u5305\u542B any/all/exclude\uFF0C\u4E0D\u662F\u6570\u503C\u6743\u91CD\u3002
 
 \u7ED3\u6784\u793A\u4F8B\uFF1A
-{"turnSummary":"\u672C\u8F6E\u4E8B\u5B9E\u6458\u8981","facts":[{"id":"fact_1","type":"event","entityId":"event_x","title":"\u4E8B\u4EF6\u540D\u79F0","content":"\u53EF\u89C2\u5BDF\u4E8B\u5B9E","status":"\u8FDB\u884C\u4E2D","keywords":["\u5173\u952E\u8BCD"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription()}}`;
+{"turnSummary":"\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981","facts":[{"fact_id":"fact_1","event_id":"event_1","type":"event","title":"\u5BF9\u6218\u5F00\u59CB","occurred":["\u7532\u4E0E\u4E59\u5F00\u59CB\u4EA4\u6218"],"unresolved":["\u80DC\u8D1F\u672A\u5B9A"],"status":"\u8FDB\u884C\u4E2D","time_range":{"start":"\u5F53\u524D","end":"","label":"\u672C\u573A\u5BF9\u6218"},"related_entities":["\u7532","\u4E59"],"keywords":["\u7532","\u4E59","\u5BF9\u6218"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(active)}}`;
 }
-function stateUserPrompt(previous, playerText, assistantText, repair = false) {
-  return `\u3010\u4E0A\u4E00\u4EFD\u72B6\u6001\u8868\u3011
-${JSON.stringify(previous, null, 2)}
+function activeFactPayload(facts) {
+  return facts.map((fact) => ({
+    fact_id: fact.factId,
+    event_id: fact.eventId,
+    occurred: fact.occurredFacts,
+    unresolved: fact.unresolvedItems,
+    status: fact.status,
+    time_range: fact.timeRange,
+    related_entities: fact.relatedEntities,
+    title: fact.title,
+    type: fact.type,
+    keywords: fact.keywords,
+    confidence: fact.confidence,
+    active: fact.active
+  }));
+}
+function stateUserPrompt(previous, playerText, assistantText, registry2, internalFacts = [], repair = false) {
+  const active = tables(registry2);
+  const filteredPrevious = normalizeSnapshot(previous, previous, active, false);
+  return `\u3010\u5F53\u524D\u5185\u90E8\u6D3B\u8DC3\u4E8B\u5B9E\u3011
+${JSON.stringify(activeFactPayload(internalFacts), null, 2)}
+
+\u3010\u4E0A\u4E00\u4EFD\u542F\u7528\u8868\u683C\u89C6\u56FE\u3011
+${JSON.stringify(filteredPrevious, null, 2)}
 
 \u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
 ${playerText || "\uFF08\u7A7A\uFF09"}
 
-\u3010AI\u672C\u8F6E\u6B63\u6587\u3011
+\u3010\u89D2\u8272\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u8F93\u51FA\u6807\u51C6\u5316\u4E8B\u5B9E\u4E0E\u66F4\u65B0\u540E\u7684\u5B8C\u6574\u72B6\u6001\u5FEB\u7167\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
+\u5185\u90E8\u4E8B\u5B9E\u5C42\u662F\u8FDE\u7EED\u6027\u6765\u6E90\uFF1B\u6CBF\u7528\u540C\u4E00\u4E8B\u5B9E\u7684 fact_id \u548C event_id\uFF0C\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u66F4\u65B0\u3001\u8FFD\u52A0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u64CD\u4F5C\u3002\u8F93\u51FA\u66F4\u65B0\u540E\u7684\u5B8C\u6574\u542F\u7528\u8868\u683C\u89C6\u56FE\uFF0Csnapshot \u4E0D\u5F97\u51FA\u73B0\u6CE8\u518C\u8868\u4E4B\u5916\u7684\u952E\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
 }
-function rowSchema(lifecycle = false) {
-  const properties = {
-    id: { type: "string" },
-    title: { type: "string" },
-    content: { type: "string" },
-    keywords: { type: "array", items: { type: "string" } },
-    status: { type: "string" }
-  };
-  if (lifecycle) {
-    properties.lifecycle = {
+function scalarSchema(field) {
+  if (field.type === "string[]") return { type: "array", items: { type: "string" } };
+  if (field.type === "lifecycle") {
+    return {
       type: "object",
       properties: {
         existence: { type: "string" },
@@ -2845,28 +3343,36 @@ function rowSchema(lifecycle = false) {
       additionalProperties: false
     };
   }
-  return {
+  return { type: "string" };
+}
+function rowSchema(table) {
+  const properties = {};
+  const required = [];
+  for (const field of table.fields) {
+    properties[field.key] = scalarSchema(field);
+    if (field.required) required.push(field.key);
+  }
+  properties.factIds = { type: "array", items: { type: "string" } };
+  properties.eventId = { type: "string" };
+  properties.recall = {
     type: "object",
-    properties,
-    required: ["id", "title", "content", "keywords", "status", ...lifecycle ? ["lifecycle"] : []],
+    properties: {
+      any: { type: "array", items: { type: "string" } },
+      all: { type: "array", items: { type: "string" } },
+      exclude: { type: "array", items: { type: "string" } }
+    },
+    required: ["any", "all", "exclude"],
     additionalProperties: false
   };
+  required.push("factIds", "eventId", "recall");
+  return { type: "object", properties, required: [...new Set(required)], additionalProperties: false };
 }
-function stateJsonSchema() {
-  const snapshotProperties = Object.fromEntries([
-    ["focus", rowSchema(true)],
-    ["spacetime", rowSchema()],
-    ["characters", rowSchema(true)],
-    ["relationships", rowSchema()],
-    ["items", rowSchema()],
-    ["skills", rowSchema()],
-    ["events", rowSchema()],
-    ["regions", rowSchema()],
-    ["foundations", rowSchema()]
-  ].map(([key, schema]) => [key, { type: "array", items: schema }]));
+function stateJsonSchema(registry2) {
+  const active = tables(registry2);
+  const snapshotProperties = Object.fromEntries(active.map((table) => [table.key, { type: "array", items: rowSchema(table) }]));
   return {
-    name: "MirrorAbyssStateResult",
-    description: "\u955C\u6E0A\u4E8B\u5B9E\u548C\u5B8C\u6574\u72B6\u6001\u8868",
+    name: "MirrorAbyssStateResultV23",
+    description: "\u955C\u6E0A\u5185\u90E8\u4E8B\u5B9E\u5C42\u4E0E\u52A8\u6001\u53EF\u89C1\u8868\u683C\u89C6\u56FE",
     strict: true,
     value: {
       type: "object",
@@ -2877,26 +3383,24 @@ function stateJsonSchema() {
           items: {
             type: "object",
             properties: {
-              id: { type: "string" },
+              fact_id: { type: "string" },
+              event_id: { type: "string" },
               type: { type: "string" },
-              entityId: { type: "string" },
               title: { type: "string" },
-              content: { type: "string" },
+              occurred: { type: "array", items: { type: "string" } },
+              unresolved: { type: "array", items: { type: "string" } },
               status: { type: "string" },
+              time_range: { type: "object", properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } }, required: ["start", "end", "label"], additionalProperties: false },
+              related_entities: { type: "array", items: { type: "string" } },
               keywords: { type: "array", items: { type: "string" } },
               operation: { type: "string" },
               confidence: { type: "string" }
             },
-            required: ["id", "type", "entityId", "title", "content", "status", "keywords", "operation", "confidence"],
+            required: ["fact_id", "event_id", "type", "title", "occurred", "unresolved", "status", "time_range", "related_entities", "keywords", "operation", "confidence"],
             additionalProperties: false
           }
         },
-        snapshot: {
-          type: "object",
-          properties: snapshotProperties,
-          required: ["focus", "spacetime", "characters", "relationships", "items", "skills", "events", "regions", "foundations"],
-          additionalProperties: false
-        }
+        snapshot: { type: "object", properties: snapshotProperties, required: active.map((table) => table.key), additionalProperties: false }
       },
       required: ["turnSummary", "facts", "snapshot"],
       additionalProperties: false
@@ -2906,33 +3410,27 @@ function stateJsonSchema() {
 
 // src/pipeline/state.ts
 function previousSnapshot(beforeIndex) {
+  const registry2 = getSettings().tableRegistry;
   const chat = getChat();
   for (let i = beforeIndex - 1; i >= 0; i -= 1) {
     if (chat[i]?.is_user) continue;
     const snapshot = chat[i]?.extra?.mirrorAbyssV11?.snapshot;
-    if (snapshot) return normalizeSnapshot(snapshot, snapshot);
+    if (snapshot) return normalizeSnapshot(snapshot, snapshot, registry2);
     const legacy = chat[i]?.extra?.mirrorAbyss?.tableSnapshot;
-    if (legacy) return normalizeSnapshot(legacy, legacy);
+    if (legacy) return normalizeSnapshot(legacy, legacy, registry2);
   }
-  return emptySnapshot();
+  return emptySnapshot(registry2);
 }
 function cloneProtectedRow(row) {
-  return {
-    ...row,
-    keywords: [...row.keywords],
-    ...row.lifecycle ? {
-      lifecycle: {
-        ...row.lifecycle,
-        returnConditions: [...row.lifecycle.returnConditions],
-        returnBlockers: [...row.lifecycle.returnBlockers]
-      }
-    } : {}
-  };
+  return structuredClone(row);
 }
-function preserveProtectedRows(previous, next) {
-  for (const key of TABLE_KEYS) {
+function preserveProtectedRows(previous, next, customRegistry) {
+  const registry2 = normalizeTableRegistry(customRegistry);
+  for (const table of registry2) {
+    const key = table.key;
+    next[key] ||= [];
     const nextIndexById = new Map(next[key].map((row, index) => [row.id, index]));
-    for (const row of previous[key]) {
+    for (const row of previous[key] ?? []) {
       if (row.source !== "manual" && !row.locked) continue;
       const protectedRow = cloneProtectedRow(row);
       const existingIndex = nextIndexById.get(row.id);
@@ -2946,31 +3444,68 @@ function preserveProtectedRows(previous, next) {
   }
   return next;
 }
+function mergeEnabledViews(previous, parsedSnapshot, registry2) {
+  const merged = {};
+  for (const table of registry2) merged[table.key] = structuredClone(previous[table.key] ?? []);
+  for (const table of enabledTables(registry2)) merged[table.key] = parsedSnapshot[table.key];
+  return normalizeSnapshot(merged, previous, registry2);
+}
 async function runStateExtraction(artifact, force = false) {
-  if (!force && artifact.stages.state.status === "success" && artifact.snapshot) return artifact.snapshot;
   const settings = getSettings();
+  const registry2 = normalizeTableRegistry(settings.tableRegistry);
+  const active = enabledTables(registry2);
   const previous = previousSnapshot(artifact.messageIndex);
+  const chatState = await getChatState(artifact.chatKey);
+  const activeFacts = (chatState.internalFacts ?? []).filter((fact) => fact.active || fact.unresolvedItems.length > 0 || !fact.consumedBySmallSummaryId).slice(-120);
+  const inputFingerprint = hashText(JSON.stringify({
+    previous,
+    activeFacts: activeFacts.map((fact) => ({
+      factId: fact.factId,
+      eventId: fact.eventId,
+      occurredFacts: fact.occurredFacts,
+      unresolvedItems: fact.unresolvedItems,
+      status: fact.status,
+      active: fact.active
+    })),
+    registry: registryFingerprint(registry2),
+    playerText: artifact.playerText,
+    assistantText: artifact.assistantText
+  }));
+  if (!force && artifact.stages.state.status === "success" && artifact.snapshot && (!artifact.stateInputFingerprint || artifact.stateInputFingerprint === inputFingerprint)) {
+    artifact.stateInputFingerprint = inputFingerprint;
+    return normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry2);
+  }
   markStage(artifact, "state", "running");
   await putArtifact(artifact);
   try {
     const parsed = await generateStructuredTask({
       task: "state",
-      systemPrompt: stateSystemPrompt(),
-      prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText),
-      structureDescription: `{"turnSummary":"...","facts":[{"id":"...","type":"event","entityId":"...","title":"...","content":"...","status":"...","keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription()}}`,
+      systemPrompt: stateSystemPrompt(registry2),
+      prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
+      structureDescription: `{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","type":"event","title":"...","occurred":["..."],"unresolved":["..."],"status":"...","time_range":{"start":"","end":"","label":""},"related_entities":["..."],"keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(registry2)}}`,
       allowRepair: settings.repairInvalidJsonOnce,
-      jsonSchema: stateJsonSchema()
+      jsonSchema: stateJsonSchema(registry2)
     });
-    if (!parsed.snapshot || typeof parsed.snapshot !== "object") {
-      throw new Error("\u72B6\u6001\u8868\u8FD4\u56DE\u7F3A\u5C11 snapshot \u6839\u5BF9\u8C61");
+    if (!parsed.snapshot || typeof parsed.snapshot !== "object" || Array.isArray(parsed.snapshot)) throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 snapshot \u6839\u5BF9\u8C61");
+    if (Array.isArray(parsed.snapshot.characters) && !Array.isArray(parsed.snapshot.state) && active.some((table) => table.key === "state")) {
+      parsed.snapshot.state = parsed.snapshot.characters;
+      delete parsed.snapshot.characters;
     }
-    for (const key of TABLE_KEYS) {
-      if (!Array.isArray(parsed.snapshot[key])) throw new Error(`\u72B6\u6001\u8868\u8FD4\u56DE\u7F3A\u5C11 ${key} \u6570\u7EC4`);
-    }
+    const returnedKeys = Object.keys(parsed.snapshot);
+    const activeKeys = new Set(active.map((table) => table.key));
+    for (const key of returnedKeys) if (!activeKeys.has(key)) throw new Error(`\u6A21\u578B\u8FD4\u56DE\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${key}`);
+    for (const table of active) if (!Array.isArray(parsed.snapshot[table.key])) parsed.snapshot[table.key] = [];
     assertArtifactCommitCurrent(artifact);
-    const normalized = preservePersistentCharacters(previous, preserveProtectedRows(previous, normalizeSnapshot(parsed.snapshot, previous)));
+    const normalized = filterPassiveObservers(
+      removeFocusCharacterDuplicates(
+        preservePersistentCharacters(previous, preserveProtectedRows(previous, mergeEnabledViews(previous, parsed.snapshot, registry2), registry2), registry2),
+        registry2
+      ),
+      registry2
+    );
     artifact.factPackage = normalizeFactPackage(parsed, artifact.messageKey);
     artifact.snapshot = normalized;
+    artifact.stateInputFingerprint = inputFingerprint;
     markStage(artifact, "state", "success");
     await putArtifact(artifact);
     return normalized;
@@ -3221,6 +3756,7 @@ var taskQueue = new TaskQueue();
 
 // src/pipeline/pipeline.ts
 var listeners = /* @__PURE__ */ new Set();
+var scheduledMessageTimers = /* @__PURE__ */ new Map();
 function subscribePipeline(listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -3258,7 +3794,16 @@ function resolveChangedIndex(payload) {
   for (const candidate of candidates) {
     if (candidate !== void 0 && candidate !== null && Number.isInteger(Number(candidate))) return Number(candidate);
   }
-  return null;
+  const chat = getChat();
+  const direct = chat.indexOf(payload);
+  if (direct >= 0) return direct;
+  const nested = payload?.message;
+  const nestedIndex = nested ? chat.indexOf(nested) : -1;
+  return nestedIndex >= 0 ? nestedIndex : null;
+}
+function isNarrativeTail(index) {
+  if (index < 0 || index !== latestAssistantIndex()) return false;
+  return !getChat().slice(index + 1).some((message) => message?.is_user === true || isProcessableAssistantMessage(message));
 }
 async function pauseLorebookForHistoryChange(chatKey) {
   try {
@@ -3309,11 +3854,47 @@ async function commitCoreState(index, artifact) {
   if (!chatState.processedMessageKeys.includes(artifact.messageKey)) {
     chatState.processedMessageKeys.push(artifact.messageKey);
   }
+  if (artifact.factPackage?.facts?.length) {
+    const incomingFacts = normalizeInternalFacts(artifact.factPackage.facts, artifact.messageKey);
+    chatState.internalFacts = mergeInternalFacts(chatState.internalFacts ?? [], incomingFacts, artifact.factPackage.facts);
+  }
   chatState.latestSnapshotMessageKey = artifact.messageKey;
   chatState.updatedAt = nowIso();
   assertArtifactCommitCurrent(artifact);
   await putChatState(chatState);
   await saveArtifactToMessage(index, artifact);
+}
+function invalidateDerivedForValidMessages(chatState, validMessageIds) {
+  const currentFacts = Array.isArray(chatState.internalFacts) ? chatState.internalFacts : [];
+  const allFactIds = new Set(currentFacts.map((fact) => String(fact.factId || "")));
+  const invalidated = invalidateFactsAfterMessages(currentFacts, validMessageIds);
+  chatState.internalFacts = invalidated.facts;
+  const invalidSmallIds = /* @__PURE__ */ new Set();
+  for (const summary of chatState.smallSummaries ?? []) {
+    const sourceFactIds = Array.isArray(summary.sourceFactIds) ? summary.sourceFactIds : [];
+    const factInvalid = sourceFactIds.some((id) => invalidated.removedFactIds.has(id));
+    const legacyInvalid = (summary.sourceKeys ?? []).some((key) => {
+      if (allFactIds.has(key)) return invalidated.removedFactIds.has(key);
+      return !validMessageIds.has(key);
+    });
+    if (factInvalid || legacyInvalid) invalidSmallIds.add(summary.id);
+  }
+  chatState.smallSummaries = (chatState.smallSummaries ?? []).filter((summary) => !invalidSmallIds.has(summary.id));
+  const invalidLargeIds = /* @__PURE__ */ new Set();
+  for (const summary of chatState.largeSummaries ?? []) {
+    const sources = summary.sourceSummaryIds ?? summary.sourceKeys ?? [];
+    if (sources.some((id) => invalidSmallIds.has(id)) || summary.previousLargeSummaryId && invalidLargeIds.has(summary.previousLargeSummaryId)) {
+      invalidLargeIds.add(summary.id);
+    }
+  }
+  chatState.largeSummaries = (chatState.largeSummaries ?? []).filter((summary) => !invalidLargeIds.has(summary.id));
+  for (const summary of chatState.smallSummaries ?? []) {
+    if (summary.solidifiedByLargeSummaryId && invalidLargeIds.has(summary.solidifiedByLargeSummaryId)) delete summary.solidifiedByLargeSummaryId;
+  }
+  for (const fact of chatState.internalFacts) {
+    if (fact.consumedBySmallSummaryId && invalidSmallIds.has(fact.consumedBySmallSummaryId)) delete fact.consumedBySmallSummaryId;
+    if (fact.solidifiedByLargeSummaryId && invalidLargeIds.has(fact.solidifiedByLargeSummaryId)) delete fact.solidifiedByLargeSummaryId;
+  }
 }
 async function prepareDerivedStageStatuses(artifact) {
   const settings = getSettings();
@@ -3321,14 +3902,20 @@ async function prepareDerivedStageStatuses(artifact) {
   const summaryEnabled = Boolean(settings.autoSmallSummary || settings.autoLargeSummary);
   markStage(artifact, "summary", summaryEnabled ? "queued" : "skipped");
   if (chatState.historyInvalidation) {
-    markStage(artifact, "sync", "blocked", "\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u624B\u52A8\u91CD\u7B97");
+    const automatic = Boolean(chatState.historyInvalidation.automatic);
+    markStage(
+      artifact,
+      "sync",
+      "blocked",
+      automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u5EFA\uFF0C\u5B8C\u6210\u540E\u5C06\u7EE7\u7EED\u540C\u6B65" : "\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u624B\u52A8\u91CD\u7B97"
+    );
   } else {
     markStage(artifact, "sync", settings.lorebookSync ? "queued" : "skipped");
   }
   await saveArtifactToMessage(artifact.messageIndex, artifact);
 }
-async function clearResolvedLatestHistoryInvalidation(index, artifact, force) {
-  if (!force || index !== getChat().length - 1 || index !== latestAssistantIndex()) return false;
+async function clearResolvedLatestHistoryInvalidation(index, artifact) {
+  if (!isNarrativeTail(index)) return false;
   const chatState = await getChatState(artifact.chatKey);
   const invalidation = chatState.historyInvalidation;
   if (!invalidation || invalidation.startIndex !== index || invalidation.reason === "deleted") return false;
@@ -3340,14 +3927,9 @@ async function clearResolvedLatestHistoryInvalidation(index, artifact, force) {
 }
 async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
   const chatState = await getChatState(artifact.chatKey);
-  const invalidSmallIds = new Set(
-    chatState.smallSummaries.filter((summary) => summary.sourceKeys.includes(previousMessageKey)).map((summary) => summary.id)
-  );
-  chatState.smallSummaries = chatState.smallSummaries.filter((summary) => !invalidSmallIds.has(summary.id));
-  chatState.largeSummaries = chatState.largeSummaries.filter(
-    (summary) => !summary.sourceKeys.some((key) => invalidSmallIds.has(key))
-  );
-  chatState.processedMessageKeys = chatState.processedMessageKeys.filter((key) => key !== previousMessageKey);
+  const validMessageIds = new Set(chatState.processedMessageKeys.filter((key) => key !== previousMessageKey));
+  invalidateDerivedForValidMessages(chatState, validMessageIds);
+  chatState.processedMessageKeys = [...validMessageIds];
   if (chatState.latestSnapshotMessageKey === previousMessageKey) {
     chatState.latestSnapshotMessageKey = chatState.processedMessageKeys.at(-1);
   }
@@ -3499,7 +4081,7 @@ async function processMessage(index, force = false, options = {}) {
       }
       if (artifact.snapshot && artifact.stages.state.status === "success") {
         await commitCoreState(index, artifact);
-        await clearResolvedLatestHistoryInvalidation(index, artifact, force);
+        await clearResolvedLatestHistoryInvalidation(index, artifact);
         await prepareDerivedStageStatuses(artifact);
         if (!options.skipDerived) {
           taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
@@ -3532,7 +4114,11 @@ function scheduleMessage(payload, force = false, delay = 0) {
   const scheduledChatKey = currentChatKey();
   const scheduledIdentity = messageIdentity(index);
   const scheduledFingerprint = messageFingerprint(index);
-  window.setTimeout(() => {
+  const scheduleKey = `${scheduledChatKey}:${scheduledIdentity}`;
+  const existingTimer = scheduledMessageTimers.get(scheduleKey);
+  if (existingTimer !== void 0) window.clearTimeout(existingTimer);
+  const timer = window.setTimeout(() => {
+    scheduledMessageTimers.delete(scheduleKey);
     void (async () => {
       if (!getSettings().enabled) return;
       if (currentChatKey() !== scheduledChatKey) return;
@@ -3540,7 +4126,10 @@ function scheduleMessage(payload, force = false, delay = 0) {
       if (!isProcessableAssistantMessage(current)) return;
       if (messageIdentity(index) !== scheduledIdentity || messageFingerprint(index) !== scheduledFingerprint) return;
       const state2 = await getChatState(scheduledChatKey);
-      if (!force && state2.historyInvalidation) return;
+      const latestOnlyInvalidation = Boolean(
+        state2.historyInvalidation && state2.historyInvalidation.startIndex === index && state2.historyInvalidation.reason !== "deleted" && isNarrativeTail(index)
+      );
+      if (!force && state2.historyInvalidation && !latestOnlyInvalidation) return;
       await processMessage(index, force);
     })().catch((error) => {
       if (error instanceof CommitRejectedError || error instanceof Error && error.name === "AbortError") return;
@@ -3548,16 +4137,42 @@ function scheduleMessage(payload, force = false, delay = 0) {
       toast("error", `\u81EA\u52A8\u6574\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
     });
   }, delay);
+  scheduledMessageTimers.set(scheduleKey, timer);
+}
+function markArtifactsForHistoryRebuild(startIndex, changedIndex = startIndex) {
+  for (let i = startIndex; i < getChat().length; i += 1) {
+    const message = getMessage(i);
+    const artifact = getAttachedArtifact(message);
+    if (!artifact) continue;
+    if (i === changedIndex && artifact.sourceFingerprint !== messageFingerprint(i)) {
+      markStage(artifact, "audit", "idle");
+      markStage(artifact, "revision", "idle");
+      artifact.approvedFingerprint = void 0;
+    }
+    markStage(artifact, "state", "blocked", "\u4E0A\u6E38\u5386\u53F2\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u6309\u4F9D\u8D56\u91CD\u5EFA");
+    markStage(artifact, "summary", "blocked", "\u4E0A\u6E38\u5386\u53F2\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u6309\u4F9D\u8D56\u91CD\u5EFA");
+    markStage(artifact, "sync", "blocked", "\u4E0A\u6E38\u5386\u53F2\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u6309\u4F9D\u8D56\u91CD\u5EFA");
+  }
 }
 async function invalidateHistory(payload, reason) {
   if (!getSettings().enabled) return;
   const chatKey = currentChatKey();
+  const eventIndex = resolveChangedIndex(payload);
+  if (reason !== "deleted" && eventIndex !== null) {
+    const message = getMessage(eventIndex);
+    const attached = getAttachedArtifact(message);
+    if (!attached) return;
+    if (attached.sourceFingerprint === messageFingerprint(eventIndex)) return;
+  }
+  const scannedIndex = firstInconsistentArtifactIndex(getChat(), MODULE_NAME, messageIdentity, messageFingerprint);
+  const detectedIndex = eventIndex ?? (scannedIndex === -1 ? null : scannedIndex);
+  if (detectedIndex === null && reason !== "deleted") {
+    console.warn("[MirrorAbyss] ignored unlocatable history event without artifact mismatch", reason, payload);
+    return;
+  }
   invalidateHistoryRevision(chatKey);
   abortActiveRequests();
   taskQueue.cancelPendingByChatKey(chatKey, "\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u65E7\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
-  const eventIndex = resolveChangedIndex(payload);
-  const scannedIndex = reason === "deleted" ? firstInconsistentArtifactIndex(getChat(), MODULE_NAME, messageIdentity, messageFingerprint) : null;
-  const detectedIndex = reason === "deleted" ? scannedIndex === -1 ? null : scannedIndex : eventIndex;
   const state2 = await getChatState(chatKey);
   if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u53D8\u5316\u4E0D\u518D\u5199\u5165");
   if (detectedIndex === null) {
@@ -3572,32 +4187,30 @@ async function invalidateHistory(payload, reason) {
   }
   const index = Math.max(0, detectedIndex);
   const startIndex = Math.min(index, state2.historyInvalidation?.startIndex ?? index);
-  state2.historyInvalidation = { startIndex, reason, detectedAt: nowIso() };
+  const latestOnly = Boolean(
+    reason !== "deleted" && startIndex === index && isNarrativeTail(index)
+  );
+  state2.historyInvalidation = { startIndex, reason, detectedAt: nowIso(), automatic: latestOnly };
   state2.lastSyncStatus = "failed";
-  state2.lastSyncError = `\u5386\u53F2\u6D88\u606F\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB\u91CD\u7B97`;
+  state2.lastSyncError = latestOnly ? "\u6700\u65B0\u6B63\u6587\u5DF2\u53D8\u5316\uFF0C\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF1B\u5B8C\u6210\u524D\u6682\u7F13\u4E16\u754C\u4E66\u540C\u6B65" : `\u5386\u53F2\u6D88\u606F\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB\u91CD\u7B97`;
   const validPrefixKeys = /* @__PURE__ */ new Set();
   for (let i = 0; i < startIndex; i += 1) {
     const attached = getAttachedArtifact(getMessage(i));
     if (attached) validPrefixKeys.add(attached.messageKey);
   }
-  for (let i = startIndex; i < getChat().length; i += 1) {
-    const message = getMessage(i);
-    if (message?.extra?.[MODULE_NAME]) delete message.extra[MODULE_NAME];
-  }
-  const invalidSmallIds = new Set(
-    state2.smallSummaries.filter((summary) => summary.sourceKeys.some((key) => !validPrefixKeys.has(key))).map((summary) => summary.id)
-  );
-  state2.smallSummaries = state2.smallSummaries.filter((summary) => !invalidSmallIds.has(summary.id));
-  state2.largeSummaries = state2.largeSummaries.filter(
-    (summary) => !summary.sourceKeys.some((key) => invalidSmallIds.has(key))
-  );
+  markArtifactsForHistoryRebuild(startIndex, index);
+  invalidateDerivedForValidMessages(state2, validPrefixKeys);
   state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
   state2.latestSnapshotMessageKey = state2.processedMessageKeys.at(-1);
   await persistChatFor(chatKey);
   await putChatState(state2);
   await pauseLorebookForHistoryChange(chatKey);
   notifyFrom(index);
-  toast("warning", `\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C\uFF1B\u8BF7\u5728\u955C\u6E0A\u4E2D\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB\u91CD\u7B97`);
+  if (latestOnly) {
+    toast("info", "\u6700\u65B0\u6B63\u6587\u5DF2\u53D8\u5316\uFF0C\u955C\u6E0A\u5C06\u81EA\u52A8\u4ECE\u5BA1\u6838\u7EE7\u7EED\u5904\u7406\uFF1B\u4E16\u754C\u4E66\u5728\u5B8C\u6210\u524D\u6682\u65F6\u505C\u7528");
+  } else {
+    toast("warning", `\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C\uFF1B\u8BF7\u5728\u955C\u6E0A\u4E2D\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB\u91CD\u7B97`);
+  }
 }
 async function recalculateInvalidatedHistory() {
   if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
@@ -3611,7 +4224,7 @@ async function recalculateInvalidatedHistory() {
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
     const message = getMessage(index);
     if (!isProcessableAssistantMessage(message)) continue;
-    latest = await processMessage(index, true, { skipDerived: true });
+    latest = await processMessage(index, false, { skipDerived: true });
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
     if (!latest || latest.stages.state.status === "failed" || latest.stages.state.status === "blocked") {
       throw new Error(`\u7B2C ${index + 1} \u6761\u6D88\u606F\u91CD\u7B97\u5931\u8D25\uFF0C\u4E16\u754C\u4E66\u4ECD\u4FDD\u6301\u6682\u505C`);
@@ -3646,7 +4259,7 @@ async function recalculateInvalidatedHistory() {
       bindArtifactTaskGuard(artifact, guard);
       try {
         try {
-          await maybeRunSummaries(artifact, true, true);
+          await rebuildEligibleSummaries(artifact);
         } catch (error) {
           if (derivedTaskError(error)) throw error;
           errors.push(`\u603B\u7ED3\uFF1A${toErrorMessage(error)}`);
@@ -3688,17 +4301,8 @@ async function chooseHistoryRecalculationStart(startIndex) {
     const attached = getAttachedArtifact(getMessage(i));
     if (attached) validPrefixKeys.add(attached.messageKey);
   }
-  for (let i = index; i < getChat().length; i += 1) {
-    const message = getMessage(i);
-    if (message?.extra?.[MODULE_NAME]) delete message.extra[MODULE_NAME];
-  }
-  const invalidSmallIds = new Set(
-    state2.smallSummaries.filter((summary) => summary.sourceKeys.some((key) => !validPrefixKeys.has(key))).map((summary) => summary.id)
-  );
-  state2.smallSummaries = state2.smallSummaries.filter((summary) => !invalidSmallIds.has(summary.id));
-  state2.largeSummaries = state2.largeSummaries.filter(
-    (summary) => !summary.sourceKeys.some((key) => invalidSmallIds.has(key))
-  );
+  markArtifactsForHistoryRebuild(index, index);
+  invalidateDerivedForValidMessages(state2, validPrefixKeys);
   state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
   state2.latestSnapshotMessageKey = state2.processedMessageKeys.at(-1);
   state2.lastSyncError = `\u5DF2\u9009\u62E9\u4ECE\u7B2C ${index + 1} \u6761\u6D88\u606F\u5F00\u59CB\u91CD\u7B97`;
@@ -3767,7 +4371,7 @@ async function retryStage(index, stage) {
         await runStateExtraction(artifact, true);
         await saveArtifactToMessage(index, artifact);
         await commitCoreState(index, artifact);
-        await clearResolvedLatestHistoryInvalidation(index, artifact, true);
+        await clearResolvedLatestHistoryInvalidation(index, artifact);
         await prepareDerivedStageStatuses(artifact);
         taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
         queueAutomaticDerived(index, artifact, scheduledHistoryRevision);
@@ -3907,10 +4511,15 @@ function latestSnapshotArtifact() {
 function installPipelineEventHandlers() {
   const context = globalThis.SillyTavern.getContext();
   const { eventSource, event_types } = context;
-  const onReceived = (payload) => scheduleMessage(payload, false);
+  const onReceived = (payload) => scheduleMessage(payload, false, 180);
   const handleInvalidation = (payload, reason) => {
     if (!getSettings().enabled) return;
-    void invalidateHistory(payload, reason).catch((error) => {
+    const changedIndex = resolveChangedIndex(payload);
+    void invalidateHistory(payload, reason).then(() => {
+      if (reason !== "deleted" && changedIndex !== null && isNarrativeTail(changedIndex)) {
+        scheduleMessage(changedIndex, false, 120);
+      }
+    }).catch((error) => {
       console.error("[MirrorAbyss] history invalidation failed", error);
       toast("error", `\u5386\u53F2\u53D8\u5316\u5904\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
     });
@@ -3937,12 +4546,12 @@ function installPipelineEventHandlers() {
 }
 
 // src/domain/graph.ts
-function nodeTypeFor(table) {
-  if (table === "focus") return "focus";
-  if (table === "characters") return "character";
-  if (table === "items") return "item";
-  if (table === "events") return "event";
-  if (table === "regions" || table === "spacetime") return "region";
+function nodeTypeFor(role) {
+  if (role === "focus") return "focus";
+  if (role === "state") return "character";
+  if (role === "items" || role === "skills") return "item";
+  if (role === "events") return "event";
+  if (role === "regions" || role === "spacetime" || role === "globalChanges") return "region";
   return null;
 }
 function compactLabel(value) {
@@ -3963,36 +4572,26 @@ function uniquePairKey(a, b, label) {
   const [left, right] = [a, b].sort();
   return `${left}|${right}|${label}`;
 }
-function buildRelationshipGraph(snapshot, scope = "relations") {
+function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
   if (!snapshot) return { nodes: [], edges: [] };
+  const registry2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
   const nodes = [];
-  const nodeById = /* @__PURE__ */ new Map();
   const rowsByNode = /* @__PURE__ */ new Map();
-  const tables = scope === "relations" ? ["focus", "characters"] : ["focus", "characters", "items", "events", "regions", "spacetime"];
-  for (const table of tables) {
-    const type = nodeTypeFor(table);
+  const roles = scope === "relations" ? ["focus", "state"] : ["focus", "state", "items", "skills", "events", "regions", "spacetime", "globalChanges"];
+  for (const table of enabledTables(registry2).filter((item) => roles.includes(item.role))) {
+    const type = nodeTypeFor(table.role);
     if (!type) continue;
-    for (const row of snapshot[table]) {
-      const id = `${table}:${row.id}`;
-      const node = {
-        id,
-        label: String(row.title || "\u672A\u547D\u540D").trim(),
-        type,
-        detail: row.content,
-        status: row.status,
-        existence: row.lifecycle?.existence,
-        activity: row.lifecycle?.activity,
-        memory: row.lifecycle?.memory
-      };
-      nodes.push(node);
-      nodeById.set(id, node);
+    for (const row of snapshot[table.key] ?? []) {
+      const id = `${table.key}:${row.id}`;
+      nodes.push({ id, label: String(row.title || "\u672A\u547D\u540D").trim(), type, detail: row.content, status: row.status, existence: row.lifecycle?.existence, activity: row.lifecycle?.activity, memory: row.lifecycle?.memory });
       rowsByNode.set(id, row);
     }
   }
   const edges = [];
   const seenEdges = /* @__PURE__ */ new Set();
+  const relationKey = tableByRole(registry2, "relationships")?.key;
   let relationIndex = 0;
-  for (const row of snapshot.relationships) {
+  for (const row of relationKey ? snapshot[relationKey] ?? [] : []) {
     const matched = nodes.filter((node) => mentions(row, node));
     if (matched.length >= 2) {
       const source = matched[0];
@@ -4000,62 +4599,27 @@ function buildRelationshipGraph(snapshot, scope = "relations") {
         const key = uniquePairKey(source.id, target.id, row.title);
         if (seenEdges.has(key)) continue;
         seenEdges.add(key);
-        edges.push({
-          id: `edge:${row.id}:${target.id}`,
-          source: source.id,
-          target: target.id,
-          label: compactLabel(row.title),
-          detail: row.content
-        });
+        edges.push({ id: `edge:${row.id}:${target.id}`, source: source.id, target: target.id, label: compactLabel(row.title), detail: row.content });
       }
-      continue;
-    }
-    const relationNode = {
-      id: `relationship:${row.id}`,
-      label: compactLabel(row.title || `\u5173\u7CFB${relationIndex + 1}`),
-      type: "relationship",
-      detail: row.content,
-      status: row.status,
-      existence: row.lifecycle?.existence,
-      activity: row.lifecycle?.activity,
-      memory: row.lifecycle?.memory
-    };
-    relationIndex += 1;
-    nodes.push(relationNode);
-    nodeById.set(relationNode.id, relationNode);
-    if (matched.length === 1) {
-      edges.push({
-        id: `edge:${row.id}:single`,
-        source: matched[0].id,
-        target: relationNode.id,
-        label: compactLabel(row.status || "\u5173\u7CFB"),
-        detail: row.content
-      });
+    } else {
+      const relationNode = { id: `relationship:${row.id}`, label: compactLabel(row.title || `\u5173\u7CFB${relationIndex + 1}`), type: "relationship", detail: row.content, status: row.status };
+      relationIndex += 1;
+      nodes.push(relationNode);
+      if (matched.length === 1) edges.push({ id: `edge:${row.id}:single`, source: matched[0].id, target: relationNode.id, label: compactLabel(row.status || "\u5173\u7CFB"), detail: row.content });
     }
   }
   if (scope === "world") {
-    const contextualTypes = /* @__PURE__ */ new Set(["item", "event", "region"]);
-    const characters = nodes.filter(
-      (node) => node.type === "character" || node.type === "focus"
-    );
-    const contextual = nodes.filter((node) => contextualTypes.has(node.type));
-    for (const character of characters) {
-      const row = rowsByNode.get(character.id);
+    const contextual = nodes.filter((node) => ["item", "event", "region"].includes(node.type));
+    for (const actor of nodes.filter((node) => node.type === "character" || node.type === "focus")) {
+      const row = rowsByNode.get(actor.id);
       if (!row) continue;
       const text = relationText(row);
       for (const target of contextual) {
-        const label = target.label.toLowerCase();
-        if (label.length < 2 || !text.includes(label)) continue;
-        const key = uniquePairKey(character.id, target.id, "\u5173\u8054");
+        if (target.label.length < 2 || !text.includes(target.label.toLowerCase())) continue;
+        const key = uniquePairKey(actor.id, target.id, "\u5173\u8054");
         if (seenEdges.has(key)) continue;
         seenEdges.add(key);
-        edges.push({
-          id: `context:${character.id}:${target.id}`,
-          source: character.id,
-          target: target.id,
-          label: "\u5173\u8054",
-          detail: row.content
-        });
+        edges.push({ id: `context:${actor.id}:${target.id}`, source: actor.id, target: target.id, label: "\u5173\u8054", detail: row.content });
       }
     }
   }
@@ -4091,6 +4655,15 @@ async function runDiagnostics() {
     detail: document.querySelector("#ma11-settings-root") ? "\u5DF2\u6302\u8F7D" : "\u5C1A\u672A\u6302\u8F7D"
   });
   const settings = context ? getSettings() : null;
+  if (settings) {
+    const registry2 = normalizeTableRegistry(settings.tableRegistry);
+    checks.push({
+      id: "tableRegistry",
+      label: "\u52A8\u6001\u8868\u683C\u6CE8\u518C\u8868",
+      status: registry2.length ? "ok" : "warn",
+      detail: `${registry2.length} \u5F20\u5DF2\u6CE8\u518C\uFF0C${enabledTables(registry2).length} \u5F20\u542F\u7528`
+    });
+  }
   checks.push({
     id: "audit",
     label: "\u89C4\u5219\u5BA1\u6838\u914D\u7F6E",
@@ -4131,6 +4704,8 @@ function redactedChatState(state2) {
     chatKey: state2.chatKey,
     processedMessageCount: Array.isArray(state2.processedMessageKeys) ? state2.processedMessageKeys.length : 0,
     latestSnapshotMessageKey: state2.latestSnapshotMessageKey,
+    internalFactCount: Array.isArray(state2.internalFacts) ? state2.internalFacts.length : 0,
+    pendingSmallFactCount: Array.isArray(state2.internalFacts) ? state2.internalFacts.filter((fact) => !fact.consumedBySmallSummaryId).length : 0,
     smallSummaryCount: Array.isArray(state2.smallSummaries) ? state2.smallSummaries.length : 0,
     largeSummaryCount: Array.isArray(state2.largeSummaries) ? state2.largeSummaries.length : 0,
     historyInvalidation: state2.historyInvalidation,
@@ -4240,7 +4815,7 @@ function root() {
         <header class="ma11-header">
           <div>
             <div class="ma11-brand">\u955C\u6E0A <span>${VERSION}</span></div>
-            <div class="ma11-subtitle">\u7ED3\u6784\u5316\u72B6\u6001\u3001\u5206\u5C42\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
+            <div class="ma11-subtitle">\u52A8\u6001\u4E8B\u5B9E\u89C6\u56FE\u3001\u4E8B\u4EF6\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
           </div>
           <button class="ma11-icon-button" data-ma11-action="close" aria-label="\u5173\u95ED">\xD7</button>
         </header>
@@ -4248,6 +4823,7 @@ function root() {
           ${[
       ["overview", "\u603B\u89C8"],
       ["tables", "\u72B6\u6001\u8868"],
+      ["tableManager", "\u8868\u683C\u7BA1\u7406"],
       ["graph", "\u5173\u7CFB\u56FE\u8C31"],
       ["summaries", "\u603B\u7ED3"],
       ["audit", "\u89C4\u5219\u5BA1\u6838"],
@@ -4330,14 +4906,14 @@ function statusClass(value) {
 }
 function stageCards(artifact) {
   const stages = artifact?.stages;
-  const rows2 = [
+  const rows = [
     ["audit", "\u89C4\u5219\u5BA1\u6838"],
     ["revision", "\u5B9A\u5411\u4FEE\u6B63"],
     ["state", "\u72B6\u6001\u63D0\u53D6"],
     ["summary", "\u5206\u5C42\u603B\u7ED3"],
     ["sync", "\u4E16\u754C\u4E66\u540C\u6B65"]
   ];
-  return `<div class="ma11-stage-grid">${rows2.map(([key, label]) => {
+  return `<div class="ma11-stage-grid">${rows.map(([key, label]) => {
     const stage = stages?.[key] ?? { status: "idle", attempts: 0 };
     return `<article class="ma11-stage-card ${statusClass(stage.status)}">
       <div><b>${label}</b><span>${statusText(stage.status)}</span></div>
@@ -4404,14 +4980,14 @@ async function overviewHtml(artifactInfo) {
   const enabled = getSettings().enabled;
   const artifact = artifactInfo?.artifact;
   const chatState = await getChatState(currentChatKey());
-  const rows2 = snapshotRowCount(artifact?.snapshot);
+  const rows = snapshotRowCount(artifact?.snapshot, getSettings().tableRegistry, true);
   const tasks = recentTasksHtml();
   return `
-    ${chatState.historyInvalidation ? `<section class="ma11-card ma11-history-warning"><header><b>\u5386\u53F2\u6570\u636E\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u955C\u6E0A\u4E0D\u4F1A\u5728\u540E\u53F0\u81EA\u52A8\u91CD\u653E\u5386\u53F2\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u4ECE\u53D8\u66F4\u4F4D\u7F6E\u5F00\u59CB\u91CD\u7B97"}</button></div></section>` : ""}
+    ${chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u624B\u52A8\u5386\u53F2\u91CD\u5EFA\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u53EA\u4F1A\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u91CD\u5EFA\uFF0C\u4E0D\u4F1A\u91CD\u8DD1\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u6309\u4F9D\u8D56\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : ""}
     <section class="ma11-hero">
       <div>
         <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
-        <p>${artifact ? `\u72B6\u6001\u8868 ${rows2} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
+        <p>${artifact ? `\u72B6\u6001\u8868 ${rows} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
       </div>
       <div class="ma11-actions">
         <button data-ma11-action="process-latest" ${enabled ? "" : "disabled"}>\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
@@ -4420,10 +4996,11 @@ async function overviewHtml(artifactInfo) {
       </div>
     </section>
     ${stageCards(artifact)}
-    <section class="ma11-card">
-      <header><b>\u5206\u9636\u6BB5\u624B\u52A8\u64CD\u4F5C</b><span>\u6BCF\u4E2A\u6309\u94AE\u53EA\u6267\u884C\u5BF9\u5E94\u9636\u6BB5</span></header>
+    <details class="ma11-card ma11-debug-tools">
+      <summary><b>\u5355\u6B65\u6392\u9519\u5DE5\u5177</b><span>\u6B63\u5E38\u6E38\u73A9\u65E0\u9700\u5C55\u5F00</span></summary>
+      <p class="ma11-help">\u4EC5\u5728\u5355\u4E00\u9636\u6BB5\u5931\u8D25\u6216\u8BCA\u65AD\u65F6\u4F7F\u7528\uFF1B\u9ED8\u8BA4\u81EA\u52A8\u6D41\u7A0B\u4F1A\u4ECE\u6709\u6548\u68C0\u67E5\u70B9\u7EE7\u7EED\u3002</p>
       ${stageActionButtonsHtml(artifactInfo)}
-    </section>
+    </details>
     <section class="ma11-card">
       <header><b>\u4EFB\u52A1\u961F\u5217</b><span data-ma11-task-count>${tasks.count ? `${tasks.count} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2"}</span></header>
       <div class="ma11-task-list" data-ma11-task-list>
@@ -4432,7 +5009,7 @@ async function overviewHtml(artifactInfo) {
     </section>
     <section class="ma11-card ma11-note">
       <b>\u672C\u7248\u67B6\u6784\u539F\u5219</b>
-      <p>\u6BCF\u6761AI\u6B63\u6587\u53EA\u521B\u5EFA\u4E00\u4E2A\u552F\u4E00\u4EFB\u52A1\uFF1B\u5BA1\u6838\u3001\u8868\u683C\u3001\u603B\u7ED3\u3001\u540C\u6B65\u5206\u9636\u6BB5\u4FDD\u5B58\u3002\u5355\u4E00\u9636\u6BB5\u5931\u8D25\u65F6\u53EA\u91CD\u8BD5\u8BE5\u9636\u6BB5\uFF0C\u4E0D\u91CD\u65B0\u8C03\u7528\u6574\u6761\u7BA1\u7EBF\u3002</p>
+      <p>\u6B63\u5E38\u60C5\u51B5\u4E0B\uFF0C\u6B63\u6587\u4F1A\u81EA\u52A8\u4F9D\u6B21\u5B8C\u6210\u5BA1\u6838\u3001\u5FC5\u8981\u4FEE\u6B63\u3001\u8868\u683C\u3001\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u3002\u53EA\u6709\u8F83\u65E9\u5386\u53F2\u53D8\u5316\u6216\u5355\u9636\u6BB5\u5931\u8D25\u65F6\u624D\u9700\u8981\u4F7F\u7528\u624B\u52A8\u5DE5\u5177\uFF1B\u91CD\u5EFA\u4F1A\u5148\u590D\u7528\u4ECD\u6709\u6548\u7684\u68C0\u67E5\u70B9\u3002</p>
     </section>`;
 }
 function lifecycleHtml(row) {
@@ -4450,37 +5027,94 @@ function lifecycleHtml(row) {
   ].join("");
   return `<div class="ma11-lifecycle-inline">${chips}${conditions}</div>`;
 }
+function rowCustomFieldsHtml(row, table) {
+  if (!table || !row.fields) return "";
+  const lines = table.fields.filter((field) => field.key in (row.fields ?? {})).map((field) => {
+    const raw = row.fields?.[field.key];
+    const value = Array.isArray(raw) ? raw.join("\u3001") : String(raw ?? "");
+    return value.trim() ? `<div><small>${escapeHtml(field.label)}</small>${escapeHtml(value)}</div>` : "";
+  }).filter(Boolean);
+  return lines.length ? `<div class="ma11-custom-fields">${lines.join("")}</div>` : "";
+}
 function tableHtml(artifactInfo) {
   const settings = getSettings();
+  const registry2 = normalizeTableRegistry(settings.tableRegistry);
+  const visibleTables = enabledTables(registry2);
   const artifact = artifactInfo?.artifact;
   const latest = latestSnapshotArtifact();
-  const editable = Boolean(
-    settings.enabled && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey
-  );
-  const active = settings.ui.activeTable;
-  const rows2 = artifact?.snapshot?.[active] ?? [];
+  const editable = Boolean(settings.enabled && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey);
+  if (!visibleTables.length) {
+    return `<section class="ma11-empty-panel"><h2>\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u683C</h2><p>\u5185\u90E8\u4E8B\u5B9E\u5C42\u4ECD\u4F1A\u4FDD\u5B58\u4E8B\u4EF6\u7EBF\u548C\u603B\u7ED3\u6D88\u8D39\u72B6\u6001\u3002\u8BF7\u5728\u201C\u8868\u683C\u7BA1\u7406\u201D\u4E2D\u542F\u7528\u6216\u65B0\u589E\u89C6\u56FE\u3002</p><button data-ma11-action="open-table-manager">\u6253\u5F00\u8868\u683C\u7BA1\u7406</button></section>`;
+  }
+  let active = settings.ui.activeTable;
+  let activeDefinition = visibleTables.find((table) => table.key === active);
+  if (!activeDefinition) {
+    activeDefinition = visibleTables[0];
+    active = activeDefinition.key;
+    settings.ui.activeTable = active;
+  }
+  const rows = artifact?.snapshot?.[active] ?? [];
   return `
     <section class="ma11-toolbar ma11-table-toolbar">
-      <div class="ma11-table-tabs">${TABLE_KEYS.map((key) => `<button class="${key === active ? "active" : ""}" data-ma11-table="${key}">${TABLE_LABELS[key]} <span>${artifact?.snapshot?.[key]?.length ?? 0}</span></button>`).join("")}</div>
-      <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="run-state" ${settings.enabled && artifactInfo?.index === latestAssistantIndex() && (!settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>\u751F\u6210/\u66F4\u65B0\u8868\u683C</button></div>
+      <div>
+        <div class="ma11-table-tabs">${visibleTables.map((table) => `<button class="${table.key === active ? "active" : ""}" data-ma11-table="${escapeHtml(table.key)}">${escapeHtml(table.name)} <span>${artifact?.snapshot?.[table.key]?.length ?? 0}</span></button>`).join("")}</div>
+        <p class="ma11-table-purpose"><b>${escapeHtml(activeDefinition.name)}</b>\uFF1A${escapeHtml(activeDefinition.purpose)}</p>
+      </div>
+      <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="run-state" ${settings.enabled && artifactInfo?.index === latestAssistantIndex() && (!settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>\u751F\u6210/\u66F4\u65B0\u8868\u683C</button><button data-ma11-action="open-table-manager">\u7BA1\u7406\u8868\u683C</button></div>
     </section>
-    <p class="ma11-table-hint">\u8868\u683C\u4FDD\u6301\u6A2A\u5411\u6392\u7248\u3002\u624B\u673A\u7AEF\u8BF7\u5728\u8868\u683C\u533A\u57DF\u5DE6\u53F3\u6ED1\u52A8\uFF0C\u4E0D\u4F1A\u518D\u628A\u4E2D\u6587\u538B\u6210\u7AD6\u6392\u3002</p>
-    <section class="ma11-table-wrap" role="region" aria-label="${TABLE_LABELS[active]}\u72B6\u6001\u8868" tabindex="0">
+    <p class="ma11-table-hint">\u53EA\u663E\u793A\u542F\u7528\u89C6\u56FE\u3002\u624B\u673A\u7AEF\u53EF\u5728\u8868\u683C\u533A\u57DF\u5DE6\u53F3\u6ED1\u52A8\uFF1B\u505C\u7528\u6216\u5220\u9664\u89C6\u56FE\u4E0D\u4F1A\u5220\u9664\u5185\u90E8\u4E8B\u5B9E\u3001\u4E8B\u4EF6\u7EBF\u6216\u603B\u7ED3\u3002</p>
+    <section class="ma11-table-wrap" role="region" aria-label="${escapeHtml(activeDefinition.name)}\u72B6\u6001\u8868" tabindex="0">
       ${artifact?.snapshot ? `<table class="ma11-table">
         <colgroup><col class="ma11-col-index"/><col class="ma11-col-title"/><col class="ma11-col-content"/><col class="ma11-col-state"/><col class="ma11-col-meta"/><col class="ma11-col-actions"/></colgroup>
         <thead><tr><th>\u5E8F\u53F7</th><th>\u5BF9\u8C61</th><th>\u5F53\u524D\u8BB0\u5F55</th><th>\u72B6\u6001\u4E0E\u5173\u952E\u8BCD</th><th>\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4</th><th>\u64CD\u4F5C</th></tr></thead>
-        <tbody>${rows2.length ? rows2.map(
-    (row, index) => `<tr>
+        <tbody>${rows.length ? rows.map((row, index) => `<tr>
           <td>${index + 1}</td>
           <td class="ma11-cell-title"><b>${escapeHtml(row.title)}</b></td>
-          <td class="ma11-cell-content">${escapeHtml(row.content)}</td>
+          <td class="ma11-cell-content">${escapeHtml(row.content)}${rowCustomFieldsHtml(row, activeDefinition)}</td>
           <td><div class="ma11-cell-status">${row.status ? `<span class="ma11-status-text">${escapeHtml(row.status)}</span>` : ""}${lifecycleHtml(row)}<div class="ma11-keyword-list">${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</div></div></td>
           <td><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.source === "manual" || row.locked ? "\u73A9\u5BB6\u9501\u5B9A" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
           <td><div class="ma11-row-actions"><button data-ma11-edit-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u5220\u9664</button></div></td>
-        </tr>`
-  ).join("") : `<tr><td colspan="6" class="ma11-empty">\u8BE5\u5206\u7C7B\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
+        </tr>`).join("") : `<tr><td colspan="6" class="ma11-empty">\u8BE5\u89C6\u56FE\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
       </table>` : '<div class="ma11-empty-panel">\u5C1A\u65E0\u72B6\u6001\u8868\u3002\u70B9\u51FB\u201C\u6574\u7406\u6700\u65B0\u6B63\u6587\u201D\u3002</div>'}
     </section>`;
+}
+function tableManagerHtml(artifactInfo) {
+  const settings = getSettings();
+  const registry2 = normalizeTableRegistry(settings.tableRegistry);
+  const snapshot = artifactInfo?.artifact.snapshot;
+  const rows = registry2.map((table, index) => {
+    const fields = customFieldText(table);
+    return `<article class="ma11-table-manager-row" data-ma11-table-card="${escapeHtml(table.key)}">
+      <div class="ma11-table-manager-head">
+        <span class="ma11-order-number">${index + 1}</span>
+        <label class="ma11-switch"><input type="checkbox" data-ma11-table-enabled="${escapeHtml(table.key)}" ${table.enabled ? "checked" : ""}/><span>${table.enabled ? "\u542F\u7528" : "\u505C\u7528"}</span></label>
+        <span class="ma11-badge">${table.isDefault ? "\u9ED8\u8BA4\u89C6\u56FE" : "\u81EA\u5B9A\u4E49\u89C6\u56FE"}</span>
+        <span>${snapshot?.[table.key]?.length ?? 0} \u884C</span>
+      </div>
+      <div class="ma11-table-manager-fields">
+        <label>\u540D\u79F0<input data-ma11-table-name="${escapeHtml(table.key)}" value="${escapeHtml(table.name)}" maxlength="80" /></label>
+        <label>\u7528\u9014\u8BF4\u660E<textarea data-ma11-table-purpose="${escapeHtml(table.key)}" rows="3" maxlength="1000">${escapeHtml(table.purpose)}</textarea></label>
+        <label>\u81EA\u5B9A\u4E49\u5B57\u6BB5 <small>\u6BCF\u884C\uFF1A\u5B57\u6BB5\u952E:\u540D\u79F0:string\u6216string[]:\u7528\u9014</small><textarea data-ma11-table-fields="${escapeHtml(table.key)}" rows="3" placeholder="mood:\u60C5\u7EEA:string:\u5F53\u524D\u5DF2\u663E\u5F71\u60C5\u7EEA">${escapeHtml(fields)}</textarea></label>
+      </div>
+      <div class="ma11-actions ma11-table-manager-actions">
+        <button data-ma11-action="save-table" data-ma11-table-key="${escapeHtml(table.key)}">\u4FDD\u5B58\u4FEE\u6539</button>
+        <button data-ma11-action="move-table-up" data-ma11-table-key="${escapeHtml(table.key)}" ${index === 0 ? "disabled" : ""}>\u4E0A\u79FB</button>
+        <button data-ma11-action="move-table-down" data-ma11-table-key="${escapeHtml(table.key)}" ${index === registry2.length - 1 ? "disabled" : ""}>\u4E0B\u79FB</button>
+        <button class="danger" data-ma11-action="delete-table" data-ma11-table-key="${escapeHtml(table.key)}">\u5220\u9664\u89C6\u56FE</button>
+      </div>
+      <p class="ma11-help">\u952E\uFF1A${escapeHtml(table.key)} \xB7 \u89D2\u8272\uFF1A${escapeHtml(table.role)}\u3002\u540D\u79F0\u3001\u7528\u9014\u4E0E\u5B57\u6BB5\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\u548C JSON Schema\u3002</p>
+    </article>`;
+  }).join("");
+  return `<section class="ma11-toolbar"><div><h2>\u8868\u683C\u7BA1\u7406</h2><p>\u8868\u683C\u662F\u5185\u90E8\u4E8B\u5B9E\u7684\u53EF\u89C1\u89C6\u56FE\uFF0C\u6570\u91CF\u4E0D\u9650\u3002\u505C\u7528\u6216\u5220\u9664\u540E\u4E0D\u518D\u8981\u6C42\u6A21\u578B\u8F93\u51FA\uFF0C\u4E5F\u4E0D\u518D\u8FDB\u5165 UI \u4E0E\u4E16\u754C\u4E66\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u5341\u8868</button></div></section>
+    <section class="ma11-card ma11-form-card ma11-new-table">
+      <header><b>\u65B0\u589E\u81EA\u5B9A\u4E49\u8868\u683C</b><span>\u65B0\u589E\u540E\u81EA\u52A8\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001 Schema</span></header>
+      <label>\u540D\u79F0<input data-ma11-new-table-name maxlength="80" placeholder="\u4F8B\u5982\uFF1A\u7EC4\u7EC7\u72B6\u6001" /></label>
+      <label>\u7528\u9014\u8BF4\u660E<textarea data-ma11-new-table-purpose rows="3" maxlength="1000" placeholder="\u8BF4\u660E\u53EA\u5E94\u8BB0\u5F55\u4EC0\u4E48\uFF0C\u4EE5\u53CA\u4E0D\u5E94\u8BB0\u5F55\u4EC0\u4E48\u3002"></textarea></label>
+      <label>\u5B57\u6BB5\u5B9A\u4E49 <small>\u53EF\u7559\u7A7A\uFF1B\u6BCF\u884C\uFF1A\u5B57\u6BB5\u952E:\u540D\u79F0:string\u6216string[]:\u7528\u9014</small><textarea data-ma11-new-table-fields rows="3" placeholder="rank:\u5C42\u7EA7:string:\u5DF2\u660E\u786E\u7684\u7EC4\u7EC7\u5C42\u7EA7"></textarea></label>
+      <div class="ma11-actions"><button data-ma11-action="create-table">\u65B0\u589E\u8868\u683C</button></div>
+    </section>
+    <section class="ma11-table-manager-list">${rows || '<div class="ma11-empty-panel">\u5F53\u524D\u6CA1\u6709\u8868\u683C\u5B9A\u4E49\u3002</div>'}</section>
+    <section class="ma11-card ma11-note"><b>\u5220\u9664\u8BF4\u660E</b><p>\u5220\u9664\u9ED8\u8BA4\u8868\u683C\u53EA\u5220\u9664\u53EF\u89C1\u89C6\u56FE\uFF0C\u4E0D\u5220\u9664\u804A\u5929\u7EA7\u5185\u90E8\u4E8B\u5B9E\u3001event_id\u3001\u5C0F\u603B\u7ED3\u3001\u5927\u603B\u7ED3\u6216\u5386\u53F2\u91CD\u5EFA\u4F9D\u636E\u3002\u4EBA\u5DE5\u4E16\u754C\u4E66\u6761\u76EE\u4E5F\u4E0D\u4F1A\u88AB\u955C\u6E0A\u64CD\u4F5C\u3002</p></section>`;
 }
 function graphNodePositions(graph) {
   const width = 1e3;
@@ -4539,7 +5173,7 @@ function graphLifecycleClass(node) {
 function graphHtml(artifactInfo) {
   const settings = getSettings();
   const snapshot = artifactInfo?.artifact.snapshot;
-  const graph = buildRelationshipGraph(snapshot, settings.ui.graphScope);
+  const graph = buildRelationshipGraph(snapshot, settings.ui.graphScope, settings.tableRegistry);
   const positioned = graphNodePositions(graph);
   const positions = new Map(positioned.map((node) => [node.id, node]));
   const selected = positioned.find((node) => node.id === selectedGraphNodeId) ?? positioned[0];
@@ -4584,7 +5218,7 @@ async function summariesHtml() {
   const small = state2?.smallSummaries ?? [];
   const large = state2?.largeSummaries ?? [];
   return `
-    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u8D1F\u8D23\u5B89\u5168\u6C89\u964D\u5DF2\u7ED3\u675F\u5185\u5BB9\uFF1B\u5927\u603B\u7ED3\u628A\u5DF2\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u5185\u63A8\u4E3A\u7D2F\u8BA1\u957F\u671F\u8BB0\u5FC6\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
+    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u6309 event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5927\u603B\u7ED3\u53EA\u56FA\u5316\u5C1A\u672A\u88AB\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
     <div class="ma11-summary-columns">
       <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map(
     (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
@@ -4633,14 +5267,18 @@ async function syncHtml() {
   return `
     <section class="ma11-card ma11-form-card">
       <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(state2?.lastSyncStatus || "idle")}">${statusText(state2?.lastSyncStatus || "idle")}</span></header>
-      ${state2?.historyInvalidation ? `<div class="ma11-error-box">${state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002`}\u5B8C\u6210\u624B\u52A8\u91CD\u7B97\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002</div>` : ""}
+      ${state2?.historyInvalidation ? `<div class="ma11-error-box">${state2.historyInvalidation.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF0C\u5B8C\u6210\u540E\u4F1A\u81EA\u884C\u6062\u590D\u4E16\u754C\u4E66\u540C\u6B65\u3002" : state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002\u6309\u4F9D\u8D56\u91CD\u5EFA\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002`}</div>` : ""}
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
-      <label>\u53D1\u5E03\u7ED3\u6784<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u5BF9\u8C61\u8BED\u4E49\u6A21\u5F0F\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u884C\u8C03\u8BD5\u6A21\u5F0F</option></select></label>
-      <p class="ma11-help">\u5BF9\u8C61\u8BED\u4E49\u6A21\u5F0F\u6309\u73B0\u5B9E\u5BF9\u8C61\u5EFA\u7ACB\u6761\u76EE\uFF1A\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u6BCF\u4E2A\u7126\u70B9\u3001\u6BCF\u4E2A\u6B63\u5F0F\u4EBA\u7269\u3001\u5173\u7CFB\u7F51\u7EDC\u3001\u533A\u57DF\u3001\u4E8B\u4EF6/\u6D41\u7A0B\u3001\u7269\u54C1/\u8D44\u6E90\u3001\u6280\u80FD\uFF0C\u4EE5\u53CA\u5F53\u524D\u5C0F\u603B\u7ED3\u548C\u7D2F\u8BA1\u5927\u603B\u7ED3\u3002\u65E7\u7684\u955C\u6E0A\u7BA1\u7406\u6761\u76EE\u4F1A\u5728\u91CD\u65B0\u53D1\u5E03\u65F6\u81EA\u52A8\u66FF\u6362\u3002</p>
+      <label>\u53D1\u5E03\u7ED3\u6784<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u8BED\u4E49\u5BF9\u8C61\u6A21\u5F0F\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u884C\u8C03\u8BD5\u6A21\u5F0F</option></select></label>
+      <p class="ma11-help">\u4E16\u754C\u4E66\u53EA\u4F7F\u7528\u4E09\u79CD\u542F\u7528\u5F62\u5F0F\uFF1Aconstant \u5E38\u9A7B\u3001trigger \u660E\u786E\u6761\u4EF6\u89E6\u53D1\u3001vector \u5411\u91CF\u8BED\u4E49\u53EC\u56DE\u3002\u955C\u6E0A\u53D1\u5E03\u987A\u5E8F\u4E3A\u5E38\u9A7B \u2192 any/all/exclude \u89E6\u53D1 \u2192 \u5411\u91CF\uFF0C\u518D\u6309 fact_id / event_id \u53BB\u91CD\u5E76\u6309\u603B\u5BB9\u91CF\u88C1\u526A\uFF1B\u4E0D\u4F7F\u7528\u6570\u503C\u6743\u91CD\u51B3\u5B9A\u662F\u5426\u8FDB\u5165\u4E0A\u4E0B\u6587\u3002SillyTavern \u5B9E\u9645\u5411\u91CF\u76F8\u4F3C\u5EA6\u4E0E\u6700\u5927\u5339\u914D\u6570\u7531 Vector Storage \u5168\u5C40\u8BBE\u7F6E\u63A7\u5236\uFF0C\u955C\u6E0A\u4E0D\u4F1A\u64C5\u81EA\u4FEE\u6539\u5168\u5C40\u914D\u7F6E\u3002</p>
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="vectorizeRows" ${settings.vectorizeRows ? "checked" : ""}/><span>\u4EBA\u7269\u3001\u7269\u54C1\u3001\u4E8B\u4EF6\u7B49\u72B6\u6001\u884C\u542F\u7528\u5411\u91CF</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u57FA\u7840\u8BBE\u5B9A\u3001\u5168\u5C40\u6001\u52BF\u3001\u5F53\u524D\u7126\u70B9\u4E0E\u5F53\u524D\u603B\u7ED3\u5E38\u9A7B</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u5C06\u6781\u5C11\u91CF\u5F53\u524D\u7126\u70B9\u3001\u65F6\u7A7A\u3001\u5FC5\u8981\u89C4\u5219\u3001\u4E0D\u53EF\u7F3A\u5931\u72B6\u6001\u548C\u76F4\u63A5\u76F8\u5173\u5168\u5C40\u53D8\u5316\u8BBE\u4E3A\u5E38\u9A7B</span></label>
+      <div class="ma11-editor-grid ma11-recall-grid">
+        <label>\u671F\u671B\u5411\u91CF\u76F8\u4F3C\u5EA6\u95E8\u69DB <small>\u6258\u7BA1\u5143\u6570\u636E</small><input type="number" min="0" max="0.99" step="0.01" data-ma11-recall-setting="similarityThreshold" value="${settings.lorebookRecall.similarityThreshold}" /></label>
+        <label>\u6700\u5927\u5411\u91CF\u5019\u9009\u6761\u76EE <small>\u955C\u6E0A\u53D1\u5E03\u88C1\u526A</small><input type="number" min="1" max="100" data-ma11-recall-setting="maxVectorResults" value="${settings.lorebookRecall.maxVectorResults}" /></label>
+        <label>\u4E16\u754C\u4E66\u603B\u5BB9\u91CF\uFF08\u5B57\u7B26\uFF09<input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
+      </div>
       <div class="ma11-actions"><button data-ma11-action="retry-sync" ${settings.enabled && info && !state2?.historyInvalidation ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
@@ -4686,12 +5324,12 @@ function settingsHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span>\u6BCF\u6761\u65B0AI\u6B63\u6587\u81EA\u52A8\u63D0\u53D6\u4E8B\u5B9E\u5E76\u6574\u7406\u8868\u683C</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="showMessagePanel" ${settings.showMessagePanel ? "checked" : ""}/><span>\u5728\u6B63\u6587\u4E0B\u663E\u793A\u72B6\u6001\u6761</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5C0F\u603B\u7ED3</span></label>
-      <label>\u5C0F\u603B\u7ED3\u6700\u665A\u56DE\u5408\u6570<input type="number" min="8" max="30" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
+      <label>\u4E8B\u4EF6\u7EBF\u6700\u665A\u6D88\u606F\u6570<input type="number" min="8" max="30" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
       <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>\u7ED3\u6784\u5316\u8F93\u51FA\u4E0D\u53EF\u7528\u6216JSON\u683C\u5F0F\u9519\u8BEF\u65F6\uFF0C\u6700\u591A\u989D\u5916\u8C03\u7528\u4E00\u6B21</span></label>
-      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6839\u636E\u5DF2\u7ECF\u63D0\u53D6\u7684\u72B6\u6001\u53D8\u5316\u5224\u65AD\uFF1A\u5267\u60C5\u53D8\u5316\u5BC6\u96C6\u65F6\u53EF\u63D0\u524D\u89E6\u53D1\uFF0C\u53D8\u5316\u5C11\u65F6\u5EF6\u540E\uFF0C\u4F46\u4E0D\u4F1A\u8D85\u8FC7\u201C\u6700\u665A\u56DE\u5408\u6570\u201D\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u517C\u5BB9\u56DE\u9000\u53EA\u6267\u884C\u4E00\u6B21\uFF1B\u7F51\u7EDC\u9519\u8BEF\u4E0D\u4F1A\u89E6\u53D1\uFF0C\u5931\u8D25\u540E\u7531\u7528\u6237\u624B\u52A8\u91CD\u8BD5\u3002</p>
+      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6309\u5185\u90E8\u4E8B\u5B9E\u7684 event_id \u5224\u65AD\u4E8B\u4EF6\u7EBF\uFF1B\u4E8B\u4EF6\u7ED3\u675F\u3001\u8FBE\u5230\u4E8B\u5B9E\u89C4\u6A21\u6216\u6700\u665A\u6D88\u606F\u8FB9\u754C\u65F6\u89E6\u53D1\uFF0C\u4E0D\u6309\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\u538B\u7F29\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u517C\u5BB9\u56DE\u9000\u53EA\u6267\u884C\u4E00\u6B21\uFF1B\u7F51\u7EDC\u9519\u8BEF\u4E0D\u4F1A\u89E6\u53D1\uFF0C\u5931\u8D25\u540E\u7531\u7528\u6237\u624B\u52A8\u91CD\u8BD5\u3002</p>
     </section>
     <section class="ma11-card ma11-form-card">
       <header><b>\u91CD\u7F6E\u4E0E\u7EF4\u62A4</b><span>\u4EE5\u4E0B\u64CD\u4F5C\u4E0D\u4F1A\u4FEE\u6539\u5176\u4ED6\u804A\u5929\u3002</span></header>
@@ -4729,6 +5367,7 @@ async function renderWorkspace() {
     let html = "";
     if (settings.ui.activeTab === "overview") html = await overviewHtml(info);
     if (settings.ui.activeTab === "tables") html = tableHtml(info);
+    if (settings.ui.activeTab === "tableManager") html = tableManagerHtml(info);
     if (settings.ui.activeTab === "graph") html = graphHtml(info);
     if (settings.ui.activeTab === "summaries") html = await summariesHtml();
     if (settings.ui.activeTab === "audit") html = auditHtml();
@@ -4799,7 +5438,7 @@ function openRowEditor(tableKey, row) {
   form.elements.namedItem("keywords").value = row?.keywords.join(", ") || "";
   form.elements.namedItem("locked").checked = row?.locked ?? true;
   const lifecycleFields = form.querySelector("[data-ma11-lifecycle-fields]");
-  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
+  const supportsLifecycle = tableByKey(getSettings().tableRegistry, tableKey)?.role === "state";
   if (lifecycleFields) lifecycleFields.hidden = !supportsLifecycle;
   if (supportsLifecycle) {
     const life = row?.lifecycle;
@@ -4832,7 +5471,7 @@ async function saveRow(form) {
   const status = form.elements.namedItem("status").value.trim();
   const keywords = form.elements.namedItem("keywords").value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
   const locked = form.elements.namedItem("locked").checked;
-  const supportsLifecycle = tableKey === "characters" || tableKey === "focus";
+  const supportsLifecycle = tableByKey(getSettings().tableRegistry, tableKey)?.role === "state";
   const listFrom = (name) => form.elements.namedItem(name).value.split(/\n|[；;]/).map((item) => item.trim()).filter(Boolean);
   const lifecycle = supportsLifecycle ? {
     existence: form.elements.namedItem("existence").value,
@@ -4851,7 +5490,7 @@ async function saveRow(form) {
     keywords,
     locked,
     lifecycle
-  });
+  }, getSettings().tableRegistry);
   const message = getMessage(info.index);
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
@@ -4865,7 +5504,7 @@ async function deleteRowAction(rowId) {
   const info = editableArtifact();
   const tableKey = getSettings().ui.activeTable;
   if (!confirm("\u786E\u5B9A\u5220\u9664\u8FD9\u6761\u72B6\u6001\u5417\uFF1F")) return;
-  info.artifact.snapshot = deleteRow(info.artifact.snapshot, tableKey, rowId);
+  info.artifact.snapshot = deleteRow(info.artifact.snapshot, tableKey, rowId, getSettings().tableRegistry);
   const message = getMessage(info.index);
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
@@ -4873,6 +5512,27 @@ async function deleteRowAction(rowId) {
   assertArtifactCommitCurrent(info.artifact);
   if (getSettings().lorebookSync) await retryStage(info.index, "sync");
   await renderWorkspace();
+}
+async function updateTableRegistryAndSync(registry2) {
+  const settings = getSettings();
+  settings.tableRegistry = normalizeTableRegistry(registry2);
+  const active = enabledTables(settings.tableRegistry);
+  if (!active.some((table) => table.key === settings.ui.activeTable)) settings.ui.activeTable = active[0]?.key || "";
+  settings.migration.dynamicTablesV23 = true;
+  saveSettings();
+  renderAllMessagePanels();
+  const latest = latestSnapshotArtifact();
+  if (settings.lorebookSync && latest && !(await getChatState(latest.artifact.chatKey)).historyInvalidation) {
+    try {
+      await retryStage(latest.index, "sync");
+    } catch (error) {
+      toast("warning", `\u8868\u683C\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u4E16\u754C\u4E66\u5237\u65B0\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    }
+  }
+  await renderWorkspace();
+}
+function valueFromWorkspace(workspace, selector) {
+  return workspace.querySelector(selector)?.value.trim() || "";
 }
 function updateSetting(target) {
   const key = target.dataset.ma11Setting;
@@ -4929,12 +5589,13 @@ function bindWorkspace(workspace) {
       if (action === "close") workspace.hidden = true;
       if (action === "open-tables") setTab("tables");
       if (action === "open-graph") setTab("graph");
+      if (action === "open-table-manager") setTab("tableManager");
       if (action === "process-latest") {
         if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
         const index = latestAssistantIndex();
         if (index < 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
         selectedMessageIndex = index;
-        await processMessage(index, true);
+        await processMessage(index, false);
         await renderWorkspace();
       }
       if (action === "recalculate-history") {
@@ -4971,6 +5632,38 @@ function bindWorkspace(workspace) {
         if (!info) throw new Error("\u5C1A\u65E0\u53EF\u540C\u6B65\u7684\u72B6\u6001");
         await retryStage(info.index, "sync");
         await renderWorkspace();
+      }
+      const tableDefinitionKey = actionButton?.dataset.ma11TableKey || "";
+      if (action === "create-table") {
+        const name = valueFromWorkspace(workspace, "[data-ma11-new-table-name]");
+        const purpose = valueFromWorkspace(workspace, "[data-ma11-new-table-purpose]");
+        const fields = valueFromWorkspace(workspace, "[data-ma11-new-table-fields]");
+        if (!name) throw new Error("\u8BF7\u586B\u5199\u8868\u683C\u540D\u79F0");
+        await updateTableRegistryAndSync(createCustomTable(getSettings().tableRegistry, name, purpose, fields));
+        toast("success", "\u81EA\u5B9A\u4E49\u8868\u683C\u5DF2\u65B0\u589E\uFF0C\u5C06\u4ECE\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u5F00\u59CB\u751F\u6548");
+      }
+      if (action === "save-table" && tableDefinitionKey) {
+        const name = valueFromWorkspace(workspace, `[data-ma11-table-name="${tableDefinitionKey}"]`);
+        const purpose = valueFromWorkspace(workspace, `[data-ma11-table-purpose="${tableDefinitionKey}"]`);
+        const fields = valueFromWorkspace(workspace, `[data-ma11-table-fields="${tableDefinitionKey}"]`);
+        if (!name || !purpose) throw new Error("\u8868\u683C\u540D\u79F0\u548C\u7528\u9014\u8BF4\u660E\u4E0D\u80FD\u4E3A\u7A7A");
+        let registry2 = updateTableDefinition(getSettings().tableRegistry, tableDefinitionKey, { name, purpose });
+        registry2 = updateTableFields(registry2, tableDefinitionKey, fields);
+        await updateTableRegistryAndSync(registry2);
+        toast("success", "\u8868\u683C\u5B9A\u4E49\u5DF2\u66F4\u65B0\uFF0C\u5C06\u4ECE\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u5F00\u59CB\u751F\u6548");
+      }
+      if (action === "move-table-up" && tableDefinitionKey) await updateTableRegistryAndSync(moveTableDefinition(getSettings().tableRegistry, tableDefinitionKey, -1));
+      if (action === "move-table-down" && tableDefinitionKey) await updateTableRegistryAndSync(moveTableDefinition(getSettings().tableRegistry, tableDefinitionKey, 1));
+      if (action === "delete-table" && tableDefinitionKey) {
+        const definition = tableByKey(getSettings().tableRegistry, tableDefinitionKey);
+        const warning = definition?.isDefault ? `\u786E\u5B9A\u5220\u9664\u9ED8\u8BA4\u89C6\u56FE\u201C${definition.name}\u201D\u5417\uFF1F\u53EA\u4F1A\u5220\u9664\u53EF\u89C1\u89C6\u56FE\uFF0C\u4E0D\u4F1A\u5220\u9664\u5185\u90E8\u4E8B\u5B9E\u3001\u4E8B\u4EF6\u7EBF\u3001\u5C0F\u603B\u7ED3\u3001\u5927\u603B\u7ED3\u6216\u5386\u53F2\u91CD\u5EFA\u6570\u636E\u3002` : `\u786E\u5B9A\u5220\u9664\u81EA\u5B9A\u4E49\u89C6\u56FE\u201C${definition?.name || tableDefinitionKey}\u201D\u5417\uFF1F\u5185\u90E8\u4E8B\u5B9E\u548C\u603B\u7ED3\u4E0D\u4F1A\u5220\u9664\u3002`;
+        if (window.confirm(warning)) await updateTableRegistryAndSync(removeTableDefinition(getSettings().tableRegistry, tableDefinitionKey));
+      }
+      if (action === "restore-default-tables") {
+        if (window.confirm("\u6062\u590D\u9ED8\u8BA4\u5341\u8868\u4F1A\u66FF\u6362\u5F53\u524D\u8868\u683C\u6CE8\u518C\u8868\uFF1B\u81EA\u5B9A\u4E49\u89C6\u56FE\u5C06\u9000\u51FA\uFF0C\u4F46\u5185\u90E8\u4E8B\u5B9E\u3001\u603B\u7ED3\u548C\u4EBA\u5DE5\u4E16\u754C\u4E66\u6761\u76EE\u4E0D\u4F1A\u5220\u9664\u3002\u662F\u5426\u7EE7\u7EED\uFF1F")) {
+          await updateTableRegistryAndSync(restoreDefaultTableRegistry());
+          toast("success", "\u5DF2\u6062\u590D\u9ED8\u8BA4\u5341\u8868");
+        }
       }
       if (action === "add-row") openRowEditor(getSettings().ui.activeTable);
       if (action === "close-editor") closeEditor();
@@ -5060,6 +5753,16 @@ function bindWorkspace(workspace) {
   workspace.addEventListener("change", (event) => {
     const target = event.target;
     if (target.dataset.ma11Setting) updateSetting(target);
+    if (target.dataset.ma11RecallSetting) {
+      const key = target.dataset.ma11RecallSetting;
+      const value = Number(target.value);
+      getSettings().lorebookRecall[key] = value;
+      saveSettings();
+    }
+    if (target.dataset.ma11TableEnabled) {
+      const key = target.dataset.ma11TableEnabled;
+      void updateTableRegistryAndSync(updateTableDefinition(getSettings().tableRegistry, key, { enabled: target.checked })).catch((error) => toast("error", toErrorMessage(error)));
+    }
     if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfileId) updateConnection(target);
   });
   workspace.addEventListener("input", (event) => {
@@ -5164,34 +5867,56 @@ function messageStageAvailability(index, artifact) {
   };
 }
 var pendingRetryIndexes = /* @__PURE__ */ new Set();
+function flowStageHtml(order, label, stage) {
+  const status = stageLabel(stage);
+  const symbol = stage?.status === "success" || stage?.status === "skipped" ? "\u2713" : stage?.status === "failed" || stage?.status === "blocked" ? "!" : stage?.status === "running" || stage?.status === "queued" ? "\u2026" : String(order);
+  return `<span class="ma11-flow-stage ${tone(stage)}"><em>${symbol}</em><span><small>${label}</small><b>${status}</b></span></span>`;
+}
 function panelHtml(index, artifact) {
-  const rows2 = artifact.snapshot ? Object.values(artifact.snapshot).reduce((sum, list3) => sum + list3.length, 0) : 0;
+  const rows = snapshotRowCount(artifact.snapshot, getSettings().tableRegistry, true);
   const error = Object.values(artifact.stages).find((stage) => stage.error)?.error;
   const retrying = pendingRetryIndexes.has(index);
   const latestText = index === latestAssistantIndex();
   const latestSnapshot = index === latestSnapshotArtifact()?.index;
   const available = messageStageAvailability(index, artifact);
   const enabled = (action) => !retrying && available[action] ? "" : "disabled";
+  const chainBusy = Object.values(artifact.stages).some((stage) => ["queued", "running"].includes(stage.status));
+  const chainFailed = Object.values(artifact.stages).some((stage) => ["failed", "blocked"].includes(stage.status));
+  const chainComplete = artifact.stages.state.status === "success" && ["success", "skipped"].includes(artifact.stages.summary.status) && ["success", "skipped"].includes(artifact.stages.sync.status);
+  const chainState = chainBusy ? "\u81EA\u52A8\u5904\u7406\u4E2D" : chainFailed ? "\u9700\u8981\u5904\u7406" : chainComplete ? "\u672C\u8F6E\u5DF2\u5B8C\u6210" : "\u7B49\u5F85\u81EA\u52A8\u7EE7\u7EED";
+  const chainHint = chainBusy ? "\u955C\u6E0A\u4F1A\u6309\u987A\u5E8F\u81EA\u52A8\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u9010\u4E2A\u70B9\u51FB\u3002" : chainComplete ? "\u5BA1\u6838\u3001\u8868\u683C\u4E0E\u6D3E\u751F\u53D1\u5E03\u5DF2\u5B8C\u6210\u3002" : "\u6309\u94AE\u53EA\u7528\u4E8E\u6062\u590D\u4E2D\u65AD\u94FE\uFF1B\u4E0B\u65B9\u5355\u6B65\u5DE5\u5177\u7528\u4E8E\u6392\u9519\u3002";
   return `
     <div class="ma11-message-panel" data-ma-index="${index}">
       <button class="ma11-message-summary" type="button" data-ma-action="open">
-        <span class="ma11-message-title">\u955C\u6E0A\u72B6\u6001</span>
-        <span class="ma11-badge ${tone(artifact.stages.audit)}">\u5BA1\u6838 ${stageLabel(artifact.stages.audit)}</span>
-        <span class="ma11-badge ${tone(artifact.stages.revision)}">\u4FEE\u6B63 ${stageLabel(artifact.stages.revision)}</span>
-        <span class="ma11-badge ${tone(artifact.stages.state)}">\u8868\u683C ${stageLabel(artifact.stages.state)}</span>
-        <span class="ma11-badge ${tone(artifact.stages.summary)}">\u603B\u7ED3 ${stageLabel(artifact.stages.summary)}</span>
-        <span class="ma11-badge ${tone(artifact.stages.sync)}">\u540C\u6B65 ${stageLabel(artifact.stages.sync)}</span>
-        <span class="ma11-message-count">${rows2} \u6761</span>
+        <span class="ma11-message-title">\u955C\u6E0A\u81EA\u52A8\u5904\u7406</span>
+        <span class="ma11-message-count">${rows} \u6761\u72B6\u6001</span>
       </button>
+      <div class="ma11-chain-state ${chainFailed ? "danger" : chainBusy ? "working" : chainComplete ? "success" : "neutral"}">
+        <b>${chainState}</b><span>${chainHint}</span>
+      </div>
+      <div class="ma11-flow" aria-label="\u5BA1\u6838\u5230\u4E16\u754C\u4E66\u7684\u5904\u7406\u8FDB\u5EA6">
+        ${flowStageHtml(1, "\u5BA1\u6838", artifact.stages.audit)}<i>\u203A</i>
+        ${flowStageHtml(2, "\u4FEE\u6B63", artifact.stages.revision)}<i>\u203A</i>
+        ${flowStageHtml(3, "\u8868\u683C", artifact.stages.state)}<i>\u203A</i>
+        ${flowStageHtml(4, "\u603B\u7ED3", artifact.stages.summary)}<i>\u203A</i>
+        ${flowStageHtml(5, "\u4E16\u754C\u4E66", artifact.stages.sync)}
+      </div>
       ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
-      ${latestText ? `<div class="ma11-message-actions ma11-message-stage-actions" aria-label="\u955C\u6E0A\u5206\u9636\u6BB5\u64CD\u4F5C">
-        <button data-ma-stage-action="audit" ${enabled("audit")}>\u5BA1\u6838\u6B63\u6587</button>
-        <button data-ma-stage-action="revision" ${enabled("revision")}>\u91CD\u65B0\u4FEE\u6B63</button>
-        <button data-ma-stage-action="state" ${enabled("state")}>\u751F\u6210\u8868\u683C</button>
-        <button data-ma-stage-action="small" ${enabled("small")}>\u5C0F\u603B\u7ED3</button>
-        <button data-ma-stage-action="large" ${enabled("large")}>\u5927\u603B\u7ED3</button>
-        <button data-ma-stage-action="sync" ${enabled("sync")}>\u540C\u6B65\u4E16\u754C\u4E66</button>
-      </div>` : ""}
+      ${latestText ? `<div class="ma11-message-primary-actions">
+        <button class="ma11-primary-action" data-ma-auto-continue ${retrying || chainBusy || chainComplete ? "disabled" : ""}>${chainBusy ? "\u81EA\u52A8\u5904\u7406\u4E2D\uFF0C\u8BF7\u7A0D\u5019" : chainComplete ? "\u81EA\u52A8\u6D41\u7A0B\u5DF2\u5B8C\u6210" : "\u7EE7\u7EED\u81EA\u52A8\u6D41\u7A0B"}</button>
+        <small>\u4F1A\u68C0\u67E5\u5DF2\u6709\u6210\u529F\u72B6\u6001\uFF0C\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u91CD\u590D\u8C03\u7528\u5DF2\u901A\u8FC7\u7684\u5BA1\u6838\u3002</small>
+      </div>
+      <details class="ma11-message-tools">
+        <summary>\u5355\u6B65\u6392\u9519\u5DE5\u5177\uFF08\u6B63\u5E38\u6E38\u73A9\u65E0\u9700\u4F7F\u7528\uFF09</summary>
+        <div class="ma11-message-actions ma11-message-stage-actions" aria-label="\u955C\u6E0A\u5206\u9636\u6BB5\u64CD\u4F5C">
+          <button data-ma-stage-action="audit" ${enabled("audit")}>\u4EC5\u5BA1\u6838</button>
+          <button data-ma-stage-action="revision" ${enabled("revision")}>\u4EC5\u4FEE\u6B63</button>
+          <button data-ma-stage-action="state" ${enabled("state")}>\u4EC5\u751F\u6210\u8868\u683C</button>
+          <button data-ma-stage-action="small" ${enabled("small")}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button>
+          <button data-ma-stage-action="large" ${enabled("large")}>\u7ACB\u5373\u5927\u603B\u7ED3</button>
+          <button data-ma-stage-action="sync" ${enabled("sync")}>\u7ACB\u5373\u540C\u6B65</button>
+        </div>
+      </details>` : ""}
       <div class="ma11-message-actions">
         ${retrying ? "<button disabled>\u5904\u7406\u4E2D\u2026</button>" : ""}
         ${!retrying && latestText && artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
@@ -5232,6 +5957,19 @@ function installMessagePanelHandlers() {
     if (!panel) return;
     const index = Number(panel.dataset.maIndex);
     if (target.closest('[data-ma-action="open"]')) openWorkspace("overview", index);
+    if (target.closest("[data-ma-auto-continue]")) {
+      if (pendingRetryIndexes.has(index)) return;
+      pendingRetryIndexes.add(index);
+      renderMessagePanel(index);
+      toast("info", "\u6B63\u5728\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\u5904\u7406");
+      void processMessage(index, false).catch((error) => {
+        toast("error", toErrorMessage(error));
+      }).finally(() => {
+        pendingRetryIndexes.delete(index);
+        renderMessagePanel(index);
+      });
+      return;
+    }
     const stageAction = target.closest("[data-ma-stage-action]")?.dataset.maStageAction;
     if (stageAction) {
       if (pendingRetryIndexes.has(index)) return;
@@ -5374,7 +6112,7 @@ function exposeApi() {
       const context = getContext();
       const index = [...context.chat ?? []].map((_, i) => i).reverse().find((i) => isProcessableAssistantMessage(context.chat[i]));
       if (index === void 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
-      return processMessage(index, true);
+      return processMessage(index, false);
     },
     diagnostics: diagnosticReport,
     restart: restartPlugin,

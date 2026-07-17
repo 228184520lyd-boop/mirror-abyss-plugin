@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.18",
+  "version": "1.2.0-rc.20",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊源码重构版：使用 SillyTavern 原生事件、连接、聊天保存和世界书能力。"
+  "description": "镜渊动态记忆视图版：动态表格、独立事实层、事件总结与三模式世界书召回。"
 }

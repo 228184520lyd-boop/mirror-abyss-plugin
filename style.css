@@ -235,3 +235,167 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .ma11-connection-row { grid-template-columns: 1fr; }
   .ma11-editor-grid { grid-template-columns: 1fr; }
 }
+
+/* rc.19：把阶段状态表现为一条连续处理链，主操作与单步排错分层。 */
+.ma11-flow {
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) auto minmax(92px, 1fr) auto minmax(92px, 1fr) auto minmax(92px, 1fr) auto minmax(92px, 1fr);
+  align-items: stretch;
+  gap: .35rem;
+  margin-top: .55rem;
+}
+.ma11-flow > i {
+  display: grid;
+  place-items: center;
+  color: var(--ma-muted);
+  font-style: normal;
+  font-size: 1.15rem;
+}
+.ma11-flow-stage {
+  display: grid;
+  gap: .15rem;
+  min-width: 0;
+  padding: .48rem .55rem;
+  border: 1px solid var(--ma-border);
+  border-top: 3px solid var(--ma-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ma-panel) 88%, var(--ma-bg));
+  text-align: center;
+}
+.ma11-flow-stage small { color: var(--ma-muted); }
+.ma11-flow-stage.success { border-top-color: var(--ma-success); }
+.ma11-flow-stage.working { border-top-color: var(--ma-warning); }
+.ma11-flow-stage.danger { border-top-color: var(--ma-danger); }
+.ma11-message-primary-actions {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) 1fr;
+  align-items: center;
+  gap: .7rem;
+  margin-top: .65rem;
+  padding: .65rem;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 45%, var(--ma-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ma-accent) 8%, transparent);
+}
+.ma11-message-primary-actions small { color: var(--ma-muted); }
+.ma11-primary-action {
+  border-color: var(--ma-accent) !important;
+  background: color-mix(in srgb, var(--ma-accent) 20%, transparent) !important;
+  font-weight: 700;
+}
+.ma11-message-tools-label {
+  margin-top: .7rem;
+  color: var(--ma-muted);
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+}
+
+@media (max-width: 760px) {
+  .ma11-flow {
+    grid-template-columns: 1fr;
+  }
+  .ma11-flow > i { transform: rotate(90deg); height: .5rem; }
+  .ma11-message-primary-actions { grid-template-columns: 1fr; }
+}
+
+/* rc.19.1：强化自动链主次层级，避免用户误以为每个阶段都必须手动点击。 */
+.ma11-chain-state {
+  display: flex;
+  justify-content: space-between;
+  gap: .75rem;
+  align-items: center;
+  margin-top: .55rem;
+  padding: .55rem .7rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ma-panel) 84%, var(--ma-bg));
+}
+.ma11-chain-state span { color: var(--ma-muted); font-size: .82rem; text-align: right; }
+.ma11-chain-state.success { border-color: color-mix(in srgb, var(--ma-success) 55%, var(--ma-border)); }
+.ma11-chain-state.working { border-color: color-mix(in srgb, var(--ma-warning) 55%, var(--ma-border)); }
+.ma11-chain-state.danger { border-color: color-mix(in srgb, var(--ma-danger) 60%, var(--ma-border)); }
+.ma11-flow-stage {
+  grid-template-columns: 1.7rem 1fr;
+  align-items: center;
+  text-align: left;
+}
+.ma11-flow-stage em {
+  display: grid;
+  place-items: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--ma-border);
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+}
+.ma11-flow-stage > span { display: grid; gap: .08rem; min-width: 0; }
+.ma11-flow-stage.success em { border-color: var(--ma-success); }
+.ma11-flow-stage.working em { border-color: var(--ma-warning); }
+.ma11-flow-stage.danger em { border-color: var(--ma-danger); }
+.ma11-message-tools {
+  margin-top: .65rem;
+  border: 1px dashed var(--ma-border);
+  border-radius: 8px;
+  padding: .5rem .65rem;
+}
+.ma11-message-tools summary {
+  cursor: pointer;
+  color: var(--ma-muted);
+  font-size: .8rem;
+  font-weight: 700;
+}
+.ma11-message-tools[open] summary { margin-bottom: .35rem; }
+@media (max-width: 760px) {
+  .ma11-chain-state { align-items: flex-start; flex-direction: column; }
+  .ma11-chain-state span { text-align: left; }
+}
+
+/* rc.20：动态表格管理与三模式召回设置。 */
+.ma11-debug-tools > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: .75rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.ma11-debug-tools > summary span,
+.ma11-table-purpose,
+.ma11-table-manager-row .ma11-help { color: var(--ma-muted); }
+.ma11-debug-tools[open] > summary { padding-bottom: .65rem; margin-bottom: .75rem; border-bottom: 1px solid var(--ma-border); }
+.ma11-table-toolbar > div:first-child { min-width: 0; }
+.ma11-table-purpose { margin: .65rem 0 0 !important; }
+.ma11-custom-fields { display: grid; gap: .25rem; margin-top: .55rem; padding-top: .45rem; border-top: 1px dashed var(--ma-border); }
+.ma11-custom-fields > div { display: grid; grid-template-columns: minmax(5rem, auto) 1fr; gap: .45rem; }
+.ma11-custom-fields small { color: var(--ma-muted); }
+.ma11-table-manager-list { display: grid; gap: .8rem; }
+.ma11-table-manager-row {
+  display: grid;
+  gap: .75rem;
+  padding: 1rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 11px;
+  background: var(--ma-panel);
+}
+.ma11-table-manager-head { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+.ma11-order-number { display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid var(--ma-border); border-radius: 999px; font-weight: 700; }
+.ma11-table-manager-fields { display: grid; grid-template-columns: minmax(12rem, .7fr) minmax(18rem, 1.4fr) minmax(18rem, 1.4fr); gap: .75rem; }
+.ma11-table-manager-fields label { display: grid; gap: .35rem; }
+.ma11-table-manager-fields input,
+.ma11-table-manager-fields textarea {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--ma-border); border-radius: 8px; padding: .58rem .65rem; background: var(--ma-input); color: var(--ma-text);
+}
+.ma11-table-manager-actions { justify-content: flex-end; }
+.ma11-recall-grid { grid-template-columns: repeat(3, 1fr); }
+
+@media (max-width: 900px) {
+  .ma11-table-manager-fields { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .ma11-table-manager-row { padding: .8rem; }
+  .ma11-table-manager-actions button { flex: 1 1 8rem; }
+  .ma11-recall-grid { grid-template-columns: 1fr; }
+  .ma11-custom-fields > div { grid-template-columns: 1fr; }
+}
