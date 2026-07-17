@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.21";
-var PIPELINE_VERSION = "ma-pipeline-24";
+var VERSION = "1.2.0-rc.23";
+var PIPELINE_VERSION = "ma-pipeline-26";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -37,8 +37,8 @@ var DEFAULT_SETTINGS = {
     smallSummary: { mode: "current", profileId: "", profile: "" },
     largeSummary: { mode: "current", profileId: "", profile: "" }
   },
-  ui: { activeTab: "overview", activeTable: "focus", graphScope: "relations", graphZoom: 1 },
-  migration: { legacyChecked: false, dynamicTablesV23: false }
+  ui: { activeTab: "overview", activeTable: "spacetime", graphScope: "relations", graphZoom: 1 },
+  migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false }
 };
 
 // src/core/utils.ts
@@ -287,35 +287,72 @@ function toErrorMessage(error) {
 }
 
 // src/domain/table-registry.ts
-var CORE_FIELD_KEYS = ["id", "title", "content", "keywords", "status", "factIds", "eventId", "recall"];
+var CORE_FIELD_KEYS = [
+  "id",
+  "title",
+  "content",
+  "keywords",
+  "status",
+  "factIds",
+  "eventId",
+  "recall",
+  "baseContent",
+  "currentStates",
+  "solidifiedHistory",
+  "relatedObjects",
+  "relatedEvents",
+  "relationshipStates",
+  "abilityStates",
+  "objectType",
+  "migrationStatus"
+];
 var COMMON_FIELDS = [
-  { key: "id", label: "\u7A33\u5B9AID", description: "\u540C\u4E00\u5BF9\u8C61\u6CBF\u7528\u7A33\u5B9AID", type: "string", required: true },
-  { key: "title", label: "\u5BF9\u8C61", description: "\u7B80\u6D01\u6807\u8BC6\u8BE5\u6761\u4E8B\u5B9E\u89C6\u56FE", type: "string", required: true },
-  { key: "content", label: "\u5F53\u524D\u4E8B\u5B9E", description: "\u53EA\u5199\u5DF2\u663E\u5F71\u4E14\u5BF9\u540E\u7EED\u6709\u7528\u7684\u5F53\u524D\u4E8B\u5B9E", type: "string", required: true },
-  { key: "keywords", label: "\u5173\u952E\u8BCD", description: "\u4EBA\u7269\u540D\u3001\u522B\u540D\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u533A\u57DF\u3001\u4E8B\u4EF6\u3001\u7EC4\u7EC7\u6216\u5236\u5EA6\u7B49\u660E\u786E\u89E6\u53D1\u8BCD", type: "string[]", required: true },
-  { key: "status", label: "\u72B6\u6001", description: "\u5F53\u524D\u6709\u6548\u72B6\u6001\u6216\u9636\u6BB5", type: "string", required: true }
+  { key: "id", label: "\u7A33\u5B9AID", description: "\u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u7A33\u5B9AID\uFF1B\u4E0D\u5F97\u56E0\u573A\u666F\u3001\u72B6\u6001\u6216\u603B\u7ED3\u7248\u672C\u53D8\u5316\u91CD\u65B0\u521B\u5EFA\u3002", type: "string", required: true },
+  { key: "title", label: "\u5BF9\u8C61", description: "\u5BF9\u8C61\u7684\u7A33\u5B9A\u540D\u79F0\u6216\u660E\u786E\u6807\u8BC6\u3002", type: "string", required: true },
+  { key: "content", label: "\u5F53\u524D\u6458\u8981", description: "\u53EA\u6982\u62EC\u5F53\u524D\u6709\u6548\u72B6\u6001\uFF0C\u4E0D\u590D\u5236\u57FA\u7840\u5185\u5BB9\u3001\u5DF2\u56FA\u5316\u5386\u53F2\u6216\u5176\u4ED6\u8868\u683C\u5185\u5BB9\u3002", type: "string", required: true },
+  { key: "keywords", label: "\u5173\u952E\u8BCD", description: "\u5BF9\u8C61\u540D\u3001\u522B\u540D\u53CA\u53EF\u660E\u786E\u89E6\u53D1\u8BE5\u5BF9\u8C61\u7684\u8BCD\u3002", type: "string[]", required: true },
+  { key: "status", label: "\u72B6\u6001", description: "\u5BF9\u8C61\u5F53\u524D\u751F\u547D\u5468\u671F\u3001\u9636\u6BB5\u6216\u6709\u6548\u6027\u6807\u8BB0\u3002", type: "string", required: true }
+];
+var OBJECT_LAYER_FIELDS = [
+  { key: "baseContent", label: "\u57FA\u7840\u5185\u5BB9", description: "\u5BF9\u8C61\u7A33\u5B9A\u5B9A\u4E49\u3002\u5DF2\u6709\u975E\u7A7A\u503C\u4E0D\u5F97\u7531\u72B6\u6001\u63D0\u53D6\u3001\u5C0F\u603B\u7ED3\u6216\u5927\u603B\u7ED3\u6539\u5199\u3002", type: "string", required: false },
+  { key: "solidifiedHistory", label: "\u5DF2\u56FA\u5316\u5386\u53F2", description: "\u7ECF\u8FC7\u957F\u671F\u603B\u7ED3\u786E\u8BA4\u7684\u7A33\u5B9A\u7ED3\u679C\uFF1B\u72B6\u6001\u63D0\u53D6\u4E0D\u5F97\u81EA\u884C\u6DFB\u52A0\u6216\u6539\u5199\u3002", type: "string[]", required: false },
+  { key: "currentStates", label: "\u5F53\u524D\u72B6\u6001", description: "\u6709\u660E\u786E\u6765\u6E90\u3001\u5BF9\u540E\u7EED\u4ECD\u6709\u6548\u7684\u53EF\u53D8\u72B6\u6001\uFF1B\u5141\u8BB8\u540E\u7EED\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u6362\u3002", type: "string[]", required: false },
+  { key: "relatedObjects", label: "\u5173\u8054\u5BF9\u8C61", description: "\u660E\u786E\u53C2\u4E0E\u6216\u53D7\u5F71\u54CD\u7684\u5BF9\u8C61\u7A33\u5B9AID/\u540D\u79F0\uFF1B\u4E0D\u5F97\u56E0\u540C\u573A\u6216\u56F4\u89C2\u5EFA\u7ACB\u5173\u8054\u3002", type: "string[]", required: false },
+  { key: "relatedEvents", label: "\u5173\u8054\u4E8B\u4EF6", description: "\u76F4\u63A5\u65BD\u52A0\u5F53\u524D\u72B6\u6001\u6216\u957F\u671F\u5F71\u54CD\u7684 event_id/\u4E8B\u4EF6\u540D\u79F0\u3002", type: "string[]", required: false }
+];
+var CHARACTER_FIELDS = [
+  { key: "relationshipStates", label: "\u5173\u7CFB\u72B6\u6001", description: "\u4EC5\u8BB0\u5F55\u5DF2\u660E\u786E\u53D1\u751F\u53D8\u5316\u4E14\u4F1A\u5F71\u54CD\u540E\u7EED\u7684\u5173\u7CFB\uFF1B\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u548C\u63A8\u6D4B\u4E0D\u5F97\u5199\u5165\u3002", type: "string[]", required: false },
+  { key: "abilityStates", label: "\u80FD\u529B\u72B6\u6001", description: "\u5DF2\u786E\u8BA4\u80FD\u529B\u53CA\u5176\u5F53\u524D\u53EF\u7528\u3001\u53D7\u9650\u3001\u83B7\u5F97\u3001\u5931\u53BB\u6216\u6539\u53D8\u72B6\u6001\uFF1B\u7981\u6B62\u6309\u8EAB\u4EFD\u8865\u5168\u3002", type: "string[]", required: false }
+];
+var CUSTOM_OBJECT_FIELDS = [
+  { key: "objectType", label: "\u5BF9\u8C61\u7C7B\u578B", description: "\u73A9\u5BB6\u5B9A\u4E49\u6216\u5F85\u5F52\u5E76\u5BF9\u8C61\u7684\u7C7B\u578B\u3002", type: "string", required: false },
+  { key: "migrationStatus", label: "\u5F52\u5E76\u72B6\u6001", description: "\u72EC\u7ACB\u3001\u5F85\u5F52\u5E76\u3001\u5DF2\u5F52\u5E76\u6216\u5B58\u5728\u6B67\u4E49\u3002", type: "string", required: false }
 ];
 var LIFECYCLE_FIELD = {
   key: "lifecycle",
   label: "\u751F\u547D\u5468\u671F",
-  description: "\u6B63\u5F0F\u4E3B\u4F53\u7684\u5B58\u5728\u3001\u6D3B\u8DC3\u3001\u8BB0\u5FC6\u3001\u8BC1\u636E\u4E0E\u56DE\u6D41\u6761\u4EF6",
+  description: "\u89D2\u8272\u5B58\u5728\u3001\u6D3B\u8DC3\u3001\u8BB0\u5FC6\u3001\u8BC1\u636E\u4E0E\u56DE\u6D41\u6761\u4EF6\u3002",
   type: "lifecycle",
   required: false
 };
+function roleFields(role) {
+  const fields = [...deepClone(COMMON_FIELDS), ...deepClone(OBJECT_LAYER_FIELDS)];
+  if (role === "characters" || role === "state") fields.push(...deepClone(CHARACTER_FIELDS), deepClone(LIFECYCLE_FIELD));
+  if (role === "custom") fields.push(...deepClone(CUSTOM_OBJECT_FIELDS));
+  return fields;
+}
 function defaults() {
   const definitions = [
-    ["focus", "\u7126\u70B9", "\u5F53\u524D\u6838\u5FC3\u51B2\u7A81\u3001\u76EE\u6807\u6216\u5F85\u51B3\u4E8B\u9879\uFF1B\u4E0D\u5F97\u590D\u5236\u4EBA\u7269\u5361\u6216\u5176\u4ED6\u8868\u683C\u4E8B\u5B9E\u3002", "focus", false],
-    ["spacetime", "\u65F6\u7A7A", "\u5F53\u524D\u7126\u70B9\u76F4\u63A5\u76F8\u5173\u7684\u65F6\u95F4\u3001\u5730\u70B9\u4E0E\u573A\u666F\u8FDE\u7EED\u6027\u3002", "spacetime", false],
-    ["state", "\u72B6\u6001", "\u6B63\u5F0F\u663E\u5F71\u4E14\u5BF9\u5F53\u524D\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u7684\u4E3B\u4F53\u72B6\u6001\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5F97\u5EFA\u7ACB\u3002", "state", true],
-    ["items", "\u7269\u54C1", "\u5BF9\u5F53\u524D\u7126\u70B9\u3001\u56E0\u679C\u6216\u540E\u7EED\u751F\u6210\u6709\u4F5C\u7528\u7684\u91CD\u8981\u7269\u54C1\u4E0E\u8D44\u6E90\u3002", "items", false],
-    ["skills", "\u6280\u80FD", "\u5DF2\u663E\u5F71\u7684\u6280\u80FD\u3001\u80FD\u529B\u3001\u6761\u4EF6\u3001\u6D88\u8017\u4E0E\u8FB9\u754C\u3002", "skills", false],
-    ["relationships", "\u663E\u8457\u5173\u7CFB", "\u5DF2\u7ECF\u663E\u5F71\u5E76\u4F1A\u5F71\u54CD\u884C\u4E3A\u6216\u4E8B\u4EF6\u7ED3\u679C\u7684\u5173\u7CFB\u3002", "relationships", false],
-    ["events", "\u6D3B\u8DC3\u4E8B\u4EF6", "\u4ECD\u5728\u63A8\u8FDB\u6216\u5C1A\u6709\u672A\u51B3\u4E8B\u9879\u7684\u4E8B\u4EF6\u7EBF\u4E0E\u6D41\u7A0B\u3002", "events", false],
-    ["regions", "\u76F8\u5173\u533A\u57DF", "\u4E0E\u5F53\u524D\u7126\u70B9\u6216\u672A\u51B3\u4E8B\u4EF6\u76F4\u63A5\u76F8\u5173\u7684\u533A\u57DF\u72B6\u6001\u3002", "regions", false],
-    ["globalChanges", "\u5168\u5C40\u53D8\u5316", "\u5DF2\u7ECF\u53D1\u751F\u5E76\u76F4\u63A5\u5F71\u54CD\u540E\u7EED\u7684\u8DE8\u533A\u57DF\u3001\u5236\u5EA6\u6216\u4E16\u754C\u6001\u52BF\u53D8\u5316\u3002", "globalChanges", false],
-    ["foundations", "\u76F8\u5173\u57FA\u7840\u8BBE\u5B9A", "\u5F53\u524D\u7126\u70B9\u786E\u5B9E\u9700\u8981\u7684\u7A33\u5B9A\u89C4\u5219\u3001\u5236\u5EA6\u548C\u627F\u91CD\u8BBE\u5B9A\u3002", "foundations", false]
+    ["spacetime", "\u65F6\u7A7A", "\u5F53\u524D\u65F6\u95F4\u3001\u5F53\u524D\u573A\u666F\u53CA\u8FDE\u7EED\u6027\uFF1B\u63D0\u5230\u5730\u70B9\u4E0D\u7B49\u4E8E\u8FDB\u5165\u8BE5\u5730\u70B9\uFF0C\u79BB\u5F00\u540E\u5E94\u7ED3\u675F\u5F53\u524D\u72B6\u6001\u3002", "spacetime"],
+    ["characters", "\u89D2\u8272", "\u5DF2\u663E\u5F71\u4E14\u5BF9\u540E\u7EED\u6709\u72EC\u7ACB\u4F5C\u7528\u7684\u89D2\u8272\u5BF9\u8C61\uFF1B\u5173\u7CFB\u3001\u80FD\u529B\u548C\u53EF\u53D8\u72B6\u6001\u7EDF\u4E00\u5F52\u5165\u89D2\u8272\u3002", "characters"],
+    ["items", "\u7269\u54C1", "\u6709\u660E\u786E\u6301\u6709\u3001\u4F7F\u7528\u3001\u635F\u574F\u3001\u8F6C\u79FB\u6216\u56E0\u679C\u4F5C\u7528\u7684\u91CD\u8981\u7269\u54C1\u4E0E\u8D44\u6E90\u3002", "items"],
+    ["events", "\u4E8B\u4EF6", "\u4E8B\u4EF6\u7EBF\u7684\u9636\u6BB5\u3001\u5DF2\u53D1\u751F\u7ECF\u8FC7\u3001\u672A\u51B3\u4E8B\u9879\u548C\u7ED3\u679C\uFF1B\u4EE5\u72B6\u6001\u533A\u5206 active\u3001paused\u3001resolved\u3001archived\u3002", "events"],
+    ["regions", "\u533A\u57DF", "\u5730\u70B9\u3001\u533A\u57DF\u3001\u5EFA\u7B51\u6216\u7A7A\u95F4\u5BF9\u8C61\u7684\u57FA\u7840\u5B9A\u4E49\u4E0E\u5F53\u524D\u53D8\u5316\uFF1B\u201C\u76F8\u5173\u6027\u201D\u7531\u89E6\u53D1\u548C\u53EC\u56DE\u51B3\u5B9A\u3002", "regions"],
+    ["globalChanges", "\u5168\u5C40\u53D8\u5316", "\u5DF2\u53D1\u751F\u5E76\u6301\u7EED\u5F71\u54CD\u8DE8\u533A\u57DF\u3001\u5236\u5EA6\u3001\u7EC4\u7EC7\u6216\u4E16\u754C\u6001\u52BF\u7684\u53D8\u5316\u3002", "globalChanges"],
+    ["foundations", "\u57FA\u7840\u8BBE\u5B9A", "\u7A33\u5B9A\u89C4\u5219\u3001\u5236\u5EA6\u3001\u79CD\u65CF\u6216\u4E16\u754C\u627F\u91CD\u8BBE\u5B9A\uFF1B\u5267\u60C5\u53D8\u5316\u53EA\u80FD\u8FDB\u5165\u5F53\u524D\u72B6\u6001\u6216\u5DF2\u56FA\u5316\u5386\u53F2\u3002", "foundations"],
+    ["customObjects", "\u81EA\u5B9A\u4E49\u5BF9\u8C61", "\u73A9\u5BB6\u521B\u5EFA\u6216\u5C1A\u4E0D\u80FD\u5B89\u5168\u5F52\u5E76\u5230\u9ED8\u8BA4\u7C7B\u578B\u7684\u5BF9\u8C61\uFF1B\u540E\u7EED\u53EF\u5728\u660E\u786E\u6761\u4EF6\u4E0B\u5F52\u5E76\u3002", "custom"]
   ];
-  return definitions.map(([key, name, purpose, role, lifecycle], order) => ({
+  return definitions.map(([key, name, purpose, role], order) => ({
     key,
     name,
     purpose,
@@ -323,22 +360,20 @@ function defaults() {
     enabled: true,
     order,
     isDefault: true,
-    fields: [...deepClone(COMMON_FIELDS), ...lifecycle ? [deepClone(LIFECYCLE_FIELD)] : []]
+    fields: roleFields(role)
   }));
 }
 var DEFAULT_TABLE_REGISTRY = Object.freeze(defaults());
 var LEGACY_TABLE_KEY_MAP = {
-  focus: "focus",
   spacetime: "spacetime",
-  characters: "state",
-  state: "state",
+  characters: "characters",
+  state: "characters",
   items: "items",
-  skills: "skills",
-  relationships: "relationships",
   events: "events",
   regions: "regions",
   globalChanges: "globalChanges",
-  foundations: "foundations"
+  foundations: "foundations",
+  customObjects: "customObjects"
 };
 function normalizeField(value, index) {
   const source = value && typeof value === "object" ? value : {};
@@ -353,6 +388,16 @@ function normalizeField(value, index) {
     required: Boolean(source.required)
   };
 }
+function normalizedRole(value) {
+  const allowed = /* @__PURE__ */ new Set(["spacetime", "characters", "items", "events", "regions", "globalChanges", "foundations", "custom", "focus", "state", "skills", "relationships"]);
+  return allowed.has(String(value)) ? String(value) : "custom";
+}
+function mergeRoleFields(role, sourceFields) {
+  const fields = roleFields(role);
+  const incoming = (Array.isArray(sourceFields) ? sourceFields : []).map(normalizeField).filter((field) => Boolean(field));
+  for (const field of incoming) if (!fields.some((existing) => existing.key === field.key)) fields.push(field);
+  return fields;
+}
 function normalizeTableRegistry(value) {
   const source = Array.isArray(value) && value.length ? value : DEFAULT_TABLE_REGISTRY;
   const output = [];
@@ -363,22 +408,41 @@ function normalizeTableRegistry(value) {
     if (!key) key = `custom_${hashText(`${row.name}|${index}`)}`;
     if (used.has(key)) key = `${key}_${index + 1}`;
     used.add(key);
-    const fields = (Array.isArray(row.fields) ? row.fields : COMMON_FIELDS).map(normalizeField).filter((field) => Boolean(field));
-    for (const common of COMMON_FIELDS) if (!fields.some((field) => field.key === common.key)) fields.push(deepClone(common));
-    const role = ["focus", "spacetime", "state", "items", "skills", "relationships", "events", "regions", "globalChanges", "foundations", "custom"].includes(String(row.role)) ? row.role : "custom";
-    if (role === "state" && !fields.some((field) => field.key === "lifecycle")) fields.push(deepClone(LIFECYCLE_FIELD));
+    const role = normalizedRole(row.role);
     output.push({
       key,
       name: safeText(row.name || DEFAULT_TABLE_REGISTRY.find((table) => table.key === key)?.name || `\u81EA\u5B9A\u4E49\u8868\u683C ${index + 1}`, 80).trim(),
-      purpose: safeText(row.purpose, 1e3).trim() || "\u8BB0\u5F55\u73A9\u5BB6\u5B9A\u4E49\u3001\u5BF9\u540E\u7EED\u751F\u6210\u6709\u7528\u7684\u5DF2\u663E\u5F71\u4E8B\u5B9E\u3002",
+      purpose: safeText(row.purpose, 1e3).trim() || "\u8BB0\u5F55\u73A9\u5BB6\u5B9A\u4E49\u3001\u5BF9\u540E\u7EED\u751F\u6210\u6709\u7528\u7684\u5DF2\u663E\u5F71\u5BF9\u8C61\u4E0E\u72B6\u6001\u3002",
       role,
       enabled: row.enabled !== false,
       order: Number.isFinite(Number(row.order)) ? Number(row.order) : index,
       isDefault: Boolean(row.isDefault || DEFAULT_TABLE_REGISTRY.some((table) => table.key === key)),
-      fields
+      fields: mergeRoleFields(role, row.fields)
     });
   });
   return output.sort((a, b) => a.order - b.order).map((table, order) => ({ ...table, order }));
+}
+function migrateTableRegistryToObjectViews(value) {
+  const old = normalizeTableRegistry(value);
+  const next = restoreDefaultTableRegistry();
+  const sourceFor = {
+    spacetime: ["spacetime"],
+    characters: ["characters", "state"],
+    items: ["items"],
+    events: ["events"],
+    regions: ["regions"],
+    globalChanges: ["globalChanges"],
+    foundations: ["foundations"],
+    customObjects: ["customObjects"]
+  };
+  for (const table of next) {
+    const source = old.find((item) => sourceFor[table.key]?.includes(item.key) || sourceFor[table.key]?.includes(item.role));
+    if (!source) continue;
+    table.enabled = source.enabled;
+    table.fields = mergeRoleFields(table.role, source.fields);
+  }
+  const custom = old.filter((table) => !table.isDefault && !next.some((item) => item.key === table.key));
+  return normalizeTableRegistry([...next, ...custom.map((table, index) => ({ ...table, order: next.length + index }))]);
 }
 function enabledTables(registry2) {
   return normalizeTableRegistry(registry2).filter((table) => table.enabled);
@@ -415,8 +479,7 @@ function customFieldText(table) {
 function updateTableFields(registry2, key, fieldText) {
   const current = normalizeTableRegistry(registry2).find((table) => table.key === key);
   if (!current) return normalizeTableRegistry(registry2);
-  const fields = [...deepClone(COMMON_FIELDS), ...current.role === "state" ? [deepClone(LIFECYCLE_FIELD)] : [], ...parseCustomFields(fieldText)];
-  return updateTableDefinition(registry2, key, { fields });
+  return updateTableDefinition(registry2, key, { fields: [...roleFields(current.role), ...parseCustomFields(fieldText)] });
 }
 function createCustomTable(registry2, name, purpose, fieldText = "") {
   const next = normalizeTableRegistry(registry2);
@@ -424,12 +487,12 @@ function createCustomTable(registry2, name, purpose, fieldText = "") {
   next.push({
     key,
     name: safeText(name, 80).trim() || "\u81EA\u5B9A\u4E49\u8868\u683C",
-    purpose: safeText(purpose, 1e3).trim() || "\u8BB0\u5F55\u73A9\u5BB6\u5B9A\u4E49\u7684\u5DF2\u663E\u5F71\u4E8B\u5B9E\u3002",
+    purpose: safeText(purpose, 1e3).trim() || "\u8BB0\u5F55\u73A9\u5BB6\u5B9A\u4E49\u7684\u5BF9\u8C61\u3001\u57FA\u7840\u5185\u5BB9\u4E0E\u53EF\u53D8\u72B6\u6001\u3002",
     role: "custom",
     enabled: true,
     order: next.length,
     isDefault: false,
-    fields: [...deepClone(COMMON_FIELDS), ...parseCustomFields(fieldText)]
+    fields: [...roleFields("custom"), ...parseCustomFields(fieldText)]
   });
   return normalizeTableRegistry(next);
 }
@@ -447,15 +510,83 @@ function moveTableDefinition(registry2, key, direction) {
   [next[index], next[target]] = [next[target], next[index]];
   return next.map((table, order) => ({ ...table, order }));
 }
+function normalizedName(value) {
+  return safeText(value, 240).toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+}
+function characterNameAliases(value) {
+  const raw = safeText(value, 240).trim();
+  const stripped = raw.replace(/^(?:人物|角色|人物状态|角色状态|档案|信息)\s*[:：|｜-]?\s*/i, "").replace(/\s*(?:人物|角色|人物状态|角色状态|档案|信息|当前状态)$/i, "");
+  const candidates = [raw, stripped, ...raw.split(/[|｜:：—–-]/)];
+  return [...new Set(candidates.map(normalizedName).filter((name) => name.length >= 2 || /[\u3400-\u9fff]/.test(name)))];
+}
+function list(value) {
+  return Array.isArray(value) ? value.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
+}
+function rowText(row) {
+  return `${safeText(row?.title, 240)} ${safeText(row?.content, 4e3)} ${list(row?.keywords).join(" ")}`;
+}
+function appendField(row, field, value) {
+  row.fields ||= {};
+  const current = list(row.fields[field]);
+  if (value && !current.includes(value)) current.push(value);
+  row.fields[field] = current;
+}
+function mergeIds(row, source) {
+  row.factIds = [.../* @__PURE__ */ new Set([...list(row.factIds ?? row.fact_ids), ...list(source.factIds ?? source.fact_ids)])];
+  row.keywords = [.../* @__PURE__ */ new Set([...list(row.keywords), ...list(source.keywords)])];
+  if (!row.eventId && (source.eventId || source.event_id)) row.eventId = safeText(source.eventId || source.event_id, 160);
+}
+function pendingCustom(row, objectType) {
+  return {
+    ...deepClone(row),
+    id: safeText(row?.id, 160).trim() || `legacy_${objectType}_${hashText(rowText(row))}`,
+    fields: { ...row?.fields && typeof row.fields === "object" ? deepClone(row.fields) : {}, objectType, migrationStatus: "\u5F85\u5F52\u5E76" }
+  };
+}
 function migrateSnapshotTables(value, registry2) {
   const source = value && typeof value === "object" ? value : {};
-  const output = {};
-  for (const table of normalizeTableRegistry(registry2)) output[table.key] = [];
+  const tables2 = normalizeTableRegistry(registry2);
+  const output = Object.fromEntries(tables2.map((table) => [table.key, []]));
+  const characterKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key || "characters";
+  const customKey = tableByRole(tables2, "custom", false)?.key || "customObjects";
   for (const [sourceKey, rawRows] of Object.entries(source)) {
     if (!Array.isArray(rawRows)) continue;
     const targetKey = LEGACY_TABLE_KEY_MAP[sourceKey] ?? sourceKey;
-    if (!(targetKey in output)) continue;
-    output[targetKey].push(...rawRows);
+    if (targetKey in output) output[targetKey].push(...deepClone(rawRows));
+  }
+  const characters = output[characterKey] ?? (output[characterKey] = []);
+  const characterNames = characters.map((row) => ({ row, names: characterNameAliases(row?.title) })).filter((item) => item.names.length);
+  const distribute = (rows, field, objectType) => {
+    if (!Array.isArray(rows)) return;
+    for (const raw of rows) {
+      const row = deepClone(raw);
+      const text = normalizedName(rowText(row));
+      const matches = characterNames.filter((item) => item.names.some((name) => text.includes(name)));
+      const allowed = field === "relationshipStates" ? matches.length >= 1 && matches.length <= 2 ? matches : [] : matches.length === 1 ? matches : [];
+      if (!allowed.length) {
+        if (customKey in output) output[customKey].push(pendingCustom(row, objectType));
+        continue;
+      }
+      const statement = `${safeText(row.title, 240).trim()}${safeText(row.content, 4e3).trim() ? `\uFF1A${safeText(row.content, 4e3).trim()}` : ""}`;
+      for (const match of allowed) {
+        appendField(match.row, field, statement);
+        if (row.eventId || row.event_id) appendField(match.row, "relatedEvents", safeText(row.eventId || row.event_id, 160));
+        mergeIds(match.row, row);
+      }
+      if ((row.source === "manual" || row.locked) && customKey in output) {
+        const migrated = pendingCustom(row, objectType);
+        migrated.fields.migrationStatus = "\u5DF2\u5F52\u5E76";
+        migrated.fields.relatedObjects = allowed.map((match) => safeText(match.row.id || match.row.title, 240)).filter(Boolean);
+        output[customKey].push(migrated);
+      }
+    }
+  };
+  distribute(source.relationships, "relationshipStates", "legacy_relationship");
+  distribute(source.skills, "abilityStates", "legacy_skill");
+  if (Array.isArray(source.focus) && customKey in output) {
+    for (const row of source.focus) {
+      if (row?.source === "manual" || row?.locked) output[customKey].push(pendingCustom(row, "legacy_focus_note"));
+    }
   }
   return output;
 }
@@ -482,7 +613,8 @@ function getSettings() {
   context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
   const settings = context.extensionSettings[MODULE_NAME];
   if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
-  settings.migration ||= { legacyChecked: false, dynamicTablesV23: false };
+  settings.migration ||= { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false };
+  settings.migration.objectViewsV26 ??= false;
   settings.lorebookRecall ||= { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 };
   settings.lorebookRecall.similarityThreshold = Math.min(0.99, Math.max(0, Number(settings.lorebookRecall.similarityThreshold) || 0.72));
   settings.lorebookRecall.maxVectorResults = Math.min(100, Math.max(1, Math.round(Number(settings.lorebookRecall.maxVectorResults) || 8)));
@@ -491,12 +623,19 @@ function getSettings() {
     settings.tableRegistry = restoreDefaultTableRegistry();
     settings.vectorizeRows = true;
     settings.migration.dynamicTablesV23 = true;
-    if (settings.ui?.activeTable === "characters") settings.ui.activeTable = "state";
   } else {
     settings.tableRegistry = normalizeTableRegistry(settings.tableRegistry);
   }
+  if (!settings.migration.objectViewsV26) {
+    settings.tableRegistry = migrateTableRegistryToObjectViews(settings.tableRegistry);
+    settings.migration.objectViewsV26 = true;
+    const legacyActive = settings.ui?.activeTable || "";
+    if (["focus", "state", "characters", "skills", "relationships"].includes(legacyActive)) settings.ui.activeTable = "characters";
+    if (legacyActive === "regions") settings.ui.activeTable = "regions";
+    if (legacyActive === "foundations") settings.ui.activeTable = "foundations";
+  }
   if (!tableByKey(settings.tableRegistry, settings.ui?.activeTable || "") || !tableByKey(settings.tableRegistry, settings.ui.activeTable)?.enabled) {
-    settings.ui.activeTable = settings.tableRegistry.find((table) => table.enabled)?.key || settings.tableRegistry[0]?.key || "focus";
+    settings.ui.activeTable = settings.tableRegistry.find((table) => table.enabled)?.key || settings.tableRegistry[0]?.key || "spacetime";
   }
   const savedProfiles = Array.isArray(context.extensionSettings?.connectionManager?.profiles) ? context.extensionSettings.connectionManager.profiles : [];
   for (const connection of Object.values(settings.connections ?? {})) {
@@ -833,9 +972,9 @@ function pendingFactsByEvent(facts) {
   const groups = /* @__PURE__ */ new Map();
   for (const fact of facts) {
     if (fact.consumedBySmallSummaryId) continue;
-    const list3 = groups.get(fact.eventId) ?? [];
-    list3.push(fact);
-    groups.set(fact.eventId, list3);
+    const list4 = groups.get(fact.eventId) ?? [];
+    list4.push(fact);
+    groups.set(fact.eventId, list4);
   }
   return groups;
 }
@@ -909,19 +1048,24 @@ var MEMORY_STATES = /* @__PURE__ */ new Set([
   "\u4E0D\u9002\u7528"
 ]);
 var EVIDENCE_LEVELS = /* @__PURE__ */ new Set(["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"]);
-var STANDARD_FIELDS = /* @__PURE__ */ new Set(["id", "title", "name", "content", "summary", "keywords", "status", "source", "locked", "lifecycle", "updatedAt", "factIds", "fact_ids", "eventId", "event_id", "recall", "fields"]);
+var STANDARD_FIELDS = /* @__PURE__ */ new Set(["id", "title", "name", "content", "summary", "keywords", "status", "source", "locked", "lockMode", "lifecycle", "updatedAt", "factIds", "fact_ids", "eventId", "event_id", "recall", "fields"]);
 function registryOrDefault(registry2) {
   return normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY);
 }
+function characterTableKey(registry2) {
+  return tableByRole(registry2, "characters", false)?.key || tableByRole(registry2, "state", false)?.key;
+}
 function attachLegacyAliases(snapshot, registry2) {
-  const stateKey = tableByRole(registry2, "state", false)?.key;
-  if (stateKey && stateKey in snapshot && !Object.prototype.hasOwnProperty.call(snapshot, "characters")) {
-    Object.defineProperty(snapshot, "characters", {
+  const key = characterTableKey(registry2);
+  if (!key || !(key in snapshot)) return snapshot;
+  for (const alias of ["characters", "state"]) {
+    if (alias === key || Object.prototype.hasOwnProperty.call(snapshot, alias)) continue;
+    Object.defineProperty(snapshot, alias, {
       configurable: true,
       enumerable: false,
-      get: () => snapshot[stateKey],
+      get: () => snapshot[key],
       set: (value) => {
-        snapshot[stateKey] = Array.isArray(value) ? value : [];
+        snapshot[key] = Array.isArray(value) ? value : [];
       }
     });
   }
@@ -987,23 +1131,30 @@ function normalizeRow(value, tableKey, index, previous, registry2) {
   const now = nowIso();
   const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
   const manual = source.source === "manual" || previous?.source === "manual";
+  const locked = Boolean(source.locked ?? previous?.locked ?? false);
+  const rawLockMode = safeText(source.lockMode ?? previous?.lockMode, 20).trim();
+  const lockMode = locked || rawLockMode === "all" ? "all" : manual || rawLockMode === "base" ? "base" : void 0;
   const title = safeText(source.title || source.name || previous?.title || `${table.name} ${index + 1}`, 240).trim();
   const keywords = normalizeKeywords(source.keywords ?? previous?.keywords ?? []);
-  const supportsLifecycle = table.role === "state" || table.fields.some((field) => field.type === "lifecycle");
+  const supportsLifecycle = ["characters", "state"].includes(table.role) || table.fields.some((field) => field.type === "lifecycle");
   const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
   const factIds = normalizeStringList(source.factIds ?? source.fact_ids ?? previous?.factIds, 40, 160);
   const eventId = safeText(source.eventId ?? source.event_id ?? previous?.eventId, 160).trim() || void 0;
+  const content = safeText(source.content || source.summary || previous?.content || "", 12e3).trim();
+  const fields = normalizeCustomFields(source, table, previous);
+  if (manual && !safeText(fields.baseContent, 12e3).trim() && content) fields.baseContent = content;
   return {
     id,
     title,
-    content: safeText(source.content || source.summary || previous?.content || "", 12e3).trim(),
+    content,
     keywords,
     status: safeText(source.status || previous?.status || "active", 120).trim() || "active",
     source: manual ? "manual" : "auto",
-    locked: Boolean(source.locked ?? previous?.locked ?? manual),
+    locked: lockMode === "all",
+    lockMode,
     lifecycle: supportsLifecycle && lifecycleInput ? normalizeLifecycle(lifecycleInput, previous?.lifecycle) : void 0,
     updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now,
-    fields: normalizeCustomFields(source, table, previous),
+    fields,
     factIds,
     eventId,
     recall: normalizeRecall(source.recall ?? previous?.recall, title, keywords)
@@ -1033,12 +1184,12 @@ function identityTitle(value) {
   return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function stateRows(snapshot, registry2) {
-  const key = tableByRole(registry2, "state", false)?.key;
+  const key = characterTableKey(registry2);
   return key ? snapshot[key] ?? [] : [];
 }
 function preservePersistentCharacters(previous, next, registry2) {
   const tables2 = registryOrDefault(registry2);
-  const key = tableByRole(tables2, "state", false)?.key;
+  const key = characterTableKey(tables2);
   if (!key) return next;
   const nextRows = next[key] ?? (next[key] = []);
   const oldRows = previous[key] ?? previous.characters ?? [];
@@ -1049,8 +1200,26 @@ function preservePersistentCharacters(previous, next, registry2) {
     const titleMatch = byTitle.get(identityTitle(oldRow.title));
     if (titleMatch) {
       titleMatch.id = oldRow.id;
-      if (oldRow.source === "manual" || oldRow.locked) Object.assign(titleMatch, structuredClone(oldRow));
-      else if (!titleMatch.lifecycle && oldRow.lifecycle) titleMatch.lifecycle = structuredClone(oldRow.lifecycle);
+      if (oldRow.locked || oldRow.lockMode === "all") {
+        Object.assign(titleMatch, structuredClone(oldRow));
+      } else if (oldRow.source === "manual" || oldRow.lockMode === "base") {
+        const generatedFields = titleMatch.fields ?? {};
+        const oldFields = oldRow.fields ?? {};
+        titleMatch.title = oldRow.title;
+        titleMatch.source = "manual";
+        titleMatch.locked = false;
+        titleMatch.lockMode = "base";
+        titleMatch.fields = {
+          ...structuredClone(oldFields),
+          currentStates: structuredClone(generatedFields.currentStates ?? oldFields.currentStates ?? []),
+          relationshipStates: structuredClone(generatedFields.relationshipStates ?? oldFields.relationshipStates ?? []),
+          abilityStates: structuredClone(generatedFields.abilityStates ?? oldFields.abilityStates ?? []),
+          relatedObjects: structuredClone(generatedFields.relatedObjects ?? oldFields.relatedObjects ?? []),
+          relatedEvents: structuredClone(generatedFields.relatedEvents ?? oldFields.relatedEvents ?? [])
+        };
+      } else if (!titleMatch.lifecycle && oldRow.lifecycle) {
+        titleMatch.lifecycle = structuredClone(oldRow.lifecycle);
+      }
       byId.set(oldRow.id, titleMatch);
       continue;
     }
@@ -1068,6 +1237,25 @@ function preservePersistentCharacters(previous, next, registry2) {
     }
     return false;
   });
+  return attachLegacyAliases(next, tables2);
+}
+function preserveObjectBaseLayers(previous, next, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  for (const table of tables2) {
+    const previousRows = previous[table.key] ?? [];
+    const byId = new Map(previousRows.map((row) => [row.id, row]));
+    const byTitle = new Map(previousRows.map((row) => [identityTitle(row.title), row]));
+    for (const row of next[table.key] ?? []) {
+      const old = byId.get(row.id) ?? byTitle.get(identityTitle(row.title));
+      if (!old) continue;
+      row.fields ||= {};
+      const oldFields = old.fields ?? {};
+      const existingBase = safeText(oldFields.baseContent, 12e3).trim();
+      if (existingBase) row.fields.baseContent = structuredClone(oldFields.baseContent);
+      if ("solidifiedHistory" in oldFields) row.fields.solidifiedHistory = structuredClone(oldFields.solidifiedHistory);
+      else delete row.fields.solidifiedHistory;
+    }
+  }
   return attachLegacyAliases(next, tables2);
 }
 function characterTitleAliases(title) {
@@ -1157,7 +1345,7 @@ function emptyChatState(chatKey) {
     smallSummaries: [],
     largeSummaries: [],
     lastSyncStatus: "idle",
-    migration: { dynamicTablesV23: false, internalFactsV23: false },
+    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false },
     updatedAt: nowIso()
   };
 }
@@ -1178,6 +1366,7 @@ function migrateChatState(raw, chatKey) {
   const previousSchema = Number(state2.schemaVersion) || 1;
   const needsViewMigration = state2.migration?.dynamicTablesV23 !== true;
   const needsFactMigration = state2.migration?.internalFactsV23 !== true;
+  const needsObjectViewMigration = state2.migration?.objectViewsV26 !== true;
   let artifactViewsChanged = false;
   state2.schemaVersion = 2;
   state2.processedMessageKeys = Array.isArray(state2.processedMessageKeys) ? [...new Set(state2.processedMessageKeys.map(String))] : [];
@@ -1188,7 +1377,7 @@ function migrateChatState(raw, chatKey) {
   for (const message of getChat()) {
     const artifact = message?.extra?.[MODULE_NAME];
     if (!artifact || artifact.chatKey !== chatKey) continue;
-    if (needsViewMigration && artifact.snapshot) {
+    if ((needsViewMigration || needsObjectViewMigration) && artifact.snapshot) {
       const before = JSON.stringify(artifact.snapshot);
       artifact.snapshot = normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry2);
       if (JSON.stringify(artifact.snapshot) !== before) artifactViewsChanged = true;
@@ -1199,12 +1388,12 @@ function migrateChatState(raw, chatKey) {
   }
   migrateLegacyConsumption(facts, state2.smallSummaries, state2.largeSummaries);
   state2.internalFacts = facts;
-  state2.migration = { ...state2.migration ?? {}, dynamicTablesV23: true, internalFactsV23: true };
+  state2.migration = { ...state2.migration ?? {}, dynamicTablesV23: true, internalFactsV23: true, objectViewsV26: true };
   state2.updatedAt ||= nowIso();
   return {
     state: state2,
     artifactViewsChanged,
-    metadataChanged: previousSchema !== 2 || needsViewMigration || needsFactMigration
+    metadataChanged: previousSchema !== 2 || needsViewMigration || needsFactMigration || needsObjectViewMigration
   };
 }
 async function putArtifact(_artifact) {
@@ -1909,7 +2098,7 @@ function auditJsonSchema() {
 }
 
 // src/pipeline/audit.ts
-function list(value, maxItems = 24) {
+function list2(value, maxItems = 24) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => safeText(item, 2e3).trim()).filter(Boolean).slice(0, maxItems);
 }
@@ -1941,7 +2130,7 @@ function parseAuditResult(raw) {
       decision,
       reason: safeText(data.reason, 3e3).trim() || (passed ? "\u901A\u8FC7" : "\u8FDD\u53CD\u89C4\u5219"),
       violations: passed ? [] : violations,
-      preserve: list(data.preserve),
+      preserve: list2(data.preserve),
       rewriteInstruction: safeText(data.rewriteInstruction, 6e3).trim(),
       violationFingerprint: passed ? "" : resultFingerprint(violations),
       replacementText: !passed && decision === "revise" ? safeText(data.replacementText ?? data.finalText, 2e5).trim() || void 0 : void 0
@@ -2337,7 +2526,8 @@ function rowContent(table, row) {
   if (row.keywords.length) lines.push(`\u89E6\u53D1\u8BCD\uFF1A${row.keywords.join("\u3001")}`);
   if (row.factIds?.length) lines.push(`\u4E8B\u5B9EID\uFF1A${row.factIds.join("\u3001")}`);
   if (row.eventId) lines.push(`\u4E8B\u4EF6ID\uFF1A${row.eventId}`);
-  if (row.source === "manual" || row.locked) lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u9501\u5B9A\uFF1B\u81EA\u52A8\u6574\u7406\u4E0D\u5F97\u8986\u76D6\u6216\u5220\u9664\u3002");
+  if (row.locked || row.lockMode === "all") lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u5B8C\u5168\u9501\u5B9A\uFF1B\u57FA\u7840\u4E0E\u72B6\u6001\u5747\u4E0D\u5F97\u81EA\u52A8\u4FEE\u6539\u3002");
+  else if (row.source === "manual" || row.lockMode === "base") lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u57FA\u7840\u4FDD\u62A4\uFF1B\u57FA\u7840\u5185\u5BB9\u4E0D\u5F97\u81EA\u52A8\u6539\u5199\uFF0C\u5F53\u524D\u72B6\u6001\u53EF\u4F9D\u636E\u660E\u786E\u4E8B\u5B9E\u66F4\u65B0\u3002");
   return lines.join("\n");
 }
 function rowSearchText(row) {
@@ -2347,25 +2537,25 @@ function isAudienceRow(row) {
   if (row.source === "manual" || row.locked) return false;
   return /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|喝彩|起哄|议论|人群反应|站在一旁|远处观看)/i.test(rowSearchText(row));
 }
-function normalizedName(value) {
+function normalizedName2(value) {
   return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function aliases(title) {
   const raw = String(title || "").trim();
-  return uniq([normalizedName(raw), ...raw.split(/[｜|:：—–-]/).map(normalizedName)], 12);
+  return uniq([normalizedName2(raw), ...raw.split(/[｜|:：—–-]/).map(normalizedName2)], 12);
 }
-function filterSnapshotForLorebook(snapshot, customRegistry) {
+function filterSnapshotForLorebook(snapshot, customRegistry, focusObjectId = "") {
   const tables2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
   const next = filterPassiveObservers(normalizeSnapshot(snapshot, snapshot, tables2), tables2);
-  const stateKey = tableByRole(tables2, "state", false)?.key;
+  const stateKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key;
   const focusKey = tableByRole(tables2, "focus", false)?.key;
   const eventKey = tableByRole(tables2, "events", false)?.key;
   const relationKey = tableByRole(tables2, "relationships", false)?.key;
   if (!stateKey) return next;
   const relevanceRows = [focusKey, eventKey, relationKey].filter(Boolean).flatMap((key) => next[key] ?? []);
-  const relevance = normalizedName(relevanceRows.map(rowSearchText).join(" "));
+  const relevance = normalizedName2(relevanceRows.map(rowSearchText).join(" "));
   next[stateKey] = (next[stateKey] ?? []).filter((row) => {
-    if (row.source === "manual" || row.locked) return true;
+    if (row.id === focusObjectId || row.source === "manual" || row.locked) return true;
     if (isAudienceRow(row)) return false;
     const named = aliases(row.title).some((name) => name && relevance.includes(name));
     const direct = /(核心参与|直接相关|交战|对战|行动者|目标|当事人)/i.test(rowSearchText(row));
@@ -2373,11 +2563,12 @@ function filterSnapshotForLorebook(snapshot, customRegistry) {
   });
   const retainedNames = new Set(next[stateKey].flatMap((row) => aliases(row.title)));
   for (const table of enabledTables(tables2)) {
-    if (["focus", "spacetime", "state", "events", "globalChanges", "foundations"].includes(table.role)) continue;
+    if (["focus", "spacetime", "characters", "state", "events", "globalChanges", "foundations"].includes(table.role)) continue;
     next[table.key] = (next[table.key] ?? []).filter((row) => {
+      if (table.role === "custom" && safeText(row.fields?.migrationStatus, 80).trim() === "\u5DF2\u5F52\u5E76") return false;
       if (row.source === "manual" || row.locked) return true;
       if (isAudienceRow(row)) return false;
-      const text = normalizedName(rowSearchText(row));
+      const text = normalizedName2(rowSearchText(row));
       return !retainedNames.size || [...retainedNames].some((name) => text.includes(name)) || table.role === "regions";
     });
   }
@@ -2387,9 +2578,6 @@ function defaultTrigger(row) {
   const recall = row.recall ?? { any: [], all: [], exclude: [] };
   const any = uniq([...recall.any ?? [], row.title, ...row.keywords], 32);
   return { any, all: uniq(recall.all ?? [], 20), exclude: uniq(recall.exclude ?? [], 20) };
-}
-function isEssentialState(row) {
-  return /(不可缺失|昏迷|重伤|濒死|死亡|失踪|被拘禁|封印|当前在场|当前相关|核心参与)/i.test(rowSearchText(row));
 }
 function isHistoricalSpacetime(row) {
   return /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(rowSearchText(row));
@@ -2401,10 +2589,11 @@ function currentSpacetimeRowId(rows) {
   return (explicit.at(-1) ?? active.at(-1))?.id;
 }
 function recallModeFor(role, row, options, currentSpacetimeId) {
+  if ((role === "characters" || role === "state") && row.id === options.focusObjectId) return "constant";
   if (!options.latestContinuityConstant) return "trigger";
-  if (role === "focus" || role === "globalChanges") return "constant";
+  if (role === "globalChanges") return "constant";
   if (role === "spacetime") return row.id === currentSpacetimeId ? "constant" : "trigger";
-  if (role === "state" && isEssentialState(row)) return "constant";
+  if (role === "characters" || role === "state") return "trigger";
   if (role === "foundations" && /(必要|规则|制度|禁止|必须|不可)/i.test(rowSearchText(row))) return "constant";
   return "trigger";
 }
@@ -2435,7 +2624,7 @@ function unconsumedSmallSummaries(small, large) {
 function tableDocuments(snapshot, options) {
   if (!snapshot) return [];
   const tables2 = registry(options);
-  const filtered = filterSnapshotForLorebook(snapshot, tables2);
+  const filtered = filterSnapshotForLorebook(snapshot, tables2, options.focusObjectId);
   const docs = [];
   for (const table of enabledTables(tables2)) {
     const rows = filtered[table.key] ?? [];
@@ -2596,6 +2785,18 @@ function managedInfo(entry) {
 function managedContentIdentity(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
+function managedCommentIdentity(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+function isMirrorAbyssGeneratedEntry(entry) {
+  return /^\[MA11\]\s+MA[｜|]/.test(managedCommentIdentity(entry?.comment));
+}
+function mirrorAbyssExactIdentity(comment, content) {
+  const normalizedComment = managedCommentIdentity(comment);
+  const normalizedContent = managedContentIdentity(content);
+  return normalizedComment && normalizedContent ? `${normalizedComment}
+${normalizedContent}` : "";
+}
 async function reloadWorldInfoEditor(wi, name, loadIfNotSelected = false) {
   const context = getContext();
   const updateList = context.updateWorldInfoList ?? wi.updateWorldInfoList;
@@ -2684,10 +2885,102 @@ async function desiredSpecs(artifact) {
       internalFacts: state2.internalFacts,
       similarityThreshold: settings.lorebookRecall.similarityThreshold,
       maxVectorResults: settings.lorebookRecall.maxVectorResults,
-      totalCapacity: settings.lorebookRecall.totalCapacity
+      totalCapacity: settings.lorebookRecall.totalCapacity,
+      focusObjectId: state2.focusObjectId
     }
   );
   return new Map(documents.map((document2) => [document2.key, document2]));
+}
+function reconcileLorebookEntries(data, desired, chatKey, wi, name, dedicatedBook = false) {
+  data.entries ||= {};
+  const pairs = [];
+  const currentByKey = /* @__PURE__ */ new Map();
+  const currentByExact = /* @__PURE__ */ new Map();
+  const generatedByExact = /* @__PURE__ */ new Map();
+  for (const [uid, entry] of Object.entries(data.entries)) {
+    const info = managedInfo(entry);
+    const currentScope = Boolean(info?.managed && info.chatKey === chatKey);
+    const generated = isMirrorAbyssGeneratedEntry(entry);
+    if (!currentScope && !generated) continue;
+    const pair = {
+      uid,
+      entry,
+      info,
+      key: String(info?.key || ""),
+      exactIdentity: mirrorAbyssExactIdentity(entry.comment, entry.content),
+      currentScope,
+      generated
+    };
+    pairs.push(pair);
+    if (currentScope && pair.key) currentByKey.set(pair.key, [...currentByKey.get(pair.key) ?? [], pair]);
+    if (currentScope && pair.exactIdentity) currentByExact.set(pair.exactIdentity, [...currentByExact.get(pair.exactIdentity) ?? [], pair]);
+    if (generated && pair.exactIdentity) generatedByExact.set(pair.exactIdentity, [...generatedByExact.get(pair.exactIdentity) ?? [], pair]);
+  }
+  let changed = false;
+  let created = 0;
+  let adoptedLegacy = 0;
+  let removed = 0;
+  const claimed = /* @__PURE__ */ new Set();
+  const entryIds = [];
+  const desiredKeysByIdentity = /* @__PURE__ */ new Map();
+  const takeUnclaimed = (items) => items?.find((pair) => !claimed.has(pair.uid));
+  for (const [key, spec] of desired) {
+    const exactIdentity = mirrorAbyssExactIdentity(spec.comment, spec.content);
+    if (exactIdentity) {
+      const keys = desiredKeysByIdentity.get(exactIdentity) ?? /* @__PURE__ */ new Set();
+      keys.add(key);
+      desiredKeysByIdentity.set(exactIdentity, keys);
+    }
+    let pair = takeUnclaimed(currentByKey.get(key)) ?? takeUnclaimed(currentByExact.get(exactIdentity));
+    if (!pair && exactIdentity) {
+      pair = (generatedByExact.get(exactIdentity) ?? []).find((candidate) => {
+        if (claimed.has(candidate.uid)) return false;
+        if (candidate.currentScope) return true;
+        if (!candidate.info?.managed || !candidate.info?.chatKey) return true;
+        if (candidate.key === key) return true;
+        return dedicatedBook;
+      });
+      if (pair && !pair.currentScope) adoptedLegacy += 1;
+    }
+    let entry = pair?.entry;
+    if (!entry) {
+      entry = wi.createWorldInfoEntry(name, data);
+      if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${key}`);
+      const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? "");
+      if (!createdUid) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u7F3A\u5C11UID\uFF1A${key}`);
+      pair = {
+        uid: createdUid,
+        entry,
+        info: null,
+        key,
+        exactIdentity,
+        currentScope: true,
+        generated: true
+      };
+      created += 1;
+      changed = true;
+    }
+    claimed.add(pair.uid);
+    const before = JSON.stringify(entry);
+    applyEntry(entry, chatKey, key, spec, wi);
+    if (before !== JSON.stringify(entry)) changed = true;
+    if (Number.isFinite(Number(entry.uid))) entryIds.push(Number(entry.uid));
+  }
+  for (const pair of pairs) {
+    if (claimed.has(pair.uid)) continue;
+    let shouldRemove = pair.currentScope;
+    if (!shouldRemove && pair.generated && pair.exactIdentity) {
+      const desiredKeys = desiredKeysByIdentity.get(pair.exactIdentity);
+      if (desiredKeys?.size) {
+        shouldRemove = dedicatedBook || !pair.info?.managed || !pair.info?.chatKey || pair.key && desiredKeys.has(pair.key);
+      }
+    }
+    if (!shouldRemove) continue;
+    delete data.entries[pair.uid];
+    removed += 1;
+    changed = true;
+  }
+  return { changed, entryIds, created, adoptedLegacy, removed };
 }
 async function syncLorebook(artifact, force = false) {
   assertArtifactCommitCurrent(artifact);
@@ -2718,49 +3011,9 @@ async function syncLorebook(artifact, force = false) {
     const data = await wi.loadWorldInfo(name) || { entries: {} };
     data.entries ||= {};
     const desired = await desiredSpecs(artifact);
-    const managedEntries = [];
-    const byKey = /* @__PURE__ */ new Map();
-    const byContent = /* @__PURE__ */ new Map();
-    for (const [uid, entry] of Object.entries(data.entries)) {
-      const info = managedInfo(entry);
-      if (!info?.managed || info.chatKey !== artifact.chatKey) continue;
-      const pair = {
-        uid,
-        entry,
-        key: String(info.key || ""),
-        contentIdentity: managedContentIdentity(entry.content)
-      };
-      managedEntries.push(pair);
-      if (pair.key) byKey.set(pair.key, [...byKey.get(pair.key) ?? [], pair]);
-      if (pair.contentIdentity) byContent.set(pair.contentIdentity, [...byContent.get(pair.contentIdentity) ?? [], pair]);
-    }
-    let changed = false;
-    const claimed = /* @__PURE__ */ new Set();
-    const entryIds = [];
-    const takeUnclaimed = (pairs) => pairs?.find((pair) => !claimed.has(pair.uid));
-    for (const [key, spec] of desired) {
-      const contentIdentity = managedContentIdentity(spec.content);
-      let pair = takeUnclaimed(byKey.get(key)) ?? takeUnclaimed(byContent.get(contentIdentity));
-      let entry = pair?.entry;
-      if (!entry) {
-        entry = wi.createWorldInfoEntry(name, data);
-        if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${key}`);
-        const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? "");
-        if (!createdUid) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u7F3A\u5C11UID\uFF1A${key}`);
-        pair = { uid: createdUid, entry, key, contentIdentity };
-        changed = true;
-      }
-      claimed.add(pair.uid);
-      const before = JSON.stringify(entry);
-      applyEntry(entry, artifact.chatKey, key, spec, wi);
-      if (before !== JSON.stringify(entry)) changed = true;
-      if (Number.isFinite(Number(entry.uid))) entryIds.push(Number(entry.uid));
-    }
-    for (const pair of managedEntries) {
-      if (claimed.has(pair.uid)) continue;
-      delete data.entries[pair.uid];
-      changed = true;
-    }
+    const dedicatedBook = name === generatedBookName(artifact.chatKey);
+    const reconciliation = reconcileLorebookEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook);
+    const { changed, entryIds } = reconciliation;
     assertArtifactCommitCurrent(artifact);
     if (changed) {
       await wi.saveWorldInfo(name, data, true);
@@ -2938,7 +3191,7 @@ function applySedimentation(snapshot, summary, registry2) {
       return true;
     });
   }
-  const stateKey = tableByRole(tables2, "state", false)?.key;
+  const stateKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key;
   const stateRows2 = stateKey ? next[stateKey] ?? [] : [];
   for (const update of plan.characterActivityUpdates) {
     const row = stateRows2.find((item) => item.id === update.rowId);
@@ -3020,9 +3273,9 @@ function eventClosed(facts) {
 function choosePendingEvent(facts, threshold, force) {
   const allByEvent = /* @__PURE__ */ new Map();
   for (const fact of facts) {
-    const list3 = allByEvent.get(fact.eventId) ?? [];
-    list3.push(fact);
-    allByEvent.set(fact.eventId, list3);
+    const list4 = allByEvent.get(fact.eventId) ?? [];
+    list4.push(fact);
+    allByEvent.set(fact.eventId, list4);
   }
   const groups = [...pendingFactsByEvent(facts).entries()].map(([eventId, eventFacts]) => ({ eventId, facts: eventFacts, closed: eventClosed(allByEvent.get(eventId) ?? eventFacts), messages: new Set(eventFacts.flatMap((fact) => fact.sourceMessageIds)).size })).filter((group) => force || group.closed || group.messages >= threshold).sort((a, b) => Number(b.closed) - Number(a.closed) || b.facts.length - a.facts.length || a.eventId.localeCompare(b.eventId));
   return groups[0] ?? null;
@@ -3211,7 +3464,7 @@ var OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close",
 var CONFIDENCE2 = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
 var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
 var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
-function list2(value, limit = 24, itemLimit = 500) {
+function list3(value, limit = 24, itemLimit = 500) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
@@ -3228,8 +3481,8 @@ function normalizeFacts(value) {
     const title = safeText(item.title, 240).trim();
     const content = safeText(item.content, 6e3).trim();
     const id = safeText(item.factId ?? item.fact_id ?? item.id, 160).trim() || `fact_${hashText(`${entityId}|${title}|${content}|${index}`)}`;
-    const occurred = list2(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1e3);
-    const unresolved = list2(item.unresolved ?? item.unresolvedItems, 30, 1e3);
+    const occurred = list3(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1e3);
+    const unresolved = list3(item.unresolved ?? item.unresolvedItems, 30, 1e3);
     return {
       id,
       factId: id,
@@ -3242,8 +3495,8 @@ function normalizeFacts(value) {
       unresolved,
       status: safeText(item.status, 120).trim() || "active",
       timeRange: normalizeTimeRange(item.timeRange ?? item.time_range),
-      relatedEntities: list2(item.relatedEntities ?? item.related_entities, 30, 240),
-      keywords: list2(item.keywords, 24, 100),
+      relatedEntities: list3(item.relatedEntities ?? item.related_entities, 30, 240),
+      keywords: list3(item.keywords, 24, 100),
       operation: OPERATIONS.has(operation) ? operation : "update",
       confidence: CONFIDENCE2.has(confidence) ? confidence : "uncertain"
     };
@@ -3297,7 +3550,7 @@ snapshot \u53EA\u80FD\u5305\u542B\u5F53\u524D\u542F\u7528\u7684\u8868\u683C\uFF1
 \u3010\u5185\u90E8\u4E8B\u5B9E\u5C42\u3011
 facts \u6BCF\u6761\u5B57\u6BB5\uFF1A
 - fact_id\uFF1A\u7A33\u5B9A\u4E8B\u5B9EID\uFF1B\u540C\u4E00\u4E8B\u5B9E\u66F4\u65B0\u65F6\u6CBF\u7528\u3002
-- event_id\uFF1A\u6240\u5C5E\u4E8B\u4EF6\u7EBFID\uFF1B\u540C\u4E00\u56E0\u679C\u7EBF\u6CBF\u7528\u3002\u5373\u4F7F\u201C\u6D3B\u8DC3\u4E8B\u4EF6\u201D\u89C6\u56FE\u88AB\u5220\u9664\u4E5F\u5FC5\u987B\u4FDD\u7559\u3002
+- event_id\uFF1A\u6240\u5C5E\u4E8B\u4EF6\u7EBFID\uFF1B\u540C\u4E00\u56E0\u679C\u7EBF\u6CBF\u7528\u3002\u5373\u4F7F\u201C\u4E8B\u4EF6\u201D\u89C6\u56FE\u88AB\u5220\u9664\u6216\u505C\u7528\u4E5F\u5FC5\u987B\u4FDD\u7559\u3002
 - type\uFF1A\u4E8B\u5B9E\u7C7B\u522B\u6216\u8BED\u4E49\u7C7B\u578B\uFF0C\u4E0D\u53D7\u8868\u683C\u6570\u91CF\u9650\u5236\u3002
 - title\uFF1A\u4E8B\u5B9E\u6807\u9898\u3002
 - occurred\uFF1A\u5DF2\u7ECF\u786E\u5B9A\u53D1\u751F\u7684\u4E8B\u5B9E\u53E5\u6570\u7EC4\u3002
@@ -3310,12 +3563,12 @@ facts \u6BCF\u6761\u5B57\u6BB5\uFF1A
 - confidence\uFF1Aconfirmed\u3001recorded\u3001reported\u3001uncertain\u3002
 
 \u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
-1. \u53EA\u4FDD\u5B58\u5F53\u524D\u7126\u70B9\u5468\u56F4\u3001\u5BF9\u540E\u7EED\u751F\u6210\u786E\u6709\u4F5C\u7528\u7684\u6D3B\u8DC3\u4E8B\u5B9E\uFF1B\u4E0D\u590D\u5236\u5168\u90E8\u65E7\u72B6\u6001\u3002
+1. \u53EA\u4FDD\u5B58\u5BF9\u540E\u7EED\u751F\u6210\u786E\u6709\u4F5C\u7528\u3001\u6765\u6E90\u660E\u786E\u7684\u6D3B\u8DC3\u4E8B\u5B9E\uFF1B\u4E0D\u590D\u5236\u5168\u90E8\u65E7\u72B6\u6001\uFF0C\u4E5F\u4E0D\u751F\u6210\u72EC\u7ACB\u7126\u70B9\u4E8B\u5B9E\u3002
 2. \u7981\u6B62\u56E0\u4EBA\u7269\u4EC5\u4EC5\u51FA\u73B0\u3001\u56F4\u89C2\u3001\u542C\u89C1\u3001\u559D\u5F69\u3001\u8BAE\u8BBA\u3001\u540C\u573A\u6216\u4E34\u65F6\u4F8D\u4ECE\u8EAB\u4EFD\u800C\u5EFA\u7ACB\u72B6\u6001\u3001\u5173\u7CFB\u6216\u4E8B\u4EF6\u3002
 3. \u4E24\u4EBA\u5BF9\u6218\u53EA\u4FDD\u7559\u4EA4\u6218\u53CC\u65B9\u3001\u5BF9\u6218\u4E8B\u5B9E\uFF0C\u4EE5\u53CA\u786E\u5B9E\u4F1A\u6539\u53D8\u6218\u5C40\u6216\u7ED3\u679C\u7684\u7B2C\u4E09\u65B9\u3002\u7EAF\u89C2\u4F17\u53CA\u5176\u5173\u7CFB\u3001\u7269\u54C1\u3001\u53CD\u5E94\u3001\u533A\u57DF\u548C\u8BBE\u5B9A\u4E0D\u5F97\u8FDB\u5165 facts\u3001snapshot \u6216\u4E16\u754C\u4E66\u89C6\u56FE\u3002
-4. \u7126\u70B9\u6807\u9898\u4E0D\u80FD\u53EA\u5199\u5355\u4E2A\u4EBA\u540D\uFF1B\u7981\u6B62\u81EA\u52A8\u8865\u5168 NPC \u9690\u79C1\u3001\u7ECF\u5386\u3001\u80FD\u529B\u3001\u9690\u85CF\u5173\u7CFB\u3001\u771F\u5B9E\u610F\u56FE\u548C\u672A\u53D1\u751F\u7ED3\u679C\u3002
+4. \u7981\u6B62\u81EA\u52A8\u8865\u5168 NPC \u9690\u79C1\u3001\u7ECF\u5386\u3001\u80FD\u529B\u3001\u9690\u85CF\u5173\u7CFB\u3001\u771F\u5B9E\u610F\u56FE\u548C\u672A\u53D1\u751F\u7ED3\u679C\u3002\u89D2\u8272\u53EA\u56E0\u5B9E\u9645\u53C2\u4E0E\u3001\u660E\u786E\u53D7\u5F71\u54CD\u6216\u73A9\u5BB6\u4EBA\u5DE5\u5EFA\u7ACB\u800C\u8FDB\u5165\u89D2\u8272\u89C6\u56FE\u3002
 5. \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
-6. focus \u53EA\u8BB0\u5F55\u5F53\u524D\u6838\u5FC3\u51B2\u7A81\u3001\u76EE\u6807\u6216\u5F85\u51B3\u4E8B\u9879\uFF1B\u540C\u4E00\u4E8B\u5B9E\u53EA\u8FDB\u5165\u6700\u5408\u9002\u7684\u4E00\u5F20\u53EF\u89C1\u8868\uFF0C\u7126\u70B9\u8868\u4E0D\u5F97\u4E0E\u72B6\u6001\u3001\u4E8B\u4EF6\u7B49\u8868\u91CD\u590D\u3002
+6. \u4E0D\u8F93\u51FA focus \u8868\u6216\u7126\u70B9\u4E8B\u5B9E\u3002\u5173\u7CFB\u548C\u6280\u80FD\u4E0D\u5F97\u5355\u5217\uFF1A\u660E\u786E\u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF0C\u660E\u786E\u80FD\u529B\u53CA\u5176\u53EF\u7528/\u53D7\u9650\u53D8\u5316\u5199\u5165\u89D2\u8272 abilityStates\u3002
 7. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u884C\u4E3A\u53EF\u4EE5\u8BB0\u5F55\u4E3A\u5DF2\u58F0\u660E\u52A8\u4F5C\uFF1B\u5916\u90E8\u7ED3\u679C\u5FC5\u987B\u7531\u89D2\u8272\u6B63\u6587\u6216\u5DF2\u6709\u53EF\u9760\u4E8B\u5B9E\u786E\u8BA4\u3002
 8. event_id \u662F\u603B\u7ED3\u548C\u5386\u53F2\u91CD\u5EFA\u7684\u7A33\u5B9A\u4E3B\u7EBF\uFF0C\u4E0D\u5F97\u56E0\u4E8B\u4EF6\u8868\u88AB\u505C\u7528\u800C\u7701\u7565\u3002
 
@@ -3326,10 +3579,13 @@ ${tableLines || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u6
 1. snapshot \u662F facts \u7684\u5F53\u524D\u89C6\u56FE\uFF0C\u4E0D\u662F\u552F\u4E00\u6570\u636E\u6E90\u3002\u6BCF\u884C\u4F7F\u7528 factIds \u5173\u8054\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4F7F\u7528 eventId \u5173\u8054\u4E8B\u4EF6\u7EBF\u3002
 2. \u4FDD\u7559\u672A\u53D7\u5F71\u54CD\u4E14\u4ECD\u6210\u7ACB\u7684\u65E7\u884C\uFF1B\u53EA\u6709\u6B63\u6587\u660E\u786E\u6539\u53D8\u65F6\u624D\u66F4\u65B0\u3002
 3. source=manual \u6216 locked=true \u7684\u65E7\u884C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
-4. \u6B63\u5F0F\u4E3B\u4F53\u4EC5\u5728\u5DF2\u663E\u5F71\u4E14\u5BF9\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u65F6\u8FDB\u5165\u201C\u72B6\u6001\u201D\u89D2\u8272\u8868\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5EFA\u7ACB\u3002
+4. \u6B63\u5F0F\u4E3B\u4F53\u4EC5\u5728\u5DF2\u663E\u5F71\u4E14\u5BF9\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u65F6\u8FDB\u5165\u201C\u89D2\u8272\u201D\u89C6\u56FE\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5EFA\u7ACB\u3002
 5. \u573A\u666F\u6216\u5730\u70B9\u53D1\u751F\u5207\u6362\u65F6\uFF0C\u201C\u65F6\u7A7A\u201D\u4E2D\u53EA\u80FD\u6709\u4E00\u4E2A\u5F53\u524D\u573A\u666F\uFF1B\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u82E5\u4ECD\u6709\u540E\u7EED\u4EF7\u503C\uFF0C\u72B6\u6001\u5FC5\u987B\u6539\u4E3A\u201C\u5DF2\u79BB\u5F00\u201D\u6216\u201C\u5386\u53F2\u573A\u666F\u201D\uFF0C\u5E76\u63D0\u4F9B\u660E\u786E\u89E6\u53D1\u8BCD\uFF0C\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
 6. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
 7. keywords \u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u6216\u89E6\u53D1\u8BCD\uFF1Brecall \u53EF\u5305\u542B any/all/exclude\uFF0C\u4E0D\u662F\u6570\u503C\u6743\u91CD\u3002
+8. baseContent \u662F\u7A33\u5B9A\u57FA\u7840\u5C42\uFF1A\u65B0\u5BF9\u8C61\u9996\u6B21\u5EFA\u7ACB\u65F6\u53EA\u80FD\u5199\u6B63\u6587\u660E\u786E\u5185\u5BB9\uFF1B\u5DF2\u6709\u975E\u7A7A\u503C\u5FC5\u987B\u539F\u6837\u4FDD\u7559\u3002
+9. solidifiedHistory \u53EA\u80FD\u7531\u540E\u7EED\u957F\u671F\u603B\u7ED3\u56FA\u5316\uFF0C\u72B6\u6001\u63D0\u53D6\u5FC5\u987B\u539F\u6837\u4FDD\u7559\uFF0C\u4E0D\u5F97\u81EA\u884C\u6DFB\u52A0\u3002
+10. currentStates\u3001relationshipStates\u3001abilityStates \u53EA\u6709\u5728\u5B58\u5728\u660E\u786E fact_id\u3001event_id\u3001\u6765\u6E90\u6D88\u606F\u548C\u6301\u7EED\u4F5C\u7528\u65F6\u624D\u53EF add/update/close/replace\u3002\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u3002
 
 \u7ED3\u6784\u793A\u4F8B\uFF1A
 {"turnSummary":"\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981","facts":[{"fact_id":"fact_1","event_id":"event_1","type":"event","title":"\u5BF9\u6218\u5F00\u59CB","occurred":["\u7532\u4E0E\u4E59\u5F00\u59CB\u4EA4\u6218"],"unresolved":["\u80DC\u8D1F\u672A\u5B9A"],"status":"\u8FDB\u884C\u4E2D","time_range":{"start":"\u5F53\u524D","end":"","label":"\u672C\u573A\u5BF9\u6218"},"related_entities":["\u7532","\u4E59"],"keywords":["\u7532","\u4E59","\u5BF9\u6218"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(active)}}`;
@@ -3413,8 +3669,8 @@ function stateJsonSchema(registry2) {
   const active = tables(registry2);
   const snapshotProperties = Object.fromEntries(active.map((table) => [table.key, { type: "array", items: rowSchema(table) }]));
   return {
-    name: "MirrorAbyssStateResultV23",
-    description: "\u955C\u6E0A\u5185\u90E8\u4E8B\u5B9E\u5C42\u4E0E\u52A8\u6001\u53EF\u89C1\u8868\u683C\u89C6\u56FE",
+    name: "MirrorAbyssStateResultV26",
+    description: "\u955C\u6E0A\u5185\u90E8\u4E8B\u5B9E\u5C42\u4E0E\u5BF9\u8C61\u5316\u52A8\u6001\u89C6\u56FE",
     strict: true,
     value: {
       type: "object",
@@ -3466,22 +3722,46 @@ function previousSnapshot(beforeIndex) {
 function cloneProtectedRow(row) {
   return structuredClone(row);
 }
+function rowIdentityTitle(value) {
+  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+}
 function preserveProtectedRows(previous, next, customRegistry) {
   const registry2 = normalizeTableRegistry(customRegistry);
+  const mutableFields = /* @__PURE__ */ new Set(["currentStates", "relationshipStates", "abilityStates", "relatedObjects", "relatedEvents", "migrationStatus"]);
   for (const table of registry2) {
     const key = table.key;
     next[key] ||= [];
     const nextIndexById = new Map(next[key].map((row, index) => [row.id, index]));
+    const nextIndexByTitle = new Map(next[key].map((row, index) => [rowIdentityTitle(row.title), index]));
     for (const row of previous[key] ?? []) {
-      if (row.source !== "manual" && !row.locked) continue;
+      if (row.source !== "manual" && !row.locked && row.lockMode !== "all" && row.lockMode !== "base") continue;
       const protectedRow = cloneProtectedRow(row);
-      const existingIndex = nextIndexById.get(row.id);
+      const existingIndex = nextIndexById.get(row.id) ?? nextIndexByTitle.get(rowIdentityTitle(row.title));
       if (existingIndex === void 0) {
         nextIndexById.set(row.id, next[key].length);
+        nextIndexByTitle.set(rowIdentityTitle(row.title), next[key].length);
         next[key].push(protectedRow);
-      } else {
-        next[key][existingIndex] = protectedRow;
+        continue;
       }
+      if (row.locked || row.lockMode === "all") {
+        next[key][existingIndex] = protectedRow;
+        continue;
+      }
+      const generated = next[key][existingIndex];
+      const oldFields = row.fields ?? {};
+      const generatedFields = generated.fields ?? {};
+      const mergedFields = { ...structuredClone(oldFields) };
+      for (const field of mutableFields) if (field in generatedFields) mergedFields[field] = structuredClone(generatedFields[field]);
+      next[key][existingIndex] = {
+        ...generated,
+        id: row.id,
+        title: row.title,
+        source: "manual",
+        locked: false,
+        lockMode: "base",
+        fields: mergedFields,
+        factIds: [.../* @__PURE__ */ new Set([...row.factIds ?? [], ...generated.factIds ?? []])]
+      };
     }
   }
   return next;
@@ -3529,18 +3809,27 @@ async function runStateExtraction(artifact, force = false) {
       jsonSchema: stateJsonSchema(registry2)
     });
     if (!parsed.snapshot || typeof parsed.snapshot !== "object" || Array.isArray(parsed.snapshot)) throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 snapshot \u6839\u5BF9\u8C61");
-    if (Array.isArray(parsed.snapshot.characters) && !Array.isArray(parsed.snapshot.state) && active.some((table) => table.key === "state")) {
-      parsed.snapshot.state = parsed.snapshot.characters;
-      delete parsed.snapshot.characters;
+    const characterTable = active.find((table) => table.role === "characters" || table.role === "state");
+    if (characterTable) {
+      if (Array.isArray(parsed.snapshot.state) && !Array.isArray(parsed.snapshot[characterTable.key])) parsed.snapshot[characterTable.key] = parsed.snapshot.state;
+      if (Array.isArray(parsed.snapshot.characters) && !Array.isArray(parsed.snapshot[characterTable.key])) parsed.snapshot[characterTable.key] = parsed.snapshot.characters;
+      if (characterTable.key !== "state") delete parsed.snapshot.state;
+      if (characterTable.key !== "characters") delete parsed.snapshot.characters;
     }
     const returnedKeys = Object.keys(parsed.snapshot);
     const activeKeys = new Set(active.map((table) => table.key));
-    for (const key of returnedKeys) if (!activeKeys.has(key)) throw new Error(`\u6A21\u578B\u8FD4\u56DE\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${key}`);
+    const legacyViewKeys = /* @__PURE__ */ new Set(["focus", "state", "characters", "skills", "relationships"]);
+    for (const key of returnedKeys) if (!activeKeys.has(key) && !legacyViewKeys.has(key)) throw new Error(`\u6A21\u578B\u8FD4\u56DE\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${key}`);
+    parsed.snapshot = migrateSnapshotTables(parsed.snapshot, registry2);
     for (const table of active) if (!Array.isArray(parsed.snapshot[table.key])) parsed.snapshot[table.key] = [];
     assertArtifactCommitCurrent(artifact);
     const normalized = filterPassiveObservers(
       removeFocusCharacterDuplicates(
-        preservePersistentCharacters(previous, preserveProtectedRows(previous, mergeEnabledViews(previous, parsed.snapshot, registry2), registry2), registry2),
+        preserveObjectBaseLayers(
+          previous,
+          preservePersistentCharacters(previous, preserveProtectedRows(previous, mergeEnabledViews(previous, parsed.snapshot, registry2), registry2), registry2),
+          registry2
+        ),
         registry2
       ),
       registry2
@@ -4593,8 +4882,7 @@ function installPipelineEventHandlers() {
 
 // src/domain/graph.ts
 function nodeTypeFor(role) {
-  if (role === "focus") return "focus";
-  if (role === "state") return "character";
+  if (role === "characters" || role === "state") return "character";
   if (role === "items" || role === "skills") return "item";
   if (role === "events") return "event";
   if (role === "regions" || role === "spacetime" || role === "globalChanges") return "region";
@@ -4604,15 +4892,12 @@ function compactLabel(value) {
   const text = String(value || "").trim();
   return text.length > 24 ? `${text.slice(0, 23)}\u2026` : text;
 }
-function relationText(row) {
-  return `${row.title}
-${row.content}
-${row.status}
-${row.keywords.join(" ")}`.toLowerCase();
+function stringList3(value) {
+  return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
 }
-function mentions(row, node) {
-  const label = node.label.trim().toLowerCase();
-  return label.length >= 2 && relationText(row).includes(label);
+function relationText(row) {
+  const fields = row.fields ?? {};
+  return [row.title, row.content, row.status, ...row.keywords, ...stringList3(fields.relationshipStates), ...stringList3(fields.relatedObjects), ...stringList3(fields.relatedEvents)].join(" ").toLowerCase();
 }
 function uniquePairKey(a, b, label) {
   const [left, right] = [a, b].sort();
@@ -4623,7 +4908,7 @@ function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
   const registry2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
   const nodes = [];
   const rowsByNode = /* @__PURE__ */ new Map();
-  const roles = scope === "relations" ? ["focus", "state"] : ["focus", "state", "items", "skills", "events", "regions", "spacetime", "globalChanges"];
+  const roles = scope === "relations" ? ["characters", "state"] : ["characters", "state", "items", "events", "regions", "spacetime", "globalChanges"];
   for (const table of enabledTables(registry2).filter((item) => roles.includes(item.role))) {
     const type = nodeTypeFor(table.role);
     if (!type) continue;
@@ -4634,39 +4919,21 @@ function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
     }
   }
   const edges = [];
-  const seenEdges = /* @__PURE__ */ new Set();
-  const relationKey = tableByRole(registry2, "relationships")?.key;
-  let relationIndex = 0;
-  for (const row of relationKey ? snapshot[relationKey] ?? [] : []) {
-    const matched = nodes.filter((node) => mentions(row, node));
-    if (matched.length >= 2) {
-      const source = matched[0];
-      for (const target of matched.slice(1, 4)) {
-        const key = uniquePairKey(source.id, target.id, row.title);
-        if (seenEdges.has(key)) continue;
-        seenEdges.add(key);
-        edges.push({ id: `edge:${row.id}:${target.id}`, source: source.id, target: target.id, label: compactLabel(row.title), detail: row.content });
-      }
-    } else {
-      const relationNode = { id: `relationship:${row.id}`, label: compactLabel(row.title || `\u5173\u7CFB${relationIndex + 1}`), type: "relationship", detail: row.content, status: row.status };
-      relationIndex += 1;
-      nodes.push(relationNode);
-      if (matched.length === 1) edges.push({ id: `edge:${row.id}:single`, source: matched[0].id, target: relationNode.id, label: compactLabel(row.status || "\u5173\u7CFB"), detail: row.content });
-    }
-  }
-  if (scope === "world") {
-    const contextual = nodes.filter((node) => ["item", "event", "region"].includes(node.type));
-    for (const actor of nodes.filter((node) => node.type === "character" || node.type === "focus")) {
-      const row = rowsByNode.get(actor.id);
-      if (!row) continue;
-      const text = relationText(row);
-      for (const target of contextual) {
-        if (target.label.length < 2 || !text.includes(target.label.toLowerCase())) continue;
-        const key = uniquePairKey(actor.id, target.id, "\u5173\u8054");
-        if (seenEdges.has(key)) continue;
-        seenEdges.add(key);
-        edges.push({ id: `context:${actor.id}:${target.id}`, source: actor.id, target: target.id, label: "\u5173\u8054", detail: row.content });
-      }
+  const seen = /* @__PURE__ */ new Set();
+  for (const source of nodes) {
+    const row = rowsByNode.get(source.id);
+    if (!row) continue;
+    const text = relationText(row);
+    const relationshipText = stringList3(row.fields?.relationshipStates).join("\uFF1B");
+    for (const target of nodes) {
+      if (target.id === source.id || target.label.trim().length < 2) continue;
+      if (!text.includes(target.label.trim().toLowerCase())) continue;
+      if (scope === "relations" && (source.type !== "character" || target.type !== "character")) continue;
+      const label = relationshipText && relationshipText.toLowerCase().includes(target.label.toLowerCase()) ? compactLabel(relationshipText) : "\u5173\u8054";
+      const key = uniquePairKey(source.id, target.id, label);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ id: `edge:${source.id}:${target.id}`, source: source.id, target: target.id, label, detail: relationshipText || row.content });
     }
   }
   return { nodes, edges };
@@ -4861,16 +5128,16 @@ function root() {
         <header class="ma11-header">
           <div>
             <div class="ma11-brand">\u955C\u6E0A <span>${VERSION}</span></div>
-            <div class="ma11-subtitle">\u52A8\u6001\u4E8B\u5B9E\u89C6\u56FE\u3001\u4E8B\u4EF6\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
+            <div class="ma11-subtitle">\u5BF9\u8C61\u4E8B\u5B9E\u89C6\u56FE\u3001\u4E8B\u4EF6\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
           </div>
           <button class="ma11-icon-button" data-ma11-action="close" aria-label="\u5173\u95ED">\xD7</button>
         </header>
         <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">
           ${[
       ["overview", "\u603B\u89C8"],
-      ["tables", "\u72B6\u6001\u8868"],
+      ["tables", "\u5BF9\u8C61\u89C6\u56FE"],
       ["tableManager", "\u8868\u683C\u7BA1\u7406"],
-      ["graph", "\u5173\u7CFB\u56FE\u8C31"],
+      ["graph", "\u5BF9\u8C61\u56FE\u8C31"],
       ["summaries", "\u603B\u7ED3"],
       ["audit", "\u89C4\u5219\u5BA1\u6838"],
       ["sync", "\u4E16\u754C\u4E66"],
@@ -4884,14 +5151,28 @@ function root() {
       </div>
       <div class="ma11-editor-backdrop" hidden>
         <form class="ma11-editor" id="ma11-row-editor">
-          <header><b>\u7F16\u8F91\u72B6\u6001\u884C</b><button type="button" data-ma11-action="close-editor">\xD7</button></header>
+          <header><b>\u7F16\u8F91\u5BF9\u8C61\u6761\u76EE</b><button type="button" data-ma11-action="close-editor">\xD7</button></header>
           <input type="hidden" name="tableKey" />
           <input type="hidden" name="rowId" />
           <label>\u5BF9\u8C61<input name="title" required maxlength="240" /></label>
           <label>\u5F53\u524D\u4E8B\u5B9E<textarea name="content" rows="6" maxlength="12000"></textarea></label>
           <label>\u72B6\u6001<input name="status" maxlength="120" /></label>
           <label>\u5173\u952E\u8BCD\uFF08\u9017\u53F7\u5206\u9694\uFF09<input name="keywords" maxlength="800" /></label>
-          <label class="ma11-switch"><input type="checkbox" name="locked" /><span>\u73A9\u5BB6\u9501\u5B9A\uFF08\u81EA\u52A8\u6574\u7406\u4E0D\u5F97\u8986\u76D6\uFF09</span></label>
+          <label class="ma11-switch"><input type="checkbox" name="locked" /><span>\u5B8C\u5168\u9501\u5B9A\uFF08\u57FA\u7840\u548C\u72B6\u6001\u5747\u4E0D\u81EA\u52A8\u4FEE\u6539\uFF09</span></label>
+          <p class="ma11-help">\u666E\u901A\u4EBA\u5DE5\u6761\u76EE\u9ED8\u8BA4\u53EA\u4FDD\u62A4\u57FA\u7840\u5185\u5BB9\uFF1B\u5F53\u524D\u72B6\u6001\u3001\u5173\u7CFB\u548C\u80FD\u529B\u4ECD\u53EF\u4F9D\u636E\u660E\u786E\u4E8B\u5B9E\u66F4\u65B0\u3002</p>
+          <fieldset class="ma11-object-editor">
+            <legend>\u5BF9\u8C61\u5206\u5C42\u5185\u5BB9</legend>
+            <label>\u57FA\u7840\u5185\u5BB9<textarea name="baseContent" rows="4" maxlength="12000" placeholder="\u7A33\u5B9A\u5B9A\u4E49\uFF1B\u540E\u7EED\u603B\u7ED3\u4E0D\u5F97\u6539\u5199"></textarea></label>
+            <label>\u5DF2\u56FA\u5316\u5386\u53F2\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="solidifiedHistory" rows="3" maxlength="8000"></textarea></label>
+            <label>\u5F53\u524D\u72B6\u6001\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="currentStates" rows="4" maxlength="8000"></textarea></label>
+            <label>\u5173\u8054\u5BF9\u8C61\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="relatedObjects" rows="3" maxlength="4000"></textarea></label>
+            <label>\u5173\u8054\u4E8B\u4EF6\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="relatedEvents" rows="3" maxlength="4000"></textarea></label>
+          </fieldset>
+          <fieldset class="ma11-character-object-editor" data-ma11-character-object-fields hidden>
+            <legend>\u89D2\u8272\u53EF\u53D8\u4FE1\u606F</legend>
+            <label>\u5173\u7CFB\u72B6\u6001\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="relationshipStates" rows="3" maxlength="6000"></textarea></label>
+            <label>\u80FD\u529B\u72B6\u6001\uFF08\u6BCF\u884C\u4E00\u9879\uFF09<textarea name="abilityStates" rows="3" maxlength="6000"></textarea></label>
+          </fieldset>
           <fieldset class="ma11-lifecycle-editor" data-ma11-lifecycle-fields hidden>
             <legend>\u4EBA\u7269\u751F\u547D\u5468\u671F</legend>
             <div class="ma11-editor-grid">
@@ -5007,12 +5288,12 @@ function recentTasksHtml() {
 }
 function refreshTaskList() {
   const workspace = document.querySelector("#ma11-workspace");
-  const list3 = workspace?.querySelector("[data-ma11-task-list]");
+  const list4 = workspace?.querySelector("[data-ma11-task-list]");
   const count = workspace?.querySelector("[data-ma11-task-count]");
-  if (!list3 || !count) return;
+  if (!list4 || !count) return;
   const tasks = recentTasksHtml();
   count.textContent = tasks.count ? `${tasks.count} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2";
-  list3.innerHTML = tasks.html;
+  list4.innerHTML = tasks.html;
 }
 function handleQueueChange() {
   refreshTaskList();
@@ -5033,12 +5314,12 @@ async function overviewHtml(artifactInfo) {
     <section class="ma11-hero">
       <div>
         <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
-        <p>${artifact ? `\u72B6\u6001\u8868 ${rows} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
+        <p>${artifact ? `\u5BF9\u8C61\u89C6\u56FE ${rows} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
       </div>
       <div class="ma11-actions">
         <button data-ma11-action="process-latest" ${enabled ? "" : "disabled"}>\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
-        <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}>\u67E5\u770B\u72B6\u6001\u8868</button>
-        <button data-ma11-action="open-graph" ${artifact?.snapshot ? "" : "disabled"}>\u5173\u7CFB\u56FE\u8C31</button>
+        <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u89C6\u56FE</button>
+        <button data-ma11-action="open-graph" ${artifact?.snapshot ? "" : "disabled"}>\u5BF9\u8C61\u56FE\u8C31</button>
       </div>
     </section>
     ${stageCards(artifact)}
@@ -5082,12 +5363,14 @@ function rowCustomFieldsHtml(row, table) {
   }).filter(Boolean);
   return lines.length ? `<div class="ma11-custom-fields">${lines.join("")}</div>` : "";
 }
-function tableHtml(artifactInfo) {
+async function tableHtml(artifactInfo) {
   const settings = getSettings();
   const registry2 = normalizeTableRegistry(settings.tableRegistry);
   const visibleTables = enabledTables(registry2);
   const artifact = artifactInfo?.artifact;
   const latest = latestSnapshotArtifact();
+  const chatState = await getChatState(currentChatKey());
+  const focusObjectId = chatState.focusObjectId || "";
   const editable = Boolean(settings.enabled && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey);
   if (!visibleTables.length) {
     return `<section class="ma11-empty-panel"><h2>\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u683C</h2><p>\u5185\u90E8\u4E8B\u5B9E\u5C42\u4ECD\u4F1A\u4FDD\u5B58\u4E8B\u4EF6\u7EBF\u548C\u603B\u7ED3\u6D88\u8D39\u72B6\u6001\u3002\u8BF7\u5728\u201C\u8868\u683C\u7BA1\u7406\u201D\u4E2D\u542F\u7528\u6216\u65B0\u589E\u89C6\u56FE\u3002</p><button data-ma11-action="open-table-manager">\u6253\u5F00\u8868\u683C\u7BA1\u7406</button></section>`;
@@ -5115,11 +5398,11 @@ function tableHtml(artifactInfo) {
         <thead><tr><th>\u5E8F\u53F7</th><th>\u5BF9\u8C61</th><th>\u5F53\u524D\u8BB0\u5F55</th><th>\u72B6\u6001\u4E0E\u5173\u952E\u8BCD</th><th>\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4</th><th>\u64CD\u4F5C</th></tr></thead>
         <tbody>${rows.length ? rows.map((row, index) => `<tr>
           <td>${index + 1}</td>
-          <td class="ma11-cell-title"><b>${escapeHtml(row.title)}</b></td>
+          <td class="ma11-cell-title"><b>${escapeHtml(row.title)}</b>${row.id === focusObjectId ? `<span class="ma11-badge">\u5E38\u9A7B\u7126\u70B9</span>` : ""}</td>
           <td class="ma11-cell-content">${escapeHtml(row.content)}${rowCustomFieldsHtml(row, activeDefinition)}</td>
           <td><div class="ma11-cell-status">${row.status ? `<span class="ma11-status-text">${escapeHtml(row.status)}</span>` : ""}${lifecycleHtml(row)}<div class="ma11-keyword-list">${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</div></div></td>
-          <td><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.source === "manual" || row.locked ? "\u73A9\u5BB6\u9501\u5B9A" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
-          <td><div class="ma11-row-actions"><button data-ma11-edit-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u5220\u9664</button></div></td>
+          <td><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.locked ? "\u5B8C\u5168\u9501\u5B9A" : row.source === "manual" ? "\u4EBA\u5DE5\u57FA\u7840" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
+          <td><div class="ma11-row-actions">${["characters", "state"].includes(activeDefinition.role) ? row.id === focusObjectId ? `<button data-ma11-action="clear-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u53D6\u6D88\u7126\u70B9</button>` : `<button data-ma11-action="set-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u8BBE\u4E3A\u7126\u70B9</button>` : ""}<button data-ma11-edit-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u5220\u9664</button></div></td>
         </tr>`).join("") : `<tr><td colspan="6" class="ma11-empty">\u8BE5\u89C6\u56FE\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
       </table>` : '<div class="ma11-empty-panel">\u5C1A\u65E0\u72B6\u6001\u8868\u3002\u70B9\u51FB\u201C\u6574\u7406\u6700\u65B0\u6B63\u6587\u201D\u3002</div>'}
     </section>`;
@@ -5151,7 +5434,7 @@ function tableManagerHtml(artifactInfo) {
       <p class="ma11-help">\u952E\uFF1A${escapeHtml(table.key)} \xB7 \u89D2\u8272\uFF1A${escapeHtml(table.role)}\u3002\u540D\u79F0\u3001\u7528\u9014\u4E0E\u5B57\u6BB5\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\u548C JSON Schema\u3002</p>
     </article>`;
   }).join("");
-  return `<section class="ma11-toolbar"><div><h2>\u8868\u683C\u7BA1\u7406</h2><p>\u8868\u683C\u662F\u5185\u90E8\u4E8B\u5B9E\u7684\u53EF\u89C1\u89C6\u56FE\uFF0C\u6570\u91CF\u4E0D\u9650\u3002\u505C\u7528\u6216\u5220\u9664\u540E\u4E0D\u518D\u8981\u6C42\u6A21\u578B\u8F93\u51FA\uFF0C\u4E5F\u4E0D\u518D\u8FDB\u5165 UI \u4E0E\u4E16\u754C\u4E66\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u5341\u8868</button></div></section>
+  return `<section class="ma11-toolbar"><div><h2>\u8868\u683C\u7BA1\u7406</h2><p>\u8868\u683C\u662F\u5185\u90E8\u4E8B\u5B9E\u7684\u53EF\u89C1\u89C6\u56FE\uFF0C\u6570\u91CF\u4E0D\u9650\u3002\u505C\u7528\u6216\u5220\u9664\u540E\u4E0D\u518D\u8981\u6C42\u6A21\u578B\u8F93\u51FA\uFF0C\u4E5F\u4E0D\u518D\u8FDB\u5165 UI \u4E0E\u4E16\u754C\u4E66\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u516B\u8868</button></div></section>
     <section class="ma11-card ma11-form-card ma11-new-table">
       <header><b>\u65B0\u589E\u81EA\u5B9A\u4E49\u8868\u683C</b><span>\u65B0\u589E\u540E\u81EA\u52A8\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001 Schema</span></header>
       <label>\u540D\u79F0<input data-ma11-new-table-name maxlength="80" placeholder="\u4F8B\u5982\uFF1A\u7EC4\u7EC7\u72B6\u6001" /></label>
@@ -5242,7 +5525,7 @@ ${node.detail}`)}</title></g>`
   const graphHeight = Math.round(680 * zoom);
   return `
     <section class="ma11-toolbar ma11-graph-toolbar">
-      <div><h2>\u5173\u7CFB\u56FE\u8C31</h2><p>\u7531\u5F53\u524D\u72B6\u6001\u8868\u751F\u6210\uFF0C\u53EA\u8BFB\u5C55\u793A\uFF0C\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002</p></div>
+      <div><h2>\u5BF9\u8C61\u56FE\u8C31</h2><p>\u7531\u5F53\u524D\u72B6\u6001\u8868\u751F\u6210\uFF0C\u53EA\u8BFB\u5C55\u793A\uFF0C\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002</p></div>
       <div class="ma11-graph-toolbar-actions">
         <div class="ma11-segmented"><button class="${settings.ui.graphScope === "relations" ? "active" : ""}" data-ma11-graph-scope="relations">\u4EBA\u7269\u5173\u7CFB</button><button class="${settings.ui.graphScope === "world" ? "active" : ""}" data-ma11-graph-scope="world">\u5168\u5C40\u7F51\u7EDC</button></div>
         <div class="ma11-graph-zoom" aria-label="\u56FE\u8C31\u7F29\u653E">
@@ -5255,7 +5538,7 @@ ${node.detail}`)}</title></g>`
         </div>
       </div>
     </section>
-    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5173\u7CFB\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
+    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5BF9\u8C61\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
 }
 async function summariesHtml() {
   const info = latestSnapshotArtifact();
@@ -5325,7 +5608,7 @@ async function syncHtml() {
         <label>\u6700\u5927\u5411\u91CF\u5019\u9009\u6761\u76EE <small>\u955C\u6E0A\u53D1\u5E03\u88C1\u526A</small><input type="number" min="1" max="100" data-ma11-recall-setting="maxVectorResults" value="${settings.lorebookRecall.maxVectorResults}" /></label>
         <label>\u4E16\u754C\u4E66\u603B\u5BB9\u91CF\uFF08\u5B57\u7B26\uFF09<input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
       </div>
-      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${settings.enabled && info && !state2?.historyInvalidation ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5173\u7CFB\u56FE\u8C31</button></div>
+      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${settings.enabled && info && !state2?.historyInvalidation ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
     </section>`;
@@ -5412,7 +5695,7 @@ async function renderWorkspace() {
     );
     let html = "";
     if (settings.ui.activeTab === "overview") html = await overviewHtml(info);
-    if (settings.ui.activeTab === "tables") html = tableHtml(info);
+    if (settings.ui.activeTab === "tables") html = await tableHtml(info);
     if (settings.ui.activeTab === "tableManager") html = tableManagerHtml(info);
     if (settings.ui.activeTab === "graph") html = graphHtml(info);
     if (settings.ui.activeTab === "summaries") html = await summariesHtml();
@@ -5482,9 +5765,22 @@ function openRowEditor(tableKey, row) {
   form.elements.namedItem("content").value = row?.content || "";
   form.elements.namedItem("status").value = row?.status || "active";
   form.elements.namedItem("keywords").value = row?.keywords.join(", ") || "";
-  form.elements.namedItem("locked").checked = row?.locked ?? true;
+  form.elements.namedItem("locked").checked = row?.locked ?? false;
+  const objectFields = row?.fields ?? {};
+  const setList = (name, value) => {
+    form.elements.namedItem(name).value = Array.isArray(value) ? value.join("\n") : String(value ?? "");
+  };
+  setList("baseContent", objectFields.baseContent);
+  setList("solidifiedHistory", objectFields.solidifiedHistory);
+  setList("currentStates", objectFields.currentStates);
+  setList("relatedObjects", objectFields.relatedObjects);
+  setList("relatedEvents", objectFields.relatedEvents);
+  setList("relationshipStates", objectFields.relationshipStates);
+  setList("abilityStates", objectFields.abilityStates);
   const lifecycleFields = form.querySelector("[data-ma11-lifecycle-fields]");
-  const supportsLifecycle = tableByKey(getSettings().tableRegistry, tableKey)?.role === "state";
+  const supportsLifecycle = ["characters", "state"].includes(tableByKey(getSettings().tableRegistry, tableKey)?.role || "");
+  const characterObjectFields = form.querySelector("[data-ma11-character-object-fields]");
+  if (characterObjectFields) characterObjectFields.hidden = !supportsLifecycle;
   if (lifecycleFields) lifecycleFields.hidden = !supportsLifecycle;
   if (supportsLifecycle) {
     const life = row?.lifecycle;
@@ -5517,7 +5813,7 @@ async function saveRow(form) {
   const status = form.elements.namedItem("status").value.trim();
   const keywords = form.elements.namedItem("keywords").value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
   const locked = form.elements.namedItem("locked").checked;
-  const supportsLifecycle = tableByKey(getSettings().tableRegistry, tableKey)?.role === "state";
+  const supportsLifecycle = ["characters", "state"].includes(tableByKey(getSettings().tableRegistry, tableKey)?.role || "");
   const listFrom = (name) => form.elements.namedItem(name).value.split(/\n|[；;]/).map((item) => item.trim()).filter(Boolean);
   const lifecycle = supportsLifecycle ? {
     existence: form.elements.namedItem("existence").value,
@@ -5528,6 +5824,17 @@ async function saveRow(form) {
     returnConditions: listFrom("returnConditions"),
     returnBlockers: listFrom("returnBlockers")
   } : void 0;
+  const fields = {
+    baseContent: form.elements.namedItem("baseContent").value.trim(),
+    solidifiedHistory: listFrom("solidifiedHistory"),
+    currentStates: listFrom("currentStates"),
+    relatedObjects: listFrom("relatedObjects"),
+    relatedEvents: listFrom("relatedEvents")
+  };
+  if (supportsLifecycle) {
+    fields.relationshipStates = listFrom("relationshipStates");
+    fields.abilityStates = listFrom("abilityStates");
+  }
   info.artifact.snapshot = upsertManualRow(info.artifact.snapshot, tableKey, {
     id: rowId || void 0,
     title,
@@ -5535,7 +5842,9 @@ async function saveRow(form) {
     status,
     keywords,
     locked,
-    lifecycle
+    lockMode: locked ? "all" : "base",
+    lifecycle,
+    fields
   }, getSettings().tableRegistry);
   const message = getMessage(info.index);
   if (message) attachArtifactToMessage(message, info.artifact);
@@ -5551,6 +5860,11 @@ async function deleteRowAction(rowId) {
   const tableKey = getSettings().ui.activeTable;
   if (!confirm("\u786E\u5B9A\u5220\u9664\u8FD9\u6761\u72B6\u6001\u5417\uFF1F")) return;
   info.artifact.snapshot = deleteRow(info.artifact.snapshot, tableKey, rowId, getSettings().tableRegistry);
+  const chatState = await getChatState(info.artifact.chatKey);
+  if (chatState.focusObjectId === rowId) {
+    chatState.focusObjectId = void 0;
+    await putChatState(chatState);
+  }
   const message = getMessage(info.index);
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
@@ -5706,10 +6020,26 @@ function bindWorkspace(workspace) {
         if (window.confirm(warning)) await updateTableRegistryAndSync(removeTableDefinition(getSettings().tableRegistry, tableDefinitionKey));
       }
       if (action === "restore-default-tables") {
-        if (window.confirm("\u6062\u590D\u9ED8\u8BA4\u5341\u8868\u4F1A\u66FF\u6362\u5F53\u524D\u8868\u683C\u6CE8\u518C\u8868\uFF1B\u81EA\u5B9A\u4E49\u89C6\u56FE\u5C06\u9000\u51FA\uFF0C\u4F46\u5185\u90E8\u4E8B\u5B9E\u3001\u603B\u7ED3\u548C\u4EBA\u5DE5\u4E16\u754C\u4E66\u6761\u76EE\u4E0D\u4F1A\u5220\u9664\u3002\u662F\u5426\u7EE7\u7EED\uFF1F")) {
+        if (window.confirm("\u6062\u590D\u9ED8\u8BA4\u516B\u8868\u4F1A\u66FF\u6362\u5F53\u524D\u8868\u683C\u6CE8\u518C\u8868\uFF1B\u81EA\u5B9A\u4E49\u89C6\u56FE\u5C06\u9000\u51FA\uFF0C\u4F46\u5185\u90E8\u4E8B\u5B9E\u3001\u603B\u7ED3\u548C\u4EBA\u5DE5\u4E16\u754C\u4E66\u6761\u76EE\u4E0D\u4F1A\u5220\u9664\u3002\u662F\u5426\u7EE7\u7EED\uFF1F")) {
           await updateTableRegistryAndSync(restoreDefaultTableRegistry());
-          toast("success", "\u5DF2\u6062\u590D\u9ED8\u8BA4\u5341\u8868");
+          toast("success", "\u5DF2\u6062\u590D\u9ED8\u8BA4\u516B\u8868");
         }
+      }
+      if (action === "set-focus" || action === "clear-focus") {
+        const rowId = actionButton?.dataset.ma11FocusRow || "";
+        const info = latestSnapshotArtifact();
+        if (!info?.artifact.snapshot) throw new Error("\u5C1A\u65E0\u53EF\u8BBE\u7F6E\u7126\u70B9\u7684\u89D2\u8272\u89C6\u56FE");
+        const registry2 = normalizeTableRegistry(getSettings().tableRegistry);
+        const characterTable = registry2.find((table2) => ["characters", "state"].includes(table2.role));
+        if (!characterTable) throw new Error("\u5F53\u524D\u6CA1\u6709\u89D2\u8272\u89C6\u56FE");
+        const row = (info.artifact.snapshot[characterTable.key] ?? []).find((item) => item.id === rowId);
+        if (action === "set-focus" && !row) throw new Error("\u7126\u70B9\u76EE\u6807\u4E0D\u662F\u5F53\u524D\u89D2\u8272\u6761\u76EE");
+        const state2 = await getChatState(info.artifact.chatKey);
+        state2.focusObjectId = action === "set-focus" ? rowId : void 0;
+        await putChatState(state2);
+        if (getSettings().lorebookSync) await retryStage(info.index, "sync");
+        toast("success", action === "set-focus" ? `\u5DF2\u5C06\u201C${row?.title || "\u89D2\u8272"}\u201D\u8BBE\u4E3A\u552F\u4E00\u5E38\u9A7B\u7126\u70B9` : "\u5DF2\u53D6\u6D88\u5E38\u9A7B\u7126\u70B9");
+        await renderWorkspace();
       }
       if (action === "add-row") openRowEditor(getSettings().ui.activeTable);
       if (action === "close-editor") closeEditor();
