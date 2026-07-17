@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.13";
-var PIPELINE_VERSION = "ma-pipeline-17";
+var VERSION = "1.2.0-rc.17";
+var PIPELINE_VERSION = "ma-pipeline-21";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
@@ -607,6 +607,23 @@ function firstInconsistentArtifactIndex(chat, moduleName, identityAt, fingerprin
       artifact && (artifact.messageIndex !== index || artifact.messageKey !== identityAt(index) || artifact.sourceFingerprint !== fingerprintAt(index))
     );
   });
+}
+
+// src/core/presentation-events.ts
+var auditListeners = /* @__PURE__ */ new Set();
+function publishAuditPresentation(index, hidden, marked = false) {
+  const state2 = { index, hidden, marked: !hidden && marked };
+  for (const listener of auditListeners) {
+    try {
+      listener(state2);
+    } catch (error) {
+      console.warn("[MirrorAbyss] audit presentation listener failed", error);
+    }
+  }
+}
+function subscribeAuditPresentation(listener) {
+  auditListeners.add(listener);
+  return () => auditListeners.delete(listener);
 }
 
 // src/llm/request-scheduler.ts
@@ -1219,14 +1236,6 @@ function parseAuditResult(raw) {
     throw new Error("\u89C4\u5219\u5BA1\u6838\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548JSON\u3001MA_OK\u6216MA_FAIL");
   }
 }
-function findMessageElement(index) {
-  return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
-}
-function applyAuditVisibility(index, hidden, marked = false) {
-  const element = findMessageElement(index);
-  element?.classList.toggle("ma11-audit-hidden-message", hidden);
-  element?.classList.toggle("ma11-audit-marked-message", !hidden && marked);
-}
 async function auditText(playerRules, playerText, assistantText) {
   const request = {
     task: "audit",
@@ -1259,16 +1268,16 @@ async function auditText(playerRules, playerText, assistantText) {
 async function applyAuditFailureAction(artifact, action) {
   if (action === "mark") {
     artifact.hiddenByAudit = false;
-    applyAuditVisibility(artifact.messageIndex, false, true);
+    publishAuditPresentation(artifact.messageIndex, false, true);
     return;
   }
   if (action === "hide") {
     artifact.hiddenByAudit = true;
-    applyAuditVisibility(artifact.messageIndex, true);
+    publishAuditPresentation(artifact.messageIndex, true);
     return;
   }
   artifact.hiddenByAudit = true;
-  applyAuditVisibility(artifact.messageIndex, true);
+  publishAuditPresentation(artifact.messageIndex, true);
   toast("warning", "\u5BA1\u6838\u672A\u901A\u8FC7\u4E14\u5B9A\u5411\u4FEE\u6B63\u672A\u6210\u529F\uFF1B\u6B63\u6587\u5DF2\u4FDD\u7559\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u5904\u7406");
 }
 async function runAudit(artifact, force = false) {
@@ -1278,7 +1287,7 @@ async function runAudit(artifact, force = false) {
     markStage(artifact, "audit", "skipped");
     markStage(artifact, "revision", "skipped");
     artifact.hiddenByAudit = false;
-    applyAuditVisibility(artifact.messageIndex, false, false);
+    publishAuditPresentation(artifact.messageIndex, false, false);
     artifact.audit = {
       passed: true,
       decision: "pass",
@@ -1304,7 +1313,7 @@ async function runAudit(artifact, force = false) {
     if (result.passed) {
       artifact.approvedFingerprint = artifact.sourceFingerprint;
       artifact.hiddenByAudit = false;
-      applyAuditVisibility(artifact.messageIndex, false, false);
+      publishAuditPresentation(artifact.messageIndex, false, false);
       markStage(artifact, "audit", "success");
       markStage(artifact, "revision", "skipped");
     } else {
@@ -1419,12 +1428,13 @@ function shouldAttemptRevision(audit) {
   return !audit.passed;
 }
 async function runRevisionFlow(artifact, publishProgress) {
+  assertArtifactCommitCurrent(artifact);
   const settings = getSettings();
   const firstAudit = artifact.audit;
   if (!firstAudit || firstAudit.passed) throw new Error("\u6CA1\u6709\u53EF\u4FEE\u6B63\u7684\u5BA1\u6838\u5931\u8D25\u7ED3\u679C");
   artifact.revision = initialRevisionRecord(artifact);
   artifact.hiddenByAudit = false;
-  applyAuditVisibility(artifact.messageIndex, false, true);
+  publishAuditPresentation(artifact.messageIndex, false, true);
   toast("info", "\u5BA1\u6838\u672A\u901A\u8FC7\uFF0C\u6B63\u5728\u5B9A\u5411\u4FEE\u6B63\u5F53\u524D\u6B63\u6587");
   artifact.revision.status = "running";
   markStage(artifact, "revision", "running");
@@ -1436,6 +1446,7 @@ async function runRevisionFlow(artifact, publishProgress) {
   const maxAttempts = Math.min(2, Math.max(1, Number(settings.maxRevisionAttempts) || 1));
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      assertArtifactCommitCurrent(artifact);
       const supplied = attempt === 1 ? currentAudit.replacementText : void 0;
       const raw = supplied ?? await generateTask({
         task: "revision",
@@ -1456,7 +1467,7 @@ async function runRevisionFlow(artifact, publishProgress) {
       if (candidateAudit.passed) {
         artifact.audit = candidateAudit;
         await replaceMessageInPlace(artifact, candidate);
-        applyAuditVisibility(artifact.messageIndex, false, false);
+        publishAuditPresentation(artifact.messageIndex, false, false);
         artifact.revision.status = "success";
         artifact.revision.finalFingerprint = artifact.sourceFingerprint;
         artifact.revision.committedAt = nowIso();
@@ -3058,7 +3069,173 @@ function resolveChangedIndex(payload) {
   for (const candidate of candidates) {
     if (candidate !== void 0 && candidate !== null && Number.isInteger(Number(candidate))) return Number(candidate);
   }
+  const directMessage = payload?.message;
+  if (directMessage && typeof directMessage === "object") {
+    const index = getChat().indexOf(directMessage);
+    if (index >= 0) return index;
+  }
   return null;
+}
+function isLatestAssistantReplacement(index) {
+  if (index === null || index < 0) return false;
+  const chat = getChat();
+  return index === chat.length - 1 && index === latestAssistantIndex() && isProcessableAssistantMessage(getMessage(index));
+}
+function latestSuccessfulMessageKeyAtOrBefore(index, chatKey) {
+  for (let current = Math.min(index, getChat().length - 1); current >= 0; current -= 1) {
+    const artifact = getAttachedArtifact(getMessage(current));
+    if (artifact?.chatKey === chatKey && artifact.snapshot && artifact.stages.state.status === "success") {
+      return artifact.messageKey;
+    }
+  }
+  return void 0;
+}
+function removeSummariesForMessage(state2, messageKey) {
+  const removedSmallIds = new Set(
+    state2.smallSummaries.filter((summary) => summary.sourceKeys.includes(messageKey)).map((summary) => summary.id)
+  );
+  state2.smallSummaries = state2.smallSummaries.filter((summary) => !removedSmallIds.has(summary.id));
+  state2.largeSummaries = state2.largeSummaries.filter(
+    (summary) => !summary.sourceKeys.some((key) => removedSmallIds.has(key))
+  );
+}
+function currentArtifactKeys(chatKey) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const message of getChat()) {
+    const artifact = getAttachedArtifact(message);
+    if (artifact?.chatKey === chatKey) keys.add(artifact.messageKey);
+  }
+  return keys;
+}
+function reconcileOrphanedManagedKeys(state2, chatKey) {
+  const liveKeys = currentArtifactKeys(chatKey);
+  const orphanedKeys = new Set(
+    state2.processedMessageKeys.filter((key) => !liveKeys.has(key))
+  );
+  if (state2.latestSnapshotMessageKey && !liveKeys.has(state2.latestSnapshotMessageKey)) {
+    orphanedKeys.add(state2.latestSnapshotMessageKey);
+  }
+  for (const messageKey of orphanedKeys) removeSummariesForMessage(state2, messageKey);
+  state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => liveKeys.has(key));
+  state2.latestSnapshotMessageKey = latestSuccessfulMessageKeyAtOrBefore(getChat().length - 1, chatKey);
+  return orphanedKeys;
+}
+function hasRemainingArtifactInconsistency() {
+  return firstInconsistentArtifactIndex(
+    getChat(),
+    MODULE_NAME,
+    messageIdentity,
+    messageFingerprint
+  ) !== -1;
+}
+async function clearFalseLatestSwipeInvalidation(index, chatKey) {
+  if (!isLatestAssistantReplacement(index) || currentChatKey() !== chatKey) return false;
+  const state2 = await getChatState(chatKey);
+  const invalidation = state2.historyInvalidation;
+  if (!invalidation || invalidation.reason !== "swiped" || invalidation.startIndex !== index) return false;
+  delete state2.historyInvalidation;
+  state2.lastSyncStatus = "idle";
+  state2.lastSyncError = void 0;
+  await putChatState(state2);
+  return true;
+}
+async function clearFalseTailDeletionInvalidation(chatKey) {
+  if (currentChatKey() !== chatKey || hasRemainingArtifactInconsistency()) return false;
+  const state2 = await getChatState(chatKey);
+  const invalidation = state2.historyInvalidation;
+  if (!invalidation || invalidation.reason !== "deleted" || invalidation.startIndex !== void 0) return false;
+  reconcileOrphanedManagedKeys(state2, chatKey);
+  delete state2.historyInvalidation;
+  state2.lastSyncStatus = "idle";
+  state2.lastSyncError = void 0;
+  await putChatState(state2);
+  return true;
+}
+async function invalidateLatestAssistantVersion(index) {
+  if (!isLatestAssistantReplacement(index)) return;
+  const chatKey = currentChatKey();
+  const message = getMessage(index);
+  if (!message) return;
+  const currentFingerprint = messageFingerprint(index);
+  const attached = getAttachedArtifact(message);
+  const staleArtifact = attached?.chatKey === chatKey && attached.sourceFingerprint !== currentFingerprint ? attached : null;
+  if (!staleArtifact) {
+    await clearFalseLatestSwipeInvalidation(index, chatKey);
+    return;
+  }
+  taskQueue.cancelPending(
+    (task) => task.chatKey === chatKey && (task.kind !== "pipeline" || task.key.endsWith(`:${staleArtifact.messageKey}`)),
+    "\u6700\u65B0\u6B63\u6587\u5DF2\u91CD\u65B0\u751F\u6210\uFF0C\u65E7\u7248\u672C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88"
+  );
+  if (message.extra?.[MODULE_NAME] === staleArtifact) {
+    delete message.extra[MODULE_NAME];
+    notify(index, null);
+    await persistChat();
+  }
+  if (currentChatKey() !== chatKey || messageFingerprint(index) !== currentFingerprint) return;
+  const state2 = await getChatState(chatKey);
+  state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => key !== staleArtifact.messageKey);
+  removeSummariesForMessage(state2, staleArtifact.messageKey);
+  state2.latestSnapshotMessageKey = latestSuccessfulMessageKeyAtOrBefore(index, chatKey);
+  if (state2.historyInvalidation?.reason === "swiped" && state2.historyInvalidation.startIndex === index) {
+    delete state2.historyInvalidation;
+  }
+  state2.lastSyncStatus = "idle";
+  state2.lastSyncError = void 0;
+  await putChatState(state2);
+  const currentArtifact2 = getAttachedArtifact(getMessage(index));
+  const currentVersionCommitted = Boolean(
+    currentArtifact2?.chatKey === chatKey && currentArtifact2.sourceFingerprint === currentFingerprint && currentArtifact2.snapshot && currentArtifact2.stages.state.status === "success" && state2.processedMessageKeys.includes(currentArtifact2.messageKey)
+  );
+  if (getSettings().lorebookSync && !currentVersionCommitted) {
+    try {
+      await pauseCurrentChatLorebookEntries(chatKey);
+    } catch (error) {
+      console.warn("[MirrorAbyss] failed to pause lorebook after latest response regeneration", error);
+      toast("warning", `\u6700\u65B0\u6B63\u6587\u5DF2\u91CD\u65B0\u751F\u6210\uFF0C\u4F46\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    }
+  }
+  notify(index, null);
+  toast("info", "\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u91CD\u65B0\u751F\u6210\uFF0C\u65E7\u6574\u7406\u7ED3\u679C\u5DF2\u5E9F\u5F03\uFF1B\u53EF\u91CD\u65B0\u6574\u7406\u5F53\u524D\u6B63\u6587");
+}
+async function invalidateDeletedManagedTail(eventIndex) {
+  const chatKey = currentChatKey();
+  abortActiveRequests();
+  taskQueue.cancelPending(
+    (task) => task.chatKey === chatKey,
+    "\u672B\u7AEF\u6B63\u6587\u5DF2\u5220\u9664\uFF0C\u65E7\u7248\u672C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88"
+  );
+  const state2 = await getChatState(chatKey);
+  if (currentChatKey() !== chatKey) return;
+  if (hasRemainingArtifactInconsistency()) {
+    await invalidateHistory(eventIndex, "deleted");
+    return;
+  }
+  const orphanedKeys = reconcileOrphanedManagedKeys(state2, chatKey);
+  if (state2.historyInvalidation?.reason === "deleted" && state2.historyInvalidation.startIndex === void 0) {
+    delete state2.historyInvalidation;
+  }
+  if (!state2.historyInvalidation) {
+    state2.lastSyncStatus = "idle";
+    state2.lastSyncError = void 0;
+  }
+  await putChatState(state2);
+  if (currentChatKey() !== chatKey || hasRemainingArtifactInconsistency()) return;
+  const refreshedState = await getChatState(chatKey);
+  const currentSnapshot = latestSnapshotForChat(chatKey);
+  const replacementAlreadyCommitted = Boolean(
+    currentSnapshot && refreshedState.processedMessageKeys.includes(currentSnapshot.artifact.messageKey)
+  );
+  if (getSettings().lorebookSync && !replacementAlreadyCommitted && orphanedKeys.size > 0) {
+    try {
+      await pauseCurrentChatLorebookEntries(chatKey);
+    } catch (error) {
+      console.warn("[MirrorAbyss] failed to pause lorebook after managed tail deletion", error);
+      toast("warning", `\u672B\u7AEF\u6B63\u6587\u5DF2\u5220\u9664\uFF0C\u4F46\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+    }
+  }
+  notifyFrom(Math.max(0, Math.min(eventIndex ?? getChat().length, getChat().length) - 1));
+  toast("info", "\u68C0\u6D4B\u5230\u672B\u7AEF\u6B63\u6587\u5220\u9664\uFF0C\u65E7\u6574\u7406\u7ED3\u679C\u5DF2\u5E9F\u5F03\uFF1B\u91CD\u65B0\u751F\u6210\u540E\u53EF\u76F4\u63A5\u6574\u7406\u65B0\u6B63\u6587");
 }
 async function pauseLorebookForHistoryChange(chatKey) {
   try {
@@ -3188,13 +3365,22 @@ function startAutomaticDerived(chatKey) {
     toast("error", `\u6D3E\u751F\u6574\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
   });
 }
-async function processMessage(index, force = false, derivedMode = force ? "await" : "background") {
+async function processMessage(index, force = false, derivedMode = force ? "await" : "background", forceRevision = false) {
   if (!getSettings().enabled) return null;
   const message = getMessage(index);
   if (!isProcessableAssistantMessage(message)) return null;
   const identity = messageIdentity(index);
   const scheduledChatKey = currentChatKey();
-  const key = `${PIPELINE_VERSION}:critical:${scheduledChatKey}:${identity}`;
+  if (forceRevision) {
+    await clearFalseLatestSwipeInvalidation(index, scheduledChatKey);
+    await clearFalseTailDeletionInvalidation(scheduledChatKey);
+    taskQueue.cancelPending(
+      (task) => task.chatKey === scheduledChatKey && task.kind === "pipeline" && task.key.endsWith(`:${identity}`) && task.key.includes(":auto:"),
+      "\u5DF2\u7531\u4EBA\u5DE5\u91CD\u65B0\u6574\u7406\u5F53\u524D\u6B63\u6587\uFF0C\u81EA\u52A8\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88"
+    );
+  }
+  const runMode = forceRevision ? "manual-revision" : force ? "forced" : "auto";
+  const key = `${PIPELINE_VERSION}:critical:${runMode}:${scheduledChatKey}:${identity}`;
   const result = await taskQueue.run(
     key,
     `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`,
@@ -3213,7 +3399,8 @@ async function processMessage(index, force = false, derivedMode = force ? "await
       try {
         let audit = await runAudit(artifact, force);
         await saveArtifactToMessage(index, artifact);
-        if (settings.auditFailAction === "revise" && shouldAttemptRevision(audit)) {
+        const revisionRequested = forceRevision || settings.auditFailAction === "revise";
+        if (revisionRequested && shouldAttemptRevision(audit)) {
           const revised = await runRevisionFlow(artifact, async () => {
             await saveArtifactToMessage(index, artifact);
           });
@@ -3221,7 +3408,7 @@ async function processMessage(index, force = false, derivedMode = force ? "await
           await saveArtifactToMessage(index, artifact);
         }
         if (!audit.passed) {
-          const failureAction = settings.auditFailAction === "revise" ? settings.revisionFallbackAction : settings.auditFailAction;
+          const failureAction = revisionRequested ? settings.revisionFallbackAction : settings.auditFailAction === "mark" ? "mark" : "hide";
           await applyAuditFailureAction(artifact, failureAction);
           markStage(artifact, "state", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
           markStage(artifact, "summary", "blocked", "\u89C4\u5219\u5BA1\u6838\u672A\u901A\u8FC7");
@@ -3247,12 +3434,12 @@ async function processMessage(index, force = false, derivedMode = force ? "await
         return { artifact, shouldDerive: false };
       } catch (error) {
         const messageText = toErrorMessage(error);
-        console.error("[MirrorAbyss] critical pipeline failed", error);
         if (error instanceof CommitRejectedError) {
           toast("warning", messageText);
           throw error;
         }
         if (error instanceof Error && error.name === "AbortError") throw error;
+        console.error("[MirrorAbyss] critical pipeline failed", error);
         try {
           await saveArtifactToMessage(index, artifact);
         } catch (saveError) {
@@ -3434,7 +3621,8 @@ async function retryStage(index, stage) {
   if (["summary", "sync"].includes(stage) && latestSnapshot?.index !== index) {
     throw new Error("\u603B\u7ED3\u548C\u4E16\u754C\u4E66\u53EA\u80FD\u57FA\u4E8E\u6700\u65B0\u6210\u529F\u72B6\u6001\u8868");
   }
-  if (stage === "audit" || stage === "revision") return processMessage(index, true, "await");
+  if (stage === "audit") return processMessage(index, true, "await");
+  if (stage === "revision") return processMessage(index, true, "await", true);
   const artifact = latestSnapshot?.index === index ? latestSnapshot.artifact : await loadOrCreateArtifact(index, false);
   const chatKey = artifact.chatKey;
   if (stage === "state") {
@@ -3579,8 +3767,34 @@ function installPipelineEventHandlers() {
     });
   };
   const onEdited = (payload) => handleInvalidation(payload, "edited");
-  const onSwiped = (payload) => handleInvalidation(payload, "swiped");
-  const onDeleted = (payload) => handleInvalidation(payload, "deleted");
+  const onSwiped = (payload) => {
+    const index = resolveChangedIndex(payload);
+    if (isLatestAssistantReplacement(index)) {
+      void invalidateLatestAssistantVersion(index).catch((error) => {
+        console.error("[MirrorAbyss] latest response regeneration handling failed", error);
+        toast("error", `\u6700\u65B0\u6B63\u6587\u91CD\u65B0\u751F\u6210\u5904\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+      });
+      return;
+    }
+    handleInvalidation(payload, "swiped");
+  };
+  const onDeleted = (payload) => {
+    const scannedIndex = firstInconsistentArtifactIndex(
+      getChat(),
+      MODULE_NAME,
+      messageIdentity,
+      messageFingerprint
+    );
+    if (scannedIndex === -1) {
+      const eventIndex = resolveChangedIndex(payload);
+      void invalidateDeletedManagedTail(eventIndex).catch((error) => {
+        console.error("[MirrorAbyss] managed tail deletion handling failed", error);
+        toast("error", `\u672B\u7AEF\u6B63\u6587\u5220\u9664\u5904\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+      });
+      return;
+    }
+    handleInvalidation(payload, "deleted");
+  };
   const onChatChanged = () => {
     abortActiveRequests();
     let nextChatKey = "";
@@ -3820,6 +4034,38 @@ async function diagnosticReport() {
     tasks: taskQueue.list().slice(0, 30),
     requests: listRequestTraces().slice(0, 30)
   };
+}
+
+// src/services/plugin-control.ts
+function setPluginEnabled(enabled, options = {}) {
+  const normalized = Boolean(enabled);
+  getSettings().enabled = normalized;
+  setRequestAcceptance(normalized);
+  taskQueue.setAccepting(normalized);
+  if (!normalized) abortActiveRequests();
+  if (options.persist !== false) saveSettings();
+}
+
+// src/services/manual-state.ts
+async function commitManualSnapshot(index, artifact) {
+  assertArtifactCommitCurrent(artifact);
+  const message = getMessage(index);
+  if (!message) throw new Error("\u72B6\u6001\u8868\u5BF9\u5E94\u6B63\u6587\u5DF2\u4E0D\u5B58\u5728");
+  attachArtifactToMessage(message, artifact);
+  await putArtifact(artifact);
+  await persistChat();
+  assertArtifactCommitCurrent(artifact);
+  if (getSettings().lorebookSync) await retryStage(index, "sync");
+}
+async function saveManualStateRow(index, artifact, tableKey, row) {
+  assertArtifactCommitCurrent(artifact);
+  artifact.snapshot = upsertManualRow(artifact.snapshot, tableKey, row);
+  await commitManualSnapshot(index, artifact);
+}
+async function removeManualStateRow(index, artifact, tableKey, rowId) {
+  assertArtifactCommitCurrent(artifact);
+  artifact.snapshot = deleteRow(artifact.snapshot, tableKey, rowId);
+  await commitManualSnapshot(index, artifact);
 }
 
 // src/ui/workspace.ts
@@ -4434,7 +4680,7 @@ async function saveRow(form) {
     returnConditions: listFrom("returnConditions"),
     returnBlockers: listFrom("returnBlockers")
   } : void 0;
-  info.artifact.snapshot = upsertManualRow(info.artifact.snapshot, tableKey, {
+  await saveManualStateRow(info.index, info.artifact, tableKey, {
     id: rowId || void 0,
     title,
     content,
@@ -4443,12 +4689,6 @@ async function saveRow(form) {
     locked,
     lifecycle
   });
-  const message = getMessage(info.index);
-  if (message) attachArtifactToMessage(message, info.artifact);
-  await putArtifact(info.artifact);
-  await persistChat();
-  assertArtifactCommitCurrent(info.artifact);
-  if (getSettings().lorebookSync) await retryStage(info.index, "sync");
   closeEditor();
   await renderWorkspace();
 }
@@ -4456,13 +4696,7 @@ async function deleteRowAction(rowId) {
   const info = editableArtifact();
   const tableKey = getSettings().ui.activeTable;
   if (!confirm("\u786E\u5B9A\u5220\u9664\u8FD9\u6761\u72B6\u6001\u5417\uFF1F")) return;
-  info.artifact.snapshot = deleteRow(info.artifact.snapshot, tableKey, rowId);
-  const message = getMessage(info.index);
-  if (message) attachArtifactToMessage(message, info.artifact);
-  await putArtifact(info.artifact);
-  await persistChat();
-  assertArtifactCommitCurrent(info.artifact);
-  if (getSettings().lorebookSync) await retryStage(info.index, "sync");
+  await removeManualStateRow(info.index, info.artifact, tableKey, rowId);
   await renderWorkspace();
 }
 function updateSetting(target) {
@@ -4470,16 +4704,15 @@ function updateSetting(target) {
   if (!key) return;
   const settings = getSettings();
   const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target instanceof HTMLInputElement && target.type === "number" ? Number(target.value) : target.value;
-  settings[key] = value;
-  saveSettings();
   if (key === "enabled") {
-    setRequestAcceptance(Boolean(value));
-    taskQueue.setAccepting(Boolean(value));
-    if (!value) abortActiveRequests();
+    setPluginEnabled(Boolean(value));
     const quick = document.querySelector('[data-ma11-quick-setting="enabled"]');
     if (quick) quick.checked = Boolean(value);
     renderAllMessagePanels();
     void renderWorkspace();
+  } else {
+    settings[key] = value;
+    saveSettings();
   }
   if (key === "showMessagePanel") renderAllMessagePanels();
   if (key === "auditEnabled") {
@@ -4533,7 +4766,7 @@ function bindWorkspace(workspace) {
         const index = latestAssistantIndex();
         if (index < 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
         selectedMessageIndex = index;
-        await processMessage(index, true);
+        await processMessage(index, true, "await", true);
         await renderWorkspace();
       }
       if (action === "recalculate-history") {
@@ -4746,8 +4979,13 @@ function tone(stage) {
   if (stage?.status === "running" || stage?.status === "queued") return "working";
   return "neutral";
 }
-function findMessageElement2(index) {
+function findMessageElement(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
+}
+function applyAuditVisibility(index, hidden, marked = false) {
+  const element = findMessageElement(index);
+  element?.classList.toggle("ma11-audit-hidden-message", hidden);
+  element?.classList.toggle("ma11-audit-marked-message", !hidden && marked);
 }
 var pendingRetryIndexes = /* @__PURE__ */ new Set();
 function panelHtml(index, artifact) {
@@ -4778,7 +5016,7 @@ function panelHtml(index, artifact) {
     </div>`;
 }
 function renderMessagePanel(index) {
-  const messageElement = findMessageElement2(index);
+  const messageElement = findMessageElement(index);
   if (!messageElement) return;
   const settings = getSettings();
   const artifact = getArtifactAt(index);
@@ -4823,11 +5061,15 @@ function installMessagePanelHandlers() {
   };
   document.addEventListener("click", click);
   const unsubscribe = subscribePipeline((index) => renderMessagePanel(index));
+  const unsubscribeAuditPresentation = subscribeAuditPresentation(({ index, hidden, marked }) => {
+    applyAuditVisibility(index, hidden, marked);
+  });
   return () => {
     installed = false;
     pendingRetryIndexes.clear();
     document.removeEventListener("click", click);
     unsubscribe();
+    unsubscribeAuditPresentation();
   };
 }
 
@@ -4901,11 +5143,7 @@ async function mountSettingsPanel(isCurrent = () => true) {
   });
   root2.querySelector('[data-ma11-quick-setting="enabled"]')?.addEventListener("change", (event) => {
     const enabled = event.target.checked;
-    getSettings().enabled = enabled;
-    setRequestAcceptance(enabled);
-    taskQueue.setAccepting(enabled);
-    if (!enabled) abortActiveRequests();
-    saveSettings();
+    setPluginEnabled(enabled);
     const workspaceToggle = document.querySelector('[data-ma11-setting="enabled"]');
     if (workspaceToggle) workspaceToggle.checked = enabled;
     renderAllMessagePanels();
@@ -4956,7 +5194,7 @@ function exposeApi() {
       const context = getContext();
       const index = [...context.chat ?? []].map((_, i) => i).reverse().find((i) => isProcessableAssistantMessage(context.chat[i]));
       if (index === void 0) throw new Error("\u6CA1\u6709\u53EF\u6574\u7406\u7684AI\u6B63\u6587");
-      return processMessage(index, true);
+      return processMessage(index, true, "await", true);
     },
     diagnostics: diagnosticReport,
     restart: restartPlugin,
