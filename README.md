@@ -34,6 +34,6 @@ npm install
 npm run verify
 ```
 
-rc.12 同时修复旧版“撤回”设置被迁移成隐藏、以及 block 判定绕过定向修正的问题。
+rc.13 在 rc.12 的定向修正恢复基础上，补齐修正进度发布：审核阻断后会先把“修正处理中”保存并推送到消息面板和已打开的工作区，再发起修正模型请求。
 
 可安装包只需要根目录中的 `manifest.json`、`index.js`、`index.js.map`、`style.css`、`settings.html` 和说明文档。

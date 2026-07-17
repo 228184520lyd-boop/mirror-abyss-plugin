@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.12";
-var PIPELINE_VERSION = "ma-pipeline-16";
+var VERSION = "1.2.0-rc.13";
+var PIPELINE_VERSION = "ma-pipeline-17";
 var TABLE_KEYS = [
   "focus",
   "spacetime",
@@ -1418,7 +1418,7 @@ function initialRevisionRecord(artifact) {
 function shouldAttemptRevision(audit) {
   return !audit.passed;
 }
-async function runRevisionFlow(artifact) {
+async function runRevisionFlow(artifact, publishProgress) {
   const settings = getSettings();
   const firstAudit = artifact.audit;
   if (!firstAudit || firstAudit.passed) throw new Error("\u6CA1\u6709\u53EF\u4FEE\u6B63\u7684\u5BA1\u6838\u5931\u8D25\u7ED3\u679C");
@@ -1429,6 +1429,7 @@ async function runRevisionFlow(artifact) {
   artifact.revision.status = "running";
   markStage(artifact, "revision", "running");
   await putArtifact(artifact);
+  await publishProgress?.(artifact);
   let sourceText = artifact.assistantText;
   let currentAudit = firstAudit;
   let previousViolationFingerprint = firstAudit.violationFingerprint;
@@ -3213,7 +3214,9 @@ async function processMessage(index, force = false, derivedMode = force ? "await
         let audit = await runAudit(artifact, force);
         await saveArtifactToMessage(index, artifact);
         if (settings.auditFailAction === "revise" && shouldAttemptRevision(audit)) {
-          const revised = await runRevisionFlow(artifact);
+          const revised = await runRevisionFlow(artifact, async () => {
+            await saveArtifactToMessage(index, artifact);
+          });
           audit = revised.audit;
           await saveArtifactToMessage(index, artifact);
         }
@@ -3824,6 +3827,7 @@ var selectedMessageIndex = null;
 var rendering = false;
 var renderAgain = false;
 var queueUnsubscribe = null;
+var pipelineUnsubscribe = null;
 var selectedGraphNodeId = null;
 var editorChatKey = null;
 var editorMessageKey = null;
@@ -3902,6 +3906,10 @@ function root() {
   element = document.querySelector("#ma11-workspace");
   bindWorkspace(element);
   queueUnsubscribe ||= taskQueue.subscribe(handleQueueChange);
+  pipelineUnsubscribe ||= subscribePipeline(() => {
+    const workspace = document.querySelector("#ma11-workspace");
+    if (workspace && !workspace.hidden) void renderWorkspace();
+  });
   return element;
 }
 function currentArtifact() {
@@ -4709,6 +4717,8 @@ function disposeWorkspace() {
   resetWorkspaceContext();
   queueUnsubscribe?.();
   queueUnsubscribe = null;
+  pipelineUnsubscribe?.();
+  pipelineUnsubscribe = null;
   savingRow = false;
   renderAgain = false;
   document.querySelector("#ma11-workspace")?.remove();
