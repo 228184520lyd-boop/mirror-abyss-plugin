@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.32";
-var PIPELINE_VERSION = "ma-pipeline-34";
+var VERSION = "1.2.0-rc.33";
+var PIPELINE_VERSION = "ma-pipeline-35";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -3203,6 +3203,12 @@ var TaskBlockedError = class extends Error {
     this.name = "TaskBlockedError";
   }
 };
+var TaskSkippedError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TaskSkippedError";
+  }
+};
 function cancelledError(message) {
   const error = new Error(message);
   error.name = "AbortError";
@@ -3301,6 +3307,9 @@ var TaskQueue = class _TaskQueue {
       reason
     );
   }
+  cancelPendingMatching(predicate, reason = "\u6392\u961F\u4EFB\u52A1\u5DF2\u5931\u6548") {
+    return this.cancelPending((job) => predicate(job.task), reason);
+  }
   cancelPending(predicate, reason) {
     const remaining = [];
     let cancelled = 0;
@@ -3377,8 +3386,14 @@ var TaskQueue = class _TaskQueue {
     }).catch((error) => {
       const cancelled = error instanceof Error && error.name === "AbortError";
       const blocked = error instanceof TaskBlockedError || error instanceof Error && error.name === "TaskBlockedError";
-      task.state = cancelled ? "cancelled" : blocked ? "blocked" : "failed";
-      task.error = toErrorMessage(error);
+      const skipped = error instanceof TaskSkippedError || error instanceof Error && error.name === "TaskSkippedError";
+      task.state = cancelled ? "cancelled" : blocked ? "blocked" : skipped ? "skipped" : "failed";
+      if (skipped) {
+        task.skipReason = toErrorMessage(error);
+        delete task.error;
+      } else {
+        task.error = toErrorMessage(error);
+      }
       job.reject(error);
     }).finally(() => {
       const finishedMs = Date.now();
@@ -3410,7 +3425,13 @@ var TaskQueue = class _TaskQueue {
       createdAt: nowIso(),
       createdAtMs: createdMs,
       priority,
-      chatKey: options.chatKey
+      chatKey: options.chatKey,
+      triggerSource: options.triggerSource,
+      messageKey: options.messageKey,
+      messageFingerprint: options.messageFingerprint,
+      historyRevisionAtEnqueue: options.historyRevisionAtEnqueue,
+      historyRecoveryPhaseAtEnqueue: options.historyRecoveryPhaseAtEnqueue,
+      automatic: options.automatic === true
     };
     this.tasks.set(task.id, task);
     let resolve;
@@ -5404,6 +5425,16 @@ async function runStateExtraction(artifact, force = false) {
 // src/pipeline/pipeline.ts
 var listeners = /* @__PURE__ */ new Set();
 var scheduledMessageTimers = /* @__PURE__ */ new Map();
+function cancelScheduledMessagesForChat(chatKey) {
+  let cancelled = 0;
+  for (const [key, timer] of scheduledMessageTimers) {
+    if (!key.startsWith(`${chatKey}:`)) continue;
+    window.clearTimeout(timer);
+    scheduledMessageTimers.delete(key);
+    cancelled += 1;
+  }
+  return cancelled;
+}
 function subscribePipeline(listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -5601,7 +5632,7 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
   }
 }
 function derivedTaskError(error) {
-  return error instanceof CommitRejectedError || error instanceof TaskBlockedError || error instanceof Error && ["AbortError", "TaskBlockedError"].includes(error.name);
+  return error instanceof CommitRejectedError || error instanceof TaskBlockedError || error instanceof TaskSkippedError || error instanceof Error && ["AbortError", "TaskBlockedError", "TaskSkippedError"].includes(error.name);
 }
 function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
   const settings = getSettings();
@@ -5633,7 +5664,15 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
           await saveArtifactToMessage(index, artifact);
         }
       });
-    }, { priority: 40, chatKey }).catch((error) => {
+    }, {
+      priority: 40,
+      chatKey,
+      triggerSource: "derived-sync",
+      messageKey,
+      messageFingerprint: artifact.sourceFingerprint,
+      historyRevisionAtEnqueue: historyRevision,
+      automatic: true
+    }).catch((error) => {
       if (derivedTaskError(error)) return;
       console.warn("[MirrorAbyss] derived lorebook sync failed", error);
       toast("warning", `\u6838\u5FC3\u72B6\u6001\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u4E16\u754C\u4E66\u540C\u6B65\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
@@ -5654,7 +5693,15 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
           await saveArtifactToMessage(index, artifact);
         }
       });
-    }, { priority: 10, chatKey }).then(queueSync, (error) => {
+    }, {
+      priority: 10,
+      chatKey,
+      triggerSource: "derived-large-summary",
+      messageKey,
+      messageFingerprint: artifact.sourceFingerprint,
+      historyRevisionAtEnqueue: historyRevision,
+      automatic: true
+    }).then(queueSync, (error) => {
       if (derivedTaskError(error)) return;
       console.warn("[MirrorAbyss] derived large summary failed", error);
       toast("warning", `\u6838\u5FC3\u72B6\u6001\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u5927\u603B\u7ED3\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
@@ -5674,7 +5721,15 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
         await saveArtifactToMessage(index, artifact);
       }
     });
-  }, { priority: 30, chatKey }).then(() => queueLarge(true), (error) => {
+  }, {
+    priority: 30,
+    chatKey,
+    triggerSource: "derived-small-summary",
+    messageKey,
+    messageFingerprint: artifact.sourceFingerprint,
+    historyRevisionAtEnqueue: historyRevision,
+    automatic: true
+  }).then(() => queueLarge(true), (error) => {
     if (derivedTaskError(error)) return;
     console.warn("[MirrorAbyss] derived small summary failed", error);
     toast("warning", `\u6838\u5FC3\u72B6\u6001\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u5C0F\u603B\u7ED3\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
@@ -5699,6 +5754,8 @@ async function processMessage(index, force = false, options = {}) {
   const scheduledFingerprint = messageFingerprint(index);
   const scheduledChatKey = currentChatKey();
   const scheduledHistoryRevision = currentHistoryRevision(scheduledChatKey);
+  const enqueueState = await getChatState(scheduledChatKey);
+  const triggerSource = options.triggerSource || (options.historyRecovery ? "history-recovery" : options.automatic ? "automatic" : force ? "manual-force" : "manual");
   const key = `${PIPELINE_VERSION}:${scheduledChatKey}:${identity}`;
   return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async (guard) => {
     const settings = getSettings();
@@ -5711,6 +5768,11 @@ async function processMessage(index, force = false, options = {}) {
       throw new CommitRejectedError("\u6B63\u6587\u5DF2\u7ECF\u53D8\u5316\uFF0C\u672C\u6B21\u6392\u961F\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
     }
     const processingState = await getChatState(scheduledChatKey);
+    if (processingState.historyRecovery && !options.historyRecovery) {
+      const detail = `\u5386\u53F2\u6062\u590D\u6B63\u5728\u6267\u884C\uFF08${processingState.historyRecovery.phase}\uFF09\uFF0C\u672C\u6B21\u666E\u901A\u4EFB\u52A1\u5DF2\u8DF3\u8FC7`;
+      if (options.automatic) throw new TaskSkippedError(detail);
+      throw new TaskBlockedError(detail);
+    }
     if (processingState.historyInvalidation) {
       const recoveryAuthorized = Boolean(
         options.historyRecovery && processingState.historyRecovery && index >= Number(processingState.historyInvalidation.startIndex ?? index)
@@ -5718,6 +5780,13 @@ async function processMessage(index, force = false, options = {}) {
       if (!recoveryAuthorized && !isAutomaticLatestHistoryRecovery(index, processingState)) {
         throw new TaskBlockedError(historyBlockedMessage(processingState));
       }
+    }
+    const attached = getAttachedArtifact(getMessage(index));
+    const alreadyCommitted = Boolean(
+      options.automatic && !force && !options.historyRecovery && attached && attached.chatKey === scheduledChatKey && attached.sourceFingerprint === scheduledFingerprint && attached.messageKey === identity && attached.snapshot && attached.stages.state.status === "success" && processingState.processedMessageKeys.includes(attached.messageKey)
+    );
+    if (alreadyCommitted) {
+      throw new TaskSkippedError("\u76F8\u540C\u6B63\u6587\u5DF2\u7531\u5F53\u524D\u6D41\u6C34\u7EBF\u6B63\u5F0F\u63D0\u4EA4\uFF0C\u672C\u6B21\u81EA\u52A8\u4EFB\u52A1\u4E0D\u518D\u91CD\u590D\u5904\u7406");
     }
     const artifact = await loadOrCreateArtifact(index, force, scheduledHistoryRevision, guard);
     notify(index, artifact);
@@ -5774,9 +5843,18 @@ async function processMessage(index, force = false, options = {}) {
       unbindArtifactTaskGuard(artifact, guard);
       unbindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
     }
-  }, { priority: 90, chatKey: scheduledChatKey });
+  }, {
+    priority: 90,
+    chatKey: scheduledChatKey,
+    triggerSource,
+    messageKey: identity,
+    messageFingerprint: scheduledFingerprint,
+    historyRevisionAtEnqueue: scheduledHistoryRevision,
+    historyRecoveryPhaseAtEnqueue: enqueueState.historyRecovery?.phase,
+    automatic: options.automatic === true
+  });
 }
-function scheduleMessage(payload, force = false, delay = 0) {
+function scheduleMessage(payload, force = false, delay = 0, triggerSource = "automatic-event") {
   if (!getSettings().enabled) return;
   const index = resolveMessageIndex(payload);
   if (index < 0) return;
@@ -5797,13 +5875,14 @@ function scheduleMessage(payload, force = false, delay = 0) {
       if (!isProcessableAssistantMessage(current)) return;
       if (messageIdentity(index) !== scheduledIdentity || messageFingerprint(index) !== scheduledFingerprint) return;
       const state2 = await getChatState(scheduledChatKey);
+      if (state2.historyRecovery) return;
       const latestOnlyInvalidation = Boolean(
         state2.historyInvalidation && state2.historyInvalidation.startIndex === index && state2.historyInvalidation.reason !== "deleted" && isNarrativeTail(index)
       );
       if (!force && state2.historyInvalidation && !latestOnlyInvalidation) return;
-      await processMessage(index, force);
+      await processMessage(index, force, { automatic: true, triggerSource });
     })().catch((error) => {
-      if (error instanceof CommitRejectedError || error instanceof Error && error.name === "AbortError") return;
+      if (error instanceof CommitRejectedError || error instanceof TaskSkippedError || error instanceof Error && ["AbortError", "TaskSkippedError"].includes(error.name)) return;
       console.error("[MirrorAbyss] scheduled processing failed", error);
       toast("error", `\u81EA\u52A8\u6574\u7406\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
     });
@@ -5888,6 +5967,7 @@ async function invalidateHistory(payload, reason) {
 async function recalculateInvalidatedHistory() {
   if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
   const chatKey = currentChatKey();
+  cancelScheduledMessagesForChat(chatKey);
   const state2 = await getChatState(chatKey);
   const startIndex = state2.historyInvalidation?.startIndex;
   if (startIndex === void 0) throw new Error("\u5C1A\u672A\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9");
@@ -5906,6 +5986,7 @@ async function recalculateInvalidatedHistory() {
   state2.lastSyncError = processableIndexes.length ? `\u6B63\u5728\u91CD\u5EFA\u5386\u53F2\u6838\u5FC3\u72B6\u6001\uFF080/${processableIndexes.length}\uFF09` : "\u6B63\u5728\u68C0\u67E5\u5386\u53F2\u6062\u590D\u7ED3\u679C";
   await putChatState(state2);
   let latest = null;
+  const recoveredMessageKeys = /* @__PURE__ */ new Set();
   for (const [position, index] of processableIndexes.entries()) {
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
     const progressState = await getChatState(chatKey);
@@ -5921,6 +6002,7 @@ async function recalculateInvalidatedHistory() {
     await putChatState(progressState);
     try {
       latest = await processMessage(index, false, { skipDerived: true, historyRecovery: true });
+      if (latest?.messageKey) recoveredMessageKeys.add(latest.messageKey);
       if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
       if (!latest || latest.stages.state.status === "failed" || latest.stages.state.status === "blocked") {
         const stageError = latest?.stages.state.error || "\u72B6\u6001\u8868\u672A\u6210\u529F";
@@ -6008,6 +6090,13 @@ async function recalculateInvalidatedHistory() {
             await saveArtifactToMessage(recoveryInfo.index, artifact);
           }
           if (errors.length) throw new Error(errors.join("\uFF1B"));
+          cancelScheduledMessagesForChat(chatKey);
+          taskQueue.cancelPendingMatching(
+            (task) => Boolean(
+              task.chatKey === chatKey && task.automatic === true && recoveredMessageKeys.has(String(task.messageKey || "")) && task.triggerSource !== "history-recovery"
+            ),
+            "\u5386\u53F2\u6062\u590D\u5DF2\u63D0\u4EA4\u76F8\u540C\u6B63\u6587\uFF0C\u9648\u65E7\u81EA\u52A8\u4EFB\u52A1\u5DF2\u53D6\u6D88"
+          );
         } finally {
           unbindArtifactTaskGuard(artifact, guard);
           unbindArtifactHistoryRevision(artifact, revision);
@@ -6297,13 +6386,13 @@ function latestSnapshotArtifact() {
 function installPipelineEventHandlers() {
   const context = globalThis.SillyTavern.getContext();
   const { eventSource, event_types } = context;
-  const onReceived = (payload) => scheduleMessage(payload, false, 180);
+  const onReceived = (payload) => scheduleMessage(payload, false, 180, "message-received");
   const handleInvalidation = (payload, reason) => {
     if (!getSettings().enabled) return;
     const changedIndex = resolveChangedIndex(payload);
     void invalidateHistory(payload, reason).then(() => {
       if (reason !== "deleted" && changedIndex !== null && isNarrativeTail(changedIndex)) {
-        scheduleMessage(changedIndex, false, 120);
+        scheduleMessage(changedIndex, false, 120, `history-${reason}`);
       }
     }).catch((error) => {
       console.error("[MirrorAbyss] history invalidation failed", error);
@@ -6501,6 +6590,13 @@ function safeTask(task) {
     queueWaitMs: task.queueWaitMs,
     runMs: task.runMs,
     totalMs: task.totalMs,
+    triggerSource: task.triggerSource,
+    messageKey: task.messageKey,
+    messageFingerprint: task.messageFingerprint,
+    historyRevisionAtEnqueue: task.historyRevisionAtEnqueue,
+    historyRecoveryPhaseAtEnqueue: task.historyRecoveryPhaseAtEnqueue,
+    automatic: task.automatic === true,
+    skipReason: redactedError(task.skipReason),
     error: redactedError(task.error)
   };
 }

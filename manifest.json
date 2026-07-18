@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.32",
+  "version": "1.2.0-rc.33",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊行级状态补丁版：压缩结构化请求，按稳定ID合并变化行，并持久记忆当前连接的Schema兼容性。"
+  "description": "镜渊历史恢复竞态修复版：恢复期间抑制自动调度，取消陈旧任务，并按正文指纹跳过迟到的重复处理。"
 }
