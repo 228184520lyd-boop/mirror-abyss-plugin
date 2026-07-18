@@ -1,6 +1,15 @@
-# Mirror Abyss 1.2.0-rc.29 验收记录
+# Mirror Abyss 1.2.0-rc.30 验收记录
 
 流水线：`ma-pipeline-32`
+
+
+## rc.30 实机恢复专项
+
+- 明确 Schema 400 后，即使普通回退 504，后续请求也直接省略 Schema。
+- 未闭合 JSON 判定为截断，不触发模型修理。
+- 增量 snapshot 未返回的启用表格保留旧值，显式空数组才清空。
+- 历史恢复失败记录 currentIndex、进度、阶段与具体错误。
+- 完整 `npm run verify` 通过。
 
 ## 自动验证范围
 

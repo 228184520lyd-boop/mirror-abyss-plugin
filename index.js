@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.29";
-var PIPELINE_VERSION = "ma-pipeline-32";
+var VERSION = "1.2.0-rc.30";
+var PIPELINE_VERSION = "ma-pipeline-33";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -144,6 +144,38 @@ var JsonObjectParseError = class extends Error {
     this.attempts = attempts;
   }
 };
+function isLikelyTruncatedJson(raw, error) {
+  const text = stripReasoningAndBom(safeText(raw, 2e5)).trim();
+  if (!text) return false;
+  const firstBrace = text.indexOf("{");
+  if (firstBrace < 0) return false;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let sawObject = false;
+  for (let i = firstBrace; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      sawObject = true;
+    } else if (char === "}" && depth > 0) {
+      depth -= 1;
+    }
+  }
+  if (sawObject && (depth > 0 || inString)) return true;
+  const attempts = error instanceof JsonObjectParseError ? error.attempts.join(" ") : toErrorMessage(error);
+  return /unexpected end|unterminated|string literal|end of json input|json input.*ended/i.test(attempts);
+}
 function jsonPreview(raw, max = 360) {
   return safeText(raw, 1e5).replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -2301,15 +2333,31 @@ function taskConnectionKey(task) {
   const connection = getSettings().connections[task];
   if (connection?.mode === "profile") {
     const profileId = resolveProfileId(connection);
-    return `${task}:profile:${profileId || "unselected"}`;
+    const profile = supportedProfiles().find((item) => item?.id === profileId);
+    return `${task}:profile:${profileId || "unselected"}:${hashText(`${profile?.api || ""}|${profile?.model || ""}`)}`;
   }
-  return `${task}:current-chat`;
+  const context = getContext();
+  const currentIdentity = [
+    context.mainApi,
+    context.chatCompletionSettings?.model,
+    context.oai_settings?.chat_completion_source,
+    context.oai_settings?.openai_model,
+    context.textgenerationwebui_settings?.custom_model,
+    context.selected_model,
+    context.model,
+    context.api_server
+  ].map((value) => safeText(value, 240)).join("|");
+  return `${task}:current-chat:${hashText(currentIdentity)}`;
 }
 function shouldSkipJsonSchema(task) {
   return schemaUnsupportedConnections.has(taskConnectionKey(task));
 }
 function rememberJsonSchemaUnsupported(task) {
   schemaUnsupportedConnections.add(taskConnectionKey(task));
+}
+function isDefinitiveJsonSchemaUnsupported(error) {
+  const message = toErrorMessage(error);
+  return /\bbad request\b|\bstatus\s*400\b|\bhttp\s*400\b|json[_ -]?schema.*(?:unsupported|invalid|not supported)|response[_ -]?format.*(?:unsupported|invalid|not supported)|unknown (?:field|parameter).*schema/i.test(message);
 }
 function responseTokens(options) {
   const requested = Number(options.maxTokens);
@@ -2531,6 +2579,7 @@ async function testConnection(task) {
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") throw error;
       schemaFailure = error;
+      if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported(task);
     }
   }
   if (schemaFailure) {
@@ -2616,6 +2665,7 @@ async function generateWithSchemaFallback(options) {
   } catch (error) {
     if (!options.jsonSchema || isCancelledRequest(error)) throw error;
     schemaFailure = error;
+    if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported(options.task);
   }
   try {
     const fallback = await generateTask({ ...options, jsonSchema: void 0 });
@@ -2633,6 +2683,13 @@ async function generateStructuredTask(options) {
   try {
     return parseJsonObject(raw);
   } catch (firstError) {
+    if (isLikelyTruncatedJson(raw, firstError)) {
+      throw structuredError(
+        options.task,
+        new Error("\u6A21\u578B\u8F93\u51FA\u5728JSON\u5BF9\u8C61\u7ED3\u675F\u524D\u88AB\u622A\u65AD\uFF0C\u7F3A\u5931\u5185\u5BB9\u65E0\u6CD5\u5B89\u5168\u4FEE\u590D\uFF1B\u8BF7\u7F29\u77ED\u7ED3\u6784\u5316\u8F93\u51FA\u6216\u91CD\u8BD5"),
+        raw
+      );
+    }
     const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
     if (!allowRepair) throw structuredError(options.task, firstError, raw);
     try {
@@ -2829,6 +2886,7 @@ async function auditText(playerRules, playerText, assistantText) {
     } catch (error) {
       if (isCancelledAuditRequest(error)) throw error;
       structuredRequestError = error;
+      if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported("audit");
     }
   }
   if (structuredRequestError) {
@@ -2845,6 +2903,9 @@ async function auditText(playerRules, playerText, assistantText) {
   try {
     return parseAuditResult(raw);
   } catch (firstError) {
+    if (isLikelyTruncatedJson(raw, firstError)) {
+      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002\u6A21\u578B\u8F93\u51FA\u5728JSON\u5BF9\u8C61\u7ED3\u675F\u524D\u88AB\u622A\u65AD\uFF0C\u65E0\u6CD5\u5B89\u5168\u4FEE\u590D\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
+    }
     if (raw.trim() === "{}") {
       const prefix = structuredRequestError ? `\u7ED3\u6784\u5316\u8BF7\u6C42\u5931\u8D25\u540E\uFF0C\u65E0Schema\u56DE\u9000\u4ECD\u8FD4\u56DE\u7A7A\u5BF9\u8C61\u3002\u539F\u9519\u8BEF\uFF1A${toErrorMessage(structuredRequestError)}` : "\u5BA1\u6838\u6A21\u578B\u8FD4\u56DE\u7A7A\u5BF9\u8C61";
       throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${prefix}`);
@@ -4602,6 +4663,7 @@ function stateSystemPrompt(registry2) {
 \u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5 JSON.parse \u7684\u5B8C\u6574\u5BF9\u8C61\uFF0C\u4E0D\u8981 Markdown\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
 \u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001snapshot\u3002
 snapshot \u53EA\u80FD\u5305\u542B\u5F53\u524D\u542F\u7528\u7684\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\u542F\u7528\u8868\u683C\uFF09"}\u3002\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u672A\u6CE8\u518C\u3001\u5DF2\u5220\u9664\u6216\u5DF2\u505C\u7528\u8868\u683C\u3002
+snapshot \u91C7\u7528\u589E\u91CF\u8868\u683C\u89C6\u56FE\uFF1A\u53EA\u8FD4\u56DE\u672C\u8F6E\u786E\u5B9E\u53D1\u751F\u53D8\u5316\u7684\u8868\u683C\uFF1B\u672A\u8FD4\u56DE\u7684\u542F\u7528\u8868\u683C\u8868\u793A\u6CBF\u7528\u4E0A\u4E00\u4EFD\uFF0C\u4E0D\u5F97\u4E3A\u4E86\u51D1\u9F50\u7ED3\u6784\u91CD\u590D\u8F93\u51FA\u3002\u82E5\u67D0\u5F20\u8868\u786E\u8BA4\u5E94\u88AB\u6E05\u7A7A\uFF0C\u5FC5\u987B\u663E\u5F0F\u8FD4\u56DE\u8BE5\u8868\u4E3A\u7A7A\u6570\u7EC4\u3002
 
 \u3010\u5185\u90E8\u4E8B\u5B9E\u5C42\u3011
 facts \u6BCF\u6761\u5B57\u6BB5\uFF1A
@@ -4633,7 +4695,7 @@ ${tableLines || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u6
 
 \u3010\u8868\u683C\u7EF4\u62A4\u3011
 1. snapshot \u662F facts \u7684\u5F53\u524D\u89C6\u56FE\uFF0C\u4E0D\u662F\u552F\u4E00\u6570\u636E\u6E90\u3002\u6BCF\u884C\u4F7F\u7528 factIds \u5173\u8054\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4F7F\u7528 eventId \u5173\u8054\u4E8B\u4EF6\u7EBF\u3002
-2. \u4FDD\u7559\u672A\u53D7\u5F71\u54CD\u4E14\u4ECD\u6210\u7ACB\u7684\u65E7\u884C\uFF1B\u53EA\u6709\u6B63\u6587\u660E\u786E\u6539\u53D8\u65F6\u624D\u66F4\u65B0\u3002
+2. \u4FDD\u7559\u672A\u53D7\u5F71\u54CD\u4E14\u4ECD\u6210\u7ACB\u7684\u65E7\u884C\uFF1B\u53EA\u6709\u6B63\u6587\u660E\u786E\u6539\u53D8\u65F6\u624D\u66F4\u65B0\u3002\u672A\u53D8\u5316\u7684\u6574\u5F20\u8868\u4E0D\u8981\u653E\u8FDB snapshot\u3002
 3. source=manual \u6216 locked=true \u7684\u65E7\u884C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
 4. \u6B63\u5F0F\u4E3B\u4F53\u4EC5\u5728\u5DF2\u663E\u5F71\u4E14\u5BF9\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u65F6\u8FDB\u5165\u201C\u89D2\u8272\u201D\u89C6\u56FE\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5EFA\u7ACB\u3002
 5. \u573A\u666F\u6216\u5730\u70B9\u53D1\u751F\u5207\u6362\u65F6\uFF0C\u201C\u65F6\u7A7A\u201D\u4E2D\u53EA\u80FD\u6709\u4E00\u4E2A\u5F53\u524D\u573A\u666F\uFF1B\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u82E5\u4ECD\u6709\u540E\u7EED\u4EF7\u503C\uFF0C\u72B6\u6001\u5FC5\u987B\u6539\u4E3A\u201C\u5DF2\u79BB\u5F00\u201D\u6216\u201C\u5386\u53F2\u573A\u666F\u201D\uFF0C\u5E76\u63D0\u4F9B\u660E\u786E\u89E6\u53D1\u8BCD\uFF0C\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
@@ -4670,7 +4732,7 @@ function stateUserPrompt(previous, playerText, assistantText, registry2, interna
 ${JSON.stringify(activeFactPayload(internalFacts), null, 2)}
 
 \u3010\u4E0A\u4E00\u4EFD\u542F\u7528\u8868\u683C\u89C6\u56FE\u3011
-${JSON.stringify(filteredPrevious, null, 2)}
+${JSON.stringify(filteredPrevious)}
 
 \u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
 ${playerText || "\uFF08\u7A7A\uFF09"}
@@ -4678,7 +4740,7 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u89D2\u8272\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u5185\u90E8\u4E8B\u5B9E\u5C42\u662F\u8FDE\u7EED\u6027\u6765\u6E90\uFF1B\u6CBF\u7528\u540C\u4E00\u4E8B\u5B9E\u7684 fact_id \u548C event_id\uFF0C\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u66F4\u65B0\u3001\u8FFD\u52A0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u64CD\u4F5C\u3002\u8F93\u51FA\u66F4\u65B0\u540E\u7684\u5B8C\u6574\u542F\u7528\u8868\u683C\u89C6\u56FE\uFF0Csnapshot \u4E0D\u5F97\u51FA\u73B0\u6CE8\u518C\u8868\u4E4B\u5916\u7684\u952E\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
+\u5185\u90E8\u4E8B\u5B9E\u5C42\u662F\u8FDE\u7EED\u6027\u6765\u6E90\uFF1B\u6CBF\u7528\u540C\u4E00\u4E8B\u5B9E\u7684 fact_id \u548C event_id\uFF0C\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u66F4\u65B0\u3001\u8FFD\u52A0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u64CD\u4F5C\u3002snapshot \u53EA\u8F93\u51FA\u672C\u8F6E\u53D1\u751F\u53D8\u5316\u7684\u6574\u5F20\u8868\uFF1B\u672A\u8F93\u51FA\u7684\u542F\u7528\u8868\u683C\u7531\u63D2\u4EF6\u6CBF\u7528\u4E0A\u4E00\u4EFD\uFF0C\u786E\u8BA4\u6E05\u7A7A\u65F6\u624D\u663E\u5F0F\u8F93\u51FA []\u3002snapshot \u4E0D\u5F97\u51FA\u73B0\u6CE8\u518C\u8868\u4E4B\u5916\u7684\u952E\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
 }
 function scalarSchema(field) {
   const semantics = {
@@ -4765,7 +4827,7 @@ function stateJsonSchema(registry2) {
             additionalProperties: false
           }
         },
-        snapshot: { type: "object", properties: snapshotProperties, required: active.map((table) => table.key), additionalProperties: false }
+        snapshot: { type: "object", properties: snapshotProperties, additionalProperties: false }
       },
       required: ["turnSummary", "facts", "snapshot"],
       additionalProperties: false
@@ -4849,7 +4911,11 @@ function preserveProtectedRows(previous, next, customRegistry) {
 function mergeEnabledViews(previous, parsedSnapshot, registry2) {
   const merged = {};
   for (const table of registry2) merged[table.key] = structuredClone(previous[table.key] ?? []);
-  for (const table of enabledTables(registry2)) merged[table.key] = parsedSnapshot[table.key];
+  for (const table of enabledTables(registry2)) {
+    if (Object.prototype.hasOwnProperty.call(parsedSnapshot, table.key)) {
+      merged[table.key] = parsedSnapshot[table.key];
+    }
+  }
   return normalizeSnapshot(merged, previous, registry2);
 }
 function assertRegistryCurrent(expectedFingerprint) {
@@ -4883,6 +4949,8 @@ async function runStateExtraction(artifact, force = false) {
   await putArtifact(artifact);
   try {
     const parsed = await generateStructuredTask(request);
+    if (typeof parsed.turnSummary !== "string") throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 turnSummary \u5B57\u7B26\u4E32");
+    if (!Array.isArray(parsed.facts)) throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 facts \u6570\u7EC4");
     if (!parsed.snapshot || typeof parsed.snapshot !== "object" || Array.isArray(parsed.snapshot)) throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 snapshot \u6839\u5BF9\u8C61");
     const characterTable = active.find((table) => table.role === "characters" || table.role === "state");
     if (characterTable) {
@@ -4896,7 +4964,9 @@ async function runStateExtraction(artifact, force = false) {
     const legacyViewKeys = /* @__PURE__ */ new Set(["focus", "state", "characters", "skills", "relationships"]);
     for (const key of returnedKeys) if (!activeKeys.has(key) && !legacyViewKeys.has(key)) throw new Error(`\u6A21\u578B\u8FD4\u56DE\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${key}`);
     parsed.snapshot = migrateSnapshotTables(parsed.snapshot, registry2);
-    for (const table of active) if (!Array.isArray(parsed.snapshot[table.key])) parsed.snapshot[table.key] = [];
+    for (const [key, value] of Object.entries(parsed.snapshot)) {
+      if (activeKeys.has(key) && !Array.isArray(value)) throw new Error(`\u72B6\u6001\u8868 ${key} \u5FC5\u987B\u662F\u6570\u7EC4`);
+    }
     assertArtifactCommitCurrent(artifact);
     assertRegistryCurrent(expectedRegistryFingerprint);
     const mergedViews = preserveStableObjectIds(previous, mergeEnabledViews(previous, parsed.snapshot, registry2), registry2);
@@ -5517,6 +5587,7 @@ async function processMessage(index, force = false, options = {}) {
         throw error;
       }
       if (error instanceof Error && error.name === "AbortError") throw error;
+      notify(index, artifact);
       await saveArtifactToMessage(index, artifact);
       throw error;
     } finally {
@@ -5596,6 +5667,7 @@ async function invalidateHistory(payload, reason) {
   const state2 = await getChatState(chatKey);
   if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u53D8\u5316\u4E0D\u518D\u5199\u5165");
   if (detectedIndex === null) {
+    delete state2.historyRecovery;
     state2.historyInvalidation = { reason, detectedAt: nowIso() };
     state2.lastSyncStatus = "failed";
     state2.lastSyncError = "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u5224\u65AD\u4F4D\u7F6E\uFF1B\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9";
@@ -5610,6 +5682,7 @@ async function invalidateHistory(payload, reason) {
   const latestOnly = Boolean(
     reason !== "deleted" && startIndex === index && isNarrativeTail(index)
   );
+  delete state2.historyRecovery;
   state2.historyInvalidation = { startIndex, reason, detectedAt: nowIso(), automatic: latestOnly };
   state2.lastSyncStatus = "failed";
   state2.lastSyncError = latestOnly ? "\u6700\u65B0\u6B63\u6587\u5DF2\u53D8\u5316\uFF0C\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF1B\u5B8C\u6210\u524D\u6682\u7F13\u4E16\u754C\u4E66\u540C\u6B65" : `\u5386\u53F2\u6D88\u606F\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB\u91CD\u7B97`;
@@ -5639,15 +5712,62 @@ async function recalculateInvalidatedHistory() {
   const startIndex = state2.historyInvalidation?.startIndex;
   if (startIndex === void 0) throw new Error("\u5C1A\u672A\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9");
   const endIndex = getChat().length;
+  const processableIndexes = Array.from({ length: Math.max(0, endIndex - startIndex) }, (_, offset) => startIndex + offset).filter((index) => isProcessableAssistantMessage(getMessage(index)));
+  state2.historyRecovery = {
+    startIndex,
+    endIndex,
+    currentIndex: processableIndexes[0],
+    completedCount: 0,
+    totalCount: processableIndexes.length,
+    phase: "rebuilding-core",
+    updatedAt: nowIso()
+  };
+  state2.lastSyncStatus = "failed";
+  state2.lastSyncError = processableIndexes.length ? `\u6B63\u5728\u91CD\u5EFA\u5386\u53F2\u6838\u5FC3\u72B6\u6001\uFF080/${processableIndexes.length}\uFF09` : "\u6B63\u5728\u68C0\u67E5\u5386\u53F2\u6062\u590D\u7ED3\u679C";
+  await putChatState(state2);
   let latest = null;
-  for (let index = startIndex; index < endIndex; index += 1) {
+  for (const [position, index] of processableIndexes.entries()) {
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
-    const message = getMessage(index);
-    if (!isProcessableAssistantMessage(message)) continue;
-    latest = await processMessage(index, false, { skipDerived: true });
-    if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
-    if (!latest || latest.stages.state.status === "failed" || latest.stages.state.status === "blocked") {
-      throw new Error(`\u7B2C ${index + 1} \u6761\u6D88\u606F\u91CD\u7B97\u5931\u8D25\uFF0C\u4E16\u754C\u4E66\u4ECD\u4FDD\u6301\u6682\u505C`);
+    const progressState = await getChatState(chatKey);
+    progressState.historyRecovery = {
+      ...progressState.historyRecovery ?? state2.historyRecovery,
+      currentIndex: index,
+      completedCount: position,
+      phase: "rebuilding-core",
+      error: void 0,
+      updatedAt: nowIso()
+    };
+    progressState.lastSyncError = `\u6B63\u5728\u91CD\u5EFA\u7B2C ${index + 1} \u6761\u6D88\u606F\uFF08${position + 1}/${processableIndexes.length}\uFF09`;
+    await putChatState(progressState);
+    try {
+      latest = await processMessage(index, false, { skipDerived: true });
+      if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
+      if (!latest || latest.stages.state.status === "failed" || latest.stages.state.status === "blocked") {
+        const stageError = latest?.stages.state.error || "\u72B6\u6001\u8868\u672A\u6210\u529F";
+        throw new Error(stageError);
+      }
+      const completedState = await getChatState(chatKey);
+      if (completedState.historyRecovery) {
+        completedState.historyRecovery.completedCount = position + 1;
+        completedState.historyRecovery.updatedAt = nowIso();
+      }
+      completedState.lastSyncError = `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u5EFA ${position + 1}/${processableIndexes.length}`;
+      await putChatState(completedState);
+    } catch (error) {
+      const detail = toErrorMessage(error);
+      const failedState = await getChatState(chatKey);
+      failedState.historyRecovery = {
+        ...failedState.historyRecovery ?? state2.historyRecovery,
+        currentIndex: index,
+        completedCount: position,
+        phase: "failed",
+        error: detail,
+        updatedAt: nowIso()
+      };
+      failedState.lastSyncStatus = "failed";
+      failedState.lastSyncError = `\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210\uFF1A\u7B2C ${index + 1} \u6761\u6D88\u606F\u7684\u72B6\u6001\u63D0\u53D6\u5931\u8D25\u3002${detail}`;
+      await putChatState(failedState);
+      throw new Error(failedState.lastSyncError);
     }
   }
   if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
@@ -5656,6 +5776,7 @@ async function recalculateInvalidatedHistory() {
   if (!recoveryInfo) {
     await clearCurrentChatLorebookEntries(chatKey);
     delete freshState.historyInvalidation;
+    delete freshState.historyRecovery;
     freshState.lastSyncError = void 0;
     freshState.lastSyncStatus = "success";
     freshState.lastSyncAt = nowIso();
@@ -5663,8 +5784,13 @@ async function recalculateInvalidatedHistory() {
     toast("success", "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF1B\u5F53\u524D\u6CA1\u6709\u53EF\u53D1\u5E03\u72B6\u6001\uFF0C\u5DF2\u6E05\u9664\u672C\u804A\u5929\u7684\u955C\u6E0A\u4E16\u754C\u4E66\u6761\u76EE");
     return null;
   }
+  if (freshState.historyRecovery) {
+    freshState.historyRecovery.phase = "rebuilding-derived";
+    freshState.historyRecovery.currentIndex = recoveryInfo.index;
+    freshState.historyRecovery.updatedAt = nowIso();
+  }
   delete freshState.historyInvalidation;
-  freshState.lastSyncError = void 0;
+  freshState.lastSyncError = "\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u5EFA\uFF0C\u6B63\u5728\u6062\u590D\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66";
   freshState.lastSyncStatus = "idle";
   await putChatState(freshState);
   const artifact = recoveryInfo.artifact;
@@ -5686,6 +5812,13 @@ async function recalculateInvalidatedHistory() {
         }
         await saveArtifactToMessage(recoveryInfo.index, artifact);
         if (getSettings().lorebookSync) {
+          const publishingState = await getChatState(chatKey);
+          if (publishingState.historyRecovery) {
+            publishingState.historyRecovery.phase = "publishing-lorebook";
+            publishingState.historyRecovery.updatedAt = nowIso();
+          }
+          publishingState.lastSyncError = "\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u4E0E\u603B\u7ED3\u5DF2\u6062\u590D\uFF0C\u6B63\u5728\u53D1\u5E03\u4E16\u754C\u4E66";
+          await putChatState(publishingState);
           try {
             await syncLorebook(artifact);
           } catch (error) {
@@ -5701,9 +5834,22 @@ async function recalculateInvalidatedHistory() {
     },
     { priority: 70, chatKey }
   );
+  const finalState = await getChatState(chatKey);
   if (errors.length) {
+    if (finalState.historyRecovery) {
+      finalState.historyRecovery.phase = "partial";
+      finalState.historyRecovery.error = errors.join("\uFF1B");
+      finalState.historyRecovery.updatedAt = nowIso();
+    }
+    finalState.lastSyncStatus = "failed";
+    finalState.lastSyncError = `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u6062\u590D\uFF0C\u4F46\u90E8\u5206\u6D3E\u751F\u5931\u8D25\uFF1A${errors.join("\uFF1B")}`;
+    await putChatState(finalState);
     toast("warning", `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u7B97\u5B8C\u6210\uFF0C\u4F46\u90E8\u5206\u6D3E\u751F\u6062\u590D\u5931\u8D25\uFF1A${errors.join("\uFF1B")}`);
   } else {
+    delete finalState.historyRecovery;
+    finalState.lastSyncError = void 0;
+    if (!getSettings().lorebookSync) finalState.lastSyncStatus = "idle";
+    await putChatState(finalState);
     toast("success", getSettings().lorebookSync ? "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6062\u590D" : "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF1B\u81EA\u52A8\u4E16\u754C\u4E66\u540C\u6B65\u5F53\u524D\u5DF2\u5173\u95ED");
   }
   return artifact;
@@ -5716,6 +5862,7 @@ async function chooseHistoryRecalculationStart(startIndex) {
   if (!state2.historyInvalidation) throw new Error("\u5F53\u524D\u6CA1\u6709\u5F85\u5904\u7406\u7684\u5386\u53F2\u5931\u6548");
   const index = Math.max(0, Math.min(Math.trunc(startIndex), Math.max(0, getChat().length - 1)));
   state2.historyInvalidation.startIndex = index;
+  delete state2.historyRecovery;
   const validPrefixKeys = /* @__PURE__ */ new Set();
   for (let i = 0; i < index; i += 1) {
     const attached = getAttachedArtifact(getMessage(i));
@@ -6112,8 +6259,8 @@ async function runDiagnostics() {
     checks.push({
       id: "history",
       label: "\u5386\u53F2\u6570\u636E\u4E00\u81F4\u6027",
-      status: state2.historyInvalidation ? "warn" : "ok",
-      detail: state2.historyInvalidation ? state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u9700\u8981\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u9700\u8981\u624B\u52A8\u91CD\u7B97` : "\u5F53\u524D\u6D3E\u751F\u6570\u636E\u672A\u53D1\u73B0\u5386\u53F2\u5931\u6548"
+      status: state2.historyRecovery?.phase === "failed" ? "error" : state2.historyInvalidation ? "warn" : "ok",
+      detail: state2.historyRecovery?.phase === "failed" ? `\u5386\u53F2\u91CD\u5EFA\u5931\u8D25\uFF1A${state2.historyRecovery.error || state2.lastSyncError || "\u672A\u77E5\u9519\u8BEF"}` : state2.historyRecovery ? state2.lastSyncError || `\u5386\u53F2\u6062\u590D\u9636\u6BB5\uFF1A${state2.historyRecovery.phase}` : state2.historyInvalidation ? state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u9700\u8981\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u9700\u8981\u624B\u52A8\u91CD\u7B97` : "\u5F53\u524D\u6D3E\u751F\u6570\u636E\u672A\u53D1\u73B0\u5386\u53F2\u5931\u6548"
     });
     checks.push({
       id: "sync",
@@ -6136,6 +6283,7 @@ function redactedChatState(state2) {
     smallSummaryCount: Array.isArray(state2.smallSummaries) ? state2.smallSummaries.length : 0,
     largeSummaryCount: Array.isArray(state2.largeSummaries) ? state2.largeSummaries.length : 0,
     historyInvalidation: state2.historyInvalidation,
+    historyRecovery: state2.historyRecovery,
     lastLorebookName: state2.lastLorebookName ? "[\u5DF2\u8BBE\u7F6E]" : "",
     lastSyncAt: state2.lastSyncAt,
     lastSyncStatus: state2.lastSyncStatus,
@@ -6414,8 +6562,24 @@ function handleQueueChange() {
   if (taskQueue.list().some((task) => task.state === "queued" || task.state === "running")) return;
   const workspace = document.querySelector("#ma11-workspace");
   const active = document.activeElement;
-  if (workspace?.contains(active) && active?.matches("input, textarea, select, button")) return;
+  if (workspace?.contains(active) && active?.matches("input, textarea, select, [contenteditable='true']")) return;
   void renderWorkspace();
+}
+function historyRecoveryHtml(chatState) {
+  const recovery = chatState?.historyRecovery;
+  if (!recovery) return "";
+  const current = Number.isInteger(recovery.currentIndex) ? `\u7B2C ${recovery.currentIndex + 1} \u6761\u6D88\u606F` : "\u5F53\u524D\u5386\u53F2";
+  const progress = recovery.totalCount ? `${recovery.completedCount}/${recovery.totalCount}` : "\u68C0\u67E5\u4E2D";
+  if (recovery.phase === "failed") {
+    return `<section class="ma11-card ma11-history-warning"><header><b>\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210</b><span>${escapeHtml(current)}</span></header><p>${escapeHtml(recovery.error || chatState.lastSyncError || "\u72B6\u6001\u63D0\u53D6\u5931\u8D25")}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">\u4ECE\u5931\u8D25\u4F4D\u7F6E\u7EE7\u7EED</button></div></section>`;
+  }
+  const labels = {
+    "rebuilding-core": "\u6B63\u5728\u91CD\u5EFA\u6838\u5FC3\u72B6\u6001",
+    "rebuilding-derived": "\u6B63\u5728\u6062\u590D\u603B\u7ED3",
+    "publishing-lorebook": "\u6B63\u5728\u53D1\u5E03\u4E16\u754C\u4E66",
+    partial: "\u6838\u5FC3\u72B6\u6001\u5DF2\u6062\u590D\uFF0C\u6D3E\u751F\u6062\u590D\u4E0D\u5B8C\u6574"
+  };
+  return `<section class="ma11-card ma11-history-warning"><header><b>${escapeHtml(labels[recovery.phase] || "\u6B63\u5728\u6062\u590D\u5386\u53F2")}</b><span>${escapeHtml(progress)}</span></header><p>${escapeHtml(chatState.lastSyncError || current)}</p></section>`;
 }
 async function overviewHtml(artifactInfo) {
   const enabled = getSettings().enabled;
@@ -6424,7 +6588,7 @@ async function overviewHtml(artifactInfo) {
   const rows = snapshotRowCount(artifact?.snapshot, getSettings().tableRegistry, true);
   const tasks = recentTasksHtml();
   return `
-    ${chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u624B\u52A8\u5386\u53F2\u91CD\u5EFA\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u53EA\u4F1A\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u91CD\u5EFA\uFF0C\u4E0D\u4F1A\u91CD\u8DD1\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u6309\u4F9D\u8D56\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : ""}
+    ${historyRecoveryHtml(chatState) || (chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u624B\u52A8\u5386\u53F2\u91CD\u5EFA\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u53EA\u4F1A\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u91CD\u5EFA\uFF0C\u4E0D\u4F1A\u91CD\u8DD1\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u6309\u4F9D\u8D56\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : "")}
     <section class="ma11-hero">
       <div>
         <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
@@ -6713,6 +6877,7 @@ async function syncHtml() {
   return `
     <section class="ma11-card ma11-form-card">
       <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(state2?.lastSyncStatus || "idle")}">${statusText(state2?.lastSyncStatus || "idle")}</span></header>
+      ${state2?.historyRecovery ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError || state2.historyRecovery.error || "\u6B63\u5728\u6062\u590D\u5386\u53F2")}</div>` : ""}
       ${state2?.historyInvalidation ? `<div class="ma11-error-box">${state2.historyInvalidation.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF0C\u5B8C\u6210\u540E\u4F1A\u81EA\u884C\u6062\u590D\u4E16\u754C\u4E66\u540C\u6B65\u3002" : state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002\u6309\u4F9D\u8D56\u91CD\u5EFA\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002`}</div>` : ""}
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
