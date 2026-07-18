@@ -2,7 +2,7 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.30";
+var VERSION = "1.2.0-rc.31";
 var PIPELINE_VERSION = "ma-pipeline-33";
 var DEFAULT_SETTINGS = {
   enabled: true,
@@ -1735,26 +1735,6 @@ function deleteRow(snapshot, tableKey, rowId, registry2) {
   next[tableKey] = (next[tableKey] ?? []).filter((row) => row.id !== rowId);
   return next;
 }
-function stateSchemaDescription(registry2) {
-  const example = {};
-  for (const table of enabledTables(registryOrDefault(registry2))) {
-    const sample = {
-      id: `${table.key}-1`,
-      title: table.name,
-      content: table.purpose,
-      keywords: [table.name],
-      status: "active",
-      factIds: ["fact_1"],
-      eventId: "event_1"
-    };
-    for (const field of table.fields) {
-      if (STANDARD_FIELDS.has(field.key) || field.key === "lifecycle") continue;
-      sample[field.key] = field.type === "string[]" ? [] : "";
-    }
-    example[table.key] = [sample];
-  }
-  return JSON.stringify(example, null, 2);
-}
 function relevanceText(row) {
   return `${row.title} ${row.content} ${row.status} ${row.keywords.join(" ")}`;
 }
@@ -2259,7 +2239,7 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
       this.pump(laneName);
     });
   }
-  run(laneName, task, signal, work) {
+  run(laneName, task, signal, work, metadata = {}) {
     if (signal.aborted) return Promise.reject(abortError());
     const createdMs = Date.now();
     const id = makeId("request");
@@ -2273,7 +2253,8 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
       requestMs: 0,
       totalMs: 0,
       firstByteMs: void 0,
-      streamMode: "off"
+      streamMode: "off",
+      ...metadata
     };
     this.traces.set(id, trace);
     let resolve;
@@ -2329,12 +2310,29 @@ var TASK_RESPONSE_TOKENS = {
   largeSummary: 3200
 };
 var schemaUnsupportedConnections = /* @__PURE__ */ new Set();
+var SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaUnsupported.v31";
+function readStoredSchemaCapabilities() {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(SCHEMA_CAPABILITY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function persistSchemaCapabilities() {
+  try {
+    globalThis.sessionStorage?.setItem(SCHEMA_CAPABILITY_STORAGE_KEY, JSON.stringify([...schemaUnsupportedConnections]));
+  } catch {
+  }
+}
+for (const key of readStoredSchemaCapabilities()) schemaUnsupportedConnections.add(key);
 function taskConnectionKey(task) {
   const connection = getSettings().connections[task];
   if (connection?.mode === "profile") {
     const profileId = resolveProfileId(connection);
     const profile = supportedProfiles().find((item) => item?.id === profileId);
-    return `${task}:profile:${profileId || "unselected"}:${hashText(`${profile?.api || ""}|${profile?.model || ""}`)}`;
+    return `profile:${profileId || "unselected"}:${hashText(`${profile?.api || ""}|${profile?.model || ""}`)}`;
   }
   const context = getContext();
   const currentIdentity = [
@@ -2347,13 +2345,14 @@ function taskConnectionKey(task) {
     context.model,
     context.api_server
   ].map((value) => safeText(value, 240)).join("|");
-  return `${task}:current-chat:${hashText(currentIdentity)}`;
+  return `current-chat:${hashText(currentIdentity)}`;
 }
 function shouldSkipJsonSchema(task) {
   return schemaUnsupportedConnections.has(taskConnectionKey(task));
 }
 function rememberJsonSchemaUnsupported(task) {
   schemaUnsupportedConnections.add(taskConnectionKey(task));
+  persistSchemaCapabilities();
 }
 function isDefinitiveJsonSchemaUnsupported(error) {
   const message = toErrorMessage(error);
@@ -2528,12 +2527,20 @@ async function generateTask(options) {
     const connection = getSettings().connections[options.task];
     const profileId = connection?.mode === "profile" ? resolveProfileId(connection) : "";
     const lane = connection?.mode === "profile" ? `profile:${profileId || "unselected"}` : "current-chat";
+    const promptChars = Array.isArray(options.prompt) ? options.prompt.reduce((sum, item) => sum + safeText(item?.content, 2e5).length, 0) : safeText(options.prompt, 2e5).length;
+    const tokenLimit = responseTokens(options);
     return await requestScheduler.run(lane, options.task, controller.signal, async () => {
       if (connection?.mode === "profile") {
         if (!profileId) throw new Error(`${options.task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`);
         return generateWithNativeProfile(request, profileId, controller);
       }
       return generateCurrent(request, controller);
+    }, {
+      requestPurpose: options.requestPurpose || (options.jsonSchema ? "schema" : "plain"),
+      systemPromptChars: options.systemPrompt.length,
+      promptChars,
+      responseTokens: tokenLimit,
+      hasJsonSchema: Boolean(options.jsonSchema)
     });
   } finally {
     externalSignal?.removeEventListener("abort", forwardAbort);
@@ -2649,17 +2656,18 @@ async function repairStructuredOutput(task, raw, structureDescription) {
   const repaired = await generateTask({
     task,
     systemPrompt: repairSystemPrompt(structureDescription),
-    prompt: repairUserPrompt(raw)
+    prompt: repairUserPrompt(raw),
+    requestPurpose: "json-repair"
   });
   return parseJsonObject(repaired);
 }
 async function generateWithSchemaFallback(options) {
   if (options.jsonSchema && shouldSkipJsonSchema(options.task)) {
-    return generateTask({ ...options, jsonSchema: void 0 });
+    return generateTask({ ...options, jsonSchema: void 0, requestPurpose: "plain" });
   }
   let schemaFailure;
   try {
-    const raw = await generateTask(options);
+    const raw = await generateTask({ ...options, requestPurpose: options.jsonSchema ? "schema" : "plain" });
     if (!options.jsonSchema || raw.trim() !== "{}") return raw;
     schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
   } catch (error) {
@@ -2668,7 +2676,7 @@ async function generateWithSchemaFallback(options) {
     if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported(options.task);
   }
   try {
-    const fallback = await generateTask({ ...options, jsonSchema: void 0 });
+    const fallback = await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "fallback" });
     rememberJsonSchemaUnsupported(options.task);
     return fallback;
   } catch (fallbackError) {
@@ -4645,72 +4653,169 @@ function normalizeFactPackage(value, sourceMessageKey) {
 }
 
 // src/prompts/state.ts
+var COMMON_FIELD_KEYS = /* @__PURE__ */ new Set([
+  "id",
+  "title",
+  "content",
+  "keywords",
+  "status",
+  "baseContent",
+  "solidifiedHistory",
+  "currentStates",
+  "relatedObjects",
+  "relatedEvents"
+]);
+var ACTIVE_STATUS_RE = /current|active|进行|当前|活跃|未决|持续|开放|受限|暂停/i;
+var MAX_INDEX_ROWS = 240;
+var MAX_FULL_ROWS = 36;
+var MAX_FULL_ROWS_PER_TABLE = 12;
+var MAX_FACTS = 36;
 function tables(registry2) {
   return enabledTables(normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY));
 }
-function fieldInstruction(field) {
-  return `${field.key}\uFF08${field.label}\uFF09\uFF1A${field.description || "\u6309\u5B57\u6BB5\u540D\u79F0\u586B\u5199"}${field.required ? "\uFF0C\u5FC5\u586B" : "\uFF0C\u65E0\u4E8B\u5B9E\u53EF\u7559\u7A7A"}`;
+function extraFieldInstruction(field) {
+  return `${field.key}\uFF08${field.label}\uFF09\uFF1A${field.description || "\u6309\u5B57\u6BB5\u540D\u79F0\u586B\u5199"}${field.required ? "\uFF0C\u5FC5\u586B" : ""}`;
+}
+function compactRegistryDescription(active) {
+  return active.map((table, index) => {
+    const defaultTable = DEFAULT_TABLE_REGISTRY.find((item) => item.key === table.key);
+    const extras = table.fields.filter((field) => {
+      if (!COMMON_FIELD_KEYS.has(field.key)) return true;
+      const base = defaultTable?.fields.find((item) => item.key === field.key);
+      return !base || base.label !== field.label || base.description !== field.description || base.required !== field.required;
+    }).map(extraFieldInstruction).join("\uFF1B");
+    return `${index + 1}. ${table.key}\uFF5C${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}${extras ? `\uFF5C\u6269\u5C55\u5B57\u6BB5\uFF1A${extras}` : ""}`;
+  }).join("\n");
 }
 function stateSystemPrompt(registry2) {
   const active = tables(registry2);
-  const tableLines = active.map((table, index) => {
-    const fields = table.fields.map(fieldInstruction).join("\uFF1B");
-    return `${index + 1}. ${table.key}\uFF5C${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}\uFF5C\u5B57\u6BB5\uFF1A${fields}`;
-  }).join("\n");
   const keys = active.map((table) => table.key).join("\u3001");
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\uFF0C\u4E5F\u662F\u5185\u90E8\u4E8B\u5B9E\u4E0E\u52A8\u6001\u53EF\u89C1\u89C6\u56FE\u7EF4\u62A4\u5668\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\uFF0C\u91C7\u7528\u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
 
-\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5 JSON.parse \u7684\u5B8C\u6574\u5BF9\u8C61\uFF0C\u4E0D\u8981 Markdown\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
+\u53EA\u8F93\u51FA\u53EF\u76F4\u63A5 JSON.parse \u7684\u5B8C\u6574\u5BF9\u8C61\uFF0C\u4E0D\u8981 Markdown\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
 \u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001snapshot\u3002
-snapshot \u53EA\u80FD\u5305\u542B\u5F53\u524D\u542F\u7528\u7684\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\u542F\u7528\u8868\u683C\uFF09"}\u3002\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u672A\u6CE8\u518C\u3001\u5DF2\u5220\u9664\u6216\u5DF2\u505C\u7528\u8868\u683C\u3002
-snapshot \u91C7\u7528\u589E\u91CF\u8868\u683C\u89C6\u56FE\uFF1A\u53EA\u8FD4\u56DE\u672C\u8F6E\u786E\u5B9E\u53D1\u751F\u53D8\u5316\u7684\u8868\u683C\uFF1B\u672A\u8FD4\u56DE\u7684\u542F\u7528\u8868\u683C\u8868\u793A\u6CBF\u7528\u4E0A\u4E00\u4EFD\uFF0C\u4E0D\u5F97\u4E3A\u4E86\u51D1\u9F50\u7ED3\u6784\u91CD\u590D\u8F93\u51FA\u3002\u82E5\u67D0\u5F20\u8868\u786E\u8BA4\u5E94\u88AB\u6E05\u7A7A\uFF0C\u5FC5\u987B\u663E\u5F0F\u8FD4\u56DE\u8BE5\u8868\u4E3A\u7A7A\u6570\u7EC4\u3002
+snapshot \u53EA\u80FD\u51FA\u73B0\u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
 
-\u3010\u5185\u90E8\u4E8B\u5B9E\u5C42\u3011
-facts \u6BCF\u6761\u5B57\u6BB5\uFF1A
-- fact_id\uFF1A\u7A33\u5B9A\u4E8B\u5B9EID\uFF1B\u540C\u4E00\u4E8B\u5B9E\u66F4\u65B0\u65F6\u6CBF\u7528\u3002
-- event_id\uFF1A\u6240\u5C5E\u4E8B\u4EF6\u7EBFID\uFF1B\u540C\u4E00\u56E0\u679C\u7EBF\u6CBF\u7528\u3002\u5373\u4F7F\u201C\u4E8B\u4EF6\u201D\u89C6\u56FE\u88AB\u5220\u9664\u6216\u505C\u7528\u4E5F\u5FC5\u987B\u4FDD\u7559\u3002
-- type\uFF1A\u4E8B\u5B9E\u7C7B\u522B\u6216\u8BED\u4E49\u7C7B\u578B\uFF0C\u4E0D\u53D7\u8868\u683C\u6570\u91CF\u9650\u5236\u3002
-- title\uFF1A\u4E8B\u5B9E\u6807\u9898\u3002
-- occurred\uFF1A\u5DF2\u7ECF\u786E\u5B9A\u53D1\u751F\u7684\u4E8B\u5B9E\u53E5\u6570\u7EC4\u3002
-- unresolved\uFF1A\u5C1A\u672A\u89E3\u51B3\u4F46\u6B63\u6587\u5DF2\u660E\u786E\u5B58\u5728\u7684\u4E8B\u9879\u6570\u7EC4\u3002
-- status\uFF1A\u5F53\u524D\u9636\u6BB5\u6216\u6709\u6548\u72B6\u6001\u3002
-- time_range\uFF1Astart\u3001end\u3001label\uFF1B\u672A\u77E5\u53EF\u4E3A\u7A7A\u5B57\u7B26\u4E32\u3002
-- related_entities\uFF1A\u6B63\u6587\u660E\u786E\u5173\u8054\u7684\u4EBA\u7269\u3001\u7269\u54C1\u3001\u6280\u80FD\u3001\u533A\u57DF\u3001\u7EC4\u7EC7\u3001\u5236\u5EA6\u7B49\u3002
-- keywords\uFF1A\u660E\u786E\u540D\u79F0\u548C\u522B\u540D\u3002
-- operation\uFF1Acreate\u3001update\u3001append\u3001close\u3001supersede\u3002
-- confidence\uFF1Aconfirmed\u3001recorded\u3001reported\u3001uncertain\u3002
+\u3010\u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3011
+1. snapshot[\u8868\u683C\u952E] \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u884C\uFF0C\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\u3002
+2. \u63D2\u4EF6\u6309\u7A33\u5B9A id \u5C06\u8FD4\u56DE\u884C\u5408\u5E76\u8FDB\u65E7\u89C6\u56FE\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\u3002
+3. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id\u3002\u53EA\u6709\u786E\u8BA4\u6574\u5F20\u8868\u5E94\u6E05\u7A7A\u65F6\uFF0C\u624D\u663E\u5F0F\u8FD4\u56DE\u8BE5\u8868\u4E3A []\u3002
+4. \u6BCF\u4E2A\u8FD4\u56DE\u884C\u5FC5\u987B\u5305\u542B id\u3001title\u3001content\u3001keywords\u3001status\u3001factIds\u3001eventId\u3001recall\u3002
+5. recall \u56FA\u5B9A\u4E3A {"any":[],"all":[],"exclude":[]}\uFF1B\u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u548C\u6392\u9664\u8BCD\u3002
+6. baseContent \u4E0E solidifiedHistory \u5DF2\u6709\u5185\u5BB9\u4E0D\u5F97\u6539\u5199\uFF1B\u666E\u901A\u72B6\u6001\u53D8\u5316\u5199\u5165 currentStates \u6216\u5BF9\u5E94\u6269\u5C55\u5B57\u6BB5\u3002
+
+\u3010\u5185\u90E8\u4E8B\u5B9E facts\u3011
+\u6BCF\u6761\u5305\u542B fact_id\u3001event_id\u3001type\u3001title\u3001occurred\u3001unresolved\u3001status\u3001time_range\u3001related_entities\u3001keywords\u3001operation\u3001confidence\u3002
+\u540C\u4E00\u4E8B\u5B9E\u4E0E\u4E8B\u4EF6\u7EBF\u5FC5\u987B\u6CBF\u7528\u65E7 ID\uFF1B\u53EA\u8F93\u51FA\u672C\u8F6E create\u3001update\u3001append\u3001close \u6216 supersede \u53D8\u5316\u3002
 
 \u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
-1. \u53EA\u4FDD\u5B58\u5BF9\u540E\u7EED\u751F\u6210\u786E\u6709\u4F5C\u7528\u3001\u6765\u6E90\u660E\u786E\u7684\u6D3B\u8DC3\u4E8B\u5B9E\uFF1B\u4E0D\u590D\u5236\u5168\u90E8\u65E7\u72B6\u6001\uFF0C\u4E5F\u4E0D\u751F\u6210\u72EC\u7ACB\u7126\u70B9\u4E8B\u5B9E\u3002
-2. \u7981\u6B62\u56E0\u4EBA\u7269\u4EC5\u4EC5\u51FA\u73B0\u3001\u56F4\u89C2\u3001\u542C\u89C1\u3001\u559D\u5F69\u3001\u8BAE\u8BBA\u3001\u540C\u573A\u6216\u4E34\u65F6\u4F8D\u4ECE\u8EAB\u4EFD\u800C\u5EFA\u7ACB\u72B6\u6001\u3001\u5173\u7CFB\u6216\u4E8B\u4EF6\u3002
-3. \u4E24\u4EBA\u5BF9\u6218\u53EA\u4FDD\u7559\u4EA4\u6218\u53CC\u65B9\u3001\u5BF9\u6218\u4E8B\u5B9E\uFF0C\u4EE5\u53CA\u786E\u5B9E\u4F1A\u6539\u53D8\u6218\u5C40\u6216\u7ED3\u679C\u7684\u7B2C\u4E09\u65B9\u3002\u7EAF\u89C2\u4F17\u53CA\u5176\u5173\u7CFB\u3001\u7269\u54C1\u3001\u53CD\u5E94\u3001\u533A\u57DF\u548C\u8BBE\u5B9A\u4E0D\u5F97\u8FDB\u5165 facts\u3001snapshot \u6216\u4E16\u754C\u4E66\u89C6\u56FE\u3002
-4. \u7981\u6B62\u81EA\u52A8\u8865\u5168 NPC \u9690\u79C1\u3001\u7ECF\u5386\u3001\u80FD\u529B\u3001\u9690\u85CF\u5173\u7CFB\u3001\u771F\u5B9E\u610F\u56FE\u548C\u672A\u53D1\u751F\u7ED3\u679C\u3002\u89D2\u8272\u53EA\u56E0\u5B9E\u9645\u53C2\u4E0E\u3001\u660E\u786E\u53D7\u5F71\u54CD\u6216\u73A9\u5BB6\u4EBA\u5DE5\u5EFA\u7ACB\u800C\u8FDB\u5165\u89D2\u8272\u89C6\u56FE\u3002
-5. \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
-6. \u4E0D\u8F93\u51FA focus \u8868\u6216\u7126\u70B9\u4E8B\u5B9E\u3002\u5173\u7CFB\u548C\u6280\u80FD\u4E0D\u5F97\u5355\u5217\uFF1A\u660E\u786E\u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF0C\u660E\u786E\u80FD\u529B\u53CA\u5176\u53EF\u7528/\u53D7\u9650\u53D8\u5316\u5199\u5165\u89D2\u8272 abilityStates\u3002
-7. \u73A9\u5BB6\u8F93\u5165\u4E2D\u7684\u884C\u4E3A\u53EF\u4EE5\u8BB0\u5F55\u4E3A\u5DF2\u58F0\u660E\u52A8\u4F5C\uFF1B\u5916\u90E8\u7ED3\u679C\u5FC5\u987B\u7531\u89D2\u8272\u6B63\u6587\u6216\u5DF2\u6709\u53EF\u9760\u4E8B\u5B9E\u786E\u8BA4\u3002
-8. event_id \u662F\u603B\u7ED3\u548C\u5386\u53F2\u91CD\u5EFA\u7684\u7A33\u5B9A\u4E3B\u7EBF\uFF0C\u4E0D\u5F97\u56E0\u4E8B\u4EF6\u8868\u88AB\u505C\u7528\u800C\u7701\u7565\u3002
+- \u53EA\u8BB0\u5F55\u5BF9\u540E\u7EED\u4ECD\u6709\u4F5C\u7528\u4E14\u6765\u6E90\u660E\u786E\u7684\u4E8B\u5B9E\uFF1B\u540C\u573A\u3001\u56F4\u89C2\u3001\u542C\u89C1\u3001\u8868\u60C5\u3001\u4E34\u65F6\u4F8D\u4ECE\u548C\u666E\u901A\u5BF9\u8BDD\u4E0D\u81EA\u52A8\u5EFA\u7ACB\u5BF9\u8C61\u6216\u5173\u7CFB\u3002
+- \u4E0D\u8F93\u51FA focus \u8868\u6216\u7126\u70B9\u4E8B\u5B9E\u3002\u5173\u7CFB\u548C\u6280\u80FD\u4E0D\u5F97\u5355\u5217\u3002
+- \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
+- \u73A9\u5BB6\u8F93\u5165\u53EF\u8BB0\u5F55\u4E3A\u58F0\u660E\u52A8\u4F5C\uFF1B\u5916\u90E8\u7ED3\u679C\u5FC5\u987B\u7531\u89D2\u8272\u6B63\u6587\u6216\u5DF2\u6709\u53EF\u9760\u4E8B\u5B9E\u786E\u8BA4\u3002
+- \u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF1B\u80FD\u529B\u53D8\u5316\u5199\u5165 abilityStates\uFF1B\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u3002
+- \u5F53\u524D\u5730\u70B9\u53EA\u5199\u65F6\u7A7A\uFF1B\u533A\u57DF\u4EC5\u8BB0\u5F55\u79BB\u5F00\u540E\u4ECD\u6210\u7ACB\u7684\u72EC\u7ACB\u5B9A\u4E49\u6216\u6301\u7EED\u53D8\u5316\u3002
+- \u573A\u666F\u5207\u6362\u540E\uFF0C\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u82E5\u9700\u4FDD\u7559\u5FC5\u987B\u6807\u4E3A\u201C\u5DF2\u79BB\u5F00\u201D\u6216\u201C\u5386\u53F2\u573A\u666F\u201D\uFF0C\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
+- \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
 
-\u3010\u53EF\u89C1\u8868\u683C\u6CE8\u518C\u8868\u3011
-${tableLines || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u683C\uFF1Bsnapshot \u8F93\u51FA\u7A7A\u5BF9\u8C61\uFF0C\u4F46 facts \u4ECD\u6B63\u5E38\u7EF4\u62A4\u3002"}
+\u3010\u542F\u7528\u8868\u683C\u3011
+${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1Bsnapshot \u8F93\u51FA\u7A7A\u5BF9\u8C61\u3002"}
 
-\u3010\u8868\u683C\u7EF4\u62A4\u3011
-1. snapshot \u662F facts \u7684\u5F53\u524D\u89C6\u56FE\uFF0C\u4E0D\u662F\u552F\u4E00\u6570\u636E\u6E90\u3002\u6BCF\u884C\u4F7F\u7528 factIds \u5173\u8054\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4F7F\u7528 eventId \u5173\u8054\u4E8B\u4EF6\u7EBF\u3002
-2. \u4FDD\u7559\u672A\u53D7\u5F71\u54CD\u4E14\u4ECD\u6210\u7ACB\u7684\u65E7\u884C\uFF1B\u53EA\u6709\u6B63\u6587\u660E\u786E\u6539\u53D8\u65F6\u624D\u66F4\u65B0\u3002\u672A\u53D8\u5316\u7684\u6574\u5F20\u8868\u4E0D\u8981\u653E\u8FDB snapshot\u3002
-3. source=manual \u6216 locked=true \u7684\u65E7\u884C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
-4. \u6B63\u5F0F\u4E3B\u4F53\u4EC5\u5728\u5DF2\u663E\u5F71\u4E14\u5BF9\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u65F6\u8FDB\u5165\u201C\u89D2\u8272\u201D\u89C6\u56FE\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5EFA\u7ACB\u3002
-5. \u573A\u666F\u6216\u5730\u70B9\u53D1\u751F\u5207\u6362\u65F6\uFF0C\u201C\u65F6\u7A7A\u201D\u4E2D\u53EA\u80FD\u6709\u4E00\u4E2A\u5F53\u524D\u573A\u666F\uFF1B\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u82E5\u4ECD\u6709\u540E\u7EED\u4EF7\u503C\uFF0C\u72B6\u6001\u5FC5\u987B\u6539\u4E3A\u201C\u5DF2\u79BB\u5F00\u201D\u6216\u201C\u5386\u53F2\u573A\u666F\u201D\uFF0C\u5E76\u63D0\u4F9B\u660E\u786E\u89E6\u53D1\u8BCD\uFF0C\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
-6. \u201C\u533A\u57DF\u201D\u4E0D\u662F\u5F53\u524D\u4F4D\u7F6E\u7684\u526F\u672C\u3002\u4EC5\u56E0\u8FDB\u5165\u3001\u505C\u7559\u3001\u63D0\u53CA\u67D0\u5730\u70B9\uFF0C\u4E0D\u5F97\u521B\u5EFA\u533A\u57DF\u884C\uFF1B\u53EA\u6709\u8BE5\u5730\u70B9\u5B58\u5728\u72EC\u7ACB\u57FA\u7840\u5B9A\u4E49\uFF0C\u6216\u53D1\u751F\u5C01\u9501\u3001\u635F\u574F\u3001\u5F52\u5C5E\u3001\u5F00\u653E\u72B6\u6001\u7B49\u79BB\u5F00\u540E\u4ECD\u6210\u7ACB\u7684\u6301\u7EED\u53D8\u5316\u65F6\uFF0C\u624D\u8FDB\u5165\u533A\u57DF\u3002\u5F53\u524D\u5730\u70B9\u53EA\u5199\u5165\u65F6\u7A7A\u3002
-7. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
-8. keywords \u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u6216\u89E6\u53D1\u8BCD\uFF1Brecall \u53EF\u5305\u542B any/all/exclude\uFF0C\u4E0D\u662F\u6570\u503C\u6743\u91CD\u3002
-9. baseContent \u662F\u7A33\u5B9A\u57FA\u7840\u5C42\uFF1A\u65B0\u5BF9\u8C61\u9996\u6B21\u5EFA\u7ACB\u65F6\u53EA\u80FD\u5199\u6B63\u6587\u660E\u786E\u5185\u5BB9\uFF1B\u5DF2\u6709\u975E\u7A7A\u503C\u5FC5\u987B\u539F\u6837\u4FDD\u7559\u3002
-10. solidifiedHistory \u53EA\u80FD\u7531\u540E\u7EED\u957F\u671F\u603B\u7ED3\u56FA\u5316\uFF0C\u72B6\u6001\u63D0\u53D6\u5FC5\u987B\u539F\u6837\u4FDD\u7559\uFF0C\u4E0D\u5F97\u81EA\u884C\u6DFB\u52A0\u3002
-11. currentStates\u3001relationshipStates\u3001abilityStates \u53EA\u6709\u5728\u5B58\u5728\u660E\u786E fact_id\u3001event_id\u3001\u6765\u6E90\u6D88\u606F\u548C\u6301\u7EED\u4F5C\u7528\u65F6\u624D\u53EF add/update/close/replace\u3002\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u3002
+\u3010\u901A\u7528\u5B57\u6BB5\u3011
+id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u7A33\u5B9A\u57FA\u7840\uFF1BsolidifiedHistory\uFF1A\u5DF2\u56FA\u5316\u5386\u53F2\uFF1BcurrentStates\uFF1A\u6301\u7EED\u53EF\u53D8\u72B6\u6001\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
 
-\u7ED3\u6784\u793A\u4F8B\uFF1A
-{"turnSummary":"\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981","facts":[{"fact_id":"fact_1","event_id":"event_1","type":"event","title":"\u5BF9\u6218\u5F00\u59CB","occurred":["\u7532\u4E0E\u4E59\u5F00\u59CB\u4EA4\u6218"],"unresolved":["\u80DC\u8D1F\u672A\u5B9A"],"status":"\u8FDB\u884C\u4E2D","time_range":{"start":"\u5F53\u524D","end":"","label":"\u672C\u573A\u5BF9\u6218"},"related_entities":["\u7532","\u4E59"],"keywords":["\u7532","\u4E59","\u5BF9\u6218"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(active)}}`;
+\u793A\u4F8B\uFF1A
+{"turnSummary":"\u672C\u8F6E\u4E8B\u5B9E\u6458\u8981","facts":[{"fact_id":"fact_1","event_id":"event_1","type":"event","title":"\u4E8B\u4EF6\u53D8\u5316","occurred":["\u5DF2\u53D1\u751F\u4E8B\u5B9E"],"unresolved":[],"status":"active","time_range":{"start":"\u5F53\u524D","end":"","label":""},"related_entities":["\u7532"],"keywords":["\u7532"],"operation":"update","confidence":"confirmed"}],"snapshot":{"characters":[{"id":"character_a","title":"\u7532","content":"\u7532\u7684\u5F53\u524D\u6709\u6548\u72B6\u6001","keywords":["\u7532"],"status":"active","currentStates":["\u5F53\u524D\u53D8\u5316"],"factIds":["fact_1"],"eventId":"event_1","recall":{"any":["\u7532"],"all":[],"exclude":[]}}]}}`;
 }
-function activeFactPayload(facts) {
-  return facts.map((fact) => ({
+function normalizeSearchText(value) {
+  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+function stringList3(value) {
+  return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+}
+function modelRow(row) {
+  const output = {
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    keywords: row.keywords,
+    status: row.status,
+    factIds: row.factIds ?? [],
+    eventId: row.eventId ?? "",
+    recall: row.recall ?? { any: [row.title, ...row.keywords], all: [], exclude: [] }
+  };
+  if (row.lifecycle) output.lifecycle = row.lifecycle;
+  if (row.fields && typeof row.fields === "object") Object.assign(output, row.fields);
+  return output;
+}
+function rowIndex(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    keywords: row.keywords,
+    eventId: row.eventId ?? ""
+  };
+}
+function rowTerms(row) {
+  return [row.id, row.title, ...row.keywords ?? []].map(normalizeSearchText).filter((term) => term.length >= 2);
+}
+function rowMatches(row, source) {
+  return rowTerms(row).some((term) => source.includes(term));
+}
+function relatedTokens(row) {
+  const fields = row.fields && typeof row.fields === "object" ? row.fields : {};
+  return [
+    ...stringList3(fields.relatedObjects),
+    ...stringList3(fields.relatedEvents)
+  ].map(normalizeSearchText).filter(Boolean);
+}
+function compactSnapshotContext(previous, active, sourceText) {
+  const source = normalizeSearchText(sourceText);
+  const all = [];
+  let order = 0;
+  for (const table of active) {
+    for (const row of previous[table.key] ?? []) {
+      const direct = rowMatches(row, source);
+      const activeRow = table.role === "spacetime" || table.role === "events" && ACTIVE_STATUS_RE.test(row.status) || ACTIVE_STATUS_RE.test(row.status);
+      all.push({ table, row, direct, active: activeRow, order: order += 1 });
+    }
+  }
+  const seedTokens = /* @__PURE__ */ new Set();
+  for (const item of all) {
+    if (!item.direct && !item.active) continue;
+    for (const term of rowTerms(item.row)) seedTokens.add(term);
+  }
+  const related = (item) => relatedTokens(item.row).some((term) => seedTokens.has(term));
+  const priority = (item) => item.direct ? 4 : item.table.role === "spacetime" ? 3 : related(item) ? 2 : item.active ? 1 : 0;
+  const sorted = [...all].sort((a, b) => priority(b) - priority(a) || String(b.row.updatedAt || "").localeCompare(String(a.row.updatedAt || "")) || a.order - b.order);
+  const index = {};
+  for (const item of sorted.slice(0, MAX_INDEX_ROWS)) {
+    (index[item.table.key] ||= []).push(rowIndex(item.row));
+  }
+  const relevant = {};
+  let total = 0;
+  const perTable = /* @__PURE__ */ new Map();
+  for (const item of sorted) {
+    if (priority(item) <= 0 && (previous[item.table.key]?.length ?? 0) > 8) continue;
+    if (total >= MAX_FULL_ROWS) break;
+    const count = perTable.get(item.table.key) ?? 0;
+    if (count >= MAX_FULL_ROWS_PER_TABLE) continue;
+    (relevant[item.table.key] ||= []).push(modelRow(item.row));
+    perTable.set(item.table.key, count + 1);
+    total += 1;
+  }
+  return { index, relevant };
+}
+function factMatches(fact, source) {
+  const terms = [fact.factId, fact.eventId, fact.title, ...fact.keywords, ...fact.relatedEntities].map(normalizeSearchText).filter((term) => term.length >= 2);
+  return terms.some((term) => source.includes(term));
+}
+function activeFactPayload(facts, sourceText) {
+  const source = normalizeSearchText(sourceText);
+  const selected = facts.length <= MAX_FACTS ? facts : facts.filter((fact) => factMatches(fact, source) || fact.unresolvedItems.length > 0 || fact.active).slice(-MAX_FACTS);
+  const fallback = selected.length ? selected : facts.slice(-12);
+  return fallback.map((fact) => ({
     fact_id: fact.factId,
     event_id: fact.eventId,
     occurred: fact.occurredFacts,
@@ -4727,12 +4832,17 @@ function activeFactPayload(facts) {
 }
 function stateUserPrompt(previous, playerText, assistantText, registry2, internalFacts = [], repair = false) {
   const active = tables(registry2);
-  const filteredPrevious = normalizeSnapshot(previous, previous, active, false);
-  return `\u3010\u5F53\u524D\u5185\u90E8\u6D3B\u8DC3\u4E8B\u5B9E\u3011
-${JSON.stringify(activeFactPayload(internalFacts), null, 2)}
+  const sourceText = `${playerText}
+${assistantText}`;
+  const context = compactSnapshotContext(previous, active, sourceText);
+  return `\u3010\u76F8\u5173\u5185\u90E8\u4E8B\u5B9E\u3011
+${JSON.stringify(activeFactPayload(internalFacts, sourceText))}
 
-\u3010\u4E0A\u4E00\u4EFD\u542F\u7528\u8868\u683C\u89C6\u56FE\u3011
-${JSON.stringify(filteredPrevious)}
+\u3010\u65E7\u89C6\u56FE\u7D22\u5F15\uFF1A\u4EC5\u7528\u4E8E\u6CBF\u7528\u7A33\u5B9AID\u3011
+${JSON.stringify(context.index)}
+
+\u3010\u4E0E\u672C\u8F6E\u76F8\u5173\u7684\u65E7\u884C\u5168\u6587\u3011
+${JSON.stringify(context.relevant)}
 
 \u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
 ${playerText || "\uFF08\u7A7A\uFF09"}
@@ -4740,13 +4850,15 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u89D2\u8272\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u5185\u90E8\u4E8B\u5B9E\u5C42\u662F\u8FDE\u7EED\u6027\u6765\u6E90\uFF1B\u6CBF\u7528\u540C\u4E00\u4E8B\u5B9E\u7684 fact_id \u548C event_id\uFF0C\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u66F4\u65B0\u3001\u8FFD\u52A0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u64CD\u4F5C\u3002snapshot \u53EA\u8F93\u51FA\u672C\u8F6E\u53D1\u751F\u53D8\u5316\u7684\u6574\u5F20\u8868\uFF1B\u672A\u8F93\u51FA\u7684\u542F\u7528\u8868\u683C\u7531\u63D2\u4EF6\u6CBF\u7528\u4E0A\u4E00\u4EFD\uFF0C\u786E\u8BA4\u6E05\u7A7A\u65F6\u624D\u663E\u5F0F\u8F93\u51FA []\u3002snapshot \u4E0D\u5F97\u51FA\u73B0\u6CE8\u518C\u8868\u4E4B\u5916\u7684\u952E\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
+\u53EA\u8FD4\u56DE\u672C\u8F6E\u4E8B\u5B9E\u53D8\u5316\u548C\u884C\u7EA7\u8865\u4E01\u3002snapshot \u4E2D\u672A\u8FD4\u56DE\u7684\u884C\u7531\u63D2\u4EF6\u4FDD\u7559\uFF1B\u4E0D\u8981\u590D\u5236\u65E0\u53D8\u5316\u65E7\u884C\u3002\u82E5\u65E7\u89C6\u56FE\u7D22\u5F15\u4E2D\u5DF2\u6709\u540C\u4E00\u5BF9\u8C61\uFF0C\u5FC5\u987B\u6CBF\u7528\u5176 id\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
 }
-function scalarSchema(field) {
-  const semantics = {
+function scalarSchema(field, table) {
+  const defaultField = DEFAULT_TABLE_REGISTRY.find((item) => item.key === table.key)?.fields.find((item) => item.key === field.key);
+  const customized = !defaultField || defaultField.label !== field.label || defaultField.description !== field.description || defaultField.type !== field.type;
+  const semantics = customized ? {
     title: field.label,
     description: `${field.label}\uFF1A${field.description || "\u6309\u5B57\u6BB5\u540D\u79F0\u586B\u5199"}`
-  };
+  } : {};
   if (field.type === "string[]") return { type: "array", items: { type: "string" }, ...semantics };
   if (field.type === "lifecycle") {
     return {
@@ -4771,7 +4883,7 @@ function rowSchema(table) {
   const properties = {};
   const required = [];
   for (const field of table.fields) {
-    properties[field.key] = scalarSchema(field);
+    properties[field.key] = scalarSchema(field, table);
     if (field.required) required.push(field.key);
   }
   properties.factIds = { type: "array", items: { type: "string" } };
@@ -4794,12 +4906,12 @@ function stateJsonSchema(registry2) {
   const snapshotProperties = Object.fromEntries(active.map((table) => [table.key, {
     type: "array",
     title: table.name,
-    description: `${table.name}\uFF1A${table.purpose}`,
+    description: `${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}\uFF5C\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u884C\uFF1B\u7A7A\u6570\u7EC4\u8868\u793A\u786E\u8BA4\u6E05\u7A7A\u6574\u8868`,
     items: rowSchema(table)
   }]));
   return {
-    name: "MirrorAbyssStateResultV26",
-    description: "\u955C\u6E0A\u5185\u90E8\u4E8B\u5B9E\u5C42\u4E0E\u5BF9\u8C61\u5316\u52A8\u6001\u89C6\u56FE",
+    name: "MirrorAbyssStatePatchV31",
+    description: "\u955C\u6E0A\u5185\u90E8\u4E8B\u5B9E\u53D8\u5316\u4E0E\u5BF9\u8C61\u884C\u7EA7\u8865\u4E01",
     strict: true,
     value: {
       type: "object",
@@ -4908,13 +5020,48 @@ function preserveProtectedRows(previous, next, customRegistry) {
   }
   return next;
 }
-function mergeEnabledViews(previous, parsedSnapshot, registry2) {
+function normalizedTitle(value) {
+  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+}
+function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
   const merged = {};
   for (const table of registry2) merged[table.key] = structuredClone(previous[table.key] ?? []);
   for (const table of enabledTables(registry2)) {
-    if (Object.prototype.hasOwnProperty.call(parsedSnapshot, table.key)) {
-      merged[table.key] = parsedSnapshot[table.key];
+    if (!Object.prototype.hasOwnProperty.call(parsedSnapshot, table.key)) continue;
+    const patches = parsedSnapshot[table.key];
+    if (!Array.isArray(patches)) continue;
+    if (patches.length === 0) {
+      merged[table.key] = [];
+      continue;
     }
+    const rows = structuredClone(previous[table.key] ?? []);
+    const idIndex = new Map(rows.map((row, index) => [row.id, index]));
+    const titleIndexes = /* @__PURE__ */ new Map();
+    rows.forEach((row, index) => {
+      const title = normalizedTitle(row.title);
+      if (title) titleIndexes.set(title, [...titleIndexes.get(title) ?? [], index]);
+    });
+    const patchTitleCounts = /* @__PURE__ */ new Map();
+    for (const patch of patches) {
+      const title = normalizedTitle(patch?.title);
+      if (title) patchTitleCounts.set(title, (patchTitleCounts.get(title) ?? 0) + 1);
+    }
+    for (const patch of patches) {
+      if (!patch || typeof patch !== "object") continue;
+      const id = String(patch.id ?? "").trim();
+      const title = normalizedTitle(patch.title);
+      const uniqueTitleIndex = title && patchTitleCounts.get(title) === 1 && (titleIndexes.get(title)?.length ?? 0) === 1 ? titleIndexes.get(title)?.[0] : void 0;
+      const index = id && idIndex.get(id) !== void 0 ? idIndex.get(id) : uniqueTitleIndex;
+      if (index === void 0) {
+        rows.push(patch);
+        if (id) idIndex.set(id, rows.length - 1);
+        if (title) titleIndexes.set(title, [...titleIndexes.get(title) ?? [], rows.length - 1]);
+      } else {
+        rows[index] = patch;
+        if (id) idIndex.set(id, index);
+      }
+    }
+    merged[table.key] = rows;
   }
   return normalizeSnapshot(merged, previous, registry2);
 }
@@ -4936,9 +5083,10 @@ async function runStateExtraction(artifact, force = false) {
     task: "state",
     systemPrompt: stateSystemPrompt(registry2),
     prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
-    structureDescription: `{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","type":"event","title":"...","occurred":["..."],"unresolved":["..."],"status":"...","time_range":{"start":"","end":"","label":""},"related_entities":["..."],"keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(registry2)}}`,
+    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","type":"event","title":"...","occurred":["..."],"unresolved":[],"status":"active","time_range":{"start":"","end":"","label":""},"related_entities":["..."],"keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":{"<tableKey>":[{"id":"...","title":"...","content":"...","keywords":["..."],"status":"active","factIds":["..."],"eventId":"...","recall":{"any":["..."],"all":[],"exclude":[]}}]}}',
     allowRepair: settings.repairInvalidJsonOnce,
-    jsonSchema: stateJsonSchema(registry2)
+    jsonSchema: stateJsonSchema(registry2),
+    maxTokens: 2400
   };
   const inputFingerprint = hashText(JSON.stringify(request));
   assertRegistryCurrent(expectedRegistryFingerprint);
@@ -4969,7 +5117,7 @@ async function runStateExtraction(artifact, force = false) {
     }
     assertArtifactCommitCurrent(artifact);
     assertRegistryCurrent(expectedRegistryFingerprint);
-    const mergedViews = preserveStableObjectIds(previous, mergeEnabledViews(previous, parsed.snapshot, registry2), registry2);
+    const mergedViews = preserveStableObjectIds(previous, mergeStateRowPatches(previous, parsed.snapshot, registry2), registry2);
     const normalized = filterPassiveObservers(
       enforceObjectViewAllocation(
         removeFocusCharacterDuplicates(
@@ -6153,12 +6301,12 @@ function compactLabel(value) {
   const text = String(value || "").trim();
   return text.length > 24 ? `${text.slice(0, 23)}\u2026` : text;
 }
-function stringList3(value) {
+function stringList4(value) {
   return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
 }
 function relationText(row) {
   const fields = row.fields ?? {};
-  return [row.title, row.content, row.status, ...row.keywords, ...stringList3(fields.relationshipStates), ...stringList3(fields.relatedObjects), ...stringList3(fields.relatedEvents)].join(" ").toLowerCase();
+  return [row.title, row.content, row.status, ...row.keywords, ...stringList4(fields.relationshipStates), ...stringList4(fields.relatedObjects), ...stringList4(fields.relatedEvents)].join(" ").toLowerCase();
 }
 function uniquePairKey(a, b, label) {
   const [left, right] = [a, b].sort();
@@ -6185,7 +6333,7 @@ function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
     const row = rowsByNode.get(source.id);
     if (!row) continue;
     const text = relationText(row);
-    const relationshipText = stringList3(row.fields?.relationshipStates).join("\uFF1B");
+    const relationshipText = stringList4(row.fields?.relationshipStates).join("\uFF1B");
     for (const target of nodes) {
       if (target.id === source.id || target.label.trim().length < 2) continue;
       if (!text.includes(target.label.trim().toLowerCase())) continue;
@@ -6328,6 +6476,11 @@ function safeRequest(trace) {
     totalMs: trace.totalMs,
     firstByteMs: trace.firstByteMs,
     streamMode: trace.streamMode,
+    requestPurpose: trace.requestPurpose,
+    systemPromptChars: trace.systemPromptChars,
+    promptChars: trace.promptChars,
+    responseTokens: trace.responseTokens,
+    hasJsonSchema: trace.hasJsonSchema,
     error: redactedError(trace.error)
   };
 }

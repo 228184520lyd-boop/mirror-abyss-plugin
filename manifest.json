@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.30",
+  "version": "1.2.0-rc.31",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊语义表头版：默认表头可编辑并进入状态传输，稳定字段键与世界书身份保持不变。"
+  "description": "镜渊行级状态补丁版：压缩结构化请求，按稳定ID合并变化行，并持久记忆当前连接的Schema兼容性。"
 }
