@@ -383,6 +383,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .ma11-order-number { display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid var(--ma-border); border-radius: 999px; font-weight: 700; }
 .ma11-table-manager-fields { display: grid; grid-template-columns: minmax(12rem, .7fr) minmax(18rem, 1.4fr) minmax(18rem, 1.4fr); gap: .75rem; }
 .ma11-table-manager-fields label { display: grid; gap: .35rem; }
+.ma11-table-manager-fields .ma11-table-header-editor { grid-column: 1 / -1; }
 .ma11-table-manager-fields input,
 .ma11-table-manager-fields textarea {
   width: 100%; box-sizing: border-box; border: 1px solid var(--ma-border); border-radius: 8px; padding: .58rem .65rem; background: var(--ma-input); color: var(--ma-text);

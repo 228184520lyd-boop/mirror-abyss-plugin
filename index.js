@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.23";
-var PIPELINE_VERSION = "ma-pipeline-26";
+var VERSION = "1.2.0-rc.29";
+var PIPELINE_VERSION = "ma-pipeline-32";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -306,6 +306,24 @@ var CORE_FIELD_KEYS = [
   "objectType",
   "migrationStatus"
 ];
+var EDITABLE_HEADER_FIELD_KEYS = ["title", "content", "status", "keywords"];
+var EDITABLE_HEADER_FIELD_KEY_SET = new Set(EDITABLE_HEADER_FIELD_KEYS);
+var RESERVED_CUSTOM_FIELD_KEYS = /* @__PURE__ */ new Set([
+  ...CORE_FIELD_KEYS,
+  "name",
+  "summary",
+  "source",
+  "locked",
+  "lockMode",
+  "lifecycle",
+  "updatedAt",
+  "fact_ids",
+  "event_id",
+  "fields",
+  "__proto__",
+  "prototype",
+  "constructor"
+]);
 var COMMON_FIELDS = [
   { key: "id", label: "\u7A33\u5B9AID", description: "\u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u7A33\u5B9AID\uFF1B\u4E0D\u5F97\u56E0\u573A\u666F\u3001\u72B6\u6001\u6216\u603B\u7ED3\u7248\u672C\u53D8\u5316\u91CD\u65B0\u521B\u5EFA\u3002", type: "string", required: true },
   { key: "title", label: "\u5BF9\u8C61", description: "\u5BF9\u8C61\u7684\u7A33\u5B9A\u540D\u79F0\u6216\u660E\u786E\u6807\u8BC6\u3002", type: "string", required: true },
@@ -395,7 +413,21 @@ function normalizedRole(value) {
 function mergeRoleFields(role, sourceFields) {
   const fields = roleFields(role);
   const incoming = (Array.isArray(sourceFields) ? sourceFields : []).map(normalizeField).filter((field) => Boolean(field));
-  for (const field of incoming) if (!fields.some((existing) => existing.key === field.key)) fields.push(field);
+  for (const field of incoming) {
+    const existingIndex = fields.findIndex((existing) => existing.key === field.key);
+    if (existingIndex < 0) {
+      fields.push(field);
+      continue;
+    }
+    if (!EDITABLE_HEADER_FIELD_KEY_SET.has(field.key)) continue;
+    const canonical = fields[existingIndex];
+    fields[existingIndex] = {
+      ...canonical,
+      label: field.label || canonical.label,
+      description: field.description || canonical.description
+      // key/type/required 永远由 canonical 定义提供，玩家改表头不能改变传输结构。
+    };
+  }
   return fields;
 }
 function normalizeTableRegistry(value) {
@@ -459,13 +491,56 @@ function restoreDefaultTableRegistry() {
 function registryFingerprint(registry2) {
   return hashText(JSON.stringify(normalizeTableRegistry(registry2).map(({ key, name, purpose, role, enabled, order, fields }) => ({ key, name, purpose, role, enabled, order, fields }))));
 }
+function customizedFieldLabel(table, fieldKey, fallback) {
+  const current = table.fields.find((field) => field.key === fieldKey);
+  const canonical = roleFields(table.role).find((field) => field.key === fieldKey);
+  if (!current?.label || current.label === canonical?.label) return fallback;
+  return current.label;
+}
+function tableColumnHeaders(table) {
+  const title = customizedFieldLabel(table, "title", "\u5BF9\u8C61");
+  const content = customizedFieldLabel(table, "content", "\u5F53\u524D\u8BB0\u5F55");
+  const status = customizedFieldLabel(table, "status", "\u72B6\u6001");
+  const keywords = customizedFieldLabel(table, "keywords", "\u5173\u952E\u8BCD");
+  return { title, content, state: `${status}\u4E0E${keywords}` };
+}
+function editableHeaderText(table) {
+  return EDITABLE_HEADER_FIELD_KEYS.map((key) => {
+    const field = table.fields.find((item) => item.key === key) ?? roleFields(table.role).find((item) => item.key === key);
+    return field ? `${field.key}:${field.label}:${field.description}` : "";
+  }).filter(Boolean).join("\n");
+}
+function updateTableHeaders(registry2, key, headerText) {
+  const current = normalizeTableRegistry(registry2).find((table) => table.key === key);
+  if (!current) return normalizeTableRegistry(registry2);
+  const updates = /* @__PURE__ */ new Map();
+  for (const rawLine of headerText.split(/\n+/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const parts = line.split(/[:：]/).map((part) => part.trim());
+    const fieldKey = parts.shift() || "";
+    if (!EDITABLE_HEADER_FIELD_KEY_SET.has(fieldKey)) {
+      throw new Error(`\u201C${fieldKey || "\u7A7A\u5B57\u6BB5"}\u201D\u4E0D\u662F\u53EF\u7F16\u8F91\u8BED\u4E49\u8868\u5934\uFF1B\u5E95\u5C42\u5B57\u6BB5\u952E\u4E0D\u53EF\u4FEE\u6539`);
+    }
+    const canonical = roleFields(current.role).find((field) => field.key === fieldKey);
+    const label = safeText(parts.shift(), 80).trim() || canonical?.label || fieldKey;
+    const description = safeText(parts.join("\uFF1A"), 500).trim() || canonical?.description || label;
+    updates.set(fieldKey, { label, description });
+  }
+  const fields = current.fields.map((field) => {
+    const update = updates.get(field.key);
+    return update ? { ...field, ...update } : field;
+  });
+  return updateTableDefinition(registry2, key, { fields });
+}
 function parseCustomFields(fieldText = "") {
   const used = /* @__PURE__ */ new Set();
   return fieldText.split(/\n+/).map((value) => value.trim()).filter(Boolean).map((line, index) => {
     const parts = line.split(/[:：]/).map((part) => part.trim());
     const rawKey = parts[0] || `field_${index + 1}`;
     const key = safeText(rawKey, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "") || `field_${index + 1}`;
-    if (CORE_FIELD_KEYS.includes(key) || key === "lifecycle" || used.has(key)) return null;
+    if (RESERVED_CUSTOM_FIELD_KEYS.has(key)) throw new Error(`\u5B57\u6BB5\u201C${key}\u201D\u662F\u7CFB\u7EDF\u4FDD\u7559\u5B57\u6BB5\uFF0C\u4E0D\u80FD\u7528\u4F5C\u81EA\u5B9A\u4E49\u5B57\u6BB5\u952E`);
+    if (used.has(key)) return null;
     used.add(key);
     const label = safeText(parts[1] || key, 80).trim() || key;
     const type = parts[2] === "string[]" ? "string[]" : "string";
@@ -479,7 +554,22 @@ function customFieldText(table) {
 function updateTableFields(registry2, key, fieldText) {
   const current = normalizeTableRegistry(registry2).find((table) => table.key === key);
   if (!current) return normalizeTableRegistry(registry2);
-  return updateTableDefinition(registry2, key, { fields: [...roleFields(current.role), ...parseCustomFields(fieldText)] });
+  const previousCustom = current.fields.filter((field) => !CORE_FIELD_KEYS.includes(field.key) && field.key !== "lifecycle");
+  const nextCustom = parseCustomFields(fieldText);
+  const nextByKey = new Map(nextCustom.map((field) => [field.key, field]));
+  const previousKeys = new Set(previousCustom.map((field) => field.key));
+  const removedKeys = previousCustom.filter((field) => !nextByKey.has(field.key)).map((field) => field.key);
+  const addedKeys = nextCustom.filter((field) => !previousKeys.has(field.key)).map((field) => field.key);
+  if (removedKeys.length && addedKeys.length) {
+    throw new Error(`\u5B57\u6BB5\u952E\u662F\u7A33\u5B9A\u952E\uFF0C\u4E0D\u80FD\u5728\u540C\u4E00\u6B21\u8868\u5934\u7F16\u8F91\u4E2D\u628A\u201C${removedKeys.join("\u3001")}\u201D\u6539\u4E3A\u201C${addedKeys.join("\u3001")}\u201D`);
+  }
+  for (const previous of previousCustom) {
+    const next = nextByKey.get(previous.key);
+    if (!next) continue;
+    if (next.type !== previous.type) throw new Error(`\u5B57\u6BB5\u201C${previous.key}\u201D\u7684\u5B57\u6BB5\u7C7B\u578B\u521B\u5EFA\u540E\u4E0D\u53EF\u76F4\u63A5\u4FEE\u6539`);
+  }
+  const coreFields = current.fields.filter((field) => CORE_FIELD_KEYS.includes(field.key) || field.key === "lifecycle");
+  return updateTableDefinition(registry2, key, { fields: [...coreFields, ...nextCustom] });
 }
 function createCustomTable(registry2, name, purpose, fieldText = "") {
   const next = normalizeTableRegistry(registry2);
@@ -536,6 +626,35 @@ function mergeIds(row, source) {
   row.keywords = [.../* @__PURE__ */ new Set([...list(row.keywords), ...list(source.keywords)])];
   if (!row.eventId && (source.eventId || source.event_id)) row.eventId = safeText(source.eventId || source.event_id, 160);
 }
+function mergeLegacyCharactersByStableId(rows) {
+  const output = [];
+  const byId = /* @__PURE__ */ new Map();
+  for (const raw of rows) {
+    const row = deepClone(raw);
+    const id = safeText(row?.id, 160).trim();
+    const existing = id ? byId.get(id) : void 0;
+    if (!existing) {
+      output.push(row);
+      if (id) byId.set(id, row);
+      continue;
+    }
+    const existingFields = existing.fields && typeof existing.fields === "object" ? existing.fields : {};
+    const incomingFields = row.fields && typeof row.fields === "object" ? row.fields : {};
+    for (const [key, value] of Object.entries(incomingFields)) {
+      if (Array.isArray(value)) existingFields[key] = [.../* @__PURE__ */ new Set([...list(existingFields[key]), ...list(value)])];
+      else if (!safeText(existingFields[key], 12e3).trim() && safeText(value, 12e3).trim()) existingFields[key] = deepClone(value);
+    }
+    existing.fields = existingFields;
+    if (safeText(row.content, 12e3).trim()) existing.content = row.content;
+    if (safeText(row.status, 120).trim()) existing.status = row.status;
+    if (safeText(row.updatedAt, 80).trim()) existing.updatedAt = row.updatedAt;
+    existing.source = existing.source === "manual" || row.source === "manual" ? "manual" : existing.source ?? row.source;
+    existing.locked = Boolean(existing.locked || row.locked);
+    existing.lockMode = existing.locked || existing.lockMode === "all" || row.lockMode === "all" ? "all" : existing.source === "manual" || existing.lockMode === "base" || row.lockMode === "base" ? "base" : void 0;
+    mergeIds(existing, row);
+  }
+  return output;
+}
 function pendingCustom(row, objectType) {
   return {
     ...deepClone(row),
@@ -552,9 +671,15 @@ function migrateSnapshotTables(value, registry2) {
   for (const [sourceKey, rawRows] of Object.entries(source)) {
     if (!Array.isArray(rawRows)) continue;
     const targetKey = LEGACY_TABLE_KEY_MAP[sourceKey] ?? sourceKey;
+    if (targetKey === characterKey && ["characters", "state"].includes(sourceKey)) continue;
     if (targetKey in output) output[targetKey].push(...deepClone(rawRows));
   }
-  const characters = output[characterKey] ?? (output[characterKey] = []);
+  for (const sourceKey of ["characters", "state"]) {
+    const rawRows = source[sourceKey];
+    if (Array.isArray(rawRows)) output[characterKey].push(...deepClone(rawRows));
+  }
+  const characters = mergeLegacyCharactersByStableId(output[characterKey] ?? []);
+  output[characterKey] = characters;
   const characterNames = characters.map((row) => ({ row, names: characterNameAliases(row?.title) })).filter((item) => item.names.length);
   const distribute = (rows, field, objectType) => {
     if (!Array.isArray(rows)) return;
@@ -709,8 +834,21 @@ function previousUserText(beforeIndex) {
   }
   return "";
 }
+function chatLocator(context) {
+  const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? "";
+  const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? "unknown"}`;
+  return chatId ? `${scope}|${String(chatId)}` : "";
+}
+function currentChatLocator() {
+  return chatLocator(getContext());
+}
 function currentChatKey() {
   const context = getContext();
+  const locator = chatLocator(context);
+  const storedState = context.chatMetadata?.[MODULE_NAME]?.state;
+  if (locator && storedState?.chatLocator === locator && safeText(storedState.chatKey, 240).trim()) {
+    return safeText(storedState.chatKey, 240).trim();
+  }
   const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? "";
   const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? "unknown"}`;
   const seed = `${scope}|${chatId || context.name1 || "chat"}|${context.name2 || ""}`;
@@ -1014,6 +1152,17 @@ function invalidateFactsAfterMessages(facts, validMessageIds) {
   return { facts: kept, removedFactIds };
 }
 
+// src/domain/observer.ts
+var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
+var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
+var NEGATED_INTERVENTION = /(?:未|没有|并未|从未|不曾)\s*(?:介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害)/gi;
+function isPurePassiveObserverText(value) {
+  const text = String(value ?? "");
+  if (!PASSIVE_OBSERVER.test(text)) return false;
+  const affirmativeText = text.replace(NEGATED_INTERVENTION, "");
+  return !CAUSAL_INTERVENTION.test(affirmativeText);
+}
+
 // src/domain/snapshot.ts
 var EXISTENCE_STATES = /* @__PURE__ */ new Set([
   "\u5B58\u6D3B",
@@ -1181,7 +1330,7 @@ function normalizeSnapshot(value, previousSnapshot2, registry2, includeDisabled 
   return attachLegacyAliases(output, tables2);
 }
 function identityTitle(value) {
-  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function stateRows(snapshot, registry2) {
   const key = characterTableKey(registry2);
@@ -1194,12 +1343,26 @@ function preservePersistentCharacters(previous, next, registry2) {
   const nextRows = next[key] ?? (next[key] = []);
   const oldRows = previous[key] ?? previous.characters ?? [];
   const byId = new Map(nextRows.map((row) => [row.id, row]));
-  const byTitle = new Map(nextRows.map((row) => [identityTitle(row.title), row]));
+  const idRemap = /* @__PURE__ */ new Map();
+  const oldTitleCounts = /* @__PURE__ */ new Map();
+  const nextByTitle = /* @__PURE__ */ new Map();
+  for (const row of oldRows) {
+    const title = identityTitle(row.title);
+    if (title) oldTitleCounts.set(title, (oldTitleCounts.get(title) ?? 0) + 1);
+  }
+  for (const row of nextRows) {
+    const title = identityTitle(row.title);
+    if (title) nextByTitle.set(title, [...nextByTitle.get(title) ?? [], row]);
+  }
   for (const oldRow of oldRows) {
     if (byId.has(oldRow.id)) continue;
-    const titleMatch = byTitle.get(identityTitle(oldRow.title));
+    const title = identityTitle(oldRow.title);
+    const titleMatches = title ? nextByTitle.get(title) ?? [] : [];
+    const titleMatch = title && oldTitleCounts.get(title) === 1 && titleMatches.length === 1 ? titleMatches[0] : void 0;
     if (titleMatch) {
+      const replacedId = titleMatch.id;
       titleMatch.id = oldRow.id;
+      if (replacedId && replacedId !== oldRow.id) idRemap.set(replacedId, oldRow.id);
       if (oldRow.locked || oldRow.lockMode === "all") {
         Object.assign(titleMatch, structuredClone(oldRow));
       } else if (oldRow.source === "manual" || oldRow.lockMode === "base") {
@@ -1226,17 +1389,10 @@ function preservePersistentCharacters(previous, next, registry2) {
     const restored = structuredClone(oldRow);
     nextRows.push(restored);
     byId.set(restored.id, restored);
-    byTitle.set(identityTitle(restored.title), restored);
+    if (title) nextByTitle.set(title, [...nextByTitle.get(title) ?? [], restored]);
   }
-  const seenTitles = /* @__PURE__ */ new Set();
-  next[key] = nextRows.filter((row) => {
-    const title = identityTitle(row.title);
-    if (!title || !seenTitles.has(title)) {
-      if (title) seenTitles.add(title);
-      return true;
-    }
-    return false;
-  });
+  next[key] = nextRows;
+  rewriteObjectReferences(next, idRemap);
   return attachLegacyAliases(next, tables2);
 }
 function preserveObjectBaseLayers(previous, next, registry2) {
@@ -1244,9 +1400,21 @@ function preserveObjectBaseLayers(previous, next, registry2) {
   for (const table of tables2) {
     const previousRows = previous[table.key] ?? [];
     const byId = new Map(previousRows.map((row) => [row.id, row]));
-    const byTitle = new Map(previousRows.map((row) => [identityTitle(row.title), row]));
+    const previousByTitle = /* @__PURE__ */ new Map();
+    const nextTitleCounts = /* @__PURE__ */ new Map();
+    for (const row of previousRows) {
+      const title = identityTitle(row.title);
+      if (title) previousByTitle.set(title, [...previousByTitle.get(title) ?? [], row]);
+    }
     for (const row of next[table.key] ?? []) {
-      const old = byId.get(row.id) ?? byTitle.get(identityTitle(row.title));
+      const title = identityTitle(row.title);
+      if (title) nextTitleCounts.set(title, (nextTitleCounts.get(title) ?? 0) + 1);
+    }
+    for (const row of next[table.key] ?? []) {
+      const title = identityTitle(row.title);
+      const titleMatches = title ? previousByTitle.get(title) ?? [] : [];
+      const uniqueTitleMatch = title && titleMatches.length === 1 && nextTitleCounts.get(title) === 1 ? titleMatches[0] : void 0;
+      const old = byId.get(row.id) ?? uniqueTitleMatch;
       if (!old) continue;
       row.fields ||= {};
       const oldFields = old.fields ?? {};
@@ -1279,6 +1447,242 @@ function removeFocusCharacterDuplicates(snapshot, registry2) {
   });
   return snapshot;
 }
+function rowArray(value) {
+  return Array.isArray(value) ? value.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
+}
+var PERSISTED_CHARACTER_STATE_FIELDS = ["currentStates", "relationshipStates", "abilityStates"];
+var PERSISTED_CHARACTER_SHARED_FIELDS = ["solidifiedHistory", "relatedObjects", "relatedEvents"];
+function persistedCharacterName(value) {
+  const original = safeText(value, 240).trim();
+  let name = original.replace(/^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]\s*/i, "").replace(/^(?:人物|角色|档案|信息)\s*[:：|｜-]\s*/i, "").replace(/\s*(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i, "").replace(/\s*(?:人物|角色)?(?:档案|信息)\s*$/i, "").trim();
+  if (!name) name = original;
+  const identity = identityTitle(name);
+  return (/* @__PURE__ */ new Set(["\u89D2\u8272", "\u4EBA\u7269", "\u672A\u77E5", "\u672A\u547D\u540D", "unknown", "unknowncharacter"])).has(identity) ? "" : identity;
+}
+function explicitPersistedStateTitle(value) {
+  const title = safeText(value, 240).trim();
+  return /^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]/i.test(title) || /(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i.test(title);
+}
+function hasPersistedBaseSignal(row) {
+  const baseContent = safeText(row.fields?.baseContent, 12e3).trim();
+  return Boolean(baseContent || row.source === "manual" || row.locked || row.lockMode === "base" || row.lockMode === "all");
+}
+function hasPersistedStateSignal(row) {
+  const generatedId = /^characters(?:_|$)/i.test(safeText(row.id, 160).trim());
+  const mutableState = PERSISTED_CHARACTER_STATE_FIELDS.some((field) => rowArray(row.fields?.[field]).length > 0);
+  return explicitPersistedStateTitle(row.title) || generatedId && mutableState;
+}
+function mergedRecall(base, state2) {
+  if (!base && !state2) return void 0;
+  return {
+    any: [.../* @__PURE__ */ new Set([...base?.any ?? [], ...state2?.any ?? []])],
+    all: [.../* @__PURE__ */ new Set([...base?.all ?? [], ...state2?.all ?? []])],
+    exclude: [.../* @__PURE__ */ new Set([...base?.exclude ?? [], ...state2?.exclude ?? []])]
+  };
+}
+function mergePersistedCharacterDuplicates(snapshot, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  const key = characterTableKey(tables2);
+  const idRemap = /* @__PURE__ */ new Map();
+  if (!key) return { snapshot, idRemap, mergedCount: 0 };
+  if (key !== "state" && Object.prototype.propertyIsEnumerable.call(snapshot, "state") && Array.isArray(snapshot.state)) {
+    return { snapshot, idRemap, mergedCount: 0 };
+  }
+  const rows = snapshot[key] ?? [];
+  const groups = /* @__PURE__ */ new Map();
+  rows.forEach((row, index) => {
+    const name = persistedCharacterName(row.title);
+    if (!name) return;
+    groups.set(name, [...groups.get(name) ?? [], { row, index }]);
+  });
+  const replacementByIndex = /* @__PURE__ */ new Map();
+  const removedIndexes = /* @__PURE__ */ new Set();
+  let mergedCount = 0;
+  for (const group of groups.values()) {
+    if (group.length !== 2) continue;
+    const bases = group.filter(({ row }) => hasPersistedBaseSignal(row));
+    const states = group.filter(({ row }) => !hasPersistedBaseSignal(row) && hasPersistedStateSignal(row));
+    if (bases.length !== 1 || states.length !== 1) continue;
+    const baseEntry = bases[0];
+    const stateEntry = states[0];
+    if (baseEntry.row.id === stateEntry.row.id) continue;
+    const base = baseEntry.row;
+    const state2 = stateEntry.row;
+    const baseFields = structuredClone(base.fields ?? {});
+    const stateFields = state2.fields ?? {};
+    const fields = { ...baseFields };
+    for (const field of PERSISTED_CHARACTER_STATE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(stateFields, field)) fields[field] = structuredClone(stateFields[field]);
+    }
+    for (const field of PERSISTED_CHARACTER_SHARED_FIELDS) {
+      fields[field] = [.../* @__PURE__ */ new Set([...rowArray(baseFields[field]), ...rowArray(stateFields[field])])];
+    }
+    for (const [field, value] of Object.entries(stateFields)) {
+      if (field === "baseContent" || field === "solidifiedHistory" || PERSISTED_CHARACTER_STATE_FIELDS.includes(field) || PERSISTED_CHARACTER_SHARED_FIELDS.includes(field)) continue;
+      const current = fields[field];
+      if (Array.isArray(value)) fields[field] = [.../* @__PURE__ */ new Set([...rowArray(current), ...rowArray(value)])];
+      else if (!safeText(current, 4e3).trim() && safeText(value, 4e3).trim()) fields[field] = structuredClone(value);
+    }
+    const merged = {
+      ...structuredClone(base),
+      id: base.id,
+      title: base.title,
+      content: state2.content || base.content,
+      status: state2.status || base.status,
+      updatedAt: state2.updatedAt || base.updatedAt,
+      keywords: [.../* @__PURE__ */ new Set([...base.keywords ?? [], ...state2.keywords ?? []])],
+      factIds: [.../* @__PURE__ */ new Set([...base.factIds ?? [], ...state2.factIds ?? []])],
+      eventId: state2.eventId || base.eventId,
+      recall: mergedRecall(base.recall, state2.recall),
+      lifecycle: state2.lifecycle ? structuredClone(state2.lifecycle) : structuredClone(base.lifecycle),
+      source: base.source,
+      locked: base.locked,
+      lockMode: base.lockMode,
+      fields
+    };
+    replacementByIndex.set(baseEntry.index, merged);
+    removedIndexes.add(stateEntry.index);
+    idRemap.set(state2.id, base.id);
+    mergedCount += 1;
+  }
+  if (!mergedCount) return { snapshot, idRemap, mergedCount };
+  snapshot[key] = rows.map((row, index) => replacementByIndex.get(index) ?? row).filter((_row, index) => !removedIndexes.has(index));
+  rewriteObjectReferences(snapshot, idRemap);
+  return { snapshot: attachLegacyAliases(snapshot, tables2), idRemap, mergedCount };
+}
+function rewriteObjectReferences(snapshot, idRemap) {
+  if (!idRemap.size) return snapshot;
+  for (const rows of Object.values(snapshot)) {
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      const related = rowArray(row.fields?.relatedObjects);
+      if (!related.length) continue;
+      row.fields ||= {};
+      row.fields.relatedObjects = [...new Set(related.map((id) => idRemap.get(id) ?? id))];
+    }
+  }
+  return snapshot;
+}
+function mergeRowsByIdentity(existing, incoming) {
+  const fields = { ...existing.fields ?? {} };
+  for (const [key, value] of Object.entries(incoming.fields ?? {})) {
+    if (Array.isArray(value)) fields[key] = [.../* @__PURE__ */ new Set([...rowArray(fields[key]), ...rowArray(value)])];
+    else if (safeText(value, 4e3).trim()) fields[key] = structuredClone(value);
+  }
+  return {
+    ...existing,
+    ...incoming,
+    id: existing.id,
+    title: incoming.title || existing.title,
+    content: incoming.content || existing.content,
+    keywords: [.../* @__PURE__ */ new Set([...existing.keywords ?? [], ...incoming.keywords ?? []])],
+    factIds: [.../* @__PURE__ */ new Set([...existing.factIds ?? [], ...incoming.factIds ?? []])],
+    eventId: incoming.eventId || existing.eventId,
+    fields,
+    source: existing.source === "manual" || incoming.source === "manual" ? "manual" : "auto",
+    locked: Boolean(existing.locked || incoming.locked),
+    lockMode: existing.lockMode === "all" || incoming.lockMode === "all" ? "all" : existing.lockMode === "base" || incoming.lockMode === "base" ? "base" : void 0
+  };
+}
+function preserveStableObjectIds(previous, next, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  const idRemap = /* @__PURE__ */ new Map();
+  for (const table of tables2) {
+    const oldRows = previous[table.key] ?? [];
+    const newRows = next[table.key] ?? [];
+    const oldById = new Map(oldRows.map((row) => [row.id, row]));
+    const oldByEvent = /* @__PURE__ */ new Map();
+    const oldByTitle = /* @__PURE__ */ new Map();
+    const oldByFact = /* @__PURE__ */ new Map();
+    const newEventCounts = /* @__PURE__ */ new Map();
+    const newTitleCounts = /* @__PURE__ */ new Map();
+    const newFactCounts = /* @__PURE__ */ new Map();
+    for (const row of newRows) {
+      if (row.eventId) newEventCounts.set(row.eventId, (newEventCounts.get(row.eventId) ?? 0) + 1);
+      const title = identityTitle(row.title);
+      if (title) newTitleCounts.set(title, (newTitleCounts.get(title) ?? 0) + 1);
+      for (const factId of new Set(row.factIds ?? [])) {
+        newFactCounts.set(factId, (newFactCounts.get(factId) ?? 0) + 1);
+      }
+    }
+    for (const row of oldRows) {
+      if (row.eventId) oldByEvent.set(row.eventId, [...oldByEvent.get(row.eventId) ?? [], row]);
+      const title = identityTitle(row.title);
+      if (title) oldByTitle.set(title, [...oldByTitle.get(title) ?? [], row]);
+      for (const factId of new Set(row.factIds ?? [])) oldByFact.set(factId, [...oldByFact.get(factId) ?? [], row]);
+    }
+    const claimed = /* @__PURE__ */ new Set();
+    const uniqueUnclaimed = (rows) => {
+      if (rows?.length !== 1 || claimed.has(rows[0].id)) return void 0;
+      return rows[0];
+    };
+    for (const row of newRows) {
+      let matched = oldById.get(row.id);
+      if (matched && claimed.has(matched.id)) matched = void 0;
+      if (!matched && row.eventId && newEventCounts.get(row.eventId) === 1) {
+        matched = uniqueUnclaimed(oldByEvent.get(row.eventId));
+      }
+      const title = identityTitle(row.title);
+      if (!matched && title && newTitleCounts.get(title) === 1) matched = uniqueUnclaimed(oldByTitle.get(title));
+      if (!matched && row.factIds?.length) {
+        const candidates = /* @__PURE__ */ new Set();
+        for (const factId of new Set(row.factIds)) {
+          if (newFactCounts.get(factId) !== 1) continue;
+          const candidate = uniqueUnclaimed(oldByFact.get(factId));
+          if (candidate) candidates.add(candidate);
+        }
+        if (candidates.size === 1) matched = [...candidates][0];
+      }
+      if (!matched) continue;
+      const sameTitle = title && title === identityTitle(matched.title);
+      const replacedId = row.id;
+      row.id = matched.id;
+      if (replacedId && replacedId !== matched.id) idRemap.set(replacedId, matched.id);
+      if (sameTitle) row.title = matched.title;
+      claimed.add(matched.id);
+    }
+    const merged = /* @__PURE__ */ new Map();
+    for (const row of newRows) {
+      const current = merged.get(row.id);
+      merged.set(row.id, current ? mergeRowsByIdentity(current, row) : row);
+    }
+    next[table.key] = [...merged.values()];
+  }
+  rewriteObjectReferences(next, idRemap);
+  return attachLegacyAliases(next, tables2);
+}
+function regionStateText(row) {
+  const fields = row.fields ?? {};
+  return [row.title, row.content, row.status, ...rowArray(fields.currentStates), ...rowArray(fields.solidifiedHistory)].join(" ");
+}
+function enforceObjectViewAllocation(snapshot, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  const spacetimeKey = tableByRole(tables2, "spacetime", false)?.key;
+  const regionKey = tableByRole(tables2, "regions", false)?.key;
+  if (!spacetimeKey || !regionKey) return snapshot;
+  const spacetimeRows = snapshot[spacetimeKey] ?? [];
+  const activeRows = spacetimeRows.filter((row) => !/(已离开|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(`${row.status} ${row.content}`));
+  const current = activeRows.at(-1);
+  if (!current) return snapshot;
+  const currentIdentity = identityTitle(current.title);
+  const persistentChangeSignal = /(封锁|解封|开放|关闭|停用|启用|损坏|损毁|坍塌|重建|占领|失守|戒严|污染|净化|改造|沦陷|恢复|摧毁|建成|归属改变|控制权|驻军撤离|驻军进驻|灾害|危机解除|永久|长期持续)/i;
+  const sceneOnlySignal = /(当前|进入|来到|抵达|停留|正在|位于|设有|用于|用作|配备|包含|连接|通往|内部有|内有|可供)/i;
+  const stableDefinitionSignal = /(属于|隶属|管辖|地处|坐落|是一座|是一个|是一处|是一片|区域类型|建筑类型|辖区|边界|常年|主要居民|主要产业|地貌|气候|历史上)/i;
+  snapshot[regionKey] = (snapshot[regionKey] ?? []).filter((row) => {
+    if (row.source === "manual" || row.locked || row.lockMode === "all") return true;
+    const fields = row.fields ?? {};
+    const baseContent = safeText(fields.baseContent, 12e3).trim();
+    const hasHistory = rowArray(fields.solidifiedHistory).length > 0;
+    const text = regionStateText(row);
+    if (hasHistory || persistentChangeSignal.test(text)) return true;
+    if (!baseContent) return false;
+    const regionIdentity = identityTitle(row.title);
+    const duplicatesCurrentPath = Boolean(regionIdentity && currentIdentity && (currentIdentity.includes(regionIdentity) || regionIdentity.includes(currentIdentity)));
+    if (!duplicatesCurrentPath) return true;
+    return stableDefinitionSignal.test(baseContent) && !sceneOnlySignal.test(baseContent.replace(stableDefinitionSignal, ""));
+  });
+  return attachLegacyAliases(snapshot, tables2);
+}
 function snapshotRowCount(snapshot, registry2, enabledOnly = false) {
   if (!snapshot) return 0;
   const tables2 = registryOrDefault(registry2).filter((table) => !enabledOnly || table.enabled);
@@ -1289,7 +1693,7 @@ function upsertManualRow(snapshot, tableKey, row, registry2) {
   const next = normalizeSnapshot(snapshot, snapshot, tables2);
   next[tableKey] ||= [];
   const index = next[tableKey].findIndex((item) => item.id === row.id);
-  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? true, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0, tables2);
+  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? false, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0, tables2);
   if (index >= 0) next[tableKey][index] = normalized;
   else next[tableKey].push(normalized);
   return next;
@@ -1324,7 +1728,7 @@ function relevanceText(row) {
 }
 function isPassiveObserver(row) {
   if (row.source === "manual" || row.locked) return false;
-  return /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看)/i.test(relevanceText(row));
+  return isPurePassiveObserverText(relevanceText(row));
 }
 function filterPassiveObservers(snapshot, registry2) {
   const tables2 = registryOrDefault(registry2);
@@ -1336,16 +1740,17 @@ function filterPassiveObservers(snapshot, registry2) {
 }
 
 // src/storage/repository.ts
+var CURRENT_SCHEMA_VERSION = 2;
 function emptyChatState(chatKey) {
   return {
-    schemaVersion: 2,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     chatKey,
     processedMessageKeys: [],
     internalFacts: [],
     smallSummaries: [],
     largeSummaries: [],
     lastSyncStatus: "idle",
-    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false },
+    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false },
     updatedAt: nowIso()
   };
 }
@@ -1361,57 +1766,281 @@ function normalizeSummaryArrays(value, kind) {
     unresolvedItems: Array.isArray(item.unresolvedItems) ? [...new Set(item.unresolvedItems.map(String))] : void 0
   }));
 }
+function migrateLegacySmallSummaryVersions(small, large) {
+  const consumedByLarge = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
+  const groups = /* @__PURE__ */ new Map();
+  small.forEach((item, index) => {
+    if (item.solidifiedByLargeSummaryId || item.supersededBySmallSummaryId || consumedByLarge.has(item.id)) return;
+    const eventKey = String(item.eventId || "").trim();
+    if (!eventKey) return;
+    const rows = groups.get(eventKey) ?? [];
+    rows.push({ item, index });
+    groups.set(eventKey, rows);
+  });
+  let changed = false;
+  for (const rows of groups.values()) {
+    if (rows.length < 2) continue;
+    rows.sort((a, b) => String(a.item.createdAt || "").localeCompare(String(b.item.createdAt || "")) || a.index - b.index);
+    const latest = rows.at(-1).item;
+    const older = rows.slice(0, -1).map(({ item }) => item);
+    const summaries = [...new Set(rows.map(({ item }) => String(item.summary || "").trim()).filter(Boolean))];
+    const unresolved = [...new Set(rows.flatMap(({ item }) => item.unresolvedItems ?? []))];
+    const sourceFactIds = [...new Set(rows.flatMap(({ item }) => item.sourceFactIds ?? item.sourceKeys))];
+    const sourceKeys = [...new Set(rows.flatMap(({ item }) => item.sourceKeys ?? []))];
+    latest.summary = summaries.join("\n");
+    latest.unresolvedItems = unresolved;
+    latest.sourceFactIds = sourceFactIds;
+    latest.sourceKeys = sourceKeys.length ? sourceKeys : sourceFactIds;
+    latest.previousSmallSummaryId ||= older.at(-1)?.id;
+    for (const item of older) item.supersededBySmallSummaryId = latest.id;
+    changed = true;
+  }
+  return changed;
+}
+function currentCharacterIds(chatKey, registry2) {
+  const characterTable = registry2.find((table) => table.enabled && table.role === "characters");
+  if (!characterTable) return /* @__PURE__ */ new Set();
+  const chat = getChat();
+  for (let index = chat.length - 1; index >= 0; index -= 1) {
+    const artifact = chat[index]?.extra?.[MODULE_NAME];
+    if (!artifact || artifact.chatKey !== chatKey || !artifact.snapshot) continue;
+    const rows = artifact.snapshot[characterTable.key];
+    return new Set(
+      (Array.isArray(rows) ? rows : []).map((row) => String(row?.id ?? "").trim()).filter(Boolean)
+    );
+  }
+  return /* @__PURE__ */ new Set();
+}
+function validateCurrentFocus(state2, registry2) {
+  const hadFocus = Object.prototype.hasOwnProperty.call(state2, "focusObjectId");
+  const focusObjectId = String(state2.focusObjectId ?? "").trim();
+  if (!focusObjectId) {
+    delete state2.focusObjectId;
+    return hadFocus;
+  }
+  if (!currentCharacterIds(state2.chatKey, registry2).has(focusObjectId)) {
+    delete state2.focusObjectId;
+    return true;
+  }
+  return false;
+}
 function migrateChatState(raw, chatKey) {
-  const state2 = raw && raw.chatKey === chatKey ? raw : emptyChatState(chatKey);
+  const state2 = raw && raw.chatKey === chatKey ? structuredClone(raw) : emptyChatState(chatKey);
+  const metadataBefore = JSON.stringify(raw ?? null);
   const previousSchema = Number(state2.schemaVersion) || 1;
   const needsViewMigration = state2.migration?.dynamicTablesV23 !== true;
   const needsFactMigration = state2.migration?.internalFactsV23 !== true;
   const needsObjectViewMigration = state2.migration?.objectViewsV26 !== true;
+  const needsObjectAllocationMigration = state2.migration?.objectAllocationV27 !== true;
+  const needsSummaryVersionMigration = state2.migration?.summaryVersionsV27 !== true;
+  const needsRegionAllocationMigration = state2.migration?.regionAllocationV28 !== true;
+  const needsCharacterMergeMigration = state2.migration?.characterMergeV29 !== true;
+  const needsPersistedCharacterMergeMigration = state2.migration?.persistedCharacterMergeV30 !== true;
+  const needsFullSnapshotMigration = needsViewMigration || needsObjectViewMigration || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
   let artifactViewsChanged = false;
-  state2.schemaVersion = 2;
+  state2.schemaVersion = CURRENT_SCHEMA_VERSION;
+  state2.chatLocator = currentChatLocator() || state2.chatLocator;
   state2.processedMessageKeys = Array.isArray(state2.processedMessageKeys) ? [...new Set(state2.processedMessageKeys.map(String))] : [];
   state2.smallSummaries = normalizeSummaryArrays(state2.smallSummaries, "small");
   state2.largeSummaries = normalizeSummaryArrays(state2.largeSummaries, "large");
+  const summaryVersionsChanged = needsSummaryVersionMigration ? migrateLegacySmallSummaryVersions(state2.smallSummaries, state2.largeSummaries) : false;
   let facts = normalizeInternalFacts(state2.internalFacts);
   const registry2 = getSettings().tableRegistry;
+  let previousMigratedSnapshot;
+  let persistedCharactersChanged = false;
   for (const message of getChat()) {
     const artifact = message?.extra?.[MODULE_NAME];
     if (!artifact || artifact.chatKey !== chatKey) continue;
-    if ((needsViewMigration || needsObjectViewMigration) && artifact.snapshot) {
-      const before = JSON.stringify(artifact.snapshot);
-      artifact.snapshot = normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry2);
-      if (JSON.stringify(artifact.snapshot) !== before) artifactViewsChanged = true;
+    if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration) && artifact.snapshot) {
+      const before = JSON.stringify({
+        snapshot: artifact.snapshot,
+        aliases: artifact.persistedCharacterIdAliasesV30,
+        sync: artifact.stages?.sync,
+        lorebookEntryIds: artifact.lorebookEntryIds
+      });
+      let migrated = needsFullSnapshotMigration ? normalizeSnapshot(artifact.snapshot, previousMigratedSnapshot ?? artifact.snapshot, registry2) : structuredClone(artifact.snapshot);
+      if (needsFullSnapshotMigration && previousMigratedSnapshot) {
+        migrated = preserveStableObjectIds(previousMigratedSnapshot, migrated, registry2);
+      }
+      if (needsPersistedCharacterMergeMigration) {
+        const savedAliases = artifact.persistedCharacterIdAliasesV30 && typeof artifact.persistedCharacterIdAliasesV30 === "object" ? artifact.persistedCharacterIdAliasesV30 : {};
+        const aliasMap = new Map(
+          Object.entries(savedAliases).map(([oldId, stableId]) => [String(oldId), String(stableId)]).filter(([oldId, stableId]) => Boolean(oldId && stableId))
+        );
+        if (aliasMap.size) persistedCharactersChanged = true;
+        rewriteObjectReferences(migrated, aliasMap);
+        const persisted = mergePersistedCharacterDuplicates(migrated, registry2);
+        migrated = persisted.snapshot;
+        if (persisted.idRemap.size) {
+          artifact.persistedCharacterIdAliasesV30 = {
+            ...Object.fromEntries(aliasMap),
+            ...Object.fromEntries(persisted.idRemap)
+          };
+          persistedCharactersChanged = true;
+          if (artifact.stages?.sync) {
+            artifact.stages.sync = {
+              ...artifact.stages.sync,
+              status: "idle",
+              error: void 0,
+              startedAt: void 0,
+              finishedAt: void 0
+            };
+          }
+          delete artifact.lorebookEntryIds;
+        }
+      }
+      if (needsFullSnapshotMigration) migrated = enforceObjectViewAllocation(migrated, registry2);
+      artifact.snapshot = migrated;
+      if (needsFullSnapshotMigration) previousMigratedSnapshot = migrated;
+      const after = JSON.stringify({
+        snapshot: artifact.snapshot,
+        aliases: artifact.persistedCharacterIdAliasesV30,
+        sync: artifact.stages?.sync,
+        lorebookEntryIds: artifact.lorebookEntryIds
+      });
+      if (after !== before) artifactViewsChanged = true;
+    } else if (artifact.snapshot) {
+      if (needsFullSnapshotMigration) previousMigratedSnapshot = normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry2);
     }
     if (!needsFactMigration || !artifact.factPackage?.facts?.length) continue;
     const incoming = normalizeInternalFacts(artifact.factPackage.facts, artifact.messageKey);
     facts = mergeInternalFacts(facts, incoming, artifact.factPackage.facts);
   }
-  migrateLegacyConsumption(facts, state2.smallSummaries, state2.largeSummaries);
+  validateCurrentFocus(state2, registry2);
+  if (persistedCharactersChanged) {
+    state2.lastSyncStatus = "idle";
+    state2.lastSyncError = void 0;
+  }
+  if (needsFactMigration || needsSummaryVersionMigration) {
+    migrateLegacyConsumption(facts, state2.smallSummaries, state2.largeSummaries);
+  }
   state2.internalFacts = facts;
-  state2.migration = { ...state2.migration ?? {}, dynamicTablesV23: true, internalFactsV23: true, objectViewsV26: true };
+  state2.migration = {
+    ...state2.migration ?? {},
+    dynamicTablesV23: true,
+    internalFactsV23: true,
+    objectViewsV26: true,
+    objectAllocationV27: true,
+    summaryVersionsV27: true,
+    regionAllocationV28: true,
+    characterMergeV29: true,
+    persistedCharacterMergeV30: true
+  };
   state2.updatedAt ||= nowIso();
   return {
     state: state2,
     artifactViewsChanged,
-    metadataChanged: previousSchema !== 2 || needsViewMigration || needsFactMigration || needsObjectViewMigration
+    metadataChanged: metadataBefore !== JSON.stringify(state2) || previousSchema !== CURRENT_SCHEMA_VERSION || summaryVersionsChanged
   };
 }
 async function putArtifact(_artifact) {
 }
-async function getChatState(chatKey) {
+var chatStateReads = /* @__PURE__ */ new Map();
+var REQUIRED_MIGRATIONS = [
+  "dynamicTablesV23",
+  "internalFactsV23",
+  "objectViewsV26",
+  "objectAllocationV27",
+  "summaryVersionsV27",
+  "regionAllocationV28",
+  "characterMergeV29",
+  "persistedCharacterMergeV30"
+];
+function currentStateStructure(raw, chatKey) {
+  if (!raw || typeof raw !== "object") return false;
+  const state2 = raw;
+  if (state2.schemaVersion !== CURRENT_SCHEMA_VERSION || state2.chatKey !== chatKey) return false;
+  if (!Array.isArray(state2.processedMessageKeys) || !Array.isArray(state2.internalFacts) || !Array.isArray(state2.smallSummaries) || !Array.isArray(state2.largeSummaries)) return false;
+  if (!state2.processedMessageKeys.every((key) => typeof key === "string")) return false;
+  if (new Set(state2.processedMessageKeys).size !== state2.processedMessageKeys.length) return false;
+  if (!["idle", "success", "failed"].includes(state2.lastSyncStatus)) return false;
+  if (typeof state2.updatedAt !== "string") return false;
+  if (state2.focusObjectId !== void 0 && typeof state2.focusObjectId !== "string") return false;
+  return REQUIRED_MIGRATIONS.every((key) => state2.migration?.[key] === true);
+}
+async function readCurrentChatStateFast(namespace, state2, chatKey) {
+  if (!Object.prototype.hasOwnProperty.call(state2, "focusObjectId")) return state2;
+  const next = { ...state2 };
+  const focusChanged = validateCurrentFocus(next, getSettings().tableRegistry);
+  if (!focusChanged) return state2;
+  namespace.state = next;
+  try {
+    await persistMetadataFor(chatKey);
+    return next;
+  } catch (error) {
+    namespace.state = state2;
+    throw error;
+  }
+}
+async function readChatState(chatKey) {
   assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u8BFB\u53D6\u65E7\u804A\u5929\u72B6\u6001");
   const namespace = getChatMetadataNamespace();
+  if (currentStateStructure(namespace.state, chatKey)) {
+    return readCurrentChatStateFast(namespace, namespace.state, chatKey);
+  }
+  const hadState = Object.prototype.hasOwnProperty.call(namespace, "state");
+  const previousState = namespace.state;
+  const backups = [];
+  for (const message of getChat()) {
+    const artifact = message?.extra?.[MODULE_NAME];
+    if (!artifact || artifact.chatKey !== chatKey) continue;
+    backups.push({
+      artifact,
+      snapshot: artifact.snapshot,
+      aliases: artifact.persistedCharacterIdAliasesV30,
+      hadAliases: Object.prototype.hasOwnProperty.call(artifact, "persistedCharacterIdAliasesV30"),
+      sync: artifact.stages?.sync,
+      hadSync: Boolean(artifact.stages && Object.prototype.hasOwnProperty.call(artifact.stages, "sync")),
+      lorebookEntryIds: artifact.lorebookEntryIds,
+      hadLorebookEntryIds: Object.prototype.hasOwnProperty.call(artifact, "lorebookEntryIds")
+    });
+  }
   const migration = migrateChatState(namespace.state, chatKey);
-  namespace.state = migration.state;
-  if (migration.artifactViewsChanged) await persistChatFor(chatKey);
-  if (migration.metadataChanged) await persistMetadataFor(chatKey);
-  return namespace.state;
+  let chatPersisted = false;
+  try {
+    if (migration.artifactViewsChanged) {
+      await persistChatFor(chatKey);
+      chatPersisted = true;
+    }
+    namespace.state = migration.state;
+    if (migration.metadataChanged) await persistMetadataFor(chatKey);
+    return namespace.state;
+  } catch (error) {
+    if (hadState) namespace.state = previousState;
+    else delete namespace.state;
+    if (!chatPersisted) {
+      for (const backup of backups) {
+        backup.artifact.snapshot = backup.snapshot;
+        if (backup.hadAliases) backup.artifact.persistedCharacterIdAliasesV30 = backup.aliases;
+        else delete backup.artifact.persistedCharacterIdAliasesV30;
+        if (backup.artifact.stages) {
+          if (backup.hadSync) backup.artifact.stages.sync = backup.sync;
+          else delete backup.artifact.stages.sync;
+        }
+        if (backup.hadLorebookEntryIds) backup.artifact.lorebookEntryIds = backup.lorebookEntryIds;
+        else delete backup.artifact.lorebookEntryIds;
+      }
+    }
+    throw error;
+  }
+}
+function getChatState(chatKey) {
+  const running = chatStateReads.get(chatKey);
+  if (running) return running;
+  const pending = readChatState(chatKey).finally(() => {
+    if (chatStateReads.get(chatKey) === pending) chatStateReads.delete(chatKey);
+  });
+  chatStateReads.set(chatKey, pending);
+  return pending;
 }
 async function putChatState(state2) {
   assertChatCommitCurrent(state2.chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u5199\u5165\u65E7\u804A\u5929\u72B6\u6001");
-  state2.schemaVersion = 2;
+  state2.schemaVersion = CURRENT_SCHEMA_VERSION;
+  state2.chatLocator = currentChatLocator() || state2.chatLocator;
   state2.internalFacts = normalizeInternalFacts(state2.internalFacts);
-  migrateLegacyConsumption(state2.internalFacts, state2.smallSummaries, state2.largeSummaries);
+  if (state2.migration?.internalFactsV23 !== true || state2.migration?.summaryVersionsV27 !== true) {
+    migrateLegacyConsumption(state2.internalFacts, state2.smallSummaries, state2.largeSummaries);
+  }
   state2.updatedAt = nowIso();
   const namespace = getChatMetadataNamespace();
   namespace.state = state2;
@@ -2514,16 +3143,21 @@ function lifecycleLines(lifecycle) {
   return lines;
 }
 function rowContent(table, row) {
-  const lines = [`[${table.name}\uFF1A${row.title}]`, ...lifecycleLines(row.lifecycle)];
-  if (row.status) lines.push(`\u5F53\u524D\u72B6\u6001\uFF1A${row.status}`);
-  if (row.content) lines.push(`\u5F53\u524D\u8BB0\u5F55\uFF1A${row.content}`);
+  const titleLabel = customizedFieldLabel(table, "title", "");
+  const statusLabel = customizedFieldLabel(table, "status", "\u5F53\u524D\u72B6\u6001");
+  const contentLabel = customizedFieldLabel(table, "content", "\u5F53\u524D\u8BB0\u5F55");
+  const keywordsLabel = customizedFieldLabel(table, "keywords", "\u89E6\u53D1\u8BCD");
+  const heading = titleLabel ? `[${table.name}\uFF5C${titleLabel}\uFF1A${row.title}]` : `[${table.name}\uFF1A${row.title}]`;
+  const lines = [heading, ...lifecycleLines(row.lifecycle)];
+  if (row.status) lines.push(`${statusLabel}\uFF1A${row.status}`);
+  if (row.content) lines.push(`${contentLabel}\uFF1A${row.content}`);
   for (const field of table.fields) {
     if (!row.fields || !(field.key in row.fields)) continue;
     const value = row.fields[field.key];
     if (Array.isArray(value) && value.length) lines.push(`${field.label}\uFF1A${value.join("\u3001")}`);
     else if (String(value ?? "").trim()) lines.push(`${field.label}\uFF1A${String(value)}`);
   }
-  if (row.keywords.length) lines.push(`\u89E6\u53D1\u8BCD\uFF1A${row.keywords.join("\u3001")}`);
+  if (row.keywords.length) lines.push(`${keywordsLabel}\uFF1A${row.keywords.join("\u3001")}`);
   if (row.factIds?.length) lines.push(`\u4E8B\u5B9EID\uFF1A${row.factIds.join("\u3001")}`);
   if (row.eventId) lines.push(`\u4E8B\u4EF6ID\uFF1A${row.eventId}`);
   if (row.locked || row.lockMode === "all") lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u5B8C\u5168\u9501\u5B9A\uFF1B\u57FA\u7840\u4E0E\u72B6\u6001\u5747\u4E0D\u5F97\u81EA\u52A8\u4FEE\u6539\u3002");
@@ -2535,7 +3169,7 @@ function rowSearchText(row) {
 }
 function isAudienceRow(row) {
   if (row.source === "manual" || row.locked) return false;
-  return /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|喝彩|起哄|议论|人群反应|站在一旁|远处观看)/i.test(rowSearchText(row));
+  return isPurePassiveObserverText(rowSearchText(row));
 }
 function normalizedName2(value) {
   return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
@@ -2544,18 +3178,17 @@ function aliases(title) {
   const raw = String(title || "").trim();
   return uniq([normalizedName2(raw), ...raw.split(/[｜|:：—–-]/).map(normalizedName2)], 12);
 }
-function filterSnapshotForLorebook(snapshot, customRegistry, focusObjectId = "") {
+function filterSnapshotForLorebook(snapshot, customRegistry) {
   const tables2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
-  const next = filterPassiveObservers(normalizeSnapshot(snapshot, snapshot, tables2), tables2);
+  const next = filterPassiveObservers(enforceObjectViewAllocation(normalizeSnapshot(snapshot, snapshot, tables2), tables2), tables2);
   const stateKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key;
-  const focusKey = tableByRole(tables2, "focus", false)?.key;
   const eventKey = tableByRole(tables2, "events", false)?.key;
   const relationKey = tableByRole(tables2, "relationships", false)?.key;
   if (!stateKey) return next;
-  const relevanceRows = [focusKey, eventKey, relationKey].filter(Boolean).flatMap((key) => next[key] ?? []);
+  const relevanceRows = [eventKey, relationKey].filter(Boolean).flatMap((key) => next[key] ?? []);
   const relevance = normalizedName2(relevanceRows.map(rowSearchText).join(" "));
   next[stateKey] = (next[stateKey] ?? []).filter((row) => {
-    if (row.id === focusObjectId || row.source === "manual" || row.locked) return true;
+    if (row.source === "manual" || row.locked) return true;
     if (isAudienceRow(row)) return false;
     const named = aliases(row.title).some((name) => name && relevance.includes(name));
     const direct = /(核心参与|直接相关|交战|对战|行动者|目标|当事人)/i.test(rowSearchText(row));
@@ -2597,10 +3230,11 @@ function recallModeFor(role, row, options, currentSpacetimeId) {
   if (role === "foundations" && /(必要|规则|制度|禁止|必须|不可)/i.test(rowSearchText(row))) return "constant";
   return "trigger";
 }
-function makeDocument(key, comment, content, kind, mode, trigger, factIds, eventIds, updatedAt, options) {
+function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, factIds, eventIds, updatedAt, options) {
   const actualMode = mode;
   return {
     key,
+    logicalKey,
     comment: `[MA11] ${comment}`,
     content,
     keywords: actualMode === "trigger" ? trigger.any : [],
@@ -2619,12 +3253,12 @@ function makeDocument(key, comment, content, kind, mode, trigger, factIds, event
 }
 function unconsumedSmallSummaries(small, large) {
   const legacy = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-  return small.filter((item) => !item.solidifiedByLargeSummaryId && !legacy.has(item.id));
+  return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !legacy.has(item.id));
 }
 function tableDocuments(snapshot, options) {
   if (!snapshot) return [];
   const tables2 = registry(options);
-  const filtered = filterSnapshotForLorebook(snapshot, tables2, options.focusObjectId);
+  const filtered = filterSnapshotForLorebook(snapshot, tables2);
   const docs = [];
   for (const table of enabledTables(tables2)) {
     const rows = filtered[table.key] ?? [];
@@ -2634,6 +3268,7 @@ function tableDocuments(snapshot, options) {
       const trigger = defaultTrigger(row);
       docs.push(makeDocument(
         `view:${table.key}:${row.id}`,
+        `view:${table.key}:${normalizedName2(row.title) || row.id}`,
         `MA\uFF5C${table.name}\uFF5C${row.title}`,
         rowContent(table, row),
         `view:${table.role}`,
@@ -2648,19 +3283,48 @@ function tableDocuments(snapshot, options) {
   }
   return docs;
 }
+function summaryEventKey(item) {
+  return item.eventId || item.id;
+}
+function activeSmallSummaryGroups(small, large) {
+  const active = unconsumedSmallSummaries(small, large);
+  const groups = /* @__PURE__ */ new Map();
+  for (const item of active) {
+    const eventKey = summaryEventKey(item);
+    const rows = groups.get(eventKey) ?? [];
+    rows.push(item);
+    groups.set(eventKey, rows);
+  }
+  return [...groups.entries()].map(([eventKey, items]) => {
+    const ordered = items.map((item, index) => ({ item, index })).sort(
+      (a, b) => String(a.item.createdAt || "").localeCompare(String(b.item.createdAt || "")) || a.index - b.index
+    ).map(({ item }) => item);
+    return { eventKey, items: ordered, latest: ordered.at(-1) };
+  });
+}
+function mergedSmallSummaryContent(group) {
+  const latest = group.latest;
+  const hasCumulativeChain = Boolean(latest.previousSmallSummaryId) || group.items.some((item) => item.supersededBySmallSummaryId === latest.id);
+  const summaries = hasCumulativeChain ? [latest.summary] : uniq(group.items.map((item) => item.summary), 40);
+  const unresolved = uniq(group.items.flatMap((item) => item.unresolvedItems ?? []), 60);
+  return `[\u4E8B\u4EF6\u7EBF\uFF1A${latest.eventId || group.eventKey || "\u672A\u5206\u7C7B"}]
+${summaries.join("\n")}${unresolved.length ? `
+\u672A\u89E3\u51B3\uFF1A${unresolved.join("\uFF1B")}` : ""}`;
+}
 function summaryDocuments(small, large, options) {
   const docs = [];
-  for (const item of unconsumedSmallSummaries(small, large)) {
+  for (const group of activeSmallSummaryGroups(small, large)) {
+    const item = group.latest;
+    const factIds = uniq(group.items.flatMap((summary) => summary.sourceFactIds ?? summary.sourceKeys), 100);
     docs.push(makeDocument(
-      `small:${item.id}`,
+      `small:event:${group.eventKey}`,
+      `small:event:${group.eventKey}`,
       `MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item.title}`,
-      `[\u4E8B\u4EF6\u7EBF\uFF1A${item.eventId || "\u672A\u5206\u7C7B"}]
-${item.summary}${item.unresolvedItems?.length ? `
-\u672A\u89E3\u51B3\uFF1A${item.unresolvedItems.join("\uFF1B")}` : ""}`,
+      mergedSmallSummaryContent(group),
       "summary:small",
       "vector",
       { any: [], all: [], exclude: [] },
-      item.sourceFactIds ?? item.sourceKeys,
+      factIds,
       item.eventId ? [item.eventId] : [],
       item.createdAt,
       options
@@ -2669,7 +3333,8 @@ ${item.summary}${item.unresolvedItems?.length ? `
   const latestLarge = large.at(-1);
   if (latestLarge) {
     docs.push(makeDocument(
-      `large:${latestLarge.id}`,
+      "large:current",
+      "large:current",
       `MA\uFF5C\u5927\u603B\u7ED3\uFF5C${latestLarge.title}`,
       latestLarge.summary,
       "summary:large",
@@ -2685,8 +3350,14 @@ ${item.summary}${item.unresolvedItems?.length ? `
 }
 function selectLorebookDocuments(documents, options) {
   const modeRank = { constant: 0, trigger: 1, vector: 2 };
+  const selectionMode = (document2) => {
+    const focusedCharacter = Boolean(
+      options.focusObjectId && ["view:characters", "view:state"].includes(document2.kind) && document2.key.endsWith(`:${options.focusObjectId}`)
+    );
+    return focusedCharacter ? "trigger" : document2.recallMode;
+  };
   const ordered = [...documents].sort((a, b) => {
-    const modeDifference = modeRank[a.recallMode] - modeRank[b.recallMode];
+    const modeDifference = modeRank[selectionMode(a)] - modeRank[selectionMode(b)];
     if (modeDifference) return modeDifference;
     const timeDifference = String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
     return timeDifference || a.key.localeCompare(b.key);
@@ -2729,10 +3400,15 @@ function buildLorebookDocuments(snapshot, small, large, options) {
 
 // src/pipeline/lorebook.ts
 var worldInfoModulePromise = null;
+var worldInfoApiForTests = null;
+var lorebookMutationLocks = /* @__PURE__ */ new Map();
 function resetLorebookRuntime() {
   worldInfoModulePromise = null;
+  worldInfoApiForTests = null;
+  lorebookMutationLocks.clear();
 }
 async function worldInfoApi() {
+  if (worldInfoApiForTests) return worldInfoApiForTests;
   if (!worldInfoModulePromise) {
     const moduleUrl = "/scripts/world-info.js";
     worldInfoModulePromise = import(
@@ -2742,42 +3418,67 @@ async function worldInfoApi() {
   }
   return worldInfoModulePromise;
 }
+async function withLorebookMutation(name, action) {
+  const lockKey = sanitizeBookName(name);
+  if (!lockKey) return action();
+  const previous = lorebookMutationLocks.get(lockKey) ?? Promise.resolve();
+  const current = previous.catch(() => void 0).then(action);
+  lorebookMutationLocks.set(lockKey, current);
+  try {
+    return await current;
+  } finally {
+    if (lorebookMutationLocks.get(lockKey) === current) lorebookMutationLocks.delete(lockKey);
+  }
+}
 function generatedBookName(chatKey = currentChatKey()) {
   const context = getContext();
   const display = sanitizeBookName(context.name2 || context.name1 || "Chat") || "Chat";
   return sanitizeBookName(`MA_${display}_${hashText(chatKey).slice(0, 8)}`);
 }
-async function resolveBookName(create, artifact) {
-  const chatKey = artifact?.chatKey ?? currentChatKey();
-  if (artifact) assertArtifactCommitCurrent(artifact);
-  else assertChatCommitCurrent(chatKey);
+function isDedicatedGeneratedBook(name, chatKey) {
+  return !sanitizeBookName(getSettings().lorebookName) && name === generatedBookName(chatKey);
+}
+function resolveTargetBookName(create, chatKey = currentChatKey()) {
   const settings = getSettings();
   const meta = getChatMetadataNamespace();
   const context = getContext();
   let name = sanitizeBookName(settings.lorebookName || meta.lorebookName || context.chatMetadata?.world_info || "");
-  if (!name && create && settings.autoCreateLorebook) name = generatedBookName(artifact?.chatKey);
-  if (!name) return "";
-  if (create) {
-    const wi = await worldInfoApi();
-    let data = await wi.loadWorldInfo(name);
-    if (!data && typeof wi.createNewWorldInfo === "function") {
-      if (artifact) assertArtifactCommitCurrent(artifact);
-      await wi.createNewWorldInfo(name, { interactive: false });
-      data = await wi.loadWorldInfo(name);
-    }
-    if (!data) {
-      data = { entries: {} };
-      if (artifact) assertArtifactCommitCurrent(artifact);
-      await wi.saveWorldInfo(name, data, true);
-    }
-    if (artifact) assertArtifactCommitCurrent(artifact);
-    context.chatMetadata ||= {};
-    context.chatMetadata[wi.METADATA_KEY || "world_info"] = name;
-    meta.lorebookName = name;
-    await persistMetadataFor(chatKey);
-    refreshChatLorebookIndicator(name);
-  }
+  if (!name && create && settings.autoCreateLorebook) name = generatedBookName(chatKey);
   return name;
+}
+async function ensureLorebook(name, chatKey, artifact) {
+  const assertCurrent = () => {
+    if (artifact) assertArtifactCommitCurrent(artifact);
+    else assertChatCommitCurrent(chatKey);
+  };
+  assertCurrent();
+  const wi = await worldInfoApi();
+  assertCurrent();
+  let data = await wi.loadWorldInfo(name);
+  assertCurrent();
+  if (!data && typeof wi.createNewWorldInfo === "function") {
+    assertCurrent();
+    await wi.createNewWorldInfo(name, { interactive: false });
+    assertCurrent();
+    data = await wi.loadWorldInfo(name);
+    assertCurrent();
+  }
+  if (!data) {
+    data = { entries: {} };
+    assertCurrent();
+    await wi.saveWorldInfo(name, data, true);
+    assertCurrent();
+  }
+  const context = getContext();
+  const meta = getChatMetadataNamespace();
+  assertCurrent();
+  context.chatMetadata ||= {};
+  context.chatMetadata[wi.METADATA_KEY || "world_info"] = name;
+  meta.lorebookName = name;
+  await persistMetadataFor(chatKey);
+  assertCurrent();
+  refreshChatLorebookIndicator(name);
+  return wi;
 }
 function managedInfo(entry) {
   return entry?.extensions?.mirrorAbyssV11 ?? null;
@@ -2796,6 +3497,18 @@ function mirrorAbyssExactIdentity(comment, content) {
   const normalizedContent = managedContentIdentity(content);
   return normalizedComment && normalizedContent ? `${normalizedComment}
 ${normalizedContent}` : "";
+}
+function legacyLogicalKey(entry, info) {
+  const explicit = String(info?.logicalKey || "").trim();
+  if (explicit) return explicit;
+  const comment = managedCommentIdentity(entry?.comment);
+  const content = managedContentIdentity(entry?.content);
+  if (/^\[MA11\]\s+MA[｜|]大总结(?:[｜|]|$)/.test(comment)) return "large:current";
+  if (/^\[MA11\]\s+MA[｜|]小总结(?:[｜|]|$)/.test(comment)) {
+    const eventId = content.match(/\[事件线[：:]\s*([^\]\n]+)\]/)?.[1]?.trim();
+    if (eventId) return `small:event:${eventId}`;
+  }
+  return "";
 }
 async function reloadWorldInfoEditor(wi, name, loadIfNotSelected = false) {
   const context = getContext();
@@ -2816,9 +3529,11 @@ async function reloadWorldInfoEditor(wi, name, loadIfNotSelected = false) {
   }
   if (shouldRenderTarget && typeof wi.showWorldEditor === "function") {
     await wi.showWorldEditor(name);
+    return true;
   } else if (typeof reload === "function") {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   }
+  return false;
 }
 function refreshChatLorebookIndicator(name) {
   if (typeof document?.querySelectorAll !== "function") return;
@@ -2861,6 +3576,7 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     managed: true,
     chatKey,
     key,
+    logicalKey: spec.logicalKey || key,
     kind: spec.kind,
     version: VERSION,
     recallMode: spec.recallMode,
@@ -2869,6 +3585,9 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     factIds: spec.factIds,
     eventIds: spec.eventIds
   };
+}
+function summaryEventKey2(item) {
+  return String(item?.eventId || item?.id || "").trim();
 }
 async function desiredSpecs(artifact) {
   const settings = getSettings();
@@ -2889,32 +3608,183 @@ async function desiredSpecs(artifact) {
       focusObjectId: state2.focusObjectId
     }
   );
-  return new Map(documents.map((document2) => [document2.key, document2]));
+  const desired = new Map(documents.map((document2) => [document2.key, document2]));
+  return { desired };
 }
-function reconcileLorebookEntries(data, desired, chatKey, wi, name, dedicatedBook = false) {
+async function legacyCleanupScope(artifact) {
+  const state2 = await getChatState(artifact.chatKey);
+  const logicalKeys = /* @__PURE__ */ new Set();
+  const legacyKeys = /* @__PURE__ */ new Set();
+  const comments = /* @__PURE__ */ new Set();
+  for (const item of state2.smallSummaries) {
+    const eventKey = summaryEventKey2(item);
+    if (eventKey) logicalKeys.add(`small:event:${eventKey}`);
+    legacyKeys.add(`small:${item.id}`);
+    comments.add(managedCommentIdentity(`[MA11] MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item.title}`));
+  }
+  for (const item of state2.largeSummaries) {
+    logicalKeys.add("large:current");
+    legacyKeys.add(`large:${item.id}`);
+    comments.add(managedCommentIdentity(`[MA11] MA\uFF5C\u5927\u603B\u7ED3\uFF5C${item.title}`));
+  }
+  return { logicalKeys, legacyKeys, comments };
+}
+function legacyManagedKey(key) {
+  return key.startsWith("small:") && !key.startsWith("small:event:") || key.startsWith("large:") && key !== "large:current";
+}
+function appendPair(index, key, pair) {
+  if (!key) return;
+  index.set(key, [...index.get(key) ?? [], pair]);
+}
+function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBook = false, _cleanup = {}) {
   data.entries ||= {};
   const pairs = [];
   const currentByKey = /* @__PURE__ */ new Map();
-  const currentByExact = /* @__PURE__ */ new Map();
-  const generatedByExact = /* @__PURE__ */ new Map();
+  const currentByLogical = /* @__PURE__ */ new Map();
   for (const [uid, entry] of Object.entries(data.entries)) {
     const info = managedInfo(entry);
     const currentScope = Boolean(info?.managed && info.chatKey === chatKey);
-    const generated = isMirrorAbyssGeneratedEntry(entry);
-    if (!currentScope && !generated) continue;
+    if (!currentScope) continue;
     const pair = {
       uid,
       entry,
       info,
       key: String(info?.key || ""),
+      logicalKey: legacyLogicalKey(entry, info),
+      commentIdentity: managedCommentIdentity(entry.comment),
+      exactIdentity: mirrorAbyssExactIdentity(entry.comment, entry.content),
+      currentScope,
+      generated: isMirrorAbyssGeneratedEntry(entry)
+    };
+    pairs.push(pair);
+    appendPair(currentByKey, pair.key, pair);
+    appendPair(currentByLogical, pair.logicalKey, pair);
+  }
+  let changed = false;
+  let created = 0;
+  let removed = 0;
+  const claimed = /* @__PURE__ */ new Set();
+  const duplicateManaged = /* @__PURE__ */ new Set();
+  const protectedAmbiguous = /* @__PURE__ */ new Set();
+  const entryIds = [];
+  const desiredLogicalCounts = /* @__PURE__ */ new Map();
+  for (const [key, spec] of desired) {
+    const logicalKey = String(spec.logicalKey || key);
+    desiredLogicalCounts.set(logicalKey, (desiredLogicalCounts.get(logicalKey) ?? 0) + 1);
+  }
+  const stablePairOrder = (left, right) => {
+    const leftNumber = Number(left.uid);
+    const rightNumber = Number(right.uid);
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+      return leftNumber - rightNumber;
+    }
+    return left.uid.localeCompare(right.uid);
+  };
+  const desiredItems = [...desired.entries()].map(([key, spec]) => ({
+    key,
+    spec,
+    logicalKey: String(spec.logicalKey || key),
+    commentIdentity: managedCommentIdentity(spec.comment),
+    exactIdentity: mirrorAbyssExactIdentity(spec.comment, spec.content),
+    pair: void 0
+  }));
+  for (const item of desiredItems) {
+    const keyCandidates = (currentByKey.get(item.key) ?? []).filter((pair) => !claimed.has(pair.uid)).sort(stablePairOrder);
+    item.pair = keyCandidates[0];
+    if (item.pair) claimed.add(item.pair.uid);
+    if (item.pair && keyCandidates.length > 1) {
+      for (const duplicate of keyCandidates.slice(1)) duplicateManaged.add(duplicate.uid);
+    }
+  }
+  for (const item of desiredItems) {
+    if (item.pair) continue;
+    const logicalCandidates = (currentByLogical.get(item.logicalKey) ?? []).filter((candidate) => !claimed.has(candidate.uid) && !duplicateManaged.has(candidate.uid));
+    const logicalUniqueOnBothSides = logicalCandidates.length === 1 && desiredLogicalCounts.get(item.logicalKey) === 1;
+    if (logicalUniqueOnBothSides) {
+      item.pair = logicalCandidates[0];
+      claimed.add(item.pair.uid);
+    } else if (logicalCandidates.length) {
+      for (const candidate of logicalCandidates) protectedAmbiguous.add(candidate.uid);
+    }
+  }
+  for (const item of desiredItems) {
+    let pair = item.pair;
+    let entry = pair?.entry;
+    if (!entry) {
+      entry = wi.createWorldInfoEntry(name, data);
+      if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${item.key}`);
+      const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? "");
+      if (!createdUid) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u7F3A\u5C11UID\uFF1A${item.key}`);
+      pair = {
+        uid: createdUid,
+        entry,
+        info: null,
+        key: item.key,
+        logicalKey: item.logicalKey,
+        commentIdentity: item.commentIdentity,
+        exactIdentity: item.exactIdentity,
+        currentScope: true,
+        generated: true
+      };
+      created += 1;
+      changed = true;
+    }
+    claimed.add(pair.uid);
+    const before = JSON.stringify(entry);
+    applyEntry(entry, chatKey, item.key, item.spec, wi);
+    if (before !== JSON.stringify(entry)) changed = true;
+    if (Number.isFinite(Number(entry.uid))) entryIds.push(Number(entry.uid));
+  }
+  for (const pair of pairs) {
+    if (claimed.has(pair.uid)) continue;
+    if (protectedAmbiguous.has(pair.uid)) continue;
+    if (legacyManagedKey(pair.key)) continue;
+    if (!duplicateManaged.has(pair.uid) && !pair.currentScope) continue;
+    delete data.entries[pair.uid];
+    removed += 1;
+    changed = true;
+  }
+  return { changed, entryIds, created, adoptedLegacy: 0, removed };
+}
+function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, dedicatedBook = false, cleanup = {}) {
+  data.entries ||= {};
+  const pairs = [];
+  const currentByKey = /* @__PURE__ */ new Map();
+  const currentByLogical = /* @__PURE__ */ new Map();
+  const currentByComment = /* @__PURE__ */ new Map();
+  const currentByExact = /* @__PURE__ */ new Map();
+  const adoptableByLogical = /* @__PURE__ */ new Map();
+  const adoptableByComment = /* @__PURE__ */ new Map();
+  const adoptableByExact = /* @__PURE__ */ new Map();
+  for (const [uid, entry] of Object.entries(data.entries)) {
+    const info = managedInfo(entry);
+    const currentScope = Boolean(info?.managed && info.chatKey === chatKey);
+    const generated = isMirrorAbyssGeneratedEntry(entry);
+    const ownerUnknown = generated && (!info?.managed || !info?.chatKey);
+    if (!currentScope && !(dedicatedBook && ownerUnknown)) continue;
+    const pair = {
+      uid,
+      entry,
+      info,
+      key: String(info?.key || ""),
+      logicalKey: legacyLogicalKey(entry, info),
+      commentIdentity: managedCommentIdentity(entry.comment),
       exactIdentity: mirrorAbyssExactIdentity(entry.comment, entry.content),
       currentScope,
       generated
     };
     pairs.push(pair);
-    if (currentScope && pair.key) currentByKey.set(pair.key, [...currentByKey.get(pair.key) ?? [], pair]);
-    if (currentScope && pair.exactIdentity) currentByExact.set(pair.exactIdentity, [...currentByExact.get(pair.exactIdentity) ?? [], pair]);
-    if (generated && pair.exactIdentity) generatedByExact.set(pair.exactIdentity, [...generatedByExact.get(pair.exactIdentity) ?? [], pair]);
+    if (currentScope) {
+      appendPair(currentByKey, pair.key, pair);
+      appendPair(currentByLogical, pair.logicalKey, pair);
+      appendPair(currentByComment, pair.commentIdentity, pair);
+      appendPair(currentByExact, pair.exactIdentity, pair);
+    }
+    if (dedicatedBook && ownerUnknown) {
+      appendPair(adoptableByLogical, pair.logicalKey, pair);
+      appendPair(adoptableByComment, pair.commentIdentity, pair);
+      appendPair(adoptableByExact, pair.exactIdentity, pair);
+    }
   }
   let changed = false;
   let created = 0;
@@ -2922,37 +3792,34 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, dedicatedBoo
   let removed = 0;
   const claimed = /* @__PURE__ */ new Set();
   const entryIds = [];
-  const desiredKeysByIdentity = /* @__PURE__ */ new Map();
-  const takeUnclaimed = (items) => items?.find((pair) => !claimed.has(pair.uid));
+  const takeUnique = (items) => {
+    const available = (items ?? []).filter((pair) => !claimed.has(pair.uid));
+    return available.length === 1 ? available[0] : void 0;
+  };
   for (const [key, spec] of desired) {
+    const logicalKey = String(spec.logicalKey || key);
+    const commentIdentity = managedCommentIdentity(spec.comment);
     const exactIdentity = mirrorAbyssExactIdentity(spec.comment, spec.content);
-    if (exactIdentity) {
-      const keys = desiredKeysByIdentity.get(exactIdentity) ?? /* @__PURE__ */ new Set();
-      keys.add(key);
-      desiredKeysByIdentity.set(exactIdentity, keys);
-    }
-    let pair = takeUnclaimed(currentByKey.get(key)) ?? takeUnclaimed(currentByExact.get(exactIdentity));
-    if (!pair && exactIdentity) {
-      pair = (generatedByExact.get(exactIdentity) ?? []).find((candidate) => {
-        if (claimed.has(candidate.uid)) return false;
-        if (candidate.currentScope) return true;
-        if (!candidate.info?.managed || !candidate.info?.chatKey) return true;
-        if (candidate.key === key) return true;
-        return dedicatedBook;
-      });
-      if (pair && !pair.currentScope) adoptedLegacy += 1;
+    let pair = takeUnique(currentByKey.get(key)) ?? takeUnique(currentByLogical.get(logicalKey)) ?? takeUnique(currentByComment.get(commentIdentity)) ?? takeUnique(currentByExact.get(exactIdentity));
+    if (!pair && dedicatedBook) {
+      pair = takeUnique(adoptableByLogical.get(logicalKey)) ?? takeUnique(adoptableByComment.get(commentIdentity)) ?? takeUnique(adoptableByExact.get(exactIdentity));
+      if (pair) adoptedLegacy += 1;
     }
     let entry = pair?.entry;
     if (!entry) {
       entry = wi.createWorldInfoEntry(name, data);
       if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${key}`);
-      const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? "");
+      const createdUid = String(
+        entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? ""
+      );
       if (!createdUid) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u7F3A\u5C11UID\uFF1A${key}`);
       pair = {
         uid: createdUid,
         entry,
         info: null,
         key,
+        logicalKey,
+        commentIdentity,
         exactIdentity,
         currentScope: true,
         generated: true
@@ -2968,21 +3835,16 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, dedicatedBoo
   }
   for (const pair of pairs) {
     if (claimed.has(pair.uid)) continue;
-    let shouldRemove = pair.currentScope;
-    if (!shouldRemove && pair.generated && pair.exactIdentity) {
-      const desiredKeys = desiredKeysByIdentity.get(pair.exactIdentity);
-      if (desiredKeys?.size) {
-        shouldRemove = dedicatedBook || !pair.info?.managed || !pair.info?.chatKey || pair.key && desiredKeys.has(pair.key);
-      }
-    }
-    if (!shouldRemove) continue;
+    const ownerUnknown = pair.generated && (!pair.info?.managed || !pair.info?.chatKey);
+    const oldKeyInScope = pair.currentScope && (legacyManagedKey(pair.key) || Boolean(pair.key && cleanup.legacyKeys?.has(pair.key)) || Boolean(pair.logicalKey && cleanup.logicalKeys?.has(pair.logicalKey)) || Boolean(pair.commentIdentity && cleanup.comments?.has(pair.commentIdentity)));
+    if (!oldKeyInScope && !(dedicatedBook && ownerUnknown)) continue;
     delete data.entries[pair.uid];
     removed += 1;
     changed = true;
   }
   return { changed, entryIds, created, adoptedLegacy, removed };
 }
-async function syncLorebook(artifact, force = false) {
+async function syncLorebookOnce(artifact, name, force = false) {
   assertArtifactCommitCurrent(artifact);
   if (!artifact.snapshot || artifact.stages.state.status !== "success") {
     throw new Error("\u6CA1\u6709\u6210\u529F\u72B6\u6001\u8868\uFF0C\u505C\u6B62\u4E16\u754C\u4E66\u540C\u6B65");
@@ -3005,23 +3867,54 @@ async function syncLorebook(artifact, force = false) {
     return;
   }
   try {
-    const wi = await worldInfoApi();
-    const name = await resolveBookName(true, artifact);
+    const wi = await ensureLorebook(name, artifact.chatKey, artifact);
     if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
     const data = await wi.loadWorldInfo(name) || { entries: {} };
     data.entries ||= {};
-    const desired = await desiredSpecs(artifact);
-    const dedicatedBook = name === generatedBookName(artifact.chatKey);
+    const plan = await desiredSpecs(artifact);
+    const desired = plan.desired;
+    const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
     const reconciliation = reconcileLorebookEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook);
-    const { changed, entryIds } = reconciliation;
+    const changed = reconciliation.changed;
+    let entryIds = reconciliation.entryIds;
     assertArtifactCommitCurrent(artifact);
     if (changed) {
       await wi.saveWorldInfo(name, data, true);
       assertArtifactCommitCurrent(artifact);
-    }
-    if (changed || force) {
-      await reloadWorldInfoEditor(wi, name, force);
+      const verifiedData = await wi.loadWorldInfo(name) || data;
+      const verification = reconcileLorebookEntries(
+        verifiedData,
+        desired,
+        artifact.chatKey,
+        wi,
+        name,
+        dedicatedBook
+      );
+      entryIds = verification.entryIds;
+      if (verification.changed) {
+        assertArtifactCommitCurrent(artifact);
+        await wi.saveWorldInfo(name, verifiedData, true);
+        assertArtifactCommitCurrent(artifact);
+      }
+      const renderedTarget = await reloadWorldInfoEditor(wi, name, force);
       assertArtifactCommitCurrent(artifact);
+      if (renderedTarget) {
+        const postReloadData = await wi.loadWorldInfo(name) || verifiedData;
+        const postReloadVerification = reconcileLorebookEntries(
+          postReloadData,
+          desired,
+          artifact.chatKey,
+          wi,
+          name,
+          dedicatedBook
+        );
+        entryIds = postReloadVerification.entryIds;
+        if (postReloadVerification.changed) {
+          assertArtifactCommitCurrent(artifact);
+          await wi.saveWorldInfo(name, postReloadData, true);
+          assertArtifactCommitCurrent(artifact);
+        }
+      }
     }
     assertArtifactCommitCurrent(artifact);
     artifact.lorebookEntryIds = entryIds;
@@ -3043,57 +3936,212 @@ async function syncLorebook(artifact, force = false) {
     throw error;
   }
 }
-async function clearCurrentChatLorebookEntries(chatKey = currentChatKey()) {
-  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-  const name = await resolveBookName(false);
-  if (!name) return 0;
-  const wi = await worldInfoApi();
-  const data = await wi.loadWorldInfo(name);
-  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-  if (!data?.entries) return 0;
-  let removed = 0;
-  for (const [uid, entry] of Object.entries(data.entries)) {
+async function syncLorebook(artifact, force = false) {
+  assertArtifactCommitCurrent(artifact);
+  const settings = getSettings();
+  const name = resolveTargetBookName(true, artifact.chatKey);
+  if (!settings.lorebookSync && !force) {
+    await syncLorebookOnce(artifact, name, force);
+    return;
+  }
+  if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
+  await withLorebookMutation(name, async () => {
+    assertArtifactCommitCurrent(artifact);
+    await syncLorebookOnce(artifact, name, force);
+  });
+}
+function maintenancePreviewFromData(data, name, chatKey, dedicatedBook) {
+  let currentManaged = 0;
+  let legacyCandidates = 0;
+  let removable = 0;
+  let protectedUnknown = 0;
+  let protectedForeign = 0;
+  for (const entry of Object.values(data?.entries ?? {})) {
     const info = managedInfo(entry);
+    const generated = isMirrorAbyssGeneratedEntry(entry);
     if (info?.managed && info.chatKey === chatKey) {
-      delete data.entries[uid];
-      removed += 1;
+      currentManaged += 1;
+      const key = String(info.key || "");
+      if (!key || legacyManagedKey(key)) {
+        legacyCandidates += 1;
+        removable += 1;
+      }
+      continue;
+    }
+    if (info?.managed && info.chatKey && info.chatKey !== chatKey) {
+      protectedForeign += 1;
+      continue;
+    }
+    if (generated && (!info?.managed || !info?.chatKey)) {
+      legacyCandidates += 1;
+      if (dedicatedBook) removable += 1;
+      else protectedUnknown += 1;
     }
   }
-  if (removed) {
-    if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    await wi.saveWorldInfo(name, data, true);
-    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    await reloadWorldInfoEditor(wi, name);
-  }
-  return removed;
+  return {
+    applied: false,
+    name,
+    dedicatedBook,
+    currentManaged,
+    legacyCandidates,
+    removable,
+    protectedUnknown,
+    protectedForeign,
+    removed: 0
+  };
 }
-async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
-  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-  const name = await resolveBookName(false);
-  if (!name) return 0;
-  const wi = await worldInfoApi();
-  const data = await wi.loadWorldInfo(name);
-  if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-  if (!data?.entries) return 0;
-  let managed = 0;
-  let changed = false;
-  for (const entry of Object.values(data.entries)) {
-    const info = managedInfo(entry);
-    if (info?.managed && info.chatKey === chatKey) {
-      managed += 1;
-      if (!entry.disable) {
-        entry.disable = true;
-        changed = true;
+async function previewLorebookMaintenance(artifact) {
+  assertArtifactCommitCurrent(artifact);
+  const name = resolveTargetBookName(false, artifact.chatKey);
+  if (!name) return maintenancePreviewFromData(null, "", artifact.chatKey, false);
+  return withLorebookMutation(name, async () => {
+    assertArtifactCommitCurrent(artifact);
+    const wi = await worldInfoApi();
+    assertArtifactCommitCurrent(artifact);
+    const data = await wi.loadWorldInfo(name);
+    assertArtifactCommitCurrent(artifact);
+    return maintenancePreviewFromData(
+      data,
+      name,
+      artifact.chatKey,
+      isDedicatedGeneratedBook(name, artifact.chatKey)
+    );
+  });
+}
+async function applyLorebookMaintenance(artifact) {
+  assertArtifactCommitCurrent(artifact);
+  if (!artifact.snapshot || artifact.stages.state.status !== "success") {
+    throw new Error("\u6CA1\u6709\u6210\u529F\u72B6\u6001\u8868\uFF0C\u505C\u6B62\u4E16\u754C\u4E66\u7EF4\u62A4");
+  }
+  const name = resolveTargetBookName(true, artifact.chatKey);
+  if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
+  return withLorebookMutation(name, async () => {
+    assertArtifactCommitCurrent(artifact);
+    const wi = await ensureLorebook(name, artifact.chatKey, artifact);
+    assertArtifactCommitCurrent(artifact);
+    const data = await wi.loadWorldInfo(name) || { entries: {} };
+    assertArtifactCommitCurrent(artifact);
+    data.entries ||= {};
+    const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
+    const preview = maintenancePreviewFromData(data, name, artifact.chatKey, dedicatedBook);
+    const plan = await desiredSpecs(artifact);
+    const cleanup = await legacyCleanupScope(artifact);
+    assertArtifactCommitCurrent(artifact);
+    const first = reconcileLorebookMaintenanceEntries(
+      data,
+      plan.desired,
+      artifact.chatKey,
+      wi,
+      name,
+      dedicatedBook,
+      cleanup
+    );
+    let removed = first.removed;
+    if (first.changed) {
+      assertArtifactCommitCurrent(artifact);
+      await wi.saveWorldInfo(name, data, true);
+      assertArtifactCommitCurrent(artifact);
+      const verifiedData = await wi.loadWorldInfo(name) || data;
+      assertArtifactCommitCurrent(artifact);
+      const verification = reconcileLorebookMaintenanceEntries(
+        verifiedData,
+        plan.desired,
+        artifact.chatKey,
+        wi,
+        name,
+        dedicatedBook,
+        cleanup
+      );
+      removed += verification.removed;
+      if (verification.changed) {
+        await wi.saveWorldInfo(name, verifiedData, true);
+        assertArtifactCommitCurrent(artifact);
+      }
+      const renderedTarget = await reloadWorldInfoEditor(wi, name, true);
+      assertArtifactCommitCurrent(artifact);
+      if (renderedTarget) {
+        const postReloadData = await wi.loadWorldInfo(name) || verifiedData;
+        assertArtifactCommitCurrent(artifact);
+        const postReloadVerification = reconcileLorebookMaintenanceEntries(
+          postReloadData,
+          plan.desired,
+          artifact.chatKey,
+          wi,
+          name,
+          dedicatedBook,
+          cleanup
+        );
+        removed += postReloadVerification.removed;
+        if (postReloadVerification.changed) {
+          await wi.saveWorldInfo(name, postReloadData, true);
+          assertArtifactCommitCurrent(artifact);
+        }
       }
     }
-  }
-  if (changed) {
-    if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    await wi.saveWorldInfo(name, data, true);
+    return { ...preview, applied: true, removed };
+  });
+}
+async function clearCurrentChatLorebookEntries(chatKey = currentChatKey()) {
+  assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  const name = resolveTargetBookName(false, chatKey);
+  if (!name) return 0;
+  return withLorebookMutation(name, async () => {
+    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    const wi = await worldInfoApi();
+    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    const data = await wi.loadWorldInfo(name);
+    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    if (!data?.entries) return 0;
+    let removed = 0;
+    for (const [uid, entry] of Object.entries(data.entries)) {
+      const info = managedInfo(entry);
+      if (info?.managed && info.chatKey === chatKey) {
+        delete data.entries[uid];
+        removed += 1;
+      }
+    }
+    if (removed) {
+      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+      await wi.saveWorldInfo(name, data, true);
+      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+      await reloadWorldInfoEditor(wi, name);
+      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    }
+    return removed;
+  });
+}
+async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
+  assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  const name = resolveTargetBookName(false, chatKey);
+  if (!name) return 0;
+  return withLorebookMutation(name, async () => {
     assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    await reloadWorldInfoEditor(wi, name);
-  }
-  return managed;
+    const wi = await worldInfoApi();
+    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    const data = await wi.loadWorldInfo(name);
+    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    if (!data?.entries) return 0;
+    let managed = 0;
+    let changed = false;
+    for (const entry of Object.values(data.entries)) {
+      const info = managedInfo(entry);
+      if (info?.managed && info.chatKey === chatKey) {
+        managed += 1;
+        if (!entry.disable) {
+          entry.disable = true;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+      await wi.saveWorldInfo(name, data, true);
+      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+      await reloadWorldInfoEditor(wi, name);
+      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+    }
+    return managed;
+  });
 }
 
 // src/domain/summary.ts
@@ -3218,7 +4266,7 @@ function smallSummarySystemPrompt() {
 \u4E8B\u4EF6\u672A\u7ED3\u675F\u65F6\uFF0C\u53EA\u603B\u7ED3\u5DF2\u786E\u5B9A\u53D1\u751F\u7684\u90E8\u5206\uFF0C\u5E76\u660E\u786E\u672A\u89E3\u51B3\u4E8B\u9879\u3002\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u3001\u559D\u5F69\u3001\u8BAE\u8BBA\u548C\u540C\u573A\u8005\u4E0D\u5F97\u8FDB\u5165\u603B\u7ED3\uFF0C\u9664\u975E\u5176\u884C\u4E3A\u6539\u53D8\u4E8B\u4EF6\u7ED3\u679C\u3002
 \u8F93\u51FA\u5B57\u6BB5\u56FA\u5B9A\u4E3A title\u3001summary\u3001keywords\u3001unresolved\u3002\u53EF\u89C1\u8868\u9000\u51FA\u7531\u4EE3\u7801\u6309 event_id / fact_id \u5B89\u5168\u5904\u7406\uFF0C\u4E0D\u7531\u4F60\u6307\u5B9A\u884C\u53F7\u3002`;
 }
-function smallSummaryPrompt(eventId, facts) {
+function smallSummaryPrompt(eventId, facts, previous) {
   const payload = facts.map((fact) => ({
     fact_id: fact.factId,
     event_id: fact.eventId,
@@ -3232,10 +4280,14 @@ function smallSummaryPrompt(eventId, facts) {
     keywords: fact.keywords,
     confidence: fact.confidence
   }));
-  return `\u4E3A event_id=${eventId} \u751F\u6210\u4E00\u6761\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3\u3002
-\u53EA\u4F7F\u7528\u4E0B\u5217\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002\u6309\u56E0\u679C\u987A\u5E8F\u5408\u5E76\u540C\u4E49\u4E8B\u5B9E\uFF0C\u4FDD\u7559\u4ECD\u6709\u6548\u7684\u7ED3\u679C\u548C\u672A\u51B3\u4E8B\u9879\u3002
+  const previousPayload = previous ? JSON.stringify({ id: previous.id, event_id: previous.eventId, title: previous.title, summary: previous.summary, unresolved: previous.unresolvedItems ?? [], keywords: previous.keywords }) : "\uFF08\u65E0\uFF09";
+  return `\u4E3A event_id=${eventId} \u751F\u6210\u8BE5\u4E8B\u4EF6\u7EBF\u7684\u65B0\u7248\u672C\u5C0F\u603B\u7ED3\u3002
+\u53EA\u4F7F\u7528\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u548C\u4E0B\u5217\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002\u65B0\u7248\u672C\u5FC5\u987B\u7D2F\u8BA1\u4FDD\u7559\u4ECD\u6709\u6548\u7684\u65E2\u6709\u4E8B\u5B9E\uFF0C\u5E76\u7528\u65B0\u4E8B\u5B9E\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u65E7\u8868\u8FF0\u3002
 
-\u3010\u5185\u90E8\u4E8B\u5B9E\u3011
+\u3010\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u3011
+${previousPayload}
+
+\u3010\u672C\u6B21\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\u3011
 ${JSON.stringify(payload, null, 2)}
 
 \u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}`;
@@ -3282,7 +4334,7 @@ function choosePendingEvent(facts, threshold, force) {
 }
 function pendingSmallSummaries(small, large) {
   const legacyConsumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-  return small.filter((item) => !item.solidifiedByLargeSummaryId && !legacyConsumed.has(item.id));
+  return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !legacyConsumed.has(item.id));
 }
 function hasEligibleSmallSummary(facts, threshold) {
   return Boolean(choosePendingEvent(facts, Math.max(1, Math.round(Number(threshold) || 12)), false));
@@ -3296,25 +4348,30 @@ async function generateSmallSummary(artifact, force = false) {
   const threshold = Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12));
   const selected = choosePendingEvent(chatState.internalFacts ?? [], threshold, force);
   if (!selected) return null;
+  const previousEventSummary = [...chatState.smallSummaries].reverse().find(
+    (item) => item.eventId === selected.eventId && !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId
+  );
   const parsed = await generateStructuredTask({
     task: "smallSummary",
     systemPrompt: smallSummarySystemPrompt(),
-    prompt: smallSummaryPrompt(selected.eventId, selected.facts),
+    prompt: smallSummaryPrompt(selected.eventId, selected.facts, previousEventSummary),
     structureDescription: '{"title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}'
   });
   assertArtifactCommitCurrent(artifact);
-  const factIds = selected.facts.map((fact) => fact.factId);
-  const summary = normalizeSummary(parsed, "small", factIds, void 0, { eventId: selected.eventId, sourceFactIds: factIds });
+  const newFactIds = selected.facts.map((fact) => fact.factId);
+  const sourceFactIds = [.../* @__PURE__ */ new Set([...previousEventSummary?.sourceFactIds ?? previousEventSummary?.sourceKeys ?? [], ...newFactIds])];
+  const summary = normalizeSummary(parsed, "small", sourceFactIds, void 0, { eventId: selected.eventId, sourceFactIds });
+  summary.previousSmallSummaryId = previousEventSummary?.id;
   if (!summary.summary) throw new Error("\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981");
   const previousSnapshot2 = artifact.snapshot ? structuredClone(artifact.snapshot) : void 0;
   const previousFacts = structuredClone(chatState.internalFacts);
-  const previousSummaries = [...chatState.smallSummaries];
+  const previousSummaries = structuredClone(chatState.smallSummaries);
   try {
     if (artifact.snapshot) {
       summary.sedimentation = deriveEventSedimentationPlan(
         artifact.snapshot,
         selected.eventId,
-        factIds,
+        newFactIds,
         selected.closed,
         settings.tableRegistry
       );
@@ -3323,7 +4380,8 @@ async function generateSmallSummary(artifact, force = false) {
       await persistChatFor(artifact.chatKey);
     }
     chatState.smallSummaries.push(summary);
-    markFactsConsumed(chatState.internalFacts, factIds, summary.id);
+    if (previousEventSummary) previousEventSummary.supersededBySmallSummaryId = summary.id;
+    markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
     await putChatState(chatState);
   } catch (error) {
     artifact.snapshot = previousSnapshot2;
@@ -3462,8 +4520,6 @@ async function rebuildEligibleSummaries(artifact) {
 // src/domain/facts.ts
 var OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
 var CONFIDENCE2 = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
-var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
-var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
 function list3(value, limit = 24, itemLimit = 500) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
@@ -3514,7 +4570,7 @@ function filterPassiveObserverFacts(facts) {
       ...fact.relatedEntities ?? [],
       ...fact.keywords
     ].join(" ");
-    return !PASSIVE_OBSERVER.test(text) || CAUSAL_INTERVENTION.test(text);
+    return !isPurePassiveObserverText(text);
   });
 }
 function normalizeFactPackage(value, sourceMessageKey) {
@@ -3581,11 +4637,12 @@ ${tableLines || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u6
 3. source=manual \u6216 locked=true \u7684\u65E7\u884C\u4E0D\u5F97\u8986\u76D6\u3001\u5220\u9664\u6216\u964D\u7EA7\u3002
 4. \u6B63\u5F0F\u4E3B\u4F53\u4EC5\u5728\u5DF2\u663E\u5F71\u4E14\u5BF9\u8FDE\u7EED\u6027\u6709\u72EC\u7ACB\u4EF7\u503C\u65F6\u8FDB\u5165\u201C\u89D2\u8272\u201D\u89C6\u56FE\uFF1B\u7EAF\u65C1\u89C2\u8005\u4E0D\u5EFA\u7ACB\u3002
 5. \u573A\u666F\u6216\u5730\u70B9\u53D1\u751F\u5207\u6362\u65F6\uFF0C\u201C\u65F6\u7A7A\u201D\u4E2D\u53EA\u80FD\u6709\u4E00\u4E2A\u5F53\u524D\u573A\u666F\uFF1B\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u82E5\u4ECD\u6709\u540E\u7EED\u4EF7\u503C\uFF0C\u72B6\u6001\u5FC5\u987B\u6539\u4E3A\u201C\u5DF2\u79BB\u5F00\u201D\u6216\u201C\u5386\u53F2\u573A\u666F\u201D\uFF0C\u5E76\u63D0\u4F9B\u660E\u786E\u89E6\u53D1\u8BCD\uFF0C\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
-6. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
-7. keywords \u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u6216\u89E6\u53D1\u8BCD\uFF1Brecall \u53EF\u5305\u542B any/all/exclude\uFF0C\u4E0D\u662F\u6570\u503C\u6743\u91CD\u3002
-8. baseContent \u662F\u7A33\u5B9A\u57FA\u7840\u5C42\uFF1A\u65B0\u5BF9\u8C61\u9996\u6B21\u5EFA\u7ACB\u65F6\u53EA\u80FD\u5199\u6B63\u6587\u660E\u786E\u5185\u5BB9\uFF1B\u5DF2\u6709\u975E\u7A7A\u503C\u5FC5\u987B\u539F\u6837\u4FDD\u7559\u3002
-9. solidifiedHistory \u53EA\u80FD\u7531\u540E\u7EED\u957F\u671F\u603B\u7ED3\u56FA\u5316\uFF0C\u72B6\u6001\u63D0\u53D6\u5FC5\u987B\u539F\u6837\u4FDD\u7559\uFF0C\u4E0D\u5F97\u81EA\u884C\u6DFB\u52A0\u3002
-10. currentStates\u3001relationshipStates\u3001abilityStates \u53EA\u6709\u5728\u5B58\u5728\u660E\u786E fact_id\u3001event_id\u3001\u6765\u6E90\u6D88\u606F\u548C\u6301\u7EED\u4F5C\u7528\u65F6\u624D\u53EF add/update/close/replace\u3002\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u3002
+6. \u201C\u533A\u57DF\u201D\u4E0D\u662F\u5F53\u524D\u4F4D\u7F6E\u7684\u526F\u672C\u3002\u4EC5\u56E0\u8FDB\u5165\u3001\u505C\u7559\u3001\u63D0\u53CA\u67D0\u5730\u70B9\uFF0C\u4E0D\u5F97\u521B\u5EFA\u533A\u57DF\u884C\uFF1B\u53EA\u6709\u8BE5\u5730\u70B9\u5B58\u5728\u72EC\u7ACB\u57FA\u7840\u5B9A\u4E49\uFF0C\u6216\u53D1\u751F\u5C01\u9501\u3001\u635F\u574F\u3001\u5F52\u5C5E\u3001\u5F00\u653E\u72B6\u6001\u7B49\u79BB\u5F00\u540E\u4ECD\u6210\u7ACB\u7684\u6301\u7EED\u53D8\u5316\u65F6\uFF0C\u624D\u8FDB\u5165\u533A\u57DF\u3002\u5F53\u524D\u5730\u70B9\u53EA\u5199\u5165\u65F6\u7A7A\u3002
+7. \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
+8. keywords \u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u6216\u89E6\u53D1\u8BCD\uFF1Brecall \u53EF\u5305\u542B any/all/exclude\uFF0C\u4E0D\u662F\u6570\u503C\u6743\u91CD\u3002
+9. baseContent \u662F\u7A33\u5B9A\u57FA\u7840\u5C42\uFF1A\u65B0\u5BF9\u8C61\u9996\u6B21\u5EFA\u7ACB\u65F6\u53EA\u80FD\u5199\u6B63\u6587\u660E\u786E\u5185\u5BB9\uFF1B\u5DF2\u6709\u975E\u7A7A\u503C\u5FC5\u987B\u539F\u6837\u4FDD\u7559\u3002
+10. solidifiedHistory \u53EA\u80FD\u7531\u540E\u7EED\u957F\u671F\u603B\u7ED3\u56FA\u5316\uFF0C\u72B6\u6001\u63D0\u53D6\u5FC5\u987B\u539F\u6837\u4FDD\u7559\uFF0C\u4E0D\u5F97\u81EA\u884C\u6DFB\u52A0\u3002
+11. currentStates\u3001relationshipStates\u3001abilityStates \u53EA\u6709\u5728\u5B58\u5728\u660E\u786E fact_id\u3001event_id\u3001\u6765\u6E90\u6D88\u606F\u548C\u6301\u7EED\u4F5C\u7528\u65F6\u624D\u53EF add/update/close/replace\u3002\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u3002
 
 \u7ED3\u6784\u793A\u4F8B\uFF1A
 {"turnSummary":"\u672C\u8F6E\u5DF2\u53D1\u751F\u4E8B\u5B9E\u6458\u8981","facts":[{"fact_id":"fact_1","event_id":"event_1","type":"event","title":"\u5BF9\u6218\u5F00\u59CB","occurred":["\u7532\u4E0E\u4E59\u5F00\u59CB\u4EA4\u6218"],"unresolved":["\u80DC\u8D1F\u672A\u5B9A"],"status":"\u8FDB\u884C\u4E2D","time_range":{"start":"\u5F53\u524D","end":"","label":"\u672C\u573A\u5BF9\u6218"},"related_entities":["\u7532","\u4E59"],"keywords":["\u7532","\u4E59","\u5BF9\u6218"],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(active)}}`;
@@ -3624,10 +4681,15 @@ ${assistantText}
 \u5185\u90E8\u4E8B\u5B9E\u5C42\u662F\u8FDE\u7EED\u6027\u6765\u6E90\uFF1B\u6CBF\u7528\u540C\u4E00\u4E8B\u5B9E\u7684 fact_id \u548C event_id\uFF0C\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u66F4\u65B0\u3001\u8FFD\u52A0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u64CD\u4F5C\u3002\u8F93\u51FA\u66F4\u65B0\u540E\u7684\u5B8C\u6574\u542F\u7528\u8868\u683C\u89C6\u56FE\uFF0Csnapshot \u4E0D\u5F97\u51FA\u73B0\u6CE8\u518C\u8868\u4E4B\u5916\u7684\u952E\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
 }
 function scalarSchema(field) {
-  if (field.type === "string[]") return { type: "array", items: { type: "string" } };
+  const semantics = {
+    title: field.label,
+    description: `${field.label}\uFF1A${field.description || "\u6309\u5B57\u6BB5\u540D\u79F0\u586B\u5199"}`
+  };
+  if (field.type === "string[]") return { type: "array", items: { type: "string" }, ...semantics };
   if (field.type === "lifecycle") {
     return {
       type: "object",
+      ...semantics,
       properties: {
         existence: { type: "string" },
         activity: { type: "string" },
@@ -3641,7 +4703,7 @@ function scalarSchema(field) {
       additionalProperties: false
     };
   }
-  return { type: "string" };
+  return { type: "string", ...semantics };
 }
 function rowSchema(table) {
   const properties = {};
@@ -3667,7 +4729,12 @@ function rowSchema(table) {
 }
 function stateJsonSchema(registry2) {
   const active = tables(registry2);
-  const snapshotProperties = Object.fromEntries(active.map((table) => [table.key, { type: "array", items: rowSchema(table) }]));
+  const snapshotProperties = Object.fromEntries(active.map((table) => [table.key, {
+    type: "array",
+    title: table.name,
+    description: `${table.name}\uFF1A${table.purpose}`,
+    items: rowSchema(table)
+  }]));
   return {
     name: "MirrorAbyssStateResultV26",
     description: "\u955C\u6E0A\u5185\u90E8\u4E8B\u5B9E\u5C42\u4E0E\u5BF9\u8C61\u5316\u52A8\u6001\u89C6\u56FE",
@@ -3707,6 +4774,8 @@ function stateJsonSchema(registry2) {
 }
 
 // src/pipeline/state.ts
+var RegistryChangedError = class extends CommitRejectedError {
+};
 function previousSnapshot(beforeIndex) {
   const registry2 = getSettings().tableRegistry;
   const chat = getChat();
@@ -3732,14 +4801,25 @@ function preserveProtectedRows(previous, next, customRegistry) {
     const key = table.key;
     next[key] ||= [];
     const nextIndexById = new Map(next[key].map((row, index) => [row.id, index]));
-    const nextIndexByTitle = new Map(next[key].map((row, index) => [rowIdentityTitle(row.title), index]));
+    const previousTitleCounts = /* @__PURE__ */ new Map();
+    const nextIndexesByTitle = /* @__PURE__ */ new Map();
+    for (const row of previous[key] ?? []) {
+      const title = rowIdentityTitle(row.title);
+      if (title) previousTitleCounts.set(title, (previousTitleCounts.get(title) ?? 0) + 1);
+    }
+    next[key].forEach((row, index) => {
+      const title = rowIdentityTitle(row.title);
+      if (title) nextIndexesByTitle.set(title, [...nextIndexesByTitle.get(title) ?? [], index]);
+    });
     for (const row of previous[key] ?? []) {
       if (row.source !== "manual" && !row.locked && row.lockMode !== "all" && row.lockMode !== "base") continue;
       const protectedRow = cloneProtectedRow(row);
-      const existingIndex = nextIndexById.get(row.id) ?? nextIndexByTitle.get(rowIdentityTitle(row.title));
+      const title = rowIdentityTitle(row.title);
+      const titleIndexes = title ? nextIndexesByTitle.get(title) ?? [] : [];
+      const uniqueTitleIndex = title && previousTitleCounts.get(title) === 1 && titleIndexes.length === 1 ? titleIndexes[0] : void 0;
+      const existingIndex = nextIndexById.get(row.id) ?? uniqueTitleIndex;
       if (existingIndex === void 0) {
         nextIndexById.set(row.id, next[key].length);
-        nextIndexByTitle.set(rowIdentityTitle(row.title), next[key].length);
         next[key].push(protectedRow);
         continue;
       }
@@ -3772,42 +4852,37 @@ function mergeEnabledViews(previous, parsedSnapshot, registry2) {
   for (const table of enabledTables(registry2)) merged[table.key] = parsedSnapshot[table.key];
   return normalizeSnapshot(merged, previous, registry2);
 }
+function assertRegistryCurrent(expectedFingerprint) {
+  const current = enabledTables(normalizeTableRegistry(getSettings().tableRegistry));
+  if (registryFingerprint(current) !== expectedFingerprint) {
+    throw new RegistryChangedError("\u8868\u683C\u5B9A\u4E49\u5DF2\u53D8\u5316\uFF0C\u65E7\u72B6\u6001\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
+  }
+}
 async function runStateExtraction(artifact, force = false) {
   const settings = getSettings();
   const registry2 = normalizeTableRegistry(settings.tableRegistry);
   const active = enabledTables(registry2);
+  const expectedRegistryFingerprint = registryFingerprint(active);
   const previous = previousSnapshot(artifact.messageIndex);
   const chatState = await getChatState(artifact.chatKey);
   const activeFacts = (chatState.internalFacts ?? []).filter((fact) => fact.active || fact.unresolvedItems.length > 0 || !fact.consumedBySmallSummaryId).slice(-120);
-  const inputFingerprint = hashText(JSON.stringify({
-    previous,
-    activeFacts: activeFacts.map((fact) => ({
-      factId: fact.factId,
-      eventId: fact.eventId,
-      occurredFacts: fact.occurredFacts,
-      unresolvedItems: fact.unresolvedItems,
-      status: fact.status,
-      active: fact.active
-    })),
-    registry: registryFingerprint(registry2),
-    playerText: artifact.playerText,
-    assistantText: artifact.assistantText
-  }));
-  if (!force && artifact.stages.state.status === "success" && artifact.snapshot && (!artifact.stateInputFingerprint || artifact.stateInputFingerprint === inputFingerprint)) {
-    artifact.stateInputFingerprint = inputFingerprint;
+  const request = {
+    task: "state",
+    systemPrompt: stateSystemPrompt(registry2),
+    prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
+    structureDescription: `{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","type":"event","title":"...","occurred":["..."],"unresolved":["..."],"status":"...","time_range":{"start":"","end":"","label":""},"related_entities":["..."],"keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(registry2)}}`,
+    allowRepair: settings.repairInvalidJsonOnce,
+    jsonSchema: stateJsonSchema(registry2)
+  };
+  const inputFingerprint = hashText(JSON.stringify(request));
+  assertRegistryCurrent(expectedRegistryFingerprint);
+  if (!force && artifact.stages.state.status === "success" && artifact.snapshot && artifact.stateInputFingerprint === inputFingerprint) {
     return normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry2);
   }
   markStage(artifact, "state", "running");
   await putArtifact(artifact);
   try {
-    const parsed = await generateStructuredTask({
-      task: "state",
-      systemPrompt: stateSystemPrompt(registry2),
-      prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
-      structureDescription: `{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","type":"event","title":"...","occurred":["..."],"unresolved":["..."],"status":"...","time_range":{"start":"","end":"","label":""},"related_entities":["..."],"keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":${stateSchemaDescription(registry2)}}`,
-      allowRepair: settings.repairInvalidJsonOnce,
-      jsonSchema: stateJsonSchema(registry2)
-    });
+    const parsed = await generateStructuredTask(request);
     if (!parsed.snapshot || typeof parsed.snapshot !== "object" || Array.isArray(parsed.snapshot)) throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 snapshot \u6839\u5BF9\u8C61");
     const characterTable = active.find((table) => table.role === "characters" || table.role === "state");
     if (characterTable) {
@@ -3823,11 +4898,16 @@ async function runStateExtraction(artifact, force = false) {
     parsed.snapshot = migrateSnapshotTables(parsed.snapshot, registry2);
     for (const table of active) if (!Array.isArray(parsed.snapshot[table.key])) parsed.snapshot[table.key] = [];
     assertArtifactCommitCurrent(artifact);
+    assertRegistryCurrent(expectedRegistryFingerprint);
+    const mergedViews = preserveStableObjectIds(previous, mergeEnabledViews(previous, parsed.snapshot, registry2), registry2);
     const normalized = filterPassiveObservers(
-      removeFocusCharacterDuplicates(
-        preserveObjectBaseLayers(
-          previous,
-          preservePersistentCharacters(previous, preserveProtectedRows(previous, mergeEnabledViews(previous, parsed.snapshot, registry2), registry2), registry2),
+      enforceObjectViewAllocation(
+        removeFocusCharacterDuplicates(
+          preserveObjectBaseLayers(
+            previous,
+            preservePersistentCharacters(previous, preserveProtectedRows(previous, mergedViews, registry2), registry2),
+            registry2
+          ),
           registry2
         ),
         registry2
@@ -3841,6 +4921,11 @@ async function runStateExtraction(artifact, force = false) {
     await putArtifact(artifact);
     return normalized;
   } catch (error) {
+    if (error instanceof RegistryChangedError) {
+      markStage(artifact, "state", "idle");
+      await putArtifact(artifact);
+      throw error;
+    }
     if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
     markStage(artifact, "state", "failed", toErrorMessage(error));
     await putArtifact(artifact);
@@ -4742,6 +5827,35 @@ async function retryStage(index, stage) {
     }
   }, { priority: 70, chatKey });
 }
+async function previewLorebookMaintenance2(index) {
+  if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
+  const latest = latestSnapshotArtifact();
+  if (!latest || latest.index !== index) throw new Error("\u4E16\u754C\u4E66\u7EF4\u62A4\u53EA\u80FD\u57FA\u4E8E\u6700\u65B0\u6210\u529F\u72B6\u6001\u8868");
+  return previewLorebookMaintenance(latest.artifact);
+}
+async function applyLorebookMaintenance2(index) {
+  if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
+  const latest = latestSnapshotArtifact();
+  if (!latest || latest.index !== index) throw new Error("\u4E16\u754C\u4E66\u7EF4\u62A4\u53EA\u80FD\u57FA\u4E8E\u6700\u65B0\u6210\u529F\u72B6\u6001\u8868");
+  const artifact = latest.artifact;
+  const scheduledHistoryRevision = currentHistoryRevision(artifact.chatKey);
+  const key = `${PIPELINE_VERSION}:maintain-lorebook:${artifact.chatKey}:${artifact.messageKey}`;
+  return taskQueue.run(key, "\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\u4E16\u754C\u4E66", "sync", async (guard) => {
+    if (currentChatKey() !== artifact.chatKey) return null;
+    assertHistoryRevisionCurrent(artifact.chatKey, scheduledHistoryRevision);
+    bindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
+    bindArtifactTaskGuard(artifact, guard);
+    try {
+      const result = await applyLorebookMaintenance(artifact);
+      await syncLorebook(artifact, true);
+      await saveArtifactToMessage(index, artifact);
+      return result;
+    } finally {
+      unbindArtifactTaskGuard(artifact, guard);
+      unbindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
+    }
+  }, { priority: 70, chatKey: artifact.chatKey });
+}
 async function forceSummary(_index, kind) {
   if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
   const latest = latestSnapshotArtifact();
@@ -5154,10 +6268,10 @@ function root() {
           <header><b>\u7F16\u8F91\u5BF9\u8C61\u6761\u76EE</b><button type="button" data-ma11-action="close-editor">\xD7</button></header>
           <input type="hidden" name="tableKey" />
           <input type="hidden" name="rowId" />
-          <label>\u5BF9\u8C61<input name="title" required maxlength="240" /></label>
-          <label>\u5F53\u524D\u4E8B\u5B9E<textarea name="content" rows="6" maxlength="12000"></textarea></label>
-          <label>\u72B6\u6001<input name="status" maxlength="120" /></label>
-          <label>\u5173\u952E\u8BCD\uFF08\u9017\u53F7\u5206\u9694\uFF09<input name="keywords" maxlength="800" /></label>
+          <label><span data-ma11-row-field-label="title">\u5BF9\u8C61</span><input name="title" required maxlength="240" /></label>
+          <label><span data-ma11-row-field-label="content">\u5F53\u524D\u4E8B\u5B9E</span><textarea name="content" rows="6" maxlength="12000"></textarea></label>
+          <label><span data-ma11-row-field-label="status">\u72B6\u6001</span><input name="status" maxlength="120" /></label>
+          <label><span data-ma11-row-field-label="keywords">\u5173\u952E\u8BCD\uFF08\u9017\u53F7\u5206\u9694\uFF09</span><input name="keywords" maxlength="800" /></label>
           <label class="ma11-switch"><input type="checkbox" name="locked" /><span>\u5B8C\u5168\u9501\u5B9A\uFF08\u57FA\u7840\u548C\u72B6\u6001\u5747\u4E0D\u81EA\u52A8\u4FEE\u6539\uFF09</span></label>
           <p class="ma11-help">\u666E\u901A\u4EBA\u5DE5\u6761\u76EE\u9ED8\u8BA4\u53EA\u4FDD\u62A4\u57FA\u7840\u5185\u5BB9\uFF1B\u5F53\u524D\u72B6\u6001\u3001\u5173\u7CFB\u548C\u80FD\u529B\u4ECD\u53EF\u4F9D\u636E\u660E\u786E\u4E8B\u5B9E\u66F4\u65B0\u3002</p>
           <fieldset class="ma11-object-editor">
@@ -5383,6 +6497,7 @@ async function tableHtml(artifactInfo) {
     settings.ui.activeTable = active;
   }
   const rows = artifact?.snapshot?.[active] ?? [];
+  const columnHeaders = tableColumnHeaders(activeDefinition);
   return `
     <section class="ma11-toolbar ma11-table-toolbar">
       <div>
@@ -5395,7 +6510,7 @@ async function tableHtml(artifactInfo) {
     <section class="ma11-table-wrap" role="region" aria-label="${escapeHtml(activeDefinition.name)}\u72B6\u6001\u8868" tabindex="0">
       ${artifact?.snapshot ? `<table class="ma11-table">
         <colgroup><col class="ma11-col-index"/><col class="ma11-col-title"/><col class="ma11-col-content"/><col class="ma11-col-state"/><col class="ma11-col-meta"/><col class="ma11-col-actions"/></colgroup>
-        <thead><tr><th>\u5E8F\u53F7</th><th>\u5BF9\u8C61</th><th>\u5F53\u524D\u8BB0\u5F55</th><th>\u72B6\u6001\u4E0E\u5173\u952E\u8BCD</th><th>\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4</th><th>\u64CD\u4F5C</th></tr></thead>
+        <thead><tr><th>\u5E8F\u53F7</th><th>${escapeHtml(columnHeaders.title)}</th><th>${escapeHtml(columnHeaders.content)}</th><th>${escapeHtml(columnHeaders.state)}</th><th>\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4</th><th>\u64CD\u4F5C</th></tr></thead>
         <tbody>${rows.length ? rows.map((row, index) => `<tr>
           <td>${index + 1}</td>
           <td class="ma11-cell-title"><b>${escapeHtml(row.title)}</b>${row.id === focusObjectId ? `<span class="ma11-badge">\u5E38\u9A7B\u7126\u70B9</span>` : ""}</td>
@@ -5413,6 +6528,7 @@ function tableManagerHtml(artifactInfo) {
   const snapshot = artifactInfo?.artifact.snapshot;
   const rows = registry2.map((table, index) => {
     const fields = customFieldText(table);
+    const headers = editableHeaderText(table);
     return `<article class="ma11-table-manager-row" data-ma11-table-card="${escapeHtml(table.key)}">
       <div class="ma11-table-manager-head">
         <span class="ma11-order-number">${index + 1}</span>
@@ -5423,6 +6539,7 @@ function tableManagerHtml(artifactInfo) {
       <div class="ma11-table-manager-fields">
         <label>\u540D\u79F0<input data-ma11-table-name="${escapeHtml(table.key)}" value="${escapeHtml(table.name)}" maxlength="80" /></label>
         <label>\u7528\u9014\u8BF4\u660E<textarea data-ma11-table-purpose="${escapeHtml(table.key)}" rows="3" maxlength="1000">${escapeHtml(table.purpose)}</textarea></label>
+        <label class="ma11-table-header-editor">\u8BED\u4E49\u8868\u5934 <small>\u6BCF\u884C\uFF1A\u7A33\u5B9A\u5B57\u6BB5\u952E:\u73A9\u5BB6\u8868\u5934:\u4F20\u8F93\u8BF4\u660E\uFF1B\u53EA\u4FEE\u6539\u8868\u5934\u8BED\u4E49\uFF0C\u5E95\u5C42\u952E\u548C\u5B57\u6BB5\u7C7B\u578B\u4FDD\u6301\u4E0D\u53D8</small><textarea data-ma11-table-headers="${escapeHtml(table.key)}" rows="6">${escapeHtml(headers)}</textarea></label>
         <label>\u81EA\u5B9A\u4E49\u5B57\u6BB5 <small>\u6BCF\u884C\uFF1A\u5B57\u6BB5\u952E:\u540D\u79F0:string\u6216string[]:\u7528\u9014</small><textarea data-ma11-table-fields="${escapeHtml(table.key)}" rows="3" placeholder="mood:\u60C5\u7EEA:string:\u5F53\u524D\u5DF2\u663E\u5F71\u60C5\u7EEA">${escapeHtml(fields)}</textarea></label>
       </div>
       <div class="ma11-actions ma11-table-manager-actions">
@@ -5431,7 +6548,7 @@ function tableManagerHtml(artifactInfo) {
         <button data-ma11-action="move-table-down" data-ma11-table-key="${escapeHtml(table.key)}" ${index === registry2.length - 1 ? "disabled" : ""}>\u4E0B\u79FB</button>
         <button class="danger" data-ma11-action="delete-table" data-ma11-table-key="${escapeHtml(table.key)}">\u5220\u9664\u89C6\u56FE</button>
       </div>
-      <p class="ma11-help">\u952E\uFF1A${escapeHtml(table.key)} \xB7 \u89D2\u8272\uFF1A${escapeHtml(table.role)}\u3002\u540D\u79F0\u3001\u7528\u9014\u4E0E\u5B57\u6BB5\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\u548C JSON Schema\u3002</p>
+      <p class="ma11-help">\u5168\u5C40\u8868\u683C\u5B9A\u4E49\uFF0C\u9002\u7528\u4E8E\u6240\u6709\u804A\u5929\u3002\u952E\uFF1A${escapeHtml(table.key)} \xB7 \u89D2\u8272\uFF1A${escapeHtml(table.role)}\u3002\u540D\u79F0\u3001\u7528\u9014\u3001\u8BED\u4E49\u8868\u5934\u4E0E\u5B57\u6BB5\u8BF4\u660E\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\u548C JSON Schema\uFF1B\u7A33\u5B9A\u952E\u4E0D\u4F1A\u968F\u6539\u540D\u53D8\u5316\u3002</p>
     </article>`;
   }).join("");
   return `<section class="ma11-toolbar"><div><h2>\u8868\u683C\u7BA1\u7406</h2><p>\u8868\u683C\u662F\u5185\u90E8\u4E8B\u5B9E\u7684\u53EF\u89C1\u89C6\u56FE\uFF0C\u6570\u91CF\u4E0D\u9650\u3002\u505C\u7528\u6216\u5220\u9664\u540E\u4E0D\u518D\u8981\u6C42\u6A21\u578B\u8F93\u51FA\uFF0C\u4E5F\u4E0D\u518D\u8FDB\u5165 UI \u4E0E\u4E16\u754C\u4E66\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u516B\u8868</button></div></section>
@@ -5759,6 +6876,19 @@ function openRowEditor(tableKey, row) {
     ".ma11-editor-backdrop"
   );
   const form = workspace.querySelector("#ma11-row-editor");
+  const tableDefinition = tableByKey(getSettings().tableRegistry, tableKey);
+  if (tableDefinition) {
+    const labels = {
+      title: customizedFieldLabel(tableDefinition, "title", "\u5BF9\u8C61"),
+      content: customizedFieldLabel(tableDefinition, "content", "\u5F53\u524D\u4E8B\u5B9E"),
+      status: customizedFieldLabel(tableDefinition, "status", "\u72B6\u6001"),
+      keywords: `${customizedFieldLabel(tableDefinition, "keywords", "\u5173\u952E\u8BCD")}\uFF08\u9017\u53F7\u5206\u9694\uFF09`
+    };
+    for (const [fieldKey, label] of Object.entries(labels)) {
+      const target = form.querySelector(`[data-ma11-row-field-label="${fieldKey}"]`);
+      if (target) target.textContent = label;
+    }
+  }
   form.elements.namedItem("tableKey").value = tableKey;
   form.elements.namedItem("rowId").value = row?.id || "";
   form.elements.namedItem("title").value = row?.title || "";
@@ -5778,7 +6908,7 @@ function openRowEditor(tableKey, row) {
   setList("relationshipStates", objectFields.relationshipStates);
   setList("abilityStates", objectFields.abilityStates);
   const lifecycleFields = form.querySelector("[data-ma11-lifecycle-fields]");
-  const supportsLifecycle = ["characters", "state"].includes(tableByKey(getSettings().tableRegistry, tableKey)?.role || "");
+  const supportsLifecycle = ["characters", "state"].includes(tableDefinition?.role || "");
   const characterObjectFields = form.querySelector("[data-ma11-character-object-fields]");
   if (characterObjectFields) characterObjectFields.hidden = !supportsLifecycle;
   if (lifecycleFields) lifecycleFields.hidden = !supportsLifecycle;
@@ -5990,7 +7120,18 @@ function bindWorkspace(workspace) {
       if (action === "retry-sync") {
         const info = latestSnapshotArtifact();
         if (!info) throw new Error("\u5C1A\u65E0\u53EF\u540C\u6B65\u7684\u72B6\u6001");
-        await retryStage(info.index, "sync");
+        if (getSettings().lorebookLayout === "semantic") {
+          const preview = await previewLorebookMaintenance2(info.index);
+          const warning = [
+            `\u68C0\u6D4B\u5230 ${preview.legacyCandidates} \u4E2A\u5386\u53F2\u5019\u9009\uFF0C\u5176\u4E2D ${preview.removable} \u4E2A\u53EF\u5B89\u5168\u5904\u7406\u3002`,
+            `\u5C06\u4FDD\u7559 ${preview.protectedForeign} \u4E2A\u5176\u4ED6\u804A\u5929\u6761\u76EE\u548C ${preview.protectedUnknown} \u4E2A\u5171\u4EAB\u4E66 owner \u672A\u77E5\u6761\u76EE\u3002`,
+            "\u662F\u5426\u7EE7\u7EED\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\uFF1F"
+          ].join("\n");
+          if (!window.confirm(warning)) return;
+          await applyLorebookMaintenance2(info.index);
+        } else {
+          await retryStage(info.index, "sync");
+        }
         await renderWorkspace();
       }
       const tableDefinitionKey = actionButton?.dataset.ma11TableKey || "";
@@ -6005,9 +7146,11 @@ function bindWorkspace(workspace) {
       if (action === "save-table" && tableDefinitionKey) {
         const name = valueFromWorkspace(workspace, `[data-ma11-table-name="${tableDefinitionKey}"]`);
         const purpose = valueFromWorkspace(workspace, `[data-ma11-table-purpose="${tableDefinitionKey}"]`);
+        const headers = valueFromWorkspace(workspace, `[data-ma11-table-headers="${tableDefinitionKey}"]`);
         const fields = valueFromWorkspace(workspace, `[data-ma11-table-fields="${tableDefinitionKey}"]`);
         if (!name || !purpose) throw new Error("\u8868\u683C\u540D\u79F0\u548C\u7528\u9014\u8BF4\u660E\u4E0D\u80FD\u4E3A\u7A7A");
         let registry2 = updateTableDefinition(getSettings().tableRegistry, tableDefinitionKey, { name, purpose });
+        registry2 = updateTableHeaders(registry2, tableDefinitionKey, headers);
         registry2 = updateTableFields(registry2, tableDefinitionKey, fields);
         await updateTableRegistryAndSync(registry2);
         toast("success", "\u8868\u683C\u5B9A\u4E49\u5DF2\u66F4\u65B0\uFF0C\u5C06\u4ECE\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u5F00\u59CB\u751F\u6548");
