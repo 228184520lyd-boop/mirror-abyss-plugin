@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.31";
-var PIPELINE_VERSION = "ma-pipeline-33";
+var VERSION = "1.2.0-rc.32";
+var PIPELINE_VERSION = "ma-pipeline-34";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -3196,6 +3196,250 @@ async function runRevisionFlow(artifact) {
   }
 }
 
+// src/pipeline/task-queue.ts
+var TaskBlockedError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TaskBlockedError";
+  }
+};
+function cancelledError(message) {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+function elapsed(startedAt, finishedAt = Date.now()) {
+  return startedAt === void 0 ? void 0 : Math.max(0, finishedAt - startedAt);
+}
+var DEFAULT_PRIORITIES = {
+  audit: 100,
+  revision: 100,
+  state: 90,
+  manual: 70,
+  sync: 40,
+  smallSummary: 30,
+  largeSummary: 10
+};
+var TaskQueue = class _TaskQueue {
+  static MAX_TASKS = 200;
+  inFlight = /* @__PURE__ */ new Map();
+  tasks = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  accepting = true;
+  generation = 0;
+  sequence = 0;
+  pending = [];
+  active = null;
+  idleWaiters = /* @__PURE__ */ new Set();
+  setAccepting(accepting) {
+    if (this.accepting && !accepting) {
+      this.generation += 1;
+      this.cancelPending(() => true, "\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
+    }
+    this.accepting = accepting;
+    if (accepting) this.pump();
+  }
+  isTerminal(task) {
+    return !["running", "queued"].includes(String(task.state));
+  }
+  pruneTasks() {
+    while (this.tasks.size > _TaskQueue.MAX_TASKS) {
+      const removable = [...this.tasks.entries()].find(([, task]) => this.isTerminal(task));
+      if (!removable) break;
+      this.tasks.delete(removable[0]);
+    }
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  notify() {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn("[MirrorAbyss] task listener failed", error);
+      }
+    }
+  }
+  list() {
+    return [...this.tasks.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+  has(key) {
+    return this.inFlight.has(key);
+  }
+  clearHistory() {
+    for (const [id, task] of this.tasks) {
+      if (this.isTerminal(task)) this.tasks.delete(id);
+    }
+    this.notify();
+  }
+  resetRuntime() {
+    this.generation += 1;
+    this.cancelPending(() => true, "\u955C\u6E0A\u8FD0\u884C\u73AF\u5883\u5DF2\u91CD\u7F6E\uFF0C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
+    this.clearHistory();
+    this.notify();
+  }
+  resolveIdle() {
+    if (this.active || this.pending.length) return;
+    for (const resolve of this.idleWaiters) resolve();
+    this.idleWaiters.clear();
+  }
+  async whenIdle() {
+    if (!this.active && !this.pending.length) return;
+    await new Promise((resolve) => this.idleWaiters.add(resolve));
+  }
+  cancelPendingByChatKey(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u65E7\u804A\u5929\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
+    return this.cancelPending((job) => job.chatKey === chatKey, reason);
+  }
+  cancelPendingOutsideChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u65E7\u804A\u5929\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
+    return this.cancelPending((job) => Boolean(job.chatKey && job.chatKey !== chatKey), reason);
+  }
+  cancelPendingDerivedByChatKey(chatKey, reason = "\u5DF2\u6709\u66F4\u65B0\u7684\u6B63\u6587\u72B6\u6001\uFF0C\u65E7\u6D3E\u751F\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
+    return this.cancelPending(
+      (job) => job.chatKey === chatKey && String(job.task.key).includes(":derived:"),
+      reason
+    );
+  }
+  cancelPending(predicate, reason) {
+    const remaining = [];
+    let cancelled = 0;
+    const now = Date.now();
+    for (const job of this.pending) {
+      if (!predicate(job)) {
+        remaining.push(job);
+        continue;
+      }
+      cancelled += 1;
+      job.task.state = "cancelled";
+      job.task.error = reason;
+      job.task.finishedAt = nowIso();
+      job.task.queueWaitMs = elapsed(job.task.createdAtMs, now);
+      job.task.totalMs = elapsed(job.task.createdAtMs, now);
+      if (this.inFlight.get(job.task.key) === job.promise) this.inFlight.delete(job.task.key);
+      job.reject(cancelledError(reason));
+    }
+    this.pending = remaining;
+    if (cancelled) {
+      this.pruneTasks();
+      this.notify();
+    }
+    this.resolveIdle();
+    return cancelled;
+  }
+  /** 从 pending 中选择最高优先级任务；同优先级保持进入顺序。 */
+  selectNext() {
+    if (!this.pending.length) return null;
+    let selectedIndex = 0;
+    for (let index = 1; index < this.pending.length; index += 1) {
+      const candidate = this.pending[index];
+      const selected = this.pending[selectedIndex];
+      if (candidate.priority > selected.priority || candidate.priority === selected.priority && candidate.sequence < selected.sequence) {
+        selectedIndex = index;
+      }
+    }
+    return this.pending.splice(selectedIndex, 1)[0] ?? null;
+  }
+  pump() {
+    if (this.active || !this.accepting) {
+      this.resolveIdle();
+      return;
+    }
+    const job = this.selectNext();
+    if (!job) {
+      this.resolveIdle();
+      return;
+    }
+    this.active = job;
+    const task = job.task;
+    const startedMs = Date.now();
+    task.state = "running";
+    task.startedAt = nowIso();
+    task.startedAtMs = startedMs;
+    task.queueWaitMs = elapsed(task.createdAtMs, startedMs);
+    this.notify();
+    const guard = {
+      generation: job.generation,
+      assertCurrent: () => {
+        if (!this.accepting || job.generation !== this.generation) {
+          throw cancelledError("\u955C\u6E0A\u751F\u547D\u5468\u671F\u5DF2\u53D8\u5316\uFF0C\u65E7\u4EFB\u52A1\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
+        }
+      }
+    };
+    void Promise.resolve().then(async () => {
+      guard.assertCurrent();
+      const result = await job.work(guard);
+      guard.assertCurrent();
+      return result;
+    }).then((result) => {
+      task.state = "success";
+      job.resolve(result);
+    }).catch((error) => {
+      const cancelled = error instanceof Error && error.name === "AbortError";
+      const blocked = error instanceof TaskBlockedError || error instanceof Error && error.name === "TaskBlockedError";
+      task.state = cancelled ? "cancelled" : blocked ? "blocked" : "failed";
+      task.error = toErrorMessage(error);
+      job.reject(error);
+    }).finally(() => {
+      const finishedMs = Date.now();
+      task.finishedAt = nowIso();
+      task.runMs = elapsed(startedMs, finishedMs);
+      task.totalMs = elapsed(task.createdAtMs, finishedMs);
+      if (this.inFlight.get(task.key) === job.promise) this.inFlight.delete(task.key);
+      if (this.active === job) this.active = null;
+      this.pruneTasks();
+      this.notify();
+      this.pump();
+    });
+  }
+  /**
+   * 相同 key 的任务共享同一 Promise；generation 与 guard 共同阻止禁用/重启后的旧任务提交。
+   */
+  run(key, label, kind, work, options = {}) {
+    if (!this.accepting) return Promise.reject(cancelledError("\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u4E0D\u518D\u63A5\u53D7\u65B0\u4EFB\u52A1"));
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+    const createdMs = Date.now();
+    const priority = Number.isFinite(options.priority) ? Number(options.priority) : DEFAULT_PRIORITIES[String(kind)] ?? 50;
+    const task = {
+      id: makeId("task"),
+      key,
+      label,
+      kind,
+      state: "queued",
+      createdAt: nowIso(),
+      createdAtMs: createdMs,
+      priority,
+      chatKey: options.chatKey
+    };
+    this.tasks.set(task.id, task);
+    let resolve;
+    let reject;
+    const promise = new Promise((resolveValue, rejectValue) => {
+      resolve = resolveValue;
+      reject = rejectValue;
+    });
+    const job = {
+      task,
+      work,
+      generation: this.generation,
+      sequence: this.sequence += 1,
+      priority,
+      chatKey: options.chatKey,
+      promise,
+      resolve,
+      reject
+    };
+    this.pending.push(job);
+    this.inFlight.set(key, promise);
+    this.pruneTasks();
+    this.notify();
+    this.pump();
+    return promise;
+  }
+};
+var taskQueue = new TaskQueue();
+
 // src/domain/lorebook-publish.ts
 function registry(options) {
   return normalizeTableRegistry(options?.registry?.length ? options.registry : DEFAULT_TABLE_REGISTRY);
@@ -3913,7 +4157,7 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
   }
   return { changed, entryIds, created, adoptedLegacy, removed };
 }
-async function syncLorebookOnce(artifact, name, force = false) {
+async function syncLorebookOnce(artifact, name, force = false, options = {}) {
   assertArtifactCommitCurrent(artifact);
   if (!artifact.snapshot || artifact.stages.state.status !== "success") {
     throw new Error("\u6CA1\u6709\u6210\u529F\u72B6\u6001\u8868\uFF0C\u505C\u6B62\u4E16\u754C\u4E66\u540C\u6B65");
@@ -3928,12 +4172,18 @@ async function syncLorebookOnce(artifact, name, force = false) {
   await putArtifact(artifact);
   const chatState = await getChatState(artifact.chatKey);
   if (chatState.historyInvalidation) {
-    markStage(artifact, "sync", "blocked", "\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u624B\u52A8\u91CD\u7B97");
-    chatState.lastSyncStatus = "failed";
-    chatState.lastSyncError = chatState.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u9700\u8981\u91CD\u7B97`;
-    await putArtifact(artifact);
-    await putChatState(chatState);
-    return;
+    const recovery = chatState.historyRecovery;
+    const recoveryAuthorized = Boolean(
+      options.allowHistoryRecovery && recovery?.phase === "publishing-lorebook" && chatState.latestSnapshotMessageKey === artifact.messageKey
+    );
+    if (!recoveryAuthorized) {
+      markStage(artifact, "sync", "blocked", "\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u5386\u53F2\u91CD\u5EFA\u5B8C\u6210");
+      chatState.lastSyncStatus = "failed";
+      chatState.lastSyncError = chatState.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u9700\u8981\u91CD\u7B97`;
+      await putArtifact(artifact);
+      await putChatState(chatState);
+      throw new TaskBlockedError(chatState.lastSyncError);
+    }
   }
   try {
     const wi = await ensureLorebook(name, artifact.chatKey, artifact);
@@ -4005,18 +4255,18 @@ async function syncLorebookOnce(artifact, name, force = false) {
     throw error;
   }
 }
-async function syncLorebook(artifact, force = false) {
+async function syncLorebook(artifact, force = false, options = {}) {
   assertArtifactCommitCurrent(artifact);
   const settings = getSettings();
   const name = resolveTargetBookName(true, artifact.chatKey);
   if (!settings.lorebookSync && !force) {
-    await syncLorebookOnce(artifact, name, force);
+    await syncLorebookOnce(artifact, name, force, options);
     return;
   }
   if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
   await withLorebookMutation(name, async () => {
     assertArtifactCommitCurrent(artifact);
-    await syncLorebookOnce(artifact, name, force);
+    await syncLorebookOnce(artifact, name, force, options);
   });
 }
 function maintenancePreviewFromData(data, name, chatKey, dedicatedBook) {
@@ -5151,243 +5401,6 @@ async function runStateExtraction(artifact, force = false) {
   }
 }
 
-// src/pipeline/task-queue.ts
-function cancelledError(message) {
-  const error = new Error(message);
-  error.name = "AbortError";
-  return error;
-}
-function elapsed(startedAt, finishedAt = Date.now()) {
-  return startedAt === void 0 ? void 0 : Math.max(0, finishedAt - startedAt);
-}
-var DEFAULT_PRIORITIES = {
-  audit: 100,
-  revision: 100,
-  state: 90,
-  manual: 70,
-  sync: 40,
-  smallSummary: 30,
-  largeSummary: 10
-};
-var TaskQueue = class _TaskQueue {
-  static MAX_TASKS = 200;
-  inFlight = /* @__PURE__ */ new Map();
-  tasks = /* @__PURE__ */ new Map();
-  listeners = /* @__PURE__ */ new Set();
-  accepting = true;
-  generation = 0;
-  sequence = 0;
-  pending = [];
-  active = null;
-  idleWaiters = /* @__PURE__ */ new Set();
-  setAccepting(accepting) {
-    if (this.accepting && !accepting) {
-      this.generation += 1;
-      this.cancelPending(() => true, "\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
-    }
-    this.accepting = accepting;
-    if (accepting) this.pump();
-  }
-  isTerminal(task) {
-    return !["running", "queued"].includes(String(task.state));
-  }
-  pruneTasks() {
-    while (this.tasks.size > _TaskQueue.MAX_TASKS) {
-      const removable = [...this.tasks.entries()].find(([, task]) => this.isTerminal(task));
-      if (!removable) break;
-      this.tasks.delete(removable[0]);
-    }
-  }
-  subscribe(listener) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-  notify() {
-    for (const listener of this.listeners) {
-      try {
-        listener();
-      } catch (error) {
-        console.warn("[MirrorAbyss] task listener failed", error);
-      }
-    }
-  }
-  list() {
-    return [...this.tasks.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-  }
-  has(key) {
-    return this.inFlight.has(key);
-  }
-  clearHistory() {
-    for (const [id, task] of this.tasks) {
-      if (this.isTerminal(task)) this.tasks.delete(id);
-    }
-    this.notify();
-  }
-  resetRuntime() {
-    this.generation += 1;
-    this.cancelPending(() => true, "\u955C\u6E0A\u8FD0\u884C\u73AF\u5883\u5DF2\u91CD\u7F6E\uFF0C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
-    this.clearHistory();
-    this.notify();
-  }
-  resolveIdle() {
-    if (this.active || this.pending.length) return;
-    for (const resolve of this.idleWaiters) resolve();
-    this.idleWaiters.clear();
-  }
-  async whenIdle() {
-    if (!this.active && !this.pending.length) return;
-    await new Promise((resolve) => this.idleWaiters.add(resolve));
-  }
-  cancelPendingByChatKey(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u65E7\u804A\u5929\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
-    return this.cancelPending((job) => job.chatKey === chatKey, reason);
-  }
-  cancelPendingOutsideChat(chatKey, reason = "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u65E7\u804A\u5929\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
-    return this.cancelPending((job) => Boolean(job.chatKey && job.chatKey !== chatKey), reason);
-  }
-  cancelPendingDerivedByChatKey(chatKey, reason = "\u5DF2\u6709\u66F4\u65B0\u7684\u6B63\u6587\u72B6\u6001\uFF0C\u65E7\u6D3E\u751F\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
-    return this.cancelPending(
-      (job) => job.chatKey === chatKey && String(job.task.key).includes(":derived:"),
-      reason
-    );
-  }
-  cancelPending(predicate, reason) {
-    const remaining = [];
-    let cancelled = 0;
-    const now = Date.now();
-    for (const job of this.pending) {
-      if (!predicate(job)) {
-        remaining.push(job);
-        continue;
-      }
-      cancelled += 1;
-      job.task.state = "cancelled";
-      job.task.error = reason;
-      job.task.finishedAt = nowIso();
-      job.task.queueWaitMs = elapsed(job.task.createdAtMs, now);
-      job.task.totalMs = elapsed(job.task.createdAtMs, now);
-      if (this.inFlight.get(job.task.key) === job.promise) this.inFlight.delete(job.task.key);
-      job.reject(cancelledError(reason));
-    }
-    this.pending = remaining;
-    if (cancelled) {
-      this.pruneTasks();
-      this.notify();
-    }
-    this.resolveIdle();
-    return cancelled;
-  }
-  /** 从 pending 中选择最高优先级任务；同优先级保持进入顺序。 */
-  selectNext() {
-    if (!this.pending.length) return null;
-    let selectedIndex = 0;
-    for (let index = 1; index < this.pending.length; index += 1) {
-      const candidate = this.pending[index];
-      const selected = this.pending[selectedIndex];
-      if (candidate.priority > selected.priority || candidate.priority === selected.priority && candidate.sequence < selected.sequence) {
-        selectedIndex = index;
-      }
-    }
-    return this.pending.splice(selectedIndex, 1)[0] ?? null;
-  }
-  pump() {
-    if (this.active || !this.accepting) {
-      this.resolveIdle();
-      return;
-    }
-    const job = this.selectNext();
-    if (!job) {
-      this.resolveIdle();
-      return;
-    }
-    this.active = job;
-    const task = job.task;
-    const startedMs = Date.now();
-    task.state = "running";
-    task.startedAt = nowIso();
-    task.startedAtMs = startedMs;
-    task.queueWaitMs = elapsed(task.createdAtMs, startedMs);
-    this.notify();
-    const guard = {
-      generation: job.generation,
-      assertCurrent: () => {
-        if (!this.accepting || job.generation !== this.generation) {
-          throw cancelledError("\u955C\u6E0A\u751F\u547D\u5468\u671F\u5DF2\u53D8\u5316\uFF0C\u65E7\u4EFB\u52A1\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
-        }
-      }
-    };
-    void Promise.resolve().then(async () => {
-      guard.assertCurrent();
-      const result = await job.work(guard);
-      guard.assertCurrent();
-      return result;
-    }).then((result) => {
-      task.state = "success";
-      job.resolve(result);
-    }).catch((error) => {
-      const cancelled = error instanceof Error && error.name === "AbortError";
-      task.state = cancelled ? "cancelled" : "failed";
-      task.error = toErrorMessage(error);
-      job.reject(error);
-    }).finally(() => {
-      const finishedMs = Date.now();
-      task.finishedAt = nowIso();
-      task.runMs = elapsed(startedMs, finishedMs);
-      task.totalMs = elapsed(task.createdAtMs, finishedMs);
-      if (this.inFlight.get(task.key) === job.promise) this.inFlight.delete(task.key);
-      if (this.active === job) this.active = null;
-      this.pruneTasks();
-      this.notify();
-      this.pump();
-    });
-  }
-  /**
-   * 相同 key 的任务共享同一 Promise；generation 与 guard 共同阻止禁用/重启后的旧任务提交。
-   */
-  run(key, label, kind, work, options = {}) {
-    if (!this.accepting) return Promise.reject(cancelledError("\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u4E0D\u518D\u63A5\u53D7\u65B0\u4EFB\u52A1"));
-    const existing = this.inFlight.get(key);
-    if (existing) return existing;
-    const createdMs = Date.now();
-    const priority = Number.isFinite(options.priority) ? Number(options.priority) : DEFAULT_PRIORITIES[String(kind)] ?? 50;
-    const task = {
-      id: makeId("task"),
-      key,
-      label,
-      kind,
-      state: "queued",
-      createdAt: nowIso(),
-      createdAtMs: createdMs,
-      priority,
-      chatKey: options.chatKey
-    };
-    this.tasks.set(task.id, task);
-    let resolve;
-    let reject;
-    const promise = new Promise((resolveValue, rejectValue) => {
-      resolve = resolveValue;
-      reject = rejectValue;
-    });
-    const job = {
-      task,
-      work,
-      generation: this.generation,
-      sequence: this.sequence += 1,
-      priority,
-      chatKey: options.chatKey,
-      promise,
-      resolve,
-      reject
-    };
-    this.pending.push(job);
-    this.inFlight.set(key, promise);
-    this.pruneTasks();
-    this.notify();
-    this.pump();
-    return promise;
-  }
-};
-var taskQueue = new TaskQueue();
-
 // src/pipeline/pipeline.ts
 var listeners = /* @__PURE__ */ new Set();
 var scheduledMessageTimers = /* @__PURE__ */ new Map();
@@ -5588,7 +5601,7 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
   }
 }
 function derivedTaskError(error) {
-  return error instanceof CommitRejectedError || error instanceof Error && error.name === "AbortError";
+  return error instanceof CommitRejectedError || error instanceof TaskBlockedError || error instanceof Error && ["AbortError", "TaskBlockedError"].includes(error.name);
 }
 function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
   const settings = getSettings();
@@ -5668,6 +5681,16 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
     if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueLarge(true);
   });
 }
+function isAutomaticLatestHistoryRecovery(index, chatState) {
+  const invalidation = chatState?.historyInvalidation;
+  return Boolean(
+    invalidation && invalidation.automatic && invalidation.startIndex === index && invalidation.reason !== "deleted" && isNarrativeTail(index)
+  );
+}
+function historyBlockedMessage(chatState) {
+  const startIndex = chatState?.historyInvalidation?.startIndex;
+  return startIndex === void 0 ? "\u5386\u53F2\u6570\u636E\u5DF2\u5931\u6548\uFF0C\u8BF7\u5148\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9" : `\u5386\u53F2\u6570\u636E\u5DF2\u5931\u6548\uFF0C\u8BF7\u4ECE\u7B2C ${startIndex + 1} \u6761\u6D88\u606F\u5F00\u59CB\u91CD\u7B97`;
+}
 async function processMessage(index, force = false, options = {}) {
   if (!getSettings().enabled) return null;
   const message = getMessage(index);
@@ -5686,6 +5709,15 @@ async function processMessage(index, force = false, options = {}) {
     if (!isProcessableAssistantMessage(getMessage(index))) return null;
     if (messageFingerprint(index) !== scheduledFingerprint) {
       throw new CommitRejectedError("\u6B63\u6587\u5DF2\u7ECF\u53D8\u5316\uFF0C\u672C\u6B21\u6392\u961F\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
+    }
+    const processingState = await getChatState(scheduledChatKey);
+    if (processingState.historyInvalidation) {
+      const recoveryAuthorized = Boolean(
+        options.historyRecovery && processingState.historyRecovery && index >= Number(processingState.historyInvalidation.startIndex ?? index)
+      );
+      if (!recoveryAuthorized && !isAutomaticLatestHistoryRecovery(index, processingState)) {
+        throw new TaskBlockedError(historyBlockedMessage(processingState));
+      }
     }
     const artifact = await loadOrCreateArtifact(index, force, scheduledHistoryRevision, guard);
     notify(index, artifact);
@@ -5719,7 +5751,7 @@ async function processMessage(index, force = false, options = {}) {
       }
       if (artifact.snapshot && artifact.stages.state.status === "success") {
         await commitCoreState(index, artifact);
-        await clearResolvedLatestHistoryInvalidation(index, artifact);
+        if (!options.historyRecovery) await clearResolvedLatestHistoryInvalidation(index, artifact);
         const summaryPlan = await prepareDerivedStageStatuses(artifact);
         if (!options.skipDerived) {
           taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
@@ -5888,7 +5920,7 @@ async function recalculateInvalidatedHistory() {
     progressState.lastSyncError = `\u6B63\u5728\u91CD\u5EFA\u7B2C ${index + 1} \u6761\u6D88\u606F\uFF08${position + 1}/${processableIndexes.length}\uFF09`;
     await putChatState(progressState);
     try {
-      latest = await processMessage(index, false, { skipDerived: true });
+      latest = await processMessage(index, false, { skipDerived: true, historyRecovery: true });
       if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
       if (!latest || latest.stages.state.status === "failed" || latest.stages.state.status === "blocked") {
         const stageError = latest?.stages.state.error || "\u72B6\u6001\u8868\u672A\u6210\u529F";
@@ -5937,51 +5969,56 @@ async function recalculateInvalidatedHistory() {
     freshState.historyRecovery.currentIndex = recoveryInfo.index;
     freshState.historyRecovery.updatedAt = nowIso();
   }
-  delete freshState.historyInvalidation;
   freshState.lastSyncError = "\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u5EFA\uFF0C\u6B63\u5728\u6062\u590D\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66";
   freshState.lastSyncStatus = "idle";
   await putChatState(freshState);
   const artifact = recoveryInfo.artifact;
   const revision = currentHistoryRevision(chatKey);
   const errors = [];
-  await taskQueue.run(
-    `${PIPELINE_VERSION}:history-recovery-derived:${chatKey}:${artifact.messageKey}`,
-    "\u6062\u590D\u5386\u53F2\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66",
-    "smallSummary",
-    async (guard) => {
-      bindArtifactHistoryRevision(artifact, revision);
-      bindArtifactTaskGuard(artifact, guard);
-      try {
+  try {
+    await taskQueue.run(
+      `${PIPELINE_VERSION}:history-recovery-derived:${chatKey}:${artifact.messageKey}`,
+      "\u6062\u590D\u5386\u53F2\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66",
+      "smallSummary",
+      async (guard) => {
+        bindArtifactHistoryRevision(artifact, revision);
+        bindArtifactTaskGuard(artifact, guard);
         try {
-          await rebuildEligibleSummaries(artifact);
-        } catch (error) {
-          if (derivedTaskError(error)) throw error;
-          errors.push(`\u603B\u7ED3\uFF1A${toErrorMessage(error)}`);
-        }
-        await saveArtifactToMessage(recoveryInfo.index, artifact);
-        if (getSettings().lorebookSync) {
-          const publishingState = await getChatState(chatKey);
-          if (publishingState.historyRecovery) {
-            publishingState.historyRecovery.phase = "publishing-lorebook";
-            publishingState.historyRecovery.updatedAt = nowIso();
-          }
-          publishingState.lastSyncError = "\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u4E0E\u603B\u7ED3\u5DF2\u6062\u590D\uFF0C\u6B63\u5728\u53D1\u5E03\u4E16\u754C\u4E66";
-          await putChatState(publishingState);
           try {
-            await syncLorebook(artifact);
+            await rebuildEligibleSummaries(artifact);
           } catch (error) {
             if (derivedTaskError(error)) throw error;
-            errors.push(`\u4E16\u754C\u4E66\uFF1A${toErrorMessage(error)}`);
+            errors.push(`\u603B\u7ED3\uFF1A${toErrorMessage(error)}`);
           }
           await saveArtifactToMessage(recoveryInfo.index, artifact);
+          if (getSettings().lorebookSync && errors.length === 0) {
+            const publishingState = await getChatState(chatKey);
+            if (publishingState.historyRecovery) {
+              publishingState.historyRecovery.phase = "publishing-lorebook";
+              publishingState.historyRecovery.updatedAt = nowIso();
+            }
+            publishingState.lastSyncError = "\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u4E0E\u603B\u7ED3\u5DF2\u6062\u590D\uFF0C\u6B63\u5728\u53D1\u5E03\u4E16\u754C\u4E66";
+            await putChatState(publishingState);
+            try {
+              await syncLorebook(artifact, false, { allowHistoryRecovery: true });
+            } catch (error) {
+              if (error instanceof CommitRejectedError || error instanceof Error && error.name === "AbortError") throw error;
+              errors.push(`\u4E16\u754C\u4E66\uFF1A${toErrorMessage(error)}`);
+            }
+            await saveArtifactToMessage(recoveryInfo.index, artifact);
+          }
+          if (errors.length) throw new Error(errors.join("\uFF1B"));
+        } finally {
+          unbindArtifactTaskGuard(artifact, guard);
+          unbindArtifactHistoryRevision(artifact, revision);
         }
-      } finally {
-        unbindArtifactTaskGuard(artifact, guard);
-        unbindArtifactHistoryRevision(artifact, revision);
-      }
-    },
-    { priority: 70, chatKey }
-  );
+      },
+      { priority: 70, chatKey }
+    );
+  } catch (error) {
+    if (derivedTaskError(error)) throw error;
+    if (errors.length === 0) errors.push(toErrorMessage(error));
+  }
   const finalState = await getChatState(chatKey);
   if (errors.length) {
     if (finalState.historyRecovery) {
@@ -5994,6 +6031,7 @@ async function recalculateInvalidatedHistory() {
     await putChatState(finalState);
     toast("warning", `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u7B97\u5B8C\u6210\uFF0C\u4F46\u90E8\u5206\u6D3E\u751F\u6062\u590D\u5931\u8D25\uFF1A${errors.join("\uFF1B")}`);
   } else {
+    delete finalState.historyInvalidation;
     delete finalState.historyRecovery;
     finalState.lastSyncError = void 0;
     if (!getSettings().lorebookSync) finalState.lastSyncStatus = "idle";
@@ -6042,6 +6080,10 @@ async function retryStage(index, stage) {
   return taskQueue.run(key, `\u91CD\u8BD5${stage}`, queueKind, async (guard) => {
     if (currentChatKey() !== chatKey) return null;
     assertHistoryRevisionCurrent(chatKey, scheduledHistoryRevision);
+    const currentState = await getChatState(chatKey);
+    if (currentState.historyInvalidation && ["state", "summary", "sync"].includes(stage)) {
+      throw new TaskBlockedError(historyBlockedMessage(currentState));
+    }
     const artifact = latestSnapshot?.index === index ? latestSnapshot.artifact : await loadOrCreateArtifact(index, false, scheduledHistoryRevision, guard);
     bindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
     bindArtifactTaskGuard(artifact, guard);

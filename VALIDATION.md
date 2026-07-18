@@ -1,7 +1,18 @@
-# Mirror Abyss 1.2.0-rc.31 验收记录
+# Mirror Abyss 1.2.0-rc.32 验收记录
 
-流水线：`ma-pipeline-32`
+流水线：`ma-pipeline-34`
 
+
+## rc.32 历史事务闭环专项
+
+- 历史锁存在时，普通整理和 state 重试在模型调用前进入 blocked；
+- 被阻断任务不推进 processedMessageKeys、内部事实和最新快照；
+- 世界书没有实际写入时任务状态为 blocked，不再是 success；
+- 历史重建使用显式恢复权限，普通 force 无权越锁；
+- 世界书保存故意暂停时，historyInvalidation 持续保留；
+- 保存、回读和归并完成后才清除 historyInvalidation/historyRecovery；
+- 完整 `npm run verify` 通过，43 个测试文件通过；
+- `npm audit --omit=dev` 为 0 漏洞。
 
 ## rc.31 状态请求压缩专项
 
@@ -22,7 +33,7 @@
 
 ## 自动验证范围
 
-正式 `npm run verify` 覆盖 41 个测试文件：
+正式 `npm run verify` 覆盖 43 个测试文件：
 
 - 人工基础保护、完全锁定与普通自动状态更新；
 - 编辑、swipe、删除、聊天切换后的历史修订与旧任务提交拒绝；
