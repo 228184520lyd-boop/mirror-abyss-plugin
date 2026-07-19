@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.39";
-var PIPELINE_VERSION = "ma-pipeline-41";
+var VERSION = "1.2.0-rc.41";
+var PIPELINE_VERSION = "ma-pipeline-43";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -1790,6 +1790,9 @@ function filterPassiveObservers(snapshot, registry2) {
 
 // src/storage/repository.ts
 var CURRENT_SCHEMA_VERSION = 2;
+function cloneChatState(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 function emptyChatState(chatKey) {
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -1883,7 +1886,7 @@ function normalizeLegacySyncControlState(state2) {
   return true;
 }
 function migrateChatState(raw, chatKey) {
-  const state2 = raw && raw.chatKey === chatKey ? structuredClone(raw) : emptyChatState(chatKey);
+  const state2 = raw && raw.chatKey === chatKey ? cloneChatState(raw) : emptyChatState(chatKey);
   const metadataBefore = JSON.stringify(raw ?? null);
   const previousSchema = Number(state2.schemaVersion) || 1;
   const needsViewMigration = state2.migration?.dynamicTablesV23 !== true;
@@ -2021,11 +2024,11 @@ async function readCurrentChatStateFast(namespace, state2, chatKey) {
   const next = { ...state2 };
   const focusChanged = Object.prototype.hasOwnProperty.call(state2, "focusObjectId") ? validateCurrentFocus(next, getSettings().tableRegistry) : false;
   const syncStateChanged = normalizeLegacySyncControlState(next);
-  if (!focusChanged && !syncStateChanged) return state2;
+  if (!focusChanged && !syncStateChanged) return cloneChatState(state2);
   namespace.state = next;
   try {
     await persistMetadataFor(chatKey);
-    return next;
+    return cloneChatState(next);
   } catch (error) {
     namespace.state = state2;
     throw error;
@@ -2063,7 +2066,7 @@ async function readChatState(chatKey) {
     }
     namespace.state = migration.state;
     if (migration.metadataChanged) await persistMetadataFor(chatKey);
-    return namespace.state;
+    return cloneChatState(namespace.state);
   } catch (error) {
     if (hadState) namespace.state = previousState;
     else delete namespace.state;
@@ -2094,25 +2097,59 @@ function getChatState(chatKey) {
 }
 async function putChatState(state2) {
   assertChatCommitCurrent(state2.chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u5199\u5165\u65E7\u804A\u5929\u72B6\u6001");
-  state2.schemaVersion = CURRENT_SCHEMA_VERSION;
-  state2.chatLocator = currentChatLocator() || state2.chatLocator;
-  state2.internalFacts = normalizeInternalFacts(state2.internalFacts);
-  if (state2.migration?.internalFactsV23 !== true || state2.migration?.summaryVersionsV27 !== true) {
-    migrateLegacyConsumption(state2.internalFacts, state2.smallSummaries, state2.largeSummaries);
-  }
-  state2.updatedAt = nowIso();
   const namespace = getChatMetadataNamespace();
-  namespace.state = state2;
-  namespace.updatedAt = state2.updatedAt;
-  await persistMetadataFor(state2.chatKey);
+  const hadState = Object.prototype.hasOwnProperty.call(namespace, "state");
+  const previousState = hadState ? cloneChatState(namespace.state) : void 0;
+  const hadUpdatedAt = Object.prototype.hasOwnProperty.call(namespace, "updatedAt");
+  const previousUpdatedAt = namespace.updatedAt;
+  const next = cloneChatState(state2);
+  next.schemaVersion = CURRENT_SCHEMA_VERSION;
+  next.chatLocator = currentChatLocator() || next.chatLocator;
+  next.internalFacts = normalizeInternalFacts(next.internalFacts);
+  if (next.migration?.internalFactsV23 !== true || next.migration?.summaryVersionsV27 !== true) {
+    migrateLegacyConsumption(next.internalFacts, next.smallSummaries, next.largeSummaries);
+  }
+  next.updatedAt = nowIso();
+  namespace.state = next;
+  namespace.updatedAt = next.updatedAt;
+  try {
+    await persistMetadataFor(next.chatKey);
+    Object.assign(state2, cloneChatState(next));
+  } catch (error) {
+    if (!(error instanceof CommitRejectedError)) {
+      if (hadState) namespace.state = previousState;
+      else delete namespace.state;
+      if (hadUpdatedAt) namespace.updatedAt = previousUpdatedAt;
+      else delete namespace.updatedAt;
+    }
+    throw error;
+  }
 }
 async function clearAllStorage(chatKey = currentChatKey()) {
   assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u6E05\u7406\u65E7\u804A\u5929\u72B6\u6001");
   const namespace = getChatMetadataNamespace();
+  const hadState = Object.prototype.hasOwnProperty.call(namespace, "state");
+  const previousState = hadState ? cloneChatState(namespace.state) : void 0;
+  const hadLorebookName = Object.prototype.hasOwnProperty.call(namespace, "lorebookName");
+  const previousLorebookName = namespace.lorebookName;
+  const hadUpdatedAt = Object.prototype.hasOwnProperty.call(namespace, "updatedAt");
+  const previousUpdatedAt = namespace.updatedAt;
   delete namespace.state;
   delete namespace.lorebookName;
   namespace.updatedAt = nowIso();
-  await persistMetadataFor(chatKey);
+  try {
+    await persistMetadataFor(chatKey);
+  } catch (error) {
+    if (!(error instanceof CommitRejectedError)) {
+      if (hadState) namespace.state = previousState;
+      else delete namespace.state;
+      if (hadLorebookName) namespace.lorebookName = previousLorebookName;
+      else delete namespace.lorebookName;
+      if (hadUpdatedAt) namespace.updatedAt = previousUpdatedAt;
+      else delete namespace.updatedAt;
+    }
+    throw error;
+  }
 }
 
 // src/core/requests.ts
@@ -2183,12 +2220,15 @@ function getAttachedArtifact(message) {
 function markStage(artifact, stage, status, error) {
   const current = artifact.stages[stage] ?? idleStage();
   const now = nowIso();
+  const terminal = ["success", "failed", "cancelled", "skipped", "blocked"].includes(status);
+  const enteringRunning = status === "running" && current.status !== "running";
   artifact.stages[stage] = {
     ...current,
     status,
-    attempts: status === "running" ? current.attempts + 1 : current.attempts,
-    startedAt: status === "running" ? now : current.startedAt,
-    finishedAt: ["success", "failed", "cancelled", "skipped", "blocked"].includes(status) ? now : void 0,
+    attempts: enteringRunning ? current.attempts + 1 : current.attempts,
+    // queued/idle 代表一轮尚未开始；直接 blocked/skipped 也不能继承上一轮执行时间。
+    startedAt: status === "running" ? enteringRunning ? now : current.startedAt : terminal && current.status === "running" ? current.startedAt : void 0,
+    finishedAt: terminal ? now : void 0,
     error: error || void 0
   };
   artifact.updatedAt = now;
@@ -2294,7 +2334,7 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
     job.trace.state = "running";
     job.trace.startedAt = nowIso();
     job.trace.transportWaitMs = Math.max(0, startedMs - job.createdMs);
-    void job.work().then((result) => {
+    void Promise.resolve().then(() => job.work()).then((result) => {
       job.trace.state = "success";
       job.resolve(result);
     }).catch((error) => {
@@ -2391,33 +2431,37 @@ var TASK_RESPONSE_TOKENS = {
 };
 var schemaUnsupportedConnections = /* @__PURE__ */ new Set();
 var schemaRejectedRequests = /* @__PURE__ */ new Set();
-var SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaCapabilities.v35";
-var LEGACY_SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaUnsupported.v31";
+var SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaCapabilities.v40";
+var LEGACY_SCHEMA_CAPABILITY_STORAGE_KEYS = [
+  "mirrorAbyss.schemaCapabilities.v35",
+  "mirrorAbyss.schemaUnsupported.v31"
+];
 function readStoredSchemaCapabilities() {
   try {
     const raw = globalThis.sessionStorage?.getItem(SCHEMA_CAPABILITY_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     return {
-      unsupportedConnections: Array.isArray(parsed?.unsupportedConnections) ? parsed.unsupportedConnections.filter((item) => typeof item === "string") : [],
-      rejectedSchemas: Array.isArray(parsed?.rejectedSchemas) ? parsed.rejectedSchemas.filter((item) => typeof item === "string") : []
+      unsupportedConnections: Array.isArray(parsed?.unsupportedConnections) ? parsed.unsupportedConnections.filter((item) => typeof item === "string") : []
     };
   } catch {
-    return { unsupportedConnections: [], rejectedSchemas: [] };
+    return { unsupportedConnections: [] };
   }
 }
 function persistSchemaCapabilities() {
   try {
     globalThis.sessionStorage?.setItem(SCHEMA_CAPABILITY_STORAGE_KEY, JSON.stringify({
-      unsupportedConnections: [...schemaUnsupportedConnections],
-      rejectedSchemas: [...schemaRejectedRequests]
+      unsupportedConnections: [...schemaUnsupportedConnections]
     }));
-    globalThis.sessionStorage?.removeItem(LEGACY_SCHEMA_CAPABILITY_STORAGE_KEY);
+    for (const key of LEGACY_SCHEMA_CAPABILITY_STORAGE_KEYS) globalThis.sessionStorage?.removeItem(key);
   } catch {
   }
 }
 var storedSchemaCapabilities = readStoredSchemaCapabilities();
 for (const key of storedSchemaCapabilities.unsupportedConnections) schemaUnsupportedConnections.add(key);
-for (const key of storedSchemaCapabilities.rejectedSchemas) schemaRejectedRequests.add(key);
+try {
+  for (const key of LEGACY_SCHEMA_CAPABILITY_STORAGE_KEYS) globalThis.sessionStorage?.removeItem(key);
+} catch {
+}
 function taskConnectionKey(task) {
   const connection = getSettings().connections[task];
   if (connection?.mode === "profile") {
@@ -2441,9 +2485,10 @@ function taskConnectionKey(task) {
 function schemaRequestKey(task, jsonSchema) {
   return `${taskConnectionKey(task)}:${task}:${hashText(JSON.stringify(jsonSchema))}`;
 }
-function shouldSkipJsonSchema(task, jsonSchema) {
-  if (schemaUnsupportedConnections.has(taskConnectionKey(task))) return true;
-  return Boolean(jsonSchema && schemaRejectedRequests.has(schemaRequestKey(task, jsonSchema)));
+function jsonSchemaSkipReason(task, jsonSchema) {
+  if (schemaUnsupportedConnections.has(taskConnectionKey(task))) return "connection-unsupported";
+  if (jsonSchema && schemaRejectedRequests.has(schemaRequestKey(task, jsonSchema))) return "schema-rejected";
+  return null;
 }
 function rememberJsonSchemaUnsupported(task) {
   schemaUnsupportedConnections.add(taskConnectionKey(task));
@@ -2451,7 +2496,10 @@ function rememberJsonSchemaUnsupported(task) {
 }
 function rememberJsonSchemaRejected(task, jsonSchema) {
   schemaRejectedRequests.add(schemaRequestKey(task, jsonSchema));
-  persistSchemaCapabilities();
+}
+function forgetJsonSchemaRejected(task, jsonSchema) {
+  if (!jsonSchema) return;
+  schemaRejectedRequests.delete(schemaRequestKey(task, jsonSchema));
 }
 function isDefinitiveJsonSchemaUnsupported(error) {
   const message = toErrorMessage(error);
@@ -2772,12 +2820,15 @@ async function testConnection(task) {
   };
   const schema = request.jsonSchema;
   let schemaFailure;
-  if (shouldSkipJsonSchema(task, schema)) {
+  let pendingRejectedSchema = false;
+  const skipReason = jsonSchemaSkipReason(task, schema);
+  if (skipReason) {
     schemaStatus = "cached-bypass";
     raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "plain" });
   } else {
     try {
       raw = await generateTask({ ...request, requestPurpose: "schema" });
+      if (raw.trim() !== "{}") forgetJsonSchemaRejected(task, schema);
       if (raw.trim() === "{}") {
         schemaStatus = "empty-fallback";
         schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61");
@@ -2802,10 +2853,7 @@ async function testConnection(task) {
   if (schemaFailure) {
     try {
       raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "fallback" });
-      if (schemaStatus === "rejected-fallback" && !isDefinitiveJsonSchemaUnsupported(schemaFailure)) {
-        rememberJsonSchemaRejected(task, schema);
-      }
-      if (schemaStatus === "empty-fallback") rememberJsonSchemaRejected(task, schema);
+      pendingRejectedSchema = schemaStatus === "rejected-fallback" && !isDefinitiveJsonSchemaUnsupported(schemaFailure) || schemaStatus === "empty-fallback";
     } catch (fallbackError) {
       if (fallbackError instanceof Error && fallbackError.name === "AbortError") throw fallbackError;
       throw new Error(
@@ -2821,6 +2869,8 @@ async function testConnection(task) {
     instructionFollowed = parsed.ok === true && parsed.source === "mirror-abyss";
   } catch {
   }
+  if (pendingRejectedSchema && instructionFollowed) rememberJsonSchemaRejected(task, schema);
+  if (skipReason === "schema-rejected" && !instructionFollowed) forgetJsonSchemaRejected(task, schema);
   return {
     connected: Boolean(raw.trim()),
     instructionFollowed,
@@ -2991,14 +3041,21 @@ async function repairStructuredOutput(task, raw, structureDescription, jsonSchem
   return parseAndValidateStructuredOutput(repaired, jsonSchema, validationOptions, candidateTransform);
 }
 async function generateWithSchemaFallback(options) {
-  if (options.jsonSchema && shouldSkipJsonSchema(options.task, options.jsonSchema)) {
-    return generateTask({ ...options, jsonSchema: void 0, requestPurpose: "plain" });
+  const skipReason = options.jsonSchema ? jsonSchemaSkipReason(options.task, options.jsonSchema) : null;
+  if (options.jsonSchema && skipReason) {
+    return {
+      raw: await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "plain" }),
+      skipReason
+    };
   }
   let schemaFailure;
   let rejectThisSchema = false;
   try {
     const raw = await generateTask({ ...options, requestPurpose: options.jsonSchema ? "schema" : "plain" });
-    if (!options.jsonSchema || raw.trim() !== "{}") return raw;
+    if (!options.jsonSchema || raw.trim() !== "{}") {
+      if (options.jsonSchema) forgetJsonSchemaRejected(options.task, options.jsonSchema);
+      return { raw, skipReason: null };
+    }
     schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u3001\u63A5\u53E3\u6216\u8BE5Schema\u4E0D\u517C\u5BB9");
     rejectThisSchema = true;
   } catch (error) {
@@ -3017,8 +3074,11 @@ async function generateWithSchemaFallback(options) {
   }
   try {
     const fallback = await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "fallback" });
-    if (rejectThisSchema && options.jsonSchema) rememberJsonSchemaRejected(options.task, options.jsonSchema);
-    return fallback;
+    return {
+      raw: fallback,
+      skipReason: null,
+      pendingRejectedSchema: rejectThisSchema ? options.jsonSchema : void 0
+    };
   } catch (fallbackError) {
     if (isCancelledRequest(fallbackError)) throw fallbackError;
     throw new Error(
@@ -3027,11 +3087,15 @@ async function generateWithSchemaFallback(options) {
   }
 }
 async function generateStructuredTask(options) {
-  const raw = await generateWithSchemaFallback(options);
+  const generation = await generateWithSchemaFallback(options);
+  const raw = generation.raw;
   const validationSchema = options.validationSchema ?? options.jsonSchema;
   try {
-    return parseAndValidateStructuredOutput(raw, validationSchema, options.validationOptions, options.candidateTransform);
+    const parsed = parseAndValidateStructuredOutput(raw, validationSchema, options.validationOptions, options.candidateTransform);
+    if (generation.pendingRejectedSchema) rememberJsonSchemaRejected(options.task, generation.pendingRejectedSchema);
+    return parsed;
   } catch (firstError) {
+    if (generation.skipReason === "schema-rejected") forgetJsonSchemaRejected(options.task, options.jsonSchema);
     if (firstError instanceof StructuredSchemaValidationError) {
       throw structuredError(options.task, firstError, raw);
     }
@@ -3045,7 +3109,8 @@ async function generateStructuredTask(options) {
     const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
     if (!allowRepair) throw structuredError(options.task, firstError, raw);
     try {
-      return await repairStructuredOutput(options.task, raw, options.structureDescription, validationSchema, options.validationOptions, options.candidateTransform);
+      const repaired = await repairStructuredOutput(options.task, raw, options.structureDescription, validationSchema, options.validationOptions, options.candidateTransform);
+      return repaired;
     } catch (repairError) {
       if (repairError instanceof Error && repairError.message.startsWith(`${TASK_LABELS[options.task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784`)) {
         throw repairError;
@@ -3229,11 +3294,13 @@ async function auditText(playerRules, playerText, assistantText) {
   let structuredRequestError;
   let rejectAuditSchema = false;
   const schema = auditJsonSchema();
-  if (shouldSkipJsonSchema("audit", schema)) {
+  const skipReason = jsonSchemaSkipReason("audit", schema);
+  if (skipReason) {
     raw = await generateTask({ ...request, requestPurpose: "plain" });
   } else {
     try {
       raw = await generateTask({ ...request, jsonSchema: schema, requestPurpose: "schema" });
+      if (raw.trim() !== "{}") forgetJsonSchemaRejected("audit", schema);
       if (raw.trim() === "{}") {
         structuredRequestError = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u3001\u63A5\u53E3\u6216\u5BA1\u6838Schema\u4E0D\u517C\u5BB9");
         rejectAuditSchema = true;
@@ -3241,14 +3308,21 @@ async function auditText(playerRules, playerText, assistantText) {
     } catch (error) {
       if (isCancelledAuditRequest(error)) throw error;
       structuredRequestError = error;
-      if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported("audit");
-      else rejectAuditSchema = isJsonSchemaRequestRejected(error);
+      if (isDefinitiveJsonSchemaUnsupported(error)) {
+        rememberJsonSchemaUnsupported("audit");
+      } else if (isJsonSchemaRequestRejected(error)) {
+        rejectAuditSchema = true;
+      } else {
+        throw new Error(
+          `\u89C4\u5219\u5BA1\u6838\u7ED3\u6784\u5316\u8BF7\u6C42\u5931\u8D25\uFF08${describeTaskConnection("audit")}\uFF09\uFF0C\u672A\u6267\u884C\u65E0Schema\u91CD\u590D\u8BF7\u6C42\uFF1A${toErrorMessage(error)}`,
+          { cause: error }
+        );
+      }
     }
   }
   if (structuredRequestError) {
     try {
       raw = await generateTask({ ...request, requestPurpose: "fallback" });
-      if (rejectAuditSchema) rememberJsonSchemaRejected("audit", schema);
     } catch (fallbackError) {
       if (isCancelledAuditRequest(fallbackError)) throw fallbackError;
       throw new Error(
@@ -3257,8 +3331,11 @@ async function auditText(playerRules, playerText, assistantText) {
     }
   }
   try {
-    return parseAuditResult(raw);
+    const parsed = parseAuditResult(raw);
+    if (rejectAuditSchema) rememberJsonSchemaRejected("audit", schema);
+    return parsed;
   } catch (firstError) {
+    if (skipReason === "schema-rejected") forgetJsonSchemaRejected("audit", schema);
     if (isLikelyTruncatedJson(raw, firstError)) {
       throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002\u6A21\u578B\u8F93\u51FA\u5728JSON\u5BF9\u8C61\u7ED3\u675F\u524D\u88AB\u622A\u65AD\uFF0C\u65E0\u6CD5\u5B89\u5168\u4FEE\u590D\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
     }
@@ -3276,7 +3353,8 @@ async function auditText(playerRules, playerText, assistantText) {
         '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"...","replacementText":"...\u6216\u7A7A\u5B57\u7B26\u4E32"}',
         schema
       );
-      return parseAuditResult(JSON.stringify(repaired));
+      const parsed = parseAuditResult(JSON.stringify(repaired));
+      return parsed;
     } catch (repairError) {
       if (isCancelledAuditRequest(repairError)) throw repairError;
       throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(repairError)}\uFF1B\u539F\u59CB\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
@@ -3599,6 +3677,7 @@ var TaskQueue = class _TaskQueue {
   setAccepting(accepting) {
     if (this.accepting && !accepting) {
       this.generation += 1;
+      this.cancelActiveMatching(() => true, "\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u8FD0\u884C\u4EFB\u52A1\u5DF2\u8BF7\u6C42\u53D6\u6D88");
       this.cancelPending(() => true, "\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
     }
     this.accepting = accepting;
@@ -3641,6 +3720,7 @@ var TaskQueue = class _TaskQueue {
   }
   resetRuntime() {
     this.generation += 1;
+    this.cancelActiveMatching(() => true, "\u955C\u6E0A\u8FD0\u884C\u73AF\u5883\u5DF2\u91CD\u7F6E\uFF0C\u8FD0\u884C\u4EFB\u52A1\u5DF2\u8BF7\u6C42\u53D6\u6D88");
     this.cancelPending(() => true, "\u955C\u6E0A\u8FD0\u884C\u73AF\u5883\u5DF2\u91CD\u7F6E\uFF0C\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
     this.clearHistory();
     this.notify();
@@ -3693,6 +3773,8 @@ var TaskQueue = class _TaskQueue {
       cancelled += 1;
       job.task.state = "cancelled";
       job.task.error = reason;
+      job.task.cancelReason = reason;
+      job.task.cancelRequestedAt = nowIso();
       job.task.finishedAt = nowIso();
       job.task.queueWaitMs = elapsed(job.task.createdAtMs, now);
       job.task.totalMs = elapsed(job.task.createdAtMs, now);
@@ -3756,7 +3838,7 @@ var TaskQueue = class _TaskQueue {
       task.state = "success";
       job.resolve(result);
     }).catch((error) => {
-      const cancelled = error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name);
+      const cancelled = Boolean(job.cancelReason) || error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name);
       const blocked = error instanceof TaskBlockedError || error instanceof Error && error.name === "TaskBlockedError";
       const skipped = error instanceof TaskSkippedError || error instanceof Error && error.name === "TaskSkippedError";
       task.state = cancelled ? "cancelled" : blocked ? "blocked" : skipped ? "skipped" : "failed";
@@ -3764,9 +3846,9 @@ var TaskQueue = class _TaskQueue {
         task.skipReason = toErrorMessage(error);
         delete task.error;
       } else {
-        task.error = toErrorMessage(error);
+        task.error = cancelled && job.cancelReason ? job.cancelReason : toErrorMessage(error);
       }
-      job.reject(error);
+      job.reject(cancelled && job.cancelReason ? cancelledError(job.cancelReason) : error);
     }).finally(() => {
       const finishedMs = Date.now();
       task.finishedAt = nowIso();
@@ -4040,7 +4122,6 @@ var lorebookMutationLocks = /* @__PURE__ */ new Map();
 function resetLorebookRuntime() {
   worldInfoModulePromise = null;
   worldInfoApiForTests = null;
-  lorebookMutationLocks.clear();
 }
 async function worldInfoApi() {
   if (worldInfoApiForTests) return worldInfoApiForTests;

@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.39",
+  "version": "1.2.0-rc.41",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊请求调度修复版：分离业务与只读诊断通道，阻止上游故障重复回退，并修正历史恢复与世界书同步状态边界。"
+  "description": "镜渊基础契约修复版：修复队列死锁、错误回退与缓存、取消竞态、阶段时间残留、世界书重启并发和状态持久化失败回滚。"
 }
