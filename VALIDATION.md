@@ -1,6 +1,26 @@
-# Mirror Abyss 1.2.0-rc.38 验收记录
+# Mirror Abyss 1.2.0-rc.39 验收记录
 
-流水线：`ma-pipeline-40`
+流水线：`ma-pipeline-41`
+
+## rc.39 统一实机验收
+
+本版在 rc.38 总表基础上继续收口请求调度与历史状态，不要求分段实机。统一演示重点：
+
+- 长状态或历史恢复请求运行时点击连接测试，诊断请求应进入 `*:diagnostic`，`transportWaitMs` 接近 0；业务请求保持 `*:business`；
+- 若状态 Schema 遇到 502/504，只出现一次 state schema 请求，不再生成 state fallback；
+- 新正文抢占自动总结时，只取消总结业务请求，不取消并行连接测试；
+- 历史恢复期间 history 显示恢复阶段，sync 显示暂停并保留上次实际同步时间；
+- 刷新后旧 queued/running 状态被对账，不永久残留；
+- 最终状态、总结与世界书仍按原单 active 事务顺序提交。
+
+本地新增验证：
+
+- business/diagnostic 双通道分离与同类串行；
+- 5xx/超时不触发普通 JSON 重复请求；
+- 定向取消不误伤诊断；
+- 历史控制流与真实同步结果分离；
+- 旧 lastSync 污染迁移；
+- 历史与同步错误诊断脱敏。
 
 ## rc.38 统一实机验收
 

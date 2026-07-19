@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.38";
-var PIPELINE_VERSION = "ma-pipeline-40";
+var VERSION = "1.2.0-rc.39";
+var PIPELINE_VERSION = "ma-pipeline-41";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -1873,6 +1873,15 @@ function validateCurrentFocus(state2, registry2) {
   }
   return false;
 }
+function normalizeLegacySyncControlState(state2) {
+  const error = String(state2.lastSyncError ?? "").trim();
+  if (!error || state2.lastSyncStatus !== "failed") return false;
+  const controlOnly = /^(?:正在重建|历史核心状态已重建|历史核心状态与总结已恢复|历史消息发生变化|最新正文已变化|检测到历史删除|已选择从第|历史恢复被中断|正文已修正|历史重建未完成)/.test(error) || /^历史核心状态已恢复，但部分派生失败/.test(error) && !error.includes("\u4E16\u754C\u4E66\uFF1A");
+  if (!controlOnly) return false;
+  state2.lastSyncStatus = state2.lastSyncAt ? "success" : "idle";
+  delete state2.lastSyncError;
+  return true;
+}
 function migrateChatState(raw, chatKey) {
   const state2 = raw && raw.chatKey === chatKey ? structuredClone(raw) : emptyChatState(chatKey);
   const metadataBefore = JSON.stringify(raw ?? null);
@@ -1956,6 +1965,7 @@ function migrateChatState(raw, chatKey) {
     facts = mergeInternalFacts(facts, incoming, artifact.factPackage.facts);
   }
   validateCurrentFocus(state2, registry2);
+  normalizeLegacySyncControlState(state2);
   if (persistedCharactersChanged) {
     state2.lastSyncStatus = "idle";
     state2.lastSyncError = void 0;
@@ -2008,10 +2018,10 @@ function currentStateStructure(raw, chatKey) {
   return REQUIRED_MIGRATIONS.every((key) => state2.migration?.[key] === true);
 }
 async function readCurrentChatStateFast(namespace, state2, chatKey) {
-  if (!Object.prototype.hasOwnProperty.call(state2, "focusObjectId")) return state2;
   const next = { ...state2 };
-  const focusChanged = validateCurrentFocus(next, getSettings().tableRegistry);
-  if (!focusChanged) return state2;
+  const focusChanged = Object.prototype.hasOwnProperty.call(state2, "focusObjectId") ? validateCurrentFocus(next, getSettings().tableRegistry) : false;
+  const syncStateChanged = normalizeLegacySyncControlState(next);
+  if (!focusChanged && !syncStateChanged) return state2;
   namespace.state = next;
   try {
     await persistMetadataFor(chatKey);
@@ -2106,23 +2116,35 @@ async function clearAllStorage(chatKey = currentChatKey()) {
 }
 
 // src/core/requests.ts
-var activeControllers = /* @__PURE__ */ new Set();
+var activeControllers = /* @__PURE__ */ new Map();
 var acceptingRequests = true;
 function setRequestAcceptance(accepting) {
   acceptingRequests = accepting;
 }
-function beginModelRequest() {
+function beginModelRequest(metadata) {
   if (!acceptingRequests) throw new Error("\u955C\u6E0A\u5DF2\u7981\u7528\uFF0C\u4E0D\u518D\u63A5\u53D7\u65B0\u8BF7\u6C42");
   const controller = new AbortController();
-  activeControllers.add(controller);
+  activeControllers.set(controller, metadata);
   return controller;
 }
 function finishModelRequest(controller) {
   activeControllers.delete(controller);
 }
-function abortActiveRequests() {
-  for (const controller of activeControllers) controller.abort();
-  activeControllers.clear();
+function abortActiveRequests(predicate = () => true) {
+  let aborted = 0;
+  for (const [controller, metadata] of activeControllers) {
+    if (!predicate(metadata)) continue;
+    aborted += 1;
+    controller.abort();
+    activeControllers.delete(controller);
+  }
+  return aborted;
+}
+function abortActiveBusinessRequests() {
+  return abortActiveRequests((metadata) => metadata.requestClass === "business");
+}
+function abortActiveAutomaticSummaryRequests() {
+  return abortActiveRequests((metadata) => metadata.requestClass === "business" && ["smallSummary", "largeSummary"].includes(metadata.task));
 }
 
 // src/domain/artifact.ts
@@ -2199,7 +2221,7 @@ function requestErrorMetadata(error) {
   const message = toErrorMessage(error);
   const statusMatch = message.match(/(?:http|status|code)?\s*[:=]?\s*([45]\d{2})\b/i);
   const httpStatus = statusMatch ? Number(statusMatch[1]) : void 0;
-  if (error instanceof Error && error.name === "AbortError") return { errorKind: "cancelled", httpStatus };
+  if (error instanceof Error && error.name === "AbortError" || /\b(?:cancelled|canceled|aborted)\b|stop event|已取消|被取消|已中止/i.test(message)) return { errorKind: "cancelled", httpStatus };
   if (/no message generated|返回为空|空内容/i.test(message)) return { errorKind: "empty", httpStatus };
   if (httpStatus === 401 || httpStatus === 403 || /unauthori[sz]ed|forbidden|api key/i.test(message)) return { errorKind: "auth", httpStatus };
   if (httpStatus === 429 || /rate.?limit|too many requests/i.test(message)) return { errorKind: "rate_limit", httpStatus };
@@ -2293,13 +2315,17 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
       this.pump(laneName);
     });
   }
-  run(laneName, task, signal, work, metadata = {}) {
+  run(connectionLane, requestClass, task, signal, work, metadata = {}) {
     if (signal.aborted) return Promise.reject(abortError());
+    const laneName = `${connectionLane}:${requestClass}`;
     const createdMs = Date.now();
     const id = makeId("request");
     const trace = {
+      ...metadata,
       id,
       lane: laneName,
+      connectionLane,
+      requestClass,
       task,
       state: "queued",
       createdAt: nowIso(),
@@ -2307,8 +2333,7 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
       requestMs: 0,
       totalMs: 0,
       firstByteMs: void 0,
-      streamMode: "off",
-      ...metadata
+      streamMode: "off"
     };
     this.traces.set(id, trace);
     let resolve;
@@ -2680,7 +2705,8 @@ function describeTaskConnection(task) {
   return "\u5F53\u524D\u804A\u5929\u8FDE\u63A5";
 }
 async function generateTask(options) {
-  const controller = beginModelRequest();
+  const requestClass = options.requestClass === "diagnostic" ? "diagnostic" : "business";
+  const controller = beginModelRequest({ task: options.task, requestClass });
   const externalSignal = options.signal;
   const forwardAbort = () => controller.abort(externalSignal?.reason);
   if (externalSignal?.aborted) forwardAbort();
@@ -2689,10 +2715,10 @@ async function generateTask(options) {
     const request = { ...options, signal: controller.signal };
     const connection = getSettings().connections[options.task];
     const profileId = connection?.mode === "profile" ? resolveProfileId(connection) : "";
-    const lane = connection?.mode === "profile" ? `profile:${profileId || "unselected"}` : "current-chat";
+    const connectionLane = connection?.mode === "profile" ? `profile:${profileId || "unselected"}` : "current-chat";
     const promptChars = Array.isArray(options.prompt) ? options.prompt.reduce((sum, item) => sum + safeText(item?.content, 2e5).length, 0) : safeText(options.prompt, 2e5).length;
     const tokenLimit = responseTokens(options);
-    return await requestScheduler.run(lane, options.task, controller.signal, async () => {
+    return await requestScheduler.run(connectionLane, requestClass, options.task, controller.signal, async () => {
       if (connection?.mode === "profile") {
         if (!profileId) throw new Error(`${options.task}\u672A\u9009\u62E9\u6709\u6548\u7684Connection Profile`);
         return generateWithNativeProfile(request, profileId, controller);
@@ -2700,6 +2726,7 @@ async function generateTask(options) {
       return generateCurrent(request, controller);
     }, {
       requestPurpose: options.requestPurpose || (options.jsonSchema ? "schema" : "plain"),
+      requestOrigin: options.requestOrigin ? safeText(options.requestOrigin, 80) : void 0,
       systemPromptChars: options.systemPrompt.length,
       promptChars,
       responseTokens: tokenLimit,
@@ -2725,6 +2752,8 @@ async function testConnection(task) {
     systemPrompt: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
     prompt: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}',
     maxTokens: 256,
+    requestClass: "diagnostic",
+    requestOrigin: "connection-test",
     jsonSchema: {
       name: "MirrorAbyssConnectionTestV35",
       description: "\u955C\u6E0A\u539F\u751F\u8FDE\u63A5\u7ED3\u6784\u5316\u8F93\u51FA\u6D4B\u8BD5",
@@ -2763,7 +2792,10 @@ async function testConnection(task) {
       } else if (isJsonSchemaRequestRejected(error)) {
         schemaStatus = "rejected-fallback";
       } else {
-        schemaStatus = "transient-fallback";
+        throw new Error(
+          `${describeTaskConnection(task)}\u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25\uFF0C\u672A\u6267\u884C\u65E0Schema\u91CD\u590D\u8BF7\u6C42\uFF1A${toErrorMessage(error)}`,
+          { cause: error }
+        );
       }
     }
   }
@@ -2972,8 +3004,16 @@ async function generateWithSchemaFallback(options) {
   } catch (error) {
     if (!options.jsonSchema || isCancelledRequest(error)) throw error;
     schemaFailure = error;
-    if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported(options.task);
-    else rejectThisSchema = isJsonSchemaRequestRejected(error);
+    if (isDefinitiveJsonSchemaUnsupported(error)) {
+      rememberJsonSchemaUnsupported(options.task);
+    } else if (isJsonSchemaRequestRejected(error)) {
+      rejectThisSchema = true;
+    } else {
+      throw new Error(
+        `${TASK_LABELS[options.task]}\u7ED3\u6784\u5316\u8BF7\u6C42\u5931\u8D25\uFF08${describeTaskConnection(options.task)}\uFF09\uFF0C\u672A\u6267\u884C\u65E0Schema\u91CD\u590D\u8BF7\u6C42\uFF1A${toErrorMessage(error)}`,
+        { cause: error }
+      );
+    }
   }
   try {
     const fallback = await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "fallback" });
@@ -4464,12 +4504,10 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
       options.allowHistoryRecovery && recovery?.phase === "publishing-lorebook" && chatState.latestSnapshotMessageKey === artifact.messageKey
     );
     if (!recoveryAuthorized) {
-      markStage(artifact, "sync", "blocked", "\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u7B49\u5F85\u5386\u53F2\u91CD\u5EFA\u5B8C\u6210");
-      chatState.lastSyncStatus = "failed";
-      chatState.lastSyncError = chatState.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u9700\u8981\u91CD\u7B97`;
+      const blockedReason = chatState.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u9700\u8981\u91CD\u7B97`;
+      markStage(artifact, "sync", "blocked", blockedReason);
       await putArtifact(artifact);
-      await putChatState(chatState);
-      throw new TaskBlockedError(chatState.lastSyncError);
+      throw new TaskBlockedError(blockedReason);
     }
   }
   try {
@@ -6267,8 +6305,6 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
     recovery.phase = "failed";
     recovery.error = reason;
     recovery.updatedAt = nowIso();
-    chatState.lastSyncStatus = "failed";
-    chatState.lastSyncError = `\u5386\u53F2\u6062\u590D\u88AB\u4E2D\u65AD\uFF1A${reason}`;
     await putChatState(chatState);
   }
   return { artifacts: changedArtifacts, historyRecovery: interruptedRecovery };
@@ -6324,9 +6360,20 @@ function isNarrativeTail(index) {
 async function pauseLorebookForHistoryChange(chatKey) {
   try {
     await pauseCurrentChatLorebookEntries(chatKey);
+    const state2 = await getChatState(chatKey);
+    if (state2.historyInvalidation?.pauseError) {
+      delete state2.historyInvalidation.pauseError;
+      await putChatState(state2);
+    }
   } catch (error) {
+    const detail = toErrorMessage(error);
     console.warn("[MirrorAbyss] failed to pause stale lorebook entries", error);
-    toast("warning", `\u5386\u53F2\u6570\u636E\u5DF2\u6682\u505C\uFF0C\u4F46\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${toErrorMessage(error)}\u3002\u8BF7\u907F\u514D\u7EE7\u7EED\u751F\u6210\u5E76\u624B\u52A8\u91CD\u8BD5\u5386\u53F2\u91CD\u7B97`);
+    const state2 = await getChatState(chatKey);
+    if (state2.historyInvalidation) {
+      state2.historyInvalidation.pauseError = detail;
+      await putChatState(state2);
+    }
+    toast("warning", `\u5386\u53F2\u6570\u636E\u5DF2\u6682\u505C\uFF0C\u4F46\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${detail}\u3002\u8BF7\u907F\u514D\u7EE7\u7EED\u751F\u6210\u5E76\u624B\u52A8\u91CD\u8BD5\u5386\u53F2\u91CD\u7B97`);
   }
 }
 async function saveArtifactToMessage(index, artifact) {
@@ -6440,8 +6487,6 @@ async function clearResolvedLatestHistoryInvalidation(index, artifact) {
   const invalidation = chatState.historyInvalidation;
   if (!invalidation || invalidation.startIndex !== index || invalidation.reason === "deleted") return false;
   delete chatState.historyInvalidation;
-  chatState.lastSyncError = void 0;
-  chatState.lastSyncStatus = "idle";
   await putChatState(chatState);
   return true;
 }
@@ -6453,8 +6498,6 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
   if (chatState.latestSnapshotMessageKey === previousMessageKey) {
     chatState.latestSnapshotMessageKey = chatState.processedMessageKeys.at(-1);
   }
-  chatState.lastSyncStatus = "failed";
-  chatState.lastSyncError = "\u6B63\u6587\u5DF2\u4FEE\u6B63\uFF0C\u7B49\u5F85\u91CD\u65B0\u751F\u6210\u8868\u683C\u540E\u540C\u6B65\u4E16\u754C\u4E66";
   artifact.factPackage = void 0;
   artifact.snapshot = void 0;
   markStage(artifact, "state", "idle");
@@ -6465,8 +6508,11 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
   try {
     await pauseCurrentChatLorebookEntries(artifact.chatKey);
   } catch (error) {
+    const detail = toErrorMessage(error);
     console.warn("[MirrorAbyss] revised text saved but stale lorebook pause failed", error);
-    toast("warning", `\u6B63\u6587\u5DF2\u4FEE\u6B63\uFF0C\u4F46\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${toErrorMessage(error)}\u3002\u8BF7\u5728\u751F\u6210\u8868\u683C\u540E\u624B\u52A8\u540C\u6B65\u4E16\u754C\u4E66`);
+    markStage(artifact, "sync", "failed", `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${detail}`);
+    await saveArtifactToMessage(artifact.messageIndex, artifact);
+    toast("warning", `\u6B63\u6587\u5DF2\u4FEE\u6B63\uFF0C\u4F46\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${detail}\u3002\u8BF7\u5728\u751F\u6210\u8868\u683C\u540E\u624B\u52A8\u540C\u6B65\u4E16\u754C\u4E66`);
   }
 }
 function derivedTaskError(error) {
@@ -6637,7 +6683,7 @@ async function processMessage(index, force = false, options = {}) {
       ),
       "\u68C0\u6D4B\u5230\u65B0\u7684\u6B63\u6587\uFF0C\u65E7\u81EA\u52A8\u603B\u7ED3\u5DF2\u6682\u505C\u5E76\u7B49\u5F85\u540E\u7EED\u91CD\u65B0\u5F52\u5E76"
     );
-    if (preempted) abortActiveRequests();
+    if (preempted) abortActiveAutomaticSummaryRequests();
   }
   return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async (guard) => {
     const settings = getSettings();
@@ -6803,15 +6849,13 @@ async function invalidateHistory(payload, reason) {
     return;
   }
   invalidateHistoryRevision(chatKey);
-  abortActiveRequests();
+  abortActiveBusinessRequests();
   taskQueue.cancelPendingByChatKey(chatKey, "\u5386\u53F2\u6D88\u606F\u5DF2\u53D8\u5316\uFF0C\u65E7\u6392\u961F\u4EFB\u52A1\u5DF2\u53D6\u6D88");
   const state2 = await getChatState(chatKey);
   if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u53D8\u5316\u4E0D\u518D\u5199\u5165");
   if (detectedIndex === null) {
     delete state2.historyRecovery;
     state2.historyInvalidation = { reason, detectedAt: nowIso() };
-    state2.lastSyncStatus = "failed";
-    state2.lastSyncError = "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u5224\u65AD\u4F4D\u7F6E\uFF1B\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9";
     await putChatState(state2);
     await pauseLorebookForHistoryChange(chatKey);
     toast("warning", "\u68C0\u6D4B\u5230\u5386\u53F2\u6D88\u606F\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u5224\u65AD\u4F4D\u7F6E\u3002\u73B0\u6709\u8BB0\u5FC6\u5DF2\u4FDD\u7559\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u6682\u505C\uFF1B\u8BF7\u5728\u955C\u6E0A\u4E2D\u9009\u62E9\u91CD\u7B97\u8D77\u70B9");
@@ -6825,8 +6869,6 @@ async function invalidateHistory(payload, reason) {
   );
   delete state2.historyRecovery;
   state2.historyInvalidation = { startIndex, reason, detectedAt: nowIso(), automatic: latestOnly };
-  state2.lastSyncStatus = "failed";
-  state2.lastSyncError = latestOnly ? "\u6700\u65B0\u6B63\u6587\u5DF2\u53D8\u5316\uFF0C\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF1B\u5B8C\u6210\u524D\u6682\u7F13\u4E16\u754C\u4E66\u540C\u6B65" : `\u5386\u53F2\u6D88\u606F\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u4ECE\u7B2C ${startIndex + 1} \u6761\u5F00\u59CB\u91CD\u7B97`;
   const validPrefixKeys = /* @__PURE__ */ new Set();
   for (let i = 0; i < startIndex; i += 1) {
     const attached = getAttachedArtifact(getMessage(i));
@@ -6864,8 +6906,6 @@ async function recalculateInvalidatedHistory() {
     phase: "rebuilding-core",
     updatedAt: nowIso()
   };
-  state2.lastSyncStatus = "failed";
-  state2.lastSyncError = processableIndexes.length ? `\u6B63\u5728\u91CD\u5EFA\u5386\u53F2\u6838\u5FC3\u72B6\u6001\uFF080/${processableIndexes.length}\uFF09` : "\u6B63\u5728\u68C0\u67E5\u5386\u53F2\u6062\u590D\u7ED3\u679C";
   await putChatState(state2);
   let latest = null;
   const recoveredMessageKeys = /* @__PURE__ */ new Set();
@@ -6880,7 +6920,6 @@ async function recalculateInvalidatedHistory() {
       error: void 0,
       updatedAt: nowIso()
     };
-    progressState.lastSyncError = `\u6B63\u5728\u91CD\u5EFA\u7B2C ${index + 1} \u6761\u6D88\u606F\uFF08${position + 1}/${processableIndexes.length}\uFF09`;
     await putChatState(progressState);
     try {
       latest = await processMessage(index, false, { skipDerived: true, historyRecovery: true });
@@ -6895,7 +6934,6 @@ async function recalculateInvalidatedHistory() {
         completedState.historyRecovery.completedCount = position + 1;
         completedState.historyRecovery.updatedAt = nowIso();
       }
-      completedState.lastSyncError = `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u5EFA ${position + 1}/${processableIndexes.length}`;
       await putChatState(completedState);
     } catch (error) {
       const detail = toErrorMessage(error);
@@ -6908,10 +6946,8 @@ async function recalculateInvalidatedHistory() {
         error: detail,
         updatedAt: nowIso()
       };
-      failedState.lastSyncStatus = "failed";
-      failedState.lastSyncError = `\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210\uFF1A\u7B2C ${index + 1} \u6761\u6D88\u606F\u7684\u72B6\u6001\u63D0\u53D6\u5931\u8D25\u3002${detail}`;
       await putChatState(failedState);
-      throw new Error(failedState.lastSyncError);
+      throw new Error(`\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210\uFF1A\u7B2C ${index + 1} \u6761\u6D88\u606F\u7684\u72B6\u6001\u63D0\u53D6\u5931\u8D25\u3002${detail}`);
     }
   }
   if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
@@ -6933,8 +6969,6 @@ async function recalculateInvalidatedHistory() {
     freshState.historyRecovery.currentIndex = recoveryInfo.index;
     freshState.historyRecovery.updatedAt = nowIso();
   }
-  freshState.lastSyncError = "\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u5EFA\uFF0C\u6B63\u5728\u6062\u590D\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66";
-  freshState.lastSyncStatus = "idle";
   await putChatState(freshState);
   const artifact = recoveryInfo.artifact;
   const revision = currentHistoryRevision(chatKey);
@@ -6961,7 +6995,6 @@ async function recalculateInvalidatedHistory() {
               publishingState.historyRecovery.phase = "publishing-lorebook";
               publishingState.historyRecovery.updatedAt = nowIso();
             }
-            publishingState.lastSyncError = "\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u4E0E\u603B\u7ED3\u5DF2\u6062\u590D\uFF0C\u6B63\u5728\u53D1\u5E03\u4E16\u754C\u4E66";
             await putChatState(publishingState);
             try {
               await syncLorebook(artifact, false, { allowHistoryRecovery: true });
@@ -6997,15 +7030,15 @@ async function recalculateInvalidatedHistory() {
       finalState.historyRecovery.error = errors.join("\uFF1B");
       finalState.historyRecovery.updatedAt = nowIso();
     }
-    finalState.lastSyncStatus = "failed";
-    finalState.lastSyncError = `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u6062\u590D\uFF0C\u4F46\u90E8\u5206\u6D3E\u751F\u5931\u8D25\uFF1A${errors.join("\uFF1B")}`;
     await putChatState(finalState);
     toast("warning", `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u7B97\u5B8C\u6210\uFF0C\u4F46\u90E8\u5206\u6D3E\u751F\u6062\u590D\u5931\u8D25\uFF1A${errors.join("\uFF1B")}`);
   } else {
     delete finalState.historyInvalidation;
     delete finalState.historyRecovery;
-    finalState.lastSyncError = void 0;
-    if (!getSettings().lorebookSync) finalState.lastSyncStatus = "idle";
+    if (!getSettings().lorebookSync) {
+      finalState.lastSyncStatus = "idle";
+      finalState.lastSyncError = void 0;
+    }
     await putChatState(finalState);
     toast("success", getSettings().lorebookSync ? "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6062\u590D" : "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF1B\u81EA\u52A8\u4E16\u754C\u4E66\u540C\u6B65\u5F53\u524D\u5DF2\u5173\u95ED");
   }
@@ -7029,7 +7062,6 @@ async function chooseHistoryRecalculationStart(startIndex) {
   invalidateDerivedForValidMessages(state2, validPrefixKeys);
   state2.processedMessageKeys = state2.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
   state2.latestSnapshotMessageKey = state2.processedMessageKeys.at(-1);
-  state2.lastSyncError = `\u5DF2\u9009\u62E9\u4ECE\u7B2C ${index + 1} \u6761\u6D88\u606F\u5F00\u59CB\u91CD\u7B97`;
   await persistChatFor(chatKey);
   await putChatState(state2);
   notifyFrom(index);
@@ -7367,6 +7399,51 @@ function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
 }
 
 // src/ui/diagnostics.ts
+function historyStatus(state2) {
+  const pauseError = redactedError(state2?.historyInvalidation?.pauseError);
+  const recovery = state2?.historyRecovery;
+  if (recovery) {
+    const progress = recovery.totalCount ? `${recovery.completedCount ?? 0}/${recovery.totalCount}` : "\u68C0\u67E5\u4E2D";
+    const current = Number.isInteger(recovery.currentIndex) ? `\u7B2C ${recovery.currentIndex + 1} \u6761\u6D88\u606F` : "\u5F53\u524D\u5386\u53F2";
+    if (recovery.phase === "failed") {
+      return { status: "error", detail: `\u5386\u53F2\u91CD\u5EFA\u5931\u8D25\uFF1A${redactedError(recovery.error) || "\u672A\u77E5\u9519\u8BEF"}${pauseError ? `\uFF1B\u65E7\u4E16\u754C\u4E66\u6682\u505C\u5931\u8D25\uFF1A${pauseError}` : ""}` };
+    }
+    if (pauseError) {
+      return { status: "error", detail: `\u5386\u53F2\u6062\u590D\u8FDB\u884C\u4E2D\uFF0C\u4F46\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${pauseError}` };
+    }
+    if (recovery.phase === "partial") {
+      return { status: "warn", detail: `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u6062\u590D\uFF0C\u4F46\u6D3E\u751F\u4E0D\u5B8C\u6574\uFF1A${redactedError(recovery.error) || "\u8BF7\u91CD\u8BD5"}` };
+    }
+    const labels = {
+      "rebuilding-core": "\u6B63\u5728\u91CD\u5EFA\u6838\u5FC3\u72B6\u6001",
+      "rebuilding-derived": "\u6B63\u5728\u6062\u590D\u603B\u7ED3",
+      "publishing-lorebook": "\u6B63\u5728\u53D1\u5E03\u4E16\u754C\u4E66"
+    };
+    return { status: "warn", detail: `${labels[recovery.phase] || "\u6B63\u5728\u6062\u590D\u5386\u53F2"}\uFF08${progress}\uFF0C${current}\uFF09` };
+  }
+  const invalidation = state2?.historyInvalidation;
+  if (invalidation) {
+    if (invalidation.pauseError) {
+      return { status: "error", detail: `\u5386\u53F2\u5DF2\u5931\u6548\uFF0C\u4F46\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${invalidation.pauseError}` };
+    }
+    return {
+      status: "warn",
+      detail: invalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u9700\u8981\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `${invalidation.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D" : `\u7B2C ${invalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u9700\u8981\u624B\u52A8\u91CD\u7B97`}`
+    };
+  }
+  return { status: "ok", detail: "\u5F53\u524D\u6D3E\u751F\u6570\u636E\u672A\u53D1\u73B0\u5386\u53F2\u5931\u6548" };
+}
+function syncStatus(state2) {
+  if (state2?.historyRecovery || state2?.historyInvalidation) {
+    const pauseError = redactedError(state2?.historyInvalidation?.pauseError);
+    const last = state2.lastSyncAt ? `\uFF1B\u4E0A\u6B21\u5B9E\u9645\u540C\u6B65\uFF1A${state2.lastSyncAt}` : "";
+    return pauseError ? { status: "error", detail: `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${pauseError}${last}` } : { status: "warn", detail: `\u5386\u53F2\u6062\u590D\u671F\u95F4\u4E16\u754C\u4E66\u540C\u6B65\u6682\u505C${last}` };
+  }
+  return {
+    status: state2?.lastSyncStatus === "failed" ? "error" : state2?.lastSyncStatus === "success" ? "ok" : "warn",
+    detail: redactedError(state2?.lastSyncError) || state2?.lastSyncAt || "\u5C1A\u672A\u540C\u6B65"
+  };
+}
 async function runDiagnostics() {
   const checks = [];
   const context = tryGetContext();
@@ -7422,18 +7499,10 @@ async function runDiagnostics() {
   });
   if (context) {
     const state2 = await getChatState(currentChatKey());
-    checks.push({
-      id: "history",
-      label: "\u5386\u53F2\u6570\u636E\u4E00\u81F4\u6027",
-      status: state2.historyRecovery?.phase === "failed" ? "error" : state2.historyInvalidation ? "warn" : "ok",
-      detail: state2.historyRecovery?.phase === "failed" ? `\u5386\u53F2\u91CD\u5EFA\u5931\u8D25\uFF1A${state2.historyRecovery.error || state2.lastSyncError || "\u672A\u77E5\u9519\u8BEF"}` : state2.historyRecovery ? state2.lastSyncError || `\u5386\u53F2\u6062\u590D\u9636\u6BB5\uFF1A${state2.historyRecovery.phase}` : state2.historyInvalidation ? state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u9700\u8981\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u9700\u8981\u624B\u52A8\u91CD\u7B97` : "\u5F53\u524D\u6D3E\u751F\u6570\u636E\u672A\u53D1\u73B0\u5386\u53F2\u5931\u6548"
-    });
-    checks.push({
-      id: "sync",
-      label: "\u6700\u8FD1\u4E16\u754C\u4E66\u540C\u6B65",
-      status: state2.lastSyncStatus === "failed" ? "error" : state2.lastSyncStatus === "success" ? "ok" : "warn",
-      detail: state2.lastSyncError || state2.lastSyncAt || "\u5C1A\u672A\u540C\u6B65"
-    });
+    const history = historyStatus(state2);
+    checks.push({ id: "history", label: "\u5386\u53F2\u6570\u636E\u4E00\u81F4\u6027", ...history });
+    const sync = syncStatus(state2);
+    checks.push({ id: "sync", label: "\u6700\u8FD1\u4E16\u754C\u4E66\u540C\u6B65", ...sync });
   }
   return checks;
 }
@@ -7448,12 +7517,18 @@ function redactedChatState(state2) {
     pendingSmallFactCount: Array.isArray(state2.internalFacts) ? state2.internalFacts.filter((fact) => !fact.consumedBySmallSummaryId).length : 0,
     smallSummaryCount: Array.isArray(state2.smallSummaries) ? state2.smallSummaries.length : 0,
     largeSummaryCount: Array.isArray(state2.largeSummaries) ? state2.largeSummaries.length : 0,
-    historyInvalidation: state2.historyInvalidation,
-    historyRecovery: state2.historyRecovery,
+    historyInvalidation: state2.historyInvalidation ? {
+      ...state2.historyInvalidation,
+      pauseError: redactedError(state2.historyInvalidation.pauseError)
+    } : void 0,
+    historyRecovery: state2.historyRecovery ? {
+      ...state2.historyRecovery,
+      error: redactedError(state2.historyRecovery.error)
+    } : void 0,
     lastLorebookName: state2.lastLorebookName ? "[\u5DF2\u8BBE\u7F6E]" : "",
     lastSyncAt: state2.lastSyncAt,
     lastSyncStatus: state2.lastSyncStatus,
-    lastSyncError: state2.lastSyncError,
+    lastSyncError: redactedError(state2.lastSyncError),
     updatedAt: state2.updatedAt
   };
 }
@@ -7493,6 +7568,9 @@ function safeRequest(trace) {
   return {
     id: trace.id,
     lane: trace.lane,
+    connectionLane: trace.connectionLane,
+    requestClass: trace.requestClass,
+    requestOrigin: trace.requestOrigin,
     task: trace.task,
     state: trace.state,
     createdAt: trace.createdAt,
@@ -7752,10 +7830,12 @@ function handleQueueChange() {
 function historyRecoveryHtml(chatState) {
   const recovery = chatState?.historyRecovery;
   if (!recovery) return "";
+  const pauseError = chatState?.historyInvalidation?.pauseError;
   const current = Number.isInteger(recovery.currentIndex) ? `\u7B2C ${recovery.currentIndex + 1} \u6761\u6D88\u606F` : "\u5F53\u524D\u5386\u53F2";
-  const progress = recovery.totalCount ? `${recovery.completedCount}/${recovery.totalCount}` : "\u68C0\u67E5\u4E2D";
+  const progress = recovery.totalCount ? `${recovery.completedCount ?? 0}/${recovery.totalCount}` : "\u68C0\u67E5\u4E2D";
   if (recovery.phase === "failed") {
-    return `<section class="ma11-card ma11-history-warning"><header><b>\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210</b><span>${escapeHtml(current)}</span></header><p>${escapeHtml(recovery.error || chatState.lastSyncError || "\u72B6\u6001\u63D0\u53D6\u5931\u8D25")}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">\u4ECE\u5931\u8D25\u4F4D\u7F6E\u7EE7\u7EED</button></div></section>`;
+    const failedDetail = `${recovery.error || "\u72B6\u6001\u63D0\u53D6\u5931\u8D25"}${pauseError ? `\uFF1B\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${pauseError}` : ""}`;
+    return `<section class="ma11-card ma11-history-warning"><header><b>\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210</b><span>${escapeHtml(current)}</span></header><p>${escapeHtml(failedDetail)}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">\u4ECE\u5931\u8D25\u4F4D\u7F6E\u7EE7\u7EED</button></div></section>`;
   }
   const labels = {
     "rebuilding-core": "\u6B63\u5728\u91CD\u5EFA\u6838\u5FC3\u72B6\u6001",
@@ -7763,7 +7843,8 @@ function historyRecoveryHtml(chatState) {
     "publishing-lorebook": "\u6B63\u5728\u53D1\u5E03\u4E16\u754C\u4E66",
     partial: "\u6838\u5FC3\u72B6\u6001\u5DF2\u6062\u590D\uFF0C\u6D3E\u751F\u6062\u590D\u4E0D\u5B8C\u6574"
   };
-  return `<section class="ma11-card ma11-history-warning"><header><b>${escapeHtml(labels[recovery.phase] || "\u6B63\u5728\u6062\u590D\u5386\u53F2")}</b><span>${escapeHtml(progress)}</span></header><p>${escapeHtml(chatState.lastSyncError || current)}</p></section>`;
+  const detail = pauseError ? `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${pauseError}` : recovery.phase === "partial" ? recovery.error || "\u8BF7\u91CD\u8BD5\u672A\u5B8C\u6210\u7684\u6D3E\u751F\u9636\u6BB5" : current;
+  return `<section class="ma11-card ma11-history-warning"><header><b>${escapeHtml(labels[recovery.phase] || "\u6B63\u5728\u6062\u590D\u5386\u53F2")}</b><span>${escapeHtml(progress)}</span></header><p>${escapeHtml(detail)}</p></section>`;
 }
 async function overviewHtml(artifactInfo) {
   const enabled = getSettings().enabled;
@@ -8056,13 +8137,16 @@ function auditHtml() {
 }
 async function syncHtml() {
   const info = latestSnapshotArtifact();
-  const state2 = info ? await getChatState(info.artifact.chatKey) : null;
+  const state2 = await getChatState(currentChatKey());
   const settings = getSettings();
+  const syncPaused = Boolean(state2?.historyRecovery || state2?.historyInvalidation);
+  const syncDisplayStatus = syncPaused ? "blocked" : state2?.lastSyncStatus || "idle";
+  const syncDisplayText = syncPaused ? "\u6682\u505C" : statusText(syncDisplayStatus);
   return `
     <section class="ma11-card ma11-form-card">
-      <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(state2?.lastSyncStatus || "idle")}">${statusText(state2?.lastSyncStatus || "idle")}</span></header>
-      ${state2?.historyRecovery ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError || state2.historyRecovery.error || "\u6B63\u5728\u6062\u590D\u5386\u53F2")}</div>` : ""}
-      ${state2?.historyInvalidation ? `<div class="ma11-error-box">${state2.historyInvalidation.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF0C\u5B8C\u6210\u540E\u4F1A\u81EA\u884C\u6062\u590D\u4E16\u754C\u4E66\u540C\u6B65\u3002" : state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002\u6309\u4F9D\u8D56\u91CD\u5EFA\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002`}</div>` : ""}
+      <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(syncDisplayStatus)}">${syncDisplayText}</span></header>
+      ${state2?.historyRecovery ? `<div class="ma11-error-box">${escapeHtml(state2.historyRecovery.error || "\u6B63\u5728\u6062\u590D\u5386\u53F2\uFF1B\u6700\u8FD1\u540C\u6B65\u7ED3\u679C\u4FDD\u6301\u4E0D\u53D8")}</div>` : ""}
+      ${state2?.historyInvalidation ? `<div class="ma11-error-box">${state2.historyInvalidation.pauseError ? `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${escapeHtml(state2.historyInvalidation.pauseError)}\u3002\u8BF7\u5148\u5B8C\u6210\u5386\u53F2\u91CD\u5EFA\u5E76\u91CD\u65B0\u53D1\u5E03\u3002` : state2.historyInvalidation.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF0C\u5B8C\u6210\u540E\u4F1A\u81EA\u884C\u6062\u590D\u4E16\u754C\u4E66\u540C\u6B65\u3002" : state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002\u6309\u4F9D\u8D56\u91CD\u5EFA\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002`}</div>` : ""}
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
       <label>\u53D1\u5E03\u7ED3\u6784<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u8BED\u4E49\u5BF9\u8C61\u6A21\u5F0F\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u884C\u8C03\u8BD5\u6A21\u5F0F</option></select></label>
@@ -8610,7 +8694,6 @@ function bindWorkspace(workspace) {
           "cached-bypass": "Schema\u5DF2\u6309\u7F13\u5B58\u7ED5\u8FC7",
           "rejected-fallback": "Schema\u8BF7\u6C42\u88AB\u62D2\u540E\u666E\u901AJSON\u6210\u529F",
           "empty-fallback": "Schema\u8FD4\u56DE\u7A7A\u5BF9\u8C61\u540E\u666E\u901AJSON\u6210\u529F",
-          "transient-fallback": "Schema\u4E34\u65F6\u6545\u969C\u540E\u666E\u901AJSON\u6210\u529F",
           "plain-only": "\u4EC5\u666E\u901AJSON"
         };
         const schemaDetail = schemaLabels[result.schemaStatus] || result.schemaStatus;
