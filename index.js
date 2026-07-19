@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.44";
-var PIPELINE_VERSION = "ma-pipeline-46";
+var VERSION = "1.2.0-rc.46";
+var PIPELINE_VERSION = "ma-pipeline-48";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -1345,8 +1345,14 @@ function normalizeRow(value, tableKey, index, previous, registry2) {
   const locked = Boolean(source.locked ?? previous?.locked ?? false);
   const rawLockMode = safeText(source.lockMode ?? previous?.lockMode, 20).trim();
   const lockMode = locked || rawLockMode === "all" ? "all" : manual || rawLockMode === "base" ? "base" : void 0;
-  const title = safeText(source.title || source.name || previous?.title || `${table.name} ${index + 1}`, 240).trim();
-  const keywords = normalizeKeywords(source.keywords ?? previous?.keywords ?? []);
+  const incomingTitle = safeText(source.title || source.name || previous?.title || `${table.name} ${index + 1}`, 240).trim();
+  const previousTitle = safeText(previous?.title, 240).trim();
+  const title = !manual && previousTitle ? previousTitle : incomingTitle;
+  const keywords = manual ? normalizeKeywords(source.keywords ?? previous?.keywords ?? []) : normalizeKeywords([
+    ...previous?.keywords ?? [],
+    ...normalizeKeywords(source.keywords ?? []),
+    ...incomingTitle && identityTitle(incomingTitle) !== identityTitle(title) ? [incomingTitle] : []
+  ]);
   const supportsLifecycle = ["characters", "state"].includes(table.role) || table.fields.some((field) => field.type === "lifecycle");
   const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
   const factIds = normalizeStringList(source.factIds ?? source.fact_ids ?? previous?.factIds, 40, 160);
@@ -1547,6 +1553,25 @@ function mergedRecall(base, state2) {
     exclude: [.../* @__PURE__ */ new Set([...base?.exclude ?? [], ...state2?.exclude ?? []])]
   };
 }
+function preserveAnchoredTitle(existing, incoming) {
+  const incomingTitle = safeText(incoming.title, 240).trim();
+  const anchoredTitle = safeText(existing.title, 240).trim() || incomingTitle;
+  const alias = incomingTitle && identityTitle(incomingTitle) !== identityTitle(anchoredTitle) ? incomingTitle : "";
+  const keywords = normalizeKeywords([
+    ...existing.keywords ?? [],
+    ...incoming.keywords ?? [],
+    ...alias ? [alias] : []
+  ]);
+  const recall = mergedRecall(existing.recall, incoming.recall);
+  if (recall) recall.any = normalizeKeywords([...recall.any ?? [], anchoredTitle, ...keywords]);
+  return {
+    ...incoming,
+    id: existing.id,
+    title: anchoredTitle,
+    keywords,
+    recall
+  };
+}
 function mergePersistedCharacterDuplicates(snapshot, registry2) {
   const tables2 = registryOrDefault(registry2);
   const key = characterTableKey(tables2);
@@ -1637,11 +1662,10 @@ function mergeRowsByIdentity(existing, incoming) {
     if (Array.isArray(value)) fields[key] = [.../* @__PURE__ */ new Set([...rowArray(fields[key]), ...rowArray(value)])];
     else if (safeText(value, 4e3).trim()) fields[key] = structuredClone(value);
   }
-  return {
+  return preserveAnchoredTitle(existing, {
     ...existing,
     ...incoming,
     id: existing.id,
-    title: incoming.title || existing.title,
     content: incoming.content || existing.content,
     keywords: [.../* @__PURE__ */ new Set([...existing.keywords ?? [], ...incoming.keywords ?? []])],
     factIds: [.../* @__PURE__ */ new Set([...existing.factIds ?? [], ...incoming.factIds ?? []])],
@@ -1651,7 +1675,7 @@ function mergeRowsByIdentity(existing, incoming) {
     source: existing.source === "manual" || incoming.source === "manual" ? "manual" : "auto",
     locked: Boolean(existing.locked || incoming.locked),
     lockMode: existing.lockMode === "all" || incoming.lockMode === "all" ? "all" : existing.lockMode === "base" || incoming.lockMode === "base" ? "base" : void 0
-  };
+  });
 }
 function preserveStableObjectIds(previous, next, registry2) {
   const tables2 = registryOrDefault(registry2);
@@ -1666,8 +1690,14 @@ function preserveStableObjectIds(previous, next, registry2) {
     const newEventCounts = /* @__PURE__ */ new Map();
     const newTitleCounts = /* @__PURE__ */ new Map();
     const newFactCounts = /* @__PURE__ */ new Map();
+    const rowEventIds2 = (row) => [...new Set([
+      ...row.eventIds ?? [],
+      String(row.eventId || "").trim()
+    ].filter(Boolean))];
     for (const row of newRows) {
-      if (row.eventId) newEventCounts.set(row.eventId, (newEventCounts.get(row.eventId) ?? 0) + 1);
+      for (const eventId of rowEventIds2(row)) {
+        newEventCounts.set(eventId, (newEventCounts.get(eventId) ?? 0) + 1);
+      }
       const title = identityTitle(row.title);
       if (title) newTitleCounts.set(title, (newTitleCounts.get(title) ?? 0) + 1);
       for (const factId of new Set(row.factIds ?? [])) {
@@ -1675,7 +1705,9 @@ function preserveStableObjectIds(previous, next, registry2) {
       }
     }
     for (const row of oldRows) {
-      if (row.eventId) oldByEvent.set(row.eventId, [...oldByEvent.get(row.eventId) ?? [], row]);
+      for (const eventId of rowEventIds2(row)) {
+        oldByEvent.set(eventId, [...oldByEvent.get(eventId) ?? [], row]);
+      }
       const title = identityTitle(row.title);
       if (title) oldByTitle.set(title, [...oldByTitle.get(title) ?? [], row]);
       for (const factId of new Set(row.factIds ?? [])) oldByFact.set(factId, [...oldByFact.get(factId) ?? [], row]);
@@ -1688,8 +1720,14 @@ function preserveStableObjectIds(previous, next, registry2) {
     for (const row of newRows) {
       let matched = oldById.get(row.id);
       if (matched && claimed.has(matched.id)) matched = void 0;
-      if (!matched && row.eventId && newEventCounts.get(row.eventId) === 1) {
-        matched = uniqueUnclaimed(oldByEvent.get(row.eventId));
+      if (!matched) {
+        const candidates = /* @__PURE__ */ new Set();
+        for (const eventId of rowEventIds2(row)) {
+          if (newEventCounts.get(eventId) !== 1) continue;
+          const candidate = uniqueUnclaimed(oldByEvent.get(eventId));
+          if (candidate) candidates.add(candidate);
+        }
+        if (candidates.size === 1) matched = [...candidates][0];
       }
       const title = identityTitle(row.title);
       if (!matched && title && newTitleCounts.get(title) === 1) matched = uniqueUnclaimed(oldByTitle.get(title));
@@ -1703,11 +1741,9 @@ function preserveStableObjectIds(previous, next, registry2) {
         if (candidates.size === 1) matched = [...candidates][0];
       }
       if (!matched) continue;
-      const sameTitle = title && title === identityTitle(matched.title);
       const replacedId = row.id;
-      row.id = matched.id;
+      Object.assign(row, preserveAnchoredTitle(matched, row));
       if (replacedId && replacedId !== matched.id) idRemap.set(replacedId, matched.id);
-      if (sameTitle) row.title = matched.title;
       claimed.add(matched.id);
     }
     const merged = /* @__PURE__ */ new Map();
@@ -4144,6 +4180,11 @@ async function withLorebookMutation(name, action) {
     if (lorebookMutationLocks.get(lockKey) === current) lorebookMutationLocks.delete(lockKey);
   }
 }
+async function withLorebookMutations(names, action) {
+  const ordered = [...new Set(names.map(sanitizeBookName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const acquire = (index) => index >= ordered.length ? action() : withLorebookMutation(ordered[index], () => acquire(index + 1));
+  return acquire(0);
+}
 function generatedBookName(chatKey = currentChatKey()) {
   const context = getContext();
   const display = sanitizeBookName(context.name2 || context.name1 || "Chat") || "Chat";
@@ -4196,6 +4237,59 @@ async function ensureLorebook(name, chatKey, artifact) {
 }
 function managedInfo(entry) {
   return entry?.extensions?.mirrorAbyssV11 ?? null;
+}
+function removeManagedEntriesForChat(data, chatKey) {
+  if (!data?.entries) return 0;
+  let removed = 0;
+  for (const [uid, entry] of Object.entries(data.entries)) {
+    const info = managedInfo(entry);
+    if (info?.managed && info.chatKey === chatKey) {
+      delete data.entries[uid];
+      removed += 1;
+    }
+  }
+  return removed;
+}
+async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
+  assertArtifactCommitCurrent(artifact);
+  const data = await wi.loadWorldInfo(name);
+  assertArtifactCommitCurrent(artifact);
+  if (!data?.entries) return 0;
+  let removed = removeManagedEntriesForChat(data, chatKey);
+  if (!removed) return 0;
+  await wi.saveWorldInfo(name, data, true);
+  assertArtifactCommitCurrent(artifact);
+  const verifiedData = await wi.loadWorldInfo(name) || data;
+  assertArtifactCommitCurrent(artifact);
+  const verifiedRemoved = removeManagedEntriesForChat(verifiedData, chatKey);
+  removed += verifiedRemoved;
+  if (verifiedRemoved) {
+    await wi.saveWorldInfo(name, verifiedData, true);
+    assertArtifactCommitCurrent(artifact);
+  }
+  const rendered = await reloadWorldInfoEditor(wi, name, false);
+  assertArtifactCommitCurrent(artifact);
+  if (rendered) {
+    const postReloadData = await wi.loadWorldInfo(name) || verifiedData;
+    assertArtifactCommitCurrent(artifact);
+    const postReloadRemoved = removeManagedEntriesForChat(postReloadData, chatKey);
+    removed += postReloadRemoved;
+    if (postReloadRemoved) {
+      await wi.saveWorldInfo(name, postReloadData, true);
+      assertArtifactCommitCurrent(artifact);
+      await reloadWorldInfoEditor(wi, name, true);
+      assertArtifactCommitCurrent(artifact);
+      const finalData = await wi.loadWorldInfo(name) || postReloadData;
+      const finalRemoved = removeManagedEntriesForChat(finalData, chatKey);
+      removed += finalRemoved;
+      if (finalRemoved) {
+        await wi.saveWorldInfo(name, finalData, true);
+        assertArtifactCommitCurrent(artifact);
+        throw new Error("\u65E7\u4E16\u754C\u4E66\u6E05\u7406\u5237\u65B0\u540E\u6301\u7EED\u56DE\u5199\u65E7\u7F13\u5B58\uFF0C\u5DF2\u4FEE\u6B63\u5165\u5E93\u4F46\u754C\u9762\u672A\u80FD\u7A33\u5B9A\u5237\u65B0");
+      }
+    }
+  }
+  return removed;
 }
 function managedContentIdentity(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -4636,12 +4730,52 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
   }
   return { changed, entryIds, created, adoptedLegacy, removed };
 }
+async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedicatedBook, force, entryIds) {
+  const renderedTarget = await reloadWorldInfoEditor(wi, name, force);
+  assertArtifactCommitCurrent(artifact);
+  if (!renderedTarget) return entryIds;
+  const postReloadData = await wi.loadWorldInfo(name) || { entries: {} };
+  postReloadData.entries ||= {};
+  const postReloadVerification = reconcileLorebookEntries(
+    postReloadData,
+    desired,
+    artifact.chatKey,
+    wi,
+    name,
+    dedicatedBook
+  );
+  entryIds = postReloadVerification.entryIds;
+  if (!postReloadVerification.changed) return entryIds;
+  assertArtifactCommitCurrent(artifact);
+  await wi.saveWorldInfo(name, postReloadData, true);
+  assertArtifactCommitCurrent(artifact);
+  await reloadWorldInfoEditor(wi, name, true);
+  assertArtifactCommitCurrent(artifact);
+  const finalData = await wi.loadWorldInfo(name) || postReloadData;
+  finalData.entries ||= {};
+  const finalVerification = reconcileLorebookEntries(
+    finalData,
+    desired,
+    artifact.chatKey,
+    wi,
+    name,
+    dedicatedBook
+  );
+  entryIds = finalVerification.entryIds;
+  if (finalVerification.changed) {
+    await wi.saveWorldInfo(name, finalData, true);
+    assertArtifactCommitCurrent(artifact);
+    throw new Error("\u4E16\u754C\u4E66\u7F16\u8F91\u5668\u5237\u65B0\u540E\u6301\u7EED\u56DE\u5199\u65E7\u7F13\u5B58\uFF0C\u5DF2\u4FEE\u6B63\u5165\u5E93\u4F46\u754C\u9762\u672A\u80FD\u7A33\u5B9A\u5237\u65B0");
+  }
+  return entryIds;
+}
 async function syncLorebookOnce(artifact, name, force = false, options = {}) {
   assertArtifactCommitCurrent(artifact);
   if (!artifact.snapshot || artifact.stages.state.status !== "success") {
     throw new Error("\u6CA1\u6709\u6210\u529F\u72B6\u6001\u8868\uFF0C\u505C\u6B62\u4E16\u754C\u4E66\u540C\u6B65");
   }
   const settings = getSettings();
+  const retryingFailedSync = artifact.stages.sync.status === "failed";
   if (!settings.lorebookSync && !force) {
     markStage(artifact, "sync", "skipped");
     await putArtifact(artifact);
@@ -4692,25 +4826,21 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         await wi.saveWorldInfo(name, verifiedData, true);
         assertArtifactCommitCurrent(artifact);
       }
-      const renderedTarget = await reloadWorldInfoEditor(wi, name, force);
-      assertArtifactCommitCurrent(artifact);
-      if (renderedTarget) {
-        const postReloadData = await wi.loadWorldInfo(name) || verifiedData;
-        const postReloadVerification = reconcileLorebookEntries(
-          postReloadData,
-          desired,
-          artifact.chatKey,
-          wi,
-          name,
-          dedicatedBook
-        );
-        entryIds = postReloadVerification.entryIds;
-        if (postReloadVerification.changed) {
-          assertArtifactCommitCurrent(artifact);
-          await wi.saveWorldInfo(name, postReloadData, true);
-          assertArtifactCommitCurrent(artifact);
-        }
-      }
+    }
+    if (changed || force || retryingFailedSync || chatState.lastSyncStatus === "failed") {
+      entryIds = await refreshTargetLorebookAndConfirm(
+        wi,
+        name,
+        desired,
+        artifact,
+        dedicatedBook,
+        force,
+        entryIds
+      );
+    }
+    const previousLorebookName = sanitizeBookName(chatState.lastLorebookName || "");
+    if (previousLorebookName && previousLorebookName !== name) {
+      await cleanupPreviousLorebook(wi, previousLorebookName, artifact.chatKey, artifact);
     }
     assertArtifactCommitCurrent(artifact);
     artifact.lorebookEntryIds = entryIds;
@@ -4745,7 +4875,9 @@ async function syncLorebook(artifact, force = false, options = {}) {
     return;
   }
   if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
-  await withLorebookMutation(name, async () => {
+  const persisted = await getChatState(artifact.chatKey);
+  const previousLorebookName = sanitizeBookName(persisted.lastLorebookName || "");
+  await withLorebookMutations([name, previousLorebookName], async () => {
     assertArtifactCommitCurrent(artifact);
     await syncLorebookOnce(artifact, name, force, options);
   });
@@ -4885,71 +5017,148 @@ async function applyLorebookMaintenance(artifact) {
         if (postReloadVerification.changed) {
           await wi.saveWorldInfo(name, postReloadData, true);
           assertArtifactCommitCurrent(artifact);
+          await reloadWorldInfoEditor(wi, name, true);
+          assertArtifactCommitCurrent(artifact);
+          const finalData = await wi.loadWorldInfo(name) || postReloadData;
+          assertArtifactCommitCurrent(artifact);
+          const finalVerification = reconcileLorebookMaintenanceEntries(
+            finalData,
+            plan.desired,
+            artifact.chatKey,
+            wi,
+            name,
+            dedicatedBook,
+            cleanup
+          );
+          removed += finalVerification.removed;
+          if (finalVerification.changed) {
+            await wi.saveWorldInfo(name, finalData, true);
+            assertArtifactCommitCurrent(artifact);
+            throw new Error("\u4E16\u754C\u4E66\u7EF4\u62A4\u5237\u65B0\u540E\u6301\u7EED\u56DE\u5199\u65E7\u7F13\u5B58\uFF0C\u5DF2\u4FEE\u6B63\u5165\u5E93\u4F46\u754C\u9762\u672A\u80FD\u7A33\u5B9A\u5237\u65B0");
+          }
         }
       }
     }
     return { ...preview, applied: true, removed };
   });
 }
-async function clearCurrentChatLorebookEntries(chatKey = currentChatKey()) {
-  assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-  const name = resolveTargetBookName(false, chatKey);
-  if (!name) return 0;
-  return withLorebookMutation(name, async () => {
-    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    const wi = await worldInfoApi();
-    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    const data = await wi.loadWorldInfo(name);
-    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    if (!data?.entries) return 0;
-    let removed = 0;
-    for (const [uid, entry] of Object.entries(data.entries)) {
-      const info = managedInfo(entry);
-      if (info?.managed && info.chatKey === chatKey) {
-        delete data.entries[uid];
-        removed += 1;
+async function knownLorebookNamesForChat(chatKey) {
+  const state2 = await getChatState(chatKey);
+  return [...new Set([
+    sanitizeBookName(state2.lastLorebookName || ""),
+    resolveTargetBookName(false, chatKey)
+  ].filter(Boolean))];
+}
+async function clearManagedEntriesInBook(wi, name, chatKey) {
+  const assertCurrent = () => assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  assertCurrent();
+  const data = await wi.loadWorldInfo(name);
+  assertCurrent();
+  if (!data?.entries) return 0;
+  const removed = removeManagedEntriesForChat(data, chatKey);
+  if (!removed) return 0;
+  await wi.saveWorldInfo(name, data, true);
+  assertCurrent();
+  const verifiedData = await wi.loadWorldInfo(name) || data;
+  assertCurrent();
+  const verifiedRemoved = removeManagedEntriesForChat(verifiedData, chatKey);
+  if (verifiedRemoved) {
+    await wi.saveWorldInfo(name, verifiedData, true);
+    assertCurrent();
+  }
+  const rendered = await reloadWorldInfoEditor(wi, name);
+  assertCurrent();
+  if (rendered) {
+    const postReloadData = await wi.loadWorldInfo(name) || verifiedData;
+    assertCurrent();
+    const postReloadRemoved = removeManagedEntriesForChat(postReloadData, chatKey);
+    if (postReloadRemoved) {
+      await wi.saveWorldInfo(name, postReloadData, true);
+      assertCurrent();
+      await reloadWorldInfoEditor(wi, name, true);
+      assertCurrent();
+      const finalData = await wi.loadWorldInfo(name) || postReloadData;
+      const finalRemoved = removeManagedEntriesForChat(finalData, chatKey);
+      if (finalRemoved) {
+        await wi.saveWorldInfo(name, finalData, true);
+        assertCurrent();
+        throw new Error("\u4E16\u754C\u4E66\u6E05\u7406\u5237\u65B0\u540E\u6301\u7EED\u56DE\u5199\u65E7\u7F13\u5B58\uFF0C\u5DF2\u4FEE\u6B63\u5165\u5E93\u4F46\u754C\u9762\u672A\u80FD\u7A33\u5B9A\u5237\u65B0");
       }
     }
-    if (removed) {
-      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-      await wi.saveWorldInfo(name, data, true);
-      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-      await reloadWorldInfoEditor(wi, name);
-      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  }
+  return removed;
+}
+function pauseManagedEntries(data, chatKey) {
+  let managed = 0;
+  let changed = false;
+  for (const entry of Object.values(data?.entries ?? {})) {
+    const info = managedInfo(entry);
+    if (info?.managed && info.chatKey === chatKey) {
+      managed += 1;
+      if (!entry.disable) {
+        entry.disable = true;
+        changed = true;
+      }
     }
+  }
+  return { managed, changed };
+}
+async function pauseManagedEntriesInBook(wi, name, chatKey) {
+  const assertCurrent = () => assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  assertCurrent();
+  const data = await wi.loadWorldInfo(name);
+  assertCurrent();
+  if (!data?.entries) return 0;
+  const first = pauseManagedEntries(data, chatKey);
+  if (!first.changed) return first.managed;
+  await wi.saveWorldInfo(name, data, true);
+  assertCurrent();
+  const verifiedData = await wi.loadWorldInfo(name) || data;
+  const verification = pauseManagedEntries(verifiedData, chatKey);
+  if (verification.changed) {
+    await wi.saveWorldInfo(name, verifiedData, true);
+    assertCurrent();
+  }
+  const rendered = await reloadWorldInfoEditor(wi, name);
+  assertCurrent();
+  if (rendered) {
+    const postReloadData = await wi.loadWorldInfo(name) || verifiedData;
+    const postReloadVerification = pauseManagedEntries(postReloadData, chatKey);
+    if (postReloadVerification.changed) {
+      await wi.saveWorldInfo(name, postReloadData, true);
+      assertCurrent();
+      await reloadWorldInfoEditor(wi, name, true);
+      assertCurrent();
+      const finalData = await wi.loadWorldInfo(name) || postReloadData;
+      const finalVerification = pauseManagedEntries(finalData, chatKey);
+      if (finalVerification.changed) {
+        await wi.saveWorldInfo(name, finalData, true);
+        assertCurrent();
+        throw new Error("\u4E16\u754C\u4E66\u6682\u505C\u5237\u65B0\u540E\u6301\u7EED\u56DE\u5199\u65E7\u7F13\u5B58\uFF0C\u5DF2\u4FEE\u6B63\u5165\u5E93\u4F46\u754C\u9762\u672A\u80FD\u7A33\u5B9A\u5237\u65B0");
+      }
+    }
+  }
+  return first.managed;
+}
+async function clearCurrentChatLorebookEntries(chatKey = currentChatKey()) {
+  assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6E05\u7406\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  const names = await knownLorebookNamesForChat(chatKey);
+  if (!names.length) return 0;
+  return withLorebookMutations(names, async () => {
+    const wi = await worldInfoApi();
+    let removed = 0;
+    for (const name of names) removed += await clearManagedEntriesInBook(wi, name, chatKey);
     return removed;
   });
 }
 async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
   assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-  const name = resolveTargetBookName(false, chatKey);
-  if (!name) return 0;
-  return withLorebookMutation(name, async () => {
-    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
+  const names = await knownLorebookNamesForChat(chatKey);
+  if (!names.length) return 0;
+  return withLorebookMutations(names, async () => {
     const wi = await worldInfoApi();
-    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    const data = await wi.loadWorldInfo(name);
-    assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    if (!data?.entries) return 0;
     let managed = 0;
-    let changed = false;
-    for (const entry of Object.values(data.entries)) {
-      const info = managedInfo(entry);
-      if (info?.managed && info.chatKey === chatKey) {
-        managed += 1;
-        if (!entry.disable) {
-          entry.disable = true;
-          changed = true;
-        }
-      }
-    }
-    if (changed) {
-      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-      await wi.saveWorldInfo(name, data, true);
-      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-      await reloadWorldInfoEditor(wi, name);
-      assertChatCommitCurrent(chatKey, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u505C\u6B62\u6682\u505C\u65E7\u804A\u5929\u4E16\u754C\u4E66");
-    }
+    for (const name of names) managed += await pauseManagedEntriesInBook(wi, name, chatKey);
     return managed;
   });
 }
@@ -5178,7 +5387,12 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts
   const next = structuredClone(snapshot);
   for (const table of registry2) {
     for (const row of next[table.key] ?? []) {
-      const rowTokens = [entryToken(row.id), entryToken(row.title)].filter(Boolean);
+      const rowTokens = [
+        entryToken(row.id),
+        entryToken(row.title),
+        ...(row.keywords ?? []).map(entryToken),
+        ...(row.recall?.any ?? []).map(entryToken)
+      ].filter(Boolean);
       const linkedByEvent = rowEventIds(row).includes(eventId);
       const linkedByFact = (row.factIds ?? []).some((id) => factIds.has(id));
       const linkedByObject = rowTokens.some((token) => relatedTokens2.has(token));
@@ -5650,7 +5864,7 @@ function stateSystemPrompt(registry2) {
 
 \u3010\u6700\u5C0F operations \u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3011
 1. operations \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u5BF9\u8C61\u884C\uFF1B\u6BCF\u9879\u56FA\u5B9A\u5305\u542B op\u3001table\u3001id\u3001title\u3001content\u3001keywords\u3001status\u3001fields\u3001lifecycle\uFF0Cop \u5F53\u524D\u53EA\u80FD\u662F upsert\u3002
-2. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id\u3002\u65E0\u53D8\u5316\u5BF9\u8C61\u4E0D\u8F93\u51FA operation\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\uFF1B\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\uFF0C\u4E5F\u4E0D\u5F97\u8F93\u51FA\u9690\u5F0F\u6E05\u8868\u64CD\u4F5C\u3002
+2. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id \u4E0E\u65E7 title\u3002title \u662F\u5DF2\u5EFA\u7ACB\u6761\u76EE\u7684\u957F\u671F\u540D\u79F0\u951A\u70B9\uFF0C\u666E\u901A\u72B6\u6001\u53D8\u5316\u4E0D\u5F97\u6539\u540D\uFF1B\u6B63\u6587\u51FA\u73B0\u7684\u65B0\u79F0\u547C\u53EA\u52A0\u5165 keywords\u3002\u65E0\u53D8\u5316\u5BF9\u8C61\u4E0D\u8F93\u51FA operation\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\uFF1B\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\uFF0C\u4E5F\u4E0D\u5F97\u8F93\u51FA\u9690\u5F0F\u6E05\u8868\u64CD\u4F5C\u3002
 3. fields \u662F\u52A8\u6001\u5B57\u6BB5\u8865\u4E01\u6570\u7EC4\uFF0C\u6BCF\u9879\u56FA\u5B9A\u4E3A {"key":"\u5B57\u6BB5\u540D","values":["\u503C"]}\u3002string \u5B57\u6BB5 values \u53EA\u653E\u4E00\u4E2A\u5B57\u7B26\u4E32\uFF1Bstring[] \u5B57\u6BB5\u6309\u6570\u7EC4\u9010\u9879\u586B\u5199\uFF1B\u65E0\u989D\u5916\u5B57\u6BB5\u65F6\u8F93\u51FA\u7A7A\u6570\u7EC4\u3002
 4. lifecycle \u59CB\u7EC8\u8F93\u51FA\u5B8C\u6574\u5BF9\u8C61\u3002\u8BE5\u884C\u6CA1\u6709\u751F\u547D\u5468\u671F\u53D8\u5316\u65F6\uFF0C\u4E94\u4E2A\u5B57\u7B26\u4E32\u8F93\u51FA\u7A7A\u5B57\u7B26\u4E32\uFF0C\u4E24\u4E2A\u6570\u7EC4\u8F93\u51FA\u7A7A\u6570\u7EC4\uFF1B\u53EA\u6709\u76EE\u6807\u8868\u6CE8\u518C\u4E86 lifecycle \u4E14\u786E\u6709\u53D8\u5316\u65F6\u624D\u586B\u5199\u3002
 5. factIds\u3001eventId\u3001eventIds \u4E0E recall \u7531\u63D2\u4EF6\u6839\u636E facts \u672C\u5730\u751F\u6210\uFF0C\u4E0D\u8981\u91CD\u590D\u8F93\u51FA\u3002
@@ -5675,7 +5889,7 @@ function stateSystemPrompt(registry2) {
 ${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1Boperations \u8F93\u51FA\u7A7A\u6570\u7EC4\u3002"}
 
 \u3010\u5B57\u6BB5\u5C42\u7EA7\u3011
-id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u7A33\u5B9A\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u5BF9\u8C61\u5B9A\u4E49\uFF1BcurrentFacts\uFF1A\u73B0\u884C\u4E8B\u5B9E\uFF1BcurrentStates\uFF1A\u5F53\u524D\u72B6\u6001\uFF1BrecentHistory\uFF1A\u8FD1\u671F\u7ECF\u5386\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BsolidifiedHistory\uFF1A\u5386\u53F2\u4E8B\u5B9E\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
+id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u9996\u6B21\u5EFA\u7ACB\u540E\u9501\u5B9A\u7684\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u540E\u7EED\u51FA\u73B0\u7684\u7A33\u5B9A\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u5BF9\u8C61\u5B9A\u4E49\uFF1BcurrentFacts\uFF1A\u73B0\u884C\u4E8B\u5B9E\uFF1BcurrentStates\uFF1A\u5F53\u524D\u72B6\u6001\uFF1BrecentHistory\uFF1A\u8FD1\u671F\u7ECF\u5386\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BsolidifiedHistory\uFF1A\u5386\u53F2\u4E8B\u5B9E\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
 
 \u8F93\u51FA\u7ED3\u6784\u793A\u610F\uFF08\u7701\u7565\u65E0\u53D8\u5316\u5BF9\u8C61\uFF09\uFF1A
 {"turnSummary":"\u591A\u7EBF\u5206\u522B\u63A8\u8FDB","facts":[{"fact_id":"f1","event_id":"e1","type":"event","title":"\u4E8B\u4EF6\u4E00","occurred":["\u5DF2\u53D1\u751F\u7ED3\u679C"],"unresolved":[],"status":"resolved","time_start":"\u5F53\u524D","time_end":"\u5F53\u524D","time_label":"","related_entities":["\u5BF9\u8C61\u7532","\u5730\u533A\u7532"],"keywords":["\u4E8B\u4EF6\u4E00"],"operation":"close","confidence":"confirmed"}],"operations":[{"op":"upsert","table":"characters","id":"c1","title":"\u5BF9\u8C61\u7532","content":"\u5F53\u524D\u7ED3\u679C","keywords":["\u5BF9\u8C61\u7532"],"status":"active","fields":[{"key":"currentFacts","values":["\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E"]}],"lifecycle":{"existence":"","activity":"","memory":"","evidenceLevel":"","evidence":"","returnConditions":[],"returnBlockers":[]}}]}`;
@@ -7773,10 +7987,14 @@ var selectedMessageIndex = null;
 var rendering = false;
 var renderAgain = false;
 var queueUnsubscribe = null;
+var pipelineUnsubscribe = null;
+var workspaceRenderScheduled = false;
+var workspaceRenderDeferred = false;
 var selectedGraphNodeId = null;
 var editorChatKey = null;
 var editorMessageKey = null;
 var savingRow = false;
+var workspacePipelineActionPending = false;
 function resolveWorkspaceStageCommand(action) {
   const commands = {
     "run-audit": { kind: "retry", stage: "audit" },
@@ -7792,37 +8010,95 @@ function clampGraphZoom(value) {
   if (!Number.isFinite(numeric)) return 1;
   return Math.min(2.5, Math.max(0.5, Math.round(numeric * 20) / 20));
 }
+function ensureWorkspaceSubscriptions() {
+  queueUnsubscribe ||= taskQueue.subscribe(handleQueueChange);
+  pipelineUnsubscribe ||= subscribePipeline(() => handlePipelineChange());
+}
+var WORKSPACE_NAVIGATION = [
+  {
+    label: "\u8FD0\u884C",
+    items: [
+      { key: "overview", label: "\u603B\u89C8", icon: "fa-gauge-high", description: "\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C" },
+      { key: "tables", label: "\u5BF9\u8C61\u89C6\u56FE", icon: "fa-table-cells-large", description: "\u89D2\u8272\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u4E0E\u533A\u57DF\u5BF9\u8C61" },
+      { key: "graph", label: "\u5BF9\u8C61\u56FE\u8C31", icon: "fa-diagram-project", description: "\u67E5\u770B\u5BF9\u8C61\u4E4B\u95F4\u7684\u5173\u7CFB\u7F51\u7EDC" },
+      { key: "summaries", label: "\u5206\u5C42\u603B\u7ED3", icon: "fa-layer-group", description: "\u4E8B\u4EF6\u5C0F\u603B\u7ED3\u4E0E\u957F\u671F\u5927\u603B\u7ED3" }
+    ]
+  },
+  {
+    label: "\u7BA1\u7406",
+    items: [
+      { key: "tableManager", label: "\u8868\u683C\u7BA1\u7406", icon: "fa-sliders", description: "\u8C03\u6574\u53EF\u89C1\u89C6\u56FE\u4E0E\u5B57\u6BB5\u8BED\u4E49" },
+      { key: "audit", label: "\u89C4\u5219\u5BA1\u6838", icon: "fa-shield-halved", description: "\u5BA1\u6838\u89C4\u5219\u3001\u4FEE\u6B63\u7B56\u7565\u4E0E\u7ED3\u679C" },
+      { key: "sync", label: "\u4E16\u754C\u4E66", icon: "fa-book-atlas", description: "\u53D1\u5E03\u3001\u6E05\u7406\u4E0E\u53EC\u56DE\u8BBE\u7F6E" }
+    ]
+  },
+  {
+    label: "\u7CFB\u7EDF",
+    items: [
+      { key: "settings", label: "\u6A21\u578B\u4E0E\u8BBE\u7F6E", icon: "fa-gears", description: "\u8FDE\u63A5\u5206\u914D\u3001\u81EA\u52A8\u5316\u4E0E\u7EF4\u62A4" },
+      { key: "diagnostics", label: "\u8BCA\u65AD", icon: "fa-stethoscope", description: "\u68C0\u67E5\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65" }
+    ]
+  }
+];
+function workspaceTabMeta(tab) {
+  const key = String(tab || "overview");
+  for (const group of WORKSPACE_NAVIGATION) {
+    const item = group.items.find((candidate) => candidate.key === key);
+    if (item) return { key: item.key, label: item.label, description: item.description };
+  }
+  return { key: "overview", label: "\u603B\u89C8", description: "\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C" };
+}
+function workspaceNavigationHtml() {
+  return WORKSPACE_NAVIGATION.map((group) => `
+    <section class="ma11-nav-group" aria-label="${group.label}">
+      <div class="ma11-nav-label">${group.label}</div>
+      ${group.items.map((item) => `
+        <button type="button" data-ma11-tab="${item.key}" title="${item.description}">
+          <i class="ma11-nav-icon fa-solid ${item.icon}" aria-hidden="true"></i>
+          <span>${item.label}</span>
+        </button>`).join("")}
+    </section>`).join("");
+}
 function root() {
   let element = document.querySelector("#ma11-workspace");
-  if (element) return element;
+  if (element) {
+    ensureWorkspaceSubscriptions();
+    return element;
+  }
   document.body.insertAdjacentHTML(
     "beforeend",
     `
     <div id="ma11-workspace" class="ma11-workspace" hidden>
       <div class="ma11-shell" role="dialog" aria-modal="true" aria-label="\u955C\u6E0A\u63A7\u5236\u4E2D\u5FC3">
-        <header class="ma11-header">
-          <div>
-            <div class="ma11-brand">\u955C\u6E0A <span>${VERSION}</span></div>
-            <div class="ma11-subtitle">\u5BF9\u8C61\u4E8B\u5B9E\u89C6\u56FE\u3001\u4E8B\u4EF6\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u53D1\u5E03</div>
+        <aside class="ma11-sidebar">
+          <div class="ma11-sidebar-brand">
+            <div class="ma11-brand-mark" aria-hidden="true">\u6E0A</div>
+            <div>
+              <div class="ma11-brand">\u955C\u6E0A</div>
+              <div class="ma11-subtitle">\u957F\u671F\u53D9\u4E8B\u8BB0\u5FC6\u5DE5\u4F5C\u533A</div>
+            </div>
           </div>
-          <button class="ma11-icon-button" data-ma11-action="close" aria-label="\u5173\u95ED">\xD7</button>
-        </header>
-        <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">
-          ${[
-      ["overview", "\u603B\u89C8"],
-      ["tables", "\u5BF9\u8C61\u89C6\u56FE"],
-      ["tableManager", "\u8868\u683C\u7BA1\u7406"],
-      ["graph", "\u5BF9\u8C61\u56FE\u8C31"],
-      ["summaries", "\u603B\u7ED3"],
-      ["audit", "\u89C4\u5219\u5BA1\u6838"],
-      ["sync", "\u4E16\u754C\u4E66"],
-      ["settings", "\u6A21\u578B\u4E0E\u8BBE\u7F6E"],
-      ["diagnostics", "\u8BCA\u65AD"]
-    ].map(
-      ([key, label]) => `<button data-ma11-tab="${key}">${label}</button>`
-    ).join("")}
-        </nav>
-        <main id="ma11-workspace-content" class="ma11-content"></main>
+          <div class="ma11-sidebar-status"><span></span>\u5F53\u524D\u804A\u5929\u72EC\u7ACB\u8FD0\u884C</div>
+          <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">${workspaceNavigationHtml()}</nav>
+          <footer class="ma11-sidebar-footer">
+            <span>Mirror Abyss</span>
+            <b>${VERSION}</b>
+          </footer>
+        </aside>
+        <section class="ma11-main">
+          <header class="ma11-header">
+            <div class="ma11-page-heading">
+              <div class="ma11-kicker">\u955C\u6E0A\u5DE5\u4F5C\u533A</div>
+              <h1 data-ma11-current-title>\u603B\u89C8</h1>
+              <p data-ma11-current-description>\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C</p>
+            </div>
+            <div class="ma11-header-actions">
+              <span class="ma11-version">${VERSION}</span>
+              <button class="ma11-icon-button" type="button" data-ma11-action="close" aria-label="\u5173\u95ED\u955C\u6E0A">\xD7</button>
+            </div>
+          </header>
+          <main id="ma11-workspace-content" class="ma11-content"></main>
+        </section>
       </div>
       <div class="ma11-editor-backdrop" hidden>
         <form class="ma11-editor" id="ma11-row-editor">
@@ -7875,7 +8151,7 @@ function root() {
   );
   element = document.querySelector("#ma11-workspace");
   bindWorkspace(element);
-  queueUnsubscribe ||= taskQueue.subscribe(handleQueueChange);
+  ensureWorkspaceSubscriptions();
   return element;
 }
 function currentArtifact() {
@@ -7885,6 +8161,42 @@ function currentArtifact() {
     return null;
   }
   return latestArtifact();
+}
+function workspacePipelineBusy(artifactInfo = currentArtifact()) {
+  const stageBusy = Boolean(artifactInfo && Object.values(artifactInfo.artifact.stages).some(
+    (stage) => stage.status === "queued" || stage.status === "running"
+  ));
+  const chatKey = artifactInfo?.artifact.chatKey || currentChatKey();
+  const queueBusy = taskQueue.list().some(
+    (task) => (task.state === "queued" || task.state === "running") && (!task.chatKey || task.chatKey === chatKey)
+  );
+  return workspacePipelineActionPending || stageBusy || queueBusy;
+}
+function workspaceHasFocusedEditor(workspace) {
+  const active = document.activeElement;
+  return Boolean(workspace.contains(active) && active?.matches("input, textarea, select, [contenteditable='true']"));
+}
+function workspaceHasUnsavedSurface(workspace) {
+  const editor = workspace.querySelector(".ma11-editor-backdrop");
+  return editor?.hidden === false || getSettings().ui.activeTab === "tableManager";
+}
+function scheduleWorkspaceRender() {
+  const workspace = document.querySelector("#ma11-workspace");
+  if (!workspace || workspace.hidden) return;
+  if (workspaceHasFocusedEditor(workspace) || workspaceHasUnsavedSurface(workspace)) {
+    workspaceRenderDeferred = true;
+    return;
+  }
+  if (workspaceRenderScheduled) return;
+  workspaceRenderScheduled = true;
+  queueMicrotask(() => {
+    workspaceRenderScheduled = false;
+    void renderWorkspace();
+  });
+}
+function handlePipelineChange() {
+  refreshTaskList();
+  scheduleWorkspaceRender();
 }
 function statusText(value) {
   const map = {
@@ -7930,15 +8242,16 @@ function stageActionButtonsHtml(artifactInfo) {
   const isLatestText = artifactInfo ? artifactInfo.index === latestIndex : selectedMessageIndex === null && latestIndex >= 0;
   const artifact = artifactInfo?.artifact;
   const latestSnapshot = latestSnapshotArtifact();
-  const canAudit = Boolean(settings.enabled && settings.auditEnabled && settings.auditPrompt.trim() && isLatestText);
+  const busy = workspacePipelineBusy(artifactInfo);
+  const canAudit = Boolean(settings.enabled && !busy && settings.auditEnabled && settings.auditPrompt.trim() && isLatestText);
   const canRevise = Boolean(
-    settings.enabled && isLatestText && artifact?.audit && !artifact.audit.passed && artifact.audit.decision !== "block"
+    settings.enabled && !busy && isLatestText && artifact?.audit && !artifact.audit.passed && artifact.audit.decision !== "block"
   );
   const canState = Boolean(
-    settings.enabled && isLatestText && (!settings.auditEnabled || artifact?.audit?.passed)
+    settings.enabled && !busy && isLatestText && (!settings.auditEnabled || artifact?.audit?.passed)
   );
   const canSummarize = Boolean(
-    settings.enabled && latestSnapshot && artifactInfo?.artifact.messageKey === latestSnapshot.artifact.messageKey
+    settings.enabled && !busy && latestSnapshot && artifactInfo?.artifact.messageKey === latestSnapshot.artifact.messageKey
   );
   return `<div class="ma11-actions ma11-stage-actions">
     <button data-ma11-action="run-audit" ${canAudit ? "" : "disabled"}>\u5BA1\u6838\u6B63\u6587</button>
@@ -7949,7 +8262,8 @@ function stageActionButtonsHtml(artifactInfo) {
   </div>`;
 }
 function recentTasksHtml() {
-  const jobs = taskQueue.list().slice(0, 5);
+  const chatKey = currentChatKey();
+  const jobs = taskQueue.list().filter((task) => !task.chatKey || task.chatKey === chatKey).slice(0, 5);
   return {
     count: jobs.length,
     html: jobs.length ? jobs.map((task) => {
@@ -7958,7 +8272,7 @@ function recentTasksHtml() {
         Number.isFinite(task.runMs) ? `\u6267\u884C ${task.runMs}ms` : ""
       ].filter(Boolean).join(" \xB7 ");
       return `<div><span>${escapeHtml(task.label)}${timing ? `<small>${escapeHtml(timing)}</small>` : ""}</span><em class="${task.state}">${escapeHtml(statusText(task.state))}</em></div>`;
-    }).join("") : '<p class="ma11-empty">\u6CA1\u6709\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u3002</p>'
+    }).join("") : '<p class="ma11-empty">\u6682\u65E0\u6700\u8FD1\u4EFB\u52A1\u3002</p>'
   };
 }
 function refreshTaskList() {
@@ -7972,13 +8286,9 @@ function refreshTaskList() {
 }
 function handleQueueChange() {
   refreshTaskList();
-  if (taskQueue.list().some((task) => task.state === "queued" || task.state === "running")) return;
-  const workspace = document.querySelector("#ma11-workspace");
-  const active = document.activeElement;
-  if (workspace?.contains(active) && active?.matches("input, textarea, select, [contenteditable='true']")) return;
-  void renderWorkspace();
+  scheduleWorkspaceRender();
 }
-function historyRecoveryHtml(chatState) {
+function historyRecoveryHtml(chatState, busy = false) {
   const recovery = chatState?.historyRecovery;
   if (!recovery) return "";
   const pauseError = chatState?.historyInvalidation?.pauseError;
@@ -7986,7 +8296,7 @@ function historyRecoveryHtml(chatState) {
   const progress = recovery.totalCount ? `${recovery.completedCount ?? 0}/${recovery.totalCount}` : "\u68C0\u67E5\u4E2D";
   if (recovery.phase === "failed") {
     const failedDetail = `${recovery.error || "\u72B6\u6001\u63D0\u53D6\u5931\u8D25"}${pauseError ? `\uFF1B\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${pauseError}` : ""}`;
-    return `<section class="ma11-card ma11-history-warning"><header><b>\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210</b><span>${escapeHtml(current)}</span></header><p>${escapeHtml(failedDetail)}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">\u4ECE\u5931\u8D25\u4F4D\u7F6E\u7EE7\u7EED</button></div></section>`;
+    return `<section class="ma11-card ma11-history-warning"><header><b>\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210</b><span>${escapeHtml(current)}</span></header><p>${escapeHtml(failedDetail)}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>\u4ECE\u5931\u8D25\u4F4D\u7F6E\u7EE7\u7EED</button></div></section>`;
   }
   const labels = {
     "rebuilding-core": "\u6B63\u5728\u91CD\u5EFA\u6838\u5FC3\u72B6\u6001",
@@ -8003,15 +8313,16 @@ async function overviewHtml(artifactInfo) {
   const chatState = await getChatState(currentChatKey());
   const rows = snapshotRowCount(artifact?.snapshot, getSettings().tableRegistry, true);
   const tasks = recentTasksHtml();
+  const busy = workspacePipelineBusy(artifactInfo);
   return `
-    ${historyRecoveryHtml(chatState) || (chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u624B\u52A8\u5386\u53F2\u91CD\u5EFA\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u53EA\u4F1A\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u91CD\u5EFA\uFF0C\u4E0D\u4F1A\u91CD\u8DD1\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history">${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u6309\u4F9D\u8D56\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : "")}
+    ${historyRecoveryHtml(chatState, busy) || (chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u624B\u52A8\u5386\u53F2\u91CD\u5EFA\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u53EA\u4F1A\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u91CD\u5EFA\uFF0C\u4E0D\u4F1A\u91CD\u8DD1\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u6309\u4F9D\u8D56\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : "")}
     <section class="ma11-hero">
       <div>
         <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
         <p>${artifact ? `\u5BF9\u8C61\u89C6\u56FE ${rows} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
       </div>
       <div class="ma11-actions">
-        <button data-ma11-action="process-latest" ${enabled ? "" : "disabled"}>\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
+        <button data-ma11-action="process-latest" ${enabled && latestAssistantIndex() >= 0 && !busy ? "" : "disabled"}>\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
         <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u89C6\u56FE</button>
         <button data-ma11-action="open-graph" ${artifact?.snapshot ? "" : "disabled"}>\u5BF9\u8C61\u56FE\u8C31</button>
       </div>
@@ -8065,7 +8376,8 @@ async function tableHtml(artifactInfo) {
   const latest = latestSnapshotArtifact();
   const chatState = await getChatState(currentChatKey());
   const focusObjectId = chatState.focusObjectId || "";
-  const editable = Boolean(settings.enabled && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey);
+  const busy = workspacePipelineBusy(artifactInfo);
+  const editable = Boolean(settings.enabled && !busy && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey);
   if (!visibleTables.length) {
     return `<section class="ma11-empty-panel"><h2>\u6CA1\u6709\u542F\u7528\u7684\u53EF\u89C1\u8868\u683C</h2><p>\u5185\u90E8\u4E8B\u5B9E\u5C42\u4ECD\u4F1A\u4FDD\u5B58\u4E8B\u4EF6\u7EBF\u548C\u603B\u7ED3\u6D88\u8D39\u72B6\u6001\u3002\u8BF7\u5728\u201C\u8868\u683C\u7BA1\u7406\u201D\u4E2D\u542F\u7528\u6216\u65B0\u589E\u89C6\u56FE\u3002</p><button data-ma11-action="open-table-manager">\u6253\u5F00\u8868\u683C\u7BA1\u7406</button></section>`;
   }
@@ -8084,7 +8396,7 @@ async function tableHtml(artifactInfo) {
         <div class="ma11-table-tabs">${visibleTables.map((table) => `<button class="${table.key === active ? "active" : ""}" data-ma11-table="${escapeHtml(table.key)}">${escapeHtml(table.name)} <span>${artifact?.snapshot?.[table.key]?.length ?? 0}</span></button>`).join("")}</div>
         <p class="ma11-table-purpose"><b>${escapeHtml(activeDefinition.name)}</b>\uFF1A${escapeHtml(activeDefinition.purpose)}</p>
       </div>
-      <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="run-state" ${settings.enabled && artifactInfo?.index === latestAssistantIndex() && (!settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>\u751F\u6210/\u66F4\u65B0\u8868\u683C</button><button data-ma11-action="open-table-manager">\u7BA1\u7406\u8868\u683C</button></div>
+      <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="run-state" ${settings.enabled && !busy && artifactInfo?.index === latestAssistantIndex() && (!settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>\u751F\u6210/\u66F4\u65B0\u8868\u683C</button><button data-ma11-action="open-table-manager">\u7BA1\u7406\u8868\u683C</button></div>
     </section>
     <p class="ma11-table-hint">\u53EA\u663E\u793A\u542F\u7528\u89C6\u56FE\u3002\u624B\u673A\u7AEF\u53EF\u5728\u8868\u683C\u533A\u57DF\u5DE6\u53F3\u6ED1\u52A8\uFF1B\u505C\u7528\u6216\u5220\u9664\u89C6\u56FE\u4E0D\u4F1A\u5220\u9664\u5185\u90E8\u4E8B\u5B9E\u3001\u4E8B\u4EF6\u7EBF\u6216\u603B\u7ED3\u3002</p>
     <section class="ma11-table-wrap" role="region" aria-label="${escapeHtml(activeDefinition.name)}\u72B6\u6001\u8868" tabindex="0">
@@ -8240,12 +8552,13 @@ ${node.detail}`)}</title></g>`
 async function summariesHtml() {
   const info = latestSnapshotArtifact();
   const enabled = getSettings().enabled;
+  const busy = workspacePipelineBusy(info);
   const state2 = info ? await getChatState(info.artifact.chatKey) : null;
   const allSmall = state2?.smallSummaries ?? [];
   const large = state2?.largeSummaries ?? [];
   const small = pendingSmallSummaries(allSmall, large);
   return `
-    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u6309 event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5927\u603B\u7ED3\u53EA\u56FA\u5316\u5C1A\u672A\u88AB\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
+    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u6309 event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5927\u603B\u7ED3\u53EA\u56FA\u5316\u5C1A\u672A\u88AB\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info && !busy ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info && !busy ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
     <div class="ma11-summary-columns">
       <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map(
     (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
@@ -8263,8 +8576,9 @@ function auditHtml() {
   const violationHtml = audit && !audit.passed && audit.violations.length ? `<ol class="ma11-violation-list">${audit.violations.map((item) => `<li><b>${escapeHtml(item.rule)}</b><p>${escapeHtml(item.evidence)}</p><small>\u4FEE\u6539\uFF1A${escapeHtml(item.action)}</small></li>`).join("")}</ol>` : "";
   const latestIndex = latestAssistantIndex();
   const isLatest = info ? info.index === latestIndex : selectedMessageIndex === null && latestIndex >= 0;
-  const canAudit = Boolean(settings.enabled && settings.auditEnabled && settings.auditPrompt.trim() && isLatest);
-  const canRevise = Boolean(settings.enabled && isLatest && audit && !audit.passed && audit.decision !== "block");
+  const busy = workspacePipelineBusy(info);
+  const canAudit = Boolean(settings.enabled && !busy && settings.auditEnabled && settings.auditPrompt.trim() && isLatest);
+  const canRevise = Boolean(settings.enabled && !busy && isLatest && audit && !audit.passed && audit.decision !== "block");
   return `
     <section class="ma11-toolbar"><div><h2>\u5BA1\u6838\u4E0E\u4FEE\u6B63</h2><p>\u5BA1\u6838\u548C\u4FEE\u6B63\u5206\u5F00\u6267\u884C\uFF1B\u4FEE\u6B63\u901A\u8FC7\u540E\u518D\u70B9\u51FB\u201C\u751F\u6210\u8868\u683C\u201D\u3002</p></div><div class="ma11-actions"><button data-ma11-action="run-audit" ${canAudit ? "" : "disabled"}>\u7ACB\u5373\u5BA1\u6838</button><button data-ma11-action="run-revision" ${canRevise ? "" : "disabled"}>\u6267\u884C\u4FEE\u6B63</button></div></section>
     <section class="ma11-card ma11-form-card">
@@ -8292,6 +8606,7 @@ async function syncHtml() {
   const state2 = await getChatState(currentChatKey());
   const settings = getSettings();
   const syncPaused = Boolean(state2?.historyRecovery || state2?.historyInvalidation);
+  const busy = workspacePipelineBusy(info);
   const syncDisplayStatus = syncPaused ? "blocked" : state2?.lastSyncStatus || "idle";
   const syncDisplayText = syncPaused ? "\u6682\u505C" : statusText(syncDisplayStatus);
   return `
@@ -8310,7 +8625,7 @@ async function syncHtml() {
         <label>\u6700\u5927\u5411\u91CF\u5019\u9009\u6761\u76EE <small>\u955C\u6E0A\u53D1\u5E03\u88C1\u526A</small><input type="number" min="1" max="100" data-ma11-recall-setting="maxVectorResults" value="${settings.lorebookRecall.maxVectorResults}" /></label>
         <label>\u4E16\u754C\u4E66\u603B\u5BB9\u91CF\uFF08\u5B57\u7B26\uFF09<input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
       </div>
-      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${settings.enabled && info && !state2?.historyInvalidation ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u56FE\u8C31</button></div>
+      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u56FE\u8C31</button></div>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
     </section>`;
@@ -8385,16 +8700,22 @@ async function renderWorkspace() {
     return;
   }
   rendering = true;
+  workspaceRenderDeferred = false;
   const renderChatKey = currentChatKey();
   try {
     const settings = getSettings();
     const info = currentArtifact();
-    workspace.querySelectorAll("[data-ma11-tab]").forEach(
-      (button) => button.classList.toggle(
-        "active",
-        button.dataset.ma11Tab === settings.ui.activeTab
-      )
-    );
+    const activeMeta = workspaceTabMeta(settings.ui.activeTab);
+    const currentTitle = workspace.querySelector("[data-ma11-current-title]");
+    const currentDescription = workspace.querySelector("[data-ma11-current-description]");
+    if (currentTitle) currentTitle.textContent = activeMeta.label;
+    if (currentDescription) currentDescription.textContent = activeMeta.description;
+    workspace.querySelectorAll("[data-ma11-tab]").forEach((button) => {
+      const active = button.dataset.ma11Tab === activeMeta.key;
+      button.classList.toggle("active", active);
+      if (active) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    });
     let html = "";
     if (settings.ui.activeTab === "overview") html = await overviewHtml(info);
     if (settings.ui.activeTab === "tables") html = await tableHtml(info);
@@ -8410,7 +8731,17 @@ async function renderWorkspace() {
       return;
     }
     const content = workspace.querySelector("#ma11-workspace-content");
-    if (content) content.innerHTML = html;
+    if (content) {
+      const scrollTop = content.scrollTop;
+      const tableScrollLeft = content.querySelector(".ma11-table-wrap")?.scrollLeft ?? 0;
+      const openDetails = Array.from(content.querySelectorAll("details")).map((item, index) => item.open ? index : -1).filter((index) => index >= 0);
+      content.innerHTML = html;
+      content.scrollTop = scrollTop;
+      const tableWrap = content.querySelector(".ma11-table-wrap");
+      if (tableWrap) tableWrap.scrollLeft = tableScrollLeft;
+      const details = Array.from(content.querySelectorAll("details"));
+      for (const index of openDetails) if (details[index]) details[index].open = true;
+    }
   } catch (error) {
     if (currentChatKey() !== renderChatKey) {
       renderAgain = true;
@@ -8442,6 +8773,7 @@ function editableArtifact() {
     throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u7F16\u8F91\u4E0D\u518D\u4FDD\u5B58");
   }
   const info = currentArtifact();
+  if (workspacePipelineBusy(info)) throw new Error("\u955C\u6E0A\u4ECD\u6709\u4EFB\u52A1\u5728\u5904\u7406\uFF0C\u8BF7\u5B8C\u6210\u540E\u518D\u7F16\u8F91");
   const latest = latestSnapshotArtifact();
   if (!info?.artifact.snapshot || !latest || info.artifact.messageKey !== latest.artifact.messageKey) {
     throw new Error("\u5386\u53F2\u72B6\u6001\u8868\u53EA\u8BFB\uFF0C\u53EA\u80FD\u7F16\u8F91\u6700\u65B0\u6210\u529F\u72B6\u6001\u8868");
@@ -8655,13 +8987,33 @@ function bindWorkspace(workspace) {
     const testButton = target.closest("[data-ma11-test]");
     const busyButton = actionButton ?? testButton;
     const originalButtonText = busyButton?.textContent ?? "";
+    const pipelineAction = [
+      "process-latest",
+      "recalculate-history",
+      "run-audit",
+      "run-revision",
+      "run-state",
+      "force-small",
+      "force-large",
+      "retry-sync",
+      "set-focus",
+      "clear-focus"
+    ].includes(action || "");
+    if (pipelineAction && workspacePipelineBusy()) return;
+    if (pipelineAction) {
+      workspacePipelineActionPending = true;
+      scheduleWorkspaceRender();
+    }
     try {
       if (busyButton && !["close", "open-tables", "open-graph", "close-editor"].includes(action || "")) {
         busyButton.disabled = true;
         busyButton.setAttribute("aria-busy", "true");
         busyButton.textContent = "\u5904\u7406\u4E2D\u2026";
       }
-      if (action === "close") workspace.hidden = true;
+      if (action === "close") {
+        closeWorkspace();
+        return;
+      }
       if (action === "open-tables") setTab("tables");
       if (action === "open-graph") setTab("graph");
       if (action === "open-table-manager") setTab("tableManager");
@@ -8856,8 +9208,12 @@ function bindWorkspace(workspace) {
     } catch (error) {
       toast("error", toErrorMessage(error));
     } finally {
+      if (pipelineAction) {
+        workspacePipelineActionPending = false;
+        scheduleWorkspaceRender();
+      }
       if (busyButton?.isConnected) {
-        busyButton.disabled = false;
+        if (!pipelineAction) busyButton.disabled = false;
         busyButton.removeAttribute("aria-busy");
         busyButton.textContent = originalButtonText;
       }
@@ -8899,6 +9255,13 @@ function bindWorkspace(workspace) {
       updateSetting(target);
     if (target.dataset.ma11ConnectionProfileId) updateConnection(target);
   });
+  workspace.addEventListener("focusout", () => {
+    window.setTimeout(() => {
+      if (!workspaceRenderDeferred || workspaceHasFocusedEditor(workspace) || workspaceHasUnsavedSurface(workspace)) return;
+      workspaceRenderDeferred = false;
+      scheduleWorkspaceRender();
+    }, 0);
+  });
   workspace.querySelector("#ma11-row-editor")?.addEventListener("submit", (event) => {
     event.preventDefault();
     if (savingRow) return;
@@ -8918,13 +9281,20 @@ function bindWorkspace(workspace) {
     });
   });
 }
+function resolveWorkspaceMessageSelection(messageIndex) {
+  return Number.isInteger(messageIndex) ? Number(messageIndex) : null;
+}
 function openWorkspace(tab, messageIndex) {
   const workspace = root();
-  if (Number.isInteger(messageIndex))
-    selectedMessageIndex = Number(messageIndex);
+  selectedMessageIndex = resolveWorkspaceMessageSelection(messageIndex);
   if (tab) getSettings().ui.activeTab = tab;
   workspace.hidden = false;
   void renderWorkspace();
+}
+function closeWorkspace() {
+  closeEditor();
+  const workspace = document.querySelector("#ma11-workspace");
+  if (workspace) workspace.hidden = true;
 }
 function resetWorkspaceContext() {
   selectedMessageIndex = null;
@@ -8935,7 +9305,12 @@ function disposeWorkspace() {
   resetWorkspaceContext();
   queueUnsubscribe?.();
   queueUnsubscribe = null;
+  pipelineUnsubscribe?.();
+  pipelineUnsubscribe = null;
   savingRow = false;
+  workspacePipelineActionPending = false;
+  workspaceRenderScheduled = false;
+  workspaceRenderDeferred = false;
   renderAgain = false;
   document.querySelector("#ma11-workspace")?.remove();
 }

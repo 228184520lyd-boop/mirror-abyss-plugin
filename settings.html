@@ -1,17 +1,34 @@
 <div id="ma11-settings-root" class="ma11-settings-root">
   <div class="inline-drawer">
-    <div class="inline-drawer-toggle inline-drawer-header">
-      <b>镜渊</b>
+    <div class="inline-drawer-toggle inline-drawer-header ma11-settings-heading">
+      <div class="ma11-settings-title">
+        <span class="ma11-settings-mark" aria-hidden="true">渊</span>
+        <span><b>镜渊</b><small>长期叙事记忆</small></span>
+      </div>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
       <div class="ma11-settings-content">
-        <label class="checkbox_label">
-          <input type="checkbox" data-ma11-quick-setting="enabled">
-          <span>启用镜渊</span>
-        </label>
-        <button class="menu_button" type="button" data-ma11-action="open">打开镜渊工作区</button>
-        <button class="menu_button" type="button" data-ma11-action="diagnostics">运行诊断</button>
+        <div class="ma11-settings-overview">
+          <div>
+            <b>工作区状态</b>
+            <p>对象、总结、审核与世界书统一管理。</p>
+          </div>
+          <label class="ma11-quick-switch">
+            <input type="checkbox" data-ma11-quick-setting="enabled">
+            <span>启用</span>
+          </label>
+        </div>
+        <div class="ma11-settings-shortcuts">
+          <button class="menu_button ma11-settings-primary" type="button" data-ma11-action="open">
+            <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+            <span>打开工作区</span>
+          </button>
+          <button class="menu_button" type="button" data-ma11-action="diagnostics">
+            <i class="fa-solid fa-stethoscope" aria-hidden="true"></i>
+            <span>运行诊断</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
