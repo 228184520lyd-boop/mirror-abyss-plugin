@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.42";
-var PIPELINE_VERSION = "ma-pipeline-44";
+var VERSION = "1.2.0-rc.44";
+var PIPELINE_VERSION = "ma-pipeline-46";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -4203,6 +4203,9 @@ function managedContentIdentity(value) {
 function managedCommentIdentity(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
+function mirrorAbyssManagedNameIdentity(value) {
+  return String(value ?? "").normalize("NFKC").replace(/^\s*\[MA11\]\s*/i, "").replace(/[|｜]+/g, "|").split("|").map((part) => part.replace(/\s+/g, " ").trim().toLocaleLowerCase()).filter(Boolean).join("|");
+}
 function isMirrorAbyssGeneratedEntry(entry) {
   return /^\[MA11\]\s+MA[｜|]/.test(managedCommentIdentity(entry?.comment));
 }
@@ -4359,6 +4362,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
   data.entries ||= {};
   const pairs = [];
   const currentByKey = /* @__PURE__ */ new Map();
+  const currentByName = /* @__PURE__ */ new Map();
   const currentByLogical = /* @__PURE__ */ new Map();
   for (const [uid, entry] of Object.entries(data.entries)) {
     const info = managedInfo(entry);
@@ -4370,6 +4374,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
       info,
       key: String(info?.key || ""),
       logicalKey: legacyLogicalKey(entry, info),
+      nameIdentity: mirrorAbyssManagedNameIdentity(entry.comment),
       commentIdentity: managedCommentIdentity(entry.comment),
       exactIdentity: mirrorAbyssExactIdentity(entry.comment, entry.content),
       currentScope,
@@ -4377,6 +4382,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
     };
     pairs.push(pair);
     appendPair(currentByKey, pair.key, pair);
+    appendPair(currentByName, pair.nameIdentity, pair);
     appendPair(currentByLogical, pair.logicalKey, pair);
   }
   let changed = false;
@@ -4386,8 +4392,11 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
   const duplicateManaged = /* @__PURE__ */ new Set();
   const protectedAmbiguous = /* @__PURE__ */ new Set();
   const entryIds = [];
+  const desiredNameCounts = /* @__PURE__ */ new Map();
   const desiredLogicalCounts = /* @__PURE__ */ new Map();
   for (const [key, spec] of desired) {
+    const nameIdentity = mirrorAbyssManagedNameIdentity(spec.comment);
+    if (nameIdentity) desiredNameCounts.set(nameIdentity, (desiredNameCounts.get(nameIdentity) ?? 0) + 1);
     const logicalKey = String(spec.logicalKey || key);
     desiredLogicalCounts.set(logicalKey, (desiredLogicalCounts.get(logicalKey) ?? 0) + 1);
   }
@@ -4403,6 +4412,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
     key,
     spec,
     logicalKey: String(spec.logicalKey || key),
+    nameIdentity: mirrorAbyssManagedNameIdentity(spec.comment),
     commentIdentity: managedCommentIdentity(spec.comment),
     exactIdentity: mirrorAbyssExactIdentity(spec.comment, spec.content),
     pair: void 0
@@ -4414,6 +4424,21 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
     if (item.pair && keyCandidates.length > 1) {
       for (const duplicate of keyCandidates.slice(1)) duplicateManaged.add(duplicate.uid);
     }
+  }
+  for (const item of desiredItems) {
+    if (!item.nameIdentity || desiredNameCounts.get(item.nameIdentity) !== 1) continue;
+    const nameCandidates = (currentByName.get(item.nameIdentity) ?? []).filter((candidate) => !duplicateManaged.has(candidate.uid)).sort(stablePairOrder);
+    if (item.pair) {
+      for (const candidate of nameCandidates) {
+        if (candidate.uid !== item.pair.uid && !claimed.has(candidate.uid)) duplicateManaged.add(candidate.uid);
+      }
+      continue;
+    }
+    const available = nameCandidates.filter((candidate) => !claimed.has(candidate.uid));
+    if (!available.length) continue;
+    item.pair = available[0];
+    claimed.add(item.pair.uid);
+    for (const duplicate of available.slice(1)) duplicateManaged.add(duplicate.uid);
   }
   for (const item of desiredItems) {
     if (item.pair) continue;
@@ -4440,6 +4465,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
         info: null,
         key: item.key,
         logicalKey: item.logicalKey,
+        nameIdentity: item.nameIdentity,
         commentIdentity: item.commentIdentity,
         exactIdentity: item.exactIdentity,
         currentScope: true,
@@ -4456,9 +4482,15 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
   }
   for (const pair of pairs) {
     if (claimed.has(pair.uid)) continue;
+    if (duplicateManaged.has(pair.uid)) {
+      delete data.entries[pair.uid];
+      removed += 1;
+      changed = true;
+      continue;
+    }
     if (protectedAmbiguous.has(pair.uid)) continue;
     if (legacyManagedKey(pair.key)) continue;
-    if (!duplicateManaged.has(pair.uid) && !pair.currentScope) continue;
+    if (!pair.currentScope) continue;
     delete data.entries[pair.uid];
     removed += 1;
     changed = true;
@@ -4469,9 +4501,11 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
   data.entries ||= {};
   const pairs = [];
   const currentByKey = /* @__PURE__ */ new Map();
+  const currentByName = /* @__PURE__ */ new Map();
   const currentByLogical = /* @__PURE__ */ new Map();
   const currentByComment = /* @__PURE__ */ new Map();
   const currentByExact = /* @__PURE__ */ new Map();
+  const adoptableByName = /* @__PURE__ */ new Map();
   const adoptableByLogical = /* @__PURE__ */ new Map();
   const adoptableByComment = /* @__PURE__ */ new Map();
   const adoptableByExact = /* @__PURE__ */ new Map();
@@ -4487,6 +4521,7 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
       info,
       key: String(info?.key || ""),
       logicalKey: legacyLogicalKey(entry, info),
+      nameIdentity: mirrorAbyssManagedNameIdentity(entry.comment),
       commentIdentity: managedCommentIdentity(entry.comment),
       exactIdentity: mirrorAbyssExactIdentity(entry.comment, entry.content),
       currentScope,
@@ -4495,11 +4530,13 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
     pairs.push(pair);
     if (currentScope) {
       appendPair(currentByKey, pair.key, pair);
+      appendPair(currentByName, pair.nameIdentity, pair);
       appendPair(currentByLogical, pair.logicalKey, pair);
       appendPair(currentByComment, pair.commentIdentity, pair);
       appendPair(currentByExact, pair.exactIdentity, pair);
     }
     if (dedicatedBook && ownerUnknown) {
+      appendPair(adoptableByName, pair.nameIdentity, pair);
       appendPair(adoptableByLogical, pair.logicalKey, pair);
       appendPair(adoptableByComment, pair.commentIdentity, pair);
       appendPair(adoptableByExact, pair.exactIdentity, pair);
@@ -4510,18 +4547,47 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
   let adoptedLegacy = 0;
   let removed = 0;
   const claimed = /* @__PURE__ */ new Set();
+  const duplicateManaged = /* @__PURE__ */ new Set();
   const entryIds = [];
+  const stablePairOrder = (left, right) => {
+    const leftNumber = Number(left.uid);
+    const rightNumber = Number(right.uid);
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+      return leftNumber - rightNumber;
+    }
+    return left.uid.localeCompare(right.uid);
+  };
   const takeUnique = (items) => {
     const available = (items ?? []).filter((pair) => !claimed.has(pair.uid));
     return available.length === 1 ? available[0] : void 0;
   };
+  const desiredNameCounts = /* @__PURE__ */ new Map();
+  for (const [key, spec] of desired) {
+    const nameIdentity = mirrorAbyssManagedNameIdentity(spec.comment);
+    if (nameIdentity) desiredNameCounts.set(nameIdentity, (desiredNameCounts.get(nameIdentity) ?? 0) + 1);
+  }
   for (const [key, spec] of desired) {
     const logicalKey = String(spec.logicalKey || key);
+    const nameIdentity = mirrorAbyssManagedNameIdentity(spec.comment);
     const commentIdentity = managedCommentIdentity(spec.comment);
     const exactIdentity = mirrorAbyssExactIdentity(spec.comment, spec.content);
-    let pair = takeUnique(currentByKey.get(key)) ?? takeUnique(currentByLogical.get(logicalKey)) ?? takeUnique(currentByComment.get(commentIdentity)) ?? takeUnique(currentByExact.get(exactIdentity));
+    const keyCandidates = (currentByKey.get(key) ?? []).filter((candidate) => !claimed.has(candidate.uid)).sort(stablePairOrder);
+    let pair = keyCandidates[0];
+    if (pair) {
+      for (const duplicate of keyCandidates.slice(1)) duplicateManaged.add(duplicate.uid);
+    }
+    if (nameIdentity && desiredNameCounts.get(nameIdentity) === 1) {
+      const nameCandidates = (currentByName.get(nameIdentity) ?? []).filter((candidate) => !claimed.has(candidate.uid) && !duplicateManaged.has(candidate.uid)).sort(stablePairOrder);
+      if (!pair && nameCandidates.length) pair = nameCandidates[0];
+      if (pair) {
+        for (const duplicate of nameCandidates) {
+          if (duplicate.uid !== pair.uid) duplicateManaged.add(duplicate.uid);
+        }
+      }
+    }
+    pair ??= takeUnique(currentByLogical.get(logicalKey)) ?? takeUnique(currentByComment.get(commentIdentity)) ?? takeUnique(currentByExact.get(exactIdentity));
     if (!pair && dedicatedBook) {
-      pair = takeUnique(adoptableByLogical.get(logicalKey)) ?? takeUnique(adoptableByComment.get(commentIdentity)) ?? takeUnique(adoptableByExact.get(exactIdentity));
+      pair = (nameIdentity && desiredNameCounts.get(nameIdentity) === 1 ? takeUnique(adoptableByName.get(nameIdentity)) : void 0) ?? takeUnique(adoptableByLogical.get(logicalKey)) ?? takeUnique(adoptableByComment.get(commentIdentity)) ?? takeUnique(adoptableByExact.get(exactIdentity));
       if (pair) adoptedLegacy += 1;
     }
     let entry = pair?.entry;
@@ -4538,6 +4604,7 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
         info: null,
         key,
         logicalKey,
+        nameIdentity,
         commentIdentity,
         exactIdentity,
         currentScope: true,
@@ -4554,6 +4621,12 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
   }
   for (const pair of pairs) {
     if (claimed.has(pair.uid)) continue;
+    if (duplicateManaged.has(pair.uid) && pair.currentScope) {
+      delete data.entries[pair.uid];
+      removed += 1;
+      changed = true;
+      continue;
+    }
     const ownerUnknown = pair.generated && (!pair.info?.managed || !pair.info?.chatKey);
     const oldKeyInScope = pair.currentScope && (legacyManagedKey(pair.key) || Boolean(pair.key && cleanup.legacyKeys?.has(pair.key)) || Boolean(pair.logicalKey && cleanup.logicalKeys?.has(pair.logicalKey)) || Boolean(pair.commentIdentity && cleanup.comments?.has(pair.commentIdentity)));
     if (!oldKeyInScope && !(dedicatedBook && ownerUnknown)) continue;
@@ -4679,19 +4752,22 @@ async function syncLorebook(artifact, force = false, options = {}) {
 }
 function maintenancePreviewFromData(data, name, chatKey, dedicatedBook) {
   let currentManaged = 0;
-  let legacyCandidates = 0;
-  let removable = 0;
   let protectedUnknown = 0;
   let protectedForeign = 0;
-  for (const entry of Object.values(data?.entries ?? {})) {
+  const candidateUids = /* @__PURE__ */ new Set();
+  const removableUids = /* @__PURE__ */ new Set();
+  const currentByName = /* @__PURE__ */ new Map();
+  for (const [uid, entry] of Object.entries(data?.entries ?? {})) {
     const info = managedInfo(entry);
     const generated = isMirrorAbyssGeneratedEntry(entry);
     if (info?.managed && info.chatKey === chatKey) {
       currentManaged += 1;
+      const nameIdentity = mirrorAbyssManagedNameIdentity(entry.comment);
+      if (nameIdentity) currentByName.set(nameIdentity, [...currentByName.get(nameIdentity) ?? [], uid]);
       const key = String(info.key || "");
       if (!key || legacyManagedKey(key)) {
-        legacyCandidates += 1;
-        removable += 1;
+        candidateUids.add(uid);
+        removableUids.add(uid);
       }
       continue;
     }
@@ -4700,9 +4776,16 @@ function maintenancePreviewFromData(data, name, chatKey, dedicatedBook) {
       continue;
     }
     if (generated && (!info?.managed || !info?.chatKey)) {
-      legacyCandidates += 1;
-      if (dedicatedBook) removable += 1;
+      candidateUids.add(uid);
+      if (dedicatedBook) removableUids.add(uid);
       else protectedUnknown += 1;
+    }
+  }
+  for (const uids of currentByName.values()) {
+    if (uids.length < 2) continue;
+    for (const uid of uids.slice(1)) {
+      candidateUids.add(uid);
+      removableUids.add(uid);
     }
   }
   return {
@@ -4710,8 +4793,8 @@ function maintenancePreviewFromData(data, name, chatKey, dedicatedBook) {
     name,
     dedicatedBook,
     currentManaged,
-    legacyCandidates,
-    removable,
+    legacyCandidates: candidateUids.size,
+    removable: removableUids.size,
     protectedUnknown,
     protectedForeign,
     removed: 0
@@ -5127,6 +5210,10 @@ function pendingSmallEventGroups(facts, threshold, force) {
     closed: eventClosed(allByEvent.get(eventId) ?? eventFacts),
     messages: new Set(eventFacts.flatMap((fact) => fact.sourceMessageIds)).size
   })).filter((group) => force || group.closed || group.messages >= threshold).sort((a, b) => Number(b.closed) - Number(a.closed) || b.facts.length - a.facts.length || a.eventId.localeCompare(b.eventId));
+}
+function pendingSmallSummaries(small, large) {
+  const consumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
+  return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !consumed.has(item.id));
 }
 function pendingLargeEventGroups(small, large, threshold, force) {
   const consumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
@@ -8154,8 +8241,9 @@ async function summariesHtml() {
   const info = latestSnapshotArtifact();
   const enabled = getSettings().enabled;
   const state2 = info ? await getChatState(info.artifact.chatKey) : null;
-  const small = state2?.smallSummaries ?? [];
+  const allSmall = state2?.smallSummaries ?? [];
   const large = state2?.largeSummaries ?? [];
+  const small = pendingSmallSummaries(allSmall, large);
   return `
     <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u6309 event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5927\u603B\u7ED3\u53EA\u56FA\u5316\u5C1A\u672A\u88AB\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
     <div class="ma11-summary-columns">
