@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.47";
-var PIPELINE_VERSION = "ma-pipeline-49";
+var VERSION = "1.2.0-rc.48";
+var PIPELINE_VERSION = "ma-pipeline-50";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -8018,6 +8018,12 @@ function unlockWorkspaceViewport() {
   window.visualViewport?.removeEventListener("resize", updateWorkspaceViewportHeight);
   document.documentElement.style.removeProperty("--ma11-viewport-height");
 }
+function setWorkspaceNavigation(open) {
+  const workspace = document.querySelector("#ma11-workspace");
+  if (!workspace) return;
+  workspace.classList.toggle("ma11-nav-open", open);
+  workspace.querySelector('[data-ma11-action="toggle-menu"]')?.setAttribute("aria-expanded", String(open));
+}
 function resolveWorkspaceStageCommand(action) {
   const commands = {
     "run-audit": { kind: "retry", stage: "audit" },
@@ -8100,6 +8106,7 @@ function root() {
               <div class="ma11-brand">\u955C\u6E0A</div>
               <div class="ma11-subtitle">\u957F\u671F\u53D9\u4E8B\u8BB0\u5FC6\u5DE5\u4F5C\u533A</div>
             </div>
+            <button class="ma11-mobile-nav-close" type="button" data-ma11-action="close-menu" aria-label="\u5173\u95ED\u529F\u80FD\u83DC\u5355">\xD7</button>
           </div>
           <div class="ma11-sidebar-status"><span></span>\u5F53\u524D\u804A\u5929\u72EC\u7ACB\u8FD0\u884C</div>
           <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">${workspaceNavigationHtml()}</nav>
@@ -8108,8 +8115,12 @@ function root() {
             <b>${VERSION}</b>
           </footer>
         </aside>
+        <button class="ma11-nav-scrim" type="button" data-ma11-action="close-menu" aria-label="\u5173\u95ED\u529F\u80FD\u83DC\u5355" tabindex="-1"></button>
         <section class="ma11-main">
           <header class="ma11-header">
+            <button class="ma11-icon-button ma11-menu-button" type="button" data-ma11-action="toggle-menu" aria-label="\u6253\u5F00\u529F\u80FD\u83DC\u5355" aria-expanded="false">
+              <i class="fa-solid fa-bars" aria-hidden="true"></i>
+            </button>
             <div class="ma11-page-heading">
               <div class="ma11-kicker">\u955C\u6E0A\u5DE5\u4F5C\u533A</div>
               <h1 data-ma11-current-title>\u603B\u89C8</h1>
@@ -8241,22 +8252,33 @@ function statusClass(value) {
   if (value === "running" || value === "queued") return "working";
   return "neutral";
 }
-function stageCards(artifact) {
+function workflowState(artifact) {
+  if (!artifact) return { label: "\u5C1A\u672A\u6574\u7406", detail: "\u751F\u6210\u4E00\u6761 AI \u6B63\u6587\u540E\u4F1A\u81EA\u52A8\u5F00\u59CB", tone: "neutral", completed: 0, total: 5 };
+  const stages = [artifact.stages.audit, artifact.stages.revision, artifact.stages.state, artifact.stages.summary, artifact.stages.sync];
+  const failed = stages.find((stage) => ["failed", "blocked"].includes(stage.status));
+  const running = stages.find((stage) => ["queued", "running"].includes(stage.status));
+  const completed = stages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
+  if (failed) return { label: "\u9700\u8981\u5904\u7406", detail: failed.error || "\u67D0\u4E2A\u9636\u6BB5\u672A\u5B8C\u6210", tone: "danger", completed, total: 5 };
+  if (running) return { label: "\u81EA\u52A8\u5904\u7406\u4E2D", detail: "\u6D41\u7A0B\u4F1A\u6309\u987A\u5E8F\u7EE7\u7EED", tone: "working", completed, total: 5 };
+  if (artifact.stages.state.status === "success" && ["success", "skipped"].includes(artifact.stages.summary.status) && ["success", "skipped"].includes(artifact.stages.sync.status)) {
+    return { label: "\u672C\u8F6E\u5DF2\u5B8C\u6210", detail: "\u72B6\u6001\u3001\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u5DF2\u66F4\u65B0", tone: "success", completed, total: 5 };
+  }
+  return { label: "\u7B49\u5F85\u7EE7\u7EED", detail: "\u5C06\u4ECE\u7B2C\u4E00\u4E2A\u672A\u5B8C\u6210\u9636\u6BB5\u7EE7\u7EED", tone: "neutral", completed, total: 5 };
+}
+function stageStripHtml(artifact) {
   const stages = artifact?.stages;
   const rows = [
-    ["audit", "\u89C4\u5219\u5BA1\u6838"],
-    ["revision", "\u5B9A\u5411\u4FEE\u6B63"],
-    ["state", "\u72B6\u6001\u63D0\u53D6"],
-    ["summary", "\u5206\u5C42\u603B\u7ED3"],
-    ["sync", "\u4E16\u754C\u4E66\u540C\u6B65"]
+    ["audit", "\u5BA1\u6838"],
+    ["revision", "\u4FEE\u6B63"],
+    ["state", "\u8868\u683C"],
+    ["summary", "\u603B\u7ED3"],
+    ["sync", "\u4E16\u754C\u4E66"]
   ];
-  return `<div class="ma11-stage-grid">${rows.map(([key, label]) => {
+  return `<div class="ma11-stage-strip">${rows.map(([key, label]) => {
     const stage = stages?.[key] ?? { status: "idle", attempts: 0 };
-    return `<article class="ma11-stage-card ${statusClass(stage.status)}">
-      <div><b>${label}</b><span>${statusText(stage.status)}</span></div>
-      <small>\u5C1D\u8BD5 ${stage.attempts || 0} \u6B21</small>
-      ${stage.error ? `<p>${escapeHtml(stage.error)}</p>` : ""}
-    </article>`;
+    return `<div class="ma11-stage-step ${statusClass(stage.status)}" title="${stage.error ? escapeHtml(stage.error) : `${label}\uFF1A${statusText(stage.status)}`}">
+        <span aria-hidden="true"></span><b>${label}</b><small>${statusText(stage.status)}</small>
+      </div>`;
   }).join("")}</div>`;
 }
 function stageActionButtonsHtml(artifactInfo) {
@@ -8337,34 +8359,32 @@ async function overviewHtml(artifactInfo) {
   const rows = snapshotRowCount(artifact?.snapshot, getSettings().tableRegistry, true);
   const tasks = recentTasksHtml();
   const busy = workspacePipelineBusy(artifactInfo);
+  const flow = workflowState(artifact);
+  const syncText = chatState.lastSyncAt ? `\u4E16\u754C\u4E66 ${new Date(chatState.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "\u4E16\u754C\u4E66\u672A\u540C\u6B65";
   return `
-    ${historyRecoveryHtml(chatState, busy) || (chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u624B\u52A8\u5386\u53F2\u91CD\u5EFA\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002\u73B0\u6709\u6D3E\u751F\u8BB0\u5FC6\u5C1A\u672A\u6E05\u9664\uFF0C\u8BF7\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002\u53EA\u4F1A\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u91CD\u5EFA\uFF0C\u4E0D\u4F1A\u91CD\u8DD1\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u6309\u4F9D\u8D56\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : "")}
-    <section class="ma11-hero">
-      <div>
-        <h2>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929\u5C1A\u65E0\u955C\u6E0A\u8BB0\u5F55"}</h2>
-        <p>${artifact ? `\u5BF9\u8C61\u89C6\u56FE ${rows} \u6761 \xB7 \u66F4\u65B0\u65F6\u95F4 ${escapeHtml(new Date(artifact.updatedAt).toLocaleString())}` : "\u751F\u6210\u4E00\u6761AI\u6B63\u6587\uFF0C\u6216\u624B\u52A8\u6574\u7406\u6700\u65B0\u6B63\u6587\u3002"}</p>
+    ${historyRecoveryHtml(chatState, busy) || (chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : "")}
+    <section class="ma11-dashboard-status ${flow.tone}">
+      <div class="ma11-dashboard-status-icon" aria-hidden="true"><i class="fa-solid ${flow.tone === "success" ? "fa-check" : flow.tone === "danger" ? "fa-triangle-exclamation" : flow.tone === "working" ? "fa-spinner" : "fa-circle"}"></i></div>
+      <div class="ma11-dashboard-status-copy">
+        <small>\u5F53\u524D\u6D41\u7A0B</small>
+        <h2>${escapeHtml(flow.label)}</h2>
+        <p>${escapeHtml(flow.detail)}</p>
+        <div class="ma11-dashboard-meta"><span>${artifact ? `\u7B2C ${artifact.messageIndex + 1} \u6761\u6B63\u6587` : "\u5F53\u524D\u804A\u5929"}</span><span>${rows} \u4E2A\u5BF9\u8C61</span><span>${escapeHtml(syncText)}</span></div>
       </div>
-      <div class="ma11-actions">
-        <button data-ma11-action="process-latest" ${enabled && latestAssistantIndex() >= 0 && !busy ? "" : "disabled"}>\u6574\u7406\u6700\u65B0\u6B63\u6587</button>
-        <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u89C6\u56FE</button>
-        <button data-ma11-action="open-graph" ${artifact?.snapshot ? "" : "disabled"}>\u5BF9\u8C61\u56FE\u8C31</button>
-      </div>
+      <button data-ma11-action="process-latest" ${enabled && latestAssistantIndex() >= 0 && !busy ? "" : "disabled"}>${artifact ? "\u91CD\u65B0\u6574\u7406" : "\u6574\u7406\u6700\u65B0\u6B63\u6587"}</button>
     </section>
-    ${stageCards(artifact)}
-    <details class="ma11-card ma11-debug-tools">
-      <summary><b>\u5355\u6B65\u6392\u9519\u5DE5\u5177</b><span>\u6B63\u5E38\u6E38\u73A9\u65E0\u9700\u5C55\u5F00</span></summary>
-      <p class="ma11-help">\u4EC5\u5728\u5355\u4E00\u9636\u6BB5\u5931\u8D25\u6216\u8BCA\u65AD\u65F6\u4F7F\u7528\uFF1B\u9ED8\u8BA4\u81EA\u52A8\u6D41\u7A0B\u4F1A\u4ECE\u6709\u6548\u68C0\u67E5\u70B9\u7EE7\u7EED\u3002</p>
-      ${stageActionButtonsHtml(artifactInfo)}
-    </details>
-    <section class="ma11-card">
-      <header><b>\u4EFB\u52A1\u961F\u5217</b><span data-ma11-task-count>${tasks.count ? `${tasks.count} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2"}</span></header>
-      <div class="ma11-task-list" data-ma11-task-list>
-        ${tasks.html}
-      </div>
+    <section class="ma11-card ma11-progress-card">
+      <header><b>\u5904\u7406\u8FDB\u5EA6</b><span>${flow.completed}/${flow.total}</span></header>
+      ${stageStripHtml(artifact)}
     </section>
-    <section class="ma11-card ma11-note">
-      <b>\u672C\u7248\u67B6\u6784\u539F\u5219</b>
-      <p>\u6B63\u5E38\u60C5\u51B5\u4E0B\uFF0C\u6B63\u6587\u4F1A\u81EA\u52A8\u4F9D\u6B21\u5B8C\u6210\u5BA1\u6838\u3001\u5FC5\u8981\u4FEE\u6B63\u3001\u8868\u683C\u3001\u603B\u7ED3\u4E0E\u4E16\u754C\u4E66\u3002\u53EA\u6709\u8F83\u65E9\u5386\u53F2\u53D8\u5316\u6216\u5355\u9636\u6BB5\u5931\u8D25\u65F6\u624D\u9700\u8981\u4F7F\u7528\u624B\u52A8\u5DE5\u5177\uFF1B\u91CD\u5EFA\u4F1A\u5148\u590D\u7528\u4ECD\u6709\u6548\u7684\u68C0\u67E5\u70B9\u3002</p>
+    <nav class="ma11-dashboard-links" aria-label="\u5E38\u7528\u529F\u80FD">
+      <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}><i class="fa-solid fa-table-cells-large" aria-hidden="true"></i><span><b>\u5BF9\u8C61</b><small>\u67E5\u770B\u72B6\u6001\u8868</small></span></button>
+      <button data-ma11-tab="summaries" ${artifact?.snapshot ? "" : "disabled"}><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span><b>\u603B\u7ED3</b><small>\u8FD1\u671F\u4E0E\u957F\u671F</small></span></button>
+      <button data-ma11-tab="sync" ${artifact?.snapshot ? "" : "disabled"}><i class="fa-solid fa-book-atlas" aria-hidden="true"></i><span><b>\u4E16\u754C\u4E66</b><small>\u53D1\u5E03\u4E0E\u53EC\u56DE</small></span></button>
+    </nav>
+    <section class="ma11-card ma11-task-card">
+      <header><b>\u4EFB\u52A1</b><span data-ma11-task-count>${tasks.count ? `${tasks.count} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u5F53\u524D\u7A7A\u95F2"}</span></header>
+      <div class="ma11-task-list" data-ma11-task-list>${tasks.html}</div>
     </section>`;
 }
 function lifecycleHtml(row) {
@@ -8711,9 +8731,14 @@ function settingsHtml() {
 }
 async function diagnosticsHtml() {
   const checks = await runDiagnostics();
+  const info = currentArtifact();
   return `
     <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
-    <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>`;
+    <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
+    <details class="ma11-card ma11-debug-tools">
+      <summary><b>\u9AD8\u7EA7\u6392\u9519\u5DE5\u5177</b><span>\u4EC5\u5728\u5355\u9636\u6BB5\u5931\u8D25\u65F6\u4F7F\u7528</span></summary>
+      ${stageActionButtonsHtml(info)}
+    </details>`;
 }
 async function renderWorkspace() {
   const workspace = document.querySelector("#ma11-workspace");
@@ -9004,7 +9029,10 @@ function bindWorkspace(workspace) {
   workspace.addEventListener("click", async (event) => {
     const target = event.target;
     const tab = target.closest("[data-ma11-tab]")?.dataset.ma11Tab;
-    if (tab) return setTab(tab);
+    if (tab) {
+      setWorkspaceNavigation(false);
+      return setTab(tab);
+    }
     const action = target.closest("[data-ma11-action]")?.dataset.ma11Action;
     const actionButton = action ? target.closest("[data-ma11-action]") : null;
     const testButton = target.closest("[data-ma11-test]");
@@ -9028,10 +9056,18 @@ function bindWorkspace(workspace) {
       scheduleWorkspaceRender();
     }
     try {
-      if (busyButton && !["close", "open-tables", "open-graph", "close-editor"].includes(action || "")) {
+      if (busyButton && !["close", "close-menu", "toggle-menu", "open-tables", "open-graph", "close-editor"].includes(action || "")) {
         busyButton.disabled = true;
         busyButton.setAttribute("aria-busy", "true");
         busyButton.textContent = "\u5904\u7406\u4E2D\u2026";
+      }
+      if (action === "toggle-menu") {
+        setWorkspaceNavigation(!workspace.classList.contains("ma11-nav-open"));
+        return;
+      }
+      if (action === "close-menu") {
+        setWorkspaceNavigation(false);
+        return;
       }
       if (action === "close") {
         closeWorkspace();
@@ -9312,13 +9348,17 @@ function openWorkspace(tab, messageIndex) {
   selectedMessageIndex = resolveWorkspaceMessageSelection(messageIndex);
   if (tab) getSettings().ui.activeTab = tab;
   workspace.hidden = false;
+  setWorkspaceNavigation(false);
   lockWorkspaceViewport();
   void renderWorkspace();
 }
 function closeWorkspace() {
   closeEditor();
   const workspace = document.querySelector("#ma11-workspace");
-  if (workspace) workspace.hidden = true;
+  if (workspace) {
+    setWorkspaceNavigation(false);
+    workspace.hidden = true;
+  }
   unlockWorkspaceViewport();
 }
 function resetWorkspaceContext() {
@@ -9382,6 +9422,8 @@ function messageStageAvailability(index, artifact) {
   };
 }
 var pendingRetryIndexes = /* @__PURE__ */ new Set();
+var expandedPanelIndexes = /* @__PURE__ */ new Set();
+var collapsedPanelIndexes = /* @__PURE__ */ new Set();
 function flowStageHtml(order, label, stage) {
   const status = stageLabel(stage);
   const symbol = stage?.status === "success" || stage?.status === "skipped" ? "\u2713" : stage?.status === "failed" || stage?.status === "blocked" ? "!" : stage?.status === "running" || stage?.status === "queued" ? "\u2026" : String(order);
@@ -9395,50 +9437,58 @@ function panelHtml(index, artifact) {
   const latestSnapshot = index === latestSnapshotArtifact()?.index;
   const available = messageStageAvailability(index, artifact);
   const enabled = (action) => !retrying && available[action] ? "" : "disabled";
-  const chainBusy = Object.values(artifact.stages).some((stage) => ["queued", "running"].includes(stage.status));
-  const chainFailed = Object.values(artifact.stages).some((stage) => ["failed", "blocked"].includes(stage.status));
+  const stages = [artifact.stages.audit, artifact.stages.revision, artifact.stages.state, artifact.stages.summary, artifact.stages.sync];
+  const chainBusy = stages.some((stage) => ["queued", "running"].includes(stage.status));
+  const chainFailed = stages.some((stage) => ["failed", "blocked"].includes(stage.status));
+  const completedStages = stages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
   const chainComplete = artifact.stages.state.status === "success" && ["success", "skipped"].includes(artifact.stages.summary.status) && ["success", "skipped"].includes(artifact.stages.sync.status);
-  const chainState = chainBusy ? "\u81EA\u52A8\u5904\u7406\u4E2D" : chainFailed ? "\u9700\u8981\u5904\u7406" : chainComplete ? "\u672C\u8F6E\u5DF2\u5B8C\u6210" : "\u7B49\u5F85\u81EA\u52A8\u7EE7\u7EED";
-  const chainHint = chainBusy ? "\u955C\u6E0A\u4F1A\u6309\u987A\u5E8F\u81EA\u52A8\u7EE7\u7EED\uFF0C\u4E0D\u9700\u8981\u9010\u4E2A\u70B9\u51FB\u3002" : chainComplete ? "\u5BA1\u6838\u3001\u8868\u683C\u4E0E\u6D3E\u751F\u53D1\u5E03\u5DF2\u5B8C\u6210\u3002" : "\u6309\u94AE\u53EA\u7528\u4E8E\u6062\u590D\u4E2D\u65AD\u94FE\uFF1B\u4E0B\u65B9\u5355\u6B65\u5DE5\u5177\u7528\u4E8E\u6392\u9519\u3002";
+  const chainState = chainBusy ? "\u5904\u7406\u4E2D" : chainFailed ? "\u9700\u5904\u7406" : chainComplete ? "\u5DF2\u5B8C\u6210" : "\u5F85\u7EE7\u7EED";
+  const expanded = expandedPanelIndexes.has(index) || chainFailed && !collapsedPanelIndexes.has(index);
   return `
-    <div class="ma11-message-panel" data-ma-index="${index}">
-      <button class="ma11-message-summary" type="button" data-ma-action="open">
-        <span class="ma11-message-title">\u955C\u6E0A\u81EA\u52A8\u5904\u7406</span>
-        <span class="ma11-message-count">${rows} \u6761\u72B6\u6001</span>
-      </button>
-      <div class="ma11-chain-state ${chainFailed ? "danger" : chainBusy ? "working" : chainComplete ? "success" : "neutral"}">
-        <b>${chainState}</b><span>${chainHint}</span>
+    <div class="ma11-message-panel ${expanded ? "is-open" : ""}" data-ma-index="${index}">
+      <div class="ma11-message-bar ${chainFailed ? "danger" : chainBusy ? "working" : chainComplete ? "success" : "neutral"}">
+        <span class="ma11-message-state-dot" aria-hidden="true"></span>
+        <button class="ma11-message-open" type="button" data-ma-action="open">
+          <b>\u955C\u6E0A</b><span>${chainState}</span>
+        </button>
+        <span class="ma11-message-count">${rows} \u5BF9\u8C61</span>
+        <button class="ma11-message-expand" type="button" data-ma-action="toggle-details" aria-expanded="${expanded}" aria-label="${expanded ? "\u6536\u8D77\u955C\u6E0A\u8BE6\u60C5" : "\u5C55\u5F00\u955C\u6E0A\u8BE6\u60C5"}">
+          <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+        </button>
       </div>
-      <div class="ma11-flow" aria-label="\u5BA1\u6838\u5230\u4E16\u754C\u4E66\u7684\u5904\u7406\u8FDB\u5EA6">
-        ${flowStageHtml(1, "\u5BA1\u6838", artifact.stages.audit)}<i>\u203A</i>
-        ${flowStageHtml(2, "\u4FEE\u6B63", artifact.stages.revision)}<i>\u203A</i>
-        ${flowStageHtml(3, "\u8868\u683C", artifact.stages.state)}<i>\u203A</i>
-        ${flowStageHtml(4, "\u603B\u7ED3", artifact.stages.summary)}<i>\u203A</i>
-        ${flowStageHtml(5, "\u4E16\u754C\u4E66", artifact.stages.sync)}
-      </div>
-      ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
-      ${latestText ? `<div class="ma11-message-primary-actions">
-        <button class="ma11-primary-action" data-ma-auto-continue ${retrying || chainBusy || chainComplete ? "disabled" : ""}>${chainBusy ? "\u81EA\u52A8\u5904\u7406\u4E2D\uFF0C\u8BF7\u7A0D\u5019" : chainComplete ? "\u81EA\u52A8\u6D41\u7A0B\u5DF2\u5B8C\u6210" : "\u7EE7\u7EED\u81EA\u52A8\u6D41\u7A0B"}</button>
-        <small>\u4F1A\u68C0\u67E5\u5DF2\u6709\u6210\u529F\u72B6\u6001\uFF0C\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\uFF0C\u4E0D\u91CD\u590D\u8C03\u7528\u5DF2\u901A\u8FC7\u7684\u5BA1\u6838\u3002</small>
-      </div>
-      <details class="ma11-message-tools">
-        <summary>\u5355\u6B65\u6392\u9519\u5DE5\u5177\uFF08\u6B63\u5E38\u6E38\u73A9\u65E0\u9700\u4F7F\u7528\uFF09</summary>
-        <div class="ma11-message-actions ma11-message-stage-actions" aria-label="\u955C\u6E0A\u5206\u9636\u6BB5\u64CD\u4F5C">
-          <button data-ma-stage-action="audit" ${enabled("audit")}>\u4EC5\u5BA1\u6838</button>
-          <button data-ma-stage-action="revision" ${enabled("revision")}>\u4EC5\u4FEE\u6B63</button>
-          <button data-ma-stage-action="state" ${enabled("state")}>\u4EC5\u751F\u6210\u8868\u683C</button>
-          <button data-ma-stage-action="small" ${enabled("small")}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button>
-          <button data-ma-stage-action="large" ${enabled("large")}>\u7ACB\u5373\u5927\u603B\u7ED3</button>
-          <button data-ma-stage-action="sync" ${enabled("sync")}>\u7ACB\u5373\u540C\u6B65</button>
+      <div class="ma11-message-detail" ${expanded ? "" : "hidden"}>
+        <div class="ma11-message-progress-head"><span>\u5904\u7406\u8FDB\u5EA6</span><b>${completedStages}/5</b></div>
+        <div class="ma11-flow" aria-label="\u5BA1\u6838\u5230\u4E16\u754C\u4E66\u7684\u5904\u7406\u8FDB\u5EA6">
+          ${flowStageHtml(1, "\u5BA1\u6838", artifact.stages.audit)}
+          ${flowStageHtml(2, "\u4FEE\u6B63", artifact.stages.revision)}
+          ${flowStageHtml(3, "\u8868\u683C", artifact.stages.state)}
+          ${flowStageHtml(4, "\u603B\u7ED3", artifact.stages.summary)}
+          ${flowStageHtml(5, "\u4E16\u754C\u4E66", artifact.stages.sync)}
         </div>
-      </details>` : ""}
-      <div class="ma11-message-actions">
-        ${retrying ? "<button disabled>\u5904\u7406\u4E2D\u2026</button>" : ""}
-        ${!retrying && latestText && artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
-        ${!retrying && latestText && ["failed", "blocked"].includes(artifact.stages.revision?.status ?? "idle") ? '<button data-ma-retry="revision">\u91CD\u8BD5\u5B9A\u5411\u4FEE\u6B63</button>' : ""}
-        ${!retrying && latestText && artifact.stages.state.status === "failed" ? '<button data-ma-retry="state">\u91CD\u8BD5\u8868\u683C</button>' : ""}
-        ${!retrying && latestSnapshot && artifact.stages.summary.status === "failed" ? '<button data-ma-retry="summary">\u91CD\u8BD5\u603B\u7ED3</button>' : ""}
-        ${!retrying && latestSnapshot && artifact.stages.sync.status === "failed" ? '<button data-ma-retry="sync">\u91CD\u8BD5\u540C\u6B65</button>' : ""}
+        ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
+        ${latestText ? `<div class="ma11-message-primary-actions">
+          <button class="ma11-primary-action" data-ma-auto-continue ${retrying || chainBusy || chainComplete ? "disabled" : ""}>${chainBusy ? "\u5904\u7406\u4E2D" : chainComplete ? "\u6D41\u7A0B\u5DF2\u5B8C\u6210" : "\u7EE7\u7EED\u81EA\u52A8\u6D41\u7A0B"}</button>
+          <button data-ma-action="open">\u6253\u5F00\u5DE5\u4F5C\u533A</button>
+        </div>
+        <details class="ma11-message-tools">
+          <summary>\u9AD8\u7EA7\u6392\u9519</summary>
+          <div class="ma11-message-actions ma11-message-stage-actions" aria-label="\u955C\u6E0A\u5206\u9636\u6BB5\u64CD\u4F5C">
+            <button data-ma-stage-action="audit" ${enabled("audit")}>\u4EC5\u5BA1\u6838</button>
+            <button data-ma-stage-action="revision" ${enabled("revision")}>\u4EC5\u4FEE\u6B63</button>
+            <button data-ma-stage-action="state" ${enabled("state")}>\u4EC5\u751F\u6210\u8868\u683C</button>
+            <button data-ma-stage-action="small" ${enabled("small")}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button>
+            <button data-ma-stage-action="large" ${enabled("large")}>\u7ACB\u5373\u5927\u603B\u7ED3</button>
+            <button data-ma-stage-action="sync" ${enabled("sync")}>\u7ACB\u5373\u540C\u6B65</button>
+          </div>
+        </details>` : '<div class="ma11-message-actions"><button data-ma-action="open">\u6253\u5F00\u5DE5\u4F5C\u533A</button></div>'}
+        <div class="ma11-message-actions ma11-message-retries">
+          ${retrying ? "<button disabled>\u5904\u7406\u4E2D\u2026</button>" : ""}
+          ${!retrying && latestText && artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
+          ${!retrying && latestText && ["failed", "blocked"].includes(artifact.stages.revision?.status ?? "idle") ? '<button data-ma-retry="revision">\u91CD\u8BD5\u5B9A\u5411\u4FEE\u6B63</button>' : ""}
+          ${!retrying && latestText && artifact.stages.state.status === "failed" ? '<button data-ma-retry="state">\u91CD\u8BD5\u8868\u683C</button>' : ""}
+          ${!retrying && latestSnapshot && artifact.stages.summary.status === "failed" ? '<button data-ma-retry="summary">\u91CD\u8BD5\u603B\u7ED3</button>' : ""}
+          ${!retrying && latestSnapshot && artifact.stages.sync.status === "failed" ? '<button data-ma-retry="sync">\u91CD\u8BD5\u540C\u6B65</button>' : ""}
+        </div>
       </div>
     </div>`;
 }
@@ -9471,6 +9521,17 @@ function installMessagePanelHandlers() {
     const panel = target.closest(".ma11-message-panel");
     if (!panel) return;
     const index = Number(panel.dataset.maIndex);
+    if (target.closest('[data-ma-action="toggle-details"]')) {
+      if (panel.classList.contains("is-open")) {
+        expandedPanelIndexes.delete(index);
+        collapsedPanelIndexes.add(index);
+      } else {
+        collapsedPanelIndexes.delete(index);
+        expandedPanelIndexes.add(index);
+      }
+      renderMessagePanel(index);
+      return;
+    }
     if (target.closest('[data-ma-action="open"]')) openWorkspace("overview", index);
     if (target.closest("[data-ma-auto-continue]")) {
       if (pendingRetryIndexes.has(index)) return;
