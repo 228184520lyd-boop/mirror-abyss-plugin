@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`1.2.0-rc.36`　流水线：`ma-pipeline-38`
+版本：`1.2.0-rc.37`　流水线：`ma-pipeline-39`
 
 镜渊是 SillyTavern 前端扩展。它在角色正文生成完成后执行规则审核、必要的定向修正、内部事实提取、对象化状态视图、按事件线的小总结、增量大总结和当前聊天世界书发布。插件不生成主叙事正文，不保存供应商密钥，也不替代 SillyTavern 的连接系统。
 
@@ -19,9 +19,24 @@
 事实与状态先提交；总结或世界书失败不会回滚核心结果。自动流程为主，单步操作默认收在排错工具中。
 
 
+## rc.37 严格扁平状态 Schema
+
+rc.36 实机再次证明：仅把状态 Schema 从约 10 KB 缩到约 2.6 KB 仍会在约 2 秒内返回 400；同连接的审核 Schema 持续成功。因而“单纯过大、过深”不是完整根因。最显著的剩余差异是：审核使用 `strict: true` 且所有对象属性全部列入 `required`，rc.36 状态 Schema 使用 `strict: false` 并依赖大量可选动态属性。
+
+- 状态供应商 Schema 改为 `MirrorAbyssStateOperationsV37`，使用 `strict: true`；
+- Schema 中每一级 object 的全部 properties 均进入 required，并设置 `additionalProperties: false`；
+- facts 的时间范围改为扁平 `time_start / time_end / time_label`，入库前本地恢复为原 `time_range`；
+- 动态表格字段改为 `fields: [{ key, values }]`，字段是否存在、类型是否正确、能否用于目标表，全部由镜渊按当前注册表本地验证；
+- lifecycle 使用固定完整对象；无变化时输出空值，插件不会用空生命周期覆盖旧值；
+- 保留 rc.36 直接字段输出和旧 snapshot 输出的兼容读取；
+- 诊断导出现在保留 `jsonSchemaName / jsonSchemaBytes`，便于下一轮实机精确确认实际发送版本；
+- 完整八表 Schema、对象定义保护、总结字段禁写和世界书事务边界均未改变。
+
+默认状态传输 Schema 约 2,304 字节、35 个属性。详细证据见 `RC37_STRICT_SCHEMA_REPORT.md`。
+
 ## rc.36 状态 Schema 传输层瘦身
 
-rc.35 实机证明：同一连接的审核 Schema 成功，而完整状态 Schema 在约 2 秒内返回 400，普通 JSON 回退随后成功。根因收敛为状态 Schema 本身过大、过深，而不是当前连接整体不支持 Schema。
+rc.35 实机证明：同一连接的审核 Schema 成功，而完整状态 Schema 在约 2 秒内返回 400，普通 JSON 回退随后成功。rc.36 据此先验证“复杂度过高”假设并缩减传输 Schema；后续 rc.36 实机显示缩减后仍返回 400，因此该假设只解释了风险，不足以单独解释当前接口拒绝。
 
 - 供应商侧状态输出改为单一 `operations` 列表，当前只允许显式 `upsert`；
 - 无变化对象不输出 operation，未返回行保留，不提供隐式清表或模型侧删除；

@@ -1,23 +1,26 @@
-# Mirror Abyss 1.2.0-rc.36 验收记录
+# Mirror Abyss 1.2.0-rc.37 验收记录
 
-流水线：`ma-pipeline-38`
+流水线：`ma-pipeline-39`
 
-## rc.36 状态 Schema 实机复验
+## rc.37 严格扁平状态 Schema 实机复验
 
-已通过本地回归：
+本地回归已通过：
 
-- 状态供应商传输 Schema 使用 `MirrorAbyssStateOperationsV36`；
-- 完整八表约束仍在本地执行，不合法的表格专属字段不能入库；
-- operations 只允许 `upsert`，空输出不会清表；
-- 请求诊断记录 `jsonSchemaName / jsonSchemaBytes`；
-- 历史恢复期间的普通手动正文处理直接 blocked，不进入待恢复后执行的队列。
+- 状态 Schema 使用 `MirrorAbyssStateOperationsV37` 与 `strict: true`；
+- Schema 内每个 object 的全部 properties 都在 required 中；
+- 动态字段通过 `fields[{key, values}]` 传输，按当前表格注册表本地还原和验证；
+- lifecycle 无变化时不会覆盖旧值；
+- rc.36 直接字段格式和旧 snapshot 格式继续兼容；
+- 诊断导出包含 `jsonSchemaName / jsonSchemaBytes`；
+- 完整八表、事实、对象定义保护和总结字段权限仍由本地完整 Schema 检查。
 
 实机重点：
 
-1. 生成一条简单角色正文，状态请求应直接以 Schema 成功，不再出现 state fallback；
-2. 诊断应显示 `jsonSchemaName: MirrorAbyssStateOperationsV36`，`jsonSchemaBytes` 约 2,640；
-3. 表格和世界书正常完成，未变化表不被清空；
-4. 历史恢复运行时点击继续/手动整理，应直接显示 blocked，不能新建普通 state 请求。
+1. 清除旧页面或安装 rc.37 后刷新，生成一条简单角色正文；
+2. 首个 state 请求应显示 `requestPurpose: schema`、`hasJsonSchema: true`、`jsonSchemaName: MirrorAbyssStateOperationsV37`；
+3. 若成功，后面不应出现 state fallback；若仍 400，诊断中的 `jsonSchemaBytes` 可证明实际发送的是新 Schema；
+4. 表格与世界书应正常完成，未返回对象不能消失；
+5. 再生成一条正文，确认不会因旧 rc.36 Schema 缓存直接绕过 V37。
 
 ## rc.34 多事件线记忆漏斗
 

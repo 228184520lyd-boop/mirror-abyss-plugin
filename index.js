@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.36";
-var PIPELINE_VERSION = "ma-pipeline-38";
+var VERSION = "1.2.0-rc.37";
+var PIPELINE_VERSION = "ma-pipeline-39";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -5295,17 +5295,17 @@ function stateSystemPrompt(registry2) {
 4. \u5C3D\u91CF\u5728\u4E00\u6B21\u8FD4\u56DE\u4E2D\u5B8C\u6210\u672C\u8F6E\u5168\u90E8\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u548C\u5168\u90E8\u53D7\u5F71\u54CD\u6761\u76EE\u7684\u8865\u4E01\u3002
 
 \u3010\u6700\u5C0F operations \u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3011
-1. operations \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u5BF9\u8C61\u884C\uFF1B\u6BCF\u9879\u56FA\u5B9A\u5305\u542B op\u3001table \u4E0E\u8BE5\u884C\u5B57\u6BB5\uFF0Cop \u5F53\u524D\u53EA\u80FD\u662F upsert\u3002
+1. operations \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u5BF9\u8C61\u884C\uFF1B\u6BCF\u9879\u56FA\u5B9A\u5305\u542B op\u3001table\u3001id\u3001title\u3001content\u3001keywords\u3001status\u3001fields\u3001lifecycle\uFF0Cop \u5F53\u524D\u53EA\u80FD\u662F upsert\u3002
 2. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id\u3002\u65E0\u53D8\u5316\u5BF9\u8C61\u4E0D\u8F93\u51FA operation\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\uFF1B\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\uFF0C\u4E5F\u4E0D\u5F97\u8F93\u51FA\u9690\u5F0F\u6E05\u8868\u64CD\u4F5C\u3002
-3. \u8FD4\u56DE\u884C\u53EA\u9700\u5305\u542B\u8868\u683C\u5B9A\u4E49\u4E2D\u7684\u5185\u5BB9\u5B57\u6BB5\uFF1BfactIds\u3001eventId\u3001eventIds \u4E0E recall \u7531\u63D2\u4EF6\u6839\u636E facts \u672C\u5730\u751F\u6210\uFF0C\u4E0D\u8981\u91CD\u590D\u8F93\u51FA\u3002
-4. \u65B0\u5BF9\u8C61\u5FC5\u987B\u7ED9\u51FA id\u3001title\u3001content\u3001keywords\u3001status\uFF1B\u65E7\u5BF9\u8C61\u4ECD\u5EFA\u8BAE\u8FD4\u56DE\u8FD9\u4E94\u9879\u4EE5\u907F\u514D\u6B67\u4E49\u3002
-5. baseContent \u662F\u5BF9\u8C61\u5B9A\u4E49\uFF0C\u5DF2\u6709\u975E\u7A7A\u503C\u4E0D\u5F97\u7531\u666E\u901A\u72B6\u6001\u63D0\u53D6\u6539\u5199\u3002
-6. currentFacts \u5199\u5F53\u524D\u5BA2\u89C2\u6210\u7ACB\u3001\u6301\u7EED\u8F83\u4E45\u4F46\u672A\u6765\u4ECD\u53EF\u80FD\u88AB\u66FF\u6362\u7684\u4E8B\u5B9E\u3002
-7. currentStates \u5199\u6B63\u5728\u53D1\u751F\u3001\u77ED\u671F\u6216\u9636\u6BB5\u6027\u7684\u72B6\u6001\uFF0C\u4FDD\u7559\u672C\u8F6E\u6700\u6709\u7528\u7EC6\u8282\u3002
-8. recentHistory \u4E0E solidifiedHistory \u53EA\u7531\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u7EF4\u62A4\uFF0C\u72B6\u6001\u63D0\u53D6\u4E0D\u5F97\u5199\u5165\u6216\u6539\u5199\u3002
+3. fields \u662F\u52A8\u6001\u5B57\u6BB5\u8865\u4E01\u6570\u7EC4\uFF0C\u6BCF\u9879\u56FA\u5B9A\u4E3A {"key":"\u5B57\u6BB5\u540D","values":["\u503C"]}\u3002string \u5B57\u6BB5 values \u53EA\u653E\u4E00\u4E2A\u5B57\u7B26\u4E32\uFF1Bstring[] \u5B57\u6BB5\u6309\u6570\u7EC4\u9010\u9879\u586B\u5199\uFF1B\u65E0\u989D\u5916\u5B57\u6BB5\u65F6\u8F93\u51FA\u7A7A\u6570\u7EC4\u3002
+4. lifecycle \u59CB\u7EC8\u8F93\u51FA\u5B8C\u6574\u5BF9\u8C61\u3002\u8BE5\u884C\u6CA1\u6709\u751F\u547D\u5468\u671F\u53D8\u5316\u65F6\uFF0C\u4E94\u4E2A\u5B57\u7B26\u4E32\u8F93\u51FA\u7A7A\u5B57\u7B26\u4E32\uFF0C\u4E24\u4E2A\u6570\u7EC4\u8F93\u51FA\u7A7A\u6570\u7EC4\uFF1B\u53EA\u6709\u76EE\u6807\u8868\u6CE8\u518C\u4E86 lifecycle \u4E14\u786E\u6709\u53D8\u5316\u65F6\u624D\u586B\u5199\u3002
+5. factIds\u3001eventId\u3001eventIds \u4E0E recall \u7531\u63D2\u4EF6\u6839\u636E facts \u672C\u5730\u751F\u6210\uFF0C\u4E0D\u8981\u91CD\u590D\u8F93\u51FA\u3002
+6. baseContent \u662F\u5BF9\u8C61\u5B9A\u4E49\uFF0C\u5DF2\u6709\u975E\u7A7A\u503C\u4E0D\u5F97\u7531\u666E\u901A\u72B6\u6001\u63D0\u53D6\u6539\u5199\u3002
+7. currentFacts \u5199\u5F53\u524D\u5BA2\u89C2\u6210\u7ACB\u3001\u6301\u7EED\u8F83\u4E45\u4F46\u672A\u6765\u4ECD\u53EF\u80FD\u88AB\u66FF\u6362\u7684\u4E8B\u5B9E\uFF1BcurrentStates \u5199\u6B63\u5728\u53D1\u751F\u3001\u77ED\u671F\u6216\u9636\u6BB5\u6027\u7684\u72B6\u6001\u3002
+8. recentHistory \u4E0E solidifiedHistory \u53EA\u7531\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u7EF4\u62A4\uFF0C\u72B6\u6001\u63D0\u53D6\u4E0D\u5F97\u5199\u5165 fields\u3002
 
 \u3010\u5185\u90E8\u4E8B\u5B9E facts\u3011
-\u6BCF\u6761\u5305\u542B fact_id\u3001event_id\u3001type\u3001title\u3001occurred\u3001unresolved\u3001status\u3001time_range\u3001related_entities\u3001keywords\u3001operation\u3001confidence\u3002
+\u6BCF\u6761\u56FA\u5B9A\u5305\u542B fact_id\u3001event_id\u3001type\u3001title\u3001occurred\u3001unresolved\u3001status\u3001time_start\u3001time_end\u3001time_label\u3001related_entities\u3001keywords\u3001operation\u3001confidence\u3002
 \u540C\u4E00\u4E8B\u5B9E\u4E0E\u4E8B\u4EF6\u7EBF\u5FC5\u987B\u6CBF\u7528\u65E7 ID\uFF1B\u53EA\u8F93\u51FA\u672C\u8F6E create\u3001update\u3001append\u3001close \u6216 supersede \u53D8\u5316\u3002
 
 \u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
@@ -5324,7 +5324,7 @@ ${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8
 id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u7A33\u5B9A\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u5BF9\u8C61\u5B9A\u4E49\uFF1BcurrentFacts\uFF1A\u73B0\u884C\u4E8B\u5B9E\uFF1BcurrentStates\uFF1A\u5F53\u524D\u72B6\u6001\uFF1BrecentHistory\uFF1A\u8FD1\u671F\u7ECF\u5386\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BsolidifiedHistory\uFF1A\u5386\u53F2\u4E8B\u5B9E\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
 
 \u8F93\u51FA\u7ED3\u6784\u793A\u610F\uFF08\u7701\u7565\u65E0\u53D8\u5316\u5BF9\u8C61\uFF09\uFF1A
-{"turnSummary":"\u591A\u7EBF\u5206\u522B\u63A8\u8FDB","facts":[{"fact_id":"f1","event_id":"e1","type":"event","title":"\u4E8B\u4EF6\u4E00","occurred":["\u5DF2\u53D1\u751F\u7ED3\u679C"],"unresolved":[],"status":"resolved","time_range":{"start":"\u5F53\u524D","end":"\u5F53\u524D","label":""},"related_entities":["\u5BF9\u8C61\u7532","\u5730\u533A\u7532"],"keywords":["\u4E8B\u4EF6\u4E00"],"operation":"close","confidence":"confirmed"},{"fact_id":"f2","event_id":"e2","type":"event","title":"\u4E8B\u4EF6\u4E8C","occurred":["\u53E6\u4E00\u7ED3\u679C"],"unresolved":["\u4ECD\u5F85\u5904\u7406"],"status":"active","time_range":{"start":"\u5F53\u524D","end":"","label":""},"related_entities":["\u5BF9\u8C61\u4E59"],"keywords":["\u4E8B\u4EF6\u4E8C"],"operation":"update","confidence":"confirmed"}],"operations":[{"op":"upsert","table":"characters","id":"c1","title":"\u5BF9\u8C61\u7532","content":"\u5F53\u524D\u7ED3\u679C","keywords":["\u5BF9\u8C61\u7532"],"status":"active","currentFacts":["\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E"]}]}`;
+{"turnSummary":"\u591A\u7EBF\u5206\u522B\u63A8\u8FDB","facts":[{"fact_id":"f1","event_id":"e1","type":"event","title":"\u4E8B\u4EF6\u4E00","occurred":["\u5DF2\u53D1\u751F\u7ED3\u679C"],"unresolved":[],"status":"resolved","time_start":"\u5F53\u524D","time_end":"\u5F53\u524D","time_label":"","related_entities":["\u5BF9\u8C61\u7532","\u5730\u533A\u7532"],"keywords":["\u4E8B\u4EF6\u4E00"],"operation":"close","confidence":"confirmed"}],"operations":[{"op":"upsert","table":"characters","id":"c1","title":"\u5BF9\u8C61\u7532","content":"\u5F53\u524D\u7ED3\u679C","keywords":["\u5BF9\u8C61\u7532"],"status":"active","fields":[{"key":"currentFacts","values":["\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E"]}],"lifecycle":{"existence":"","activity":"","memory":"","evidenceLevel":"","evidence":"","returnConditions":[],"returnBlockers":[]}}]}`;
 }
 function normalizeSearchText(value) {
   return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
@@ -5507,12 +5507,9 @@ function transportFactSchema() {
       occurred: { type: "array", items: { type: "string" } },
       unresolved: { type: "array", items: { type: "string" } },
       status: { type: "string" },
-      time_range: {
-        type: "object",
-        properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } },
-        required: ["start", "end", "label"],
-        additionalProperties: false
-      },
+      time_start: { type: "string" },
+      time_end: { type: "string" },
+      time_label: { type: "string" },
       related_entities: { type: "array", items: { type: "string" } },
       keywords: { type: "array", items: { type: "string" } },
       operation: { type: "string", enum: ["create", "update", "append", "close", "supersede"] },
@@ -5526,7 +5523,9 @@ function transportFactSchema() {
       "occurred",
       "unresolved",
       "status",
-      "time_range",
+      "time_start",
+      "time_end",
+      "time_label",
       "related_entities",
       "keywords",
       "operation",
@@ -5535,32 +5534,57 @@ function transportFactSchema() {
     additionalProperties: false
   };
 }
-function transportOperationSchema(active) {
-  const fields = /* @__PURE__ */ new Map();
-  for (const table of active) {
-    for (const field of table.fields) {
-      if (field.key === "recentHistory" || field.key === "solidifiedHistory") continue;
-      if (!fields.has(field.key)) fields.set(field.key, field);
-    }
-  }
-  const properties = {
-    op: { type: "string", enum: ["upsert"] },
-    table: { type: "string", enum: active.map((table) => table.key) }
-  };
-  for (const [key, field] of fields) properties[key] = scalarSchema(field, active.find((table) => table.fields.some((item) => item.key === key)) ?? active[0]);
+function transportFieldPatchSchema() {
   return {
     type: "object",
-    properties,
-    required: ["op", "table", "id", "title", "content", "keywords", "status"],
+    properties: {
+      key: { type: "string" },
+      values: { type: "array", items: { type: "string" } }
+    },
+    required: ["key", "values"],
+    additionalProperties: false
+  };
+}
+function transportLifecycleSchema() {
+  return {
+    type: "object",
+    properties: {
+      existence: { type: "string" },
+      activity: { type: "string" },
+      memory: { type: "string" },
+      evidenceLevel: { type: "string" },
+      evidence: { type: "string" },
+      returnConditions: { type: "array", items: { type: "string" } },
+      returnBlockers: { type: "array", items: { type: "string" } }
+    },
+    required: ["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"],
+    additionalProperties: false
+  };
+}
+function transportOperationSchema(active) {
+  return {
+    type: "object",
+    properties: {
+      op: { type: "string", enum: ["upsert"] },
+      table: { type: "string", enum: active.map((table) => table.key) },
+      id: { type: "string" },
+      title: { type: "string" },
+      content: { type: "string" },
+      keywords: { type: "array", items: { type: "string" } },
+      status: { type: "string" },
+      fields: { type: "array", items: transportFieldPatchSchema() },
+      lifecycle: transportLifecycleSchema()
+    },
+    required: ["op", "table", "id", "title", "content", "keywords", "status", "fields", "lifecycle"],
     additionalProperties: false
   };
 }
 function stateTransportJsonSchema(registry2) {
   const active = tables(registry2);
   return {
-    name: "MirrorAbyssStateOperationsV36",
-    description: "\u955C\u6E0A\u72B6\u6001\u4E8B\u5B9E\u4E0E\u6700\u5C0F\u5BF9\u8C61\u884C\u8865\u4E01",
-    strict: false,
+    name: "MirrorAbyssStateOperationsV37",
+    description: "\u955C\u6E0A\u72B6\u6001\u4E8B\u5B9E\u4E0E\u4E25\u683C\u6241\u5E73\u5BF9\u8C61\u8865\u4E01",
+    strict: true,
     value: {
       type: "object",
       properties: {
@@ -5845,23 +5869,92 @@ function assertRegistryCurrent(expectedFingerprint) {
     throw new RegistryChangedError("\u8868\u683C\u5B9A\u4E49\u5DF2\u53D8\u5316\uFF0C\u65E7\u72B6\u6001\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
   }
 }
+function hasLifecycleValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value;
+  return ["existence", "activity", "memory", "evidenceLevel", "evidence"].some((key) => String(item[key] ?? "").trim()) || textList(item.returnConditions).length > 0 || textList(item.returnBlockers).length > 0;
+}
+function normalizeTransportFacts(rawFacts) {
+  if (!Array.isArray(rawFacts)) return rawFacts;
+  return rawFacts.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`facts[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
+    const fact = { ...raw };
+    if (!fact.time_range && !fact.timeRange && ("time_start" in fact || "time_end" in fact || "time_label" in fact)) {
+      fact.time_range = {
+        start: String(fact.time_start ?? ""),
+        end: String(fact.time_end ?? ""),
+        label: String(fact.time_label ?? "")
+      };
+      delete fact.time_start;
+      delete fact.time_end;
+      delete fact.time_label;
+    }
+    return fact;
+  });
+}
 function normalizeStateTransportOutput(candidate, active) {
-  if (candidate.snapshot && typeof candidate.snapshot === "object" && !Array.isArray(candidate.snapshot)) return candidate;
-  if (!Array.isArray(candidate.operations)) return candidate;
-  const activeKeys = new Set(active.map((table) => table.key));
+  const normalizedFacts = normalizeTransportFacts(candidate.facts);
+  if (candidate.snapshot && typeof candidate.snapshot === "object" && !Array.isArray(candidate.snapshot)) {
+    return { ...candidate, facts: normalizedFacts };
+  }
+  if (!Array.isArray(candidate.operations)) return { ...candidate, facts: normalizedFacts };
+  const activeByKey = new Map(active.map((table) => [table.key, table]));
   const snapshot = {};
   candidate.operations.forEach((raw, index) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`operations[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
     const source = raw;
     if (source.op !== "upsert") throw new Error(`operations[${index}].op \u76EE\u524D\u53EA\u80FD\u662F upsert`);
-    const table = String(source.table ?? "").trim();
-    if (!activeKeys.has(table)) throw new Error(`operations[${index}].table \u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\uFF1A${table || "\u7A7A"}`);
-    const row = { ...source };
-    delete row.op;
-    delete row.table;
-    (snapshot[table] ||= []).push(row);
+    const tableKey = String(source.table ?? "").trim();
+    const table = activeByKey.get(tableKey);
+    if (!table) throw new Error(`operations[${index}].table \u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\uFF1A${tableKey || "\u7A7A"}`);
+    const row = {
+      id: source.id,
+      title: source.title,
+      content: source.content,
+      keywords: source.keywords,
+      status: source.status
+    };
+    if (Array.isArray(source.fields)) {
+      const seen = /* @__PURE__ */ new Set();
+      for (let fieldIndex = 0; fieldIndex < source.fields.length; fieldIndex += 1) {
+        const rawField = source.fields[fieldIndex];
+        if (!rawField || typeof rawField !== "object" || Array.isArray(rawField)) {
+          throw new Error(`operations[${index}].fields[${fieldIndex}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
+        }
+        const patch = rawField;
+        const key = String(patch.key ?? "").trim();
+        if (!key) throw new Error(`operations[${index}].fields[${fieldIndex}].key \u4E0D\u80FD\u4E3A\u7A7A`);
+        if (seen.has(key)) throw new Error(`operations[${index}] \u5B57\u6BB5\u91CD\u590D\uFF1A${key}`);
+        seen.add(key);
+        if (["id", "title", "content", "keywords", "status", "recentHistory", "solidifiedHistory"].includes(key)) {
+          throw new Error(`operations[${index}] \u4E0D\u5141\u8BB8\u901A\u8FC7 fields \u5199\u5165\uFF1A${key}`);
+        }
+        const definition = table.fields.find((field) => field.key === key);
+        if (!definition) throw new Error(`operations[${index}] \u5B57\u6BB5\u672A\u6CE8\u518C\u4E8E ${tableKey}\uFF1A${key}`);
+        const values = textList(patch.values);
+        if (definition.type === "string") {
+          if (values.length > 1) throw new Error(`operations[${index}].${key} \u662F string\uFF0Cvalues \u6700\u591A\u4E00\u9879`);
+          row[key] = values[0] ?? "";
+        } else if (definition.type === "string[]") {
+          row[key] = values;
+        } else {
+          throw new Error(`operations[${index}].${key} \u5FC5\u987B\u901A\u8FC7 lifecycle \u5BF9\u8C61\u4F20\u8F93`);
+        }
+      }
+    } else {
+      for (const [key, value] of Object.entries(source)) {
+        if (["op", "table", "id", "title", "content", "keywords", "status", "lifecycle"].includes(key)) continue;
+        row[key] = value;
+      }
+    }
+    if (hasLifecycleValue(source.lifecycle)) {
+      const lifecycleField = table.fields.find((field) => field.type === "lifecycle");
+      if (!lifecycleField) throw new Error(`operations[${index}] \u7684 ${tableKey} \u672A\u6CE8\u518C lifecycle \u5B57\u6BB5`);
+      row[lifecycleField.key] = source.lifecycle;
+    }
+    (snapshot[tableKey] ||= []).push(row);
   });
-  const normalized = { ...candidate, snapshot };
+  const normalized = { ...candidate, facts: normalizedFacts, snapshot };
   delete normalized.operations;
   return normalized;
 }
@@ -5877,7 +5970,7 @@ async function runStateExtraction(artifact, force = false) {
     task: "state",
     systemPrompt: stateSystemPrompt(registry2),
     prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
-    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","title":"...","related_entities":["\u53D7\u5F71\u54CD\u6761\u76EE\u540D"]}],"operations":[{"op":"upsert","table":"characters","id":"...","title":"...","content":"...","keywords":["..."],"status":"active","currentFacts":["..."],"currentStates":["..."]}]}',
+    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","title":"...","time_start":"\u5F53\u524D","time_end":"","time_label":"","related_entities":["\u53D7\u5F71\u54CD\u6761\u76EE\u540D"]}],"operations":[{"op":"upsert","table":"characters","id":"...","title":"...","content":"...","keywords":["..."],"status":"active","fields":[{"key":"currentFacts","values":["..."]}],"lifecycle":{"existence":"","activity":"","memory":"","evidenceLevel":"","evidence":"","returnConditions":[],"returnBlockers":[]}}]}',
     allowRepair: settings.repairInvalidJsonOnce,
     jsonSchema: stateTransportJsonSchema(registry2),
     validationSchema: stateJsonSchema(registry2),
@@ -7160,6 +7253,8 @@ function safeRequest(trace) {
     promptChars: trace.promptChars,
     responseTokens: trace.responseTokens,
     hasJsonSchema: trace.hasJsonSchema,
+    jsonSchemaName: trace.hasJsonSchema ? trace.jsonSchemaName : void 0,
+    jsonSchemaBytes: trace.hasJsonSchema ? trace.jsonSchemaBytes : void 0,
     error: redactedError(trace.error)
   };
 }
