@@ -1,6 +1,52 @@
-# Mirror Abyss 1.2.0-rc.39 验收记录
+# Mirror Abyss 1.2.0-rc.42 验收记录
 
-流水线：`ma-pipeline-41`
+流水线：`ma-pipeline-44`
+
+
+## rc.42 链路收敛回归
+
+新增 `tests/rc42-chain-shortening.ts`，验证：
+
+- 合规正文严格 `audit → state`，聊天保存从 6 次降为 3 次；
+- 修正正文严格 `audit → revision → audit → state`，聊天保存从 8 次降为 5 次；
+- 状态核心 ChatState 只提交一次，提交结果直接进入派生计划；
+- 历史恢复不再对每条正文执行处理前/处理后双进度写入；
+- 最新正文恢复一次提交核心状态并解除历史暂停；
+- 世界书文档构建复用同步阶段已读取的 ChatState；
+- 自动派生取消按显式 `automatic + kind`，不会误取消核心或人工任务。
+
+实机需核对普通、修正、最新编辑恢复、两条历史恢复和自动总结被新正文取代五条链。完整步骤见 `RC42_CHAIN_SHORTENING_REPORT.md`。
+
+## rc.41 基础设施契约回归
+
+本版只修复由失败测试证明的基础设施问题。新增与更新验证覆盖：
+
+- 请求执行函数同步 throw 后，当前 lane 正确释放，后续请求继续执行；
+- structured/audit fallback 只有原始 plain 输出自行解析并通过业务校验后才提交 Schema 绕过缓存；
+- audit 的 5xx、超时、鉴权、限流和取消不会发送第二次 plain 请求；
+- queued、blocked、skipped、running 的时间戳、attempts 和错误字段按本轮阶段重新计算；
+- 禁用、重置、聊天切换时 pending 与 active 任务均保留明确取消原因；
+- 已请求取消的任务即使随后收到 502/504，任务终态仍为 cancelled；
+- 插件重启期间同一本世界书的物理保存最大并发仍为 1；
+- Proxy 包装 ChatState 可读取为独立 JSON 副本；
+- ChatState 保存与清空失败时，metadata 恢复到操作前状态。
+
+完整 `npm run verify`、20 步模拟、TypeScript 检查、浏览器构建和语法检查必须全部通过。
+
+## rc.40 Schema 缓存回归
+
+本版只验证一个已复现 Bug：Schema 兼容 fallback 在内容尚未解析前就提交拒绝缓存，导致后续状态重试永久直走 plain，并反复产生截断 JSON。
+
+本地新增验证：
+
+- Schema 400 后 fallback 被截断时，不提交具体 Schema 拒绝缓存；下一次任务重新发送 Schema；
+- fallback 完整并通过目标 Schema 后，下一次才允许内存级 plain 绕过；
+- 已缓存绕过的 plain 输出一旦截断，立即清除缓存，下一次重新发送 Schema；
+- rc.35 遗留的持久化具体 Schema 拒绝缓存升级时自动清除；
+- 具体 Schema 拒绝不再写入 sessionStorage；
+- 审核与连接测试也只有在 fallback 结果有效后才提交缓存。
+
+实机只需重试失败的历史恢复。首个 state 请求应重新显示 `requestPurpose: schema`、`hasJsonSchema: true`、`jsonSchemaName: MirrorAbyssStateOperationsV37`，不应继续直接 plain。
 
 ## rc.39 统一实机验收
 

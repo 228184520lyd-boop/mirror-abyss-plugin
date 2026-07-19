@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.41";
-var PIPELINE_VERSION = "ma-pipeline-43";
+var VERSION = "1.2.0-rc.42";
+var PIPELINE_VERSION = "ma-pipeline-44";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -3420,10 +3420,6 @@ ${settings.maxRevisionAttempts}`);
     } else {
       markStage(artifact, "audit", "blocked", result.reason);
     }
-    const message = getMessage(artifact.messageIndex);
-    if (!message) throw new Error("\u539FAI\u6B63\u6587\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u91CD\u65B0\u6574\u7406");
-    attachArtifactToMessage(message, artifact);
-    await persistChatFor(artifact.chatKey);
     await putArtifact(artifact);
     return result;
   } catch (error) {
@@ -3742,7 +3738,9 @@ var TaskQueue = class _TaskQueue {
   }
   cancelPendingDerivedByChatKey(chatKey, reason = "\u5DF2\u6709\u66F4\u65B0\u7684\u6B63\u6587\u72B6\u6001\uFF0C\u65E7\u6D3E\u751F\u4EFB\u52A1\u5DF2\u53D6\u6D88") {
     return this.cancelPending(
-      (job) => job.chatKey === chatKey && String(job.task.key).includes(":derived:"),
+      (job) => Boolean(
+        job.chatKey === chatKey && job.task.automatic === true && ["smallSummary", "largeSummary", "sync"].includes(String(job.task.kind))
+      ),
       reason
     );
   }
@@ -4308,9 +4306,9 @@ function applyEntry(entry, chatKey, key, spec, wi) {
 function summaryEventKey(item) {
   return String(item?.eventId || item?.id || "").trim();
 }
-async function desiredSpecs(artifact) {
+async function desiredSpecs(artifact, committedState) {
   const settings = getSettings();
-  const state2 = await getChatState(artifact.chatKey);
+  const state2 = committedState ?? await getChatState(artifact.chatKey);
   const documents = buildLorebookDocuments(
     artifact.snapshot,
     state2.smallSummaries,
@@ -4596,7 +4594,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
     if (!name) throw new Error("\u6CA1\u6709\u53EF\u7528\u7684\u804A\u5929\u4E16\u754C\u4E66");
     const data = await wi.loadWorldInfo(name) || { entries: {} };
     data.entries ||= {};
-    const plan = await desiredSpecs(artifact);
+    const plan = await desiredSpecs(artifact, chatState);
     const desired = plan.desired;
     const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
     const reconciliation = reconcileLorebookEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook);
@@ -6479,8 +6477,6 @@ async function loadOrCreateArtifact(index, _force, historyRevision, taskGuard) {
     if (taskGuard) bindArtifactTaskGuard(artifact, taskGuard);
     assertArtifactCommitCurrent(artifact);
     attachArtifactToMessage(message, artifact);
-    await persistChatFor(artifact.chatKey);
-    await putArtifact(artifact);
     artifact.stages.revision ||= { status: "idle", attempts: 0 };
     return artifact;
   } catch (error) {
@@ -6489,7 +6485,7 @@ async function loadOrCreateArtifact(index, _force, historyRevision, taskGuard) {
     throw error;
   }
 }
-async function commitCoreState(index, artifact) {
+async function commitCoreState(artifact, resolveLatestHistoryInvalidation = false) {
   if (!artifact.snapshot || artifact.stages.state.status !== "success") {
     throw new Error("\u72B6\u6001\u8868\u5C1A\u672A\u6210\u529F\uFF0C\u4E0D\u80FD\u63D0\u4EA4\u6838\u5FC3\u7ED3\u679C");
   }
@@ -6503,10 +6499,16 @@ async function commitCoreState(index, artifact) {
     chatState.internalFacts = mergeInternalFacts(chatState.internalFacts ?? [], incomingFacts, artifact.factPackage.facts);
   }
   chatState.latestSnapshotMessageKey = artifact.messageKey;
+  if (resolveLatestHistoryInvalidation && isNarrativeTail(artifact.messageIndex)) {
+    const invalidation = chatState.historyInvalidation;
+    if (invalidation?.startIndex === artifact.messageIndex && invalidation.reason !== "deleted") {
+      delete chatState.historyInvalidation;
+    }
+  }
   chatState.updatedAt = nowIso();
   assertArtifactCommitCurrent(artifact);
   await putChatState(chatState);
-  await saveArtifactToMessage(index, artifact);
+  return chatState;
 }
 function invalidateDerivedForValidMessages(chatState, validMessageIds) {
   const currentFacts = Array.isArray(chatState.internalFacts) ? chatState.internalFacts : [];
@@ -6540,9 +6542,8 @@ function invalidateDerivedForValidMessages(chatState, validMessageIds) {
     if (fact.solidifiedByLargeSummaryId && invalidLargeIds.has(fact.solidifiedByLargeSummaryId)) delete fact.solidifiedByLargeSummaryId;
   }
 }
-async function prepareDerivedStageStatuses(artifact) {
+async function prepareDerivedStageStatuses(artifact, chatState) {
   const settings = getSettings();
-  const chatState = await getChatState(artifact.chatKey);
   const plan = {
     small: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(chatState.internalFacts ?? [], settings.smallSummaryTurns)),
     large: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(chatState.smallSummaries ?? [], chatState.largeSummaries ?? [], settings.largeSummaryCount))
@@ -6561,15 +6562,6 @@ async function prepareDerivedStageStatuses(artifact) {
   }
   await saveArtifactToMessage(artifact.messageIndex, artifact);
   return plan;
-}
-async function clearResolvedLatestHistoryInvalidation(index, artifact) {
-  if (!isNarrativeTail(index)) return false;
-  const chatState = await getChatState(artifact.chatKey);
-  const invalidation = chatState.historyInvalidation;
-  if (!invalidation || invalidation.startIndex !== index || invalidation.reason === "deleted") return false;
-  delete chatState.historyInvalidation;
-  await putChatState(chatState);
-  return true;
 }
 async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
   const chatState = await getChatState(artifact.chatKey);
@@ -6828,9 +6820,8 @@ async function processMessage(index, force = false, options = {}) {
         await saveArtifactToMessage(index, artifact);
       }
       if (artifact.snapshot && artifact.stages.state.status === "success") {
-        await commitCoreState(index, artifact);
-        if (!options.historyRecovery) await clearResolvedLatestHistoryInvalidation(index, artifact);
-        const summaryPlan = await prepareDerivedStageStatuses(artifact);
+        const committedState = await commitCoreState(artifact, !options.historyRecovery);
+        const summaryPlan = await prepareDerivedStageStatuses(artifact, committedState);
         if (!options.skipDerived) {
           taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
           queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
@@ -6992,16 +6983,6 @@ async function recalculateInvalidatedHistory() {
   const recoveredMessageKeys = /* @__PURE__ */ new Set();
   for (const [position, index] of processableIndexes.entries()) {
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
-    const progressState = await getChatState(chatKey);
-    progressState.historyRecovery = {
-      ...progressState.historyRecovery ?? state2.historyRecovery,
-      currentIndex: index,
-      completedCount: position,
-      phase: "rebuilding-core",
-      error: void 0,
-      updatedAt: nowIso()
-    };
-    await putChatState(progressState);
     try {
       latest = await processMessage(index, false, { skipDerived: true, historyRecovery: true });
       if (latest?.messageKey) recoveredMessageKeys.add(latest.messageKey);
@@ -7013,6 +6994,9 @@ async function recalculateInvalidatedHistory() {
       const completedState = await getChatState(chatKey);
       if (completedState.historyRecovery) {
         completedState.historyRecovery.completedCount = position + 1;
+        completedState.historyRecovery.currentIndex = processableIndexes[position + 1] ?? index;
+        completedState.historyRecovery.phase = "rebuilding-core";
+        completedState.historyRecovery.error = void 0;
         completedState.historyRecovery.updatedAt = nowIso();
       }
       await putChatState(completedState);
@@ -7211,9 +7195,8 @@ async function retryStage(index, stage) {
         }
         await runStateExtraction(artifact, true);
         await saveArtifactToMessage(index, artifact);
-        await commitCoreState(index, artifact);
-        await clearResolvedLatestHistoryInvalidation(index, artifact);
-        const summaryPlan = await prepareDerivedStageStatuses(artifact);
+        const committedState = await commitCoreState(artifact, true);
+        const summaryPlan = await prepareDerivedStageStatuses(artifact, committedState);
         taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
         queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
       }
