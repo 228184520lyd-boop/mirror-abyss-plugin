@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.46";
-var PIPELINE_VERSION = "ma-pipeline-48";
+var VERSION = "1.2.0-rc.47";
+var PIPELINE_VERSION = "ma-pipeline-49";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -7995,6 +7995,29 @@ var editorChatKey = null;
 var editorMessageKey = null;
 var savingRow = false;
 var workspacePipelineActionPending = false;
+var workspaceViewportBound = false;
+function updateWorkspaceViewportHeight() {
+  const height = Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight));
+  document.documentElement.style.setProperty("--ma11-viewport-height", `${height}px`);
+}
+function lockWorkspaceViewport() {
+  document.documentElement.classList.add("ma11-workspace-open");
+  document.body.classList.add("ma11-workspace-open");
+  updateWorkspaceViewportHeight();
+  if (workspaceViewportBound) return;
+  workspaceViewportBound = true;
+  window.addEventListener("resize", updateWorkspaceViewportHeight, { passive: true });
+  window.visualViewport?.addEventListener("resize", updateWorkspaceViewportHeight, { passive: true });
+}
+function unlockWorkspaceViewport() {
+  document.documentElement.classList.remove("ma11-workspace-open");
+  document.body.classList.remove("ma11-workspace-open");
+  if (!workspaceViewportBound) return;
+  workspaceViewportBound = false;
+  window.removeEventListener("resize", updateWorkspaceViewportHeight);
+  window.visualViewport?.removeEventListener("resize", updateWorkspaceViewportHeight);
+  document.documentElement.style.removeProperty("--ma11-viewport-height");
+}
 function resolveWorkspaceStageCommand(action) {
   const commands = {
     "run-audit": { kind: "retry", stage: "audit" },
@@ -8404,13 +8427,13 @@ async function tableHtml(artifactInfo) {
         <colgroup><col class="ma11-col-index"/><col class="ma11-col-title"/><col class="ma11-col-content"/><col class="ma11-col-state"/><col class="ma11-col-meta"/><col class="ma11-col-actions"/></colgroup>
         <thead><tr><th>\u5E8F\u53F7</th><th>${escapeHtml(columnHeaders.title)}</th><th>${escapeHtml(columnHeaders.content)}</th><th>${escapeHtml(columnHeaders.state)}</th><th>\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4</th><th>\u64CD\u4F5C</th></tr></thead>
         <tbody>${rows.length ? rows.map((row, index) => `<tr>
-          <td>${index + 1}</td>
-          <td class="ma11-cell-title"><b>${escapeHtml(row.title)}</b>${row.id === focusObjectId ? `<span class="ma11-badge">\u5E38\u9A7B\u7126\u70B9</span>` : ""}</td>
-          <td class="ma11-cell-content">${escapeHtml(row.content)}${rowCustomFieldsHtml(row, activeDefinition)}</td>
-          <td><div class="ma11-cell-status">${row.status ? `<span class="ma11-status-text">${escapeHtml(row.status)}</span>` : ""}${lifecycleHtml(row)}<div class="ma11-keyword-list">${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</div></div></td>
-          <td><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.locked ? "\u5B8C\u5168\u9501\u5B9A" : row.source === "manual" ? "\u4EBA\u5DE5\u57FA\u7840" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
-          <td><div class="ma11-row-actions">${["characters", "state"].includes(activeDefinition.role) ? row.id === focusObjectId ? `<button data-ma11-action="clear-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u53D6\u6D88\u7126\u70B9</button>` : `<button data-ma11-action="set-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u8BBE\u4E3A\u7126\u70B9</button>` : ""}<button data-ma11-edit-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u5220\u9664</button></div></td>
-        </tr>`).join("") : `<tr><td colspan="6" class="ma11-empty">\u8BE5\u89C6\u56FE\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
+          <td data-label="\u5E8F\u53F7">${index + 1}</td>
+          <td class="ma11-cell-title" data-label="${escapeHtml(columnHeaders.title)}"><b>${escapeHtml(row.title)}</b>${row.id === focusObjectId ? `<span class="ma11-badge">\u5E38\u9A7B\u7126\u70B9</span>` : ""}</td>
+          <td class="ma11-cell-content" data-label="${escapeHtml(columnHeaders.content)}">${escapeHtml(row.content)}${rowCustomFieldsHtml(row, activeDefinition)}</td>
+          <td data-label="${escapeHtml(columnHeaders.state)}"><div class="ma11-cell-status">${row.status ? `<span class="ma11-status-text">${escapeHtml(row.status)}</span>` : ""}${lifecycleHtml(row)}<div class="ma11-keyword-list">${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</div></div></td>
+          <td data-label="\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4"><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.locked ? "\u5B8C\u5168\u9501\u5B9A" : row.source === "manual" ? "\u4EBA\u5DE5\u57FA\u7840" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
+          <td data-label="\u64CD\u4F5C"><div class="ma11-row-actions">${["characters", "state"].includes(activeDefinition.role) ? row.id === focusObjectId ? `<button data-ma11-action="clear-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u53D6\u6D88\u7126\u70B9</button>` : `<button data-ma11-action="set-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u8BBE\u4E3A\u7126\u70B9</button>` : ""}<button data-ma11-edit-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u5220\u9664</button></div></td>
+        </tr>`).join("") : `<tr class="ma11-empty-row"><td colspan="6" class="ma11-empty">\u8BE5\u89C6\u56FE\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
       </table>` : '<div class="ma11-empty-panel">\u5C1A\u65E0\u72B6\u6001\u8868\u3002\u70B9\u51FB\u201C\u6574\u7406\u6700\u65B0\u6B63\u6587\u201D\u3002</div>'}
     </section>`;
 }
@@ -9289,12 +9312,14 @@ function openWorkspace(tab, messageIndex) {
   selectedMessageIndex = resolveWorkspaceMessageSelection(messageIndex);
   if (tab) getSettings().ui.activeTab = tab;
   workspace.hidden = false;
+  lockWorkspaceViewport();
   void renderWorkspace();
 }
 function closeWorkspace() {
   closeEditor();
   const workspace = document.querySelector("#ma11-workspace");
   if (workspace) workspace.hidden = true;
+  unlockWorkspaceViewport();
 }
 function resetWorkspaceContext() {
   selectedMessageIndex = null;
@@ -9312,6 +9337,7 @@ function disposeWorkspace() {
   workspaceRenderScheduled = false;
   workspaceRenderDeferred = false;
   renderAgain = false;
+  unlockWorkspaceViewport();
   document.querySelector("#ma11-workspace")?.remove();
 }
 function refreshWorkspace() {

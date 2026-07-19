@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.46",
+  "version": "1.2.0-rc.47",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊 rc.46：修复多事件对象身份继承、目标世界书迁移清理，并强化世界书保存、回读与编辑器刷新确认。"
+  "description": "镜渊 rc.47：修复手机端工作区高度、导航溢出、对象表格与编辑器适配问题。"
 }

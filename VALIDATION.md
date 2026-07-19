@@ -1,6 +1,13 @@
-# Mirror Abyss 1.2.0-rc.46 验收记录
+# Mirror Abyss 1.2.0-rc.47 验收记录
 
-流水线：`ma-pipeline-48`
+## rc.47 手机端 UI
+
+- 动态 visualViewport 高度与页面滚动锁。
+- 900px 以下网格导航，620px 以下三列导航。
+- 700px 以下对象表格转为字段卡片。
+- 安全区、全屏编辑器、设置入口与按钮换行检查。
+
+流水线：`ma-pipeline-49`
 
 
 
