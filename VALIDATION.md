@@ -1,6 +1,21 @@
-# Mirror Abyss 1.2.0-rc.37 验收记录
+# Mirror Abyss 1.2.0-rc.38 验收记录
 
-流水线：`ma-pipeline-39`
+流水线：`ma-pipeline-40`
+
+## rc.38 统一实机验收
+
+本版不再逐问题拆开测试。按 `RC38_MASTER_LEDGER_REPORT.md` 的 A–E 顺序连续演示启动、Schema 主链、自动总结让位、多事件世界书、历史恢复和聊天切换，结束后一次性导出诊断与录屏。
+
+本地新增验证：
+
+- 监听器安装、清理、再次安装不叠加；
+- 遗留 queued/running 阶段与历史恢复状态可幂等对账；
+- 新正文取消运行中的自动总结，不取消核心 state 或 sync；
+- 未达到大总结阈值时不创建空 largeSummary 任务；
+- No message generated、tool call 参数和供应商返回信封正确分类；
+- 请求诊断包含 errorKind/httpStatus，任务诊断包含 cancelReason；
+- 旧 delete 审核设置迁移为 hide；
+- 类型检查、构建和浏览器语法检查均通过。
 
 ## rc.37 严格扁平状态 Schema 实机复验
 

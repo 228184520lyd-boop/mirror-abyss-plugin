@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.37";
-var PIPELINE_VERSION = "ma-pipeline-39";
+var VERSION = "1.2.0-rc.38";
+var PIPELINE_VERSION = "ma-pipeline-40";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -589,7 +589,7 @@ function updateTableHeaders(registry2, key, headerText) {
 }
 function parseCustomFields(fieldText = "") {
   const used = /* @__PURE__ */ new Set();
-  return fieldText.split(/\n+/).map((value) => value.trim()).filter(Boolean).map((line, index) => {
+  const parsed = fieldText.split(/\n+/).map((value) => value.trim()).filter(Boolean).map((line, index) => {
     const parts = line.split(/[:：]/).map((part) => part.trim());
     const rawKey = parts[0] || `field_${index + 1}`;
     const key = safeText(rawKey, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "") || `field_${index + 1}`;
@@ -600,7 +600,8 @@ function parseCustomFields(fieldText = "") {
     const type = parts[2] === "string[]" ? "string[]" : "string";
     const description = safeText(parts.slice(3).join("\uFF1A") || label, 500).trim();
     return { key, label, description, type, required: false };
-  }).filter((field) => Boolean(field));
+  });
+  return parsed.filter((field) => field !== null);
 }
 function customFieldText(table) {
   return table.fields.filter((field) => !CORE_FIELD_KEYS.includes(field.key) && field.key !== "lifecycle").map((field) => `${field.key}:${field.label}:${field.type}:${field.description}`).join("\n");
@@ -792,6 +793,13 @@ function getSettings() {
   context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
   const settings = context.extensionSettings[MODULE_NAME];
   if (String(settings.lorebookLayout) === "compact") settings.lorebookLayout = "semantic";
+  const auditFailAction = String(settings.auditFailAction || "revise");
+  settings.auditFailAction = auditFailAction === "delete" || auditFailAction === "withdraw" ? "hide" : ["revise", "mark", "hide"].includes(auditFailAction) ? auditFailAction : "revise";
+  settings.revisionFallbackAction = String(settings.revisionFallbackAction) === "mark" ? "mark" : "hide";
+  settings.maxRevisionAttempts = Math.min(2, Math.max(1, Math.round(Number(settings.maxRevisionAttempts) || 1)));
+  settings.smallSummaryTurns = Math.min(100, Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12)));
+  settings.largeSummaryCount = Math.min(50, Math.max(1, Math.round(Number(settings.largeSummaryCount) || 4)));
+  settings.requestTimeoutMs = Math.min(3e5, Math.max(1e4, Math.round(Number(settings.requestTimeoutMs) || 9e4)));
   settings.migration ||= { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false };
   settings.migration.objectViewsV26 ??= false;
   settings.lorebookRecall ||= { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 };
@@ -2158,7 +2166,7 @@ function markStage(artifact, stage, status, error) {
     status,
     attempts: status === "running" ? current.attempts + 1 : current.attempts,
     startedAt: status === "running" ? now : current.startedAt,
-    finishedAt: ["success", "failed", "skipped", "blocked"].includes(status) ? now : void 0,
+    finishedAt: ["success", "failed", "cancelled", "skipped", "blocked"].includes(status) ? now : void 0,
     error: error || void 0
   };
   artifact.updatedAt = now;
@@ -2186,6 +2194,19 @@ function abortError(message = "\u6A21\u578B\u8BF7\u6C42\u5DF2\u53D6\u6D88") {
   const error = new Error(message);
   error.name = "AbortError";
   return error;
+}
+function requestErrorMetadata(error) {
+  const message = toErrorMessage(error);
+  const statusMatch = message.match(/(?:http|status|code)?\s*[:=]?\s*([45]\d{2})\b/i);
+  const httpStatus = statusMatch ? Number(statusMatch[1]) : void 0;
+  if (error instanceof Error && error.name === "AbortError") return { errorKind: "cancelled", httpStatus };
+  if (/no message generated|返回为空|空内容/i.test(message)) return { errorKind: "empty", httpStatus };
+  if (httpStatus === 401 || httpStatus === 403 || /unauthori[sz]ed|forbidden|api key/i.test(message)) return { errorKind: "auth", httpStatus };
+  if (httpStatus === 429 || /rate.?limit|too many requests/i.test(message)) return { errorKind: "rate_limit", httpStatus };
+  if (httpStatus !== void 0 && httpStatus >= 500 || /gateway|upstream|bad gateway|service unavailable/i.test(message)) return { errorKind: "upstream", httpStatus };
+  if (/timeout|timed out|超时/i.test(message)) return { errorKind: "timeout", httpStatus };
+  if (httpStatus === 400 || /bad request|invalid schema|invalid request/i.test(message)) return { errorKind: "request", httpStatus };
+  return { errorKind: "unknown", httpStatus };
 }
 var RequestLaneScheduler = class _RequestLaneScheduler {
   static MAX_TRACES = 200;
@@ -2237,6 +2258,7 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
       job.signal.removeEventListener("abort", job.abortListener);
       job.trace.state = "cancelled";
       job.trace.error = "\u6A21\u578B\u8BF7\u6C42\u5DF2\u53D6\u6D88";
+      job.trace.errorKind = "cancelled";
       job.trace.finishedAt = nowIso();
       job.trace.transportWaitMs = Math.max(0, Date.now() - job.createdMs);
       job.trace.totalMs = job.trace.transportWaitMs;
@@ -2254,8 +2276,11 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
       job.trace.state = "success";
       job.resolve(result);
     }).catch((error) => {
-      job.trace.state = error instanceof Error && error.name === "AbortError" ? "cancelled" : "failed";
+      const metadata = requestErrorMetadata(error);
+      job.trace.state = metadata.errorKind === "cancelled" ? "cancelled" : "failed";
       job.trace.error = toErrorMessage(error);
+      job.trace.errorKind = metadata.errorKind;
+      job.trace.httpStatus = metadata.httpStatus;
       job.reject(error);
     }).finally(() => {
       const finishedMs = Date.now();
@@ -2312,6 +2337,7 @@ var RequestLaneScheduler = class _RequestLaneScheduler {
         state2.pending.splice(index, 1);
         trace.state = "cancelled";
         trace.error = "\u6A21\u578B\u8BF7\u6C42\u5DF2\u53D6\u6D88";
+        trace.errorKind = "cancelled";
         trace.finishedAt = nowIso();
         trace.transportWaitMs = Math.max(0, Date.now() - createdMs);
         trace.totalMs = trace.transportWaitMs;
@@ -2428,25 +2454,110 @@ function textFromValue(value) {
   }
   return "";
 }
+function textFromContentParts(value) {
+  if (!Array.isArray(value)) return "";
+  const parts = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      if (item.trim()) parts.push(item.trim());
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const source = item;
+    const text = typeof source.text === "string" ? source.text.trim() : typeof source.output_text === "string" ? source.output_text.trim() : "";
+    if (text) parts.push(text);
+    const args = source.functionCall?.args ?? source.function_call?.arguments ?? source.input;
+    if (args && typeof args === "object") parts.push(textFromValue(args));
+    else if (typeof args === "string" && args.trim()) parts.push(args.trim());
+  }
+  return parts.filter(Boolean).join("\n").trim();
+}
 function generationText(result) {
   if (typeof result === "string") return result.trim();
-  const envelopeKeys = ["content", "text", "output", "result", "value", "pipe"];
-  for (const key of envelopeKeys) {
-    const text = textFromValue(result?.[key]);
+  if (!result || typeof result !== "object") return "";
+  for (const value of [result.output_text, result.content, result.text, result.result, result.value, result.pipe]) {
+    if (Array.isArray(value)) {
+      const text2 = textFromContentParts(value);
+      if (text2) return text2;
+      continue;
+    }
+    const text = textFromValue(value);
+    if (text) return text;
+  }
+  const messageContent = result?.message?.content ?? result?.choices?.[0]?.message?.content;
+  if (Array.isArray(messageContent)) {
+    const text = textFromContentParts(messageContent);
+    if (text) return text;
+  } else {
+    const text = textFromValue(messageContent);
     if (text) return text;
   }
   for (const value of [
-    result?.message?.content,
-    result?.choices?.[0]?.message?.content,
-    result?.choices?.[0]?.text
+    result?.choices?.[0]?.text,
+    result?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments,
+    result?.choices?.[0]?.message?.function_call?.arguments
   ]) {
     const text = textFromValue(value);
     if (text) return text;
   }
-  const hasEnvelope = Boolean(
-    result && typeof result === "object" && (envelopeKeys.some((key) => key in result) || "message" in result || "choices" in result)
-  );
+  const candidateParts = result?.candidates?.[0]?.content?.parts;
+  const candidateText = textFromContentParts(candidateParts);
+  if (candidateText) return candidateText;
+  if (Array.isArray(result.output)) {
+    for (const item of result.output) {
+      const outputText = textFromContentParts(item?.content);
+      if (outputText) return outputText;
+      const input = item?.input ?? item?.arguments;
+      const inputText = textFromValue(input);
+      if (inputText) return inputText;
+    }
+  } else {
+    const outputText = textFromValue(result.output);
+    if (outputText) return outputText;
+  }
+  const hasEnvelope = [
+    "content",
+    "text",
+    "output",
+    "output_text",
+    "result",
+    "value",
+    "pipe",
+    "message",
+    "choices",
+    "candidates",
+    "error",
+    "refusal",
+    "status",
+    "incomplete_details",
+    "promptFeedback"
+  ].some((key) => key in result);
   return hasEnvelope ? "" : textFromValue(result) || safeText(result, 2e5).trim();
+}
+function generationFailureDetail(result) {
+  if (!result || typeof result !== "object") return "";
+  const error = result.error;
+  const errorText = typeof error === "string" ? error : typeof error?.message === "string" ? error.message : typeof error?.error?.message === "string" ? error.error.message : "";
+  if (errorText.trim()) return safeText(errorText, 500).trim();
+  const refusal = result.refusal ?? result?.message?.refusal ?? result?.choices?.[0]?.message?.refusal;
+  if (typeof refusal === "string" && refusal.trim()) return `\u6A21\u578B\u62D2\u7EDD\u8FD4\u56DE\u5185\u5BB9\uFF1A${safeText(refusal, 300).trim()}`;
+  const incompleteReason = result?.incomplete_details?.reason;
+  if (typeof incompleteReason === "string" && incompleteReason.trim()) {
+    return `\u6A21\u578B\u54CD\u5E94\u672A\u5B8C\u6210\uFF1A${safeText(incompleteReason, 160).trim()}`;
+  }
+  const finishReason = result?.choices?.[0]?.finish_reason ?? result?.stop_reason ?? result?.candidates?.[0]?.finishReason ?? result?.candidates?.[0]?.finish_reason;
+  if (typeof finishReason === "string" && finishReason.trim()) {
+    return `No message generated\uFF08\u7EC8\u6B62\u539F\u56E0\uFF1A${safeText(finishReason, 160).trim()}\uFF09`;
+  }
+  const blockReason = result?.promptFeedback?.blockReason ?? result?.prompt_feedback?.block_reason;
+  if (typeof blockReason === "string" && blockReason.trim()) {
+    return `\u6A21\u578B\u8BF7\u6C42\u88AB\u62E6\u622A\uFF1A${safeText(blockReason, 160).trim()}`;
+  }
+  return "";
+}
+function emptyGenerationError(label, result) {
+  const detail = generationFailureDetail(result);
+  return new Error(detail || `${label}\u8FD4\u56DE\u4E3A\u7A7A\uFF08No message generated\uFF09`);
 }
 function cleanProfileName(value) {
   return safeText(value, 160).replace(/["|\r\n]/g, "").trim();
@@ -2514,7 +2625,7 @@ async function generateCurrent(options, controller) {
     controller
   );
   const text = generationText(result);
-  if (!text) throw new Error(`${options.task}\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A`);
+  if (!text) throw emptyGenerationError(`${options.task}\u6A21\u578B`, result);
   return text;
 }
 async function generateWithNativeProfile(options, profileId, controller) {
@@ -2548,7 +2659,7 @@ async function generateWithNativeProfile(options, profileId, controller) {
     controller
   );
   const text = generationText(result);
-  if (!text) throw new Error(`${options.task} Connection Profile\u8FD4\u56DE\u4E3A\u7A7A`);
+  if (!text) throw emptyGenerationError(`${options.task} Connection Profile`, result);
   return text;
 }
 function listSupportedConnectionProfiles() {
@@ -3198,7 +3309,11 @@ ${settings.maxRevisionAttempts}`);
     await putArtifact(artifact);
     return result;
   } catch (error) {
-    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
+    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) {
+      markStage(artifact, "audit", "cancelled", toErrorMessage(error));
+      await putArtifact(artifact);
+      throw error;
+    }
     markStage(artifact, "audit", "failed", toErrorMessage(error));
     await putArtifact(artifact);
     throw error;
@@ -3382,6 +3497,12 @@ async function runRevisionFlow(artifact) {
     return { approved: false, audit: artifact.audit ?? firstAudit };
   } catch (error) {
     if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) {
+      artifact.revision.status = "cancelled";
+      artifact.revision.stoppedReason = toErrorMessage(error);
+      artifact.hiddenByAudit = false;
+      applyAuditVisibility(artifact.messageIndex, false, true);
+      markStage(artifact, "revision", "cancelled", artifact.revision.stoppedReason);
+      await putArtifact(artifact);
       throw error;
     }
     artifact.revision.status = "failed";
@@ -3505,6 +3626,18 @@ var TaskQueue = class _TaskQueue {
       reason
     );
   }
+  /**
+   * 只标记当前 active 任务取消；调用方负责取消其外部请求。任务守卫会阻止迟到结果提交。
+   */
+  cancelActiveMatching(predicate, reason = "\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1\u5DF2\u88AB\u66F4\u9AD8\u4F18\u5148\u7EA7\u5DE5\u4F5C\u53D6\u4EE3") {
+    const job = this.active;
+    if (!job || !predicate(job.task) || job.cancelReason) return false;
+    job.cancelReason = reason;
+    job.task.cancelRequestedAt = nowIso();
+    job.task.cancelReason = reason;
+    this.notify();
+    return true;
+  }
   cancelPendingMatching(predicate, reason = "\u6392\u961F\u4EFB\u52A1\u5DF2\u5931\u6548") {
     return this.cancelPending((job) => predicate(job.task), reason);
   }
@@ -3568,6 +3701,7 @@ var TaskQueue = class _TaskQueue {
     const guard = {
       generation: job.generation,
       assertCurrent: () => {
+        if (job.cancelReason) throw cancelledError(job.cancelReason);
         if (!this.accepting || job.generation !== this.generation) {
           throw cancelledError("\u955C\u6E0A\u751F\u547D\u5468\u671F\u5DF2\u53D8\u5316\uFF0C\u65E7\u4EFB\u52A1\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
         }
@@ -3582,7 +3716,7 @@ var TaskQueue = class _TaskQueue {
       task.state = "success";
       job.resolve(result);
     }).catch((error) => {
-      const cancelled = error instanceof Error && error.name === "AbortError";
+      const cancelled = error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name);
       const blocked = error instanceof TaskBlockedError || error instanceof Error && error.name === "TaskBlockedError";
       const skipped = error instanceof TaskSkippedError || error instanceof Error && error.name === "TaskSkippedError";
       task.state = cancelled ? "cancelled" : blocked ? "blocked" : skipped ? "skipped" : "failed";
@@ -4398,7 +4532,11 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
     await putArtifact(artifact);
     await putChatState(chatState);
   } catch (error) {
-    if (error instanceof Error && error.name === "CommitRejectedError") throw error;
+    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) {
+      markStage(artifact, "sync", "cancelled", toErrorMessage(error));
+      await putArtifact(artifact);
+      throw error;
+    }
     const message = toErrorMessage(error);
     markStage(artifact, "sync", "failed", message);
     chatState.lastSyncStatus = "failed";
@@ -5115,7 +5253,11 @@ async function runSummaryStage(artifact, kind, force = false) {
     await putArtifact(artifact);
     return Boolean(generated);
   } catch (error) {
-    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
+    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) {
+      if (!preserveEarlierFailure) markStage(artifact, "summary", "cancelled", toErrorMessage(error));
+      await putArtifact(artifact);
+      throw error;
+    }
     const label = kind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3";
     const previous = artifact.stages.summary.error;
     const current = `${label}\u5931\u8D25\uFF1A${toErrorMessage(error)}`;
@@ -5148,11 +5290,14 @@ async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = fals
 async function rebuildEligibleSummaries(artifact) {
   const settings = getSettings();
   const errors = [];
+  let generatedAny = false;
+  const previousStatus = artifact.stages.summary.status;
   markStage(artifact, "summary", "running");
   await putArtifact(artifact);
   if (settings.autoSmallSummary) {
     try {
       while (await generateSmallSummary(artifact, false)) {
+        generatedAny = true;
       }
     } catch (error) {
       if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
@@ -5162,6 +5307,7 @@ async function rebuildEligibleSummaries(artifact) {
   if (settings.autoLargeSummary) {
     try {
       while (await generateLargeSummary(artifact, false)) {
+        generatedAny = true;
       }
     } catch (error) {
       if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
@@ -5173,7 +5319,11 @@ async function rebuildEligibleSummaries(artifact) {
     await putArtifact(artifact);
     throw new Error(errors.join("\uFF1B"));
   }
-  markStage(artifact, "summary", settings.autoSmallSummary || settings.autoLargeSummary ? "success" : "skipped");
+  markStage(
+    artifact,
+    "summary",
+    generatedAny || previousStatus === "success" ? "success" : "skipped"
+  );
   await putArtifact(artifact);
 }
 
@@ -6045,7 +6195,11 @@ async function runStateExtraction(artifact, force = false) {
       await putArtifact(artifact);
       throw error;
     }
-    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) throw error;
+    if (error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name)) {
+      markStage(artifact, "state", "cancelled", toErrorMessage(error));
+      await putArtifact(artifact);
+      throw error;
+    }
     markStage(artifact, "state", "failed", toErrorMessage(error));
     await putArtifact(artifact);
     throw error;
@@ -6055,6 +6209,10 @@ async function runStateExtraction(artifact, force = false) {
 // src/pipeline/pipeline.ts
 var listeners = /* @__PURE__ */ new Set();
 var scheduledMessageTimers = /* @__PURE__ */ new Map();
+function removeSourceListener(source, event, handler) {
+  if (typeof source?.off === "function") source.off(event, handler);
+  else source?.removeListener?.(event, handler);
+}
 function cancelScheduledMessagesForChat(chatKey) {
   let cancelled = 0;
   for (const [key, timer] of scheduledMessageTimers) {
@@ -6064,6 +6222,56 @@ function cancelScheduledMessagesForChat(chatKey) {
     cancelled += 1;
   }
   return cancelled;
+}
+function cancelScheduledMessagesOutsideChat(chatKey) {
+  let cancelled = 0;
+  for (const [key, timer] of scheduledMessageTimers) {
+    if (key.startsWith(`${chatKey}:`)) continue;
+    window.clearTimeout(timer);
+    scheduledMessageTimers.delete(key);
+    cancelled += 1;
+  }
+  return cancelled;
+}
+var INTERRUPTED_STAGE_MESSAGE = "\u9875\u9762\u5237\u65B0\u3001\u63D2\u4EF6\u91CD\u542F\u6216\u804A\u5929\u5207\u6362\u4E2D\u65AD\u4E86\u65E7\u4EFB\u52A1\uFF0C\u8BF7\u4ECE\u5931\u8D25\u9636\u6BB5\u7EE7\u7EED";
+async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSAGE) {
+  const chatKey = currentChatKey();
+  const chat = getChat();
+  let changedArtifacts = 0;
+  let firstChangedIndex = chat.length;
+  for (let index = 0; index < chat.length; index += 1) {
+    const artifact = getAttachedArtifact(chat[index]);
+    if (!artifact || artifact.chatKey !== chatKey) continue;
+    let changed = false;
+    for (const stage of ["audit", "revision", "state", "summary", "sync"]) {
+      const status = artifact.stages?.[stage]?.status;
+      if (status !== "queued" && status !== "running") continue;
+      markStage(artifact, stage, "cancelled", reason);
+      changed = true;
+    }
+    if (changed) {
+      changedArtifacts += 1;
+      firstChangedIndex = Math.min(firstChangedIndex, index);
+    }
+  }
+  if (changedArtifacts) {
+    await persistChatFor(chatKey);
+    notifyFrom(firstChangedIndex);
+  }
+  const chatState = await getChatState(chatKey);
+  const recovery = chatState.historyRecovery;
+  const interruptedRecovery = Boolean(
+    recovery && ["rebuilding-core", "rebuilding-derived", "publishing-lorebook"].includes(recovery.phase)
+  );
+  if (interruptedRecovery && recovery) {
+    recovery.phase = "failed";
+    recovery.error = reason;
+    recovery.updatedAt = nowIso();
+    chatState.lastSyncStatus = "failed";
+    chatState.lastSyncError = `\u5386\u53F2\u6062\u590D\u88AB\u4E2D\u65AD\uFF1A${reason}`;
+    await putChatState(chatState);
+  }
+  return { artifacts: changedArtifacts, historyRecovery: interruptedRecovery };
 }
 function subscribePipeline(listener) {
   listeners.add(listener);
@@ -6264,6 +6472,9 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
 function derivedTaskError(error) {
   return error instanceof CommitRejectedError || error instanceof TaskBlockedError || error instanceof TaskSkippedError || error instanceof Error && ["AbortError", "TaskBlockedError", "TaskSkippedError"].includes(error.name);
 }
+function cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision) {
+  return error instanceof Error && error.name === "AbortError" && currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled;
+}
 function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
   const settings = getSettings();
   const chatKey = artifact.chatKey;
@@ -6284,7 +6495,7 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
   };
   const queueSync = () => {
     if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled) return;
-    if (!settings.lorebookSync) return;
+    if (!getSettings().lorebookSync) return;
     const key2 = `${PIPELINE_VERSION}:derived:sync:${chatKey}:${messageKey}`;
     void taskQueue.run(key2, `\u540E\u53F0\u540C\u6B65\u7B2C ${index + 1} \u6761\u6B63\u6587\u4E16\u754C\u4E66`, "sync", async (guard) => {
       await runWithGuards(guard, async () => {
@@ -6310,7 +6521,7 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
   };
   const queueLarge = (shouldRun) => {
     if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled) return;
-    if (!settings.autoLargeSummary || !shouldRun) {
+    if (!getSettings().autoLargeSummary || !shouldRun) {
       queueSync();
       return;
     }
@@ -6332,9 +6543,30 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
       historyRevisionAtEnqueue: historyRevision,
       automatic: true
     }).then(queueSync, (error) => {
-      if (derivedTaskError(error)) return;
+      if (derivedTaskError(error)) {
+        if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision)) queueSync();
+        return;
+      }
       console.warn("[MirrorAbyss] derived large summary failed", error);
       toast("warning", `\u6838\u5FC3\u72B6\u6001\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u5927\u603B\u7ED3\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
+      if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueSync();
+    });
+  };
+  const queueLargeFromCurrentState = () => {
+    void (async () => {
+      if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled) return;
+      const currentSettings = getSettings();
+      const currentState = await getChatState(chatKey);
+      const eligible = Boolean(
+        currentSettings.autoLargeSummary && hasEligibleLargeSummary(
+          currentState.smallSummaries ?? [],
+          currentState.largeSummaries ?? [],
+          currentSettings.largeSummaryCount
+        )
+      );
+      queueLarge(eligible);
+    })().catch((error) => {
+      console.warn("[MirrorAbyss] failed to recheck large-summary eligibility", error);
       if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueSync();
     });
   };
@@ -6359,11 +6591,14 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
     messageFingerprint: artifact.sourceFingerprint,
     historyRevisionAtEnqueue: historyRevision,
     automatic: true
-  }).then(() => queueLarge(true), (error) => {
-    if (derivedTaskError(error)) return;
+  }).then(queueLargeFromCurrentState, (error) => {
+    if (derivedTaskError(error)) {
+      if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision)) queueSync();
+      return;
+    }
     console.warn("[MirrorAbyss] derived small summary failed", error);
     toast("warning", `\u6838\u5FC3\u72B6\u6001\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u5C0F\u603B\u7ED3\u5931\u8D25\uFF1A${toErrorMessage(error)}`);
-    if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueLarge(true);
+    if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) queueLargeFromCurrentState();
   });
 }
 function isAutomaticLatestHistoryRecovery(index, chatState) {
@@ -6391,13 +6626,26 @@ async function processMessage(index, force = false, options = {}) {
   }
   const triggerSource = options.triggerSource || (options.historyRecovery ? "history-recovery" : options.automatic ? "automatic" : force ? "manual-force" : "manual");
   const key = `${PIPELINE_VERSION}:${scheduledChatKey}:${identity}`;
+  const attachedAtEnqueue = getAttachedArtifact(message);
+  const duplicateCommittedAutomatic = Boolean(
+    options.automatic && !force && !options.historyRecovery && attachedAtEnqueue && attachedAtEnqueue.chatKey === scheduledChatKey && attachedAtEnqueue.sourceFingerprint === scheduledFingerprint && attachedAtEnqueue.messageKey === identity && attachedAtEnqueue.snapshot && attachedAtEnqueue.stages.state.status === "success" && enqueueState.processedMessageKeys.includes(attachedAtEnqueue.messageKey)
+  );
+  if (!options.historyRecovery && !duplicateCommittedAutomatic) {
+    const preempted = taskQueue.cancelActiveMatching(
+      (task) => Boolean(
+        task.chatKey === scheduledChatKey && task.automatic === true && ["smallSummary", "largeSummary"].includes(String(task.kind))
+      ),
+      "\u68C0\u6D4B\u5230\u65B0\u7684\u6B63\u6587\uFF0C\u65E7\u81EA\u52A8\u603B\u7ED3\u5DF2\u6682\u505C\u5E76\u7B49\u5F85\u540E\u7EED\u91CD\u65B0\u5F52\u5E76"
+    );
+    if (preempted) abortActiveRequests();
+  }
   return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async (guard) => {
     const settings = getSettings();
-    if (!settings.enabled) return null;
-    if (currentChatKey() !== scheduledChatKey) return null;
+    if (!settings.enabled) throw new TaskSkippedError("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u672C\u6B21\u6392\u961F\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
+    if (currentChatKey() !== scheduledChatKey) throw new TaskSkippedError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u6392\u961F\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
     guard.assertCurrent();
     assertHistoryRevisionCurrent(scheduledChatKey, scheduledHistoryRevision);
-    if (!isProcessableAssistantMessage(getMessage(index))) return null;
+    if (!isProcessableAssistantMessage(getMessage(index))) throw new TaskSkippedError("\u76EE\u6807\u6B63\u6587\u5DF2\u4E0D\u5B58\u5728\u6216\u4E0D\u518D\u7B26\u5408\u5904\u7406\u6761\u4EF6");
     if (messageFingerprint(index) !== scheduledFingerprint) {
       throw new CommitRejectedError("\u6B63\u6587\u5DF2\u7ECF\u53D8\u5316\uFF0C\u672C\u6B21\u6392\u961F\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
     }
@@ -6801,7 +7049,7 @@ async function retryStage(index, stage) {
   const key = `${PIPELINE_VERSION}:retry:${stage}:${chatKey}:${identity}`;
   const queueKind = stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage;
   return taskQueue.run(key, `\u91CD\u8BD5${stage}`, queueKind, async (guard) => {
-    if (currentChatKey() !== chatKey) return null;
+    if (currentChatKey() !== chatKey) throw new TaskSkippedError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u9636\u6BB5\u91CD\u8BD5\u4E0D\u518D\u5904\u7406");
     assertHistoryRevisionCurrent(chatKey, scheduledHistoryRevision);
     const currentState = await getChatState(chatKey);
     if (currentState.historyInvalidation && ["state", "summary", "sync"].includes(stage)) {
@@ -6901,7 +7149,7 @@ async function applyLorebookMaintenance2(index) {
   const scheduledHistoryRevision = currentHistoryRevision(artifact.chatKey);
   const key = `${PIPELINE_VERSION}:maintain-lorebook:${artifact.chatKey}:${artifact.messageKey}`;
   return taskQueue.run(key, "\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\u4E16\u754C\u4E66", "sync", async (guard) => {
-    if (currentChatKey() !== artifact.chatKey) return null;
+    if (currentChatKey() !== artifact.chatKey) throw new TaskSkippedError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u4E16\u754C\u4E66\u7EF4\u62A4\u4E0D\u518D\u5904\u7406");
     assertHistoryRevisionCurrent(artifact.chatKey, scheduledHistoryRevision);
     bindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
     bindArtifactTaskGuard(artifact, guard);
@@ -6924,7 +7172,7 @@ async function forceSummary(_index, kind) {
   const scheduledHistoryRevision = currentHistoryRevision(artifact.chatKey);
   const key = `${PIPELINE_VERSION}:force-summary:${kind}:${artifact.chatKey}:${artifact.messageKey}`;
   return taskQueue.run(key, `\u7ACB\u5373${kind === "small" ? "\u5C0F" : "\u5927"}\u603B\u7ED3`, kind === "small" ? "smallSummary" : "largeSummary", async (guard) => {
-    if (currentChatKey() !== artifact.chatKey) return null;
+    if (currentChatKey() !== artifact.chatKey) throw new TaskSkippedError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u603B\u7ED3\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
     assertHistoryRevisionCurrent(artifact.chatKey, scheduledHistoryRevision);
     bindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
     bindArtifactTaskGuard(artifact, guard);
@@ -7037,8 +7285,13 @@ function installPipelineEventHandlers() {
   const onSwiped = (payload) => handleInvalidation(payload, "swiped");
   const onDeleted = (payload) => handleInvalidation(payload, "deleted");
   const onChatChanged = () => {
+    const chatKey = currentChatKey();
     abortActiveRequests();
-    taskQueue.cancelPendingOutsideChat(currentChatKey());
+    taskQueue.cancelPendingOutsideChat(chatKey);
+    cancelScheduledMessagesOutsideChat(chatKey);
+    void reconcileInterruptedRuntimeState().catch((error) => {
+      console.warn("[MirrorAbyss] interrupted runtime reconciliation failed", error);
+    });
   };
   eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
   eventSource.on(event_types.MESSAGE_EDITED, onEdited);
@@ -7046,11 +7299,11 @@ function installPipelineEventHandlers() {
   eventSource.on(event_types.MESSAGE_DELETED, onDeleted);
   eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
   return () => {
-    eventSource.removeListener?.(event_types.MESSAGE_RECEIVED, onReceived);
-    eventSource.removeListener?.(event_types.MESSAGE_EDITED, onEdited);
-    eventSource.removeListener?.(event_types.MESSAGE_SWIPED, onSwiped);
-    eventSource.removeListener?.(event_types.MESSAGE_DELETED, onDeleted);
-    eventSource.removeListener?.(event_types.CHAT_CHANGED, onChatChanged);
+    removeSourceListener(eventSource, event_types.MESSAGE_RECEIVED, onReceived);
+    removeSourceListener(eventSource, event_types.MESSAGE_EDITED, onEdited);
+    removeSourceListener(eventSource, event_types.MESSAGE_SWIPED, onSwiped);
+    removeSourceListener(eventSource, event_types.MESSAGE_DELETED, onDeleted);
+    removeSourceListener(eventSource, event_types.CHAT_CHANGED, onChatChanged);
   };
 }
 
@@ -7230,6 +7483,8 @@ function safeTask(task) {
     historyRevisionAtEnqueue: task.historyRevisionAtEnqueue,
     historyRecoveryPhaseAtEnqueue: task.historyRecoveryPhaseAtEnqueue,
     automatic: task.automatic === true,
+    cancelRequestedAt: task.cancelRequestedAt,
+    cancelReason: redactedError(task.cancelReason),
     skipReason: redactedError(task.skipReason),
     error: redactedError(task.error)
   };
@@ -7255,6 +7510,8 @@ function safeRequest(trace) {
     hasJsonSchema: trace.hasJsonSchema,
     jsonSchemaName: trace.hasJsonSchema ? trace.jsonSchemaName : void 0,
     jsonSchemaBytes: trace.hasJsonSchema ? trace.jsonSchemaBytes : void 0,
+    errorKind: trace.errorKind,
+    httpStatus: trace.httpStatus,
     error: redactedError(trace.error)
   };
 }
@@ -8382,7 +8639,8 @@ function bindWorkspace(workspace) {
     }
     if (target.dataset.ma11TableEnabled) {
       const key = target.dataset.ma11TableEnabled;
-      void updateTableRegistryAndSync(updateTableDefinition(getSettings().tableRegistry, key, { enabled: target.checked })).catch((error) => toast("error", toErrorMessage(error)));
+      const checked = target instanceof HTMLInputElement ? target.checked : false;
+      void updateTableRegistryAndSync(updateTableDefinition(getSettings().tableRegistry, key, { enabled: checked })).catch((error) => toast("error", toErrorMessage(error)));
     }
     if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfileId) updateConnection(target);
   });
@@ -8714,12 +8972,22 @@ var cleanupUiEvents = null;
 var appReadyHandlerInstalled = false;
 var appReadyContext = null;
 var appReadyHandler = null;
+var startupTimer;
 var extensionEnabled = true;
 var lifecycleGeneration = 0;
 var debugRegistered = false;
 var startupAttempts = 0;
 var lastError = null;
 var MAX_STARTUP_ATTEMPTS = 20;
+function removeSourceListener2(source, event, handler) {
+  if (typeof source?.off === "function") source.off(event, handler);
+  else source?.removeListener?.(event, handler);
+}
+function clearStartupTimer() {
+  if (startupTimer === void 0) return;
+  window.clearTimeout(startupTimer);
+  startupTimer = void 0;
+}
 function exposeApi() {
   globalThis.MirrorAbyss = {
     version: VERSION,
@@ -8772,6 +9040,8 @@ async function initialize() {
     taskQueue.setAccepting(settings.enabled);
     await mountSettingsPanel(() => extensionEnabled && generation === lifecycleGeneration);
     if (!extensionEnabled || generation !== lifecycleGeneration) return;
+    await reconcileInterruptedRuntimeState();
+    if (!extensionEnabled || generation !== lifecycleGeneration) return;
     mountOptionalTopButton();
     cleanupPipeline ||= installPipelineEventHandlers();
     cleanupPanels ||= installMessagePanelHandlers();
@@ -8790,9 +9060,9 @@ async function initialize() {
       context.eventSource.on(context.event_types.CHAT_CHANGED, resetAndRerender);
       context.eventSource.on(context.event_types.MESSAGE_DELETED, resetAndRerender);
       cleanupUiEvents = () => {
-        context.eventSource.removeListener?.(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-        context.eventSource.removeListener?.(context.event_types.CHAT_CHANGED, resetAndRerender);
-        context.eventSource.removeListener?.(context.event_types.MESSAGE_DELETED, resetAndRerender);
+        removeSourceListener2(context.eventSource, context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
+        removeSourceListener2(context.eventSource, context.event_types.CHAT_CHANGED, resetAndRerender);
+        removeSourceListener2(context.eventSource, context.event_types.MESSAGE_DELETED, resetAndRerender);
       };
     }
     if (!debugRegistered && typeof context.registerDebugFunction === "function") {
@@ -8825,8 +9095,16 @@ function installAppReadyHandler() {
   if (!context) {
     startupAttempts += 1;
     if (startupAttempts < MAX_STARTUP_ATTEMPTS) {
-      window.setTimeout(installAppReadyHandler, 250);
+      if (startupTimer === void 0) {
+        const generation = lifecycleGeneration;
+        startupTimer = window.setTimeout(() => {
+          startupTimer = void 0;
+          if (!extensionEnabled || generation !== lifecycleGeneration) return;
+          installAppReadyHandler();
+        }, 250);
+      }
     } else {
+      clearStartupTimer();
       const error = new Error("\u7B49\u5F85SillyTavern\u4E0A\u4E0B\u6587\u8D85\u65F6\uFF0C\u8BF7\u5237\u65B0\u9875\u9762\u540E\u91CD\u8BD5");
       state = "error";
       lastError = error;
@@ -8834,6 +9112,7 @@ function installAppReadyHandler() {
     }
     return;
   }
+  clearStartupTimer();
   startupAttempts = 0;
   appReadyHandlerInstalled = true;
   appReadyContext = context;
@@ -8868,8 +9147,10 @@ function shutdown() {
   cleanupPipeline = null;
   cleanupPanels = null;
   cleanupUiEvents = null;
+  clearStartupTimer();
+  startupAttempts = 0;
   if (appReadyContext && appReadyHandler) {
-    appReadyContext.eventSource.removeListener?.(appReadyContext.event_types.APP_READY, appReadyHandler);
+    removeSourceListener2(appReadyContext.eventSource, appReadyContext.event_types.APP_READY, appReadyHandler);
   }
   appReadyContext = null;
   appReadyHandler = null;

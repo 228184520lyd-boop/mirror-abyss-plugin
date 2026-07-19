@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`1.2.0-rc.37`　流水线：`ma-pipeline-39`
+版本：`1.2.0-rc.38`　流水线：`ma-pipeline-40`
 
 镜渊是 SillyTavern 前端扩展。它在角色正文生成完成后执行规则审核、必要的定向修正、内部事实提取、对象化状态视图、按事件线的小总结、增量大总结和当前聊天世界书发布。插件不生成主叙事正文，不保存供应商密钥，也不替代 SillyTavern 的连接系统。
 
@@ -18,6 +18,21 @@
 
 事实与状态先提交；总结或世界书失败不会回滚核心结果。自动流程为主，单步操作默认收在排错工具中。
 
+
+## rc.38 固定台账收口
+
+rc.38 不改变已经在实机上直接成功的 `MirrorAbyssStateOperationsV37`。本版回到固定 48 项问题台账，集中修复生命周期、任务终态、自动总结阻塞、中断状态残留、响应信封、错误分类和旧设置迁移：
+
+- 重复激活不再累积启动定时器或旧事件监听器；
+- 页面刷新、重启或切回聊天时，遗留 `queued/running` 阶段对账为 cancelled，历史恢复对账为 failed 并保留重试入口；
+- 无业务产出的自动大总结不再创建 success 空任务；
+- 新正文可安全取消同聊天运行中的自动小/大总结，让 state 优先执行，但仍保持单 active、无并发写入；
+- 聊天切换、提交守卫拒绝和插件关闭统一记为 cancelled/skipped/blocked，不再以 null 返回伪装 success；
+- 扩展模型响应信封识别，独立处理 No message generated、refusal、incomplete 和工具调用参数；
+- 诊断新增 `errorKind/httpStatus/cancelReason`；旧 `auditFailAction: delete` 自动迁移为 hide；
+- TypeScript noEmit 检查正式加入打包回归。
+
+完整 48 项状态和统一实机步骤见 `RC38_MASTER_LEDGER_REPORT.md`。
 
 ## rc.37 严格扁平状态 Schema
 
