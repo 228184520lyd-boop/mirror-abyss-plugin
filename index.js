@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.50";
-var PIPELINE_VERSION = "ma-pipeline-50";
+var VERSION = "1.2.0-rc.52";
+var PIPELINE_VERSION = "ma-pipeline-52";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -27,8 +27,6 @@ var DEFAULT_SETTINGS = {
   latestContinuityConstant: true,
   lorebookLayout: "semantic",
   lorebookRecall: { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 },
-  compatibilityMode: false,
-  repairInvalidJsonOnce: true,
   requestTimeoutMs: 9e4,
   tableRegistry: [],
   connections: {
@@ -43,32 +41,32 @@ var DEFAULT_SETTINGS = {
 };
 
 // src/core/utils.ts
-function deepClone(value) {
+function deepClone(value2) {
   if (typeof structuredClone === "function") {
     try {
-      return structuredClone(value);
+      return structuredClone(value2);
     } catch {
     }
   }
-  return JSON.parse(JSON.stringify(value));
+  return JSON.parse(JSON.stringify(value2));
 }
 function mergeDefaults(defaults2, current) {
   const output = deepClone(defaults2);
   const merge = (target, source) => {
     if (!source) return;
-    for (const [key, value] of Object.entries(source)) {
-      if (value && typeof value === "object" && !Array.isArray(value) && target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
-        merge(target[key], value);
-      } else if (value !== void 0) {
-        target[key] = value;
+    for (const [key, value2] of Object.entries(source)) {
+      if (value2 && typeof value2 === "object" && !Array.isArray(value2) && target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
+        merge(target[key], value2);
+      } else if (value2 !== void 0) {
+        target[key] = value2;
       }
     }
   };
   merge(output, current);
   return output;
 }
-function hashText(value) {
-  const text = String(value ?? "");
+function hashText(value2) {
+  const text = String(value2 ?? "");
   let hash = 2166136261;
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
@@ -83,9 +81,9 @@ function makeId(prefix = "ma") {
 function nowIso() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
-function escapeHtml(value) {
+function escapeHtml(value2) {
   const element = document.createElement("div");
-  element.textContent = String(value ?? "");
+  element.textContent = String(value2 ?? "");
   return element.innerHTML;
 }
 function withTimeout(promise, ms, label, controller) {
@@ -117,11 +115,11 @@ function withTimeout(promise, ms, label, controller) {
       reject(new Error(`${label}\u8D85\u65F6\uFF08${Math.round(ms / 1e3)}\u79D2\uFF09`));
     }, ms);
     promise.then(
-      (value) => {
+      (value2) => {
         if (settled) return;
         settled = true;
         cleanup();
-        resolve(value);
+        resolve(value2);
       },
       (error) => {
         if (settled) return;
@@ -132,186 +130,11 @@ function withTimeout(promise, ms, label, controller) {
     );
   });
 }
-function safeText(value, max = 1e5) {
-  return String(value ?? "").replace(/\u0000/g, "").slice(0, max);
+function safeText(value2, max = 1e5) {
+  return String(value2 ?? "").replace(/\u0000/g, "").slice(0, max);
 }
-var JsonObjectParseError = class extends Error {
-  preview;
-  attempts;
-  constructor(message, raw, attempts = []) {
-    super(message);
-    this.name = "JsonObjectParseError";
-    this.preview = jsonPreview(raw);
-    this.attempts = attempts;
-  }
-};
-function isLikelyTruncatedJson(raw, error) {
-  const text = stripReasoningAndBom(safeText(raw, 2e5)).trim();
-  if (!text) return false;
-  const firstBrace = text.indexOf("{");
-  if (firstBrace < 0) return false;
-  const stack = [];
-  let inString = false;
-  let escaped = false;
-  let sawObject = false;
-  let mismatched = false;
-  for (let i = firstBrace; i < text.length; i += 1) {
-    const char = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{" || char === "[") {
-      stack.push(char);
-      if (char === "{") sawObject = true;
-      continue;
-    }
-    if (char === "}" || char === "]") {
-      const expected = char === "}" ? "{" : "[";
-      if (stack.at(-1) === expected) stack.pop();
-      else mismatched = true;
-    }
-  }
-  if (sawObject && (stack.length > 0 || inString)) return true;
-  if (mismatched) return false;
-  const attempts = error instanceof JsonObjectParseError ? error.attempts.join(" ") : toErrorMessage(error);
-  return /unexpected end|unterminated|string literal|end of json input|json input.*ended/i.test(attempts);
-}
-function jsonPreview(raw, max = 360) {
-  return safeText(raw, 1e5).replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/\s+/g, " ").trim().slice(0, max);
-}
-function stripReasoningAndBom(text) {
-  return text.replace(/^\uFEFF/, "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").replace(/<!--[\s\S]*?-->/g, "").trim();
-}
-function fencedCandidates(text) {
-  const output = [];
-  const regex = /```(?:json|javascript|js|text)?\s*([\s\S]*?)```/gi;
-  let match;
-  while (match = regex.exec(text)) {
-    if (match[1]?.trim()) output.push(match[1].trim());
-  }
-  return output;
-}
-function balancedObjectCandidates(text) {
-  const output = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{") {
-      if (depth === 0) start = i;
-      depth += 1;
-      continue;
-    }
-    if (char === "}" && depth > 0) {
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        output.push(text.slice(start, i + 1));
-        start = -1;
-      }
-    }
-  }
-  return output;
-}
-function normalizeJsonPunctuationOutsideStrings(text) {
-  let output = "";
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (inString) {
-      output += char;
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      output += char;
-      continue;
-    }
-    const replacement = {
-      "\uFF5B": "{",
-      "\uFF5D": "}",
-      "\uFF3B": "[",
-      "\uFF3D": "]",
-      "\uFF1A": ":",
-      "\uFF0C": ","
-    };
-    output += replacement[char] ?? char;
-  }
-  return output;
-}
-function commonJsonRepairs(text) {
-  const base = normalizeJsonPunctuationOutsideStrings(text).replace(/^\s*(?:json|JSON)\s*[:：]?\s*/, "").trim();
-  const withoutTrailingCommas = base.replace(/,\s*([}\]])/g, "$1");
-  const withoutSemicolon = withoutTrailingCommas.replace(/;\s*$/, "").trim();
-  return [.../* @__PURE__ */ new Set([base, withoutTrailingCommas, withoutSemicolon])].filter(Boolean);
-}
-function parseObjectCandidate(candidate) {
-  const parsed = JSON.parse(candidate);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("JSON\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61");
-  }
-  return parsed;
-}
-function parseJsonObjectCandidates(raw) {
-  const original = safeText(raw).trim();
-  if (!original || original === "{}") throw new JsonObjectParseError("\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A", raw);
-  const clean = stripReasoningAndBom(original);
-  const fenced = fencedCandidates(clean);
-  const balanced = balancedObjectCandidates(clean).reverse();
-  const candidates = [...fenced, clean, ...balanced];
-  const uniqueCandidates = [...new Set(candidates.map((item) => item.trim()).filter(Boolean))];
-  const attempts = [];
-  const output = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const candidate of uniqueCandidates) {
-    for (const repaired of commonJsonRepairs(candidate)) {
-      try {
-        const parsed = parseObjectCandidate(repaired);
-        const fingerprint = JSON.stringify(parsed);
-        if (!seen.has(fingerprint)) {
-          seen.add(fingerprint);
-          output.push(parsed);
-        }
-        break;
-      } catch (error) {
-        attempts.push(error instanceof Error ? error.message : String(error));
-      }
-    }
-  }
-  if (output.length) return output;
-  throw new JsonObjectParseError("\u6A21\u578B\u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684JSON\u5BF9\u8C61", raw, attempts.slice(-6));
-}
-function parseJsonObject(raw) {
-  return parseJsonObjectCandidates(raw)[0];
-}
-function sanitizeBookName(value) {
-  return String(value ?? "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
+function sanitizeBookName(value2) {
+  return String(value2 ?? "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
 }
 function toErrorMessage(error) {
   if (error instanceof Error) {
@@ -448,8 +271,8 @@ var LEGACY_TABLE_KEY_MAP = {
   foundations: "foundations",
   customObjects: "customObjects"
 };
-function normalizeField(value, index) {
-  const source = value && typeof value === "object" ? value : {};
+function normalizeField(value2, index) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   const key = safeText(source.key, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "");
   if (!key) return null;
   const type = ["string", "string[]", "lifecycle"].includes(String(source.type)) ? source.type : "string";
@@ -461,9 +284,9 @@ function normalizeField(value, index) {
     required: Boolean(source.required)
   };
 }
-function normalizedRole(value) {
+function normalizedRole(value2) {
   const allowed = /* @__PURE__ */ new Set(["spacetime", "characters", "items", "events", "regions", "globalChanges", "foundations", "custom", "focus", "state", "skills", "relationships"]);
-  return allowed.has(String(value)) ? String(value) : "custom";
+  return allowed.has(String(value2)) ? String(value2) : "custom";
 }
 function mergeRoleFields(role, sourceFields) {
   const fields = roleFields(role);
@@ -485,8 +308,8 @@ function mergeRoleFields(role, sourceFields) {
   }
   return fields;
 }
-function normalizeTableRegistry(value) {
-  const source = Array.isArray(value) && value.length ? value : DEFAULT_TABLE_REGISTRY;
+function normalizeTableRegistry(value2) {
+  const source = Array.isArray(value2) && value2.length ? value2 : DEFAULT_TABLE_REGISTRY;
   const output = [];
   const used = /* @__PURE__ */ new Set();
   source.forEach((item, index) => {
@@ -509,8 +332,8 @@ function normalizeTableRegistry(value) {
   });
   return output.sort((a, b) => a.order - b.order).map((table, order) => ({ ...table, order }));
 }
-function migrateTableRegistryToObjectViews(value) {
-  const old = normalizeTableRegistry(value);
+function migrateTableRegistryToObjectViews(value2) {
+  const old = normalizeTableRegistry(value2);
   const next = restoreDefaultTableRegistry();
   const sourceFor = {
     spacetime: ["spacetime"],
@@ -590,7 +413,7 @@ function updateTableHeaders(registry2, key, headerText) {
 }
 function parseCustomFields(fieldText = "") {
   const used = /* @__PURE__ */ new Set();
-  const parsed = fieldText.split(/\n+/).map((value) => value.trim()).filter(Boolean).map((line, index) => {
+  const parsed = fieldText.split(/\n+/).map((value2) => value2.trim()).filter(Boolean).map((line, index) => {
     const parts = line.split(/[:：]/).map((part) => part.trim());
     const rawKey = parts[0] || `field_${index + 1}`;
     const key = safeText(rawKey, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "") || `field_${index + 1}`;
@@ -656,25 +479,25 @@ function moveTableDefinition(registry2, key, direction) {
   [next[index], next[target]] = [next[target], next[index]];
   return next.map((table, order) => ({ ...table, order }));
 }
-function normalizedName(value) {
-  return safeText(value, 240).toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+function normalizedName(value2) {
+  return safeText(value2, 240).toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
-function characterNameAliases(value) {
-  const raw = safeText(value, 240).trim();
+function characterNameAliases(value2) {
+  const raw = safeText(value2, 240).trim();
   const stripped = raw.replace(/^(?:人物|角色|人物状态|角色状态|档案|信息)\s*[:：|｜-]?\s*/i, "").replace(/\s*(?:人物|角色|人物状态|角色状态|档案|信息|当前状态)$/i, "");
   const candidates = [raw, stripped, ...raw.split(/[|｜:：—–-]/)];
   return [...new Set(candidates.map(normalizedName).filter((name) => name.length >= 2 || /[\u3400-\u9fff]/.test(name)))];
 }
-function list(value) {
-  return Array.isArray(value) ? value.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
+function list(value2) {
+  return Array.isArray(value2) ? value2.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
 }
 function rowText(row) {
   return `${safeText(row?.title, 240)} ${safeText(row?.content, 4e3)} ${list(row?.keywords).join(" ")}`;
 }
-function appendField(row, field, value) {
+function appendField(row, field, value2) {
   row.fields ||= {};
   const current = list(row.fields[field]);
-  if (value && !current.includes(value)) current.push(value);
+  if (value2 && !current.includes(value2)) current.push(value2);
   row.fields[field] = current;
 }
 function mergeIds(row, source) {
@@ -696,9 +519,9 @@ function mergeLegacyCharactersByStableId(rows) {
     }
     const existingFields = existing.fields && typeof existing.fields === "object" ? existing.fields : {};
     const incomingFields = row.fields && typeof row.fields === "object" ? row.fields : {};
-    for (const [key, value] of Object.entries(incomingFields)) {
-      if (Array.isArray(value)) existingFields[key] = [.../* @__PURE__ */ new Set([...list(existingFields[key]), ...list(value)])];
-      else if (!safeText(existingFields[key], 12e3).trim() && safeText(value, 12e3).trim()) existingFields[key] = deepClone(value);
+    for (const [key, value2] of Object.entries(incomingFields)) {
+      if (Array.isArray(value2)) existingFields[key] = [.../* @__PURE__ */ new Set([...list(existingFields[key]), ...list(value2)])];
+      else if (!safeText(existingFields[key], 12e3).trim() && safeText(value2, 12e3).trim()) existingFields[key] = deepClone(value2);
     }
     existing.fields = existingFields;
     if (safeText(row.content, 12e3).trim()) existing.content = row.content;
@@ -718,8 +541,8 @@ function pendingCustom(row, objectType) {
     fields: { ...row?.fields && typeof row.fields === "object" ? deepClone(row.fields) : {}, objectType, migrationStatus: "\u5F85\u5F52\u5E76" }
   };
 }
-function migrateSnapshotTables(value, registry2) {
-  const source = value && typeof value === "object" ? value : {};
+function migrateSnapshotTables(value2, registry2) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   const tables2 = normalizeTableRegistry(registry2);
   const output = Object.fromEntries(tables2.map((table) => [table.key, []]));
   const characterKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key || "characters";
@@ -801,7 +624,8 @@ function getSettings() {
   settings.smallSummaryTurns = Math.min(100, Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12)));
   settings.largeSummaryCount = Math.min(50, Math.max(1, Math.round(Number(settings.largeSummaryCount) || 4)));
   settings.requestTimeoutMs = Math.min(3e5, Math.max(1e4, Math.round(Number(settings.requestTimeoutMs) || 9e4)));
-  settings.compatibilityMode = settings.compatibilityMode === true;
+  delete settings.compatibilityMode;
+  delete settings.repairInvalidJsonOnce;
   settings.migration ||= { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false };
   settings.migration.objectViewsV26 ??= false;
   settings.lorebookRecall ||= { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 };
@@ -1027,12 +851,12 @@ function assertArtifactCommitCurrent(artifact) {
 
 // src/domain/internal-facts.ts
 var CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
-function stringList(value, limit = 40, itemLimit = 500) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+function stringList(value2, limit = 40, itemLimit = 500) {
+  if (!Array.isArray(value2)) return [];
+  return [...new Set(value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
-function timeRange(value) {
-  const source = value && typeof value === "object" ? value : {};
+function timeRange(value2) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   return {
     start: safeText(source.start, 120).trim() || void 0,
     end: safeText(source.end, 120).trim() || void 0,
@@ -1047,8 +871,8 @@ function eventIdFor(source, factId) {
   if (type === "event" && entity) return entity;
   return `event_${hashText(`${entity}|${source.title}|${factId}`)}`;
 }
-function normalizeInternalFact(value, sourceMessageId = "", index = 0) {
-  const source = value && typeof value === "object" ? value : {};
+function normalizeInternalFact(value2, sourceMessageId = "", index = 0) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   const content = safeText(source.content, 6e3).trim();
   const occurred = stringList(source.occurredFacts ?? source.occurred ?? (content ? [content] : []), 30, 1e3);
   if (!content && !occurred.length) return null;
@@ -1081,11 +905,11 @@ function normalizeInternalFact(value, sourceMessageId = "", index = 0) {
     updatedAt: safeText(source.updatedAt, 80).trim() || nowIso()
   };
 }
-function normalizeInternalFacts(value, sourceMessageId = "") {
-  if (!Array.isArray(value)) return [];
+function normalizeInternalFacts(value2, sourceMessageId = "") {
+  if (!Array.isArray(value2)) return [];
   const output = [];
   const seen = /* @__PURE__ */ new Set();
-  value.forEach((item, index) => {
+  value2.forEach((item, index) => {
     const normalized = normalizeInternalFact(item, sourceMessageId, index);
     if (!normalized) return;
     if (seen.has(normalized.factId)) {
@@ -1174,9 +998,9 @@ function pendingFactsByEvent(facts) {
   const groups = /* @__PURE__ */ new Map();
   for (const fact of facts) {
     if (fact.consumedBySmallSummaryId) continue;
-    const list4 = groups.get(fact.eventId) ?? [];
-    list4.push(fact);
-    groups.set(fact.eventId, list4);
+    const list3 = groups.get(fact.eventId) ?? [];
+    list3.push(fact);
+    groups.set(fact.eventId, list3);
   }
   return groups;
 }
@@ -1220,8 +1044,8 @@ function invalidateFactsAfterMessages(facts, validMessageIds) {
 var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
 var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
 var NEGATED_INTERVENTION = /(?:未|没有|并未|从未|不曾)\s*(?:介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害)/gi;
-function isPurePassiveObserverText(value) {
-  const text = String(value ?? "");
+function isPurePassiveObserverText(value2) {
+  const text = String(value2 ?? "");
   if (!PASSIVE_OBSERVER.test(text)) return false;
   const affirmativeText = text.replace(NEGATED_INTERVENTION, "");
   return !CAUSAL_INTERVENTION.test(affirmativeText);
@@ -1277,8 +1101,8 @@ function attachLegacyAliases(snapshot, registry2) {
       configurable: true,
       enumerable: false,
       get: () => snapshot[key],
-      set: (value) => {
-        snapshot[key] = Array.isArray(value) ? value : [];
+      set: (value2) => {
+        snapshot[key] = Array.isArray(value2) ? value2 : [];
       }
     });
   }
@@ -1288,23 +1112,23 @@ function emptySnapshot(registry2, includeDisabled = true) {
   const tables2 = registryOrDefault(registry2).filter((table) => includeDisabled || table.enabled);
   return attachLegacyAliases(Object.fromEntries(tables2.map((table) => [table.key, []])), tables2);
 }
-function normalizeKeywords(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 24);
+function normalizeKeywords(value2) {
+  if (!Array.isArray(value2)) return [];
+  return [...new Set(value2.map((item) => safeText(item, 80).trim()).filter(Boolean))].slice(0, 24);
 }
-function normalizeStringList(value, limit = 20, itemLimit = 240) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+function normalizeStringList(value2, limit = 20, itemLimit = 240) {
+  if (!Array.isArray(value2)) return [];
+  return [...new Set(value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
-function enumValue(value, allowed, fallback) {
-  const text = safeText(value, 80).trim();
+function enumValue(value2, allowed, fallback) {
+  const text = safeText(value2, 80).trim();
   return allowed.has(text) ? text : fallback;
 }
 function defaultLifecycle() {
   return { existence: "\u672A\u6807\u6CE8", activity: "\u672A\u6807\u6CE8", memory: "\u672A\u6807\u6CE8", evidenceLevel: "\u672A\u77E5", evidence: "", returnConditions: [], returnBlockers: [] };
 }
-function normalizeLifecycle(value, previous) {
-  const source = value && typeof value === "object" ? value : {};
+function normalizeLifecycle(value2, previous) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   const base = previous ?? defaultLifecycle();
   return {
     existence: enumValue(source.existence ?? base.existence, EXISTENCE_STATES, base.existence),
@@ -1316,8 +1140,8 @@ function normalizeLifecycle(value, previous) {
     returnBlockers: normalizeStringList(source.returnBlockers ?? base.returnBlockers)
   };
 }
-function normalizeRecall(value, title, keywords) {
-  const source = value && typeof value === "object" ? value : {};
+function normalizeRecall(value2, title, keywords) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   const any = normalizeStringList(source.any, 24, 100);
   return {
     any: any.length ? any : normalizeKeywords([title, ...keywords]),
@@ -1337,10 +1161,10 @@ function normalizeCustomFields(source, table, previous) {
   }
   return output;
 }
-function normalizeRow(value, tableKey, index, previous, registry2) {
+function normalizeRow(value2, tableKey, index, previous, registry2) {
   const tables2 = registryOrDefault(registry2);
   const table = tableByKey(tables2, tableKey) ?? { key: tableKey, name: tableKey, role: "custom", fields: [] };
-  const source = value && typeof value === "object" ? value : {};
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   const now = nowIso();
   const id = safeText(source.id || previous?.id || makeId(tableKey), 160).trim() || makeId(tableKey);
   const manual = source.source === "manual" || previous?.source === "manual";
@@ -1382,9 +1206,9 @@ function normalizeRow(value, tableKey, index, previous, registry2) {
     recall: normalizeRecall(source.recall ?? previous?.recall, title, keywords)
   };
 }
-function normalizeSnapshot(value, previousSnapshot2, registry2, includeDisabled = true) {
+function normalizeSnapshot(value2, previousSnapshot2, registry2, includeDisabled = true) {
   const tables2 = registryOrDefault(registry2).filter((table) => includeDisabled || table.enabled);
-  const source = migrateSnapshotTables(value, tables2);
+  const source = migrateSnapshotTables(value2, tables2);
   const previous = previousSnapshot2 ? migrateSnapshotTables(previousSnapshot2, tables2) : {};
   const output = emptySnapshot(tables2, true);
   for (const table of tables2) {
@@ -1402,8 +1226,8 @@ function normalizeSnapshot(value, previousSnapshot2, registry2, includeDisabled 
   }
   return attachLegacyAliases(output, tables2);
 }
-function identityTitle(value) {
-  return String(value || "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+function identityTitle(value2) {
+  return String(value2 || "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function stateRows(snapshot, registry2) {
   const key = characterTableKey(registry2);
@@ -1513,7 +1337,7 @@ function removeFocusCharacterDuplicates(snapshot, registry2) {
   if (!focusKey) return snapshot;
   const characters = stateRows(snapshot, tables2);
   const aliases2 = new Set(characters.flatMap((row) => characterTitleAliases(row.title)));
-  const contents = new Set(characters.map((row) => identityTitle(row.content)).filter((value) => value.length >= 12));
+  const contents = new Set(characters.map((row) => identityTitle(row.content)).filter((value2) => value2.length >= 12));
   snapshot[focusKey] = (snapshot[focusKey] ?? []).filter((row) => {
     if (row.source === "manual" || row.locked) return true;
     const title = identityTitle(row.title);
@@ -1522,20 +1346,20 @@ function removeFocusCharacterDuplicates(snapshot, registry2) {
   });
   return snapshot;
 }
-function rowArray(value) {
-  return Array.isArray(value) ? value.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
+function rowArray(value2) {
+  return Array.isArray(value2) ? value2.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
 }
 var PERSISTED_CHARACTER_STATE_FIELDS = ["currentFacts", "currentStates", "recentHistory", "relationshipStates", "abilityStates"];
 var PERSISTED_CHARACTER_SHARED_FIELDS = ["solidifiedHistory", "relatedObjects", "relatedEvents"];
-function persistedCharacterName(value) {
-  const original = safeText(value, 240).trim();
+function persistedCharacterName(value2) {
+  const original = safeText(value2, 240).trim();
   let name = original.replace(/^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]\s*/i, "").replace(/^(?:人物|角色|档案|信息)\s*[:：|｜-]\s*/i, "").replace(/\s*(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i, "").replace(/\s*(?:人物|角色)?(?:档案|信息)\s*$/i, "").trim();
   if (!name) name = original;
-  const identity = identityTitle(name);
-  return (/* @__PURE__ */ new Set(["\u89D2\u8272", "\u4EBA\u7269", "\u672A\u77E5", "\u672A\u547D\u540D", "unknown", "unknowncharacter"])).has(identity) ? "" : identity;
+  const identity2 = identityTitle(name);
+  return (/* @__PURE__ */ new Set(["\u89D2\u8272", "\u4EBA\u7269", "\u672A\u77E5", "\u672A\u547D\u540D", "unknown", "unknowncharacter"])).has(identity2) ? "" : identity2;
 }
-function explicitPersistedStateTitle(value) {
-  const title = safeText(value, 240).trim();
+function explicitPersistedStateTitle(value2) {
+  const title = safeText(value2, 240).trim();
   return /^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]/i.test(title) || /(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i.test(title);
 }
 function hasPersistedBaseSignal(row) {
@@ -1611,11 +1435,11 @@ function mergePersistedCharacterDuplicates(snapshot, registry2) {
     for (const field of PERSISTED_CHARACTER_SHARED_FIELDS) {
       fields[field] = [.../* @__PURE__ */ new Set([...rowArray(baseFields[field]), ...rowArray(stateFields[field])])];
     }
-    for (const [field, value] of Object.entries(stateFields)) {
+    for (const [field, value2] of Object.entries(stateFields)) {
       if (field === "baseContent" || field === "solidifiedHistory" || PERSISTED_CHARACTER_STATE_FIELDS.includes(field) || PERSISTED_CHARACTER_SHARED_FIELDS.includes(field)) continue;
       const current = fields[field];
-      if (Array.isArray(value)) fields[field] = [.../* @__PURE__ */ new Set([...rowArray(current), ...rowArray(value)])];
-      else if (!safeText(current, 4e3).trim() && safeText(value, 4e3).trim()) fields[field] = structuredClone(value);
+      if (Array.isArray(value2)) fields[field] = [.../* @__PURE__ */ new Set([...rowArray(current), ...rowArray(value2)])];
+      else if (!safeText(current, 4e3).trim() && safeText(value2, 4e3).trim()) fields[field] = structuredClone(value2);
     }
     const merged = {
       ...structuredClone(base),
@@ -1660,9 +1484,9 @@ function rewriteObjectReferences(snapshot, idRemap) {
 }
 function mergeRowsByIdentity(existing, incoming) {
   const fields = { ...existing.fields ?? {} };
-  for (const [key, value] of Object.entries(incoming.fields ?? {})) {
-    if (Array.isArray(value)) fields[key] = [.../* @__PURE__ */ new Set([...rowArray(fields[key]), ...rowArray(value)])];
-    else if (safeText(value, 4e3).trim()) fields[key] = structuredClone(value);
+  for (const [key, value2] of Object.entries(incoming.fields ?? {})) {
+    if (Array.isArray(value2)) fields[key] = [.../* @__PURE__ */ new Set([...rowArray(fields[key]), ...rowArray(value2)])];
+    else if (safeText(value2, 4e3).trim()) fields[key] = structuredClone(value2);
   }
   return preserveAnchoredTitle(existing, {
     ...existing,
@@ -1828,8 +1652,8 @@ function filterPassiveObservers(snapshot, registry2) {
 
 // src/storage/repository.ts
 var CURRENT_SCHEMA_VERSION = 2;
-function cloneChatState(value) {
-  return JSON.parse(JSON.stringify(value));
+function cloneChatState(value2) {
+  return JSON.parse(JSON.stringify(value2));
 }
 function emptyChatState(chatKey) {
   return {
@@ -1844,9 +1668,9 @@ function emptyChatState(chatKey) {
     updatedAt: nowIso()
   };
 }
-function normalizeSummaryArrays(value, kind) {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item) => item && typeof item === "object").map((item) => ({
+function normalizeSummaryArrays(value2, kind) {
+  if (!Array.isArray(value2)) return [];
+  return value2.filter((item) => item && typeof item === "object").map((item) => ({
     ...item,
     kind,
     sourceKeys: Array.isArray(item.sourceKeys) ? [...new Set(item.sourceKeys.map(String))] : [],
@@ -2252,8 +2076,8 @@ function attachArtifactToMessage(message, artifact) {
   message.extra[MODULE_NAME] = artifact;
 }
 function getAttachedArtifact(message) {
-  const value = message?.extra?.[MODULE_NAME];
-  return value && typeof value === "object" ? value : null;
+  const value2 = message?.extra?.[MODULE_NAME];
+  return value2 && typeof value2 === "object" ? value2 : null;
 }
 function markStage(artifact, stage, status, error) {
   const current = artifact.stages[stage] ?? idleStage();
@@ -2467,86 +2291,6 @@ var TASK_RESPONSE_TOKENS = {
   smallSummary: 2400,
   largeSummary: 3200
 };
-var schemaUnsupportedConnections = /* @__PURE__ */ new Set();
-var schemaRejectedRequests = /* @__PURE__ */ new Set();
-var SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaCapabilities.v40";
-var LEGACY_SCHEMA_CAPABILITY_STORAGE_KEYS = [
-  "mirrorAbyss.schemaCapabilities.v35",
-  "mirrorAbyss.schemaUnsupported.v31"
-];
-function readStoredSchemaCapabilities() {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(SCHEMA_CAPABILITY_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return {
-      unsupportedConnections: Array.isArray(parsed?.unsupportedConnections) ? parsed.unsupportedConnections.filter((item) => typeof item === "string") : []
-    };
-  } catch {
-    return { unsupportedConnections: [] };
-  }
-}
-function persistSchemaCapabilities() {
-  try {
-    globalThis.sessionStorage?.setItem(SCHEMA_CAPABILITY_STORAGE_KEY, JSON.stringify({
-      unsupportedConnections: [...schemaUnsupportedConnections]
-    }));
-    for (const key of LEGACY_SCHEMA_CAPABILITY_STORAGE_KEYS) globalThis.sessionStorage?.removeItem(key);
-  } catch {
-  }
-}
-var storedSchemaCapabilities = readStoredSchemaCapabilities();
-for (const key of storedSchemaCapabilities.unsupportedConnections) schemaUnsupportedConnections.add(key);
-try {
-  for (const key of LEGACY_SCHEMA_CAPABILITY_STORAGE_KEYS) globalThis.sessionStorage?.removeItem(key);
-} catch {
-}
-function taskConnectionKey(task) {
-  const connection = getSettings().connections[task];
-  if (connection?.mode === "profile") {
-    const profileId = resolveProfileId(connection);
-    const profile = supportedProfiles().find((item) => item?.id === profileId);
-    return `profile:${profileId || "unselected"}:${hashText(`${profile?.api || ""}|${profile?.model || ""}`)}`;
-  }
-  const context = getContext();
-  const currentIdentity = [
-    context.mainApi,
-    context.chatCompletionSettings?.model,
-    context.oai_settings?.chat_completion_source,
-    context.oai_settings?.openai_model,
-    context.textgenerationwebui_settings?.custom_model,
-    context.selected_model,
-    context.model,
-    context.api_server
-  ].map((value) => safeText(value, 240)).join("|");
-  return `current-chat:${hashText(currentIdentity)}`;
-}
-function schemaRequestKey(task, jsonSchema) {
-  return `${taskConnectionKey(task)}:${task}:${hashText(JSON.stringify(jsonSchema))}`;
-}
-function jsonSchemaSkipReason(task, jsonSchema) {
-  if (schemaUnsupportedConnections.has(taskConnectionKey(task))) return "connection-unsupported";
-  if (jsonSchema && schemaRejectedRequests.has(schemaRequestKey(task, jsonSchema))) return "schema-rejected";
-  return null;
-}
-function rememberJsonSchemaUnsupported(task) {
-  schemaUnsupportedConnections.add(taskConnectionKey(task));
-  persistSchemaCapabilities();
-}
-function rememberJsonSchemaRejected(task, jsonSchema) {
-  schemaRejectedRequests.add(schemaRequestKey(task, jsonSchema));
-}
-function forgetJsonSchemaRejected(task, jsonSchema) {
-  if (!jsonSchema) return;
-  schemaRejectedRequests.delete(schemaRequestKey(task, jsonSchema));
-}
-function isDefinitiveJsonSchemaUnsupported(error) {
-  const message = toErrorMessage(error);
-  return /(?:json[_ -]?schema|structured outputs?|response[_ -]?format).*(?:not supported|unsupported|not available)|(?:does not|doesn't) support.*(?:json[_ -]?schema|structured outputs?|response[_ -]?format)|unknown (?:field|parameter).*(?:json_schema|response_format)|unrecognized (?:field|parameter).*(?:json_schema|response_format)/i.test(message);
-}
-function isJsonSchemaRequestRejected(error) {
-  const message = toErrorMessage(error);
-  return /\bbad request\b|\bstatus\s*400\b|\bhttp\s*400\b|invalid (?:json[_ -]?)?schema|schema.*invalid|response[_ -]?format.*invalid/i.test(message);
-}
 function responseTokens(options) {
   const requested = Number(options.maxTokens);
   if (Number.isFinite(requested) && requested > 0) {
@@ -2554,21 +2298,24 @@ function responseTokens(options) {
   }
   return TASK_RESPONSE_TOKENS[options.task];
 }
-function textFromValue(value) {
-  if (typeof value === "string") return value.trim();
-  if (value && typeof value === "object") {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "";
+function textFromValue(value2) {
+  if (typeof value2 === "string") return value2.trim();
+  if (!value2 || typeof value2 !== "object") return "";
+  const source = value2;
+  for (const key of ["text", "output_text", "content", "value"]) {
+    const nested = source[key];
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+    if (Array.isArray(nested)) {
+      const text = textFromContentParts(nested);
+      if (text) return text;
     }
   }
   return "";
 }
-function textFromContentParts(value) {
-  if (!Array.isArray(value)) return "";
+function textFromContentParts(value2) {
+  if (!Array.isArray(value2)) return "";
   const parts = [];
-  for (const item of value) {
+  for (const item of value2) {
     if (typeof item === "string") {
       if (item.trim()) parts.push(item.trim());
       continue;
@@ -2578,21 +2325,20 @@ function textFromContentParts(value) {
     const text = typeof source.text === "string" ? source.text.trim() : typeof source.output_text === "string" ? source.output_text.trim() : "";
     if (text) parts.push(text);
     const args = source.functionCall?.args ?? source.function_call?.arguments ?? source.input;
-    if (args && typeof args === "object") parts.push(textFromValue(args));
-    else if (typeof args === "string" && args.trim()) parts.push(args.trim());
+    if (typeof args === "string" && args.trim()) parts.push(args.trim());
   }
   return parts.filter(Boolean).join("\n").trim();
 }
 function generationText(result) {
   if (typeof result === "string") return result.trim();
   if (!result || typeof result !== "object") return "";
-  for (const value of [result.output_text, result.content, result.text, result.result, result.value, result.pipe]) {
-    if (Array.isArray(value)) {
-      const text2 = textFromContentParts(value);
+  for (const value2 of [result.output_text, result.content, result.text, result.result, result.value, result.pipe]) {
+    if (Array.isArray(value2)) {
+      const text2 = textFromContentParts(value2);
       if (text2) return text2;
       continue;
     }
-    const text = textFromValue(value);
+    const text = textFromValue(value2);
     if (text) return text;
   }
   const messageContent = result?.message?.content ?? result?.choices?.[0]?.message?.content;
@@ -2603,12 +2349,12 @@ function generationText(result) {
     const text = textFromValue(messageContent);
     if (text) return text;
   }
-  for (const value of [
+  for (const value2 of [
     result?.choices?.[0]?.text,
     result?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments,
     result?.choices?.[0]?.message?.function_call?.arguments
   ]) {
-    const text = textFromValue(value);
+    const text = textFromValue(value2);
     if (text) return text;
   }
   const candidateParts = result?.candidates?.[0]?.content?.parts;
@@ -2643,7 +2389,7 @@ function generationText(result) {
     "incomplete_details",
     "promptFeedback"
   ].some((key) => key in result);
-  return hasEnvelope ? "" : textFromValue(result) || safeText(result, 2e5).trim();
+  return hasEnvelope ? "" : textFromValue(result);
 }
 function generationFailureDetail(result) {
   if (!result || typeof result !== "object") return "";
@@ -2670,8 +2416,8 @@ function emptyGenerationError(label, result) {
   const detail = generationFailureDetail(result);
   return new Error(detail || `${label}\u8FD4\u56DE\u4E3A\u7A7A\uFF08No message generated\uFF09`);
 }
-function cleanProfileName(value) {
-  return safeText(value, 160).replace(/["|\r\n]/g, "").trim();
+function cleanProfileName(value2) {
+  return safeText(value2, 160).replace(/["|\r\n]/g, "").trim();
 }
 function connectionManagerStore() {
   const context = getContext();
@@ -2699,12 +2445,6 @@ function resolveProfileId(connection) {
   }
   return "";
 }
-function profileApiMode(profileId) {
-  const context = getContext();
-  const profile = supportedProfiles().find((item) => item?.id === profileId);
-  const selected = context.CONNECT_API_MAP?.[profile?.api]?.selected;
-  return selected === "openai" || selected === "textgenerationwebui" ? selected : "";
-}
 function messagesFromOptions(options) {
   const messages = [];
   if (options.systemPrompt.trim()) messages.push({ role: "system", content: options.systemPrompt });
@@ -2727,7 +2467,6 @@ async function generateCurrent(options, controller) {
     Promise.resolve(context.generateRaw({
       systemPrompt: options.systemPrompt,
       prompt: options.prompt,
-      jsonSchema: options.jsonSchema,
       responseLength: responseTokens(options),
       signal: options.signal
     })),
@@ -2748,9 +2487,6 @@ async function generateWithNativeProfile(options, profileId, controller) {
   const settings = getSettings();
   const messages = messagesFromOptions(options);
   const overridePayload = { stream: false };
-  if (options.jsonSchema && profileApiMode(profileId) === "openai") {
-    overridePayload.json_schema = options.jsonSchema;
-  }
   const result = await withTimeout(
     Promise.resolve(service.sendRequest(
       profileId,
@@ -2811,14 +2547,12 @@ async function generateTask(options) {
       }
       return generateCurrent(request, controller);
     }, {
-      requestPurpose: options.requestPurpose || (options.jsonSchema ? "schema" : "plain"),
+      requestPurpose: options.requestPurpose || "plain",
       requestOrigin: options.requestOrigin ? safeText(options.requestOrigin, 80) : void 0,
       systemPromptChars: options.systemPrompt.length,
       promptChars,
       responseTokens: tokenLimit,
-      hasJsonSchema: Boolean(options.jsonSchema),
-      jsonSchemaName: options.jsonSchema ? safeText(options.jsonSchema.name, 120) : void 0,
-      jsonSchemaBytes: options.jsonSchema ? JSON.stringify(options.jsonSchema).length : 0
+      protocol: options.requestPurpose === "fixed-text" || options.requestPurpose === "connection-test" ? "fixed-text" : "plain-text"
     });
   } finally {
     externalSignal?.removeEventListener("abort", forwardAbort);
@@ -2830,368 +2564,58 @@ function requestTraceReport() {
 }
 async function testConnection(task) {
   const started = performance.now();
-  let raw = "";
-  let schemaStatus = "supported";
-  let schemaDetail = "";
-  const request = {
+  const raw = await generateTask({
     task,
-    systemPrompt: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
-    prompt: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}',
-    maxTokens: 256,
+    systemPrompt: "\u4F60\u662F\u955C\u6E0A\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\u6D4B\u8BD5\u5668\u3002\u7981\u6B62JSON\u3001Markdown\u3001\u89E3\u91CA\u548C\u601D\u8003\u6807\u7B7E\u3002",
+    prompt: "<MA_PING>\nstatus=ok\nsource=mirror-abyss\n</MA_PING>",
+    maxTokens: 128,
     requestClass: "diagnostic",
     requestOrigin: "connection-test",
-    jsonSchema: {
-      name: "MirrorAbyssConnectionTestV35",
-      description: "\u955C\u6E0A\u539F\u751F\u8FDE\u63A5\u7ED3\u6784\u5316\u8F93\u51FA\u6D4B\u8BD5",
-      strict: false,
-      value: {
-        $schema: "http://json-schema.org/draft-04/schema#",
-        type: "object",
-        required: ["ok", "source"],
-        properties: {
-          ok: { type: "boolean" },
-          source: { type: "string" }
-        },
-        additionalProperties: false
-      }
-    }
-  };
-  const schema = request.jsonSchema;
-  const compatibilityMode = getSettings().compatibilityMode;
-  let schemaFailure;
-  let pendingRejectedSchema = false;
-  const skipReason = compatibilityMode ? null : jsonSchemaSkipReason(task, schema);
-  if (compatibilityMode) {
-    schemaStatus = "plain-only";
-    schemaDetail = "\u517C\u5BB9\u6A21\u5F0F\u5DF2\u5F00\u542F\uFF0C\u672C\u6B21\u672A\u53D1\u9001JSON Schema";
-    raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "plain" });
-  } else if (skipReason) {
-    schemaStatus = "cached-bypass";
-    raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "plain" });
-  } else {
-    try {
-      raw = await generateTask({ ...request, requestPurpose: "schema" });
-      if (raw.trim() !== "{}") forgetJsonSchemaRejected(task, schema);
-      if (raw.trim() === "{}") {
-        schemaStatus = "empty-fallback";
-        schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61");
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") throw error;
-      schemaFailure = error;
-      schemaDetail = safeText(toErrorMessage(error), 240);
-      if (isDefinitiveJsonSchemaUnsupported(error)) {
-        schemaStatus = "rejected-fallback";
-        rememberJsonSchemaUnsupported(task);
-      } else if (isJsonSchemaRequestRejected(error)) {
-        schemaStatus = "rejected-fallback";
-      } else {
-        throw new Error(
-          `${describeTaskConnection(task)}\u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25\uFF0C\u672A\u6267\u884C\u65E0Schema\u91CD\u590D\u8BF7\u6C42\uFF1A${toErrorMessage(error)}`,
-          { cause: error }
-        );
-      }
-    }
-  }
-  if (schemaFailure) {
-    try {
-      raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "fallback" });
-      pendingRejectedSchema = schemaStatus === "rejected-fallback" && !isDefinitiveJsonSchemaUnsupported(schemaFailure) || schemaStatus === "empty-fallback";
-    } catch (fallbackError) {
-      if (fallbackError instanceof Error && fallbackError.name === "AbortError") throw fallbackError;
-      throw new Error(
-        `${describeTaskConnection(task)}\u8FDE\u63A5\u5931\u8D25\u3002\u7ED3\u6784\u5316\u8BF7\u6C42\uFF1A${toErrorMessage(schemaFailure)}\uFF1B\u65E0Schema\u56DE\u9000\uFF1A${toErrorMessage(fallbackError)}`
-      );
-    }
-  }
-  let jsonValid = false;
-  let instructionFollowed = false;
-  try {
-    const parsed = parseJsonObject(raw);
-    jsonValid = true;
-    instructionFollowed = parsed.ok === true && parsed.source === "mirror-abyss";
-  } catch {
-  }
-  if (pendingRejectedSchema && instructionFollowed) rememberJsonSchemaRejected(task, schema);
-  if (skipReason === "schema-rejected" && !instructionFollowed) forgetJsonSchemaRejected(task, schema);
+    requestPurpose: "connection-test"
+  });
+  const normalized = raw.replace(/\r/g, "").trim();
+  const instructionFollowed = /<MA_PING>\s*status\s*[=＝:：]\s*ok\s*source\s*[=＝:：]\s*mirror-abyss\s*<\/MA_PING>/i.test(normalized);
   return {
-    connected: Boolean(raw.trim()),
+    connected: Boolean(normalized),
     instructionFollowed,
-    jsonValid,
+    protocolValid: instructionFollowed,
     method: describeTaskConnection(task),
     elapsedMs: Math.round(performance.now() - started),
-    responsePreview: raw.replace(/\s+/g, " ").slice(0, 240),
-    schemaStatus,
-    schemaDetail
+    responsePreview: normalized.replace(/\s+/g, " ").slice(0, 240),
+    responseFormat: "fixed-text",
+    protocolDetail: "\u6240\u6709\u6A21\u578B\u4EFB\u52A1\u5747\u4F7F\u7528\u56FA\u5B9A\u6587\u672C\u6216\u6B63\u6587\u6587\u672C\uFF0C\u4E0D\u53D1\u9001JSON Schema"
   };
-}
-
-// src/llm/schema-validation.ts
-function schemaRoot(schema) {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return null;
-  const source = schema;
-  const value = source.value;
-  if (value && typeof value === "object" && !Array.isArray(value)) return value;
-  return source;
-}
-function typeMatches(value, type) {
-  if (type === "object") return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-  if (type === "array") return Array.isArray(value);
-  if (type === "string") return typeof value === "string";
-  if (type === "boolean") return typeof value === "boolean";
-  if (type === "number") return typeof value === "number" && Number.isFinite(value);
-  if (type === "integer") return typeof value === "number" && Number.isInteger(value);
-  if (type === "null") return value === null;
-  return true;
-}
-function describeType(value) {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  return typeof value;
-}
-function validateNode(value, schema, path, issues, limit, options) {
-  if (issues.length >= limit) return;
-  if (Array.isArray(schema.enum) && !schema.enum.some((item) => Object.is(item, value))) {
-    issues.push({ path, message: `\u503C\u4E0D\u5728\u5141\u8BB8\u679A\u4E3E\u4E2D` });
-    return;
-  }
-  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
-  if (types.length && !types.some((type) => typeof type === "string" && typeMatches(value, type))) {
-    issues.push({ path, message: `\u7C7B\u578B\u5E94\u4E3A ${types.join("|")}\uFF0C\u5B9E\u9645\u4E3A ${describeType(value)}` });
-    return;
-  }
-  if (schema.type === "object" || !schema.type && value && typeof value === "object" && !Array.isArray(value)) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const object = value;
-    const properties = schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties) ? schema.properties : {};
-    const required = Array.isArray(schema.required) ? schema.required.filter((item) => typeof item === "string") : [];
-    const allowedMissing = /* @__PURE__ */ new Set();
-    for (const [prefix, keys] of Object.entries(options.allowedMissingRequiredByPathPrefix ?? {})) {
-      if (path.startsWith(prefix)) for (const key of keys) allowedMissing.add(key);
-    }
-    for (const key of required) {
-      if (!Object.prototype.hasOwnProperty.call(object, key) && !allowedMissing.has(key)) {
-        issues.push({ path: `${path}.${key}`, message: "\u7F3A\u5C11\u5FC5\u586B\u5B57\u6BB5" });
-        if (issues.length >= limit) return;
-      }
-    }
-    if (schema.additionalProperties === false) {
-      const allowedAdditional = new Set(options.allowedAdditionalProperties?.[path] ?? []);
-      for (const [prefix, keys] of Object.entries(options.allowedAdditionalPropertiesByPathPrefix ?? {})) {
-        if (path.startsWith(prefix)) for (const key of keys) allowedAdditional.add(key);
-      }
-      for (const key of Object.keys(object)) {
-        if (!Object.prototype.hasOwnProperty.call(properties, key) && !allowedAdditional.has(key)) {
-          issues.push({ path: `${path}.${key}`, message: "\u51FA\u73B0\u672A\u58F0\u660E\u5B57\u6BB5" });
-          if (issues.length >= limit) return;
-        }
-      }
-    }
-    for (const [key, childSchema] of Object.entries(properties)) {
-      if (!Object.prototype.hasOwnProperty.call(object, key)) continue;
-      if (!childSchema || typeof childSchema !== "object" || Array.isArray(childSchema)) continue;
-      validateNode(object[key], childSchema, `${path}.${key}`, issues, limit, options);
-      if (issues.length >= limit) return;
-    }
-    return;
-  }
-  if (schema.type === "array") {
-    if (!Array.isArray(value)) return;
-    const itemSchema = schema.items;
-    if (!itemSchema || typeof itemSchema !== "object" || Array.isArray(itemSchema)) return;
-    value.forEach((item, index) => {
-      if (issues.length >= limit) return;
-      validateNode(item, itemSchema, `${path}[${index}]`, issues, limit, options);
-    });
-  }
-}
-function validateStructuredValue(value, schema, limit = 12, options = {}) {
-  const root2 = schemaRoot(schema);
-  if (!root2) return [];
-  const issues = [];
-  validateNode(value, root2, "$", issues, Math.max(1, limit), options);
-  return issues;
-}
-function formatSchemaIssues(issues) {
-  return issues.map((issue) => `${issue.path}\uFF1A${issue.message}`).join("\uFF1B");
-}
-
-// src/llm/structured.ts
-var StructuredSchemaValidationError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "StructuredSchemaValidationError";
-  }
-};
-function repairSystemPrompt(structureDescription) {
-  return `\u4F60\u662FJSON\u683C\u5F0F\u4FEE\u590D\u5668\u3002\u4F60\u4E0D\u6267\u884C\u539F\u4EFB\u52A1\u3001\u4E0D\u8865\u5145\u65B0\u4E8B\u5B9E\u3001\u4E0D\u89E3\u91CA\u5185\u5BB9\uFF0C\u53EA\u628A\u7ED9\u5B9A\u6A21\u578B\u8F93\u51FA\u8F6C\u6362\u6210\u4E00\u4E2A\u5408\u6CD5JSON\u5BF9\u8C61\u3002
-
-\u8981\u6C42\uFF1A
-1. \u4FDD\u7559\u539F\u8F93\u51FA\u4E2D\u5DF2\u7ECF\u8868\u8FBE\u7684\u8BED\u4E49\uFF0C\u4E0D\u81EA\u884C\u91CD\u505A\u5BA1\u6838\u3001\u603B\u7ED3\u6216\u72B6\u6001\u63D0\u53D6\u3002
-2. \u5220\u9664Markdown\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u548C\u601D\u8003\u6807\u7B7E\u3002
-3. \u4FEE\u590D\u7F3A\u5931\u5F15\u53F7\u3001\u5C3E\u968F\u9017\u53F7\u3001\u5168\u89D2\u6807\u70B9\u7B49\u683C\u5F0F\u95EE\u9898\u3002
-4. \u8F93\u51FA\u5FC5\u987B\u80FD\u88ABJSON.parse\u76F4\u63A5\u89E3\u6790\uFF0C\u6839\u8282\u70B9\u5FC5\u987B\u662F\u5BF9\u8C61\u3002
-5. \u53EA\u8F93\u51FAJSON\u5BF9\u8C61\uFF0C\u7981\u6B62\u8F93\u51FA\u4EFB\u4F55\u989D\u5916\u6587\u5B57\u3002
-
-\u3010\u76EE\u6807\u7ED3\u6784\u3011
-${structureDescription}`;
-}
-function repairUserPrompt(raw) {
-  return `\u3010\u9700\u8981\u4FEE\u590D\u7684\u539F\u59CB\u8F93\u51FA\u3011
-${safeText(raw, 8e4)}`;
-}
-var TASK_LABELS = {
-  audit: "\u89C4\u5219\u5BA1\u6838",
-  revision: "\u5B9A\u5411\u4FEE\u6B63",
-  state: "\u72B6\u6001\u8868",
-  smallSummary: "\u5C0F\u603B\u7ED3",
-  largeSummary: "\u5927\u603B\u7ED3"
-};
-function isCancelledRequest(error) {
-  return error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name);
-}
-function structuredError(task, error, raw) {
-  const connection = describeTaskConnection(task);
-  const preview = error instanceof JsonObjectParseError ? error.preview : jsonPreview(raw);
-  const detail = toErrorMessage(error);
-  return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
-}
-function parseAndValidateStructuredOutput(raw, jsonSchema, validationOptions = {}, candidateTransform) {
-  const candidates = parseJsonObjectCandidates(raw);
-  let firstIssues = "";
-  for (const source of candidates) {
-    let candidate;
-    try {
-      candidate = candidateTransform ? candidateTransform(structuredClone(source)) : source;
-    } catch (error) {
-      if (!firstIssues) firstIssues = toErrorMessage(error);
-      continue;
-    }
-    if (!jsonSchema) return candidate;
-    const issues = validateStructuredValue(candidate, jsonSchema, 12, validationOptions);
-    if (!issues.length) return candidate;
-    if (!firstIssues) firstIssues = formatSchemaIssues(issues);
-  }
-  throw new StructuredSchemaValidationError(`JSON\u53EF\u4EE5\u89E3\u6790\uFF0C\u4F46\u4E0D\u7B26\u5408\u76EE\u6807Schema\uFF1A${firstIssues || "\u7ED3\u6784\u4E0D\u5339\u914D"}`);
-}
-async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, validationOptions = {}, candidateTransform) {
-  const repaired = await generateTask({
-    task,
-    systemPrompt: repairSystemPrompt(structureDescription),
-    prompt: repairUserPrompt(raw),
-    requestPurpose: "json-repair"
-  });
-  return parseAndValidateStructuredOutput(repaired, jsonSchema, validationOptions, candidateTransform);
-}
-async function generateWithSchemaFallback(options) {
-  if (getSettings().compatibilityMode) {
-    return {
-      raw: await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "plain" }),
-      skipReason: null
-    };
-  }
-  const skipReason = options.jsonSchema ? jsonSchemaSkipReason(options.task, options.jsonSchema) : null;
-  if (options.jsonSchema && skipReason) {
-    return {
-      raw: await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "plain" }),
-      skipReason
-    };
-  }
-  let schemaFailure;
-  let rejectThisSchema = false;
-  try {
-    const raw = await generateTask({ ...options, requestPurpose: options.jsonSchema ? "schema" : "plain" });
-    if (!options.jsonSchema || raw.trim() !== "{}") {
-      if (options.jsonSchema) forgetJsonSchemaRejected(options.task, options.jsonSchema);
-      return { raw, skipReason: null };
-    }
-    schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u3001\u63A5\u53E3\u6216\u8BE5Schema\u4E0D\u517C\u5BB9");
-    rejectThisSchema = true;
-  } catch (error) {
-    if (!options.jsonSchema || isCancelledRequest(error)) throw error;
-    schemaFailure = error;
-    if (isDefinitiveJsonSchemaUnsupported(error)) {
-      rememberJsonSchemaUnsupported(options.task);
-    } else if (isJsonSchemaRequestRejected(error)) {
-      rejectThisSchema = true;
-    } else {
-      throw new Error(
-        `${TASK_LABELS[options.task]}\u7ED3\u6784\u5316\u8BF7\u6C42\u5931\u8D25\uFF08${describeTaskConnection(options.task)}\uFF09\uFF0C\u672A\u6267\u884C\u65E0Schema\u91CD\u590D\u8BF7\u6C42\uFF1A${toErrorMessage(error)}`,
-        { cause: error }
-      );
-    }
-  }
-  try {
-    const fallback = await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "fallback" });
-    return {
-      raw: fallback,
-      skipReason: null,
-      pendingRejectedSchema: rejectThisSchema ? options.jsonSchema : void 0
-    };
-  } catch (fallbackError) {
-    if (isCancelledRequest(fallbackError)) throw fallbackError;
-    throw new Error(
-      `${TASK_LABELS[options.task]}\u8BF7\u6C42\u5931\u8D25\uFF08${describeTaskConnection(options.task)}\uFF09\u3002\u7ED3\u6784\u5316\u8BF7\u6C42\uFF1A${toErrorMessage(schemaFailure)}\uFF1B\u65E0Schema\u56DE\u9000\uFF1A${toErrorMessage(fallbackError)}`
-    );
-  }
-}
-async function generateStructuredTask(options) {
-  const generation = await generateWithSchemaFallback(options);
-  const raw = generation.raw;
-  const validationSchema = options.validationSchema ?? options.jsonSchema;
-  try {
-    const parsed = parseAndValidateStructuredOutput(raw, validationSchema, options.validationOptions, options.candidateTransform);
-    if (generation.pendingRejectedSchema) rememberJsonSchemaRejected(options.task, generation.pendingRejectedSchema);
-    return parsed;
-  } catch (firstError) {
-    if (generation.skipReason === "schema-rejected") forgetJsonSchemaRejected(options.task, options.jsonSchema);
-    if (firstError instanceof StructuredSchemaValidationError) {
-      throw structuredError(options.task, firstError, raw);
-    }
-    if (isLikelyTruncatedJson(raw, firstError)) {
-      throw structuredError(
-        options.task,
-        new Error("\u6A21\u578B\u8F93\u51FA\u5728JSON\u5BF9\u8C61\u7ED3\u675F\u524D\u88AB\u622A\u65AD\uFF0C\u7F3A\u5931\u5185\u5BB9\u65E0\u6CD5\u5B89\u5168\u4FEE\u590D\uFF1B\u8BF7\u7F29\u77ED\u7ED3\u6784\u5316\u8F93\u51FA\u6216\u91CD\u8BD5"),
-        raw
-      );
-    }
-    const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
-    if (!allowRepair) throw structuredError(options.task, firstError, raw);
-    try {
-      const repaired = await repairStructuredOutput(options.task, raw, options.structureDescription, validationSchema, options.validationOptions, options.candidateTransform);
-      return repaired;
-    } catch (repairError) {
-      if (repairError instanceof Error && repairError.message.startsWith(`${TASK_LABELS[options.task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784`)) {
-        throw repairError;
-      }
-      throw structuredError(options.task, repairError, raw);
-    }
-  }
 }
 
 // src/prompts/audit.ts
 function auditSystemPrompt() {
   return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u89C4\u5219\u5BA1\u6838\u5668\u3002\u4F60\u53EA\u68C0\u67E5\u7ED9\u5B9AAI\u6B63\u6587\u662F\u5426\u8FDD\u53CD\u73A9\u5BB6\u63D0\u4F9B\u7684\u786C\u6027\u89C4\u5219\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u6DA6\u8272\uFF0C\u4E0D\u66FF\u6B63\u6587\u8FA9\u62A4\u3002
 
-\u5FC5\u987B\u53EA\u8F93\u51FA\u4E00\u4E2AJSON\u5BF9\u8C61\uFF0C\u7ED3\u6784\u5982\u4E0B\uFF1A
-{
-  "result": "pass | revise | block",
-  "reason": "\u4E00\u53E5\u8BDD\u7ED3\u8BBA",
-  "violations": [
-    {
-      "ruleId": "\u7A33\u5B9A\u3001\u7B80\u77ED\u7684\u89C4\u5219\u7F16\u53F7",
-      "rule": "\u88AB\u8FDD\u53CD\u7684\u89C4\u5219",
-      "evidence": "\u6B63\u6587\u4E2D\u7684\u5177\u4F53\u8FDD\u89C4\u7247\u6BB5\u6216\u51C6\u786E\u6982\u8FF0",
-      "action": "\u5E94\u5982\u4F55\u4FEE\u6539\uFF0C\u5FC5\u987B\u5177\u4F53\u53EF\u6267\u884C"
-    }
-  ],
-  "preserve": ["\u4FEE\u6B63\u65F6\u5FC5\u987B\u4FDD\u7559\u7684\u5916\u90E8\u4E8B\u5B9E"],
-  "rewriteInstruction": "\u7ED9\u4FEE\u6B63\u6587\u6A21\u578B\u7684\u4E00\u6BB5\u5B8C\u6574\u6307\u4EE4",
-  "replacementText": "\u82E5\u80FD\u4E25\u683C\u6700\u5C0F\u4FEE\u6B63\u5219\u7ED9\u51FA\u5B8C\u6574\u66FF\u6362\u6B63\u6587\uFF1B\u5426\u5219\u8F93\u51FA\u7A7A\u5B57\u7B26\u4E32"
-}
+\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62JSON\u3001Markdown\u4EE3\u7801\u5757\u3001\u89E3\u91CA\u3001\u524D\u8A00\u3001\u7ED3\u8BED\u548C\u601D\u8003\u6807\u7B7E\u3002
+
+\u4E3B\u7ED3\u679C\u5FC5\u987B\u4E14\u53EA\u80FD\u6709\u4E00\u4E2A\uFF1A
+<MA_AUDIT>
+result=pass|revise|block
+reason=\u4E00\u53E5\u8BDD\u7ED3\u8BBA
+preserve=\u4FEE\u6B63\u65F6\u5FC5\u987B\u4FDD\u7559\u7684\u5916\u90E8\u4E8B\u5B9E\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
+rewrite=\u7ED9\u4FEE\u6B63\u6587\u6A21\u578B\u7684\u5B8C\u6574\u4FEE\u6539\u6307\u4EE4
+</MA_AUDIT>
+
+\u6BCF\u9879\u660E\u786E\u8FDD\u89C4\u5355\u72EC\u8FD4\u56DE\uFF1A
+<MA_VIOLATION>
+rule_id=\u7A33\u5B9A\u3001\u7B80\u77ED\u7684\u89C4\u5219\u7F16\u53F7
+rule=\u88AB\u8FDD\u53CD\u7684\u89C4\u5219
+evidence=\u6B63\u6587\u4E2D\u7684\u5177\u4F53\u8FDD\u89C4\u7247\u6BB5\u6216\u51C6\u786E\u6982\u8FF0
+action=\u5E94\u5982\u4F55\u4FEE\u6539\uFF0C\u5FC5\u987B\u5177\u4F53\u53EF\u6267\u884C
+</MA_VIOLATION>
+
+\u82E5\u5224\u5B9A revise \u4E14\u80FD\u4E25\u683C\u6700\u5C0F\u4FEE\u6B63\uFF0C\u53EF\u989D\u5916\u8FD4\u56DE\u5B8C\u6574\u66FF\u6362\u6B63\u6587\uFF1A
+<MA_REPLACEMENT>
+\u4FEE\u6B63\u540E\u7684\u5B8C\u6574\u6B63\u6587
+</MA_REPLACEMENT>
 
 \u5224\u5B9A\u6807\u51C6\uFF1A
-- pass\uFF1A\u6CA1\u6709\u660E\u786E\u8FDD\u89C4\u3002
+- pass\uFF1A\u6CA1\u6709\u660E\u786E\u8FDD\u89C4\uFF0C\u4E0D\u8F93\u51FA <MA_VIOLATION> \u548C <MA_REPLACEMENT>\u3002
 - revise\uFF1A\u53EF\u4EE5\u5728\u4E0D\u6539\u53D8\u5DF2\u7ECF\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u4EF6\u3001NPC\u884C\u4E3A\u548C\u4E8B\u4EF6\u987A\u5E8F\u7684\u524D\u63D0\u4E0B\u5B9A\u5411\u4FEE\u6B63\u3002
 - block\uFF1A\u6574\u6BB5\u5185\u5BB9\u5EFA\u7ACB\u5728\u8FDD\u89C4\u524D\u63D0\u4E0A\uFF0C\u65E0\u6CD5\u5C40\u90E8\u4FEE\u6B63\u800C\u4E0D\u91CD\u6784\u5267\u60C5\u3002
 
@@ -3200,9 +2624,7 @@ function auditSystemPrompt() {
 2. evidence\u5FC5\u987B\u8DB3\u4EE5\u8BA9\u4FEE\u6B63\u6587\u6A21\u578B\u5B9A\u4F4D\u95EE\u9898\u3002
 3. action\u5FC5\u987B\u8BF4\u660E\u201C\u5220\u4EC0\u4E48\u3001\u4FDD\u7559\u4EC0\u4E48\u3001\u7528\u4EC0\u4E48\u53EF\u89C2\u5BDF\u4E8B\u5B9E\u66FF\u4EE3\u201D\uFF0C\u4E0D\u80FD\u53EA\u5199\u201C\u4E0D\u8981\u8FDD\u89C4\u201D\u3002
 4. preserve\u53EA\u5199\u5DF2\u7ECF\u6210\u7ACB\u4E14\u4E0D\u80FD\u88AB\u4FEE\u6B63\u6A21\u578B\u6539\u52A8\u7684\u5916\u90E8\u4E8B\u5B9E\u3002
-5. pass\u65F6violations\u5FC5\u987B\u4E3A\u7A7A\uFF0CrewriteInstruction\u53EF\u4E3A\u7A7A\u3002
-6. replacementText\u5B57\u6BB5\u5FC5\u987B\u59CB\u7EC8\u5B58\u5728\uFF1B\u4EC5\u5728\u80FD\u4E25\u683C\u6700\u5C0F\u4FEE\u6B63\u65F6\u586B\u5199\u5B8C\u6574\u6B63\u6587\uFF0C\u5426\u5219\u8F93\u51FA\u7A7A\u5B57\u7B26\u4E32\u3002
-7. \u4E0D\u8F93\u51FAMarkdown\u4EE3\u7801\u5757\uFF0C\u4E0D\u8F93\u51FAJSON\u4EE5\u5916\u7684\u6587\u5B57\u3002`;
+5. \u5B57\u6BB5\u5185\u5BB9\u4F7F\u7528\u81EA\u7136\u8BED\u8A00\uFF1B\u5916\u5C42\u6807\u7B7E\u548C\u5B57\u6BB5\u540D\u5FC5\u987B\u4E25\u683C\u4FDD\u6301\u3002`;
 }
 function auditUserPrompt(rulePrompt, playerText, assistantText) {
   return `\u3010\u73A9\u5BB6\u5BA1\u6838\u89C4\u5219\u3011
@@ -3214,113 +2636,188 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u5F85\u5BA1\u6838AI\u6B63\u6587\u3011
 ${assistantText}`;
 }
-function auditJsonSchema() {
-  return {
-    name: "MirrorAbyssAuditResult",
-    description: "\u955C\u6E0A\u89C4\u5219\u5BA1\u6838\u7ED3\u679C",
-    strict: true,
-    value: {
-      $schema: "http://json-schema.org/draft-04/schema#",
-      type: "object",
-      properties: {
-        result: { type: "string", enum: ["pass", "revise", "block"] },
-        reason: { type: "string" },
-        violations: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              ruleId: { type: "string" },
-              rule: { type: "string" },
-              evidence: { type: "string" },
-              action: { type: "string" }
-            },
-            required: ["ruleId", "rule", "evidence", "action"],
-            additionalProperties: false
-          }
-        },
-        preserve: { type: "array", items: { type: "string" } },
-        rewriteInstruction: { type: "string" },
-        replacementText: { type: "string" }
-      },
-      required: ["result", "reason", "violations", "preserve", "rewriteInstruction", "replacementText"],
-      additionalProperties: false
+
+// src/domain/fixed-text.ts
+function normalizedMarker(value2) {
+  return value2.trim().toUpperCase();
+}
+function appendField2(block, key, value2) {
+  const current = block.fields.get(key) ?? [];
+  block.fields.set(key, [...current, value2]);
+}
+function appendContinuation(block, key, value2) {
+  const current = block.fields.get(key) ?? [];
+  if (!current.length) return;
+  const next = [...current];
+  next[next.length - 1] = `${next[next.length - 1]}
+${value2}`.trim();
+  block.fields.set(key, next);
+}
+function parseFixedTextBlocks(raw, markers) {
+  const source = safeText(raw, 24e4).replace(/^\uFEFF/, "");
+  const byStart = new Map(markers.map((item) => [normalizedMarker(item.start), item]));
+  const byEnd = new Map(markers.map((item) => [normalizedMarker(item.end), item]));
+  const blocks = [];
+  let current = null;
+  let definition = null;
+  let lastKey = "";
+  let rawLines = [];
+  const flush = () => {
+    if (!current) return;
+    if (definition?.rawBody) current.raw = rawLines.join("\n").trim();
+    blocks.push(current);
+    current = null;
+    definition = null;
+    lastKey = "";
+    rawLines = [];
+  };
+  source.split(/\r?\n/).forEach((sourceLine, index) => {
+    const trimmed = sourceLine.trim();
+    const markerKey = normalizedMarker(trimmed);
+    const start = byStart.get(markerKey);
+    if (start) {
+      flush();
+      definition = start;
+      current = { kind: start.kind, fields: /* @__PURE__ */ new Map(), raw: "", line: index + 1 };
+      return;
     }
+    const end = byEnd.get(markerKey);
+    if (end) {
+      if (current?.kind === end.kind) flush();
+      return;
+    }
+    if (!current || !definition) return;
+    if (definition.rawBody) {
+      rawLines.push(sourceLine);
+      return;
+    }
+    if (!trimmed || /^```/.test(trimmed)) return;
+    const match = sourceLine.match(/^\s*([^=＝:：]+?)\s*[=＝:：]\s*(.*)$/);
+    if (match) {
+      lastKey = match[1].trim();
+      if (lastKey) appendField2(current, lastKey, match[2].trim());
+      return;
+    }
+    if (lastKey) appendContinuation(current, lastKey, sourceLine.trim());
+  });
+  flush();
+  return blocks;
+}
+function fixedTextValues(block, ...keys) {
+  const output = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const key of keys) {
+    for (const raw of block.fields.get(key) ?? []) {
+      const value2 = safeText(raw, 12e3).trim();
+      if (!value2 || seen.has(value2)) continue;
+      seen.add(value2);
+      output.push(value2);
+    }
+  }
+  return output;
+}
+function fixedTextValue(block, ...keys) {
+  return fixedTextValues(block, ...keys).at(-1) ?? "";
+}
+
+// src/domain/audit-text.ts
+var MARKERS = [
+  { kind: "audit", start: "<MA_AUDIT>", end: "</MA_AUDIT>" },
+  { kind: "violation", start: "<MA_VIOLATION>", end: "</MA_VIOLATION>" },
+  { kind: "replacement", start: "<MA_REPLACEMENT>", end: "</MA_REPLACEMENT>", rawBody: true }
+];
+function normalizedKey(value2) {
+  return value2.normalize("NFKC").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+function aliasFields(block) {
+  const aliases2 = {
+    "\u7ED3\u679C": "result",
+    "\u5224\u5B9A": "result",
+    "\u7ED3\u8BBA": "result",
+    "\u539F\u56E0": "reason",
+    "\u7406\u7531": "reason",
+    "\u4FDD\u7559": "preserve",
+    "\u5FC5\u987B\u4FDD\u7559": "preserve",
+    "\u4FEE\u6B63\u6307\u4EE4": "rewrite",
+    "\u4FEE\u6539\u6307\u4EE4": "rewrite",
+    "\u91CD\u5199\u6307\u4EE4": "rewrite",
+    "rewriteinstruction": "rewrite",
+    "\u89C4\u5219\u7F16\u53F7": "ruleid",
+    "\u89C4\u5219id": "ruleid",
+    "rule_id": "ruleid",
+    "\u89C4\u5219": "rule",
+    "\u8BC1\u636E": "evidence",
+    "\u4FEE\u6539": "action",
+    "\u64CD\u4F5C": "action"
+  };
+  const output = /* @__PURE__ */ new Map();
+  for (const [key, values2] of block.fields.entries()) {
+    const normalized = normalizedKey(key);
+    const target = aliases2[key.trim()] || aliases2[normalized] || normalized;
+    output.set(target, [...output.get(target) ?? [], ...values2]);
+  }
+  return output;
+}
+function values(block, ...keys) {
+  return fixedTextValues({ ...block, fields: aliasFields(block) }, ...keys);
+}
+function value(block, ...keys) {
+  return fixedTextValue({ ...block, fields: aliasFields(block) }, ...keys);
+}
+function fingerprint(violations) {
+  const source = violations.map((item) => `${item.ruleId}|${item.rule}`.toLowerCase().replace(/\s+/g, " ").trim()).sort().join("\n");
+  return source ? hashText(source) : "";
+}
+function decisionValue(raw) {
+  const value2 = normalizedKey(raw);
+  if (["pass", "\u901A\u8FC7", "\u5408\u683C"].includes(value2)) return "pass";
+  if (["revise", "\u4FEE\u6539", "\u4FEE\u6B63", "\u9700\u4FEE\u6539", "\u9700\u8981\u4FEE\u6539"].includes(value2)) return "revise";
+  if (["block", "\u963B\u6B62", "\u62E6\u622A", "\u65E0\u6CD5\u4FEE\u6B63"].includes(value2)) return "block";
+  return "";
+}
+function parseAuditTextOutput(raw) {
+  const text = safeText(raw, 22e4).trim();
+  const legacy = text.replace(/\r/g, "").split("\n");
+  if (legacy[0]?.trim().toUpperCase() === "MA_OK") {
+    return { passed: true, decision: "pass", reason: legacy.slice(1).join("\n").trim() || "\u901A\u8FC7", violations: [], preserve: [], rewriteInstruction: "", violationFingerprint: "" };
+  }
+  if (legacy[0]?.trim().toUpperCase() === "MA_FAIL") {
+    const reason = legacy.slice(1).join("\n").trim() || "\u8FDD\u53CD\u89C4\u5219";
+    const violations2 = [{ ruleId: "legacy_failure", rule: "\u5BA1\u6838\u6A21\u578B\u5224\u5B9A\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219", evidence: reason, action: reason }];
+    return { passed: false, decision: "revise", reason, violations: violations2, preserve: [], rewriteInstruction: reason, violationFingerprint: fingerprint(violations2) };
+  }
+  const blocks = parseFixedTextBlocks(text, MARKERS);
+  const auditBlocks = blocks.filter((block) => block.kind === "audit");
+  if (auditBlocks.length !== 1) throw new Error(`\u5BA1\u6838\u56FA\u5B9A\u6587\u672C\u5FC5\u987B\u4E14\u53EA\u80FD\u5305\u542B\u4E00\u4E2A <MA_AUDIT>\uFF0C\u5B9E\u9645 ${auditBlocks.length} \u4E2A`);
+  const audit = auditBlocks[0];
+  const decision = decisionValue(value(audit, "result"));
+  if (!decision) throw new Error("\u5BA1\u6838\u56FA\u5B9A\u6587\u672C\u7F3A\u5C11\u6709\u6548 result=pass|revise|block");
+  const passed = decision === "pass";
+  const violations = blocks.filter((block) => block.kind === "violation").map((block, index) => ({
+    ruleId: safeText(value(block, "ruleid") || `rule_${index + 1}`, 120).trim() || `rule_${index + 1}`,
+    rule: safeText(value(block, "rule"), 1e3).trim(),
+    evidence: safeText(value(block, "evidence"), 3e3).trim(),
+    action: safeText(value(block, "action"), 3e3).trim()
+  })).filter((item) => item.rule || item.evidence || item.action).slice(0, 24);
+  if (!passed && !violations.length) throw new Error("\u5BA1\u6838\u5224\u5B9A\u672A\u901A\u8FC7\uFF0C\u4F46\u6CA1\u6709\u8FD4\u56DE <MA_VIOLATION>");
+  const replacementBlocks = blocks.filter((block) => block.kind === "replacement");
+  if (replacementBlocks.length > 1) throw new Error("\u5BA1\u6838\u56FA\u5B9A\u6587\u672C\u6700\u591A\u53EA\u80FD\u5305\u542B\u4E00\u4E2A <MA_REPLACEMENT>");
+  const replacementText = decision === "revise" ? safeText(replacementBlocks[0]?.raw, 2e5).trim() || void 0 : void 0;
+  return {
+    passed,
+    decision,
+    reason: safeText(value(audit, "reason"), 3e3).trim() || (passed ? "\u901A\u8FC7" : "\u8FDD\u53CD\u89C4\u5219"),
+    violations: passed ? [] : violations,
+    preserve: values(audit, "preserve").map((item) => safeText(item, 2e3).trim()).filter(Boolean).slice(0, 24),
+    rewriteInstruction: safeText(value(audit, "rewrite"), 6e3).trim(),
+    violationFingerprint: passed ? "" : fingerprint(violations),
+    replacementText
   };
 }
 
 // src/pipeline/audit.ts
-function list2(value, maxItems = 24) {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => safeText(item, 2e3).trim()).filter(Boolean).slice(0, maxItems);
-}
-function violationList(value) {
-  if (!Array.isArray(value)) return [];
-  return value.map((item, index) => ({
-    ruleId: safeText(item?.ruleId || `rule_${index + 1}`, 120).trim() || `rule_${index + 1}`,
-    rule: safeText(item?.rule, 1e3).trim(),
-    evidence: safeText(item?.evidence, 3e3).trim(),
-    action: safeText(item?.action, 3e3).trim()
-  })).filter((item) => item.rule || item.evidence || item.action).slice(0, 24);
-}
-function resultFingerprint(violations) {
-  const normalized = violations.map((item) => `${item.ruleId}|${item.rule}`.toLowerCase().replace(/\s+/g, " ").trim()).sort().join("\n");
-  return normalized ? hashText(normalized) : "";
-}
 function parseAuditResult(raw) {
-  const text = safeText(raw, 1e5).trim();
-  try {
-    const data = parseJsonObject(text);
-    if (!["pass", "revise", "block"].includes(String(data.result))) {
-      throw new Error("\u5BA1\u6838\u7ED3\u679C\u7F3A\u5C11\u6709\u6548\u7684result\u5B57\u6BB5");
-    }
-    const decision = String(data.result);
-    const violations = violationList(data.violations);
-    const passed = decision === "pass";
-    return {
-      passed,
-      decision,
-      reason: safeText(data.reason, 3e3).trim() || (passed ? "\u901A\u8FC7" : "\u8FDD\u53CD\u89C4\u5219"),
-      violations: passed ? [] : violations,
-      preserve: list2(data.preserve),
-      rewriteInstruction: safeText(data.rewriteInstruction, 6e3).trim(),
-      violationFingerprint: passed ? "" : resultFingerprint(violations),
-      replacementText: !passed && decision === "revise" ? safeText(data.replacementText ?? data.finalText, 2e5).trim() || void 0 : void 0
-    };
-  } catch {
-    const lines = text.replace(/\r/g, "").split("\n");
-    const first = (lines[0] || "").trim().toUpperCase();
-    const reason = lines.slice(1).join("\n").trim();
-    if (first === "MA_OK") {
-      return {
-        passed: true,
-        decision: "pass",
-        reason: reason || "\u901A\u8FC7",
-        violations: [],
-        preserve: [],
-        rewriteInstruction: "",
-        violationFingerprint: ""
-      };
-    }
-    if (first === "MA_FAIL") {
-      const violations = [{
-        ruleId: "legacy_failure",
-        rule: "\u5BA1\u6838\u6A21\u578B\u5224\u5B9A\u8FDD\u53CD\u73A9\u5BB6\u89C4\u5219",
-        evidence: reason || "\u672A\u7ED9\u51FA\u5177\u4F53\u8BC1\u636E",
-        action: reason || "\u4F9D\u636E\u73A9\u5BB6\u89C4\u5219\u5B9A\u5411\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9"
-      }];
-      return {
-        passed: false,
-        decision: "revise",
-        reason: reason || "\u8FDD\u53CD\u89C4\u5219",
-        violations,
-        preserve: [],
-        rewriteInstruction: reason || "\u53EA\u4FEE\u6B63\u8FDD\u89C4\u5185\u5BB9\uFF0C\u4E0D\u6539\u53D8\u5DF2\u6210\u7ACB\u7684\u5916\u90E8\u4E8B\u5B9E\u3002",
-        violationFingerprint: resultFingerprint(violations)
-      };
-    }
-    throw new Error("\u89C4\u5219\u5BA1\u6838\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548JSON\u3001MA_OK\u6216MA_FAIL");
-  }
+  return parseAuditTextOutput(raw);
 }
 function findMessageElement(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
@@ -3330,87 +2827,21 @@ function applyAuditVisibility(index, hidden, marked = false) {
   element?.classList.toggle("ma11-audit-hidden-message", hidden);
   element?.classList.toggle("ma11-audit-marked-message", !hidden && marked);
 }
-function isCancelledAuditRequest(error) {
-  return error instanceof Error && ["AbortError", "CommitRejectedError"].includes(error.name);
-}
 async function auditText(playerRules, playerText, assistantText) {
-  const request = {
+  const raw = await generateTask({
     task: "audit",
     systemPrompt: auditSystemPrompt(),
-    prompt: auditUserPrompt(playerRules, playerText, assistantText)
-  };
-  let raw = "";
-  let structuredRequestError;
-  let rejectAuditSchema = false;
-  const schema = auditJsonSchema();
-  const compatibilityMode = getSettings().compatibilityMode;
-  const skipReason = compatibilityMode ? null : jsonSchemaSkipReason("audit", schema);
-  if (compatibilityMode) {
-    raw = await generateTask({ ...request, requestPurpose: "plain" });
-  } else if (skipReason) {
-    raw = await generateTask({ ...request, requestPurpose: "plain" });
-  } else {
-    try {
-      raw = await generateTask({ ...request, jsonSchema: schema, requestPurpose: "schema" });
-      if (raw.trim() !== "{}") forgetJsonSchemaRejected("audit", schema);
-      if (raw.trim() === "{}") {
-        structuredRequestError = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u3001\u63A5\u53E3\u6216\u5BA1\u6838Schema\u4E0D\u517C\u5BB9");
-        rejectAuditSchema = true;
-      }
-    } catch (error) {
-      if (isCancelledAuditRequest(error)) throw error;
-      structuredRequestError = error;
-      if (isDefinitiveJsonSchemaUnsupported(error)) {
-        rememberJsonSchemaUnsupported("audit");
-      } else if (isJsonSchemaRequestRejected(error)) {
-        rejectAuditSchema = true;
-      } else {
-        throw new Error(
-          `\u89C4\u5219\u5BA1\u6838\u7ED3\u6784\u5316\u8BF7\u6C42\u5931\u8D25\uFF08${describeTaskConnection("audit")}\uFF09\uFF0C\u672A\u6267\u884C\u65E0Schema\u91CD\u590D\u8BF7\u6C42\uFF1A${toErrorMessage(error)}`,
-          { cause: error }
-        );
-      }
-    }
-  }
-  if (structuredRequestError) {
-    try {
-      raw = await generateTask({ ...request, requestPurpose: "fallback" });
-    } catch (fallbackError) {
-      if (isCancelledAuditRequest(fallbackError)) throw fallbackError;
-      throw new Error(
-        `\u89C4\u5219\u5BA1\u6838\u8BF7\u6C42\u5931\u8D25\uFF08${describeTaskConnection("audit")}\uFF09\u3002\u7ED3\u6784\u5316\u8BF7\u6C42\uFF1A${toErrorMessage(structuredRequestError)}\uFF1B\u65E0Schema\u56DE\u9000\uFF1A${toErrorMessage(fallbackError)}`
-      );
-    }
-  }
+    prompt: auditUserPrompt(playerRules, playerText, assistantText),
+    requestPurpose: "fixed-text"
+  });
   try {
-    const parsed = parseAuditResult(raw);
-    if (rejectAuditSchema) rememberJsonSchemaRejected("audit", schema);
-    return parsed;
-  } catch (firstError) {
-    if (skipReason === "schema-rejected") forgetJsonSchemaRejected("audit", schema);
-    if (isLikelyTruncatedJson(raw, firstError)) {
-      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002\u6A21\u578B\u8F93\u51FA\u5728JSON\u5BF9\u8C61\u7ED3\u675F\u524D\u88AB\u622A\u65AD\uFF0C\u65E0\u6CD5\u5B89\u5168\u4FEE\u590D\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
-    }
-    if (raw.trim() === "{}") {
-      const prefix = structuredRequestError ? `\u7ED3\u6784\u5316\u8BF7\u6C42\u5931\u8D25\u540E\uFF0C\u65E0Schema\u56DE\u9000\u4ECD\u8FD4\u56DE\u7A7A\u5BF9\u8C61\u3002\u539F\u9519\u8BEF\uFF1A${toErrorMessage(structuredRequestError)}` : "\u5BA1\u6838\u6A21\u578B\u8FD4\u56DE\u7A7A\u5BF9\u8C61";
-      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${prefix}`);
-    }
-    if (!getSettings().repairInvalidJsonOnce) {
-      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(firstError)}\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
-    }
-    try {
-      const repaired = await repairStructuredOutput(
-        "audit",
-        raw,
-        '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"...","replacementText":"...\u6216\u7A7A\u5B57\u7B26\u4E32"}',
-        schema
-      );
-      const parsed = parseAuditResult(JSON.stringify(repaired));
-      return parsed;
-    } catch (repairError) {
-      if (isCancelledAuditRequest(repairError)) throw repairError;
-      throw new Error(`\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u6784\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(repairError)}\uFF1B\u539F\u59CB\u8FD4\u56DE\u7247\u6BB5\uFF1A${jsonPreview(raw)}`);
-    }
+    return parseAuditResult(raw);
+  } catch (error) {
+    const preview = safeText(raw, 1200).replace(/\s+/g, " ").trim();
+    throw new Error(
+      `\u89C4\u5219\u5BA1\u6838\u672A\u8FD4\u56DE\u6709\u6548\u56FA\u5B9A\u6587\u672C\uFF08${describeTaskConnection("audit")}\uFF09\u3002${toErrorMessage(error)}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`,
+      { cause: error }
+    );
   }
 }
 async function applyAuditFailureAction(artifact, action) {
@@ -3969,16 +3400,16 @@ var taskQueue = new TaskQueue();
 function registry(options) {
   return normalizeTableRegistry(options?.registry?.length ? options.registry : DEFAULT_TABLE_REGISTRY);
 }
-function uniq(values, limit = 40) {
-  return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, limit);
+function uniq(values2, limit = 40) {
+  return [...new Set(values2.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, limit);
 }
 function lifecycleLines(lifecycle) {
   if (!lifecycle) return [];
-  const lines = [`\u5B58\u5728\u72B6\u6001\uFF1A${lifecycle.existence}`, `\u6D3B\u8DC3\u72B6\u6001\uFF1A${lifecycle.activity}`, `\u8BB0\u5FC6\u72B6\u6001\uFF1A${lifecycle.memory}`, `\u8BC1\u636E\u7B49\u7EA7\uFF1A${lifecycle.evidenceLevel}`];
-  if (lifecycle.evidence) lines.push(`\u5224\u65AD\u4F9D\u636E\uFF1A${lifecycle.evidence}`);
-  if (lifecycle.returnConditions.length) lines.push(`\u53EF\u80FD\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnConditions.join("\uFF1B")}`);
-  if (lifecycle.returnBlockers.length) lines.push(`\u963B\u6B62\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnBlockers.join("\uFF1B")}`);
-  return lines;
+  const lines2 = [`\u5B58\u5728\u72B6\u6001\uFF1A${lifecycle.existence}`, `\u6D3B\u8DC3\u72B6\u6001\uFF1A${lifecycle.activity}`, `\u8BB0\u5FC6\u72B6\u6001\uFF1A${lifecycle.memory}`, `\u8BC1\u636E\u7B49\u7EA7\uFF1A${lifecycle.evidenceLevel}`];
+  if (lifecycle.evidence) lines2.push(`\u5224\u65AD\u4F9D\u636E\uFF1A${lifecycle.evidence}`);
+  if (lifecycle.returnConditions.length) lines2.push(`\u53EF\u80FD\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnConditions.join("\uFF1B")}`);
+  if (lifecycle.returnBlockers.length) lines2.push(`\u963B\u6B62\u56DE\u6D41\u6761\u4EF6\uFF1A${lifecycle.returnBlockers.join("\uFF1B")}`);
+  return lines2;
 }
 function rowContent(table, row) {
   const titleLabel = customizedFieldLabel(table, "title", "");
@@ -3986,22 +3417,22 @@ function rowContent(table, row) {
   const contentLabel = customizedFieldLabel(table, "content", "\u5F53\u524D\u8BB0\u5F55");
   const keywordsLabel = customizedFieldLabel(table, "keywords", "\u89E6\u53D1\u8BCD");
   const heading = titleLabel ? `[${table.name}\uFF5C${titleLabel}\uFF1A${row.title}]` : `[${table.name}\uFF1A${row.title}]`;
-  const lines = [heading, ...lifecycleLines(row.lifecycle)];
-  if (row.status) lines.push(`${statusLabel}\uFF1A${row.status}`);
-  if (row.content) lines.push(`${contentLabel}\uFF1A${row.content}`);
+  const lines2 = [heading, ...lifecycleLines(row.lifecycle)];
+  if (row.status) lines2.push(`${statusLabel}\uFF1A${row.status}`);
+  if (row.content) lines2.push(`${contentLabel}\uFF1A${row.content}`);
   for (const field of table.fields) {
     if (!row.fields || !(field.key in row.fields)) continue;
-    const value = row.fields[field.key];
-    if (Array.isArray(value) && value.length) lines.push(`${field.label}\uFF1A${value.join("\u3001")}`);
-    else if (String(value ?? "").trim()) lines.push(`${field.label}\uFF1A${String(value)}`);
+    const value2 = row.fields[field.key];
+    if (Array.isArray(value2) && value2.length) lines2.push(`${field.label}\uFF1A${value2.join("\u3001")}`);
+    else if (String(value2 ?? "").trim()) lines2.push(`${field.label}\uFF1A${String(value2)}`);
   }
-  if (row.keywords.length) lines.push(`${keywordsLabel}\uFF1A${row.keywords.join("\u3001")}`);
-  if (row.factIds?.length) lines.push(`\u4E8B\u5B9EID\uFF1A${row.factIds.join("\u3001")}`);
+  if (row.keywords.length) lines2.push(`${keywordsLabel}\uFF1A${row.keywords.join("\u3001")}`);
+  if (row.factIds?.length) lines2.push(`\u4E8B\u5B9EID\uFF1A${row.factIds.join("\u3001")}`);
   const eventIds = row.eventIds ?? (row.eventId ? [row.eventId] : []);
-  if (eventIds.length) lines.push(`\u4E8B\u4EF6ID\uFF1A${eventIds.join("\u3001")}`);
-  if (row.locked || row.lockMode === "all") lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u5B8C\u5168\u9501\u5B9A\uFF1B\u57FA\u7840\u4E0E\u72B6\u6001\u5747\u4E0D\u5F97\u81EA\u52A8\u4FEE\u6539\u3002");
-  else if (row.source === "manual" || row.lockMode === "base") lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u57FA\u7840\u4FDD\u62A4\uFF1B\u57FA\u7840\u5185\u5BB9\u4E0D\u5F97\u81EA\u52A8\u6539\u5199\uFF0C\u5F53\u524D\u72B6\u6001\u53EF\u4F9D\u636E\u660E\u786E\u4E8B\u5B9E\u66F4\u65B0\u3002");
-  return lines.join("\n");
+  if (eventIds.length) lines2.push(`\u4E8B\u4EF6ID\uFF1A${eventIds.join("\u3001")}`);
+  if (row.locked || row.lockMode === "all") lines2.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u5B8C\u5168\u9501\u5B9A\uFF1B\u57FA\u7840\u4E0E\u72B6\u6001\u5747\u4E0D\u5F97\u81EA\u52A8\u4FEE\u6539\u3002");
+  else if (row.source === "manual" || row.lockMode === "base") lines2.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u57FA\u7840\u4FDD\u62A4\uFF1B\u57FA\u7840\u5185\u5BB9\u4E0D\u5F97\u81EA\u52A8\u6539\u5199\uFF0C\u5F53\u524D\u72B6\u6001\u53EF\u4F9D\u636E\u660E\u786E\u4E8B\u5B9E\u66F4\u65B0\u3002");
+  return lines2.join("\n");
 }
 function rowSearchText(row) {
   return `${row.title} ${row.content} ${row.status} ${row.keywords.join(" ")}`;
@@ -4010,8 +3441,8 @@ function isAudienceRow(row) {
   if (row.source === "manual" || row.locked) return false;
   return isPurePassiveObserverText(rowSearchText(row));
 }
-function normalizedName2(value) {
-  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+function normalizedName2(value2) {
+  return String(value2 || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function aliases(title) {
   const raw = String(title || "").trim();
@@ -4307,14 +3738,14 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
   }
   return removed;
 }
-function managedContentIdentity(value) {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
+function managedContentIdentity(value2) {
+  return String(value2 ?? "").replace(/\s+/g, " ").trim();
 }
-function managedCommentIdentity(value) {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
+function managedCommentIdentity(value2) {
+  return String(value2 ?? "").replace(/\s+/g, " ").trim();
 }
-function mirrorAbyssManagedNameIdentity(value) {
-  return String(value ?? "").normalize("NFKC").replace(/^\s*\[MA11\]\s*/i, "").replace(/[|｜]+/g, "|").split("|").map((part) => part.replace(/\s+/g, " ").trim().toLocaleLowerCase()).filter(Boolean).join("|");
+function mirrorAbyssManagedNameIdentity(value2) {
+  return String(value2 ?? "").normalize("NFKC").replace(/^\s*\[MA11\]\s*/i, "").replace(/[|｜]+/g, "|").split("|").map((part) => part.replace(/\s+/g, " ").trim().toLocaleLowerCase()).filter(Boolean).join("|");
 }
 function isMirrorAbyssGeneratedEntry(entry) {
   return /^\[MA11\]\s+MA[｜|]/.test(managedCommentIdentity(entry?.comment));
@@ -4372,8 +3803,8 @@ function refreshChatLorebookIndicator(name) {
     button.classList.toggle("world_set", linked);
   });
 }
-function escapeRegex(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(value2) {
+  return String(value2 || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function triggerKeys(spec) {
   const trigger = spec.trigger ?? { any: spec.keywords ?? [], all: [], exclude: [] };
@@ -4567,7 +3998,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
     if (!entry) {
       entry = wi.createWorldInfoEntry(name, data);
       if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${item.key}`);
-      const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? "");
+      const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value2]) => value2 === entry)?.[0] ?? "");
       if (!createdUid) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u7F3A\u5C11UID\uFF1A${item.key}`);
       pair = {
         uid: createdUid,
@@ -4705,7 +4136,7 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
       entry = wi.createWorldInfoEntry(name, data);
       if (!entry) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u521B\u5EFA\u5931\u8D25\uFF1A${key}`);
       const createdUid = String(
-        entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? ""
+        entry.uid ?? Object.entries(data.entries).find(([, value2]) => value2 === entry)?.[0] ?? ""
       );
       if (!createdUid) throw new Error(`\u4E16\u754C\u4E66\u6761\u76EE\u7F3A\u5C11UID\uFF1A${key}`);
       pair = {
@@ -5180,39 +4611,39 @@ async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
 }
 
 // src/domain/summary.ts
-function stringList2(value, limit = 60, itemLimit = 600) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+function stringList2(value2, limit = 60, itemLimit = 600) {
+  if (!Array.isArray(value2)) return [];
+  return [...new Set(value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
-function normalizeActivityUpdates(value) {
-  if (!Array.isArray(value)) return [];
+function normalizeActivityUpdates(value2) {
+  if (!Array.isArray(value2)) return [];
   const allowed = /* @__PURE__ */ new Set(["\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863"]);
-  return value.map((item) => item && typeof item === "object" ? item : {}).map((item) => ({
+  return value2.map((item) => item && typeof item === "object" ? item : {}).map((item) => ({
     rowId: safeText(item.rowId, 160).trim(),
     activity: safeText(item.activity, 40).trim(),
     reason: safeText(item.reason, 500).trim()
   })).filter((item) => item.rowId && allowed.has(item.activity)).slice(0, 30);
 }
-function normalizeSedimentation(value) {
-  if (!value || typeof value !== "object") return void 0;
-  const source = value;
+function normalizeSedimentation(value2) {
+  if (!value2 || typeof value2 !== "object") return void 0;
+  const source = value2;
   return { removeRowIds: stringList2(source.removeRowIds, 50, 160), characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates), notes: stringList2(source.notes, 30, 500) };
 }
-function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
+function normalizeSummary(value2, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
   return {
     id: makeId(kind),
     kind,
-    title: safeText(value.title || (kind === "small" ? "\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3" : "\u957F\u671F\u56E0\u679C\u603B\u7ED3"), 240).trim(),
-    summary: safeText(value.summary || "", 3e4).trim(),
-    keywords: stringList2(value.keywords, 32, 100),
+    title: safeText(value2.title || (kind === "small" ? "\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3" : "\u957F\u671F\u56E0\u679C\u603B\u7ED3"), 240).trim(),
+    summary: safeText(value2.summary || "", 3e4).trim(),
+    keywords: stringList2(value2.keywords, 32, 100),
     sourceKeys: [...new Set(sourceKeys)],
     sourceFactIds: metadata.sourceFactIds ? [...new Set(metadata.sourceFactIds)] : kind === "small" ? [...new Set(sourceKeys)] : void 0,
     sourceSummaryIds: kind === "large" ? [...new Set(metadata.sourceSummaryIds ?? sourceKeys)] : void 0,
-    eventId: safeText(metadata.eventId || value.event_id || value.eventId, 160).trim() || void 0,
+    eventId: safeText(metadata.eventId || value2.event_id || value2.eventId, 160).trim() || void 0,
     eventIds: kind === "large" ? [...new Set(metadata.eventIds ?? (metadata.eventId ? [metadata.eventId] : []))] : void 0,
-    unresolvedItems: stringList2(value.unresolved ?? value.unresolvedItems, 40, 1e3),
+    unresolvedItems: stringList2(value2.unresolved ?? value2.unresolvedItems, 40, 1e3),
     createdAt: nowIso(),
-    sedimentation: kind === "small" ? normalizeSedimentation(value.sedimentation) : void 0,
+    sedimentation: kind === "small" ? normalizeSedimentation(value2.sedimentation) : void 0,
     previousLargeSummaryId: kind === "large" ? previousLargeSummaryId : void 0
   };
 }
@@ -5294,82 +4725,145 @@ function applySedimentation(snapshot, summary, registry2) {
 
 // src/prompts/summary.ts
 function smallSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\uFF0C\u4E5F\u662F\u6309 event_id \u5DE5\u4F5C\u7684\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u63A8\u6D4B\uFF0C\u4E0D\u628A\u672A\u53D1\u751F\u7ED3\u679C\u5199\u6B7B\u3002
-\u4E00\u6B21\u8BF7\u6C42\u53EF\u80FD\u5305\u542B\u591A\u6761\u5F7C\u6B64\u65E0\u5173\u7684\u4E8B\u4EF6\u7EBF\u3002\u5FC5\u987B\u6309 event_id \u5206\u522B\u603B\u7ED3\uFF0C\u7EDD\u4E0D\u80FD\u628A\u4E0D\u540C\u4E8B\u4EF6\u7EBF\u7684\u4EBA\u7269\u3001\u5730\u70B9\u3001\u56E0\u679C\u6216\u7ED3\u679C\u6DF7\u5728\u4E00\u8D77\u3002
-\u5C0F\u603B\u7ED3\u6309\u6BCF\u4E00\u4E2A event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF0C\u4E0D\u662F\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\uFF0C\u4E5F\u4E0D\u662F\u5F53\u524D\u8868\u683C\u538B\u7F29\u3002
-\u5FC5\u987B\u4FDD\u7559\uFF1A\u8D77\u56E0\u3001\u5DF2\u53D1\u751F\u7684\u5173\u952E\u7ECF\u8FC7\u3001\u5DF2\u4EA7\u751F\u7684\u53D8\u5316\u3001\u5F53\u524D\u7ED3\u679C\u3001\u5C1A\u672A\u89E3\u51B3\u4E8B\u9879\u3001\u5BF9\u540E\u7EED\u4ECD\u6709\u6548\u7684\u5F71\u54CD\u3002
-\u5FC5\u987B\u5220\u9664\uFF1A\u91CD\u590D\u52A8\u4F5C\u3001\u6C14\u6C1B\u63CF\u5199\u3001\u65E0\u56E0\u679C\u4F5C\u7528\u7684\u65C1\u89C2\u8005\u3001\u65E0\u540E\u7EED\u610F\u4E49\u7684\u4E34\u65F6\u53CD\u5E94\u3001\u5DF2\u88AB\u65B0\u4E8B\u5B9E\u8986\u76D6\u7684\u65E7\u8868\u8FF0\u3002
-\u4E8B\u4EF6\u672A\u7ED3\u675F\u65F6\uFF0C\u53EA\u603B\u7ED3\u5DF2\u786E\u5B9A\u53D1\u751F\u7684\u90E8\u5206\uFF0C\u5E76\u660E\u786E\u672A\u89E3\u51B3\u4E8B\u9879\u3002\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u3001\u559D\u5F69\u3001\u8BAE\u8BBA\u548C\u540C\u573A\u8005\u4E0D\u5F97\u8FDB\u5165\u603B\u7ED3\uFF0C\u9664\u975E\u5176\u884C\u4E3A\u6539\u53D8\u4E8B\u4EF6\u7ED3\u679C\u3002
-\u8F93\u51FA\u6839\u5B57\u6BB5\u56FA\u5B9A\u4E3A summaries\uFF1B\u6BCF\u9879\u56FA\u5B9A\u4E3A event_id\u3001title\u3001summary\u3001keywords\u3001unresolved\u3002\u53EF\u89C1\u8868\u9000\u51FA\u7531\u4EE3\u7801\u6309 event_id / fact_id \u5B89\u5168\u5904\u7406\uFF0C\u4E0D\u7531\u4F60\u6307\u5B9A\u884C\u53F7\u3002`;
+  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u6309\u672C\u6B21\u8BF7\u6C42\u63D0\u4F9B\u7684 slot \u5206\u522B\u603B\u7ED3\u4E8B\u4EF6\u7EBF\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u63A8\u6D4B\uFF0C\u4E0D\u628A\u672A\u53D1\u751F\u7ED3\u679C\u5199\u6B7B\u3002
+
+\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62JSON\u3001Markdown\u4EE3\u7801\u5757\u3001\u89E3\u91CA\u548C\u601D\u8003\u6807\u7B7E\u3002\u6BCF\u4E2A\u8F93\u5165 slot \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u4E2A\uFF1A
+<MA_SUMMARY>
+slot=S1
+title=\u4E8B\u4EF6\u7EBF\u6807\u9898
+summary=\u7D2F\u8BA1\u5C0F\u603B\u7ED3\uFF1B\u5141\u8BB8\u81EA\u7136\u8BED\u8A00\u7EED\u884C
+keyword=\u5173\u952E\u8BCD\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
+unresolved=\u5C1A\u672A\u89E3\u51B3\u4E8B\u9879\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
+</MA_SUMMARY>
+
+\u89C4\u5219\uFF1A
+1. \u4E0D\u540C slot \u7EDD\u4E0D\u80FD\u6DF7\u5408\u4EBA\u7269\u3001\u5730\u70B9\u3001\u56E0\u679C\u6216\u7ED3\u679C\u3002
+2. \u5C0F\u603B\u7ED3\u4E0D\u662F\u804A\u5929\u6D41\u6C34\u8D26\uFF1B\u4FDD\u7559\u8D77\u56E0\u3001\u5173\u952E\u7ECF\u8FC7\u3001\u5DF2\u4EA7\u751F\u53D8\u5316\u3001\u5F53\u524D\u7ED3\u679C\u3001\u672A\u51B3\u4E8B\u9879\u548C\u540E\u7EED\u4ECD\u6709\u6548\u7684\u5F71\u54CD\u3002
+3. \u5220\u9664\u91CD\u590D\u52A8\u4F5C\u3001\u6C14\u6C1B\u63CF\u5199\u3001\u65E0\u56E0\u679C\u4F5C\u7528\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\uFF0C\u65E0\u540E\u7EED\u610F\u4E49\u7684\u4E34\u65F6\u53CD\u5E94\u548C\u88AB\u65B0\u4E8B\u5B9E\u8986\u76D6\u7684\u65E7\u8868\u8FF0\u3002
+4. \u4E8B\u4EF6\u672A\u7ED3\u675F\u65F6\uFF0C\u53EA\u603B\u7ED3\u5DF2\u786E\u8BA4\u90E8\u5206\uFF0C\u5E76\u660E\u786E\u672A\u51B3\u4E8B\u9879\u3002
+5. slot \u53EA\u662F\u672C\u6B21\u8BF7\u6C42\u8DEF\u7531\u6807\u7B7E\uFF0C\u5FC5\u987B\u539F\u6837\u8FD4\u56DE\uFF1B\u4E0D\u8981\u8F93\u51FA\u4EFB\u4F55\u5185\u90E8 ID\u3002`;
 }
-function compactSmallFacts(facts) {
-  return facts.map((fact) => ({
-    fact_id: fact.factId,
-    event_id: fact.eventId,
-    source_message_ids: fact.sourceMessageIds,
-    title: fact.title,
-    occurred: fact.occurredFacts,
-    unresolved: fact.unresolvedItems,
-    status: fact.status,
-    time_range: fact.timeRange,
-    related_entities: fact.relatedEntities,
-    keywords: fact.keywords,
-    confidence: fact.confidence
-  }));
+function lines(values2) {
+  return values2.map((item) => `- ${String(item ?? "").trim()}`).filter((item) => item !== "-").join("\n") || "\uFF08\u65E0\uFF09";
+}
+function smallEventSection(group, index) {
+  const slot = group.slot || `S${index + 1}`;
+  const facts = group.facts.map((fact, factIndex) => `\u4E8B\u5B9E${factIndex + 1}
+\u6807\u9898\uFF1A${fact.title}
+\u5DF2\u53D1\u751F\uFF1A${lines(fact.occurredFacts)}
+\u672A\u51B3\uFF1A${lines(fact.unresolvedItems)}
+\u72B6\u6001\uFF1A${fact.status}
+\u65F6\u95F4\uFF1A${[fact.timeRange.start, fact.timeRange.end, fact.timeRange.label].filter(Boolean).join(" / ") || "\u672A\u6807\u6CE8"}
+\u76F4\u63A5\u5F71\u54CD\u5BF9\u8C61\uFF1A${lines(fact.relatedEntities)}
+\u7F6E\u4FE1\u5EA6\uFF1A${fact.confidence}`).join("\n\n");
+  return `\u3010\u4E8B\u4EF6\u69FD\u4F4D ${slot}\u3011
+\u5185\u90E8\u4E8B\u4EF6\u540D\u79F0\uFF08\u53EA\u7528\u4E8E\u7406\u89E3\uFF0C\u4E0D\u8981\u8F93\u51FA\uFF09\uFF1A${group.eventId}
+
+\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\uFF1A
+${group.previous ? `\u6807\u9898\uFF1A${group.previous.title}
+\u6458\u8981\uFF1A${group.previous.summary}
+\u672A\u51B3\uFF1A${lines(group.previous.unresolvedItems ?? [])}
+\u5173\u952E\u8BCD\uFF1A${lines(group.previous.keywords)}` : "\uFF08\u65E0\uFF09"}
+
+\u672C\u6B21\u65B0\u589E\u4E8B\u5B9E\uFF1A
+${facts || "\uFF08\u65E0\uFF09"}`;
 }
 function smallSummaryBatchPrompt(groups) {
-  const payload = groups.map((group) => ({
-    event_id: group.eventId,
-    previous_small: group.previous ? {
-      id: group.previous.id,
-      title: group.previous.title,
-      summary: group.previous.summary,
-      unresolved: group.previous.unresolvedItems ?? [],
-      keywords: group.previous.keywords
-    } : null,
-    new_facts: compactSmallFacts(group.facts)
-  }));
-  return `\u4E3A\u4E0B\u5217\u6BCF\u6761 event_id \u5206\u522B\u751F\u6210\u81EA\u5DF1\u7684\u65B0\u7248\u672C\u5C0F\u603B\u7ED3\u3002\u53EF\u4EE5\u4E00\u6B21\u751F\u6210\u591A\u6761\uFF0C\u4F46\u7981\u6B62\u8DE8\u4E8B\u4EF6\u5408\u5E76\u4E8B\u5B9E\u3001\u4EBA\u7269\u3001\u5730\u70B9\u6216\u56E0\u679C\u3002
-\u53EA\u4F7F\u7528\u5404\u81EA\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u548C\u5404\u81EA\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002\u65B0\u7248\u672C\u5FC5\u987B\u7D2F\u8BA1\u4FDD\u7559\u4ECD\u6709\u6548\u7684\u65E2\u6709\u4E8B\u5B9E\uFF0C\u5E76\u7528\u65B0\u4E8B\u5B9E\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u65E7\u8868\u8FF0\u3002
+  return `\u4E3A\u4E0B\u5217\u4E8B\u4EF6\u69FD\u4F4D\u5206\u522B\u751F\u6210\u81EA\u5DF1\u7684\u7D2F\u8BA1\u5C0F\u603B\u7ED3\u3002\u53EA\u4F7F\u7528\u5404\u69FD\u4F4D\u7684\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u548C\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002
 
-\u3010\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u6279\u6B21\u3011
-${JSON.stringify(payload)}
+${groups.map(smallEventSection).join("\n\n====================\n\n")}
 
-\u53EA\u8F93\u51FA\uFF1A{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}
-\u6BCF\u4E2A\u8F93\u5165 event_id \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u9879\u3002`;
+\u6309\u8F93\u5165\u987A\u5E8F\u8FD4\u56DE <MA_SUMMARY>\u3002\u6BCF\u4E2A slot \u5FC5\u987B\u4E14\u53EA\u80FD\u51FA\u73B0\u4E00\u6B21\u3002`;
 }
 function largeSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u8BFB\u53D6\u804A\u5929\u6B63\u6587\uFF0C\u4E0D\u8865\u5168\u672A\u663E\u5F71\u5185\u5BB9\u3002
-\u4E00\u6B21\u8BF7\u6C42\u53EF\u80FD\u5305\u542B\u591A\u6761\u5F7C\u6B64\u65E0\u5173\u7684\u4E8B\u4EF6\u7EBF\u3002\u5FC5\u987B\u6309 event_id \u5206\u522B\u751F\u6210\u957F\u671F\u603B\u7ED3\uFF0C\u7EDD\u4E0D\u80FD\u628A\u4E0D\u540C\u4E8B\u4EF6\u7EBF\u6DF7\u6210\u540C\u4E00\u6BB5\u5386\u53F2\u3002
-\u6BCF\u6761\u4E8B\u4EF6\u7EBF\u53EA\u538B\u7F29\u81EA\u8EAB\u7684\u5C0F\u603B\u7ED3\uFF1A\u5F53\u524D\u5C42\u7EC6\u8282\u6700\u591A\uFF0C\u8FD1\u671F\u5C42\u6B21\u4E4B\uFF0C\u957F\u671F\u5386\u53F2\u53EA\u4FDD\u7559\u6700\u7EC8\u7ED3\u679C\u3001\u6838\u5FC3\u56E0\u679C\u4E0E\u6301\u7EED\u5F71\u54CD\u3002`;
+  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u6309\u672C\u6B21\u8BF7\u6C42\u63D0\u4F9B\u7684 slot \u5206\u522B\u751F\u6210\u957F\u671F\u603B\u7ED3\uFF0C\u4E0D\u8BFB\u53D6\u804A\u5929\u6B63\u6587\uFF0C\u4E0D\u8865\u5168\u672A\u663E\u5F71\u5185\u5BB9\u3002
+
+\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62JSON\u3001Markdown\u4EE3\u7801\u5757\u3001\u89E3\u91CA\u548C\u601D\u8003\u6807\u7B7E\u3002\u6BCF\u4E2A\u8F93\u5165 slot \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u4E2A\uFF1A
+<MA_SUMMARY>
+slot=L1
+title=\u4E8B\u4EF6\u7EBF\u6807\u9898
+summary=\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\uFF1B\u5141\u8BB8\u81EA\u7136\u8BED\u8A00\u7EED\u884C
+keyword=\u5173\u952E\u8BCD\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
+unresolved=\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
+</MA_SUMMARY>
+
+\u89C4\u5219\uFF1A
+1. \u4E0D\u540C slot \u7EDD\u4E0D\u80FD\u6DF7\u5408\u4E8B\u5B9E\u3001\u56E0\u679C\u3001\u4EBA\u7269\u6216\u5730\u70B9\u3002
+2. \u53EA\u56FA\u5316\u5DF2\u7ECF\u53D1\u751F\u7684\u7ED3\u679C\u3001\u6838\u5FC3\u56E0\u679C\u3001\u957F\u671F\u5F71\u54CD\u548C\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\u3002
+3. \u5220\u9664\u52A8\u4F5C\u7EC6\u8282\u3001\u91CD\u590D\u8FC7\u7A0B\u548C\u5DF2\u88AB\u7ED3\u679C\u8986\u76D6\u7684\u63CF\u8FF0\u3002
+4. slot \u53EA\u662F\u672C\u6B21\u8BF7\u6C42\u8DEF\u7531\u6807\u7B7E\uFF0C\u5FC5\u987B\u539F\u6837\u8FD4\u56DE\uFF1B\u4E0D\u8981\u8F93\u51FA\u4EFB\u4F55\u5185\u90E8 ID\u3002`;
+}
+function largeEventSection(group, index) {
+  const slot = group.slot || `L${index + 1}`;
+  return `\u3010\u4E8B\u4EF6\u69FD\u4F4D ${slot}\u3011
+\u5185\u90E8\u4E8B\u4EF6\u540D\u79F0\uFF08\u53EA\u7528\u4E8E\u7406\u89E3\uFF0C\u4E0D\u8981\u8F93\u51FA\uFF09\uFF1A${group.eventId}
+
+\u4E0A\u4E00\u7248\u957F\u671F\u603B\u7ED3\uFF1A
+${group.previousLarge ? `\u6807\u9898\uFF1A${group.previousLarge.title}
+\u6458\u8981\uFF1A${group.previousLarge.summary}
+\u672A\u51B3\uFF1A${lines(group.previousLarge.unresolvedItems ?? [])}
+\u5173\u952E\u8BCD\uFF1A${lines(group.previousLarge.keywords)}` : "\uFF08\u65E0\uFF09"}
+
+\u6700\u65B0\u7D2F\u8BA1\u5C0F\u603B\u7ED3\uFF1A
+\u6807\u9898\uFF1A${group.latestSmall.title}
+\u6458\u8981\uFF1A${group.latestSmall.summary}
+\u672A\u51B3\uFF1A${lines(group.latestSmall.unresolvedItems ?? [])}
+\u5173\u952E\u8BCD\uFF1A${lines(group.latestSmall.keywords)}`;
 }
 function largeSummaryPrompt(groups) {
-  const payload = groups.map((group) => ({
-    event_id: group.eventId,
-    previous_large: group.previousLarge ? {
-      id: group.previousLarge.id,
-      title: group.previousLarge.title,
-      summary: group.previousLarge.summary,
-      unresolved: group.previousLarge.unresolvedItems ?? [],
-      keywords: group.previousLarge.keywords
-    } : null,
-    latest_small: {
-      id: group.latestSmall.id,
-      title: group.latestSmall.title,
-      summary: group.latestSmall.summary,
-      unresolved: group.latestSmall.unresolvedItems ?? [],
-      keywords: group.latestSmall.keywords
-    },
-    source_summary_ids: group.sourceSummaryIds
-  }));
-  return `\u5C06\u4E0B\u5217\u6BCF\u6761 event_id \u5206\u522B\u538B\u7F29\u4E3A\u81EA\u5DF1\u7684\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\u3002\u53EF\u4EE5\u4E00\u6B21\u751F\u6210\u591A\u6761\uFF0C\u4F46\u7981\u6B62\u8DE8\u4E8B\u4EF6\u5408\u5E76\u4E8B\u5B9E\u3001\u56E0\u679C\u3001\u4EBA\u7269\u6216\u5730\u70B9\u3002
-\u804C\u8D23\uFF1A\u56FA\u5316\u5DF2\u7ECF\u53D1\u751F\u7684\u7ED3\u679C\uFF1B\u4FDD\u7559\u957F\u671F\u5F71\u54CD\u548C\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\uFF1B\u5220\u9664\u52A8\u4F5C\u7EC6\u8282\u3001\u91CD\u590D\u8FC7\u7A0B\u4E0E\u5DF2\u88AB\u7ED3\u679C\u8986\u76D6\u7684\u63CF\u8FF0\u3002\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u4FE1\u606F\u5FC5\u987B\u5220\u9664\u3002
+  return `\u5C06\u4E0B\u5217\u4E8B\u4EF6\u69FD\u4F4D\u5206\u522B\u538B\u7F29\u4E3A\u81EA\u5DF1\u7684\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\u3002\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u4E0D\u5F97\u8FDB\u5165\u957F\u671F\u603B\u7ED3\u3002
 
-\u3010\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u6279\u6B21\u3011
-${JSON.stringify(payload)}
+${groups.map(largeEventSection).join("\n\n====================\n\n")}
 
-\u53EA\u8F93\u51FA\uFF1A{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}
-\u6BCF\u4E2A\u8F93\u5165 event_id \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u9879\u3002`;
+\u6309\u8F93\u5165\u987A\u5E8F\u8FD4\u56DE <MA_SUMMARY>\u3002\u6BCF\u4E2A slot \u5FC5\u987B\u4E14\u53EA\u80FD\u51FA\u73B0\u4E00\u6B21\u3002`;
+}
+
+// src/domain/summary-text.ts
+var MARKERS2 = [{ kind: "summary", start: "<MA_SUMMARY>", end: "</MA_SUMMARY>" }];
+function normalizeKey(value2) {
+  const raw = value2.normalize("NFKC").trim();
+  const aliases2 = {
+    "\u69FD\u4F4D": "slot",
+    "\u7F16\u53F7": "slot",
+    "\u6807\u9898": "title",
+    "\u6458\u8981": "summary",
+    "\u5173\u952E\u8BCD": "keyword",
+    "\u672A\u51B3": "unresolved",
+    "\u672A\u89E3\u51B3": "unresolved"
+  };
+  return aliases2[raw] || raw.toLowerCase().replace(/[\s_-]+/g, "");
+}
+function normalizedBlock(block) {
+  const fields = /* @__PURE__ */ new Map();
+  for (const [key, values2] of block.fields.entries()) {
+    const target = normalizeKey(key);
+    fields.set(target, [...fields.get(target) ?? [], ...values2]);
+  }
+  return { ...block, fields };
+}
+function parseSummaryTextOutput(raw, expectedSlots) {
+  const expected = new Set(expectedSlots);
+  const blocks = parseFixedTextBlocks(raw, MARKERS2).filter((block) => block.kind === "summary");
+  if (!blocks.length) throw new Error("\u603B\u7ED3\u6A21\u578B\u672A\u8FD4\u56DE <MA_SUMMARY>");
+  const output = /* @__PURE__ */ new Map();
+  for (const source of blocks) {
+    const block = normalizedBlock(source);
+    const slot = fixedTextValue(block, "slot").trim().toUpperCase();
+    if (!slot) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_SUMMARY> \u7F3A\u5C11 slot`);
+    if (!expected.has(slot)) throw new Error(`\u603B\u7ED3\u8FD4\u56DE\u672A\u8BF7\u6C42\u69FD\u4F4D\uFF1A${slot}`);
+    if (output.has(slot)) throw new Error(`\u603B\u7ED3\u91CD\u590D\u8FD4\u56DE\u69FD\u4F4D\uFF1A${slot}`);
+    const summary = safeText(fixedTextValue(block, "summary"), 2e4).trim();
+    if (!summary) throw new Error(`\u603B\u7ED3\u69FD\u4F4D ${slot} \u7684 summary \u4E3A\u7A7A`);
+    output.set(slot, {
+      slot,
+      title: safeText(fixedTextValue(block, "title"), 1e3).trim(),
+      summary,
+      keywords: fixedTextValues(block, "keyword").map((item) => safeText(item, 200).trim()).filter(Boolean).slice(0, 40),
+      unresolved: fixedTextValues(block, "unresolved").map((item) => safeText(item, 2e3).trim()).filter(Boolean).slice(0, 40)
+    });
+  }
+  for (const slot of expectedSlots) if (!output.has(slot)) throw new Error(`\u603B\u7ED3\u7F3A\u5C11\u69FD\u4F4D\u7ED3\u679C\uFF1A${slot}`);
+  return output;
 }
 
 // src/pipeline/summary.ts
@@ -5383,8 +4877,8 @@ function eventClosed(facts) {
   const settled = !latest.active || /(结束|已解决|已关闭|完成|归档|closed|resolved|ended)/i.test(latest.status);
   return settled && latest.unresolvedItems.length === 0;
 }
-function entryToken(value) {
-  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+function entryToken(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function summaryMemoryText(summary) {
   const title = String(summary.title || "").trim();
@@ -5403,7 +4897,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts
   const next = structuredClone(snapshot);
   for (const table of registry2) {
     for (const row of next[table.key] ?? []) {
-      const rowTokens = [
+      const rowTokens2 = [
         entryToken(row.id),
         entryToken(row.title),
         ...(row.keywords ?? []).map(entryToken),
@@ -5411,17 +4905,17 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts
       ].filter(Boolean);
       const linkedByEvent = rowEventIds(row).includes(eventId);
       const linkedByFact = (row.factIds ?? []).some((id) => factIds.has(id));
-      const linkedByObject = rowTokens.some((token) => relatedTokens2.has(token));
-      const linkedEventRow = table.role === "events" && rowTokens.some((token) => eventTitleTokens.has(token));
+      const linkedByObject = rowTokens2.some((token) => relatedTokens2.has(token));
+      const linkedEventRow = table.role === "events" && rowTokens2.some((token) => eventTitleTokens.has(token));
       const target = linkedByEvent || linkedByFact || linkedByObject || linkedEventRow;
       if (!target || row.locked || row.lockMode === "all") continue;
       row.fields ||= {};
       const current = Array.isArray(row.fields[layer]) ? row.fields[layer].map((item) => String(item ?? "").trim()).filter(Boolean) : [];
-      let values = current.filter((item) => !removals.has(item));
-      if (addText) values.push(addText);
-      values = [...new Set(values)].slice(-40);
-      if (JSON.stringify(current) === JSON.stringify(values)) continue;
-      row.fields[layer] = values;
+      let values2 = current.filter((item) => !removals.has(item));
+      if (addText) values2.push(addText);
+      values2 = [...new Set(values2)].slice(-40);
+      if (JSON.stringify(current) === JSON.stringify(values2)) continue;
+      row.fields[layer] = values2;
       row.updatedAt = nowIso();
     }
   }
@@ -5430,9 +4924,9 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts
 function pendingSmallEventGroups(facts, threshold, force) {
   const allByEvent = /* @__PURE__ */ new Map();
   for (const fact of facts) {
-    const list4 = allByEvent.get(fact.eventId) ?? [];
-    list4.push(fact);
-    allByEvent.set(fact.eventId, list4);
+    const list3 = allByEvent.get(fact.eventId) ?? [];
+    list3.push(fact);
+    allByEvent.set(fact.eventId, list3);
   }
   return [...pendingFactsByEvent(facts).entries()].map(([eventId, eventFacts]) => ({
     eventId,
@@ -5495,29 +4989,27 @@ async function generateSmallSummary(artifact, force = false) {
       (item) => item.eventId === group.eventId && !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId
     )
   }));
-  const parsed = await generateStructuredTask({
+  const slotted = prepared.map((group, index) => ({ ...group, slot: `S${index + 1}` }));
+  const raw = await generateTask({
     task: "smallSummary",
     systemPrompt: smallSummarySystemPrompt(),
-    prompt: smallSummaryBatchPrompt(prepared.map((group) => ({ eventId: group.eventId, facts: group.facts, previous: group.previous }))),
-    structureDescription: '{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}',
-    maxTokens: Math.min(2200, 700 + prepared.length * 260)
+    prompt: smallSummaryBatchPrompt(slotted.map((group) => ({ slot: group.slot, eventId: group.eventId, facts: group.facts, previous: group.previous }))),
+    maxTokens: Math.min(2200, 700 + prepared.length * 260),
+    requestPurpose: "fixed-text"
   });
   assertArtifactCommitCurrent(artifact);
-  const rawSummaries = Array.isArray(parsed?.summaries) ? parsed.summaries : prepared.length === 1 && parsed && typeof parsed === "object" ? [{ ...parsed, event_id: parsed.event_id || prepared[0].eventId }] : [];
-  const byEvent = /* @__PURE__ */ new Map();
-  for (const item of rawSummaries) {
-    if (!item || typeof item !== "object") continue;
-    const eventId = String(item.event_id ?? item.eventId ?? "").trim();
-    if (!eventId || byEvent.has(eventId)) continue;
-    byEvent.set(eventId, item);
+  let bySlot;
+  try {
+    bySlot = parseSummaryTextOutput(raw, slotted.map((group) => group.slot));
+  } catch (error) {
+    const preview = safeText(raw, 1200).replace(/\s+/g, " ").trim();
+    throw new Error(`\u5C0F\u603B\u7ED3\u672A\u8FD4\u56DE\u6709\u6548\u56FA\u5B9A\u6587\u672C\uFF1A${toErrorMessage(error)}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`, { cause: error });
   }
-  const expected = new Set(prepared.map((group) => group.eventId));
-  for (const eventId of expected) if (!byEvent.has(eventId)) throw new Error(`\u5C0F\u603B\u7ED3\u7F3A\u5C11\u4E8B\u4EF6\u7EBF\u7ED3\u679C\uFF1A${eventId}`);
-  for (const eventId of byEvent.keys()) if (!expected.has(eventId)) throw new Error(`\u5C0F\u603B\u7ED3\u8FD4\u56DE\u672A\u8BF7\u6C42\u4E8B\u4EF6\u7EBF\uFF1A${eventId}`);
-  const generated = prepared.map((group) => {
+  const generated = slotted.map((group) => {
     const newFactIds = group.facts.map((fact) => fact.factId);
     const sourceFactIds = [.../* @__PURE__ */ new Set([...group.previous?.sourceFactIds ?? group.previous?.sourceKeys ?? [], ...newFactIds])];
-    const summary = normalizeSummary(byEvent.get(group.eventId), "small", sourceFactIds, void 0, { eventId: group.eventId, sourceFactIds });
+    const text = bySlot.get(group.slot);
+    const summary = normalizeSummary({ title: text.title, summary: text.summary, keywords: text.keywords, unresolved: text.unresolved }, "small", sourceFactIds, void 0, { eventId: group.eventId, sourceFactIds });
     summary.previousSmallSummaryId = group.previous?.id;
     summary.eventClosed = group.closed;
     if (!summary.summary) throw new Error(`\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981\uFF1A${group.eventId}`);
@@ -5577,33 +5069,32 @@ async function generateLargeSummary(artifact, force = false) {
   const threshold = Math.max(1, Number(settings.largeSummaryCount) || 4);
   const groups = pendingLargeEventGroups(chatState.smallSummaries, chatState.largeSummaries, threshold, force).slice(0, 8);
   if (!groups.length) return null;
-  const parsed = await generateStructuredTask({
+  const slotted = groups.map((group, index) => ({ ...group, slot: `L${index + 1}` }));
+  const raw = await generateTask({
     task: "largeSummary",
     systemPrompt: largeSummarySystemPrompt(),
-    prompt: largeSummaryPrompt(groups.map((group) => ({
+    prompt: largeSummaryPrompt(slotted.map((group) => ({
+      slot: group.slot,
       eventId: group.eventId,
       latestSmall: group.latest,
       sourceSummaryIds: group.sourceSummaryIds,
       previousLarge: group.previousLarge
     }))),
-    structureDescription: '{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}',
-    maxTokens: Math.min(2200, 700 + groups.length * 260)
+    maxTokens: Math.min(2200, 700 + groups.length * 260),
+    requestPurpose: "fixed-text"
   });
   assertArtifactCommitCurrent(artifact);
-  const rawSummaries = Array.isArray(parsed?.summaries) ? parsed.summaries : groups.length === 1 && parsed && typeof parsed === "object" ? [{ ...parsed, event_id: parsed.event_id || groups[0].eventId }] : [];
-  const byEvent = /* @__PURE__ */ new Map();
-  for (const item of rawSummaries) {
-    if (!item || typeof item !== "object") continue;
-    const eventId = String(item.event_id ?? item.eventId ?? "").trim();
-    if (!eventId || byEvent.has(eventId)) continue;
-    byEvent.set(eventId, item);
+  let bySlot;
+  try {
+    bySlot = parseSummaryTextOutput(raw, slotted.map((group) => group.slot));
+  } catch (error) {
+    const preview = safeText(raw, 1200).replace(/\s+/g, " ").trim();
+    throw new Error(`\u5927\u603B\u7ED3\u672A\u8FD4\u56DE\u6709\u6548\u56FA\u5B9A\u6587\u672C\uFF1A${toErrorMessage(error)}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`, { cause: error });
   }
-  const expected = new Set(groups.map((group) => group.eventId));
-  for (const eventId of expected) if (!byEvent.has(eventId)) throw new Error(`\u5927\u603B\u7ED3\u7F3A\u5C11\u4E8B\u4EF6\u7EBF\u7ED3\u679C\uFF1A${eventId}`);
-  for (const eventId of byEvent.keys()) if (!expected.has(eventId)) throw new Error(`\u5927\u603B\u7ED3\u8FD4\u56DE\u672A\u8BF7\u6C42\u4E8B\u4EF6\u7EBF\uFF1A${eventId}`);
-  const generated = groups.map((group) => {
-    const value = byEvent.get(group.eventId);
-    const summary = normalizeSummary(value, "large", group.sourceSummaryIds, group.previousLarge?.id, {
+  const generated = slotted.map((group) => {
+    const text = bySlot.get(group.slot);
+    const value2 = { title: text.title, summary: text.summary, keywords: text.keywords, unresolved: text.unresolved };
+    const summary = normalizeSummary(value2, "large", group.sourceSummaryIds, group.previousLarge?.id, {
       eventId: group.eventId,
       eventIds: [group.eventId],
       sourceSummaryIds: group.sourceSummaryIds,
@@ -5764,25 +5255,25 @@ async function rebuildEligibleSummaries(artifact) {
 // src/domain/facts.ts
 var OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
 var CONFIDENCE2 = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
-function list3(value, limit = 24, itemLimit = 500) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+function list2(value2, limit = 24, itemLimit = 500) {
+  if (!Array.isArray(value2)) return [];
+  return [...new Set(value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
-function normalizeTimeRange(value) {
-  const source = value && typeof value === "object" ? value : {};
+function normalizeTimeRange(value2) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
   return { start: safeText(source.start, 120).trim() || void 0, end: safeText(source.end, 120).trim() || void 0, label: safeText(source.label, 240).trim() || void 0 };
 }
-function normalizeFacts(value) {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => item && typeof item === "object" ? item : {}).map((item, index) => {
+function normalizeFacts(value2) {
+  if (!Array.isArray(value2)) return [];
+  return value2.map((item) => item && typeof item === "object" ? item : {}).map((item, index) => {
     const operation = safeText(item.operation, 40).trim();
     const confidence = safeText(item.confidence, 40).trim();
     const entityId = safeText(item.entityId ?? item.entity_id, 160).trim();
     const title = safeText(item.title, 240).trim();
     const content = safeText(item.content, 6e3).trim();
     const id = safeText(item.factId ?? item.fact_id ?? item.id, 160).trim() || `fact_${hashText(`${entityId}|${title}|${content}|${index}`)}`;
-    const occurred = list3(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1e3);
-    const unresolved = list3(item.unresolved ?? item.unresolvedItems, 30, 1e3);
+    const occurred = list2(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1e3);
+    const unresolved = list2(item.unresolved ?? item.unresolvedItems, 30, 1e3);
     return {
       id,
       factId: id,
@@ -5795,8 +5286,8 @@ function normalizeFacts(value) {
       unresolved,
       status: safeText(item.status, 120).trim() || "active",
       timeRange: normalizeTimeRange(item.timeRange ?? item.time_range),
-      relatedEntities: list3(item.relatedEntities ?? item.related_entities, 30, 240),
-      keywords: list3(item.keywords, 24, 100),
+      relatedEntities: list2(item.relatedEntities ?? item.related_entities, 30, 240),
+      keywords: list2(item.keywords, 24, 100),
       operation: OPERATIONS.has(operation) ? operation : "update",
       confidence: CONFIDENCE2.has(confidence) ? confidence : "uncertain"
     };
@@ -5817,14 +5308,323 @@ function filterPassiveObserverFacts(facts) {
     return !isPurePassiveObserverText(text);
   });
 }
-function normalizeFactPackage(value, sourceMessageKey) {
+function normalizeFactPackage(value2, sourceMessageKey) {
   return {
     schemaVersion: 2,
     sourceMessageKey,
-    turnSummary: safeText(value.turnSummary, 4e3).trim(),
-    facts: filterPassiveObserverFacts(normalizeFacts(value.facts)),
+    turnSummary: safeText(value2.turnSummary, 4e3).trim(),
+    facts: filterPassiveObserverFacts(normalizeFacts(value2.facts)),
     createdAt: nowIso()
   };
+}
+
+// src/domain/state-text.ts
+var STATE_TEXT_MARKERS = {
+  turnStart: "<MA_TURN>",
+  turnEnd: "</MA_TURN>",
+  factStart: "<MA_FACT>",
+  factEnd: "</MA_FACT>",
+  rowStart: "<MA_ROW>",
+  rowEnd: "</MA_ROW>"
+};
+var CORE_ROW_KEYS = /* @__PURE__ */ new Set(["table", "object", "summary", "content", "status", "keyword"]);
+var FORBIDDEN_STATE_FIELDS = /* @__PURE__ */ new Set(["id", "title", "content", "keywords", "status", "recentHistory", "solidifiedHistory", "factIds", "eventId", "eventIds", "recall"]);
+var FACT_OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
+var FACT_CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
+var KEY_ALIASES = {
+  "\u8868\u683C": "table",
+  "\u5BF9\u8C61": "object",
+  "\u540D\u79F0": "object",
+  "\u6458\u8981": "summary",
+  "\u5185\u5BB9": "content",
+  "\u72B6\u6001": "status",
+  "\u5173\u952E\u8BCD": "keyword",
+  "\u4E8B\u4EF6": "event",
+  "\u6807\u9898": "title",
+  "\u7C7B\u578B": "type",
+  "\u64CD\u4F5C": "operation",
+  "\u7F6E\u4FE1\u5EA6": "confidence",
+  "\u5DF2\u53D1\u751F": "occurred",
+  "\u672A\u51B3": "unresolved",
+  "\u5F00\u59CB\u65F6\u95F4": "time_start",
+  "\u7ED3\u675F\u65F6\u95F4": "time_end",
+  "\u65F6\u95F4\u6807\u7B7E": "time_label",
+  "\u5173\u8054\u5BF9\u8C61": "related",
+  "\u5B57\u6BB5": "field",
+  "\u751F\u547D\u5468\u671F": "lifecycle"
+};
+function identity(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, "");
+}
+function unique(values2, limit = 40, chars = 800) {
+  return [...new Set(values2.map((item) => safeText(item, chars).trim()).filter(Boolean))].slice(0, limit);
+}
+function normalizeKey2(raw) {
+  const trimmed = raw.trim();
+  const alias = KEY_ALIASES[trimmed];
+  if (alias) return alias;
+  if (trimmed.startsWith("\u5B57\u6BB5.")) return `field.${trimmed.slice(3).trim()}`;
+  if (trimmed.startsWith("\u751F\u547D\u5468\u671F.")) return `lifecycle.${trimmed.slice(5).trim()}`;
+  return trimmed;
+}
+function addField(block, key, value2) {
+  const normalized = normalizeKey2(key);
+  if (!normalized) return;
+  block.fields.set(normalized, [...block.fields.get(normalized) ?? [], value2.trim()]);
+}
+function fieldValues(block, ...keys) {
+  return unique(keys.flatMap((key) => block.fields.get(key) ?? []));
+}
+function fieldValue(block, ...keys) {
+  return fieldValues(block, ...keys).at(-1) ?? "";
+}
+var STATE_BLOCK_MARKERS = [
+  { kind: "turn", start: STATE_TEXT_MARKERS.turnStart, end: STATE_TEXT_MARKERS.turnEnd },
+  { kind: "fact", start: STATE_TEXT_MARKERS.factStart, end: STATE_TEXT_MARKERS.factEnd },
+  { kind: "row", start: STATE_TEXT_MARKERS.rowStart, end: STATE_TEXT_MARKERS.rowEnd },
+  { kind: "turn", start: "\u3010\u56DE\u5408\u3011", end: "\u3010\u56DE\u5408\u7ED3\u675F\u3011" },
+  { kind: "fact", start: "\u3010\u4E8B\u5B9E\u3011", end: "\u3010\u4E8B\u5B9E\u7ED3\u675F\u3011" },
+  { kind: "row", start: "\u3010\u6761\u76EE\u3011", end: "\u3010\u6761\u76EE\u7ED3\u675F\u3011" }
+];
+function parseStateTextBlocks(raw) {
+  const parsed = parseFixedTextBlocks(raw, STATE_BLOCK_MARKERS);
+  if (!parsed.length) throw new Error("\u72B6\u6001\u6A21\u578B\u672A\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u5757\uFF08\u7F3A\u5C11 <MA_TURN>/<MA_FACT>/<MA_ROW>\uFF09");
+  return parsed.map((source) => {
+    const block = { ...source, kind: source.kind, fields: /* @__PURE__ */ new Map() };
+    for (const [key, values2] of source.fields.entries()) for (const value2 of values2) addField(block, key, value2);
+    return block;
+  });
+}
+function rowTokens(row) {
+  return new Set([row.title, ...row.keywords ?? []].map(identity).filter(Boolean));
+}
+function intersection(left, right) {
+  const rightSet = right instanceof Set ? right : new Set(right);
+  return [...left].filter((item) => rightSet.has(item));
+}
+function rowsStronglyDuplicate(left, right) {
+  if (!identity(left.title) || identity(left.title) !== identity(right.title)) return false;
+  if (intersection(left.factIds ?? [], right.factIds ?? []).length) return true;
+  const leftEvents = unique([...left.eventIds ?? [], left.eventId]);
+  const rightEvents = unique([...right.eventIds ?? [], right.eventId]);
+  if (intersection(leftEvents, rightEvents).length) return true;
+  const title = identity(left.title);
+  const leftAliases = new Set([...rowTokens(left)].filter((token) => token !== title));
+  const rightAliases = new Set([...rowTokens(right)].filter((token) => token !== title));
+  if (intersection(leftAliases, rightAliases).length) return true;
+  const leftContent = identity(left.content);
+  return Boolean(leftContent && leftContent === identity(right.content));
+}
+function mergeFieldValues(left, right) {
+  if (Array.isArray(left) || Array.isArray(right)) return unique([...Array.isArray(left) ? left : [], ...Array.isArray(right) ? right : []], 60, 1200);
+  const rightText = safeText(right, 12e3).trim();
+  return rightText || left;
+}
+function mergeRows(left, right) {
+  const protectedLeft = left.source === "manual" || left.locked || left.lockMode;
+  const protectedRight = right.source === "manual" || right.locked || right.lockMode;
+  const canonical = protectedLeft ? left : protectedRight ? right : left;
+  const secondary = canonical === left ? right : left;
+  const newer = String(right.updatedAt || "") >= String(left.updatedAt || "") ? right : left;
+  const fields = { ...canonical.fields ?? {} };
+  for (const [key, value2] of Object.entries(secondary.fields ?? {})) fields[key] = mergeFieldValues(fields[key], value2);
+  return {
+    ...canonical,
+    content: newer.content || canonical.content || secondary.content,
+    status: newer.status || canonical.status,
+    keywords: unique([...canonical.keywords ?? [], ...secondary.keywords ?? []], 24, 100),
+    fields,
+    factIds: unique([...canonical.factIds ?? [], ...secondary.factIds ?? []], 80, 160),
+    eventIds: unique([...canonical.eventIds ?? [], canonical.eventId, ...secondary.eventIds ?? [], secondary.eventId], 80, 160),
+    eventId: canonical.eventId || secondary.eventId,
+    lifecycle: canonical.lifecycle ?? secondary.lifecycle,
+    updatedAt: newer.updatedAt || canonical.updatedAt
+  };
+}
+function dedupeStrongStateRows(snapshot, registry2) {
+  const tables2 = normalizeTableRegistry(registry2);
+  const output = structuredClone(snapshot);
+  for (const table of tables2) {
+    const rows = output[table.key] ?? [];
+    const kept = [];
+    for (const row of rows) {
+      const index = kept.findIndex((candidate) => rowsStronglyDuplicate(candidate, row));
+      if (index < 0) kept.push(row);
+      else kept[index] = mergeRows(kept[index], row);
+    }
+    output[table.key] = kept;
+  }
+  return output;
+}
+function findExistingRow(tableKey, objectName, keywords, previous) {
+  const rows = previous[tableKey] ?? [];
+  const objectToken = identity(objectName);
+  const exactTitle = rows.filter((row) => identity(row.title) === objectToken);
+  if (exactTitle.length === 1) return exactTitle[0];
+  if (exactTitle.length > 1) {
+    const collapsed = exactTitle.reduce((acc, row) => rowsStronglyDuplicate(acc, row) ? mergeRows(acc, row) : acc, exactTitle[0]);
+    if (exactTitle.every((row) => row === exactTitle[0] || rowsStronglyDuplicate(exactTitle[0], row))) return collapsed;
+    throw new Error(`\u8868\u683C ${tableKey} \u4E2D\u5B58\u5728\u591A\u4E2A\u65E0\u6CD5\u81EA\u52A8\u533A\u5206\u7684\u540C\u540D\u5BF9\u8C61\uFF1A${objectName}`);
+  }
+  const wanted = new Set([objectName, ...keywords].map(identity).filter(Boolean));
+  const aliasMatches = rows.filter((row) => intersection(rowTokens(row), wanted).length > 0);
+  if (aliasMatches.length === 1) return aliasMatches[0];
+  if (aliasMatches.length > 1) throw new Error(`\u8868\u683C ${tableKey} \u4E2D\u6709\u591A\u4E2A\u6761\u76EE\u547D\u4E2D\u5BF9\u8C61\u522B\u540D\uFF1A${objectName}`);
+  return void 0;
+}
+function resolveTable(raw, active) {
+  const token = identity(raw);
+  const matches = active.filter((table) => identity(table.key) === token || identity(table.name) === token || identity(table.role) === token);
+  if (matches.length === 1) return matches[0];
+  if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u6761\u76EE\u4F7F\u7528\u4E86\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${raw || "\u7A7A"}`);
+  throw new Error(`\u56FA\u5B9A\u6587\u672C\u8868\u683C\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF1A${raw}`);
+}
+function resolveField(table, raw) {
+  const token = identity(raw);
+  const matches = table.fields.filter((field) => identity(field.key) === token || identity(field.label) === token);
+  if (matches.length === 1) return matches[0];
+  if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u672A\u6CE8\u518C\u4E8E ${table.key}\uFF1A${raw}`);
+  throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF08${table.key}\uFF09\uFF1A${raw}`);
+}
+function buildRowPatch(block, active, previous) {
+  const table = resolveTable(fieldValue(block, "table"), active);
+  const objectName = fieldValue(block, "object", "title").trim();
+  if (!objectName) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u7F3A\u5C11 object`);
+  const keywords = unique([objectName, ...fieldValues(block, "keyword")], 24, 100);
+  const existing = findExistingRow(table.key, objectName, keywords, previous);
+  const fields = {};
+  let lifecycle;
+  for (const [rawKey, values2] of block.fields.entries()) {
+    if (CORE_ROW_KEYS.has(rawKey) || rawKey === "title") continue;
+    if (rawKey.startsWith("field.")) {
+      const requested = rawKey.slice("field.".length).trim();
+      const definition = resolveField(table, requested);
+      if (FORBIDDEN_STATE_FIELDS.has(definition.key)) throw new Error(`\u72B6\u6001\u6587\u672C\u4E0D\u5141\u8BB8\u5199\u5165\u5B57\u6BB5\uFF1A${definition.key}`);
+      if (definition.type === "lifecycle") throw new Error(`\u5B57\u6BB5 ${definition.key} \u5FC5\u987B\u4F7F\u7528 lifecycle.* \u884C`);
+      const cleaned = unique(values2, definition.type === "string[]" ? 40 : 1, 1200);
+      fields[definition.key] = definition.type === "string[]" ? cleaned : cleaned.at(-1) ?? "";
+      continue;
+    }
+    if (rawKey.startsWith("lifecycle.")) {
+      const key = rawKey.slice("lifecycle.".length).trim();
+      const lifecycleField = table.fields.find((field) => field.type === "lifecycle");
+      if (!lifecycleField) throw new Error(`\u8868\u683C ${table.key} \u672A\u6CE8\u518C lifecycle \u5B57\u6BB5`);
+      if (!["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"].includes(key)) {
+        throw new Error(`\u672A\u77E5\u751F\u547D\u5468\u671F\u5B57\u6BB5\uFF1A${key}`);
+      }
+      lifecycle ||= {};
+      lifecycle[key] = ["returnConditions", "returnBlockers"].includes(key) ? unique(values2, 30, 500) : safeText(values2.at(-1), 1e3).trim();
+      continue;
+    }
+    if (!KEY_ALIASES[rawKey]) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u542B\u672A\u77E5\u5B57\u6BB5\uFF1A${rawKey}`);
+  }
+  const row = {
+    id: existing?.id || makeId(table.key),
+    title: existing?.title || objectName,
+    content: fieldValue(block, "summary", "content") || existing?.content || objectName,
+    keywords: unique([...existing?.keywords ?? [], ...keywords], 24, 100),
+    status: fieldValue(block, "status") || existing?.status || "active",
+    source: existing?.source ?? "auto",
+    locked: existing?.locked ?? false,
+    lockMode: existing?.lockMode,
+    lifecycle,
+    updatedAt: existing?.updatedAt ?? "",
+    fields
+  };
+  return { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}` };
+}
+function mergePatchRows(left, right) {
+  const fields = { ...left.fields ?? {} };
+  for (const [key, value2] of Object.entries(right.fields ?? {})) fields[key] = mergeFieldValues(fields[key], value2);
+  return {
+    ...left,
+    content: right.content || left.content,
+    status: right.status || left.status,
+    keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100),
+    fields,
+    lifecycle: right.lifecycle ?? left.lifecycle
+  };
+}
+function activeEventMatch(eventName, activeFacts) {
+  const token = identity(eventName);
+  if (!token) return void 0;
+  const matches = new Set(activeFacts.filter((fact) => {
+    const terms = [fact.eventId, fact.title, ...fact.keywords].map(identity).filter(Boolean);
+    return terms.includes(token);
+  }).map((fact) => fact.eventId));
+  return matches.size === 1 ? [...matches][0] : void 0;
+}
+function factFromBlock(block, activeFacts) {
+  const title = fieldValue(block, "title", "object").trim();
+  if (!title) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_FACT> \u7F3A\u5C11 title`);
+  const eventName = fieldValue(block, "event") || title;
+  const eventId = activeEventMatch(eventName, activeFacts) || `event_${hashText(identity(eventName) || identity(title))}`;
+  const titleToken = identity(title);
+  const previousMatches = activeFacts.filter((fact) => fact.eventId === eventId && identity(fact.title) === titleToken);
+  const factId = previousMatches.length === 1 ? previousMatches[0].factId : `fact_${hashText(`${eventId}|${titleToken}`)}`;
+  const occurred = fieldValues(block, "occurred", "content");
+  const unresolved = fieldValues(block, "unresolved");
+  const status = fieldValue(block, "status") || "active";
+  const requestedOperation = fieldValue(block, "operation");
+  const operation = FACT_OPERATIONS.has(requestedOperation) ? requestedOperation : /closed|resolved|ended|archived|结束|已解决|已关闭|已归档/i.test(status) ? "close" : previousMatches.length ? "update" : "create";
+  const requestedConfidence = fieldValue(block, "confidence");
+  const confidence = FACT_CONFIDENCE.has(requestedConfidence) ? requestedConfidence : "uncertain";
+  return {
+    fact_id: factId,
+    event_id: eventId,
+    entity_id: eventId,
+    type: fieldValue(block, "type") || "event",
+    title,
+    content: occurred.join("\uFF1B"),
+    occurred,
+    unresolved,
+    status,
+    time_range: {
+      start: fieldValue(block, "time_start"),
+      end: fieldValue(block, "time_end"),
+      label: fieldValue(block, "time_label")
+    },
+    related_entities: fieldValues(block, "related"),
+    keywords: unique([title, eventName, ...fieldValues(block, "keyword")], 24, 100),
+    operation,
+    confidence
+  };
+}
+function mergeFacts(left, right) {
+  return {
+    ...left,
+    ...right,
+    content: unique([left.content, right.content], 20, 1200).join("\uFF1B"),
+    occurred: unique([...left.occurred ?? [], ...right.occurred ?? []], 40, 1200),
+    unresolved: unique([...left.unresolved ?? [], ...right.unresolved ?? []], 40, 1200),
+    related_entities: unique([...left.related_entities ?? [], ...right.related_entities ?? []], 40, 240),
+    keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100)
+  };
+}
+function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = []) {
+  const active = enabledTables(normalizeTableRegistry(registry2));
+  const previous = dedupeStrongStateRows(previousSnapshot2, registry2);
+  const blocks = parseStateTextBlocks(raw);
+  const turnSummary = blocks.filter((block) => block.kind === "turn").map((block) => fieldValue(block, "summary", "content")).filter(Boolean).at(-1) ?? "";
+  const factsById = /* @__PURE__ */ new Map();
+  const snapshot = {};
+  const rowsByIdentity = /* @__PURE__ */ new Map();
+  for (const block of blocks) {
+    if (block.kind === "fact") {
+      const fact = factFromBlock(block, activeFacts);
+      if (!fact.occurred.length && !fact.unresolved.length) continue;
+      const id = String(fact.fact_id);
+      factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
+    }
+    if (block.kind === "row") {
+      const patch = buildRowPatch(block, active, previous);
+      const key = `${patch.table}|${patch.matchKey}`;
+      const current = rowsByIdentity.get(key);
+      rowsByIdentity.set(key, current ? { table: patch.table, row: mergePatchRows(current.row, patch.row), matchKey: patch.matchKey } : patch);
+    }
+  }
+  for (const { table, row } of rowsByIdentity.values()) (snapshot[table] ||= []).push(row);
+  return { turnSummary, facts: [...factsById.values()], snapshot };
 }
 
 // src/prompts/state.ts
@@ -5866,87 +5666,108 @@ function compactRegistryDescription(active) {
 }
 function stateSystemPrompt(registry2) {
   const active = tables(registry2);
-  const keys = active.map((table) => table.key).join("\u3001");
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\uFF08\u591A\u4E8B\u4EF6\u7EBF\u3001\u591A\u5BF9\u8C61\uFF09\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
+  const keys = active.map((table) => `${table.key}\uFF08${table.name}\uFF09`).join("\u3001");
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
 
-\u53EA\u8F93\u51FA\u53EF\u76F4\u63A5 JSON.parse \u7684\u5B8C\u6574\u5BF9\u8C61\uFF0C\u4E0D\u8981 Markdown\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
-\u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001operations\u3002operations.table \u53EA\u80FD\u4F7F\u7528\u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
+\u4F60\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62\u8FD4\u56DE JSON\u3001Markdown \u8868\u683C\u3001\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
+\u5141\u8BB8\u7684\u5757\u53EA\u6709 <MA_TURN>\u3001<MA_FACT>\u3001<MA_ROW>\uFF1B\u6BCF\u4E2A\u5B57\u6BB5\u72EC\u5360\u4E00\u884C\uFF0C\u4F7F\u7528\u82F1\u6587\u7B49\u53F7\u201C=\u201D\u8FDE\u63A5\u3002\u5217\u8868\u5B57\u6BB5\u901A\u8FC7\u91CD\u590D\u540C\u540D\u884C\u8868\u8FBE\uFF0C\u7981\u6B62\u81EA\u884C\u53D1\u660E\u5B57\u6BB5\u3002
 
-\u3010\u4E00\u6B21\u751F\u6210\uFF0C\u591A\u7EBF\u5206\u533A\u3011
-1. \u4E00\u8F6E\u6B63\u6587\u53EF\u80FD\u540C\u65F6\u63A8\u8FDB\u591A\u6761\u5F7C\u6B64\u65E0\u5173\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5FC5\u987B\u5206\u522B\u5EFA\u7ACB\u6216\u6CBF\u7528\u4E0D\u540C event_id\uFF0C\u7EDD\u4E0D\u80FD\u6DF7\u6210\u540C\u4E00\u4E8B\u4EF6\u3002
-2. \u540C\u4E00\u5BF9\u8C61\u53EF\u4EE5\u540C\u65F6\u53D7\u591A\u6761\u4E8B\u4EF6\u7EBF\u5F71\u54CD\uFF1B\u5728\u540C\u4E00\u884C\u4E2D\u5F52\u5E76\u6240\u6709\u771F\u5B9E\u53D8\u5316\uFF0C\u4E0D\u80FD\u8BA9\u540E\u4E00\u4E2A\u4E8B\u4EF6\u8986\u76D6\u524D\u4E00\u4E2A\u4E8B\u4EF6\u3002
-3. facts \u7684 related_entities \u5FC5\u987B\u5217\u51FA\u8BE5\u4E8B\u5B9E\u76F4\u63A5\u5F71\u54CD\u7684\u5BF9\u8C61\u7A33\u5B9A\u540D\u79F0\uFF0C\u5305\u62EC\u4EBA\u7269\u3001\u5730\u533A\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u3001\u7EC4\u7EC7\u6216\u5168\u5C40\u5BF9\u8C61\uFF1B\u53EA\u77E5\u60C5\u3001\u540C\u573A\u6216\u56F4\u89C2\u4E0D\u7B97\u5F71\u54CD\u3002
-4. \u5C3D\u91CF\u5728\u4E00\u6B21\u8FD4\u56DE\u4E2D\u5B8C\u6210\u672C\u8F6E\u5168\u90E8\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u548C\u5168\u90E8\u53D7\u5F71\u54CD\u6761\u76EE\u7684\u8865\u4E01\u3002
-
-\u3010\u6700\u5C0F operations \u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3011
-1. operations \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u5BF9\u8C61\u884C\uFF1B\u6BCF\u9879\u56FA\u5B9A\u5305\u542B op\u3001table\u3001id\u3001title\u3001content\u3001keywords\u3001status\u3001fields\u3001lifecycle\uFF0Cop \u5F53\u524D\u53EA\u80FD\u662F upsert\u3002
-2. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id \u4E0E\u65E7 title\u3002title \u662F\u5DF2\u5EFA\u7ACB\u6761\u76EE\u7684\u957F\u671F\u540D\u79F0\u951A\u70B9\uFF0C\u666E\u901A\u72B6\u6001\u53D8\u5316\u4E0D\u5F97\u6539\u540D\uFF1B\u6B63\u6587\u51FA\u73B0\u7684\u65B0\u79F0\u547C\u53EA\u52A0\u5165 keywords\u3002\u65E0\u53D8\u5316\u5BF9\u8C61\u4E0D\u8F93\u51FA operation\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\uFF1B\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\uFF0C\u4E5F\u4E0D\u5F97\u8F93\u51FA\u9690\u5F0F\u6E05\u8868\u64CD\u4F5C\u3002
-3. fields \u662F\u52A8\u6001\u5B57\u6BB5\u8865\u4E01\u6570\u7EC4\uFF0C\u6BCF\u9879\u56FA\u5B9A\u4E3A {"key":"\u5B57\u6BB5\u540D","values":["\u503C"]}\u3002string \u5B57\u6BB5 values \u53EA\u653E\u4E00\u4E2A\u5B57\u7B26\u4E32\uFF1Bstring[] \u5B57\u6BB5\u6309\u6570\u7EC4\u9010\u9879\u586B\u5199\uFF1B\u65E0\u989D\u5916\u5B57\u6BB5\u65F6\u8F93\u51FA\u7A7A\u6570\u7EC4\u3002
-4. lifecycle \u59CB\u7EC8\u8F93\u51FA\u5B8C\u6574\u5BF9\u8C61\u3002\u8BE5\u884C\u6CA1\u6709\u751F\u547D\u5468\u671F\u53D8\u5316\u65F6\uFF0C\u4E94\u4E2A\u5B57\u7B26\u4E32\u8F93\u51FA\u7A7A\u5B57\u7B26\u4E32\uFF0C\u4E24\u4E2A\u6570\u7EC4\u8F93\u51FA\u7A7A\u6570\u7EC4\uFF1B\u53EA\u6709\u76EE\u6807\u8868\u6CE8\u518C\u4E86 lifecycle \u4E14\u786E\u6709\u53D8\u5316\u65F6\u624D\u586B\u5199\u3002
-5. factIds\u3001eventId\u3001eventIds \u4E0E recall \u7531\u63D2\u4EF6\u6839\u636E facts \u672C\u5730\u751F\u6210\uFF0C\u4E0D\u8981\u91CD\u590D\u8F93\u51FA\u3002
-6. baseContent \u662F\u5BF9\u8C61\u5B9A\u4E49\uFF0C\u5DF2\u6709\u975E\u7A7A\u503C\u4E0D\u5F97\u7531\u666E\u901A\u72B6\u6001\u63D0\u53D6\u6539\u5199\u3002
-7. currentFacts \u5199\u5F53\u524D\u5BA2\u89C2\u6210\u7ACB\u3001\u6301\u7EED\u8F83\u4E45\u4F46\u672A\u6765\u4ECD\u53EF\u80FD\u88AB\u66FF\u6362\u7684\u4E8B\u5B9E\uFF1BcurrentStates \u5199\u6B63\u5728\u53D1\u751F\u3001\u77ED\u671F\u6216\u9636\u6BB5\u6027\u7684\u72B6\u6001\u3002
-8. recentHistory \u4E0E solidifiedHistory \u53EA\u7531\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u7EF4\u62A4\uFF0C\u72B6\u6001\u63D0\u53D6\u4E0D\u5F97\u5199\u5165 fields\u3002
-
-\u3010\u5185\u90E8\u4E8B\u5B9E facts\u3011
-\u6BCF\u6761\u56FA\u5B9A\u5305\u542B fact_id\u3001event_id\u3001type\u3001title\u3001occurred\u3001unresolved\u3001status\u3001time_start\u3001time_end\u3001time_label\u3001related_entities\u3001keywords\u3001operation\u3001confidence\u3002
-\u540C\u4E00\u4E8B\u5B9E\u4E0E\u4E8B\u4EF6\u7EBF\u5FC5\u987B\u6CBF\u7528\u65E7 ID\uFF1B\u53EA\u8F93\u51FA\u672C\u8F6E create\u3001update\u3001append\u3001close \u6216 supersede \u53D8\u5316\u3002
+\u3010\u6838\u5FC3\u539F\u5219\u3011
+1. \u6A21\u578B\u4E0D\u751F\u6210\u4EFB\u4F55 id\u3001fact_id\u3001event_id\uFF0C\u4E5F\u4E0D\u91CD\u5199\u6574\u5F20\u8868\u3002\u5BF9\u8C61\u5339\u914D\u3001\u7A33\u5B9A ID\u3001\u540C\u8F6E\u5408\u5E76\u548C\u53BB\u91CD\u5168\u90E8\u7531\u63D2\u4EF6\u5B8C\u6210\u3002
+2. <MA_ROW> \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u5BF9\u8C61\u3002\u672A\u8FD4\u56DE\u6761\u76EE\u7531\u63D2\u4EF6\u4FDD\u7559\u3002
+3. table \u53EA\u80FD\u586B\u5199\u542F\u7528\u8868\u683C\u952E\u6216\u540D\u79F0\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
+4. object \u586B\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1B\u6B63\u6587\u51FA\u73B0\u7684\u65B0\u79F0\u547C\u7528 keyword \u91CD\u590D\u884C\u8865\u5145\u3002\u4E0D\u8981\u628A\u540C\u4E00\u5BF9\u8C61\u62C6\u6210\u4E24\u4E2A <MA_ROW>\u3002
+5. field.<\u5B57\u6BB5\u952E\u6216\u8868\u5934> \u53EA\u586B\u5199\u672C\u8F6E\u9700\u8981\u66F4\u65B0\u7684\u5B57\u6BB5\u3002string[] \u5B57\u6BB5\u53EF\u91CD\u590D\u591A\u884C\uFF1Bstring \u5B57\u6BB5\u53EA\u5199\u4E00\u884C\u3002
+6. recentHistory \u4E0E solidifiedHistory \u53EA\u7531\u603B\u7ED3\u7EF4\u62A4\uFF0C\u72B6\u6001\u63D0\u53D6\u7981\u6B62\u5199\u5165\u3002
+7. \u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF1B\u80FD\u529B\u53D8\u5316\u5199\u5165 abilityStates\u3002\u4E0D\u5F97\u5355\u72EC\u521B\u5EFA\u5173\u7CFB\u8868\u6216\u6280\u80FD\u8868\u3002
+8. \u4E0D\u8F93\u51FA\u7126\u70B9\u6761\u76EE\u3002\u7126\u70B9\u53EA\u7531\u73A9\u5BB6\u8BBE\u7F6E\u3002
 
 \u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
-- \u53EA\u8BB0\u5F55\u5BF9\u540E\u7EED\u4ECD\u6709\u4F5C\u7528\u4E14\u6765\u6E90\u660E\u786E\u7684\u4E8B\u5B9E\uFF1B\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u5BF9\u8C61\u65B0\u7684\u5173\u7CFB\u3001\u80FD\u529B\u3001\u8EAB\u4EFD\u6216\u957F\u671F\u5F71\u54CD\uFF0C\u56F4\u89C2\u548C\u4E34\u65F6\u52A8\u4F5C\u4E5F\u4E0D\u81EA\u52A8\u5EFA\u7ACB\u5BF9\u8C61\u6216\u5173\u7CFB\u3002
-- \u4E0D\u8F93\u51FA focus \u8868\u6216\u7126\u70B9\u4E8B\u5B9E\u3002\u5173\u7CFB\u548C\u6280\u80FD\u4E0D\u5F97\u5355\u5217\uFF1B\u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF0C\u80FD\u529B\u53D8\u5316\u5199\u5165 abilityStates\u3002
+- \u4E00\u8F6E\u6B63\u6587\u53EF\u63A8\u8FDB\u591A\u6761\u4E8B\u4EF6\u7EBF\uFF0C\u5206\u522B\u8F93\u51FA\u591A\u4E2A <MA_FACT>\uFF1Bevent \u586B\u4E8B\u4EF6\u7A33\u5B9A\u540D\u79F0\uFF0C\u4E0D\u586B ID\u3002
+- \u53EA\u8BB0\u5F55\u5BF9\u540E\u7EED\u4ECD\u6709\u4F5C\u7528\u4E14\u6765\u6E90\u660E\u786E\u7684\u4E8B\u5B9E\u3002\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u3001\u56F4\u89C2\u548C\u4E34\u65F6\u52A8\u4F5C\u4E0D\u5F97\u81EA\u52A8\u521B\u5EFA\u957F\u671F\u5BF9\u8C61\u6216\u5173\u7CFB\u3002
 - \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
-- \u73A9\u5BB6\u8F93\u5165\u53EF\u8BB0\u5F55\u4E3A\u58F0\u660E\u52A8\u4F5C\uFF1B\u5916\u90E8\u7ED3\u679C\u5FC5\u987B\u7531\u89D2\u8272\u6B63\u6587\u6216\u5DF2\u6709\u53EF\u9760\u4E8B\u5B9E\u786E\u8BA4\u3002
 - \u5F53\u524D\u5730\u70B9\u53EA\u5199\u65F6\u7A7A\uFF1B\u533A\u57DF\u53EA\u8BB0\u5F55\u79BB\u5F00\u540E\u4ECD\u6210\u7ACB\u7684\u5B9A\u4E49\u3001\u73B0\u884C\u4E8B\u5B9E\u6216\u6301\u7EED\u53D8\u5316\u3002
 - \u573A\u666F\u5207\u6362\u540E\uFF0C\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
 - \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
 
-\u3010\u542F\u7528\u8868\u683C\u3011
-${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1Boperations \u8F93\u51FA\u7A7A\u6570\u7EC4\u3002"}
+\u3010\u56FA\u5B9A\u6587\u672C\u683C\u5F0F\u3011
+<MA_TURN>
+summary=\u672C\u8F6E\u53D8\u5316\u6982\u62EC
+</MA_TURN>
 
-\u3010\u5B57\u6BB5\u5C42\u7EA7\u3011
-id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u9996\u6B21\u5EFA\u7ACB\u540E\u9501\u5B9A\u7684\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u540E\u7EED\u51FA\u73B0\u7684\u7A33\u5B9A\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u5BF9\u8C61\u5B9A\u4E49\uFF1BcurrentFacts\uFF1A\u73B0\u884C\u4E8B\u5B9E\uFF1BcurrentStates\uFF1A\u5F53\u524D\u72B6\u6001\uFF1BrecentHistory\uFF1A\u8FD1\u671F\u7ECF\u5386\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BsolidifiedHistory\uFF1A\u5386\u53F2\u4E8B\u5B9E\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
+<MA_FACT>
+event=\u4E8B\u4EF6\u7A33\u5B9A\u540D\u79F0
+title=\u672C\u6761\u4E8B\u5B9E\u540D\u79F0
+type=event
+status=active
+operation=update
+confidence=confirmed
+occurred=\u5DF2\u53D1\u751F\u7ED3\u679C
+unresolved=\u5C1A\u672A\u89E3\u51B3\u4E8B\u9879
+time_start=\u5F53\u524D
+time_end=
+time_label=
+related=\u76F4\u63A5\u53D7\u5F71\u54CD\u5BF9\u8C61
+keyword=\u4E8B\u5B9E\u5173\u952E\u8BCD
+</MA_FACT>
 
-\u8F93\u51FA\u7ED3\u6784\u793A\u610F\uFF08\u7701\u7565\u65E0\u53D8\u5316\u5BF9\u8C61\uFF09\uFF1A
-{"turnSummary":"\u591A\u7EBF\u5206\u522B\u63A8\u8FDB","facts":[{"fact_id":"f1","event_id":"e1","type":"event","title":"\u4E8B\u4EF6\u4E00","occurred":["\u5DF2\u53D1\u751F\u7ED3\u679C"],"unresolved":[],"status":"resolved","time_start":"\u5F53\u524D","time_end":"\u5F53\u524D","time_label":"","related_entities":["\u5BF9\u8C61\u7532","\u5730\u533A\u7532"],"keywords":["\u4E8B\u4EF6\u4E00"],"operation":"close","confidence":"confirmed"}],"operations":[{"op":"upsert","table":"characters","id":"c1","title":"\u5BF9\u8C61\u7532","content":"\u5F53\u524D\u7ED3\u679C","keywords":["\u5BF9\u8C61\u7532"],"status":"active","fields":[{"key":"currentFacts","values":["\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E"]}],"lifecycle":{"existence":"","activity":"","memory":"","evidenceLevel":"","evidence":"","returnConditions":[],"returnBlockers":[]}}]}`;
+<MA_ROW>
+table=characters
+object=\u5BF9\u8C61\u7A33\u5B9A\u540D\u79F0
+summary=\u5F53\u524D\u6709\u6548\u6458\u8981
+status=active
+keyword=\u5BF9\u8C61\u522B\u540D
+field.currentFacts=\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E
+field.currentStates=\u5F53\u524D\u9636\u6BB5\u72B6\u6001
+field.relatedObjects=\u76F4\u63A5\u5173\u8054\u5BF9\u8C61
+field.relatedEvents=\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u540D\u79F0
+lifecycle.existence=\u5B58\u6D3B
+lifecycle.activity=\u5F53\u524D\u76F8\u5173
+lifecycle.memory=\u672A\u6807\u6CE8
+lifecycle.evidenceLevel=\u5DF2\u786E\u8BA4
+lifecycle.evidence=\u6B63\u6587\u660E\u786E\u5185\u5BB9
+lifecycle.returnConditions=
+lifecycle.returnBlockers=
+</MA_ROW>
+
+\u6CA1\u6709\u4E8B\u5B9E\u6216\u6761\u76EE\u53D8\u5316\u65F6\u53EF\u7701\u7565\u5BF9\u5E94\u5757\uFF0C\u4F46\u81F3\u5C11\u8F93\u51FA\u4E00\u4E2A <MA_TURN>\u3002\u4E0D\u8981\u8F93\u51FA\u7A7A\u5360\u4F4D <MA_FACT>/<MA_ROW>\u3002
+
+\u3010\u542F\u7528\u8868\u683C\u4E0E\u5B57\u6BB5\u3011
+${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1B\u4E0D\u8981\u8F93\u51FA <MA_ROW>\u3002"}`;
 }
-function normalizeSearchText(value) {
-  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+function normalizeSearchText(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
 }
-function stringList3(value) {
-  return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+function stringList3(value2) {
+  return Array.isArray(value2) ? value2.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
 }
-function boundedList(value, count, chars) {
-  return stringList3(value).slice(-count).map((item) => item.slice(0, chars));
+function boundedList(value2, count, chars) {
+  return stringList3(value2).slice(-count).map((item) => item.slice(0, chars));
 }
 function modelRow(row) {
   const output = {
-    id: row.id,
     title: row.title,
     content: String(row.content || "").slice(0, 800),
     keywords: (row.keywords ?? []).slice(0, 16),
-    status: row.status,
-    eventIds: row.eventIds ?? (row.eventId ? [row.eventId] : [])
+    status: row.status
   };
   if (row.lifecycle) output.lifecycle = row.lifecycle;
   const fields = row.fields && typeof row.fields === "object" ? row.fields : {};
-  for (const [key, value] of Object.entries(fields)) {
-    if (key === "baseContent") output[key] = String(value ?? "").slice(0, 700);
-    else if (key === "currentFacts" || key === "currentStates") output[key] = boundedList(value, 10, 260);
-    else if (key === "recentHistory") output[key] = boundedList(value, 4, 320);
-    else if (key === "solidifiedHistory") output[key] = boundedList(value, 2, 260);
-    else if (Array.isArray(value)) output[key] = boundedList(value, 10, 220);
-    else output[key] = String(value ?? "").slice(0, 600);
+  for (const [key, value2] of Object.entries(fields)) {
+    if (key === "baseContent") output[key] = String(value2 ?? "").slice(0, 700);
+    else if (key === "currentFacts" || key === "currentStates") output[key] = boundedList(value2, 10, 260);
+    else if (key === "recentHistory") output[key] = boundedList(value2, 4, 320);
+    else if (key === "solidifiedHistory") output[key] = boundedList(value2, 2, 260);
+    else if (Array.isArray(value2)) output[key] = boundedList(value2, 10, 220);
+    else output[key] = String(value2 ?? "").slice(0, 600);
   }
   return output;
 }
 function rowIndex(row) {
   return {
-    id: row.id,
     title: row.title,
     status: row.status,
-    keywords: row.keywords,
-    eventIds: row.eventIds ?? (row.eventId ? [row.eventId] : [])
+    keywords: row.keywords
   };
 }
 function rowTerms(row) {
@@ -6008,8 +5829,6 @@ function activeFactPayload(facts, sourceText) {
   const selected = facts.length <= MAX_FACTS ? facts : facts.filter((fact) => factMatches(fact, source) || fact.unresolvedItems.length > 0 || fact.active).slice(-MAX_FACTS);
   const fallback = selected.length ? selected : facts.slice(-12);
   return fallback.map((fact) => ({
-    fact_id: fact.factId,
-    event_id: fact.eventId,
     occurred: fact.occurredFacts,
     unresolved: fact.unresolvedItems,
     status: fact.status,
@@ -6022,19 +5841,99 @@ function activeFactPayload(facts, sourceText) {
     active: fact.active
   }));
 }
+function contextValue(value2) {
+  return String(value2 ?? "").replace(/<\/?MA_[A-Z_]+>/gi, (tag) => tag.replace(/</g, "\uFF1C").replace(/>/g, "\uFF1E")).replace(/\r\n?/g, "\n").split("\n").map((line) => line.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+function pushContextField(lines2, key, value2) {
+  if (Array.isArray(value2)) {
+    for (const item of value2) pushContextField(lines2, key, item);
+    return;
+  }
+  if (value2 && typeof value2 === "object") {
+    for (const [nestedKey, nestedValue] of Object.entries(value2)) {
+      pushContextField(lines2, `${key}.${nestedKey}`, nestedValue);
+    }
+    return;
+  }
+  const text = contextValue(value2);
+  if (text) lines2.push(`${key}=${text}`);
+}
+function contextFactBlocks(payload) {
+  if (!payload.length) return "\uFF08\u65E0\uFF09";
+  return payload.map((fact) => {
+    const lines2 = ["<MA_CONTEXT_FACT>"];
+    pushContextField(lines2, "title", fact.title);
+    pushContextField(lines2, "type", fact.type);
+    pushContextField(lines2, "status", fact.status);
+    pushContextField(lines2, "confidence", fact.confidence);
+    pushContextField(lines2, "active", fact.active);
+    const time = fact.time_range && typeof fact.time_range === "object" ? fact.time_range : {};
+    pushContextField(lines2, "time_start", time.start);
+    pushContextField(lines2, "time_end", time.end);
+    pushContextField(lines2, "time_label", time.label);
+    pushContextField(lines2, "occurred", fact.occurred);
+    pushContextField(lines2, "unresolved", fact.unresolved);
+    pushContextField(lines2, "related", fact.related_entities);
+    pushContextField(lines2, "keyword", fact.keywords);
+    lines2.push("</MA_CONTEXT_FACT>");
+    return lines2.join("\n");
+  }).join("\n");
+}
+function contextIndexBlocks(index) {
+  const blocks = [];
+  for (const [table, rows] of Object.entries(index)) {
+    for (const source of rows) {
+      const row = source && typeof source === "object" ? source : {};
+      const lines2 = ["<MA_CONTEXT_INDEX>"];
+      pushContextField(lines2, "table", table);
+      pushContextField(lines2, "object", row.title);
+      pushContextField(lines2, "status", row.status);
+      pushContextField(lines2, "keyword", row.keywords);
+      lines2.push("</MA_CONTEXT_INDEX>");
+      blocks.push(lines2.join("\n"));
+    }
+  }
+  return blocks.join("\n") || "\uFF08\u65E0\uFF09";
+}
+function contextRowBlocks(relevant) {
+  const blocks = [];
+  for (const [table, rows] of Object.entries(relevant)) {
+    for (const source of rows) {
+      const row = source && typeof source === "object" ? source : {};
+      const lines2 = ["<MA_CONTEXT_ROW>"];
+      pushContextField(lines2, "table", table);
+      pushContextField(lines2, "object", row.title);
+      pushContextField(lines2, "summary", row.content);
+      pushContextField(lines2, "status", row.status);
+      pushContextField(lines2, "keyword", row.keywords);
+      if (row.lifecycle && typeof row.lifecycle === "object") {
+        for (const [key, value2] of Object.entries(row.lifecycle)) {
+          pushContextField(lines2, `lifecycle.${key}`, value2);
+        }
+      }
+      for (const [key, value2] of Object.entries(row)) {
+        if (["title", "content", "status", "keywords", "lifecycle"].includes(key)) continue;
+        pushContextField(lines2, `field.${key}`, value2);
+      }
+      lines2.push("</MA_CONTEXT_ROW>");
+      blocks.push(lines2.join("\n"));
+    }
+  }
+  return blocks.join("\n") || "\uFF08\u65E0\uFF09";
+}
 function stateUserPrompt(previous, playerText, assistantText, registry2, internalFacts = [], repair = false) {
   const active = tables(registry2);
   const sourceText = `${playerText}
 ${assistantText}`;
   const context = compactSnapshotContext(previous, active, sourceText);
-  return `\u3010\u76F8\u5173\u5185\u90E8\u4E8B\u5B9E\u3011
-${JSON.stringify(activeFactPayload(internalFacts, sourceText))}
+  return `\u3010\u76F8\u5173\u5185\u90E8\u4E8B\u5B9E\uFF1A\u4EC5\u7528\u4E8E\u5224\u65AD\u4E8B\u4EF6\u5EF6\u7EED\uFF0C\u4E0D\u8981\u7167\u6284\u4E3A\u65B0\u4E8B\u5B9E\u3011
+${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
 
-\u3010\u65E7\u89C6\u56FE\u7D22\u5F15\uFF1A\u4EC5\u7528\u4E8E\u6CBF\u7528\u7A33\u5B9AID\u3011
-${JSON.stringify(context.index)}
+\u3010\u65E7\u89C6\u56FE\u7D22\u5F15\uFF1A\u53EA\u7528\u4E8E\u8BC6\u522B\u5DF2\u6709\u5BF9\u8C61\u3011
+${contextIndexBlocks(context.index)}
 
-\u3010\u4E0E\u672C\u8F6E\u76F8\u5173\u7684\u65E7\u884C\u5168\u6587\u3011
-${JSON.stringify(context.relevant)}
+\u3010\u4E0E\u672C\u8F6E\u76F8\u5173\u7684\u65E7\u884C\u5168\u6587\uFF1A\u53EA\u7528\u4E8E\u5224\u65AD\u66F4\u65B0\u5185\u5BB9\u3011
+${contextRowBlocks(context.relevant)}
 
 \u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
 ${playerText || "\uFF08\u7A7A\uFF09"}
@@ -6042,207 +5941,14 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u89D2\u8272\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u53EA\u8FD4\u56DE\u672C\u8F6E\u4E8B\u5B9E\u53D8\u5316\u548C\u6700\u5C0F operations \u884C\u7EA7\u8865\u4E01\u3002\u672A\u8FD4\u56DE\u7684\u5BF9\u8C61\u884C\u7531\u63D2\u4EF6\u4FDD\u7559\uFF1B\u4E0D\u8981\u590D\u5236\u65E0\u53D8\u5316\u65E7\u884C\u3002\u82E5\u65E7\u89C6\u56FE\u7D22\u5F15\u4E2D\u5DF2\u6709\u540C\u4E00\u5BF9\u8C61\uFF0C\u5FC5\u987B\u6CBF\u7528\u5176 id\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
-}
-function scalarSchema(field, table) {
-  const defaultField = DEFAULT_TABLE_REGISTRY.find((item) => item.key === table.key)?.fields.find((item) => item.key === field.key);
-  const customized = !defaultField || defaultField.label !== field.label || defaultField.description !== field.description || defaultField.type !== field.type;
-  const semantics = customized ? {
-    title: field.label,
-    description: `${field.label}\uFF1A${field.description || "\u6309\u5B57\u6BB5\u540D\u79F0\u586B\u5199"}`
-  } : {};
-  if (field.type === "string[]") return { type: "array", items: { type: "string" }, ...semantics };
-  if (field.type === "lifecycle") {
-    return {
-      type: "object",
-      ...semantics,
-      properties: {
-        existence: { type: "string" },
-        activity: { type: "string" },
-        memory: { type: "string" },
-        evidenceLevel: { type: "string" },
-        evidence: { type: "string" },
-        returnConditions: { type: "array", items: { type: "string" } },
-        returnBlockers: { type: "array", items: { type: "string" } }
-      },
-      required: ["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"],
-      additionalProperties: false
-    };
-  }
-  return { type: "string", ...semantics };
-}
-function rowSchema(table) {
-  const properties = {};
-  const required = [];
-  for (const field of table.fields) {
-    properties[field.key] = scalarSchema(field, table);
-    if (field.required) required.push(field.key);
-  }
-  return { type: "object", properties, required: [...new Set(required)], additionalProperties: false };
-}
-function transportFactSchema() {
-  return {
-    type: "object",
-    properties: {
-      fact_id: { type: "string" },
-      event_id: { type: "string" },
-      type: { type: "string" },
-      title: { type: "string" },
-      occurred: { type: "array", items: { type: "string" } },
-      unresolved: { type: "array", items: { type: "string" } },
-      status: { type: "string" },
-      time_start: { type: "string" },
-      time_end: { type: "string" },
-      time_label: { type: "string" },
-      related_entities: { type: "array", items: { type: "string" } },
-      keywords: { type: "array", items: { type: "string" } },
-      operation: { type: "string", enum: ["create", "update", "append", "close", "supersede"] },
-      confidence: { type: "string", enum: ["confirmed", "recorded", "reported", "uncertain"] }
-    },
-    required: [
-      "fact_id",
-      "event_id",
-      "type",
-      "title",
-      "occurred",
-      "unresolved",
-      "status",
-      "time_start",
-      "time_end",
-      "time_label",
-      "related_entities",
-      "keywords",
-      "operation",
-      "confidence"
-    ],
-    additionalProperties: false
-  };
-}
-function transportFieldPatchSchema() {
-  return {
-    type: "object",
-    properties: {
-      key: { type: "string" },
-      values: { type: "array", items: { type: "string" } }
-    },
-    required: ["key", "values"],
-    additionalProperties: false
-  };
-}
-function transportLifecycleSchema() {
-  return {
-    type: "object",
-    properties: {
-      existence: { type: "string" },
-      activity: { type: "string" },
-      memory: { type: "string" },
-      evidenceLevel: { type: "string" },
-      evidence: { type: "string" },
-      returnConditions: { type: "array", items: { type: "string" } },
-      returnBlockers: { type: "array", items: { type: "string" } }
-    },
-    required: ["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"],
-    additionalProperties: false
-  };
-}
-function transportOperationSchema(active) {
-  return {
-    type: "object",
-    properties: {
-      op: { type: "string", enum: ["upsert"] },
-      table: { type: "string", enum: active.map((table) => table.key) },
-      id: { type: "string" },
-      title: { type: "string" },
-      content: { type: "string" },
-      keywords: { type: "array", items: { type: "string" } },
-      status: { type: "string" },
-      fields: { type: "array", items: transportFieldPatchSchema() },
-      lifecycle: transportLifecycleSchema()
-    },
-    required: ["op", "table", "id", "title", "content", "keywords", "status", "fields", "lifecycle"],
-    additionalProperties: false
-  };
-}
-function stateTransportJsonSchema(registry2) {
-  const active = tables(registry2);
-  return {
-    name: "MirrorAbyssStateOperationsV37",
-    description: "\u955C\u6E0A\u72B6\u6001\u4E8B\u5B9E\u4E0E\u4E25\u683C\u6241\u5E73\u5BF9\u8C61\u8865\u4E01",
-    strict: true,
-    value: {
-      type: "object",
-      properties: {
-        turnSummary: { type: "string" },
-        facts: { type: "array", items: transportFactSchema() },
-        operations: { type: "array", items: transportOperationSchema(active) }
-      },
-      required: ["turnSummary", "facts", "operations"],
-      additionalProperties: false
-    }
-  };
-}
-function stateJsonSchema(registry2) {
-  const active = tables(registry2);
-  const snapshotProperties = Object.fromEntries(active.map((table) => [table.key, {
-    type: "array",
-    title: table.name,
-    description: `${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}\uFF5C\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u884C\uFF1B\u65E0\u53D8\u5316\u65F6\u7701\u7565\u8BE5\u8868\uFF1B\u7A7A\u6570\u7EC4\u4EC5\u89C6\u4E3A\u65E0\u53D8\u5316\uFF0C\u4E0D\u8868\u793A\u6E05\u7A7A`,
-    items: rowSchema(table)
-  }]));
-  return {
-    name: "MirrorAbyssMultiEventPatchV35",
-    description: "\u955C\u6E0A\u591A\u4E8B\u4EF6\u7EBF\u4E8B\u5B9E\u53D8\u5316\u4E0E\u591A\u5BF9\u8C61\u884C\u7EA7\u8865\u4E01",
-    strict: false,
-    value: {
-      $schema: "http://json-schema.org/draft-04/schema#",
-      type: "object",
-      properties: {
-        turnSummary: { type: "string" },
-        facts: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              fact_id: { type: "string" },
-              factId: { type: "string" },
-              id: { type: "string" },
-              event_id: { type: "string" },
-              eventId: { type: "string" },
-              entity_id: { type: "string" },
-              entityId: { type: "string" },
-              type: { type: "string" },
-              title: { type: "string" },
-              content: { type: "string" },
-              occurred: { type: "array", items: { type: "string" } },
-              occurredFacts: { type: "array", items: { type: "string" } },
-              unresolved: { type: "array", items: { type: "string" } },
-              unresolvedItems: { type: "array", items: { type: "string" } },
-              status: { type: "string" },
-              time_range: { type: "object", properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } }, additionalProperties: false },
-              timeRange: { type: "object", properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } }, additionalProperties: false },
-              related_entities: { type: "array", items: { type: "string" } },
-              relatedEntities: { type: "array", items: { type: "string" } },
-              keywords: { type: "array", items: { type: "string" } },
-              operation: { type: "string", enum: ["create", "update", "append", "close", "supersede"] },
-              confidence: { type: "string", enum: ["confirmed", "recorded", "reported", "uncertain"] }
-            },
-            required: ["type", "title", "status", "keywords", "operation", "confidence"],
-            additionalProperties: false
-          }
-        },
-        snapshot: { type: "object", properties: snapshotProperties, additionalProperties: false }
-      },
-      required: ["turnSummary", "facts", "snapshot"],
-      additionalProperties: false
-    }
-  };
+\u53EA\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\u3002\u53EA\u5199\u672C\u8F6E\u4E8B\u5B9E\u53D8\u5316\u548C\u6700\u5C0F\u6761\u76EE\u8865\u4E01\uFF1B\u672A\u8FD4\u56DE\u6761\u76EE\u7531\u63D2\u4EF6\u4FDD\u7559\u3002\u4E0D\u8981\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u8F93\u51FA id/fact_id/event_id\uFF0C\u4E0D\u8981\u590D\u5236\u65E0\u53D8\u5316\u65E7\u884C\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u56FA\u5B9A\u6587\u672C\u683C\u5F0F\u4E0D\u5B8C\u6574\uFF1B\u8FD9\u6B21\u4E25\u683C\u4F7F\u7528 <MA_TURN>/<MA_FACT>/<MA_ROW>\u3002" : ""}`;
 }
 
 // src/pipeline/state.ts
 var RegistryChangedError = class extends CommitRejectedError {
 };
-var FACT_OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
-var FACT_CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
+var FACT_OPERATIONS2 = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
+var FACT_CONFIDENCE2 = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
 function assertStateBusinessShape(parsed, active) {
   const factIds = /* @__PURE__ */ new Set();
   parsed.facts.forEach((fact, index) => {
@@ -6256,8 +5962,8 @@ function assertStateBusinessShape(parsed, active) {
     if (!title) throw new Error(`facts[${index}].title \u4E0D\u80FD\u4E3A\u7A7A`);
     if (factIds.has(factId)) throw new Error(`\u540C\u4E00\u6B21\u72B6\u6001\u8FD4\u56DE\u5305\u542B\u91CD\u590D fact_id\uFF1A${factId}`);
     factIds.add(factId);
-    if (source.operation !== void 0 && !FACT_OPERATIONS.has(String(source.operation))) throw new Error(`facts[${index}].operation \u4E0D\u5408\u6CD5`);
-    if (source.confidence !== void 0 && !FACT_CONFIDENCE.has(String(source.confidence))) throw new Error(`facts[${index}].confidence \u4E0D\u5408\u6CD5`);
+    if (source.operation !== void 0 && !FACT_OPERATIONS2.has(String(source.operation))) throw new Error(`facts[${index}].operation \u4E0D\u5408\u6CD5`);
+    if (source.confidence !== void 0 && !FACT_CONFIDENCE2.has(String(source.confidence))) throw new Error(`facts[${index}].confidence \u4E0D\u5408\u6CD5`);
   });
   for (const table of active) {
     const rows = parsed.snapshot[table.key];
@@ -6291,8 +5997,8 @@ function previousSnapshot(beforeIndex) {
 function cloneProtectedRow(row) {
   return structuredClone(row);
 }
-function rowIdentityTitle(value) {
-  return String(value || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+function rowIdentityTitle(value2) {
+  return String(value2 || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function preserveProtectedRows(previous, next, customRegistry) {
   const registry2 = normalizeTableRegistry(customRegistry);
@@ -6346,8 +6052,8 @@ function preserveProtectedRows(previous, next, customRegistry) {
   }
   return next;
 }
-function normalizedTitle(value) {
-  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+function normalizedTitle(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
 function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
   const merged = {};
@@ -6399,11 +6105,11 @@ function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
   }
   return normalizeSnapshot(merged, previous, registry2);
 }
-function identityToken(value) {
-  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+function identityToken(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
 }
-function textList(value) {
-  return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+function textList(value2) {
+  return Array.isArray(value2) ? value2.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
 }
 function attachLocalFactMetadata(parsedSnapshot, rawFacts, registry2) {
   const facts = rawFacts.filter((item) => item && typeof item === "object").map((item) => item);
@@ -6415,10 +6121,10 @@ function attachLocalFactMetadata(parsedSnapshot, rawFacts, registry2) {
       const patch = rawPatch;
       const title = String(patch.title ?? "").trim();
       const id = String(patch.id ?? "").trim();
-      const rowTokens = new Set([title, id].map(identityToken).filter(Boolean));
+      const rowTokens2 = new Set([title, id].map(identityToken).filter(Boolean));
       let matched = facts.filter((fact) => {
         const related = textList(fact.related_entities ?? fact.relatedEntities).map(identityToken).filter(Boolean);
-        if (related.some((token) => rowTokens.has(token))) return true;
+        if (related.some((token) => rowTokens2.has(token))) return true;
         if (table.role === "events" && identityToken(fact.title) === identityToken(title)) return true;
         return false;
       });
@@ -6453,124 +6159,20 @@ function assertRegistryCurrent(expectedFingerprint) {
     throw new RegistryChangedError("\u8868\u683C\u5B9A\u4E49\u5DF2\u53D8\u5316\uFF0C\u65E7\u72B6\u6001\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
   }
 }
-function hasLifecycleValue(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const item = value;
-  return ["existence", "activity", "memory", "evidenceLevel", "evidence"].some((key) => String(item[key] ?? "").trim()) || textList(item.returnConditions).length > 0 || textList(item.returnBlockers).length > 0;
-}
-function normalizeTransportFacts(rawFacts) {
-  if (!Array.isArray(rawFacts)) return rawFacts;
-  return rawFacts.map((raw, index) => {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`facts[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
-    const fact = { ...raw };
-    if (!fact.time_range && !fact.timeRange && ("time_start" in fact || "time_end" in fact || "time_label" in fact)) {
-      fact.time_range = {
-        start: String(fact.time_start ?? ""),
-        end: String(fact.time_end ?? ""),
-        label: String(fact.time_label ?? "")
-      };
-      delete fact.time_start;
-      delete fact.time_end;
-      delete fact.time_label;
-    }
-    return fact;
-  });
-}
-function normalizeStateTransportOutput(candidate, active) {
-  const normalizedFacts = normalizeTransportFacts(candidate.facts);
-  if (candidate.snapshot && typeof candidate.snapshot === "object" && !Array.isArray(candidate.snapshot)) {
-    return { ...candidate, facts: normalizedFacts };
-  }
-  if (!Array.isArray(candidate.operations)) return { ...candidate, facts: normalizedFacts };
-  const activeByKey = new Map(active.map((table) => [table.key, table]));
-  const snapshot = {};
-  candidate.operations.forEach((raw, index) => {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`operations[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
-    const source = raw;
-    if (source.op !== "upsert") throw new Error(`operations[${index}].op \u76EE\u524D\u53EA\u80FD\u662F upsert`);
-    const tableKey = String(source.table ?? "").trim();
-    const table = activeByKey.get(tableKey);
-    if (!table) throw new Error(`operations[${index}].table \u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\uFF1A${tableKey || "\u7A7A"}`);
-    const row = {
-      id: source.id,
-      title: source.title,
-      content: source.content,
-      keywords: source.keywords,
-      status: source.status
-    };
-    if (Array.isArray(source.fields)) {
-      const seen = /* @__PURE__ */ new Set();
-      for (let fieldIndex = 0; fieldIndex < source.fields.length; fieldIndex += 1) {
-        const rawField = source.fields[fieldIndex];
-        if (!rawField || typeof rawField !== "object" || Array.isArray(rawField)) {
-          throw new Error(`operations[${index}].fields[${fieldIndex}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
-        }
-        const patch = rawField;
-        const key = String(patch.key ?? "").trim();
-        if (!key) throw new Error(`operations[${index}].fields[${fieldIndex}].key \u4E0D\u80FD\u4E3A\u7A7A`);
-        if (seen.has(key)) throw new Error(`operations[${index}] \u5B57\u6BB5\u91CD\u590D\uFF1A${key}`);
-        seen.add(key);
-        if (["id", "title", "content", "keywords", "status", "recentHistory", "solidifiedHistory"].includes(key)) {
-          throw new Error(`operations[${index}] \u4E0D\u5141\u8BB8\u901A\u8FC7 fields \u5199\u5165\uFF1A${key}`);
-        }
-        const definition = table.fields.find((field) => field.key === key);
-        if (!definition) throw new Error(`operations[${index}] \u5B57\u6BB5\u672A\u6CE8\u518C\u4E8E ${tableKey}\uFF1A${key}`);
-        const values = textList(patch.values);
-        if (definition.type === "string") {
-          if (values.length > 1) throw new Error(`operations[${index}].${key} \u662F string\uFF0Cvalues \u6700\u591A\u4E00\u9879`);
-          row[key] = values[0] ?? "";
-        } else if (definition.type === "string[]") {
-          row[key] = values;
-        } else {
-          throw new Error(`operations[${index}].${key} \u5FC5\u987B\u901A\u8FC7 lifecycle \u5BF9\u8C61\u4F20\u8F93`);
-        }
-      }
-    } else {
-      for (const [key, value] of Object.entries(source)) {
-        if (["op", "table", "id", "title", "content", "keywords", "status", "lifecycle"].includes(key)) continue;
-        row[key] = value;
-      }
-    }
-    if (hasLifecycleValue(source.lifecycle)) {
-      const lifecycleField = table.fields.find((field) => field.type === "lifecycle");
-      if (!lifecycleField) throw new Error(`operations[${index}] \u7684 ${tableKey} \u672A\u6CE8\u518C lifecycle \u5B57\u6BB5`);
-      row[lifecycleField.key] = source.lifecycle;
-    }
-    (snapshot[tableKey] ||= []).push(row);
-  });
-  const normalized = { ...candidate, facts: normalizedFacts, snapshot };
-  delete normalized.operations;
-  return normalized;
-}
 async function runStateExtraction(artifact, force = false) {
   const settings = getSettings();
   const registry2 = normalizeTableRegistry(settings.tableRegistry);
   const active = enabledTables(registry2);
   const expectedRegistryFingerprint = registryFingerprint(active);
-  const previous = previousSnapshot(artifact.messageIndex);
+  const previous = dedupeStrongStateRows(previousSnapshot(artifact.messageIndex), registry2);
   const chatState = await getChatState(artifact.chatKey);
   const activeFacts = (chatState.internalFacts ?? []).filter((fact) => fact.active || fact.unresolvedItems.length > 0 || !fact.consumedBySmallSummaryId).slice(-120);
   const request = {
     task: "state",
     systemPrompt: stateSystemPrompt(registry2),
     prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
-    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","title":"...","time_start":"\u5F53\u524D","time_end":"","time_label":"","related_entities":["\u53D7\u5F71\u54CD\u6761\u76EE\u540D"]}],"operations":[{"op":"upsert","table":"characters","id":"...","title":"...","content":"...","keywords":["..."],"status":"active","fields":[{"key":"currentFacts","values":["..."]}],"lifecycle":{"existence":"","activity":"","memory":"","evidenceLevel":"","evidence":"","returnConditions":[],"returnBlockers":[]}}]}',
-    allowRepair: settings.repairInvalidJsonOnce,
-    jsonSchema: stateTransportJsonSchema(registry2),
-    validationSchema: stateJsonSchema(registry2),
-    candidateTransform: (candidate) => normalizeStateTransportOutput(candidate, active),
-    validationOptions: {
-      allowedAdditionalProperties: {
-        "$.snapshot": [.../* @__PURE__ */ new Set(["focus", "state", "characters", "skills", "relationships", ...registry2.filter((table) => !table.enabled).map((table) => table.key)])]
-      },
-      allowedAdditionalPropertiesByPathPrefix: {
-        "$.snapshot.": ["factIds", "eventId", "eventIds", "recall", "source", "locked", "lockMode", "updatedAt", "fields"]
-      },
-      allowedMissingRequiredByPathPrefix: {
-        "$.facts[": ["operation", "confidence"]
-      }
-    },
-    maxTokens: 4096
+    maxTokens: 4096,
+    requestPurpose: "fixed-text"
   };
   const inputFingerprint = hashText(JSON.stringify(request));
   assertRegistryCurrent(expectedRegistryFingerprint);
@@ -6580,7 +6182,14 @@ async function runStateExtraction(artifact, force = false) {
   markStage(artifact, "state", "running");
   await putArtifact(artifact);
   try {
-    const parsed = await generateStructuredTask(request);
+    const raw = await generateTask(request);
+    let parsed;
+    try {
+      parsed = parseStateTextOutput(raw, previous, registry2, activeFacts);
+    } catch (error) {
+      const preview = safeText(raw, 1200).replace(/\s+/g, " ").trim();
+      throw new Error(`\u72B6\u6001\u8868\u56FA\u5B9A\u6587\u672C\u65E0\u6CD5\u89E3\u6790\uFF1A${toErrorMessage(error)}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`, { cause: error });
+    }
     if (typeof parsed.turnSummary !== "string") throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 turnSummary \u5B57\u7B26\u4E32");
     if (!Array.isArray(parsed.facts)) throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 facts \u6570\u7EC4");
     if (!parsed.snapshot || typeof parsed.snapshot !== "object" || Array.isArray(parsed.snapshot)) throw new Error("\u72B6\u6001\u8FD4\u56DE\u7F3A\u5C11 snapshot \u6839\u5BF9\u8C61");
@@ -6596,8 +6205,8 @@ async function runStateExtraction(artifact, force = false) {
     const legacyViewKeys = /* @__PURE__ */ new Set(["focus", "state", "characters", "skills", "relationships"]);
     for (const key of returnedKeys) if (!activeKeys.has(key) && !legacyViewKeys.has(key)) throw new Error(`\u6A21\u578B\u8FD4\u56DE\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${key}`);
     parsed.snapshot = attachLocalFactMetadata(migrateSnapshotTables(parsed.snapshot, registry2), parsed.facts, registry2);
-    for (const [key, value] of Object.entries(parsed.snapshot)) {
-      if (activeKeys.has(key) && !Array.isArray(value)) throw new Error(`\u72B6\u6001\u8868 ${key} \u5FC5\u987B\u662F\u6570\u7EC4`);
+    for (const [key, value2] of Object.entries(parsed.snapshot)) {
+      if (activeKeys.has(key) && !Array.isArray(value2)) throw new Error(`\u72B6\u6001\u8868 ${key} \u5FC5\u987B\u662F\u6570\u7EC4`);
     }
     assertStateBusinessShape(parsed, active);
     assertArtifactCommitCurrent(artifact);
@@ -6784,10 +6393,10 @@ async function saveArtifactToMessage(index, artifact) {
 async function loadOrCreateArtifact(index, _force, historyRevision, taskGuard) {
   const message = getMessage(index);
   if (!isProcessableAssistantMessage(message)) throw new Error("\u76EE\u6807\u4E0D\u662F\u6709\u6548AI\u6B63\u6587");
-  const fingerprint = messageFingerprint(index);
+  const fingerprint2 = messageFingerprint(index);
   let artifact = getAttachedArtifact(message);
   try {
-    if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint) {
+    if (!artifact || artifact.chatKey !== currentChatKey() || artifact.sourceFingerprint !== fingerprint2) {
       artifact = createArtifact(message, index);
     }
     if (historyRevision !== void 0) bindArtifactHistoryRevision(artifact, historyRevision);
@@ -7051,7 +6660,7 @@ async function processMessage(index, force = false, options = {}) {
   if (!getSettings().enabled) return null;
   const message = getMessage(index);
   if (!isProcessableAssistantMessage(message)) return null;
-  const identity = messageIdentity(index);
+  const identity2 = messageIdentity(index);
   const scheduledFingerprint = messageFingerprint(index);
   const scheduledChatKey = currentChatKey();
   const scheduledHistoryRevision = currentHistoryRevision(scheduledChatKey);
@@ -7061,10 +6670,10 @@ async function processMessage(index, force = false, options = {}) {
     throw new TaskBlockedError(detail);
   }
   const triggerSource = options.triggerSource || (options.historyRecovery ? "history-recovery" : options.automatic ? "automatic" : force ? "manual-force" : "manual");
-  const key = `${PIPELINE_VERSION}:${scheduledChatKey}:${identity}`;
+  const key = `${PIPELINE_VERSION}:${scheduledChatKey}:${identity2}`;
   const attachedAtEnqueue = getAttachedArtifact(message);
   const duplicateCommittedAutomatic = Boolean(
-    options.automatic && !force && !options.historyRecovery && attachedAtEnqueue && attachedAtEnqueue.chatKey === scheduledChatKey && attachedAtEnqueue.sourceFingerprint === scheduledFingerprint && attachedAtEnqueue.messageKey === identity && attachedAtEnqueue.snapshot && attachedAtEnqueue.stages.state.status === "success" && enqueueState.processedMessageKeys.includes(attachedAtEnqueue.messageKey)
+    options.automatic && !force && !options.historyRecovery && attachedAtEnqueue && attachedAtEnqueue.chatKey === scheduledChatKey && attachedAtEnqueue.sourceFingerprint === scheduledFingerprint && attachedAtEnqueue.messageKey === identity2 && attachedAtEnqueue.snapshot && attachedAtEnqueue.stages.state.status === "success" && enqueueState.processedMessageKeys.includes(attachedAtEnqueue.messageKey)
   );
   if (!options.historyRecovery && !duplicateCommittedAutomatic) {
     const preempted = taskQueue.cancelActiveMatching(
@@ -7101,7 +6710,7 @@ async function processMessage(index, force = false, options = {}) {
     }
     const attached = getAttachedArtifact(getMessage(index));
     const alreadyCommitted = Boolean(
-      options.automatic && !force && !options.historyRecovery && attached && attached.chatKey === scheduledChatKey && attached.sourceFingerprint === scheduledFingerprint && attached.messageKey === identity && attached.snapshot && attached.stages.state.status === "success" && processingState.processedMessageKeys.includes(attached.messageKey)
+      options.automatic && !force && !options.historyRecovery && attached && attached.chatKey === scheduledChatKey && attached.sourceFingerprint === scheduledFingerprint && attached.messageKey === identity2 && attached.snapshot && attached.stages.state.status === "success" && processingState.processedMessageKeys.includes(attached.messageKey)
     );
     if (alreadyCommitted) {
       throw new TaskSkippedError("\u76F8\u540C\u6B63\u6587\u5DF2\u7531\u5F53\u524D\u6D41\u6C34\u7EBF\u6B63\u5F0F\u63D0\u4EA4\uFF0C\u672C\u6B21\u81EA\u52A8\u4EFB\u52A1\u4E0D\u518D\u91CD\u590D\u5904\u7406");
@@ -7164,7 +6773,7 @@ async function processMessage(index, force = false, options = {}) {
     priority: 90,
     chatKey: scheduledChatKey,
     triggerSource,
-    messageKey: identity,
+    messageKey: identity2,
     messageFingerprint: scheduledFingerprint,
     historyRevisionAtEnqueue: scheduledHistoryRevision,
     historyRecoveryPhaseAtEnqueue: enqueueState.historyRecovery?.phase,
@@ -7459,8 +7068,8 @@ async function retryStage(index, stage) {
   }
   const chatKey = currentChatKey();
   const scheduledHistoryRevision = currentHistoryRevision(chatKey);
-  const identity = messageIdentity(index);
-  const key = `${PIPELINE_VERSION}:retry:${stage}:${chatKey}:${identity}`;
+  const identity2 = messageIdentity(index);
+  const key = `${PIPELINE_VERSION}:retry:${stage}:${chatKey}:${identity2}`;
   const queueKind = stage === "sync" ? "sync" : stage === "summary" ? "smallSummary" : stage;
   return taskQueue.run(key, `\u91CD\u8BD5${stage}`, queueKind, async (guard) => {
     if (currentChatKey() !== chatKey) throw new TaskSkippedError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u9636\u6BB5\u91CD\u8BD5\u4E0D\u518D\u5904\u7406");
@@ -7728,12 +7337,12 @@ function nodeTypeFor(role) {
   if (role === "regions" || role === "spacetime" || role === "globalChanges") return "region";
   return null;
 }
-function compactLabel(value) {
-  const text = String(value || "").trim();
+function compactLabel(value2) {
+  const text = String(value2 || "").trim();
   return text.length > 24 ? `${text.slice(0, 23)}\u2026` : text;
 }
-function stringList4(value) {
-  return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
+function stringList4(value2) {
+  return Array.isArray(value2) ? value2.map(String).map((item) => item.trim()).filter(Boolean) : [];
 }
 function relationText(row) {
   const fields = row.fields ?? {};
@@ -7862,10 +7471,10 @@ async function runDiagnostics() {
       detail: `${registry2.length} \u5F20\u5DF2\u6CE8\u518C\uFF0C${enabledTables(registry2).length} \u5F20\u542F\u7528`
     });
     checks.push({
-      id: "compatibilityMode",
-      label: "\u7ED3\u6784\u5316\u8BF7\u6C42\u6A21\u5F0F",
-      status: settings.compatibilityMode ? "warn" : "ok",
-      detail: settings.compatibilityMode ? "\u517C\u5BB9\u6A21\u5F0F\u5DF2\u5F00\u542F\uFF1A\u4E0D\u53D1\u9001JSON Schema\uFF0C\u8FD4\u56DE\u7ED3\u679C\u4ECD\u7531\u955C\u6E0A\u672C\u5730\u6821\u9A8C" : "\u6807\u51C6\u6A21\u5F0F\uFF1A\u4F7F\u7528JSON Schema\u7ED3\u6784\u5316\u8BF7\u6C42"
+      id: "modelProtocol",
+      label: "\u6A21\u578B\u8FD4\u56DE\u534F\u8BAE",
+      status: "ok",
+      detail: "\u5BA1\u6838\u3001\u72B6\u6001\u8868\u3001\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u7EDF\u4E00\u4F7F\u7528\u56FA\u5B9A\u6587\u672C\uFF1BJSON\u4EC5\u7528\u4E8E\u63D2\u4EF6\u5185\u90E8\u5B58\u50A8"
     });
   }
   checks.push({
@@ -7919,8 +7528,8 @@ function redactedChatState(state2) {
     updatedAt: state2.updatedAt
   };
 }
-function redactedError(value) {
-  const text = String(value ?? "").trim();
+function redactedError(value2) {
+  const text = String(value2 ?? "").trim();
   if (!text) return void 0;
   return text.replace(/([；;]\s*(?:原始)?返回片段\s*[:：]).*$/s, "$1[\u5DF2\u9690\u85CF]").slice(0, 1200);
 }
@@ -7972,9 +7581,7 @@ function safeRequest(trace) {
     systemPromptChars: trace.systemPromptChars,
     promptChars: trace.promptChars,
     responseTokens: trace.responseTokens,
-    hasJsonSchema: trace.hasJsonSchema,
-    jsonSchemaName: trace.hasJsonSchema ? trace.jsonSchemaName : void 0,
-    jsonSchemaBytes: trace.hasJsonSchema ? trace.jsonSchemaBytes : void 0,
+    protocol: trace.protocol,
     errorKind: trace.errorKind,
     httpStatus: trace.httpStatus,
     error: redactedError(trace.error)
@@ -8050,8 +7657,8 @@ function resolveWorkspaceStageCommand(action) {
   };
   return commands[action] ?? null;
 }
-function clampGraphZoom(value) {
-  const numeric = Number(value);
+function clampGraphZoom(value2) {
+  const numeric = Number(value2);
   if (!Number.isFinite(numeric)) return 1;
   return Math.min(2.5, Math.max(0.5, Math.round(numeric * 20) / 20));
 }
@@ -8167,16 +7774,16 @@ function root() {
             <legend>\u4EBA\u7269\u751F\u547D\u5468\u671F</legend>
             <div class="ma11-editor-grid">
               <label>\u5B58\u5728\u72B6\u6001<select name="existence">
-                ${["\u5B58\u6D3B", "\u6B7B\u4EA1\u5DF2\u786E\u8BA4", "\u5B58\u5728\u672A\u77E5", "\u5931\u8E2A", "\u8EAB\u4EFD\u5B58\u7591", "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4", "\u5B58\u5728\u88AB\u62B9\u9664", "\u672A\u6807\u6CE8"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+                ${["\u5B58\u6D3B", "\u6B7B\u4EA1\u5DF2\u786E\u8BA4", "\u5B58\u5728\u672A\u77E5", "\u5931\u8E2A", "\u8EAB\u4EFD\u5B58\u7591", "\u865A\u6784\u6216\u8BEF\u8BA4\u5DF2\u786E\u8BA4", "\u5B58\u5728\u88AB\u62B9\u9664", "\u672A\u6807\u6CE8"].map((value2) => `<option value="${value2}">${value2}</option>`).join("")}
               </select></label>
               <label>\u6D3B\u8DC3\u72B6\u6001<select name="activity">
-                ${["\u5F53\u524D\u5728\u573A", "\u5F53\u524D\u76F8\u5173", "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3", "\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863", "\u672A\u6807\u6CE8"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+                ${["\u5F53\u524D\u5728\u573A", "\u5F53\u524D\u76F8\u5173", "\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3", "\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863", "\u672A\u6807\u6CE8"].map((value2) => `<option value="${value2}">${value2}</option>`).join("")}
               </select></label>
               <label>\u8BB0\u5FC6\u72B6\u6001<select name="memory">
-                ${["\u5E7F\u6CDB\u8BB0\u5F97", "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97", "\u4EC5\u8BB0\u5F55\u7559\u5B58", "\u4EC5\u75D5\u8FF9\u7559\u5B58", "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97", "\u8BB0\u5FC6\u88AB\u7BE1\u6539", "\u8BB0\u5FC6\u88AB\u62B9\u9664", "\u672A\u6807\u6CE8"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+                ${["\u5E7F\u6CDB\u8BB0\u5F97", "\u90E8\u5206\u4EBA\u7269\u8BB0\u5F97", "\u4EC5\u8BB0\u5F55\u7559\u5B58", "\u4EC5\u75D5\u8FF9\u7559\u5B58", "\u65E0\u4EBA\u53EF\u786E\u8BA4\u8BB0\u5F97", "\u8BB0\u5FC6\u88AB\u7BE1\u6539", "\u8BB0\u5FC6\u88AB\u62B9\u9664", "\u672A\u6807\u6CE8"].map((value2) => `<option value="${value2}">${value2}</option>`).join("")}
               </select></label>
               <label>\u8BC1\u636E\u7B49\u7EA7<select name="evidenceLevel">
-                ${["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"].map((value) => `<option value="${value}">${value}</option>`).join("")}
+                ${["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"].map((value2) => `<option value="${value2}">${value2}</option>`).join("")}
               </select></label>
             </div>
             <label>\u5224\u65AD\u4F9D\u636E<textarea name="evidence" rows="3" maxlength="4000"></textarea></label>
@@ -8237,7 +7844,7 @@ function handlePipelineChange() {
   refreshTaskList();
   scheduleWorkspaceRender();
 }
-function statusText(value) {
+function statusText(value2) {
   const map = {
     idle: "\u7B49\u5F85",
     queued: "\u6392\u961F",
@@ -8248,13 +7855,13 @@ function statusText(value) {
     skipped: "\u8DF3\u8FC7",
     blocked: "\u963B\u65AD"
   };
-  return map[value] || value;
+  return map[value2] || value2;
 }
-function statusClass(value) {
-  if (value === "success" || value === "skipped") return "success";
-  if (value === "failed" || value === "blocked") return "danger";
-  if (value === "cancelled") return "neutral";
-  if (value === "running" || value === "queued") return "working";
+function statusClass(value2) {
+  if (value2 === "success" || value2 === "skipped") return "success";
+  if (value2 === "failed" || value2 === "blocked") return "danger";
+  if (value2 === "cancelled") return "neutral";
+  if (value2 === "running" || value2 === "queued") return "working";
   return "neutral";
 }
 function workflowState(artifact) {
@@ -8327,12 +7934,12 @@ function recentTasksHtml() {
 }
 function refreshTaskList() {
   const workspace = document.querySelector("#ma11-workspace");
-  const list4 = workspace?.querySelector("[data-ma11-task-list]");
+  const list3 = workspace?.querySelector("[data-ma11-task-list]");
   const count = workspace?.querySelector("[data-ma11-task-count]");
-  if (!list4 || !count) return;
+  if (!list3 || !count) return;
   const tasks = recentTasksHtml();
   count.textContent = tasks.count ? `${tasks.count} \u6761\u6700\u8FD1\u4EFB\u52A1` : "\u7A7A\u95F2";
-  list4.innerHTML = tasks.html;
+  list3.innerHTML = tasks.html;
 }
 function handleQueueChange() {
   refreshTaskList();
@@ -8400,7 +8007,7 @@ function lifecycleHtml(row) {
     ["\u6D3B\u8DC3", life.activity],
     ["\u8BB0\u5FC6", life.memory],
     ["\u8BC1\u636E", life.evidenceLevel]
-  ].map(([label, value]) => `<span class="ma11-life-chip"><small>${label}</small>${escapeHtml(value)}</span>`).join("");
+  ].map(([label, value2]) => `<span class="ma11-life-chip"><small>${label}</small>${escapeHtml(value2)}</span>`).join("");
   const conditions = [
     life.returnConditions.length ? `<p><b>\u56DE\u6D41\uFF1A</b>${escapeHtml(life.returnConditions.join("\uFF1B"))}</p>` : "",
     life.returnBlockers.length ? `<p><b>\u963B\u6B62\uFF1A</b>${escapeHtml(life.returnBlockers.join("\uFF1B"))}</p>` : ""
@@ -8409,12 +8016,12 @@ function lifecycleHtml(row) {
 }
 function rowCustomFieldsHtml(row, table) {
   if (!table || !row.fields) return "";
-  const lines = table.fields.filter((field) => field.key in (row.fields ?? {})).map((field) => {
+  const lines2 = table.fields.filter((field) => field.key in (row.fields ?? {})).map((field) => {
     const raw = row.fields?.[field.key];
-    const value = Array.isArray(raw) ? raw.join("\u3001") : String(raw ?? "");
-    return value.trim() ? `<div><small>${escapeHtml(field.label)}</small>${escapeHtml(value)}</div>` : "";
+    const value2 = Array.isArray(raw) ? raw.join("\u3001") : String(raw ?? "");
+    return value2.trim() ? `<div><small>${escapeHtml(field.label)}</small>${escapeHtml(value2)}</div>` : "";
   }).filter(Boolean);
-  return lines.length ? `<div class="ma11-custom-fields">${lines.join("")}</div>` : "";
+  return lines2.length ? `<div class="ma11-custom-fields">${lines2.join("")}</div>` : "";
 }
 async function tableHtml(artifactInfo) {
   const settings = getSettings();
@@ -8488,12 +8095,12 @@ function tableManagerHtml(artifactInfo) {
         <button data-ma11-action="move-table-down" data-ma11-table-key="${escapeHtml(table.key)}" ${index === registry2.length - 1 ? "disabled" : ""}>\u4E0B\u79FB</button>
         <button class="danger" data-ma11-action="delete-table" data-ma11-table-key="${escapeHtml(table.key)}">\u5220\u9664\u89C6\u56FE</button>
       </div>
-      <p class="ma11-help">\u5168\u5C40\u8868\u683C\u5B9A\u4E49\uFF0C\u9002\u7528\u4E8E\u6240\u6709\u804A\u5929\u3002\u952E\uFF1A${escapeHtml(table.key)} \xB7 \u89D2\u8272\uFF1A${escapeHtml(table.role)}\u3002\u540D\u79F0\u3001\u7528\u9014\u3001\u8BED\u4E49\u8868\u5934\u4E0E\u5B57\u6BB5\u8BF4\u660E\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\u548C JSON Schema\uFF1B\u7A33\u5B9A\u952E\u4E0D\u4F1A\u968F\u6539\u540D\u53D8\u5316\u3002</p>
+      <p class="ma11-help">\u5168\u5C40\u8868\u683C\u5B9A\u4E49\uFF0C\u9002\u7528\u4E8E\u6240\u6709\u804A\u5929\u3002\u952E\uFF1A${escapeHtml(table.key)} \xB7 \u89D2\u8272\uFF1A${escapeHtml(table.role)}\u3002\u540D\u79F0\u3001\u7528\u9014\u3001\u8BED\u4E49\u8868\u5934\u4E0E\u5B57\u6BB5\u8BF4\u660E\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\u548C\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u6620\u5C04\uFF1B\u7A33\u5B9A\u952E\u4E0D\u4F1A\u968F\u6539\u540D\u53D8\u5316\u3002</p>
     </article>`;
   }).join("");
   return `<section class="ma11-toolbar"><div><h2>\u8868\u683C\u7BA1\u7406</h2><p>\u8868\u683C\u662F\u5185\u90E8\u4E8B\u5B9E\u7684\u53EF\u89C1\u89C6\u56FE\uFF0C\u6570\u91CF\u4E0D\u9650\u3002\u505C\u7528\u6216\u5220\u9664\u540E\u4E0D\u518D\u8981\u6C42\u6A21\u578B\u8F93\u51FA\uFF0C\u4E5F\u4E0D\u518D\u8FDB\u5165 UI \u4E0E\u4E16\u754C\u4E66\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u516B\u8868</button></div></section>
     <section class="ma11-card ma11-form-card ma11-new-table">
-      <header><b>\u65B0\u589E\u81EA\u5B9A\u4E49\u8868\u683C</b><span>\u65B0\u589E\u540E\u81EA\u52A8\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001 Schema</span></header>
+      <header><b>\u65B0\u589E\u81EA\u5B9A\u4E49\u8868\u683C</b><span>\u65B0\u589E\u540E\u81EA\u52A8\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u6587\u672C\u534F\u8BAE</span></header>
       <label>\u540D\u79F0<input data-ma11-new-table-name maxlength="80" placeholder="\u4F8B\u5982\uFF1A\u7EC4\u7EC7\u72B6\u6001" /></label>
       <label>\u7528\u9014\u8BF4\u660E<textarea data-ma11-new-table-purpose rows="3" maxlength="1000" placeholder="\u8BF4\u660E\u53EA\u5E94\u8BB0\u5F55\u4EC0\u4E48\uFF0C\u4EE5\u53CA\u4E0D\u5E94\u8BB0\u5F55\u4EC0\u4E48\u3002"></textarea></label>
       <label>\u5B57\u6BB5\u5B9A\u4E49 <small>\u53EF\u7559\u7A7A\uFF1B\u6BCF\u884C\uFF1A\u5B57\u6BB5\u952E:\u540D\u79F0:string\u6216string[]:\u7528\u9014</small><textarea data-ma11-new-table-fields rows="3" placeholder="rank:\u5C42\u7EA7:string:\u5DF2\u660E\u786E\u7684\u7EC4\u7EC7\u5C42\u7EA7"></textarea></label>
@@ -8686,17 +8293,17 @@ function connectionProfiles() {
   }
 }
 function connectionBlock(task, label) {
-  const value = getSettings().connections[task];
+  const value2 = getSettings().connections[task];
   const profiles = connectionProfiles();
-  const profileOptions = profiles.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === value.profileId ? "selected" : ""}>${escapeHtml(profile.name)}${profile.model ? ` \xB7 ${escapeHtml(profile.model)}` : ""}</option>`).join("");
-  const missingProfile = value.profileId && !profiles.some((profile) => profile.id === value.profileId) ? `<option value="${escapeHtml(value.profileId)}" selected>\u5DF2\u5220\u9664\u6216\u4E0D\u53D7\u652F\u6301\u7684\u914D\u7F6E</option>` : "";
+  const profileOptions = profiles.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === value2.profileId ? "selected" : ""}>${escapeHtml(profile.name)}${profile.model ? ` \xB7 ${escapeHtml(profile.model)}` : ""}</option>`).join("");
+  const missingProfile = value2.profileId && !profiles.some((profile) => profile.id === value2.profileId) ? `<option value="${escapeHtml(value2.profileId)}" selected>\u5DF2\u5220\u9664\u6216\u4E0D\u53D7\u652F\u6301\u7684\u914D\u7F6E</option>` : "";
   return `<div class="ma11-connection-row" data-ma11-connection="${task}">
     <b>${label}</b>
     <select data-ma11-connection-mode="${task}">
-      <option value="current" ${value.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option>
-      <option value="profile" ${value.mode === "profile" ? "selected" : ""}>ST\u539F\u751F Profile\uFF08\u9694\u79BB\u8BF7\u6C42\uFF09</option>
+      <option value="current" ${value2.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option>
+      <option value="profile" ${value2.mode === "profile" ? "selected" : ""}>ST\u539F\u751F Profile\uFF08\u9694\u79BB\u8BF7\u6C42\uFF09</option>
     </select>
-    <select data-ma11-connection-profile-id="${task}" ${value.mode === "profile" ? "" : "hidden disabled"}><option value="">\u8BF7\u9009\u62E9Connection Profile</option>${missingProfile}${profileOptions}</select>
+    <select data-ma11-connection-profile-id="${task}" ${value2.mode === "profile" ? "" : "hidden disabled"}><option value="">\u8BF7\u9009\u62E9Connection Profile</option>${missingProfile}${profileOptions}</select>
     <button data-ma11-test="${task}">\u6D4B\u8BD5</button>
   </div>`;
 }
@@ -8710,10 +8317,7 @@ function settingsHtml() {
       ${connectionBlock("state", "\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u8868")}
       ${connectionBlock("smallSummary", "\u5C0F\u603B\u7ED3")}
       ${connectionBlock("largeSummary", "\u5927\u603B\u7ED3")}
-      <div class="ma11-compat-setting">
-        <label class="ma11-switch"><input type="checkbox" data-ma11-setting="compatibilityMode" ${settings.compatibilityMode ? "checked" : ""}/><span><b>\u517C\u5BB9\u6A21\u5F0F</b>\uFF08\u4E0D\u53D1\u9001 JSON Schema\uFF09</span></label>
-        <p>\u516C\u5171\u53CD\u4EE3\u6216\u5171\u4EAB\u7F51\u5173\u65E0\u6CD5\u5904\u7406\u7ED3\u6784\u5316\u8F93\u51FA\u65F6\u5F00\u542F\u3002\u955C\u6E0A\u4ECD\u8981\u6C42\u6A21\u578B\u8FD4\u56DE JSON\uFF0C\u5E76\u7EE7\u7EED\u6267\u884C\u672C\u5730\u6821\u9A8C\u3002</p>
-      </div>
+      <p class="ma11-help"><b>\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF1A</b>\u5BA1\u6838\u3001\u72B6\u6001\u8868\u3001\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u90FD\u4E0D\u53D1\u9001 JSON Schema\uFF1B\u6A21\u578B\u53EA\u586B\u5199\u6587\u672C\u58F3\uFF0C\u63D2\u4EF6\u8D1F\u8D23\u89E3\u6790\u3001\u5339\u914D\u3001\u53BB\u91CD\u3001\u5206\u914D ID \u548C\u5185\u90E8\u5B58\u50A8\u3002</p>
       <p class="ma11-help">\u5F53\u524D\u804A\u5929\u8FDE\u63A5\u4F7F\u7528 generateRaw\uFF1BProfile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u5E76\u5173\u95ED\u89D2\u8272\u9884\u8BBE\u4E0E Instruct\u3002\u63D2\u4EF6\u4E0D\u4FDD\u5B58 API \u5730\u5740\u6216\u5BC6\u94A5\u3002</p>
     </section>
     <section class="ma11-card ma11-form-card">
@@ -8726,8 +8330,7 @@ function settingsHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
       <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>JSON\u8BED\u6CD5\u9519\u8BEF\u65F6\uFF0C\u5141\u8BB8\u989D\u5916\u8C03\u7528\u4E00\u6B21\u683C\u5F0F\u4FEE\u590D</span></label>
-      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6309\u5185\u90E8\u4E8B\u5B9E\u7684 event_id \u5224\u65AD\u4E8B\u4EF6\u7EBF\uFF1B\u4E8B\u4EF6\u7ED3\u675F\u3001\u8FBE\u5230\u4E8B\u5B9E\u89C4\u6A21\u6216\u6700\u665A\u6D88\u606F\u8FB9\u754C\u65F6\u89E6\u53D1\uFF0C\u4E0D\u6309\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\u538B\u7F29\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u517C\u5BB9\u6A21\u5F0F\u53EA\u6539\u53D8\u8BF7\u6C42\u683C\u5F0F\uFF0C\u4E0D\u5207\u6362\u8FDE\u63A5\uFF0C\u4E5F\u4E0D\u4F1A\u81EA\u52A8\u91CD\u590D\u7F51\u7EDC\u8BF7\u6C42\u3002</p>
+      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6309\u5185\u90E8\u4E8B\u5B9E\u7684 event_id \u5224\u65AD\u4E8B\u4EF6\u7EBF\uFF1B\u4E8B\u4EF6\u7ED3\u675F\u3001\u8FBE\u5230\u4E8B\u5B9E\u89C4\u6A21\u6216\u6700\u665A\u6D88\u606F\u8FB9\u754C\u65F6\u89E6\u53D1\uFF0C\u4E0D\u6309\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\u538B\u7F29\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u6240\u6709\u6A21\u578B\u7ED3\u6784\u5316\u4EFB\u52A1\u5747\u7531\u63D2\u4EF6\u89E3\u6790\u56FA\u5B9A\u6587\u672C\uFF1B\u6A21\u578B\u4E0D\u751F\u6210 ID\u3001\u4E0D\u7EF4\u62A4\u6570\u636E\u5E93\u5BF9\u8C61\uFF0C\u4E5F\u4E0D\u4F1A\u56E0\u4E3A\u683C\u5F0F\u9519\u8BEF\u989D\u5916\u8C03\u7528\u4FEE\u590D\u6A21\u578B\u3002</p>
     </section>
     <section class="ma11-card ma11-form-card">
       <header><b>\u91CD\u7F6E\u4E0E\u7EF4\u62A4</b><span>\u4EE5\u4E0B\u64CD\u4F5C\u4E0D\u4F1A\u4FEE\u6539\u5176\u4ED6\u804A\u5929\u3002</span></header>
@@ -8875,8 +8478,8 @@ function openRowEditor(tableKey, row) {
   form.elements.namedItem("keywords").value = row?.keywords.join(", ") || "";
   form.elements.namedItem("locked").checked = row?.locked ?? false;
   const objectFields = row?.fields ?? {};
-  const setList = (name, value) => {
-    form.elements.namedItem(name).value = Array.isArray(value) ? value.join("\n") : String(value ?? "");
+  const setList = (name, value2) => {
+    form.elements.namedItem(name).value = Array.isArray(value2) ? value2.join("\n") : String(value2 ?? "");
   };
   setList("baseContent", objectFields.baseContent);
   setList("solidifiedHistory", objectFields.solidifiedHistory);
@@ -9006,15 +8609,15 @@ function updateSetting(target) {
   const key = target.dataset.ma11Setting;
   if (!key) return;
   const settings = getSettings();
-  const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target instanceof HTMLInputElement && target.type === "number" ? Number(target.value) : target.value;
-  settings[key] = value;
+  const value2 = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target instanceof HTMLInputElement && target.type === "number" ? Number(target.value) : target.value;
+  settings[key] = value2;
   saveSettings();
   if (key === "enabled") {
-    setRequestAcceptance(Boolean(value));
-    taskQueue.setAccepting(Boolean(value));
-    if (!value) abortActiveRequests();
+    setRequestAcceptance(Boolean(value2));
+    taskQueue.setAccepting(Boolean(value2));
+    if (!value2) abortActiveRequests();
     const quick = document.querySelector('[data-ma11-quick-setting="enabled"]');
-    if (quick) quick.checked = Boolean(value);
+    if (quick) quick.checked = Boolean(value2);
     renderAllMessagePanels();
     void renderWorkspace();
   }
@@ -9254,16 +8857,8 @@ function bindWorkspace(workspace) {
       const testTask = target.closest("[data-ma11-test]")?.dataset.ma11Test;
       if (testTask) {
         const result = await testConnection(testTask);
-        const schemaLabels = {
-          supported: "Schema\u76F4\u63A5\u6210\u529F",
-          "cached-bypass": "Schema\u5DF2\u6309\u7F13\u5B58\u7ED5\u8FC7",
-          "rejected-fallback": "Schema\u8BF7\u6C42\u88AB\u62D2\u540E\u666E\u901AJSON\u6210\u529F",
-          "empty-fallback": "Schema\u8FD4\u56DE\u7A7A\u5BF9\u8C61\u540E\u666E\u901AJSON\u6210\u529F",
-          "plain-only": "\u4EC5\u666E\u901AJSON"
-        };
-        const schemaDetail = schemaLabels[result.schemaStatus] || result.schemaStatus;
-        const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1B${schemaDetail}\uFF1BJSON${result.jsonValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
-        const diagnostic = result.schemaDetail ? `\uFF1BSchema\u8BCA\u65AD\uFF1A${result.schemaDetail}` : "";
+        const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1B\u56FA\u5B9A\u6587\u672C${result.protocolValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
+        const diagnostic = result.protocolDetail ? `\uFF1B\u534F\u8BAE\u8BCA\u65AD\uFF1A${result.protocolDetail}` : "";
         toast(result.instructionFollowed ? "success" : "warning", result.instructionFollowed ? `${detail}${diagnostic}` : `${detail}${diagnostic}\uFF1B\u8FD4\u56DE\uFF1A${result.responsePreview}`);
       }
     } catch (error) {
@@ -9285,8 +8880,8 @@ function bindWorkspace(workspace) {
     if (target.dataset.ma11Setting) updateSetting(target);
     if (target.dataset.ma11RecallSetting) {
       const key = target.dataset.ma11RecallSetting;
-      const value = Number(target.value);
-      getSettings().lorebookRecall[key] = value;
+      const value2 = Number(target.value);
+      getSettings().lorebookRecall[key] = value2;
       saveSettings();
     }
     if (target.dataset.ma11TableEnabled) {
