@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.52";
-var PIPELINE_VERSION = "ma-pipeline-52";
+var VERSION = "1.2.0-rc.53";
+var PIPELINE_VERSION = "ma-pipeline-53";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -1040,6 +1040,11 @@ function invalidateFactsAfterMessages(facts, validMessageIds) {
   return { facts: kept, removedFactIds };
 }
 
+// src/domain/object-identity.ts
+function canonicalObjectTitle(value2) {
+  return String(value2 ?? "").normalize("NFKC").trim().toLocaleLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, "");
+}
+
 // src/domain/observer.ts
 var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
 var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
@@ -1049,6 +1054,446 @@ function isPurePassiveObserverText(value2) {
   if (!PASSIVE_OBSERVER.test(text)) return false;
   const affirmativeText = text.replace(NEGATED_INTERVENTION, "");
   return !CAUSAL_INTERVENTION.test(affirmativeText);
+}
+
+// src/domain/fixed-text.ts
+function normalizedMarker(value2) {
+  return value2.trim().toUpperCase();
+}
+function appendField2(block, key, value2) {
+  const current = block.fields.get(key) ?? [];
+  block.fields.set(key, [...current, value2]);
+}
+function appendContinuation(block, key, value2) {
+  const current = block.fields.get(key) ?? [];
+  if (!current.length) return;
+  const next = [...current];
+  next[next.length - 1] = `${next[next.length - 1]}
+${value2}`.trim();
+  block.fields.set(key, next);
+}
+function parseFixedTextBlocks(raw, markers) {
+  const source = safeText(raw, 24e4).replace(/^\uFEFF/, "");
+  const byStart = new Map(markers.map((item) => [normalizedMarker(item.start), item]));
+  const byEnd = new Map(markers.map((item) => [normalizedMarker(item.end), item]));
+  const blocks = [];
+  let current = null;
+  let definition = null;
+  let lastKey = "";
+  let rawLines = [];
+  const flush = () => {
+    if (!current) return;
+    if (definition?.rawBody) current.raw = rawLines.join("\n").trim();
+    blocks.push(current);
+    current = null;
+    definition = null;
+    lastKey = "";
+    rawLines = [];
+  };
+  source.split(/\r?\n/).forEach((sourceLine, index) => {
+    const trimmed = sourceLine.trim();
+    const markerKey = normalizedMarker(trimmed);
+    const start = byStart.get(markerKey);
+    if (start) {
+      flush();
+      definition = start;
+      current = { kind: start.kind, fields: /* @__PURE__ */ new Map(), raw: "", line: index + 1 };
+      return;
+    }
+    const end = byEnd.get(markerKey);
+    if (end) {
+      if (current?.kind === end.kind) flush();
+      return;
+    }
+    if (!current || !definition) return;
+    if (definition.rawBody) {
+      rawLines.push(sourceLine);
+      return;
+    }
+    if (!trimmed || /^```/.test(trimmed)) return;
+    const match = sourceLine.match(/^\s*([^=＝:：]+?)\s*[=＝:：]\s*(.*)$/);
+    if (match) {
+      lastKey = match[1].trim();
+      if (lastKey) appendField2(current, lastKey, match[2].trim());
+      return;
+    }
+    if (lastKey) appendContinuation(current, lastKey, sourceLine.trim());
+  });
+  flush();
+  return blocks;
+}
+function fixedTextValues(block, ...keys) {
+  const output = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const key of keys) {
+    for (const raw of block.fields.get(key) ?? []) {
+      const value2 = safeText(raw, 12e3).trim();
+      if (!value2 || seen.has(value2)) continue;
+      seen.add(value2);
+      output.push(value2);
+    }
+  }
+  return output;
+}
+function fixedTextValue(block, ...keys) {
+  return fixedTextValues(block, ...keys).at(-1) ?? "";
+}
+
+// src/domain/state-text.ts
+var STATE_TEXT_MARKERS = {
+  turnStart: "<MA_TURN>",
+  turnEnd: "</MA_TURN>",
+  factStart: "<MA_FACT>",
+  factEnd: "</MA_FACT>",
+  rowStart: "<MA_ROW>",
+  rowEnd: "</MA_ROW>"
+};
+var CORE_ROW_KEYS = /* @__PURE__ */ new Set(["table", "object", "summary", "content", "status", "keyword"]);
+var FORBIDDEN_STATE_FIELDS = /* @__PURE__ */ new Set(["id", "title", "content", "keywords", "status", "recentHistory", "solidifiedHistory", "factIds", "eventId", "eventIds", "recall"]);
+var FACT_OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
+var FACT_CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
+var KEY_ALIASES = {
+  "\u8868\u683C": "table",
+  "\u5BF9\u8C61": "object",
+  "\u540D\u79F0": "object",
+  "\u6458\u8981": "summary",
+  "\u5185\u5BB9": "content",
+  "\u72B6\u6001": "status",
+  "\u5173\u952E\u8BCD": "keyword",
+  "\u4E8B\u4EF6": "event",
+  "\u6807\u9898": "title",
+  "\u7C7B\u578B": "type",
+  "\u64CD\u4F5C": "operation",
+  "\u7F6E\u4FE1\u5EA6": "confidence",
+  "\u5DF2\u53D1\u751F": "occurred",
+  "\u672A\u51B3": "unresolved",
+  "\u5F00\u59CB\u65F6\u95F4": "time_start",
+  "\u7ED3\u675F\u65F6\u95F4": "time_end",
+  "\u65F6\u95F4\u6807\u7B7E": "time_label",
+  "\u5173\u8054\u5BF9\u8C61": "related",
+  "\u5B57\u6BB5": "field",
+  "\u751F\u547D\u5468\u671F": "lifecycle"
+};
+function identity(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, "");
+}
+function unique(values2, limit = 40, chars = 800) {
+  return [...new Set(values2.map((item) => safeText(item, chars).trim()).filter(Boolean))].slice(0, limit);
+}
+function normalizeKey(raw) {
+  const trimmed = raw.trim();
+  const alias = KEY_ALIASES[trimmed];
+  if (alias) return alias;
+  if (trimmed.startsWith("\u5B57\u6BB5.")) return `field.${trimmed.slice(3).trim()}`;
+  if (trimmed.startsWith("\u751F\u547D\u5468\u671F.")) return `lifecycle.${trimmed.slice(5).trim()}`;
+  return trimmed;
+}
+function addField(block, key, value2) {
+  const normalized = normalizeKey(key);
+  if (!normalized) return;
+  block.fields.set(normalized, [...block.fields.get(normalized) ?? [], value2.trim()]);
+}
+function fieldValues(block, ...keys) {
+  return unique(keys.flatMap((key) => block.fields.get(key) ?? []));
+}
+function fieldValue(block, ...keys) {
+  return fieldValues(block, ...keys).at(-1) ?? "";
+}
+var STATE_BLOCK_MARKERS = [
+  { kind: "turn", start: STATE_TEXT_MARKERS.turnStart, end: STATE_TEXT_MARKERS.turnEnd },
+  { kind: "fact", start: STATE_TEXT_MARKERS.factStart, end: STATE_TEXT_MARKERS.factEnd },
+  { kind: "row", start: STATE_TEXT_MARKERS.rowStart, end: STATE_TEXT_MARKERS.rowEnd },
+  { kind: "turn", start: "\u3010\u56DE\u5408\u3011", end: "\u3010\u56DE\u5408\u7ED3\u675F\u3011" },
+  { kind: "fact", start: "\u3010\u4E8B\u5B9E\u3011", end: "\u3010\u4E8B\u5B9E\u7ED3\u675F\u3011" },
+  { kind: "row", start: "\u3010\u6761\u76EE\u3011", end: "\u3010\u6761\u76EE\u7ED3\u675F\u3011" }
+];
+function parseStateTextBlocks(raw) {
+  const parsed = parseFixedTextBlocks(raw, STATE_BLOCK_MARKERS);
+  if (!parsed.length) throw new Error("\u72B6\u6001\u6A21\u578B\u672A\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u5757\uFF08\u7F3A\u5C11 <MA_TURN>/<MA_FACT>/<MA_ROW>\uFF09");
+  return parsed.map((source) => {
+    const block = { ...source, kind: source.kind, fields: /* @__PURE__ */ new Map() };
+    for (const [key, values2] of source.fields.entries()) for (const value2 of values2) addField(block, key, value2);
+    return block;
+  });
+}
+function rowTokens(row) {
+  return new Set([row.title, ...row.keywords ?? []].map(identity).filter(Boolean));
+}
+function intersection(left, right) {
+  const rightSet = right instanceof Set ? right : new Set(right);
+  return [...left].filter((item) => rightSet.has(item));
+}
+function mergeFieldValues(left, right) {
+  if (Array.isArray(left) || Array.isArray(right)) return unique([...Array.isArray(left) ? left : [], ...Array.isArray(right) ? right : []], 60, 1200);
+  const rightText = safeText(right, 12e3).trim();
+  return rightText || left;
+}
+function rowProtectionRank(row) {
+  if (row.locked || row.lockMode === "all") return 3;
+  if (row.source === "manual" || row.lockMode === "base") return 2;
+  return 1;
+}
+function canonicalRow(left, right) {
+  const rankDiff = rowProtectionRank(right) - rowProtectionRank(left);
+  if (rankDiff) return rankDiff > 0 ? right : left;
+  const leftTime = String(left.updatedAt || "");
+  const rightTime = String(right.updatedAt || "");
+  if (leftTime && rightTime && leftTime !== rightTime) return leftTime < rightTime ? left : right;
+  if (leftTime !== rightTime) return leftTime ? left : right;
+  return String(left.id || "").localeCompare(String(right.id || "")) <= 0 ? left : right;
+}
+function fresherRow(left, right) {
+  const leftTime = String(left.updatedAt || "");
+  const rightTime = String(right.updatedAt || "");
+  if (leftTime !== rightTime) return rightTime > leftTime ? right : left;
+  return String(right.id || "").localeCompare(String(left.id || "")) > 0 ? right : left;
+}
+function mergeRows(left, right) {
+  const canonical = canonicalRow(left, right);
+  const secondary = canonical === left ? right : left;
+  const newer = fresherRow(left, right);
+  const fields = { ...canonical.fields ?? {} };
+  for (const [key, value2] of Object.entries(secondary.fields ?? {})) {
+    if (Array.isArray(fields[key]) || Array.isArray(value2)) {
+      fields[key] = mergeFieldValues(fields[key], value2);
+      continue;
+    }
+    const currentText = safeText(fields[key], 12e3).trim();
+    const incomingText = safeText(value2, 12e3).trim();
+    if (!currentText && incomingText) fields[key] = value2;
+    else if (rowProtectionRank(canonical) === 1 && newer === secondary && incomingText) fields[key] = value2;
+  }
+  const fullyLocked = rowProtectionRank(canonical) === 3;
+  const recall = canonical.recall || secondary.recall ? {
+    any: unique([...canonical.recall?.any ?? [], ...secondary.recall?.any ?? []], 40, 120),
+    all: unique([...canonical.recall?.all ?? [], ...secondary.recall?.all ?? []], 30, 120),
+    exclude: unique([...canonical.recall?.exclude ?? [], ...secondary.recall?.exclude ?? []], 30, 120)
+  } : void 0;
+  return {
+    ...canonical,
+    content: fullyLocked ? canonical.content : newer.content || canonical.content || secondary.content,
+    status: fullyLocked ? canonical.status : newer.status || canonical.status,
+    keywords: unique([...canonical.keywords ?? [], ...secondary.keywords ?? []], 24, 100),
+    fields,
+    factIds: unique([...canonical.factIds ?? [], ...secondary.factIds ?? []], 80, 160),
+    eventIds: unique([...canonical.eventIds ?? [], canonical.eventId, ...secondary.eventIds ?? [], secondary.eventId], 80, 160),
+    eventId: fullyLocked ? canonical.eventId || secondary.eventId : newer.eventId || canonical.eventId || secondary.eventId,
+    lifecycle: fullyLocked ? canonical.lifecycle ?? secondary.lifecycle : newer.lifecycle ?? canonical.lifecycle ?? secondary.lifecycle,
+    recall,
+    updatedAt: fullyLocked ? canonical.updatedAt : newer.updatedAt || canonical.updatedAt
+  };
+}
+function mergeDuplicateStateRows(snapshot, registry2, onlyTableKeys) {
+  const tables2 = normalizeTableRegistry(registry2);
+  const output = structuredClone(snapshot);
+  const idRemap = /* @__PURE__ */ new Map();
+  let mergedCount = 0;
+  for (const table of tables2) {
+    if (onlyTableKeys && !onlyTableKeys.has(table.key)) continue;
+    const rows = output[table.key] ?? [];
+    const groups = /* @__PURE__ */ new Map();
+    const order = [];
+    for (const row of rows) {
+      const token = canonicalObjectTitle(row.title) || `@id:${row.id}`;
+      if (!groups.has(token)) order.push(token);
+      groups.set(token, [...groups.get(token) ?? [], row]);
+    }
+    output[table.key] = order.map((token) => {
+      const group = [...groups.get(token) ?? []].sort((left, right) => {
+        const time = String(left.updatedAt || "").localeCompare(String(right.updatedAt || ""));
+        return time || String(left.id || "").localeCompare(String(right.id || ""));
+      });
+      const merged = group.slice(1).reduce((current, row) => mergeRows(current, row), group[0]);
+      if (group.length > 1) mergedCount += group.length - 1;
+      for (const row of group) {
+        if (row.id && row.id !== merged.id) idRemap.set(row.id, merged.id);
+      }
+      return merged;
+    });
+  }
+  if (idRemap.size) {
+    for (const rows of Object.values(output)) {
+      if (!Array.isArray(rows)) continue;
+      for (const row of rows) {
+        const related = Array.isArray(row.fields?.relatedObjects) ? row.fields.relatedObjects : [];
+        if (!related.length) continue;
+        row.fields ||= {};
+        row.fields.relatedObjects = unique(related.map((value2) => idRemap.get(String(value2)) ?? value2), 60, 240);
+      }
+    }
+  }
+  return { snapshot: output, idRemap, mergedCount };
+}
+function dedupeStrongStateRows(snapshot, registry2) {
+  return mergeDuplicateStateRows(snapshot, registry2).snapshot;
+}
+function findExistingRow(tableKey, objectName, keywords, previous) {
+  const rows = previous[tableKey] ?? [];
+  const objectToken = canonicalObjectTitle(objectName);
+  const exactTitle = rows.filter((row) => canonicalObjectTitle(row.title) === objectToken);
+  if (exactTitle.length === 1) return exactTitle[0];
+  if (exactTitle.length > 1) {
+    return exactTitle.slice(1).reduce((current, row) => mergeRows(current, row), exactTitle[0]);
+  }
+  const wanted = new Set([objectName, ...keywords].map(identity).filter(Boolean));
+  const aliasMatches = rows.filter((row) => intersection(rowTokens(row), wanted).length > 0);
+  if (aliasMatches.length === 1) return aliasMatches[0];
+  if (aliasMatches.length > 1) throw new Error(`\u8868\u683C ${tableKey} \u4E2D\u6709\u591A\u4E2A\u6761\u76EE\u547D\u4E2D\u5BF9\u8C61\u522B\u540D\uFF1A${objectName}`);
+  return void 0;
+}
+function resolveTable(raw, active) {
+  const token = identity(raw);
+  const matches = active.filter((table) => identity(table.key) === token || identity(table.name) === token || identity(table.role) === token);
+  if (matches.length === 1) return matches[0];
+  if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u6761\u76EE\u4F7F\u7528\u4E86\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${raw || "\u7A7A"}`);
+  throw new Error(`\u56FA\u5B9A\u6587\u672C\u8868\u683C\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF1A${raw}`);
+}
+function resolveField(table, raw) {
+  const token = identity(raw);
+  const matches = table.fields.filter((field) => identity(field.key) === token || identity(field.label) === token);
+  if (matches.length === 1) return matches[0];
+  if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u672A\u6CE8\u518C\u4E8E ${table.key}\uFF1A${raw}`);
+  throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF08${table.key}\uFF09\uFF1A${raw}`);
+}
+function buildRowPatch(block, active, previous) {
+  const table = resolveTable(fieldValue(block, "table"), active);
+  const objectName = fieldValue(block, "object", "title").trim();
+  if (!objectName) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u7F3A\u5C11 object`);
+  const keywords = unique([objectName, ...fieldValues(block, "keyword")], 24, 100);
+  const existing = findExistingRow(table.key, objectName, keywords, previous);
+  const fields = {};
+  let lifecycle;
+  for (const [rawKey, values2] of block.fields.entries()) {
+    if (CORE_ROW_KEYS.has(rawKey) || rawKey === "title") continue;
+    if (rawKey.startsWith("field.")) {
+      const requested = rawKey.slice("field.".length).trim();
+      const definition = resolveField(table, requested);
+      if (FORBIDDEN_STATE_FIELDS.has(definition.key)) throw new Error(`\u72B6\u6001\u6587\u672C\u4E0D\u5141\u8BB8\u5199\u5165\u5B57\u6BB5\uFF1A${definition.key}`);
+      if (definition.type === "lifecycle") throw new Error(`\u5B57\u6BB5 ${definition.key} \u5FC5\u987B\u4F7F\u7528 lifecycle.* \u884C`);
+      const cleaned = unique(values2, definition.type === "string[]" ? 40 : 1, 1200);
+      fields[definition.key] = definition.type === "string[]" ? cleaned : cleaned.at(-1) ?? "";
+      continue;
+    }
+    if (rawKey.startsWith("lifecycle.")) {
+      const key = rawKey.slice("lifecycle.".length).trim();
+      const lifecycleField = table.fields.find((field) => field.type === "lifecycle");
+      if (!lifecycleField) throw new Error(`\u8868\u683C ${table.key} \u672A\u6CE8\u518C lifecycle \u5B57\u6BB5`);
+      if (!["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"].includes(key)) {
+        throw new Error(`\u672A\u77E5\u751F\u547D\u5468\u671F\u5B57\u6BB5\uFF1A${key}`);
+      }
+      lifecycle ||= {};
+      lifecycle[key] = ["returnConditions", "returnBlockers"].includes(key) ? unique(values2, 30, 500) : safeText(values2.at(-1), 1e3).trim();
+      continue;
+    }
+    if (!KEY_ALIASES[rawKey]) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u542B\u672A\u77E5\u5B57\u6BB5\uFF1A${rawKey}`);
+  }
+  const row = {
+    id: existing?.id || makeId(table.key),
+    title: existing?.title || objectName,
+    content: fieldValue(block, "summary", "content") || existing?.content || objectName,
+    keywords: unique([...existing?.keywords ?? [], ...keywords], 24, 100),
+    status: fieldValue(block, "status") || existing?.status || "active",
+    source: existing?.source ?? "auto",
+    locked: existing?.locked ?? false,
+    lockMode: existing?.lockMode,
+    lifecycle,
+    updatedAt: existing?.updatedAt ?? "",
+    fields
+  };
+  return { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}` };
+}
+function mergePatchRows(left, right) {
+  const fields = { ...left.fields ?? {} };
+  for (const [key, value2] of Object.entries(right.fields ?? {})) fields[key] = mergeFieldValues(fields[key], value2);
+  return {
+    ...left,
+    content: right.content || left.content,
+    status: right.status || left.status,
+    keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100),
+    fields,
+    lifecycle: right.lifecycle ?? left.lifecycle
+  };
+}
+function activeEventMatch(eventName, activeFacts) {
+  const token = identity(eventName);
+  if (!token) return void 0;
+  const matches = new Set(activeFacts.filter((fact) => {
+    const terms = [fact.eventId, fact.title, ...fact.keywords].map(identity).filter(Boolean);
+    return terms.includes(token);
+  }).map((fact) => fact.eventId));
+  return matches.size === 1 ? [...matches][0] : void 0;
+}
+function factFromBlock(block, activeFacts) {
+  const title = fieldValue(block, "title", "object").trim();
+  if (!title) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_FACT> \u7F3A\u5C11 title`);
+  const eventName = fieldValue(block, "event") || title;
+  const eventId = activeEventMatch(eventName, activeFacts) || `event_${hashText(identity(eventName) || identity(title))}`;
+  const titleToken = identity(title);
+  const previousMatches = activeFacts.filter((fact) => fact.eventId === eventId && identity(fact.title) === titleToken);
+  const factId = previousMatches.length === 1 ? previousMatches[0].factId : `fact_${hashText(`${eventId}|${titleToken}`)}`;
+  const occurred = fieldValues(block, "occurred", "content");
+  const unresolved = fieldValues(block, "unresolved");
+  const status = fieldValue(block, "status") || "active";
+  const requestedOperation = fieldValue(block, "operation");
+  const operation = FACT_OPERATIONS.has(requestedOperation) ? requestedOperation : /closed|resolved|ended|archived|结束|已解决|已关闭|已归档/i.test(status) ? "close" : previousMatches.length ? "update" : "create";
+  const requestedConfidence = fieldValue(block, "confidence");
+  const confidence = FACT_CONFIDENCE.has(requestedConfidence) ? requestedConfidence : "uncertain";
+  return {
+    fact_id: factId,
+    event_id: eventId,
+    entity_id: eventId,
+    type: fieldValue(block, "type") || "event",
+    title,
+    content: occurred.join("\uFF1B"),
+    occurred,
+    unresolved,
+    status,
+    time_range: {
+      start: fieldValue(block, "time_start"),
+      end: fieldValue(block, "time_end"),
+      label: fieldValue(block, "time_label")
+    },
+    related_entities: fieldValues(block, "related"),
+    keywords: unique([title, eventName, ...fieldValues(block, "keyword")], 24, 100),
+    operation,
+    confidence
+  };
+}
+function mergeFacts(left, right) {
+  return {
+    ...left,
+    ...right,
+    content: unique([left.content, right.content], 20, 1200).join("\uFF1B"),
+    occurred: unique([...left.occurred ?? [], ...right.occurred ?? []], 40, 1200),
+    unresolved: unique([...left.unresolved ?? [], ...right.unresolved ?? []], 40, 1200),
+    related_entities: unique([...left.related_entities ?? [], ...right.related_entities ?? []], 40, 240),
+    keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100)
+  };
+}
+function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = []) {
+  const active = enabledTables(normalizeTableRegistry(registry2));
+  const previous = dedupeStrongStateRows(previousSnapshot2, registry2);
+  const blocks = parseStateTextBlocks(raw);
+  const turnSummary = blocks.filter((block) => block.kind === "turn").map((block) => fieldValue(block, "summary", "content")).filter(Boolean).at(-1) ?? "";
+  const factsById = /* @__PURE__ */ new Map();
+  const snapshot = {};
+  const rowsByIdentity = /* @__PURE__ */ new Map();
+  for (const block of blocks) {
+    if (block.kind === "fact") {
+      const fact = factFromBlock(block, activeFacts);
+      if (!fact.occurred.length && !fact.unresolved.length) continue;
+      const id = String(fact.fact_id);
+      factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
+    }
+    if (block.kind === "row") {
+      const patch = buildRowPatch(block, active, previous);
+      const key = `${patch.table}|${patch.matchKey}`;
+      const current = rowsByIdentity.get(key);
+      rowsByIdentity.set(key, current ? { table: patch.table, row: mergePatchRows(current.row, patch.row), matchKey: patch.matchKey } : patch);
+    }
+  }
+  for (const { table, row } of rowsByIdentity.values()) (snapshot[table] ||= []).push(row);
+  return { turnSummary, facts: [...factsById.values()], snapshot };
 }
 
 // src/domain/snapshot.ts
@@ -1224,10 +1669,10 @@ function normalizeSnapshot(value2, previousSnapshot2, registry2, includeDisabled
       return normalized;
     });
   }
-  return attachLegacyAliases(output, tables2);
+  return attachLegacyAliases(dedupeStrongStateRows(output, tables2), tables2);
 }
 function identityTitle(value2) {
-  return String(value2 || "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+  return canonicalObjectTitle(value2);
 }
 function stateRows(snapshot, registry2) {
   const key = characterTableKey(registry2);
@@ -1235,18 +1680,15 @@ function stateRows(snapshot, registry2) {
 }
 function preservePersistentCharacters(previous, next, registry2) {
   const tables2 = registryOrDefault(registry2);
+  previous = dedupeStrongStateRows(previous, tables2);
+  next = dedupeStrongStateRows(next, tables2);
   const key = characterTableKey(tables2);
   if (!key) return next;
   const nextRows = next[key] ?? (next[key] = []);
   const oldRows = previous[key] ?? previous.characters ?? [];
   const byId = new Map(nextRows.map((row) => [row.id, row]));
   const idRemap = /* @__PURE__ */ new Map();
-  const oldTitleCounts = /* @__PURE__ */ new Map();
   const nextByTitle = /* @__PURE__ */ new Map();
-  for (const row of oldRows) {
-    const title = identityTitle(row.title);
-    if (title) oldTitleCounts.set(title, (oldTitleCounts.get(title) ?? 0) + 1);
-  }
   for (const row of nextRows) {
     const title = identityTitle(row.title);
     if (title) nextByTitle.set(title, [...nextByTitle.get(title) ?? [], row]);
@@ -1255,7 +1697,7 @@ function preservePersistentCharacters(previous, next, registry2) {
     if (byId.has(oldRow.id)) continue;
     const title = identityTitle(oldRow.title);
     const titleMatches = title ? nextByTitle.get(title) ?? [] : [];
-    const titleMatch = title && oldTitleCounts.get(title) === 1 && titleMatches.length === 1 ? titleMatches[0] : void 0;
+    const titleMatch = titleMatches[0];
     if (titleMatch) {
       const replacedId = titleMatch.id;
       titleMatch.id = oldRow.id;
@@ -1290,28 +1732,24 @@ function preservePersistentCharacters(previous, next, registry2) {
   }
   next[key] = nextRows;
   rewriteObjectReferences(next, idRemap);
-  return attachLegacyAliases(next, tables2);
+  return attachLegacyAliases(dedupeStrongStateRows(next, tables2), tables2);
 }
 function preserveObjectBaseLayers(previous, next, registry2) {
   const tables2 = registryOrDefault(registry2);
+  previous = dedupeStrongStateRows(previous, tables2);
+  next = dedupeStrongStateRows(next, tables2);
   for (const table of tables2) {
     const previousRows = previous[table.key] ?? [];
     const byId = new Map(previousRows.map((row) => [row.id, row]));
     const previousByTitle = /* @__PURE__ */ new Map();
-    const nextTitleCounts = /* @__PURE__ */ new Map();
     for (const row of previousRows) {
       const title = identityTitle(row.title);
       if (title) previousByTitle.set(title, [...previousByTitle.get(title) ?? [], row]);
     }
     for (const row of next[table.key] ?? []) {
       const title = identityTitle(row.title);
-      if (title) nextTitleCounts.set(title, (nextTitleCounts.get(title) ?? 0) + 1);
-    }
-    for (const row of next[table.key] ?? []) {
-      const title = identityTitle(row.title);
       const titleMatches = title ? previousByTitle.get(title) ?? [] : [];
-      const uniqueTitleMatch = title && titleMatches.length === 1 && nextTitleCounts.get(title) === 1 ? titleMatches[0] : void 0;
-      const old = byId.get(row.id) ?? uniqueTitleMatch;
+      const old = byId.get(row.id) ?? titleMatches[0];
       if (!old) continue;
       row.fields ||= {};
       const oldFields = old.fields ?? {};
@@ -1323,7 +1761,7 @@ function preserveObjectBaseLayers(previous, next, registry2) {
       else delete row.fields.solidifiedHistory;
     }
   }
-  return attachLegacyAliases(next, tables2);
+  return attachLegacyAliases(dedupeStrongStateRows(next, tables2), tables2);
 }
 function characterTitleAliases(title) {
   const raw = String(title || "").trim();
@@ -1349,27 +1787,26 @@ function removeFocusCharacterDuplicates(snapshot, registry2) {
 function rowArray(value2) {
   return Array.isArray(value2) ? value2.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
 }
-var PERSISTED_CHARACTER_STATE_FIELDS = ["currentFacts", "currentStates", "recentHistory", "relationshipStates", "abilityStates"];
-var PERSISTED_CHARACTER_SHARED_FIELDS = ["solidifiedHistory", "relatedObjects", "relatedEvents"];
-function persistedCharacterName(value2) {
+var LEGACY_CHARACTER_STATE_FIELDS = ["currentFacts", "currentStates", "recentHistory", "relationshipStates", "abilityStates"];
+function legacyCharacterTitle(value2) {
   const original = safeText(value2, 240).trim();
-  let name = original.replace(/^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]\s*/i, "").replace(/^(?:人物|角色|档案|信息)\s*[:：|｜-]\s*/i, "").replace(/\s*(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i, "").replace(/\s*(?:人物|角色)?(?:档案|信息)\s*$/i, "").trim();
-  if (!name) name = original;
-  const identity2 = identityTitle(name);
-  return (/* @__PURE__ */ new Set(["\u89D2\u8272", "\u4EBA\u7269", "\u672A\u77E5", "\u672A\u547D\u540D", "unknown", "unknowncharacter"])).has(identity2) ? "" : identity2;
+  let title = original.replace(/^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]\s*/i, "").replace(/^(?:人物|角色|档案|信息)\s*[:：|｜-]\s*/i, "").replace(/\s*(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i, "").replace(/\s*(?:人物|角色)?(?:档案|信息)\s*$/i, "").trim();
+  if (!title) title = original;
+  const token = identityTitle(title);
+  return (/* @__PURE__ */ new Set(["\u89D2\u8272", "\u4EBA\u7269", "\u672A\u77E5", "\u672A\u547D\u540D", "unknown", "unknowncharacter"])).has(token) ? "" : title;
 }
-function explicitPersistedStateTitle(value2) {
+function explicitLegacyStateTitle(value2) {
   const title = safeText(value2, 240).trim();
   return /^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]/i.test(title) || /(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i.test(title);
 }
-function hasPersistedBaseSignal(row) {
+function legacyBaseSignal(row) {
   const baseContent = safeText(row.fields?.baseContent, 12e3).trim();
   return Boolean(baseContent || row.source === "manual" || row.locked || row.lockMode === "base" || row.lockMode === "all");
 }
-function hasPersistedStateSignal(row) {
+function legacyStateSignal(row) {
   const generatedId = /^characters(?:_|$)/i.test(safeText(row.id, 160).trim());
-  const mutableState = PERSISTED_CHARACTER_STATE_FIELDS.some((field) => rowArray(row.fields?.[field]).length > 0);
-  return explicitPersistedStateTitle(row.title) || generatedId && mutableState;
+  const mutableState = LEGACY_CHARACTER_STATE_FIELDS.some((field) => rowArray(row.fields?.[field]).length > 0);
+  return explicitLegacyStateTitle(row.title) || generatedId && mutableState;
 }
 function mergedRecall(base, state2) {
   if (!base && !state2) return void 0;
@@ -1406,68 +1843,56 @@ function mergePersistedCharacterDuplicates(snapshot, registry2) {
   if (key !== "state" && Object.prototype.propertyIsEnumerable.call(snapshot, "state") && Array.isArray(snapshot.state)) {
     return { snapshot, idRemap, mergedCount: 0 };
   }
-  const rows = snapshot[key] ?? [];
+  const working = structuredClone(snapshot);
   const groups = /* @__PURE__ */ new Map();
-  rows.forEach((row, index) => {
-    const name = persistedCharacterName(row.title);
-    if (!name) return;
-    groups.set(name, [...groups.get(name) ?? [], { row, index }]);
-  });
-  const replacementByIndex = /* @__PURE__ */ new Map();
-  const removedIndexes = /* @__PURE__ */ new Set();
-  let mergedCount = 0;
-  for (const group of groups.values()) {
-    if (group.length !== 2) continue;
-    const bases = group.filter(({ row }) => hasPersistedBaseSignal(row));
-    const states = group.filter(({ row }) => !hasPersistedBaseSignal(row) && hasPersistedStateSignal(row));
-    if (bases.length !== 1 || states.length !== 1) continue;
-    const baseEntry = bases[0];
-    const stateEntry = states[0];
-    if (baseEntry.row.id === stateEntry.row.id) continue;
-    const base = baseEntry.row;
-    const state2 = stateEntry.row;
-    const baseFields = structuredClone(base.fields ?? {});
-    const stateFields = state2.fields ?? {};
-    const fields = { ...baseFields };
-    for (const field of PERSISTED_CHARACTER_STATE_FIELDS) {
-      if (Object.prototype.hasOwnProperty.call(stateFields, field)) fields[field] = structuredClone(stateFields[field]);
-    }
-    for (const field of PERSISTED_CHARACTER_SHARED_FIELDS) {
-      fields[field] = [.../* @__PURE__ */ new Set([...rowArray(baseFields[field]), ...rowArray(stateFields[field])])];
-    }
-    for (const [field, value2] of Object.entries(stateFields)) {
-      if (field === "baseContent" || field === "solidifiedHistory" || PERSISTED_CHARACTER_STATE_FIELDS.includes(field) || PERSISTED_CHARACTER_SHARED_FIELDS.includes(field)) continue;
-      const current = fields[field];
-      if (Array.isArray(value2)) fields[field] = [.../* @__PURE__ */ new Set([...rowArray(current), ...rowArray(value2)])];
-      else if (!safeText(current, 4e3).trim() && safeText(value2, 4e3).trim()) fields[field] = structuredClone(value2);
-    }
-    const merged = {
-      ...structuredClone(base),
-      id: base.id,
-      title: base.title,
-      content: state2.content || base.content,
-      status: state2.status || base.status,
-      updatedAt: state2.updatedAt || base.updatedAt,
-      keywords: [.../* @__PURE__ */ new Set([...base.keywords ?? [], ...state2.keywords ?? []])],
-      factIds: [.../* @__PURE__ */ new Set([...base.factIds ?? [], ...state2.factIds ?? []])],
-      eventId: state2.eventId || base.eventId,
-      eventIds: [.../* @__PURE__ */ new Set([...base.eventIds ?? (base.eventId ? [base.eventId] : []), ...state2.eventIds ?? (state2.eventId ? [state2.eventId] : [])])],
-      recall: mergedRecall(base.recall, state2.recall),
-      lifecycle: state2.lifecycle ? structuredClone(state2.lifecycle) : structuredClone(base.lifecycle),
-      source: base.source,
-      locked: base.locked,
-      lockMode: base.lockMode,
-      fields
-    };
-    replacementByIndex.set(baseEntry.index, merged);
-    removedIndexes.add(stateEntry.index);
-    idRemap.set(state2.id, base.id);
-    mergedCount += 1;
+  for (const row of working[key] ?? []) {
+    const displayTitle = legacyCharacterTitle(row.title);
+    const token = identityTitle(displayTitle);
+    if (!token) continue;
+    groups.set(token, [...groups.get(token) ?? [], row]);
   }
-  if (!mergedCount) return { snapshot, idRemap, mergedCount };
-  snapshot[key] = rows.map((row, index) => replacementByIndex.get(index) ?? row).filter((_row, index) => !removedIndexes.has(index));
-  rewriteObjectReferences(snapshot, idRemap);
-  return { snapshot: attachLegacyAliases(snapshot, tables2), idRemap, mergedCount };
+  for (const rows of groups.values()) {
+    if (rows.length < 2) continue;
+    const protectedRows = rows.filter(legacyBaseSignal);
+    const canonical = protectedRows.find((row) => row.locked || row.lockMode === "all") ?? protectedRows[0] ?? rows[0];
+    const title = legacyCharacterTitle(canonical.title) || canonical.title;
+    const stateRows2 = rows.filter(legacyStateSignal);
+    const freshestState = [...stateRows2].sort((left, right) => {
+      const time = String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+      return time || String(right.id || "").localeCompare(String(left.id || ""));
+    })[0];
+    if (freshestState) {
+      canonical.content = freshestState.content || canonical.content;
+      canonical.status = freshestState.status || canonical.status;
+      canonical.updatedAt = freshestState.updatedAt || canonical.updatedAt;
+      canonical.lifecycle = structuredClone(freshestState.lifecycle ?? canonical.lifecycle);
+      canonical.eventId = freshestState.eventId || canonical.eventId;
+    }
+    const suppliedStateFields = /* @__PURE__ */ new Set();
+    for (const row of stateRows2) {
+      for (const field of LEGACY_CHARACTER_STATE_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(row.fields ?? {}, field)) suppliedStateFields.add(field);
+      }
+    }
+    for (const row of protectedRows) {
+      if (!suppliedStateFields.size) continue;
+      row.fields ||= {};
+      for (const field of suppliedStateFields) delete row.fields[field];
+    }
+    for (const row of rows) {
+      const originalTitle = safeText(row.title, 240).trim();
+      row.title = title;
+      if (originalTitle && identityTitle(originalTitle) !== identityTitle(title)) {
+        row.keywords = normalizeKeywords([...row.keywords ?? [], originalTitle]);
+      }
+    }
+  }
+  const result = mergeDuplicateStateRows(working, tables2, /* @__PURE__ */ new Set([key]));
+  return {
+    snapshot: attachLegacyAliases(result.snapshot, tables2),
+    idRemap: result.idRemap,
+    mergedCount: result.mergedCount
+  };
 }
 function rewriteObjectReferences(snapshot, idRemap) {
   if (!idRemap.size) return snapshot;
@@ -1505,6 +1930,9 @@ function mergeRowsByIdentity(existing, incoming) {
 }
 function preserveStableObjectIds(previous, next, registry2) {
   const tables2 = registryOrDefault(registry2);
+  const target = next;
+  previous = dedupeStrongStateRows(previous, tables2);
+  next = dedupeStrongStateRows(next, tables2);
   const idRemap = /* @__PURE__ */ new Map();
   for (const table of tables2) {
     const oldRows = previous[table.key] ?? [];
@@ -1580,7 +2008,10 @@ function preserveStableObjectIds(previous, next, registry2) {
     next[table.key] = [...merged.values()];
   }
   rewriteObjectReferences(next, idRemap);
-  return attachLegacyAliases(next, tables2);
+  const result = dedupeStrongStateRows(next, tables2);
+  for (const key of Object.keys(target)) delete target[key];
+  for (const [key, rows] of Object.entries(result)) target[key] = rows;
+  return attachLegacyAliases(target, tables2);
 }
 function regionStateText(row) {
   const fields = row.fields ?? {};
@@ -1623,15 +2054,48 @@ function upsertManualRow(snapshot, tableKey, row, registry2) {
   const tables2 = registryOrDefault(registry2);
   const next = normalizeSnapshot(snapshot, snapshot, tables2);
   next[tableKey] ||= [];
-  const index = next[tableKey].findIndex((item) => item.id === row.id);
-  const normalized = normalizeRow({ ...row, source: "manual", locked: row.locked ?? false, updatedAt: nowIso() }, tableKey, index >= 0 ? index : next[tableKey].length, index >= 0 ? next[tableKey][index] : void 0, tables2);
-  if (index >= 0) next[tableKey][index] = normalized;
+  const idIndex = next[tableKey].findIndex((item) => item.id === row.id);
+  const titleToken = identityTitle(safeText(row.title, 240));
+  const titleIndex = titleToken ? next[tableKey].findIndex((item, index) => index !== idIndex && identityTitle(item.title) === titleToken) : -1;
+  const targetIndex = titleIndex >= 0 ? titleIndex : idIndex;
+  const target = targetIndex >= 0 ? next[tableKey][targetIndex] : void 0;
+  const edited = idIndex >= 0 ? next[tableKey][idIndex] : void 0;
+  const fields = {
+    ...target?.fields ?? {},
+    ...edited?.fields ?? {},
+    ...row.fields ?? {}
+  };
+  const normalized = normalizeRow({
+    ...target,
+    ...edited,
+    ...row,
+    id: target?.id || edited?.id || row.id,
+    keywords: [.../* @__PURE__ */ new Set([...target?.keywords ?? [], ...edited?.keywords ?? [], ...row.keywords ?? []])],
+    factIds: [.../* @__PURE__ */ new Set([...target?.factIds ?? [], ...edited?.factIds ?? [], ...row.factIds ?? []])],
+    eventIds: [.../* @__PURE__ */ new Set([
+      ...target?.eventIds ?? (target?.eventId ? [target.eventId] : []),
+      ...edited?.eventIds ?? (edited?.eventId ? [edited.eventId] : []),
+      ...row.eventIds ?? (row.eventId ? [row.eventId] : [])
+    ])],
+    fields,
+    source: "manual",
+    locked: row.locked ?? edited?.locked ?? target?.locked ?? false,
+    updatedAt: nowIso()
+  }, tableKey, targetIndex >= 0 ? targetIndex : next[tableKey].length, target, tables2);
+  if (targetIndex >= 0) next[tableKey][targetIndex] = normalized;
   else next[tableKey].push(normalized);
-  return next;
+  if (idIndex >= 0 && idIndex !== targetIndex) {
+    const removedId = edited?.id;
+    next[tableKey].splice(idIndex, 1);
+    if (removedId && removedId !== normalized.id) rewriteObjectReferences(next, /* @__PURE__ */ new Map([[removedId, normalized.id]]));
+  }
+  return dedupeStrongStateRows(next, tables2);
 }
 function deleteRow(snapshot, tableKey, rowId, registry2) {
+  const rawTitle = (snapshot[tableKey] ?? []).find((row) => row.id === rowId)?.title;
   const next = normalizeSnapshot(snapshot, snapshot, registry2);
-  next[tableKey] = (next[tableKey] ?? []).filter((row) => row.id !== rowId);
+  const titleToken = identityTitle(rawTitle || "");
+  next[tableKey] = (next[tableKey] ?? []).filter((row) => row.id !== rowId && (!titleToken || identityTitle(row.title) !== titleToken));
   return next;
 }
 function relevanceText(row) {
@@ -1664,7 +2128,7 @@ function emptyChatState(chatKey) {
     smallSummaries: [],
     largeSummaries: [],
     lastSyncStatus: "idle",
-    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false },
+    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false },
     updatedAt: nowIso()
   };
 }
@@ -1747,6 +2211,45 @@ function normalizeLegacySyncControlState(state2) {
   delete state2.lastSyncError;
   return true;
 }
+function aliasMapFrom(value2) {
+  if (!value2 || typeof value2 !== "object" || Array.isArray(value2)) return /* @__PURE__ */ new Map();
+  return new Map(
+    Object.entries(value2).map(([oldId, stableId]) => [String(oldId).trim(), String(stableId ?? "").trim()]).filter(([oldId, stableId]) => Boolean(oldId && stableId && oldId !== stableId))
+  );
+}
+function resolveIdAlias(value2, aliases2) {
+  let current = String(value2 || "").trim();
+  const seen = /* @__PURE__ */ new Set();
+  while (current && aliases2.has(current) && !seen.has(current)) {
+    seen.add(current);
+    current = String(aliases2.get(current) || "").trim() || current;
+  }
+  return current;
+}
+function flattenAliasMap(aliases2) {
+  const flattened = /* @__PURE__ */ new Map();
+  for (const oldId of aliases2.keys()) {
+    const stableId = resolveIdAlias(oldId, aliases2);
+    if (oldId && stableId && oldId !== stableId) flattened.set(oldId, stableId);
+  }
+  return flattened;
+}
+function applyObjectIdAliases(snapshot, aliases2, registry2) {
+  if (!aliases2.size) return false;
+  aliases2 = flattenAliasMap(aliases2);
+  let changed = false;
+  for (const table of registry2) {
+    for (const row of snapshot[table.key] ?? []) {
+      const stableId = resolveIdAlias(row.id, aliases2);
+      if (stableId && stableId !== row.id) {
+        row.id = stableId;
+        changed = true;
+      }
+    }
+  }
+  rewriteObjectReferences(snapshot, aliases2);
+  return changed;
+}
 function migrateChatState(raw, chatKey) {
   const state2 = raw && raw.chatKey === chatKey ? cloneChatState(raw) : emptyChatState(chatKey);
   const metadataBefore = JSON.stringify(raw ?? null);
@@ -1759,6 +2262,7 @@ function migrateChatState(raw, chatKey) {
   const needsRegionAllocationMigration = state2.migration?.regionAllocationV28 !== true;
   const needsCharacterMergeMigration = state2.migration?.characterMergeV29 !== true;
   const needsPersistedCharacterMergeMigration = state2.migration?.persistedCharacterMergeV30 !== true;
+  const needsUniqueObjectNamesMigration = state2.migration?.uniqueObjectNamesV31 !== true;
   const needsFullSnapshotMigration = needsViewMigration || needsObjectViewMigration || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
   let artifactViewsChanged = false;
   state2.schemaVersion = CURRENT_SCHEMA_VERSION;
@@ -1771,13 +2275,17 @@ function migrateChatState(raw, chatKey) {
   const registry2 = getSettings().tableRegistry;
   let previousMigratedSnapshot;
   let persistedCharactersChanged = false;
+  let uniqueObjectNamesChanged = false;
+  const uniqueNameAliases = /* @__PURE__ */ new Map();
+  const canonicalIdsByTableTitle = /* @__PURE__ */ new Map();
   for (const message of getChat()) {
     const artifact = message?.extra?.[MODULE_NAME];
     if (!artifact || artifact.chatKey !== chatKey) continue;
-    if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration) && artifact.snapshot) {
+    if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration || needsUniqueObjectNamesMigration) && artifact.snapshot) {
       const before = JSON.stringify({
         snapshot: artifact.snapshot,
         aliases: artifact.persistedCharacterIdAliasesV30,
+        uniqueAliases: artifact.uniqueObjectIdAliasesV31,
         sync: artifact.stages?.sync,
         lorebookEntryIds: artifact.lorebookEntryIds
       });
@@ -1812,12 +2320,70 @@ function migrateChatState(raw, chatKey) {
           delete artifact.lorebookEntryIds;
         }
       }
+      if (needsUniqueObjectNamesMigration) {
+        const savedAliases = aliasMapFrom(artifact.uniqueObjectIdAliasesV31);
+        if (savedAliases.size) {
+          applyObjectIdAliases(migrated, savedAliases, registry2);
+          for (const [oldId, stableId] of savedAliases) uniqueNameAliases.set(oldId, stableId);
+          uniqueObjectNamesChanged = true;
+        }
+        const unique2 = mergeDuplicateStateRows(migrated, registry2);
+        migrated = unique2.snapshot;
+        const artifactAliases = new Map(savedAliases);
+        for (const [oldId, stableId] of unique2.idRemap) artifactAliases.set(oldId, stableId);
+        const crossSnapshotAliases = /* @__PURE__ */ new Map();
+        for (const table of registry2) {
+          const rows = migrated[table.key] ?? [];
+          const occupied = new Map(rows.map((row) => [row.id, row]));
+          for (const row of rows) {
+            const titleToken = canonicalObjectTitle(row.title);
+            if (!titleToken) continue;
+            const identityKey = `${table.key}\0${titleToken}`;
+            const stableId = canonicalIdsByTableTitle.get(identityKey);
+            if (!stableId) {
+              canonicalIdsByTableTitle.set(identityKey, row.id);
+              continue;
+            }
+            if (stableId === row.id) continue;
+            const collision = occupied.get(stableId);
+            if (collision && collision !== row) {
+              throw new Error(`\u5BF9\u8C61\u552F\u4E00\u5316\u8FC1\u79FB\u68C0\u6D4B\u5230 ID \u51B2\u7A81\uFF1A${table.key}/${row.title}/${stableId}`);
+            }
+            const oldId = row.id;
+            row.id = stableId;
+            occupied.delete(oldId);
+            occupied.set(stableId, row);
+            crossSnapshotAliases.set(oldId, stableId);
+            artifactAliases.set(oldId, stableId);
+          }
+        }
+        if (crossSnapshotAliases.size) rewriteObjectReferences(migrated, crossSnapshotAliases);
+        const flattenedAliases = flattenAliasMap(artifactAliases);
+        if (flattenedAliases.size) {
+          artifact.uniqueObjectIdAliasesV31 = Object.fromEntries(flattenedAliases);
+          for (const [oldId, stableId] of flattenedAliases) uniqueNameAliases.set(oldId, stableId);
+        }
+        if (unique2.mergedCount || crossSnapshotAliases.size || savedAliases.size) {
+          uniqueObjectNamesChanged = true;
+          if (artifact.stages?.sync) {
+            artifact.stages.sync = {
+              ...artifact.stages.sync,
+              status: "idle",
+              error: void 0,
+              startedAt: void 0,
+              finishedAt: void 0
+            };
+          }
+          delete artifact.lorebookEntryIds;
+        }
+      }
       if (needsFullSnapshotMigration) migrated = enforceObjectViewAllocation(migrated, registry2);
       artifact.snapshot = migrated;
       if (needsFullSnapshotMigration) previousMigratedSnapshot = migrated;
       const after = JSON.stringify({
         snapshot: artifact.snapshot,
         aliases: artifact.persistedCharacterIdAliasesV30,
+        uniqueAliases: artifact.uniqueObjectIdAliasesV31,
         sync: artifact.stages?.sync,
         lorebookEntryIds: artifact.lorebookEntryIds
       });
@@ -1829,9 +2395,16 @@ function migrateChatState(raw, chatKey) {
     const incoming = normalizeInternalFacts(artifact.factPackage.facts, artifact.messageKey);
     facts = mergeInternalFacts(facts, incoming, artifact.factPackage.facts);
   }
+  if (state2.focusObjectId) {
+    const stableFocusId = resolveIdAlias(state2.focusObjectId, flattenAliasMap(uniqueNameAliases));
+    if (stableFocusId && stableFocusId !== state2.focusObjectId) {
+      state2.focusObjectId = stableFocusId;
+      uniqueObjectNamesChanged = true;
+    }
+  }
   validateCurrentFocus(state2, registry2);
   normalizeLegacySyncControlState(state2);
-  if (persistedCharactersChanged) {
+  if (persistedCharactersChanged || uniqueObjectNamesChanged) {
     state2.lastSyncStatus = "idle";
     state2.lastSyncError = void 0;
   }
@@ -1848,7 +2421,8 @@ function migrateChatState(raw, chatKey) {
     summaryVersionsV27: true,
     regionAllocationV28: true,
     characterMergeV29: true,
-    persistedCharacterMergeV30: true
+    persistedCharacterMergeV30: true,
+    uniqueObjectNamesV31: true
   };
   state2.updatedAt ||= nowIso();
   return {
@@ -1868,7 +2442,8 @@ var REQUIRED_MIGRATIONS = [
   "summaryVersionsV27",
   "regionAllocationV28",
   "characterMergeV29",
-  "persistedCharacterMergeV30"
+  "persistedCharacterMergeV30",
+  "uniqueObjectNamesV31"
 ];
 function currentStateStructure(raw, chatKey) {
   if (!raw || typeof raw !== "object") return false;
@@ -1913,6 +2488,8 @@ async function readChatState(chatKey) {
       snapshot: artifact.snapshot,
       aliases: artifact.persistedCharacterIdAliasesV30,
       hadAliases: Object.prototype.hasOwnProperty.call(artifact, "persistedCharacterIdAliasesV30"),
+      uniqueAliases: artifact.uniqueObjectIdAliasesV31,
+      hadUniqueAliases: Object.prototype.hasOwnProperty.call(artifact, "uniqueObjectIdAliasesV31"),
       sync: artifact.stages?.sync,
       hadSync: Boolean(artifact.stages && Object.prototype.hasOwnProperty.call(artifact.stages, "sync")),
       lorebookEntryIds: artifact.lorebookEntryIds,
@@ -1937,6 +2514,8 @@ async function readChatState(chatKey) {
         backup.artifact.snapshot = backup.snapshot;
         if (backup.hadAliases) backup.artifact.persistedCharacterIdAliasesV30 = backup.aliases;
         else delete backup.artifact.persistedCharacterIdAliasesV30;
+        if (backup.hadUniqueAliases) backup.artifact.uniqueObjectIdAliasesV31 = backup.uniqueAliases;
+        else delete backup.artifact.uniqueObjectIdAliasesV31;
         if (backup.artifact.stages) {
           if (backup.hadSync) backup.artifact.stages.sync = backup.sync;
           else delete backup.artifact.stages.sync;
@@ -2635,89 +3214,6 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 
 \u3010\u5F85\u5BA1\u6838AI\u6B63\u6587\u3011
 ${assistantText}`;
-}
-
-// src/domain/fixed-text.ts
-function normalizedMarker(value2) {
-  return value2.trim().toUpperCase();
-}
-function appendField2(block, key, value2) {
-  const current = block.fields.get(key) ?? [];
-  block.fields.set(key, [...current, value2]);
-}
-function appendContinuation(block, key, value2) {
-  const current = block.fields.get(key) ?? [];
-  if (!current.length) return;
-  const next = [...current];
-  next[next.length - 1] = `${next[next.length - 1]}
-${value2}`.trim();
-  block.fields.set(key, next);
-}
-function parseFixedTextBlocks(raw, markers) {
-  const source = safeText(raw, 24e4).replace(/^\uFEFF/, "");
-  const byStart = new Map(markers.map((item) => [normalizedMarker(item.start), item]));
-  const byEnd = new Map(markers.map((item) => [normalizedMarker(item.end), item]));
-  const blocks = [];
-  let current = null;
-  let definition = null;
-  let lastKey = "";
-  let rawLines = [];
-  const flush = () => {
-    if (!current) return;
-    if (definition?.rawBody) current.raw = rawLines.join("\n").trim();
-    blocks.push(current);
-    current = null;
-    definition = null;
-    lastKey = "";
-    rawLines = [];
-  };
-  source.split(/\r?\n/).forEach((sourceLine, index) => {
-    const trimmed = sourceLine.trim();
-    const markerKey = normalizedMarker(trimmed);
-    const start = byStart.get(markerKey);
-    if (start) {
-      flush();
-      definition = start;
-      current = { kind: start.kind, fields: /* @__PURE__ */ new Map(), raw: "", line: index + 1 };
-      return;
-    }
-    const end = byEnd.get(markerKey);
-    if (end) {
-      if (current?.kind === end.kind) flush();
-      return;
-    }
-    if (!current || !definition) return;
-    if (definition.rawBody) {
-      rawLines.push(sourceLine);
-      return;
-    }
-    if (!trimmed || /^```/.test(trimmed)) return;
-    const match = sourceLine.match(/^\s*([^=＝:：]+?)\s*[=＝:：]\s*(.*)$/);
-    if (match) {
-      lastKey = match[1].trim();
-      if (lastKey) appendField2(current, lastKey, match[2].trim());
-      return;
-    }
-    if (lastKey) appendContinuation(current, lastKey, sourceLine.trim());
-  });
-  flush();
-  return blocks;
-}
-function fixedTextValues(block, ...keys) {
-  const output = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const key of keys) {
-    for (const raw of block.fields.get(key) ?? []) {
-      const value2 = safeText(raw, 12e3).trim();
-      if (!value2 || seen.has(value2)) continue;
-      seen.add(value2);
-      output.push(value2);
-    }
-  }
-  return output;
-}
-function fixedTextValue(block, ...keys) {
-  return fixedTextValues(block, ...keys).at(-1) ?? "";
 }
 
 // src/domain/audit-text.ts
@@ -3442,7 +3938,7 @@ function isAudienceRow(row) {
   return isPurePassiveObserverText(rowSearchText(row));
 }
 function normalizedName2(value2) {
-  return String(value2 || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+  return canonicalObjectTitle(value2);
 }
 function aliases(title) {
   const raw = String(title || "").trim();
@@ -3450,7 +3946,9 @@ function aliases(title) {
 }
 function filterSnapshotForLorebook(snapshot, customRegistry) {
   const tables2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
-  const next = filterPassiveObservers(enforceObjectViewAllocation(normalizeSnapshot(snapshot, snapshot, tables2), tables2), tables2);
+  const normalized = normalizeSnapshot(snapshot, snapshot, tables2);
+  const deduped = dedupeStrongStateRows(normalized, tables2);
+  const next = filterPassiveObservers(enforceObjectViewAllocation(deduped, tables2), tables2);
   const stateKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key;
   const eventKey = tableByRole(tables2, "events", false)?.key;
   const relationKey = tableByRole(tables2, "relationships", false)?.key;
@@ -3533,9 +4031,10 @@ function tableDocuments(snapshot, options) {
     for (const row of rows) {
       const mode = recallModeFor(table.role, row, options, currentSpacetimeId);
       const trigger = defaultTrigger(row);
+      const titleToken = normalizedName2(row.title) || row.id;
       docs.push(makeDocument(
         `view:${table.key}:${row.id}`,
-        `view:${table.key}:${normalizedName2(row.title) || row.id}`,
+        `view:${table.key}:${titleToken}`,
         `MA\uFF5C${table.name}\uFF5C${row.title}`,
         rowContent(table, row),
         `view:${table.role}`,
@@ -3869,7 +4368,7 @@ async function desiredSpecs(artifact, committedState) {
       focusObjectId: state2.focusObjectId
     }
   );
-  const desired = new Map(documents.map((document2) => [document2.key, document2]));
+  const desired = normalizeDesiredLorebookSpecs(new Map(documents.map((document2) => [document2.key, document2])));
   return { desired };
 }
 async function legacyCleanupScope(artifact) {
@@ -3899,7 +4398,66 @@ function appendPair(index, key, pair) {
   if (!key) return;
   index.set(key, [...index.get(key) ?? [], pair]);
 }
-function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBook = false, _cleanup = {}) {
+function uniqueSpecStrings(values2, limit = 120) {
+  return [...new Set(values2.flatMap((value2) => Array.isArray(value2) ? value2 : [value2]).map((value2) => String(value2 ?? "").trim()).filter(Boolean))].slice(0, limit);
+}
+function recallModePriority(value2) {
+  return value2 === "constant" ? 0 : value2 === "trigger" ? 1 : 2;
+}
+function mergeDesiredLorebookSpec(left, right) {
+  const rightIsNewer = String(right?.updatedAt || "") > String(left?.updatedAt || "");
+  const primary = rightIsNewer ? right : left;
+  const secondary = primary === left ? right : left;
+  const mode = recallModePriority(left?.recallMode) <= recallModePriority(right?.recallMode) ? left?.recallMode : right?.recallMode;
+  return {
+    ...secondary,
+    ...primary,
+    // 正文是对象当前完整视图，不能把两份完整条目逐行拼接成重复切面。
+    // 事实与事件通过下方 ID 集合合并；正文采用较新的完整视图。
+    content: String(primary?.content || secondary?.content || "").trim(),
+    recallMode: mode,
+    constant: mode === "constant",
+    vectorized: mode === "vector",
+    trigger: {
+      any: uniqueSpecStrings([left?.trigger?.any, right?.trigger?.any], 48),
+      all: uniqueSpecStrings([left?.trigger?.all, right?.trigger?.all], 32),
+      exclude: uniqueSpecStrings([left?.trigger?.exclude, right?.trigger?.exclude], 32)
+    },
+    factIds: uniqueSpecStrings([left?.factIds, right?.factIds], 160),
+    eventIds: uniqueSpecStrings([left?.eventIds, right?.eventIds], 120),
+    updatedAt: String(primary?.updatedAt || secondary?.updatedAt || "")
+  };
+}
+function normalizeDesiredLorebookSpecs(desired) {
+  const output = new Map([...desired.entries()].map(([key, spec]) => [key, structuredClone(spec)]));
+  const groups = /* @__PURE__ */ new Map();
+  for (const [key, spec] of output) {
+    const nameIdentity = mirrorAbyssManagedNameIdentity(spec?.comment);
+    if (!nameIdentity) continue;
+    groups.set(nameIdentity, [...groups.get(nameIdentity) ?? [], { key, spec }]);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ordered = [...group].sort((left, right) => {
+      const mode = recallModePriority(left.spec?.recallMode) - recallModePriority(right.spec?.recallMode);
+      if (mode) return mode;
+      const time = String(right.spec?.updatedAt || "").localeCompare(String(left.spec?.updatedAt || ""));
+      return time || left.key.localeCompare(right.key);
+    });
+    const survivor = ordered[0];
+    let merged = structuredClone(survivor.spec);
+    for (const item of ordered.slice(1)) {
+      merged = mergeDesiredLorebookSpec(merged, item.spec);
+      output.delete(item.key);
+    }
+    merged.comment = survivor.spec.comment;
+    merged.logicalKey = String(survivor.spec.logicalKey || survivor.key);
+    output.set(survivor.key, merged);
+  }
+  return output;
+}
+function reconcileLorebookEntries(data, desired, chatKey, wi, name, dedicatedBook = false, _cleanup = {}) {
+  desired = normalizeDesiredLorebookSpecs(desired);
   data.entries ||= {};
   const pairs = [];
   const currentByKey = /* @__PURE__ */ new Map();
@@ -3907,7 +4465,10 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
   const currentByLogical = /* @__PURE__ */ new Map();
   for (const [uid, entry] of Object.entries(data.entries)) {
     const info = managedInfo(entry);
-    const currentScope = Boolean(info?.managed && info.chatKey === chatKey);
+    const ownedByCurrentChat = Boolean(info?.managed && info.chatKey === chatKey);
+    const generated = isMirrorAbyssGeneratedEntry(entry);
+    const ownerUnknown = generated && (!info?.managed || !info?.chatKey);
+    const currentScope = ownedByCurrentChat || Boolean(dedicatedBook && ownerUnknown);
     if (!currentScope) continue;
     const pair = {
       uid,
@@ -3919,7 +4480,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
       commentIdentity: managedCommentIdentity(entry.comment),
       exactIdentity: mirrorAbyssExactIdentity(entry.comment, entry.content),
       currentScope,
-      generated: isMirrorAbyssGeneratedEntry(entry)
+      generated
     };
     pairs.push(pair);
     appendPair(currentByKey, pair.key, pair);
@@ -3928,6 +4489,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
   }
   let changed = false;
   let created = 0;
+  let adoptedLegacy = 0;
   let removed = 0;
   const claimed = /* @__PURE__ */ new Set();
   const duplicateManaged = /* @__PURE__ */ new Set();
@@ -3994,6 +4556,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
   }
   for (const item of desiredItems) {
     let pair = item.pair;
+    const adoptedExistingLegacy = Boolean(pair && (!pair.info?.managed || !pair.info?.chatKey));
     let entry = pair?.entry;
     if (!entry) {
       entry = wi.createWorldInfoEntry(name, data);
@@ -4016,6 +4579,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
       changed = true;
     }
     claimed.add(pair.uid);
+    if (adoptedExistingLegacy) adoptedLegacy += 1;
     const before = JSON.stringify(entry);
     applyEntry(entry, chatKey, item.key, item.spec, wi);
     if (before !== JSON.stringify(entry)) changed = true;
@@ -4036,9 +4600,10 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, _dedicatedBo
     removed += 1;
     changed = true;
   }
-  return { changed, entryIds, created, adoptedLegacy: 0, removed };
+  return { changed, entryIds, created, adoptedLegacy, removed };
 }
 function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, dedicatedBook = false, cleanup = {}) {
+  desired = normalizeDesiredLorebookSpecs(desired);
   data.entries ||= {};
   const pairs = [];
   const currentByKey = /* @__PURE__ */ new Map();
@@ -4820,7 +5385,7 @@ ${groups.map(largeEventSection).join("\n\n====================\n\n")}
 
 // src/domain/summary-text.ts
 var MARKERS2 = [{ kind: "summary", start: "<MA_SUMMARY>", end: "</MA_SUMMARY>" }];
-function normalizeKey(value2) {
+function normalizeKey2(value2) {
   const raw = value2.normalize("NFKC").trim();
   const aliases2 = {
     "\u69FD\u4F4D": "slot",
@@ -4836,7 +5401,7 @@ function normalizeKey(value2) {
 function normalizedBlock(block) {
   const fields = /* @__PURE__ */ new Map();
   for (const [key, values2] of block.fields.entries()) {
-    const target = normalizeKey(key);
+    const target = normalizeKey2(key);
     fields.set(target, [...fields.get(target) ?? [], ...values2]);
   }
   return { ...block, fields };
@@ -5318,315 +5883,6 @@ function normalizeFactPackage(value2, sourceMessageKey) {
   };
 }
 
-// src/domain/state-text.ts
-var STATE_TEXT_MARKERS = {
-  turnStart: "<MA_TURN>",
-  turnEnd: "</MA_TURN>",
-  factStart: "<MA_FACT>",
-  factEnd: "</MA_FACT>",
-  rowStart: "<MA_ROW>",
-  rowEnd: "</MA_ROW>"
-};
-var CORE_ROW_KEYS = /* @__PURE__ */ new Set(["table", "object", "summary", "content", "status", "keyword"]);
-var FORBIDDEN_STATE_FIELDS = /* @__PURE__ */ new Set(["id", "title", "content", "keywords", "status", "recentHistory", "solidifiedHistory", "factIds", "eventId", "eventIds", "recall"]);
-var FACT_OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
-var FACT_CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
-var KEY_ALIASES = {
-  "\u8868\u683C": "table",
-  "\u5BF9\u8C61": "object",
-  "\u540D\u79F0": "object",
-  "\u6458\u8981": "summary",
-  "\u5185\u5BB9": "content",
-  "\u72B6\u6001": "status",
-  "\u5173\u952E\u8BCD": "keyword",
-  "\u4E8B\u4EF6": "event",
-  "\u6807\u9898": "title",
-  "\u7C7B\u578B": "type",
-  "\u64CD\u4F5C": "operation",
-  "\u7F6E\u4FE1\u5EA6": "confidence",
-  "\u5DF2\u53D1\u751F": "occurred",
-  "\u672A\u51B3": "unresolved",
-  "\u5F00\u59CB\u65F6\u95F4": "time_start",
-  "\u7ED3\u675F\u65F6\u95F4": "time_end",
-  "\u65F6\u95F4\u6807\u7B7E": "time_label",
-  "\u5173\u8054\u5BF9\u8C61": "related",
-  "\u5B57\u6BB5": "field",
-  "\u751F\u547D\u5468\u671F": "lifecycle"
-};
-function identity(value2) {
-  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, "");
-}
-function unique(values2, limit = 40, chars = 800) {
-  return [...new Set(values2.map((item) => safeText(item, chars).trim()).filter(Boolean))].slice(0, limit);
-}
-function normalizeKey2(raw) {
-  const trimmed = raw.trim();
-  const alias = KEY_ALIASES[trimmed];
-  if (alias) return alias;
-  if (trimmed.startsWith("\u5B57\u6BB5.")) return `field.${trimmed.slice(3).trim()}`;
-  if (trimmed.startsWith("\u751F\u547D\u5468\u671F.")) return `lifecycle.${trimmed.slice(5).trim()}`;
-  return trimmed;
-}
-function addField(block, key, value2) {
-  const normalized = normalizeKey2(key);
-  if (!normalized) return;
-  block.fields.set(normalized, [...block.fields.get(normalized) ?? [], value2.trim()]);
-}
-function fieldValues(block, ...keys) {
-  return unique(keys.flatMap((key) => block.fields.get(key) ?? []));
-}
-function fieldValue(block, ...keys) {
-  return fieldValues(block, ...keys).at(-1) ?? "";
-}
-var STATE_BLOCK_MARKERS = [
-  { kind: "turn", start: STATE_TEXT_MARKERS.turnStart, end: STATE_TEXT_MARKERS.turnEnd },
-  { kind: "fact", start: STATE_TEXT_MARKERS.factStart, end: STATE_TEXT_MARKERS.factEnd },
-  { kind: "row", start: STATE_TEXT_MARKERS.rowStart, end: STATE_TEXT_MARKERS.rowEnd },
-  { kind: "turn", start: "\u3010\u56DE\u5408\u3011", end: "\u3010\u56DE\u5408\u7ED3\u675F\u3011" },
-  { kind: "fact", start: "\u3010\u4E8B\u5B9E\u3011", end: "\u3010\u4E8B\u5B9E\u7ED3\u675F\u3011" },
-  { kind: "row", start: "\u3010\u6761\u76EE\u3011", end: "\u3010\u6761\u76EE\u7ED3\u675F\u3011" }
-];
-function parseStateTextBlocks(raw) {
-  const parsed = parseFixedTextBlocks(raw, STATE_BLOCK_MARKERS);
-  if (!parsed.length) throw new Error("\u72B6\u6001\u6A21\u578B\u672A\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u5757\uFF08\u7F3A\u5C11 <MA_TURN>/<MA_FACT>/<MA_ROW>\uFF09");
-  return parsed.map((source) => {
-    const block = { ...source, kind: source.kind, fields: /* @__PURE__ */ new Map() };
-    for (const [key, values2] of source.fields.entries()) for (const value2 of values2) addField(block, key, value2);
-    return block;
-  });
-}
-function rowTokens(row) {
-  return new Set([row.title, ...row.keywords ?? []].map(identity).filter(Boolean));
-}
-function intersection(left, right) {
-  const rightSet = right instanceof Set ? right : new Set(right);
-  return [...left].filter((item) => rightSet.has(item));
-}
-function rowsStronglyDuplicate(left, right) {
-  if (!identity(left.title) || identity(left.title) !== identity(right.title)) return false;
-  if (intersection(left.factIds ?? [], right.factIds ?? []).length) return true;
-  const leftEvents = unique([...left.eventIds ?? [], left.eventId]);
-  const rightEvents = unique([...right.eventIds ?? [], right.eventId]);
-  if (intersection(leftEvents, rightEvents).length) return true;
-  const title = identity(left.title);
-  const leftAliases = new Set([...rowTokens(left)].filter((token) => token !== title));
-  const rightAliases = new Set([...rowTokens(right)].filter((token) => token !== title));
-  if (intersection(leftAliases, rightAliases).length) return true;
-  const leftContent = identity(left.content);
-  return Boolean(leftContent && leftContent === identity(right.content));
-}
-function mergeFieldValues(left, right) {
-  if (Array.isArray(left) || Array.isArray(right)) return unique([...Array.isArray(left) ? left : [], ...Array.isArray(right) ? right : []], 60, 1200);
-  const rightText = safeText(right, 12e3).trim();
-  return rightText || left;
-}
-function mergeRows(left, right) {
-  const protectedLeft = left.source === "manual" || left.locked || left.lockMode;
-  const protectedRight = right.source === "manual" || right.locked || right.lockMode;
-  const canonical = protectedLeft ? left : protectedRight ? right : left;
-  const secondary = canonical === left ? right : left;
-  const newer = String(right.updatedAt || "") >= String(left.updatedAt || "") ? right : left;
-  const fields = { ...canonical.fields ?? {} };
-  for (const [key, value2] of Object.entries(secondary.fields ?? {})) fields[key] = mergeFieldValues(fields[key], value2);
-  return {
-    ...canonical,
-    content: newer.content || canonical.content || secondary.content,
-    status: newer.status || canonical.status,
-    keywords: unique([...canonical.keywords ?? [], ...secondary.keywords ?? []], 24, 100),
-    fields,
-    factIds: unique([...canonical.factIds ?? [], ...secondary.factIds ?? []], 80, 160),
-    eventIds: unique([...canonical.eventIds ?? [], canonical.eventId, ...secondary.eventIds ?? [], secondary.eventId], 80, 160),
-    eventId: canonical.eventId || secondary.eventId,
-    lifecycle: canonical.lifecycle ?? secondary.lifecycle,
-    updatedAt: newer.updatedAt || canonical.updatedAt
-  };
-}
-function dedupeStrongStateRows(snapshot, registry2) {
-  const tables2 = normalizeTableRegistry(registry2);
-  const output = structuredClone(snapshot);
-  for (const table of tables2) {
-    const rows = output[table.key] ?? [];
-    const kept = [];
-    for (const row of rows) {
-      const index = kept.findIndex((candidate) => rowsStronglyDuplicate(candidate, row));
-      if (index < 0) kept.push(row);
-      else kept[index] = mergeRows(kept[index], row);
-    }
-    output[table.key] = kept;
-  }
-  return output;
-}
-function findExistingRow(tableKey, objectName, keywords, previous) {
-  const rows = previous[tableKey] ?? [];
-  const objectToken = identity(objectName);
-  const exactTitle = rows.filter((row) => identity(row.title) === objectToken);
-  if (exactTitle.length === 1) return exactTitle[0];
-  if (exactTitle.length > 1) {
-    const collapsed = exactTitle.reduce((acc, row) => rowsStronglyDuplicate(acc, row) ? mergeRows(acc, row) : acc, exactTitle[0]);
-    if (exactTitle.every((row) => row === exactTitle[0] || rowsStronglyDuplicate(exactTitle[0], row))) return collapsed;
-    throw new Error(`\u8868\u683C ${tableKey} \u4E2D\u5B58\u5728\u591A\u4E2A\u65E0\u6CD5\u81EA\u52A8\u533A\u5206\u7684\u540C\u540D\u5BF9\u8C61\uFF1A${objectName}`);
-  }
-  const wanted = new Set([objectName, ...keywords].map(identity).filter(Boolean));
-  const aliasMatches = rows.filter((row) => intersection(rowTokens(row), wanted).length > 0);
-  if (aliasMatches.length === 1) return aliasMatches[0];
-  if (aliasMatches.length > 1) throw new Error(`\u8868\u683C ${tableKey} \u4E2D\u6709\u591A\u4E2A\u6761\u76EE\u547D\u4E2D\u5BF9\u8C61\u522B\u540D\uFF1A${objectName}`);
-  return void 0;
-}
-function resolveTable(raw, active) {
-  const token = identity(raw);
-  const matches = active.filter((table) => identity(table.key) === token || identity(table.name) === token || identity(table.role) === token);
-  if (matches.length === 1) return matches[0];
-  if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u6761\u76EE\u4F7F\u7528\u4E86\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${raw || "\u7A7A"}`);
-  throw new Error(`\u56FA\u5B9A\u6587\u672C\u8868\u683C\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF1A${raw}`);
-}
-function resolveField(table, raw) {
-  const token = identity(raw);
-  const matches = table.fields.filter((field) => identity(field.key) === token || identity(field.label) === token);
-  if (matches.length === 1) return matches[0];
-  if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u672A\u6CE8\u518C\u4E8E ${table.key}\uFF1A${raw}`);
-  throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF08${table.key}\uFF09\uFF1A${raw}`);
-}
-function buildRowPatch(block, active, previous) {
-  const table = resolveTable(fieldValue(block, "table"), active);
-  const objectName = fieldValue(block, "object", "title").trim();
-  if (!objectName) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u7F3A\u5C11 object`);
-  const keywords = unique([objectName, ...fieldValues(block, "keyword")], 24, 100);
-  const existing = findExistingRow(table.key, objectName, keywords, previous);
-  const fields = {};
-  let lifecycle;
-  for (const [rawKey, values2] of block.fields.entries()) {
-    if (CORE_ROW_KEYS.has(rawKey) || rawKey === "title") continue;
-    if (rawKey.startsWith("field.")) {
-      const requested = rawKey.slice("field.".length).trim();
-      const definition = resolveField(table, requested);
-      if (FORBIDDEN_STATE_FIELDS.has(definition.key)) throw new Error(`\u72B6\u6001\u6587\u672C\u4E0D\u5141\u8BB8\u5199\u5165\u5B57\u6BB5\uFF1A${definition.key}`);
-      if (definition.type === "lifecycle") throw new Error(`\u5B57\u6BB5 ${definition.key} \u5FC5\u987B\u4F7F\u7528 lifecycle.* \u884C`);
-      const cleaned = unique(values2, definition.type === "string[]" ? 40 : 1, 1200);
-      fields[definition.key] = definition.type === "string[]" ? cleaned : cleaned.at(-1) ?? "";
-      continue;
-    }
-    if (rawKey.startsWith("lifecycle.")) {
-      const key = rawKey.slice("lifecycle.".length).trim();
-      const lifecycleField = table.fields.find((field) => field.type === "lifecycle");
-      if (!lifecycleField) throw new Error(`\u8868\u683C ${table.key} \u672A\u6CE8\u518C lifecycle \u5B57\u6BB5`);
-      if (!["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"].includes(key)) {
-        throw new Error(`\u672A\u77E5\u751F\u547D\u5468\u671F\u5B57\u6BB5\uFF1A${key}`);
-      }
-      lifecycle ||= {};
-      lifecycle[key] = ["returnConditions", "returnBlockers"].includes(key) ? unique(values2, 30, 500) : safeText(values2.at(-1), 1e3).trim();
-      continue;
-    }
-    if (!KEY_ALIASES[rawKey]) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u542B\u672A\u77E5\u5B57\u6BB5\uFF1A${rawKey}`);
-  }
-  const row = {
-    id: existing?.id || makeId(table.key),
-    title: existing?.title || objectName,
-    content: fieldValue(block, "summary", "content") || existing?.content || objectName,
-    keywords: unique([...existing?.keywords ?? [], ...keywords], 24, 100),
-    status: fieldValue(block, "status") || existing?.status || "active",
-    source: existing?.source ?? "auto",
-    locked: existing?.locked ?? false,
-    lockMode: existing?.lockMode,
-    lifecycle,
-    updatedAt: existing?.updatedAt ?? "",
-    fields
-  };
-  return { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}` };
-}
-function mergePatchRows(left, right) {
-  const fields = { ...left.fields ?? {} };
-  for (const [key, value2] of Object.entries(right.fields ?? {})) fields[key] = mergeFieldValues(fields[key], value2);
-  return {
-    ...left,
-    content: right.content || left.content,
-    status: right.status || left.status,
-    keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100),
-    fields,
-    lifecycle: right.lifecycle ?? left.lifecycle
-  };
-}
-function activeEventMatch(eventName, activeFacts) {
-  const token = identity(eventName);
-  if (!token) return void 0;
-  const matches = new Set(activeFacts.filter((fact) => {
-    const terms = [fact.eventId, fact.title, ...fact.keywords].map(identity).filter(Boolean);
-    return terms.includes(token);
-  }).map((fact) => fact.eventId));
-  return matches.size === 1 ? [...matches][0] : void 0;
-}
-function factFromBlock(block, activeFacts) {
-  const title = fieldValue(block, "title", "object").trim();
-  if (!title) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_FACT> \u7F3A\u5C11 title`);
-  const eventName = fieldValue(block, "event") || title;
-  const eventId = activeEventMatch(eventName, activeFacts) || `event_${hashText(identity(eventName) || identity(title))}`;
-  const titleToken = identity(title);
-  const previousMatches = activeFacts.filter((fact) => fact.eventId === eventId && identity(fact.title) === titleToken);
-  const factId = previousMatches.length === 1 ? previousMatches[0].factId : `fact_${hashText(`${eventId}|${titleToken}`)}`;
-  const occurred = fieldValues(block, "occurred", "content");
-  const unresolved = fieldValues(block, "unresolved");
-  const status = fieldValue(block, "status") || "active";
-  const requestedOperation = fieldValue(block, "operation");
-  const operation = FACT_OPERATIONS.has(requestedOperation) ? requestedOperation : /closed|resolved|ended|archived|结束|已解决|已关闭|已归档/i.test(status) ? "close" : previousMatches.length ? "update" : "create";
-  const requestedConfidence = fieldValue(block, "confidence");
-  const confidence = FACT_CONFIDENCE.has(requestedConfidence) ? requestedConfidence : "uncertain";
-  return {
-    fact_id: factId,
-    event_id: eventId,
-    entity_id: eventId,
-    type: fieldValue(block, "type") || "event",
-    title,
-    content: occurred.join("\uFF1B"),
-    occurred,
-    unresolved,
-    status,
-    time_range: {
-      start: fieldValue(block, "time_start"),
-      end: fieldValue(block, "time_end"),
-      label: fieldValue(block, "time_label")
-    },
-    related_entities: fieldValues(block, "related"),
-    keywords: unique([title, eventName, ...fieldValues(block, "keyword")], 24, 100),
-    operation,
-    confidence
-  };
-}
-function mergeFacts(left, right) {
-  return {
-    ...left,
-    ...right,
-    content: unique([left.content, right.content], 20, 1200).join("\uFF1B"),
-    occurred: unique([...left.occurred ?? [], ...right.occurred ?? []], 40, 1200),
-    unresolved: unique([...left.unresolved ?? [], ...right.unresolved ?? []], 40, 1200),
-    related_entities: unique([...left.related_entities ?? [], ...right.related_entities ?? []], 40, 240),
-    keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100)
-  };
-}
-function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = []) {
-  const active = enabledTables(normalizeTableRegistry(registry2));
-  const previous = dedupeStrongStateRows(previousSnapshot2, registry2);
-  const blocks = parseStateTextBlocks(raw);
-  const turnSummary = blocks.filter((block) => block.kind === "turn").map((block) => fieldValue(block, "summary", "content")).filter(Boolean).at(-1) ?? "";
-  const factsById = /* @__PURE__ */ new Map();
-  const snapshot = {};
-  const rowsByIdentity = /* @__PURE__ */ new Map();
-  for (const block of blocks) {
-    if (block.kind === "fact") {
-      const fact = factFromBlock(block, activeFacts);
-      if (!fact.occurred.length && !fact.unresolved.length) continue;
-      const id = String(fact.fact_id);
-      factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
-    }
-    if (block.kind === "row") {
-      const patch = buildRowPatch(block, active, previous);
-      const key = `${patch.table}|${patch.matchKey}`;
-      const current = rowsByIdentity.get(key);
-      rowsByIdentity.set(key, current ? { table: patch.table, row: mergePatchRows(current.row, patch.row), matchKey: patch.matchKey } : patch);
-    }
-  }
-  for (const { table, row } of rowsByIdentity.values()) (snapshot[table] ||= []).push(row);
-  return { turnSummary, facts: [...factsById.values()], snapshot };
-}
-
 // src/prompts/state.ts
 var COMMON_FIELD_KEYS = /* @__PURE__ */ new Set([
   "id",
@@ -5970,6 +6226,7 @@ function assertStateBusinessShape(parsed, active) {
     if (rows === void 0) continue;
     if (!Array.isArray(rows)) throw new Error(`\u72B6\u6001\u8868 ${table.key} \u5FC5\u987B\u662F\u6570\u7EC4`);
     const ids = /* @__PURE__ */ new Set();
+    const titles = /* @__PURE__ */ new Set();
     rows.forEach((row, index) => {
       if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
       const source = row;
@@ -5978,7 +6235,10 @@ function assertStateBusinessShape(parsed, active) {
       if (!id) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}].id \u4E0D\u80FD\u4E3A\u7A7A`);
       if (!title) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}].title \u4E0D\u80FD\u4E3A\u7A7A`);
       if (ids.has(id)) throw new Error(`\u72B6\u6001\u8868 ${table.key} \u540C\u4E00\u6B21\u8FD4\u56DE\u5305\u542B\u91CD\u590D id\uFF1A${id}`);
+      const titleToken = rowIdentityTitle(title);
+      if (titleToken && titles.has(titleToken)) throw new Error(`\u72B6\u6001\u8868 ${table.key} \u540C\u4E00\u6B21\u8FD4\u56DE\u5305\u542B\u91CD\u590D\u5BF9\u8C61\uFF1A${title}`);
       ids.add(id);
+      if (titleToken) titles.add(titleToken);
     });
   }
 }
@@ -5998,21 +6258,18 @@ function cloneProtectedRow(row) {
   return structuredClone(row);
 }
 function rowIdentityTitle(value2) {
-  return String(value2 || "").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+  return canonicalObjectTitle(value2);
 }
 function preserveProtectedRows(previous, next, customRegistry) {
   const registry2 = normalizeTableRegistry(customRegistry);
+  previous = dedupeStrongStateRows(previous, registry2);
+  next = dedupeStrongStateRows(next, registry2);
   const mutableFields = /* @__PURE__ */ new Set(["currentFacts", "currentStates", "recentHistory", "relationshipStates", "abilityStates", "relatedObjects", "relatedEvents", "migrationStatus"]);
   for (const table of registry2) {
     const key = table.key;
     next[key] ||= [];
     const nextIndexById = new Map(next[key].map((row, index) => [row.id, index]));
-    const previousTitleCounts = /* @__PURE__ */ new Map();
     const nextIndexesByTitle = /* @__PURE__ */ new Map();
-    for (const row of previous[key] ?? []) {
-      const title = rowIdentityTitle(row.title);
-      if (title) previousTitleCounts.set(title, (previousTitleCounts.get(title) ?? 0) + 1);
-    }
     next[key].forEach((row, index) => {
       const title = rowIdentityTitle(row.title);
       if (title) nextIndexesByTitle.set(title, [...nextIndexesByTitle.get(title) ?? [], index]);
@@ -6022,8 +6279,7 @@ function preserveProtectedRows(previous, next, customRegistry) {
       const protectedRow = cloneProtectedRow(row);
       const title = rowIdentityTitle(row.title);
       const titleIndexes = title ? nextIndexesByTitle.get(title) ?? [] : [];
-      const uniqueTitleIndex = title && previousTitleCounts.get(title) === 1 && titleIndexes.length === 1 ? titleIndexes[0] : void 0;
-      const existingIndex = nextIndexById.get(row.id) ?? uniqueTitleIndex;
+      const existingIndex = nextIndexById.get(row.id) ?? titleIndexes[0];
       if (existingIndex === void 0) {
         nextIndexById.set(row.id, next[key].length);
         next[key].push(protectedRow);
@@ -6050,10 +6306,10 @@ function preserveProtectedRows(previous, next, customRegistry) {
       };
     }
   }
-  return next;
+  return dedupeStrongStateRows(next, registry2);
 }
 function normalizedTitle(value2) {
-  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+  return canonicalObjectTitle(value2);
 }
 function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
   const merged = {};
@@ -8557,6 +8813,16 @@ async function saveRow(form) {
     lifecycle,
     fields
   }, getSettings().tableRegistry);
+  if (rowId) {
+    const canonical = (info.artifact.snapshot[tableKey] ?? []).find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(title));
+    if (canonical && canonical.id !== rowId) {
+      const chatState = await getChatState(info.artifact.chatKey);
+      if (chatState.focusObjectId === rowId) {
+        chatState.focusObjectId = canonical.id;
+        await putChatState(chatState);
+      }
+    }
+  }
   const message = getMessage(info.index);
   if (message) attachArtifactToMessage(message, info.artifact);
   await putArtifact(info.artifact);
