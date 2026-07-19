@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`1.2.0-rc.48`　流水线：`ma-pipeline-50`
+版本：`1.2.0-rc.50`　流水线：`ma-pipeline-50`
 
 镜渊是 SillyTavern 前端扩展。它在角色正文生成完成后执行规则审核、必要的定向修正、内部事实提取、对象化状态视图、按事件线的小总结、增量大总结和当前聊天世界书发布。插件不生成主叙事正文，不保存供应商密钥，也不替代 SillyTavern 的连接系统。
 
@@ -21,6 +21,18 @@
 
 
 
+
+
+## rc.49 单一兼容模式
+
+本版只增加一个连接兼容开关，不引入自动切换连接或多级降级：
+
+- 关闭兼容模式时，完整沿用 rc.48 的 JSON Schema 请求；
+- 开启兼容模式时，审核、状态提取、小总结、大总结和连接测试从首个请求起不发送 JSON Schema；
+- 模型仍被要求返回 JSON，镜渊继续执行本地解析、业务 Schema 校验和可选的一次语法修复；
+- 兼容模式不切换 Connection Profile、不改用当前聊天连接，也不自动重复网络请求。
+
+详细边界见 `RC49_COMPATIBILITY_MODE_REPORT.md`。
 
 ## rc.48 手机信息架构重构
 
@@ -443,3 +455,8 @@ rc.27 新增独立迁移位 `persistedCharacterMergeV30`，专门处理已经由
 阶段六直接调用 `processMessage`、`syncLorebook`、`pauseCurrentChatLorebookEntries` 和 `clearCurrentChatLorebookEntries`，并使用可控 provider/world-info 桩执行五轮聊天、焦点、总结、共享物理书、故障隔离和 3200ms 延迟切换。
 
 模拟生产链验证，不是实机验证。真实 SillyTavern 刷新、世界书网络保存、连续同步和供应商延迟仍需实机验收。
+
+
+## rc.50 顶部滑动导航
+
+工作区取消桌面左侧栏和手机抽屉，所有功能页统一放入顶部横向标签栏。标签栏支持鼠标滚动条、触控左右滑动和活动页自动进入可视区域；内容区恢复全宽。总览、对象、图谱、总结、表格管理、审核、世界书、模型设置和诊断入口均保留。

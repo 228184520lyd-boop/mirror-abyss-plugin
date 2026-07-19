@@ -2,7 +2,7 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.48";
+var VERSION = "1.2.0-rc.50";
 var PIPELINE_VERSION = "ma-pipeline-50";
 var DEFAULT_SETTINGS = {
   enabled: true,
@@ -27,6 +27,7 @@ var DEFAULT_SETTINGS = {
   latestContinuityConstant: true,
   lorebookLayout: "semantic",
   lorebookRecall: { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 },
+  compatibilityMode: false,
   repairInvalidJsonOnce: true,
   requestTimeoutMs: 9e4,
   tableRegistry: [],
@@ -800,6 +801,7 @@ function getSettings() {
   settings.smallSummaryTurns = Math.min(100, Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12)));
   settings.largeSummaryCount = Math.min(50, Math.max(1, Math.round(Number(settings.largeSummaryCount) || 4)));
   settings.requestTimeoutMs = Math.min(3e5, Math.max(1e4, Math.round(Number(settings.requestTimeoutMs) || 9e4)));
+  settings.compatibilityMode = settings.compatibilityMode === true;
   settings.migration ||= { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false };
   settings.migration.objectViewsV26 ??= false;
   settings.lorebookRecall ||= { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 };
@@ -2855,10 +2857,15 @@ async function testConnection(task) {
     }
   };
   const schema = request.jsonSchema;
+  const compatibilityMode = getSettings().compatibilityMode;
   let schemaFailure;
   let pendingRejectedSchema = false;
-  const skipReason = jsonSchemaSkipReason(task, schema);
-  if (skipReason) {
+  const skipReason = compatibilityMode ? null : jsonSchemaSkipReason(task, schema);
+  if (compatibilityMode) {
+    schemaStatus = "plain-only";
+    schemaDetail = "\u517C\u5BB9\u6A21\u5F0F\u5DF2\u5F00\u542F\uFF0C\u672C\u6B21\u672A\u53D1\u9001JSON Schema";
+    raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "plain" });
+  } else if (skipReason) {
     schemaStatus = "cached-bypass";
     raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "plain" });
   } else {
@@ -3077,6 +3084,12 @@ async function repairStructuredOutput(task, raw, structureDescription, jsonSchem
   return parseAndValidateStructuredOutput(repaired, jsonSchema, validationOptions, candidateTransform);
 }
 async function generateWithSchemaFallback(options) {
+  if (getSettings().compatibilityMode) {
+    return {
+      raw: await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "plain" }),
+      skipReason: null
+    };
+  }
   const skipReason = options.jsonSchema ? jsonSchemaSkipReason(options.task, options.jsonSchema) : null;
   if (options.jsonSchema && skipReason) {
     return {
@@ -3330,8 +3343,11 @@ async function auditText(playerRules, playerText, assistantText) {
   let structuredRequestError;
   let rejectAuditSchema = false;
   const schema = auditJsonSchema();
-  const skipReason = jsonSchemaSkipReason("audit", schema);
-  if (skipReason) {
+  const compatibilityMode = getSettings().compatibilityMode;
+  const skipReason = compatibilityMode ? null : jsonSchemaSkipReason("audit", schema);
+  if (compatibilityMode) {
+    raw = await generateTask({ ...request, requestPurpose: "plain" });
+  } else if (skipReason) {
     raw = await generateTask({ ...request, requestPurpose: "plain" });
   } else {
     try {
@@ -7845,6 +7861,12 @@ async function runDiagnostics() {
       status: registry2.length ? "ok" : "warn",
       detail: `${registry2.length} \u5F20\u5DF2\u6CE8\u518C\uFF0C${enabledTables(registry2).length} \u5F20\u542F\u7528`
     });
+    checks.push({
+      id: "compatibilityMode",
+      label: "\u7ED3\u6784\u5316\u8BF7\u6C42\u6A21\u5F0F",
+      status: settings.compatibilityMode ? "warn" : "ok",
+      detail: settings.compatibilityMode ? "\u517C\u5BB9\u6A21\u5F0F\u5DF2\u5F00\u542F\uFF1A\u4E0D\u53D1\u9001JSON Schema\uFF0C\u8FD4\u56DE\u7ED3\u679C\u4ECD\u7531\u955C\u6E0A\u672C\u5730\u6821\u9A8C" : "\u6807\u51C6\u6A21\u5F0F\uFF1A\u4F7F\u7528JSON Schema\u7ED3\u6784\u5316\u8BF7\u6C42"
+    });
   }
   checks.push({
     id: "audit",
@@ -8018,12 +8040,6 @@ function unlockWorkspaceViewport() {
   window.visualViewport?.removeEventListener("resize", updateWorkspaceViewportHeight);
   document.documentElement.style.removeProperty("--ma11-viewport-height");
 }
-function setWorkspaceNavigation(open) {
-  const workspace = document.querySelector("#ma11-workspace");
-  if (!workspace) return;
-  workspace.classList.toggle("ma11-nav-open", open);
-  workspace.querySelector('[data-ma11-action="toggle-menu"]')?.setAttribute("aria-expanded", String(open));
-}
 function resolveWorkspaceStageCommand(action) {
   const commands = {
     "run-audit": { kind: "retry", stage: "audit" },
@@ -8099,38 +8115,27 @@ function root() {
     `
     <div id="ma11-workspace" class="ma11-workspace" hidden>
       <div class="ma11-shell" role="dialog" aria-modal="true" aria-label="\u955C\u6E0A\u63A7\u5236\u4E2D\u5FC3">
-        <aside class="ma11-sidebar">
-          <div class="ma11-sidebar-brand">
-            <div class="ma11-brand-mark" aria-hidden="true">\u6E0A</div>
-            <div>
-              <div class="ma11-brand">\u955C\u6E0A</div>
-              <div class="ma11-subtitle">\u957F\u671F\u53D9\u4E8B\u8BB0\u5FC6\u5DE5\u4F5C\u533A</div>
-            </div>
-            <button class="ma11-mobile-nav-close" type="button" data-ma11-action="close-menu" aria-label="\u5173\u95ED\u529F\u80FD\u83DC\u5355">\xD7</button>
-          </div>
-          <div class="ma11-sidebar-status"><span></span>\u5F53\u524D\u804A\u5929\u72EC\u7ACB\u8FD0\u884C</div>
-          <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD">${workspaceNavigationHtml()}</nav>
-          <footer class="ma11-sidebar-footer">
-            <span>Mirror Abyss</span>
-            <b>${VERSION}</b>
-          </footer>
-        </aside>
-        <button class="ma11-nav-scrim" type="button" data-ma11-action="close-menu" aria-label="\u5173\u95ED\u529F\u80FD\u83DC\u5355" tabindex="-1"></button>
         <section class="ma11-main">
           <header class="ma11-header">
-            <button class="ma11-icon-button ma11-menu-button" type="button" data-ma11-action="toggle-menu" aria-label="\u6253\u5F00\u529F\u80FD\u83DC\u5355" aria-expanded="false">
-              <i class="fa-solid fa-bars" aria-hidden="true"></i>
-            </button>
+            <div class="ma11-header-brand">
+              <div class="ma11-brand-mark" aria-hidden="true">\u6E0A</div>
+              <div class="ma11-header-brand-copy">
+                <div class="ma11-brand">\u955C\u6E0A</div>
+                <div class="ma11-subtitle">\u957F\u671F\u53D9\u4E8B\u8BB0\u5FC6</div>
+              </div>
+            </div>
             <div class="ma11-page-heading">
-              <div class="ma11-kicker">\u955C\u6E0A\u5DE5\u4F5C\u533A</div>
+              <div class="ma11-kicker">\u5F53\u524D\u9875\u9762</div>
               <h1 data-ma11-current-title>\u603B\u89C8</h1>
               <p data-ma11-current-description>\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C</p>
             </div>
             <div class="ma11-header-actions">
+              <span class="ma11-chat-status"><span></span>\u5F53\u524D\u804A\u5929</span>
               <span class="ma11-version">${VERSION}</span>
               <button class="ma11-icon-button" type="button" data-ma11-action="close" aria-label="\u5173\u95ED\u955C\u6E0A">\xD7</button>
             </div>
           </header>
+          <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD" data-ma11-scroll-tabs>${workspaceNavigationHtml()}</nav>
           <main id="ma11-workspace-content" class="ma11-content"></main>
         </section>
       </div>
@@ -8705,6 +8710,10 @@ function settingsHtml() {
       ${connectionBlock("state", "\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u8868")}
       ${connectionBlock("smallSummary", "\u5C0F\u603B\u7ED3")}
       ${connectionBlock("largeSummary", "\u5927\u603B\u7ED3")}
+      <div class="ma11-compat-setting">
+        <label class="ma11-switch"><input type="checkbox" data-ma11-setting="compatibilityMode" ${settings.compatibilityMode ? "checked" : ""}/><span><b>\u517C\u5BB9\u6A21\u5F0F</b>\uFF08\u4E0D\u53D1\u9001 JSON Schema\uFF09</span></label>
+        <p>\u516C\u5171\u53CD\u4EE3\u6216\u5171\u4EAB\u7F51\u5173\u65E0\u6CD5\u5904\u7406\u7ED3\u6784\u5316\u8F93\u51FA\u65F6\u5F00\u542F\u3002\u955C\u6E0A\u4ECD\u8981\u6C42\u6A21\u578B\u8FD4\u56DE JSON\uFF0C\u5E76\u7EE7\u7EED\u6267\u884C\u672C\u5730\u6821\u9A8C\u3002</p>
+      </div>
       <p class="ma11-help">\u5F53\u524D\u804A\u5929\u8FDE\u63A5\u4F7F\u7528 generateRaw\uFF1BProfile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u5E76\u5173\u95ED\u89D2\u8272\u9884\u8BBE\u4E0E Instruct\u3002\u63D2\u4EF6\u4E0D\u4FDD\u5B58 API \u5730\u5740\u6216\u5BC6\u94A5\u3002</p>
     </section>
     <section class="ma11-card ma11-form-card">
@@ -8717,8 +8726,8 @@ function settingsHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
       <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
       <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>\u7ED3\u6784\u5316\u8F93\u51FA\u4E0D\u53EF\u7528\u6216JSON\u683C\u5F0F\u9519\u8BEF\u65F6\uFF0C\u6700\u591A\u989D\u5916\u8C03\u7528\u4E00\u6B21</span></label>
-      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6309\u5185\u90E8\u4E8B\u5B9E\u7684 event_id \u5224\u65AD\u4E8B\u4EF6\u7EBF\uFF1B\u4E8B\u4EF6\u7ED3\u675F\u3001\u8FBE\u5230\u4E8B\u5B9E\u89C4\u6A21\u6216\u6700\u665A\u6D88\u606F\u8FB9\u754C\u65F6\u89E6\u53D1\uFF0C\u4E0D\u6309\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\u538B\u7F29\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u517C\u5BB9\u56DE\u9000\u53EA\u6267\u884C\u4E00\u6B21\uFF1B\u7F51\u7EDC\u9519\u8BEF\u4E0D\u4F1A\u89E6\u53D1\uFF0C\u5931\u8D25\u540E\u7531\u7528\u6237\u624B\u52A8\u91CD\u8BD5\u3002</p>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="repairInvalidJsonOnce" ${settings.repairInvalidJsonOnce ? "checked" : ""}/><span>JSON\u8BED\u6CD5\u9519\u8BEF\u65F6\uFF0C\u5141\u8BB8\u989D\u5916\u8C03\u7528\u4E00\u6B21\u683C\u5F0F\u4FEE\u590D</span></label>
+      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6309\u5185\u90E8\u4E8B\u5B9E\u7684 event_id \u5224\u65AD\u4E8B\u4EF6\u7EBF\uFF1B\u4E8B\u4EF6\u7ED3\u675F\u3001\u8FBE\u5230\u4E8B\u5B9E\u89C4\u6A21\u6216\u6700\u665A\u6D88\u606F\u8FB9\u754C\u65F6\u89E6\u53D1\uFF0C\u4E0D\u6309\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\u538B\u7F29\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u517C\u5BB9\u6A21\u5F0F\u53EA\u6539\u53D8\u8BF7\u6C42\u683C\u5F0F\uFF0C\u4E0D\u5207\u6362\u8FDE\u63A5\uFF0C\u4E5F\u4E0D\u4F1A\u81EA\u52A8\u91CD\u590D\u7F51\u7EDC\u8BF7\u6C42\u3002</p>
     </section>
     <section class="ma11-card ma11-form-card">
       <header><b>\u91CD\u7F6E\u4E0E\u7EF4\u62A4</b><span>\u4EE5\u4E0B\u64CD\u4F5C\u4E0D\u4F1A\u4FEE\u6539\u5176\u4ED6\u804A\u5929\u3002</span></header>
@@ -8763,6 +8772,10 @@ async function renderWorkspace() {
       button.classList.toggle("active", active);
       if (active) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
+    });
+    workspace.querySelector(`[data-ma11-tab="${activeMeta.key}"]`)?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest"
     });
     let html = "";
     if (settings.ui.activeTab === "overview") html = await overviewHtml(info);
@@ -9029,10 +9042,7 @@ function bindWorkspace(workspace) {
   workspace.addEventListener("click", async (event) => {
     const target = event.target;
     const tab = target.closest("[data-ma11-tab]")?.dataset.ma11Tab;
-    if (tab) {
-      setWorkspaceNavigation(false);
-      return setTab(tab);
-    }
+    if (tab) return setTab(tab);
     const action = target.closest("[data-ma11-action]")?.dataset.ma11Action;
     const actionButton = action ? target.closest("[data-ma11-action]") : null;
     const testButton = target.closest("[data-ma11-test]");
@@ -9056,18 +9066,10 @@ function bindWorkspace(workspace) {
       scheduleWorkspaceRender();
     }
     try {
-      if (busyButton && !["close", "close-menu", "toggle-menu", "open-tables", "open-graph", "close-editor"].includes(action || "")) {
+      if (busyButton && !["close", "open-tables", "open-graph", "close-editor"].includes(action || "")) {
         busyButton.disabled = true;
         busyButton.setAttribute("aria-busy", "true");
         busyButton.textContent = "\u5904\u7406\u4E2D\u2026";
-      }
-      if (action === "toggle-menu") {
-        setWorkspaceNavigation(!workspace.classList.contains("ma11-nav-open"));
-        return;
-      }
-      if (action === "close-menu") {
-        setWorkspaceNavigation(false);
-        return;
       }
       if (action === "close") {
         closeWorkspace();
@@ -9348,17 +9350,13 @@ function openWorkspace(tab, messageIndex) {
   selectedMessageIndex = resolveWorkspaceMessageSelection(messageIndex);
   if (tab) getSettings().ui.activeTab = tab;
   workspace.hidden = false;
-  setWorkspaceNavigation(false);
   lockWorkspaceViewport();
   void renderWorkspace();
 }
 function closeWorkspace() {
   closeEditor();
   const workspace = document.querySelector("#ma11-workspace");
-  if (workspace) {
-    setWorkspaceNavigation(false);
-    workspace.hidden = true;
-  }
+  if (workspace) workspace.hidden = true;
   unlockWorkspaceViewport();
 }
 function resetWorkspaceContext() {
