@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.33";
-var PIPELINE_VERSION = "ma-pipeline-35";
+var VERSION = "1.2.0-rc.35";
+var PIPELINE_VERSION = "ma-pipeline-37";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -149,10 +149,11 @@ function isLikelyTruncatedJson(raw, error) {
   if (!text) return false;
   const firstBrace = text.indexOf("{");
   if (firstBrace < 0) return false;
-  let depth = 0;
+  const stack = [];
   let inString = false;
   let escaped = false;
   let sawObject = false;
+  let mismatched = false;
   for (let i = firstBrace; i < text.length; i += 1) {
     const char = text[i];
     if (inString) {
@@ -165,14 +166,19 @@ function isLikelyTruncatedJson(raw, error) {
       inString = true;
       continue;
     }
-    if (char === "{") {
-      depth += 1;
-      sawObject = true;
-    } else if (char === "}" && depth > 0) {
-      depth -= 1;
+    if (char === "{" || char === "[") {
+      stack.push(char);
+      if (char === "{") sawObject = true;
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      const expected = char === "}" ? "{" : "[";
+      if (stack.at(-1) === expected) stack.pop();
+      else mismatched = true;
     }
   }
-  if (sawObject && (depth > 0 || inString)) return true;
+  if (sawObject && (stack.length > 0 || inString)) return true;
+  if (mismatched) return false;
   const attempts = error instanceof JsonObjectParseError ? error.attempts.join(" ") : toErrorMessage(error);
   return /unexpected end|unterminated|string literal|end of json input|json input.*ended/i.test(attempts);
 }
@@ -271,7 +277,7 @@ function parseObjectCandidate(candidate) {
   }
   return parsed;
 }
-function parseJsonObject(raw) {
+function parseJsonObjectCandidates(raw) {
   const original = safeText(raw).trim();
   if (!original || original === "{}") throw new JsonObjectParseError("\u6A21\u578B\u8FD4\u56DE\u4E3A\u7A7A", raw);
   const clean = stripReasoningAndBom(original);
@@ -280,16 +286,28 @@ function parseJsonObject(raw) {
   const candidates = [...fenced, clean, ...balanced];
   const uniqueCandidates = [...new Set(candidates.map((item) => item.trim()).filter(Boolean))];
   const attempts = [];
+  const output = [];
+  const seen = /* @__PURE__ */ new Set();
   for (const candidate of uniqueCandidates) {
     for (const repaired of commonJsonRepairs(candidate)) {
       try {
-        return parseObjectCandidate(repaired);
+        const parsed = parseObjectCandidate(repaired);
+        const fingerprint = JSON.stringify(parsed);
+        if (!seen.has(fingerprint)) {
+          seen.add(fingerprint);
+          output.push(parsed);
+        }
+        break;
       } catch (error) {
         attempts.push(error instanceof Error ? error.message : String(error));
       }
     }
   }
+  if (output.length) return output;
   throw new JsonObjectParseError("\u6A21\u578B\u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684JSON\u5BF9\u8C61", raw, attempts.slice(-6));
+}
+function parseJsonObject(raw) {
+  return parseJsonObjectCandidates(raw)[0];
 }
 function sanitizeBookName(value) {
   return String(value ?? "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
@@ -329,7 +347,9 @@ var CORE_FIELD_KEYS = [
   "eventId",
   "recall",
   "baseContent",
+  "currentFacts",
   "currentStates",
+  "recentHistory",
   "solidifiedHistory",
   "relatedObjects",
   "relatedEvents",
@@ -364,9 +384,11 @@ var COMMON_FIELDS = [
   { key: "status", label: "\u72B6\u6001", description: "\u5BF9\u8C61\u5F53\u524D\u751F\u547D\u5468\u671F\u3001\u9636\u6BB5\u6216\u6709\u6548\u6027\u6807\u8BB0\u3002", type: "string", required: true }
 ];
 var OBJECT_LAYER_FIELDS = [
-  { key: "baseContent", label: "\u57FA\u7840\u5185\u5BB9", description: "\u5BF9\u8C61\u7A33\u5B9A\u5B9A\u4E49\u3002\u5DF2\u6709\u975E\u7A7A\u503C\u4E0D\u5F97\u7531\u72B6\u6001\u63D0\u53D6\u3001\u5C0F\u603B\u7ED3\u6216\u5927\u603B\u7ED3\u6539\u5199\u3002", type: "string", required: false },
-  { key: "solidifiedHistory", label: "\u5DF2\u56FA\u5316\u5386\u53F2", description: "\u7ECF\u8FC7\u957F\u671F\u603B\u7ED3\u786E\u8BA4\u7684\u7A33\u5B9A\u7ED3\u679C\uFF1B\u72B6\u6001\u63D0\u53D6\u4E0D\u5F97\u81EA\u884C\u6DFB\u52A0\u6216\u6539\u5199\u3002", type: "string[]", required: false },
-  { key: "currentStates", label: "\u5F53\u524D\u72B6\u6001", description: "\u6709\u660E\u786E\u6765\u6E90\u3001\u5BF9\u540E\u7EED\u4ECD\u6709\u6548\u7684\u53EF\u53D8\u72B6\u6001\uFF1B\u5141\u8BB8\u540E\u7EED\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u6362\u3002", type: "string[]", required: false },
+  { key: "baseContent", label: "\u5BF9\u8C61\u5B9A\u4E49", description: "\u5BF9\u8C61\u672C\u8EAB\u662F\u4EC0\u4E48\u3002\u5DF2\u6709\u975E\u7A7A\u503C\u539F\u5219\u4E0A\u4E0D\u5F97\u7531\u666E\u901A\u72B6\u6001\u63D0\u53D6\u6539\u5199\uFF1B\u4EC5\u660E\u786E\u91CD\u5B9A\u4E49\u3001\u6BC1\u706D\u3001\u91CD\u5EFA\u6216\u4EBA\u5DE5\u7F16\u8F91\u65F6\u53D8\u5316\u3002", type: "string", required: false },
+  { key: "currentFacts", label: "\u73B0\u884C\u4E8B\u5B9E", description: "\u5F53\u524D\u5BA2\u89C2\u6210\u7ACB\u3001\u6301\u7EED\u65F6\u95F4\u8F83\u957F\u4F46\u672A\u6765\u4ECD\u53EF\u80FD\u88AB\u65B0\u4E8B\u4EF6\u66FF\u6362\u7684\u4E8B\u5B9E\u3002", type: "string[]", required: false },
+  { key: "currentStates", label: "\u5F53\u524D\u72B6\u6001", description: "\u6B63\u5728\u53D1\u751F\u3001\u77ED\u671F\u6216\u9636\u6BB5\u6027\u7684\u72B6\u6001\uFF1B\u5F53\u524D\u5C42\u5E94\u4FDD\u7559\u6700\u591A\u7EC6\u8282\uFF0C\u5E76\u5141\u8BB8\u540E\u7EED\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u6362\u3002", type: "string[]", required: false },
+  { key: "recentHistory", label: "\u8FD1\u671F\u7ECF\u5386", description: "\u7531\u5C0F\u603B\u7ED3\u5F52\u5E76\u7684\u8FD1\u671F\u4E8B\u4EF6\u8FC7\u7A0B\u3001\u76F4\u63A5\u56E0\u679C\u4E0E\u5C1A\u6709\u540E\u7EED\u4F5C\u7528\u7684\u5F71\u54CD\uFF1B\u7EC6\u8282\u5C11\u4E8E\u5F53\u524D\u5C42\u3001\u591A\u4E8E\u5386\u53F2\u5C42\u3002", type: "string[]", required: false },
+  { key: "solidifiedHistory", label: "\u5386\u53F2\u4E8B\u5B9E", description: "\u7531\u5927\u603B\u7ED3\u957F\u671F\u56FA\u5316\u7684\u6700\u7CBE\u7B80\u7ED3\u679C\u4E0E\u4E0D\u53EF\u5FFD\u7565\u5F71\u54CD\uFF1B\u4E0D\u5F97\u628A\u65E0\u5173\u4E8B\u4EF6\u7EBF\u6DF7\u5728\u540C\u4E00\u4E8B\u5B9E\u4E2D\u3002", type: "string[]", required: false },
   { key: "relatedObjects", label: "\u5173\u8054\u5BF9\u8C61", description: "\u660E\u786E\u53C2\u4E0E\u6216\u53D7\u5F71\u54CD\u7684\u5BF9\u8C61\u7A33\u5B9AID/\u540D\u79F0\uFF1B\u4E0D\u5F97\u56E0\u540C\u573A\u6216\u56F4\u89C2\u5EFA\u7ACB\u5173\u8054\u3002", type: "string[]", required: false },
   { key: "relatedEvents", label: "\u5173\u8054\u4E8B\u4EF6", description: "\u76F4\u63A5\u65BD\u52A0\u5F53\u524D\u72B6\u6001\u6216\u957F\u671F\u5F71\u54CD\u7684 event_id/\u4E8B\u4EF6\u540D\u79F0\u3002", type: "string[]", required: false }
 ];
@@ -1229,7 +1251,7 @@ var MEMORY_STATES = /* @__PURE__ */ new Set([
   "\u4E0D\u9002\u7528"
 ]);
 var EVIDENCE_LEVELS = /* @__PURE__ */ new Set(["\u5DF2\u786E\u8BA4", "\u53EF\u9760\u8BB0\u5F55", "\u591A\u65B9\u9648\u8FF0", "\u5355\u65B9\u9648\u8FF0", "\u63A8\u6D4B", "\u672A\u77E5"]);
-var STANDARD_FIELDS = /* @__PURE__ */ new Set(["id", "title", "name", "content", "summary", "keywords", "status", "source", "locked", "lockMode", "lifecycle", "updatedAt", "factIds", "fact_ids", "eventId", "event_id", "recall", "fields"]);
+var STANDARD_FIELDS = /* @__PURE__ */ new Set(["id", "title", "name", "content", "summary", "keywords", "status", "source", "locked", "lockMode", "lifecycle", "updatedAt", "factIds", "fact_ids", "eventId", "event_id", "eventIds", "event_ids", "recall", "fields"]);
 function registryOrDefault(registry2) {
   return normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY);
 }
@@ -1321,6 +1343,8 @@ function normalizeRow(value, tableKey, index, previous, registry2) {
   const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
   const factIds = normalizeStringList(source.factIds ?? source.fact_ids ?? previous?.factIds, 40, 160);
   const eventId = safeText(source.eventId ?? source.event_id ?? previous?.eventId, 160).trim() || void 0;
+  const eventIds = normalizeStringList(source.eventIds ?? source.event_ids ?? previous?.eventIds ?? (eventId ? [eventId] : []), 60, 160);
+  if (eventId && !eventIds.includes(eventId)) eventIds.unshift(eventId);
   const content = safeText(source.content || source.summary || previous?.content || "", 12e3).trim();
   const fields = normalizeCustomFields(source, table, previous);
   if (manual && !safeText(fields.baseContent, 12e3).trim() && content) fields.baseContent = content;
@@ -1337,7 +1361,8 @@ function normalizeRow(value, tableKey, index, previous, registry2) {
     updatedAt: safeText(source.updatedAt || previous?.updatedAt || now, 80) || now,
     fields,
     factIds,
-    eventId,
+    eventId: eventId || eventIds[0],
+    eventIds,
     recall: normalizeRecall(source.recall ?? previous?.recall, title, keywords)
   };
 }
@@ -1452,6 +1477,8 @@ function preserveObjectBaseLayers(previous, next, registry2) {
       const oldFields = old.fields ?? {};
       const existingBase = safeText(oldFields.baseContent, 12e3).trim();
       if (existingBase) row.fields.baseContent = structuredClone(oldFields.baseContent);
+      if ("recentHistory" in oldFields) row.fields.recentHistory = structuredClone(oldFields.recentHistory);
+      else delete row.fields.recentHistory;
       if ("solidifiedHistory" in oldFields) row.fields.solidifiedHistory = structuredClone(oldFields.solidifiedHistory);
       else delete row.fields.solidifiedHistory;
     }
@@ -1482,7 +1509,7 @@ function removeFocusCharacterDuplicates(snapshot, registry2) {
 function rowArray(value) {
   return Array.isArray(value) ? value.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
 }
-var PERSISTED_CHARACTER_STATE_FIELDS = ["currentStates", "relationshipStates", "abilityStates"];
+var PERSISTED_CHARACTER_STATE_FIELDS = ["currentFacts", "currentStates", "recentHistory", "relationshipStates", "abilityStates"];
 var PERSISTED_CHARACTER_SHARED_FIELDS = ["solidifiedHistory", "relatedObjects", "relatedEvents"];
 function persistedCharacterName(value) {
   const original = safeText(value, 240).trim();
@@ -1565,6 +1592,7 @@ function mergePersistedCharacterDuplicates(snapshot, registry2) {
       keywords: [.../* @__PURE__ */ new Set([...base.keywords ?? [], ...state2.keywords ?? []])],
       factIds: [.../* @__PURE__ */ new Set([...base.factIds ?? [], ...state2.factIds ?? []])],
       eventId: state2.eventId || base.eventId,
+      eventIds: [.../* @__PURE__ */ new Set([...base.eventIds ?? (base.eventId ? [base.eventId] : []), ...state2.eventIds ?? (state2.eventId ? [state2.eventId] : [])])],
       recall: mergedRecall(base.recall, state2.recall),
       lifecycle: state2.lifecycle ? structuredClone(state2.lifecycle) : structuredClone(base.lifecycle),
       source: base.source,
@@ -1610,6 +1638,7 @@ function mergeRowsByIdentity(existing, incoming) {
     keywords: [.../* @__PURE__ */ new Set([...existing.keywords ?? [], ...incoming.keywords ?? []])],
     factIds: [.../* @__PURE__ */ new Set([...existing.factIds ?? [], ...incoming.factIds ?? []])],
     eventId: incoming.eventId || existing.eventId,
+    eventIds: [.../* @__PURE__ */ new Set([...existing.eventIds ?? (existing.eventId ? [existing.eventId] : []), ...incoming.eventIds ?? (incoming.eventId ? [incoming.eventId] : [])])],
     fields,
     source: existing.source === "manual" || incoming.source === "manual" ? "manual" : "auto",
     locked: Boolean(existing.locked || incoming.locked),
@@ -1685,7 +1714,7 @@ function preserveStableObjectIds(previous, next, registry2) {
 }
 function regionStateText(row) {
   const fields = row.fields ?? {};
-  return [row.title, row.content, row.status, ...rowArray(fields.currentStates), ...rowArray(fields.solidifiedHistory)].join(" ");
+  return [row.title, row.content, row.status, ...rowArray(fields.currentFacts), ...rowArray(fields.currentStates), ...rowArray(fields.recentHistory), ...rowArray(fields.solidifiedHistory)].join(" ");
 }
 function enforceObjectViewAllocation(snapshot, registry2) {
   const tables2 = registryOrDefault(registry2);
@@ -2310,23 +2339,34 @@ var TASK_RESPONSE_TOKENS = {
   largeSummary: 3200
 };
 var schemaUnsupportedConnections = /* @__PURE__ */ new Set();
-var SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaUnsupported.v31";
+var schemaRejectedRequests = /* @__PURE__ */ new Set();
+var SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaCapabilities.v35";
+var LEGACY_SCHEMA_CAPABILITY_STORAGE_KEY = "mirrorAbyss.schemaUnsupported.v31";
 function readStoredSchemaCapabilities() {
   try {
     const raw = globalThis.sessionStorage?.getItem(SCHEMA_CAPABILITY_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      unsupportedConnections: Array.isArray(parsed?.unsupportedConnections) ? parsed.unsupportedConnections.filter((item) => typeof item === "string") : [],
+      rejectedSchemas: Array.isArray(parsed?.rejectedSchemas) ? parsed.rejectedSchemas.filter((item) => typeof item === "string") : []
+    };
   } catch {
-    return [];
+    return { unsupportedConnections: [], rejectedSchemas: [] };
   }
 }
 function persistSchemaCapabilities() {
   try {
-    globalThis.sessionStorage?.setItem(SCHEMA_CAPABILITY_STORAGE_KEY, JSON.stringify([...schemaUnsupportedConnections]));
+    globalThis.sessionStorage?.setItem(SCHEMA_CAPABILITY_STORAGE_KEY, JSON.stringify({
+      unsupportedConnections: [...schemaUnsupportedConnections],
+      rejectedSchemas: [...schemaRejectedRequests]
+    }));
+    globalThis.sessionStorage?.removeItem(LEGACY_SCHEMA_CAPABILITY_STORAGE_KEY);
   } catch {
   }
 }
-for (const key of readStoredSchemaCapabilities()) schemaUnsupportedConnections.add(key);
+var storedSchemaCapabilities = readStoredSchemaCapabilities();
+for (const key of storedSchemaCapabilities.unsupportedConnections) schemaUnsupportedConnections.add(key);
+for (const key of storedSchemaCapabilities.rejectedSchemas) schemaRejectedRequests.add(key);
 function taskConnectionKey(task) {
   const connection = getSettings().connections[task];
   if (connection?.mode === "profile") {
@@ -2347,16 +2387,28 @@ function taskConnectionKey(task) {
   ].map((value) => safeText(value, 240)).join("|");
   return `current-chat:${hashText(currentIdentity)}`;
 }
-function shouldSkipJsonSchema(task) {
-  return schemaUnsupportedConnections.has(taskConnectionKey(task));
+function schemaRequestKey(task, jsonSchema) {
+  return `${taskConnectionKey(task)}:${task}:${hashText(JSON.stringify(jsonSchema))}`;
+}
+function shouldSkipJsonSchema(task, jsonSchema) {
+  if (schemaUnsupportedConnections.has(taskConnectionKey(task))) return true;
+  return Boolean(jsonSchema && schemaRejectedRequests.has(schemaRequestKey(task, jsonSchema)));
 }
 function rememberJsonSchemaUnsupported(task) {
   schemaUnsupportedConnections.add(taskConnectionKey(task));
   persistSchemaCapabilities();
 }
+function rememberJsonSchemaRejected(task, jsonSchema) {
+  schemaRejectedRequests.add(schemaRequestKey(task, jsonSchema));
+  persistSchemaCapabilities();
+}
 function isDefinitiveJsonSchemaUnsupported(error) {
   const message = toErrorMessage(error);
-  return /\bbad request\b|\bstatus\s*400\b|\bhttp\s*400\b|json[_ -]?schema.*(?:unsupported|invalid|not supported)|response[_ -]?format.*(?:unsupported|invalid|not supported)|unknown (?:field|parameter).*schema/i.test(message);
+  return /(?:json[_ -]?schema|structured outputs?|response[_ -]?format).*(?:not supported|unsupported|not available)|(?:does not|doesn't) support.*(?:json[_ -]?schema|structured outputs?|response[_ -]?format)|unknown (?:field|parameter).*(?:json_schema|response_format)|unrecognized (?:field|parameter).*(?:json_schema|response_format)/i.test(message);
+}
+function isJsonSchemaRequestRejected(error) {
+  const message = toErrorMessage(error);
+  return /\bbad request\b|\bstatus\s*400\b|\bhttp\s*400\b|invalid (?:json[_ -]?)?schema|schema.*invalid|response[_ -]?format.*invalid/i.test(message);
 }
 function responseTokens(options) {
   const requested = Number(options.maxTokens);
@@ -2553,15 +2605,17 @@ function requestTraceReport() {
 async function testConnection(task) {
   const started = performance.now();
   let raw = "";
+  let schemaStatus = "supported";
+  let schemaDetail = "";
   const request = {
     task,
     systemPrompt: "\u4F60\u662FAPI\u7ED3\u6784\u6D4B\u8BD5\u5668\u3002\u7981\u6B62\u89E3\u91CA\u3001\u7981\u6B62Markdown\u3001\u7981\u6B62\u601D\u8003\u6807\u7B7E\u3002",
     prompt: '\u53EA\u8F93\u51FA\u8FD9\u4E2AJSON\u5BF9\u8C61\uFF1A{"ok":true,"source":"mirror-abyss"}',
     maxTokens: 256,
     jsonSchema: {
-      name: "MirrorAbyssConnectionTest",
+      name: "MirrorAbyssConnectionTestV35",
       description: "\u955C\u6E0A\u539F\u751F\u8FDE\u63A5\u7ED3\u6784\u5316\u8F93\u51FA\u6D4B\u8BD5",
-      strict: true,
+      strict: false,
       value: {
         $schema: "http://json-schema.org/draft-04/schema#",
         type: "object",
@@ -2574,25 +2628,39 @@ async function testConnection(task) {
       }
     }
   };
+  const schema = request.jsonSchema;
   let schemaFailure;
-  if (shouldSkipJsonSchema(task)) {
-    raw = await generateTask({ ...request, jsonSchema: void 0 });
+  if (shouldSkipJsonSchema(task, schema)) {
+    schemaStatus = "cached-bypass";
+    raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "plain" });
   } else {
     try {
-      raw = await generateTask(request);
+      raw = await generateTask({ ...request, requestPurpose: "schema" });
       if (raw.trim() === "{}") {
-        schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
+        schemaStatus = "empty-fallback";
+        schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61");
       }
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") throw error;
       schemaFailure = error;
-      if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported(task);
+      schemaDetail = safeText(toErrorMessage(error), 240);
+      if (isDefinitiveJsonSchemaUnsupported(error)) {
+        schemaStatus = "rejected-fallback";
+        rememberJsonSchemaUnsupported(task);
+      } else if (isJsonSchemaRequestRejected(error)) {
+        schemaStatus = "rejected-fallback";
+      } else {
+        schemaStatus = "transient-fallback";
+      }
     }
   }
   if (schemaFailure) {
     try {
-      raw = await generateTask({ ...request, jsonSchema: void 0 });
-      rememberJsonSchemaUnsupported(task);
+      raw = await generateTask({ ...request, jsonSchema: void 0, requestPurpose: "fallback" });
+      if (schemaStatus === "rejected-fallback" && !isDefinitiveJsonSchemaUnsupported(schemaFailure)) {
+        rememberJsonSchemaRejected(task, schema);
+      }
+      if (schemaStatus === "empty-fallback") rememberJsonSchemaRejected(task, schema);
     } catch (fallbackError) {
       if (fallbackError instanceof Error && fallbackError.name === "AbortError") throw fallbackError;
       throw new Error(
@@ -2614,11 +2682,109 @@ async function testConnection(task) {
     jsonValid,
     method: describeTaskConnection(task),
     elapsedMs: Math.round(performance.now() - started),
-    responsePreview: raw.replace(/\s+/g, " ").slice(0, 240)
+    responsePreview: raw.replace(/\s+/g, " ").slice(0, 240),
+    schemaStatus,
+    schemaDetail
   };
 }
 
+// src/llm/schema-validation.ts
+function schemaRoot(schema) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return null;
+  const source = schema;
+  const value = source.value;
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  return source;
+}
+function typeMatches(value, type) {
+  if (type === "object") return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (type === "array") return Array.isArray(value);
+  if (type === "string") return typeof value === "string";
+  if (type === "boolean") return typeof value === "boolean";
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+  if (type === "null") return value === null;
+  return true;
+}
+function describeType(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+function validateNode(value, schema, path, issues, limit, options) {
+  if (issues.length >= limit) return;
+  if (Array.isArray(schema.enum) && !schema.enum.some((item) => Object.is(item, value))) {
+    issues.push({ path, message: `\u503C\u4E0D\u5728\u5141\u8BB8\u679A\u4E3E\u4E2D` });
+    return;
+  }
+  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (types.length && !types.some((type) => typeof type === "string" && typeMatches(value, type))) {
+    issues.push({ path, message: `\u7C7B\u578B\u5E94\u4E3A ${types.join("|")}\uFF0C\u5B9E\u9645\u4E3A ${describeType(value)}` });
+    return;
+  }
+  if (schema.type === "object" || !schema.type && value && typeof value === "object" && !Array.isArray(value)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const object = value;
+    const properties = schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties) ? schema.properties : {};
+    const required = Array.isArray(schema.required) ? schema.required.filter((item) => typeof item === "string") : [];
+    const allowedMissing = /* @__PURE__ */ new Set();
+    for (const [prefix, keys] of Object.entries(options.allowedMissingRequiredByPathPrefix ?? {})) {
+      if (path.startsWith(prefix)) for (const key of keys) allowedMissing.add(key);
+    }
+    for (const key of required) {
+      if (!Object.prototype.hasOwnProperty.call(object, key) && !allowedMissing.has(key)) {
+        issues.push({ path: `${path}.${key}`, message: "\u7F3A\u5C11\u5FC5\u586B\u5B57\u6BB5" });
+        if (issues.length >= limit) return;
+      }
+    }
+    if (schema.additionalProperties === false) {
+      const allowedAdditional = new Set(options.allowedAdditionalProperties?.[path] ?? []);
+      for (const [prefix, keys] of Object.entries(options.allowedAdditionalPropertiesByPathPrefix ?? {})) {
+        if (path.startsWith(prefix)) for (const key of keys) allowedAdditional.add(key);
+      }
+      for (const key of Object.keys(object)) {
+        if (!Object.prototype.hasOwnProperty.call(properties, key) && !allowedAdditional.has(key)) {
+          issues.push({ path: `${path}.${key}`, message: "\u51FA\u73B0\u672A\u58F0\u660E\u5B57\u6BB5" });
+          if (issues.length >= limit) return;
+        }
+      }
+    }
+    for (const [key, childSchema] of Object.entries(properties)) {
+      if (!Object.prototype.hasOwnProperty.call(object, key)) continue;
+      if (!childSchema || typeof childSchema !== "object" || Array.isArray(childSchema)) continue;
+      validateNode(object[key], childSchema, `${path}.${key}`, issues, limit, options);
+      if (issues.length >= limit) return;
+    }
+    return;
+  }
+  if (schema.type === "array") {
+    if (!Array.isArray(value)) return;
+    const itemSchema = schema.items;
+    if (!itemSchema || typeof itemSchema !== "object" || Array.isArray(itemSchema)) return;
+    value.forEach((item, index) => {
+      if (issues.length >= limit) return;
+      validateNode(item, itemSchema, `${path}[${index}]`, issues, limit, options);
+    });
+  }
+}
+function validateStructuredValue(value, schema, limit = 12, options = {}) {
+  const root2 = schemaRoot(schema);
+  if (!root2) return [];
+  const issues = [];
+  validateNode(value, root2, "$", issues, Math.max(1, limit), options);
+  return issues;
+}
+function formatSchemaIssues(issues) {
+  return issues.map((issue) => `${issue.path}\uFF1A${issue.message}`).join("\uFF1B");
+}
+
 // src/llm/structured.ts
+var StructuredSchemaValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "StructuredSchemaValidationError";
+  }
+};
 function repairSystemPrompt(structureDescription) {
   return `\u4F60\u662FJSON\u683C\u5F0F\u4FEE\u590D\u5668\u3002\u4F60\u4E0D\u6267\u884C\u539F\u4EFB\u52A1\u3001\u4E0D\u8865\u5145\u65B0\u4E8B\u5B9E\u3001\u4E0D\u89E3\u91CA\u5185\u5BB9\uFF0C\u53EA\u628A\u7ED9\u5B9A\u6A21\u578B\u8F93\u51FA\u8F6C\u6362\u6210\u4E00\u4E2A\u5408\u6CD5JSON\u5BF9\u8C61\u3002
 
@@ -2652,32 +2818,46 @@ function structuredError(task, error, raw) {
   const detail = toErrorMessage(error);
   return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
 }
-async function repairStructuredOutput(task, raw, structureDescription) {
+function parseAndValidateStructuredOutput(raw, jsonSchema, validationOptions = {}) {
+  const candidates = parseJsonObjectCandidates(raw);
+  if (!jsonSchema) return candidates[0];
+  let firstIssues = "";
+  for (const candidate of candidates) {
+    const issues = validateStructuredValue(candidate, jsonSchema, 12, validationOptions);
+    if (!issues.length) return candidate;
+    if (!firstIssues) firstIssues = formatSchemaIssues(issues);
+  }
+  throw new StructuredSchemaValidationError(`JSON\u53EF\u4EE5\u89E3\u6790\uFF0C\u4F46\u4E0D\u7B26\u5408\u76EE\u6807Schema\uFF1A${firstIssues || "\u7ED3\u6784\u4E0D\u5339\u914D"}`);
+}
+async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, validationOptions = {}) {
   const repaired = await generateTask({
     task,
     systemPrompt: repairSystemPrompt(structureDescription),
     prompt: repairUserPrompt(raw),
     requestPurpose: "json-repair"
   });
-  return parseJsonObject(repaired);
+  return parseAndValidateStructuredOutput(repaired, jsonSchema, validationOptions);
 }
 async function generateWithSchemaFallback(options) {
-  if (options.jsonSchema && shouldSkipJsonSchema(options.task)) {
+  if (options.jsonSchema && shouldSkipJsonSchema(options.task, options.jsonSchema)) {
     return generateTask({ ...options, jsonSchema: void 0, requestPurpose: "plain" });
   }
   let schemaFailure;
+  let rejectThisSchema = false;
   try {
     const raw = await generateTask({ ...options, requestPurpose: options.jsonSchema ? "schema" : "plain" });
     if (!options.jsonSchema || raw.trim() !== "{}") return raw;
-    schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
+    schemaFailure = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u3001\u63A5\u53E3\u6216\u8BE5Schema\u4E0D\u517C\u5BB9");
+    rejectThisSchema = true;
   } catch (error) {
     if (!options.jsonSchema || isCancelledRequest(error)) throw error;
     schemaFailure = error;
     if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported(options.task);
+    else rejectThisSchema = isJsonSchemaRequestRejected(error);
   }
   try {
     const fallback = await generateTask({ ...options, jsonSchema: void 0, requestPurpose: "fallback" });
-    rememberJsonSchemaUnsupported(options.task);
+    if (rejectThisSchema && options.jsonSchema) rememberJsonSchemaRejected(options.task, options.jsonSchema);
     return fallback;
   } catch (fallbackError) {
     if (isCancelledRequest(fallbackError)) throw fallbackError;
@@ -2689,8 +2869,11 @@ async function generateWithSchemaFallback(options) {
 async function generateStructuredTask(options) {
   const raw = await generateWithSchemaFallback(options);
   try {
-    return parseJsonObject(raw);
+    return parseAndValidateStructuredOutput(raw, options.jsonSchema, options.validationOptions);
   } catch (firstError) {
+    if (firstError instanceof StructuredSchemaValidationError) {
+      throw structuredError(options.task, firstError, raw);
+    }
     if (isLikelyTruncatedJson(raw, firstError)) {
       throw structuredError(
         options.task,
@@ -2701,7 +2884,7 @@ async function generateStructuredTask(options) {
     const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
     if (!allowRepair) throw structuredError(options.task, firstError, raw);
     try {
-      return await repairStructuredOutput(options.task, raw, options.structureDescription);
+      return await repairStructuredOutput(options.task, raw, options.structureDescription, options.jsonSchema, options.validationOptions);
     } catch (repairError) {
       if (repairError instanceof Error && repairError.message.startsWith(`${TASK_LABELS[options.task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784`)) {
         throw repairError;
@@ -2883,24 +3066,28 @@ async function auditText(playerRules, playerText, assistantText) {
   };
   let raw = "";
   let structuredRequestError;
-  if (shouldSkipJsonSchema("audit")) {
-    raw = await generateTask(request);
+  let rejectAuditSchema = false;
+  const schema = auditJsonSchema();
+  if (shouldSkipJsonSchema("audit", schema)) {
+    raw = await generateTask({ ...request, requestPurpose: "plain" });
   } else {
     try {
-      raw = await generateTask({ ...request, jsonSchema: auditJsonSchema() });
+      raw = await generateTask({ ...request, jsonSchema: schema, requestPurpose: "schema" });
       if (raw.trim() === "{}") {
-        structuredRequestError = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u6216\u63A5\u53E3\u53EF\u80FD\u4E0D\u652F\u6301JSON Schema");
+        structuredRequestError = new Error("\u7ED3\u6784\u5316\u8F93\u51FA\u8FD4\u56DE\u7A7A\u5BF9\u8C61\uFF0C\u5F53\u524D\u6A21\u578B\u3001\u63A5\u53E3\u6216\u5BA1\u6838Schema\u4E0D\u517C\u5BB9");
+        rejectAuditSchema = true;
       }
     } catch (error) {
       if (isCancelledAuditRequest(error)) throw error;
       structuredRequestError = error;
       if (isDefinitiveJsonSchemaUnsupported(error)) rememberJsonSchemaUnsupported("audit");
+      else rejectAuditSchema = isJsonSchemaRequestRejected(error);
     }
   }
   if (structuredRequestError) {
     try {
-      raw = await generateTask(request);
-      rememberJsonSchemaUnsupported("audit");
+      raw = await generateTask({ ...request, requestPurpose: "fallback" });
+      if (rejectAuditSchema) rememberJsonSchemaRejected("audit", schema);
     } catch (fallbackError) {
       if (isCancelledAuditRequest(fallbackError)) throw fallbackError;
       throw new Error(
@@ -2925,7 +3112,8 @@ async function auditText(playerRules, playerText, assistantText) {
       const repaired = await repairStructuredOutput(
         "audit",
         raw,
-        '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"...","replacementText":"...\u6216\u7A7A\u5B57\u7B26\u4E32"}'
+        '{"result":"pass|revise|block","reason":"...","violations":[{"ruleId":"...","rule":"...","evidence":"...","action":"..."}],"preserve":["..."],"rewriteInstruction":"...","replacementText":"...\u6216\u7A7A\u5B57\u7B26\u4E32"}',
+        schema
       );
       return parseAuditResult(JSON.stringify(repaired));
     } catch (repairError) {
@@ -3493,7 +3681,8 @@ function rowContent(table, row) {
   }
   if (row.keywords.length) lines.push(`${keywordsLabel}\uFF1A${row.keywords.join("\u3001")}`);
   if (row.factIds?.length) lines.push(`\u4E8B\u5B9EID\uFF1A${row.factIds.join("\u3001")}`);
-  if (row.eventId) lines.push(`\u4E8B\u4EF6ID\uFF1A${row.eventId}`);
+  const eventIds = row.eventIds ?? (row.eventId ? [row.eventId] : []);
+  if (eventIds.length) lines.push(`\u4E8B\u4EF6ID\uFF1A${eventIds.join("\u3001")}`);
   if (row.locked || row.lockMode === "all") lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u5B8C\u5168\u9501\u5B9A\uFF1B\u57FA\u7840\u4E0E\u72B6\u6001\u5747\u4E0D\u5F97\u81EA\u52A8\u4FEE\u6539\u3002");
   else if (row.source === "manual" || row.lockMode === "base") lines.push("\u7EF4\u62A4\u6743\u9650\uFF1A\u73A9\u5BB6\u57FA\u7840\u4FDD\u62A4\uFF1B\u57FA\u7840\u5185\u5BB9\u4E0D\u5F97\u81EA\u52A8\u6539\u5199\uFF0C\u5F53\u524D\u72B6\u6001\u53EF\u4F9D\u636E\u660E\u786E\u4E8B\u5B9E\u66F4\u65B0\u3002");
   return lines.join("\n");
@@ -3557,6 +3746,7 @@ function currentSpacetimeRowId(rows) {
 }
 function recallModeFor(role, row, options, currentSpacetimeId) {
   if ((role === "characters" || role === "state") && row.id === options.focusObjectId) return "constant";
+  if (role === "events" && options.vectorize) return "vector";
   if (!options.latestContinuityConstant) return "trigger";
   if (role === "globalChanges") return "constant";
   if (role === "spacetime") return row.id === currentSpacetimeId ? "constant" : "trigger";
@@ -3585,10 +3775,6 @@ function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, fa
     eventIds: uniq(eventIds, 60)
   };
 }
-function unconsumedSmallSummaries(small, large) {
-  const legacy = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-  return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !legacy.has(item.id));
-}
 function tableDocuments(snapshot, options) {
   if (!snapshot) return [];
   const tables2 = registry(options);
@@ -3609,76 +3795,11 @@ function tableDocuments(snapshot, options) {
         mode,
         trigger,
         row.factIds ?? [],
-        row.eventId ? [row.eventId] : [],
+        row.eventIds ?? (row.eventId ? [row.eventId] : []),
         row.updatedAt,
         options
       ));
     }
-  }
-  return docs;
-}
-function summaryEventKey(item) {
-  return item.eventId || item.id;
-}
-function activeSmallSummaryGroups(small, large) {
-  const active = unconsumedSmallSummaries(small, large);
-  const groups = /* @__PURE__ */ new Map();
-  for (const item of active) {
-    const eventKey = summaryEventKey(item);
-    const rows = groups.get(eventKey) ?? [];
-    rows.push(item);
-    groups.set(eventKey, rows);
-  }
-  return [...groups.entries()].map(([eventKey, items]) => {
-    const ordered = items.map((item, index) => ({ item, index })).sort(
-      (a, b) => String(a.item.createdAt || "").localeCompare(String(b.item.createdAt || "")) || a.index - b.index
-    ).map(({ item }) => item);
-    return { eventKey, items: ordered, latest: ordered.at(-1) };
-  });
-}
-function mergedSmallSummaryContent(group) {
-  const latest = group.latest;
-  const hasCumulativeChain = Boolean(latest.previousSmallSummaryId) || group.items.some((item) => item.supersededBySmallSummaryId === latest.id);
-  const summaries = hasCumulativeChain ? [latest.summary] : uniq(group.items.map((item) => item.summary), 40);
-  const unresolved = uniq(group.items.flatMap((item) => item.unresolvedItems ?? []), 60);
-  return `[\u4E8B\u4EF6\u7EBF\uFF1A${latest.eventId || group.eventKey || "\u672A\u5206\u7C7B"}]
-${summaries.join("\n")}${unresolved.length ? `
-\u672A\u89E3\u51B3\uFF1A${unresolved.join("\uFF1B")}` : ""}`;
-}
-function summaryDocuments(small, large, options) {
-  const docs = [];
-  for (const group of activeSmallSummaryGroups(small, large)) {
-    const item = group.latest;
-    const factIds = uniq(group.items.flatMap((summary) => summary.sourceFactIds ?? summary.sourceKeys), 100);
-    docs.push(makeDocument(
-      `small:event:${group.eventKey}`,
-      `small:event:${group.eventKey}`,
-      `MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item.title}`,
-      mergedSmallSummaryContent(group),
-      "summary:small",
-      "vector",
-      { any: [], all: [], exclude: [] },
-      factIds,
-      item.eventId ? [item.eventId] : [],
-      item.createdAt,
-      options
-    ));
-  }
-  const latestLarge = large.at(-1);
-  if (latestLarge) {
-    docs.push(makeDocument(
-      "large:current",
-      "large:current",
-      `MA\uFF5C\u5927\u603B\u7ED3\uFF5C${latestLarge.title}`,
-      latestLarge.summary,
-      "summary:large",
-      "vector",
-      { any: [], all: [], exclude: [] },
-      latestLarge.sourceFactIds ?? [],
-      latestLarge.eventIds ?? [],
-      latestLarge.createdAt,
-      options
-    ));
   }
   return docs;
 }
@@ -3696,8 +3817,7 @@ function selectLorebookDocuments(documents, options) {
     const timeDifference = String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
     return timeDifference || a.key.localeCompare(b.key);
   });
-  const seenFacts = /* @__PURE__ */ new Set();
-  const seenEvents = /* @__PURE__ */ new Set();
+  const seenKeys = /* @__PURE__ */ new Set();
   const seenContents = /* @__PURE__ */ new Set();
   const output = [];
   let used = 0;
@@ -3706,27 +3826,24 @@ function selectLorebookDocuments(documents, options) {
   const maxVector = Math.max(1, Math.round(Number(options.maxVectorResults) || 8));
   for (const doc of ordered) {
     if (doc.recallMode === "vector" && vectorCount >= maxVector) continue;
+    if (seenKeys.has(doc.key)) continue;
     const contentIdentity = doc.content.replace(/\s+/g, " ").trim();
     if (contentIdentity && seenContents.has(contentIdentity)) continue;
-    const identities = [...doc.factIds.map((id) => `f:${id}`), ...doc.eventIds.map((id) => `e:${id}`)];
-    const duplicate = identities.length > 0 && identities.every((id) => id.startsWith("f:") ? seenFacts.has(id.slice(2)) : seenEvents.has(id.slice(2)));
-    if (duplicate) continue;
     const size = doc.content.length;
     if (used + size > capacity && output.length) continue;
     output.push({ ...doc, order: output.length + 100 });
     used += size;
     if (doc.recallMode === "vector") vectorCount += 1;
+    seenKeys.add(doc.key);
     if (contentIdentity) seenContents.add(contentIdentity);
-    doc.factIds.forEach((id) => seenFacts.add(id));
-    doc.eventIds.forEach((id) => seenEvents.add(id));
   }
   return output;
 }
-function buildSemanticLorebookDocuments(snapshot, small, large, options) {
-  return selectLorebookDocuments([...tableDocuments(snapshot, options), ...summaryDocuments(small, large, options)], options);
+function buildSemanticLorebookDocuments(snapshot, _small, _large, options) {
+  return selectLorebookDocuments(tableDocuments(snapshot, options), options);
 }
-function buildDetailedLorebookDocuments(snapshot, small, large, options) {
-  return selectLorebookDocuments([...tableDocuments(snapshot, options), ...summaryDocuments(small, large, options)], options);
+function buildDetailedLorebookDocuments(snapshot, _small, _large, options) {
+  return selectLorebookDocuments(tableDocuments(snapshot, options), options);
 }
 function buildLorebookDocuments(snapshot, small, large, options) {
   return options.layout === "detailed" ? buildDetailedLorebookDocuments(snapshot, small, large, options) : buildSemanticLorebookDocuments(snapshot, small, large, options);
@@ -3837,7 +3954,10 @@ function legacyLogicalKey(entry, info) {
   if (explicit) return explicit;
   const comment = managedCommentIdentity(entry?.comment);
   const content = managedContentIdentity(entry?.content);
-  if (/^\[MA11\]\s+MA[｜|]大总结(?:[｜|]|$)/.test(comment)) return "large:current";
+  if (/^\[MA11\]\s+MA[｜|]大总结(?:[｜|]|$)/.test(comment)) {
+    const eventId = content.match(/\[长期事件线[：:]\s*([^\]\n]+)\]/)?.[1]?.trim();
+    return eventId ? `large:event:${eventId}` : "large:current";
+  }
   if (/^\[MA11\]\s+MA[｜|]小总结(?:[｜|]|$)/.test(comment)) {
     const eventId = content.match(/\[事件线[：:]\s*([^\]\n]+)\]/)?.[1]?.trim();
     if (eventId) return `small:event:${eventId}`;
@@ -3920,7 +4040,7 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     eventIds: spec.eventIds
   };
 }
-function summaryEventKey2(item) {
+function summaryEventKey(item) {
   return String(item?.eventId || item?.id || "").trim();
 }
 async function desiredSpecs(artifact) {
@@ -3951,12 +4071,14 @@ async function legacyCleanupScope(artifact) {
   const legacyKeys = /* @__PURE__ */ new Set();
   const comments = /* @__PURE__ */ new Set();
   for (const item of state2.smallSummaries) {
-    const eventKey = summaryEventKey2(item);
+    const eventKey = summaryEventKey(item);
     if (eventKey) logicalKeys.add(`small:event:${eventKey}`);
     legacyKeys.add(`small:${item.id}`);
     comments.add(managedCommentIdentity(`[MA11] MA\uFF5C\u5C0F\u603B\u7ED3\uFF5C${item.title}`));
   }
   for (const item of state2.largeSummaries) {
+    const eventKey = summaryEventKey(item);
+    if (eventKey) logicalKeys.add(`large:event:${eventKey}`);
     logicalKeys.add("large:current");
     legacyKeys.add(`large:${item.id}`);
     comments.add(managedCommentIdentity(`[MA11] MA\uFF5C\u5927\u603B\u7ED3\uFF5C${item.title}`));
@@ -3964,7 +4086,7 @@ async function legacyCleanupScope(artifact) {
   return { logicalKeys, legacyKeys, comments };
 }
 function legacyManagedKey(key) {
-  return key.startsWith("small:") && !key.startsWith("small:event:") || key.startsWith("large:") && key !== "large:current";
+  return key.startsWith("small:") && !key.startsWith("small:event:") || key.startsWith("large:") && key !== "large:current" && !key.startsWith("large:event:");
 }
 function appendPair(index, key, pair) {
   if (!key) return;
@@ -4513,8 +4635,8 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metad
     sourceKeys: [...new Set(sourceKeys)],
     sourceFactIds: metadata.sourceFactIds ? [...new Set(metadata.sourceFactIds)] : kind === "small" ? [...new Set(sourceKeys)] : void 0,
     sourceSummaryIds: kind === "large" ? [...new Set(metadata.sourceSummaryIds ?? sourceKeys)] : void 0,
-    eventId: kind === "small" ? safeText(metadata.eventId || value.event_id || value.eventId, 160).trim() || void 0 : void 0,
-    eventIds: kind === "large" ? [...new Set(metadata.eventIds ?? [])] : void 0,
+    eventId: safeText(metadata.eventId || value.event_id || value.eventId, 160).trim() || void 0,
+    eventIds: kind === "large" ? [...new Set(metadata.eventIds ?? (metadata.eventId ? [metadata.eventId] : []))] : void 0,
     unresolvedItems: stringList2(value.unresolved ?? value.unresolvedItems, 40, 1e3),
     createdAt: nowIso(),
     sedimentation: kind === "small" ? normalizeSedimentation(value.sedimentation) : void 0,
@@ -4523,7 +4645,7 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metad
 }
 
 // src/domain/sedimentation.ts
-var REMOVABLE_ROLES = /* @__PURE__ */ new Set(["spacetime", "events", "regions"]);
+var REMOVABLE_ROLES = /* @__PURE__ */ new Set(["spacetime"]);
 var SETTLED_STATUS = /(已结束|已完成|已关闭|已失效|已归档|已替代|resolved|closed|completed|expired|archived|superseded|historical)/i;
 function registryOrDefault2(registry2) {
   return normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY);
@@ -4550,14 +4672,14 @@ function deriveEventSedimentationPlan(snapshot, eventId, factIds, closed, regist
   const removeRowIds = [];
   for (const table of tables2.filter((item) => REMOVABLE_ROLES.has(item.role))) {
     for (const row of snapshot[table.key] ?? []) {
-      const linked = row.eventId === eventId || (row.factIds ?? []).some((id) => factSet.has(id));
+      const linked = (row.eventIds ?? (row.eventId ? [row.eventId] : [])).includes(eventId) || (row.factIds ?? []).some((id) => factSet.has(id));
       if (linked && SETTLED_STATUS.test(`${row.status} ${row.content}`)) removeRowIds.push(row.id);
     }
   }
   return {
     removeRowIds: [...new Set(removeRowIds)],
     characterActivityUpdates: [],
-    notes: ["\u7531\u4EE3\u7801\u6309 event_id / fact_id \u751F\u6210\u5B89\u5168\u6C89\u964D\u5019\u9009\uFF1B\u4EBA\u5DE5\u3001\u9501\u5B9A\u3001\u672A\u7ED3\u7B97\u548C\u5F53\u524D\u76F8\u5173\u884C\u4ECD\u7531\u4FDD\u62A4\u89C4\u5219\u62E6\u622A\u3002"]
+    notes: ["\u7531\u4EE3\u7801\u6309 event_id / fact_id \u751F\u6210\u65E7\u65F6\u7A7A\u9000\u51FA\u5019\u9009\uFF1B\u4E8B\u4EF6\u3001\u533A\u57DF\u548C\u5BF9\u8C61\u6761\u76EE\u4FDD\u7559\uFF0C\u5728\u6761\u76EE\u5185\u90E8\u5B8C\u6210\u8FD1\u671F\u4E0E\u5386\u53F2\u6C89\u964D\u3002"]
   };
 }
 function applySedimentation(snapshot, summary, registry2) {
@@ -4600,14 +4722,15 @@ function applySedimentation(snapshot, summary, registry2) {
 // src/prompts/summary.ts
 function smallSummarySystemPrompt() {
   return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\uFF0C\u4E5F\u662F\u6309 event_id \u5DE5\u4F5C\u7684\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u63A8\u6D4B\uFF0C\u4E0D\u628A\u672A\u53D1\u751F\u7ED3\u679C\u5199\u6B7B\u3002
-\u5C0F\u603B\u7ED3\u6309\u4E00\u4E2A event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF0C\u4E0D\u662F\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\uFF0C\u4E5F\u4E0D\u662F\u5F53\u524D\u8868\u683C\u538B\u7F29\u3002
+\u4E00\u6B21\u8BF7\u6C42\u53EF\u80FD\u5305\u542B\u591A\u6761\u5F7C\u6B64\u65E0\u5173\u7684\u4E8B\u4EF6\u7EBF\u3002\u5FC5\u987B\u6309 event_id \u5206\u522B\u603B\u7ED3\uFF0C\u7EDD\u4E0D\u80FD\u628A\u4E0D\u540C\u4E8B\u4EF6\u7EBF\u7684\u4EBA\u7269\u3001\u5730\u70B9\u3001\u56E0\u679C\u6216\u7ED3\u679C\u6DF7\u5728\u4E00\u8D77\u3002
+\u5C0F\u603B\u7ED3\u6309\u6BCF\u4E00\u4E2A event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF0C\u4E0D\u662F\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\uFF0C\u4E5F\u4E0D\u662F\u5F53\u524D\u8868\u683C\u538B\u7F29\u3002
 \u5FC5\u987B\u4FDD\u7559\uFF1A\u8D77\u56E0\u3001\u5DF2\u53D1\u751F\u7684\u5173\u952E\u7ECF\u8FC7\u3001\u5DF2\u4EA7\u751F\u7684\u53D8\u5316\u3001\u5F53\u524D\u7ED3\u679C\u3001\u5C1A\u672A\u89E3\u51B3\u4E8B\u9879\u3001\u5BF9\u540E\u7EED\u4ECD\u6709\u6548\u7684\u5F71\u54CD\u3002
 \u5FC5\u987B\u5220\u9664\uFF1A\u91CD\u590D\u52A8\u4F5C\u3001\u6C14\u6C1B\u63CF\u5199\u3001\u65E0\u56E0\u679C\u4F5C\u7528\u7684\u65C1\u89C2\u8005\u3001\u65E0\u540E\u7EED\u610F\u4E49\u7684\u4E34\u65F6\u53CD\u5E94\u3001\u5DF2\u88AB\u65B0\u4E8B\u5B9E\u8986\u76D6\u7684\u65E7\u8868\u8FF0\u3002
 \u4E8B\u4EF6\u672A\u7ED3\u675F\u65F6\uFF0C\u53EA\u603B\u7ED3\u5DF2\u786E\u5B9A\u53D1\u751F\u7684\u90E8\u5206\uFF0C\u5E76\u660E\u786E\u672A\u89E3\u51B3\u4E8B\u9879\u3002\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u3001\u559D\u5F69\u3001\u8BAE\u8BBA\u548C\u540C\u573A\u8005\u4E0D\u5F97\u8FDB\u5165\u603B\u7ED3\uFF0C\u9664\u975E\u5176\u884C\u4E3A\u6539\u53D8\u4E8B\u4EF6\u7ED3\u679C\u3002
-\u8F93\u51FA\u5B57\u6BB5\u56FA\u5B9A\u4E3A title\u3001summary\u3001keywords\u3001unresolved\u3002\u53EF\u89C1\u8868\u9000\u51FA\u7531\u4EE3\u7801\u6309 event_id / fact_id \u5B89\u5168\u5904\u7406\uFF0C\u4E0D\u7531\u4F60\u6307\u5B9A\u884C\u53F7\u3002`;
+\u8F93\u51FA\u6839\u5B57\u6BB5\u56FA\u5B9A\u4E3A summaries\uFF1B\u6BCF\u9879\u56FA\u5B9A\u4E3A event_id\u3001title\u3001summary\u3001keywords\u3001unresolved\u3002\u53EF\u89C1\u8868\u9000\u51FA\u7531\u4EE3\u7801\u6309 event_id / fact_id \u5B89\u5168\u5904\u7406\uFF0C\u4E0D\u7531\u4F60\u6307\u5B9A\u884C\u53F7\u3002`;
 }
-function smallSummaryPrompt(eventId, facts, previous) {
-  const payload = facts.map((fact) => ({
+function compactSmallFacts(facts) {
+  return facts.map((fact) => ({
     fact_id: fact.factId,
     event_id: fact.eventId,
     source_message_ids: fact.sourceMessageIds,
@@ -4620,35 +4743,60 @@ function smallSummaryPrompt(eventId, facts, previous) {
     keywords: fact.keywords,
     confidence: fact.confidence
   }));
-  const previousPayload = previous ? JSON.stringify({ id: previous.id, event_id: previous.eventId, title: previous.title, summary: previous.summary, unresolved: previous.unresolvedItems ?? [], keywords: previous.keywords }) : "\uFF08\u65E0\uFF09";
-  return `\u4E3A event_id=${eventId} \u751F\u6210\u8BE5\u4E8B\u4EF6\u7EBF\u7684\u65B0\u7248\u672C\u5C0F\u603B\u7ED3\u3002
-\u53EA\u4F7F\u7528\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u548C\u4E0B\u5217\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002\u65B0\u7248\u672C\u5FC5\u987B\u7D2F\u8BA1\u4FDD\u7559\u4ECD\u6709\u6548\u7684\u65E2\u6709\u4E8B\u5B9E\uFF0C\u5E76\u7528\u65B0\u4E8B\u5B9E\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u65E7\u8868\u8FF0\u3002
+}
+function smallSummaryBatchPrompt(groups) {
+  const payload = groups.map((group) => ({
+    event_id: group.eventId,
+    previous_small: group.previous ? {
+      id: group.previous.id,
+      title: group.previous.title,
+      summary: group.previous.summary,
+      unresolved: group.previous.unresolvedItems ?? [],
+      keywords: group.previous.keywords
+    } : null,
+    new_facts: compactSmallFacts(group.facts)
+  }));
+  return `\u4E3A\u4E0B\u5217\u6BCF\u6761 event_id \u5206\u522B\u751F\u6210\u81EA\u5DF1\u7684\u65B0\u7248\u672C\u5C0F\u603B\u7ED3\u3002\u53EF\u4EE5\u4E00\u6B21\u751F\u6210\u591A\u6761\uFF0C\u4F46\u7981\u6B62\u8DE8\u4E8B\u4EF6\u5408\u5E76\u4E8B\u5B9E\u3001\u4EBA\u7269\u3001\u5730\u70B9\u6216\u56E0\u679C\u3002
+\u53EA\u4F7F\u7528\u5404\u81EA\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u548C\u5404\u81EA\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002\u65B0\u7248\u672C\u5FC5\u987B\u7D2F\u8BA1\u4FDD\u7559\u4ECD\u6709\u6548\u7684\u65E2\u6709\u4E8B\u5B9E\uFF0C\u5E76\u7528\u65B0\u4E8B\u5B9E\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u4EE3\u65E7\u8868\u8FF0\u3002
 
-\u3010\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u3011
-${previousPayload}
+\u3010\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u6279\u6B21\u3011
+${JSON.stringify(payload)}
 
-\u3010\u672C\u6B21\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\u3011
-${JSON.stringify(payload, null, 2)}
-
-\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}`;
+\u53EA\u8F93\u51FA\uFF1A{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}
+\u6BCF\u4E2A\u8F93\u5165 event_id \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u9879\u3002`;
 }
 function largeSummarySystemPrompt() {
-  return "\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\uFF0C\u4E5F\u662F\u957F\u671F\u56E0\u679C\u56FA\u5316\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002\u8F93\u5165\u53EA\u80FD\u662F\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u548C\u5C1A\u672A\u56FA\u5316\u7684\u5C0F\u603B\u7ED3\uFF1B\u4E0D\u5F97\u91CD\u65B0\u8BFB\u53D6\u804A\u5929\u3001\u5C55\u5F00\u52A8\u4F5C\u7EC6\u8282\u6216\u8865\u5168\u672A\u663E\u5F71\u5185\u5BB9\u3002";
+  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\uFF0C\u4E0D\u8BFB\u53D6\u804A\u5929\u6B63\u6587\uFF0C\u4E0D\u8865\u5168\u672A\u663E\u5F71\u5185\u5BB9\u3002
+\u4E00\u6B21\u8BF7\u6C42\u53EF\u80FD\u5305\u542B\u591A\u6761\u5F7C\u6B64\u65E0\u5173\u7684\u4E8B\u4EF6\u7EBF\u3002\u5FC5\u987B\u6309 event_id \u5206\u522B\u751F\u6210\u957F\u671F\u603B\u7ED3\uFF0C\u7EDD\u4E0D\u80FD\u628A\u4E0D\u540C\u4E8B\u4EF6\u7EBF\u6DF7\u6210\u540C\u4E00\u6BB5\u5386\u53F2\u3002
+\u6BCF\u6761\u4E8B\u4EF6\u7EBF\u53EA\u538B\u7F29\u81EA\u8EAB\u7684\u5C0F\u603B\u7ED3\uFF1A\u5F53\u524D\u5C42\u7EC6\u8282\u6700\u591A\uFF0C\u8FD1\u671F\u5C42\u6B21\u4E4B\uFF0C\u957F\u671F\u5386\u53F2\u53EA\u4FDD\u7559\u6700\u7EC8\u7ED3\u679C\u3001\u6838\u5FC3\u56E0\u679C\u4E0E\u6301\u7EED\u5F71\u54CD\u3002`;
 }
-function largeSummaryPrompt(summaries, previousLarge) {
-  const source = summaries.map((item) => ({ id: item.id, event_id: item.eventId, title: item.title, summary: item.summary, unresolved: item.unresolvedItems ?? [], keywords: item.keywords })).map((item) => JSON.stringify(item)).join("\n");
-  const previous = previousLarge ? JSON.stringify({ id: previousLarge.id, title: previousLarge.title, summary: previousLarge.summary, keywords: previousLarge.keywords }) : "\uFF08\u65E0\uFF09";
-  return `\u628A\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u4E0E\u672C\u6279\u5C1A\u672A\u56FA\u5316\u7684\u5C0F\u603B\u7ED3\u5408\u5E76\u4E3A\u65B0\u7684\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\u3002
-\u804C\u8D23\uFF1A\u56FA\u5316\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u5B9E\uFF1B\u5408\u5E76\u540C\u4E00\u957F\u671F\u56E0\u679C\u7EBF\uFF1B\u53BB\u91CD\u548C\u8FDB\u4E00\u6B65\u6982\u62EC\uFF1B\u4FDD\u7559\u7A33\u5B9A\u7ED3\u679C\u548C\u672A\u89E3\u51B3\u4E8B\u9879\u3002
-\u4E0D\u5F97\u91CD\u505A\u5168\u90E8\u804A\u5929\u603B\u7ED3\uFF0C\u4E0D\u5F97\u91CD\u65B0\u5C55\u5F00\u52A8\u4F5C\u7EC6\u8282\uFF0C\u4E0D\u5F97\u8865\u5168\u672A\u53D1\u751F\u6216\u672A\u663E\u5F71\u5185\u5BB9\uFF0C\u4E0D\u5F97\u6D88\u8D39\u8F93\u5165\u4E4B\u5916\u7684\u5C0F\u603B\u7ED3\u3002\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u65C1\u89C2\u4FE1\u606F\u5FC5\u987B\u5220\u9664\u3002
+function largeSummaryPrompt(groups) {
+  const payload = groups.map((group) => ({
+    event_id: group.eventId,
+    previous_large: group.previousLarge ? {
+      id: group.previousLarge.id,
+      title: group.previousLarge.title,
+      summary: group.previousLarge.summary,
+      unresolved: group.previousLarge.unresolvedItems ?? [],
+      keywords: group.previousLarge.keywords
+    } : null,
+    latest_small: {
+      id: group.latestSmall.id,
+      title: group.latestSmall.title,
+      summary: group.latestSmall.summary,
+      unresolved: group.latestSmall.unresolvedItems ?? [],
+      keywords: group.latestSmall.keywords
+    },
+    source_summary_ids: group.sourceSummaryIds
+  }));
+  return `\u5C06\u4E0B\u5217\u6BCF\u6761 event_id \u5206\u522B\u538B\u7F29\u4E3A\u81EA\u5DF1\u7684\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\u3002\u53EF\u4EE5\u4E00\u6B21\u751F\u6210\u591A\u6761\uFF0C\u4F46\u7981\u6B62\u8DE8\u4E8B\u4EF6\u5408\u5E76\u4E8B\u5B9E\u3001\u56E0\u679C\u3001\u4EBA\u7269\u6216\u5730\u70B9\u3002
+\u804C\u8D23\uFF1A\u56FA\u5316\u5DF2\u7ECF\u53D1\u751F\u7684\u7ED3\u679C\uFF1B\u4FDD\u7559\u957F\u671F\u5F71\u54CD\u548C\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\uFF1B\u5220\u9664\u52A8\u4F5C\u7EC6\u8282\u3001\u91CD\u590D\u8FC7\u7A0B\u4E0E\u5DF2\u88AB\u7ED3\u679C\u8986\u76D6\u7684\u63CF\u8FF0\u3002\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u4FE1\u606F\u5FC5\u987B\u5220\u9664\u3002
 
-\u3010\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u3011
-${previous}
+\u3010\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u6279\u6B21\u3011
+${JSON.stringify(payload)}
 
-\u3010\u5C1A\u672A\u56FA\u5316\u7684\u5C0F\u603B\u7ED3\u3011
-${source || "\uFF08\u65E0\uFF09"}
-
-\u53EA\u8F93\u51FA\uFF1A{"title":"...","summary":"...","keywords":["..."]}`;
+\u53EA\u8F93\u51FA\uFF1A{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}
+\u6BCF\u4E2A\u8F93\u5165 event_id \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u9879\u3002`;
 }
 
 // src/pipeline/summary.ts
@@ -4662,66 +4810,171 @@ function eventClosed(facts) {
   const settled = !latest.active || /(结束|已解决|已关闭|完成|归档|closed|resolved|ended)/i.test(latest.status);
   return settled && latest.unresolvedItems.length === 0;
 }
-function choosePendingEvent(facts, threshold, force) {
+function entryToken(value) {
+  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+}
+function summaryMemoryText(summary) {
+  const title = String(summary.title || "").trim();
+  const body = String(summary.summary || "").trim();
+  return title ? `\u3010${title}\u3011${body}` : body;
+}
+function rowEventIds(row) {
+  return [...new Set([...row.eventIds ?? [], String(row.eventId || "").trim()].filter(Boolean))];
+}
+function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts, registryValue) {
+  const registry2 = normalizeTableRegistry(registryValue);
+  const relatedTokens2 = new Set(facts.flatMap((fact) => fact.relatedEntities).map(entryToken).filter(Boolean));
+  const eventTitleTokens = new Set(facts.map((fact) => entryToken(fact.title)).filter(Boolean));
+  const factIds = new Set(facts.map((fact) => fact.factId).filter(Boolean));
+  const removals = new Set(removeTexts.map((item) => String(item || "").trim()).filter(Boolean));
+  const next = structuredClone(snapshot);
+  for (const table of registry2) {
+    for (const row of next[table.key] ?? []) {
+      const rowTokens = [entryToken(row.id), entryToken(row.title)].filter(Boolean);
+      const linkedByEvent = rowEventIds(row).includes(eventId);
+      const linkedByFact = (row.factIds ?? []).some((id) => factIds.has(id));
+      const linkedByObject = rowTokens.some((token) => relatedTokens2.has(token));
+      const linkedEventRow = table.role === "events" && rowTokens.some((token) => eventTitleTokens.has(token));
+      const target = linkedByEvent || linkedByFact || linkedByObject || linkedEventRow;
+      if (!target || row.locked || row.lockMode === "all") continue;
+      row.fields ||= {};
+      const current = Array.isArray(row.fields[layer]) ? row.fields[layer].map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+      let values = current.filter((item) => !removals.has(item));
+      if (addText) values.push(addText);
+      values = [...new Set(values)].slice(-40);
+      if (JSON.stringify(current) === JSON.stringify(values)) continue;
+      row.fields[layer] = values;
+      row.updatedAt = nowIso();
+    }
+  }
+  return next;
+}
+function pendingSmallEventGroups(facts, threshold, force) {
   const allByEvent = /* @__PURE__ */ new Map();
   for (const fact of facts) {
     const list4 = allByEvent.get(fact.eventId) ?? [];
     list4.push(fact);
     allByEvent.set(fact.eventId, list4);
   }
-  const groups = [...pendingFactsByEvent(facts).entries()].map(([eventId, eventFacts]) => ({ eventId, facts: eventFacts, closed: eventClosed(allByEvent.get(eventId) ?? eventFacts), messages: new Set(eventFacts.flatMap((fact) => fact.sourceMessageIds)).size })).filter((group) => force || group.closed || group.messages >= threshold).sort((a, b) => Number(b.closed) - Number(a.closed) || b.facts.length - a.facts.length || a.eventId.localeCompare(b.eventId));
-  return groups[0] ?? null;
+  return [...pendingFactsByEvent(facts).entries()].map(([eventId, eventFacts]) => ({
+    eventId,
+    facts: eventFacts,
+    closed: eventClosed(allByEvent.get(eventId) ?? eventFacts),
+    messages: new Set(eventFacts.flatMap((fact) => fact.sourceMessageIds)).size
+  })).filter((group) => force || group.closed || group.messages >= threshold).sort((a, b) => Number(b.closed) - Number(a.closed) || b.facts.length - a.facts.length || a.eventId.localeCompare(b.eventId));
 }
-function pendingSmallSummaries(small, large) {
-  const legacyConsumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-  return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !legacyConsumed.has(item.id));
+function pendingLargeEventGroups(small, large, threshold, force) {
+  const consumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
+  const groups = /* @__PURE__ */ new Map();
+  for (const item of small) {
+    if (item.solidifiedByLargeSummaryId || consumed.has(item.id)) continue;
+    const eventId = String(item.eventId || item.id).trim();
+    groups.set(eventId, [...groups.get(eventId) ?? [], item]);
+  }
+  const minimum = Math.max(1, Math.round(Number(threshold) || 4));
+  const output = [];
+  for (const [eventId, items] of groups) {
+    const ordered = items.map((item, index) => ({ item, index })).sort(
+      (a, b) => String(a.item.createdAt || "").localeCompare(String(b.item.createdAt || "")) || a.index - b.index
+    ).map(({ item }) => item);
+    const latest = [...ordered].reverse().find((item) => !item.supersededBySmallSummaryId) ?? ordered.at(-1);
+    const closed = latest.eventClosed === true;
+    if (!force && !closed && ordered.length < minimum) continue;
+    const previousLarge = [...large].reverse().find((item) => item.eventId === eventId || item.eventIds?.includes(eventId));
+    output.push({
+      eventId,
+      items: ordered,
+      latest,
+      previousLarge,
+      // 小总结新版本是累计版本；大总结只直接读取最新版本，但提交后要把整条旧版本链一起标记为已固化。
+      sourceSummaryIds: [latest.id],
+      consumedVersionIds: ordered.map((item) => item.id),
+      sourceFactIds: [...new Set(latest.sourceFactIds ?? latest.sourceKeys)],
+      closed
+    });
+  }
+  return output.sort((a, b) => Number(b.closed) - Number(a.closed) || b.items.length - a.items.length || a.eventId.localeCompare(b.eventId));
 }
 function hasEligibleSmallSummary(facts, threshold) {
-  return Boolean(choosePendingEvent(facts, Math.max(1, Math.round(Number(threshold) || 12)), false));
+  return pendingSmallEventGroups(facts, Math.max(1, Math.round(Number(threshold) || 12)), false).length > 0;
 }
 function hasEligibleLargeSummary(small, large, threshold) {
-  return pendingSmallSummaries(small, large).length >= Math.max(1, Math.round(Number(threshold) || 4));
+  return pendingLargeEventGroups(small, large, threshold, false).length > 0;
 }
 async function generateSmallSummary(artifact, force = false) {
   const settings = getSettings();
   const chatState = await getChatState(artifact.chatKey);
   const threshold = Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12));
-  const selected = choosePendingEvent(chatState.internalFacts ?? [], threshold, force);
-  if (!selected) return null;
-  const previousEventSummary = [...chatState.smallSummaries].reverse().find(
-    (item) => item.eventId === selected.eventId && !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId
-  );
+  const selected = pendingSmallEventGroups(chatState.internalFacts ?? [], threshold, force).slice(0, 8);
+  if (!selected.length) return null;
+  const prepared = selected.map((group) => ({
+    ...group,
+    previous: [...chatState.smallSummaries].reverse().find(
+      (item) => item.eventId === group.eventId && !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId
+    )
+  }));
   const parsed = await generateStructuredTask({
     task: "smallSummary",
     systemPrompt: smallSummarySystemPrompt(),
-    prompt: smallSummaryPrompt(selected.eventId, selected.facts, previousEventSummary),
-    structureDescription: '{"title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}'
+    prompt: smallSummaryBatchPrompt(prepared.map((group) => ({ eventId: group.eventId, facts: group.facts, previous: group.previous }))),
+    structureDescription: '{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}',
+    maxTokens: Math.min(2200, 700 + prepared.length * 260)
   });
   assertArtifactCommitCurrent(artifact);
-  const newFactIds = selected.facts.map((fact) => fact.factId);
-  const sourceFactIds = [.../* @__PURE__ */ new Set([...previousEventSummary?.sourceFactIds ?? previousEventSummary?.sourceKeys ?? [], ...newFactIds])];
-  const summary = normalizeSummary(parsed, "small", sourceFactIds, void 0, { eventId: selected.eventId, sourceFactIds });
-  summary.previousSmallSummaryId = previousEventSummary?.id;
-  if (!summary.summary) throw new Error("\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981");
+  const rawSummaries = Array.isArray(parsed?.summaries) ? parsed.summaries : prepared.length === 1 && parsed && typeof parsed === "object" ? [{ ...parsed, event_id: parsed.event_id || prepared[0].eventId }] : [];
+  const byEvent = /* @__PURE__ */ new Map();
+  for (const item of rawSummaries) {
+    if (!item || typeof item !== "object") continue;
+    const eventId = String(item.event_id ?? item.eventId ?? "").trim();
+    if (!eventId || byEvent.has(eventId)) continue;
+    byEvent.set(eventId, item);
+  }
+  const expected = new Set(prepared.map((group) => group.eventId));
+  for (const eventId of expected) if (!byEvent.has(eventId)) throw new Error(`\u5C0F\u603B\u7ED3\u7F3A\u5C11\u4E8B\u4EF6\u7EBF\u7ED3\u679C\uFF1A${eventId}`);
+  for (const eventId of byEvent.keys()) if (!expected.has(eventId)) throw new Error(`\u5C0F\u603B\u7ED3\u8FD4\u56DE\u672A\u8BF7\u6C42\u4E8B\u4EF6\u7EBF\uFF1A${eventId}`);
+  const generated = prepared.map((group) => {
+    const newFactIds = group.facts.map((fact) => fact.factId);
+    const sourceFactIds = [.../* @__PURE__ */ new Set([...group.previous?.sourceFactIds ?? group.previous?.sourceKeys ?? [], ...newFactIds])];
+    const summary = normalizeSummary(byEvent.get(group.eventId), "small", sourceFactIds, void 0, { eventId: group.eventId, sourceFactIds });
+    summary.previousSmallSummaryId = group.previous?.id;
+    summary.eventClosed = group.closed;
+    if (!summary.summary) throw new Error(`\u5C0F\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981\uFF1A${group.eventId}`);
+    return { group, summary, newFactIds };
+  });
   const previousSnapshot2 = artifact.snapshot ? structuredClone(artifact.snapshot) : void 0;
   const previousFacts = structuredClone(chatState.internalFacts);
   const previousSummaries = structuredClone(chatState.smallSummaries);
   try {
     if (artifact.snapshot) {
-      summary.sedimentation = deriveEventSedimentationPlan(
-        artifact.snapshot,
-        selected.eventId,
-        newFactIds,
-        selected.closed,
-        settings.tableRegistry
-      );
-      artifact.snapshot = applySedimentation(artifact.snapshot, summary, settings.tableRegistry);
+      let nextSnapshot = artifact.snapshot;
+      for (const { group, summary, newFactIds } of generated) {
+        summary.sedimentation = deriveEventSedimentationPlan(
+          nextSnapshot,
+          group.eventId,
+          newFactIds,
+          group.closed,
+          settings.tableRegistry
+        );
+        nextSnapshot = applySedimentation(nextSnapshot, summary, settings.tableRegistry);
+        nextSnapshot = applySummaryLayer(
+          nextSnapshot,
+          group.eventId,
+          group.facts,
+          "recentHistory",
+          summaryMemoryText(summary),
+          group.previous ? [summaryMemoryText(group.previous)] : [],
+          settings.tableRegistry
+        );
+      }
+      artifact.snapshot = nextSnapshot;
       assertArtifactCommitCurrent(artifact);
       await persistChatFor(artifact.chatKey);
     }
-    chatState.smallSummaries.push(summary);
-    if (previousEventSummary) previousEventSummary.supersededBySmallSummaryId = summary.id;
-    markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
+    chatState.smallSummaries.push(...generated.map((item) => item.summary));
+    for (const { group, summary, newFactIds } of generated) {
+      if (group.previous) group.previous.supersededBySmallSummaryId = summary.id;
+      markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
+    }
     await putChatState(chatState);
   } catch (error) {
     artifact.snapshot = previousSnapshot2;
@@ -4734,52 +4987,109 @@ async function generateSmallSummary(artifact, force = false) {
     }
     throw error;
   }
-  return summary;
+  return generated.at(-1)?.summary ?? null;
 }
 async function generateLargeSummary(artifact, force = false) {
   const settings = getSettings();
   const chatState = await getChatState(artifact.chatKey);
-  const pending = pendingSmallSummaries(chatState.smallSummaries, chatState.largeSummaries);
   const threshold = Math.max(1, Number(settings.largeSummaryCount) || 4);
-  if (!force && pending.length < threshold) return null;
-  if (!pending.length) return null;
-  const selected = force ? pending : pending.slice(0, threshold);
-  const previousLarge = chatState.largeSummaries.at(-1);
+  const groups = pendingLargeEventGroups(chatState.smallSummaries, chatState.largeSummaries, threshold, force).slice(0, 8);
+  if (!groups.length) return null;
   const parsed = await generateStructuredTask({
     task: "largeSummary",
     systemPrompt: largeSummarySystemPrompt(),
-    prompt: largeSummaryPrompt(selected, previousLarge),
-    structureDescription: '{"title":"...","summary":"...","keywords":["..."]}'
+    prompt: largeSummaryPrompt(groups.map((group) => ({
+      eventId: group.eventId,
+      latestSmall: group.latest,
+      sourceSummaryIds: group.sourceSummaryIds,
+      previousLarge: group.previousLarge
+    }))),
+    structureDescription: '{"summaries":[{"event_id":"...","title":"...","summary":"...","keywords":["..."],"unresolved":["..."]}]}',
+    maxTokens: Math.min(2200, 700 + groups.length * 260)
   });
   assertArtifactCommitCurrent(artifact);
-  const selectedIds = selected.map((item) => item.id);
-  const sourceFactIds = [...new Set(selected.flatMap((item) => item.sourceFactIds ?? item.sourceKeys))];
-  const eventIds = [...new Set(selected.map((item) => item.eventId).filter((id) => Boolean(id)))];
-  const summary = normalizeSummary(parsed, "large", selectedIds, previousLarge?.id, {
-    sourceSummaryIds: selectedIds,
-    sourceFactIds,
-    eventIds
+  const rawSummaries = Array.isArray(parsed?.summaries) ? parsed.summaries : groups.length === 1 && parsed && typeof parsed === "object" ? [{ ...parsed, event_id: parsed.event_id || groups[0].eventId }] : [];
+  const byEvent = /* @__PURE__ */ new Map();
+  for (const item of rawSummaries) {
+    if (!item || typeof item !== "object") continue;
+    const eventId = String(item.event_id ?? item.eventId ?? "").trim();
+    if (!eventId || byEvent.has(eventId)) continue;
+    byEvent.set(eventId, item);
+  }
+  const expected = new Set(groups.map((group) => group.eventId));
+  for (const eventId of expected) if (!byEvent.has(eventId)) throw new Error(`\u5927\u603B\u7ED3\u7F3A\u5C11\u4E8B\u4EF6\u7EBF\u7ED3\u679C\uFF1A${eventId}`);
+  for (const eventId of byEvent.keys()) if (!expected.has(eventId)) throw new Error(`\u5927\u603B\u7ED3\u8FD4\u56DE\u672A\u8BF7\u6C42\u4E8B\u4EF6\u7EBF\uFF1A${eventId}`);
+  const generated = groups.map((group) => {
+    const value = byEvent.get(group.eventId);
+    const summary = normalizeSummary(value, "large", group.sourceSummaryIds, group.previousLarge?.id, {
+      eventId: group.eventId,
+      eventIds: [group.eventId],
+      sourceSummaryIds: group.sourceSummaryIds,
+      sourceFactIds: group.sourceFactIds
+    });
+    if (!summary.summary) throw new Error(`\u5927\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981\uFF1A${group.eventId}`);
+    return { group, summary };
   });
-  if (!summary.summary) throw new Error("\u5927\u603B\u7ED3\u6A21\u578B\u8FD4\u56DE\u7A7A\u6458\u8981");
-  const previousLargeList = [...chatState.largeSummaries];
+  const previousLargeList = structuredClone(chatState.largeSummaries);
   const previousSmall = structuredClone(chatState.smallSummaries);
   const previousFacts = structuredClone(chatState.internalFacts);
+  const previousSnapshot2 = artifact.snapshot ? structuredClone(artifact.snapshot) : void 0;
   try {
-    chatState.largeSummaries.push(summary);
+    if (artifact.snapshot) {
+      let nextSnapshot = artifact.snapshot;
+      for (const { group, summary } of generated) {
+        const eventFacts = chatState.internalFacts.filter((fact) => fact.eventId === group.eventId);
+        nextSnapshot = applySummaryLayer(
+          nextSnapshot,
+          group.eventId,
+          eventFacts,
+          "recentHistory",
+          "",
+          group.items.map(summaryMemoryText),
+          settings.tableRegistry
+        );
+        nextSnapshot = applySummaryLayer(
+          nextSnapshot,
+          group.eventId,
+          eventFacts,
+          "solidifiedHistory",
+          summaryMemoryText(summary),
+          group.previousLarge ? [summaryMemoryText(group.previousLarge)] : [],
+          settings.tableRegistry
+        );
+      }
+      artifact.snapshot = nextSnapshot;
+      assertArtifactCommitCurrent(artifact);
+      await persistChatFor(artifact.chatKey);
+    }
+    chatState.largeSummaries.push(...generated.map((item) => item.summary));
     await putChatState(chatState);
     const readBack = await getChatState(artifact.chatKey);
-    if (!readBack.largeSummaries.some((item) => item.id === summary.id)) throw new Error("\u5927\u603B\u7ED3\u5199\u5165\u540E\u56DE\u8BFB\u6821\u9A8C\u5931\u8D25");
-    for (const item of readBack.smallSummaries) if (selectedIds.includes(item.id)) item.solidifiedByLargeSummaryId = summary.id;
-    const factIds = readBack.smallSummaries.filter((item) => selectedIds.includes(item.id)).flatMap((item) => item.sourceFactIds ?? item.sourceKeys);
-    markFactsSolidified(readBack.internalFacts, factIds, summary.id);
+    const generatedIds = new Set(generated.map((item) => item.summary.id));
+    if (![...generatedIds].every((id) => readBack.largeSummaries.some((item) => item.id === id))) {
+      throw new Error("\u5927\u603B\u7ED3\u6279\u91CF\u5199\u5165\u540E\u56DE\u8BFB\u6821\u9A8C\u5931\u8D25");
+    }
+    for (const { group, summary } of generated) {
+      const selectedIds = new Set(group.consumedVersionIds);
+      for (const item of readBack.smallSummaries) if (selectedIds.has(item.id)) item.solidifiedByLargeSummaryId = summary.id;
+      markFactsSolidified(readBack.internalFacts, group.sourceFactIds, summary.id);
+    }
     await putChatState(readBack);
   } catch (error) {
+    artifact.snapshot = previousSnapshot2;
     chatState.largeSummaries = previousLargeList;
     chatState.smallSummaries = previousSmall;
     chatState.internalFacts = previousFacts;
+    if (previousSnapshot2) {
+      try {
+        assertArtifactCommitCurrent(artifact);
+        await persistChatFor(artifact.chatKey).catch(() => void 0);
+      } catch {
+      }
+    }
     throw error;
   }
-  return summary;
+  return generated.at(-1)?.summary ?? null;
 }
 async function runSummaryStage(artifact, kind, force = false) {
   const settings = getSettings();
@@ -4931,16 +5241,18 @@ var COMMON_FIELD_KEYS = /* @__PURE__ */ new Set([
   "keywords",
   "status",
   "baseContent",
-  "solidifiedHistory",
+  "currentFacts",
   "currentStates",
+  "recentHistory",
+  "solidifiedHistory",
   "relatedObjects",
   "relatedEvents"
 ]);
 var ACTIVE_STATUS_RE = /current|active|进行|当前|活跃|未决|持续|开放|受限|暂停/i;
-var MAX_INDEX_ROWS = 240;
-var MAX_FULL_ROWS = 36;
-var MAX_FULL_ROWS_PER_TABLE = 12;
-var MAX_FACTS = 36;
+var MAX_INDEX_ROWS = 120;
+var MAX_FULL_ROWS = 16;
+var MAX_FULL_ROWS_PER_TABLE = 6;
+var MAX_FACTS = 18;
 function tables(registry2) {
   return enabledTables(normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY));
 }
@@ -4961,42 +5273,48 @@ function compactRegistryDescription(active) {
 function stateSystemPrompt(registry2) {
   const active = tables(registry2);
   const keys = active.map((table) => table.key).join("\u3001");
-  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\uFF0C\u91C7\u7528\u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
+  return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\uFF08\u591A\u4E8B\u4EF6\u7EBF\u3001\u591A\u5BF9\u8C61\uFF09\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
 
 \u53EA\u8F93\u51FA\u53EF\u76F4\u63A5 JSON.parse \u7684\u5B8C\u6574\u5BF9\u8C61\uFF0C\u4E0D\u8981 Markdown\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
-\u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001snapshot\u3002
-snapshot \u53EA\u80FD\u51FA\u73B0\u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
+\u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001snapshot\u3002snapshot \u53EA\u80FD\u51FA\u73B0\u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
+
+\u3010\u4E00\u6B21\u751F\u6210\uFF0C\u591A\u7EBF\u5206\u533A\u3011
+1. \u4E00\u8F6E\u6B63\u6587\u53EF\u80FD\u540C\u65F6\u63A8\u8FDB\u591A\u6761\u5F7C\u6B64\u65E0\u5173\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5FC5\u987B\u5206\u522B\u5EFA\u7ACB\u6216\u6CBF\u7528\u4E0D\u540C event_id\uFF0C\u7EDD\u4E0D\u80FD\u6DF7\u6210\u540C\u4E00\u4E8B\u4EF6\u3002
+2. \u540C\u4E00\u5BF9\u8C61\u53EF\u4EE5\u540C\u65F6\u53D7\u591A\u6761\u4E8B\u4EF6\u7EBF\u5F71\u54CD\uFF1B\u5728\u540C\u4E00\u884C\u4E2D\u5F52\u5E76\u6240\u6709\u771F\u5B9E\u53D8\u5316\uFF0C\u4E0D\u80FD\u8BA9\u540E\u4E00\u4E2A\u4E8B\u4EF6\u8986\u76D6\u524D\u4E00\u4E2A\u4E8B\u4EF6\u3002
+3. facts \u7684 related_entities \u5FC5\u987B\u5217\u51FA\u8BE5\u4E8B\u5B9E\u76F4\u63A5\u5F71\u54CD\u7684\u5BF9\u8C61\u7A33\u5B9A\u540D\u79F0\uFF0C\u5305\u62EC\u4EBA\u7269\u3001\u5730\u533A\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u3001\u7EC4\u7EC7\u6216\u5168\u5C40\u5BF9\u8C61\uFF1B\u53EA\u77E5\u60C5\u3001\u540C\u573A\u6216\u56F4\u89C2\u4E0D\u7B97\u5F71\u54CD\u3002
+4. \u5C3D\u91CF\u5728\u4E00\u6B21\u8FD4\u56DE\u4E2D\u5B8C\u6210\u672C\u8F6E\u5168\u90E8\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u548C\u5168\u90E8\u53D7\u5F71\u54CD\u6761\u76EE\u7684\u8865\u4E01\u3002
 
 \u3010\u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3011
-1. snapshot[\u8868\u683C\u952E] \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u884C\uFF0C\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\u3002
-2. \u63D2\u4EF6\u6309\u7A33\u5B9A id \u5C06\u8FD4\u56DE\u884C\u5408\u5E76\u8FDB\u65E7\u89C6\u56FE\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\u3002
-3. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id\u3002\u53EA\u6709\u786E\u8BA4\u6574\u5F20\u8868\u5E94\u6E05\u7A7A\u65F6\uFF0C\u624D\u663E\u5F0F\u8FD4\u56DE\u8BE5\u8868\u4E3A []\u3002
-4. \u6BCF\u4E2A\u8FD4\u56DE\u884C\u5FC5\u987B\u5305\u542B id\u3001title\u3001content\u3001keywords\u3001status\u3001factIds\u3001eventId\u3001recall\u3002
-5. recall \u56FA\u5B9A\u4E3A {"any":[],"all":[],"exclude":[]}\uFF1B\u53EA\u5199\u660E\u786E\u540D\u79F0\u3001\u522B\u540D\u548C\u6392\u9664\u8BCD\u3002
-6. baseContent \u4E0E solidifiedHistory \u5DF2\u6709\u5185\u5BB9\u4E0D\u5F97\u6539\u5199\uFF1B\u666E\u901A\u72B6\u6001\u53D8\u5316\u5199\u5165 currentStates \u6216\u5BF9\u5E94\u6269\u5C55\u5B57\u6BB5\u3002
+1. snapshot[\u8868\u683C\u952E] \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u884C\uFF0C\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\u3002
+2. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id\u3002\u65E0\u53D8\u5316\u8868\u683C\u76F4\u63A5\u7701\u7565\uFF1B\u7A7A\u6570\u7EC4\u53EA\u8868\u793A\u672C\u8F6E\u6CA1\u6709\u884C\u8865\u4E01\uFF0C\u72B6\u6001\u6A21\u578B\u4E0D\u5F97\u81EA\u52A8\u6E05\u7A7A\u6574\u5F20\u8868\u3002
+3. \u8FD4\u56DE\u884C\u53EA\u9700\u5305\u542B\u8868\u683C\u5B9A\u4E49\u4E2D\u7684\u5185\u5BB9\u5B57\u6BB5\uFF1BfactIds\u3001eventId\u3001eventIds \u4E0E recall \u7531\u63D2\u4EF6\u6839\u636E facts \u672C\u5730\u751F\u6210\uFF0C\u4E0D\u8981\u91CD\u590D\u8F93\u51FA\u3002
+4. \u65B0\u5BF9\u8C61\u5FC5\u987B\u7ED9\u51FA id\u3001title\u3001content\u3001keywords\u3001status\uFF1B\u65E7\u5BF9\u8C61\u4ECD\u5EFA\u8BAE\u8FD4\u56DE\u8FD9\u4E94\u9879\u4EE5\u907F\u514D\u6B67\u4E49\u3002
+5. baseContent \u662F\u5BF9\u8C61\u5B9A\u4E49\uFF0C\u5DF2\u6709\u975E\u7A7A\u503C\u4E0D\u5F97\u7531\u666E\u901A\u72B6\u6001\u63D0\u53D6\u6539\u5199\u3002
+6. currentFacts \u5199\u5F53\u524D\u5BA2\u89C2\u6210\u7ACB\u3001\u6301\u7EED\u8F83\u4E45\u4F46\u672A\u6765\u4ECD\u53EF\u80FD\u88AB\u66FF\u6362\u7684\u4E8B\u5B9E\u3002
+7. currentStates \u5199\u6B63\u5728\u53D1\u751F\u3001\u77ED\u671F\u6216\u9636\u6BB5\u6027\u7684\u72B6\u6001\uFF0C\u4FDD\u7559\u672C\u8F6E\u6700\u6709\u7528\u7EC6\u8282\u3002
+8. recentHistory \u4E0E solidifiedHistory \u53EA\u7531\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u7EF4\u62A4\uFF0C\u72B6\u6001\u63D0\u53D6\u4E0D\u5F97\u5199\u5165\u6216\u6539\u5199\u3002
 
 \u3010\u5185\u90E8\u4E8B\u5B9E facts\u3011
 \u6BCF\u6761\u5305\u542B fact_id\u3001event_id\u3001type\u3001title\u3001occurred\u3001unresolved\u3001status\u3001time_range\u3001related_entities\u3001keywords\u3001operation\u3001confidence\u3002
 \u540C\u4E00\u4E8B\u5B9E\u4E0E\u4E8B\u4EF6\u7EBF\u5FC5\u987B\u6CBF\u7528\u65E7 ID\uFF1B\u53EA\u8F93\u51FA\u672C\u8F6E create\u3001update\u3001append\u3001close \u6216 supersede \u53D8\u5316\u3002
 
 \u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
-- \u53EA\u8BB0\u5F55\u5BF9\u540E\u7EED\u4ECD\u6709\u4F5C\u7528\u4E14\u6765\u6E90\u660E\u786E\u7684\u4E8B\u5B9E\uFF1B\u540C\u573A\u3001\u56F4\u89C2\u3001\u542C\u89C1\u3001\u8868\u60C5\u3001\u4E34\u65F6\u4F8D\u4ECE\u548C\u666E\u901A\u5BF9\u8BDD\u4E0D\u81EA\u52A8\u5EFA\u7ACB\u5BF9\u8C61\u6216\u5173\u7CFB\u3002
-- \u4E0D\u8F93\u51FA focus \u8868\u6216\u7126\u70B9\u4E8B\u5B9E\u3002\u5173\u7CFB\u548C\u6280\u80FD\u4E0D\u5F97\u5355\u5217\u3002
+- \u53EA\u8BB0\u5F55\u5BF9\u540E\u7EED\u4ECD\u6709\u4F5C\u7528\u4E14\u6765\u6E90\u660E\u786E\u7684\u4E8B\u5B9E\uFF1B\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u5BF9\u8C61\u65B0\u7684\u5173\u7CFB\u3001\u80FD\u529B\u3001\u8EAB\u4EFD\u6216\u957F\u671F\u5F71\u54CD\uFF0C\u56F4\u89C2\u548C\u4E34\u65F6\u52A8\u4F5C\u4E5F\u4E0D\u81EA\u52A8\u5EFA\u7ACB\u5BF9\u8C61\u6216\u5173\u7CFB\u3002
+- \u4E0D\u8F93\u51FA focus \u8868\u6216\u7126\u70B9\u4E8B\u5B9E\u3002\u5173\u7CFB\u548C\u6280\u80FD\u4E0D\u5F97\u5355\u5217\uFF1B\u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF0C\u80FD\u529B\u53D8\u5316\u5199\u5165 abilityStates\u3002
 - \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
 - \u73A9\u5BB6\u8F93\u5165\u53EF\u8BB0\u5F55\u4E3A\u58F0\u660E\u52A8\u4F5C\uFF1B\u5916\u90E8\u7ED3\u679C\u5FC5\u987B\u7531\u89D2\u8272\u6B63\u6587\u6216\u5DF2\u6709\u53EF\u9760\u4E8B\u5B9E\u786E\u8BA4\u3002
-- \u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF1B\u80FD\u529B\u53D8\u5316\u5199\u5165 abilityStates\uFF1B\u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u6216\u8EAB\u4EFD\u8054\u60F3\u4E0D\u5F97\u8D4B\u4E88\u3002
-- \u5F53\u524D\u5730\u70B9\u53EA\u5199\u65F6\u7A7A\uFF1B\u533A\u57DF\u4EC5\u8BB0\u5F55\u79BB\u5F00\u540E\u4ECD\u6210\u7ACB\u7684\u72EC\u7ACB\u5B9A\u4E49\u6216\u6301\u7EED\u53D8\u5316\u3002
-- \u573A\u666F\u5207\u6362\u540E\uFF0C\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u82E5\u9700\u4FDD\u7559\u5FC5\u987B\u6807\u4E3A\u201C\u5DF2\u79BB\u5F00\u201D\u6216\u201C\u5386\u53F2\u573A\u666F\u201D\uFF0C\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
+- \u5F53\u524D\u5730\u70B9\u53EA\u5199\u65F6\u7A7A\uFF1B\u533A\u57DF\u53EA\u8BB0\u5F55\u79BB\u5F00\u540E\u4ECD\u6210\u7ACB\u7684\u5B9A\u4E49\u3001\u73B0\u884C\u4E8B\u5B9E\u6216\u6301\u7EED\u53D8\u5316\u3002
+- \u573A\u666F\u5207\u6362\u540E\uFF0C\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
 - \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
 
 \u3010\u542F\u7528\u8868\u683C\u3011
 ${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1Bsnapshot \u8F93\u51FA\u7A7A\u5BF9\u8C61\u3002"}
 
-\u3010\u901A\u7528\u5B57\u6BB5\u3011
-id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u7A33\u5B9A\u57FA\u7840\uFF1BsolidifiedHistory\uFF1A\u5DF2\u56FA\u5316\u5386\u53F2\uFF1BcurrentStates\uFF1A\u6301\u7EED\u53EF\u53D8\u72B6\u6001\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
+\u3010\u5B57\u6BB5\u5C42\u7EA7\u3011
+id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u7A33\u5B9A\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u5BF9\u8C61\u5B9A\u4E49\uFF1BcurrentFacts\uFF1A\u73B0\u884C\u4E8B\u5B9E\uFF1BcurrentStates\uFF1A\u5F53\u524D\u72B6\u6001\uFF1BrecentHistory\uFF1A\u8FD1\u671F\u7ECF\u5386\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BsolidifiedHistory\uFF1A\u5386\u53F2\u4E8B\u5B9E\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
 
-\u793A\u4F8B\uFF1A
-{"turnSummary":"\u672C\u8F6E\u4E8B\u5B9E\u6458\u8981","facts":[{"fact_id":"fact_1","event_id":"event_1","type":"event","title":"\u4E8B\u4EF6\u53D8\u5316","occurred":["\u5DF2\u53D1\u751F\u4E8B\u5B9E"],"unresolved":[],"status":"active","time_range":{"start":"\u5F53\u524D","end":"","label":""},"related_entities":["\u7532"],"keywords":["\u7532"],"operation":"update","confidence":"confirmed"}],"snapshot":{"characters":[{"id":"character_a","title":"\u7532","content":"\u7532\u7684\u5F53\u524D\u6709\u6548\u72B6\u6001","keywords":["\u7532"],"status":"active","currentStates":["\u5F53\u524D\u53D8\u5316"],"factIds":["fact_1"],"eventId":"event_1","recall":{"any":["\u7532"],"all":[],"exclude":[]}}]}}`;
+\u8F93\u51FA\u7ED3\u6784\u793A\u610F\uFF08\u7701\u7565\u65E0\u53D8\u5316\u8868\u683C\uFF09\uFF1A
+{"turnSummary":"\u591A\u7EBF\u5206\u522B\u63A8\u8FDB","facts":[{"fact_id":"f1","event_id":"e1","type":"event","title":"\u4E8B\u4EF6\u4E00","occurred":["\u5DF2\u53D1\u751F\u7ED3\u679C"],"unresolved":[],"status":"resolved","time_range":{"start":"\u5F53\u524D","end":"\u5F53\u524D","label":""},"related_entities":["\u5BF9\u8C61\u7532","\u5730\u533A\u7532"],"keywords":["\u4E8B\u4EF6\u4E00"],"operation":"close","confidence":"confirmed"},{"fact_id":"f2","event_id":"e2","type":"event","title":"\u4E8B\u4EF6\u4E8C","occurred":["\u53E6\u4E00\u7ED3\u679C"],"unresolved":["\u4ECD\u5F85\u5904\u7406"],"status":"active","time_range":{"start":"\u5F53\u524D","end":"","label":""},"related_entities":["\u5BF9\u8C61\u4E59"],"keywords":["\u4E8B\u4EF6\u4E8C"],"operation":"update","confidence":"confirmed"}],"snapshot":{"characters":[{"id":"c1","title":"\u5BF9\u8C61\u7532","content":"\u5F53\u524D\u7ED3\u679C","keywords":["\u5BF9\u8C61\u7532"],"status":"active","currentFacts":["\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E"]}]}}`;
 }
 function normalizeSearchText(value) {
   return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
@@ -5004,19 +5322,28 @@ function normalizeSearchText(value) {
 function stringList3(value) {
   return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
 }
+function boundedList(value, count, chars) {
+  return stringList3(value).slice(-count).map((item) => item.slice(0, chars));
+}
 function modelRow(row) {
   const output = {
     id: row.id,
     title: row.title,
-    content: row.content,
-    keywords: row.keywords,
+    content: String(row.content || "").slice(0, 800),
+    keywords: (row.keywords ?? []).slice(0, 16),
     status: row.status,
-    factIds: row.factIds ?? [],
-    eventId: row.eventId ?? "",
-    recall: row.recall ?? { any: [row.title, ...row.keywords], all: [], exclude: [] }
+    eventIds: row.eventIds ?? (row.eventId ? [row.eventId] : [])
   };
   if (row.lifecycle) output.lifecycle = row.lifecycle;
-  if (row.fields && typeof row.fields === "object") Object.assign(output, row.fields);
+  const fields = row.fields && typeof row.fields === "object" ? row.fields : {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === "baseContent") output[key] = String(value ?? "").slice(0, 700);
+    else if (key === "currentFacts" || key === "currentStates") output[key] = boundedList(value, 10, 260);
+    else if (key === "recentHistory") output[key] = boundedList(value, 4, 320);
+    else if (key === "solidifiedHistory") output[key] = boundedList(value, 2, 260);
+    else if (Array.isArray(value)) output[key] = boundedList(value, 10, 220);
+    else output[key] = String(value ?? "").slice(0, 600);
+  }
   return output;
 }
 function rowIndex(row) {
@@ -5025,7 +5352,7 @@ function rowIndex(row) {
     title: row.title,
     status: row.status,
     keywords: row.keywords,
-    eventId: row.eventId ?? ""
+    eventIds: row.eventIds ?? (row.eventId ? [row.eventId] : [])
   };
 }
 function rowTerms(row) {
@@ -5157,19 +5484,6 @@ function rowSchema(table) {
     properties[field.key] = scalarSchema(field, table);
     if (field.required) required.push(field.key);
   }
-  properties.factIds = { type: "array", items: { type: "string" } };
-  properties.eventId = { type: "string" };
-  properties.recall = {
-    type: "object",
-    properties: {
-      any: { type: "array", items: { type: "string" } },
-      all: { type: "array", items: { type: "string" } },
-      exclude: { type: "array", items: { type: "string" } }
-    },
-    required: ["any", "all", "exclude"],
-    additionalProperties: false
-  };
-  required.push("factIds", "eventId", "recall");
   return { type: "object", properties, required: [...new Set(required)], additionalProperties: false };
 }
 function stateJsonSchema(registry2) {
@@ -5177,14 +5491,15 @@ function stateJsonSchema(registry2) {
   const snapshotProperties = Object.fromEntries(active.map((table) => [table.key, {
     type: "array",
     title: table.name,
-    description: `${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}\uFF5C\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u884C\uFF1B\u7A7A\u6570\u7EC4\u8868\u793A\u786E\u8BA4\u6E05\u7A7A\u6574\u8868`,
+    description: `${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}\uFF5C\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u884C\uFF1B\u65E0\u53D8\u5316\u65F6\u7701\u7565\u8BE5\u8868\uFF1B\u7A7A\u6570\u7EC4\u4EC5\u89C6\u4E3A\u65E0\u53D8\u5316\uFF0C\u4E0D\u8868\u793A\u6E05\u7A7A`,
     items: rowSchema(table)
   }]));
   return {
-    name: "MirrorAbyssStatePatchV31",
-    description: "\u955C\u6E0A\u5185\u90E8\u4E8B\u5B9E\u53D8\u5316\u4E0E\u5BF9\u8C61\u884C\u7EA7\u8865\u4E01",
-    strict: true,
+    name: "MirrorAbyssMultiEventPatchV35",
+    description: "\u955C\u6E0A\u591A\u4E8B\u4EF6\u7EBF\u4E8B\u5B9E\u53D8\u5316\u4E0E\u591A\u5BF9\u8C61\u884C\u7EA7\u8865\u4E01",
+    strict: false,
     value: {
+      $schema: "http://json-schema.org/draft-04/schema#",
       type: "object",
       properties: {
         turnSummary: { type: "string" },
@@ -5194,19 +5509,29 @@ function stateJsonSchema(registry2) {
             type: "object",
             properties: {
               fact_id: { type: "string" },
+              factId: { type: "string" },
+              id: { type: "string" },
               event_id: { type: "string" },
+              eventId: { type: "string" },
+              entity_id: { type: "string" },
+              entityId: { type: "string" },
               type: { type: "string" },
               title: { type: "string" },
+              content: { type: "string" },
               occurred: { type: "array", items: { type: "string" } },
+              occurredFacts: { type: "array", items: { type: "string" } },
               unresolved: { type: "array", items: { type: "string" } },
+              unresolvedItems: { type: "array", items: { type: "string" } },
               status: { type: "string" },
-              time_range: { type: "object", properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } }, required: ["start", "end", "label"], additionalProperties: false },
+              time_range: { type: "object", properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } }, additionalProperties: false },
+              timeRange: { type: "object", properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } }, additionalProperties: false },
               related_entities: { type: "array", items: { type: "string" } },
+              relatedEntities: { type: "array", items: { type: "string" } },
               keywords: { type: "array", items: { type: "string" } },
-              operation: { type: "string" },
-              confidence: { type: "string" }
+              operation: { type: "string", enum: ["create", "update", "append", "close", "supersede"] },
+              confidence: { type: "string", enum: ["confirmed", "recorded", "reported", "uncertain"] }
             },
-            required: ["fact_id", "event_id", "type", "title", "occurred", "unresolved", "status", "time_range", "related_entities", "keywords", "operation", "confidence"],
+            required: ["type", "title", "status", "keywords", "operation", "confidence"],
             additionalProperties: false
           }
         },
@@ -5221,6 +5546,41 @@ function stateJsonSchema(registry2) {
 // src/pipeline/state.ts
 var RegistryChangedError = class extends CommitRejectedError {
 };
+var FACT_OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
+var FACT_CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
+function assertStateBusinessShape(parsed, active) {
+  const factIds = /* @__PURE__ */ new Set();
+  parsed.facts.forEach((fact, index) => {
+    if (!fact || typeof fact !== "object" || Array.isArray(fact)) throw new Error(`facts[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
+    const source = fact;
+    const factId = String(source.fact_id ?? source.factId ?? source.id ?? "").trim();
+    const eventId = String(source.event_id ?? source.eventId ?? source.entity_id ?? source.entityId ?? "").trim();
+    const title = String(source.title ?? "").trim();
+    if (!factId) throw new Error(`facts[${index}].fact_id \u4E0D\u80FD\u4E3A\u7A7A`);
+    if (!eventId) throw new Error(`facts[${index}].event_id \u4E0D\u80FD\u4E3A\u7A7A`);
+    if (!title) throw new Error(`facts[${index}].title \u4E0D\u80FD\u4E3A\u7A7A`);
+    if (factIds.has(factId)) throw new Error(`\u540C\u4E00\u6B21\u72B6\u6001\u8FD4\u56DE\u5305\u542B\u91CD\u590D fact_id\uFF1A${factId}`);
+    factIds.add(factId);
+    if (source.operation !== void 0 && !FACT_OPERATIONS.has(String(source.operation))) throw new Error(`facts[${index}].operation \u4E0D\u5408\u6CD5`);
+    if (source.confidence !== void 0 && !FACT_CONFIDENCE.has(String(source.confidence))) throw new Error(`facts[${index}].confidence \u4E0D\u5408\u6CD5`);
+  });
+  for (const table of active) {
+    const rows = parsed.snapshot[table.key];
+    if (rows === void 0) continue;
+    if (!Array.isArray(rows)) throw new Error(`\u72B6\u6001\u8868 ${table.key} \u5FC5\u987B\u662F\u6570\u7EC4`);
+    const ids = /* @__PURE__ */ new Set();
+    rows.forEach((row, index) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
+      const source = row;
+      const id = String(source.id ?? "").trim();
+      const title = String(source.title ?? "").trim();
+      if (!id) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}].id \u4E0D\u80FD\u4E3A\u7A7A`);
+      if (!title) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}].title \u4E0D\u80FD\u4E3A\u7A7A`);
+      if (ids.has(id)) throw new Error(`\u72B6\u6001\u8868 ${table.key} \u540C\u4E00\u6B21\u8FD4\u56DE\u5305\u542B\u91CD\u590D id\uFF1A${id}`);
+      ids.add(id);
+    });
+  }
+}
 function previousSnapshot(beforeIndex) {
   const registry2 = getSettings().tableRegistry;
   const chat = getChat();
@@ -5241,7 +5601,7 @@ function rowIdentityTitle(value) {
 }
 function preserveProtectedRows(previous, next, customRegistry) {
   const registry2 = normalizeTableRegistry(customRegistry);
-  const mutableFields = /* @__PURE__ */ new Set(["currentStates", "relationshipStates", "abilityStates", "relatedObjects", "relatedEvents", "migrationStatus"]);
+  const mutableFields = /* @__PURE__ */ new Set(["currentFacts", "currentStates", "recentHistory", "relationshipStates", "abilityStates", "relatedObjects", "relatedEvents", "migrationStatus"]);
   for (const table of registry2) {
     const key = table.key;
     next[key] ||= [];
@@ -5301,10 +5661,7 @@ function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
     if (!Object.prototype.hasOwnProperty.call(parsedSnapshot, table.key)) continue;
     const patches = parsedSnapshot[table.key];
     if (!Array.isArray(patches)) continue;
-    if (patches.length === 0) {
-      merged[table.key] = [];
-      continue;
-    }
+    if (patches.length === 0) continue;
     const rows = structuredClone(previous[table.key] ?? []);
     const idIndex = new Map(rows.map((row, index) => [row.id, index]));
     const titleIndexes = /* @__PURE__ */ new Map();
@@ -5328,13 +5685,72 @@ function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
         if (id) idIndex.set(id, rows.length - 1);
         if (title) titleIndexes.set(title, [...titleIndexes.get(title) ?? [], rows.length - 1]);
       } else {
-        rows[index] = patch;
-        if (id) idIndex.set(id, index);
+        const existing = rows[index];
+        const source = patch;
+        rows[index] = {
+          ...existing,
+          ...source,
+          // 标题唯一命中时必须继续沿用旧稳定 ID；模型补丁不能借机分裂同一对象。
+          id: existing.id,
+          fields: {
+            ...existing.fields ?? {},
+            ...source.fields && typeof source.fields === "object" ? source.fields : {}
+          }
+        };
+        idIndex.set(existing.id, index);
       }
     }
     merged[table.key] = rows;
   }
   return normalizeSnapshot(merged, previous, registry2);
+}
+function identityToken(value) {
+  return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, "");
+}
+function textList(value) {
+  return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+}
+function attachLocalFactMetadata(parsedSnapshot, rawFacts, registry2) {
+  const facts = rawFacts.filter((item) => item && typeof item === "object").map((item) => item);
+  for (const table of enabledTables(registry2)) {
+    const patches = parsedSnapshot[table.key];
+    if (!Array.isArray(patches)) continue;
+    for (const rawPatch of patches) {
+      if (!rawPatch || typeof rawPatch !== "object") continue;
+      const patch = rawPatch;
+      const title = String(patch.title ?? "").trim();
+      const id = String(patch.id ?? "").trim();
+      const rowTokens = new Set([title, id].map(identityToken).filter(Boolean));
+      let matched = facts.filter((fact) => {
+        const related = textList(fact.related_entities ?? fact.relatedEntities).map(identityToken).filter(Boolean);
+        if (related.some((token) => rowTokens.has(token))) return true;
+        if (table.role === "events" && identityToken(fact.title) === identityToken(title)) return true;
+        return false;
+      });
+      if (!matched.length && facts.length === 1) matched = facts;
+      const factIds = [.../* @__PURE__ */ new Set([
+        ...textList(patch.factIds ?? patch.fact_ids),
+        ...matched.map((fact) => String(fact.fact_id ?? fact.factId ?? "").trim()).filter(Boolean)
+      ])];
+      const eventIds = [...new Set([
+        ...textList(patch.eventIds ?? patch.event_ids),
+        String(patch.eventId ?? patch.event_id ?? "").trim(),
+        ...matched.map((fact) => String(fact.event_id ?? fact.eventId ?? "").trim()).filter(Boolean)
+      ].filter(Boolean))];
+      patch.factIds = factIds;
+      patch.eventIds = eventIds;
+      patch.eventId = eventIds[0] ?? "";
+      if (!patch.recall || typeof patch.recall !== "object") {
+        const keywords = textList(patch.keywords);
+        patch.recall = { any: [...new Set([title, ...keywords].filter(Boolean))], all: [], exclude: [] };
+      }
+      const hasRelatedEvents = table.fields.some((field) => field.key === "relatedEvents");
+      if (hasRelatedEvents && eventIds.length) {
+        patch.relatedEvents = [.../* @__PURE__ */ new Set([...textList(patch.relatedEvents), ...eventIds])];
+      }
+    }
+  }
+  return parsedSnapshot;
 }
 function assertRegistryCurrent(expectedFingerprint) {
   const current = enabledTables(normalizeTableRegistry(getSettings().tableRegistry));
@@ -5354,10 +5770,21 @@ async function runStateExtraction(artifact, force = false) {
     task: "state",
     systemPrompt: stateSystemPrompt(registry2),
     prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
-    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","type":"event","title":"...","occurred":["..."],"unresolved":[],"status":"active","time_range":{"start":"","end":"","label":""},"related_entities":["..."],"keywords":["..."],"operation":"update","confidence":"confirmed"}],"snapshot":{"<tableKey>":[{"id":"...","title":"...","content":"...","keywords":["..."],"status":"active","factIds":["..."],"eventId":"...","recall":{"any":["..."],"all":[],"exclude":[]}}]}}',
+    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","title":"...","related_entities":["\u53D7\u5F71\u54CD\u6761\u76EE\u540D"]}],"snapshot":{"<tableKey>":[{"id":"...","title":"...","content":"...","keywords":["..."],"status":"active","currentFacts":["..."],"currentStates":["..."]}]}}',
     allowRepair: settings.repairInvalidJsonOnce,
     jsonSchema: stateJsonSchema(registry2),
-    maxTokens: 2400
+    validationOptions: {
+      allowedAdditionalProperties: {
+        "$.snapshot": [.../* @__PURE__ */ new Set(["focus", "state", "characters", "skills", "relationships", ...registry2.filter((table) => !table.enabled).map((table) => table.key)])]
+      },
+      allowedAdditionalPropertiesByPathPrefix: {
+        "$.snapshot.": ["factIds", "eventId", "eventIds", "recall", "source", "locked", "lockMode", "updatedAt", "fields"]
+      },
+      allowedMissingRequiredByPathPrefix: {
+        "$.facts[": ["operation", "confidence"]
+      }
+    },
+    maxTokens: 4096
   };
   const inputFingerprint = hashText(JSON.stringify(request));
   assertRegistryCurrent(expectedRegistryFingerprint);
@@ -5382,10 +5809,11 @@ async function runStateExtraction(artifact, force = false) {
     const activeKeys = new Set(active.map((table) => table.key));
     const legacyViewKeys = /* @__PURE__ */ new Set(["focus", "state", "characters", "skills", "relationships"]);
     for (const key of returnedKeys) if (!activeKeys.has(key) && !legacyViewKeys.has(key)) throw new Error(`\u6A21\u578B\u8FD4\u56DE\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${key}`);
-    parsed.snapshot = migrateSnapshotTables(parsed.snapshot, registry2);
+    parsed.snapshot = attachLocalFactMetadata(migrateSnapshotTables(parsed.snapshot, registry2), parsed.facts, registry2);
     for (const [key, value] of Object.entries(parsed.snapshot)) {
       if (activeKeys.has(key) && !Array.isArray(value)) throw new Error(`\u72B6\u6001\u8868 ${key} \u5FC5\u987B\u662F\u6570\u7EC4`);
     }
+    assertStateBusinessShape(parsed, active);
     assertArtifactCommitCurrent(artifact);
     assertRegistryCurrent(expectedRegistryFingerprint);
     const mergedViews = preserveStableObjectIds(previous, mergeStateRowPatches(previous, parsed.snapshot, registry2), registry2);
@@ -7173,7 +7601,7 @@ async function syncHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
       <label>\u53D1\u5E03\u7ED3\u6784<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u8BED\u4E49\u5BF9\u8C61\u6A21\u5F0F\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u884C\u8C03\u8BD5\u6A21\u5F0F</option></select></label>
-      <p class="ma11-help">\u4E16\u754C\u4E66\u53EA\u4F7F\u7528\u4E09\u79CD\u542F\u7528\u5F62\u5F0F\uFF1Aconstant \u5E38\u9A7B\u3001trigger \u660E\u786E\u6761\u4EF6\u89E6\u53D1\u3001vector \u5411\u91CF\u8BED\u4E49\u53EC\u56DE\u3002\u955C\u6E0A\u53D1\u5E03\u987A\u5E8F\u4E3A\u5E38\u9A7B \u2192 any/all/exclude \u89E6\u53D1 \u2192 \u5411\u91CF\uFF0C\u518D\u6309 fact_id / event_id \u53BB\u91CD\u5E76\u6309\u603B\u5BB9\u91CF\u88C1\u526A\uFF1B\u4E0D\u4F7F\u7528\u6570\u503C\u6743\u91CD\u51B3\u5B9A\u662F\u5426\u8FDB\u5165\u4E0A\u4E0B\u6587\u3002SillyTavern \u5B9E\u9645\u5411\u91CF\u76F8\u4F3C\u5EA6\u4E0E\u6700\u5927\u5339\u914D\u6570\u7531 Vector Storage \u5168\u5C40\u8BBE\u7F6E\u63A7\u5236\uFF0C\u955C\u6E0A\u4E0D\u4F1A\u64C5\u81EA\u4FEE\u6539\u5168\u5C40\u914D\u7F6E\u3002</p>
+      <p class="ma11-help">\u4E16\u754C\u4E66\u53EA\u4F7F\u7528\u4E09\u79CD\u542F\u7528\u5F62\u5F0F\uFF1Aconstant \u5E38\u9A7B\u3001trigger \u660E\u786E\u6761\u4EF6\u89E6\u53D1\u3001vector \u5411\u91CF\u8BED\u4E49\u53EC\u56DE\u3002\u955C\u6E0A\u53D1\u5E03\u987A\u5E8F\u4E3A\u5E38\u9A7B \u2192 any/all/exclude \u89E6\u53D1 \u2192 \u5411\u91CF\uFF0C\u518D\u6309\u6761\u76EE\u8EAB\u4EFD\u4E0E\u5B8C\u5168\u76F8\u540C\u5185\u5BB9\u53BB\u91CD\u5E76\u6309\u603B\u5BB9\u91CF\u88C1\u526A\uFF1B\u5171\u4EAB fact_id / event_id \u7684\u4E0D\u540C\u5BF9\u8C61\u6761\u76EE\u4F1A\u5206\u522B\u4FDD\u7559\uFF1B\u4E0D\u4F7F\u7528\u6570\u503C\u6743\u91CD\u51B3\u5B9A\u662F\u5426\u8FDB\u5165\u4E0A\u4E0B\u6587\u3002SillyTavern \u5B9E\u9645\u5411\u91CF\u76F8\u4F3C\u5EA6\u4E0E\u6700\u5927\u5339\u914D\u6570\u7531 Vector Storage \u5168\u5C40\u8BBE\u7F6E\u63A7\u5236\uFF0C\u955C\u6E0A\u4E0D\u4F1A\u64C5\u81EA\u4FEE\u6539\u5168\u5C40\u914D\u7F6E\u3002</p>
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u5C06\u6781\u5C11\u91CF\u5F53\u524D\u7126\u70B9\u3001\u65F6\u7A7A\u3001\u5FC5\u8981\u89C4\u5219\u3001\u4E0D\u53EF\u7F3A\u5931\u72B6\u6001\u548C\u76F4\u63A5\u76F8\u5173\u5168\u5C40\u53D8\u5316\u8BBE\u4E3A\u5E38\u9A7B</span></label>
       <div class="ma11-editor-grid ma11-recall-grid">
@@ -7712,8 +8140,18 @@ function bindWorkspace(workspace) {
       const testTask = target.closest("[data-ma11-test]")?.dataset.ma11Test;
       if (testTask) {
         const result = await testConnection(testTask);
-        const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1BJSON${result.jsonValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
-        toast(result.instructionFollowed ? "success" : "warning", result.instructionFollowed ? detail : `${detail}\uFF1B\u8FD4\u56DE\uFF1A${result.responsePreview}`);
+        const schemaLabels = {
+          supported: "Schema\u76F4\u63A5\u6210\u529F",
+          "cached-bypass": "Schema\u5DF2\u6309\u7F13\u5B58\u7ED5\u8FC7",
+          "rejected-fallback": "Schema\u8BF7\u6C42\u88AB\u62D2\u540E\u666E\u901AJSON\u6210\u529F",
+          "empty-fallback": "Schema\u8FD4\u56DE\u7A7A\u5BF9\u8C61\u540E\u666E\u901AJSON\u6210\u529F",
+          "transient-fallback": "Schema\u4E34\u65F6\u6545\u969C\u540E\u666E\u901AJSON\u6210\u529F",
+          "plain-only": "\u4EC5\u666E\u901AJSON"
+        };
+        const schemaDetail = schemaLabels[result.schemaStatus] || result.schemaStatus;
+        const detail = `${result.method}\uFF1B\u8017\u65F6${result.elapsedMs}ms\uFF1B\u8FDE\u63A5${result.connected ? "\u6210\u529F" : "\u5931\u8D25"}\uFF1B${schemaDetail}\uFF1BJSON${result.jsonValid ? "\u6709\u6548" : "\u65E0\u6548"}\uFF1B\u7CBE\u786E\u9075\u5FAA${result.instructionFollowed ? "\u901A\u8FC7" : "\u672A\u901A\u8FC7"}`;
+        const diagnostic = result.schemaDetail ? `\uFF1BSchema\u8BCA\u65AD\uFF1A${result.schemaDetail}` : "";
+        toast(result.instructionFollowed ? "success" : "warning", result.instructionFollowed ? `${detail}${diagnostic}` : `${detail}${diagnostic}\uFF1B\u8FD4\u56DE\uFF1A${result.responsePreview}`);
       }
     } catch (error) {
       toast("error", toErrorMessage(error));

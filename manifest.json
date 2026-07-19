@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.33",
+  "version": "1.2.0-rc.35",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊历史恢复竞态修复版：恢复期间抑制自动调度，取消陈旧任务，并按正文指纹跳过迟到的重复处理。"
+  "description": "镜渊 JSON 根因修复版：区分连接能力、单份 Schema 拒绝与临时故障，增加本地结构校验，并禁止空数组误清表。"
 }
