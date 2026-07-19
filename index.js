@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.35";
-var PIPELINE_VERSION = "ma-pipeline-37";
+var VERSION = "1.2.0-rc.36";
+var PIPELINE_VERSION = "ma-pipeline-38";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -2592,7 +2592,9 @@ async function generateTask(options) {
       systemPromptChars: options.systemPrompt.length,
       promptChars,
       responseTokens: tokenLimit,
-      hasJsonSchema: Boolean(options.jsonSchema)
+      hasJsonSchema: Boolean(options.jsonSchema),
+      jsonSchemaName: options.jsonSchema ? safeText(options.jsonSchema.name, 120) : void 0,
+      jsonSchemaBytes: options.jsonSchema ? JSON.stringify(options.jsonSchema).length : 0
     });
   } finally {
     externalSignal?.removeEventListener("abort", forwardAbort);
@@ -2818,25 +2820,32 @@ function structuredError(task, error, raw) {
   const detail = toErrorMessage(error);
   return new Error(`${TASK_LABELS[task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784\uFF08${connection}\uFF09\u3002${detail}${preview ? `\uFF1B\u8FD4\u56DE\u7247\u6BB5\uFF1A${preview}` : ""}`);
 }
-function parseAndValidateStructuredOutput(raw, jsonSchema, validationOptions = {}) {
+function parseAndValidateStructuredOutput(raw, jsonSchema, validationOptions = {}, candidateTransform) {
   const candidates = parseJsonObjectCandidates(raw);
-  if (!jsonSchema) return candidates[0];
   let firstIssues = "";
-  for (const candidate of candidates) {
+  for (const source of candidates) {
+    let candidate;
+    try {
+      candidate = candidateTransform ? candidateTransform(structuredClone(source)) : source;
+    } catch (error) {
+      if (!firstIssues) firstIssues = toErrorMessage(error);
+      continue;
+    }
+    if (!jsonSchema) return candidate;
     const issues = validateStructuredValue(candidate, jsonSchema, 12, validationOptions);
     if (!issues.length) return candidate;
     if (!firstIssues) firstIssues = formatSchemaIssues(issues);
   }
   throw new StructuredSchemaValidationError(`JSON\u53EF\u4EE5\u89E3\u6790\uFF0C\u4F46\u4E0D\u7B26\u5408\u76EE\u6807Schema\uFF1A${firstIssues || "\u7ED3\u6784\u4E0D\u5339\u914D"}`);
 }
-async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, validationOptions = {}) {
+async function repairStructuredOutput(task, raw, structureDescription, jsonSchema, validationOptions = {}, candidateTransform) {
   const repaired = await generateTask({
     task,
     systemPrompt: repairSystemPrompt(structureDescription),
     prompt: repairUserPrompt(raw),
     requestPurpose: "json-repair"
   });
-  return parseAndValidateStructuredOutput(repaired, jsonSchema, validationOptions);
+  return parseAndValidateStructuredOutput(repaired, jsonSchema, validationOptions, candidateTransform);
 }
 async function generateWithSchemaFallback(options) {
   if (options.jsonSchema && shouldSkipJsonSchema(options.task, options.jsonSchema)) {
@@ -2868,8 +2877,9 @@ async function generateWithSchemaFallback(options) {
 }
 async function generateStructuredTask(options) {
   const raw = await generateWithSchemaFallback(options);
+  const validationSchema = options.validationSchema ?? options.jsonSchema;
   try {
-    return parseAndValidateStructuredOutput(raw, options.jsonSchema, options.validationOptions);
+    return parseAndValidateStructuredOutput(raw, validationSchema, options.validationOptions, options.candidateTransform);
   } catch (firstError) {
     if (firstError instanceof StructuredSchemaValidationError) {
       throw structuredError(options.task, firstError, raw);
@@ -2884,7 +2894,7 @@ async function generateStructuredTask(options) {
     const allowRepair = options.allowRepair ?? getSettings().repairInvalidJsonOnce;
     if (!allowRepair) throw structuredError(options.task, firstError, raw);
     try {
-      return await repairStructuredOutput(options.task, raw, options.structureDescription, options.jsonSchema, options.validationOptions);
+      return await repairStructuredOutput(options.task, raw, options.structureDescription, validationSchema, options.validationOptions, options.candidateTransform);
     } catch (repairError) {
       if (repairError instanceof Error && repairError.message.startsWith(`${TASK_LABELS[options.task]}\u672A\u8FD4\u56DE\u6709\u6548JSON\u7ED3\u6784`)) {
         throw repairError;
@@ -5276,7 +5286,7 @@ function stateSystemPrompt(registry2) {
   return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\uFF08\u591A\u4E8B\u4EF6\u7EBF\u3001\u591A\u5BF9\u8C61\uFF09\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
 
 \u53EA\u8F93\u51FA\u53EF\u76F4\u63A5 JSON.parse \u7684\u5B8C\u6574\u5BF9\u8C61\uFF0C\u4E0D\u8981 Markdown\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
-\u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001snapshot\u3002snapshot \u53EA\u80FD\u51FA\u73B0\u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
+\u6839\u8282\u70B9\u56FA\u5B9A\u4E3A turnSummary\u3001facts\u3001operations\u3002operations.table \u53EA\u80FD\u4F7F\u7528\u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
 
 \u3010\u4E00\u6B21\u751F\u6210\uFF0C\u591A\u7EBF\u5206\u533A\u3011
 1. \u4E00\u8F6E\u6B63\u6587\u53EF\u80FD\u540C\u65F6\u63A8\u8FDB\u591A\u6761\u5F7C\u6B64\u65E0\u5173\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5FC5\u987B\u5206\u522B\u5EFA\u7ACB\u6216\u6CBF\u7528\u4E0D\u540C event_id\uFF0C\u7EDD\u4E0D\u80FD\u6DF7\u6210\u540C\u4E00\u4E8B\u4EF6\u3002
@@ -5284,9 +5294,9 @@ function stateSystemPrompt(registry2) {
 3. facts \u7684 related_entities \u5FC5\u987B\u5217\u51FA\u8BE5\u4E8B\u5B9E\u76F4\u63A5\u5F71\u54CD\u7684\u5BF9\u8C61\u7A33\u5B9A\u540D\u79F0\uFF0C\u5305\u62EC\u4EBA\u7269\u3001\u5730\u533A\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u3001\u7EC4\u7EC7\u6216\u5168\u5C40\u5BF9\u8C61\uFF1B\u53EA\u77E5\u60C5\u3001\u540C\u573A\u6216\u56F4\u89C2\u4E0D\u7B97\u5F71\u54CD\u3002
 4. \u5C3D\u91CF\u5728\u4E00\u6B21\u8FD4\u56DE\u4E2D\u5B8C\u6210\u672C\u8F6E\u5168\u90E8\u72EC\u7ACB\u4E8B\u4EF6\u7EBF\u548C\u5168\u90E8\u53D7\u5F71\u54CD\u6761\u76EE\u7684\u8865\u4E01\u3002
 
-\u3010\u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3011
-1. snapshot[\u8868\u683C\u952E] \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u884C\uFF0C\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\u3002
-2. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id\u3002\u65E0\u53D8\u5316\u8868\u683C\u76F4\u63A5\u7701\u7565\uFF1B\u7A7A\u6570\u7EC4\u53EA\u8868\u793A\u672C\u8F6E\u6CA1\u6709\u884C\u8865\u4E01\uFF0C\u72B6\u6001\u6A21\u578B\u4E0D\u5F97\u81EA\u52A8\u6E05\u7A7A\u6574\u5F20\u8868\u3002
+\u3010\u6700\u5C0F operations \u884C\u7EA7\u8865\u4E01\u534F\u8BAE\u3011
+1. operations \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u53D8\u5316\u7684\u5BF9\u8C61\u884C\uFF1B\u6BCF\u9879\u56FA\u5B9A\u5305\u542B op\u3001table \u4E0E\u8BE5\u884C\u5B57\u6BB5\uFF0Cop \u5F53\u524D\u53EA\u80FD\u662F upsert\u3002
+2. \u540C\u4E00\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u65E7 id\u3002\u65E0\u53D8\u5316\u5BF9\u8C61\u4E0D\u8F93\u51FA operation\uFF1B\u672A\u8FD4\u56DE\u884C\u81EA\u52A8\u4FDD\u7559\uFF1B\u4E0D\u5F97\u91CD\u5199\u6574\u5F20\u65E7\u8868\uFF0C\u4E5F\u4E0D\u5F97\u8F93\u51FA\u9690\u5F0F\u6E05\u8868\u64CD\u4F5C\u3002
 3. \u8FD4\u56DE\u884C\u53EA\u9700\u5305\u542B\u8868\u683C\u5B9A\u4E49\u4E2D\u7684\u5185\u5BB9\u5B57\u6BB5\uFF1BfactIds\u3001eventId\u3001eventIds \u4E0E recall \u7531\u63D2\u4EF6\u6839\u636E facts \u672C\u5730\u751F\u6210\uFF0C\u4E0D\u8981\u91CD\u590D\u8F93\u51FA\u3002
 4. \u65B0\u5BF9\u8C61\u5FC5\u987B\u7ED9\u51FA id\u3001title\u3001content\u3001keywords\u3001status\uFF1B\u65E7\u5BF9\u8C61\u4ECD\u5EFA\u8BAE\u8FD4\u56DE\u8FD9\u4E94\u9879\u4EE5\u907F\u514D\u6B67\u4E49\u3002
 5. baseContent \u662F\u5BF9\u8C61\u5B9A\u4E49\uFF0C\u5DF2\u6709\u975E\u7A7A\u503C\u4E0D\u5F97\u7531\u666E\u901A\u72B6\u6001\u63D0\u53D6\u6539\u5199\u3002
@@ -5308,13 +5318,13 @@ function stateSystemPrompt(registry2) {
 - \u8FC7\u7A0B\u538B\u7F29\u4E3A\u5F53\u524D\u7ED3\u679C\uFF0C\u672A\u51B3\u4E8B\u9879\u4E0D\u5F97\u5F3A\u884C\u95ED\u5408\u3002
 
 \u3010\u542F\u7528\u8868\u683C\u3011
-${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1Bsnapshot \u8F93\u51FA\u7A7A\u5BF9\u8C61\u3002"}
+${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1Boperations \u8F93\u51FA\u7A7A\u6570\u7EC4\u3002"}
 
 \u3010\u5B57\u6BB5\u5C42\u7EA7\u3011
 id\uFF1A\u7A33\u5B9A ID\uFF1Btitle\uFF1A\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1Bcontent\uFF1A\u5F53\u524D\u6709\u6548\u6458\u8981\uFF1Bkeywords\uFF1A\u540D\u79F0\u4E0E\u7A33\u5B9A\u522B\u540D\uFF1Bstatus\uFF1A\u5F53\u524D\u9636\u6BB5\uFF1BbaseContent\uFF1A\u5BF9\u8C61\u5B9A\u4E49\uFF1BcurrentFacts\uFF1A\u73B0\u884C\u4E8B\u5B9E\uFF1BcurrentStates\uFF1A\u5F53\u524D\u72B6\u6001\uFF1BrecentHistory\uFF1A\u8FD1\u671F\u7ECF\u5386\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BsolidifiedHistory\uFF1A\u5386\u53F2\u4E8B\u5B9E\uFF08\u72B6\u6001\u63D0\u53D6\u7981\u5199\uFF09\uFF1BrelatedObjects\uFF1A\u76F4\u63A5\u5173\u8054\u5BF9\u8C61\uFF1BrelatedEvents\uFF1A\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u3002
 
-\u8F93\u51FA\u7ED3\u6784\u793A\u610F\uFF08\u7701\u7565\u65E0\u53D8\u5316\u8868\u683C\uFF09\uFF1A
-{"turnSummary":"\u591A\u7EBF\u5206\u522B\u63A8\u8FDB","facts":[{"fact_id":"f1","event_id":"e1","type":"event","title":"\u4E8B\u4EF6\u4E00","occurred":["\u5DF2\u53D1\u751F\u7ED3\u679C"],"unresolved":[],"status":"resolved","time_range":{"start":"\u5F53\u524D","end":"\u5F53\u524D","label":""},"related_entities":["\u5BF9\u8C61\u7532","\u5730\u533A\u7532"],"keywords":["\u4E8B\u4EF6\u4E00"],"operation":"close","confidence":"confirmed"},{"fact_id":"f2","event_id":"e2","type":"event","title":"\u4E8B\u4EF6\u4E8C","occurred":["\u53E6\u4E00\u7ED3\u679C"],"unresolved":["\u4ECD\u5F85\u5904\u7406"],"status":"active","time_range":{"start":"\u5F53\u524D","end":"","label":""},"related_entities":["\u5BF9\u8C61\u4E59"],"keywords":["\u4E8B\u4EF6\u4E8C"],"operation":"update","confidence":"confirmed"}],"snapshot":{"characters":[{"id":"c1","title":"\u5BF9\u8C61\u7532","content":"\u5F53\u524D\u7ED3\u679C","keywords":["\u5BF9\u8C61\u7532"],"status":"active","currentFacts":["\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E"]}]}}`;
+\u8F93\u51FA\u7ED3\u6784\u793A\u610F\uFF08\u7701\u7565\u65E0\u53D8\u5316\u5BF9\u8C61\uFF09\uFF1A
+{"turnSummary":"\u591A\u7EBF\u5206\u522B\u63A8\u8FDB","facts":[{"fact_id":"f1","event_id":"e1","type":"event","title":"\u4E8B\u4EF6\u4E00","occurred":["\u5DF2\u53D1\u751F\u7ED3\u679C"],"unresolved":[],"status":"resolved","time_range":{"start":"\u5F53\u524D","end":"\u5F53\u524D","label":""},"related_entities":["\u5BF9\u8C61\u7532","\u5730\u533A\u7532"],"keywords":["\u4E8B\u4EF6\u4E00"],"operation":"close","confidence":"confirmed"},{"fact_id":"f2","event_id":"e2","type":"event","title":"\u4E8B\u4EF6\u4E8C","occurred":["\u53E6\u4E00\u7ED3\u679C"],"unresolved":["\u4ECD\u5F85\u5904\u7406"],"status":"active","time_range":{"start":"\u5F53\u524D","end":"","label":""},"related_entities":["\u5BF9\u8C61\u4E59"],"keywords":["\u4E8B\u4EF6\u4E8C"],"operation":"update","confidence":"confirmed"}],"operations":[{"op":"upsert","table":"characters","id":"c1","title":"\u5BF9\u8C61\u7532","content":"\u5F53\u524D\u7ED3\u679C","keywords":["\u5BF9\u8C61\u7532"],"status":"active","currentFacts":["\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E"]}]}`;
 }
 function normalizeSearchText(value) {
   return String(value ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
@@ -5448,7 +5458,7 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u89D2\u8272\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u53EA\u8FD4\u56DE\u672C\u8F6E\u4E8B\u5B9E\u53D8\u5316\u548C\u884C\u7EA7\u8865\u4E01\u3002snapshot \u4E2D\u672A\u8FD4\u56DE\u7684\u884C\u7531\u63D2\u4EF6\u4FDD\u7559\uFF1B\u4E0D\u8981\u590D\u5236\u65E0\u53D8\u5316\u65E7\u884C\u3002\u82E5\u65E7\u89C6\u56FE\u7D22\u5F15\u4E2D\u5DF2\u6709\u540C\u4E00\u5BF9\u8C61\uFF0C\u5FC5\u987B\u6CBF\u7528\u5176 id\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
+\u53EA\u8FD4\u56DE\u672C\u8F6E\u4E8B\u5B9E\u53D8\u5316\u548C\u6700\u5C0F operations \u884C\u7EA7\u8865\u4E01\u3002\u672A\u8FD4\u56DE\u7684\u5BF9\u8C61\u884C\u7531\u63D2\u4EF6\u4FDD\u7559\uFF1B\u4E0D\u8981\u590D\u5236\u65E0\u53D8\u5316\u65E7\u884C\u3002\u82E5\u65E7\u89C6\u56FE\u7D22\u5F15\u4E2D\u5DF2\u6709\u540C\u4E00\u5BF9\u8C61\uFF0C\u5FC5\u987B\u6CBF\u7528\u5176 id\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8F93\u51FA\u65E0\u6CD5\u89E3\u6790\uFF1B\u8FD9\u6B21\u53EA\u8F93\u51FA\u5408\u6CD5JSON\u5BF9\u8C61\u3002" : ""}`;
 }
 function scalarSchema(field, table) {
   const defaultField = DEFAULT_TABLE_REGISTRY.find((item) => item.key === table.key)?.fields.find((item) => item.key === field.key);
@@ -5485,6 +5495,83 @@ function rowSchema(table) {
     if (field.required) required.push(field.key);
   }
   return { type: "object", properties, required: [...new Set(required)], additionalProperties: false };
+}
+function transportFactSchema() {
+  return {
+    type: "object",
+    properties: {
+      fact_id: { type: "string" },
+      event_id: { type: "string" },
+      type: { type: "string" },
+      title: { type: "string" },
+      occurred: { type: "array", items: { type: "string" } },
+      unresolved: { type: "array", items: { type: "string" } },
+      status: { type: "string" },
+      time_range: {
+        type: "object",
+        properties: { start: { type: "string" }, end: { type: "string" }, label: { type: "string" } },
+        required: ["start", "end", "label"],
+        additionalProperties: false
+      },
+      related_entities: { type: "array", items: { type: "string" } },
+      keywords: { type: "array", items: { type: "string" } },
+      operation: { type: "string", enum: ["create", "update", "append", "close", "supersede"] },
+      confidence: { type: "string", enum: ["confirmed", "recorded", "reported", "uncertain"] }
+    },
+    required: [
+      "fact_id",
+      "event_id",
+      "type",
+      "title",
+      "occurred",
+      "unresolved",
+      "status",
+      "time_range",
+      "related_entities",
+      "keywords",
+      "operation",
+      "confidence"
+    ],
+    additionalProperties: false
+  };
+}
+function transportOperationSchema(active) {
+  const fields = /* @__PURE__ */ new Map();
+  for (const table of active) {
+    for (const field of table.fields) {
+      if (field.key === "recentHistory" || field.key === "solidifiedHistory") continue;
+      if (!fields.has(field.key)) fields.set(field.key, field);
+    }
+  }
+  const properties = {
+    op: { type: "string", enum: ["upsert"] },
+    table: { type: "string", enum: active.map((table) => table.key) }
+  };
+  for (const [key, field] of fields) properties[key] = scalarSchema(field, active.find((table) => table.fields.some((item) => item.key === key)) ?? active[0]);
+  return {
+    type: "object",
+    properties,
+    required: ["op", "table", "id", "title", "content", "keywords", "status"],
+    additionalProperties: false
+  };
+}
+function stateTransportJsonSchema(registry2) {
+  const active = tables(registry2);
+  return {
+    name: "MirrorAbyssStateOperationsV36",
+    description: "\u955C\u6E0A\u72B6\u6001\u4E8B\u5B9E\u4E0E\u6700\u5C0F\u5BF9\u8C61\u884C\u8865\u4E01",
+    strict: false,
+    value: {
+      type: "object",
+      properties: {
+        turnSummary: { type: "string" },
+        facts: { type: "array", items: transportFactSchema() },
+        operations: { type: "array", items: transportOperationSchema(active) }
+      },
+      required: ["turnSummary", "facts", "operations"],
+      additionalProperties: false
+    }
+  };
 }
 function stateJsonSchema(registry2) {
   const active = tables(registry2);
@@ -5758,6 +5845,26 @@ function assertRegistryCurrent(expectedFingerprint) {
     throw new RegistryChangedError("\u8868\u683C\u5B9A\u4E49\u5DF2\u53D8\u5316\uFF0C\u65E7\u72B6\u6001\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
   }
 }
+function normalizeStateTransportOutput(candidate, active) {
+  if (candidate.snapshot && typeof candidate.snapshot === "object" && !Array.isArray(candidate.snapshot)) return candidate;
+  if (!Array.isArray(candidate.operations)) return candidate;
+  const activeKeys = new Set(active.map((table) => table.key));
+  const snapshot = {};
+  candidate.operations.forEach((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`operations[${index}] \u5FC5\u987B\u662F\u5BF9\u8C61`);
+    const source = raw;
+    if (source.op !== "upsert") throw new Error(`operations[${index}].op \u76EE\u524D\u53EA\u80FD\u662F upsert`);
+    const table = String(source.table ?? "").trim();
+    if (!activeKeys.has(table)) throw new Error(`operations[${index}].table \u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\uFF1A${table || "\u7A7A"}`);
+    const row = { ...source };
+    delete row.op;
+    delete row.table;
+    (snapshot[table] ||= []).push(row);
+  });
+  const normalized = { ...candidate, snapshot };
+  delete normalized.operations;
+  return normalized;
+}
 async function runStateExtraction(artifact, force = false) {
   const settings = getSettings();
   const registry2 = normalizeTableRegistry(settings.tableRegistry);
@@ -5770,9 +5877,11 @@ async function runStateExtraction(artifact, force = false) {
     task: "state",
     systemPrompt: stateSystemPrompt(registry2),
     prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
-    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","title":"...","related_entities":["\u53D7\u5F71\u54CD\u6761\u76EE\u540D"]}],"snapshot":{"<tableKey>":[{"id":"...","title":"...","content":"...","keywords":["..."],"status":"active","currentFacts":["..."],"currentStates":["..."]}]}}',
+    structureDescription: '{"turnSummary":"...","facts":[{"fact_id":"...","event_id":"...","title":"...","related_entities":["\u53D7\u5F71\u54CD\u6761\u76EE\u540D"]}],"operations":[{"op":"upsert","table":"characters","id":"...","title":"...","content":"...","keywords":["..."],"status":"active","currentFacts":["..."],"currentStates":["..."]}]}',
     allowRepair: settings.repairInvalidJsonOnce,
-    jsonSchema: stateJsonSchema(registry2),
+    jsonSchema: stateTransportJsonSchema(registry2),
+    validationSchema: stateJsonSchema(registry2),
+    candidateTransform: (candidate) => normalizeStateTransportOutput(candidate, active),
     validationOptions: {
       allowedAdditionalProperties: {
         "$.snapshot": [.../* @__PURE__ */ new Set(["focus", "state", "characters", "skills", "relationships", ...registry2.filter((table) => !table.enabled).map((table) => table.key)])]
@@ -6183,6 +6292,10 @@ async function processMessage(index, force = false, options = {}) {
   const scheduledChatKey = currentChatKey();
   const scheduledHistoryRevision = currentHistoryRevision(scheduledChatKey);
   const enqueueState = await getChatState(scheduledChatKey);
+  if (enqueueState.historyRecovery && !options.historyRecovery && !options.automatic) {
+    const detail = `\u5386\u53F2\u6062\u590D\u6B63\u5728\u6267\u884C\uFF08${enqueueState.historyRecovery.phase}\uFF09\uFF0C\u672C\u6B21\u624B\u52A8\u4EFB\u52A1\u672A\u5165\u961F`;
+    throw new TaskBlockedError(detail);
+  }
   const triggerSource = options.triggerSource || (options.historyRecovery ? "history-recovery" : options.automatic ? "automatic" : force ? "manual-force" : "manual");
   const key = `${PIPELINE_VERSION}:${scheduledChatKey}:${identity}`;
   return taskQueue.run(key, `\u5904\u7406\u7B2C ${index + 1} \u6761AI\u6B63\u6587`, "state", async (guard) => {

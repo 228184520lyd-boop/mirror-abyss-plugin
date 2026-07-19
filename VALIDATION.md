@@ -1,17 +1,23 @@
-# Mirror Abyss 1.2.0-rc.35 验收记录
+# Mirror Abyss 1.2.0-rc.36 验收记录
 
-流水线：`ma-pipeline-37`
+流水线：`ma-pipeline-38`
 
-## rc.35 JSON 根因回归
+## rc.36 状态 Schema 实机复验
 
-- [ ] 普通 400 + 普通 JSON 成功：只跳过同一 Schema 指纹，不影响同连接其他 Schema。
-- [ ] 500/504 + 普通 JSON 成功：下一次仍尝试 Schema，不污染能力缓存。
-- [ ] 接口明确返回“不支持 response_format/json_schema”：同连接后续任务绕过 Schema。
-- [ ] 多个 JSON 对象：只接收通过目标 Schema 的候选。
-- [ ] JSON 可解析但字段类型/枚举错误：直接失败，不调用修复模型，不覆盖旧状态。
-- [ ] 对象或数组截断：直接失败，不调用修复模型。
-- [ ] 模型返回某表 `[]`：保留该表旧值。
-- [ ] 连接测试 UI 显示 Schema 状态和脱敏错误分类。
+已通过本地回归：
+
+- 状态供应商传输 Schema 使用 `MirrorAbyssStateOperationsV36`；
+- 完整八表约束仍在本地执行，不合法的表格专属字段不能入库；
+- operations 只允许 `upsert`，空输出不会清表；
+- 请求诊断记录 `jsonSchemaName / jsonSchemaBytes`；
+- 历史恢复期间的普通手动正文处理直接 blocked，不进入待恢复后执行的队列。
+
+实机重点：
+
+1. 生成一条简单角色正文，状态请求应直接以 Schema 成功，不再出现 state fallback；
+2. 诊断应显示 `jsonSchemaName: MirrorAbyssStateOperationsV36`，`jsonSchemaBytes` 约 2,640；
+3. 表格和世界书正常完成，未变化表不被清空；
+4. 历史恢复运行时点击继续/手动整理，应直接显示 blocked，不能新建普通 state 请求。
 
 ## rc.34 多事件线记忆漏斗
 
