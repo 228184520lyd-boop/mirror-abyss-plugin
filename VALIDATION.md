@@ -1,6 +1,46 @@
-# Mirror Abyss 1.2.0 稳定版验收记录
+# Mirror Abyss 1.3.0 验收记录
 
-流水线：`ma-pipeline-60`
+流水线：`ma-pipeline-62`
+
+## 1.3.0 标准工作台验收
+
+- `npm run test:rc62:standard`：通过。验证四段状态白盒规则、标准恢复、开箱检查、表格搜索、关键列固定、图谱显式关系优先、旧记录回退标记、非折叠页面与 reduced-motion 动效边界。
+- `npm run test:stable`、`npm run test:rc60:whitebox`：通过。验证两级总结信息资格与自定义状态规则进入真实 system prompt。
+- `npm run test:rc20:dynamic`、`npm run test:rc29:headers`：通过。动态表格、简化表头和内部字段保护未回归。
+- `npm run test:rc51:text-state`、`npm run test:rc52:text-protocol`、`npm run test:rc53:unique-object`：通过。固定文本协议、稳定对象身份和世界书唯一性未回归。
+- `npm run test:rc57:snapshot-precision`、`npm run test:rc58:directory-context`：通过。稀疏修订、旧字段保护和上下文压缩未回归。
+- `npm run test:rc59:aba`、`npm run test:rc59:abnormal`、`npm run test:rc59:split-save`：通过。聊天切换、HTML/超时/缺标签、分离保存恢复未回归。
+- `npm run test:rc59:player-runtime`：通过。六次 3001–3400 ms 离线 Connection Profile 调用完成；空小总结可重试；稳定 ID 继承；对象数 1、重复对象 0、幽灵任务 0。
+- `npm run test:rc59:ui`：通过。九页功能分配、触控尺寸、响应式布局与动作映射未回归。
+- `npm run typecheck`、`npm run build`、`npm run syntax`：通过。
+
+### UI 合约
+
+- `workspace.ts`、`message-panel.ts` 与 `settings.html` 不再使用 `<details>` / `<summary>` 或设置抽屉折叠。
+- 总览提供六项准备度检查和进度条；状态反馈使用 `role=status` 与 `aria-live=polite`。
+- 普通页面不显示固定文本协议、稳定 ID 或事实/事件内部标识；诊断页可只读预览 state、small summary、large summary、audit 和 revision 的完整 system prompt。
+- 对象表搜索和图谱搜索均提供结果反馈；图谱搜索高亮动画只在未请求 reduced motion 时启用。
+
+### 图谱合约
+
+- `relationshipStates`、`relatedObjects` 和 `relatedEvents` 是首要边来源。
+- 只有源对象没有任何显式关联时，才允许从旧文本提及产生 `legacy` 边。
+- 图谱不修改快照，不创建事实，不决定对象身份。
+
+### 已知验证边界
+
+- 本轮在容器环境分组执行全部历史回归、受影响链路和玩家延迟流程；没有连接真实 SillyTavern 实机或实体手机。
+- 一次性 `npm run verify` 在串行执行到玩家延迟模拟时出现进程悬挂，未取得整条命令退出码 0；该玩家流程随后在 75 秒硬上限下独立完成六次 3002–3401 ms 调用并通过，其后的 UI、白盒、类型、构建和语法检查也分别通过。
+- 标准状态 system prompt 去除重复执行段后为 4275 字符，并由 rc.31 合约限制在 4300 字符以内。
+- `npm ci --ignore-scripts` 在外部 120 秒限制内未完整退出，但所需本地 esbuild/TypeScript 依赖已安装并实际完成测试、构建和语法检查；不把依赖恢复命令声称为退出码 0。
+
+## 1.2.1 对象准入白盒验收
+
+- `npm run test:rc60:whitebox`：通过。验证默认状态提示词包含对象建档边界、背景板 NPC 排除规则与保守不新建原则。
+- 自定义“允许建档条件 / 默认排除条件”会进入实际状态提取 system prompt；流水线不再只调用硬编码默认值。
+- 表格管理页包含两个直接可编辑的文本区、保存按钮、恢复严格默认值按钮和完整提示词预览。
+- 本次没有修改固定文本标签、解析器、对象 ID、匹配、合并、去重、旧快照保留或世界书同步逻辑。
+- `npm run test:rc20:dynamic`、`npm run test:rc29:headers`、`npm run test:rc51:text-state`、`npm run typecheck`：通过。
 
 
 ## 1.2.0 稳定版新增验收

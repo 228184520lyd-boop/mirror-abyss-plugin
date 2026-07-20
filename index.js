@@ -2,20 +2,49 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0";
-var PIPELINE_VERSION = "ma-pipeline-60";
+var VERSION = "1.3.0";
+var PIPELINE_VERSION = "ma-pipeline-62";
+var DEFAULT_STATE_PROMPTS = {
+  admissionRules: [
+    "\u53EA\u6709\u5BF9\u8C61\u5DF2\u7ECF\u5F62\u6210\u201C\u540E\u7EED\u7EE7\u7EED\u751F\u6210\u65F6\u5FC5\u987B\u77E5\u9053\u201D\u7684\u72EC\u7ACB\u4E8B\u5B9E\uFF0C\u624D\u5141\u8BB8\u65B0\u5EFA\u6761\u76EE\u3002",
+    "\u4EBA\u7269\u81F3\u5C11\u6EE1\u8DB3\u4E00\u9879\uFF1A\u4E3B\u52A8\u6539\u53D8\u4E8B\u4EF6\u56E0\u679C\uFF1B\u4E0E\u91CD\u8981\u5BF9\u8C61\u5F62\u6210\u6301\u7EED\u5173\u7CFB\uFF1B\u627F\u62C5\u4F1A\u5EF6\u7EED\u7684\u76EE\u6807\u3001\u8D23\u4EFB\u3001\u7EA6\u675F\u6216\u672A\u51B3\u4E8B\u9879\uFF1B\u83B7\u5F97\u6216\u5931\u53BB\u6301\u7EED\u6709\u6548\u7684\u8EAB\u4EFD\u3001\u80FD\u529B\u3001\u5F52\u5C5E\u6216\u72B6\u6001\uFF1B\u5728\u591A\u6B21\u51FA\u73B0\u4E2D\u5F62\u6210\u7A33\u5B9A\u53D9\u4E8B\u4F5C\u7528\u3002",
+    "\u7269\u54C1\u3001\u533A\u57DF\u3001\u7EC4\u7EC7\u6216\u5176\u4ED6\u5BF9\u8C61\u5FC5\u987B\u5177\u6709\u79BB\u5F00\u5F53\u524D\u573A\u666F\u540E\u4ECD\u6210\u7ACB\u7684\u5B9A\u4E49\u3001\u5F52\u5C5E\u3001\u72B6\u6001\u3001\u89C4\u5219\u4F5C\u7528\u6216\u6301\u7EED\u53D8\u5316\u3002",
+    "\u65B0\u5BF9\u8C61\u5E94\u80FD\u88AB\u7A33\u5B9A\u547D\u540D\u5E76\u4E0E\u5DF2\u6709\u5BF9\u8C61\u533A\u5206\uFF1B\u65E0\u6CD5\u786E\u8BA4\u8EAB\u4EFD\u8FB9\u754C\u65F6\u6682\u4E0D\u5EFA\u6863\u3002"
+  ].join("\n"),
+  exclusionRules: [
+    "\u4EC5\u88AB\u770B\u89C1\u3001\u7ECF\u8FC7\u3001\u63D0\u5230\u3001\u63CF\u5199\u59D3\u540D\u3001\u670D\u88C5\u3001\u5916\u8C8C\u3001\u7AD9\u4F4D\u3001\u60C5\u7EEA\u6216\u77ED\u52A8\u4F5C\uFF0C\u4E0D\u8DB3\u4EE5\u5EFA\u7ACB\u6761\u76EE\u3002",
+    "\u8DEF\u4EBA\u3001\u5BBE\u5BA2\u3001\u89C2\u4F17\u3001\u4F8D\u536B\u3001\u4EC6\u4ECE\u3001\u5E97\u5458\u3001\u58EB\u5175\u3001\u6751\u6C11\u3001\u56F4\u89C2\u8005\u7B49\u4E00\u6B21\u6027\u529F\u80FD\u89D2\u8272\u9ED8\u8BA4\u6392\u9664\uFF0C\u5373\u4F7F\u6709\u59D3\u540D\u3001\u5916\u8C8C\u63CF\u5199\u3001\u52A8\u4F5C\u6216\u4E00\u53E5\u53F0\u8BCD\u4E5F\u4E0D\u5EFA\u6863\u3002",
+    "\u533F\u540D\u7FA4\u4F53\u3001\u804C\u4E1A\u79F0\u8C13\u3001\u4E34\u65F6\u79F0\u547C\u3001\u573A\u666F\u9648\u8BBE\u548C\u53EA\u670D\u52A1\u5355\u6B21\u52A8\u4F5C\u7684\u5BF9\u8C61\u9ED8\u8BA4\u6392\u9664\u3002",
+    "\u666E\u901A\u5BF9\u8BDD\u5BF9\u8C61\u3001\u77ED\u6682\u51B2\u7A81\u5BF9\u8C61\u3001\u9012\u4EA4\u7269\u54C1\u8005\u3001\u901A\u62A5\u8005\u3001\u5F15\u8DEF\u8005\u548C\u4EC5\u63D0\u4F9B\u80CC\u666F\u4FE1\u606F\u8005\u9ED8\u8BA4\u6392\u9664\u3002",
+    "\u53EA\u6709\u540E\u7EED\u6B63\u6587\u660E\u786E\u8D4B\u4E88\u5176\u72EC\u7ACB\u56E0\u679C\u4F5C\u7528\u3001\u6301\u7EED\u5173\u7CFB\u6216\u627F\u63A5\u4EF7\u503C\u65F6\uFF0C\u624D\u53EF\u4ECE\u80CC\u666F\u5BF9\u8C61\u5347\u7EA7\u4E3A\u6B63\u5F0F\u6761\u76EE\u3002"
+  ].join("\n"),
+  evidenceRules: [
+    "\u53EA\u4F7F\u7528\u672C\u6B21\u6B63\u6587\u660E\u786E\u51FA\u73B0\u7684\u4E8B\u5B9E\u4E0E\u63D2\u4EF6\u63D0\u4F9B\u7684\u65E7\u8BB0\u5F55\uFF0C\u4E0D\u6309\u5E38\u8BC6\u3001\u8EAB\u4EFD\u6A21\u677F\u3001\u6587\u98CE\u6697\u793A\u6216\u53EF\u80FD\u6027\u8865\u5168\u3002",
+    "\u4EB2\u5386\u5E76\u660E\u786E\u53D1\u751F\u7684\u5185\u5BB9\u53EF\u6807\u4E3A confirmed\uFF1B\u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u6216\u4E3B\u89C2\u5224\u65AD\u5FC5\u987B\u4FDD\u7559 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u81EA\u52A8\u5347\u7EA7\u3002",
+    "\u65B0\u65E7\u5185\u5BB9\u51B2\u7A81\u65F6\uFF0C\u53EA\u6709\u6B63\u6587\u660E\u786E\u63A8\u7FFB\u3001\u7ED3\u675F\u6216\u66FF\u6362\u65E7\u4E8B\u5B9E\u624D\u66F4\u65B0\uFF1B\u8BC1\u636E\u4E0D\u8DB3\u65F6\u4FDD\u7559\u65E7\u8BB0\u5F55\u5E76\u7701\u7565\u672C\u6B21\u66F4\u65B0\u3002",
+    "\u540C\u540D\u3001\u8FD1\u540D\u6216\u540C\u804C\u4E1A\u5BF9\u8C61\u6CA1\u6709\u660E\u786E\u522B\u540D\u3001\u5173\u7CFB\u6216\u8FDE\u7EED\u4E0A\u4E0B\u6587\u65F6\u4E0D\u5F97\u5408\u5E76\uFF1B\u8EAB\u4EFD\u4E0D\u6E05\u65F6\u5B81\u53EF\u4E0D\u5199\uFF0C\u4E5F\u4E0D\u8981\u9519\u8BEF\u5F52\u5E76\u3002",
+    "\u65E0\u6CD5\u786E\u5B9A\u662F\u5426\u5177\u6709\u540E\u7EED\u6301\u7EED\u4EF7\u503C\u65F6\uFF0C\u9ED8\u8BA4\u4E0D\u65B0\u5EFA\uFF1B\u65E0\u6CD5\u5224\u65AD\u53D8\u5316\u6216\u8EAB\u4EFD\u65F6\uFF0C\u7701\u7565\u5BF9\u5E94\u4E8B\u5B9E\u548C\u6761\u76EE\u3002"
+  ].join("\n"),
+  updateRules: [
+    "\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u7ED3\u675F\u3001\u88AB\u66FF\u6362\u6216\u53D1\u751F\u5B9E\u8D28\u53D8\u5316\u7684\u5B57\u6BB5\uFF1B\u518D\u6B21\u51FA\u73B0\u3001\u91CD\u590D\u63CF\u8FF0\u548C\u63AA\u8F9E\u53D8\u5316\u4E0D\u7B97\u66F4\u65B0\u3002",
+    "\u57FA\u7840\u5B9A\u4E49\u53EA\u6709\u5728\u6B63\u6587\u660E\u786E\u91CD\u5B9A\u4E49\u3001\u6BC1\u706D\u3001\u91CD\u5EFA\u3001\u8F6C\u8BA9\u6216\u4EBA\u5DE5\u7F16\u8F91\u65F6\u624D\u6539\u53D8\uFF1B\u666E\u901A\u72B6\u6001\u53D8\u5316\u4E0D\u5F97\u8986\u76D6\u57FA\u7840\u5B9A\u4E49\u3002",
+    "\u72B6\u6001\u5B57\u6BB5\u5199\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\uFF1A\u65B0\u72B6\u6001\u66FF\u6362\u65E7\u72B6\u6001\uFF0C\u5DF2\u89E3\u51B3\u672A\u51B3\u4E8B\u9879\u5E94\u5173\u95ED\uFF0C\u4E0D\u628A\u5B8C\u6574\u8FC7\u7A0B\u6301\u7EED\u8FFD\u52A0\u5230\u5F53\u524D\u72B6\u6001\u3002",
+    "\u5173\u7CFB\u53EA\u6709\u5728\u660E\u786E\u5F62\u6210\u627F\u8BFA\u3001\u5F52\u5C5E\u3001\u51B2\u7A81\u3001\u5408\u4F5C\u3001\u652F\u914D\u3001\u4F9D\u8D56\u6216\u5176\u4ED6\u4F1A\u5F71\u54CD\u540E\u7EED\u884C\u4E3A\u7684\u53D8\u5316\u65F6\u624D\u66F4\u65B0\uFF1B\u540C\u573A\u3001\u666E\u901A\u4EA4\u8C08\u548C\u5355\u6B21\u5E2E\u52A9\u4E0D\u5EFA\u7ACB\u5173\u7CFB\u3002",
+    "\u6BCF\u6761\u4E8B\u5B9E\u53EA\u8868\u8FBE\u4E00\u4E2A\u4E3B\u4F53\u3001\u4E00\u4E2A\u53D8\u5316\u548C\u4E00\u4E2A\u5F53\u524D\u7ED3\u679C\uFF1B\u76F8\u540C\u4FE1\u606F\u53EA\u4FDD\u7559\u4E00\u6B21\u3002"
+  ].join("\n")
+};
 var DEFAULT_SUMMARY_PROMPTS = {
   small: {
-    coreQuestion: "\u63A5\u4E0B\u6765\u7EE7\u7EED\u8FD9\u6761\u4E8B\u4EF6\u7EBF\uFF0C\u5FC5\u987B\u77E5\u9053\u4EC0\u4E48\uFF1F",
+    coreQuestion: "\u7EE7\u7EED\u8FD9\u6761\u4E8B\u4EF6\u7EBF\u7684\u4E0B\u4E00\u6B65\uFF0C\u5FC5\u987B\u4FDD\u7559\u7684\u6700\u5C0F\u4E8B\u5B9E\u96C6\u5408\u662F\u4EC0\u4E48\uFF1F",
     includeRules: [
-      "\u4E8B\u4EF6\u6210\u7ACB\u6240\u5FC5\u9700\u7684\u8D77\u56E0\u3002",
-      "\u6539\u53D8\u4E8B\u4EF6\u65B9\u5411\u7684\u5173\u952E\u8F6C\u6298\u3002",
-      "\u5F53\u524D\u9636\u6BB5\u5DF2\u7ECF\u5F62\u6210\u7684\u7ED3\u679C\u3002",
-      "\u5F53\u524D\u4ECD\u5728\u6301\u7EED\u5E76\u4F1A\u5F71\u54CD\u540E\u7EED\u7684\u76F4\u63A5\u5F71\u54CD\u3002",
-      "\u540E\u7EED\u5FC5\u987B\u627F\u63A5\u7684\u672A\u51B3\u4E8B\u9879\u3002"
+      "\u89E3\u91CA\u5F53\u524D\u5C40\u9762\u7684\u5FC5\u8981\u8D77\u56E0\u4E0E\u5173\u952E\u627F\u8BFA\u3002",
+      "\u771F\u6B63\u6539\u53D8\u4E8B\u4EF6\u65B9\u5411\u7684\u8F6C\u6298\u548C\u51B3\u5B9A\u3002",
+      "\u5F53\u524D\u9636\u6BB5\u5DF2\u7ECF\u5F62\u6210\u3001\u5C1A\u672A\u88AB\u8986\u76D6\u7684\u7ED3\u679C\u3002",
+      "\u4ECD\u5728\u6301\u7EED\u5E76\u4F1A\u76F4\u63A5\u5F71\u54CD\u4E0B\u4E00\u6B65\u7684\u72B6\u6001\u3001\u9650\u5236\u4E0E\u8D44\u6E90\u53D8\u5316\u3002",
+      "\u4E0B\u4E00\u6B65\u5FC5\u987B\u627F\u63A5\u7684\u76EE\u6807\u3001\u8D23\u4EFB\u3001\u98CE\u9669\u548C\u672A\u51B3\u4E8B\u9879\u3002"
     ].join("\n"),
     excludeRules: [
-      "\u53F0\u8BCD\u590D\u8FF0\u3001\u8FDE\u7EED\u52A8\u4F5C\u3001\u573A\u9762\u8C03\u5EA6\u3001\u6C14\u6C1B\u548C\u666E\u901A\u53CD\u5E94\u3002",
+      "\u53F0\u8BCD\u590D\u8FF0\u3001\u8FDE\u7EED\u52A8\u4F5C\u3001\u573A\u9762\u8C03\u5EA6\u3001\u670D\u88C5\u5916\u8C8C\u3001\u6C14\u6C1B\u548C\u666E\u901A\u53CD\u5E94\u3002",
       "\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u4E8B\u4EF6\u56E0\u679C\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u3002",
       "\u5DF2\u7ECF\u88AB\u540E\u7EED\u7ED3\u679C\u8986\u76D6\u7684\u4E2D\u95F4\u6B65\u9AA4\u3002",
       "\u5BF9\u540E\u7EED\u6CA1\u6709\u4F5C\u7528\u7684\u4E34\u65F6\u7EC6\u8282\u3002",
@@ -23,23 +52,23 @@ var DEFAULT_SUMMARY_PROMPTS = {
       "\u5DF2\u5199\u5165 unresolved \u7684\u5185\u5BB9\u4E0D\u5F97\u5728 summary \u4E2D\u91CD\u590D\u3002"
     ].join("\n"),
     updateRules: [
-      "\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u53EA\u662F\u5F85\u4FEE\u8BA2\u539F\u6599\uFF0C\u4E0D\u5F97\u5728\u5176\u540E\u7EE7\u7EED\u8FFD\u52A0\u3002",
+      "\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u53EA\u662F\u5F85\u4FEE\u8BA2\u539F\u6599\uFF0C\u4E0D\u5F97\u5728\u5176\u540E\u7EE7\u7EED\u8FFD\u52A0\u6216\u673A\u68B0\u7F29\u5199\u3002",
       "\u7ED3\u5408\u65B0\u589E\u4E8B\u5B9E\uFF0C\u91CD\u5199\u4E3A\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\u3002",
       "\u65B0\u7ED3\u679C\u8986\u76D6\u65E7\u8FC7\u7A0B\u65F6\uFF0C\u5220\u9664\u65E7\u8FC7\u7A0B\uFF1B\u672A\u51B3\u4E8B\u9879\u89E3\u51B3\u540E\uFF0C\u4ECE unresolved \u4E2D\u79FB\u9664\u3002",
       "\u4E0D\u540C\u4E8B\u4EF6\u69FD\u4F4D\u7EDD\u4E0D\u80FD\u6DF7\u5408\u4EBA\u7269\u3001\u5730\u70B9\u3001\u56E0\u679C\u6216\u7ED3\u679C\u3002"
     ].join("\n"),
     expressionRules: [
       "\u76F4\u63A5\u5199\u5BF9\u8C61\u3001\u4E8B\u5B9E\u548C\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u5206\u6790\u8FC7\u7A0B\u3002",
-      "\u6BCF\u53E5\u8BDD\u53EA\u627F\u62C5\u4E00\u4E2A\u8FD1\u671F\u8FDE\u7EED\u6027\u4FE1\u606F\u3002",
+      "\u6BCF\u53E5\u8BDD\u53EA\u627F\u62C5\u4E00\u4E2A\u8FD1\u671F\u8FDE\u7EED\u6027\u4FE1\u606F\uFF0C\u5E76\u4F18\u5148\u8868\u8FBE\u201C\u53D8\u5316\u540E\u7684\u5F53\u524D\u7ED3\u679C\u201D\u3002",
       "\u76F8\u540C\u4FE1\u606F\u53EA\u51FA\u73B0\u4E00\u6B21\uFF1B\u6CA1\u6709\u5185\u5BB9\u7684\u5B57\u6BB5\u4E0D\u8981\u7F16\u9020\u3002",
       "\u4E0D\u6309\u56FA\u5B9A\u5B57\u6570\u88C1\u526A\uFF0C\u590D\u6742\u4E8B\u4EF6\u53EF\u4FDD\u7559\u591A\u9879\u5FC5\u8981\u4FE1\u606F\u3002"
     ].join("\n")
   },
   large: {
-    coreQuestion: "\u5373\u4F7F\u8FD1\u671F\u8FC7\u7A0B\u5168\u90E8\u9057\u5FD8\uFF0C\u672A\u6765\u8DE8\u573A\u666F\u3001\u8DE8\u9636\u6BB5\u4ECD\u5FC5\u987B\u77E5\u9053\u4EC0\u4E48\uFF1F",
+    coreQuestion: "\u5373\u4F7F\u8FD1\u671F\u8FC7\u7A0B\u5168\u90E8\u9057\u5FD8\uFF0C\u54EA\u4E9B\u5DF2\u786E\u8BA4\u4E8B\u5B9E\u4ECD\u4F1A\u8DE8\u573A\u666F\u3001\u8DE8\u9636\u6BB5\u6539\u53D8\u672A\u6765\uFF1F",
     includeRules: [
-      "\u5DF2\u7ECF\u786E\u8BA4\u7684\u957F\u671F\u7ED3\u679C\u3002",
-      "\u4E0D\u53EF\u9006\u6216\u957F\u671F\u6709\u6548\u7684\u53D8\u5316\u3002",
+      "\u5DF2\u7ECF\u786E\u8BA4\u5E76\u8DE8\u9636\u6BB5\u6709\u6548\u7684\u7ED3\u679C\u3002",
+      "\u4E0D\u53EF\u9006\u3001\u53CD\u590D\u51FA\u73B0\u6216\u957F\u671F\u6709\u6548\u7684\u53D8\u5316\u3002",
       "\u957F\u671F\u8EAB\u4EFD\u3001\u5173\u7CFB\u3001\u80FD\u529B\u3001\u5F52\u5C5E\u3001\u5236\u5EA6\u6216\u4E16\u754C\u72B6\u6001\u53D8\u5316\u3002",
       "\u8DE8\u9636\u6BB5\u6301\u7EED\u6210\u7ACB\u7684\u5173\u952E\u56E0\u679C\u3002",
       "\u8DE8\u9636\u6BB5\u4ECD\u672A\u5B8C\u6210\u7684\u8D23\u4EFB\u3001\u76EE\u6807\u3001\u7EA6\u675F\u6216\u672A\u51B3\u4E8B\u9879\u3002"
@@ -53,7 +82,7 @@ var DEFAULT_SUMMARY_PROMPTS = {
       "\u5C0F\u603B\u7ED3\u7684\u9010\u9879\u7F29\u5199\u3001\u8FD1\u4E49\u6539\u5199\u6216\u540C\u4E49\u91CD\u590D\u3002"
     ].join("\n"),
     updateRules: [
-      "\u4E0D\u8981\u7F29\u5199\u5C0F\u603B\u7ED3\uFF1B\u91CD\u65B0\u5BA1\u67E5\u6BCF\u9879\u4FE1\u606F\u662F\u5426\u5177\u6709\u957F\u671F\u8D44\u683C\u3002",
+      "\u4E0D\u8981\u7F29\u5199\u5C0F\u603B\u7ED3\uFF1B\u91CD\u65B0\u5BA1\u67E5\u6BCF\u9879\u4FE1\u606F\u662F\u5426\u5177\u6709\u957F\u671F\u8D44\u683C\u548C\u8DB3\u591F\u8BC1\u636E\u3002",
       "\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u53EA\u662F\u5F85\u4FEE\u8BA2\u539F\u6599\u3002\u6CA1\u6709\u65B0\u7684\u957F\u671F\u53D8\u5316\u65F6\u4FDD\u6301\u539F\u610F\uFF0C\u4E0D\u5F97\u6269\u5199\u3002",
       "\u957F\u671F\u4E8B\u5B9E\u88AB\u65B0\u4E8B\u5B9E\u63A8\u7FFB\u3001\u7ED3\u675F\u6216\u66FF\u6362\u65F6\uFF0C\u66F4\u65B0\u4E3A\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\u3002",
       "\u4E0D\u540C\u4E8B\u4EF6\u69FD\u4F4D\u7EDD\u4E0D\u80FD\u6DF7\u5408\u4E8B\u5B9E\u3001\u56E0\u679C\u3001\u4EBA\u7269\u6216\u5730\u70B9\u3002"
@@ -82,6 +111,7 @@ var DEFAULT_SETTINGS = {
   smallSummaryTurns: 12,
   autoLargeSummary: true,
   largeSummaryCount: 4,
+  statePrompts: DEFAULT_STATE_PROMPTS,
   summaryPrompts: DEFAULT_SUMMARY_PROMPTS,
   lorebookSync: true,
   autoCreateLorebook: true,
@@ -302,14 +332,14 @@ function roleFields(role) {
 }
 function defaults() {
   const definitions = [
-    ["spacetime", "\u65F6\u7A7A", "\u5F53\u524D\u65F6\u95F4\u3001\u5F53\u524D\u573A\u666F\u53CA\u8FDE\u7EED\u6027\uFF1B\u63D0\u5230\u5730\u70B9\u4E0D\u7B49\u4E8E\u8FDB\u5165\u8BE5\u5730\u70B9\uFF0C\u79BB\u5F00\u540E\u5E94\u7ED3\u675F\u5F53\u524D\u72B6\u6001\u3002", "spacetime"],
-    ["characters", "\u89D2\u8272", "\u5DF2\u663E\u5F71\u4E14\u5BF9\u540E\u7EED\u6709\u72EC\u7ACB\u4F5C\u7528\u7684\u89D2\u8272\u5BF9\u8C61\uFF1B\u5173\u7CFB\u3001\u80FD\u529B\u548C\u53EF\u53D8\u72B6\u6001\u7EDF\u4E00\u5F52\u5165\u89D2\u8272\u3002", "characters"],
-    ["items", "\u7269\u54C1", "\u6709\u660E\u786E\u6301\u6709\u3001\u4F7F\u7528\u3001\u635F\u574F\u3001\u8F6C\u79FB\u6216\u56E0\u679C\u4F5C\u7528\u7684\u91CD\u8981\u7269\u54C1\u4E0E\u8D44\u6E90\u3002", "items"],
-    ["events", "\u4E8B\u4EF6", "\u4E8B\u4EF6\u7EBF\u7684\u9636\u6BB5\u3001\u5DF2\u53D1\u751F\u7ECF\u8FC7\u3001\u672A\u51B3\u4E8B\u9879\u548C\u7ED3\u679C\uFF1B\u4EE5\u72B6\u6001\u533A\u5206 active\u3001paused\u3001resolved\u3001archived\u3002", "events"],
+    ["spacetime", "\u65F6\u7A7A", "\u53EA\u8BB0\u5F55\u5F53\u524D\u771F\u5B9E\u8FDB\u5165\u7684\u65F6\u95F4\u4E0E\u573A\u666F\uFF0C\u4EE5\u53CA\u4F1A\u5F71\u54CD\u8FDE\u7EED\u6027\u7684\u7A7A\u95F4\u53D8\u5316\uFF1B\u88AB\u63D0\u53CA\u3001\u88AB\u56DE\u5FC6\u6216\u4EC5\u4F5C\u4E3A\u80CC\u666F\u51FA\u73B0\u7684\u5730\u70B9\u4E0D\u5F97\u5199\u6210\u5F53\u524D\u4F4D\u7F6E\u3002", "spacetime"],
+    ["characters", "\u89D2\u8272", "\u53EA\u8BB0\u5F55\u5DF2\u5F62\u6210\u6301\u7EED\u4F5C\u7528\u7684\u72EC\u7ACB\u89D2\u8272\u3002\u59D3\u540D\u3001\u670D\u88C5\u3001\u5916\u8C8C\u3001\u7AD9\u4F4D\u3001\u4E00\u6B21\u52A8\u4F5C\u6216\u4E00\u53E5\u53F0\u8BCD\u5747\u4E0D\u8DB3\u4EE5\u5355\u72EC\u5EFA\u6863\uFF1B\u5173\u7CFB\u3001\u80FD\u529B\u548C\u53EF\u53D8\u72B6\u6001\u7EDF\u4E00\u5F52\u5165\u89D2\u8272\u3002", "characters"],
+    ["items", "\u7269\u54C1", "\u53EA\u8BB0\u5F55\u5177\u6709\u660E\u786E\u6301\u6709\u3001\u4F7F\u7528\u3001\u635F\u574F\u3001\u8F6C\u79FB\u3001\u7A00\u7F3A\u6027\u6216\u6301\u7EED\u56E0\u679C\u4F5C\u7528\u7684\u91CD\u8981\u7269\u54C1\u4E0E\u8D44\u6E90\uFF1B\u666E\u901A\u5E03\u666F\u4E0E\u4E00\u6B21\u6027\u9053\u5177\u4E0D\u5EFA\u6863\u3002", "items"],
+    ["events", "\u4E8B\u4EF6", "\u53EA\u8BB0\u5F55\u5177\u6709\u53EF\u8BC6\u522B\u8D77\u56E0\u3001\u884C\u52A8\u3001\u7ED3\u679C\u3001\u672A\u51B3\u4E8B\u9879\u6216\u6301\u7EED\u5F71\u54CD\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u666E\u901A\u4EA4\u8C08\u3001\u8DEF\u8FC7\u548C\u65E0\u540E\u679C\u52A8\u4F5C\u4E0D\u5355\u72EC\u5EFA\u4E8B\u4EF6\u3002", "events"],
     ["regions", "\u533A\u57DF", "\u5730\u70B9\u3001\u533A\u57DF\u3001\u5EFA\u7B51\u6216\u7A7A\u95F4\u5BF9\u8C61\u7684\u57FA\u7840\u5B9A\u4E49\u4E0E\u5F53\u524D\u53D8\u5316\uFF1B\u201C\u76F8\u5173\u6027\u201D\u7531\u89E6\u53D1\u548C\u53EC\u56DE\u51B3\u5B9A\u3002", "regions"],
-    ["globalChanges", "\u5168\u5C40\u53D8\u5316", "\u5DF2\u53D1\u751F\u5E76\u6301\u7EED\u5F71\u54CD\u8DE8\u533A\u57DF\u3001\u5236\u5EA6\u3001\u7EC4\u7EC7\u6216\u4E16\u754C\u6001\u52BF\u7684\u53D8\u5316\u3002", "globalChanges"],
-    ["foundations", "\u57FA\u7840\u8BBE\u5B9A", "\u7A33\u5B9A\u89C4\u5219\u3001\u5236\u5EA6\u3001\u79CD\u65CF\u6216\u4E16\u754C\u627F\u91CD\u8BBE\u5B9A\uFF1B\u5267\u60C5\u53D8\u5316\u53EA\u80FD\u8FDB\u5165\u5F53\u524D\u72B6\u6001\u6216\u5DF2\u56FA\u5316\u5386\u53F2\u3002", "foundations"],
-    ["customObjects", "\u81EA\u5B9A\u4E49\u5BF9\u8C61", "\u73A9\u5BB6\u521B\u5EFA\u6216\u5C1A\u4E0D\u80FD\u5B89\u5168\u5F52\u5E76\u5230\u9ED8\u8BA4\u7C7B\u578B\u7684\u5BF9\u8C61\uFF1B\u540E\u7EED\u53EF\u5728\u660E\u786E\u6761\u4EF6\u4E0B\u5F52\u5E76\u3002", "custom"]
+    ["globalChanges", "\u5168\u5C40\u53D8\u5316", "\u53EA\u8BB0\u5F55\u5DF2\u786E\u8BA4\u53D1\u751F\u3001\u8DE8\u5BF9\u8C61\u6216\u8DE8\u533A\u57DF\u6301\u7EED\u751F\u6548\u7684\u5236\u5EA6\u3001\u7EC4\u7EC7\u4E0E\u4E16\u754C\u6001\u52BF\u53D8\u5316\uFF1B\u9884\u6D4B\u548C\u5C40\u90E8\u6CE2\u52A8\u4E0D\u5F97\u5199\u5165\u3002", "globalChanges"],
+    ["foundations", "\u57FA\u7840\u8BBE\u5B9A", "\u53EA\u8BB0\u5F55\u88AB\u6B63\u6587\u660E\u786E\u786E\u8BA4\u3001\u957F\u671F\u7A33\u5B9A\u4E14\u627F\u62C5\u4E16\u754C\u8FD0\u884C\u7EA6\u675F\u7684\u89C4\u5219\u3001\u5236\u5EA6\u3001\u79CD\u65CF\u6216\u4E16\u754C\u8BBE\u5B9A\uFF1B\u7981\u6B62\u6309\u9898\u6750\u5E38\u8BC6\u8865\u5168\u3002", "foundations"],
+    ["customObjects", "\u81EA\u5B9A\u4E49\u5BF9\u8C61", "\u7528\u4E8E\u73A9\u5BB6\u4E3B\u52A8\u5B9A\u4E49\u6216\u6682\u65F6\u65E0\u6CD5\u5B89\u5168\u5F52\u7C7B\u3001\u4F46\u5DF2\u6EE1\u8DB3\u5EFA\u6863\u8D44\u683C\u7684\u5BF9\u8C61\uFF1B\u4E0D\u80FD\u4F5C\u4E3A\u4E0D\u786E\u5B9A\u4FE1\u606F\u548C\u80CC\u666F\u677F\u5BF9\u8C61\u7684\u515C\u5E95\u5783\u573E\u6876\u3002", "custom"]
   ];
   return definitions.map(([key, name, purpose, role], order) => ({
     key,
@@ -742,6 +772,10 @@ function getSettings() {
   settings.maxRevisionAttempts = Math.min(2, Math.max(1, Math.round(Number(settings.maxRevisionAttempts) || 1)));
   settings.smallSummaryTurns = Math.min(100, Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12)));
   settings.largeSummaryCount = Math.min(50, Math.max(1, Math.round(Number(settings.largeSummaryCount) || 4)));
+  settings.statePrompts.admissionRules = safeText(settings.statePrompts.admissionRules, 8e3).trim();
+  settings.statePrompts.exclusionRules = safeText(settings.statePrompts.exclusionRules, 8e3).trim();
+  settings.statePrompts.evidenceRules = safeText(settings.statePrompts.evidenceRules, 8e3).trim();
+  settings.statePrompts.updateRules = safeText(settings.statePrompts.updateRules, 8e3).trim();
   for (const kind of ["small", "large"]) {
     const section = settings.summaryPrompts[kind];
     section.coreQuestion = safeText(section.coreQuestion, 1200).trim();
@@ -6092,9 +6126,17 @@ function compactRegistryDescription(active) {
     return `${index + 1}. ${table.key}\uFF5C${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}${extras ? `\uFF5C\u6269\u5C55\u5B57\u6BB5\uFF1A${extras}` : ""}`;
   }).join("\n");
 }
-function stateSystemPrompt(registry2) {
+function statePromptText(value2, fallback) {
+  const text = String(value2 ?? "").trim();
+  return text || fallback;
+}
+function stateSystemPrompt(registry2, promptSettings = DEFAULT_STATE_PROMPTS) {
   const active = tables(registry2);
   const keys = active.map((table) => `${table.key}\uFF08${table.name}\uFF09`).join("\u3001");
+  const admissionRules = statePromptText(promptSettings?.admissionRules, DEFAULT_STATE_PROMPTS.admissionRules);
+  const exclusionRules = statePromptText(promptSettings?.exclusionRules, DEFAULT_STATE_PROMPTS.exclusionRules);
+  const evidenceRules = statePromptText(promptSettings?.evidenceRules, DEFAULT_STATE_PROMPTS.evidenceRules);
+  const updateRules = statePromptText(promptSettings?.updateRules, DEFAULT_STATE_PROMPTS.updateRules);
   return `\u4F60\u662F\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668\u3002\u4F60\u4E0D\u7EED\u5199\u6545\u4E8B\uFF0C\u4E0D\u63A8\u6D4B\u672A\u663E\u5F71\u5185\u5BB9\u3002
 
 \u4F60\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62\u8FD4\u56DE JSON\u3001Markdown \u8868\u683C\u3001\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
@@ -6110,14 +6152,29 @@ function stateSystemPrompt(registry2) {
 7. \u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF1B\u80FD\u529B\u53D8\u5316\u5199\u5165 abilityStates\u3002\u4E0D\u5F97\u5355\u72EC\u521B\u5EFA\u5173\u7CFB\u8868\u6216\u6280\u80FD\u8868\u3002
 8. \u4E0D\u8F93\u51FA\u7126\u70B9\u6761\u76EE\u3002\u7126\u70B9\u53EA\u7531\u73A9\u5BB6\u8BBE\u7F6E\u3002
 
+\u3010\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\uFF5C\u767D\u76D2\u89C4\u5219\u3011
+\u4EE5\u4E0B\u89C4\u5219\u51B3\u5B9A\u201C\u65B0\u5BF9\u8C61\u662F\u5426\u6709\u8D44\u683C\u8FDB\u5165\u8868\u683C\u201D\u3002\u8868\u683C\u7528\u9014\u4E0E\u5B57\u6BB5\u8BF4\u660E\u53EA\u51B3\u5B9A\u201C\u5408\u683C\u5BF9\u8C61\u8BB0\u5F55\u4EC0\u4E48\u201D\uFF0C\u4E0D\u80FD\u653E\u5BBD\u8FD9\u91CC\u7684\u51C6\u5165\u8FB9\u754C\u3002
+
+\u5141\u8BB8\u5EFA\u6863\u6761\u4EF6\uFF1A
+${admissionRules}
+
+\u9ED8\u8BA4\u6392\u9664\u6761\u4EF6\uFF1A
+${exclusionRules}
+
+\u8BC1\u636E\u4E0E\u4E0D\u786E\u5B9A\u6027\uFF1A
+${evidenceRules}
+
+\u66F4\u65B0\u4E0E\u51B2\u7A81\u5904\u7406\uFF1A
+${updateRules}
+
 \u3010\u65E7\u5FEB\u7167\u4FEE\u8BA2\u89C4\u5219\u3011
-- <MA_DIRECTORY> \u662F\u5DF2\u6709\u5BF9\u8C61\u7684\u77ED\u76EE\u5F55\uFF0C\u53EA\u7528\u4E8E\u8EAB\u4EFD\u8BC6\u522B\uFF0C\u4E0D\u662F\u5141\u8BB8\u5BF9\u8C61\u767D\u540D\u5355\u3002\u76EE\u5F55\u4E2D\u5B58\u5728\u7684\u5BF9\u8C61\u4F18\u5148\u6CBF\u7528\u5176\u7A33\u5B9A\u540D\u79F0\uFF1B\u76EE\u5F55\u4E2D\u6CA1\u6709\u4F46\u6B63\u6587\u660E\u786E\u5EFA\u7ACB\u7684\u5BF9\u8C61\u4ECD\u53EF\u6B63\u5E38\u8F93\u51FA\uFF0C\u63D2\u4EF6\u4F1A\u5728\u5168\u5E93\u590D\u67E5\u540E\u51B3\u5B9A\u65B0\u5EFA\u6216\u5408\u5E76\u3002
+- <MA_DIRECTORY> \u662F\u5DF2\u6709\u5BF9\u8C61\u7684\u77ED\u76EE\u5F55\uFF0C\u53EA\u7528\u4E8E\u8EAB\u4EFD\u8BC6\u522B\uFF0C\u4E0D\u662F\u5141\u8BB8\u5BF9\u8C61\u767D\u540D\u5355\u3002\u76EE\u5F55\u4E2D\u5B58\u5728\u7684\u5BF9\u8C61\u4F18\u5148\u6CBF\u7528\u5176\u7A33\u5B9A\u540D\u79F0\uFF1B\u76EE\u5F55\u4E2D\u6CA1\u6709\u7684\u5BF9\u8C61\u53EA\u6709\u5148\u901A\u8FC7\u201C\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\u201D\u3001\u4E14\u88AB\u6B63\u6587\u660E\u786E\u5EFA\u7ACB\u540E\u624D\u53EF\u8F93\u51FA\uFF0C\u63D2\u4EF6\u4F1A\u5728\u5168\u5E93\u590D\u67E5\u540E\u51B3\u5B9A\u65B0\u5EFA\u6216\u5408\u5E76\u3002
 - <MA_CONTEXT_ROW> \u662F\u672C\u8F6E\u9AD8\u76F8\u5173\u5BF9\u8C61\u7684\u5DE5\u4F5C\u526F\u672C\uFF0C\u4E0D\u662F\u5B8C\u6574\u6570\u636E\u5E93\u3002\u5DF2\u6709\u5BF9\u8C61\u53EA\u4FEE\u8BA2\u672C\u8F6E\u786E\u5B9E\u53D8\u5316\u7684\u5B57\u6BB5\uFF1B\u6CA1\u6709\u53D8\u5316\u7684\u5B57\u6BB5\u4E0D\u8981\u8F93\u51FA\uFF0C\u66F4\u4E0D\u5F97\u6DA6\u8272\u3001\u6362\u5E8F\u6216\u6539\u5199\u63AA\u8F9E\u3002
 - \u67D0\u4E2A\u5DF2\u6709\u5BF9\u8C61\u672A\u5217\u5165 <MA_CONTEXT_ROW> \u4F46\u672C\u8F6E\u786E\u5B9E\u53D1\u751F\u53D8\u5316\u65F6\uFF0C\u4ECD\u5FC5\u987B\u6309\u76EE\u5F55\u540D\u79F0\u8FD4\u56DE\u5176\u53D8\u5316\u5B57\u6BB5\uFF1B\u672A\u8FD4\u56DE\u5B57\u6BB5\u7531\u63D2\u4EF6\u4ECE\u5B8C\u6574\u65E7\u5FEB\u7167\u4FDD\u7559\u3002
 - \u4E00\u4E2A\u5BF9\u8C61\u672C\u8F6E\u53D1\u751F\u591A\u9879\u5267\u70C8\u53D8\u5316\u65F6\uFF0C\u5FC5\u987B\u5B8C\u6574\u8FD4\u56DE\u5168\u90E8\u53D7\u5F71\u54CD\u5B57\u6BB5\uFF1B\u4E0D\u9650\u5236\u53D8\u5316\u5B57\u6BB5\u6570\u91CF\uFF0C\u4E5F\u4E0D\u9650\u5236\u72EC\u7ACB\u4E8B\u5B9E\u6761\u6570\u3002
 - \u8FD4\u56DE\u5B57\u6BB5\u8868\u793A\u8BE5\u5B57\u6BB5\u4FEE\u8BA2\u540E\u7684\u5F53\u524D\u7248\u672C\uFF0C\u4E0D\u662F\u8FFD\u52A0\u5EFA\u8BAE\u3002\u6BCF\u6761\u91CD\u590D field \u884C\u53EA\u8868\u8FBE\u4E00\u4E2A\u72EC\u7ACB\u4E8B\u5B9E\u6216\u72B6\u6001\u3002
 - \u65E7\u5BF9\u8C61\u5B9A\u4E49\u3001\u56FA\u6709\u4F5C\u7528\u548C\u957F\u671F\u4FE1\u606F\u6CA1\u6709\u88AB\u6B63\u6587\u660E\u786E\u91CD\u5B9A\u4E49\u65F6\u4E0D\u5F97\u6539\u5199\uFF1B\u7269\u54C1\u7684\u65E2\u6709\u4F5C\u7528\u4E0D\u5F97\u56E0\u6301\u6709\u3001\u4F7F\u7528\u6216\u72B6\u6001\u53D8\u5316\u800C\u4E22\u5931\u3002
-- \u65B0\u5BF9\u8C61\u53EA\u586B\u5199\u6B63\u6587\u5DF2\u660E\u786E\u5EFA\u7ACB\u7684\u5185\u5BB9\uFF1B\u4E0D\u5F97\u4E3A\u4E86\u586B\u6EE1\u5B57\u6BB5\u800C\u8865\u5168\u5E38\u8BC6\u3001\u8EAB\u4EFD\u3001\u4F5C\u7528\u3001\u5173\u7CFB\u6216\u80FD\u529B\u3002
+- \u901A\u8FC7\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\u7684\u65B0\u5BF9\u8C61\u53EA\u586B\u5199\u6B63\u6587\u5DF2\u660E\u786E\u5EFA\u7ACB\u7684\u5185\u5BB9\uFF1B\u4E0D\u5F97\u4E3A\u4E86\u586B\u6EE1\u5B57\u6BB5\u800C\u8865\u5168\u5E38\u8BC6\u3001\u8EAB\u4EFD\u3001\u4F5C\u7528\u3001\u5173\u7CFB\u6216\u80FD\u529B\u3002
 
 \u3010\u7CBE\u51C6\u8868\u8FBE\u89C4\u5219\u3011
 - \u6761\u6570\u4E0D\u8BBE\u786C\u4E0A\u9650\uFF1B\u6709\u591A\u5C11\u72EC\u7ACB\u4E14\u5FC5\u8981\u7684\u4E8B\u5B9E\u5C31\u5199\u591A\u5C11\u6761\u3002
@@ -6699,7 +6756,7 @@ async function runStateExtraction(artifact, force = false) {
   const activeFacts = (chatState.internalFacts ?? []).filter((fact) => fact.active || fact.unresolvedItems.length > 0 || !fact.consumedBySmallSummaryId).slice(-120);
   const request = {
     task: "state",
-    systemPrompt: stateSystemPrompt(registry2),
+    systemPrompt: stateSystemPrompt(registry2, settings.statePrompts),
     prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
     maxTokens: 4096,
     requestPurpose: "fixed-text"
@@ -7918,27 +7975,64 @@ function compactLabel(value2) {
 function stringList4(value2) {
   return Array.isArray(value2) ? value2.map(String).map((item) => item.trim()).filter(Boolean) : [];
 }
+function normalizeReference(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+function rowAliases(row) {
+  return [...new Set([row.title, ...row.keywords ?? []].map(normalizeReference).filter((value2) => value2.length >= 2))];
+}
 function relationText(row) {
   const fields = row.fields ?? {};
-  return [row.title, row.content, row.status, ...row.keywords, ...stringList4(fields.relationshipStates), ...stringList4(fields.relatedObjects), ...stringList4(fields.relatedEvents)].join(" ").toLowerCase();
+  return [row.title, row.content, row.status, ...row.keywords, ...stringList4(fields.relationshipStates)].join(" ").toLowerCase();
 }
-function uniquePairKey(a, b, label) {
+function uniquePairKey(a, b, kind) {
   const [left, right] = [a, b].sort();
-  return `${left}|${right}|${label}`;
+  return `${left}|${right}|${kind}`;
+}
+function referenceMatches(reference, aliases2) {
+  const normalized = normalizeReference(reference);
+  if (!normalized) return false;
+  return aliases2.some((alias) => normalized === alias || normalized.includes(alias) || alias.includes(normalized));
+}
+function relationshipLineFor(row, aliases2) {
+  return stringList4(row.fields?.relationshipStates).find((line) => aliases2.some((alias) => normalizeReference(line).includes(alias))) || "";
+}
+function edgeKindFor(target, relationshipLine) {
+  if (relationshipLine) return "relationship";
+  if (target.type === "event") return "event";
+  return "object";
+}
+function edgeLabelFor(target, relationshipLine) {
+  if (relationshipLine) return compactLabel(relationshipLine);
+  if (target.type === "event") return "\u53C2\u4E0E\u4E8B\u4EF6";
+  if (target.type === "region") return "\u5173\u8054\u533A\u57DF";
+  if (target.type === "item") return "\u5173\u8054\u7269\u54C1";
+  return "\u5173\u8054\u5BF9\u8C61";
 }
 function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
   if (!snapshot) return { nodes: [], edges: [] };
   const registry2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
   const nodes = [];
   const rowsByNode = /* @__PURE__ */ new Map();
+  const aliasesByNode = /* @__PURE__ */ new Map();
   const roles = scope === "relations" ? ["characters", "state"] : ["characters", "state", "items", "events", "regions", "spacetime", "globalChanges"];
   for (const table of enabledTables(registry2).filter((item) => roles.includes(item.role))) {
     const type = nodeTypeFor(table.role);
     if (!type) continue;
     for (const row of snapshot[table.key] ?? []) {
       const id = `${table.key}:${row.id}`;
-      nodes.push({ id, label: String(row.title || "\u672A\u547D\u540D").trim(), type, detail: row.content, status: row.status, existence: row.lifecycle?.existence, activity: row.lifecycle?.activity, memory: row.lifecycle?.memory });
+      nodes.push({
+        id,
+        label: String(row.title || "\u672A\u547D\u540D").trim(),
+        type,
+        detail: row.content,
+        status: row.status,
+        existence: row.lifecycle?.existence,
+        activity: row.lifecycle?.activity,
+        memory: row.lifecycle?.memory
+      });
       rowsByNode.set(id, row);
+      aliasesByNode.set(id, rowAliases(row));
     }
   }
   const edges = [];
@@ -7946,17 +8040,35 @@ function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
   for (const source of nodes) {
     const row = rowsByNode.get(source.id);
     if (!row) continue;
-    const text = relationText(row);
-    const relationshipText = stringList4(row.fields?.relationshipStates).join("\uFF1B");
+    const relatedObjects = stringList4(row.fields?.relatedObjects);
+    const relatedEvents = stringList4(row.fields?.relatedEvents);
+    const relationshipStates = stringList4(row.fields?.relationshipStates);
+    const hasExplicitLinks = relatedObjects.length > 0 || relatedEvents.length > 0 || relationshipStates.length > 0;
+    const legacyText = relationText(row);
     for (const target of nodes) {
-      if (target.id === source.id || target.label.trim().length < 2) continue;
-      if (!text.includes(target.label.trim().toLowerCase())) continue;
+      if (target.id === source.id) continue;
       if (scope === "relations" && (source.type !== "character" || target.type !== "character")) continue;
-      const label = relationshipText && relationshipText.toLowerCase().includes(target.label.toLowerCase()) ? compactLabel(relationshipText) : "\u5173\u8054";
-      const key = uniquePairKey(source.id, target.id, label);
+      const targetAliases = aliasesByNode.get(target.id) ?? [];
+      if (!targetAliases.length) continue;
+      const relationshipLine = relationshipLineFor(row, targetAliases);
+      const objectReference = relatedObjects.find((item) => referenceMatches(item, targetAliases)) || "";
+      const eventReference = relatedEvents.find((item) => referenceMatches(item, targetAliases)) || "";
+      const legacyMention = !hasExplicitLinks && targetAliases.some((alias) => legacyText.includes(alias));
+      if (!relationshipLine && !objectReference && !eventReference && !legacyMention) continue;
+      const kind = legacyMention ? "legacy" : edgeKindFor(target, relationshipLine);
+      const key = uniquePairKey(source.id, target.id, kind);
       if (seen.has(key)) continue;
       seen.add(key);
-      edges.push({ id: `edge:${source.id}:${target.id}`, source: source.id, target: target.id, label, detail: relationshipText || row.content });
+      const evidence = relationshipLine || objectReference || eventReference || row.content;
+      edges.push({
+        id: `edge:${source.id}:${target.id}:${kind}`,
+        source: source.id,
+        target: target.id,
+        label: legacyMention ? "\u65E7\u8BB0\u5F55\u5173\u8054" : edgeLabelFor(target, relationshipLine),
+        detail: evidence,
+        kind,
+        explicit: !legacyMention
+      });
     }
   }
   return { nodes, edges };
@@ -8199,6 +8311,9 @@ var editorMessageKey = null;
 var savingRow = false;
 var workspacePipelineActionPending = false;
 var workspaceViewportBound = false;
+var tableSearchQuery = "";
+var graphSearchQuery = "";
+var diagnosticPromptKind = "state";
 function updateWorkspaceViewportHeight() {
   const height = Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight));
   document.documentElement.style.setProperty("--ma11-viewport-height", `${height}px`);
@@ -8245,7 +8360,7 @@ var WORKSPACE_NAVIGATION = [
   { key: "tables", label: "\u5BF9\u8C61", icon: "fa-table-cells-large", description: "\u89D2\u8272\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u4E0E\u533A\u57DF\u5BF9\u8C61" },
   { key: "graph", label: "\u56FE\u8C31", icon: "fa-diagram-project", description: "\u67E5\u770B\u5BF9\u8C61\u4E4B\u95F4\u7684\u5173\u7CFB\u7F51\u7EDC" },
   { key: "summaries", label: "\u603B\u7ED3", icon: "fa-layer-group", description: "\u4E8B\u4EF6\u5C0F\u603B\u7ED3\u4E0E\u957F\u671F\u5927\u603B\u7ED3" },
-  { key: "tableManager", label: "\u8868\u683C", icon: "fa-sliders", description: "\u8C03\u6574\u53EF\u89C1\u89C6\u56FE\u4E0E\u5B57\u6BB5\u8BED\u4E49" },
+  { key: "tableManager", label: "\u89C4\u5219", icon: "fa-sliders", description: "\u6807\u51C6\u63D0\u793A\u8BCD\u3001\u8868\u683C\u7ED3\u6784\u4E0E\u53EF\u8C03\u89C4\u5219" },
   { key: "audit", label: "\u5BA1\u6838", icon: "fa-shield-halved", description: "\u5BA1\u6838\u89C4\u5219\u3001\u4FEE\u6B63\u7B56\u7565\u4E0E\u7ED3\u679C" },
   { key: "sync", label: "\u4E16\u754C\u4E66", icon: "fa-book-atlas", description: "\u53D1\u5E03\u3001\u6E05\u7406\u4E0E\u53EC\u56DE\u8BBE\u7F6E" },
   { key: "settings", label: "\u8BBE\u7F6E", icon: "fa-gears", description: "\u8FDE\u63A5\u5206\u914D\u3001\u81EA\u52A8\u5316\u4E0E\u7EF4\u62A4" },
@@ -8305,6 +8420,7 @@ function root() {
           </header>
           <nav class="ma11-tabs" role="tablist" aria-label="\u955C\u6E0A\u529F\u80FD" data-ma11-scroll-tabs>${workspaceNavigationHtml()}</nav>
           <main id="ma11-workspace-content" class="ma11-content" role="tabpanel"></main>
+          <div class="ma11-live-region" role="status" aria-live="polite" aria-atomic="true" data-ma11-live></div>
         </section>
       </div>
       <div class="ma11-editor-backdrop" hidden>
@@ -8530,6 +8646,29 @@ function historyRecoveryHtml(chatState, busy = false) {
   const detail = pauseError ? `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${pauseError}` : recovery.phase === "partial" ? recovery.error || "\u8BF7\u91CD\u8BD5\u672A\u5B8C\u6210\u7684\u6D3E\u751F\u9636\u6BB5" : current;
   return `<section class="ma11-card ma11-history-warning"><header><b>${escapeHtml(labels[recovery.phase] || "\u6B63\u5728\u6062\u590D\u5386\u53F2")}</b><span>${escapeHtml(progress)}</span></header><p>${escapeHtml(detail)}</p></section>`;
 }
+function promptSettingsAreStandard() {
+  const settings = getSettings();
+  return JSON.stringify(settings.statePrompts) === JSON.stringify(DEFAULT_STATE_PROMPTS) && JSON.stringify(settings.summaryPrompts) === JSON.stringify(DEFAULT_SUMMARY_PROMPTS);
+}
+function setupReadinessHtml(artifact, chatState) {
+  const settings = getSettings();
+  const enabledCount = enabledTables(settings.tableRegistry).length;
+  const checks = [
+    { ok: settings.enabled, label: "\u63D2\u4EF6\u5DF2\u542F\u7528", action: "settings" },
+    { ok: settings.autoState, label: "\u81EA\u52A8\u6574\u7406\u5DF2\u5F00\u542F", action: "settings" },
+    { ok: enabledCount > 0, label: `${enabledCount} \u4E2A\u8BB0\u5FC6\u89C6\u56FE\u53EF\u7528`, action: "tableManager" },
+    { ok: promptSettingsAreStandard(), label: "\u6807\u51C6\u89C4\u5219\u672A\u88AB\u6539\u5199", action: "tableManager" },
+    { ok: Boolean(artifact?.snapshot), label: "\u5F53\u524D\u804A\u5929\u5DF2\u6709\u8BB0\u5FC6\u5FEB\u7167", action: "tables" },
+    { ok: settings.lorebookSync && !chatState?.historyInvalidation, label: "\u4E16\u754C\u4E66\u540C\u6B65\u53EF\u7528", action: "sync" }
+  ];
+  const completed = checks.filter((item) => item.ok).length;
+  const percent = Math.round(completed / checks.length * 100);
+  return `<section class="ma11-card ma11-readiness-card">
+    <header><div><b>\u5F00\u7BB1\u68C0\u67E5</b><span>\u4E0D\u9700\u8981\u7406\u89E3\u5185\u90E8\u534F\u8BAE\uFF0C\u6309\u672A\u5B8C\u6210\u9879\u5904\u7406\u5373\u53EF</span></div><strong>${completed}/${checks.length}</strong></header>
+    <div class="ma11-progress-track" aria-label="\u5F00\u7BB1\u68C0\u67E5\u5B8C\u6210\u5EA6 ${percent}%"><span style="width:${percent}%"></span></div>
+    <div class="ma11-readiness-grid">${checks.map((item) => `<button class="${item.ok ? "ready" : "pending"}" data-ma11-tab="${item.action}"><i class="fa-solid ${item.ok ? "fa-check" : "fa-arrow-right"}" aria-hidden="true"></i><span>${escapeHtml(item.label)}</span></button>`).join("")}</div>
+  </section>`;
+}
 async function overviewHtml(artifactInfo) {
   const enabled = getSettings().enabled;
   const artifact = artifactInfo?.artifact;
@@ -8551,8 +8690,10 @@ async function overviewHtml(artifactInfo) {
       </div>
       <button data-ma11-action="process-latest" ${enabled && latestAssistantIndex() >= 0 && !busy ? "" : "disabled"}>${artifact ? "\u91CD\u65B0\u6574\u7406" : "\u6574\u7406\u6700\u65B0\u6B63\u6587"}</button>
     </section>
+    ${setupReadinessHtml(artifact, chatState)}
     <section class="ma11-card ma11-progress-card">
       <header><b>\u5904\u7406\u8FDB\u5EA6</b><span>${flow.completed}/${flow.total}</span></header>
+      <div class="ma11-progress-track" aria-label="\u5904\u7406\u8FDB\u5EA6 ${Math.round(flow.completed / flow.total * 100)}%"><span style="width:${Math.round(flow.completed / flow.total * 100)}%"></span></div>
       ${stageStripHtml(artifact)}
     </section>
     <nav class="ma11-dashboard-links" aria-label="\u5E38\u7528\u529F\u80FD">
@@ -8589,6 +8730,15 @@ function rowCustomFieldsHtml(row, table) {
   }).filter(Boolean);
   return lines2.length ? `<div class="ma11-custom-fields">${lines2.join("")}</div>` : "";
 }
+function searchableRowText(row) {
+  return [
+    row.title,
+    row.content,
+    row.status,
+    ...row.keywords ?? [],
+    ...Object.values(row.fields ?? {}).flatMap((value2) => Array.isArray(value2) ? value2.map(String) : [String(value2 ?? "")])
+  ].join(" ").toLocaleLowerCase();
+}
 async function tableHtml(artifactInfo) {
   const settings = getSettings();
   const registry2 = normalizeTableRegistry(settings.tableRegistry);
@@ -8617,23 +8767,49 @@ async function tableHtml(artifactInfo) {
         <div class="ma11-table-tabs">${visibleTables.map((table) => `<button class="${table.key === active ? "active" : ""}" data-ma11-table="${escapeHtml(table.key)}">${escapeHtml(table.name)} <span>${artifact?.snapshot?.[table.key]?.length ?? 0}</span></button>`).join("")}</div>
         <p class="ma11-table-purpose"><b>${escapeHtml(activeDefinition.name)}</b>\uFF1A${escapeHtml(activeDefinition.purpose)}</p>
       </div>
-      <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="run-state" ${settings.enabled && !busy && artifactInfo?.index === latestAssistantIndex() && (!settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>\u751F\u6210/\u66F4\u65B0\u8868\u683C</button><button data-ma11-action="open-table-manager">\u7BA1\u7406\u8868\u683C</button></div>
+      <div class="ma11-table-tools">
+        <label class="ma11-search-field"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input data-ma11-table-search value="${escapeHtml(tableSearchQuery)}" placeholder="\u641C\u7D22\u5F53\u524D\u8868\u683C" aria-label="\u641C\u7D22\u5F53\u524D\u8868\u683C"/><output data-ma11-table-visible-count>${rows.length} / ${rows.length}</output></label>
+        <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>\uFF0B \u6DFB\u52A0</button><button data-ma11-action="run-state" ${settings.enabled && !busy && artifactInfo?.index === latestAssistantIndex() && (!settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>\u751F\u6210/\u66F4\u65B0</button><button data-ma11-action="open-table-manager">\u89C4\u5219\u4E0E\u8868\u683C</button></div>
+      </div>
     </section>
     <p class="ma11-table-hint">\u53EA\u663E\u793A\u542F\u7528\u89C6\u56FE\u3002\u624B\u673A\u7AEF\u53EF\u5728\u8868\u683C\u533A\u57DF\u5DE6\u53F3\u6ED1\u52A8\uFF1B\u505C\u7528\u6216\u5220\u9664\u89C6\u56FE\u4E0D\u4F1A\u5220\u9664\u5185\u90E8\u4E8B\u5B9E\u3001\u4E8B\u4EF6\u7EBF\u6216\u603B\u7ED3\u3002</p>
     <section class="ma11-table-wrap" role="region" aria-label="${escapeHtml(activeDefinition.name)}\u72B6\u6001\u8868" tabindex="0">
       ${artifact?.snapshot ? `<table class="ma11-table">
         <colgroup><col class="ma11-col-index"/><col class="ma11-col-title"/><col class="ma11-col-content"/><col class="ma11-col-state"/><col class="ma11-col-meta"/><col class="ma11-col-actions"/></colgroup>
         <thead><tr><th>\u5E8F\u53F7</th><th>${escapeHtml(columnHeaders.title)}</th><th>${escapeHtml(columnHeaders.content)}</th><th>${escapeHtml(columnHeaders.state)}</th><th>\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4</th><th>\u64CD\u4F5C</th></tr></thead>
-        <tbody>${rows.length ? rows.map((row, index) => `<tr>
+        <tbody>${rows.length ? rows.map((row, index) => {
+    const searchText = searchableRowText(row);
+    const hidden = tableSearchQuery && !searchText.includes(tableSearchQuery.toLocaleLowerCase());
+    return `<tr data-ma11-table-row-search="${escapeHtml(searchText)}" ${hidden ? "hidden" : ""}>
           <td data-label="\u5E8F\u53F7">${index + 1}</td>
           <td class="ma11-cell-title" data-label="${escapeHtml(columnHeaders.title)}"><b>${escapeHtml(row.title)}</b>${row.id === focusObjectId ? `<span class="ma11-badge">\u5E38\u9A7B\u7126\u70B9</span>` : ""}</td>
           <td class="ma11-cell-content" data-label="${escapeHtml(columnHeaders.content)}">${escapeHtml(row.content)}${rowCustomFieldsHtml(row, activeDefinition)}</td>
           <td data-label="${escapeHtml(columnHeaders.state)}"><div class="ma11-cell-status">${row.status ? `<span class="ma11-status-text">${escapeHtml(row.status)}</span>` : ""}${lifecycleHtml(row)}<div class="ma11-keyword-list">${row.keywords.map((word) => `<span class="ma11-keyword">${escapeHtml(word)}</span>`).join("")}</div></div></td>
           <td data-label="\u6765\u6E90\u4E0E\u66F4\u65B0\u65F6\u95F4"><div class="ma11-cell-meta"><span class="ma11-source ${row.source}">${row.locked ? "\u5B8C\u5168\u9501\u5B9A" : row.source === "manual" ? "\u4EBA\u5DE5\u57FA\u7840" : "\u81EA\u52A8"}</span><time>${escapeHtml(new Date(row.updatedAt).toLocaleString())}</time></div></td>
           <td data-label="\u64CD\u4F5C"><div class="ma11-row-actions">${["characters", "state"].includes(activeDefinition.role) ? row.id === focusObjectId ? `<button data-ma11-action="clear-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u53D6\u6D88\u7126\u70B9</button>` : `<button data-ma11-action="set-focus" data-ma11-focus-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u8BBE\u4E3A\u7126\u70B9</button>` : ""}<button data-ma11-edit-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u7F16\u8F91</button><button class="danger" data-ma11-delete-row="${escapeHtml(row.id)}" ${editable ? "" : "disabled"}>\u5220\u9664</button></div></td>
-        </tr>`).join("") : `<tr class="ma11-empty-row"><td colspan="6" class="ma11-empty">\u8BE5\u89C6\u56FE\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
+        </tr>`;
+  }).join("") : `<tr class="ma11-empty-row"><td colspan="6" class="ma11-empty">\u8BE5\u89C6\u56FE\u6682\u65E0\u8BB0\u5F55\u3002</td></tr>`}</tbody>
       </table>` : '<div class="ma11-empty-panel">\u5C1A\u65E0\u72B6\u6001\u8868\u3002\u70B9\u51FB\u201C\u6574\u7406\u6700\u65B0\u6B63\u6587\u201D\u3002</div>'}
     </section>`;
+}
+function statePromptEditorHtml(registry2) {
+  const settings = getSettings();
+  const prompt = settings.statePrompts;
+  return `<section class="ma11-card ma11-form-card ma11-rule-card" id="ma11-rule-state">
+    <header><div><b>\u4E8B\u5B9E\u63D0\u53D6\u89C4\u5219</b><span>\u51B3\u5B9A\u8C01\u80FD\u8FDB\u5165\u8BB0\u5FC6\u3001\u54EA\u4E9B\u4E8B\u5B9E\u53EF\u4FE1\u3001\u5DF2\u6709\u8BB0\u5F55\u5982\u4F55\u66F4\u65B0</span></div><span class="ma11-badge ${JSON.stringify(prompt) === JSON.stringify(DEFAULT_STATE_PROMPTS) ? "success" : "working"}">${JSON.stringify(prompt) === JSON.stringify(DEFAULT_STATE_PROMPTS) ? "\u6807\u51C6" : "\u5DF2\u81EA\u5B9A\u4E49"}</span></header>
+    <div class="ma11-guidance-banner"><i class="fa-solid fa-filter-circle-xmark" aria-hidden="true"></i><div><b>\u9ED8\u8BA4\u91C7\u7528\u4E25\u683C\u51C6\u5165</b><p>\u59D3\u540D\u3001\u670D\u88C5\u3001\u5916\u8C8C\u3001\u4E00\u53E5\u53F0\u8BCD\u6216\u77ED\u6682\u51FA\u573A\u90FD\u4E0D\u8DB3\u4EE5\u5EFA\u6863\uFF1B\u771F\u6B63\u6539\u53D8\u56E0\u679C\u6216\u5F62\u6210\u6301\u7EED\u5173\u7CFB\u540E\u518D\u5347\u7EA7\u4E3A\u6B63\u5F0F\u5BF9\u8C61\u3002</p></div></div>
+    <div class="ma11-rule-grid">
+      <label>\u5141\u8BB8\u5EFA\u6863\u6761\u4EF6 <small>\u63CF\u8FF0\u5BF9\u8C61\u4F55\u65F6\u5177\u6709\u957F\u671F\u8BB0\u5F55\u4EF7\u503C\u3002</small><textarea rows="8" data-ma11-state-prompt="admissionRules">${escapeHtml(prompt.admissionRules)}</textarea></label>
+      <label>\u9ED8\u8BA4\u6392\u9664\u6761\u4EF6 <small>\u547D\u4E2D\u8FD9\u4E9B\u60C5\u51B5\u65F6\u9ED8\u8BA4\u4E0D\u65B0\u5EFA\u6761\u76EE\u3002</small><textarea rows="8" data-ma11-state-prompt="exclusionRules">${escapeHtml(prompt.exclusionRules)}</textarea></label>
+      <label>\u8BC1\u636E\u4E0E\u4E0D\u786E\u5B9A\u6027 <small>\u51B3\u5B9A\u4F20\u95FB\u3001\u51B2\u7A81\u548C\u8EAB\u4EFD\u4E0D\u6E05\u65F6\u5982\u4F55\u5904\u7406\u3002</small><textarea rows="8" data-ma11-state-prompt="evidenceRules">${escapeHtml(prompt.evidenceRules)}</textarea></label>
+      <label>\u66F4\u65B0\u4E0E\u51B2\u7A81\u5904\u7406 <small>\u51B3\u5B9A\u4F55\u65F6\u4FEE\u6539\u65E7\u8BB0\u5F55\u3001\u5173\u95ED\u672A\u51B3\u548C\u5EFA\u7ACB\u5173\u7CFB\u3002</small><textarea rows="8" data-ma11-state-prompt="updateRules">${escapeHtml(prompt.updateRules)}</textarea></label>
+    </div>
+    <div class="ma11-actions">
+      <button data-ma11-action="save-state-prompt">\u4FDD\u5B58\u4E8B\u5B9E\u63D0\u53D6\u89C4\u5219</button>
+      <button data-ma11-action="restore-state-prompt">\u6062\u590D\u6807\u51C6\u89C4\u5219</button>
+    </div>
+    <p class="ma11-help">\u6A21\u578B\u53EA\u8D1F\u8D23\u5224\u65AD\u548C\u586B\u5199\u81EA\u7136\u8BED\u8A00\u5185\u5BB9\uFF1B\u5BF9\u8C61\u8EAB\u4EFD\u3001\u7A33\u5B9A ID\u3001\u5408\u5E76\u53BB\u91CD\u3001\u5386\u53F2\u4FDD\u7559\u548C\u56FA\u5B9A\u4F20\u8F93\u683C\u5F0F\u4ECD\u7531\u63D2\u4EF6\u7EF4\u62A4\u3002</p>
+  </section>`;
 }
 function tableManagerHtml(artifactInfo) {
   const settings = getSettings();
@@ -8664,7 +8840,14 @@ function tableManagerHtml(artifactInfo) {
       <p class="ma11-help">\u5168\u5C40\u8868\u683C\u5B9A\u4E49\uFF0C\u9002\u7528\u4E8E\u6240\u6709\u804A\u5929\u3002\u540D\u79F0\u3001\u7528\u9014\u3001\u8BED\u4E49\u8868\u5934\u4E0E\u5B57\u6BB5\u8BF4\u660E\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\uFF1B\u6539\u540D\u4E0D\u4F1A\u7834\u574F\u5DF2\u6709\u6570\u636E\u6216\u5BF9\u8C61\u8EAB\u4EFD\u3002</p>
     </article>`;
   }).join("");
-  return `<section class="ma11-toolbar"><div><h2>\u8868\u683C\u7BA1\u7406</h2><p>\u8868\u683C\u662F\u5185\u90E8\u4E8B\u5B9E\u7684\u53EF\u89C1\u89C6\u56FE\uFF0C\u6570\u91CF\u4E0D\u9650\u3002\u505C\u7528\u6216\u5220\u9664\u540E\u4E0D\u518D\u8981\u6C42\u6A21\u578B\u8F93\u51FA\uFF0C\u4E5F\u4E0D\u518D\u8FDB\u5165 UI \u4E0E\u4E16\u754C\u4E66\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u516B\u8868</button></div></section>
+  const standard = promptSettingsAreStandard();
+  return `<section class="ma11-toolbar ma11-rules-toolbar"><div><h2>\u89C4\u5219\u4E0E\u8868\u683C</h2><p>\u5E38\u7528\u89C4\u5219\u76F4\u63A5\u7F16\u8F91\uFF1B\u56FA\u5B9A\u534F\u8BAE\u548C\u5185\u90E8\u5B57\u6BB5\u53EA\u5728\u8BCA\u65AD\u9875\u67E5\u770B\uFF0C\u907F\u514D\u8BEF\u6539\u5E95\u5C42\u7ED3\u6784\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-standard-rules">\u5E94\u7528\u6807\u51C6\u89C4\u5219</button><button data-ma11-action="open-prompt-diagnostics">\u67E5\u770B\u8C03\u8BD5\u9884\u89C8</button></div></section>
+    <section class="ma11-card ma11-standard-card ${standard ? "is-standard" : "is-custom"}">
+      <div><span class="ma11-standard-orb" aria-hidden="true"><i class="fa-solid ${standard ? "fa-check" : "fa-pen"}"></i></span><div><b>${standard ? "\u5F53\u524D\u4F7F\u7528\u6807\u51C6\u8BB0\u5FC6\u89C4\u5219" : "\u5F53\u524D\u5305\u542B\u81EA\u5B9A\u4E49\u89C4\u5219"}</b><p>${standard ? "\u53EF\u76F4\u63A5\u4F7F\u7528\uFF1B\u80CC\u666F\u677F NPC\u3001\u4F20\u95FB\u3001\u4E0D\u786E\u5B9A\u8EAB\u4EFD\u548C\u91CD\u590D\u4FE1\u606F\u5747\u91C7\u7528\u4FDD\u5B88\u5199\u5165\u3002" : "\u81EA\u5B9A\u4E49\u4F1A\u4ECE\u4E0B\u4E00\u6B21\u5BF9\u5E94\u4EFB\u52A1\u5F00\u59CB\u751F\u6548\uFF1B\u968F\u65F6\u53EF\u6062\u590D\u6807\u51C6\u89C4\u5219\u3002"}</p></div></div>
+      <nav class="ma11-rule-jump" aria-label="\u89C4\u5219\u9875\u9762\u5BFC\u822A"><a href="#ma11-rule-state">\u4E8B\u5B9E\u63D0\u53D6</a><a href="#ma11-rule-small">\u8FD1\u671F\u4E8B\u4EF6</a><a href="#ma11-rule-large">\u957F\u671F\u56FA\u5316</a><a href="#ma11-rule-tables">\u8868\u683C\u7ED3\u6784</a></nav>
+    </section>
+    ${statePromptEditorHtml(registry2)}
+    <section class="ma11-summary-prompt-grid">${summaryPromptEditorHtml("small")}${summaryPromptEditorHtml("large")}</section>
     <section class="ma11-card ma11-form-card ma11-new-table">
       <header><b>\u65B0\u589E\u81EA\u5B9A\u4E49\u8868\u683C</b><span>\u65B0\u589E\u540E\u81EA\u52A8\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u6587\u672C\u534F\u8BAE</span></header>
       <label>\u540D\u79F0<input data-ma11-new-table-name maxlength="80" placeholder="\u4F8B\u5982\uFF1A\u7EC4\u7EC7\u72B6\u6001" /></label>
@@ -8672,6 +8855,7 @@ function tableManagerHtml(artifactInfo) {
       <label>\u9644\u52A0\u8868\u5934 <small>\u53EF\u7559\u7A7A\uFF1B\u6BCF\u884C\uFF1A\u8868\u5934\u540D\u79F0\uFF5C\u8BB0\u5F55\u8981\u6C42</small><textarea data-ma11-new-table-fields rows="3" placeholder="\u7EC4\u7EC7\u5C42\u7EA7\uFF5C\u8BB0\u5F55\u5DF2\u7ECF\u660E\u786E\u7684\u7EC4\u7EC7\u5C42\u7EA7"></textarea></label>
       <div class="ma11-actions"><button data-ma11-action="create-table">\u65B0\u589E\u8868\u683C</button></div>
     </section>
+    <section class="ma11-section-heading" id="ma11-rule-tables"><div><span>04</span><div><h3>\u8868\u683C\u7ED3\u6784</h3><p>\u51B3\u5B9A\u5408\u683C\u5BF9\u8C61\u8BB0\u5F55\u4EC0\u4E48\uFF0C\u4E0D\u8D1F\u8D23\u653E\u5BBD\u5BF9\u8C61\u51C6\u5165\u3002</p></div></div><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u516B\u8868</button></section>
     <section class="ma11-table-manager-list">${rows || '<div class="ma11-empty-panel">\u5F53\u524D\u6CA1\u6709\u8868\u683C\u5B9A\u4E49\u3002</div>'}</section>
     <section class="ma11-card ma11-note"><b>\u5220\u9664\u8BF4\u660E</b><p>\u5220\u9664\u9ED8\u8BA4\u8868\u683C\u53EA\u5220\u9664\u53EF\u89C1\u89C6\u56FE\uFF0C\u4E0D\u5220\u9664\u804A\u5929\u7EA7\u5185\u90E8\u4E8B\u5B9E\u3001event_id\u3001\u5C0F\u603B\u7ED3\u3001\u5927\u603B\u7ED3\u6216\u5386\u53F2\u91CD\u5EFA\u4F9D\u636E\u3002\u4EBA\u5DE5\u4E16\u754C\u4E66\u6761\u76EE\u4E5F\u4E0D\u4F1A\u88AB\u955C\u6E0A\u64CD\u4F5C\u3002</p></section>`;
 }
@@ -8735,6 +8919,13 @@ function graphHtml(artifactInfo) {
   const graph = buildRelationshipGraph(snapshot, settings.ui.graphScope, settings.tableRegistry);
   const positioned = graphNodePositions(graph);
   const positions = new Map(positioned.map((node) => [node.id, node]));
+  const degree = /* @__PURE__ */ new Map();
+  for (const edge of graph.edges) {
+    degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+    degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+  }
+  const graphQuery = graphSearchQuery.trim().toLocaleLowerCase();
+  const matchingNodeIds = new Set(positioned.filter((node) => !graphQuery || `${node.label} ${node.detail} ${node.status}`.toLocaleLowerCase().includes(graphQuery)).map((node) => node.id));
   const selected = positioned.find((node) => node.id === selectedGraphNodeId) ?? positioned[0];
   if (selected && !selectedGraphNodeId) selectedGraphNodeId = selected.id;
   const zoom = clampGraphZoom(settings.ui.graphZoom);
@@ -8745,19 +8936,26 @@ function graphHtml(artifactInfo) {
     if (!source || !target) return "";
     const mx = (source.x + target.x) / 2;
     const my = (source.y + target.y) / 2;
-    return `<g class="ma11-graph-edge"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"><title>${escapeHtml(`${edge.label}\uFF1A${edge.detail}`)}</title></line>${graph.edges.length <= 18 ? `<text x="${mx}" y="${my}">${escapeHtml(edge.label)}</text>` : ""}</g>`;
+    const dimmed = graphQuery && !matchingNodeIds.has(edge.source) && !matchingNodeIds.has(edge.target);
+    return `<g class="ma11-graph-edge ${edge.kind || "object"} ${edge.explicit === false ? "legacy" : "explicit"} ${dimmed ? "dimmed" : ""}" data-ma11-graph-edge-source="${escapeHtml(edge.source)}" data-ma11-graph-edge-target="${escapeHtml(edge.target)}"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"><title>${escapeHtml(`${edge.label}\uFF1A${edge.detail}`)}</title></line>${graph.edges.length <= 18 ? `<text x="${mx}" y="${my}">${escapeHtml(edge.label)}</text>` : ""}</g>`;
   }).join("");
   const nodeSvg = positioned.map(
-    (node) => `<g class="ma11-graph-node ${node.type} ${graphLifecycleClass(node)} ${selected?.id === node.id ? "selected" : ""}" data-ma11-graph-node="${escapeHtml(node.id)}" transform="translate(${node.x} ${node.y})" tabindex="0" role="button"><circle r="34"></circle><text text-anchor="middle" y="4">${escapeHtml(node.label.length > 10 ? `${node.label.slice(0, 9)}\u2026` : node.label)}</text><title>${escapeHtml(`${node.label}
-${node.detail}`)}</title></g>`
+    (node) => {
+      const searchText = `${node.label} ${node.detail} ${node.status}`.toLocaleLowerCase();
+      const matches = !graphQuery || matchingNodeIds.has(node.id);
+      const radius = Math.min(44, 31 + (degree.get(node.id) ?? 0) * 2);
+      return `<g class="ma11-graph-node ${node.type} ${graphLifecycleClass(node)} ${selected?.id === node.id ? "selected" : ""} ${graphQuery ? matches ? "search-match" : "dimmed" : ""}" data-ma11-graph-node="${escapeHtml(node.id)}" data-ma11-graph-search-text="${escapeHtml(searchText)}" transform="translate(${node.x} ${node.y})" tabindex="0" role="button"><circle r="${radius}"></circle><text text-anchor="middle" y="4">${escapeHtml(node.label.length > 10 ? `${node.label.slice(0, 9)}\u2026` : node.label)}</text><title>${escapeHtml(`${node.label}
+${node.detail}`)}</title></g>`;
+    }
   ).join("");
   const graphWidth = Math.round(1e3 * zoom);
   const graphHeight = Math.round(680 * zoom);
   return `
     <section class="ma11-toolbar ma11-graph-toolbar">
-      <div><h2>\u5BF9\u8C61\u56FE\u8C31</h2><p>\u7531\u5F53\u524D\u72B6\u6001\u8868\u751F\u6210\uFF0C\u53EA\u8BFB\u5C55\u793A\uFF0C\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002</p></div>
+      <div><h2>\u5BF9\u8C61\u56FE\u8C31</h2><p>\u4F18\u5148\u4F7F\u7528\u660E\u786E\u7684\u5173\u8054\u5BF9\u8C61\u3001\u5173\u8054\u4E8B\u4EF6\u548C\u5173\u7CFB\u72B6\u6001\uFF1B\u65E7\u6570\u636E\u7F3A\u5C11\u663E\u5F0F\u5173\u8054\u65F6\u624D\u4F7F\u7528\u517C\u5BB9\u63A8\u65AD\u3002</p></div>
       <div class="ma11-graph-toolbar-actions">
         <div class="ma11-segmented"><button class="${settings.ui.graphScope === "relations" ? "active" : ""}" data-ma11-graph-scope="relations">\u4EBA\u7269\u5173\u7CFB</button><button class="${settings.ui.graphScope === "world" ? "active" : ""}" data-ma11-graph-scope="world">\u5168\u5C40\u7F51\u7EDC</button></div>
+        <label class="ma11-search-field ma11-graph-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input data-ma11-graph-search value="${escapeHtml(graphSearchQuery)}" placeholder="\u67E5\u627E\u5E76\u9AD8\u4EAE\u8282\u70B9" aria-label="\u67E5\u627E\u56FE\u8C31\u8282\u70B9"/><output data-ma11-graph-match-count>${matchingNodeIds.size} / ${graph.nodes.length}</output></label>
         <div class="ma11-graph-zoom" aria-label="\u56FE\u8C31\u7F29\u653E">
           <button type="button" data-ma11-graph-zoom="out" title="\u7F29\u5C0F">\u2212</button>
           <input type="range" min="50" max="250" step="5" value="${Math.round(zoom * 100)}" data-ma11-graph-zoom-range aria-label="\u7F29\u653E\u6BD4\u4F8B" />
@@ -8768,35 +8966,31 @@ ${node.detail}`)}</title></g>`
         </div>
       </div>
     </section>
-    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5BF9\u8C61\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
+    <section class="ma11-graph-stats"><span><b>${graph.nodes.length}</b>\u8282\u70B9</span><span><b>${graph.edges.length}</b>\u5173\u7CFB</span><span><b>${graph.edges.filter((edge) => edge.explicit !== false).length}</b>\u660E\u786E\u5173\u8054</span><span><b>${graph.edges.filter((edge) => edge.explicit === false).length}</b>\u517C\u5BB9\u5173\u8054</span></section>
+    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div><div class="ma11-graph-legend"><span><i class="character"></i>\u4EBA\u7269</span><span><i class="item"></i>\u7269\u54C1</span><span><i class="event"></i>\u4E8B\u4EF6</span><span><i class="region"></i>\u533A\u57DF</span><span><i class="legacy"></i>\u65E7\u8BB0\u5F55\u63A8\u65AD</span></div><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5BF9\u8C61\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u76F4\u63A5\u5173\u7CFB</dt><dd>${degree.get(selected.id) ?? 0}</dd><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u89D2\u8272\u6216\u4E8B\u4EF6\u6761\u76EE\u4E2D\u5EFA\u7ACB\u660E\u786E\u5173\u8054\u3002</section>'}`;
 }
 function summaryPromptEditorHtml(kind) {
   const settings = getSettings();
   const prompt = settings.summaryPrompts[kind];
-  const label = kind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3";
-  const fullPrompt = kind === "small" ? smallSummarySystemPrompt(prompt) : largeSummarySystemPrompt(prompt);
-  const field = (key, title, rows) => `<label>${title}<textarea rows="${rows}" data-ma11-summary-prompt="${kind}" data-ma11-summary-section="${key}">${escapeHtml(prompt[key])}</textarea></label>`;
-  return `<details class="ma11-card ma11-summary-prompt-card">
-    <summary><b>${label}\u63D0\u793A\u8BCD</b><span>\u53EF\u89C1\u3001\u53EF\u7F16\u8F91\u3001\u53EF\u6062\u590D\u9ED8\u8BA4</span></summary>
-    <div class="ma11-form-card ma11-summary-prompt-form">
-      ${field("coreQuestion", "\u6838\u5FC3\u5224\u65AD", 2)}
-      <div class="ma11-editor-grid">
-        ${field("includeRules", "\u4FDD\u7559\u5185\u5BB9", 7)}
-        ${field("excludeRules", "\u6392\u9664\u5185\u5BB9", 7)}
-      </div>
-      <div class="ma11-editor-grid">
-        ${field("updateRules", "\u66F4\u65B0\u89C4\u5219", 6)}
-        ${field("expressionRules", "\u8868\u8FBE\u89C4\u5219", 6)}
-      </div>
-      <div class="ma11-actions">
-        <button data-ma11-action="save-summary-prompt" data-ma11-summary-kind="${kind}">\u4FDD\u5B58${label}\u63D0\u793A\u8BCD</button>
-        <button data-ma11-action="restore-summary-prompt" data-ma11-summary-kind="${kind}">\u6062\u590D${label}\u9ED8\u8BA4\u503C</button>
-      </div>
-      <details class="ma11-prompt-preview"><summary>\u67E5\u770B\u5F53\u524D\u5B8C\u6574\u89C4\u5219\u63D0\u793A\u8BCD</summary><pre>${escapeHtml(fullPrompt)}</pre></details>
-      <details class="ma11-prompt-preview"><summary>\u67E5\u770B\u56FA\u5B9A\u8F93\u51FA\u534F\u8BAE</summary><pre>${escapeHtml(summaryFixedProtocol(kind))}</pre></details>
-      <p class="ma11-help">\u8FD9\u91CC\u53EA\u8C03\u6574\u6A21\u578B\u5982\u4F55\u7B5B\u9009\u548C\u8868\u8FBE\u603B\u7ED3\u5185\u5BB9\u3002\u4E8B\u4EF6\u5206\u7EC4\u3001\u4E8B\u5B9E\u6D88\u8D39\u3001\u7248\u672C\u7EE7\u627F\u3001\u5199\u5165\u5BF9\u8C61\u548C\u4E16\u754C\u4E66\u540C\u6B65\u4ECD\u7531\u63D2\u4EF6\u4EE3\u7801\u51B3\u5B9A\u3002</p>
+  const label = kind === "small" ? "\u8FD1\u671F\u4E8B\u4EF6\u89C4\u5219" : "\u957F\u671F\u56FA\u5316\u89C4\u5219";
+  const description = kind === "small" ? "\u628A\u540C\u4E00\u4E8B\u4EF6\u7EBF\u538B\u7F29\u6210\u4E0B\u4E00\u6B65\u5FC5\u987B\u627F\u63A5\u7684\u6700\u5C0F\u4E8B\u5B9E\u96C6\u5408\u3002" : "\u4ECE\u8FD1\u671F\u4E8B\u4EF6\u4E2D\u91CD\u65B0\u5BA1\u67E5\uFF0C\u53EA\u4FDD\u7559\u8DE8\u573A\u666F\u3001\u8DE8\u9636\u6BB5\u4ECD\u4F1A\u6539\u53D8\u672A\u6765\u7684\u4E8B\u5B9E\u3002";
+  const standard = JSON.stringify(prompt) === JSON.stringify(DEFAULT_SUMMARY_PROMPTS[kind]);
+  const field = (key, title, rows, help) => `<label>${title}<small>${help}</small><textarea rows="${rows}" data-ma11-summary-prompt="${kind}" data-ma11-summary-section="${key}">${escapeHtml(prompt[key])}</textarea></label>`;
+  return `<section class="ma11-card ma11-form-card ma11-summary-prompt-card" id="ma11-rule-${kind}">
+    <header><div><b>${label}</b><span>${description}</span></div><span class="ma11-badge ${standard ? "success" : "working"}">${standard ? "\u6807\u51C6" : "\u5DF2\u81EA\u5B9A\u4E49"}</span></header>
+    ${field("coreQuestion", "\u6838\u5FC3\u5224\u65AD", 3, "\u6BCF\u6B21\u603B\u7ED3\u5148\u56DE\u7B54\u8FD9\u4E2A\u95EE\u9898\uFF0C\u800C\u4E0D\u662F\u6309\u5B57\u6570\u622A\u65AD\u3002")}
+    <div class="ma11-rule-grid">
+      ${field("includeRules", "\u5FC5\u987B\u4FDD\u7559", 8, "\u53EA\u5217\u771F\u6B63\u5F71\u54CD\u540E\u7EED\u8FDE\u7EED\u6027\u7684\u5185\u5BB9\u3002")}
+      ${field("excludeRules", "\u5FC5\u987B\u5220\u9664", 8, "\u6392\u9664\u8FC7\u7A0B\u3001\u91CD\u590D\u3001\u80CC\u666F\u677F\u548C\u5DF2\u5931\u6548\u4FE1\u606F\u3002")}
+      ${field("updateRules", "\u7248\u672C\u66F4\u65B0", 7, "\u4E0A\u4E00\u7248\u662F\u5F85\u4FEE\u8BA2\u539F\u6599\uFF0C\u4E0D\u662F\u7EE7\u7EED\u8FFD\u52A0\u7684\u6B63\u6587\u3002")}
+      ${field("expressionRules", "\u8868\u8FBE\u65B9\u5F0F", 7, "\u63A7\u5236\u7C92\u5EA6\u3001\u53BB\u91CD\u4E0E\u6700\u7EC8\u53EF\u8BFB\u6027\u3002")}
     </div>
-  </details>`;
+    <div class="ma11-actions">
+      <button data-ma11-action="save-summary-prompt" data-ma11-summary-kind="${kind}">\u4FDD\u5B58${label}</button>
+      <button data-ma11-action="restore-summary-prompt" data-ma11-summary-kind="${kind}">\u6062\u590D\u6807\u51C6\u89C4\u5219</button>
+    </div>
+    <p class="ma11-help">\u4E8B\u4EF6\u5206\u7EC4\u3001\u4E8B\u5B9E\u6D88\u8D39\u3001\u7248\u672C\u7EE7\u627F\u3001\u6C89\u6DC0\u5230\u5BF9\u8C61\u548C\u4E16\u754C\u4E66\u540C\u6B65\u7531\u63D2\u4EF6\u8D1F\u8D23\uFF1B\u8FD9\u91CC\u4EC5\u8C03\u6574\u6A21\u578B\u7B5B\u9009\u4E0E\u8868\u8FBE\u3002</p>
+  </section>`;
 }
 async function summariesHtml() {
   const info = latestSnapshotArtifact();
@@ -8815,8 +9009,7 @@ async function summariesHtml() {
       <section class="ma11-card"><header><b>\u5927\u603B\u7ED3</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map(
     (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>\u957F\u671F\u672A\u51B3</b><span>${escapeHtml(item.unresolvedItems.join("\uFF1B"))}</span></div>` : ""}${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
   ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5927\u603B\u7ED3\u3002</p>'}</section>
-    </div>
-    <section class="ma11-summary-prompt-grid">${summaryPromptEditorHtml("small")}${summaryPromptEditorHtml("large")}</section>`;
+    </div>`;
 }
 function auditHtml() {
   const settings = getSettings();
@@ -8833,6 +9026,7 @@ function auditHtml() {
     <section class="ma11-toolbar"><div><h2>\u5BA1\u6838\u4E0E\u4FEE\u6B63</h2><p>\u5BA1\u6838\u548C\u4FEE\u6B63\u5206\u5F00\u6267\u884C\uFF1B\u4FEE\u6B63\u901A\u8FC7\u540E\u518D\u70B9\u51FB\u201C\u751F\u6210\u8868\u683C\u201D\u3002</p></div><div class="ma11-actions"><button data-ma11-action="run-audit" ${canAudit ? "" : "disabled"}>\u7ACB\u5373\u5BA1\u6838</button><button data-ma11-action="run-revision" ${canRevise ? "" : "disabled"}>\u6267\u884C\u4FEE\u6B63</button></div></section>
     <section class="ma11-card ma11-form-card">
       <header><b>\u89C4\u5219\u5BA1\u6838\u4E0E\u5B9A\u5411\u4FEE\u6B63</b><span>\u6700\u7EC8\u901A\u8FC7\u7684\u6B63\u6587\u624D\u8FDB\u5165\u72B6\u6001\u8868\u4E0E\u4E16\u754C\u4E66</span></header>
+      <div class="ma11-guidance-banner"><span aria-hidden="true">\u2713</span><div><b>\u53EA\u586B\u5199\u53EF\u4EE5\u660E\u786E\u5224\u5B9A\u7684\u786C\u89C4\u5219</b><p>\u63A8\u8350\u5199\u201C\u5FC5\u987B/\u7981\u6B62/\u4EC5\u5F53\u201D\u7684\u53EF\u9A8C\u8BC1\u6761\u4EF6\u3002\u6587\u98CE\u504F\u597D\u3001\u6A21\u7CCA\u5BA1\u7F8E\u548C\u4E92\u76F8\u51B2\u7A81\u7684\u8981\u6C42\u4E0D\u9002\u5408\u4F5C\u4E3A\u81EA\u52A8\u963B\u65AD\u89C4\u5219\u3002</p></div></div>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="auditEnabled" ${settings.auditEnabled ? "checked" : ""}/><span>\u542F\u7528\u89C4\u5219\u5BA1\u6838</span></label>
       <label>\u5BA1\u6838\u5931\u8D25\u5904\u7406<select data-ma11-setting="auditFailAction">
         <option value="revise" ${settings.auditFailAction === "revise" ? "selected" : ""}>\u5B9A\u5411\u4FEE\u6B63\u5E76\u539F\u4F4D\u66FF\u6362\uFF08\u63A8\u8350\uFF09</option>
@@ -8845,7 +9039,7 @@ function auditHtml() {
       </select></label>
       <label>\u6700\u5927\u81EA\u52A8\u4FEE\u6B63\u6B21\u6570<input type="number" min="1" max="2" data-ma11-setting="maxRevisionAttempts" value="${settings.maxRevisionAttempts}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="stopOnRepeatedViolation" ${settings.stopOnRepeatedViolation ? "checked" : ""}/><span>\u76F8\u540C\u8FDD\u89C4\u91CD\u590D\u51FA\u73B0\u65F6\u7ACB\u5373\u505C\u6B62\uFF0C\u9632\u6B62\u5FAA\u73AF</span></label>
-      <label>\u5BA1\u6838\u63D0\u793A\u8BCD<textarea rows="14" data-ma11-setting="auditPrompt" placeholder="\u586B\u5199\u5FC5\u987B\u68C0\u67E5\u7684\u786C\u89C4\u5219\u3002">${escapeHtml(settings.auditPrompt)}</textarea></label>
+      <label>\u5BA1\u6838\u89C4\u5219 <small>\u4E00\u6761\u89C4\u5219\u4E00\u884C\uFF0C\u5199\u660E\u89E6\u53D1\u6761\u4EF6\u4E0E\u5141\u8BB8\u7684\u6700\u5C0F\u4FEE\u6B63\u8303\u56F4</small><textarea rows="14" data-ma11-setting="auditPrompt" placeholder="\u793A\u4F8B\uFF1A\u7981\u6B62\u66FF\u73A9\u5BB6\u51B3\u5B9A\u662F\u5426\u63A5\u53D7\u4EA4\u6613\uFF1B\u82E5\u51FA\u73B0\uFF0C\u53EA\u5220\u9664\u4EE3\u66FF\u73A9\u5BB6\u4F5C\u51FA\u7684\u51B3\u5B9A\uFF0C\u4E0D\u6539\u52A8\u5176\u4ED6\u6B63\u6587\u3002">${escapeHtml(settings.auditPrompt)}</textarea></label>
       <label>\u9644\u52A0\u4FEE\u6B63\u8981\u6C42\uFF08\u53EF\u9009\uFF09<textarea rows="6" data-ma11-setting="revisionPrompt" placeholder="\u4F8B\u5982\uFF1A\u53EA\u505A\u6700\u5C0F\u6539\u52A8\uFF1B\u4FDD\u7559\u539F\u6709\u6587\u98CE\u548C\u6BB5\u843D\u957F\u5EA6\u3002">${escapeHtml(settings.revisionPrompt)}</textarea></label>
       <p class="ma11-help">\u5BA1\u6838\u8BF4\u660E\u548C\u4FEE\u6B63\u6307\u4EE4\u4E0D\u4F1A\u4F5C\u4E3A\u804A\u5929\u6D88\u606F\u5199\u5165\u4E0A\u4E0B\u6587\u3002\u4FEE\u6B63\u901A\u8FC7\u540E\u539F\u4F4D\u66F4\u65B0\u6B63\u6587\uFF1B\u63D2\u4EF6\u4E0D\u4F1A\u9501\u5B9A\u9152\u9986\u751F\u6210\u6309\u94AE\uFF0C\u4E5F\u4E0D\u4F1A\u81EA\u52A8\u5220\u9664\u6D88\u606F\u3002</p>
     </section>
@@ -8866,14 +9060,14 @@ async function syncHtml() {
       ${state2?.historyInvalidation ? `<div class="ma11-error-box">${state2.historyInvalidation.pauseError ? `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${escapeHtml(state2.historyInvalidation.pauseError)}\u3002\u8BF7\u5148\u5B8C\u6210\u5386\u53F2\u91CD\u5EFA\u5E76\u91CD\u65B0\u53D1\u5E03\u3002` : state2.historyInvalidation.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF0C\u5B8C\u6210\u540E\u4F1A\u81EA\u884C\u6062\u590D\u4E16\u754C\u4E66\u540C\u6B65\u3002" : state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002\u6309\u4F9D\u8D56\u91CD\u5EFA\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002`}</div>` : ""}
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
-      <label>\u53D1\u5E03\u7ED3\u6784<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u8BED\u4E49\u5BF9\u8C61\u6A21\u5F0F\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u884C\u8C03\u8BD5\u6A21\u5F0F</option></select></label>
-      <p class="ma11-help">\u4E16\u754C\u4E66\u53EA\u4F7F\u7528\u4E09\u79CD\u542F\u7528\u5F62\u5F0F\uFF1Aconstant \u5E38\u9A7B\u3001trigger \u660E\u786E\u6761\u4EF6\u89E6\u53D1\u3001vector \u5411\u91CF\u8BED\u4E49\u53EC\u56DE\u3002\u955C\u6E0A\u53D1\u5E03\u987A\u5E8F\u4E3A\u5E38\u9A7B \u2192 any/all/exclude \u89E6\u53D1 \u2192 \u5411\u91CF\uFF0C\u518D\u6309\u6761\u76EE\u8EAB\u4EFD\u4E0E\u5B8C\u5168\u76F8\u540C\u5185\u5BB9\u53BB\u91CD\u5E76\u6309\u603B\u5BB9\u91CF\u88C1\u526A\uFF1B\u5171\u4EAB fact_id / event_id \u7684\u4E0D\u540C\u5BF9\u8C61\u6761\u76EE\u4F1A\u5206\u522B\u4FDD\u7559\uFF1B\u4E0D\u4F7F\u7528\u6570\u503C\u6743\u91CD\u51B3\u5B9A\u662F\u5426\u8FDB\u5165\u4E0A\u4E0B\u6587\u3002SillyTavern \u5B9E\u9645\u5411\u91CF\u76F8\u4F3C\u5EA6\u4E0E\u6700\u5927\u5339\u914D\u6570\u7531 Vector Storage \u5168\u5C40\u8BBE\u7F6E\u63A7\u5236\uFF0C\u955C\u6E0A\u4E0D\u4F1A\u64C5\u81EA\u4FEE\u6539\u5168\u5C40\u914D\u7F6E\u3002</p>
+      <label>\u53D1\u5E03\u6A21\u5F0F<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u6309\u5BF9\u8C61\u6574\u7406\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u6761\u6392\u9519</option></select></label>
+      <div class="ma11-guidance-banner ma11-recall-guide"><span aria-hidden="true">\u2197</span><div><b>\u955C\u6E0A\u4F1A\u81EA\u52A8\u5206\u914D\u4E09\u79CD\u53EC\u56DE\u65B9\u5F0F</b><p>\u6781\u5C11\u91CF\u5F53\u524D\u8FDE\u7EED\u6027\u59CB\u7EC8\u643A\u5E26\uFF1B\u6709\u660E\u786E\u5173\u952E\u8BCD\u7684\u5185\u5BB9\u6309\u6761\u4EF6\u51FA\u73B0\uFF1B\u5176\u4F59\u957F\u671F\u8BB0\u5FC6\u6309\u8BED\u4E49\u76F8\u5173\u6027\u53EC\u56DE\u3002\u666E\u901A\u4F7F\u7528\u65E0\u9700\u7406\u89E3\u5E95\u5C42\u5B57\u6BB5\u6216\u624B\u5DE5\u914D\u7F6E\u53D1\u5E03\u987A\u5E8F\u3002</p></div></div>
       <label>\u4E16\u754C\u4E66\u540D\u79F0\uFF08\u7559\u7A7A\u81EA\u52A8\u751F\u6210\uFF09<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>\u5C06\u6781\u5C11\u91CF\u5F53\u524D\u7126\u70B9\u3001\u65F6\u7A7A\u3001\u5FC5\u8981\u89C4\u5219\u3001\u4E0D\u53EF\u7F3A\u5931\u72B6\u6001\u548C\u76F4\u63A5\u76F8\u5173\u5168\u5C40\u53D8\u5316\u8BBE\u4E3A\u5E38\u9A7B</span></label>
       <div class="ma11-editor-grid ma11-recall-grid">
-        <label>\u671F\u671B\u5411\u91CF\u76F8\u4F3C\u5EA6\u95E8\u69DB <small>\u6258\u7BA1\u5143\u6570\u636E</small><input type="number" min="0" max="0.99" step="0.01" data-ma11-recall-setting="similarityThreshold" value="${settings.lorebookRecall.similarityThreshold}" /></label>
-        <label>\u6700\u5927\u5411\u91CF\u5019\u9009\u6761\u76EE <small>\u955C\u6E0A\u53D1\u5E03\u88C1\u526A</small><input type="number" min="1" max="100" data-ma11-recall-setting="maxVectorResults" value="${settings.lorebookRecall.maxVectorResults}" /></label>
-        <label>\u4E16\u754C\u4E66\u603B\u5BB9\u91CF\uFF08\u5B57\u7B26\uFF09<input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
+        <label>\u8BED\u4E49\u53EC\u56DE\u53C2\u8003\u95E8\u69DB <small>\u8D8A\u9AD8\u8D8A\u4E25\u683C\uFF1B\u9ED8\u8BA4\u503C\u9002\u5408\u591A\u6570\u5267\u60C5</small><input type="number" min="0" max="0.99" step="0.01" data-ma11-recall-setting="similarityThreshold" value="${settings.lorebookRecall.similarityThreshold}" /></label>
+        <label>\u5355\u6B21\u6700\u591A\u53EC\u56DE\u6761\u76EE <small>\u7528\u4E8E\u9650\u5236\u65E0\u5173\u4FE1\u606F\u548C\u4E0A\u4E0B\u6587\u5360\u7528</small><input type="number" min="1" max="100" data-ma11-recall-setting="maxVectorResults" value="${settings.lorebookRecall.maxVectorResults}" /></label>
+        <label>\u957F\u671F\u8BB0\u5FC6\u53D1\u5E03\u4E0A\u9650\uFF08\u5B57\u7B26\uFF09<small>\u8FBE\u5230\u4E0A\u9650\u65F6\u4F18\u5148\u4FDD\u7559\u66F4\u76F4\u63A5\u76F8\u5173\u7684\u5185\u5BB9</small><input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
       </div>
       <div class="ma11-actions ma11-sync-actions">
         <button data-ma11-action="sync-now" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>\u7ACB\u5373\u540C\u6B65</button>
@@ -8900,8 +9094,8 @@ function connectionBlock(task, label) {
   return `<div class="ma11-connection-row" data-ma11-connection="${task}">
     <b>${label}</b>
     <select data-ma11-connection-mode="${task}">
-      <option value="current" ${value2.mode === "current" ? "selected" : ""}>\u5F53\u524D\u804A\u5929\u8FDE\u63A5</option>
-      <option value="profile" ${value2.mode === "profile" ? "selected" : ""}>ST\u539F\u751F Profile\uFF08\u9694\u79BB\u8BF7\u6C42\uFF09</option>
+      <option value="current" ${value2.mode === "current" ? "selected" : ""}>\u6CBF\u7528\u5F53\u524D\u804A\u5929\u6A21\u578B</option>
+      <option value="profile" ${value2.mode === "profile" ? "selected" : ""}>\u4F7F\u7528\u72EC\u7ACB\u6A21\u578B\u914D\u7F6E</option>
     </select>
     <select data-ma11-connection-profile-id="${task}" ${value2.mode === "profile" ? "" : "hidden disabled"}><option value="">\u8BF7\u9009\u62E9Connection Profile</option>${missingProfile}${profileOptions}</select>
     <button data-ma11-test="${task}">\u6D4B\u8BD5</button>
@@ -8910,47 +9104,73 @@ function connectionBlock(task, label) {
 function settingsHtml() {
   const settings = getSettings();
   return `
-    <section class="ma11-card ma11-form-card">
-      <header><b>\u4EFB\u52A1\u6A21\u578B\u5206\u914D</b><span>\u5168\u90E8\u901A\u8FC7 SillyTavern \u539F\u751F\u8FDE\u63A5\u80FD\u529B\u8C03\u7528\u3002</span></header>
+    <section class="ma11-toolbar"><div><h2>\u8BBE\u7F6E</h2><p>\u666E\u901A\u4F7F\u7528\u53EA\u9700\u786E\u8BA4\u81EA\u52A8\u6574\u7406\u548C\u6A21\u578B\u5206\u914D\uFF1B\u89C4\u5219\u7EC6\u8282\u7EDF\u4E00\u653E\u5728\u201C\u89C4\u5219\u201D\u9875\u3002</p></div><div class="ma11-actions"><button data-ma11-action="open-rule-center">\u6253\u5F00\u89C4\u5219\u4E2D\u5FC3</button><button data-ma11-tab="diagnostics">\u8FD0\u884C\u8BCA\u65AD</button></div></section>
+    <section class="ma11-card ma11-form-card ma11-quick-settings">
+      <header><div><b>\u81EA\u52A8\u5316\u4E0E\u663E\u793A</b><span>\u63A8\u8350\u9879\u5DF2\u6309\u5F00\u7BB1\u4F7F\u7528\u914D\u7F6E</span></div><span class="ma11-badge success">\u63A8\u8350</span></header>
+      <div class="ma11-setting-tile-grid">
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span><b>\u542F\u7528\u955C\u6E0A</b><small>\u63A7\u5236\u6240\u6709\u81EA\u52A8\u4EFB\u52A1</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span><b>\u81EA\u52A8\u6574\u7406\u8BB0\u5FC6</b><small>\u6BCF\u6761\u65B0 AI \u6B63\u6587\u540E\u63D0\u53D6\u53D8\u5316</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span><b>\u81EA\u52A8\u8FD1\u671F\u603B\u7ED3</b><small>\u7EF4\u6301\u5F53\u524D\u4E8B\u4EF6\u7EBF\u8FDE\u7EED\u6027</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span><b>\u81EA\u52A8\u957F\u671F\u56FA\u5316</b><small>\u6C89\u6DC0\u8DE8\u9636\u6BB5\u6709\u6548\u4E8B\u5B9E</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="showMessagePanel" ${settings.showMessagePanel ? "checked" : ""}/><span><b>\u6B63\u6587\u72B6\u6001\u6761</b><small>\u663E\u793A\u6BCF\u6761\u6B63\u6587\u7684\u5904\u7406\u72B6\u6001</small></span></label>
+      </div>
+      <div class="ma11-editor-grid ma11-setting-number-grid">
+        <label>\u8FD1\u671F\u4E8B\u4EF6\u6700\u665A\u6574\u7406\u8FB9\u754C <small>\u8D85\u8FC7\u8BE5\u6D88\u606F\u6570\u65F6\u5F3A\u5236\u68C0\u67E5\u662F\u5426\u7ED3\u7B97</small><input type="number" min="8" max="30" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
+        <label>\u957F\u671F\u56FA\u5316\u6240\u9700\u8FD1\u671F\u603B\u7ED3\u6570 <small>\u8FBE\u5230\u540E\u91CD\u65B0\u5BA1\u67E5\u957F\u671F\u8D44\u683C</small><input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
+        <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6 <small>\u5355\u4F4D\uFF1A\u6BEB\u79D2</small><input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
+      </div>
+    </section>
+    <section class="ma11-card ma11-form-card ma11-model-settings">
+      <header><div><b>\u4EFB\u52A1\u6A21\u578B\u5206\u914D</b><span>\u9ED8\u8BA4\u6CBF\u7528\u5F53\u524D\u804A\u5929\u6A21\u578B\uFF1B\u9700\u8981\u9694\u79BB\u65F6\u518D\u6307\u5B9A\u72EC\u7ACB\u914D\u7F6E</span></div></header>
       ${connectionBlock("audit", "\u89C4\u5219\u5BA1\u6838")}
       ${connectionBlock("revision", "\u5B9A\u5411\u4FEE\u6B63")}
-      ${connectionBlock("state", "\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u8868")}
-      ${connectionBlock("smallSummary", "\u5C0F\u603B\u7ED3")}
-      ${connectionBlock("largeSummary", "\u5927\u603B\u7ED3")}
-      <p class="ma11-help"><b>\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF1A</b>\u5BA1\u6838\u3001\u72B6\u6001\u8868\u3001\u5C0F\u603B\u7ED3\u548C\u5927\u603B\u7ED3\u90FD\u4E0D\u53D1\u9001 JSON Schema\uFF1B\u6A21\u578B\u53EA\u586B\u5199\u6587\u672C\u58F3\uFF0C\u63D2\u4EF6\u8D1F\u8D23\u89E3\u6790\u3001\u5339\u914D\u3001\u53BB\u91CD\u3001\u5206\u914D ID \u548C\u5185\u90E8\u5B58\u50A8\u3002</p>
-      <p class="ma11-help">\u5F53\u524D\u804A\u5929\u8FDE\u63A5\u4F7F\u7528 generateRaw\uFF1BProfile \u4F7F\u7528 ConnectionManagerRequestService\uFF0C\u5E76\u5173\u95ED\u89D2\u8272\u9884\u8BBE\u4E0E Instruct\u3002\u63D2\u4EF6\u4E0D\u4FDD\u5B58 API \u5730\u5740\u6216\u5BC6\u94A5\u3002</p>
+      ${connectionBlock("state", "\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u8868\u683C")}
+      ${connectionBlock("smallSummary", "\u8FD1\u671F\u4E8B\u4EF6\u603B\u7ED3")}
+      ${connectionBlock("largeSummary", "\u957F\u671F\u4E8B\u5B9E\u56FA\u5316")}
+      <p class="ma11-help">\u201C\u6D4B\u8BD5\u201D\u4F1A\u9A8C\u8BC1\u8FDE\u63A5\u4E0E\u56FA\u5B9A\u6587\u672C\u9075\u5FAA\u60C5\u51B5\u3002API \u5730\u5740\u548C\u5BC6\u94A5\u4ECD\u7531 SillyTavern \u7BA1\u7406\uFF0C\u955C\u6E0A\u4E0D\u5355\u72EC\u4FDD\u5B58\u3002</p>
     </section>
-    <section class="ma11-card ma11-form-card">
-      <header><b>\u81EA\u52A8\u5316</b></header>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span>\u542F\u7528\u955C\u6E0A</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span>\u6BCF\u6761\u65B0AI\u6B63\u6587\u81EA\u52A8\u63D0\u53D6\u4E8B\u5B9E\u5E76\u6574\u7406\u8868\u683C</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="showMessagePanel" ${settings.showMessagePanel ? "checked" : ""}/><span>\u5728\u6B63\u6587\u4E0B\u663E\u793A\u72B6\u6001\u6761</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5C0F\u603B\u7ED3</span></label>
-      <label>\u4E8B\u4EF6\u7EBF\u6700\u665A\u6D88\u606F\u6570<input type="number" min="8" max="30" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span>\u81EA\u52A8\u5927\u603B\u7ED3</span></label>
-      <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570<input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
-      <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6\uFF08\u6BEB\u79D2\uFF09<input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
-      <p class="ma11-help">\u5C0F\u603B\u7ED3\u6309\u5185\u90E8\u4E8B\u5B9E\u7684 event_id \u5224\u65AD\u4E8B\u4EF6\u7EBF\uFF1B\u4E8B\u4EF6\u7ED3\u675F\u3001\u8FBE\u5230\u4E8B\u5B9E\u89C4\u6A21\u6216\u6700\u665A\u6D88\u606F\u8FB9\u754C\u65F6\u89E6\u53D1\uFF0C\u4E0D\u6309\u804A\u5929\u8F6E\u6B21\u6D41\u6C34\u8D26\u538B\u7F29\u3002\u5224\u65AD\u4E0D\u989D\u5916\u8C03\u7528\u6A21\u578B\u3002\u6240\u6709\u6A21\u578B\u7ED3\u6784\u5316\u4EFB\u52A1\u5747\u7531\u63D2\u4EF6\u89E3\u6790\u56FA\u5B9A\u6587\u672C\uFF1B\u6A21\u578B\u4E0D\u751F\u6210 ID\u3001\u4E0D\u7EF4\u62A4\u6570\u636E\u5E93\u5BF9\u8C61\uFF0C\u4E5F\u4E0D\u4F1A\u56E0\u4E3A\u683C\u5F0F\u9519\u8BEF\u989D\u5916\u8C03\u7528\u4FEE\u590D\u6A21\u578B\u3002</p>
-    </section>
-    <section class="ma11-card ma11-form-card">
-      <header><b>\u91CD\u7F6E\u4E0E\u7EF4\u62A4</b><span>\u4EE5\u4E0B\u64CD\u4F5C\u4E0D\u4F1A\u4FEE\u6539\u5176\u4ED6\u804A\u5929\u3002</span></header>
+    <section class="ma11-card ma11-form-card ma11-maintenance-card">
+      <header><b>\u7EF4\u62A4</b><span>\u4E0D\u4F1A\u5F71\u54CD\u5176\u4ED6\u804A\u5929</span></header>
       <div class="ma11-actions">
-        <button data-ma11-action="restart-plugin">\u91CD\u5EFA\u63D2\u4EF6\u7F13\u5B58\uFF08\u8F6F\u91CD\u7F6E\uFF09</button>
-        <button class="danger" data-ma11-action="reset-current-game">\u91CD\u7F6E\u5F53\u524D\u6E38\u620F</button>
+        <button data-ma11-action="restart-plugin">\u91CD\u5EFA\u63D2\u4EF6\u7F13\u5B58</button>
+        <button class="danger" data-ma11-action="reset-current-game">\u91CD\u7F6E\u5F53\u524D\u804A\u5929\u8BB0\u5FC6</button>
       </div>
-      <p class="ma11-help">\u91CD\u5EFA\u63D2\u4EF6\u7F13\u5B58\u4F1A\u53D6\u6D88\u8BF7\u6C42\u3001\u5E9F\u5F03\u4EFB\u52A1\u3001\u6E05\u9664\u4E00\u6B21\u6027\u6A21\u5757\u7F13\u5B58\u3001\u89E3\u9664\u76D1\u542C\u5E76\u91CD\u65B0\u6302\u8F7D\u955C\u6E0A UI\uFF0C\u76F8\u5F53\u4E8E\u8F6F\u91CD\u7F6E\u63D2\u4EF6\uFF0C\u4E0D\u5220\u9664\u8868\u683C\u3001\u603B\u7ED3\u548C\u8BBE\u7F6E\u3002\u91CD\u7F6E\u5F53\u524D\u6E38\u620F\u4F1A\u5220\u9664\u672C\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u5BA1\u6838\u8BB0\u5F55\u53CA\u5176\u4E16\u754C\u4E66\u6761\u76EE\uFF0C\u4F46\u4FDD\u7559\u63D2\u4EF6\u8BBE\u7F6E\u3002</p>
+      <p class="ma11-help">\u91CD\u5EFA\u7F13\u5B58\u4E0D\u4F1A\u5220\u9664\u6570\u636E\u3002\u91CD\u7F6E\u5F53\u524D\u804A\u5929\u4F1A\u5220\u9664\u672C\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u5BA1\u6838\u8BB0\u5F55\u53CA\u955C\u6E0A\u4E16\u754C\u4E66\u6761\u76EE\uFF0C\u4E4B\u540E\u9700\u8981\u91CD\u65B0\u6574\u7406\u3002</p>
     </section>`;
 }
 async function diagnosticsHtml() {
   const checks = await runDiagnostics();
   const info = currentArtifact();
+  const settings = getSettings();
+  const promptMap = {
+    state: stateSystemPrompt(settings.tableRegistry, settings.statePrompts),
+    small: smallSummarySystemPrompt(settings.summaryPrompts.small),
+    large: largeSummarySystemPrompt(settings.summaryPrompts.large),
+    audit: `${auditSystemPrompt()}
+
+\u3010\u73A9\u5BB6\u5BA1\u6838\u89C4\u5219\u3011
+${settings.auditPrompt || "\uFF08\u672A\u586B\u5199\uFF09"}`,
+    revision: revisionSystemPrompt(settings.revisionPrompt)
+  };
+  const selectedPrompt = promptMap[diagnosticPromptKind];
   return `
-    <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65\u5206\u522B\u68C0\u67E5\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
+    <section class="ma11-toolbar"><div><h2>\u8FD0\u884C\u8BCA\u65AD</h2><p>\u5148\u770B\u68C0\u67E5\u7ED3\u8BBA\uFF1B\u53EA\u6709\u5B9A\u4F4D\u5177\u4F53\u9636\u6BB5\u65F6\u624D\u4F7F\u7528\u4E0B\u65B9\u8C03\u8BD5\u5DE5\u5177\u3002</p></div><div class="ma11-actions"><button data-ma11-action="refresh-diagnostics">\u5237\u65B0</button><button data-ma11-action="copy-diagnostics">\u590D\u5236\u8BCA\u65AD</button></div></section>
     <section class="ma11-check-grid">${checks.map((check) => `<article class="ma11-check ${check.status}"><span></span><div><b>${escapeHtml(check.label)}</b><p>${escapeHtml(check.detail)}</p></div></article>`).join("")}</section>
-    <details class="ma11-card ma11-debug-tools">
-      <summary><b>\u9AD8\u7EA7\u6392\u9519\u5DE5\u5177</b><span>\u4EC5\u5728\u5355\u9636\u6BB5\u5931\u8D25\u65F6\u4F7F\u7528</span></summary>
+    <section class="ma11-card ma11-debug-tools">
+      <header><b>\u5355\u9636\u6BB5\u6392\u9519</b><span>\u4E0D\u4F1A\u6539\u53D8\u5176\u4ED6\u9636\u6BB5\u7684\u8BBE\u7F6E</span></header>
       ${stageActionButtonsHtml(info)}
-    </details>`;
+    </section>
+    <section class="ma11-card ma11-form-card ma11-prompt-inspector">
+      <header><div><b>\u63D0\u793A\u8BCD\u8C03\u8BD5\u9884\u89C8</b><span>\u53EA\u8BFB\u663E\u793A\u5B9E\u9645\u53D1\u9001\u7684\u7CFB\u7EDF\u89C4\u5219\uFF1B\u666E\u901A\u8BBE\u7F6E\u9875\u4E0D\u66B4\u9732\u56FA\u5B9A\u534F\u8BAE</span></div><button data-ma11-action="copy-current-prompt">\u590D\u5236\u5F53\u524D\u63D0\u793A\u8BCD</button></header>
+      <label>\u9009\u62E9\u4EFB\u52A1<select data-ma11-prompt-inspector>
+        <option value="state" ${diagnosticPromptKind === "state" ? "selected" : ""}>\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u8868\u683C</option>
+        <option value="small" ${diagnosticPromptKind === "small" ? "selected" : ""}>\u8FD1\u671F\u4E8B\u4EF6\u603B\u7ED3</option>
+        <option value="large" ${diagnosticPromptKind === "large" ? "selected" : ""}>\u957F\u671F\u4E8B\u5B9E\u56FA\u5316</option>
+        <option value="audit" ${diagnosticPromptKind === "audit" ? "selected" : ""}>\u89C4\u5219\u5BA1\u6838</option>
+        <option value="revision" ${diagnosticPromptKind === "revision" ? "selected" : ""}>\u5B9A\u5411\u4FEE\u6B63</option>
+      </select></label>
+      <textarea readonly rows="24" data-ma11-current-prompt>${escapeHtml(selectedPrompt)}</textarea>
+    </section>`;
 }
 async function renderWorkspace() {
   const workspace = document.querySelector("#ma11-workspace");
@@ -8994,13 +9214,12 @@ async function renderWorkspace() {
     if (content) {
       const scrollTop = content.scrollTop;
       const tableScrollLeft = content.querySelector(".ma11-table-wrap")?.scrollLeft ?? 0;
-      const openDetails = Array.from(content.querySelectorAll("details")).map((item, index) => item.open ? index : -1).filter((index) => index >= 0);
       content.innerHTML = html;
       content.scrollTop = scrollTop;
       const tableWrap = content.querySelector(".ma11-table-wrap");
       if (tableWrap) tableWrap.scrollLeft = tableScrollLeft;
-      const details = Array.from(content.querySelectorAll("details"));
-      for (const index of openDetails) if (details[index]) details[index].open = true;
+      if (settings.ui.activeTab === "tables") applyTableSearch(workspace, tableSearchQuery);
+      if (settings.ui.activeTab === "graph") applyGraphSearch(workspace, graphSearchQuery);
     }
   } catch (error) {
     if (currentChatKey() !== renderChatKey) {
@@ -9211,6 +9430,40 @@ async function updateTableRegistryAndSync(registry2) {
 function valueFromWorkspace(workspace, selector) {
   return workspace.querySelector(selector)?.value.trim() || "";
 }
+function applyTableSearch(workspace, value2) {
+  tableSearchQuery = value2.trim().toLocaleLowerCase();
+  const rows = Array.from(workspace.querySelectorAll("[data-ma11-table-row-search]"));
+  let visible = 0;
+  for (const row of rows) {
+    const matches = !tableSearchQuery || String(row.dataset.ma11TableRowSearch || "").includes(tableSearchQuery);
+    row.hidden = !matches;
+    if (matches) visible += 1;
+  }
+  const output = workspace.querySelector("[data-ma11-table-visible-count]");
+  if (output) output.value = `${visible} / ${rows.length}`;
+}
+function applyGraphSearch(workspace, value2) {
+  graphSearchQuery = value2.trim().toLocaleLowerCase();
+  const matched = /* @__PURE__ */ new Set();
+  const nodes = Array.from(workspace.querySelectorAll("[data-ma11-graph-node]"));
+  for (const node of nodes) {
+    const matches = !graphSearchQuery || String(node.dataset.ma11GraphSearchText || "").includes(graphSearchQuery);
+    node.classList.toggle("dimmed", Boolean(graphSearchQuery && !matches));
+    node.classList.toggle("search-match", Boolean(graphSearchQuery && matches));
+    if (matches && node.dataset.ma11GraphNode) matched.add(node.dataset.ma11GraphNode);
+  }
+  const edges = Array.from(workspace.querySelectorAll("[data-ma11-graph-edge-source]"));
+  for (const edge of edges) {
+    const connected = matched.has(String(edge.dataset.ma11GraphEdgeSource || "")) || matched.has(String(edge.dataset.ma11GraphEdgeTarget || ""));
+    edge.classList.toggle("dimmed", Boolean(graphSearchQuery && !connected));
+  }
+  const output = workspace.querySelector("[data-ma11-graph-match-count]");
+  if (output) output.value = `${matched.size} / ${nodes.length}`;
+}
+function announceWorkspace(workspace, message) {
+  const live = workspace.querySelector("[data-ma11-live]");
+  if (live) live.textContent = message;
+}
 function updateSetting(target) {
   const key = target.dataset.ma11Setting;
   if (!key) return;
@@ -9288,6 +9541,11 @@ function bindWorkspace(workspace) {
       if (action === "open-tables") setTab("tables");
       if (action === "open-graph") setTab("graph");
       if (action === "open-table-manager") setTab("tableManager");
+      if (action === "open-rule-center") setTab("tableManager");
+      if (action === "open-prompt-diagnostics") {
+        diagnosticPromptKind = "state";
+        setTab("diagnostics");
+      }
       if (action === "process-latest") {
         if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
         const index = latestAssistantIndex();
@@ -9367,6 +9625,34 @@ function bindWorkspace(workspace) {
           await renderWorkspace();
         }
       }
+      if (action === "save-state-prompt" || action === "restore-state-prompt") {
+        const settings = getSettings();
+        if (action === "restore-state-prompt") {
+          settings.statePrompts = structuredClone(DEFAULT_STATE_PROMPTS);
+          saveSettings();
+          toast("success", "\u4E8B\u5B9E\u63D0\u53D6\u89C4\u5219\u5DF2\u6062\u590D\u6807\u51C6\u503C");
+          await renderWorkspace();
+        } else {
+          const admissionRules = safeText(workspace.querySelector('[data-ma11-state-prompt="admissionRules"]')?.value, 8e3).trim();
+          const exclusionRules = safeText(workspace.querySelector('[data-ma11-state-prompt="exclusionRules"]')?.value, 8e3).trim();
+          const evidenceRules = safeText(workspace.querySelector('[data-ma11-state-prompt="evidenceRules"]')?.value, 8e3).trim();
+          const updateRules = safeText(workspace.querySelector('[data-ma11-state-prompt="updateRules"]')?.value, 8e3).trim();
+          if (!admissionRules || !exclusionRules || !evidenceRules || !updateRules) throw new Error("\u56DB\u4E2A\u4E8B\u5B9E\u63D0\u53D6\u89C4\u5219\u533A\u90FD\u4E0D\u80FD\u4E3A\u7A7A");
+          settings.statePrompts = { admissionRules, exclusionRules, evidenceRules, updateRules };
+          saveSettings();
+          toast("success", "\u4E8B\u5B9E\u63D0\u53D6\u89C4\u5219\u5DF2\u4FDD\u5B58\uFF0C\u5C06\u4ECE\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u5F00\u59CB\u751F\u6548");
+          await renderWorkspace();
+        }
+      }
+      if (action === "restore-standard-rules") {
+        const settings = getSettings();
+        settings.statePrompts = structuredClone(DEFAULT_STATE_PROMPTS);
+        settings.summaryPrompts = structuredClone(DEFAULT_SUMMARY_PROMPTS);
+        saveSettings();
+        toast("success", "\u5DF2\u5E94\u7528\u6807\u51C6\u8BB0\u5FC6\u89C4\u5219");
+        announceWorkspace(workspace, "\u6807\u51C6\u8BB0\u5FC6\u89C4\u5219\u5DF2\u5E94\u7528");
+        await renderWorkspace();
+      }
       const tableDefinitionKey = actionButton?.dataset.ma11TableKey || "";
       if (action === "create-table") {
         const name = valueFromWorkspace(workspace, "[data-ma11-new-table-name]");
@@ -9424,6 +9710,12 @@ function bindWorkspace(workspace) {
         const report = await diagnosticReport();
         await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
         toast("success", "\u8BCA\u65AD\u4FE1\u606F\u5DF2\u590D\u5236");
+      }
+      if (action === "copy-current-prompt") {
+        const prompt = workspace.querySelector("[data-ma11-current-prompt]")?.value || "";
+        if (!prompt) throw new Error("\u5F53\u524D\u6CA1\u6709\u53EF\u590D\u5236\u7684\u63D0\u793A\u8BCD");
+        await navigator.clipboard.writeText(prompt);
+        toast("success", "\u5F53\u524D\u63D0\u793A\u8BCD\u5DF2\u590D\u5236");
       }
       if (action === "restart-plugin") {
         const restart = globalThis.MirrorAbyss?.restart;
@@ -9521,9 +9813,21 @@ function bindWorkspace(workspace) {
       void updateTableRegistryAndSync(updateTableDefinition(getSettings().tableRegistry, key, { enabled: checked })).catch((error) => toast("error", toErrorMessage(error)));
     }
     if (target.dataset.ma11ConnectionMode || target.dataset.ma11ConnectionProfileId) updateConnection(target);
+    if (target.dataset.ma11PromptInspector !== void 0) {
+      diagnosticPromptKind = target.value;
+      void renderWorkspace();
+    }
   });
   workspace.addEventListener("input", (event) => {
     const target = event.target;
+    if (target.dataset.ma11TableSearch !== void 0) {
+      applyTableSearch(workspace, target.value);
+      return;
+    }
+    if (target.dataset.ma11GraphSearch !== void 0) {
+      applyGraphSearch(workspace, target.value);
+      return;
+    }
     if (target.dataset.ma11GraphZoomRange !== void 0) {
       getSettings().ui.graphZoom = clampGraphZoom(Number(target.value) / 100);
       saveSettings();
@@ -9667,8 +9971,6 @@ function messageStageAvailability(index, artifact) {
   };
 }
 var pendingRetryIndexes = /* @__PURE__ */ new Set();
-var expandedPanelIndexes = /* @__PURE__ */ new Set();
-var collapsedPanelIndexes = /* @__PURE__ */ new Set();
 function flowStageHtml(order, label, stage) {
   const status = stageLabel(stage);
   const symbol = stage?.status === "success" || stage?.status === "skipped" ? "\u2713" : stage?.status === "failed" || stage?.status === "blocked" ? "!" : stage?.status === "running" || stage?.status === "queued" ? "\u2026" : String(order);
@@ -9695,20 +9997,17 @@ function panelHtml(index, artifact) {
   const completedStages = stages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
   const chainComplete = artifact.stages.state.status === "success" && ["success", "skipped"].includes(artifact.stages.summary.status) && ["success", "skipped"].includes(artifact.stages.sync.status);
   const chainState = chainBusy ? "\u5904\u7406\u4E2D" : chainFailed ? "\u9700\u5904\u7406" : chainComplete ? "\u5DF2\u5B8C\u6210" : "\u5F85\u7EE7\u7EED";
-  const expanded = expandedPanelIndexes.has(index) || chainFailed && !collapsedPanelIndexes.has(index);
   return `
-    <div class="ma11-message-panel ${expanded ? "is-open" : ""}" data-ma-index="${index}">
+    <div class="ma11-message-panel is-open" data-ma-index="${index}">
       <div class="ma11-message-bar ${chainFailed ? "danger" : chainBusy ? "working" : chainComplete ? "success" : "neutral"}">
         <span class="ma11-message-state-dot" aria-hidden="true"></span>
         <button class="ma11-message-open" type="button" data-ma-action="open">
           <b>\u955C\u6E0A</b><span>${chainState}</span>
         </button>
         <span class="ma11-message-count">${rows} \u5BF9\u8C61</span>
-        <button class="ma11-message-expand" type="button" data-ma-action="toggle-details" aria-expanded="${expanded}" aria-label="${expanded ? "\u6536\u8D77\u955C\u6E0A\u8BE6\u60C5" : "\u5C55\u5F00\u955C\u6E0A\u8BE6\u60C5"}">
-          <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
-        </button>
+        <button class="ma11-message-open-workspace" type="button" data-ma-action="open">\u5DE5\u4F5C\u533A</button>
       </div>
-      <div class="ma11-message-detail" ${expanded ? "" : "hidden"}>
+      <div class="ma11-message-detail">
         <div class="ma11-message-progress-head"><span>\u5904\u7406\u8FDB\u5EA6</span><b>${completedStages}/5</b></div>
         <div class="ma11-flow" aria-label="\u5BA1\u6838\u5230\u4E16\u754C\u4E66\u7684\u5904\u7406\u8FDB\u5EA6">
           ${flowStageHtml(1, "\u5BA1\u6838", displayStages.audit)}
@@ -9722,8 +10021,8 @@ function panelHtml(index, artifact) {
           <button class="ma11-primary-action" data-ma-auto-continue ${retrying || chainBusy || chainComplete ? "disabled" : ""}>${chainBusy ? "\u5904\u7406\u4E2D" : chainComplete ? "\u6D41\u7A0B\u5DF2\u5B8C\u6210" : "\u7EE7\u7EED\u81EA\u52A8\u6D41\u7A0B"}</button>
           <button data-ma-action="open">\u6253\u5F00\u5DE5\u4F5C\u533A</button>
         </div>
-        <details class="ma11-message-tools">
-          <summary>\u9AD8\u7EA7\u6392\u9519</summary>
+        <div class="ma11-message-tools" aria-label="\u5355\u9636\u6BB5\u6392\u9519">
+          <div class="ma11-message-tools-title"><b>\u5355\u9636\u6BB5\u5904\u7406</b><small>\u4EC5\u5728\u81EA\u52A8\u6D41\u7A0B\u672A\u80FD\u5B8C\u6210\u65F6\u4F7F\u7528</small></div>
           <div class="ma11-message-actions ma11-message-stage-actions" aria-label="\u955C\u6E0A\u5206\u9636\u6BB5\u64CD\u4F5C">
             <button data-ma-stage-action="audit" ${enabled("audit")}>\u4EC5\u5BA1\u6838</button>
             <button data-ma-stage-action="revision" ${enabled("revision")}>\u4EC5\u4FEE\u6B63</button>
@@ -9732,7 +10031,7 @@ function panelHtml(index, artifact) {
             <button data-ma-stage-action="large" ${enabled("large")}>\u7ACB\u5373\u5927\u603B\u7ED3</button>
             <button data-ma-stage-action="sync" ${enabled("sync")}>\u7ACB\u5373\u540C\u6B65</button>
           </div>
-        </details>` : '<div class="ma11-message-actions"><button data-ma-action="open">\u6253\u5F00\u5DE5\u4F5C\u533A</button></div>'}
+        </div>` : '<div class="ma11-message-actions"><button data-ma-action="open">\u6253\u5F00\u5DE5\u4F5C\u533A</button></div>'}
         <div class="ma11-message-actions ma11-message-retries">
           ${retrying ? "<button disabled>\u5904\u7406\u4E2D\u2026</button>" : ""}
           ${!retrying && latestText && artifact.stages.audit.status === "failed" ? '<button data-ma-retry="audit">\u91CD\u8BD5\u5BA1\u6838</button>' : ""}
@@ -9773,17 +10072,6 @@ function installMessagePanelHandlers() {
     const panel = target.closest(".ma11-message-panel");
     if (!panel) return;
     const index = Number(panel.dataset.maIndex);
-    if (target.closest('[data-ma-action="toggle-details"]')) {
-      if (panel.classList.contains("is-open")) {
-        expandedPanelIndexes.delete(index);
-        collapsedPanelIndexes.add(index);
-      } else {
-        collapsedPanelIndexes.delete(index);
-        expandedPanelIndexes.add(index);
-      }
-      renderMessagePanel(index);
-      return;
-    }
     if (target.closest('[data-ma-action="open"]')) openWorkspace("overview", index);
     if (target.closest("[data-ma-auto-continue]")) {
       if (pendingRetryIndexes.has(index)) return;
