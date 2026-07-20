@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.56";
-var PIPELINE_VERSION = "ma-pipeline-56";
+var VERSION = "1.2.0-rc.59";
+var PIPELINE_VERSION = "ma-pipeline-59";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -1093,16 +1093,30 @@ function parseFixedTextBlocks(raw, markers) {
   source.split(/\r?\n/).forEach((sourceLine, index) => {
     const trimmed = sourceLine.trim();
     const markerKey = normalizedMarker(trimmed);
+    if (current && definition?.rawBody) {
+      if (markerKey === normalizedMarker(definition.end)) {
+        flush();
+      } else {
+        rawLines.push(sourceLine);
+      }
+      return;
+    }
     const start = byStart.get(markerKey);
     if (start) {
-      flush();
+      if (current && definition) {
+        throw new Error(`\u7B2C ${current.line} \u884C\u5F00\u59CB\u7684 ${definition.start} \u672A\u95ED\u5408\uFF0C\u7F3A\u5C11 ${definition.end}`);
+      }
       definition = start;
       current = { kind: start.kind, fields: /* @__PURE__ */ new Map(), raw: "", line: index + 1 };
       return;
     }
     const end = byEnd.get(markerKey);
     if (end) {
-      if (current?.kind === end.kind) flush();
+      if (!current || !definition) throw new Error(`\u7B2C ${index + 1} \u884C\u51FA\u73B0\u672A\u914D\u5BF9\u7ED3\u675F\u6807\u7B7E ${end.end}`);
+      if (markerKey !== normalizedMarker(definition.end)) {
+        throw new Error(`\u7B2C ${current.line} \u884C\u5F00\u59CB\u7684 ${definition.start} \u7ED3\u675F\u6807\u7B7E\u4E0D\u5339\u914D\uFF0C\u671F\u671B ${definition.end}`);
+      }
+      flush();
       return;
     }
     if (!current || !definition) return;
@@ -1119,7 +1133,9 @@ function parseFixedTextBlocks(raw, markers) {
     }
     if (lastKey) appendContinuation(current, lastKey, sourceLine.trim());
   });
-  flush();
+  if (current && definition) {
+    throw new Error(`\u7B2C ${current.line} \u884C\u5F00\u59CB\u7684 ${definition.start} \u672A\u95ED\u5408\uFF0C\u7F3A\u5C11 ${definition.end}`);
+  }
   return blocks;
 }
 function fixedTextValues(block, ...keys) {
@@ -5916,10 +5932,11 @@ var COMMON_FIELD_KEYS = /* @__PURE__ */ new Set([
   "relatedEvents"
 ]);
 var ACTIVE_STATUS_RE = /current|active|进行|当前|活跃|未决|持续|开放|受限|暂停/i;
-var MAX_INDEX_ROWS = 120;
-var MAX_FULL_ROWS = 16;
-var MAX_FULL_ROWS_PER_TABLE = 6;
-var MAX_FACTS = 18;
+var DIRECTORY_CHAR_BUDGET = 4500;
+var MAX_DIRECTORY_ALIASES = 6;
+var MAX_FULL_ROWS = 8;
+var MAX_FULL_ROWS_PER_TABLE = 3;
+var MAX_FACTS = 12;
 function tables(registry2) {
   return enabledTables(normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY));
 }
@@ -5954,6 +5971,23 @@ function stateSystemPrompt(registry2) {
 6. recentHistory \u4E0E solidifiedHistory \u53EA\u7531\u603B\u7ED3\u7EF4\u62A4\uFF0C\u72B6\u6001\u63D0\u53D6\u7981\u6B62\u5199\u5165\u3002
 7. \u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF1B\u80FD\u529B\u53D8\u5316\u5199\u5165 abilityStates\u3002\u4E0D\u5F97\u5355\u72EC\u521B\u5EFA\u5173\u7CFB\u8868\u6216\u6280\u80FD\u8868\u3002
 8. \u4E0D\u8F93\u51FA\u7126\u70B9\u6761\u76EE\u3002\u7126\u70B9\u53EA\u7531\u73A9\u5BB6\u8BBE\u7F6E\u3002
+
+\u3010\u65E7\u5FEB\u7167\u4FEE\u8BA2\u89C4\u5219\u3011
+- <MA_DIRECTORY> \u662F\u5DF2\u6709\u5BF9\u8C61\u7684\u77ED\u76EE\u5F55\uFF0C\u53EA\u7528\u4E8E\u8EAB\u4EFD\u8BC6\u522B\uFF0C\u4E0D\u662F\u5141\u8BB8\u5BF9\u8C61\u767D\u540D\u5355\u3002\u76EE\u5F55\u4E2D\u5B58\u5728\u7684\u5BF9\u8C61\u4F18\u5148\u6CBF\u7528\u5176\u7A33\u5B9A\u540D\u79F0\uFF1B\u76EE\u5F55\u4E2D\u6CA1\u6709\u4F46\u6B63\u6587\u660E\u786E\u5EFA\u7ACB\u7684\u5BF9\u8C61\u4ECD\u53EF\u6B63\u5E38\u8F93\u51FA\uFF0C\u63D2\u4EF6\u4F1A\u5728\u5168\u5E93\u590D\u67E5\u540E\u51B3\u5B9A\u65B0\u5EFA\u6216\u5408\u5E76\u3002
+- <MA_CONTEXT_ROW> \u662F\u672C\u8F6E\u9AD8\u76F8\u5173\u5BF9\u8C61\u7684\u5DE5\u4F5C\u526F\u672C\uFF0C\u4E0D\u662F\u5B8C\u6574\u6570\u636E\u5E93\u3002\u5DF2\u6709\u5BF9\u8C61\u53EA\u4FEE\u8BA2\u672C\u8F6E\u786E\u5B9E\u53D8\u5316\u7684\u5B57\u6BB5\uFF1B\u6CA1\u6709\u53D8\u5316\u7684\u5B57\u6BB5\u4E0D\u8981\u8F93\u51FA\uFF0C\u66F4\u4E0D\u5F97\u6DA6\u8272\u3001\u6362\u5E8F\u6216\u6539\u5199\u63AA\u8F9E\u3002
+- \u67D0\u4E2A\u5DF2\u6709\u5BF9\u8C61\u672A\u5217\u5165 <MA_CONTEXT_ROW> \u4F46\u672C\u8F6E\u786E\u5B9E\u53D1\u751F\u53D8\u5316\u65F6\uFF0C\u4ECD\u5FC5\u987B\u6309\u76EE\u5F55\u540D\u79F0\u8FD4\u56DE\u5176\u53D8\u5316\u5B57\u6BB5\uFF1B\u672A\u8FD4\u56DE\u5B57\u6BB5\u7531\u63D2\u4EF6\u4ECE\u5B8C\u6574\u65E7\u5FEB\u7167\u4FDD\u7559\u3002
+- \u4E00\u4E2A\u5BF9\u8C61\u672C\u8F6E\u53D1\u751F\u591A\u9879\u5267\u70C8\u53D8\u5316\u65F6\uFF0C\u5FC5\u987B\u5B8C\u6574\u8FD4\u56DE\u5168\u90E8\u53D7\u5F71\u54CD\u5B57\u6BB5\uFF1B\u4E0D\u9650\u5236\u53D8\u5316\u5B57\u6BB5\u6570\u91CF\uFF0C\u4E5F\u4E0D\u9650\u5236\u72EC\u7ACB\u4E8B\u5B9E\u6761\u6570\u3002
+- \u8FD4\u56DE\u5B57\u6BB5\u8868\u793A\u8BE5\u5B57\u6BB5\u4FEE\u8BA2\u540E\u7684\u5F53\u524D\u7248\u672C\uFF0C\u4E0D\u662F\u8FFD\u52A0\u5EFA\u8BAE\u3002\u6BCF\u6761\u91CD\u590D field \u884C\u53EA\u8868\u8FBE\u4E00\u4E2A\u72EC\u7ACB\u4E8B\u5B9E\u6216\u72B6\u6001\u3002
+- \u65E7\u5BF9\u8C61\u5B9A\u4E49\u3001\u56FA\u6709\u4F5C\u7528\u548C\u957F\u671F\u4FE1\u606F\u6CA1\u6709\u88AB\u6B63\u6587\u660E\u786E\u91CD\u5B9A\u4E49\u65F6\u4E0D\u5F97\u6539\u5199\uFF1B\u7269\u54C1\u7684\u65E2\u6709\u4F5C\u7528\u4E0D\u5F97\u56E0\u6301\u6709\u3001\u4F7F\u7528\u6216\u72B6\u6001\u53D8\u5316\u800C\u4E22\u5931\u3002
+- \u65B0\u5BF9\u8C61\u53EA\u586B\u5199\u6B63\u6587\u5DF2\u660E\u786E\u5EFA\u7ACB\u7684\u5185\u5BB9\uFF1B\u4E0D\u5F97\u4E3A\u4E86\u586B\u6EE1\u5B57\u6BB5\u800C\u8865\u5168\u5E38\u8BC6\u3001\u8EAB\u4EFD\u3001\u4F5C\u7528\u3001\u5173\u7CFB\u6216\u80FD\u529B\u3002
+
+\u3010\u7CBE\u51C6\u8868\u8FBE\u89C4\u5219\u3011
+- \u6761\u6570\u4E0D\u8BBE\u786C\u4E0A\u9650\uFF1B\u6709\u591A\u5C11\u72EC\u7ACB\u4E14\u5FC5\u8981\u7684\u4E8B\u5B9E\u5C31\u5199\u591A\u5C11\u6761\u3002
+- \u6BCF\u6761\u53EA\u8BF4\u4E00\u4EF6\u4E8B\uFF0C\u76F4\u63A5\u5199\u4E3B\u4F53\u3001\u53D8\u5316\u548C\u5F53\u524D\u7ED3\u679C\uFF1B\u7981\u6B62\u590D\u8FF0\u5B8C\u6574\u52A8\u4F5C\u94FE\u3002
+- summary \u901A\u5E38\u4E0D\u8D85\u8FC7 80 \u4E2A\u6C49\u5B57\uFF1BbaseContent \u901A\u5E38\u4E0D\u8D85\u8FC7 120 \u4E2A\u6C49\u5B57\uFF1B\u6BCF\u6761\u4E8B\u5B9E\u3001\u72B6\u6001\u3001\u5173\u7CFB\u6216\u80FD\u529B\u901A\u5E38\u4E0D\u8D85\u8FC7 60 \u4E2A\u6C49\u5B57\u3002
+- \u590D\u6742\u4E8B\u5B9E\u53EF\u4EE5\u7565\u957F\uFF0C\u4F46\u4E0D\u5F97\u5220\u9664\u5173\u952E\u5BF9\u8C61\u3001\u5F52\u5C5E\u3001\u56FA\u6709\u4F5C\u7528\u3001\u72B6\u6001\u3001\u65F6\u95F4\u6761\u4EF6\u6216\u56E0\u679C\u7ED3\u679C\u3002
+- \u7981\u6B62\u201C\u672C\u8F6E\u4E2D\u3001\u5267\u60C5\u4E2D\u3001\u53EF\u4EE5\u770B\u51FA\u3001\u8BF4\u660E\u4E86\u3001\u7531\u6B64\u53EF\u89C1\u201D\u7B49\u5206\u6790\u6027\u5957\u8BDD\u3002
+- \u540C\u4E49\u5185\u5BB9\u53EA\u4FDD\u7559\u6700\u51C6\u786E\u7684\u4E00\u6761\uFF0C\u4E0D\u5F97\u7528\u4E0D\u540C\u63AA\u8F9E\u91CD\u590D\u540C\u4E00\u4E8B\u5B9E\u3002
 
 \u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
 - \u4E00\u8F6E\u6B63\u6587\u53EF\u63A8\u8FDB\u591A\u6761\u4E8B\u4EF6\u7EBF\uFF0C\u5206\u522B\u8F93\u51FA\u591A\u4E2A <MA_FACT>\uFF1Bevent \u586B\u4E8B\u4EF6\u7A33\u5B9A\u540D\u79F0\uFF0C\u4E0D\u586B ID\u3002
@@ -6017,31 +6051,50 @@ function stringList3(value2) {
 function boundedList(value2, count, chars) {
   return stringList3(value2).slice(-count).map((item) => item.slice(0, chars));
 }
-function modelRow(row) {
+function compactLifecycle(row) {
+  if (!row.lifecycle) return void 0;
+  return {
+    existence: row.lifecycle.existence,
+    activity: row.lifecycle.activity,
+    memory: row.lifecycle.memory,
+    evidenceLevel: row.lifecycle.evidenceLevel,
+    evidence: String(row.lifecycle.evidence || "").slice(0, 160),
+    returnConditions: boundedList(row.lifecycle.returnConditions, 4, 100),
+    returnBlockers: boundedList(row.lifecycle.returnBlockers, 4, 100)
+  };
+}
+function modelRow(row, detail) {
+  const direct = detail === "direct";
   const output = {
     title: row.title,
-    content: String(row.content || "").slice(0, 800),
-    keywords: (row.keywords ?? []).slice(0, 16),
-    status: row.status
+    content: String(row.content || "").slice(0, direct ? 240 : 160),
+    keywords: (row.keywords ?? []).slice(0, direct ? 8 : 5).map((item) => String(item).slice(0, 60)),
+    status: String(row.status || "").slice(0, 80)
   };
-  if (row.lifecycle) output.lifecycle = row.lifecycle;
+  const lifecycle = compactLifecycle(row);
+  if (lifecycle) output.lifecycle = lifecycle;
   const fields = row.fields && typeof row.fields === "object" ? row.fields : {};
   for (const [key, value2] of Object.entries(fields)) {
-    if (key === "baseContent") output[key] = String(value2 ?? "").slice(0, 700);
-    else if (key === "currentFacts" || key === "currentStates") output[key] = boundedList(value2, 10, 260);
-    else if (key === "recentHistory") output[key] = boundedList(value2, 4, 320);
-    else if (key === "solidifiedHistory") output[key] = boundedList(value2, 2, 260);
-    else if (Array.isArray(value2)) output[key] = boundedList(value2, 10, 220);
-    else output[key] = String(value2 ?? "").slice(0, 600);
+    if (key === "baseContent") output[key] = String(value2 ?? "").slice(0, direct ? 240 : 160);
+    else if (key === "currentFacts" || key === "currentStates") output[key] = boundedList(value2, direct ? 6 : 3, direct ? 100 : 80);
+    else if (key === "recentHistory") output[key] = boundedList(value2, 1, 140);
+    else if (key === "solidifiedHistory") output[key] = boundedList(value2, 1, 140);
+    else if (key === "relationshipStates" || key === "abilityStates") output[key] = boundedList(value2, direct ? 4 : 2, direct ? 100 : 80);
+    else if (key === "relatedObjects" || key === "relatedEvents") output[key] = boundedList(value2, direct ? 6 : 4, 70);
+    else if (Array.isArray(value2)) output[key] = boundedList(value2, direct ? 4 : 2, direct ? 90 : 70);
+    else output[key] = String(value2 ?? "").slice(0, direct ? 200 : 140);
   }
   return output;
 }
-function rowIndex(row) {
-  return {
-    title: row.title,
-    status: row.status,
-    keywords: row.keywords
-  };
+function directoryEntry(item) {
+  const titleToken = normalizeSearchText(item.row.title);
+  const keywords = [...new Set((item.row.keywords ?? []).map((value2) => String(value2 ?? "").trim()).filter(Boolean).filter((value2) => normalizeSearchText(value2) !== titleToken))].slice(0, MAX_DIRECTORY_ALIASES).map((value2) => value2.slice(0, 60));
+  return { table: item.table.key, title: String(item.row.title || "").slice(0, 100), keywords };
+}
+function directoryLine(entry) {
+  const safe = (value2) => contextValue(value2).replace(/[｜|]/g, "\uFF0F");
+  const aliases2 = entry.keywords.map(safe).filter(Boolean).join("\u3001");
+  return `entry=${safe(entry.table)}\uFF5C${safe(entry.title)}${aliases2 ? `\uFF5C${aliases2}` : ""}`;
 }
 function rowTerms(row) {
   return [row.id, row.title, ...row.keywords ?? []].map(normalizeSearchText).filter((term) => term.length >= 2);
@@ -6063,35 +6116,56 @@ function compactSnapshotContext(previous, active, sourceText) {
   for (const table of active) {
     for (const row of previous[table.key] ?? []) {
       const direct = rowMatches(row, source);
-      const activeRow = table.role === "spacetime" || table.role === "events" && ACTIVE_STATUS_RE.test(row.status) || ACTIVE_STATUS_RE.test(row.status);
-      all.push({ table, row, direct, active: activeRow, order: order += 1 });
+      const statusActive = ACTIVE_STATUS_RE.test(row.status);
+      all.push({
+        table,
+        row,
+        direct,
+        active: statusActive,
+        spacetime: table.role === "spacetime",
+        activeEvent: table.role === "events" && statusActive,
+        activeCharacter: table.role === "characters" && statusActive,
+        order: order += 1
+      });
     }
   }
-  const seedTokens = /* @__PURE__ */ new Set();
+  const directTerms = /* @__PURE__ */ new Set();
+  const directReferences = /* @__PURE__ */ new Set();
   for (const item of all) {
-    if (!item.direct && !item.active) continue;
-    for (const term of rowTerms(item.row)) seedTokens.add(term);
+    if (!item.direct) continue;
+    for (const term of rowTerms(item.row)) directTerms.add(term);
+    for (const term of relatedTokens(item.row)) directReferences.add(term);
   }
-  const related = (item) => relatedTokens(item.row).some((term) => seedTokens.has(term));
-  const priority = (item) => item.direct ? 4 : item.table.role === "spacetime" ? 3 : related(item) ? 2 : item.active ? 1 : 0;
+  const related = (item) => rowTerms(item.row).some((term) => directReferences.has(term)) || relatedTokens(item.row).some((term) => directTerms.has(term));
+  const priority = (item) => item.direct ? 100 : item.spacetime ? 90 : item.activeEvent ? 80 : related(item) ? 70 : item.activeCharacter ? 60 : item.active ? 30 : 0;
   const sorted = [...all].sort((a, b) => priority(b) - priority(a) || String(b.row.updatedAt || "").localeCompare(String(a.row.updatedAt || "")) || a.order - b.order);
-  const index = {};
-  for (const item of sorted.slice(0, MAX_INDEX_ROWS)) {
-    (index[item.table.key] ||= []).push(rowIndex(item.row));
+  const directory = [];
+  let directoryChars = "<MA_DIRECTORY>\n</MA_DIRECTORY>".length;
+  let directoryOmitted = 0;
+  for (const item of sorted) {
+    const entry = directoryEntry(item);
+    const line = directoryLine(entry);
+    if (directoryChars + line.length + 1 > DIRECTORY_CHAR_BUDGET) {
+      directoryOmitted += 1;
+      continue;
+    }
+    directory.push(entry);
+    directoryChars += line.length + 1;
   }
   const relevant = {};
   let total = 0;
   const perTable = /* @__PURE__ */ new Map();
   for (const item of sorted) {
-    if (priority(item) <= 0 && (previous[item.table.key]?.length ?? 0) > 8) continue;
+    if (priority(item) <= 0) continue;
     if (total >= MAX_FULL_ROWS) break;
     const count = perTable.get(item.table.key) ?? 0;
     if (count >= MAX_FULL_ROWS_PER_TABLE) continue;
-    (relevant[item.table.key] ||= []).push(modelRow(item.row));
+    const detail = item.direct ? "direct" : "support";
+    (relevant[item.table.key] ||= []).push(modelRow(item.row, detail));
     perTable.set(item.table.key, count + 1);
     total += 1;
   }
-  return { index, relevant };
+  return { directory, directoryOmitted, relevant };
 }
 function factMatches(fact, source) {
   const terms = [fact.factId, fact.eventId, fact.title, ...fact.keywords, ...fact.relatedEntities].map(normalizeSearchText).filter((term) => term.length >= 2);
@@ -6099,17 +6173,26 @@ function factMatches(fact, source) {
 }
 function activeFactPayload(facts, sourceText) {
   const source = normalizeSearchText(sourceText);
-  const selected = facts.length <= MAX_FACTS ? facts : facts.filter((fact) => factMatches(fact, source) || fact.unresolvedItems.length > 0 || fact.active).slice(-MAX_FACTS);
-  const fallback = selected.length ? selected : facts.slice(-12);
+  const scored = facts.map((fact, index) => ({
+    fact,
+    index,
+    score: (factMatches(fact, source) ? 100 : 0) + (fact.unresolvedItems.length ? 40 : 0) + (fact.active ? 20 : 0)
+  })).sort((a, b) => b.score - a.score || String(b.fact.updatedAt || "").localeCompare(String(a.fact.updatedAt || "")) || b.index - a.index);
+  const selected = scored.filter((item) => item.score > 0).slice(0, MAX_FACTS);
+  const fallback = (selected.length ? selected : scored.slice(0, 8)).map((item) => item.fact);
   return fallback.map((fact) => ({
-    occurred: fact.occurredFacts,
-    unresolved: fact.unresolvedItems,
-    status: fact.status,
-    time_range: fact.timeRange,
-    related_entities: fact.relatedEntities,
-    title: fact.title,
-    type: fact.type,
-    keywords: fact.keywords,
+    occurred: boundedList(fact.occurredFacts, 3, 140),
+    unresolved: boundedList(fact.unresolvedItems, 3, 140),
+    status: String(fact.status || "").slice(0, 60),
+    time_range: {
+      start: String(fact.timeRange?.start || "").slice(0, 80),
+      end: String(fact.timeRange?.end || "").slice(0, 80),
+      label: String(fact.timeRange?.label || "").slice(0, 100)
+    },
+    related_entities: boundedList(fact.relatedEntities, 8, 80),
+    title: String(fact.title || "").slice(0, 120),
+    type: String(fact.type || "").slice(0, 60),
+    keywords: boundedList(fact.keywords, 6, 60),
     confidence: fact.confidence,
     active: fact.active
   }));
@@ -6152,21 +6235,12 @@ function contextFactBlocks(payload) {
     return lines2.join("\n");
   }).join("\n");
 }
-function contextIndexBlocks(index) {
-  const blocks = [];
-  for (const [table, rows] of Object.entries(index)) {
-    for (const source of rows) {
-      const row = source && typeof source === "object" ? source : {};
-      const lines2 = ["<MA_CONTEXT_INDEX>"];
-      pushContextField(lines2, "table", table);
-      pushContextField(lines2, "object", row.title);
-      pushContextField(lines2, "status", row.status);
-      pushContextField(lines2, "keyword", row.keywords);
-      lines2.push("</MA_CONTEXT_INDEX>");
-      blocks.push(lines2.join("\n"));
-    }
-  }
-  return blocks.join("\n") || "\uFF08\u65E0\uFF09";
+function contextDirectoryBlock(directory, omitted) {
+  const lines2 = ["<MA_DIRECTORY>"];
+  for (const entry of directory) lines2.push(directoryLine(entry));
+  if (omitted > 0) lines2.push(`omitted=${omitted}`);
+  lines2.push("</MA_DIRECTORY>");
+  return lines2.join("\n");
 }
 function contextRowBlocks(relevant) {
   const blocks = [];
@@ -6202,10 +6276,10 @@ ${assistantText}`;
   return `\u3010\u76F8\u5173\u5185\u90E8\u4E8B\u5B9E\uFF1A\u4EC5\u7528\u4E8E\u5224\u65AD\u4E8B\u4EF6\u5EF6\u7EED\uFF0C\u4E0D\u8981\u7167\u6284\u4E3A\u65B0\u4E8B\u5B9E\u3011
 ${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
 
-\u3010\u65E7\u89C6\u56FE\u7D22\u5F15\uFF1A\u53EA\u7528\u4E8E\u8BC6\u522B\u5DF2\u6709\u5BF9\u8C61\u3011
-${contextIndexBlocks(context.index)}
+\u3010\u5168\u5C40\u5BF9\u8C61\u77ED\u76EE\u5F55\uFF1A\u7528\u4E8E\u8BC6\u522B\u5DF2\u6709\u5BF9\u8C61\uFF1B\u76EE\u5F55\u4E0D\u662F\u767D\u540D\u5355\uFF0C\u6B63\u6587\u660E\u786E\u7684\u65B0\u5BF9\u8C61\u4ECD\u53EF\u8F93\u51FA\u3011
+${contextDirectoryBlock(context.directory, context.directoryOmitted)}
 
-\u3010\u4E0E\u672C\u8F6E\u76F8\u5173\u7684\u65E7\u884C\u5168\u6587\uFF1A\u53EA\u7528\u4E8E\u5224\u65AD\u66F4\u65B0\u5185\u5BB9\u3011
+\u3010\u9AD8\u76F8\u5173\u5BF9\u8C61\u5DE5\u4F5C\u526F\u672C\uFF1A\u53EA\u7528\u4E8E\u4FEE\u8BA2\u672C\u8F6E\u53D8\u5316\uFF1B\u672A\u5217\u5165\u6B64\u5904\u7684\u76EE\u5F55\u5BF9\u8C61\u4ECD\u53EF\u66F4\u65B0\u3011
 ${contextRowBlocks(context.relevant)}
 
 \u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
@@ -6214,7 +6288,7 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u89D2\u8272\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u53EA\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\u3002\u53EA\u5199\u672C\u8F6E\u4E8B\u5B9E\u53D8\u5316\u548C\u6700\u5C0F\u6761\u76EE\u8865\u4E01\uFF1B\u672A\u8FD4\u56DE\u6761\u76EE\u7531\u63D2\u4EF6\u4FDD\u7559\u3002\u4E0D\u8981\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u8F93\u51FA id/fact_id/event_id\uFF0C\u4E0D\u8981\u590D\u5236\u65E0\u53D8\u5316\u65E7\u884C\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u56FA\u5B9A\u6587\u672C\u683C\u5F0F\u4E0D\u5B8C\u6574\uFF1B\u8FD9\u6B21\u4E25\u683C\u4F7F\u7528 <MA_TURN>/<MA_FACT>/<MA_ROW>\u3002" : ""}`;
+\u53EA\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\u3002\u57FA\u4E8E\u5BF9\u8C61\u76EE\u5F55\u8BC6\u522B\u8EAB\u4EFD\uFF0C\u5E76\u4F9D\u636E\u9AD8\u76F8\u5173\u5DE5\u4F5C\u526F\u672C\u4FEE\u8BA2\u672C\u8F6E\u786E\u5B9E\u53D8\u5316\u7684\u5BF9\u8C61\u5B57\u6BB5\uFF1B\u672A\u8FD4\u56DE\u6761\u76EE\u548C\u672A\u8FD4\u56DE\u5B57\u6BB5\u7531\u63D2\u4EF6\u539F\u6837\u4FDD\u7559\u3002\u53D8\u5316\u5F88\u5927\u65F6\u5B8C\u6574\u8FD4\u56DE\u5168\u90E8\u53D7\u5F71\u54CD\u5B57\u6BB5\uFF0C\u53D8\u5316\u5F88\u5C0F\u65F6\u53EA\u8FD4\u56DE\u5B9E\u9645\u53D8\u5316\u5B57\u6BB5\u3002\u6BCF\u6761\u53EA\u8868\u8FBE\u4E00\u4E2A\u72EC\u7ACB\u4E8B\u5B9E\uFF0C\u4F7F\u7528\u6700\u77ED\u5B8C\u6574\u53E5\uFF1B\u4E0D\u9650\u5236\u5FC5\u8981\u4E8B\u5B9E\u6761\u6570\u3002\u4E0D\u8981\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u8F93\u51FA id/fact_id/event_id\uFF0C\u4E0D\u8981\u590D\u5236\u3001\u6DA6\u8272\u6216\u6362\u5E8F\u65E0\u53D8\u5316\u65E7\u5B57\u6BB5\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u56FA\u5B9A\u6587\u672C\u683C\u5F0F\u4E0D\u5B8C\u6574\uFF1B\u8FD9\u6B21\u4E25\u683C\u4F7F\u7528 <MA_TURN>/<MA_FACT>/<MA_ROW>\u3002" : ""}`;
 }
 
 // src/pipeline/state.ts
@@ -6328,6 +6402,51 @@ function preserveProtectedRows(previous, next, customRegistry) {
 function normalizedTitle(value2) {
   return canonicalObjectTitle(value2);
 }
+function normalizedComparableText(value2) {
+  return String(value2 ?? "").normalize("NFKC").replace(/\r\n?/g, "\n").split("\n").map((line) => line.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").replace(/[。．.！!？?；;，,、：:]$/u, "").trim();
+}
+function normalizedComparableList(value2) {
+  if (!Array.isArray(value2)) return [];
+  return [...new Set(value2.map(normalizedComparableText).filter(Boolean))].sort();
+}
+function normalizedComparableObject(value2) {
+  if (Array.isArray(value2)) return value2.map(normalizedComparableObject);
+  if (value2 && typeof value2 === "object") {
+    return Object.fromEntries(Object.entries(value2).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, normalizedComparableObject(item)]));
+  }
+  return normalizedComparableText(value2);
+}
+function sameComparableValue(left, right) {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    const a = normalizedComparableList(left);
+    const b = normalizedComparableList(right);
+    return a.length === b.length && a.every((value2, index) => value2 === b[index]);
+  }
+  const leftObject = left && typeof left === "object";
+  const rightObject = right && typeof right === "object";
+  if (leftObject || rightObject) {
+    if (!leftObject || !rightObject) return false;
+    return JSON.stringify(normalizedComparableObject(left)) === JSON.stringify(normalizedComparableObject(right));
+  }
+  return normalizedComparableText(left) === normalizedComparableText(right);
+}
+function preserveEquivalentPatchValues(existing, source) {
+  const output = { ...source };
+  if ("content" in output && sameComparableValue(existing.content, output.content)) output.content = existing.content;
+  if ("status" in output && sameComparableValue(existing.status, output.status)) output.status = existing.status;
+  if ("keywords" in output && sameComparableValue(existing.keywords, output.keywords)) output.keywords = structuredClone(existing.keywords);
+  if (output.fields && typeof output.fields === "object" && !Array.isArray(output.fields)) {
+    const nextFields = { ...output.fields };
+    for (const [key, value2] of Object.entries(nextFields)) {
+      const oldValue = existing.fields?.[key];
+      if (sameComparableValue(oldValue, value2)) nextFields[key] = structuredClone(oldValue);
+    }
+    output.fields = nextFields;
+  }
+  if ("lifecycle" in output && sameComparableValue(existing.lifecycle, output.lifecycle)) output.lifecycle = structuredClone(existing.lifecycle);
+  return output;
+}
 function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
   const merged = {};
   for (const table of registry2) merged[table.key] = structuredClone(previous[table.key] ?? []);
@@ -6360,7 +6479,7 @@ function mergeStateRowPatches(previous, parsedSnapshot, registry2) {
         if (title) titleIndexes.set(title, [...titleIndexes.get(title) ?? [], rows.length - 1]);
       } else {
         const existing = rows[index];
-        const source = patch;
+        const source = preserveEquivalentPatchValues(existing, patch);
         rows[index] = {
           ...existing,
           ...source,
@@ -7624,6 +7743,7 @@ function installPipelineEventHandlers() {
   const onDeleted = (payload) => handleInvalidation(payload, "deleted");
   const onChatChanged = () => {
     const chatKey = currentChatKey();
+    taskQueue.cancelActiveMatching(() => true, "\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u65E7\u804A\u5929\u8FD0\u884C\u4EFB\u52A1\u5DF2\u53D6\u6D88");
     abortActiveRequests();
     taskQueue.cancelPendingOutsideChat(chatKey);
     cancelScheduledMessagesOutsideChat(chatKey);
@@ -7983,49 +8103,41 @@ function ensureWorkspaceSubscriptions() {
   pipelineUnsubscribe ||= subscribePipeline(() => handlePipelineChange());
 }
 var WORKSPACE_NAVIGATION = [
-  {
-    label: "\u8FD0\u884C",
-    items: [
-      { key: "overview", label: "\u603B\u89C8", icon: "fa-gauge-high", description: "\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C" },
-      { key: "tables", label: "\u5BF9\u8C61\u89C6\u56FE", icon: "fa-table-cells-large", description: "\u89D2\u8272\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u4E0E\u533A\u57DF\u5BF9\u8C61" },
-      { key: "graph", label: "\u5BF9\u8C61\u56FE\u8C31", icon: "fa-diagram-project", description: "\u67E5\u770B\u5BF9\u8C61\u4E4B\u95F4\u7684\u5173\u7CFB\u7F51\u7EDC" },
-      { key: "summaries", label: "\u5206\u5C42\u603B\u7ED3", icon: "fa-layer-group", description: "\u4E8B\u4EF6\u5C0F\u603B\u7ED3\u4E0E\u957F\u671F\u5927\u603B\u7ED3" }
-    ]
-  },
-  {
-    label: "\u7BA1\u7406",
-    items: [
-      { key: "tableManager", label: "\u8868\u683C\u7BA1\u7406", icon: "fa-sliders", description: "\u8C03\u6574\u53EF\u89C1\u89C6\u56FE\u4E0E\u5B57\u6BB5\u8BED\u4E49" },
-      { key: "audit", label: "\u89C4\u5219\u5BA1\u6838", icon: "fa-shield-halved", description: "\u5BA1\u6838\u89C4\u5219\u3001\u4FEE\u6B63\u7B56\u7565\u4E0E\u7ED3\u679C" },
-      { key: "sync", label: "\u4E16\u754C\u4E66", icon: "fa-book-atlas", description: "\u53D1\u5E03\u3001\u6E05\u7406\u4E0E\u53EC\u56DE\u8BBE\u7F6E" }
-    ]
-  },
-  {
-    label: "\u7CFB\u7EDF",
-    items: [
-      { key: "settings", label: "\u6A21\u578B\u4E0E\u8BBE\u7F6E", icon: "fa-gears", description: "\u8FDE\u63A5\u5206\u914D\u3001\u81EA\u52A8\u5316\u4E0E\u7EF4\u62A4" },
-      { key: "diagnostics", label: "\u8BCA\u65AD", icon: "fa-stethoscope", description: "\u68C0\u67E5\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65" }
-    ]
-  }
+  { key: "overview", label: "\u603B\u89C8", icon: "fa-gauge-high", description: "\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C" },
+  { key: "tables", label: "\u5BF9\u8C61", icon: "fa-table-cells-large", description: "\u89D2\u8272\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u4E0E\u533A\u57DF\u5BF9\u8C61" },
+  { key: "graph", label: "\u56FE\u8C31", icon: "fa-diagram-project", description: "\u67E5\u770B\u5BF9\u8C61\u4E4B\u95F4\u7684\u5173\u7CFB\u7F51\u7EDC" },
+  { key: "summaries", label: "\u603B\u7ED3", icon: "fa-layer-group", description: "\u4E8B\u4EF6\u5C0F\u603B\u7ED3\u4E0E\u957F\u671F\u5927\u603B\u7ED3" },
+  { key: "tableManager", label: "\u8868\u683C", icon: "fa-sliders", description: "\u8C03\u6574\u53EF\u89C1\u89C6\u56FE\u4E0E\u5B57\u6BB5\u8BED\u4E49" },
+  { key: "audit", label: "\u5BA1\u6838", icon: "fa-shield-halved", description: "\u5BA1\u6838\u89C4\u5219\u3001\u4FEE\u6B63\u7B56\u7565\u4E0E\u7ED3\u679C" },
+  { key: "sync", label: "\u4E16\u754C\u4E66", icon: "fa-book-atlas", description: "\u53D1\u5E03\u3001\u6E05\u7406\u4E0E\u53EC\u56DE\u8BBE\u7F6E" },
+  { key: "settings", label: "\u8BBE\u7F6E", icon: "fa-gears", description: "\u8FDE\u63A5\u5206\u914D\u3001\u81EA\u52A8\u5316\u4E0E\u7EF4\u62A4" },
+  { key: "diagnostics", label: "\u8BCA\u65AD", icon: "fa-stethoscope", description: "\u68C0\u67E5\u5165\u53E3\u3001\u6A21\u578B\u3001\u5B58\u50A8\u4E0E\u540C\u6B65" }
 ];
 function workspaceTabMeta(tab) {
   const key = String(tab || "overview");
-  for (const group of WORKSPACE_NAVIGATION) {
-    const item = group.items.find((candidate) => candidate.key === key);
-    if (item) return { key: item.key, label: item.label, description: item.description };
-  }
+  const item = WORKSPACE_NAVIGATION.find((candidate) => candidate.key === key);
+  if (item) return { key: item.key, label: item.label, description: item.description };
   return { key: "overview", label: "\u603B\u89C8", description: "\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C" };
 }
 function workspaceNavigationHtml() {
-  return WORKSPACE_NAVIGATION.map((group) => `
-    <section class="ma11-nav-group" aria-label="${group.label}">
-      <div class="ma11-nav-label">${group.label}</div>
-      ${group.items.map((item) => `
-        <button type="button" data-ma11-tab="${item.key}" title="${item.description}">
-          <i class="ma11-nav-icon fa-solid ${item.icon}" aria-hidden="true"></i>
-          <span>${item.label}</span>
-        </button>`).join("")}
-    </section>`).join("");
+  return WORKSPACE_NAVIGATION.map((item) => `
+    <button type="button" role="tab" aria-selected="false" aria-controls="ma11-workspace-content" data-ma11-tab="${item.key}" title="${item.description}">
+      <i class="ma11-nav-icon fa-solid ${item.icon}" aria-hidden="true"></i>
+      <span>${item.label}</span>
+    </button>`).join("");
+}
+function scrollActiveWorkspaceTabIntoView(workspace, key) {
+  const tabs = workspace.querySelector("[data-ma11-scroll-tabs]");
+  const active = workspace.querySelector(`[role="tab"][data-ma11-tab="${key}"]`);
+  if (!tabs || !active) return;
+  active.scrollIntoView({ block: "nearest", inline: "nearest" });
+  window.requestAnimationFrame(() => {
+    if (!tabs.isConnected || !active.isConnected) return;
+    const tabRect = tabs.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    if (activeRect.right > tabRect.right - 8) tabs.scrollLeft += activeRect.right - tabRect.right + 8;
+    if (activeRect.left < tabRect.left + 8) tabs.scrollLeft -= tabRect.left - activeRect.left + 8;
+  });
 }
 function root() {
   let element = document.querySelector("#ma11-workspace");
@@ -8047,19 +8159,14 @@ function root() {
                 <div class="ma11-subtitle">\u957F\u671F\u53D9\u4E8B\u8BB0\u5FC6</div>
               </div>
             </div>
-            <div class="ma11-page-heading">
-              <div class="ma11-kicker">\u5F53\u524D\u9875\u9762</div>
-              <h1 data-ma11-current-title>\u603B\u89C8</h1>
-              <p data-ma11-current-description>\u6D41\u7A0B\u72B6\u6001\u3001\u6700\u8FD1\u4EFB\u52A1\u4E0E\u5FEB\u6377\u64CD\u4F5C</p>
-            </div>
             <div class="ma11-header-actions">
-              <span class="ma11-chat-status"><span></span>\u5F53\u524D\u804A\u5929</span>
+              <span class="ma11-chat-status"><span aria-hidden="true"></span>\u5F53\u524D\u804A\u5929</span>
               <span class="ma11-version">${VERSION}</span>
               <button class="ma11-icon-button" type="button" data-ma11-action="close" aria-label="\u5173\u95ED\u955C\u6E0A">\xD7</button>
             </div>
           </header>
-          <nav class="ma11-tabs" aria-label="\u955C\u6E0A\u529F\u80FD" data-ma11-scroll-tabs>${workspaceNavigationHtml()}</nav>
-          <main id="ma11-workspace-content" class="ma11-content"></main>
+          <nav class="ma11-tabs" role="tablist" aria-label="\u955C\u6E0A\u529F\u80FD" data-ma11-scroll-tabs>${workspaceNavigationHtml()}</nav>
+          <main id="ma11-workspace-content" class="ma11-content" role="tabpanel"></main>
         </section>
       </div>
       <div class="ma11-editor-backdrop" hidden>
@@ -8416,7 +8523,7 @@ function tableManagerHtml(artifactInfo) {
         <button data-ma11-action="move-table-down" data-ma11-table-key="${escapeHtml(table.key)}" ${index === registry2.length - 1 ? "disabled" : ""}>\u4E0B\u79FB</button>
         <button class="danger" data-ma11-action="delete-table" data-ma11-table-key="${escapeHtml(table.key)}">\u5220\u9664\u89C6\u56FE</button>
       </div>
-      <p class="ma11-help">\u5168\u5C40\u8868\u683C\u5B9A\u4E49\uFF0C\u9002\u7528\u4E8E\u6240\u6709\u804A\u5929\u3002\u952E\uFF1A${escapeHtml(table.key)} \xB7 \u89D2\u8272\uFF1A${escapeHtml(table.role)}\u3002\u540D\u79F0\u3001\u7528\u9014\u3001\u8BED\u4E49\u8868\u5934\u4E0E\u5B57\u6BB5\u8BF4\u660E\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\u548C\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u6620\u5C04\uFF1B\u7A33\u5B9A\u952E\u4E0D\u4F1A\u968F\u6539\u540D\u53D8\u5316\u3002</p>
+      <p class="ma11-help">\u5168\u5C40\u8868\u683C\u5B9A\u4E49\uFF0C\u9002\u7528\u4E8E\u6240\u6709\u804A\u5929\u3002\u540D\u79F0\u3001\u7528\u9014\u3001\u8BED\u4E49\u8868\u5934\u4E0E\u5B57\u6BB5\u8BF4\u660E\u4F1A\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u63D0\u53D6\u63D0\u793A\u8BCD\uFF1B\u6539\u540D\u4E0D\u4F1A\u7834\u574F\u5DF2\u6709\u6570\u636E\u6216\u5BF9\u8C61\u8EAB\u4EFD\u3002</p>
     </article>`;
   }).join("");
   return `<section class="ma11-toolbar"><div><h2>\u8868\u683C\u7BA1\u7406</h2><p>\u8868\u683C\u662F\u5185\u90E8\u4E8B\u5B9E\u7684\u53EF\u89C1\u89C6\u56FE\uFF0C\u6570\u91CF\u4E0D\u9650\u3002\u505C\u7528\u6216\u5220\u9664\u540E\u4E0D\u518D\u8981\u6C42\u6A21\u578B\u8F93\u51FA\uFF0C\u4E5F\u4E0D\u518D\u8FDB\u5165 UI \u4E0E\u4E16\u754C\u4E66\u3002</p></div><div class="ma11-actions"><button data-ma11-action="restore-default-tables">\u6062\u590D\u9ED8\u8BA4\u516B\u8868</button></div></section>
@@ -8601,7 +8708,12 @@ async function syncHtml() {
         <label>\u6700\u5927\u5411\u91CF\u5019\u9009\u6761\u76EE <small>\u955C\u6E0A\u53D1\u5E03\u88C1\u526A</small><input type="number" min="1" max="100" data-ma11-recall-setting="maxVectorResults" value="${settings.lorebookRecall.maxVectorResults}" /></label>
         <label>\u4E16\u754C\u4E66\u603B\u5BB9\u91CF\uFF08\u5B57\u7B26\uFF09<input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
       </div>
-      <div class="ma11-actions"><button data-ma11-action="retry-sync" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>${settings.lorebookLayout === "semantic" ? "\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03" : "\u7ACB\u5373\u540C\u6B65"}</button><button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u56FE\u8C31</button></div>
+      <div class="ma11-actions ma11-sync-actions">
+        <button data-ma11-action="sync-now" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>\u7ACB\u5373\u540C\u6B65</button>
+        ${settings.lorebookLayout === "semantic" ? `<button data-ma11-action="maintain-lorebook" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03</button>` : ""}
+        <button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u5BF9\u8C61\u56FE\u8C31</button>
+      </div>
+      <p class="ma11-help ma11-maintenance-note"><b>\u7EF4\u62A4\u64CD\u4F5C\uFF1A</b>\u201C\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\u201D\u4F1A\u5148\u68C0\u67E5\u53EF\u5B89\u5168\u5220\u9664\u7684\u955C\u6E0A\u65E7\u6761\u76EE\uFF0C\u5E76\u5728\u4E00\u6B21\u786E\u8BA4\u540E\u53D1\u5E03\u5F53\u524D\u771F\u5B9E\u5FEB\u7167\uFF1B\u4E0D\u4F1A\u5904\u7406\u4EBA\u5DE5\u6761\u76EE\u6216\u5176\u4ED6\u804A\u5929\u6761\u76EE\u3002</p>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
     </section>`;
@@ -8687,20 +8799,16 @@ async function renderWorkspace() {
     const settings = getSettings();
     const info = currentArtifact();
     const activeMeta = workspaceTabMeta(settings.ui.activeTab);
-    const currentTitle = workspace.querySelector("[data-ma11-current-title]");
-    const currentDescription = workspace.querySelector("[data-ma11-current-description]");
-    if (currentTitle) currentTitle.textContent = activeMeta.label;
-    if (currentDescription) currentDescription.textContent = activeMeta.description;
+    const contentPanel = workspace.querySelector("#ma11-workspace-content");
+    contentPanel?.setAttribute("aria-label", `${activeMeta.label}\uFF1A${activeMeta.description}`);
     workspace.querySelectorAll("[data-ma11-tab]").forEach((button) => {
       const active = button.dataset.ma11Tab === activeMeta.key;
       button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", String(active));
       if (active) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
-    workspace.querySelector(`[data-ma11-tab="${activeMeta.key}"]`)?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest"
-    });
+    scrollActiveWorkspaceTabIntoView(workspace, activeMeta.key);
     let html = "";
     if (settings.ui.activeTab === "overview") html = await overviewHtml(info);
     if (settings.ui.activeTab === "tables") html = await tableHtml(info);
@@ -8990,7 +9098,8 @@ function bindWorkspace(workspace) {
       "run-state",
       "force-small",
       "force-large",
-      "retry-sync",
+      "sync-now",
+      "maintain-lorebook",
       "set-focus",
       "clear-focus"
     ].includes(action || "");
@@ -9049,21 +9158,23 @@ function bindWorkspace(workspace) {
         await forceSummary(info.index, stageCommand.summary);
         await renderWorkspace();
       }
-      if (action === "retry-sync") {
+      if (action === "sync-now") {
         const info = latestSnapshotArtifact();
         if (!info) throw new Error("\u5C1A\u65E0\u53EF\u540C\u6B65\u7684\u72B6\u6001");
-        if (getSettings().lorebookLayout === "semantic") {
-          const preview = await previewLorebookMaintenance2(info.index);
-          const warning = [
-            `\u68C0\u6D4B\u5230 ${preview.legacyCandidates} \u4E2A\u5386\u53F2\u5019\u9009\uFF0C\u5176\u4E2D ${preview.removable} \u4E2A\u53EF\u5B89\u5168\u5904\u7406\u3002`,
-            `\u5C06\u4FDD\u7559 ${preview.protectedForeign} \u4E2A\u5176\u4ED6\u804A\u5929\u6761\u76EE\u548C ${preview.protectedUnknown} \u4E2A\u5171\u4EAB\u4E66 owner \u672A\u77E5\u6761\u76EE\u3002`,
-            "\u662F\u5426\u7EE7\u7EED\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\uFF1F"
-          ].join("\n");
-          if (!window.confirm(warning)) return;
-          await applyLorebookMaintenance2(info.index);
-        } else {
-          await retryStage(info.index, "sync");
-        }
+        await retryStage(info.index, "sync");
+        await renderWorkspace();
+      }
+      if (action === "maintain-lorebook") {
+        const info = latestSnapshotArtifact();
+        if (!info) throw new Error("\u5C1A\u65E0\u53EF\u540C\u6B65\u7684\u72B6\u6001");
+        const preview = await previewLorebookMaintenance2(info.index);
+        const warning = [
+          `\u68C0\u6D4B\u5230 ${preview.legacyCandidates} \u4E2A\u5386\u53F2\u5019\u9009\uFF0C\u5176\u4E2D ${preview.removable} \u4E2A\u53EF\u5B89\u5168\u5904\u7406\u3002`,
+          `\u5C06\u4FDD\u7559 ${preview.protectedForeign} \u4E2A\u5176\u4ED6\u804A\u5929\u6761\u76EE\u548C ${preview.protectedUnknown} \u4E2A\u5171\u4EAB\u4E66 owner \u672A\u77E5\u6761\u76EE\u3002`,
+          "\u786E\u8BA4\u540E\u5C06\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\u5F53\u524D\u771F\u5B9E\u5FEB\u7167\u3002"
+        ].join("\n");
+        if (!window.confirm(warning)) return;
+        await applyLorebookMaintenance2(info.index);
         await renderWorkspace();
       }
       const tableDefinitionKey = actionButton?.dataset.ma11TableKey || "";
@@ -9132,8 +9243,7 @@ function bindWorkspace(workspace) {
         return;
       }
       if (action === "reset-current-game") {
-        if (!window.confirm("\u8FD9\u4F1A\u5220\u9664\u5F53\u524D\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u5BA1\u6838\u8BB0\u5F55\u548C\u955C\u6E0A\u4E16\u754C\u4E66\u6761\u76EE\u3002\u5176\u4ED6\u804A\u5929\u548C\u63D2\u4EF6\u8BBE\u7F6E\u4E0D\u53D7\u5F71\u54CD\u3002\u662F\u5426\u7EE7\u7EED\uFF1F")) return;
-        if (!window.confirm("\u8BF7\u518D\u6B21\u786E\u8BA4\uFF1A\u91CD\u7F6E\u540E\u53EA\u80FD\u91CD\u65B0\u8C03\u7528\u6A21\u578B\u6574\u7406\u5F53\u524D\u804A\u5929\uFF0C\u65E0\u6CD5\u81EA\u52A8\u6062\u590D\u3002")) return;
+        if (!window.confirm("\u8FD9\u4F1A\u5220\u9664\u5F53\u524D\u804A\u5929\u7684\u955C\u6E0A\u8868\u683C\u3001\u603B\u7ED3\u3001\u5BA1\u6838\u8BB0\u5F55\u548C\u955C\u6E0A\u4E16\u754C\u4E66\u6761\u76EE\u3002\u5176\u4ED6\u804A\u5929\u548C\u63D2\u4EF6\u8BBE\u7F6E\u4E0D\u53D7\u5F71\u54CD\uFF1B\u5220\u9664\u540E\u53EA\u80FD\u91CD\u65B0\u8C03\u7528\u6A21\u578B\u6574\u7406\uFF0C\u65E0\u6CD5\u81EA\u52A8\u6062\u590D\u3002\u662F\u5426\u7EE7\u7EED\uFF1F")) return;
         const result = await resetCurrentGame();
         resetWorkspaceContext();
         renderAllMessagePanels();

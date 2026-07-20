@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.2.0-rc.56",
+  "version": "1.2.0-rc.59",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊 rc.56：历史核心重建中途失败后从失败消息继续，已成功前缀不再重复调用；保留 rc.55 小总结队列修复。"
+  "description": "镜渊 rc.59：阻止聊天 A→B→A 时旧异步任务复活，严格拒绝缺少结束标签的固定文本，并更新桌面与手机工作区。"
 }
