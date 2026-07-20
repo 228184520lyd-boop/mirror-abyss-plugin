@@ -985,3 +985,18 @@ textarea { resize: vertical; }
 @media (max-width: 600px) {
   .ma11-compat-setting p { margin-left: 0; }
 }
+
+/* 1.2.0：总结提示词白盒编辑 */
+.ma11-summary-prompt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; margin-top: .8rem; }
+.ma11-summary-prompt-card > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; cursor: pointer; list-style: none; }
+.ma11-summary-prompt-card > summary::-webkit-details-marker { display: none; }
+.ma11-summary-prompt-card > summary span { color: var(--ma-muted); font-size: .85rem; font-weight: 400; }
+.ma11-summary-prompt-form { margin-top: .75rem; padding: 0; }
+.ma11-summary-prompt-form textarea { min-height: 5.5rem; }
+.ma11-summary-prompt-form > label:first-child textarea { min-height: 3.5rem; }
+.ma11-prompt-preview { margin-top: .65rem; border-top: 1px solid var(--ma-border); padding-top: .65rem; }
+.ma11-prompt-preview > summary { cursor: pointer; font-weight: 600; }
+.ma11-prompt-preview pre { margin: .65rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; line-height: 1.55; color: var(--ma-text); background: color-mix(in srgb, var(--ma-panel) 86%, transparent); border: 1px solid var(--ma-border); border-radius: .55rem; padding: .75rem; }
+.ma11-summary-unresolved { display: grid; gap: .2rem; margin: .45rem 0; padding: .45rem .55rem; border-left: 3px solid var(--ma-accent); background: color-mix(in srgb, var(--ma-accent) 8%, transparent); }
+.ma11-summary-unresolved span { white-space: pre-wrap; }
+@media (max-width: 900px) { .ma11-summary-prompt-grid { grid-template-columns: 1fr; } }

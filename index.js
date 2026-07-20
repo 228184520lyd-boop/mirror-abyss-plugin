@@ -2,8 +2,70 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.59";
-var PIPELINE_VERSION = "ma-pipeline-59";
+var VERSION = "1.2.0";
+var PIPELINE_VERSION = "ma-pipeline-60";
+var DEFAULT_SUMMARY_PROMPTS = {
+  small: {
+    coreQuestion: "\u63A5\u4E0B\u6765\u7EE7\u7EED\u8FD9\u6761\u4E8B\u4EF6\u7EBF\uFF0C\u5FC5\u987B\u77E5\u9053\u4EC0\u4E48\uFF1F",
+    includeRules: [
+      "\u4E8B\u4EF6\u6210\u7ACB\u6240\u5FC5\u9700\u7684\u8D77\u56E0\u3002",
+      "\u6539\u53D8\u4E8B\u4EF6\u65B9\u5411\u7684\u5173\u952E\u8F6C\u6298\u3002",
+      "\u5F53\u524D\u9636\u6BB5\u5DF2\u7ECF\u5F62\u6210\u7684\u7ED3\u679C\u3002",
+      "\u5F53\u524D\u4ECD\u5728\u6301\u7EED\u5E76\u4F1A\u5F71\u54CD\u540E\u7EED\u7684\u76F4\u63A5\u5F71\u54CD\u3002",
+      "\u540E\u7EED\u5FC5\u987B\u627F\u63A5\u7684\u672A\u51B3\u4E8B\u9879\u3002"
+    ].join("\n"),
+    excludeRules: [
+      "\u53F0\u8BCD\u590D\u8FF0\u3001\u8FDE\u7EED\u52A8\u4F5C\u3001\u573A\u9762\u8C03\u5EA6\u3001\u6C14\u6C1B\u548C\u666E\u901A\u53CD\u5E94\u3002",
+      "\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u4E8B\u4EF6\u56E0\u679C\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u3002",
+      "\u5DF2\u7ECF\u88AB\u540E\u7EED\u7ED3\u679C\u8986\u76D6\u7684\u4E2D\u95F4\u6B65\u9AA4\u3002",
+      "\u5BF9\u540E\u7EED\u6CA1\u6709\u4F5C\u7528\u7684\u4E34\u65F6\u7EC6\u8282\u3002",
+      "\u5DF2\u7ECF\u5931\u6548\u3001\u5DF2\u7ECF\u89E3\u51B3\u6216\u53EA\u662F\u91CD\u590D\u6539\u5199\u7684\u4FE1\u606F\u3002",
+      "\u5DF2\u5199\u5165 unresolved \u7684\u5185\u5BB9\u4E0D\u5F97\u5728 summary \u4E2D\u91CD\u590D\u3002"
+    ].join("\n"),
+    updateRules: [
+      "\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u53EA\u662F\u5F85\u4FEE\u8BA2\u539F\u6599\uFF0C\u4E0D\u5F97\u5728\u5176\u540E\u7EE7\u7EED\u8FFD\u52A0\u3002",
+      "\u7ED3\u5408\u65B0\u589E\u4E8B\u5B9E\uFF0C\u91CD\u5199\u4E3A\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\u3002",
+      "\u65B0\u7ED3\u679C\u8986\u76D6\u65E7\u8FC7\u7A0B\u65F6\uFF0C\u5220\u9664\u65E7\u8FC7\u7A0B\uFF1B\u672A\u51B3\u4E8B\u9879\u89E3\u51B3\u540E\uFF0C\u4ECE unresolved \u4E2D\u79FB\u9664\u3002",
+      "\u4E0D\u540C\u4E8B\u4EF6\u69FD\u4F4D\u7EDD\u4E0D\u80FD\u6DF7\u5408\u4EBA\u7269\u3001\u5730\u70B9\u3001\u56E0\u679C\u6216\u7ED3\u679C\u3002"
+    ].join("\n"),
+    expressionRules: [
+      "\u76F4\u63A5\u5199\u5BF9\u8C61\u3001\u4E8B\u5B9E\u548C\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u5199\u5206\u6790\u8FC7\u7A0B\u3002",
+      "\u6BCF\u53E5\u8BDD\u53EA\u627F\u62C5\u4E00\u4E2A\u8FD1\u671F\u8FDE\u7EED\u6027\u4FE1\u606F\u3002",
+      "\u76F8\u540C\u4FE1\u606F\u53EA\u51FA\u73B0\u4E00\u6B21\uFF1B\u6CA1\u6709\u5185\u5BB9\u7684\u5B57\u6BB5\u4E0D\u8981\u7F16\u9020\u3002",
+      "\u4E0D\u6309\u56FA\u5B9A\u5B57\u6570\u88C1\u526A\uFF0C\u590D\u6742\u4E8B\u4EF6\u53EF\u4FDD\u7559\u591A\u9879\u5FC5\u8981\u4FE1\u606F\u3002"
+    ].join("\n")
+  },
+  large: {
+    coreQuestion: "\u5373\u4F7F\u8FD1\u671F\u8FC7\u7A0B\u5168\u90E8\u9057\u5FD8\uFF0C\u672A\u6765\u8DE8\u573A\u666F\u3001\u8DE8\u9636\u6BB5\u4ECD\u5FC5\u987B\u77E5\u9053\u4EC0\u4E48\uFF1F",
+    includeRules: [
+      "\u5DF2\u7ECF\u786E\u8BA4\u7684\u957F\u671F\u7ED3\u679C\u3002",
+      "\u4E0D\u53EF\u9006\u6216\u957F\u671F\u6709\u6548\u7684\u53D8\u5316\u3002",
+      "\u957F\u671F\u8EAB\u4EFD\u3001\u5173\u7CFB\u3001\u80FD\u529B\u3001\u5F52\u5C5E\u3001\u5236\u5EA6\u6216\u4E16\u754C\u72B6\u6001\u53D8\u5316\u3002",
+      "\u8DE8\u9636\u6BB5\u6301\u7EED\u6210\u7ACB\u7684\u5173\u952E\u56E0\u679C\u3002",
+      "\u8DE8\u9636\u6BB5\u4ECD\u672A\u5B8C\u6210\u7684\u8D23\u4EFB\u3001\u76EE\u6807\u3001\u7EA6\u675F\u6216\u672A\u51B3\u4E8B\u9879\u3002"
+    ].join("\n"),
+    excludeRules: [
+      "\u4E8B\u4EF6\u7ECF\u8FC7\u3001\u52A8\u4F5C\u8FC7\u7A0B\u3001\u53F0\u8BCD\u3001\u795E\u6001\u548C\u6C14\u6C1B\u3002",
+      "\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u3002",
+      "\u4E34\u65F6\u5730\u70B9\u79FB\u52A8\u3001\u77ED\u671F\u60C5\u7EEA\u548C\u5373\u65F6\u72B6\u6001\u3002",
+      "\u5DF2\u7ECF\u89E3\u51B3\u7684\u8BEF\u4F1A\u3001\u51B2\u7A81\u3001\u4EFB\u52A1\u6216\u666E\u901A\u9636\u6BB5\u95EE\u9898\u3002",
+      "\u53EA\u5728\u5F53\u524D\u573A\u666F\u6210\u7ACB\u3001\u6216\u5DF2\u7531\u5F53\u524D\u72B6\u6001\u8868\u8868\u8FBE\u7684\u77ED\u671F\u4FE1\u606F\u3002",
+      "\u5C0F\u603B\u7ED3\u7684\u9010\u9879\u7F29\u5199\u3001\u8FD1\u4E49\u6539\u5199\u6216\u540C\u4E49\u91CD\u590D\u3002"
+    ].join("\n"),
+    updateRules: [
+      "\u4E0D\u8981\u7F29\u5199\u5C0F\u603B\u7ED3\uFF1B\u91CD\u65B0\u5BA1\u67E5\u6BCF\u9879\u4FE1\u606F\u662F\u5426\u5177\u6709\u957F\u671F\u8D44\u683C\u3002",
+      "\u4E0A\u4E00\u7248\u5927\u603B\u7ED3\u53EA\u662F\u5F85\u4FEE\u8BA2\u539F\u6599\u3002\u6CA1\u6709\u65B0\u7684\u957F\u671F\u53D8\u5316\u65F6\u4FDD\u6301\u539F\u610F\uFF0C\u4E0D\u5F97\u6269\u5199\u3002",
+      "\u957F\u671F\u4E8B\u5B9E\u88AB\u65B0\u4E8B\u5B9E\u63A8\u7FFB\u3001\u7ED3\u675F\u6216\u66FF\u6362\u65F6\uFF0C\u66F4\u65B0\u4E3A\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\u3002",
+      "\u4E0D\u540C\u4E8B\u4EF6\u69FD\u4F4D\u7EDD\u4E0D\u80FD\u6DF7\u5408\u4E8B\u5B9E\u3001\u56E0\u679C\u3001\u4EBA\u7269\u6216\u5730\u70B9\u3002"
+    ].join("\n"),
+    expressionRules: [
+      "\u6BCF\u53E5\u8BDD\u5FC5\u987B\u8868\u8FBE\u4E00\u4E2A\u957F\u671F\u7ED3\u679C\u3001\u957F\u671F\u5F71\u54CD\u6216\u957F\u671F\u672A\u51B3\u4E8B\u9879\u3002",
+      "\u76F4\u63A5\u5199\u957F\u671F\u6210\u7ACB\u7684\u5BF9\u8C61\u3001\u4E8B\u5B9E\u548C\u56E0\u679C\uFF0C\u4E0D\u5199\u5224\u65AD\u8FC7\u7A0B\u3002",
+      "\u76F8\u540C\u4FE1\u606F\u53EA\u51FA\u73B0\u4E00\u6B21\uFF1B\u6CA1\u6709\u957F\u671F\u8D44\u683C\u7684\u5185\u5BB9\u5168\u90E8\u5220\u9664\u3002",
+      "\u4E0D\u6309\u56FA\u5B9A\u5B57\u6570\u88C1\u526A\uFF0C\u957F\u5EA6\u7531\u957F\u671F\u6709\u6548\u4FE1\u606F\u7684\u6570\u91CF\u51B3\u5B9A\u3002"
+    ].join("\n")
+  }
+};
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -20,6 +82,7 @@ var DEFAULT_SETTINGS = {
   smallSummaryTurns: 12,
   autoLargeSummary: true,
   largeSummaryCount: 4,
+  summaryPrompts: DEFAULT_SUMMARY_PROMPTS,
   lorebookSync: true,
   autoCreateLorebook: true,
   lorebookName: "",
@@ -385,67 +448,123 @@ function tableColumnHeaders(table) {
 function editableHeaderText(table) {
   return EDITABLE_HEADER_FIELD_KEYS.map((key) => {
     const field = table.fields.find((item) => item.key === key) ?? roleFields(table.role).find((item) => item.key === key);
-    return field ? `${field.key}:${field.label}:${field.description}` : "";
+    return field ? `${field.label}\uFF5C${field.description}` : "";
   }).filter(Boolean).join("\n");
+}
+function splitVisibleFieldLine(line) {
+  const vertical = line.indexOf("\uFF5C") >= 0 ? line.indexOf("\uFF5C") : line.indexOf("|");
+  if (vertical >= 0) {
+    return {
+      label: safeText(line.slice(0, vertical), 80).trim(),
+      description: safeText(line.slice(vertical + 1), 500).trim()
+    };
+  }
+  const colon = line.search(/[:：]/);
+  if (colon >= 0) {
+    return {
+      label: safeText(line.slice(0, colon), 80).trim(),
+      description: safeText(line.slice(colon + 1), 500).trim()
+    };
+  }
+  return { label: safeText(line, 80).trim(), description: "" };
 }
 function updateTableHeaders(registry2, key, headerText) {
   const current = normalizeTableRegistry(registry2).find((table) => table.key === key);
   if (!current) return normalizeTableRegistry(registry2);
   const updates = /* @__PURE__ */ new Map();
-  for (const rawLine of headerText.split(/\n+/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const parts = line.split(/[:：]/).map((part) => part.trim());
-    const fieldKey = parts.shift() || "";
-    if (!EDITABLE_HEADER_FIELD_KEY_SET.has(fieldKey)) {
-      throw new Error(`\u201C${fieldKey || "\u7A7A\u5B57\u6BB5"}\u201D\u4E0D\u662F\u53EF\u7F16\u8F91\u8BED\u4E49\u8868\u5934\uFF1B\u5E95\u5C42\u5B57\u6BB5\u952E\u4E0D\u53EF\u4FEE\u6539`);
+  const rows = headerText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  rows.forEach((line, index) => {
+    const legacyParts = line.split(/[:：]/).map((part) => part.trim());
+    const legacyKey = legacyParts[0] || "";
+    if (EDITABLE_HEADER_FIELD_KEY_SET.has(legacyKey)) {
+      const canonical2 = roleFields(current.role).find((field) => field.key === legacyKey);
+      const label = safeText(legacyParts[1], 80).trim() || canonical2?.label || legacyKey;
+      const description = safeText(legacyParts.slice(2).join("\uFF1A"), 500).trim() || canonical2?.description || label;
+      updates.set(legacyKey, { label, description });
+      return;
     }
+    const fieldKey = EDITABLE_HEADER_FIELD_KEYS[index];
+    if (!fieldKey) return;
     const canonical = roleFields(current.role).find((field) => field.key === fieldKey);
-    const label = safeText(parts.shift(), 80).trim() || canonical?.label || fieldKey;
-    const description = safeText(parts.join("\uFF1A"), 500).trim() || canonical?.description || label;
-    updates.set(fieldKey, { label, description });
-  }
+    const visible = splitVisibleFieldLine(line);
+    updates.set(fieldKey, {
+      label: visible.label || canonical?.label || fieldKey,
+      description: visible.description || canonical?.description || visible.label || fieldKey
+    });
+  });
   const fields = current.fields.map((field) => {
     const update = updates.get(field.key);
     return update ? { ...field, ...update } : field;
   });
   return updateTableDefinition(registry2, key, { fields });
 }
-function parseCustomFields(fieldText = "") {
+function normalizedFieldLabel(value2) {
+  return safeText(value2, 120).normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+function parseCustomFields(fieldText = "", previousCustom = []) {
   const used = /* @__PURE__ */ new Set();
-  const parsed = fieldText.split(/\n+/).map((value2) => value2.trim()).filter(Boolean).map((line, index) => {
-    const parts = line.split(/[:：]/).map((part) => part.trim());
-    const rawKey = parts[0] || `field_${index + 1}`;
-    const key = safeText(rawKey, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "") || `field_${index + 1}`;
-    if (RESERVED_CUSTOM_FIELD_KEYS.has(key)) throw new Error(`\u5B57\u6BB5\u201C${key}\u201D\u662F\u7CFB\u7EDF\u4FDD\u7559\u5B57\u6BB5\uFF0C\u4E0D\u80FD\u7528\u4F5C\u81EA\u5B9A\u4E49\u5B57\u6BB5\u952E`);
-    if (used.has(key)) return null;
+  const usedPrevious = /* @__PURE__ */ new Set();
+  const previousByLabel = new Map(previousCustom.map((field) => [normalizedFieldLabel(field.label), field]));
+  const rows = fieldText.split(/\n+/).map((value2) => value2.trim()).filter(Boolean);
+  return rows.map((line, index) => {
+    const legacyParts = line.split(/[:：]/).map((part) => part.trim());
+    const isLegacy = legacyParts.length >= 3 && /^(?:string|string\[\])$/.test(legacyParts[2] || "");
+    if (isLegacy) {
+      const rawKey = legacyParts[0] || `field_${index + 1}`;
+      let key2 = safeText(rawKey, 60).trim().replace(/[^a-zA-Z0-9_-]/g, "") || `field_${index + 1}`;
+      if (RESERVED_CUSTOM_FIELD_KEYS.has(key2)) throw new Error(`\u5B57\u6BB5\u201C${key2}\u201D\u662F\u7CFB\u7EDF\u4FDD\u7559\u5B57\u6BB5\uFF0C\u4E0D\u80FD\u7528\u4F5C\u81EA\u5B9A\u4E49\u5B57\u6BB5\u952E`);
+      while (used.has(key2)) key2 = `${key2}_${index + 1}`;
+      used.add(key2);
+      const label2 = safeText(legacyParts[1] || key2, 80).trim() || key2;
+      const type = legacyParts[2] === "string[]" ? "string[]" : "string";
+      const description = safeText(legacyParts.slice(3).join("\uFF1A") || label2, 500).trim();
+      return { key: key2, label: label2, description, type, required: false };
+    }
+    const visible = splitVisibleFieldLine(line);
+    const label = visible.label || `\u8868\u5934${index + 1}`;
+    const labelToken = normalizedFieldLabel(label);
+    let previous = previousByLabel.get(labelToken);
+    if (!previous || usedPrevious.has(previous.key)) previous = previousCustom[index];
+    if (previous && usedPrevious.has(previous.key)) previous = void 0;
+    if (previous) usedPrevious.add(previous.key);
+    let key = previous?.key || `field_${hashText(`${label}|${index}`)}`;
+    if (RESERVED_CUSTOM_FIELD_KEYS.has(key)) key = `field_${hashText(`${label}|${index}|custom`)}`;
+    while (used.has(key)) key = `${key}_${index + 1}`;
     used.add(key);
-    const label = safeText(parts[1] || key, 80).trim() || key;
-    const type = parts[2] === "string[]" ? "string[]" : "string";
-    const description = safeText(parts.slice(3).join("\uFF1A") || label, 500).trim();
-    return { key, label, description, type, required: false };
+    return {
+      key,
+      label: safeText(label, 80).trim() || `\u8868\u5934${index + 1}`,
+      description: safeText(visible.description || previous?.description || label, 500).trim(),
+      type: previous?.type === "string" ? "string" : "string[]",
+      required: false
+    };
   });
-  return parsed.filter((field) => field !== null);
 }
 function customFieldText(table) {
-  return table.fields.filter((field) => !CORE_FIELD_KEYS.includes(field.key) && field.key !== "lifecycle").map((field) => `${field.key}:${field.label}:${field.type}:${field.description}`).join("\n");
+  return table.fields.filter((field) => !CORE_FIELD_KEYS.includes(field.key) && field.key !== "lifecycle").map((field) => `${field.label}\uFF5C${field.description}`).join("\n");
 }
 function updateTableFields(registry2, key, fieldText) {
   const current = normalizeTableRegistry(registry2).find((table) => table.key === key);
   if (!current) return normalizeTableRegistry(registry2);
   const previousCustom = current.fields.filter((field) => !CORE_FIELD_KEYS.includes(field.key) && field.key !== "lifecycle");
-  const nextCustom = parseCustomFields(fieldText);
-  const nextByKey = new Map(nextCustom.map((field) => [field.key, field]));
-  const previousKeys = new Set(previousCustom.map((field) => field.key));
-  const removedKeys = previousCustom.filter((field) => !nextByKey.has(field.key)).map((field) => field.key);
-  const addedKeys = nextCustom.filter((field) => !previousKeys.has(field.key)).map((field) => field.key);
-  if (removedKeys.length && addedKeys.length) {
-    throw new Error(`\u5B57\u6BB5\u952E\u662F\u7A33\u5B9A\u952E\uFF0C\u4E0D\u80FD\u5728\u540C\u4E00\u6B21\u8868\u5934\u7F16\u8F91\u4E2D\u628A\u201C${removedKeys.join("\u3001")}\u201D\u6539\u4E3A\u201C${addedKeys.join("\u3001")}\u201D`);
-  }
-  for (const previous of previousCustom) {
-    const next = nextByKey.get(previous.key);
-    if (!next) continue;
-    if (next.type !== previous.type) throw new Error(`\u5B57\u6BB5\u201C${previous.key}\u201D\u7684\u5B57\u6BB5\u7C7B\u578B\u521B\u5EFA\u540E\u4E0D\u53EF\u76F4\u63A5\u4FEE\u6539`);
+  const rows = fieldText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const legacyMode = rows.length > 0 && rows.every((line) => {
+    const parts = line.split(/[:：]/).map((part) => part.trim());
+    return parts.length >= 3 && /^(?:string|string\[\])$/.test(parts[2] || "");
+  });
+  const nextCustom = parseCustomFields(fieldText, previousCustom);
+  if (legacyMode) {
+    const nextByKey = new Map(nextCustom.map((field) => [field.key, field]));
+    const previousKeys = new Set(previousCustom.map((field) => field.key));
+    const removedKeys = previousCustom.filter((field) => !nextByKey.has(field.key)).map((field) => field.key);
+    const addedKeys = nextCustom.filter((field) => !previousKeys.has(field.key)).map((field) => field.key);
+    if (removedKeys.length && addedKeys.length) {
+      throw new Error(`\u5B57\u6BB5\u952E\u662F\u7A33\u5B9A\u952E\uFF0C\u4E0D\u80FD\u5728\u540C\u4E00\u6B21\u8868\u5934\u7F16\u8F91\u4E2D\u628A\u201C${removedKeys.join("\u3001")}\u201D\u6539\u4E3A\u201C${addedKeys.join("\u3001")}\u201D`);
+    }
+    for (const previous of previousCustom) {
+      const next = nextByKey.get(previous.key);
+      if (next && next.type !== previous.type) throw new Error(`\u5B57\u6BB5\u201C${previous.key}\u201D\u7684\u5B57\u6BB5\u7C7B\u578B\u521B\u5EFA\u540E\u4E0D\u53EF\u76F4\u63A5\u4FEE\u6539`);
+    }
   }
   const coreFields = current.fields.filter((field) => CORE_FIELD_KEYS.includes(field.key) || field.key === "lifecycle");
   return updateTableDefinition(registry2, key, { fields: [...coreFields, ...nextCustom] });
@@ -623,6 +742,14 @@ function getSettings() {
   settings.maxRevisionAttempts = Math.min(2, Math.max(1, Math.round(Number(settings.maxRevisionAttempts) || 1)));
   settings.smallSummaryTurns = Math.min(100, Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12)));
   settings.largeSummaryCount = Math.min(50, Math.max(1, Math.round(Number(settings.largeSummaryCount) || 4)));
+  for (const kind of ["small", "large"]) {
+    const section = settings.summaryPrompts[kind];
+    section.coreQuestion = safeText(section.coreQuestion, 1200).trim();
+    section.includeRules = safeText(section.includeRules, 6e3).trim();
+    section.excludeRules = safeText(section.excludeRules, 6e3).trim();
+    section.updateRules = safeText(section.updateRules, 6e3).trim();
+    section.expressionRules = safeText(section.expressionRules, 6e3).trim();
+  }
   settings.requestTimeoutMs = Math.min(3e5, Math.max(1e4, Math.round(Number(settings.requestTimeoutMs) || 9e4)));
   delete settings.compatibilityMode;
   delete settings.repairInvalidJsonOnce;
@@ -5322,24 +5449,50 @@ function applySedimentation(snapshot, summary, registry2) {
 }
 
 // src/prompts/summary.ts
-function smallSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u9636\u6BB5\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u6309\u672C\u6B21\u8BF7\u6C42\u63D0\u4F9B\u7684 slot \u5206\u522B\u603B\u7ED3\u4E8B\u4EF6\u7EBF\uFF0C\u4E0D\u7EED\u5199\uFF0C\u4E0D\u63A8\u6D4B\uFF0C\u4E0D\u628A\u672A\u53D1\u751F\u7ED3\u679C\u5199\u6B7B\u3002
-
-\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62JSON\u3001Markdown\u4EE3\u7801\u5757\u3001\u89E3\u91CA\u548C\u601D\u8003\u6807\u7B7E\u3002\u6BCF\u4E2A\u8F93\u5165 slot \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u4E2A\uFF1A
-<MA_SUMMARY>
-slot=S1
+function ruleLines(value2) {
+  return String(value2 || "").split(/\n+/).map((line) => line.trim().replace(/^[-*•\d.、)）\s]+/, "")).filter(Boolean).map((line, index) => `${index + 1}. ${line}`).join("\n") || "\uFF08\u65E0\u9644\u52A0\u89C4\u5219\uFF09";
+}
+function summaryFixedProtocol(kind) {
+  return `<MA_SUMMARY>
+slot=${kind === "small" ? "S1" : "L1"}
 title=\u4E8B\u4EF6\u7EBF\u6807\u9898
-summary=\u7D2F\u8BA1\u5C0F\u603B\u7ED3\uFF1B\u5141\u8BB8\u81EA\u7136\u8BED\u8A00\u7EED\u884C
+summary=${kind === "small" ? "\u5F53\u524D\u552F\u4E00\u6709\u6548\u7684\u8FD1\u671F\u8FDE\u7EED\u6027\u603B\u7ED3" : "\u5F53\u524D\u552F\u4E00\u6709\u6548\u7684\u957F\u671F\u4E8B\u5B9E\u603B\u7ED3"}
 keyword=\u5173\u952E\u8BCD\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
-unresolved=\u5C1A\u672A\u89E3\u51B3\u4E8B\u9879\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
-</MA_SUMMARY>
+unresolved=${kind === "small" ? "\u540E\u7EED\u5FC5\u987B\u627F\u63A5\u7684\u672A\u51B3\u4E8B\u9879" : "\u8DE8\u9636\u6BB5\u4ECD\u672A\u5B8C\u6210\u7684\u957F\u671F\u4E8B\u9879"}\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
+</MA_SUMMARY>`;
+}
+function systemPrompt(kind, sections) {
+  const small = kind === "small";
+  return `\u4EFB\u52A1\uFF1A\u751F\u6210\u6BCF\u4E2A\u4E8B\u4EF6\u69FD\u4F4D\u5F53\u524D\u552F\u4E00\u6709\u6548\u7684${small ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3"}\u3002
 
-\u89C4\u5219\uFF1A
-1. \u4E0D\u540C slot \u7EDD\u4E0D\u80FD\u6DF7\u5408\u4EBA\u7269\u3001\u5730\u70B9\u3001\u56E0\u679C\u6216\u7ED3\u679C\u3002
-2. \u5C0F\u603B\u7ED3\u4E0D\u662F\u804A\u5929\u6D41\u6C34\u8D26\uFF1B\u4FDD\u7559\u8D77\u56E0\u3001\u5173\u952E\u7ECF\u8FC7\u3001\u5DF2\u4EA7\u751F\u53D8\u5316\u3001\u5F53\u524D\u7ED3\u679C\u3001\u672A\u51B3\u4E8B\u9879\u548C\u540E\u7EED\u4ECD\u6709\u6548\u7684\u5F71\u54CD\u3002
-3. \u5220\u9664\u91CD\u590D\u52A8\u4F5C\u3001\u6C14\u6C1B\u63CF\u5199\u3001\u65E0\u56E0\u679C\u4F5C\u7528\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\uFF0C\u65E0\u540E\u7EED\u610F\u4E49\u7684\u4E34\u65F6\u53CD\u5E94\u548C\u88AB\u65B0\u4E8B\u5B9E\u8986\u76D6\u7684\u65E7\u8868\u8FF0\u3002
-4. \u4E8B\u4EF6\u672A\u7ED3\u675F\u65F6\uFF0C\u53EA\u603B\u7ED3\u5DF2\u786E\u8BA4\u90E8\u5206\uFF0C\u5E76\u660E\u786E\u672A\u51B3\u4E8B\u9879\u3002
-5. slot \u53EA\u662F\u672C\u6B21\u8BF7\u6C42\u8DEF\u7531\u6807\u7B7E\uFF0C\u5FC5\u987B\u539F\u6837\u8FD4\u56DE\uFF1B\u4E0D\u8981\u8F93\u51FA\u4EFB\u4F55\u5185\u90E8 ID\u3002`;
+\u6838\u5FC3\u5224\u65AD\uFF1A
+${sections.coreQuestion}
+
+\u53EA\u4FDD\u7559\uFF1A
+${ruleLines(sections.includeRules)}
+
+\u5FC5\u987B\u5220\u9664\uFF1A
+${ruleLines(sections.excludeRules)}
+
+\u66F4\u65B0\u89C4\u5219\uFF1A
+${ruleLines(sections.updateRules)}
+
+\u8868\u8FBE\u89C4\u5219\uFF1A
+${ruleLines(sections.expressionRules)}
+
+\u56FA\u5B9A\u8981\u6C42\uFF1A
+1. \u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\u3002
+2. \u53EA\u4F7F\u7528\u672C\u6B21\u8BF7\u6C42\u63D0\u4F9B\u7684\u6750\u6599\uFF0C\u4E0D\u8BFB\u53D6\u804A\u5929\u6B63\u6587\uFF0C\u4E0D\u8865\u5168\u672A\u663E\u5F71\u5185\u5BB9\u3002
+3. slot \u53EA\u662F\u672C\u6B21\u8BF7\u6C42\u7684\u8DEF\u7531\u6807\u7B7E\uFF0C\u5FC5\u987B\u539F\u6837\u8FD4\u56DE\uFF1B\u4E0D\u8981\u8F93\u51FA\u4EFB\u4F55\u5185\u90E8 ID\u3002
+4. \u6BCF\u4E2A\u8F93\u5165 slot \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u4E2A <MA_SUMMARY>\u3002
+5. \u7981\u6B62 JSON\u3001Markdown \u4EE3\u7801\u5757\u3001\u89E3\u91CA\u3001\u5206\u6790\u8FC7\u7A0B\u548C\u601D\u8003\u6807\u7B7E\u3002
+6. \u4E8B\u4EF6\u672A\u7ED3\u675F\u65F6\u53EA\u5199\u5DF2\u786E\u8BA4\u5185\u5BB9\uFF0C\u5E76\u5C06\u771F\u6B63\u9700\u8981\u540E\u7EED\u627F\u63A5\u7684\u4E8B\u9879\u5199\u5165 unresolved\u3002
+
+\u56FA\u5B9A\u8F93\u51FA\u534F\u8BAE\uFF1A
+${summaryFixedProtocol(kind)}`;
+}
+function smallSummarySystemPrompt(sections = DEFAULT_SUMMARY_PROMPTS.small) {
+  return systemPrompt("small", sections);
 }
 function lines(values2) {
   return values2.map((item) => `- ${String(item ?? "").trim()}`).filter((item) => item !== "-").join("\n") || "\uFF08\u65E0\uFF09";
@@ -5357,7 +5510,7 @@ function smallEventSection(group, index) {
   return `\u3010\u4E8B\u4EF6\u69FD\u4F4D ${slot}\u3011
 \u5185\u90E8\u4E8B\u4EF6\u540D\u79F0\uFF08\u53EA\u7528\u4E8E\u7406\u89E3\uFF0C\u4E0D\u8981\u8F93\u51FA\uFF09\uFF1A${group.eventId}
 
-\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\uFF1A
+\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\uFF08\u5F85\u4FEE\u8BA2\u539F\u6599\uFF0C\u4E0D\u662F\u5FC5\u987B\u4FDD\u7559\u7684\u6B63\u6587\uFF09\uFF1A
 ${group.previous ? `\u6807\u9898\uFF1A${group.previous.title}
 \u6458\u8981\uFF1A${group.previous.summary}
 \u672A\u51B3\uFF1A${lines(group.previous.unresolvedItems ?? [])}
@@ -5367,49 +5520,34 @@ ${group.previous ? `\u6807\u9898\uFF1A${group.previous.title}
 ${facts || "\uFF08\u65E0\uFF09"}`;
 }
 function smallSummaryBatchPrompt(groups) {
-  return `\u4E3A\u4E0B\u5217\u4E8B\u4EF6\u69FD\u4F4D\u5206\u522B\u751F\u6210\u81EA\u5DF1\u7684\u7D2F\u8BA1\u5C0F\u603B\u7ED3\u3002\u53EA\u4F7F\u7528\u5404\u69FD\u4F4D\u7684\u4E0A\u4E00\u7248\u5C0F\u603B\u7ED3\u548C\u65B0\u589E\u5185\u90E8\u4E8B\u5B9E\uFF0C\u4E0D\u8BFB\u53D6\u6216\u8865\u5168\u804A\u5929\u6B63\u6587\u3002
+  return `\u5206\u522B\u66F4\u65B0\u4E0B\u5217\u4E8B\u4EF6\u69FD\u4F4D\u7684\u5C0F\u603B\u7ED3\u3002\u5BF9\u6BCF\u4E2A\u69FD\u4F4D\u90FD\u8981\u91CD\u5199\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\uFF0C\u4E0D\u5F97\u5728\u65E7\u603B\u7ED3\u540E\u8FFD\u52A0\u3002
 
 ${groups.map(smallEventSection).join("\n\n====================\n\n")}
 
 \u6309\u8F93\u5165\u987A\u5E8F\u8FD4\u56DE <MA_SUMMARY>\u3002\u6BCF\u4E2A slot \u5FC5\u987B\u4E14\u53EA\u80FD\u51FA\u73B0\u4E00\u6B21\u3002`;
 }
-function largeSummarySystemPrompt() {
-  return `\u4F60\u662F\u955C\u6E0A\u957F\u671F\u6C89\u964D\u7ED3\u7B97\u5668\u3002\u4F60\u6309\u672C\u6B21\u8BF7\u6C42\u63D0\u4F9B\u7684 slot \u5206\u522B\u751F\u6210\u957F\u671F\u603B\u7ED3\uFF0C\u4E0D\u8BFB\u53D6\u804A\u5929\u6B63\u6587\uFF0C\u4E0D\u8865\u5168\u672A\u663E\u5F71\u5185\u5BB9\u3002
-
-\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62JSON\u3001Markdown\u4EE3\u7801\u5757\u3001\u89E3\u91CA\u548C\u601D\u8003\u6807\u7B7E\u3002\u6BCF\u4E2A\u8F93\u5165 slot \u5FC5\u987B\u4E14\u53EA\u80FD\u8FD4\u56DE\u4E00\u4E2A\uFF1A
-<MA_SUMMARY>
-slot=L1
-title=\u4E8B\u4EF6\u7EBF\u6807\u9898
-summary=\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\uFF1B\u5141\u8BB8\u81EA\u7136\u8BED\u8A00\u7EED\u884C
-keyword=\u5173\u952E\u8BCD\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
-unresolved=\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\uFF08\u53EF\u91CD\u590D\u591A\u884C\uFF09
-</MA_SUMMARY>
-
-\u89C4\u5219\uFF1A
-1. \u4E0D\u540C slot \u7EDD\u4E0D\u80FD\u6DF7\u5408\u4E8B\u5B9E\u3001\u56E0\u679C\u3001\u4EBA\u7269\u6216\u5730\u70B9\u3002
-2. \u53EA\u56FA\u5316\u5DF2\u7ECF\u53D1\u751F\u7684\u7ED3\u679C\u3001\u6838\u5FC3\u56E0\u679C\u3001\u957F\u671F\u5F71\u54CD\u548C\u4ECD\u672A\u89E3\u51B3\u4E8B\u9879\u3002
-3. \u5220\u9664\u52A8\u4F5C\u7EC6\u8282\u3001\u91CD\u590D\u8FC7\u7A0B\u548C\u5DF2\u88AB\u7ED3\u679C\u8986\u76D6\u7684\u63CF\u8FF0\u3002
-4. slot \u53EA\u662F\u672C\u6B21\u8BF7\u6C42\u8DEF\u7531\u6807\u7B7E\uFF0C\u5FC5\u987B\u539F\u6837\u8FD4\u56DE\uFF1B\u4E0D\u8981\u8F93\u51FA\u4EFB\u4F55\u5185\u90E8 ID\u3002`;
+function largeSummarySystemPrompt(sections = DEFAULT_SUMMARY_PROMPTS.large) {
+  return systemPrompt("large", sections);
 }
 function largeEventSection(group, index) {
   const slot = group.slot || `L${index + 1}`;
   return `\u3010\u4E8B\u4EF6\u69FD\u4F4D ${slot}\u3011
 \u5185\u90E8\u4E8B\u4EF6\u540D\u79F0\uFF08\u53EA\u7528\u4E8E\u7406\u89E3\uFF0C\u4E0D\u8981\u8F93\u51FA\uFF09\uFF1A${group.eventId}
 
-\u4E0A\u4E00\u7248\u957F\u671F\u603B\u7ED3\uFF1A
+\u4E0A\u4E00\u7248\u957F\u671F\u603B\u7ED3\uFF08\u5F85\u4FEE\u8BA2\u539F\u6599\uFF09\uFF1A
 ${group.previousLarge ? `\u6807\u9898\uFF1A${group.previousLarge.title}
 \u6458\u8981\uFF1A${group.previousLarge.summary}
 \u672A\u51B3\uFF1A${lines(group.previousLarge.unresolvedItems ?? [])}
 \u5173\u952E\u8BCD\uFF1A${lines(group.previousLarge.keywords)}` : "\uFF08\u65E0\uFF09"}
 
-\u6700\u65B0\u7D2F\u8BA1\u5C0F\u603B\u7ED3\uFF1A
+\u6700\u65B0\u7D2F\u8BA1\u5C0F\u603B\u7ED3\uFF08\u4EC5\u4F5C\u4E3A\u957F\u671F\u8D44\u683C\u5BA1\u67E5\u6750\u6599\uFF0C\u4E0D\u5F97\u9010\u53E5\u7F29\u5199\uFF09\uFF1A
 \u6807\u9898\uFF1A${group.latestSmall.title}
 \u6458\u8981\uFF1A${group.latestSmall.summary}
 \u672A\u51B3\uFF1A${lines(group.latestSmall.unresolvedItems ?? [])}
 \u5173\u952E\u8BCD\uFF1A${lines(group.latestSmall.keywords)}`;
 }
 function largeSummaryPrompt(groups) {
-  return `\u5C06\u4E0B\u5217\u4E8B\u4EF6\u69FD\u4F4D\u5206\u522B\u538B\u7F29\u4E3A\u81EA\u5DF1\u7684\u7D2F\u8BA1\u957F\u671F\u603B\u7ED3\u3002\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u4E0D\u5F97\u8FDB\u5165\u957F\u671F\u603B\u7ED3\u3002
+  return `\u5206\u522B\u5BA1\u67E5\u4E0B\u5217\u4E8B\u4EF6\u69FD\u4F4D\uFF0C\u53EA\u56FA\u5316\u8DE8\u573A\u666F\u3001\u8DE8\u9636\u6BB5\u4ECD\u4E0D\u80FD\u9057\u5FD8\u7684\u957F\u671F\u4E8B\u5B9E\u3002\u4E0D\u662F\u7F29\u5199\u5C0F\u603B\u7ED3\u3002\u6CA1\u6709\u4ECB\u5165\u6216\u6539\u53D8\u957F\u671F\u56E0\u679C\u7684\u65C1\u89C2\u8005\u3001\u89C2\u4F17\u3001\u8DEF\u4EBA\u4E0D\u5F97\u8FDB\u5165\u957F\u671F\u603B\u7ED3\u3002
 
 ${groups.map(largeEventSection).join("\n\n====================\n\n")}
 
@@ -5590,7 +5728,7 @@ async function generateSmallSummary(artifact, force = false) {
   const slotted = prepared.map((group, index) => ({ ...group, slot: `S${index + 1}` }));
   const raw = await generateTask({
     task: "smallSummary",
-    systemPrompt: smallSummarySystemPrompt(),
+    systemPrompt: smallSummarySystemPrompt(settings.summaryPrompts.small),
     prompt: smallSummaryBatchPrompt(slotted.map((group) => ({ slot: group.slot, eventId: group.eventId, facts: group.facts, previous: group.previous }))),
     maxTokens: Math.min(2200, 700 + prepared.length * 260),
     requestPurpose: "fixed-text"
@@ -5670,7 +5808,7 @@ async function generateLargeSummary(artifact, force = false) {
   const slotted = groups.map((group, index) => ({ ...group, slot: `L${index + 1}` }));
   const raw = await generateTask({
     task: "largeSummary",
-    systemPrompt: largeSummarySystemPrompt(),
+    systemPrompt: largeSummarySystemPrompt(settings.summaryPrompts.large),
     prompt: largeSummaryPrompt(slotted.map((group) => ({
       slot: group.slot,
       eventId: group.eventId,
@@ -8514,8 +8652,8 @@ function tableManagerHtml(artifactInfo) {
       <div class="ma11-table-manager-fields">
         <label>\u540D\u79F0<input data-ma11-table-name="${escapeHtml(table.key)}" value="${escapeHtml(table.name)}" maxlength="80" /></label>
         <label>\u7528\u9014\u8BF4\u660E<textarea data-ma11-table-purpose="${escapeHtml(table.key)}" rows="3" maxlength="1000">${escapeHtml(table.purpose)}</textarea></label>
-        <label class="ma11-table-header-editor">\u8BED\u4E49\u8868\u5934 <small>\u6BCF\u884C\uFF1A\u7A33\u5B9A\u5B57\u6BB5\u952E:\u73A9\u5BB6\u8868\u5934:\u4F20\u8F93\u8BF4\u660E\uFF1B\u53EA\u4FEE\u6539\u8868\u5934\u8BED\u4E49\uFF0C\u5E95\u5C42\u952E\u548C\u5B57\u6BB5\u7C7B\u578B\u4FDD\u6301\u4E0D\u53D8</small><textarea data-ma11-table-headers="${escapeHtml(table.key)}" rows="6">${escapeHtml(headers)}</textarea></label>
-        <label>\u81EA\u5B9A\u4E49\u5B57\u6BB5 <small>\u6BCF\u884C\uFF1A\u5B57\u6BB5\u952E:\u540D\u79F0:string\u6216string[]:\u7528\u9014</small><textarea data-ma11-table-fields="${escapeHtml(table.key)}" rows="3" placeholder="mood:\u60C5\u7EEA:string:\u5F53\u524D\u5DF2\u663E\u5F71\u60C5\u7EEA">${escapeHtml(fields)}</textarea></label>
+        <label class="ma11-table-header-editor">\u57FA\u7840\u8868\u5934 <small>\u6BCF\u884C\uFF1A\u8868\u5934\u540D\u79F0\uFF5C\u8BB0\u5F55\u8981\u6C42\u3002\u5185\u90E8\u5B57\u6BB5\u8EAB\u4EFD\u7531\u63D2\u4EF6\u7EF4\u62A4\u3002</small><textarea data-ma11-table-headers="${escapeHtml(table.key)}" rows="6">${escapeHtml(headers)}</textarea></label>
+        <label>\u9644\u52A0\u8868\u5934 <small>\u6BCF\u884C\uFF1A\u8868\u5934\u540D\u79F0\uFF5C\u8BB0\u5F55\u8981\u6C42\u3002\u8C03\u6574\u884C\u5E8F\u5373\u53EF\u8C03\u6574\u8868\u5934\u987A\u5E8F\u3002</small><textarea data-ma11-table-fields="${escapeHtml(table.key)}" rows="3" placeholder="\u6218\u6597\u98CE\u683C\uFF5C\u8BB0\u5F55\u957F\u671F\u7A33\u5B9A\u7684\u6218\u6597\u65B9\u5F0F\u548C\u6B66\u5668\u504F\u597D">${escapeHtml(fields)}</textarea></label>
       </div>
       <div class="ma11-actions ma11-table-manager-actions">
         <button data-ma11-action="save-table" data-ma11-table-key="${escapeHtml(table.key)}">\u4FDD\u5B58\u4FEE\u6539</button>
@@ -8531,7 +8669,7 @@ function tableManagerHtml(artifactInfo) {
       <header><b>\u65B0\u589E\u81EA\u5B9A\u4E49\u8868\u683C</b><span>\u65B0\u589E\u540E\u81EA\u52A8\u8FDB\u5165\u4E0B\u4E00\u6B21\u72B6\u6001\u6587\u672C\u534F\u8BAE</span></header>
       <label>\u540D\u79F0<input data-ma11-new-table-name maxlength="80" placeholder="\u4F8B\u5982\uFF1A\u7EC4\u7EC7\u72B6\u6001" /></label>
       <label>\u7528\u9014\u8BF4\u660E<textarea data-ma11-new-table-purpose rows="3" maxlength="1000" placeholder="\u8BF4\u660E\u53EA\u5E94\u8BB0\u5F55\u4EC0\u4E48\uFF0C\u4EE5\u53CA\u4E0D\u5E94\u8BB0\u5F55\u4EC0\u4E48\u3002"></textarea></label>
-      <label>\u5B57\u6BB5\u5B9A\u4E49 <small>\u53EF\u7559\u7A7A\uFF1B\u6BCF\u884C\uFF1A\u5B57\u6BB5\u952E:\u540D\u79F0:string\u6216string[]:\u7528\u9014</small><textarea data-ma11-new-table-fields rows="3" placeholder="rank:\u5C42\u7EA7:string:\u5DF2\u660E\u786E\u7684\u7EC4\u7EC7\u5C42\u7EA7"></textarea></label>
+      <label>\u9644\u52A0\u8868\u5934 <small>\u53EF\u7559\u7A7A\uFF1B\u6BCF\u884C\uFF1A\u8868\u5934\u540D\u79F0\uFF5C\u8BB0\u5F55\u8981\u6C42</small><textarea data-ma11-new-table-fields rows="3" placeholder="\u7EC4\u7EC7\u5C42\u7EA7\uFF5C\u8BB0\u5F55\u5DF2\u7ECF\u660E\u786E\u7684\u7EC4\u7EC7\u5C42\u7EA7"></textarea></label>
       <div class="ma11-actions"><button data-ma11-action="create-table">\u65B0\u589E\u8868\u683C</button></div>
     </section>
     <section class="ma11-table-manager-list">${rows || '<div class="ma11-empty-panel">\u5F53\u524D\u6CA1\u6709\u8868\u683C\u5B9A\u4E49\u3002</div>'}</section>
@@ -8632,6 +8770,34 @@ ${node.detail}`)}</title></g>`
     </section>
     ${graph.nodes.length ? `<section class="ma11-graph-layout"><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5BF9\u8C61\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}</dl>` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u201C\u4EBA\u7269\u201D\u548C\u201C\u5173\u7CFB\u201D\u8868\u4E2D\u751F\u6210\u6216\u6DFB\u52A0\u8BB0\u5F55\u3002</section>'}`;
 }
+function summaryPromptEditorHtml(kind) {
+  const settings = getSettings();
+  const prompt = settings.summaryPrompts[kind];
+  const label = kind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3";
+  const fullPrompt = kind === "small" ? smallSummarySystemPrompt(prompt) : largeSummarySystemPrompt(prompt);
+  const field = (key, title, rows) => `<label>${title}<textarea rows="${rows}" data-ma11-summary-prompt="${kind}" data-ma11-summary-section="${key}">${escapeHtml(prompt[key])}</textarea></label>`;
+  return `<details class="ma11-card ma11-summary-prompt-card">
+    <summary><b>${label}\u63D0\u793A\u8BCD</b><span>\u53EF\u89C1\u3001\u53EF\u7F16\u8F91\u3001\u53EF\u6062\u590D\u9ED8\u8BA4</span></summary>
+    <div class="ma11-form-card ma11-summary-prompt-form">
+      ${field("coreQuestion", "\u6838\u5FC3\u5224\u65AD", 2)}
+      <div class="ma11-editor-grid">
+        ${field("includeRules", "\u4FDD\u7559\u5185\u5BB9", 7)}
+        ${field("excludeRules", "\u6392\u9664\u5185\u5BB9", 7)}
+      </div>
+      <div class="ma11-editor-grid">
+        ${field("updateRules", "\u66F4\u65B0\u89C4\u5219", 6)}
+        ${field("expressionRules", "\u8868\u8FBE\u89C4\u5219", 6)}
+      </div>
+      <div class="ma11-actions">
+        <button data-ma11-action="save-summary-prompt" data-ma11-summary-kind="${kind}">\u4FDD\u5B58${label}\u63D0\u793A\u8BCD</button>
+        <button data-ma11-action="restore-summary-prompt" data-ma11-summary-kind="${kind}">\u6062\u590D${label}\u9ED8\u8BA4\u503C</button>
+      </div>
+      <details class="ma11-prompt-preview"><summary>\u67E5\u770B\u5F53\u524D\u5B8C\u6574\u89C4\u5219\u63D0\u793A\u8BCD</summary><pre>${escapeHtml(fullPrompt)}</pre></details>
+      <details class="ma11-prompt-preview"><summary>\u67E5\u770B\u56FA\u5B9A\u8F93\u51FA\u534F\u8BAE</summary><pre>${escapeHtml(summaryFixedProtocol(kind))}</pre></details>
+      <p class="ma11-help">\u8FD9\u91CC\u53EA\u8C03\u6574\u6A21\u578B\u5982\u4F55\u7B5B\u9009\u548C\u8868\u8FBE\u603B\u7ED3\u5185\u5BB9\u3002\u4E8B\u4EF6\u5206\u7EC4\u3001\u4E8B\u5B9E\u6D88\u8D39\u3001\u7248\u672C\u7EE7\u627F\u3001\u5199\u5165\u5BF9\u8C61\u548C\u4E16\u754C\u4E66\u540C\u6B65\u4ECD\u7531\u63D2\u4EF6\u4EE3\u7801\u51B3\u5B9A\u3002</p>
+    </div>
+  </details>`;
+}
 async function summariesHtml() {
   const info = latestSnapshotArtifact();
   const enabled = getSettings().enabled;
@@ -8641,15 +8807,16 @@ async function summariesHtml() {
   const large = state2?.largeSummaries ?? [];
   const small = pendingSmallSummaries(allSmall, large);
   return `
-    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u6309 event_id \u6C47\u603B\u5DF2\u7ECF\u53D1\u751F\u7684\u4E8B\u4EF6\u7EBF\uFF1B\u5927\u603B\u7ED3\u53EA\u56FA\u5316\u5C1A\u672A\u88AB\u6D88\u8D39\u7684\u5C0F\u603B\u7ED3\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info && !busy ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info && !busy ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
+    <section class="ma11-toolbar"><div><h2>\u5206\u5C42\u603B\u7ED3</h2><p>\u5C0F\u603B\u7ED3\u53EA\u4FDD\u7559\u8FD1\u671F\u5FC5\u987B\u627F\u63A5\u7684\u4FE1\u606F\uFF1B\u5927\u603B\u7ED3\u91CD\u65B0\u5BA1\u67E5\u5E76\u53EA\u56FA\u5316\u8DE8\u9636\u6BB5\u4ECD\u4E0D\u80FD\u9057\u5FD8\u7684\u957F\u671F\u4E8B\u5B9E\u3002</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info && !busy ? "" : "disabled"}>\u7ACB\u5373\u5C0F\u603B\u7ED3</button><button data-ma11-action="force-large" ${enabled && info && !busy ? "" : "disabled"}>\u7ACB\u5373\u5927\u603B\u7ED3</button></div></section>
     <div class="ma11-summary-columns">
       <section class="ma11-card"><header><b>\u5C0F\u603B\u7ED3</b><span>${small.length}</span></header>${small.length ? small.slice().reverse().map(
-    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
+    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>\u672A\u51B3</b><span>${escapeHtml(item.unresolvedItems.join("\uFF1B"))}</span></div>` : ""}${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
   ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5C0F\u603B\u7ED3\u3002</p>'}</section>
       <section class="ma11-card"><header><b>\u5927\u603B\u7ED3</b><span>${large.length}</span></header>${large.length ? large.slice().reverse().map(
-    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
+    (item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>\u957F\u671F\u672A\u51B3</b><span>${escapeHtml(item.unresolvedItems.join("\uFF1B"))}</span></div>` : ""}${item.sedimentation ? `<div class="ma11-summary-settlement"><span>\u5DF2\u5E94\u7528 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>\u4FDD\u62A4/\u5FFD\u7565 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`
   ).join("") : '<p class="ma11-empty">\u5C1A\u65E0\u5927\u603B\u7ED3\u3002</p>'}</section>
-    </div>`;
+    </div>
+    <section class="ma11-summary-prompt-grid">${summaryPromptEditorHtml("small")}${summaryPromptEditorHtml("large")}</section>`;
 }
 function auditHtml() {
   const settings = getSettings();
@@ -9176,6 +9343,29 @@ function bindWorkspace(workspace) {
         if (!window.confirm(warning)) return;
         await applyLorebookMaintenance2(info.index);
         await renderWorkspace();
+      }
+      if (action === "save-summary-prompt" || action === "restore-summary-prompt") {
+        const kind = actionButton?.dataset.ma11SummaryKind;
+        if (!kind) throw new Error("\u65E0\u6CD5\u786E\u5B9A\u603B\u7ED3\u63D0\u793A\u8BCD\u7C7B\u578B");
+        const settings = getSettings();
+        if (action === "restore-summary-prompt") {
+          settings.summaryPrompts[kind] = structuredClone(DEFAULT_SUMMARY_PROMPTS[kind]);
+          saveSettings();
+          toast("success", `${kind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3"}\u63D0\u793A\u8BCD\u5DF2\u6062\u590D\u9ED8\u8BA4`);
+          await renderWorkspace();
+        } else {
+          const next = { ...settings.summaryPrompts[kind] };
+          for (const section of ["coreQuestion", "includeRules", "excludeRules", "updateRules", "expressionRules"]) {
+            const input = workspace.querySelector(`[data-ma11-summary-prompt="${kind}"][data-ma11-summary-section="${section}"]`);
+            const value2 = safeText(input?.value, 6e3).trim();
+            if (!value2) throw new Error(`${kind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3"}\u7684\u201C${section}\u201D\u4E0D\u80FD\u4E3A\u7A7A`);
+            next[section] = value2;
+          }
+          settings.summaryPrompts[kind] = next;
+          saveSettings();
+          toast("success", `${kind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3"}\u63D0\u793A\u8BCD\u5DF2\u4FDD\u5B58`);
+          await renderWorkspace();
+        }
       }
       const tableDefinitionKey = actionButton?.dataset.ma11TableKey || "";
       if (action === "create-table") {
