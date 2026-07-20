@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.2.0-rc.53";
-var PIPELINE_VERSION = "ma-pipeline-53";
+var VERSION = "1.2.0-rc.56";
+var PIPELINE_VERSION = "ma-pipeline-56";
 var DEFAULT_SETTINGS = {
   enabled: true,
   autoState: true,
@@ -4270,28 +4270,45 @@ function legacyLogicalKey(entry, info) {
   }
   return "";
 }
+async function waitForWorldInfoEditorPaint() {
+  const raf = typeof window?.requestAnimationFrame === "function" ? window.requestAnimationFrame.bind(window) : null;
+  if (!raf) {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    return;
+  }
+  await new Promise((resolve) => raf(() => raf(() => resolve())));
+}
 async function reloadWorldInfoEditor(wi, name, loadIfNotSelected = false) {
   const context = getContext();
-  const updateList = context.updateWorldInfoList ?? wi.updateWorldInfoList;
+  const contextUpdateList = context.updateWorldInfoList;
+  const moduleUpdateList = wi.updateWorldInfoList;
+  const updateList = contextUpdateList ?? moduleUpdateList;
   if (typeof updateList === "function") {
-    await Promise.resolve(updateList.call(context));
+    await Promise.resolve(updateList.call(contextUpdateList ? context : wi));
   }
   const names = typeof context.getWorldInfoNames === "function" ? context.getWorldInfoNames() : Array.isArray(wi.world_names) ? [...wi.world_names] : [];
   const listed = !names.length || names.includes(name);
   const editorSelect = document.querySelector("#world_editor_select");
   const selectedName = editorSelect?.selectedOptions?.[0]?.textContent?.trim() ?? "";
   const shouldRenderTarget = loadIfNotSelected || selectedName === name;
+  const contextShow = context.showWorldEditor;
+  const moduleShow = wi.showWorldEditor;
+  const show = contextShow ?? moduleShow;
+  if (shouldRenderTarget && typeof show === "function") {
+    if (editorSelect && listed && editorSelect.options) {
+      const targetOption = Array.from(editorSelect.options).find((option) => option.textContent?.trim() === name);
+      if (targetOption) editorSelect.value = targetOption.value;
+    }
+    await Promise.resolve(show.call(contextShow ? context : wi, name));
+    await waitForWorldInfoEditorPaint();
+    return true;
+  }
   const contextReload = context.reloadWorldInfoEditor;
   const moduleReload = wi.reloadEditor ?? wi.reloadWorldInfoEditor;
   const reload = contextReload ?? moduleReload;
   if (typeof reload === "function" && listed) {
     await Promise.resolve(reload.call(contextReload ? context : wi, name, loadIfNotSelected));
-  }
-  if (shouldRenderTarget && typeof wi.showWorldEditor === "function") {
-    await wi.showWorldEditor(name);
-    return true;
-  } else if (typeof reload === "function") {
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await waitForWorldInfoEditorPaint();
   }
   return false;
 }
@@ -7151,19 +7168,31 @@ async function recalculateInvalidatedHistory() {
   if (startIndex === void 0) throw new Error("\u5C1A\u672A\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9");
   const endIndex = getChat().length;
   const processableIndexes = Array.from({ length: Math.max(0, endIndex - startIndex) }, (_, offset) => startIndex + offset).filter((index) => isProcessableAssistantMessage(getMessage(index)));
+  const previousRecovery = state2.historyRecovery;
+  const canResumeCore = Boolean(
+    previousRecovery && previousRecovery.startIndex === startIndex && ["failed", "rebuilding-core"].includes(previousRecovery.phase) && Number.isInteger(previousRecovery.currentIndex) && processableIndexes.includes(Number(previousRecovery.currentIndex))
+  );
+  const resumeOffset = canResumeCore ? processableIndexes.indexOf(Number(previousRecovery?.currentIndex)) : previousRecovery && previousRecovery.startIndex === startIndex && ["rebuilding-derived", "publishing-lorebook", "partial"].includes(previousRecovery.phase) ? processableIndexes.length : 0;
+  const completedBeforeRun = resumeOffset;
+  const remainingIndexes = processableIndexes.slice(resumeOffset);
   state2.historyRecovery = {
     startIndex,
     endIndex,
-    currentIndex: processableIndexes[0],
-    completedCount: 0,
+    currentIndex: remainingIndexes[0] ?? processableIndexes.at(-1),
+    completedCount: completedBeforeRun,
     totalCount: processableIndexes.length,
-    phase: "rebuilding-core",
+    phase: remainingIndexes.length ? "rebuilding-core" : "rebuilding-derived",
     updatedAt: nowIso()
   };
   await putChatState(state2);
   let latest = null;
   const recoveredMessageKeys = /* @__PURE__ */ new Set();
-  for (const [position, index] of processableIndexes.entries()) {
+  for (const index of processableIndexes.slice(0, completedBeforeRun)) {
+    const attached = getAttachedArtifact(getMessage(index));
+    if (attached?.messageKey) recoveredMessageKeys.add(attached.messageKey);
+  }
+  for (const [runPosition, index] of remainingIndexes.entries()) {
+    const absolutePosition = completedBeforeRun + runPosition;
     if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u91CD\u7B97\u5DF2\u505C\u6B62");
     try {
       latest = await processMessage(index, false, { skipDerived: true, historyRecovery: true });
@@ -7175,8 +7204,8 @@ async function recalculateInvalidatedHistory() {
       }
       const completedState = await getChatState(chatKey);
       if (completedState.historyRecovery) {
-        completedState.historyRecovery.completedCount = position + 1;
-        completedState.historyRecovery.currentIndex = processableIndexes[position + 1] ?? index;
+        completedState.historyRecovery.completedCount = absolutePosition + 1;
+        completedState.historyRecovery.currentIndex = processableIndexes[absolutePosition + 1] ?? index;
         completedState.historyRecovery.phase = "rebuilding-core";
         completedState.historyRecovery.error = void 0;
         completedState.historyRecovery.updatedAt = nowIso();
@@ -7188,7 +7217,7 @@ async function recalculateInvalidatedHistory() {
       failedState.historyRecovery = {
         ...failedState.historyRecovery ?? state2.historyRecovery,
         currentIndex: index,
-        completedCount: position,
+        completedCount: absolutePosition,
         phase: "failed",
         error: detail,
         updatedAt: nowIso()
@@ -7442,12 +7471,35 @@ async function applyLorebookMaintenance2(index) {
     }
   }, { priority: 70, chatKey: artifact.chatKey });
 }
-async function forceSummary(_index, kind) {
+async function forceSummary(requestedIndex, kind) {
   if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
   const latest = latestSnapshotArtifact();
   if (!latest) throw new Error("\u6CA1\u6709\u6210\u529F\u72B6\u6001\u8868\uFF0C\u4E0D\u80FD\u751F\u6210\u603B\u7ED3");
+  if (Number.isInteger(requestedIndex) && requestedIndex >= 0 && requestedIndex !== latest.index) {
+    throw new Error("\u603B\u7ED3\u53EA\u80FD\u57FA\u4E8E\u6700\u65B0\u6210\u529F\u72B6\u6001\u8868");
+  }
   const { index, artifact } = latest;
   const scheduledHistoryRevision = currentHistoryRevision(artifact.chatKey);
+  taskQueue.cancelPendingMatching(
+    (task) => Boolean(
+      task.chatKey === artifact.chatKey && task.automatic === true && ["smallSummary", "largeSummary", "sync"].includes(String(task.kind))
+    ),
+    "\u73A9\u5BB6\u5DF2\u624B\u52A8\u63D0\u4EA4\u603B\u7ED3\uFF0C\u65E7\u81EA\u52A8\u6D3E\u751F\u4EFB\u52A1\u5DF2\u53D6\u6D88"
+  );
+  const cancelledActiveSummary = taskQueue.cancelActiveMatching(
+    (task) => Boolean(
+      task.chatKey === artifact.chatKey && task.automatic === true && ["smallSummary", "largeSummary"].includes(String(task.kind))
+    ),
+    "\u73A9\u5BB6\u5DF2\u624B\u52A8\u63D0\u4EA4\u603B\u7ED3\uFF0C\u65E7\u81EA\u52A8\u603B\u7ED3\u5DF2\u8BF7\u6C42\u53D6\u6D88"
+  );
+  if (cancelledActiveSummary) abortActiveAutomaticSummaryRequests();
+  const hasLiveSummaryTask = taskQueue.list().some((task) => Boolean(
+    ["queued", "running"].includes(String(task.state)) && task.chatKey === artifact.chatKey && ["smallSummary", "largeSummary"].includes(String(task.kind)) && (!task.messageKey || task.messageKey === artifact.messageKey)
+  ));
+  if (["queued", "running"].includes(artifact.stages.summary.status) && !hasLiveSummaryTask) {
+    markStage(artifact, "summary", "failed", "\u4E0A\u6B21\u603B\u7ED3\u4EFB\u52A1\u5DF2\u7ED3\u675F\u4F46\u72B6\u6001\u672A\u6536\u5C3E\uFF0C\u5DF2\u91CA\u653E\u5E76\u5141\u8BB8\u91CD\u65B0\u63D0\u4EA4");
+    await saveArtifactToMessage(index, artifact);
+  }
   const key = `${PIPELINE_VERSION}:force-summary:${kind}:${artifact.chatKey}:${artifact.messageKey}`;
   return taskQueue.run(key, `\u7ACB\u5373${kind === "small" ? "\u5C0F" : "\u5927"}\u603B\u7ED3`, kind === "small" ? "smallSummary" : "largeSummary", async (guard) => {
     if (currentChatKey() !== artifact.chatKey) throw new TaskSkippedError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u603B\u7ED3\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
@@ -7478,7 +7530,15 @@ async function forceSummary(_index, kind) {
       unbindArtifactTaskGuard(artifact, guard);
       unbindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
     }
-  }, { priority: 70, chatKey: artifact.chatKey });
+  }, {
+    priority: 70,
+    chatKey: artifact.chatKey,
+    triggerSource: "manual-summary",
+    messageKey: artifact.messageKey,
+    messageFingerprint: artifact.sourceFingerprint,
+    historyRevisionAtEnqueue: scheduledHistoryRevision,
+    automatic: false
+  });
 }
 function getArtifactAt(index) {
   return getAttachedArtifact(getMessage(index));
@@ -8065,13 +8125,18 @@ function currentArtifact() {
   return latestArtifact();
 }
 function workspacePipelineBusy(artifactInfo = currentArtifact()) {
-  const stageBusy = Boolean(artifactInfo && Object.values(artifactInfo.artifact.stages).some(
-    (stage) => stage.status === "queued" || stage.status === "running"
+  const artifact = artifactInfo?.artifact;
+  const chatKey = artifact?.chatKey || currentChatKey();
+  const liveTasks = taskQueue.list().filter((task) => Boolean(
+    (task.state === "queued" || task.state === "running") && (!task.chatKey || task.chatKey === chatKey) && (!artifact || !task.messageKey || task.messageKey === artifact.messageKey)
   ));
-  const chatKey = artifactInfo?.artifact.chatKey || currentChatKey();
-  const queueBusy = taskQueue.list().some(
-    (task) => (task.state === "queued" || task.state === "running") && (!task.chatKey || task.chatKey === chatKey)
-  );
+  const queueBusy = liveTasks.length > 0;
+  const stageBusy = Boolean(artifact && Object.entries(artifact.stages).some(([stageName, stage]) => {
+    if (stage.status !== "queued" && stage.status !== "running") return false;
+    if (stageName === "summary") return liveTasks.some((task) => ["smallSummary", "largeSummary"].includes(String(task.kind)));
+    if (stageName === "sync") return liveTasks.some((task) => String(task.kind) === "sync");
+    return true;
+  }));
   return workspacePipelineActionPending || stageBusy || queueBusy;
 }
 function workspaceHasFocusedEditor(workspace) {
@@ -9263,6 +9328,27 @@ function tone(stage) {
   if (stage?.status === "running" || stage?.status === "queued") return "working";
   return "neutral";
 }
+function liveTaskMatchesArtifact(artifact, kinds) {
+  return taskQueue.list().some((task) => Boolean(
+    ["queued", "running"].includes(String(task.state)) && (!task.chatKey || task.chatKey === artifact.chatKey) && (!task.messageKey || task.messageKey === artifact.messageKey) && kinds.includes(String(task.kind))
+  ));
+}
+function effectiveStageBusy(artifact, stage) {
+  const status = artifact.stages[stage]?.status;
+  if (!["queued", "running"].includes(status ?? "idle")) return false;
+  if (stage === "summary") return liveTaskMatchesArtifact(artifact, ["smallSummary", "largeSummary"]);
+  if (stage === "sync") return liveTaskMatchesArtifact(artifact, ["sync"]);
+  return true;
+}
+function displayStage(artifact, stage) {
+  const value2 = artifact.stages[stage];
+  if (!["queued", "running"].includes(value2?.status ?? "idle") || effectiveStageBusy(artifact, stage)) return value2;
+  return {
+    ...value2,
+    status: "failed",
+    error: value2?.error || "\u4EFB\u52A1\u5DF2\u7ED3\u675F\u4F46\u754C\u9762\u72B6\u6001\u672A\u6536\u5C3E\uFF0C\u53EF\u91CD\u65B0\u63D0\u4EA4"
+  };
+}
 function findMessageElement2(index) {
   return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
 }
@@ -9270,14 +9356,14 @@ function messageStageAvailability(index, artifact) {
   const settings = getSettings();
   const latestText = index === latestAssistantIndex();
   const latestSnapshot = index === latestSnapshotArtifact()?.index;
-  const notBusy = (status) => !["queued", "running"].includes(status ?? "idle");
+  const notBusy = (stage) => !effectiveStageBusy(artifact, stage);
   return {
-    audit: Boolean(settings.enabled && latestText && settings.auditEnabled && settings.auditPrompt.trim() && notBusy(artifact.stages.audit.status)),
-    revision: Boolean(settings.enabled && latestText && artifact.audit && !artifact.audit.passed && artifact.audit.decision !== "block" && notBusy(artifact.stages.revision.status)),
-    state: Boolean(settings.enabled && latestText && (!settings.auditEnabled || artifact.audit?.passed) && notBusy(artifact.stages.state.status)),
-    small: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === "success" && notBusy(artifact.stages.summary.status)),
-    large: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === "success" && notBusy(artifact.stages.summary.status)),
-    sync: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === "success" && notBusy(artifact.stages.sync.status))
+    audit: Boolean(settings.enabled && latestText && settings.auditEnabled && settings.auditPrompt.trim() && notBusy("audit")),
+    revision: Boolean(settings.enabled && latestText && artifact.audit && !artifact.audit.passed && artifact.audit.decision !== "block" && notBusy("revision")),
+    state: Boolean(settings.enabled && latestText && (!settings.auditEnabled || artifact.audit?.passed) && notBusy("state")),
+    small: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === "success" && notBusy("summary")),
+    large: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === "success" && notBusy("summary")),
+    sync: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === "success" && notBusy("sync"))
   };
 }
 var pendingRetryIndexes = /* @__PURE__ */ new Set();
@@ -9296,8 +9382,15 @@ function panelHtml(index, artifact) {
   const latestSnapshot = index === latestSnapshotArtifact()?.index;
   const available = messageStageAvailability(index, artifact);
   const enabled = (action) => !retrying && available[action] ? "" : "disabled";
-  const stages = [artifact.stages.audit, artifact.stages.revision, artifact.stages.state, artifact.stages.summary, artifact.stages.sync];
-  const chainBusy = stages.some((stage) => ["queued", "running"].includes(stage.status));
+  const displayStages = {
+    audit: displayStage(artifact, "audit"),
+    revision: displayStage(artifact, "revision"),
+    state: displayStage(artifact, "state"),
+    summary: displayStage(artifact, "summary"),
+    sync: displayStage(artifact, "sync")
+  };
+  const stages = [displayStages.audit, displayStages.revision, displayStages.state, displayStages.summary, displayStages.sync];
+  const chainBusy = Object.keys(displayStages).some((stage) => effectiveStageBusy(artifact, stage));
   const chainFailed = stages.some((stage) => ["failed", "blocked"].includes(stage.status));
   const completedStages = stages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
   const chainComplete = artifact.stages.state.status === "success" && ["success", "skipped"].includes(artifact.stages.summary.status) && ["success", "skipped"].includes(artifact.stages.sync.status);
@@ -9318,11 +9411,11 @@ function panelHtml(index, artifact) {
       <div class="ma11-message-detail" ${expanded ? "" : "hidden"}>
         <div class="ma11-message-progress-head"><span>\u5904\u7406\u8FDB\u5EA6</span><b>${completedStages}/5</b></div>
         <div class="ma11-flow" aria-label="\u5BA1\u6838\u5230\u4E16\u754C\u4E66\u7684\u5904\u7406\u8FDB\u5EA6">
-          ${flowStageHtml(1, "\u5BA1\u6838", artifact.stages.audit)}
-          ${flowStageHtml(2, "\u4FEE\u6B63", artifact.stages.revision)}
-          ${flowStageHtml(3, "\u8868\u683C", artifact.stages.state)}
-          ${flowStageHtml(4, "\u603B\u7ED3", artifact.stages.summary)}
-          ${flowStageHtml(5, "\u4E16\u754C\u4E66", artifact.stages.sync)}
+          ${flowStageHtml(1, "\u5BA1\u6838", displayStages.audit)}
+          ${flowStageHtml(2, "\u4FEE\u6B63", displayStages.revision)}
+          ${flowStageHtml(3, "\u8868\u683C", displayStages.state)}
+          ${flowStageHtml(4, "\u603B\u7ED3", displayStages.summary)}
+          ${flowStageHtml(5, "\u4E16\u754C\u4E66", displayStages.sync)}
         </div>
         ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ""}
         ${latestText ? `<div class="ma11-message-primary-actions">

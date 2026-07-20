@@ -1,6 +1,6 @@
-# Mirror Abyss 1.2.0-rc.53 验收记录
+# Mirror Abyss 1.2.0-rc.56 验收记录
 
-流水线：`ma-pipeline-53`
+流水线：`ma-pipeline-56`
 
 ## 架构验收
 
@@ -68,3 +68,35 @@ npm run verify
 ## 已知边界
 
 固定文本壳允许字段内容使用自然语言，但外层标签和字段名必须存在。格式缺失时任务明确失败，不会把散文或旧 JSON 猜测为有效数据，也不会静默写入半成品。
+
+
+## rc.54 世界书界面刷新
+
+- `npm run test:ui-sync`：通过。
+- `npm run test:rc54:worldbook-refresh`：通过。
+- 验证当前打开的目标书不再并发触发 `reloadEditor` 和 `showWorldEditor`。
+- 验证清理后的唯一条目不会被延迟的旧 `change` 渲染覆盖。
+- 验证后台未打开的世界书仍使用选择器刷新，不强制打开编辑器。
+
+## rc.55 小总结空响应与队列恢复
+
+- `npm run test:queue`：通过；验证 `No message generated` 失败后，同 key 已从 `inFlight` 释放，第二次手动重试实际执行。
+- `npm run test:ui-sync`：通过；验证持久化 `summary=queued` 但无真实任务时，立即小总结按钮恢复可用；真实总结任务运行时仍阻止重复提交。
+- `npm run test:generator-lane`：通过；空响应继续被识别为独立模型失败，请求 lane 正常释放。
+- `npm run test:derived`、`npm run test:partial`：通过；自动总结失败不回滚核心状态，也不破坏后续派生链。
+- `npm run test:rc32:history-recovery`、`npm run test:rc33:recovery-race`：通过；历史恢复和自动任务竞态未回归。
+- 完整 `npm run verify` 前半链全部通过；因外部 20 分钟执行上限中断后，从中断点续跑的剩余回归、类型检查、构建和语法检查全部通过。
+
+实机预期：Connection Profile 返回空内容后，任务显示失败；再次点击“立即小总结”会重新调用模型，不再永久停留在“排队/处理中”。
+
+
+
+## rc.56 历史核心断点续跑
+
+- `npm run test:rc56:history-resume`：通过。三条累计重建中第二条失败；第二次继续只重新调用第二、第三条，第一条调用结果保持不变。
+- `npm run test:rc32:history-recovery`、`test:rc32:history-transaction`、`test:rc33:recovery-race`：通过。历史锁、世界书提交边界和陈旧自动任务取消未回归。
+- `npm run test:smart-rebuild`、`test:rc42:chain`、`test:step2`、`test:step3`：通过。旧智能重建、链路缩短、历史失效与受保护提交未回归。
+- `npm run test:rc55:summary-retry`：通过。小总结空响应后的队列恢复仍有效。
+- TypeScript 类型检查、浏览器构建和 `node --check index.js`：通过。
+
+实机预期：累计历史重建在中间消息失败后，再点“继续重建”应从该失败消息开始；前面已成功消息不会再次产生模型请求。
