@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-当前稳定版：`1.3.12`　流水线：`ma-pipeline-75`
+当前版本：`1.3.13`　流水线：`ma-pipeline-76`
 
 镜渊是 SillyTavern 的长线叙事记忆扩展。它不接管角色正文生成，而是在正文生成后完成规则审核、必要修正、事实提取、对象状态维护、分层总结、历史恢复和世界书发布。
 
@@ -20,13 +20,21 @@
 
 ## 安装
 
-1. 下载 GitHub Releases 中的 `Mirror-Abyss-1.3.12.zip`。
+1. 下载 GitHub Releases 中的 `Mirror-Abyss-1.3.13.zip`。
 2. 在 SillyTavern 扩展管理中安装压缩包。
 3. 刷新 SillyTavern。
 4. 打开“镜渊”工作区，按照总览中的开箱检查完成连接与自动化设置。
 
 最低 SillyTavern 版本：`1.16.0`。
 
+
+## 1.3.13 固定语义状态协议
+
+- 状态模型只输出中文固定语义层：对象类型、对象、变化层、动作和内容。
+- `baseContent`、`currentStates`、稳定 ID 等数据库实现细节全部留在插件内部，由唯一映射器确定性写入。
+- 自定义表格通过可见表名和字段显示名进入模型协议；UI 表头、模型语义标签和内部稳定键相互独立。
+- 旧 `<MA_FACT>`、`<MA_ROW>` 与 `field=` 协议已移除，不做测试存档兼容；旧响应夹具需要按新协议重建。
+- 未注册语义层会明确拒绝，模型不能自行发明 `currentTime` 等字段。
 
 ## 1.3.12 历史工作流收拢（第一阶段）
 
@@ -140,6 +148,7 @@
 - [插件概念与业务逻辑](docs/PLUGIN_LOGIC.md)
 - [运行工作流收拢路线](docs/WORKFLOW_REFACTOR_PLAN.md)
 - [更新记录](CHANGELOG.md)
+- [1.3.13 更新说明](docs/releases/1.3.13.md)
 - [1.3.12 更新说明](docs/releases/1.3.12.md)
 - [1.3.11 更新说明](docs/releases/1.3.11.md)
 - [1.3.10 更新说明](docs/releases/1.3.10.md)

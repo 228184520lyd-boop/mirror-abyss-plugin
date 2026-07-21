@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.3.12";
-var PIPELINE_VERSION = "ma-pipeline-75";
+var VERSION = "1.3.13";
+var PIPELINE_VERSION = "ma-pipeline-76";
 var DEFAULT_CONTENT_LIMITS = {
   tables: {
     spacetime: 700,
@@ -38,28 +38,28 @@ var DEFAULT_STATE_PROMPTS = {
   ].join("\n"),
   routingRules: [
     "\u5206\u7C7B\u770B\u5BF9\u8C61\u672C\u8D28\u548C\u4E8B\u5B9E\u4F5C\u7528\u57DF\uFF0C\u4E0D\u770B\u662F\u5426\u6709\u540D\u5B57\u3001\u76EE\u6807\u3001\u5173\u7CFB\u3001\u884C\u52A8\u6216\u62DF\u4EBA\u5316\u53D9\u8FF0\uFF1B\u89D2\u8272\u8868\u4E0D\u662F\u515C\u5E95\u3002",
-    "characters\uFF08\u89D2\u8272\uFF09\uFF1A\u5177\u4F53\u4E2A\u4F53\u624D\u662F character\uFF0C\u4EC5\u5177\u4F53\u4EBA\u7269\u3001\u72EC\u7ACB\u4EBA\u683C\u751F\u7269\u6216\u610F\u8BC6\u4F53\uFF1B\u7EC4\u7EC7\u3001\u9635\u8425\u3001\u653F\u6743\u3001\u673A\u6784\u3001\u7FA4\u4F53\u3001\u5730\u70B9\u3001\u5236\u5EA6\u548C\u89C4\u5219\u4E0D\u5F97\u8FDB\u5165\u3002",
-    "scenes\uFF08\u573A\u666F\uFF09\uFF1A\u573A\u666F\u662F\u201C\u672C\u6B21\u5C40\u9762\u5207\u7247\u201D\uFF0C\u8BB0\u5F55\u53C2\u4E0E\u8005\u3001\u9650\u5236\u4E0E\u627F\u63A5\u70B9\uFF1B\u7ED3\u675F\u540E\u6807\u8BB0\u5DF2\u7ED3\u675F/\u5DF2\u79BB\u5F00\uFF0C\u7ED3\u679C\u5DF2\u5206\u53D1\u4E14\u65E0\u72EC\u7ACB\u540E\u7EED\u65F6\u53EF\u7ED3\u7B97\u5220\u9664\u3002",
-    "regions\uFF08\u5730\u70B9\uFF09\uFF1A\u53EF\u7A33\u5B9A\u5B9A\u4F4D\u7684\u5730\u70B9\u3001\u533A\u57DF\u3001\u5EFA\u7B51\u3001\u623F\u95F4\u3001\u9053\u8DEF\u6216\u79D8\u5883\uFF1B\u5F53\u524D\u6240\u5728\u4F4D\u7F6E\u53EF\u540C\u65F6\u5199\u5165 spacetime\u3002",
-    "globalChanges\uFF08\u5168\u5C40\u53D8\u5316\uFF09\uFF1A\u7EC4\u7EC7\u3001\u9635\u8425\u3001\u653F\u6743\u3001\u673A\u6784\u3001\u7FA4\u4F53\u683C\u5C40\u3001\u5236\u5EA6\u6267\u884C\u4E0E\u4E16\u754C\u6001\u52BF\uFF1B\u5373\u4F7F\u50CF\u89D2\u8272\u4E00\u6837\u884C\u52A8\u4E5F\u5C5E\u5168\u5C40\u3002",
-    "items\uFF08\u7269\u54C1\uFF09\u8BB0\u5F55\u53EF\u533A\u5206\u7684\u5177\u4F53\u7269\u4EF6\u3001\u88C5\u5907\u3001\u6587\u4EF6\u3001\u6750\u6599\u3001\u5BB9\u5668\u3001\u8D27\u5E01\u6279\u6B21\u6216\u5173\u952E\u8D44\u6E90\uFF1B\u4E0D\u8981\u628A\u591A\u4E2A\u6709\u72EC\u7ACB\u5F52\u5C5E\u6216\u72B6\u6001\u7684\u547D\u540D\u7269\u54C1\u5408\u5E76\u6210\u4E00\u884C\u3002",
-    "foundations \u8BB0\u5F55\u7A33\u5B9A\u4E16\u754C\u89C4\u5219\uFF1Bevents\u3001spacetime \u5206\u522B\u8BB0\u5F55\u4E8B\u4EF6\u7EBF\u548C\u5F53\u524D\u65F6\u7A7A\uFF1B\u53EA\u6709\u786E\u5B9E\u65E0\u6CD5\u5B89\u5168\u5F52\u7C7B\u65F6\u624D\u7528 customObjects\u3002",
+    "\u89D2\u8272\uFF1A\u4EC5\u5177\u4F53\u4EBA\u7269\u3001\u72EC\u7ACB\u4EBA\u683C\u751F\u7269\u6216\u610F\u8BC6\u4F53\uFF1B\u7EC4\u7EC7\u3001\u9635\u8425\u3001\u653F\u6743\u3001\u673A\u6784\u3001\u7FA4\u4F53\u3001\u5730\u70B9\u3001\u5236\u5EA6\u548C\u89C4\u5219\u4E0D\u5F97\u8FDB\u5165\u3002",
+    "\u573A\u666F\uFF1A\u573A\u666F\u662F\u201C\u672C\u6B21\u5C40\u9762\u5207\u7247\u201D\uFF0C\u8BB0\u5F55\u53C2\u4E0E\u8005\u3001\u9650\u5236\u4E0E\u627F\u63A5\u70B9\uFF1B\u7ED3\u675F\u540E\u6807\u8BB0\u5DF2\u7ED3\u675F\u6216\u5DF2\u79BB\u5F00\uFF0C\u7ED3\u679C\u5DF2\u5206\u53D1\u4E14\u65E0\u72EC\u7ACB\u540E\u7EED\u65F6\u53EF\u7ED3\u7B97\u5220\u9664\u3002",
+    "\u5730\u70B9\uFF1A\u53EF\u7A33\u5B9A\u5B9A\u4F4D\u7684\u5730\u70B9\u3001\u533A\u57DF\u3001\u5EFA\u7B51\u3001\u623F\u95F4\u3001\u9053\u8DEF\u6216\u79D8\u5883\uFF1B\u5F53\u524D\u6240\u5728\u4F4D\u7F6E\u53EF\u540C\u65F6\u66F4\u65B0\u65F6\u7A7A\u3002",
+    "\u5168\u5C40\u53D8\u5316\uFF1A\u7EC4\u7EC7\u3001\u9635\u8425\u3001\u653F\u6743\u3001\u673A\u6784\u3001\u7FA4\u4F53\u683C\u5C40\u3001\u5236\u5EA6\u6267\u884C\u4E0E\u4E16\u754C\u6001\u52BF\uFF1B\u5373\u4F7F\u50CF\u89D2\u8272\u4E00\u6837\u884C\u52A8\u4E5F\u5C5E\u5168\u5C40\u53D8\u5316\u3002",
+    "\u7269\u54C1\uFF1A\u8BB0\u5F55\u53EF\u533A\u5206\u7684\u5177\u4F53\u7269\u4EF6\u3001\u88C5\u5907\u3001\u6587\u4EF6\u3001\u6750\u6599\u3001\u5BB9\u5668\u3001\u8D27\u5E01\u6279\u6B21\u6216\u5173\u952E\u8D44\u6E90\uFF1B\u4E0D\u8981\u628A\u591A\u4E2A\u6709\u72EC\u7ACB\u5F52\u5C5E\u6216\u72B6\u6001\u7684\u547D\u540D\u7269\u54C1\u5408\u5E76\u6210\u4E00\u884C\u3002",
+    "\u57FA\u7840\u8BBE\u5B9A\u8BB0\u5F55\u7A33\u5B9A\u4E16\u754C\u89C4\u5219\uFF1B\u4E8B\u4EF6\u4E0E\u65F6\u7A7A\u5206\u522B\u8BB0\u5F55\u4E8B\u4EF6\u7EBF\u548C\u5F53\u524D\u65F6\u7A7A\uFF1B\u53EA\u6709\u786E\u5B9E\u65E0\u6CD5\u5B89\u5168\u5F52\u7C7B\u65F6\u624D\u7528\u81EA\u5B9A\u4E49\u5BF9\u8C61\u3002",
     "\u5DF2\u6709\u5BF9\u8C61\u5FC5\u987B\u6CBF\u7528\u539F\u8868\uFF0C\u4E0D\u5F97\u56E0\u672C\u8F6E\u63AA\u8F9E\u53D8\u5316\u6539\u6295\u89D2\u8272\u8868\u6216\u65B0\u5EFA\u91CD\u590D\u6761\u76EE\u3002"
   ].join("\n"),
   evidenceRules: [
     "\u53EA\u4F7F\u7528\u672C\u6B21\u6B63\u6587\u660E\u786E\u51FA\u73B0\u7684\u4E8B\u5B9E\u4E0E\u63D2\u4EF6\u63D0\u4F9B\u7684\u65E7\u8BB0\u5F55\uFF0C\u4E0D\u6309\u5E38\u8BC6\u3001\u8EAB\u4EFD\u6A21\u677F\u3001\u6587\u98CE\u6697\u793A\u6216\u53EF\u80FD\u6027\u8865\u5168\u3002",
-    "\u4EB2\u5386\u5E76\u660E\u786E\u53D1\u751F\u7684\u5185\u5BB9\u53EF\u6807\u4E3A confirmed\uFF1B\u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u6216\u4E3B\u89C2\u5224\u65AD\u5FC5\u987B\u4FDD\u7559 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u81EA\u52A8\u5347\u7EA7\u3002",
+    "\u4EB2\u5386\u5E76\u660E\u786E\u53D1\u751F\u7684\u5185\u5BB9\u53EF\u6807\u4E3A\u786E\u8BA4\uFF1B\u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u6216\u4E3B\u89C2\u5224\u65AD\u5FC5\u987B\u4FDD\u7559\u8F6C\u8FF0\u6216\u4E0D\u786E\u5B9A\uFF0C\u4E0D\u5F97\u81EA\u52A8\u5347\u7EA7\u3002",
     "\u65B0\u65E7\u5185\u5BB9\u51B2\u7A81\u65F6\uFF0C\u53EA\u6709\u6B63\u6587\u660E\u786E\u63A8\u7FFB\u3001\u7ED3\u675F\u6216\u66FF\u6362\u65E7\u4E8B\u5B9E\u624D\u66F4\u65B0\uFF1B\u8BC1\u636E\u4E0D\u8DB3\u65F6\u4FDD\u7559\u65E7\u8BB0\u5F55\u5E76\u7701\u7565\u672C\u6B21\u66F4\u65B0\u3002",
     "\u540C\u540D\u3001\u8FD1\u540D\u6216\u540C\u804C\u4E1A\u5BF9\u8C61\u6CA1\u6709\u660E\u786E\u522B\u540D\u3001\u5173\u7CFB\u6216\u8FDE\u7EED\u4E0A\u4E0B\u6587\u65F6\u4E0D\u5F97\u5408\u5E76\uFF1B\u8EAB\u4EFD\u4E0D\u6E05\u65F6\u5B81\u53EF\u4E0D\u5199\uFF0C\u4E5F\u4E0D\u8981\u9519\u8BEF\u5F52\u5E76\u3002",
     "\u6B63\u6587\u672A\u660E\u786E\u5EFA\u7ACB\u6301\u7EED\u4E8B\u5B9E\u65F6\uFF0C\u9ED8\u8BA4\u4E0D\u65B0\u5EFA\uFF1B\u65E0\u6CD5\u786E\u8BA4\u53D8\u5316\u6216\u8EAB\u4EFD\u65F6\uFF0C\u7701\u7565\u5BF9\u5E94\u4E8B\u5B9E\u548C\u6761\u76EE\u3002"
   ].join("\n"),
   updateRules: [
-    "\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u7ED3\u675F\u3001\u88AB\u66FF\u6362\u6216\u53D1\u751F\u5B9E\u8D28\u53D8\u5316\u7684\u5B57\u6BB5\uFF1B\u518D\u6B21\u51FA\u73B0\u3001\u91CD\u590D\u63CF\u8FF0\u548C\u63AA\u8F9E\u53D8\u5316\u4E0D\u7B97\u66F4\u65B0\u3002",
+    "\u53EA\u8F93\u51FA\u672C\u8F6E\u65B0\u589E\u3001\u7ED3\u675F\u3001\u88AB\u66FF\u6362\u6216\u53D1\u751F\u5B9E\u8D28\u53D8\u5316\u7684\u8BED\u4E49\u5C42\uFF1B\u518D\u6B21\u51FA\u73B0\u3001\u91CD\u590D\u63CF\u8FF0\u548C\u63AA\u8F9E\u53D8\u5316\u4E0D\u7B97\u66F4\u65B0\u3002",
     "\u63D0\u4EA4\u524D\u9010\u9879\u590D\u67E5\u6240\u6709\u53EF\u533A\u5206\u7269\u54C1\uFF1A\u6240\u6709\u6743\u3001\u4F4D\u7F6E\u3001\u6570\u91CF\u3001\u5B8C\u6574\u6027\u3001\u53EF\u7528\u6027\u3001\u9690\u85CF\u72B6\u6001\u3001\u7528\u9014\u6216\u540E\u7EED\u53EF\u53D6\u5F97\u6027\u88AB\u5EFA\u7ACB\u6216\u6539\u53D8\u65F6\uFF0C\u6BCF\u4EF6\u72EC\u7ACB\u8F93\u51FA\uFF0C\u4E0D\u80FD\u53EA\u6311\u6700\u663E\u773C\u7684\u4E00\u4EF6\u3002",
     "\u63D0\u4EA4\u524D\u5FC5\u987B\u786E\u8BA4\u5F53\u524D\u771F\u5B9E\u573A\u666F\u6709\u573A\u666F\u6761\u76EE\uFF1B\u53D1\u751F\u573A\u666F\u5207\u6362\u65F6\uFF0C\u65B0\u573A\u666F\u8BBE\u4E3A\u5F53\u524D\uFF0C\u65E7\u573A\u666F\u66F4\u65B0\u4E3A\u5DF2\u7ED3\u675F\u6216\u5DF2\u79BB\u5F00\u3002",
     "\u57FA\u7840\u5B9A\u4E49\u53EA\u6709\u5728\u6B63\u6587\u660E\u786E\u91CD\u5B9A\u4E49\u3001\u6BC1\u706D\u3001\u91CD\u5EFA\u3001\u8F6C\u8BA9\u6216\u4EBA\u5DE5\u7F16\u8F91\u65F6\u624D\u6539\u53D8\uFF1B\u666E\u901A\u72B6\u6001\u53D8\u5316\u4E0D\u5F97\u8986\u76D6\u57FA\u7840\u5B9A\u4E49\u3002",
-    "\u72B6\u6001\u5B57\u6BB5\u5199\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\uFF1A\u65B0\u72B6\u6001\u66FF\u6362\u65E7\u72B6\u6001\uFF0C\u5DF2\u89E3\u51B3\u672A\u51B3\u4E8B\u9879\u5E94\u5173\u95ED\uFF0C\u4E0D\u628A\u5B8C\u6574\u8FC7\u7A0B\u6301\u7EED\u8FFD\u52A0\u5230\u5F53\u524D\u72B6\u6001\u3002",
-    "\u5173\u7CFB\u53EA\u6709\u5728\u6B63\u6587\u660E\u786E\u5F62\u6210\u627F\u8BFA\u3001\u5F52\u5C5E\u3001\u51B2\u7A81\u3001\u5408\u4F5C\u3001\u652F\u914D\u3001\u4F9D\u8D56\u6216\u5176\u4ED6\u6301\u7EED\u5173\u7CFB\u53D8\u5316\u65F6\u624D\u66F4\u65B0\uFF1B\u660E\u786E\u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272 relationshipStates\uFF1B\u540C\u573A\u3001\u666E\u901A\u4EA4\u8C08\u548C\u5355\u6B21\u5E2E\u52A9\u4E0D\u5EFA\u7ACB\u5173\u7CFB\u3002",
+    "\u5F53\u524D\u72B6\u6001\u5199\u5F53\u524D\u552F\u4E00\u6709\u6548\u7248\u672C\uFF1A\u65B0\u72B6\u6001\u66FF\u6362\u65E7\u72B6\u6001\uFF0C\u5DF2\u89E3\u51B3\u672A\u51B3\u4E8B\u9879\u5E94\u5173\u95ED\uFF0C\u4E0D\u628A\u5B8C\u6574\u8FC7\u7A0B\u6301\u7EED\u8FFD\u52A0\u5230\u5F53\u524D\u72B6\u6001\u3002",
+    "\u5173\u7CFB\u53EA\u6709\u5728\u6B63\u6587\u660E\u786E\u5F62\u6210\u627F\u8BFA\u3001\u5F52\u5C5E\u3001\u51B2\u7A81\u3001\u5408\u4F5C\u3001\u652F\u914D\u3001\u4F9D\u8D56\u6216\u5176\u4ED6\u6301\u7EED\u5173\u7CFB\u53D8\u5316\u65F6\u624D\u66F4\u65B0\uFF1B\u660E\u786E\u5173\u7CFB\u53D8\u5316\u5199\u5165\u89D2\u8272\u7684\u5173\u7CFB\u72B6\u6001\uFF1B\u540C\u573A\u3001\u666E\u901A\u4EA4\u8C08\u548C\u5355\u6B21\u5E2E\u52A9\u4E0D\u5EFA\u7ACB\u5173\u7CFB\u3002",
     "\u6BCF\u6761\u4E8B\u5B9E\u53EA\u8868\u8FBE\u4E00\u4E2A\u4E3B\u4F53\u3001\u4E00\u4E2A\u53D8\u5316\u548C\u4E00\u4E2A\u5F53\u524D\u7ED3\u679C\uFF1B\u76F8\u540C\u4FE1\u606F\u53EA\u4FDD\u7559\u4E00\u6B21\u3002",
     "\u53EA\u8BB0\u5F55\u6B63\u6587\u660E\u786E\u5EFA\u7ACB\u7684\u53D8\u5316\uFF0C\u4E0D\u8BC4\u4EF7\u91CD\u8981\u6027\u3001\u4E0D\u63A8\u6D4B\u672A\u6765\u3001\u4E0D\u63D0\u51FA\u5408\u5E76\u3001\u5220\u9664\u3001\u5F52\u6863\u3001\u7ED3\u7B97\u6216\u957F\u671F\u4EF7\u503C\u5EFA\u8BAE\u3002"
   ].join("\n")
@@ -343,8 +343,8 @@ var OBJECT_LAYER_FIELDS = [
   { key: "currentStates", label: "\u5F53\u524D\u72B6\u6001", description: "\u6B63\u5728\u53D1\u751F\u3001\u77ED\u671F\u6216\u9636\u6BB5\u6027\u7684\u72B6\u6001\uFF1B\u5F53\u524D\u5C42\u5E94\u4FDD\u7559\u6700\u591A\u7EC6\u8282\uFF0C\u5E76\u5141\u8BB8\u540E\u7EED\u66F4\u65B0\u3001\u5173\u95ED\u6216\u66FF\u6362\u3002", type: "string[]", required: false },
   { key: "recentHistory", label: "\u8FD1\u671F\u7ECF\u5386", description: "\u7531\u5C0F\u603B\u7ED3\u5F52\u5E76\u7684\u8FD1\u671F\u4E8B\u4EF6\u8FC7\u7A0B\u3001\u76F4\u63A5\u56E0\u679C\u4E0E\u5C1A\u6709\u540E\u7EED\u4F5C\u7528\u7684\u5F71\u54CD\uFF1B\u7EC6\u8282\u5C11\u4E8E\u5F53\u524D\u5C42\u3001\u591A\u4E8E\u5386\u53F2\u5C42\u3002", type: "string[]", required: false },
   { key: "solidifiedHistory", label: "\u5386\u53F2\u4E8B\u5B9E", description: "\u7531\u5927\u603B\u7ED3\u957F\u671F\u56FA\u5316\u7684\u6700\u7CBE\u7B80\u7ED3\u679C\u4E0E\u4E0D\u53EF\u5FFD\u7565\u5F71\u54CD\uFF1B\u4E0D\u5F97\u628A\u65E0\u5173\u4E8B\u4EF6\u7EBF\u6DF7\u5728\u540C\u4E00\u4E8B\u5B9E\u4E2D\u3002", type: "string[]", required: false },
-  { key: "relatedObjects", label: "\u5173\u8054\u5BF9\u8C61", description: "\u660E\u786E\u53C2\u4E0E\u6216\u53D7\u5F71\u54CD\u7684\u5BF9\u8C61\u7A33\u5B9AID/\u540D\u79F0\uFF1B\u4E0D\u5F97\u56E0\u540C\u573A\u6216\u56F4\u89C2\u5EFA\u7ACB\u5173\u8054\u3002", type: "string[]", required: false },
-  { key: "relatedEvents", label: "\u5173\u8054\u4E8B\u4EF6", description: "\u76F4\u63A5\u65BD\u52A0\u5F53\u524D\u72B6\u6001\u6216\u957F\u671F\u5F71\u54CD\u7684 event_id/\u4E8B\u4EF6\u540D\u79F0\u3002", type: "string[]", required: false },
+  { key: "relatedObjects", label: "\u5173\u8054\u5BF9\u8C61", description: "\u660E\u786E\u53C2\u4E0E\u6216\u53D7\u5F71\u54CD\u7684\u5BF9\u8C61\u7A33\u5B9A\u540D\u79F0\uFF1B\u4E0D\u5F97\u56E0\u540C\u573A\u6216\u56F4\u89C2\u5EFA\u7ACB\u5173\u8054\u3002", type: "string[]", required: false },
+  { key: "relatedEvents", label: "\u5173\u8054\u4E8B\u4EF6", description: "\u76F4\u63A5\u65BD\u52A0\u5F53\u524D\u72B6\u6001\u6216\u957F\u671F\u5F71\u54CD\u7684\u4E8B\u4EF6\u540D\u79F0\u3002", type: "string[]", required: false },
   { key: "absorbedMemory", label: "\u627F\u63A5\u8BB0\u5F55", description: "\u7531\u63D2\u4EF6\u5199\u5165\uFF1A\u5176\u4ED6\u4E34\u65F6\u6761\u76EE\u9000\u51FA\u524D\u5206\u53D1\u5230\u672C\u6761\u76EE\u7684\u6301\u7EED\u7ED3\u679C\u3002\u539F\u6761\u76EE\u5728\u603B\u7ED3\u8986\u76D6\u5BA1\u8BA1\u901A\u8FC7\u540E\u5220\u9664\uFF1B\u6A21\u578B\u4E0D\u5F97\u76F4\u63A5\u586B\u5199\u3002", type: "string[]", required: false }
 ];
 var CHARACTER_FIELDS = [
@@ -1433,76 +1433,126 @@ function fixedTextValue(block, ...keys) {
   return fixedTextValues(block, ...keys).at(-1) ?? "";
 }
 
+// src/domain/state-semantics.ts
+var FORBIDDEN_FIELD_KEYS = /* @__PURE__ */ new Set([
+  "id",
+  "title",
+  "content",
+  "keywords",
+  "status",
+  "recentHistory",
+  "solidifiedHistory",
+  "absorbedMemory",
+  "factIds",
+  "eventId",
+  "eventIds",
+  "recall",
+  "lifecycle"
+]);
+var FIXED_FIELD_LAYERS = [
+  { key: "baseContent", label: "\u8EAB\u4EFD\u5B9A\u4E49", aliases: ["\u8EAB\u4EFD\u5B9A\u4E49", "\u8EAB\u4EFD\u4E0E\u5BF9\u8C61\u5B9A\u4E49", "\u5BF9\u8C61\u5B9A\u4E49", "\u8EAB\u4EFD\u951A\u70B9"] },
+  { key: "currentFacts", label: "\u73B0\u884C\u4E8B\u5B9E", aliases: ["\u73B0\u884C\u4E8B\u5B9E", "\u957F\u671F\u4E0E\u73B0\u884C\u4E8B\u5B9E", "\u6301\u7EED\u4E8B\u5B9E"] },
+  { key: "currentStates", label: "\u5F53\u524D\u72B6\u6001", aliases: ["\u5F53\u524D\u72B6\u6001", "\u5F53\u524D\u73B0\u5B9E", "\u5373\u65F6\u72B6\u6001", "\u9636\u6BB5\u72B6\u6001"] },
+  { key: "presentationStates", label: "\u5916\u89C2\u8868\u73B0", aliases: ["\u5916\u89C2\u8868\u73B0", "\u5916\u89C2\u4E0E\u8868\u73B0", "\u8868\u8C61\u72B6\u6001"] },
+  { key: "relationshipStates", label: "\u5173\u7CFB\u72B6\u6001", aliases: ["\u5173\u7CFB\u72B6\u6001", "\u6301\u7EED\u5173\u7CFB"] },
+  { key: "abilityStates", label: "\u80FD\u529B\u72B6\u6001", aliases: ["\u80FD\u529B\u72B6\u6001", "\u80FD\u529B\u53D8\u5316"] },
+  { key: "relatedObjects", label: "\u5173\u8054\u5BF9\u8C61", aliases: ["\u5173\u8054\u5BF9\u8C61", "\u76F4\u63A5\u5173\u8054\u5BF9\u8C61"] },
+  { key: "relatedEvents", label: "\u5173\u8054\u4E8B\u4EF6", aliases: ["\u5173\u8054\u4E8B\u4EF6", "\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6"] }
+];
+var PSEUDO_LAYERS = [
+  { kind: "content", label: "\u5F53\u524D\u6458\u8981", aliases: ["\u5F53\u524D\u6458\u8981", "\u6458\u8981", "\u5F53\u524D\u8BB0\u5F55"] },
+  { kind: "status", label: "\u6761\u76EE\u72B6\u6001", aliases: ["\u6761\u76EE\u72B6\u6001", "\u5B58\u7EED\u72B6\u6001", "\u751F\u547D\u5468\u671F\u72B6\u6001"] },
+  { kind: "keywords", label: "\u68C0\u7D22\u8BCD", aliases: ["\u68C0\u7D22\u8BCD", "\u5173\u952E\u8BCD", "\u522B\u540D"] }
+];
+function token(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, "");
+}
+function fieldByKey(table, key) {
+  return table.fields.find((field) => field.key === key);
+}
+function customWritableFields(table) {
+  const fixedKeys = new Set(FIXED_FIELD_LAYERS.map((item) => item.key));
+  return table.fields.filter((field) => !FORBIDDEN_FIELD_KEYS.has(field.key) && !fixedKeys.has(field.key) && field.type !== "lifecycle");
+}
+function resolveStateLayer(table, raw) {
+  const normalized = token(raw);
+  if (!normalized) throw new Error(`\u53D8\u5316\u5C42\u4E3A\u7A7A\uFF08${table.name}\uFF09`);
+  for (const layer of PSEUDO_LAYERS) {
+    if (layer.aliases.some((alias) => token(alias) === normalized)) return { kind: layer.kind, label: layer.label };
+  }
+  for (const layer of FIXED_FIELD_LAYERS) {
+    if (!layer.aliases.some((alias) => token(alias) === normalized)) continue;
+    const definition = fieldByKey(table, layer.key);
+    if (!definition) throw new Error(`\u53D8\u5316\u5C42\u201C${layer.label}\u201D\u4E0D\u9002\u7528\u4E8E${table.name}`);
+    return { kind: "field", key: definition.key, label: layer.label, definition };
+  }
+  const matches = customWritableFields(table).filter((field) => token(field.label) === normalized);
+  if (matches.length === 1) {
+    const definition = matches[0];
+    return { kind: "field", key: definition.key, label: definition.label, definition };
+  }
+  if (matches.length > 1) throw new Error(`\u53D8\u5316\u5C42\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF08${table.name}\uFF09\uFF1A${raw}`);
+  throw new Error(`\u53D8\u5316\u5C42\u672A\u6CE8\u518C\u4E8E${table.name}\uFF1A${raw}`);
+}
+function stateLayerLabelForField(table, key) {
+  const fixed = FIXED_FIELD_LAYERS.find((item) => item.key === key);
+  if (fixed) return fixed.label;
+  return customWritableFields(table).find((field) => field.key === key)?.label;
+}
+function writableStateLayers(table) {
+  const content = fieldByKey(table, "content");
+  const status = fieldByKey(table, "status");
+  const keywords = fieldByKey(table, "keywords");
+  const output = [
+    { label: "\u5F53\u524D\u6458\u8981", description: content?.description || "\u5BF9\u8C61\u5F53\u524D\u552F\u4E00\u6709\u6548\u6982\u62EC\u3002", multiple: false },
+    { label: "\u6761\u76EE\u72B6\u6001", description: status?.description || "\u5BF9\u8C61\u5F53\u524D\u751F\u547D\u5468\u671F\u6216\u6709\u6548\u6027\u72B6\u6001\u3002", multiple: false },
+    { label: "\u68C0\u7D22\u8BCD", description: keywords?.description || "\u5BF9\u8C61\u540D\u3001\u522B\u540D\u53CA\u68C0\u7D22\u89E6\u53D1\u8BCD\u3002", multiple: true }
+  ];
+  for (const layer of FIXED_FIELD_LAYERS) {
+    const field = fieldByKey(table, layer.key);
+    if (!field) continue;
+    output.push({ label: layer.label, description: field.description || layer.label, multiple: field.type === "string[]" });
+  }
+  for (const field of customWritableFields(table)) {
+    output.push({ label: field.label, description: field.description || field.label, multiple: field.type === "string[]" });
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return output.filter((item) => {
+    const normalized = token(item.label);
+    if (!normalized || seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
 // src/domain/state-text.ts
 var STATE_TEXT_MARKERS = {
   turnStart: "<MA_TURN>",
   turnEnd: "</MA_TURN>",
   changeStart: "<MA_CHANGE>",
-  changeEnd: "</MA_CHANGE>",
-  factStart: "<MA_FACT>",
-  factEnd: "</MA_FACT>",
-  rowStart: "<MA_ROW>",
-  rowEnd: "</MA_ROW>"
+  changeEnd: "</MA_CHANGE>"
 };
-var CORE_ROW_KEYS = /* @__PURE__ */ new Set([
-  "table",
-  "kind",
-  "object",
-  "summary",
-  "content",
-  "status",
-  "keyword",
-  "entry_action",
-  "merge_table",
-  "merge_object",
-  "merge_note",
-  "merge_reason"
-]);
-var FORBIDDEN_STATE_FIELDS = /* @__PURE__ */ new Set(["id", "title", "content", "keywords", "status", "recentHistory", "solidifiedHistory", "absorbedMemory", "factIds", "eventId", "eventIds", "recall"]);
-var FACT_OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
+var CHANGE_OPERATIONS = /* @__PURE__ */ new Set(["set", "replace", "add", "remove", "close"]);
 var FACT_CONFIDENCE = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
 var KEY_ALIASES = {
+  "\u6458\u8981": "summary",
+  "\u4E8B\u4EF6": "event",
+  "\u5BF9\u8C61\u7C7B\u578B": "kind",
+  "\u7C7B\u578B": "kind",
   "\u8868\u683C": "table",
   "\u5BF9\u8C61": "object",
   "\u540D\u79F0": "object",
-  "\u6458\u8981": "summary",
-  "\u5185\u5BB9": "content",
-  "\u72B6\u6001": "status",
-  "\u5173\u952E\u8BCD": "keyword",
-  "\u672C\u8D28\u7C7B\u578B": "kind",
-  "\u5F52\u6863\u7C7B\u578B": "kind",
-  "\u5BF9\u8C61\u7C7B\u578B": "kind",
-  "\u6761\u76EE\u52A8\u4F5C": "entry_action",
-  "\u751F\u547D\u5468\u671F\u52A8\u4F5C": "entry_action",
-  "\u5F52\u5E76\u52A8\u4F5C": "entry_action",
-  "\u5E76\u5165\u8868\u683C": "merge_table",
-  "\u5BBF\u4E3B\u8868\u683C": "merge_table",
-  "\u5E76\u5165\u5BF9\u8C61": "merge_object",
-  "\u5BBF\u4E3B\u5BF9\u8C61": "merge_object",
-  "\u5F52\u5E76\u8BB0\u5F55": "merge_note",
-  "\u5E76\u5165\u5185\u5BB9": "merge_note",
-  "\u4FDD\u7559\u5185\u5BB9": "merge_note",
-  "\u9000\u51FA\u539F\u56E0": "merge_reason",
-  "\u5F52\u5E76\u539F\u56E0": "merge_reason",
-  "\u4E8B\u4EF6": "event",
-  "\u6807\u9898": "title",
-  "\u7C7B\u578B": "type",
-  "\u64CD\u4F5C": "operation",
-  "\u7F6E\u4FE1\u5EA6": "confidence",
-  "\u4E3B\u4F53": "object",
-  "\u5BF9\u8C61\u5B57\u6BB5": "field",
-  "\u503C": "value",
-  "\u7ED3\u679C": "result",
+  "\u53D8\u5316\u5C42": "layer",
+  "\u52A8\u4F5C": "operation",
+  "\u5185\u5BB9": "value",
   "\u4E8B\u5B9E\u7ED3\u679C": "result",
-  "\u8BC1\u636E": "result",
-  "\u5DF2\u53D1\u751F": "occurred",
-  "\u672A\u51B3": "unresolved",
+  "\u7ED3\u679C": "result",
+  "\u7F6E\u4FE1\u5EA6": "confidence",
+  "\u5173\u8054\u5BF9\u8C61": "related",
+  "\u5173\u952E\u8BCD": "keyword",
   "\u5F00\u59CB\u65F6\u95F4": "time_start",
   "\u7ED3\u675F\u65F6\u95F4": "time_end",
-  "\u65F6\u95F4\u6807\u7B7E": "time_label",
-  "\u5173\u8054\u5BF9\u8C61": "related",
-  "\u5B57\u6BB5": "field",
-  "\u751F\u547D\u5468\u671F": "lifecycle"
+  "\u65F6\u95F4\u6807\u7B7E": "time_label"
 };
 var KIND_ROLE = {
   spacetime: "spacetime",
@@ -1587,11 +1637,7 @@ function unique(values2, limit = 40, chars = 800) {
 }
 function normalizeKey(raw) {
   const trimmed = raw.trim();
-  const alias = KEY_ALIASES[trimmed];
-  if (alias) return alias;
-  if (trimmed.startsWith("\u5B57\u6BB5.")) return `field.${trimmed.slice(3).trim()}`;
-  if (trimmed.startsWith("\u751F\u547D\u5468\u671F.")) return `lifecycle.${trimmed.slice(5).trim()}`;
-  return trimmed;
+  return KEY_ALIASES[trimmed] || trimmed;
 }
 function addField(block, key, value2) {
   const normalized = normalizeKey(key);
@@ -1606,18 +1652,12 @@ function fieldValue(block, ...keys) {
 }
 var STATE_BLOCK_MARKERS = [
   { kind: "turn", start: STATE_TEXT_MARKERS.turnStart, end: STATE_TEXT_MARKERS.turnEnd },
-  { kind: "change", start: STATE_TEXT_MARKERS.changeStart, end: STATE_TEXT_MARKERS.changeEnd },
-  { kind: "fact", start: STATE_TEXT_MARKERS.factStart, end: STATE_TEXT_MARKERS.factEnd },
-  { kind: "row", start: STATE_TEXT_MARKERS.rowStart, end: STATE_TEXT_MARKERS.rowEnd },
-  { kind: "turn", start: "\u3010\u56DE\u5408\u3011", end: "\u3010\u56DE\u5408\u7ED3\u675F\u3011" },
-  { kind: "change", start: "\u3010\u53D8\u5316\u3011", end: "\u3010\u53D8\u5316\u7ED3\u675F\u3011" },
-  { kind: "fact", start: "\u3010\u4E8B\u5B9E\u3011", end: "\u3010\u4E8B\u5B9E\u7ED3\u675F\u3011" },
-  { kind: "row", start: "\u3010\u6761\u76EE\u3011", end: "\u3010\u6761\u76EE\u7ED3\u675F\u3011" }
+  { kind: "change", start: STATE_TEXT_MARKERS.changeStart, end: STATE_TEXT_MARKERS.changeEnd }
 ];
 function safelyCloseTrailingStateBlock(raw) {
   const source = String(raw ?? "").replace(/^\uFEFF/, "").trim();
   if (!source) return source;
-  const candidates = STATE_BLOCK_MARKERS.filter((item) => item.start.startsWith("<MA_")).map((item) => ({ ...item, index: source.toUpperCase().lastIndexOf(item.start.toUpperCase()) })).filter((item) => item.index >= 0).sort((a, b) => b.index - a.index);
+  const candidates = STATE_BLOCK_MARKERS.map((item) => ({ ...item, index: source.toUpperCase().lastIndexOf(item.start.toUpperCase()) })).filter((item) => item.index >= 0).sort((a, b) => b.index - a.index);
   const last = candidates[0];
   if (!last) return source;
   const tail = source.slice(last.index);
@@ -1625,21 +1665,25 @@ function safelyCloseTrailingStateBlock(raw) {
   const body = tail.slice(last.start.length);
   const hasCompleteLine = /(^|\n)\s*[^=＝:：\n]+\s*[=＝:：]\s*\S[^\n]*\s*$/u.test(body);
   if (!hasCompleteLine) return source;
-  if (last.kind === "turn" && !/(^|\n)\s*(?:summary|摘要|content|内容)\s*[=＝:：]\s*\S/iu.test(body)) return source;
+  if (last.kind === "turn" && !/(^|\n)\s*(?:摘要|summary)\s*[=＝:：]\s*\S/iu.test(body)) return source;
   if (last.kind === "change") {
-    const required = ["event", "kind", "object", "field", "operation"];
-    if (!required.every((key) => new RegExp(`(^|\\n)\\s*${key}\\s*[=\uFF1D:\uFF1A]\\s*\\S`, "iu").test(body))) return source;
-    if (!/(^|\n)\s*(?:value|值|result|结果|事实结果|证据)\s*[=＝:：]\s*\S/iu.test(body)) return source;
+    const required = ["\u4E8B\u4EF6", "\u5BF9\u8C61\u7C7B\u578B", "\u5BF9\u8C61", "\u53D8\u5316\u5C42", "\u52A8\u4F5C"];
+    if (!required.every((key) => new RegExp(`(^|\\n)\\s*${key}\\s*[=\uFF1D:\uFF1A]\\s*\\S`, "u").test(body))) return source;
+    if (!/(^|\n)\s*(?:内容|事实结果)\s*[=＝:：]\s*\S/u.test(body)) return source;
   }
   return `${source}
 ${last.end}`;
 }
 function parseStateTextBlocks(raw) {
-  const parsed = parseFixedTextBlocks(safelyCloseTrailingStateBlock(raw), STATE_BLOCK_MARKERS);
+  const source = String(raw ?? "");
+  if (/<MA_(?:FACT|ROW)>|<\/MA_(?:FACT|ROW)>|【(?:事实|条目)(?:结束)?】|(^|\n)\s*(?:field|字段)(?:\.|\s*[=＝:：])/iu.test(source)) {
+    throw new Error("\u72B6\u6001\u6A21\u578B\u8FD4\u56DE\u4E86\u5DF2\u505C\u7528\u65E7\u534F\u8BAE\uFF1B\u53EA\u63A5\u53D7 <MA_TURN>/<MA_CHANGE> \u4E0E\u201C\u53D8\u5316\u5C42\u201D");
+  }
+  const parsed = parseFixedTextBlocks(safelyCloseTrailingStateBlock(source), STATE_BLOCK_MARKERS);
   if (!parsed.length) throw new Error("\u72B6\u6001\u6A21\u578B\u672A\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u5757\uFF08\u7F3A\u5C11 <MA_TURN>/<MA_CHANGE>\uFF09");
-  return parsed.map((source) => {
-    const block = { ...source, kind: source.kind, fields: /* @__PURE__ */ new Map() };
-    for (const [key, values2] of source.fields.entries()) for (const value2 of values2) addField(block, key, value2);
+  return parsed.map((source2) => {
+    const block = { ...source2, kind: source2.kind, fields: /* @__PURE__ */ new Map() };
+    for (const [key, values2] of source2.fields.entries()) for (const value2 of values2) addField(block, key, value2);
     return block;
   });
 }
@@ -1722,12 +1766,12 @@ function mergeDuplicateStateRows(snapshot, registry2, onlyTableKeys) {
     const groups = /* @__PURE__ */ new Map();
     const order = [];
     for (const row of rows) {
-      const token = canonicalObjectTitle(row.title) || `@id:${row.id}`;
-      if (!groups.has(token)) order.push(token);
-      groups.set(token, [...groups.get(token) ?? [], row]);
+      const token2 = canonicalObjectTitle(row.title) || `@id:${row.id}`;
+      if (!groups.has(token2)) order.push(token2);
+      groups.set(token2, [...groups.get(token2) ?? [], row]);
     }
-    output[table.key] = order.map((token) => {
-      const group = [...groups.get(token) ?? []].sort((left, right) => {
+    output[table.key] = order.map((token2) => {
+      const group = [...groups.get(token2) ?? []].sort((left, right) => {
         const time = String(left.updatedAt || "").localeCompare(String(right.updatedAt || ""));
         return time || String(left.id || "").localeCompare(String(right.id || ""));
       });
@@ -1770,129 +1814,54 @@ function findExistingRow(tableKey, objectName, keywords, previous) {
   return void 0;
 }
 function resolveTable(raw, active) {
-  const token = identity(raw);
-  const matches = active.filter((table) => identity(table.key) === token || identity(table.name) === token || identity(table.role) === token);
+  const token2 = identity(raw);
+  const matches = active.filter((table) => identity(table.name) === token2);
   if (matches.length === 1) return matches[0];
   if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u6761\u76EE\u4F7F\u7528\u4E86\u672A\u6CE8\u518C\u6216\u5DF2\u505C\u7528\u8868\u683C\uFF1A${raw || "\u7A7A"}`);
   throw new Error(`\u56FA\u5B9A\u6587\u672C\u8868\u683C\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF1A${raw}`);
 }
 function findUniqueExactRowAcrossTables(requestedTableKey, objectName, previous, active) {
-  const token = canonicalObjectTitle(objectName);
-  if (!token) return void 0;
+  const token2 = canonicalObjectTitle(objectName);
+  if (!token2) return void 0;
   const matches = [];
   for (const table of active) {
     if (table.key === requestedTableKey) continue;
     for (const row of previous[table.key] ?? []) {
-      if (canonicalObjectTitle(row.title) === token) matches.push({ table, row });
+      if (canonicalObjectTitle(row.title) === token2) matches.push({ table, row });
     }
   }
   return matches.length === 1 ? matches[0] : void 0;
 }
-function resolveField(table, raw) {
-  const token = identity(raw);
-  const matches = table.fields.filter((field) => identity(field.key) === token || identity(field.label) === token);
-  if (matches.length === 1) return matches[0];
-  if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u672A\u6CE8\u518C\u4E8E ${table.key}\uFF1A${raw}`);
-  throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF08${table.key}\uFF09\uFF1A${raw}`);
-}
-function buildRowPatch(block, active, previous) {
-  const requestedTable = resolveTable(fieldValue(block, "table"), active);
-  const kind = rowKind(fieldValue(block, "kind"));
-  let table = semanticTable(kind, active) ?? requestedTable;
-  const objectName = fieldValue(block, "object", "title").trim();
-  if (!objectName) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u7F3A\u5C11 object`);
-  const keywords = unique([objectName, ...fieldValues(block, "keyword")], 24, 100);
-  let existing = findExistingRow(table.key, objectName, keywords, previous);
-  let relocation;
-  if (!existing) {
-    const anchored = findUniqueExactRowAcrossTables(table.key, objectName, previous, active);
-    if (anchored) {
-      const protectedPlacement = anchored.row.source === "manual" || anchored.row.locked || anchored.row.lockMode === "all" || anchored.row.lockMode === "base";
-      const explicitSemanticMove = Boolean(kind && semanticTable(kind, active)?.key === table.key && anchored.table.key !== table.key);
-      if (explicitSemanticMove && !protectedPlacement) {
-        existing = anchored.row;
-        relocation = { id: anchored.row.id, title: anchored.row.title, fromTable: anchored.table.key, toTable: table.key };
-      } else {
-        table = anchored.table;
-        existing = anchored.row;
-      }
-    }
-  }
-  const fields = {};
-  if (relocation && existing?.fields) {
-    const allowedFields = new Set(table.fields.map((field) => field.key));
-    for (const [key, value2] of Object.entries(existing.fields)) if (allowedFields.has(key)) fields[key] = structuredClone(value2);
-  }
-  let lifecycle;
-  for (const [rawKey, values2] of block.fields.entries()) {
-    if (CORE_ROW_KEYS.has(rawKey) || rawKey === "title") continue;
-    if (rawKey.startsWith("field.")) {
-      const requested = rawKey.slice("field.".length).trim();
-      const definition = resolveField(table, requested);
-      if (FORBIDDEN_STATE_FIELDS.has(definition.key)) throw new Error(`\u72B6\u6001\u6587\u672C\u4E0D\u5141\u8BB8\u5199\u5165\u5B57\u6BB5\uFF1A${definition.key}`);
-      if (definition.type === "lifecycle") throw new Error(`\u5B57\u6BB5 ${definition.key} \u5FC5\u987B\u4F7F\u7528 lifecycle.* \u884C`);
-      const cleaned = unique(values2, definition.type === "string[]" ? 40 : 1, 1200);
-      fields[definition.key] = definition.type === "string[]" ? cleaned : cleaned.at(-1) ?? "";
-      continue;
-    }
-    if (rawKey.startsWith("lifecycle.")) {
-      const key = rawKey.slice("lifecycle.".length).trim();
-      const lifecycleField = table.fields.find((field) => field.type === "lifecycle");
-      if (!lifecycleField) throw new Error(`\u8868\u683C ${table.key} \u672A\u6CE8\u518C lifecycle \u5B57\u6BB5`);
-      if (!["existence", "activity", "memory", "evidenceLevel", "evidence", "returnConditions", "returnBlockers"].includes(key)) {
-        throw new Error(`\u672A\u77E5\u751F\u547D\u5468\u671F\u5B57\u6BB5\uFF1A${key}`);
-      }
-      lifecycle ||= {};
-      lifecycle[key] = ["returnConditions", "returnBlockers"].includes(key) ? unique(values2, 30, 500) : safeText(values2.at(-1), 1e3).trim();
-      continue;
-    }
-    if (!KEY_ALIASES[rawKey]) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_ROW> \u542B\u672A\u77E5\u5B57\u6BB5\uFF1A${rawKey}`);
-  }
-  const row = {
-    id: existing?.id || makeId(table.key),
-    title: existing?.title || objectName,
-    content: fieldValue(block, "summary", "content") || existing?.content || objectName,
-    keywords: unique([...existing?.keywords ?? [], ...keywords], 24, 100),
-    status: fieldValue(block, "status") || existing?.status || "active",
-    source: existing?.source ?? "auto",
-    locked: existing?.locked ?? false,
-    lockMode: existing?.lockMode,
-    lifecycle,
-    updatedAt: nowIso(),
-    fields,
-    semanticRole: table.role
-  };
-  return { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation };
-}
 function mergePatchRows(left, right) {
-  const fields = { ...left.fields ?? {} };
-  for (const [key, value2] of Object.entries(right.fields ?? {})) fields[key] = mergeFieldValues(fields[key], value2);
   return {
     ...left,
+    ...right,
+    id: left.id || right.id,
+    title: left.title || right.title,
     content: right.content || left.content,
     status: right.status || left.status,
     keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100),
-    fields,
+    fields: { ...left.fields ?? {}, ...right.fields ?? {} },
     lifecycle: right.lifecycle ?? left.lifecycle
   };
 }
 function activeEventMatch(eventName, activeFacts) {
-  const token = identity(eventName);
-  if (!token) return void 0;
+  const token2 = identity(eventName);
+  if (!token2) return void 0;
   const matches = new Set(activeFacts.filter((fact) => {
     const terms = [fact.eventId, fact.title, ...fact.keywords].map(identity).filter(Boolean);
-    return terms.includes(token);
+    return terms.includes(token2);
   }).map((fact) => fact.eventId));
   return matches.size === 1 ? [...matches][0] : void 0;
 }
 function snapshotEventMatch(eventName, previous, active) {
-  const token = identity(eventName);
-  if (!token) return void 0;
+  const token2 = identity(eventName);
+  if (!token2) return void 0;
   const matches = /* @__PURE__ */ new Set();
   for (const table of active.filter((item) => item.role === "events")) {
     for (const row of previous[table.key] ?? []) {
       const terms = [row.title, ...row.keywords ?? []].map(identity).filter(Boolean);
-      if (!terms.includes(token)) continue;
+      if (!terms.includes(token2)) continue;
       for (const eventId of [...row.eventIds ?? [], row.eventId].filter(Boolean)) matches.add(eventId);
     }
   }
@@ -1903,13 +1872,12 @@ function rowSingleEventMatch(row) {
   const values2 = [...new Set([...row.eventIds ?? [], row.eventId].filter(Boolean))];
   return values2.length === 1 ? values2[0] : void 0;
 }
-var CHANGE_OPERATIONS = /* @__PURE__ */ new Set(["set", "replace", "add", "remove", "close"]);
 function changeOperation(value2) {
-  const token = identity(value2);
-  if (["replace", "\u66FF\u6362", "\u8986\u76D6"].includes(token)) return "replace";
-  if (["add", "append", "\u65B0\u589E", "\u6DFB\u52A0", "\u8FFD\u52A0"].includes(token)) return "add";
-  if (["remove", "delete", "\u79FB\u9664", "\u5220\u9664", "\u89E3\u9664"].includes(token)) return "remove";
-  if (["close", "closed", "\u7ED3\u675F", "\u5173\u95ED", "\u5B8C\u6210", "\u89E3\u51B3"].includes(token)) return "close";
+  const token2 = identity(value2);
+  if (["replace", "\u66FF\u6362", "\u8986\u76D6"].includes(token2)) return "replace";
+  if (["add", "append", "\u65B0\u589E", "\u6DFB\u52A0", "\u8FFD\u52A0"].includes(token2)) return "add";
+  if (["remove", "delete", "\u79FB\u9664", "\u5220\u9664", "\u89E3\u9664"].includes(token2)) return "remove";
+  if (["close", "closed", "\u7ED3\u675F", "\u5173\u95ED", "\u5B8C\u6210", "\u89E3\u51B3"].includes(token2)) return "close";
   return "set";
 }
 function arrayAfterChange(existing, values2, operation) {
@@ -1921,15 +1889,24 @@ function arrayAfterChange(existing, values2, operation) {
   }
   return unique(values2, 40, 1200);
 }
+function confidenceFromValue(value2) {
+  const raw = String(value2 ?? "").trim();
+  const normalized = identity(raw);
+  if (["confirmed", "\u786E\u8BA4", "\u5DF2\u786E\u8BA4"].map(identity).includes(normalized)) return "confirmed";
+  if (["recorded", "\u8BB0\u5F55", "\u5DF2\u8BB0\u5F55"].map(identity).includes(normalized)) return "recorded";
+  if (["reported", "\u8F6C\u8FF0", "\u4F20\u95FB", "\u62A5\u544A"].map(identity).includes(normalized)) return "reported";
+  if (["uncertain", "\u4E0D\u786E\u5B9A", "\u5B58\u7591"].map(identity).includes(normalized)) return "uncertain";
+  return FACT_CONFIDENCE.has(raw) ? raw : "confirmed";
+}
 function changeFromBlock(block, active, previous, activeFacts) {
-  const kind = rowKind(fieldValue(block, "kind", "type"));
+  const kind = rowKind(fieldValue(block, "kind"));
   const explicitTable = fieldValue(block, "table").trim();
   let table = explicitTable ? resolveTable(explicitTable, active) : semanticTable(kind, active);
-  if (!table) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u65E0\u6CD5\u786E\u5B9A\u8868\u683C\uFF1B\u8BF7\u586B\u5199 kind${explicitTable ? ` \u6216\u4FEE\u6B63 table=${explicitTable}` : ""}`);
+  if (!table) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u65E0\u6CD5\u786E\u5B9A\u5BF9\u8C61\u8868\uFF1B\u8BF7\u4FEE\u6B63\u201C\u5BF9\u8C61\u7C7B\u578B\u201D${explicitTable ? `\u6216\u201C\u8868\u683C=${explicitTable}\u201D` : ""}`);
   const semantic = semanticTable(kind, active);
   if (semantic && table.role !== semantic.role) table = semantic;
-  const objectName = fieldValue(block, "object", "title").trim();
-  if (!objectName) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u7F3A\u5C11 object`);
+  const objectName = fieldValue(block, "object").trim();
+  if (!objectName) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u7F3A\u5C11\u201C\u5BF9\u8C61\u201D`);
   const keywords = unique([objectName, ...fieldValues(block, "keyword")], 24, 100);
   let existing = findExistingRow(table.key, objectName, keywords, previous);
   let relocation;
@@ -1937,7 +1914,7 @@ function changeFromBlock(block, active, previous, activeFacts) {
     const anchored = findUniqueExactRowAcrossTables(table.key, objectName, previous, active);
     if (anchored) {
       const protectedPlacement = anchored.row.source === "manual" || anchored.row.locked || anchored.row.lockMode === "all" || anchored.row.lockMode === "base";
-      const explicitSemanticMove = Boolean(kind && semantic?.key === table.key && anchored.table.key !== table.key);
+      const explicitSemanticMove = Boolean(kind && semantic?.key === table.key && anchored.table.key !== table.key && !(table.role === "characters" && anchored.table.role !== "characters"));
       if (explicitSemanticMove && !protectedPlacement) {
         existing = anchored.row;
         relocation = { id: anchored.row.id, title: anchored.row.title, fromTable: anchored.table.key, toTable: table.key };
@@ -1947,36 +1924,31 @@ function changeFromBlock(block, active, previous, activeFacts) {
       }
     }
   }
-  const rawField = fieldValue(block, "field").trim();
-  if (!rawField) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u7F3A\u5C11 field`);
-  const values2 = fieldValues(block, "value", "content", "occurred");
-  const result = fieldValue(block, "result", "occurred", "content").trim() || values2.join("\uFF1B").trim();
+  const rawLayer = fieldValue(block, "layer").trim();
+  if (!rawLayer) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u7F3A\u5C11\u201C\u53D8\u5316\u5C42\u201D`);
+  const layer = resolveStateLayer(table, rawLayer);
+  const values2 = fieldValues(block, "value");
+  const result = fieldValue(block, "result").trim() || values2.join("\uFF1B").trim();
+  if (!values2.length && !result) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u7F3A\u5C11\u201C\u5185\u5BB9\u201D\u6216\u201C\u4E8B\u5B9E\u7ED3\u679C\u201D`);
   const operation = changeOperation(fieldValue(block, "operation"));
-  if (!CHANGE_OPERATIONS.has(operation)) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> operation \u4E0D\u5408\u6CD5`);
+  if (!CHANGE_OPERATIONS.has(operation)) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u52A8\u4F5C\u4E0D\u5408\u6CD5`);
   const fields = {};
   let content = existing?.content || objectName;
   let status = existing?.status || "active";
   let rowKeywords = [...existing?.keywords ?? [], ...keywords];
-  const fieldToken = identity(rawField);
-  if (["summary", "content", "\u6458\u8981", "\u5185\u5BB9"].map(identity).includes(fieldToken)) {
+  if (layer.kind === "content") {
     if (operation !== "remove") content = values2.at(-1) || result || content;
-  } else if (["status", "\u72B6\u6001"].map(identity).includes(fieldToken)) {
+  } else if (layer.kind === "status") {
     status = operation === "remove" ? "active" : values2.at(-1) || result || (operation === "close" ? "closed" : status);
-  } else if (["keyword", "keywords", "\u5173\u952E\u8BCD"].map(identity).includes(fieldToken)) {
+  } else if (layer.kind === "keywords") {
     rowKeywords = operation === "remove" ? rowKeywords.filter((item) => !new Set(values2.map(identity)).has(identity(item))) : unique([...rowKeywords, ...values2], 24, 100);
   } else {
-    const definition = resolveField(table, rawField);
-    if (FORBIDDEN_STATE_FIELDS.has(definition.key)) throw new Error(`\u72B6\u6001\u53D8\u5316\u4E0D\u5141\u8BB8\u5199\u5165\u5B57\u6BB5\uFF1A${definition.key}`);
-    if (definition.type === "lifecycle") throw new Error(`\u72B6\u6001\u53D8\u5316\u4E0D\u5141\u8BB8\u76F4\u63A5\u7EF4\u62A4 lifecycle\uFF1A${definition.key}`);
-    const prior = existing?.fields?.[definition.key];
-    if (definition.type === "string[]") fields[definition.key] = arrayAfterChange(prior, values2.length ? values2 : result ? [result] : [], operation);
-    else fields[definition.key] = operation === "remove" ? "" : values2.at(-1) || result;
+    const prior = existing?.fields?.[layer.key];
+    if (layer.definition.type === "string[]") fields[layer.key] = arrayAfterChange(prior, values2.length ? values2 : [result], operation);
+    else fields[layer.key] = operation === "remove" ? "" : values2.at(-1) || result;
   }
-  if (operation === "close") {
-    const statusField = ["status", "\u72B6\u6001"].map(identity).includes(fieldToken);
-    status = statusField ? values2.at(-1) || result || "closed" : "closed";
-  }
-  const rowContent2 = ["summary", "content", "\u6458\u8981", "\u5185\u5BB9"].map(identity).includes(fieldToken) ? content : existing?.content || result || objectName;
+  if (operation === "close") status = layer.kind === "status" ? values2.at(-1) || result || "closed" : "closed";
+  const rowContent2 = layer.kind === "content" ? content : existing?.content || result || objectName;
   const row = {
     id: existing?.id || makeId(table.key),
     title: existing?.title || objectName,
@@ -1988,17 +1960,16 @@ function changeFromBlock(block, active, previous, activeFacts) {
     lockMode: existing?.lockMode,
     lifecycle: existing?.lifecycle,
     updatedAt: nowIso(),
-    fields,
+    fields: relocation ? { ...existing?.fields ?? {}, ...fields } : fields,
     semanticRole: table.role
   };
   const eventName = fieldValue(block, "event").trim() || objectName;
   const eventId = activeEventMatch(eventName, activeFacts) || snapshotEventMatch(eventName, previous, active) || rowSingleEventMatch(existing) || `event_${hashText(identity(eventName))}`;
-  const factTitle = fieldValue(block, "title").trim() || `${objectName}\xB7${rawField}`;
+  const factTitle = `${objectName}\xB7${layer.label}`;
   const previousMatches = activeFacts.filter((fact2) => fact2.eventId === eventId && identity(fact2.title) === identity(factTitle));
   const factId2 = previousMatches.length === 1 ? previousMatches[0].factId : `fact_${hashText(`${eventId}|${identity(factTitle)}`)}`;
-  const confidenceValue = fieldValue(block, "confidence");
-  const confidence = FACT_CONFIDENCE.has(confidenceValue) ? confidenceValue : "confirmed";
-  const explicitClosed = operation === "close" || ["status", "\u72B6\u6001"].map(identity).includes(fieldToken) && /(完成|结束|关闭|解决|归档|closed|completed|resolved|ended|archived)/i.test(status);
+  const confidence = confidenceFromValue(fieldValue(block, "confidence"));
+  const explicitClosed = operation === "close" || layer.kind === "status" && /(完成|结束|关闭|解决|归档|closed|completed|resolved|ended|archived)/i.test(status);
   const factOperation = explicitClosed ? "close" : operation === "add" ? "append" : previousMatches.length ? "update" : "create";
   const occurred = unique([result || `${objectName}\uFF1A${values2.join("\uFF1B")}`], 8, 1200);
   const fact = {
@@ -2026,42 +1997,6 @@ function changeFromBlock(block, active, previous, activeFacts) {
     patch: { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation }
   };
 }
-function factFromBlock(block, activeFacts) {
-  const title = fieldValue(block, "title", "object").trim();
-  if (!title) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_FACT> \u7F3A\u5C11 title`);
-  const eventName = fieldValue(block, "event") || title;
-  const eventId = activeEventMatch(eventName, activeFacts) || `event_${hashText(identity(eventName) || identity(title))}`;
-  const titleToken = identity(title);
-  const previousMatches = activeFacts.filter((fact) => fact.eventId === eventId && identity(fact.title) === titleToken);
-  const factId2 = previousMatches.length === 1 ? previousMatches[0].factId : `fact_${hashText(`${eventId}|${titleToken}`)}`;
-  const occurred = fieldValues(block, "occurred", "content");
-  const unresolved = [];
-  const status = fieldValue(block, "status") || "active";
-  const requestedOperation = fieldValue(block, "operation");
-  const operation = FACT_OPERATIONS.has(requestedOperation) ? requestedOperation : /closed|resolved|ended|archived|结束|已解决|已关闭|已归档/i.test(status) ? "close" : previousMatches.length ? "update" : "create";
-  const requestedConfidence = fieldValue(block, "confidence");
-  const confidence = FACT_CONFIDENCE.has(requestedConfidence) ? requestedConfidence : "uncertain";
-  return {
-    fact_id: factId2,
-    event_id: eventId,
-    entity_id: eventId,
-    type: fieldValue(block, "type") || "event",
-    title,
-    content: occurred.join("\uFF1B"),
-    occurred,
-    unresolved,
-    status,
-    time_range: {
-      start: fieldValue(block, "time_start"),
-      end: fieldValue(block, "time_end"),
-      label: fieldValue(block, "time_label")
-    },
-    related_entities: fieldValues(block, "related"),
-    keywords: unique([title, eventName, ...fieldValues(block, "keyword")], 24, 100),
-    operation,
-    confidence
-  };
-}
 function mergeFacts(left, right) {
   return {
     ...left,
@@ -2073,9 +2008,23 @@ function mergeFacts(left, right) {
     keywords: unique([...left.keywords ?? [], ...right.keywords ?? []], 24, 100)
   };
 }
+function applyPatchToWorkingSnapshot(working, patch) {
+  if (patch.relocation) {
+    working[patch.relocation.fromTable] = (working[patch.relocation.fromTable] ?? []).filter((row) => row.id !== patch.relocation.id);
+  }
+  const rows = working[patch.table] ?? [];
+  const index = rows.findIndex((row) => row.id === patch.row.id);
+  if (index < 0) working[patch.table] = [...rows, structuredClone(patch.row)];
+  else {
+    const next = [...rows];
+    next[index] = mergePatchRows(next[index], patch.row);
+    working[patch.table] = next;
+  }
+}
 function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = []) {
   const active = enabledTables(normalizeTableRegistry(registry2));
   const previous = dedupeStrongStateRows(previousSnapshot2, registry2);
+  const working = structuredClone(previous);
   const blocks = parseStateTextBlocks(raw);
   const turnSummary = blocks.filter((block) => block.kind === "turn").map((block) => fieldValue(block, "summary", "content")).filter(Boolean).at(-1) ?? "";
   const factsById = /* @__PURE__ */ new Map();
@@ -2084,14 +2033,15 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
   const relocationsById = /* @__PURE__ */ new Map();
   for (const block of blocks) {
     if (block.kind === "change") {
-      const converted = changeFromBlock(block, active, previous, activeFacts);
+      const converted = changeFromBlock(block, active, working, activeFacts);
       const fact = converted.fact;
       if (fact.occurred.length) {
         const id = String(fact.fact_id);
         factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
       }
       const patch = converted.patch;
-      const key = `${patch.table}|${patch.matchKey}`;
+      applyPatchToWorkingSnapshot(working, patch);
+      const key = `${patch.table}|${canonicalObjectTitle(patch.row.title) || patch.matchKey}`;
       const current = rowsByIdentity.get(key);
       rowsByIdentity.set(key, current ? {
         table: patch.table,
@@ -2102,24 +2052,6 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
       if (patch.relocation) relocationsById.set(patch.relocation.id, patch.relocation);
       continue;
     }
-    if (block.kind === "fact") {
-      const fact = factFromBlock(block, activeFacts);
-      if (!fact.occurred.length && !fact.unresolved.length) continue;
-      const id = String(fact.fact_id);
-      factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
-    }
-    if (block.kind === "row") {
-      const patch = buildRowPatch(block, active, previous);
-      const key = `${patch.table}|${patch.matchKey}`;
-      const current = rowsByIdentity.get(key);
-      rowsByIdentity.set(key, current ? {
-        table: patch.table,
-        row: mergePatchRows(current.row, patch.row),
-        matchKey: patch.matchKey,
-        relocation: current.relocation ?? patch.relocation
-      } : patch);
-      if (patch.relocation) relocationsById.set(patch.relocation.id, patch.relocation);
-    }
   }
   for (const { table, row } of rowsByIdentity.values()) (snapshot[table] ||= []).push(row);
   return {
@@ -2127,7 +2059,7 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
     facts: [...factsById.values()],
     snapshot,
     relocations: [...relocationsById.values()],
-    // 旧 API 保留空数组，明确表示生命周期只由插件状态机生成。
+    // 生命周期只由插件状态机生成。
     entryLifecycleDirectives: []
   };
 }
@@ -2141,9 +2073,9 @@ function stringArray(value2, itemLimit = 500) {
 }
 function replaceExactValue(value2, idRemap, deletedIds) {
   if (typeof value2 === "string") {
-    const token = value2.trim();
-    if (idRemap.has(token)) return idRemap.get(token);
-    if (deletedIds.has(token)) return void 0;
+    const token2 = value2.trim();
+    if (idRemap.has(token2)) return idRemap.get(token2);
+    if (deletedIds.has(token2)) return void 0;
     return value2;
   }
   if (Array.isArray(value2)) {
@@ -2905,8 +2837,8 @@ function legacyCharacterTitle(value2) {
   const original = safeText(value2, 240).trim();
   let title = original.replace(/^(?:人物|角色)(?:的)?(?:当前)?状态\s*[:：|｜-]\s*/i, "").replace(/^(?:人物|角色|档案|信息)\s*[:：|｜-]\s*/i, "").replace(/\s*(?:的)?(?:人物|角色)?(?:当前)?状态\s*$/i, "").replace(/\s*(?:人物|角色)?(?:档案|信息)\s*$/i, "").trim();
   if (!title) title = original;
-  const token = identityTitle(title);
-  return (/* @__PURE__ */ new Set(["\u89D2\u8272", "\u4EBA\u7269", "\u672A\u77E5", "\u672A\u547D\u540D", "unknown", "unknowncharacter"])).has(token) ? "" : title;
+  const token2 = identityTitle(title);
+  return (/* @__PURE__ */ new Set(["\u89D2\u8272", "\u4EBA\u7269", "\u672A\u77E5", "\u672A\u547D\u540D", "unknown", "unknowncharacter"])).has(token2) ? "" : title;
 }
 function explicitLegacyStateTitle(value2) {
   const title = safeText(value2, 240).trim();
@@ -2933,9 +2865,9 @@ function mergePersistedCharacterDuplicates(snapshot, registry2) {
   const groups = /* @__PURE__ */ new Map();
   for (const row of working[key] ?? []) {
     const displayTitle = legacyCharacterTitle(row.title);
-    const token = identityTitle(displayTitle);
-    if (!token) continue;
-    groups.set(token, [...groups.get(token) ?? [], row]);
+    const token2 = identityTitle(displayTitle);
+    if (!token2) continue;
+    groups.set(token2, [...groups.get(token2) ?? [], row]);
   }
   for (const rows of groups.values()) {
     if (rows.length < 2) continue;
@@ -5129,7 +5061,7 @@ function rowContent(table, row, maxChars) {
   const keywordsLabel = customizedFieldLabel(table, "keywords", "\u89E6\u53D1\u8BCD");
   const heading = titleLabel ? `[${table.name}\uFF5C${titleLabel}\uFF1A${row.title}]` : `[${table.name}\uFF1A${row.title}]`;
   const fields = row.fields ?? {};
-  const fieldByKey = new Map(table.fields.map((field) => [field.key, field]));
+  const fieldByKey2 = new Map(table.fields.map((field) => [field.key, field]));
   const prioritizedKeys = [
     "baseContent",
     "currentFacts",
@@ -5143,12 +5075,12 @@ function rowContent(table, row, maxChars) {
     "solidifiedHistory"
   ];
   const lines2 = [heading];
-  const baseField = fieldByKey.get("baseContent");
+  const baseField = fieldByKey2.get("baseContent");
   if (baseField && "baseContent" in fields) lines2.push(...boundedLine(baseField.label, fields.baseContent));
   if (row.status) lines2.push(`${statusLabel}\uFF1A${row.status}`);
   if (row.content) lines2.push(`${contentLabel}\uFF1A${row.content}`);
   for (const key of prioritizedKeys.filter((key2) => key2 !== "baseContent")) {
-    const field = fieldByKey.get(key);
+    const field = fieldByKey2.get(key);
     if (field && key in fields) lines2.push(...boundedLine(field.label, fields[key]));
   }
   for (const field of table.fields) {
@@ -6983,8 +6915,8 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts
       ].filter(Boolean);
       const linkedByEvent = rowEventIds3(row).includes(eventId);
       const linkedByFact = (row.factIds ?? []).some((id) => factIds.has(id));
-      const linkedByObject = rowTokens2.some((token) => relatedTokens2.has(token));
-      const linkedEventRow = table.role === "events" && rowTokens2.some((token) => eventTitleTokens.has(token));
+      const linkedByObject = rowTokens2.some((token2) => relatedTokens2.has(token2));
+      const linkedEventRow = table.role === "events" && rowTokens2.some((token2) => eventTitleTokens.has(token2));
       const target = linkedByEvent || linkedByFact || linkedByObject || linkedEventRow;
       if (!target || row.locked || row.lockMode === "all") continue;
       row.fields ||= {};
@@ -7426,22 +7358,6 @@ function normalizeFactPackage(value2, sourceMessageKey) {
 }
 
 // src/prompts/state.ts
-var COMMON_FIELD_KEYS = /* @__PURE__ */ new Set([
-  "id",
-  "title",
-  "content",
-  "keywords",
-  "status",
-  "baseContent",
-  "currentFacts",
-  "currentStates",
-  "recentHistory",
-  "solidifiedHistory",
-  "relatedObjects",
-  "relatedEvents",
-  "absorbedMemory",
-  "presentationStates"
-]);
 var ACTIVE_STATUS_RE = /current|active|进行|当前|活跃|未决|持续|开放|受限|暂停/i;
 var DIRECTORY_CHAR_BUDGET = 1600;
 var MAX_DIRECTORY_ALIASES = 6;
@@ -7451,76 +7367,137 @@ var MAX_FACTS = 6;
 function tables(registry2) {
   return enabledTables(normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY));
 }
-function extraFieldInstruction(field) {
-  return `${field.key}\uFF08${field.label}\uFF09\uFF1A${field.description || "\u6309\u5B57\u6BB5\u540D\u79F0\u586B\u5199"}${field.required ? "\uFF0C\u5FC5\u586B" : ""}`;
-}
+var COMMON_STATE_LAYER_LABELS = /* @__PURE__ */ new Set([
+  "\u5F53\u524D\u6458\u8981",
+  "\u6761\u76EE\u72B6\u6001",
+  "\u68C0\u7D22\u8BCD",
+  "\u8EAB\u4EFD\u5B9A\u4E49",
+  "\u73B0\u884C\u4E8B\u5B9E",
+  "\u5F53\u524D\u72B6\u6001",
+  "\u5173\u8054\u5BF9\u8C61",
+  "\u5173\u8054\u4E8B\u4EF6"
+]);
 function compactRegistryDescription(active) {
+  const defaults2 = normalizeTableRegistry(DEFAULT_TABLE_REGISTRY);
   return active.map((table, index) => {
-    const defaultTable = DEFAULT_TABLE_REGISTRY.find((item) => item.key === table.key);
-    const extras = table.fields.filter((field) => {
-      if (!COMMON_FIELD_KEYS.has(field.key)) return true;
-      const base = defaultTable?.fields.find((item) => item.key === field.key);
-      return !base || base.label !== field.label || base.description !== field.description || base.required !== field.required;
-    }).map(extraFieldInstruction).join("\uFF1B");
-    return `${index + 1}. ${table.key}\uFF5C${table.name}\uFF5C\u7528\u9014\uFF1A${table.purpose}${extras ? `\uFF5C\u6269\u5C55\u5B57\u6BB5\uFF1A${extras}` : ""}`;
+    const layers = writableStateLayers(table);
+    const defaultTable = defaults2.find((item) => item.key === table.key || table.isDefault && item.role === table.role);
+    const defaultLayers = new Map((defaultTable ? writableStateLayers(defaultTable) : []).map((layer) => [layer.label, layer]));
+    const dedicated = layers.filter((layer) => !COMMON_STATE_LAYER_LABELS.has(layer.label));
+    const overrides = defaultTable ? layers.filter((layer) => COMMON_STATE_LAYER_LABELS.has(layer.label) && defaultLayers.get(layer.label)?.description !== layer.description) : [];
+    const title = table.fields.find((field) => field.key === "title");
+    const defaultTitle = defaultTable?.fields.find((field) => field.key === "title");
+    const notes = [];
+    if (dedicated.length) notes.push(`\u4E13\u5C5E\u5C42\uFF1A${dedicated.map((layer) => `${layer.label}=${layer.description}`).join("\uFF1B")}`);
+    if (overrides.length) notes.push(`\u8BED\u4E49\u8986\u76D6\uFF1A${overrides.map((layer) => `${layer.label}=${layer.description}`).join("\uFF1B")}`);
+    if (title?.description && defaultTitle && title.description !== defaultTitle.description) notes.push(`\u5BF9\u8C61\u547D\u540D\uFF1A${title.description}`);
+    return `${index + 1}. ${table.name}\uFF5C\u7C7B\u578B\uFF1A${kindLabel(table)}\uFF5C\u7528\u9014\uFF1A${table.purpose}${notes.length ? `\uFF5C${notes.join("\uFF5C")}` : ""}`;
   }).join("\n");
 }
-function statePromptText(value2, fallback) {
-  const text2 = String(value2 ?? "").trim();
-  return text2 || fallback;
+function kindLabel(table) {
+  const labels = {
+    spacetime: "\u65F6\u7A7A",
+    scenes: "\u573A\u666F",
+    characters: "\u89D2\u8272",
+    items: "\u7269\u54C1",
+    events: "\u4E8B\u4EF6",
+    regions: "\u5730\u70B9",
+    globalChanges: "\u5168\u5C40",
+    foundations: "\u57FA\u7840\u8BBE\u5B9A",
+    custom: "\u81EA\u5B9A\u4E49\u5BF9\u8C61"
+  };
+  return labels[table.role] || "\u81EA\u5B9A\u4E49\u5BF9\u8C61";
+}
+var MODEL_VISIBLE_RULE_REPLACEMENTS = [
+  [/relationshipStates/gi, "\u5173\u7CFB\u72B6\u6001"],
+  [/presentationStates/gi, "\u5916\u89C2\u8868\u73B0"],
+  [/solidifiedHistory/gi, "\u5386\u53F2\u4E8B\u5B9E"],
+  [/absorbedMemory/gi, "\u627F\u63A5\u8BB0\u5F55"],
+  [/globalChanges/gi, "\u5168\u5C40\u53D8\u5316"],
+  [/customObjects/gi, "\u81EA\u5B9A\u4E49\u5BF9\u8C61"],
+  [/currentStates/gi, "\u5F53\u524D\u72B6\u6001"],
+  [/currentFacts/gi, "\u73B0\u884C\u4E8B\u5B9E"],
+  [/recentHistory/gi, "\u8FD1\u671F\u7ECF\u5386"],
+  [/relatedObjects/gi, "\u5173\u8054\u5BF9\u8C61"],
+  [/relatedEvents/gi, "\u5173\u8054\u4E8B\u4EF6"],
+  [/abilityStates/gi, "\u80FD\u529B\u72B6\u6001"],
+  [/baseContent/gi, "\u8EAB\u4EFD\u5B9A\u4E49"],
+  [/characters/gi, "\u89D2\u8272"],
+  [/character/gi, "\u89D2\u8272"],
+  [/foundations/gi, "\u57FA\u7840\u8BBE\u5B9A"],
+  [/spacetime/gi, "\u65F6\u7A7A"],
+  [/global/gi, "\u5168\u5C40"],
+  [/regions/gi, "\u5730\u70B9"],
+  [/region/gi, "\u5730\u70B9"],
+  [/scenes/gi, "\u573A\u666F"],
+  [/scene/gi, "\u573A\u666F"],
+  [/items/gi, "\u7269\u54C1"],
+  [/item/gi, "\u7269\u54C1"],
+  [/events/gi, "\u4E8B\u4EF6"],
+  [/event/gi, "\u4E8B\u4EF6"],
+  [/confirmed/gi, "\u786E\u8BA4"],
+  [/reported/gi, "\u8F6C\u8FF0"],
+  [/uncertain/gi, "\u4E0D\u786E\u5B9A"]
+];
+function modelVisibleRuleText(value2, fallback) {
+  let text2 = String(value2 ?? "").trim() || fallback;
+  for (const [pattern, replacement] of MODEL_VISIBLE_RULE_REPLACEMENTS) text2 = text2.replace(pattern, replacement);
+  return text2;
 }
 function stateSystemPrompt(registry2, promptSettings = DEFAULT_STATE_PROMPTS, contentLimits = DEFAULT_CONTENT_LIMITS) {
   const active = tables(registry2);
-  const keys = active.map((table) => `${table.key}\uFF08${table.name}\uFF09`).join("\u3001");
-  const admissionRules = statePromptText(promptSettings?.admissionRules, DEFAULT_STATE_PROMPTS.admissionRules);
-  const exclusionRules = statePromptText(promptSettings?.exclusionRules, DEFAULT_STATE_PROMPTS.exclusionRules);
-  const routingRules = statePromptText(promptSettings?.routingRules, DEFAULT_STATE_PROMPTS.routingRules);
-  const evidenceRules = statePromptText(promptSettings?.evidenceRules, DEFAULT_STATE_PROMPTS.evidenceRules);
-  const updateRules = statePromptText(promptSettings?.updateRules, DEFAULT_STATE_PROMPTS.updateRules);
-  return `\u201C\u955C\u6E0A\u201D\u65E0\u89C2\u70B9\u4E8B\u5B9E\u4E66\u8BB0\uFF5C\u56FA\u5B9A\u6587\u672C\u534F\u8BAE
+  const names = active.map((table) => table.name).join("\u3001");
+  const admissionRules = modelVisibleRuleText(promptSettings?.admissionRules, DEFAULT_STATE_PROMPTS.admissionRules);
+  const exclusionRules = modelVisibleRuleText(promptSettings?.exclusionRules, DEFAULT_STATE_PROMPTS.exclusionRules);
+  const routingRules = modelVisibleRuleText(promptSettings?.routingRules, DEFAULT_STATE_PROMPTS.routingRules);
+  const evidenceRules = modelVisibleRuleText(promptSettings?.evidenceRules, DEFAULT_STATE_PROMPTS.evidenceRules);
+  const updateRules = modelVisibleRuleText(promptSettings?.updateRules, DEFAULT_STATE_PROMPTS.updateRules);
+  void contentLimits;
+  return `\u201C\u955C\u6E0A\u201D\u65E0\u89C2\u70B9\u4E8B\u5B9E\u4E66\u8BB0\uFF5C\u56FA\u5B9A\u8BED\u4E49\u6587\u672C\u534F\u8BAE
 
 \u804C\u8D23\u4EC5\u9650\u4E8E\u65E0\u89C2\u70B9\u4E8B\u5B9E\u63D0\u53D6\uFF1A\u53EA\u628A\u672C\u8F6E\u6B63\u6587\u4E2D\u5DF2\u7ECF\u660E\u786E\u6210\u7ACB\u7684\u53D8\u5316\u8F6C\u6362\u4E3A\u56FA\u5B9A\u6587\u672C\u3002\u7981\u6B62\u8BC4\u4EF7\u3001\u89E3\u91CA\u52A8\u673A\u3001\u9884\u6D4B\u3001\u8865\u5168\u3001\u8BC6\u522B\u4F0F\u7B14\u3001\u5224\u65AD\u4EF7\u503C\u3001\u51B3\u5B9A\u7ED3\u7B97\u3001\u5408\u5E76\u6216\u5220\u9664\u3002
 \u7981\u6B62\u8FD4\u56DE JSON\u3001Markdown \u8868\u683C\u3001\u4EE3\u7801\u56F4\u680F\u3001\u601D\u8003\u8FC7\u7A0B\u548C\u5757\u5916\u8BF4\u660E\u3002
 
 \u3010\u552F\u4E00\u8F93\u51FA\u534F\u8BAE\u3011
-\u53EA\u5141\u8BB8 <MA_TURN> \u4E0E <MA_CHANGE>\u3002\u6A21\u578B\u4E0D\u751F\u6210\u4EFB\u4F55 id\u3001fact_id\u3001event_id\uFF1B\u5BF9\u8C61\u5339\u914D\u3001\u4E8B\u5B9E ID\u3001\u8868\u683C\u8865\u4E01\u3001\u53C2\u4E0E\u72B6\u6001\u548C\u7ED3\u7B97\u7531\u63D2\u4EF6\u5B8C\u6210\u3002
+\u53EA\u5141\u8BB8 <MA_TURN> \u4E0E <MA_CHANGE>\u3002\u6A21\u578B\u4E0D\u63A5\u89E6\u6570\u636E\u5E93\u5B57\u6BB5\u3001\u5185\u90E8\u952E\u3001\u7A33\u5B9A ID\u3001\u4E8B\u5B9E ID\u3001\u4E8B\u4EF6 ID\uFF1B\u5BF9\u8C61\u5339\u914D\u3001\u8BED\u4E49\u5C42\u6620\u5C04\u3001\u8868\u683C\u8865\u4E01\u3001\u53C2\u4E0E\u72B6\u6001\u548C\u7ED3\u7B97\u5168\u90E8\u7531\u63D2\u4EF6\u5B8C\u6210\u3002
 
 <MA_TURN>
-summary=\u672C\u8F6E\u660E\u786E\u53D8\u5316\u6982\u62EC
+\u6458\u8981=\u672C\u8F6E\u660E\u786E\u53D8\u5316\u6982\u62EC
 </MA_TURN>
 
 <MA_CHANGE>
-event=\u5DF2\u660E\u786E\u53D1\u751F\u53D8\u5316\u6240\u5F52\u5C5E\u7684\u7A33\u5B9A\u4E8B\u4EF6\u540D
-kind=spacetime|scene|character|item|event|region|global|foundation|custom
-table=\u4EC5 custom \u6216\u540C\u7C7B\u8868\u6709\u6B67\u4E49\u65F6\u586B\u5199\u542F\u7528\u8868\u683C\u952E
-object=\u7A33\u5B9A\u5BF9\u8C61\u540D
-field=\u5DF2\u6CE8\u518C\u5B57\u6BB5\u952E\u6216\u8868\u5934\uFF0C\u4E5F\u53EF\u586B summary/status/keyword
-operation=set|replace|add|remove|close
-value=\u53D8\u5316\u540E\u7684\u660E\u786E\u503C\uFF1B\u5217\u8868\u5B57\u6BB5\u53EF\u91CD\u590D value \u884C
-result=\u53EF\u9009\uFF1B\u4EC5\u5F53 value \u4E0D\u80FD\u72EC\u7ACB\u8868\u8FBE\u4E8B\u5B9E\u65F6\u586B\u5199\u6700\u77ED\u5B8C\u6574\u53E5
-confidence=\u53EF\u9009\uFF1B\u7F3A\u7701 confirmed\uFF0C\u53EA\u6709\u6B63\u6587\u660E\u786E\u5C5E\u4E8E\u8BB0\u5F55\u3001\u8F6C\u8FF0\u6216\u4E0D\u786E\u5B9A\u4FE1\u606F\u65F6\u586B\u5199 recorded|reported|uncertain
-related=\u76F4\u63A5\u53D7\u5F71\u54CD\u5BF9\u8C61\uFF0C\u53EF\u91CD\u590D
-keyword=\u5FC5\u8981\u522B\u540D\u6216\u68C0\u7D22\u8BCD\uFF0C\u53EF\u91CD\u590D
+\u4E8B\u4EF6=\u5DF2\u660E\u786E\u53D1\u751F\u53D8\u5316\u6240\u5F52\u5C5E\u7684\u7A33\u5B9A\u4E8B\u4EF6\u540D
+\u5BF9\u8C61\u7C7B\u578B=\u65F6\u7A7A|\u573A\u666F|\u89D2\u8272|\u7269\u54C1|\u4E8B\u4EF6|\u5730\u70B9|\u5168\u5C40|\u57FA\u7840\u8BBE\u5B9A|\u81EA\u5B9A\u4E49\u5BF9\u8C61
+\u8868\u683C=\u4EC5\u201C\u81EA\u5B9A\u4E49\u5BF9\u8C61\u201D\u5B58\u5728\u591A\u4E2A\u53EF\u9009\u8868\u65F6\u586B\u5199\u8868\u683C\u663E\u793A\u540D\u79F0
+\u5BF9\u8C61=\u7A33\u5B9A\u5BF9\u8C61\u540D
+\u53D8\u5316\u5C42=\u5F53\u524D\u6458\u8981|\u6761\u76EE\u72B6\u6001|\u68C0\u7D22\u8BCD|\u8EAB\u4EFD\u5B9A\u4E49|\u73B0\u884C\u4E8B\u5B9E|\u5F53\u524D\u72B6\u6001|\u5916\u89C2\u8868\u73B0|\u5173\u7CFB\u72B6\u6001|\u80FD\u529B\u72B6\u6001|\u5173\u8054\u5BF9\u8C61|\u5173\u8054\u4E8B\u4EF6|\u8BE5\u8868\u5217\u51FA\u7684\u81EA\u5B9A\u4E49\u8BED\u4E49\u5C42
+\u52A8\u4F5C=\u8BBE\u5B9A|\u66FF\u6362|\u65B0\u589E|\u79FB\u9664|\u5173\u95ED
+\u5185\u5BB9=\u53D8\u5316\u540E\u7684\u660E\u786E\u503C\uFF1B\u5217\u8868\u8BED\u4E49\u5C42\u53EF\u91CD\u590D\u201C\u5185\u5BB9\u201D\u884C
+\u4E8B\u5B9E\u7ED3\u679C=\u53EF\u9009\uFF1B\u53EA\u6709\u201C\u5185\u5BB9\u201D\u4E0D\u80FD\u72EC\u7ACB\u8868\u8FBE\u4E8B\u5B9E\u65F6\u586B\u5199\u6700\u77ED\u5B8C\u6574\u53E5
+\u7F6E\u4FE1\u5EA6=\u53EF\u9009\uFF1B\u786E\u8BA4|\u8BB0\u5F55|\u8F6C\u8FF0|\u4E0D\u786E\u5B9A
+\u5173\u8054\u5BF9\u8C61=\u53EF\u9009\uFF1B\u76F4\u63A5\u53D7\u5F71\u54CD\u5BF9\u8C61\uFF0C\u53EF\u91CD\u590D
+\u5173\u952E\u8BCD=\u53EF\u9009\uFF1B\u5FC5\u8981\u522B\u540D\u6216\u68C0\u7D22\u8BCD\uFF0C\u53EF\u91CD\u590D
 </MA_CHANGE>
 
-\u6CA1\u6709\u4E8B\u5B9E\u53D8\u5316\u65F6\u53EA\u8F93\u51FA <MA_TURN>\u3002\u6BCF\u4E2A\u53D8\u5316\u5757\u53EA\u8868\u8FBE\u4E00\u4E2A\u5BF9\u8C61\u7684\u4E00\u4E2A\u5B57\u6BB5\u53D8\u5316\u3002\u4E0D\u8981\u8F93\u51FA\u65E7\u534F\u8BAE <MA_FACT>/<MA_ROW>\uFF1B\u63D2\u4EF6\u4ECD\u4F1A\u517C\u5BB9\u8BFB\u53D6\u65E7\u8FD4\u56DE\u3002 \u4E00\u8F6E\u6B63\u6587\u53EF\u63A8\u8FDB\u591A\u6761\u4E8B\u4EF6\u7EBF\uFF1B\u6BCF\u6761\u53D8\u5316\u5FC5\u987B\u586B\u5199\u5404\u81EA\u7A33\u5B9A\u4E8B\u4EF6\u540D\uFF0C\u4E0D\u5F97\u628A\u65E0\u5173\u4E8B\u4EF6\u5408\u5E76\u3002
+\u6CA1\u6709\u4E8B\u5B9E\u53D8\u5316\u65F6\u53EA\u8F93\u51FA <MA_TURN>\u3002\u6BCF\u4E2A\u53D8\u5316\u5757\u53EA\u8868\u8FBE\u4E00\u4E2A\u5BF9\u8C61\u7684\u4E00\u4E2A\u8BED\u4E49\u5C42\u53D8\u5316\u3002\u4E00\u8F6E\u6B63\u6587\u53EF\u63A8\u8FDB\u591A\u6761\u4E8B\u4EF6\u7EBF\uFF1B\u6BCF\u6761\u53D8\u5316\u5FC5\u987B\u586B\u5199\u5404\u81EA\u7A33\u5B9A\u4E8B\u4EF6\u540D\uFF0C\u4E0D\u5F97\u628A\u65E0\u5173\u4E8B\u4EF6\u5408\u5E76\u3002
+\u4E25\u7981\u8F93\u51FA\u65E7\u4E8B\u5B9E\u5757\u3001\u65E7\u6761\u76EE\u5757\u3001\u5B57\u6BB5\u58F0\u660E\u6216\u4EFB\u4F55\u63D2\u4EF6\u5185\u90E8\u82F1\u6587\u952E\u3002
 
 \u3010\u4E0A\u4E0B\u6587\u8BF4\u660E\u3011
-<MA_DIRECTORY> \u662F\u5DF2\u6709\u5BF9\u8C61\u7684\u77ED\u76EE\u5F55\uFF0C\u53EA\u7528\u4E8E\u6CBF\u7528\u7A33\u5B9A\u540D\u79F0\uFF1B\u76EE\u5F55\u4E2D\u6CA1\u6709\u7684\u5BF9\u8C61\u53EA\u6709\u5148\u901A\u8FC7\u201C\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\u201D\u624D\u53EF\u65B0\u5EFA\u3002\u4E00\u4E2A\u5BF9\u8C61\u672C\u8F6E\u53D1\u751F\u591A\u9879\u5267\u70C8\u53D8\u5316\u65F6\uFF0C\u5206\u522B\u8F93\u51FA\u591A\u4E2A\u6700\u5C0F <MA_CHANGE>\uFF0C\u4E0D\u5F97\u56E0\u53D8\u5316\u591A\u800C\u65B0\u5EFA\u540C\u540D\u5BF9\u8C61\u3002
+<MA_DIRECTORY> \u662F\u5DF2\u6709\u5BF9\u8C61\u77ED\u76EE\u5F55\uFF0C\u53EA\u7528\u4E8E\u6CBF\u7528\u7A33\u5B9A\u540D\u79F0\uFF1B<MA_CONTEXT_ROW> \u4F7F\u7528\u7684\u4E5F\u662F\u6A21\u578B\u53EF\u89C1\u8BED\u4E49\u5C42\uFF0C\u4E0D\u662F\u6570\u636E\u5E93\u7ED3\u6784\u3002\u76EE\u5F55\u4E2D\u6CA1\u6709\u7684\u5BF9\u8C61\u53EA\u6709\u5148\u901A\u8FC7\u201C\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\u201D\u624D\u53EF\u65B0\u5EFA\u3002
 
 \u3010\u673A\u68B0\u8FB9\u754C\u3011
 - \u53EA\u5199\u672C\u8F6E\u65B0\u589E\u3001\u7ED3\u675F\u3001\u88AB\u66FF\u6362\u6216\u88AB\u6B63\u6587\u660E\u786E\u8BC1\u5B9E\u7684\u4E8B\u5B9E\uFF1B\u672A\u77E5\u3001\u53EF\u80FD\u6027\u3001\u666E\u901A\u52A8\u4F5C\u94FE\u548C\u91CD\u590D\u63CF\u8FF0\u4E0D\u5199\u3002
-- \u672A\u8FD4\u56DE\u6761\u76EE\u7531\u63D2\u4EF6\u4FDD\u7559\uFF1B\u6A21\u578B\u53EA\u8F93\u51FA\u53D1\u751F\u53D8\u5316\u7684\u5B57\u6BB5\uFF0C\u4E0D\u91CD\u5199\u5B8C\u6574\u5FEB\u7167\u3002
-- \u4E0D\u8F93\u51FA\u7126\u70B9\u6761\u76EE\u6216 focus \u8868\u4E8B\u5B9E\uFF1B\u7126\u70B9\u53EA\u7531\u73A9\u5BB6\u548C\u63D2\u4EF6\u7EF4\u62A4\u3002
+- \u672A\u8FD4\u56DE\u5BF9\u8C61\u4E0E\u8BED\u4E49\u5C42\u7531\u63D2\u4EF6\u4FDD\u7559\uFF1B\u6A21\u578B\u53EA\u8F93\u51FA\u53D1\u751F\u53D8\u5316\u7684\u5185\u5BB9\uFF0C\u4E0D\u91CD\u5199\u5B8C\u6574\u5FEB\u7167\u3002
+- \u4E0D\u8F93\u51FA\u7126\u70B9\u6761\u76EE\u6216\u7126\u70B9\u4E8B\u5B9E\uFF1B\u7126\u70B9\u53EA\u7531\u73A9\u5BB6\u548C\u63D2\u4EF6\u7EF4\u62A4\u3002
 - \u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u3001\u56F4\u89C2\u548C\u4E34\u65F6\u52A8\u4F5C\u4E0D\u5EFA\u7ACB\u5173\u7CFB\u6216\u72EC\u7ACB\u5BF9\u8C61\u3002
 - \u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\uFF1B\u5F53\u524D\u65F6\u7A7A\u548C\u5F53\u524D\u573A\u666F\u53EA\u5199\u6B63\u6587\u5B9E\u9645\u6240\u5728\u4F4D\u7F6E\u3002
-- field \u5FC5\u987B\u4F7F\u7528\u5DF2\u6CE8\u518C\u5B57\u6BB5\u952E\u6216\u8868\u5934\uFF0C\u7981\u6B62\u81EA\u884C\u53D1\u660E\u5B57\u6BB5\u3002
-- currentStates \u7B49\u5F53\u524D\u5B57\u6BB5\u53D1\u751F\u66FF\u6362\u65F6\uFF0C\u7528 operation=replace\uFF0C\u5E76\u7ED9\u51FA\u8BE5\u5B57\u6BB5\u5F53\u524D\u5B8C\u6574\u6709\u6548\u503C\uFF1B\u72EC\u7ACB\u65B0\u589E\u5217\u8868\u9879\u624D\u7528 add\u3002
-- close \u53EA\u5728\u6B63\u6587\u660E\u786E\u5199\u660E\u5B8C\u6210\u3001\u7ED3\u675F\u3001\u5173\u95ED\u3001\u89E3\u51B3\u3001\u635F\u6BC1\u3001\u6D88\u8017\u3001\u4EA4\u4ED8\u7B49\u7ED3\u679C\u65F6\u4F7F\u7528\uFF1B\u63D2\u4EF6\u4F1A\u628A\u5BF9\u5E94\u4E8B\u4EF6\u4E8B\u5B9E\u6807\u8BB0\u4E3A\u5DF2\u7ED3\u675F\u3002
-- \u8868\u8C61\u3001\u670D\u88C5\u3001\u79F0\u547C\u548C\u4ED6\u4EBA\u8BEF\u8BA4\u53EA\u80FD\u5199\u5916\u89C2\u8868\u73B0\u5B57\u6BB5\uFF0C\u4E0D\u5F97\u6539\u5199\u8EAB\u4EFD\u951A\u70B9\u3002
-- baseContent=\u8EAB\u4EFD\u951A\u70B9\uFF1BpresentationStates=\u5916\u89C2\u4E0E\u8868\u73B0\u3002entry_action \u548C merge_* \u7531\u63D2\u4EF6\u7EF4\u62A4\uFF0C\u6A21\u578B\u4E0D\u5F97\u8F93\u51FA\u3002
-- \u540C\u4E00\u5BF9\u8C61\u6CBF\u7528\u7A33\u5B9A\u540D\u79F0\uFF1B\u65B0\u79F0\u547C\u5199 keyword\u3002\u65F6\u7A7A\u53EA\u8868\u793A\u5F53\u524D\u65F6\u95F4\u4E0E\u4F4D\u7F6E\uFF0C\u6BCF\u8F6E\u4E0D\u5F97\u521B\u5EFA\u591A\u4E2A\u5F53\u524D\u65F6\u7A7A\u5BF9\u8C61\u3002
-- \u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
+- \u201C\u53D8\u5316\u5C42\u201D\u53EA\u80FD\u4F7F\u7528\u672C\u63D0\u793A\u8BCD\u5217\u51FA\u7684\u56FA\u5B9A\u8BED\u4E49\u5C42\u6216\u5BF9\u5E94\u8868\u5217\u51FA\u7684\u81EA\u5B9A\u4E49\u8BED\u4E49\u5C42\uFF0C\u7981\u6B62\u81EA\u884C\u53D1\u660E\u3002
+- \u5F53\u524D\u72B6\u6001\u53D1\u751F\u6574\u4F53\u66FF\u6362\u65F6\u7528\u201C\u52A8\u4F5C=\u66FF\u6362\u201D\uFF0C\u5E76\u7ED9\u51FA\u8BE5\u5C42\u5F53\u524D\u5B8C\u6574\u6709\u6548\u503C\uFF1B\u72EC\u7ACB\u65B0\u589E\u5217\u8868\u9879\u624D\u7528\u201C\u52A8\u4F5C=\u65B0\u589E\u201D\u3002
+- \u5173\u95ED\u53EA\u5728\u6B63\u6587\u660E\u786E\u5199\u660E\u5B8C\u6210\u3001\u7ED3\u675F\u3001\u5173\u95ED\u3001\u89E3\u51B3\u3001\u635F\u6BC1\u3001\u6D88\u8017\u3001\u4EA4\u4ED8\u7B49\u7ED3\u679C\u65F6\u4F7F\u7528\u3002
+- \u8868\u8C61\u3001\u670D\u88C5\u3001\u79F0\u547C\u548C\u4ED6\u4EBA\u8BEF\u8BA4\u53EA\u5199\u201C\u5916\u89C2\u8868\u73B0\u201D\uFF0C\u4E0D\u5F97\u6539\u5199\u201C\u8EAB\u4EFD\u5B9A\u4E49\u201D\u3002
+- \u8EAB\u4EFD\u5B9A\u4E49\u662F\u8EAB\u4EFD\u951A\u70B9\uFF1B\u8FD1\u671F\u7ECF\u5386\u3001\u5386\u53F2\u4E8B\u5B9E\u3001\u627F\u63A5\u8BB0\u5F55\u548C\u751F\u547D\u5468\u671F\u7531\u63D2\u4EF6\u4E0E\u603B\u7ED3\u72B6\u6001\u673A\u7EF4\u62A4\uFF0C\u6A21\u578B\u4E0D\u5F97\u8F93\u51FA\u3002
+- \u540C\u4E00\u5BF9\u8C61\u6CBF\u7528\u7A33\u5B9A\u540D\u79F0\uFF1B\u65B0\u79F0\u547C\u5199\u201C\u5173\u952E\u8BCD\u201D\u3002\u65F6\u7A7A\u53EA\u8868\u793A\u5F53\u524D\u65F6\u95F4\u4E0E\u4F4D\u7F6E\uFF0C\u6BCF\u8F6E\u4E0D\u5F97\u521B\u5EFA\u591A\u4E2A\u5F53\u524D\u65F6\u7A7A\u5BF9\u8C61\u3002
+- \u5F53\u524D\u542F\u7528\u5BF9\u8C61\u8868\uFF1A${names || "\uFF08\u65E0\uFF09"}\u3002
 
 \u3010\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\uFF5C\u767D\u76D2\u89C4\u5219\u3011
 \u5141\u8BB8\u5EFA\u6863\u6761\u4EF6\uFF1A
@@ -7539,10 +7516,13 @@ ${evidenceRules}
 \u66F4\u65B0\u4E0E\u51B2\u7A81\uFF1A
 ${updateRules}
 
-\u3010\u542F\u7528\u8868\u683C\u5B57\u6BB5\u3011
+\u3010\u8BED\u4E49\u5C42\u542B\u4E49\u3011
+\u5F53\u524D\u6458\u8981=\u5BF9\u8C61\u5F53\u524D\u552F\u4E00\u6709\u6548\u6982\u62EC\uFF1B\u6761\u76EE\u72B6\u6001=\u5BF9\u8C61\u5F53\u524D\u9636\u6BB5\u6216\u6709\u6548\u6027\uFF1B\u68C0\u7D22\u8BCD=\u540D\u79F0\u3001\u522B\u540D\u548C\u89E6\u53D1\u8BCD\uFF1B\u8EAB\u4EFD\u5B9A\u4E49=\u7A33\u5B9A\u8EAB\u4EFD\u951A\u70B9\uFF1B\u73B0\u884C\u4E8B\u5B9E=\u6301\u7EED\u4F46\u53EF\u88AB\u660E\u786E\u4E8B\u5B9E\u66FF\u6362\u7684\u5C5E\u6027\uFF1B\u5F53\u524D\u72B6\u6001=\u77ED\u671F\u6216\u9636\u6BB5\u72B6\u6001\uFF1B\u5173\u8054\u5BF9\u8C61/\u5173\u8054\u4E8B\u4EF6=\u6B63\u6587\u660E\u786E\u7684\u76F4\u63A5\u5173\u8054\u3002\u89D2\u8272\u53E6\u53EF\u7528\u5916\u89C2\u8868\u73B0\u3001\u5173\u7CFB\u72B6\u6001\u3001\u80FD\u529B\u72B6\u6001\u3002
+
+\u3010\u542F\u7528\u5BF9\u8C61\u8868\u3011
 ${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1B\u4E0D\u8981\u8F93\u51FA <MA_CHANGE>\u3002"}
 
-\u8F93\u51FA\u524D\u53EA\u68C0\u67E5\uFF1A\u662F\u5426\u4E3A\u6B63\u6587\u4E8B\u5B9E\u3001\u5BF9\u8C61\u4E0E\u5B57\u6BB5\u662F\u5426\u660E\u786E\u3001\u5757\u662F\u5426\u95ED\u5408\u3002\u4E0D\u8981\u589E\u52A0\u4EFB\u4F55\u5206\u6790\u3002`;
+\u8F93\u51FA\u524D\u53EA\u68C0\u67E5\uFF1A\u662F\u5426\u4E3A\u6B63\u6587\u4E8B\u5B9E\u3001\u5BF9\u8C61\u7C7B\u578B\u4E0E\u53D8\u5316\u5C42\u662F\u5426\u660E\u786E\u3001\u5757\u662F\u5426\u95ED\u5408\u3002\u4E0D\u8981\u589E\u52A0\u4EFB\u4F55\u5206\u6790\u3002`;
 }
 function normalizeSearchText(value2) {
   return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
@@ -7575,12 +7555,12 @@ function modelRow(row, detail) {
 function directoryEntry(item) {
   const titleToken = normalizeSearchText(item.row.title);
   const keywords = [...new Set((item.row.keywords ?? []).map((value2) => String(value2 ?? "").trim()).filter(Boolean).filter((value2) => normalizeSearchText(value2) !== titleToken))].slice(0, MAX_DIRECTORY_ALIASES).map((value2) => value2.slice(0, 60));
-  return { table: item.table.key, title: String(item.row.title || "").slice(0, 100), keywords };
+  return { table: item.table.name, kind: kindLabel(item.table), title: String(item.row.title || "").slice(0, 100), keywords };
 }
 function directoryLine(entry) {
   const safe = (value2) => contextValue(value2).replace(/[｜|]/g, "\uFF0F");
   const aliases2 = entry.keywords.map(safe).filter(Boolean).join("\u3001");
-  return `entry=${safe(entry.table)}\uFF5C${safe(entry.title)}${aliases2 ? `\uFF5C${aliases2}` : ""}`;
+  return `\u6761\u76EE=${safe(entry.kind)}\uFF5C${safe(entry.table)}\uFF5C${safe(entry.title)}${aliases2 ? `\uFF5C${aliases2}` : ""}`;
 }
 function rowTerms(row) {
   return [row.id, row.title, ...row.keywords ?? []].map(normalizeSearchText).filter((term) => term.length >= 2);
@@ -7725,25 +7705,24 @@ function contextDirectoryBlock(directory, omitted) {
   lines2.push("</MA_DIRECTORY>");
   return lines2.join("\n");
 }
-function contextRowBlocks(relevant) {
+function contextRowBlocks(relevant, active) {
   const blocks = [];
-  for (const [table, rows] of Object.entries(relevant)) {
+  for (const [tableKey, rows] of Object.entries(relevant)) {
+    const table = active.find((item) => item.key === tableKey);
+    if (!table) continue;
     for (const source of rows) {
       const row = source && typeof source === "object" ? source : {};
       const lines2 = ["<MA_CONTEXT_ROW>"];
-      pushContextField(lines2, "table", table);
-      pushContextField(lines2, "object", row.title);
-      pushContextField(lines2, "summary", row.content);
-      pushContextField(lines2, "status", row.status);
-      pushContextField(lines2, "keyword", row.keywords);
-      if (row.lifecycle && typeof row.lifecycle === "object") {
-        for (const [key, value2] of Object.entries(row.lifecycle)) {
-          pushContextField(lines2, `lifecycle.${key}`, value2);
-        }
-      }
+      pushContextField(lines2, "\u5BF9\u8C61\u7C7B\u578B", kindLabel(table));
+      pushContextField(lines2, "\u8868\u683C", table.name);
+      pushContextField(lines2, "\u5BF9\u8C61", row.title);
+      pushContextField(lines2, "\u5F53\u524D\u6458\u8981", row.content);
+      pushContextField(lines2, "\u6761\u76EE\u72B6\u6001", row.status);
+      pushContextField(lines2, "\u68C0\u7D22\u8BCD", row.keywords);
       for (const [key, value2] of Object.entries(row)) {
         if (["title", "content", "status", "keywords", "lifecycle"].includes(key)) continue;
-        pushContextField(lines2, `field.${key}`, value2);
+        const label = stateLayerLabelForField(table, key);
+        if (label) pushContextField(lines2, label, value2);
       }
       lines2.push("</MA_CONTEXT_ROW>");
       blocks.push(lines2.join("\n"));
@@ -7763,7 +7742,7 @@ ${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
 ${contextDirectoryBlock(context.directory, context.directoryOmitted)}
 
 \u3010\u76F8\u5173\u5BF9\u8C61\u5F53\u524D\u5DE5\u4F5C\u526F\u672C\u3011
-${contextRowBlocks(context.relevant)}
+${contextRowBlocks(context.relevant, active)}
 
 \u3010\u73A9\u5BB6\u8F93\u5165\u3011
 ${playerText || "\uFF08\u7A7A\uFF09"}
@@ -7771,13 +7750,13 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u53EA\u8FD4\u56DE <MA_TURN> \u4E0E <MA_CHANGE>\u3002\u628A\u6B63\u6587\u4E8B\u5B9E\u5199\u6210\u6700\u5C0F\u5B57\u6BB5\u53D8\u5316\uFF1B\u4E0D\u8981\u540C\u65F6\u518D\u5199\u4E8B\u5B9E\u5757\u548C\u6761\u76EE\u5757\u3002\u672A\u8FD4\u56DE\u5BF9\u8C61\u4E0E\u5B57\u6BB5\u7531\u63D2\u4EF6\u539F\u6837\u4FDD\u7559\uFF1B\u6B63\u6587\u53D8\u5316\u518D\u5927\u4E5F\u53EA\u8F93\u51FA\u786E\u5B9E\u53D8\u5316\u7684\u5B57\u6BB5\uFF0C\u4E0D\u590D\u8FF0\u65E7\u5185\u5BB9\u3002\u4E0D\u8981\u8BC4\u4EF7\u3001\u63A8\u6D4B\u3001\u8865\u5168\u3001\u5206\u6790\u52A8\u673A\u3001\u5224\u65AD\u7ED3\u7B97\u3001\u63D0\u51FA\u5408\u5E76\u6216\u5220\u9664\u3002\u4E0D\u8981\u8F93\u51FA ID\u3001JSON\u3001\u65E7\u534F\u8BAE <MA_FACT>/<MA_ROW> \u6216\u65E0\u53D8\u5316\u65E7\u5B57\u6BB5\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8FD4\u56DE\u683C\u5F0F\u4E0D\u5B8C\u6574\uFF1A\u9010\u5757\u95ED\u5408\u6807\u7B7E\u3002\u6BCF\u4E2A <MA_CHANGE> \u5FC5\u987B\u5305\u542B event\u3001kind\u3001object\u3001field\u3001operation\uFF0C\u4EE5\u53CA value \u6216 result\uFF1B\u4E0D\u8981\u8865\u5145\u539F\u6587\u6CA1\u6709\u7684\u4E8B\u5B9E\u3002" : ""}`;
+\u53EA\u8FD4\u56DE <MA_TURN> \u4E0E <MA_CHANGE>\u3002\u628A\u6B63\u6587\u4E8B\u5B9E\u5199\u6210\u6700\u5C0F\u8BED\u4E49\u5C42\u53D8\u5316\u3002\u672A\u8FD4\u56DE\u5BF9\u8C61\u4E0E\u8BED\u4E49\u5C42\u7531\u63D2\u4EF6\u539F\u6837\u4FDD\u7559\uFF1B\u6B63\u6587\u53D8\u5316\u518D\u5927\u4E5F\u53EA\u8F93\u51FA\u786E\u5B9E\u53D8\u5316\u7684\u5185\u5BB9\uFF0C\u4E0D\u590D\u8FF0\u65E7\u5185\u5BB9\u3002\u4E0D\u8981\u8BC4\u4EF7\u3001\u63A8\u6D4B\u3001\u8865\u5168\u3001\u5206\u6790\u52A8\u673A\u3001\u5224\u65AD\u7ED3\u7B97\u3001\u63D0\u51FA\u5408\u5E76\u6216\u5220\u9664\u3002\u4E0D\u8981\u8F93\u51FA ID\u3001JSON\u3001\u65E7\u4E8B\u5B9E\u5757\u3001\u65E7\u6761\u76EE\u5757\u3001\u5B57\u6BB5\u58F0\u660E\u3001\u5185\u90E8\u82F1\u6587\u952E\u6216\u65E0\u53D8\u5316\u65E7\u5185\u5BB9\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8FD4\u56DE\u683C\u5F0F\u4E0D\u5B8C\u6574\uFF1A\u9010\u5757\u95ED\u5408\u6807\u7B7E\u3002\u6BCF\u4E2A <MA_CHANGE> \u5FC5\u987B\u5305\u542B\u201C\u4E8B\u4EF6\u3001\u5BF9\u8C61\u7C7B\u578B\u3001\u5BF9\u8C61\u3001\u53D8\u5316\u5C42\u3001\u52A8\u4F5C\u201D\uFF0C\u4EE5\u53CA\u201C\u5185\u5BB9\u201D\u6216\u201C\u4E8B\u5B9E\u7ED3\u679C\u201D\uFF1B\u4E0D\u8981\u8865\u5145\u539F\u6587\u6CA1\u6709\u7684\u4E8B\u5B9E\u3002" : ""}`;
 }
 
 // src/pipeline/state.ts
 var RegistryChangedError = class extends CommitRejectedError {
 };
-var FACT_OPERATIONS2 = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
+var FACT_OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
 var FACT_CONFIDENCE2 = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
 function assertStateBusinessShape(parsed, active) {
   const factIds = /* @__PURE__ */ new Set();
@@ -7792,7 +7771,7 @@ function assertStateBusinessShape(parsed, active) {
     if (!title) throw new Error(`facts[${index}].title \u4E0D\u80FD\u4E3A\u7A7A`);
     if (factIds.has(factId2)) throw new Error(`\u540C\u4E00\u6B21\u72B6\u6001\u8FD4\u56DE\u5305\u542B\u91CD\u590D fact_id\uFF1A${factId2}`);
     factIds.add(factId2);
-    if (source.operation !== void 0 && !FACT_OPERATIONS2.has(String(source.operation))) throw new Error(`facts[${index}].operation \u4E0D\u5408\u6CD5`);
+    if (source.operation !== void 0 && !FACT_OPERATIONS.has(String(source.operation))) throw new Error(`facts[${index}].operation \u4E0D\u5408\u6CD5`);
     if (source.confidence !== void 0 && !FACT_CONFIDENCE2.has(String(source.confidence))) throw new Error(`facts[${index}].confidence \u4E0D\u5408\u6CD5`);
   });
   for (const table of active) {
@@ -7965,7 +7944,7 @@ function attachLocalFactMetadata(parsedSnapshot, rawFacts, registry2) {
       const rowTokens2 = new Set([title, id].map(identityToken).filter(Boolean));
       let matched = facts.filter((fact) => {
         const related = textList(fact.related_entities ?? fact.relatedEntities).map(identityToken).filter(Boolean);
-        if (related.some((token) => rowTokens2.has(token))) return true;
+        if (related.some((token2) => rowTokens2.has(token2))) return true;
         if (table.role === "events" && identityToken(fact.title) === identityToken(title)) return true;
         return false;
       });
@@ -8051,19 +8030,19 @@ ${playerText || "\uFF08\u7A7A\uFF09"}
 \u3010\u672C\u8F6E\u6B63\u6587\u5206\u6BB5 ${index + 1}/${total}\u3011
 ${assistantChunk}
 
-\u53EA\u63D0\u53D6\u8FD9\u4E00\u5206\u6BB5\u660E\u786E\u5EFA\u7ACB\u7684\u53D8\u5316\u3002\u53EA\u8FD4\u56DE <MA_TURN> \u4E0E <MA_CHANGE>\uFF1B\u4E0D\u8981\u5F15\u7528\u5176\u4ED6\u5206\u6BB5\u3001\u8865\u5168\u4E0A\u4E0B\u6587\u6216\u8F93\u51FA\u65E7\u534F\u8BAE\u3002`;
+\u53EA\u63D0\u53D6\u8FD9\u4E00\u5206\u6BB5\u660E\u786E\u5EFA\u7ACB\u7684\u53D8\u5316\u3002\u53EA\u8FD4\u56DE <MA_TURN> \u4E0E <MA_CHANGE>\uFF1B\u4F7F\u7528\u201C\u5BF9\u8C61\u7C7B\u578B\u3001\u5BF9\u8C61\u3001\u53D8\u5316\u5C42\u3001\u52A8\u4F5C\u3001\u5185\u5BB9\u201D\u7684\u56FA\u5B9A\u8BED\u4E49\u683C\u5F0F\uFF0C\u4E0D\u8981\u5F15\u7528\u5176\u4ED6\u5206\u6BB5\u3001\u8865\u5168\u4E0A\u4E0B\u6587\u6216\u8F93\u51FA\u5185\u90E8\u5B57\u6BB5\u952E\u3002`;
 }
 function retryableStateTransportError(error) {
   return /(504|502|503|gateway|timeout|timed out|超时|网关|no message generated|返回为空|响应未完成|upstream)/i.test(toErrorMessage(error));
 }
 function repairableStateParseError(error) {
   const message = toErrorMessage(error);
-  return !/(未注册|已停用|存在歧义|多个条目命中|不允许写入|不允许直接维护|未知生命周期|只能用于已有对象|absorb 必须|merge_)/i.test(message);
+  return !/(未注册|已停用|无法确定对象表|存在歧义|多个条目命中|不允许写入|不允许直接维护|未知生命周期|只能用于已有对象|absorb 必须|merge_)/i.test(message);
 }
 function compactStateRepairSystemPrompt() {
   return `\u4F60\u662F\u56FA\u5B9A\u6587\u672C\u6574\u7406\u5668\uFF0C\u4E0D\u5206\u6790\u5267\u60C5\u3001\u4E0D\u8865\u5145\u4E8B\u5B9E\u3002\u628A\u8F93\u5165\u4E2D\u5DF2\u7ECF\u5199\u51FA\u7684\u5185\u5BB9\u6574\u7406\u6210\u955C\u6E0A\u56FA\u5B9A\u6587\u672C\u3002
-\u53EA\u5141\u8BB8 <MA_TURN> \u548C <MA_CHANGE>\u3002\u5220\u9664\u5757\u5916\u8BF4\u660E\u3001JSON \u5916\u58F3\u3001\u4EE3\u7801\u56F4\u680F\u548C\u601D\u8003\u6587\u5B57\uFF1B\u8865\u9F50\u80FD\u591F\u4ECE\u539F\u6587\u786E\u5B9A\u7684\u6807\u7B7E\u4E0E\u5B57\u6BB5\u540D\u3002
-\u6BCF\u4E2A\u53D8\u5316\u5757\u5FC5\u987B\u6709 event\u3001kind\u3001object\u3001field\u3001operation\uFF0C\u4EE5\u53CA value \u6216 result\u3002result \u4E0E confidence \u53EF\u7701\u7565\u3002\u7981\u6B62\u521B\u9020\u3001\u731C\u6D4B\u6216\u6539\u5199\u4E8B\u5B9E\u3002`;
+\u53EA\u5141\u8BB8 <MA_TURN> \u548C <MA_CHANGE>\u3002\u5220\u9664\u5757\u5916\u8BF4\u660E\u3001JSON \u5916\u58F3\u3001\u4EE3\u7801\u56F4\u680F\u548C\u601D\u8003\u6587\u5B57\uFF1B\u8865\u9F50\u80FD\u591F\u4ECE\u539F\u6587\u786E\u5B9A\u7684\u6807\u7B7E\u4E0E\u56FA\u5B9A\u8BED\u4E49\u9879\u3002
+\u6BCF\u4E2A\u53D8\u5316\u5757\u5FC5\u987B\u6709\u201C\u4E8B\u4EF6\u3001\u5BF9\u8C61\u7C7B\u578B\u3001\u5BF9\u8C61\u3001\u53D8\u5316\u5C42\u3001\u52A8\u4F5C\u201D\uFF0C\u4EE5\u53CA\u201C\u5185\u5BB9\u201D\u6216\u201C\u4E8B\u5B9E\u7ED3\u679C\u201D\u3002\u4E8B\u5B9E\u7ED3\u679C\u4E0E\u7F6E\u4FE1\u5EA6\u53EF\u7701\u7565\u3002\u7981\u6B62\u521B\u9020\u3001\u731C\u6D4B\u6216\u6539\u5199\u4E8B\u5B9E\uFF0C\u4E5F\u7981\u6B62\u8F93\u51FA\u5185\u90E8\u5B57\u6BB5\u952E\u3002`;
 }
 function compactStateRepairPrompt(raw) {
   return `\u3010\u5F85\u6574\u7406\u7684\u6A21\u578B\u539F\u59CB\u8FD4\u56DE\u3011
