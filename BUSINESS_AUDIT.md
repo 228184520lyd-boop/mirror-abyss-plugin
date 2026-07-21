@@ -1,6 +1,22 @@
-# Mirror Abyss 1.3.7 业务逻辑审计
+# Mirror Abyss 1.3.12 业务逻辑审计
 
-流水线：`ma-pipeline-71`
+流水线：`ma-pipeline-75`
+
+## 1.3.12 历史工作流边界
+
+历史失效与恢复流程由 `src/workflow/history-workflow.ts` 统一解释和推进。`pipeline.ts`、世界书发布与诊断只能通过该接口判断流程是否阻断、当前阶段、恢复起点和错误；不得各自维护一套历史状态转移。
+
+本阶段底层仍保存 `historyInvalidation / historyRecovery`，但它们仅是工作流模块的存储实现，不再是外围业务可自由修改的两个权威。事实、快照、总结和世界书内容仍由既有记忆状态机与提交边界负责。
+
+## 1.3.11 单一记忆权威边界
+
+生产链只有一个记忆写入编排者：`memory-state-machine.ts`。模型提供明确事实，`object-identity.ts` 只解析稳定对象，`special-table-rules.ts` 只处理时空等确定例外，`entry-lifecycle.ts` 只执行参与状态与物理删除。总结、世界书、图谱和 UI 均不能自行创造另一套生命周期判断。
+
+生产状态只允许 `active / settling`。旧 `absorbed / retired` 不进入正常游玩路径，只能由 repository 在加载旧存档时一次性迁移。模型输出中的 `entry_action`、`merge_*` 等字段不构成事实，生产解析器忽略。
+
+小总结和大总结负责写入“事实已消费／已固化”的覆盖结果；随后统一状态机执行审计。世界书只读取最终提交态并映射为启用、停用或删除；旁观者过滤属于只读发布投影，不能写回快照。记忆网络同样只读。
+
+旧 `sedimentation.ts` 与 `summary-policy.ts` 已删除，防止旧沉降、旧时机策略和新状态机同时成为权威。提交态通过不变量检查阻止重复稳定 ID 与旧生命周期状态重新进入生产快照。
 
 ## 1.3.7 确定性结算与状态传输边界
 

@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.3.9";
-var PIPELINE_VERSION = "ma-pipeline-72";
+var VERSION = "1.3.12";
+var PIPELINE_VERSION = "ma-pipeline-75";
 var DEFAULT_CONTENT_LIMITS = {
   tables: {
     spacetime: 700,
@@ -1795,13 +1795,6 @@ function resolveField(table, raw) {
   if (!matches.length) throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u672A\u6CE8\u518C\u4E8E ${table.key}\uFF1A${raw}`);
   throw new Error(`\u56FA\u5B9A\u6587\u672C\u5B57\u6BB5\u540D\u79F0\u5B58\u5728\u6B67\u4E49\uFF08${table.key}\uFF09\uFF1A${raw}`);
 }
-function lifecycleAction(value2) {
-  const token = identity(value2);
-  if (["absorb", "merge", "absorbed", "\u5E76\u5165", "\u5F52\u5E76", "\u5408\u5E76"].includes(token)) return "absorb";
-  if (["retire", "retired", "remove", "expire", "\u9000\u51FA", "\u6CEF\u706D", "\u5931\u6548"].includes(token)) return "retire";
-  if (["restore", "reactivate", "\u6062\u590D", "\u91CD\u65B0\u6FC0\u6D3B"].includes(token)) return "restore";
-  return void 0;
-}
 function buildRowPatch(block, active, previous) {
   const requestedTable = resolveTable(fieldValue(block, "table"), active);
   const kind = rowKind(fieldValue(block, "kind"));
@@ -1869,31 +1862,7 @@ function buildRowPatch(block, active, previous) {
     fields,
     semanticRole: table.role
   };
-  const action = lifecycleAction(fieldValue(block, "entry_action"));
-  let lifecycleDirective;
-  if (action) {
-    if (!existing) throw new Error(`\u7B2C ${block.line} \u884C\u7684\u6761\u76EE\u751F\u547D\u5468\u671F\u52A8\u4F5C\u53EA\u80FD\u7528\u4E8E\u5DF2\u6709\u5BF9\u8C61\uFF1A${objectName}`);
-    let targetTable;
-    let targetTitle;
-    if (action === "absorb") {
-      const rawTargetTable = fieldValue(block, "merge_table").trim();
-      targetTitle = fieldValue(block, "merge_object").trim();
-      if (!rawTargetTable || !targetTitle) throw new Error(`\u7B2C ${block.line} \u884C\u7684 absorb \u5FC5\u987B\u586B\u5199 merge_table \u4E0E merge_object`);
-      targetTable = resolveTable(rawTargetTable, active).key;
-      if (!fieldValue(block, "merge_note").trim()) throw new Error(`\u7B2C ${block.line} \u884C\u7684 absorb \u5FC5\u987B\u586B\u5199 merge_note`);
-    }
-    lifecycleDirective = {
-      sourceId: existing.id,
-      sourceTable: table.key,
-      sourceTitle: existing.title,
-      action,
-      targetTable,
-      targetTitle,
-      note: fieldValue(block, "merge_note").trim() || void 0,
-      reason: fieldValue(block, "merge_reason").trim() || void 0
-    };
-  }
-  return { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation, lifecycleDirective };
+  return { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation };
 }
 function mergePatchRows(left, right) {
   const fields = { ...left.fields ?? {} };
@@ -2113,7 +2082,6 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
   const snapshot = {};
   const rowsByIdentity = /* @__PURE__ */ new Map();
   const relocationsById = /* @__PURE__ */ new Map();
-  const lifecycleBySourceId = /* @__PURE__ */ new Map();
   for (const block of blocks) {
     if (block.kind === "change") {
       const converted = changeFromBlock(block, active, previous, activeFacts);
@@ -2129,8 +2097,7 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
         table: patch.table,
         row: mergePatchRows(current.row, patch.row),
         matchKey: patch.matchKey,
-        relocation: current.relocation ?? patch.relocation,
-        lifecycleDirective: current.lifecycleDirective
+        relocation: current.relocation ?? patch.relocation
       } : patch);
       if (patch.relocation) relocationsById.set(patch.relocation.id, patch.relocation);
       continue;
@@ -2149,11 +2116,9 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
         table: patch.table,
         row: mergePatchRows(current.row, patch.row),
         matchKey: patch.matchKey,
-        relocation: current.relocation ?? patch.relocation,
-        lifecycleDirective: patch.lifecycleDirective ?? current.lifecycleDirective
+        relocation: current.relocation ?? patch.relocation
       } : patch);
       if (patch.relocation) relocationsById.set(patch.relocation.id, patch.relocation);
-      if (patch.lifecycleDirective) lifecycleBySourceId.set(patch.lifecycleDirective.sourceId, patch.lifecycleDirective);
     }
   }
   for (const { table, row } of rowsByIdentity.values()) (snapshot[table] ||= []).push(row);
@@ -2162,7 +2127,8 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
     facts: [...factsById.values()],
     snapshot,
     relocations: [...relocationsById.values()],
-    entryLifecycleDirectives: [...lifecycleBySourceId.values()]
+    // 旧 API 保留空数组，明确表示生命周期只由插件状态机生成。
+    entryLifecycleDirectives: []
   };
 }
 
@@ -2379,7 +2345,8 @@ function entryState(row) {
   return row?.entryLifecycle ? "settling" : "active";
 }
 function isLegacyEntryLifecycle(row) {
-  return row?.entryLifecycle?.state === "absorbed" || row?.entryLifecycle?.state === "retired";
+  const state2 = safeText(row?.entryLifecycle?.state, 24);
+  return state2 === "absorbed" || state2 === "retired";
 }
 function isEntryLifecycleHidden(row) {
   return isLegacyEntryLifecycle(row);
@@ -2561,7 +2528,7 @@ function finalizeSettlingEntries(snapshot, options) {
 function garbageCollectLegacyEntryTombstones(snapshot, internalFacts, registry2, focusObjectId) {
   const tables2 = normalizeTableRegistry(registry2);
   const hasLegacyRows = tables2.some((table) => (snapshot[table.key] ?? []).some((row) => {
-    const state2 = row.entryLifecycle?.state;
+    const state2 = safeText(row.entryLifecycle?.state, 24);
     return state2 === "absorbed" || state2 === "retired" || Boolean(row.entryLifecycle?.legacyState);
   }));
   if (!hasLegacyRows) return { snapshot, deletedRowIds: [] };
@@ -2570,7 +2537,7 @@ function garbageCollectLegacyEntryTombstones(snapshot, internalFacts, registry2,
   const deleted = /* @__PURE__ */ new Set();
   for (const table of tables2) {
     for (const row of next[table.key] ?? []) {
-      const rawState = row.entryLifecycle?.state;
+      const rawState = safeText(row.entryLifecycle?.state, 24);
       const legacyState = row.entryLifecycle?.legacyState || (rawState === "absorbed" || rawState === "retired" ? rawState : void 0);
       if (!legacyState) continue;
       row.entryLifecycle = normalizeEntryLifecycleValue({ ...row.entryLifecycle, state: legacyState }, row.entryLifecycle);
@@ -3184,21 +3151,21 @@ function filterPassiveObservers(snapshot, registry2) {
 }
 
 // src/storage/repository.ts
-var CURRENT_SCHEMA_VERSION = 2;
+var CURRENT_SCHEMA_VERSION = 3;
 function cloneChatState(value2) {
   return JSON.parse(JSON.stringify(value2));
 }
 function emptyChatState(chatKey) {
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    memoryStateVersion: 1,
+    memoryStateVersion: 2,
     chatKey,
     processedMessageKeys: [],
     internalFacts: [],
     smallSummaries: [],
     largeSummaries: [],
     lastSyncStatus: "idle",
-    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false },
+    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false },
     updatedAt: nowIso()
   };
 }
@@ -3335,10 +3302,11 @@ function migrateChatState(raw, chatKey) {
   const needsUniqueObjectNamesMigration = state2.migration?.uniqueObjectNamesV31 !== true;
   const needsSpacetimeSingletonMigration = state2.migration?.spacetimeSingletonV32 !== true;
   const needsEntryLifecycleMigration = state2.migration?.entryLifecycleV33 !== true;
+  const needsSingleAuthorityMigration = state2.migration?.singleAuthorityV34 !== true;
   const needsFullSnapshotMigration = needsViewMigration || needsObjectViewMigration || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
   let artifactViewsChanged = false;
   state2.schemaVersion = CURRENT_SCHEMA_VERSION;
-  state2.memoryStateVersion = 1;
+  state2.memoryStateVersion = 2;
   state2.chatLocator = currentChatLocator() || state2.chatLocator;
   state2.processedMessageKeys = Array.isArray(state2.processedMessageKeys) ? [...new Set(state2.processedMessageKeys.map(String))] : [];
   state2.smallSummaries = normalizeSummaryArrays(state2.smallSummaries, "small");
@@ -3354,7 +3322,7 @@ function migrateChatState(raw, chatKey) {
   for (const message of getChat()) {
     const artifact = message?.extra?.[MODULE_NAME];
     if (!artifact || artifact.chatKey !== chatKey) continue;
-    if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration || needsUniqueObjectNamesMigration || needsSpacetimeSingletonMigration || needsEntryLifecycleMigration) && artifact.snapshot) {
+    if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration || needsUniqueObjectNamesMigration || needsSpacetimeSingletonMigration || needsEntryLifecycleMigration || needsSingleAuthorityMigration) && artifact.snapshot) {
       const before = JSON.stringify({
         snapshot: artifact.snapshot,
         aliases: artifact.persistedCharacterIdAliasesV30,
@@ -3450,7 +3418,7 @@ function migrateChatState(raw, chatKey) {
           delete artifact.lorebookEntryIds;
         }
       }
-      if (needsEntryLifecycleMigration) {
+      if (needsEntryLifecycleMigration || needsSingleAuthorityMigration) {
         for (const table of registry2) {
           for (const row of migrated[table.key] ?? []) {
             if (!row.entryLifecycle) continue;
@@ -3521,7 +3489,8 @@ function migrateChatState(raw, chatKey) {
     persistedCharacterMergeV30: true,
     uniqueObjectNamesV31: true,
     spacetimeSingletonV32: true,
-    entryLifecycleV33: true
+    entryLifecycleV33: true,
+    singleAuthorityV34: true
   };
   state2.updatedAt ||= nowIso();
   return {
@@ -3544,12 +3513,13 @@ var REQUIRED_MIGRATIONS = [
   "persistedCharacterMergeV30",
   "uniqueObjectNamesV31",
   "spacetimeSingletonV32",
-  "entryLifecycleV33"
+  "entryLifecycleV33",
+  "singleAuthorityV34"
 ];
 function currentStateStructure(raw, chatKey) {
   if (!raw || typeof raw !== "object") return false;
   const state2 = raw;
-  if (state2.schemaVersion !== CURRENT_SCHEMA_VERSION || state2.memoryStateVersion !== 1 || state2.chatKey !== chatKey) return false;
+  if (state2.schemaVersion !== CURRENT_SCHEMA_VERSION || state2.memoryStateVersion !== 2 || state2.chatKey !== chatKey) return false;
   if (!Array.isArray(state2.processedMessageKeys) || !Array.isArray(state2.internalFacts) || !Array.isArray(state2.smallSummaries) || !Array.isArray(state2.largeSummaries)) return false;
   if (!state2.processedMessageKeys.every((key) => typeof key === "string")) return false;
   if (new Set(state2.processedMessageKeys).size !== state2.processedMessageKeys.length) return false;
@@ -3784,6 +3754,95 @@ function firstInconsistentArtifactIndex(chat, moduleName, identityAt, fingerprin
       artifact && (artifact.messageIndex !== index || artifact.messageKey !== identityAt(index) || artifact.sourceFingerprint !== fingerprintAt(index))
     );
   });
+}
+
+// src/workflow/history-workflow.ts
+function readHistoryWorkflow(state2) {
+  const invalidation = state2?.historyInvalidation;
+  const recovery = state2?.historyRecovery;
+  if (recovery) {
+    const status = recovery.phase === "failed" ? "failed" : recovery.phase === "partial" ? "partial" : "rebuilding";
+    return {
+      status,
+      blocked: true,
+      running: status === "rebuilding",
+      invalidation,
+      recovery,
+      startIndex: invalidation?.startIndex ?? recovery.startIndex,
+      phase: recovery.phase,
+      automatic: Boolean(invalidation?.automatic),
+      pauseError: invalidation?.pauseError,
+      error: recovery.error
+    };
+  }
+  if (invalidation) {
+    return {
+      status: "invalid",
+      blocked: true,
+      running: false,
+      invalidation,
+      startIndex: invalidation.startIndex,
+      automatic: Boolean(invalidation.automatic),
+      pauseError: invalidation.pauseError
+    };
+  }
+  return { status: "clean", blocked: false, running: false, automatic: false };
+}
+function historyBlockedMessage(state2) {
+  const workflow = readHistoryWorkflow(state2);
+  return workflow.startIndex === void 0 ? "\u5386\u53F2\u6570\u636E\u5DF2\u5931\u6548\uFF0C\u8BF7\u5148\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9" : `\u5386\u53F2\u6570\u636E\u5DF2\u5931\u6548\uFF0C\u8BF7\u4ECE\u7B2C ${workflow.startIndex + 1} \u6761\u6D88\u606F\u5F00\u59CB\u91CD\u7B97`;
+}
+function invalidateHistoryWorkflow(state2, input) {
+  delete state2.historyRecovery;
+  state2.historyInvalidation = {
+    ...input,
+    detectedAt: input.detectedAt || nowIso()
+  };
+  return state2.historyInvalidation;
+}
+function setHistoryPauseError(state2, error) {
+  if (!state2.historyInvalidation) return;
+  if (error) state2.historyInvalidation.pauseError = error;
+  else delete state2.historyInvalidation.pauseError;
+}
+function resolveLatestHistoryInvalidation(state2, messageIndex) {
+  const invalidation = state2.historyInvalidation;
+  if (!invalidation || invalidation.startIndex !== messageIndex || invalidation.reason === "deleted") return false;
+  delete state2.historyInvalidation;
+  return true;
+}
+function beginHistoryRecovery(state2, input) {
+  state2.historyRecovery = {
+    ...input,
+    updatedAt: input.updatedAt || nowIso()
+  };
+  return state2.historyRecovery;
+}
+function updateHistoryRecovery(state2, patch) {
+  if (!state2.historyRecovery) return void 0;
+  Object.assign(state2.historyRecovery, patch, { updatedAt: patch.updatedAt || nowIso() });
+  return state2.historyRecovery;
+}
+function failHistoryRecovery(state2, error, patch = {}) {
+  return updateHistoryRecovery(state2, { ...patch, phase: "failed", error });
+}
+function markHistoryRecoveryPartial(state2, error) {
+  return updateHistoryRecovery(state2, { phase: "partial", error });
+}
+function interruptHistoryRecovery(state2, reason) {
+  const workflow = readHistoryWorkflow(state2);
+  if (!workflow.running) return false;
+  failHistoryRecovery(state2, reason);
+  return true;
+}
+function chooseHistoryRecalculationStart(state2, startIndex) {
+  if (!state2.historyInvalidation) throw new Error("\u5F53\u524D\u6CA1\u6709\u5F85\u5904\u7406\u7684\u5386\u53F2\u5931\u6548");
+  state2.historyInvalidation.startIndex = startIndex;
+  delete state2.historyRecovery;
+}
+function completeHistoryWorkflow(state2) {
+  delete state2.historyInvalidation;
+  delete state2.historyRecovery;
 }
 
 // src/llm/request-scheduler.ts
@@ -5121,9 +5180,8 @@ function aliases(title) {
 }
 function filterSnapshotForLorebook(snapshot, customRegistry) {
   const tables2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
-  const normalized = normalizeSnapshot(snapshot, snapshot, tables2);
-  const deduped = dedupeStrongStateRows(normalized, tables2);
-  const next = filterPassiveObservers(ensureCurrentSceneEntry(enforceObjectViewAllocation(deduped, tables2), tables2), tables2);
+  const next = filterPassiveObservers(structuredClone(snapshot), tables2);
+  for (const table of tables2) next[table.key] ||= [];
   for (const table of tables2) next[table.key] = (next[table.key] ?? []).filter((row) => !isEntryLifecycleHidden(row));
   const stateKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key;
   const eventKey = tableByRole(tables2, "events", false)?.key;
@@ -6002,13 +6060,13 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
   markStage(artifact, "sync", "running");
   await putArtifact(artifact);
   const chatState = await getChatState(artifact.chatKey);
-  if (chatState.historyInvalidation) {
-    const recovery = chatState.historyRecovery;
+  const historyWorkflow = readHistoryWorkflow(chatState);
+  if (historyWorkflow.blocked) {
     const recoveryAuthorized = Boolean(
-      options.allowHistoryRecovery && recovery?.phase === "publishing-lorebook" && chatState.latestSnapshotMessageKey === artifact.messageKey
+      options.allowHistoryRecovery && historyWorkflow.phase === "publishing-lorebook" && chatState.latestSnapshotMessageKey === artifact.messageKey
     );
     if (!recoveryAuthorized) {
-      const blockedReason = chatState.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u9700\u8981\u91CD\u7B97`;
+      const blockedReason = historyWorkflow.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9" : `\u7B2C ${historyWorkflow.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u9700\u8981\u91CD\u7B97`;
       markStage(artifact, "sync", "blocked", blockedReason);
       await putArtifact(artifact);
       throw new TaskBlockedError(blockedReason);
@@ -6528,7 +6586,7 @@ function deriveIncrementalSettlementDirectives(input) {
 }
 
 // src/domain/memory-state-machine.ts
-var MEMORY_STATE_VERSION = 1;
+var MEMORY_STATE_VERSION = 2;
 function cloneProtectedRow(row) {
   return structuredClone(row);
 }
@@ -6590,6 +6648,19 @@ function preserveProtectedRows(previous, next, registryValue) {
   }
   return dedupeStrongStateRows(next, registry2);
 }
+function assertCommittedMemoryState(snapshot, registryValue) {
+  const registry2 = normalizeTableRegistry(registryValue);
+  for (const table of registry2) {
+    const ids = /* @__PURE__ */ new Set();
+    for (const row of snapshot[table.key] ?? []) {
+      if (ids.has(row.id)) throw new Error(`\u5DF2\u63D0\u4EA4\u5FEB\u7167\u5305\u542B\u91CD\u590D\u5BF9\u8C61 ID\uFF1A${table.key}/${row.id}`);
+      ids.add(row.id);
+      if (row.entryLifecycle && row.entryLifecycle.state !== "settling") {
+        throw new Error(`\u751F\u4EA7\u72B6\u6001\u5305\u542B\u65E7\u751F\u547D\u5468\u671F\uFF1A${table.key}/${row.id}/${row.entryLifecycle.state}`);
+      }
+    }
+  }
+}
 function transitionStateSnapshot(input) {
   const registry2 = normalizeTableRegistry(input.registry);
   const diagnostics = [];
@@ -6631,23 +6702,15 @@ function transitionStateSnapshot(input) {
     code: "settlement-transitions",
     detail: `\u5E94\u7528 ${lifecycle.appliedSourceIds.length}\uFF0C\u5FFD\u7565 ${lifecycle.ignoredSourceIds.length}`
   });
-  const legacyGc = garbageCollectLegacyEntryTombstones(
-    lifecycle.snapshot,
-    input.internalFacts,
-    registry2,
-    input.focusObjectId
-  );
-  if (legacyGc.deletedRowIds.length) diagnostics.push({
-    stage: "legacy-migration",
-    code: "legacy-tombstones-removed",
-    detail: `\u6E05\u7406 ${legacyGc.deletedRowIds.length} \u6761\u65E7\u5893\u7891`
-  });
+  const committed = filterPassiveObservers(lifecycle.snapshot, registry2);
+  assertCommittedMemoryState(committed, registry2);
   return {
-    snapshot: filterPassiveObservers(legacyGc.snapshot, registry2),
+    snapshot: committed,
     memoryStateVersion: MEMORY_STATE_VERSION,
     lifecycleAppliedIds: lifecycle.appliedSourceIds,
     lifecycleIgnoredIds: lifecycle.ignoredSourceIds,
-    legacyDeletedIds: legacyGc.deletedRowIds,
+    // 字段仅保留 API 兼容；旧墓碑清理由 repository 的一次性迁移负责。
+    legacyDeletedIds: [],
     diagnostics
   };
 }
@@ -6662,6 +6725,7 @@ function assertCoverageCommitted(input) {
 }
 function finalizeSummarySettlement(input) {
   assertCoverageCommitted(input);
+  assertCommittedMemoryState(input.snapshot, input.registry);
   const result = finalizeSettlingEntries(input.snapshot, {
     eventId: input.eventId,
     sourceFactIds: input.sourceFactIds,
@@ -6670,6 +6734,7 @@ function finalizeSummarySettlement(input) {
     registry: input.registry,
     focusObjectId: input.focusObjectId
   });
+  assertCommittedMemoryState(result.snapshot, input.registry);
   return {
     ...result,
     diagnostics: [{
@@ -6697,7 +6762,13 @@ function normalizeActivityUpdates(value2) {
 function normalizeSedimentation(value2) {
   if (!value2 || typeof value2 !== "object") return void 0;
   const source = value2;
-  return { removeRowIds: stringList3(source.removeRowIds, 50, 160), characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates), notes: stringList3(source.notes, 30, 500) };
+  return {
+    removeRowIds: stringList3(source.removeRowIds, 50, 160),
+    characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates),
+    notes: stringList3(source.notes, 30, 500),
+    appliedRowIds: stringList3(source.appliedRowIds, 80, 160),
+    ignoredRowIds: stringList3(source.ignoredRowIds, 80, 160)
+  };
 }
 function normalizeSummary(value2, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
   return {
@@ -6713,84 +6784,10 @@ function normalizeSummary(value2, kind, sourceKeys, previousLargeSummaryId, meta
     eventIds: kind === "large" ? [...new Set(metadata.eventIds ?? (metadata.eventId ? [metadata.eventId] : []))] : void 0,
     unresolvedItems: stringList3(value2.unresolved ?? value2.unresolvedItems, 40, 1e3),
     createdAt: nowIso(),
-    sedimentation: kind === "small" ? normalizeSedimentation(value2.sedimentation) : void 0,
+    // 兼容字段现在只保存统一状态机的结算报告，不再反向修改快照。
+    sedimentation: normalizeSedimentation(value2.sedimentation),
     previousLargeSummaryId: kind === "large" ? previousLargeSummaryId : void 0
   };
-}
-
-// src/domain/sedimentation.ts
-var REMOVABLE_ROLES = /* @__PURE__ */ new Set(["spacetime"]);
-var SETTLED_STATUS = /(已结束|已完成|已关闭|已失效|已归档|已替代|resolved|closed|completed|expired|archived|superseded|historical)/i;
-function registryOrDefault2(registry2) {
-  return normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY);
-}
-function canRemoveRow(table, row, snapshot) {
-  if (!REMOVABLE_ROLES.has(table.role)) return false;
-  if (row.source === "manual" || row.locked || !SETTLED_STATUS.test(`${row.status} ${row.content}`)) return false;
-  if (table.role === "spacetime" && (snapshot[table.key]?.length ?? 0) <= 1) return false;
-  return true;
-}
-function canAdvanceActivity(current, target, row) {
-  if (row.source === "manual" || row.locked || current === "\u5F53\u524D\u5728\u573A" || current === "\u5F53\u524D\u76F8\u5173") return false;
-  const sequence = ["\u79BB\u573A\u4F46\u4ECD\u6D3B\u8DC3", "\u4F11\u7720", "\u957F\u671F\u4F11\u7720", "\u5DF2\u5F52\u6863"];
-  const from = sequence.indexOf(current ?? "\u672A\u6807\u6CE8");
-  const to = sequence.indexOf(target);
-  if (to < 0) return false;
-  if (current === "\u672A\u6807\u6CE8") return target === "\u4F11\u7720";
-  return from >= 0 && to === Math.min(from + 1, sequence.length - 1);
-}
-function deriveEventSedimentationPlan(snapshot, eventId, factIds, closed, registry2) {
-  if (!closed) return { removeRowIds: [], characterActivityUpdates: [], notes: ["\u4E8B\u4EF6\u5C1A\u672A\u7ED3\u675F\uFF0C\u4E0D\u6267\u884C\u53EF\u89C1\u89C6\u56FE\u9000\u51FA\u3002"] };
-  const tables2 = registryOrDefault2(registry2);
-  const factSet = new Set(factIds);
-  const removeRowIds = [];
-  for (const table of tables2.filter((item) => REMOVABLE_ROLES.has(item.role))) {
-    for (const row of snapshot[table.key] ?? []) {
-      const linked = (row.eventIds ?? (row.eventId ? [row.eventId] : [])).includes(eventId) || (row.factIds ?? []).some((id) => factSet.has(id));
-      if (linked && SETTLED_STATUS.test(`${row.status} ${row.content}`)) removeRowIds.push(row.id);
-    }
-  }
-  return {
-    removeRowIds: [...new Set(removeRowIds)],
-    characterActivityUpdates: [],
-    notes: ["\u7531\u4EE3\u7801\u6309 event_id / fact_id \u751F\u6210\u65E7\u65F6\u7A7A\u9000\u51FA\u5019\u9009\uFF1B\u4E8B\u4EF6\u3001\u533A\u57DF\u548C\u5BF9\u8C61\u6761\u76EE\u4FDD\u7559\uFF0C\u5728\u6761\u76EE\u5185\u90E8\u5B8C\u6210\u8FD1\u671F\u4E0E\u5386\u53F2\u6C89\u964D\u3002"]
-  };
-}
-function applySedimentation(snapshot, summary, registry2) {
-  const tables2 = registryOrDefault2(registry2);
-  const plan = summary.sedimentation;
-  if (!plan) return normalizeSnapshot(snapshot, snapshot, tables2);
-  const next = normalizeSnapshot(snapshot, snapshot, tables2);
-  const requested = new Set(plan.removeRowIds);
-  const applied = [];
-  const ignored = [];
-  for (const table of tables2.filter((item) => REMOVABLE_ROLES.has(item.role))) {
-    next[table.key] = (next[table.key] ?? []).filter((row) => {
-      if (!requested.has(row.id)) return true;
-      if (canRemoveRow(table, row, next)) {
-        applied.push(row.id);
-        return false;
-      }
-      ignored.push(row.id);
-      return true;
-    });
-  }
-  const stateKey = tableByRole(tables2, "characters", false)?.key || tableByRole(tables2, "state", false)?.key;
-  const stateRows2 = stateKey ? next[stateKey] ?? [] : [];
-  for (const update of plan.characterActivityUpdates) {
-    const row = stateRows2.find((item) => item.id === update.rowId);
-    if (!row || !canAdvanceActivity(row.lifecycle?.activity, update.activity, row)) {
-      ignored.push(update.rowId);
-      continue;
-    }
-    row.lifecycle ||= { existence: "\u672A\u6807\u6CE8", activity: "\u672A\u6807\u6CE8", memory: "\u672A\u6807\u6CE8", evidenceLevel: "\u672A\u77E5", evidence: "", returnConditions: [], returnBlockers: [] };
-    row.lifecycle.activity = update.activity;
-    row.status = update.activity;
-    applied.push(update.rowId);
-  }
-  const normalizedPlan = { ...plan, appliedRowIds: [...new Set(applied)], ignoredRowIds: [...new Set(ignored)] };
-  summary.sedimentation = normalizedPlan;
-  return next;
 }
 
 // src/prompts/summary.ts
@@ -7109,14 +7106,6 @@ async function generateSmallSummary(artifact, force = false) {
     if (artifact.snapshot) {
       let nextSnapshot = artifact.snapshot;
       for (const { group, summary, newFactIds } of generated) {
-        summary.sedimentation = deriveEventSedimentationPlan(
-          nextSnapshot,
-          group.eventId,
-          newFactIds,
-          group.closed,
-          settings.tableRegistry
-        );
-        nextSnapshot = applySedimentation(nextSnapshot, summary, settings.tableRegistry);
         nextSnapshot = applySummaryLayer(
           nextSnapshot,
           group.eventId,
@@ -7137,11 +7126,13 @@ async function generateSmallSummary(artifact, force = false) {
           focusObjectId: chatState.focusObjectId
         });
         nextSnapshot = settlement.snapshot;
-        if (settlement.deletedRowIds.length) {
-          summary.sedimentation ||= { removeRowIds: [], characterActivityUpdates: [], notes: [] };
-          summary.sedimentation.appliedRowIds = [.../* @__PURE__ */ new Set([...summary.sedimentation.appliedRowIds ?? [], ...settlement.deletedRowIds])];
-          summary.sedimentation.notes.push(`\u603B\u7ED3\u8986\u76D6\u540E\u5220\u9664\u5DF2\u7ED3\u7B97\u6761\u76EE\uFF1A${settlement.deletedRowIds.join("\u3001")}`);
-        }
+        summary.sedimentation = {
+          removeRowIds: [],
+          characterActivityUpdates: [],
+          appliedRowIds: [...settlement.deletedRowIds],
+          ignoredRowIds: [...settlement.retainedRowIds],
+          notes: settlement.deletedRowIds.length ? [`\u603B\u7ED3\u8986\u76D6\u540E\u7531\u7EDF\u4E00\u72B6\u6001\u673A\u7269\u7406\u5220\u9664\uFF1A${settlement.deletedRowIds.join("\u3001")}`] : ["\u603B\u7ED3\u5DF2\u5199\u5165\u8986\u76D6\u6807\u8BB0\uFF1B\u6CA1\u6709\u6EE1\u8DB3\u5220\u9664\u5951\u7EA6\u7684\u5F85\u7ED3\u7B97\u5BB9\u5668\u3002"]
+        };
       }
       artifact.snapshot = nextSnapshot;
       assertArtifactCommitCurrent(artifact);
@@ -7246,6 +7237,13 @@ async function generateLargeSummary(artifact, force = false) {
           focusObjectId: chatState.focusObjectId
         });
         nextSnapshot = settlement.snapshot;
+        summary.sedimentation = {
+          removeRowIds: [],
+          characterActivityUpdates: [],
+          appliedRowIds: [...settlement.deletedRowIds],
+          ignoredRowIds: [...settlement.retainedRowIds],
+          notes: settlement.deletedRowIds.length ? [`\u5927\u603B\u7ED3\u8986\u76D6\u540E\u7531\u7EDF\u4E00\u72B6\u6001\u673A\u7269\u7406\u5220\u9664\uFF1A${settlement.deletedRowIds.join("\u3001")}`] : ["\u5927\u603B\u7ED3\u5DF2\u56FA\u5316\uFF1B\u6CA1\u6709\u6EE1\u8DB3\u5220\u9664\u5951\u7EA6\u7684\u5F85\u7ED3\u7B97\u5BB9\u5668\u3002"]
+        };
       }
       artifact.snapshot = nextSnapshot;
       assertArtifactCommitCurrent(artifact);
@@ -8285,16 +8283,8 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
     notifyFrom(firstChangedIndex);
   }
   const chatState = await getChatState(chatKey);
-  const recovery = chatState.historyRecovery;
-  const interruptedRecovery = Boolean(
-    recovery && ["rebuilding-core", "rebuilding-derived", "publishing-lorebook"].includes(recovery.phase)
-  );
-  if (interruptedRecovery && recovery) {
-    recovery.phase = "failed";
-    recovery.error = reason;
-    recovery.updatedAt = nowIso();
-    await putChatState(chatState);
-  }
+  const interruptedRecovery = interruptHistoryRecovery(chatState, reason);
+  if (interruptedRecovery) await putChatState(chatState);
   return { artifacts: changedArtifacts, historyRecovery: interruptedRecovery };
 }
 function subscribePipeline(listener) {
@@ -8349,16 +8339,16 @@ async function pauseLorebookForHistoryChange(chatKey) {
   try {
     await pauseCurrentChatLorebookEntries(chatKey);
     const state2 = await getChatState(chatKey);
-    if (state2.historyInvalidation?.pauseError) {
-      delete state2.historyInvalidation.pauseError;
+    if (readHistoryWorkflow(state2).pauseError) {
+      setHistoryPauseError(state2);
       await putChatState(state2);
     }
   } catch (error) {
     const detail = toErrorMessage(error);
     console.warn("[MirrorAbyss] failed to pause stale lorebook entries", error);
     const state2 = await getChatState(chatKey);
-    if (state2.historyInvalidation) {
-      state2.historyInvalidation.pauseError = detail;
+    if (readHistoryWorkflow(state2).invalidation) {
+      setHistoryPauseError(state2, detail);
       await putChatState(state2);
     }
     toast("warning", `\u5386\u53F2\u6570\u636E\u5DF2\u6682\u505C\uFF0C\u4F46\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${detail}\u3002\u8BF7\u907F\u514D\u7EE7\u7EED\u751F\u6210\u5E76\u624B\u52A8\u91CD\u8BD5\u5386\u53F2\u91CD\u7B97`);
@@ -8394,7 +8384,7 @@ async function loadOrCreateArtifact(index, _force, historyRevision, taskGuard) {
     throw error;
   }
 }
-async function commitCoreState(artifact, resolveLatestHistoryInvalidation = false) {
+async function commitCoreState(artifact, resolveLatestHistoryInvalidation2 = false) {
   if (!artifact.snapshot || artifact.stages.state.status !== "success") {
     throw new Error("\u72B6\u6001\u8868\u5C1A\u672A\u6210\u529F\uFF0C\u4E0D\u80FD\u63D0\u4EA4\u6838\u5FC3\u7ED3\u679C");
   }
@@ -8408,11 +8398,8 @@ async function commitCoreState(artifact, resolveLatestHistoryInvalidation = fals
     chatState.internalFacts = mergeInternalFacts(chatState.internalFacts ?? [], incomingFacts, artifact.factPackage.facts);
   }
   chatState.latestSnapshotMessageKey = artifact.messageKey;
-  if (resolveLatestHistoryInvalidation && isNarrativeTail(artifact.messageIndex)) {
-    const invalidation = chatState.historyInvalidation;
-    if (invalidation?.startIndex === artifact.messageIndex && invalidation.reason !== "deleted") {
-      delete chatState.historyInvalidation;
-    }
+  if (resolveLatestHistoryInvalidation2 && isNarrativeTail(artifact.messageIndex)) {
+    resolveLatestHistoryInvalidation(chatState, artifact.messageIndex);
   }
   chatState.updatedAt = nowIso();
   assertArtifactCommitCurrent(artifact);
@@ -8458,8 +8445,9 @@ async function prepareDerivedStageStatuses(artifact, chatState) {
     large: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(chatState.smallSummaries ?? [], chatState.largeSummaries ?? [], settings.largeSummaryCount))
   };
   markStage(artifact, "summary", plan.small || plan.large ? "queued" : "skipped");
-  if (chatState.historyInvalidation) {
-    const automatic = Boolean(chatState.historyInvalidation.automatic);
+  const historyWorkflow = readHistoryWorkflow(chatState);
+  if (historyWorkflow.blocked) {
+    const automatic = historyWorkflow.automatic;
     markStage(
       artifact,
       "sync",
@@ -8630,14 +8618,10 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
   });
 }
 function isAutomaticLatestHistoryRecovery(index, chatState) {
-  const invalidation = chatState?.historyInvalidation;
+  const workflow = readHistoryWorkflow(chatState);
   return Boolean(
-    invalidation && invalidation.automatic && invalidation.startIndex === index && invalidation.reason !== "deleted" && isNarrativeTail(index)
+    workflow.invalidation && workflow.automatic && workflow.startIndex === index && workflow.invalidation.reason !== "deleted" && isNarrativeTail(index)
   );
-}
-function historyBlockedMessage(chatState) {
-  const startIndex = chatState?.historyInvalidation?.startIndex;
-  return startIndex === void 0 ? "\u5386\u53F2\u6570\u636E\u5DF2\u5931\u6548\uFF0C\u8BF7\u5148\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9" : `\u5386\u53F2\u6570\u636E\u5DF2\u5931\u6548\uFF0C\u8BF7\u4ECE\u7B2C ${startIndex + 1} \u6761\u6D88\u606F\u5F00\u59CB\u91CD\u7B97`;
 }
 async function processMessage(index, force = false, options = {}) {
   if (!getSettings().enabled) return null;
@@ -8648,8 +8632,9 @@ async function processMessage(index, force = false, options = {}) {
   const scheduledChatKey = currentChatKey();
   const scheduledHistoryRevision = currentHistoryRevision(scheduledChatKey);
   const enqueueState = await getChatState(scheduledChatKey);
-  if (enqueueState.historyRecovery && !options.historyRecovery && !options.automatic) {
-    const detail = `\u5386\u53F2\u6062\u590D\u6B63\u5728\u6267\u884C\uFF08${enqueueState.historyRecovery.phase}\uFF09\uFF0C\u672C\u6B21\u624B\u52A8\u4EFB\u52A1\u672A\u5165\u961F`;
+  const enqueueWorkflow = readHistoryWorkflow(enqueueState);
+  if (enqueueWorkflow.running && !options.historyRecovery && !options.automatic) {
+    const detail = `\u5386\u53F2\u6062\u590D\u6B63\u5728\u6267\u884C\uFF08${enqueueWorkflow.phase}\uFF09\uFF0C\u672C\u6B21\u624B\u52A8\u4EFB\u52A1\u672A\u5165\u961F`;
     throw new TaskBlockedError(detail);
   }
   const triggerSource = options.triggerSource || (options.historyRecovery ? "history-recovery" : options.automatic ? "automatic" : force ? "manual-force" : "manual");
@@ -8678,14 +8663,15 @@ async function processMessage(index, force = false, options = {}) {
       throw new CommitRejectedError("\u6B63\u6587\u5DF2\u7ECF\u53D8\u5316\uFF0C\u672C\u6B21\u6392\u961F\u4EFB\u52A1\u4E0D\u518D\u5904\u7406");
     }
     const processingState = await getChatState(scheduledChatKey);
-    if (processingState.historyRecovery && !options.historyRecovery) {
-      const detail = `\u5386\u53F2\u6062\u590D\u6B63\u5728\u6267\u884C\uFF08${processingState.historyRecovery.phase}\uFF09\uFF0C\u672C\u6B21\u666E\u901A\u4EFB\u52A1\u5DF2\u8DF3\u8FC7`;
+    const processingWorkflow = readHistoryWorkflow(processingState);
+    if (processingWorkflow.running && !options.historyRecovery) {
+      const detail = `\u5386\u53F2\u6062\u590D\u6B63\u5728\u6267\u884C\uFF08${processingWorkflow.phase}\uFF09\uFF0C\u672C\u6B21\u666E\u901A\u4EFB\u52A1\u5DF2\u8DF3\u8FC7`;
       if (options.automatic) throw new TaskSkippedError(detail);
       throw new TaskBlockedError(detail);
     }
-    if (processingState.historyInvalidation) {
+    if (processingWorkflow.blocked) {
       const recoveryAuthorized = Boolean(
-        options.historyRecovery && processingState.historyRecovery && index >= Number(processingState.historyInvalidation.startIndex ?? index)
+        options.historyRecovery && processingWorkflow.recovery && index >= Number(processingWorkflow.startIndex ?? index)
       );
       if (!recoveryAuthorized && !isAutomaticLatestHistoryRecovery(index, processingState)) {
         throw new TaskBlockedError(historyBlockedMessage(processingState));
@@ -8759,7 +8745,7 @@ async function processMessage(index, force = false, options = {}) {
     messageKey: identity3,
     messageFingerprint: scheduledFingerprint,
     historyRevisionAtEnqueue: scheduledHistoryRevision,
-    historyRecoveryPhaseAtEnqueue: enqueueState.historyRecovery?.phase,
+    historyRecoveryPhaseAtEnqueue: enqueueWorkflow.phase,
     automatic: options.automatic === true
   });
 }
@@ -8784,11 +8770,12 @@ function scheduleMessage(payload, force = false, delay = 0, triggerSource = "aut
       if (!isProcessableAssistantMessage(current)) return;
       if (messageIdentity(index) !== scheduledIdentity || messageFingerprint(index) !== scheduledFingerprint) return;
       const state2 = await getChatState(scheduledChatKey);
-      if (state2.historyRecovery) return;
+      const workflow = readHistoryWorkflow(state2);
+      if (workflow.running) return;
       const latestOnlyInvalidation = Boolean(
-        state2.historyInvalidation && state2.historyInvalidation.startIndex === index && state2.historyInvalidation.reason !== "deleted" && isNarrativeTail(index)
+        workflow.invalidation && workflow.startIndex === index && workflow.invalidation.reason !== "deleted" && isNarrativeTail(index)
       );
-      if (!force && state2.historyInvalidation && !latestOnlyInvalidation) return;
+      if (!force && workflow.blocked && !latestOnlyInvalidation) return;
       await processMessage(index, force, { automatic: true, triggerSource });
     })().catch((error) => {
       if (error instanceof CommitRejectedError || error instanceof TaskSkippedError || error instanceof Error && ["AbortError", "TaskSkippedError"].includes(error.name)) return;
@@ -8835,8 +8822,7 @@ async function invalidateHistory(payload, reason) {
   const state2 = await getChatState(chatKey);
   if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u5386\u53F2\u53D8\u5316\u4E0D\u518D\u5199\u5165");
   if (detectedIndex === null) {
-    delete state2.historyRecovery;
-    state2.historyInvalidation = { reason, detectedAt: nowIso() };
+    invalidateHistoryWorkflow(state2, { reason });
     await putChatState(state2);
     await pauseLorebookForHistoryChange(chatKey);
     toast("warning", "\u68C0\u6D4B\u5230\u5386\u53F2\u6D88\u606F\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u5224\u65AD\u4F4D\u7F6E\u3002\u73B0\u6709\u8BB0\u5FC6\u5DF2\u4FDD\u7559\uFF0C\u4E16\u754C\u4E66\u540C\u6B65\u6682\u505C\uFF1B\u8BF7\u5728\u955C\u6E0A\u4E2D\u9009\u62E9\u91CD\u7B97\u8D77\u70B9");
@@ -8844,12 +8830,11 @@ async function invalidateHistory(payload, reason) {
     return;
   }
   const index = Math.max(0, detectedIndex);
-  const startIndex = Math.min(index, state2.historyInvalidation?.startIndex ?? index);
+  const startIndex = Math.min(index, readHistoryWorkflow(state2).startIndex ?? index);
   const latestOnly = Boolean(
     reason !== "deleted" && startIndex === index && isNarrativeTail(index)
   );
-  delete state2.historyRecovery;
-  state2.historyInvalidation = { startIndex, reason, detectedAt: nowIso(), automatic: latestOnly };
+  invalidateHistoryWorkflow(state2, { startIndex, reason, automatic: latestOnly });
   const validPrefixKeys = /* @__PURE__ */ new Set();
   for (let i = 0; i < startIndex; i += 1) {
     const attached = getAttachedArtifact(getMessage(i));
@@ -8874,26 +8859,26 @@ async function recalculateInvalidatedHistory() {
   const chatKey = currentChatKey();
   cancelScheduledMessagesForChat(chatKey);
   const state2 = await getChatState(chatKey);
-  const startIndex = state2.historyInvalidation?.startIndex;
-  if (startIndex === void 0) throw new Error("\u5C1A\u672A\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9");
+  const workflow = readHistoryWorkflow(state2);
+  const startIndex = workflow.startIndex;
+  if (startIndex === void 0 || !workflow.invalidation) throw new Error("\u5C1A\u672A\u9009\u62E9\u5386\u53F2\u91CD\u7B97\u8D77\u70B9");
   const endIndex = getChat().length;
   const processableIndexes = Array.from({ length: Math.max(0, endIndex - startIndex) }, (_, offset) => startIndex + offset).filter((index) => isProcessableAssistantMessage(getMessage(index)));
-  const previousRecovery = state2.historyRecovery;
+  const previousRecovery = workflow.recovery;
   const canResumeCore = Boolean(
     previousRecovery && previousRecovery.startIndex === startIndex && ["failed", "rebuilding-core"].includes(previousRecovery.phase) && Number.isInteger(previousRecovery.currentIndex) && processableIndexes.includes(Number(previousRecovery.currentIndex))
   );
   const resumeOffset = canResumeCore ? processableIndexes.indexOf(Number(previousRecovery?.currentIndex)) : previousRecovery && previousRecovery.startIndex === startIndex && ["rebuilding-derived", "publishing-lorebook", "partial"].includes(previousRecovery.phase) ? processableIndexes.length : 0;
   const completedBeforeRun = resumeOffset;
   const remainingIndexes = processableIndexes.slice(resumeOffset);
-  state2.historyRecovery = {
+  beginHistoryRecovery(state2, {
     startIndex,
     endIndex,
     currentIndex: remainingIndexes[0] ?? processableIndexes.at(-1),
     completedCount: completedBeforeRun,
     totalCount: processableIndexes.length,
-    phase: remainingIndexes.length ? "rebuilding-core" : "rebuilding-derived",
-    updatedAt: nowIso()
-  };
+    phase: remainingIndexes.length ? "rebuilding-core" : "rebuilding-derived"
+  });
   await putChatState(state2);
   let latest = null;
   const recoveredMessageKeys = /* @__PURE__ */ new Set();
@@ -8913,25 +8898,21 @@ async function recalculateInvalidatedHistory() {
         throw new Error(stageError);
       }
       const completedState = await getChatState(chatKey);
-      if (completedState.historyRecovery) {
-        completedState.historyRecovery.completedCount = absolutePosition + 1;
-        completedState.historyRecovery.currentIndex = processableIndexes[absolutePosition + 1] ?? index;
-        completedState.historyRecovery.phase = "rebuilding-core";
-        completedState.historyRecovery.error = void 0;
-        completedState.historyRecovery.updatedAt = nowIso();
-      }
+      updateHistoryRecovery(completedState, {
+        completedCount: absolutePosition + 1,
+        currentIndex: processableIndexes[absolutePosition + 1] ?? index,
+        phase: "rebuilding-core",
+        error: void 0
+      });
       await putChatState(completedState);
     } catch (error) {
       const detail = toErrorMessage(error);
       const failedState = await getChatState(chatKey);
-      failedState.historyRecovery = {
-        ...failedState.historyRecovery ?? state2.historyRecovery,
-        currentIndex: index,
-        completedCount: absolutePosition,
-        phase: "failed",
-        error: detail,
-        updatedAt: nowIso()
-      };
+      const failedWorkflow = readHistoryWorkflow(failedState);
+      if (!failedWorkflow.recovery && workflow.recovery) {
+        beginHistoryRecovery(failedState, workflow.recovery);
+      }
+      failHistoryRecovery(failedState, detail, { currentIndex: index, completedCount: absolutePosition });
       await putChatState(failedState);
       throw new Error(`\u5386\u53F2\u91CD\u5EFA\u672A\u5B8C\u6210\uFF1A\u7B2C ${index + 1} \u6761\u6D88\u606F\u7684\u72B6\u6001\u63D0\u53D6\u5931\u8D25\u3002${detail}`);
     }
@@ -8941,8 +8922,7 @@ async function recalculateInvalidatedHistory() {
   const freshState = await getChatState(chatKey);
   if (!recoveryInfo) {
     await clearCurrentChatLorebookEntries(chatKey);
-    delete freshState.historyInvalidation;
-    delete freshState.historyRecovery;
+    completeHistoryWorkflow(freshState);
     freshState.lastSyncError = void 0;
     freshState.lastSyncStatus = "success";
     freshState.lastSyncAt = nowIso();
@@ -8950,11 +8930,10 @@ async function recalculateInvalidatedHistory() {
     toast("success", "\u5386\u53F2\u6570\u636E\u91CD\u7B97\u5B8C\u6210\uFF1B\u5F53\u524D\u6CA1\u6709\u53EF\u53D1\u5E03\u72B6\u6001\uFF0C\u5DF2\u6E05\u9664\u672C\u804A\u5929\u7684\u955C\u6E0A\u4E16\u754C\u4E66\u6761\u76EE");
     return null;
   }
-  if (freshState.historyRecovery) {
-    freshState.historyRecovery.phase = "rebuilding-derived";
-    freshState.historyRecovery.currentIndex = recoveryInfo.index;
-    freshState.historyRecovery.updatedAt = nowIso();
-  }
+  updateHistoryRecovery(freshState, {
+    phase: "rebuilding-derived",
+    currentIndex: recoveryInfo.index
+  });
   await putChatState(freshState);
   const artifact = recoveryInfo.artifact;
   const revision = currentHistoryRevision(chatKey);
@@ -8977,10 +8956,7 @@ async function recalculateInvalidatedHistory() {
           await saveArtifactToMessage(recoveryInfo.index, artifact);
           if (getSettings().lorebookSync && errors.length === 0) {
             const publishingState = await getChatState(chatKey);
-            if (publishingState.historyRecovery) {
-              publishingState.historyRecovery.phase = "publishing-lorebook";
-              publishingState.historyRecovery.updatedAt = nowIso();
-            }
+            updateHistoryRecovery(publishingState, { phase: "publishing-lorebook" });
             await putChatState(publishingState);
             try {
               await syncLorebook(artifact, false, { allowHistoryRecovery: true });
@@ -9011,16 +8987,11 @@ async function recalculateInvalidatedHistory() {
   }
   const finalState = await getChatState(chatKey);
   if (errors.length) {
-    if (finalState.historyRecovery) {
-      finalState.historyRecovery.phase = "partial";
-      finalState.historyRecovery.error = errors.join("\uFF1B");
-      finalState.historyRecovery.updatedAt = nowIso();
-    }
+    markHistoryRecoveryPartial(finalState, errors.join("\uFF1B"));
     await putChatState(finalState);
     toast("warning", `\u5386\u53F2\u6838\u5FC3\u72B6\u6001\u5DF2\u91CD\u7B97\u5B8C\u6210\uFF0C\u4F46\u90E8\u5206\u6D3E\u751F\u6062\u590D\u5931\u8D25\uFF1A${errors.join("\uFF1B")}`);
   } else {
-    delete finalState.historyInvalidation;
-    delete finalState.historyRecovery;
+    completeHistoryWorkflow(finalState);
     if (!getSettings().lorebookSync) {
       finalState.lastSyncStatus = "idle";
       finalState.lastSyncError = void 0;
@@ -9030,15 +9001,14 @@ async function recalculateInvalidatedHistory() {
   }
   return artifact;
 }
-async function chooseHistoryRecalculationStart(startIndex) {
+async function chooseHistoryRecalculationStart2(startIndex) {
   if (!getSettings().enabled) throw new Error("\u955C\u6E0A\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u542F\u7528");
   const chatKey = currentChatKey();
   const state2 = await getChatState(chatKey);
   if (currentChatKey() !== chatKey) throw new Error("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u4E0D\u518D\u4FEE\u6539\u5386\u53F2\u91CD\u7B97\u8303\u56F4");
-  if (!state2.historyInvalidation) throw new Error("\u5F53\u524D\u6CA1\u6709\u5F85\u5904\u7406\u7684\u5386\u53F2\u5931\u6548");
+  if (!readHistoryWorkflow(state2).invalidation) throw new Error("\u5F53\u524D\u6CA1\u6709\u5F85\u5904\u7406\u7684\u5386\u53F2\u5931\u6548");
   const index = Math.max(0, Math.min(Math.trunc(startIndex), Math.max(0, getChat().length - 1)));
-  state2.historyInvalidation.startIndex = index;
-  delete state2.historyRecovery;
+  chooseHistoryRecalculationStart(state2, index);
   const validPrefixKeys = /* @__PURE__ */ new Set();
   for (let i = 0; i < index; i += 1) {
     const attached = getAttachedArtifact(getMessage(i));
@@ -9070,7 +9040,7 @@ async function retryStage(index, stage) {
     if (currentChatKey() !== chatKey) throw new TaskSkippedError("\u804A\u5929\u5DF2\u5207\u6362\uFF0C\u672C\u6B21\u9636\u6BB5\u91CD\u8BD5\u4E0D\u518D\u5904\u7406");
     assertHistoryRevisionCurrent(chatKey, scheduledHistoryRevision);
     const currentState = await getChatState(chatKey);
-    if (currentState.historyInvalidation && ["state", "summary", "sync"].includes(stage)) {
+    if (readHistoryWorkflow(currentState).blocked && ["state", "summary", "sync"].includes(stage)) {
       throw new TaskBlockedError(historyBlockedMessage(currentState));
     }
     const artifact = latestSnapshot?.index === index ? latestSnapshot.artifact : await loadOrCreateArtifact(index, false, scheduledHistoryRevision, guard);
@@ -9363,6 +9333,12 @@ function unique2(values2, limit = 80) {
 function eventIdsOf(row) {
   return unique2([...row.eventIds ?? [], row.eventId ?? ""]);
 }
+function normalizeEntityReference(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+function rowReferenceKeys(row) {
+  return unique2([row.title, ...row.keywords ?? []].map(normalizeEntityReference).filter((value2) => value2.length >= 2));
+}
 function factClosed2(fact) {
   return !fact.active || /已结束|已完成|已关闭|已结算|完成|结束|关闭|closed|completed|ended|settled/i.test(String(fact.status || ""));
 }
@@ -9395,10 +9371,17 @@ function buildEventProfiles(snapshot, facts, smallSummaries, largeSummaries, reg
   for (const eventId of ids) {
     const eventFacts = facts.filter((fact) => String(fact.eventId || fact.factId || "").trim() === eventId);
     const eventRow = eventRowById.get(eventId);
+    const explicitRelatedKeys = new Set(eventFacts.flatMap((fact) => fact.relatedEntities ?? []).map(normalizeEntityReference).filter((value2) => value2.length >= 2));
     const relatedEntries = [];
+    const seenRelatedEntries = /* @__PURE__ */ new Set();
     for (const table of enabled) {
       for (const row of snapshot?.[table.key] ?? []) {
-        if (!eventIdsOf(row).includes(eventId) && row.id !== eventId) continue;
+        const linkedByEventId = eventIdsOf(row).includes(eventId) || row.id === eventId;
+        const linkedByExplicitEntity = rowReferenceKeys(row).some((key) => explicitRelatedKeys.has(key));
+        if (!linkedByEventId && !linkedByExplicitEntity) continue;
+        const relatedKey = `${table.key}:${row.id}`;
+        if (seenRelatedEntries.has(relatedKey)) continue;
+        seenRelatedEntries.add(relatedKey);
         relatedEntries.push({
           id: row.id,
           title: row.title,
@@ -9599,8 +9582,9 @@ function enrichRelationshipGraphWithEventProfiles(source, profiles) {
 
 // src/ui/diagnostics.ts
 function historyStatus(state2) {
-  const pauseError = redactedError(state2?.historyInvalidation?.pauseError);
-  const recovery = state2?.historyRecovery;
+  const workflow = readHistoryWorkflow(state2);
+  const pauseError = redactedError(workflow.pauseError);
+  const recovery = workflow.recovery;
   if (recovery) {
     const progress = recovery.totalCount ? `${recovery.completedCount ?? 0}/${recovery.totalCount}` : "\u68C0\u67E5\u4E2D";
     const current = Number.isInteger(recovery.currentIndex) ? `\u7B2C ${recovery.currentIndex + 1} \u6761\u6D88\u606F` : "\u5F53\u524D\u5386\u53F2";
@@ -9620,7 +9604,7 @@ function historyStatus(state2) {
     };
     return { status: "warn", detail: `${labels[recovery.phase] || "\u6B63\u5728\u6062\u590D\u5386\u53F2"}\uFF08${progress}\uFF0C${current}\uFF09` };
   }
-  const invalidation = state2?.historyInvalidation;
+  const invalidation = workflow.invalidation;
   if (invalidation) {
     if (invalidation.pauseError) {
       return { status: "error", detail: `\u5386\u53F2\u5DF2\u5931\u6548\uFF0C\u4F46\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${invalidation.pauseError}` };
@@ -9633,8 +9617,9 @@ function historyStatus(state2) {
   return { status: "ok", detail: "\u5F53\u524D\u6D3E\u751F\u6570\u636E\u672A\u53D1\u73B0\u5386\u53F2\u5931\u6548" };
 }
 function syncStatus(state2) {
-  if (state2?.historyRecovery || state2?.historyInvalidation) {
-    const pauseError = redactedError(state2?.historyInvalidation?.pauseError);
+  const workflow = readHistoryWorkflow(state2);
+  if (workflow.blocked) {
+    const pauseError = redactedError(workflow.pauseError);
     const last = state2.lastSyncAt ? `\uFF1B\u4E0A\u6B21\u5B9E\u9645\u540C\u6B65\uFF1A${state2.lastSyncAt}` : "";
     return pauseError ? { status: "error", detail: `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${pauseError}${last}` } : { status: "warn", detail: `\u5386\u53F2\u6062\u590D\u671F\u95F4\u4E16\u754C\u4E66\u540C\u6B65\u6682\u505C${last}` };
   }
@@ -10152,9 +10137,10 @@ function handleQueueChange() {
   scheduleWorkspaceRender();
 }
 function historyRecoveryHtml(chatState, busy = false) {
-  const recovery = chatState?.historyRecovery;
+  const workflow = readHistoryWorkflow(chatState);
+  const recovery = workflow.recovery;
   if (!recovery) return "";
-  const pauseError = chatState?.historyInvalidation?.pauseError;
+  const pauseError = workflow.pauseError;
   const current = Number.isInteger(recovery.currentIndex) ? `\u7B2C ${recovery.currentIndex + 1} \u6761\u6D88\u606F` : "\u5F53\u524D\u5386\u53F2";
   const progress = recovery.totalCount ? `${recovery.completedCount ?? 0}/${recovery.totalCount}` : "\u68C0\u67E5\u4E2D";
   if (recovery.phase === "failed") {
@@ -10183,7 +10169,7 @@ function setupReadinessHtml(artifact, chatState) {
     { ok: enabledCount > 0, label: `${enabledCount} \u4E2A\u8BB0\u5FC6\u89C6\u56FE\u53EF\u7528`, action: "tableManager" },
     { ok: promptSettingsAreStandard(), label: "\u6807\u51C6\u89C4\u5219\u672A\u88AB\u6539\u5199", action: "tableManager" },
     { ok: Boolean(artifact?.snapshot), label: "\u5F53\u524D\u804A\u5929\u5DF2\u6709\u8BB0\u5FC6\u5FEB\u7167", action: "tables" },
-    { ok: settings.lorebookSync && !chatState?.historyInvalidation, label: "\u4E16\u754C\u4E66\u540C\u6B65\u53EF\u7528", action: "sync" }
+    { ok: settings.lorebookSync && !readHistoryWorkflow(chatState).blocked, label: "\u4E16\u754C\u4E66\u540C\u6B65\u53EF\u7528", action: "sync" }
   ];
   const completed = checks.filter((item) => item.ok).length;
   const percent = Math.round(completed / checks.length * 100);
@@ -10197,13 +10183,14 @@ async function overviewHtml(artifactInfo) {
   const enabled = getSettings().enabled;
   const artifact = artifactInfo?.artifact;
   const chatState = await getChatState(currentChatKey());
+  const historyWorkflow = readHistoryWorkflow(chatState);
   const rows = snapshotRowCount(artifact?.snapshot, getSettings().tableRegistry, true);
   const tasks = recentTasksHtml();
   const busy = workspacePipelineBusy(artifactInfo);
   const flow = workflowState(artifact);
   const syncText = chatState.lastSyncAt ? `\u4E16\u754C\u4E66 ${new Date(chatState.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "\u4E16\u754C\u4E66\u672A\u540C\u6B65";
   return `
-    ${historyRecoveryHtml(chatState, busy) || (chatState.historyInvalidation ? chatState.historyInvalidation.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${chatState.historyInvalidation.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002" : `\u7B2C ${chatState.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${chatState.historyInvalidation.reason === "edited" ? "\u7F16\u8F91" : chatState.historyInvalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${chatState.historyInvalidation.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : "")}
+    ${historyRecoveryHtml(chatState, busy) || (historyWorkflow.invalidation ? historyWorkflow.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u6062\u590D</b><span>\u4E16\u754C\u4E66\u6682\u7F13\u540C\u6B65</span></header><p>\u68C0\u6D4B\u5230\u6700\u65B0\u6B63\u6587\u53D1\u751F\u7F16\u8F91\u6216\u6362\u9875\u3002\u955C\u6E0A\u4F1A\u590D\u7528\u4ECD\u6709\u6548\u7684\u5BA1\u6838\u7ED3\u679C\uFF0C\u5E76\u4ECE\u7B2C\u4E00\u4E2A\u5931\u6548\u9636\u6BB5\u7EE7\u7EED\u3002</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>\u8F83\u65E9\u5386\u53F2\u9700\u8981\u91CD\u7B97</b><span>\u4E16\u754C\u4E66\u540C\u6B65\u5DF2\u6682\u505C</span></header><p>${historyWorkflow.startIndex === void 0 ? "\u68C0\u6D4B\u5230\u5386\u53F2\u5220\u9664\uFF0C\u4F46\u65E0\u6CD5\u81EA\u52A8\u5224\u65AD\u5220\u9664\u4F4D\u7F6E\u3002" : `\u7B2C ${historyWorkflow.startIndex + 1} \u6761\u6D88\u606F\u53D1\u751F\u4E86${historyWorkflow.invalidation.reason === "edited" ? "\u7F16\u8F91" : historyWorkflow.invalidation.reason === "swiped" ? "\u6362\u9875" : "\u5220\u9664"}\u3002`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${historyWorkflow.startIndex === void 0 ? "\u9009\u62E9\u8D77\u70B9\u5E76\u91CD\u7B97" : "\u7EE7\u7EED\u91CD\u5EFA"}</button></div></section>` : "")}
     <section class="ma11-dashboard-status ${flow.tone}">
       <div class="ma11-dashboard-status-icon" aria-hidden="true"><i class="fa-solid ${flow.tone === "success" ? "fa-check" : flow.tone === "danger" ? "fa-triangle-exclamation" : flow.tone === "working" ? "fa-spinner" : "fa-circle"}"></i></div>
       <div class="ma11-dashboard-status-copy">
@@ -10592,15 +10579,16 @@ async function syncHtml() {
   const info = latestSnapshotArtifact();
   const state2 = await getChatState(currentChatKey());
   const settings = getSettings();
-  const syncPaused = Boolean(state2?.historyRecovery || state2?.historyInvalidation);
+  const historyWorkflow = readHistoryWorkflow(state2);
+  const syncPaused = historyWorkflow.blocked;
   const busy = workspacePipelineBusy(info);
   const syncDisplayStatus = syncPaused ? "blocked" : state2?.lastSyncStatus || "idle";
   const syncDisplayText = syncPaused ? "\u6682\u505C" : statusText(syncDisplayStatus);
   return `
     <section class="ma11-card ma11-form-card">
       <header><b>\u804A\u5929\u4E16\u754C\u4E66</b><span class="ma11-badge ${statusClass(syncDisplayStatus)}">${syncDisplayText}</span></header>
-      ${state2?.historyRecovery ? `<div class="ma11-error-box">${escapeHtml(state2.historyRecovery.error || "\u6B63\u5728\u6062\u590D\u5386\u53F2\uFF1B\u6700\u8FD1\u540C\u6B65\u7ED3\u679C\u4FDD\u6301\u4E0D\u53D8")}</div>` : ""}
-      ${state2?.historyInvalidation ? `<div class="ma11-error-box">${state2.historyInvalidation.pauseError ? `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${escapeHtml(state2.historyInvalidation.pauseError)}\u3002\u8BF7\u5148\u5B8C\u6210\u5386\u53F2\u91CD\u5EFA\u5E76\u91CD\u65B0\u53D1\u5E03\u3002` : state2.historyInvalidation.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF0C\u5B8C\u6210\u540E\u4F1A\u81EA\u884C\u6062\u590D\u4E16\u754C\u4E66\u540C\u6B65\u3002" : state2.historyInvalidation.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002" : `\u7B2C ${state2.historyInvalidation.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002\u6309\u4F9D\u8D56\u91CD\u5EFA\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002`}</div>` : ""}
+      ${historyWorkflow.recovery ? `<div class="ma11-error-box">${escapeHtml(historyWorkflow.error || "\u6B63\u5728\u6062\u590D\u5386\u53F2\uFF1B\u6700\u8FD1\u540C\u6B65\u7ED3\u679C\u4FDD\u6301\u4E0D\u53D8")}</div>` : ""}
+      ${historyWorkflow.invalidation ? `<div class="ma11-error-box">${historyWorkflow.pauseError ? `\u65E7\u4E16\u754C\u4E66\u6761\u76EE\u6682\u505C\u5931\u8D25\uFF1A${escapeHtml(historyWorkflow.pauseError)}\u3002\u8BF7\u5148\u5B8C\u6210\u5386\u53F2\u91CD\u5EFA\u5E76\u91CD\u65B0\u53D1\u5E03\u3002` : historyWorkflow.automatic ? "\u6700\u65B0\u6B63\u6587\u6B63\u5728\u81EA\u52A8\u91CD\u65B0\u6574\u7406\uFF0C\u5B8C\u6210\u540E\u4F1A\u81EA\u884C\u6062\u590D\u4E16\u754C\u4E66\u540C\u6B65\u3002" : historyWorkflow.startIndex === void 0 ? "\u5386\u53F2\u5220\u9664\u4F4D\u7F6E\u672A\u77E5\uFF0C\u8BF7\u5148\u9009\u62E9\u91CD\u7B97\u8D77\u70B9\u3002\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002" : `\u7B2C ${historyWorkflow.startIndex + 1} \u6761\u6D88\u606F\u4E4B\u540E\u7684\u6570\u636E\u5DF2\u5931\u6548\u3002\u6309\u4F9D\u8D56\u91CD\u5EFA\u5B8C\u6210\u524D\u4E0D\u4F1A\u53D1\u5E03\u4E16\u754C\u4E66\u3002`}</div>` : ""}
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>\u81EA\u52A8\u540C\u6B65\u4E16\u754C\u4E66</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>\u81EA\u52A8\u521B\u5EFA\u6BCF\u804A\u5929\u72EC\u7ACB\u4E16\u754C\u4E66</span></label>
       <label>\u53D1\u5E03\u6A21\u5F0F<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>\u6309\u5BF9\u8C61\u6574\u7406\uFF08\u63A8\u8350\uFF09</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>\u9010\u6761\u6392\u9519</option></select></label>
@@ -10613,8 +10601,8 @@ async function syncHtml() {
         <label>\u957F\u671F\u8BB0\u5FC6\u53D1\u5E03\u4E0A\u9650\uFF08\u5B57\u7B26\uFF09<small>\u8FBE\u5230\u4E0A\u9650\u65F6\u4F18\u5148\u4FDD\u7559\u66F4\u76F4\u63A5\u76F8\u5173\u7684\u5185\u5BB9</small><input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
       </div>
       <div class="ma11-actions ma11-sync-actions">
-        <button data-ma11-action="sync-now" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>\u7ACB\u5373\u540C\u6B65</button>
-        ${settings.lorebookLayout === "semantic" ? `<button data-ma11-action="maintain-lorebook" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03</button>` : ""}
+        <button data-ma11-action="sync-now" ${settings.enabled && info && !busy && !historyWorkflow.blocked ? "" : "disabled"}>\u7ACB\u5373\u540C\u6B65</button>
+        ${settings.lorebookLayout === "semantic" ? `<button data-ma11-action="maintain-lorebook" ${settings.enabled && info && !busy && !historyWorkflow.blocked ? "" : "disabled"}>\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03</button>` : ""}
         <button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u8BB0\u5FC6\u7F51\u7EDC</button>
       </div>
       <p class="ma11-help ma11-maintenance-note"><b>\u7EF4\u62A4\u64CD\u4F5C\uFF1A</b>\u201C\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\u201D\u4F1A\u5148\u68C0\u67E5\u53EF\u5B89\u5168\u5220\u9664\u7684\u955C\u6E0A\u65E7\u6761\u76EE\uFF0C\u5E76\u5728\u4E00\u6B21\u786E\u8BA4\u540E\u53D1\u5E03\u5F53\u524D\u771F\u5B9E\u5FEB\u7167\uFF1B\u4E0D\u4F1A\u5904\u7406\u4EBA\u5DE5\u6761\u76EE\u6216\u5176\u4ED6\u804A\u5929\u6761\u76EE\u3002</p>
@@ -10659,14 +10647,16 @@ function eventProfileSectionHtml(profiles, graph, compact = false) {
 async function memoryNetworkHtml(artifactInfo) {
   const settings = getSettings();
   const state2 = await getChatState(currentChatKey());
+  const snapshotArtifact = latestSnapshotArtifact() ?? (artifactInfo?.artifact.snapshot ? artifactInfo : null);
+  const snapshot = snapshotArtifact?.artifact.snapshot;
   const profiles = buildEventProfiles(
-    artifactInfo?.artifact.snapshot,
+    snapshot,
     state2.internalFacts,
     state2.smallSummaries,
     state2.largeSummaries,
     settings.tableRegistry
   );
-  const baseGraph = buildRelationshipGraph(artifactInfo?.artifact.snapshot, settings.ui.graphScope, settings.tableRegistry);
+  const baseGraph = buildRelationshipGraph(snapshot, settings.ui.graphScope, settings.tableRegistry);
   const graph = settings.ui.graphScope === "world" ? enrichRelationshipGraphWithEventProfiles(baseGraph, profiles) : baseGraph;
   const view = settings.ui.memoryView;
   return `
@@ -10679,8 +10669,8 @@ async function memoryNetworkHtml(artifactInfo) {
       </div>
     </section>
     ${view === "events" ? eventProfileSectionHtml(profiles, graph) : ""}
-    ${view === "graph" ? graphHtml(artifactInfo, profiles, graph) : ""}
-    ${view === "combined" ? `<div class="ma11-memory-combined"><section class="ma11-memory-events-pane">${eventProfileSectionHtml(profiles, graph, true)}</section><section class="ma11-memory-graph-pane">${graphHtml(artifactInfo, profiles, graph)}</section></div>` : ""}`;
+    ${view === "graph" ? graphHtml(snapshotArtifact, profiles, graph) : ""}
+    ${view === "combined" ? `<div class="ma11-memory-combined"><section class="ma11-memory-events-pane">${eventProfileSectionHtml(profiles, graph, true)}</section><section class="ma11-memory-graph-pane">${graphHtml(snapshotArtifact, profiles, graph)}</section></div>` : ""}`;
 }
 function connectionProfiles() {
   try {
@@ -11045,7 +11035,7 @@ async function updateTableRegistryAndSync(registry2) {
   saveSettings();
   renderAllMessagePanels();
   const latest = latestSnapshotArtifact();
-  if (settings.lorebookSync && latest && !(await getChatState(latest.artifact.chatKey)).historyInvalidation) {
+  if (settings.lorebookSync && latest && !readHistoryWorkflow(await getChatState(latest.artifact.chatKey)).blocked) {
     try {
       await retryStage(latest.index, "sync");
     } catch (error) {
@@ -11195,14 +11185,14 @@ function bindWorkspace(workspace) {
       }
       if (action === "recalculate-history") {
         const state2 = await getChatState(currentChatKey());
-        if (state2.historyInvalidation?.startIndex === void 0) {
+        if (readHistoryWorkflow(state2).startIndex === void 0) {
           const answer = window.prompt(`\u8BF7\u8F93\u5165\u91CD\u7B97\u8D77\u70B9\uFF081-${Math.max(1, getChat().length)}\uFF09`, "1");
           if (answer === null) return;
           const start = Number(answer);
           if (!Number.isInteger(start) || start < 1 || start > Math.max(1, getChat().length)) {
             throw new Error("\u91CD\u7B97\u8D77\u70B9\u5FC5\u987B\u662F\u5F53\u524D\u804A\u5929\u8303\u56F4\u5185\u7684\u6D88\u606F\u5E8F\u53F7");
           }
-          await chooseHistoryRecalculationStart(start - 1);
+          await chooseHistoryRecalculationStart2(start - 1);
         }
         await recalculateInvalidatedHistory();
         selectedMessageIndex = null;
