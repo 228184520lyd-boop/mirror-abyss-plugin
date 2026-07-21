@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.3.0",
+  "version": "1.3.6",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "镜渊 1.3.0：标准化长期叙事记忆、白盒规则中心、可编辑表格、关系图谱与无折叠响应式工作区。"
+  "description": "事实书记、增量结算、事件画像与白盒记忆硬上限"
 }

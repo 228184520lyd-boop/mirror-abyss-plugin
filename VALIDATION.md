@@ -1,6 +1,55 @@
-# Mirror Abyss 1.3.0 验收记录
+# Mirror Abyss 1.3.6 验收记录
 
-流水线：`ma-pipeline-62`
+流水线：`ma-pipeline-70`
+
+## 1.3.6 无观点事实、增量结算与事件画像验收
+
+- `npm run test:rc69:fact-only`：通过。验证状态／总结模型仅承担事实提取与压缩，生产链忽略模型生命周期意见，旧未决输出不再进入新状态，插件仅按本轮明确事实生成增量结算动作。
+- 同一回归验证普通可替代物品可在明确终态进入待结算，而唯一、任务、证物和关键物品不会因转移被机械删除。
+- 事件画像由已有事实、对象、总结和待结算状态派生，不调用模型、不持久化第二份正文；角色表身份、长期／现行、当前状态和外观表现分层正常。
+- 世界书对象硬上限按完整事实行执行；小总结和大总结超过白盒硬上限时拒绝提交。
+- `test:rc51:text-state`、`test:rc52:text-protocol`、`test:rc58:directory-context`、`test:rc60:whitebox`、`test:stable`、`test:rc62:standard`、`test:rc68:lifecycle`、`test:rc65:routing`、`test:rc67:coverage` 等关键回归通过。
+- `npm run typecheck`、`npm run build`、`npm run syntax`：通过。
+- 标准状态 system prompt 实测为 5,111 字符，并由 `test:rc31:state-patch` 约束在 5,200 字符以内。
+- 一次性 `npm run verify` 在外部 900 秒上限到达时已依次通过至 `test:rc59:aba`，随后正在执行 `test:rc59:abnormal`；中断点之后的异常矩阵、分离保存、六次 3.0–3.4 秒玩家流程、UI、白盒、路由、生命周期、事实书记、类型检查、构建和语法检查均已独立执行通过。因此全部组成命令均通过，但不把聚合命令声明为一次性退出码 0。
+
+## 1.3.5 世界书结算与真实删除验收
+
+- `npm run test:rc68:lifecycle`：通过。验证 `absorb / retire` 先把 ST 世界书原条目设为禁用、事件未结束时不得删除、总结覆盖与宿主分发完成后真实删除、待结算恢复、保护条目、无宿主退出、临时参与者与事件容器级联结算，以及 1.3.4 旧隐藏墓碑回收。
+- `npm run test:rc20:summary`、`npm run test:rc20:lorebook`、`npm run test:rc53:unique-object`：通过。总结消费、世界书召回方式、稳定对象与唯一发布未回归。
+- `npm run test:rc57:snapshot-precision`、`npm run test:rc58:directory-context`、`npm run test:rc60:whitebox`、`npm run test:rc62:standard`、`npm run test:rc65:routing`、`npm run test:rc67:coverage`：通过。稀疏修订、对象目录、白盒规则、工作台、类型分流、物品与场景覆盖未回归。
+- `npm run test:rc59:abnormal`、`npm run test:rc59:aba`、`npm run test:rc59:split-save`、`npm run test:rc66:revision-resume`：通过。异常响应、聊天切换、分离保存和审核失败续跑未回归。
+- `rc59-profile-player-runtime` 直接运行通过：六次模型调用耗时约 3001–3401 ms，稳定 ID 继承，对象重复 0，幽灵任务 0。
+- `npm run typecheck`、`npm run build`、`npm run syntax`：通过。
+- `npm run verify` 在容器 300 秒上限内依次通过到 rc.59 区段后被外部超时终止；中止点之后的全部测试已独立执行通过，因此不把聚合命令声称为一次性退出码 0。
+
+## 1.3.4 条目生命周期验收（历史版本）
+
+- `npm run test:rc68:lifecycle`：通过。验证普通出售物品并入交易事件、源条目转隐藏墓碑、宿主吸收归并事实/事实引用/事件引用/旧名称召回、世界书不再发布源对象、普通更新不复活墓碑、显式恢复、锁定保护和终态退出。
+- `npm run test:rc31:state-patch`：通过。加入生命周期协议后，标准状态 system prompt 仍严格小于 5,200 字符，并保留既有任务识别文本。
+- `npm run test:rc53:unique-object`、`npm run test:rc54:worldbook-refresh`、`npm run test:rc58:directory-context`、`npm run test:rc20:lorebook`：通过。稳定身份、世界书刷新、对象目录和召回模式未回归。
+- `npm run test:rc65:routing`、`npm run test:rc67:coverage`：通过。角色/全局/地点/场景分流与物品覆盖未回归。
+- `npm run test:rc57:snapshot-precision`、`npm run test:rc59:abnormal`、`npm run test:rc59:split-save`、`npm run test:rc59:aba`、`npm run test:rc66:revision-resume`：通过。稀疏快照、异常响应、分离保存、聊天切换和审核修正续跑未回归。
+- `npm run test:rc59:player-runtime`：在 75 秒硬上限内通过。六次模型调用耗时 3001–3401 ms，稳定 ID 正常继承，重复对象 0、幽灵任务 0。
+- `npm run typecheck`、`npm run build`、`npm run syntax`：通过。
+
+## 1.3.3 物品覆盖、场景与语义归档验收
+
+- `npm run test:rc67:coverage`：通过。验证三件独立物品同时入表、场景默认表、当前场景兜底、角色误归档全局条目迁移、稳定 ID/基础定义保留、角色专属字段剔除，以及独立物品进入世界书。
+- `npm run test:rc65:routing`：通过。地点、场景和全局语义边界继续有效，旧对象原归属锚定与人工移动未回归。
+- `npm run test:rc20`、`npm run test:rc21:bugs`、`npm run test:rc24:real-machine`、`npm run test:rc25:trial`：通过。九个默认对象视图、场景发布、地点过滤、20 步玩家流程和世界书唯一性未回归。
+- `npm run test:rc31:state-patch`：通过。新增场景类型与物品覆盖后，默认状态 system prompt 为 5,200 字符以内。
+- `npm run test:rc52:text-protocol`、`npm run test:rc53:unique-object`、`npm run test:rc57:snapshot-precision`、`npm run test:rc58:directory-context`、`npm run test:rc59:abnormal`、`npm run test:rc60:whitebox`、`npm run test:rc66:revision-resume`：通过。固定文本、稳定身份、稀疏修订、压缩上下文、异常响应、白盒规则和修正恢复未回归。
+- `npm run test:rc59:player-runtime`：在 90 秒硬上限下通过。六次模型调用耗时 3001–3401 ms，稳定 ID 正常继承，重复对象 0、幽灵任务 0。
+- `npm run typecheck`、`npm run build`、`npm run syntax`：通过。
+
+## 1.3.2 条目分流与审核恢复验收
+
+- `npm run test:rc65:routing`：通过。验证地点表恢复、全局对象不回退角色、跨表原归属锚定，以及人工移动时稳定 ID/引用保留。
+- `npm run test:rc66:revision-resume`：通过。构造“失败审核已保存但 revision 被旧状态标成 skipped”的历史恢复现场；恢复调用顺序固定为 `revision → audit → state`，未重新审核原正文。
+- `npm run test:ui-sync`、`npm run test:rc42:chain`、`npm run test:rc56:history-resume`：通过。单阶段按钮、正常自动修正链和历史失败后缀续跑未回归。
+- `npm run test:rc59:player-runtime`：在 90 秒硬上限下通过。六次 3001–3401 ms 模型调用完成，稳定 ID 继承、重复对象 0、幽灵任务 0。
+- `npm run typecheck`、`npm run build`、`npm run syntax`：通过。
 
 ## 1.3.0 标准工作台验收
 
@@ -203,3 +252,17 @@ npm run verify
 - rc.20、rc.31、rc.34、rc.36、rc.38、rc.41、rc.51–rc.57 相关状态、事件、身份与历史回归均通过。
 
 实机预期：诊断中的 `promptChars` 应明显低于 rc.56/rc.57 的约 24,000 字符；实际数值仍会随本轮正文长度、命中对象数量和相关内部事实变化。
+
+## 1.3.1 移动端与正文状态区补充验证
+
+- `tests/rc63-mobile-ui-hotfix.ts`：复选框尺寸、移动端表格固定列移除、表头模糊层移除、标题栏触控尺寸、导航顺序和记忆层级映射。
+- `tests/rc64-inline-panel-collapse.ts`：正文状态详情默认收起、展开状态保持、无障碍展开属性、独立工作区入口和收起后不占位。
+- 已通过 `typecheck`、浏览器构建与 `node --check index.js`。
+
+
+## 1.3.2 地点与全局条目分流验证
+
+- `tests/rc65-entry-routing.ts`：验证默认地点视图存在、全局对象语义边界、地点新建、已有全局对象的跨表归属锚定，以及人工移动误分类条目。
+- `tests/rc31-state-patch-compaction.ts`：标准状态系统提示为 4,700 字符以内。
+- `tests/rc60-state-prompt-whitebox.ts`、`tests/rc62-standard-workbench.ts`：新增分流规则继续保持白盒可编辑，并纳入标准规则判断。
+- `typecheck`、浏览器构建和 `node --check index.js`：通过。

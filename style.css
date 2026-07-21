@@ -840,7 +840,7 @@ textarea { resize: vertical; }
 .ma11-task-card .ma11-empty { margin: 0; }
 .ma11-task-card .ma11-task-list:has(.ma11-empty) { min-height: 0; }
 
-/* 正文下方始终显示状态与处理详情 */
+/* 正文下方保持紧凑：状态栏常驻，完整处理详情按需展开 */
 .ma11-message-panel {
   margin: .34rem .45rem;
   padding: 0;
@@ -881,7 +881,18 @@ textarea { resize: vertical; }
 }
 .ma11-message-open b { font-size: .78rem; }
 .ma11-message-open span { min-width: 0; color: var(--ma-muted); font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma11-message-open i {
+  flex: 0 0 auto;
+  margin-left: .05rem;
+  color: var(--ma-faint);
+  font-size: .82rem;
+  font-style: normal;
+  line-height: 1;
+  transition: transform .18s ease;
+}
+.ma11-message-panel.is-open .ma11-message-open i { transform: rotate(180deg); }
 .ma11-message-count { margin: 0; color: var(--ma-faint); font-size: .68rem; white-space: nowrap; }
+.ma11-message-detail[hidden] { display: none !important; }
 .ma11-message-detail {
   padding: .58rem;
   border-top: 1px solid var(--ma-border);
@@ -1394,3 +1405,224 @@ textarea { resize: vertical; }
   gap: .8rem;
   border-bottom: 1px solid var(--ma-border);
 }
+
+/* 1.3.1：移动端 UI 修复与记忆层级映射。 */
+.ma11-brand {
+  font-size: 1.12rem;
+  letter-spacing: .035em;
+}
+
+.ma11-table-heading {
+  display: grid;
+  gap: .12rem;
+  margin-bottom: .65rem;
+}
+.ma11-table-heading h2 { margin: 0; font-size: 1.04rem; }
+.ma11-table-heading p { margin: 0; color: var(--ma-muted); font-size: .76rem; }
+
+/* 通用输入框规则不能污染 checkbox。 */
+.ma11-form-card input[type="checkbox"],
+.ma11-settings-root input[type="checkbox"],
+.ma11-setting-tile input[type="checkbox"] {
+  appearance: auto !important;
+  -webkit-appearance: checkbox !important;
+  width: 1.1rem !important;
+  height: 1.1rem !important;
+  min-width: 1.1rem !important;
+  max-width: 1.1rem !important;
+  margin: .12rem 0 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 3px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  accent-color: var(--ma-accent);
+}
+
+.ma11-setting-tile {
+  min-height: 0;
+  display: grid !important;
+  grid-template-columns: 1.1rem minmax(0, 1fr);
+  align-items: start;
+  gap: .65rem !important;
+}
+.ma11-setting-tile > span {
+  min-width: 0;
+  display: grid;
+  gap: .14rem;
+  writing-mode: horizontal-tb !important;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+.ma11-setting-tile b { color: var(--ma-text); line-height: 1.35; }
+.ma11-setting-tile small { line-height: 1.45; }
+
+/* 表格使用实体表面，不再叠加模糊玻璃层。 */
+.ma11-table-wrap {
+  isolation: isolate;
+  touch-action: pan-x pan-y;
+}
+.ma11-table th {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: var(--ma-surface-1);
+}
+
+.ma11-memory-layer-map,
+.ma11-memory-rule-flow {
+  display: grid;
+  align-items: stretch;
+  gap: .5rem;
+  margin-bottom: .85rem;
+  padding: .7rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--ma-surface-1) 96%, transparent);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 8%);
+}
+.ma11-memory-layer-map {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+}
+.ma11-memory-rule-flow {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+}
+.ma11-memory-layer-map > div,
+.ma11-memory-rule-flow > a {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: .08rem .48rem;
+  align-content: center;
+  padding: .62rem .68rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 10px;
+  background: var(--ma-surface-0);
+  color: var(--ma-text);
+  text-decoration: none;
+}
+.ma11-memory-layer-map span,
+.ma11-memory-rule-flow span {
+  grid-row: 1 / 3;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 8px;
+  color: var(--ma-accent);
+  background: var(--ma-accent-soft);
+  font-size: .68rem;
+  font-weight: 800;
+}
+.ma11-memory-layer-map b,
+.ma11-memory-rule-flow b { line-height: 1.25; }
+.ma11-memory-layer-map small,
+.ma11-memory-rule-flow small { min-width: 0; color: var(--ma-muted); line-height: 1.35; }
+.ma11-memory-layer-map > i,
+.ma11-memory-rule-flow > i { align-self: center; color: var(--ma-faint); }
+.ma11-memory-rule-flow > a:hover { border-color: var(--ma-accent); background: var(--ma-surface-hover); }
+
+@media (max-width: 900px) {
+  .ma11-header {
+    min-height: 66px;
+    padding: .62rem .74rem;
+  }
+  .ma11-brand-mark {
+    width: 2.35rem;
+    height: 2.35rem;
+    font-size: .94rem;
+  }
+  .ma11-brand { font-size: 1.18rem; }
+  .ma11-subtitle {
+    display: block;
+    margin-top: .1rem;
+    font-size: .7rem;
+  }
+  .ma11-version { display: none; }
+  .ma11-icon-button {
+    width: 42px;
+    height: 42px;
+    font-size: 1.32rem;
+  }
+  .ma11-tabs { padding: .46rem .55rem .5rem; }
+  .ma11-tabs button {
+    min-height: 42px;
+    padding: .48rem .68rem;
+    font-size: .82rem;
+  }
+
+  /* 手机横向滑动时不固定列，也不保留透明覆盖层。 */
+  .ma11-table th { position: static; top: auto; z-index: auto; }
+  .ma11-table th:nth-child(1),
+  .ma11-table td:nth-child(1),
+  .ma11-table th:nth-child(2),
+  .ma11-table td:nth-child(2) {
+    position: static !important;
+    left: auto !important;
+    z-index: auto !important;
+    box-shadow: none !important;
+  }
+  .ma11-table thead th:nth-child(1),
+  .ma11-table thead th:nth-child(2) { z-index: auto; }
+  .ma11-table-wrap {
+    overflow-x: auto;
+    overflow-y: auto;
+    background: var(--ma-surface-1);
+  }
+
+  .ma11-memory-rule-flow {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ma11-memory-rule-flow > i { display: none; }
+}
+
+@media (max-width: 620px) {
+  .ma11-header {
+    min-height: 64px;
+    padding: .58rem .66rem;
+  }
+  .ma11-header-brand { gap: .6rem; }
+  .ma11-brand { font-size: 1.2rem; }
+  .ma11-subtitle { font-size: .68rem; }
+  .ma11-tabs button { min-height: 40px; font-size: .8rem; }
+
+  .ma11-setting-tile-grid { gap: .5rem; }
+  .ma11-setting-tile {
+    min-height: 58px;
+    align-items: center;
+    padding: .72rem .75rem;
+  }
+  .ma11-setting-tile input[type="checkbox"] { margin-top: 0 !important; }
+
+  .ma11-memory-layer-map,
+  .ma11-memory-rule-flow {
+    grid-template-columns: 1fr;
+    gap: .42rem;
+    padding: .58rem;
+  }
+  .ma11-memory-layer-map > i,
+  .ma11-memory-rule-flow > i { display: none; }
+  .ma11-memory-layer-map > div,
+  .ma11-memory-rule-flow > a { min-height: 58px; }
+}
+
+@media (max-width: 380px) {
+  .ma11-subtitle { display: none; }
+  .ma11-brand { font-size: 1.15rem; }
+}
+
+/* 1.3.6 事件画像：只展示由现有事实派生的事件索引，不建立第二份长期正文。 */
+.ma11-event-profile-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px}
+.ma11-event-profile-overview{display:grid;gap:14px}
+.ma11-event-profile-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.ma11-event-profile-stats span,.ma11-event-profile-metrics span{display:flex;gap:6px;align-items:baseline;padding:10px 12px;border:1px solid var(--ma11-border,#ffffff20);border-radius:10px;background:rgba(255,255,255,.025)}
+.ma11-event-profile-stats b{font-size:1.25rem}
+.ma11-event-profile-card{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ma11-event-profile-card header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.ma11-event-profile-card header div{min-width:0;display:grid;gap:3px}
+.ma11-event-profile-card header span{overflow-wrap:anywhere;opacity:.72}
+.ma11-event-profile-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.ma11-event-results ul{margin:6px 0 0;padding-inline-start:20px}
+.ma11-event-profile-card footer{margin-top:auto;font-size:.82rem;opacity:.68}
+.ma11-muted{opacity:.7}
+@media(max-width:700px){.ma11-event-profile-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.ma11-event-profile-metrics{grid-template-columns:1fr}}
