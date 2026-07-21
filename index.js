@@ -2,8 +2,8 @@
 var MODULE_NAME = "mirrorAbyssV11";
 var LEGACY_MODULE_NAME = "mirrorAbyss";
 var DISPLAY_NAME = "\u955C\u6E0A";
-var VERSION = "1.3.6";
-var PIPELINE_VERSION = "ma-pipeline-70";
+var VERSION = "1.3.9";
+var PIPELINE_VERSION = "ma-pipeline-72";
 var DEFAULT_CONTENT_LIMITS = {
   tables: {
     spacetime: 700,
@@ -152,6 +152,9 @@ var DEFAULT_SETTINGS = {
   lorebookLayout: "semantic",
   lorebookRecall: { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24e3 },
   requestTimeoutMs: 9e4,
+  stateContextChars: 18e3,
+  stateOutputTokens: 3072,
+  stateChunkChars: 6e3,
   tableRegistry: [],
   connections: {
     audit: { mode: "current", profileId: "", profile: "" },
@@ -160,8 +163,8 @@ var DEFAULT_SETTINGS = {
     smallSummary: { mode: "current", profileId: "", profile: "" },
     largeSummary: { mode: "current", profileId: "", profile: "" }
   },
-  ui: { activeTab: "overview", activeTable: "spacetime", graphScope: "relations", graphZoom: 1 },
-  migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false }
+  ui: { activeTab: "overview", activeTable: "spacetime", graphScope: "world", graphZoom: 1, memoryView: "combined" },
+  migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false }
 };
 
 // src/core/utils.ts
@@ -840,9 +843,21 @@ function getSettings() {
   settings.contentLimits.smallSummary = Math.min(1e4, Math.max(200, Math.round(Number(settings.contentLimits.smallSummary) || DEFAULT_CONTENT_LIMITS.smallSummary)));
   settings.contentLimits.largeSummary = Math.min(2e4, Math.max(300, Math.round(Number(settings.contentLimits.largeSummary) || DEFAULT_CONTENT_LIMITS.largeSummary)));
   settings.requestTimeoutMs = Math.min(3e5, Math.max(1e4, Math.round(Number(settings.requestTimeoutMs) || 9e4)));
+  settings.stateContextChars = Math.min(6e4, Math.max(6e3, Math.round(Number(settings.stateContextChars) || 18e3)));
+  settings.stateOutputTokens = Math.min(8192, Math.max(768, Math.round(Number(settings.stateOutputTokens) || 3072)));
+  settings.stateChunkChars = Math.min(16e3, Math.max(1800, Math.round(Number(settings.stateChunkChars) || 6e3)));
+  settings.ui ||= structuredClone(DEFAULT_SETTINGS.ui);
+  settings.ui.graphScope = settings.ui.graphScope === "relations" ? "relations" : "world";
+  settings.ui.graphZoom = Math.min(2.5, Math.max(0.5, Number(settings.ui.graphZoom) || 1));
+  settings.ui.memoryView = ["combined", "events", "graph"].includes(String(settings.ui.memoryView)) ? settings.ui.memoryView : "combined";
   delete settings.compatibilityMode;
   delete settings.repairInvalidJsonOnce;
   settings.migration ||= { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false };
+  if (!settings.migration.memoryNetworkV38) {
+    settings.ui.memoryView = "combined";
+    settings.ui.graphScope = "world";
+    settings.migration.memoryNetworkV38 = true;
+  }
   settings.migration.objectViewsV26 ??= false;
   settings.migration.sceneTableV33 ??= false;
   settings.migration.entryRoutingV33 ??= false;
@@ -922,6 +937,9 @@ function getSettings() {
   }
   if (!settings.migration.contentLimitsV36) {
     settings.migration.contentLimitsV36 = true;
+  }
+  if (!settings.migration.stateProtocolV37) {
+    settings.migration.stateProtocolV37 = true;
   }
   if (!tableByKey(settings.tableRegistry, settings.ui?.activeTable || "") || !tableByKey(settings.tableRegistry, settings.ui.activeTable)?.enabled) {
     settings.ui.activeTable = settings.tableRegistry.find((table) => table.enabled)?.key || settings.tableRegistry[0]?.key || "spacetime";
@@ -1316,22 +1334,6 @@ function invalidateFactsAfterMessages(facts, validMessageIds) {
   return { facts: kept, removedFactIds };
 }
 
-// src/domain/object-identity.ts
-function canonicalObjectTitle(value2) {
-  return String(value2 ?? "").normalize("NFKC").trim().toLocaleLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, "");
-}
-
-// src/domain/observer.ts
-var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
-var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
-var NEGATED_INTERVENTION = /(?:未|没有|并未|从未|不曾)\s*(?:介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害)/gi;
-function isPurePassiveObserverText(value2) {
-  const text2 = String(value2 ?? "");
-  if (!PASSIVE_OBSERVER.test(text2)) return false;
-  const affirmativeText = text2.replace(NEGATED_INTERVENTION, "");
-  return !CAUSAL_INTERVENTION.test(affirmativeText);
-}
-
 // src/domain/fixed-text.ts
 function normalizedMarker(value2) {
   return value2.trim().toUpperCase();
@@ -1435,6 +1437,8 @@ function fixedTextValue(block, ...keys) {
 var STATE_TEXT_MARKERS = {
   turnStart: "<MA_TURN>",
   turnEnd: "</MA_TURN>",
+  changeStart: "<MA_CHANGE>",
+  changeEnd: "</MA_CHANGE>",
   factStart: "<MA_FACT>",
   factEnd: "</MA_FACT>",
   rowStart: "<MA_ROW>",
@@ -1485,6 +1489,12 @@ var KEY_ALIASES = {
   "\u7C7B\u578B": "type",
   "\u64CD\u4F5C": "operation",
   "\u7F6E\u4FE1\u5EA6": "confidence",
+  "\u4E3B\u4F53": "object",
+  "\u5BF9\u8C61\u5B57\u6BB5": "field",
+  "\u503C": "value",
+  "\u7ED3\u679C": "result",
+  "\u4E8B\u5B9E\u7ED3\u679C": "result",
+  "\u8BC1\u636E": "result",
   "\u5DF2\u53D1\u751F": "occurred",
   "\u672A\u51B3": "unresolved",
   "\u5F00\u59CB\u65F6\u95F4": "time_start",
@@ -1596,15 +1606,37 @@ function fieldValue(block, ...keys) {
 }
 var STATE_BLOCK_MARKERS = [
   { kind: "turn", start: STATE_TEXT_MARKERS.turnStart, end: STATE_TEXT_MARKERS.turnEnd },
+  { kind: "change", start: STATE_TEXT_MARKERS.changeStart, end: STATE_TEXT_MARKERS.changeEnd },
   { kind: "fact", start: STATE_TEXT_MARKERS.factStart, end: STATE_TEXT_MARKERS.factEnd },
   { kind: "row", start: STATE_TEXT_MARKERS.rowStart, end: STATE_TEXT_MARKERS.rowEnd },
   { kind: "turn", start: "\u3010\u56DE\u5408\u3011", end: "\u3010\u56DE\u5408\u7ED3\u675F\u3011" },
+  { kind: "change", start: "\u3010\u53D8\u5316\u3011", end: "\u3010\u53D8\u5316\u7ED3\u675F\u3011" },
   { kind: "fact", start: "\u3010\u4E8B\u5B9E\u3011", end: "\u3010\u4E8B\u5B9E\u7ED3\u675F\u3011" },
   { kind: "row", start: "\u3010\u6761\u76EE\u3011", end: "\u3010\u6761\u76EE\u7ED3\u675F\u3011" }
 ];
+function safelyCloseTrailingStateBlock(raw) {
+  const source = String(raw ?? "").replace(/^\uFEFF/, "").trim();
+  if (!source) return source;
+  const candidates = STATE_BLOCK_MARKERS.filter((item) => item.start.startsWith("<MA_")).map((item) => ({ ...item, index: source.toUpperCase().lastIndexOf(item.start.toUpperCase()) })).filter((item) => item.index >= 0).sort((a, b) => b.index - a.index);
+  const last = candidates[0];
+  if (!last) return source;
+  const tail = source.slice(last.index);
+  if (tail.toUpperCase().includes(last.end.toUpperCase())) return source;
+  const body = tail.slice(last.start.length);
+  const hasCompleteLine = /(^|\n)\s*[^=＝:：\n]+\s*[=＝:：]\s*\S[^\n]*\s*$/u.test(body);
+  if (!hasCompleteLine) return source;
+  if (last.kind === "turn" && !/(^|\n)\s*(?:summary|摘要|content|内容)\s*[=＝:：]\s*\S/iu.test(body)) return source;
+  if (last.kind === "change") {
+    const required = ["event", "kind", "object", "field", "operation"];
+    if (!required.every((key) => new RegExp(`(^|\\n)\\s*${key}\\s*[=\uFF1D:\uFF1A]\\s*\\S`, "iu").test(body))) return source;
+    if (!/(^|\n)\s*(?:value|值|result|结果|事实结果|证据)\s*[=＝:：]\s*\S/iu.test(body)) return source;
+  }
+  return `${source}
+${last.end}`;
+}
 function parseStateTextBlocks(raw) {
-  const parsed = parseFixedTextBlocks(raw, STATE_BLOCK_MARKERS);
-  if (!parsed.length) throw new Error("\u72B6\u6001\u6A21\u578B\u672A\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u5757\uFF08\u7F3A\u5C11 <MA_TURN>/<MA_FACT>/<MA_ROW>\uFF09");
+  const parsed = parseFixedTextBlocks(safelyCloseTrailingStateBlock(raw), STATE_BLOCK_MARKERS);
+  if (!parsed.length) throw new Error("\u72B6\u6001\u6A21\u578B\u672A\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u5757\uFF08\u7F3A\u5C11 <MA_TURN>/<MA_CHANGE>\uFF09");
   return parsed.map((source) => {
     const block = { ...source, kind: source.kind, fields: /* @__PURE__ */ new Map() };
     for (const [key, values2] of source.fields.entries()) for (const value2 of values2) addField(block, key, value2);
@@ -1833,7 +1865,7 @@ function buildRowPatch(block, active, previous) {
     locked: existing?.locked ?? false,
     lockMode: existing?.lockMode,
     lifecycle,
-    updatedAt: existing?.updatedAt ?? "",
+    updatedAt: nowIso(),
     fields,
     semanticRole: table.role
   };
@@ -1883,6 +1915,147 @@ function activeEventMatch(eventName, activeFacts) {
     return terms.includes(token);
   }).map((fact) => fact.eventId));
   return matches.size === 1 ? [...matches][0] : void 0;
+}
+function snapshotEventMatch(eventName, previous, active) {
+  const token = identity(eventName);
+  if (!token) return void 0;
+  const matches = /* @__PURE__ */ new Set();
+  for (const table of active.filter((item) => item.role === "events")) {
+    for (const row of previous[table.key] ?? []) {
+      const terms = [row.title, ...row.keywords ?? []].map(identity).filter(Boolean);
+      if (!terms.includes(token)) continue;
+      for (const eventId of [...row.eventIds ?? [], row.eventId].filter(Boolean)) matches.add(eventId);
+    }
+  }
+  return matches.size === 1 ? [...matches][0] : void 0;
+}
+function rowSingleEventMatch(row) {
+  if (!row) return void 0;
+  const values2 = [...new Set([...row.eventIds ?? [], row.eventId].filter(Boolean))];
+  return values2.length === 1 ? values2[0] : void 0;
+}
+var CHANGE_OPERATIONS = /* @__PURE__ */ new Set(["set", "replace", "add", "remove", "close"]);
+function changeOperation(value2) {
+  const token = identity(value2);
+  if (["replace", "\u66FF\u6362", "\u8986\u76D6"].includes(token)) return "replace";
+  if (["add", "append", "\u65B0\u589E", "\u6DFB\u52A0", "\u8FFD\u52A0"].includes(token)) return "add";
+  if (["remove", "delete", "\u79FB\u9664", "\u5220\u9664", "\u89E3\u9664"].includes(token)) return "remove";
+  if (["close", "closed", "\u7ED3\u675F", "\u5173\u95ED", "\u5B8C\u6210", "\u89E3\u51B3"].includes(token)) return "close";
+  return "set";
+}
+function arrayAfterChange(existing, values2, operation) {
+  const current = Array.isArray(existing) ? existing.map((item) => safeText(item, 1200).trim()).filter(Boolean) : [];
+  if (operation === "add") return unique([...current, ...values2], 40, 1200);
+  if (operation === "remove") {
+    const removed = new Set(values2.map(identity).filter(Boolean));
+    return current.filter((item) => !removed.has(identity(item)));
+  }
+  return unique(values2, 40, 1200);
+}
+function changeFromBlock(block, active, previous, activeFacts) {
+  const kind = rowKind(fieldValue(block, "kind", "type"));
+  const explicitTable = fieldValue(block, "table").trim();
+  let table = explicitTable ? resolveTable(explicitTable, active) : semanticTable(kind, active);
+  if (!table) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u65E0\u6CD5\u786E\u5B9A\u8868\u683C\uFF1B\u8BF7\u586B\u5199 kind${explicitTable ? ` \u6216\u4FEE\u6B63 table=${explicitTable}` : ""}`);
+  const semantic = semanticTable(kind, active);
+  if (semantic && table.role !== semantic.role) table = semantic;
+  const objectName = fieldValue(block, "object", "title").trim();
+  if (!objectName) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u7F3A\u5C11 object`);
+  const keywords = unique([objectName, ...fieldValues(block, "keyword")], 24, 100);
+  let existing = findExistingRow(table.key, objectName, keywords, previous);
+  let relocation;
+  if (!existing) {
+    const anchored = findUniqueExactRowAcrossTables(table.key, objectName, previous, active);
+    if (anchored) {
+      const protectedPlacement = anchored.row.source === "manual" || anchored.row.locked || anchored.row.lockMode === "all" || anchored.row.lockMode === "base";
+      const explicitSemanticMove = Boolean(kind && semantic?.key === table.key && anchored.table.key !== table.key);
+      if (explicitSemanticMove && !protectedPlacement) {
+        existing = anchored.row;
+        relocation = { id: anchored.row.id, title: anchored.row.title, fromTable: anchored.table.key, toTable: table.key };
+      } else {
+        table = anchored.table;
+        existing = anchored.row;
+      }
+    }
+  }
+  const rawField = fieldValue(block, "field").trim();
+  if (!rawField) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> \u7F3A\u5C11 field`);
+  const values2 = fieldValues(block, "value", "content", "occurred");
+  const result = fieldValue(block, "result", "occurred", "content").trim() || values2.join("\uFF1B").trim();
+  const operation = changeOperation(fieldValue(block, "operation"));
+  if (!CHANGE_OPERATIONS.has(operation)) throw new Error(`\u7B2C ${block.line} \u884C\u5F00\u59CB\u7684 <MA_CHANGE> operation \u4E0D\u5408\u6CD5`);
+  const fields = {};
+  let content = existing?.content || objectName;
+  let status = existing?.status || "active";
+  let rowKeywords = [...existing?.keywords ?? [], ...keywords];
+  const fieldToken = identity(rawField);
+  if (["summary", "content", "\u6458\u8981", "\u5185\u5BB9"].map(identity).includes(fieldToken)) {
+    if (operation !== "remove") content = values2.at(-1) || result || content;
+  } else if (["status", "\u72B6\u6001"].map(identity).includes(fieldToken)) {
+    status = operation === "remove" ? "active" : values2.at(-1) || result || (operation === "close" ? "closed" : status);
+  } else if (["keyword", "keywords", "\u5173\u952E\u8BCD"].map(identity).includes(fieldToken)) {
+    rowKeywords = operation === "remove" ? rowKeywords.filter((item) => !new Set(values2.map(identity)).has(identity(item))) : unique([...rowKeywords, ...values2], 24, 100);
+  } else {
+    const definition = resolveField(table, rawField);
+    if (FORBIDDEN_STATE_FIELDS.has(definition.key)) throw new Error(`\u72B6\u6001\u53D8\u5316\u4E0D\u5141\u8BB8\u5199\u5165\u5B57\u6BB5\uFF1A${definition.key}`);
+    if (definition.type === "lifecycle") throw new Error(`\u72B6\u6001\u53D8\u5316\u4E0D\u5141\u8BB8\u76F4\u63A5\u7EF4\u62A4 lifecycle\uFF1A${definition.key}`);
+    const prior = existing?.fields?.[definition.key];
+    if (definition.type === "string[]") fields[definition.key] = arrayAfterChange(prior, values2.length ? values2 : result ? [result] : [], operation);
+    else fields[definition.key] = operation === "remove" ? "" : values2.at(-1) || result;
+  }
+  if (operation === "close") {
+    const statusField = ["status", "\u72B6\u6001"].map(identity).includes(fieldToken);
+    status = statusField ? values2.at(-1) || result || "closed" : "closed";
+  }
+  const rowContent2 = ["summary", "content", "\u6458\u8981", "\u5185\u5BB9"].map(identity).includes(fieldToken) ? content : existing?.content || result || objectName;
+  const row = {
+    id: existing?.id || makeId(table.key),
+    title: existing?.title || objectName,
+    content: rowContent2,
+    keywords: unique(rowKeywords, 24, 100),
+    status,
+    source: existing?.source ?? "auto",
+    locked: existing?.locked ?? false,
+    lockMode: existing?.lockMode,
+    lifecycle: existing?.lifecycle,
+    updatedAt: nowIso(),
+    fields,
+    semanticRole: table.role
+  };
+  const eventName = fieldValue(block, "event").trim() || objectName;
+  const eventId = activeEventMatch(eventName, activeFacts) || snapshotEventMatch(eventName, previous, active) || rowSingleEventMatch(existing) || `event_${hashText(identity(eventName))}`;
+  const factTitle = fieldValue(block, "title").trim() || `${objectName}\xB7${rawField}`;
+  const previousMatches = activeFacts.filter((fact2) => fact2.eventId === eventId && identity(fact2.title) === identity(factTitle));
+  const factId2 = previousMatches.length === 1 ? previousMatches[0].factId : `fact_${hashText(`${eventId}|${identity(factTitle)}`)}`;
+  const confidenceValue = fieldValue(block, "confidence");
+  const confidence = FACT_CONFIDENCE.has(confidenceValue) ? confidenceValue : "confirmed";
+  const explicitClosed = operation === "close" || ["status", "\u72B6\u6001"].map(identity).includes(fieldToken) && /(完成|结束|关闭|解决|归档|closed|completed|resolved|ended|archived)/i.test(status);
+  const factOperation = explicitClosed ? "close" : operation === "add" ? "append" : previousMatches.length ? "update" : "create";
+  const occurred = unique([result || `${objectName}\uFF1A${values2.join("\uFF1B")}`], 8, 1200);
+  const fact = {
+    fact_id: factId2,
+    event_id: eventId,
+    entity_id: eventId,
+    type: kind || table.role || "event",
+    title: factTitle,
+    content: occurred.join("\uFF1B"),
+    occurred,
+    unresolved: [],
+    status: explicitClosed ? "closed" : "active",
+    time_range: {
+      start: fieldValue(block, "time_start"),
+      end: fieldValue(block, "time_end"),
+      label: fieldValue(block, "time_label")
+    },
+    related_entities: unique([objectName, ...fieldValues(block, "related")], 40, 240),
+    keywords: unique([objectName, eventName, factTitle, ...fieldValues(block, "keyword")], 24, 100),
+    operation: factOperation,
+    confidence
+  };
+  return {
+    fact,
+    patch: { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation }
+  };
 }
 function factFromBlock(block, activeFacts) {
   const title = fieldValue(block, "title", "object").trim();
@@ -1942,6 +2115,26 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
   const relocationsById = /* @__PURE__ */ new Map();
   const lifecycleBySourceId = /* @__PURE__ */ new Map();
   for (const block of blocks) {
+    if (block.kind === "change") {
+      const converted = changeFromBlock(block, active, previous, activeFacts);
+      const fact = converted.fact;
+      if (fact.occurred.length) {
+        const id = String(fact.fact_id);
+        factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
+      }
+      const patch = converted.patch;
+      const key = `${patch.table}|${patch.matchKey}`;
+      const current = rowsByIdentity.get(key);
+      rowsByIdentity.set(key, current ? {
+        table: patch.table,
+        row: mergePatchRows(current.row, patch.row),
+        matchKey: patch.matchKey,
+        relocation: current.relocation ?? patch.relocation,
+        lifecycleDirective: current.lifecycleDirective
+      } : patch);
+      if (patch.relocation) relocationsById.set(patch.relocation.id, patch.relocation);
+      continue;
+    }
     if (block.kind === "fact") {
       const fact = factFromBlock(block, activeFacts);
       if (!fact.occurred.length && !fact.unresolved.length) continue;
@@ -1971,6 +2164,479 @@ function parseStateTextOutput(raw, previousSnapshot2, registry2, activeFacts = [
     relocations: [...relocationsById.values()],
     entryLifecycleDirectives: [...lifecycleBySourceId.values()]
   };
+}
+
+// src/domain/object-identity.ts
+function canonicalObjectTitle(value2) {
+  return String(value2 ?? "").normalize("NFKC").trim().toLocaleLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, "");
+}
+function stringArray(value2, itemLimit = 500) {
+  return Array.isArray(value2) ? value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean) : [];
+}
+function replaceExactValue(value2, idRemap, deletedIds) {
+  if (typeof value2 === "string") {
+    const token = value2.trim();
+    if (idRemap.has(token)) return idRemap.get(token);
+    if (deletedIds.has(token)) return void 0;
+    return value2;
+  }
+  if (Array.isArray(value2)) {
+    return [...new Set(value2.map((item) => replaceExactValue(item, idRemap, deletedIds)).filter((item) => item !== void 0))];
+  }
+  return value2;
+}
+function rewriteObjectReferences(snapshot, idRemap, deletedIds = /* @__PURE__ */ new Set()) {
+  if (!idRemap.size && !deletedIds.size) return snapshot;
+  for (const rows of Object.values(snapshot)) {
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row.fields || typeof row.fields !== "object") continue;
+      for (const key of ["relatedObjects", "relatedObjectIds", "relatedEntities", "participantIds", "ownerId", "holderId", "hostId"]) {
+        if (!(key in row.fields)) continue;
+        const replaced = replaceExactValue(row.fields[key], idRemap, deletedIds);
+        if (replaced === void 0) delete row.fields[key];
+        else row.fields[key] = replaced;
+      }
+    }
+  }
+  return snapshot;
+}
+function preserveAnchoredTitle(existing, incoming) {
+  const incomingTitle = safeText(incoming.title, 240).trim();
+  const anchoredTitle = safeText(existing.title, 240).trim() || incomingTitle;
+  const alias = incomingTitle && canonicalObjectTitle(incomingTitle) !== canonicalObjectTitle(anchoredTitle) ? incomingTitle : "";
+  return {
+    ...incoming,
+    id: existing.id,
+    title: anchoredTitle,
+    keywords: [.../* @__PURE__ */ new Set([...existing.keywords ?? [], ...incoming.keywords ?? [], ...alias ? [alias] : []])].slice(0, 24),
+    recall: {
+      any: [.../* @__PURE__ */ new Set([...existing.recall?.any ?? [], ...incoming.recall?.any ?? [], ...alias ? [alias] : []])].slice(0, 32),
+      all: [.../* @__PURE__ */ new Set([...existing.recall?.all ?? [], ...incoming.recall?.all ?? []])].slice(0, 20),
+      exclude: [.../* @__PURE__ */ new Set([...existing.recall?.exclude ?? [], ...incoming.recall?.exclude ?? []])].slice(0, 20)
+    }
+  };
+}
+function mergeRowsByIdentity(existing, incoming) {
+  const fields = { ...existing.fields ?? {} };
+  for (const [key, value2] of Object.entries(incoming.fields ?? {})) {
+    if (Array.isArray(value2)) fields[key] = [.../* @__PURE__ */ new Set([...stringArray(fields[key]), ...stringArray(value2)])];
+    else if (safeText(value2, 4e3).trim()) fields[key] = structuredClone(value2);
+  }
+  return preserveAnchoredTitle(existing, {
+    ...existing,
+    ...incoming,
+    id: existing.id,
+    content: incoming.content || existing.content,
+    keywords: [.../* @__PURE__ */ new Set([...existing.keywords ?? [], ...incoming.keywords ?? []])],
+    factIds: [.../* @__PURE__ */ new Set([...existing.factIds ?? [], ...incoming.factIds ?? []])],
+    eventId: incoming.eventId || existing.eventId,
+    eventIds: [.../* @__PURE__ */ new Set([
+      ...existing.eventIds ?? (existing.eventId ? [existing.eventId] : []),
+      ...incoming.eventIds ?? (incoming.eventId ? [incoming.eventId] : [])
+    ])],
+    fields,
+    source: existing.source === "manual" || incoming.source === "manual" ? "manual" : "auto",
+    locked: Boolean(existing.locked || incoming.locked),
+    lockMode: existing.lockMode === "all" || incoming.lockMode === "all" ? "all" : existing.lockMode === "base" || incoming.lockMode === "base" ? "base" : void 0,
+    entryLifecycle: incoming.entryLifecycle ?? existing.entryLifecycle
+  });
+}
+function alignPatchRowsToCanonicalSnapshot(patchSnapshot, canonicalSnapshot, idRemap, registry2) {
+  const tables2 = normalizeTableRegistry(registry2);
+  const next = {};
+  let alignedRowCount = 0;
+  const eventIds = (row) => [...new Set([...row.eventIds ?? [], row.eventId].map((item) => String(item || "").trim()).filter(Boolean))];
+  for (const table of tables2) {
+    const canonicalRows = canonicalSnapshot[table.key] ?? [];
+    const rows = structuredClone(patchSnapshot?.[table.key] ?? []);
+    const byId = new Map(canonicalRows.map((row) => [row.id, row]));
+    const byTitle = /* @__PURE__ */ new Map();
+    const byEvent = /* @__PURE__ */ new Map();
+    const byFact = /* @__PURE__ */ new Map();
+    for (const row of canonicalRows) {
+      const title = canonicalObjectTitle(row.title);
+      if (title) byTitle.set(title, [...byTitle.get(title) ?? [], row]);
+      for (const eventId of eventIds(row)) byEvent.set(eventId, [...byEvent.get(eventId) ?? [], row]);
+      for (const factId2 of new Set(row.factIds ?? [])) byFact.set(factId2, [...byFact.get(factId2) ?? [], row]);
+    }
+    for (const row of rows) {
+      const originalId = String(row.id || "").trim();
+      const remappedId = idRemap.get(originalId);
+      let matched = remappedId && byId.get(remappedId) || byId.get(originalId);
+      if (!matched) {
+        const candidates = /* @__PURE__ */ new Set();
+        const title = canonicalObjectTitle(row.title);
+        if (title && byTitle.get(title)?.length === 1) candidates.add(byTitle.get(title)[0]);
+        for (const eventId of eventIds(row)) if (byEvent.get(eventId)?.length === 1) candidates.add(byEvent.get(eventId)[0]);
+        for (const factId2 of new Set(row.factIds ?? [])) if (byFact.get(factId2)?.length === 1) candidates.add(byFact.get(factId2)[0]);
+        if (candidates.size === 1) matched = [...candidates][0];
+      }
+      if (matched && row.id !== matched.id) {
+        row.id = matched.id;
+        alignedRowCount += 1;
+      }
+    }
+    if (rows.length) next[table.key] = rows;
+  }
+  return { patchSnapshot: next, alignedRowCount };
+}
+function canonicalizeObjectIdentities(previous, incoming, registry2) {
+  const tables2 = normalizeTableRegistry(registry2);
+  const next = dedupeStrongStateRows(incoming, tables2);
+  const old = dedupeStrongStateRows(previous, tables2);
+  const idRemap = /* @__PURE__ */ new Map();
+  for (const table of tables2) {
+    const oldRows = old[table.key] ?? [];
+    const newRows = next[table.key] ?? [];
+    const oldById = new Map(oldRows.map((row) => [row.id, row]));
+    const oldByEvent = /* @__PURE__ */ new Map();
+    const oldByTitle = /* @__PURE__ */ new Map();
+    const oldByFact = /* @__PURE__ */ new Map();
+    const newEventCounts = /* @__PURE__ */ new Map();
+    const newTitleCounts = /* @__PURE__ */ new Map();
+    const newFactCounts = /* @__PURE__ */ new Map();
+    const eventIds = (row) => [...new Set([...row.eventIds ?? [], row.eventId].map((item) => String(item || "").trim()).filter(Boolean))];
+    for (const row of newRows) {
+      for (const eventId of eventIds(row)) newEventCounts.set(eventId, (newEventCounts.get(eventId) ?? 0) + 1);
+      const title = canonicalObjectTitle(row.title);
+      if (title) newTitleCounts.set(title, (newTitleCounts.get(title) ?? 0) + 1);
+      for (const factId2 of new Set(row.factIds ?? [])) newFactCounts.set(factId2, (newFactCounts.get(factId2) ?? 0) + 1);
+    }
+    for (const row of oldRows) {
+      for (const eventId of eventIds(row)) oldByEvent.set(eventId, [...oldByEvent.get(eventId) ?? [], row]);
+      const title = canonicalObjectTitle(row.title);
+      if (title) oldByTitle.set(title, [...oldByTitle.get(title) ?? [], row]);
+      for (const factId2 of new Set(row.factIds ?? [])) oldByFact.set(factId2, [...oldByFact.get(factId2) ?? [], row]);
+    }
+    const claimed = /* @__PURE__ */ new Set();
+    const uniqueUnclaimed = (rows) => rows?.length === 1 && !claimed.has(rows[0].id) ? rows[0] : void 0;
+    for (const row of newRows) {
+      let matched = oldById.get(row.id);
+      if (matched && claimed.has(matched.id)) matched = void 0;
+      if (!matched) {
+        const candidates = /* @__PURE__ */ new Set();
+        for (const eventId of eventIds(row)) {
+          if (newEventCounts.get(eventId) !== 1) continue;
+          const candidate = uniqueUnclaimed(oldByEvent.get(eventId));
+          if (candidate) candidates.add(candidate);
+        }
+        if (candidates.size === 1) matched = [...candidates][0];
+      }
+      const title = canonicalObjectTitle(row.title);
+      if (!matched && title && newTitleCounts.get(title) === 1) matched = uniqueUnclaimed(oldByTitle.get(title));
+      if (!matched) {
+        const candidates = /* @__PURE__ */ new Set();
+        for (const factId2 of new Set(row.factIds ?? [])) {
+          if (newFactCounts.get(factId2) !== 1) continue;
+          const candidate = uniqueUnclaimed(oldByFact.get(factId2));
+          if (candidate) candidates.add(candidate);
+        }
+        if (candidates.size === 1) matched = [...candidates][0];
+      }
+      if (!matched) continue;
+      const replacedId = row.id;
+      Object.assign(row, preserveAnchoredTitle(matched, row));
+      if (replacedId && replacedId !== matched.id) idRemap.set(replacedId, matched.id);
+      claimed.add(matched.id);
+    }
+    const merged = /* @__PURE__ */ new Map();
+    for (const row of newRows) {
+      const current = merged.get(row.id);
+      merged.set(row.id, current ? mergeRowsByIdentity(current, row) : row);
+    }
+    next[table.key] = [...merged.values()];
+  }
+  rewriteObjectReferences(next, idRemap);
+  return { snapshot: dedupeStrongStateRows(next, tables2), idRemap };
+}
+
+// src/domain/entry-lifecycle.ts
+function stringList2(value2, limit = 80, itemLimit = 180) {
+  if (!Array.isArray(value2)) return [];
+  return [...new Set(value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+}
+function normalizeEntryLifecycleValue(value2, previous) {
+  const source = value2 && typeof value2 === "object" ? value2 : {};
+  const rawState = safeText(source.state ?? previous?.state, 24).trim();
+  const rawAction = safeText(source.action ?? previous?.action, 24).trim();
+  const action = rawAction === "absorb" || rawState === "absorbed" ? "absorb" : rawAction === "retire" || rawState === "retired" ? "retire" : void 0;
+  if (rawState !== "settling" && rawState !== "absorbed" && rawState !== "retired") return void 0;
+  if (!action) return void 0;
+  return {
+    state: "settling",
+    legacyState: rawState === "absorbed" || rawState === "retired" ? rawState : previous?.legacyState,
+    action,
+    targetTable: safeText(source.targetTable ?? previous?.targetTable, 100).trim() || void 0,
+    targetId: safeText(source.targetId ?? previous?.targetId, 160).trim() || void 0,
+    targetTitle: safeText(source.targetTitle ?? previous?.targetTitle, 240).trim() || void 0,
+    note: safeText(source.note ?? previous?.note, 1200).trim(),
+    reason: safeText(source.reason ?? previous?.reason, 800).trim(),
+    updatedAt: safeText(source.updatedAt ?? previous?.updatedAt ?? nowIso(), 80).trim() || nowIso()
+  };
+}
+function entryState(row) {
+  return row?.entryLifecycle ? "settling" : "active";
+}
+function isLegacyEntryLifecycle(row) {
+  return row?.entryLifecycle?.state === "absorbed" || row?.entryLifecycle?.state === "retired";
+}
+function isEntryLifecycleHidden(row) {
+  return isLegacyEntryLifecycle(row);
+}
+function isEntryParticipationPaused(row) {
+  return entryState(row) === "settling" || isLegacyEntryLifecycle(row);
+}
+function visibleStateRows(rows) {
+  return (rows ?? []).filter((row) => !isEntryLifecycleHidden(row));
+}
+function protectedRow(row, focusObjectId) {
+  return row.source === "manual" || row.locked || row.lockMode === "all" || row.lockMode === "base" || row.id === focusObjectId;
+}
+function rowEventIds(row) {
+  return [...new Set([...row.eventIds ?? [], row.eventId].map((item) => safeText(item, 180).trim()).filter(Boolean))];
+}
+function appendUniqueText(value2, text2, limit = 60) {
+  const current = Array.isArray(value2) ? value2.map((item) => safeText(item, 1200).trim()).filter(Boolean) : [];
+  return [...new Set([...current, safeText(text2, 1200).trim()].filter(Boolean))].slice(-limit);
+}
+function findTarget(snapshot, directive) {
+  const targetTable = safeText(directive.targetTable, 100).trim();
+  const targetTitle = canonicalObjectTitle(safeText(directive.targetTitle, 240));
+  if (!targetTable || !targetTitle) return void 0;
+  const matches = (snapshot[targetTable] ?? []).filter((row) => entryState(row) === "active" && canonicalObjectTitle(row.title) === targetTitle);
+  return matches.length === 1 ? { tableKey: targetTable, row: matches[0] } : void 0;
+}
+function applyEntryLifecycleDirectives(snapshot, directives, registry2, focusObjectId) {
+  const tables2 = normalizeTableRegistry(registry2);
+  const next = structuredClone(snapshot);
+  const applied = [];
+  const ignored = [];
+  for (const directive of directives ?? []) {
+    const source = (next[directive.sourceTable] ?? []).find((row) => row.id === directive.sourceId);
+    if (!source || protectedRow(source, focusObjectId)) {
+      ignored.push(directive.sourceId);
+      continue;
+    }
+    if (directive.action === "restore") {
+      if (entryState(source) !== "settling") {
+        ignored.push(source.id);
+        continue;
+      }
+      delete source.entryLifecycle;
+      if (/^(待结算|已并入|已退出|absorbed|retired)/i.test(source.status)) source.status = "active";
+      source.updatedAt = nowIso();
+      applied.push(source.id);
+      continue;
+    }
+    if (entryState(source) !== "active") {
+      ignored.push(source.id);
+      continue;
+    }
+    const note = safeText(directive.note, 1200).trim();
+    const reason = safeText(directive.reason, 800).trim();
+    if (directive.action === "absorb") {
+      const target = findTarget(next, directive);
+      if (!target || target.row.id === source.id || target.row.locked || target.row.lockMode === "all") {
+        ignored.push(source.id);
+        continue;
+      }
+      const memory = note || `${source.title}\u4E0D\u518D\u4F5C\u4E3A\u72EC\u7ACB\u6761\u76EE\u4FDD\u7559\uFF0C\u5176\u6709\u6548\u540E\u679C\u5DF2\u5E76\u5165${target.row.title}\u3002`;
+      target.row.fields ||= {};
+      target.row.fields.absorbedMemory = appendUniqueText(target.row.fields.absorbedMemory, memory);
+      target.row.factIds = [.../* @__PURE__ */ new Set([...target.row.factIds ?? [], ...source.factIds ?? []])];
+      target.row.eventIds = [.../* @__PURE__ */ new Set([
+        ...target.row.eventIds ?? (target.row.eventId ? [target.row.eventId] : []),
+        ...source.eventIds ?? (source.eventId ? [source.eventId] : [])
+      ])];
+      target.row.eventId ||= target.row.eventIds[0];
+      target.row.recall ||= { any: [], all: [], exclude: [] };
+      target.row.recall.any = [.../* @__PURE__ */ new Set([...target.row.recall.any ?? [], source.title, ...source.keywords ?? []])].slice(0, 32);
+      target.row.updatedAt = nowIso();
+      source.entryLifecycle = {
+        state: "settling",
+        action: "absorb",
+        targetTable: target.tableKey,
+        targetId: target.row.id,
+        targetTitle: target.row.title,
+        note: memory,
+        reason,
+        updatedAt: nowIso()
+      };
+      source.status = `\u5F85\u7ED3\u7B97\uFF1A\u5E76\u5165${target.row.title}`;
+      source.updatedAt = nowIso();
+      applied.push(source.id);
+      continue;
+    }
+    if (directive.action === "retire") {
+      const terminalText = `${source.status} ${source.content} ${note} ${reason}`;
+      const terminal = /(已出售|已赠出|已消耗|耗尽|已损毁|已销毁|已丢弃|已遗失|已结束|已关闭|已失效|已解决|已解散|已退出|不再有效|无后续价值|sold|consumed|destroyed|discarded|lost|closed|ended|resolved|retired|obsolete)/i.test(terminalText);
+      if (!terminal) {
+        ignored.push(source.id);
+        continue;
+      }
+      source.entryLifecycle = {
+        state: "settling",
+        action: "retire",
+        note: note || `${source.title}\u5DF2\u5931\u53BB\u72EC\u7ACB\u8FFD\u8E2A\u4EF7\u503C\u3002`,
+        reason,
+        updatedAt: nowIso()
+      };
+      source.status = "\u5F85\u7ED3\u7B97\uFF1A\u9000\u51FA\u72EC\u7ACB\u6761\u76EE";
+      source.updatedAt = nowIso();
+      applied.push(source.id);
+    }
+  }
+  return {
+    snapshot: dedupeStrongStateRows(next, tables2),
+    appliedSourceIds: [...new Set(applied)],
+    ignoredSourceIds: [...new Set(ignored)]
+  };
+}
+function findLifecycleTarget(snapshot, row) {
+  const lifecycle = row.entryLifecycle;
+  if (!lifecycle || lifecycle.action !== "absorb") return void 0;
+  const rows = lifecycle.targetTable ? snapshot[lifecycle.targetTable] ?? [] : [];
+  return rows.find((candidate) => candidate.id === lifecycle.targetId) ?? rows.find((candidate) => canonicalObjectTitle(candidate.title) === canonicalObjectTitle(lifecycle.targetTitle));
+}
+function targetHasDistribution(snapshot, row) {
+  if (row.entryLifecycle?.action !== "absorb") return true;
+  const target = findLifecycleTarget(snapshot, row);
+  if (!target) return false;
+  const absorbed = Array.isArray(target.fields?.absorbedMemory) ? target.fields.absorbedMemory.map((item) => safeText(item, 1200).trim()) : [];
+  const note = safeText(row.entryLifecycle.note, 1200).trim();
+  const sourceFacts = new Set(row.factIds ?? []);
+  const targetHasFacts = [...sourceFacts].every((id) => (target.factIds ?? []).includes(id));
+  return (!note || absorbed.includes(note)) && targetHasFacts;
+}
+function finalizeSettlingEntries(snapshot, options) {
+  const tables2 = normalizeTableRegistry(options.registry);
+  const next = structuredClone(snapshot);
+  const coveredFactIds = new Set(stringList2(options.sourceFactIds, 200, 180));
+  for (const fact of options.internalFacts ?? []) {
+    if (fact.consumedBySmallSummaryId || fact.solidifiedByLargeSummaryId) coveredFactIds.add(fact.factId);
+  }
+  const retained = [];
+  const deleted = [];
+  if (!options.eventClosed) {
+    for (const table of tables2) for (const row of next[table.key] ?? []) if (entryState(row) === "settling") retained.push(row.id);
+    return { snapshot: dedupeStrongStateRows(next, tables2), deletedRowIds: [], deletedEntries: [], retainedRowIds: [...new Set(retained)] };
+  }
+  for (const table of tables2) {
+    for (const row of next[table.key] ?? []) {
+      if (entryState(row) !== "settling") continue;
+      const linkedByEvent = rowEventIds(row).includes(options.eventId);
+      const rowFacts = stringList2(row.factIds, 200, 180);
+      const linkedByFacts = rowFacts.some((id) => coveredFactIds.has(id));
+      const allKnownFactsCovered = rowFacts.length > 0 && rowFacts.every((id) => coveredFactIds.has(id));
+      const ready = !protectedRow(row, options.focusObjectId) && (linkedByEvent || linkedByFacts) && allKnownFactsCovered && targetHasDistribution(next, row);
+      if (!ready) {
+        retained.push(row.id);
+        continue;
+      }
+      deleted.push({
+        tableKey: table.key,
+        id: row.id,
+        title: row.title,
+        targetId: row.entryLifecycle?.action === "absorb" ? row.entryLifecycle.targetId : void 0
+      });
+    }
+  }
+  if (deleted.length) {
+    const deletedIds = new Set(deleted.map((item) => item.id));
+    const remap = /* @__PURE__ */ new Map();
+    for (const item of deleted) {
+      if (item.targetId && !deletedIds.has(item.targetId)) remap.set(item.id, item.targetId);
+    }
+    for (const table of tables2) next[table.key] = (next[table.key] ?? []).filter((row) => !deletedIds.has(row.id));
+    rewriteObjectReferences(next, remap, deletedIds);
+  }
+  return {
+    snapshot: dedupeStrongStateRows(next, tables2),
+    deletedRowIds: [...new Set(deleted.map((item) => item.id))],
+    deletedEntries: deleted,
+    retainedRowIds: [...new Set(retained)]
+  };
+}
+function garbageCollectLegacyEntryTombstones(snapshot, internalFacts, registry2, focusObjectId) {
+  const tables2 = normalizeTableRegistry(registry2);
+  const hasLegacyRows = tables2.some((table) => (snapshot[table.key] ?? []).some((row) => {
+    const state2 = row.entryLifecycle?.state;
+    return state2 === "absorbed" || state2 === "retired" || Boolean(row.entryLifecycle?.legacyState);
+  }));
+  if (!hasLegacyRows) return { snapshot, deletedRowIds: [] };
+  const next = structuredClone(snapshot);
+  const factsById = new Map((internalFacts ?? []).map((fact) => [fact.factId, fact]));
+  const deleted = /* @__PURE__ */ new Set();
+  for (const table of tables2) {
+    for (const row of next[table.key] ?? []) {
+      const rawState = row.entryLifecycle?.state;
+      const legacyState = row.entryLifecycle?.legacyState || (rawState === "absorbed" || rawState === "retired" ? rawState : void 0);
+      if (!legacyState) continue;
+      row.entryLifecycle = normalizeEntryLifecycleValue({ ...row.entryLifecycle, state: legacyState }, row.entryLifecycle);
+      if (!row.entryLifecycle || protectedRow(row, focusObjectId)) continue;
+      const rowFacts = stringList2(row.factIds, 200, 180).map((id) => factsById.get(id)).filter((fact) => Boolean(fact));
+      const allCovered = rowFacts.length > 0 && rowFacts.every((fact) => Boolean(fact.consumedBySmallSummaryId || fact.solidifiedByLargeSummaryId));
+      const stillActive = rowFacts.some((fact) => fact.active);
+      if (allCovered && !stillActive && targetHasDistribution(next, row)) deleted.add(row.id);
+    }
+  }
+  if (deleted.size) {
+    for (const table of tables2) next[table.key] = (next[table.key] ?? []).filter((row) => !deleted.has(row.id));
+    rewriteObjectReferences(next, /* @__PURE__ */ new Map(), deleted);
+  }
+  return { snapshot: dedupeStrongStateRows(next, tables2), deletedRowIds: [...deleted] };
+}
+
+// src/domain/special-table-rules.ts
+function stringArray2(value2) {
+  return Array.isArray(value2) ? value2.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
+}
+function isHistoricalSceneRow(row) {
+  return isEntryLifecycleHidden(row) || /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(`${row.status} ${row.content}`);
+}
+function enforceSpacetimeSingleton(snapshot, registry2) {
+  const tables2 = normalizeTableRegistry(registry2);
+  const spacetimeKey = tableByRole(tables2, "spacetime", false)?.key;
+  if (!spacetimeKey) return { snapshot, idRemap: /* @__PURE__ */ new Map(), mergedRowIds: [] };
+  const rows = snapshot[spacetimeKey] ?? [];
+  if (!rows.length) return { snapshot, idRemap: /* @__PURE__ */ new Map(), mergedRowIds: [] };
+  const active = rows.filter((row) => !isHistoricalSceneRow(row));
+  const candidates = active.length ? active : rows;
+  const selectedSource = candidates.map((row, index) => ({ row, index })).reduce((current, candidate) => {
+    const currentTime = Date.parse(current.row.updatedAt || "") || 0;
+    const candidateTime = Date.parse(candidate.row.updatedAt || "") || 0;
+    return candidateTime > currentTime || candidateTime === currentTime && candidate.index > current.index ? candidate : current;
+  }).row;
+  const selected = structuredClone(selectedSource);
+  const mergeListField = (key, limit = 60) => [...new Set(rows.flatMap((row) => stringArray2(row.fields?.[key])))].slice(-limit);
+  selected.id = "spacetime_current";
+  selected.semanticRole = "spacetime";
+  selected.keywords = [...new Set([selected.title, ...selected.keywords ?? []].filter(Boolean))].slice(0, 24);
+  selected.factIds = [...new Set(rows.flatMap((row) => row.factIds ?? []))].slice(0, 80);
+  selected.eventIds = [...new Set(rows.flatMap((row) => row.eventIds ?? (row.eventId ? [row.eventId] : [])))].slice(0, 80);
+  selected.eventId = selected.eventId || selected.eventIds[0];
+  selected.fields ||= {};
+  for (const key of ["recentHistory", "solidifiedHistory", "relatedObjects", "relatedEvents"]) {
+    const merged = mergeListField(key, key.includes("History") ? 40 : 80);
+    if (merged.length) selected.fields[key] = merged;
+  }
+  const idRemap = new Map(rows.map((row) => [row.id, selected.id]).filter(([oldId]) => oldId && oldId !== selected.id));
+  const mergedRowIds = rows.map((row) => row.id).filter((id) => id !== selected.id);
+  snapshot[spacetimeKey] = [selected];
+  rewriteObjectReferences(snapshot, idRemap);
+  return { snapshot, idRemap, mergedRowIds };
+}
+
+// src/domain/observer.ts
+var PASSIVE_OBSERVER = /(纯观众|旁观|围观|观众|看客|路人|背景人物|未介入|只听见|喝彩|起哄|议论|人群反应|站在一旁|远处观看|观战)/i;
+var CAUSAL_INTERVENTION = /(介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害|死亡|被俘)/i;
+var NEGATED_INTERVENTION = /(?:未|没有|并未|从未|不曾)\s*(?:介入|出手|攻击|阻止|救援|治疗|打断|干预|加入战斗|改变战局|扭转|导致|造成|夺取|提供关键|发动|施放|控制|拦截|保护|击中|受伤|伤害)/gi;
+function isPurePassiveObserverText(value2) {
+  const text2 = String(value2 ?? "");
+  if (!PASSIVE_OBSERVER.test(text2)) return false;
+  const affirmativeText = text2.replace(NEGATED_INTERVENTION, "");
+  return !CAUSAL_INTERVENTION.test(affirmativeText);
 }
 
 // src/domain/snapshot.ts
@@ -2062,30 +2728,6 @@ function normalizeLifecycle(value2, previous) {
     returnBlockers: normalizeStringList(source.returnBlockers ?? base.returnBlockers)
   };
 }
-function normalizeEntryLifecycle(value2, previous) {
-  const source = value2 && typeof value2 === "object" ? value2 : {};
-  const state2 = safeText(source.state ?? previous?.state, 24).trim();
-  if (!["settling", "absorbed", "retired"].includes(state2)) return void 0;
-  return {
-    state: state2,
-    action: ["absorb", "retire"].includes(safeText(source.action ?? previous?.action, 24).trim()) ? safeText(source.action ?? previous?.action, 24).trim() : state2 === "absorbed" ? "absorb" : state2 === "retired" ? "retire" : previous?.action,
-    targetTable: safeText(source.targetTable ?? previous?.targetTable, 100).trim() || void 0,
-    targetId: safeText(source.targetId ?? previous?.targetId, 160).trim() || void 0,
-    targetTitle: safeText(source.targetTitle ?? previous?.targetTitle, 240).trim() || void 0,
-    note: safeText(source.note ?? previous?.note, 1200).trim(),
-    reason: safeText(source.reason ?? previous?.reason, 800).trim(),
-    updatedAt: safeText(source.updatedAt ?? previous?.updatedAt ?? nowIso(), 80).trim() || nowIso()
-  };
-}
-function isEntryLifecycleHidden(row) {
-  return row?.entryLifecycle?.state === "absorbed" || row?.entryLifecycle?.state === "retired";
-}
-function isEntryParticipationPaused(row) {
-  return row?.entryLifecycle?.state === "settling" || isEntryLifecycleHidden(row);
-}
-function visibleStateRows(rows) {
-  return (rows ?? []).filter((row) => !isEntryLifecycleHidden(row));
-}
 function normalizeRecall(value2, title, keywords) {
   const source = value2 && typeof value2 === "object" ? value2 : {};
   const any = normalizeStringList(source.any, 24, 100);
@@ -2127,7 +2769,7 @@ function normalizeRow(value2, tableKey, index, previous, registry2) {
   ]);
   const supportsLifecycle = ["characters", "state"].includes(table.role) || table.fields.some((field) => field.type === "lifecycle");
   const lifecycleInput = source.lifecycle ?? previous?.lifecycle;
-  const entryLifecycle = normalizeEntryLifecycle(source.entryLifecycle ?? previous?.entryLifecycle, previous?.entryLifecycle);
+  const entryLifecycle = normalizeEntryLifecycleValue(source.entryLifecycle ?? previous?.entryLifecycle, previous?.entryLifecycle);
   const factIds = normalizeStringList(source.factIds ?? source.fact_ids ?? previous?.factIds, 40, 160);
   const eventId = safeText(source.eventId ?? source.event_id ?? previous?.eventId, 160).trim() || void 0;
   const eventIds = normalizeStringList(source.eventIds ?? source.event_ids ?? previous?.eventIds ?? (eventId ? [eventId] : []), 60, 160);
@@ -2312,33 +2954,6 @@ function legacyStateSignal(row) {
   const mutableState = LEGACY_CHARACTER_STATE_FIELDS.some((field) => rowArray(row.fields?.[field]).length > 0);
   return explicitLegacyStateTitle(row.title) || generatedId && mutableState;
 }
-function mergedRecall(base, state2) {
-  if (!base && !state2) return void 0;
-  return {
-    any: [.../* @__PURE__ */ new Set([...base?.any ?? [], ...state2?.any ?? []])],
-    all: [.../* @__PURE__ */ new Set([...base?.all ?? [], ...state2?.all ?? []])],
-    exclude: [.../* @__PURE__ */ new Set([...base?.exclude ?? [], ...state2?.exclude ?? []])]
-  };
-}
-function preserveAnchoredTitle(existing, incoming) {
-  const incomingTitle = safeText(incoming.title, 240).trim();
-  const anchoredTitle = safeText(existing.title, 240).trim() || incomingTitle;
-  const alias = incomingTitle && identityTitle(incomingTitle) !== identityTitle(anchoredTitle) ? incomingTitle : "";
-  const keywords = normalizeKeywords([
-    ...existing.keywords ?? [],
-    ...incoming.keywords ?? [],
-    ...alias ? [alias] : []
-  ]);
-  const recall = mergedRecall(existing.recall, incoming.recall);
-  if (recall) recall.any = normalizeKeywords([...recall.any ?? [], anchoredTitle, ...keywords]);
-  return {
-    ...incoming,
-    id: existing.id,
-    title: anchoredTitle,
-    keywords,
-    recall
-  };
-}
 function mergePersistedCharacterDuplicates(snapshot, registry2) {
   const tables2 = registryOrDefault(registry2);
   const key = characterTableKey(tables2);
@@ -2398,122 +3013,10 @@ function mergePersistedCharacterDuplicates(snapshot, registry2) {
     mergedCount: result.mergedCount
   };
 }
-function rewriteObjectReferences(snapshot, idRemap) {
-  if (!idRemap.size) return snapshot;
-  for (const rows of Object.values(snapshot)) {
-    if (!Array.isArray(rows)) continue;
-    for (const row of rows) {
-      const related = rowArray(row.fields?.relatedObjects);
-      if (!related.length) continue;
-      row.fields ||= {};
-      row.fields.relatedObjects = [...new Set(related.map((id) => idRemap.get(id) ?? id))];
-    }
-  }
-  return snapshot;
-}
-function mergeRowsByIdentity(existing, incoming) {
-  const fields = { ...existing.fields ?? {} };
-  for (const [key, value2] of Object.entries(incoming.fields ?? {})) {
-    if (Array.isArray(value2)) fields[key] = [.../* @__PURE__ */ new Set([...rowArray(fields[key]), ...rowArray(value2)])];
-    else if (safeText(value2, 4e3).trim()) fields[key] = structuredClone(value2);
-  }
-  return preserveAnchoredTitle(existing, {
-    ...existing,
-    ...incoming,
-    id: existing.id,
-    content: incoming.content || existing.content,
-    keywords: [.../* @__PURE__ */ new Set([...existing.keywords ?? [], ...incoming.keywords ?? []])],
-    factIds: [.../* @__PURE__ */ new Set([...existing.factIds ?? [], ...incoming.factIds ?? []])],
-    eventId: incoming.eventId || existing.eventId,
-    eventIds: [.../* @__PURE__ */ new Set([...existing.eventIds ?? (existing.eventId ? [existing.eventId] : []), ...incoming.eventIds ?? (incoming.eventId ? [incoming.eventId] : [])])],
-    fields,
-    source: existing.source === "manual" || incoming.source === "manual" ? "manual" : "auto",
-    locked: Boolean(existing.locked || incoming.locked),
-    lockMode: existing.lockMode === "all" || incoming.lockMode === "all" ? "all" : existing.lockMode === "base" || incoming.lockMode === "base" ? "base" : void 0,
-    entryLifecycle: incoming.entryLifecycle ?? existing.entryLifecycle
-  });
-}
 function preserveStableObjectIds(previous, next, registry2) {
   const tables2 = registryOrDefault(registry2);
   const target = next;
-  previous = dedupeStrongStateRows(previous, tables2);
-  next = dedupeStrongStateRows(next, tables2);
-  const idRemap = /* @__PURE__ */ new Map();
-  for (const table of tables2) {
-    const oldRows = previous[table.key] ?? [];
-    const newRows = next[table.key] ?? [];
-    const oldById = new Map(oldRows.map((row) => [row.id, row]));
-    const oldByEvent = /* @__PURE__ */ new Map();
-    const oldByTitle = /* @__PURE__ */ new Map();
-    const oldByFact = /* @__PURE__ */ new Map();
-    const newEventCounts = /* @__PURE__ */ new Map();
-    const newTitleCounts = /* @__PURE__ */ new Map();
-    const newFactCounts = /* @__PURE__ */ new Map();
-    const rowEventIds3 = (row) => [...new Set([
-      ...row.eventIds ?? [],
-      String(row.eventId || "").trim()
-    ].filter(Boolean))];
-    for (const row of newRows) {
-      for (const eventId of rowEventIds3(row)) {
-        newEventCounts.set(eventId, (newEventCounts.get(eventId) ?? 0) + 1);
-      }
-      const title = identityTitle(row.title);
-      if (title) newTitleCounts.set(title, (newTitleCounts.get(title) ?? 0) + 1);
-      for (const factId2 of new Set(row.factIds ?? [])) {
-        newFactCounts.set(factId2, (newFactCounts.get(factId2) ?? 0) + 1);
-      }
-    }
-    for (const row of oldRows) {
-      for (const eventId of rowEventIds3(row)) {
-        oldByEvent.set(eventId, [...oldByEvent.get(eventId) ?? [], row]);
-      }
-      const title = identityTitle(row.title);
-      if (title) oldByTitle.set(title, [...oldByTitle.get(title) ?? [], row]);
-      for (const factId2 of new Set(row.factIds ?? [])) oldByFact.set(factId2, [...oldByFact.get(factId2) ?? [], row]);
-    }
-    const claimed = /* @__PURE__ */ new Set();
-    const uniqueUnclaimed = (rows) => {
-      if (rows?.length !== 1 || claimed.has(rows[0].id)) return void 0;
-      return rows[0];
-    };
-    for (const row of newRows) {
-      let matched = oldById.get(row.id);
-      if (matched && claimed.has(matched.id)) matched = void 0;
-      if (!matched) {
-        const candidates = /* @__PURE__ */ new Set();
-        for (const eventId of rowEventIds3(row)) {
-          if (newEventCounts.get(eventId) !== 1) continue;
-          const candidate = uniqueUnclaimed(oldByEvent.get(eventId));
-          if (candidate) candidates.add(candidate);
-        }
-        if (candidates.size === 1) matched = [...candidates][0];
-      }
-      const title = identityTitle(row.title);
-      if (!matched && title && newTitleCounts.get(title) === 1) matched = uniqueUnclaimed(oldByTitle.get(title));
-      if (!matched && row.factIds?.length) {
-        const candidates = /* @__PURE__ */ new Set();
-        for (const factId2 of new Set(row.factIds)) {
-          if (newFactCounts.get(factId2) !== 1) continue;
-          const candidate = uniqueUnclaimed(oldByFact.get(factId2));
-          if (candidate) candidates.add(candidate);
-        }
-        if (candidates.size === 1) matched = [...candidates][0];
-      }
-      if (!matched) continue;
-      const replacedId = row.id;
-      Object.assign(row, preserveAnchoredTitle(matched, row));
-      if (replacedId && replacedId !== matched.id) idRemap.set(replacedId, matched.id);
-      claimed.add(matched.id);
-    }
-    const merged = /* @__PURE__ */ new Map();
-    for (const row of newRows) {
-      const current = merged.get(row.id);
-      merged.set(row.id, current ? mergeRowsByIdentity(current, row) : row);
-    }
-    next[table.key] = [...merged.values()];
-  }
-  rewriteObjectReferences(next, idRemap);
-  const result = dedupeStrongStateRows(next, tables2);
+  const result = canonicalizeObjectIdentities(previous, next, tables2).snapshot;
   for (const key of Object.keys(target)) delete target[key];
   for (const [key, rows] of Object.entries(result)) target[key] = rows;
   return attachLegacyAliases(target, tables2);
@@ -2550,18 +3053,19 @@ function enforceObjectViewAllocation(snapshot, registry2) {
   });
   return attachLegacyAliases(snapshot, tables2);
 }
-function historicalSceneText(row) {
-  return isEntryLifecycleHidden(row) || /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(`${row.status} ${row.content}`);
+function enforceCurrentSpacetimeSingleton(snapshot, registry2) {
+  const tables2 = registryOrDefault(registry2);
+  return attachLegacyAliases(enforceSpacetimeSingleton(snapshot, tables2).snapshot, tables2);
 }
 function ensureCurrentSceneEntry(snapshot, registry2) {
   const tables2 = registryOrDefault(registry2);
   const spacetimeKey = tableByRole(tables2, "spacetime", false)?.key;
   const sceneKey = tableByRole(tables2, "scenes", false)?.key;
   if (!spacetimeKey || !sceneKey) return snapshot;
-  const currentSpacetime = (snapshot[spacetimeKey] ?? []).filter((row) => !historicalSceneText(row)).at(-1);
+  const currentSpacetime = (snapshot[spacetimeKey] ?? []).filter((row) => !isHistoricalSceneRow(row)).at(-1);
   if (!currentSpacetime) return snapshot;
   const sceneRows = snapshot[sceneKey] ?? (snapshot[sceneKey] = []);
-  if (sceneRows.some((row) => !historicalSceneText(row))) return snapshot;
+  if (sceneRows.some((row) => !isHistoricalSceneRow(row))) return snapshot;
   const titleToken = identityTitle(currentSpacetime.title);
   const existing = titleToken ? sceneRows.find((row) => identityTitle(row.title) === titleToken) : void 0;
   if (existing) {
@@ -2587,206 +3091,6 @@ function ensureCurrentSceneEntry(snapshot, registry2) {
     updatedAt: currentSpacetime.updatedAt || nowIso()
   }, sceneKey, sceneRows.length, void 0, tables2));
   return snapshot;
-}
-function appendUniqueText(value2, text2, limit = 60) {
-  const current = Array.isArray(value2) ? value2.map((item) => safeText(item, 1200).trim()).filter(Boolean) : [];
-  return [...new Set([...current, safeText(text2, 1200).trim()].filter(Boolean))].slice(-limit);
-}
-function lifecycleTarget(snapshot, directive) {
-  const targetTable = safeText(directive.targetTable, 100).trim();
-  const targetTitle = identityTitle(safeText(directive.targetTitle, 240));
-  if (!targetTable || !targetTitle) return void 0;
-  const rows = snapshot[targetTable] ?? [];
-  const matches = rows.filter((row) => !isEntryParticipationPaused(row) && identityTitle(row.title) === targetTitle);
-  return matches.length === 1 ? { tableKey: targetTable, row: matches[0] } : void 0;
-}
-function applyEntryLifecycleDirectives(snapshot, directives, registry2, focusObjectId) {
-  const tables2 = registryOrDefault(registry2);
-  const next = normalizeSnapshot(snapshot, snapshot, tables2);
-  const applied = [];
-  const ignored = [];
-  for (const directive of directives ?? []) {
-    const sourceRows = next[directive.sourceTable] ?? [];
-    const source = sourceRows.find((row) => row.id === directive.sourceId);
-    if (!source) {
-      ignored.push(directive.sourceId);
-      continue;
-    }
-    const protectedSource = source.source === "manual" || source.locked || source.lockMode === "all" || source.lockMode === "base" || source.id === focusObjectId;
-    if (protectedSource) {
-      ignored.push(source.id);
-      continue;
-    }
-    if (directive.action === "restore") {
-      if (!isEntryParticipationPaused(source)) {
-        ignored.push(source.id);
-        continue;
-      }
-      delete source.entryLifecycle;
-      if (/^(待结算|已并入|已退出|absorbed|retired)/i.test(source.status)) source.status = "active";
-      source.updatedAt = nowIso();
-      applied.push(source.id);
-      continue;
-    }
-    const note = safeText(directive.note, 1200).trim();
-    const reason = safeText(directive.reason, 800).trim();
-    if (directive.action === "absorb") {
-      const target = lifecycleTarget(next, directive);
-      if (!target || target.row.id === source.id || target.row.locked || target.row.lockMode === "all") {
-        ignored.push(source.id);
-        continue;
-      }
-      const memory = note || `${source.title}\u4E0D\u518D\u4F5C\u4E3A\u72EC\u7ACB\u6761\u76EE\u4FDD\u7559\uFF0C\u5176\u6709\u6548\u540E\u679C\u5DF2\u5E76\u5165${target.row.title}\u3002`;
-      target.row.fields ||= {};
-      target.row.fields.absorbedMemory = appendUniqueText(target.row.fields.absorbedMemory, memory);
-      target.row.factIds = [.../* @__PURE__ */ new Set([...target.row.factIds ?? [], ...source.factIds ?? []])];
-      target.row.eventIds = [.../* @__PURE__ */ new Set([
-        ...target.row.eventIds ?? (target.row.eventId ? [target.row.eventId] : []),
-        ...source.eventIds ?? (source.eventId ? [source.eventId] : [])
-      ])];
-      target.row.eventId ||= target.row.eventIds[0];
-      target.row.recall ||= { any: [], all: [], exclude: [] };
-      target.row.recall.any = [.../* @__PURE__ */ new Set([...target.row.recall.any ?? [], source.title, ...source.keywords ?? []])].slice(0, 32);
-      target.row.updatedAt = nowIso();
-      source.entryLifecycle = {
-        state: "settling",
-        action: "absorb",
-        targetTable: target.tableKey,
-        targetId: target.row.id,
-        targetTitle: target.row.title,
-        note: memory,
-        reason,
-        updatedAt: nowIso()
-      };
-      source.status = `\u5F85\u7ED3\u7B97\uFF1A\u5E76\u5165${target.row.title}`;
-      source.updatedAt = nowIso();
-      applied.push(source.id);
-      continue;
-    }
-    if (directive.action === "retire") {
-      const terminalText = `${source.status} ${source.content} ${note} ${reason}`;
-      const terminal = /(已出售|已赠出|已消耗|耗尽|已损毁|已销毁|已丢弃|已遗失|已结束|已关闭|已失效|已解决|已解散|已退出|不再有效|无后续价值|sold|consumed|destroyed|discarded|lost|closed|ended|resolved|retired|obsolete)/i.test(terminalText);
-      if (!terminal) {
-        ignored.push(source.id);
-        continue;
-      }
-      source.entryLifecycle = {
-        state: "settling",
-        action: "retire",
-        note: note || `${source.title}\u5DF2\u5931\u53BB\u72EC\u7ACB\u8FFD\u8E2A\u4EF7\u503C\u3002`,
-        reason,
-        updatedAt: nowIso()
-      };
-      source.status = "\u5F85\u7ED3\u7B97\uFF1A\u9000\u51FA\u72EC\u7ACB\u6761\u76EE";
-      source.updatedAt = nowIso();
-      applied.push(source.id);
-    }
-  }
-  return {
-    snapshot: attachLegacyAliases(dedupeStrongStateRows(next, tables2), tables2),
-    appliedSourceIds: [...new Set(applied)],
-    ignoredSourceIds: [...new Set(ignored)]
-  };
-}
-function garbageCollectLegacyEntryTombstones(snapshot, internalFacts, registry2, focusObjectId) {
-  const tables2 = registryOrDefault(registry2);
-  const next = normalizeSnapshot(snapshot, snapshot, tables2);
-  const factsById = new Map((internalFacts ?? []).map((fact) => [fact.factId, fact]));
-  const deleted = [];
-  for (const table of tables2) {
-    next[table.key] = (next[table.key] ?? []).filter((row) => {
-      if (!isEntryLifecycleHidden(row)) return true;
-      if (row.source === "manual" || row.locked || row.lockMode === "all" || row.lockMode === "base" || row.id === focusObjectId) return true;
-      const rowFacts = (row.factIds ?? []).map((id) => factsById.get(id)).filter((fact) => Boolean(fact));
-      const uncovered = rowFacts.some((fact) => !fact.consumedBySmallSummaryId && !fact.solidifiedByLargeSummaryId);
-      const stillOpen = rowFacts.some((fact) => fact.active || fact.unresolvedItems.length > 0);
-      if (uncovered || stillOpen) return true;
-      if (settlingAction(row) === "absorb" && !settlementTargetExists(next, row)) return true;
-      deleted.push(row.id);
-      return false;
-    });
-  }
-  return {
-    snapshot: attachLegacyAliases(dedupeStrongStateRows(next, tables2), tables2),
-    deletedRowIds: [...new Set(deleted)]
-  };
-}
-function rowEventIdList(row) {
-  return [...new Set([...row.eventIds ?? [], row.eventId].map((item) => safeText(item, 180).trim()).filter(Boolean))];
-}
-function settlingAction(row) {
-  if (row.entryLifecycle?.action) return row.entryLifecycle.action;
-  if (row.entryLifecycle?.state === "absorbed") return "absorb";
-  if (row.entryLifecycle?.state === "retired") return "retire";
-  return void 0;
-}
-function settlementTargetExists(snapshot, row) {
-  const lifecycle = row.entryLifecycle;
-  if (!lifecycle || settlingAction(row) !== "absorb") return true;
-  const targetRows = lifecycle.targetTable ? snapshot[lifecycle.targetTable] ?? [] : [];
-  const target = targetRows.find((candidate) => candidate.id === lifecycle.targetId) ?? targetRows.find((candidate) => identityTitle(candidate.title) === identityTitle(lifecycle.targetTitle));
-  if (!target) return false;
-  const absorbed = Array.isArray(target.fields?.absorbedMemory) ? target.fields?.absorbedMemory.map((item) => safeText(item, 1200).trim()) : [];
-  const note = safeText(lifecycle.note, 1200).trim();
-  const sourceFacts = new Set(row.factIds ?? []);
-  const targetHasFacts = [...sourceFacts].every((id) => (target.factIds ?? []).includes(id));
-  return (!note || absorbed.includes(note)) && targetHasFacts;
-}
-function finalizeSettlingEntries(snapshot, options) {
-  const tables2 = registryOrDefault(options.registry);
-  const next = normalizeSnapshot(snapshot, snapshot, tables2);
-  const coveredFactIds = new Set((options.sourceFactIds ?? []).map((item) => safeText(item, 180).trim()).filter(Boolean));
-  for (const fact of options.internalFacts ?? []) {
-    if (fact.consumedBySmallSummaryId || fact.solidifiedByLargeSummaryId) coveredFactIds.add(fact.factId);
-  }
-  const deleted = [];
-  const retained = [];
-  if (!options.eventClosed) {
-    for (const table of tables2) for (const row of next[table.key] ?? []) if (isEntryParticipationPaused(row)) retained.push(row.id);
-    return { snapshot: next, deletedRowIds: [], retainedRowIds: [...new Set(retained)] };
-  }
-  for (const table of tables2) {
-    const keep = [];
-    for (const row of next[table.key] ?? []) {
-      if (!isEntryParticipationPaused(row)) {
-        keep.push(row);
-        continue;
-      }
-      const protectedRow = row.source === "manual" || row.locked || row.lockMode === "all" || row.lockMode === "base" || row.id === options.focusObjectId;
-      const linkedByEvent = rowEventIdList(row).includes(options.eventId);
-      const rowFacts = (row.factIds ?? []).filter(Boolean);
-      const linkedByFacts = rowFacts.some((id) => coveredFactIds.has(id));
-      const allKnownFactsCovered = rowFacts.length === 0 || rowFacts.every((id) => coveredFactIds.has(id));
-      const ready = !protectedRow && Boolean(settlingAction(row)) && (linkedByEvent || linkedByFacts) && allKnownFactsCovered && settlementTargetExists(next, row);
-      if (!ready) {
-        keep.push(row);
-        retained.push(row.id);
-        continue;
-      }
-      deleted.push(row.id);
-    }
-    next[table.key] = keep;
-  }
-  if (deleted.length) {
-    const deletedIds = new Set(deleted);
-    for (const table of tables2) {
-      for (const row of next[table.key] ?? []) {
-        if (!Array.isArray(row.fields?.relatedObjects)) continue;
-        const current = row.fields.relatedObjects;
-        const filtered = current.filter((value2) => !deletedIds.has(safeText(value2, 180).trim()));
-        if (filtered.length !== current.length) {
-          row.fields ||= {};
-          row.fields.relatedObjects = filtered;
-          row.updatedAt = nowIso();
-        }
-      }
-    }
-  }
-  return {
-    snapshot: attachLegacyAliases(dedupeStrongStateRows(next, tables2), tables2),
-    deletedRowIds: [...new Set(deleted)],
-    retainedRowIds: [...new Set(retained)]
-  };
 }
 function snapshotRowCount(snapshot, registry2, enabledOnly = false) {
   if (!snapshot) return 0;
@@ -2887,13 +3191,14 @@ function cloneChatState(value2) {
 function emptyChatState(chatKey) {
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    memoryStateVersion: 1,
     chatKey,
     processedMessageKeys: [],
     internalFacts: [],
     smallSummaries: [],
     largeSummaries: [],
     lastSyncStatus: "idle",
-    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false },
+    migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false },
     updatedAt: nowIso()
   };
 }
@@ -3028,9 +3333,12 @@ function migrateChatState(raw, chatKey) {
   const needsCharacterMergeMigration = state2.migration?.characterMergeV29 !== true;
   const needsPersistedCharacterMergeMigration = state2.migration?.persistedCharacterMergeV30 !== true;
   const needsUniqueObjectNamesMigration = state2.migration?.uniqueObjectNamesV31 !== true;
+  const needsSpacetimeSingletonMigration = state2.migration?.spacetimeSingletonV32 !== true;
+  const needsEntryLifecycleMigration = state2.migration?.entryLifecycleV33 !== true;
   const needsFullSnapshotMigration = needsViewMigration || needsObjectViewMigration || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
   let artifactViewsChanged = false;
   state2.schemaVersion = CURRENT_SCHEMA_VERSION;
+  state2.memoryStateVersion = 1;
   state2.chatLocator = currentChatLocator() || state2.chatLocator;
   state2.processedMessageKeys = Array.isArray(state2.processedMessageKeys) ? [...new Set(state2.processedMessageKeys.map(String))] : [];
   state2.smallSummaries = normalizeSummaryArrays(state2.smallSummaries, "small");
@@ -3046,7 +3354,7 @@ function migrateChatState(raw, chatKey) {
   for (const message of getChat()) {
     const artifact = message?.extra?.[MODULE_NAME];
     if (!artifact || artifact.chatKey !== chatKey) continue;
-    if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration || needsUniqueObjectNamesMigration) && artifact.snapshot) {
+    if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration || needsUniqueObjectNamesMigration || needsSpacetimeSingletonMigration || needsEntryLifecycleMigration) && artifact.snapshot) {
       const before = JSON.stringify({
         snapshot: artifact.snapshot,
         aliases: artifact.persistedCharacterIdAliasesV30,
@@ -3142,7 +3450,18 @@ function migrateChatState(raw, chatKey) {
           delete artifact.lorebookEntryIds;
         }
       }
+      if (needsEntryLifecycleMigration) {
+        for (const table of registry2) {
+          for (const row of migrated[table.key] ?? []) {
+            if (!row.entryLifecycle) continue;
+            const normalizedLifecycle = normalizeEntryLifecycleValue(row.entryLifecycle, row.entryLifecycle);
+            if (normalizedLifecycle) row.entryLifecycle = normalizedLifecycle;
+            else delete row.entryLifecycle;
+          }
+        }
+      }
       if (needsFullSnapshotMigration) migrated = enforceObjectViewAllocation(migrated, registry2);
+      if (needsSpacetimeSingletonMigration) migrated = enforceCurrentSpacetimeSingleton(migrated, registry2);
       artifact.snapshot = migrated;
       if (needsFullSnapshotMigration) previousMigratedSnapshot = migrated;
       const after = JSON.stringify({
@@ -3177,6 +3496,19 @@ function migrateChatState(raw, chatKey) {
     migrateLegacyConsumption(facts, state2.smallSummaries, state2.largeSummaries);
   }
   state2.internalFacts = facts;
+  if (needsEntryLifecycleMigration) {
+    for (const message of getChat()) {
+      const artifact = message?.extra?.[MODULE_NAME];
+      if (!artifact || artifact.chatKey !== chatKey || !artifact.snapshot) continue;
+      const gc = garbageCollectLegacyEntryTombstones(artifact.snapshot, facts, registry2, state2.focusObjectId);
+      if (gc.deletedRowIds.length || JSON.stringify(gc.snapshot) !== JSON.stringify(artifact.snapshot)) {
+        artifact.snapshot = gc.snapshot;
+        artifactViewsChanged = true;
+        if (artifact.stages?.sync) artifact.stages.sync = { ...artifact.stages.sync, status: "idle", error: void 0 };
+        delete artifact.lorebookEntryIds;
+      }
+    }
+  }
   state2.migration = {
     ...state2.migration ?? {},
     dynamicTablesV23: true,
@@ -3187,7 +3519,9 @@ function migrateChatState(raw, chatKey) {
     regionAllocationV28: true,
     characterMergeV29: true,
     persistedCharacterMergeV30: true,
-    uniqueObjectNamesV31: true
+    uniqueObjectNamesV31: true,
+    spacetimeSingletonV32: true,
+    entryLifecycleV33: true
   };
   state2.updatedAt ||= nowIso();
   return {
@@ -3208,12 +3542,14 @@ var REQUIRED_MIGRATIONS = [
   "regionAllocationV28",
   "characterMergeV29",
   "persistedCharacterMergeV30",
-  "uniqueObjectNamesV31"
+  "uniqueObjectNamesV31",
+  "spacetimeSingletonV32",
+  "entryLifecycleV33"
 ];
 function currentStateStructure(raw, chatKey) {
   if (!raw || typeof raw !== "object") return false;
   const state2 = raw;
-  if (state2.schemaVersion !== CURRENT_SCHEMA_VERSION || state2.chatKey !== chatKey) return false;
+  if (state2.schemaVersion !== CURRENT_SCHEMA_VERSION || state2.memoryStateVersion !== 1 || state2.chatKey !== chatKey) return false;
   if (!Array.isArray(state2.processedMessageKeys) || !Array.isArray(state2.internalFacts) || !Array.isArray(state2.smallSummaries) || !Array.isArray(state2.largeSummaries)) return false;
   if (!state2.processedMessageKeys.every((key) => typeof key === "string")) return false;
   if (new Set(state2.processedMessageKeys).size !== state2.processedMessageKeys.length) return false;
@@ -6045,8 +6381,307 @@ async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
   });
 }
 
+// src/domain/incremental-settlement.ts
+var CLOSED_STATUS_RE = /(已完成|完成|已结束|结束|已关闭|关闭|已解决|解决|已归档|归档|closed|completed|resolved|ended|archived)/i;
+var ITEM_TERMINAL_RE = /(已出售|出售完成|已赠出|已交付|已消耗|耗尽|已损毁|已销毁|已丢弃|已遗失|不再持有|sold|transferred|delivered|consumed|destroyed|discarded|lost)/i;
+var ITEM_TRANSFER_RE = /(已出售|出售完成|已赠出|已交付|已遗失|不再持有|sold|transferred|delivered|lost)/i;
+var ITEM_DISPOSABLE_RE = /(普通|制式|可替代|消耗品|一次性|空瓶|废弃|无特殊|common|ordinary|disposable|consumable)/i;
+var ITEM_INDEPENDENT_RE = /(唯一|神器|圣器|圣剑|证物|任务|关键|不可替代|传家|王室|核心|unique|artifact|evidence|quest|key item)/i;
+var SCENE_TERMINAL_RE = /(已结束|已离开|离开场景|场景结束|已关闭|ended|left|closed)/i;
+function text(value2) {
+  return String(value2 ?? "").trim();
+}
+function list2(value2) {
+  return Array.isArray(value2) ? value2.map(text).filter(Boolean) : [];
+}
+function identity2(value2) {
+  return text(value2).normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+function factEventId(fact) {
+  return text(fact.event_id ?? fact.eventId ?? fact.entity_id ?? fact.entityId);
+}
+function factId(fact) {
+  return text(fact.fact_id ?? fact.factId ?? fact.id);
+}
+function factClosed(fact) {
+  const operation = text(fact.operation).toLowerCase();
+  return operation === "close" || CLOSED_STATUS_RE.test(text(fact.status));
+}
+function rowEventIds2(row) {
+  return [...new Set([...row.eventIds ?? [], row.eventId].map(text).filter(Boolean))];
+}
+function rowText2(row) {
+  const fields = row.fields ?? {};
+  return [
+    row.status,
+    row.content,
+    fields.baseContent,
+    ...list2(fields.currentFacts),
+    ...list2(fields.currentStates)
+  ].map(text).filter(Boolean).join(" ");
+}
+function explicitTerminal(role, row) {
+  const source = rowText2(row);
+  if (role === "events") return CLOSED_STATUS_RE.test(source);
+  if (role === "scenes") return SCENE_TERMINAL_RE.test(source);
+  if (role === "items") {
+    if (!ITEM_TERMINAL_RE.test(source)) return false;
+    if (ITEM_INDEPENDENT_RE.test(source)) return false;
+    if (ITEM_TRANSFER_RE.test(source)) return ITEM_DISPOSABLE_RE.test(source);
+    return true;
+  }
+  return false;
+}
+function eventHost(snapshot, registry2, eventId) {
+  for (const table of enabledTables(registry2).filter((item) => item.role === "events")) {
+    const exact = (snapshot[table.key] ?? []).find((row) => rowEventIds2(row).includes(eventId));
+    if (exact) return { table: table.key, row: exact };
+  }
+  return void 0;
+}
+function rowFactText(row, facts, eventId) {
+  const rowIds = new Set(row.factIds ?? []);
+  const aliases2 = new Set([row.id, row.title, ...row.keywords ?? []].map(identity2).filter(Boolean));
+  const matched = facts.filter((fact) => {
+    if (factEventId(fact) !== eventId) return false;
+    if (rowIds.has(factId(fact))) return true;
+    return list2(fact.related_entities ?? fact.relatedEntities).map(identity2).some((value2) => aliases2.has(value2));
+  });
+  return [...new Set(matched.flatMap((fact) => list2(fact.occurred ?? fact.occurredFacts).concat(text(fact.content))).map(text).filter(Boolean))].join("\uFF1B").slice(0, 1200);
+}
+function deriveIncrementalSettlementDirectives(input) {
+  const registry2 = normalizeTableRegistry(input.registry);
+  const tableByKey2 = new Map(registry2.map((table) => [table.key, table]));
+  const touched = /* @__PURE__ */ new Map();
+  for (const [tableKey, patches] of Object.entries(input.patchSnapshot ?? {})) {
+    const table = tableByKey2.get(tableKey);
+    if (!table || !Array.isArray(patches)) continue;
+    for (const patch of patches) {
+      const row = (input.snapshot[tableKey] ?? []).find((candidate) => candidate.id === patch.id);
+      if (row) touched.set(row.id, { table, patch, row });
+    }
+  }
+  const closedEventIds = new Set(input.facts.filter(factClosed).map(factEventId).filter(Boolean));
+  const activeEventIds = new Set(input.facts.filter((fact) => !factClosed(fact)).map(factEventId).filter(Boolean));
+  for (const table of enabledTables(registry2)) {
+    for (const row of input.snapshot[table.key] ?? []) {
+      if (touched.has(row.id)) continue;
+      if (!rowEventIds2(row).some((eventId) => closedEventIds.has(eventId))) continue;
+      touched.set(row.id, { table, patch: row, row });
+    }
+  }
+  const output = /* @__PURE__ */ new Map();
+  for (const { table, patch, row } of touched.values()) {
+    const protectedRow2 = row.source === "manual" || row.locked || row.lockMode === "all" || row.lockMode === "base" || row.id === input.focusObjectId;
+    if (protectedRow2) continue;
+    const events = rowEventIds2(row);
+    const touchedActive = events.some((eventId) => activeEventIds.has(eventId));
+    if (isEntryParticipationPaused(row) && touchedActive && !explicitTerminal(table.role, patch)) {
+      output.set(row.id, {
+        sourceId: row.id,
+        sourceTable: table.key,
+        sourceTitle: row.title,
+        action: "restore"
+      });
+      continue;
+    }
+    const closedEventId = events.find((eventId) => closedEventIds.has(eventId));
+    if (!closedEventId || !explicitTerminal(table.role, row)) continue;
+    const note = rowFactText(row, input.facts, closedEventId) || `${row.title}\u5728\u8BE5\u4E8B\u4EF6\u4E2D\u7684\u660E\u786E\u7ED3\u679C\u5DF2\u7531\u4E8B\u4EF6\u4E8B\u5B9E\u627F\u63A5\u3002`;
+    if (table.role === "events") {
+      output.set(row.id, {
+        sourceId: row.id,
+        sourceTable: table.key,
+        sourceTitle: row.title,
+        action: "retire",
+        note,
+        reason: "\u4E8B\u4EF6\u6B63\u6587\u5DF2\u660E\u786E\u7ED3\u675F\uFF1B\u7B49\u5F85\u5C0F\u603B\u7ED3\u8986\u76D6\u540E\u5220\u9664\u4E8B\u4EF6\u5BB9\u5668\u3002"
+      });
+      continue;
+    }
+    if (table.role === "scenes" || table.role === "items") {
+      const host = eventHost(input.snapshot, registry2, closedEventId);
+      if (host && host.row.id !== row.id) {
+        output.set(row.id, {
+          sourceId: row.id,
+          sourceTable: table.key,
+          sourceTitle: row.title,
+          action: "absorb",
+          targetTable: host.table,
+          targetTitle: host.row.title,
+          note,
+          reason: "\u672C\u8F6E\u663E\u5F0F\u7EC8\u6001\u5DF2\u8FDB\u5165\u540C\u4E00\u4E8B\u4EF6\u4E8B\u5B9E\uFF1B\u7B49\u5F85\u603B\u7ED3\u8986\u76D6\u540E\u5220\u9664\u539F\u5BB9\u5668\u3002"
+        });
+      } else {
+        output.set(row.id, {
+          sourceId: row.id,
+          sourceTable: table.key,
+          sourceTitle: row.title,
+          action: "retire",
+          note,
+          reason: "\u672C\u8F6E\u663E\u5F0F\u7EC8\u6001\u5DF2\u786E\u8BA4\uFF1B\u7B49\u5F85\u603B\u7ED3\u8986\u76D6\u540E\u5220\u9664\u539F\u5BB9\u5668\u3002"
+        });
+      }
+    }
+  }
+  return [...output.values()];
+}
+
+// src/domain/memory-state-machine.ts
+var MEMORY_STATE_VERSION = 1;
+function cloneProtectedRow(row) {
+  return structuredClone(row);
+}
+function preserveProtectedRows(previous, next, registryValue) {
+  const registry2 = normalizeTableRegistry(registryValue);
+  previous = dedupeStrongStateRows(previous, registry2);
+  next = dedupeStrongStateRows(next, registry2);
+  const mutableFields = /* @__PURE__ */ new Set([
+    "currentFacts",
+    "currentStates",
+    "recentHistory",
+    "relationshipStates",
+    "abilityStates",
+    "presentationStates",
+    "relatedObjects",
+    "relatedEvents",
+    "migrationStatus"
+  ]);
+  for (const table of registry2) {
+    const key = table.key;
+    next[key] ||= [];
+    const nextIndexById = new Map(next[key].map((row, index) => [row.id, index]));
+    const nextIndexesByTitle = /* @__PURE__ */ new Map();
+    next[key].forEach((row, index) => {
+      const title = canonicalObjectTitle(row.title);
+      if (title) nextIndexesByTitle.set(title, [...nextIndexesByTitle.get(title) ?? [], index]);
+    });
+    for (const row of previous[key] ?? []) {
+      if (row.source !== "manual" && !row.locked && row.lockMode !== "all" && row.lockMode !== "base") continue;
+      const protectedRow2 = cloneProtectedRow(row);
+      const title = canonicalObjectTitle(row.title);
+      const titleIndexes = title ? nextIndexesByTitle.get(title) ?? [] : [];
+      const existingIndex = nextIndexById.get(row.id) ?? titleIndexes[0];
+      if (existingIndex === void 0) {
+        nextIndexById.set(row.id, next[key].length);
+        next[key].push(protectedRow2);
+        continue;
+      }
+      if (row.locked || row.lockMode === "all") {
+        next[key][existingIndex] = protectedRow2;
+        continue;
+      }
+      const generated = next[key][existingIndex];
+      const oldFields = row.fields ?? {};
+      const generatedFields = generated.fields ?? {};
+      const mergedFields = { ...structuredClone(oldFields) };
+      for (const field of mutableFields) if (field in generatedFields) mergedFields[field] = structuredClone(generatedFields[field]);
+      next[key][existingIndex] = {
+        ...generated,
+        id: row.id,
+        title: row.title,
+        source: "manual",
+        locked: false,
+        lockMode: "base",
+        fields: mergedFields,
+        factIds: [.../* @__PURE__ */ new Set([...row.factIds ?? [], ...generated.factIds ?? []])]
+      };
+    }
+  }
+  return dedupeStrongStateRows(next, registry2);
+}
+function transitionStateSnapshot(input) {
+  const registry2 = normalizeTableRegistry(input.registry);
+  const diagnostics = [];
+  const identity3 = canonicalizeObjectIdentities(input.previous, input.incoming, registry2);
+  if (identity3.idRemap.size) diagnostics.push({
+    stage: "identity",
+    code: "id-remap",
+    detail: `\u7EE7\u627F\u5E76\u6539\u5199 ${identity3.idRemap.size} \u4E2A\u5BF9\u8C61 ID`
+  });
+  const protectedMerged = preserveProtectedRows(input.previous, identity3.snapshot, registry2);
+  const persistent = preservePersistentCharacters(input.previous, protectedMerged, registry2);
+  const basePreserved = preserveObjectBaseLayers(input.previous, persistent, registry2);
+  diagnostics.push({ stage: "protected", code: "protected-layers-applied", detail: "\u4EBA\u5DE5/\u9501\u5B9A\u4E0E\u57FA\u7840\u5386\u53F2\u5C42\u5DF2\u6062\u590D" });
+  let prepared = removeFocusCharacterDuplicates(basePreserved, registry2);
+  prepared = enforceObjectViewAllocation(prepared, registry2);
+  const spacetime = enforceSpacetimeSingleton(prepared, registry2);
+  prepared = ensureCurrentSceneEntry(spacetime.snapshot, registry2);
+  if (spacetime.mergedRowIds.length) diagnostics.push({
+    stage: "special-tables",
+    code: "spacetime-singleton",
+    detail: `\u5408\u5E76 ${spacetime.mergedRowIds.length} \u6761\u65E7\u65F6\u7A7A\u884C`
+  });
+  const alignedPatch = alignPatchRowsToCanonicalSnapshot(input.patchSnapshot, prepared, identity3.idRemap, registry2);
+  if (alignedPatch.alignedRowCount) diagnostics.push({
+    stage: "identity",
+    code: "patch-id-aligned",
+    detail: `\u5C06 ${alignedPatch.alignedRowCount} \u6761\u672C\u8F6E\u8865\u4E01\u7ED1\u5B9A\u5230\u7A33\u5B9A\u5BF9\u8C61 ID`
+  });
+  const directives = deriveIncrementalSettlementDirectives({
+    snapshot: prepared,
+    patchSnapshot: alignedPatch.patchSnapshot,
+    facts: input.facts,
+    registry: registry2,
+    focusObjectId: input.focusObjectId
+  });
+  const lifecycle = applyEntryLifecycleDirectives(prepared, directives, registry2, input.focusObjectId);
+  if (lifecycle.appliedSourceIds.length || lifecycle.ignoredSourceIds.length) diagnostics.push({
+    stage: "lifecycle",
+    code: "settlement-transitions",
+    detail: `\u5E94\u7528 ${lifecycle.appliedSourceIds.length}\uFF0C\u5FFD\u7565 ${lifecycle.ignoredSourceIds.length}`
+  });
+  const legacyGc = garbageCollectLegacyEntryTombstones(
+    lifecycle.snapshot,
+    input.internalFacts,
+    registry2,
+    input.focusObjectId
+  );
+  if (legacyGc.deletedRowIds.length) diagnostics.push({
+    stage: "legacy-migration",
+    code: "legacy-tombstones-removed",
+    detail: `\u6E05\u7406 ${legacyGc.deletedRowIds.length} \u6761\u65E7\u5893\u7891`
+  });
+  return {
+    snapshot: filterPassiveObservers(legacyGc.snapshot, registry2),
+    memoryStateVersion: MEMORY_STATE_VERSION,
+    lifecycleAppliedIds: lifecycle.appliedSourceIds,
+    lifecycleIgnoredIds: lifecycle.ignoredSourceIds,
+    legacyDeletedIds: legacyGc.deletedRowIds,
+    diagnostics
+  };
+}
+function assertCoverageCommitted(input) {
+  const byId = new Map(input.internalFacts.map((fact) => [fact.factId, fact]));
+  for (const factId2 of input.sourceFactIds) {
+    const fact = byId.get(factId2);
+    if (!fact) continue;
+    const covered = input.coverageKind === "small" ? Boolean(fact.consumedBySmallSummaryId || fact.solidifiedByLargeSummaryId) : Boolean(fact.solidifiedByLargeSummaryId);
+    if (!covered) throw new Error(`${input.coverageKind === "small" ? "\u5C0F\u603B\u7ED3" : "\u5927\u603B\u7ED3"}\u8986\u76D6\u6807\u8BB0\u5C1A\u672A\u63D0\u4EA4\uFF1A${factId2}`);
+  }
+}
+function finalizeSummarySettlement(input) {
+  assertCoverageCommitted(input);
+  const result = finalizeSettlingEntries(input.snapshot, {
+    eventId: input.eventId,
+    sourceFactIds: input.sourceFactIds,
+    eventClosed: input.eventClosed,
+    internalFacts: input.internalFacts,
+    registry: input.registry,
+    focusObjectId: input.focusObjectId
+  });
+  return {
+    ...result,
+    diagnostics: [{
+      stage: "summary-settlement",
+      code: result.deletedRowIds.length ? "physical-delete" : "retained",
+      detail: result.deletedRowIds.length ? `\u603B\u7ED3\u8986\u76D6\u540E\u7269\u7406\u5220\u9664 ${result.deletedRowIds.length} \u4E2A\u5BB9\u5668` : `\u672C\u6B21\u4FDD\u7559 ${result.retainedRowIds.length} \u4E2A\u5F85\u7ED3\u7B97\u5BB9\u5668`
+    }]
+  };
+}
+
 // src/domain/summary.ts
-function stringList2(value2, limit = 60, itemLimit = 600) {
+function stringList3(value2, limit = 60, itemLimit = 600) {
   if (!Array.isArray(value2)) return [];
   return [...new Set(value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
@@ -6062,7 +6697,7 @@ function normalizeActivityUpdates(value2) {
 function normalizeSedimentation(value2) {
   if (!value2 || typeof value2 !== "object") return void 0;
   const source = value2;
-  return { removeRowIds: stringList2(source.removeRowIds, 50, 160), characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates), notes: stringList2(source.notes, 30, 500) };
+  return { removeRowIds: stringList3(source.removeRowIds, 50, 160), characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates), notes: stringList3(source.notes, 30, 500) };
 }
 function normalizeSummary(value2, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
   return {
@@ -6070,13 +6705,13 @@ function normalizeSummary(value2, kind, sourceKeys, previousLargeSummaryId, meta
     kind,
     title: safeText(value2.title || (kind === "small" ? "\u4E8B\u4EF6\u7EBF\u5C0F\u603B\u7ED3" : "\u957F\u671F\u56E0\u679C\u603B\u7ED3"), 240).trim(),
     summary: safeText(value2.summary || "", 3e4).trim(),
-    keywords: stringList2(value2.keywords, 32, 100),
+    keywords: stringList3(value2.keywords, 32, 100),
     sourceKeys: [...new Set(sourceKeys)],
     sourceFactIds: metadata.sourceFactIds ? [...new Set(metadata.sourceFactIds)] : kind === "small" ? [...new Set(sourceKeys)] : void 0,
     sourceSummaryIds: kind === "large" ? [...new Set(metadata.sourceSummaryIds ?? sourceKeys)] : void 0,
     eventId: safeText(metadata.eventId || value2.event_id || value2.eventId, 160).trim() || void 0,
     eventIds: kind === "large" ? [...new Set(metadata.eventIds ?? (metadata.eventId ? [metadata.eventId] : []))] : void 0,
-    unresolvedItems: stringList2(value2.unresolved ?? value2.unresolvedItems, 40, 1e3),
+    unresolvedItems: stringList3(value2.unresolved ?? value2.unresolvedItems, 40, 1e3),
     createdAt: nowIso(),
     sedimentation: kind === "small" ? normalizeSedimentation(value2.sedimentation) : void 0,
     previousLargeSummaryId: kind === "large" ? previousLargeSummaryId : void 0
@@ -6330,7 +6965,7 @@ function summaryMemoryText(summary) {
   const body = String(summary.summary || "").trim();
   return title ? `\u3010${title}\u3011${body}` : body;
 }
-function rowEventIds(row) {
+function rowEventIds3(row) {
   return [...new Set([...row.eventIds ?? [], String(row.eventId || "").trim()].filter(Boolean))];
 }
 function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts, registryValue) {
@@ -6349,7 +6984,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addText, removeTexts
         ...(row.keywords ?? []).map(entryToken),
         ...(row.recall?.any ?? []).map(entryToken)
       ].filter(Boolean);
-      const linkedByEvent = rowEventIds(row).includes(eventId);
+      const linkedByEvent = rowEventIds3(row).includes(eventId);
       const linkedByFact = (row.factIds ?? []).some((id) => factIds.has(id));
       const linkedByObject = rowTokens2.some((token) => relatedTokens2.has(token));
       const linkedEventRow = table.role === "events" && rowTokens2.some((token) => eventTitleTokens.has(token));
@@ -6466,6 +7101,11 @@ async function generateSmallSummary(artifact, force = false) {
   const previousFacts = structuredClone(chatState.internalFacts);
   const previousSummaries = structuredClone(chatState.smallSummaries);
   try {
+    chatState.smallSummaries.push(...generated.map((item) => item.summary));
+    for (const { group, summary, newFactIds } of generated) {
+      if (group.previous) group.previous.supersededBySmallSummaryId = summary.id;
+      markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
+    }
     if (artifact.snapshot) {
       let nextSnapshot = artifact.snapshot;
       for (const { group, summary, newFactIds } of generated) {
@@ -6486,11 +7126,13 @@ async function generateSmallSummary(artifact, force = false) {
           group.previous ? [summaryMemoryText(group.previous)] : [],
           settings.tableRegistry
         );
-        const settlement = finalizeSettlingEntries(nextSnapshot, {
+        const settlement = finalizeSummarySettlement({
+          snapshot: nextSnapshot,
           eventId: group.eventId,
           sourceFactIds: summary.sourceFactIds ?? [],
           eventClosed: group.closed,
           internalFacts: chatState.internalFacts,
+          coverageKind: "small",
           registry: settings.tableRegistry,
           focusObjectId: chatState.focusObjectId
         });
@@ -6504,11 +7146,6 @@ async function generateSmallSummary(artifact, force = false) {
       artifact.snapshot = nextSnapshot;
       assertArtifactCommitCurrent(artifact);
       await persistChatFor(artifact.chatKey);
-    }
-    chatState.smallSummaries.push(...generated.map((item) => item.summary));
-    for (const { group, summary, newFactIds } of generated) {
-      if (group.previous) group.previous.supersededBySmallSummaryId = summary.id;
-      markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
     }
     await putChatState(chatState);
   } catch (error) {
@@ -6570,6 +7207,12 @@ async function generateLargeSummary(artifact, force = false) {
   const previousFacts = structuredClone(chatState.internalFacts);
   const previousSnapshot2 = artifact.snapshot ? structuredClone(artifact.snapshot) : void 0;
   try {
+    chatState.largeSummaries.push(...generated.map((item) => item.summary));
+    for (const { group, summary } of generated) {
+      const selectedIds = new Set(group.consumedVersionIds);
+      for (const item of chatState.smallSummaries) if (selectedIds.has(item.id)) item.solidifiedByLargeSummaryId = summary.id;
+      markFactsSolidified(chatState.internalFacts, group.sourceFactIds, summary.id);
+    }
     if (artifact.snapshot) {
       let nextSnapshot = artifact.snapshot;
       for (const { group, summary } of generated) {
@@ -6592,11 +7235,13 @@ async function generateLargeSummary(artifact, force = false) {
           group.previousLarge ? [summaryMemoryText(group.previousLarge)] : [],
           settings.tableRegistry
         );
-        const settlement = finalizeSettlingEntries(nextSnapshot, {
+        const settlement = finalizeSummarySettlement({
+          snapshot: nextSnapshot,
           eventId: group.eventId,
           sourceFactIds: summary.sourceFactIds ?? [],
           eventClosed: eventClosed(eventFacts),
           internalFacts: chatState.internalFacts,
+          coverageKind: "large",
           registry: settings.tableRegistry,
           focusObjectId: chatState.focusObjectId
         });
@@ -6606,19 +7251,12 @@ async function generateLargeSummary(artifact, force = false) {
       assertArtifactCommitCurrent(artifact);
       await persistChatFor(artifact.chatKey);
     }
-    chatState.largeSummaries.push(...generated.map((item) => item.summary));
     await putChatState(chatState);
     const readBack = await getChatState(artifact.chatKey);
     const generatedIds = new Set(generated.map((item) => item.summary.id));
     if (![...generatedIds].every((id) => readBack.largeSummaries.some((item) => item.id === id))) {
       throw new Error("\u5927\u603B\u7ED3\u6279\u91CF\u5199\u5165\u540E\u56DE\u8BFB\u6821\u9A8C\u5931\u8D25");
     }
-    for (const { group, summary } of generated) {
-      const selectedIds = new Set(group.consumedVersionIds);
-      for (const item of readBack.smallSummaries) if (selectedIds.has(item.id)) item.solidifiedByLargeSummaryId = summary.id;
-      markFactsSolidified(readBack.internalFacts, group.sourceFactIds, summary.id);
-    }
-    await putChatState(readBack);
   } catch (error) {
     artifact.snapshot = previousSnapshot2;
     chatState.largeSummaries = previousLargeList;
@@ -6726,7 +7364,7 @@ async function rebuildEligibleSummaries(artifact) {
 // src/domain/facts.ts
 var OPERATIONS = /* @__PURE__ */ new Set(["create", "update", "append", "close", "supersede"]);
 var CONFIDENCE2 = /* @__PURE__ */ new Set(["confirmed", "recorded", "reported", "uncertain"]);
-function list2(value2, limit = 24, itemLimit = 500) {
+function list3(value2, limit = 24, itemLimit = 500) {
   if (!Array.isArray(value2)) return [];
   return [...new Set(value2.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
 }
@@ -6743,8 +7381,8 @@ function normalizeFacts(value2) {
     const title = safeText(item.title, 240).trim();
     const content = safeText(item.content, 6e3).trim();
     const id = safeText(item.factId ?? item.fact_id ?? item.id, 160).trim() || `fact_${hashText(`${entityId}|${title}|${content}|${index}`)}`;
-    const occurred = list2(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1e3);
-    const unresolved = list2(item.unresolved ?? item.unresolvedItems, 30, 1e3);
+    const occurred = list3(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1e3);
+    const unresolved = list3(item.unresolved ?? item.unresolvedItems, 30, 1e3);
     return {
       id,
       factId: id,
@@ -6757,8 +7395,8 @@ function normalizeFacts(value2) {
       unresolved,
       status: safeText(item.status, 120).trim() || "active",
       timeRange: normalizeTimeRange(item.timeRange ?? item.time_range),
-      relatedEntities: list2(item.relatedEntities ?? item.related_entities, 30, 240),
-      keywords: list2(item.keywords, 24, 100),
+      relatedEntities: list3(item.relatedEntities ?? item.related_entities, 30, 240),
+      keywords: list3(item.keywords, 24, 100),
       operation: OPERATIONS.has(operation) ? operation : "update",
       confidence: CONFIDENCE2.has(confidence) ? confidence : "uncertain"
     };
@@ -6789,145 +7427,6 @@ function normalizeFactPackage(value2, sourceMessageKey) {
   };
 }
 
-// src/domain/incremental-settlement.ts
-var CLOSED_STATUS_RE = /(已完成|完成|已结束|结束|已关闭|关闭|已解决|解决|已归档|归档|closed|completed|resolved|ended|archived)/i;
-var ITEM_TERMINAL_RE = /(已出售|出售完成|已赠出|已交付|已消耗|耗尽|已损毁|已销毁|已丢弃|已遗失|不再持有|sold|transferred|delivered|consumed|destroyed|discarded|lost)/i;
-var ITEM_TRANSFER_RE = /(已出售|出售完成|已赠出|已交付|已遗失|不再持有|sold|transferred|delivered|lost)/i;
-var ITEM_DISPOSABLE_RE = /(普通|制式|可替代|消耗品|一次性|空瓶|废弃|无特殊|common|ordinary|disposable|consumable)/i;
-var ITEM_INDEPENDENT_RE = /(唯一|神器|圣器|圣剑|证物|任务|关键|不可替代|传家|王室|核心|unique|artifact|evidence|quest|key item)/i;
-var SCENE_TERMINAL_RE = /(已结束|已离开|离开场景|场景结束|已关闭|ended|left|closed)/i;
-function text(value2) {
-  return String(value2 ?? "").trim();
-}
-function list3(value2) {
-  return Array.isArray(value2) ? value2.map(text).filter(Boolean) : [];
-}
-function identity2(value2) {
-  return text(value2).normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
-}
-function factEventId(fact) {
-  return text(fact.event_id ?? fact.eventId ?? fact.entity_id ?? fact.entityId);
-}
-function factId(fact) {
-  return text(fact.fact_id ?? fact.factId ?? fact.id);
-}
-function factClosed(fact) {
-  const operation = text(fact.operation).toLowerCase();
-  return operation === "close" || CLOSED_STATUS_RE.test(text(fact.status));
-}
-function rowEventIds2(row) {
-  return [...new Set([...row.eventIds ?? [], row.eventId].map(text).filter(Boolean))];
-}
-function rowText2(row) {
-  const fields = row.fields ?? {};
-  return [
-    row.status,
-    row.content,
-    fields.baseContent,
-    ...list3(fields.currentFacts),
-    ...list3(fields.currentStates)
-  ].map(text).filter(Boolean).join(" ");
-}
-function explicitTerminal(role, row) {
-  const source = rowText2(row);
-  if (role === "events") return CLOSED_STATUS_RE.test(source);
-  if (role === "scenes") return SCENE_TERMINAL_RE.test(source);
-  if (role === "items") {
-    if (!ITEM_TERMINAL_RE.test(source)) return false;
-    if (ITEM_INDEPENDENT_RE.test(source)) return false;
-    if (ITEM_TRANSFER_RE.test(source)) return ITEM_DISPOSABLE_RE.test(source);
-    return true;
-  }
-  return false;
-}
-function eventHost(snapshot, registry2, eventId) {
-  for (const table of enabledTables(registry2).filter((item) => item.role === "events")) {
-    const exact = (snapshot[table.key] ?? []).find((row) => rowEventIds2(row).includes(eventId));
-    if (exact) return { table: table.key, row: exact };
-  }
-  return void 0;
-}
-function rowFactText(row, facts, eventId) {
-  const rowIds = new Set(row.factIds ?? []);
-  const aliases2 = new Set([row.id, row.title, ...row.keywords ?? []].map(identity2).filter(Boolean));
-  const matched = facts.filter((fact) => {
-    if (factEventId(fact) !== eventId) return false;
-    if (rowIds.has(factId(fact))) return true;
-    return list3(fact.related_entities ?? fact.relatedEntities).map(identity2).some((value2) => aliases2.has(value2));
-  });
-  return [...new Set(matched.flatMap((fact) => list3(fact.occurred ?? fact.occurredFacts).concat(text(fact.content))).map(text).filter(Boolean))].join("\uFF1B").slice(0, 1200);
-}
-function deriveIncrementalSettlementDirectives(input) {
-  const registry2 = normalizeTableRegistry(input.registry);
-  const tableByKey2 = new Map(registry2.map((table) => [table.key, table]));
-  const touched = /* @__PURE__ */ new Map();
-  for (const [tableKey, patches] of Object.entries(input.patchSnapshot ?? {})) {
-    const table = tableByKey2.get(tableKey);
-    if (!table || !Array.isArray(patches)) continue;
-    for (const patch of patches) {
-      const row = (input.snapshot[tableKey] ?? []).find((candidate) => candidate.id === patch.id);
-      if (row) touched.set(row.id, { table, patch, row });
-    }
-  }
-  const closedEventIds = new Set(input.facts.filter(factClosed).map(factEventId).filter(Boolean));
-  const activeEventIds = new Set(input.facts.filter((fact) => !factClosed(fact)).map(factEventId).filter(Boolean));
-  const output = /* @__PURE__ */ new Map();
-  for (const { table, patch, row } of touched.values()) {
-    const protectedRow = row.source === "manual" || row.locked || row.lockMode === "all" || row.lockMode === "base" || row.id === input.focusObjectId;
-    if (protectedRow) continue;
-    const events = rowEventIds2(row);
-    const touchedActive = events.some((eventId) => activeEventIds.has(eventId));
-    if (isEntryParticipationPaused(row) && touchedActive && !explicitTerminal(table.role, patch)) {
-      output.set(row.id, {
-        sourceId: row.id,
-        sourceTable: table.key,
-        sourceTitle: row.title,
-        action: "restore"
-      });
-      continue;
-    }
-    const closedEventId = events.find((eventId) => closedEventIds.has(eventId));
-    if (!closedEventId || !explicitTerminal(table.role, row)) continue;
-    const note = rowFactText(row, input.facts, closedEventId) || `${row.title}\u5728\u8BE5\u4E8B\u4EF6\u4E2D\u7684\u660E\u786E\u7ED3\u679C\u5DF2\u7531\u4E8B\u4EF6\u4E8B\u5B9E\u627F\u63A5\u3002`;
-    if (table.role === "events") {
-      output.set(row.id, {
-        sourceId: row.id,
-        sourceTable: table.key,
-        sourceTitle: row.title,
-        action: "retire",
-        note,
-        reason: "\u4E8B\u4EF6\u6B63\u6587\u5DF2\u660E\u786E\u7ED3\u675F\uFF1B\u7B49\u5F85\u5C0F\u603B\u7ED3\u8986\u76D6\u540E\u5220\u9664\u4E8B\u4EF6\u5BB9\u5668\u3002"
-      });
-      continue;
-    }
-    if (table.role === "scenes" || table.role === "items") {
-      const host = eventHost(input.snapshot, registry2, closedEventId);
-      if (host && host.row.id !== row.id) {
-        output.set(row.id, {
-          sourceId: row.id,
-          sourceTable: table.key,
-          sourceTitle: row.title,
-          action: "absorb",
-          targetTable: host.table,
-          targetTitle: host.row.title,
-          note,
-          reason: "\u672C\u8F6E\u663E\u5F0F\u7EC8\u6001\u5DF2\u8FDB\u5165\u540C\u4E00\u4E8B\u4EF6\u4E8B\u5B9E\uFF1B\u7B49\u5F85\u603B\u7ED3\u8986\u76D6\u540E\u5220\u9664\u539F\u5BB9\u5668\u3002"
-        });
-      } else {
-        output.set(row.id, {
-          sourceId: row.id,
-          sourceTable: table.key,
-          sourceTitle: row.title,
-          action: "retire",
-          note,
-          reason: "\u672C\u8F6E\u663E\u5F0F\u7EC8\u6001\u5DF2\u786E\u8BA4\uFF1B\u7B49\u5F85\u603B\u7ED3\u8986\u76D6\u540E\u5220\u9664\u539F\u5BB9\u5668\u3002"
-        });
-      }
-    }
-  }
-  return [...output.values()];
-}
-
 // src/prompts/state.ts
 var COMMON_FIELD_KEYS = /* @__PURE__ */ new Set([
   "id",
@@ -6946,11 +7445,11 @@ var COMMON_FIELD_KEYS = /* @__PURE__ */ new Set([
   "presentationStates"
 ]);
 var ACTIVE_STATUS_RE = /current|active|进行|当前|活跃|未决|持续|开放|受限|暂停/i;
-var DIRECTORY_CHAR_BUDGET = 2600;
+var DIRECTORY_CHAR_BUDGET = 1600;
 var MAX_DIRECTORY_ALIASES = 6;
-var MAX_FULL_ROWS = 10;
-var MAX_FULL_ROWS_PER_TABLE = 3;
-var MAX_FACTS = 12;
+var MAX_FULL_ROWS = 6;
+var MAX_FULL_ROWS_PER_TABLE = 2;
+var MAX_FACTS = 6;
 function tables(registry2) {
   return enabledTables(normalizeTableRegistry(registry2?.length ? registry2 : DEFAULT_TABLE_REGISTRY));
 }
@@ -6980,26 +7479,52 @@ function stateSystemPrompt(registry2, promptSettings = DEFAULT_STATE_PROMPTS, co
   const routingRules = statePromptText(promptSettings?.routingRules, DEFAULT_STATE_PROMPTS.routingRules);
   const evidenceRules = statePromptText(promptSettings?.evidenceRules, DEFAULT_STATE_PROMPTS.evidenceRules);
   const updateRules = statePromptText(promptSettings?.updateRules, DEFAULT_STATE_PROMPTS.updateRules);
-  return `\u201C\u955C\u6E0A\u201D\u4E8B\u5B9E\u63D0\u53D6\u4E0E\u72B6\u6001\u7EF4\u62A4\u5668
+  return `\u201C\u955C\u6E0A\u201D\u65E0\u89C2\u70B9\u4E8B\u5B9E\u4E66\u8BB0\uFF5C\u56FA\u5B9A\u6587\u672C\u534F\u8BAE
 
-\u4F60\u5FC5\u987B\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\uFF0C\u7981\u6B62\u8FD4\u56DE JSON\u3001Markdown \u8868\u683C\u3001\u4EE3\u7801\u56F4\u680F\u3001\u89E3\u91CA\u6216\u601D\u8003\u6807\u7B7E\u3002
-\u5141\u8BB8\u7684\u5757\u53EA\u6709 <MA_TURN>\u3001<MA_FACT>\u3001<MA_ROW>\uFF1B\u6BCF\u4E2A\u5B57\u6BB5\u72EC\u5360\u4E00\u884C\uFF0C\u4F7F\u7528\u82F1\u6587\u7B49\u53F7\u201C=\u201D\u8FDE\u63A5\u3002\u5217\u8868\u5B57\u6BB5\u901A\u8FC7\u91CD\u590D\u540C\u540D\u884C\u8868\u8FBE\uFF0C\u7981\u6B62\u81EA\u884C\u53D1\u660E\u5B57\u6BB5\u3002
+\u804C\u8D23\u4EC5\u9650\u4E8E\u65E0\u89C2\u70B9\u4E8B\u5B9E\u63D0\u53D6\uFF1A\u53EA\u628A\u672C\u8F6E\u6B63\u6587\u4E2D\u5DF2\u7ECF\u660E\u786E\u6210\u7ACB\u7684\u53D8\u5316\u8F6C\u6362\u4E3A\u56FA\u5B9A\u6587\u672C\u3002\u7981\u6B62\u8BC4\u4EF7\u3001\u89E3\u91CA\u52A8\u673A\u3001\u9884\u6D4B\u3001\u8865\u5168\u3001\u8BC6\u522B\u4F0F\u7B14\u3001\u5224\u65AD\u4EF7\u503C\u3001\u51B3\u5B9A\u7ED3\u7B97\u3001\u5408\u5E76\u6216\u5220\u9664\u3002
+\u7981\u6B62\u8FD4\u56DE JSON\u3001Markdown \u8868\u683C\u3001\u4EE3\u7801\u56F4\u680F\u3001\u601D\u8003\u8FC7\u7A0B\u548C\u5757\u5916\u8BF4\u660E\u3002
 
-\u3010\u6838\u5FC3\u539F\u5219\u3011
-1. \u804C\u8D23\u4EC5\u9650\u4E8E\u65E0\u89C2\u70B9\u4E8B\u5B9E\u63D0\u53D6\uFF1A\u53EA\u63D0\u53D6\u6B63\u6587\u660E\u786E\u5EFA\u7ACB\u7684\u4E8B\u5B9E\uFF1B\u7981\u6B62\u8BC4\u4EF7\u91CD\u8981\u6027\u3001\u9884\u6D4B\u672A\u6765\u3001\u89E3\u91CA\u52A8\u673A\u3001\u8BC6\u522B\u4F0F\u7B14\u3001\u5224\u65AD\u957F\u671F\u4EF7\u503C\u6216\u63D0\u51FA\u7CFB\u7EDF\u5904\u7406\u5EFA\u8BAE\u3002
-2. \u6A21\u578B\u4E0D\u751F\u6210\u4EFB\u4F55 id\u3001fact_id\u3001event_id\uFF0C\u4E0D\u91CD\u5199\u6574\u8868\uFF1B\u8EAB\u4EFD\u3001\u53BB\u91CD\u3001\u53C2\u4E0E\u72B6\u6001\u3001\u7ED3\u7B97\u548C\u5220\u9664\u7531\u63D2\u4EF6\u5B8C\u6210\u3002
-3. <MA_FACT> \u53EA\u5199\u672C\u8F6E\u660E\u786E\u53D1\u751F\u3001\u7ED3\u675F\u3001\u66FF\u6362\u6216\u88AB\u8BC1\u5B9E\u7684\u4E8B\u5B9E\uFF1B<MA_ROW> \u53EA\u662F\u8FD9\u4E9B\u4E8B\u5B9E\u5728\u5BF9\u8C61\u8868\u4E2D\u7684\u5F53\u524D\u6295\u5F71\u3002
-4. <MA_ROW> \u53EA\u8FD4\u56DE\u672C\u8F6E\u65B0\u589E\u6216\u5B9E\u8D28\u53D8\u5316\u5BF9\u8C61\uFF1B\u672A\u8FD4\u56DE\u6761\u76EE\u7531\u63D2\u4EF6\u4FDD\u7559\u3002
-5. table \u4EC5\u586B\u542F\u7528\u8868\u683C\u952E\u6216\u540D\u79F0\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
-6. \u6BCF\u4E2A <MA_ROW> \u5FC5\u586B kind\uFF1Aspacetime\u3001scene\u3001character\u3001item\u3001event\u3001region\u3001global\u3001foundation \u6216 custom\uFF1B\u6309\u5BF9\u8C61\u672C\u8D28\u9009 table\u3002
-7. object \u586B\u7A33\u5B9A\u5BF9\u8C61\u540D\uFF1B\u65B0\u79F0\u547C\u7528 keyword \u8865\u5145\uFF0C\u540C\u4E00\u5BF9\u8C61\u4E0D\u5F97\u62C6\u6210\u4E24\u884C\u3002
-8. field.<\u5B57\u6BB5\u952E\u6216\u8868\u5934> \u53EA\u5199\u672C\u8F6E\u4E8B\u5B9E\u9020\u6210\u7684\u5B57\u6BB5\u53D8\u5316\uFF1Bstring[] \u53EF\u91CD\u590D\uFF0Cstring \u4E00\u884C\u3002
-9. recentHistory\u3001solidifiedHistory\u3001absorbedMemory\u3001entry_action \u548C merge_* \u7531\u63D2\u4EF6\u7EF4\u62A4\uFF0C\u7981\u6B62\u8F93\u51FA absorb\u3001retire\u3001restore \u6216\u5408\u5E76\u5EFA\u8BAE\u3002
-10. \u4E0D\u8F93\u51FA\u7126\u70B9\u6761\u76EE\uFF1B\u7126\u70B9\u53EA\u7531\u73A9\u5BB6\u8BBE\u7F6E\u3002
+\u3010\u552F\u4E00\u8F93\u51FA\u534F\u8BAE\u3011
+\u53EA\u5141\u8BB8 <MA_TURN> \u4E0E <MA_CHANGE>\u3002\u6A21\u578B\u4E0D\u751F\u6210\u4EFB\u4F55 id\u3001fact_id\u3001event_id\uFF1B\u5BF9\u8C61\u5339\u914D\u3001\u4E8B\u5B9E ID\u3001\u8868\u683C\u8865\u4E01\u3001\u53C2\u4E0E\u72B6\u6001\u548C\u7ED3\u7B97\u7531\u63D2\u4EF6\u5B8C\u6210\u3002
+
+<MA_TURN>
+summary=\u672C\u8F6E\u660E\u786E\u53D8\u5316\u6982\u62EC
+</MA_TURN>
+
+<MA_CHANGE>
+event=\u5DF2\u660E\u786E\u53D1\u751F\u53D8\u5316\u6240\u5F52\u5C5E\u7684\u7A33\u5B9A\u4E8B\u4EF6\u540D
+kind=spacetime|scene|character|item|event|region|global|foundation|custom
+table=\u4EC5 custom \u6216\u540C\u7C7B\u8868\u6709\u6B67\u4E49\u65F6\u586B\u5199\u542F\u7528\u8868\u683C\u952E
+object=\u7A33\u5B9A\u5BF9\u8C61\u540D
+field=\u5DF2\u6CE8\u518C\u5B57\u6BB5\u952E\u6216\u8868\u5934\uFF0C\u4E5F\u53EF\u586B summary/status/keyword
+operation=set|replace|add|remove|close
+value=\u53D8\u5316\u540E\u7684\u660E\u786E\u503C\uFF1B\u5217\u8868\u5B57\u6BB5\u53EF\u91CD\u590D value \u884C
+result=\u53EF\u9009\uFF1B\u4EC5\u5F53 value \u4E0D\u80FD\u72EC\u7ACB\u8868\u8FBE\u4E8B\u5B9E\u65F6\u586B\u5199\u6700\u77ED\u5B8C\u6574\u53E5
+confidence=\u53EF\u9009\uFF1B\u7F3A\u7701 confirmed\uFF0C\u53EA\u6709\u6B63\u6587\u660E\u786E\u5C5E\u4E8E\u8BB0\u5F55\u3001\u8F6C\u8FF0\u6216\u4E0D\u786E\u5B9A\u4FE1\u606F\u65F6\u586B\u5199 recorded|reported|uncertain
+related=\u76F4\u63A5\u53D7\u5F71\u54CD\u5BF9\u8C61\uFF0C\u53EF\u91CD\u590D
+keyword=\u5FC5\u8981\u522B\u540D\u6216\u68C0\u7D22\u8BCD\uFF0C\u53EF\u91CD\u590D
+</MA_CHANGE>
+
+\u6CA1\u6709\u4E8B\u5B9E\u53D8\u5316\u65F6\u53EA\u8F93\u51FA <MA_TURN>\u3002\u6BCF\u4E2A\u53D8\u5316\u5757\u53EA\u8868\u8FBE\u4E00\u4E2A\u5BF9\u8C61\u7684\u4E00\u4E2A\u5B57\u6BB5\u53D8\u5316\u3002\u4E0D\u8981\u8F93\u51FA\u65E7\u534F\u8BAE <MA_FACT>/<MA_ROW>\uFF1B\u63D2\u4EF6\u4ECD\u4F1A\u517C\u5BB9\u8BFB\u53D6\u65E7\u8FD4\u56DE\u3002 \u4E00\u8F6E\u6B63\u6587\u53EF\u63A8\u8FDB\u591A\u6761\u4E8B\u4EF6\u7EBF\uFF1B\u6BCF\u6761\u53D8\u5316\u5FC5\u987B\u586B\u5199\u5404\u81EA\u7A33\u5B9A\u4E8B\u4EF6\u540D\uFF0C\u4E0D\u5F97\u628A\u65E0\u5173\u4E8B\u4EF6\u5408\u5E76\u3002
+
+\u3010\u4E0A\u4E0B\u6587\u8BF4\u660E\u3011
+<MA_DIRECTORY> \u662F\u5DF2\u6709\u5BF9\u8C61\u7684\u77ED\u76EE\u5F55\uFF0C\u53EA\u7528\u4E8E\u6CBF\u7528\u7A33\u5B9A\u540D\u79F0\uFF1B\u76EE\u5F55\u4E2D\u6CA1\u6709\u7684\u5BF9\u8C61\u53EA\u6709\u5148\u901A\u8FC7\u201C\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\u201D\u624D\u53EF\u65B0\u5EFA\u3002\u4E00\u4E2A\u5BF9\u8C61\u672C\u8F6E\u53D1\u751F\u591A\u9879\u5267\u70C8\u53D8\u5316\u65F6\uFF0C\u5206\u522B\u8F93\u51FA\u591A\u4E2A\u6700\u5C0F <MA_CHANGE>\uFF0C\u4E0D\u5F97\u56E0\u53D8\u5316\u591A\u800C\u65B0\u5EFA\u540C\u540D\u5BF9\u8C61\u3002
+
+\u3010\u673A\u68B0\u8FB9\u754C\u3011
+- \u53EA\u5199\u672C\u8F6E\u65B0\u589E\u3001\u7ED3\u675F\u3001\u88AB\u66FF\u6362\u6216\u88AB\u6B63\u6587\u660E\u786E\u8BC1\u5B9E\u7684\u4E8B\u5B9E\uFF1B\u672A\u77E5\u3001\u53EF\u80FD\u6027\u3001\u666E\u901A\u52A8\u4F5C\u94FE\u548C\u91CD\u590D\u63CF\u8FF0\u4E0D\u5199\u3002
+- \u672A\u8FD4\u56DE\u6761\u76EE\u7531\u63D2\u4EF6\u4FDD\u7559\uFF1B\u6A21\u578B\u53EA\u8F93\u51FA\u53D1\u751F\u53D8\u5316\u7684\u5B57\u6BB5\uFF0C\u4E0D\u91CD\u5199\u5B8C\u6574\u5FEB\u7167\u3002
+- \u4E0D\u8F93\u51FA\u7126\u70B9\u6761\u76EE\u6216 focus \u8868\u4E8B\u5B9E\uFF1B\u7126\u70B9\u53EA\u7531\u73A9\u5BB6\u548C\u63D2\u4EF6\u7EF4\u62A4\u3002
+- \u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u3001\u56F4\u89C2\u548C\u4E34\u65F6\u52A8\u4F5C\u4E0D\u5EFA\u7ACB\u5173\u7CFB\u6216\u72EC\u7ACB\u5BF9\u8C61\u3002
+- \u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\uFF1B\u5F53\u524D\u65F6\u7A7A\u548C\u5F53\u524D\u573A\u666F\u53EA\u5199\u6B63\u6587\u5B9E\u9645\u6240\u5728\u4F4D\u7F6E\u3002
+- field \u5FC5\u987B\u4F7F\u7528\u5DF2\u6CE8\u518C\u5B57\u6BB5\u952E\u6216\u8868\u5934\uFF0C\u7981\u6B62\u81EA\u884C\u53D1\u660E\u5B57\u6BB5\u3002
+- currentStates \u7B49\u5F53\u524D\u5B57\u6BB5\u53D1\u751F\u66FF\u6362\u65F6\uFF0C\u7528 operation=replace\uFF0C\u5E76\u7ED9\u51FA\u8BE5\u5B57\u6BB5\u5F53\u524D\u5B8C\u6574\u6709\u6548\u503C\uFF1B\u72EC\u7ACB\u65B0\u589E\u5217\u8868\u9879\u624D\u7528 add\u3002
+- close \u53EA\u5728\u6B63\u6587\u660E\u786E\u5199\u660E\u5B8C\u6210\u3001\u7ED3\u675F\u3001\u5173\u95ED\u3001\u89E3\u51B3\u3001\u635F\u6BC1\u3001\u6D88\u8017\u3001\u4EA4\u4ED8\u7B49\u7ED3\u679C\u65F6\u4F7F\u7528\uFF1B\u63D2\u4EF6\u4F1A\u628A\u5BF9\u5E94\u4E8B\u4EF6\u4E8B\u5B9E\u6807\u8BB0\u4E3A\u5DF2\u7ED3\u675F\u3002
+- \u8868\u8C61\u3001\u670D\u88C5\u3001\u79F0\u547C\u548C\u4ED6\u4EBA\u8BEF\u8BA4\u53EA\u80FD\u5199\u5916\u89C2\u8868\u73B0\u5B57\u6BB5\uFF0C\u4E0D\u5F97\u6539\u5199\u8EAB\u4EFD\u951A\u70B9\u3002
+- baseContent=\u8EAB\u4EFD\u951A\u70B9\uFF1BpresentationStates=\u5916\u89C2\u4E0E\u8868\u73B0\u3002entry_action \u548C merge_* \u7531\u63D2\u4EF6\u7EF4\u62A4\uFF0C\u6A21\u578B\u4E0D\u5F97\u8F93\u51FA\u3002
+- \u540C\u4E00\u5BF9\u8C61\u6CBF\u7528\u7A33\u5B9A\u540D\u79F0\uFF1B\u65B0\u79F0\u547C\u5199 keyword\u3002\u65F6\u7A7A\u53EA\u8868\u793A\u5F53\u524D\u65F6\u95F4\u4E0E\u4F4D\u7F6E\uFF0C\u6BCF\u8F6E\u4E0D\u5F97\u521B\u5EFA\u591A\u4E2A\u5F53\u524D\u65F6\u7A7A\u5BF9\u8C61\u3002
+- \u542F\u7528\u8868\u683C\uFF1A${keys || "\uFF08\u65E0\uFF09"}\u3002
 
 \u3010\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\uFF5C\u767D\u76D2\u89C4\u5219\u3011
-\u89C4\u5219\u51B3\u5B9A\u8C01\u80FD\u5EFA\u6863\uFF1B\u8868\u683C\u7528\u9014\u51B3\u5B9A\u8BB0\u5F55\u5185\u5BB9\u3002
-
 \u5141\u8BB8\u5EFA\u6863\u6761\u4EF6\uFF1A
 ${admissionRules}
 
@@ -7007,96 +7532,28 @@ ${admissionRules}
 ${exclusionRules}
 
 \u7C7B\u578B\u4E0E\u8868\u683C\u5206\u6D41\uFF1A
+\u672C\u6B21\u53D9\u4E8B\u5C40\u9762\u5199\u5165\u573A\u666F\uFF1B\u5730\u70B9\u8868\u8BB0\u5F55\u53EF\u590D\u7528\u7A7A\u95F4\u672C\u4F53\u3002
 ${routingRules}
 
 \u8BC1\u636E\u4E0E\u4E0D\u786E\u5B9A\u6027\uFF1A
 ${evidenceRules}
 
-\u66F4\u65B0\u4E0E\u51B2\u7A81\u5904\u7406\uFF1A
+\u66F4\u65B0\u4E0E\u51B2\u7A81\uFF1A
 ${updateRules}
 
-\u3010\u65E7\u5FEB\u7167\u4FEE\u8BA2\u89C4\u5219\u3011
-- <MA_DIRECTORY> \u662F\u5DF2\u6709\u5BF9\u8C61\u7684\u77ED\u76EE\u5F55\uFF0C\u4E0D\u662F\u767D\u540D\u5355\uFF1B\u76EE\u5F55\u4E2D\u6CA1\u6709\u7684\u5BF9\u8C61\u53EA\u6709\u5148\u901A\u8FC7\u201C\u5BF9\u8C61\u5EFA\u6863\u8FB9\u754C\u201D\u624D\u53EF\u65B0\u5EFA\u3002
-- <MA_CONTEXT_ROW> \u662F\u9AD8\u76F8\u5173\u5DE5\u4F5C\u526F\u672C\uFF1B\u6CBF\u7528\u7A33\u5B9A\u540D\u79F0\uFF0C\u6CA1\u6709\u53D8\u5316\u7684\u5B57\u6BB5\u4E0D\u8981\u8F93\u51FA\uFF0C\u4E0D\u5F97\u6DA6\u8272\u3001\u6362\u5E8F\u6216\u6539\u5199\u63AA\u8F9E\uFF1B\u672A\u8FD4\u56DE\u65E7\u5185\u5BB9\u7531\u63D2\u4EF6\u4FDD\u7559\u3002
-- \u4E00\u4E2A\u5BF9\u8C61\u672C\u8F6E\u53D1\u751F\u591A\u9879\u5267\u70C8\u53D8\u5316\u65F6\uFF0C\u8FD4\u56DE\u5168\u90E8\u53D7\u5F71\u54CD\u5B57\u6BB5\u548C\u5F53\u524D\u7248\u672C\uFF1B\u4E0D\u9650\u5236\u53D8\u5316\u5B57\u6BB5\u6570\u91CF\uFF0C\u4E5F\u4E0D\u9650\u5236\u72EC\u7ACB\u4E8B\u5B9E\u6761\u6570\u3002
-- \u672A\u660E\u786E\u91CD\u5B9A\u4E49\u65F6\u4E0D\u5F97\u6539\u5199\u57FA\u7840\u5B9A\u4E49\u3001\u56FA\u6709\u4F5C\u7528\u548C\u957F\u671F\u4FE1\u606F\uFF1B\u7269\u54C1\u7684\u65E2\u6709\u4F5C\u7528\u4E0D\u5F97\u56E0\u72B6\u6001\u53D8\u5316\u4E22\u5931\uFF1B\u65B0\u5BF9\u8C61\u53EA\u586B\u6B63\u6587\u5DF2\u5EFA\u7ACB\u5185\u5BB9\u3002
-- \u89D2\u8272\u69FD\u4F4D\uFF1AbaseContent=\u8EAB\u4EFD\u951A\u70B9\uFF0CcurrentFacts=\u957F\u671F/\u73B0\u884C\u4E8B\u5B9E\uFF0CcurrentStates=\u5F53\u524D\u72B6\u6001\uFF0CpresentationStates=\u5916\u89C2\u8868\u73B0\uFF1B\u8868\u8C61\u4E0D\u5F97\u6539\u5199\u8EAB\u4EFD\uFF0C\u5355\u6B21\u884C\u4E3A\u4E0D\u5F97\u63A8\u65AD\u4EBA\u683C\u3002
+\u3010\u542F\u7528\u8868\u683C\u5B57\u6BB5\u3011
+${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1B\u4E0D\u8981\u8F93\u51FA <MA_CHANGE>\u3002"}
 
-\u3010\u7CBE\u51C6\u8868\u8FBE\u89C4\u5219\u3011
-- \u5FC5\u8981\u4E8B\u5B9E\u6761\u6570\u4E0D\u8BBE\u4E0A\u9650\uFF1B\u6BCF\u6761\u53EA\u5199\u4E00\u4E2A\u4E3B\u4F53\u3001\u53D8\u5316\u548C\u5F53\u524D\u7ED3\u679C\uFF0C\u4E0D\u590D\u8FF0\u52A8\u4F5C\u94FE\u3002
-- summary \u901A\u5E38\u4E0D\u8D85\u8FC7 80 \u4E2A\u6C49\u5B57\uFF1B\u5355\u6761\u77ED\u800C\u5B8C\u6574\uFF0C\u786C\u4E0A\u9650\u7531\u63D2\u4EF6\u6309\u767D\u76D2\u8BBE\u7F6E\u6821\u9A8C\uFF0C\u4E0D\u8981\u51D1\u5B57\u6570\u6216\u589E\u52A0\u89E3\u91CA\u3002
-- \u7981\u6B62\u5206\u6790\u6027\u5957\u8BDD\uFF1B\u540C\u4E49\u5185\u5BB9\u53EA\u4FDD\u7559\u6700\u51C6\u786E\u7684\u4E00\u6761\u3002
-
-\u3010\u4E8B\u5B9E\u8FB9\u754C\u3011
-- \u4E00\u8F6E\u6B63\u6587\u53EF\u63A8\u8FDB\u591A\u6761\u4E8B\u4EF6\u7EBF\uFF1Bevent \u586B\u7A33\u5B9A\u540D\u79F0\uFF0C\u4E0D\u586B ID\u3002\u4E8B\u4EF6\u72B6\u6001\u53EA\u6765\u81EA\u6B63\u6587\u660E\u786E\u7ED3\u679C\uFF0C\u4E0D\u5224\u65AD\u7ED3\u7B97\u3002
-- \u540C\u573A\u3001\u666E\u901A\u5BF9\u8BDD\u3001\u8868\u60C5\u3001\u63A8\u6D4B\u3001\u56F4\u89C2\u548C\u4E34\u65F6\u52A8\u4F5C\u672C\u8EAB\u4E0D\u5EFA\u5BF9\u8C61\u6216\u5173\u7CFB\uFF1B\u53EA\u8BB0\u5F55\u6B63\u6587\u660E\u786E\u5F62\u6210\u7684\u7ED3\u679C\u3002
-- \u4ED6\u4EBA\u9648\u8FF0\u3001\u4F20\u95FB\u548C\u63A8\u6D4B\u4F7F\u7528 reported \u6216 uncertain\uFF0C\u4E0D\u5F97\u5347\u7EA7\u4E3A confirmed\u3002
-- \u5F53\u524D\u65F6\u95F4/\u4F4D\u7F6E\u5199\u5165\u65F6\u7A7A\uFF0C\u672C\u6B21\u53D9\u4E8B\u5C40\u9762\u5199\u5165\u573A\u666F\uFF0C\u5730\u70B9\u8868\u8BB0\u5F55\u53EF\u590D\u7528\u7A7A\u95F4\u672C\u4F53\u3002
-- \u573A\u666F\u5207\u6362\u540E\uFF0C\u5DF2\u79BB\u5F00\u7684\u65E7\u573A\u666F\u548C\u65E7\u65F6\u7A7A\u4E0D\u5F97\u7EE7\u7EED\u6807\u4E3A\u5F53\u524D\u3002
-- \u8FC7\u7A0B\u538B\u7F29\u4E3A\u6B63\u6587\u5DF2\u7ECF\u660E\u786E\u5F62\u6210\u7684\u5F53\u524D\u7ED3\u679C\uFF1B\u672A\u77E5\u3001\u672A\u8BF4\u660E\u548C\u53EF\u80FD\u6027\u4E0D\u5199\u5165\u3002
-
-\u3010\u56FA\u5B9A\u6587\u672C\u683C\u5F0F\u3011
-<MA_ROW> \u4EC5\u793A\u8303\u8BED\u6CD5\uFF1B\u5B9E\u9645 table \u6309\u7C7B\u578B\u5206\u6D41\u3002
-
-<MA_TURN>
-summary=\u672C\u8F6E\u53D8\u5316\u6982\u62EC
-</MA_TURN>
-
-<MA_FACT>
-event=\u4E8B\u4EF6\u7A33\u5B9A\u540D\u79F0
-title=\u672C\u6761\u4E8B\u5B9E\u540D\u79F0
-type=event
-status=active
-operation=update
-confidence=confirmed
-occurred=\u5DF2\u53D1\u751F\u7ED3\u679C
-time_start=\u5F53\u524D
-time_end=
-time_label=
-related=\u76F4\u63A5\u53D7\u5F71\u54CD\u5BF9\u8C61
-keyword=\u4E8B\u5B9E\u5173\u952E\u8BCD
-</MA_FACT>
-
-<MA_ROW>
-table=regions
-kind=region
-object=\u793A\u4F8B\u5730\u70B9\u7A33\u5B9A\u540D\u79F0
-summary=\u5F53\u524D\u6709\u6548\u6458\u8981
-status=active
-keyword=\u5BF9\u8C61\u522B\u540D
-field.currentFacts=\u5F53\u524D\u5BA2\u89C2\u4E8B\u5B9E
-field.currentStates=\u5F53\u524D\u9636\u6BB5\u72B6\u6001
-field.relatedObjects=\u76F4\u63A5\u5173\u8054\u5BF9\u8C61
-field.relatedEvents=\u76F4\u63A5\u5173\u8054\u4E8B\u4EF6\u540D\u79F0
-
-</MA_ROW>
-
-
-\u65E0\u4E8B\u5B9E\u6216\u6761\u76EE\u53D8\u5316\u65F6\u53EF\u7701\u7565\u5BF9\u5E94\u5757\uFF0C\u4F46\u81F3\u5C11\u8F93\u51FA <MA_TURN>\uFF1B\u4E0D\u8981\u8F93\u51FA\u7A7A\u5757\u3002
-
-\u3010\u542F\u7528\u8868\u683C\u4E0E\u5B57\u6BB5\u3011
-${compactRegistryDescription(active) || "\u5F53\u524D\u6CA1\u6709\u542F\u7528\u8868\u683C\uFF1B\u4E0D\u8981\u8F93\u51FA <MA_ROW>\u3002"}`;
+\u8F93\u51FA\u524D\u53EA\u68C0\u67E5\uFF1A\u662F\u5426\u4E3A\u6B63\u6587\u4E8B\u5B9E\u3001\u5BF9\u8C61\u4E0E\u5B57\u6BB5\u662F\u5426\u660E\u786E\u3001\u5757\u662F\u5426\u95ED\u5408\u3002\u4E0D\u8981\u589E\u52A0\u4EFB\u4F55\u5206\u6790\u3002`;
 }
 function normalizeSearchText(value2) {
   return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
 }
-function stringList3(value2) {
+function stringList4(value2) {
   return Array.isArray(value2) ? value2.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
 }
 function boundedList(value2, count, chars) {
-  return stringList3(value2).slice(-count).map((item) => item.slice(0, chars));
-}
-function compactLifecycle(row) {
-  if (!row.lifecycle) return void 0;
-  return {
-    existence: row.lifecycle.existence,
-    activity: row.lifecycle.activity,
-    memory: row.lifecycle.memory,
-    evidenceLevel: row.lifecycle.evidenceLevel,
-    evidence: String(row.lifecycle.evidence || "").slice(0, 160),
-    returnConditions: boundedList(row.lifecycle.returnConditions, 4, 100),
-    returnBlockers: boundedList(row.lifecycle.returnBlockers, 4, 100)
-  };
+  return stringList4(value2).slice(-count).map((item) => item.slice(0, chars));
 }
 function modelRow(row, detail) {
   const direct = detail === "direct";
@@ -7106,14 +7563,10 @@ function modelRow(row, detail) {
     keywords: (row.keywords ?? []).slice(0, direct ? 8 : 5).map((item) => String(item).slice(0, 60)),
     status: String(row.status || "").slice(0, 80)
   };
-  const lifecycle = compactLifecycle(row);
-  if (lifecycle) output.lifecycle = lifecycle;
   const fields = row.fields && typeof row.fields === "object" ? row.fields : {};
   for (const [key, value2] of Object.entries(fields)) {
     if (key === "baseContent") output[key] = String(value2 ?? "").slice(0, direct ? 240 : 160);
     else if (key === "currentFacts" || key === "currentStates") output[key] = boundedList(value2, direct ? 6 : 3, direct ? 100 : 80);
-    else if (key === "recentHistory") output[key] = boundedList(value2, 1, 140);
-    else if (key === "solidifiedHistory") output[key] = boundedList(value2, 1, 140);
     else if (key === "relationshipStates" || key === "abilityStates" || key === "presentationStates") output[key] = boundedList(value2, direct ? 4 : 2, direct ? 100 : 80);
     else if (key === "relatedObjects" || key === "relatedEvents") output[key] = boundedList(value2, direct ? 6 : 4, 70);
     else if (Array.isArray(value2)) output[key] = boundedList(value2, direct ? 4 : 2, direct ? 90 : 70);
@@ -7140,8 +7593,8 @@ function rowMatches(row, source) {
 function relatedTokens(row) {
   const fields = row.fields && typeof row.fields === "object" ? row.fields : {};
   return [
-    ...stringList3(fields.relatedObjects),
-    ...stringList3(fields.relatedEvents)
+    ...stringList4(fields.relatedObjects),
+    ...stringList4(fields.relatedEvents)
   ].map(normalizeSearchText).filter(Boolean);
 }
 function compactSnapshotContext(previous, active, sourceText) {
@@ -7213,9 +7666,8 @@ function activeFactPayload(facts, sourceText) {
     index,
     score: (factMatches(fact, source) ? 100 : 0) + (fact.active ? 20 : 0)
   })).sort((a, b) => b.score - a.score || String(b.fact.updatedAt || "").localeCompare(String(a.fact.updatedAt || "")) || b.index - a.index);
-  const selected = scored.filter((item) => item.score > 0).slice(0, MAX_FACTS);
-  const fallback = (selected.length ? selected : scored.slice(0, 8)).map((item) => item.fact);
-  return fallback.map((fact) => ({
+  const selected = scored.filter((item) => item.score > 0).slice(0, MAX_FACTS).map((item) => item.fact);
+  return selected.map((fact) => ({
     occurred: boundedList(fact.occurredFacts, 3, 140),
     status: String(fact.status || "").slice(0, 60),
     time_range: {
@@ -7306,22 +7758,22 @@ function stateUserPrompt(previous, playerText, assistantText, registry2, interna
   const sourceText = `${playerText}
 ${assistantText}`;
   const context = compactSnapshotContext(previous, active, sourceText);
-  return `\u3010\u76F8\u5173\u5185\u90E8\u4E8B\u5B9E\uFF1A\u4EC5\u7528\u4E8E\u8BC6\u522B\u540C\u4E00\u4E8B\u4EF6\u4E0E\u5BF9\u8C61\uFF0C\u4E0D\u8981\u7167\u6284\u6216\u6269\u5199\u3011
+  return `\u3010\u76F8\u5173\u65E2\u6709\u4E8B\u5B9E\uFF5C\u53EA\u7528\u4E8E\u8BC6\u522B\u540C\u4E00\u5BF9\u8C61\u4E0E\u4E8B\u4EF6\u3011
 ${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
 
-\u3010\u672C\u8F6E\u76F8\u5173\u5BF9\u8C61\u77ED\u76EE\u5F55\uFF1A\u7531\u63D2\u4EF6\u672C\u5730\u7B5B\u9009\uFF1B\u4E0D\u662F\u5B8C\u6574\u4ED3\u5E93\uFF0C\u4E5F\u4E0D\u662F\u767D\u540D\u5355\u3011
+\u3010\u76F8\u5173\u5BF9\u8C61\u77ED\u76EE\u5F55\u3011
 ${contextDirectoryBlock(context.directory, context.directoryOmitted)}
 
-\u3010\u9AD8\u76F8\u5173\u5BF9\u8C61\u5DE5\u4F5C\u526F\u672C\uFF1A\u53EA\u7528\u4E8E\u4FEE\u8BA2\u672C\u8F6E\u53D8\u5316\uFF1B\u672A\u5217\u5165\u6B64\u5904\u7684\u76EE\u5F55\u5BF9\u8C61\u4ECD\u53EF\u66F4\u65B0\u3011
+\u3010\u76F8\u5173\u5BF9\u8C61\u5F53\u524D\u5DE5\u4F5C\u526F\u672C\u3011
 ${contextRowBlocks(context.relevant)}
 
-\u3010\u73A9\u5BB6\u672C\u8F6E\u8F93\u5165\u3011
+\u3010\u73A9\u5BB6\u8F93\u5165\u3011
 ${playerText || "\uFF08\u7A7A\uFF09"}
 
-\u3010\u89D2\u8272\u672C\u8F6E\u6B63\u6587\u3011
+\u3010\u672C\u8F6E\u6B63\u6587\u3011
 ${assistantText}
 
-\u53EA\u8FD4\u56DE\u56FA\u5B9A\u6587\u672C\u534F\u8BAE\u3002\u53EA\u63D0\u53D6\u672C\u8F6E\u6B63\u6587\u660E\u786E\u5EFA\u7ACB\u7684\u4E8B\u5B9E\uFF0C\u5E76\u628A\u4E8B\u5B9E\u6295\u5F71\u5230\u53D7\u5F71\u54CD\u5BF9\u8C61\u5B57\u6BB5\uFF1B\u672A\u8FD4\u56DE\u5B57\u6BB5\u7531\u63D2\u4EF6\u539F\u6837\u4FDD\u7559\uFF0C\u672A\u8FD4\u56DE\u6761\u76EE\u7EE7\u7EED\u4FDD\u7559\u3002\u53D8\u5316\u5F88\u5927\u65F6\u5B8C\u6574\u8FD4\u56DE\u5168\u90E8\u53D7\u5F71\u54CD\u5B57\u6BB5\uFF0C\u4E0D\u9650\u5236\u5FC5\u8981\u4E8B\u5B9E\u6761\u6570\u3002\u6BCF\u6761\u53EA\u8868\u8FBE\u4E00\u4E2A\u72EC\u7ACB\u4E8B\u5B9E\uFF0C\u4F7F\u7528\u6700\u77ED\u5B8C\u6574\u53E5\u3002\u4E0D\u8981\u8BC4\u4EF7\u3001\u63A8\u6D4B\u3001\u8865\u5168\u3001\u5224\u65AD\u7ED3\u7B97\u3001\u63D0\u51FA\u5408\u5E76\u6216\u5220\u9664\uFF1B\u4E0D\u8981\u8FD4\u56DE entry_action/merge_*\uFF1B\u4E0D\u8981\u8FD4\u56DE JSON\uFF0C\u4E0D\u8981\u8F93\u51FA id/fact_id/event_id\uFF0C\u4E0D\u8981\u590D\u5236\u3001\u6DA6\u8272\u6216\u6362\u5E8F\u65E0\u53D8\u5316\u65E7\u5B57\u6BB5\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u56FA\u5B9A\u6587\u672C\u683C\u5F0F\u4E0D\u5B8C\u6574\uFF1B\u8FD9\u6B21\u4E25\u683C\u4F7F\u7528 <MA_TURN>/<MA_FACT>/<MA_ROW>\u3002" : ""}`;
+\u53EA\u8FD4\u56DE <MA_TURN> \u4E0E <MA_CHANGE>\u3002\u628A\u6B63\u6587\u4E8B\u5B9E\u5199\u6210\u6700\u5C0F\u5B57\u6BB5\u53D8\u5316\uFF1B\u4E0D\u8981\u540C\u65F6\u518D\u5199\u4E8B\u5B9E\u5757\u548C\u6761\u76EE\u5757\u3002\u672A\u8FD4\u56DE\u5BF9\u8C61\u4E0E\u5B57\u6BB5\u7531\u63D2\u4EF6\u539F\u6837\u4FDD\u7559\uFF1B\u6B63\u6587\u53D8\u5316\u518D\u5927\u4E5F\u53EA\u8F93\u51FA\u786E\u5B9E\u53D8\u5316\u7684\u5B57\u6BB5\uFF0C\u4E0D\u590D\u8FF0\u65E7\u5185\u5BB9\u3002\u4E0D\u8981\u8BC4\u4EF7\u3001\u63A8\u6D4B\u3001\u8865\u5168\u3001\u5206\u6790\u52A8\u673A\u3001\u5224\u65AD\u7ED3\u7B97\u3001\u63D0\u51FA\u5408\u5E76\u6216\u5220\u9664\u3002\u4E0D\u8981\u8F93\u51FA ID\u3001JSON\u3001\u65E7\u534F\u8BAE <MA_FACT>/<MA_ROW> \u6216\u65E0\u53D8\u5316\u65E7\u5B57\u6BB5\u3002${repair ? "\n\u4E0A\u4E00\u6B21\u8FD4\u56DE\u683C\u5F0F\u4E0D\u5B8C\u6574\uFF1A\u9010\u5757\u95ED\u5408\u6807\u7B7E\u3002\u6BCF\u4E2A <MA_CHANGE> \u5FC5\u987B\u5305\u542B event\u3001kind\u3001object\u3001field\u3001operation\uFF0C\u4EE5\u53CA value \u6216 result\uFF1B\u4E0D\u8981\u8865\u5145\u539F\u6587\u6CA1\u6709\u7684\u4E8B\u5B9E\u3002" : ""}`;
 }
 
 // src/pipeline/state.ts
@@ -7359,7 +7811,7 @@ function assertStateBusinessShape(parsed, active) {
       if (!id) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}].id \u4E0D\u80FD\u4E3A\u7A7A`);
       if (!title) throw new Error(`\u72B6\u6001\u8868 ${table.key}[${index}].title \u4E0D\u80FD\u4E3A\u7A7A`);
       if (ids.has(id)) throw new Error(`\u72B6\u6001\u8868 ${table.key} \u540C\u4E00\u6B21\u8FD4\u56DE\u5305\u542B\u91CD\u590D id\uFF1A${id}`);
-      const titleToken = rowIdentityTitle(title);
+      const titleToken = canonicalObjectTitle(title);
       if (titleToken && titles.has(titleToken)) throw new Error(`\u72B6\u6001\u8868 ${table.key} \u540C\u4E00\u6B21\u8FD4\u56DE\u5305\u542B\u91CD\u590D\u5BF9\u8C61\uFF1A${title}`);
       ids.add(id);
       if (titleToken) titles.add(titleToken);
@@ -7377,60 +7829,6 @@ function previousSnapshot(beforeIndex) {
     if (legacy) return normalizeSnapshot(legacy, legacy, registry2);
   }
   return emptySnapshot(registry2);
-}
-function cloneProtectedRow(row) {
-  return structuredClone(row);
-}
-function rowIdentityTitle(value2) {
-  return canonicalObjectTitle(value2);
-}
-function preserveProtectedRows(previous, next, customRegistry) {
-  const registry2 = normalizeTableRegistry(customRegistry);
-  previous = dedupeStrongStateRows(previous, registry2);
-  next = dedupeStrongStateRows(next, registry2);
-  const mutableFields = /* @__PURE__ */ new Set(["currentFacts", "currentStates", "recentHistory", "relationshipStates", "abilityStates", "presentationStates", "relatedObjects", "relatedEvents", "migrationStatus"]);
-  for (const table of registry2) {
-    const key = table.key;
-    next[key] ||= [];
-    const nextIndexById = new Map(next[key].map((row, index) => [row.id, index]));
-    const nextIndexesByTitle = /* @__PURE__ */ new Map();
-    next[key].forEach((row, index) => {
-      const title = rowIdentityTitle(row.title);
-      if (title) nextIndexesByTitle.set(title, [...nextIndexesByTitle.get(title) ?? [], index]);
-    });
-    for (const row of previous[key] ?? []) {
-      if (row.source !== "manual" && !row.locked && row.lockMode !== "all" && row.lockMode !== "base") continue;
-      const protectedRow = cloneProtectedRow(row);
-      const title = rowIdentityTitle(row.title);
-      const titleIndexes = title ? nextIndexesByTitle.get(title) ?? [] : [];
-      const existingIndex = nextIndexById.get(row.id) ?? titleIndexes[0];
-      if (existingIndex === void 0) {
-        nextIndexById.set(row.id, next[key].length);
-        next[key].push(protectedRow);
-        continue;
-      }
-      if (row.locked || row.lockMode === "all") {
-        next[key][existingIndex] = protectedRow;
-        continue;
-      }
-      const generated = next[key][existingIndex];
-      const oldFields = row.fields ?? {};
-      const generatedFields = generated.fields ?? {};
-      const mergedFields = { ...structuredClone(oldFields) };
-      for (const field of mutableFields) if (field in generatedFields) mergedFields[field] = structuredClone(generatedFields[field]);
-      next[key][existingIndex] = {
-        ...generated,
-        id: row.id,
-        title: row.title,
-        source: "manual",
-        locked: false,
-        lockMode: "base",
-        fields: mergedFields,
-        factIds: [.../* @__PURE__ */ new Set([...row.factIds ?? [], ...generated.factIds ?? []])]
-      };
-    }
-  }
-  return dedupeStrongStateRows(next, registry2);
 }
 function normalizedTitle(value2) {
   return canonicalObjectTitle(value2);
@@ -7604,6 +8002,148 @@ function assertRegistryCurrent(expectedFingerprint) {
     throw new RegistryChangedError("\u8868\u683C\u5B9A\u4E49\u5DF2\u53D8\u5316\uFF0C\u65E7\u72B6\u6001\u7ED3\u679C\u4E0D\u518D\u63D0\u4EA4");
   }
 }
+function splitStateSource(text2, limit) {
+  const max = Math.max(800, Math.round(limit));
+  const paragraphs = String(text2 || "").replace(/\r\n?/g, "\n").split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  const chunks = [];
+  let current = "";
+  const push = (value2) => {
+    const cleaned = value2.trim();
+    if (cleaned) chunks.push(cleaned);
+  };
+  const append = (piece) => {
+    if (!piece) return;
+    if (!current) {
+      current = piece;
+      return;
+    }
+    if (current.length + piece.length + 2 <= max) current += `
+
+${piece}`;
+    else {
+      push(current);
+      current = piece;
+    }
+  };
+  for (const paragraph of paragraphs.length ? paragraphs : [String(text2 || "")]) {
+    if (paragraph.length <= max) {
+      append(paragraph);
+      continue;
+    }
+    const sentences = paragraph.split(/(?<=[。！？!?；;])\s*/u).map((item) => item.trim()).filter(Boolean);
+    for (const sentence of sentences.length ? sentences : [paragraph]) {
+      if (sentence.length <= max) {
+        append(sentence);
+        continue;
+      }
+      if (current) {
+        push(current);
+        current = "";
+      }
+      for (let offset = 0; offset < sentence.length; offset += max) push(sentence.slice(offset, offset + max));
+    }
+  }
+  push(current);
+  return chunks.length ? chunks : [""];
+}
+function minimalStateChunkPrompt(playerText, assistantChunk, index, total) {
+  return `\u3010\u73A9\u5BB6\u8F93\u5165\u3011
+${playerText || "\uFF08\u7A7A\uFF09"}
+
+\u3010\u672C\u8F6E\u6B63\u6587\u5206\u6BB5 ${index + 1}/${total}\u3011
+${assistantChunk}
+
+\u53EA\u63D0\u53D6\u8FD9\u4E00\u5206\u6BB5\u660E\u786E\u5EFA\u7ACB\u7684\u53D8\u5316\u3002\u53EA\u8FD4\u56DE <MA_TURN> \u4E0E <MA_CHANGE>\uFF1B\u4E0D\u8981\u5F15\u7528\u5176\u4ED6\u5206\u6BB5\u3001\u8865\u5168\u4E0A\u4E0B\u6587\u6216\u8F93\u51FA\u65E7\u534F\u8BAE\u3002`;
+}
+function retryableStateTransportError(error) {
+  return /(504|502|503|gateway|timeout|timed out|超时|网关|no message generated|返回为空|响应未完成|upstream)/i.test(toErrorMessage(error));
+}
+function repairableStateParseError(error) {
+  const message = toErrorMessage(error);
+  return !/(未注册|已停用|存在歧义|多个条目命中|不允许写入|不允许直接维护|未知生命周期|只能用于已有对象|absorb 必须|merge_)/i.test(message);
+}
+function compactStateRepairSystemPrompt() {
+  return `\u4F60\u662F\u56FA\u5B9A\u6587\u672C\u6574\u7406\u5668\uFF0C\u4E0D\u5206\u6790\u5267\u60C5\u3001\u4E0D\u8865\u5145\u4E8B\u5B9E\u3002\u628A\u8F93\u5165\u4E2D\u5DF2\u7ECF\u5199\u51FA\u7684\u5185\u5BB9\u6574\u7406\u6210\u955C\u6E0A\u56FA\u5B9A\u6587\u672C\u3002
+\u53EA\u5141\u8BB8 <MA_TURN> \u548C <MA_CHANGE>\u3002\u5220\u9664\u5757\u5916\u8BF4\u660E\u3001JSON \u5916\u58F3\u3001\u4EE3\u7801\u56F4\u680F\u548C\u601D\u8003\u6587\u5B57\uFF1B\u8865\u9F50\u80FD\u591F\u4ECE\u539F\u6587\u786E\u5B9A\u7684\u6807\u7B7E\u4E0E\u5B57\u6BB5\u540D\u3002
+\u6BCF\u4E2A\u53D8\u5316\u5757\u5FC5\u987B\u6709 event\u3001kind\u3001object\u3001field\u3001operation\uFF0C\u4EE5\u53CA value \u6216 result\u3002result \u4E0E confidence \u53EF\u7701\u7565\u3002\u7981\u6B62\u521B\u9020\u3001\u731C\u6D4B\u6216\u6539\u5199\u4E8B\u5B9E\u3002`;
+}
+function compactStateRepairPrompt(raw) {
+  return `\u3010\u5F85\u6574\u7406\u7684\u6A21\u578B\u539F\u59CB\u8FD4\u56DE\u3011
+${safeText(raw, 18e3)}
+
+\u53EA\u505A\u683C\u5F0F\u6574\u7406\u3002\u539F\u59CB\u8FD4\u56DE\u6CA1\u6709\u8868\u8FBE\u7684\u4E8B\u5B9E\u4E0D\u5F97\u6DFB\u52A0\u3002`;
+}
+async function repairStateText(raw, previous, registry2, activeFacts, maxTokens, origin) {
+  const repaired = await generateTask({
+    task: "state",
+    systemPrompt: compactStateRepairSystemPrompt(),
+    prompt: compactStateRepairPrompt(raw),
+    maxTokens: Math.min(Math.max(768, maxTokens), 1536),
+    requestPurpose: "fixed-text",
+    requestOrigin: origin
+  });
+  parseStateTextOutput(repaired, previous, registry2, activeFacts);
+  return repaired;
+}
+async function generateValidatedStateText(request, previous, registry2, activeFacts, repairOrigin) {
+  const raw = await generateTask(request);
+  try {
+    parseStateTextOutput(raw, previous, registry2, activeFacts);
+    return raw;
+  } catch (parseError) {
+    if (!repairableStateParseError(parseError)) throw parseError;
+    try {
+      return await repairStateText(raw, previous, registry2, activeFacts, Number(request.maxTokens) || 1536, repairOrigin);
+    } catch (repairError) {
+      throw new Error(`\u72B6\u6001\u8FD4\u56DE\u683C\u5F0F\u6574\u7406\u5931\u8D25\uFF1A${toErrorMessage(parseError)}\uFF1B\u6574\u7406\u91CD\u8BD5\uFF1A${toErrorMessage(repairError)}`, { cause: repairError });
+    }
+  }
+}
+async function requestStateText(artifact, previous, activeFacts, registry2, systemPrompt2, settings) {
+  const fullPrompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts);
+  const budget = Math.max(6e3, settings.stateContextChars);
+  const initialRequest = {
+    task: "state",
+    systemPrompt: systemPrompt2,
+    prompt: fullPrompt,
+    maxTokens: settings.stateOutputTokens,
+    requestPurpose: "fixed-text",
+    requestOrigin: "state-primary"
+  };
+  let initialError;
+  if (systemPrompt2.length + fullPrompt.length <= budget) {
+    try {
+      return await generateValidatedStateText(initialRequest, previous, registry2, activeFacts, "state-format-repair");
+    } catch (error) {
+      initialError = error;
+      if (!retryableStateTransportError(error) && !repairableStateParseError(error)) throw error;
+      if (!retryableStateTransportError(error) && !/格式整理失败|固定文本|MA_CHANGE|MA_TURN/i.test(toErrorMessage(error))) throw error;
+    }
+  }
+  const reserve = Math.max(2200, budget - systemPrompt2.length - 1800);
+  let chunkLimit = Math.max(800, Math.min(settings.stateChunkChars, reserve));
+  let chunks = splitStateSource(artifact.assistantText, chunkLimit);
+  if (chunks.length > 12) {
+    chunkLimit = Math.max(chunkLimit, Math.ceil(String(artifact.assistantText || "").length / 12));
+    chunks = splitStateSource(artifact.assistantText, chunkLimit);
+  }
+  const outputs = [];
+  for (let index = 0; index < chunks.length; index += 1) {
+    let prompt = initialError ? minimalStateChunkPrompt(artifact.playerText, chunks[index], index, chunks.length) : stateUserPrompt(previous, artifact.playerText, chunks[index], registry2, activeFacts, false);
+    if (systemPrompt2.length + prompt.length > budget) prompt = minimalStateChunkPrompt(artifact.playerText, chunks[index], index, chunks.length);
+    outputs.push(await generateValidatedStateText({
+      task: "state",
+      systemPrompt: systemPrompt2,
+      prompt,
+      maxTokens: Math.min(settings.stateOutputTokens, 2304),
+      requestPurpose: "fixed-text",
+      requestOrigin: `state-chunk-${index + 1}-of-${chunks.length}`
+    }, previous, registry2, activeFacts, `state-chunk-format-repair-${index + 1}-of-${chunks.length}`));
+  }
+  const combined = outputs.join("\n");
+  parseStateTextOutput(combined, previous, registry2, activeFacts);
+  return combined;
+}
 async function runStateExtraction(artifact, force = false) {
   const settings = getSettings();
   const registry2 = normalizeTableRegistry(settings.tableRegistry);
@@ -7612,14 +8152,15 @@ async function runStateExtraction(artifact, force = false) {
   const previous = dedupeStrongStateRows(previousSnapshot(artifact.messageIndex), registry2);
   const chatState = await getChatState(artifact.chatKey);
   const activeFacts = (chatState.internalFacts ?? []).filter((fact) => fact.active || !fact.consumedBySmallSummaryId).slice(-120);
-  const request = {
-    task: "state",
-    systemPrompt: stateSystemPrompt(registry2, settings.statePrompts, settings.contentLimits),
-    prompt: stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts),
-    maxTokens: 6144,
-    requestPurpose: "fixed-text"
-  };
-  const inputFingerprint = hashText(JSON.stringify(request));
+  const systemPrompt2 = stateSystemPrompt(registry2, settings.statePrompts, settings.contentLimits);
+  const prompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry2, activeFacts);
+  const inputFingerprint = hashText(JSON.stringify({
+    systemPrompt: systemPrompt2,
+    prompt,
+    stateContextChars: settings.stateContextChars,
+    stateOutputTokens: settings.stateOutputTokens,
+    stateChunkChars: settings.stateChunkChars
+  }));
   assertRegistryCurrent(expectedRegistryFingerprint);
   if (!force && artifact.stages.state.status === "success" && artifact.snapshot && artifact.stateInputFingerprint === inputFingerprint) {
     return normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry2);
@@ -7627,7 +8168,7 @@ async function runStateExtraction(artifact, force = false) {
   markStage(artifact, "state", "running");
   await putArtifact(artifact);
   try {
-    const raw = await generateTask(request);
+    const raw = await requestStateText(artifact, previous, activeFacts, registry2, systemPrompt2, settings);
     let parsed;
     try {
       parsed = parseStateTextOutput(raw, previous, registry2, activeFacts);
@@ -7657,38 +8198,17 @@ async function runStateExtraction(artifact, force = false) {
     assertArtifactCommitCurrent(artifact);
     assertRegistryCurrent(expectedRegistryFingerprint);
     const routedPrevious = applyStateRowRelocations(previous, parsed.relocations, registry2);
-    const mergedViews = preserveStableObjectIds(routedPrevious, mergeStateRowPatches(routedPrevious, parsed.snapshot, registry2), registry2);
-    const prepared = ensureCurrentSceneEntry(enforceObjectViewAllocation(
-      removeFocusCharacterDuplicates(
-        preserveObjectBaseLayers(
-          routedPrevious,
-          preservePersistentCharacters(routedPrevious, preserveProtectedRows(routedPrevious, mergedViews, registry2), registry2),
-          registry2
-        ),
-        registry2
-      ),
-      registry2
-    ), registry2);
-    const pluginLifecycleDirectives = deriveIncrementalSettlementDirectives({
-      snapshot: prepared,
+    const mergedViews = mergeStateRowPatches(routedPrevious, parsed.snapshot, registry2);
+    const transition = transitionStateSnapshot({
+      previous: routedPrevious,
+      incoming: mergedViews,
       patchSnapshot: parsed.snapshot,
       facts: parsed.facts,
+      internalFacts: chatState.internalFacts,
       registry: registry2,
       focusObjectId: chatState.focusObjectId
     });
-    const lifecycleApplied = applyEntryLifecycleDirectives(
-      prepared,
-      pluginLifecycleDirectives,
-      registry2,
-      chatState.focusObjectId
-    );
-    const legacyGc = garbageCollectLegacyEntryTombstones(
-      lifecycleApplied.snapshot,
-      chatState.internalFacts,
-      registry2,
-      chatState.focusObjectId
-    );
-    const normalized = filterPassiveObservers(legacyGc.snapshot, registry2);
+    const normalized = transition.snapshot;
     artifact.factPackage = normalizeFactPackage(parsed, artifact.messageKey);
     artifact.snapshot = normalized;
     artifact.stateInputFingerprint = inputFingerprint;
@@ -8883,7 +9403,8 @@ function buildEventProfiles(snapshot, facts, smallSummaries, largeSummaries, reg
           id: row.id,
           title: row.title,
           table: table.name,
-          settling: row.entryLifecycle?.state === "settling"
+          tableKey: table.key,
+          settling: isEntryParticipationPaused(row)
         });
       }
     }
@@ -8902,6 +9423,7 @@ function buildEventProfiles(snapshot, facts, smallSummaries, largeSummaries, reg
     profiles.push({
       eventId,
       title: eventRow?.title || latestFact?.title || latestSummary?.title || eventId,
+      eventEntryId: eventRow?.id,
       status: closed ? "closed" : "active",
       factCount: eventFacts.length,
       messageCount: unique2(eventFacts.flatMap((fact) => fact.sourceMessageIds ?? []), 1e4).length,
@@ -8919,6 +9441,160 @@ function buildEventProfiles(snapshot, facts, smallSummaries, largeSummaries, reg
     if (a.status !== b.status) return a.status === "active" ? -1 : 1;
     return String(b.updatedAt).localeCompare(String(a.updatedAt)) || a.title.localeCompare(b.title);
   });
+}
+
+// src/domain/graph.ts
+function nodeTypeFor(role) {
+  if (role === "characters" || role === "state") return "character";
+  if (role === "items" || role === "skills") return "item";
+  if (role === "events") return "event";
+  if (role === "regions" || role === "scenes" || role === "spacetime" || role === "globalChanges") return "region";
+  return null;
+}
+function compactLabel(value2) {
+  const text2 = String(value2 || "").trim();
+  return text2.length > 24 ? `${text2.slice(0, 23)}\u2026` : text2;
+}
+function stringList5(value2) {
+  return Array.isArray(value2) ? value2.map(String).map((item) => item.trim()).filter(Boolean) : [];
+}
+function normalizeReference(value2) {
+  return String(value2 ?? "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+function rowAliases(row) {
+  return [...new Set([row.title, ...row.keywords ?? []].map(normalizeReference).filter((value2) => value2.length >= 2))];
+}
+function relationText(row) {
+  const fields = row.fields ?? {};
+  return [row.title, row.content, row.status, ...row.keywords, ...stringList5(fields.relationshipStates)].join(" ").toLowerCase();
+}
+function uniquePairKey(a, b, kind) {
+  const [left, right] = [a, b].sort();
+  return `${left}|${right}|${kind}`;
+}
+function referenceMatches(reference, aliases2) {
+  const normalized = normalizeReference(reference);
+  if (!normalized) return false;
+  return aliases2.some((alias) => normalized === alias || normalized.includes(alias) || alias.includes(normalized));
+}
+function relationshipLineFor(row, aliases2) {
+  return stringList5(row.fields?.relationshipStates).find((line) => aliases2.some((alias) => normalizeReference(line).includes(alias))) || "";
+}
+function edgeKindFor(target, relationshipLine) {
+  if (relationshipLine) return "relationship";
+  if (target.type === "event") return "event";
+  return "object";
+}
+function edgeLabelFor(target, relationshipLine) {
+  if (relationshipLine) return compactLabel(relationshipLine);
+  if (target.type === "event") return "\u53C2\u4E0E\u4E8B\u4EF6";
+  if (target.type === "region") return "\u5173\u8054\u533A\u57DF";
+  if (target.type === "item") return "\u5173\u8054\u7269\u54C1";
+  return "\u5173\u8054\u5BF9\u8C61";
+}
+function buildRelationshipGraph(snapshot, scope = "relations", customRegistry) {
+  if (!snapshot) return { nodes: [], edges: [] };
+  const registry2 = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
+  const nodes = [];
+  const rowsByNode = /* @__PURE__ */ new Map();
+  const aliasesByNode = /* @__PURE__ */ new Map();
+  const roles = scope === "relations" ? ["characters", "state"] : ["characters", "state", "items", "events", "regions", "scenes", "spacetime", "globalChanges"];
+  for (const table of enabledTables(registry2).filter((item) => roles.includes(item.role))) {
+    const type = nodeTypeFor(table.role);
+    if (!type) continue;
+    for (const row of snapshot[table.key] ?? []) {
+      if (isEntryLifecycleHidden(row)) continue;
+      const id = `${table.key}:${row.id}`;
+      nodes.push({
+        id,
+        label: String(row.title || "\u672A\u547D\u540D").trim(),
+        type,
+        detail: row.content,
+        status: row.status,
+        existence: row.lifecycle?.existence,
+        activity: row.lifecycle?.activity,
+        memory: row.lifecycle?.memory
+      });
+      rowsByNode.set(id, row);
+      aliasesByNode.set(id, rowAliases(row));
+    }
+  }
+  const edges = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const source of nodes) {
+    const row = rowsByNode.get(source.id);
+    if (!row) continue;
+    const relatedObjects = stringList5(row.fields?.relatedObjects);
+    const relatedEvents = stringList5(row.fields?.relatedEvents);
+    const relationshipStates = stringList5(row.fields?.relationshipStates);
+    const hasExplicitLinks = relatedObjects.length > 0 || relatedEvents.length > 0 || relationshipStates.length > 0;
+    const legacyText = relationText(row);
+    for (const target of nodes) {
+      if (target.id === source.id) continue;
+      if (scope === "relations" && (source.type !== "character" || target.type !== "character")) continue;
+      const targetAliases = aliasesByNode.get(target.id) ?? [];
+      if (!targetAliases.length) continue;
+      const relationshipLine = relationshipLineFor(row, targetAliases);
+      const objectReference = relatedObjects.find((item) => referenceMatches(item, targetAliases)) || "";
+      const eventReference = relatedEvents.find((item) => referenceMatches(item, targetAliases)) || "";
+      const legacyMention = !hasExplicitLinks && targetAliases.some((alias) => legacyText.includes(alias));
+      if (!relationshipLine && !objectReference && !eventReference && !legacyMention) continue;
+      const kind = legacyMention ? "legacy" : edgeKindFor(target, relationshipLine);
+      const key = uniquePairKey(source.id, target.id, kind);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const evidence = relationshipLine || objectReference || eventReference || row.content;
+      edges.push({
+        id: `edge:${source.id}:${target.id}:${kind}`,
+        source: source.id,
+        target: target.id,
+        label: legacyMention ? "\u65E7\u8BB0\u5F55\u5173\u8054" : edgeLabelFor(target, relationshipLine),
+        detail: evidence,
+        kind,
+        explicit: !legacyMention
+      });
+    }
+  }
+  return { nodes, edges };
+}
+function enrichRelationshipGraphWithEventProfiles(source, profiles) {
+  const nodes = source.nodes.map((node) => ({ ...node }));
+  const edges = source.edges.map((edge) => ({ ...edge }));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const edgePairs = new Set(edges.map((edge) => [edge.source, edge.target].sort().join("|")));
+  const nodeForEntry = (tableKey, entryId) => nodeById.get(`${tableKey}:${entryId}`) ?? nodes.find((node) => node.id.endsWith(`:${entryId}`));
+  for (const profile of profiles) {
+    let eventNode = profile.eventEntryId ? nodes.find((node) => node.type === "event" && node.id.endsWith(`:${profile.eventEntryId}`)) : void 0;
+    eventNode ??= nodes.find((node) => node.type === "event" && (node.id.endsWith(`:${profile.eventId}`) || node.label === profile.title));
+    if (!eventNode) {
+      eventNode = {
+        id: `event-profile:${profile.eventId}`,
+        label: profile.title,
+        type: "event",
+        detail: profile.currentResults.join("\uFF1B") || "\u7531\u5DF2\u63D0\u4EA4\u4E8B\u5B9E\u6D3E\u751F\u7684\u4E8B\u4EF6\u753B\u50CF",
+        status: profile.status === "closed" ? "\u5DF2\u5F62\u6210\u7ED3\u679C" : "\u8FDB\u884C\u4E2D"
+      };
+      nodes.push(eventNode);
+      nodeById.set(eventNode.id, eventNode);
+    }
+    for (const entry of profile.relatedEntries) {
+      const target = nodeForEntry(entry.tableKey, entry.id);
+      if (!target || target.id === eventNode.id) continue;
+      const pair = [eventNode.id, target.id].sort().join("|");
+      if (edgePairs.has(pair)) continue;
+      edgePairs.add(pair);
+      edges.push({
+        id: `event-profile-edge:${profile.eventId}:${target.id}`,
+        source: eventNode.id,
+        target: target.id,
+        label: "\u4E8B\u4EF6\u5173\u8054",
+        detail: `${target.label}\u53C2\u4E0E\u6216\u53D7\u5230\u201C${profile.title}\u201D\u5F71\u54CD`,
+        kind: "event",
+        explicit: true
+      });
+    }
+  }
+  return { nodes, edges };
 }
 
 // src/ui/diagnostics.ts
@@ -9207,7 +9883,7 @@ var WORKSPACE_NAVIGATION = [
   { key: "tables", label: "\u8868\u683C", icon: "fa-table-cells-large", description: "\u67E5\u770B\u89D2\u8272\u3001\u573A\u666F\u3001\u4E8B\u4EF6\u3001\u7269\u54C1\u4E0E\u5730\u70B9\u8BB0\u5FC6" },
   { key: "tableManager", label: "\u89C4\u5219", icon: "fa-sliders", description: "\u72B6\u6001\u8868\u3001\u5C0F\u603B\u7ED3\u3001\u5927\u603B\u7ED3\u4E0E\u8868\u683C\u5B57\u6BB5\u89C4\u5219" },
   { key: "summaries", label: "\u603B\u7ED3", icon: "fa-layer-group", description: "\u67E5\u770B\u5C0F\u603B\u7ED3\u4E0E\u5927\u603B\u7ED3" },
-  { key: "graph", label: "\u4E8B\u4EF6\u753B\u50CF", icon: "fa-timeline", description: "\u6309\u4E8B\u4EF6\u67E5\u770B\u4E8B\u5B9E\u3001\u53C2\u4E0E\u5BF9\u8C61\u3001\u603B\u7ED3\u4E0E\u7ED3\u7B97\u72B6\u6001" },
+  { key: "graph", label: "\u8BB0\u5FC6\u7F51\u7EDC", icon: "fa-diagram-project", description: "\u878D\u5408\u4E8B\u4EF6\u753B\u50CF\u4E0E\u5BF9\u8C61\u5173\u7CFB\u56FE\u8C31" },
   { key: "audit", label: "\u5BA1\u6838", icon: "fa-shield-halved", description: "\u5BA1\u6838\u89C4\u5219\u3001\u4FEE\u6B63\u7B56\u7565\u4E0E\u7ED3\u679C" },
   { key: "sync", label: "\u4E16\u754C\u4E66", icon: "fa-book-atlas", description: "\u53D1\u5E03\u3001\u6E05\u7406\u4E0E\u53EC\u56DE\u8BBE\u7F6E" },
   { key: "settings", label: "\u8BBE\u7F6E", icon: "fa-gears", description: "\u8FDE\u63A5\u5206\u914D\u3001\u81EA\u52A8\u5316\u4E0E\u7EF4\u62A4" },
@@ -9725,6 +10401,117 @@ function tableManagerHtml(artifactInfo) {
     <section class="ma11-table-manager-list">${rows || '<div class="ma11-empty-panel">\u5F53\u524D\u6CA1\u6709\u8868\u683C\u5B9A\u4E49\u3002</div>'}</section>
     <section class="ma11-card ma11-note"><b>\u5220\u9664\u8BF4\u660E</b><p>\u5220\u9664\u9ED8\u8BA4\u8868\u683C\u53EA\u5220\u9664\u53EF\u89C1\u89C6\u56FE\uFF0C\u4E0D\u5220\u9664\u804A\u5929\u7EA7\u5185\u90E8\u4E8B\u5B9E\u3001event_id\u3001\u5C0F\u603B\u7ED3\u3001\u5927\u603B\u7ED3\u6216\u5386\u53F2\u91CD\u5EFA\u4F9D\u636E\u3002\u4EBA\u5DE5\u4E16\u754C\u4E66\u6761\u76EE\u4E5F\u4E0D\u4F1A\u88AB\u955C\u6E0A\u64CD\u4F5C\u3002</p></section>`;
 }
+function graphNodePositions(graph) {
+  const width = 1e3;
+  const height = 680;
+  const center = { x: width / 2, y: height / 2 };
+  const groups = /* @__PURE__ */ new Map();
+  for (const node of graph.nodes) {
+    const key = node.type === "focus" ? "focus" : node.type === "character" ? "character" : node.type === "relationship" ? "relationship" : "world";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(node);
+  }
+  const output = [];
+  const focus = groups.get("focus") ?? [];
+  focus.forEach(
+    (node, index) => output.push({ ...node, x: center.x + index * 56, y: center.y })
+  );
+  const ring = (key, radiusX, radiusY, offset = 0) => {
+    const nodes = groups.get(key) ?? [];
+    nodes.forEach((node, index) => {
+      const angle = offset + Math.PI * 2 * index / Math.max(nodes.length, 1);
+      output.push({
+        ...node,
+        x: center.x + Math.cos(angle) * radiusX,
+        y: center.y + Math.sin(angle) * radiusY
+      });
+    });
+  };
+  ring("character", 250, 185, -Math.PI / 2);
+  ring("relationship", 365, 250, Math.PI / 6);
+  ring("world", 455, 300, 0);
+  if (!focus.length && output.length) {
+    output[0].x = center.x;
+    output[0].y = center.y;
+  }
+  return output;
+}
+function graphTypeLabel(type) {
+  const labels = {
+    focus: "\u7126\u70B9",
+    character: "\u4EBA\u7269",
+    relationship: "\u5173\u7CFB",
+    item: "\u7269\u54C1",
+    event: "\u4E8B\u4EF6",
+    region: "\u533A\u57DF"
+  };
+  return labels[type];
+}
+function graphLifecycleClass(node) {
+  if (node.existence === "\u6B7B\u4EA1\u5DF2\u786E\u8BA4") return "dead";
+  if (node.existence === "\u5B58\u5728\u672A\u77E5" || node.existence === "\u8EAB\u4EFD\u5B58\u7591" || node.existence === "\u5931\u8E2A") return "uncertain";
+  if (node.activity === "\u5DF2\u5F52\u6863") return "archived";
+  if (node.activity === "\u957F\u671F\u4F11\u7720") return "long-dormant";
+  if (node.activity === "\u4F11\u7720") return "dormant";
+  return "";
+}
+function graphHtml(artifactInfo, profiles = [], graphOverride) {
+  const settings = getSettings();
+  const snapshot = artifactInfo?.artifact.snapshot;
+  const graph = graphOverride ?? buildRelationshipGraph(snapshot, settings.ui.graphScope, settings.tableRegistry);
+  const positioned = graphNodePositions(graph);
+  const positions = new Map(positioned.map((node) => [node.id, node]));
+  const degree = /* @__PURE__ */ new Map();
+  for (const edge of graph.edges) {
+    degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+    degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+  }
+  const graphQuery = graphSearchQuery.trim().toLocaleLowerCase();
+  const matchingNodeIds = new Set(positioned.filter((node) => !graphQuery || `${node.label} ${node.detail} ${node.status}`.toLocaleLowerCase().includes(graphQuery)).map((node) => node.id));
+  const selected = positioned.find((node) => node.id === selectedGraphNodeId) ?? positioned[0];
+  if (selected && !selectedGraphNodeId) selectedGraphNodeId = selected.id;
+  const selectedEventProfile = selected?.type === "event" ? profiles.find((profile) => profile.eventEntryId && selected.id.endsWith(`:${profile.eventEntryId}`) || profile.eventId === selected.label || profile.title === selected.label) : void 0;
+  const zoom = clampGraphZoom(settings.ui.graphZoom);
+  settings.ui.graphZoom = zoom;
+  const edgeSvg = graph.edges.map((edge) => {
+    const source = positions.get(edge.source);
+    const target = positions.get(edge.target);
+    if (!source || !target) return "";
+    const mx = (source.x + target.x) / 2;
+    const my = (source.y + target.y) / 2;
+    const dimmed = graphQuery && !matchingNodeIds.has(edge.source) && !matchingNodeIds.has(edge.target);
+    return `<g class="ma11-graph-edge ${edge.kind || "object"} ${edge.explicit === false ? "legacy" : "explicit"} ${dimmed ? "dimmed" : ""}" data-ma11-graph-edge-source="${escapeHtml(edge.source)}" data-ma11-graph-edge-target="${escapeHtml(edge.target)}"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"><title>${escapeHtml(`${edge.label}\uFF1A${edge.detail}`)}</title></line>${graph.edges.length <= 18 ? `<text x="${mx}" y="${my}">${escapeHtml(edge.label)}</text>` : ""}</g>`;
+  }).join("");
+  const nodeSvg = positioned.map(
+    (node) => {
+      const searchText = `${node.label} ${node.detail} ${node.status}`.toLocaleLowerCase();
+      const matches = !graphQuery || matchingNodeIds.has(node.id);
+      const radius = Math.min(44, 31 + (degree.get(node.id) ?? 0) * 2);
+      return `<g class="ma11-graph-node ${node.type} ${graphLifecycleClass(node)} ${selected?.id === node.id ? "selected" : ""} ${graphQuery ? matches ? "search-match" : "dimmed" : ""}" data-ma11-graph-node="${escapeHtml(node.id)}" data-ma11-graph-search-text="${escapeHtml(searchText)}" transform="translate(${node.x} ${node.y})" tabindex="0" role="button"><circle r="${radius}"></circle><text text-anchor="middle" y="4">${escapeHtml(node.label.length > 10 ? `${node.label.slice(0, 9)}\u2026` : node.label)}</text><title>${escapeHtml(`${node.label}
+${node.detail}`)}</title></g>`;
+    }
+  ).join("");
+  const graphWidth = Math.round(1e3 * zoom);
+  const graphHeight = Math.round(680 * zoom);
+  return `
+    <section class="ma11-toolbar ma11-graph-toolbar">
+      <div><h2>\u5BF9\u8C61\u56FE\u8C31</h2><p>\u4F18\u5148\u4F7F\u7528\u660E\u786E\u7684\u5173\u8054\u5BF9\u8C61\u3001\u5173\u8054\u4E8B\u4EF6\u548C\u5173\u7CFB\u72B6\u6001\uFF1B\u65E7\u6570\u636E\u7F3A\u5C11\u663E\u5F0F\u5173\u8054\u65F6\u624D\u4F7F\u7528\u517C\u5BB9\u63A8\u65AD\u3002</p></div>
+      <div class="ma11-graph-toolbar-actions">
+        <div class="ma11-segmented"><button class="${settings.ui.graphScope === "relations" ? "active" : ""}" data-ma11-graph-scope="relations">\u4EBA\u7269\u5173\u7CFB</button><button class="${settings.ui.graphScope === "world" ? "active" : ""}" data-ma11-graph-scope="world">\u5168\u5C40\u7F51\u7EDC</button></div>
+        <label class="ma11-search-field ma11-graph-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input data-ma11-graph-search value="${escapeHtml(graphSearchQuery)}" placeholder="\u67E5\u627E\u5E76\u9AD8\u4EAE\u8282\u70B9" aria-label="\u67E5\u627E\u56FE\u8C31\u8282\u70B9"/><output data-ma11-graph-match-count>${matchingNodeIds.size} / ${graph.nodes.length}</output></label>
+        <div class="ma11-graph-zoom" aria-label="\u56FE\u8C31\u7F29\u653E">
+          <button type="button" data-ma11-graph-zoom="out" title="\u7F29\u5C0F">\u2212</button>
+          <input type="range" min="50" max="250" step="5" value="${Math.round(zoom * 100)}" data-ma11-graph-zoom-range aria-label="\u7F29\u653E\u6BD4\u4F8B" />
+          <button type="button" data-ma11-graph-zoom="in" title="\u653E\u5927">\uFF0B</button>
+          <button type="button" data-ma11-graph-zoom="reset">100%</button>
+          <button type="button" data-ma11-graph-zoom="fit">\u9002\u5E94</button>
+          <output>${Math.round(zoom * 100)}%</output>
+        </div>
+      </div>
+    </section>
+    <section class="ma11-graph-stats"><span><b>${graph.nodes.length}</b>\u8282\u70B9</span><span><b>${graph.edges.length}</b>\u5173\u7CFB</span><span><b>${graph.edges.filter((edge) => edge.explicit !== false).length}</b>\u660E\u786E\u5173\u8054</span><span><b>${graph.edges.filter((edge) => edge.explicit === false).length}</b>\u517C\u5BB9\u5173\u8054</span></section>
+    ${graph.nodes.length ? `<section class="ma11-graph-layout"><div><div class="ma11-graph-legend"><span><i class="character"></i>\u4EBA\u7269</span><span><i class="item"></i>\u7269\u54C1</span><span><i class="event"></i>\u4E8B\u4EF6</span><span><i class="region"></i>\u5730\u70B9 / \u573A\u666F / \u5168\u5C40</span><span><i class="legacy"></i>\u65E7\u8BB0\u5F55\u63A8\u65AD</span></div><div class="ma11-graph-canvas"><svg viewBox="0 0 1000 680" width="${graphWidth}" height="${graphHeight}" style="width:${graphWidth}px;height:${graphHeight}px" preserveAspectRatio="xMidYMid meet" aria-label="\u955C\u6E0A\u5BF9\u8C61\u56FE\u8C31">${edgeSvg}${nodeSvg}</svg></div></div><aside class="ma11-graph-detail">${selected ? `<span class="ma11-graph-type ${selected.type}">${escapeHtml(graphTypeLabel(selected.type))}</span><h3>${escapeHtml(selected.label)}</h3><p>${escapeHtml(selected.detail || "\u6682\u65E0\u8BE6\u7EC6\u8BB0\u5F55")}</p><dl><dt>\u76F4\u63A5\u5173\u7CFB</dt><dd>${degree.get(selected.id) ?? 0}</dd><dt>\u72B6\u6001</dt><dd>${escapeHtml(selected.status || "\u672A\u6807\u6CE8")}</dd>${selected.existence ? `<dt>\u5B58\u5728</dt><dd>${escapeHtml(selected.existence)}</dd>` : ""}${selected.activity ? `<dt>\u6D3B\u8DC3</dt><dd>${escapeHtml(selected.activity)}</dd>` : ""}${selected.memory ? `<dt>\u8BB0\u5FC6</dt><dd>${escapeHtml(selected.memory)}</dd>` : ""}${selectedEventProfile ? `<dt>\u4E8B\u4EF6\u4E8B\u5B9E</dt><dd>${selectedEventProfile.factCount}</dd><dt>\u603B\u7ED3\u5C42</dt><dd>${selectedEventProfile.hasLargeSummary ? "\u5DF2\u6709\u5927\u603B\u7ED3" : selectedEventProfile.smallSummaryCount ? `${selectedEventProfile.smallSummaryCount} \u4E2A\u5C0F\u603B\u7ED3` : "\u5C1A\u65E0\u603B\u7ED3"}</dd><dt>\u5F85\u7ED3\u7B97</dt><dd>${selectedEventProfile.settlingEntryCount}</dd>` : ""}</dl>${selectedEventProfile?.currentResults.length ? `<div class="ma11-event-results ma11-graph-event-results"><b>\u660E\u786E\u7ED3\u679C</b><ul>${selectedEventProfile.currentResults.map((result) => `<li>${escapeHtml(result)}</li>`).join("")}</ul></div>` : ""}` : '<p class="ma11-empty">\u70B9\u51FB\u8282\u70B9\u67E5\u770B\u8BE6\u60C5\u3002</p>'}</aside></section>` : '<section class="ma11-empty-panel">\u5F53\u524D\u72B6\u6001\u8868\u6CA1\u6709\u53EF\u7ED8\u5236\u7684\u5173\u7CFB\u8282\u70B9\u3002\u5148\u5728\u89D2\u8272\u6216\u4E8B\u4EF6\u6761\u76EE\u4E2D\u5EFA\u7ACB\u660E\u786E\u5173\u8054\u3002</section>'}`;
+}
 function summaryPromptEditorHtml(kind) {
   const settings = getSettings();
   const prompt = settings.summaryPrompts[kind];
@@ -9828,23 +10615,18 @@ async function syncHtml() {
       <div class="ma11-actions ma11-sync-actions">
         <button data-ma11-action="sync-now" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>\u7ACB\u5373\u540C\u6B65</button>
         ${settings.lorebookLayout === "semantic" ? `<button data-ma11-action="maintain-lorebook" ${settings.enabled && info && !busy && !state2?.historyInvalidation && !state2?.historyRecovery ? "" : "disabled"}>\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03</button>` : ""}
-        <button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u4E8B\u4EF6\u753B\u50CF</button>
+        <button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>\u67E5\u770B\u8BB0\u5FC6\u7F51\u7EDC</button>
       </div>
       <p class="ma11-help ma11-maintenance-note"><b>\u7EF4\u62A4\u64CD\u4F5C\uFF1A</b>\u201C\u6309\u5BF9\u8C61\u6E05\u7406\u5E76\u91CD\u65B0\u53D1\u5E03\u201D\u4F1A\u5148\u68C0\u67E5\u53EF\u5B89\u5168\u5220\u9664\u7684\u955C\u6E0A\u65E7\u6761\u76EE\uFF0C\u5E76\u5728\u4E00\u6B21\u786E\u8BA4\u540E\u53D1\u5E03\u5F53\u524D\u771F\u5B9E\u5FEB\u7167\uFF1B\u4E0D\u4F1A\u5904\u7406\u4EBA\u5DE5\u6761\u76EE\u6216\u5176\u4ED6\u804A\u5929\u6761\u76EE\u3002</p>
       ${state2?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state2.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>\u5F53\u524D\u4E16\u754C\u4E66</dt><dd>${escapeHtml(state2?.lastLorebookName || "\u672A\u5EFA\u7ACB")}</dd><dt>\u6700\u8FD1\u540C\u6B65</dt><dd>${escapeHtml(state2?.lastSyncAt ? new Date(state2.lastSyncAt).toLocaleString() : "\u5C1A\u672A\u540C\u6B65")}</dd></dl>
     </section>`;
 }
-async function eventProfileHtml(artifactInfo) {
-  const settings = getSettings();
-  const state2 = await getChatState(currentChatKey());
-  const profiles = buildEventProfiles(
-    artifactInfo?.artifact.snapshot,
-    state2.internalFacts,
-    state2.smallSummaries,
-    state2.largeSummaries,
-    settings.tableRegistry
-  );
+function eventGraphNodeId(profile, graph) {
+  const candidates = [profile.eventEntryId, profile.eventId].filter(Boolean);
+  return graph.nodes.find((node) => node.id === `event-profile:${profile.eventId}`)?.id ?? graph.nodes.find((node) => node.type === "event" && candidates.some((id) => node.id.endsWith(`:${id}`)))?.id ?? graph.nodes.find((node) => node.type === "event" && node.label === profile.title)?.id ?? null;
+}
+function eventProfileSectionHtml(profiles, graph, compact = false) {
   const active = profiles.filter((profile) => profile.status === "active").length;
   const closed = profiles.length - active;
   const facts = profiles.reduce((sum, profile) => sum + profile.factCount, 0);
@@ -9854,7 +10636,8 @@ async function eventProfileHtml(artifactInfo) {
   const cards = profiles.map((profile) => {
     const searchText = [profile.title, profile.eventId, ...profile.relatedEntities, ...profile.currentResults].join(" ").toLocaleLowerCase();
     const summaryState = profile.hasLargeSummary ? "\u5DF2\u6709\u5927\u603B\u7ED3" : profile.smallSummaryCount ? `${profile.smallSummaryCount} \u4E2A\u6709\u6548\u5C0F\u603B\u7ED3` : "\u5C1A\u65E0\u603B\u7ED3";
-    return `<article class="ma11-card ma11-event-profile-card" data-ma11-event-profile data-ma11-event-profile-search="${escapeHtml(searchText)}">
+    const graphNodeId = eventGraphNodeId(profile, graph);
+    return `<article class="ma11-card ma11-event-profile-card ${graphNodeId && selectedGraphNodeId === graphNodeId ? "selected" : ""}" data-ma11-event-profile data-ma11-event-profile-search="${escapeHtml(searchText)}">
       <header><div><b>${escapeHtml(profile.title)}</b><span>${escapeHtml(profile.eventId)}</span></div><span class="ma11-badge ${profile.status === "closed" ? "success" : "warning"}">${profile.status === "closed" ? "\u5DF2\u5F62\u6210\u7ED3\u679C" : "\u8FDB\u884C\u4E2D"}</span></header>
       <div class="ma11-event-profile-metrics">
         <span><b>${profile.factCount}</b> \u6761\u4E8B\u5B9E</span><span><b>${profile.messageCount}</b> \u6761\u6765\u6E90\u6D88\u606F</span><span><b>${profile.relatedEntries.length}</b> \u4E2A\u5173\u8054\u6761\u76EE</span><span><b>${profile.contentChars}</b> \u5B57\u7B26\u6750\u6599</span>
@@ -9862,16 +10645,42 @@ async function eventProfileHtml(artifactInfo) {
       <p><b>\u603B\u7ED3\u5C42\uFF1A</b>${escapeHtml(summaryState)}${profile.settlingEntryCount ? ` \xB7 ${profile.settlingEntryCount} \u4E2A\u6761\u76EE\u5F85\u7ED3\u7B97` : ""}</p>
       ${profile.relatedEntities.length ? `<p><b>\u5173\u8054\u5BF9\u8C61\uFF1A</b>${escapeHtml(profile.relatedEntities.join("\u3001"))}</p>` : ""}
       ${profile.currentResults.length ? `<div class="ma11-event-results"><b>\u660E\u786E\u7ED3\u679C</b><ul>${profile.currentResults.map((result) => `<li>${escapeHtml(result)}</li>`).join("")}</ul></div>` : `<p class="ma11-muted">\u5C1A\u672A\u63D0\u53D6\u5230\u660E\u786E\u7ED3\u679C\uFF1B\u753B\u50CF\u4E0D\u4F1A\u8865\u5168\u672A\u77E5\u4FE1\u606F\u3002</p>`}
-      <footer>${profile.updatedAt ? `\u6700\u8FD1\u66F4\u65B0\uFF1A${escapeHtml(profile.updatedAt)}` : "\u4EC5\u7531\u73B0\u6709\u4E8B\u5B9E\u6D3E\u751F"}</footer>
+      <footer><span>${profile.updatedAt ? `\u6700\u8FD1\u66F4\u65B0\uFF1A${escapeHtml(profile.updatedAt)}` : "\u4EC5\u7531\u73B0\u6709\u4E8B\u5B9E\u6D3E\u751F"}</span>${graphNodeId ? `<button type="button" data-ma11-locate-graph-node="${escapeHtml(graphNodeId)}">\u5728\u56FE\u8C31\u4E2D\u5B9A\u4F4D</button>` : ""}</footer>
     </article>`;
   }).join("");
   return `
-    <section class="ma11-toolbar"><div><h2>\u4E8B\u4EF6\u753B\u50CF</h2><p>\u7531\u5DF2\u63D0\u4EA4\u4E8B\u5B9E\u3001\u5BF9\u8C61\u5173\u8054\u548C\u603B\u7ED3\u7248\u672C\u5B9E\u65F6\u6D3E\u751F\uFF1B\u4E0D\u8C03\u7528\u6A21\u578B\uFF0C\u4E5F\u4E0D\u5EFA\u7ACB\u7B2C\u4E8C\u4EFD\u8BB0\u5FC6\u4ED3\u5E93\u3002</p></div></section>
+    <section class="ma11-toolbar ma11-event-profile-toolbar"><div><h2>${compact ? "\u4E8B\u4EF6\u753B\u50CF" : "\u4E8B\u4EF6\u753B\u50CF"}</h2><p>\u7531\u5DF2\u63D0\u4EA4\u4E8B\u5B9E\u3001\u5BF9\u8C61\u5173\u8054\u548C\u603B\u7ED3\u7248\u672C\u5B9E\u65F6\u6D3E\u751F\uFF1B\u4E0D\u8C03\u7528\u6A21\u578B\uFF0C\u4E5F\u4E0D\u5EFA\u7ACB\u7B2C\u4E8C\u4EFD\u8BB0\u5FC6\u4ED3\u5E93\u3002</p></div></section>
     <section class="ma11-card ma11-event-profile-overview">
       <div class="ma11-event-profile-stats"><span><b>${active}</b>\u8FDB\u884C\u4E2D</span><span><b>${closed}</b>\u5DF2\u5F62\u6210\u7ED3\u679C</span><span><b>${facts}</b>\u4E8B\u5B9E</span><span><b>${settling}</b>\u5F85\u7ED3\u7B97\u6761\u76EE</span></div>
       <label class="ma11-search-field"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input data-ma11-event-profile-search-input value="${escapeHtml(graphSearchQuery)}" placeholder="\u641C\u7D22\u4E8B\u4EF6\u3001\u5BF9\u8C61\u6216\u660E\u786E\u7ED3\u679C"/><output data-ma11-event-profile-match-count>${visibleCount} / ${profiles.length}</output></label>
     </section>
-    <section class="ma11-event-profile-grid">${cards || `<article class="ma11-card ma11-empty-state"><b>\u6682\u65E0\u4E8B\u4EF6\u753B\u50CF</b><p>\u5B8C\u6210\u72B6\u6001\u63D0\u53D6\u540E\uFF0C\u4E8B\u4EF6\u753B\u50CF\u4F1A\u4ECE\u73B0\u6709\u4E8B\u5B9E\u81EA\u52A8\u51FA\u73B0\u3002</p></article>`}</section>`;
+    <section class="ma11-event-profile-grid ${compact ? "compact" : ""}">${cards || `<article class="ma11-card ma11-empty-state"><b>\u6682\u65E0\u4E8B\u4EF6\u753B\u50CF</b><p>\u5B8C\u6210\u72B6\u6001\u63D0\u53D6\u540E\uFF0C\u4E8B\u4EF6\u753B\u50CF\u4F1A\u4ECE\u73B0\u6709\u4E8B\u5B9E\u81EA\u52A8\u51FA\u73B0\u3002</p></article>`}</section>`;
+}
+async function memoryNetworkHtml(artifactInfo) {
+  const settings = getSettings();
+  const state2 = await getChatState(currentChatKey());
+  const profiles = buildEventProfiles(
+    artifactInfo?.artifact.snapshot,
+    state2.internalFacts,
+    state2.smallSummaries,
+    state2.largeSummaries,
+    settings.tableRegistry
+  );
+  const baseGraph = buildRelationshipGraph(artifactInfo?.artifact.snapshot, settings.ui.graphScope, settings.tableRegistry);
+  const graph = settings.ui.graphScope === "world" ? enrichRelationshipGraphWithEventProfiles(baseGraph, profiles) : baseGraph;
+  const view = settings.ui.memoryView;
+  return `
+    <section class="ma11-toolbar ma11-memory-network-toolbar">
+      <div><h2>\u8BB0\u5FC6\u7F51\u7EDC</h2><p>\u4E8B\u4EF6\u753B\u50CF\u8D1F\u8D23\u65F6\u95F4\u4E0E\u7ED3\u7B97\uFF0C\u5173\u7CFB\u56FE\u8C31\u8D1F\u8D23\u5BF9\u8C61\u8054\u7CFB\uFF1B\u4E24\u8005\u8BFB\u53D6\u540C\u4E00\u4EFD\u4E8B\u5B9E\u548C\u5BF9\u8C61\u6570\u636E\uFF0C\u4E0D\u5EFA\u7ACB\u91CD\u590D\u8BB0\u5FC6\u3002</p></div>
+      <div class="ma11-segmented ma11-memory-view-switch" role="tablist" aria-label="\u8BB0\u5FC6\u7F51\u7EDC\u89C6\u56FE">
+        <button type="button" class="${view === "combined" ? "active" : ""}" data-ma11-memory-view="combined">\u878D\u5408\u89C6\u56FE</button>
+        <button type="button" class="${view === "events" ? "active" : ""}" data-ma11-memory-view="events">\u4E8B\u4EF6\u753B\u50CF</button>
+        <button type="button" class="${view === "graph" ? "active" : ""}" data-ma11-memory-view="graph">\u5173\u7CFB\u56FE\u8C31</button>
+      </div>
+    </section>
+    ${view === "events" ? eventProfileSectionHtml(profiles, graph) : ""}
+    ${view === "graph" ? graphHtml(artifactInfo, profiles, graph) : ""}
+    ${view === "combined" ? `<div class="ma11-memory-combined"><section class="ma11-memory-events-pane">${eventProfileSectionHtml(profiles, graph, true)}</section><section class="ma11-memory-graph-pane">${graphHtml(artifactInfo, profiles, graph)}</section></div>` : ""}`;
 }
 function connectionProfiles() {
   try {
@@ -9914,6 +10723,9 @@ function settingsHtml() {
         <label>\u5C0F\u603B\u7ED3\u6700\u665A\u6574\u7406\u8FB9\u754C <small>\u8D85\u8FC7\u8BE5\u6D88\u606F\u6570\u65F6\u5F3A\u5236\u68C0\u67E5\u662F\u5426\u7ED3\u7B97</small><input type="number" min="8" max="30" data-ma11-setting="smallSummaryTurns" value="${settings.smallSummaryTurns}" /></label>
         <label>\u5927\u603B\u7ED3\u6240\u9700\u5C0F\u603B\u7ED3\u6570 <small>\u8FBE\u5230\u540E\u91CD\u65B0\u5BA1\u67E5\u957F\u671F\u8D44\u683C</small><input type="number" min="1" max="30" data-ma11-setting="largeSummaryCount" value="${settings.largeSummaryCount}" /></label>
         <label>\u6A21\u578B\u8BF7\u6C42\u8D85\u65F6 <small>\u5355\u4F4D\uFF1A\u6BEB\u79D2</small><input type="number" min="10000" max="300000" step="1000" data-ma11-setting="requestTimeoutMs" value="${settings.requestTimeoutMs}" /></label>
+        <label>\u72B6\u6001\u8BF7\u6C42\u5B57\u7B26\u9884\u7B97 <small>\u63D0\u793A\u8BCD\u4E0E\u672C\u8F6E\u4E0A\u4E0B\u6587\u5408\u8BA1\uFF1B\u8D85\u51FA\u540E\u81EA\u52A8\u5206\u6BB5</small><input type="number" min="6000" max="60000" step="1000" data-ma11-setting="stateContextChars" value="${settings.stateContextChars}" /></label>
+        <label>\u72B6\u6001\u8F93\u51FA Token \u4E0A\u9650 <small>\u4E2D\u6A21\u578B\u6216\u6162\u7F51\u5173\u5EFA\u8BAE 2048\u20133072</small><input type="number" min="768" max="8192" step="256" data-ma11-setting="stateOutputTokens" value="${settings.stateOutputTokens}" /></label>
+        <label>\u72B6\u6001\u5931\u8D25\u5206\u6BB5\u957F\u5EA6 <small>\u4EC5\u5728\u8D85\u65F6\u6216\u683C\u5F0F\u5931\u8D25\u65F6\u62C6\u5206\u672C\u8F6E\u6B63\u6587</small><input type="number" min="1800" max="16000" step="200" data-ma11-setting="stateChunkChars" value="${settings.stateChunkChars}" /></label>
       </div>
     </section>
     <section class="ma11-card ma11-form-card ma11-content-limit-settings">
@@ -10005,7 +10817,7 @@ async function renderWorkspace() {
     if (settings.ui.activeTab === "overview") html = await overviewHtml(info);
     if (settings.ui.activeTab === "tables") html = await tableHtml(info);
     if (settings.ui.activeTab === "tableManager") html = tableManagerHtml(info);
-    if (settings.ui.activeTab === "graph") html = await eventProfileHtml(info);
+    if (settings.ui.activeTab === "graph") html = await memoryNetworkHtml(info);
     if (settings.ui.activeTab === "summaries") html = await summariesHtml();
     if (settings.ui.activeTab === "audit") html = auditHtml();
     if (settings.ui.activeTab === "sync") html = await syncHtml();
@@ -10024,7 +10836,10 @@ async function renderWorkspace() {
       const tableWrap = content.querySelector(".ma11-table-wrap");
       if (tableWrap) tableWrap.scrollLeft = tableScrollLeft;
       if (settings.ui.activeTab === "tables") applyTableSearch(workspace, tableSearchQuery);
-      if (settings.ui.activeTab === "graph") applyEventProfileSearch(workspace, graphSearchQuery);
+      if (settings.ui.activeTab === "graph") {
+        applyEventProfileSearch(workspace, graphSearchQuery);
+        applyGraphSearch(workspace, graphSearchQuery);
+      }
     }
   } catch (error) {
     if (currentChatKey() !== renderChatKey) {
@@ -10556,6 +11371,21 @@ function bindWorkspace(workspace) {
         renderAllMessagePanels();
         toast("success", `\u5F53\u524D\u6E38\u620F\u5DF2\u91CD\u7F6E\uFF1A\u6E05\u9664 ${result.messages} \u6761\u6D88\u606F\u8BB0\u5F55\u3001${result.lorebookEntries} \u4E2A\u4E16\u754C\u4E66\u6761\u76EE`);
         await renderWorkspace();
+      }
+      const memoryView = target.closest("[data-ma11-memory-view]")?.dataset.ma11MemoryView;
+      if (memoryView) {
+        getSettings().ui.memoryView = memoryView;
+        saveSettings();
+        await renderWorkspace();
+      }
+      const locateGraphNodeId = target.closest("[data-ma11-locate-graph-node]")?.dataset.ma11LocateGraphNode;
+      if (locateGraphNodeId) {
+        selectedGraphNodeId = locateGraphNodeId;
+        getSettings().ui.memoryView = "combined";
+        getSettings().ui.graphScope = "world";
+        saveSettings();
+        await renderWorkspace();
+        workspace.querySelector(".ma11-memory-graph-pane")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }
       const graphScope = target.closest("[data-ma11-graph-scope]")?.dataset.ma11GraphScope;
       if (graphScope) {
