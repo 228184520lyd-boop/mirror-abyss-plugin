@@ -1648,3 +1648,100 @@ textarea { resize: vertical; }
   .ma11-event-profile-card footer{align-items:flex-start;flex-direction:column}
   .ma11-event-profile-card footer button{width:100%}
 }
+
+/* 1.3.14：移动端对象卡片与事件中心图谱。 */
+.ma11-mobile-table-cards { display: none; }
+.ma11-mobile-row-card {
+  display: grid;
+  gap: .58rem;
+  padding: .8rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 12px;
+  background: var(--ma-surface-1);
+}
+.ma11-mobile-row-card > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: .5rem;
+}
+.ma11-mobile-row-card > header > div { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+.ma11-mobile-row-card > header b { overflow-wrap: anywhere; }
+.ma11-mobile-row-index { display: grid; place-items: center; width: 1.7rem; height: 1.7rem; border-radius: 999px; background: var(--ma-accent-soft); color: var(--ma-accent); font-size: .72rem; font-weight: 800; }
+.ma11-mobile-row-summary {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ma-text);
+  line-height: 1.52;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.ma11-mobile-row-status { color: var(--ma-muted); font-size: .76rem; }
+.ma11-mobile-row-fields { display: grid; gap: .36rem; }
+.ma11-mobile-field { display: grid; grid-template-columns: minmax(5rem, 30%) minmax(0, 1fr); gap: .5rem; padding-top: .35rem; border-top: 1px dashed var(--ma-border); }
+.ma11-mobile-field small { color: var(--ma-muted); }
+.ma11-mobile-field span {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.ma11-mobile-row-card > footer { display: flex; align-items: center; justify-content: space-between; gap: .55rem; padding-top: .45rem; border-top: 1px solid var(--ma-border); }
+.ma11-mobile-row-card > footer time { color: var(--ma-faint); font-size: .68rem; }
+.ma11-mobile-row-card .ma11-row-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; }
+.ma11-mobile-row-card .ma11-row-actions button { width: auto; min-height: 38px; }
+
+.ma11-graph-canvas { min-height: 540px; }
+.ma11-graph-canvas svg { min-width: 100%; }
+
+@media (max-width: 900px) {
+  .ma11-graph-layout { display: flex; flex-direction: column; gap: .65rem; }
+  .ma11-graph-layout > div { width: 100%; min-width: 0; }
+  .ma11-graph-canvas {
+    width: 100%;
+    height: clamp(380px, 60vh, 680px);
+    min-height: 380px;
+    overflow: auto;
+    touch-action: pan-x pan-y;
+  }
+  .ma11-graph-detail {
+    position: static;
+    order: 2;
+    width: 100%;
+    box-sizing: border-box;
+    max-height: 42vh;
+    overflow: auto;
+  }
+  .ma11-graph-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .25rem .65rem;
+    margin: 0 0 .5rem;
+    padding: .42rem .55rem;
+    border: 1px solid var(--ma-border);
+    border-radius: 9px;
+    background: var(--ma-surface-1);
+  }
+  .ma11-graph-stats span {
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    gap: .2rem;
+  }
+  .ma11-graph-stats b { font-size: .78rem; }
+  .ma11-graph-legend { margin-bottom: .36rem; }
+  .ma11-graph-zoom { flex-wrap: wrap; }
+}
+
+@media (max-width: 700px) {
+  .ma11-table-wrap { overflow: visible; border: 0; background: transparent; }
+  .ma11-table { display: none; }
+  .ma11-mobile-table-cards { display: grid; gap: .65rem; }
+  .ma11-table-hint { margin: .35rem 0 .6rem; }
+  .ma11-memory-layer-map { overflow-x: auto; }
+  .ma11-graph-toolbar-actions { width: 100%; }
+  .ma11-graph-canvas { height: clamp(380px, 58vh, 620px); }
+}

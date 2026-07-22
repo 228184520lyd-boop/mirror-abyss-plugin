@@ -1,3 +1,7 @@
+/**
+ * 模块职责：挂载 SillyTavern 设置入口和顶部工作区按钮。
+ * 维护边界：打开或切换 UI 本身不得触发模型请求。
+ */
 import { DISPLAY_NAME, VERSION } from '../constants.js';
 import { getContext, getSettings, saveSettings } from '../core/context.js';
 import { openWorkspace, refreshWorkspace } from './workspace.js';
@@ -89,3 +93,4 @@ export function mountOptionalTopButton() {
     button.addEventListener('click', () => openWorkspace('overview'));
     host.appendChild(button);
 }
+//# sourceMappingURL=settings-panel.js.map

@@ -1,7 +1,11 @@
+/**
+ * 模块职责：插件启动、禁用、重启、事件装卸与调试 API 的生命周期总控。
+ * 维护边界：生命周期代次用于阻止旧初始化继续落地；禁用时必须停止接收任务并取消活动请求。
+ */
 import { MODULE_NAME, VERSION } from '../constants.js';
-import { getContext, getSettings, saveSettings, toast, tryGetContext } from '../core/context.js';
+import { getContext, getSettings, isProcessableAssistantMessage, saveSettings, toast, tryGetContext } from '../core/context.js';
 import { clearAllStorage } from '../storage/repository.js';
-import { attemptAutomaticHistoryRecovery, installPipelineEventHandlers, processMessage } from '../pipeline/pipeline.js';
+import { installPipelineEventHandlers, processMessage, reconcileInterruptedRuntimeState } from '../pipeline/pipeline.js';
 import { resetLorebookRuntime } from '../pipeline/lorebook.js';
 import { installMessagePanelHandlers, renderAllMessagePanels } from '../ui/message-panel.js';
 import { diagnosticReport } from '../ui/diagnostics.js';
@@ -16,12 +20,27 @@ let cleanupUiEvents = null;
 let appReadyHandlerInstalled = false;
 let appReadyContext = null;
 let appReadyHandler = null;
+let startupTimer;
 let extensionEnabled = true;
+// 每次 shutdown 都递增代次，使旧 initialize continuation 即使恢复也不能继续挂载 UI 或监听器。
 let lifecycleGeneration = 0;
 let debugRegistered = false;
 let startupAttempts = 0;
 let lastError = null;
 const MAX_STARTUP_ATTEMPTS = 20;
+function removeSourceListener(source, event, handler) {
+    if (typeof source?.off === 'function')
+        source.off(event, handler);
+    else
+        source?.removeListener?.(event, handler);
+}
+function clearStartupTimer() {
+    if (startupTimer === undefined)
+        return;
+    window.clearTimeout(startupTimer);
+    startupTimer = undefined;
+}
+/** 暴露稳定调试入口；这些名称可能被用户脚本和诊断流程依赖。 */
 function exposeApi() {
     globalThis.MirrorAbyss = {
         version: VERSION,
@@ -36,10 +55,10 @@ function exposeApi() {
             if (!getSettings().enabled)
                 throw new Error('镜渊已关闭，请先启用');
             const context = getContext();
-            const index = [...(context.chat ?? [])].map((_, i) => i).reverse().find((i) => !context.chat[i]?.is_user && String(context.chat[i]?.mes || '').trim());
+            const index = [...(context.chat ?? [])].map((_, i) => i).reverse().find((i) => isProcessableAssistantMessage(context.chat[i]));
             if (index === undefined)
                 throw new Error('没有可整理的AI正文');
-            return processMessage(index, true);
+            return processMessage(index, false);
         },
         diagnostics: diagnosticReport,
         restart: restartPlugin,
@@ -81,6 +100,9 @@ export async function initialize() {
         await mountSettingsPanel(() => extensionEnabled && generation === lifecycleGeneration);
         if (!extensionEnabled || generation !== lifecycleGeneration)
             return;
+        await reconcileInterruptedRuntimeState();
+        if (!extensionEnabled || generation !== lifecycleGeneration)
+            return;
         mountOptionalTopButton();
         cleanupPipeline ||= installPipelineEventHandlers();
         cleanupPanels ||= installMessagePanelHandlers();
@@ -99,9 +121,9 @@ export async function initialize() {
             context.eventSource.on(context.event_types.CHAT_CHANGED, resetAndRerender);
             context.eventSource.on(context.event_types.MESSAGE_DELETED, resetAndRerender);
             cleanupUiEvents = () => {
-                context.eventSource.removeListener?.(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-                context.eventSource.removeListener?.(context.event_types.CHAT_CHANGED, resetAndRerender);
-                context.eventSource.removeListener?.(context.event_types.MESSAGE_DELETED, resetAndRerender);
+                removeSourceListener(context.eventSource, context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
+                removeSourceListener(context.eventSource, context.event_types.CHAT_CHANGED, resetAndRerender);
+                removeSourceListener(context.eventSource, context.event_types.MESSAGE_DELETED, resetAndRerender);
             };
         }
         if (!debugRegistered && typeof context.registerDebugFunction === 'function') {
@@ -115,9 +137,6 @@ export async function initialize() {
         document.querySelector('#ma11-fatal')?.remove();
         state = 'ready';
         toast('success', `已启动 ${VERSION}`);
-        window.setTimeout(() => {
-            void attemptAutomaticHistoryRecovery();
-        }, 300);
     }
     catch (error) {
         if (!extensionEnabled || generation !== lifecycleGeneration)
@@ -137,9 +156,18 @@ export function installAppReadyHandler() {
     if (!context) {
         startupAttempts += 1;
         if (startupAttempts < MAX_STARTUP_ATTEMPTS) {
-            window.setTimeout(installAppReadyHandler, 250);
+            if (startupTimer === undefined) {
+                const generation = lifecycleGeneration;
+                startupTimer = window.setTimeout(() => {
+                    startupTimer = undefined;
+                    if (!extensionEnabled || generation !== lifecycleGeneration)
+                        return;
+                    installAppReadyHandler();
+                }, 250);
+            }
         }
         else {
+            clearStartupTimer();
             const error = new Error('等待SillyTavern上下文超时，请刷新页面后重试');
             state = 'error';
             lastError = error;
@@ -147,6 +175,7 @@ export function installAppReadyHandler() {
         }
         return;
     }
+    clearStartupTimer();
     startupAttempts = 0;
     appReadyHandlerInstalled = true;
     appReadyContext = context;
@@ -185,8 +214,10 @@ function shutdown() {
     cleanupPipeline = null;
     cleanupPanels = null;
     cleanupUiEvents = null;
+    clearStartupTimer();
+    startupAttempts = 0;
     if (appReadyContext && appReadyHandler) {
-        appReadyContext.eventSource.removeListener?.(appReadyContext.event_types.APP_READY, appReadyHandler);
+        removeSourceListener(appReadyContext.eventSource, appReadyContext.event_types.APP_READY, appReadyHandler);
     }
     appReadyContext = null;
     appReadyHandler = null;
@@ -226,3 +257,4 @@ export async function onClean() {
 export async function onDelete() {
     shutdown();
 }
+//# sourceMappingURL=app.js.map

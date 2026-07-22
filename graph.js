@@ -1,132 +1,191 @@
-function nodeTypeFor(table) {
-    if (table === "focus")
-        return "focus";
-    if (table === "characters")
-        return "character";
-    if (table === "items")
-        return "item";
-    if (table === "events")
-        return "event";
-    if (table === "regions" || table === "spacetime")
-        return "region";
+import { DEFAULT_TABLE_REGISTRY, enabledTables, normalizeTableRegistry } from './table-registry.js';
+import { isEntryLifecycleHidden } from './entry-lifecycle.js';
+function nodeTypeFor(role) {
+    if (role === 'characters' || role === 'state')
+        return 'character';
+    if (role === 'items' || role === 'skills')
+        return 'item';
+    if (role === 'events')
+        return 'event';
+    if (role === 'regions' || role === 'scenes' || role === 'spacetime' || role === 'globalChanges')
+        return 'region';
     return null;
 }
 function compactLabel(value) {
-    const text = String(value || "").trim();
+    const text = String(value || '').trim();
     return text.length > 24 ? `${text.slice(0, 23)}…` : text;
 }
+function stringList(value) {
+    return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
+}
+function normalizeReference(value) {
+    return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+function rowAliases(row) {
+    return [...new Set([row.title, ...(row.keywords ?? [])]
+            .map(normalizeReference)
+            .filter((value) => value.length >= 2))];
+}
 function relationText(row) {
-    return `${row.title}\n${row.content}\n${row.status}\n${row.keywords.join(" ")}`.toLowerCase();
+    const fields = row.fields ?? {};
+    return [row.title, row.content, row.status, ...row.keywords, ...stringList(fields.relationshipStates)]
+        .join(' ')
+        .toLowerCase();
 }
-function mentions(row, node) {
-    const label = node.label.trim().toLowerCase();
-    return label.length >= 2 && relationText(row).includes(label);
-}
-function uniquePairKey(a, b, label) {
+function uniquePairKey(a, b, kind) {
     const [left, right] = [a, b].sort();
-    return `${left}|${right}|${label}`;
+    return `${left}|${right}|${kind}`;
 }
-export function buildRelationshipGraph(snapshot, scope = "relations") {
+function referenceMatches(reference, aliases) {
+    const normalized = normalizeReference(reference);
+    if (!normalized)
+        return false;
+    return aliases.some((alias) => normalized === alias || normalized.includes(alias) || alias.includes(normalized));
+}
+function relationshipLineFor(row, aliases) {
+    return stringList(row.fields?.relationshipStates)
+        .find((line) => aliases.some((alias) => normalizeReference(line).includes(alias))) || '';
+}
+function edgeKindFor(target, relationshipLine) {
+    if (relationshipLine)
+        return 'relationship';
+    if (target.type === 'event')
+        return 'event';
+    return 'object';
+}
+function edgeLabelFor(target, relationshipLine) {
+    if (relationshipLine)
+        return compactLabel(relationshipLine);
+    if (target.type === 'event')
+        return '参与事件';
+    if (target.type === 'region')
+        return '关联区域';
+    if (target.type === 'item')
+        return '关联物品';
+    return '关联对象';
+}
+export function buildRelationshipGraph(snapshot, scope = 'relations', customRegistry) {
     if (!snapshot)
         return { nodes: [], edges: [] };
+    const registry = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
     const nodes = [];
-    const nodeById = new Map();
     const rowsByNode = new Map();
-    const tables = scope === "relations"
-        ? ["focus", "characters"]
-        : ["focus", "characters", "items", "events", "regions", "spacetime"];
-    for (const table of tables) {
-        const type = nodeTypeFor(table);
+    const aliasesByNode = new Map();
+    const roles = scope === 'relations'
+        ? ['characters', 'state']
+        : ['characters', 'state', 'items', 'events', 'regions', 'scenes', 'spacetime', 'globalChanges'];
+    for (const table of enabledTables(registry).filter((item) => roles.includes(item.role))) {
+        const type = nodeTypeFor(table.role);
         if (!type)
             continue;
-        for (const row of snapshot[table]) {
-            const id = `${table}:${row.id}`;
-            const node = {
+        for (const row of snapshot[table.key] ?? []) {
+            if (isEntryLifecycleHidden(row))
+                continue;
+            const id = `${table.key}:${row.id}`;
+            nodes.push({
                 id,
-                label: String(row.title || "未命名").trim(),
+                label: String(row.title || '未命名').trim(),
                 type,
                 detail: row.content,
                 status: row.status,
                 existence: row.lifecycle?.existence,
                 activity: row.lifecycle?.activity,
                 memory: row.lifecycle?.memory,
-            };
-            nodes.push(node);
-            nodeById.set(id, node);
+            });
             rowsByNode.set(id, row);
+            aliasesByNode.set(id, rowAliases(row));
         }
     }
     const edges = [];
-    const seenEdges = new Set();
-    let relationIndex = 0;
-    for (const row of snapshot.relationships) {
-        const matched = nodes.filter((node) => mentions(row, node));
-        if (matched.length >= 2) {
-            const source = matched[0];
-            for (const target of matched.slice(1, 4)) {
-                const key = uniquePairKey(source.id, target.id, row.title);
-                if (seenEdges.has(key))
-                    continue;
-                seenEdges.add(key);
-                edges.push({
-                    id: `edge:${row.id}:${target.id}`,
-                    source: source.id,
-                    target: target.id,
-                    label: compactLabel(row.title),
-                    detail: row.content,
-                });
-            }
+    const seen = new Set();
+    for (const source of nodes) {
+        const row = rowsByNode.get(source.id);
+        if (!row)
             continue;
-        }
-        const relationNode = {
-            id: `relationship:${row.id}`,
-            label: compactLabel(row.title || `关系${relationIndex + 1}`),
-            type: "relationship",
-            detail: row.content,
-            status: row.status,
-            existence: row.lifecycle?.existence,
-            activity: row.lifecycle?.activity,
-            memory: row.lifecycle?.memory,
-        };
-        relationIndex += 1;
-        nodes.push(relationNode);
-        nodeById.set(relationNode.id, relationNode);
-        if (matched.length === 1) {
-            edges.push({
-                id: `edge:${row.id}:single`,
-                source: matched[0].id,
-                target: relationNode.id,
-                label: compactLabel(row.status || "关系"),
-                detail: row.content,
-            });
-        }
-    }
-    if (scope === "world") {
-        const contextualTypes = new Set(["item", "event", "region"]);
-        const characters = nodes.filter((node) => node.type === "character" || node.type === "focus");
-        const contextual = nodes.filter((node) => contextualTypes.has(node.type));
-        for (const character of characters) {
-            const row = rowsByNode.get(character.id);
-            if (!row)
+        const relatedObjects = stringList(row.fields?.relatedObjects);
+        const relatedEvents = stringList(row.fields?.relatedEvents);
+        const relationshipStates = stringList(row.fields?.relationshipStates);
+        const hasExplicitLinks = relatedObjects.length > 0 || relatedEvents.length > 0 || relationshipStates.length > 0;
+        const legacyText = relationText(row);
+        for (const target of nodes) {
+            if (target.id === source.id)
                 continue;
-            const text = relationText(row);
-            for (const target of contextual) {
-                const label = target.label.toLowerCase();
-                if (label.length < 2 || !text.includes(label))
-                    continue;
-                const key = uniquePairKey(character.id, target.id, "关联");
-                if (seenEdges.has(key))
-                    continue;
-                seenEdges.add(key);
-                edges.push({
-                    id: `context:${character.id}:${target.id}`,
-                    source: character.id,
-                    target: target.id,
-                    label: "关联",
-                    detail: row.content,
-                });
-            }
+            if (scope === 'relations' && (source.type !== 'character' || target.type !== 'character'))
+                continue;
+            const targetAliases = aliasesByNode.get(target.id) ?? [];
+            if (!targetAliases.length)
+                continue;
+            const relationshipLine = relationshipLineFor(row, targetAliases);
+            const objectReference = relatedObjects.find((item) => referenceMatches(item, targetAliases)) || '';
+            const eventReference = relatedEvents.find((item) => referenceMatches(item, targetAliases)) || '';
+            const legacyMention = !hasExplicitLinks && targetAliases.some((alias) => legacyText.includes(alias));
+            if (!relationshipLine && !objectReference && !eventReference && !legacyMention)
+                continue;
+            const kind = legacyMention ? 'legacy' : edgeKindFor(target, relationshipLine);
+            const key = uniquePairKey(source.id, target.id, kind);
+            if (seen.has(key))
+                continue;
+            seen.add(key);
+            const evidence = relationshipLine || objectReference || eventReference || row.content;
+            edges.push({
+                id: `edge:${source.id}:${target.id}:${kind}`,
+                source: source.id,
+                target: target.id,
+                label: legacyMention ? '旧记录关联' : edgeLabelFor(target, relationshipLine),
+                detail: evidence,
+                kind,
+                explicit: !legacyMention,
+            });
         }
     }
     return { nodes, edges };
 }
+/**
+ * 将事件画像的明确事件—对象关联叠加到只读图谱。
+ * 只生成派生节点/边，不写回快照，也不反向创建事实。
+ */
+export function enrichRelationshipGraphWithEventProfiles(source, profiles) {
+    const nodes = source.nodes.map((node) => ({ ...node }));
+    const edges = source.edges.map((edge) => ({ ...edge }));
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const edgePairs = new Set(edges.map((edge) => [edge.source, edge.target].sort().join('|')));
+    const nodeForEntry = (tableKey, entryId) => nodeById.get(`${tableKey}:${entryId}`)
+        ?? nodes.find((node) => node.id.endsWith(`:${entryId}`));
+    for (const profile of profiles) {
+        let eventNode = profile.eventEntryId
+            ? nodes.find((node) => node.type === 'event' && node.id.endsWith(`:${profile.eventEntryId}`))
+            : undefined;
+        eventNode ??= nodes.find((node) => node.type === 'event' && (node.id.endsWith(`:${profile.eventId}`) || node.label === profile.title));
+        if (!eventNode) {
+            eventNode = {
+                id: `event-profile:${profile.eventId}`,
+                label: profile.title,
+                type: 'event',
+                detail: profile.currentResults.join('；') || '由已提交事实派生的事件画像',
+                status: profile.status === 'closed' ? '已形成结果' : '进行中',
+            };
+            nodes.push(eventNode);
+            nodeById.set(eventNode.id, eventNode);
+        }
+        for (const entry of profile.relatedEntries) {
+            const target = nodeForEntry(entry.tableKey, entry.id);
+            if (!target || target.id === eventNode.id)
+                continue;
+            const pair = [eventNode.id, target.id].sort().join('|');
+            if (edgePairs.has(pair))
+                continue;
+            edgePairs.add(pair);
+            edges.push({
+                id: `event-profile-edge:${profile.eventId}:${target.id}`,
+                source: eventNode.id,
+                target: target.id,
+                label: '事件关联',
+                detail: `${target.label}参与或受到“${profile.title}”影响`,
+                kind: 'event',
+                explicit: true,
+            });
+        }
+    }
+    return { nodes, edges };
+}
+//# sourceMappingURL=graph.js.map
