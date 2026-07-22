@@ -10,15 +10,19 @@ import { hashText, sanitizeBookName, toErrorMessage } from './core-utils.js';
 import { markStage } from './domain-artifact.js';
 import { getChatState, putArtifact, putChatState } from './storage-repository.js';
 import { TaskBlockedError } from './pipeline-task-queue.js';
-import { buildLorebookDocuments } from './domain-lorebook-publish.js';
+import { buildLorebookDocuments, countLorebookSourceRows } from './domain-lorebook-publish.js';
 import { resolveHostControl } from './domain-host-control.js';
 import { readHistoryWorkflow } from './workflow-history-workflow.js';
 let worldInfoModulePromise = null;
+let scriptModulePromise = null;
 let worldInfoApiForTests = null;
+let lorebookTransportForTests = null;
 const lorebookMutationLocks = new Map();
 export function resetLorebookRuntime() {
     worldInfoModulePromise = null;
+    scriptModulePromise = null;
     worldInfoApiForTests = null;
+    lorebookTransportForTests = null;
     // 正在执行的物理世界书写入不会因插件重启而瞬间停止。清空锁表会让新实例
     // 与旧保存并发写同一本书；保留 Promise 链，待旧写入真正结束后由 finally 自行释放。
 }
@@ -26,6 +30,10 @@ export function resetLorebookRuntime() {
 export function setLorebookWorldInfoApiForTests(api) {
     worldInfoApiForTests = api;
     worldInfoModulePromise = null;
+}
+/** Node 集成测试使用；生产环境默认直连 SillyTavern 世界书后端。 */
+export function setLorebookTransportForTests(transport) {
+    lorebookTransportForTests = transport;
 }
 async function worldInfoApi() {
     if (worldInfoApiForTests)
@@ -35,6 +43,108 @@ async function worldInfoApi() {
         worldInfoModulePromise = import(/* @vite-ignore */ moduleUrl);
     }
     return worldInfoModulePromise;
+}
+async function worldInfoRequestHeaders() {
+    const context = getContext();
+    if (typeof context.getRequestHeaders === 'function')
+        return context.getRequestHeaders();
+    if (!scriptModulePromise) {
+        const moduleUrl = '/script.js';
+        scriptModulePromise = import(/* @vite-ignore */ moduleUrl);
+    }
+    const script = await scriptModulePromise;
+    if (typeof script.getRequestHeaders !== 'function')
+        throw new Error('SillyTavern 请求头接口不可用');
+    return script.getRequestHeaders();
+}
+async function responseError(response) {
+    try {
+        const text = String(await response.text()).trim();
+        return text ? `${response.status} ${text}` : String(response.status);
+    }
+    catch {
+        return String(response.status);
+    }
+}
+/** 绕过 world-info 内存缓存，读取服务端实际世界书文件。 */
+export async function loadWorldInfoAuthoritative(name) {
+    if (lorebookTransportForTests?.load)
+        return lorebookTransportForTests.load(name);
+    const response = await fetch('/api/worldinfo/get', {
+        method: 'POST',
+        headers: await worldInfoRequestHeaders(),
+        body: JSON.stringify({ name }),
+        cache: 'no-store',
+    });
+    if (!response.ok)
+        throw new Error(`世界书服务端读取失败：${await responseError(response)}`);
+    const data = await response.json();
+    return data && typeof data === 'object' ? data : { entries: {} };
+}
+/** 使用可检查 HTTP 状态的接口写入，避免缓存成功而服务端没有条目。 */
+export async function saveWorldInfoAuthoritative(name, data) {
+    if (lorebookTransportForTests?.save)
+        return lorebookTransportForTests.save(name, data);
+    const response = await fetch('/api/worldinfo/edit', {
+        method: 'POST',
+        headers: await worldInfoRequestHeaders(),
+        body: JSON.stringify({ name, data }),
+        cache: 'no-store',
+    });
+    if (!response.ok)
+        throw new Error(`世界书服务端写入失败：${await responseError(response)}`);
+    return response.json().catch(() => ({ ok: true }));
+}
+function persistedManagedEntries(data, chatKey) {
+    const byKey = new Map();
+    for (const [uid, entry] of Object.entries(data?.entries ?? {})) {
+        const info = managedInfo(entry);
+        if (!info?.managed || info.chatKey !== chatKey || !info.key)
+            continue;
+        byKey.set(String(info.key), { uid, entry });
+    }
+    return byKey;
+}
+/** 服务端实际条目必须与当前发布计划一一对应；缺失、空正文或旧副本均视为失败。 */
+export function verifyPersistedLorebook(data, desired, chatKey) {
+    const actual = persistedManagedEntries(data, chatKey);
+    const missing = [];
+    const mismatched = [];
+    for (const [key, spec] of desired) {
+        const pair = actual.get(key);
+        if (!pair) {
+            missing.push(key);
+            continue;
+        }
+        if (managedContentIdentity(pair.entry?.content) !== managedContentIdentity(spec.content)
+            || managedCommentIdentity(pair.entry?.comment) !== managedCommentIdentity(spec.comment))
+            mismatched.push(key);
+    }
+    const extras = [...actual.keys()].filter((key) => !desired.has(key));
+    if (missing.length || mismatched.length || extras.length) {
+        const parts = [];
+        if (missing.length)
+            parts.push(`缺少 ${missing.length} 条`);
+        if (mismatched.length)
+            parts.push(`内容不一致 ${mismatched.length} 条`);
+        if (extras.length)
+            parts.push(`残留 ${extras.length} 条`);
+        throw new Error(`世界书服务端验收失败：${parts.join('，')}`);
+    }
+    return [...actual.values()].map(({ uid, entry }) => Number.isFinite(Number(entry?.uid)) ? Number(entry.uid) : Number(uid)).filter(Number.isFinite);
+}
+async function persistLorebookVerified(wi, name, data, desired, chatKey) {
+    // 先用可检查状态的后端接口落盘；再调用 ST 模块同步内存缓存和编辑器数据。
+    await saveWorldInfoAuthoritative(name, data);
+    try {
+        await wi.saveWorldInfo(name, data, true);
+    }
+    catch (error) {
+        console.warn('[Mirror Abyss] 世界书已服务端落盘，但 ST 内存缓存刷新失败：', error);
+    }
+    const persisted = await loadWorldInfoAuthoritative(name);
+    persisted.entries ||= {};
+    return verifyPersistedLorebook(persisted, desired, chatKey);
 }
 async function withLorebookMutation(name, action) {
     const lockKey = sanitizeBookName(name);
@@ -369,7 +479,8 @@ async function desiredSpecs(artifact, committedState) {
         entryLimits: settings.contentLimits.tables,
     });
     const desired = normalizeDesiredLorebookSpecs(new Map(documents.map((document) => [document.key, document])));
-    return { desired };
+    const sourceRows = countLorebookSourceRows(artifact.snapshot, settings.tableRegistry);
+    return { desired, sourceRows };
 }
 async function legacyCleanupScope(artifact) {
     const state = await getChatState(artifact.chatKey);
@@ -828,34 +939,12 @@ export function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, 
     }
     return { changed, entryIds, created, adoptedLegacy, removed };
 }
-async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedicatedBook, force, entryIds) {
-    const renderedTarget = await reloadWorldInfoEditor(wi, name, force);
+async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, _dedicatedBook, force, entryIds) {
+    await reloadWorldInfoEditor(wi, name, force);
     assertArtifactCommitCurrent(artifact);
-    if (!renderedTarget)
-        return entryIds;
-    // showWorldEditor 可能把打开前的旧缓存延迟写回。重绘后必须重新加载并按当前 desired 对账。
-    const postReloadData = (await wi.loadWorldInfo(name)) || { entries: {} };
-    postReloadData.entries ||= {};
-    const postReloadVerification = reconcileLorebookEntries(postReloadData, desired, artifact.chatKey, wi, name, dedicatedBook);
-    entryIds = postReloadVerification.entryIds;
-    if (!postReloadVerification.changed)
-        return entryIds;
-    assertArtifactCommitCurrent(artifact);
-    await wi.saveWorldInfo(name, postReloadData, true);
-    assertArtifactCommitCurrent(artifact);
-    // 修正保存后再次重绘，确保当前编辑器看到的是最终入库版本，而不是刚被修掉的旧缓存。
-    await reloadWorldInfoEditor(wi, name, true);
-    assertArtifactCommitCurrent(artifact);
-    const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
-    finalData.entries ||= {};
-    const finalVerification = reconcileLorebookEntries(finalData, desired, artifact.chatKey, wi, name, dedicatedBook);
-    entryIds = finalVerification.entryIds;
-    if (finalVerification.changed) {
-        await wi.saveWorldInfo(name, finalData, true);
-        assertArtifactCommitCurrent(artifact);
-        throw new Error('世界书编辑器刷新后持续回写旧缓存，已修正入库但界面未能稳定刷新');
-    }
-    return entryIds;
+    const persisted = await loadWorldInfoAuthoritative(name);
+    persisted.entries ||= {};
+    return verifyPersistedLorebook(persisted, desired, artifact.chatKey) || entryIds;
 }
 /**
  * 基于最新成功状态及总结执行差异同步；写入前后持续校验 artifact 是否仍然有效。
@@ -893,32 +982,28 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         const wi = await ensureLorebook(name, artifact.chatKey, artifact);
         if (!name)
             throw new Error('没有可用的聊天世界书');
-        const data = (await wi.loadWorldInfo(name)) || { entries: {} };
+        // loadWorldInfo 可能命中 ST 内存缓存；同步必须从服务端实际文件开始对账。
+        const data = (await loadWorldInfoAuthoritative(name)) || { entries: {} };
         data.entries ||= {};
         const plan = await desiredSpecs(artifact, chatState);
         const desired = plan.desired;
+        if (plan.sourceRows > 0 && desired.size === 0)
+            throw new Error(`状态表有 ${plan.sourceRows} 个可发布条目，但世界书发布计划为 0；已停止空同步`);
         const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
         const reconciliation = reconcileLorebookEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook);
         const changed = reconciliation.changed;
         let entryIds = reconciliation.entryIds;
         assertArtifactCommitCurrent(artifact);
         if (changed) {
-            await wi.saveWorldInfo(name, data, true);
+            entryIds = await persistLorebookVerified(wi, name, data, desired, artifact.chatKey);
             assertArtifactCommitCurrent(artifact);
-            // 只有实际保存后做一次回读确认，清除保存路径回流的同 managedKey 副本。
-            const verifiedData = (await wi.loadWorldInfo(name)) || data;
-            const verification = reconcileLorebookEntries(verifiedData, desired, artifact.chatKey, wi, name, dedicatedBook);
-            entryIds = verification.entryIds;
-            if (verification.changed) {
-                assertArtifactCommitCurrent(artifact);
-                await wi.saveWorldInfo(name, verifiedData, true);
-                assertArtifactCommitCurrent(artifact);
-            }
         }
-        // 普通同步只在数据变化后刷新；强制同步或上一轮刷新失败的重试即使无变化也必须重绘。
-        if (changed || force || retryingFailedSync || chatState.lastSyncStatus === 'failed') {
+        else {
+            entryIds = verifyPersistedLorebook(data, desired, artifact.chatKey);
+        }
+        // 强制同步、数据变化或上一轮失败时重绘；重绘后再次从服务端验收，禁止缓存制造假成功。
+        if (changed || force || retryingFailedSync || chatState.lastSyncStatus === 'failed')
             entryIds = await refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedicatedBook, force, entryIds);
-        }
         const previousLorebookName = sanitizeBookName(chatState.lastLorebookName || '');
         if (previousLorebookName && previousLorebookName !== name) {
             // 新目标书已经成功入库后再清旧书，避免目标发布失败时先丢失原有长期记忆。
@@ -930,6 +1015,8 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         chatState.lastLorebookName = name;
         chatState.lastSyncAt = new Date().toISOString();
         chatState.lastSyncStatus = 'success';
+        chatState.lastSyncEntryCount = entryIds.length;
+        chatState.lastSyncPlannedCount = desired.size;
         chatState.lastSyncError = undefined;
         await putArtifact(artifact);
         await putChatState(chatState);

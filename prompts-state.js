@@ -100,7 +100,7 @@ export function stateSystemPrompt(registry, promptSettings = DEFAULT_STATE_PROMP
 
 【输出】
 使用 <MA_EVENT> 组织同一事件。第一行事件名，第二行只能是“进行中”或“已结束”。
-对象模块第一行写对象稳定名称，后续直接写变化谓语，不重复对象名。只输出实际出现的模块，不补齐类型。
+对象模块第一行写对象稳定名称，后续直接写变化谓语，不重复对象名。只输出实际出现的模块，不补齐类型。用最精炼、最简洁的自然表达，保留必要对象、变化与结果，不解释、不铺陈。
 <MA_CORE> 可省略；仅在存在无法归给单一对象、且不与对象结果重叠的过程事实时使用。
 无新增事实时只输出：<MA_TURN>无新增事实</MA_TURN>
 
@@ -150,7 +150,7 @@ ${exclusionRules}
 【启用对象表】
 ${compactRegistryDescription(active) || '当前没有启用表格。'}
 
-输出前只检查：正文是否点名并证实、归属是否唯一、各条是否互不重叠、标签是否闭合。`;
+输出前只检查：是否明确、是否精炼、归属是否唯一、各条是否互不重叠、标签是否闭合。`;
 }
 function normalizeSearchText(value) {
     return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');

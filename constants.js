@@ -5,8 +5,8 @@
 export const MODULE_NAME = 'mirrorAbyssV11';
 export const LEGACY_MODULE_NAME = 'mirrorAbyss';
 export const DISPLAY_NAME = '镜渊';
-export const VERSION = '1.3.16';
-export const PIPELINE_VERSION = 'ma-pipeline-79';
+export const VERSION = '1.3.17';
+export const PIPELINE_VERSION = 'ma-pipeline-80';
 export const DEFAULT_CONTENT_LIMITS = {
     tables: {
         spacetime: 700,
@@ -24,27 +24,25 @@ export const DEFAULT_CONTENT_LIMITS = {
 };
 export const DEFAULT_STATE_PROMPTS = {
     admissionRules: [
-        '正文点名并明确建立、改变或取消，且对象可稳定区分时才输出。',
-        '只输出本轮具有独立变化的对象；没有变化的对象直接省略。',
+        '只记录正文点名并明确成立的新增、改变与失效；没有变化的对象省略。',
+        '在不遗漏明确事实的前提下，用最精炼、最简洁的自然表达。',
     ].join('\n'),
     exclusionRules: [
-        '正文未点名、未明确证实、仅作背景描写或只能依靠常识推断的内容不输出。',
-        '不遍历旧对象，不补齐类型，不为了完整而新增条目。',
+        '正文未提及、未证实或只能依靠常识推断的内容不生成。',
+        '不遍历旧对象，不补齐类型，不解释、不铺陈、不重复。',
     ].join('\n'),
     routingRules: [
-        '归属看谁发生变化，不看一句话里还提到谁；其他对象只作必要关联。',
-        '角色承载身体、认知、身份、能力、目标及获得或失去；物品承载数量、完整度、功能、形态、激活与所在；场景承载结构、环境、通行、危险与局面；地点承载稳定空间；全局承载组织制度与世界态势；基础设定承载稳定规则。',
-        '无法归给单一对象、且不与对象结果重叠的一次性过程才归事件。',
+        '归属看谁发生变化；句中其他对象只作必要关联。',
+        '角色承载自身变化；物品承载自身变化；场景与地点承载空间自身变化；全局与基础设定承载其自身变化。',
+        '无法归给单一对象且不与对象结果重叠的独立过程才归事件。',
     ].join('\n'),
     evidenceRules: [
-        '只使用本轮正文明确事实与相关旧记录；正文没有提及或没有证实，就不生成。',
-        '新旧冲突时，只有正文明确替换、结束或推翻旧事实才更新。',
+        '只依据本轮正文和相关旧记录；新旧冲突时，正文明确替换、结束或推翻才更新。',
     ].join('\n'),
     updateRules: [
-        '同一事件可以产生多个对象事实；不同对象的不同变化分别记录，同一对象的同一变化只记录一次。',
-        '各条合读应还原完整事实，彼此不概括、不包含、不换词复述。',
-        '角色获得与另一角色失去属于两个对象变化，可以分别记录；物品条目不再重复同一次持有关系。',
-        '事件核心不是必填；仅保留无法由对象变化承载的独立过程。',
+        '同一事件可产生多个对象事实；不同对象的不同变化分别记录，同一对象的同一变化只写一次。',
+        '各条合读还原完整事实，彼此不概括、不包含、不换词复述。',
+        '获得与失去可分别归属不同对象；事件核心仅在有独立过程事实时出现。',
     ].join('\n'),
 };
 export const DEFAULT_SUMMARY_PROMPTS = {
@@ -148,5 +146,5 @@ export const DEFAULT_SETTINGS = {
         largeSummary: { mode: 'current', profileId: '', profile: '' },
     },
     ui: { activeTab: 'overview', activeTable: 'spacetime', graphScope: 'world', graphZoom: 1, memoryView: 'combined' },
-    migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false },
+    migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false, conciseFactsV41: false },
 };

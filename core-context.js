@@ -139,6 +139,12 @@ export function getSettings() {
             settings.statePrompts = structuredClone(DEFAULT_SETTINGS.statePrompts);
         settings.migration.factOwnershipV40 = true;
     }
+    if (!settings.migration.conciseFactsV41) {
+        // 只迁移未经编辑的 1.3.16 标准提示词；玩家白盒自定义原样保留。
+        if (hashText(JSON.stringify(settings.statePrompts)) === 'zfk50i')
+            settings.statePrompts = structuredClone(DEFAULT_SETTINGS.statePrompts);
+        settings.migration.conciseFactsV41 = true;
+    }
     if (!settings.migration.factOwnershipRegistryV40) {
         // 只替换未经编辑的 1.3.14 默认表定义；自定义用途、表头和表格必须保留。
         if (hashText(JSON.stringify(normalizeTableRegistry(settings.tableRegistry))) === '1d6o99v')

@@ -961,7 +961,7 @@ async function syncHtml() {
       </div>
       <p class="ma11-help ma11-maintenance-note"><b>维护操作：</b>“按对象清理并重新发布”会先检查可安全删除的镜渊旧条目，并在一次确认后发布当前真实快照；不会处理人工条目或其他聊天条目。</p>
       ${state?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state.lastSyncError)}</div>` : ""}
-      <dl class="ma11-meta"><dt>当前世界书</dt><dd>${escapeHtml(state?.lastLorebookName || "未建立")}</dd><dt>最近同步</dt><dd>${escapeHtml(state?.lastSyncAt ? new Date(state.lastSyncAt).toLocaleString() : "尚未同步")}</dd></dl>
+      <dl class="ma11-meta"><dt>当前世界书</dt><dd>${escapeHtml(state?.lastLorebookName || "未建立")}</dd><dt>实际条目</dt><dd>${Number.isFinite(Number(state?.lastSyncEntryCount)) ? Number(state.lastSyncEntryCount) : "—"}</dd><dt>最近同步</dt><dd>${escapeHtml(state?.lastSyncAt ? new Date(state.lastSyncAt).toLocaleString() : "尚未同步")}</dd></dl>
     </section>`;
 }
 function eventGraphNodeId(profile, graph) {

@@ -3,12 +3,10 @@
  * 维护边界：不使用数值权重决定记忆进入上下文；不同信息点可共享 fact_id/event_id，去重只按条目身份与完全相同内容，再按总容量裁剪。
  */
 import { DEFAULT_CONTENT_LIMITS } from './constants.js';
-import { customizedFieldLabel, DEFAULT_TABLE_REGISTRY, enabledTables, normalizeTableRegistry, tableByRole } from './domain-table-registry.js';
+import { customizedFieldLabel, DEFAULT_TABLE_REGISTRY, enabledTables, normalizeTableRegistry } from './domain-table-registry.js';
 import { isEntryLifecycleHidden, isEntryParticipationPaused } from './domain-entry-lifecycle.js';
-import { filterPassiveObservers } from './domain-snapshot.js';
 import { safeText } from './core-utils.js';
 import { canonicalObjectTitle } from './domain-object-identity.js';
-import { isPurePassiveObserverText } from './domain-observer.js';
 function registry(options) {
     return normalizeTableRegistry(options?.registry?.length ? options.registry : DEFAULT_TABLE_REGISTRY);
 }
@@ -106,66 +104,31 @@ function rowContent(table, row, maxChars) {
     return fitWholeLines(uniqueContentLines(lines), maxChars);
 }
 function rowSearchText(row) {
-    // 1.3.16：对象变化主要保存在 fields 中；发布关联判断必须读取完整对象视图。
-    // 只看标题/摘要会把已写入 currentFacts、currentStates、relatedObjects 的真实条目误判为无关。
     const fieldText = safeText(JSON.stringify(row.fields ?? {}), 12000).trim();
     return `${row.title} ${row.content} ${row.status} ${row.keywords.join(' ')} ${fieldText}`;
 }
-function isAudienceRow(row) {
-    if (row.source === 'manual' || row.locked)
-        return false;
-    return isPurePassiveObserverText(rowSearchText(row));
-}
 function normalizedName(value) { return canonicalObjectTitle(value); }
-function aliases(title) {
-    const raw = String(title || '').trim();
-    return uniq([normalizedName(raw), ...raw.split(/[｜|:：—–-]/).map(normalizedName)], 12);
-}
 /**
- * 活跃视图和世界书共同过滤纯旁观者，人工/锁定行不自动删除。
- * 发布前过滤只依据对象事实和保护规则；焦点不得改变对象是否参与发布，唯一效果在 recallModeFor。
+ * 世界书是成功状态表的直接投影，不在发布阶段再次判断“是否相关”。
+ * 准入、归属和旁观者排除已经由状态提取与快照提交完成；这里仅排除禁用表和生命周期隐藏行。
  */
 export function filterSnapshotForLorebook(snapshot, customRegistry) {
     const tables = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
-    // 世界书只消费已经提交的快照，不再自行创建场景、迁移对象或合并身份。
-    // 旧存档修复属于 repository 迁移，普通发布链不得成为第二套状态机。
-    const next = filterPassiveObservers(structuredClone(snapshot), tables);
-    for (const table of tables)
-        next[table.key] ||= [];
-    for (const table of tables)
-        next[table.key] = (next[table.key] ?? []).filter((row) => !isEntryLifecycleHidden(row));
-    const stateKey = tableByRole(tables, 'characters', false)?.key || tableByRole(tables, 'state', false)?.key;
-    const eventKey = tableByRole(tables, 'events', false)?.key;
-    const relationKey = tableByRole(tables, 'relationships', false)?.key;
-    if (!stateKey)
-        return next;
-    const relevanceRows = [eventKey, relationKey].filter(Boolean).flatMap((key) => next[key] ?? []);
-    const relevance = normalizedName(relevanceRows.map(rowSearchText).join(' '));
-    next[stateKey] = (next[stateKey] ?? []).filter((row) => {
-        if (row.source === 'manual' || row.locked)
-            return true;
-        if (isAudienceRow(row))
-            return false;
-        const named = aliases(row.title).some((name) => name && relevance.includes(name));
-        const direct = /(核心参与|直接相关|交战|对战|行动者|目标|当事人)/i.test(rowSearchText(row));
-        return named || direct || !relevance;
-    });
-    const retainedNames = new Set(next[stateKey].flatMap((row) => aliases(row.title)));
-    for (const table of enabledTables(tables)) {
-        if (['focus', 'spacetime', 'scenes', 'characters', 'state', 'items', 'events', 'globalChanges', 'foundations'].includes(table.role))
-            continue;
-        next[table.key] = (next[table.key] ?? []).filter((row) => {
-            if (table.role === 'custom' && safeText(row.fields?.migrationStatus, 80).trim() === '已归并')
-                return false;
-            if (row.source === 'manual' || row.locked)
-                return true;
-            if (isAudienceRow(row))
-                return false;
-            const text = normalizedName(rowSearchText(row));
-            return !retainedNames.size || [...retainedNames].some((name) => text.includes(name)) || table.role === 'regions';
-        });
+    const next = structuredClone(snapshot ?? {});
+    const enabledKeys = new Set(enabledTables(tables).map((table) => table.key));
+    for (const table of tables) {
+        const rows = Array.isArray(next[table.key]) ? next[table.key] : [];
+        next[table.key] = enabledKeys.has(table.key)
+            ? rows.filter((row) => row && !isEntryLifecycleHidden(row))
+            : [];
     }
     return next;
+}
+/** 表格成功后应当进入发布计划的可见对象数量。 */
+export function countLorebookSourceRows(snapshot, customRegistry) {
+    const tables = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
+    const filtered = filterSnapshotForLorebook(snapshot, tables);
+    return enabledTables(tables).reduce((total, table) => total + (filtered[table.key]?.length ?? 0), 0);
 }
 function defaultTrigger(row) {
     const recall = row.recall ?? { any: [], all: [], exclude: [] };

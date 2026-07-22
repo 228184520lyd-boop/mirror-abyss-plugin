@@ -575,13 +575,10 @@ function moduleLines(value) {
 function lineOf(source, index) {
     return source.slice(0, index).split('\n').length;
 }
-function compactFactText(value, limit = 220, label = '事实模块') {
-    const text = safeText(value, Math.max(limit * 4, 1200)).replace(/\s+/g, ' ').trim();
-    if (!text)
-        return '';
-    if (text.length > limit)
-        throw new Error(`${label}过长：${text.length}/${limit} 字；只写一到两句具体事实`);
-    return text;
+function compactFactText(value, _limit, _label) {
+    // 输出长度由调用模型的 token 上限控制；解析器不再以字数拒绝已经明确成立的事实。
+    // 这里只压平空白，是否精炼由提示词正向约束，不用硬阈值诱导机械截断或重试。
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 function naturalFactToken(value) {
     return identity(value).replace(/[。．.！!？?；;，,、：:]+/gu, '');
@@ -608,7 +605,7 @@ function validateNaturalModuleOwnership(eventName, modules) {
     }
 }
 /**
- * 1.3.15 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是最短事实。
+ * 1.3.15 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是精炼事实。
  */
 export function parseStateTextBlocks(raw) {
     const source = String(raw ?? '').replace(/^\uFEFF/, '').trim();

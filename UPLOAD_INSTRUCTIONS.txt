@@ -1,7 +1,8 @@
-Mirror Abyss 1.3.16 GitHub 网页上传版
+Mirror Abyss 1.3.17 GitHub 网页平铺版
 
-1. 解压本 ZIP。
+1. 解压本压缩包。
 2. 在 GitHub 仓库根目录选择 Add file → Upload files。
-3. 上传解压后的全部文件并覆盖同名旧文件。
-4. 该版本没有子目录，适合 GitHub 网页上传。
-5. 在 SillyTavern 更新扩展后，执行一次“强制同步世界书”；1.3.15 已写入表格的数据无需重新提取。
+3. 上传解压后的全部文件并覆盖旧版。
+4. 不要直接把 ZIP 当作插件源码上传。
+
+本包无子目录，适用于 GitHub 网页上传。SillyTavern 直接安装请使用 Mirror-Abyss-1.3.17.zip。
