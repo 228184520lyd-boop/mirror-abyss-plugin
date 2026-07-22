@@ -105,7 +105,12 @@ function rowContent(table, row, maxChars) {
     // 事实 ID、事件 ID 与维护权限只保留在插件元数据中，不注入正文模型。
     return fitWholeLines(uniqueContentLines(lines), maxChars);
 }
-function rowSearchText(row) { return `${row.title} ${row.content} ${row.status} ${row.keywords.join(' ')}`; }
+function rowSearchText(row) {
+    // 1.3.16：对象变化主要保存在 fields 中；发布关联判断必须读取完整对象视图。
+    // 只看标题/摘要会把已写入 currentFacts、currentStates、relatedObjects 的真实条目误判为无关。
+    const fieldText = safeText(JSON.stringify(row.fields ?? {}), 12000).trim();
+    return `${row.title} ${row.content} ${row.status} ${row.keywords.join(' ')} ${fieldText}`;
+}
 function isAudienceRow(row) {
     if (row.source === 'manual' || row.locked)
         return false;
