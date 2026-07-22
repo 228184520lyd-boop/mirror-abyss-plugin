@@ -170,4 +170,3 @@ export const DEFAULT_SETTINGS = {
     ui: { activeTab: 'overview', activeTable: 'spacetime', graphScope: 'world', graphZoom: 1, memoryView: 'combined' },
     migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false },
 };
-//# sourceMappingURL=constants.js.map
