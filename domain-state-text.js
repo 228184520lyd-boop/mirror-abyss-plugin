@@ -583,8 +583,32 @@ function compactFactText(value, limit = 220, label = '事实模块') {
         throw new Error(`${label}过长：${text.length}/${limit} 字；只写一到两句具体事实`);
     return text;
 }
+function naturalFactToken(value) {
+    return identity(value).replace(/[。．.！!？?；;，,、：:]+/gu, '');
+}
+function validateNaturalModuleOwnership(eventName, modules) {
+    const objectNames = unique(modules.filter((module) => !module.eventModule).map((module) => module.objectName), 40, 240)
+        .map((name) => ({ name, token: identity(name) }))
+        .filter((item) => item.token.length >= 2)
+        .sort((left, right) => right.token.length - left.token.length);
+    const seenFacts = new Map();
+    for (const module of modules) {
+        const factToken = naturalFactToken(module.content);
+        const factScope = module.eventModule ? `event|${factToken}` : `${identity(module.objectName)}|${factToken}`;
+        const duplicate = seenFacts.get(factScope);
+        if (factToken && duplicate)
+            throw new Error(`事件“${eventName}”中对象“${module.objectName || eventName}”重复返回同一事实：<${duplicate.tag}> 与 <${module.tag}>`);
+        if (factToken)
+            seenFacts.set(factScope, module);
+        if (module.eventModule)
+            continue;
+        const repeatedSubject = objectNames.find((item) => factToken.startsWith(item.token));
+        if (repeatedSubject)
+            throw new Error(`事件“${eventName}”的 <${module.tag}> 已在首行声明对象“${module.objectName}”；事实行应直接写变化，不要再次以“${repeatedSubject.name}”起句`);
+    }
+}
 /**
- * 1.3.14 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是最短事实。
+ * 1.3.15 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是最短事实。
  */
 export function parseStateTextBlocks(raw) {
     const source = String(raw ?? '').replace(/^\uFEFF/, '').trim();
@@ -658,8 +682,6 @@ export function parseStateTextBlocks(raw) {
             throw new Error(`事件“${eventName}”第二行必须是“进行中”或“已结束”`);
         if (!modules.length)
             throw new Error(`事件“${eventName}”没有事实模块`);
-        if (!modules.some((module) => module.tag === 'MA_CORE'))
-            throw new Error(`事件“${eventName}”缺少唯一的 <MA_CORE> 动作骨架`);
         if (status === '已结束' && modules.some((module) => module.unresolved)) {
             throw new Error(`事件“${eventName}”标记为已结束，但仍返回 <MA_UNRESOLVED>`);
         }
@@ -672,6 +694,7 @@ export function parseStateTextBlocks(raw) {
                 throw new Error(`事件“${eventName}”重复返回同一事实模块：${module.eventModule ? `<${module.tag}>` : module.objectName}`);
             moduleKeys.add(key);
         }
+        validateNaturalModuleOwnership(eventName, modules);
         output.push({ kind: 'event', line, eventName, closed: status === '已结束', modules });
     }
     if (!output.some((block) => block.kind === 'turn' || block.kind === 'event')) {
@@ -799,6 +822,38 @@ function naturalChange(event, module, active, previous, activeFacts, allObjectNa
     };
     return { fact, patch: { table: targetTable.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation } };
 }
+function naturalEventContainerPatch(event, active, previous, activeFacts, allObjectNames) {
+    const table = tableByRole(active, 'events', false);
+    if (!table)
+        return undefined;
+    const keywords = unique([event.eventName], 24, 100);
+    const existing = findExistingRow(table.key, event.eventName, keywords, previous);
+    const eventId = activeEventMatch(event.eventName, activeFacts)
+        || snapshotEventMatch(event.eventName, previous, active)
+        || rowSingleEventMatch(existing)
+        || `event_${hashText(identity(event.eventName))}`;
+    const fields = { ...(existing?.fields ?? {}) };
+    if (allObjectNames.length)
+        fields.relatedObjects = arrayAfterChange(fields.relatedObjects, allObjectNames, 'add');
+    const row = {
+        id: existing?.id || makeId(table.key),
+        title: existing?.title || event.eventName,
+        content: existing?.content || event.eventName,
+        keywords: unique([...(existing?.keywords ?? []), ...keywords], 24, 100),
+        status: event.closed ? '已结束' : '进行中',
+        source: existing?.source ?? 'auto',
+        locked: existing?.locked ?? false,
+        lockMode: existing?.lockMode,
+        lifecycle: existing?.lifecycle,
+        updatedAt: nowIso(),
+        fields,
+        semanticRole: table.role,
+        eventId,
+        eventIds: unique([...(existing?.eventIds ?? []), existing?.eventId, eventId], 80, 160),
+        factIds: unique([...(existing?.factIds ?? [])], 200, 180),
+    };
+    return { table: table.key, row, matchKey: existing?.id || `new:${identity(event.eventName)}` };
+}
 export function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = []) {
     const active = enabledTables(normalizeTableRegistry(registry));
     const previous = dedupeStrongStateRows(previousSnapshot, registry);
@@ -828,6 +883,18 @@ export function parseStateTextOutput(raw, previousSnapshot, registry, activeFact
             } : patch);
             if (patch.relocation)
                 relocationsById.set(patch.relocation.id, patch.relocation);
+        }
+        const eventContainer = naturalEventContainerPatch(event, active, working, activeFacts, allObjectNames);
+        if (eventContainer) {
+            applyPatchToWorkingSnapshot(working, eventContainer);
+            const containerKey = `${eventContainer.table}|${canonicalObjectTitle(eventContainer.row.title) || eventContainer.matchKey}`;
+            const currentContainer = rowsByIdentity.get(containerKey);
+            rowsByIdentity.set(containerKey, currentContainer ? {
+                table: eventContainer.table,
+                row: mergePatchRows(currentContainer.row, eventContainer.row),
+                matchKey: eventContainer.matchKey,
+                relocation: currentContainer.relocation,
+            } : eventContainer);
         }
         // 事件状态由插件生成稳定事实，永远最后提交，确保已结束事件不会被后续对象模块重新判为 active。
         const eventId = activeEventMatch(event.eventName, activeFacts)

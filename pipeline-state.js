@@ -370,7 +370,7 @@ function splitStateSource(text, limit) {
     return chunks.length ? chunks : [''];
 }
 function minimalStateChunkPrompt(playerText, assistantChunk, index, total) {
-    return `【玩家输入】\n${playerText || '（空）'}\n\n【本轮正文分段 ${index + 1}/${total}】\n${assistantChunk}\n\n只提取这一分段明确建立的变化。只返回 <MA_TURN> 与 <MA_EVENT> 自然事实模块。每个事件必须有一条 <MA_CORE> 动作骨架；对象模块第一行写对象名，后续只写该对象自身的一句结果。禁止等号、键值字段、重复复述和内部字段键。`;
+    return `【玩家输入】\n${playerText || '（空）'}\n\n【本轮正文分段 ${index + 1}/${total}】\n${assistantChunk}\n\n只提取这一分段点名并明确建立的变化。只返回 <MA_TURN> 与按需出现的 <MA_EVENT>。对象模块第一行写对象名，后续直接写该对象的变化，不重复对象名；正文未提就不生成，不补齐类型。<MA_CORE> 可省略，只用于无法归给单一对象且不与对象结果重叠的过程。`;
 }
 function retryableStateTransportError(error) {
     return /(504|502|503|gateway|timeout|timed out|超时|网关|no message generated|返回为空|响应未完成|upstream)/i.test(toErrorMessage(error));
@@ -383,7 +383,7 @@ function repairableStateParseError(error) {
 function compactStateRepairSystemPrompt() {
     return `你是固定文本整理器，不分析剧情、不补充事实。把输入中已经写出的内容整理成镜渊自然事实模块。
 只允许 <MA_TURN> 和 <MA_EVENT>。删除块外说明、JSON 外壳、代码围栏、等号键值和思考文字。
-<MA_EVENT> 第一行是事件名，第二行只能是“进行中”或“已结束”；必须保留唯一 <MA_CORE>。对象模块第一行写对象名，后续只写该对象自身的一到两句具体结果。不同模块不得重复整件事；原始返回没有表达的事实不得添加。`;
+<MA_EVENT> 第一行是事件名，第二行只能是“进行中”或“已结束”。对象模块第一行写对象名，后续直接写该对象的变化，不重复对象名。<MA_CORE> 可省略，仅保留原文已有、无法归给单一对象且不与对象结果重叠的过程。不同模块不得概括、包含或换词复述；原始返回没有表达的事实不得添加。`;
 }
 function compactStateRepairPrompt(raw) {
     return `【待整理的模型原始返回】\n${safeText(raw, 18000)}\n\n只做格式整理。原始返回没有表达的事实不得添加。`;

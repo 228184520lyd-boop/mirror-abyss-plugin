@@ -36,7 +36,8 @@ function compactRegistryDescription(active) {
             notes.push(`语义覆盖：${overrides.map((layer) => `${layer.label}：${layer.description}`).join('；')}`);
         if (title?.description && defaultTitle && title.description !== defaultTitle.description)
             notes.push(`对象命名：${title.description}`);
-        return `${index + 1}. ${table.name}｜类型：${kindLabel(table)}｜用途：${table.purpose}${notes.length ? `｜${notes.join('｜')}` : ''}`;
+        const purpose = table.isDefault ? '' : `｜用途：${table.purpose}`;
+        return `${index + 1}. ${table.name}｜类型：${kindLabel(table)}${purpose}${notes.length ? `｜${notes.join('｜')}` : ''}`;
     }).join('\n');
 }
 function kindLabel(table) {
@@ -92,78 +93,64 @@ export function stateSystemPrompt(registry, promptSettings = DEFAULT_STATE_PROMP
     const evidenceRules = modelVisibleRuleText(promptSettings?.evidenceRules, DEFAULT_STATE_PROMPTS.evidenceRules);
     const updateRules = modelVisibleRuleText(promptSettings?.updateRules, DEFAULT_STATE_PROMPTS.updateRules);
     void contentLimits;
-    return `“镜渊”无观点事实书记｜自然事实模块协议
+    return `“镜渊”事实书记｜稀疏自然事实
 
-职责：只提取本轮明确成立的短事实。禁止评论、解释动机、预测、补全、判断价值、决定删除或输出数据库字段。
-禁止 JSON、键值表单、Markdown 代码块、思考过程和块外说明。
+只记录本轮正文点名并明确成立的新增、改变与失效。
+以“对象—变化范围”为单位：归属看谁发生变化；同一事件可有多个对象变化；同一对象的同一变化只写一次。各条合读还原完整事实，彼此不概括、不包含、不换词复述。
 
-【事件容器】
-每条独立事件使用一个 <MA_EVENT>。第一行写稳定事件名，第二行只能写“进行中”或“已结束”。同一事件内的模块依次连读后才构成完整事件；任何模块都不得重复复述整件事。
+【输出】
+使用 <MA_EVENT> 组织同一事件。第一行事件名，第二行只能是“进行中”或“已结束”。
+对象模块第一行写对象稳定名称，后续直接写变化谓语，不重复对象名。只输出实际出现的模块，不补齐类型。
+<MA_CORE> 可省略；仅在存在无法归给单一对象、且不与对象结果重叠的过程事实时使用。
+无新增事实时只输出：<MA_TURN>无新增事实</MA_TURN>
 
+示例：
 <MA_EVENT>
-潜入库房
-进行中
-<MA_CORE>
-林默借助钩索登上屋顶，以烟雾弹遮挡守卫后打开库房侧门。
-</MA_CORE>
+短剑交接
+已结束
 <MA_CHARACTER_STATE>
-林默
-已经进入库房，暂未被守卫确认身份。
+莉娅
+失去短剑。
 </MA_CHARACTER_STATE>
-<MA_ITEM_STATE>
-烟雾弹
-已使用一枚，剩余两枚。
-</MA_ITEM_STATE>
-<MA_UNRESOLVED>
-守卫可能在烟雾散去后发现侧门被打开。
-</MA_UNRESOLVED>
+<MA_CHARACTER_STATE>
+凯厄斯
+获得短剑。
+</MA_CHARACTER_STATE>
 </MA_EVENT>
 
-【可用自然模块】
-事件：<MA_CORE>、<MA_EVENT_RESULT>、<MA_EVENT_STATE>、<MA_UNRESOLVED>
-角色：<MA_CHARACTER_IDENTITY>、<MA_CHARACTER_FACT>、<MA_CHARACTER_STATE>、<MA_CHARACTER_APPEARANCE>、<MA_CHARACTER_RELATION>、<MA_CHARACTER_ABILITY>
-物品：<MA_ITEM_IDENTITY>、<MA_ITEM_FACT>、<MA_ITEM_STATE>
-场景：<MA_SCENE_IDENTITY>、<MA_SCENE_FACT>、<MA_SCENE_STATE>
-地点：<MA_REGION_IDENTITY>、<MA_REGION_FACT>、<MA_REGION_STATE>
-全局：<MA_GLOBAL_IDENTITY>、<MA_GLOBAL_FACT>、<MA_GLOBAL_STATE>
-基础设定：<MA_FOUNDATION_IDENTITY>、<MA_FOUNDATION_FACT>、<MA_FOUNDATION_STATE>
-时空：<MA_SPACETIME_STATE>
-自定义表：<MA_CUSTOM>，依次四行写“表格显示名、对象名、语义层显示名、具体事实”。
+可用标签：
+事件 <MA_CORE> <MA_EVENT_RESULT> <MA_EVENT_STATE> <MA_UNRESOLVED>
+角色 <MA_CHARACTER_IDENTITY> <MA_CHARACTER_FACT> <MA_CHARACTER_STATE> <MA_CHARACTER_APPEARANCE> <MA_CHARACTER_RELATION> <MA_CHARACTER_ABILITY>
+物品 <MA_ITEM_IDENTITY> <MA_ITEM_FACT> <MA_ITEM_STATE>
+场景 <MA_SCENE_IDENTITY> <MA_SCENE_FACT> <MA_SCENE_STATE>
+地点 <MA_REGION_IDENTITY> <MA_REGION_FACT> <MA_REGION_STATE>
+全局 <MA_GLOBAL_IDENTITY> <MA_GLOBAL_FACT> <MA_GLOBAL_STATE>
+基础设定 <MA_FOUNDATION_IDENTITY> <MA_FOUNDATION_FACT> <MA_FOUNDATION_STATE>
+时空 <MA_SPACETIME_STATE>
+自定义 <MA_CUSTOM>：表名、对象名、语义层、具体事实各一行。
 
-对象模块第一行必须是对象稳定名称，后续只写该对象自身的具体变化。事件模块直接写事实，不写对象名。
-
-【硬限制】
-1. 每个模块只写一个对象、一个角度、一个当前结果，通常一句，复杂时最多两句。
-2. 核心事实只写一次最短动作骨架；角色不重复动作骨架，只写角色自身结果；每个道具分别写归属、数量、位置、完整性或可用性变化；场景只写局面变化。
-3. 没有独立变化的对象不输出模块。临时动作、服装描写、普通反应和背景板不建档。
-4. “身份”模块只用于正文明确改变对象本质或基础定义。临时伪装、变装、幻术写外观；短期伤势或阶段变化写状态。
-5. 基础定义被明确改变时，事件核心必须写清改变事实。例如“林默完成手术，由男性转变为女性”；身份模块只写新的当前定义“女性”。
-6. 事件有未决事项必须保持“进行中”；只有结果形成且没有未决事项时才写“已结束”。
-7. 不写近期经历、历史事实、承接记录、生命周期、稳定 ID、事件 ID 或事实 ID；这些由插件分发、总结和结算。
-8. 不使用“字段、变化层、动作、内容”等表单词，不输出等号。
-9. 无事实变化时只输出 <MA_TURN>，正文直接写一句最短变化概括；有事件时也可以先输出一个 <MA_TURN>。
-10. 当前启用表：${names || '（无）'}。
-
-【对象建档边界】
-允许建档：
-${admissionRules}
-
-默认排除：
-${exclusionRules}
-
-对象分流：
+【锚点】
 ${routingRules}
 
-证据边界：
+【准入】
+${admissionRules}
+
+【证据】
 ${evidenceRules}
 
-更新与冲突：
+【更新】
 ${updateRules}
 
-【启用对象表】
-${compactRegistryDescription(active) || '当前没有启用表格；不要输出事件模块。'}
+【边界】
+${exclusionRules}
+不输出 JSON、键值、等号、代码块、判断过程、数据库字段、稳定 ID、事件 ID、事实 ID、删除或结算建议。
+事件有未决事项时写“进行中”；结果已形成且没有未决事项时写“已结束”。
+当前启用表：${names || '（无）'}。
 
-输出前只检查：事实是否明确、模块是否短、各模块是否互不重复、标签是否闭合。`;
+【启用对象表】
+${compactRegistryDescription(active) || '当前没有启用表格。'}
+
+输出前只检查：正文是否点名并证实、归属是否唯一、各条是否互不重叠、标签是否闭合。`;
 }
 function normalizeSearchText(value) {
     return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
@@ -453,7 +440,7 @@ export function stateUserPrompt(previous, playerText, assistantText, registry, i
 
 【本轮正文】\n${assistantText}
 
-只返回 <MA_TURN> 和一个或多个 <MA_EVENT> 自然模块。每个事件第一行是事件名，第二行是“进行中”或“已结束”；对象模块第一行是对象名，后续是一到两句具体事实。不要使用等号、键值字段、JSON、内部英文键或旧协议。核心事实只写一次，各对象模块只写自身变化。${repair ? '\n上一次返回格式不完整：只补齐自然模块标签与事件前两行，不得改写或新增原文事实。' : ''}`;
+只返回 <MA_TURN> 与按需出现的 <MA_EVENT>。对象模块第一行写对象名，后续直接写该对象的变化，不重复对象名。正文未点名或未明确证实就不生成；不补齐类型。<MA_CORE> 仅在存在无法归给单一对象且不与对象结果重叠的过程时使用，可省略。不同对象的不同变化可分别记录；同一对象的同一变化只写一次。${repair ? '\n上一次返回格式不完整：只整理标签与事件前两行，不改写、不补充事实。' : ''}`;
 }
 export function stateTextProtocolDescription(registry) {
     const active = tables(registry);

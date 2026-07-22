@@ -131,17 +131,19 @@ export function getSettings() {
         }
         settings.migration.sceneTableV33 = true;
     }
-    if (!settings.migration.entryRoutingV33) {
-        const appendRule = (current, rule, marker) => current.includes(marker)
-            ? current
-            : `${current.trim()}${current.trim() ? '\n' : ''}${rule}`;
-        settings.statePrompts.admissionRules = appendRule(settings.statePrompts.admissionRules, '物品只要其身份可区分，且所有权、位置、数量、完整性、可用性、隐藏状态、用途或后续能否取得会影响下一轮，就应建档；不要求已经多次出现。', '后续能否取得');
-        settings.statePrompts.admissionRules = appendRule(settings.statePrompts.admissionRules, '当前实际发生的叙事场景必须建立或更新场景条目；场景条目记录参与对象、核心局面、直接限制与未决承接，不等同于地点本身。', '不等同于地点本身');
-        settings.statePrompts.routingRules = appendRule(settings.statePrompts.routingRules, 'scenes（场景）：一次真实发生的叙事场景或局面切片；场景结束后改为已结束/已离开，不删除。', 'scenes（场景）');
-        settings.statePrompts.routingRules = appendRule(settings.statePrompts.routingRules, '分类时先判断对象本质：具体个体才是角色；组织、阵营、政权、机构、群体格局和制度执行即使具有名称、目标、关系或行动，也归入全局变化。', '具体个体才是角色');
-        settings.statePrompts.updateRules = appendRule(settings.statePrompts.updateRules, '提交前逐项复查正文中的可区分物品，凡所有权、位置、数量、完整性、可用性、隐藏状态、用途或后续可取得性被建立或改变，均需输出独立物品条目。', '逐项复查正文中的可区分物品');
-        settings.statePrompts.updateRules = appendRule(settings.statePrompts.updateRules, '提交前确认当前真实场景有场景条目；发生场景切换时，新场景设为当前，旧场景更新为已结束或已离开。', '当前真实场景有场景条目');
+    if (!settings.migration.entryRoutingV33)
         settings.migration.entryRoutingV33 = true;
+    if (!settings.migration.factOwnershipV40) {
+        // 只迁移未经编辑的 1.3.14 标准提示词；玩家白盒自定义必须原样保留。
+        if (hashText(JSON.stringify(settings.statePrompts)) === 'h1aadq')
+            settings.statePrompts = structuredClone(DEFAULT_SETTINGS.statePrompts);
+        settings.migration.factOwnershipV40 = true;
+    }
+    if (!settings.migration.factOwnershipRegistryV40) {
+        // 只替换未经编辑的 1.3.14 默认表定义；自定义用途、表头和表格必须保留。
+        if (hashText(JSON.stringify(normalizeTableRegistry(settings.tableRegistry))) === '1d6o99v')
+            settings.tableRegistry = restoreDefaultTableRegistry();
+        settings.migration.factOwnershipRegistryV40 = true;
     }
     for (const table of settings.tableRegistry) {
         const fallback = DEFAULT_CONTENT_LIMITS.tables[table.key] ?? DEFAULT_CONTENT_LIMITS.tables.customObjects;

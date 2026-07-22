@@ -1,8 +1,10 @@
-Mirror Abyss 1.3.14 GitHub 网页平铺版
+Mirror Abyss 1.3.15 GitHub 网页上传版
 
-此包专门用于手机或 GitHub 网页上传。所有运行文件都在根目录，不依赖子目录。
-1. 解压本包。
-2. 在 GitHub 仓库根目录选择 Add file -> Upload files。
-3. 选择解压后的全部文件上传，并允许覆盖 index.js、manifest.json、style.css 等同名文件。
-4. 原仓库中误上传的 app.js、context.js、pipeline.js 等旧平铺文件可稍后删除；它们不会再被新版入口引用。
-5. 在 SillyTavern 中删除旧安装后重新安装仓库，或执行更新并强制刷新。
+1. 解压本文件。
+2. 打开 GitHub 仓库根目录。
+3. 选择 Add file → Upload files。
+4. 一次上传解压后的全部文件并覆盖同名文件。
+5. 该包已经把运行文件平铺并重写导入路径；不要再建立 bootstrap、core、domain 等子目录。
+6. 提交后确认仓库根目录存在 manifest.json、index.js、bootstrap-app.js、domain-state-text.js。
+
+此包用于 GitHub 网页上传，不用于在本地还原源代码目录。SillyTavern 可从该仓库安装。
