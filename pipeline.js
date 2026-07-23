@@ -13,12 +13,15 @@ import { beginHistoryRecovery, chooseHistoryRecalculationStart as chooseHistoryW
 import { invalidateFactsAfterMessages, mergeInternalFacts, normalizeInternalFacts } from '../domain/internal-facts.js';
 import { applyAuditFailureAction, runAudit } from './audit.js';
 import { runRevisionFlow } from './revision.js';
-import { applyLorebookMaintenance as applyLorebookMaintenanceForArtifact, clearCurrentChatLorebookEntries, pauseCurrentChatLorebookEntries, previewLorebookMaintenance as previewLorebookMaintenanceForArtifact, syncLorebook, } from './lorebook.js';
+import { applyLorebookMaintenance as applyLorebookMaintenanceForArtifact, clearCurrentChatLorebookEntries, pauseCurrentChatLorebookEntries, previewLorebookMaintenance as previewLorebookMaintenanceForArtifact, restoreSuppressedLorebookEntry as restoreSuppressedLorebookEntryForArtifact, syncLorebook, } from './lorebook.js';
 import { hasEligibleLargeSummary, hasEligibleSmallSummary, maybeRunSummaries, rebuildEligibleSummaries, runSummaryStage } from './summary.js';
 import { runStateExtraction } from './state.js';
 import { TaskBlockedError, TaskSkippedError, taskQueue } from './task-queue.js';
-import { getChatState, putArtifact, putChatState } from '../storage/repository.js';
+import { emptyChatState, getChatState, putArtifact, putChatState } from '../storage/repository.js';
 import { resolveHostControl } from '../domain/host-control.js';
+import { createPlayerRecordingBoundary, messageInsideRecordingBoundary, recordingStartIndex } from '../domain/recording-boundary.js';
+import { advanceRuntimeV2, markRuntimeJobDone, markRuntimeJobFailed, markRuntimeJobRunning } from '../runtime-v2/orchestrator.js';
+import { normalizeRuntimeV2 } from '../runtime-v2/state.js';
 const listeners = new Set();
 const scheduledMessageTimers = new Map();
 function removeSourceListener(source, event, handler) {
@@ -82,9 +85,29 @@ export async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAG
     }
     const chatState = await getChatState(chatKey);
     const interruptedRecovery = interruptHistoryRecovery(chatState, reason);
-    if (interruptedRecovery)
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    let runtimeChanged = false;
+    for (const job of runtime.outbox) {
+        if (job.status !== 'running')
+            continue;
+        job.status = 'pending';
+        job.startedAt = '';
+        job.finishedAt = '';
+        job.error = reason;
+        runtimeChanged = true;
+    }
+    if (runtime.machines.publication.status === 'writing') {
+        runtime.machines.publication.status = 'queued';
+        runtime.machines.publication.lastError = reason;
+        runtimeChanged = true;
+    }
+    if (runtimeChanged) {
+        runtime.updatedAt = nowIso();
+        chatState.runtimeV2 = runtime;
+    }
+    if (interruptedRecovery || runtimeChanged)
         await putChatState(chatState);
-    return { artifacts: changedArtifacts, historyRecovery: interruptedRecovery };
+    return { artifacts: changedArtifacts, historyRecovery: interruptedRecovery, runtimeOutboxRecovered: runtimeChanged };
 }
 export function subscribePipeline(listener) {
     listeners.add(listener);
@@ -225,6 +248,27 @@ async function commitCoreState(artifact, resolveLatestHistoryInvalidation = fals
     if (resolveLatestHistoryInvalidation && isNarrativeTail(artifact.messageIndex)) {
         resolveLatestHistoryLock(chatState, artifact.messageIndex);
     }
+    const settings = getSettings();
+    const runtime = advanceRuntimeV2({
+        chatState,
+        artifact,
+        settings,
+        smallEligible: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(
+            chatState.internalFacts ?? [],
+            settings.smallSummaryTurns,
+            artifact.sceneBoundary?.eventIds ?? [],
+        )),
+        largeEligible: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(
+            chatState.smallSummaries ?? [],
+            chatState.largeSummaries ?? [],
+            settings.largeSummaryCount,
+        )),
+    });
+    artifact.runtimeV2 = {
+        revision: runtime.runtime.revision,
+        plan: runtime.plan,
+        narrativeContext: structuredClone(runtime.runtime.narrativeContext),
+    };
     chatState.updatedAt = nowIso();
     assertArtifactCommitCurrent(artifact);
     await putChatState(chatState);
@@ -274,13 +318,11 @@ function invalidateDerivedForValidMessages(chatState, validMessageIds) {
 }
 async function prepareDerivedStageStatuses(artifact, chatState) {
     const settings = getSettings();
+    const summaryKind = artifact.runtimeV2?.plan?.summaryKind || '';
     const plan = {
-        small: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(
-            chatState.internalFacts ?? [],
-            settings.smallSummaryTurns,
-            artifact.sceneBoundary?.eventIds ?? [],
-        )),
-        large: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(chatState.smallSummaries ?? [], chatState.largeSummaries ?? [], settings.largeSummaryCount)),
+        small: summaryKind === 'small',
+        large: summaryKind === 'large',
+        summaryKind,
     };
     markStage(artifact, 'summary', plan.small || plan.large ? 'queued' : 'skipped');
     const historyWorkflow = readHistoryWorkflow(chatState);
@@ -344,7 +386,6 @@ function cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision) {
  * 派生链按小总结 → 大总结 → 世界书单向排队。每一段独立失败，不回滚核心状态。
  */
 function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
-    const settings = getSettings();
     const chatKey = artifact.chatKey;
     const messageKey = artifact.messageKey;
     const runWithGuards = async (guard, work) => {
@@ -363,16 +404,32 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
             unbindArtifactHistoryRevision(artifact, historyRevision);
         }
     };
+    const updateRuntime = async (type, status, error = '') => {
+        const state = await getChatState(chatKey);
+        if (status === 'running')
+            markRuntimeJobRunning(state, type, messageKey);
+        else if (status === 'done')
+            markRuntimeJobDone(state, type, artifact);
+        else
+            markRuntimeJobFailed(state, type, messageKey, error);
+        await putChatState(state);
+    };
     const queueSync = () => {
         if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled)
             return;
         if (!resolveHostControl(getSettings()).lorebook)
             return;
-        const key = `${PIPELINE_VERSION}:derived:sync:${chatKey}:${messageKey}`;
+        const key = `${PIPELINE_VERSION}:runtime-v2:sync:${chatKey}:${messageKey}`;
         void taskQueue.run(key, `后台同步第 ${index + 1} 条正文世界书`, 'sync', async (guard) => {
             await runWithGuards(guard, async () => {
+                await updateRuntime('lorebook-sync', 'running');
                 try {
                     await syncLorebook(artifact);
+                    await updateRuntime('lorebook-sync', 'done');
+                }
+                catch (error) {
+                    await updateRuntime('lorebook-sync', 'failed', toErrorMessage(error));
+                    throw error;
                 }
                 finally {
                     await saveArtifactToMessage(index, artifact);
@@ -381,7 +438,7 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
         }, {
             priority: 40,
             chatKey,
-            triggerSource: 'derived-sync',
+            triggerSource: 'runtime-v2-sync',
             messageKey,
             messageFingerprint: artifact.sourceFingerprint,
             historyRevisionAtEnqueue: historyRevision,
@@ -389,96 +446,89 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
         }).catch((error) => {
             if (derivedTaskError(error))
                 return;
-            console.warn('[MirrorAbyss] derived lorebook sync failed', error);
-            toast('warning', `核心状态已保存，但世界书同步失败：${toErrorMessage(error)}`);
+            console.warn('[MirrorAbyss] runtime-v2 lorebook sync failed', error);
+            toast('warning', `核心状态已保存，但世界书投影失败：${toErrorMessage(error)}`);
         });
     };
-    const queueLarge = (shouldRun) => {
-        if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled)
-            return;
-        if (!getSettings().autoLargeSummary || !shouldRun) {
-            queueSync();
-            return;
-        }
-        const key = `${PIPELINE_VERSION}:derived:large:${chatKey}:${messageKey}`;
-        void taskQueue.run(key, `后台生成第 ${index + 1} 条正文大总结`, 'largeSummary', async (guard) => {
-            await runWithGuards(guard, async () => {
-                try {
-                    await runSummaryStage(artifact, 'large');
-                }
-                finally {
-                    await saveArtifactToMessage(index, artifact);
-                }
-            });
-        }, {
-            priority: 10,
-            chatKey,
-            triggerSource: 'derived-large-summary',
-            messageKey,
-            messageFingerprint: artifact.sourceFingerprint,
-            historyRevisionAtEnqueue: historyRevision,
-            automatic: true,
-        }).then(queueSync, (error) => {
-            if (derivedTaskError(error)) {
-                if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision))
-                    queueSync();
-                return;
-            }
-            console.warn('[MirrorAbyss] derived large summary failed', error);
-            toast('warning', `核心状态已保存，但大总结失败：${toErrorMessage(error)}`);
-            if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled)
-                queueSync();
-        });
-    };
-    const queueLargeFromCurrentState = () => {
-        void (async () => {
-            if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled)
-                return;
-            const currentSettings = getSettings();
-            const currentState = await getChatState(chatKey);
-            const eligible = Boolean(currentSettings.autoLargeSummary
-                && hasEligibleLargeSummary(currentState.smallSummaries ?? [], currentState.largeSummaries ?? [], currentSettings.largeSummaryCount));
-            queueLarge(eligible);
-        })().catch((error) => {
-            console.warn('[MirrorAbyss] failed to recheck large-summary eligibility', error);
-            if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled)
-                queueSync();
-        });
-    };
-    if (!settings.autoSmallSummary || !summaryPlan.small) {
-        queueLarge(summaryPlan.large);
+    const kind = summaryPlan.summaryKind || (summaryPlan.small ? 'small' : summaryPlan.large ? 'large' : '');
+    if (!kind) {
+        queueSync();
         return;
     }
-    const key = `${PIPELINE_VERSION}:derived:small:${chatKey}:${messageKey}`;
-    void taskQueue.run(key, `后台生成第 ${index + 1} 条正文小总结`, 'smallSummary', async (guard) => {
+    const jobType = `${kind}-summary`;
+    const key = `${PIPELINE_VERSION}:runtime-v2:${kind}:${chatKey}:${messageKey}`;
+    void taskQueue.run(key, `后台生成第 ${index + 1} 条正文${kind === 'small' ? '小' : '大'}总结`, kind === 'small' ? 'smallSummary' : 'largeSummary', async (guard) => {
         await runWithGuards(guard, async () => {
+            await updateRuntime(jobType, 'running');
             try {
-                await runSummaryStage(artifact, 'small');
+                await runSummaryStage(artifact, kind);
+                await updateRuntime(jobType, 'done');
+            }
+            catch (error) {
+                await updateRuntime(jobType, 'failed', toErrorMessage(error));
+                throw error;
             }
             finally {
                 await saveArtifactToMessage(index, artifact);
             }
         });
     }, {
-        priority: 30,
+        priority: kind === 'small' ? 30 : 20,
         chatKey,
-        triggerSource: 'derived-small-summary',
+        triggerSource: `runtime-v2-${kind}-summary`,
         messageKey,
         messageFingerprint: artifact.sourceFingerprint,
         historyRevisionAtEnqueue: historyRevision,
         automatic: true,
-    }).then(queueLargeFromCurrentState, (error) => {
+    }).then(queueSync, (error) => {
         if (derivedTaskError(error)) {
             if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision))
                 queueSync();
             return;
         }
-        console.warn('[MirrorAbyss] derived small summary failed', error);
-        toast('warning', `核心状态已保存，但小总结失败：${toErrorMessage(error)}`);
+        console.warn(`[MirrorAbyss] runtime-v2 ${kind} summary failed`, error);
+        toast('warning', `核心状态已保存，但${kind === 'small' ? '小' : '大'}总结失败：${toErrorMessage(error)}`);
         if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled)
-            queueLargeFromCurrentState();
+            queueSync();
     });
 }
+
+export async function resumeRuntimeOutbox() {
+    if (!getSettings().enabled)
+        return { resumed: false, reason: 'disabled' };
+    const chatKey = currentChatKey();
+    const state = await getChatState(chatKey);
+    const runtime = normalizeRuntimeV2(state.runtimeV2);
+    const pending = runtime.outbox.filter((job) => job.status === 'pending');
+    if (!pending.length)
+        return { resumed: false, reason: 'empty' };
+    const chat = getChat();
+    const pendingSummary = [...pending].reverse().find((job) => ['small-summary', 'large-summary'].includes(job.type));
+    if (pendingSummary) {
+        const index = chat.findIndex((message) => getAttachedArtifact(message)?.messageKey === pendingSummary.turnKey);
+        const artifact = index >= 0 ? getAttachedArtifact(chat[index]) : null;
+        if (artifact?.snapshot && artifact.stages?.state?.status === 'success') {
+            queueAutomaticDerived(index, artifact, currentHistoryRevision(chatKey), {
+                small: pendingSummary.type === 'small-summary',
+                large: pendingSummary.type === 'large-summary',
+                summaryKind: pendingSummary.type === 'small-summary' ? 'small' : 'large',
+            });
+            return { resumed: true, kind: pendingSummary.type, turnKey: pendingSummary.turnKey };
+        }
+    }
+    const syncJob = [...pending].reverse().find((job) => job.type === 'lorebook-sync');
+    if (syncJob) {
+        const latest = [...chat].map((message, index) => ({ index, artifact: getAttachedArtifact(message) }))
+            .reverse()
+            .find((item) => item.artifact?.snapshot && item.artifact?.stages?.state?.status === 'success');
+        if (latest) {
+            queueAutomaticDerived(latest.index, latest.artifact, currentHistoryRevision(chatKey), { small: false, large: false, summaryKind: '' });
+            return { resumed: true, kind: 'lorebook-sync', turnKey: latest.artifact.messageKey };
+        }
+    }
+    return { resumed: false, reason: 'artifact-missing' };
+}
+
 function isAutomaticLatestHistoryRecovery(index, chatState) {
     const workflow = readHistoryWorkflow(chatState);
     return Boolean(workflow.invalidation
@@ -501,6 +551,14 @@ export async function processMessage(index, force = false, options = {}) {
     const scheduledChatKey = currentChatKey();
     const scheduledHistoryRevision = currentHistoryRevision(scheduledChatKey);
     const enqueueState = await getChatState(scheduledChatKey);
+    if (!messageInsideRecordingBoundary(enqueueState, index)) {
+        if (options.automatic)
+            return null;
+        const startIndex = recordingStartIndex(enqueueState);
+        throw new Error(startIndex === undefined
+            ? '尚未设置游玩记录起点，请先在镜渊总览点击“开始游玩记录”'
+            : `第 ${index + 1} 条消息位于游玩记录起点之前，不会进入镜渊记忆`);
+    }
     const enqueueWorkflow = readHistoryWorkflow(enqueueState);
     if (enqueueWorkflow.running && !options.historyRecovery && !options.automatic) {
         const detail = `历史恢复正在执行（${enqueueWorkflow.phase}），本次手动任务未入队`;
@@ -671,6 +729,8 @@ export function scheduleMessage(payload, force = false, delay = 0, triggerSource
             if (messageIdentity(index) !== scheduledIdentity || messageFingerprint(index) !== scheduledFingerprint)
                 return;
             const state = await getChatState(scheduledChatKey);
+            if (!messageInsideRecordingBoundary(state, index))
+                return;
             const workflow = readHistoryWorkflow(state);
             if (workflow.running)
                 return;
@@ -737,12 +797,23 @@ export async function invalidateHistory(payload, reason) {
         console.warn('[MirrorAbyss] ignored unlocatable history event without artifact mismatch', reason, payload);
         return;
     }
-    invalidateHistoryRevision(chatKey);
-    abortActiveBusinessRequests();
-    taskQueue.cancelPendingByChatKey(chatKey, '历史消息已变化，旧排队任务已取消');
     const state = await getChatState(chatKey);
     if (currentChatKey() !== chatKey)
         throw new Error('聊天已切换，历史变化不再写入');
+    const boundaryStart = recordingStartIndex(state);
+    if (boundaryStart === undefined)
+        return;
+    if (detectedIndex !== null && detectedIndex < boundaryStart) {
+        // 起点之前的内容不属于游戏记录。删除会让后续数组序号整体左移，因此只校正边界，不触发历史重建。
+        if (reason === 'deleted') {
+            state.recordingBoundary = { ...state.recordingBoundary, startIndex: Math.max(0, boundaryStart - 1) };
+            await putChatState(state);
+        }
+        return;
+    }
+    invalidateHistoryRevision(chatKey);
+    abortActiveBusinessRequests();
+    taskQueue.cancelPendingByChatKey(chatKey, '历史消息已变化，旧排队任务已取消');
     if (detectedIndex === null) {
         invalidateHistoryWorkflow(state, { reason });
         await putChatState(state);
@@ -785,9 +856,12 @@ export async function recalculateInvalidatedHistory() {
     cancelScheduledMessagesForChat(chatKey);
     const state = await getChatState(chatKey);
     const workflow = readHistoryWorkflow(state);
-    const startIndex = workflow.startIndex;
+    const boundaryStart = recordingStartIndex(state);
+    const startIndex = workflow.startIndex === undefined || boundaryStart === undefined
+        ? workflow.startIndex
+        : Math.max(workflow.startIndex, boundaryStart);
     if (startIndex === undefined || !workflow.invalidation)
-        throw new Error('尚未选择历史重算起点');
+        throw new Error(boundaryStart === undefined ? '尚未设置游玩记录起点' : '尚未选择历史重算起点');
     const endIndex = getChat().length;
     const processableIndexes = Array.from({ length: Math.max(0, endIndex - startIndex) }, (_, offset) => startIndex + offset)
         .filter((index) => isProcessableAssistantMessage(getMessage(index)));
@@ -959,7 +1033,10 @@ export async function chooseHistoryRecalculationStart(startIndex) {
         throw new Error('聊天已切换，不再修改历史重算范围');
     if (!readHistoryWorkflow(state).invalidation)
         throw new Error('当前没有待处理的历史失效');
-    const index = Math.max(0, Math.min(Math.trunc(startIndex), Math.max(0, getChat().length - 1)));
+    const boundaryStart = recordingStartIndex(state);
+    if (boundaryStart === undefined)
+        throw new Error('尚未设置游玩记录起点');
+    const index = Math.max(boundaryStart, Math.min(Math.trunc(startIndex), Math.max(boundaryStart, getChat().length - 1)));
     chooseHistoryWorkflowStart(state, index);
     const validPrefixKeys = new Set();
     for (let i = 0; i < index; i += 1) {
@@ -1210,6 +1287,46 @@ export async function forceSummary(requestedIndex, kind) {
 export function getArtifactAt(index) {
     return getAttachedArtifact(getMessage(index));
 }
+export async function beginPlayRecording() {
+    const sourceChatKey = currentChatKey();
+    taskQueue.setAccepting(false);
+    abortActiveRequests();
+    taskQueue.resetRuntime();
+    try {
+        await taskQueue.whenIdle();
+        if (currentChatKey() !== sourceChatKey)
+            throw new Error('聊天已切换，已停止设置游玩记录起点');
+        const lorebookEntries = await clearCurrentChatLorebookEntries(sourceChatKey);
+        let clearedArtifacts = 0;
+        for (const message of getChat()) {
+            if (message?.extra?.[MODULE_NAME]) {
+                delete message.extra[MODULE_NAME];
+                clearedArtifacts += 1;
+            }
+            if (message?.extra?.[LEGACY_MODULE_NAME])
+                delete message.extra[LEGACY_MODULE_NAME];
+        }
+        const state = emptyChatState(sourceChatKey);
+        state.recordingBoundary = createPlayerRecordingBoundary(getChat().length);
+        await persistChatFor(sourceChatKey);
+        await putChatState(state);
+        notifyFrom(0);
+        return { boundary: state.recordingBoundary, clearedArtifacts, lorebookEntries };
+    }
+    finally {
+        taskQueue.setAccepting(getSettings().enabled);
+    }
+}
+
+export async function restoreSuppressedLorebookEntry(key) {
+    if (!getSettings().enabled)
+        throw new Error('镜渊已关闭，请先启用');
+    const latest = latestSnapshotArtifact();
+    if (!latest)
+        throw new Error('尚无可同步的状态');
+    return restoreSuppressedLorebookEntryForArtifact(latest.artifact, key);
+}
+
 export async function resetCurrentGame() {
     const sourceChatKey = currentChatKey();
     taskQueue.setAccepting(false);

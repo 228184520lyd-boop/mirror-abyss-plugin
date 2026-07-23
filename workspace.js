@@ -14,7 +14,7 @@ import { visibleStateRows } from "../domain/entry-lifecycle.js";
 import { createCustomTable, customFieldText, customizedFieldLabel, editableHeaderText, enabledTables, moveTableDefinition, normalizeTableRegistry, removeTableDefinition, restoreDefaultTableRegistry, tableColumnHeaders, tableByKey, updateTableDefinition, updateTableFields, updateTableHeaders, } from "../domain/table-registry.js";
 import { buildRelationshipGraph, enrichRelationshipGraphWithEventProfiles, } from "../domain/graph.js";
 import { listSupportedConnectionProfiles, testConnection } from "../llm/generator.js";
-import { applyLorebookMaintenance, forceSummary, getArtifactAt, latestArtifact, latestSnapshotArtifact, previewLorebookMaintenance, processMessage, recalculateInvalidatedHistory, resetCurrentGame, chooseHistoryRecalculationStart, retryStage, subscribePipeline, } from "../pipeline/pipeline.js";
+import { applyLorebookMaintenance, beginPlayRecording, forceSummary, getArtifactAt, latestArtifact, latestSnapshotArtifact, previewLorebookMaintenance, processMessage, recalculateInvalidatedHistory, resetCurrentGame, restoreSuppressedLorebookEntry, chooseHistoryRecalculationStart, retryStage, subscribePipeline, } from "../pipeline/pipeline.js";
 import { taskQueue } from "../pipeline/task-queue.js";
 import { pendingSmallSummaries } from "../pipeline/summary.js";
 import { largeSummarySystemPrompt, smallSummarySystemPrompt } from "../prompts/summary.js";
@@ -26,6 +26,8 @@ import { diagnosticReport, runDiagnostics } from "./diagnostics.js";
 import { renderAllMessagePanels } from "./message-panel.js";
 import { abortActiveRequests, setRequestAcceptance } from "../core/requests.js";
 import { readHistoryWorkflow } from "../workflow/history-workflow.js";
+import { recordingStartIndex } from "../domain/recording-boundary.js";
+import { suppressedLorebookEntries } from "../domain/publication-control.js";
 let selectedMessageIndex = null;
 let rendering = false;
 let renderAgain = false;
@@ -428,6 +430,7 @@ function setupReadinessHtml(artifact, chatState) {
     const checks = [
         { ok: settings.enabled, label: "插件已启用", action: "settings" },
         { ok: settings.autoState, label: "自动整理已开启", action: "settings" },
+        { ok: recordingStartIndex(chatState) !== undefined, label: "游玩记录起点已设置", action: "overview" },
         { ok: enabledCount > 0, label: `${enabledCount} 个记忆视图可用`, action: "tableManager" },
         { ok: promptSettingsAreStandard(), label: "标准规则未被改写", action: "tableManager" },
         { ok: Boolean(artifact?.snapshot), label: "当前聊天已有记忆快照", action: "tables" },
@@ -441,11 +444,43 @@ function setupReadinessHtml(artifact, chatState) {
     <div class="ma11-readiness-grid">${checks.map((item) => `<button class="${item.ok ? "ready" : "pending"}" data-ma11-tab="${item.action}"><i class="fa-solid ${item.ok ? "fa-check" : "fa-arrow-right"}" aria-hidden="true"></i><span>${escapeHtml(item.label)}</span></button>`).join("")}</div>
   </section>`;
 }
+function runtimeV2OverviewHtml(chatState) {
+    const runtime = chatState?.runtimeV2;
+    if (!runtime)
+        return '';
+    const sceneMachine = runtime.machines?.scene ?? {};
+    const current = sceneMachine.instances?.[sceneMachine.currentInstanceId];
+    const summary = runtime.machines?.summary ?? {};
+    const publication = runtime.machines?.publication ?? {};
+    const pendingJobs = (runtime.outbox ?? []).filter((job) => ['pending', 'running', 'failed'].includes(job.status));
+    const summaryLabel = summary.pendingKind === 'small'
+        ? '小总结待执行'
+        : summary.pendingKind === 'large'
+            ? '大总结待执行'
+            : '无总结任务';
+    const sceneLabel = current
+        ? [current.location, current.stage || current.title].filter(Boolean).join('｜')
+        : '没有活动场景实例';
+    return `<section class="ma11-card">
+      <header><div><b>Runtime V2 权威状态</b><span>修订 ${escapeHtml(String(runtime.revision ?? 0))}</span></div></header>
+      <dl class="ma11-meta">
+        <dt>游戏时间</dt><dd>${escapeHtml(runtime.machines?.clock?.display || '未发生明确时间推进')}</dd>
+        <dt>当前场景实例</dt><dd>${escapeHtml(sceneLabel)}</dd>
+        <dt>当前目标</dt><dd>${escapeHtml(current?.goal || '未明确')}</dd>
+        <dt>总结调度</dt><dd>${escapeHtml(summaryLabel)}</dd>
+        <dt>世界书投影</dt><dd>${escapeHtml(`${publication.status || 'clean'}｜期望 ${publication.desiredRevision ?? 0} / 已确认 ${publication.confirmedRevision ?? 0}`)}</dd>
+        <dt>未完成事务</dt><dd>${escapeHtml(String(pendingJobs.length))}</dd>
+      </dl>
+      ${publication.lastError ? `<div class="ma11-error-box">${escapeHtml(publication.lastError)}</div>` : ''}
+    </section>`;
+}
+
 async function overviewHtml(artifactInfo) {
     const enabled = getSettings().enabled;
     const artifact = artifactInfo?.artifact;
     const chatState = await getChatState(currentChatKey());
     const historyWorkflow = readHistoryWorkflow(chatState);
+    const playStart = recordingStartIndex(chatState);
     const rows = snapshotRowCount(artifact?.snapshot, getSettings().tableRegistry, true);
     const tasks = recentTasksHtml();
     const busy = workspacePipelineBusy(artifactInfo);
@@ -454,6 +489,11 @@ async function overviewHtml(artifactInfo) {
         ? `世界书 ${new Date(chatState.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
         : "世界书未同步";
     return `
+    <section class="ma11-card ma11-recording-card">
+      <header><div><b>游玩记录边界</b><span>${playStart === undefined ? "尚未开始" : `从第 ${playStart + 1} 条消息起`}</span></div></header>
+      <p>${playStart === undefined ? "起点之前的设定讨论、提示词、测试回复不会进入事实、总结或世界书。" : "镜渊只处理起点之后的正文；重设起点会清空当前聊天已有镜渊记忆和托管世界书条目。"}</p>
+      <div class="ma11-actions"><button data-ma11-action="start-play-recording" ${busy ? "disabled" : ""}>${playStart === undefined ? "从下一条消息开始记录" : "重新设置记录起点"}</button></div>
+    </section>
     ${historyRecoveryHtml(chatState, busy) || (historyWorkflow.invalidation ? (historyWorkflow.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>最新正文正在自动恢复</b><span>世界书暂缓同步</span></header><p>检测到最新正文发生编辑或换页。镜渊会复用仍有效的审核结果，并从第一个失效阶段继续。</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>较早历史需要重算</b><span>世界书同步已暂停</span></header><p>${historyWorkflow.startIndex === undefined ? "检测到历史删除，但无法自动判断删除位置。" : `第 ${historyWorkflow.startIndex + 1} 条消息发生了${historyWorkflow.invalidation.reason === "edited" ? "编辑" : historyWorkflow.invalidation.reason === "swiped" ? "换页" : "删除"}。`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${historyWorkflow.startIndex === undefined ? "选择起点并重算" : "继续重建"}</button></div></section>`) : "")}
     <section class="ma11-dashboard-status ${flow.tone}">
       <div class="ma11-dashboard-status-icon" aria-hidden="true"><i class="fa-solid ${flow.tone === "success" ? "fa-check" : flow.tone === "danger" ? "fa-triangle-exclamation" : flow.tone === "working" ? "fa-spinner" : "fa-circle"}"></i></div>
@@ -463,8 +503,9 @@ async function overviewHtml(artifactInfo) {
         <p>${escapeHtml(flow.detail)}</p>
         <div class="ma11-dashboard-meta"><span>${artifact ? `第 ${artifact.messageIndex + 1} 条正文` : "当前聊天"}</span><span>${rows} 个对象</span><span>${escapeHtml(syncText)}</span></div>
       </div>
-      <button data-ma11-action="process-latest" ${enabled && latestAssistantIndex() >= 0 && !busy ? "" : "disabled"}>${artifact ? "重新整理" : "整理最新正文"}</button>
+      <button data-ma11-action="process-latest" ${enabled && playStart !== undefined && latestAssistantIndex() >= playStart && !busy ? "" : "disabled"}>${artifact ? "重新整理" : "整理最新正文"}</button>
     </section>
+    ${runtimeV2OverviewHtml(chatState)}
     ${setupReadinessHtml(artifact, chatState)}
     <section class="ma11-card ma11-progress-card">
       <header><b>处理进度</b><span>${flow.completed}/${flow.total}</span></header>
@@ -960,6 +1001,10 @@ async function syncHtml() {
         <button data-ma11-action="open-graph" ${info?.artifact.snapshot ? "" : "disabled"}>查看记忆网络</button>
       </div>
       <p class="ma11-help ma11-maintenance-note"><b>维护操作：</b>“按对象清理并重新发布”会先检查可安全删除的镜渊旧条目，并在一次确认后发布当前真实快照；不会处理人工条目或其他聊天条目。</p>
+      ${(() => {
+        const suppressed = suppressedLorebookEntries(state);
+        return suppressed.length ? `<section class="ma11-suppressed-list"><header><b>玩家已删除并禁止自动恢复</b><span>${suppressed.length} 条</span></header><p>关联显示已从其他世界书条目隐藏；内部事实链仍保留，恢复发布后会重新建立关联。</p>${suppressed.map((item) => `<div><span>${escapeHtml(item.comment || item.key)}</span><button data-ma11-action="restore-lorebook-entry" data-ma11-suppression-key="${escapeHtml(item.key)}">恢复发布</button></div>`).join("")}</section>` : "";
+      })()}
       ${state?.lastSyncError ? `<div class="ma11-error-box">${escapeHtml(state.lastSyncError)}</div>` : ""}
       <dl class="ma11-meta"><dt>当前世界书</dt><dd>${escapeHtml(state?.lastLorebookName || "未建立")}</dd><dt>最近同步</dt><dd>${escapeHtml(state?.lastSyncAt ? new Date(state.lastSyncAt).toLocaleString() : "尚未同步")}</dd></dl>
     </section>`;
@@ -1578,7 +1623,7 @@ function bindWorkspace(workspace) {
         const originalButtonText = busyButton?.textContent ?? "";
         const pipelineAction = [
             "process-latest", "recalculate-history", "run-audit", "run-revision", "run-state",
-            "force-small", "force-large", "sync-now", "maintain-lorebook", "set-focus", "clear-focus",
+            "force-small", "force-large", "sync-now", "maintain-lorebook", "start-play-recording", "restore-lorebook-entry", "set-focus", "clear-focus",
         ].includes(action || "");
         if (pipelineAction && workspacePipelineBusy())
             return;
@@ -1607,6 +1652,27 @@ function bindWorkspace(workspace) {
             if (action === "open-prompt-diagnostics") {
                 diagnosticPromptKind = "state";
                 setTab("diagnostics");
+            }
+            if (action === "start-play-recording") {
+                const state = await getChatState(currentChatKey());
+                const existing = recordingStartIndex(state) !== undefined;
+                const warning = existing
+                    ? "重新设置起点会清空当前聊天已有的镜渊事实、总结、状态表和托管世界书条目。是否继续？"
+                    : "将从下一条新消息开始记录；当前已有聊天内容不会进入镜渊记忆。是否继续？";
+                if (!window.confirm(warning))
+                    return;
+                const result = await beginPlayRecording();
+                toast("success", `游玩记录起点已设置；从第 ${result.boundary.startIndex + 1} 条消息起生效`);
+                selectedMessageIndex = null;
+                await renderWorkspace();
+            }
+            if (action === "restore-lorebook-entry") {
+                const key = actionButton?.dataset.ma11SuppressionKey || "";
+                if (!key)
+                    throw new Error("无法确定需要恢复的世界书条目");
+                await restoreSuppressedLorebookEntry(key);
+                toast("success", "世界书条目已恢复发布");
+                await renderWorkspace();
             }
             if (action === "process-latest") {
                 if (!getSettings().enabled)

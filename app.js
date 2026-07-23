@@ -5,7 +5,7 @@
 import { MODULE_NAME, VERSION } from '../constants.js';
 import { getContext, getSettings, isProcessableAssistantMessage, saveSettings, toast, tryGetContext } from '../core/context.js';
 import { clearAllStorage } from '../storage/repository.js';
-import { installPipelineEventHandlers, processMessage, reconcileInterruptedRuntimeState } from '../pipeline/pipeline.js';
+import { installPipelineEventHandlers, processMessage, reconcileInterruptedRuntimeState, resumeRuntimeOutbox } from '../pipeline/pipeline.js';
 import { resetLorebookRuntime } from '../pipeline/lorebook.js';
 import { installMessagePanelHandlers, renderAllMessagePanels } from '../ui/message-panel.js';
 import { diagnosticReport } from '../ui/diagnostics.js';
@@ -101,6 +101,9 @@ export async function initialize() {
         if (!extensionEnabled || generation !== lifecycleGeneration)
             return;
         await reconcileInterruptedRuntimeState();
+        if (!extensionEnabled || generation !== lifecycleGeneration)
+            return;
+        await resumeRuntimeOutbox();
         if (!extensionEnabled || generation !== lifecycleGeneration)
             return;
         mountOptionalTopButton();

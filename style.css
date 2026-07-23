@@ -1745,3 +1745,19 @@ textarea { resize: vertical; }
   .ma11-graph-toolbar-actions { width: 100%; }
   .ma11-graph-canvas { height: clamp(380px, 58vh, 620px); }
 }
+
+/* core.6：玩家记录边界与世界书发布否决。 */
+.ma11-recording-card { border-color: color-mix(in srgb, var(--ma-accent) 36%, var(--ma-border)); }
+.ma11-recording-card header > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .45rem 1rem; }
+.ma11-recording-card header span { color: var(--ma-muted); }
+.ma11-suppressed-list { display: grid; gap: .55rem; margin-top: .85rem; padding: .75rem; border: 1px solid var(--ma-border); border-radius: 11px; background: var(--ma-surface-1); }
+.ma11-suppressed-list > header { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; }
+.ma11-suppressed-list > header span,.ma11-suppressed-list > p { color: var(--ma-muted); }
+.ma11-suppressed-list > p { margin: 0; font-size: .82rem; line-height: 1.45; }
+.ma11-suppressed-list > div { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: .65rem; padding-top: .5rem; border-top: 1px dashed var(--ma-border); }
+.ma11-suppressed-list > div span { min-width: 0; overflow-wrap: anywhere; }
+.ma11-suppressed-list > div button { min-height: 36px; white-space: nowrap; }
+@media (max-width: 620px) {
+  .ma11-suppressed-list > div { grid-template-columns: 1fr; }
+  .ma11-suppressed-list > div button { width: 100%; }
+}

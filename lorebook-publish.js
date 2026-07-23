@@ -9,6 +9,7 @@ import { filterPassiveObservers } from './snapshot.js';
 import { safeText } from '../core/utils.js';
 import { canonicalObjectTitle } from './object-identity.js';
 import { isPurePassiveObserverText } from './observer.js';
+import { narrativeContextText } from '../runtime-v2/orchestrator.js';
 function registry(options) {
     return normalizeTableRegistry(options?.registry?.length ? options.registry : DEFAULT_TABLE_REGISTRY);
 }
@@ -71,7 +72,6 @@ function rowContent(table, row, maxChars) {
     const titleLabel = customizedFieldLabel(table, 'title', '');
     const statusLabel = customizedFieldLabel(table, 'status', '当前状态');
     const contentLabel = customizedFieldLabel(table, 'content', '当前记录');
-    const keywordsLabel = customizedFieldLabel(table, 'keywords', '触发词');
     const heading = titleLabel
         ? `[${table.name}｜${titleLabel}：${row.title}]`
         : `[${table.name}：${row.title}]`;
@@ -99,9 +99,6 @@ function rowContent(table, row, maxChars) {
             continue;
         lines.push(...boundedLine(field.label, fields[field.key]));
     }
-    lines.push(...lifecycleLines(row.lifecycle));
-    if (row.keywords.length)
-        lines.push(`${keywordsLabel}：${row.keywords.join('、')}`);
     // 事实 ID、事件 ID 与维护权限只保留在插件元数据中，不注入正文模型。
     return fitWholeLines(uniqueContentLines(lines), maxChars);
 }
@@ -180,71 +177,104 @@ function currentSpacetimeRowId(rows) {
     const explicit = active.filter((row) => /(当前场景|当前位置|当前地点|当前时空|正在此处|当前所在|current|active)/i.test(rowSearchText(row)));
     return (explicit.at(-1) ?? active.at(-1))?.id;
 }
-function recallModeFor(role, row, options, currentSpacetimeId) {
-    // 玩家手动焦点只授予该对象 constant；不依赖连续性常驻开关，也不改变其他召回规则。
+function recallModeFor(role, row, options, _currentSpacetimeId) {
+    // Runtime V2 publishes one clean current-context entry as the only automatic
+    // continuity constant. Raw scene/spacetime working rows stay retrievable but
+    // can no longer pin stale machine state into every generation.
     if ((role === 'characters' || role === 'state') && row.id === options.focusObjectId)
         return 'constant';
-    // 总结已沉降回独立事件条目；启用语义召回时，由事件条目承接整条事件线的当前、近期与历史语义。
-    // 人物、地区、物品等对象仍使用名称/别名触发，保证每个世界书条目只有一种召回方式。
-    if (role === 'events' && options.vectorize)
-        return 'vector';
-    if (!options.latestContinuityConstant)
-        return 'trigger';
     if (role === 'globalChanges')
         return 'constant';
-    if (role === 'spacetime')
-        return row.id === currentSpacetimeId ? 'constant' : 'trigger';
-    if (role === 'scenes')
-        return row.id === currentSpacetimeId ? 'constant' : 'trigger';
-    // 角色是否常驻只由玩家设置的唯一焦点决定；伤势等状态仍由 SillyTavern 触发机制召回。
-    if (role === 'characters' || role === 'state')
-        return 'trigger';
     if (role === 'foundations' && /(必要|规则|制度|禁止|必须|不可)/i.test(rowSearchText(row)))
         return 'constant';
+    if (role === 'events' && options.vectorize)
+        return 'vector';
     return 'trigger';
 }
+
 function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, factIds, eventIds, updatedAt, options, disabled = false) {
-    // 单条目只采用一种召回方式：constant、关键词 trigger 或事件线 vector。
-    const actualMode = mode;
+    const constant = !disabled && mode === 'constant';
+    const vectorized = !disabled && mode === 'vector';
+    const keywords = !disabled && !constant ? trigger.any : [];
     return {
         key,
         logicalKey,
         comment: `[MA11] ${comment}`,
         content,
-        keywords: actualMode === 'trigger' ? trigger.any : [],
-        constant: !disabled && actualMode === 'constant',
-        vectorized: !disabled && actualMode === 'vector',
+        keywords,
+        constant,
+        vectorized,
         disabled,
         order: 0,
         updatedAt,
         kind,
-        recallMode: actualMode,
+        // Hybrid means keyword + vector are both available. This is metadata;
+        // SillyTavern receives the independent key/vectorized fields below.
+        recallMode: constant ? 'constant' : vectorized ? 'hybrid' : 'trigger',
         trigger,
-        // SillyTavern 的相似度门槛和 Max Entries 是 Vector Storage 全局设置；这里只保存镜渊托管元数据。
         vector: { similarityThreshold: Math.min(0.99, Math.max(0, Number(options.similarityThreshold) || 0.72)), maxResults: Math.max(1, Math.round(Number(options.maxVectorResults) || 8)) },
         factIds: uniq(factIds, 100),
         eventIds: uniq(eventIds, 60),
         allowRecursion: options.recursion !== false,
     };
 }
+
 export function unconsumedSmallSummaries(small, large) {
     const legacy = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
     return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !legacy.has(item.id));
+}
+function relationLookups(snapshot, tables) {
+    const objectTitles = new Map();
+    const eventTitles = new Map();
+    for (const table of tables) {
+        for (const row of snapshot?.[table.key] ?? []) {
+            const title = String(row?.title || '').trim();
+            const id = String(row?.id || '').trim();
+            if (id && title)
+                objectTitles.set(id, title);
+            if (table.role === 'events' && title) {
+                for (const eventId of [...new Set([id, row?.eventId, ...(row?.eventIds ?? [])]
+                    .map((item) => String(item || '').trim()).filter(Boolean))]) {
+                    eventTitles.set(eventId, title);
+                }
+            }
+        }
+    }
+    return { objectTitles, eventTitles };
+}
+function readableRelation(value, lookup) {
+    const text = String(value ?? '').trim();
+    return lookup.get(text) || text;
+}
+function rowForPublication(row, lookups) {
+    const next = structuredClone(row);
+    next.fields ||= {};
+    if (Array.isArray(next.fields.relatedObjects)) {
+        next.fields.relatedObjects = next.fields.relatedObjects
+            .map((item) => readableRelation(item, lookups.objectTitles));
+    }
+    if (Array.isArray(next.fields.relatedEvents)) {
+        next.fields.relatedEvents = next.fields.relatedEvents
+            .map((item) => readableRelation(item, lookups.eventTitles));
+    }
+    return next;
 }
 function tableDocuments(snapshot, options) {
     if (!snapshot)
         return [];
     const tables = registry(options);
     const filtered = filterSnapshotForLorebook(snapshot, tables);
+    const lookups = relationLookups(filtered, tables);
     const docs = [];
     for (const table of enabledTables(tables)) {
         const rows = filtered[table.key] ?? [];
         const currentSpacetimeId = table.role === 'spacetime' || table.role === 'scenes' ? currentSpacetimeRowId(rows) : undefined;
         for (const row of rows) {
+            const readableRow = rowForPublication(row, lookups);
             const mode = recallModeFor(table.role, row, options, currentSpacetimeId);
             const trigger = defaultTrigger(row);
             const titleToken = normalizedName(row.title) || row.id;
-            docs.push(makeDocument(`view:${table.key}:${row.id}`, `view:${table.key}:${titleToken}`, `MA｜${table.name}｜${row.title}`, rowContent(table, row, Math.max(200, Number(options.entryLimits?.[table.key]) || Number(DEFAULT_CONTENT_LIMITS.tables[table.key]) || 1200)), `view:${table.role}`, mode, trigger, row.factIds ?? [], row.eventIds ?? (row.eventId ? [row.eventId] : []), row.updatedAt, options, isEntryParticipationPaused(row)));
+            docs.push(makeDocument(`view:${table.key}:${row.id}`, `view:${table.key}:${titleToken}`, `MA｜${table.name}｜${row.title}`, rowContent(table, readableRow, Math.max(200, Number(options.entryLimits?.[table.key]) || Number(DEFAULT_CONTENT_LIMITS.tables[table.key]) || 1200)), `view:${table.role}`, mode, trigger, row.factIds ?? [], row.eventIds ?? (row.eventId ? [row.eventId] : []), row.updatedAt, options, isEntryParticipationPaused(row)));
         }
     }
     return docs;
@@ -351,7 +381,7 @@ function summaryFallbackDocuments(small, large, representedEventIds, options) {
 }
 /** 编译完整保存集合；SillyTavern 在运行时负责关键词、向量条数与上下文容量限制。 */
 export function selectLorebookDocuments(documents, options) {
-    const modeRank = { constant: 0, trigger: 1, vector: 2 };
+    const modeRank = { constant: 0, trigger: 1, hybrid: 2, vector: 2 };
     const selectionMode = (document) => {
         const focusedCharacter = Boolean(options.focusObjectId
             && ['view:characters', 'view:state'].includes(document.kind)
@@ -391,6 +421,33 @@ export function selectLorebookDocuments(documents, options) {
     }
     return output;
 }
+function narrativeContextDocument(options) {
+    const content = narrativeContextText(options.narrativeContext);
+    if (!content || content === '[当前叙事上下文]')
+        return null;
+    return {
+        key: 'runtime:narrative-context',
+        logicalKey: 'runtime:narrative-context',
+        comment: '[MA11] MA｜当前叙事上下文',
+        content,
+        keywords: [],
+        constant: true,
+        vectorized: false,
+        disabled: false,
+        order: 1,
+        updatedAt: options.narrativeContext?.generatedAt || '',
+        kind: 'runtime:narrative-context',
+        recallMode: 'constant',
+        trigger: { any: [], all: [], exclude: [] },
+        vector: { similarityThreshold: 0, maxResults: 1 },
+        factIds: [],
+        eventIds: [],
+        // Current-context projection is a terminal projection and must not fan
+        // out through recursive lorebook activation.
+        allowRecursion: false,
+    };
+}
+
 export function buildSemanticLorebookDocuments(snapshot, small, large, options) {
     const tables = registry(options);
     const views = tableDocuments(snapshot, options);
@@ -407,7 +464,8 @@ export function buildSemanticLorebookDocuments(snapshot, small, large, options) 
     const summaryEventIds = new Set(summaryFallbacks.flatMap((item) => item.eventIds ?? []));
     const representedByViewOrSummary = new Set([...representedEventIds, ...summaryEventIds]);
     const factFallbacks = factDocuments(facts, representedFactIds, representedByViewOrSummary, tables, options);
-    return selectLorebookDocuments([...views, ...factFallbacks, ...summaryFallbacks], options);
+    const currentContext = narrativeContextDocument(options);
+    return selectLorebookDocuments([...(currentContext ? [currentContext] : []), ...views, ...factFallbacks, ...summaryFallbacks], options);
 }
 export function buildDetailedLorebookDocuments(snapshot, small, large, options) {
     return buildSemanticLorebookDocuments(snapshot, small, large, options);

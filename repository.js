@@ -11,7 +11,10 @@ import { canonicalObjectTitle } from '../domain/object-identity.js';
 import { enforceObjectViewAllocation, enforceCurrentSpacetimeSingleton, mergePersistedCharacterDuplicates, normalizeSnapshot, preserveStableObjectIds, rewriteObjectReferences, } from '../domain/snapshot.js';
 import { garbageCollectLegacyEntryTombstones, normalizeEntryLifecycleValue } from '../domain/entry-lifecycle.js';
 import { mergeDuplicateStateRows } from '../domain/state-text.js';
-export const CURRENT_SCHEMA_VERSION = 4;
+import { normalizeRecordingBoundary } from '../domain/recording-boundary.js';
+import { normalizeLorebookPublication } from '../domain/publication-control.js';
+import { emptyRuntimeV2, normalizeRuntimeV2 } from '../runtime-v2/state.js';
+export const CURRENT_SCHEMA_VERSION = 6;
 /** ChatState 是持久化 JSON 数据；使用 JSON 副本兼容 SillyTavern/插件可能提供的 Proxy 包装对象。 */
 function cloneChatState(value) {
     return JSON.parse(JSON.stringify(value));
@@ -26,6 +29,8 @@ export function emptyChatState(chatKey) {
         smallSummaries: [],
         largeSummaries: [],
         lastSyncStatus: 'idle',
+        lorebookPublication: normalizeLorebookPublication(),
+        runtimeV2: emptyRuntimeV2(),
         migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false, factContractV35: false },
         updatedAt: nowIso(),
     };
@@ -200,9 +205,26 @@ function migrateChatState(raw, chatKey) {
         || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
     let artifactViewsChanged = false;
     state.schemaVersion = CURRENT_SCHEMA_VERSION;
+    state.runtimeV2 = normalizeRuntimeV2(state.runtimeV2);
     state.memoryStateVersion = 2;
     state.chatLocator = currentChatLocator() || state.chatLocator;
     state.processedMessageKeys = Array.isArray(state.processedMessageKeys) ? [...new Set(state.processedMessageKeys.map(String))] : [];
+    state.recordingBoundary = normalizeRecordingBoundary(state.recordingBoundary);
+    state.lorebookPublication = normalizeLorebookPublication(state.lorebookPublication);
+    if (!state.recordingBoundary && state.processedMessageKeys.length) {
+        const processed = new Set(state.processedMessageKeys);
+        const firstIndex = getChat().findIndex((message) => {
+            const artifact = message?.extra?.[MODULE_NAME];
+            return Boolean(artifact?.chatKey === chatKey && processed.has(String(artifact.messageKey || '')));
+        });
+        if (firstIndex >= 0) {
+            state.recordingBoundary = {
+                startIndex: firstIndex,
+                setAt: state.updatedAt || nowIso(),
+                source: 'legacy',
+            };
+        }
+    }
     state.smallSummaries = normalizeSummaryArrays(state.smallSummaries, 'small');
     state.largeSummaries = normalizeSummaryArrays(state.largeSummaries, 'large');
     const summaryVersionsChanged = needsSummaryVersionMigration
@@ -465,6 +487,12 @@ function currentStateStructure(raw, chatKey) {
         return false;
     if (state.focusObjectId !== undefined && typeof state.focusObjectId !== 'string')
         return false;
+    if (state.recordingBoundary !== undefined && !normalizeRecordingBoundary(state.recordingBoundary))
+        return false;
+    if (JSON.stringify(state.lorebookPublication) !== JSON.stringify(normalizeLorebookPublication(state.lorebookPublication)))
+        return false;
+    if (JSON.stringify(state.runtimeV2) !== JSON.stringify(normalizeRuntimeV2(state.runtimeV2)))
+        return false;
     return REQUIRED_MIGRATIONS.every((key) => state.migration?.[key] === true);
 }
 async function readCurrentChatStateFast(namespace, state, chatKey) {
@@ -581,6 +609,9 @@ export async function putChatState(state) {
     next.schemaVersion = CURRENT_SCHEMA_VERSION;
     next.chatLocator = currentChatLocator() || next.chatLocator;
     next.internalFacts = normalizeInternalFacts(next.internalFacts);
+    next.recordingBoundary = normalizeRecordingBoundary(next.recordingBoundary);
+    next.lorebookPublication = normalizeLorebookPublication(next.lorebookPublication);
+    next.runtimeV2 = normalizeRuntimeV2(next.runtimeV2);
     if (next.migration?.internalFactsV23 !== true || next.migration?.summaryVersionsV27 !== true) {
         migrateLegacyConsumption(next.internalFacts, next.smallSummaries, next.largeSummaries);
     }

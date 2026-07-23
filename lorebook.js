@@ -13,6 +13,7 @@ import { TaskBlockedError } from './task-queue.js';
 import { buildLorebookDocuments } from '../domain/lorebook-publish.js';
 import { resolveHostControl } from '../domain/host-control.js';
 import { readHistoryWorkflow } from '../workflow/history-workflow.js';
+import { applyLorebookSuppressions, detectPlayerDeletedLorebookEntries, restoreLorebookSuppression, updateLorebookPublicationLedger } from '../domain/publication-control.js';
 let worldInfoModulePromise = null;
 let worldInfoApiForTests = null;
 const lorebookMutationLocks = new Map();
@@ -318,9 +319,9 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     entry.comment = spec.comment;
     entry.content = spec.content;
     const disabled = spec.disabled === true;
-    entry.constant = !disabled && spec.recallMode === 'constant';
-    entry.vectorized = !disabled && spec.recallMode === 'vector';
-    entry.key = !disabled && spec.recallMode === 'trigger' ? triggerKeys(spec) : [];
+    entry.constant = !disabled && spec.constant === true;
+    entry.vectorized = !disabled && spec.vectorized === true;
+    entry.key = !disabled && !entry.constant && (spec.keywords?.length || spec.trigger?.any?.length) ? triggerKeys(spec) : [];
     entry.keysecondary = [];
     entry.selective = false;
     entry.disable = disabled;
@@ -366,6 +367,7 @@ async function desiredSpecs(artifact, committedState) {
         maxVectorResults: settings.lorebookRecall.maxVectorResults,
         totalCapacity: settings.lorebookRecall.totalCapacity,
         focusObjectId: state.focusObjectId,
+        narrativeContext: state.runtimeV2?.narrativeContext,
         entryLimits: settings.contentLimits.tables,
     });
     const desired = normalizeDesiredLorebookSpecs(new Map(documents.map((document) => [document.key, document])));
@@ -423,8 +425,10 @@ function mergeDesiredLorebookSpec(left, right) {
         // 事实与事件通过下方 ID 集合合并；正文采用较新的完整视图。
         content: String(primary?.content || secondary?.content || '').trim(),
         recallMode: mode,
-        constant: mode === 'constant',
-        vectorized: mode === 'vector' && !(left?.disabled === true && right?.disabled === true),
+        constant: Boolean(left?.constant || right?.constant || mode === 'constant'),
+        vectorized: Boolean(left?.vectorized || right?.vectorized || mode === 'hybrid' || mode === 'vector')
+            && !(left?.disabled === true && right?.disabled === true),
+        keywords: uniqueSpecStrings([left?.keywords, right?.keywords, left?.trigger?.any, right?.trigger?.any], 48),
         disabled: left?.disabled === true && right?.disabled === true,
         trigger: {
             any: uniqueSpecStrings([left?.trigger?.any, right?.trigger?.any], 48),
@@ -896,7 +900,13 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         const data = (await wi.loadWorldInfo(name)) || { entries: {} };
         data.entries ||= {};
         const plan = await desiredSpecs(artifact, chatState);
-        const desired = plan.desired;
+        const detectedDeletions = detectPlayerDeletedLorebookEntries(chatState, data, plan.desired, artifact.chatKey, name);
+        if (detectedDeletions.length) {
+            // 玩家删除属于持久化发布否决，必须在任何可能失败的后续写入前先保存墓碑。
+            await putChatState(chatState);
+            assertArtifactCommitCurrent(artifact);
+        }
+        const desired = applyLorebookSuppressions(plan.desired, chatState);
         const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
         const reconciliation = reconcileLorebookEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook);
         const changed = reconciliation.changed;
@@ -925,6 +935,9 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
             await cleanupPreviousLorebook(wi, previousLorebookName, artifact.chatKey, artifact);
         }
         assertArtifactCommitCurrent(artifact);
+        const finalPublicationData = (await wi.loadWorldInfo(name)) || data;
+        assertArtifactCommitCurrent(artifact);
+        updateLorebookPublicationLedger(chatState, finalPublicationData, artifact.chatKey, name);
         artifact.lorebookEntryIds = entryIds;
         markStage(artifact, 'sync', 'success');
         chatState.lastLorebookName = name;
@@ -1060,10 +1073,17 @@ export async function applyLorebookMaintenance(artifact) {
         data.entries ||= {};
         const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
         const preview = maintenancePreviewFromData(data, name, artifact.chatKey, dedicatedBook);
-        const plan = await desiredSpecs(artifact);
+        const state = await getChatState(artifact.chatKey);
+        const plan = await desiredSpecs(artifact, state);
+        const detectedDeletions = detectPlayerDeletedLorebookEntries(state, data, plan.desired, artifact.chatKey, name);
+        if (detectedDeletions.length) {
+            await putChatState(state);
+            assertArtifactCommitCurrent(artifact);
+        }
+        const desired = applyLorebookSuppressions(plan.desired, state);
         const cleanup = await legacyCleanupScope(artifact);
         assertArtifactCommitCurrent(artifact);
-        const first = reconcileLorebookMaintenanceEntries(data, plan.desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
+        const first = reconcileLorebookMaintenanceEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
         let removed = first.removed;
         if (first.changed) {
             assertArtifactCommitCurrent(artifact);
@@ -1071,7 +1091,7 @@ export async function applyLorebookMaintenance(artifact) {
             assertArtifactCommitCurrent(artifact);
             const verifiedData = (await wi.loadWorldInfo(name)) || data;
             assertArtifactCommitCurrent(artifact);
-            const verification = reconcileLorebookMaintenanceEntries(verifiedData, plan.desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
+            const verification = reconcileLorebookMaintenanceEntries(verifiedData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
             removed += verification.removed;
             if (verification.changed) {
                 await wi.saveWorldInfo(name, verifiedData, true);
@@ -1082,7 +1102,7 @@ export async function applyLorebookMaintenance(artifact) {
             if (renderedTarget) {
                 const postReloadData = (await wi.loadWorldInfo(name)) || verifiedData;
                 assertArtifactCommitCurrent(artifact);
-                const postReloadVerification = reconcileLorebookMaintenanceEntries(postReloadData, plan.desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
+                const postReloadVerification = reconcileLorebookMaintenanceEntries(postReloadData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
                 removed += postReloadVerification.removed;
                 if (postReloadVerification.changed) {
                     await wi.saveWorldInfo(name, postReloadData, true);
@@ -1091,7 +1111,7 @@ export async function applyLorebookMaintenance(artifact) {
                     assertArtifactCommitCurrent(artifact);
                     const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
                     assertArtifactCommitCurrent(artifact);
-                    const finalVerification = reconcileLorebookMaintenanceEntries(finalData, plan.desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
+                    const finalVerification = reconcileLorebookMaintenanceEntries(finalData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
                     removed += finalVerification.removed;
                     if (finalVerification.changed) {
                         await wi.saveWorldInfo(name, finalData, true);
@@ -1104,6 +1124,17 @@ export async function applyLorebookMaintenance(artifact) {
         return { ...preview, applied: true, removed };
     });
 }
+export async function restoreSuppressedLorebookEntry(artifact, key) {
+    assertArtifactCommitCurrent(artifact);
+    const state = await getChatState(artifact.chatKey);
+    if (!restoreLorebookSuppression(state, key))
+        return false;
+    await putChatState(state);
+    assertArtifactCommitCurrent(artifact);
+    await syncLorebook(artifact, true);
+    return true;
+}
+
 async function knownLorebookNamesForChat(chatKey) {
     const state = await getChatState(chatKey);
     return [...new Set([

@@ -142,6 +142,12 @@ function redactedChatState(state) {
         chatKey: state.chatKey,
         processedMessageCount: Array.isArray(state.processedMessageKeys) ? state.processedMessageKeys.length : 0,
         latestSnapshotMessageKey: state.latestSnapshotMessageKey,
+        recordingBoundary: state.recordingBoundary ? {
+            startIndex: state.recordingBoundary.startIndex,
+            setAt: state.recordingBoundary.setAt,
+            source: state.recordingBoundary.source,
+        } : undefined,
+        suppressedLorebookEntryCount: Object.keys(state.lorebookPublication?.suppressed ?? {}).length,
         internalFactCount: Array.isArray(state.internalFacts) ? state.internalFacts.length : 0,
         pendingSmallFactCount: Array.isArray(state.internalFacts) ? state.internalFacts.filter((fact) => !fact.consumedBySmallSummaryId).length : 0,
         smallSummaryCount: Array.isArray(state.smallSummaries) ? state.smallSummaries.length : 0,
@@ -158,6 +164,23 @@ function redactedChatState(state) {
         lastSyncAt: state.lastSyncAt,
         lastSyncStatus: state.lastSyncStatus,
         lastSyncError: redactedError(state.lastSyncError),
+        runtimeV2: state.runtimeV2 ? {
+            version: state.runtimeV2.version,
+            revision: state.runtimeV2.revision,
+            processedTurnCount: Array.isArray(state.runtimeV2.processedTurnKeys) ? state.runtimeV2.processedTurnKeys.length : 0,
+            journalCount: Array.isArray(state.runtimeV2.journal) ? state.runtimeV2.journal.length : 0,
+            outbox: Array.isArray(state.runtimeV2.outbox) ? state.runtimeV2.outbox.map((job) => ({
+                id: job.id,
+                type: job.type,
+                turnIndex: job.turnIndex,
+                sourceRevision: job.sourceRevision,
+                status: job.status,
+                attempts: job.attempts,
+                error: redactedError(job.error),
+            })) : [],
+            machines: state.runtimeV2.machines,
+            narrativeContext: state.runtimeV2.narrativeContext,
+        } : undefined,
         updatedAt: state.updatedAt,
     };
 }

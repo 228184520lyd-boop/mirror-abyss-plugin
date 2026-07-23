@@ -5,8 +5,8 @@
 export const MODULE_NAME = 'mirrorAbyssV11';
 export const LEGACY_MODULE_NAME = 'mirrorAbyss';
 export const DISPLAY_NAME = '镜渊';
-export const VERSION = '1.3.14-core.4';
-export const PIPELINE_VERSION = 'ma-pipeline-81';
+export const VERSION = '1.4.0-alpha.1';
+export const PIPELINE_VERSION = 'ma-runtime-v2-1';
 export const DEFAULT_CONTENT_LIMITS = {
     tables: {
         spacetime: 700,

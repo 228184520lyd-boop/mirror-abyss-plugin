@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.3.14-core.5",
+  "version": "1.4.0-alpha.1",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "自然事实模块、统一 ST 接管、确定性分发沉降与移动端记忆网络"
+  "description": "Runtime V2：事件日志、场景实例、权威时钟、互斥总结与事务化世界书投影"
 }
