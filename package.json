@@ -1,0 +1,9 @@
+{
+  "name": "mirror-abyss",
+  "version": "1.3.14-core.5",
+  "type": "module",
+  "scripts": {
+    "test:core": "node --test tests/core-authority.test.js",
+    "verify:core": "npm run test:core"
+  }
+}

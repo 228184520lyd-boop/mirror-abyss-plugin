@@ -249,7 +249,107 @@ function tableDocuments(snapshot, options) {
     }
     return docs;
 }
-/** 常驻→明确触发→向量；不同信息点即使共享 fact_id/event_id 也必须保留，仅按条目身份与完全相同内容去重后按总容量裁剪。 */
+function factValue(fact, camel, snake) {
+    return fact?.[camel] ?? fact?.[snake];
+}
+function factList(fact, camel, snake) {
+    const value = factValue(fact, camel, snake);
+    return Array.isArray(value) ? value.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
+}
+const FACT_TYPE_ROLES = {
+    spacetime: 'spacetime',
+    scenes: 'scenes',
+    scene: 'scenes',
+    characters: 'characters',
+    character: 'characters',
+    state: 'characters',
+    items: 'items',
+    item: 'items',
+    events: 'events',
+    event: 'events',
+    regions: 'regions',
+    region: 'regions',
+    globalChanges: 'globalChanges',
+    global: 'globalChanges',
+    foundations: 'foundations',
+    foundation: 'foundations',
+};
+function factPublishingEnabled(fact, tables) {
+    const viewTable = String(fact?.view?.table ?? '').trim();
+    if (viewTable)
+        return tables.some((table) => table.key === viewTable && table.enabled);
+    const type = String(fact?.type ?? '').trim();
+    const direct = tables.find((table) => table.key === type);
+    if (direct)
+        return direct.enabled;
+    const role = FACT_TYPE_ROLES[type];
+    if (!role)
+        return true;
+    const matches = tables.filter((table) => table.role === role);
+    return matches.length > 0 && matches.some((table) => table.enabled);
+}
+function factDocuments(facts, representedFactIds, representedEventIds, tables, options) {
+    const docs = [];
+    for (const fact of facts ?? []) {
+        const factId = String(factValue(fact, 'factId', 'fact_id') ?? '').trim();
+        const eventId = String(factValue(fact, 'eventId', 'event_id') ?? '').trim();
+        const storageClass = String(factValue(fact, 'storageClass', 'storage_class') ?? '').trim();
+        const supersededByFactId = String(factValue(fact, 'supersededByFactId', 'superseded_by_fact_id') ?? '').trim();
+        if (!factId
+            || storageClass === 'episodic'
+            || Boolean(supersededByFactId)
+            || representedFactIds.has(factId)
+            || (eventId && representedEventIds.has(eventId))
+            || !factPublishingEnabled(fact, tables))
+            continue;
+        const title = String(fact.title || '叙事事实').trim();
+        const content = String(fact.content || '').trim();
+        const occurred = factList(fact, 'occurredFacts', 'occurred');
+        const unresolved = factList(fact, 'unresolvedItems', 'unresolved');
+        const lines = [`[事实：${title}]`, ...occurred];
+        if (content && !occurred.includes(content))
+            lines.push(content);
+        if (unresolved.length)
+            lines.push(...unresolved.map((item) => `未决：${item}`));
+        const text = fitWholeLines(uniqueContentLines(lines), Math.max(240, Number(options.factEntryLimit) || 1200));
+        if (!text)
+            continue;
+        const related = factList(fact, 'relatedEntities', 'related_entities');
+        const keywords = uniq([...(fact.keywords ?? []), title, ...related], 32);
+        const historical = fact.active === false
+            || Boolean(fact.consumedBySmallSummaryId)
+            || Boolean(fact.solidifiedByLargeSummaryId)
+            || /(closed|resolved|ended|archived|结束|已解决|已关闭|已归档)/i.test(String(fact.status || ''));
+        const mode = historical && options.vectorize ? 'vector' : 'trigger';
+        docs.push(makeDocument(`fact:${factId}`, `fact:${factId}`, `MA｜事实｜${title}`, text, 'fact', mode, { any: keywords, all: [], exclude: [] }, [factId], eventId ? [eventId] : [], fact.updatedAt || fact.createdAt, options));
+    }
+    return docs;
+}
+function summaryFallbackDocuments(small, large, representedEventIds, options) {
+    const docs = [];
+    const candidates = [
+        ...(large ?? []).map((item) => ({ ...item, fallbackKind: 'large' })),
+        ...unconsumedSmallSummaries(small ?? [], large ?? []).map((item) => ({ ...item, fallbackKind: 'small' })),
+    ];
+    for (const summary of candidates) {
+        const eventId = String(summary.eventId || summary.eventIds?.[0] || '').trim();
+        if (!eventId || representedEventIds.has(eventId))
+            continue;
+        const text = fitWholeLines(uniqueContentLines([
+            `[${summary.fallbackKind === 'large' ? '长期记忆' : '近期记忆'}：${summary.title || '事件线'}]`,
+            summary.summary,
+            ...(summary.unresolvedItems ?? []).map((item) => `未决：${item}`),
+        ]), Math.max(240, Number(options.summaryEntryLimit) || 1600));
+        if (!text)
+            continue;
+        const id = String(summary.id || `${summary.fallbackKind}:${eventId}`);
+        const mode = options.vectorize ? 'vector' : 'trigger';
+        docs.push(makeDocument(`summary:${id}`, `summary:${id}`, `MA｜总结回退｜${summary.title || eventId}`, text, `summary:${summary.fallbackKind}`, mode, { any: uniq([...(summary.keywords ?? []), summary.title, eventId], 32), all: [], exclude: [] }, summary.sourceFactIds ?? [], [eventId], summary.createdAt, options));
+        representedEventIds.add(eventId);
+    }
+    return docs;
+}
+/** 编译完整保存集合；SillyTavern 在运行时负责关键词、向量条数与上下文容量限制。 */
 export function selectLorebookDocuments(documents, options) {
     const modeRank = { constant: 0, trigger: 1, vector: 2 };
     const selectionMode = (document) => {
@@ -272,10 +372,6 @@ export function selectLorebookDocuments(documents, options) {
     const seenKeys = new Set();
     const seenContents = new Set();
     const output = [];
-    let used = 0;
-    let vectorCount = 0;
-    const capacity = Math.max(2000, Math.round(Number(options.totalCapacity) || 24000));
-    const maxVector = Math.max(1, Math.round(Number(options.maxVectorResults) || 8));
     for (const doc of ordered) {
         if (seenKeys.has(doc.key))
             continue;
@@ -285,30 +381,36 @@ export function selectLorebookDocuments(documents, options) {
             seenKeys.add(doc.key);
             continue;
         }
-        if (doc.recallMode === 'vector' && vectorCount >= maxVector)
-            continue;
         const contentIdentity = doc.content.replace(/\s+/g, ' ').trim();
         if (contentIdentity && seenContents.has(contentIdentity))
             continue;
-        const size = doc.content.length;
-        if (used + size > capacity && output.length)
-            continue;
         output.push({ ...doc, order: output.length + 100 });
-        used += size;
-        if (doc.recallMode === 'vector')
-            vectorCount += 1;
         seenKeys.add(doc.key);
         if (contentIdentity)
             seenContents.add(contentIdentity);
     }
     return output;
 }
-export function buildSemanticLorebookDocuments(snapshot, _small, _large, options) {
-    // 小总结/大总结是内部处理凭证，正文已经沉降进对象和事件条目的 recentHistory / solidifiedHistory。
-    return selectLorebookDocuments(tableDocuments(snapshot, options), options);
+export function buildSemanticLorebookDocuments(snapshot, small, large, options) {
+    const tables = registry(options);
+    const views = tableDocuments(snapshot, options);
+    // 生命周期暂停只暂停原视图，不能占用事实/总结的代表资格；否则 settling 条目会形成召回空洞。
+    const activeViews = views.filter((item) => !item.disabled);
+    const representedFactIds = new Set(activeViews.flatMap((item) => item.factIds ?? []));
+    const representedEventIds = new Set(activeViews.flatMap((item) => item.eventIds ?? []));
+    const facts = options.internalFacts ?? [];
+    const eventPublishingEnabled = Boolean(tableByRole(tables, 'events', false)?.enabled);
+    // 已结算事件优先由总结承接；没有可用总结时才回退到正式事实。
+    const summaryFallbacks = eventPublishingEnabled
+        ? summaryFallbackDocuments(small, large, representedEventIds, options)
+        : [];
+    const summaryEventIds = new Set(summaryFallbacks.flatMap((item) => item.eventIds ?? []));
+    const representedByViewOrSummary = new Set([...representedEventIds, ...summaryEventIds]);
+    const factFallbacks = factDocuments(facts, representedFactIds, representedByViewOrSummary, tables, options);
+    return selectLorebookDocuments([...views, ...factFallbacks, ...summaryFallbacks], options);
 }
-export function buildDetailedLorebookDocuments(snapshot, _small, _large, options) {
-    return selectLorebookDocuments(tableDocuments(snapshot, options), options);
+export function buildDetailedLorebookDocuments(snapshot, small, large, options) {
+    return buildSemanticLorebookDocuments(snapshot, small, large, options);
 }
 export function buildLorebookDocuments(snapshot, small, large, options) {
     return options.layout === 'detailed' ? buildDetailedLorebookDocuments(snapshot, small, large, options) : buildSemanticLorebookDocuments(snapshot, small, large, options);

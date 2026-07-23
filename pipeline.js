@@ -275,7 +275,11 @@ function invalidateDerivedForValidMessages(chatState, validMessageIds) {
 async function prepareDerivedStageStatuses(artifact, chatState) {
     const settings = getSettings();
     const plan = {
-        small: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(chatState.internalFacts ?? [], settings.smallSummaryTurns)),
+        small: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(
+            chatState.internalFacts ?? [],
+            settings.smallSummaryTurns,
+            artifact.sceneBoundary?.eventIds ?? [],
+        )),
         large: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(chatState.smallSummaries ?? [], chatState.largeSummaries ?? [], settings.largeSummaryCount)),
     };
     markStage(artifact, 'summary', plan.small || plan.large ? 'queued' : 'skipped');

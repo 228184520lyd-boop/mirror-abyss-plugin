@@ -1,5 +1,6 @@
 import { enabledTables, normalizeTableRegistry } from './table-registry.js';
 import { isEntryParticipationPaused } from './entry-lifecycle.js';
+import { tableByRole } from './table-registry.js';
 const CLOSED_STATUS_RE = /(已完成|完成|已结束|结束|已关闭|关闭|已解决|解决|已归档|归档|closed|completed|resolved|ended|archived)/i;
 const ITEM_TERMINAL_RE = /(已出售|出售完成|已赠出|已交付|已消耗|耗尽|已损毁|已销毁|已丢弃|已遗失|不再持有|sold|transferred|delivered|consumed|destroyed|discarded|lost)/i;
 const ITEM_TRANSFER_RE = /(已出售|出售完成|已赠出|已交付|已遗失|不再持有|sold|transferred|delivered|lost)/i;
@@ -27,6 +28,39 @@ function factClosed(fact) {
 }
 function rowEventIds(row) {
     return [...new Set([...(row.eventIds ?? []), row.eventId].map(text).filter(Boolean))];
+}
+function activeRow(row) {
+    return !isEntryParticipationPaused(row)
+        && !CLOSED_STATUS_RE.test(rowText(row));
+}
+function currentSpacetime(snapshot, registry) {
+    const table = tableByRole(registry, 'spacetime', false);
+    return table ? (snapshot[table.key] ?? []).filter(activeRow).at(-1) : undefined;
+}
+/**
+ * 场景边界只由前后两个已提交时空快照的稳定身份变化产生。
+ * 地点被提及、回忆或模型只改写描述时不会触发。
+ */
+export function deriveSceneBoundary(previous, next, registryValue) {
+    const registry = normalizeTableRegistry(registryValue);
+    const before = currentSpacetime(previous, registry);
+    const after = currentSpacetime(next, registry);
+    if (!before || !after || identity(before.title) === identity(after.title))
+        return undefined;
+    const sceneTable = tableByRole(registry, 'scenes', false);
+    const previousScenes = sceneTable ? previous[sceneTable.key] ?? [] : [];
+    const oldScene = previousScenes.find((row) => identity(row.title) === identity(before.title))
+        ?? previousScenes.filter(activeRow).at(-1);
+    return {
+        previousTitle: before.title,
+        currentTitle: after.title,
+        previousSceneId: oldScene?.id,
+        relatedObjectTokens: [...new Set(list(oldScene?.fields?.relatedObjects).map(identity).filter(Boolean))],
+        eventIds: [...new Set([
+                ...rowEventIds(before),
+                ...rowEventIds(oldScene),
+            ].filter(Boolean))],
+    };
 }
 function rowText(row) {
     const fields = row.fields ?? {};
@@ -96,6 +130,19 @@ export function deriveIncrementalSettlementDirectives(input) {
     }
     const closedEventIds = new Set(input.facts.filter(factClosed).map(factEventId).filter(Boolean));
     const activeEventIds = new Set(input.facts.filter((fact) => !factClosed(fact)).map(factEventId).filter(Boolean));
+    const sceneBoundary = input.sceneBoundary;
+    const currentPatchObjectTokens = new Set();
+    for (const [tableKey, patches] of Object.entries(input.patchSnapshot ?? {})) {
+        const table = tableByKey.get(tableKey);
+        if (!table || !['characters', 'state'].includes(table.role) || !Array.isArray(patches))
+            continue;
+        for (const patch of patches)
+            for (const value of [patch?.id, patch?.title, ...(patch?.keywords ?? [])]) {
+                const token = identity(value);
+                if (token)
+                    currentPatchObjectTokens.add(token);
+            }
+    }
     // 事件结束后只扫描绑定该事件的局部对象，不扫描整个仓库内容。
     for (const table of enabledTables(registry)) {
         for (const row of input.snapshot[table.key] ?? []) {
@@ -106,15 +153,74 @@ export function deriveIncrementalSettlementDirectives(input) {
             touched.set(row.id, { table, patch: row, row });
         }
     }
+    // 场景切换只加入旧场景及其明确关联的临时角色；本轮继续出现的对象不预退出。
+    if (sceneBoundary) {
+        const related = new Set(sceneBoundary.relatedObjectTokens ?? []);
+        for (const table of enabledTables(registry)) {
+            for (const row of input.snapshot[table.key] ?? []) {
+                const rowTokens = [row.id, row.title, ...(row.keywords ?? [])].map(identity).filter(Boolean);
+                const oldScene = table.role === 'scenes'
+                    && (row.id === sceneBoundary.previousSceneId || identity(row.title) === identity(sceneBoundary.previousTitle));
+                const relatedCharacter = ['characters', 'state'].includes(table.role)
+                    && rowTokens.some((token) => related.has(token))
+                    && !rowTokens.some((token) => currentPatchObjectTokens.has(token));
+                if (oldScene || relatedCharacter)
+                    touched.set(row.id, { table, patch: row, row, sceneBoundary: true });
+            }
+        }
+    }
     const output = new Map();
-    for (const { table, patch, row } of touched.values()) {
+    for (const { table, patch, row, sceneBoundary: fromSceneBoundary } of touched.values()) {
         const protectedEntry = row.source === 'manual' || row.locked || row.lockMode === 'all' || row.lockMode === 'base' || row.id === input.focusObjectId;
         if (protectedEntry)
             continue;
         const events = rowEventIds(row);
-        const touchedActive = events.some((eventId) => activeEventIds.has(eventId));
-        if (isEntryParticipationPaused(row) && touchedActive && !explicitTerminal(table.role, patch)) {
+        const patchEvents = rowEventIds(patch);
+        const touchedActive = [...new Set([...events, ...patchEvents])].some((eventId) => activeEventIds.has(eventId));
+        const explicitlyReturned = touched.has(row.id) && patch !== row;
+        if (isEntryParticipationPaused(row)
+            && (touchedActive || explicitlyReturned)
+            && !explicitTerminal(table.role, patch)) {
             output.set(row.id, { sourceId: row.id, sourceTable: table.key, sourceTitle: row.title, action: 'restore' });
+            continue;
+        }
+        if (fromSceneBoundary) {
+            if (table.role === 'scenes') {
+                output.set(row.id, {
+                    sourceId: row.id,
+                    sourceTable: table.key,
+                    sourceTitle: row.title,
+                    action: 'retire',
+                    trigger: 'scene-boundary',
+                    triggerEventIds: sceneBoundary.eventIds,
+                    note: `${row.title}已离开场景，等待本场景事实完成分发。`,
+                    reason: `场景已切换至${sceneBoundary.currentTitle}；旧场景进入预退出。`,
+                });
+                continue;
+            }
+            const hasOpenCrossSceneEvent = events.some((eventId) => {
+                if (closedEventIds.has(eventId))
+                    return false;
+                const host = eventHost(input.snapshot, registry, eventId);
+                return host ? activeRow(host.row) : true;
+            });
+            const fields = row.fields ?? {};
+            const persistentCharacter = Boolean(text(fields.baseContent)
+                || list(fields.relationshipStates).length
+                || list(fields.abilityStates).length
+                || events.length > 1);
+            if (!hasOpenCrossSceneEvent && !persistentCharacter) {
+                output.set(row.id, {
+                    sourceId: row.id,
+                    sourceTable: table.key,
+                    sourceTitle: row.title,
+                    action: 'retire',
+                    trigger: 'scene-boundary',
+                    triggerEventIds: sceneBoundary.eventIds,
+                    note: `${row.title}已离开当前场景，等待其短期影响完成分发。`,
+                    reason: `场景已切换至${sceneBoundary.currentTitle}；临时 NPC 进入预退出。`,
+                });
+            }
             continue;
         }
         const closedEventId = events.find((eventId) => closedEventIds.has(eventId));
@@ -122,7 +228,7 @@ export function deriveIncrementalSettlementDirectives(input) {
             continue;
         const note = rowFactText(row, input.facts, closedEventId)
             || `${row.title}在该事件中的明确结果已写入对象事实。`;
-        // 事件状态由自然协议第二行和插件生成的关闭事实确定；不再要求事件正文重复出现“已结束”。
+        // 事件状态只由插件根据正文与自然事实模块中的明确终局证据确定。
         if (table.role === 'events') {
             output.set(row.id, {
                 sourceId: row.id,

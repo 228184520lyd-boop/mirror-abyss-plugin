@@ -34,7 +34,8 @@ export function buildEventProfiles(snapshot, facts, smallSummaries, largeSummari
             eventRowById.set(eventId, row);
     }
     const ids = new Set();
-    facts.forEach((fact) => ids.add(String(fact.eventId || fact.factId || '').trim()));
+    facts.filter((fact) => fact.storageClass !== 'episodic')
+        .forEach((fact) => ids.add(String(fact.eventId || '').trim()));
     eventRows.forEach((row) => {
         const linked = eventIdsOf(row);
         (linked.length ? linked : [row.id]).forEach((id) => ids.add(String(id || '').trim()));
@@ -45,7 +46,8 @@ export function buildEventProfiles(snapshot, facts, smallSummaries, largeSummari
     const enabled = enabledTables(tables);
     const profiles = [];
     for (const eventId of ids) {
-        const eventFacts = facts.filter((fact) => String(fact.eventId || fact.factId || '').trim() === eventId);
+        const eventFacts = facts.filter((fact) => fact.storageClass !== 'episodic'
+            && String(fact.eventId || '').trim() === eventId);
         const eventRow = eventRowById.get(eventId);
         // 新数据优先使用 eventIds；旧存档缺少该元数据时，只使用事实中明确列出的 relatedEntities 做精确回挂。
         // 不扫描正文、不进行模糊推断，避免把同名或背景对象错误接入事件。

@@ -1,6 +1,7 @@
 import { hashText, makeId, nowIso, safeText } from '../core/utils.js';
 import { parseFixedTextBlocks } from './fixed-text.js';
 import { canonicalObjectTitle } from './object-identity.js';
+import { applyFactContractGate } from './fact-contract.js';
 import { enabledTables, normalizeTableRegistry, tableByRole } from './table-registry.js';
 import { resolveStateLayer } from './state-semantics.js';
 export const STATE_TEXT_MARKERS = {
@@ -328,7 +329,13 @@ function activeEventMatch(eventName, activeFacts) {
     if (!token)
         return undefined;
     const matches = new Set(activeFacts.filter((fact) => {
-        const terms = [fact.eventId, fact.title, ...fact.keywords].map(identity).filter(Boolean);
+        const terms = [
+            fact.eventId,
+            fact.title,
+            fact.view?.eventName,
+            fact.view?.objectTitle,
+            ...fact.keywords,
+        ].map(identity).filter(Boolean);
         return terms.includes(token);
     }).map((fact) => fact.eventId));
     return matches.size === 1 ? [...matches][0] : undefined;
@@ -354,6 +361,150 @@ function rowSingleEventMatch(row) {
         return undefined;
     const values = [...new Set([...(row.eventIds ?? []), row.eventId].filter(Boolean))];
     return values.length === 1 ? values[0] : undefined;
+}
+function rowEventIds(row) {
+    return [...new Set([...(row?.eventIds ?? []), row?.eventId].map((value) => String(value || '').trim()).filter(Boolean))];
+}
+function eventRowById(snapshot, active, eventId) {
+    if (!eventId)
+        return undefined;
+    const matches = [];
+    for (const table of active.filter((item) => item.role === 'events')) {
+        for (const row of snapshot[table.key] ?? []) {
+            if (rowEventIds(row).includes(eventId))
+                matches.push(row);
+        }
+    }
+    return matches.length === 1 ? matches[0] : undefined;
+}
+function eventCandidateOpen(eventId, snapshot, active, activeFacts) {
+    const row = eventRowById(snapshot, active, eventId);
+    if (row?.entryLifecycle?.state === 'settling'
+        || /(已结束|结束|已完成|完成|已解决|已关闭|已归档|closed|completed|resolved|ended|archived)/i.test(String(row?.status || ''))) {
+        return false;
+    }
+    const statusFacts = activeFacts.filter((fact) => fact.eventId === eventId
+        && (fact.view?.moduleTag === 'MA_EVENT_STATUS' || /事件状态$/u.test(String(fact.title || ''))));
+    const latest = statusFacts.at(-1);
+    return !latest || latest.active !== false;
+}
+function canonicalEventName(eventId, fallback, snapshot, active, activeFacts) {
+    const row = eventRowById(snapshot, active, eventId);
+    if (row?.title)
+        return row.title;
+    const fact = [...activeFacts].reverse().find((item) => item.eventId === eventId
+        && item.view?.semanticRole === 'events'
+        && item.view?.objectTitle);
+    return fact?.view?.objectTitle || fallback;
+}
+const GENERIC_EVENT_CONTEXT_TOKENS = new Set([
+    '事件', '任务', '状态', '当前', '已经', '开始', '继续', '进行', '完成', '结束',
+    '结果', '目标', '行动', '阶段', '成功', '失败', '仍在', '正在',
+]);
+function eventContextTokens(value, omitted = []) {
+    let token = identity(value);
+    for (const item of omitted.map(identity).filter((item) => item.length >= 2))
+        token = token.split(item).join('');
+    const output = new Set();
+    for (let index = 0; index + 1 < token.length; index += 1) {
+        const part = token.slice(index, index + 2);
+        if (!GENERIC_EVENT_CONTEXT_TOKENS.has(part))
+            output.add(part);
+    }
+    return output;
+}
+function contextualEventMatches(event, snapshot, active, activeFacts, allowedIds) {
+    const matches = new Set();
+    const currentText = [event.eventName, ...event.modules.map((item) => item.content)].join(' ');
+    const currentIdentity = identity(currentText);
+    for (const table of active.filter((item) => item.role === 'events')) {
+        for (const row of snapshot[table.key] ?? []) {
+            const eventIds = rowEventIds(row).filter((eventId) => (!allowedIds || allowedIds.has(eventId))
+                && eventCandidateOpen(eventId, snapshot, active, activeFacts));
+            if (!eventIds.length)
+                continue;
+            const anchors = unique(row.fields?.relatedObjects ?? [], 40, 240)
+                .filter((item) => identity(item).length >= 2);
+            if (!anchors.some((item) => currentIdentity.includes(identity(item))))
+                continue;
+            const currentTokens = eventContextTokens(currentText, anchors);
+            const previousTokens = eventContextTokens([
+                row.title,
+                row.content,
+                ...(row.keywords ?? []),
+            ].join(' '), anchors);
+            if (![...currentTokens].some((item) => previousTokens.has(item)))
+                continue;
+            for (const eventId of eventIds)
+                matches.add(eventId);
+        }
+    }
+    return matches;
+}
+function freshEventId(eventName, snapshot, active, activeFacts) {
+    const token = identity(eventName);
+    const base = `event_${hashText(token)}`;
+    const used = new Set(activeFacts.map((fact) => String(fact.eventId || '').trim()).filter(Boolean));
+    for (const table of active.filter((item) => item.role === 'events'))
+        for (const row of snapshot[table.key] ?? [])
+            for (const eventId of rowEventIds(row))
+                used.add(eventId);
+    if (!used.has(base))
+        return base;
+    return `event_${hashText(`${token}|new-after|${[...used].sort().join('|')}`)}`;
+}
+/**
+ * 一个 <MA_EVENT> 是事件身份解析的最小事务边界。先按事件名精确复用；名称漂移时，
+ * 优先接受本块明确对象行共同指向的唯一、仍开放 event_id；对象模块缺失或多线并存时，
+ * 还必须同时命中旧事件的明确关联对象与非通用文本片段。多候选或已结束候选都不猜测。
+ */
+function resolveNaturalEventIdentity(event, snapshot, active, activeFacts) {
+    const exact = activeEventMatch(event.eventName, activeFacts)
+        || snapshotEventMatch(event.eventName, snapshot, active);
+    if (exact && eventCandidateOpen(exact, snapshot, active, activeFacts)) {
+        return {
+            eventId: exact,
+            canonicalName: canonicalEventName(exact, event.eventName, snapshot, active, activeFacts),
+        };
+    }
+    const candidates = new Set();
+    for (const module of event.modules.filter((item) => !item.eventModule)) {
+        const token = canonicalObjectTitle(module.objectName);
+        if (!token)
+            continue;
+        const matches = [];
+        for (const table of active.filter((item) => item.role !== 'events')) {
+            for (const row of snapshot[table.key] ?? []) {
+                if (canonicalObjectTitle(row.title) === token)
+                    matches.push(row);
+            }
+        }
+        if (matches.length !== 1)
+            continue;
+        for (const eventId of rowEventIds(matches[0])) {
+            if (eventCandidateOpen(eventId, snapshot, active, activeFacts))
+                candidates.add(eventId);
+        }
+    }
+    if (candidates.size === 1) {
+        const eventId = [...candidates][0];
+        return {
+            eventId,
+            canonicalName: canonicalEventName(eventId, event.eventName, snapshot, active, activeFacts),
+        };
+    }
+    const contextual = contextualEventMatches(event, snapshot, active, activeFacts, candidates.size ? candidates : undefined);
+    if (contextual.size === 1) {
+        const eventId = [...contextual][0];
+        return {
+            eventId,
+            canonicalName: canonicalEventName(eventId, event.eventName, snapshot, active, activeFacts),
+        };
+    }
+    return {
+        eventId: freshEventId(event.eventName, snapshot, active, activeFacts),
+        canonicalName: event.eventName,
+    };
 }
 function changeOperation(value) {
     const token = identity(value);
@@ -467,6 +618,9 @@ function changeFromBlock(block, active, previous, activeFacts) {
         locked: existing?.locked ?? false,
         lockMode: existing?.lockMode,
         lifecycle: existing?.lifecycle,
+        // 待结算对象再次出现时，必须把状态机标记带到事务入口，由 restore 指令原子恢复；
+        // 不能在模型投影阶段静默丢失，否则会留下“无 lifecycle 但状态仍待结算”的半恢复行。
+        entryLifecycle: existing?.entryLifecycle ? structuredClone(existing.entryLifecycle) : undefined,
         updatedAt: nowIso(),
         fields: relocation ? { ...(existing?.fields ?? {}), ...fields } : fields,
         semanticRole: table.role,
@@ -583,6 +737,21 @@ function compactFactText(value, limit = 220, label = '事实模块') {
         throw new Error(`${label}过长：${text.length}/${limit} 字；只写一到两句具体事实`);
     return text;
 }
+// 事件关闭只接受正文和事实模块共同出现的明确终局表达。单个动作完成、到达、开门、
+// 交付一件物品等原子结果都不能据此关闭整条事件线。
+const EXPLICIT_EVENT_TERMINAL_RE = /(?:事件|任务|目标|委托|调查|案件|战斗|冲突|谈判|交易|仪式|行动|计划|追捕|危机|救援|审判|比赛|旅程|会面|婚礼).{0,16}(?:已结束|已经结束|结束了|已完成|已经完成|完成了|已解决|已经解决|已关闭|已经关闭|已达成|已经达成|宣告结束|告一段落|结案|告破)|(?:任务完成|目标达成|危机解除|战斗结束|谈判结束|交易完成|仪式完成|追捕结束|调查结案|案件告破|救援完成|比赛结束|婚礼结束)|(?:此事|此案|争端|纠纷).{0,8}(?:作罢|了结|终结|不再追究)|(?:对方|双方|一方).{0,12}(?:认输|投降).{0,12}(?:不再追究|退出争端|停止争斗)/iu;
+function explicitlyClosedEvent(event, sourceText) {
+    if (event.modules.some((module) => module.unresolved))
+        return false;
+    const eventEvidence = event.modules
+        .filter((module) => module.tag === 'MA_EVENT_RESULT' || module.tag === 'MA_EVENT_STATE' || module.tag === 'MA_CORE')
+        .map((module) => module.content)
+        .join(' ');
+    const source = String(sourceText ?? '').trim();
+    return Boolean(source
+        && EXPLICIT_EVENT_TERMINAL_RE.test(eventEvidence)
+        && EXPLICIT_EVENT_TERMINAL_RE.test(source));
+}
 /**
  * 1.3.14 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是最短事实。
  */
@@ -653,16 +822,17 @@ export function parseStateTextBlocks(raw) {
         const eventName = safeText(prelude[0], 240).trim();
         if (!eventName)
             throw new Error(`第 ${line} 行的 <MA_EVENT> 缺少事件名称`);
-        const status = prelude[1] || '进行中';
-        if (!/^(进行中|已结束)$/u.test(status))
-            throw new Error(`事件“${eventName}”第二行必须是“进行中”或“已结束”`);
+        // 兼容 1.3.14 已保存的模型输出：旧第二行可以读取，但只作为迁移输入，
+        // 不再拥有事件关闭权。新协议在事件名之后直接进入事实模块。
+        const legacyStatus = prelude[1] || '';
+        if (legacyStatus && !/^(进行中|已结束)$/u.test(legacyStatus))
+            throw new Error(`事件“${eventName}”在事件名后出现未知文本；新协议应直接写事实模块`);
+        if (prelude.length > (legacyStatus ? 2 : 1))
+            throw new Error(`事件“${eventName}”在事实模块前包含多余文本`);
         if (!modules.length)
             throw new Error(`事件“${eventName}”没有事实模块`);
         if (!modules.some((module) => module.tag === 'MA_CORE'))
             throw new Error(`事件“${eventName}”缺少唯一的 <MA_CORE> 动作骨架`);
-        if (status === '已结束' && modules.some((module) => module.unresolved)) {
-            throw new Error(`事件“${eventName}”标记为已结束，但仍返回 <MA_UNRESOLVED>`);
-        }
         const moduleKeys = new Set();
         for (const module of modules) {
             const key = module.eventModule
@@ -672,7 +842,7 @@ export function parseStateTextBlocks(raw) {
                 throw new Error(`事件“${eventName}”重复返回同一事实模块：${module.eventModule ? `<${module.tag}>` : module.objectName}`);
             moduleKeys.add(key);
         }
-        output.push({ kind: 'event', line, eventName, closed: status === '已结束', modules });
+        output.push({ kind: 'event', line, eventName, reportedClosed: legacyStatus === '已结束', closed: false, modules });
     }
     if (!output.some((block) => block.kind === 'turn' || block.kind === 'event')) {
         throw new Error('状态模型未返回 <MA_TURN> 或 <MA_EVENT>');
@@ -697,9 +867,67 @@ function eventCoreText(event) {
         || event.modules.find((module) => module.tag === 'MA_EVENT_RESULT')?.content
         || `${event.eventName}${event.closed ? '已结束' : '正在进行'}`;
 }
+function projectionPatchForFact(fact, working) {
+    const view = fact.view;
+    if (!view)
+        return undefined;
+    const rows = working[view.table] ?? [];
+    const existing = rows.find((row) => row.id === view.rowId)
+        ?? rows.find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(view.objectTitle));
+    const fields = { ...(existing?.fields ?? {}) };
+    let content = existing?.content || '';
+    let status = existing?.status || 'active';
+    let rowKeywords = unique([...(existing?.keywords ?? []), ...(view.keywords ?? [])], 24, 100);
+    if (view.layerKind === 'content')
+        content = view.value;
+    else if (view.layerKind === 'status')
+        status = view.value;
+    else if (view.layerKind === 'keywords')
+        rowKeywords = unique([...rowKeywords, view.value], 24, 100);
+    else if (view.layerType === 'string[]')
+        fields[view.layerKey] = arrayAfterChange(fields[view.layerKey], [view.value], view.arrayOperation || 'replace');
+    else if (view.layerKey)
+        fields[view.layerKey] = view.value;
+    if (!content && !(view.layerKind === 'field' && view.layerKey === 'baseContent'))
+        content = view.objectTitle;
+    if (view.moduleTag === 'MA_CORE')
+        content = view.value;
+    if (view.semanticRole === 'events')
+        status = view.eventClosed ? '已结束' : '进行中';
+    fields.relatedEvents = arrayAfterChange(fields.relatedEvents, [view.eventName], 'add');
+    if (view.semanticRole === 'events' && view.relatedObjects?.length)
+        fields.relatedObjects = arrayAfterChange(fields.relatedObjects, view.relatedObjects, 'add');
+    const row = {
+        id: existing?.id || view.rowId,
+        title: existing?.title || view.objectTitle,
+        content,
+        keywords: rowKeywords,
+        status,
+        source: existing?.source ?? 'auto',
+        locked: existing?.locked ?? false,
+        lockMode: existing?.lockMode,
+        lifecycle: existing?.lifecycle,
+        entryLifecycle: existing?.entryLifecycle ? structuredClone(existing.entryLifecycle) : undefined,
+        updatedAt: nowIso(),
+        fields,
+        semanticRole: view.semanticRole,
+        eventId: fact.event_id,
+        eventIds: unique([...(existing?.eventIds ?? []), existing?.eventId, fact.event_id], 80, 160),
+        factIds: unique([...(existing?.factIds ?? []), fact.fact_id], 200, 180),
+    };
+    if (view.baseRevisionStatement)
+        row.baseRevisionEvidence = { eventId: fact.event_id, factId: fact.fact_id, statement: view.baseRevisionStatement };
+    return {
+        table: view.table,
+        row,
+        matchKey: existing?.id || `new:${identity(view.objectTitle)}`,
+        relocation: view.relocation,
+    };
+}
 function naturalChange(event, module, active, previous, activeFacts, allObjectNames) {
     const table = naturalTable(module, active);
-    const objectName = module.eventModule ? event.eventName : module.objectName;
+    const stableEventName = event.canonicalName || event.eventName;
+    const objectName = module.eventModule ? stableEventName : module.objectName;
     const keywords = unique([objectName], 24, 100);
     let targetTable = table;
     let existing = findExistingRow(table.key, objectName, keywords, previous);
@@ -720,67 +948,28 @@ function naturalChange(event, module, active, previous, activeFacts, allObjectNa
         }
     }
     const layer = resolveStateLayer(targetTable, module.layerLabel);
-    const fields = { ...(existing?.fields ?? {}) };
-    let content = existing?.content || '';
-    let status = existing?.status || 'active';
-    let rowKeywords = unique([...(existing?.keywords ?? []), ...keywords], 24, 100);
-    if (layer.kind === 'content')
-        content = module.content;
-    else if (layer.kind === 'status')
-        status = module.content;
-    else if (layer.kind === 'keywords')
-        rowKeywords = unique([...rowKeywords, module.content], 24, 100);
-    else if (layer.definition.type === 'string[]') {
-        fields[layer.key] = arrayAfterChange(fields[layer.key], [module.content], arrayLayerOperation(layer.key));
-    }
-    else {
-        const previousBase = safeText(fields[layer.key], 12000).trim();
-        fields[layer.key] = module.content;
-        if (layer.key === 'baseContent' && previousBase && previousBase !== module.content) {
-            // 明确的身份/对象本质模块可以改变基础定义；普通状态模块不能触碰此标记。
-            const statement = eventCoreText(event);
-            fields.currentFacts = arrayAfterChange(fields.currentFacts, [statement], 'add');
-        }
-    }
-    if (!content && !(layer.kind === 'field' && layer.key === 'baseContent'))
-        content = objectName;
-    if (module.eventModule && module.tag === 'MA_CORE')
-        content = module.content;
-    if (module.eventModule)
-        status = event.closed ? '已结束' : '进行中';
-    const eventId = activeEventMatch(event.eventName, activeFacts)
-        || snapshotEventMatch(event.eventName, previous, active)
-        || rowSingleEventMatch(existing)
-        || `event_${hashText(identity(event.eventName))}`;
+    const eventId = event.eventId;
     const factTitle = `${objectName}·${layer.label}`;
     const previousMatches = activeFacts.filter((fact) => fact.eventId === eventId && identity(fact.title) === identity(factTitle));
-    const factId = previousMatches.length === 1
-        ? previousMatches[0].factId
-        : `fact_${hashText(`${eventId}|${identity(factTitle)}`)}`;
+    const replacementLayer = !module.eventModule && arrayLayerOperation(layer.key) === 'replace';
+    const hostId = existing?.id;
+    const currentHostFact = replacementLayer && hostId
+        ? [...activeFacts].reverse().find((fact) => fact.active !== false
+            && !fact.supersededByFactId
+            && (fact.primaryHost?.id === hostId || fact.view?.rowId === hostId)
+            && (fact.view?.layerKey === layer.key || identity(fact.title) === identity(factTitle)))
+        : undefined;
+    const sameCurrentValue = currentHostFact
+        && identity(currentHostFact.content) === identity(module.content);
+    const factId = sameCurrentValue
+        ? currentHostFact.factId
+        : currentHostFact
+            ? `fact_${hashText(`${hostId}|${layer.key}|${currentHostFact.factId}|${identity(module.content)}`)}`
+            : previousMatches.length === 1
+                ? previousMatches[0].factId
+                : `fact_${hashText(`${eventId}|${identity(factTitle)}`)}`;
     const relatedObjects = module.eventModule ? allObjectNames : [objectName];
-    fields.relatedEvents = arrayAfterChange(fields.relatedEvents, [event.eventName], 'add');
-    if (module.eventModule && allObjectNames.length)
-        fields.relatedObjects = arrayAfterChange(fields.relatedObjects, allObjectNames, 'add');
-    const row = {
-        id: existing?.id || makeId(targetTable.key),
-        title: existing?.title || objectName,
-        content,
-        keywords: rowKeywords,
-        status,
-        source: existing?.source ?? 'auto',
-        locked: existing?.locked ?? false,
-        lockMode: existing?.lockMode,
-        lifecycle: existing?.lifecycle,
-        updatedAt: nowIso(),
-        fields,
-        semanticRole: targetTable.role,
-        eventId,
-        eventIds: unique([...(existing?.eventIds ?? []), existing?.eventId, eventId], 80, 160),
-        factIds: unique([...(existing?.factIds ?? []), factId], 200, 180),
-    };
-    if (layer.kind === 'field' && layer.key === 'baseContent' && existing && safeText(existing.fields?.baseContent, 12000).trim() !== module.content) {
-        row.baseRevisionEvidence = { eventId, factId, statement: eventCoreText(event) };
-    }
+    const previousBase = safeText(existing?.fields?.baseContent, 12000).trim();
     const fact = {
         fact_id: factId,
         event_id: eventId,
@@ -792,14 +981,38 @@ function naturalChange(event, module, active, previous, activeFacts, allObjectNa
         unresolved: module.unresolved ? [module.content] : [],
         status: module.unresolved ? 'active' : 'active',
         time_range: {},
-        related_entities: unique([...relatedObjects, event.eventName], 40, 240),
-        keywords: unique([objectName, event.eventName, factTitle], 24, 100),
-        operation: previousMatches.length ? 'update' : 'create',
+        related_entities: unique([...relatedObjects, stableEventName, event.eventName], 40, 240),
+        keywords: unique([objectName, stableEventName, event.eventName, factTitle], 24, 100),
+        operation: sameCurrentValue || previousMatches.some((fact) => fact.factId === factId) ? 'update' : 'create',
         confidence: 'confirmed',
+        supersedes_fact_id: currentHostFact && !sameCurrentValue ? currentHostFact.factId : undefined,
+        view: {
+            table: targetTable.key,
+            rowId: existing?.id || makeId(targetTable.key),
+            objectTitle: existing?.title || objectName,
+            semanticRole: targetTable.role,
+            layerKind: layer.kind,
+            layerKey: layer.key,
+            layerType: layer.definition?.type,
+            arrayOperation: arrayLayerOperation(layer.key),
+            value: module.content,
+            keywords: unique([...keywords, stableEventName, event.eventName], 24, 100),
+            eventName: stableEventName,
+            eventClosed: event.closed,
+            relatedObjects: module.eventModule ? allObjectNames : [],
+            moduleTag: module.tag,
+            relocation,
+            baseRevisionStatement: layer.kind === 'field' && layer.key === 'baseContent' && existing && previousBase !== module.content
+                ? eventCoreText(event)
+                : undefined,
+        },
     };
-    return { fact, patch: { table: targetTable.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation } };
+    return {
+        ...fact,
+        ...applyFactContractGate(fact, { existingObject: Boolean(existing) }),
+    };
 }
-export function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = []) {
+export function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [], options = {}) {
     const active = enabledTables(normalizeTableRegistry(registry));
     const previous = dedupeStrongStateRows(previousSnapshot, registry);
     const working = structuredClone(previous);
@@ -810,13 +1023,18 @@ export function parseStateTextOutput(raw, previousSnapshot, registry, activeFact
     const rowsByIdentity = new Map();
     const relocationsById = new Map();
     for (const event of blocks.filter((block) => block.kind === 'event')) {
+        event.closed = explicitlyClosedEvent(event, options.sourceText);
+        const eventIdentity = resolveNaturalEventIdentity(event, working, active, activeFacts);
+        event.eventId = eventIdentity.eventId;
+        event.canonicalName = eventIdentity.canonicalName;
         const allObjectNames = unique(event.modules.filter((module) => !module.eventModule).map((module) => module.objectName), 40, 240);
         for (const module of event.modules) {
-            const converted = naturalChange(event, module, active, working, activeFacts, allObjectNames);
-            const fact = converted.fact;
+            const fact = naturalChange(event, module, active, working, activeFacts, allObjectNames);
             const id = String(fact.fact_id);
             factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
-            const patch = converted.patch;
+            const patch = projectionPatchForFact(fact, working);
+            if (!patch)
+                continue;
             applyPatchToWorkingSnapshot(working, patch);
             const key = `${patch.table}|${canonicalObjectTitle(patch.row.title) || patch.matchKey}`;
             const current = rowsByIdentity.get(key);
@@ -830,27 +1048,61 @@ export function parseStateTextOutput(raw, previousSnapshot, registry, activeFact
                 relocationsById.set(patch.relocation.id, patch.relocation);
         }
         // 事件状态由插件生成稳定事实，永远最后提交，确保已结束事件不会被后续对象模块重新判为 active。
-        const eventId = activeEventMatch(event.eventName, activeFacts)
-            || snapshotEventMatch(event.eventName, working, active)
-            || `event_${hashText(identity(event.eventName))}`;
+        const eventId = event.eventId;
+        const stableEventName = event.canonicalName || event.eventName;
         const statusFactId = `fact_${hashText(`${eventId}|event-status`)}`;
         const previousStatus = activeFacts.find((fact) => fact.factId === statusFactId);
-        factsById.set(statusFactId, {
+        const eventTable = tableByRole(active, 'events', false);
+        const existingEventRow = eventTable
+            ? eventRowById(working, active, eventId)
+                || findExistingRow(eventTable.key, stableEventName, [stableEventName, event.eventName], working)
+            : undefined;
+        const statusFact = {
             fact_id: statusFactId,
             event_id: eventId,
             entity_id: eventId,
             type: 'events',
-            title: `${event.eventName}·事件状态`,
-            content: event.closed ? `${event.eventName}已结束。` : `${event.eventName}正在进行。`,
-            occurred: [event.closed ? `${event.eventName}已结束。` : `${event.eventName}正在进行。`],
+            title: `${stableEventName}·事件状态`,
+            content: event.closed ? `${stableEventName}已结束。` : `${stableEventName}正在进行。`,
+            occurred: [event.closed ? `${stableEventName}已结束。` : `${stableEventName}正在进行。`],
             unresolved: event.modules.filter((module) => module.unresolved).map((module) => module.content),
             status: event.closed ? 'closed' : 'active',
             time_range: {},
-            related_entities: unique([event.eventName, ...allObjectNames], 40, 240),
-            keywords: unique([event.eventName], 24, 100),
+            related_entities: unique([stableEventName, event.eventName, ...allObjectNames], 40, 240),
+            keywords: unique([stableEventName, event.eventName], 24, 100),
             operation: event.closed ? 'close' : previousStatus ? 'update' : 'create',
             confidence: 'confirmed',
-        });
+            view: eventTable ? {
+                table: eventTable.key,
+                rowId: existingEventRow?.id || makeId(eventTable.key),
+                objectTitle: existingEventRow?.title || stableEventName,
+                semanticRole: 'events',
+                layerKind: 'status',
+                value: event.closed ? '已结束' : '进行中',
+                keywords: unique([stableEventName, event.eventName], 24, 100),
+                eventName: stableEventName,
+                eventClosed: event.closed,
+                relatedObjects: allObjectNames,
+                moduleTag: 'MA_EVENT_STATUS',
+            } : undefined,
+        };
+        const routedStatusFact = {
+            ...statusFact,
+            ...applyFactContractGate(statusFact, { existingObject: Boolean(existingEventRow) }),
+        };
+        factsById.set(statusFactId, routedStatusFact);
+        const statusPatch = projectionPatchForFact(routedStatusFact, working);
+        if (statusPatch) {
+            applyPatchToWorkingSnapshot(working, statusPatch);
+            const key = `${statusPatch.table}|${canonicalObjectTitle(statusPatch.row.title) || statusPatch.matchKey}`;
+            const current = rowsByIdentity.get(key);
+            rowsByIdentity.set(key, current ? {
+                table: statusPatch.table,
+                row: mergePatchRows(current.row, statusPatch.row),
+                matchKey: statusPatch.matchKey,
+                relocation: current.relocation ?? statusPatch.relocation,
+            } : statusPatch);
+        }
     }
     for (const { table, row } of rowsByIdentity.values())
         (snapshot[table] ||= []).push(row);

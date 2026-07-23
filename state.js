@@ -1,574 +1,460 @@
 /**
- * 模块职责：调用状态模型并把内部事实包与动态可见表格合并为下一快照。
- * 维护边界：模型只更新启用表格；停用表格保留隐藏旧视图；人工/锁定行必须恢复。
+ * 模块职责：依据动态表格注册表构造内部事实与行级状态固定文本协议。
+ * 维护边界：只提取已发生、已显影内容；未返回行由插件保留，禁止模型重写完整旧快照。
  */
-import { assertArtifactCommitCurrent, CommitRejectedError } from '../core/commit-guard.js';
-import { getChat, getSettings } from '../core/context.js';
-import { hashText, safeText, toErrorMessage } from '../core/utils.js';
-import { markStage } from '../domain/artifact.js';
-import { normalizeFactPackage } from '../domain/facts.js';
-import { canonicalObjectTitle } from '../domain/object-identity.js';
-import { enabledTables, migrateSnapshotTables, normalizeTableRegistry, registryFingerprint } from '../domain/table-registry.js';
-import { emptySnapshot, normalizeSnapshot } from '../domain/snapshot.js';
-import { transitionStateSnapshot } from '../domain/memory-state-machine.js';
-import { dedupeStrongStateRows, parseStateTextOutput } from '../domain/state-text.js';
-import { generateTask } from '../llm/generator.js';
-import { stateSystemPrompt, stateUserPrompt } from '../prompts/state.js';
-import { getChatState, putArtifact } from '../storage/repository.js';
-class RegistryChangedError extends CommitRejectedError {
+import { DEFAULT_CONTENT_LIMITS, DEFAULT_STATE_PROMPTS } from '../constants.js';
+import { DEFAULT_TABLE_REGISTRY, enabledTables, normalizeTableRegistry } from '../domain/table-registry.js';
+import { stateLayerLabelForField, writableStateLayers } from '../domain/state-semantics.js';
+const ACTIVE_STATUS_RE = /current|active|进行|当前|活跃|未决|持续|开放|受限|暂停/i;
+const DIRECTORY_CHAR_BUDGET = 1600;
+const MAX_DIRECTORY_ALIASES = 6;
+const MAX_FULL_ROWS = 6;
+const MAX_FULL_ROWS_PER_TABLE = 2;
+const MAX_FACTS = 6;
+function tables(registry) {
+    return enabledTables(normalizeTableRegistry(registry?.length ? registry : DEFAULT_TABLE_REGISTRY));
 }
-const FACT_OPERATIONS = new Set(['create', 'update', 'append', 'close', 'supersede']);
-const FACT_CONFIDENCE = new Set(['confirmed', 'recorded', 'reported', 'uncertain']);
-/** 固定文本解析后再检查镜渊业务身份约束。 */
-function assertStateBusinessShape(parsed, active) {
-    const factIds = new Set();
-    parsed.facts.forEach((fact, index) => {
-        if (!fact || typeof fact !== 'object' || Array.isArray(fact))
-            throw new Error(`facts[${index}] 必须是对象`);
-        const source = fact;
-        const factId = String(source.fact_id ?? source.factId ?? source.id ?? '').trim();
-        const eventId = String(source.event_id ?? source.eventId ?? source.entity_id ?? source.entityId ?? '').trim();
-        const title = String(source.title ?? '').trim();
-        if (!factId)
-            throw new Error(`facts[${index}].fact_id 不能为空`);
-        if (!eventId)
-            throw new Error(`facts[${index}].event_id 不能为空`);
-        if (!title)
-            throw new Error(`facts[${index}].title 不能为空`);
-        if (factIds.has(factId))
-            throw new Error(`同一次状态返回包含重复 fact_id：${factId}`);
-        factIds.add(factId);
-        if (source.operation !== undefined && !FACT_OPERATIONS.has(String(source.operation)))
-            throw new Error(`facts[${index}].operation 不合法`);
-        if (source.confidence !== undefined && !FACT_CONFIDENCE.has(String(source.confidence)))
-            throw new Error(`facts[${index}].confidence 不合法`);
-    });
+const COMMON_STATE_LAYER_LABELS = new Set([
+    '当前摘要', '条目状态', '检索词', '身份定义', '现行事实', '当前状态', '关联对象', '关联事件',
+]);
+function compactRegistryDescription(active) {
+    const defaults = normalizeTableRegistry(DEFAULT_TABLE_REGISTRY);
+    return active.map((table, index) => {
+        const layers = writableStateLayers(table);
+        const defaultTable = defaults.find((item) => item.key === table.key || (table.isDefault && item.role === table.role));
+        const defaultLayers = new Map((defaultTable ? writableStateLayers(defaultTable) : []).map((layer) => [layer.label, layer]));
+        const dedicated = layers.filter((layer) => !COMMON_STATE_LAYER_LABELS.has(layer.label));
+        const overrides = defaultTable
+            ? layers.filter((layer) => COMMON_STATE_LAYER_LABELS.has(layer.label) && defaultLayers.get(layer.label)?.description !== layer.description)
+            : [];
+        const title = table.fields.find((field) => field.key === 'title');
+        const defaultTitle = defaultTable?.fields.find((field) => field.key === 'title');
+        const notes = [];
+        if (dedicated.length)
+            notes.push(`专属层：${dedicated.map((layer) => `${layer.label}：${layer.description}`).join('；')}`);
+        if (overrides.length)
+            notes.push(`语义覆盖：${overrides.map((layer) => `${layer.label}：${layer.description}`).join('；')}`);
+        if (title?.description && defaultTitle && title.description !== defaultTitle.description)
+            notes.push(`对象命名：${title.description}`);
+        return `${index + 1}. ${table.name}｜类型：${kindLabel(table)}｜用途：${table.purpose}${notes.length ? `｜${notes.join('｜')}` : ''}`;
+    }).join('\n');
+}
+function kindLabel(table) {
+    const labels = {
+        spacetime: '时空', scenes: '场景', characters: '角色', items: '物品', events: '事件',
+        regions: '地点', globalChanges: '全局', foundations: '基础设定', custom: '自定义对象',
+    };
+    return labels[table.role] || '自定义对象';
+}
+const MODEL_VISIBLE_RULE_REPLACEMENTS = [
+    [/relationshipStates/gi, '关系状态'],
+    [/presentationStates/gi, '外观表现'],
+    [/solidifiedHistory/gi, '历史事实'],
+    [/absorbedMemory/gi, '承接记录'],
+    [/globalChanges/gi, '全局变化'],
+    [/customObjects/gi, '自定义对象'],
+    [/currentStates/gi, '当前状态'],
+    [/currentFacts/gi, '现行事实'],
+    [/recentHistory/gi, '近期经历'],
+    [/relatedObjects/gi, '关联对象'],
+    [/relatedEvents/gi, '关联事件'],
+    [/abilityStates/gi, '能力状态'],
+    [/baseContent/gi, '身份定义'],
+    [/characters/gi, '角色'],
+    [/character/gi, '角色'],
+    [/foundations/gi, '基础设定'],
+    [/spacetime/gi, '时空'],
+    [/global/gi, '全局'],
+    [/regions/gi, '地点'],
+    [/region/gi, '地点'],
+    [/scenes/gi, '场景'],
+    [/scene/gi, '场景'],
+    [/items/gi, '物品'],
+    [/item/gi, '物品'],
+    [/events/gi, '事件'],
+    [/event/gi, '事件'],
+    [/confirmed/gi, '确认'],
+    [/reported/gi, '转述'],
+    [/uncertain/gi, '不确定'],
+];
+function modelVisibleRuleText(value, fallback) {
+    let text = String(value ?? '').trim() || fallback;
+    for (const [pattern, replacement] of MODEL_VISIBLE_RULE_REPLACEMENTS)
+        text = text.replace(pattern, replacement);
+    return text;
+}
+export function stateSystemPrompt(registry, promptSettings = DEFAULT_STATE_PROMPTS, contentLimits = DEFAULT_CONTENT_LIMITS) {
+    const active = tables(registry);
+    const names = active.map((table) => table.name).join('、');
+    const admissionRules = modelVisibleRuleText(promptSettings?.admissionRules, DEFAULT_STATE_PROMPTS.admissionRules);
+    const exclusionRules = modelVisibleRuleText(promptSettings?.exclusionRules, DEFAULT_STATE_PROMPTS.exclusionRules);
+    const routingRules = modelVisibleRuleText(promptSettings?.routingRules, DEFAULT_STATE_PROMPTS.routingRules);
+    const evidenceRules = modelVisibleRuleText(promptSettings?.evidenceRules, DEFAULT_STATE_PROMPTS.evidenceRules);
+    const updateRules = modelVisibleRuleText(promptSettings?.updateRules, DEFAULT_STATE_PROMPTS.updateRules);
+    void contentLimits;
+    return `“镜渊”无观点事实书记｜自然事实模块协议
+
+职责：只提取本轮明确成立的短事实。禁止评论、解释动机、预测、补全、判断价值、决定删除或输出数据库字段。
+禁止 JSON、键值表单、Markdown 代码块、思考过程和块外说明。
+
+【事件容器】
+每条独立事件使用一个 <MA_EVENT>。第一行只写稳定事件名，随后直接写事实模块。书记只记录已发生结果，不判断整条事件是否结束，也不单独生成“未决事项”；事件状态由插件根据正文和事实模块中的明确终局事实统一计算。同一事件内的模块依次连读后才构成完整事件；任何模块都不得重复复述整件事。
+
+<MA_EVENT>
+潜入库房
+<MA_CORE>
+林默借助钩索登上屋顶，以烟雾弹遮挡守卫后打开库房侧门。
+</MA_CORE>
+<MA_CHARACTER_STATE>
+林默
+已经进入库房，暂未被守卫确认身份。
+</MA_CHARACTER_STATE>
+<MA_ITEM_STATE>
+烟雾弹
+已使用一枚，剩余两枚。
+</MA_ITEM_STATE>
+</MA_EVENT>
+
+【可用自然模块】
+事件：<MA_CORE>、<MA_EVENT_RESULT>、<MA_EVENT_STATE>
+角色：<MA_CHARACTER_IDENTITY>、<MA_CHARACTER_FACT>、<MA_CHARACTER_STATE>、<MA_CHARACTER_APPEARANCE>、<MA_CHARACTER_RELATION>、<MA_CHARACTER_ABILITY>
+物品：<MA_ITEM_IDENTITY>、<MA_ITEM_FACT>、<MA_ITEM_STATE>
+场景：<MA_SCENE_IDENTITY>、<MA_SCENE_FACT>、<MA_SCENE_STATE>
+地点：<MA_REGION_IDENTITY>、<MA_REGION_FACT>、<MA_REGION_STATE>
+全局：<MA_GLOBAL_IDENTITY>、<MA_GLOBAL_FACT>、<MA_GLOBAL_STATE>
+基础设定：<MA_FOUNDATION_IDENTITY>、<MA_FOUNDATION_FACT>、<MA_FOUNDATION_STATE>
+时空：<MA_SPACETIME_STATE>
+自定义表：<MA_CUSTOM>，依次四行写“表格显示名、对象名、语义层显示名、具体事实”。
+
+对象模块第一行必须是对象稳定名称，后续只写该对象自身的具体变化。事件模块直接写事实，不写对象名。
+
+【硬限制】
+1. 每个模块只写一个对象、一个角度、一个当前结果，通常一句，复杂时最多两句。
+2. 核心事实只写一次最短动作骨架；角色不重复动作骨架，只写角色自身结果；每个道具分别写归属、数量、位置、完整性或可用性变化；场景只写局面变化。
+3. 没有独立变化的对象不输出模块。临时动作、服装描写、普通反应和背景板不建档。
+4. “身份”模块只用于正文明确改变对象本质或基础定义。临时伪装、变装、幻术写外观；短期伤势或阶段变化写状态。
+5. 基础定义被明确改变时，事件核心必须写清改变事实。例如“林默完成手术，由男性转变为女性”；身份模块只写新的当前定义“女性”。
+6. 只记录正文明确写出的已发生结果；不输出“进行中/已结束”，不生成可能性、未来风险或未决事项，不把一个动作做完等同于整条事件结束。
+7. 不写近期经历、历史事实、承接记录、生命周期、稳定 ID、事件 ID 或事实 ID；这些由插件分发、总结和结算。
+8. 不使用“字段、变化层、动作、内容”等表单词，不输出等号。
+9. 无事实变化时只输出 <MA_TURN>，正文直接写一句最短变化概括；有事件时也可以先输出一个 <MA_TURN>。
+10. 当前启用表：${names || '（无）'}。
+
+【对象建档边界】
+允许建档：
+${admissionRules}
+
+默认排除：
+${exclusionRules}
+
+对象分流：
+${routingRules}
+
+证据边界：
+${evidenceRules}
+
+更新与冲突：
+${updateRules}
+
+【启用对象表】
+${compactRegistryDescription(active) || '当前没有启用表格；不要输出事件模块。'}
+
+输出前只检查：事实是否明确、模块是否短、各模块是否互不重复、标签是否闭合。`;
+}
+function normalizeSearchText(value) {
+    return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+function stringList(value) {
+    return Array.isArray(value) ? value.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
+}
+function boundedList(value, count, chars) {
+    return stringList(value).slice(-count).map((item) => item.slice(0, chars));
+}
+function compactLifecycle(row) {
+    if (!row.lifecycle)
+        return undefined;
+    return {
+        existence: row.lifecycle.existence,
+        activity: row.lifecycle.activity,
+        memory: row.lifecycle.memory,
+        evidenceLevel: row.lifecycle.evidenceLevel,
+        evidence: String(row.lifecycle.evidence || '').slice(0, 160),
+        returnConditions: boundedList(row.lifecycle.returnConditions, 4, 100),
+        returnBlockers: boundedList(row.lifecycle.returnBlockers, 4, 100),
+    };
+}
+/**
+ * 只给高相关对象发送“工作副本”，不是完整持久化行。
+ * direct 允许更多当前切面；support 仅保留帮助代词、事件延续和身份判断的必要内容。
+ */
+function modelRow(row, detail) {
+    const direct = detail === 'direct';
+    const output = {
+        title: row.title,
+        content: String(row.content || '').slice(0, direct ? 240 : 160),
+        keywords: (row.keywords ?? []).slice(0, direct ? 8 : 5).map((item) => String(item).slice(0, 60)),
+        status: String(row.status || '').slice(0, 80),
+    };
+    const fields = row.fields && typeof row.fields === 'object' ? row.fields : {};
+    for (const [key, value] of Object.entries(fields)) {
+        if (key === 'baseContent')
+            output[key] = String(value ?? '').slice(0, direct ? 240 : 160);
+        else if (key === 'currentFacts' || key === 'currentStates')
+            output[key] = boundedList(value, direct ? 6 : 3, direct ? 100 : 80);
+        else if (key === 'relationshipStates' || key === 'abilityStates' || key === 'presentationStates')
+            output[key] = boundedList(value, direct ? 4 : 2, direct ? 100 : 80);
+        else if (key === 'relatedObjects' || key === 'relatedEvents')
+            output[key] = boundedList(value, direct ? 6 : 4, 70);
+        else if (Array.isArray(value))
+            output[key] = boundedList(value, direct ? 4 : 2, direct ? 90 : 70);
+        else
+            output[key] = String(value ?? '').slice(0, direct ? 200 : 140);
+    }
+    return output;
+}
+function directoryEntry(item) {
+    const titleToken = normalizeSearchText(item.row.title);
+    const keywords = [...new Set((item.row.keywords ?? [])
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+            .filter((value) => normalizeSearchText(value) !== titleToken))]
+        .slice(0, MAX_DIRECTORY_ALIASES)
+        .map((value) => value.slice(0, 60));
+    return { table: item.table.name, kind: kindLabel(item.table), title: String(item.row.title || '').slice(0, 100), keywords };
+}
+function directoryLine(entry) {
+    const safe = (value) => contextValue(value).replace(/[｜|]/g, '／');
+    const aliases = entry.keywords.map(safe).filter(Boolean).join('、');
+    return `${safe(entry.kind)}｜${safe(entry.table)}｜${safe(entry.title)}${aliases ? `｜${aliases}` : ''}`;
+}
+function rowTerms(row) {
+    return [row.id, row.title, ...(row.keywords ?? [])]
+        .map(normalizeSearchText)
+        .filter((term) => term.length >= 2);
+}
+function rowMatches(row, source) {
+    return rowTerms(row).some((term) => source.includes(term));
+}
+function relatedTokens(row) {
+    const fields = row.fields && typeof row.fields === 'object' ? row.fields : {};
+    return [
+        ...stringList(fields.relatedObjects),
+        ...stringList(fields.relatedEvents),
+    ].map(normalizeSearchText).filter(Boolean);
+}
+function compactSnapshotContext(previous, active, sourceText) {
+    const source = normalizeSearchText(sourceText);
+    const all = [];
+    let order = 0;
     for (const table of active) {
-        const rows = parsed.snapshot[table.key];
-        if (rows === undefined)
-            continue;
-        if (!Array.isArray(rows))
-            throw new Error(`状态表 ${table.key} 必须是数组`);
-        const ids = new Set();
-        const titles = new Set();
-        rows.forEach((row, index) => {
-            if (!row || typeof row !== 'object' || Array.isArray(row))
-                throw new Error(`状态表 ${table.key}[${index}] 必须是对象`);
-            const source = row;
-            const id = String(source.id ?? '').trim();
-            const title = String(source.title ?? '').trim();
-            if (!id)
-                throw new Error(`状态表 ${table.key}[${index}].id 不能为空`);
-            if (!title)
-                throw new Error(`状态表 ${table.key}[${index}].title 不能为空`);
-            if (ids.has(id))
-                throw new Error(`状态表 ${table.key} 同一次返回包含重复 id：${id}`);
-            const titleToken = canonicalObjectTitle(title);
-            if (titleToken && titles.has(titleToken))
-                throw new Error(`状态表 ${table.key} 同一次返回包含重复对象：${title}`);
-            ids.add(id);
-            if (titleToken)
-                titles.add(titleToken);
-        });
+        for (const row of previous[table.key] ?? []) {
+            const direct = rowMatches(row, source);
+            const statusActive = ACTIVE_STATUS_RE.test(row.status);
+            all.push({
+                table,
+                row,
+                direct,
+                active: statusActive,
+                spacetime: table.role === 'spacetime',
+                activeEvent: table.role === 'events' && statusActive,
+                activeCharacter: table.role === 'characters' && statusActive,
+                order: order += 1,
+            });
+        }
     }
-}
-export function previousSnapshot(beforeIndex) {
-    const registry = getSettings().tableRegistry;
-    const chat = getChat();
-    for (let i = beforeIndex - 1; i >= 0; i -= 1) {
-        if (chat[i]?.is_user)
+    const directTerms = new Set();
+    const directReferences = new Set();
+    for (const item of all) {
+        if (!item.direct)
             continue;
-        const snapshot = chat[i]?.extra?.mirrorAbyssV11?.snapshot;
-        if (snapshot)
-            return normalizeSnapshot(snapshot, snapshot, registry);
-        const legacy = chat[i]?.extra?.mirrorAbyss?.tableSnapshot;
-        if (legacy)
-            return normalizeSnapshot(legacy, legacy, registry);
+        for (const term of rowTerms(item.row))
+            directTerms.add(term);
+        for (const term of relatedTokens(item.row))
+            directReferences.add(term);
     }
-    return emptySnapshot(registry);
+    const related = (item) => (rowTerms(item.row).some((term) => directReferences.has(term))
+        || relatedTokens(item.row).some((term) => directTerms.has(term)));
+    const priority = (item) => item.direct ? 100
+        : item.spacetime ? 90
+            : item.activeEvent ? 80
+                : related(item) ? 70
+                    : item.activeCharacter ? 60
+                        : item.active ? 30
+                            : 0;
+    const sorted = [...all].sort((a, b) => priority(b) - priority(a)
+        || String(b.row.updatedAt || '').localeCompare(String(a.row.updatedAt || ''))
+        || a.order - b.order);
+    // 目录只发送本轮直接命中、显式关联与当前连续性对象；插件不把完整仓库交给模型扫描。
+    const directory = [];
+    let directoryChars = '<MA_DIRECTORY>\n</MA_DIRECTORY>'.length;
+    let directoryOmitted = 0;
+    for (const item of sorted.filter((candidate) => priority(candidate) > 0).slice(0, 32)) {
+        const entry = directoryEntry(item);
+        const line = directoryLine(entry);
+        if (directoryChars + line.length + 1 > DIRECTORY_CHAR_BUDGET) {
+            directoryOmitted += 1;
+            continue;
+        }
+        directory.push(entry);
+        directoryChars += line.length + 1;
+    }
+    const relevant = {};
+    let total = 0;
+    const perTable = new Map();
+    for (const item of sorted) {
+        if (priority(item) <= 0)
+            continue;
+        if (total >= MAX_FULL_ROWS)
+            break;
+        const count = perTable.get(item.table.key) ?? 0;
+        if (count >= MAX_FULL_ROWS_PER_TABLE)
+            continue;
+        const detail = item.direct ? 'direct' : 'support';
+        (relevant[item.table.key] ||= []).push(modelRow(item.row, detail));
+        perTable.set(item.table.key, count + 1);
+        total += 1;
+    }
+    return { directory, directoryOmitted, relevant };
 }
-export { preserveProtectedRows } from '../domain/memory-state-machine.js';
-function normalizedTitle(value) {
-    return canonicalObjectTitle(value);
+function factMatches(fact, source) {
+    const terms = [fact.factId, fact.eventId, fact.title, ...fact.keywords, ...fact.relatedEntities]
+        .map(normalizeSearchText)
+        .filter((term) => term.length >= 2);
+    return terms.some((term) => source.includes(term));
 }
-function normalizedComparableText(value) {
+function activeFactPayload(facts, sourceText) {
+    const source = normalizeSearchText(sourceText);
+    const scored = facts.map((fact, index) => ({
+        fact,
+        index,
+        score: (factMatches(fact, source) ? 100 : 0) + (fact.active ? 20 : 0),
+    })).sort((a, b) => b.score - a.score
+        || String(b.fact.updatedAt || '').localeCompare(String(a.fact.updatedAt || ''))
+        || b.index - a.index);
+    const selected = scored.filter((item) => item.score > 0).slice(0, MAX_FACTS).map((item) => item.fact);
+    return selected.map((fact) => ({
+        event_name: String(fact.view?.eventName || (fact.view?.semanticRole === 'events' ? fact.view?.objectTitle : '') || '').slice(0, 120),
+        occurred: boundedList(fact.occurredFacts, 3, 140),
+        status: String(fact.status || '').slice(0, 60),
+        time_range: {
+            start: String(fact.timeRange?.start || '').slice(0, 80),
+            end: String(fact.timeRange?.end || '').slice(0, 80),
+            label: String(fact.timeRange?.label || '').slice(0, 100),
+        },
+        related_entities: boundedList(fact.relatedEntities, 8, 80),
+        title: String(fact.title || '').slice(0, 120),
+        type: String(fact.type || '').slice(0, 60),
+        keywords: boundedList(fact.keywords, 6, 60),
+        confidence: fact.confidence,
+        active: fact.active,
+    }));
+}
+function contextValue(value) {
     return String(value ?? '')
-        .normalize('NFKC')
+        .replace(/<\/?MA_[A-Z_]+>/gi, (tag) => tag.replace(/</g, '＜').replace(/>/g, '＞'))
         .replace(/\r\n?/g, '\n')
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
         .join(' ')
         .replace(/\s+/g, ' ')
-        .replace(/[。．.！!？?；;，,、：:]$/u, '')
         .trim();
 }
-function normalizedComparableList(value) {
-    if (!Array.isArray(value))
-        return [];
-    return [...new Set(value.map(normalizedComparableText).filter(Boolean))].sort();
-}
-function normalizedComparableObject(value) {
-    if (Array.isArray(value))
-        return value.map(normalizedComparableObject);
+function pushContextField(lines, key, value) {
+    if (Array.isArray(value)) {
+        for (const item of value)
+            pushContextField(lines, key, item);
+        return;
+    }
     if (value && typeof value === 'object') {
-        return Object.fromEntries(Object.entries(value)
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, item]) => [key, normalizedComparableObject(item)]));
-    }
-    return normalizedComparableText(value);
-}
-function sameComparableValue(left, right) {
-    if (Array.isArray(left) || Array.isArray(right)) {
-        if (!Array.isArray(left) || !Array.isArray(right))
-            return false;
-        const a = normalizedComparableList(left);
-        const b = normalizedComparableList(right);
-        return a.length === b.length && a.every((value, index) => value === b[index]);
-    }
-    const leftObject = left && typeof left === 'object';
-    const rightObject = right && typeof right === 'object';
-    if (leftObject || rightObject) {
-        if (!leftObject || !rightObject)
-            return false;
-        return JSON.stringify(normalizedComparableObject(left)) === JSON.stringify(normalizedComparableObject(right));
-    }
-    return normalizedComparableText(left) === normalizedComparableText(right);
-}
-/**
- * 模型返回的是候选修订。若只是空白、末尾标点或数组顺序变化，继续沿用旧值，
- * 避免无剧情变化时产生快照抖动；真正内容变化仍完整接受，不限制变化幅度。
- */
-function preserveEquivalentPatchValues(existing, source) {
-    const output = { ...source };
-    if ('content' in output && sameComparableValue(existing.content, output.content))
-        output.content = existing.content;
-    if ('status' in output && sameComparableValue(existing.status, output.status))
-        output.status = existing.status;
-    if ('keywords' in output && sameComparableValue(existing.keywords, output.keywords))
-        output.keywords = structuredClone(existing.keywords);
-    if (output.fields && typeof output.fields === 'object' && !Array.isArray(output.fields)) {
-        const nextFields = { ...output.fields };
-        for (const [key, value] of Object.entries(nextFields)) {
-            const oldValue = existing.fields?.[key];
-            if (sameComparableValue(oldValue, value))
-                nextFields[key] = structuredClone(oldValue);
+        for (const [nestedKey, nestedValue] of Object.entries(value)) {
+            pushContextField(lines, `${key}.${nestedKey}`, nestedValue);
         }
-        output.fields = nextFields;
+        return;
     }
-    if ('lifecycle' in output && sameComparableValue(existing.lifecycle, output.lifecycle))
-        output.lifecycle = structuredClone(existing.lifecycle);
-    return output;
+    const text = contextValue(value);
+    if (text)
+        lines.push(`${key}：${text}`);
 }
-/**
- * V35 行级补丁合并：非空数组只 upsert 返回行，未返回行和空数组都保留旧表。
- * 自动状态提取不再用 [] 承担高风险清表语义；未来清表必须走独立显式操作。
- * 旧模型若仍返回完整表，也会按同一规则逐行覆盖，不产生重复。
- */
-export function mergeStateRowPatches(previous, parsedSnapshot, registry) {
-    const merged = {};
-    for (const table of registry)
-        merged[table.key] = structuredClone(previous[table.key] ?? []);
-    for (const table of enabledTables(registry)) {
-        if (!Object.prototype.hasOwnProperty.call(parsedSnapshot, table.key))
+function contextFactBlocks(payload) {
+    if (!payload.length)
+        return '（无）';
+    return payload.map((fact) => {
+        const lines = ['<MA_CONTEXT_FACT>'];
+        pushContextField(lines, 'event_name', fact.event_name);
+        pushContextField(lines, 'title', fact.title);
+        pushContextField(lines, 'type', fact.type);
+        pushContextField(lines, 'status', fact.status);
+        pushContextField(lines, 'confidence', fact.confidence);
+        pushContextField(lines, 'active', fact.active);
+        const time = fact.time_range && typeof fact.time_range === 'object'
+            ? fact.time_range
+            : {};
+        pushContextField(lines, 'time_start', time.start);
+        pushContextField(lines, 'time_end', time.end);
+        pushContextField(lines, 'time_label', time.label);
+        pushContextField(lines, 'occurred', fact.occurred);
+        pushContextField(lines, 'related', fact.related_entities);
+        pushContextField(lines, 'keyword', fact.keywords);
+        lines.push('</MA_CONTEXT_FACT>');
+        return lines.join('\n');
+    }).join('\n');
+}
+function contextDirectoryBlock(directory, omitted) {
+    const lines = ['<MA_DIRECTORY>'];
+    for (const entry of directory)
+        lines.push(directoryLine(entry));
+    if (omitted > 0)
+        lines.push(`省略对象：${omitted}`);
+    lines.push('</MA_DIRECTORY>');
+    return lines.join('\n');
+}
+function contextRowBlocks(relevant, active) {
+    const blocks = [];
+    for (const [tableKey, rows] of Object.entries(relevant)) {
+        const table = active.find((item) => item.key === tableKey);
+        if (!table)
             continue;
-        const patches = parsedSnapshot[table.key];
-        if (!Array.isArray(patches))
-            continue;
-        if (patches.length === 0)
-            continue;
-        const rows = structuredClone(previous[table.key] ?? []);
-        const idIndex = new Map(rows.map((row, index) => [row.id, index]));
-        const titleIndexes = new Map();
-        rows.forEach((row, index) => {
-            const title = normalizedTitle(row.title);
-            if (title)
-                titleIndexes.set(title, [...(titleIndexes.get(title) ?? []), index]);
-        });
-        const patchTitleCounts = new Map();
-        for (const patch of patches) {
-            const title = normalizedTitle(patch?.title);
-            if (title)
-                patchTitleCounts.set(title, (patchTitleCounts.get(title) ?? 0) + 1);
-        }
-        for (const patch of patches) {
-            if (!patch || typeof patch !== 'object')
-                continue;
-            const id = String(patch.id ?? '').trim();
-            const title = normalizedTitle(patch.title);
-            const uniqueTitleIndex = title
-                && patchTitleCounts.get(title) === 1
-                && (titleIndexes.get(title)?.length ?? 0) === 1
-                ? titleIndexes.get(title)?.[0]
-                : undefined;
-            const index = (id && idIndex.get(id) !== undefined) ? idIndex.get(id) : uniqueTitleIndex;
-            if (index === undefined) {
-                rows.push(patch);
-                if (id)
-                    idIndex.set(id, rows.length - 1);
-                if (title)
-                    titleIndexes.set(title, [...(titleIndexes.get(title) ?? []), rows.length - 1]);
+        for (const source of rows) {
+            const row = source && typeof source === 'object' ? source : {};
+            const lines = ['<MA_CONTEXT_ROW>'];
+            pushContextField(lines, '对象类型', kindLabel(table));
+            pushContextField(lines, '表格', table.name);
+            pushContextField(lines, '对象', row.title);
+            pushContextField(lines, '当前摘要', row.content);
+            pushContextField(lines, '条目状态', row.status);
+            pushContextField(lines, '检索词', row.keywords);
+            for (const [key, value] of Object.entries(row)) {
+                if (['title', 'content', 'status', 'keywords', 'lifecycle'].includes(key))
+                    continue;
+                const label = stateLayerLabelForField(table, key);
+                if (label)
+                    pushContextField(lines, label, value);
             }
-            else {
-                const existing = rows[index];
-                const source = preserveEquivalentPatchValues(existing, patch);
-                rows[index] = {
-                    ...existing,
-                    ...source,
-                    // 标题唯一命中时必须继续沿用旧稳定 ID；模型补丁不能借机分裂同一对象。
-                    id: existing.id,
-                    fields: {
-                        ...(existing.fields ?? {}),
-                        ...(source.fields && typeof source.fields === 'object' ? source.fields : {}),
-                    },
-                };
-                idIndex.set(existing.id, index);
-            }
-        }
-        merged[table.key] = rows;
-    }
-    return normalizeSnapshot(merged, previous, registry);
-}
-/**
- * 模型通过 kind 明确纠正自动条目的语义归属时，先从旧表移除同一稳定 ID，
- * 再由正常行级补丁写入目标表。人工基础保护和完全锁定条目不允许自动搬迁。
- */
-export function applyStateRowRelocations(previous, rawRelocations, registry) {
-    if (!Array.isArray(rawRelocations) || !rawRelocations.length)
-        return previous;
-    const next = structuredClone(previous);
-    const tableKeys = new Set(registry.map((table) => table.key));
-    for (const raw of rawRelocations) {
-        if (!raw || typeof raw !== 'object')
-            continue;
-        const move = raw;
-        const id = String(move.id ?? '').trim();
-        const fromTable = String(move.fromTable ?? '').trim();
-        const toTable = String(move.toTable ?? '').trim();
-        if (!id || !fromTable || !toTable || fromTable === toTable)
-            continue;
-        if (!tableKeys.has(fromTable) || !tableKeys.has(toTable))
-            continue;
-        const sourceRows = next[fromTable] ?? [];
-        const source = sourceRows.find((row) => row.id === id);
-        if (!source)
-            continue;
-        if (source.source === 'manual' || source.locked || source.lockMode === 'all' || source.lockMode === 'base')
-            continue;
-        next[fromTable] = sourceRows.filter((row) => row.id !== id);
-    }
-    return normalizeSnapshot(next, previous, registry);
-}
-function identityToken(value) {
-    return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, '');
-}
-function textList(value) {
-    return Array.isArray(value) ? value.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
-}
-/**
- * facts 是事件线真相来源；行只输出内容补丁。这里在本地把同一轮多事件线重新挂回受影响对象，
- * 避免模型为每一行重复 factIds/eventIds/recall，降低输出体积并防止两条线互相覆盖。
- */
-export function attachLocalFactMetadata(parsedSnapshot, rawFacts, registry) {
-    const facts = rawFacts.filter((item) => item && typeof item === 'object').map((item) => item);
-    for (const table of enabledTables(registry)) {
-        const patches = parsedSnapshot[table.key];
-        if (!Array.isArray(patches))
-            continue;
-        for (const rawPatch of patches) {
-            if (!rawPatch || typeof rawPatch !== 'object')
-                continue;
-            const patch = rawPatch;
-            const title = String(patch.title ?? '').trim();
-            const id = String(patch.id ?? '').trim();
-            const rowTokens = new Set([title, id].map(identityToken).filter(Boolean));
-            let matched = facts.filter((fact) => {
-                const related = textList(fact.related_entities ?? fact.relatedEntities).map(identityToken).filter(Boolean);
-                if (related.some((token) => rowTokens.has(token)))
-                    return true;
-                if (table.role === 'events' && identityToken(fact.title) === identityToken(title))
-                    return true;
-                return false;
-            });
-            // 单事件轮次允许安全回退；多事件轮次绝不凭模糊关键词把无关线挂到一起。
-            if (!matched.length && facts.length === 1)
-                matched = facts;
-            const factIds = [...new Set([
-                    ...textList(patch.factIds ?? patch.fact_ids),
-                    ...matched.map((fact) => String(fact.fact_id ?? fact.factId ?? '').trim()).filter(Boolean),
-                ])];
-            const eventIds = [...new Set([
-                    ...textList(patch.eventIds ?? patch.event_ids),
-                    String(patch.eventId ?? patch.event_id ?? '').trim(),
-                    ...matched.map((fact) => String(fact.event_id ?? fact.eventId ?? '').trim()).filter(Boolean),
-                ].filter(Boolean))];
-            patch.factIds = factIds;
-            patch.eventIds = eventIds;
-            patch.eventId = eventIds[0] ?? '';
-            if (!patch.recall || typeof patch.recall !== 'object') {
-                const keywords = textList(patch.keywords);
-                patch.recall = { any: [...new Set([title, ...keywords].filter(Boolean))], all: [], exclude: [] };
-            }
-            const hasRelatedEvents = table.fields.some((field) => field.key === 'relatedEvents');
-            if (hasRelatedEvents && eventIds.length) {
-                patch.relatedEvents = [...new Set([...textList(patch.relatedEvents), ...eventIds])];
-            }
+            lines.push('</MA_CONTEXT_ROW>');
+            blocks.push(lines.join('\n'));
         }
     }
-    return parsedSnapshot;
+    return blocks.join('\n') || '（无）';
 }
-function assertRegistryCurrent(expectedFingerprint) {
-    const current = enabledTables(normalizeTableRegistry(getSettings().tableRegistry));
-    if (registryFingerprint(current) !== expectedFingerprint) {
-        throw new RegistryChangedError('表格定义已变化，旧状态结果不再提交');
-    }
+export function stateUserPrompt(previous, playerText, assistantText, registry, internalFacts = [], repair = false) {
+    const active = tables(registry);
+    const sourceText = `${playerText}\n${assistantText}`;
+    const context = compactSnapshotContext(previous, active, sourceText);
+    return `【相关既有事实｜只用于识别同一对象与事件】\n${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
+
+【相关对象短目录】\n${contextDirectoryBlock(context.directory, context.directoryOmitted)}
+
+【相关对象当前工作副本】\n${contextRowBlocks(context.relevant, active)}
+
+【玩家输入】\n${playerText || '（空）'}
+
+【本轮正文】\n${assistantText}
+
+只返回 <MA_TURN> 和一个或多个 <MA_EVENT> 自然模块。每个事件第一行只写事件名，随后直接写事实模块；不要输出“进行中/已结束”。若相关既有事实中的 event_name 与本轮属于同一事件线，必须逐字沿用该 event_name；阶段推进、地点变化或形成结果都不是改名理由。只有明确无关的新因果线才使用新事件名。对象模块第一行是对象名，后续是一到两句具体事实。不要使用等号、键值字段、JSON、内部英文键或旧协议。核心事实只写一次，各对象模块只写自身变化。${repair ? '\n上一次返回格式不完整：只补齐自然模块标签与事件名，不得改写或新增原文事实。' : ''}`;
 }
-function splitStateSource(text, limit) {
-    const max = Math.max(800, Math.round(limit));
-    const paragraphs = String(text || '').replace(/\r\n?/g, '\n').split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
-    const chunks = [];
-    let current = '';
-    const push = (value) => {
-        const cleaned = value.trim();
-        if (cleaned)
-            chunks.push(cleaned);
-    };
-    const append = (piece) => {
-        if (!piece)
-            return;
-        if (!current) {
-            current = piece;
-            return;
-        }
-        if (current.length + piece.length + 2 <= max)
-            current += `\n\n${piece}`;
-        else {
-            push(current);
-            current = piece;
-        }
-    };
-    for (const paragraph of paragraphs.length ? paragraphs : [String(text || '')]) {
-        if (paragraph.length <= max) {
-            append(paragraph);
-            continue;
-        }
-        const sentences = paragraph.split(/(?<=[。！？!?；;])\s*/u).map((item) => item.trim()).filter(Boolean);
-        for (const sentence of sentences.length ? sentences : [paragraph]) {
-            if (sentence.length <= max) {
-                append(sentence);
-                continue;
-            }
-            if (current) {
-                push(current);
-                current = '';
-            }
-            for (let offset = 0; offset < sentence.length; offset += max)
-                push(sentence.slice(offset, offset + max));
-        }
-    }
-    push(current);
-    return chunks.length ? chunks : [''];
-}
-function minimalStateChunkPrompt(playerText, assistantChunk, index, total) {
-    return `【玩家输入】\n${playerText || '（空）'}\n\n【本轮正文分段 ${index + 1}/${total}】\n${assistantChunk}\n\n只提取这一分段明确建立的变化。只返回 <MA_TURN> 与 <MA_EVENT> 自然事实模块。每个事件必须有一条 <MA_CORE> 动作骨架；对象模块第一行写对象名，后续只写该对象自身的一句结果。禁止等号、键值字段、重复复述和内部字段键。`;
-}
-function retryableStateTransportError(error) {
-    return /(504|502|503|gateway|timeout|timed out|超时|网关|no message generated|返回为空|响应未完成|upstream)/i.test(toErrorMessage(error));
-}
-/** 只修复标签、块和必填语义项等传输格式问题；表格/语义层权限与对象歧义属于语义校验，必须原样失败。 */
-function repairableStateParseError(error) {
-    const message = toErrorMessage(error);
-    return !/(未注册|已停用|无法确定对象表|存在歧义|多个条目命中|不允许写入|不允许直接维护|未知生命周期|只能用于已有对象|absorb 必须|merge_)/i.test(message);
-}
-function compactStateRepairSystemPrompt() {
-    return `你是固定文本整理器，不分析剧情、不补充事实。把输入中已经写出的内容整理成镜渊自然事实模块。
-只允许 <MA_TURN> 和 <MA_EVENT>。删除块外说明、JSON 外壳、代码围栏、等号键值和思考文字。
-<MA_EVENT> 第一行是事件名，第二行只能是“进行中”或“已结束”；必须保留唯一 <MA_CORE>。对象模块第一行写对象名，后续只写该对象自身的一到两句具体结果。不同模块不得重复整件事；原始返回没有表达的事实不得添加。`;
-}
-function compactStateRepairPrompt(raw) {
-    return `【待整理的模型原始返回】\n${safeText(raw, 18000)}\n\n只做格式整理。原始返回没有表达的事实不得添加。`;
-}
-async function repairStateText(raw, previous, registry, activeFacts, maxTokens, origin) {
-    const repaired = await generateTask({
-        task: 'state',
-        systemPrompt: compactStateRepairSystemPrompt(),
-        prompt: compactStateRepairPrompt(raw),
-        maxTokens: Math.min(Math.max(768, maxTokens), 1536),
-        requestPurpose: 'fixed-text',
-        requestOrigin: origin,
-    });
-    parseStateTextOutput(repaired, previous, registry, activeFacts);
-    return repaired;
-}
-async function generateValidatedStateText(request, previous, registry, activeFacts, repairOrigin) {
-    const raw = await generateTask(request);
-    try {
-        parseStateTextOutput(raw, previous, registry, activeFacts);
-        return raw;
-    }
-    catch (parseError) {
-        if (!repairableStateParseError(parseError))
-            throw parseError;
-        try {
-            return await repairStateText(raw, previous, registry, activeFacts, Number(request.maxTokens) || 1536, repairOrigin);
-        }
-        catch (repairError) {
-            throw new Error(`状态返回格式整理失败：${toErrorMessage(parseError)}；整理重试：${toErrorMessage(repairError)}`, { cause: repairError });
-        }
-    }
-}
-async function requestStateText(artifact, previous, activeFacts, registry, systemPrompt, settings) {
-    const fullPrompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry, activeFacts);
-    const budget = Math.max(6000, settings.stateContextChars);
-    const initialRequest = {
-        task: 'state',
-        systemPrompt,
-        prompt: fullPrompt,
-        maxTokens: settings.stateOutputTokens,
-        requestPurpose: 'fixed-text',
-        requestOrigin: 'state-primary',
-    };
-    let initialError;
-    if (systemPrompt.length + fullPrompt.length <= budget) {
-        try {
-            return await generateValidatedStateText(initialRequest, previous, registry, activeFacts, 'state-format-repair');
-        }
-        catch (error) {
-            initialError = error;
-            if (!retryableStateTransportError(error) && !repairableStateParseError(error))
-                throw error;
-            if (!retryableStateTransportError(error) && !/格式整理失败|固定文本|MA_EVENT|MA_TURN/i.test(toErrorMessage(error)))
-                throw error;
-        }
-    }
-    const reserve = Math.max(2200, budget - systemPrompt.length - 1800);
-    let chunkLimit = Math.max(800, Math.min(settings.stateChunkChars, reserve));
-    let chunks = splitStateSource(artifact.assistantText, chunkLimit);
-    if (chunks.length > 12) {
-        chunkLimit = Math.max(chunkLimit, Math.ceil(String(artifact.assistantText || '').length / 12));
-        chunks = splitStateSource(artifact.assistantText, chunkLimit);
-    }
-    const outputs = [];
-    for (let index = 0; index < chunks.length; index += 1) {
-        let prompt = initialError
-            ? minimalStateChunkPrompt(artifact.playerText, chunks[index], index, chunks.length)
-            : stateUserPrompt(previous, artifact.playerText, chunks[index], registry, activeFacts, false);
-        if (systemPrompt.length + prompt.length > budget)
-            prompt = minimalStateChunkPrompt(artifact.playerText, chunks[index], index, chunks.length);
-        outputs.push(await generateValidatedStateText({
-            task: 'state',
-            systemPrompt,
-            prompt,
-            maxTokens: Math.min(settings.stateOutputTokens, 2304),
-            requestPurpose: 'fixed-text',
-            requestOrigin: `state-chunk-${index + 1}-of-${chunks.length}`,
-        }, previous, registry, activeFacts, `state-chunk-format-repair-${index + 1}-of-${chunks.length}`));
-    }
-    const combined = outputs.join('\n');
-    parseStateTextOutput(combined, previous, registry, activeFacts);
-    return combined;
-}
-/** 状态任务一次产出内部事实变更和动态快照，成功后由主流水线提交核心结果。 */
-export async function runStateExtraction(artifact, force = false) {
-    const settings = getSettings();
-    const registry = normalizeTableRegistry(settings.tableRegistry);
-    const active = enabledTables(registry);
-    const expectedRegistryFingerprint = registryFingerprint(active);
-    const previous = dedupeStrongStateRows(previousSnapshot(artifact.messageIndex), registry);
-    const chatState = await getChatState(artifact.chatKey);
-    const activeFacts = (chatState.internalFacts ?? [])
-        .filter((fact) => fact.active || !fact.consumedBySmallSummaryId)
-        .slice(-120);
-    const systemPrompt = stateSystemPrompt(registry, settings.statePrompts, settings.contentLimits);
-    const prompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry, activeFacts);
-    const inputFingerprint = hashText(JSON.stringify({
-        systemPrompt,
-        prompt,
-        stateContextChars: settings.stateContextChars,
-        stateOutputTokens: settings.stateOutputTokens,
-        stateChunkChars: settings.stateChunkChars,
-    }));
-    assertRegistryCurrent(expectedRegistryFingerprint);
-    if (!force && artifact.stages.state.status === 'success' && artifact.snapshot && artifact.stateInputFingerprint === inputFingerprint) {
-        return normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry);
-    }
-    markStage(artifact, 'state', 'running');
-    await putArtifact(artifact);
-    try {
-        const raw = await requestStateText(artifact, previous, activeFacts, registry, systemPrompt, settings);
-        let parsed;
-        try {
-            parsed = parseStateTextOutput(raw, previous, registry, activeFacts);
-        }
-        catch (error) {
-            const preview = safeText(raw, 1200).replace(/\s+/g, ' ').trim();
-            throw new Error(`状态表固定文本无法解析：${toErrorMessage(error)}${preview ? `；返回片段：${preview}` : ''}`, { cause: error });
-        }
-        if (typeof parsed.turnSummary !== 'string')
-            throw new Error('状态返回缺少 turnSummary 字符串');
-        if (!Array.isArray(parsed.facts))
-            throw new Error('状态返回缺少 facts 数组');
-        if (!parsed.snapshot || typeof parsed.snapshot !== 'object' || Array.isArray(parsed.snapshot))
-            throw new Error('状态返回缺少 snapshot 根对象');
-        // 兼容旧模型返回 state/characters；只迁移到当前注册的角色视图，其他未注册键仍拒绝。
-        const characterTable = active.find((table) => table.role === 'characters' || table.role === 'state');
-        if (characterTable) {
-            if (Array.isArray(parsed.snapshot.state) && !Array.isArray(parsed.snapshot[characterTable.key]))
-                parsed.snapshot[characterTable.key] = parsed.snapshot.state;
-            if (Array.isArray(parsed.snapshot.characters) && !Array.isArray(parsed.snapshot[characterTable.key]))
-                parsed.snapshot[characterTable.key] = parsed.snapshot.characters;
-            if (characterTable.key !== 'state')
-                delete parsed.snapshot.state;
-            if (characterTable.key !== 'characters')
-                delete parsed.snapshot.characters;
-        }
-        const returnedKeys = Object.keys(parsed.snapshot);
-        const activeKeys = new Set(active.map((table) => table.key));
-        const legacyViewKeys = new Set(['focus', 'state', 'characters', 'skills', 'relationships']);
-        for (const key of returnedKeys)
-            if (!activeKeys.has(key) && !legacyViewKeys.has(key))
-                throw new Error(`模型返回未注册或已停用表格：${key}`);
-        parsed.snapshot = attachLocalFactMetadata(migrateSnapshotTables(parsed.snapshot, registry), parsed.facts, registry);
-        for (const [key, value] of Object.entries(parsed.snapshot)) {
-            if (activeKeys.has(key) && !Array.isArray(value))
-                throw new Error(`状态表 ${key} 必须是数组`);
-        }
-        assertStateBusinessShape(parsed, active);
-        assertArtifactCommitCurrent(artifact);
-        assertRegistryCurrent(expectedRegistryFingerprint);
-        const routedPrevious = applyStateRowRelocations(previous, parsed.relocations, registry);
-        const mergedViews = mergeStateRowPatches(routedPrevious, parsed.snapshot, registry);
-        const transition = transitionStateSnapshot({
-            previous: routedPrevious,
-            incoming: mergedViews,
-            patchSnapshot: parsed.snapshot,
-            facts: parsed.facts,
-            internalFacts: chatState.internalFacts,
-            registry,
-            focusObjectId: chatState.focusObjectId,
-        });
-        const normalized = transition.snapshot;
-        artifact.factPackage = normalizeFactPackage(parsed, artifact.messageKey);
-        artifact.snapshot = normalized;
-        artifact.stateInputFingerprint = inputFingerprint;
-        markStage(artifact, 'state', 'success');
-        await putArtifact(artifact);
-        return normalized;
-    }
-    catch (error) {
-        if (error instanceof RegistryChangedError) {
-            markStage(artifact, 'state', 'idle');
-            await putArtifact(artifact);
-            throw error;
-        }
-        if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name)) {
-            markStage(artifact, 'state', 'cancelled', toErrorMessage(error));
-            await putArtifact(artifact);
-            throw error;
-        }
-        markStage(artifact, 'state', 'failed', toErrorMessage(error));
-        await putArtifact(artifact);
-        throw error;
-    }
+export function stateTextProtocolDescription(registry) {
+    const active = tables(registry);
+    return `自然事实模块：<MA_TURN>、<MA_EVENT> 及角色/物品/场景等对象模块。启用对象表：${active.map((table) => table.name).join('、')}。模型只写短事实；插件负责识别对象、映射语义层、分发、稳定 ID、总结窗口与结算。`;
 }
 //# sourceMappingURL=state.js.map

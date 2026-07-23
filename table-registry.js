@@ -438,7 +438,7 @@ export function migrateSnapshotTables(value, registry) {
     const source = value && typeof value === 'object' ? value : {};
     const tables = normalizeTableRegistry(registry);
     const output = Object.fromEntries(tables.map((table) => [table.key, []]));
-    const characterKey = tableByRole(tables, 'characters', false)?.key || tableByRole(tables, 'state', false)?.key || 'characters';
+    const characterKey = tableByRole(tables, 'characters', false)?.key || tableByRole(tables, 'state', false)?.key;
     const customKey = tableByRole(tables, 'custom', false)?.key || 'customObjects';
     for (const [sourceKey, rawRows] of Object.entries(source)) {
         if (!Array.isArray(rawRows))
@@ -446,18 +446,21 @@ export function migrateSnapshotTables(value, registry) {
         const targetKey = LEGACY_TABLE_KEY_MAP[sourceKey] ?? sourceKey;
         // 旧 characters/state 必须脱离 JSON 键顺序单独处理；characters 提供身份，
         // state 随后只覆盖当前正文、状态和更新时间。
-        if (targetKey === characterKey && ['characters', 'state'].includes(sourceKey))
+        if (characterKey && targetKey === characterKey && ['characters', 'state'].includes(sourceKey))
             continue;
         if (targetKey in output)
             output[targetKey].push(...deepClone(rawRows));
     }
-    for (const sourceKey of ['characters', 'state']) {
-        const rawRows = source[sourceKey];
-        if (Array.isArray(rawRows))
-            output[characterKey].push(...deepClone(rawRows));
+    if (characterKey) {
+        for (const sourceKey of ['characters', 'state']) {
+            const rawRows = source[sourceKey];
+            if (Array.isArray(rawRows))
+                output[characterKey].push(...deepClone(rawRows));
+        }
     }
-    const characters = mergeLegacyCharactersByStableId(output[characterKey] ?? []);
-    output[characterKey] = characters;
+    const characters = characterKey ? mergeLegacyCharactersByStableId(output[characterKey] ?? []) : [];
+    if (characterKey)
+        output[characterKey] = characters;
     const characterNames = characters
         .map((row) => ({ row, names: characterNameAliases(row?.title) }))
         .filter((item) => item.names.length);

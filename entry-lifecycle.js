@@ -28,6 +28,8 @@ export function normalizeEntryLifecycleValue(value, previous) {
         targetTable: safeText(source.targetTable ?? previous?.targetTable, 100).trim() || undefined,
         targetId: safeText(source.targetId ?? previous?.targetId, 160).trim() || undefined,
         targetTitle: safeText(source.targetTitle ?? previous?.targetTitle, 240).trim() || undefined,
+        trigger: safeText(source.trigger ?? previous?.trigger, 40).trim() || undefined,
+        triggerEventIds: stringList(source.triggerEventIds ?? previous?.triggerEventIds, 20, 180),
         note: safeText(source.note ?? previous?.note, 1200).trim(),
         reason: safeText(source.reason ?? previous?.reason, 800).trim(),
         updatedAt: safeText(source.updatedAt ?? previous?.updatedAt ?? nowIso(), 80).trim() || nowIso(),
@@ -141,7 +143,7 @@ export function applyEntryLifecycleDirectives(snapshot, directives, registry, fo
         }
         if (directive.action === 'retire') {
             const terminalText = `${source.status} ${source.content} ${note} ${reason}`;
-            const terminal = /(已出售|已赠出|已消耗|耗尽|已损毁|已销毁|已丢弃|已遗失|已结束|已关闭|已失效|已解决|已解散|已退出|不再有效|无后续价值|sold|consumed|destroyed|discarded|lost|closed|ended|resolved|retired|obsolete)/i.test(terminalText);
+            const terminal = /(已出售|已赠出|已消耗|耗尽|已损毁|已销毁|已丢弃|已遗失|已结束|已关闭|已失效|已解决|已解散|已退出|已离开场景|已离开当前场景|预退出|不再有效|无后续价值|sold|consumed|destroyed|discarded|lost|closed|ended|resolved|retired|obsolete)/i.test(terminalText);
             if (!terminal) {
                 ignored.push(source.id);
                 continue;
@@ -149,6 +151,8 @@ export function applyEntryLifecycleDirectives(snapshot, directives, registry, fo
             source.entryLifecycle = {
                 state: 'settling',
                 action: 'retire',
+                trigger: safeText(directive.trigger, 40).trim() || undefined,
+                triggerEventIds: stringList(directive.triggerEventIds, 20, 180),
                 note: note || `${source.title}已失去独立追踪价值。`,
                 reason,
                 updatedAt: nowIso(),
@@ -158,8 +162,27 @@ export function applyEntryLifecycleDirectives(snapshot, directives, registry, fo
             applied.push(source.id);
         }
     }
+    const finalized = dedupeStrongStateRows(next, tables);
+    // 去重可能把同 ID 的旧视图状态文本重新合回结果；恢复必须在最终快照上原子清除待结算痕迹。
+    if (applied.length) {
+        const restoredIds = new Set((directives ?? [])
+            .filter((item) => item.action === 'restore' && applied.includes(item.sourceId))
+            .map((item) => item.sourceId));
+        for (const table of tables) {
+            for (const row of finalized[table.key] ?? []) {
+                if (!restoredIds.has(row.id))
+                    continue;
+                delete row.entryLifecycle;
+                if (!safeText(row.status, 120).trim()
+                    || /^(待结算|已并入|已退出|absorbed|retired)/i.test(row.status)) {
+                    row.status = 'active';
+                }
+                row.updatedAt = nowIso();
+            }
+        }
+    }
     return {
-        snapshot: dedupeStrongStateRows(next, tables),
+        snapshot: finalized,
         appliedSourceIds: [...new Set(applied)],
         ignoredSourceIds: [...new Set(ignored)],
     };
@@ -172,9 +195,31 @@ function findLifecycleTarget(snapshot, row) {
     return rows.find((candidate) => candidate.id === lifecycle.targetId)
         ?? rows.find((candidate) => canonicalObjectTitle(candidate.title) === canonicalObjectTitle(lifecycle.targetTitle));
 }
-function targetHasDistribution(snapshot, row) {
+function targetHasDistribution(snapshot, row, eventId) {
+    if (row.entryLifecycle?.action === 'retire') {
+        const sourceFactIds = new Set(row.factIds ?? []);
+        for (const rows of Object.values(snapshot)) {
+            if (!Array.isArray(rows))
+                continue;
+            for (const candidate of rows) {
+                if (!candidate || candidate.id === row.id || entryState(candidate) !== 'active')
+                    continue;
+                const fields = candidate.fields ?? {};
+                const hasDurableMemory = ['recentHistory', 'solidifiedHistory', 'absorbedMemory']
+                    .some((key) => Array.isArray(fields[key]) && fields[key].some((item) => safeText(item, 1200).trim()));
+                if (!hasDurableMemory)
+                    continue;
+                const sameEvent = rowEventIds(candidate).includes(eventId);
+                const carriesSourceFact = (candidate.factIds ?? []).some((id) => sourceFactIds.has(id));
+                if (sameEvent || carriesSourceFact)
+                    return true;
+            }
+        }
+        // retire 不带目标宿主；若没有另一个活动对象明确承接总结，必须保留原容器。
+        return false;
+    }
     if (row.entryLifecycle?.action !== 'absorb')
-        return true;
+        return false;
     const target = findLifecycleTarget(snapshot, row);
     if (!target)
         return false;
@@ -199,13 +244,6 @@ export function finalizeSettlingEntries(snapshot, options) {
     }
     const retained = [];
     const deleted = [];
-    if (!options.eventClosed) {
-        for (const table of tables)
-            for (const row of next[table.key] ?? [])
-                if (entryState(row) === 'settling')
-                    retained.push(row.id);
-        return { snapshot: dedupeStrongStateRows(next, tables), deletedRowIds: [], deletedEntries: [], retainedRowIds: [...new Set(retained)] };
-    }
     // 先基于同一个事务副本做完整判定，再统一删除，支持源和宿主同批级联结算。
     for (const table of tables) {
         for (const row of next[table.key] ?? []) {
@@ -215,10 +253,15 @@ export function finalizeSettlingEntries(snapshot, options) {
             const rowFacts = stringList(row.factIds, 200, 180);
             const linkedByFacts = rowFacts.some((id) => coveredFactIds.has(id));
             const allKnownFactsCovered = rowFacts.length > 0 && rowFacts.every((id) => coveredFactIds.has(id));
+            const sceneBoundarySettlement = row.entryLifecycle?.trigger === 'scene-boundary'
+                && (row.entryLifecycle.triggerEventIds ?? []).includes(options.eventId);
+            // 事件容器和依附事件终局的对象仍要求事件关闭；场景边界临时容器则按自身承接状态退出。
+            const lifecycleCanClose = options.eventClosed || sceneBoundarySettlement;
             const ready = !protectedRow(row, options.focusObjectId)
+                && lifecycleCanClose
                 && (linkedByEvent || linkedByFacts)
                 && allKnownFactsCovered
-                && targetHasDistribution(next, row);
+                && targetHasDistribution(next, row, options.eventId);
             if (!ready) {
                 retained.push(row.id);
                 continue;

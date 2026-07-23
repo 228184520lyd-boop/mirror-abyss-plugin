@@ -3,6 +3,7 @@
  * 维护边界：表格删除、停用或重命名不得删除这里的事件线、消费标记或历史来源。
  */
 import { hashText, nowIso, safeText } from '../core/utils.js';
+import { applyFactContractGate } from './fact-contract.js';
 const CONFIDENCE = new Set(['confirmed', 'recorded', 'reported', 'uncertain']);
 function stringList(value, limit = 40, itemLimit = 500) {
     if (!Array.isArray(value))
@@ -17,15 +18,33 @@ function timeRange(value) {
         label: safeText(source.label, 240).trim() || undefined,
     };
 }
-function eventIdFor(source, factId) {
-    const explicit = safeText(source.eventId ?? source.event_id, 160).trim();
-    if (explicit)
-        return explicit;
-    const entity = safeText(source.entityId ?? source.entity_id, 160).trim();
-    const type = safeText(source.type, 80).trim();
-    if (type === 'event' && entity)
-        return entity;
-    return `event_${hashText(`${entity}|${source.title}|${factId}`)}`;
+function normalizeFactView(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const table = safeText(source.table, 100).trim();
+    const rowId = safeText(source.rowId, 160).trim();
+    const objectTitle = safeText(source.objectTitle, 240).trim();
+    if (!table || !rowId || !objectTitle)
+        return undefined;
+    return {
+        table,
+        rowId,
+        objectTitle,
+        semanticRole: safeText(source.semanticRole, 80).trim(),
+        layerKind: safeText(source.layerKind, 40).trim(),
+        layerKey: safeText(source.layerKey, 100).trim() || undefined,
+        layerType: safeText(source.layerType, 40).trim() || undefined,
+        arrayOperation: safeText(source.arrayOperation, 24).trim() || undefined,
+        value: safeText(source.value, 6000).trim(),
+        keywords: stringList(source.keywords, 24, 100),
+        eventName: safeText(source.eventName, 240).trim(),
+        eventClosed: source.eventClosed === true,
+        relatedObjects: stringList(source.relatedObjects, 40, 240),
+        moduleTag: safeText(source.moduleTag, 80).trim(),
+        relocation: source.relocation && typeof source.relocation === 'object'
+            ? structuredClone(source.relocation)
+            : undefined,
+        baseRevisionStatement: safeText(source.baseRevisionStatement, 1200).trim() || undefined,
+    };
 }
 export function normalizeInternalFact(value, sourceMessageId = '', index = 0) {
     const source = value && typeof value === 'object' ? value : {};
@@ -41,9 +60,23 @@ export function normalizeInternalFact(value, sourceMessageId = '', index = 0) {
     const sourceIds = stringList(source.sourceMessageIds ?? source.source_message_ids, 40, 200);
     if (sourceMessageId && !sourceIds.includes(sourceMessageId))
         sourceIds.push(sourceMessageId);
+    const view = normalizeFactView(source.view ?? source.projectionHint ?? source.projection_hint);
+    const contract = applyFactContractGate({
+        ...source,
+        factId,
+        title,
+        content: content || occurred.join('；'),
+        confidence: CONFIDENCE.has(confidenceText) ? confidenceText : 'uncertain',
+        view,
+    }, {
+        index,
+        sourceMessageId,
+        existingObject: source.admission?.objectQualified === true,
+    });
+    const validTo = contract.validTo;
     return {
         factId,
-        eventId: eventIdFor(source, factId),
+        eventId: contract.eventId,
         sourceMessageIds: sourceIds,
         pendingSourceMessageIds: stringList(source.pendingSourceMessageIds ?? source.pending_source_message_ids, 40, 200),
         occurredFacts: occurred,
@@ -53,13 +86,27 @@ export function normalizeInternalFact(value, sourceMessageId = '', index = 0) {
         relatedEntities: stringList(source.relatedEntities ?? source.related_entities, 30, 240),
         title,
         content: content || occurred.join('；'),
-        type: safeText(source.type, 80).trim() || 'event',
+        type: safeText(source.type, 80).trim() || 'fact',
         keywords: stringList(source.keywords, 24, 100),
         confidence: CONFIDENCE.has(confidenceText) ? confidenceText : 'uncertain',
-        active: source.active !== false && !/(closed|resolved|ended|archived|结束|已解决|已关闭|已归档)/i.test(status),
-        supersededByFactId: safeText(source.supersededByFactId ?? source.superseded_by_fact_id, 160).trim() || undefined,
+        evidenceKind: contract.evidenceKind,
+        subjectRef: contract.subjectRef,
+        primaryHost: contract.primaryHost,
+        facet: contract.facet,
+        storageClass: contract.storageClass,
+        validFrom: contract.validFrom,
+        validTo,
+        active: source.active !== false
+            && !validTo
+            && !/(closed|resolved|ended|archived|结束|已解决|已关闭|已归档)/i.test(status),
+        supersedesFactId: contract.supersedesFactId,
+        supersededByFactId: contract.supersededByFactId,
         consumedBySmallSummaryId: safeText(source.consumedBySmallSummaryId, 160).trim() || undefined,
         solidifiedByLargeSummaryId: safeText(source.solidifiedByLargeSummaryId, 160).trim() || undefined,
+        projectionHint: contract.projectionHint,
+        admission: contract.admission,
+        view: contract.view,
+        lastOperation: safeText(source.operation ?? source.lastOperation, 40).trim() || undefined,
         createdAt: safeText(source.createdAt, 80).trim() || nowIso(),
         updatedAt: safeText(source.updatedAt, 80).trim() || nowIso(),
     };
@@ -109,6 +156,16 @@ function semanticFingerprint(fact) {
         confidence: fact.confidence,
         active: fact.active,
         supersededByFactId: fact.supersededByFactId,
+        supersedesFactId: fact.supersedesFactId,
+        subjectRef: fact.subjectRef,
+        primaryHost: fact.primaryHost,
+        facet: fact.facet,
+        storageClass: fact.storageClass,
+        validFrom: fact.validFrom,
+        validTo: fact.validTo,
+        evidenceKind: fact.evidenceKind,
+        admission: fact.admission,
+        view: fact.view,
     });
 }
 /** 合并本轮事实操作；close/supersede 只改变事实状态，不删除历史来源。 */
@@ -122,10 +179,29 @@ export function mergeInternalFacts(existing, incoming, rawFacts = []) {
         relatedEntities: [...fact.relatedEntities],
         keywords: [...fact.keywords],
         timeRange: { ...fact.timeRange },
+        view: fact.view ? structuredClone(fact.view) : undefined,
+        projectionHint: fact.projectionHint ? structuredClone(fact.projectionHint) : undefined,
+        subjectRef: fact.subjectRef ? structuredClone(fact.subjectRef) : undefined,
+        primaryHost: fact.primaryHost ? structuredClone(fact.primaryHost) : undefined,
+        admission: fact.admission ? structuredClone(fact.admission) : undefined,
     }));
     const byId = new Map(output.map((fact, index) => [fact.factId, index]));
-    const rawById = new Map(rawFacts.map((fact) => [fact.factId || fact.id, fact]));
+    const rawById = new Map(rawFacts.map((fact) => [fact.factId || fact.fact_id || fact.id, fact]));
     for (const next of incoming) {
+        const replacedFactId = next.supersedesFactId;
+        if (replacedFactId && replacedFactId !== next.factId) {
+            const replacedIndex = byId.get(replacedFactId);
+            if (replacedIndex !== undefined) {
+                const replaced = output[replacedIndex];
+                output[replacedIndex] = {
+                    ...replaced,
+                    active: false,
+                    validTo: next.validFrom || next.sourceMessageIds.at(-1) || nowIso(),
+                    supersededByFactId: next.factId,
+                    updatedAt: nowIso(),
+                };
+            }
+        }
         const index = byId.get(next.factId);
         if (index === undefined) {
             next.pendingSourceMessageIds = [...new Set(next.pendingSourceMessageIds?.length ? next.pendingSourceMessageIds : next.sourceMessageIds)];
@@ -150,7 +226,14 @@ export function mergeInternalFacts(existing, incoming, rawFacts = []) {
             keywords: mergeList(previous.keywords, next.keywords),
             timeRange: mergeTimeRange(previous.timeRange, next.timeRange),
             active: operation === 'close' || operation === 'supersede' ? false : next.active,
-            supersededByFactId: operation === 'supersede' ? (next.supersededByFactId || previous.supersededByFactId) : previous.supersededByFactId,
+            validFrom: previous.validFrom || next.validFrom,
+            validTo: operation === 'close' || (operation === 'supersede' && !next.supersedesFactId)
+                ? (next.validTo || next.sourceMessageIds.at(-1) || previous.validTo || nowIso())
+                : next.validTo || previous.validTo,
+            supersedesFactId: next.supersedesFactId || previous.supersedesFactId,
+            supersededByFactId: operation === 'supersede' && !next.supersedesFactId
+                ? (next.supersededByFactId || previous.supersededByFactId)
+                : next.supersededByFactId || previous.supersededByFactId,
             consumedBySmallSummaryId: previous.consumedBySmallSummaryId,
             solidifiedByLargeSummaryId: previous.solidifiedByLargeSummaryId,
             createdAt: previous.createdAt,
@@ -170,6 +253,8 @@ export function pendingFactsByEvent(facts) {
     const groups = new Map();
     for (const fact of facts) {
         if (fact.consumedBySmallSummaryId)
+            continue;
+        if (!fact.eventId || fact.storageClass === 'episodic')
             continue;
         const list = groups.get(fact.eventId) ?? [];
         list.push(fact);

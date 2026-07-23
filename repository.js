@@ -11,7 +11,7 @@ import { canonicalObjectTitle } from '../domain/object-identity.js';
 import { enforceObjectViewAllocation, enforceCurrentSpacetimeSingleton, mergePersistedCharacterDuplicates, normalizeSnapshot, preserveStableObjectIds, rewriteObjectReferences, } from '../domain/snapshot.js';
 import { garbageCollectLegacyEntryTombstones, normalizeEntryLifecycleValue } from '../domain/entry-lifecycle.js';
 import { mergeDuplicateStateRows } from '../domain/state-text.js';
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 /** ChatState 是持久化 JSON 数据；使用 JSON 副本兼容 SillyTavern/插件可能提供的 Proxy 包装对象。 */
 function cloneChatState(value) {
     return JSON.parse(JSON.stringify(value));
@@ -26,7 +26,7 @@ export function emptyChatState(chatKey) {
         smallSummaries: [],
         largeSummaries: [],
         lastSyncStatus: 'idle',
-        migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false },
+        migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false, factContractV35: false },
         updatedAt: nowIso(),
     };
 }
@@ -77,6 +77,7 @@ export function migrateLegacySmallSummaryVersions(small, large) {
         latest.sourceFactIds = sourceFactIds;
         latest.sourceKeys = sourceKeys.length ? sourceKeys : sourceFactIds;
         latest.previousSmallSummaryId ||= older.at(-1)?.id;
+        latest.rollupCount = Math.max(Number(latest.rollupCount) || 1, rows.length);
         for (const item of older)
             item.supersededBySmallSummaryId = latest.id;
         changed = true;
@@ -193,6 +194,8 @@ function migrateChatState(raw, chatKey) {
     // 1.3.9 将 absorbed/retired 统一迁移为 settling，并用同一覆盖闸门回收已完成旧墓碑。
     const needsEntryLifecycleMigration = state.migration?.entryLifecycleV33 !== true;
     const needsSingleAuthorityMigration = state.migration?.singleAuthorityV34 !== true;
+    // core.4 为旧事实补齐主宿主、切面、保存层级和有效区间；无法确认对象时保留 legacy 宿主，不猜测归并。
+    const needsFactContractMigration = state.migration?.factContractV35 !== true;
     const needsFullSnapshotMigration = needsViewMigration || needsObjectViewMigration
         || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
     let artifactViewsChanged = false;
@@ -377,7 +380,7 @@ function migrateChatState(raw, chatKey) {
         state.lastSyncStatus = 'idle';
         state.lastSyncError = undefined;
     }
-    if (needsFactMigration || needsSummaryVersionMigration) {
+    if (needsFactMigration || needsSummaryVersionMigration || needsFactContractMigration) {
         migrateLegacyConsumption(facts, state.smallSummaries, state.largeSummaries);
     }
     state.internalFacts = facts;
@@ -410,6 +413,7 @@ function migrateChatState(raw, chatKey) {
         spacetimeSingletonV32: true,
         entryLifecycleV33: true,
         singleAuthorityV34: true,
+        factContractV35: true,
     };
     state.updatedAt ||= nowIso();
     return {
@@ -438,6 +442,7 @@ const REQUIRED_MIGRATIONS = [
     'spacetimeSingletonV32',
     'entryLifecycleV33',
     'singleAuthorityV34',
+    'factContractV35',
 ];
 function currentStateStructure(raw, chatKey) {
     if (!raw || typeof raw !== 'object')

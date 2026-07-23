@@ -1,10 +1,10 @@
 import { alignPatchRowsToCanonicalSnapshot, canonicalObjectTitle, canonicalizeObjectIdentities } from './object-identity.js';
-import { deriveIncrementalSettlementDirectives } from './incremental-settlement.js';
+import { deriveIncrementalSettlementDirectives, deriveSceneBoundary } from './incremental-settlement.js';
 import { applyEntryLifecycleDirectives, finalizeSettlingEntries, } from './entry-lifecycle.js';
 import { ensureCurrentSceneEntry, enforceObjectViewAllocation, filterPassiveObservers, preserveObjectBaseLayers, preservePersistentCharacters, removeFocusCharacterDuplicates, } from './snapshot.js';
 import { enforceSpacetimeSingleton } from './special-table-rules.js';
 import { dedupeStrongStateRows } from './state-text.js';
-import { normalizeTableRegistry } from './table-registry.js';
+import { normalizeTableRegistry, tableByRole } from './table-registry.js';
 const MEMORY_STATE_VERSION = 2;
 function cloneProtectedRow(row) {
     return structuredClone(row);
@@ -104,6 +104,8 @@ export function assertCommittedMemoryState(snapshot, registryValue) {
 export function transitionStateSnapshot(input) {
     const registry = normalizeTableRegistry(input.registry);
     const diagnostics = [];
+    // spacetime_current 是固定槽位，地点切换必须在通用对象身份继承把标题收回旧值之前判定。
+    const sceneBoundary = deriveSceneBoundary(input.previous, input.incoming, registry);
     const identity = canonicalizeObjectIdentities(input.previous, input.incoming, registry);
     if (identity.idRemap.size)
         diagnostics.push({
@@ -114,6 +116,17 @@ export function transitionStateSnapshot(input) {
     const basePreserved = preserveObjectBaseLayers(input.previous, persistent, registry);
     diagnostics.push({ stage: 'protected', code: 'protected-layers-applied', detail: '人工/锁定与基础历史层已恢复' });
     let prepared = removeFocusCharacterDuplicates(basePreserved, registry);
+    if (sceneBoundary) {
+        const spacetimeTable = tableByRole(registry, 'spacetime', false);
+        const incomingCurrent = spacetimeTable
+            ? (input.incoming[spacetimeTable.key] ?? []).find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(sceneBoundary.currentTitle))
+            : undefined;
+        const preparedCurrent = spacetimeTable ? (prepared[spacetimeTable.key] ?? []).at(-1) : undefined;
+        if (incomingCurrent && preparedCurrent) {
+            // 当前时空是固定发布槽位，不是永久地点对象；切换时接受新内容但继续沿用固定 ID。
+            Object.assign(preparedCurrent, structuredClone(incomingCurrent), { id: 'spacetime_current' });
+        }
+    }
     prepared = enforceObjectViewAllocation(prepared, registry);
     const spacetime = enforceSpacetimeSingleton(prepared, registry);
     prepared = ensureCurrentSceneEntry(spacetime.snapshot, registry);
@@ -132,6 +145,7 @@ export function transitionStateSnapshot(input) {
         facts: input.facts,
         registry,
         focusObjectId: input.focusObjectId,
+        sceneBoundary,
     });
     const lifecycle = applyEntryLifecycleDirectives(prepared, directives, registry, input.focusObjectId);
     if (lifecycle.appliedSourceIds.length || lifecycle.ignoredSourceIds.length)
@@ -147,6 +161,7 @@ export function transitionStateSnapshot(input) {
         memoryStateVersion: MEMORY_STATE_VERSION,
         lifecycleAppliedIds: lifecycle.appliedSourceIds,
         lifecycleIgnoredIds: lifecycle.ignoredSourceIds,
+        sceneBoundary,
         // 字段仅保留 API 兼容；旧墓碑清理由 repository 的一次性迁移负责。
         legacyDeletedIds: [],
         diagnostics,
