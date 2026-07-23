@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-当前版本：`1.3.14-core.5`　流水线：`ma-pipeline-81`
+当前版本：`1.3.14-core.4`　流水线：`ma-pipeline-81`
 
 本修复版以 1.3.14 为基线，只恢复原有事实权威链，不替换 UI、不删功能：
 
@@ -29,7 +29,7 @@
 
 ## 安装
 
-1. 下载 GitHub Releases 中的 `Mirror-Abyss-1.3.14-core.5.zip`。
+1. 下载 GitHub Releases 中的 `Mirror-Abyss-1.3.14.zip`。
 2. 在 SillyTavern 扩展管理中安装压缩包。
 3. 刷新 SillyTavern。
 4. 打开“镜渊”工作区，按照总览中的开箱检查完成连接与自动化设置。
