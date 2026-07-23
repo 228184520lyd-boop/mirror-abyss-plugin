@@ -86,8 +86,12 @@ export async function runRevisionFlow(artifact) {
                 // Purging it keeps the saved chat metadata free of the discarded prose.
                 artifact.revision.originalText = '';
                 artifact.hiddenByAudit = false;
+                artifact.revision.stoppedReason = undefined;
                 markStage(artifact, 'audit', 'success');
                 markStage(artifact, 'revision', 'success');
+                // 修正开始时消息节点已被加上隐藏类。仅修改 artifact 状态不会立即移除旧 DOM 类，
+                // 必须在复审通过后显式放行，否则正文已替换成功但界面仍像被拦截。
+                applyAuditVisibility(artifact.messageIndex, false, false);
                 await putArtifact(artifact);
                 return { approved: true, audit: candidateAudit };
             }

@@ -1,6 +1,6 @@
-# Mirror Abyss 1.3.17 验收记录
+# Mirror Abyss 1.3.19 验收记录
 
-流水线：`ma-pipeline-80`
+流水线：`ma-pipeline-82`
 
 ## 1.3.17 精炼输出与真实落盘专项
 
@@ -372,3 +372,20 @@ npm run verify
 - `tests/rc31-state-patch-compaction.ts`：标准状态系统提示为 4,700 字符以内。
 - `tests/rc60-state-prompt-whitebox.ts`、`tests/rc62-standard-workbench.ts`：新增分流规则继续保持白盒可编辑，并纳入标准规则判断。
 - `typecheck`、浏览器构建和 `node --check index.js`：通过。
+
+
+## 1.3.19 世界书控制词隔离专项
+
+- 构造含“当前摘要、身份定义、现行事实、标题约束、摘要、镜渊”前缀的表格行，发布结果仅保留事实值。
+- 角色对象名仅作为事实主体使用；表名、字段名、生命周期、关联对象、关联事件和关键词不进入正文。
+- 托管条目 `comment` 为空，`addMemo=false`；管理身份仍存在于 `extensions.mirrorAbyssV11`。
+- 旧 `[MA11] MA｜...` 条目可通过旧前缀或托管元数据识别，并在同步时更新为新格式。
+
+## 1.3.18 审核与修正专项
+
+- 标准 `MA_AUDIT` 的 pass/revise/block 解析通过。
+- 中文字段、Markdown 围栏、`MA_PASS/MA_REVISE/MA_BLOCK` 和自然语言结论兼容通过。
+- revise 缺少 `MA_VIOLATION` 时会生成内部最小违规记录，不再因格式缺块中断修正。
+- 未闭合 `MA_REPLACEMENT` 可保守提取到文本末尾。
+- `result=pass|revise|block` 仍被视为歧义并拒绝，防止错误放行。
+- 修正复审通过分支会显式执行 `applyAuditVisibility(index, false, false)`，清除旧隐藏/标红类。

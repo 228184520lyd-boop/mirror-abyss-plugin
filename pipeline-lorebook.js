@@ -309,7 +309,7 @@ export function mirrorAbyssManagedNameIdentity(value) {
 }
 /** 只把带镜渊固定备注前缀的条目视为可识别旧副本，普通人工条目不参与精确清理。 */
 export function isMirrorAbyssGeneratedEntry(entry) {
-    return /^\[MA11\]\s+MA[｜|]/.test(managedCommentIdentity(entry?.comment));
+    return Boolean(managedInfo(entry)?.managed) || /^\[MA11\]\s+MA[｜|]/.test(managedCommentIdentity(entry?.comment));
 }
 /** 备注与正文共同组成精确签名；仅正文相似不会触发删除。 */
 export function mirrorAbyssExactIdentity(comment, content) {
@@ -434,7 +434,8 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     entry.keysecondary = [];
     entry.selective = false;
     entry.disable = disabled;
-    entry.addMemo = true;
+    // 备注只用于编辑器显示；托管身份位于 extensions，禁止把备注名称注入主模型。
+    entry.addMemo = false;
     entry.position = wi.world_info_position?.after ?? 1;
     // order 仅用于世界书编辑器显示顺序，不参与镜渊的记忆取舍。
     entry.order = spec.order;

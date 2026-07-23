@@ -3,7 +3,7 @@
  * 维护边界：不使用数值权重决定记忆进入上下文；不同信息点可共享 fact_id/event_id，去重只按条目身份与完全相同内容，再按总容量裁剪。
  */
 import { DEFAULT_CONTENT_LIMITS } from './constants.js';
-import { customizedFieldLabel, DEFAULT_TABLE_REGISTRY, enabledTables, normalizeTableRegistry } from './domain-table-registry.js';
+import { DEFAULT_TABLE_REGISTRY, enabledTables, normalizeTableRegistry } from './domain-table-registry.js';
 import { isEntryLifecycleHidden, isEntryParticipationPaused } from './domain-entry-lifecycle.js';
 import { safeText } from './core-utils.js';
 import { canonicalObjectTitle } from './domain-object-identity.js';
@@ -13,24 +13,44 @@ function registry(options) {
 function uniq(values, limit = 40) {
     return [...new Set(values.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, limit);
 }
-function lifecycleLines(lifecycle) {
-    if (!lifecycle)
-        return [];
-    const lines = [`存在状态：${lifecycle.existence}`, `活跃状态：${lifecycle.activity}`, `记忆状态：${lifecycle.memory}`, `证据等级：${lifecycle.evidenceLevel}`];
-    if (lifecycle.evidence)
-        lines.push(`判断依据：${lifecycle.evidence}`);
-    if (lifecycle.returnConditions.length)
-        lines.push(`可能回流条件：${lifecycle.returnConditions.join('；')}`);
-    if (lifecycle.returnBlockers.length)
-        lines.push(`阻止回流条件：${lifecycle.returnBlockers.join('；')}`);
-    return lines;
-}
-function boundedLine(label, value) {
-    if (Array.isArray(value)) {
-        return value.map((item) => String(item ?? '').trim()).filter(Boolean).map((item) => `${label}：${item}`);
+function stripControlPrefix(value, labels = []) {
+    let text = String(value ?? '').trim();
+    const candidates = [...new Set(['镜渊', 'Mirror Abyss', '当前摘要', '摘要', '当前记录', '对象定义', '身份定义', '身份与对象定义', '现行事实', '长期与现行事实', '当前状态', '条目状态', '检索词', '关键词', '关联对象', '关联事件', '近期经历', '历史事实', '承接记录', '外观表现', '外观与表现', '关系状态', '能力状态', '生命周期', ...labels]
+        .map((item) => String(item || '').trim()).filter(Boolean))]
+        .sort((a, b) => b.length - a.length);
+    for (let pass = 0; pass < 3; pass += 1) {
+        const matched = candidates.find((label) => text.startsWith(`${label}：`) || text.startsWith(`${label}:`));
+        if (!matched)
+            break;
+        text = text.slice(matched.length + 1).trim();
     }
-    const text = String(value ?? '').trim();
-    return text ? [`${label}：${text}`] : [];
+    return text;
+}
+function sentenceValue(value, labels = []) {
+    const text = stripControlPrefix(value, labels);
+    if (!text)
+        return '';
+    return /[。！？.!?]$/.test(text) ? text : `${text}。`;
+}
+function visibleValues(value, labels = []) {
+    return (Array.isArray(value) ? value : [value])
+        .map((item) => sentenceValue(item, labels))
+        .filter(Boolean);
+}
+function visibleIdentity(value) {
+    return canonicalObjectTitle(value).replace(/[。！？.!?：:]+$/g, '').trim();
+}
+function factLine(title, value, includeTitle) {
+    const text = sentenceValue(value);
+    if (!text)
+        return '';
+    if (!includeTitle || !title)
+        return text;
+    const normalizedTitle = visibleIdentity(title);
+    const normalizedText = visibleIdentity(text);
+    if (normalizedTitle && normalizedText.startsWith(normalizedTitle))
+        return text;
+    return `${title}：${text}`;
 }
 function fitWholeLines(lines, maxChars) {
     const limit = Math.max(200, Math.round(Number(maxChars) || 1200));
@@ -46,7 +66,6 @@ function fitWholeLines(lines, maxChars) {
             used += separator + line.length;
             continue;
         }
-        // 优先丢弃完整的低优先级事实，不从中间硬截断；只有首个身份行本身过长时才安全截断。
         if (!output.length)
             return line.slice(0, Math.max(1, limit - 1)) + (line.length > limit ? '…' : '');
     }
@@ -65,42 +84,42 @@ function uniqueContentLines(lines) {
     }
     return output;
 }
+/**
+ * 世界书正文只承载可直接参与续写的自然事实。
+ * 表名、字段名、摘要标签、生命周期、关键词和托管品牌均属于插件控制面，不能注入主模型。
+ */
 function rowContent(table, row, maxChars) {
-    const titleLabel = customizedFieldLabel(table, 'title', '');
-    const statusLabel = customizedFieldLabel(table, 'status', '当前状态');
-    const contentLabel = customizedFieldLabel(table, 'content', '当前记录');
-    const keywordsLabel = customizedFieldLabel(table, 'keywords', '触发词');
-    const heading = titleLabel
-        ? `[${table.name}｜${titleLabel}：${row.title}]`
-        : `[${table.name}：${row.title}]`;
     const fields = row.fields ?? {};
     const fieldByKey = new Map(table.fields.map((field) => [field.key, field]));
-    const prioritizedKeys = [
+    const includeTitle = ['characters', 'items', 'scenes', 'regions', 'spacetime', 'state'].includes(table.role);
+    const controlLabels = table.fields.map((field) => field.label);
+    const lines = [];
+    const push = (value, labels = []) => {
+        for (const item of visibleValues(value, [row.title, ...controlLabels, ...labels])) {
+            if (visibleIdentity(item) === visibleIdentity(row.title))
+                continue;
+            const line = factLine(row.title, item, includeTitle);
+            if (line)
+                lines.push(line);
+        }
+    };
+    const preferredKeys = [
         'baseContent', 'currentFacts', 'currentStates', 'presentationStates', 'relationshipStates', 'abilityStates',
-        'relatedObjects', 'relatedEvents', 'recentHistory', 'solidifiedHistory',
+        'recentHistory', 'solidifiedHistory',
     ];
-    const lines = [heading];
-    const baseField = fieldByKey.get('baseContent');
-    if (baseField && 'baseContent' in fields)
-        lines.push(...boundedLine(baseField.label, fields.baseContent));
-    if (row.status && !/^(active|进行中)$/i.test(row.status.trim()))
-        lines.push(`${statusLabel}：${row.status}`);
     if (row.content && canonicalObjectTitle(row.content) !== canonicalObjectTitle(row.title))
-        lines.push(`${contentLabel}：${row.content}`);
-    for (const key of prioritizedKeys.filter((key) => key !== 'baseContent')) {
-        const field = fieldByKey.get(key);
-        if (field && key in fields)
-            lines.push(...boundedLine(field.label, fields[key]));
+        push(row.content, ['当前记录', '当前摘要', '摘要']);
+    for (const key of preferredKeys) {
+        if (fieldByKey.has(key) && key in fields)
+            push(fields[key], [fieldByKey.get(key)?.label]);
     }
+    // 自定义白盒字段仍可发布其事实值，但字段标签本身永不进入模型上下文。
+    // 关联对象、关联事件只用于检索、图谱和归属，不作为可见正文重复列名。
     for (const field of table.fields) {
-        if (prioritizedKeys.includes(field.key) || !(field.key in fields))
+        if (preferredKeys.includes(field.key) || ['relatedObjects', 'relatedEvents', 'keywords', 'title', 'status', 'content'].includes(field.key) || !(field.key in fields))
             continue;
-        lines.push(...boundedLine(field.label, fields[field.key]));
+        push(fields[field.key], [field.label]);
     }
-    lines.push(...lifecycleLines(row.lifecycle));
-    if (row.keywords.length)
-        lines.push(`${keywordsLabel}：${row.keywords.join('、')}`);
-    // 事实 ID、事件 ID 与维护权限只保留在插件元数据中，不注入正文模型。
     return fitWholeLines(uniqueContentLines(lines), maxChars);
 }
 function rowSearchText(row) {
@@ -128,7 +147,8 @@ export function filterSnapshotForLorebook(snapshot, customRegistry) {
 export function countLorebookSourceRows(snapshot, customRegistry) {
     const tables = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
     const filtered = filterSnapshotForLorebook(snapshot, tables);
-    return enabledTables(tables).reduce((total, table) => total + (filtered[table.key]?.length ?? 0), 0);
+    return enabledTables(tables).reduce((total, table) => total + (filtered[table.key] ?? [])
+        .filter((row) => rowContent(table, row, 100000).trim()).length, 0);
 }
 function defaultTrigger(row) {
     const recall = row.recall ?? { any: [], all: [], exclude: [] };
@@ -177,7 +197,7 @@ function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, fa
     return {
         key,
         logicalKey,
-        comment: `[MA11] ${comment}`,
+        comment: String(comment || ''),
         content,
         keywords: actualMode === 'trigger' ? trigger.any : [],
         constant: !disabled && actualMode === 'constant',
@@ -212,7 +232,10 @@ function tableDocuments(snapshot, options) {
             const mode = recallModeFor(table.role, row, options, currentSpacetimeId);
             const trigger = defaultTrigger(row);
             const titleToken = normalizedName(row.title) || row.id;
-            docs.push(makeDocument(`view:${table.key}:${row.id}`, `view:${table.key}:${titleToken}`, `MA｜${table.name}｜${row.title}`, rowContent(table, row, Math.max(200, Number(options.entryLimits?.[table.key]) || Number(DEFAULT_CONTENT_LIMITS.tables[table.key]) || 1200)), `view:${table.role}`, mode, trigger, row.factIds ?? [], row.eventIds ?? (row.eventId ? [row.eventId] : []), row.updatedAt, options, isEntryParticipationPaused(row)));
+            const content = rowContent(table, row, Math.max(200, Number(options.entryLimits?.[table.key]) || Number(DEFAULT_CONTENT_LIMITS.tables[table.key]) || 1200));
+            if (!content.trim())
+                continue;
+            docs.push(makeDocument(`view:${table.key}:${row.id}`, `view:${table.key}:${titleToken}`, '', content, `view:${table.role}`, mode, trigger, row.factIds ?? [], row.eventIds ?? (row.eventId ? [row.eventId] : []), row.updatedAt, options, isEntryParticipationPaused(row)));
         }
     }
     return docs;
