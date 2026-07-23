@@ -50,4 +50,3 @@ export function enforceSpacetimeSingleton(snapshot, registry) {
     rewriteObjectReferences(snapshot, idRemap);
     return { snapshot, idRemap, mergedRowIds };
 }
-//# sourceMappingURL=special-table-rules.js.map

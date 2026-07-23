@@ -473,4 +473,3 @@ export function buildDetailedLorebookDocuments(snapshot, small, large, options) 
 export function buildLorebookDocuments(snapshot, small, large, options) {
     return options.layout === 'detailed' ? buildDetailedLorebookDocuments(snapshot, small, large, options) : buildSemanticLorebookDocuments(snapshot, small, large, options);
 }
-//# sourceMappingURL=lorebook-publish.js.map

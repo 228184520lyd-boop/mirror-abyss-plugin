@@ -506,4 +506,3 @@ export function migrateSnapshotTables(value, registry) {
     }
     return output;
 }
-//# sourceMappingURL=table-registry.js.map

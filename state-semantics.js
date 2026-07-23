@@ -88,4 +88,3 @@ export function writableStateLayers(table) {
         return true;
     });
 }
-//# sourceMappingURL=state-semantics.js.map

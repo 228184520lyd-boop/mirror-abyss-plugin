@@ -251,4 +251,3 @@ export function installMessagePanelHandlers() {
         unsubscribe();
     };
 }
-//# sourceMappingURL=message-panel.js.map

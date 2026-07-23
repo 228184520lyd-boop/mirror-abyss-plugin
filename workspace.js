@@ -2147,4 +2147,3 @@ export function disposeWorkspace() {
 export function refreshWorkspace() {
     void renderWorkspace();
 }
-//# sourceMappingURL=workspace.js.map

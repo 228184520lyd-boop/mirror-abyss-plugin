@@ -260,4 +260,3 @@ export async function onClean() {
 export async function onDelete() {
     shutdown();
 }
-//# sourceMappingURL=app.js.map

@@ -1442,4 +1442,3 @@ export function installPipelineEventHandlers() {
         removeSourceListener(eventSource, event_types.CHAT_CHANGED, onChatChanged);
     };
 }
-//# sourceMappingURL=pipeline.js.map

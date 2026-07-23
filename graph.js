@@ -188,4 +188,3 @@ export function enrichRelationshipGraphWithEventProfiles(source, profiles) {
     }
     return { nodes, edges };
 }
-//# sourceMappingURL=graph.js.map

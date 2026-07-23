@@ -49,4 +49,3 @@ export async function replaceMessageInPlace(artifact, text) {
     await refreshMessageDisplay(artifact.messageIndex);
     return artifact.sourceFingerprint;
 }
-//# sourceMappingURL=message-update.js.map

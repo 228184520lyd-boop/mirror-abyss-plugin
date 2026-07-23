@@ -310,4 +310,3 @@ export function invalidateFactsAfterMessages(facts, validMessageIds) {
     });
     return { facts: kept, removedFactIds };
 }
-//# sourceMappingURL=internal-facts.js.map

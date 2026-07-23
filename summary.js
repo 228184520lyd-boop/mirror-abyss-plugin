@@ -43,4 +43,3 @@ export function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId
         previousLargeSummaryId: kind === 'large' ? previousLargeSummaryId : undefined,
     };
 }
-//# sourceMappingURL=summary.js.map

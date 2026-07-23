@@ -114,4 +114,3 @@ export function fixedTextValues(block, ...keys) {
 export function fixedTextValue(block, ...keys) {
     return fixedTextValues(block, ...keys).at(-1) ?? '';
 }
-//# sourceMappingURL=fixed-text.js.map

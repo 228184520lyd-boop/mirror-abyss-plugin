@@ -240,4 +240,3 @@ export function canonicalizeObjectIdentities(previous, incoming, registry) {
     rewriteObjectReferences(next, idRemap);
     return { snapshot: dedupeStrongStateRows(next, tables), idRemap };
 }
-//# sourceMappingURL=object-identity.js.map

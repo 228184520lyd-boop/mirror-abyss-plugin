@@ -344,4 +344,3 @@ export async function testConnection(task) {
         protocolDetail: '所有模型任务均使用固定文本或正文文本，不发送JSON Schema',
     };
 }
-//# sourceMappingURL=generator.js.map

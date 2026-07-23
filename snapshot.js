@@ -664,4 +664,3 @@ export function filterPassiveObservers(snapshot, registry) {
     }
     return snapshot;
 }
-//# sourceMappingURL=snapshot.js.map

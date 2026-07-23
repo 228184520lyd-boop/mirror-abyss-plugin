@@ -269,4 +269,3 @@ export async function diagnosticReport() {
         privacy: '诊断不包含玩家输入、AI正文、小总结正文、大总结正文、完整模型响应或API密钥',
     };
 }
-//# sourceMappingURL=diagnostics.js.map

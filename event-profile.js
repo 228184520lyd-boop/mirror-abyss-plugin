@@ -113,4 +113,3 @@ export function buildEventProfiles(snapshot, facts, smallSummaries, largeSummari
         return String(b.updatedAt).localeCompare(String(a.updatedAt)) || a.title.localeCompare(b.title);
     });
 }
-//# sourceMappingURL=event-profile.js.map

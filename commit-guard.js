@@ -92,4 +92,3 @@ export function assertArtifactCommitCurrent(artifact) {
         throw new CommitRejectedError('正文已经变化，请重新整理');
     }
 }
-//# sourceMappingURL=commit-guard.js.map

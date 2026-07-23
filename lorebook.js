@@ -1263,4 +1263,3 @@ export async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()
         return managed;
     });
 }
-//# sourceMappingURL=lorebook.js.map

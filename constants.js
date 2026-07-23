@@ -5,7 +5,7 @@
 export const MODULE_NAME = 'mirrorAbyssV11';
 export const LEGACY_MODULE_NAME = 'mirrorAbyss';
 export const DISPLAY_NAME = '镜渊';
-export const VERSION = '1.4.0-alpha.1';
+export const VERSION = '1.4.0-alpha.2';
 export const PIPELINE_VERSION = 'ma-runtime-v2-1';
 export const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -170,4 +170,3 @@ export const DEFAULT_SETTINGS = {
     ui: { activeTab: 'overview', activeTable: 'spacetime', graphScope: 'world', graphZoom: 1, memoryView: 'combined' },
     migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false },
 };
-//# sourceMappingURL=constants.js.map

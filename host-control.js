@@ -8,4 +8,3 @@ export function resolveHostControl(settings) {
         recursion: Boolean(managed && settings.hostControl?.recursion !== false),
     };
 }
-//# sourceMappingURL=host-control.js.map

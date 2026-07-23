@@ -7,4 +7,3 @@ export function firstInconsistentArtifactIndex(chat, moduleName, identityAt, fin
                 artifact.sourceFingerprint !== fingerprintAt(index)));
     });
 }
-//# sourceMappingURL=history.js.map

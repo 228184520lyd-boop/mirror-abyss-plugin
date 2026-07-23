@@ -130,4 +130,3 @@ export function normalizeFactPackage(value, sourceMessageKey) {
         createdAt: nowIso(),
     };
 }
-//# sourceMappingURL=facts.js.map

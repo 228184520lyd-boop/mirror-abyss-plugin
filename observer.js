@@ -12,4 +12,3 @@ export function isPurePassiveObserverText(value) {
     const affirmativeText = text.replace(NEGATED_INTERVENTION, '');
     return !CAUSAL_INTERVENTION.test(affirmativeText);
 }
-//# sourceMappingURL=observer.js.map

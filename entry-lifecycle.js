@@ -328,4 +328,3 @@ export function garbageCollectLegacyEntryTombstones(snapshot, internalFacts, reg
     }
     return { snapshot: dedupeStrongStateRows(next, tables), deletedRowIds: [...deleted] };
 }
-//# sourceMappingURL=entry-lifecycle.js.map

@@ -312,4 +312,3 @@ export function toast(kind, message) {
 export function cloneSettings() {
     return deepClone(getSettings());
 }
-//# sourceMappingURL=context.js.map

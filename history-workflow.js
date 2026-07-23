@@ -112,4 +112,3 @@ export function completeHistoryWorkflow(state) {
     delete state.historyInvalidation;
     delete state.historyRecovery;
 }
-//# sourceMappingURL=history-workflow.js.map

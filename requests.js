@@ -33,4 +33,3 @@ export function abortActiveAutomaticSummaryRequests() {
     return abortActiveRequests((metadata) => (metadata.requestClass === 'business'
         && ['smallSummary', 'largeSummary'].includes(metadata.task)));
 }
-//# sourceMappingURL=requests.js.map

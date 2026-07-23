@@ -57,4 +57,3 @@ export function markStage(artifact, stage, status, error) {
     };
     artifact.updatedAt = now;
 }
-//# sourceMappingURL=artifact.js.map

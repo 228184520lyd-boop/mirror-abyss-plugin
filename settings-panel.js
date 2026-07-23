@@ -93,4 +93,3 @@ export function mountOptionalTopButton() {
     button.addEventListener('click', () => openWorkspace('overview'));
     host.appendChild(button);
 }
-//# sourceMappingURL=settings-panel.js.map
