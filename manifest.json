@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.4.0-alpha.3",
+  "version": "1.4.0-alpha.4",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "Runtime V2 单入口兼容版：取消多文件模块加载链，修复 [object Event] 启动失败"
+  "description": "Runtime V2 单入口稳定版：Connection Profile 改用流式传输，修复 HTML 错误页被当作 JSON 解析"
 }

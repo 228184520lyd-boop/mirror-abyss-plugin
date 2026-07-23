@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.3';
+const VERSION = '1.4.0-alpha.4';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -7189,6 +7189,7 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"beginModelRequest",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["beginModelRequest"]});
 Object.defineProperty(__scope,"finishModelRequest",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["finishModelRequest"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"withTimeout",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["withTimeout"]});
 Object.defineProperty(__scope,"requestScheduler",{enumerable:true,configurable:true,get:()=>__require("llm/request-scheduler.js")["requestScheduler"]});
 with(__scope){
@@ -7428,6 +7429,33 @@ async function generateCurrent(options, controller) {
         throw emptyGenerationError(`${options.task}模型`, result);
     return text;
 }
+function normalizeProfileTransportError(error, label) {
+    const message = toErrorMessage(error);
+    if (/unexpected token\s*["']?<|<html|<!doctype|not valid json/i.test(message)) {
+        return new Error(`${label}上游返回了HTML错误页而不是模型JSON。通常是反向代理、网关超时、接口路径错误或登录页拦截；请查看请求诊断中的HTTP状态。`, { cause: error });
+    }
+    return error instanceof Error ? error : new Error(message || `${label}请求失败`);
+}
+async function consumeProfileStream(streamResult, label) {
+    if (typeof streamResult !== 'function') {
+        const directText = generationText(streamResult);
+        if (!directText)
+            throw emptyGenerationError(label, streamResult);
+        return directText;
+    }
+    const iterable = streamResult();
+    if (!iterable || typeof iterable[Symbol.asyncIterator] !== 'function')
+        throw new Error(`${label}没有返回可读取的流`);
+    let latestText = '';
+    for await (const chunk of iterable) {
+        const chunkText = generationText(chunk);
+        if (chunkText)
+            latestText = chunkText;
+    }
+    if (!latestText)
+        throw emptyGenerationError(label, null);
+    return latestText;
+}
 async function generateWithNativeProfile(options, profileId, controller) {
     const context = getContext();
     const service = context.ConnectionManagerRequestService;
@@ -7436,18 +7464,25 @@ async function generateWithNativeProfile(options, profileId, controller) {
     }
     const settings = getSettings();
     const messages = messagesFromOptions(options);
-    const overridePayload = { stream: false };
-    const result = await withTimeout(Promise.resolve(service.sendRequest(profileId, messages, responseTokens(options), {
-        stream: false,
-        extractData: true,
-        includePreset: false,
-        includeInstruct: false,
-        signal: options.signal,
-    }, overridePayload)), Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${options.task} Connection Profile请求`, controller);
-    const text = generationText(result);
-    if (!text)
-        throw emptyGenerationError(`${options.task} Connection Profile`, result);
-    return text;
+    const label = `${options.task} Connection Profile`;
+    const request = (async () => {
+        try {
+            // SillyTavern 的非流式路径会在检查 HTTP 状态前直接 response.json()。
+            // 使用流式路径可先检查 4xx/5xx，并持续产生数据，避免长请求被网关误判为空闲。
+            const streamResult = await service.sendRequest(profileId, messages, responseTokens(options), {
+                stream: true,
+                extractData: true,
+                includePreset: false,
+                includeInstruct: false,
+                signal: options.signal,
+            }, { stream: true });
+            return await consumeProfileStream(streamResult, label);
+        }
+        catch (error) {
+            throw normalizeProfileTransportError(error, label);
+        }
+    })();
+    return await withTimeout(request, Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${label}请求`, controller);
 }
 function listSupportedConnectionProfiles() {
     return supportedProfiles()
@@ -7505,6 +7540,7 @@ async function generateTask(options) {
             promptChars,
             responseTokens: tokenLimit,
             protocol: options.requestPurpose === 'fixed-text' || options.requestPurpose === 'connection-test' ? 'fixed-text' : 'plain-text',
+            streamMode: connection?.mode === 'profile' ? 'on' : 'off',
         });
     }
     finally {
@@ -7575,7 +7611,7 @@ function requestErrorMetadata(error) {
         return { errorKind: 'auth', httpStatus };
     if (httpStatus === 429 || /rate.?limit|too many requests/i.test(message))
         return { errorKind: 'rate_limit', httpStatus };
-    if ((httpStatus !== undefined && httpStatus >= 500) || /gateway|upstream|bad gateway|service unavailable/i.test(message))
+    if ((httpStatus !== undefined && httpStatus >= 500) || /gateway|upstream|bad gateway|service unavailable|HTML错误页|not valid json|unexpected token\s*[\"']?</i.test(message))
         return { errorKind: 'upstream', httpStatus };
     if (/timeout|timed out|超时/i.test(message))
         return { errorKind: 'timeout', httpStatus };
@@ -7704,7 +7740,7 @@ class RequestLaneScheduler {
             requestMs: 0,
             totalMs: 0,
             firstByteMs: undefined,
-            streamMode: 'off',
+            streamMode: metadata.streamMode === 'on' ? 'on' : 'off',
         };
         this.traces.set(id, trace);
         let resolve;
