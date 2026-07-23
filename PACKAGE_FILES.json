@@ -1,0 +1,30 @@
+{
+  "version": "1.4.0-alpha.3",
+  "files": [
+    {
+      "name": "bundle.js",
+      "size": 958919,
+      "sha256": "057d1727bb2319c919850dfe9761fbbe768f56ca3eeec1a4e007d0f46f645f57"
+    },
+    {
+      "name": "index.js",
+      "size": 1732,
+      "sha256": "d8039c0a21bb2879a895c4594a1d96339d347dc2d2430aa435391bd5dff8d05b"
+    },
+    {
+      "name": "manifest.json",
+      "size": 665,
+      "sha256": "3b6abe0c520b0d4832922bc5b8966b65bf4ec26a7117104ea768d0e3636e158a"
+    },
+    {
+      "name": "settings.html",
+      "size": 1348,
+      "sha256": "a38879f69ef7cb4492bd3d51b3e52dcf75449ea1b5ea1bad9a85bfc0a0d00b0c"
+    },
+    {
+      "name": "style.css",
+      "size": 69293,
+      "sha256": "eb016f008cdeb1d5096e37252e3fb1cfc0016a4f47140d17e439cc74001325f4"
+    }
+  ]
+}
