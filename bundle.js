@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.7';
+const VERSION = '1.4.0-alpha.9';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -5295,6 +5295,194 @@ function enforceSpacetimeSingleton(snapshot, registry) {
 
 }
 };
+__defs["domain/state-module-registry.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
+Object.defineProperty(__scope,"stateLayerLabelForField",{enumerable:true,configurable:true,get:()=>__require("domain/state-semantics.js")["stateLayerLabelForField"]});
+with(__scope){
+Object.defineProperty(exports,"buildStateModuleRegistry",{enumerable:true,configurable:true,get:()=>buildStateModuleRegistry});
+Object.defineProperty(exports,"canonicalStateTag",{enumerable:true,configurable:true,get:()=>canonicalStateTag});
+/**
+ * 模块职责：根据当前动态表格注册表生成状态固定文本模块目录与兼容别名。
+ * 维护边界：只描述“标签/表格/语义层”映射，不解析事实、不创建对象、不修改状态。
+ */
+const CANONICAL_MODULES = {
+    MA_CORE: { role: 'events', layer: '当前摘要', event: true, aliases: ['动作骨架', '核心动作', '事件骨架', '事件事实'] },
+    MA_EVENT_RESULT: { role: 'events', layer: '现行事实', event: true, aliases: ['事件结果', '结果事实'] },
+    MA_EVENT_STATE: { role: 'events', layer: '当前状态', event: true, aliases: ['事件状态', '阶段状态'] },
+    MA_UNRESOLVED: { role: 'events', layer: '当前状态', event: true, unresolved: true, aliases: ['未决事项', '未解决事项'] },
+    MA_CHARACTER_IDENTITY: { role: 'characters', layer: '身份定义', aliases: ['角色身份', '人物身份', '角色定义'] },
+    MA_CHARACTER_FACT: { role: 'characters', layer: '现行事实', aliases: ['角色事实', '人物事实', '角色现行事实'] },
+    MA_CHARACTER_STATE: { role: 'characters', layer: '当前状态', aliases: ['角色状态', '人物状态', '角色当前状态'] },
+    MA_CHARACTER_APPEARANCE: { role: 'characters', layer: '外观表现', aliases: ['角色外观', '人物外观', '外观表现'] },
+    MA_CHARACTER_RELATION: { role: 'characters', layer: '关系状态', aliases: ['角色关系', '人物关系', '关系状态'] },
+    MA_CHARACTER_ABILITY: { role: 'characters', layer: '能力状态', aliases: ['角色能力', '人物能力', '能力状态'] },
+    MA_ITEM_IDENTITY: { role: 'items', layer: '身份定义', aliases: ['物品身份', '道具身份', '物品定义'] },
+    MA_ITEM_FACT: { role: 'items', layer: '现行事实', aliases: ['物品事实', '道具事实', '物品现行事实'] },
+    MA_ITEM_STATE: { role: 'items', layer: '当前状态', aliases: ['物品状态', '道具状态', '物品当前状态'] },
+    MA_SCENE_IDENTITY: { role: 'scenes', layer: '身份定义', aliases: ['场景身份', '场景定义'] },
+    MA_SCENE_FACT: { role: 'scenes', layer: '现行事实', aliases: ['场景事实', '场景现行事实'] },
+    MA_SCENE_STATE: { role: 'scenes', layer: '当前状态', aliases: ['场景状态', '场景当前状态'] },
+    MA_REGION_IDENTITY: { role: 'regions', layer: '身份定义', aliases: ['地点身份', '区域身份', '地点定义'] },
+    MA_REGION_FACT: { role: 'regions', layer: '现行事实', aliases: ['地点事实', '区域事实', '地点现行事实'] },
+    MA_REGION_STATE: { role: 'regions', layer: '当前状态', aliases: ['地点状态', '区域状态', '地点当前状态'] },
+    MA_GLOBAL_IDENTITY: { role: 'globalChanges', layer: '身份定义', aliases: ['全局身份', '组织身份', '全局定义'] },
+    MA_GLOBAL_FACT: { role: 'globalChanges', layer: '现行事实', aliases: ['全局事实', '组织事实', '制度事实'] },
+    MA_GLOBAL_STATE: { role: 'globalChanges', layer: '当前状态', aliases: ['全局状态', '组织状态', '制度状态'] },
+    MA_FOUNDATION_IDENTITY: { role: 'foundations', layer: '身份定义', aliases: ['基础设定身份', '规则定义', '设定定义'] },
+    MA_FOUNDATION_FACT: { role: 'foundations', layer: '现行事实', aliases: ['基础设定事实', '规则事实', '设定事实'] },
+    MA_FOUNDATION_STATE: { role: 'foundations', layer: '当前状态', aliases: ['基础设定状态', '规则状态', '设定状态'] },
+    MA_SPACETIME_STATE: { role: 'spacetime', layer: '当前状态', aliases: ['时空状态', '当前时空'] },
+    MA_CUSTOM: { layer: '', custom: true, aliases: ['自定义对象'] },
+};
+
+const ROLE_LABELS = {
+    spacetime: ['时空'],
+    scenes: ['场景', '局面'],
+    characters: ['角色', '人物'],
+    state: ['角色', '人物'],
+    items: ['物品', '道具', '装备'],
+    events: ['事件'],
+    regions: ['地点', '区域'],
+    globalChanges: ['全局', '组织', '制度'],
+    foundations: ['基础设定', '规则', '设定'],
+    custom: ['自定义对象'],
+};
+
+const WRITABLE_PSEUDO_FIELDS = [
+    { key: 'content', label: '当前摘要', aliases: ['当前摘要', '摘要', '当前记录'] },
+    { key: 'status', label: '条目状态', aliases: ['条目状态', '存续状态'] },
+    { key: 'keywords', label: '检索词', aliases: ['检索词', '关键词', '别名'] },
+];
+
+function token(value) {
+    return String(value ?? '')
+        .normalize('NFKC')
+        .toUpperCase()
+        .replace(/^\/?\s*/u, '')
+        .replace(/[\s·•.\-—–|｜:：/\\()（）【】\[\]<>《》“”"'`]+/gu, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+}
+
+function headerToken(value) {
+    return String(value ?? '')
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/[\s·•._—–\-|｜:：/\\()（）【】\[\]<>《》“”"'`]+/gu, '');
+}
+
+function addUniqueAlias(aliasMap, collisions, alias, spec) {
+    const key = headerToken(alias);
+    if (!key || collisions.has(key))
+        return;
+    const current = aliasMap.get(key);
+    if (!current) {
+        aliasMap.set(key, spec);
+        return;
+    }
+    const same = current.role === spec.role
+        && current.layer === spec.layer
+        && Boolean(current.event) === Boolean(spec.event)
+        && (!current.tableName || !spec.tableName || current.tableName === spec.tableName);
+    if (!same) {
+        aliasMap.delete(key);
+        collisions.add(key);
+    }
+}
+
+function writableLayers(table) {
+    const output = [...WRITABLE_PSEUDO_FIELDS];
+    for (const field of table.fields ?? []) {
+        const label = stateLayerLabelForField(table, field.key);
+        if (!label)
+            continue;
+        output.push({ key: field.key, label, aliases: [label, field.label].filter(Boolean) });
+    }
+    const seen = new Set();
+    return output.filter((item) => {
+        const key = `${item.key}|${headerToken(item.label)}`;
+        if (seen.has(key))
+            return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function buildStateModuleRegistry(registry) {
+    const tables = normalizeTableRegistry(registry);
+    const byTag = new Map();
+    const byHeader = new Map();
+    const headerCollisions = new Set();
+
+    for (const [tag, source] of Object.entries(CANONICAL_MODULES)) {
+        const spec = { tag, ...source, source: 'canonical' };
+        byTag.set(token(tag), spec);
+        for (const alias of source.aliases ?? [])
+            addUniqueAlias(byHeader, headerCollisions, alias, spec);
+    }
+
+    for (const table of tables.filter((item) => item.enabled)) {
+        const roleLabels = [...new Set([table.name, ...(ROLE_LABELS[table.role] ?? [])].filter(Boolean))];
+        const tableTokens = [...new Set([table.key, table.name, table.role].map(token).filter(Boolean))];
+        const layers = writableLayers(table);
+
+        const genericSpec = {
+            tag: `MA_TABLE_${token(table.key)}`,
+            tableName: table.name,
+            role: table.role,
+            layer: '',
+            dynamicTable: true,
+            event: table.role === 'events',
+            source: 'dynamic-table',
+        };
+        for (const tableToken of tableTokens) {
+            byTag.set(token(`MA_TABLE_${tableToken}`), genericSpec);
+            byTag.set(token(`MA_${tableToken}`), genericSpec);
+        }
+
+        for (const layer of layers) {
+            const directSpec = {
+                tag: `MA_${token(table.key)}_${token(layer.key)}`,
+                tableName: table.name,
+                role: table.role,
+                layer: layer.label,
+                dynamicDirect: true,
+                event: table.role === 'events',
+                source: 'dynamic-layer',
+            };
+            const layerTokens = [...new Set([layer.key, layer.label, ...(layer.aliases ?? [])].map(token).filter(Boolean))];
+            for (const tableToken of tableTokens)
+                for (const layerToken of layerTokens)
+                    byTag.set(token(`MA_${tableToken}_${layerToken}`), directSpec);
+            for (const tableLabel of roleLabels) {
+                for (const layerLabel of [...new Set([layer.label, ...(layer.aliases ?? [])].filter(Boolean))]) {
+                    addUniqueAlias(byHeader, headerCollisions, `${tableLabel}${layerLabel}`, directSpec);
+                    addUniqueAlias(byHeader, headerCollisions, `${tableLabel}·${layerLabel}`, directSpec);
+                }
+            }
+        }
+    }
+
+    return {
+        resolveTag(rawTag) {
+            return byTag.get(token(rawTag));
+        },
+        resolveHeader(rawHeader) {
+            return byHeader.get(headerToken(rawHeader));
+        },
+        tagToken: token,
+        headerToken,
+        knownTags: new Set(byTag.keys()),
+    };
+}
+
+function canonicalStateTag(value) {
+    return token(value);
+}
+
+}
+};
 __defs["domain/state-semantics.js"]=function(exports,__require){
 const __scope=Object.create(null);
 with(__scope){
@@ -5407,6 +5595,8 @@ Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
 Object.defineProperty(__scope,"resolveStateLayer",{enumerable:true,configurable:true,get:()=>__require("domain/state-semantics.js")["resolveStateLayer"]});
+Object.defineProperty(__scope,"buildStateModuleRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/state-module-registry.js")["buildStateModuleRegistry"]});
+Object.defineProperty(__scope,"canonicalStateTag",{enumerable:true,configurable:true,get:()=>__require("domain/state-module-registry.js")["canonicalStateTag"]});
 with(__scope){
 Object.defineProperty(exports,"mergeDuplicateStateRows",{enumerable:true,configurable:true,get:()=>mergeDuplicateStateRows});
 Object.defineProperty(exports,"dedupeStrongStateRows",{enumerable:true,configurable:true,get:()=>dedupeStrongStateRows});
@@ -6099,35 +6289,6 @@ function applyPatchToWorkingSnapshot(working, patch) {
         working[patch.table] = next;
     }
 }
-const NATURAL_MODULES = {
-    MA_CORE: { role: 'events', layer: '当前摘要', event: true },
-    MA_EVENT_RESULT: { role: 'events', layer: '现行事实', event: true },
-    MA_EVENT_STATE: { role: 'events', layer: '当前状态', event: true },
-    MA_UNRESOLVED: { role: 'events', layer: '当前状态', event: true, unresolved: true },
-    MA_CHARACTER_IDENTITY: { role: 'characters', layer: '身份定义' },
-    MA_CHARACTER_FACT: { role: 'characters', layer: '现行事实' },
-    MA_CHARACTER_STATE: { role: 'characters', layer: '当前状态' },
-    MA_CHARACTER_APPEARANCE: { role: 'characters', layer: '外观表现' },
-    MA_CHARACTER_RELATION: { role: 'characters', layer: '关系状态' },
-    MA_CHARACTER_ABILITY: { role: 'characters', layer: '能力状态' },
-    MA_ITEM_IDENTITY: { role: 'items', layer: '身份定义' },
-    MA_ITEM_FACT: { role: 'items', layer: '现行事实' },
-    MA_ITEM_STATE: { role: 'items', layer: '当前状态' },
-    MA_SCENE_IDENTITY: { role: 'scenes', layer: '身份定义' },
-    MA_SCENE_FACT: { role: 'scenes', layer: '现行事实' },
-    MA_SCENE_STATE: { role: 'scenes', layer: '当前状态' },
-    MA_REGION_IDENTITY: { role: 'regions', layer: '身份定义' },
-    MA_REGION_FACT: { role: 'regions', layer: '现行事实' },
-    MA_REGION_STATE: { role: 'regions', layer: '当前状态' },
-    MA_GLOBAL_IDENTITY: { role: 'globalChanges', layer: '身份定义' },
-    MA_GLOBAL_FACT: { role: 'globalChanges', layer: '现行事实' },
-    MA_GLOBAL_STATE: { role: 'globalChanges', layer: '当前状态' },
-    MA_FOUNDATION_IDENTITY: { role: 'foundations', layer: '身份定义' },
-    MA_FOUNDATION_FACT: { role: 'foundations', layer: '现行事实' },
-    MA_FOUNDATION_STATE: { role: 'foundations', layer: '当前状态' },
-    MA_SPACETIME_STATE: { role: 'spacetime', layer: '当前状态' },
-    MA_CUSTOM: { layer: '', custom: true },
-};
 function moduleLines(value) {
     return String(value || '')
         .replace(/^\s+|\s+$/g, '')
@@ -6172,7 +6333,7 @@ function explicitlyClosedEvent(event, sourceText) {
     if (event.modules.some((module) => module.unresolved))
         return false;
     const eventEvidence = event.modules
-        .filter((module) => module.tag === 'MA_EVENT_RESULT' || module.tag === 'MA_EVENT_STATE' || module.tag === 'MA_CORE')
+        .filter((module) => module.eventModule && !module.unresolved)
         .map((module) => module.content)
         .join(' ');
     const source = String(sourceText ?? '').trim();
@@ -6183,90 +6344,266 @@ function explicitlyClosedEvent(event, sourceText) {
 /**
  * 1.3.14 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是最短事实。
  */
-function parseStateTextBlocks(raw) {
-    const source = String(raw ?? '').replace(/^\uFEFF/, '').trim();
+function normalizeProtocolSource(raw) {
+    return String(raw ?? '')
+        .replace(/^\uFEFF/, '')
+        .replace(/[＜〈]/gu, '<')
+        .replace(/[＞〉]/gu, '>')
+        .replace(/<\s*(\/?)\s*(MA_[^<>]+?)\s*>/giu, (_match, slash, rawTag) => `<${slash}${canonicalStateTag(rawTag)}>`)
+        .trim();
+}
+function extractProtocolContainers(source) {
+    const blocks = [];
+    const tokenRe = /<(\/)?(MA_TURN|MA_EVENT)>/gu;
+    let current;
+    for (const match of source.matchAll(tokenRe)) {
+        const closing = Boolean(match[1]);
+        const tag = match[2];
+        const index = match.index ?? 0;
+        if (!closing) {
+            if (current) {
+                blocks.push({
+                    kind: current.tag === 'MA_TURN' ? 'turn' : 'event',
+                    line: lineOf(source, current.openIndex),
+                    body: source.slice(current.contentStart, index),
+                    autoClosed: true,
+                });
+            }
+            current = { tag, openIndex: index, contentStart: index + match[0].length };
+            continue;
+        }
+        if (!current)
+            continue;
+        if (current.tag !== tag)
+            continue;
+        blocks.push({
+            kind: tag === 'MA_TURN' ? 'turn' : 'event',
+            line: lineOf(source, current.openIndex),
+            body: source.slice(current.contentStart, index),
+            autoClosed: false,
+        });
+        current = undefined;
+    }
+    if (current) {
+        blocks.push({
+            kind: current.tag === 'MA_TURN' ? 'turn' : 'event',
+            line: lineOf(source, current.openIndex),
+            body: source.slice(current.contentStart),
+            autoClosed: true,
+        });
+    }
+    return blocks;
+}
+function maskRangesPreservingLines(source, ranges) {
+    if (!ranges.length)
+        return source;
+    const chars = [...source];
+    for (const range of ranges) {
+        for (let index = Math.max(0, range.start); index < Math.min(chars.length, range.end); index += 1) {
+            if (chars[index] !== '\n' && chars[index] !== '\r')
+                chars[index] = ' ';
+        }
+    }
+    return chars.join('');
+}
+function dynamicModuleFromSpec(spec, rawContent, line) {
+    const lines = moduleLines(rawContent);
+    let objectName = '';
+    let tableName = spec.tableName || '';
+    let layerLabel = spec.layer || '';
+    let contentLines = [];
+    if (spec.event) {
+        if (spec.dynamicTable) {
+            layerLabel = lines[0] || '';
+            contentLines = lines.slice(1);
+        }
+        else {
+            contentLines = lines;
+        }
+    }
+    else if (spec.custom) {
+        if (lines.length < 4)
+            throw new Error(`第 ${line} 行的 <MA_CUSTOM> 至少需要“表名、对象、语义层、事实”四行`);
+        [tableName, objectName, layerLabel] = lines;
+        contentLines = lines.slice(3);
+    }
+    else if (spec.dynamicTable) {
+        if (lines.length < 3)
+            throw new Error(`第 ${line} 行的 <${spec.tag}> 至少需要“对象、语义层、事实”三行`);
+        [objectName, layerLabel] = lines;
+        contentLines = lines.slice(2);
+    }
+    else {
+        objectName = lines[0] || '';
+        contentLines = lines.slice(1);
+    }
+    const contentLimit = spec.tag === 'MA_CORE' ? 320 : 220;
+    const content = compactFactText(contentLines.join(' '), contentLimit, `<${spec.tag}>`);
+    if (!content)
+        throw new Error(`第 ${line} 行的 <${spec.tag}> 缺少具体事实`);
+    if (!spec.event && !objectName)
+        throw new Error(`第 ${line} 行的 <${spec.tag}> 缺少对象名`);
+    if (spec.dynamicTable && !layerLabel)
+        throw new Error(`第 ${line} 行的 <${spec.tag}> 缺少语义层`);
+    return {
+        tag: spec.tag,
+        line,
+        objectName: objectName || undefined,
+        tableName: tableName || undefined,
+        layerLabel,
+        content,
+        role: spec.role,
+        eventModule: Boolean(spec.event),
+        unresolved: Boolean(spec.unresolved),
+        parserSource: spec.source || 'canonical',
+    };
+}
+function scanTaggedEventModules(body, moduleRegistry, baseLine) {
+    const modules = [];
+    const ranges = [];
+    const tokenRe = /<(\/)?(MA_[^<>]+)>/gu;
+    let current;
+    const finalize = (endIndex, endTokenIndex = endIndex) => {
+        if (!current)
+            return;
+        const rawContent = body.slice(current.contentStart, endIndex);
+        modules.push(dynamicModuleFromSpec(current.spec, rawContent, baseLine + lineOf(body, current.openIndex) - 1));
+        ranges.push({ start: current.openIndex, end: endTokenIndex });
+        current = undefined;
+    };
+    for (const match of body.matchAll(tokenRe)) {
+        const closing = Boolean(match[1]);
+        const rawTag = match[2];
+        const tag = canonicalStateTag(rawTag);
+        const index = match.index ?? 0;
+        const spec = moduleRegistry.resolveTag(tag);
+        if (!spec)
+            throw new Error(`第 ${baseLine + lineOf(body, index) - 1} 行使用了未注册模块 <${tag}>`);
+        if (!closing) {
+            // 自然模块不允许嵌套；遇到新模块时，将前一模块确定性闭合。
+            finalize(index, index);
+            current = {
+                tag,
+                spec,
+                openIndex: index,
+                contentStart: index + match[0].length,
+            };
+            continue;
+        }
+        if (!current)
+            continue;
+        if (current.tag !== tag) {
+            // 错配结束标签不能改变事实归属；只在边界处闭合当前模块。
+            finalize(index, index + match[0].length);
+            continue;
+        }
+        finalize(index, index + match[0].length);
+    }
+    finalize(body.length, body.length);
+    return { modules, residual: maskRangesPreservingLines(body, ranges) };
+}
+function headerLooksSemantic(value) {
+    return /(模块|身份|定义|事实|状态|结果|摘要|关系|能力|外观|表现|检索词|关键词|未决)/u.test(String(value || ''));
+}
+function parseResidualEventText(residual, moduleRegistry, line) {
+    const lines = moduleLines(residual);
+    const rawEventName = lines.shift() || '';
+    const eventName = safeText(rawEventName.replace(/^(?:事件(?:名称|名)?|变化链)\s*[:：]\s*/u, ''), 240).trim();
+    if (!eventName)
+        throw new Error(`第 ${line} 行的 <MA_EVENT> 缺少事件名称`);
+    let legacyStatus = '';
+    const modules = [];
+    const implicitCoreLines = [];
+    let pending;
+    const flush = () => {
+        if (!pending)
+            return;
+        modules.push(dynamicModuleFromSpec(pending.spec, pending.lines.join('\n'), line));
+        pending = undefined;
+    };
+    for (const rawLine of lines) {
+        const cleaned = rawLine.replace(/^[-*•]\s*/u, '').trim();
+        if (!cleaned)
+            continue;
+        const statusMatch = cleaned.match(/^(?:(?:事件|阶段)?状态\s*[:：]?\s*)?(进行中|已结束)$/u);
+        if (statusMatch && !legacyStatus) {
+            legacyStatus = statusMatch[1];
+            continue;
+        }
+        const headerMatch = cleaned.match(/^([^:：]{1,80})\s*[:：]\s*(.*)$/u);
+        const headerText = headerMatch?.[1]?.trim() || cleaned;
+        const spec = moduleRegistry.resolveHeader(headerText);
+        const standaloneHeader = Boolean(spec && !headerMatch);
+        if (spec && (headerMatch || standaloneHeader)) {
+            flush();
+            const remainder = headerMatch?.[2]?.trim() || '';
+            const pendingLines = [];
+            if (remainder) {
+                if (!spec.event && !spec.custom) {
+                    const split = remainder.split(/\s*[|｜]\s*/u);
+                    pendingLines.push(split.shift() || '');
+                    if (split.length)
+                        pendingLines.push(split.join('；'));
+                }
+                else {
+                    pendingLines.push(remainder);
+                }
+            }
+            pending = { spec, lines: pendingLines };
+            continue;
+        }
+        if (headerMatch && headerLooksSemantic(headerText))
+            throw new Error(`第 ${line} 行出现未注册动态模块标题：${headerText}`);
+        if (pending) {
+            pending.lines.push(cleaned);
+            continue;
+        }
+        const implicitFact = cleaned
+            .replace(/^(?:动作骨架|核心动作|事件骨架|事件事实|事实)\s*[:：]\s*/u, '')
+            .trim();
+        if (implicitFact)
+            implicitCoreLines.push(implicitFact);
+    }
+    flush();
+    if (implicitCoreLines.length) {
+        const coreSpec = moduleRegistry.resolveTag('MA_CORE');
+        modules.unshift(dynamicModuleFromSpec(coreSpec, implicitCoreLines.join('；'), line));
+    }
+    return { eventName, legacyStatus, modules };
+}
+/**
+ * 动态自然模块解析器：协议骨架固定，模块目录由当前 tableRegistry 生成。
+ * 严格语义错误继续拒绝；标签缺失、重复、别名与可确定的边界错误在本地归一化。
+ */
+function parseStateTextBlocks(raw, registry = undefined) {
+    const source = normalizeProtocolSource(raw);
     if (!source)
         throw new Error('状态模型返回为空');
-    if (/<MA_CHANGE>|<MA_(?:FACT|ROW)>|(^|\n)\s*[^\n]+\s*[=＝]\s*\S/iu.test(source)) {
+    if (/<MA_CHANGE>|<MA_(?:FACT|ROW)>|(^|\n)\s*[^\n]+\s*[=＝]\s*\S/iu.test(source))
         throw new Error('状态模型返回了已停用键值协议；只接受 <MA_EVENT> 内的自然事实模块');
-    }
+    const moduleRegistry = buildStateModuleRegistry(registry);
     const output = [];
-    const turnRe = /<MA_TURN>([\s\S]*?)<\/MA_TURN>/giu;
-    for (const match of source.matchAll(turnRe)) {
-        const summary = compactFactText(match[1], 320, '<MA_TURN>');
-        if (summary)
-            output.push({ kind: 'turn', line: lineOf(source, match.index ?? 0), summary });
-    }
-    const eventRe = /<MA_EVENT>([\s\S]*?)<\/MA_EVENT>/giu;
-    for (const match of source.matchAll(eventRe)) {
-        const body = match[1];
-        const line = lineOf(source, match.index ?? 0);
-        const moduleRe = /<(MA_[A-Z_]+)>([\s\S]*?)<\/\1>/gu;
-        const modules = [];
-        let firstModuleIndex = body.length;
-        for (const moduleMatch of body.matchAll(moduleRe)) {
-            firstModuleIndex = Math.min(firstModuleIndex, moduleMatch.index ?? body.length);
-            const tag = moduleMatch[1].toUpperCase();
-            const spec = NATURAL_MODULES[tag];
-            if (!spec)
-                throw new Error(`第 ${lineOf(source, (match.index ?? 0) + (moduleMatch.index ?? 0))} 行使用了未注册模块 <${tag}>`);
-            const lines = moduleLines(moduleMatch[2]);
-            let objectName = '';
-            let tableName = '';
-            let layerLabel = spec.layer;
-            let contentLines = [];
-            if (spec.event) {
-                contentLines = lines;
-            }
-            else if (spec.custom) {
-                if (lines.length < 4)
-                    throw new Error(`第 ${line} 行的 <MA_CUSTOM> 至少需要“表名、对象、语义层、事实”四行`);
-                [tableName, objectName, layerLabel] = lines;
-                contentLines = lines.slice(3);
-            }
-            else {
-                objectName = lines[0] || '';
-                contentLines = lines.slice(1);
-            }
-            const contentLimit = tag === 'MA_CORE' ? 320 : 220;
-            const content = compactFactText(contentLines.join(' '), contentLimit, `<${tag}>`);
-            if (!content)
-                throw new Error(`第 ${line} 行的 <${tag}> 缺少具体事实`);
-            if (!spec.event && !objectName)
-                throw new Error(`第 ${line} 行的 <${tag}> 缺少对象名`);
-            modules.push({
-                tag,
-                line,
-                objectName: objectName || undefined,
-                tableName: tableName || undefined,
-                layerLabel,
-                content,
-                role: spec.role,
-                eventModule: Boolean(spec.event),
-                unresolved: Boolean(spec.unresolved),
-            });
+    for (const block of extractProtocolContainers(source)) {
+        if (block.kind === 'turn') {
+            const summary = compactFactText(block.body, 320, '<MA_TURN>');
+            if (summary)
+                output.push({ kind: 'turn', line: block.line, summary, parserMode: block.autoClosed ? 'compat' : 'strict' });
+            continue;
         }
-        const prelude = moduleLines(body.slice(0, firstModuleIndex));
-        const eventName = safeText(prelude[0], 240).trim();
-        if (!eventName)
-            throw new Error(`第 ${line} 行的 <MA_EVENT> 缺少事件名称`);
-        // 兼容 1.3.14 已保存的模型输出：旧第二行可以读取，但只作为迁移输入，
-        // 不再拥有事件关闭权。新协议在事件名之后直接进入事实模块。
-        const legacyStatus = prelude[1] || '';
-        if (legacyStatus && !/^(进行中|已结束)$/u.test(legacyStatus))
-            throw new Error(`事件“${eventName}”在事件名后出现未知文本；新协议应直接写事实模块`);
-        if (prelude.length > (legacyStatus ? 2 : 1))
-            throw new Error(`事件“${eventName}”在事实模块前包含多余文本`);
-        if (!modules.length)
-            throw new Error(`事件“${eventName}”没有事实模块`);
-        if (!modules.some((module) => module.tag === 'MA_CORE'))
-            throw new Error(`事件“${eventName}”缺少唯一的 <MA_CORE> 动作骨架`);
+        const scanned = scanTaggedEventModules(block.body, moduleRegistry, block.line);
+        const residual = parseResidualEventText(scanned.residual, moduleRegistry, block.line);
+        const modules = [...residual.modules, ...scanned.modules];
+        if (!modules.some((module) => module.tag === 'MA_CORE')) {
+            const fallbackModule = modules.find((module) => module.eventModule && !module.unresolved && module.tag !== 'MA_CORE');
+            const coreSpec = moduleRegistry.resolveTag('MA_CORE');
+            modules.unshift(dynamicModuleFromSpec(coreSpec, fallbackModule?.content || residual.eventName, block.line));
+        }
         const mergedModules = [];
         const moduleIndexes = new Map();
         for (const module of modules) {
             const key = module.eventModule
-                ? module.tag
-                : `${module.tag}|${canonicalObjectTitle(module.objectName)}|${module.tableName || ''}|${module.layerLabel}`;
+                ? `${module.tableName || module.role || ''}|${module.layerLabel}|${module.tag === 'MA_CORE' ? 'core' : module.unresolved ? 'unresolved' : 'fact'}`
+                : `${module.tableName || module.role || ''}|${module.layerLabel}|${canonicalObjectTitle(module.objectName)}`;
             const existingIndex = moduleIndexes.get(key);
             if (existingIndex === undefined) {
                 moduleIndexes.set(key, mergedModules.length);
@@ -6276,12 +6613,20 @@ function parseStateTextBlocks(raw) {
             const existing = mergedModules[existingIndex];
             existing.content = mergeNaturalModuleContent(existing.content, module.content, existing.tag);
             existing.unresolved = Boolean(existing.unresolved || module.unresolved);
+            existing.parserSource = existing.parserSource === module.parserSource ? existing.parserSource : 'normalized';
         }
-        output.push({ kind: 'event', line, eventName, reportedClosed: legacyStatus === '已结束', closed: false, modules: mergedModules });
+        output.push({
+            kind: 'event',
+            line: block.line,
+            eventName: residual.eventName,
+            reportedClosed: residual.legacyStatus === '已结束',
+            closed: false,
+            modules: mergedModules,
+            parserMode: block.autoClosed || mergedModules.some((item) => item.parserSource !== 'canonical') ? 'compat' : 'strict',
+        });
     }
-    if (!output.some((block) => block.kind === 'turn' || block.kind === 'event')) {
+    if (!output.some((block) => block.kind === 'turn' || block.kind === 'event'))
         throw new Error('状态模型未返回 <MA_TURN> 或 <MA_EVENT>');
-    }
     return output.sort((a, b) => a.line - b.line);
 }
 function naturalTable(module, active) {
@@ -6299,7 +6644,7 @@ function arrayLayerOperation(layerKey) {
 }
 function eventCoreText(event) {
     return event.modules.find((module) => module.tag === 'MA_CORE')?.content
-        || event.modules.find((module) => module.tag === 'MA_EVENT_RESULT')?.content
+        || event.modules.find((module) => module.eventModule && !module.unresolved)?.content
         || `${event.eventName}${event.closed ? '已结束' : '正在进行'}`;
 }
 function projectionPatchForFact(fact, working) {
@@ -6459,7 +6804,7 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
     const active = enabledTables(normalizeTableRegistry(registry));
     const previous = dedupeStrongStateRows(previousSnapshot, registry);
     const working = structuredClone(previous);
-    const blocks = parseStateTextBlocks(raw);
+    const blocks = parseStateTextBlocks(raw, registry);
     const turnSummary = blocks.filter((block) => block.kind === 'turn').map((block) => block.summary).at(-1) ?? '';
     const factsById = new Map();
     const snapshot = {};
@@ -15221,7 +15566,7 @@ async function runDiagnostics() {
             id: 'modelProtocol',
             label: '模型返回协议',
             status: 'ok',
-            detail: '审核、状态表、小总结和大总结统一使用固定文本；JSON仅用于插件内部存储',
+            detail: '统一使用固定文本；状态解析器按当前表格注册表动态识别模块并本地归一化，JSON仅用于插件内部存储',
         });
     }
     checks.push({

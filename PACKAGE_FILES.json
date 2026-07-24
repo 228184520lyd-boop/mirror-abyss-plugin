@@ -1,10 +1,10 @@
 {
-  "version": "1.4.0-alpha.7",
+  "version": "1.4.0-alpha.9",
   "files": [
     {
       "name": "bundle.js",
-      "size": 990115,
-      "sha256": "8a49012532bfeaab8b4dc0cf8886e44ae3b82b52ae9a2b07afa449ac9a149c50"
+      "size": 1005034,
+      "sha256": "4098def47dada31b38d6e17b7ead04ac042b9579a836ee05c18251a25b621710"
     },
     {
       "name": "index.js",
@@ -13,8 +13,8 @@
     },
     {
       "name": "manifest.json",
-      "size": 685,
-      "sha256": "3c4a9e68eab62613d77def76a0f878ca03d71145c58355412e4d668f83d11a37"
+      "size": 692,
+      "sha256": "7d30bb52b5949bfdb5edbdbf4f58e319d1773ba9d83179a6a3cd24cb3d66d2aa"
     },
     {
       "name": "settings.html",
