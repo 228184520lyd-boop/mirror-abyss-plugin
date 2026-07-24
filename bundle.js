@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.6';
+const VERSION = '1.4.0-alpha.7';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -6146,6 +6146,25 @@ function compactFactText(value, limit = 220, label = '事实模块') {
         throw new Error(`${label}过长：${text.length}/${limit} 字；只写一到两句具体事实`);
     return text;
 }
+/**
+ * 模型偶尔会把同一语义槽拆成两个同名模块。该情况不改变对象、表格或语义层，
+ * 可以在本地确定性合并，不能升级为第二次剧情模型调用。
+ */
+function mergeNaturalModuleContent(left, right, tag) {
+    const values = [];
+    const identities = new Set();
+    for (const value of [left, right]) {
+        for (const part of String(value || '').split(/[；;]+/u).map((item) => item.trim()).filter(Boolean)) {
+            const key = identity(part);
+            if (!key || identities.has(key))
+                continue;
+            identities.add(key);
+            values.push(part);
+        }
+    }
+    const limit = tag === 'MA_CORE' ? 640 : 440;
+    return compactFactText(values.join('；'), limit, `<${tag}> 合并结果`);
+}
 // 事件关闭只接受正文和事实模块共同出现的明确终局表达。单个动作完成、到达、开门、
 // 交付一件物品等原子结果都不能据此关闭整条事件线。
 const EXPLICIT_EVENT_TERMINAL_RE = /(?:事件|任务|目标|委托|调查|案件|战斗|冲突|谈判|交易|仪式|行动|计划|追捕|危机|救援|审判|比赛|旅程|会面|婚礼|实验|测量流程|观测流程|测试|验证|分析流程|研究阶段|项目|工作流|拍摄|场次).{0,16}(?:已结束|已经结束|结束了|已完成|已经完成|完成了|已解决|已经解决|已关闭|已经关闭|已达成|已经达成|宣告结束|告一段落|结案|告破)|(?:任务完成|目标达成|危机解除|战斗结束|谈判结束|交易完成|仪式完成|追捕结束|调查结案|案件告破|救援完成|比赛结束|婚礼结束|实验结束|实验完成|测量流程完成|观测流程结束|测试完成|验证结束|分析流程完成|研究阶段结束|项目完成|工作流结束|拍摄结束|场次结束)|(?:此事|此案|争端|纠纷).{0,8}(?:作罢|了结|终结|不再追究)|(?:对方|双方|一方).{0,12}(?:认输|投降).{0,12}(?:不再追究|退出争端|停止争斗)/iu;
@@ -6242,16 +6261,23 @@ function parseStateTextBlocks(raw) {
             throw new Error(`事件“${eventName}”没有事实模块`);
         if (!modules.some((module) => module.tag === 'MA_CORE'))
             throw new Error(`事件“${eventName}”缺少唯一的 <MA_CORE> 动作骨架`);
-        const moduleKeys = new Set();
+        const mergedModules = [];
+        const moduleIndexes = new Map();
         for (const module of modules) {
             const key = module.eventModule
                 ? module.tag
                 : `${module.tag}|${canonicalObjectTitle(module.objectName)}|${module.tableName || ''}|${module.layerLabel}`;
-            if (moduleKeys.has(key))
-                throw new Error(`事件“${eventName}”重复返回同一事实模块：${module.eventModule ? `<${module.tag}>` : module.objectName}`);
-            moduleKeys.add(key);
+            const existingIndex = moduleIndexes.get(key);
+            if (existingIndex === undefined) {
+                moduleIndexes.set(key, mergedModules.length);
+                mergedModules.push(module);
+                continue;
+            }
+            const existing = mergedModules[existingIndex];
+            existing.content = mergeNaturalModuleContent(existing.content, module.content, existing.tag);
+            existing.unresolved = Boolean(existing.unresolved || module.unresolved);
         }
-        output.push({ kind: 'event', line, eventName, reportedClosed: legacyStatus === '已结束', closed: false, modules });
+        output.push({ kind: 'event', line, eventName, reportedClosed: legacyStatus === '已结束', closed: false, modules: mergedModules });
     }
     if (!output.some((block) => block.kind === 'turn' || block.kind === 'event')) {
         throw new Error('状态模型未返回 <MA_TURN> 或 <MA_EVENT>');
@@ -9614,6 +9640,7 @@ Object.defineProperty(__scope,"createPlayerRecordingBoundary",{enumerable:true,c
 Object.defineProperty(__scope,"messageInsideRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["messageInsideRecordingBoundary"]});
 Object.defineProperty(__scope,"recordingStartIndex",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["recordingStartIndex"]});
 Object.defineProperty(__scope,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["advanceRuntimeV2"]});
+Object.defineProperty(__scope,"ensureRuntimeJob",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["ensureRuntimeJob"]});
 Object.defineProperty(__scope,"markRuntimeJobDone",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobDone"]});
 Object.defineProperty(__scope,"markRuntimeJobFailed",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobFailed"]});
 Object.defineProperty(__scope,"markRuntimeJobRunning",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobRunning"]});
@@ -9939,10 +9966,13 @@ function invalidateDerivedForValidMessages(chatState, validMessageIds) {
 async function prepareDerivedStageStatuses(artifact, chatState) {
     const settings = getSettings();
     const summaryKind = artifact.runtimeV2?.plan?.summaryKind || '';
+    const runtimePlan = artifact.runtimeV2?.plan ?? {};
     const plan = {
         small: summaryKind === 'small',
         large: summaryKind === 'large',
         summaryKind,
+        summaryJobId: String(runtimePlan.summaryJobId || ''),
+        syncJobId: String(runtimePlan.syncJobId || ''),
     };
     markStage(artifact, 'summary', plan.small || plan.large ? 'queued' : 'skipped');
     const historyWorkflow = readHistoryWorkflow(chatState);
@@ -10026,12 +10056,13 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
     };
     const updateRuntime = async (type, status, error = '') => {
         const state = await getChatState(chatKey);
+        const jobId = type === 'lorebook-sync' ? summaryPlan.syncJobId : summaryPlan.summaryJobId;
         if (status === 'running')
-            markRuntimeJobRunning(state, type, messageKey);
+            markRuntimeJobRunning(state, type, messageKey, jobId);
         else if (status === 'done')
-            markRuntimeJobDone(state, type, artifact);
+            markRuntimeJobDone(state, type, artifact, jobId);
         else
-            markRuntimeJobFailed(state, type, messageKey, error);
+            markRuntimeJobFailed(state, type, messageKey, error, jobId);
         await putChatState(state);
     };
     const queueSync = () => {
@@ -10100,16 +10131,29 @@ function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
         messageFingerprint: artifact.sourceFingerprint,
         historyRevisionAtEnqueue: historyRevision,
         automatic: true,
-    }).then(queueSync, (error) => {
+    }).then(() => {
+        if (summaryPlan.resumeLatestSync)
+            void resumeRuntimeOutbox();
+        else
+            queueSync();
+    }, (error) => {
         if (derivedTaskError(error)) {
-            if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision))
-                queueSync();
+            if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision)) {
+                if (summaryPlan.resumeLatestSync)
+                    void resumeRuntimeOutbox();
+                else
+                    queueSync();
+            }
             return;
         }
         console.warn(`[MirrorAbyss] runtime-v2 ${kind} summary failed`, error);
         toast('warning', `核心状态已保存，但${kind === 'small' ? '小' : '大'}总结失败：${toErrorMessage(error)}`);
-        if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled)
-            queueSync();
+        if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) {
+            if (summaryPlan.resumeLatestSync)
+                void resumeRuntimeOutbox();
+            else
+                queueSync();
+        }
     });
 }
 
@@ -10118,35 +10162,59 @@ async function resumeRuntimeOutbox() {
         return { resumed: false, reason: 'disabled' };
     const chatKey = currentChatKey();
     const state = await getChatState(chatKey);
-    const runtime = normalizeRuntimeV2(state.runtimeV2);
-    const pending = runtime.outbox.filter((job) => job.status === 'pending');
-    if (!pending.length)
-        return { resumed: false, reason: 'empty' };
+    let runtime = normalizeRuntimeV2(state.runtimeV2);
     const chat = getChat();
-    const pendingSummary = [...pending].reverse().find((job) => ['small-summary', 'large-summary'].includes(job.type));
+    const artifactForTurnKey = (turnKey) => {
+        const index = chat.findIndex((message) => getAttachedArtifact(message)?.messageKey === turnKey);
+        return { index, artifact: index >= 0 ? getAttachedArtifact(chat[index]) : null };
+    };
+    const latest = [...chat].map((message, index) => ({ index, artifact: getAttachedArtifact(message) }))
+        .reverse()
+        .find((item) => item.artifact?.snapshot && item.artifact?.stages?.state?.status === 'success');
+    let stateChanged = JSON.stringify(runtime) !== JSON.stringify(state.runtimeV2);
+    let pendingSummary = [...runtime.outbox].reverse().find((job) => ['small-summary', 'large-summary'].includes(job.type) && job.status === 'pending');
+    if (!pendingSummary && runtime.machines.summary.pendingKind && runtime.machines.summary.pendingTurnKey) {
+        const target = artifactForTurnKey(runtime.machines.summary.pendingTurnKey);
+        if (target.artifact?.snapshot && target.artifact.stages?.state?.status === 'success') {
+            pendingSummary = ensureRuntimeJob(state, `${runtime.machines.summary.pendingKind}-summary`, target.artifact, runtime.revision);
+            runtime = normalizeRuntimeV2(state.runtimeV2);
+            stateChanged = true;
+        }
+    }
+    let syncJob = [...runtime.outbox].reverse().find((job) => job.type === 'lorebook-sync' && job.status === 'pending');
+    if (!syncJob && runtime.machines.publication.desiredRevision > runtime.machines.publication.confirmedRevision && latest) {
+        syncJob = ensureRuntimeJob(state, 'lorebook-sync', latest.artifact, runtime.machines.publication.desiredRevision);
+        runtime = normalizeRuntimeV2(state.runtimeV2);
+        stateChanged = true;
+    }
+    if (stateChanged)
+        await putChatState(state);
     if (pendingSummary) {
-        const index = chat.findIndex((message) => getAttachedArtifact(message)?.messageKey === pendingSummary.turnKey);
-        const artifact = index >= 0 ? getAttachedArtifact(chat[index]) : null;
-        if (artifact?.snapshot && artifact.stages?.state?.status === 'success') {
-            queueAutomaticDerived(index, artifact, currentHistoryRevision(chatKey), {
+        const target = artifactForTurnKey(pendingSummary.turnKey);
+        if (target.artifact?.snapshot && target.artifact.stages?.state?.status === 'success') {
+            const pendingSync = [...runtime.outbox].reverse().find((job) => job.type === 'lorebook-sync' && job.status === 'pending');
+            queueAutomaticDerived(target.index, target.artifact, currentHistoryRevision(chatKey), {
                 small: pendingSummary.type === 'small-summary',
                 large: pendingSummary.type === 'large-summary',
                 summaryKind: pendingSummary.type === 'small-summary' ? 'small' : 'large',
+                summaryJobId: pendingSummary.id,
+                syncJobId: '',
+                resumeLatestSync: true,
             });
-            return { resumed: true, kind: pendingSummary.type, turnKey: pendingSummary.turnKey };
+            return { resumed: true, kind: pendingSummary.type, turnKey: pendingSummary.turnKey, jobId: pendingSummary.id };
         }
     }
-    const syncJob = [...pending].reverse().find((job) => job.type === 'lorebook-sync');
-    if (syncJob) {
-        const latest = [...chat].map((message, index) => ({ index, artifact: getAttachedArtifact(message) }))
-            .reverse()
-            .find((item) => item.artifact?.snapshot && item.artifact?.stages?.state?.status === 'success');
-        if (latest) {
-            queueAutomaticDerived(latest.index, latest.artifact, currentHistoryRevision(chatKey), { small: false, large: false, summaryKind: '' });
-            return { resumed: true, kind: 'lorebook-sync', turnKey: latest.artifact.messageKey };
-        }
+    if (syncJob && latest) {
+        queueAutomaticDerived(latest.index, latest.artifact, currentHistoryRevision(chatKey), {
+            small: false,
+            large: false,
+            summaryKind: '',
+            summaryJobId: '',
+            syncJobId: syncJob.id,
+        });
+        return { resumed: true, kind: 'lorebook-sync', turnKey: latest.artifact.messageKey, jobId: syncJob.id };
     }
-    return { resumed: false, reason: 'artifact-missing' };
+    return { resumed: false, reason: runtime.outbox.some((job) => job.status === 'pending') ? 'artifact-missing' : 'empty' };
 }
 
 function isAutomaticLatestHistoryRecovery(index, chatState) {
@@ -11045,9 +11113,15 @@ function installPipelineEventHandlers() {
         abortActiveRequests();
         taskQueue.cancelPendingOutsideChat(chatKey);
         cancelScheduledMessagesOutsideChat(chatKey);
-        void reconcileInterruptedRuntimeState().catch((error) => {
-            console.warn('[MirrorAbyss] interrupted runtime reconciliation failed', error);
-        });
+        void (async () => {
+            try {
+                await reconcileInterruptedRuntimeState();
+                await resumeRuntimeOutbox();
+            }
+            catch (error) {
+                console.warn('[MirrorAbyss] interrupted runtime reconciliation or outbox resume failed', error);
+            }
+        })();
     };
     eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
     eventSource.on(event_types.MESSAGE_EDITED, onEdited);
@@ -11661,7 +11735,9 @@ async function generateValidatedStateText(request, previous, registry, activeFac
             return await repairStateText(raw, previous, registry, activeFacts, Number(request.maxTokens) || 1536, repairOrigin);
         }
         catch (repairError) {
-            throw new Error(`状态返回格式整理失败：${toErrorMessage(parseError)}；整理重试：${toErrorMessage(repairError)}`, { cause: repairError });
+            const failure = new Error(`状态返回格式整理失败：${toErrorMessage(parseError)}；整理重试：${toErrorMessage(repairError)}`, { cause: repairError });
+            failure.code = 'STATE_FORMAT_REPAIR_FAILED';
+            throw failure;
         }
     }
 }
@@ -11682,11 +11758,13 @@ async function requestStateText(artifact, previous, activeFacts, registry, syste
             return await generateValidatedStateText(initialRequest, previous, registry, activeFacts, 'state-format-repair');
         }
         catch (error) {
+            // 主请求已经获得内容但格式整理失败时，不再切块重跑同一正文。
+            // 这类重跑会放大调用次数，并可能把同一事实拆成多份。
+            if (error?.code === 'STATE_FORMAT_REPAIR_FAILED')
+                throw error;
+            if (!retryableStateTransportError(error))
+                throw error;
             initialError = error;
-            if (!retryableStateTransportError(error) && !repairableStateParseError(error))
-                throw error;
-            if (!retryableStateTransportError(error) && !/格式整理失败|固定文本|MA_EVENT|MA_TURN/i.test(toErrorMessage(error)))
-                throw error;
         }
     }
     const reserve = Math.max(2200, budget - systemPrompt.length - 1800);
@@ -13490,6 +13568,7 @@ Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
 with(__scope){
 Object.defineProperty(exports,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>advanceRuntimeV2});
+Object.defineProperty(exports,"ensureRuntimeJob",{enumerable:true,configurable:true,get:()=>ensureRuntimeJob});
 Object.defineProperty(exports,"markRuntimeJobRunning",{enumerable:true,configurable:true,get:()=>markRuntimeJobRunning});
 Object.defineProperty(exports,"markRuntimeJobDone",{enumerable:true,configurable:true,get:()=>markRuntimeJobDone});
 Object.defineProperty(exports,"markRuntimeJobFailed",{enumerable:true,configurable:true,get:()=>markRuntimeJobFailed});
@@ -13529,14 +13608,34 @@ function normalizedToken(value) {
     return text(value, 500).normalize('NFKC').toLowerCase().replace(/[\s，。；、：:｜|—–-]+/g, '');
 }
 
+const SCENE_LABEL_GROUPS = {
+    location: ['当前地点', '所在地点', '地点'],
+    stage: ['当前阶段', '场景阶段', '阶段'],
+    goal: ['当前目标', '场景目标', '目标'],
+    status: ['阶段状态', '场景状态', '进度状态'],
+};
+const ALL_SCENE_LABELS = Object.values(SCENE_LABEL_GROUPS).flat();
+function escapedAlternation(values) {
+    return values.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+}
 function labeledValue(source, labels) {
-    for (const label of labels) {
-        const regex = new RegExp(`(?:^|[\\n；。])\\s*${label}\\s*[：:]\\s*([^\\n；。]+)`, 'i');
-        const matched = source.match(regex);
-        if (matched?.[1])
-            return text(matched[1], 500);
-    }
-    return '';
+    const wanted = escapedAlternation(labels);
+    const anyLabel = escapedAlternation(ALL_SCENE_LABELS);
+    const regex = new RegExp(`(?:^|[\\n；。]|\\s)(?:${wanted})\\s*[：:]\\s*([\\s\\S]*?)(?=(?:[\\n；。]|\\s)(?:${anyLabel})\\s*[：:]|$)`, 'i');
+    const matched = String(source || '').match(regex);
+    return matched?.[1] ? text(matched[1].replace(/^[；。\s]+|[；。\s]+$/g, ''), 500) : '';
+}
+function bareSceneLocation(value) {
+    let source = text(value, 1500);
+    if (!source)
+        return '';
+    source = source.replace(/^(?:当前地点|所在地点|地点)\s*[：:]\s*/i, '');
+    const trailingLabels = [...SCENE_LABEL_GROUPS.stage, ...SCENE_LABEL_GROUPS.goal, ...SCENE_LABEL_GROUPS.status];
+    const nextLabel = new RegExp(`(?:[\\n；。]|\\s)(?:${escapedAlternation(trailingLabels)})\\s*[：:]`, 'i');
+    const matched = nextLabel.exec(source);
+    if (matched)
+        source = source.slice(0, matched.index);
+    return text(source.replace(/[；。\s]+$/g, ''), 240);
 }
 
 function latestRows(snapshot, registry, role) {
@@ -13559,12 +13658,12 @@ function sceneDescriptor(snapshot, artifact, registry) {
     const spacetime = activeRow(spacetimeRows);
     const source = [rowText(scene), rowText(spacetime), artifact?.factPackage?.turnSummary]
         .map((item) => text(item, 1500)).filter(Boolean).join('\n');
-    const location = labeledValue(source, ['当前地点', '所在地点', '地点'])
-        || text(spacetime?.title || spacetime?.content, 240)
-        || text(scene?.title, 240);
-    const stage = labeledValue(source, ['当前阶段', '场景阶段', '阶段']);
-    const goal = labeledValue(source, ['当前目标', '场景目标', '目标']);
-    const explicitStatus = labeledValue(source, ['阶段状态', '场景状态', '进度状态']);
+    const location = labeledValue(source, SCENE_LABEL_GROUPS.location)
+        || bareSceneLocation(spacetime?.title || spacetime?.content)
+        || bareSceneLocation(scene?.title);
+    const stage = labeledValue(source, SCENE_LABEL_GROUPS.stage);
+    const goal = labeledValue(source, SCENE_LABEL_GROUPS.goal);
+    const explicitStatus = labeledValue(source, SCENE_LABEL_GROUPS.status);
     const rawStatus = explicitStatus || text(scene?.status, 120);
     const status = TERMINAL_RE.test(rawStatus || source)
         ? 'closed'
@@ -13781,7 +13880,7 @@ function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
 function planSummary(runtime, artifact, eligibility) {
     const machine = runtime.machines.summary;
     if (machine.pendingKind && machine.pendingTurnKey && machine.pendingTurnKey !== artifact.messageKey)
-        return '';
+        return { kind: '', job: undefined };
     let kind = '';
     if (eligibility.small) {
         kind = 'small';
@@ -13792,12 +13891,12 @@ function planSummary(runtime, artifact, eligibility) {
         kind = 'large';
     }
     if (!kind)
-        return '';
+        return { kind: '', job: undefined };
     machine.pendingKind = kind;
     machine.pendingTurnKey = artifact.messageKey;
-    enqueue(runtime, `${kind}-summary`, artifact);
-    appendJournal(runtime, 'SUMMARY_SCHEDULED', artifact.messageKey, artifact.messageIndex, { kind });
-    return kind;
+    const job = enqueue(runtime, `${kind}-summary`, artifact);
+    appendJournal(runtime, 'SUMMARY_SCHEDULED', artifact.messageKey, artifact.messageIndex, { kind, jobId: job.id });
+    return { kind, job };
 }
 
 function buildNarrativeContext(runtime, snapshot, registry, descriptor) {
@@ -13835,7 +13934,11 @@ function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeE
                 summaryKind: runtime.machines.summary.pendingTurnKey === artifact.messageKey
                     ? runtime.machines.summary.pendingKind
                     : '',
+                summaryJobId: runtime.outbox.find((job) => ['small-summary', 'large-summary'].includes(job.type)
+                    && job.turnKey === artifact.messageKey
+                    && ['pending', 'running'].includes(job.status))?.id || '',
                 sync: runtime.machines.publication.desiredRevision > runtime.machines.publication.confirmedRevision,
+                syncJobId: runtime.machines.publication.pendingJobId || '',
             },
             duplicate: true,
         };
@@ -13853,7 +13956,8 @@ function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeE
     }
     const descriptor = sceneDescriptor(artifact.snapshot, artifact, settings.tableRegistry);
     advanceScene(runtime, descriptor, artifact);
-    const summaryKind = planSummary(runtime, artifact, { small: smallEligible, large: largeEligible });
+    const summaryPlan = planSummary(runtime, artifact, { small: smallEligible, large: largeEligible });
+    const summaryKind = summaryPlan.kind;
     runtime.narrativeContext = buildNarrativeContext(runtime, artifact.snapshot, settings.tableRegistry, descriptor);
     appendJournal(runtime, 'NARRATIVE_CONTEXT_PROJECTED', artifact.messageKey, artifact.messageIndex, { revision: runtime.narrativeContext.revision });
     runtime.machines.publication.desiredRevision = runtime.revision;
@@ -13869,22 +13973,55 @@ function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeE
     runtime.machines.turn.lastCommittedAt = nowIso();
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
-    return { runtime, plan: { summaryKind, sync: true }, duplicate: false };
+    return {
+        runtime,
+        plan: {
+            summaryKind,
+            summaryJobId: summaryPlan.job?.id || '',
+            sync: true,
+            syncJobId: syncJob.id,
+        },
+        duplicate: false,
+    };
 }
 
-function findJob(runtime, type, turnKey) {
-    return [...runtime.outbox].reverse().find((item) => item.type === type && item.turnKey === turnKey && !['cancelled'].includes(item.status));
+function findJob(runtime, type, turnKey, jobId = '') {
+    if (jobId)
+        return runtime.outbox.find((item) => item.id === jobId && item.type === type);
+    return [...runtime.outbox].reverse().find((item) => item.type === type && item.turnKey === turnKey && !['cancelled', 'superseded'].includes(item.status));
 }
 
-function markRuntimeJobRunning(chatState, type, turnKey) {
+function ensureRuntimeJob(chatState, type, artifact, sourceRevision) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
-    const job = findJob(runtime, type, turnKey);
-    if (job) {
-        job.status = 'running';
-        job.attempts += 1;
-        job.startedAt = nowIso();
-        job.error = '';
+    let job = findJob(runtime, type, artifact.messageKey);
+    if (!job || ['done', 'cancelled', 'superseded'].includes(job.status))
+        job = enqueue(runtime, type, artifact, sourceRevision ?? runtime.revision);
+    if (type === 'small-summary' || type === 'large-summary') {
+        runtime.machines.summary.pendingKind = type === 'small-summary' ? 'small' : 'large';
+        runtime.machines.summary.pendingTurnKey = artifact.messageKey;
     }
+    if (type === 'lorebook-sync') {
+        runtime.machines.publication.desiredRevision = Math.max(runtime.machines.publication.desiredRevision, job.sourceRevision);
+        runtime.machines.publication.pendingJobId = job.id;
+        runtime.machines.publication.status = 'queued';
+        runtime.machines.publication.updatedAt = nowIso();
+    }
+    runtime.updatedAt = nowIso();
+    chatState.runtimeV2 = runtime;
+    return job;
+}
+
+function markRuntimeJobRunning(chatState, type, turnKey, jobId = '') {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const job = findJob(runtime, type, turnKey, jobId);
+    if (!job) {
+        chatState.runtimeV2 = runtime;
+        return undefined;
+    }
+    job.status = 'running';
+    job.attempts += 1;
+    job.startedAt = nowIso();
+    job.error = '';
     if (type === 'lorebook-sync') {
         runtime.machines.publication.status = 'writing';
         runtime.machines.publication.updatedAt = nowIso();
@@ -13893,14 +14030,16 @@ function markRuntimeJobRunning(chatState, type, turnKey) {
     return job;
 }
 
-function markRuntimeJobDone(chatState, type, artifact) {
+function markRuntimeJobDone(chatState, type, artifact, jobId = '') {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
-    const job = findJob(runtime, type, artifact.messageKey);
-    if (job) {
-        job.status = 'done';
-        job.finishedAt = nowIso();
-        job.error = '';
+    const job = findJob(runtime, type, artifact.messageKey, jobId);
+    if (!job) {
+        chatState.runtimeV2 = runtime;
+        return undefined;
     }
+    job.status = 'done';
+    job.finishedAt = nowIso();
+    job.error = '';
     if (type === 'small-summary' || type === 'large-summary') {
         const kind = type === 'small-summary' ? 'small' : 'large';
         runtime.machines.summary.pendingKind = '';
@@ -13917,25 +14056,43 @@ function markRuntimeJobDone(chatState, type, artifact) {
     }
     if (type === 'lorebook-sync') {
         runtime.machines.publication.confirmedRevision = Math.max(runtime.machines.publication.confirmedRevision, job?.sourceRevision ?? runtime.revision);
-        runtime.machines.publication.status = runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision ? 'clean' : 'dirty';
-        runtime.machines.publication.pendingJobId = '';
+        for (const candidate of runtime.outbox) {
+            if (candidate.id !== job?.id
+                && candidate.type === 'lorebook-sync'
+                && ['pending', 'running', 'failed'].includes(candidate.status)
+                && candidate.sourceRevision <= runtime.machines.publication.confirmedRevision) {
+                candidate.status = 'superseded';
+                candidate.finishedAt ||= nowIso();
+                candidate.error = '';
+            }
+        }
+        const nextJob = runtime.outbox
+            .filter((candidate) => candidate.type === 'lorebook-sync'
+                && ['pending', 'running'].includes(candidate.status)
+                && candidate.sourceRevision > runtime.machines.publication.confirmedRevision)
+            .sort((a, b) => a.sourceRevision - b.sourceRevision)
+            .at(-1);
+        runtime.machines.publication.pendingJobId = nextJob?.id || '';
+        runtime.machines.publication.status = runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision && !nextJob ? 'clean' : 'dirty';
         runtime.machines.publication.lastError = '';
         runtime.machines.publication.updatedAt = nowIso();
-        appendJournal(runtime, 'LOREBOOK_PROJECTION_CONFIRMED', artifact.messageKey, artifact.messageIndex, { revision: runtime.machines.publication.confirmedRevision });
+        appendJournal(runtime, 'LOREBOOK_PROJECTION_CONFIRMED', artifact.messageKey, artifact.messageIndex, { revision: runtime.machines.publication.confirmedRevision, jobId: job?.id || '' });
     }
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
     return job;
 }
 
-function markRuntimeJobFailed(chatState, type, turnKey, error) {
+function markRuntimeJobFailed(chatState, type, turnKey, error, jobId = '') {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
-    const job = findJob(runtime, type, turnKey);
-    if (job) {
-        job.status = 'failed';
-        job.finishedAt = nowIso();
-        job.error = text(error, 1200);
+    const job = findJob(runtime, type, turnKey, jobId);
+    if (!job) {
+        chatState.runtimeV2 = runtime;
+        return undefined;
     }
+    job.status = 'failed';
+    job.finishedAt = nowIso();
+    job.error = text(error, 1200);
     if (type === 'small-summary' || type === 'large-summary') {
         runtime.machines.summary.pendingKind = '';
         runtime.machines.summary.pendingTurnKey = '';
@@ -14088,7 +14245,7 @@ function normalizeSceneInstance(value, id) {
 
 function normalizeOutboxJob(value) {
     const source = value && typeof value === 'object' ? value : {};
-    const status = ['pending', 'running', 'done', 'failed', 'cancelled'].includes(String(source.status))
+    const status = ['pending', 'running', 'done', 'failed', 'cancelled', 'superseded'].includes(String(source.status))
         ? String(source.status)
         : 'pending';
     const type = ['small-summary', 'large-summary', 'lorebook-sync'].includes(String(source.type))
@@ -14209,6 +14366,34 @@ function normalizeRuntimeV2(value) {
     };
     if (runtime.machines.scene.currentInstanceId && !runtime.machines.scene.instances[runtime.machines.scene.currentInstanceId]) {
         runtime.machines.scene.currentInstanceId = '';
+    }
+    // 已确认投影覆盖其之前的同步意图，旧任务不应永久停留在 pending/failed。
+    for (const job of runtime.outbox) {
+        if (job.type === 'lorebook-sync'
+            && ['pending', 'running', 'failed'].includes(job.status)
+            && job.sourceRevision <= runtime.machines.publication.confirmedRevision) {
+            job.status = 'superseded';
+            job.finishedAt ||= runtime.machines.publication.updatedAt || nowIso();
+            job.error = '';
+        }
+    }
+    const liveSyncJobs = runtime.outbox
+        .filter((job) => job.type === 'lorebook-sync'
+            && ['pending', 'running'].includes(job.status)
+            && job.sourceRevision > runtime.machines.publication.confirmedRevision)
+        .sort((a, b) => a.sourceRevision - b.sourceRevision);
+    if (!liveSyncJobs.some((job) => job.id === runtime.machines.publication.pendingJobId))
+        runtime.machines.publication.pendingJobId = liveSyncJobs.at(-1)?.id || '';
+    if (runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision && !liveSyncJobs.length)
+        runtime.machines.publication.status = 'clean';
+    else if (runtime.machines.publication.status === 'clean')
+        runtime.machines.publication.status = liveSyncJobs.some((job) => job.status === 'running') ? 'writing' : 'queued';
+    const liveSummaryJobs = runtime.outbox
+        .filter((job) => ['small-summary', 'large-summary'].includes(job.type) && ['pending', 'running'].includes(job.status));
+    const latestSummaryJob = liveSummaryJobs.at(-1);
+    if (latestSummaryJob && (!runtime.machines.summary.pendingKind || !runtime.machines.summary.pendingTurnKey)) {
+        runtime.machines.summary.pendingKind = latestSummaryJob.type === 'small-summary' ? 'small' : 'large';
+        runtime.machines.summary.pendingTurnKey = latestSummaryJob.turnKey;
     }
     return runtime;
 }
