@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.9';
+const VERSION = '1.4.0-alpha.10';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -3289,6 +3289,7 @@ Object.defineProperty(__scope,"filterPassiveObservers",{enumerable:true,configur
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalObjectTitle"]});
 Object.defineProperty(__scope,"isPurePassiveObserverText",{enumerable:true,configurable:true,get:()=>__require("domain/observer.js")["isPurePassiveObserverText"]});
+Object.defineProperty(__scope,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["summaryIsCurrent"]});
 Object.defineProperty(__scope,"narrativeContextText",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["narrativeContextText"]});
 with(__scope){
 Object.defineProperty(exports,"filterSnapshotForLorebook",{enumerable:true,configurable:true,get:()=>filterSnapshotForLorebook});
@@ -3512,7 +3513,27 @@ function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, fa
 
 function unconsumedSmallSummaries(small, large) {
     const legacy = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-    return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !legacy.has(item.id));
+    return small.filter((item) => summaryIsCurrent(item)
+        && item.recallEligible !== false
+        && !item.solidifiedByLargeSummaryId
+        && !item.supersededBySmallSummaryId
+        && !legacy.has(item.id));
+}
+function currentLargeSummaries(large) {
+    const byEvent = new Map();
+    for (const item of large ?? []) {
+        if (!summaryIsCurrent(item) || item.recallEligible === false)
+            continue;
+        const eventId = String(item.eventId || item.eventIds?.[0] || item.id || '').trim();
+        if (!eventId)
+            continue;
+        const previous = byEvent.get(eventId);
+        const newer = !previous
+            || String(item.createdAt || '').localeCompare(String(previous.createdAt || '')) > 0;
+        if (newer)
+            byEvent.set(eventId, item);
+    }
+    return [...byEvent.values()];
 }
 function relationLookups(snapshot, tables) {
     const objectTitles = new Map();
@@ -3649,7 +3670,7 @@ function factDocuments(facts, representedFactIds, representedEventIds, tables, o
 function summaryFallbackDocuments(small, large, representedEventIds, options) {
     const docs = [];
     const candidates = [
-        ...(large ?? []).map((item) => ({ ...item, fallbackKind: 'large' })),
+        ...currentLargeSummaries(large ?? []).map((item) => ({ ...item, fallbackKind: 'large' })),
         ...unconsumedSmallSummaries(small ?? [], large ?? []).map((item) => ({ ...item, fallbackKind: 'small' })),
     ];
     for (const summary of candidates) {
@@ -6994,7 +7015,11 @@ Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
+Object.defineProperty(exports,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>inferSummaryLifecycle});
+Object.defineProperty(exports,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>markSummaryLifecycle});
+Object.defineProperty(exports,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>summaryIsCurrent});
 Object.defineProperty(exports,"normalizeSummary",{enumerable:true,configurable:true,get:()=>normalizeSummary});
+Object.defineProperty(exports,"SUMMARY_LIFECYCLE_STATES",{enumerable:true,configurable:true,get:()=>SUMMARY_LIFECYCLE_STATES});
 function stringList(value, limit = 60, itemLimit = 600) {
     if (!Array.isArray(value))
         return [];
@@ -7008,16 +7033,65 @@ function normalizeActivityUpdates(value) {
         rowId: safeText(item.rowId, 160).trim(), activity: safeText(item.activity, 40).trim(), reason: safeText(item.reason, 500).trim(),
     })).filter((item) => item.rowId && allowed.has(item.activity)).slice(0, 30);
 }
+const SUMMARY_LIFECYCLE_STATES = ['active', 'superseded', 'solidified', 'archived'];
+
+function inferSummaryLifecycle(value, kind = value?.kind) {
+    const explicit = safeText(value?.lifecycleStatus, 40).trim();
+    if (SUMMARY_LIFECYCLE_STATES.includes(explicit))
+        return explicit;
+    if (kind === 'small') {
+        if (value?.solidifiedByLargeSummaryId)
+            return 'solidified';
+        if (value?.supersededBySmallSummaryId)
+            return 'superseded';
+        return 'active';
+    }
+    if (value?.supersededByLargeSummaryId)
+        return 'superseded';
+    if (value?.eventClosed === true || value?.archivedAt)
+        return 'archived';
+    return 'active';
+}
+
+function markSummaryLifecycle(summary, status, metadata = {}) {
+    if (!summary || !SUMMARY_LIFECYCLE_STATES.includes(status))
+        return summary;
+    summary.lifecycleStatus = status;
+    summary.recallEligible = metadata.recallEligible ?? ['active', 'archived'].includes(status);
+    summary.lifecycleUpdatedAt = nowIso();
+    if (metadata.successorId) {
+        if (summary.kind === 'small')
+            summary.supersededBySmallSummaryId ||= metadata.successorId;
+        else
+            summary.supersededByLargeSummaryId ||= metadata.successorId;
+    }
+    return summary;
+}
+
+function summaryIsCurrent(summary) {
+    return ['active', 'archived'].includes(inferSummaryLifecycle(summary, summary?.kind));
+}
+
 function normalizeSedimentation(value) {
     if (!value || typeof value !== 'object')
         return undefined;
     const source = value;
+    const distributedRowIds = stringList(source.distributedRowIds, 80, 160);
+    const enteredSettlingRowIds = stringList(source.enteredSettlingRowIds, 80, 160);
+    const deletedRowIds = stringList(source.deletedRowIds ?? source.appliedRowIds, 80, 160);
+    const retainedRowIds = stringList(source.retainedRowIds ?? source.ignoredRowIds, 80, 160);
     return {
         removeRowIds: stringList(source.removeRowIds, 50, 160),
         characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates),
         notes: stringList(source.notes, 30, 500),
-        appliedRowIds: stringList(source.appliedRowIds, 80, 160),
-        ignoredRowIds: stringList(source.ignoredRowIds, 80, 160),
+        distributedRowIds,
+        enteredSettlingRowIds,
+        deletedRowIds,
+        retainedRowIds,
+        retainedReasons: stringList(source.retainedReasons, 80, 500),
+        // 兼容旧 UI / 旧存档；新代码应读取上面的明确字段。
+        appliedRowIds: stringList(source.appliedRowIds?.length ? source.appliedRowIds : [...distributedRowIds, ...deletedRowIds], 80, 160),
+        ignoredRowIds: stringList(source.ignoredRowIds?.length ? source.ignoredRowIds : retainedRowIds, 80, 160),
     };
 }
 function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
@@ -7037,6 +7111,9 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metad
         // 兼容字段现在只保存统一状态机的结算报告，不再反向修改快照。
         sedimentation: normalizeSedimentation(value.sedimentation),
         previousLargeSummaryId: kind === 'large' ? previousLargeSummaryId : undefined,
+        lifecycleStatus: 'active',
+        recallEligible: true,
+        lifecycleUpdatedAt: nowIso(),
     };
 }
 
@@ -9990,6 +10067,7 @@ Object.defineProperty(__scope,"markRuntimeJobDone",{enumerable:true,configurable
 Object.defineProperty(__scope,"markRuntimeJobFailed",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobFailed"]});
 Object.defineProperty(__scope,"markRuntimeJobRunning",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobRunning"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
+Object.defineProperty(__scope,"selectNextPendingPluginJob",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state-controller.js")["selectNextPendingPluginJob"]});
 with(__scope){
 Object.defineProperty(exports,"reconcileInterruptedRuntimeState",{enumerable:true,configurable:true,get:()=>reconcileInterruptedRuntimeState});
 Object.defineProperty(exports,"resumeRuntimeOutbox",{enumerable:true,configurable:true,get:()=>resumeRuntimeOutbox});
@@ -10534,30 +10612,31 @@ async function resumeRuntimeOutbox() {
     }
     if (stateChanged)
         await putChatState(state);
-    if (pendingSummary) {
-        const target = artifactForTurnKey(pendingSummary.turnKey);
+    runtime = normalizeRuntimeV2(state.runtimeV2);
+    const nextJob = selectNextPendingPluginJob(runtime);
+    if (nextJob && ['small-summary', 'large-summary'].includes(nextJob.type)) {
+        const target = artifactForTurnKey(nextJob.turnKey);
         if (target.artifact?.snapshot && target.artifact.stages?.state?.status === 'success') {
-            const pendingSync = [...runtime.outbox].reverse().find((job) => job.type === 'lorebook-sync' && job.status === 'pending');
             queueAutomaticDerived(target.index, target.artifact, currentHistoryRevision(chatKey), {
-                small: pendingSummary.type === 'small-summary',
-                large: pendingSummary.type === 'large-summary',
-                summaryKind: pendingSummary.type === 'small-summary' ? 'small' : 'large',
-                summaryJobId: pendingSummary.id,
+                small: nextJob.type === 'small-summary',
+                large: nextJob.type === 'large-summary',
+                summaryKind: nextJob.type === 'small-summary' ? 'small' : 'large',
+                summaryJobId: nextJob.id,
                 syncJobId: '',
                 resumeLatestSync: true,
             });
-            return { resumed: true, kind: pendingSummary.type, turnKey: pendingSummary.turnKey, jobId: pendingSummary.id };
+            return { resumed: true, kind: nextJob.type, turnKey: nextJob.turnKey, jobId: nextJob.id };
         }
     }
-    if (syncJob && latest) {
+    if (nextJob?.type === 'lorebook-sync' && latest) {
         queueAutomaticDerived(latest.index, latest.artifact, currentHistoryRevision(chatKey), {
             small: false,
             large: false,
             summaryKind: '',
             summaryJobId: '',
-            syncJobId: syncJob.id,
+            syncJobId: nextJob.id,
         });
-        return { resumed: true, kind: 'lorebook-sync', turnKey: latest.artifact.messageKey, jobId: syncJob.id };
+        return { resumed: true, kind: 'lorebook-sync', turnKey: latest.artifact.messageKey, jobId: nextJob.id };
     }
     return { resumed: false, reason: runtime.outbox.some((job) => job.status === 'pending') ? 'artifact-missing' : 'empty' };
 }
@@ -12265,7 +12344,9 @@ Object.defineProperty(__scope,"pendingFactsByEvent",{enumerable:true,configurabl
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"isEntryLifecycleHidden",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryLifecycleHidden"]});
 Object.defineProperty(__scope,"finalizeSummarySettlement",{enumerable:true,configurable:true,get:()=>__require("domain/memory-state-machine.js")["finalizeSummarySettlement"]});
+Object.defineProperty(__scope,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["markSummaryLifecycle"]});
 Object.defineProperty(__scope,"normalizeSummary",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["normalizeSummary"]});
+Object.defineProperty(__scope,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["summaryIsCurrent"]});
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"largeSummaryPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["largeSummaryPrompt"]});
 Object.defineProperty(__scope,"largeSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["largeSummarySystemPrompt"]});
@@ -12313,6 +12394,61 @@ function summaryMemoryText(summary) {
 function rowEventIds(row) {
     return [...new Set([...(row.eventIds ?? []), String(row.eventId || '').trim()].filter(Boolean))];
 }
+function changedSummaryLayerRowIds(before, after, layer, registryValue) {
+    const registry = normalizeTableRegistry(registryValue);
+    const changed = [];
+    for (const table of registry) {
+        const beforeById = new Map((before?.[table.key] ?? []).map((row) => [row.id, row]));
+        for (const row of after?.[table.key] ?? []) {
+            const previous = beforeById.get(row.id);
+            const oldValue = Array.isArray(previous?.fields?.[layer]) ? previous.fields[layer] : [];
+            const newValue = Array.isArray(row?.fields?.[layer]) ? row.fields[layer] : [];
+            if (JSON.stringify(oldValue) !== JSON.stringify(newValue))
+                changed.push(row.id);
+        }
+    }
+    return [...new Set(changed)];
+}
+function settlingRowIdsForEvent(snapshot, eventId, registryValue) {
+    const registry = normalizeTableRegistry(registryValue);
+    const output = [];
+    for (const table of registry) {
+        for (const row of snapshot?.[table.key] ?? []) {
+            if (row?.entryLifecycle?.state !== 'settling')
+                continue;
+            const triggerEvents = row.entryLifecycle?.triggerEventIds ?? [];
+            if (rowEventIds(row).includes(eventId) || triggerEvents.includes(eventId))
+                output.push(row.id);
+        }
+    }
+    return [...new Set(output)];
+}
+function settlementReport({ distributedRowIds, enteredSettlingRowIds, settlement, label }) {
+    const deletedRowIds = [...settlement.deletedRowIds];
+    const retainedRowIds = [...settlement.retainedRowIds];
+    const notes = [];
+    if (distributedRowIds.length)
+        notes.push(`${label}已向 ${distributedRowIds.length} 个对象写入承接层。`);
+    if (deletedRowIds.length)
+        notes.push(`${label}覆盖后由统一状态机物理删除：${deletedRowIds.join('、')}`);
+    if (retainedRowIds.length)
+        notes.push(`${retainedRowIds.length} 个待结算容器继续保留，等待承接、覆盖或终局条件。`);
+    if (!notes.length)
+        notes.push(`${label}已提交；本次没有对象分发或待结算容器变化。`);
+    return {
+        removeRowIds: [],
+        characterActivityUpdates: [],
+        distributedRowIds,
+        enteredSettlingRowIds,
+        deletedRowIds,
+        retainedRowIds,
+        retainedReasons: retainedRowIds.map((id) => `${id}：等待承接、覆盖或终局条件`),
+        // 兼容旧界面字段。
+        appliedRowIds: [...new Set([...distributedRowIds, ...deletedRowIds])],
+        ignoredRowIds: retainedRowIds,
+        notes,
+    };
+}
 /**
  * 总结不再把同一整段事件摘要复制到所有对象。事件条目只承接事件线摘要；
  * 其他对象只承接模型在 <MA_MEMORY> 中为该对象给出的短结果。
@@ -12344,7 +12480,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
         const layerLabel = separator > 0 ? title.slice(separator + 1).trim() : '';
         if (fact.type === 'events' && objectName)
             eventNames.add(objectName);
-        if (!objectName || layerLabel !== '现行事实')
+        if (!objectName || fact.type === 'events')
             continue;
         const key = entryToken(objectName);
         const values = currentFactTextByObject.get(key) ?? new Set();
@@ -12383,10 +12519,12 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
             const removeTexts = table.role === 'events'
                 ? removalEventTexts
                 : (removalByObject.get(objectKey) ?? new Set());
+            const explicitObjectTexts = additionByObject.get(objectKey) ?? [];
+            const deterministicObjectTexts = [...(currentFactTextByObject.get(objectKey) ?? [])];
             const addTexts = table.role === 'events'
                 ? (addition ? [summaryMemoryText(addition)].filter(Boolean) : [])
-                : (additionByObject.get(objectKey) ?? []);
-            // 没有该对象自己的模块时，不把事件摘要兜底复制过来。
+                : (explicitObjectTexts.length ? explicitObjectTexts : deterministicObjectTexts);
+            // 非事件对象没有模型分发时，只复用该对象自己的正式事实；绝不复制整段事件摘要。
             if (!removeTexts.size && !addTexts.length)
                 continue;
             row.fields ||= {};
@@ -12450,13 +12588,13 @@ function pendingSmallEventGroups(facts, threshold, force, boundaryEventIds = [])
 /** 兼容旧调用：仅返回每条事件线当前活动的小总结版本。 */
 function pendingSmallSummaries(small, large) {
     const consumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-    return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !consumed.has(item.id));
+    return small.filter((item) => summaryIsCurrent(item) && !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !consumed.has(item.id));
 }
 function pendingLargeEventGroups(small, large, threshold, force) {
     const consumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
     const groups = new Map();
     for (const item of small) {
-        if (item.solidifiedByLargeSummaryId || consumed.has(item.id))
+        if (!summaryIsCurrent(item) || item.solidifiedByLargeSummaryId || consumed.has(item.id))
             continue;
         // 缺 event_id 的旧数据按自身 ID 隔离，绝不因标题相似把不同事件混线。
         const eventId = String(item.eventId || item.id).trim();
@@ -12469,9 +12607,9 @@ function pendingLargeEventGroups(small, large, threshold, force) {
         const latest = [...ordered].reverse().find((item) => !item.supersededBySmallSummaryId) ?? ordered.at(-1);
         const closed = latest.eventClosed === true;
         const rollupCount = Math.max(ordered.length, Number(latest.rollupCount) || 1);
-        if (!force && !closed && rollupCount < minimum)
+        if (!force && rollupCount < minimum)
             continue;
-        const previousLarge = [...large].reverse().find((item) => item.eventId === eventId || item.eventIds?.includes(eventId));
+        const previousLarge = [...large].reverse().find((item) => summaryIsCurrent(item) && (item.eventId === eventId || item.eventIds?.includes(eventId)));
         output.push({
             eventId,
             items: ordered,
@@ -12537,6 +12675,7 @@ async function generateSmallSummary(artifact, force = false) {
             ? Math.max(1, Number(group.previous.rollupCount) || 1) + 1
             : 1;
         summary.eventClosed = group.closed;
+        markSummaryLifecycle(summary, group.closed ? 'archived' : 'active', { recallEligible: true });
         if (!summary.summary)
             throw new Error(`小总结模型返回空摘要：${group.eventId}`);
         if (summary.summary.length > settings.contentLimits.smallSummary)
@@ -12550,13 +12689,16 @@ async function generateSmallSummary(artifact, force = false) {
         chatState.smallSummaries.push(...generated.map((item) => item.summary));
         for (const { group, summary, newFactIds } of generated) {
             if (group.previous)
-                group.previous.supersededBySmallSummaryId = summary.id;
+                markSummaryLifecycle(group.previous, 'superseded', { successorId: summary.id, recallEligible: false });
             markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
         }
         if (artifact.snapshot) {
             let nextSnapshot = artifact.snapshot;
             for (const { group, summary, newFactIds } of generated) {
+                const beforeDistribution = nextSnapshot;
                 nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, group.facts, 'recentHistory', summary, group.previous ? [group.previous] : [], settings.tableRegistry);
+                const distributedRowIds = changedSummaryLayerRowIds(beforeDistribution, nextSnapshot, 'recentHistory', settings.tableRegistry);
+                const enteredSettlingRowIds = settlingRowIdsForEvent(nextSnapshot, group.eventId, settings.tableRegistry);
                 const settlement = finalizeSummarySettlement({
                     snapshot: nextSnapshot,
                     eventId: group.eventId,
@@ -12568,22 +12710,18 @@ async function generateSmallSummary(artifact, force = false) {
                     focusObjectId: chatState.focusObjectId,
                 });
                 nextSnapshot = settlement.snapshot;
-                summary.sedimentation = {
-                    removeRowIds: [],
-                    characterActivityUpdates: [],
-                    appliedRowIds: [...settlement.deletedRowIds],
-                    ignoredRowIds: [...settlement.retainedRowIds],
-                    notes: settlement.deletedRowIds.length
-                        ? [`总结覆盖后由统一状态机物理删除：${settlement.deletedRowIds.join('、')}`]
-                        : ['总结已写入覆盖标记；没有满足删除契约的待结算容器。'],
-                };
+                summary.sedimentation = settlementReport({
+                    distributedRowIds,
+                    enteredSettlingRowIds,
+                    settlement,
+                    label: '小总结',
+                });
             }
             artifact.snapshot = nextSnapshot;
             assertArtifactCommitCurrent(artifact);
             await persistChatFor(artifact.chatKey);
         }
-        // 小总结是加工容器：同一事件只保留当前累计版本，旧版本在完成对象分发后退出。
-        chatState.smallSummaries = chatState.smallSummaries.filter((item) => !item.supersededBySmallSummaryId);
+        // 历史版本保留用于审计与 UI；superseded 版本退出召回和后续消费，不再物理删除。
         await putChatState(chatState);
     }
     catch (error) {
@@ -12642,6 +12780,7 @@ async function generateLargeSummary(artifact, force = false) {
             sourceFactIds: group.sourceFactIds,
         });
         summary.distributions = text.distributions;
+        markSummaryLifecycle(summary, group.closed ? 'archived' : 'active', { recallEligible: true });
         if (!summary.summary)
             throw new Error(`大总结模型返回空摘要：${group.eventId}`);
         if (summary.summary.length > settings.contentLimits.largeSummary)
@@ -12656,17 +12795,29 @@ async function generateLargeSummary(artifact, force = false) {
         chatState.largeSummaries.push(...generated.map((item) => item.summary));
         for (const { group, summary } of generated) {
             const selectedIds = new Set(group.consumedVersionIds);
-            for (const item of chatState.smallSummaries)
-                if (selectedIds.has(item.id))
-                    item.solidifiedByLargeSummaryId = summary.id;
+            for (const item of chatState.smallSummaries) {
+                if (!selectedIds.has(item.id))
+                    continue;
+                item.solidifiedByLargeSummaryId = summary.id;
+                markSummaryLifecycle(item, 'solidified', { recallEligible: false });
+            }
+            if (group.previousLarge)
+                markSummaryLifecycle(group.previousLarge, 'superseded', { successorId: summary.id, recallEligible: false });
             markFactsSolidified(chatState.internalFacts, group.sourceFactIds, summary.id);
         }
         if (artifact.snapshot) {
             let nextSnapshot = artifact.snapshot;
             for (const { group, summary } of generated) {
                 const eventFacts = chatState.internalFacts.filter((fact) => fact.eventId === group.eventId);
+                const beforeRecentRetirement = nextSnapshot;
                 nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'recentHistory', undefined, group.items, settings.tableRegistry);
+                const beforeDistribution = nextSnapshot;
                 nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'solidifiedHistory', summary, group.previousLarge ? [group.previousLarge] : [], settings.tableRegistry);
+                const distributedRowIds = [...new Set([
+                    ...changedSummaryLayerRowIds(beforeRecentRetirement, nextSnapshot, 'recentHistory', settings.tableRegistry),
+                    ...changedSummaryLayerRowIds(beforeDistribution, nextSnapshot, 'solidifiedHistory', settings.tableRegistry),
+                ])];
+                const enteredSettlingRowIds = settlingRowIdsForEvent(nextSnapshot, group.eventId, settings.tableRegistry);
                 const settlement = finalizeSummarySettlement({
                     snapshot: nextSnapshot,
                     eventId: group.eventId,
@@ -12678,40 +12829,23 @@ async function generateLargeSummary(artifact, force = false) {
                     focusObjectId: chatState.focusObjectId,
                 });
                 nextSnapshot = settlement.snapshot;
-                summary.sedimentation = {
-                    removeRowIds: [],
-                    characterActivityUpdates: [],
-                    appliedRowIds: [...settlement.deletedRowIds],
-                    ignoredRowIds: [...settlement.retainedRowIds],
-                    notes: settlement.deletedRowIds.length
-                        ? [`大总结覆盖后由统一状态机物理删除：${settlement.deletedRowIds.join('、')}`]
-                        : ['大总结已固化；没有满足删除契约的待结算容器。'],
-                };
+                summary.sedimentation = settlementReport({
+                    distributedRowIds,
+                    enteredSettlingRowIds,
+                    settlement,
+                    label: '大总结',
+                });
             }
             artifact.snapshot = nextSnapshot;
             assertArtifactCommitCurrent(artifact);
             await persistChatFor(artifact.chatKey);
         }
-        // 大总结完成固化后，已消费的小总结不再作为独立条目保留。
-        const consumedSmallIds = new Set(generated.flatMap(({ group }) => group.consumedVersionIds));
-        chatState.smallSummaries = chatState.smallSummaries.filter((item) => !consumedSmallIds.has(item.id));
-        // 大总结同样只是加工容器：开放事件保留当前累计版本；关闭事件已分发到长期宿主后移除正文容器。
-        const closedEventIds = new Set(generated.filter((item) => item.group.closed).map((item) => item.group.eventId));
-        const supersededLargeIds = new Set(generated.map((item) => item.summary.previousLargeSummaryId).filter(Boolean));
-        chatState.largeSummaries = chatState.largeSummaries.filter((item) => {
-            if (supersededLargeIds.has(item.id))
-                return false;
-            if (closedEventIds.has(String(item.eventId || '')))
-                return false;
-            return true;
-        });
+        // 总结是可审计状态记录：完成消费后退出召回，但不从聊天状态和 UI 历史中物理删除。
         await putChatState(chatState);
         const readBack = await getChatState(artifact.chatKey);
-        const retainedGeneratedIds = new Set(generated
-            .filter((item) => !item.group.closed)
-            .map((item) => item.summary.id));
-        if (![...retainedGeneratedIds].every((id) => readBack.largeSummaries.some((item) => item.id === id))) {
-            throw new Error('开放事件大总结写入后回读校验失败');
+        const generatedIds = new Set(generated.map((item) => item.summary.id));
+        if (![...generatedIds].every((id) => readBack.largeSummaries.some((item) => item.id === id))) {
+            throw new Error('大总结写入后回读校验失败');
         }
     }
     catch (error) {
@@ -13911,6 +14045,8 @@ Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
+Object.defineProperty(__scope,"applyPluginStateDecision",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state-controller.js")["applyPluginStateDecision"]});
+Object.defineProperty(__scope,"derivePluginStateDecision",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state-controller.js")["derivePluginStateDecision"]});
 with(__scope){
 Object.defineProperty(exports,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>advanceRuntimeV2});
 Object.defineProperty(exports,"ensureRuntimeJob",{enumerable:true,configurable:true,get:()=>ensureRuntimeJob});
@@ -14222,28 +14358,6 @@ function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
     return job;
 }
 
-function planSummary(runtime, artifact, eligibility) {
-    const machine = runtime.machines.summary;
-    if (machine.pendingKind && machine.pendingTurnKey && machine.pendingTurnKey !== artifact.messageKey)
-        return { kind: '', job: undefined };
-    let kind = '';
-    if (eligibility.small) {
-        kind = 'small';
-    }
-    else if (eligibility.large && artifact.messageIndex > machine.lastSmallTurnIndex) {
-        // A large summary may never be automatically scheduled on the same turn
-        // that committed a small summary.
-        kind = 'large';
-    }
-    if (!kind)
-        return { kind: '', job: undefined };
-    machine.pendingKind = kind;
-    machine.pendingTurnKey = artifact.messageKey;
-    const job = enqueue(runtime, `${kind}-summary`, artifact);
-    appendJournal(runtime, 'SUMMARY_SCHEDULED', artifact.messageKey, artifact.messageIndex, { kind, jobId: job.id });
-    return { kind, job };
-}
-
 function buildNarrativeContext(runtime, snapshot, registry, descriptor) {
     const currentId = runtime.machines.scene.currentInstanceId;
     const current = runtime.machines.scene.instances[currentId];
@@ -14301,15 +14415,31 @@ function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeE
     }
     const descriptor = sceneDescriptor(artifact.snapshot, artifact, settings.tableRegistry);
     advanceScene(runtime, descriptor, artifact);
-    const summaryPlan = planSummary(runtime, artifact, { small: smallEligible, large: largeEligible });
-    const summaryKind = summaryPlan.kind;
     runtime.narrativeContext = buildNarrativeContext(runtime, artifact.snapshot, settings.tableRegistry, descriptor);
     appendJournal(runtime, 'NARRATIVE_CONTEXT_PROJECTED', artifact.messageKey, artifact.messageIndex, { revision: runtime.narrativeContext.revision });
     runtime.machines.publication.desiredRevision = runtime.revision;
+    const controllerDecision = derivePluginStateDecision({
+        runtime,
+        artifact,
+        eligibility: { small: smallEligible, large: largeEligible },
+        snapshot: artifact.snapshot,
+        reason: 'turn-commit',
+    });
+    let summaryJob;
+    if (controllerDecision.summaryKind) {
+        runtime.machines.summary.pendingKind = controllerDecision.summaryKind;
+        runtime.machines.summary.pendingTurnKey = artifact.messageKey;
+        summaryJob = enqueue(runtime, `${controllerDecision.summaryKind}-summary`, artifact);
+        appendJournal(runtime, 'SUMMARY_SCHEDULED', artifact.messageKey, artifact.messageIndex, { kind: controllerDecision.summaryKind, jobId: summaryJob.id });
+    }
     const syncJob = enqueue(runtime, 'lorebook-sync', artifact, runtime.machines.publication.desiredRevision);
     runtime.machines.publication.status = 'queued';
     runtime.machines.publication.pendingJobId = syncJob.id;
     runtime.machines.publication.updatedAt = nowIso();
+    controllerDecision.summaryJobId = summaryJob?.id || controllerDecision.summaryJobId || '';
+    controllerDecision.syncJobId = syncJob.id;
+    controllerDecision.nextJobId ||= summaryJob?.id || syncJob.id;
+    applyPluginStateDecision(runtime, controllerDecision);
     runtime.processedTurnKeys.push(artifact.messageKey);
     runtime.processedTurnKeys = runtime.processedTurnKeys.slice(-2000);
     runtime.machines.turn.status = 'committed';
@@ -14321,13 +14451,25 @@ function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeE
     return {
         runtime,
         plan: {
-            summaryKind,
-            summaryJobId: summaryPlan.job?.id || '',
+            summaryKind: controllerDecision.summaryKind,
+            summaryJobId: summaryJob?.id || '',
             sync: true,
             syncJobId: syncJob.id,
         },
         duplicate: false,
     };
+}
+
+
+function refreshController(runtime, artifact, reason) {
+    const decision = derivePluginStateDecision({
+        runtime,
+        artifact,
+        eligibility: {},
+        snapshot: artifact?.snapshot,
+        reason,
+    });
+    applyPluginStateDecision(runtime, decision);
 }
 
 function findJob(runtime, type, turnKey, jobId = '') {
@@ -14351,6 +14493,7 @@ function ensureRuntimeJob(chatState, type, artifact, sourceRevision) {
         runtime.machines.publication.status = 'queued';
         runtime.machines.publication.updatedAt = nowIso();
     }
+    refreshController(runtime, artifact, 'job-ensured');
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
     return job;
@@ -14371,6 +14514,7 @@ function markRuntimeJobRunning(chatState, type, turnKey, jobId = '') {
         runtime.machines.publication.status = 'writing';
         runtime.machines.publication.updatedAt = nowIso();
     }
+    refreshController(runtime, { messageKey: turnKey, messageIndex: job.turnIndex }, 'job-running');
     chatState.runtimeV2 = runtime;
     return job;
 }
@@ -14423,6 +14567,7 @@ function markRuntimeJobDone(chatState, type, artifact, jobId = '') {
         runtime.machines.publication.updatedAt = nowIso();
         appendJournal(runtime, 'LOREBOOK_PROJECTION_CONFIRMED', artifact.messageKey, artifact.messageIndex, { revision: runtime.machines.publication.confirmedRevision, jobId: job?.id || '' });
     }
+    refreshController(runtime, artifact, 'job-done');
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
     return job;
@@ -14447,6 +14592,7 @@ function markRuntimeJobFailed(chatState, type, turnKey, error, jobId = '') {
         runtime.machines.publication.lastError = text(error, 1200);
         runtime.machines.publication.updatedAt = nowIso();
     }
+    refreshController(runtime, { messageKey: turnKey, messageIndex: job.turnIndex }, 'job-failed');
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
     return job;
@@ -14472,6 +14618,128 @@ function narrativeContextText(context) {
     for (const item of source.effectiveFacts ?? [])
         lines.push(`有效事实：${item}`);
     return lines.join('\n');
+}
+
+}
+};
+__defs["runtime-v2/state-controller.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+with(__scope){
+Object.defineProperty(exports,"settlingRowCount",{enumerable:true,configurable:true,get:()=>settlingRowCount});
+Object.defineProperty(exports,"derivePluginStateDecision",{enumerable:true,configurable:true,get:()=>derivePluginStateDecision});
+Object.defineProperty(exports,"applyPluginStateDecision",{enumerable:true,configurable:true,get:()=>applyPluginStateDecision});
+Object.defineProperty(exports,"selectNextPendingPluginJob",{enumerable:true,configurable:true,get:()=>selectNextPendingPluginJob});
+/**
+ * Plugin-state reconciliation controller.
+ *
+ * This controller never reads or generates narrative prose. It observes the
+ * durable plugin state (runtime machines, outbox, summaries and snapshot
+ * lifecycle markers), chooses the next derived maintenance action and records
+ * why that action is next. Domain modules still execute the work.
+ */
+function text(value, limit = 800) {
+    return safeText(value, limit).trim();
+}
+
+function live(job) {
+    return job && ['pending', 'running'].includes(job.status);
+}
+
+function settlingRowCount(snapshot) {
+    let count = 0;
+    for (const rows of Object.values(snapshot ?? {})) {
+        if (!Array.isArray(rows))
+            continue;
+        count += rows.filter((row) => row?.entryLifecycle?.state === 'settling').length;
+    }
+    return count;
+}
+
+function derivePluginStateDecision({ runtime, artifact, eligibility = {}, snapshot, reason = 'reconcile' }) {
+    const liveSummaryJobs = runtime.outbox
+        .filter((job) => ['small-summary', 'large-summary'].includes(job.type) && live(job))
+        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    const liveSyncJobs = runtime.outbox
+        .filter((job) => job.type === 'lorebook-sync'
+            && live(job)
+            && job.sourceRevision > runtime.machines.publication.confirmedRevision)
+        .sort((a, b) => a.sourceRevision - b.sourceRevision);
+    const currentSummaryJob = liveSummaryJobs[0];
+    const currentSyncJob = liveSyncJobs.at(-1);
+    const publicationDirty = runtime.machines.publication.desiredRevision > runtime.machines.publication.confirmedRevision;
+    const settlingCount = settlingRowCount(snapshot);
+    let summaryKind = '';
+    let nextAction = 'idle';
+    let nextJobId = '';
+    let detail = '插件状态已对账，无待执行派生动作';
+
+    if (currentSummaryJob) {
+        const pendingKind = currentSummaryJob.type === 'small-summary' ? 'small' : 'large';
+        nextAction = currentSummaryJob.status === 'running' ? 'wait-summary' : currentSummaryJob.type;
+        nextJobId = currentSummaryJob.id;
+        detail = `${pendingKind === 'small' ? '小' : '大'}总结任务尚未完成`;
+    }
+    else if (eligibility.small) {
+        summaryKind = 'small';
+        nextAction = 'small-summary';
+        detail = '存在达到窗口、场景边界或终局条件的未消费事实';
+    }
+    else if (eligibility.large && Number(artifact?.messageIndex ?? -1) > Number(runtime.machines.summary.lastSmallTurnIndex ?? -1)) {
+        summaryKind = 'large';
+        nextAction = 'large-summary';
+        detail = '存在达到累计阈值的未固化小总结';
+    }
+    else if (publicationDirty || currentSyncJob) {
+        nextAction = currentSyncJob?.status === 'running' ? 'wait-publication' : 'lorebook-sync';
+        nextJobId = currentSyncJob?.id || '';
+        detail = '世界书投影尚未追上正式状态版本';
+    }
+    else if (settlingCount > 0) {
+        nextAction = 'await-summary-coverage';
+        detail = `${settlingCount} 个条目仍等待对象分发或总结覆盖，不允许物理删除`;
+    }
+
+    return {
+        summaryKind,
+        summaryJobId: currentSummaryJob?.id || '',
+        syncRequired: publicationDirty || Boolean(currentSyncJob),
+        syncJobId: currentSyncJob?.id || '',
+        nextAction,
+        nextJobId,
+        reason: text(detail, 500),
+        trigger: text(reason, 120),
+        settlingCount,
+        observedRevision: runtime.revision,
+    };
+}
+
+function applyPluginStateDecision(runtime, decision) {
+    runtime.machines.controller = {
+        phase: decision.nextAction,
+        nextAction: decision.nextAction,
+        nextJobId: decision.nextJobId || decision.summaryJobId || decision.syncJobId || '',
+        reason: decision.reason,
+        settlingCount: Math.max(0, Number(decision.settlingCount) || 0),
+        observedRevision: Math.max(0, Number(decision.observedRevision) || 0),
+        trigger: decision.trigger || '',
+        updatedAt: nowIso(),
+    };
+    return runtime.machines.controller;
+}
+
+function selectNextPendingPluginJob(runtime) {
+    const summary = runtime.outbox
+        .filter((job) => ['small-summary', 'large-summary'].includes(job.type) && job.status === 'pending')
+        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))[0];
+    if (summary)
+        return summary;
+    return runtime.outbox
+        .filter((job) => job.type === 'lorebook-sync'
+            && job.status === 'pending'
+            && job.sourceRevision > runtime.machines.publication.confirmedRevision)
+        .sort((a, b) => b.sourceRevision - a.sourceRevision)[0];
 }
 
 }
@@ -14548,6 +14816,16 @@ function emptyRuntimeV2() {
                 lastLargeTurnIndex: -1,
                 lastSmallTurnKey: '',
                 lastLargeTurnKey: '',
+            },
+            controller: {
+                phase: 'idle',
+                nextAction: 'idle',
+                nextJobId: '',
+                reason: '',
+                settlingCount: 0,
+                observedRevision: 0,
+                trigger: '',
+                updatedAt: '',
             },
             publication: {
                 desiredRevision: 0,
@@ -14671,6 +14949,18 @@ function normalizeRuntimeV2(value) {
                 lastSmallTurnKey: cleanText(machines.summary?.lastSmallTurnKey, 220),
                 lastLargeTurnKey: cleanText(machines.summary?.lastLargeTurnKey, 220),
             },
+            controller: {
+                ...base.machines.controller,
+                ...(machines.controller ?? {}),
+                phase: cleanText(machines.controller?.phase, 80) || 'idle',
+                nextAction: cleanText(machines.controller?.nextAction, 80) || 'idle',
+                nextJobId: cleanText(machines.controller?.nextJobId, 220),
+                reason: cleanText(machines.controller?.reason, 500),
+                settlingCount: Math.max(0, integer(machines.controller?.settlingCount, 0)),
+                observedRevision: Math.max(0, integer(machines.controller?.observedRevision, 0)),
+                trigger: cleanText(machines.controller?.trigger, 120),
+                updatedAt: cleanText(machines.controller?.updatedAt, 80),
+            },
             publication: {
                 ...base.machines.publication,
                 ...(machines.publication ?? {}),
@@ -14775,6 +15065,8 @@ Object.defineProperty(__scope,"normalizeRecordingBoundary",{enumerable:true,conf
 Object.defineProperty(__scope,"normalizeLorebookPublication",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["normalizeLorebookPublication"]});
 Object.defineProperty(__scope,"emptyRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["emptyRuntimeV2"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
+Object.defineProperty(__scope,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["inferSummaryLifecycle"]});
+Object.defineProperty(__scope,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["markSummaryLifecycle"]});
 with(__scope){
 Object.defineProperty(exports,"putArtifact",{enumerable:true,configurable:true,get:()=>putArtifact});
 Object.defineProperty(exports,"putChatState",{enumerable:true,configurable:true,get:()=>putChatState});
@@ -14811,15 +15103,20 @@ function emptyChatState(chatKey) {
 function normalizeSummaryArrays(value, kind) {
     if (!Array.isArray(value))
         return [];
-    return value.filter((item) => item && typeof item === 'object').map((item) => ({
-        ...item,
-        kind,
-        sourceKeys: Array.isArray(item.sourceKeys) ? [...new Set(item.sourceKeys.map(String))] : [],
-        sourceFactIds: Array.isArray(item.sourceFactIds) ? [...new Set(item.sourceFactIds.map(String))] : undefined,
-        sourceSummaryIds: Array.isArray(item.sourceSummaryIds) ? [...new Set(item.sourceSummaryIds.map(String))] : undefined,
-        eventIds: Array.isArray(item.eventIds) ? [...new Set(item.eventIds.map(String))] : undefined,
-        unresolvedItems: Array.isArray(item.unresolvedItems) ? [...new Set(item.unresolvedItems.map(String))] : undefined,
-    }));
+    return value.filter((item) => item && typeof item === 'object').map((item) => {
+        const normalized = {
+            ...item,
+            kind,
+            sourceKeys: Array.isArray(item.sourceKeys) ? [...new Set(item.sourceKeys.map(String))] : [],
+            sourceFactIds: Array.isArray(item.sourceFactIds) ? [...new Set(item.sourceFactIds.map(String))] : undefined,
+            sourceSummaryIds: Array.isArray(item.sourceSummaryIds) ? [...new Set(item.sourceSummaryIds.map(String))] : undefined,
+            eventIds: Array.isArray(item.eventIds) ? [...new Set(item.eventIds.map(String))] : undefined,
+            unresolvedItems: Array.isArray(item.unresolvedItems) ? [...new Set(item.unresolvedItems.map(String))] : undefined,
+        };
+        normalized.lifecycleStatus = inferSummaryLifecycle(normalized, kind);
+        normalized.recallEligible = item.recallEligible !== false && ['active', 'archived'].includes(normalized.lifecycleStatus);
+        return normalized;
+    });
 }
 /**
  * rc.23 以前同一 event_id 可能累计留下多条尚未固化的小总结。迁移时把它们整理为一条
@@ -14856,8 +15153,11 @@ function migrateLegacySmallSummaryVersions(small, large) {
         latest.sourceKeys = sourceKeys.length ? sourceKeys : sourceFactIds;
         latest.previousSmallSummaryId ||= older.at(-1)?.id;
         latest.rollupCount = Math.max(Number(latest.rollupCount) || 1, rows.length);
-        for (const item of older)
+        for (const item of older) {
             item.supersededBySmallSummaryId = latest.id;
+            markSummaryLifecycle(item, 'superseded', { successorId: latest.id, recallEligible: false });
+        }
+        markSummaryLifecycle(latest, latest.eventClosed === true ? 'archived' : 'active', { recallEligible: true });
         changed = true;
     }
     return changed;
@@ -15593,6 +15893,15 @@ async function runDiagnostics() {
         const state = await getChatState(currentChatKey());
         const history = historyStatus(state);
         checks.push({ id: 'history', label: '历史数据一致性', ...history });
+        const controller = state?.runtimeV2?.machines?.controller;
+        checks.push({
+            id: 'stateController',
+            label: '统一状态协调器',
+            status: controller ? 'ok' : 'warn',
+            detail: controller
+                ? `${controller.nextAction || 'idle'}；待结算 ${controller.settlingCount ?? 0}；${controller.reason || '状态已对账'}`
+                : '旧状态尚未建立协调器视图，将在下一次状态提交时自动补齐',
+        });
         const sync = syncStatus(state);
         checks.push({ id: 'sync', label: '最近世界书同步', ...sync });
     }
@@ -16181,7 +16490,7 @@ Object.defineProperty(__scope,"chooseHistoryRecalculationStart",{enumerable:true
 Object.defineProperty(__scope,"retryStage",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["retryStage"]});
 Object.defineProperty(__scope,"subscribePipeline",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["subscribePipeline"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
-Object.defineProperty(__scope,"pendingSmallSummaries",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["pendingSmallSummaries"]});
+Object.defineProperty(__scope,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["inferSummaryLifecycle"]});
 Object.defineProperty(__scope,"largeSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["largeSummarySystemPrompt"]});
 Object.defineProperty(__scope,"smallSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["smallSummarySystemPrompt"]});
 Object.defineProperty(__scope,"stateSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/state.js")["stateSystemPrompt"]});
@@ -16642,6 +16951,7 @@ function runtimeV2OverviewHtml(chatState) {
     const current = sceneMachine.instances?.[sceneMachine.currentInstanceId];
     const summary = runtime.machines?.summary ?? {};
     const publication = runtime.machines?.publication ?? {};
+    const controller = runtime.machines?.controller ?? {};
     const pendingJobs = (runtime.outbox ?? []).filter((job) => ['pending', 'running', 'failed'].includes(job.status));
     const summaryLabel = summary.pendingKind === 'small'
         ? '小总结待执行'
@@ -16657,7 +16967,9 @@ function runtimeV2OverviewHtml(chatState) {
         <dt>游戏时间</dt><dd>${escapeHtml(runtime.machines?.clock?.display || '未发生明确时间推进')}</dd>
         <dt>当前场景实例</dt><dd>${escapeHtml(sceneLabel)}</dd>
         <dt>当前目标</dt><dd>${escapeHtml(current?.goal || '未明确')}</dd>
+        <dt>统一状态协调</dt><dd>${escapeHtml(`${controller.nextAction || 'idle'}${controller.reason ? `｜${controller.reason}` : ''}`)}</dd>
         <dt>总结调度</dt><dd>${escapeHtml(summaryLabel)}</dd>
+        <dt>待结算条目</dt><dd>${escapeHtml(String(controller.settlingCount ?? 0))}</dd>
         <dt>世界书投影</dt><dd>${escapeHtml(`${publication.status || 'clean'}｜期望 ${publication.desiredRevision ?? 0} / 已确认 ${publication.confirmedRevision ?? 0}`)}</dd>
         <dt>未完成事务</dt><dd>${escapeHtml(String(pendingJobs.length))}</dd>
       </dl>
@@ -17158,30 +17470,53 @@ function summaryPromptEditorHtml(kind) {
     <p class="ma11-help">事件分组、事实消费、版本继承、沉淀到对象和世界书同步由插件负责；这里仅调整模型筛选与表达。</p>
   </section>`;
 }
+function summaryLifecycleDisplay(item) {
+    const status = inferSummaryLifecycle(item, item?.kind);
+    const labels = {
+        active: '当前',
+        archived: '已归档',
+        solidified: '已固化',
+        superseded: '旧版本',
+    };
+    const classes = {
+        active: 'success',
+        archived: 'working',
+        solidified: 'working',
+        superseded: '',
+    };
+    return { status, label: labels[status] || status, className: classes[status] || '' };
+}
+function summarySettlementHtml(item) {
+    const value = item?.sedimentation;
+    if (!value)
+        return '';
+    const distributed = value.distributedRowIds?.length ?? 0;
+    const settling = value.enteredSettlingRowIds?.length ?? 0;
+    const deleted = value.deletedRowIds?.length ?? value.appliedRowIds?.length ?? 0;
+    const retained = value.retainedRowIds?.length ?? value.ignoredRowIds?.length ?? 0;
+    return `<div class="ma11-summary-settlement"><span>已分发 ${distributed}</span><span>待结算 ${settling}</span><span>已删除 ${deleted}</span><span>保留 ${retained}</span></div>`;
+}
+function summaryArticleHtml(item, unresolvedLabel) {
+    const lifecycle = summaryLifecycleDisplay(item);
+    return `<article class="ma11-summary"><h3>${escapeHtml(item.title)} <span class="ma11-badge ${lifecycle.className}">${escapeHtml(lifecycle.label)}</span></h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>${unresolvedLabel}</b><span>${escapeHtml(item.unresolvedItems.join('；'))}</span></div>` : ''}${summarySettlementHtml(item)}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`;
+}
 async function summariesHtml() {
     const info = latestSnapshotArtifact();
     const enabled = getSettings().enabled;
     const busy = workspacePipelineBusy(info);
     const state = info ? await getChatState(info.artifact.chatKey) : null;
-    const allSmall = state?.smallSummaries ?? [];
+    const small = state?.smallSummaries ?? [];
     const large = state?.largeSummaries ?? [];
-    const small = pendingSmallSummaries(allSmall, large);
+    const smallCurrent = small.filter((item) => ['active', 'archived'].includes(inferSummaryLifecycle(item, 'small'))).length;
+    const largeCurrent = large.filter((item) => ['active', 'archived'].includes(inferSummaryLifecycle(item, 'large'))).length;
     return `
     <section class="ma11-toolbar"><div><h2>小总结与大总结</h2><p>小总结写入近期经历；大总结重新审查并写入历史事实。</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info && !busy ? "" : "disabled"}>立即小总结</button><button data-ma11-action="force-large" ${enabled && info && !busy ? "" : "disabled"}>立即大总结</button></div></section>
     <div class="ma11-summary-columns">
-      <section class="ma11-card"><header><b>小总结</b><span>${small.length}</span></header>${small.length
-        ? small
-            .slice()
-            .reverse()
-            .map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>未决</b><span>${escapeHtml(item.unresolvedItems.join('；'))}</span></div>` : ''}${item.sedimentation ? `<div class="ma11-summary-settlement"><span>已应用 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>保护/忽略 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`)
-            .join("")
+      <section class="ma11-card"><header><b>小总结</b><span>当前 ${smallCurrent} / 全部 ${small.length}</span></header>${small.length
+        ? small.slice().reverse().map((item) => summaryArticleHtml(item, '未决')).join("")
         : '<p class="ma11-empty">尚无小总结。</p>'}</section>
-      <section class="ma11-card"><header><b>大总结</b><span>${large.length}</span></header>${large.length
-        ? large
-            .slice()
-            .reverse()
-            .map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>长期未决</b><span>${escapeHtml(item.unresolvedItems.join('；'))}</span></div>` : ''}${item.sedimentation ? `<div class="ma11-summary-settlement"><span>已应用 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>保护/忽略 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`)
-            .join("")
+      <section class="ma11-card"><header><b>大总结</b><span>当前 ${largeCurrent} / 全部 ${large.length}</span></header>${large.length
+        ? large.slice().reverse().map((item) => summaryArticleHtml(item, '长期未决')).join("")
         : '<p class="ma11-empty">尚无大总结。</p>'}</section>
     </div>`;
 }
