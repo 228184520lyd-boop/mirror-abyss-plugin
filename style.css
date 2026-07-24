@@ -471,6 +471,11 @@ textarea { resize: vertical; }
 .ma11-switch { min-height: 40px; padding: .55rem .65rem; border: 1px solid var(--ma-border); border-radius: var(--ma-radius-sm); background: var(--ma-surface-0); }
 .ma11-switch input { width: auto; accent-color: var(--ma-accent); }
 .ma11-connection-row { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(180px, 1fr) minmax(240px, 1.35fr) auto; align-items: center; gap: .6rem; padding: .6rem; border: 1px solid var(--ma-border); border-radius: 9px; background: var(--ma-surface-0); }
+/* BUGFIX：Profile 下拉框被 hidden 后不再参与自动放置；固定列位可避免“测试”按钮误占整列。 */
+.ma11-connection-row > b { grid-column: 1; grid-row: 1; }
+.ma11-connection-row select[data-ma11-connection-mode] { grid-column: 2; grid-row: 1; }
+.ma11-connection-row select[data-ma11-connection-profile-id] { grid-column: 3; grid-row: 1; }
+.ma11-connection-row > button { grid-column: 4; grid-row: 1; }
 .ma11-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; }
 .ma11-recall-grid { grid-template-columns: repeat(3, 1fr); }
 .ma11-meta { display: grid; grid-template-columns: minmax(9rem, auto) 1fr; gap: .38rem .75rem; margin: .7rem 0 0; font-size: .82rem; }
@@ -545,12 +550,19 @@ textarea { resize: vertical; }
 .ma11-graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: .8rem; }
 .ma11-graph-canvas { min-height: 520px; overflow: auto; border: 1px solid var(--ma-border); border-radius: var(--ma-radius-md); background: var(--ma-surface-0); scrollbar-width: thin; }
 .ma11-graph-canvas svg { display: block; margin: auto; }
-.ma11-graph-edge line { stroke: var(--ma-border-strong); stroke-width: 2; }
-.ma11-graph-edge text { fill: var(--ma-muted); font-size: 12px; }
+.ma11-graph-edge line { stroke: var(--ma-border-strong); stroke-width: 1.7; opacity: .72; }
+.ma11-graph-edge text {
+  fill: var(--ma-muted);
+  stroke: var(--ma-surface-0);
+  stroke-width: 4px;
+  paint-order: stroke fill;
+  font-size: 11px;
+  font-weight: 650;
+}
 .ma11-graph-node { cursor: pointer; }
-.ma11-graph-node circle { fill: var(--ma-surface-1); stroke: var(--ma-accent); stroke-width: 2; }
-.ma11-graph-node text { fill: var(--ma-text); font-size: 12px; pointer-events: none; }
-.ma11-graph-node.selected circle { stroke-width: 5; }
+.ma11-graph-node rect { fill: var(--ma-surface-1); stroke: var(--ma-accent); stroke-width: 2; }
+.ma11-graph-node text { fill: var(--ma-text); font-size: 12px; font-weight: 700; pointer-events: none; }
+.ma11-graph-node.selected rect { stroke-width: 3; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--ma-accent) 42%, transparent)); }
 .ma11-graph-detail { padding: .85rem; border: 1px solid var(--ma-border); border-radius: var(--ma-radius-md); background: var(--ma-surface-1); }
 
 /* 编辑器 */
@@ -596,9 +608,9 @@ textarea { resize: vertical; }
 @media (max-width: 1100px) {
   .ma11-table-manager-fields { grid-template-columns: 1fr 1fr; }
   .ma11-table-manager-fields .ma11-table-header-editor { grid-column: 1 / -1; }
-  .ma11-connection-row { grid-template-columns: minmax(110px, .7fr) 1fr; }
-  .ma11-connection-row select[data-ma11-connection-profile-id] { grid-column: 1 / -1; }
-  .ma11-connection-row button { justify-self: end; }
+  .ma11-connection-row { grid-template-columns: minmax(110px, .7fr) minmax(0, 1fr) auto; }
+  .ma11-connection-row select[data-ma11-connection-profile-id] { grid-column: 1 / -1; grid-row: 2; }
+  .ma11-connection-row > button { grid-column: 3; grid-row: 1; justify-self: end; }
 }
 
 @media (max-width: 900px) {
@@ -688,8 +700,11 @@ textarea { resize: vertical; }
   .ma11-quick-switch { align-self: flex-start; }
   .ma11-settings-shortcuts { grid-template-columns: 1fr; }
   .ma11-connection-row { grid-template-columns: 1fr; }
-  .ma11-connection-row select[data-ma11-connection-profile-id] { grid-column: auto; }
-  .ma11-connection-row button { width: 100%; justify-self: stretch; }
+  .ma11-connection-row > b,
+  .ma11-connection-row select[data-ma11-connection-mode],
+  .ma11-connection-row select[data-ma11-connection-profile-id],
+  .ma11-connection-row > button { grid-column: 1; grid-row: auto; }
+  .ma11-connection-row > button { width: 100%; justify-self: stretch; }
   .ma11-actions,
   .ma11-message-actions,
   .ma11-graph-toolbar-actions,
@@ -1280,12 +1295,12 @@ textarea { resize: vertical; }
     var(--ma-surface-0);
   background-size: auto, 32px 32px, 32px 32px, auto;
 }
-.ma11-graph-node circle { transition: opacity .18s ease, stroke-width .18s ease, filter .18s ease, r .18s ease; }
-.ma11-graph-node.character circle { stroke: var(--ma-accent); }
-.ma11-graph-node.item circle { stroke: var(--ma-warning); }
-.ma11-graph-node.event circle { stroke: var(--ma-success); }
-.ma11-graph-node.region circle { stroke: color-mix(in srgb, var(--ma-accent) 52%, var(--ma-success)); }
-.ma11-graph-node.search-match circle { stroke-width: 5; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--ma-accent) 55%, transparent)); }
+.ma11-graph-node rect { transition: opacity .18s ease, stroke-width .18s ease, filter .18s ease; }
+.ma11-graph-node.character rect { stroke: var(--ma-accent); }
+.ma11-graph-node.item rect { stroke: var(--ma-warning); }
+.ma11-graph-node.event rect { stroke: var(--ma-success); }
+.ma11-graph-node.region rect { stroke: color-mix(in srgb, var(--ma-accent) 52%, var(--ma-success)); }
+.ma11-graph-node.search-match rect { stroke-width: 4; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--ma-accent) 55%, transparent)); }
 .ma11-graph-node.dimmed,
 .ma11-graph-edge.dimmed { opacity: .12; }
 .ma11-graph-edge.legacy line { stroke-dasharray: 7 5; opacity: .55; }
@@ -1330,7 +1345,7 @@ textarea { resize: vertical; }
 @media (prefers-reduced-motion: no-preference) {
   .ma11-dashboard-status.working .ma11-dashboard-status-icon i { animation: ma11-spin 1.05s linear infinite; }
   .ma11-graph-node { transition: opacity .18s ease; }
-  .ma11-graph-node.search-match circle { animation: ma11NodePulse 1.6s ease-in-out infinite; }
+  .ma11-graph-node.search-match rect { animation: ma11NodePulse 1.6s ease-in-out infinite; }
   @keyframes ma11-spin { to { transform: rotate(360deg); } }
   @keyframes ma11NodePulse {
     0%, 100% { stroke-opacity: .72; filter: drop-shadow(0 0 4px color-mix(in srgb, var(--ma-accent) 35%, transparent)); }
@@ -1760,4 +1775,79 @@ textarea { resize: vertical; }
 @media (max-width: 620px) {
   .ma11-suppressed-list > div { grid-template-columns: 1fr; }
   .ma11-suppressed-list > div button { width: 100%; }
+}
+
+/* 1.4.0-alpha.5：表头模板与联动规则 */
+.ma11-table-manager-fields select,
+.ma11-link-rule-editor select,
+.ma11-new-link-rule select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--ma-border);
+  border-radius: var(--ma-radius-sm);
+  padding: .58rem .65rem;
+  background: var(--ma-input);
+  color: var(--ma-text);
+  outline: none;
+}
+.ma11-table-manager-fields select:focus,
+.ma11-link-rule-editor select:focus,
+.ma11-new-link-rule select:focus {
+  border-color: var(--ma-accent);
+  box-shadow: 0 0 0 2px var(--ma-accent-soft);
+}
+.ma11-table-manager-fields .ma11-table-purpose-editor { grid-column: 2 / -1; }
+.ma11-table-manager-fields .ma11-table-header-editor,
+.ma11-table-manager-fields .ma11-table-extra-editor { grid-column: 1 / -1; }
+.ma11-link-rule-list { display: grid; gap: .75rem; }
+.ma11-link-rule-row {
+  position: relative;
+  display: grid;
+  gap: .75rem;
+  overflow: hidden;
+  padding: .85rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 13px;
+  background: var(--ma-surface-1);
+  box-shadow: 0 7px 20px rgb(0 0 0 / 8%);
+}
+.ma11-link-rule-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--ma-accent);
+  opacity: .55;
+}
+.ma11-link-rule-head { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; padding-left: .25rem; }
+.ma11-link-rule-editor { display: grid; grid-template-columns: minmax(12rem, .65fr) minmax(18rem, 1.35fr); gap: .75rem; align-items: start; }
+.ma11-link-rule-editor > label,
+.ma11-new-link-rule > label { display: grid; gap: .32rem; color: var(--ma-muted); font-size: .79rem; }
+.ma11-link-target-box { display: grid; gap: .45rem; }
+.ma11-link-target-box > b { color: var(--ma-muted); font-size: .79rem; }
+.ma11-link-target-box > div { display: flex; flex-wrap: wrap; gap: .42rem; }
+.ma11-link-target {
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: .38rem;
+  min-height: 34px;
+  padding: .35rem .55rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 999px;
+  background: var(--ma-surface-0);
+  color: var(--ma-text) !important;
+  font-size: .75rem !important;
+}
+.ma11-link-target input { width: auto !important; margin: 0; accent-color: var(--ma-accent); }
+.ma11-new-link-rule { grid-template-columns: minmax(12rem, .65fr) minmax(18rem, 1.35fr); align-items: start; }
+.ma11-new-link-rule > header,
+.ma11-new-link-rule > .ma11-actions { grid-column: 1 / -1; }
+
+@media (max-width: 900px) {
+  .ma11-table-manager-fields .ma11-table-purpose-editor { grid-column: 1 / -1; }
+  .ma11-link-rule-editor,
+  .ma11-new-link-rule { grid-template-columns: 1fr; }
+  .ma11-new-link-rule > header,
+  .ma11-new-link-rule > .ma11-actions { grid-column: auto; }
 }

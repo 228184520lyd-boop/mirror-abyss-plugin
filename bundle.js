@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.4';
+const VERSION = '1.4.0-alpha.6';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -341,47 +341,30 @@ const DEFAULT_CONTENT_LIMITS = {
 };
 const DEFAULT_STATE_PROMPTS = {
     admissionRules: [
-        '当前事件中已经明确建立、且下一轮连续性需要读取的对象可建临时条目；建档不等于永久保存，后续由插件按事实状态结算。',
-        '具体个体角色至少满足一项明确事实：主动造成事件结果；形成持续关系；承担正文已明确的目标、责任或约束；获得或失去持续有效的身份、能力、归属或状态；在多次出现中形成稳定作用。',
-        '物品名称或身份可区分，且所有权、持有位置、数量、完整性、可用性、隐藏状态、证据状态、任务用途或独特功能中的任一项被正文明确建立或改变时，应建档；不要求已经多次出现。',
-        '当前实际发生的叙事场景必须建立或更新场景条目；场景条目记录本次场景的参与对象、核心局面、直接限制与明确结果，不等同于地点本身。',
-        '地点、区域、建筑或空间满足至少一项即可建档：当前正文真实进入并成为明确场景；被正文明确命名、定义或重复进入的空间；具有离开当前场景后仍成立的名称、功能、布局、归属、访问条件或持续变化。仅被提及、回忆或作为模糊背景时不建档。',
-        '组织、阵营、制度、规则或其他对象必须具有离开当前场景后仍成立的定义、归属、状态、规则作用或持续变化。',
-        '新对象应能被稳定命名并与已有对象区分；无法确认身份边界时暂不建档。',
+        '只在当前启用表头及其记录要求明确允许时建档；表头名称、用途说明和字段记录要求共同决定提取方向。',
+        '新对象必须能够被稳定命名，并与已有对象区分；无法确认对象边界时暂不建档。',
+        '只记录本轮正文明确建立、且会改变当前记录或后续连续性的事实。',
     ].join('\n'),
     exclusionRules: [
-        '仅被看见、经过、提到、描写姓名、服装、外貌、站位、情绪或短动作，不足以建立条目。',
-        '路人、宾客、观众、侍卫、仆从、店员、士兵、村民、围观者等一次性功能角色默认排除，即使有姓名、外貌描写、动作或一句台词也不建档。',
-        '匿名群体、职业称谓、临时称呼、场景陈设和只服务单次动作的对象默认排除。',
-        '普通对话对象、短暂冲突对象、递交物品者、通报者、引路者和仅提供背景信息者默认排除。',
-        '只有后续正文明确赋予其独立因果作用、持续关系或承接价值时，才可从背景对象升级为正式条目。',
+        '没有命中任何启用表头记录要求的内容不建档，也不强行塞入最相近的表。',
+        '仅有措辞变化、重复描述、普通反应、无结果动作或一次性背景信息时不更新。',
+        '不能从常识、类型名称、文风暗示或可能性补全正文未明确给出的事实。',
     ].join('\n'),
     routingRules: [
-        '分类看对象本质和事实作用域，不看是否有名字、目标、关系、行动或拟人化叙述；角色表不是兜底。',
-        '角色：仅具体人物、独立人格生物或意识体；组织、阵营、政权、机构、群体、地点、制度和规则不得进入。',
-        '场景：场景是“本次局面切片”，记录参与者、限制与承接点；结束后标记已结束或已离开，结果已分发且无独立后续时可结算删除。',
-        '地点：可稳定定位的地点、区域、建筑、房间、道路或秘境；当前所在位置可同时更新时空。',
-        '全局变化：组织、阵营、政权、机构、群体格局、制度执行与世界态势；即使像角色一样行动也属全局变化。',
-        '物品：记录可区分的具体物件、装备、文件、材料、容器、货币批次或关键资源；不要把多个有独立归属或状态的命名物品合并成一行。',
-        '基础设定记录稳定世界规则；事件与时空分别记录事件线和当前时空；只有确实无法安全归类时才用自定义对象。',
-        '已有对象必须沿用原表，不得因本轮措辞变化改投角色表或新建重复条目。',
+        '按当前启用表头的名称、用途说明和字段记录要求分流，不按内部通道名称猜测语义。',
+        '同一事实只进入最直接承载它的表头；确实属于多个对象时分别写各对象自身结果，不重复整段内容。',
+        '已有对象沿用原表和稳定身份；只有表头记录要求明确改变时，未来新事实才按新方向提取。',
     ].join('\n'),
     evidenceRules: [
-        '只使用本次正文明确出现的事实与插件提供的旧记录，不按常识、身份模板、文风暗示或可能性补全。',
-        '亲历并明确发生的内容可标为确认；他人陈述、传闻或主观判断必须保留转述或不确定，不得自动升级。',
-        '新旧内容冲突时，只有正文明确推翻、结束或替换旧事实才更新；证据不足时保留旧记录并省略本次更新。',
-        '同名、近名或同职业对象没有明确别名、关系或连续上下文时不得合并；身份不清时宁可不写，也不要错误归并。',
-        '正文未明确建立持续事实时，默认不新建；无法确认变化或身份时，省略对应事实和条目。',
+        '只使用本轮正文明确出现的事实和插件提供的旧记录。',
+        '传闻、转述、主观判断和不确定信息必须保留其证据等级，不得自动升级为确认事实。',
+        '新旧内容冲突时，只有正文明确推翻、结束或替换旧事实才更新；证据不足时保留旧记录。',
     ].join('\n'),
     updateRules: [
-        '只输出本轮新增、结束、被替换或发生实质变化的语义层；再次出现、重复描述和措辞变化不算更新。',
-        '提交前逐项复查所有可区分物品：所有权、位置、数量、完整性、可用性、隐藏状态、用途或后续可取得性被建立或改变时，每件独立输出，不能只挑最显眼的一件。',
-        '提交前必须确认当前真实场景有场景条目；发生场景切换时，新场景设为当前，旧场景更新为已结束或已离开。',
-        '基础定义只有在正文明确重定义、毁灭、重建、转让或人工编辑时才改变；普通状态变化不得覆盖基础定义。',
-        '当前状态写当前唯一有效版本：新状态替换旧状态，已解决未决事项应关闭，不把完整过程持续追加到当前状态。',
-        '关系只有在正文明确形成承诺、归属、冲突、合作、支配、依赖或其他持续关系变化时才更新；明确关系变化写入角色的关系状态；同场、普通交谈和单次帮助不建立关系。',
-        '每条事实只表达一个主体、一个变化和一个当前结果；相同信息只保留一次。',
-        '只记录正文明确建立的变化，不评价重要性、不推测未来、不提出合并、删除、归档、结算或长期价值建议。',
+        '只输出本轮新增、结束、被替换或发生实质变化的内容；再次出现和近义改写不算更新。',
+        '当前层只保留当前唯一有效版本；新事实替换旧状态时不得把完整过程持续追加。',
+        '表头联动只要求重新检查目标表；没有真实变化时目标表不要输出。',
+        '每条事实只表达一个主体、一个变化和一个当前结果，相同信息只保留一次。',
     ].join('\n'),
 };
 const DEFAULT_SUMMARY_PROMPTS = {
@@ -477,6 +460,7 @@ const DEFAULT_SETTINGS = {
     stateOutputTokens: 3072,
     stateChunkChars: 6000,
     tableRegistry: [],
+    tableLinkRules: [],
     connections: {
         audit: { mode: 'current', profileId: '', profile: '' },
         revision: { mode: 'current', profileId: '', profile: '' },
@@ -485,7 +469,7 @@ const DEFAULT_SETTINGS = {
         largeSummary: { mode: 'current', profileId: '', profile: '' },
     },
     ui: { activeTab: 'overview', activeTable: 'spacetime', graphScope: 'world', graphZoom: 1, memoryView: 'combined' },
-    migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false },
+    migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false, tableLinksV40: false, headerTemplateV40: false },
 };
 
 }
@@ -621,6 +605,8 @@ Object.defineProperty(__scope,"migrateTableRegistryToObjectViews",{enumerable:tr
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"restoreDefaultTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["restoreDefaultTableRegistry"]});
 Object.defineProperty(__scope,"tableByKey",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByKey"]});
+Object.defineProperty(__scope,"normalizeTableLinkRules",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["normalizeTableLinkRules"]});
+Object.defineProperty(__scope,"restoreDefaultTableLinkRules",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["restoreDefaultTableLinkRules"]});
 with(__scope){
 Object.defineProperty(exports,"persistMetadata",{enumerable:true,configurable:true,get:()=>persistMetadata});
 Object.defineProperty(exports,"persistChat",{enumerable:true,configurable:true,get:()=>persistChat});
@@ -731,6 +717,8 @@ function getSettings() {
         settings.migration.hostControlV39 = true;
     }
     settings.migration.naturalModulesV39 ??= false;
+    settings.migration.tableLinksV40 ??= false;
+    settings.migration.headerTemplateV40 ??= false;
     settings.migration.objectViewsV26 ??= false;
     settings.migration.sceneTableV33 ??= false;
     settings.migration.entryRoutingV33 ??= false;
@@ -795,6 +783,18 @@ function getSettings() {
     }
     if (!settings.migration.stateProtocolV37) {
         settings.migration.stateProtocolV37 = true;
+    }
+    if (!settings.migration.tableLinksV40) {
+        settings.tableLinkRules = restoreDefaultTableLinkRules(settings.tableRegistry);
+        settings.migration.tableLinksV40 = true;
+    }
+    else {
+        settings.tableLinkRules = normalizeTableLinkRules(settings.tableLinkRules, settings.tableRegistry);
+    }
+    // 1.4.0-alpha.5 起，用户只通过表头提示词改变提取方向；旧的五组全局规则收回为固定通用内核。
+    if (!settings.migration.headerTemplateV40) {
+        settings.statePrompts = structuredClone(DEFAULT_SETTINGS.statePrompts);
+        settings.migration.headerTemplateV40 = true;
     }
     if (!tableByKey(settings.tableRegistry, settings.ui?.activeTable || '') || !tableByKey(settings.tableRegistry, settings.ui.activeTable)?.enabled) {
         settings.ui.activeTable = settings.tableRegistry.find((table) => table.enabled)?.key || settings.tableRegistry[0]?.key || 'spacetime';
@@ -1092,16 +1092,32 @@ function deepClone(value) {
     }
     return JSON.parse(JSON.stringify(value));
 }
+function isPlainRecord(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
 function mergeDefaults(defaults, current) {
     const output = deepClone(defaults);
     const merge = (target, source) => {
-        if (!source)
+        // 持久化设置属于不可信反序列化输入。容器类型不匹配时保留默认值，
+        // 不能把字符串、数组或 null 覆盖到后续会被直接解引用的设置对象上。
+        if (!isPlainRecord(source) || !isPlainRecord(target))
             return;
         for (const [key, value] of Object.entries(source)) {
-            if (value && typeof value === 'object' && !Array.isArray(value) && target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])) {
-                merge(target[key], value);
+            const fallback = target[key];
+            if (isPlainRecord(fallback)) {
+                if (isPlainRecord(value))
+                    merge(fallback, value);
+                continue;
             }
-            else if (value !== undefined) {
+            if (Array.isArray(fallback)) {
+                if (Array.isArray(value))
+                    target[key] = deepClone(value);
+                continue;
+            }
+            if (value !== undefined && (value === null || ['string', 'number', 'boolean'].includes(typeof value))) {
                 target[key] = value;
             }
         }
@@ -2637,7 +2653,9 @@ Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
+Object.defineProperty(__scope,"linkedTargetRoles",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["linkedTargetRoles"]});
 with(__scope){
+Object.defineProperty(exports,"deriveSpacetimeChange",{enumerable:true,configurable:true,get:()=>deriveSpacetimeChange});
 Object.defineProperty(exports,"deriveSceneBoundary",{enumerable:true,configurable:true,get:()=>deriveSceneBoundary});
 Object.defineProperty(exports,"deriveIncrementalSettlementDirectives",{enumerable:true,configurable:true,get:()=>deriveIncrementalSettlementDirectives});
 const CLOSED_STATUS_RE = /(已完成|完成|已结束|结束|已关闭|关闭|已解决|解决|已归档|归档|closed|completed|resolved|ended|archived)/i;
@@ -2666,7 +2684,7 @@ function factClosed(fact) {
     return operation === 'close' || CLOSED_STATUS_RE.test(text(fact.status));
 }
 function rowEventIds(row) {
-    return [...new Set([...(row.eventIds ?? []), row.eventId].map(text).filter(Boolean))];
+    return [...new Set([...(row?.eventIds ?? []), row?.eventId].map(text).filter(Boolean))];
 }
 function activeRow(row) {
     return !isEntryParticipationPaused(row)
@@ -2677,10 +2695,10 @@ function currentSpacetime(snapshot, registry) {
     return table ? (snapshot[table.key] ?? []).filter(activeRow).at(-1) : undefined;
 }
 /**
- * 场景边界只由前后两个已提交时空快照的稳定身份变化产生。
- * 地点被提及、回忆或模型只改写描述时不会触发。
+ * 时空槽位变化只由前后两个已提交快照的稳定身份变化产生。
+ * 它用于接受 spacetime_current 的新标题，本身不代表要联动其他表。
  */
-function deriveSceneBoundary(previous, next, registryValue) {
+function deriveSpacetimeChange(previous, next, registryValue) {
     const registry = normalizeTableRegistry(registryValue);
     const before = currentSpacetime(previous, registry);
     const after = currentSpacetime(next, registry);
@@ -2700,6 +2718,20 @@ function deriveSceneBoundary(previous, next, registryValue) {
                 ...rowEventIds(oldScene),
             ].filter(Boolean))],
     };
+}
+/**
+ * 场景边界是“时空变化 + 已启用联动规则”的结果。
+ * 关闭时空联动后，时空表本身仍可更新，但不会触发场景/NPC 预退出或提前总结。
+ */
+function deriveSceneBoundary(previous, next, registryValue, linkRules = undefined) {
+    const registry = normalizeTableRegistry(registryValue);
+    const change = deriveSpacetimeChange(previous, next, registry);
+    if (!change)
+        return undefined;
+    const targetRoles = linkedTargetRoles(linkRules, registry, 'spacetime');
+    if (!targetRoles.size)
+        return undefined;
+    return { ...change, targetRoles: [...targetRoles] };
 }
 function rowText(row) {
     const fields = row.fields ?? {};
@@ -2795,12 +2827,14 @@ function deriveIncrementalSettlementDirectives(input) {
     // 场景切换只加入旧场景及其明确关联的临时角色；本轮继续出现的对象不预退出。
     if (sceneBoundary) {
         const related = new Set(sceneBoundary.relatedObjectTokens ?? []);
+        const targetRoles = new Set(sceneBoundary.targetRoles ?? []);
         for (const table of enabledTables(registry)) {
             for (const row of input.snapshot[table.key] ?? []) {
                 const rowTokens = [row.id, row.title, ...(row.keywords ?? [])].map(identity).filter(Boolean);
-                const oldScene = table.role === 'scenes'
+                const oldScene = targetRoles.has('scenes') && table.role === 'scenes'
                     && (row.id === sceneBoundary.previousSceneId || identity(row.title) === identity(sceneBoundary.previousTitle));
-                const relatedCharacter = ['characters', 'state'].includes(table.role)
+                const relatedCharacter = (targetRoles.has('characters') || targetRoles.has('state'))
+                    && ['characters', 'state'].includes(table.role)
                     && rowTokens.some((token) => related.has(token))
                     && !rowTokens.some((token) => currentPatchObjectTokens.has(token));
                 if (oldScene || relatedCharacter)
@@ -3740,6 +3774,7 @@ Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurab
 Object.defineProperty(__scope,"canonicalizeObjectIdentities",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalizeObjectIdentities"]});
 Object.defineProperty(__scope,"deriveIncrementalSettlementDirectives",{enumerable:true,configurable:true,get:()=>__require("domain/incremental-settlement.js")["deriveIncrementalSettlementDirectives"]});
 Object.defineProperty(__scope,"deriveSceneBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/incremental-settlement.js")["deriveSceneBoundary"]});
+Object.defineProperty(__scope,"deriveSpacetimeChange",{enumerable:true,configurable:true,get:()=>__require("domain/incremental-settlement.js")["deriveSpacetimeChange"]});
 Object.defineProperty(__scope,"applyEntryLifecycleDirectives",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["applyEntryLifecycleDirectives"]});
 Object.defineProperty(__scope,"finalizeSettlingEntries",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["finalizeSettlingEntries"]});
 Object.defineProperty(__scope,"ensureCurrentSceneEntry",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["ensureCurrentSceneEntry"]});
@@ -3752,6 +3787,7 @@ Object.defineProperty(__scope,"enforceSpacetimeSingleton",{enumerable:true,confi
 Object.defineProperty(__scope,"dedupeStrongStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/state-text.js")["dedupeStrongStateRows"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
+Object.defineProperty(__scope,"linkedTargetRoles",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["linkedTargetRoles"]});
 with(__scope){
 Object.defineProperty(exports,"preserveProtectedRows",{enumerable:true,configurable:true,get:()=>preserveProtectedRows});
 Object.defineProperty(exports,"assertCommittedMemoryState",{enumerable:true,configurable:true,get:()=>assertCommittedMemoryState});
@@ -3857,7 +3893,9 @@ function transitionStateSnapshot(input) {
     const registry = normalizeTableRegistry(input.registry);
     const diagnostics = [];
     // spacetime_current 是固定槽位，地点切换必须在通用对象身份继承把标题收回旧值之前判定。
-    const sceneBoundary = deriveSceneBoundary(input.previous, input.incoming, registry);
+    const spacetimeChange = deriveSpacetimeChange(input.previous, input.incoming, registry);
+    const sceneBoundary = deriveSceneBoundary(input.previous, input.incoming, registry, input.tableLinkRules);
+    const spacetimeLinkedRoles = linkedTargetRoles(input.tableLinkRules, registry, 'spacetime');
     const identity = canonicalizeObjectIdentities(input.previous, input.incoming, registry);
     if (identity.idRemap.size)
         diagnostics.push({
@@ -3868,10 +3906,10 @@ function transitionStateSnapshot(input) {
     const basePreserved = preserveObjectBaseLayers(input.previous, persistent, registry);
     diagnostics.push({ stage: 'protected', code: 'protected-layers-applied', detail: '人工/锁定与基础历史层已恢复' });
     let prepared = removeFocusCharacterDuplicates(basePreserved, registry);
-    if (sceneBoundary) {
+    if (spacetimeChange) {
         const spacetimeTable = tableByRole(registry, 'spacetime', false);
         const incomingCurrent = spacetimeTable
-            ? (input.incoming[spacetimeTable.key] ?? []).find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(sceneBoundary.currentTitle))
+            ? (input.incoming[spacetimeTable.key] ?? []).find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(spacetimeChange.currentTitle))
             : undefined;
         const preparedCurrent = spacetimeTable ? (prepared[spacetimeTable.key] ?? []).at(-1) : undefined;
         if (incomingCurrent && preparedCurrent) {
@@ -3881,7 +3919,9 @@ function transitionStateSnapshot(input) {
     }
     prepared = enforceObjectViewAllocation(prepared, registry);
     const spacetime = enforceSpacetimeSingleton(prepared, registry);
-    prepared = ensureCurrentSceneEntry(spacetime.snapshot, registry);
+    prepared = spacetimeLinkedRoles.has('scenes')
+        ? ensureCurrentSceneEntry(spacetime.snapshot, registry)
+        : spacetime.snapshot;
     if (spacetime.mergedRowIds.length)
         diagnostics.push({
             stage: 'special-tables', code: 'spacetime-singleton', detail: `合并 ${spacetime.mergedRowIds.length} 条旧时空行`,
@@ -6108,7 +6148,7 @@ function compactFactText(value, limit = 220, label = '事实模块') {
 }
 // 事件关闭只接受正文和事实模块共同出现的明确终局表达。单个动作完成、到达、开门、
 // 交付一件物品等原子结果都不能据此关闭整条事件线。
-const EXPLICIT_EVENT_TERMINAL_RE = /(?:事件|任务|目标|委托|调查|案件|战斗|冲突|谈判|交易|仪式|行动|计划|追捕|危机|救援|审判|比赛|旅程|会面|婚礼).{0,16}(?:已结束|已经结束|结束了|已完成|已经完成|完成了|已解决|已经解决|已关闭|已经关闭|已达成|已经达成|宣告结束|告一段落|结案|告破)|(?:任务完成|目标达成|危机解除|战斗结束|谈判结束|交易完成|仪式完成|追捕结束|调查结案|案件告破|救援完成|比赛结束|婚礼结束)|(?:此事|此案|争端|纠纷).{0,8}(?:作罢|了结|终结|不再追究)|(?:对方|双方|一方).{0,12}(?:认输|投降).{0,12}(?:不再追究|退出争端|停止争斗)/iu;
+const EXPLICIT_EVENT_TERMINAL_RE = /(?:事件|任务|目标|委托|调查|案件|战斗|冲突|谈判|交易|仪式|行动|计划|追捕|危机|救援|审判|比赛|旅程|会面|婚礼|实验|测量流程|观测流程|测试|验证|分析流程|研究阶段|项目|工作流|拍摄|场次).{0,16}(?:已结束|已经结束|结束了|已完成|已经完成|完成了|已解决|已经解决|已关闭|已经关闭|已达成|已经达成|宣告结束|告一段落|结案|告破)|(?:任务完成|目标达成|危机解除|战斗结束|谈判结束|交易完成|仪式完成|追捕结束|调查结案|案件告破|救援完成|比赛结束|婚礼结束|实验结束|实验完成|测量流程完成|观测流程结束|测试完成|验证结束|分析流程完成|研究阶段结束|项目完成|工作流结束|拍摄结束|场次结束)|(?:此事|此案|争端|纠纷).{0,8}(?:作罢|了结|终结|不再追究)|(?:对方|双方|一方).{0,12}(?:认输|投降).{0,12}(?:不再追究|退出争端|停止争斗)/iu;
 function explicitlyClosedEvent(event, sourceText) {
     if (event.modules.some((module) => module.unresolved))
         return false;
@@ -6294,7 +6334,15 @@ function projectionPatchForFact(fact, working) {
     };
 }
 function naturalChange(event, module, active, previous, activeFacts, allObjectNames) {
-    const table = naturalTable(module, active);
+    const enabledEventTable = module.eventModule ? tableByRole(active, 'events', false) : undefined;
+    // <MA_EVENT> 是所有对象变化共用的事务容器。即使玩家关闭事件视图，
+    // MA_CORE 仍需形成内部事实以维持对象事实的 event_id 一致性，但不得重新发布事件行。
+    const table = module.eventModule
+        ? (enabledEventTable ?? tableByRole(normalizeTableRegistry(), 'events', false))
+        : naturalTable(module, active);
+    if (!table)
+        throw new Error(`<${module.tag}> 无法确定对象表`);
+    const projectView = !module.eventModule || Boolean(enabledEventTable);
     const stableEventName = event.canonicalName || event.eventName;
     const objectName = module.eventModule ? stableEventName : module.objectName;
     const keywords = unique([objectName], 24, 100);
@@ -6355,7 +6403,7 @@ function naturalChange(event, module, active, previous, activeFacts, allObjectNa
         operation: sameCurrentValue || previousMatches.some((fact) => fact.factId === factId) ? 'update' : 'create',
         confidence: 'confirmed',
         supersedes_fact_id: currentHostFact && !sameCurrentValue ? currentHostFact.factId : undefined,
-        view: {
+        view: projectView ? {
             table: targetTable.key,
             rowId: existing?.id || makeId(targetTable.key),
             objectTitle: existing?.title || objectName,
@@ -6374,7 +6422,7 @@ function naturalChange(event, module, active, previous, activeFacts, allObjectNa
             baseRevisionStatement: layer.kind === 'field' && layer.key === 'baseContent' && existing && previousBase !== module.content
                 ? eventCoreText(event)
                 : undefined,
-        },
+        } : undefined,
     };
     return {
         ...fact,
@@ -6623,6 +6671,163 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metad
 
 }
 };
+__defs["domain/table-link-rules.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
+Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
+Object.defineProperty(__scope,"tableByKey",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByKey"]});
+with(__scope){
+Object.defineProperty(exports,"normalizeTableLinkRules",{enumerable:true,configurable:true,get:()=>normalizeTableLinkRules});
+Object.defineProperty(exports,"restoreDefaultTableLinkRules",{enumerable:true,configurable:true,get:()=>restoreDefaultTableLinkRules});
+Object.defineProperty(exports,"enabledTableLinkRules",{enumerable:true,configurable:true,get:()=>enabledTableLinkRules});
+Object.defineProperty(exports,"tableLinkRulesFingerprint",{enumerable:true,configurable:true,get:()=>tableLinkRulesFingerprint});
+Object.defineProperty(exports,"createTableLinkRule",{enumerable:true,configurable:true,get:()=>createTableLinkRule});
+Object.defineProperty(exports,"updateTableLinkRule",{enumerable:true,configurable:true,get:()=>updateTableLinkRule});
+Object.defineProperty(exports,"removeTableLinkRule",{enumerable:true,configurable:true,get:()=>removeTableLinkRule});
+Object.defineProperty(exports,"linkedTargetRoles",{enumerable:true,configurable:true,get:()=>linkedTargetRoles});
+Object.defineProperty(exports,"DEFAULT_TABLE_LINK_RULES",{enumerable:true,configurable:true,get:()=>DEFAULT_TABLE_LINK_RULES});
+const DEFAULT_RULE_DEFINITIONS = [
+    {
+        id: 'link_spacetime_context',
+        sourceTableKey: 'spacetime',
+        targetTableKeys: ['scenes', 'characters', 'items', 'events'],
+        enabled: true,
+        isDefault: true,
+    },
+];
+
+const DEFAULT_TABLE_LINK_RULES = Object.freeze(DEFAULT_RULE_DEFINITIONS.map((rule) => Object.freeze({
+    ...rule,
+    targetTableKeys: Object.freeze([...rule.targetTableKeys]),
+})));
+
+function normalizedRuleId(value, sourceTableKey, targetTableKeys, index) {
+    const raw = safeText(value, 80).trim().replace(/[^a-zA-Z0-9_-]/g, '');
+    return raw || `link_${hashText(`${sourceTableKey}|${targetTableKeys.join(',')}|${index}`)}`;
+}
+
+/**
+ * 联动规则只表达“来源表变化时，同轮重新检查哪些目标表”。
+ * 它不直接修改目标表，也不允许脚本或表达式进入运行链。
+ */
+function normalizeTableLinkRules(value, registryValue) {
+    const registry = normalizeTableRegistry(registryValue);
+    const tableKeys = new Set(registry.map((table) => table.key));
+    const source = Array.isArray(value) ? value : DEFAULT_TABLE_LINK_RULES;
+    const output = [];
+    const usedIds = new Set();
+    source.forEach((item, index) => {
+        const row = item && typeof item === 'object' ? item : {};
+        const sourceTableKey = safeText(row.sourceTableKey ?? row.source, 80).trim();
+        if (!tableKeys.has(sourceTableKey))
+            return;
+        const targets = Array.isArray(row.targetTableKeys)
+            ? row.targetTableKeys
+            : Array.isArray(row.targets) ? row.targets : [];
+        const targetTableKeys = [...new Set(targets
+                .map((target) => safeText(target, 80).trim())
+                .filter((target) => target && target !== sourceTableKey && tableKeys.has(target)))];
+        if (!targetTableKeys.length)
+            return;
+        let id = normalizedRuleId(row.id, sourceTableKey, targetTableKeys, index);
+        if (usedIds.has(id))
+            id = `${id}_${index + 1}`;
+        usedIds.add(id);
+        output.push({
+            id,
+            sourceTableKey,
+            targetTableKeys,
+            enabled: row.enabled !== false,
+            isDefault: Boolean(row.isDefault || DEFAULT_TABLE_LINK_RULES.some((rule) => rule.id === id)),
+        });
+    });
+    return output;
+}
+
+function restoreDefaultTableLinkRules(registryValue) {
+    return normalizeTableLinkRules(DEFAULT_TABLE_LINK_RULES.map((rule) => ({
+        ...rule,
+        targetTableKeys: [...rule.targetTableKeys],
+    })), registryValue);
+}
+
+function enabledTableLinkRules(value, registryValue) {
+    const registry = normalizeTableRegistry(registryValue);
+    const enabledTables = new Set(registry.filter((table) => table.enabled).map((table) => table.key));
+    return normalizeTableLinkRules(value, registry)
+        .filter((rule) => rule.enabled && enabledTables.has(rule.sourceTableKey))
+        .map((rule) => ({
+            ...rule,
+            targetTableKeys: rule.targetTableKeys.filter((key) => enabledTables.has(key)),
+        }))
+        .filter((rule) => rule.targetTableKeys.length);
+}
+
+function tableLinkRulesFingerprint(value, registryValue) {
+    return hashText(JSON.stringify(normalizeTableLinkRules(value, registryValue).map((rule) => ({
+        id: rule.id,
+        sourceTableKey: rule.sourceTableKey,
+        targetTableKeys: rule.targetTableKeys,
+        enabled: rule.enabled,
+    }))));
+}
+
+function createTableLinkRule(value, registryValue, sourceTableKey, targetTableKeys) {
+    const registry = normalizeTableRegistry(registryValue);
+    const next = normalizeTableLinkRules(value, registry);
+    const source = tableByKey(registry, sourceTableKey);
+    if (!source)
+        throw new Error('请选择有效的来源表头');
+    const targets = [...new Set((targetTableKeys ?? []).filter((key) => key !== sourceTableKey && tableByKey(registry, key)))];
+    if (!targets.length)
+        throw new Error('请至少选择一个需要重新检查的目标表头');
+    next.push({
+        id: `link_${hashText(`${sourceTableKey}|${targets.join(',')}|${Date.now()}|${next.length}`)}`,
+        sourceTableKey,
+        targetTableKeys: targets,
+        enabled: true,
+        isDefault: false,
+    });
+    return normalizeTableLinkRules(next, registry);
+}
+
+function updateTableLinkRule(value, registryValue, id, patch) {
+    const registry = normalizeTableRegistry(registryValue);
+    const next = normalizeTableLinkRules(value, registry).map((rule) => rule.id === id
+        ? {
+            ...rule,
+            sourceTableKey: patch.sourceTableKey ?? rule.sourceTableKey,
+            targetTableKeys: patch.targetTableKeys ?? rule.targetTableKeys,
+            enabled: patch.enabled ?? rule.enabled,
+        }
+        : rule);
+    return normalizeTableLinkRules(next, registry);
+}
+
+function removeTableLinkRule(value, registryValue, id) {
+    return normalizeTableLinkRules(value, registryValue).filter((rule) => rule.id !== id);
+}
+
+function linkedTargetRoles(value, registryValue, sourceRole) {
+    const registry = normalizeTableRegistry(registryValue);
+    const tableByKeyMap = new Map(registry.map((table) => [table.key, table]));
+    const roles = new Set();
+    for (const rule of enabledTableLinkRules(value, registry)) {
+        const source = tableByKeyMap.get(rule.sourceTableKey);
+        if (source?.role !== sourceRole)
+            continue;
+        for (const targetKey of rule.targetTableKeys) {
+            const target = tableByKeyMap.get(targetKey);
+            if (target?.role)
+                roles.add(target.role);
+        }
+    }
+    return roles;
+}
+
+}
+};
 __defs["domain/table-registry.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"deepClone",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["deepClone"]});
@@ -6630,6 +6835,8 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
 Object.defineProperty(exports,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>normalizeTableRegistry});
+Object.defineProperty(exports,"exportTableRegistryTemplate",{enumerable:true,configurable:true,get:()=>exportTableRegistryTemplate});
+Object.defineProperty(exports,"normalizeImportedTableRegistry",{enumerable:true,configurable:true,get:()=>normalizeImportedTableRegistry});
 Object.defineProperty(exports,"migrateTableRegistryToObjectViews",{enumerable:true,configurable:true,get:()=>migrateTableRegistryToObjectViews});
 Object.defineProperty(exports,"enabledTables",{enumerable:true,configurable:true,get:()=>enabledTables});
 Object.defineProperty(exports,"tableByKey",{enumerable:true,configurable:true,get:()=>tableByKey});
@@ -6750,6 +6957,9 @@ function mergeRoleFields(role, sourceFields) {
     for (const field of incoming) {
         const existingIndex = fields.findIndex((existing) => existing.key === field.key);
         if (existingIndex < 0) {
+            // BUGFIX：导入模板不得把 source/locked/constructor 等内部保留键伪装成自定义表头。
+            if (RESERVED_CUSTOM_FIELD_KEYS.has(field.key))
+                continue;
             fields.push(field);
             continue;
         }
@@ -6792,6 +7002,56 @@ function normalizeTableRegistry(value) {
         });
     });
     return output.sort((a, b) => a.order - b.order).map((table, order) => ({ ...table, order }));
+}
+/**
+ * 导出模板只包含玩家可编辑的提取方向；不暴露内部 role、required、生命周期或核心存储字段。
+ * key 仅用于导入时稳定匹配原表头，自定义字段保留 type 以避免往返后改变数据形态。
+ */
+function exportTableRegistryTemplate(value) {
+    return normalizeTableRegistry(value).map((table) => ({
+        key: table.key,
+        name: table.name,
+        purpose: table.purpose,
+        enabled: table.enabled,
+        order: table.order,
+        headers: EDITABLE_HEADER_FIELD_KEYS.map((key) => {
+            const field = table.fields.find((item) => item.key === key)
+                ?? roleFields(table.role).find((item) => item.key === key);
+            return field ? { key, label: field.label, description: field.description } : null;
+        }).filter(Boolean),
+        fields: table.fields
+            .filter((field) => !CORE_FIELD_KEYS.includes(field.key) && field.key !== 'lifecycle')
+            .map((field) => ({
+                key: field.key,
+                label: field.label,
+                description: field.description,
+                type: field.type === 'string' ? 'string' : 'string[]',
+            })),
+    }));
+}
+
+/**
+ * 模板只承载显示表头、用途、启用状态、顺序和自定义表。
+ * 默认表的内部 role 固定；导入的新表一律属于 custom，防止模板改写生命周期与事实路由。
+ */
+function normalizeImportedTableRegistry(value) {
+    const canonicalRoles = new Map(DEFAULT_TABLE_REGISTRY.map((table) => [table.key, table.role]));
+    const source = Array.isArray(value) ? value : [];
+    const sanitized = source.map((item) => {
+        const row = item && typeof item === 'object' ? item : {};
+        const key = safeText(row.key, 80).trim().replace(/[^a-zA-Z0-9_-]/g, '');
+        const canonicalRole = canonicalRoles.get(key);
+        const fields = Array.isArray(row.headers)
+            ? [...row.headers, ...(Array.isArray(row.fields) ? row.fields : [])]
+            : row.fields;
+        return {
+            ...row,
+            fields,
+            role: canonicalRole ?? 'custom',
+            isDefault: Boolean(canonicalRole),
+        };
+    });
+    return normalizeTableRegistry(sanitized);
 }
 /** rc.22 默认十表迁移为对象视图；保留玩家自定义视图和默认表上的自定义字段。 */
 function migrateTableRegistryToObjectViews(value) {
@@ -7165,20 +7425,21 @@ function migrateSnapshotTables(value, registry) {
 };
 __defs["index.js"]=function(exports,__require){
 const __scope=Object.create(null);
-Object.defineProperty(__scope,"installAppReadyHandler",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["installAppReadyHandler"]});
-Object.defineProperty(exports,"onActivate",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onActivate"]});
-Object.defineProperty(exports,"onInstall",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onInstall"]});
-Object.defineProperty(exports,"onUpdate",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onUpdate"]});
-Object.defineProperty(exports,"onEnable",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onEnable"]});
-Object.defineProperty(exports,"onDisable",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onDisable"]});
-Object.defineProperty(exports,"onClean",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onClean"]});
-Object.defineProperty(exports,"onDelete",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onDelete"]});
+Object.defineProperty(__scope,"onActivate",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onActivate"]});
+Object.defineProperty(__scope,"onInstall",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onInstall"]});
+Object.defineProperty(__scope,"onUpdate",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onUpdate"]});
+Object.defineProperty(__scope,"onEnable",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onEnable"]});
+Object.defineProperty(__scope,"onDisable",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onDisable"]});
+Object.defineProperty(__scope,"onClean",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onClean"]});
+Object.defineProperty(__scope,"onDelete",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onDelete"]});
 with(__scope){
-/**
- * 模块职责：浏览器入口，仅负责导出 SillyTavern 生命周期钩子。
- * 维护边界：不要在入口层堆叠业务逻辑，避免生命周期与流水线耦合。
- */
-installAppReadyHandler();
+Object.defineProperty(exports,"onActivate",{enumerable:true,configurable:true,get:()=>onActivate});
+Object.defineProperty(exports,"onInstall",{enumerable:true,configurable:true,get:()=>onInstall});
+Object.defineProperty(exports,"onUpdate",{enumerable:true,configurable:true,get:()=>onUpdate});
+Object.defineProperty(exports,"onEnable",{enumerable:true,configurable:true,get:()=>onEnable});
+Object.defineProperty(exports,"onDisable",{enumerable:true,configurable:true,get:()=>onDisable});
+Object.defineProperty(exports,"onClean",{enumerable:true,configurable:true,get:()=>onClean});
+Object.defineProperty(exports,"onDelete",{enumerable:true,configurable:true,get:()=>onDelete});
 
 }
 };
@@ -7374,14 +7635,13 @@ function connectionManagerStore() {
 }
 function supportedProfiles() {
     const context = getContext();
-    try {
-        const service = context.ConnectionManagerRequestService;
-        if (typeof service?.getSupportedProfiles === 'function')
-            return service.getSupportedProfiles();
+    const service = context.ConnectionManagerRequestService;
+    if (typeof service?.getSupportedProfiles === 'function') {
+        // BUGFIX: 服务明确报错（例如 Connection Manager 已禁用）时必须向上抛出；
+        // 若退回原始列表，UI 会显示实际不可调用的 Profile，测试时才出现 API 失败。
+        return service.getSupportedProfiles();
     }
-    catch {
-        // fall back to raw profile list; request call will still validate.
-    }
+    // 仅兼容尚未导出服务方法的旧版 SillyTavern。
     return connectionManagerStore()?.profiles ?? [];
 }
 function resolveProfileId(connection) {
@@ -7472,8 +7732,10 @@ async function generateWithNativeProfile(options, profileId, controller) {
             const streamResult = await service.sendRequest(profileId, messages, responseTokens(options), {
                 stream: true,
                 extractData: true,
-                includePreset: false,
-                includeInstruct: false,
+                // BUGFIX：独立 Profile 必须使用其自己的生成预设与文本补全 instruct。
+                // 强制关闭会退回当前聊天的全局采样参数，并把 Text Completion 消息降级为裸文本拼接。
+                includePreset: true,
+                includeInstruct: true,
                 signal: options.signal,
             }, { stream: true });
             return await consumeProfileStream(streamResult, label);
@@ -7697,7 +7959,14 @@ class RequestLaneScheduler {
         // 与成熟 Promise 队列一致：执行函数即使同步 throw，也必须进入任务 Promise 的失败路径，
         // 不能让 run() 直接抛出并把 lane 永久留在 active。
         void Promise.resolve()
-            .then(() => job.work())
+            .then(async () => {
+            if (job.signal.aborted)
+                throw abortError();
+            const result = await job.work();
+            if (job.signal.aborted)
+                throw abortError();
+            return result;
+        })
             .then((result) => {
             job.trace.state = 'success';
             job.resolve(result);
@@ -10961,6 +11230,7 @@ Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true
 Object.defineProperty(__scope,"migrateSnapshotTables",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["migrateSnapshotTables"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"registryFingerprint",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["registryFingerprint"]});
+Object.defineProperty(__scope,"tableLinkRulesFingerprint",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["tableLinkRulesFingerprint"]});
 Object.defineProperty(__scope,"emptySnapshot",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["emptySnapshot"]});
 Object.defineProperty(__scope,"normalizeSnapshot",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["normalizeSnapshot"]});
 Object.defineProperty(__scope,"transitionStateSnapshot",{enumerable:true,configurable:true,get:()=>__require("domain/memory-state-machine.js")["transitionStateSnapshot"]});
@@ -11294,9 +11564,11 @@ function attachLocalFactMetadata(parsedSnapshot, rawFacts, registry) {
     return parsedSnapshot;
 }
 function assertRegistryCurrent(expectedFingerprint) {
-    const current = enabledTables(normalizeTableRegistry(getSettings().tableRegistry));
-    if (registryFingerprint(current) !== expectedFingerprint) {
-        throw new RegistryChangedError('表格定义已变化，旧状态结果不再提交');
+    const settings = getSettings();
+    const current = enabledTables(normalizeTableRegistry(settings.tableRegistry));
+    const currentFingerprint = hashText(`${registryFingerprint(current)}|${tableLinkRulesFingerprint(settings.tableLinkRules, current)}`);
+    if (currentFingerprint !== expectedFingerprint) {
+        throw new RegistryChangedError('表头或联动规则已变化，旧状态结果不再提交');
     }
 }
 function splitStateSource(text, limit) {
@@ -11449,14 +11721,14 @@ async function runStateExtraction(artifact, force = false) {
     const settings = getSettings();
     const registry = normalizeTableRegistry(settings.tableRegistry);
     const active = enabledTables(registry);
-    const expectedRegistryFingerprint = registryFingerprint(active);
+    const expectedRegistryFingerprint = hashText(`${registryFingerprint(active)}|${tableLinkRulesFingerprint(settings.tableLinkRules, active)}`);
     const previous = dedupeStrongStateRows(previousSnapshot(artifact.messageIndex), registry);
     const chatState = await getChatState(artifact.chatKey);
     const activeFacts = (chatState.internalFacts ?? [])
         .filter((fact) => fact.storageClass !== 'episodic')
         .filter((fact) => fact.active || !fact.consumedBySmallSummaryId)
         .slice(-120);
-    const systemPrompt = stateSystemPrompt(registry, settings.statePrompts, settings.contentLimits);
+    const systemPrompt = stateSystemPrompt(registry, settings.statePrompts, settings.contentLimits, settings.tableLinkRules);
     const prompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry, activeFacts);
     const inputFingerprint = hashText(JSON.stringify({
         systemPrompt,
@@ -11525,6 +11797,7 @@ async function runStateExtraction(artifact, force = false) {
             internalFacts: chatState.internalFacts,
             registry,
             focusObjectId: chatState.focusObjectId,
+            tableLinkRules: settings.tableLinkRules,
         });
         const normalized = transition.snapshot;
         artifact.factPackage = normalizeFactPackage(parsed, artifact.messageKey);
@@ -12584,9 +12857,12 @@ __defs["prompts/state.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"DEFAULT_CONTENT_LIMITS",{enumerable:true,configurable:true,get:()=>__require("constants.js")["DEFAULT_CONTENT_LIMITS"]});
 Object.defineProperty(__scope,"DEFAULT_STATE_PROMPTS",{enumerable:true,configurable:true,get:()=>__require("constants.js")["DEFAULT_STATE_PROMPTS"]});
+Object.defineProperty(__scope,"CORE_FIELD_KEYS",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["CORE_FIELD_KEYS"]});
+Object.defineProperty(__scope,"EDITABLE_HEADER_FIELD_KEYS",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["EDITABLE_HEADER_FIELD_KEYS"]});
 Object.defineProperty(__scope,"DEFAULT_TABLE_REGISTRY",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["DEFAULT_TABLE_REGISTRY"]});
 Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["enabledTables"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
+Object.defineProperty(__scope,"enabledTableLinkRules",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["enabledTableLinkRules"]});
 Object.defineProperty(__scope,"stateLayerLabelForField",{enumerable:true,configurable:true,get:()=>__require("domain/state-semantics.js")["stateLayerLabelForField"]});
 Object.defineProperty(__scope,"writableStateLayers",{enumerable:true,configurable:true,get:()=>__require("domain/state-semantics.js")["writableStateLayers"]});
 with(__scope){
@@ -12610,25 +12886,13 @@ const COMMON_STATE_LAYER_LABELS = new Set([
     '当前摘要', '条目状态', '检索词', '身份定义', '现行事实', '当前状态', '关联对象', '关联事件',
 ]);
 function compactRegistryDescription(active) {
-    const defaults = normalizeTableRegistry(DEFAULT_TABLE_REGISTRY);
     return active.map((table, index) => {
-        const layers = writableStateLayers(table);
-        const defaultTable = defaults.find((item) => item.key === table.key || (table.isDefault && item.role === table.role));
-        const defaultLayers = new Map((defaultTable ? writableStateLayers(defaultTable) : []).map((layer) => [layer.label, layer]));
-        const dedicated = layers.filter((layer) => !COMMON_STATE_LAYER_LABELS.has(layer.label));
-        const overrides = defaultTable
-            ? layers.filter((layer) => COMMON_STATE_LAYER_LABELS.has(layer.label) && defaultLayers.get(layer.label)?.description !== layer.description)
-            : [];
-        const title = table.fields.find((field) => field.key === 'title');
-        const defaultTitle = defaultTable?.fields.find((field) => field.key === 'title');
-        const notes = [];
-        if (dedicated.length)
-            notes.push(`专属层：${dedicated.map((layer) => `${layer.label}：${layer.description}`).join('；')}`);
-        if (overrides.length)
-            notes.push(`语义覆盖：${overrides.map((layer) => `${layer.label}：${layer.description}`).join('；')}`);
-        if (title?.description && defaultTitle && title.description !== defaultTitle.description)
-            notes.push(`对象命名：${title.description}`);
-        return `${index + 1}. ${table.name}｜类型：${kindLabel(table)}｜用途：${table.purpose}${notes.length ? `｜${notes.join('｜')}` : ''}`;
+        const visibleFields = table.fields.filter((field) => EDITABLE_HEADER_FIELD_KEYS.includes(field.key)
+            || (!CORE_FIELD_KEYS.includes(field.key) && field.key !== 'lifecycle'));
+        const fieldText = visibleFields.length
+            ? visibleFields.map((field) => `${field.label}：${field.description}`).join('；')
+            : '使用该表用途说明判断是否记录';
+        return `${index + 1}. ${table.name}｜记录方向：${table.purpose}｜表头要求：${fieldText}`;
     }).join('\n');
 }
 function kindLabel(table) {
@@ -12675,7 +12939,34 @@ function modelVisibleRuleText(value, fallback) {
         text = text.replace(pattern, replacement);
     return text;
 }
-function stateSystemPrompt(registry, promptSettings = DEFAULT_STATE_PROMPTS, contentLimits = DEFAULT_CONTENT_LIMITS) {
+const ROLE_TRANSPORT_MODULES = {
+    events: '<MA_CORE>、<MA_EVENT_RESULT>、<MA_EVENT_STATE>',
+    characters: '<MA_CHARACTER_IDENTITY>、<MA_CHARACTER_FACT>、<MA_CHARACTER_STATE>、<MA_CHARACTER_APPEARANCE>、<MA_CHARACTER_RELATION>、<MA_CHARACTER_ABILITY>',
+    state: '<MA_CHARACTER_IDENTITY>、<MA_CHARACTER_FACT>、<MA_CHARACTER_STATE>、<MA_CHARACTER_APPEARANCE>、<MA_CHARACTER_RELATION>、<MA_CHARACTER_ABILITY>',
+    items: '<MA_ITEM_IDENTITY>、<MA_ITEM_FACT>、<MA_ITEM_STATE>',
+    scenes: '<MA_SCENE_IDENTITY>、<MA_SCENE_FACT>、<MA_SCENE_STATE>',
+    regions: '<MA_REGION_IDENTITY>、<MA_REGION_FACT>、<MA_REGION_STATE>',
+    globalChanges: '<MA_GLOBAL_IDENTITY>、<MA_GLOBAL_FACT>、<MA_GLOBAL_STATE>',
+    foundations: '<MA_FOUNDATION_IDENTITY>、<MA_FOUNDATION_FACT>、<MA_FOUNDATION_STATE>',
+    spacetime: '<MA_SPACETIME_STATE>',
+    custom: '<MA_CUSTOM>（依次四行写：表格显示名、对象名、语义层显示名、具体事实）',
+};
+function transportModuleDescription(active) {
+    return active.map((table) => `${table.name}：${ROLE_TRANSPORT_MODULES[table.role] || ROLE_TRANSPORT_MODULES.custom}`).join('\n');
+}
+function linkRuleDescription(linkRules, registry) {
+    const active = normalizeTableRegistry(registry);
+    const byKey = new Map(active.map((table) => [table.key, table]));
+    const rules = enabledTableLinkRules(linkRules, active);
+    if (!rules.length)
+        return '当前没有启用联动规则。只处理正文直接命中的表头。';
+    return rules.map((rule, index) => {
+        const source = byKey.get(rule.sourceTableKey)?.name || rule.sourceTableKey;
+        const targets = rule.targetTableKeys.map((key) => byKey.get(key)?.name || key).join('、');
+        return `${index + 1}. “${source}”发生真实变化时，同轮重新检查“${targets}”；目标没有真实变化时不要输出。`;
+    }).join('\n');
+}
+function stateSystemPrompt(registry, promptSettings = DEFAULT_STATE_PROMPTS, contentLimits = DEFAULT_CONTENT_LIMITS, linkRules = undefined) {
     const active = tables(registry);
     const names = active.map((table) => table.name).join('、');
     const admissionRules = modelVisibleRuleText(promptSettings?.admissionRules, DEFAULT_STATE_PROMPTS.admissionRules);
@@ -12686,64 +12977,25 @@ function stateSystemPrompt(registry, promptSettings = DEFAULT_STATE_PROMPTS, con
     void contentLimits;
     return `“镜渊”无观点事实书记｜自然事实模块协议
 
-职责：只提取本轮明确成立的短事实。禁止评论、解释动机、预测、补全、判断价值、决定删除或输出数据库字段。
+职责：只提取本轮明确成立的短事实。表头名称、用途说明和表头记录要求决定提取方向；内部标签只是传输通道，不代表固定领域。
+禁止评论、解释动机、预测、补全、判断价值、决定删除或输出数据库字段。
 禁止 JSON、键值表单、Markdown 代码块、思考过程和块外说明。
 
-【事件容器】
-每条独立事件使用一个 <MA_EVENT>。第一行只写稳定事件名，随后直接写事实模块。书记只记录已发生结果，不判断整条事件是否结束，也不单独生成“未决事项”；事件状态由插件根据正文和事实模块中的明确终局事实统一计算。同一事件内的模块依次连读后才构成完整事件；任何模块都不得重复复述整件事。
+【变化容器】
+每条彼此独立的变化链使用一个 <MA_EVENT>。第一行写稳定、可读的变化链名称，随后写相关事实模块。书记只记录已发生结果，不单独生成“未决事项”，不判断整条变化链是否应删除或归档。
+对象模块第一行必须是对象稳定名称，后续只写该对象自身的具体变化；同一事实不得在多个模块中重复复述。
 
-<MA_EVENT>
-潜入库房
-<MA_CORE>
-林默借助钩索登上屋顶，以烟雾弹遮挡守卫后打开库房侧门。
-</MA_CORE>
-<MA_CHARACTER_STATE>
-林默
-已经进入库房，暂未被守卫确认身份。
-</MA_CHARACTER_STATE>
-<MA_ITEM_STATE>
-烟雾弹
-已使用一枚，剩余两枚。
-</MA_ITEM_STATE>
-</MA_EVENT>
+【当前启用表与传输标签】
+${transportModuleDescription(active) || '当前没有启用表头。'}
 
-【可用自然模块】
-事件：<MA_CORE>、<MA_EVENT_RESULT>、<MA_EVENT_STATE>
-角色：<MA_CHARACTER_IDENTITY>、<MA_CHARACTER_FACT>、<MA_CHARACTER_STATE>、<MA_CHARACTER_APPEARANCE>、<MA_CHARACTER_RELATION>、<MA_CHARACTER_ABILITY>
-物品：<MA_ITEM_IDENTITY>、<MA_ITEM_FACT>、<MA_ITEM_STATE>
-场景：<MA_SCENE_IDENTITY>、<MA_SCENE_FACT>、<MA_SCENE_STATE>
-地点：<MA_REGION_IDENTITY>、<MA_REGION_FACT>、<MA_REGION_STATE>
-全局：<MA_GLOBAL_IDENTITY>、<MA_GLOBAL_FACT>、<MA_GLOBAL_STATE>
-基础设定：<MA_FOUNDATION_IDENTITY>、<MA_FOUNDATION_FACT>、<MA_FOUNDATION_STATE>
-时空：<MA_SPACETIME_STATE>
-自定义表：<MA_CUSTOM>，依次四行写“表格显示名、对象名、语义层显示名、具体事实”。
-
-对象模块第一行必须是对象稳定名称，后续只写该对象自身的具体变化。事件模块直接写事实，不写对象名。
-
-【场景与时间专用格式】
-场景发生建立、切换、阶段推进或目标变化时，必须输出 <MA_SCENE_STATE>。第一行写本次场景的可读名称，后续按正文明确事实写：当前地点、当前阶段、当前目标、阶段状态。阶段状态只允许“进行中、已完成、已中止”之一；这是场景实例状态，不代表整条故事事件结束。
-只有正文明确出现时间推进、日期变化或新的当前时间时才输出 <MA_SPACETIME_STATE>；写明“当前时间：……”以及正文明确给出的“经过时间：……”。没有明确时间变化时不得猜测。
-
-【硬限制】
-1. 每个模块只写一个对象、一个角度、一个当前结果，通常一句，复杂时最多两句。
-2. 核心事实只写一次最短动作骨架；角色不重复动作骨架，只写角色自身结果；每个道具分别写归属、数量、位置、完整性或可用性变化；场景只写局面变化。
-3. 没有独立变化的对象不输出模块。临时动作、服装描写、普通反应和背景板不建档。
-4. “身份”模块只用于正文明确改变对象本质或基础定义。临时伪装、变装、幻术写外观；短期伤势或阶段变化写状态。
-5. 基础定义被明确改变时，事件核心必须写清改变事实。例如“林默完成手术，由男性转变为女性”；身份模块只写新的当前定义“女性”。
-6. 只记录正文明确写出的已发生结果；不输出“进行中/已结束”，不生成可能性、未来风险或未决事项，不把一个动作做完等同于整条事件结束。
-7. 不写近期经历、历史事实、承接记录、生命周期、稳定 ID、事件 ID 或事实 ID；这些由插件分发、总结和结算。
-8. 不使用“字段、变化层、动作、内容”等表单词，不输出等号。
-9. 无事实变化时只输出 <MA_TURN>，正文直接写一句最短变化概括；有事件时也可以先输出一个 <MA_TURN>。
-10. 当前启用表：${names || '（无）'}。
-
-【对象建档边界】
+【固定提取边界】
 允许建档：
 ${admissionRules}
 
 默认排除：
 ${exclusionRules}
 
-对象分流：
+表头分流：
 ${routingRules}
 
 证据边界：
@@ -12752,10 +13004,24 @@ ${evidenceRules}
 更新与冲突：
 ${updateRules}
 
-【启用对象表】
-${compactRegistryDescription(active) || '当前没有启用表格；不要输出事件模块。'}
+【当前提取模板】
+${compactRegistryDescription(active) || '当前没有启用表头；不要输出对象模块。'}
 
-输出前只检查：事实是否明确、模块是否短、各模块是否互不重复、标签是否闭合。`;
+【表头联动】
+${linkRuleDescription(linkRules, registry)}
+
+【硬限制】
+1. 每个模块只写一个对象、一个角度、一个当前结果，通常一句，复杂时最多两句。
+2. 没有独立变化的对象不输出模块；重复描述、普通反应和无结果过程不算变化。
+3. “身份/定义”通道只用于正文明确改变对象本质或基础定义；短期变化写当前事实或状态。
+4. 只记录正文明确写出的已发生结果，不生成可能性、未来风险或未决建议。
+5. 不写近期经历、历史事实、承接记录、生命周期、稳定 ID、事件 ID 或事实 ID；这些由插件维护。
+6. 不使用“字段、变化层、动作、内容”等表单词，不输出等号。
+7. 无事实变化时只输出 <MA_TURN>，正文写一句最短变化概括。
+8. 当前启用表头：${names || '（无）'}。
+9. 联动只表示重新检查，不得因为来源表变化而凭空修改目标表。
+
+输出前只检查：事实是否明确、是否命中启用表头、模块是否短、各模块是否互不重复、标签是否闭合。`;
 }
 function normalizeSearchText(value) {
     return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
@@ -13035,23 +13301,39 @@ function contextRowBlocks(relevant, active) {
 }
 function stateUserPrompt(previous, playerText, assistantText, registry, internalFacts = [], repair = false) {
     const active = tables(registry);
-    const sourceText = `${playerText}\n${assistantText}`;
+    const sourceText = `${playerText}
+${assistantText}`;
     const context = compactSnapshotContext(previous, active, sourceText);
-    return `【相关既有事实｜只用于识别同一对象与事件】\n${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
+    const eventTable = active.find((table) => table.role === 'events');
+    const sceneTable = active.find((table) => table.role === 'scenes');
+    const spacetimeTable = active.find((table) => table.role === 'spacetime');
+    const chainLabel = eventTable?.name || '变化链';
+    const conditionalInstructions = [
+        `每个 <MA_EVENT> 第一行只写一条稳定、可读的“${chainLabel}”变化链名称，随后直接写命中当前表头的事实模块。`,
+        '若相关既有事实中的 event_name 与本轮仍属于同一项未完成变化链，必须逐字沿用；若旧变化链已完成而正文进入新的目标、阶段或独立处理流程，应使用新的可读名称，不得强行复用旧名。',
+        sceneTable ? `正文命中“${sceneTable.name}”的记录要求，且其建立、切换、阶段或目标发生真实变化时，输出对应状态模块并写明该表头提示词要求的当前结果。` : '',
+        spacetimeTable ? `正文命中“${spacetimeTable.name}”的记录要求并发生真实变化时，输出对应状态模块。` : '',
+    ].filter(Boolean).join('');
+    return `【相关既有事实｜只用于识别同一对象与变化链】
+${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
 
-【相关对象短目录】\n${contextDirectoryBlock(context.directory, context.directoryOmitted)}
+【相关对象短目录】
+${contextDirectoryBlock(context.directory, context.directoryOmitted)}
 
-【相关对象当前工作副本】\n${contextRowBlocks(context.relevant, active)}
+【相关对象当前工作副本】
+${contextRowBlocks(context.relevant, active)}
 
-【玩家输入】\n${playerText || '（空）'}
+【玩家输入】
+${playerText || '（空）'}
 
-【本轮正文】\n${assistantText}
+【本轮正文】
+${assistantText}
 
-只返回 <MA_TURN> 和一个或多个 <MA_EVENT> 自然模块。每个事件第一行只写事件名，随后直接写事实模块；不要给故事事件输出机械生命周期词；场景状态模块除外，必须写明阶段状态。若相关既有事实中的 event_name 与本轮仍属于同一项未完成因果目标，必须逐字沿用该 event_name；若前置流程已经完成，正文转入新的目标、阶段或独立处理流程，应使用新的可读事件名，不得为了复用旧名把“登记、候场、正式挑战”等不同已完成阶段长期绑成一条。场景建立、切换、阶段推进或目标变化时必须输出场景状态模块，并明确当前地点、当前阶段、当前目标与阶段状态。正文明确推进游戏时间时必须输出时空状态模块。对象模块第一行是对象名，后续是一到两句具体事实。不要使用等号、键值字段、JSON、内部英文键或旧协议。核心事实只写一次，各对象模块只写自身变化。${repair ? '\n上一次返回格式不完整：只补齐自然模块标签与事件名，不得改写或新增原文事实。' : ''}`;
+只返回 <MA_TURN> 和一个或多个 <MA_EVENT> 自然模块。${conditionalInstructions}对象模块第一行是对象稳定名称，后续是一到两句具体事实。不要使用等号、键值字段、JSON、内部英文键或旧协议。核心事实只写一次，各对象模块只写自身变化。${repair ? '\n上一次返回格式不完整：只补齐自然模块标签与变化链名称，不得改写或新增原文事实。' : ''}`;
 }
 function stateTextProtocolDescription(registry) {
     const active = tables(registry);
-    return `自然事实模块：<MA_TURN>、<MA_EVENT> 及角色/物品/场景等对象模块。启用对象表：${active.map((table) => table.name).join('、')}。模型只写短事实；插件负责识别对象、映射语义层、分发、稳定 ID、总结窗口与结算。`;
+    return `自然事实模块：<MA_TURN>、<MA_EVENT> 以及当前启用表头对应的对象模块。启用表头：${active.map((table) => table.name).join('、') || '（无）'}。模型只写短事实；插件负责识别对象、映射语义层、分发、稳定 ID、总结窗口与结算。`;
 }
 
 }
@@ -15308,7 +15590,6 @@ function mountOptionalTopButton() {
 __defs["ui/workspace.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"VERSION",{enumerable:true,configurable:true,get:()=>__require("constants.js")["VERSION"]});
-Object.defineProperty(__scope,"DEFAULT_STATE_PROMPTS",{enumerable:true,configurable:true,get:()=>__require("constants.js")["DEFAULT_STATE_PROMPTS"]});
 Object.defineProperty(__scope,"DEFAULT_SUMMARY_PROMPTS",{enumerable:true,configurable:true,get:()=>__require("constants.js")["DEFAULT_SUMMARY_PROMPTS"]});
 Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChat"]});
 Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
@@ -15336,6 +15617,8 @@ Object.defineProperty(__scope,"customizedFieldLabel",{enumerable:true,configurab
 Object.defineProperty(__scope,"editableHeaderText",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["editableHeaderText"]});
 Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["enabledTables"]});
 Object.defineProperty(__scope,"moveTableDefinition",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["moveTableDefinition"]});
+Object.defineProperty(__scope,"exportTableRegistryTemplate",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["exportTableRegistryTemplate"]});
+Object.defineProperty(__scope,"normalizeImportedTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeImportedTableRegistry"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"removeTableDefinition",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["removeTableDefinition"]});
 Object.defineProperty(__scope,"restoreDefaultTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["restoreDefaultTableRegistry"]});
@@ -15344,6 +15627,11 @@ Object.defineProperty(__scope,"tableByKey",{enumerable:true,configurable:true,ge
 Object.defineProperty(__scope,"updateTableDefinition",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["updateTableDefinition"]});
 Object.defineProperty(__scope,"updateTableFields",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["updateTableFields"]});
 Object.defineProperty(__scope,"updateTableHeaders",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["updateTableHeaders"]});
+Object.defineProperty(__scope,"createTableLinkRule",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["createTableLinkRule"]});
+Object.defineProperty(__scope,"normalizeTableLinkRules",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["normalizeTableLinkRules"]});
+Object.defineProperty(__scope,"removeTableLinkRule",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["removeTableLinkRule"]});
+Object.defineProperty(__scope,"restoreDefaultTableLinkRules",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["restoreDefaultTableLinkRules"]});
+Object.defineProperty(__scope,"updateTableLinkRule",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["updateTableLinkRule"]});
 Object.defineProperty(__scope,"buildRelationshipGraph",{enumerable:true,configurable:true,get:()=>__require("domain/graph.js")["buildRelationshipGraph"]});
 Object.defineProperty(__scope,"enrichRelationshipGraphWithEventProfiles",{enumerable:true,configurable:true,get:()=>__require("domain/graph.js")["enrichRelationshipGraphWithEventProfiles"]});
 Object.defineProperty(__scope,"listSupportedConnectionProfiles",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["listSupportedConnectionProfiles"]});
@@ -15456,8 +15744,8 @@ function ensureWorkspaceSubscriptions() {
 }
 const WORKSPACE_NAVIGATION = [
     { key: "overview", label: "总览", icon: "fa-gauge-high", description: "流程状态、最近任务与快捷操作" },
-    { key: "tables", label: "表格", icon: "fa-table-cells-large", description: "查看角色、场景、事件、物品与地点记忆" },
-    { key: "tableManager", label: "规则", icon: "fa-sliders", description: "状态表、小总结、大总结与表格字段规则" },
+    { key: "tables", label: "表格", icon: "fa-table-cells-large", description: "查看当前提取模板生成的记忆表格" },
+    { key: "tableManager", label: "模板", icon: "fa-sliders", description: "表头提示词、联动规则与模板导入导出" },
     { key: "summaries", label: "总结", icon: "fa-layer-group", description: "查看小总结与大总结" },
     { key: "graph", label: "记忆网络", icon: "fa-diagram-project", description: "融合事件画像与对象关系图谱" },
     { key: "audit", label: "审核", icon: "fa-shield-halved", description: "审核规则、修正策略与结果" },
@@ -15512,7 +15800,7 @@ function root() {
               <div class="ma11-brand-mark" aria-hidden="true">渊</div>
               <div class="ma11-header-brand-copy">
                 <div class="ma11-brand">镜渊</div>
-                <div class="ma11-subtitle">长期叙事记忆</div>
+                <div class="ma11-subtitle">长期结构化记忆</div>
               </div>
             </div>
             <div class="ma11-header-actions">
@@ -15784,10 +16072,17 @@ function historyRecoveryHtml(chatState, busy = false) {
         : recovery.phase === "partial" ? (recovery.error || "请重试未完成的派生阶段") : current;
     return `<section class="ma11-card ma11-history-warning"><header><b>${escapeHtml(labels[recovery.phase] || "正在恢复历史")}</b><span>${escapeHtml(progress)}</span></header><p>${escapeHtml(detail)}</p></section>`;
 }
-function promptSettingsAreStandard() {
+function extractionTemplateIsDefault() {
     const settings = getSettings();
-    return JSON.stringify(settings.statePrompts) === JSON.stringify(DEFAULT_STATE_PROMPTS)
-        && JSON.stringify(settings.summaryPrompts) === JSON.stringify(DEFAULT_SUMMARY_PROMPTS);
+    const registry = normalizeTableRegistry(settings.tableRegistry);
+    const defaultRegistry = normalizeTableRegistry(restoreDefaultTableRegistry());
+    const links = normalizeTableLinkRules(settings.tableLinkRules, registry);
+    const defaultLinks = restoreDefaultTableLinkRules(defaultRegistry);
+    return JSON.stringify(registry) === JSON.stringify(defaultRegistry)
+        && JSON.stringify(links) === JSON.stringify(defaultLinks);
+}
+function summaryPromptsAreStandard() {
+    return JSON.stringify(getSettings().summaryPrompts) === JSON.stringify(DEFAULT_SUMMARY_PROMPTS);
 }
 function setupReadinessHtml(artifact, chatState) {
     const settings = getSettings();
@@ -15797,7 +16092,7 @@ function setupReadinessHtml(artifact, chatState) {
         { ok: settings.autoState, label: "自动整理已开启", action: "settings" },
         { ok: recordingStartIndex(chatState) !== undefined, label: "游玩记录起点已设置", action: "overview" },
         { ok: enabledCount > 0, label: `${enabledCount} 个记忆视图可用`, action: "tableManager" },
-        { ok: promptSettingsAreStandard(), label: "标准规则未被改写", action: "tableManager" },
+        { ok: enabledCount > 0, label: extractionTemplateIsDefault() ? "默认提取模板已加载" : "自定义提取模板已加载", action: "tableManager" },
         { ok: Boolean(artifact?.snapshot), label: "当前聊天已有记忆快照", action: "tables" },
         { ok: settings.lorebookSync && !readHistoryWorkflow(chatState).blocked, label: "世界书同步可用", action: "sync" },
     ];
@@ -15933,7 +16228,7 @@ async function tableHtml(artifactInfo) {
     const busy = workspacePipelineBusy(artifactInfo);
     const editable = Boolean(settings.enabled && !busy && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey);
     if (!visibleTables.length) {
-        return `<section class="ma11-empty-panel"><h2>没有启用的可见表格</h2><p>内部事实层仍会保存事件线和总结消费状态。请在“表格管理”中启用或新增视图。</p><button data-ma11-action="open-table-manager">打开表格管理</button></section>`;
+        return `<section class="ma11-empty-panel"><h2>没有启用的可见表格</h2><p>内部事实层仍会保存事件线和总结消费状态。请在“提取模板”中启用或新增表头。</p><button data-ma11-action="open-table-manager">打开提取模板</button></section>`;
     }
     let active = settings.ui.activeTable;
     let activeDefinition = visibleTables.find((table) => table.key === active);
@@ -15978,7 +16273,7 @@ async function tableHtml(artifactInfo) {
       </div>
       <div class="ma11-table-tools">
         <label class="ma11-search-field"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input data-ma11-table-search value="${escapeHtml(tableSearchQuery)}" placeholder="搜索当前表格" aria-label="搜索当前表格"/><output data-ma11-table-visible-count>${rows.length} / ${rows.length}</output></label>
-        <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>＋ 添加</button><button data-ma11-action="run-state" ${settings.enabled && !busy && artifactInfo?.index === latestAssistantIndex() && (!settings.hostControl.enabled || !settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>生成/更新</button><button data-ma11-action="open-table-manager">规则与字段</button></div>
+        <div class="ma11-actions"><button data-ma11-action="add-row" ${editable ? "" : "disabled"}>＋ 添加</button><button data-ma11-action="run-state" ${settings.enabled && !busy && artifactInfo?.index === latestAssistantIndex() && (!settings.hostControl.enabled || !settings.auditEnabled || artifact?.audit?.passed) ? "" : "disabled"}>生成/更新</button><button data-ma11-action="open-table-manager">提取模板</button></div>
       </div>
     </section>
     <section class="ma11-memory-layer-map" aria-label="表格与总结写入关系">
@@ -16009,29 +16304,82 @@ async function tableHtml(artifactInfo) {
       <div class="ma11-mobile-table-cards">${mobileCards}</div>
     </section>`;
 }
-function statePromptEditorHtml(registry) {
+const HEADER_TEMPLATE_FORMAT = 'mirror-abyss-header-template';
+const HEADER_TEMPLATE_VERSION = 1;
+function headerTemplatePayload() {
     const settings = getSettings();
-    const prompt = settings.statePrompts;
-    return `<section class="ma11-card ma11-form-card ma11-rule-card" id="ma11-rule-state">
-    <header><div><b>状态表规则</b><span>决定谁能进入表格、进入哪张表、哪些事实可信以及已有记录如何更新</span></div><span class="ma11-badge ${JSON.stringify(prompt) === JSON.stringify(DEFAULT_STATE_PROMPTS) ? "success" : "working"}">${JSON.stringify(prompt) === JSON.stringify(DEFAULT_STATE_PROMPTS) ? "标准" : "已自定义"}</span></header>
-    <div class="ma11-guidance-banner"><i class="fa-solid fa-filter-circle-xmark" aria-hidden="true"></i><div><b>默认采用严格准入</b><p>姓名、服装、外貌、一句台词或短暂出场都不足以建档；真正改变因果或形成持续关系后再升级为正式对象。</p></div></div>
-    <div class="ma11-rule-grid">
-      <label>允许建档条件 <small>描述对象何时具有长期记录价值。</small><textarea rows="8" data-ma11-state-prompt="admissionRules">${escapeHtml(prompt.admissionRules)}</textarea></label>
-      <label>默认排除条件 <small>命中这些情况时默认不新建条目。</small><textarea rows="8" data-ma11-state-prompt="exclusionRules">${escapeHtml(prompt.exclusionRules)}</textarea></label>
-      <label>类型与表格分流 <small>决定人物、地点、全局变化和基础设定分别进入哪张表。</small><textarea rows="10" data-ma11-state-prompt="routingRules">${escapeHtml(prompt.routingRules)}</textarea></label>
-      <label>证据与不确定性 <small>决定传闻、冲突和身份不清时如何处理。</small><textarea rows="8" data-ma11-state-prompt="evidenceRules">${escapeHtml(prompt.evidenceRules)}</textarea></label>
-      <label>更新与冲突处理 <small>决定何时修改旧记录、关闭未决和建立关系。</small><textarea rows="8" data-ma11-state-prompt="updateRules">${escapeHtml(prompt.updateRules)}</textarea></label>
-    </div>
-    <div class="ma11-actions">
-      <button data-ma11-action="save-state-prompt">保存状态表规则</button>
-      <button data-ma11-action="restore-state-prompt">恢复标准规则</button>
-    </div>
-    <p class="ma11-help">模型只负责判断和填写自然语言内容；对象身份、稳定 ID、合并去重、历史保留和固定传输格式仍由插件维护。</p>
-  </section>`;
+    const registry = normalizeTableRegistry(settings.tableRegistry);
+    return {
+        format: HEADER_TEMPLATE_FORMAT,
+        formatVersion: HEADER_TEMPLATE_VERSION,
+        exportedBy: VERSION,
+        name: '镜渊提取模板',
+        tables: exportTableRegistryTemplate(registry),
+        links: normalizeTableLinkRules(settings.tableLinkRules, registry).map((rule) => ({
+            sourceTableKey: rule.sourceTableKey,
+            targetTableKeys: [...rule.targetTableKeys],
+            enabled: rule.enabled,
+        })),
+    };
+}
+function exportHeaderTemplate() {
+    const payload = headerTemplatePayload();
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `Mirror-Abyss-header-template-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+async function importHeaderTemplateFile(file) {
+    if (!(file instanceof File))
+        throw new Error('没有选择模板文件');
+    if (file.size > 2 * 1024 * 1024)
+        throw new Error('模板文件不能超过 2MB');
+    let payload;
+    try {
+        payload = JSON.parse(await file.text());
+    }
+    catch (error) {
+        throw new Error(`模板不是有效 JSON：${toErrorMessage(error)}`);
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+        throw new Error('模板根结构无效');
+    if (payload.format !== HEADER_TEMPLATE_FORMAT)
+        throw new Error('这不是镜渊表头模板');
+    if (Number(payload.formatVersion) !== HEADER_TEMPLATE_VERSION)
+        throw new Error(`暂不支持模板格式版本 ${payload.formatVersion}`);
+    const sourceTables = Array.isArray(payload.tables) ? payload.tables : payload.tableRegistry;
+    if (!Array.isArray(sourceTables) || !sourceTables.length)
+        throw new Error('模板中没有表头定义');
+    // BUGFIX：模板导入只接受表头层配置，不能携带内部 role 或保留字段改变事实路由。
+    const registry = normalizeImportedTableRegistry(sourceTables);
+    const sourceLinks = Array.isArray(payload.links) ? payload.links : payload.tableLinkRules;
+    const links = normalizeTableLinkRules(Array.isArray(sourceLinks) ? sourceLinks : [], registry);
+    const settings = getSettings();
+    settings.tableLinkRules = links;
+    settings.migration.tableLinksV40 = true;
+    await updateTableRegistryAndSync(registry);
+}
+function tableSelectOptions(registry, selectedKey = '') {
+    return registry.map((table) => `<option value="${escapeHtml(table.key)}" ${table.key === selectedKey ? 'selected' : ''}>${escapeHtml(table.name)}</option>`).join('');
+}
+function linkTargetChoices(registry, sourceKey, selectedKeys, attributeName) {
+    const selected = new Set(selectedKeys ?? []);
+    return registry.filter((table) => table.key !== sourceKey).map((table) => `<label class="ma11-link-target"><input type="checkbox" ${attributeName} value="${escapeHtml(table.key)}" ${selected.has(table.key) ? 'checked' : ''}/><span>${escapeHtml(table.name)}</span></label>`).join('');
+}
+function selectedLinkTargets(workspace, selector) {
+    return [...workspace.querySelectorAll(selector)]
+        .filter((input) => input instanceof HTMLInputElement && input.checked)
+        .map((input) => input.value);
 }
 function tableManagerHtml(artifactInfo) {
     const settings = getSettings();
     const registry = normalizeTableRegistry(settings.tableRegistry);
+    const linkRules = normalizeTableLinkRules(settings.tableLinkRules, registry);
     const snapshot = artifactInfo?.artifact.snapshot;
     const rows = registry.map((table, index) => {
         const fields = customFieldText(table);
@@ -16039,52 +16387,68 @@ function tableManagerHtml(artifactInfo) {
         return `<article class="ma11-table-manager-row" data-ma11-table-card="${escapeHtml(table.key)}">
       <div class="ma11-table-manager-head">
         <span class="ma11-order-number">${index + 1}</span>
-        <label class="ma11-switch"><input type="checkbox" data-ma11-table-enabled="${escapeHtml(table.key)}" ${table.enabled ? "checked" : ""}/><span>${table.enabled ? "启用" : "停用"}</span></label>
-        <span class="ma11-badge">${table.isDefault ? "默认视图" : "自定义视图"}</span>
+        <label class="ma11-switch"><input type="checkbox" data-ma11-table-enabled="${escapeHtml(table.key)}" ${table.enabled ? 'checked' : ''}/><span>${table.enabled ? '启用' : '停用'}</span></label>
+        <span class="ma11-badge">${table.isDefault ? '默认表头' : '新增表头'}</span>
         <span>${visibleStateRows(snapshot?.[table.key]).length} 行</span>
       </div>
       <div class="ma11-table-manager-fields">
-        <label>名称<input data-ma11-table-name="${escapeHtml(table.key)}" value="${escapeHtml(table.name)}" maxlength="80" /></label>
-        <label>用途说明<textarea data-ma11-table-purpose="${escapeHtml(table.key)}" rows="3" maxlength="1000">${escapeHtml(table.purpose)}</textarea></label>
-        <label class="ma11-table-header-editor">基础表头 <small>每行：表头名称｜记录要求。内部字段身份由插件维护。</small><textarea data-ma11-table-headers="${escapeHtml(table.key)}" rows="6">${escapeHtml(headers)}</textarea></label>
-        <label>附加表头 <small>每行：表头名称｜记录要求。调整行序即可调整表头顺序。</small><textarea data-ma11-table-fields="${escapeHtml(table.key)}" rows="3" placeholder="战斗风格｜记录长期稳定的战斗方式和武器偏好">${escapeHtml(fields)}</textarea></label>
+        <label>表名<input data-ma11-table-name="${escapeHtml(table.key)}" value="${escapeHtml(table.name)}" maxlength="80" /></label>
+        <label class="ma11-table-purpose-editor">提取提示词 <small>直接说明这张表应记录什么、不记录什么。</small><textarea data-ma11-table-purpose="${escapeHtml(table.key)}" rows="4" maxlength="1000">${escapeHtml(table.purpose)}</textarea></label>
+        <label class="ma11-table-header-editor">基础表头提示词 <small>每行：表头名称｜该表头提取什么。内部字段身份由插件维护。</small><textarea data-ma11-table-headers="${escapeHtml(table.key)}" rows="6">${escapeHtml(headers)}</textarea></label>
+        <label class="ma11-table-extra-editor">新增表头提示词 <small>可留空；每行：表头名称｜该表头提取什么。</small><textarea data-ma11-table-fields="${escapeHtml(table.key)}" rows="4" placeholder="战斗风格｜记录长期稳定的战斗方式和武器偏好">${escapeHtml(fields)}</textarea></label>
       </div>
       <div class="ma11-actions ma11-table-manager-actions">
-        <button data-ma11-action="save-table" data-ma11-table-key="${escapeHtml(table.key)}">保存修改</button>
-        <button data-ma11-action="move-table-up" data-ma11-table-key="${escapeHtml(table.key)}" ${index === 0 ? "disabled" : ""}>上移</button>
-        <button data-ma11-action="move-table-down" data-ma11-table-key="${escapeHtml(table.key)}" ${index === registry.length - 1 ? "disabled" : ""}>下移</button>
-        <button class="danger" data-ma11-action="delete-table" data-ma11-table-key="${escapeHtml(table.key)}">删除视图</button>
+        <button data-ma11-action="save-table" data-ma11-table-key="${escapeHtml(table.key)}">保存</button>
+        <button data-ma11-action="move-table-up" data-ma11-table-key="${escapeHtml(table.key)}" ${index === 0 ? 'disabled' : ''}>上移</button>
+        <button data-ma11-action="move-table-down" data-ma11-table-key="${escapeHtml(table.key)}" ${index === registry.length - 1 ? 'disabled' : ''}>下移</button>
+        <button class="danger" data-ma11-action="delete-table" data-ma11-table-key="${escapeHtml(table.key)}">删除</button>
       </div>
-      <p class="ma11-help">全局表格定义，适用于所有聊天。名称、用途、语义表头与字段说明会进入下一次状态提取提示词；改名不会破坏已有数据或对象身份。</p>
+      <p class="ma11-help">修改表名、提取提示词或表头提示词后，下一次状态提取会按新方向工作；已有数据不会自动重新解释。</p>
     </article>`;
-    }).join("");
-    const standard = promptSettingsAreStandard();
-    return `<section class="ma11-toolbar ma11-rules-toolbar"><div><h2>记忆规则与表格</h2><p>按“状态表 → 小总结 → 大总结 → 表格字段”的顺序配置；普通使用保留标准值即可。</p></div><div class="ma11-actions"><button data-ma11-action="restore-standard-rules">应用标准规则</button><button data-ma11-action="open-prompt-diagnostics">查看调试预览</button></div></section>
-    <section class="ma11-card ma11-standard-card ${standard ? "is-standard" : "is-custom"}">
-      <div><span class="ma11-standard-orb" aria-hidden="true"><i class="fa-solid ${standard ? "fa-check" : "fa-pen"}"></i></span><div><b>${standard ? "当前使用标准记忆规则" : "当前包含自定义规则"}</b><p>${standard ? "可直接使用；背景板 NPC、传闻、不确定身份和重复信息均采用保守写入。" : "自定义会从下一次对应任务开始生效；随时可恢复标准规则。"}</p></div></div>
-      <nav class="ma11-rule-jump" aria-label="规则页面导航"><a href="#ma11-rule-state">状态表</a><a href="#ma11-rule-small">小总结</a><a href="#ma11-rule-large">大总结</a><a href="#ma11-rule-tables">表格字段</a></nav>
+    }).join('');
+    const linkRows = linkRules.map((rule, index) => {
+        const source = tableByKey(registry, rule.sourceTableKey) || registry[0];
+        return `<article class="ma11-link-rule-row" data-ma11-link-card="${escapeHtml(rule.id)}">
+      <div class="ma11-link-rule-head">
+        <span class="ma11-order-number">${index + 1}</span>
+        <label class="ma11-switch"><input type="checkbox" data-ma11-link-enabled="${escapeHtml(rule.id)}" ${rule.enabled ? 'checked' : ''}/><span>${rule.enabled ? '启用' : '停用'}</span></label>
+        <span class="ma11-badge">${rule.isDefault ? '默认联动' : '新增联动'}</span>
+      </div>
+      <div class="ma11-link-rule-editor">
+        <label>哪个表发生变化<select data-ma11-link-source="${escapeHtml(rule.id)}">${tableSelectOptions(registry, source?.key || '')}</select></label>
+        <div class="ma11-link-target-box"><b>重新检查哪些表</b><div>${linkTargetChoices(registry, source?.key || '', rule.targetTableKeys, `data-ma11-link-target="${escapeHtml(rule.id)}"`)}</div></div>
+      </div>
+      <div class="ma11-actions ma11-table-manager-actions"><button data-ma11-action="save-link-rule" data-ma11-link-rule-id="${escapeHtml(rule.id)}">保存联动</button><button class="danger" data-ma11-action="delete-link-rule" data-ma11-link-rule-id="${escapeHtml(rule.id)}">删除联动</button></div>
+      <p class="ma11-help">联动只让目标表在同一轮重新判断；目标没有真实变化时不会写入。</p>
+    </article>`;
+    }).join('');
+    const isDefault = extractionTemplateIsDefault();
+    const summaryStandard = summaryPromptsAreStandard();
+    return `<section class="ma11-toolbar ma11-rules-toolbar"><div><h2>提取模板</h2><p>只需修改表名和对应提示词；插件内部的稳定 ID、合并、沉降、总结与世界书写入保持不变。</p></div><div class="ma11-actions"><button data-ma11-action="import-header-template">导入模板</button><button data-ma11-action="export-header-template">导出模板</button><button data-ma11-action="restore-default-template">恢复默认模板</button><button data-ma11-action="open-prompt-diagnostics">查看实际提示词</button></div><input type="file" hidden accept="application/json,.json" data-ma11-template-import /></section>
+    <section class="ma11-card ma11-standard-card ${isDefault ? 'is-standard' : 'is-custom'}">
+      <div><span class="ma11-standard-orb" aria-hidden="true"><i class="fa-solid ${isDefault ? 'fa-check' : 'fa-pen'}"></i></span><div><b>${isDefault ? '正在使用镜渊默认表头模板' : '当前表头模板已修改'}</b><p>默认模板就是此前一直使用的时空、场景、角色、物品、事件、地点、全局变化、基础设定与自定义对象，不额外内置其他用途模板。</p></div></div>
+      <nav class="ma11-rule-jump" aria-label="模板页面导航"><a href="#ma11-template-tables">表头提示词</a><a href="#ma11-template-links">联动规则</a><a href="#ma11-template-summaries">总结规则</a></nav>
     </section>
-    <section class="ma11-memory-rule-flow" aria-label="记忆规则流程">
-      <a href="#ma11-rule-state"><span>01</span><b>状态表规则</b><small>筛选对象并更新当前事实</small></a>
-      <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
-      <a href="#ma11-rule-small"><span>02</span><b>小总结规则</b><small>整理近期经历</small></a>
-      <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
-      <a href="#ma11-rule-large"><span>03</span><b>大总结规则</b><small>固化历史事实</small></a>
-      <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
-      <a href="#ma11-rule-tables"><span>04</span><b>表格字段</b><small>决定各层写到哪里</small></a>
-    </section>
-    ${statePromptEditorHtml(registry)}
-    <section class="ma11-summary-prompt-grid">${summaryPromptEditorHtml('small')}${summaryPromptEditorHtml('large')}</section>
     <section class="ma11-card ma11-form-card ma11-new-table">
-      <header><b>新增自定义表格</b><span>新增后自动进入下一次状态文本协议</span></header>
-      <label>名称<input data-ma11-new-table-name maxlength="80" placeholder="例如：组织状态" /></label>
-      <label>用途说明<textarea data-ma11-new-table-purpose rows="3" maxlength="1000" placeholder="说明只应记录什么，以及不应记录什么。"></textarea></label>
-      <label>附加表头 <small>可留空；每行：表头名称｜记录要求</small><textarea data-ma11-new-table-fields rows="3" placeholder="组织层级｜记录已经明确的组织层级"></textarea></label>
-      <div class="ma11-actions"><button data-ma11-action="create-table">新增表格</button></div>
+      <header><div><b>新增表头</b><span>新增后自动进入下一次提取提示词</span></div></header>
+      <label>表名<input data-ma11-new-table-name maxlength="80" placeholder="例如：实验条件" /></label>
+      <label>提取提示词<textarea data-ma11-new-table-purpose rows="4" maxlength="1000" placeholder="说明这张表只记录什么，以及不记录什么。"></textarea></label>
+      <label>新增表头提示词 <small>可留空；每行：表头名称｜该表头提取什么。</small><textarea data-ma11-new-table-fields rows="4" placeholder="测量结果｜记录数值、单位、条件和来源"></textarea></label>
+      <div class="ma11-actions"><button data-ma11-action="create-table">新增表头</button></div>
     </section>
-    <section class="ma11-section-heading" id="ma11-rule-tables"><div><span>04</span><div><h3>表格字段与用途</h3><p>状态表更新当前字段，小总结写入近期经历，大总结写入历史事实。</p></div></div><button data-ma11-action="restore-default-tables">恢复默认八表</button></section>
-    <section class="ma11-table-manager-list">${rows || '<div class="ma11-empty-panel">当前没有表格定义。</div>'}</section>
-    <section class="ma11-card ma11-note"><b>删除说明</b><p>删除默认表格只删除可见视图，不删除聊天级内部事实、event_id、小总结、大总结或历史重建依据。人工世界书条目也不会被镜渊操作。</p></section>`;
+    <section class="ma11-section-heading" id="ma11-template-tables"><div><span>01</span><div><h3>表头与提取提示词</h3><p>启用、关闭、新增或改写后，模型会据此改变提取方向。</p></div></div></section>
+    <section class="ma11-table-manager-list">${rows || '<div class="ma11-empty-panel">当前没有表头定义。</div>'}</section>
+    <section class="ma11-section-heading" id="ma11-template-links"><div><span>02</span><div><h3>联动规则</h3><p>来源表变化时，让指定目标表在同一轮重新检查。</p></div></div></section>
+    <section class="ma11-card ma11-form-card ma11-new-link-rule">
+      <header><div><b>新增联动</b><span>不直接修改目标表，只触发重新判断</span></div></header>
+      <label>哪个表发生变化<select data-ma11-new-link-source>${tableSelectOptions(registry, registry[0]?.key || '')}</select></label>
+      <div class="ma11-link-target-box"><b>重新检查哪些表</b><div>${linkTargetChoices(registry, registry[0]?.key || '', [], 'data-ma11-new-link-target')}</div></div>
+      <div class="ma11-actions"><button data-ma11-action="create-link-rule">新增联动</button></div>
+    </section>
+    <section class="ma11-link-rule-list">${linkRows || '<div class="ma11-empty-panel">当前没有联动规则。只有正文直接命中的表头会被检查。</div>'}</section>
+    <section class="ma11-section-heading" id="ma11-template-summaries"><div><span>03</span><div><h3>总结压缩规则</h3><p>沿用现有小总结和大总结白盒设置，不随表头模板导入导出。</p></div></div><span class="ma11-badge ${summaryStandard ? 'success' : 'working'}">${summaryStandard ? '标准' : '已修改'}</span></section>
+    <section class="ma11-summary-prompt-grid">${summaryPromptEditorHtml('small')}${summaryPromptEditorHtml('large')}</section>
+    <section class="ma11-card ma11-note"><b>模板边界</b><p>导入导出只包含表头、表头提示词、启用状态、顺序和联动规则，不包含聊天数据、世界书、总结内容、连接设置或可执行代码。</p></section>`;
 }
 function graphNodePositions(graph, preferredId) {
     const width = 1000;
@@ -16126,27 +16490,22 @@ function graphNodePositions(graph, preferredId) {
     for (const nodes of byLayer.values())
         nodes.sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || a.type.localeCompare(b.type) || a.label.localeCompare(b.label));
     const output = [{ ...preferred, x: center.x, y: center.y }];
-    const placeColumns = (nodes, leftX, rightX, top, bottom) => {
+    // BUGFIX：旧版左右列 + 底部网格会把远端节点堆到中央，并让关系线大量交叉。
+    // 按最短关系距离放到同心椭圆，保持确定性，同时给中文标签留出横向空间。
+    const placeRing = (nodes, radiusX, radiusY, phase) => {
         const filtered = nodes.filter((node) => node.id !== preferred.id);
-        const left = filtered.filter((_, index) => index % 2 === 0);
-        const right = filtered.filter((_, index) => index % 2 === 1);
-        const place = (items, x, phase) => items.forEach((node, index) => {
-            const step = (bottom - top) / Math.max(items.length, 1);
-            const y = top + step * (index + .5) + (index % 2 ? phase : -phase);
-            output.push({ ...node, x, y: Math.max(65, Math.min(height - 65, y)) });
+        filtered.forEach((node, index) => {
+            const angle = phase + (Math.PI * 2 * index) / Math.max(filtered.length, 1);
+            output.push({
+                ...node,
+                x: center.x + Math.cos(angle) * radiusX,
+                y: center.y + Math.sin(angle) * radiusY,
+            });
         });
-        place(left, leftX, 14);
-        place(right, rightX, 14);
     };
-    placeColumns(byLayer.get(1) ?? [], 320, 680, 120, 640);
-    placeColumns(byLayer.get(2) ?? [], 145, 855, 80, 680);
-    const outer = (byLayer.get(3) ?? []).filter((node) => node.id !== preferred.id);
-    outer.forEach((node, index) => {
-        const columns = 5;
-        const col = index % columns;
-        const row = Math.floor(index / columns);
-        output.push({ ...node, x: 100 + col * 200, y: 700 - row * 72 });
-    });
+    placeRing(byLayer.get(1) ?? [], 185, 145, -Math.PI / 2);
+    placeRing(byLayer.get(2) ?? [], 325, 245, -Math.PI / 2 + Math.PI / 7);
+    placeRing(byLayer.get(3) ?? [], 430, 315, -Math.PI / 2 + Math.PI / 11);
     return output;
 }
 function graphTypeLabel(type) {
@@ -16214,8 +16573,9 @@ function graphHtml(artifactInfo, profiles = [], graphOverride) {
         .map((node) => {
         const searchText = `${node.label} ${node.detail} ${node.status}`.toLocaleLowerCase();
         const matches = !graphQuery || matchingNodeIds.has(node.id);
-        const radius = Math.min(44, 31 + (degree.get(node.id) ?? 0) * 2);
-        return `<g class="ma11-graph-node ${node.type} ${graphLifecycleClass(node)} ${selected?.id === node.id ? "selected" : ""} ${graphQuery ? (matches ? "search-match" : "dimmed") : ""}" data-ma11-graph-node="${escapeHtml(node.id)}" data-ma11-graph-search-text="${escapeHtml(searchText)}" transform="translate(${node.x} ${node.y})" tabindex="0" role="button"><circle r="${radius}"></circle><text text-anchor="middle" y="4">${escapeHtml(node.label.length > 10 ? `${node.label.slice(0, 9)}…` : node.label)}</text><title>${escapeHtml(`${node.label}\n${node.detail}`)}</title></g>`;
+        const shortLabel = node.label.length > 10 ? `${node.label.slice(0, 9)}…` : node.label;
+        const labelWidth = Math.min(150, Math.max(82, 34 + Array.from(shortLabel).length * 12));
+        return `<g class="ma11-graph-node ${node.type} ${graphLifecycleClass(node)} ${selected?.id === node.id ? "selected" : ""} ${graphQuery ? (matches ? "search-match" : "dimmed") : ""}" data-ma11-graph-node="${escapeHtml(node.id)}" data-ma11-graph-search-text="${escapeHtml(searchText)}" transform="translate(${node.x} ${node.y})" tabindex="0" role="button"><rect x="${-labelWidth / 2}" y="-23" width="${labelWidth}" height="46" rx="15"></rect><text text-anchor="middle" y="4">${escapeHtml(shortLabel)}</text><title>${escapeHtml(`${node.label}\n${node.detail}`)}</title></g>`;
     })
         .join("");
     const graphWidth = Math.round(1000 * zoom);
@@ -16472,7 +16832,7 @@ function settingsHtml() {
     const tableLimitFields = enabledTables(settings.tableRegistry).map((table) => `
     <label>${escapeHtml(table.name)}单条上限 <small>发布到世界书的完整字符硬上限</small><input type="number" min="200" max="20000" step="50" data-ma11-entry-limit="${escapeHtml(table.key)}" value="${settings.contentLimits.tables[table.key] ?? 1200}" /></label>`).join("");
     return `
-    <section class="ma11-toolbar"><div><h2>设置</h2><p>普通使用只需确认自动整理和模型分配；规则细节统一放在“规则”页。</p></div><div class="ma11-actions"><button data-ma11-action="open-rule-center">打开规则中心</button><button data-ma11-tab="diagnostics">运行诊断</button></div></section>
+    <section class="ma11-toolbar"><div><h2>设置</h2><p>普通使用只需确认自动整理和模型分配；提取方向统一放在“模板”页。</p></div><div class="ma11-actions"><button data-ma11-action="open-rule-center">打开提取模板</button><button data-ma11-tab="diagnostics">运行诊断</button></div></section>
     <section class="ma11-card ma11-form-card ma11-quick-settings">
       <header><div><b>自动化与显示</b><span>推荐项已按开箱使用配置</span></div><span class="ma11-badge success">推荐</span></header>
       <div class="ma11-setting-tile-grid">
@@ -16526,7 +16886,7 @@ async function diagnosticsHtml() {
     const info = currentArtifact();
     const settings = getSettings();
     const promptMap = {
-        state: stateSystemPrompt(settings.tableRegistry, settings.statePrompts, settings.contentLimits),
+        state: stateSystemPrompt(settings.tableRegistry, settings.statePrompts, settings.contentLimits, settings.tableLinkRules),
         small: smallSummarySystemPrompt(settings.summaryPrompts.small, settings.contentLimits.smallSummary),
         large: largeSummarySystemPrompt(settings.summaryPrompts.large, settings.contentLimits.largeSummary),
         audit: `${auditSystemPrompt()}
@@ -16847,6 +17207,7 @@ async function deleteRowAction(rowId) {
 async function updateTableRegistryAndSync(registry) {
     const settings = getSettings();
     settings.tableRegistry = normalizeTableRegistry(registry);
+    settings.tableLinkRules = normalizeTableLinkRules(settings.tableLinkRules, settings.tableRegistry);
     const active = enabledTables(settings.tableRegistry);
     if (!active.some((table) => table.key === settings.ui.activeTable))
         settings.ui.activeTable = active[0]?.key || "";
@@ -16862,6 +17223,13 @@ async function updateTableRegistryAndSync(registry) {
             toast("warning", `表格设置已保存，但世界书刷新失败：${toErrorMessage(error)}`);
         }
     }
+    await renderWorkspace();
+}
+async function updateTableLinkRulesAndRender(linkRules) {
+    const settings = getSettings();
+    settings.tableLinkRules = normalizeTableLinkRules(linkRules, settings.tableRegistry);
+    settings.migration.tableLinksV40 = true;
+    saveSettings();
     await renderWorkspace();
 }
 function valueFromWorkspace(workspace, selector) {
@@ -17129,36 +17497,48 @@ function bindWorkspace(workspace) {
                     await renderWorkspace();
                 }
             }
-            if (action === "save-state-prompt" || action === "restore-state-prompt") {
-                const settings = getSettings();
-                if (action === "restore-state-prompt") {
-                    settings.statePrompts = structuredClone(DEFAULT_STATE_PROMPTS);
-                    saveSettings();
-                    toast("success", "事实提取规则已恢复标准值");
-                    await renderWorkspace();
-                }
-                else {
-                    const admissionRules = safeText(workspace.querySelector('[data-ma11-state-prompt="admissionRules"]')?.value, 8000).trim();
-                    const exclusionRules = safeText(workspace.querySelector('[data-ma11-state-prompt="exclusionRules"]')?.value, 8000).trim();
-                    const routingRules = safeText(workspace.querySelector('[data-ma11-state-prompt="routingRules"]')?.value, 8000).trim();
-                    const evidenceRules = safeText(workspace.querySelector('[data-ma11-state-prompt="evidenceRules"]')?.value, 8000).trim();
-                    const updateRules = safeText(workspace.querySelector('[data-ma11-state-prompt="updateRules"]')?.value, 8000).trim();
-                    if (!admissionRules || !exclusionRules || !routingRules || !evidenceRules || !updateRules)
-                        throw new Error("五个事实提取规则区都不能为空");
-                    settings.statePrompts = { admissionRules, exclusionRules, routingRules, evidenceRules, updateRules };
-                    saveSettings();
-                    toast("success", "事实提取规则已保存，将从下一次状态提取开始生效");
-                    await renderWorkspace();
-                }
-            }
             if (action === "restore-standard-rules") {
                 const settings = getSettings();
-                settings.statePrompts = structuredClone(DEFAULT_STATE_PROMPTS);
                 settings.summaryPrompts = structuredClone(DEFAULT_SUMMARY_PROMPTS);
                 saveSettings();
-                toast("success", "已应用标准记忆规则");
-                announceWorkspace(workspace, "标准记忆规则已应用");
+                toast("success", "总结压缩规则已恢复默认");
                 await renderWorkspace();
+            }
+            if (action === "import-header-template") {
+                workspace.querySelector("[data-ma11-template-import]")?.click();
+            }
+            if (action === "export-header-template") {
+                exportHeaderTemplate();
+                toast("success", "表头模板已导出");
+            }
+            if (action === "restore-default-template") {
+                if (window.confirm("恢复默认模板会替换当前表头与联动规则；已有聊天事实和总结不会删除。是否继续？")) {
+                    const settings = getSettings();
+                    const registry = restoreDefaultTableRegistry();
+                    settings.tableLinkRules = restoreDefaultTableLinkRules(registry);
+                    await updateTableRegistryAndSync(registry);
+                    toast("success", "已恢复镜渊默认表头模板");
+                }
+            }
+            const linkRuleId = actionButton?.dataset.ma11LinkRuleId || "";
+            if (action === "create-link-rule") {
+                const source = workspace.querySelector("[data-ma11-new-link-source]")?.value || "";
+                const targets = selectedLinkTargets(workspace, "[data-ma11-new-link-target]");
+                await updateTableLinkRulesAndRender(createTableLinkRule(getSettings().tableLinkRules, getSettings().tableRegistry, source, targets));
+                toast("success", "联动规则已新增");
+            }
+            if (action === "save-link-rule" && linkRuleId) {
+                const source = workspace.querySelector(`[data-ma11-link-source="${linkRuleId}"]`)?.value || "";
+                const targets = selectedLinkTargets(workspace, `[data-ma11-link-target="${linkRuleId}"]`);
+                const enabled = Boolean(workspace.querySelector(`[data-ma11-link-enabled="${linkRuleId}"]`)?.checked);
+                await updateTableLinkRulesAndRender(updateTableLinkRule(getSettings().tableLinkRules, getSettings().tableRegistry, linkRuleId, { sourceTableKey: source, targetTableKeys: targets, enabled }));
+                toast("success", "联动规则已保存");
+            }
+            if (action === "delete-link-rule" && linkRuleId) {
+                if (window.confirm("确定删除这条联动规则吗？")) {
+                    await updateTableLinkRulesAndRender(removeTableLinkRule(getSettings().tableLinkRules, getSettings().tableRegistry, linkRuleId));
+                    toast("success", "联动规则已删除");
+                }
             }
             const tableDefinitionKey = actionButton?.dataset.ma11TableKey || "";
             if (action === "create-table") {
@@ -17168,7 +17548,7 @@ function bindWorkspace(workspace) {
                 if (!name)
                     throw new Error("请填写表格名称");
                 await updateTableRegistryAndSync(createCustomTable(getSettings().tableRegistry, name, purpose, fields));
-                toast("success", "自定义表格已新增，将从下一次状态提取开始生效");
+                toast("success", "表头已新增，将从下一次状态提取开始生效");
             }
             if (action === "save-table" && tableDefinitionKey) {
                 const name = valueFromWorkspace(workspace, `[data-ma11-table-name="${tableDefinitionKey}"]`);
@@ -17181,7 +17561,7 @@ function bindWorkspace(workspace) {
                 registry = updateTableHeaders(registry, tableDefinitionKey, headers);
                 registry = updateTableFields(registry, tableDefinitionKey, fields);
                 await updateTableRegistryAndSync(registry);
-                toast("success", "表格定义已更新，将从下一次状态提取开始生效");
+                toast("success", "表头提示词已更新，将从下一次状态提取开始生效");
             }
             if (action === "move-table-up" && tableDefinitionKey)
                 await updateTableRegistryAndSync(moveTableDefinition(getSettings().tableRegistry, tableDefinitionKey, -1));
@@ -17190,16 +17570,10 @@ function bindWorkspace(workspace) {
             if (action === "delete-table" && tableDefinitionKey) {
                 const definition = tableByKey(getSettings().tableRegistry, tableDefinitionKey);
                 const warning = definition?.isDefault
-                    ? `确定删除默认视图“${definition.name}”吗？只会删除可见视图，不会删除内部事实、事件线、小总结、大总结或历史重建数据。`
-                    : `确定删除自定义视图“${definition?.name || tableDefinitionKey}”吗？内部事实和总结不会删除。`;
+                    ? `确定删除默认表头“${definition.name}”吗？已有内部事实、事件线、小总结和大总结不会删除。`
+                    : `确定删除新增表头“${definition?.name || tableDefinitionKey}”吗？内部事实和总结不会删除。`;
                 if (window.confirm(warning))
                     await updateTableRegistryAndSync(removeTableDefinition(getSettings().tableRegistry, tableDefinitionKey));
-            }
-            if (action === "restore-default-tables") {
-                if (window.confirm("恢复默认八表会替换当前表格注册表；自定义视图将退出，但内部事实、总结和人工世界书条目不会删除。是否继续？")) {
-                    await updateTableRegistryAndSync(restoreDefaultTableRegistry());
-                    toast("success", "已恢复默认八表");
-                }
             }
             if (action === "set-focus" || action === "clear-focus") {
                 const rowId = actionButton?.dataset.ma11FocusRow || "";
@@ -17355,6 +17729,31 @@ function bindWorkspace(workspace) {
     });
     workspace.addEventListener("change", (event) => {
         const target = event.target;
+        if (target instanceof HTMLInputElement && target.dataset.ma11TemplateImport !== undefined) {
+            const file = target.files?.[0];
+            target.value = "";
+            if (file) {
+                void importHeaderTemplateFile(file)
+                    .then(() => toast("success", "表头模板已导入，将从下一次状态提取开始生效"))
+                    .catch((error) => toast("error", toErrorMessage(error)));
+            }
+            return;
+        }
+        if (target instanceof HTMLSelectElement && target.dataset.ma11LinkSource !== undefined) {
+            const id = target.dataset.ma11LinkSource;
+            const card = target.closest("[data-ma11-link-card]");
+            const box = card?.querySelector(".ma11-link-target-box > div");
+            const selected = selectedLinkTargets(workspace, `[data-ma11-link-target="${id}"]`);
+            if (box)
+                box.innerHTML = linkTargetChoices(normalizeTableRegistry(getSettings().tableRegistry), target.value, selected, `data-ma11-link-target="${escapeHtml(id)}"`);
+        }
+        if (target instanceof HTMLSelectElement && target.dataset.ma11NewLinkSource !== undefined) {
+            const card = target.closest(".ma11-new-link-rule");
+            const box = card?.querySelector(".ma11-link-target-box > div");
+            const selected = selectedLinkTargets(workspace, "[data-ma11-new-link-target]");
+            if (box)
+                box.innerHTML = linkTargetChoices(normalizeTableRegistry(getSettings().tableRegistry), target.value, selected, 'data-ma11-new-link-target');
+        }
         if (target instanceof HTMLSelectElement && target.name === "targetTableKey") {
             const form = target.closest("#ma11-row-editor");
             if (form)

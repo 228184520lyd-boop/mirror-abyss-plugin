@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.4.0-alpha.4",
+  "version": "1.4.0-alpha.6",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "Runtime V2 单入口稳定版：Connection Profile 改用流式传输，修复 HTML 错误页被当作 JSON 解析"
+  "description": "表头提示词通用化稳定性修复：设置恢复、联动关闭、模板导入导出与任务取消边界"
 }
