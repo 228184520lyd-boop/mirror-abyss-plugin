@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.16';
+const VERSION = '1.4.0-alpha.17';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -7954,7 +7954,9 @@ Object.defineProperty(exports,"requestTraceReport",{enumerable:true,configurable
  * 只读诊断使用独立且同样受限的诊断通道，不参与数据提交。
  */
 const TASK_RESPONSE_TOKENS = {
-    audit: 1800,
+    // 推理型模型的思考 token 与最终答案共用输出预算。1800 在长正文审核时
+    // 可能只够生成 reasoning，尚未来得及输出 <MA_AUDIT> 就被截断。
+    audit: 4096,
     revision: 4096,
     state: 4096,
     smallSummary: 2400,
@@ -8027,6 +8029,15 @@ function generationText(result) {
         if (text)
             return text;
     }
+    // 兼容部分 SillyTavern 分支、旧版 Connection Manager 及代理包装层。
+    // 官方流会返回 { text: 累计文本 }，但兼容实现可能直接透传 data/response/payload。
+    for (const nested of [result.data, result.response, result.payload]) {
+        if (!nested || nested === result)
+            continue;
+        const text = generationText(nested);
+        if (text)
+            return text;
+    }
     const messageContent = result?.message?.content ?? result?.choices?.[0]?.message?.content;
     if (Array.isArray(messageContent)) {
         const text = textFromContentParts(messageContent);
@@ -8040,8 +8051,12 @@ function generationText(result) {
     }
     for (const value of [
         result?.choices?.[0]?.text,
+        result?.choices?.[0]?.delta?.content,
+        result?.choices?.[0]?.delta?.text,
         result?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments,
         result?.choices?.[0]?.message?.function_call?.arguments,
+        result?.generated_text,
+        result?.completion,
     ]) {
         const text = textFromValue(value);
         if (text)
@@ -8072,6 +8087,72 @@ function generationText(result) {
         'candidates', 'error', 'refusal', 'status', 'incomplete_details', 'promptFeedback',
     ].some((key) => key in result);
     return hasEnvelope ? '' : textFromValue(result);
+}
+function generationReasoningLength(result) {
+    if (!result || typeof result !== 'object')
+        return 0;
+    const candidates = [
+        result.reasoning,
+        result.reasoning_content,
+        result?.state?.reasoning,
+        result?.message?.reasoning,
+        result?.message?.reasoning_content,
+        result?.choices?.[0]?.message?.reasoning,
+        result?.choices?.[0]?.message?.reasoning_content,
+        result?.choices?.[0]?.delta?.reasoning,
+        result?.choices?.[0]?.delta?.reasoning_content,
+    ];
+    return candidates.reduce((max, value) => typeof value === 'string' ? Math.max(max, value.length) : max, 0);
+}
+function generationStreamChunk(result) {
+    if (typeof result === 'string')
+        return { text: result, cumulative: false };
+    if (!result || typeof result !== 'object')
+        return { text: '', cumulative: false };
+    // 流片段不能逐片 trim，否则位于片段边界的换行和空格会被吞掉，
+    // 固定文本字段可能因此粘连成 result=passreason=...。
+    // SillyTavern 官方 StreamResponse.text 是累计文本；字符串和 OpenAI delta 是增量文本。
+    for (const value of [result.text, result.output_text]) {
+        if (typeof value === 'string' && value.length)
+            return { text: value, cumulative: true };
+    }
+    for (const value of [result.content, result.value]) {
+        if (typeof value === 'string' && value.length)
+            return { text: value, cumulative: false };
+    }
+    for (const value of [
+        result?.choices?.[0]?.delta?.content,
+        result?.choices?.[0]?.delta?.text,
+        result?.choices?.[0]?.text,
+    ]) {
+        if (typeof value === 'string' && value.length)
+            return { text: value, cumulative: false };
+    }
+    for (const nested of [result.data, result.response, result.payload]) {
+        if (!nested || nested === result)
+            continue;
+        const chunk = generationStreamChunk(nested);
+        if (chunk.text)
+            return chunk;
+    }
+    return { text: generationText(result), cumulative: true };
+}
+function mergeStreamText(current, incoming, cumulative) {
+    const previous = safeText(current, 500000);
+    const next = safeText(incoming, 500000);
+    if (!next)
+        return previous;
+    if (!previous)
+        return next;
+    if (cumulative) {
+        if (next === previous || next.startsWith(previous))
+            return next;
+        // 某些实现会迟到重放一个较短的旧累计帧。
+        if (previous.startsWith(next))
+            return previous;
+    }
+    // 增量片段必须原样追加。不能做内容重叠去重，否则连续相同 token 会丢字。
+    return `${previous}${next}`;
 }
 function generationFailureDetail(result) {
     if (!result || typeof result !== 'object')
@@ -8196,13 +8277,25 @@ async function consumeProfileStream(streamResult, label) {
     if (!iterable || typeof iterable[Symbol.asyncIterator] !== 'function')
         throw new Error(`${label}没有返回可读取的流`);
     let latestText = '';
+    let chunkCount = 0;
+    let maxReasoningLength = 0;
     for await (const chunk of iterable) {
-        const chunkText = generationText(chunk);
-        if (chunkText)
-            latestText = chunkText;
+        chunkCount += 1;
+        maxReasoningLength = Math.max(maxReasoningLength, generationReasoningLength(chunk));
+        const streamChunk = generationStreamChunk(chunk);
+        if (streamChunk.text) {
+            latestText = mergeStreamText(latestText, streamChunk.text, streamChunk.cumulative);
+        }
     }
-    if (!latestText)
+    if (!latestText) {
+        if (maxReasoningLength > 0) {
+            throw new Error(`${label}只返回了推理内容（约 ${maxReasoningLength} 字），没有生成最终文本。通常是推理型模型在输出上限内未结束思考；请提高输出预算或关闭该 Profile 的深度思考。`);
+        }
+        if (chunkCount > 0) {
+            throw new Error(`${label}收到 ${chunkCount} 个流片段，但没有识别到正文文本。请导出诊断并检查站点 Connection Manager 的流格式。`);
+        }
         throw emptyGenerationError(label, null);
+    }
     return latestText;
 }
 async function generateWithNativeProfile(options, profileId, controller) {
