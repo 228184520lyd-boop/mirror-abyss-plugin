@@ -326,7 +326,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.20';
+const VERSION = '1.4.0-alpha.21';
 const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -434,7 +434,7 @@ const DEFAULT_SUMMARY_PROMPTS = {
 };
 const DEFAULT_SETTINGS = {
     enabled: true,
-    hostControl: { enabled: true, vector: true, recursion: true },
+    hostControl: { enabled: true, vector: false, recursion: true },
     autoState: true,
     showMessagePanel: true,
     showTopButton: true,
@@ -473,7 +473,7 @@ const DEFAULT_SETTINGS = {
         largeSummary: { mode: 'current', profileId: '', profile: '' },
     },
     ui: { activeTab: 'overview', activeTable: 'spacetime', graphScope: 'world', graphZoom: 1, memoryView: 'combined' },
-    migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false, tableLinksV40: false, headerTemplateV40: false },
+    migration: { legacyChecked: false, dynamicTablesV23: false, objectViewsV26: false, sceneTableV33: false, entryRoutingV33: false, stateProtocolV37: false, hostControlV39: false, naturalModulesV39: false, tableLinksV40: false, headerTemplateV40: false, hostVectorSafetyV41: false },
 };
 
 }
@@ -653,12 +653,13 @@ function getSettings() {
     context.extensionSettings ||= {};
     const legacy = context.extensionSettings[LEGACY_MODULE_NAME];
     const current = context.extensionSettings[MODULE_NAME];
+    const upgradingManagedVector = Boolean(current?.migration?.hostControlV39 && current?.hostControl?.vector !== false);
     const migrated = current ?? migrateLegacySettings(legacy);
     context.extensionSettings[MODULE_NAME] = mergeDefaults(DEFAULT_SETTINGS, migrated);
     const settings = context.extensionSettings[MODULE_NAME];
     settings.hostControl ||= structuredClone(DEFAULT_SETTINGS.hostControl);
     settings.hostControl.enabled = settings.hostControl.enabled !== false;
-    settings.hostControl.vector = settings.hostControl.vector !== false;
+    settings.hostControl.vector = settings.hostControl.vector === true;
     settings.hostControl.recursion = settings.hostControl.recursion !== false;
     if (String(settings.lorebookLayout) === 'compact')
         settings.lorebookLayout = 'semantic';
@@ -717,12 +718,31 @@ function getSettings() {
         settings.migration.memoryNetworkV38 = true;
     }
     if (!settings.migration.hostControlV39) {
-        settings.hostControl = { enabled: true, vector: true, recursion: true };
+        settings.hostControl = { enabled: true, vector: false, recursion: true };
         settings.migration.hostControlV39 = true;
     }
     settings.migration.naturalModulesV39 ??= false;
     settings.migration.tableLinksV40 ??= false;
     settings.migration.headerTemplateV40 ??= false;
+    settings.migration.hostVectorSafetyV41 ??= false;
+    if (!settings.migration.hostVectorSafetyV41) {
+        // alpha.20 曾在没有能力探测的情况下主动开启 ST 的世界书向量拦截器。
+        // 升级时撤销这一危险默认；之后只允许使用玩家已经在 Vector Storage 中手动启用的能力。
+        settings.hostControl.vector = false;
+        const vectorSettings = context.extensionSettings?.vectors;
+        if (upgradingManagedVector && vectorSettings && typeof vectorSettings === 'object' && vectorSettings.enabled_world_info === true) {
+            vectorSettings.enabled_world_info = false;
+            const checkbox = globalThis.document?.querySelector?.('#vectors_enabled_world_info');
+            if (checkbox) {
+                checkbox.checked = false;
+                const EventCtor = globalThis.Event;
+                if (typeof EventCtor === 'function')
+                    checkbox.dispatchEvent(new EventCtor('input', { bubbles: true }));
+            }
+        }
+        settings.migration.hostVectorSafetyV41 = true;
+        context.saveSettingsDebounced?.();
+    }
     settings.migration.objectViewsV26 ??= false;
     settings.migration.sceneTableV33 ??= false;
     settings.migration.entryRoutingV33 ??= false;
@@ -825,7 +845,7 @@ function migrateLegacySettings(legacy) {
         return undefined;
     return {
         enabled: legacy.enabled ?? true,
-        hostControl: { enabled: true, vector: true, recursion: true },
+        hostControl: { enabled: true, vector: false, recursion: true },
         autoState: legacy.autoState ?? true,
         showMessagePanel: legacy.showMessagePanels ?? true,
         showTopButton: legacy.showTopButton ?? true,
@@ -10673,8 +10693,32 @@ function summaryEventKey(item) {
 }
 
 /**
- * 只开启镜渊条目真正依赖的 ST 全局能力；关闭镜渊能力时不反向关闭全局开关，
- * 避免破坏其他世界书。条目自身的 vectorized / recursion flags 仍是最终边界。
+ * 递归能力仍可按镜渊条目需要启用；向量能力只回读，不再改写 ST Vector Storage 全局开关。
+ * 条目自身的 vectorized / recursion flags 仍是最终边界。
+ */
+function hostVectorWorldInfoStatus() {
+    try {
+        const context = getContext();
+        const settings = context.extensionSettings?.vectors;
+        if (!settings || typeof settings !== 'object')
+            return { available: false, enabled: false, error: 'ST Vector Storage 尚未初始化' };
+        return {
+            available: true,
+            enabled: settings.enabled_world_info === true,
+            source: String(settings.source || ''),
+            scoreThreshold: Number.isFinite(Number(settings.score_threshold)) ? Number(settings.score_threshold) : undefined,
+            maxEntries: Number.isFinite(Number(settings.max_entries)) ? Number(settings.max_entries) : undefined,
+            enabledForAll: settings.enabled_for_all === true,
+        };
+    }
+    catch (error) {
+        return { available: false, enabled: false, error: toErrorMessage(error) };
+    }
+}
+
+/**
+ * 镜渊只回读 ST 能力，不再主动开启 Vector Storage 生成拦截器。
+ * 世界书向量未由玩家在 ST 中启用时，编译器会把镜渊条目降级为关键词/递归召回。
  */
 async function synchronizeHostRecallSettings(wi, desired) {
     const documents = [...desired.values()];
@@ -10687,11 +10731,12 @@ async function synchronizeHostRecallSettings(wi, desired) {
         const kind = document.disabled ? 'disabled' : (document.activationClass ?? document.recallMode ?? 'trigger');
         classificationCounts[kind] = (classificationCounts[kind] ?? 0) + 1;
     }
+    const vectorStatus = hostVectorWorldInfoStatus();
     const result = {
         checkedAt: new Date().toISOString(),
         classifications: classificationCounts,
         recursion: { requested: recursionRequested, available: false, enabled: false, changed: false },
-        vector: { requested: vectorRequested, available: false, enabled: false, changed: false },
+        vector: { requested: vectorRequested, changed: false, ...vectorStatus },
     };
 
     if (recursionRequested && typeof wi.getWorldInfoSettings === 'function' && typeof wi.updateWorldInfoSettings === 'function') {
@@ -10713,48 +10758,8 @@ async function synchronizeHostRecallSettings(wi, desired) {
         result.recursion.error = '当前 SillyTavern 未暴露世界书递归设置接口';
     }
 
-    if (vectorRequested) {
-        try {
-            const context = getContext();
-            const vectorSettings = context.extensionSettings?.vectors;
-            if (vectorSettings && typeof vectorSettings === 'object') {
-                result.vector.available = true;
-                result.vector.enabled = vectorSettings.enabled_world_info === true;
-                result.vector.source = String(vectorSettings.source || '');
-                result.vector.scoreThreshold = Number.isFinite(Number(vectorSettings.score_threshold))
-                    ? Number(vectorSettings.score_threshold)
-                    : undefined;
-                result.vector.maxEntries = Number.isFinite(Number(vectorSettings.max_entries))
-                    ? Number(vectorSettings.max_entries)
-                    : undefined;
-                result.vector.enabledForAll = vectorSettings.enabled_for_all === true;
-                if (!result.vector.enabled) {
-                    const checkbox = globalThis.document?.querySelector?.('#vectors_enabled_world_info');
-                    if (checkbox) {
-                        checkbox.checked = true;
-                        const EventCtor = globalThis.Event;
-                        if (typeof EventCtor === 'function') {
-                            checkbox.dispatchEvent(new EventCtor('input', { bubbles: true }));
-                            result.vector.liveApplied = true;
-                        }
-                    }
-                    // DOM 不可用时至少持久化设置；Vector Storage 会在下次初始化时读取。
-                    vectorSettings.enabled_world_info = true;
-                    result.vector.enabled = true;
-                    result.vector.changed = true;
-                    result.vector.reloadRequired = result.vector.liveApplied !== true;
-                    context.saveSettingsDebounced?.();
-                }
-            }
-            else {
-                result.vector.error = 'ST Vector Storage 尚未初始化，条目仍保留关键词召回';
-            }
-        }
-        catch (error) {
-            result.vector.error = toErrorMessage(error);
-        }
-    }
-
+    if (vectorRequested && !result.vector.enabled)
+        result.vector.error = result.vector.error || 'ST 世界书向量未手动启用；镜渊已回退关键词召回';
     return result;
 }
 
@@ -10764,7 +10769,7 @@ async function desiredSpecs(artifact, committedState) {
     const state = committedState ?? await getChatState(artifact.chatKey);
     const documents = buildLorebookDocuments(artifact.snapshot, state.smallSummaries, state.largeSummaries, {
         layout: settings.lorebookLayout,
-        vectorize: control.vector && settings.vectorizeRows,
+        vectorize: control.vector && settings.vectorizeRows && hostVectorWorldInfoStatus().enabled,
         recursion: control.recursion,
         latestContinuityConstant: settings.latestContinuityConstant,
         registry: settings.tableRegistry,
@@ -19132,12 +19137,11 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"latestAssistantIndex",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["latestAssistantIndex"]});
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
 Object.defineProperty(__scope,"escapeHtml",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["escapeHtml"]});
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
-Object.defineProperty(__scope,"forceSummary",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["forceSummary"]});
 Object.defineProperty(__scope,"getArtifactAt",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["getArtifactAt"]});
 Object.defineProperty(__scope,"latestSnapshotArtifact",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["latestSnapshotArtifact"]});
 Object.defineProperty(__scope,"processMessage",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["processMessage"]});
-Object.defineProperty(__scope,"retryStage",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["retryStage"]});
 Object.defineProperty(__scope,"subscribePipeline",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["subscribePipeline"]});
 Object.defineProperty(__scope,"openWorkspace",{enumerable:true,configurable:true,get:()=>__require("ui/workspace.js")["openWorkspace"]});
 Object.defineProperty(__scope,"registerMessagePanelRenderer",{enumerable:true,configurable:true,get:()=>__require("ui/workspace.js")["registerMessagePanelRenderer"]});
@@ -19147,99 +19151,82 @@ Object.defineProperty(__scope,"artifactIntentProjection",{enumerable:true,config
 Object.defineProperty(__scope,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["subscribeArtifactStageChanges"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
 with(__scope){
-Object.defineProperty(exports,"messageStageAvailability",{enumerable:true,configurable:true,get:()=>messageStageAvailability});
+Object.defineProperty(exports,"primaryPanelAction",{enumerable:true,configurable:true,get:()=>primaryPanelAction});
 Object.defineProperty(exports,"panelHtml",{enumerable:true,configurable:true,get:()=>panelHtml});
 Object.defineProperty(exports,"renderMessagePanel",{enumerable:true,configurable:true,get:()=>renderMessagePanel});
 Object.defineProperty(exports,"renderAllMessagePanels",{enumerable:true,configurable:true,get:()=>renderAllMessagePanels});
 Object.defineProperty(exports,"installMessagePanelHandlers",{enumerable:true,configurable:true,get:()=>installMessagePanelHandlers});
 /**
- * 模块职责：渲染每条角色消息下方的阶段状态与操作入口。
- * 维护边界：UI 只展示 artifact 状态；所有阶段按钮必须调用 pipeline 公开入口。
+ * 模块职责：渲染每条角色消息下方的单一流程状态与主操作。
+ * 维护边界：正文面板不再堆叠分阶段按钮；排错工具统一进入工作区诊断页。
  */
 function taskErrorTone(error) {
     return error instanceof Error && error.name === 'TaskBlockedError' ? 'warning' : 'error';
 }
 function stageLabel(stage) {
-    const map = {
-        idle: '等待', queued: '排队', running: '处理中', success: '成功', failed: '失败', cancelled: '已取消', skipped: '跳过', blocked: '阻断',
-    };
+    const map = { idle: '等待', queued: '排队', running: '处理中', success: '完成', failed: '失败', cancelled: '已取消', skipped: '跳过', blocked: '需处理' };
     return map[stage?.status] || '等待';
 }
 function tone(stage) {
-    if (stage?.status === 'success' || stage?.status === 'skipped')
-        return 'success';
-    if (stage?.status === 'failed' || stage?.status === 'blocked')
-        return 'danger';
-    if (stage?.status === 'running' || stage?.status === 'queued')
-        return 'working';
+    if (stage?.status === 'success' || stage?.status === 'skipped') return 'success';
+    if (stage?.status === 'failed' || stage?.status === 'blocked') return 'danger';
+    if (stage?.status === 'running' || stage?.status === 'queued') return 'working';
     return 'neutral';
 }
 function intentProjection(artifact) {
     return artifactIntentProjection(artifact, taskQueue.list());
 }
-function effectiveStageBusy(artifact, stage) {
-    return ['queued', 'running'].includes(intentProjection(artifact)?.steps?.[stage]?.status);
-}
 function findMessageElement(index) {
     return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
 }
-/** 按钮始终渲染；这里只决定能否点击，避免失败前完全找不到对应操作。 */
-function messageStageAvailability(index, artifact) {
-    const settings = getSettings();
-    const latestText = index === latestAssistantIndex();
-    const latestSnapshot = index === latestSnapshotArtifact()?.index;
-    const projection = intentProjection(artifact);
-    const notBusy = (stage) => !['queued', 'running'].includes(projection?.steps?.[stage]?.status);
-    return {
-        audit: Boolean(settings.enabled && settings.hostControl.enabled && latestText && settings.auditEnabled && settings.auditPrompt.trim() && notBusy('audit')),
-        revision: Boolean(settings.enabled && latestText && artifact.audit && !artifact.audit.passed && artifact.audit.decision !== 'block' && notBusy('revision')),
-        state: Boolean(settings.enabled && latestText && (!settings.hostControl.enabled || !settings.auditEnabled || artifact.audit?.passed) && notBusy('state')),
-        small: Boolean(settings.enabled && latestSnapshot && projection?.steps?.state?.status === 'success' && notBusy('summary')),
-        large: Boolean(settings.enabled && latestSnapshot && projection?.steps?.state?.status === 'success' && notBusy('summary')),
-        sync: Boolean(settings.enabled && latestSnapshot && projection?.steps?.state?.status === 'success' && notBusy('sync')),
-    };
+function firstProblemStep(projection) {
+    return ['audit', 'revision', 'state', 'summary', 'sync'].find((step) => ['failed', 'blocked'].includes(projection?.steps?.[step]?.status)) || '';
 }
-const pendingRetryIndexes = new Set();
-const expandedPanelIndexes = new Set();
+const STEP_ACTION_LABELS = Object.freeze({
+    audit: '重试审核', revision: '继续修正', state: '重试表格', summary: '重试总结', sync: '重试同步',
+});
+function primaryPanelAction(index, artifact) {
+    const projection = intentProjection(artifact);
+    const latest = index === latestAssistantIndex();
+    if (!latest) return { enabled: false, label: '历史记录', command: '' };
+    if (projection?.busy) return { enabled: false, label: '处理中…', command: '' };
+    if (projection?.status === 'completed') return { enabled: false, label: '本轮已完成', command: '' };
+    const problem = firstProblemStep(projection);
+    if (problem) return { enabled: true, label: STEP_ACTION_LABELS[problem], command: 'continue' };
+    return { enabled: true, label: artifact ? '继续处理' : '整理正文', command: 'continue' };
+}
 function flowStageHtml(order, label, stage) {
     const status = stageLabel(stage);
-    const symbol = stage?.status === 'success' || stage?.status === 'skipped'
-        ? '✓'
-        : stage?.status === 'failed' || stage?.status === 'blocked'
-            ? '!'
-            : stage?.status === 'running' || stage?.status === 'queued'
-                ? '…'
-                : String(order);
+    const symbol = stage?.status === 'success' || stage?.status === 'skipped' ? '✓'
+        : stage?.status === 'failed' || stage?.status === 'blocked' ? '!'
+            : stage?.status === 'running' || stage?.status === 'queued' ? '…' : String(order);
     return `<span class="ma11-flow-stage ${tone(stage)}"><em>${symbol}</em><span><small>${label}</small><b>${status}</b></span></span>`;
+}
+function panelRenderKey(index, artifact, rows, projection, pending) {
+    const stepKey = ['audit', 'revision', 'state', 'summary', 'sync'].map((step) => {
+        const value = projection.steps[step];
+        return `${step}:${value.status}:${value.attempts}:${value.error || ''}`;
+    }).join('|');
+    return hashText([index, artifact.updatedAt || '', projection.version, projection.status, rows, pending, artifact.hiddenByAudit, artifact.audit?.reason || '', stepKey].join('~'));
 }
 function panelHtml(index, artifact) {
     const rows = snapshotRowCount(artifact.snapshot, getSettings().tableRegistry, true);
     const projection = intentProjection(artifact);
     const displayStages = projection.steps;
-    const error = ['failed', 'blocked'].includes(projection.status) ? projection.detail : Object.values(displayStages).find((stage) => stage.error)?.error;
-    const retrying = pendingRetryIndexes.has(index);
-    const latestText = index === latestAssistantIndex();
+    const error = ['failed', 'blocked'].includes(projection.status)
+        ? projection.detail
+        : Object.values(displayStages).find((stage) => stage.error)?.error;
+    const pending = pendingIndexes.has(index);
+    const action = primaryPanelAction(index, artifact);
     const latestSnapshot = index === latestSnapshotArtifact()?.index;
-    const available = messageStageAvailability(index, artifact);
-    const enabled = (action) => !retrying && available[action] ? '' : 'disabled';
-    const expanded = expandedPanelIndexes.has(index);
-    const chainBusy = projection.busy;
-    const chainFailed = ['failed', 'blocked'].includes(projection.status);
-    const completedStages = projection.completed;
-    const chainComplete = projection.status === 'completed';
-    const chainState = projection.label;
-    return `
-    <div class="ma11-message-panel ${expanded ? 'is-open' : 'is-collapsed'}" data-ma-index="${index}">
-      <div class="ma11-message-bar ${chainFailed ? 'danger' : chainBusy ? 'working' : chainComplete ? 'success' : 'neutral'}">
+    const renderKey = panelRenderKey(index, artifact, rows, projection, pending);
+    return `<div class="ma11-message-panel" data-ma-index="${index}" data-ma-render-key="${renderKey}">
+      <div class="ma11-message-bar ${projection.tone}">
         <span class="ma11-message-state-dot" aria-hidden="true"></span>
-        <button class="ma11-message-open" type="button" data-ma-action="toggle-inline" aria-expanded="${expanded}" aria-controls="ma11-message-detail-${index}">
-          <b>镜渊</b><span>${chainState}</span><i aria-hidden="true">⌄</i>
-        </button>
+        <div class="ma11-message-open"><b>镜渊</b><span>${escapeHtml(projection.label)}</span></div>
         <span class="ma11-message-count">${rows} 对象</span>
-        <button class="ma11-message-open-workspace" type="button" data-ma-action="open">工作区</button>
       </div>
-      <div class="ma11-message-detail" id="ma11-message-detail-${index}" ${expanded ? '' : 'hidden'}>
-        <div class="ma11-message-progress-head"><span>处理进度</span><b>${completedStages}/5</b></div>
+      <div class="ma11-message-detail">
         <div class="ma11-flow" aria-label="审核到世界书的处理进度">
           ${flowStageHtml(1, '审核', displayStages.audit)}
           ${flowStageHtml(2, '修正', displayStages.revision)}
@@ -19248,133 +19235,91 @@ function panelHtml(index, artifact) {
           ${flowStageHtml(5, '世界书', displayStages.sync)}
         </div>
         ${artifact.audit && !artifact.audit.passed ? `<div class="ma11-message-error">${escapeHtml(artifact.audit.reason)}</div>` : error ? `<div class="ma11-message-error">${escapeHtml(error)}</div>` : ''}
-        ${latestText ? `<div class="ma11-message-primary-actions">
-          <button class="ma11-primary-action" data-ma-auto-continue ${retrying || chainBusy || chainComplete ? 'disabled' : ''}>${chainBusy ? '处理中' : chainComplete ? '流程已完成' : '继续自动流程'}</button>
-          <button data-ma-action="open">打开工作区</button>
-        </div>
-        <div class="ma11-message-tools" aria-label="单阶段排错">
-          <div class="ma11-message-tools-title"><b>单阶段处理</b><small>仅在自动流程未能完成时使用</small></div>
-          <div class="ma11-message-actions ma11-message-stage-actions" aria-label="镜渊分阶段操作">
-            <button data-ma-stage-action="audit" ${enabled('audit')}>仅审核</button>
-            <button data-ma-stage-action="revision" ${enabled('revision')}>仅修正</button>
-            <button data-ma-stage-action="state" ${enabled('state')}>仅生成表格</button>
-            <button data-ma-stage-action="small" ${enabled('small')}>立即小总结</button>
-            <button data-ma-stage-action="large" ${enabled('large')}>立即大总结</button>
-            <button data-ma-stage-action="sync" ${enabled('sync')}>立即同步</button>
-          </div>
-        </div>` : '<div class="ma11-message-actions"><button data-ma-action="open">打开工作区</button></div>'}
-        <div class="ma11-message-actions ma11-message-retries">
-          ${retrying ? '<button disabled>处理中…</button>' : ''}
-          ${!retrying && latestText && displayStages.audit.status === 'failed' ? '<button data-ma-retry="audit">重试审核</button>' : ''}
-          ${!retrying && latestText && ['failed', 'blocked'].includes(displayStages.revision?.status ?? 'idle') ? '<button data-ma-retry="revision">重试定向修正</button>' : ''}
-          ${!retrying && latestText && displayStages.state.status === 'failed' ? '<button data-ma-retry="state">重试表格</button>' : ''}
-          ${!retrying && latestSnapshot && displayStages.summary.status === 'failed' ? '<button data-ma-retry="summary">重试总结</button>' : ''}
-          ${!retrying && latestSnapshot && displayStages.sync.status === 'failed' ? '<button data-ma-retry="sync">重试同步</button>' : ''}
+        <div class="ma11-message-command-bar">
+          <button class="ma11-primary-action" data-ma-primary-command="${action.command}" ${pending || !action.enabled ? 'disabled' : ''}>${pending ? '处理中…' : action.label}</button>
+          <button data-ma-action="tables" ${latestSnapshot || artifact.snapshot ? '' : 'disabled'}>查看表格</button>
+          <button data-ma-action="open">工作区</button>
         </div>
       </div>
     </div>`;
 }
-function renderMessagePanel(index) {
+
+const pendingIndexes = new Set();
+const scheduledIndexes = new Set();
+let panelFrame = 0;
+function renderMessagePanelNow(index) {
     const messageElement = findMessageElement(index);
-    if (!messageElement)
-        return;
+    if (!messageElement) return;
     const settings = getSettings();
     const artifact = getArtifactAt(index);
     applyAuditVisibility(index, Boolean(settings.enabled && artifact?.hiddenByAudit), Boolean(settings.enabled && artifact?.audit && !artifact.audit.passed && !artifact.hiddenByAudit));
-    messageElement.querySelector(':scope > .ma11-message-panel')?.remove();
-    if (!settings.showMessagePanel)
+    const existing = messageElement.querySelector(':scope > .ma11-message-panel');
+    if (!settings.showMessagePanel || !artifact) {
+        existing?.remove();
         return;
-    if (!artifact)
-        return;
-    messageElement.insertAdjacentHTML('beforeend', panelHtml(index, artifact));
+    }
+    const html = panelHtml(index, artifact);
+    const key = /data-ma-render-key="([^"]+)"/u.exec(html)?.[1] || '';
+    if (existing?.dataset.maRenderKey === key) return;
+    if (existing) existing.outerHTML = html;
+    else messageElement.insertAdjacentHTML('beforeend', html);
+}
+function flushScheduledPanels() {
+    panelFrame = 0;
+    const indexes = [...scheduledIndexes];
+    scheduledIndexes.clear();
+    for (const index of indexes) renderMessagePanelNow(index);
+}
+function renderMessagePanel(index) {
+    if (!Number.isInteger(index) || index < 0) return;
+    scheduledIndexes.add(index);
+    if (!panelFrame) panelFrame = requestAnimationFrame(flushScheduledPanels);
 }
 function renderAllMessagePanels() {
-    getChat().forEach((message, index) => {
-        if (!message?.is_user)
-            renderMessagePanel(index);
-    });
+    getChat().forEach((message, index) => { if (!message?.is_user) scheduledIndexes.add(index); });
+    if (!panelFrame) panelFrame = requestAnimationFrame(flushScheduledPanels);
 }
 registerMessagePanelRenderer(renderAllMessagePanels);
 let installed = false;
 function installMessagePanelHandlers() {
-    if (installed)
-        return () => undefined;
+    if (installed) return () => undefined;
     installed = true;
     const click = (event) => {
         const target = event.target;
         const panel = target.closest('.ma11-message-panel');
-        if (!panel)
-            return;
+        if (!panel) return;
         const index = Number(panel.dataset.maIndex);
-        if (target.closest('[data-ma-action="toggle-inline"]')) {
-            if (expandedPanelIndexes.has(index))
-                expandedPanelIndexes.delete(index);
-            else
-                expandedPanelIndexes.add(index);
-            renderMessagePanel(index);
-            return;
-        }
-        if (target.closest('[data-ma-action="open"]')) {
+        const action = target.closest('[data-ma-action]')?.dataset.maAction;
+        if (action === 'open') {
             openWorkspace('overview', index);
             return;
         }
-        if (target.closest('[data-ma-auto-continue]')) {
-            if (pendingRetryIndexes.has(index))
-                return;
-            pendingRetryIndexes.add(index);
-            renderMessagePanel(index);
-            toast('info', '正在从第一个失效阶段继续处理');
-            void processMessage(index, false).catch((error) => {
-                toast(taskErrorTone(error), toErrorMessage(error));
-            }).finally(() => {
-                pendingRetryIndexes.delete(index);
-                renderMessagePanel(index);
-            });
+        if (action === 'tables') {
+            openWorkspace('tables', index);
             return;
         }
-        const stageAction = target.closest('[data-ma-stage-action]')?.dataset.maStageAction;
-        if (stageAction) {
-            if (pendingRetryIndexes.has(index))
-                return;
-            pendingRetryIndexes.add(index);
+        if (!target.closest('[data-ma-primary-command]') || pendingIndexes.has(index)) return;
+        pendingIndexes.add(index);
+        renderMessagePanel(index);
+        toast('info', '已从当前未完成阶段继续');
+        void processMessage(index, false).catch((error) => {
+            toast(taskErrorTone(error), toErrorMessage(error));
+        }).finally(() => {
+            pendingIndexes.delete(index);
             renderMessagePanel(index);
-            toast('info', '已提交阶段任务，请稍候');
-            const task = stageAction === 'small' || stageAction === 'large'
-                ? forceSummary(index, stageAction)
-                : retryStage(index, stageAction);
-            void task.catch((error) => {
-                toast(taskErrorTone(error), toErrorMessage(error));
-            }).finally(() => {
-                pendingRetryIndexes.delete(index);
-                renderMessagePanel(index);
-            });
-            return;
-        }
-        const retry = target.closest('[data-ma-retry]')?.dataset.maRetry;
-        if (retry) {
-            if (pendingRetryIndexes.has(index))
-                return;
-            pendingRetryIndexes.add(index);
-            renderMessagePanel(index);
-            toast('info', '已提交重试，请稍候');
-            void retryStage(index, retry).catch((error) => {
-                toast(taskErrorTone(error), toErrorMessage(error));
-            }).finally(() => {
-                pendingRetryIndexes.delete(index);
-                renderMessagePanel(index);
-            });
-        }
+        });
     };
     document.addEventListener('click', click);
     const unsubscribe = subscribePipeline((index) => renderMessagePanel(index));
     const unsubscribeStages = subscribeArtifactStageChanges((artifact) => {
-        if (artifact?.chatKey === currentChatKey())
-            renderMessagePanel(artifact.messageIndex);
+        if (artifact?.chatKey === currentChatKey()) renderMessagePanel(artifact.messageIndex);
     });
     return () => {
         installed = false;
-        pendingRetryIndexes.clear();
-        expandedPanelIndexes.clear();
+        pendingIndexes.clear();
+        scheduledIndexes.clear();
+        if (panelFrame) cancelAnimationFrame(panelFrame);
+        panelFrame = 0;
         document.removeEventListener('click', click);
         unsubscribe();
         unsubscribeStages();
@@ -19589,6 +19534,8 @@ let queueUnsubscribe = null;
 let pipelineUnsubscribe = null;
 let artifactStageUnsubscribe = null;
 let workspaceRenderScheduled = false;
+let workspaceRenderFrame = 0;
+let workspaceProjectionFrame = 0;
 let workspaceRenderDeferred = false;
 let selectedGraphNodeId = null;
 let editorChatKey = null;
@@ -19655,9 +19602,9 @@ function clampGraphZoom(value) {
 function ensureWorkspaceSubscriptions() {
     queueUnsubscribe ||= taskQueue.subscribe(handleQueueChange);
     pipelineUnsubscribe ||= subscribePipeline(() => handlePipelineChange());
-    artifactStageUnsubscribe ||= subscribeArtifactStageChanges((artifact) => {
+    artifactStageUnsubscribe ||= subscribeArtifactStageChanges((artifact, stage) => {
         if (artifact?.chatKey === currentChatKey())
-            handlePipelineChange();
+            handleArtifactStageChange(artifact, stage);
     });
 }
 const WORKSPACE_NAVIGATION = [
@@ -19812,24 +19759,35 @@ function workspaceHasUnsavedSurface(workspace) {
     return editor?.hidden === false || getSettings().ui.activeTab === "tableManager";
 }
 function scheduleWorkspaceRender() {
-    const workspace = document.querySelector("#ma11-workspace");
-    if (!workspace || workspace.hidden)
-        return;
+    const workspace = document.querySelector('#ma11-workspace');
+    if (!workspace || workspace.hidden) return;
     if (workspaceHasFocusedEditor(workspace) || workspaceHasUnsavedSurface(workspace)) {
         workspaceRenderDeferred = true;
         return;
     }
-    if (workspaceRenderScheduled)
-        return;
+    if (workspaceRenderScheduled) return;
     workspaceRenderScheduled = true;
-    queueMicrotask(() => {
+    workspaceRenderFrame = requestAnimationFrame(() => {
+        workspaceRenderFrame = 0;
         workspaceRenderScheduled = false;
         void renderWorkspace();
     });
 }
+function scheduleWorkspaceProjectionPatch() {
+    if (workspaceProjectionFrame) return;
+    workspaceProjectionFrame = requestAnimationFrame(() => {
+        workspaceProjectionFrame = 0;
+        refreshWorkspaceProjection();
+    });
+}
 function handlePipelineChange() {
     refreshTaskList();
-    scheduleWorkspaceRender();
+    scheduleWorkspaceProjectionPatch();
+}
+function handleArtifactStageChange(artifact, stage) {
+    scheduleWorkspaceProjectionPatch();
+    const status = artifactIntentProjection(artifact, taskQueue.list())?.steps?.[stage]?.status;
+    if (!['queued', 'running'].includes(status)) scheduleWorkspaceRender();
 }
 function taskErrorTone(error) {
     return error instanceof Error && error.name === "TaskBlockedError" ? "warning" : "error";
@@ -19926,7 +19884,7 @@ function recentTasksHtml() {
     const chatKey = currentChatKey();
     const jobs = taskQueue.list()
         .filter((task) => !task.chatKey || task.chatKey === chatKey)
-        .slice(0, 5);
+        .slice(0, 3);
     return {
         count: jobs.length,
         html: jobs.length
@@ -19989,109 +19947,98 @@ function extractionTemplateIsDefault() {
 function summaryPromptsAreStandard() {
     return JSON.stringify(getSettings().summaryPrompts) === JSON.stringify(DEFAULT_SUMMARY_PROMPTS);
 }
-function setupReadinessHtml(artifact, chatState) {
-    const settings = getSettings();
-    const enabledCount = enabledTables(settings.tableRegistry).length;
-    const checks = [
-        { ok: settings.enabled, label: "插件已启用", action: "settings" },
-        { ok: settings.autoState, label: "自动整理已开启", action: "settings" },
-        { ok: recordingStartIndex(chatState) !== undefined, label: "游玩记录起点已设置", action: "overview" },
-        { ok: enabledCount > 0, label: `${enabledCount} 个记忆视图可用`, action: "tableManager" },
-        { ok: enabledCount > 0, label: extractionTemplateIsDefault() ? "默认提取模板已加载" : "自定义提取模板已加载", action: "tableManager" },
-        { ok: Boolean(artifact?.snapshot), label: "当前聊天已有记忆快照", action: "tables" },
-        { ok: settings.lorebookSync && !readHistoryWorkflow(chatState).blocked, label: "世界书同步可用", action: "sync" },
-    ];
-    const completed = checks.filter((item) => item.ok).length;
-    const percent = Math.round((completed / checks.length) * 100);
-    return `<section class="ma11-card ma11-readiness-card">
-    <header><div><b>开箱检查</b><span>不需要理解内部协议，按未完成项处理即可</span></div><strong>${completed}/${checks.length}</strong></header>
-    <div class="ma11-progress-track" aria-label="开箱检查完成度 ${percent}%"><span style="width:${percent}%"></span></div>
-    <div class="ma11-readiness-grid">${checks.map((item) => `<button class="${item.ok ? "ready" : "pending"}" data-ma11-tab="${item.action}"><i class="fa-solid ${item.ok ? "fa-check" : "fa-arrow-right"}" aria-hidden="true"></i><span>${escapeHtml(item.label)}</span></button>`).join("")}</div>
-  </section>`;
+
+function firstWorkflowProblem(projection) {
+    return ['audit', 'revision', 'state', 'summary', 'sync'].find((step) => ['failed', 'blocked'].includes(projection?.steps?.[step]?.status)) || '';
 }
-function runtimeV2OverviewHtml(chatState) {
-    const runtime = chatState?.runtimeV2;
-    if (!runtime)
-        return '';
-    const sceneMachine = runtime.machines?.scene ?? {};
-    const current = sceneMachine.instances?.[sceneMachine.currentInstanceId];
-    const summary = runtime.machines?.summary ?? {};
-    const publication = runtime.machines?.publication ?? {};
-    const pendingJobs = (runtime.outbox ?? []).filter((job) => ['pending', 'running', 'failed'].includes(job.status));
-    const summaryLabel = summary.pendingKind === 'small'
-        ? '小总结待执行'
-        : summary.pendingKind === 'large'
-            ? '大总结待执行'
-            : '无总结任务';
-    const sceneLabel = current
-        ? [current.location, current.stage || current.title].filter(Boolean).join('｜')
-        : '没有活动场景实例';
-    return `<section class="ma11-card">
-      <header><div><b>Runtime V2 权威状态</b><span>修订 ${escapeHtml(String(runtime.revision ?? 0))}</span></div></header>
-      <dl class="ma11-meta">
-        <dt>游戏时间</dt><dd>${escapeHtml(runtime.machines?.clock?.display || '未发生明确时间推进')}</dd>
-        <dt>当前场景实例</dt><dd>${escapeHtml(sceneLabel)}</dd>
-        <dt>当前目标</dt><dd>${escapeHtml(current?.goal || '未明确')}</dd>
-        <dt>总结调度</dt><dd>${escapeHtml(summaryLabel)}</dd>
-        <dt>世界书投影</dt><dd>${escapeHtml(`${publication.status || 'clean'}｜期望 ${publication.desiredRevision ?? 0} / 已确认 ${publication.confirmedRevision ?? 0}`)}</dd>
-        <dt>未完成事务</dt><dd>${escapeHtml(String(pendingJobs.length))}</dd>
-      </dl>
-      ${publication.lastError ? `<div class="ma11-error-box">${escapeHtml(publication.lastError)}</div>` : ''}
-    </section>`;
+function workflowPrimaryUi(artifact, busy) {
+    if (busy) return { label: '处理中…', disabled: true };
+    if (!artifact) return { label: '整理最新正文', disabled: false };
+    const projection = artifactIntentProjection(artifact, taskQueue.list());
+    if (projection.status === 'completed') return { label: '本轮已完成', disabled: true };
+    const problem = firstWorkflowProblem(projection);
+    const labels = { audit: '重试审核', revision: '继续修正', state: '重试表格', summary: '重试总结', sync: '重试同步' };
+    return { label: labels[problem] || '继续处理', disabled: false };
+}
+function refreshWorkspaceProjection() {
+    const workspace = document.querySelector('#ma11-workspace');
+    if (!workspace || workspace.hidden || getSettings().ui.activeTab !== 'overview') return;
+    const info = currentArtifact();
+    const artifact = info?.artifact;
+    const flow = workflowState(artifact);
+    const busy = workspacePipelineBusy(info);
+    const dashboard = workspace.querySelector('[data-ma11-live-workflow]');
+    if (dashboard) {
+        dashboard.classList.remove('success', 'working', 'danger', 'neutral');
+        dashboard.classList.add(flow.tone);
+    }
+    const label = workspace.querySelector('[data-ma11-live-label]');
+    const detail = workspace.querySelector('[data-ma11-live-detail]');
+    const count = workspace.querySelector('[data-ma11-flow-count]');
+    const bar = workspace.querySelector('[data-ma11-flow-bar]');
+    const strip = workspace.querySelector('[data-ma11-stage-strip]');
+    const button = workspace.querySelector('[data-ma11-live-primary]');
+    if (label) label.textContent = flow.label;
+    if (detail) detail.textContent = flow.detail;
+    if (count) count.textContent = `${flow.completed}/${flow.total}`;
+    if (bar) bar.style.width = `${Math.round((flow.completed / flow.total) * 100)}%`;
+    if (strip) strip.innerHTML = stageStripHtml(artifact);
+    if (button) {
+        const primary = workflowPrimaryUi(artifact, busy);
+        button.textContent = primary.label;
+        button.disabled = primary.disabled;
+    }
 }
 
 async function overviewHtml(artifactInfo) {
-    const enabled = getSettings().enabled;
+    const settings = getSettings();
+    const enabled = settings.enabled;
     const artifact = artifactInfo?.artifact;
     const chatState = await getChatState(currentChatKey());
     const historyWorkflow = readHistoryWorkflow(chatState);
     const playStart = recordingStartIndex(chatState);
-    const rows = snapshotRowCount(artifact?.snapshot, getSettings().tableRegistry, true);
+    const rows = snapshotRowCount(artifact?.snapshot, settings.tableRegistry, true);
     const tasks = recentTasksHtml();
     const busy = workspacePipelineBusy(artifactInfo);
     const flow = workflowState(artifact);
     const latestIndex = latestAssistantIndex();
     const viewingHistory = Boolean(artifactInfo && artifactInfo.index !== latestIndex);
-    const currentSyncStatus = artifact?.stages?.sync?.status || "idle";
-    const syncText = ["queued", "running"].includes(currentSyncStatus)
+    const primary = workflowPrimaryUi(artifact, busy);
+    const problem = artifact ? firstWorkflowProblem(artifactIntentProjection(artifact, taskQueue.list())) : '';
+    const currentSyncStatus = artifactIntentProjection(artifact, taskQueue.list())?.steps?.sync?.status || 'idle';
+    const syncText = ['queued', 'running'].includes(currentSyncStatus)
         ? `世界书${statusText(currentSyncStatus)}`
         : chatState.lastSyncAt
-            ? `上次成功同步 ${new Date(chatState.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-            : "世界书未同步";
+            ? `上次同步 ${new Date(chatState.lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+            : '世界书未同步';
     return `
-    <section class="ma11-card ma11-recording-card">
-      <header><div><b>游玩记录边界</b><span>${playStart === undefined ? "尚未开始" : `从第 ${playStart + 1} 条消息起`}</span></div></header>
-      <p>${playStart === undefined ? "起点之前的设定讨论、提示词、测试回复不会进入事实、总结或世界书。" : "镜渊只处理起点之后的正文；重设起点会清空当前聊天已有镜渊记忆和托管世界书条目。"}</p>
-      <div class="ma11-actions"><button data-ma11-action="start-play-recording" ${busy ? "disabled" : ""}>${playStart === undefined ? "从下一条消息开始记录" : "重新设置记录起点"}</button></div>
-    </section>
-    ${historyRecoveryHtml(chatState, busy) || (historyWorkflow.invalidation ? (historyWorkflow.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>最新正文正在自动恢复</b><span>世界书暂缓同步</span></header><p>检测到最新正文发生编辑或换页。镜渊会复用仍有效的审核结果，并从第一个失效阶段继续。</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>较早历史需要重算</b><span>世界书同步已暂停</span></header><p>${historyWorkflow.startIndex === undefined ? "检测到历史删除，但无法自动判断删除位置。" : `第 ${historyWorkflow.startIndex + 1} 条消息发生了${historyWorkflow.invalidation.reason === "edited" ? "编辑" : historyWorkflow.invalidation.reason === "swiped" ? "换页" : "删除"}。`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${historyWorkflow.startIndex === undefined ? "选择起点并重算" : "继续重建"}</button></div></section>`) : "")}
-    ${viewingHistory ? `<section class="ma11-card ma11-history-warning"><header><b>正在查看历史正文状态</b><span>第 ${artifactInfo.index + 1} 条</span></header><p>后台任务与自动流程始终作用于最新正文；此处固定显示的是历史记录，不会跟随最新任务变化。</p><div class="ma11-actions"><button data-ma11-action="view-latest">返回最新正文</button></div></section>` : ""}
-    <section class="ma11-dashboard-status ${flow.tone}">
-      <div class="ma11-dashboard-status-icon" aria-hidden="true"><i class="fa-solid ${flow.tone === "success" ? "fa-check" : flow.tone === "danger" ? "fa-triangle-exclamation" : flow.tone === "working" ? "fa-spinner" : "fa-circle"}"></i></div>
+    ${playStart === undefined ? `<section class="ma11-card ma11-recording-card"><header><div><b>开始记录</b><span>先设定游玩边界</span></div></header><p>起点之前的设定讨论、提示词和测试回复不会进入记忆。</p><div class="ma11-actions"><button class="ma11-primary-action" data-ma11-action="start-play-recording" ${busy ? 'disabled' : ''}>从下一条消息开始记录</button></div></section>` : ''}
+    ${historyRecoveryHtml(chatState, busy) || (historyWorkflow.invalidation ? (historyWorkflow.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>最新正文正在恢复</b><span>世界书暂缓同步</span></header><p>镜渊会从第一个失效阶段继续，不会重复执行已经确认的步骤。</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>历史需要重算</b><span>世界书同步已暂停</span></header><p>${historyWorkflow.startIndex === undefined ? '无法自动判断删除位置。' : `从第 ${historyWorkflow.startIndex + 1} 条消息开始重算。`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? 'disabled' : ''}>继续历史重建</button></div></section>`) : '')}
+    ${viewingHistory ? `<section class="ma11-card ma11-history-warning"><header><b>历史正文</b><span>第 ${artifactInfo.index + 1} 条</span></header><p>这里只查看旧记录；自动流程始终作用于最新正文。</p><div class="ma11-actions"><button data-ma11-action="view-latest">返回最新正文</button></div></section>` : ''}
+    <section class="ma11-dashboard-status ${flow.tone}" data-ma11-live-workflow>
+      <div class="ma11-dashboard-status-icon" aria-hidden="true"><i class="fa-solid ${flow.tone === 'success' ? 'fa-check' : flow.tone === 'danger' ? 'fa-triangle-exclamation' : flow.tone === 'working' ? 'fa-spinner' : 'fa-circle'}"></i></div>
       <div class="ma11-dashboard-status-copy">
-        <small>${viewingHistory ? "历史正文流程" : "当前流程"}</small>
-        <h2>${escapeHtml(flow.label)}</h2>
-        <p>${escapeHtml(flow.detail)}</p>
-        <div class="ma11-dashboard-meta"><span>${artifact ? `第 ${artifact.messageIndex + 1} 条正文` : "当前聊天"}</span><span>${rows} 个对象</span><span>${escapeHtml(syncText)}</span></div>
+        <small>${viewingHistory ? '历史正文流程' : '当前流程'}</small>
+        <h2 data-ma11-live-label>${escapeHtml(flow.label)}</h2>
+        <p data-ma11-live-detail>${escapeHtml(flow.detail)}</p>
+        <div class="ma11-dashboard-meta"><span>${artifact ? `第 ${artifact.messageIndex + 1} 条正文` : '当前聊天'}</span><span>${rows} 个对象</span><span>${escapeHtml(syncText)}</span></div>
       </div>
-      ${viewingHistory
-        ? `<button data-ma11-action="view-latest">查看最新状态</button>`
-        : `<button data-ma11-action="process-latest" ${enabled && playStart !== undefined && latestIndex >= playStart && !busy ? "" : "disabled"}>${artifact ? "重新整理" : "整理最新正文"}</button>`}
+      ${viewingHistory ? `<button data-ma11-action="view-latest">查看最新状态</button>` : `<button class="ma11-primary-action" data-ma11-live-primary data-ma11-action="process-latest" ${enabled && playStart !== undefined && latestIndex >= playStart && !primary.disabled ? '' : 'disabled'}>${escapeHtml(primary.label)}</button>`}
     </section>
-    ${runtimeV2OverviewHtml(chatState)}
-    ${setupReadinessHtml(artifact, chatState)}
     <section class="ma11-card ma11-progress-card">
-      <header><b>处理进度</b><span>${flow.completed}/${flow.total}</span></header>
-      <div class="ma11-progress-track" aria-label="处理进度 ${Math.round((flow.completed / flow.total) * 100)}%"><span style="width:${Math.round((flow.completed / flow.total) * 100)}%"></span></div>
-      ${stageStripHtml(artifact)}
+      <header><b>处理进度</b><span data-ma11-flow-count>${flow.completed}/${flow.total}</span></header>
+      <div class="ma11-progress-track" aria-label="处理进度"><span data-ma11-flow-bar style="width:${Math.round((flow.completed / flow.total) * 100)}%"></span></div>
+      <div data-ma11-stage-strip>${stageStripHtml(artifact)}</div>
     </section>
+    ${problem && !viewingHistory ? `<section class="ma11-card ma11-recovery-card"><header><div><b>需要处理</b><span>${escapeHtml(flow.detail)}</span></div></header><div class="ma11-actions"><button class="ma11-primary-action" data-ma11-action="process-latest" ${busy ? 'disabled' : ''}>${escapeHtml(primary.label)}</button><button data-ma11-tab="diagnostics">打开排错工具</button></div></section>` : ''}
     <nav class="ma11-dashboard-links" aria-label="常用功能">
-      <button data-ma11-action="open-tables" ${artifact?.snapshot ? "" : "disabled"}><i class="fa-solid fa-table-cells-large" aria-hidden="true"></i><span><b>表格</b><small>查看状态表</small></span></button>
-      <button data-ma11-tab="summaries" ${artifact?.snapshot ? "" : "disabled"}><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span><b>总结</b><small>近期与长期</small></span></button>
-      <button data-ma11-tab="sync" ${artifact?.snapshot ? "" : "disabled"}><i class="fa-solid fa-book-atlas" aria-hidden="true"></i><span><b>世界书</b><small>发布与召回</small></span></button>
+      <button data-ma11-action="open-tables" ${artifact?.snapshot ? '' : 'disabled'}><i class="fa-solid fa-table-cells-large" aria-hidden="true"></i><span><b>状态表</b><small>查看和编辑对象</small></span></button>
+      <button data-ma11-tab="graph" ${artifact?.snapshot ? '' : 'disabled'}><i class="fa-solid fa-diagram-project" aria-hidden="true"></i><span><b>记忆网络</b><small>事件与关系</small></span></button>
+      <button data-ma11-tab="summaries" ${artifact?.snapshot ? '' : 'disabled'}><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span><b>总结</b><small>近期与长期</small></span></button>
+      <button data-ma11-tab="sync" ${artifact?.snapshot ? '' : 'disabled'}><i class="fa-solid fa-book-atlas" aria-hidden="true"></i><span><b>世界书</b><small>发布与召回</small></span></button>
     </nav>
     <section class="ma11-card ma11-task-card">
-      <header><b>任务</b><span data-ma11-task-count>${tasks.count ? `${tasks.count} 条最近任务` : "当前空闲"}</span></header>
+      <header><b>最近任务</b><span data-ma11-task-count>${tasks.count ? `${tasks.count} 条` : '当前空闲'}</span></header>
       <div class="ma11-task-list" data-ma11-task-list>${tasks.html}</div>
     </section>`;
 }
@@ -20625,9 +20572,7 @@ function hostRecallFeatureText(feature) {
         return '本轮未请求';
     if (!feature.available)
         return feature.error || '宿主能力不可用';
-    if (feature.reloadRequired)
-        return '已写入设置，刷新 ST 后生效';
-    return feature.enabled ? (feature.changed ? '已由镜渊开启' : '已启用') : '未启用';
+    return feature.enabled ? '已启用' : (feature.error || '未启用，使用关键词回退');
 }
 
 async function syncHtml() {
@@ -20650,14 +20595,14 @@ async function syncHtml() {
       ${historyWorkflow.recovery ? `<div class="ma11-error-box">${escapeHtml(historyWorkflow.error || "正在恢复历史；最近同步结果保持不变")}</div>` : ""}
       ${historyWorkflow.invalidation ? `<div class="ma11-error-box">${historyWorkflow.pauseError ? `旧世界书条目暂停失败：${escapeHtml(historyWorkflow.pauseError)}。请先完成历史重建并重新发布。` : historyWorkflow.automatic ? "最新正文正在自动重新整理，完成后会自行恢复世界书同步。" : historyWorkflow.startIndex === undefined ? "历史删除位置未知，请先选择重算起点。完成前不会发布世界书。" : `第 ${historyWorkflow.startIndex + 1} 条消息之后的数据已失效。按依赖重建完成前不会发布世界书。`}</div>` : ""}
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span>自动同步世界书</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-host-control="vector" ${settings.hostControl.vector ? "checked" : ""}/><span>允许镜渊托管条目使用 ST 向量召回</span></label>
-      <label class="ma11-switch"><input type="checkbox" data-ma11-host-control="recursion" ${settings.hostControl.recursion ? "checked" : ""}/><span>允许镜渊托管条目参与 ST 递归触发</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-host-control="vector" ${settings.hostControl.vector ? "checked" : ""}/><span>使用已在 ST 中手动启用的世界书向量</span></label>
+      <label class="ma11-switch"><input type="checkbox" data-ma11-host-control="recursion" ${settings.hostControl.recursion ? "checked" : ""}/><span>允许镜渊条目参与 ST 递归触发</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>自动创建每聊天独立世界书</span></label>
       <label>发布模式<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>按对象整理（推荐）</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>逐条排错</option></select></label>
       <div class="ma11-guidance-banner ma11-recall-guide"><span aria-hidden="true">↗</span><div><b>确定性动态召回</b><p>插件依据当前场景、活动事件、本轮变化、未决事项与记忆年龄，动态区分常驻、直接触发、递归桥接、关键词与向量混合、纯向量回退；规则可复现，但数值不是固定查表。</p></div></div>
       <label>世界书名称（留空自动生成）<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>将极少量当前焦点、时空、必要规则、不可缺失状态和直接相关全局变化设为常驻</span></label>
-      <div class="ma11-guidance-banner ma11-recall-guide"><span aria-hidden="true">ST</span><div><b>宿主实际状态</b><p>递归开关会在需要时由镜渊开启；向量条目的相似度阈值和单次条数仍由 SillyTavern 的 Vector Storage 设置统一控制，镜渊不会伪造一套无效参数。</p></div></div>
+      <div class="ma11-guidance-banner ma11-recall-guide"><span aria-hidden="true">ST</span><div><b>宿主实际状态</b><p>递归仍按条目需要启用；Vector Storage 必须由玩家在 ST 中配置并手动开启。镜渊只回读能力，未启用或不可用时自动回退关键词，不阻断正文生成。</p></div></div>
       <dl class="ma11-meta"><dt>托管条目分类</dt><dd>${escapeHtml(recallClassificationText(state?.hostRecallStatus?.classifications))}</dd><dt>ST 世界书递归</dt><dd>${escapeHtml(hostRecallFeatureText(state?.hostRecallStatus?.recursion))}</dd><dt>ST 世界书向量</dt><dd>${escapeHtml(hostRecallFeatureText(state?.hostRecallStatus?.vector))}</dd><dt>向量源</dt><dd>${escapeHtml(state?.hostRecallStatus?.vector?.source || '未读取')}</dd><dt>ST 向量门槛 / 条数</dt><dd>${state?.hostRecallStatus?.vector?.scoreThreshold ?? '—'} / ${state?.hostRecallStatus?.vector?.maxEntries ?? '—'}</dd></dl>
       <div class="ma11-actions ma11-sync-actions">
         <button data-ma11-action="sync-now" ${settings.enabled && info && !busy && !historyWorkflow.blocked ? "" : "disabled"}>立即同步</button>
@@ -20773,12 +20718,9 @@ function settingsHtml() {
     return `
     <section class="ma11-toolbar"><div><h2>设置</h2><p>普通使用只需确认自动整理和模型分配；提取方向统一放在“模板”页。</p></div><div class="ma11-actions"><button data-ma11-action="open-rule-center">打开提取模板</button><button data-ma11-tab="diagnostics">运行诊断</button></div></section>
     <section class="ma11-card ma11-form-card ma11-quick-settings">
-      <header><div><b>自动化与显示</b><span>推荐项已按开箱使用配置</span></div><span class="ma11-badge success">推荐</span></header>
+      <header><div><b>自动处理</b><span>只保留玩家日常会用到的开关</span></div></header>
       <div class="ma11-setting-tile-grid">
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span><b>启用镜渊</b><small>控制所有自动任务</small></span></label>
-        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="enabled" ${settings.hostControl.enabled ? "checked" : ""}/><span><b>统一接管 ST 记忆外围</b><small>默认由镜渊控制托管世界书、向量与递归</small></span></label>
-        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="vector" ${settings.hostControl.vector ? "checked" : ""}/><span><b>托管向量召回</b><small>关闭后混合与纯向量条目按动态规则退回关键词链</small></span></label>
-        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="recursion" ${settings.hostControl.recursion ? "checked" : ""}/><span><b>托管递归触发</b><small>关闭后镜渊世界书条目禁止递归激活</small></span></label>
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span><b>自动状态表</b><small>每条新 AI 正文后更新当前事实</small></span></label>
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span><b>自动小总结</b><small>整理并写入近期经历</small></span></label>
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoLargeSummary" ${settings.autoLargeSummary ? "checked" : ""}/><span><b>自动大总结</b><small>固化并写入历史事实</small></span></label>
@@ -20791,6 +20733,15 @@ function settingsHtml() {
         <label>状态请求字符预算 <small>提示词与本轮上下文合计；超出后自动分段</small><input type="number" min="6000" max="60000" step="1000" data-ma11-setting="stateContextChars" value="${settings.stateContextChars}" /></label>
         <label>状态输出 Token 上限 <small>中模型或慢网关建议 2048–3072</small><input type="number" min="768" max="8192" step="256" data-ma11-setting="stateOutputTokens" value="${settings.stateOutputTokens}" /></label>
         <label>状态失败分段长度 <small>仅在超时或格式失败时拆分本轮正文</small><input type="number" min="1800" max="16000" step="200" data-ma11-setting="stateChunkChars" value="${settings.stateChunkChars}" /></label>
+      </div>
+    </section>
+    <section class="ma11-card ma11-form-card ma11-host-settings">
+      <header><div><b>SillyTavern 联动</b><span>镜渊不再替玩家开启 Vector Storage</span></div></header>
+      <div class="ma11-setting-tile-grid">
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="enabled" ${settings.hostControl.enabled ? "checked" : ""}/><span><b>启用世界书联动</b><small>允许审核、发布和宿主召回字段生效</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="lorebookSync" ${settings.lorebookSync ? "checked" : ""}/><span><b>自动同步世界书</b><small>状态提交后发布当前快照</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="recursion" ${settings.hostControl.recursion ? "checked" : ""}/><span><b>允许递归触发</b><small>按条目边界使用 ST 原生递归</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="vector" ${settings.hostControl.vector ? "checked" : ""}/><span><b>使用已启用的 ST 向量</b><small>必须先在 Vector Storage 手动开启；不可用时自动回退关键词</small></span></label>
       </div>
     </section>
     <section class="ma11-card ma11-form-card ma11-content-limit-settings">
@@ -20939,7 +20890,7 @@ async function renderWorkspace() {
         rendering = false;
         if (renderAgain) {
             renderAgain = false;
-            queueMicrotask(() => void renderWorkspace());
+            requestAnimationFrame(() => void renderWorkspace());
         }
     }
 }
@@ -21833,6 +21784,10 @@ function disposeWorkspace() {
     workspacePipelineActionPending = false;
     workspaceRenderScheduled = false;
     workspaceRenderDeferred = false;
+    if (workspaceRenderFrame) cancelAnimationFrame(workspaceRenderFrame);
+    if (workspaceProjectionFrame) cancelAnimationFrame(workspaceProjectionFrame);
+    workspaceRenderFrame = 0;
+    workspaceProjectionFrame = 0;
     renderAgain = false;
     unlockWorkspaceViewport();
     document.querySelector("#ma11-workspace")?.remove();

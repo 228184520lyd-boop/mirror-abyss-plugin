@@ -1,10 +1,10 @@
 {
-  "version": "1.4.0-alpha.20",
+  "version": "1.4.0-alpha.21",
   "files": [
     {
       "name": "bundle.js",
-      "size": 1185061,
-      "sha256": "fa50f5fd9d92f37fcc87de3765eb6bd1a0e0cb96a8581a768d8b336d2180f13c"
+      "size": 1181867,
+      "sha256": "dee67960cfaca4707cd2332f06d02f334347c3335784aa9f906200cfd3ed6c13"
     },
     {
       "name": "index.js",
@@ -14,17 +14,17 @@
     {
       "name": "manifest.json",
       "size": 700,
-      "sha256": "5b6968fd1aaadea9c2671f3e06011974bf450c21c30530cc1b40df5fb7f87534"
+      "sha256": "e510d750652a0cc2d42aa0c206bb1201a52fe11bf85a944c76803c4d58b0a420"
     },
     {
       "name": "settings.html",
-      "size": 1348,
-      "sha256": "a38879f69ef7cb4492bd3d51b3e52dcf75449ea1b5ea1bad9a85bfc0a0d00b0c"
+      "size": 1303,
+      "sha256": "df256f0fc3749da5683e93bc16d9cfcc98091d10346aa21b0f3e0f4e10e4849c"
     },
     {
       "name": "style.css",
-      "size": 72862,
-      "sha256": "3c9f71b8c02ad22deb62d556cb7a9435e1284210f8f9addbaad07356195d924b"
+      "size": 74324,
+      "sha256": "c6ad35c60696fed205843116f8d5a25201e2127685350c95160dcd5ac1cbfec2"
     }
   ]
 }

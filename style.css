@@ -1851,3 +1851,23 @@ textarea { resize: vertical; }
   .ma11-new-link-rule > header,
   .ma11-new-link-rule > .ma11-actions { grid-column: auto; }
 }
+
+
+/* alpha.21：单一主操作与低延迟增量状态 */
+.ma11-message-bar { display:flex; align-items:center; gap:.55rem; min-width:0; }
+.ma11-message-bar .ma11-message-open { display:flex; align-items:baseline; gap:.45rem; min-width:0; }
+.ma11-message-bar .ma11-message-open span { color:var(--ma-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ma11-message-state-dot { width:.62rem; height:.62rem; flex:0 0 auto; border-radius:999px; background:var(--ma-border-strong); }
+.ma11-message-bar.success .ma11-message-state-dot { background:var(--ma-success); }
+.ma11-message-bar.working .ma11-message-state-dot { background:var(--ma-warning); }
+.ma11-message-bar.danger .ma11-message-state-dot { background:var(--ma-danger); }
+.ma11-message-command-bar { display:grid; grid-template-columns:minmax(150px,1.2fr) minmax(110px,.8fr) minmax(90px,.7fr); gap:.5rem; margin-top:.62rem; }
+.ma11-message-command-bar button { min-height:40px; }
+.ma11-recovery-card { border-color:color-mix(in srgb,var(--ma-danger) 38%,var(--ma-border)); }
+.ma11-host-settings { border-color:color-mix(in srgb,var(--ma-accent) 34%,var(--ma-border)); }
+[data-ma11-live-workflow].working .fa-spinner { animation:ma11-spin 1s linear infinite; }
+@keyframes ma11-spin { to { transform:rotate(360deg); } }
+@media (max-width:620px) {
+  .ma11-message-command-bar { grid-template-columns:1fr 1fr; }
+  .ma11-message-command-bar .ma11-primary-action { grid-column:1 / -1; }
+}
