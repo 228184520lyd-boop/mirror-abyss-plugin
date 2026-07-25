@@ -37,6 +37,7 @@ Object.defineProperty(__scope,"resetWorkspaceContext",{enumerable:true,configura
 Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveRequests"]});
 Object.defineProperty(__scope,"setRequestAcceptance",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["setRequestAcceptance"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+Object.defineProperty(__scope,"reconcileReliableRuntime",{enumerable:true,configurable:true,get:()=>__require("pipeline/reconciler.js")["reconcileReliableRuntime"]});
 with(__scope){
 Object.defineProperty(exports,"restartPlugin",{enumerable:true,configurable:true,get:()=>restartPlugin});
 Object.defineProperty(exports,"initialize",{enumerable:true,configurable:true,get:()=>initialize});
@@ -141,6 +142,9 @@ async function initialize() {
         if (!extensionEnabled || generation !== lifecycleGeneration)
             return;
         await reconcileInterruptedRuntimeState();
+        if (!extensionEnabled || generation !== lifecycleGeneration)
+            return;
+        await reconcileReliableRuntime();
         if (!extensionEnabled || generation !== lifecycleGeneration)
             return;
         await resumeRuntimeOutbox();
@@ -322,8 +326,8 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.17';
-const PIPELINE_VERSION = 'ma-runtime-v2-1';
+const VERSION = '1.4.0-alpha.20';
+const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
         spacetime: 700,
@@ -1156,6 +1160,19 @@ function withTimeout(promise, ms, label, controller) {
     return new Promise((resolve, reject) => {
         let settled = false;
         let timer;
+        const drainPromise = Promise.resolve(promise).then(() => undefined, () => undefined);
+        const attachDrain = (error) => {
+            try {
+                Object.defineProperty(error, 'drainPromise', {
+                    value: drainPromise,
+                    configurable: true,
+                });
+            }
+            catch {
+                error.drainPromise = drainPromise;
+            }
+            return error;
+        };
         const cleanup = () => {
             if (timer !== undefined)
                 window.clearTimeout(timer);
@@ -1168,7 +1185,7 @@ function withTimeout(promise, ms, label, controller) {
             cleanup();
             const error = new Error(`${label}已取消`);
             error.name = 'AbortError';
-            reject(error);
+            reject(attachDrain(error));
         };
         if (controller?.signal.aborted) {
             onAbort();
@@ -1180,8 +1197,10 @@ function withTimeout(promise, ms, label, controller) {
                 return;
             settled = true;
             cleanup();
-            controller?.abort();
-            reject(new Error(`${label}超时（${Math.round(ms / 1000)}秒）`));
+            const error = attachDrain(new Error(`${label}超时（${Math.round(ms / 1000)}秒）`));
+            error.name = 'TimeoutError';
+            controller?.abort(error);
+            reject(error);
         }, ms);
         promise.then((value) => {
             if (settled)
@@ -1246,19 +1265,27 @@ Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:tr
 Object.defineProperty(__scope,"previousUserText",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["previousUserText"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+Object.defineProperty(__scope,"createProcessingIntent",{enumerable:true,configurable:true,get:()=>__require("domain/processing-intent.js")["createProcessingIntent"]});
+Object.defineProperty(__scope,"normalizeProcessingIntent",{enumerable:true,configurable:true,get:()=>__require("domain/processing-intent.js")["normalizeProcessingIntent"]});
+Object.defineProperty(__scope,"projectProcessingIntent",{enumerable:true,configurable:true,get:()=>__require("domain/processing-intent.js")["projectProcessingIntent"]});
+Object.defineProperty(__scope,"transitionProcessingStep",{enumerable:true,configurable:true,get:()=>__require("domain/processing-intent.js")["transitionProcessingStep"]});
 with(__scope){
 Object.defineProperty(exports,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>subscribeArtifactStageChanges});
+Object.defineProperty(exports,"ensureProcessingIntent",{enumerable:true,configurable:true,get:()=>ensureProcessingIntent});
+Object.defineProperty(exports,"artifactIntentProjection",{enumerable:true,configurable:true,get:()=>artifactIntentProjection});
+Object.defineProperty(exports,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>artifactIntentStep});
+Object.defineProperty(exports,"artifactIntentCorrelation",{enumerable:true,configurable:true,get:()=>artifactIntentCorrelation});
 Object.defineProperty(exports,"createArtifact",{enumerable:true,configurable:true,get:()=>createArtifact});
 Object.defineProperty(exports,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>attachArtifactToMessage});
 Object.defineProperty(exports,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>getAttachedArtifact});
 Object.defineProperty(exports,"markStage",{enumerable:true,configurable:true,get:()=>markStage});
 /**
- * 模块职责：创建、读取、附着消息级 artifact，并维护阶段状态。
- * 维护边界：artifact 是单条正文的规范结果，必须与 chatKey、messageIdentity 和 sourceFingerprint 绑定。
+ * 模块职责：创建、读取、附着消息级 artifact，并维护处理意图的兼容阶段投影。
+ * 维护边界：TurnProcessingIntent 是流程状态唯一权威；artifact.stages 只供旧模块读取。
  */
 const stageListeners = new Set();
 
-/** 阶段状态是运行时真相；订阅者可立即刷新 UI，不必等待宿主聊天持久化完成。 */
+/** 处理意图变化后订阅者可立即刷新 UI，不必等待宿主聊天持久化完成。 */
 function subscribeArtifactStageChanges(listener) {
     stageListeners.add(listener);
     return () => stageListeners.delete(listener);
@@ -1269,17 +1296,49 @@ function notifyStageChange(artifact, stage) {
             listener(artifact, stage);
         }
         catch (error) {
-            console.warn('[MirrorAbyss] artifact stage listener failed', error);
+            console.warn('[MirrorAbyss] artifact intent listener failed', error);
         }
     }
 }
-function idleStage() {
-    return { status: 'idle', attempts: 0 };
+function intentContext(artifact) {
+    return {
+        chatKey: artifact.chatKey,
+        messageKey: artifact.messageKey,
+        messageIndex: artifact.messageIndex,
+        sourceFingerprint: artifact.sourceFingerprint,
+        stages: artifact.stages,
+    };
+}
+function ensureProcessingIntent(artifact) {
+    if (!artifact || typeof artifact !== 'object')
+        return null;
+    artifact.processingIntent = normalizeProcessingIntent(artifact.processingIntent, intentContext(artifact));
+    artifact.intentId = artifact.processingIntent.intentId;
+    artifact.stages = projectProcessingIntent(artifact.processingIntent).steps;
+    return artifact.processingIntent;
+}
+function artifactIntentProjection(artifact, tasks = []) {
+    const intent = ensureProcessingIntent(artifact);
+    return intent ? projectProcessingIntent(intent, { tasks }) : null;
+}
+function artifactIntentStep(artifact, step) {
+    const intent = ensureProcessingIntent(artifact);
+    return intent?.steps?.[step] ?? { status: 'idle', attempts: 0 };
+}
+function artifactIntentCorrelation(artifact, step, command = '') {
+    const intent = ensureProcessingIntent(artifact);
+    const stepState = intent?.steps?.[step] ?? {};
+    return {
+        intentId: intent?.intentId,
+        activityAttemptId: stepState.activeAttemptId || stepState.lastAttemptId,
+        activityStep: step,
+        commandId: command ? `${intent?.intentId}:${command}` : undefined,
+    };
 }
 function createArtifact(message, messageIndex) {
     const now = nowIso();
-    return {
-        schemaVersion: 1,
+    const artifact = {
+        schemaVersion: 2,
         chatKey: currentChatKey(),
         messageKey: messageIdentity(messageIndex),
         messageIndex,
@@ -1288,14 +1347,11 @@ function createArtifact(message, messageIndex) {
         assistantText: safeText(message.mes),
         createdAt: now,
         updatedAt: now,
-        stages: {
-            audit: idleStage(),
-            revision: idleStage(),
-            state: idleStage(),
-            summary: idleStage(),
-            sync: idleStage(),
-        },
     };
+    artifact.processingIntent = createProcessingIntent(intentContext(artifact));
+    artifact.intentId = artifact.processingIntent.intentId;
+    artifact.stages = projectProcessingIntent(artifact.processingIntent).steps;
+    return artifact;
 }
 function attachArtifactToMessage(message, artifact) {
     message.extra ||= {};
@@ -1303,27 +1359,20 @@ function attachArtifactToMessage(message, artifact) {
 }
 function getAttachedArtifact(message) {
     const value = message?.extra?.[MODULE_NAME];
-    return value && typeof value === 'object' ? value : null;
+    if (!value || typeof value !== 'object')
+        return null;
+    ensureProcessingIntent(value);
+    return value;
 }
-function markStage(artifact, stage, status, error) {
-    const current = artifact.stages[stage] ?? idleStage();
-    const now = nowIso();
-    const terminal = ['success', 'failed', 'cancelled', 'skipped', 'blocked'].includes(status);
-    const enteringRunning = status === 'running' && current.status !== 'running';
-    artifact.stages[stage] = {
-        ...current,
-        status,
-        attempts: enteringRunning ? current.attempts + 1 : current.attempts,
-        // queued/idle 代表一轮尚未开始；直接 blocked/skipped 也不能继承上一轮执行时间。
-        startedAt: status === 'running'
-            ? (enteringRunning ? now : current.startedAt)
-            : terminal && current.status === 'running'
-                ? current.startedAt
-                : undefined,
-        finishedAt: terminal ? now : undefined,
-        error: error || undefined,
-    };
-    artifact.updatedAt = now;
+/**
+ * 兼容旧阶段 API：所有写入先进入 TurnProcessingIntent 状态机，再刷新只读 stages 投影。
+ */
+function markStage(artifact, stage, status, error, metadata = {}) {
+    const intent = ensureProcessingIntent(artifact);
+    transitionProcessingStep(intent, stage, status, error, metadata);
+    artifact.intentId = intent.intentId;
+    artifact.stages = projectProcessingIntent(intent).steps;
+    artifact.updatedAt = nowIso();
     notifyStageChange(artifact, stage);
 }
 
@@ -4502,6 +4551,357 @@ function isDisposablePassiveObserverRow(row, role = '') {
 
 }
 };
+__defs["domain/processing-intent.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+with(__scope){
+Object.defineProperty(exports,"processingIntentId",{enumerable:true,configurable:true,get:()=>processingIntentId});
+Object.defineProperty(exports,"createProcessingIntent",{enumerable:true,configurable:true,get:()=>createProcessingIntent});
+Object.defineProperty(exports,"normalizeProcessingIntent",{enumerable:true,configurable:true,get:()=>normalizeProcessingIntent});
+Object.defineProperty(exports,"transitionProcessingStep",{enumerable:true,configurable:true,get:()=>transitionProcessingStep});
+Object.defineProperty(exports,"supersedeProcessingIntent",{enumerable:true,configurable:true,get:()=>supersedeProcessingIntent});
+Object.defineProperty(exports,"projectProcessingIntent",{enumerable:true,configurable:true,get:()=>projectProcessingIntent});
+Object.defineProperty(exports,"PROCESSING_INTENT_SCHEMA_VERSION",{enumerable:true,configurable:true,get:()=>PROCESSING_INTENT_SCHEMA_VERSION});
+Object.defineProperty(exports,"PROCESSING_WORKFLOW_VERSION",{enumerable:true,configurable:true,get:()=>PROCESSING_WORKFLOW_VERSION});
+Object.defineProperty(exports,"PROCESSING_STEPS",{enumerable:true,configurable:true,get:()=>PROCESSING_STEPS});
+Object.defineProperty(exports,"PROCESSING_STEP_STATUSES",{enumerable:true,configurable:true,get:()=>PROCESSING_STEP_STATUSES});
+/**
+ * 模块职责：定义单条 AI 正文的持久处理意图、合法阶段转移、尝试账本和 UI 查询投影。
+ * 维护边界：处理意图是审核→修正→表格→总结→世界书业务状态的唯一权威；
+ * artifact.stages 仅是兼容旧代码的投影，TaskQueue 与 Runtime Outbox 只保存 intentId 关联。
+ */
+const PROCESSING_INTENT_SCHEMA_VERSION = 1;
+const PROCESSING_WORKFLOW_VERSION = 'turn-processing-v1';
+const PROCESSING_STEPS = Object.freeze(['audit', 'revision', 'state', 'summary', 'sync']);
+const PROCESSING_STEP_STATUSES = Object.freeze([
+    'idle', 'queued', 'running', 'success', 'failed', 'cancelled', 'skipped', 'blocked',
+]);
+
+const TERMINAL_STEP_STATUSES = new Set(['success', 'failed', 'cancelled', 'skipped', 'blocked']);
+const COMPLETE_STEP_STATUSES = new Set(['success', 'skipped']);
+const LIVE_STEP_STATUSES = new Set(['queued', 'running']);
+const ALLOWED_TRANSITIONS = Object.freeze({
+    idle: new Set(['idle', 'queued', 'running', 'success', 'failed', 'cancelled', 'skipped', 'blocked']),
+    queued: new Set(['idle', 'queued', 'running', 'success', 'failed', 'cancelled', 'skipped', 'blocked']),
+    running: new Set(['idle', 'running', 'success', 'failed', 'cancelled', 'skipped', 'blocked']),
+    success: new Set(['idle', 'queued', 'running', 'success', 'cancelled', 'skipped', 'blocked']),
+    failed: new Set(['idle', 'queued', 'running', 'failed', 'cancelled', 'blocked']),
+    cancelled: new Set(['idle', 'queued', 'running', 'cancelled', 'blocked']),
+    skipped: new Set(['idle', 'queued', 'running', 'skipped', 'blocked']),
+    blocked: new Set(['idle', 'queued', 'running', 'success', 'blocked', 'cancelled', 'skipped']),
+});
+
+function clean(value, limit = 1200) {
+    return safeText(value, limit).trim();
+}
+function integer(value, fallback = 0) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) ? parsed : fallback;
+}
+function idleStep() {
+    return { status: 'idle', attempts: 0 };
+}
+function normalizeStep(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const status = PROCESSING_STEP_STATUSES.includes(String(source.status)) ? String(source.status) : 'idle';
+    return {
+        status,
+        attempts: Math.max(0, integer(source.attempts, 0)),
+        startedAt: clean(source.startedAt, 80) || undefined,
+        finishedAt: clean(source.finishedAt, 80) || undefined,
+        error: clean(source.error, 2400) || undefined,
+        activeAttemptId: clean(source.activeAttemptId, 220) || undefined,
+        lastAttemptId: clean(source.lastAttemptId, 220) || undefined,
+    };
+}
+
+function processingIntentId(chatKey, messageKey, sourceFingerprint) {
+    return `intent_${hashText(`${clean(chatKey, 300)}|${clean(messageKey, 300)}|${clean(sourceFingerprint, 300)}|${PROCESSING_WORKFLOW_VERSION}`)}`;
+}
+
+function computeIntentState(intent) {
+    const steps = PROCESSING_STEPS.map((step) => intent.steps[step]);
+    const completed = steps.filter((step) => COMPLETE_STEP_STATUSES.has(step.status)).length;
+    const currentStep = PROCESSING_STEPS.find((step) => !COMPLETE_STEP_STATUSES.has(intent.steps[step].status)) || '';
+    const live = steps.find((step) => LIVE_STEP_STATUSES.has(step.status));
+    const failed = steps.find((step) => step.status === 'failed');
+    const blocked = steps.find((step) => step.status === 'blocked');
+    const cancelled = steps.find((step) => step.status === 'cancelled');
+    const workflowComplete = intent.steps.state.status === 'success'
+        && COMPLETE_STEP_STATUSES.has(intent.steps.summary.status)
+        && COMPLETE_STEP_STATUSES.has(intent.steps.sync.status)
+        && COMPLETE_STEP_STATUSES.has(intent.steps.audit.status)
+        && COMPLETE_STEP_STATUSES.has(intent.steps.revision.status);
+    let status = 'pending';
+    if (intent.supersededAt)
+        status = 'superseded';
+    else if (live)
+        status = 'running';
+    else if (failed)
+        status = 'failed';
+    else if (blocked)
+        status = 'blocked';
+    else if (workflowComplete)
+        status = 'completed';
+    else if (cancelled)
+        status = 'cancelled';
+    return { status, currentStep, completed, total: PROCESSING_STEPS.length, busy: Boolean(live), terminal: ['completed', 'superseded'].includes(status) };
+}
+
+function refreshIntentState(intent) {
+    const derived = computeIntentState(intent);
+    intent.status = derived.status;
+    intent.currentStep = derived.currentStep;
+    intent.completedSteps = derived.completed;
+    return intent;
+}
+
+function createProcessingIntent({ chatKey, messageKey, messageIndex = -1, sourceFingerprint, stages, target = 'full' }) {
+    const createdAt = nowIso();
+    const steps = Object.fromEntries(PROCESSING_STEPS.map((step) => [step, normalizeStep(stages?.[step] ?? idleStep())]));
+    const intent = {
+        schemaVersion: PROCESSING_INTENT_SCHEMA_VERSION,
+        workflowVersion: PROCESSING_WORKFLOW_VERSION,
+        intentId: processingIntentId(chatKey, messageKey, sourceFingerprint),
+        chatKey: clean(chatKey, 300),
+        messageKey: clean(messageKey, 300),
+        messageIndex: integer(messageIndex, -1),
+        sourceFingerprint: clean(sourceFingerprint, 300),
+        target: clean(target, 80) || 'full',
+        version: 0,
+        status: 'pending',
+        currentStep: 'audit',
+        completedSteps: 0,
+        steps,
+        activities: [],
+        journal: [],
+        createdAt,
+        updatedAt: createdAt,
+    };
+    intent.journal.push({
+        sequence: 1,
+        type: 'INTENT_CREATED',
+        status: 'pending',
+        createdAt,
+    });
+    return refreshIntentState(intent);
+}
+
+function normalizeActivity(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const step = PROCESSING_STEPS.includes(String(source.step)) ? String(source.step) : '';
+    const attemptId = clean(source.attemptId, 220);
+    if (!step || !attemptId)
+        return null;
+    const status = ['running', 'success', 'failed', 'cancelled', 'blocked', 'skipped'].includes(String(source.status))
+        ? String(source.status)
+        : 'running';
+    return {
+        attemptId,
+        step,
+        ordinal: Math.max(1, integer(source.ordinal, 1)),
+        status,
+        startedAt: clean(source.startedAt, 80) || nowIso(),
+        finishedAt: clean(source.finishedAt, 80) || undefined,
+        error: clean(source.error, 2400) || undefined,
+    };
+}
+
+function normalizeProcessingIntent(value, context = {}) {
+    const source = value && typeof value === 'object' ? value : null;
+    const expectedId = processingIntentId(context.chatKey, context.messageKey, context.sourceFingerprint);
+    if (!source
+        || source.schemaVersion !== PROCESSING_INTENT_SCHEMA_VERSION
+        || source.workflowVersion !== PROCESSING_WORKFLOW_VERSION
+        || clean(source.intentId, 220) !== expectedId
+        || clean(source.chatKey, 300) !== clean(context.chatKey, 300)
+        || clean(source.messageKey, 300) !== clean(context.messageKey, 300)
+        || clean(source.sourceFingerprint, 300) !== clean(context.sourceFingerprint, 300)) {
+        return createProcessingIntent({ ...context, stages: context.stages });
+    }
+    const intent = {
+        ...source,
+        schemaVersion: PROCESSING_INTENT_SCHEMA_VERSION,
+        workflowVersion: PROCESSING_WORKFLOW_VERSION,
+        intentId: expectedId,
+        chatKey: clean(context.chatKey, 300),
+        messageKey: clean(context.messageKey, 300),
+        messageIndex: integer(context.messageIndex, integer(source.messageIndex, -1)),
+        sourceFingerprint: clean(context.sourceFingerprint, 300),
+        target: clean(source.target, 80) || 'full',
+        version: Math.max(0, integer(source.version, 0)),
+        steps: Object.fromEntries(PROCESSING_STEPS.map((step) => [step, normalizeStep(source.steps?.[step] ?? context.stages?.[step])])),
+        activities: Array.isArray(source.activities) ? source.activities.map(normalizeActivity).filter(Boolean).slice(-160) : [],
+        journal: Array.isArray(source.journal)
+            ? source.journal.filter((item) => item && typeof item === 'object').slice(-500)
+            : [],
+        createdAt: clean(source.createdAt, 80) || nowIso(),
+        updatedAt: clean(source.updatedAt, 80) || nowIso(),
+        supersededAt: clean(source.supersededAt, 80) || undefined,
+        supersededReason: clean(source.supersededReason, 1200) || undefined,
+    };
+    if (!intent.journal.length) {
+        intent.journal.push({ sequence: 1, type: 'INTENT_MIGRATED', status: source.status || 'pending', createdAt: intent.createdAt });
+    }
+    return refreshIntentState(intent);
+}
+
+function appendJournal(intent, entry) {
+    const sequence = Math.max(intent.version + 1, integer(intent.journal.at(-1)?.sequence, 0) + 1);
+    intent.version = sequence;
+    intent.journal.push({ sequence, ...entry, createdAt: entry.createdAt || nowIso() });
+    intent.journal = intent.journal.slice(-500);
+}
+
+function startActivity(intent, step, ordinal, at) {
+    const attemptId = `attempt_${hashText(`${intent.intentId}|${step}|${ordinal}|${at}`)}`;
+    const activity = { attemptId, step, ordinal, status: 'running', startedAt: at };
+    intent.activities.push(activity);
+    intent.activities = intent.activities.slice(-160);
+    intent.steps[step].activeAttemptId = attemptId;
+    intent.steps[step].lastAttemptId = attemptId;
+    return activity;
+}
+function settleActivity(intent, step, status, error, at) {
+    const activeId = intent.steps[step].activeAttemptId;
+    const activity = activeId ? [...intent.activities].reverse().find((item) => item.attemptId === activeId) : undefined;
+    if (activity && activity.status === 'running') {
+        activity.status = status;
+        activity.finishedAt = at;
+        activity.error = clean(error, 2400) || undefined;
+    }
+    delete intent.steps[step].activeAttemptId;
+}
+
+function transitionProcessingStep(intentValue, step, status, error, metadata = {}) {
+    if (!PROCESSING_STEPS.includes(String(step)))
+        throw new Error(`未知处理步骤：${step}`);
+    if (!PROCESSING_STEP_STATUSES.includes(String(status)))
+        throw new Error(`未知处理状态：${status}`);
+    const intent = intentValue;
+    const current = normalizeStep(intent.steps?.[step]);
+    const nextStatus = String(status);
+    if (!ALLOWED_TRANSITIONS[current.status]?.has(nextStatus)) {
+        throw new Error(`非法处理状态转移：${step}/${current.status} -> ${nextStatus}`);
+    }
+    const at = nowIso();
+    const enteringRunning = nextStatus === 'running' && current.status !== 'running';
+    const terminal = TERMINAL_STEP_STATUSES.has(nextStatus);
+    const attempts = enteringRunning ? current.attempts + 1 : current.attempts;
+    const next = {
+        ...current,
+        status: nextStatus,
+        attempts,
+        startedAt: nextStatus === 'running'
+            ? (enteringRunning ? at : current.startedAt)
+            : terminal && current.status === 'running'
+                ? current.startedAt
+                : undefined,
+        finishedAt: terminal ? at : undefined,
+        error: clean(error, 2400) || undefined,
+    };
+    intent.steps[step] = next;
+    if (enteringRunning)
+        startActivity(intent, step, attempts, at);
+    else if (terminal)
+        settleActivity(intent, step, nextStatus, error, at);
+    else if (nextStatus === 'idle')
+        delete next.activeAttemptId;
+    appendJournal(intent, {
+        type: nextStatus === 'idle' ? 'STEP_RESET' : `STEP_${nextStatus.toUpperCase()}`,
+        step,
+        previousStatus: current.status,
+        status: nextStatus,
+        attempt: attempts,
+        error: clean(error, 2400) || undefined,
+        reason: clean(metadata.reason, 1200) || undefined,
+        commandId: clean(metadata.commandId, 220) || undefined,
+        taskId: clean(metadata.taskId, 220) || undefined,
+    });
+    intent.updatedAt = at;
+    return refreshIntentState(intent);
+}
+
+function supersedeProcessingIntent(intent, reason = '正文或工作流版本已经变化') {
+    if (intent.supersededAt)
+        return intent;
+    intent.supersededAt = nowIso();
+    intent.supersededReason = clean(reason, 1200);
+    appendJournal(intent, { type: 'INTENT_SUPERSEDED', status: 'superseded', reason: intent.supersededReason });
+    intent.updatedAt = intent.supersededAt;
+    return refreshIntentState(intent);
+}
+
+function statusLabel(status) {
+    const labels = {
+        pending: '等待继续', running: '自动处理中', completed: '本轮已完成', failed: '执行失败',
+        blocked: '需要处理', cancelled: '已取消', superseded: '已失效',
+    };
+    return labels[status] || status;
+}
+
+function projectProcessingIntent(intentValue, options = {}) {
+    const intent = intentValue;
+    const steps = Object.fromEntries(PROCESSING_STEPS.map((step) => [step, { ...normalizeStep(intent.steps?.[step]) }]));
+    const relevantTasks = Array.isArray(options.tasks) ? options.tasks.filter((task) => {
+        if (!['queued', 'running'].includes(String(task?.state)))
+            return false;
+        if (task.intentId)
+            return task.intentId === intent.intentId;
+        return (!task.chatKey || task.chatKey === intent.chatKey)
+            && (!task.messageKey || task.messageKey === intent.messageKey);
+    }) : [];
+    for (const task of relevantTasks) {
+        const step = task.intentStep || '';
+        if (!step || !steps[step])
+            continue;
+        const taskStatus = task.state === 'running' ? 'running' : 'queued';
+        if (!LIVE_STEP_STATUSES.has(steps[step].status)) {
+            steps[step] = {
+                ...steps[step],
+                status: taskStatus,
+                startedAt: task.startedAt || steps[step].startedAt,
+                error: undefined,
+            };
+        }
+    }
+    const projectedIntent = { ...intent, steps };
+    const derived = computeIntentState(projectedIntent);
+    const current = derived.currentStep ? steps[derived.currentStep] : undefined;
+    const firstProblem = PROCESSING_STEPS.map((step) => ({ step, value: steps[step] }))
+        .find(({ value }) => ['failed', 'blocked'].includes(value.status));
+    const detail = clean(firstProblem?.value?.error, 2400)
+        || (derived.status === 'running' ? `${derived.currentStep || '流程'}正在执行` : '')
+        || (derived.status === 'completed' ? '状态、总结与世界书已完成' : '')
+        || (derived.status === 'superseded' ? clean(intent.supersededReason, 1200) : '')
+        || (current ? `${derived.currentStep}等待继续` : '等待继续');
+    const effectiveStatus = relevantTasks.length && derived.status !== 'completed' && derived.status !== 'superseded'
+        ? 'running'
+        : derived.status;
+    return {
+        intentId: intent.intentId,
+        workflowVersion: intent.workflowVersion,
+        status: effectiveStatus,
+        label: statusLabel(effectiveStatus),
+        detail,
+        tone: effectiveStatus === 'completed' ? 'success'
+            : ['failed', 'blocked'].includes(effectiveStatus) ? 'danger'
+                : effectiveStatus === 'running' ? 'working' : 'neutral',
+        currentStep: derived.currentStep,
+        completed: derived.completed,
+        total: derived.total,
+        busy: derived.busy || relevantTasks.length > 0,
+        terminal: derived.terminal,
+        steps,
+        activities: intent.activities ?? [],
+        version: intent.version,
+    };
+}
+
+}
+};
 __defs["domain/publication-control.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
@@ -5087,6 +5487,624 @@ function createPlayerRecordingBoundary(startIndex) {
     const normalized = Math.max(0, Math.trunc(Number(startIndex) || 0));
     return { startIndex: normalized, setAt: nowIso(), source: 'player' };
 }
+
+}
+};
+__defs["domain/reliable-workflow.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+with(__scope){
+Object.defineProperty(exports,"emptyReliableWorkflow",{enumerable:true,configurable:true,get:()=>emptyReliableWorkflow});
+Object.defineProperty(exports,"normalizeReliableWorkflow",{enumerable:true,configurable:true,get:()=>normalizeReliableWorkflow});
+Object.defineProperty(exports,"hostEventKey",{enumerable:true,configurable:true,get:()=>hostEventKey});
+Object.defineProperty(exports,"acceptHostEvent",{enumerable:true,configurable:true,get:()=>acceptHostEvent});
+Object.defineProperty(exports,"mapHostEvent",{enumerable:true,configurable:true,get:()=>mapHostEvent});
+Object.defineProperty(exports,"commandKey",{enumerable:true,configurable:true,get:()=>commandKey});
+Object.defineProperty(exports,"claimCommand",{enumerable:true,configurable:true,get:()=>claimCommand});
+Object.defineProperty(exports,"heartbeatCommand",{enumerable:true,configurable:true,get:()=>heartbeatCommand});
+Object.defineProperty(exports,"settleCommand",{enumerable:true,configurable:true,get:()=>settleCommand});
+Object.defineProperty(exports,"artifactCommitHash",{enumerable:true,configurable:true,get:()=>artifactCommitHash});
+Object.defineProperty(exports,"prepareCommit",{enumerable:true,configurable:true,get:()=>prepareCommit});
+Object.defineProperty(exports,"advanceCommit",{enumerable:true,configurable:true,get:()=>advanceCommit});
+Object.defineProperty(exports,"recordEffect",{enumerable:true,configurable:true,get:()=>recordEffect});
+Object.defineProperty(exports,"claimEffect",{enumerable:true,configurable:true,get:()=>claimEffect});
+Object.defineProperty(exports,"heartbeatEffect",{enumerable:true,configurable:true,get:()=>heartbeatEffect});
+Object.defineProperty(exports,"settleEffect",{enumerable:true,configurable:true,get:()=>settleEffect});
+Object.defineProperty(exports,"reconcileReliableWorkflow",{enumerable:true,configurable:true,get:()=>reconcileReliableWorkflow});
+Object.defineProperty(exports,"IdempotencyConflictError",{enumerable:true,configurable:true,get:()=>IdempotencyConflictError});
+Object.defineProperty(exports,"RELIABLE_WORKFLOW_SCHEMA_VERSION",{enumerable:true,configurable:true,get:()=>RELIABLE_WORKFLOW_SCHEMA_VERSION});
+Object.defineProperty(exports,"COMMAND_TERMINAL_STATUSES",{enumerable:true,configurable:true,get:()=>COMMAND_TERMINAL_STATUSES});
+Object.defineProperty(exports,"COMMIT_PHASES",{enumerable:true,configurable:true,get:()=>COMMIT_PHASES});
+/**
+ * 模块职责：支付式可靠工作流的持久控制面。
+ * 维护边界：只记录宿主事件、幂等命令、提交记录与副作用回执；不决定叙事事实。
+ */
+const RELIABLE_WORKFLOW_SCHEMA_VERSION = 1;
+const COMMAND_TERMINAL_STATUSES = Object.freeze([
+    'succeeded', 'failed', 'blocked', 'cancelled', 'skipped', 'manual_review',
+]);
+const COMMIT_PHASES = Object.freeze([
+    'prepared', 'chat_state_written', 'artifact_written', 'committed', 'failed', 'manual_review',
+]);
+
+const COMMAND_STATUSES = new Set(['accepted', 'running', ...COMMAND_TERMINAL_STATUSES]);
+const INBOX_STATUSES = new Set(['accepted', 'mapped', 'processed', 'ignored', 'manual_review']);
+const EFFECT_STATUSES = new Set(['pending', 'running', 'done', 'failed', 'cancelled', 'manual_review']);
+const TERMINAL_COMMANDS = new Set(COMMAND_TERMINAL_STATUSES);
+
+function clean(value, limit = 1200) {
+    return safeText(value, limit).trim();
+}
+function integer(value, fallback = 0) {
+    const number = Number(value);
+    return Number.isInteger(number) ? number : fallback;
+}
+function timestamp(value) {
+    const text = clean(value, 80);
+    return text && Number.isFinite(Date.parse(text)) ? text : '';
+}
+function uniqueId(prefix, material) {
+    return `${prefix}_${hashText(String(material ?? ''))}`;
+}
+function inputHash(value) {
+    if (typeof value === 'string')
+        return hashText(value);
+    return hashText(JSON.stringify(value ?? null));
+}
+
+class IdempotencyConflictError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'IdempotencyConflictError';
+    }
+}
+
+function emptyReliableWorkflow() {
+    return {
+        schemaVersion: RELIABLE_WORKFLOW_SCHEMA_VERSION,
+        revision: 0,
+        inbox: [],
+        commands: [],
+        commits: [],
+        effects: [],
+        reconciliation: {
+            status: 'clean',
+            checkedAt: '',
+            recoveredCommands: 0,
+            recoveredCommits: 0,
+            recoveredEffects: 0,
+            manualReviewCount: 0,
+            notes: [],
+        },
+        updatedAt: nowIso(),
+    };
+}
+
+function normalizeInbox(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const eventKey = clean(source.eventKey, 240);
+    if (!eventKey)
+        return null;
+    return {
+        eventKey,
+        eventType: clean(source.eventType, 120),
+        chatKey: clean(source.chatKey, 300),
+        messageKey: clean(source.messageKey, 300),
+        sourceFingerprint: clean(source.sourceFingerprint, 300),
+        hostRevision: Math.max(0, integer(source.hostRevision, 0)),
+        status: INBOX_STATUSES.has(String(source.status)) ? String(source.status) : 'accepted',
+        intentId: clean(source.intentId, 240),
+        commandId: clean(source.commandId, 240),
+        duplicateCount: Math.max(0, integer(source.duplicateCount, 0)),
+        receivedAt: timestamp(source.receivedAt) || nowIso(),
+        updatedAt: timestamp(source.updatedAt) || timestamp(source.receivedAt) || nowIso(),
+        reason: clean(source.reason, 1200),
+    };
+}
+function normalizeCommand(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const commandId = clean(source.commandId, 240);
+    const idempotencyKey = clean(source.idempotencyKey, 320);
+    if (!commandId || !idempotencyKey)
+        return null;
+    const status = COMMAND_STATUSES.has(String(source.status)) ? String(source.status) : 'accepted';
+    return {
+        commandId,
+        idempotencyKey,
+        inputHash: clean(source.inputHash, 160),
+        commandType: clean(source.commandType, 120),
+        intentId: clean(source.intentId, 240),
+        step: clean(source.step, 80),
+        status,
+        attempts: Math.max(0, integer(source.attempts, 0)),
+        createdAt: timestamp(source.createdAt) || nowIso(),
+        startedAt: timestamp(source.startedAt),
+        finishedAt: timestamp(source.finishedAt),
+        leaseOwner: clean(source.leaseOwner, 240),
+        leaseToken: clean(source.leaseToken, 240),
+        leaseUntil: timestamp(source.leaseUntil),
+        heartbeatAt: timestamp(source.heartbeatAt),
+        resultRef: clean(source.resultRef, 400),
+        resultHash: clean(source.resultHash, 160),
+        error: clean(source.error, 2400),
+        terminalReason: clean(source.terminalReason, 1200),
+        updatedAt: timestamp(source.updatedAt) || timestamp(source.createdAt) || nowIso(),
+    };
+}
+function normalizeCommit(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const commitId = clean(source.commitId, 240);
+    if (!commitId)
+        return null;
+    return {
+        commitId,
+        intentId: clean(source.intentId, 240),
+        commandId: clean(source.commandId, 240),
+        chatKey: clean(source.chatKey, 300),
+        messageKey: clean(source.messageKey, 300),
+        sourceFingerprint: clean(source.sourceFingerprint, 300),
+        artifactHash: clean(source.artifactHash, 160),
+        expectedWorkflowRevision: Math.max(0, integer(source.expectedWorkflowRevision, 0)),
+        stateRevision: Math.max(0, integer(source.stateRevision, 0)),
+        phase: COMMIT_PHASES.includes(String(source.phase)) ? String(source.phase) : 'prepared',
+        preparedAt: timestamp(source.preparedAt) || nowIso(),
+        committedAt: timestamp(source.committedAt),
+        error: clean(source.error, 2400),
+        updatedAt: timestamp(source.updatedAt) || timestamp(source.preparedAt) || nowIso(),
+    };
+}
+function normalizeEffect(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const effectId = clean(source.effectId, 240);
+    if (!effectId)
+        return null;
+    return {
+        effectId,
+        intentId: clean(source.intentId, 240),
+        commandId: clean(source.commandId, 240),
+        type: clean(source.type, 120),
+        target: clean(source.target, 500),
+        payloadHash: clean(source.payloadHash, 160),
+        status: EFFECT_STATUSES.has(String(source.status)) ? String(source.status) : 'pending',
+        attempts: Math.max(0, integer(source.attempts, 0)),
+        leaseOwner: clean(source.leaseOwner, 240),
+        leaseToken: clean(source.leaseToken, 240),
+        leaseUntil: timestamp(source.leaseUntil),
+        heartbeatAt: timestamp(source.heartbeatAt),
+        receipt: source.receipt && typeof source.receipt === 'object' ? structuredClone(source.receipt) : undefined,
+        error: clean(source.error, 2400),
+        createdAt: timestamp(source.createdAt) || nowIso(),
+        updatedAt: timestamp(source.updatedAt) || timestamp(source.createdAt) || nowIso(),
+    };
+}
+
+function normalizeReliableWorkflow(value) {
+    const base = emptyReliableWorkflow();
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+        ...base,
+        schemaVersion: RELIABLE_WORKFLOW_SCHEMA_VERSION,
+        revision: Math.max(0, integer(source.revision, 0)),
+        inbox: Array.isArray(source.inbox) ? source.inbox.map(normalizeInbox).filter(Boolean).slice(-1600) : [],
+        commands: Array.isArray(source.commands) ? source.commands.map(normalizeCommand).filter(Boolean).slice(-1200) : [],
+        commits: Array.isArray(source.commits) ? source.commits.map(normalizeCommit).filter(Boolean).slice(-800) : [],
+        effects: Array.isArray(source.effects) ? source.effects.map(normalizeEffect).filter(Boolean).slice(-1200) : [],
+        reconciliation: {
+            ...base.reconciliation,
+            ...(source.reconciliation && typeof source.reconciliation === 'object' ? source.reconciliation : {}),
+            status: ['clean', 'recovered', 'manual_review'].includes(String(source.reconciliation?.status))
+                ? String(source.reconciliation.status)
+                : 'clean',
+            checkedAt: timestamp(source.reconciliation?.checkedAt),
+            recoveredCommands: Math.max(0, integer(source.reconciliation?.recoveredCommands, 0)),
+            recoveredCommits: Math.max(0, integer(source.reconciliation?.recoveredCommits, 0)),
+            recoveredEffects: Math.max(0, integer(source.reconciliation?.recoveredEffects, 0)),
+            manualReviewCount: Math.max(0, integer(source.reconciliation?.manualReviewCount, 0)),
+            notes: Array.isArray(source.reconciliation?.notes)
+                ? source.reconciliation.notes.map((item) => clean(item, 500)).filter(Boolean).slice(-40)
+                : [],
+        },
+        updatedAt: timestamp(source.updatedAt) || nowIso(),
+    };
+}
+function mutate(workflow, at = nowIso()) {
+    workflow.revision += 1;
+    workflow.updatedAt = at;
+    return workflow;
+}
+
+function hostEventKey({ chatKey, eventType, messageKey, sourceFingerprint, hostRevision = 0 }) {
+    return uniqueId('hostevt', `${clean(chatKey, 300)}|${clean(eventType, 120)}|${clean(messageKey, 300)}|${clean(sourceFingerprint, 300)}|${Math.max(0, integer(hostRevision, 0))}`);
+}
+
+function acceptHostEvent(workflowValue, event) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const eventKey = event.eventKey || hostEventKey(event);
+    const existing = workflow.inbox.find((item) => item.eventKey === eventKey);
+    const at = nowIso();
+    if (existing) {
+        existing.duplicateCount += 1;
+        existing.updatedAt = at;
+        mutate(workflow, at);
+        return { workflow, event: existing, duplicate: true };
+    }
+    const record = normalizeInbox({ ...event, eventKey, status: 'accepted', receivedAt: at, updatedAt: at });
+    workflow.inbox.push(record);
+    workflow.inbox = workflow.inbox.slice(-1600);
+    mutate(workflow, at);
+    return { workflow, event: record, duplicate: false };
+}
+
+function mapHostEvent(workflowValue, eventKey, { intentId = '', commandId = '', status = 'mapped', reason = '' } = {}) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const record = workflow.inbox.find((item) => item.eventKey === eventKey);
+    if (!record)
+        return { workflow, event: null };
+    record.intentId = clean(intentId, 240);
+    record.commandId = clean(commandId, 240);
+    record.status = INBOX_STATUSES.has(status) ? status : 'mapped';
+    record.reason = clean(reason, 1200);
+    record.updatedAt = nowIso();
+    mutate(workflow, record.updatedAt);
+    return { workflow, event: record };
+}
+
+function commandKey({ intentId, commandType, input, attempt = 1 }) {
+    const materialHash = inputHash(input);
+    return `${clean(intentId, 240)}:${clean(commandType, 120)}:${Math.max(1, integer(attempt, 1))}:${materialHash}`;
+}
+
+function claimCommand(workflowValue, options) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const idempotencyKey = clean(options.idempotencyKey, 320);
+    const expectedInputHash = clean(options.inputHash || inputHash(options.input), 160);
+    const now = options.now instanceof Date ? options.now : new Date();
+    const at = now.toISOString();
+    const leaseMs = Math.max(30_000, integer(options.leaseMs, 10 * 60_000));
+    const owner = clean(options.owner, 240) || 'mirror-abyss';
+    let record = workflow.commands.find((item) => item.idempotencyKey === idempotencyKey);
+    if (record && record.inputHash !== expectedInputHash) {
+        throw new IdempotencyConflictError(`幂等键已被不同输入占用：${idempotencyKey}`);
+    }
+    if (record && TERMINAL_COMMANDS.has(record.status)) {
+        return { workflow, command: record, execute: false, duplicate: true, terminal: true };
+    }
+    if (record && record.status === 'running' && record.leaseUntil && Date.parse(record.leaseUntil) > now.getTime()) {
+        return { workflow, command: record, execute: false, duplicate: true, terminal: false };
+    }
+    if (!record) {
+        const commandId = uniqueId('command', `${idempotencyKey}|${expectedInputHash}`);
+        record = normalizeCommand({
+            commandId,
+            idempotencyKey,
+            inputHash: expectedInputHash,
+            commandType: options.commandType,
+            intentId: options.intentId,
+            step: options.step,
+            status: 'accepted',
+            createdAt: at,
+        });
+        workflow.commands.push(record);
+        workflow.commands = workflow.commands.slice(-1200);
+    }
+    record.status = 'running';
+    record.attempts += 1;
+    record.startedAt = at;
+    record.finishedAt = '';
+    record.leaseOwner = owner;
+    record.leaseToken = uniqueId('lease', `${record.commandId}|${record.attempts}|${at}|${owner}`);
+    record.leaseUntil = new Date(now.getTime() + leaseMs).toISOString();
+    record.heartbeatAt = at;
+    record.error = '';
+    record.terminalReason = '';
+    record.updatedAt = at;
+    mutate(workflow, at);
+    return { workflow, command: record, execute: true, duplicate: Boolean(record.attempts > 1), terminal: false };
+}
+
+function heartbeatCommand(workflowValue, commandId, leaseToken, now = new Date(), leaseMs = 10 * 60_000) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const record = workflow.commands.find((item) => item.commandId === commandId);
+    if (!record || record.status !== 'running' || record.leaseToken !== leaseToken)
+        return { workflow, command: record, updated: false };
+    const at = now.toISOString();
+    record.heartbeatAt = at;
+    record.leaseUntil = new Date(now.getTime() + Math.max(30_000, integer(leaseMs, 10 * 60_000))).toISOString();
+    record.updatedAt = at;
+    mutate(workflow, at);
+    return { workflow, command: record, updated: true };
+}
+
+function settleCommand(workflowValue, commandId, leaseToken, status, options = {}) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const record = workflow.commands.find((item) => item.commandId === commandId);
+    if (!record)
+        return { workflow, command: null, updated: false };
+    if (leaseToken && record.leaseToken && leaseToken !== record.leaseToken)
+        return { workflow, command: record, updated: false };
+    const nextStatus = TERMINAL_COMMANDS.has(status) ? status : 'failed';
+    const at = nowIso();
+    record.status = nextStatus;
+    record.finishedAt = at;
+    record.resultRef = clean(options.resultRef, 400);
+    record.resultHash = clean(options.resultHash || (options.result !== undefined ? inputHash(options.result) : ''), 160);
+    record.error = clean(options.error, 2400);
+    record.terminalReason = clean(options.reason, 1200);
+    record.leaseOwner = '';
+    record.leaseToken = '';
+    record.leaseUntil = '';
+    record.heartbeatAt = at;
+    record.updatedAt = at;
+    mutate(workflow, at);
+    return { workflow, command: record, updated: true };
+}
+
+function artifactCommitHash(artifact) {
+    return inputHash({
+        intentId: artifact?.intentId || artifact?.processingIntent?.intentId || '',
+        messageKey: artifact?.messageKey || '',
+        sourceFingerprint: artifact?.sourceFingerprint || '',
+        intentVersion: artifact?.processingIntent?.version || 0,
+        stateFingerprint: artifact?.stateInputFingerprint || '',
+        snapshot: artifact?.snapshot || null,
+    });
+}
+
+function prepareCommit(workflowValue, options) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const artifactHash = clean(options.artifactHash, 160);
+    const commitId = uniqueId('commit', `${options.intentId}|${options.commandId}|${options.messageKey}|${artifactHash}`);
+    let record = workflow.commits.find((item) => item.commitId === commitId);
+    if (record)
+        return { workflow, commit: record, duplicate: true };
+    const at = nowIso();
+    record = normalizeCommit({
+        commitId,
+        intentId: options.intentId,
+        commandId: options.commandId,
+        chatKey: options.chatKey,
+        messageKey: options.messageKey,
+        sourceFingerprint: options.sourceFingerprint,
+        artifactHash,
+        expectedWorkflowRevision: workflow.revision,
+        stateRevision: Math.max(0, integer(options.stateRevision, 0)),
+        phase: 'prepared',
+        preparedAt: at,
+        updatedAt: at,
+    });
+    workflow.commits.push(record);
+    workflow.commits = workflow.commits.slice(-800);
+    mutate(workflow, at);
+    return { workflow, commit: record, duplicate: false };
+}
+
+function advanceCommit(workflowValue, commitId, phase, error = '') {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const record = workflow.commits.find((item) => item.commitId === commitId);
+    if (!record)
+        return { workflow, commit: null, updated: false };
+    if (!COMMIT_PHASES.includes(phase))
+        throw new Error(`未知提交阶段：${phase}`);
+    const at = nowIso();
+    record.phase = phase;
+    record.error = clean(error, 2400);
+    record.updatedAt = at;
+    if (phase === 'committed')
+        record.committedAt = at;
+    mutate(workflow, at);
+    return { workflow, commit: record, updated: true };
+}
+
+function recordEffect(workflowValue, options) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const payloadHash = clean(options.payloadHash || inputHash(options.payload), 160);
+    const effectId = clean(options.effectId, 240)
+        || uniqueId('effect', `${options.intentId}|${options.commandId}|${options.type}|${options.target}|${payloadHash}`);
+    let record = workflow.effects.find((item) => item.effectId === effectId);
+    if (record) {
+        if (record.payloadHash !== payloadHash)
+            throw new IdempotencyConflictError(`副作用键已被不同载荷占用：${effectId}`);
+        return { workflow, effect: record, duplicate: true };
+    }
+    record = normalizeEffect({
+        effectId,
+        intentId: options.intentId,
+        commandId: options.commandId,
+        type: options.type,
+        target: options.target,
+        payloadHash,
+        status: 'pending',
+        createdAt: nowIso(),
+    });
+    workflow.effects.push(record);
+    workflow.effects = workflow.effects.slice(-1200);
+    mutate(workflow, record.createdAt);
+    return { workflow, effect: record, duplicate: false };
+}
+
+function claimEffect(workflowValue, effectId, options = {}) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const record = workflow.effects.find((item) => item.effectId === effectId);
+    if (!record)
+        return { workflow, effect: null, execute: false };
+    const now = options.now instanceof Date ? options.now : new Date();
+    const at = now.toISOString();
+    const requestedToken = clean(options.leaseToken, 240)
+        || uniqueId('effectlease', `${record.effectId}|${record.attempts + 1}|${at}|${options.leaseOwner || ''}`);
+    const held = record.status === 'running'
+        && record.leaseUntil
+        && Date.parse(record.leaseUntil) > now.getTime()
+        && record.leaseToken
+        && record.leaseToken !== requestedToken;
+    if (held)
+        return { workflow, effect: record, execute: false };
+    record.status = 'running';
+    record.attempts += 1;
+    record.leaseOwner = clean(options.leaseOwner, 240);
+    record.leaseToken = requestedToken;
+    record.leaseUntil = timestamp(options.leaseUntil)
+        || new Date(now.getTime() + Math.max(30_000, integer(options.leaseMs, 10 * 60_000))).toISOString();
+    record.heartbeatAt = at;
+    record.error = '';
+    record.updatedAt = at;
+    mutate(workflow, at);
+    return { workflow, effect: record, execute: true };
+}
+
+function heartbeatEffect(workflowValue, effectId, leaseToken, options = {}) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const record = workflow.effects.find((item) => item.effectId === effectId);
+    if (!record || record.status !== 'running' || !leaseToken || record.leaseToken !== leaseToken)
+        return { workflow, effect: record, updated: false };
+    const now = options.now instanceof Date ? options.now : new Date();
+    const at = now.toISOString();
+    record.heartbeatAt = at;
+    record.leaseUntil = timestamp(options.leaseUntil)
+        || new Date(now.getTime() + Math.max(30_000, integer(options.leaseMs, 10 * 60_000))).toISOString();
+    record.updatedAt = at;
+    mutate(workflow, at);
+    return { workflow, effect: record, updated: true };
+}
+
+function settleEffect(workflowValue, effectId, status, options = {}) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const record = workflow.effects.find((item) => item.effectId === effectId);
+    if (!record)
+        return { workflow, effect: null, updated: false };
+    const nextStatus = EFFECT_STATUSES.has(status) ? status : 'failed';
+    const at = nowIso();
+    record.status = nextStatus;
+    record.error = clean(options.error, 2400);
+    record.receipt = options.receipt && typeof options.receipt === 'object' ? structuredClone(options.receipt) : record.receipt;
+    record.updatedAt = at;
+    if (nextStatus === 'running') {
+        record.attempts += 1;
+        record.leaseOwner = clean(options.leaseOwner, 240);
+        record.leaseToken = clean(options.leaseToken, 240);
+        record.leaseUntil = timestamp(options.leaseUntil);
+        record.heartbeatAt = at;
+    }
+    if (['done', 'failed', 'cancelled', 'manual_review'].includes(nextStatus)) {
+        record.leaseOwner = '';
+        record.leaseToken = '';
+        record.leaseUntil = '';
+        record.heartbeatAt = at;
+    }
+    mutate(workflow, at);
+    return { workflow, effect: record, updated: true };
+}
+
+function reconcileReliableWorkflow(workflowValue, evidence = {}, now = new Date()) {
+    const workflow = normalizeReliableWorkflow(workflowValue);
+    const artifactHashes = evidence.artifactHashes instanceof Map ? evidence.artifactHashes : new Map(Object.entries(evidence.artifactHashes ?? {}));
+    const liveCommandIds = new Set(Array.isArray(evidence.liveCommandIds) ? evidence.liveCommandIds : []);
+    let recoveredCommands = 0;
+    let recoveredCommits = 0;
+    let recoveredEffects = 0;
+    let manualReviewCount = 0;
+    const notes = [];
+    const at = now.toISOString();
+
+    // 先对账提交，再处理命令租约。已落地 artifact 的命令必须由提交回执直接确认成功，
+    // 不能先被误标为 manual_review。
+    for (const commit of workflow.commits) {
+        if (['committed', 'failed', 'manual_review'].includes(commit.phase))
+            continue;
+        const observedHash = artifactHashes.get(commit.messageKey);
+        if (observedHash && observedHash === commit.artifactHash) {
+            commit.phase = 'committed';
+            commit.committedAt = at;
+            commit.error = '';
+            commit.updatedAt = at;
+            recoveredCommits += 1;
+            notes.push(`提交 ${commit.commitId} 已由持久 artifact 对账确认`);
+        }
+        else if (observedHash) {
+            commit.phase = 'manual_review';
+            commit.error = '消息 artifact 与 prepared 提交哈希不一致';
+            commit.updatedAt = at;
+            manualReviewCount += 1;
+            notes.push(`提交 ${commit.commitId} 的 artifact 哈希不一致`);
+        }
+        else {
+            // 消息可能尚未载入或已在宿主保存途中。保留 prepared，避免启动瞬间误判为终态。
+            notes.push(`提交 ${commit.commitId} 尚未找到对应 artifact，保持待对账`);
+        }
+    }
+
+    for (const command of workflow.commands) {
+        if (command.status === 'succeeded')
+            continue;
+        const committed = [...workflow.commits].reverse().find((item) => item.commandId === command.commandId && item.phase === 'committed');
+        if (!committed)
+            continue;
+        command.status = 'succeeded';
+        command.finishedAt = command.finishedAt || committed.committedAt || at;
+        command.resultRef = command.resultRef || committed.messageKey;
+        command.resultHash = command.resultHash || committed.artifactHash;
+        command.error = '';
+        command.terminalReason = 'commit-reconciled';
+        command.leaseOwner = '';
+        command.leaseToken = '';
+        command.leaseUntil = '';
+        command.updatedAt = at;
+        recoveredCommands += 1;
+        notes.push(`命令 ${command.commandId} 已由提交回执确认成功`);
+    }
+
+    for (const command of workflow.commands) {
+        if (command.status !== 'running')
+            continue;
+        const leaseExpired = !command.leaseUntil || Date.parse(command.leaseUntil) <= now.getTime();
+        if (!leaseExpired || liveCommandIds.has(command.commandId))
+            continue;
+        command.status = 'manual_review';
+        command.finishedAt = at;
+        command.error = '运行任务的租约已过期；为避免重复调用模型，未自动重试';
+        command.terminalReason = 'lease-expired';
+        command.leaseOwner = '';
+        command.leaseToken = '';
+        command.leaseUntil = '';
+        command.updatedAt = at;
+        recoveredCommands += 1;
+        manualReviewCount += 1;
+        notes.push(`命令 ${command.commandId} 租约过期，已转人工复核`);
+    }
+
+    for (const effect of workflow.effects) {
+        if (effect.status !== 'running')
+            continue;
+        const expired = !effect.leaseUntil || Date.parse(effect.leaseUntil) <= now.getTime();
+        if (!expired)
+            continue;
+        effect.status = effect.receipt ? 'done' : 'manual_review';
+        effect.error = effect.receipt ? '' : '副作用租约过期且没有执行回执；未自动重放不可逆副作用';
+        effect.leaseOwner = '';
+        effect.leaseToken = '';
+        effect.leaseUntil = '';
+        effect.updatedAt = at;
+        recoveredEffects += 1;
+        if (!effect.receipt)
+            manualReviewCount += 1;
+    }
+    const changed = recoveredCommands || recoveredCommits || recoveredEffects;
+    if (changed)
+        mutate(workflow, at);
+    workflow.reconciliation = {
+        status: manualReviewCount ? 'manual_review' : changed ? 'recovered' : 'clean',
+        checkedAt: at,
+        recoveredCommands,
+        recoveredCommits,
+        recoveredEffects,
+        manualReviewCount,
+        notes: notes.slice(-40),
+    };
+    workflow.updatedAt = at;
+    return { workflow, changed: Boolean(changed), report: workflow.reconciliation };
+}
+
 
 }
 };
@@ -6650,15 +7668,126 @@ function explicitlyClosedEvent(event, sourceText) {
         && EXPLICIT_EVENT_TERMINAL_RE.test(eventEvidence)
         && EXPLICIT_EVENT_TERMINAL_RE.test(source));
 }
+const FLAT_FACT_LABELS = new Map([
+    ['事件', 'eventName'], ['event', 'eventName'],
+    ['表格', 'tableName'], ['table', 'tableName'],
+    ['对象', 'objectName'], ['object', 'objectName'],
+    ['语义层', 'layerLabel'], ['变化层', 'layerLabel'], ['层', 'layerLabel'], ['layer', 'layerLabel'],
+    ['事实', 'content'], ['内容', 'content'], ['fact', 'content'], ['content', 'content'],
+]);
+const FLAT_NATIVE_TAGS = {
+    characters: { 身份定义: 'MA_CHARACTER_IDENTITY', 现行事实: 'MA_CHARACTER_FACT', 当前状态: 'MA_CHARACTER_STATE', 外观表现: 'MA_CHARACTER_APPEARANCE', 关系状态: 'MA_CHARACTER_RELATION', 能力状态: 'MA_CHARACTER_ABILITY' },
+    items: { 身份定义: 'MA_ITEM_IDENTITY', 现行事实: 'MA_ITEM_FACT', 当前状态: 'MA_ITEM_STATE' },
+    scenes: { 身份定义: 'MA_SCENE_IDENTITY', 现行事实: 'MA_SCENE_FACT', 当前状态: 'MA_SCENE_STATE' },
+    regions: { 身份定义: 'MA_REGION_IDENTITY', 现行事实: 'MA_REGION_FACT', 当前状态: 'MA_REGION_STATE' },
+    globalChanges: { 身份定义: 'MA_GLOBAL_IDENTITY', 现行事实: 'MA_GLOBAL_FACT', 当前状态: 'MA_GLOBAL_STATE' },
+    foundations: { 身份定义: 'MA_FOUNDATION_IDENTITY', 现行事实: 'MA_FOUNDATION_FACT', 当前状态: 'MA_FOUNDATION_STATE' },
+    spacetime: { 当前状态: 'MA_SPACETIME_STATE' },
+};
+function normalizedFlatLabel(value) {
+    return String(value ?? '').normalize('NFKC').trim().toLowerCase().replace(/[\s_-]+/gu, '');
+}
+function parseFlatFactBody(body, line) {
+    const record = {};
+    let currentKey = '';
+    for (const rawLine of String(body || '').replace(/\r\n?/g, '\n').split('\n')) {
+        const trimmed = rawLine.trim();
+        if (!trimmed)
+            continue;
+        const match = trimmed.match(/^([^:：]{1,12})\s*[:：]\s*(.*)$/u);
+        const label = match ? FLAT_FACT_LABELS.get(normalizedFlatLabel(match[1])) : undefined;
+        if (label) {
+            currentKey = label;
+            record[label] = match[2].trim();
+            continue;
+        }
+        if (!currentKey)
+            throw new Error(`第 ${line} 行的 <MA_FACT> 包含无法识别的文本：${safeText(trimmed, 80)}`);
+        record[currentKey] = `${record[currentKey] || ''} ${trimmed}`.trim();
+    }
+    record.eventName = safeText(record.eventName, 240).trim();
+    record.tableName = safeText(record.tableName, 120).trim();
+    record.objectName = safeText(record.objectName, 240).trim();
+    record.layerLabel = safeText(record.layerLabel, 120).trim();
+    record.content = compactFactText(record.content, 220, '<MA_FACT>');
+    if (!record.tableName)
+        throw new Error(`第 ${line} 行的 <MA_FACT> 缺少“表格”`);
+    if (!record.objectName)
+        throw new Error(`第 ${line} 行的 <MA_FACT> 缺少“对象”`);
+    if (!record.layerLabel)
+        throw new Error(`第 ${line} 行的 <MA_FACT> 缺少“语义层”`);
+    if (!record.content)
+        throw new Error(`第 ${line} 行的 <MA_FACT> 缺少“事实”`);
+    return record;
+}
+function flatFactModule(record, active, line) {
+    const table = resolveTable(record.tableName, active);
+    const rawLayer = normalizedFlatLabel(record.layerLabel);
+    if (table.role === 'events' && ['动作骨架', '事件骨架', '核心变化', '当前摘要', '摘要'].some((label) => normalizedFlatLabel(label) === rawLayer)) {
+        return { tag: 'MA_CORE', line, layerLabel: '当前摘要', content: record.content, role: 'events', eventModule: true, unresolved: false };
+    }
+    const layer = resolveStateLayer(table, record.layerLabel);
+    if (table.role === 'events') {
+        const tag = layer.kind === 'status' || layer.key === 'currentStates' ? 'MA_EVENT_STATE' : layer.kind === 'content' ? 'MA_CORE' : 'MA_EVENT_RESULT';
+        return { tag, line, layerLabel: tag === 'MA_CORE' ? '当前摘要' : tag === 'MA_EVENT_STATE' ? '当前状态' : '现行事实', content: record.content, role: 'events', eventModule: true, unresolved: false };
+    }
+    const tag = FLAT_NATIVE_TAGS[table.role]?.[layer.label] || 'MA_CUSTOM';
+    return {
+        tag, line, objectName: record.objectName,
+        tableName: tag === 'MA_CUSTOM' ? table.name : undefined,
+        layerLabel: layer.label, content: record.content, role: tag === 'MA_CUSTOM' ? undefined : table.role,
+        eventModule: false, unresolved: false,
+    };
+}
+function parseFlatFactBlocks(source, registry, turns) {
+    const active = enabledTables(normalizeTableRegistry(registry));
+    const groups = new Map();
+    const factRe = /<MA_FACT>([\s\S]*?)<\/MA_FACT>/giu;
+    for (const match of source.matchAll(factRe)) {
+        const line = lineOf(source, match.index ?? 0);
+        const record = parseFlatFactBody(match[1], line);
+        const eventName = record.eventName || `${record.objectName}变化`;
+        if (!groups.has(eventName))
+            groups.set(eventName, { kind: 'event', line, eventName, reportedClosed: false, closed: false, modules: [] });
+        const event = groups.get(eventName);
+        event.line = Math.min(event.line, line);
+        event.modules.push(flatFactModule(record, active, line));
+    }
+    for (const event of groups.values()) {
+        const merged = new Map();
+        for (const module of event.modules) {
+            const key = module.eventModule
+                ? module.tag
+                : `${module.tag}|${canonicalObjectTitle(module.objectName)}|${module.tableName || ''}|${module.layerLabel}`;
+            if (!merged.has(key)) {
+                merged.set(key, module);
+                continue;
+            }
+            const current = merged.get(key);
+            current.content = unique([current.content, module.content], 20, 1600).join('；');
+        }
+        event.modules = [...merged.values()];
+        if (!event.modules.some((module) => module.tag === 'MA_CORE')) {
+            const first = event.modules[0];
+            if (!first)
+                throw new Error(`事件“${event.eventName}”没有事实模块`);
+            event.modules.unshift({
+                tag: 'MA_CORE', line: event.line, layerLabel: '当前摘要',
+                content: first.content, role: 'events', eventModule: true, unresolved: false, locallyDerived: true,
+            });
+        }
+    }
+    return [...turns, ...groups.values()].sort((a, b) => a.line - b.line);
+}
 /**
- * 1.3.14 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是最短事实。
+ * 状态模型防腐层。新协议只要求扁平 <MA_FACT>；旧 <MA_EVENT> 自然模块仍可读取用于兼容历史响应。
  */
-function parseStateTextBlocks(raw) {
+function parseStateTextBlocks(raw, registry = undefined) {
     const source = normalizeModelProtocolText(raw, 240000);
     if (!source)
         throw new Error('状态模型返回为空');
-    if (/<MA_CHANGE>|<MA_(?:FACT|ROW)>/iu.test(source)) {
-        throw new Error('状态模型返回了已停用键值协议；只接受 <MA_EVENT> 内的自然事实模块');
+    if (/<MA_CHANGE>|<MA_ROW>/iu.test(source)) {
+        throw new Error('状态模型返回了已停用键值协议；只接受扁平 <MA_FACT> 或兼容 <MA_EVENT>');
     }
     const output = [];
     const turnRe = /<MA_TURN>([\s\S]*?)<\/MA_TURN>/giu;
@@ -6667,6 +7796,8 @@ function parseStateTextBlocks(raw) {
         if (summary)
             output.push({ kind: 'turn', line: lineOf(source, match.index ?? 0), summary });
     }
+    if (/<MA_FACT>/iu.test(source))
+        return parseFlatFactBlocks(source, registry, output);
     const eventRe = /<MA_EVENT>([\s\S]*?)<\/MA_EVENT>/giu;
     for (const match of source.matchAll(eventRe)) {
         const body = match[1];
@@ -6922,7 +8053,7 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
     const active = enabledTables(normalizeTableRegistry(registry));
     const previous = dedupeStrongStateRows(previousSnapshot, registry);
     const working = structuredClone(previous);
-    const blocks = parseStateTextBlocks(raw);
+    const blocks = parseStateTextBlocks(raw, registry);
     const turnSummary = blocks.filter((block) => block.kind === 'turn').map((block) => block.summary).at(-1) ?? '';
     const factsById = new Map();
     const snapshot = {};
@@ -8380,6 +9511,10 @@ async function generateTask(options) {
         }, {
             requestPurpose: options.requestPurpose || 'plain',
             requestOrigin: options.requestOrigin ? safeText(options.requestOrigin, 80) : undefined,
+            intentId: options.intentId ? safeText(options.intentId, 220) : undefined,
+            activityAttemptId: options.activityAttemptId ? safeText(options.activityAttemptId, 220) : undefined,
+            activityStep: options.activityStep ? safeText(options.activityStep, 80) : undefined,
+            commandId: options.commandId ? safeText(options.commandId, 220) : undefined,
             systemPromptChars: options.systemPrompt.length,
             promptChars,
             responseTokens: tokenLimit,
@@ -8455,7 +9590,7 @@ function requestErrorMetadata(error) {
         return { errorKind: 'auth', httpStatus };
     if (httpStatus === 429 || /rate.?limit|too many requests/i.test(message))
         return { errorKind: 'rate_limit', httpStatus };
-    if ((httpStatus !== undefined && httpStatus >= 500) || /gateway|upstream|bad gateway|service unavailable|HTML错误页|not valid json|unexpected token\s*[\"']?</i.test(message))
+    if ((httpStatus !== undefined && httpStatus >= 500) || /gateway|upstream|bad gateway|service unavailable|HTML错误页|not valid json|unexpected token\s*["']?</i.test(message))
         return { errorKind: 'upstream', httpStatus };
     if (/timeout|timed out|超时/i.test(message))
         return { errorKind: 'timeout', httpStatus };
@@ -8463,10 +9598,17 @@ function requestErrorMetadata(error) {
         return { errorKind: 'request', httpStatus };
     return { errorKind: 'unknown', httpStatus };
 }
+function physicalDrainPromise(error) {
+    const drain = error && typeof error === 'object' ? error.drainPromise : undefined;
+    return drain && typeof drain.then === 'function'
+        ? Promise.resolve(drain).then(() => undefined, () => undefined)
+        : null;
+}
 /**
- * 每个显式 lane 保持单请求；不同 lane 可独立运行。
- * 调用方必须把 lane 组成定义为“物理连接 + 调度类别”，从而把业务链与只读诊断隔离。
- * pending 按优先级选取，已经 running 的请求不会被新任务强行中断。
+ * 每个物理连接保持单请求；business / diagnostic 只影响任务语义与诊断展示，
+ * 不再拆成可以并发的物理 lane。取消或超时可以立即结束业务 Promise，但若底层
+ * generateRaw / Connection Profile 不响应 AbortSignal，连接会继续保持排空锁，直到
+ * 原始传输真正结束后才放行下一请求。
  */
 class RequestLaneScheduler {
     static MAX_TRACES = 200;
@@ -8478,13 +9620,13 @@ class RequestLaneScheduler {
     }
     clearHistory() {
         for (const [id, trace] of this.traces) {
-            if (!['queued', 'running'].includes(String(trace.state)))
+            if (!['queued', 'running'].includes(String(trace.state)) && trace.physicalState !== 'draining')
                 this.traces.delete(id);
         }
     }
     prune() {
         while (this.traces.size > RequestLaneScheduler.MAX_TRACES) {
-            const removable = [...this.traces.entries()].find(([, trace]) => !['queued', 'running'].includes(String(trace.state)));
+            const removable = [...this.traces.entries()].find(([, trace]) => !['queued', 'running'].includes(String(trace.state)) && trace.physicalState !== 'draining');
             if (!removable)
                 break;
             this.traces.delete(removable[0]);
@@ -8510,37 +9652,44 @@ class RequestLaneScheduler {
         }
         return state.pending.splice(selectedIndex, 1)[0] ?? null;
     }
-    pump(laneName) {
-        const state = this.lane(laneName);
+    settleCancelled(job, message = '模型请求已取消') {
+        if (job.businessSettled)
+            return;
+        job.businessSettled = true;
+        job.businessFinishedMs = Date.now();
+        job.trace.state = 'cancelled';
+        job.trace.error = message;
+        job.trace.errorKind = 'cancelled';
+        job.trace.finishedAt = nowIso();
+        job.trace.requestMs = Math.max(0, job.businessFinishedMs - (job.startedMs || job.createdMs));
+        job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
+        job.reject(abortError(message));
+    }
+    pump(connectionLane) {
+        const state = this.lane(connectionLane);
         if (state.active)
             return;
         const job = this.selectNext(state);
         if (!job) {
             if (!state.pending.length)
-                this.lanes.delete(laneName);
+                this.lanes.delete(connectionLane);
             return;
         }
         if (job.signal.aborted) {
             job.signal.removeEventListener('abort', job.abortListener);
-            job.trace.state = 'cancelled';
-            job.trace.error = '模型请求已取消';
-            job.trace.errorKind = 'cancelled';
-            job.trace.finishedAt = nowIso();
             job.trace.transportWaitMs = Math.max(0, Date.now() - job.createdMs);
-            job.trace.totalMs = job.trace.transportWaitMs;
-            job.reject(abortError());
+            this.settleCancelled(job);
             this.prune();
-            this.pump(laneName);
+            this.pump(connectionLane);
             return;
         }
         state.active = job;
-        const startedMs = Date.now();
+        job.startedMs = Date.now();
         job.trace.state = 'running';
+        job.trace.physicalState = 'running';
         job.trace.startedAt = nowIso();
-        job.trace.transportWaitMs = Math.max(0, startedMs - job.createdMs);
-        // 与成熟 Promise 队列一致：执行函数即使同步 throw，也必须进入任务 Promise 的失败路径，
-        // 不能让 run() 直接抛出并把 lane 永久留在 active。
-        void Promise.resolve()
+        job.trace.transportWaitMs = Math.max(0, job.startedMs - job.createdMs);
+        const execution = Promise.resolve()
             .then(async () => {
             if (job.signal.aborted)
                 throw abortError();
@@ -8548,44 +9697,66 @@ class RequestLaneScheduler {
             if (job.signal.aborted)
                 throw abortError();
             return result;
-        })
+        });
+        void execution
             .then((result) => {
+            if (job.businessSettled)
+                return;
+            job.businessSettled = true;
+            job.businessFinishedMs = Date.now();
             job.trace.state = 'success';
+            job.trace.finishedAt = nowIso();
+            job.trace.requestMs = Math.max(0, job.businessFinishedMs - job.startedMs);
+            job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
             job.resolve(result);
         })
             .catch((error) => {
+            job.drainPromise = physicalDrainPromise(error);
+            if (job.businessSettled)
+                return;
+            job.businessSettled = true;
+            job.businessFinishedMs = Date.now();
             const metadata = requestErrorMetadata(error);
             job.trace.state = metadata.errorKind === 'cancelled' ? 'cancelled' : 'failed';
             job.trace.error = toErrorMessage(error);
             job.trace.errorKind = metadata.errorKind;
             job.trace.httpStatus = metadata.httpStatus;
+            job.trace.finishedAt = nowIso();
+            job.trace.requestMs = Math.max(0, job.businessFinishedMs - job.startedMs);
+            job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
             job.reject(error);
         })
-            .finally(() => {
-            const finishedMs = Date.now();
+            .finally(async () => {
+            if (job.drainPromise) {
+                job.trace.physicalState = 'draining';
+                await job.drainPromise;
+            }
+            const physicalFinishedMs = Date.now();
+            job.trace.physicalState = 'drained';
+            job.trace.physicalFinishedAt = nowIso();
+            job.trace.physicalRequestMs = Math.max(0, physicalFinishedMs - job.startedMs);
+            job.trace.physicalDrainMs = Math.max(0, physicalFinishedMs - (job.businessFinishedMs || physicalFinishedMs));
             job.signal.removeEventListener('abort', job.abortListener);
-            job.trace.finishedAt = nowIso();
-            job.trace.requestMs = Math.max(0, finishedMs - startedMs);
-            job.trace.totalMs = Math.max(0, finishedMs - job.createdMs);
             state.active = null;
             this.prune();
-            this.pump(laneName);
+            this.pump(connectionLane);
         });
     }
     run(connectionLane, requestClass, task, signal, work, metadata = {}) {
         if (signal.aborted)
             return Promise.reject(abortError());
-        const laneName = `${connectionLane}:${requestClass}`;
+        const traceLane = `${connectionLane}:${requestClass}`;
         const createdMs = Date.now();
         const id = makeId('request');
         const trace = {
             ...metadata,
             id,
-            lane: laneName,
+            lane: traceLane,
             connectionLane,
             requestClass,
             task,
             state: 'queued',
+            physicalState: 'queued',
             createdAt: nowIso(),
             transportWaitMs: 0,
             requestMs: 0,
@@ -8600,12 +9771,12 @@ class RequestLaneScheduler {
             resolve = resolveValue;
             reject = rejectValue;
         });
-        const state = this.lane(laneName);
+        const state = this.lane(connectionLane);
         const job = {
             id,
-            lane: laneName,
+            lane: connectionLane,
             task,
-            priority: REQUEST_PRIORITIES[task],
+            priority: REQUEST_PRIORITIES[task] ?? 0,
             sequence: this.sequence += 1,
             createdMs,
             signal,
@@ -8613,29 +9784,34 @@ class RequestLaneScheduler {
             resolve,
             reject,
             trace,
+            businessSettled: false,
+            businessFinishedMs: 0,
+            startedMs: 0,
+            drainPromise: null,
             abortListener: () => {
-                if (state.active === job)
+                if (state.active === job) {
+                    // 内部超时由 withTimeout 立即返回带 drainPromise 的 TimeoutError；
+                    // 这里不能先把它降级成普通取消，否则 UI 会丢失真实超时原因。
+                    if (job.signal.reason instanceof Error && job.signal.reason.name === 'TimeoutError')
+                        return;
+                    this.settleCancelled(job);
                     return;
+                }
                 const index = state.pending.indexOf(job);
                 if (index < 0)
                     return;
                 state.pending.splice(index, 1);
-                trace.state = 'cancelled';
-                trace.error = '模型请求已取消';
-                trace.errorKind = 'cancelled';
-                trace.finishedAt = nowIso();
                 trace.transportWaitMs = Math.max(0, Date.now() - createdMs);
-                trace.totalMs = trace.transportWaitMs;
                 signal.removeEventListener('abort', job.abortListener);
-                reject(abortError());
+                this.settleCancelled(job);
                 this.prune();
-                this.pump(laneName);
+                this.pump(connectionLane);
             },
         };
         signal.addEventListener('abort', job.abortListener, { once: true });
         state.pending.push(job);
         this.prune();
-        this.pump(laneName);
+        this.pump(connectionLane);
         return promise;
     }
 }
@@ -8651,6 +9827,8 @@ Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,con
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"artifactIntentCorrelation",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentCorrelation"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"describeTaskConnection",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["describeTaskConnection"]});
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
@@ -8685,12 +9863,13 @@ function applyAuditVisibility(index, hidden, marked = false) {
 function isCancelledAuditRequest(error) {
     return error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name);
 }
-async function auditText(playerRules, playerText, assistantText) {
+async function auditText(playerRules, playerText, assistantText, correlation = {}) {
     const raw = await generateTask({
         task: 'audit',
         systemPrompt: auditSystemPrompt(),
         prompt: auditUserPrompt(playerRules, playerText, assistantText),
         requestPurpose: 'fixed-text',
+        ...correlation,
     });
     try {
         return parseAuditResult(raw);
@@ -8734,7 +9913,7 @@ function alignRevisionStageWithAudit(artifact, result) {
     if (settings.auditFailAction === 'revise') {
         // 失败审核本身是可恢复检查点。即使旧数据把 revision 留在 skipped，
         // 也必须恢复成待执行，避免“从失败位置继续”时直接越过修正。
-        if (artifact.stages.revision.status !== 'running' && !committedRevision) {
+        if (artifactIntentStep(artifact, 'revision').status !== 'running' && !committedRevision) {
             markStage(artifact, 'revision', 'idle');
         }
         return;
@@ -8747,7 +9926,6 @@ function alignRevisionStageWithAudit(artifact, result) {
  */
 async function runAudit(artifact, force = false) {
     const settings = getSettings();
-    artifact.stages.revision ||= { status: 'idle', attempts: 0 };
     if (!resolveHostControl(settings).audit) {
         markStage(artifact, 'audit', 'skipped');
         markStage(artifact, 'revision', 'skipped');
@@ -8772,8 +9950,8 @@ async function runAudit(artifact, force = false) {
     const cachedRuleMatches = !artifact.auditRuleFingerprint || artifact.auditRuleFingerprint === ruleFingerprint;
     const cachedSourceMatches = !artifact.auditSourceFingerprint || artifact.auditSourceFingerprint === artifact.sourceFingerprint;
     const cachedTerminalMatches = Boolean(cachedAudit
-        && ((cachedAudit.passed && artifact.stages.audit.status === 'success' && artifact.approvedFingerprint === artifact.sourceFingerprint)
-            || (!cachedAudit.passed && artifact.stages.audit.status === 'blocked')));
+        && ((cachedAudit.passed && artifactIntentStep(artifact, 'audit').status === 'success' && artifact.approvedFingerprint === artifact.sourceFingerprint)
+            || (!cachedAudit.passed && artifactIntentStep(artifact, 'audit').status === 'blocked')));
     if (!force && cachedTerminalMatches && cachedRuleMatches && cachedSourceMatches && cachedAudit) {
         artifact.auditRuleFingerprint = ruleFingerprint;
         artifact.auditSourceFingerprint = artifact.sourceFingerprint;
@@ -8783,7 +9961,7 @@ async function runAudit(artifact, force = false) {
     markStage(artifact, 'audit', 'running');
     await putArtifact(artifact);
     try {
-        const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText);
+        const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText, artifactIntentCorrelation(artifact, 'audit', 'audit-primary'));
         assertArtifactCommitCurrent(artifact);
         artifact.audit = result;
         artifact.auditRuleFingerprint = ruleFingerprint;
@@ -8832,6 +10010,9 @@ Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:tr
 Object.defineProperty(__scope,"MODULE_NAME",{enumerable:true,configurable:true,get:()=>__require("constants.js")["MODULE_NAME"]});
 Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
 Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"advanceCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["advanceCommit"]});
+Object.defineProperty(__scope,"artifactCommitHash",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["artifactCommitHash"]});
+Object.defineProperty(__scope,"prepareCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["prepareCommit"]});
 with(__scope){
 Object.defineProperty(exports,"commitArtifact",{enumerable:true,configurable:true,get:()=>commitArtifact});
 Object.defineProperty(exports,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>commitCoreBundle});
@@ -8910,10 +10091,55 @@ async function commitArtifact({ artifact, snapshot = captureCommitSnapshot(artif
  */
 async function commitCoreBundle({ artifact, chatState, snapshot = captureCommitSnapshot(artifact), notify }) {
     assertCommitSnapshotCurrent(snapshot, artifact);
-    await putChatState(chatState);
-    assertCommitSnapshotCurrent(snapshot, artifact);
-    await commitArtifact({ artifact, snapshot, notify });
-    return { artifact, chatState, snapshot };
+    const intentId = artifact.intentId || artifact.processingIntent?.intentId || '';
+    const commandId = artifact.processingCommandId || `${intentId}:core-commit`;
+    const prepared = prepareCommit(chatState.reliableWorkflow, {
+        intentId,
+        commandId,
+        chatKey: snapshot.chatKey,
+        messageKey: snapshot.messageKey,
+        sourceFingerprint: snapshot.sourceFingerprint,
+        artifactHash: artifactCommitHash(artifact),
+        stateRevision: chatState.runtimeV2?.revision || 0,
+    });
+    chatState.reliableWorkflow = prepared.workflow;
+    let chatStateWritten = false;
+    let artifactWritten = false;
+    try {
+        // prepared 与规范 ChatState 在同一次 metadata 保存中落地。若后续消息保存失败，
+        // Reconciler 可依据该记录与 artifact 哈希确定性对账，不会盲目重跑模型。
+        await putChatState(chatState);
+        chatStateWritten = true;
+        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written').workflow;
+        assertCommitSnapshotCurrent(snapshot, artifact);
+        await commitArtifact({ artifact, snapshot, notify });
+        artifactWritten = true;
+        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written').workflow;
+        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'committed').workflow;
+        await putChatState(chatState);
+        return { artifact, chatState, snapshot, commitId: prepared.commit.commitId };
+    }
+    catch (error) {
+        try {
+            if (!chatStateWritten) {
+                // 首次 ChatState 写入本身失败，尚无可用于恢复的 prepared 记录，允许记录为明确失败。
+                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'failed', error instanceof Error ? error.message : String(error)).workflow;
+            }
+            else if (artifactWritten) {
+                // artifact 已物理写入但最终回执未保存：保持非终态，由 Reconciler 通过 artifact 哈希确认。
+                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written', error instanceof Error ? error.message : String(error)).workflow;
+            }
+            else {
+                // commitArtifact 可能在物理保存后因聊天切换守卫拒绝，不能武断标记 failed。
+                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written', error instanceof Error ? error.message : String(error)).workflow;
+            }
+            await putChatState(chatState);
+        }
+        catch (recordError) {
+            console.warn('[MirrorAbyss] core commit failed and commit record could not be finalized', recordError);
+        }
+        throw error;
+    }
 }
 
 }
@@ -8922,6 +10148,7 @@ __defs["pipeline/core-transaction.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 Object.defineProperty(__scope,"mergeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["mergeInternalFacts"]});
@@ -8963,7 +10190,7 @@ function prepareDerivedStageStatuses(artifact, chatState, settings) {
         else if (artifact.runtimeV2?.plan?.sync && artifact.runtimeV2?.plan?.syncJobId)
             markStage(artifact, 'sync', 'queued');
         else
-            markStage(artifact, 'sync', artifact.stages.sync?.status === 'success' ? 'success' : 'skipped');
+            markStage(artifact, 'sync', artifactIntentStep(artifact, 'sync').status === 'success' ? 'success' : 'skipped');
     }
     return plan;
 }
@@ -8977,7 +10204,7 @@ async function commitCoreTransaction({
     scheduleDerived = true,
     notify,
 }) {
-    if (!artifact.snapshot || artifact.stages.state.status !== 'success')
+    if (!artifact.snapshot || artifactIntentStep(artifact, 'state').status !== 'success')
         throw new Error('状态表尚未成功，不能提交核心结果');
     const commitSnapshot = captureCommitSnapshot(artifact, historyRevision);
     const chatState = await getChatState(artifact.chatKey);
@@ -9048,6 +10275,7 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"sanitizeBookName",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["sanitizeBookName"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
 Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
@@ -10055,11 +11283,11 @@ async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedi
  */
 async function syncLorebookOnce(artifact, name, force = false, options = {}) {
     assertArtifactCommitCurrent(artifact);
-    if (!artifact.snapshot || artifact.stages.state.status !== 'success') {
+    if (!artifact.snapshot || artifactIntentStep(artifact, 'state').status !== 'success') {
         throw new Error('没有成功状态表，停止世界书同步');
     }
     const settings = getSettings();
-    const retryingFailedSync = artifact.stages.sync.status === 'failed';
+    const retryingFailedSync = artifactIntentStep(artifact, 'sync').status === 'failed';
     if (!resolveHostControl(settings).lorebook && !force) {
         markStage(artifact, 'sync', 'skipped');
         await putArtifact(artifact);
@@ -10249,7 +11477,7 @@ async function previewLorebookMaintenance(artifact) {
  */
 async function applyLorebookMaintenance(artifact) {
     assertArtifactCommitCurrent(artifact);
-    if (!artifact.snapshot || artifact.stages.state.status !== 'success') {
+    if (!artifact.snapshot || artifactIntentStep(artifact, 'state').status !== 'success') {
         throw new Error('没有成功状态表，停止世界书维护');
     }
     const name = resolveTargetBookName(true, artifact.chatKey);
@@ -10552,6 +11780,9 @@ function runManualMutation({ index, artifact, label, mutate }) {
         messageFingerprint: artifact.sourceFingerprint,
         historyRevisionAtEnqueue: historyRevision,
         automatic: false,
+        intentId: artifact.intentId || artifact.processingIntent?.intentId,
+        intentStep: 'state',
+        commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:manual-state`,
     });
 }
 
@@ -10609,6 +11840,7 @@ Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:(
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["getAttachedArtifact"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
@@ -10622,6 +11854,7 @@ Object.defineProperty(__scope,"runSummaryStage",{enumerable:true,configurable:tr
 Object.defineProperty(__scope,"TaskBlockedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskBlockedError"]});
 Object.defineProperty(__scope,"TaskSkippedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskSkippedError"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+Object.defineProperty(__scope,"startRuntimeJobHeartbeat",{enumerable:true,configurable:true,get:()=>__require("pipeline/runtime-effects.js")["startRuntimeJobHeartbeat"]});
 Object.defineProperty(__scope,"transitionRuntimeJob",{enumerable:true,configurable:true,get:()=>__require("pipeline/runtime-effects.js")["transitionRuntimeJob"]});
 with(__scope){
 Object.defineProperty(exports,"resumeRuntimeOutbox",{enumerable:true,configurable:true,get:()=>resumeRuntimeOutbox});
@@ -10745,7 +11978,7 @@ function queueSync(index, artifact, historyRevision, preferredJobId = '') {
     if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled)
         return;
     if (!resolveHostControl(getSettings()).lorebook) {
-        if (['queued', 'running'].includes(String(artifact.stages?.sync?.status))) {
+        if (['queued', 'running'].includes(String(artifactIntentStep(artifact, 'sync').status))) {
             markStage(artifact, 'sync', 'skipped', '世界书托管已关闭');
             void commitArtifact({ artifact }).catch((error) => {
                 if (!(error instanceof CommitRejectedError))
@@ -10761,17 +11994,21 @@ function queueSync(index, artifact, historyRevision, preferredJobId = '') {
         return taskQueue.run(key, `后台同步第 ${index + 1} 条正文世界书`, 'sync', async (guard) => {
             await runWithArtifactGuards(artifact, historyRevision, guard, async (commitSnapshot) => {
                 const claimed = await transitionRuntimeJob(chatKey, job.id, 'running', artifact);
-                if (!claimed || ['done', 'cancelled'].includes(claimed.status))
-                    throw new TaskSkippedError('世界书 Outbox 任务已被其他修订完成或替代');
+                if (!claimed || ['done', 'cancelled'].includes(claimed.status) || claimed.claimAccepted === false)
+                    throw new TaskSkippedError('世界书 Outbox 任务已被其他执行者领取、完成或替代');
+                const stopHeartbeat = startRuntimeJobHeartbeat({ chatKey, jobId: job.id, leaseToken: claimed.leaseToken });
                 try {
                     await syncLorebook(artifact);
-                    await transitionRuntimeJob(chatKey, job.id, 'done', artifact);
+                    const completed = await transitionRuntimeJob(chatKey, job.id, 'done', artifact, '', { leaseToken: claimed.leaseToken });
+                    if (!completed || completed.claimAccepted === false)
+                        throw new TaskSkippedError('世界书 Outbox 租约已失效，旧结果不再确认');
                 }
                 catch (error) {
-                    await transitionRuntimeJob(chatKey, job.id, 'failed', artifact, toErrorMessage(error));
+                    await transitionRuntimeJob(chatKey, job.id, 'failed', artifact, toErrorMessage(error), { leaseToken: claimed.leaseToken });
                     throw error;
                 }
                 finally {
+                    stopHeartbeat();
                     await commitArtifact({ artifact, snapshot: commitSnapshot });
                 }
             });
@@ -10783,6 +12020,9 @@ function queueSync(index, artifact, historyRevision, preferredJobId = '') {
             messageFingerprint: artifact.sourceFingerprint,
             historyRevisionAtEnqueue: historyRevision,
             automatic: true,
+            intentId: artifact.intentId || artifact.processingIntent?.intentId,
+            intentStep: 'sync',
+            commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:outbox:${job.id}`,
         });
     }).catch(async (error) => {
         await settleInterruptedDerivedStage(artifact, 'sync', error);
@@ -10810,19 +12050,21 @@ function queueRuntimeOutbox(index, artifact, historyRevision, plan = {}) {
         return taskQueue.run(key, `后台生成第 ${index + 1} 条正文${kind === 'small' ? '小' : '大'}总结`, kind === 'small' ? 'smallSummary' : 'largeSummary', async (guard) => {
             await runWithArtifactGuards(artifact, historyRevision, guard, async (commitSnapshot) => {
                 const claimed = await transitionRuntimeJob(chatKey, job.id, 'running', artifact);
-                if (!claimed || ['done', 'cancelled'].includes(claimed.status))
-                    throw new TaskSkippedError('总结 Outbox 任务已被其他修订完成或替代');
+                if (!claimed || ['done', 'cancelled'].includes(claimed.status) || claimed.claimAccepted === false)
+                    throw new TaskSkippedError('总结 Outbox 任务已被其他执行者领取、完成或替代');
+                const stopHeartbeat = startRuntimeJobHeartbeat({ chatKey, jobId: job.id, leaseToken: claimed.leaseToken });
                 try {
                     await runSummaryStage(artifact, kind);
-                    const completed = await transitionRuntimeJob(chatKey, job.id, 'done', artifact);
-                    if (!completed || completed.status !== 'done')
-                        throw new TaskSkippedError('总结 Outbox 任务已被更新正文替代');
+                    const completed = await transitionRuntimeJob(chatKey, job.id, 'done', artifact, '', { leaseToken: claimed.leaseToken });
+                    if (!completed || completed.status !== 'done' || completed.claimAccepted === false)
+                        throw new TaskSkippedError('总结 Outbox 任务已被更新正文替代或租约失效');
                 }
                 catch (error) {
-                    await transitionRuntimeJob(chatKey, job.id, 'failed', artifact, toErrorMessage(error));
+                    await transitionRuntimeJob(chatKey, job.id, 'failed', artifact, toErrorMessage(error), { leaseToken: claimed.leaseToken });
                     throw error;
                 }
                 finally {
+                    stopHeartbeat();
                     await commitArtifact({ artifact, snapshot: commitSnapshot });
                 }
             });
@@ -10834,6 +12076,9 @@ function queueRuntimeOutbox(index, artifact, historyRevision, plan = {}) {
             messageFingerprint: artifact.sourceFingerprint,
             historyRevisionAtEnqueue: historyRevision,
             automatic: true,
+            intentId: artifact.intentId || artifact.processingIntent?.intentId,
+            intentStep: 'summary',
+            commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:outbox:${job.id}`,
         });
     }).then(() => queueSync(index, artifact, historyRevision, syncJobId), async (error) => {
         await settleInterruptedDerivedStage(artifact, 'summary', error);
@@ -10907,16 +12152,20 @@ Object.defineProperty(__scope,"latestAssistantIndex",{enumerable:true,configurab
 Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageFingerprint"]});
 Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageIdentity"]});
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"abortActiveAutomaticSummaryRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveAutomaticSummaryRequests"]});
 Object.defineProperty(__scope,"abortActiveBusinessRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveBusinessRequests"]});
 Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveRequests"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
 Object.defineProperty(__scope,"createArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["createArtifact"]});
 Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["getAttachedArtifact"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
+Object.defineProperty(__scope,"processingIntentId",{enumerable:true,configurable:true,get:()=>__require("domain/processing-intent.js")["processingIntentId"]});
+Object.defineProperty(__scope,"commandKey",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["commandKey"]});
 Object.defineProperty(__scope,"firstInconsistentArtifactIndex",{enumerable:true,configurable:true,get:()=>__require("domain/history.js")["firstInconsistentArtifactIndex"]});
 Object.defineProperty(__scope,"beginHistoryRecovery",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["beginHistoryRecovery"]});
 Object.defineProperty(__scope,"chooseHistoryWorkflowStart",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["chooseHistoryRecalculationStart"]});
@@ -10954,6 +12203,11 @@ Object.defineProperty(__scope,"commitCoreTransaction",{enumerable:true,configura
 Object.defineProperty(__scope,"queueRuntimeOutbox",{enumerable:true,configurable:true,get:()=>__require("pipeline/outbox-runner.js")["queueRuntimeOutbox"]});
 Object.defineProperty(__scope,"recordCompletedSummaryEffects",{enumerable:true,configurable:true,get:()=>__require("pipeline/runtime-effects.js")["recordCompletedSummaryEffects"]});
 Object.defineProperty(__scope,"runTrackedRuntimeEffect",{enumerable:true,configurable:true,get:()=>__require("pipeline/runtime-effects.js")["runTrackedRuntimeEffect"]});
+Object.defineProperty(__scope,"beginPersistentCommand",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["beginPersistentCommand"]});
+Object.defineProperty(__scope,"commandStatusForError",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["commandStatusForError"]});
+Object.defineProperty(__scope,"receivePersistentHostEvent",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["receivePersistentHostEvent"]});
+Object.defineProperty(__scope,"settlePersistentCommand",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["settlePersistentCommand"]});
+Object.defineProperty(__scope,"startPersistentCommandHeartbeat",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["startPersistentCommandHeartbeat"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 Object.defineProperty(__scope,"createPlayerRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["createPlayerRecordingBoundary"]});
 Object.defineProperty(__scope,"messageInsideRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["messageInsideRecordingBoundary"]});
@@ -11033,7 +12287,7 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
             continue;
         let changed = false;
         for (const stage of ['audit', 'revision', 'state', 'summary', 'sync']) {
-            const status = artifact.stages?.[stage]?.status;
+            const status = artifactIntentStep(artifact, stage).status;
             if (status !== 'queued' && status !== 'running')
                 continue;
             markStage(artifact, stage, 'cancelled', reason);
@@ -11055,10 +12309,18 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
     for (const job of runtime.outbox) {
         if (job.status !== 'running')
             continue;
-        job.status = 'pending';
-        job.startedAt = '';
-        job.finishedAt = '';
-        job.error = reason;
+        const leaseActive = Boolean(job.claimedBy && job.leaseUntil && Date.parse(job.leaseUntil) > Date.now());
+        // 旧版 running 没有租约，可以立即回收；新架构的有效租约必须等待物理执行排空或过期。
+        if (leaseActive)
+            continue;
+        job.status = job.receipt ? 'done' : 'pending';
+        job.startedAt = job.receipt ? job.startedAt : '';
+        job.finishedAt = job.receipt?.confirmedAt || '';
+        job.error = job.receipt ? '' : reason;
+        job.claimedBy = '';
+        job.leaseToken = '';
+        job.leaseUntil = '';
+        job.heartbeatAt = nowIso();
         runtimeChanged = true;
     }
     if (runtime.machines.publication.status === 'writing') {
@@ -11177,7 +12439,6 @@ async function loadOrCreateArtifact(index, _force, historyRevision, taskGuard) {
         attachArtifactToMessage(message, artifact);
         // 创建/绑定 artifact 不是业务提交点。失败与成功终态由后续检查点统一保存，
         // 避免模型调用前先写入一个没有新增业务结果的空壳 artifact。
-        artifact.stages.revision ||= { status: 'idle', attempts: 0 };
         return artifact;
     }
     catch (error) {
@@ -11195,7 +12456,7 @@ function committedArtifactsForMessageKeys(messageKeys) {
         const artifact = getAttachedArtifact(getMessage(index));
         if (!artifact || !keys.has(artifact.messageKey))
             continue;
-        if (!artifact.snapshot || artifact.stages?.state?.status !== 'success')
+        if (!artifact.snapshot || artifactIntentStep(artifact, 'state').status !== 'success')
             continue;
         artifacts.push(artifact);
     }
@@ -11276,7 +12537,8 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
     artifact.snapshot = undefined;
     markStage(artifact, 'state', 'idle');
     markStage(artifact, 'summary', 'idle');
-    markStage(artifact, 'sync', 'blocked', '正文已修正，等待重新生成表格');
+    // 旧发布已暂停；新正文的表格与世界书尚未执行，属于“等待继续”而不是业务阻断。
+    markStage(artifact, 'sync', 'idle');
     await putChatState(chatState);
     await saveArtifactToMessage(artifact.messageIndex, artifact);
     try {
@@ -11334,7 +12596,28 @@ async function processMessage(index, force = false, options = {}) {
     const triggerSource = options.triggerSource
         || (options.historyRecovery ? 'history-recovery' : options.automatic ? 'automatic' : force ? 'manual-force' : 'manual');
     const key = `${PIPELINE_VERSION}:${scheduledChatKey}:${identity}`;
+    const intentId = processingIntentId(scheduledChatKey, identity, scheduledFingerprint);
     const attachedAtEnqueue = getAttachedArtifact(message);
+    const commandAttempt = force
+        ? Math.max(1, Number(attachedAtEnqueue?.processingIntent?.steps?.state?.attempts || 0) + 1)
+        : options.historyRecovery
+            ? Math.max(1, scheduledHistoryRevision + 1)
+            : 1;
+    const fullCommandKey = commandKey({
+        intentId,
+        commandType: 'full',
+        attempt: commandAttempt,
+        input: { scheduledFingerprint, scheduledHistoryRevision, force: Boolean(force), historyRecovery: Boolean(options.historyRecovery) },
+    });
+    const acceptedHostEvent = await receivePersistentHostEvent({
+        chatKey: scheduledChatKey,
+        eventType: options.hostEventType || triggerSource,
+        messageKey: identity,
+        sourceFingerprint: scheduledFingerprint,
+        hostRevision: scheduledHistoryRevision,
+        intentId,
+    });
+    const hostEventKey = acceptedHostEvent.event.eventKey;
     const duplicateCommittedAutomatic = Boolean(options.automatic
         && !force
         && !options.historyRecovery
@@ -11396,12 +12679,59 @@ async function processMessage(index, force = false, options = {}) {
             && attached.sourceFingerprint === scheduledFingerprint
             && attached.messageKey === identity
             && attached.snapshot
-            && attached.stages.state.status === 'success'
+            && artifactIntentStep(attached, 'state').status === 'success'
             && processingState.processedMessageKeys.includes(attached.messageKey));
         if (alreadyCommitted) {
             throw new TaskSkippedError('相同正文已由当前流水线正式提交，本次自动任务不再重复处理');
         }
-        const artifact = await loadOrCreateArtifact(index, force, scheduledHistoryRevision, guard);
+        const commandClaim = await beginPersistentCommand({
+            chatKey: scheduledChatKey,
+            eventKey: hostEventKey,
+            idempotencyKey: fullCommandKey,
+            input: { scheduledFingerprint, scheduledHistoryRevision, force: Boolean(force), historyRecovery: Boolean(options.historyRecovery) },
+            commandType: 'full',
+            intentId,
+            step: 'state',
+        });
+        if (!commandClaim.execute) {
+            if (commandClaim.command?.status === 'succeeded') {
+                const completedArtifact = getAttachedArtifact(getMessage(index));
+                if (completedArtifact?.sourceFingerprint === scheduledFingerprint)
+                    return completedArtifact;
+            }
+            throw new TaskSkippedError(commandClaim.terminal
+                ? `相同命令已有持久终态：${commandClaim.command?.status || 'unknown'}`
+                : '相同命令仍由另一执行者持有有效租约');
+        }
+        const stopCommandHeartbeat = startPersistentCommandHeartbeat({
+            chatKey: scheduledChatKey,
+            commandId: commandClaim.command.commandId,
+            leaseToken: commandClaim.command.leaseToken,
+        });
+        let artifact;
+        try {
+            artifact = await loadOrCreateArtifact(index, force, scheduledHistoryRevision, guard);
+        }
+        catch (error) {
+            stopCommandHeartbeat();
+            try {
+                await settlePersistentCommand({
+                    chatKey: scheduledChatKey,
+                    eventKey: hostEventKey,
+                    intentId,
+                    commandId: commandClaim.command.commandId,
+                    leaseToken: commandClaim.command.leaseToken,
+                    status: commandStatusForError(error),
+                    error: toErrorMessage(error),
+                    reason: error instanceof Error ? error.name : 'artifact-load-failed',
+                });
+            }
+            catch (settleError) {
+                console.warn('[MirrorAbyss] failed to settle command after artifact load failure', settleError);
+            }
+            throw error;
+        }
+        artifact.processingCommandId = commandClaim.command.commandId;
         notify(index, artifact);
         try {
             let audit = await runAudit(artifact, force);
@@ -11420,21 +12750,21 @@ async function processMessage(index, force = false, options = {}) {
                 markStage(artifact, 'summary', 'blocked', '规则审核未通过');
                 markStage(artifact, 'sync', 'blocked', '规则审核未通过');
                 await saveArtifactToMessage(index, artifact);
-                return artifact;
+                throw new TaskBlockedError(artifact.audit?.reason || '规则审核未通过');
             }
             if (settings.autoState || force) {
                 await runStateExtraction(artifact, force);
                 await saveArtifactToMessage(index, artifact);
             }
             else {
-                if (!artifact.snapshot || artifact.stages.state.status !== 'success') {
+                if (!artifact.snapshot || artifactIntentStep(artifact, 'state').status !== 'success') {
                     markStage(artifact, 'state', 'skipped');
                     markStage(artifact, 'summary', 'skipped');
                     markStage(artifact, 'sync', 'skipped');
                 }
                 await saveArtifactToMessage(index, artifact);
             }
-            if (artifact.snapshot && artifact.stages.state.status === 'success') {
+            if (artifact.snapshot && artifactIntentStep(artifact, 'state').status === 'success') {
                 const { plan: summaryPlan } = await commitCoreTransaction({
                     artifact,
                     historyRevision: scheduledHistoryRevision,
@@ -11449,11 +12779,41 @@ async function processMessage(index, force = false, options = {}) {
                     queueRuntimeOutbox(index, artifact, scheduledHistoryRevision, summaryPlan);
                 }
             }
+            try {
+                await settlePersistentCommand({
+                    chatKey: scheduledChatKey,
+                    eventKey: hostEventKey,
+                    intentId,
+                    commandId: commandClaim.command.commandId,
+                    leaseToken: commandClaim.command.leaseToken,
+                    status: 'succeeded',
+                    resultRef: artifact.messageKey,
+                    result: { messageKey: artifact.messageKey, intentVersion: artifact.processingIntent?.version || 0 },
+                });
+            }
+            catch (settleError) {
+                console.warn('[MirrorAbyss] core workflow committed but command receipt was not persisted', settleError);
+            }
             return artifact;
         }
         catch (error) {
             const messageText = toErrorMessage(error);
             console.error('[MirrorAbyss] pipeline failed', error);
+            try {
+                await settlePersistentCommand({
+                    chatKey: scheduledChatKey,
+                    eventKey: hostEventKey,
+                    intentId,
+                    commandId: commandClaim.command.commandId,
+                    leaseToken: commandClaim.command.leaseToken,
+                    status: commandStatusForError(error),
+                    error: messageText,
+                    reason: error instanceof Error ? error.name : 'error',
+                });
+            }
+            catch (settleError) {
+                console.warn('[MirrorAbyss] failed to persist command terminal state', settleError);
+            }
             if (error instanceof CommitRejectedError) {
                 toast('warning', messageText);
                 throw error;
@@ -11466,6 +12826,8 @@ async function processMessage(index, force = false, options = {}) {
             throw error;
         }
         finally {
+            stopCommandHeartbeat();
+            delete artifact.processingCommandId;
             unbindArtifactTaskGuard(artifact, guard);
             unbindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
         }
@@ -11478,6 +12840,8 @@ async function processMessage(index, force = false, options = {}) {
         historyRevisionAtEnqueue: scheduledHistoryRevision,
         historyRecoveryPhaseAtEnqueue: enqueueWorkflow.phase,
         automatic: options.automatic === true,
+        intentId,
+        commandId: fullCommandKey,
         exclusiveToken: options.queueExclusiveToken,
     });
 }
@@ -11525,7 +12889,8 @@ function scheduleMessage(payload, force = false, delay = 0, triggerSource = 'aut
         })().catch((error) => {
             if (error instanceof CommitRejectedError
                 || error instanceof TaskSkippedError
-                || (error instanceof Error && ['AbortError', 'TaskSkippedError'].includes(error.name)))
+                || error instanceof TaskBlockedError
+                || (error instanceof Error && ['AbortError', 'TaskSkippedError', 'TaskBlockedError'].includes(error.name)))
                 return;
             console.error('[MirrorAbyss] scheduled processing failed', error);
             toast('error', `自动整理失败：${toErrorMessage(error)}`);
@@ -11801,7 +13166,19 @@ async function recalculateInvalidatedHistory() {
                     unbindArtifactTaskGuard(artifact, guard);
                     unbindArtifactHistoryRevision(artifact, revision);
                 }
-            }, { priority: 70, chatKey, exclusiveToken: queueExclusiveToken });
+            }, {
+                priority: 70,
+                chatKey,
+                triggerSource: 'history-recovery-derived',
+                messageKey: artifact.messageKey,
+                messageFingerprint: artifact.sourceFingerprint,
+                historyRevisionAtEnqueue: revision,
+                automatic: false,
+                intentId: artifact.intentId || artifact.processingIntent?.intentId,
+                intentStep: 'summary',
+                commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:history-recovery-derived`,
+                exclusiveToken: queueExclusiveToken,
+            });
         }
         catch (error) {
             if (derivedTaskError(error))
@@ -11878,6 +13255,24 @@ async function retryStage(index, stage) {
     const scheduledHistoryRevision = currentHistoryRevision(chatKey);
     const identity = messageIdentity(index);
     const key = `${PIPELINE_VERSION}:retry:${stage}:${chatKey}:${identity}`;
+    const retryFingerprint = messageFingerprint(index);
+    const intentId = processingIntentId(chatKey, identity, retryFingerprint);
+    const retryArtifactAtEnqueue = getAttachedArtifact(getMessage(index));
+    const retryAttempt = Math.max(1, Number(retryArtifactAtEnqueue?.processingIntent?.steps?.[stage]?.attempts || 0) + 1);
+    const retryCommandKey = commandKey({
+        intentId,
+        commandType: `retry-${stage}`,
+        attempt: retryAttempt,
+        input: { retryFingerprint, scheduledHistoryRevision, stage },
+    });
+    const retryHostEvent = await receivePersistentHostEvent({
+        chatKey,
+        eventType: `manual-retry-${stage}`,
+        messageKey: identity,
+        sourceFingerprint: retryFingerprint,
+        hostRevision: scheduledHistoryRevision,
+        intentId,
+    });
     const queueKind = stage === 'sync' ? 'sync' : stage === 'summary' ? 'smallSummary' : stage;
     return taskQueue.run(key, `重试${stage}`, queueKind, async (guard) => {
         if (currentChatKey() !== chatKey)
@@ -11890,6 +13285,28 @@ async function retryStage(index, stage) {
         const artifact = latestSnapshot?.index === index
             ? latestSnapshot.artifact
             : await loadOrCreateArtifact(index, false, scheduledHistoryRevision, guard);
+        const commandClaim = await beginPersistentCommand({
+            chatKey,
+            eventKey: retryHostEvent.event.eventKey,
+            idempotencyKey: retryCommandKey,
+            input: { retryFingerprint, scheduledHistoryRevision, stage },
+            commandType: `retry-${stage}`,
+            intentId,
+            step: stage === 'summary' ? 'summary' : stage,
+        });
+        if (!commandClaim.execute) {
+            if (commandClaim.command?.status === 'succeeded')
+                return artifact;
+            throw new TaskSkippedError(commandClaim.terminal
+                ? `相同重试命令已有持久终态：${commandClaim.command?.status || 'unknown'}`
+                : '相同重试命令仍由另一执行者持有有效租约');
+        }
+        const stopCommandHeartbeat = startPersistentCommandHeartbeat({
+            chatKey,
+            commandId: commandClaim.command.commandId,
+            leaseToken: commandClaim.command.leaseToken,
+        });
+        artifact.processingCommandId = commandClaim.command.commandId;
         bindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
         bindArtifactTaskGuard(artifact, guard);
         try {
@@ -11910,12 +13327,14 @@ async function retryStage(index, stage) {
                         toast('warning', `审核已阻断正文，但旧世界书条目暂停失败：${toErrorMessage(error)}`);
                     }
                 }
-                else if (!artifact.snapshot || artifact.stages.state.status !== 'success') {
+                else if (!artifact.snapshot || artifactIntentStep(artifact, 'state').status !== 'success') {
                     markStage(artifact, 'state', 'idle');
                     markStage(artifact, 'summary', 'idle');
                     markStage(artifact, 'sync', 'idle');
                 }
                 await saveArtifactToMessage(index, artifact);
+                if (!audit.passed)
+                    throw new TaskBlockedError(audit.reason || '规则审核未通过');
             }
             if (stage === 'revision') {
                 if (!artifact.audit || artifact.audit.passed)
@@ -11929,6 +13348,9 @@ async function retryStage(index, stage) {
                 else {
                     await applyAuditFailureAction(artifact, getSettings().revisionFallbackAction);
                     await saveArtifactToMessage(index, artifact);
+                    // runRevisionFlow 正常返回只说明修正流程完成执行，不代表候选通过复审。
+                    // 将未批准结果映射为任务 blocked，避免任务队列伪报 success。
+                    throw new TaskBlockedError(artifact.revision?.stoppedReason || result.audit?.reason || '定向修正未通过复审');
                 }
             }
             if (stage === 'state') {
@@ -11993,13 +13415,59 @@ async function retryStage(index, stage) {
                 });
                 await saveArtifactToMessage(index, artifact);
             }
+            try {
+                await settlePersistentCommand({
+                    chatKey,
+                    eventKey: retryHostEvent.event.eventKey,
+                    intentId,
+                    commandId: commandClaim.command.commandId,
+                    leaseToken: commandClaim.command.leaseToken,
+                    status: 'succeeded',
+                    resultRef: artifact.messageKey,
+                    result: { messageKey: artifact.messageKey, stage, intentVersion: artifact.processingIntent?.version || 0 },
+                });
+            }
+            catch (settleError) {
+                console.warn('[MirrorAbyss] retry completed but command receipt was not persisted', settleError);
+            }
             return artifact;
         }
+        catch (error) {
+            try {
+                await settlePersistentCommand({
+                    chatKey,
+                    eventKey: retryHostEvent.event.eventKey,
+                    intentId,
+                    commandId: commandClaim.command.commandId,
+                    leaseToken: commandClaim.command.leaseToken,
+                    status: commandStatusForError(error),
+                    error: toErrorMessage(error),
+                    reason: error instanceof Error ? error.name : 'error',
+                });
+            }
+            catch (settleError) {
+                console.warn('[MirrorAbyss] failed to persist retry command terminal state', settleError);
+            }
+            throw error;
+        }
         finally {
+            stopCommandHeartbeat();
+            delete artifact.processingCommandId;
             unbindArtifactTaskGuard(artifact, guard);
             unbindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
         }
-    }, { priority: 70, chatKey });
+    }, {
+        priority: 70,
+        chatKey,
+        triggerSource: `manual-retry-${stage}`,
+        messageKey: identity,
+        messageFingerprint: retryFingerprint,
+        historyRevisionAtEnqueue: scheduledHistoryRevision,
+        automatic: false,
+        intentId,
+        intentStep: stage === 'summary' ? 'summary' : stage,
+        commandId: retryCommandKey,
+    });
 }
 /** 玩家主动维护先只读预览；普通自动/手动 sync 不会进入历史考古。 */
 async function previewLorebookMaintenance(index) {
@@ -12041,7 +13509,18 @@ async function applyLorebookMaintenance(index) {
             unbindArtifactTaskGuard(artifact, guard);
             unbindArtifactHistoryRevision(artifact, scheduledHistoryRevision);
         }
-    }, { priority: 70, chatKey: artifact.chatKey });
+    }, {
+        priority: 70,
+        chatKey: artifact.chatKey,
+        triggerSource: 'manual-lorebook-maintenance',
+        messageKey: artifact.messageKey,
+        messageFingerprint: artifact.sourceFingerprint,
+        historyRevisionAtEnqueue: scheduledHistoryRevision,
+        automatic: false,
+        intentId: artifact.intentId || artifact.processingIntent?.intentId,
+        intentStep: 'sync',
+        commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:lorebook-maintenance`,
+    });
 }
 async function forceSummary(requestedIndex, kind) {
     if (!getSettings().enabled)
@@ -12069,7 +13548,7 @@ async function forceSummary(requestedIndex, kind) {
         && task.chatKey === artifact.chatKey
         && ['smallSummary', 'largeSummary'].includes(String(task.kind))
         && (!task.messageKey || task.messageKey === artifact.messageKey)));
-    if (['queued', 'running'].includes(artifact.stages.summary.status) && !hasLiveSummaryTask) {
+    if (['queued', 'running'].includes(artifactIntentStep(artifact, 'summary').status) && !hasLiveSummaryTask) {
         markStage(artifact, 'summary', 'failed', '上次总结任务已结束但状态未收尾，已释放并允许重新提交');
         await saveArtifactToMessage(index, artifact);
     }
@@ -12129,6 +13608,9 @@ async function forceSummary(requestedIndex, kind) {
         messageFingerprint: artifact.sourceFingerprint,
         historyRevisionAtEnqueue: scheduledHistoryRevision,
         automatic: false,
+        intentId: artifact.intentId || artifact.processingIntent?.intentId,
+        intentStep: 'summary',
+        commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:force-summary:${kind}`,
     });
 }
 function getArtifactAt(index) {
@@ -12234,7 +13716,7 @@ function latestSnapshotArtifact() {
     const chatKey = currentChatKey();
     for (let i = chat.length - 1; i >= 0; i -= 1) {
         const artifact = getAttachedArtifact(chat[i]);
-        if (artifact?.chatKey === chatKey && artifact.snapshot && artifact.stages.state.status === 'success') {
+        if (artifact?.chatKey === chatKey && artifact.snapshot && artifactIntentStep(artifact, 'state').status === 'success') {
             return { index: i, artifact };
         }
     }
@@ -12244,21 +13726,38 @@ function installPipelineEventHandlers() {
     const context = globalThis.SillyTavern.getContext();
     const { eventSource, event_types } = context;
     const onReceived = (payload) => scheduleMessage(payload, false, 180, 'message-received');
+    const persistControlEvent = async (payload, eventType, chatKey = currentChatKey()) => {
+        const changedIndex = resolveChangedIndex(payload);
+        const message = changedIndex !== null ? getMessage(changedIndex) : null;
+        const messageKey = message && changedIndex !== null ? messageIdentity(changedIndex) : `index:${changedIndex ?? 'unknown'}`;
+        const sourceFingerprint = message && changedIndex !== null
+            ? messageFingerprint(changedIndex)
+            : hashText(JSON.stringify(payload ?? null));
+        return receivePersistentHostEvent({
+            chatKey,
+            eventType,
+            messageKey,
+            sourceFingerprint,
+            hostRevision: currentHistoryRevision(chatKey),
+        });
+    };
     const handleInvalidation = (payload, reason) => {
         if (!getSettings().enabled)
             return;
         const changedIndex = resolveChangedIndex(payload);
-        void invalidateHistory(payload, reason).then(() => {
-            if (reason !== 'deleted'
-                && changedIndex !== null
-                && isNarrativeTail(changedIndex)) {
-                // 最新正文的编辑或 swipe 没有后续依赖，自动从审核继续跑完整链，不要求人工历史重建。
-                scheduleMessage(changedIndex, false, 120, `history-${reason}`);
-            }
-        }).catch((error) => {
-            console.error('[MirrorAbyss] history invalidation failed', error);
-            toast('error', `历史变化处理失败：${toErrorMessage(error)}`);
-        });
+        void persistControlEvent(payload, `message-${reason}`)
+            .then(() => invalidateHistory(payload, reason))
+            .then(() => {
+                if (reason !== 'deleted'
+                    && changedIndex !== null
+                    && isNarrativeTail(changedIndex)) {
+                    // 最新正文的编辑或 swipe 没有后续依赖，自动从审核继续跑完整链，不要求人工历史重建。
+                    scheduleMessage(changedIndex, false, 120, `history-${reason}`);
+                }
+            }).catch((error) => {
+                console.error('[MirrorAbyss] history invalidation failed', error);
+                toast('error', `历史变化处理失败：${toErrorMessage(error)}`);
+            });
     };
     const onEdited = (payload) => handleInvalidation(payload, 'edited');
     const onSwiped = (payload) => handleInvalidation(payload, 'swiped');
@@ -12272,9 +13771,12 @@ function installPipelineEventHandlers() {
         abortActiveRequests();
         taskQueue.cancelPendingOutsideChat(chatKey);
         cancelScheduledMessagesOutsideChat(chatKey);
-        void reconcileInterruptedRuntimeState().catch((error) => {
-            console.warn('[MirrorAbyss] interrupted runtime reconciliation failed', error);
-        });
+        void persistControlEvent({ chatKey }, 'chat-changed', chatKey)
+            .catch((error) => console.warn('[MirrorAbyss] chat change inbox record failed', error))
+            .then(() => reconcileInterruptedRuntimeState())
+            .catch((error) => {
+                console.warn('[MirrorAbyss] interrupted runtime reconciliation failed', error);
+            });
     };
     eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
     eventSource.on(event_types.MESSAGE_EDITED, onEdited);
@@ -12292,6 +13794,292 @@ function installPipelineEventHandlers() {
 
 }
 };
+__defs["pipeline/reconciler.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
+Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChat"]});
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["getAttachedArtifact"]});
+Object.defineProperty(__scope,"artifactCommitHash",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["artifactCommitHash"]});
+Object.defineProperty(__scope,"reconcileReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["reconcileReliableWorkflow"]});
+Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
+Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+Object.defineProperty(__scope,"reliableWorkerId",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["reliableWorkerId"]});
+with(__scope){
+Object.defineProperty(exports,"reconcileReliableRuntime",{enumerable:true,configurable:true,get:()=>reconcileReliableRuntime});
+/**
+ * 模块职责：启动时对账 Intent 相关命令、跨保存提交和 Runtime Effect Outbox。
+ * 维护边界：只修复可由持久证据确定的问题；模型语义不确定时进入 manual_review。
+ */
+function artifactHashesForCurrentChat(chatKey) {
+    const hashes = new Map();
+    for (const message of getChat()) {
+        const artifact = getAttachedArtifact(message);
+        if (!artifact || artifact.chatKey !== chatKey || !artifact.messageKey)
+            continue;
+        hashes.set(artifact.messageKey, artifactCommitHash(artifact));
+    }
+    return hashes;
+}
+
+function reconcileRuntimeOutbox(runtime, now = new Date()) {
+    let recovered = 0;
+    let manualReview = 0;
+    const workerId = reliableWorkerId();
+    for (const job of runtime.outbox) {
+        if (job.status !== 'running')
+            continue;
+        const leaseExpired = !job.leaseUntil || Date.parse(job.leaseUntil) <= now.getTime();
+        const currentWorker = job.claimedBy && job.claimedBy === workerId;
+        if (!leaseExpired && currentWorker)
+            continue;
+        if (!leaseExpired && job.claimedBy && !currentWorker)
+            continue;
+        if (job.receipt) {
+            job.status = 'done';
+            job.finishedAt ||= job.receipt.confirmedAt || now.toISOString();
+            job.error = '';
+        }
+        else if (['small-summary', 'large-summary', 'lorebook-sync'].includes(job.type)) {
+            // 三类 Effect 都有确定性 jobId 与业务校验，可安全回到 pending；真正执行仍会重新领取租约。
+            job.status = 'pending';
+            job.startedAt = '';
+            job.finishedAt = '';
+            job.error = '旧执行租约已失效，已回收为待执行';
+        }
+        else {
+            job.status = 'manual_review';
+            job.error = '未知副作用租约过期且无回执，未自动重放';
+            manualReview += 1;
+        }
+        job.claimedBy = '';
+        job.leaseToken = '';
+        job.leaseUntil = '';
+        job.heartbeatAt = now.toISOString();
+        recovered += 1;
+    }
+    const livePublication = runtime.outbox.find((job) => job.type === 'lorebook-sync' && job.status === 'running');
+    if (runtime.machines.publication.status === 'writing' && !livePublication) {
+        runtime.machines.publication.status = runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision
+            ? 'clean'
+            : 'queued';
+        runtime.machines.publication.pendingJobId = runtime.outbox.find((job) => job.type === 'lorebook-sync' && job.status === 'pending')?.id || '';
+        runtime.machines.publication.updatedAt = now.toISOString();
+        recovered += 1;
+    }
+    if (recovered)
+        runtime.updatedAt = nowIso();
+    return { runtime, recovered, manualReview };
+}
+
+async function reconcileReliableRuntime() {
+    const chatKey = currentChatKey();
+    const state = await getChatState(chatKey);
+    const liveCommandIds = taskQueue.list()
+        .filter((task) => ['queued', 'running'].includes(String(task.state)))
+        .map((task) => task.commandId)
+        .filter(Boolean);
+    const reliable = reconcileReliableWorkflow(state.reliableWorkflow, {
+        artifactHashes: artifactHashesForCurrentChat(chatKey),
+        liveCommandIds,
+    });
+    const runtime = reconcileRuntimeOutbox(normalizeRuntimeV2(state.runtimeV2));
+    const changed = reliable.changed || runtime.recovered > 0;
+    state.reliableWorkflow = reliable.workflow;
+    state.runtimeV2 = runtime.runtime;
+    if (changed)
+        await putChatState(state);
+    return {
+        changed,
+        workflow: reliable.report,
+        runtimeOutboxRecovered: runtime.recovered,
+        manualReviewCount: reliable.report.manualReviewCount + runtime.manualReview,
+    };
+}
+
+}
+};
+__defs["pipeline/reliable-command.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
+Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"acceptHostEvent",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["acceptHostEvent"]});
+Object.defineProperty(__scope,"claimCommand",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["claimCommand"]});
+Object.defineProperty(__scope,"heartbeatCommand",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["heartbeatCommand"]});
+Object.defineProperty(__scope,"mapHostEvent",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["mapHostEvent"]});
+Object.defineProperty(__scope,"settleCommand",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["settleCommand"]});
+Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+with(__scope){
+Object.defineProperty(exports,"receivePersistentHostEvent",{enumerable:true,configurable:true,get:()=>receivePersistentHostEvent});
+Object.defineProperty(exports,"beginPersistentCommand",{enumerable:true,configurable:true,get:()=>beginPersistentCommand});
+Object.defineProperty(exports,"settlePersistentCommand",{enumerable:true,configurable:true,get:()=>settlePersistentCommand});
+Object.defineProperty(exports,"runPersistentCommand",{enumerable:true,configurable:true,get:()=>runPersistentCommand});
+Object.defineProperty(exports,"reliableWorkerId",{enumerable:true,configurable:true,get:()=>reliableWorkerId});
+Object.defineProperty(exports,"commandStatusForError",{enumerable:true,configurable:true,get:()=>commandStatusForError});
+Object.defineProperty(exports,"startPersistentCommandHeartbeat",{enumerable:true,configurable:true,get:()=>startPersistentCommandHeartbeat});
+/**
+ * 模块职责：将宿主事件与业务命令写入持久 Inbox/CommandRecord，并维护租约。
+ * 维护边界：不执行具体审核、状态或总结逻辑。
+ */
+const WORKER_ID = makeId('browser_worker');
+const COMMAND_LEASE_MS = 10 * 60_000;
+const HEARTBEAT_MS = 60_000;
+
+function reliableWorkerId() {
+    return WORKER_ID;
+}
+
+async function receivePersistentHostEvent(event) {
+    const state = await getChatState(event.chatKey);
+    const accepted = acceptHostEvent(state.reliableWorkflow, event);
+    state.reliableWorkflow = accepted.workflow;
+    await putChatState(state);
+    return accepted;
+}
+
+async function beginPersistentCommand(options) {
+    const state = await getChatState(options.chatKey);
+    const claimed = claimCommand(state.reliableWorkflow, {
+        ...options,
+        owner: WORKER_ID,
+        leaseMs: options.leaseMs || COMMAND_LEASE_MS,
+    });
+    state.reliableWorkflow = claimed.workflow;
+    if (options.eventKey) {
+        const mapped = mapHostEvent(state.reliableWorkflow, options.eventKey, {
+            intentId: options.intentId,
+            commandId: claimed.command?.commandId,
+            status: claimed.execute ? 'mapped' : claimed.terminal ? 'processed' : 'mapped',
+            reason: claimed.terminal ? '相同幂等命令已有持久终态' : '',
+        });
+        state.reliableWorkflow = mapped.workflow;
+    }
+    await putChatState(state);
+    return claimed;
+}
+
+async function settlePersistentCommand(options) {
+    const state = await getChatState(options.chatKey);
+    const settled = settleCommand(
+        state.reliableWorkflow,
+        options.commandId,
+        options.leaseToken,
+        options.status,
+        {
+            resultRef: options.resultRef,
+            resultHash: options.resultHash,
+            result: options.result,
+            error: options.error,
+            reason: options.reason,
+        },
+    );
+    state.reliableWorkflow = settled.workflow;
+    if (options.eventKey) {
+        const mapped = mapHostEvent(state.reliableWorkflow, options.eventKey, {
+            intentId: options.intentId,
+            commandId: options.commandId,
+            status: options.status === 'skipped' ? 'ignored' : options.status === 'manual_review' ? 'manual_review' : 'processed',
+            reason: options.reason || options.error || '',
+        });
+        state.reliableWorkflow = mapped.workflow;
+    }
+    await putChatState(state);
+    return settled;
+}
+
+function commandStatusForError(error) {
+    const name = error instanceof Error ? error.name : '';
+    if (name === 'TaskBlockedError')
+        return 'blocked';
+    if (name === 'TaskSkippedError')
+        return 'skipped';
+    if (['AbortError', 'CommitRejectedError'].includes(name))
+        return 'cancelled';
+    return 'failed';
+}
+
+function startPersistentCommandHeartbeat({ chatKey, commandId, leaseToken }) {
+    if (!commandId || !leaseToken || typeof window === 'undefined' || typeof window.setInterval !== 'function')
+        return () => {};
+    let stopped = false;
+    let running = false;
+    const beat = async () => {
+        if (stopped || running)
+            return;
+        running = true;
+        try {
+            const state = await getChatState(chatKey);
+            const heartbeat = heartbeatCommand(state.reliableWorkflow, commandId, leaseToken, new Date(), COMMAND_LEASE_MS);
+            if (heartbeat.updated) {
+                state.reliableWorkflow = heartbeat.workflow;
+                await putChatState(state);
+            }
+        }
+        catch (error) {
+            console.warn('[MirrorAbyss] persistent command heartbeat failed', error);
+        }
+        finally {
+            running = false;
+        }
+    };
+    const timer = window.setInterval(() => void beat(), HEARTBEAT_MS);
+    return () => {
+        stopped = true;
+        window.clearInterval(timer);
+    };
+}
+
+async function runPersistentCommand(options, work) {
+    const claim = await beginPersistentCommand(options);
+    if (!claim.execute)
+        return { executed: false, command: claim.command, terminal: claim.terminal };
+    const stopHeartbeat = startPersistentCommandHeartbeat({
+        chatKey: options.chatKey,
+        commandId: claim.command.commandId,
+        leaseToken: claim.command.leaseToken,
+    });
+    try {
+        const result = await work(claim.command);
+        await settlePersistentCommand({
+            chatKey: options.chatKey,
+            eventKey: options.eventKey,
+            intentId: options.intentId,
+            commandId: claim.command.commandId,
+            leaseToken: claim.command.leaseToken,
+            status: 'succeeded',
+            resultRef: options.resultRef,
+            result: options.resultSelector ? options.resultSelector(result) : undefined,
+        });
+        return { executed: true, command: claim.command, result };
+    }
+    catch (error) {
+        try {
+            await settlePersistentCommand({
+                chatKey: options.chatKey,
+                eventKey: options.eventKey,
+                intentId: options.intentId,
+                commandId: claim.command.commandId,
+                leaseToken: claim.command.leaseToken,
+                status: commandStatusForError(error),
+                error: toErrorMessage(error),
+                reason: error instanceof Error ? error.name : 'error',
+            });
+        }
+        catch (settleError) {
+            console.warn('[MirrorAbyss] failed to settle persistent command', settleError);
+        }
+        throw error;
+    }
+    finally {
+        stopHeartbeat();
+    }
+}
+
+}
+};
 __defs["pipeline/revision.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
@@ -12301,6 +14089,7 @@ Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"replaceMessageInPlace",{enumerable:true,configurable:true,get:()=>__require("core/message-update.js")["replaceMessageInPlace"]});
+Object.defineProperty(__scope,"artifactIntentCorrelation",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentCorrelation"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"revisionSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionSystemPrompt"]});
@@ -12355,24 +14144,30 @@ async function runRevisionFlow(artifact) {
     let currentAudit = firstAudit;
     let previousViolationFingerprint = firstAudit.violationFingerprint;
     const maxAttempts = Math.min(2, Math.max(1, Number(settings.maxRevisionAttempts) || 1));
+    const previousAttempts = Array.isArray(artifact.revision.attempts) ? artifact.revision.attempts.length : 0;
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             const replacementText = safeText(currentAudit.replacementText, 200000).trim();
-            const supplied = attempt === 1 && replacementText ? replacementText : undefined;
+            const replacementFingerprint = replacementText ? hashText(replacementText) : '';
+            const replacementAlreadyTried = Boolean(replacementFingerprint && artifact.revision.attempts.some((item) => item.candidateFingerprint === replacementFingerprint));
+            // 审核直接给出的最小修正版只消费一次。人工重试必须真正调用修正模型，
+            // 不能把同一候选再次送审并依赖审核随机性“第二次碰巧通过”。
+            const supplied = attempt === 1 && replacementText && !replacementAlreadyTried ? replacementText : undefined;
             const raw = supplied ?? await generateTask({
                 task: 'revision',
                 systemPrompt: revisionSystemPrompt(settings.revisionPrompt),
                 prompt: revisionUserPrompt(settings.auditPrompt, artifact.playerText, sourceText, currentAudit, attempt),
+                ...artifactIntentCorrelation(artifact, 'revision', `revision-candidate-${previousAttempts + attempt}`),
             });
             const candidate = cleanRevisionText(raw);
             if (!candidate)
                 throw new Error('修正文模型返回空正文');
             if (hashText(candidate) === hashText(sourceText))
                 throw new Error('修正文模型未改变正文');
-            const candidateAudit = await auditText(settings.auditPrompt, artifact.playerText, candidate);
+            const candidateAudit = await auditText(settings.auditPrompt, artifact.playerText, candidate, artifactIntentCorrelation(artifact, 'revision', `revision-audit-${previousAttempts + attempt}`));
             assertArtifactCommitCurrent(artifact);
             artifact.revision.attempts.push({
-                attempt,
+                attempt: previousAttempts + attempt,
                 sourceFingerprint: hashText(sourceText),
                 candidateFingerprint: hashText(candidate),
                 audit: candidateAudit,
@@ -12447,19 +14242,26 @@ async function runRevisionFlow(artifact) {
 __defs["pipeline/runtime-effects.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
+Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"claimEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["claimEffect"]});
+Object.defineProperty(__scope,"heartbeatEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["heartbeatEffect"]});
+Object.defineProperty(__scope,"recordEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["recordEffect"]});
+Object.defineProperty(__scope,"settleEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["settleEffect"]});
 Object.defineProperty(__scope,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueLorebookProjection"]});
 Object.defineProperty(__scope,"enqueueSummaryEffect",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueSummaryEffect"]});
 Object.defineProperty(__scope,"markRuntimeJobCancelledById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobCancelledById"]});
 Object.defineProperty(__scope,"markRuntimeJobDoneById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobDoneById"]});
 Object.defineProperty(__scope,"markRuntimeJobFailedById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobFailedById"]});
 Object.defineProperty(__scope,"markRuntimeJobRunningById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobRunningById"]});
+Object.defineProperty(__scope,"heartbeatRuntimeJobById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["heartbeatRuntimeJobById"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
 Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
 with(__scope){
 Object.defineProperty(exports,"transitionRuntimeJob",{enumerable:true,configurable:true,get:()=>transitionRuntimeJob});
 Object.defineProperty(exports,"runTrackedRuntimeEffect",{enumerable:true,configurable:true,get:()=>runTrackedRuntimeEffect});
 Object.defineProperty(exports,"recordCompletedSummaryEffects",{enumerable:true,configurable:true,get:()=>recordCompletedSummaryEffects});
+Object.defineProperty(exports,"startRuntimeJobHeartbeat",{enumerable:true,configurable:true,get:()=>startRuntimeJobHeartbeat});
 /**
  * Persistent lifecycle for explicitly requested derived effects.
  *
@@ -12467,6 +14269,51 @@ Object.defineProperty(exports,"recordCompletedSummaryEffects",{enumerable:true,c
  * and history recovery use this module so their successful/failed work updates
  * the same Runtime V2 state instead of bypassing it.
  */
+const EFFECT_WORKER_ID = makeId('effect_worker');
+const EFFECT_LEASE_MS = 10 * 60_000;
+const EFFECT_HEARTBEAT_MS = 60_000;
+function reliableEffectId(jobId) {
+    return `runtime_effect_${jobId}`;
+}
+function ensureReliableEffect(state, job) {
+    const recorded = recordEffect(state.reliableWorkflow, {
+        effectId: reliableEffectId(job.id),
+        intentId: job.intentId,
+        commandId: `${job.intentId || 'runtime'}:outbox:${job.id}`,
+        type: job.type,
+        target: job.turnKey,
+        payload: { jobId: job.id, sourceRevision: job.sourceRevision, turnKey: job.turnKey },
+    });
+    state.reliableWorkflow = recorded.workflow;
+    return recorded.effect;
+}
+function mirrorReliableEffect(state, job, status, error = '', options = {}) {
+    if (!job)
+        return;
+    const effect = ensureReliableEffect(state, job);
+    if (status === 'running') {
+        const claimed = claimEffect(state.reliableWorkflow, effect.effectId, {
+            leaseOwner: job.claimedBy,
+            leaseToken: job.leaseToken,
+            leaseUntil: job.leaseUntil,
+        });
+        state.reliableWorkflow = claimed.workflow;
+        return;
+    }
+    if (status === 'heartbeat') {
+        const heartbeat = heartbeatEffect(state.reliableWorkflow, effect.effectId, options.leaseToken, {
+            leaseUntil: job.leaseUntil,
+        });
+        state.reliableWorkflow = heartbeat.workflow;
+        return;
+    }
+    const settled = settleEffect(state.reliableWorkflow, effect.effectId, status === 'done' ? 'done' : status === 'cancelled' ? 'cancelled' : 'failed', {
+        error,
+        receipt: job.receipt,
+    });
+    state.reliableWorkflow = settled.workflow;
+}
+
 function cancellationError(error) {
     return error instanceof CommitRejectedError
         || (error instanceof Error && ['AbortError', 'CommitRejectedError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
@@ -12480,17 +14327,55 @@ function createJob(chatState, artifact, type, kind, reason) {
     throw new Error(`未知 Runtime 派生任务：${type}`);
 }
 
-async function transitionRuntimeJob(chatKey, jobId, status, artifact, error = '') {
+async function transitionRuntimeJob(chatKey, jobId, status, artifact, error = '', options = {}) {
     const state = await getChatState(chatKey);
-    const job = status === 'running'
-        ? markRuntimeJobRunningById(state, jobId)
-        : status === 'done'
-            ? markRuntimeJobDoneById(state, jobId, artifact)
-            : status === 'cancelled'
-                ? markRuntimeJobCancelledById(state, jobId, error || '任务已取消')
-                : markRuntimeJobFailedById(state, jobId, error);
+    let job;
+    if (status === 'running') {
+        job = markRuntimeJobRunningById(state, jobId, {
+            owner: options.owner || EFFECT_WORKER_ID,
+            leaseToken: options.leaseToken,
+            leaseMs: options.leaseMs || EFFECT_LEASE_MS,
+        });
+    }
+    else if (status === 'heartbeat') {
+        const heartbeat = heartbeatRuntimeJobById(state, jobId, options.leaseToken, {
+            leaseMs: options.leaseMs || EFFECT_LEASE_MS,
+        });
+        job = heartbeat.job;
+        if (!heartbeat.updated)
+            return job;
+    }
+    else if (status === 'done') {
+        job = markRuntimeJobDoneById(state, jobId, artifact, { leaseToken: options.leaseToken });
+    }
+    else if (status === 'cancelled') {
+        job = markRuntimeJobCancelledById(state, jobId, error || '任务已取消');
+    }
+    else {
+        job = markRuntimeJobFailedById(state, jobId, error, { leaseToken: options.leaseToken });
+    }
+    mirrorReliableEffect(state, job, status, error, options);
     await putChatState(state);
     return job;
+}
+
+function startRuntimeJobHeartbeat({ chatKey, jobId, leaseToken }) {
+    if (!jobId || !leaseToken || typeof window === 'undefined' || typeof window.setInterval !== 'function')
+        return () => {};
+    let stopped = false;
+    let running = false;
+    const timer = window.setInterval(() => {
+        if (stopped || running)
+            return;
+        running = true;
+        void transitionRuntimeJob(chatKey, jobId, 'heartbeat', undefined, '', { leaseToken })
+            .catch((error) => console.warn('[MirrorAbyss] runtime effect heartbeat failed', error))
+            .finally(() => { running = false; });
+    }, EFFECT_HEARTBEAT_MS);
+    return () => {
+        stopped = true;
+        window.clearInterval(timer);
+    };
 }
 
 async function runTrackedRuntimeEffect({ artifact, type, kind = '', reason, work }) {
@@ -12501,13 +14386,18 @@ async function runTrackedRuntimeEffect({ artifact, type, kind = '', reason, work
 
     const initialState = await getChatState(artifact.chatKey);
     const job = createJob(initialState, artifact, type, kind, reason);
-    markRuntimeJobRunningById(initialState, job.id);
+    const claimed = markRuntimeJobRunningById(initialState, job.id, { owner: EFFECT_WORKER_ID, leaseMs: EFFECT_LEASE_MS });
+    mirrorReliableEffect(initialState, claimed, 'running');
     await putChatState(initialState);
+    if (!claimed || claimed.claimAccepted === false)
+        throw new CommitRejectedError('派生任务已由另一执行者持有有效租约');
+    const leaseToken = claimed.leaseToken;
+    const stopHeartbeat = startRuntimeJobHeartbeat({ chatKey: artifact.chatKey, jobId: job.id, leaseToken });
 
     try {
         const result = await work();
-        const completed = await transitionRuntimeJob(artifact.chatKey, job.id, 'done', artifact);
-        if (!completed || completed.status !== 'done')
+        const completed = await transitionRuntimeJob(artifact.chatKey, job.id, 'done', artifact, '', { leaseToken });
+        if (!completed || completed.status !== 'done' || completed.claimAccepted === false)
             throw new CommitRejectedError('派生任务已被更新修订替代，旧结果不再确认');
         return result;
     }
@@ -12519,12 +14409,16 @@ async function runTrackedRuntimeEffect({ artifact, type, kind = '', reason, work
                 cancellationError(error) ? 'cancelled' : 'failed',
                 artifact,
                 toErrorMessage(error),
+                { leaseToken },
             );
         }
         catch (transitionError) {
             console.warn('[MirrorAbyss] failed to persist runtime effect terminal state', transitionError);
         }
         throw error;
+    }
+    finally {
+        stopHeartbeat();
     }
 }
 
@@ -12534,8 +14428,10 @@ async function recordCompletedSummaryEffects(artifact, kinds, reason = 'history-
             continue;
         const state = await getChatState(artifact.chatKey);
         const job = enqueueSummaryEffect(state, artifact, kind, reason);
-        markRuntimeJobRunningById(state, job.id);
-        markRuntimeJobDoneById(state, job.id, artifact);
+        const claimed = markRuntimeJobRunningById(state, job.id);
+        mirrorReliableEffect(state, claimed, 'running');
+        const completed = markRuntimeJobDoneById(state, job.id, artifact, { leaseToken: claimed.leaseToken });
+        mirrorReliableEffect(state, completed, 'done');
         await putChatState(state);
     }
 }
@@ -12551,7 +14447,12 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"artifactIntentCorrelation",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentCorrelation"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
+Object.defineProperty(__scope,"eventIdOfFact",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventIdOfFact"]});
+Object.defineProperty(__scope,"isEventStatusFact",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["isEventStatusFact"]});
+Object.defineProperty(__scope,"latestEventStatusFact",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["latestEventStatusFact"]});
 Object.defineProperty(__scope,"FACT_EVIDENCE_KINDS",{enumerable:true,configurable:true,get:()=>__require("domain/fact-contract.js")["FACT_EVIDENCE_KINDS"]});
 Object.defineProperty(__scope,"normalizeFactPackage",{enumerable:true,configurable:true,get:()=>__require("domain/facts.js")["normalizeFactPackage"]});
 Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalObjectTitle"]});
@@ -12574,6 +14475,7 @@ Object.defineProperty(exports,"preserveProtectedRows",{enumerable:true,configura
 with(__scope){
 Object.defineProperty(exports,"runStateExtraction",{enumerable:true,configurable:true,get:()=>runStateExtraction});
 Object.defineProperty(exports,"previousSnapshot",{enumerable:true,configurable:true,get:()=>previousSnapshot});
+Object.defineProperty(exports,"stateContextFacts",{enumerable:true,configurable:true,get:()=>stateContextFacts});
 Object.defineProperty(exports,"mergeStateRowPatches",{enumerable:true,configurable:true,get:()=>mergeStateRowPatches});
 Object.defineProperty(exports,"applyStateRowRelocations",{enumerable:true,configurable:true,get:()=>applyStateRowRelocations});
 Object.defineProperty(exports,"attachLocalFactMetadata",{enumerable:true,configurable:true,get:()=>attachLocalFactMetadata});
@@ -12661,6 +14563,49 @@ function previousSnapshot(beforeIndex) {
             return normalizeSnapshot(legacy, legacy, registry);
     }
     return emptySnapshot(registry);
+}
+function rowEventIds(row) {
+    return [...new Set([
+        row?.eventId,
+        ...(Array.isArray(row?.eventIds) ? row.eventIds : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+/**
+ * 状态模型只接收近期/活跃事实，但事件终态是例外：若当前快照或近期事实仍引用
+ * 某个 event_id，必须把该事件最新的状态权威一并带回。这样角色行暂时残留旧
+ * event_id 时，已被小总结消费的 closed 状态不会消失，也不会把全部历史事件
+ * 重新注入提示词。
+ */
+function stateContextFacts(internalFacts, previous, registry) {
+    const allFacts = (Array.isArray(internalFacts) ? internalFacts : [])
+        .filter((fact) => fact?.storageClass !== 'episodic');
+    const recentFacts = allFacts.slice(-120);
+    // 事件状态事实本身不能把历史事件重新带回上下文；只有当前对象快照或
+    // 近期非状态事实仍然引用该 event_id 时，才需要补回其最新状态权威。
+    const referencedEventIds = new Set(recentFacts
+        .filter((fact) => !isEventStatusFact(fact))
+        .map(eventIdOfFact)
+        .filter(Boolean));
+    for (const table of enabledTables(normalizeTableRegistry(registry))) {
+        for (const row of previous?.[table.key] ?? []) {
+            for (const eventId of rowEventIds(row))
+                referencedEventIds.add(eventId);
+        }
+    }
+    const selected = recentFacts.filter((fact) => fact.active || !fact.consumedBySmallSummaryId);
+    for (const eventId of referencedEventIds) {
+        const authority = latestEventStatusFact(allFacts, eventId);
+        if (authority)
+            selected.push(authority);
+    }
+    const uniqueByFactId = new Map();
+    for (const fact of selected) {
+        const key = String(fact?.factId || '').trim() || `${eventIdOfFact(fact)}|${fact?.title || ''}|${fact?.updatedAt || ''}`;
+        if (key)
+            uniqueByFactId.set(key, fact);
+    }
+    return [...uniqueByFactId.values()];
 }
 function normalizedTitle(value) {
     return canonicalObjectTitle(value);
@@ -12946,51 +14891,24 @@ function splitStateSource(text, limit) {
     return chunks.length ? chunks : [''];
 }
 function minimalStateChunkPrompt(playerText, assistantChunk, index, total) {
-    return `【玩家输入】\n${playerText || '（空）'}\n\n【本轮正文分段 ${index + 1}/${total}】\n${assistantChunk}\n\n只提取这一分段明确建立的变化。只返回 <MA_TURN> 与 <MA_EVENT> 自然事实模块。每个事件必须有一条 <MA_CORE> 动作骨架；对象模块第一行写对象名，后续只写该对象自身的一句结果。禁止等号、键值字段、重复复述和内部字段键。`;
+    return `【玩家输入】\n${playerText || '（空）'}\n\n【本轮正文分段 ${index + 1}/${total}】\n${assistantChunk}\n\n只提取这一分段明确建立的变化。只返回一个 <MA_TURN> 和若干扁平 <MA_FACT>。每个 <MA_FACT> 依次写事件、表格、对象、语义层、事实五行；禁止 JSON、嵌套 <MA_EVENT>、重复复述和内部字段键。`;
 }
 function retryableStateTransportError(error) {
     return /(504|502|503|gateway|timeout|timed out|超时|网关|no message generated|返回为空|响应未完成|upstream)/i.test(toErrorMessage(error));
 }
-/** 只修复标签、块和必填语义项等传输格式问题；表格/语义层权限与对象歧义属于语义校验，必须原样失败。 */
+/** 模型输出只经过本地防腐层解析。格式错误不得再次调用模型“修格式”，避免同一业务产生隐藏的第二次物理请求。 */
 function repairableStateParseError(error) {
     const message = toErrorMessage(error);
     return !/(未注册|已停用|无法确定对象表|存在歧义|多个条目命中|不允许写入|不允许直接维护|未知生命周期|只能用于已有对象|absorb 必须|merge_)/i.test(message);
 }
-function compactStateRepairSystemPrompt() {
-    return `你是固定文本整理器，不分析剧情、不补充事实。把输入中已经写出的内容整理成镜渊自然事实模块。
-只允许 <MA_TURN> 和 <MA_EVENT>。删除块外说明、JSON 外壳、代码围栏、等号键值和思考文字。
-<MA_EVENT> 第一行只写事件名，随后直接写事实模块；删除“进行中/已结束”状态行。必须保留唯一 <MA_CORE>。对象模块第一行写对象名，后续只写该对象自身的一到两句具体结果。不同模块不得重复整件事；原始返回没有表达的事实不得添加。`;
-}
-function compactStateRepairPrompt(raw) {
-    return `【待整理的模型原始返回】\n${safeText(raw, 18000)}\n\n只做格式整理。原始返回没有表达的事实不得添加。`;
-}
-async function repairStateText(raw, previous, registry, activeFacts, maxTokens, origin) {
-    const repaired = await generateTask({
-        task: 'state',
-        systemPrompt: compactStateRepairSystemPrompt(),
-        prompt: compactStateRepairPrompt(raw),
-        maxTokens: Math.min(Math.max(768, maxTokens), 1536),
-        requestPurpose: 'fixed-text',
-        requestOrigin: origin,
-    });
-    parseStateTextOutput(repaired, previous, registry, activeFacts);
-    return repaired;
-}
-async function generateValidatedStateText(request, previous, registry, activeFacts, repairOrigin) {
+async function generateValidatedStateText(request, previous, registry, activeFacts) {
     const raw = await generateTask(request);
     try {
         parseStateTextOutput(raw, previous, registry, activeFacts);
         return raw;
     }
     catch (parseError) {
-        if (!repairableStateParseError(parseError))
-            throw parseError;
-        try {
-            return await repairStateText(raw, previous, registry, activeFacts, Number(request.maxTokens) || 1536, repairOrigin);
-        }
-        catch (repairError) {
-            throw new Error(`状态返回格式整理失败：${toErrorMessage(parseError)}；整理重试：${toErrorMessage(repairError)}`, { cause: repairError });
-        }
+        throw new Error(`状态固定文本本地编译失败：${toErrorMessage(parseError)}`, { cause: parseError });
     }
 }
 async function requestStateText(artifact, previous, activeFacts, registry, systemPrompt, settings) {
@@ -13003,17 +14921,18 @@ async function requestStateText(artifact, previous, activeFacts, registry, syste
         maxTokens: settings.stateOutputTokens,
         requestPurpose: 'fixed-text',
         requestOrigin: 'state-primary',
+        ...artifactIntentCorrelation(artifact, 'state', 'state-primary'),
     };
     let initialError;
     if (systemPrompt.length + fullPrompt.length <= budget) {
         try {
-            return await generateValidatedStateText(initialRequest, previous, registry, activeFacts, 'state-format-repair');
+            return await generateValidatedStateText(initialRequest, previous, registry, activeFacts);
         }
         catch (error) {
             initialError = error;
             if (!retryableStateTransportError(error) && !repairableStateParseError(error))
                 throw error;
-            if (!retryableStateTransportError(error) && !/格式整理失败|固定文本|MA_EVENT|MA_TURN/i.test(toErrorMessage(error)))
+            if (!retryableStateTransportError(error) && !/本地编译失败|固定文本|MA_FACT|MA_EVENT|MA_TURN/i.test(toErrorMessage(error)))
                 throw error;
         }
     }
@@ -13038,7 +14957,8 @@ async function requestStateText(artifact, previous, activeFacts, registry, syste
             maxTokens: Math.min(settings.stateOutputTokens, 2304),
             requestPurpose: 'fixed-text',
             requestOrigin: `state-chunk-${index + 1}-of-${chunks.length}`,
-        }, previous, registry, activeFacts, `state-chunk-format-repair-${index + 1}-of-${chunks.length}`));
+            ...artifactIntentCorrelation(artifact, 'state', `state-chunk-${index + 1}-of-${chunks.length}`),
+        }, previous, registry, activeFacts));
     }
     const combined = outputs.join('\n');
     parseStateTextOutput(combined, previous, registry, activeFacts);
@@ -13052,10 +14972,7 @@ async function runStateExtraction(artifact, force = false) {
     const expectedRegistryFingerprint = hashText(`${registryFingerprint(active)}|${tableLinkRulesFingerprint(settings.tableLinkRules, active)}`);
     const previous = dedupeStrongStateRows(previousSnapshot(artifact.messageIndex), registry);
     const chatState = await getChatState(artifact.chatKey);
-    const activeFacts = (chatState.internalFacts ?? [])
-        .filter((fact) => fact.storageClass !== 'episodic')
-        .filter((fact) => fact.active || !fact.consumedBySmallSummaryId)
-        .slice(-120);
+    const activeFacts = stateContextFacts(chatState.internalFacts ?? [], previous, registry);
     const systemPrompt = stateSystemPrompt(registry, settings.statePrompts, settings.contentLimits, settings.tableLinkRules);
     const prompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry, activeFacts);
     const inputFingerprint = hashText(JSON.stringify({
@@ -13066,7 +14983,7 @@ async function runStateExtraction(artifact, force = false) {
         stateChunkChars: settings.stateChunkChars,
     }));
     assertRegistryCurrent(expectedRegistryFingerprint);
-    if (!force && artifact.stages.state.status === 'success' && artifact.snapshot && artifact.stateInputFingerprint === inputFingerprint) {
+    if (!force && artifactIntentStep(artifact, 'state').status === 'success' && artifact.snapshot && artifact.stateInputFingerprint === inputFingerprint) {
         return normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry);
     }
     markStage(artifact, 'state', 'running');
@@ -13163,6 +15080,8 @@ Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:tru
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"artifactIntentCorrelation",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentCorrelation"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"markFactsConsumed",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["markFactsConsumed"]});
 Object.defineProperty(__scope,"markFactsSolidified",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["markFactsSolidified"]});
@@ -13412,6 +15331,7 @@ async function generateSmallSummary(artifact, force = false) {
         prompt: smallSummaryBatchPrompt(slotted.map((group) => ({ slot: group.slot, eventId: group.eventId, facts: group.facts, previous: group.previous }))),
         maxTokens: Math.min(2200, 700 + prepared.length * 260),
         requestPurpose: 'fixed-text',
+        ...artifactIntentCorrelation(artifact, 'summary', 'small-summary'),
     });
     assertArtifactCommitCurrent(artifact);
     let bySlot;
@@ -13519,6 +15439,7 @@ async function generateLargeSummary(artifact, force = false) {
         }))),
         maxTokens: Math.min(2200, 700 + groups.length * 260),
         requestPurpose: 'fixed-text',
+        ...artifactIntentCorrelation(artifact, 'summary', 'large-summary'),
     });
     assertArtifactCommitCurrent(artifact);
     let bySlot;
@@ -13634,7 +15555,7 @@ async function runSummaryStage(artifact, kind, force = false) {
     const enabled = kind === 'small' ? settings.autoSmallSummary : settings.autoLargeSummary;
     if (!enabled && !force)
         return false;
-    const previousStatus = artifact.stages.summary.status;
+    const previousStatus = artifactIntentStep(artifact, 'summary').status;
     const preserveEarlierFailure = !force && previousStatus === 'failed';
     if (!preserveEarlierFailure)
         markStage(artifact, 'summary', 'running');
@@ -13656,7 +15577,7 @@ async function runSummaryStage(artifact, kind, force = false) {
             throw error;
         }
         const label = kind === 'small' ? '小总结' : '大总结';
-        const previous = artifact.stages.summary.error;
+        const previous = artifactIntentStep(artifact, 'summary').error;
         const current = `${label}失败：${toErrorMessage(error)}`;
         markStage(artifact, 'summary', 'failed', previous && previous !== current ? `${previous}；${current}` : current);
         await putArtifact(artifact);
@@ -13700,7 +15621,7 @@ async function rebuildEligibleSummaries(artifact) {
     const errors = [];
     let generatedAny = false;
     const generatedKinds = new Set();
-    const previousStatus = artifact.stages.summary.status;
+    const previousStatus = artifactIntentStep(artifact, 'summary').status;
     markStage(artifact, 'summary', 'running');
     await putArtifact(artifact);
     if (settings.autoSmallSummary) {
@@ -13996,6 +15917,7 @@ class TaskQueue {
         })
             .then((result) => {
             task.state = 'success';
+            task.businessStatus = 'succeeded';
             job.resolve(result);
         })
             .catch((error) => {
@@ -14008,6 +15930,7 @@ class TaskQueue {
             const skipped = error instanceof TaskSkippedError
                 || (error instanceof Error && error.name === 'TaskSkippedError');
             task.state = cancelled ? 'cancelled' : blocked ? 'blocked' : skipped ? 'skipped' : 'failed';
+            task.businessStatus = task.state;
             if (skipped) {
                 task.skipReason = toErrorMessage(error);
                 delete task.error;
@@ -14063,6 +15986,10 @@ class TaskQueue {
             historyRevisionAtEnqueue: options.historyRevisionAtEnqueue,
             historyRecoveryPhaseAtEnqueue: options.historyRecoveryPhaseAtEnqueue,
             automatic: options.automatic === true,
+            intentId: options.intentId,
+            intentStep: options.intentStep,
+            commandId: options.commandId,
+            businessStatus: 'pending',
         };
         this.tasks.set(task.id, task);
         let resolve;
@@ -14206,6 +16133,7 @@ __defs["prompts/state.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"DEFAULT_CONTENT_LIMITS",{enumerable:true,configurable:true,get:()=>__require("constants.js")["DEFAULT_CONTENT_LIMITS"]});
 Object.defineProperty(__scope,"DEFAULT_STATE_PROMPTS",{enumerable:true,configurable:true,get:()=>__require("constants.js")["DEFAULT_STATE_PROMPTS"]});
+Object.defineProperty(__scope,"eventStatusById",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventStatusById"]});
 Object.defineProperty(__scope,"CORE_FIELD_KEYS",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["CORE_FIELD_KEYS"]});
 Object.defineProperty(__scope,"EDITABLE_HEADER_FIELD_KEYS",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["EDITABLE_HEADER_FIELD_KEYS"]});
 Object.defineProperty(__scope,"DEFAULT_TABLE_REGISTRY",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["DEFAULT_TABLE_REGISTRY"]});
@@ -14288,20 +16216,13 @@ function modelVisibleRuleText(value, fallback) {
         text = text.replace(pattern, replacement);
     return text;
 }
-const ROLE_TRANSPORT_MODULES = {
-    events: '<MA_CORE>、<MA_EVENT_RESULT>、<MA_EVENT_STATE>',
-    characters: '<MA_CHARACTER_IDENTITY>、<MA_CHARACTER_FACT>、<MA_CHARACTER_STATE>、<MA_CHARACTER_APPEARANCE>、<MA_CHARACTER_RELATION>、<MA_CHARACTER_ABILITY>',
-    state: '<MA_CHARACTER_IDENTITY>、<MA_CHARACTER_FACT>、<MA_CHARACTER_STATE>、<MA_CHARACTER_APPEARANCE>、<MA_CHARACTER_RELATION>、<MA_CHARACTER_ABILITY>',
-    items: '<MA_ITEM_IDENTITY>、<MA_ITEM_FACT>、<MA_ITEM_STATE>',
-    scenes: '<MA_SCENE_IDENTITY>、<MA_SCENE_FACT>、<MA_SCENE_STATE>',
-    regions: '<MA_REGION_IDENTITY>、<MA_REGION_FACT>、<MA_REGION_STATE>',
-    globalChanges: '<MA_GLOBAL_IDENTITY>、<MA_GLOBAL_FACT>、<MA_GLOBAL_STATE>',
-    foundations: '<MA_FOUNDATION_IDENTITY>、<MA_FOUNDATION_FACT>、<MA_FOUNDATION_STATE>',
-    spacetime: '<MA_SPACETIME_STATE>',
-    custom: '<MA_CUSTOM>（依次四行写：表格显示名、对象名、语义层显示名、具体事实）',
-};
-function transportModuleDescription(active) {
-    return active.map((table) => `${table.name}：${ROLE_TRANSPORT_MODULES[table.role] || ROLE_TRANSPORT_MODULES.custom}`).join('\n');
+function flatProtocolTableDescription(active) {
+    return active.map((table) => {
+        const layers = writableStateLayers(table).map((layer) => layer.label);
+        if (table.role === 'events' && !layers.includes('动作骨架'))
+            layers.unshift('动作骨架');
+        return `${table.name}：${layers.join('、')}`;
+    }).join('\n');
 }
 function linkRuleDescription(linkRules, registry) {
     const active = normalizeTableRegistry(registry);
@@ -14324,18 +16245,27 @@ function stateSystemPrompt(registry, promptSettings = DEFAULT_STATE_PROMPTS, con
     const evidenceRules = modelVisibleRuleText(promptSettings?.evidenceRules, DEFAULT_STATE_PROMPTS.evidenceRules);
     const updateRules = modelVisibleRuleText(promptSettings?.updateRules, DEFAULT_STATE_PROMPTS.updateRules);
     void contentLimits;
-    return `“镜渊”无观点事实书记｜自然事实模块协议
+    return `“镜渊”无观点事实书记｜扁平事实协议
 
-职责：只提取本轮明确成立的短事实。表头名称、用途说明和表头记录要求决定提取方向；内部标签只是传输通道，不代表固定领域。
-禁止评论、解释动机、预测、补全、判断价值、决定删除或输出数据库字段。
-禁止 JSON、键值表单、Markdown 代码块、思考过程和块外说明。
+职责：只提取本轮明确成立的短事实。表头名称、用途说明和表头记录要求决定提取方向。
+禁止评论、解释动机、预测、补全、判断价值、决定删除或输出数据库内部字段。
+禁止 JSON、Markdown 代码块、思考过程、嵌套事件容器和块外说明。
 
-【变化容器】
-每条彼此独立的变化链使用一个 <MA_EVENT>。第一行写稳定、可读的变化链名称，随后写相关事实模块。书记只记录已发生结果，不单独生成“未决事项”，不判断整条变化链是否应删除或归档。
-对象模块第一行必须是对象稳定名称，后续只写该对象自身的具体变化；同一事实不得在多个模块中重复复述。
+【唯一输出结构】
+先输出一个 <MA_TURN>，正文写本轮最短变化概括。
+每条独立事实使用一个扁平 <MA_FACT>，固定五项，每项单独一行：
+事件：稳定、可读的变化链名称
+表格：当前启用表的显示名
+对象：该事实唯一主体的稳定名称
+语义层：该表允许的语义层显示名
+事实：正文明确建立的一句当前结果
 
-【当前启用表与传输标签】
-${transportModuleDescription(active) || '当前没有启用表头。'}
+不要输出 <MA_EVENT>、<MA_CORE> 或其他内部标签。不同事实可以使用相同事件名，插件会在本地分组、补齐事件骨架并生成稳定 ID。
+若事实本身描述事件核心进展，表格写事件、对象写事件名、语义层写动作骨架。
+书记只记录已发生结果，不单独生成“未决事项”，不判断整条变化链是否应删除或归档。
+
+【当前启用表与允许语义层】
+${flatProtocolTableDescription(active) || '当前没有启用表头。'}
 
 【固定提取边界】
 允许建档：
@@ -14365,12 +16295,12 @@ ${linkRuleDescription(linkRules, registry)}
 3. “身份/定义”通道只用于正文明确改变对象本质或基础定义；短期变化写当前事实或状态。
 4. 只记录正文明确写出的已发生结果，不生成可能性、未来风险或未决建议。
 5. 不写近期经历、历史事实、承接记录、生命周期、稳定 ID、事件 ID 或事实 ID；这些由插件维护。
-6. 不使用“字段、变化层、动作、内容”等表单词，不输出等号。
+6. 五个标签行必须完整；“事实”之后只写事实正文，不追加解释。
 7. 无事实变化时只输出 <MA_TURN>，正文写一句最短变化概括。
 8. 当前启用表头：${names || '（无）'}。
 9. 联动只表示重新检查，不得因为来源表变化而凭空修改目标表。
 
-输出前只检查：事实是否明确、是否命中启用表头、模块是否短、各模块是否互不重复、标签是否闭合。`;
+输出前只检查：事实是否明确、是否命中启用表头、每个 <MA_FACT> 是否只含一个主体和一个结果、标签是否闭合。`;
 }
 function normalizeSearchText(value) {
     return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
@@ -14611,6 +16541,22 @@ function contextFactBlocks(payload) {
         return lines.join('\n');
     }).join('\n');
 }
+function eventAuthorityBlocks(facts) {
+    const authorities = [...eventStatusById(facts).values()]
+        .sort((left, right) => String(right.fact?.updatedAt || '').localeCompare(String(left.fact?.updatedAt || '')))
+        .slice(0, 12);
+    if (!authorities.length)
+        return '（无）';
+    return authorities.map(({ fact, closed }) => {
+        const eventName = String(fact?.view?.eventName
+            || fact?.view?.objectTitle
+            || fact?.title
+            || '未命名事件')
+            .replace(/事件状态$/u, '')
+            .slice(0, 120);
+        return `<MA_EVENT_AUTHORITY>\n事件：${contextValue(eventName)}\n权威状态：${closed ? '已关闭' : '进行中'}\n约束：${closed ? '不得因对象行残留关联而恢复为当前事件' : '可作为同一未完成变化链继续承接'}\n</MA_EVENT_AUTHORITY>`;
+    }).join('\n');
+}
 function contextDirectoryBlock(directory, omitted) {
     const lines = ['<MA_DIRECTORY>'];
     for (const entry of directory)
@@ -14648,7 +16594,7 @@ function contextRowBlocks(relevant, active) {
     }
     return blocks.join('\n') || '（无）';
 }
-function stateUserPrompt(previous, playerText, assistantText, registry, internalFacts = [], repair = false) {
+function stateUserPrompt(previous, playerText, assistantText, registry, internalFacts = []) {
     const active = tables(registry);
     const sourceText = `${playerText}
 ${assistantText}`;
@@ -14658,13 +16604,17 @@ ${assistantText}`;
     const spacetimeTable = active.find((table) => table.role === 'spacetime');
     const chainLabel = eventTable?.name || '变化链';
     const conditionalInstructions = [
-        `每个 <MA_EVENT> 第一行只写一条稳定、可读的“${chainLabel}”变化链名称，随后直接写命中当前表头的事实模块。`,
+        `每条 <MA_FACT> 的“事件”行写稳定、可读的“${chainLabel}”变化链名称；同一变化链的多条事实逐字使用同一名称。`,
         '若相关既有事实中的 event_name 与本轮仍属于同一项未完成变化链，必须逐字沿用；若旧变化链已完成而正文进入新的目标、阶段或独立处理流程，应使用新的可读名称，不得强行复用旧名。',
-        sceneTable ? `正文命中“${sceneTable.name}”的记录要求，且其建立、切换、阶段或目标发生真实变化时，输出对应状态模块并写明该表头提示词要求的当前结果。` : '',
-        spacetimeTable ? `正文命中“${spacetimeTable.name}”的记录要求并发生真实变化时，输出对应状态模块。` : '',
+        sceneTable ? `正文命中“${sceneTable.name}”的记录要求，且其建立、切换、阶段或目标发生真实变化时，单独输出一条该表的 <MA_FACT>。` : '',
+        spacetimeTable ? `正文命中“${spacetimeTable.name}”的记录要求并发生真实变化时，单独输出一条该表的 <MA_FACT>。` : '',
     ].filter(Boolean).join('');
     return `【相关既有事实｜只用于识别同一对象与变化链】
 ${contextFactBlocks(activeFactPayload(internalFacts, sourceText))}
+
+【相关事件状态权威｜仅当前快照或近期事实仍引用的事件】
+${eventAuthorityBlocks(internalFacts)}
+事件状态权威高于对象工作副本中残留的旧关联；“已关闭”事件不得被当作当前未完成变化链复用。
 
 【相关对象短目录】
 ${contextDirectoryBlock(context.directory, context.directoryOmitted)}
@@ -14678,11 +16628,12 @@ ${playerText || '（空）'}
 【本轮正文】
 ${assistantText}
 
-只返回 <MA_TURN> 和一个或多个 <MA_EVENT> 自然模块。${conditionalInstructions}对象模块第一行是对象稳定名称，后续是一到两句具体事实。不要使用等号、键值字段、JSON、内部英文键或旧协议。核心事实只写一次，各对象模块只写自身变化。${repair ? '\n上一次返回格式不完整：只补齐自然模块标签与变化链名称，不得改写或新增原文事实。' : ''}`;
+只返回一个 <MA_TURN> 和零个或多个扁平 <MA_FACT>。${conditionalInstructions}
+每个 <MA_FACT> 固定依次写“事件、表格、对象、语义层、事实”五行；对象只写该事实唯一主体，事实只写一到两句当前结果。不要输出 JSON、内部英文键、<MA_EVENT>、<MA_CORE> 或其他内部模块。插件负责事件分组、语义路由、稳定 ID、总结窗口与结算。`;
 }
 function stateTextProtocolDescription(registry) {
     const active = tables(registry);
-    return `自然事实模块：<MA_TURN>、<MA_EVENT> 以及当前启用表头对应的对象模块。启用表头：${active.map((table) => table.name).join('、') || '（无）'}。模型只写短事实；插件负责识别对象、映射语义层、分发、稳定 ID、总结窗口与结算。`;
+    return `扁平事实协议：<MA_TURN> 与 <MA_FACT>。每条事实只包含事件、表格、对象、语义层和事实；启用表头：${active.map((table) => table.name).join('、') || '（无）'}。插件本地负责事件分组、对象映射、稳定 ID、总结窗口与结算；旧 <MA_EVENT> 仅作兼容读取。`;
 }
 
 }
@@ -14842,6 +16793,7 @@ with(__scope){
 Object.defineProperty(exports,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>advanceRuntimeV2});
 Object.defineProperty(exports,"runtimeOutboxJobs",{enumerable:true,configurable:true,get:()=>runtimeOutboxJobs});
 Object.defineProperty(exports,"markRuntimeJobRunningById",{enumerable:true,configurable:true,get:()=>markRuntimeJobRunningById});
+Object.defineProperty(exports,"heartbeatRuntimeJobById",{enumerable:true,configurable:true,get:()=>heartbeatRuntimeJobById});
 Object.defineProperty(exports,"markRuntimeJobDoneById",{enumerable:true,configurable:true,get:()=>markRuntimeJobDoneById});
 Object.defineProperty(exports,"markRuntimeJobFailedById",{enumerable:true,configurable:true,get:()=>markRuntimeJobFailedById});
 Object.defineProperty(exports,"markRuntimeJobRunning",{enumerable:true,configurable:true,get:()=>markRuntimeJobRunning});
@@ -15142,6 +17094,7 @@ function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
         type,
         turnKey: artifact.messageKey,
         turnIndex: artifact.messageIndex,
+        intentId: artifact.intentId || artifact.processingIntent?.intentId || '',
         sourceRevision: revision,
         status: 'pending',
         attempts: 0,
@@ -15149,6 +17102,11 @@ function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
         startedAt: '',
         finishedAt: '',
         error: '',
+        claimedBy: '',
+        leaseToken: '',
+        leaseUntil: '',
+        heartbeatAt: '',
+        receipt: undefined,
     };
     // 世界书只需要发布最新投影。新的修订会淘汰尚未完成的旧投影，防止刷新后反复恢复幽灵任务。
     if (type === 'lorebook-sync') {
@@ -15160,7 +17118,7 @@ function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
     }
     runtime.outbox.push(job);
     runtime.outbox = runtime.outbox.slice(-1000);
-    appendJournal(runtime, 'OUTBOX_JOB_QUEUED', artifact.messageKey, artifact.messageIndex, { jobId: id, jobType: type });
+    appendJournal(runtime, 'OUTBOX_JOB_QUEUED', artifact.messageKey, artifact.messageIndex, { jobId: id, jobType: type, intentId: job.intentId });
     return job;
 }
 
@@ -15348,38 +17306,87 @@ function runtimeOutboxJobs(chatState, { statuses = ['pending'], types, turnKey }
         && (!turnKey || job.turnKey === turnKey));
 }
 
-function markRuntimeJobRunningById(chatState, jobId) {
+function markRuntimeJobRunningById(chatState, jobId, options = {}) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
     const job = findJobById(runtime, jobId);
     if (!job || ['done', 'cancelled'].includes(job.status)) {
         chatState.runtimeV2 = runtime;
         return job;
     }
+    const now = options.now instanceof Date ? options.now : new Date();
+    const owner = text(options.owner || 'mirror-abyss-worker', 220);
+    const leaseMs = Math.max(60_000, Number(options.leaseMs) || 10 * 60_000);
+    const requestedToken = text(options.leaseToken, 220)
+        || `lease_${hashText(`${job.id}|${owner}|${job.attempts + 1}|${now.toISOString()}`)}`;
+    const held = job.status === 'running'
+        && job.leaseUntil
+        && Date.parse(job.leaseUntil) > now.getTime()
+        && job.leaseToken
+        && job.leaseToken !== requestedToken;
+    if (held) {
+        chatState.runtimeV2 = runtime;
+        return { ...job, claimAccepted: false };
+    }
     job.status = 'running';
     job.attempts += 1;
-    job.startedAt = nowIso();
+    job.startedAt = now.toISOString();
     job.finishedAt = '';
     job.error = '';
+    job.claimedBy = owner;
+    job.leaseToken = requestedToken;
+    job.leaseUntil = new Date(now.getTime() + leaseMs).toISOString();
+    job.heartbeatAt = now.toISOString();
     if (job.type === 'lorebook-sync') {
         runtime.machines.publication.status = 'writing';
         runtime.machines.publication.pendingJobId = job.id;
-        runtime.machines.publication.updatedAt = nowIso();
+        runtime.machines.publication.updatedAt = now.toISOString();
     }
-    runtime.updatedAt = nowIso();
+    runtime.updatedAt = now.toISOString();
     chatState.runtimeV2 = runtime;
-    return job;
+    return { ...job, claimAccepted: true };
 }
 
-function markRuntimeJobDoneById(chatState, jobId, artifact) {
+function heartbeatRuntimeJobById(chatState, jobId, leaseToken, options = {}) {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const job = findJobById(runtime, jobId);
+    if (!job || job.status !== 'running' || !leaseToken || job.leaseToken !== leaseToken) {
+        chatState.runtimeV2 = runtime;
+        return { job, updated: false };
+    }
+    const now = options.now instanceof Date ? options.now : new Date();
+    const leaseMs = Math.max(60_000, Number(options.leaseMs) || 10 * 60_000);
+    job.heartbeatAt = now.toISOString();
+    job.leaseUntil = new Date(now.getTime() + leaseMs).toISOString();
+    runtime.updatedAt = now.toISOString();
+    chatState.runtimeV2 = runtime;
+    return { job, updated: true };
+}
+
+function markRuntimeJobDoneById(chatState, jobId, artifact, options = {}) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
     const job = findJobById(runtime, jobId);
     if (!job || job.status === 'cancelled') {
         chatState.runtimeV2 = runtime;
         return job;
     }
+    if (options.leaseToken && job.leaseToken && options.leaseToken !== job.leaseToken) {
+        chatState.runtimeV2 = runtime;
+        return { ...job, claimAccepted: false };
+    }
     job.status = 'done';
     job.finishedAt = nowIso();
     job.error = '';
+    job.receipt = {
+        jobId: job.id,
+        type: job.type,
+        sourceRevision: job.sourceRevision,
+        messageKey: artifact?.messageKey || job.turnKey,
+        confirmedAt: job.finishedAt,
+    };
+    job.claimedBy = '';
+    job.leaseToken = '';
+    job.leaseUntil = '';
+    job.heartbeatAt = job.finishedAt;
     if (job.type === 'small-summary' || job.type === 'large-summary') {
         const kind = job.type === 'small-summary' ? 'small' : 'large';
         // 迟到旧任务不得清除新正文已经登记的总结计划。
@@ -15425,16 +17432,24 @@ function markRuntimeJobDoneById(chatState, jobId, artifact) {
     return job;
 }
 
-function markRuntimeJobFailedById(chatState, jobId, error) {
+function markRuntimeJobFailedById(chatState, jobId, error, options = {}) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
     const job = findJobById(runtime, jobId);
     if (!job || job.status === 'cancelled') {
         chatState.runtimeV2 = runtime;
         return job;
     }
+    if (options.leaseToken && job.leaseToken && options.leaseToken !== job.leaseToken) {
+        chatState.runtimeV2 = runtime;
+        return { ...job, claimAccepted: false };
+    }
     job.status = 'failed';
     job.finishedAt = nowIso();
     job.error = text(error, 1200);
+    job.claimedBy = '';
+    job.leaseToken = '';
+    job.leaseUntil = '';
+    job.heartbeatAt = job.finishedAt;
     if (job.type === 'small-summary' || job.type === 'large-summary') {
         const kind = job.type === 'small-summary' ? 'small' : 'large';
         if (runtime.machines.summary.pendingTurnKey === job.turnKey
@@ -15524,6 +17539,10 @@ function markRuntimeJobCancelledById(chatState, jobId, reason = '任务已取消
         return job;
     }
     cancelOutboxJob(runtime, job, reason);
+    job.claimedBy = '';
+    job.leaseToken = '';
+    job.leaseUntil = '';
+    job.heartbeatAt = job.finishedAt || nowIso();
     if (['small-summary', 'large-summary'].includes(job.type)
         && runtime.machines.summary.pendingTurnKey === job.turnKey) {
         runtime.machines.summary.pendingKind = '';
@@ -15756,7 +17775,7 @@ function normalizeSceneInstance(value, id) {
 
 function normalizeOutboxJob(value) {
     const source = value && typeof value === 'object' ? value : {};
-    const status = ['pending', 'running', 'done', 'failed', 'cancelled'].includes(String(source.status))
+    const status = ['pending', 'running', 'done', 'failed', 'cancelled', 'manual_review'].includes(String(source.status))
         ? String(source.status)
         : 'pending';
     const type = ['small-summary', 'large-summary', 'lorebook-sync'].includes(String(source.type))
@@ -15769,6 +17788,7 @@ function normalizeOutboxJob(value) {
         id,
         type,
         turnKey: cleanText(source.turnKey, 220),
+        intentId: cleanText(source.intentId, 220),
         turnIndex: integer(source.turnIndex),
         sourceRevision: Math.max(0, integer(source.sourceRevision, 0)),
         status,
@@ -15778,6 +17798,11 @@ function normalizeOutboxJob(value) {
         finishedAt: cleanText(source.finishedAt, 80),
         error: cleanText(source.error, 1200),
         supersededByJobId: cleanText(source.supersededByJobId, 220),
+        claimedBy: cleanText(source.claimedBy, 220),
+        leaseToken: cleanText(source.leaseToken, 220),
+        leaseUntil: cleanText(source.leaseUntil, 80),
+        heartbeatAt: cleanText(source.heartbeatAt, 80),
+        receipt: source.receipt && typeof source.receipt === 'object' ? structuredClone(source.receipt) : undefined,
     };
 }
 
@@ -15887,6 +17912,8 @@ function normalizeRuntimeV2(value) {
 __defs["storage/repository.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"MODULE_NAME",{enumerable:true,configurable:true,get:()=>__require("constants.js")["MODULE_NAME"]});
+Object.defineProperty(__scope,"ensureProcessingIntent",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["ensureProcessingIntent"]});
+Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
 Object.defineProperty(__scope,"currentChatLocator",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatLocator"]});
 Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChat"]});
@@ -15914,6 +17941,8 @@ Object.defineProperty(__scope,"normalizeRecordingBoundary",{enumerable:true,conf
 Object.defineProperty(__scope,"normalizeLorebookPublication",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["normalizeLorebookPublication"]});
 Object.defineProperty(__scope,"emptyRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["emptyRuntimeV2"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
+Object.defineProperty(__scope,"emptyReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["emptyReliableWorkflow"]});
+Object.defineProperty(__scope,"normalizeReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["normalizeReliableWorkflow"]});
 with(__scope){
 Object.defineProperty(exports,"putArtifact",{enumerable:true,configurable:true,get:()=>putArtifact});
 Object.defineProperty(exports,"putChatState",{enumerable:true,configurable:true,get:()=>putChatState});
@@ -15926,7 +17955,7 @@ Object.defineProperty(exports,"CURRENT_SCHEMA_VERSION",{enumerable:true,configur
  * 模块职责：定义消息 artifact 与聊天级 ChatState 的存储边界，并迁移 rc.19 事实/总结数据。
  * 维护边界：消息结果附着 message.extra；内部事实与消费标记写入当前 chatMetadata，并在保存前后校验 chatKey。
  */
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 /** ChatState 是持久化 JSON 数据；使用 JSON 副本兼容 SillyTavern/插件可能提供的 Proxy 包装对象。 */
 function cloneChatState(value) {
     return JSON.parse(JSON.stringify(value));
@@ -15943,6 +17972,7 @@ function emptyChatState(chatKey) {
         lastSyncStatus: 'idle',
         lorebookPublication: normalizeLorebookPublication(),
         runtimeV2: emptyRuntimeV2(),
+        reliableWorkflow: emptyReliableWorkflow(),
         migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false, factContractV35: false },
         updatedAt: nowIso(),
     };
@@ -16186,15 +18216,8 @@ function migrateChatState(raw, chatKey) {
                         ...Object.fromEntries(persisted.idRemap),
                     };
                     persistedCharactersChanged = true;
-                    if (artifact.stages?.sync) {
-                        artifact.stages.sync = {
-                            ...artifact.stages.sync,
-                            status: 'idle',
-                            error: undefined,
-                            startedAt: undefined,
-                            finishedAt: undefined,
-                        };
-                    }
+                    ensureProcessingIntent(artifact);
+                    markStage(artifact, 'sync', 'idle', undefined, { reason: 'snapshot-migration' });
                     delete artifact.lorebookEntryIds;
                 }
             }
@@ -16250,15 +18273,8 @@ function migrateChatState(raw, chatKey) {
                 }
                 if (unique.mergedCount || crossSnapshotAliases.size || savedAliases.size) {
                     uniqueObjectNamesChanged = true;
-                    if (artifact.stages?.sync) {
-                        artifact.stages.sync = {
-                            ...artifact.stages.sync,
-                            status: 'idle',
-                            error: undefined,
-                            startedAt: undefined,
-                            finishedAt: undefined,
-                        };
-                    }
+                    ensureProcessingIntent(artifact);
+                    markStage(artifact, 'sync', 'idle', undefined, { reason: 'snapshot-migration' });
                     delete artifact.lorebookEntryIds;
                 }
             }
@@ -16327,8 +18343,8 @@ function migrateChatState(raw, chatKey) {
             if (gc.deletedRowIds.length || JSON.stringify(gc.snapshot) !== JSON.stringify(artifact.snapshot)) {
                 artifact.snapshot = gc.snapshot;
                 artifactViewsChanged = true;
-                if (artifact.stages?.sync)
-                    artifact.stages.sync = { ...artifact.stages.sync, status: 'idle', error: undefined };
+                ensureProcessingIntent(artifact);
+                markStage(artifact, 'sync', 'idle', undefined, { reason: 'entry-lifecycle-migration' });
                 delete artifact.lorebookEntryIds;
             }
         }
@@ -16349,6 +18365,7 @@ function migrateChatState(raw, chatKey) {
         singleAuthorityV34: true,
         factContractV35: true,
     };
+    state.reliableWorkflow = normalizeReliableWorkflow(state.reliableWorkflow);
     state.updatedAt ||= nowIso();
     return {
         state,
@@ -16405,6 +18422,8 @@ function currentStateStructure(raw, chatKey) {
         return false;
     if (JSON.stringify(state.runtimeV2) !== JSON.stringify(normalizeRuntimeV2(state.runtimeV2)))
         return false;
+    if (JSON.stringify(state.reliableWorkflow) !== JSON.stringify(normalizeReliableWorkflow(state.reliableWorkflow)))
+        return false;
     return REQUIRED_MIGRATIONS.every((key) => state.migration?.[key] === true);
 }
 async function readCurrentChatStateFast(namespace, state, chatKey) {
@@ -16445,8 +18464,12 @@ async function readChatState(chatKey) {
             hadAliases: Object.prototype.hasOwnProperty.call(artifact, 'persistedCharacterIdAliasesV30'),
             uniqueAliases: artifact.uniqueObjectIdAliasesV31,
             hadUniqueAliases: Object.prototype.hasOwnProperty.call(artifact, 'uniqueObjectIdAliasesV31'),
-            sync: artifact.stages?.sync,
-            hadSync: Boolean(artifact.stages && Object.prototype.hasOwnProperty.call(artifact.stages, 'sync')),
+            stages: artifact.stages ? structuredClone(artifact.stages) : undefined,
+            hadStages: Object.prototype.hasOwnProperty.call(artifact, 'stages'),
+            processingIntent: artifact.processingIntent ? structuredClone(artifact.processingIntent) : undefined,
+            hadProcessingIntent: Object.prototype.hasOwnProperty.call(artifact, 'processingIntent'),
+            intentId: artifact.intentId,
+            hadIntentId: Object.prototype.hasOwnProperty.call(artifact, 'intentId'),
             lorebookEntryIds: artifact.lorebookEntryIds,
             hadLorebookEntryIds: Object.prototype.hasOwnProperty.call(artifact, 'lorebookEntryIds'),
         });
@@ -16483,12 +18506,18 @@ async function readChatState(chatKey) {
                     backup.artifact.uniqueObjectIdAliasesV31 = backup.uniqueAliases;
                 else
                     delete backup.artifact.uniqueObjectIdAliasesV31;
-                if (backup.artifact.stages) {
-                    if (backup.hadSync)
-                        backup.artifact.stages.sync = backup.sync;
-                    else
-                        delete backup.artifact.stages.sync;
-                }
+                if (backup.hadStages)
+                    backup.artifact.stages = backup.stages;
+                else
+                    delete backup.artifact.stages;
+                if (backup.hadProcessingIntent)
+                    backup.artifact.processingIntent = backup.processingIntent;
+                else
+                    delete backup.artifact.processingIntent;
+                if (backup.hadIntentId)
+                    backup.artifact.intentId = backup.intentId;
+                else
+                    delete backup.artifact.intentId;
                 if (backup.hadLorebookEntryIds)
                     backup.artifact.lorebookEntryIds = backup.lorebookEntryIds;
                 else
@@ -16524,6 +18553,7 @@ async function putChatState(state) {
     next.recordingBoundary = normalizeRecordingBoundary(next.recordingBoundary);
     next.lorebookPublication = normalizeLorebookPublication(next.lorebookPublication);
     next.runtimeV2 = normalizeRuntimeV2(next.runtimeV2);
+    next.reliableWorkflow = normalizeReliableWorkflow(next.reliableWorkflow);
     if (next.migration?.internalFactsV23 !== true || next.migration?.summaryVersionsV27 !== true) {
         migrateLegacyConsumption(next.internalFacts, next.smallSummaries, next.largeSummaries);
     }
@@ -16599,12 +18629,15 @@ Object.defineProperty(__scope,"VERSION",{enumerable:true,configurable:true,get:(
 Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["enabledTables"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
+Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChat"]});
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"tryGetContext",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["tryGetContext"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
 Object.defineProperty(__scope,"requestTraceReport",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["requestTraceReport"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
+Object.defineProperty(__scope,"artifactIntentProjection",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentProjection"]});
+Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["getAttachedArtifact"]});
 with(__scope){
 Object.defineProperty(exports,"runDiagnostics",{enumerable:true,configurable:true,get:()=>runDiagnostics});
 Object.defineProperty(exports,"diagnosticReport",{enumerable:true,configurable:true,get:()=>diagnosticReport});
@@ -16665,6 +18698,31 @@ function syncStatus(state) {
         detail: redactedError(state?.lastSyncError) || state?.lastSyncAt || '尚未同步',
     };
 }
+
+function reliableWorkflowDiagnosticCheck(state) {
+    const workflow = state?.reliableWorkflow;
+    if (!workflow)
+        return { id: 'reliableWorkflow', label: '可靠工作流控制面', status: 'warn', detail: '尚未初始化持久 Inbox、命令与提交账本' };
+    const commands = Array.isArray(workflow.commands) ? workflow.commands : [];
+    const commits = Array.isArray(workflow.commits) ? workflow.commits : [];
+    const manual = commands.filter((item) => item.status === 'manual_review').length
+        + commits.filter((item) => item.phase === 'manual_review').length
+        + (Array.isArray(workflow.effects) ? workflow.effects.filter((item) => item.status === 'manual_review').length : 0);
+    const active = commands.filter((item) => ['accepted', 'running'].includes(item.status)).length
+        + commits.filter((item) => ['prepared', 'chat_state_written', 'artifact_written'].includes(item.phase)).length;
+    const status = manual ? 'error' : active ? 'warn' : 'ok';
+    return {
+        id: 'reliableWorkflow',
+        label: '可靠工作流控制面',
+        status,
+        detail: manual
+            ? `${manual} 条记录需要人工复核；插件不会自动重复模型调用`
+            : active
+                ? `${active} 条命令或提交仍在执行/待对账`
+                : `Inbox ${workflow.inbox?.length || 0}、命令 ${commands.length}、提交 ${commits.length}，状态一致`,
+    };
+}
+
 async function runDiagnostics() {
     const checks = [];
     const context = tryGetContext();
@@ -16737,6 +18795,7 @@ async function runDiagnostics() {
         const sync = syncStatus(state);
         checks.push({ id: 'sync', label: '最近世界书同步', ...sync });
         checks.push(...runtimeStateDiagnosticChecks(state));
+        checks.push(reliableWorkflowDiagnosticCheck(state));
     }
     return checks;
 }
@@ -16776,6 +18835,67 @@ function redactChatStateForDiagnostics(state) {
             suppressedCount: Object.keys(state.lorebookPublication.suppressed ?? {}).length,
         } : undefined,
         hostRecallStatus: safeHostRecallStatus(state.hostRecallStatus),
+        reliableWorkflow: state.reliableWorkflow ? {
+            schemaVersion: state.reliableWorkflow.schemaVersion,
+            revision: state.reliableWorkflow.revision,
+            inbox: (state.reliableWorkflow.inbox ?? []).slice(-40).map((event) => ({
+                eventKey: event.eventKey,
+                eventType: event.eventType,
+                messageKey: event.messageKey,
+                status: event.status,
+                intentId: event.intentId,
+                commandId: event.commandId,
+                duplicateCount: event.duplicateCount,
+                receivedAt: event.receivedAt,
+                updatedAt: event.updatedAt,
+                reason: redactedError(event.reason),
+            })),
+            commands: (state.reliableWorkflow.commands ?? []).slice(-40).map((command) => ({
+                commandId: command.commandId,
+                idempotencyKey: command.idempotencyKey,
+                commandType: command.commandType,
+                intentId: command.intentId,
+                step: command.step,
+                status: command.status,
+                attempts: command.attempts,
+                createdAt: command.createdAt,
+                startedAt: command.startedAt,
+                finishedAt: command.finishedAt,
+                leaseUntil: command.leaseUntil,
+                resultRef: command.resultRef,
+                error: redactedError(command.error),
+                terminalReason: redactedError(command.terminalReason),
+            })),
+            commits: (state.reliableWorkflow.commits ?? []).slice(-40).map((commit) => ({
+                commitId: commit.commitId,
+                intentId: commit.intentId,
+                commandId: commit.commandId,
+                messageKey: commit.messageKey,
+                phase: commit.phase,
+                stateRevision: commit.stateRevision,
+                preparedAt: commit.preparedAt,
+                committedAt: commit.committedAt,
+                error: redactedError(commit.error),
+            })),
+            effects: (state.reliableWorkflow.effects ?? []).slice(-40).map((effect) => ({
+                effectId: effect.effectId,
+                intentId: effect.intentId,
+                commandId: effect.commandId,
+                type: effect.type,
+                target: effect.target,
+                status: effect.status,
+                attempts: effect.attempts,
+                leaseUntil: effect.leaseUntil,
+                hasReceipt: Boolean(effect.receipt),
+                error: redactedError(effect.error),
+                updatedAt: effect.updatedAt,
+            })),
+            reconciliation: {
+                ...state.reliableWorkflow.reconciliation,
+                notes: (state.reliableWorkflow.reconciliation?.notes ?? []).map((item) => redactedError(item)).filter(Boolean),
+            },
+            updatedAt: state.reliableWorkflow.updatedAt,
+        } : undefined,
         runtimeV2: state.runtimeV2 ? {
             version: state.runtimeV2.version,
             revision: state.runtimeV2.revision,
@@ -16788,6 +18908,10 @@ function redactChatStateForDiagnostics(state) {
                 sourceRevision: job.sourceRevision,
                 status: job.status,
                 attempts: job.attempts,
+                claimedBy: job.claimedBy,
+                leaseUntil: job.leaseUntil,
+                heartbeatAt: job.heartbeatAt,
+                hasReceipt: Boolean(job.receipt),
                 error: redactedError(job.error),
             })) : [],
             machines: state.runtimeV2.machines,
@@ -16825,10 +18949,51 @@ function safeTask(task) {
         historyRevisionAtEnqueue: task.historyRevisionAtEnqueue,
         historyRecoveryPhaseAtEnqueue: task.historyRecoveryPhaseAtEnqueue,
         automatic: task.automatic === true,
+        intentId: task.intentId,
+        intentStep: task.intentStep,
+        commandId: task.commandId,
+        businessStatus: task.businessStatus,
         cancelRequestedAt: task.cancelRequestedAt,
         cancelReason: redactedError(task.cancelReason),
         skipReason: redactedError(task.skipReason),
         error: redactedError(task.error),
+    };
+}
+function safeProcessingIntent(artifact) {
+    const intent = artifact?.processingIntent;
+    if (!intent)
+        return null;
+    const projection = artifactIntentProjection(artifact, taskQueue.list());
+    return {
+        intentId: intent.intentId,
+        workflowVersion: intent.workflowVersion,
+        messageKey: artifact.messageKey,
+        messageIndex: artifact.messageIndex,
+        sourceFingerprint: artifact.sourceFingerprint,
+        status: projection.status,
+        currentStep: projection.currentStep,
+        completed: projection.completed,
+        total: projection.total,
+        version: intent.version,
+        steps: Object.fromEntries(Object.entries(projection.steps).map(([key, value]) => [key, {
+            status: value.status,
+            attempts: value.attempts,
+            startedAt: value.startedAt,
+            finishedAt: value.finishedAt,
+            error: redactedError(value.error),
+            lastAttemptId: value.lastAttemptId,
+        }])),
+        activities: (intent.activities ?? []).slice(-20).map((activity) => ({
+            attemptId: activity.attemptId,
+            step: activity.step,
+            ordinal: activity.ordinal,
+            status: activity.status,
+            startedAt: activity.startedAt,
+            finishedAt: activity.finishedAt,
+            error: redactedError(activity.error),
+        })),
+        journalCount: Array.isArray(intent.journal) ? intent.journal.length : 0,
+        updatedAt: intent.updatedAt,
     };
 }
 function safeRequest(trace) {
@@ -16838,6 +19003,10 @@ function safeRequest(trace) {
         connectionLane: trace.connectionLane,
         requestClass: trace.requestClass,
         requestOrigin: trace.requestOrigin,
+        intentId: trace.intentId,
+        activityAttemptId: trace.activityAttemptId,
+        activityStep: trace.activityStep,
+        commandId: trace.commandId,
         task: trace.task,
         state: trace.state,
         createdAt: trace.createdAt,
@@ -16893,7 +19062,7 @@ function safeHostRecallStatus(value) {
 function runtimeStateDiagnosticChecks(state) {
     const checks = [];
     const outbox = Array.isArray(state?.runtimeV2?.outbox) ? state.runtimeV2.outbox : [];
-    const failed = outbox.filter((job) => job?.status === 'failed');
+    const failed = outbox.filter((job) => ['failed', 'manual_review'].includes(job?.status));
     const active = outbox.filter((job) => ['pending', 'running'].includes(job?.status));
     checks.push({
         id: 'runtimeOutbox',
@@ -16946,9 +19115,10 @@ async function diagnosticReport() {
             revisionPrompt: settings.revisionPrompt ? '[已填写]' : '',
         } : null,
         chatState: redactChatStateForDiagnostics(chatState),
+        intents: context ? getChat().map((message) => safeProcessingIntent(getAttachedArtifact(message))).filter(Boolean) : [],
         tasks: taskQueue.list().map(safeTask),
         requests: requestTraceReport().map(safeRequest),
-        privacy: '诊断不包含玩家输入、AI正文、小总结正文、大总结正文、完整模型响应或API密钥',
+        privacy: '诊断不包含玩家输入、AI正文、小总结正文、大总结正文、完整模型响应或API密钥；Intent仅包含状态、时间与关联ID',
     };
 }
 
@@ -16973,6 +19143,7 @@ Object.defineProperty(__scope,"openWorkspace",{enumerable:true,configurable:true
 Object.defineProperty(__scope,"registerMessagePanelRenderer",{enumerable:true,configurable:true,get:()=>__require("ui/workspace.js")["registerMessagePanelRenderer"]});
 Object.defineProperty(__scope,"applyAuditVisibility",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditVisibility"]});
 Object.defineProperty(__scope,"snapshotRowCount",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["snapshotRowCount"]});
+Object.defineProperty(__scope,"artifactIntentProjection",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentProjection"]});
 Object.defineProperty(__scope,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["subscribeArtifactStageChanges"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
 with(__scope){
@@ -16985,6 +19156,9 @@ Object.defineProperty(exports,"installMessagePanelHandlers",{enumerable:true,con
  * 模块职责：渲染每条角色消息下方的阶段状态与操作入口。
  * 维护边界：UI 只展示 artifact 状态；所有阶段按钮必须调用 pipeline 公开入口。
  */
+function taskErrorTone(error) {
+    return error instanceof Error && error.name === 'TaskBlockedError' ? 'warning' : 'error';
+}
 function stageLabel(stage) {
     const map = {
         idle: '等待', queued: '排队', running: '处理中', success: '成功', failed: '失败', cancelled: '已取消', skipped: '跳过', blocked: '阻断',
@@ -17000,25 +19174,11 @@ function tone(stage) {
         return 'working';
     return 'neutral';
 }
-function liveTaskMatchesArtifact(artifact, kinds) {
-    return taskQueue.list().some((task) => Boolean(['queued', 'running'].includes(String(task.state))
-        && (!task.chatKey || task.chatKey === artifact.chatKey)
-        && (!task.messageKey || task.messageKey === artifact.messageKey)
-        && kinds.includes(String(task.kind))));
+function intentProjection(artifact) {
+    return artifactIntentProjection(artifact, taskQueue.list());
 }
 function effectiveStageBusy(artifact, stage) {
-    const status = artifact.stages[stage]?.status;
-    if (status === 'queued')
-        return true;
-    if (status !== 'running')
-        return false;
-    // 派生任务运行中但队列已没有对应工作时，允许玩家重新提交；
-    // outbox-runner 会立即把 artifact 收尾为 cancelled/blocked。
-    if (stage === 'summary')
-        return liveTaskMatchesArtifact(artifact, ['smallSummary', 'largeSummary']);
-    if (stage === 'sync')
-        return liveTaskMatchesArtifact(artifact, ['sync']);
-    return true;
+    return ['queued', 'running'].includes(intentProjection(artifact)?.steps?.[stage]?.status);
 }
 function findMessageElement(index) {
     return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
@@ -17028,14 +19188,15 @@ function messageStageAvailability(index, artifact) {
     const settings = getSettings();
     const latestText = index === latestAssistantIndex();
     const latestSnapshot = index === latestSnapshotArtifact()?.index;
-    const notBusy = (stage) => !effectiveStageBusy(artifact, stage);
+    const projection = intentProjection(artifact);
+    const notBusy = (stage) => !['queued', 'running'].includes(projection?.steps?.[stage]?.status);
     return {
         audit: Boolean(settings.enabled && settings.hostControl.enabled && latestText && settings.auditEnabled && settings.auditPrompt.trim() && notBusy('audit')),
         revision: Boolean(settings.enabled && latestText && artifact.audit && !artifact.audit.passed && artifact.audit.decision !== 'block' && notBusy('revision')),
         state: Boolean(settings.enabled && latestText && (!settings.hostControl.enabled || !settings.auditEnabled || artifact.audit?.passed) && notBusy('state')),
-        small: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === 'success' && notBusy('summary')),
-        large: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === 'success' && notBusy('summary')),
-        sync: Boolean(settings.enabled && latestSnapshot && artifact.stages.state.status === 'success' && notBusy('sync')),
+        small: Boolean(settings.enabled && latestSnapshot && projection?.steps?.state?.status === 'success' && notBusy('summary')),
+        large: Boolean(settings.enabled && latestSnapshot && projection?.steps?.state?.status === 'success' && notBusy('summary')),
+        sync: Boolean(settings.enabled && latestSnapshot && projection?.steps?.state?.status === 'success' && notBusy('sync')),
     };
 }
 const pendingRetryIndexes = new Set();
@@ -17053,28 +19214,20 @@ function flowStageHtml(order, label, stage) {
 }
 function panelHtml(index, artifact) {
     const rows = snapshotRowCount(artifact.snapshot, getSettings().tableRegistry, true);
-    const error = Object.values(artifact.stages).find((stage) => stage.error)?.error;
+    const projection = intentProjection(artifact);
+    const displayStages = projection.steps;
+    const error = ['failed', 'blocked'].includes(projection.status) ? projection.detail : Object.values(displayStages).find((stage) => stage.error)?.error;
     const retrying = pendingRetryIndexes.has(index);
     const latestText = index === latestAssistantIndex();
     const latestSnapshot = index === latestSnapshotArtifact()?.index;
     const available = messageStageAvailability(index, artifact);
     const enabled = (action) => !retrying && available[action] ? '' : 'disabled';
     const expanded = expandedPanelIndexes.has(index);
-    const displayStages = {
-        audit: artifact.stages.audit,
-        revision: artifact.stages.revision,
-        state: artifact.stages.state,
-        summary: artifact.stages.summary,
-        sync: artifact.stages.sync,
-    };
-    const stages = [displayStages.audit, displayStages.revision, displayStages.state, displayStages.summary, displayStages.sync];
-    const chainBusy = stages.some((stage) => ['queued', 'running'].includes(stage?.status));
-    const chainFailed = stages.some((stage) => ['failed', 'blocked'].includes(stage.status));
-    const completedStages = stages.filter((stage) => ['success', 'skipped'].includes(stage.status)).length;
-    const chainComplete = artifact.stages.state.status === 'success'
-        && ['success', 'skipped'].includes(artifact.stages.summary.status)
-        && ['success', 'skipped'].includes(artifact.stages.sync.status);
-    const chainState = chainBusy ? '处理中' : chainFailed ? '需处理' : chainComplete ? '已完成' : '待继续';
+    const chainBusy = projection.busy;
+    const chainFailed = ['failed', 'blocked'].includes(projection.status);
+    const completedStages = projection.completed;
+    const chainComplete = projection.status === 'completed';
+    const chainState = projection.label;
     return `
     <div class="ma11-message-panel ${expanded ? 'is-open' : 'is-collapsed'}" data-ma-index="${index}">
       <div class="ma11-message-bar ${chainFailed ? 'danger' : chainBusy ? 'working' : chainComplete ? 'success' : 'neutral'}">
@@ -17112,11 +19265,11 @@ function panelHtml(index, artifact) {
         </div>` : '<div class="ma11-message-actions"><button data-ma-action="open">打开工作区</button></div>'}
         <div class="ma11-message-actions ma11-message-retries">
           ${retrying ? '<button disabled>处理中…</button>' : ''}
-          ${!retrying && latestText && artifact.stages.audit.status === 'failed' ? '<button data-ma-retry="audit">重试审核</button>' : ''}
-          ${!retrying && latestText && ['failed', 'blocked'].includes(artifact.stages.revision?.status ?? 'idle') ? '<button data-ma-retry="revision">重试定向修正</button>' : ''}
-          ${!retrying && latestText && artifact.stages.state.status === 'failed' ? '<button data-ma-retry="state">重试表格</button>' : ''}
-          ${!retrying && latestSnapshot && artifact.stages.summary.status === 'failed' ? '<button data-ma-retry="summary">重试总结</button>' : ''}
-          ${!retrying && latestSnapshot && artifact.stages.sync.status === 'failed' ? '<button data-ma-retry="sync">重试同步</button>' : ''}
+          ${!retrying && latestText && displayStages.audit.status === 'failed' ? '<button data-ma-retry="audit">重试审核</button>' : ''}
+          ${!retrying && latestText && ['failed', 'blocked'].includes(displayStages.revision?.status ?? 'idle') ? '<button data-ma-retry="revision">重试定向修正</button>' : ''}
+          ${!retrying && latestText && displayStages.state.status === 'failed' ? '<button data-ma-retry="state">重试表格</button>' : ''}
+          ${!retrying && latestSnapshot && displayStages.summary.status === 'failed' ? '<button data-ma-retry="summary">重试总结</button>' : ''}
+          ${!retrying && latestSnapshot && displayStages.sync.status === 'failed' ? '<button data-ma-retry="sync">重试同步</button>' : ''}
         </div>
       </div>
     </div>`;
@@ -17172,7 +19325,7 @@ function installMessagePanelHandlers() {
             renderMessagePanel(index);
             toast('info', '正在从第一个失效阶段继续处理');
             void processMessage(index, false).catch((error) => {
-                toast('error', toErrorMessage(error));
+                toast(taskErrorTone(error), toErrorMessage(error));
             }).finally(() => {
                 pendingRetryIndexes.delete(index);
                 renderMessagePanel(index);
@@ -17190,7 +19343,7 @@ function installMessagePanelHandlers() {
                 ? forceSummary(index, stageAction)
                 : retryStage(index, stageAction);
             void task.catch((error) => {
-                toast('error', toErrorMessage(error));
+                toast(taskErrorTone(error), toErrorMessage(error));
             }).finally(() => {
                 pendingRetryIndexes.delete(index);
                 renderMessagePanel(index);
@@ -17205,7 +19358,7 @@ function installMessagePanelHandlers() {
             renderMessagePanel(index);
             toast('info', '已提交重试，请稍候');
             void retryStage(index, retry).catch((error) => {
-                toast('error', toErrorMessage(error));
+                toast(taskErrorTone(error), toErrorMessage(error));
             }).finally(() => {
                 pendingRetryIndexes.delete(index);
                 renderMessagePanel(index);
@@ -17354,6 +19507,7 @@ Object.defineProperty(__scope,"escapeHtml",{enumerable:true,configurable:true,ge
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"buildEventProfiles",{enumerable:true,configurable:true,get:()=>__require("domain/event-profile.js")["buildEventProfiles"]});
+Object.defineProperty(__scope,"artifactIntentProjection",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentProjection"]});
 Object.defineProperty(__scope,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["subscribeArtifactStageChanges"]});
 Object.defineProperty(__scope,"snapshotRowCount",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["snapshotRowCount"]});
 Object.defineProperty(__scope,"visibleStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["visibleStateRows"]});
@@ -17644,16 +19798,10 @@ function currentArtifact() {
 /** 当前工作区是否已有业务链在排队或执行。工作区动作不得在该状态下重复提交。 */
 function workspacePipelineBusy(artifactInfo = currentArtifact()) {
     const artifact = artifactInfo?.artifact;
-    const chatKey = artifact?.chatKey || currentChatKey();
-    const liveTasks = taskQueue.list().filter((task) => Boolean((task.state === "queued" || task.state === "running")
-        && (!task.chatKey || task.chatKey === chatKey)
-        && (!artifact || !task.messageKey || task.messageKey === artifact.messageKey)));
-    const queueBusy = liveTasks.length > 0;
-    // artifact 阶段是工作区的规范状态源。Outbox 在任务被替换、阻断或取消时会立即
-    // 收尾对应阶段；这里不再用另一套“队列存在才算忙”的规则覆盖 artifact。
-    const stageBusy = Boolean(artifact && Object.values(artifact.stages)
-        .some((stage) => stage.status === "queued" || stage.status === "running"));
-    return workspacePipelineActionPending || stageBusy || queueBusy;
+    if (!artifact)
+        return workspacePipelineActionPending;
+    // UI 只读取 IntentProjection；投影内部统一关联持久意图与同 intentId 的活动任务。
+    return workspacePipelineActionPending || Boolean(artifactIntentProjection(artifact, taskQueue.list())?.busy);
 }
 function workspaceHasFocusedEditor(workspace) {
     const active = document.activeElement;
@@ -17683,6 +19831,9 @@ function handlePipelineChange() {
     refreshTaskList();
     scheduleWorkspaceRender();
 }
+function taskErrorTone(error) {
+    return error instanceof Error && error.name === "TaskBlockedError" ? "warning" : "error";
+}
 function statusText(value) {
     const map = {
         idle: "等待",
@@ -17710,23 +19861,19 @@ function statusClass(value) {
 function workflowState(artifact) {
     if (!artifact)
         return { label: "尚未整理", detail: "生成一条 AI 正文后会自动开始", tone: "neutral", completed: 0, total: 5 };
-    const stages = [artifact.stages.audit, artifact.stages.revision, artifact.stages.state, artifact.stages.summary, artifact.stages.sync];
-    const failed = stages.find((stage) => ["failed", "blocked"].includes(stage.status));
-    const running = stages.find((stage) => ["queued", "running"].includes(stage.status));
-    const completed = stages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
-    if (failed)
-        return { label: "需要处理", detail: failed.error || "某个阶段未完成", tone: "danger", completed, total: 5 };
-    if (running)
-        return { label: "自动处理中", detail: "流程会按顺序继续", tone: "working", completed, total: 5 };
-    if (artifact.stages.state.status === "success"
-        && ["success", "skipped"].includes(artifact.stages.summary.status)
-        && ["success", "skipped"].includes(artifact.stages.sync.status)) {
-        return { label: "本轮已完成", detail: "状态、总结与世界书已更新", tone: "success", completed, total: 5 };
-    }
-    return { label: "等待继续", detail: "将从第一个未完成阶段继续", tone: "neutral", completed, total: 5 };
+    const projection = artifactIntentProjection(artifact, taskQueue.list());
+    return {
+        label: projection.label,
+        detail: projection.detail,
+        tone: projection.tone,
+        completed: projection.completed,
+        total: projection.total,
+        status: projection.status,
+        currentStep: projection.currentStep,
+    };
 }
 function stageStripHtml(artifact) {
-    const stages = artifact?.stages;
+    const stages = artifact ? artifactIntentProjection(artifact, taskQueue.list())?.steps : undefined;
     const rows = [
         ["audit", "审核"],
         ["revision", "修正"],
@@ -19489,7 +21636,7 @@ function bindWorkspace(workspace) {
             }
         }
         catch (error) {
-            toast("error", toErrorMessage(error));
+            toast(taskErrorTone(error), toErrorMessage(error));
         }
         finally {
             if (pipelineAction) {
