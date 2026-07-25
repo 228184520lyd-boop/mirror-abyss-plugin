@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.10';
+const VERSION = '1.4.0-alpha.12';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -965,7 +965,9 @@ Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:tru
 Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
 with(__scope){
 Object.defineProperty(exports,"refreshMessageDisplay",{enumerable:true,configurable:true,get:()=>refreshMessageDisplay});
+Object.defineProperty(exports,"commitPreparedMessageReplacement",{enumerable:true,configurable:true,get:()=>commitPreparedMessageReplacement});
 Object.defineProperty(exports,"replaceMessageInPlace",{enumerable:true,configurable:true,get:()=>replaceMessageInPlace});
+Object.defineProperty(exports,"prepareMessageReplacement",{enumerable:true,configurable:true,get:()=>prepareMessageReplacement});
 /**
  * 模块职责：将定向修正结果原位写回当前活动 swipe，并刷新 SillyTavern 消息显示。
  * 维护边界：只允许修改仍与 artifact 指纹一致的当前正文，不新增重复消息。
@@ -994,7 +996,7 @@ async function refreshMessageDisplay(index) {
     if (typeof context.reloadCurrentChat === 'function')
         await context.reloadCurrentChat();
 }
-async function replaceMessageInPlace(artifact, text) {
+function prepareMessageReplacement(artifact, text) {
     assertArtifactCommitCurrent(artifact);
     const message = getMessage(artifact.messageIndex);
     if (!message || message.is_user)
@@ -1007,12 +1009,24 @@ async function replaceMessageInPlace(artifact, text) {
     artifact.assistantText = finalText;
     artifact.sourceFingerprint = messageFingerprint(artifact.messageIndex);
     artifact.messageKey = messageIdentity(artifact.messageIndex);
-    artifact.approvedFingerprint = artifact.sourceFingerprint;
-    artifact.hiddenByAudit = false;
+    attachArtifactToMessage(message, artifact);
+    return artifact.sourceFingerprint;
+}
+async function commitPreparedMessageReplacement(artifact) {
+    assertArtifactCommitCurrent(artifact);
+    const message = getMessage(artifact.messageIndex);
+    if (!message || message.is_user)
+        throw new Error('原AI消息已不存在');
     attachArtifactToMessage(message, artifact);
     await persistChatFor(artifact.chatKey);
     await refreshMessageDisplay(artifact.messageIndex);
     return artifact.sourceFingerprint;
+}
+async function replaceMessageInPlace(artifact, text) {
+    prepareMessageReplacement(artifact, text);
+    artifact.approvedFingerprint = artifact.sourceFingerprint;
+    artifact.hiddenByAudit = false;
+    return commitPreparedMessageReplacement(artifact);
 }
 
 }
@@ -1311,6 +1325,7 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"fixedTextValue",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["fixedTextValue"]});
 Object.defineProperty(__scope,"fixedTextValues",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["fixedTextValues"]});
+Object.defineProperty(__scope,"normalizeProtocolText",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["normalizeProtocolText"]});
 Object.defineProperty(__scope,"parseFixedTextBlocks",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["parseFixedTextBlocks"]});
 with(__scope){
 Object.defineProperty(exports,"parseAuditTextOutput",{enumerable:true,configurable:true,get:()=>parseAuditTextOutput});
@@ -1367,7 +1382,7 @@ function decisionValue(raw) {
     return '';
 }
 function parseAuditTextOutput(raw) {
-    const text = safeText(raw, 220000).trim();
+    let text = normalizeProtocolText(safeText(raw, 220000)).trim();
     const legacy = text.replace(/\r/g, '').split('\n');
     if (legacy[0]?.trim().toUpperCase() === 'MA_OK') {
         return { passed: true, decision: 'pass', reason: legacy.slice(1).join('\n').trim() || '通过', violations: [], preserve: [], rewriteInstruction: '', violationFingerprint: '' };
@@ -1377,38 +1392,63 @@ function parseAuditTextOutput(raw) {
         const violations = [{ ruleId: 'legacy_failure', rule: '审核模型判定违反玩家规则', evidence: reason, action: reason }];
         return { passed: false, decision: 'revise', reason, violations, preserve: [], rewriteInstruction: reason, violationFingerprint: fingerprint(violations) };
     }
-    const blocks = parseFixedTextBlocks(text, MARKERS);
+    // 兼容模型省略外层标签但仍返回明确字段的情况。这里只包裹已有文字，不推断审核结论。
+    if (!/<MA_AUDIT>/iu.test(text)) {
+        const first = text.split(/\n+/).map((line) => line.trim()).find(Boolean) || '';
+        const directDecision = decisionValue(first.replace(/^(?:结果|判定|结论)\s*[:：=＝]?\s*/u, ''));
+        const hasResultField = /(^|\n)\s*(?:结果|判定|结论|result)\s*[:：=＝]\s*\S/iu.test(text);
+        if (directDecision && !hasResultField)
+            text = `结果：${directDecision}\n${text.split(/\n+/).slice(1).join('\n')}`;
+        if (directDecision || hasResultField)
+            text = `<MA_AUDIT>\n${text}\n</MA_AUDIT>`;
+    }
+    const blocks = parseFixedTextBlocks(text, MARKERS, { compatibility: true });
     const auditBlocks = blocks.filter((block) => block.kind === 'audit');
-    if (auditBlocks.length !== 1)
-        throw new Error(`审核固定文本必须且只能包含一个 <MA_AUDIT>，实际 ${auditBlocks.length} 个`);
-    const audit = auditBlocks[0];
+    if (!auditBlocks.length)
+        throw new Error('审核固定文本缺少 <MA_AUDIT> 或明确的“结果/判定”字段');
+    // 多个审核块属于同一请求的重复外壳；字段确定性合并，最后一个非空结果生效。
+    const audit = { ...auditBlocks[0], fields: new Map() };
+    for (const block of auditBlocks) {
+        for (const [key, values] of block.fields.entries())
+            audit.fields.set(key, [...(audit.fields.get(key) ?? []), ...values]);
+    }
     const decision = decisionValue(value(audit, 'result'));
     if (!decision)
         throw new Error('审核固定文本缺少有效 result=pass|revise|block');
     const passed = decision === 'pass';
-    const violations = blocks.filter((block) => block.kind === 'violation').map((block, index) => ({
+    let violations = blocks.filter((block) => block.kind === 'violation').map((block, index) => ({
         ruleId: safeText(value(block, 'ruleid') || `rule_${index + 1}`, 120).trim() || `rule_${index + 1}`,
         rule: safeText(value(block, 'rule'), 1000).trim(),
         evidence: safeText(value(block, 'evidence'), 3000).trim(),
         action: safeText(value(block, 'action'), 3000).trim(),
     })).filter((item) => item.rule || item.evidence || item.action).slice(0, 24);
-    if (!passed && !violations.length)
-        throw new Error('审核判定未通过，但没有返回 <MA_VIOLATION>');
+    const reason = safeText(value(audit, 'reason'), 3000).trim() || (passed ? '通过' : '违反规则');
+    const rewriteInstruction = safeText(value(audit, 'rewrite'), 6000).trim();
+    if (!passed && !violations.length) {
+        // 审核已经给出明确失败结论时，原因/修正指令足以形成最小违规记录；不再为包装缺失要求第二次点击。
+        violations = [{
+            ruleId: 'audit_failure',
+            rule: '审核模型判定违反玩家规则',
+            evidence: reason,
+            action: rewriteInstruction || reason,
+        }];
+    }
     const replacementBlocks = blocks.filter((block) => block.kind === 'replacement');
-    if (replacementBlocks.length > 1)
-        throw new Error('审核固定文本最多只能包含一个 <MA_REPLACEMENT>');
-    const replacementText = decision === 'revise' ? safeText(replacementBlocks[0]?.raw, 200000).trim() || undefined : undefined;
+    const replacementText = decision === 'revise'
+        ? safeText(replacementBlocks.at(-1)?.raw, 200000).trim() || undefined
+        : undefined;
     return {
         passed,
         decision,
-        reason: safeText(value(audit, 'reason'), 3000).trim() || (passed ? '通过' : '违反规则'),
+        reason,
         violations: passed ? [] : violations,
         preserve: values(audit, 'preserve').map((item) => safeText(item, 2000).trim()).filter(Boolean).slice(0, 24),
-        rewriteInstruction: safeText(value(audit, 'rewrite'), 6000).trim(),
+        rewriteInstruction,
         violationFingerprint: passed ? '' : fingerprint(violations),
         replacementText,
     };
 }
+
 
 }
 };
@@ -2293,6 +2333,7 @@ __defs["domain/fixed-text.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
+Object.defineProperty(exports,"normalizeProtocolText",{enumerable:true,configurable:true,get:()=>normalizeProtocolText});
 Object.defineProperty(exports,"parseFixedTextBlocks",{enumerable:true,configurable:true,get:()=>parseFixedTextBlocks});
 Object.defineProperty(exports,"fixedTextValues",{enumerable:true,configurable:true,get:()=>fixedTextValues});
 Object.defineProperty(exports,"fixedTextValue",{enumerable:true,configurable:true,get:()=>fixedTextValue});
@@ -2301,7 +2342,15 @@ Object.defineProperty(exports,"fixedTextValue",{enumerable:true,configurable:tru
  * 维护边界：只处理文本边界、重复字段和续行；业务字段、对象身份与持久化由各领域模块负责。
  */
 function normalizedMarker(value) {
-    return value.trim().toUpperCase();
+    return String(value || '').normalize('NFKC').trim().toUpperCase().replace(/\s+/g, '');
+}
+function normalizeProtocolText(raw) {
+    let source = safeText(raw, 240000).replace(/^\uFEFF/, '').replace(/[＜〈]/gu, '<').replace(/[＞〉]/gu, '>');
+    const fenced = source.trim().match(/^```(?:[a-z0-9_-]+)?\s*([\s\S]*?)```$/iu);
+    if (fenced)
+        source = fenced[1];
+    source = source.replace(/<\s*(\/?)\s*(MA_[^<>]+?)\s*>/giu, (_match, slash, tag) => `<${slash}${String(tag).normalize('NFKC').trim().toUpperCase().replace(/[\s-]+/g, '_')}>`);
+    return source.replace(/([^\n])(<\/?MA_[^<>]+>)/gu, '$1\n$2').replace(/(<\/?MA_[^<>]+>)([^\n])/gu, '$1\n$2').trim();
 }
 function appendField(block, key, value) {
     const current = block.fields.get(key) ?? [];
@@ -2319,8 +2368,9 @@ function appendContinuation(block, key, value) {
  * 支持：英文/中文等号、英文/中文冒号、重复字段、多行续写、原文块。
  * 固定文本是提交协议而不是宽松标记提取：普通块必须用与起始标签配对的结束标签闭合。
  */
-function parseFixedTextBlocks(raw, markers) {
-    const source = safeText(raw, 240000).replace(/^\uFEFF/, '');
+function parseFixedTextBlocks(raw, markers, options = {}) {
+    const compatibility = options.compatibility === true;
+    const source = compatibility ? normalizeProtocolText(raw) : safeText(raw, 240000).replace(/^\uFEFF/, '');
     const byStart = new Map(markers.map((item) => [normalizedMarker(item.start), item]));
     const byEnd = new Map(markers.map((item) => [normalizedMarker(item.end), item]));
     const blocks = [];
@@ -2355,7 +2405,9 @@ function parseFixedTextBlocks(raw, markers) {
         const start = byStart.get(markerKey);
         if (start) {
             if (current && definition) {
-                throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
+                if (!compatibility)
+                    throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
+                flush();
             }
             definition = start;
             current = { kind: start.kind, fields: new Map(), raw: '', line: index + 1 };
@@ -2363,9 +2415,16 @@ function parseFixedTextBlocks(raw, markers) {
         }
         const end = byEnd.get(markerKey);
         if (end) {
-            if (!current || !definition)
+            if (!current || !definition) {
+                if (compatibility)
+                    return;
                 throw new Error(`第 ${index + 1} 行出现未配对结束标签 ${end.end}`);
+            }
             if (markerKey !== normalizedMarker(definition.end)) {
+                if (compatibility) {
+                    flush();
+                    return;
+                }
                 throw new Error(`第 ${current.line} 行开始的 ${definition.start} 结束标签不匹配，期望 ${definition.end}`);
             }
             flush();
@@ -2390,7 +2449,10 @@ function parseFixedTextBlocks(raw, markers) {
             appendContinuation(current, lastKey, sourceLine.trim());
     });
     if (current && definition) {
-        throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
+        if (compatibility)
+            flush();
+        else
+            throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
     }
     return blocks;
 }
@@ -3286,6 +3348,7 @@ Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"isEntryLifecycleHidden",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryLifecycleHidden"]});
 Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
 Object.defineProperty(__scope,"filterPassiveObservers",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["filterPassiveObservers"]});
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalObjectTitle"]});
 Object.defineProperty(__scope,"isPurePassiveObserverText",{enumerable:true,configurable:true,get:()=>__require("domain/observer.js")["isPurePassiveObserverText"]});
@@ -3482,6 +3545,46 @@ function recallModeFor(role, row, options, _currentSpacetimeId) {
     if (role === 'events' && options.vectorize)
         return 'vector';
     return 'trigger';
+}
+
+
+function semanticInsertionPolicy(document) {
+    const kind = String(document.kind || '');
+    const historical = document.recallMode === 'hybrid' || document.recallMode === 'vector' || kind.startsWith('summary:');
+    let bucket = 600;
+    let depth = 2;
+    if (document.disabled) {
+        bucket = 100;
+        depth = 8;
+    }
+    else if (kind === 'runtime:narrative-context') {
+        bucket = 1000;
+        depth = 0;
+    }
+    else if (kind === 'view:spacetime' || kind === 'view:state' || kind === 'view:characters') {
+        bucket = 850;
+        depth = 1;
+    }
+    else if (kind === 'view:events' || kind === 'fact') {
+        bucket = historical ? 500 : 700;
+        depth = historical ? 5 : 2;
+    }
+    else if (kind === 'view:foundations' || kind === 'view:globalChanges') {
+        bucket = 800;
+        depth = 1;
+    }
+    else if (historical) {
+        bucket = kind === 'summary:large' ? 400 : 480;
+        depth = kind === 'summary:large' ? 7 : 5;
+    }
+    const stableOffset = Number.parseInt(hashText(document.logicalKey || document.key), 36) % 37;
+    return {
+        // 概率不是记忆优先级。镜渊事实必须确定性触发，因此明确关闭随机概率过滤。
+        probability: 100,
+        useProbability: false,
+        depth,
+        order: bucket + stableOffset,
+    };
 }
 
 function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, factIds, eventIds, updatedAt, options, disabled = false) {
@@ -3719,14 +3822,14 @@ function selectLorebookDocuments(documents, options) {
             continue;
         // disable 条目不进入主模型上下文预算，但必须留在期望计划中，确保 ST 原条目被真正暂停而非提前删除。
         if (doc.disabled) {
-            output.push({ ...doc, constant: false, vectorized: false, keywords: [], order: output.length + 100 });
+            output.push({ ...doc, constant: false, vectorized: false, keywords: [], ...semanticInsertionPolicy(doc) });
             seenKeys.add(doc.key);
             continue;
         }
         const contentIdentity = doc.content.replace(/\s+/g, ' ').trim();
         if (contentIdentity && seenContents.has(contentIdentity))
             continue;
-        output.push({ ...doc, order: output.length + 100 });
+        output.push({ ...doc, ...semanticInsertionPolicy(doc) });
         seenKeys.add(doc.key);
         if (contentIdentity)
             seenContents.add(contentIdentity);
@@ -3746,7 +3849,10 @@ function narrativeContextDocument(options) {
         constant: true,
         vectorized: false,
         disabled: false,
-        order: 1,
+        order: 1000,
+        depth: 0,
+        probability: 100,
+        useProbability: false,
         updatedAt: options.narrativeContext?.generatedAt || '',
         kind: 'runtime:narrative-context',
         recallMode: 'constant',
@@ -3784,6 +3890,88 @@ function buildDetailedLorebookDocuments(snapshot, small, large, options) {
 }
 function buildLorebookDocuments(snapshot, small, large, options) {
     return options.layout === 'detailed' ? buildDetailedLorebookDocuments(snapshot, small, large, options) : buildSemanticLorebookDocuments(snapshot, small, large, options);
+}
+
+}
+};
+__defs["domain/memory-layer-reconciliation.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
+with(__scope){
+Object.defineProperty(exports,"reconcileConsumedFactLayers",{enumerable:true,configurable:true,get:()=>reconcileConsumedFactLayers});
+/**
+ * 模块职责：用已消费/已替换的正式事实清理对象视图中的当前层副本。
+ * 维护边界：只删除能够由 fact.view 精确定位或已在历史层完全同义出现的文本；不猜测剧情含义。
+ */
+function identity(value) {
+    return String(value ?? '').normalize('NFKC').toLowerCase()
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[，。！？；：、,.!?;:'"“”‘’（）()【】\[\]{}<>《》—–_-]+/g, '');
+}
+function dedupe(values) {
+    const output = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(values) ? values : []) {
+        const value = String(raw ?? '').trim();
+        const key = identity(value);
+        if (!value || !key || seen.has(key))
+            continue;
+        seen.add(key);
+        output.push(value);
+    }
+    return output;
+}
+function removeIdentities(values, removals) {
+    return dedupe(values).filter((item) => !removals.has(identity(item)));
+}
+
+function reconcileConsumedFactLayers(snapshot, facts, registryValue) {
+    const next = structuredClone(snapshot ?? {});
+    const registry = normalizeTableRegistry(registryValue);
+    const byRow = new Map();
+    for (const fact of facts ?? []) {
+        const view = fact?.view;
+        if (!view?.table || !view?.rowId || !view?.layerKey || !view?.value)
+            continue;
+        const covered = Boolean(fact.consumedBySmallSummaryId || fact.solidifiedByLargeSummaryId);
+        const superseded = Boolean(fact.supersededByFactId || fact.active === false);
+        if (!covered && !superseded)
+            continue;
+        if (fact.storageClass === 'durable' && !superseded)
+            continue;
+        const key = `${view.table}|${view.rowId}`;
+        const record = byRow.get(key) ?? { currentFacts: new Set(), currentStates: new Set(), factIds: new Set() };
+        record.factIds.add(fact.factId);
+        if (view.layerKey === 'currentFacts' && (covered || superseded))
+            record.currentFacts.add(identity(view.value));
+        if (view.layerKey === 'currentStates' && (superseded || fact.view?.eventClosed === true || fact.solidifiedByLargeSummaryId))
+            record.currentStates.add(identity(view.value));
+        byRow.set(key, record);
+    }
+    let changed = false;
+    for (const table of registry) {
+        for (const row of next[table.key] ?? []) {
+            row.fields ||= {};
+            const history = new Set([
+                ...(row.fields.recentHistory ?? []),
+                ...(row.fields.solidifiedHistory ?? []),
+            ].map(identity).filter(Boolean));
+            const record = byRow.get(`${table.key}|${row.id}`);
+            const currentFactRemovals = new Set([...(record?.currentFacts ?? []), ...history]);
+            const beforeFacts = JSON.stringify(row.fields.currentFacts ?? []);
+            const beforeStates = JSON.stringify(row.fields.currentStates ?? []);
+            if (Array.isArray(row.fields.currentFacts))
+                row.fields.currentFacts = removeIdentities(row.fields.currentFacts, currentFactRemovals);
+            if (Array.isArray(row.fields.currentStates))
+                row.fields.currentStates = removeIdentities(row.fields.currentStates, record?.currentStates ?? new Set());
+            if (record?.factIds?.size)
+                row.factIds = (row.factIds ?? []).filter((id) => !record.factIds.has(id));
+            if (beforeFacts !== JSON.stringify(row.fields.currentFacts ?? [])
+                || beforeStates !== JSON.stringify(row.fields.currentStates ?? []))
+                changed = true;
+        }
+    }
+    return { snapshot: next, changed };
 }
 
 }
@@ -6279,9 +6467,27 @@ function changeFromBlock(block, active, previous, activeFacts) {
         keywords: unique([objectName, eventName, factTitle, ...fieldValues(block, 'keyword')], 24, 100),
         operation: factOperation,
         confidence,
+        view: {
+            table: table.key,
+            rowId: row.id,
+            objectTitle: row.title,
+            semanticRole: table.role,
+            layerKind: layer.kind,
+            layerKey: layer.key,
+            layerType: layer.definition?.type,
+            arrayOperation: operation,
+            value: values.at(-1) || result,
+            keywords: row.keywords,
+            eventName,
+            eventClosed: explicitClosed,
+            relatedObjects: unique([objectName, ...fieldValues(block, 'related')], 40, 240),
+            moduleTag: 'MA_CHANGE',
+            relocation,
+        },
     };
+    const routedFact = { ...fact, ...applyFactContractGate(fact, { existingObject: Boolean(existing) }) };
     return {
-        fact,
+        fact: routedFact,
         patch: { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation },
     };
 }
@@ -6668,7 +6874,7 @@ function eventCoreText(event) {
         || event.modules.find((module) => module.eventModule && !module.unresolved)?.content
         || `${event.eventName}${event.closed ? '已结束' : '正在进行'}`;
 }
-function projectionPatchForFact(fact, working) {
+function projectionPatchForFact(fact, working, activeFacts = []) {
     const view = fact.view;
     if (!view)
         return undefined;
@@ -6676,6 +6882,19 @@ function projectionPatchForFact(fact, working) {
     const existing = rows.find((row) => row.id === view.rowId)
         ?? rows.find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(view.objectTitle));
     const fields = { ...(existing?.fields ?? {}) };
+    const supersededFactId = String(fact.supersedesFactId || fact.supersedes_fact_id || '').trim();
+    const supersededFact = supersededFactId ? activeFacts.find((item) => item.factId === supersededFactId) : undefined;
+    const supersededView = supersededFact?.view;
+    if (supersededView
+        && supersededView.table === view.table
+        && supersededView.rowId === view.rowId
+        && supersededView.layerType === 'string[]'
+        && supersededView.layerKey
+        && Array.isArray(fields[supersededView.layerKey])) {
+        const oldIdentity = identity(supersededView.value);
+        fields[supersededView.layerKey] = fields[supersededView.layerKey]
+            .filter((item) => identity(item) !== oldIdentity);
+    }
     let content = existing?.content || '';
     let status = existing?.status || 'active';
     let rowKeywords = unique([...(existing?.keywords ?? []), ...(view.keywords ?? [])], 24, 100);
@@ -6714,7 +6933,7 @@ function projectionPatchForFact(fact, working) {
         semanticRole: view.semanticRole,
         eventId: fact.event_id,
         eventIds: unique([...(existing?.eventIds ?? []), existing?.eventId, fact.event_id], 80, 160),
-        factIds: unique([...(existing?.factIds ?? []), fact.fact_id], 200, 180),
+        factIds: unique([...(existing?.factIds ?? []).filter((id) => id !== supersededFactId), fact.fact_id], 200, 180),
     };
     if (view.baseRevisionStatement)
         row.baseRevisionEvidence = { eventId: fact.event_id, factId: fact.fact_id, statement: view.baseRevisionStatement };
@@ -6821,7 +7040,50 @@ function naturalChange(event, module, active, previous, activeFacts, allObjectNa
         ...applyFactContractGate(fact, { existingObject: Boolean(existing) }),
     };
 }
+
+function parseLegacyStateTextOutput(raw, previousSnapshot, registry, activeFacts = []) {
+    const active = enabledTables(normalizeTableRegistry(registry));
+    const previous = dedupeStrongStateRows(previousSnapshot, registry);
+    const working = structuredClone(previous);
+    const blocks = parseLegacyStateTextBlocks(raw);
+    const turnSummary = blocks.filter((block) => block.kind === 'turn').map((block) => fieldValue(block, 'summary')).at(-1) ?? '';
+    const factsById = new Map();
+    const rowsByIdentity = new Map();
+    const relocationsById = new Map();
+    for (const block of blocks.filter((item) => item.kind === 'change')) {
+        const converted = changeFromBlock(block, active, working, activeFacts);
+        const factId = String(converted.fact.fact_id || '');
+        factsById.set(factId, factsById.has(factId) ? mergeFacts(factsById.get(factId), converted.fact) : converted.fact);
+        applyPatchToWorkingSnapshot(working, converted.patch);
+        const key = `${converted.patch.table}|${canonicalObjectTitle(converted.patch.row.title) || converted.patch.matchKey}`;
+        const current = rowsByIdentity.get(key);
+        rowsByIdentity.set(key, current ? {
+            table: converted.patch.table,
+            row: mergePatchRows(current.row, converted.patch.row),
+            matchKey: converted.patch.matchKey,
+            relocation: current.relocation ?? converted.patch.relocation,
+        } : converted.patch);
+        if (converted.patch.relocation)
+            relocationsById.set(converted.patch.relocation.id, converted.patch.relocation);
+    }
+    const snapshot = {};
+    for (const { table, row } of rowsByIdentity.values())
+        (snapshot[table] ||= []).push(row);
+    if (!factsById.size)
+        throw new Error('旧状态协议没有可提交的 <MA_CHANGE>');
+    return {
+        turnSummary,
+        facts: [...factsById.values()],
+        snapshot,
+        relocations: [...relocationsById.values()],
+        entryLifecycleDirectives: [],
+        parserMode: 'legacy-compatible',
+    };
+}
+
 function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [], options = {}) {
+    if (/<MA_CHANGE>|<MA_TURN>[\s\S]*?(?:摘要|summary)\s*[=＝:：]/iu.test(String(raw || '')))
+        return parseLegacyStateTextOutput(raw, previousSnapshot, registry, activeFacts);
     const active = enabledTables(normalizeTableRegistry(registry));
     const previous = dedupeStrongStateRows(previousSnapshot, registry);
     const working = structuredClone(previous);
@@ -6841,7 +7103,7 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
             const fact = naturalChange(event, module, active, working, activeFacts, allObjectNames);
             const id = String(fact.fact_id);
             factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
-            const patch = projectionPatchForFact(fact, working);
+            const patch = projectionPatchForFact(fact, working, activeFacts);
             if (!patch)
                 continue;
             applyPatchToWorkingSnapshot(working, patch);
@@ -6900,7 +7162,7 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
             ...applyFactContractGate(statusFact, { existingObject: Boolean(existingEventRow) }),
         };
         factsById.set(statusFactId, routedStatusFact);
-        const statusPatch = projectionPatchForFact(routedStatusFact, working);
+        const statusPatch = projectionPatchForFact(routedStatusFact, working, activeFacts);
         if (statusPatch) {
             applyPatchToWorkingSnapshot(working, statusPatch);
             const key = `${statusPatch.table}|${canonicalObjectTitle(statusPatch.row.title) || statusPatch.matchKey}`;
@@ -6929,11 +7191,12 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
 __defs["domain/summary-text.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+Object.defineProperty(__scope,"normalizeProtocolText",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["normalizeProtocolText"]});
 with(__scope){
 Object.defineProperty(exports,"parseSummaryTextOutput",{enumerable:true,configurable:true,get:()=>parseSummaryTextOutput});
 /**
- * 模块职责：解析小总结和大总结的自然文本模块，并按本次请求槽位回收结果。
- * 维护边界：模型只返回位置固定的短文本；eventId、总结 ID、版本链和持久化全部由插件维护。
+ * 模块职责：把小总结和大总结的模型文本归一化为稳定槽位结果。
+ * 维护边界：只修复标签、字段名、顺序和重复外壳；eventId、总结ID、版本链与事实内容均由插件维护。
  */
 function lines(value) {
     return String(value || '')
@@ -6942,68 +7205,189 @@ function lines(value) {
         .map((line) => line.trim())
         .filter(Boolean);
 }
-function lineOf(source, index) {
-    return source.slice(0, index).split('\n').length;
+function unique(values, limit = 60) {
+    const output = [];
+    const seen = new Set();
+    for (const raw of values) {
+        const value = safeText(raw, 20000).replace(/\s+/g, ' ').trim();
+        const key = value.normalize('NFKC').toLowerCase().replace(/[\s。．.!！?？;；,，、:：]+/gu, '');
+        if (!value || !key || seen.has(key))
+            continue;
+        seen.add(key);
+        output.push(value);
+        if (output.length >= limit)
+            break;
+    }
+    return output;
 }
-function nested(body, tag) {
-    const match = body.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'iu'));
-    return match?.[1] ?? '';
+function canonicalTag(value) {
+    return String(value || '').normalize('NFKC').trim().toUpperCase().replace(/[\s-]+/g, '_');
 }
-function nestedAll(body, tag) {
-    const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'giu');
-    return [...body.matchAll(re)].map((match) => match[1]);
+function normalizeSource(raw) {
+    return normalizeProtocolText(raw)
+        .replace(/<\s*(\/?)\s*(MA_(?:SUMMARY|SUMMARY_TEXT|MEMORY|KEYWORDS))\s*>/giu, (_m, slash, tag) => `<${slash}${canonicalTag(tag)}>`)
+        .trim();
 }
-/**
- * 固定自然模块：<MA_SUMMARY> 的前两行依次是 slot 与标题；摘要正文和关键词放在独立子模块。
- * 任何 key=value 都视为旧协议并拒绝，避免总结文本继续表现为数据库表单。
- */
+function extractContainers(source, tag) {
+    const output = [];
+    const tokenRe = new RegExp(`<(\\/)?${tag}>`, 'giu');
+    let current;
+    for (const match of source.matchAll(tokenRe)) {
+        const closing = Boolean(match[1]);
+        const index = match.index ?? 0;
+        if (!closing) {
+            if (current)
+                output.push(source.slice(current, index));
+            current = index + match[0].length;
+            continue;
+        }
+        if (current === undefined)
+            continue;
+        output.push(source.slice(current, index));
+        current = undefined;
+    }
+    if (current !== undefined)
+        output.push(source.slice(current));
+    return output;
+}
+function subBlocks(body, tag) {
+    return extractContainers(body, tag).map((item) => item.trim()).filter(Boolean);
+}
+function withoutSubBlocks(body) {
+    return body.replace(/<MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>[\s\S]*?(?:<\/MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>|(?=<MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>|$))/giu, '\n');
+}
+function fieldMap(value) {
+    const map = new Map();
+    let lastKey = '';
+    for (const rawLine of lines(value)) {
+        const match = rawLine.match(/^([^:：=＝]{1,80})\s*[:：=＝]\s*(.*)$/u);
+        if (match) {
+            lastKey = match[1].normalize('NFKC').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            map.set(lastKey, [...(map.get(lastKey) ?? []), match[2].trim()]);
+        }
+        else if (lastKey) {
+            const values = [...(map.get(lastKey) ?? [])];
+            if (values.length)
+                values[values.length - 1] = `${values.at(-1)}\n${rawLine}`.trim();
+            map.set(lastKey, values);
+        }
+    }
+    return map;
+}
+function lastField(map, aliases) {
+    for (const key of aliases) {
+        const values = map.get(key);
+        if (values?.length)
+            return values.at(-1).trim();
+    }
+    return '';
+}
+function allFields(map, aliases) {
+    return aliases.flatMap((key) => map.get(key) ?? []).map((item) => item.trim()).filter(Boolean);
+}
+function normalizeSlot(value) {
+    const match = String(value || '').trim().toUpperCase().match(/(?:槽位\s*[:：]?\s*)?([SL]\d+)/u);
+    return match?.[1] || '';
+}
+function memoryFromText(value, slot) {
+    const parts = lines(value).map((item) => item.replace(/^[-*•]\s*/u, '').trim()).filter(Boolean);
+    let objectType = '';
+    let objectName = '';
+    let content = '';
+    const fields = fieldMap(value);
+    if (fields.size) {
+        objectType = lastField(fields, ['对象类型', '类型', 'objecttype', 'type']);
+        objectName = lastField(fields, ['对象', '对象名', '名称', 'object', 'name']);
+        content = lastField(fields, ['内容', '记忆', '结果', 'content', 'memory', 'result']);
+    }
+    if (!objectName) {
+        [objectType, objectName] = parts;
+        content = parts.slice(2).join(' ');
+    }
+    content = safeText(content, 1200).replace(/\s+/g, ' ').trim();
+    if (content.length > 220)
+        throw new Error(`总结槽位 ${slot} 的对象记忆过长：${content.length}/220 字`);
+    return { objectType: safeText(objectType, 80).trim(), objectName: safeText(objectName, 240).trim(), content };
+}
+function parseBlock(body, expectedSlots, fallbackSlot = '') {
+    const fields = fieldMap(withoutSubBlocks(body));
+    const residualLines = lines(withoutSubBlocks(body)).filter((line) => !/^[^:：=＝]{1,80}\s*[:：=＝]/u.test(line));
+    let slot = normalizeSlot(lastField(fields, ['槽位', 'slot']) || residualLines[0] || fallbackSlot);
+    if (!slot && expectedSlots.size === 1)
+        slot = [...expectedSlots][0];
+    let title = lastField(fields, ['标题', 'title']);
+    if (!title) {
+        const slotIndex = residualLines.findIndex((line) => normalizeSlot(line) === slot);
+        title = safeText(residualLines[slotIndex >= 0 ? slotIndex + 1 : 0], 1000).trim();
+    }
+    const taggedSummary = subBlocks(body, 'MA_SUMMARY_TEXT').at(-1) || '';
+    let summary = taggedSummary || lastField(fields, ['摘要', '总结', '正文', 'summary', 'text']);
+    if (!summary) {
+        const candidates = residualLines.filter((line) => normalizeSlot(line) !== slot && line !== title);
+        summary = candidates.join(' ');
+    }
+    summary = safeText(summary, 20000).replace(/\s+/g, ' ').trim();
+    const keywordText = subBlocks(body, 'MA_KEYWORDS').join('\n');
+    const keywords = unique([
+        ...lines(keywordText).map((item) => item.replace(/^[-*•]\s*/u, '')),
+        ...allFields(fields, ['关键词', '检索词', 'keywords', 'keyword']).flatMap((item) => item.split(/[，,、;；\n]+/u)),
+    ], 24);
+    const distributions = subBlocks(body, 'MA_MEMORY')
+        .map((value) => memoryFromText(value, slot))
+        .filter((item) => item.objectName && item.content)
+        .slice(0, 40);
+    return { slot, title, summary, keywords, unresolved: [], distributions };
+}
+function mergeSlotResult(left, right) {
+    return {
+        slot: left.slot,
+        title: right.title || left.title,
+        summary: unique([left.summary, right.summary], 8).join('；'),
+        keywords: unique([...(left.keywords ?? []), ...(right.keywords ?? [])], 24),
+        unresolved: unique([...(left.unresolved ?? []), ...(right.unresolved ?? [])], 40),
+        distributions: [...new Map([...(left.distributions ?? []), ...(right.distributions ?? [])]
+            .map((item) => [`${item.objectType}|${item.objectName}|${item.content}`, item])).values()].slice(0, 40),
+    };
+}
+
 function parseSummaryTextOutput(raw, expectedSlots) {
-    const source = String(raw ?? '').replace(/^\uFEFF/, '').trim();
+    const source = normalizeSource(raw);
     if (!source)
         throw new Error('总结模型返回为空');
-    if (/(^|\n)\s*[^\n]+\s*[=＝]\s*\S/u.test(source))
-        throw new Error('总结模型返回了已停用键值协议');
-    const expected = new Set(expectedSlots.map((slot) => slot.toUpperCase()));
-    const output = new Map();
-    const blockRe = /<MA_SUMMARY>([\s\S]*?)<\/MA_SUMMARY>/giu;
-    for (const match of source.matchAll(blockRe)) {
-        const body = match[1];
-        const firstNested = body.search(/<MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>/iu);
-        const prelude = lines(firstNested < 0 ? body : body.slice(0, firstNested));
-        const slot = safeText(prelude[0], 40).trim().toUpperCase();
-        const title = safeText(prelude[1], 1000).trim();
-        const line = lineOf(source, match.index ?? 0);
-        if (!slot)
-            throw new Error(`第 ${line} 行开始的 <MA_SUMMARY> 缺少槽位`);
-        if (!expected.has(slot))
-            throw new Error(`总结返回未请求槽位：${slot}`);
-        if (output.has(slot))
-            throw new Error(`总结重复返回槽位：${slot}`);
-        const summary = safeText(nested(body, 'MA_SUMMARY_TEXT'), 20000).replace(/\s+/g, ' ').trim();
-        if (!summary)
-            throw new Error(`总结槽位 ${slot} 缺少 <MA_SUMMARY_TEXT>`);
-        const keywords = lines(nested(body, 'MA_KEYWORDS'))
-            .map((item) => safeText(item.replace(/^[-*•]\s*/, ''), 200).trim())
-            .filter(Boolean)
-            .slice(0, 24);
-        const distributions = nestedAll(body, 'MA_MEMORY').map((value) => {
-            const parts = lines(value);
-            const content = safeText(parts.slice(2).join(' '), 1200).replace(/\s+/g, ' ').trim();
-            if (content.length > 220)
-                throw new Error(`总结槽位 ${slot} 的对象记忆过长：${content.length}/220 字`);
-            return {
-                objectType: safeText(parts[0], 80).trim(),
-                objectName: safeText(parts[1], 240).trim(),
-                content,
-            };
-        }).filter((item) => item.objectName && item.content).slice(0, 40);
-        output.set(slot, { slot, title, summary, keywords, unresolved: [], distributions });
+    const expected = new Set(expectedSlots.map((slot) => String(slot).toUpperCase()));
+    let blocks = extractContainers(source, 'MA_SUMMARY');
+    // 单槽位时允许模型省略 MA_SUMMARY 外壳；多槽位时按槽位标题切段。
+    if (!blocks.length) {
+        if (expected.size === 1) {
+            blocks = [source];
+        }
+        else {
+            const slotRe = new RegExp(`(^|\\n)\\s*(?:槽位\\s*[:：=＝]\\s*)?(${[...expected].join('|')})\\s*(?=\\n|$|[:：])`, 'giu');
+            const matches = [...source.matchAll(slotRe)];
+            if (matches.length) {
+                blocks = matches.map((match, index) => source.slice(match.index ?? 0, matches[index + 1]?.index ?? source.length));
+            }
+        }
     }
-    if (!output.size)
-        throw new Error('总结模型未返回 <MA_SUMMARY>');
-    for (const slot of expected)
+    if (!blocks.length)
+        throw new Error('总结模型未返回可识别的槽位结果');
+    const output = new Map();
+    blocks.forEach((body, index) => {
+        const fallback = expectedSlots[index] || '';
+        const parsed = parseBlock(body, expected, fallback);
+        if (!parsed.slot)
+            throw new Error(`第 ${index + 1} 个总结块缺少槽位`);
+        if (!expected.has(parsed.slot))
+            throw new Error(`总结返回未请求槽位：${parsed.slot}`);
+        if (!parsed.summary)
+            throw new Error(`总结槽位 ${parsed.slot} 缺少摘要正文`);
+        const previous = output.get(parsed.slot);
+        output.set(parsed.slot, previous ? mergeSlotResult(previous, parsed) : parsed);
+    });
+    for (const slot of expected) {
         if (!output.has(slot))
             throw new Error(`总结缺少槽位结果：${slot}`);
+    }
     return output;
 }
 
@@ -7011,15 +7395,90 @@ function parseSummaryTextOutput(raw, expectedSlots) {
 };
 __defs["domain/summary.js"]=function(exports,__require){
 const __scope=Object.create(null);
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
+Object.defineProperty(exports,"summaryContentFingerprint",{enumerable:true,configurable:true,get:()=>summaryContentFingerprint});
+Object.defineProperty(exports,"refreshSummaryFingerprint",{enumerable:true,configurable:true,get:()=>refreshSummaryFingerprint});
+Object.defineProperty(exports,"mergeEquivalentSummaryVersion",{enumerable:true,configurable:true,get:()=>mergeEquivalentSummaryVersion});
 Object.defineProperty(exports,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>inferSummaryLifecycle});
 Object.defineProperty(exports,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>markSummaryLifecycle});
 Object.defineProperty(exports,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>summaryIsCurrent});
 Object.defineProperty(exports,"normalizeSummary",{enumerable:true,configurable:true,get:()=>normalizeSummary});
 Object.defineProperty(exports,"SUMMARY_LIFECYCLE_STATES",{enumerable:true,configurable:true,get:()=>SUMMARY_LIFECYCLE_STATES});
+function identityText(value) {
+    return safeText(value, 30000)
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[，。！？；：、,.!?;:'"“”‘’（）()【】\[\]{}<>《》—–_-]+/g, '');
+}
+function normalizedDistributions(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.map((item) => ({
+        objectType: identityText(item?.objectType),
+        objectName: identityText(item?.objectName),
+        content: identityText(item?.content),
+    })).filter((item) => item.objectName && item.content)
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
+function summaryContentFingerprint(value, kind = value?.kind) {
+    return hashText(JSON.stringify({
+        kind: String(kind || ''),
+        eventId: String(value?.eventId || value?.eventIds?.[0] || ''),
+        title: identityText(value?.title),
+        summary: identityText(value?.summary),
+        unresolved: [...new Set((value?.unresolvedItems ?? []).map(identityText).filter(Boolean))].sort(),
+        distributions: normalizedDistributions(value?.distributions),
+    }));
+}
+function refreshSummaryFingerprint(summary) {
+    if (!summary || typeof summary !== 'object')
+        return summary;
+    summary.contentFingerprint = summaryContentFingerprint(summary, summary.kind);
+    const sourceIds = [...new Set([
+        ...(summary.sourceFactIds ?? []),
+        ...(summary.kind === 'large' ? (summary.sourceSummaryIds ?? []) : []),
+        ...(summary.sourceKeys ?? []),
+    ].map((item) => String(item ?? '').trim()).filter(Boolean))].sort();
+    summary.sourceFingerprint = sourceIds.length
+        ? hashText(`${summary.kind}|${summary.eventId || summary.eventIds?.[0] || ''}|${sourceIds.join('|')}`)
+        : undefined;
+    return summary;
+}
+function mergeUnique(left, right, limit = 200) {
+    return [...new Set([...(left ?? []), ...(right ?? [])].map((item) => String(item ?? '').trim()).filter(Boolean))].slice(-limit);
+}
+/** 相同语义版本复用原 ID，只合并来源、分发和生命周期进度。 */
+function mergeEquivalentSummaryVersion(target, incoming) {
+    if (!target || !incoming)
+        return target || incoming;
+    const id = target.id;
+    const createdAt = target.createdAt;
+    Object.assign(target, incoming, {
+        id,
+        createdAt,
+        updatedAt: nowIso(),
+        sourceKeys: mergeUnique(target.sourceKeys, incoming.sourceKeys),
+        sourceFactIds: mergeUnique(target.sourceFactIds, incoming.sourceFactIds),
+        sourceSummaryIds: mergeUnique(target.sourceSummaryIds, incoming.sourceSummaryIds),
+        eventIds: mergeUnique(target.eventIds, incoming.eventIds),
+        keywords: mergeUnique(target.keywords, incoming.keywords, 32),
+        unresolvedItems: mergeUnique(target.unresolvedItems, incoming.unresolvedItems, 40),
+        distributions: [...new Map([...(target.distributions ?? []), ...(incoming.distributions ?? [])]
+            .filter((item) => item?.objectName && item?.content)
+            .map((item) => [`${identityText(item.objectType)}|${identityText(item.objectName)}|${identityText(item.content)}`, item])).values()],
+    });
+    delete target.previousSmallSummaryId;
+    delete target.previousLargeSummaryId;
+    delete target.supersededBySmallSummaryId;
+    delete target.supersededByLargeSummaryId;
+    return refreshSummaryFingerprint(target);
+}
+
 function stringList(value, limit = 60, itemLimit = 600) {
     if (!Array.isArray(value))
         return [];
@@ -7095,8 +7554,8 @@ function normalizeSedimentation(value) {
     };
 }
 function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
-    return {
-        id: makeId(kind),
+    const summary = {
+        id: metadata.id || makeId(kind),
         kind,
         title: safeText(value.title || (kind === 'small' ? '事件线小总结' : '长期因果总结'), 240).trim(),
         summary: safeText(value.summary || '', 30000).trim(),
@@ -7115,6 +7574,7 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metad
         recallEligible: true,
         lifecycleUpdatedAt: nowIso(),
     };
+    return refreshSummaryFingerprint(summary);
 }
 
 }
@@ -8532,6 +8992,8 @@ Object.defineProperty(exports,"runAudit",{enumerable:true,configurable:true,get:
 Object.defineProperty(exports,"parseAuditResult",{enumerable:true,configurable:true,get:()=>parseAuditResult});
 Object.defineProperty(exports,"findMessageElement",{enumerable:true,configurable:true,get:()=>findMessageElement});
 Object.defineProperty(exports,"applyAuditVisibility",{enumerable:true,configurable:true,get:()=>applyAuditVisibility});
+Object.defineProperty(exports,"auditFailurePresentation",{enumerable:true,configurable:true,get:()=>auditFailurePresentation});
+Object.defineProperty(exports,"revisionCommittedForCurrentSource",{enumerable:true,configurable:true,get:()=>revisionCommittedForCurrentSource});
 /**
  * 模块职责：解析和执行规则审核，并应用标记、隐藏或进入修正的结果。
  * 维护边界：技术故障与内容违规必须分开；缺少合法 result 的对象不能默认判为违规。
@@ -8566,27 +9028,28 @@ async function auditText(playerRules, playerText, assistantText) {
         throw new Error(`规则审核未返回有效固定文本（${describeTaskConnection('audit')}）。${toErrorMessage(error)}${preview ? `；返回片段：${preview}` : ''}`, { cause: error });
     }
 }
+function auditFailurePresentation(action) {
+    if (action === 'mark')
+        return { hidden: false, marked: true };
+    return { hidden: true, marked: false };
+}
 async function applyAuditFailureAction(artifact, action) {
-    if (action === 'mark') {
-        artifact.hiddenByAudit = false;
-        applyAuditVisibility(artifact.messageIndex, false, true);
-        return;
+    const presentation = auditFailurePresentation(action);
+    artifact.hiddenByAudit = presentation.hidden;
+    applyAuditVisibility(artifact.messageIndex, presentation.hidden, presentation.marked);
+    if (action !== 'mark' && action !== 'hide') {
+        toast('warning', '审核未通过；插件不会自动删除酒馆消息，已隐藏并保留人工处理入口');
     }
-    if (action === 'hide') {
-        artifact.hiddenByAudit = true;
-        applyAuditVisibility(artifact.messageIndex, true);
-        return;
-    }
-    artifact.hiddenByAudit = true;
-    applyAuditVisibility(artifact.messageIndex, true);
-    toast('warning', '审核未通过；插件不会自动删除酒馆消息，已隐藏并保留人工处理入口');
+}
+function revisionCommittedForCurrentSource(artifact) {
+    const currentRevision = artifact.revision;
+    return Boolean(artifact.stages?.revision?.status === 'success'
+        || (currentRevision?.finalFingerprint
+            && currentRevision.finalFingerprint === artifact.sourceFingerprint));
 }
 function alignRevisionStageWithAudit(artifact, result) {
     const settings = getSettings();
-    const currentRevision = artifact.revision;
-    const committedRevision = Boolean(currentRevision?.status === 'success'
-        && currentRevision.finalFingerprint
-        && currentRevision.finalFingerprint === artifact.sourceFingerprint);
+    const committedRevision = revisionCommittedForCurrentSource(artifact);
     if (result.passed) {
         // 修正成功后的复审属于修正阶段的一部分，不能在后续恢复时把“修正成功”覆盖成“跳过”。
         if (!committedRevision)
@@ -8663,6 +9126,12 @@ async function runAudit(artifact, force = false) {
         else {
             artifact.approvedFingerprint = undefined;
             markStage(artifact, 'audit', 'blocked', result.reason);
+            // 自动修正模式下，审核失败正文必须在修正开始前立即隐藏。
+            // 不能先保存一个可见的失败正文，再等待修正任务接管。
+            if (settings.auditFailAction === 'revise') {
+                artifact.hiddenByAudit = true;
+                applyAuditVisibility(artifact.messageIndex, true, false);
+            }
         }
         alignRevisionStageWithAudit(artifact, result);
         // 审核阶段只更新内存 artifact；业务编排器负责在明确检查点统一保存。
@@ -8697,6 +9166,7 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"sanitizeBookName",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["sanitizeBookName"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"withTimeout",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["withTimeout"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
 Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
@@ -8758,16 +9228,20 @@ async function withLorebookMutation(name, action) {
     const lockKey = sanitizeBookName(name);
     if (!lockKey)
         return action();
-    const previous = lorebookMutationLocks.get(lockKey) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(action);
-    lorebookMutationLocks.set(lockKey, current);
-    try {
-        return await current;
+    const timeoutMs = Math.min(45000, Math.max(12000, Number(getSettings().requestTimeoutMs) || 30000));
+    const previous = lorebookMutationLocks.get(lockKey);
+    if (previous) {
+        // 不绕过仍在执行的旧物理写入，也不无限排队。旧锁超时后快速失败，
+        // 由诊断提示玩家刷新宿主；避免修正、总结或同步按钮永久保持 busy。
+        await withTimeout(previous.catch(() => undefined), timeoutMs, `等待世界书“${lockKey}”写入锁`);
     }
-    finally {
+    const current = Promise.resolve().then(action);
+    lorebookMutationLocks.set(lockKey, current);
+    current.finally(() => {
         if (lorebookMutationLocks.get(lockKey) === current)
             lorebookMutationLocks.delete(lockKey);
-    }
+    }).catch(() => undefined);
+    return withTimeout(current, timeoutMs, `写入世界书“${lockKey}”`);
 }
 /** 多本物理世界书迁移时按规范化书名固定顺序取锁，避免两个聊天反向迁移形成死锁。 */
 async function withLorebookMutations(names, action) {
@@ -9044,8 +9518,13 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     entry.disable = disabled;
     entry.addMemo = true;
     entry.position = wi.world_info_position?.after ?? 1;
-    // order 仅用于世界书编辑器显示顺序，不参与镜渊的记忆取舍。
-    entry.order = spec.order;
+    // 明确写入宿主字段，避免 ST 用 UID/创建顺序补默认值，表现为“深度逐条 +1”。
+    entry.depth = Math.max(0, Math.round(Number(spec.depth) || 0));
+    entry.scanDepth = null;
+    entry.useProbability = spec.useProbability === true;
+    entry.probability = Math.min(100, Math.max(0, Math.round(Number(spec.probability) || 100)));
+    // order 是激活后上下文优先级；按语义桶和稳定键生成，不再按发布先后递增。
+    entry.order = Math.round(Number(spec.order) || 500);
     entry.preventRecursion = !spec.allowRecursion;
     entry.excludeRecursion = !spec.allowRecursion;
     entry.delayUntilRecursion = 0;
@@ -9060,6 +9539,10 @@ function applyEntry(entry, chatKey, key, spec, wi) {
         recallMode: spec.recallMode,
         trigger: spec.trigger,
         vector: spec.vector,
+        depth: entry.depth,
+        order: entry.order,
+        probability: entry.probability,
+        useProbability: entry.useProbability,
         factIds: spec.factIds,
         eventIds: spec.eventIds,
         disabled,
@@ -10012,6 +10495,7 @@ Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:tr
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"withTimeout",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["withTimeout"]});
 Object.defineProperty(__scope,"abortActiveAutomaticSummaryRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveAutomaticSummaryRequests"]});
 Object.defineProperty(__scope,"abortActiveBusinessRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveBusinessRequests"]});
 Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveRequests"]});
@@ -10432,14 +10916,20 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
     await putChatState(chatState);
     await saveArtifactToMessage(artifact.messageIndex, artifact);
     try {
-        await pauseCurrentChatLorebookEntries(artifact.chatKey);
+        // 宿主世界书 I/O 不是修正事务的提交前提。给它一个短超时，失败后继续
+        // 状态提取，避免“修正正文已成功但按钮永远不释放”。
+        await withTimeout(
+            pauseCurrentChatLorebookEntries(artifact.chatKey),
+            Math.min(8000, Math.max(2500, Number(getSettings().requestTimeoutMs) || 8000)),
+            '暂停旧世界书条目',
+        );
     }
     catch (error) {
         const detail = toErrorMessage(error);
         console.warn('[MirrorAbyss] revised text saved but stale lorebook pause failed', error);
         markStage(artifact, 'sync', 'failed', `旧世界书条目暂停失败：${detail}`);
         await saveArtifactToMessage(artifact.messageIndex, artifact);
-        toast('warning', `正文已修正，但旧世界书条目暂停失败：${detail}。请在生成表格后手动同步世界书`);
+        toast('warning', `正文已修正；旧世界书暂停未完成，但本次会继续生成状态并在随后重新同步：${detail}`);
     }
 }
 function derivedTaskError(error) {
@@ -11228,6 +11718,14 @@ async function retryStage(index, stage) {
                 await saveArtifactToMessage(index, artifact);
                 if (result.approved) {
                     await invalidateCoreAfterManualRevision(artifact, previousMessageKey);
+                    // “修正”是整条业务链中的一个阶段，而不是需要玩家再次点击的终点。
+                    // 修正版审核通过后，在同一队列任务中继续状态提交与派生排队。
+                    await runStateExtraction(artifact, true);
+                    await saveArtifactToMessage(index, artifact);
+                    const committedState = await commitCoreState(artifact, true);
+                    const summaryPlan = await prepareDerivedStageStatuses(artifact, committedState);
+                    taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
+                    queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
                 }
                 else {
                     await applyAuditFailureAction(artifact, getSettings().revisionFallbackAction);
@@ -11571,19 +12069,22 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
-Object.defineProperty(__scope,"replaceMessageInPlace",{enumerable:true,configurable:true,get:()=>__require("core/message-update.js")["replaceMessageInPlace"]});
+Object.defineProperty(__scope,"commitPreparedMessageReplacement",{enumerable:true,configurable:true,get:()=>__require("core/message-update.js")["commitPreparedMessageReplacement"]});
+Object.defineProperty(__scope,"prepareMessageReplacement",{enumerable:true,configurable:true,get:()=>__require("core/message-update.js")["prepareMessageReplacement"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"revisionSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionSystemPrompt"]});
 Object.defineProperty(__scope,"revisionUserPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionUserPrompt"]});
 Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
+Object.defineProperty(__scope,"applyAuditFailureAction",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditFailureAction"]});
 Object.defineProperty(__scope,"applyAuditVisibility",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditVisibility"]});
 Object.defineProperty(__scope,"auditText",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["auditText"]});
 with(__scope){
 Object.defineProperty(exports,"runRevisionFlow",{enumerable:true,configurable:true,get:()=>runRevisionFlow});
+Object.defineProperty(exports,"revisionFailureAction",{enumerable:true,configurable:true,get:()=>revisionFailureAction});
 /**
  * 模块职责：按审核指令生成最小修正版并复审，成功后原位替换正文。
- * 维护边界：修正次数有限；技术错误不能当作再次违规，也不能因此隐藏正文。
+ * 维护边界：修正次数有限；技术错误不能当作再次违规，也不能改变原审核失败结论。
  */
 function cleanRevisionText(raw) {
     let text = safeText(raw, 200000).trim();
@@ -11592,6 +12093,11 @@ function cleanRevisionText(raw) {
         text = fenced[1].trim();
     text = text.replace(/^(?:【?修正版(?:正文)?】?|修正后的完整正文)\s*[:：]?\s*/i, '').trim();
     return text;
+}
+function revisionFailureAction(settings, error) {
+    if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name))
+        return 'preserve-hidden';
+    return settings?.revisionFallbackAction === 'mark' ? 'mark' : 'hide';
 }
 function initialRevisionRecord(artifact) {
     return artifact.revision ?? {
@@ -11651,7 +12157,9 @@ async function runRevisionFlow(artifact) {
             });
             if (candidateAudit.passed) {
                 artifact.audit = candidateAudit;
-                await replaceMessageInPlace(artifact, candidate);
+                // 先在内存中替换正文，再写入完整的审核/修正成功终态，最后一次性保存。
+                // 避免宿主在“正文已替换、修正状态仍为 running”窗口中读取到半提交结果。
+                prepareMessageReplacement(artifact, candidate);
                 artifact.auditSourceFingerprint = artifact.sourceFingerprint;
                 artifact.revision.status = 'success';
                 artifact.revision.finalFingerprint = artifact.sourceFingerprint;
@@ -11659,10 +12167,15 @@ async function runRevisionFlow(artifact) {
                 // The rejected body is no longer needed after an atomic in-place commit.
                 // Purging it keeps the saved chat metadata free of the discarded prose.
                 artifact.revision.originalText = '';
+                artifact.approvedFingerprint = artifact.sourceFingerprint;
                 artifact.hiddenByAudit = false;
                 markStage(artifact, 'audit', 'success');
                 markStage(artifact, 'revision', 'success');
+                await commitPreparedMessageReplacement(artifact);
                 await putArtifact(artifact);
+                // 正文与审核终态都已落盘后，显式清除宿主消息上的隐藏/失败样式。
+                // 不能只修改 artifact.hiddenByAudit，否则旧 DOM 类名会让修正版继续不可见。
+                applyAuditVisibility(artifact.messageIndex, false, false);
                 return { approved: true, audit: candidateAudit };
             }
             const sameViolation = Boolean(settings.stopOnRepeatedViolation &&
@@ -11691,20 +12204,25 @@ async function runRevisionFlow(artifact) {
         return { approved: false, audit: artifact.audit ?? firstAudit };
     }
     catch (error) {
-        if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name)) {
+        const failureAction = revisionFailureAction(settings, error);
+        if (failureAction === 'preserve-hidden') {
             artifact.revision.status = 'cancelled';
             artifact.revision.stoppedReason = toErrorMessage(error);
-            artifact.hiddenByAudit = false;
-            applyAuditVisibility(artifact.messageIndex, false, true);
+            // 被取消或提交失效时，不能把尚未通过审核的原正文重新放出。
+            // CommitRejectedError 可能意味着正文已变化，因此不再主动操作当前DOM。
+            if (error.name === 'AbortError') {
+                artifact.hiddenByAudit = true;
+                applyAuditVisibility(artifact.messageIndex, true, false);
+            }
             markStage(artifact, 'revision', 'cancelled', artifact.revision.stoppedReason);
             await putArtifact(artifact);
             throw error;
         }
         artifact.revision.status = 'failed';
         artifact.revision.stoppedReason = toErrorMessage(error);
-        artifact.hiddenByAudit = false;
-        applyAuditVisibility(artifact.messageIndex, false, true);
         markStage(artifact, 'revision', 'failed', `修正执行失败：${artifact.revision.stoppedReason}`);
+        // 技术失败不改变原审核结论；按用户配置的修正失败处理保持隐藏或标红。
+        await applyAuditFailureAction(artifact, failureAction);
         await putArtifact(artifact);
         throw error;
     }
@@ -12121,50 +12639,21 @@ function minimalStateChunkPrompt(playerText, assistantChunk, index, total) {
 function retryableStateTransportError(error) {
     return /(504|502|503|gateway|timeout|timed out|超时|网关|no message generated|返回为空|响应未完成|upstream)/i.test(toErrorMessage(error));
 }
-/** 只修复标签、块和必填语义项等传输格式问题；表格/语义层权限与对象歧义属于语义校验，必须原样失败。 */
-function repairableStateParseError(error) {
-    const message = toErrorMessage(error);
-    return !/(未注册|已停用|无法确定对象表|存在歧义|多个条目命中|不允许写入|不允许直接维护|未知生命周期|只能用于已有对象|absorb 必须|merge_)/i.test(message);
-}
-function compactStateRepairSystemPrompt() {
-    return `你是固定文本整理器，不分析剧情、不补充事实。把输入中已经写出的内容整理成镜渊自然事实模块。
-只允许 <MA_TURN> 和 <MA_EVENT>。删除块外说明、JSON 外壳、代码围栏、等号键值和思考文字。
-<MA_EVENT> 第一行只写事件名，随后直接写事实模块；删除“进行中/已结束”状态行。必须保留唯一 <MA_CORE>。对象模块第一行写对象名，后续只写该对象自身的一到两句具体结果。不同模块不得重复整件事；原始返回没有表达的事实不得添加。`;
-}
-function compactStateRepairPrompt(raw) {
-    return `【待整理的模型原始返回】\n${safeText(raw, 18000)}\n\n只做格式整理。原始返回没有表达的事实不得添加。`;
-}
-async function repairStateText(raw, previous, registry, activeFacts, maxTokens, origin) {
-    const repaired = await generateTask({
-        task: 'state',
-        systemPrompt: compactStateRepairSystemPrompt(),
-        prompt: compactStateRepairPrompt(raw),
-        maxTokens: Math.min(Math.max(768, maxTokens), 1536),
-        requestPurpose: 'fixed-text',
-        requestOrigin: origin,
-    });
-    parseStateTextOutput(repaired, previous, registry, activeFacts);
-    return repaired;
-}
-async function generateValidatedStateText(request, previous, registry, activeFacts, repairOrigin) {
+/** 模型返回只调用一次；格式兼容全部由本地动态解析器处理。 */
+async function generateValidatedStateText(request, previous, registry, activeFacts, _repairOrigin) {
     const raw = await generateTask(request);
     try {
         parseStateTextOutput(raw, previous, registry, activeFacts);
         return raw;
     }
     catch (parseError) {
-        if (!repairableStateParseError(parseError))
-            throw parseError;
-        try {
-            return await repairStateText(raw, previous, registry, activeFacts, Number(request.maxTokens) || 1536, repairOrigin);
-        }
-        catch (repairError) {
-            const failure = new Error(`状态返回格式整理失败：${toErrorMessage(parseError)}；整理重试：${toErrorMessage(repairError)}`, { cause: repairError });
-            failure.code = 'STATE_FORMAT_REPAIR_FAILED';
-            throw failure;
-        }
+        const preview = safeText(raw, 1200).replace(/\s+/g, ' ').trim();
+        const failure = new Error(`状态返回无法由统一解析器接收：${toErrorMessage(parseError)}${preview ? `；返回片段：${preview}` : ''}`, { cause: parseError });
+        failure.code = 'STATE_PROTOCOL_INVALID';
+        throw failure;
     }
 }
+
 async function requestStateText(artifact, previous, activeFacts, registry, systemPrompt, settings) {
     const fullPrompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry, activeFacts);
     const budget = Math.max(6000, settings.stateContextChars);
@@ -12182,9 +12671,8 @@ async function requestStateText(artifact, previous, activeFacts, registry, syste
             return await generateValidatedStateText(initialRequest, previous, registry, activeFacts, 'state-format-repair');
         }
         catch (error) {
-            // 主请求已经获得内容但格式整理失败时，不再切块重跑同一正文。
-            // 这类重跑会放大调用次数，并可能把同一事实拆成多份。
-            if (error?.code === 'STATE_FORMAT_REPAIR_FAILED')
+            // 主请求已经获得内容但统一解析器拒绝时，不再切块或调用第二个模型修格式。
+            if (error?.code === 'STATE_PROTOCOL_INVALID')
                 throw error;
             if (!retryableStateTransportError(error))
                 throw error;
@@ -12345,7 +12833,9 @@ Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configur
 Object.defineProperty(__scope,"isEntryLifecycleHidden",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryLifecycleHidden"]});
 Object.defineProperty(__scope,"finalizeSummarySettlement",{enumerable:true,configurable:true,get:()=>__require("domain/memory-state-machine.js")["finalizeSummarySettlement"]});
 Object.defineProperty(__scope,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["markSummaryLifecycle"]});
+Object.defineProperty(__scope,"mergeEquivalentSummaryVersion",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["mergeEquivalentSummaryVersion"]});
 Object.defineProperty(__scope,"normalizeSummary",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["normalizeSummary"]});
+Object.defineProperty(__scope,"refreshSummaryFingerprint",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["refreshSummaryFingerprint"]});
 Object.defineProperty(__scope,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["summaryIsCurrent"]});
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"largeSummaryPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["largeSummaryPrompt"]});
@@ -12370,6 +12860,43 @@ Object.defineProperty(exports,"hasEligibleLargeSummary",{enumerable:true,configu
  * 模块职责：按 event_id 消费内部事实生成小总结，并仅消费未固化小总结生成大总结。
  * 维护边界：失败不破坏核心事实；同一事实和小总结不得重复消费。
  */
+function textIdentity(value) {
+    return String(value ?? '').normalize('NFKC').toLowerCase()
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[，。！？；：、,.!?;:'"“”‘’（）()【】\[\]{}<>《》—–_-]+/g, '');
+}
+function factObjectTitle(fact) {
+    const direct = String(fact?.view?.objectTitle || '').trim();
+    if (direct)
+        return direct;
+    const title = String(fact?.title || '').trim();
+    const separator = title.lastIndexOf('·');
+    return separator > 0 ? title.slice(0, separator).trim() : '';
+}
+function factMemoryValues(fact) {
+    return [...new Set([fact?.view?.value, fact?.content, ...(fact?.occurredFacts ?? [])]
+        .map((item) => String(item ?? '').trim()).filter(Boolean))];
+}
+function deterministicSummaryDistributions(facts) {
+    const byKey = new Map();
+    for (const fact of facts ?? []) {
+        if (fact?.type === 'events' || fact?.storageClass === 'episodic')
+            continue;
+        const objectName = factObjectTitle(fact);
+        if (!objectName)
+            continue;
+        const content = factMemoryValues(fact).join('；');
+        if (!content)
+            continue;
+        const objectType = String(fact?.type || fact?.view?.semanticRole || 'object').trim();
+        byKey.set(`${textIdentity(objectType)}|${textIdentity(objectName)}|${textIdentity(content)}`, { objectType, objectName, content });
+    }
+    return [...byKey.values()];
+}
+function sameSummaryContent(left, right) {
+    return Boolean(left && right && refreshSummaryFingerprint(left).contentFingerprint === refreshSummaryFingerprint(right).contentFingerprint);
+}
+
 function eventClosed(facts) {
     if (!facts.length)
         return false;
@@ -12459,7 +12986,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
     const eventTitleTokens = new Set(facts.map((fact) => entryToken(fact.title)).filter(Boolean));
     const factIds = new Set(facts.map((fact) => fact.factId).filter(Boolean));
     const next = structuredClone(snapshot);
-    const removalEventTexts = new Set(removals.map(summaryMemoryText).filter(Boolean));
+    const removalEventTexts = new Set(removals.map(summaryMemoryText).map(textIdentity).filter(Boolean));
     const removalByObject = new Map();
     for (const previous of removals) {
         for (const memory of previous.distributions ?? []) {
@@ -12467,7 +12994,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
             if (!key)
                 continue;
             const values = removalByObject.get(key) ?? new Set();
-            values.add(String(memory.content || '').trim());
+            values.add(textIdentity(memory.content));
             removalByObject.set(key, values);
         }
     }
@@ -12531,20 +13058,32 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
             const current = Array.isArray(row.fields[layer])
                 ? row.fields[layer].map((item) => String(item ?? '').trim()).filter(Boolean)
                 : [];
-            const values = [...new Set([...current.filter((item) => !removeTexts.has(item)), ...addTexts])].slice(-24);
+            const values = [...new Map([...current.filter((item) => !removeTexts.has(textIdentity(item))), ...addTexts]
+                .map((item) => [textIdentity(item), item])).values()].filter(Boolean).slice(-24);
             if (JSON.stringify(current) === JSON.stringify(values))
                 continue;
             row.fields[layer] = values;
             // 对象自己的低精度承接写入后，移除已经被该总结覆盖的短期“现行事实”副本；当前状态、关系、能力和基础定义继续保留。
             if (table.role !== 'events' && !row.entryLifecycle && addTexts.length) {
                 if (layer === 'recentHistory') {
-                    const consumedTexts = new Set(currentFactTextByObject.get(objectKey) ?? []);
+                    const objectFacts = facts.filter((fact) => entryToken(factObjectTitle(fact)) === objectKey);
+                    const removableFacts = objectFacts.filter((fact) => fact.storageClass !== 'durable');
+                    const removableIdentities = new Set(removableFacts.flatMap(factMemoryValues).map(textIdentity).filter(Boolean));
                     if (row.baseRevisionEvidence?.eventId === eventId)
-                        consumedTexts.add(String(row.baseRevisionEvidence.statement || '').trim());
-                    if (consumedTexts.size && Array.isArray(row.fields.currentFacts)) {
+                        removableIdentities.add(textIdentity(row.baseRevisionEvidence.statement));
+                    if (removableIdentities.size && Array.isArray(row.fields.currentFacts)) {
                         row.fields.currentFacts = row.fields.currentFacts
                             .map((item) => String(item ?? '').trim())
-                            .filter((item) => item && !consumedTexts.has(item));
+                            .filter((item) => item && !removableIdentities.has(textIdentity(item)));
+                    }
+                    // 阶段状态只有在事件/事实已经终止时退出当前层；仍持续的伤势、限制等继续保留。
+                    const endedStateIdentities = new Set(removableFacts
+                        .filter((fact) => fact.active === false || fact.view?.eventClosed === true || eventClosed(facts))
+                        .flatMap(factMemoryValues).map(textIdentity).filter(Boolean));
+                    if (endedStateIdentities.size && Array.isArray(row.fields.currentStates)) {
+                        row.fields.currentStates = row.fields.currentStates
+                            .map((item) => String(item ?? '').trim())
+                            .filter((item) => item && !endedStateIdentities.has(textIdentity(item)));
                     }
                 }
                 if (layer === 'solidifiedHistory') {
@@ -12668,7 +13207,8 @@ async function generateSmallSummary(artifact, force = false) {
         const sourceFactIds = [...new Set([...(group.previous?.sourceFactIds ?? group.previous?.sourceKeys ?? []), ...newFactIds])];
         const text = bySlot.get(group.slot);
         const summary = normalizeSummary({ title: text.title, summary: text.summary, keywords: text.keywords, unresolved: text.unresolved }, 'small', sourceFactIds, undefined, { eventId: group.eventId, sourceFactIds });
-        summary.distributions = text.distributions;
+        summary.distributions = text.distributions?.length ? text.distributions : deterministicSummaryDistributions(group.facts);
+        refreshSummaryFingerprint(summary);
         summary.previousSmallSummaryId = group.previous?.id;
         // 小总结旧版本在对象分发后会退出，因此用累计次数保留大总结阈值进度。
         summary.rollupCount = group.previous
@@ -12680,23 +13220,39 @@ async function generateSmallSummary(artifact, force = false) {
             throw new Error(`小总结模型返回空摘要：${group.eventId}`);
         if (summary.summary.length > settings.contentLimits.smallSummary)
             throw new Error(`小总结超过白盒硬上限：${summary.summary.length}/${settings.contentLimits.smallSummary} 字（${group.eventId}）`);
-        return { group, summary, newFactIds };
+        return {
+            group,
+            summary,
+            newFactIds,
+            equivalentPrevious: sameSummaryContent(group.previous, summary),
+            removalSummary: group.previous ? structuredClone(group.previous) : undefined,
+        };
     });
     const previousSnapshot = artifact.snapshot ? structuredClone(artifact.snapshot) : undefined;
     const previousFacts = structuredClone(chatState.internalFacts);
     const previousSummaries = structuredClone(chatState.smallSummaries);
     try {
-        chatState.smallSummaries.push(...generated.map((item) => item.summary));
-        for (const { group, summary, newFactIds } of generated) {
-            if (group.previous)
-                markSummaryLifecycle(group.previous, 'superseded', { successorId: summary.id, recallEligible: false });
-            markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
+        for (const item of generated) {
+            const { group, newFactIds } = item;
+            if (item.equivalentPrevious && group.previous) {
+                const requestedRollupCount = item.summary.rollupCount;
+                item.summary = mergeEquivalentSummaryVersion(group.previous, item.summary);
+                item.summary.rollupCount = Math.max(Number(item.summary.rollupCount) || 1, requestedRollupCount);
+                item.summary.eventClosed = item.summary.eventClosed || group.closed;
+                markSummaryLifecycle(item.summary, group.closed ? 'archived' : 'active', { recallEligible: true });
+            }
+            else {
+                chatState.smallSummaries.push(item.summary);
+                if (group.previous)
+                    markSummaryLifecycle(group.previous, 'superseded', { successorId: item.summary.id, recallEligible: false });
+            }
+            markFactsConsumed(chatState.internalFacts, newFactIds, item.summary.id);
         }
         if (artifact.snapshot) {
             let nextSnapshot = artifact.snapshot;
-            for (const { group, summary, newFactIds } of generated) {
+            for (const { group, summary, removalSummary } of generated) {
                 const beforeDistribution = nextSnapshot;
-                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, group.facts, 'recentHistory', summary, group.previous ? [group.previous] : [], settings.tableRegistry);
+                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, group.facts, 'recentHistory', summary, removalSummary ? [removalSummary] : [], settings.tableRegistry);
                 const distributedRowIds = changedSummaryLayerRowIds(beforeDistribution, nextSnapshot, 'recentHistory', settings.tableRegistry);
                 const enteredSettlingRowIds = settlingRowIdsForEvent(nextSnapshot, group.eventId, settings.tableRegistry);
                 const settlement = finalizeSummarySettlement({
@@ -12779,21 +13335,38 @@ async function generateLargeSummary(artifact, force = false) {
             sourceSummaryIds: group.sourceSummaryIds,
             sourceFactIds: group.sourceFactIds,
         });
-        summary.distributions = text.distributions;
+        const eventFacts = chatState.internalFacts.filter((fact) => fact.eventId === group.eventId);
+        summary.distributions = text.distributions?.length ? text.distributions : deterministicSummaryDistributions(eventFacts);
+        refreshSummaryFingerprint(summary);
         markSummaryLifecycle(summary, group.closed ? 'archived' : 'active', { recallEligible: true });
         if (!summary.summary)
             throw new Error(`大总结模型返回空摘要：${group.eventId}`);
         if (summary.summary.length > settings.contentLimits.largeSummary)
             throw new Error(`大总结超过白盒硬上限：${summary.summary.length}/${settings.contentLimits.largeSummary} 字（${group.eventId}）`);
-        return { group, summary };
+        return {
+            group,
+            summary,
+            equivalentPrevious: sameSummaryContent(group.previousLarge, summary),
+            removalSummary: group.previousLarge ? structuredClone(group.previousLarge) : undefined,
+        };
     });
     const previousLargeList = structuredClone(chatState.largeSummaries);
     const previousSmall = structuredClone(chatState.smallSummaries);
     const previousFacts = structuredClone(chatState.internalFacts);
     const previousSnapshot = artifact.snapshot ? structuredClone(artifact.snapshot) : undefined;
     try {
-        chatState.largeSummaries.push(...generated.map((item) => item.summary));
-        for (const { group, summary } of generated) {
+        for (const item of generated) {
+            const { group } = item;
+            if (item.equivalentPrevious && group.previousLarge) {
+                item.summary = mergeEquivalentSummaryVersion(group.previousLarge, item.summary);
+                markSummaryLifecycle(item.summary, group.closed ? 'archived' : 'active', { recallEligible: true });
+            }
+            else {
+                chatState.largeSummaries.push(item.summary);
+                if (group.previousLarge)
+                    markSummaryLifecycle(group.previousLarge, 'superseded', { successorId: item.summary.id, recallEligible: false });
+            }
+            const summary = item.summary;
             const selectedIds = new Set(group.consumedVersionIds);
             for (const item of chatState.smallSummaries) {
                 if (!selectedIds.has(item.id))
@@ -12801,18 +13374,16 @@ async function generateLargeSummary(artifact, force = false) {
                 item.solidifiedByLargeSummaryId = summary.id;
                 markSummaryLifecycle(item, 'solidified', { recallEligible: false });
             }
-            if (group.previousLarge)
-                markSummaryLifecycle(group.previousLarge, 'superseded', { successorId: summary.id, recallEligible: false });
             markFactsSolidified(chatState.internalFacts, group.sourceFactIds, summary.id);
         }
         if (artifact.snapshot) {
             let nextSnapshot = artifact.snapshot;
-            for (const { group, summary } of generated) {
+            for (const { group, summary, removalSummary } of generated) {
                 const eventFacts = chatState.internalFacts.filter((fact) => fact.eventId === group.eventId);
                 const beforeRecentRetirement = nextSnapshot;
                 nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'recentHistory', undefined, group.items, settings.tableRegistry);
                 const beforeDistribution = nextSnapshot;
-                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'solidifiedHistory', summary, group.previousLarge ? [group.previousLarge] : [], settings.tableRegistry);
+                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'solidifiedHistory', summary, removalSummary ? [removalSummary] : [], settings.tableRegistry);
                 const distributedRowIds = [...new Set([
                     ...changedSummaryLayerRowIds(beforeRecentRetirement, nextSnapshot, 'recentHistory', settings.tableRegistry),
                     ...changedSummaryLayerRowIds(beforeDistribution, nextSnapshot, 'solidifiedHistory', settings.tableRegistry),
@@ -15067,6 +15638,8 @@ Object.defineProperty(__scope,"emptyRuntimeV2",{enumerable:true,configurable:tru
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
 Object.defineProperty(__scope,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["inferSummaryLifecycle"]});
 Object.defineProperty(__scope,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["markSummaryLifecycle"]});
+Object.defineProperty(__scope,"refreshSummaryFingerprint",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["refreshSummaryFingerprint"]});
+Object.defineProperty(__scope,"reconcileConsumedFactLayers",{enumerable:true,configurable:true,get:()=>__require("domain/memory-layer-reconciliation.js")["reconcileConsumedFactLayers"]});
 with(__scope){
 Object.defineProperty(exports,"putArtifact",{enumerable:true,configurable:true,get:()=>putArtifact});
 Object.defineProperty(exports,"putChatState",{enumerable:true,configurable:true,get:()=>putChatState});
@@ -15096,14 +15669,14 @@ function emptyChatState(chatKey) {
         lastSyncStatus: 'idle',
         lorebookPublication: normalizeLorebookPublication(),
         runtimeV2: emptyRuntimeV2(),
-        migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false, factContractV35: false },
+        migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false, factContractV35: false, summaryDedupV42: false, layerReconciliationV42: false },
         updatedAt: nowIso(),
     };
 }
 function normalizeSummaryArrays(value, kind) {
     if (!Array.isArray(value))
         return [];
-    return value.filter((item) => item && typeof item === 'object').map((item) => {
+    const output = value.filter((item) => item && typeof item === 'object').map((item) => {
         const normalized = {
             ...item,
             kind,
@@ -15115,8 +15688,26 @@ function normalizeSummaryArrays(value, kind) {
         };
         normalized.lifecycleStatus = inferSummaryLifecycle(normalized, kind);
         normalized.recallEligible = item.recallEligible !== false && ['active', 'archived'].includes(normalized.lifecycleStatus);
-        return normalized;
+        return refreshSummaryFingerprint(normalized);
     });
+    // 旧版本曾为完全相同的总结反复分配随机 ID。保留原记录以维护事实/大总结引用，
+    // 但把重复版本指向最新代表并退出 UI 与召回，避免旧存档出现成排相同条目。
+    const latestByIdentity = new Map();
+    for (let index = output.length - 1; index >= 0; index -= 1) {
+        const item = output[index];
+        const eventId = String(item.eventId || item.eventIds?.[0] || '').trim();
+        const key = `${kind}|${eventId}|${item.sourceFingerprint || item.contentFingerprint}`;
+        const representative = latestByIdentity.get(key);
+        if (!representative) {
+            latestByIdentity.set(key, item);
+            delete item.duplicateOfSummaryId;
+            continue;
+        }
+        item.duplicateOfSummaryId = representative.id;
+        item.recallEligible = false;
+        markSummaryLifecycle(item, 'superseded', { successorId: representative.id, recallEligible: false });
+    }
+    return output;
 }
 /**
  * rc.23 以前同一 event_id 可能累计留下多条尚未固化的小总结。迁移时把它们整理为一条
@@ -15274,6 +15865,8 @@ function migrateChatState(raw, chatKey) {
     const needsSingleAuthorityMigration = state.migration?.singleAuthorityV34 !== true;
     // core.4 为旧事实补齐主宿主、切面、保存层级和有效区间；无法确认对象时保留 legacy 宿主，不猜测归并。
     const needsFactContractMigration = state.migration?.factContractV35 !== true;
+    const needsSummaryDedupMigration = state.migration?.summaryDedupV42 !== true;
+    const needsLayerReconciliation = state.migration?.layerReconciliationV42 !== true;
     const needsFullSnapshotMigration = needsViewMigration || needsObjectViewMigration
         || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
     let artifactViewsChanged = false;
@@ -15303,6 +15896,8 @@ function migrateChatState(raw, chatKey) {
     const summaryVersionsChanged = needsSummaryVersionMigration
         ? migrateLegacySmallSummaryVersions(state.smallSummaries, state.largeSummaries)
         : false;
+    const summaryDedupChanged = needsSummaryDedupMigration
+        && [...state.smallSummaries, ...state.largeSummaries].some((item) => item.duplicateOfSummaryId);
     let facts = normalizeInternalFacts(state.internalFacts);
     const registry = getSettings().tableRegistry;
     let previousMigratedSnapshot;
@@ -15475,8 +16070,25 @@ function migrateChatState(raw, chatKey) {
         state.lastSyncStatus = 'idle';
         state.lastSyncError = undefined;
     }
-    if (needsFactMigration || needsSummaryVersionMigration || needsFactContractMigration) {
+    if (needsFactMigration || needsSummaryVersionMigration || needsFactContractMigration || needsLayerReconciliation) {
         migrateLegacyConsumption(facts, state.smallSummaries, state.largeSummaries);
+    }
+    if (needsLayerReconciliation) {
+        const artifacts = getChat().map((message) => message?.extra?.[MODULE_NAME])
+            .filter((artifact) => artifact?.chatKey === chatKey && artifact.snapshot);
+        const latestArtifact = artifacts.at(-1);
+        if (latestArtifact?.snapshot) {
+            const reconciled = reconcileConsumedFactLayers(latestArtifact.snapshot, facts, registry);
+            if (reconciled.changed) {
+                latestArtifact.snapshot = reconciled.snapshot;
+                if (latestArtifact.stages?.sync)
+                    latestArtifact.stages.sync = { ...latestArtifact.stages.sync, status: 'idle', error: undefined };
+                delete latestArtifact.lorebookEntryIds;
+                artifactViewsChanged = true;
+                state.lastSyncStatus = 'idle';
+                state.lastSyncError = undefined;
+            }
+        }
     }
     state.internalFacts = facts;
     if (needsEntryLifecycleMigration) {
@@ -15509,6 +16121,8 @@ function migrateChatState(raw, chatKey) {
         entryLifecycleV33: true,
         singleAuthorityV34: true,
         factContractV35: true,
+        summaryDedupV42: true,
+        layerReconciliationV42: true,
     };
     state.updatedAt ||= nowIso();
     return {
@@ -15516,7 +16130,8 @@ function migrateChatState(raw, chatKey) {
         artifactViewsChanged,
         metadataChanged: metadataBefore !== JSON.stringify(state)
             || previousSchema !== CURRENT_SCHEMA_VERSION
-            || summaryVersionsChanged,
+            || summaryVersionsChanged
+            || summaryDedupChanged,
     };
 }
 /** Canonical message artifacts live on message.extra. */
@@ -15538,6 +16153,8 @@ const REQUIRED_MIGRATIONS = [
     'entryLifecycleV33',
     'singleAuthorityV34',
     'factContractV35',
+    'summaryDedupV42',
+    'layerReconciliationV42',
 ];
 function currentStateStructure(raw, chatKey) {
     if (!raw || typeof raw !== 'object')
@@ -15923,8 +16540,10 @@ function redactedChatState(state) {
         suppressedLorebookEntryCount: Object.keys(state.lorebookPublication?.suppressed ?? {}).length,
         internalFactCount: Array.isArray(state.internalFacts) ? state.internalFacts.length : 0,
         pendingSmallFactCount: Array.isArray(state.internalFacts) ? state.internalFacts.filter((fact) => !fact.consumedBySmallSummaryId).length : 0,
-        smallSummaryCount: Array.isArray(state.smallSummaries) ? state.smallSummaries.length : 0,
-        largeSummaryCount: Array.isArray(state.largeSummaries) ? state.largeSummaries.length : 0,
+        smallSummaryCount: Array.isArray(state.smallSummaries) ? state.smallSummaries.filter((item) => !item.duplicateOfSummaryId).length : 0,
+        largeSummaryCount: Array.isArray(state.largeSummaries) ? state.largeSummaries.filter((item) => !item.duplicateOfSummaryId).length : 0,
+        hiddenDuplicateSmallSummaryCount: Array.isArray(state.smallSummaries) ? state.smallSummaries.filter((item) => item.duplicateOfSummaryId).length : 0,
+        hiddenDuplicateLargeSummaryCount: Array.isArray(state.largeSummaries) ? state.largeSummaries.filter((item) => item.duplicateOfSummaryId).length : 0,
         historyInvalidation: state.historyInvalidation ? {
             ...state.historyInvalidation,
             pauseError: redactedError(state.historyInvalidation.pauseError),
@@ -16135,7 +16754,9 @@ function messageStageAvailability(index, artifact) {
 const pendingRetryIndexes = new Set();
 const expandedPanelIndexes = new Set();
 function flowStageHtml(order, label, stage) {
-    const status = stageLabel(stage);
+    const status = label === '修正' && stage?.status === 'skipped'
+        ? '无需修正'
+        : stageLabel(stage);
     const symbol = stage?.status === 'success' || stage?.status === 'skipped'
         ? '✓'
         : stage?.status === 'failed' || stage?.status === 'blocked'
@@ -17505,8 +18126,10 @@ async function summariesHtml() {
     const enabled = getSettings().enabled;
     const busy = workspacePipelineBusy(info);
     const state = info ? await getChatState(info.artifact.chatKey) : null;
-    const small = state?.smallSummaries ?? [];
-    const large = state?.largeSummaries ?? [];
+    const allSmall = state?.smallSummaries ?? [];
+    const allLarge = state?.largeSummaries ?? [];
+    const small = allSmall.filter((item) => !item.duplicateOfSummaryId);
+    const large = allLarge.filter((item) => !item.duplicateOfSummaryId);
     const smallCurrent = small.filter((item) => ['active', 'archived'].includes(inferSummaryLifecycle(item, 'small'))).length;
     const largeCurrent = large.filter((item) => ['active', 'archived'].includes(inferSummaryLifecycle(item, 'large'))).length;
     return `
@@ -17536,7 +18159,7 @@ function auditHtml() {
     const canAudit = Boolean(settings.enabled && !busy && settings.hostControl.enabled && settings.auditEnabled && settings.auditPrompt.trim() && isLatest);
     const canRevise = Boolean(settings.enabled && !busy && isLatest && audit && !audit.passed && audit.decision !== "block");
     return `
-    <section class="ma11-toolbar"><div><h2>审核与修正</h2><p>审核和修正分开执行；修正通过后再点击“生成表格”。</p></div><div class="ma11-actions"><button data-ma11-action="run-audit" ${canAudit ? "" : "disabled"}>立即审核</button><button data-ma11-action="run-revision" ${canRevise ? "" : "disabled"}>执行修正</button></div></section>
+    <section class="ma11-toolbar"><div><h2>审核与修正</h2><p>审核未通过时执行修正；修正通过后会在同一次任务中继续生成状态表并排队派生处理。</p></div><div class="ma11-actions"><button data-ma11-action="run-audit" ${canAudit ? "" : "disabled"}>立即审核</button><button data-ma11-action="run-revision" ${canRevise ? "" : "disabled"}>执行修正</button></div></section>
     <section class="ma11-card ma11-form-card">
       <header><b>规则审核与定向修正</b><span>最终通过的正文才进入状态表与世界书</span></header>
       <div class="ma11-guidance-banner"><span aria-hidden="true">✓</span><div><b>只填写可以明确判定的硬规则</b><p>推荐写“必须/禁止/仅当”的可验证条件。文风偏好、模糊审美和互相冲突的要求不适合作为自动阻断规则。</p></div></div>
