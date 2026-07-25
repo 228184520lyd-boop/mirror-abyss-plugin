@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.4.0-alpha.12",
+  "version": "1.4.0-alpha.15",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "统一协议与派生状态修复：单次任务自动续跑、总结稳定去重、当前层沉降、世界书语义触发与深度"
+  "description": "按当前场景、活动事件、最近轮次与记忆阶段动态调度 SillyTavern 常驻、触发、递归、混合与向量召回"
 }

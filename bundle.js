@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.12';
+const VERSION = '1.4.0-alpha.15';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -723,7 +723,8 @@ function getSettings() {
     settings.migration.sceneTableV33 ??= false;
     settings.migration.entryRoutingV33 ??= false;
     settings.lorebookRecall ||= { similarityThreshold: 0.72, maxVectorResults: 8, totalCapacity: 24000 };
-    settings.lorebookRecall.similarityThreshold = Math.min(0.99, Math.max(0, Number(settings.lorebookRecall.similarityThreshold) || 0.72));
+    const similarityThreshold = Number(settings.lorebookRecall.similarityThreshold);
+    settings.lorebookRecall.similarityThreshold = Math.min(0.99, Math.max(0, Number.isFinite(similarityThreshold) ? similarityThreshold : 0.72));
     settings.lorebookRecall.maxVectorResults = Math.min(100, Math.max(1, Math.round(Number(settings.lorebookRecall.maxVectorResults) || 8)));
     settings.lorebookRecall.totalCapacity = Math.min(200000, Math.max(2000, Math.round(Number(settings.lorebookRecall.totalCapacity) || 24000)));
     if (!settings.migration.dynamicTablesV23 || !Array.isArray(settings.tableRegistry) || !settings.tableRegistry.length) {
@@ -901,7 +902,8 @@ function currentChatKey() {
     }
     const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? '';
     const scope = context.groupId ? `group:${context.groupId}` : `character:${context.characterId ?? context.name2 ?? 'unknown'}`;
-    const seed = `${scope}|${chatId || context.name1 || 'chat'}|${context.name2 || ''}`;
+    // 已有稳定角色/群组作用域时，显示名不参与首次 chatKey；否则角色改名会在状态首次落盘前改变身份。
+    const seed = locator || `${scope}|${chatId || context.name1 || 'chat'}`;
     return `${scope}:${hashText(seed)}`;
 }
 function messageFingerprint(index) {
@@ -965,9 +967,7 @@ Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:tru
 Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
 with(__scope){
 Object.defineProperty(exports,"refreshMessageDisplay",{enumerable:true,configurable:true,get:()=>refreshMessageDisplay});
-Object.defineProperty(exports,"commitPreparedMessageReplacement",{enumerable:true,configurable:true,get:()=>commitPreparedMessageReplacement});
 Object.defineProperty(exports,"replaceMessageInPlace",{enumerable:true,configurable:true,get:()=>replaceMessageInPlace});
-Object.defineProperty(exports,"prepareMessageReplacement",{enumerable:true,configurable:true,get:()=>prepareMessageReplacement});
 /**
  * 模块职责：将定向修正结果原位写回当前活动 swipe，并刷新 SillyTavern 消息显示。
  * 维护边界：只允许修改仍与 artifact 指纹一致的当前正文，不新增重复消息。
@@ -996,7 +996,7 @@ async function refreshMessageDisplay(index) {
     if (typeof context.reloadCurrentChat === 'function')
         await context.reloadCurrentChat();
 }
-function prepareMessageReplacement(artifact, text) {
+async function replaceMessageInPlace(artifact, text) {
     assertArtifactCommitCurrent(artifact);
     const message = getMessage(artifact.messageIndex);
     if (!message || message.is_user)
@@ -1009,24 +1009,12 @@ function prepareMessageReplacement(artifact, text) {
     artifact.assistantText = finalText;
     artifact.sourceFingerprint = messageFingerprint(artifact.messageIndex);
     artifact.messageKey = messageIdentity(artifact.messageIndex);
-    attachArtifactToMessage(message, artifact);
-    return artifact.sourceFingerprint;
-}
-async function commitPreparedMessageReplacement(artifact) {
-    assertArtifactCommitCurrent(artifact);
-    const message = getMessage(artifact.messageIndex);
-    if (!message || message.is_user)
-        throw new Error('原AI消息已不存在');
+    artifact.approvedFingerprint = artifact.sourceFingerprint;
+    artifact.hiddenByAudit = false;
     attachArtifactToMessage(message, artifact);
     await persistChatFor(artifact.chatKey);
     await refreshMessageDisplay(artifact.messageIndex);
     return artifact.sourceFingerprint;
-}
-async function replaceMessageInPlace(artifact, text) {
-    prepareMessageReplacement(artifact, text);
-    artifact.approvedFingerprint = artifact.sourceFingerprint;
-    artifact.hiddenByAudit = false;
-    return commitPreparedMessageReplacement(artifact);
 }
 
 }
@@ -1106,6 +1094,7 @@ function deepClone(value) {
     }
     return JSON.parse(JSON.stringify(value));
 }
+const UNSAFE_RECORD_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 function isPlainRecord(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value))
         return false;
@@ -1120,6 +1109,8 @@ function mergeDefaults(defaults, current) {
         if (!isPlainRecord(source) || !isPlainRecord(target))
             return;
         for (const [key, value] of Object.entries(source)) {
+            if (UNSAFE_RECORD_KEYS.has(key))
+                continue;
             const fallback = target[key];
             if (isPlainRecord(fallback)) {
                 if (isPlainRecord(value))
@@ -1256,6 +1247,7 @@ Object.defineProperty(__scope,"previousUserText",{enumerable:true,configurable:t
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
+Object.defineProperty(exports,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>subscribeArtifactStageChanges});
 Object.defineProperty(exports,"createArtifact",{enumerable:true,configurable:true,get:()=>createArtifact});
 Object.defineProperty(exports,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>attachArtifactToMessage});
 Object.defineProperty(exports,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>getAttachedArtifact});
@@ -1264,6 +1256,23 @@ Object.defineProperty(exports,"markStage",{enumerable:true,configurable:true,get
  * 模块职责：创建、读取、附着消息级 artifact，并维护阶段状态。
  * 维护边界：artifact 是单条正文的规范结果，必须与 chatKey、messageIdentity 和 sourceFingerprint 绑定。
  */
+const stageListeners = new Set();
+
+/** 阶段状态是运行时真相；订阅者可立即刷新 UI，不必等待宿主聊天持久化完成。 */
+function subscribeArtifactStageChanges(listener) {
+    stageListeners.add(listener);
+    return () => stageListeners.delete(listener);
+}
+function notifyStageChange(artifact, stage) {
+    for (const listener of stageListeners) {
+        try {
+            listener(artifact, stage);
+        }
+        catch (error) {
+            console.warn('[MirrorAbyss] artifact stage listener failed', error);
+        }
+    }
+}
 function idleStage() {
     return { status: 'idle', attempts: 0 };
 }
@@ -1315,6 +1324,7 @@ function markStage(artifact, stage, status, error) {
         error: error || undefined,
     };
     artifact.updatedAt = now;
+    notifyStageChange(artifact, stage);
 }
 
 }
@@ -1325,7 +1335,6 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"fixedTextValue",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["fixedTextValue"]});
 Object.defineProperty(__scope,"fixedTextValues",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["fixedTextValues"]});
-Object.defineProperty(__scope,"normalizeProtocolText",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["normalizeProtocolText"]});
 Object.defineProperty(__scope,"parseFixedTextBlocks",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["parseFixedTextBlocks"]});
 with(__scope){
 Object.defineProperty(exports,"parseAuditTextOutput",{enumerable:true,configurable:true,get:()=>parseAuditTextOutput});
@@ -1382,7 +1391,7 @@ function decisionValue(raw) {
     return '';
 }
 function parseAuditTextOutput(raw) {
-    let text = normalizeProtocolText(safeText(raw, 220000)).trim();
+    const text = safeText(raw, 220000).trim();
     const legacy = text.replace(/\r/g, '').split('\n');
     if (legacy[0]?.trim().toUpperCase() === 'MA_OK') {
         return { passed: true, decision: 'pass', reason: legacy.slice(1).join('\n').trim() || '通过', violations: [], preserve: [], rewriteInstruction: '', violationFingerprint: '' };
@@ -1392,63 +1401,38 @@ function parseAuditTextOutput(raw) {
         const violations = [{ ruleId: 'legacy_failure', rule: '审核模型判定违反玩家规则', evidence: reason, action: reason }];
         return { passed: false, decision: 'revise', reason, violations, preserve: [], rewriteInstruction: reason, violationFingerprint: fingerprint(violations) };
     }
-    // 兼容模型省略外层标签但仍返回明确字段的情况。这里只包裹已有文字，不推断审核结论。
-    if (!/<MA_AUDIT>/iu.test(text)) {
-        const first = text.split(/\n+/).map((line) => line.trim()).find(Boolean) || '';
-        const directDecision = decisionValue(first.replace(/^(?:结果|判定|结论)\s*[:：=＝]?\s*/u, ''));
-        const hasResultField = /(^|\n)\s*(?:结果|判定|结论|result)\s*[:：=＝]\s*\S/iu.test(text);
-        if (directDecision && !hasResultField)
-            text = `结果：${directDecision}\n${text.split(/\n+/).slice(1).join('\n')}`;
-        if (directDecision || hasResultField)
-            text = `<MA_AUDIT>\n${text}\n</MA_AUDIT>`;
-    }
-    const blocks = parseFixedTextBlocks(text, MARKERS, { compatibility: true });
+    const blocks = parseFixedTextBlocks(text, MARKERS);
     const auditBlocks = blocks.filter((block) => block.kind === 'audit');
-    if (!auditBlocks.length)
-        throw new Error('审核固定文本缺少 <MA_AUDIT> 或明确的“结果/判定”字段');
-    // 多个审核块属于同一请求的重复外壳；字段确定性合并，最后一个非空结果生效。
-    const audit = { ...auditBlocks[0], fields: new Map() };
-    for (const block of auditBlocks) {
-        for (const [key, values] of block.fields.entries())
-            audit.fields.set(key, [...(audit.fields.get(key) ?? []), ...values]);
-    }
+    if (auditBlocks.length !== 1)
+        throw new Error(`审核固定文本必须且只能包含一个 <MA_AUDIT>，实际 ${auditBlocks.length} 个`);
+    const audit = auditBlocks[0];
     const decision = decisionValue(value(audit, 'result'));
     if (!decision)
         throw new Error('审核固定文本缺少有效 result=pass|revise|block');
     const passed = decision === 'pass';
-    let violations = blocks.filter((block) => block.kind === 'violation').map((block, index) => ({
+    const violations = blocks.filter((block) => block.kind === 'violation').map((block, index) => ({
         ruleId: safeText(value(block, 'ruleid') || `rule_${index + 1}`, 120).trim() || `rule_${index + 1}`,
         rule: safeText(value(block, 'rule'), 1000).trim(),
         evidence: safeText(value(block, 'evidence'), 3000).trim(),
         action: safeText(value(block, 'action'), 3000).trim(),
     })).filter((item) => item.rule || item.evidence || item.action).slice(0, 24);
-    const reason = safeText(value(audit, 'reason'), 3000).trim() || (passed ? '通过' : '违反规则');
-    const rewriteInstruction = safeText(value(audit, 'rewrite'), 6000).trim();
-    if (!passed && !violations.length) {
-        // 审核已经给出明确失败结论时，原因/修正指令足以形成最小违规记录；不再为包装缺失要求第二次点击。
-        violations = [{
-            ruleId: 'audit_failure',
-            rule: '审核模型判定违反玩家规则',
-            evidence: reason,
-            action: rewriteInstruction || reason,
-        }];
-    }
+    if (!passed && !violations.length)
+        throw new Error('审核判定未通过，但没有返回 <MA_VIOLATION>');
     const replacementBlocks = blocks.filter((block) => block.kind === 'replacement');
-    const replacementText = decision === 'revise'
-        ? safeText(replacementBlocks.at(-1)?.raw, 200000).trim() || undefined
-        : undefined;
+    if (replacementBlocks.length > 1)
+        throw new Error('审核固定文本最多只能包含一个 <MA_REPLACEMENT>');
+    const replacementText = decision === 'revise' ? safeText(replacementBlocks[0]?.raw, 200000).trim() || undefined : undefined;
     return {
         passed,
         decision,
-        reason,
+        reason: safeText(value(audit, 'reason'), 3000).trim() || (passed ? '通过' : '违反规则'),
         violations: passed ? [] : violations,
         preserve: values(audit, 'preserve').map((item) => safeText(item, 2000).trim()).filter(Boolean).slice(0, 24),
-        rewriteInstruction,
+        rewriteInstruction: safeText(value(audit, 'rewrite'), 6000).trim(),
         violationFingerprint: passed ? '' : fingerprint(violations),
         replacementText,
     };
 }
-
 
 }
 };
@@ -1521,12 +1505,12 @@ function isEntryParticipationPaused(row) {
 function visibleStateRows(rows) {
     return (rows ?? []).filter((row) => !isEntryLifecycleHidden(row));
 }
-function protectedRow(row, focusObjectId) {
+function protectedRow(row) {
+    // 焦点只改变世界书 recallMode；不得改变对象的事实权威、容量或生命周期。
     return row.source === 'manual'
         || row.locked
         || row.lockMode === 'all'
-        || row.lockMode === 'base'
-        || row.id === focusObjectId;
+        || row.lockMode === 'base';
 }
 function rowEventIds(row) {
     return [...new Set([...(row.eventIds ?? []), row.eventId].map((item) => safeText(item, 180).trim()).filter(Boolean))];
@@ -1553,7 +1537,7 @@ function applyEntryLifecycleDirectives(snapshot, directives, registry, focusObje
     const ignored = [];
     for (const directive of directives ?? []) {
         const source = (next[directive.sourceTable] ?? []).find((row) => row.id === directive.sourceId);
-        if (!source || protectedRow(source, focusObjectId)) {
+        if (!source || protectedRow(source)) {
             ignored.push(directive.sourceId);
             continue;
         }
@@ -1720,12 +1704,16 @@ function finalizeSettlingEntries(snapshot, options) {
             const linkedByEvent = rowEventIds(row).includes(options.eventId);
             const rowFacts = stringList(row.factIds, 200, 180);
             const linkedByFacts = rowFacts.some((id) => coveredFactIds.has(id));
-            const allKnownFactsCovered = rowFacts.length > 0 && rowFacts.every((id) => coveredFactIds.has(id));
+            // 新条目按自身 factIds 精确核对；旧条目若缺 factIds，仍可用同一 event_id 的已消费事实证明覆盖，
+            // 但后续仍必须通过 targetHasDistribution，不能仅凭事件结束直接删除。
+            const allKnownFactsCovered = rowFacts.length > 0
+                ? rowFacts.every((id) => coveredFactIds.has(id))
+                : linkedByEvent && coveredFactIds.size > 0;
             const sceneBoundarySettlement = row.entryLifecycle?.trigger === 'scene-boundary'
                 && (row.entryLifecycle.triggerEventIds ?? []).includes(options.eventId);
             // 事件容器和依附事件终局的对象仍要求事件关闭；场景边界临时容器则按自身承接状态退出。
             const lifecycleCanClose = options.eventClosed || sceneBoundarySettlement;
-            const ready = !protectedRow(row, options.focusObjectId)
+            const ready = !protectedRow(row)
                 && lifecycleCanClose
                 && (linkedByEvent || linkedByFacts)
                 && allKnownFactsCovered
@@ -1780,7 +1768,7 @@ function garbageCollectLegacyEntryTombstones(snapshot, internalFacts, registry, 
             if (!legacyState)
                 continue;
             row.entryLifecycle = normalizeEntryLifecycleValue({ ...row.entryLifecycle, state: legacyState }, row.entryLifecycle);
-            if (!row.entryLifecycle || protectedRow(row, focusObjectId))
+            if (!row.entryLifecycle || protectedRow(row))
                 continue;
             const rowFacts = stringList(row.factIds, 200, 180).map((id) => factsById.get(id)).filter((fact) => Boolean(fact));
             const allCovered = rowFacts.length > 0 && rowFacts.every((fact) => Boolean(fact.consumedBySmallSummaryId || fact.solidifiedByLargeSummaryId));
@@ -1805,6 +1793,7 @@ Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
 Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
+Object.defineProperty(__scope,"eventClosedFromFacts",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventClosedFromFacts"]});
 with(__scope){
 Object.defineProperty(exports,"buildEventProfiles",{enumerable:true,configurable:true,get:()=>buildEventProfiles});
 function unique(values, limit = 80) {
@@ -1821,11 +1810,10 @@ function rowReferenceKeys(row) {
         .map(normalizeEntityReference)
         .filter((value) => value.length >= 2));
 }
-function factClosed(fact) {
-    return !fact.active || /已结束|已完成|已关闭|已结算|完成|结束|关闭|closed|completed|ended|settled/i.test(String(fact.status || ''));
-}
 function rowClosed(row) {
-    return Boolean(row && /已结束|已完成|已关闭|已结算|完成|结束|关闭|closed|completed|ended|settled/i.test(`${row.status} ${row.content}`));
+    // 事件容器的结构化 status / lifecycle 才是权威；正文中的局部“完成”不能关闭整条事件线。
+    return Boolean(row && (isEntryParticipationPaused(row)
+        || /已结束|已完成|已关闭|已结算|完成|结束|关闭|closed|completed|ended|settled/i.test(String(row.status || ''))));
 }
 function summaryEventId(summary) {
     return String(summary.eventId || summary.eventIds?.[0] || '').trim();
@@ -1893,8 +1881,11 @@ function buildEventProfiles(snapshot, facts, smallSummaries, largeSummaries, reg
             ...relatedEntries.map((entry) => entry.title),
         ], 24);
         const currentResults = unique(eventFacts.flatMap((fact) => fact.occurredFacts ?? []).filter(Boolean), 8);
-        const allFactsClosed = eventFacts.length > 0 && eventFacts.every(factClosed);
-        const closed = Boolean(eventRow ? rowClosed(eventRow) : allFactsClosed || small.some((summary) => summary.eventClosed));
+        const factStatusClosed = eventClosedFromFacts(eventFacts, eventId);
+        // 内部事件状态事实是权威；事件行只是可见投影。只有旧数据缺状态事实时才回退到行/总结。
+        const closed = factStatusClosed !== undefined
+            ? factStatusClosed
+            : Boolean(eventRow ? rowClosed(eventRow) : small.some((summary) => summary.eventClosed));
         profiles.push({
             eventId,
             title: eventRow?.title || latestFact?.title || latestSummary?.title || eventId,
@@ -1923,20 +1914,116 @@ function buildEventProfiles(snapshot, facts, smallSummaries, largeSummaries, reg
 
 }
 };
+__defs["domain/event-status.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"eventIdOfFact",{enumerable:true,configurable:true,get:()=>eventIdOfFact});
+Object.defineProperty(exports,"isEventStatusFact",{enumerable:true,configurable:true,get:()=>isEventStatusFact});
+Object.defineProperty(exports,"latestEventStatusFact",{enumerable:true,configurable:true,get:()=>latestEventStatusFact});
+Object.defineProperty(exports,"eventStatusFactClosed",{enumerable:true,configurable:true,get:()=>eventStatusFactClosed});
+Object.defineProperty(exports,"eventClosedFromFacts",{enumerable:true,configurable:true,get:()=>eventClosedFromFacts});
+Object.defineProperty(exports,"eventStatusById",{enumerable:true,configurable:true,get:()=>eventStatusById});
+/**
+ * 模块职责：统一识别事件级状态事实，避免物品、人物或关系的 close 被误当成整条事件结束。
+ * 维护边界：只有 MA_EVENT_STATUS（及可验证的旧版“事件状态”事实）有权打开或关闭事件线。
+ */
+const CLOSED_STATUS_RE = /(已完成|完成|已结束|结束|已关闭|关闭|已解决|解决|已归档|归档|closed|completed|resolved|ended|archived)/i;
+
+function text(value) {
+    return String(value ?? '').trim();
+}
+
+function eventIdOfFact(fact) {
+    return text(fact?.eventId ?? fact?.event_id ?? fact?.entityId ?? fact?.entity_id);
+}
+
+function isEventStatusFact(fact) {
+    if (!fact || typeof fact !== 'object')
+        return false;
+    const view = fact.view ?? fact.projectionHint ?? fact.projection_hint;
+    if (text(view?.moduleTag) === 'MA_EVENT_STATUS')
+        return true;
+    if (text(view?.semanticRole) === 'events'
+        && (text(view?.layerKind) === 'status' || text(view?.layerKey) === 'status')) {
+        return true;
+    }
+    // 旧版兼容必须同时满足事件类型与明确标题，不能仅凭同 event_id 下任意 close 推断。
+    const type = text(fact.type).toLowerCase();
+    return (type === 'events' || type === 'event') && /事件状态$/u.test(text(fact.title));
+}
+
+function eventStatusOrder(fact, index) {
+    const timestamp = Date.parse(text(fact?.updatedAt ?? fact?.updated_at ?? fact?.createdAt ?? fact?.created_at)) || 0;
+    return { fact, index, timestamp };
+}
+
+function latestEventStatusFact(facts, eventId = '') {
+    const target = text(eventId);
+    const candidates = (Array.isArray(facts) ? facts : [])
+        .map(eventStatusOrder)
+        .filter(({ fact }) => isEventStatusFact(fact) && (!target || eventIdOfFact(fact) === target));
+    if (!candidates.length)
+        return undefined;
+    return candidates.reduce((latest, current) => current.timestamp > latest.timestamp
+        || (current.timestamp === latest.timestamp && current.index > latest.index)
+        ? current
+        : latest).fact;
+}
+
+function eventStatusFactClosed(fact) {
+    if (!fact)
+        return false;
+    const operation = text(fact.operation ?? fact.lastOperation).toLowerCase();
+    return fact.active === false
+        || operation === 'close'
+        || Boolean(fact.validTo ?? fact.valid_to)
+        || CLOSED_STATUS_RE.test(text(fact.status));
+}
+
+/** undefined 表示本批次没有事件级状态权威信号。 */
+function eventClosedFromFacts(facts, eventId = '') {
+    const latest = latestEventStatusFact(facts, eventId);
+    return latest ? eventStatusFactClosed(latest) : undefined;
+}
+
+function eventStatusById(facts) {
+    const grouped = new Map();
+    for (const fact of Array.isArray(facts) ? facts : []) {
+        if (!isEventStatusFact(fact))
+            continue;
+        const eventId = eventIdOfFact(fact);
+        if (!eventId)
+            continue;
+        grouped.set(eventId, [...(grouped.get(eventId) ?? []), fact]);
+    }
+    const output = new Map();
+    for (const [eventId, values] of grouped) {
+        const latest = latestEventStatusFact(values, eventId);
+        if (latest)
+            output.set(eventId, { fact: latest, closed: eventStatusFactClosed(latest) });
+    }
+    return output;
+}
+
+}
+};
 __defs["domain/fact-contract.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
+Object.defineProperty(exports,"normalizeEvidenceKind",{enumerable:true,configurable:true,get:()=>normalizeEvidenceKind});
 Object.defineProperty(exports,"applyFactContractGate",{enumerable:true,configurable:true,get:()=>applyFactContractGate});
 Object.defineProperty(exports,"FACT_STORAGE_CLASSES",{enumerable:true,configurable:true,get:()=>FACT_STORAGE_CLASSES});
 Object.defineProperty(exports,"FACT_EVIDENCE_KINDS",{enumerable:true,configurable:true,get:()=>FACT_EVIDENCE_KINDS});
+Object.defineProperty(exports,"DEFAULT_EVIDENCE_KIND",{enumerable:true,configurable:true,get:()=>DEFAULT_EVIDENCE_KIND});
 /**
  * 模块职责：在模型事实进入账本前，统一补齐准入、唯一主宿主、切面、保存层级与有效区间。
  * 维护边界：只依据模型已返回模块、稳定投影和插件上下文分类；不得补写剧情事实或猜测旧对象身份。
  */
 const FACT_STORAGE_CLASSES = new Set(['working', 'episodic', 'event', 'durable']);
 const FACT_EVIDENCE_KINDS = new Set(['confirmed', 'recorded', 'reported', 'uncertain']);
+const DEFAULT_EVIDENCE_KIND = 'uncertain';
 
 const FACET_BY_LAYER_KEY = {
     baseContent: 'identity',
@@ -1982,6 +2069,12 @@ const FACET_BY_MODULE = {
 
 function text(value, limit = 240) {
     return safeText(value, limit).trim();
+}
+
+/** 事实证据等级的唯一归一化入口；未知值不得升级为硬事实。 */
+function normalizeEvidenceKind(value) {
+    const evidence = text(value, 40);
+    return FACT_EVIDENCE_KINDS.has(evidence) ? evidence : DEFAULT_EVIDENCE_KIND;
 }
 
 function objectValue(value) {
@@ -2177,10 +2270,87 @@ function applyFactContractGate(value, options = {}) {
         validTo,
         supersedesFactId: text(source.supersedesFactId ?? source.supersedes_fact_id, 180) || undefined,
         supersededByFactId: text(source.supersededByFactId ?? source.superseded_by_fact_id, 180) || undefined,
-        evidenceKind: FACT_EVIDENCE_KINDS.has(evidence) ? evidence : 'uncertain',
+        evidenceKind: normalizeEvidenceKind(evidence),
         projectionHint: admitted.view ? structuredClone(admitted.view) : undefined,
         view: admitted.view,
         admission: admitted.admission,
+    };
+}
+
+}
+};
+__defs["domain/fact-normalization.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+with(__scope){
+Object.defineProperty(exports,"normalizeFactStringList",{enumerable:true,configurable:true,get:()=>normalizeFactStringList});
+Object.defineProperty(exports,"normalizeFactTimeRange",{enumerable:true,configurable:true,get:()=>normalizeFactTimeRange});
+Object.defineProperty(exports,"normalizeFactView",{enumerable:true,configurable:true,get:()=>normalizeFactView});
+/**
+ * 模块职责：提供公开事实包与内部事实账本共享的纯归一化工具。
+ * 维护边界：只清洗字符串列表、时间范围和事实视图，不判断事实准入、宿主或生命周期。
+ */
+function normalizeFactStringList(value, limit = 24, itemLimit = 500) {
+    if (!Array.isArray(value))
+        return [];
+    return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
+}
+
+function normalizeFactTimeRange(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+        start: safeText(source.start, 120).trim() || undefined,
+        end: safeText(source.end, 120).trim() || undefined,
+        label: safeText(source.label, 240).trim() || undefined,
+    };
+}
+
+/**
+ * 事实视图的共享归一化入口。
+ * `preserveLegacyRelocation` 仅供旧内部事实迁移使用：它保持历史 relocation 负载，
+ * 新模型事实仍要求 id/fromTable/toTable 完整后才保留迁移指令。
+ */
+function normalizeFactView(value, { preserveLegacyRelocation = false } = {}) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const table = safeText(source.table, 100).trim();
+    const rowId = safeText(source.rowId, 160).trim();
+    const objectTitle = safeText(source.objectTitle, 240).trim();
+    if (!table || !rowId || !objectTitle)
+        return undefined;
+
+    let relocation;
+    if (source.relocation && typeof source.relocation === 'object') {
+        if (preserveLegacyRelocation) {
+            relocation = structuredClone(source.relocation);
+        }
+        else {
+            const candidate = {
+                id: safeText(source.relocation.id, 160).trim(),
+                title: safeText(source.relocation.title, 240).trim(),
+                fromTable: safeText(source.relocation.fromTable, 100).trim(),
+                toTable: safeText(source.relocation.toTable, 100).trim(),
+            };
+            relocation = candidate.id && candidate.fromTable && candidate.toTable ? candidate : undefined;
+        }
+    }
+
+    return {
+        table,
+        rowId,
+        objectTitle,
+        semanticRole: safeText(source.semanticRole, 80).trim(),
+        layerKind: safeText(source.layerKind, 40).trim(),
+        layerKey: safeText(source.layerKey, 100).trim() || undefined,
+        layerType: safeText(source.layerType, 40).trim() || undefined,
+        arrayOperation: safeText(source.arrayOperation, 24).trim() || undefined,
+        value: safeText(source.value, 6000).trim(),
+        keywords: normalizeFactStringList(source.keywords, 24, 100),
+        eventName: safeText(source.eventName, 240).trim(),
+        eventClosed: source.eventClosed === true,
+        relatedObjects: normalizeFactStringList(source.relatedObjects, 40, 240),
+        moduleTag: safeText(source.moduleTag, 80).trim(),
+        relocation,
+        baseRevisionStatement: safeText(source.baseRevisionStatement, 1200).trim() || undefined,
     };
 }
 
@@ -2193,6 +2363,10 @@ Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"isPurePassiveObserverText",{enumerable:true,configurable:true,get:()=>__require("domain/observer.js")["isPurePassiveObserverText"]});
 Object.defineProperty(__scope,"applyFactContractGate",{enumerable:true,configurable:true,get:()=>__require("domain/fact-contract.js")["applyFactContractGate"]});
+Object.defineProperty(__scope,"normalizeEvidenceKind",{enumerable:true,configurable:true,get:()=>__require("domain/fact-contract.js")["normalizeEvidenceKind"]});
+Object.defineProperty(__scope,"normalizeFactStringList",{enumerable:true,configurable:true,get:()=>__require("domain/fact-normalization.js")["normalizeFactStringList"]});
+Object.defineProperty(__scope,"normalizeFactTimeRange",{enumerable:true,configurable:true,get:()=>__require("domain/fact-normalization.js")["normalizeFactTimeRange"]});
+Object.defineProperty(__scope,"normalizeFactView",{enumerable:true,configurable:true,get:()=>__require("domain/fact-normalization.js")["normalizeFactView"]});
 with(__scope){
 Object.defineProperty(exports,"normalizeFacts",{enumerable:true,configurable:true,get:()=>normalizeFacts});
 Object.defineProperty(exports,"filterPassiveObserverFacts",{enumerable:true,configurable:true,get:()=>filterPassiveObserverFacts});
@@ -2202,61 +2376,19 @@ Object.defineProperty(exports,"normalizeFactPackage",{enumerable:true,configurab
  * 维护边界：只整理已显影事实，不在领域层补写隐私、隐藏关系、能力或未来结果。
  */
 const OPERATIONS = new Set(['create', 'update', 'append', 'close', 'supersede']);
-const CONFIDENCE = new Set(['confirmed', 'recorded', 'reported', 'uncertain']);
-function list(value, limit = 24, itemLimit = 500) {
-    if (!Array.isArray(value))
-        return [];
-    return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
-}
-function normalizeTimeRange(value) {
-    const source = value && typeof value === 'object' ? value : {};
-    return { start: safeText(source.start, 120).trim() || undefined, end: safeText(source.end, 120).trim() || undefined, label: safeText(source.label, 240).trim() || undefined };
-}
-function normalizeFactView(value) {
-    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    const table = safeText(source.table, 100).trim();
-    const rowId = safeText(source.rowId, 160).trim();
-    const objectTitle = safeText(source.objectTitle, 240).trim();
-    if (!table || !rowId || !objectTitle)
-        return undefined;
-    const relocation = source.relocation && typeof source.relocation === 'object' ? {
-        id: safeText(source.relocation.id, 160).trim(),
-        title: safeText(source.relocation.title, 240).trim(),
-        fromTable: safeText(source.relocation.fromTable, 100).trim(),
-        toTable: safeText(source.relocation.toTable, 100).trim(),
-    } : undefined;
-    return {
-        table,
-        rowId,
-        objectTitle,
-        semanticRole: safeText(source.semanticRole, 80).trim(),
-        layerKind: safeText(source.layerKind, 40).trim(),
-        layerKey: safeText(source.layerKey, 100).trim() || undefined,
-        layerType: safeText(source.layerType, 40).trim() || undefined,
-        arrayOperation: safeText(source.arrayOperation, 24).trim() || undefined,
-        value: safeText(source.value, 6000).trim(),
-        keywords: list(source.keywords, 24, 100),
-        eventName: safeText(source.eventName, 240).trim(),
-        eventClosed: source.eventClosed === true,
-        relatedObjects: list(source.relatedObjects, 40, 240),
-        moduleTag: safeText(source.moduleTag, 80).trim(),
-        relocation: relocation?.id && relocation.fromTable && relocation.toTable ? relocation : undefined,
-        baseRevisionStatement: safeText(source.baseRevisionStatement, 1200).trim() || undefined,
-    };
-}
 function normalizeFacts(value, options = {}) {
     if (!Array.isArray(value))
         return [];
     return value.map((item) => item && typeof item === 'object' ? item : {})
         .map((item, index) => {
         const operation = safeText(item.operation, 40).trim();
-        const confidence = safeText(item.confidence, 40).trim();
+        const confidence = normalizeEvidenceKind(item.confidence);
         const entityId = safeText(item.entityId ?? item.entity_id, 160).trim();
         const title = safeText(item.title, 240).trim();
         const content = safeText(item.content, 6000).trim();
         const id = safeText(item.factId ?? item.fact_id ?? item.id, 160).trim() || `fact_${hashText(`${entityId}|${title}|${content}|${index}`)}`;
-        const occurred = list(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1000);
-        const unresolved = list(item.unresolved ?? item.unresolvedItems, 30, 1000);
+        const occurred = normalizeFactStringList(item.occurred ?? item.occurredFacts ?? (content ? [content] : []), 30, 1000);
+        const unresolved = normalizeFactStringList(item.unresolved ?? item.unresolvedItems, 30, 1000);
         const view = normalizeFactView(item.view);
         const contract = applyFactContractGate({
             ...item,
@@ -2266,7 +2398,7 @@ function normalizeFacts(value, options = {}) {
             eventId: safeText(item.eventId ?? item.event_id, 160).trim() || undefined,
             title: title || `事实 ${index + 1}`,
             content: content || occurred.join('；'),
-            confidence: CONFIDENCE.has(confidence) ? confidence : 'uncertain',
+            confidence,
             view,
         }, {
             index,
@@ -2284,11 +2416,11 @@ function normalizeFacts(value, options = {}) {
             occurred,
             unresolved,
             status: safeText(item.status, 120).trim() || 'active',
-            timeRange: normalizeTimeRange(item.timeRange ?? item.time_range),
-            relatedEntities: list(item.relatedEntities ?? item.related_entities, 30, 240),
-            keywords: list(item.keywords, 24, 100),
+            timeRange: normalizeFactTimeRange(item.timeRange ?? item.time_range),
+            relatedEntities: normalizeFactStringList(item.relatedEntities ?? item.related_entities, 30, 240),
+            keywords: normalizeFactStringList(item.keywords, 24, 100),
             operation: OPERATIONS.has(operation) ? operation : 'update',
-            confidence: CONFIDENCE.has(confidence) ? confidence : 'uncertain',
+            confidence,
             evidenceKind: contract.evidenceKind,
             subjectRef: contract.subjectRef,
             primaryHost: contract.primaryHost,
@@ -2333,7 +2465,7 @@ __defs["domain/fixed-text.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
-Object.defineProperty(exports,"normalizeProtocolText",{enumerable:true,configurable:true,get:()=>normalizeProtocolText});
+Object.defineProperty(exports,"normalizeModelProtocolText",{enumerable:true,configurable:true,get:()=>normalizeModelProtocolText});
 Object.defineProperty(exports,"parseFixedTextBlocks",{enumerable:true,configurable:true,get:()=>parseFixedTextBlocks});
 Object.defineProperty(exports,"fixedTextValues",{enumerable:true,configurable:true,get:()=>fixedTextValues});
 Object.defineProperty(exports,"fixedTextValue",{enumerable:true,configurable:true,get:()=>fixedTextValue});
@@ -2341,16 +2473,26 @@ Object.defineProperty(exports,"fixedTextValue",{enumerable:true,configurable:tru
  * 模块职责：解析模型返回的固定标签文本协议。
  * 维护边界：只处理文本边界、重复字段和续行；业务字段、对象身份与持久化由各领域模块负责。
  */
-function normalizedMarker(value) {
-    return String(value || '').normalize('NFKC').trim().toUpperCase().replace(/\s+/g, '');
-}
-function normalizeProtocolText(raw) {
-    let source = safeText(raw, 240000).replace(/^\uFEFF/, '').replace(/[＜〈]/gu, '<').replace(/[＞〉]/gu, '>');
-    const fenced = source.trim().match(/^```(?:[a-z0-9_-]+)?\s*([\s\S]*?)```$/iu);
+/**
+ * 统一清理模型协议文本的常见外壳，但不猜测或补写业务标签。
+ * 容忍完整 Markdown 围栏、BOM、全角尖括号及模型思考区；正式结构仍由各解析器严格校验。
+ */
+function normalizeModelProtocolText(raw, max = 240000) {
+    let source = safeText(raw, max)
+        .replace(/^\uFEFF/, '')
+        .replace(/＜(\/?(?:MA_[A-Z_]+|think|analysis))＞/giu, '<$1>')
+        .trim();
+    const fenced = source.match(/^```(?:text|markdown|xml|html)?\s*([\s\S]*?)```$/iu);
     if (fenced)
-        source = fenced[1];
-    source = source.replace(/<\s*(\/?)\s*(MA_[^<>]+?)\s*>/giu, (_match, slash, tag) => `<${slash}${String(tag).normalize('NFKC').trim().toUpperCase().replace(/[\s-]+/g, '_')}>`);
-    return source.replace(/([^\n])(<\/?MA_[^<>]+>)/gu, '$1\n$2').replace(/(<\/?MA_[^<>]+>)([^\n])/gu, '$1\n$2').trim();
+        source = fenced[1].trim();
+    source = source
+        .replace(/<(?:think|analysis)\b[^>]*>[\s\S]*?<\/(?:think|analysis)>/giu, '')
+        .trim();
+    return source;
+}
+
+function normalizedMarker(value) {
+    return value.trim().toUpperCase();
 }
 function appendField(block, key, value) {
     const current = block.fields.get(key) ?? [];
@@ -2368,9 +2510,8 @@ function appendContinuation(block, key, value) {
  * 支持：英文/中文等号、英文/中文冒号、重复字段、多行续写、原文块。
  * 固定文本是提交协议而不是宽松标记提取：普通块必须用与起始标签配对的结束标签闭合。
  */
-function parseFixedTextBlocks(raw, markers, options = {}) {
-    const compatibility = options.compatibility === true;
-    const source = compatibility ? normalizeProtocolText(raw) : safeText(raw, 240000).replace(/^\uFEFF/, '');
+function parseFixedTextBlocks(raw, markers) {
+    const source = normalizeModelProtocolText(raw, 240000);
     const byStart = new Map(markers.map((item) => [normalizedMarker(item.start), item]));
     const byEnd = new Map(markers.map((item) => [normalizedMarker(item.end), item]));
     const blocks = [];
@@ -2405,9 +2546,7 @@ function parseFixedTextBlocks(raw, markers, options = {}) {
         const start = byStart.get(markerKey);
         if (start) {
             if (current && definition) {
-                if (!compatibility)
-                    throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
-                flush();
+                throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
             }
             definition = start;
             current = { kind: start.kind, fields: new Map(), raw: '', line: index + 1 };
@@ -2415,16 +2554,9 @@ function parseFixedTextBlocks(raw, markers, options = {}) {
         }
         const end = byEnd.get(markerKey);
         if (end) {
-            if (!current || !definition) {
-                if (compatibility)
-                    return;
+            if (!current || !definition)
                 throw new Error(`第 ${index + 1} 行出现未配对结束标签 ${end.end}`);
-            }
             if (markerKey !== normalizedMarker(definition.end)) {
-                if (compatibility) {
-                    flush();
-                    return;
-                }
                 throw new Error(`第 ${current.line} 行开始的 ${definition.start} 结束标签不匹配，期望 ${definition.end}`);
             }
             flush();
@@ -2449,10 +2581,7 @@ function parseFixedTextBlocks(raw, markers, options = {}) {
             appendContinuation(current, lastKey, sourceLine.trim());
     });
     if (current && definition) {
-        if (compatibility)
-            flush();
-        else
-            throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
+        throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
     }
     return blocks;
 }
@@ -2716,6 +2845,7 @@ Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configur
 Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
 Object.defineProperty(__scope,"linkedTargetRoles",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["linkedTargetRoles"]});
+Object.defineProperty(__scope,"eventStatusById",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventStatusById"]});
 with(__scope){
 Object.defineProperty(exports,"deriveSpacetimeChange",{enumerable:true,configurable:true,get:()=>deriveSpacetimeChange});
 Object.defineProperty(exports,"deriveSceneBoundary",{enumerable:true,configurable:true,get:()=>deriveSceneBoundary});
@@ -2741,16 +2871,13 @@ function factEventId(fact) {
 function factId(fact) {
     return text(fact.fact_id ?? fact.factId ?? fact.id);
 }
-function factClosed(fact) {
-    const operation = text(fact.operation).toLowerCase();
-    return operation === 'close' || CLOSED_STATUS_RE.test(text(fact.status));
-}
 function rowEventIds(row) {
     return [...new Set([...(row?.eventIds ?? []), row?.eventId].map(text).filter(Boolean))];
 }
 function activeRow(row) {
+    // 通用参与状态只读取结构化 status；正文可能包含“完成一次步骤”等局部结果，不能关闭整个容器。
     return !isEntryParticipationPaused(row)
-        && !CLOSED_STATUS_RE.test(rowText(row));
+        && !CLOSED_STATUS_RE.test(text(row?.status));
 }
 function currentSpacetime(snapshot, registry) {
     const table = tableByRole(registry, 'spacetime', false);
@@ -2793,7 +2920,23 @@ function deriveSceneBoundary(previous, next, registryValue, linkRules = undefine
     const targetRoles = linkedTargetRoles(linkRules, registry, 'spacetime');
     if (!targetRoles.size)
         return undefined;
-    return { ...change, targetRoles: [...targetRoles] };
+    const related = new Set(change.relatedObjectTokens ?? []);
+    const eventIds = new Set(change.eventIds ?? []);
+    for (const table of enabledTables(registry)) {
+        if (!targetRoles.has(table.role))
+            continue;
+        for (const row of previous[table.key] ?? []) {
+            const rowTokens = [row.id, row.title, ...(row.keywords ?? [])].map(identity).filter(Boolean);
+            const oldScene = table.role === 'scenes'
+                && (row.id === change.previousSceneId || identity(row.title) === identity(change.previousTitle));
+            const relatedObject = rowTokens.some((token) => related.has(token));
+            if (!oldScene && !relatedObject)
+                continue;
+            for (const eventId of rowEventIds(row))
+                eventIds.add(eventId);
+        }
+    }
+    return { ...change, eventIds: [...eventIds], targetRoles: [...targetRoles] };
 }
 function rowText(row) {
     const fields = row.fields ?? {};
@@ -2808,7 +2951,7 @@ function rowText(row) {
 function explicitTerminal(role, row) {
     const source = rowText(row);
     if (role === 'events')
-        return CLOSED_STATUS_RE.test(source);
+        return CLOSED_STATUS_RE.test(text(row?.status)) || isEntryParticipationPaused(row);
     if (role === 'scenes')
         return SCENE_TERMINAL_RE.test(source);
     if (role === 'items') {
@@ -2821,6 +2964,15 @@ function explicitTerminal(role, row) {
         return true;
     }
     return false;
+}
+function characterHasIndependentValue(row) {
+    const fields = row?.fields ?? {};
+    return Boolean(text(fields.baseContent)
+        || list(fields.relationshipStates).length
+        || list(fields.abilityStates).length
+        || list(fields.solidifiedHistory).length
+        || list(fields.absorbedMemory).length
+        || rowEventIds(row).length > 1);
 }
 function eventHost(snapshot, registry, eventId) {
     for (const table of enabledTables(registry).filter((item) => item.role === 'events')) {
@@ -2861,8 +3013,9 @@ function deriveIncrementalSettlementDirectives(input) {
                 touched.set(row.id, { table, patch, row });
         }
     }
-    const closedEventIds = new Set(input.facts.filter(factClosed).map(factEventId).filter(Boolean));
-    const activeEventIds = new Set(input.facts.filter((fact) => !factClosed(fact)).map(factEventId).filter(Boolean));
+    const eventStatuses = eventStatusById(input.facts);
+    const closedEventIds = new Set([...eventStatuses].filter(([, status]) => status.closed).map(([eventId]) => eventId));
+    const activeEventIds = new Set([...eventStatuses].filter(([, status]) => !status.closed).map(([eventId]) => eventId));
     const sceneBoundary = input.sceneBoundary;
     const currentPatchObjectTokens = new Set();
     for (const [tableKey, patches] of Object.entries(input.patchSnapshot ?? {})) {
@@ -2906,7 +3059,7 @@ function deriveIncrementalSettlementDirectives(input) {
     }
     const output = new Map();
     for (const { table, patch, row, sceneBoundary: fromSceneBoundary } of touched.values()) {
-        const protectedEntry = row.source === 'manual' || row.locked || row.lockMode === 'all' || row.lockMode === 'base' || row.id === input.focusObjectId;
+        const protectedEntry = row.source === 'manual' || row.locked || row.lockMode === 'all' || row.lockMode === 'base';
         if (protectedEntry)
             continue;
         const events = rowEventIds(row);
@@ -2920,6 +3073,9 @@ function deriveIncrementalSettlementDirectives(input) {
             continue;
         }
         if (fromSceneBoundary) {
+            // 没有任何明确 event_id 时不能进入无法被总结覆盖的永久 settling。
+            if (!(sceneBoundary.eventIds ?? []).length)
+                continue;
             if (table.role === 'scenes') {
                 output.set(row.id, {
                     sourceId: row.id,
@@ -2939,11 +3095,7 @@ function deriveIncrementalSettlementDirectives(input) {
                 const host = eventHost(input.snapshot, registry, eventId);
                 return host ? activeRow(host.row) : true;
             });
-            const fields = row.fields ?? {};
-            const persistentCharacter = Boolean(text(fields.baseContent)
-                || list(fields.relationshipStates).length
-                || list(fields.abilityStates).length
-                || events.length > 1);
+            const persistentCharacter = characterHasIndependentValue(row);
             if (!hasOpenCrossSceneEvent && !persistentCharacter) {
                 output.set(row.id, {
                     sourceId: row.id,
@@ -2976,11 +3128,7 @@ function deriveIncrementalSettlementDirectives(input) {
             continue;
         }
         // 没有基础定义、关系或能力层，且只服务于本事件的自动角色，视为临时 NPC。
-        const fields = row.fields ?? {};
-        const persistentCharacter = Boolean(text(fields.baseContent)
-            || list(fields.relationshipStates).length
-            || list(fields.abilityStates).length
-            || events.length > 1);
+        const persistentCharacter = characterHasIndependentValue(row);
         if ((table.role === 'characters' || table.role === 'state') && !persistentCharacter) {
             output.set(row.id, {
                 sourceId: row.id,
@@ -3015,6 +3163,10 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"applyFactContractGate",{enumerable:true,configurable:true,get:()=>__require("domain/fact-contract.js")["applyFactContractGate"]});
+Object.defineProperty(__scope,"normalizeEvidenceKind",{enumerable:true,configurable:true,get:()=>__require("domain/fact-contract.js")["normalizeEvidenceKind"]});
+Object.defineProperty(__scope,"normalizeFactStringList",{enumerable:true,configurable:true,get:()=>__require("domain/fact-normalization.js")["normalizeFactStringList"]});
+Object.defineProperty(__scope,"normalizeFactTimeRange",{enumerable:true,configurable:true,get:()=>__require("domain/fact-normalization.js")["normalizeFactTimeRange"]});
+Object.defineProperty(__scope,"normalizeFactView",{enumerable:true,configurable:true,get:()=>__require("domain/fact-normalization.js")["normalizeFactView"]});
 with(__scope){
 Object.defineProperty(exports,"normalizeInternalFact",{enumerable:true,configurable:true,get:()=>normalizeInternalFact});
 Object.defineProperty(exports,"normalizeInternalFacts",{enumerable:true,configurable:true,get:()=>normalizeInternalFacts});
@@ -3028,69 +3180,27 @@ Object.defineProperty(exports,"invalidateFactsAfterMessages",{enumerable:true,co
  * 模块职责：维护与可见表格数量无关的聊天级内部事实层。
  * 维护边界：表格删除、停用或重命名不得删除这里的事件线、消费标记或历史来源。
  */
-const CONFIDENCE = new Set(['confirmed', 'recorded', 'reported', 'uncertain']);
-function stringList(value, limit = 40, itemLimit = 500) {
-    if (!Array.isArray(value))
-        return [];
-    return [...new Set(value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean))].slice(0, limit);
-}
-function timeRange(value) {
-    const source = value && typeof value === 'object' ? value : {};
-    return {
-        start: safeText(source.start, 120).trim() || undefined,
-        end: safeText(source.end, 120).trim() || undefined,
-        label: safeText(source.label, 240).trim() || undefined,
-    };
-}
-function normalizeFactView(value) {
-    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    const table = safeText(source.table, 100).trim();
-    const rowId = safeText(source.rowId, 160).trim();
-    const objectTitle = safeText(source.objectTitle, 240).trim();
-    if (!table || !rowId || !objectTitle)
-        return undefined;
-    return {
-        table,
-        rowId,
-        objectTitle,
-        semanticRole: safeText(source.semanticRole, 80).trim(),
-        layerKind: safeText(source.layerKind, 40).trim(),
-        layerKey: safeText(source.layerKey, 100).trim() || undefined,
-        layerType: safeText(source.layerType, 40).trim() || undefined,
-        arrayOperation: safeText(source.arrayOperation, 24).trim() || undefined,
-        value: safeText(source.value, 6000).trim(),
-        keywords: stringList(source.keywords, 24, 100),
-        eventName: safeText(source.eventName, 240).trim(),
-        eventClosed: source.eventClosed === true,
-        relatedObjects: stringList(source.relatedObjects, 40, 240),
-        moduleTag: safeText(source.moduleTag, 80).trim(),
-        relocation: source.relocation && typeof source.relocation === 'object'
-            ? structuredClone(source.relocation)
-            : undefined,
-        baseRevisionStatement: safeText(source.baseRevisionStatement, 1200).trim() || undefined,
-    };
-}
 function normalizeInternalFact(value, sourceMessageId = '', index = 0) {
     const source = value && typeof value === 'object' ? value : {};
     const content = safeText(source.content, 6000).trim();
-    const occurred = stringList(source.occurredFacts ?? source.occurred ?? (content ? [content] : []), 30, 1000);
+    const occurred = normalizeFactStringList(source.occurredFacts ?? source.occurred ?? (content ? [content] : []), 30, 1000);
     if (!content && !occurred.length)
         return null;
     const title = safeText(source.title, 240).trim() || `事实 ${index + 1}`;
     const explicitFactId = safeText(source.factId ?? source.fact_id ?? source.id, 160).trim();
     const factId = explicitFactId || `fact_${hashText(`${title}|${content}|${index}`)}`;
     const status = safeText(source.status, 160).trim() || 'active';
-    const confidenceText = safeText(source.confidence, 40).trim();
-    const sourceIds = stringList(source.sourceMessageIds ?? source.source_message_ids, 40, 200);
+    const confidence = normalizeEvidenceKind(source.confidence);
+    const sourceIds = normalizeFactStringList(source.sourceMessageIds ?? source.source_message_ids, 40, 200);
     if (sourceMessageId && !sourceIds.includes(sourceMessageId))
         sourceIds.push(sourceMessageId);
-    const view = normalizeFactView(source.view ?? source.projectionHint ?? source.projection_hint);
+    const view = normalizeFactView(source.view ?? source.projectionHint ?? source.projection_hint, { preserveLegacyRelocation: true });
     const contract = applyFactContractGate({
         ...source,
         factId,
         title,
         content: content || occurred.join('；'),
-        confidence: CONFIDENCE.has(confidenceText) ? confidenceText : 'uncertain',
+        confidence,
         view,
     }, {
         index,
@@ -3102,17 +3212,17 @@ function normalizeInternalFact(value, sourceMessageId = '', index = 0) {
         factId,
         eventId: contract.eventId,
         sourceMessageIds: sourceIds,
-        pendingSourceMessageIds: stringList(source.pendingSourceMessageIds ?? source.pending_source_message_ids, 40, 200),
+        pendingSourceMessageIds: normalizeFactStringList(source.pendingSourceMessageIds ?? source.pending_source_message_ids, 40, 200),
         occurredFacts: occurred,
-        unresolvedItems: stringList(source.unresolvedItems ?? source.unresolved ?? source.openItems, 30, 1000),
+        unresolvedItems: normalizeFactStringList(source.unresolvedItems ?? source.unresolved ?? source.openItems, 30, 1000),
         status,
-        timeRange: timeRange(source.timeRange ?? source.time_range),
-        relatedEntities: stringList(source.relatedEntities ?? source.related_entities, 30, 240),
+        timeRange: normalizeFactTimeRange(source.timeRange ?? source.time_range),
+        relatedEntities: normalizeFactStringList(source.relatedEntities ?? source.related_entities, 30, 240),
         title,
         content: content || occurred.join('；'),
         type: safeText(source.type, 80).trim() || 'fact',
-        keywords: stringList(source.keywords, 24, 100),
-        confidence: CONFIDENCE.has(confidenceText) ? confidenceText : 'uncertain',
+        keywords: normalizeFactStringList(source.keywords, 24, 100),
+        confidence,
         evidenceKind: contract.evidenceKind,
         subjectRef: contract.subjectRef,
         primaryHost: contract.primaryHost,
@@ -3348,12 +3458,15 @@ Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"isEntryLifecycleHidden",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryLifecycleHidden"]});
 Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
 Object.defineProperty(__scope,"filterPassiveObservers",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["filterPassiveObservers"]});
-Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalObjectTitle"]});
-Object.defineProperty(__scope,"isPurePassiveObserverText",{enumerable:true,configurable:true,get:()=>__require("domain/observer.js")["isPurePassiveObserverText"]});
-Object.defineProperty(__scope,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["summaryIsCurrent"]});
 Object.defineProperty(__scope,"narrativeContextText",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["narrativeContextText"]});
+Object.defineProperty(__scope,"scheduleLorebookDocuments",{enumerable:true,configurable:true,get:()=>__require("domain/st-recall-scheduler.js")["scheduleLorebookDocuments"]});
+Object.defineProperty(__scope,"buildRecallSignalContext",{enumerable:true,configurable:true,get:()=>__require("domain/recall-signals.js")["buildRecallSignalContext"]});
+Object.defineProperty(__scope,"recallSignalsForFact",{enumerable:true,configurable:true,get:()=>__require("domain/recall-signals.js")["recallSignalsForFact"]});
+Object.defineProperty(__scope,"recallSignalsForNarrativeContext",{enumerable:true,configurable:true,get:()=>__require("domain/recall-signals.js")["recallSignalsForNarrativeContext"]});
+Object.defineProperty(__scope,"recallSignalsForRow",{enumerable:true,configurable:true,get:()=>__require("domain/recall-signals.js")["recallSignalsForRow"]});
+Object.defineProperty(__scope,"recallSignalsForSummary",{enumerable:true,configurable:true,get:()=>__require("domain/recall-signals.js")["recallSignalsForSummary"]});
 with(__scope){
 Object.defineProperty(exports,"filterSnapshotForLorebook",{enumerable:true,configurable:true,get:()=>filterSnapshotForLorebook});
 Object.defineProperty(exports,"unconsumedSmallSummaries",{enumerable:true,configurable:true,get:()=>unconsumedSmallSummaries});
@@ -3362,8 +3475,8 @@ Object.defineProperty(exports,"buildSemanticLorebookDocuments",{enumerable:true,
 Object.defineProperty(exports,"buildDetailedLorebookDocuments",{enumerable:true,configurable:true,get:()=>buildDetailedLorebookDocuments});
 Object.defineProperty(exports,"buildLorebookDocuments",{enumerable:true,configurable:true,get:()=>buildLorebookDocuments});
 /**
- * 模块职责：把承载当前、近期与历史层的对象/事件表格条目转换为 constant / trigger / vector 三种世界书文档。
- * 维护边界：不使用数值权重决定记忆进入上下文；不同信息点可共享 fact_id/event_id，去重只按条目身份与完全相同内容，再按总容量裁剪。
+ * 模块职责：把当前、近期与历史记忆编译为明确的激活类别与递归传播类别，再交给唯一 ST 调度器。
+ * 维护边界：不让模型决定召回类别或数值；不同信息点可共享 fact_id/event_id，去重只按条目身份与完全相同内容。
  */
 function registry(options) {
     return normalizeTableRegistry(options?.registry?.length ? options.registry : DEFAULT_TABLE_REGISTRY);
@@ -3458,62 +3571,29 @@ function rowContent(table, row, maxChars) {
     return fitWholeLines(uniqueContentLines(lines), maxChars);
 }
 function rowSearchText(row) { return `${row.title} ${row.content} ${row.status} ${row.keywords.join(' ')}`; }
-function isAudienceRow(row) {
-    if (row.source === 'manual' || row.locked)
-        return false;
-    return isPurePassiveObserverText(rowSearchText(row));
-}
 function normalizedName(value) { return canonicalObjectTitle(value); }
-function aliases(title) {
-    const raw = String(title || '').trim();
-    return uniq([normalizedName(raw), ...raw.split(/[｜|:：—–-]/).map(normalizedName)], 12);
-}
 /**
  * 活跃视图和世界书共同过滤纯旁观者，人工/锁定行不自动删除。
- * 发布前过滤只依据对象事实和保护规则；焦点不得改变对象是否参与发布，唯一效果在 recallModeFor。
+ * 发布前过滤只依据对象事实和保护规则；焦点不得改变对象是否参与发布，唯一效果在 activationPlanFor。
  */
 function filterSnapshotForLorebook(snapshot, customRegistry) {
     const tables = normalizeTableRegistry(customRegistry?.length ? customRegistry : DEFAULT_TABLE_REGISTRY);
-    // 世界书只消费已经提交的快照，不再自行创建场景、迁移对象或合并身份。
-    // 旧存档修复属于 repository 迁移，普通发布链不得成为第二套状态机。
+    // 世界书只消费已经提交的快照。它可以暂停 settling / 隐藏旧墓碑与空旁观者壳，
+    // 但不得再按“当前是否被事件提及”建立第二套对象参与权，否则持久对象会无故从世界书消失。
     const next = filterPassiveObservers(structuredClone(snapshot), tables);
-    for (const table of tables)
+    for (const table of tables) {
         next[table.key] ||= [];
-    for (const table of tables)
-        next[table.key] = (next[table.key] ?? []).filter((row) => !isEntryLifecycleHidden(row));
-    const stateKey = tableByRole(tables, 'characters', false)?.key || tableByRole(tables, 'state', false)?.key;
-    const eventKey = tableByRole(tables, 'events', false)?.key;
-    const relationKey = tableByRole(tables, 'relationships', false)?.key;
-    if (!stateKey)
-        return next;
-    const relevanceRows = [eventKey, relationKey].filter(Boolean).flatMap((key) => next[key] ?? []);
-    const relevance = normalizedName(relevanceRows.map(rowSearchText).join(' '));
-    next[stateKey] = (next[stateKey] ?? []).filter((row) => {
-        if (row.source === 'manual' || row.locked)
-            return true;
-        if (isAudienceRow(row))
-            return false;
-        const named = aliases(row.title).some((name) => name && relevance.includes(name));
-        const direct = /(核心参与|直接相关|交战|对战|行动者|目标|当事人)/i.test(rowSearchText(row));
-        return named || direct || !relevance;
-    });
-    const retainedNames = new Set(next[stateKey].flatMap((row) => aliases(row.title)));
-    for (const table of enabledTables(tables)) {
-        if (['focus', 'spacetime', 'scenes', 'characters', 'state', 'items', 'events', 'globalChanges', 'foundations'].includes(table.role))
-            continue;
-        next[table.key] = (next[table.key] ?? []).filter((row) => {
+        next[table.key] = next[table.key].filter((row) => {
+            if (isEntryLifecycleHidden(row))
+                return false;
             if (table.role === 'custom' && safeText(row.fields?.migrationStatus, 80).trim() === '已归并')
                 return false;
-            if (row.source === 'manual' || row.locked)
-                return true;
-            if (isAudienceRow(row))
-                return false;
-            const text = normalizedName(rowSearchText(row));
-            return !retainedNames.size || [...retainedNames].some((name) => text.includes(name)) || table.role === 'regions';
+            return true;
         });
     }
     return next;
 }
+
 function defaultTrigger(row) {
     const recall = row.recall ?? { any: [], all: [], exclude: [] };
     const any = uniq([...(recall.any ?? []), row.title, ...row.keywords], 32);
@@ -3523,7 +3603,9 @@ function isEssentialState(row) {
     return /(不可缺失|昏迷|重伤|濒死|死亡|失踪|被拘禁|封印|当前在场|当前相关|核心参与)/i.test(rowSearchText(row));
 }
 function isHistoricalSpacetime(row) {
-    return /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(rowSearchText(row));
+    // 与快照和 Runtime 使用同一参与权：正文中的“完成交易”不能把当前位置判成历史。
+    return isEntryParticipationPaused(row)
+        || /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(String(row?.status || ''));
 }
 function currentSpacetimeRowId(rows) {
     const active = rows.filter((row) => !isHistoricalSpacetime(row));
@@ -3532,82 +3614,47 @@ function currentSpacetimeRowId(rows) {
     const explicit = active.filter((row) => /(当前场景|当前位置|当前地点|当前时空|正在此处|当前所在|current|active)/i.test(rowSearchText(row)));
     return (explicit.at(-1) ?? active.at(-1))?.id;
 }
-function recallModeFor(role, row, options, _currentSpacetimeId) {
-    // Runtime V2 publishes one clean current-context entry as the only automatic
-    // continuity constant. Raw scene/spacetime working rows stay retrievable but
-    // can no longer pin stale machine state into every generation.
-    if ((role === 'characters' || role === 'state') && row.id === options.focusObjectId)
-        return 'constant';
-    if (role === 'globalChanges')
-        return 'constant';
-    if (role === 'foundations' && /(必要|规则|制度|禁止|必须|不可)/i.test(rowSearchText(row)))
-        return 'constant';
+function activationPlanFor(role, row, options, signals) {
+    const focused = (role === 'characters' || role === 'state') && row.id === options.focusObjectId;
+    if (focused)
+        return { activationClass: 'constant', propagation: 'isolated' };
+    if (options.latestContinuityConstant !== false && role === 'globalChanges' && signals.directInteraction)
+        return { activationClass: 'constant', propagation: 'isolated' };
+    if (options.latestContinuityConstant !== false && role === 'foundations' && /(必要|规则|制度|禁止|必须|不可)/i.test(rowSearchText(row)))
+        return { activationClass: 'constant', propagation: 'isolated' };
+    if (signals.currentScene || signals.currentLocation || signals.directInteraction || signals.mentionedThisTurn || signals.touchedThisTurn) {
+        return { activationClass: role === 'events' && options.vectorize ? 'hybrid' : 'trigger', propagation: ['characters', 'state', 'events', 'items', 'regions', 'scenes', 'spacetime'].includes(role) ? 'bridge' : 'terminal' };
+    }
+    if (signals.activeEvent || signals.unresolved) {
+        if (options.recursion !== false)
+            return { activationClass: 'recursive', propagation: ['characters', 'state', 'events', 'items', 'regions', 'scenes', 'spacetime'].includes(role) ? 'bridge' : 'terminal' };
+        return { activationClass: role === 'events' && options.vectorize ? 'hybrid' : 'trigger', propagation: 'terminal' };
+    }
     if (role === 'events' && options.vectorize)
-        return 'vector';
-    return 'trigger';
+        return { activationClass: 'vector', propagation: 'terminal' };
+    return { activationClass: 'trigger', propagation: ['characters', 'state', 'items', 'regions'].includes(role) ? 'bridge' : 'terminal' };
 }
 
-
-function semanticInsertionPolicy(document) {
-    const kind = String(document.kind || '');
-    const historical = document.recallMode === 'hybrid' || document.recallMode === 'vector' || kind.startsWith('summary:');
-    let bucket = 600;
-    let depth = 2;
-    if (document.disabled) {
-        bucket = 100;
-        depth = 8;
-    }
-    else if (kind === 'runtime:narrative-context') {
-        bucket = 1000;
-        depth = 0;
-    }
-    else if (kind === 'view:spacetime' || kind === 'view:state' || kind === 'view:characters') {
-        bucket = 850;
-        depth = 1;
-    }
-    else if (kind === 'view:events' || kind === 'fact') {
-        bucket = historical ? 500 : 700;
-        depth = historical ? 5 : 2;
-    }
-    else if (kind === 'view:foundations' || kind === 'view:globalChanges') {
-        bucket = 800;
-        depth = 1;
-    }
-    else if (historical) {
-        bucket = kind === 'summary:large' ? 400 : 480;
-        depth = kind === 'summary:large' ? 7 : 5;
-    }
-    const stableOffset = Number.parseInt(hashText(document.logicalKey || document.key), 36) % 37;
-    return {
-        // 概率不是记忆优先级。镜渊事实必须确定性触发，因此明确关闭随机概率过滤。
-        probability: 100,
-        useProbability: false,
-        depth,
-        order: bucket + stableOffset,
-    };
-}
-
-function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, factIds, eventIds, updatedAt, options, disabled = false) {
-    const constant = !disabled && mode === 'constant';
-    const vectorized = !disabled && mode === 'vector';
-    const keywords = !disabled && !constant ? trigger.any : [];
+function makeDocument(key, logicalKey, comment, content, kind, plan, trigger, factIds, eventIds, updatedAt, options, disabled = false, recallSignals = {}) {
+    const activationClass = disabled ? 'disabled' : plan.activationClass;
     return {
         key,
         logicalKey,
         comment: `[MA11] ${comment}`,
         content,
-        keywords,
-        constant,
-        vectorized,
+        keywords: [],
+        constant: false,
+        vectorized: false,
         disabled,
         order: 0,
         updatedAt,
         kind,
-        // Hybrid means keyword + vector are both available. This is metadata;
-        // SillyTavern receives the independent key/vectorized fields below.
-        recallMode: constant ? 'constant' : vectorized ? 'hybrid' : 'trigger',
+        activationClass,
+        recallMode: activationClass,
+        propagation: plan.propagation ?? 'terminal',
+        recallSignals,
         trigger,
-        vector: { similarityThreshold: Math.min(0.99, Math.max(0, Number(options.similarityThreshold) || 0.72)), maxResults: Math.max(1, Math.round(Number(options.maxVectorResults) || 8)) },
+        vector: { similarityThreshold: Math.min(0.99, Math.max(0, Number.isFinite(Number(options.similarityThreshold)) ? Number(options.similarityThreshold) : 0.72)), maxResults: Math.max(1, Math.round(Number(options.maxVectorResults) || 8)) },
         factIds: uniq(factIds, 100),
         eventIds: uniq(eventIds, 60),
         allowRecursion: options.recursion !== false,
@@ -3616,27 +3663,7 @@ function makeDocument(key, logicalKey, comment, content, kind, mode, trigger, fa
 
 function unconsumedSmallSummaries(small, large) {
     const legacy = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-    return small.filter((item) => summaryIsCurrent(item)
-        && item.recallEligible !== false
-        && !item.solidifiedByLargeSummaryId
-        && !item.supersededBySmallSummaryId
-        && !legacy.has(item.id));
-}
-function currentLargeSummaries(large) {
-    const byEvent = new Map();
-    for (const item of large ?? []) {
-        if (!summaryIsCurrent(item) || item.recallEligible === false)
-            continue;
-        const eventId = String(item.eventId || item.eventIds?.[0] || item.id || '').trim();
-        if (!eventId)
-            continue;
-        const previous = byEvent.get(eventId);
-        const newer = !previous
-            || String(item.createdAt || '').localeCompare(String(previous.createdAt || '')) > 0;
-        if (newer)
-            byEvent.set(eventId, item);
-    }
-    return [...byEvent.values()];
+    return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !legacy.has(item.id));
 }
 function relationLookups(snapshot, tables) {
     const objectTitles = new Map();
@@ -3674,7 +3701,7 @@ function rowForPublication(row, lookups) {
     }
     return next;
 }
-function tableDocuments(snapshot, options) {
+function tableDocuments(snapshot, options, signalContext) {
     if (!snapshot)
         return [];
     const tables = registry(options);
@@ -3686,10 +3713,12 @@ function tableDocuments(snapshot, options) {
         const currentSpacetimeId = table.role === 'spacetime' || table.role === 'scenes' ? currentSpacetimeRowId(rows) : undefined;
         for (const row of rows) {
             const readableRow = rowForPublication(row, lookups);
-            const mode = recallModeFor(table.role, row, options, currentSpacetimeId);
+            const signals = recallSignalsForRow(table.role, row, currentSpacetimeId, signalContext);
+            signals.focus = (table.role === 'characters' || table.role === 'state') && row.id === options.focusObjectId;
+            const plan = activationPlanFor(table.role, row, options, signals);
             const trigger = defaultTrigger(row);
             const titleToken = normalizedName(row.title) || row.id;
-            docs.push(makeDocument(`view:${table.key}:${row.id}`, `view:${table.key}:${titleToken}`, `MA｜${table.name}｜${row.title}`, rowContent(table, readableRow, Math.max(200, Number(options.entryLimits?.[table.key]) || Number(DEFAULT_CONTENT_LIMITS.tables[table.key]) || 1200)), `view:${table.role}`, mode, trigger, row.factIds ?? [], row.eventIds ?? (row.eventId ? [row.eventId] : []), row.updatedAt, options, isEntryParticipationPaused(row)));
+            docs.push(makeDocument(`view:${table.key}:${row.id}`, `view:${table.key}:${titleToken}`, `MA｜${table.name}｜${row.title}`, rowContent(table, readableRow, Math.max(200, Number(options.entryLimits?.[table.key]) || Number(DEFAULT_CONTENT_LIMITS.tables[table.key]) || 1200)), `view:${table.role}`, plan, trigger, row.factIds ?? [], row.eventIds ?? (row.eventId ? [row.eventId] : []), row.updatedAt, options, isEntryParticipationPaused(row), signals));
         }
     }
     return docs;
@@ -3733,7 +3762,7 @@ function factPublishingEnabled(fact, tables) {
     const matches = tables.filter((table) => table.role === role);
     return matches.length > 0 && matches.some((table) => table.enabled);
 }
-function factDocuments(facts, representedFactIds, representedEventIds, tables, options) {
+function factDocuments(facts, representedFactIds, representedEventIds, tables, options, signalContext) {
     const docs = [];
     for (const fact of facts ?? []) {
         const factId = String(factValue(fact, 'factId', 'fact_id') ?? '').trim();
@@ -3761,19 +3790,27 @@ function factDocuments(facts, representedFactIds, representedEventIds, tables, o
             continue;
         const related = factList(fact, 'relatedEntities', 'related_entities');
         const keywords = uniq([...(fact.keywords ?? []), title, ...related], 32);
-        const historical = fact.active === false
-            || Boolean(fact.consumedBySmallSummaryId)
-            || Boolean(fact.solidifiedByLargeSummaryId)
+        const signals = recallSignalsForFact(fact, signalContext);
+        const historical = signals.historical
             || /(closed|resolved|ended|archived|结束|已解决|已关闭|已归档)/i.test(String(fact.status || ''));
-        const mode = historical && options.vectorize ? 'vector' : 'trigger';
-        docs.push(makeDocument(`fact:${factId}`, `fact:${factId}`, `MA｜事实｜${title}`, text, 'fact', mode, { any: keywords, all: [], exclude: [] }, [factId], eventId ? [eventId] : [], fact.updatedAt || fact.createdAt, options));
+        signals.historical = historical;
+        let plan;
+        if (historical && options.vectorize)
+            plan = { activationClass: 'vector', propagation: 'terminal' };
+        else if ((signals.activeEvent || signals.unresolved) && options.recursion !== false && !signals.directInteraction && !signals.touchedThisTurn)
+            plan = { activationClass: 'recursive', propagation: 'terminal' };
+        else if ((signals.activeEvent || signals.unresolved) && options.vectorize)
+            plan = { activationClass: 'hybrid', propagation: 'terminal' };
+        else
+            plan = { activationClass: 'trigger', propagation: 'terminal' };
+        docs.push(makeDocument(`fact:${factId}`, `fact:${factId}`, `MA｜事实｜${title}`, text, 'fact', plan, { any: keywords, all: [], exclude: [] }, [factId], eventId ? [eventId] : [], fact.updatedAt || fact.createdAt, options, false, signals));
     }
     return docs;
 }
-function summaryFallbackDocuments(small, large, representedEventIds, options) {
+function summaryFallbackDocuments(small, large, representedEventIds, options, signalContext) {
     const docs = [];
     const candidates = [
-        ...currentLargeSummaries(large ?? []).map((item) => ({ ...item, fallbackKind: 'large' })),
+        ...(large ?? []).map((item) => ({ ...item, fallbackKind: 'large' })),
         ...unconsumedSmallSummaries(small ?? [], large ?? []).map((item) => ({ ...item, fallbackKind: 'small' })),
     ];
     for (const summary of candidates) {
@@ -3788,21 +3825,30 @@ function summaryFallbackDocuments(small, large, representedEventIds, options) {
         if (!text)
             continue;
         const id = String(summary.id || `${summary.fallbackKind}:${eventId}`);
-        const mode = options.vectorize ? 'vector' : 'trigger';
-        docs.push(makeDocument(`summary:${id}`, `summary:${id}`, `MA｜总结回退｜${summary.title || eventId}`, text, `summary:${summary.fallbackKind}`, mode, { any: uniq([...(summary.keywords ?? []), summary.title, eventId], 32), all: [], exclude: [] }, summary.sourceFactIds ?? [], [eventId], summary.createdAt, options));
+        const signals = recallSignalsForSummary(summary, summary.fallbackKind, signalContext);
+        let plan;
+        if (summary.fallbackKind === 'large')
+            plan = { activationClass: options.vectorize ? 'vector' : 'trigger', propagation: 'terminal' };
+        else if ((signals.activeEvent || signals.unresolved) && options.vectorize)
+            plan = { activationClass: 'hybrid', propagation: 'terminal' };
+        else if ((signals.activeEvent || signals.unresolved) && options.recursion !== false)
+            plan = { activationClass: 'recursive', propagation: 'terminal' };
+        else
+            plan = { activationClass: options.vectorize ? 'vector' : 'trigger', propagation: 'terminal' };
+        docs.push(makeDocument(`summary:${id}`, `summary:${id}`, `MA｜总结回退｜${summary.title || eventId}`, text, `summary:${summary.fallbackKind}`, plan, { any: uniq([...(summary.keywords ?? []), summary.title, eventId], 32), all: [], exclude: [] }, summary.sourceFactIds ?? [], [eventId], summary.createdAt, options, false, signals));
         representedEventIds.add(eventId);
     }
     return docs;
 }
 /** 编译完整保存集合；SillyTavern 在运行时负责关键词、向量条数与上下文容量限制。 */
 function selectLorebookDocuments(documents, options) {
-    const modeRank = { constant: 0, trigger: 1, hybrid: 2, vector: 2 };
+    const modeRank = { constant: 0, trigger: 1, recursive: 2, hybrid: 3, vector: 4, disabled: 5 };
     const selectionMode = (document) => {
         const focusedCharacter = Boolean(options.focusObjectId
             && ['view:characters', 'view:state'].includes(document.kind)
             && document.key.endsWith(`:${options.focusObjectId}`));
         // 焦点只改变入选角色的召回模式；选择、排序与容量裁剪仍按普通角色处理。
-        return focusedCharacter ? 'trigger' : document.recallMode;
+        return focusedCharacter ? 'trigger' : (document.activationClass || document.recallMode);
     };
     // 模式顺序来自产品召回流程；同一模式按事实更新时间和稳定键排序，绝不使用 UI order、importance 或权重裁剪记忆。
     const ordered = [...documents].sort((a, b) => {
@@ -3822,53 +3868,66 @@ function selectLorebookDocuments(documents, options) {
             continue;
         // disable 条目不进入主模型上下文预算，但必须留在期望计划中，确保 ST 原条目被真正暂停而非提前删除。
         if (doc.disabled) {
-            output.push({ ...doc, constant: false, vectorized: false, keywords: [], ...semanticInsertionPolicy(doc) });
+            output.push({ ...doc, activationClass: 'disabled', recallMode: 'disabled', constant: false, vectorized: false, keywords: [], order: 1 });
             seenKeys.add(doc.key);
             continue;
         }
         const contentIdentity = doc.content.replace(/\s+/g, ' ').trim();
         if (contentIdentity && seenContents.has(contentIdentity))
             continue;
-        output.push({ ...doc, ...semanticInsertionPolicy(doc) });
+        output.push({ ...doc });
         seenKeys.add(doc.key);
         if (contentIdentity)
             seenContents.add(contentIdentity);
     }
-    return output;
+    return scheduleLorebookDocuments(output);
 }
 function narrativeContextDocument(options) {
     const content = narrativeContextText(options.narrativeContext);
     if (!content || content === '[当前叙事上下文]')
         return null;
+    const constant = options.latestContinuityConstant !== false;
+    const trigger = {
+        any: uniq([
+            options.narrativeContext?.location,
+            options.narrativeContext?.scene,
+            options.narrativeContext?.stage,
+            options.narrativeContext?.goal,
+            ...(options.narrativeContext?.activeEvents ?? []),
+        ], 24),
+        all: [],
+        exclude: [],
+    };
+    const activationClass = constant ? 'constant' : 'trigger';
     return {
         key: 'runtime:narrative-context',
         logicalKey: 'runtime:narrative-context',
         comment: '[MA11] MA｜当前叙事上下文',
         content,
         keywords: [],
-        constant: true,
+        constant: false,
         vectorized: false,
         disabled: false,
-        order: 1000,
-        depth: 0,
-        probability: 100,
-        useProbability: false,
+        order: 1,
         updatedAt: options.narrativeContext?.generatedAt || '',
         kind: 'runtime:narrative-context',
-        recallMode: 'constant',
-        trigger: { any: [], all: [], exclude: [] },
+        activationClass,
+        recallMode: activationClass,
+        propagation: 'isolated',
+        recallSignals: recallSignalsForNarrativeContext(options.signalContext),
+        trigger,
         vector: { similarityThreshold: 0, maxResults: 1 },
         factIds: [],
         eventIds: [],
-        // Current-context projection is a terminal projection and must not fan
-        // out through recursive lorebook activation.
         allowRecursion: false,
     };
 }
 
 function buildSemanticLorebookDocuments(snapshot, small, large, options) {
     const tables = registry(options);
-    const views = tableDocuments(snapshot, options);
+    const signalContext = buildRecallSignalContext({ ...options, snapshot });
+    options = { ...options, signalContext };
+    const views = tableDocuments(snapshot, options, signalContext);
     // 生命周期暂停只暂停原视图，不能占用事实/总结的代表资格；否则 settling 条目会形成召回空洞。
     const activeViews = views.filter((item) => !item.disabled);
     const representedFactIds = new Set(activeViews.flatMap((item) => item.factIds ?? []));
@@ -3877,11 +3936,11 @@ function buildSemanticLorebookDocuments(snapshot, small, large, options) {
     const eventPublishingEnabled = Boolean(tableByRole(tables, 'events', false)?.enabled);
     // 已结算事件优先由总结承接；没有可用总结时才回退到正式事实。
     const summaryFallbacks = eventPublishingEnabled
-        ? summaryFallbackDocuments(small, large, representedEventIds, options)
+        ? summaryFallbackDocuments(small, large, representedEventIds, options, signalContext)
         : [];
     const summaryEventIds = new Set(summaryFallbacks.flatMap((item) => item.eventIds ?? []));
     const representedByViewOrSummary = new Set([...representedEventIds, ...summaryEventIds]);
-    const factFallbacks = factDocuments(facts, representedFactIds, representedByViewOrSummary, tables, options);
+    const factFallbacks = factDocuments(facts, representedFactIds, representedByViewOrSummary, tables, options, signalContext);
     const currentContext = narrativeContextDocument(options);
     return selectLorebookDocuments([...(currentContext ? [currentContext] : []), ...views, ...factFallbacks, ...summaryFallbacks], options);
 }
@@ -3890,88 +3949,6 @@ function buildDetailedLorebookDocuments(snapshot, small, large, options) {
 }
 function buildLorebookDocuments(snapshot, small, large, options) {
     return options.layout === 'detailed' ? buildDetailedLorebookDocuments(snapshot, small, large, options) : buildSemanticLorebookDocuments(snapshot, small, large, options);
-}
-
-}
-};
-__defs["domain/memory-layer-reconciliation.js"]=function(exports,__require){
-const __scope=Object.create(null);
-Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
-with(__scope){
-Object.defineProperty(exports,"reconcileConsumedFactLayers",{enumerable:true,configurable:true,get:()=>reconcileConsumedFactLayers});
-/**
- * 模块职责：用已消费/已替换的正式事实清理对象视图中的当前层副本。
- * 维护边界：只删除能够由 fact.view 精确定位或已在历史层完全同义出现的文本；不猜测剧情含义。
- */
-function identity(value) {
-    return String(value ?? '').normalize('NFKC').toLowerCase()
-        .replace(/[\s\u3000]+/g, '')
-        .replace(/[，。！？；：、,.!?;:'"“”‘’（）()【】\[\]{}<>《》—–_-]+/g, '');
-}
-function dedupe(values) {
-    const output = [];
-    const seen = new Set();
-    for (const raw of Array.isArray(values) ? values : []) {
-        const value = String(raw ?? '').trim();
-        const key = identity(value);
-        if (!value || !key || seen.has(key))
-            continue;
-        seen.add(key);
-        output.push(value);
-    }
-    return output;
-}
-function removeIdentities(values, removals) {
-    return dedupe(values).filter((item) => !removals.has(identity(item)));
-}
-
-function reconcileConsumedFactLayers(snapshot, facts, registryValue) {
-    const next = structuredClone(snapshot ?? {});
-    const registry = normalizeTableRegistry(registryValue);
-    const byRow = new Map();
-    for (const fact of facts ?? []) {
-        const view = fact?.view;
-        if (!view?.table || !view?.rowId || !view?.layerKey || !view?.value)
-            continue;
-        const covered = Boolean(fact.consumedBySmallSummaryId || fact.solidifiedByLargeSummaryId);
-        const superseded = Boolean(fact.supersededByFactId || fact.active === false);
-        if (!covered && !superseded)
-            continue;
-        if (fact.storageClass === 'durable' && !superseded)
-            continue;
-        const key = `${view.table}|${view.rowId}`;
-        const record = byRow.get(key) ?? { currentFacts: new Set(), currentStates: new Set(), factIds: new Set() };
-        record.factIds.add(fact.factId);
-        if (view.layerKey === 'currentFacts' && (covered || superseded))
-            record.currentFacts.add(identity(view.value));
-        if (view.layerKey === 'currentStates' && (superseded || fact.view?.eventClosed === true || fact.solidifiedByLargeSummaryId))
-            record.currentStates.add(identity(view.value));
-        byRow.set(key, record);
-    }
-    let changed = false;
-    for (const table of registry) {
-        for (const row of next[table.key] ?? []) {
-            row.fields ||= {};
-            const history = new Set([
-                ...(row.fields.recentHistory ?? []),
-                ...(row.fields.solidifiedHistory ?? []),
-            ].map(identity).filter(Boolean));
-            const record = byRow.get(`${table.key}|${row.id}`);
-            const currentFactRemovals = new Set([...(record?.currentFacts ?? []), ...history]);
-            const beforeFacts = JSON.stringify(row.fields.currentFacts ?? []);
-            const beforeStates = JSON.stringify(row.fields.currentStates ?? []);
-            if (Array.isArray(row.fields.currentFacts))
-                row.fields.currentFacts = removeIdentities(row.fields.currentFacts, currentFactRemovals);
-            if (Array.isArray(row.fields.currentStates))
-                row.fields.currentStates = removeIdentities(row.fields.currentStates, record?.currentStates ?? new Set());
-            if (record?.factIds?.size)
-                row.factIds = (row.factIds ?? []).filter((id) => !record.factIds.has(id));
-            if (beforeFacts !== JSON.stringify(row.fields.currentFacts ?? [])
-                || beforeStates !== JSON.stringify(row.fields.currentStates ?? []))
-                changed = true;
-        }
-    }
-    return { snapshot: next, changed };
 }
 
 }
@@ -4034,7 +4011,10 @@ function preserveProtectedRows(previous, next, registryValue) {
             const protectedRow = cloneProtectedRow(row);
             const title = canonicalObjectTitle(row.title);
             const titleIndexes = title ? nextIndexesByTitle.get(title) ?? [] : [];
-            const existingIndex = nextIndexById.get(row.id) ?? titleIndexes[0];
+            if (titleIndexes.length > 1)
+                throw new Error(`保护层合并前仍存在重复规范名称：${table.key}/${row.title}`);
+            const titleIndex = titleIndexes.length === 1 ? titleIndexes[0] : undefined;
+            const existingIndex = nextIndexById.get(row.id) ?? titleIndex;
             if (existingIndex === undefined) {
                 nextIndexById.set(row.id, next[key].length);
                 next[key].push(protectedRow);
@@ -4214,19 +4194,13 @@ __defs["domain/object-identity.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"dedupeStrongStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/state-text.js")["dedupeStrongStateRows"]});
+Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-key.js")["canonicalObjectTitle"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
+Object.defineProperty(exports,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-key.js")["canonicalObjectTitle"]});
 with(__scope){
-Object.defineProperty(exports,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>canonicalObjectTitle});
 Object.defineProperty(exports,"rewriteObjectReferences",{enumerable:true,configurable:true,get:()=>rewriteObjectReferences});
 Object.defineProperty(exports,"alignPatchRowsToCanonicalSnapshot",{enumerable:true,configurable:true,get:()=>alignPatchRowsToCanonicalSnapshot});
 Object.defineProperty(exports,"canonicalizeObjectIdentities",{enumerable:true,configurable:true,get:()=>canonicalizeObjectIdentities});
-function canonicalObjectTitle(value) {
-    return String(value ?? '')
-        .normalize('NFKC')
-        .trim()
-        .toLocaleLowerCase()
-        .replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, '');
-}
 function stringArray(value, itemLimit = 500) {
     return Array.isArray(value) ? value.map((item) => safeText(item, itemLimit).trim()).filter(Boolean) : [];
 }
@@ -4462,10 +4436,29 @@ function canonicalizeObjectIdentities(previous, incoming, registry) {
 
 }
 };
+__defs["domain/object-key.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>canonicalObjectTitle});
+/**
+ * 模块职责：提供跨领域复用的对象标题规范键。
+ * 维护边界：这里只做确定性的文本归一化，不读取表格、状态或对象身份。
+ */
+function canonicalObjectTitle(value) {
+    return String(value ?? '')
+        .normalize('NFKC')
+        .trim()
+        .toLocaleLowerCase()
+        .replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, '');
+}
+
+}
+};
 __defs["domain/observer.js"]=function(exports,__require){
 const __scope=Object.create(null);
 with(__scope){
 Object.defineProperty(exports,"isPurePassiveObserverText",{enumerable:true,configurable:true,get:()=>isPurePassiveObserverText});
+Object.defineProperty(exports,"isDisposablePassiveObserverRow",{enumerable:true,configurable:true,get:()=>isDisposablePassiveObserverRow});
 /**
  * 模块职责：提供事实、快照与世界书发布共用的纯旁观判定。
  * 维护边界：含旁观措辞但产生明确因果介入时必须保留；否定介入不能被误判为介入。
@@ -4479,6 +4472,32 @@ function isPurePassiveObserverText(value) {
         return false;
     const affirmativeText = text.replace(NEGATED_INTERVENTION, '');
     return !CAUSAL_INTERVENTION.test(affirmativeText);
+}
+
+
+function list(value) {
+    return Array.isArray(value) ? value.map((item) => String(item ?? '').trim()).filter(Boolean) : [];
+}
+
+/**
+ * 只识别可在录入末端直接丢弃的“新建空壳背景角色”。
+ * 已有事实、事件锚点、基础层或任何记忆层的对象必须进入正常生命周期，不能被旁观过滤物理删除。
+ */
+function isDisposablePassiveObserverRow(row, role = '') {
+    if (!['characters', 'state'].includes(String(role || '')))
+        return false;
+    if (!row || row.source === 'manual' || row.locked || row.lockMode === 'all' || row.lockMode === 'base' || row.entryLifecycle)
+        return false;
+    if (list(row.factIds).length || list(row.eventIds).length || String(row.eventId ?? '').trim())
+        return false;
+    const fields = row.fields ?? {};
+    const durableKeys = [
+        'baseContent', 'currentFacts', 'currentStates', 'recentHistory', 'solidifiedHistory',
+        'relationshipStates', 'abilityStates', 'presentationStates', 'absorbedMemory',
+    ];
+    if (durableKeys.some((key) => Array.isArray(fields[key]) ? list(fields[key]).length : String(fields[key] ?? '').trim()))
+        return false;
+    return isPurePassiveObserverText(`${row.title ?? ''} ${row.content ?? ''} ${row.status ?? ''} ${list(row.keywords).join(' ')}`);
 }
 
 }
@@ -4696,6 +4715,339 @@ function suppressedLorebookEntries(state) {
 
 }
 };
+__defs["domain/recall-signals.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"eventStatusById",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventStatusById"]});
+Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
+Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
+with(__scope){
+Object.defineProperty(exports,"buildRecallSignalContext",{enumerable:true,configurable:true,get:()=>buildRecallSignalContext});
+Object.defineProperty(exports,"recallSignalsForRow",{enumerable:true,configurable:true,get:()=>recallSignalsForRow});
+Object.defineProperty(exports,"recallSignalsForFact",{enumerable:true,configurable:true,get:()=>recallSignalsForFact});
+Object.defineProperty(exports,"recallSignalsForSummary",{enumerable:true,configurable:true,get:()=>recallSignalsForSummary});
+Object.defineProperty(exports,"recallSignalsForNarrativeContext",{enumerable:true,configurable:true,get:()=>recallSignalsForNarrativeContext});
+/**
+ * 模块职责：只从已经提交的快照、正式事实和 Runtime V2 计算世界书动态召回信号。
+ * 维护边界：不写 ST 字段，不让模型决定常驻、递归、向量、深度或顺序；焦点只作为常驻分类信号。
+ */
+function text(value) {
+    return String(value ?? '').trim();
+}
+
+function list(value) {
+    return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
+}
+
+function normalized(value) {
+    return text(value).normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ');
+}
+
+function includesToken(haystack, token) {
+    const needle = normalized(token);
+    return needle.length >= 2 && normalized(haystack).includes(needle);
+}
+
+function turnIndexMap(runtimeV2, currentTurnKey, currentTurnIndex) {
+    const output = new Map();
+    for (const item of runtimeV2?.journal ?? []) {
+        const key = text(item?.turnKey);
+        const index = Number(item?.turnIndex);
+        if (key && Number.isInteger(index))
+            output.set(key, index);
+    }
+    const machineKey = text(runtimeV2?.machines?.turn?.lastTurnKey);
+    const machineIndex = Number(runtimeV2?.machines?.turn?.lastTurnIndex);
+    if (machineKey && Number.isInteger(machineIndex))
+        output.set(machineKey, machineIndex);
+    if (currentTurnKey && Number.isInteger(currentTurnIndex))
+        output.set(currentTurnKey, currentTurnIndex);
+    return output;
+}
+
+function factSourceTurnIndex(fact, indexes) {
+    let latest = -1;
+    for (const key of [
+        ...list(fact?.sourceMessageIds ?? fact?.source_message_ids),
+        ...list(fact?.pendingSourceMessageIds ?? fact?.pending_source_message_ids),
+    ]) {
+        const index = indexes.get(key);
+        if (Number.isInteger(index))
+            latest = Math.max(latest, index);
+    }
+    return latest;
+}
+
+function unresolvedFrom(value) {
+    if (Array.isArray(value))
+        return value.some((item) => text(item));
+    return /(未决|尚未|仍需|待处理|待完成|待确认|未解决|目标|任务|承诺|约束)/i.test(text(value));
+}
+
+function rowText(row) {
+    return [
+        row?.title,
+        row?.content,
+        row?.status,
+        ...(row?.keywords ?? []),
+        ...Object.values(row?.fields ?? {}).flatMap((value) => Array.isArray(value) ? value : [value]),
+    ].map(text).filter(Boolean).join(' ');
+}
+
+function currentSceneInstance(runtimeV2) {
+    const id = text(runtimeV2?.machines?.scene?.currentInstanceId);
+    return id ? runtimeV2?.machines?.scene?.instances?.[id] : undefined;
+}
+
+function buildRecallSignalContext(options = {}) {
+    const runtimeV2 = options.runtimeV2 && typeof options.runtimeV2 === 'object' ? options.runtimeV2 : {};
+    const narrative = options.narrativeContext ?? runtimeV2.narrativeContext ?? {};
+    const currentTurnIndex = Number.isInteger(Number(options.currentTurnIndex))
+        ? Number(options.currentTurnIndex)
+        : Number.isInteger(Number(runtimeV2?.machines?.turn?.lastTurnIndex))
+            ? Number(runtimeV2.machines.turn.lastTurnIndex)
+            : -1;
+    const currentTurnKey = text(options.currentTurnKey || runtimeV2?.machines?.turn?.lastTurnKey);
+    const indexes = turnIndexMap(runtimeV2, currentTurnKey, currentTurnIndex);
+    const facts = Array.isArray(options.internalFacts) ? options.internalFacts : [];
+    const factsById = new Map();
+    const lastSeenByFactId = new Map();
+    for (const fact of facts) {
+        const factId = text(fact?.factId ?? fact?.fact_id);
+        if (!factId)
+            continue;
+        factsById.set(factId, fact);
+        lastSeenByFactId.set(factId, factSourceTurnIndex(fact, indexes));
+    }
+    const currentScene = currentSceneInstance(runtimeV2);
+    const activeEventIds = new Set(list(currentScene?.eventIds));
+    const eventStates = eventStatusById(facts);
+    for (const [eventId, state] of eventStates) {
+        if (!state.closed)
+            activeEventIds.add(eventId);
+    }
+    const activeNarrativeTokens = list(narrative?.activeEvents).map(normalized).filter(Boolean);
+    const eventTable = tableByRole(normalizeTableRegistry(options.registry ?? []), 'events', false);
+    for (const row of eventTable ? (options.snapshot?.[eventTable.key] ?? []) : []) {
+        const titleToken = normalized(row?.title);
+        if (!titleToken || !activeNarrativeTokens.some((token) => token.includes(titleToken) || titleToken.includes(token)))
+            continue;
+        for (const eventId of [row?.id, row?.eventId, ...(row?.eventIds ?? [])].map(text).filter(Boolean))
+            activeEventIds.add(eventId);
+    }
+    const activeEventTokens = new Set([
+        ...activeNarrativeTokens,
+        ...[...activeEventIds].map(normalized),
+    ].filter(Boolean));
+    const currentPlayerText = text(options.currentPlayerText);
+    const currentAssistantText = text(options.currentAssistantText);
+    const currentContextText = [
+        narrative?.location,
+        narrative?.scene,
+        narrative?.stage,
+        narrative?.goal,
+        ...list(narrative?.activeEvents),
+        ...list(narrative?.effectiveFacts),
+    ].map(text).filter(Boolean).join(' ');
+    const currentObjectTokens = new Set();
+    const tables = normalizeTableRegistry(options.registry ?? []);
+    const sceneTables = tables.filter((table) => ['scenes', 'spacetime'].includes(table.role));
+    for (const table of sceneTables) {
+        for (const row of options.snapshot?.[table.key] ?? []) {
+            const title = text(row?.title);
+            const current = includesToken(currentContextText, title)
+                || /(当前场景|当前位置|当前地点|当前时空|正在此处|current)/i.test([row?.status, row?.content].map(text).join(' '));
+            if (!current)
+                continue;
+            for (const item of [row?.id, row?.title, ...(row?.fields?.relatedObjects ?? [])].map(text).filter(Boolean))
+                currentObjectTokens.add(normalized(item));
+        }
+    }
+    if (eventTable) {
+        for (const row of options.snapshot?.[eventTable.key] ?? []) {
+            const rowEventIds = [row?.id, row?.eventId, ...(row?.eventIds ?? [])].map(text).filter(Boolean);
+            if (!rowEventIds.some((id) => activeEventIds.has(id)) && !includesToken(currentContextText, row?.title))
+                continue;
+            for (const item of [row?.title, ...(row?.fields?.relatedObjects ?? [])].map(text).filter(Boolean))
+                currentObjectTokens.add(normalized(item));
+        }
+    }
+    return {
+        currentTurnIndex,
+        currentTurnKey,
+        indexes,
+        factsById,
+        lastSeenByFactId,
+        activeEventIds,
+        activeEventTokens,
+        narrative,
+        currentScene,
+        currentPlayerText,
+        currentAssistantText,
+        currentContextText,
+        currentObjectTokens,
+    };
+}
+
+function latestTurnFromFactIds(factIds, context) {
+    let latest = -1;
+    for (const factId of list(factIds)) {
+        const index = context.lastSeenByFactId.get(factId);
+        if (Number.isInteger(index))
+            latest = Math.max(latest, index);
+    }
+    return latest;
+}
+
+function sourceKeysTurnIndex(sourceKeys, context) {
+    let latest = -1;
+    for (const key of list(sourceKeys)) {
+        const direct = context.indexes.get(key);
+        if (Number.isInteger(direct))
+            latest = Math.max(latest, direct);
+        const factIndex = context.lastSeenByFactId.get(key);
+        if (Number.isInteger(factIndex))
+            latest = Math.max(latest, factIndex);
+    }
+    return latest;
+}
+
+function ageTurns(lastSeenTurnIndex, context) {
+    return Number.isInteger(context.currentTurnIndex) && context.currentTurnIndex >= 0 && lastSeenTurnIndex >= 0
+        ? Math.max(0, context.currentTurnIndex - lastSeenTurnIndex)
+        : null;
+}
+
+function eventSignal(eventIds, title, context) {
+    const ids = list(eventIds);
+    if (ids.some((id) => context.activeEventIds.has(id)))
+        return true;
+    const candidates = [title, ...ids].map(normalized).filter(Boolean);
+    return candidates.some((candidate) => context.activeEventTokens.has(candidate)
+        || [...context.activeEventTokens].some((token) => token.includes(candidate) || candidate.includes(token)));
+}
+
+function directSignal(title, keywords, context) {
+    return [title, ...list(keywords)].some((item) => includesToken(context.currentPlayerText, item));
+}
+
+function mentionedSignal(title, keywords, context) {
+    const currentTurnText = `${context.currentPlayerText} ${context.currentAssistantText}`;
+    return [title, ...list(keywords)].some((item) => includesToken(currentTurnText, item));
+}
+
+function currentObjectSignal(row, context) {
+    return [row?.id, row?.title].map(normalized).filter(Boolean)
+        .some((item) => context.currentObjectTokens.has(item));
+}
+
+function sceneSignals(role, row, currentSpacetimeId, context) {
+    const currentById = Boolean(currentSpacetimeId && row?.id === currentSpacetimeId);
+    const title = text(row?.title);
+    const sceneText = [context.narrative?.scene, context.narrative?.stage, context.currentScene?.title, context.currentScene?.stage].join(' ');
+    const locationText = [context.narrative?.location, context.currentScene?.location].join(' ');
+    return {
+        currentScene: currentById || (['scenes', 'spacetime'].includes(role) && includesToken(sceneText, title)),
+        currentLocation: currentById || (['regions', 'spacetime', 'scenes'].includes(role) && includesToken(locationText, title)),
+    };
+}
+
+function recallSignalsForRow(role, row, currentSpacetimeId, context) {
+    const lastSeenTurnIndex = latestTurnFromFactIds(row?.factIds, context);
+    const scene = sceneSignals(role, row, currentSpacetimeId, context);
+    const body = rowText(row);
+    const activeEvent = eventSignal(row?.eventIds ?? (row?.eventId ? [row.eventId] : []), row?.title, context);
+    const directInteraction = directSignal(row?.title, row?.keywords, context);
+    const mentionedThisTurn = mentionedSignal(row?.title, row?.keywords, context);
+    if (currentObjectSignal(row, context))
+        scene.currentScene = true;
+    return {
+        source: 'row',
+        focus: false,
+        ...scene,
+        activeEvent,
+        directInteraction,
+        mentionedThisTurn,
+        touchedThisTurn: lastSeenTurnIndex >= 0 && lastSeenTurnIndex === context.currentTurnIndex,
+        unresolved: unresolvedFrom(body),
+        permanent: ['foundations', 'globalChanges'].includes(role)
+            || Boolean(text(row?.fields?.baseContent))
+            || list(row?.fields?.solidifiedHistory).length > 0,
+        historical: false,
+        lastSeenTurnIndex,
+        ageTurns: ageTurns(lastSeenTurnIndex, context),
+    };
+}
+
+function recallSignalsForFact(fact, context) {
+    const factId = text(fact?.factId ?? fact?.fact_id);
+    const lastSeenTurnIndex = factSourceTurnIndex(fact, context.indexes);
+    const eventIds = fact?.eventId ?? fact?.event_id ? [fact?.eventId ?? fact?.event_id] : [];
+    const historical = fact?.active === false
+        || Boolean(fact?.validTo ?? fact?.valid_to)
+        || Boolean(fact?.consumedBySmallSummaryId)
+        || Boolean(fact?.solidifiedByLargeSummaryId);
+    return {
+        source: 'fact',
+        focus: false,
+        currentScene: false,
+        currentLocation: false,
+        activeEvent: eventSignal(eventIds, fact?.title, context),
+        directInteraction: directSignal(fact?.title, fact?.keywords, context),
+        mentionedThisTurn: mentionedSignal(fact?.title, fact?.keywords, context),
+        touchedThisTurn: lastSeenTurnIndex >= 0 && lastSeenTurnIndex === context.currentTurnIndex,
+        unresolved: unresolvedFrom(fact?.unresolvedItems ?? fact?.unresolved),
+        permanent: String(fact?.storageClass ?? fact?.storage_class) === 'durable',
+        historical,
+        factId,
+        lastSeenTurnIndex,
+        ageTurns: ageTurns(lastSeenTurnIndex, context),
+    };
+}
+
+function recallSignalsForSummary(summary, kind, context) {
+    const lastSeenTurnIndex = sourceKeysTurnIndex([
+        ...(summary?.sourceKeys ?? []),
+        ...(summary?.sourceMessageIds ?? []),
+        ...(summary?.sourceFactIds ?? []),
+    ], context);
+    const eventIds = [summary?.eventId, ...(summary?.eventIds ?? [])].filter(Boolean);
+    return {
+        source: 'summary',
+        focus: false,
+        currentScene: false,
+        currentLocation: false,
+        activeEvent: eventSignal(eventIds, summary?.title, context),
+        directInteraction: directSignal(summary?.title, summary?.keywords, context),
+        mentionedThisTurn: mentionedSignal(summary?.title, summary?.keywords, context),
+        touchedThisTurn: lastSeenTurnIndex >= 0 && lastSeenTurnIndex === context.currentTurnIndex,
+        unresolved: unresolvedFrom(summary?.unresolvedItems),
+        permanent: kind === 'large',
+        historical: kind === 'large' || !eventSignal(eventIds, summary?.title, context),
+        lastSeenTurnIndex,
+        ageTurns: ageTurns(lastSeenTurnIndex, context),
+    };
+}
+
+function recallSignalsForNarrativeContext(context) {
+    return {
+        source: 'runtime',
+        focus: false,
+        currentScene: true,
+        currentLocation: true,
+        activeEvent: list(context?.narrative?.activeEvents).length > 0,
+        directInteraction: true,
+        mentionedThisTurn: true,
+        touchedThisTurn: true,
+        unresolved: Boolean(text(context?.narrative?.goal)),
+        permanent: false,
+        historical: false,
+        lastSeenTurnIndex: context?.currentTurnIndex ?? -1,
+        ageTurns: 0,
+    };
+}
+
+}
+};
 __defs["domain/recording-boundary.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
@@ -4747,11 +5099,12 @@ Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurab
 Object.defineProperty(__scope,"canonicalizeObjectIdentities",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalizeObjectIdentities"]});
 Object.defineProperty(__scope,"rewriteObjectReferences",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["rewriteObjectReferences"]});
 Object.defineProperty(__scope,"isEntryLifecycleHidden",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryLifecycleHidden"]});
+Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
 Object.defineProperty(__scope,"normalizeEntryLifecycleValue",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["normalizeEntryLifecycleValue"]});
 Object.defineProperty(__scope,"visibleStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["visibleStateRows"]});
 Object.defineProperty(__scope,"enforceSpacetimeSingleton",{enumerable:true,configurable:true,get:()=>__require("domain/special-table-rules.js")["enforceSpacetimeSingleton"]});
 Object.defineProperty(__scope,"isHistoricalSceneRow",{enumerable:true,configurable:true,get:()=>__require("domain/special-table-rules.js")["isHistoricalSceneRow"]});
-Object.defineProperty(__scope,"isPurePassiveObserverText",{enumerable:true,configurable:true,get:()=>__require("domain/observer.js")["isPurePassiveObserverText"]});
+Object.defineProperty(__scope,"isDisposablePassiveObserverRow",{enumerable:true,configurable:true,get:()=>__require("domain/observer.js")["isDisposablePassiveObserverRow"]});
 Object.defineProperty(__scope,"dedupeStrongStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/state-text.js")["dedupeStrongStateRows"]});
 Object.defineProperty(__scope,"mergeDuplicateStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/state-text.js")["mergeDuplicateStateRows"]});
 Object.defineProperty(__scope,"DEFAULT_TABLE_REGISTRY",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["DEFAULT_TABLE_REGISTRY"]});
@@ -5254,7 +5607,8 @@ function enforceObjectViewAllocation(snapshot, registry) {
     if (!spacetimeKey || !regionKey)
         return snapshot;
     const spacetimeRows = snapshot[spacetimeKey] ?? [];
-    const activeRows = spacetimeRows.filter((row) => !isEntryLifecycleHidden(row) && !/(已离开|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(`${row.status} ${row.content}`));
+    const activeRows = spacetimeRows.filter((row) => !isEntryParticipationPaused(row)
+        && !/(已离开|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(String(row.status || '')));
     const current = activeRows.at(-1);
     if (!current)
         return snapshot;
@@ -5422,21 +5776,18 @@ function deleteRow(snapshot, tableKey, rowId, registry) {
     next[tableKey] = (next[tableKey] ?? []).filter((row) => row.id !== rowId && (!titleToken || identityTitle(row.title) !== titleToken));
     return next;
 }
-function relevanceText(row) {
-    return `${row.title} ${row.content} ${row.status} ${row.keywords.join(' ')}`;
-}
-function isPassiveObserver(row) {
-    if (row.source === 'manual' || row.locked)
-        return false;
-    return isPurePassiveObserverText(relevanceText(row));
-}
-/** 最后一层确定性过滤：纯旁观者及其临时反应不得留在活跃视图。 */
+
+/**
+ * 仅清理本轮误建、没有事实或事件锚点的空壳背景角色。
+ * 已建立对象必须通过 settling → 总结覆盖 → finalize 退出，禁止在这里直接物理删除。
+ */
 function filterPassiveObservers(snapshot, registry) {
     const tables = registryOrDefault(registry);
     for (const table of tables) {
         if (!table.enabled)
             continue;
-        snapshot[table.key] = (snapshot[table.key] ?? []).filter((row) => !isPassiveObserver(row));
+        snapshot[table.key] = (snapshot[table.key] ?? [])
+            .filter((row) => !isDisposablePassiveObserverRow(row, table.role));
     }
     return snapshot;
 }
@@ -5446,7 +5797,7 @@ function filterPassiveObservers(snapshot, registry) {
 __defs["domain/special-table-rules.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
-Object.defineProperty(__scope,"isEntryLifecycleHidden",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryLifecycleHidden"]});
+Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
 Object.defineProperty(__scope,"rewriteObjectReferences",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["rewriteObjectReferences"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
@@ -5457,8 +5808,9 @@ function stringArray(value) {
     return Array.isArray(value) ? value.map((item) => safeText(item, 500).trim()).filter(Boolean) : [];
 }
 function isHistoricalSceneRow(row) {
-    return isEntryLifecycleHidden(row)
-        || /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(`${row.status} ${row.content}`);
+    // 当前/历史参与权只读取结构化 status 与 lifecycle；正文中的“完成某事”不等于离开当前时空。
+    return isEntryParticipationPaused(row)
+        || /(已离开|离开场景|历史场景|过去场景|非当前|已结束|已关闭|已归档|inactive|closed|ended|archived)/i.test(String(row?.status || ''));
 }
 /**
  * 每个聊天只保留一个当前时空条目，固定 ID 为 spacetime_current。
@@ -5504,190 +5856,197 @@ function enforceSpacetimeSingleton(snapshot, registry) {
 
 }
 };
-__defs["domain/state-module-registry.js"]=function(exports,__require){
+__defs["domain/st-recall-scheduler.js"]=function(exports,__require){
 const __scope=Object.create(null);
-Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
-Object.defineProperty(__scope,"stateLayerLabelForField",{enumerable:true,configurable:true,get:()=>__require("domain/state-semantics.js")["stateLayerLabelForField"]});
 with(__scope){
-Object.defineProperty(exports,"buildStateModuleRegistry",{enumerable:true,configurable:true,get:()=>buildStateModuleRegistry});
-Object.defineProperty(exports,"canonicalStateTag",{enumerable:true,configurable:true,get:()=>canonicalStateTag});
+Object.defineProperty(exports,"scheduleLorebookDocuments",{enumerable:true,configurable:true,get:()=>scheduleLorebookDocuments});
+Object.defineProperty(exports,"recallScheduleForKind",{enumerable:true,configurable:true,get:()=>recallScheduleForKind});
 /**
- * 模块职责：根据当前动态表格注册表生成状态固定文本模块目录与兼容别名。
- * 维护边界：只描述“标签/表格/语义层”映射，不解析事实、不创建对象、不修改状态。
+ * 模块职责：把插件计算出的召回类别与动态信号确定性映射为 SillyTavern 原生世界书字段。
+ * 维护边界：确定性不等于固定查表；模型不得决定 activationClass、order、depth、scanDepth 或递归字段。
  */
-const CANONICAL_MODULES = {
-    MA_CORE: { role: 'events', layer: '当前摘要', event: true, aliases: ['动作骨架', '核心动作', '事件骨架', '事件事实'] },
-    MA_EVENT_RESULT: { role: 'events', layer: '现行事实', event: true, aliases: ['事件结果', '结果事实'] },
-    MA_EVENT_STATE: { role: 'events', layer: '当前状态', event: true, aliases: ['事件状态', '阶段状态'] },
-    MA_UNRESOLVED: { role: 'events', layer: '当前状态', event: true, unresolved: true, aliases: ['未决事项', '未解决事项'] },
-    MA_CHARACTER_IDENTITY: { role: 'characters', layer: '身份定义', aliases: ['角色身份', '人物身份', '角色定义'] },
-    MA_CHARACTER_FACT: { role: 'characters', layer: '现行事实', aliases: ['角色事实', '人物事实', '角色现行事实'] },
-    MA_CHARACTER_STATE: { role: 'characters', layer: '当前状态', aliases: ['角色状态', '人物状态', '角色当前状态'] },
-    MA_CHARACTER_APPEARANCE: { role: 'characters', layer: '外观表现', aliases: ['角色外观', '人物外观', '外观表现'] },
-    MA_CHARACTER_RELATION: { role: 'characters', layer: '关系状态', aliases: ['角色关系', '人物关系', '关系状态'] },
-    MA_CHARACTER_ABILITY: { role: 'characters', layer: '能力状态', aliases: ['角色能力', '人物能力', '能力状态'] },
-    MA_ITEM_IDENTITY: { role: 'items', layer: '身份定义', aliases: ['物品身份', '道具身份', '物品定义'] },
-    MA_ITEM_FACT: { role: 'items', layer: '现行事实', aliases: ['物品事实', '道具事实', '物品现行事实'] },
-    MA_ITEM_STATE: { role: 'items', layer: '当前状态', aliases: ['物品状态', '道具状态', '物品当前状态'] },
-    MA_SCENE_IDENTITY: { role: 'scenes', layer: '身份定义', aliases: ['场景身份', '场景定义'] },
-    MA_SCENE_FACT: { role: 'scenes', layer: '现行事实', aliases: ['场景事实', '场景现行事实'] },
-    MA_SCENE_STATE: { role: 'scenes', layer: '当前状态', aliases: ['场景状态', '场景当前状态'] },
-    MA_REGION_IDENTITY: { role: 'regions', layer: '身份定义', aliases: ['地点身份', '区域身份', '地点定义'] },
-    MA_REGION_FACT: { role: 'regions', layer: '现行事实', aliases: ['地点事实', '区域事实', '地点现行事实'] },
-    MA_REGION_STATE: { role: 'regions', layer: '当前状态', aliases: ['地点状态', '区域状态', '地点当前状态'] },
-    MA_GLOBAL_IDENTITY: { role: 'globalChanges', layer: '身份定义', aliases: ['全局身份', '组织身份', '全局定义'] },
-    MA_GLOBAL_FACT: { role: 'globalChanges', layer: '现行事实', aliases: ['全局事实', '组织事实', '制度事实'] },
-    MA_GLOBAL_STATE: { role: 'globalChanges', layer: '当前状态', aliases: ['全局状态', '组织状态', '制度状态'] },
-    MA_FOUNDATION_IDENTITY: { role: 'foundations', layer: '身份定义', aliases: ['基础设定身份', '规则定义', '设定定义'] },
-    MA_FOUNDATION_FACT: { role: 'foundations', layer: '现行事实', aliases: ['基础设定事实', '规则事实', '设定事实'] },
-    MA_FOUNDATION_STATE: { role: 'foundations', layer: '当前状态', aliases: ['基础设定状态', '规则状态', '设定状态'] },
-    MA_SPACETIME_STATE: { role: 'spacetime', layer: '当前状态', aliases: ['时空状态', '当前时空'] },
-    MA_CUSTOM: { layer: '', custom: true, aliases: ['自定义对象'] },
-};
 
-const ROLE_LABELS = {
-    spacetime: ['时空'],
-    scenes: ['场景', '局面'],
-    characters: ['角色', '人物'],
-    state: ['角色', '人物'],
-    items: ['物品', '道具', '装备'],
-    events: ['事件'],
-    regions: ['地点', '区域'],
-    globalChanges: ['全局', '组织', '制度'],
-    foundations: ['基础设定', '规则', '设定'],
-    custom: ['自定义对象'],
-};
+const SYSTEM_ROLE = 0;
 
-const WRITABLE_PSEUDO_FIELDS = [
-    { key: 'content', label: '当前摘要', aliases: ['当前摘要', '摘要', '当前记录'] },
-    { key: 'status', label: '条目状态', aliases: ['条目状态', '存续状态'] },
-    { key: 'keywords', label: '检索词', aliases: ['检索词', '关键词', '别名'] },
-];
+const DEFAULT_PROFILE = Object.freeze({ orderBase: 520, depth: 5, minDepth: 3, maxDepth: 9, scanDepth: 16 });
 
-function token(value) {
-    return String(value ?? '')
-        .normalize('NFKC')
-        .toUpperCase()
-        .replace(/^\/?\s*/u, '')
-        .replace(/[\s·•.\-—–|｜:：/\\()（）【】\[\]<>《》“”"'`]+/gu, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_+|_+$/g, '');
+const PROFILES = Object.freeze({
+    'runtime:narrative-context': { orderBase: 1000, depth: 0, minDepth: 0, maxDepth: 0, scanDepth: 4 },
+    'view:spacetime': { orderBase: 880, depth: 2, minDepth: 1, maxDepth: 4, scanDepth: 6 },
+    'view:scenes': { orderBase: 850, depth: 2, minDepth: 1, maxDepth: 5, scanDepth: 8 },
+    'view:characters': { orderBase: 700, depth: 4, minDepth: 2, maxDepth: 7, scanDepth: 12 },
+    'view:state': { orderBase: 700, depth: 4, minDepth: 2, maxDepth: 7, scanDepth: 12 },
+    'view:events': { orderBase: 680, depth: 4, minDepth: 2, maxDepth: 7, scanDepth: 14 },
+    'view:globalChanges': { orderBase: 650, depth: 4, minDepth: 2, maxDepth: 7, scanDepth: 14 },
+    'view:foundations': { orderBase: 630, depth: 5, minDepth: 3, maxDepth: 8, scanDepth: 16 },
+    'view:items': { orderBase: 600, depth: 5, minDepth: 3, maxDepth: 8, scanDepth: 14 },
+    'view:regions': { orderBase: 580, depth: 5, minDepth: 3, maxDepth: 8, scanDepth: 16 },
+    'view:custom': { orderBase: 560, depth: 5, minDepth: 3, maxDepth: 8, scanDepth: 16 },
+    fact: { orderBase: 500, depth: 6, minDepth: 3, maxDepth: 9, scanDepth: 20 },
+    'summary:small': { orderBase: 390, depth: 7, minDepth: 5, maxDepth: 10, scanDepth: 26 },
+    'summary:large': { orderBase: 270, depth: 9, minDepth: 7, maxDepth: 12, scanDepth: 38 },
+});
+
+function profileFor(kind) {
+    return PROFILES[String(kind || '')] ?? DEFAULT_PROFILE;
 }
 
-function headerToken(value) {
-    return String(value ?? '')
-        .normalize('NFKC')
-        .toLowerCase()
-        .replace(/[\s·•._—–\-|｜:：/\\()（）【】\[\]<>《》“”"'`]+/gu, '');
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
 }
 
-function addUniqueAlias(aliasMap, collisions, alias, spec) {
-    const key = headerToken(alias);
-    if (!key || collisions.has(key))
-        return;
-    const current = aliasMap.get(key);
-    if (!current) {
-        aliasMap.set(key, spec);
-        return;
-    }
-    const same = current.role === spec.role
-        && current.layer === spec.layer
-        && Boolean(current.event) === Boolean(spec.event)
-        && (!current.tableName || !spec.tableName || current.tableName === spec.tableName);
-    if (!same) {
-        aliasMap.delete(key);
-        collisions.add(key);
-    }
+function activationClassOf(document) {
+    if (document.disabled)
+        return 'disabled';
+    if (document.activationClass)
+        return document.activationClass;
+    if (document.constant)
+        return 'constant';
+    if (document.vectorized && document.keywords?.length)
+        return 'hybrid';
+    if (document.vectorized)
+        return 'vector';
+    return document.recallMode === 'recursive' ? 'recursive' : 'trigger';
 }
 
-function writableLayers(table) {
-    const output = [...WRITABLE_PSEUDO_FIELDS];
-    for (const field of table.fields ?? []) {
-        const label = stateLayerLabelForField(table, field.key);
-        if (!label)
-            continue;
-        output.push({ key: field.key, label, aliases: [label, field.label].filter(Boolean) });
-    }
-    const seen = new Set();
-    return output.filter((item) => {
-        const key = `${item.key}|${headerToken(item.label)}`;
-        if (seen.has(key))
-            return false;
-        seen.add(key);
-        return true;
-    });
+function propagationOf(document) {
+    if (document.allowRecursion === false)
+        return 'isolated';
+    if (document.propagation)
+        return document.propagation;
+    return document.allowRecursion === false ? 'isolated' : 'terminal';
 }
 
-function buildStateModuleRegistry(registry) {
-    const tables = normalizeTableRegistry(registry);
-    const byTag = new Map();
-    const byHeader = new Map();
-    const headerCollisions = new Set();
-
-    for (const [tag, source] of Object.entries(CANONICAL_MODULES)) {
-        const spec = { tag, ...source, source: 'canonical' };
-        byTag.set(token(tag), spec);
-        for (const alias of source.aliases ?? [])
-            addUniqueAlias(byHeader, headerCollisions, alias, spec);
+function relevanceScore(profile, signals = {}) {
+    let score = profile.orderBase;
+    if (signals.currentScene)
+        score += 150;
+    if (signals.directInteraction)
+        score += 120;
+    if (signals.mentionedThisTurn)
+        score += 60;
+    if (signals.touchedThisTurn)
+        score += 100;
+    if (signals.activeEvent)
+        score += 80;
+    if (signals.currentLocation)
+        score += 60;
+    if (signals.unresolved)
+        score += 45;
+    if (signals.permanent)
+        score += 20;
+    if (Number.isInteger(signals.ageTurns)) {
+        if (signals.ageTurns === 0)
+            score += 90;
+        else if (signals.ageTurns <= 2)
+            score += 60;
+        else if (signals.ageTurns <= 6)
+            score += 30;
+        else if (signals.ageTurns <= 12)
+            score += 10;
+        else if (signals.ageTurns > 32)
+            score -= 40;
     }
+    if (signals.historical)
+        score -= 100;
+    return clamp(Math.round(score), 1, 1999);
+}
 
-    for (const table of tables.filter((item) => item.enabled)) {
-        const roleLabels = [...new Set([table.name, ...(ROLE_LABELS[table.role] ?? [])].filter(Boolean))];
-        const tableTokens = [...new Set([table.key, table.name, table.role].map(token).filter(Boolean))];
-        const layers = writableLayers(table);
+function dynamicDepth(profile, signals = {}) {
+    let depth = profile.depth;
+    if (signals.currentScene)
+        depth -= 2;
+    if (signals.directInteraction || signals.mentionedThisTurn || signals.touchedThisTurn)
+        depth -= 1;
+    if (signals.currentLocation || signals.activeEvent || signals.unresolved)
+        depth -= 1;
+    if (Number.isInteger(signals.ageTurns) && signals.ageTurns <= 2)
+        depth -= 1;
+    if (Number.isInteger(signals.ageTurns) && signals.ageTurns > 24)
+        depth += 1;
+    if (signals.historical)
+        depth += 1;
+    return clamp(Math.round(depth), profile.minDepth, profile.maxDepth);
+}
 
-        const genericSpec = {
-            tag: `MA_TABLE_${token(table.key)}`,
-            tableName: table.name,
-            role: table.role,
-            layer: '',
-            dynamicTable: true,
-            event: table.role === 'events',
-            source: 'dynamic-table',
+function dynamicScanDepth(profile, activationClass, signals = {}) {
+    if (activationClass === 'constant' || activationClass === 'vector' || activationClass === 'disabled')
+        return null;
+    let depth = profile.scanDepth;
+    if (signals.currentScene || signals.directInteraction || signals.mentionedThisTurn || signals.touchedThisTurn)
+        depth -= 4;
+    if (signals.currentLocation || signals.activeEvent)
+        depth -= 2;
+    if (Number.isInteger(signals.ageTurns) && signals.ageTurns > 12)
+        depth += 8;
+    if (Number.isInteger(signals.ageTurns) && signals.ageTurns > 32)
+        depth += 8;
+    if (signals.historical)
+        depth += 8;
+    if (activationClass === 'recursive')
+        depth = Math.max(depth + 6, 18);
+    return clamp(Math.round(depth), 4, 64);
+}
+
+function recursionFields(activationClass, propagation) {
+    if (activationClass === 'disabled' || activationClass === 'constant' || activationClass === 'vector' || propagation === 'isolated') {
+        return { preventRecursion: true, excludeRecursion: true, delayUntilRecursion: 0 };
+    }
+    const bridge = propagation === 'bridge';
+    if (activationClass === 'recursive') {
+        return { preventRecursion: !bridge, excludeRecursion: false, delayUntilRecursion: 1 };
+    }
+    // 直接触发与混合触发条目可被递归链找到；bridge 还可继续扩散，terminal 到此停止。
+    return { preventRecursion: !bridge, excludeRecursion: false, delayUntilRecursion: 0 };
+}
+
+function nativeActivation(document, activationClass) {
+    const triggerAny = document.trigger?.any ?? document.keywords ?? [];
+    if (activationClass === 'constant')
+        return { constant: true, vectorized: false, keywords: [] };
+    if (activationClass === 'vector')
+        return { constant: false, vectorized: true, keywords: [] };
+    if (activationClass === 'hybrid')
+        return { constant: false, vectorized: true, keywords: triggerAny };
+    if (activationClass === 'trigger' || activationClass === 'recursive')
+        return { constant: false, vectorized: false, keywords: triggerAny };
+    return { constant: false, vectorized: false, keywords: [] };
+}
+
+/**
+ * 同一输入状态必得同一字段；order/depth/scanDepth 会随已提交的当前场景、事件、最近轮次和未决状态变化。
+ */
+function scheduleLorebookDocuments(documents) {
+    const scheduled = documents.map((document) => {
+        const profile = profileFor(document.kind);
+        const activationClass = activationClassOf(document);
+        const propagation = propagationOf(document);
+        const signals = document.recallSignals ?? {};
+        const activation = nativeActivation(document, activationClass);
+        const recursion = recursionFields(activationClass, propagation);
+        return {
+            ...document,
+            ...activation,
+            activationClass,
+            recallMode: activationClass,
+            propagation,
+            order: relevanceScore(profile, signals),
+            position: 'atDepth',
+            depth: dynamicDepth(profile, signals),
+            role: SYSTEM_ROLE,
+            scanDepth: dynamicScanDepth(profile, activationClass, signals),
+            probability: 100,
+            useProbability: true,
+            ...recursion,
         };
-        for (const tableToken of tableTokens) {
-            byTag.set(token(`MA_TABLE_${tableToken}`), genericSpec);
-            byTag.set(token(`MA_${tableToken}`), genericSpec);
-        }
-
-        for (const layer of layers) {
-            const directSpec = {
-                tag: `MA_${token(table.key)}_${token(layer.key)}`,
-                tableName: table.name,
-                role: table.role,
-                layer: layer.label,
-                dynamicDirect: true,
-                event: table.role === 'events',
-                source: 'dynamic-layer',
-            };
-            const layerTokens = [...new Set([layer.key, layer.label, ...(layer.aliases ?? [])].map(token).filter(Boolean))];
-            for (const tableToken of tableTokens)
-                for (const layerToken of layerTokens)
-                    byTag.set(token(`MA_${tableToken}_${layerToken}`), directSpec);
-            for (const tableLabel of roleLabels) {
-                for (const layerLabel of [...new Set([layer.label, ...(layer.aliases ?? [])].filter(Boolean))]) {
-                    addUniqueAlias(byHeader, headerCollisions, `${tableLabel}${layerLabel}`, directSpec);
-                    addUniqueAlias(byHeader, headerCollisions, `${tableLabel}·${layerLabel}`, directSpec);
-                }
-            }
-        }
-    }
-
-    return {
-        resolveTag(rawTag) {
-            return byTag.get(token(rawTag));
-        },
-        resolveHeader(rawHeader) {
-            return byHeader.get(headerToken(rawHeader));
-        },
-        tagToken: token,
-        headerToken,
-        knownTags: new Set(byTag.keys()),
-    };
+    });
+    return scheduled.sort((left, right) => right.order - left.order
+        || left.depth - right.depth
+        || String(left.key).localeCompare(String(right.key)));
 }
 
-function canonicalStateTag(value) {
-    return token(value);
+function recallScheduleForKind(kind) {
+    return structuredClone(profileFor(kind));
 }
 
 }
@@ -5797,144 +6156,24 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
-Object.defineProperty(__scope,"parseFixedTextBlocks",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["parseFixedTextBlocks"]});
-Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalObjectTitle"]});
+Object.defineProperty(__scope,"normalizeModelProtocolText",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["normalizeModelProtocolText"]});
+Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-key.js")["canonicalObjectTitle"]});
 Object.defineProperty(__scope,"applyFactContractGate",{enumerable:true,configurable:true,get:()=>__require("domain/fact-contract.js")["applyFactContractGate"]});
 Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["enabledTables"]});
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
 Object.defineProperty(__scope,"resolveStateLayer",{enumerable:true,configurable:true,get:()=>__require("domain/state-semantics.js")["resolveStateLayer"]});
-Object.defineProperty(__scope,"buildStateModuleRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/state-module-registry.js")["buildStateModuleRegistry"]});
-Object.defineProperty(__scope,"canonicalStateTag",{enumerable:true,configurable:true,get:()=>__require("domain/state-module-registry.js")["canonicalStateTag"]});
+Object.defineProperty(__scope,"eventClosedFromFacts",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventClosedFromFacts"]});
 with(__scope){
 Object.defineProperty(exports,"mergeDuplicateStateRows",{enumerable:true,configurable:true,get:()=>mergeDuplicateStateRows});
 Object.defineProperty(exports,"dedupeStrongStateRows",{enumerable:true,configurable:true,get:()=>dedupeStrongStateRows});
 Object.defineProperty(exports,"parseStateTextBlocks",{enumerable:true,configurable:true,get:()=>parseStateTextBlocks});
 Object.defineProperty(exports,"parseStateTextOutput",{enumerable:true,configurable:true,get:()=>parseStateTextOutput});
-Object.defineProperty(exports,"STATE_TEXT_MARKERS",{enumerable:true,configurable:true,get:()=>STATE_TEXT_MARKERS});
-const STATE_TEXT_MARKERS = {
-    turnStart: '<MA_TURN>',
-    turnEnd: '</MA_TURN>',
-    changeStart: '<MA_CHANGE>',
-    changeEnd: '</MA_CHANGE>',
-};
-const CHANGE_OPERATIONS = new Set(['set', 'replace', 'add', 'remove', 'close']);
-const FACT_CONFIDENCE = new Set(['confirmed', 'recorded', 'reported', 'uncertain']);
-const KEY_ALIASES = {
-    '摘要': 'summary',
-    '事件': 'event',
-    '对象类型': 'kind', '类型': 'kind',
-    '表格': 'table',
-    '对象': 'object', '名称': 'object',
-    '变化层': 'layer',
-    '动作': 'operation',
-    '内容': 'value',
-    '事实结果': 'result', '结果': 'result',
-    '置信度': 'confidence',
-    '关联对象': 'related',
-    '关键词': 'keyword',
-    '开始时间': 'time_start',
-    '结束时间': 'time_end',
-    '时间标签': 'time_label',
-};
-const KIND_ROLE = {
-    spacetime: 'spacetime',
-    scene: 'scenes',
-    character: 'characters',
-    item: 'items',
-    event: 'events',
-    region: 'regions',
-    global: 'globalChanges',
-    foundation: 'foundations',
-    custom: 'custom',
-};
-const KIND_ALIASES = {
-    spacetime: 'spacetime', timeandspace: 'spacetime', 时空: 'spacetime',
-    scene: 'scene', scenes: 'scene', 场景: 'scene', 局面: 'scene',
-    character: 'character', characters: 'character', person: 'character', individual: 'character', 角色: 'character', 人物: 'character', 个体: 'character',
-    item: 'item', items: 'item', object: 'item', prop: 'item', 物品: 'item', 道具: 'item', 装备: 'item',
-    event: 'event', events: 'event', 事件: 'event',
-    region: 'region', regions: 'region', place: 'region', location: 'region', 地点: 'region', 区域: 'region', 建筑: 'region',
-    global: 'global', globalchange: 'global', globalchanges: 'global', organization: 'global', faction: 'global', institution: 'global', polity: 'global', 全局: 'global', 全局变化: 'global', 组织: 'global', 阵营: 'global', 政权: 'global', 机构: 'global',
-    foundation: 'foundation', foundations: 'foundation', rule: 'foundation', setting: 'foundation', 基础设定: 'foundation', 规则: 'foundation', 设定: 'foundation',
-    custom: 'custom', customobject: 'custom', customobjects: 'custom', 自定义: 'custom', 自定义对象: 'custom',
-};
 function identity(value) {
     return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]<>《》“”"'`]+/gu, '');
 }
-function rowKind(value) {
-    return KIND_ALIASES[identity(value)];
-}
-function semanticTable(kind, active) {
-    return kind ? tableByRole(active, KIND_ROLE[kind], false) : undefined;
-}
 function unique(values, limit = 40, chars = 800) {
     return [...new Set(values.map((item) => safeText(item, chars).trim()).filter(Boolean))].slice(0, limit);
-}
-function normalizeKey(raw) {
-    const trimmed = raw.trim();
-    return KEY_ALIASES[trimmed] || trimmed;
-}
-function addField(block, key, value) {
-    const normalized = normalizeKey(key);
-    if (!normalized)
-        return;
-    block.fields.set(normalized, [...(block.fields.get(normalized) ?? []), value.trim()]);
-}
-function fieldValues(block, ...keys) {
-    return unique(keys.flatMap((key) => block.fields.get(key) ?? []));
-}
-function fieldValue(block, ...keys) {
-    return fieldValues(block, ...keys).at(-1) ?? '';
-}
-const STATE_BLOCK_MARKERS = [
-    { kind: 'turn', start: STATE_TEXT_MARKERS.turnStart, end: STATE_TEXT_MARKERS.turnEnd },
-    { kind: 'change', start: STATE_TEXT_MARKERS.changeStart, end: STATE_TEXT_MARKERS.changeEnd },
-];
-function safelyCloseTrailingStateBlock(raw) {
-    const source = String(raw ?? '').replace(/^\uFEFF/, '').trim();
-    if (!source)
-        return source;
-    const candidates = STATE_BLOCK_MARKERS
-        .map((item) => ({ ...item, index: source.toUpperCase().lastIndexOf(item.start.toUpperCase()) }))
-        .filter((item) => item.index >= 0)
-        .sort((a, b) => b.index - a.index);
-    const last = candidates[0];
-    if (!last)
-        return source;
-    const tail = source.slice(last.index);
-    if (tail.toUpperCase().includes(last.end.toUpperCase()))
-        return source;
-    const body = tail.slice(last.start.length);
-    const hasCompleteLine = /(^|\n)\s*[^=＝:：\n]+\s*[=＝:：]\s*\S[^\n]*\s*$/u.test(body);
-    if (!hasCompleteLine)
-        return source;
-    if (last.kind === 'turn' && !/(^|\n)\s*(?:摘要|summary)\s*[=＝:：]\s*\S/iu.test(body))
-        return source;
-    if (last.kind === 'change') {
-        const required = ['事件', '对象类型', '对象', '变化层', '动作'];
-        if (!required.every((key) => new RegExp(`(^|\\n)\\s*${key}\\s*[=＝:：]\\s*\\S`, 'u').test(body)))
-            return source;
-        if (!/(^|\n)\s*(?:内容|事实结果)\s*[=＝:：]\s*\S/u.test(body))
-            return source;
-    }
-    return `${source}\n${last.end}`;
-}
-function parseLegacyStateTextBlocks(raw) {
-    const source = String(raw ?? '');
-    if (/<MA_(?:FACT|ROW)>|<\/MA_(?:FACT|ROW)>|【(?:事实|条目)(?:结束)?】|(^|\n)\s*(?:field|字段)(?:\.|\s*[=＝:：])/iu.test(source)) {
-        throw new Error('状态模型返回了已停用旧协议；只接受 <MA_TURN>/<MA_CHANGE> 与“变化层”');
-    }
-    const parsed = parseFixedTextBlocks(safelyCloseTrailingStateBlock(source), STATE_BLOCK_MARKERS);
-    if (!parsed.length)
-        throw new Error('状态模型未返回固定文本块（缺少 <MA_TURN>/<MA_CHANGE>）');
-    return parsed.map((source) => {
-        const block = { ...source, kind: source.kind, fields: new Map() };
-        for (const [key, values] of source.fields.entries())
-            for (const value of values)
-                addField(block, key, value);
-        return block;
-    });
 }
 function rowTokens(row) {
     return new Set([row.title, ...(row.keywords ?? [])].map(identity).filter(Boolean));
@@ -6096,8 +6335,8 @@ function resolveTable(raw, active) {
     if (matches.length === 1)
         return matches[0];
     if (!matches.length)
-        throw new Error(`固定文本条目使用了未注册或已停用表格：${raw || '空'}`);
-    throw new Error(`固定文本表格名称存在歧义：${raw}`);
+        throw new Error(`事实模块使用了未注册或已停用表格：${raw || '空'}`);
+    throw new Error(`事实模块表格名称存在歧义：${raw}`);
 }
 /**
  * 同一稳定对象一旦已经存在于某张表，模型后续误选表格时优先沿用原表。
@@ -6186,15 +6425,13 @@ function eventRowById(snapshot, active, eventId) {
     return matches.length === 1 ? matches[0] : undefined;
 }
 function eventCandidateOpen(eventId, snapshot, active, activeFacts) {
+    // 事件级状态事实是唯一权威；可见事件行只是投影。只有旧存档缺少状态事实时才回退到行状态。
+    const closed = eventClosedFromFacts(activeFacts, eventId);
+    if (closed !== undefined)
+        return closed !== true;
     const row = eventRowById(snapshot, active, eventId);
-    if (row?.entryLifecycle?.state === 'settling'
-        || /(已结束|结束|已完成|完成|已解决|已关闭|已归档|closed|completed|resolved|ended|archived)/i.test(String(row?.status || ''))) {
-        return false;
-    }
-    const statusFacts = activeFacts.filter((fact) => fact.eventId === eventId
-        && (fact.view?.moduleTag === 'MA_EVENT_STATUS' || /事件状态$/u.test(String(fact.title || ''))));
-    const latest = statusFacts.at(-1);
-    return !latest || latest.active !== false;
+    return !(row?.entryLifecycle?.state === 'settling'
+        || /(已结束|结束|已完成|完成|已解决|已关闭|已归档|closed|completed|resolved|ended|archived)/i.test(String(row?.status || '')));
 }
 function canonicalEventName(eventId, fallback, snapshot, active, activeFacts) {
     const row = eventRowById(snapshot, active, eventId);
@@ -6314,18 +6551,6 @@ function resolveNaturalEventIdentity(event, snapshot, active, activeFacts) {
         canonicalName: event.eventName,
     };
 }
-function changeOperation(value) {
-    const token = identity(value);
-    if (['replace', '替换', '覆盖'].includes(token))
-        return 'replace';
-    if (['add', 'append', '新增', '添加', '追加'].includes(token))
-        return 'add';
-    if (['remove', 'delete', '移除', '删除', '解除'].includes(token))
-        return 'remove';
-    if (['close', 'closed', '结束', '关闭', '完成', '解决'].includes(token))
-        return 'close';
-    return 'set';
-}
 function arrayAfterChange(existing, values, operation) {
     const current = Array.isArray(existing) ? existing.map((item) => safeText(item, 1200).trim()).filter(Boolean) : [];
     if (operation === 'add')
@@ -6335,161 +6560,6 @@ function arrayAfterChange(existing, values, operation) {
         return current.filter((item) => !removed.has(identity(item)));
     }
     return unique(values, 40, 1200);
-}
-function confidenceFromValue(value) {
-    const raw = String(value ?? '').trim();
-    const normalized = identity(raw);
-    if (['confirmed', '确认', '已确认'].map(identity).includes(normalized))
-        return 'confirmed';
-    if (['recorded', '记录', '已记录'].map(identity).includes(normalized))
-        return 'recorded';
-    if (['reported', '转述', '传闻', '报告'].map(identity).includes(normalized))
-        return 'reported';
-    if (['uncertain', '不确定', '存疑'].map(identity).includes(normalized))
-        return 'uncertain';
-    return FACT_CONFIDENCE.has(raw) ? raw : 'confirmed';
-}
-function changeFromBlock(block, active, previous, activeFacts) {
-    const kind = rowKind(fieldValue(block, 'kind'));
-    const explicitTable = fieldValue(block, 'table').trim();
-    let table = explicitTable ? resolveTable(explicitTable, active) : semanticTable(kind, active);
-    if (!table)
-        throw new Error(`第 ${block.line} 行开始的 <MA_CHANGE> 无法确定对象表；请修正“对象类型”${explicitTable ? `或“表格=${explicitTable}”` : ''}`);
-    const semantic = semanticTable(kind, active);
-    if (semantic && table.role !== semantic.role)
-        table = semantic;
-    const objectName = fieldValue(block, 'object').trim();
-    if (!objectName)
-        throw new Error(`第 ${block.line} 行开始的 <MA_CHANGE> 缺少“对象”`);
-    const keywords = unique([objectName, ...fieldValues(block, 'keyword')], 24, 100);
-    let existing = findExistingRow(table.key, objectName, keywords, previous);
-    let relocation;
-    if (!existing) {
-        const anchored = findUniqueExactRowAcrossTables(table.key, objectName, previous, active);
-        if (anchored) {
-            const protectedPlacement = anchored.row.source === 'manual' || anchored.row.locked || anchored.row.lockMode === 'all' || anchored.row.lockMode === 'base';
-            const explicitSemanticMove = Boolean(kind && semantic?.key === table.key && anchored.table.key !== table.key && !(table.role === 'characters' && anchored.table.role !== 'characters'));
-            if (explicitSemanticMove && !protectedPlacement) {
-                existing = anchored.row;
-                relocation = { id: anchored.row.id, title: anchored.row.title, fromTable: anchored.table.key, toTable: table.key };
-            }
-            else {
-                table = anchored.table;
-                existing = anchored.row;
-            }
-        }
-    }
-    const rawLayer = fieldValue(block, 'layer').trim();
-    if (!rawLayer)
-        throw new Error(`第 ${block.line} 行开始的 <MA_CHANGE> 缺少“变化层”`);
-    const layer = resolveStateLayer(table, rawLayer);
-    const values = fieldValues(block, 'value');
-    const result = fieldValue(block, 'result').trim() || values.join('；').trim();
-    if (!values.length && !result)
-        throw new Error(`第 ${block.line} 行开始的 <MA_CHANGE> 缺少“内容”或“事实结果”`);
-    const operation = changeOperation(fieldValue(block, 'operation'));
-    if (!CHANGE_OPERATIONS.has(operation))
-        throw new Error(`第 ${block.line} 行开始的 <MA_CHANGE> 动作不合法`);
-    const fields = {};
-    let content = existing?.content || objectName;
-    let status = existing?.status || 'active';
-    let rowKeywords = [...(existing?.keywords ?? []), ...keywords];
-    if (layer.kind === 'content') {
-        if (operation !== 'remove')
-            content = values.at(-1) || result || content;
-    }
-    else if (layer.kind === 'status') {
-        status = operation === 'remove' ? 'active' : values.at(-1) || result || (operation === 'close' ? 'closed' : status);
-    }
-    else if (layer.kind === 'keywords') {
-        rowKeywords = operation === 'remove'
-            ? rowKeywords.filter((item) => !new Set(values.map(identity)).has(identity(item)))
-            : unique([...rowKeywords, ...values], 24, 100);
-    }
-    else {
-        const prior = existing?.fields?.[layer.key];
-        if (layer.definition.type === 'string[]')
-            fields[layer.key] = arrayAfterChange(prior, values.length ? values : [result], operation);
-        else
-            fields[layer.key] = operation === 'remove' ? '' : values.at(-1) || result;
-    }
-    if (operation === 'close')
-        status = layer.kind === 'status' ? (values.at(-1) || result || 'closed') : 'closed';
-    const rowContent = layer.kind === 'content' ? content : existing?.content || result || objectName;
-    const row = {
-        id: existing?.id || makeId(table.key),
-        title: existing?.title || objectName,
-        content: rowContent,
-        keywords: unique(rowKeywords, 24, 100),
-        status,
-        source: existing?.source ?? 'auto',
-        locked: existing?.locked ?? false,
-        lockMode: existing?.lockMode,
-        lifecycle: existing?.lifecycle,
-        // 待结算对象再次出现时，必须把状态机标记带到事务入口，由 restore 指令原子恢复；
-        // 不能在模型投影阶段静默丢失，否则会留下“无 lifecycle 但状态仍待结算”的半恢复行。
-        entryLifecycle: existing?.entryLifecycle ? structuredClone(existing.entryLifecycle) : undefined,
-        updatedAt: nowIso(),
-        fields: relocation ? { ...(existing?.fields ?? {}), ...fields } : fields,
-        semanticRole: table.role,
-    };
-    const eventName = fieldValue(block, 'event').trim() || objectName;
-    const eventId = activeEventMatch(eventName, activeFacts)
-        || snapshotEventMatch(eventName, previous, active)
-        || rowSingleEventMatch(existing)
-        || `event_${hashText(identity(eventName))}`;
-    const factTitle = `${objectName}·${layer.label}`;
-    const previousMatches = activeFacts.filter((fact) => fact.eventId === eventId && identity(fact.title) === identity(factTitle));
-    const factId = previousMatches.length === 1
-        ? previousMatches[0].factId
-        : `fact_${hashText(`${eventId}|${identity(factTitle)}`)}`;
-    const confidence = confidenceFromValue(fieldValue(block, 'confidence'));
-    const explicitClosed = operation === 'close'
-        || (layer.kind === 'status' && /(完成|结束|关闭|解决|归档|closed|completed|resolved|ended|archived)/i.test(status));
-    const factOperation = explicitClosed ? 'close' : operation === 'add' ? 'append' : previousMatches.length ? 'update' : 'create';
-    const occurred = unique([result || `${objectName}：${values.join('；')}`], 8, 1200);
-    const fact = {
-        fact_id: factId,
-        event_id: eventId,
-        entity_id: eventId,
-        type: kind || table.role || 'event',
-        title: factTitle,
-        content: occurred.join('；'),
-        occurred,
-        unresolved: [],
-        status: explicitClosed ? 'closed' : 'active',
-        time_range: {
-            start: fieldValue(block, 'time_start'),
-            end: fieldValue(block, 'time_end'),
-            label: fieldValue(block, 'time_label'),
-        },
-        related_entities: unique([objectName, ...fieldValues(block, 'related')], 40, 240),
-        keywords: unique([objectName, eventName, factTitle, ...fieldValues(block, 'keyword')], 24, 100),
-        operation: factOperation,
-        confidence,
-        view: {
-            table: table.key,
-            rowId: row.id,
-            objectTitle: row.title,
-            semanticRole: table.role,
-            layerKind: layer.kind,
-            layerKey: layer.key,
-            layerType: layer.definition?.type,
-            arrayOperation: operation,
-            value: values.at(-1) || result,
-            keywords: row.keywords,
-            eventName,
-            eventClosed: explicitClosed,
-            relatedObjects: unique([objectName, ...fieldValues(block, 'related')], 40, 240),
-            moduleTag: 'MA_CHANGE',
-            relocation,
-        },
-    };
-    const routedFact = { ...fact, ...applyFactContractGate(fact, { existingObject: Boolean(existing) }) };
-    return {
-        fact: routedFact,
-        patch: { table: table.key, row, matchKey: existing?.id || `new:${identity(objectName)}`, relocation },
-    };
 }
 function mergeFacts(left, right) {
     return {
@@ -6516,6 +6586,35 @@ function applyPatchToWorkingSnapshot(working, patch) {
         working[patch.table] = next;
     }
 }
+const NATURAL_MODULES = {
+    MA_CORE: { role: 'events', layer: '当前摘要', event: true },
+    MA_EVENT_RESULT: { role: 'events', layer: '现行事实', event: true },
+    MA_EVENT_STATE: { role: 'events', layer: '当前状态', event: true },
+    MA_UNRESOLVED: { role: 'events', layer: '当前状态', event: true, unresolved: true },
+    MA_CHARACTER_IDENTITY: { role: 'characters', layer: '身份定义' },
+    MA_CHARACTER_FACT: { role: 'characters', layer: '现行事实' },
+    MA_CHARACTER_STATE: { role: 'characters', layer: '当前状态' },
+    MA_CHARACTER_APPEARANCE: { role: 'characters', layer: '外观表现' },
+    MA_CHARACTER_RELATION: { role: 'characters', layer: '关系状态' },
+    MA_CHARACTER_ABILITY: { role: 'characters', layer: '能力状态' },
+    MA_ITEM_IDENTITY: { role: 'items', layer: '身份定义' },
+    MA_ITEM_FACT: { role: 'items', layer: '现行事实' },
+    MA_ITEM_STATE: { role: 'items', layer: '当前状态' },
+    MA_SCENE_IDENTITY: { role: 'scenes', layer: '身份定义' },
+    MA_SCENE_FACT: { role: 'scenes', layer: '现行事实' },
+    MA_SCENE_STATE: { role: 'scenes', layer: '当前状态' },
+    MA_REGION_IDENTITY: { role: 'regions', layer: '身份定义' },
+    MA_REGION_FACT: { role: 'regions', layer: '现行事实' },
+    MA_REGION_STATE: { role: 'regions', layer: '当前状态' },
+    MA_GLOBAL_IDENTITY: { role: 'globalChanges', layer: '身份定义' },
+    MA_GLOBAL_FACT: { role: 'globalChanges', layer: '现行事实' },
+    MA_GLOBAL_STATE: { role: 'globalChanges', layer: '当前状态' },
+    MA_FOUNDATION_IDENTITY: { role: 'foundations', layer: '身份定义' },
+    MA_FOUNDATION_FACT: { role: 'foundations', layer: '现行事实' },
+    MA_FOUNDATION_STATE: { role: 'foundations', layer: '当前状态' },
+    MA_SPACETIME_STATE: { role: 'spacetime', layer: '当前状态' },
+    MA_CUSTOM: { layer: '', custom: true },
+};
 function moduleLines(value) {
     return String(value || '')
         .replace(/^\s+|\s+$/g, '')
@@ -6527,31 +6626,14 @@ function lineOf(source, index) {
     return source.slice(0, index).split('\n').length;
 }
 function compactFactText(value, limit = 220, label = '事实模块') {
-    const text = safeText(value, Math.max(limit * 4, 1200)).replace(/\s+/g, ' ').trim();
+    const hardLimit = limit <= 220 ? 1600 : Math.max(limit * 8, 1600);
+    const text = String(value ?? '').replace(/\u0000/g, '').replace(/\s+/g, ' ').trim();
     if (!text)
         return '';
-    if (text.length > limit)
-        throw new Error(`${label}过长：${text.length}/${limit} 字；只写一到两句具体事实`);
+    // limit 是提示词中的理想长度，不再作为提交硬门槛；只拒绝明显失控的大段输出。
+    if (text.length > hardLimit)
+        throw new Error(`${label}异常过长：${text.length}/${hardLimit} 字；请只保留与本轮有关的具体事实`);
     return text;
-}
-/**
- * 模型偶尔会把同一语义槽拆成两个同名模块。该情况不改变对象、表格或语义层，
- * 可以在本地确定性合并，不能升级为第二次剧情模型调用。
- */
-function mergeNaturalModuleContent(left, right, tag) {
-    const values = [];
-    const identities = new Set();
-    for (const value of [left, right]) {
-        for (const part of String(value || '').split(/[；;]+/u).map((item) => item.trim()).filter(Boolean)) {
-            const key = identity(part);
-            if (!key || identities.has(key))
-                continue;
-            identities.add(key);
-            values.push(part);
-        }
-    }
-    const limit = tag === 'MA_CORE' ? 640 : 440;
-    return compactFactText(values.join('；'), limit, `<${tag}> 合并结果`);
 }
 // 事件关闭只接受正文和事实模块共同出现的明确终局表达。单个动作完成、到达、开门、
 // 交付一件物品等原子结果都不能据此关闭整条事件线。
@@ -6560,7 +6642,7 @@ function explicitlyClosedEvent(event, sourceText) {
     if (event.modules.some((module) => module.unresolved))
         return false;
     const eventEvidence = event.modules
-        .filter((module) => module.eventModule && !module.unresolved)
+        .filter((module) => module.tag === 'MA_EVENT_RESULT' || module.tag === 'MA_EVENT_STATE' || module.tag === 'MA_CORE')
         .map((module) => module.content)
         .join(' ');
     const source = String(sourceText ?? '').trim();
@@ -6571,289 +6653,98 @@ function explicitlyClosedEvent(event, sourceText) {
 /**
  * 1.3.14 自然模块协议。模块正文使用位置而非 key=value：对象模块第一行是对象名，后续是最短事实。
  */
-function normalizeProtocolSource(raw) {
-    return String(raw ?? '')
-        .replace(/^\uFEFF/, '')
-        .replace(/[＜〈]/gu, '<')
-        .replace(/[＞〉]/gu, '>')
-        .replace(/<\s*(\/?)\s*(MA_[^<>]+?)\s*>/giu, (_match, slash, rawTag) => `<${slash}${canonicalStateTag(rawTag)}>`)
-        .trim();
-}
-function extractProtocolContainers(source) {
-    const blocks = [];
-    const tokenRe = /<(\/)?(MA_TURN|MA_EVENT)>/gu;
-    let current;
-    for (const match of source.matchAll(tokenRe)) {
-        const closing = Boolean(match[1]);
-        const tag = match[2];
-        const index = match.index ?? 0;
-        if (!closing) {
-            if (current) {
-                blocks.push({
-                    kind: current.tag === 'MA_TURN' ? 'turn' : 'event',
-                    line: lineOf(source, current.openIndex),
-                    body: source.slice(current.contentStart, index),
-                    autoClosed: true,
-                });
-            }
-            current = { tag, openIndex: index, contentStart: index + match[0].length };
-            continue;
-        }
-        if (!current)
-            continue;
-        if (current.tag !== tag)
-            continue;
-        blocks.push({
-            kind: tag === 'MA_TURN' ? 'turn' : 'event',
-            line: lineOf(source, current.openIndex),
-            body: source.slice(current.contentStart, index),
-            autoClosed: false,
-        });
-        current = undefined;
-    }
-    if (current) {
-        blocks.push({
-            kind: current.tag === 'MA_TURN' ? 'turn' : 'event',
-            line: lineOf(source, current.openIndex),
-            body: source.slice(current.contentStart),
-            autoClosed: true,
-        });
-    }
-    return blocks;
-}
-function maskRangesPreservingLines(source, ranges) {
-    if (!ranges.length)
-        return source;
-    const chars = [...source];
-    for (const range of ranges) {
-        for (let index = Math.max(0, range.start); index < Math.min(chars.length, range.end); index += 1) {
-            if (chars[index] !== '\n' && chars[index] !== '\r')
-                chars[index] = ' ';
-        }
-    }
-    return chars.join('');
-}
-function dynamicModuleFromSpec(spec, rawContent, line) {
-    const lines = moduleLines(rawContent);
-    let objectName = '';
-    let tableName = spec.tableName || '';
-    let layerLabel = spec.layer || '';
-    let contentLines = [];
-    if (spec.event) {
-        if (spec.dynamicTable) {
-            layerLabel = lines[0] || '';
-            contentLines = lines.slice(1);
-        }
-        else {
-            contentLines = lines;
-        }
-    }
-    else if (spec.custom) {
-        if (lines.length < 4)
-            throw new Error(`第 ${line} 行的 <MA_CUSTOM> 至少需要“表名、对象、语义层、事实”四行`);
-        [tableName, objectName, layerLabel] = lines;
-        contentLines = lines.slice(3);
-    }
-    else if (spec.dynamicTable) {
-        if (lines.length < 3)
-            throw new Error(`第 ${line} 行的 <${spec.tag}> 至少需要“对象、语义层、事实”三行`);
-        [objectName, layerLabel] = lines;
-        contentLines = lines.slice(2);
-    }
-    else {
-        objectName = lines[0] || '';
-        contentLines = lines.slice(1);
-    }
-    const contentLimit = spec.tag === 'MA_CORE' ? 320 : 220;
-    const content = compactFactText(contentLines.join(' '), contentLimit, `<${spec.tag}>`);
-    if (!content)
-        throw new Error(`第 ${line} 行的 <${spec.tag}> 缺少具体事实`);
-    if (!spec.event && !objectName)
-        throw new Error(`第 ${line} 行的 <${spec.tag}> 缺少对象名`);
-    if (spec.dynamicTable && !layerLabel)
-        throw new Error(`第 ${line} 行的 <${spec.tag}> 缺少语义层`);
-    return {
-        tag: spec.tag,
-        line,
-        objectName: objectName || undefined,
-        tableName: tableName || undefined,
-        layerLabel,
-        content,
-        role: spec.role,
-        eventModule: Boolean(spec.event),
-        unresolved: Boolean(spec.unresolved),
-        parserSource: spec.source || 'canonical',
-    };
-}
-function scanTaggedEventModules(body, moduleRegistry, baseLine) {
-    const modules = [];
-    const ranges = [];
-    const tokenRe = /<(\/)?(MA_[^<>]+)>/gu;
-    let current;
-    const finalize = (endIndex, endTokenIndex = endIndex) => {
-        if (!current)
-            return;
-        const rawContent = body.slice(current.contentStart, endIndex);
-        modules.push(dynamicModuleFromSpec(current.spec, rawContent, baseLine + lineOf(body, current.openIndex) - 1));
-        ranges.push({ start: current.openIndex, end: endTokenIndex });
-        current = undefined;
-    };
-    for (const match of body.matchAll(tokenRe)) {
-        const closing = Boolean(match[1]);
-        const rawTag = match[2];
-        const tag = canonicalStateTag(rawTag);
-        const index = match.index ?? 0;
-        const spec = moduleRegistry.resolveTag(tag);
-        if (!spec)
-            throw new Error(`第 ${baseLine + lineOf(body, index) - 1} 行使用了未注册模块 <${tag}>`);
-        if (!closing) {
-            // 自然模块不允许嵌套；遇到新模块时，将前一模块确定性闭合。
-            finalize(index, index);
-            current = {
-                tag,
-                spec,
-                openIndex: index,
-                contentStart: index + match[0].length,
-            };
-            continue;
-        }
-        if (!current)
-            continue;
-        if (current.tag !== tag) {
-            // 错配结束标签不能改变事实归属；只在边界处闭合当前模块。
-            finalize(index, index + match[0].length);
-            continue;
-        }
-        finalize(index, index + match[0].length);
-    }
-    finalize(body.length, body.length);
-    return { modules, residual: maskRangesPreservingLines(body, ranges) };
-}
-function headerLooksSemantic(value) {
-    return /(模块|身份|定义|事实|状态|结果|摘要|关系|能力|外观|表现|检索词|关键词|未决)/u.test(String(value || ''));
-}
-function parseResidualEventText(residual, moduleRegistry, line) {
-    const lines = moduleLines(residual);
-    const rawEventName = lines.shift() || '';
-    const eventName = safeText(rawEventName.replace(/^(?:事件(?:名称|名)?|变化链)\s*[:：]\s*/u, ''), 240).trim();
-    if (!eventName)
-        throw new Error(`第 ${line} 行的 <MA_EVENT> 缺少事件名称`);
-    let legacyStatus = '';
-    const modules = [];
-    const implicitCoreLines = [];
-    let pending;
-    const flush = () => {
-        if (!pending)
-            return;
-        modules.push(dynamicModuleFromSpec(pending.spec, pending.lines.join('\n'), line));
-        pending = undefined;
-    };
-    for (const rawLine of lines) {
-        const cleaned = rawLine.replace(/^[-*•]\s*/u, '').trim();
-        if (!cleaned)
-            continue;
-        const statusMatch = cleaned.match(/^(?:(?:事件|阶段)?状态\s*[:：]?\s*)?(进行中|已结束)$/u);
-        if (statusMatch && !legacyStatus) {
-            legacyStatus = statusMatch[1];
-            continue;
-        }
-        const headerMatch = cleaned.match(/^([^:：]{1,80})\s*[:：]\s*(.*)$/u);
-        const headerText = headerMatch?.[1]?.trim() || cleaned;
-        const spec = moduleRegistry.resolveHeader(headerText);
-        const standaloneHeader = Boolean(spec && !headerMatch);
-        if (spec && (headerMatch || standaloneHeader)) {
-            flush();
-            const remainder = headerMatch?.[2]?.trim() || '';
-            const pendingLines = [];
-            if (remainder) {
-                if (!spec.event && !spec.custom) {
-                    const split = remainder.split(/\s*[|｜]\s*/u);
-                    pendingLines.push(split.shift() || '');
-                    if (split.length)
-                        pendingLines.push(split.join('；'));
-                }
-                else {
-                    pendingLines.push(remainder);
-                }
-            }
-            pending = { spec, lines: pendingLines };
-            continue;
-        }
-        if (headerMatch && headerLooksSemantic(headerText))
-            throw new Error(`第 ${line} 行出现未注册动态模块标题：${headerText}`);
-        if (pending) {
-            pending.lines.push(cleaned);
-            continue;
-        }
-        const implicitFact = cleaned
-            .replace(/^(?:动作骨架|核心动作|事件骨架|事件事实|事实)\s*[:：]\s*/u, '')
-            .trim();
-        if (implicitFact)
-            implicitCoreLines.push(implicitFact);
-    }
-    flush();
-    if (implicitCoreLines.length) {
-        const coreSpec = moduleRegistry.resolveTag('MA_CORE');
-        modules.unshift(dynamicModuleFromSpec(coreSpec, implicitCoreLines.join('；'), line));
-    }
-    return { eventName, legacyStatus, modules };
-}
-/**
- * 动态自然模块解析器：协议骨架固定，模块目录由当前 tableRegistry 生成。
- * 严格语义错误继续拒绝；标签缺失、重复、别名与可确定的边界错误在本地归一化。
- */
-function parseStateTextBlocks(raw, registry = undefined) {
-    const source = normalizeProtocolSource(raw);
+function parseStateTextBlocks(raw) {
+    const source = normalizeModelProtocolText(raw, 240000);
     if (!source)
         throw new Error('状态模型返回为空');
-    if (/<MA_CHANGE>|<MA_(?:FACT|ROW)>|(^|\n)\s*[^\n]+\s*[=＝]\s*\S/iu.test(source))
+    if (/<MA_CHANGE>|<MA_(?:FACT|ROW)>/iu.test(source)) {
         throw new Error('状态模型返回了已停用键值协议；只接受 <MA_EVENT> 内的自然事实模块');
-    const moduleRegistry = buildStateModuleRegistry(registry);
+    }
     const output = [];
-    for (const block of extractProtocolContainers(source)) {
-        if (block.kind === 'turn') {
-            const summary = compactFactText(block.body, 320, '<MA_TURN>');
-            if (summary)
-                output.push({ kind: 'turn', line: block.line, summary, parserMode: block.autoClosed ? 'compat' : 'strict' });
-            continue;
+    const turnRe = /<MA_TURN>([\s\S]*?)<\/MA_TURN>/giu;
+    for (const match of source.matchAll(turnRe)) {
+        const summary = compactFactText(match[1], 320, '<MA_TURN>');
+        if (summary)
+            output.push({ kind: 'turn', line: lineOf(source, match.index ?? 0), summary });
+    }
+    const eventRe = /<MA_EVENT>([\s\S]*?)<\/MA_EVENT>/giu;
+    for (const match of source.matchAll(eventRe)) {
+        const body = match[1];
+        const line = lineOf(source, match.index ?? 0);
+        const moduleRe = /<(MA_[A-Z_]+)>([\s\S]*?)<\/\1>/giu;
+        const modules = [];
+        let firstModuleIndex = body.length;
+        for (const moduleMatch of body.matchAll(moduleRe)) {
+            firstModuleIndex = Math.min(firstModuleIndex, moduleMatch.index ?? body.length);
+            const tag = moduleMatch[1].toUpperCase();
+            const spec = NATURAL_MODULES[tag];
+            if (!spec)
+                throw new Error(`第 ${lineOf(source, (match.index ?? 0) + (moduleMatch.index ?? 0))} 行使用了未注册模块 <${tag}>`);
+            const lines = moduleLines(moduleMatch[2]);
+            let objectName = '';
+            let tableName = '';
+            let layerLabel = spec.layer;
+            let contentLines = [];
+            if (spec.event) {
+                contentLines = lines;
+            }
+            else if (spec.custom) {
+                if (lines.length < 4)
+                    throw new Error(`第 ${line} 行的 <MA_CUSTOM> 至少需要“表名、对象、语义层、事实”四行`);
+                [tableName, objectName, layerLabel] = lines;
+                contentLines = lines.slice(3);
+            }
+            else {
+                objectName = lines[0] || '';
+                contentLines = lines.slice(1);
+            }
+            const contentLimit = tag === 'MA_CORE' ? 320 : 220;
+            const content = compactFactText(contentLines.join(' '), contentLimit, `<${tag}>`);
+            if (!content)
+                throw new Error(`第 ${line} 行的 <${tag}> 缺少具体事实`);
+            if (!spec.event && !objectName)
+                throw new Error(`第 ${line} 行的 <${tag}> 缺少对象名`);
+            modules.push({
+                tag,
+                line,
+                objectName: objectName || undefined,
+                tableName: tableName || undefined,
+                layerLabel,
+                content,
+                role: spec.role,
+                eventModule: Boolean(spec.event),
+                unresolved: Boolean(spec.unresolved),
+            });
         }
-        const scanned = scanTaggedEventModules(block.body, moduleRegistry, block.line);
-        const residual = parseResidualEventText(scanned.residual, moduleRegistry, block.line);
-        const modules = [...residual.modules, ...scanned.modules];
-        if (!modules.some((module) => module.tag === 'MA_CORE')) {
-            const fallbackModule = modules.find((module) => module.eventModule && !module.unresolved && module.tag !== 'MA_CORE');
-            const coreSpec = moduleRegistry.resolveTag('MA_CORE');
-            modules.unshift(dynamicModuleFromSpec(coreSpec, fallbackModule?.content || residual.eventName, block.line));
-        }
-        const mergedModules = [];
-        const moduleIndexes = new Map();
+        const prelude = moduleLines(body.slice(0, firstModuleIndex));
+        const eventName = safeText(prelude[0], 240).trim();
+        if (!eventName)
+            throw new Error(`第 ${line} 行的 <MA_EVENT> 缺少事件名称`);
+        // 兼容 1.3.14 已保存的模型输出：旧第二行可以读取，但只作为迁移输入，
+        // 不再拥有事件关闭权。新协议在事件名之后直接进入事实模块。
+        const legacyStatus = prelude[1] || '';
+        if (legacyStatus && !/^(进行中|已结束)$/u.test(legacyStatus))
+            throw new Error(`事件“${eventName}”在事件名后出现未知文本；新协议应直接写事实模块`);
+        if (prelude.length > (legacyStatus ? 2 : 1))
+            throw new Error(`事件“${eventName}”在事实模块前包含多余文本`);
+        if (!modules.length)
+            throw new Error(`事件“${eventName}”没有事实模块`);
+        if (!modules.some((module) => module.tag === 'MA_CORE'))
+            throw new Error(`事件“${eventName}”缺少唯一的 <MA_CORE> 动作骨架`);
+        const moduleKeys = new Set();
         for (const module of modules) {
             const key = module.eventModule
-                ? `${module.tableName || module.role || ''}|${module.layerLabel}|${module.tag === 'MA_CORE' ? 'core' : module.unresolved ? 'unresolved' : 'fact'}`
-                : `${module.tableName || module.role || ''}|${module.layerLabel}|${canonicalObjectTitle(module.objectName)}`;
-            const existingIndex = moduleIndexes.get(key);
-            if (existingIndex === undefined) {
-                moduleIndexes.set(key, mergedModules.length);
-                mergedModules.push(module);
-                continue;
-            }
-            const existing = mergedModules[existingIndex];
-            existing.content = mergeNaturalModuleContent(existing.content, module.content, existing.tag);
-            existing.unresolved = Boolean(existing.unresolved || module.unresolved);
-            existing.parserSource = existing.parserSource === module.parserSource ? existing.parserSource : 'normalized';
+                ? module.tag
+                : `${module.tag}|${canonicalObjectTitle(module.objectName)}|${module.tableName || ''}|${module.layerLabel}`;
+            if (moduleKeys.has(key))
+                throw new Error(`事件“${eventName}”重复返回同一事实模块：${module.eventModule ? `<${module.tag}>` : module.objectName}`);
+            moduleKeys.add(key);
         }
-        output.push({
-            kind: 'event',
-            line: block.line,
-            eventName: residual.eventName,
-            reportedClosed: residual.legacyStatus === '已结束',
-            closed: false,
-            modules: mergedModules,
-            parserMode: block.autoClosed || mergedModules.some((item) => item.parserSource !== 'canonical') ? 'compat' : 'strict',
-        });
+        output.push({ kind: 'event', line, eventName, reportedClosed: legacyStatus === '已结束', closed: false, modules });
     }
-    if (!output.some((block) => block.kind === 'turn' || block.kind === 'event'))
+    if (!output.some((block) => block.kind === 'turn' || block.kind === 'event')) {
         throw new Error('状态模型未返回 <MA_TURN> 或 <MA_EVENT>');
+    }
     return output.sort((a, b) => a.line - b.line);
 }
 function naturalTable(module, active) {
@@ -6871,10 +6762,10 @@ function arrayLayerOperation(layerKey) {
 }
 function eventCoreText(event) {
     return event.modules.find((module) => module.tag === 'MA_CORE')?.content
-        || event.modules.find((module) => module.eventModule && !module.unresolved)?.content
+        || event.modules.find((module) => module.tag === 'MA_EVENT_RESULT')?.content
         || `${event.eventName}${event.closed ? '已结束' : '正在进行'}`;
 }
-function projectionPatchForFact(fact, working, activeFacts = []) {
+function projectionPatchForFact(fact, working) {
     const view = fact.view;
     if (!view)
         return undefined;
@@ -6882,19 +6773,6 @@ function projectionPatchForFact(fact, working, activeFacts = []) {
     const existing = rows.find((row) => row.id === view.rowId)
         ?? rows.find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(view.objectTitle));
     const fields = { ...(existing?.fields ?? {}) };
-    const supersededFactId = String(fact.supersedesFactId || fact.supersedes_fact_id || '').trim();
-    const supersededFact = supersededFactId ? activeFacts.find((item) => item.factId === supersededFactId) : undefined;
-    const supersededView = supersededFact?.view;
-    if (supersededView
-        && supersededView.table === view.table
-        && supersededView.rowId === view.rowId
-        && supersededView.layerType === 'string[]'
-        && supersededView.layerKey
-        && Array.isArray(fields[supersededView.layerKey])) {
-        const oldIdentity = identity(supersededView.value);
-        fields[supersededView.layerKey] = fields[supersededView.layerKey]
-            .filter((item) => identity(item) !== oldIdentity);
-    }
     let content = existing?.content || '';
     let status = existing?.status || 'active';
     let rowKeywords = unique([...(existing?.keywords ?? []), ...(view.keywords ?? [])], 24, 100);
@@ -6933,7 +6811,7 @@ function projectionPatchForFact(fact, working, activeFacts = []) {
         semanticRole: view.semanticRole,
         eventId: fact.event_id,
         eventIds: unique([...(existing?.eventIds ?? []), existing?.eventId, fact.event_id], 80, 160),
-        factIds: unique([...(existing?.factIds ?? []).filter((id) => id !== supersededFactId), fact.fact_id], 200, 180),
+        factIds: unique([...(existing?.factIds ?? []), fact.fact_id], 200, 180),
     };
     if (view.baseRevisionStatement)
         row.baseRevisionEvidence = { eventId: fact.event_id, factId: fact.fact_id, statement: view.baseRevisionStatement };
@@ -7040,54 +6918,11 @@ function naturalChange(event, module, active, previous, activeFacts, allObjectNa
         ...applyFactContractGate(fact, { existingObject: Boolean(existing) }),
     };
 }
-
-function parseLegacyStateTextOutput(raw, previousSnapshot, registry, activeFacts = []) {
-    const active = enabledTables(normalizeTableRegistry(registry));
-    const previous = dedupeStrongStateRows(previousSnapshot, registry);
-    const working = structuredClone(previous);
-    const blocks = parseLegacyStateTextBlocks(raw);
-    const turnSummary = blocks.filter((block) => block.kind === 'turn').map((block) => fieldValue(block, 'summary')).at(-1) ?? '';
-    const factsById = new Map();
-    const rowsByIdentity = new Map();
-    const relocationsById = new Map();
-    for (const block of blocks.filter((item) => item.kind === 'change')) {
-        const converted = changeFromBlock(block, active, working, activeFacts);
-        const factId = String(converted.fact.fact_id || '');
-        factsById.set(factId, factsById.has(factId) ? mergeFacts(factsById.get(factId), converted.fact) : converted.fact);
-        applyPatchToWorkingSnapshot(working, converted.patch);
-        const key = `${converted.patch.table}|${canonicalObjectTitle(converted.patch.row.title) || converted.patch.matchKey}`;
-        const current = rowsByIdentity.get(key);
-        rowsByIdentity.set(key, current ? {
-            table: converted.patch.table,
-            row: mergePatchRows(current.row, converted.patch.row),
-            matchKey: converted.patch.matchKey,
-            relocation: current.relocation ?? converted.patch.relocation,
-        } : converted.patch);
-        if (converted.patch.relocation)
-            relocationsById.set(converted.patch.relocation.id, converted.patch.relocation);
-    }
-    const snapshot = {};
-    for (const { table, row } of rowsByIdentity.values())
-        (snapshot[table] ||= []).push(row);
-    if (!factsById.size)
-        throw new Error('旧状态协议没有可提交的 <MA_CHANGE>');
-    return {
-        turnSummary,
-        facts: [...factsById.values()],
-        snapshot,
-        relocations: [...relocationsById.values()],
-        entryLifecycleDirectives: [],
-        parserMode: 'legacy-compatible',
-    };
-}
-
 function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [], options = {}) {
-    if (/<MA_CHANGE>|<MA_TURN>[\s\S]*?(?:摘要|summary)\s*[=＝:：]/iu.test(String(raw || '')))
-        return parseLegacyStateTextOutput(raw, previousSnapshot, registry, activeFacts);
     const active = enabledTables(normalizeTableRegistry(registry));
     const previous = dedupeStrongStateRows(previousSnapshot, registry);
     const working = structuredClone(previous);
-    const blocks = parseStateTextBlocks(raw, registry);
+    const blocks = parseStateTextBlocks(raw);
     const turnSummary = blocks.filter((block) => block.kind === 'turn').map((block) => block.summary).at(-1) ?? '';
     const factsById = new Map();
     const snapshot = {};
@@ -7103,7 +6938,7 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
             const fact = naturalChange(event, module, active, working, activeFacts, allObjectNames);
             const id = String(fact.fact_id);
             factsById.set(id, factsById.has(id) ? mergeFacts(factsById.get(id), fact) : fact);
-            const patch = projectionPatchForFact(fact, working, activeFacts);
+            const patch = projectionPatchForFact(fact, working);
             if (!patch)
                 continue;
             applyPatchToWorkingSnapshot(working, patch);
@@ -7162,7 +6997,7 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
             ...applyFactContractGate(statusFact, { existingObject: Boolean(existingEventRow) }),
         };
         factsById.set(statusFactId, routedStatusFact);
-        const statusPatch = projectionPatchForFact(routedStatusFact, working, activeFacts);
+        const statusPatch = projectionPatchForFact(routedStatusFact, working);
         if (statusPatch) {
             applyPatchToWorkingSnapshot(working, statusPatch);
             const key = `${statusPatch.table}|${canonicalObjectTitle(statusPatch.row.title) || statusPatch.matchKey}`;
@@ -7191,12 +7026,12 @@ function parseStateTextOutput(raw, previousSnapshot, registry, activeFacts = [],
 __defs["domain/summary-text.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
-Object.defineProperty(__scope,"normalizeProtocolText",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["normalizeProtocolText"]});
+Object.defineProperty(__scope,"normalizeModelProtocolText",{enumerable:true,configurable:true,get:()=>__require("domain/fixed-text.js")["normalizeModelProtocolText"]});
 with(__scope){
 Object.defineProperty(exports,"parseSummaryTextOutput",{enumerable:true,configurable:true,get:()=>parseSummaryTextOutput});
 /**
- * 模块职责：把小总结和大总结的模型文本归一化为稳定槽位结果。
- * 维护边界：只修复标签、字段名、顺序和重复外壳；eventId、总结ID、版本链与事实内容均由插件维护。
+ * 模块职责：解析小总结和大总结的自然文本模块，并按本次请求槽位回收结果。
+ * 维护边界：模型只返回位置固定的短文本；eventId、总结 ID、版本链和持久化全部由插件维护。
  */
 function lines(value) {
     return String(value || '')
@@ -7205,189 +7040,67 @@ function lines(value) {
         .map((line) => line.trim())
         .filter(Boolean);
 }
-function unique(values, limit = 60) {
-    const output = [];
-    const seen = new Set();
-    for (const raw of values) {
-        const value = safeText(raw, 20000).replace(/\s+/g, ' ').trim();
-        const key = value.normalize('NFKC').toLowerCase().replace(/[\s。．.!！?？;；,，、:：]+/gu, '');
-        if (!value || !key || seen.has(key))
-            continue;
-        seen.add(key);
-        output.push(value);
-        if (output.length >= limit)
-            break;
-    }
-    return output;
+function lineOf(source, index) {
+    return source.slice(0, index).split('\n').length;
 }
-function canonicalTag(value) {
-    return String(value || '').normalize('NFKC').trim().toUpperCase().replace(/[\s-]+/g, '_');
+function nested(body, tag) {
+    const match = body.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'iu'));
+    return match?.[1] ?? '';
 }
-function normalizeSource(raw) {
-    return normalizeProtocolText(raw)
-        .replace(/<\s*(\/?)\s*(MA_(?:SUMMARY|SUMMARY_TEXT|MEMORY|KEYWORDS))\s*>/giu, (_m, slash, tag) => `<${slash}${canonicalTag(tag)}>`)
-        .trim();
+function nestedAll(body, tag) {
+    const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'giu');
+    return [...body.matchAll(re)].map((match) => match[1]);
 }
-function extractContainers(source, tag) {
-    const output = [];
-    const tokenRe = new RegExp(`<(\\/)?${tag}>`, 'giu');
-    let current;
-    for (const match of source.matchAll(tokenRe)) {
-        const closing = Boolean(match[1]);
-        const index = match.index ?? 0;
-        if (!closing) {
-            if (current)
-                output.push(source.slice(current, index));
-            current = index + match[0].length;
-            continue;
-        }
-        if (current === undefined)
-            continue;
-        output.push(source.slice(current, index));
-        current = undefined;
-    }
-    if (current !== undefined)
-        output.push(source.slice(current));
-    return output;
-}
-function subBlocks(body, tag) {
-    return extractContainers(body, tag).map((item) => item.trim()).filter(Boolean);
-}
-function withoutSubBlocks(body) {
-    return body.replace(/<MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>[\s\S]*?(?:<\/MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>|(?=<MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>|$))/giu, '\n');
-}
-function fieldMap(value) {
-    const map = new Map();
-    let lastKey = '';
-    for (const rawLine of lines(value)) {
-        const match = rawLine.match(/^([^:：=＝]{1,80})\s*[:：=＝]\s*(.*)$/u);
-        if (match) {
-            lastKey = match[1].normalize('NFKC').trim().toLowerCase().replace(/[\s_-]+/g, '');
-            map.set(lastKey, [...(map.get(lastKey) ?? []), match[2].trim()]);
-        }
-        else if (lastKey) {
-            const values = [...(map.get(lastKey) ?? [])];
-            if (values.length)
-                values[values.length - 1] = `${values.at(-1)}\n${rawLine}`.trim();
-            map.set(lastKey, values);
-        }
-    }
-    return map;
-}
-function lastField(map, aliases) {
-    for (const key of aliases) {
-        const values = map.get(key);
-        if (values?.length)
-            return values.at(-1).trim();
-    }
-    return '';
-}
-function allFields(map, aliases) {
-    return aliases.flatMap((key) => map.get(key) ?? []).map((item) => item.trim()).filter(Boolean);
-}
-function normalizeSlot(value) {
-    const match = String(value || '').trim().toUpperCase().match(/(?:槽位\s*[:：]?\s*)?([SL]\d+)/u);
-    return match?.[1] || '';
-}
-function memoryFromText(value, slot) {
-    const parts = lines(value).map((item) => item.replace(/^[-*•]\s*/u, '').trim()).filter(Boolean);
-    let objectType = '';
-    let objectName = '';
-    let content = '';
-    const fields = fieldMap(value);
-    if (fields.size) {
-        objectType = lastField(fields, ['对象类型', '类型', 'objecttype', 'type']);
-        objectName = lastField(fields, ['对象', '对象名', '名称', 'object', 'name']);
-        content = lastField(fields, ['内容', '记忆', '结果', 'content', 'memory', 'result']);
-    }
-    if (!objectName) {
-        [objectType, objectName] = parts;
-        content = parts.slice(2).join(' ');
-    }
-    content = safeText(content, 1200).replace(/\s+/g, ' ').trim();
-    if (content.length > 220)
-        throw new Error(`总结槽位 ${slot} 的对象记忆过长：${content.length}/220 字`);
-    return { objectType: safeText(objectType, 80).trim(), objectName: safeText(objectName, 240).trim(), content };
-}
-function parseBlock(body, expectedSlots, fallbackSlot = '') {
-    const fields = fieldMap(withoutSubBlocks(body));
-    const residualLines = lines(withoutSubBlocks(body)).filter((line) => !/^[^:：=＝]{1,80}\s*[:：=＝]/u.test(line));
-    let slot = normalizeSlot(lastField(fields, ['槽位', 'slot']) || residualLines[0] || fallbackSlot);
-    if (!slot && expectedSlots.size === 1)
-        slot = [...expectedSlots][0];
-    let title = lastField(fields, ['标题', 'title']);
-    if (!title) {
-        const slotIndex = residualLines.findIndex((line) => normalizeSlot(line) === slot);
-        title = safeText(residualLines[slotIndex >= 0 ? slotIndex + 1 : 0], 1000).trim();
-    }
-    const taggedSummary = subBlocks(body, 'MA_SUMMARY_TEXT').at(-1) || '';
-    let summary = taggedSummary || lastField(fields, ['摘要', '总结', '正文', 'summary', 'text']);
-    if (!summary) {
-        const candidates = residualLines.filter((line) => normalizeSlot(line) !== slot && line !== title);
-        summary = candidates.join(' ');
-    }
-    summary = safeText(summary, 20000).replace(/\s+/g, ' ').trim();
-    const keywordText = subBlocks(body, 'MA_KEYWORDS').join('\n');
-    const keywords = unique([
-        ...lines(keywordText).map((item) => item.replace(/^[-*•]\s*/u, '')),
-        ...allFields(fields, ['关键词', '检索词', 'keywords', 'keyword']).flatMap((item) => item.split(/[，,、;；\n]+/u)),
-    ], 24);
-    const distributions = subBlocks(body, 'MA_MEMORY')
-        .map((value) => memoryFromText(value, slot))
-        .filter((item) => item.objectName && item.content)
-        .slice(0, 40);
-    return { slot, title, summary, keywords, unresolved: [], distributions };
-}
-function mergeSlotResult(left, right) {
-    return {
-        slot: left.slot,
-        title: right.title || left.title,
-        summary: unique([left.summary, right.summary], 8).join('；'),
-        keywords: unique([...(left.keywords ?? []), ...(right.keywords ?? [])], 24),
-        unresolved: unique([...(left.unresolved ?? []), ...(right.unresolved ?? [])], 40),
-        distributions: [...new Map([...(left.distributions ?? []), ...(right.distributions ?? [])]
-            .map((item) => [`${item.objectType}|${item.objectName}|${item.content}`, item])).values()].slice(0, 40),
-    };
-}
-
+/**
+ * 固定自然模块：<MA_SUMMARY> 的前两行依次是 slot 与标题；摘要正文和关键词放在独立子模块。
+ * 结构槽位仍严格校验；模块正文允许出现等号等普通叙事符号。
+ */
 function parseSummaryTextOutput(raw, expectedSlots) {
-    const source = normalizeSource(raw);
+    const source = normalizeModelProtocolText(raw, 240000);
     if (!source)
         throw new Error('总结模型返回为空');
-    const expected = new Set(expectedSlots.map((slot) => String(slot).toUpperCase()));
-    let blocks = extractContainers(source, 'MA_SUMMARY');
-    // 单槽位时允许模型省略 MA_SUMMARY 外壳；多槽位时按槽位标题切段。
-    if (!blocks.length) {
-        if (expected.size === 1) {
-            blocks = [source];
-        }
-        else {
-            const slotRe = new RegExp(`(^|\\n)\\s*(?:槽位\\s*[:：=＝]\\s*)?(${[...expected].join('|')})\\s*(?=\\n|$|[:：])`, 'giu');
-            const matches = [...source.matchAll(slotRe)];
-            if (matches.length) {
-                blocks = matches.map((match, index) => source.slice(match.index ?? 0, matches[index + 1]?.index ?? source.length));
-            }
-        }
-    }
-    if (!blocks.length)
-        throw new Error('总结模型未返回可识别的槽位结果');
+    const expected = new Set(expectedSlots.map((slot) => slot.toUpperCase()));
     const output = new Map();
-    blocks.forEach((body, index) => {
-        const fallback = expectedSlots[index] || '';
-        const parsed = parseBlock(body, expected, fallback);
-        if (!parsed.slot)
-            throw new Error(`第 ${index + 1} 个总结块缺少槽位`);
-        if (!expected.has(parsed.slot))
-            throw new Error(`总结返回未请求槽位：${parsed.slot}`);
-        if (!parsed.summary)
-            throw new Error(`总结槽位 ${parsed.slot} 缺少摘要正文`);
-        const previous = output.get(parsed.slot);
-        output.set(parsed.slot, previous ? mergeSlotResult(previous, parsed) : parsed);
-    });
-    for (const slot of expected) {
+    const blockRe = /<MA_SUMMARY>([\s\S]*?)<\/MA_SUMMARY>/giu;
+    for (const match of source.matchAll(blockRe)) {
+        const body = match[1];
+        const firstNested = body.search(/<MA_(?:SUMMARY_TEXT|MEMORY|KEYWORDS)>/iu);
+        const prelude = lines(firstNested < 0 ? body : body.slice(0, firstNested));
+        const slot = safeText(prelude[0], 40).trim().toUpperCase();
+        const title = safeText(prelude[1], 1000).trim();
+        const line = lineOf(source, match.index ?? 0);
+        if (!slot)
+            throw new Error(`第 ${line} 行开始的 <MA_SUMMARY> 缺少槽位`);
+        if (!expected.has(slot))
+            throw new Error(`总结返回未请求槽位：${slot}`);
+        if (output.has(slot))
+            throw new Error(`总结重复返回槽位：${slot}`);
+        const summary = safeText(nested(body, 'MA_SUMMARY_TEXT'), 20000).replace(/\s+/g, ' ').trim();
+        if (!summary)
+            throw new Error(`总结槽位 ${slot} 缺少 <MA_SUMMARY_TEXT>`);
+        const keywords = lines(nested(body, 'MA_KEYWORDS'))
+            .map((item) => safeText(item.replace(/^[-*•]\s*/, ''), 200).trim())
+            .filter(Boolean)
+            .slice(0, 24);
+        const distributions = nestedAll(body, 'MA_MEMORY').map((value) => {
+            const parts = lines(value);
+            const content = safeText(parts.slice(2).join(' '), 5000).replace(/\s+/g, ' ').trim();
+            // 220 字是生成目标，不是协议硬门槛；保留适度超长结果，仅阻断明显失控输出。
+            if (content.length > 1200)
+                throw new Error(`总结槽位 ${slot} 的对象记忆异常过长：${content.length}/1200 字`);
+            return {
+                objectType: safeText(parts[0], 80).trim(),
+                objectName: safeText(parts[1], 240).trim(),
+                content,
+            };
+        }).filter((item) => item.objectName && item.content).slice(0, 40);
+        output.set(slot, { slot, title, summary, keywords, unresolved: [], distributions });
+    }
+    if (!output.size)
+        throw new Error('总结模型未返回 <MA_SUMMARY>');
+    for (const slot of expected)
         if (!output.has(slot))
             throw new Error(`总结缺少槽位结果：${slot}`);
-    }
     return output;
 }
 
@@ -7395,90 +7108,11 @@ function parseSummaryTextOutput(raw, expectedSlots) {
 };
 __defs["domain/summary.js"]=function(exports,__require){
 const __scope=Object.create(null);
-Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 with(__scope){
-Object.defineProperty(exports,"summaryContentFingerprint",{enumerable:true,configurable:true,get:()=>summaryContentFingerprint});
-Object.defineProperty(exports,"refreshSummaryFingerprint",{enumerable:true,configurable:true,get:()=>refreshSummaryFingerprint});
-Object.defineProperty(exports,"mergeEquivalentSummaryVersion",{enumerable:true,configurable:true,get:()=>mergeEquivalentSummaryVersion});
-Object.defineProperty(exports,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>inferSummaryLifecycle});
-Object.defineProperty(exports,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>markSummaryLifecycle});
-Object.defineProperty(exports,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>summaryIsCurrent});
 Object.defineProperty(exports,"normalizeSummary",{enumerable:true,configurable:true,get:()=>normalizeSummary});
-Object.defineProperty(exports,"SUMMARY_LIFECYCLE_STATES",{enumerable:true,configurable:true,get:()=>SUMMARY_LIFECYCLE_STATES});
-function identityText(value) {
-    return safeText(value, 30000)
-        .normalize('NFKC')
-        .toLowerCase()
-        .replace(/[\s\u3000]+/g, '')
-        .replace(/[，。！？；：、,.!?;:'"“”‘’（）()【】\[\]{}<>《》—–_-]+/g, '');
-}
-function normalizedDistributions(value) {
-    if (!Array.isArray(value))
-        return [];
-    return value.map((item) => ({
-        objectType: identityText(item?.objectType),
-        objectName: identityText(item?.objectName),
-        content: identityText(item?.content),
-    })).filter((item) => item.objectName && item.content)
-        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-}
-function summaryContentFingerprint(value, kind = value?.kind) {
-    return hashText(JSON.stringify({
-        kind: String(kind || ''),
-        eventId: String(value?.eventId || value?.eventIds?.[0] || ''),
-        title: identityText(value?.title),
-        summary: identityText(value?.summary),
-        unresolved: [...new Set((value?.unresolvedItems ?? []).map(identityText).filter(Boolean))].sort(),
-        distributions: normalizedDistributions(value?.distributions),
-    }));
-}
-function refreshSummaryFingerprint(summary) {
-    if (!summary || typeof summary !== 'object')
-        return summary;
-    summary.contentFingerprint = summaryContentFingerprint(summary, summary.kind);
-    const sourceIds = [...new Set([
-        ...(summary.sourceFactIds ?? []),
-        ...(summary.kind === 'large' ? (summary.sourceSummaryIds ?? []) : []),
-        ...(summary.sourceKeys ?? []),
-    ].map((item) => String(item ?? '').trim()).filter(Boolean))].sort();
-    summary.sourceFingerprint = sourceIds.length
-        ? hashText(`${summary.kind}|${summary.eventId || summary.eventIds?.[0] || ''}|${sourceIds.join('|')}`)
-        : undefined;
-    return summary;
-}
-function mergeUnique(left, right, limit = 200) {
-    return [...new Set([...(left ?? []), ...(right ?? [])].map((item) => String(item ?? '').trim()).filter(Boolean))].slice(-limit);
-}
-/** 相同语义版本复用原 ID，只合并来源、分发和生命周期进度。 */
-function mergeEquivalentSummaryVersion(target, incoming) {
-    if (!target || !incoming)
-        return target || incoming;
-    const id = target.id;
-    const createdAt = target.createdAt;
-    Object.assign(target, incoming, {
-        id,
-        createdAt,
-        updatedAt: nowIso(),
-        sourceKeys: mergeUnique(target.sourceKeys, incoming.sourceKeys),
-        sourceFactIds: mergeUnique(target.sourceFactIds, incoming.sourceFactIds),
-        sourceSummaryIds: mergeUnique(target.sourceSummaryIds, incoming.sourceSummaryIds),
-        eventIds: mergeUnique(target.eventIds, incoming.eventIds),
-        keywords: mergeUnique(target.keywords, incoming.keywords, 32),
-        unresolvedItems: mergeUnique(target.unresolvedItems, incoming.unresolvedItems, 40),
-        distributions: [...new Map([...(target.distributions ?? []), ...(incoming.distributions ?? [])]
-            .filter((item) => item?.objectName && item?.content)
-            .map((item) => [`${identityText(item.objectType)}|${identityText(item.objectName)}|${identityText(item.content)}`, item])).values()],
-    });
-    delete target.previousSmallSummaryId;
-    delete target.previousLargeSummaryId;
-    delete target.supersededBySmallSummaryId;
-    delete target.supersededByLargeSummaryId;
-    return refreshSummaryFingerprint(target);
-}
-
 function stringList(value, limit = 60, itemLimit = 600) {
     if (!Array.isArray(value))
         return [];
@@ -7492,70 +7126,21 @@ function normalizeActivityUpdates(value) {
         rowId: safeText(item.rowId, 160).trim(), activity: safeText(item.activity, 40).trim(), reason: safeText(item.reason, 500).trim(),
     })).filter((item) => item.rowId && allowed.has(item.activity)).slice(0, 30);
 }
-const SUMMARY_LIFECYCLE_STATES = ['active', 'superseded', 'solidified', 'archived'];
-
-function inferSummaryLifecycle(value, kind = value?.kind) {
-    const explicit = safeText(value?.lifecycleStatus, 40).trim();
-    if (SUMMARY_LIFECYCLE_STATES.includes(explicit))
-        return explicit;
-    if (kind === 'small') {
-        if (value?.solidifiedByLargeSummaryId)
-            return 'solidified';
-        if (value?.supersededBySmallSummaryId)
-            return 'superseded';
-        return 'active';
-    }
-    if (value?.supersededByLargeSummaryId)
-        return 'superseded';
-    if (value?.eventClosed === true || value?.archivedAt)
-        return 'archived';
-    return 'active';
-}
-
-function markSummaryLifecycle(summary, status, metadata = {}) {
-    if (!summary || !SUMMARY_LIFECYCLE_STATES.includes(status))
-        return summary;
-    summary.lifecycleStatus = status;
-    summary.recallEligible = metadata.recallEligible ?? ['active', 'archived'].includes(status);
-    summary.lifecycleUpdatedAt = nowIso();
-    if (metadata.successorId) {
-        if (summary.kind === 'small')
-            summary.supersededBySmallSummaryId ||= metadata.successorId;
-        else
-            summary.supersededByLargeSummaryId ||= metadata.successorId;
-    }
-    return summary;
-}
-
-function summaryIsCurrent(summary) {
-    return ['active', 'archived'].includes(inferSummaryLifecycle(summary, summary?.kind));
-}
-
 function normalizeSedimentation(value) {
     if (!value || typeof value !== 'object')
         return undefined;
     const source = value;
-    const distributedRowIds = stringList(source.distributedRowIds, 80, 160);
-    const enteredSettlingRowIds = stringList(source.enteredSettlingRowIds, 80, 160);
-    const deletedRowIds = stringList(source.deletedRowIds ?? source.appliedRowIds, 80, 160);
-    const retainedRowIds = stringList(source.retainedRowIds ?? source.ignoredRowIds, 80, 160);
     return {
         removeRowIds: stringList(source.removeRowIds, 50, 160),
         characterActivityUpdates: normalizeActivityUpdates(source.characterActivityUpdates),
         notes: stringList(source.notes, 30, 500),
-        distributedRowIds,
-        enteredSettlingRowIds,
-        deletedRowIds,
-        retainedRowIds,
-        retainedReasons: stringList(source.retainedReasons, 80, 500),
-        // 兼容旧 UI / 旧存档；新代码应读取上面的明确字段。
-        appliedRowIds: stringList(source.appliedRowIds?.length ? source.appliedRowIds : [...distributedRowIds, ...deletedRowIds], 80, 160),
-        ignoredRowIds: stringList(source.ignoredRowIds?.length ? source.ignoredRowIds : retainedRowIds, 80, 160),
+        appliedRowIds: stringList(source.appliedRowIds, 80, 160),
+        ignoredRowIds: stringList(source.ignoredRowIds, 80, 160),
     };
 }
 function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metadata = {}) {
-    const summary = {
-        id: metadata.id || makeId(kind),
+    return {
+        id: makeId(kind),
         kind,
         title: safeText(value.title || (kind === 'small' ? '事件线小总结' : '长期因果总结'), 240).trim(),
         summary: safeText(value.summary || '', 30000).trim(),
@@ -7570,11 +7155,7 @@ function normalizeSummary(value, kind, sourceKeys, previousLargeSummaryId, metad
         // 兼容字段现在只保存统一状态机的结算报告，不再反向修改快照。
         sedimentation: normalizeSedimentation(value.sedimentation),
         previousLargeSummaryId: kind === 'large' ? previousLargeSummaryId : undefined,
-        lifecycleStatus: 'active',
-        recallEligible: true,
-        lifecycleUpdatedAt: nowIso(),
     };
-    return refreshSummaryFingerprint(summary);
 }
 
 }
@@ -8992,8 +8573,6 @@ Object.defineProperty(exports,"runAudit",{enumerable:true,configurable:true,get:
 Object.defineProperty(exports,"parseAuditResult",{enumerable:true,configurable:true,get:()=>parseAuditResult});
 Object.defineProperty(exports,"findMessageElement",{enumerable:true,configurable:true,get:()=>findMessageElement});
 Object.defineProperty(exports,"applyAuditVisibility",{enumerable:true,configurable:true,get:()=>applyAuditVisibility});
-Object.defineProperty(exports,"auditFailurePresentation",{enumerable:true,configurable:true,get:()=>auditFailurePresentation});
-Object.defineProperty(exports,"revisionCommittedForCurrentSource",{enumerable:true,configurable:true,get:()=>revisionCommittedForCurrentSource});
 /**
  * 模块职责：解析和执行规则审核，并应用标记、隐藏或进入修正的结果。
  * 维护边界：技术故障与内容违规必须分开；缺少合法 result 的对象不能默认判为违规。
@@ -9028,28 +8607,27 @@ async function auditText(playerRules, playerText, assistantText) {
         throw new Error(`规则审核未返回有效固定文本（${describeTaskConnection('audit')}）。${toErrorMessage(error)}${preview ? `；返回片段：${preview}` : ''}`, { cause: error });
     }
 }
-function auditFailurePresentation(action) {
-    if (action === 'mark')
-        return { hidden: false, marked: true };
-    return { hidden: true, marked: false };
-}
 async function applyAuditFailureAction(artifact, action) {
-    const presentation = auditFailurePresentation(action);
-    artifact.hiddenByAudit = presentation.hidden;
-    applyAuditVisibility(artifact.messageIndex, presentation.hidden, presentation.marked);
-    if (action !== 'mark' && action !== 'hide') {
-        toast('warning', '审核未通过；插件不会自动删除酒馆消息，已隐藏并保留人工处理入口');
+    if (action === 'mark') {
+        artifact.hiddenByAudit = false;
+        applyAuditVisibility(artifact.messageIndex, false, true);
+        return;
     }
-}
-function revisionCommittedForCurrentSource(artifact) {
-    const currentRevision = artifact.revision;
-    return Boolean(artifact.stages?.revision?.status === 'success'
-        || (currentRevision?.finalFingerprint
-            && currentRevision.finalFingerprint === artifact.sourceFingerprint));
+    if (action === 'hide') {
+        artifact.hiddenByAudit = true;
+        applyAuditVisibility(artifact.messageIndex, true);
+        return;
+    }
+    artifact.hiddenByAudit = true;
+    applyAuditVisibility(artifact.messageIndex, true);
+    toast('warning', '审核未通过；插件不会自动删除酒馆消息，已隐藏并保留人工处理入口');
 }
 function alignRevisionStageWithAudit(artifact, result) {
     const settings = getSettings();
-    const committedRevision = revisionCommittedForCurrentSource(artifact);
+    const currentRevision = artifact.revision;
+    const committedRevision = Boolean(currentRevision?.status === 'success'
+        && currentRevision.finalFingerprint
+        && currentRevision.finalFingerprint === artifact.sourceFingerprint);
     if (result.passed) {
         // 修正成功后的复审属于修正阶段的一部分，不能在后续恢复时把“修正成功”覆盖成“跳过”。
         if (!committedRevision)
@@ -9126,12 +8704,6 @@ async function runAudit(artifact, force = false) {
         else {
             artifact.approvedFingerprint = undefined;
             markStage(artifact, 'audit', 'blocked', result.reason);
-            // 自动修正模式下，审核失败正文必须在修正开始前立即隐藏。
-            // 不能先保存一个可见的失败正文，再等待修正任务接管。
-            if (settings.auditFailAction === 'revise') {
-                artifact.hiddenByAudit = true;
-                applyAuditVisibility(artifact.messageIndex, true, false);
-            }
         }
         alignRevisionStageWithAudit(artifact, result);
         // 审核阶段只更新内存 artifact；业务编排器负责在明确检查点统一保存。
@@ -9153,6 +8725,223 @@ async function runAudit(artifact, force = false) {
 
 }
 };
+__defs["pipeline/commit-coordinator.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
+Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
+Object.defineProperty(__scope,"assertHistoryRevisionCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertHistoryRevisionCurrent"]});
+Object.defineProperty(__scope,"currentHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["currentHistoryRevision"]});
+Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
+Object.defineProperty(__scope,"currentChatLocator",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatLocator"]});
+Object.defineProperty(__scope,"getMessage",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getMessage"]});
+Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageFingerprint"]});
+Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageIdentity"]});
+Object.defineProperty(__scope,"MODULE_NAME",{enumerable:true,configurable:true,get:()=>__require("constants.js")["MODULE_NAME"]});
+Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
+Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+with(__scope){
+Object.defineProperty(exports,"commitArtifact",{enumerable:true,configurable:true,get:()=>commitArtifact});
+Object.defineProperty(exports,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>commitCoreBundle});
+Object.defineProperty(exports,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>captureCommitSnapshot});
+Object.defineProperty(exports,"assertCommitSnapshotCurrent",{enumerable:true,configurable:true,get:()=>assertCommitSnapshotCurrent});
+/**
+ * 模块职责：统一消息 artifact 与聊天级 ChatState 的提交前校验、保存顺序和提交后复核。
+ * 维护边界：只负责“结果如何安全落地”，不决定事实、总结或世界书业务内容。
+ */
+function captureCommitSnapshot(artifact, historyRevision = currentHistoryRevision(artifact.chatKey)) {
+    return Object.freeze({
+        chatKey: String(artifact.chatKey || ''),
+        chatLocator: String(currentChatLocator() || ''),
+        messageIndex: Number(artifact.messageIndex),
+        messageKey: String(artifact.messageKey || ''),
+        sourceFingerprint: String(artifact.sourceFingerprint || ''),
+        historyRevision: Math.max(0, Number(historyRevision) || 0),
+    });
+}
+
+function assertCommitSnapshotCurrent(snapshot, artifact) {
+    if (!snapshot || !artifact)
+        throw new Error('提交快照或 artifact 缺失');
+    if (artifact.chatKey !== snapshot.chatKey
+        || artifact.messageIndex !== snapshot.messageIndex
+        || artifact.messageKey !== snapshot.messageKey
+        || artifact.sourceFingerprint !== snapshot.sourceFingerprint) {
+        throw new CommitRejectedError('artifact 身份已变化，本次旧提交不再写入');
+    }
+    if (snapshot.chatLocator && currentChatLocator() !== snapshot.chatLocator)
+        throw new CommitRejectedError('聊天实例已经变化，本次旧提交不再写入');
+    assertHistoryRevisionCurrent(snapshot.chatKey, snapshot.historyRevision);
+    assertArtifactCommitCurrent(artifact);
+    const message = getMessage(snapshot.messageIndex);
+    if (!message || message.is_user)
+        throw new CommitRejectedError('原AI正文已不存在，请重新整理');
+    if (messageIdentity(snapshot.messageIndex) !== snapshot.messageKey
+        || messageFingerprint(snapshot.messageIndex) !== snapshot.sourceFingerprint) {
+        throw new CommitRejectedError('正文身份已经变化，本次旧提交不再写入');
+    }
+}
+
+/** 保存消息级 artifact。调用方可传 notify，在物理保存成功后刷新 UI。 */
+async function commitArtifact({ artifact, snapshot = captureCommitSnapshot(artifact), notify }) {
+    assertCommitSnapshotCurrent(snapshot, artifact);
+    const message = getMessage(snapshot.messageIndex);
+    const hadExtra = Boolean(message.extra);
+    const hadArtifact = Boolean(message.extra && Object.prototype.hasOwnProperty.call(message.extra, MODULE_NAME));
+    const previousArtifact = message.extra?.[MODULE_NAME];
+    attachArtifactToMessage(message, artifact);
+    try {
+        await persistChatFor(snapshot.chatKey);
+        assertCommitSnapshotCurrent(snapshot, artifact);
+    }
+    catch (error) {
+        // 普通保存失败时恢复内存消息；聊天切换类拒绝可能发生在物理保存之后，不能反向撤销源聊天对象。
+        if (!(error instanceof CommitRejectedError)) {
+            if (hadArtifact)
+                attachArtifactToMessage(message, previousArtifact);
+            else if (message.extra) {
+                delete message.extra[MODULE_NAME];
+                if (!hadExtra && Object.keys(message.extra).length === 0)
+                    delete message.extra;
+            }
+        }
+        throw error;
+    }
+    notify?.(snapshot.messageIndex, artifact);
+    return artifact;
+}
+
+/**
+ * 核心提交顺序固定为 ChatState → artifact。
+ * Outbox/正式事实先成为可恢复来源；若随后消息保存失败，重新进入聊天时仍可根据 ChatState 恢复，
+ * 不会出现“界面显示已排队但持久 Outbox 不存在”的不可恢复状态。
+ */
+async function commitCoreBundle({ artifact, chatState, snapshot = captureCommitSnapshot(artifact), notify }) {
+    assertCommitSnapshotCurrent(snapshot, artifact);
+    await putChatState(chatState);
+    assertCommitSnapshotCurrent(snapshot, artifact);
+    await commitArtifact({ artifact, snapshot, notify });
+    return { artifact, chatState, snapshot };
+}
+
+}
+};
+__defs["pipeline/core-transaction.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
+Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
+Object.defineProperty(__scope,"mergeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["mergeInternalFacts"]});
+Object.defineProperty(__scope,"normalizeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["normalizeInternalFacts"]});
+Object.defineProperty(__scope,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["advanceRuntimeV2"]});
+Object.defineProperty(__scope,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueLorebookProjection"]});
+Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
+Object.defineProperty(__scope,"resolveLatestHistoryInvalidation",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["resolveLatestHistoryInvalidation"]});
+Object.defineProperty(__scope,"hasEligibleLargeSummary",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["hasEligibleLargeSummary"]});
+Object.defineProperty(__scope,"hasEligibleSmallSummary",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["hasEligibleSmallSummary"]});
+Object.defineProperty(__scope,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["captureCommitSnapshot"]});
+Object.defineProperty(__scope,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["commitCoreBundle"]});
+with(__scope){
+Object.defineProperty(exports,"commitCoreTransaction",{enumerable:true,configurable:true,get:()=>commitCoreTransaction});
+/**
+ * 模块职责：把状态提取结果整理为一次核心事务：正式事实、Runtime V2、派生计划与消息 artifact。
+ * 维护边界：核心事务成功后才能执行总结和世界书；派生失败不得回滚本事务。
+ */
+function prepareDerivedStageStatuses(artifact, chatState, settings) {
+    const summaryKind = artifact.runtimeV2?.plan?.summaryKind || '';
+    const plan = {
+        small: summaryKind === 'small',
+        large: summaryKind === 'large',
+        summaryKind,
+        summaryJobId: artifact.runtimeV2?.plan?.summaryJobId || '',
+        syncJobId: artifact.runtimeV2?.plan?.syncJobId || '',
+    };
+    markStage(artifact, 'summary', plan.small || plan.large ? 'queued' : 'skipped');
+    const historyWorkflow = readHistoryWorkflow(chatState);
+    if (historyWorkflow.blocked) {
+        const automatic = historyWorkflow.automatic;
+        markStage(artifact, 'sync', 'blocked', automatic ? '最新正文正在自动重建，完成后将继续同步' : '历史消息已变化，等待手动重算');
+    }
+    else {
+        const lorebookEnabled = resolveHostControl(settings).lorebook;
+        if (!lorebookEnabled)
+            markStage(artifact, 'sync', 'skipped');
+        else if (artifact.runtimeV2?.plan?.sync && artifact.runtimeV2?.plan?.syncJobId)
+            markStage(artifact, 'sync', 'queued');
+        else
+            markStage(artifact, 'sync', artifact.stages.sync?.status === 'success' ? 'success' : 'skipped');
+    }
+    return plan;
+}
+
+async function commitCoreTransaction({
+    artifact,
+    historyRevision,
+    resolveHistoryInvalidation = false,
+    narrativeTail = false,
+    forceReprojection = false,
+    scheduleDerived = true,
+    notify,
+}) {
+    if (!artifact.snapshot || artifact.stages.state.status !== 'success')
+        throw new Error('状态表尚未成功，不能提交核心结果');
+    const commitSnapshot = captureCommitSnapshot(artifact, historyRevision);
+    const chatState = await getChatState(artifact.chatKey);
+    if (!chatState.processedMessageKeys.includes(artifact.messageKey))
+        chatState.processedMessageKeys.push(artifact.messageKey);
+    if (artifact.factPackage?.facts?.length) {
+        const incomingFacts = normalizeInternalFacts(artifact.factPackage.facts, artifact.messageKey);
+        chatState.internalFacts = mergeInternalFacts(chatState.internalFacts ?? [], incomingFacts, artifact.factPackage.facts);
+    }
+    chatState.latestSnapshotMessageKey = artifact.messageKey;
+    if (resolveHistoryInvalidation && narrativeTail)
+        resolveLatestHistoryInvalidation(chatState, artifact.messageIndex);
+
+    const settings = getSettings();
+    const hostControl = resolveHostControl(settings);
+    let runtime = advanceRuntimeV2({
+        chatState,
+        artifact,
+        settings,
+        publicationEnabled: hostControl.lorebook,
+        scheduleDerived,
+        smallEligible: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(
+            chatState.internalFacts ?? [],
+            settings.smallSummaryTurns,
+            artifact.sceneBoundary?.eventIds ?? [],
+        )),
+        largeEligible: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(
+            chatState.smallSummaries ?? [],
+            chatState.largeSummaries ?? [],
+            settings.largeSummaryCount,
+        )),
+    });
+    if (runtime.duplicate && scheduleDerived && forceReprojection && hostControl.lorebook) {
+        const syncJob = enqueueLorebookProjection(chatState, artifact, 'core-recommit');
+        runtime = {
+            ...runtime,
+            runtime: chatState.runtimeV2,
+            plan: {
+                ...runtime.plan,
+                sync: true,
+                syncJobId: syncJob.id,
+            },
+        };
+    }
+    artifact.runtimeV2 = {
+        revision: runtime.runtime.revision,
+        plan: runtime.plan,
+        narrativeContext: structuredClone(runtime.runtime.narrativeContext),
+    };
+    const plan = prepareDerivedStageStatuses(artifact, chatState, settings);
+    chatState.updatedAt = nowIso();
+    await commitCoreBundle({ artifact, chatState, snapshot: commitSnapshot, notify });
+    return { chatState, plan, commitSnapshot };
+}
+
+}
+};
 __defs["pipeline/lorebook.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"VERSION",{enumerable:true,configurable:true,get:()=>__require("constants.js")["VERSION"]});
@@ -9166,7 +8955,6 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"sanitizeBookName",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["sanitizeBookName"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
-Object.defineProperty(__scope,"withTimeout",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["withTimeout"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
 Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
@@ -9174,6 +8962,7 @@ Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,
 Object.defineProperty(__scope,"TaskBlockedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskBlockedError"]});
 Object.defineProperty(__scope,"buildLorebookDocuments",{enumerable:true,configurable:true,get:()=>__require("domain/lorebook-publish.js")["buildLorebookDocuments"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
+Object.defineProperty(__scope,"scheduleLorebookDocuments",{enumerable:true,configurable:true,get:()=>__require("domain/st-recall-scheduler.js")["scheduleLorebookDocuments"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
 Object.defineProperty(__scope,"applyLorebookSuppressions",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["applyLorebookSuppressions"]});
 Object.defineProperty(__scope,"detectPlayerDeletedLorebookEntries",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["detectPlayerDeletedLorebookEntries"]});
@@ -9181,6 +8970,7 @@ Object.defineProperty(__scope,"restoreLorebookSuppression",{enumerable:true,conf
 Object.defineProperty(__scope,"updateLorebookPublicationLedger",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["updateLorebookPublicationLedger"]});
 with(__scope){
 Object.defineProperty(exports,"reloadWorldInfoEditor",{enumerable:true,configurable:true,get:()=>reloadWorldInfoEditor});
+Object.defineProperty(exports,"synchronizeHostRecallSettings",{enumerable:true,configurable:true,get:()=>synchronizeHostRecallSettings});
 Object.defineProperty(exports,"syncLorebook",{enumerable:true,configurable:true,get:()=>syncLorebook});
 Object.defineProperty(exports,"previewLorebookMaintenance",{enumerable:true,configurable:true,get:()=>previewLorebookMaintenance});
 Object.defineProperty(exports,"applyLorebookMaintenance",{enumerable:true,configurable:true,get:()=>applyLorebookMaintenance});
@@ -9228,20 +9018,16 @@ async function withLorebookMutation(name, action) {
     const lockKey = sanitizeBookName(name);
     if (!lockKey)
         return action();
-    const timeoutMs = Math.min(45000, Math.max(12000, Number(getSettings().requestTimeoutMs) || 30000));
-    const previous = lorebookMutationLocks.get(lockKey);
-    if (previous) {
-        // 不绕过仍在执行的旧物理写入，也不无限排队。旧锁超时后快速失败，
-        // 由诊断提示玩家刷新宿主；避免修正、总结或同步按钮永久保持 busy。
-        await withTimeout(previous.catch(() => undefined), timeoutMs, `等待世界书“${lockKey}”写入锁`);
-    }
-    const current = Promise.resolve().then(action);
+    const previous = lorebookMutationLocks.get(lockKey) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(action);
     lorebookMutationLocks.set(lockKey, current);
-    current.finally(() => {
+    try {
+        return await current;
+    }
+    finally {
         if (lorebookMutationLocks.get(lockKey) === current)
             lorebookMutationLocks.delete(lockKey);
-    }).catch(() => undefined);
-    return withTimeout(current, timeoutMs, `写入世界书“${lockKey}”`);
+    }
 }
 /** 多本物理世界书迁移时按规范化书名固定顺序取锁，避免两个聊天反向迁移形成死锁。 */
 async function withLorebookMutations(names, action) {
@@ -9517,17 +9303,20 @@ function applyEntry(entry, chatKey, key, spec, wi) {
     entry.selective = false;
     entry.disable = disabled;
     entry.addMemo = true;
-    entry.position = wi.world_info_position?.after ?? 1;
-    // 明确写入宿主字段，避免 ST 用 UID/创建顺序补默认值，表现为“深度逐条 +1”。
+    entry.position = spec.position === 'atDepth'
+        ? (wi.world_info_position?.atDepth ?? 4)
+        : (wi.world_info_position?.after ?? 1);
+    entry.order = Number(spec.order) || 1;
     entry.depth = Math.max(0, Math.round(Number(spec.depth) || 0));
-    entry.scanDepth = null;
-    entry.useProbability = spec.useProbability === true;
+    entry.role = Number.isFinite(Number(spec.role)) ? Number(spec.role) : 0;
+    entry.scanDepth = spec.scanDepth === null || spec.scanDepth === undefined
+        ? null
+        : Math.max(0, Math.round(Number(spec.scanDepth) || 0));
     entry.probability = Math.min(100, Math.max(0, Math.round(Number(spec.probability) || 100)));
-    // order 是激活后上下文优先级；按语义桶和稳定键生成，不再按发布先后递增。
-    entry.order = Math.round(Number(spec.order) || 500);
-    entry.preventRecursion = !spec.allowRecursion;
-    entry.excludeRecursion = !spec.allowRecursion;
-    entry.delayUntilRecursion = 0;
+    entry.useProbability = spec.useProbability !== false;
+    entry.preventRecursion = spec.preventRecursion !== false;
+    entry.excludeRecursion = spec.excludeRecursion === true;
+    entry.delayUntilRecursion = Math.max(0, Math.round(Number(spec.delayUntilRecursion) || 0));
     entry.extensions ||= {};
     entry.extensions.mirrorAbyssV11 = {
         managed: true,
@@ -9536,22 +9325,118 @@ function applyEntry(entry, chatKey, key, spec, wi) {
         logicalKey: spec.logicalKey || key,
         kind: spec.kind,
         version: VERSION,
+        activationClass: spec.activationClass ?? spec.recallMode,
         recallMode: spec.recallMode,
+        propagation: spec.propagation ?? 'terminal',
+        recallSignals: spec.recallSignals ?? {},
         trigger: spec.trigger,
         vector: spec.vector,
-        depth: entry.depth,
-        order: entry.order,
-        probability: entry.probability,
-        useProbability: entry.useProbability,
         factIds: spec.factIds,
         eventIds: spec.eventIds,
         disabled,
         allowRecursion: spec.allowRecursion !== false,
+        schedule: {
+            position: spec.position,
+            order: entry.order,
+            depth: entry.depth,
+            role: entry.role,
+            scanDepth: entry.scanDepth,
+            preventRecursion: entry.preventRecursion,
+            excludeRecursion: entry.excludeRecursion,
+            delayUntilRecursion: entry.delayUntilRecursion,
+        },
     };
 }
 function summaryEventKey(item) {
     return String(item?.eventId || item?.id || '').trim();
 }
+
+/**
+ * 只开启镜渊条目真正依赖的 ST 全局能力；关闭镜渊能力时不反向关闭全局开关，
+ * 避免破坏其他世界书。条目自身的 vectorized / recursion flags 仍是最终边界。
+ */
+async function synchronizeHostRecallSettings(wi, desired) {
+    const documents = [...desired.values()];
+    const recursionRequested = documents.some((item) => !item.disabled
+        && !item.constant
+        && (item.preventRecursion === false || item.excludeRecursion === false));
+    const vectorRequested = documents.some((item) => !item.disabled && item.vectorized === true);
+    const classificationCounts = {};
+    for (const document of documents) {
+        const kind = document.disabled ? 'disabled' : (document.activationClass ?? document.recallMode ?? 'trigger');
+        classificationCounts[kind] = (classificationCounts[kind] ?? 0) + 1;
+    }
+    const result = {
+        checkedAt: new Date().toISOString(),
+        classifications: classificationCounts,
+        recursion: { requested: recursionRequested, available: false, enabled: false, changed: false },
+        vector: { requested: vectorRequested, available: false, enabled: false, changed: false },
+    };
+
+    if (recursionRequested && typeof wi.getWorldInfoSettings === 'function' && typeof wi.updateWorldInfoSettings === 'function') {
+        result.recursion.available = true;
+        try {
+            const current = wi.getWorldInfoSettings() ?? {};
+            result.recursion.enabled = current.world_info_recursive === true;
+            if (!result.recursion.enabled) {
+                wi.updateWorldInfoSettings({ world_info_recursive: true });
+                result.recursion.enabled = true;
+                result.recursion.changed = true;
+            }
+        }
+        catch (error) {
+            result.recursion.error = toErrorMessage(error);
+        }
+    }
+    else if (recursionRequested) {
+        result.recursion.error = '当前 SillyTavern 未暴露世界书递归设置接口';
+    }
+
+    if (vectorRequested) {
+        try {
+            const context = getContext();
+            const vectorSettings = context.extensionSettings?.vectors;
+            if (vectorSettings && typeof vectorSettings === 'object') {
+                result.vector.available = true;
+                result.vector.enabled = vectorSettings.enabled_world_info === true;
+                result.vector.source = String(vectorSettings.source || '');
+                result.vector.scoreThreshold = Number.isFinite(Number(vectorSettings.score_threshold))
+                    ? Number(vectorSettings.score_threshold)
+                    : undefined;
+                result.vector.maxEntries = Number.isFinite(Number(vectorSettings.max_entries))
+                    ? Number(vectorSettings.max_entries)
+                    : undefined;
+                result.vector.enabledForAll = vectorSettings.enabled_for_all === true;
+                if (!result.vector.enabled) {
+                    const checkbox = globalThis.document?.querySelector?.('#vectors_enabled_world_info');
+                    if (checkbox) {
+                        checkbox.checked = true;
+                        const EventCtor = globalThis.Event;
+                        if (typeof EventCtor === 'function') {
+                            checkbox.dispatchEvent(new EventCtor('input', { bubbles: true }));
+                            result.vector.liveApplied = true;
+                        }
+                    }
+                    // DOM 不可用时至少持久化设置；Vector Storage 会在下次初始化时读取。
+                    vectorSettings.enabled_world_info = true;
+                    result.vector.enabled = true;
+                    result.vector.changed = true;
+                    result.vector.reloadRequired = result.vector.liveApplied !== true;
+                    context.saveSettingsDebounced?.();
+                }
+            }
+            else {
+                result.vector.error = 'ST Vector Storage 尚未初始化，条目仍保留关键词召回';
+            }
+        }
+        catch (error) {
+            result.vector.error = toErrorMessage(error);
+        }
+    }
+
+    return result;
+}
+
 async function desiredSpecs(artifact, committedState) {
     const settings = getSettings();
     const control = resolveHostControl(settings);
@@ -9568,9 +9453,17 @@ async function desiredSpecs(artifact, committedState) {
         totalCapacity: settings.lorebookRecall.totalCapacity,
         focusObjectId: state.focusObjectId,
         narrativeContext: state.runtimeV2?.narrativeContext,
+        runtimeV2: state.runtimeV2,
+        currentTurnKey: artifact.messageKey,
+        currentTurnIndex: artifact.messageIndex,
+        currentPlayerText: artifact.playerText,
+        currentAssistantText: artifact.assistantText,
         entryLimits: settings.contentLimits.tables,
     });
-    const desired = normalizeDesiredLorebookSpecs(new Map(documents.map((document) => [document.key, document])));
+    const normalized = normalizeDesiredLorebookSpecs(new Map(documents.map((document) => [document.key, document])));
+    // 同名归并可能改变激活类别；调度器是纯函数，归并后重新计算一次原生字段，避免元数据与 ST 字段分离。
+    const scheduled = scheduleLorebookDocuments([...normalized.values()]);
+    const desired = new Map(scheduled.map((document) => [document.key, document]));
     return { desired };
 }
 async function legacyCleanupScope(artifact) {
@@ -9609,22 +9502,25 @@ function uniqueSpecStrings(values, limit = 120) {
             .map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, limit);
 }
 function recallModePriority(value) {
-    return value === 'constant' ? 0 : value === 'trigger' ? 1 : 2;
+    return ({ constant: 0, trigger: 1, recursive: 2, hybrid: 3, vector: 4, disabled: 5 })[value] ?? 6;
 }
 function mergeDesiredLorebookSpec(left, right) {
     const rightIsNewer = String(right?.updatedAt || '') > String(left?.updatedAt || '');
     const primary = rightIsNewer ? right : left;
     const secondary = primary === left ? right : left;
-    const mode = recallModePriority(left?.recallMode) <= recallModePriority(right?.recallMode)
-        ? left?.recallMode
-        : right?.recallMode;
+    const mode = recallModePriority(left?.activationClass ?? left?.recallMode) <= recallModePriority(right?.activationClass ?? right?.recallMode)
+        ? (left?.activationClass ?? left?.recallMode)
+        : (right?.activationClass ?? right?.recallMode);
     return {
         ...secondary,
         ...primary,
         // 正文是对象当前完整视图，不能把两份完整条目逐行拼接成重复切面。
         // 事实与事件通过下方 ID 集合合并；正文采用较新的完整视图。
         content: String(primary?.content || secondary?.content || '').trim(),
+        activationClass: mode,
         recallMode: mode,
+        propagation: primary?.propagation ?? secondary?.propagation ?? 'terminal',
+        recallSignals: primary?.recallSignals ?? secondary?.recallSignals ?? {},
         constant: Boolean(left?.constant || right?.constant || mode === 'constant'),
         vectorized: Boolean(left?.vectorized || right?.vectorized || mode === 'hybrid' || mode === 'vector')
             && !(left?.disabled === true && right?.disabled === true),
@@ -10107,6 +10003,8 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
             assertArtifactCommitCurrent(artifact);
         }
         const desired = applyLorebookSuppressions(plan.desired, chatState);
+        chatState.hostRecallStatus = await synchronizeHostRecallSettings(wi, desired);
+        assertArtifactCommitCurrent(artifact);
         const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
         const reconciliation = reconcileLorebookEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook);
         const changed = reconciliation.changed;
@@ -10281,6 +10179,9 @@ async function applyLorebookMaintenance(artifact) {
             assertArtifactCommitCurrent(artifact);
         }
         const desired = applyLorebookSuppressions(plan.desired, state);
+        state.hostRecallStatus = await synchronizeHostRecallSettings(wi, desired);
+        await putChatState(state);
+        assertArtifactCommitCurrent(artifact);
         const cleanup = await legacyCleanupScope(artifact);
         assertArtifactCommitCurrent(artifact);
         const first = reconcileLorebookMaintenanceEntries(data, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
@@ -10466,6 +10367,364 @@ async function pauseCurrentChatLorebookEntries(chatKey = currentChatKey()) {
 
 }
 };
+__defs["pipeline/manual-state.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
+Object.defineProperty(__scope,"assertHistoryRevisionCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertHistoryRevisionCurrent"]});
+Object.defineProperty(__scope,"bindArtifactHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["bindArtifactHistoryRevision"]});
+Object.defineProperty(__scope,"bindArtifactTaskGuard",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["bindArtifactTaskGuard"]});
+Object.defineProperty(__scope,"currentHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["currentHistoryRevision"]});
+Object.defineProperty(__scope,"unbindArtifactHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["unbindArtifactHistoryRevision"]});
+Object.defineProperty(__scope,"unbindArtifactTaskGuard",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["unbindArtifactTaskGuard"]});
+Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
+Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
+Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
+Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
+Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-key.js")["canonicalObjectTitle"]});
+Object.defineProperty(__scope,"deleteRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["deleteRow"]});
+Object.defineProperty(__scope,"moveManualRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["moveManualRow"]});
+Object.defineProperty(__scope,"upsertManualRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["upsertManualRow"]});
+Object.defineProperty(__scope,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueLorebookProjection"]});
+Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
+Object.defineProperty(__scope,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["captureCommitSnapshot"]});
+Object.defineProperty(__scope,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["commitCoreBundle"]});
+Object.defineProperty(__scope,"queueRuntimeOutbox",{enumerable:true,configurable:true,get:()=>__require("pipeline/outbox-runner.js")["queueRuntimeOutbox"]});
+Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+with(__scope){
+Object.defineProperty(exports,"saveManualStateRow",{enumerable:true,configurable:true,get:()=>saveManualStateRow});
+Object.defineProperty(exports,"deleteManualStateRow",{enumerable:true,configurable:true,get:()=>deleteManualStateRow});
+/**
+ * 模块职责：提交玩家对最新状态快照的人工增删改，并保持焦点与世界书投影一致。
+ * 维护边界：UI 只负责收集表单；人工写入与自动任务共用 TaskQueue、核心提交和 Outbox 边界。
+ */
+async function persistManualSnapshot(index, artifact, chatState, historyRevision) {
+    assertArtifactCommitCurrent(artifact);
+    const settings = getSettings();
+    const snapshot = captureCommitSnapshot(artifact, historyRevision);
+    const workflow = readHistoryWorkflow(chatState);
+    let syncJob;
+    if (workflow.blocked) {
+        markStage(artifact, 'sync', 'blocked', workflow.automatic ? '最新正文正在自动重建，完成后将继续同步' : '历史消息已变化，等待手动重算');
+    }
+    else if (resolveHostControl(settings).lorebook) {
+        syncJob = enqueueLorebookProjection(chatState, artifact, 'manual-state');
+        markStage(artifact, 'sync', 'queued');
+        artifact.runtimeV2 = {
+            revision: chatState.runtimeV2.revision,
+            plan: { summaryKind: '', summaryJobId: '', syncJobId: syncJob.id, sync: true },
+            narrativeContext: structuredClone(chatState.runtimeV2.narrativeContext),
+        };
+    }
+    else {
+        markStage(artifact, 'sync', 'skipped');
+    }
+    await commitCoreBundle({ artifact, chatState, snapshot });
+    if (syncJob) {
+        // 新人工投影已经取代旧投影；先移除内存队列中的旧同步，再登记新任务。
+        taskQueue.cancelPendingMatching((task) => Boolean(task.chatKey === artifact.chatKey
+            && task.automatic === true
+            && task.kind === 'sync'), '人工状态已更新，旧世界书投影任务已取消');
+        queueRuntimeOutbox(index, artifact, historyRevision, {
+            summaryKind: '',
+            summaryJobId: '',
+            syncJobId: syncJob.id,
+        });
+    }
+    return artifact;
+}
+
+function runManualMutation({ index, artifact, label, mutate }) {
+    const chatKey = artifact.chatKey;
+    const historyRevision = currentHistoryRevision(chatKey);
+    return taskQueue.run(`manual-state:${makeId('job')}`, label, 'manual', async (guard) => {
+        assertHistoryRevisionCurrent(chatKey, historyRevision);
+        bindArtifactHistoryRevision(artifact, historyRevision);
+        bindArtifactTaskGuard(artifact, guard);
+        try {
+            assertArtifactCommitCurrent(artifact);
+            const chatState = await getChatState(chatKey);
+            await mutate(chatState);
+            return await persistManualSnapshot(index, artifact, chatState, historyRevision);
+        }
+        finally {
+            unbindArtifactTaskGuard(artifact, guard);
+            unbindArtifactHistoryRevision(artifact, historyRevision);
+        }
+    }, {
+        priority: 70,
+        chatKey,
+        triggerSource: 'manual-state',
+        messageKey: artifact.messageKey,
+        messageFingerprint: artifact.sourceFingerprint,
+        historyRevisionAtEnqueue: historyRevision,
+        automatic: false,
+    });
+}
+
+async function saveManualStateRow({ index, artifact, sourceTableKey, targetTableKey, rowPatch, registry }) {
+    const patch = structuredClone(rowPatch ?? {});
+    const tables = structuredClone(registry ?? getSettings().tableRegistry);
+    return runManualMutation({
+        index,
+        artifact,
+        label: `保存第 ${index + 1} 条正文状态表`,
+        mutate: async (chatState) => {
+            const rowId = String(patch.id || '').trim();
+            artifact.snapshot = rowId && sourceTableKey !== targetTableKey
+                ? moveManualRow(artifact.snapshot, sourceTableKey, targetTableKey, rowId, patch, tables)
+                : upsertManualRow(artifact.snapshot, targetTableKey, patch, tables);
+            if (rowId) {
+                const title = canonicalObjectTitle(patch.title);
+                const canonical = (artifact.snapshot[targetTableKey] ?? [])
+                    .find((row) => canonicalObjectTitle(row.title) === title);
+                if (canonical && canonical.id !== rowId && chatState.focusObjectId === rowId)
+                    chatState.focusObjectId = canonical.id;
+            }
+        },
+    });
+}
+
+async function deleteManualStateRow({ index, artifact, tableKey, rowId, registry }) {
+    const tables = structuredClone(registry ?? getSettings().tableRegistry);
+    return runManualMutation({
+        index,
+        artifact,
+        label: `删除第 ${index + 1} 条正文状态行`,
+        mutate: async (chatState) => {
+            artifact.snapshot = deleteRow(artifact.snapshot, tableKey, rowId, tables);
+            if (chatState.focusObjectId === rowId)
+                chatState.focusObjectId = undefined;
+        },
+    });
+}
+
+}
+};
+__defs["pipeline/outbox-runner.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
+Object.defineProperty(__scope,"assertHistoryRevisionCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertHistoryRevisionCurrent"]});
+Object.defineProperty(__scope,"bindArtifactHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["bindArtifactHistoryRevision"]});
+Object.defineProperty(__scope,"bindArtifactTaskGuard",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["bindArtifactTaskGuard"]});
+Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
+Object.defineProperty(__scope,"currentHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["currentHistoryRevision"]});
+Object.defineProperty(__scope,"unbindArtifactHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["unbindArtifactHistoryRevision"]});
+Object.defineProperty(__scope,"unbindArtifactTaskGuard",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["unbindArtifactTaskGuard"]});
+Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
+Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChat"]});
+Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
+Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
+Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["getAttachedArtifact"]});
+Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
+Object.defineProperty(__scope,"runtimeOutboxJobs",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["runtimeOutboxJobs"]});
+Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"commitArtifact",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["commitArtifact"]});
+Object.defineProperty(__scope,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["captureCommitSnapshot"]});
+Object.defineProperty(__scope,"syncLorebook",{enumerable:true,configurable:true,get:()=>__require("pipeline/lorebook.js")["syncLorebook"]});
+Object.defineProperty(__scope,"runSummaryStage",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["runSummaryStage"]});
+Object.defineProperty(__scope,"TaskBlockedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskBlockedError"]});
+Object.defineProperty(__scope,"TaskSkippedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskSkippedError"]});
+Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+Object.defineProperty(__scope,"transitionRuntimeJob",{enumerable:true,configurable:true,get:()=>__require("pipeline/runtime-effects.js")["transitionRuntimeJob"]});
+with(__scope){
+Object.defineProperty(exports,"resumeRuntimeOutbox",{enumerable:true,configurable:true,get:()=>resumeRuntimeOutbox});
+Object.defineProperty(exports,"selectPendingSyncJob",{enumerable:true,configurable:true,get:()=>selectPendingSyncJob});
+Object.defineProperty(exports,"queueRuntimeOutbox",{enumerable:true,configurable:true,get:()=>queueRuntimeOutbox});
+/**
+ * 模块职责：把 Runtime V2 Outbox 作为自动派生任务的唯一执行来源，负责总结/世界书的领取、确认、失败与恢复。
+ * 维护边界：本模块不创建核心事实；只执行已经随 ChatState 持久化的 jobId。
+ */
+function derivedTaskError(error) {
+    return error instanceof CommitRejectedError
+        || error instanceof TaskBlockedError
+        || error instanceof TaskSkippedError
+        || (error instanceof Error && ['AbortError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
+}
+
+function cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision) {
+    return error instanceof Error
+        && error.name === 'AbortError'
+        && currentChatKey() === chatKey
+        && currentHistoryRevision(chatKey) === historyRevision
+        && getSettings().enabled;
+}
+
+function latestSnapshotArtifact() {
+    return [...getChat()].map((message, index) => ({ index, artifact: getAttachedArtifact(message) }))
+        .reverse()
+        .find((item) => item.artifact?.snapshot && item.artifact?.stages?.state?.status === 'success');
+}
+
+async function pendingJob(chatKey, jobId) {
+    const state = await getChatState(chatKey);
+    return runtimeOutboxJobs(state, { statuses: ['pending'], }).find((job) => job.id === jobId);
+}
+
+function selectPendingSyncJob(jobs, preferredJobId = '') {
+    const pending = Array.isArray(jobs) ? jobs.filter((job) => job?.status === 'pending' && job?.type === 'lorebook-sync') : [];
+    // 调用方指定了 jobId 时只能执行该任务。旧任务被新修订取消后，不得拿旧 artifact 代跑最新任务。
+    if (preferredJobId)
+        return pending.find((job) => job.id === preferredJobId);
+    return pending.sort((a, b) => b.sourceRevision - a.sourceRevision || String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+}
+
+async function latestPendingSync(chatKey, preferredJobId = '') {
+    const state = await getChatState(chatKey);
+    return selectPendingSyncJob(runtimeOutboxJobs(state, { statuses: ['pending'], types: ['lorebook-sync'] }), preferredJobId);
+}
+
+function runWithArtifactGuards(artifact, historyRevision, guard, work) {
+    const commitSnapshot = captureCommitSnapshot(artifact, historyRevision);
+    return (async () => {
+        if (currentChatKey() !== artifact.chatKey)
+            throw new CommitRejectedError('聊天已切换，旧派生任务不再运行');
+        assertHistoryRevisionCurrent(artifact.chatKey, historyRevision);
+        bindArtifactHistoryRevision(artifact, historyRevision);
+        bindArtifactTaskGuard(artifact, guard);
+        try {
+            assertArtifactCommitCurrent(artifact);
+            await work(commitSnapshot);
+            assertArtifactCommitCurrent(artifact);
+        }
+        finally {
+            unbindArtifactTaskGuard(artifact, guard);
+            unbindArtifactHistoryRevision(artifact, historyRevision);
+        }
+    })();
+}
+
+function queueSync(index, artifact, historyRevision, preferredJobId = '') {
+    const chatKey = artifact.chatKey;
+    if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled)
+        return;
+    if (!resolveHostControl(getSettings()).lorebook)
+        return;
+    void latestPendingSync(chatKey, preferredJobId).then((job) => {
+        if (!job)
+            return;
+        const key = `runtime-v2:job:${job.id}`;
+        return taskQueue.run(key, `后台同步第 ${index + 1} 条正文世界书`, 'sync', async (guard) => {
+            await runWithArtifactGuards(artifact, historyRevision, guard, async (commitSnapshot) => {
+                const claimed = await transitionRuntimeJob(chatKey, job.id, 'running', artifact);
+                if (!claimed || ['done', 'cancelled'].includes(claimed.status))
+                    throw new TaskSkippedError('世界书 Outbox 任务已被其他修订完成或替代');
+                try {
+                    await syncLorebook(artifact);
+                    await transitionRuntimeJob(chatKey, job.id, 'done', artifact);
+                }
+                catch (error) {
+                    await transitionRuntimeJob(chatKey, job.id, 'failed', artifact, toErrorMessage(error));
+                    throw error;
+                }
+                finally {
+                    await commitArtifact({ artifact, snapshot: commitSnapshot });
+                }
+            });
+        }, {
+            priority: 40,
+            chatKey,
+            triggerSource: 'runtime-v2-outbox-sync',
+            messageKey: artifact.messageKey,
+            messageFingerprint: artifact.sourceFingerprint,
+            historyRevisionAtEnqueue: historyRevision,
+            automatic: true,
+        });
+    }).catch((error) => {
+        if (derivedTaskError(error))
+            return;
+        console.warn('[MirrorAbyss] runtime-v2 lorebook sync failed', error);
+        toast('warning', `核心状态已保存，但世界书投影失败：${toErrorMessage(error)}`);
+    });
+}
+
+function queueRuntimeOutbox(index, artifact, historyRevision, plan = {}) {
+    const chatKey = artifact.chatKey;
+    const kind = plan.summaryKind || (plan.small ? 'small' : plan.large ? 'large' : '');
+    const summaryJobId = plan.summaryJobId || '';
+    const syncJobId = plan.syncJobId || '';
+    if (!kind || !summaryJobId) {
+        queueSync(index, artifact, historyRevision, syncJobId);
+        return;
+    }
+    const key = `runtime-v2:job:${summaryJobId}`;
+    void pendingJob(chatKey, summaryJobId).then((job) => {
+        if (!job)
+            throw new TaskSkippedError('总结 Outbox 任务已完成或被新正文替代');
+        return taskQueue.run(key, `后台生成第 ${index + 1} 条正文${kind === 'small' ? '小' : '大'}总结`, kind === 'small' ? 'smallSummary' : 'largeSummary', async (guard) => {
+            await runWithArtifactGuards(artifact, historyRevision, guard, async (commitSnapshot) => {
+                const claimed = await transitionRuntimeJob(chatKey, job.id, 'running', artifact);
+                if (!claimed || ['done', 'cancelled'].includes(claimed.status))
+                    throw new TaskSkippedError('总结 Outbox 任务已被其他修订完成或替代');
+                try {
+                    await runSummaryStage(artifact, kind);
+                    const completed = await transitionRuntimeJob(chatKey, job.id, 'done', artifact);
+                    if (!completed || completed.status !== 'done')
+                        throw new TaskSkippedError('总结 Outbox 任务已被更新正文替代');
+                }
+                catch (error) {
+                    await transitionRuntimeJob(chatKey, job.id, 'failed', artifact, toErrorMessage(error));
+                    throw error;
+                }
+                finally {
+                    await commitArtifact({ artifact, snapshot: commitSnapshot });
+                }
+            });
+        }, {
+            priority: kind === 'small' ? 30 : 20,
+            chatKey,
+            triggerSource: `runtime-v2-outbox-${kind}-summary`,
+            messageKey: artifact.messageKey,
+            messageFingerprint: artifact.sourceFingerprint,
+            historyRevisionAtEnqueue: historyRevision,
+            automatic: true,
+        });
+    }).then(() => queueSync(index, artifact, historyRevision, syncJobId), (error) => {
+        if (derivedTaskError(error)) {
+            if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision))
+                queueSync(index, artifact, historyRevision, syncJobId);
+            return;
+        }
+        console.warn(`[MirrorAbyss] runtime-v2 ${kind} summary failed`, error);
+        toast('warning', `核心状态已保存，但${kind === 'small' ? '小' : '大'}总结失败：${toErrorMessage(error)}`);
+        if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled)
+            queueSync(index, artifact, historyRevision, syncJobId);
+    });
+}
+
+async function resumeRuntimeOutbox() {
+    if (!getSettings().enabled)
+        return { resumed: false, reason: 'disabled' };
+    const chatKey = currentChatKey();
+    const state = await getChatState(chatKey);
+    const pending = runtimeOutboxJobs(state, { statuses: ['pending'] });
+    if (!pending.length)
+        return { resumed: false, reason: 'empty' };
+    const latest = latestSnapshotArtifact();
+    if (!latest)
+        return { resumed: false, reason: 'artifact-missing' };
+    const summaryJob = [...pending].reverse().find((job) => ['small-summary', 'large-summary'].includes(job.type));
+    const syncJob = [...pending]
+        .filter((job) => job.type === 'lorebook-sync')
+        .sort((a, b) => b.sourceRevision - a.sourceRevision)[0];
+    queueRuntimeOutbox(latest.index, latest.artifact, currentHistoryRevision(chatKey), {
+        small: summaryJob?.type === 'small-summary',
+        large: summaryJob?.type === 'large-summary',
+        summaryKind: summaryJob?.type === 'small-summary' ? 'small' : summaryJob?.type === 'large-summary' ? 'large' : '',
+        summaryJobId: summaryJob?.id || '',
+        syncJobId: syncJob?.id || '',
+    });
+    return {
+        resumed: true,
+        kind: summaryJob?.type || syncJob?.type || '',
+        jobId: summaryJob?.id || syncJob?.id || '',
+    };
+}
+
+}
+};
 __defs["pipeline/pipeline.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"LEGACY_MODULE_NAME",{enumerable:true,configurable:true,get:()=>__require("constants.js")["LEGACY_MODULE_NAME"]});
@@ -10493,9 +10752,9 @@ Object.defineProperty(__scope,"latestAssistantIndex",{enumerable:true,configurab
 Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageFingerprint"]});
 Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageIdentity"]});
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
+Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
-Object.defineProperty(__scope,"withTimeout",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["withTimeout"]});
 Object.defineProperty(__scope,"abortActiveAutomaticSummaryRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveAutomaticSummaryRequests"]});
 Object.defineProperty(__scope,"abortActiveBusinessRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveBusinessRequests"]});
 Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveRequests"]});
@@ -10513,12 +10772,9 @@ Object.defineProperty(__scope,"interruptHistoryRecovery",{enumerable:true,config
 Object.defineProperty(__scope,"invalidateHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["invalidateHistoryWorkflow"]});
 Object.defineProperty(__scope,"markHistoryRecoveryPartial",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["markHistoryRecoveryPartial"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
-Object.defineProperty(__scope,"resolveLatestHistoryLock",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["resolveLatestHistoryInvalidation"]});
 Object.defineProperty(__scope,"setHistoryPauseError",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["setHistoryPauseError"]});
 Object.defineProperty(__scope,"updateHistoryRecovery",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["updateHistoryRecovery"]});
 Object.defineProperty(__scope,"invalidateFactsAfterMessages",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["invalidateFactsAfterMessages"]});
-Object.defineProperty(__scope,"mergeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["mergeInternalFacts"]});
-Object.defineProperty(__scope,"normalizeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["normalizeInternalFacts"]});
 Object.defineProperty(__scope,"applyAuditFailureAction",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditFailureAction"]});
 Object.defineProperty(__scope,"runAudit",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["runAudit"]});
 Object.defineProperty(__scope,"runRevisionFlow",{enumerable:true,configurable:true,get:()=>__require("pipeline/revision.js")["runRevisionFlow"]});
@@ -10528,8 +10784,6 @@ Object.defineProperty(__scope,"pauseCurrentChatLorebookEntries",{enumerable:true
 Object.defineProperty(__scope,"previewLorebookMaintenanceForArtifact",{enumerable:true,configurable:true,get:()=>__require("pipeline/lorebook.js")["previewLorebookMaintenance"]});
 Object.defineProperty(__scope,"restoreSuppressedLorebookEntryForArtifact",{enumerable:true,configurable:true,get:()=>__require("pipeline/lorebook.js")["restoreSuppressedLorebookEntry"]});
 Object.defineProperty(__scope,"syncLorebook",{enumerable:true,configurable:true,get:()=>__require("pipeline/lorebook.js")["syncLorebook"]});
-Object.defineProperty(__scope,"hasEligibleLargeSummary",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["hasEligibleLargeSummary"]});
-Object.defineProperty(__scope,"hasEligibleSmallSummary",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["hasEligibleSmallSummary"]});
 Object.defineProperty(__scope,"maybeRunSummaries",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["maybeRunSummaries"]});
 Object.defineProperty(__scope,"rebuildEligibleSummaries",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["rebuildEligibleSummaries"]});
 Object.defineProperty(__scope,"runSummaryStage",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["runSummaryStage"]});
@@ -10539,22 +10793,21 @@ Object.defineProperty(__scope,"TaskSkippedError",{enumerable:true,configurable:t
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
 Object.defineProperty(__scope,"emptyChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["emptyChatState"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
 Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"commitArtifact",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["commitArtifact"]});
+Object.defineProperty(__scope,"commitCoreTransaction",{enumerable:true,configurable:true,get:()=>__require("pipeline/core-transaction.js")["commitCoreTransaction"]});
+Object.defineProperty(__scope,"queueRuntimeOutbox",{enumerable:true,configurable:true,get:()=>__require("pipeline/outbox-runner.js")["queueRuntimeOutbox"]});
+Object.defineProperty(__scope,"recordCompletedSummaryEffects",{enumerable:true,configurable:true,get:()=>__require("pipeline/runtime-effects.js")["recordCompletedSummaryEffects"]});
+Object.defineProperty(__scope,"runTrackedRuntimeEffect",{enumerable:true,configurable:true,get:()=>__require("pipeline/runtime-effects.js")["runTrackedRuntimeEffect"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 Object.defineProperty(__scope,"createPlayerRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["createPlayerRecordingBoundary"]});
 Object.defineProperty(__scope,"messageInsideRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["messageInsideRecordingBoundary"]});
 Object.defineProperty(__scope,"recordingStartIndex",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["recordingStartIndex"]});
-Object.defineProperty(__scope,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["advanceRuntimeV2"]});
-Object.defineProperty(__scope,"ensureRuntimeJob",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["ensureRuntimeJob"]});
-Object.defineProperty(__scope,"markRuntimeJobDone",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobDone"]});
-Object.defineProperty(__scope,"markRuntimeJobFailed",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobFailed"]});
-Object.defineProperty(__scope,"markRuntimeJobRunning",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobRunning"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
-Object.defineProperty(__scope,"selectNextPendingPluginJob",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state-controller.js")["selectNextPendingPluginJob"]});
+Object.defineProperty(__scope,"rebuildRuntimeV2FromArtifacts",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/replay.js")["rebuildRuntimeV2FromArtifacts"]});
+Object.defineProperty(exports,"resumeRuntimeOutbox",{enumerable:true,configurable:true,get:()=>__require("pipeline/outbox-runner.js")["resumeRuntimeOutbox"]});
 with(__scope){
 Object.defineProperty(exports,"reconcileInterruptedRuntimeState",{enumerable:true,configurable:true,get:()=>reconcileInterruptedRuntimeState});
-Object.defineProperty(exports,"resumeRuntimeOutbox",{enumerable:true,configurable:true,get:()=>resumeRuntimeOutbox});
 Object.defineProperty(exports,"processMessage",{enumerable:true,configurable:true,get:()=>processMessage});
 Object.defineProperty(exports,"invalidateHistory",{enumerable:true,configurable:true,get:()=>invalidateHistory});
 Object.defineProperty(exports,"recalculateInvalidatedHistory",{enumerable:true,configurable:true,get:()=>recalculateInvalidatedHistory});
@@ -10578,6 +10831,9 @@ Object.defineProperty(exports,"installPipelineEventHandlers",{enumerable:true,co
  */
 const listeners = new Set();
 const scheduledMessageTimers = new Map();
+// 历史重建会串行调用普通流水线，不能把整个重建再次放入同一 TaskQueue。
+// 这里提供聊天级独占门闩，并在进入重建前排空该聊天的旧任务。
+let activeHistoryRebuildChatKey = '';
 function removeSourceListener(source, event, handler) {
     if (typeof source?.off === 'function')
         source.off(event, handler);
@@ -10744,14 +11000,9 @@ async function pauseLorebookForHistoryChange(chatKey) {
     }
 }
 async function saveArtifactToMessage(index, artifact) {
-    assertArtifactCommitCurrent(artifact);
-    const message = getMessage(index);
-    if (!message || message.is_user)
-        throw new Error('原AI正文已不存在，请重新整理');
-    attachArtifactToMessage(message, artifact);
-    await putArtifact(artifact);
-    await persistChatFor(artifact.chatKey);
-    notify(index, artifact);
+    if (index !== artifact.messageIndex)
+        throw new Error('artifact 消息索引不一致，拒绝保存');
+    await commitArtifact({ artifact, notify });
 }
 async function loadOrCreateArtifact(index, _force, historyRevision, taskGuard) {
     const message = getMessage(index);
@@ -10782,57 +11033,30 @@ async function loadOrCreateArtifact(index, _force, historyRevision, taskGuard) {
         throw error;
     }
 }
-/**
- * 核心提交只包含内部事实、动态可见视图及消息 artifact。该步骤成功后才允许排队总结和世界书。
- */
-async function commitCoreState(artifact, resolveLatestHistoryInvalidation = false) {
-    if (!artifact.snapshot || artifact.stages.state.status !== 'success') {
-        throw new Error('状态表尚未成功，不能提交核心结果');
+function committedArtifactsForMessageKeys(messageKeys) {
+    const keys = messageKeys instanceof Set ? messageKeys : new Set(messageKeys ?? []);
+    const artifacts = [];
+    for (let index = 0; index < getChat().length; index += 1) {
+        const artifact = getAttachedArtifact(getMessage(index));
+        if (!artifact || !keys.has(artifact.messageKey))
+            continue;
+        if (!artifact.snapshot || artifact.stages?.state?.status !== 'success')
+            continue;
+        artifacts.push(artifact);
     }
-    assertArtifactCommitCurrent(artifact);
-    const chatState = await getChatState(artifact.chatKey);
-    if (!chatState.processedMessageKeys.includes(artifact.messageKey)) {
-        chatState.processedMessageKeys.push(artifact.messageKey);
-    }
-    if (artifact.factPackage?.facts?.length) {
-        const incomingFacts = normalizeInternalFacts(artifact.factPackage.facts, artifact.messageKey);
-        chatState.internalFacts = mergeInternalFacts(chatState.internalFacts ?? [], incomingFacts, artifact.factPackage.facts);
-    }
-    chatState.latestSnapshotMessageKey = artifact.messageKey;
-    if (resolveLatestHistoryInvalidation && isNarrativeTail(artifact.messageIndex)) {
-        resolveLatestHistoryLock(chatState, artifact.messageIndex);
-    }
-    const settings = getSettings();
-    const runtime = advanceRuntimeV2({
-        chatState,
-        artifact,
-        settings,
-        smallEligible: Boolean(settings.autoSmallSummary && hasEligibleSmallSummary(
-            chatState.internalFacts ?? [],
-            settings.smallSummaryTurns,
-            artifact.sceneBoundary?.eventIds ?? [],
-        )),
-        largeEligible: Boolean(settings.autoLargeSummary && hasEligibleLargeSummary(
-            chatState.smallSummaries ?? [],
-            chatState.largeSummaries ?? [],
-            settings.largeSummaryCount,
-        )),
-    });
-    artifact.runtimeV2 = {
-        revision: runtime.runtime.revision,
-        plan: runtime.plan,
-        narrativeContext: structuredClone(runtime.runtime.narrativeContext),
-    };
-    chatState.updatedAt = nowIso();
-    assertArtifactCommitCurrent(artifact);
-    await putChatState(chatState);
-    // 状态 artifact 已在进入核心提交前保存；这里仅提交 ChatState，
-    // 避免同一状态结果连续保存两次聊天，并把已提交状态直接传给派生计划。
-    return chatState;
+    return artifacts;
 }
-/**
- * 状态表成功后立即把派生阶段标成 queued/skipped，避免 UI 在后台任务已经排队时仍显示 idle。
- */
+
+function replayRuntimeForValidMessages(chatState, validMessageIds) {
+    const settings = getSettings();
+    return rebuildRuntimeV2FromArtifacts(
+        chatState,
+        committedArtifactsForMessageKeys(validMessageIds),
+        settings,
+        { publicationEnabled: resolveHostControl(settings).lorebook },
+    );
+}
+
 function invalidateDerivedForValidMessages(chatState, validMessageIds) {
     const currentFacts = Array.isArray(chatState.internalFacts) ? chatState.internalFacts : [];
     const allFactIds = new Set(currentFacts.map((fact) => String(fact.factId || '')));
@@ -10870,29 +11094,6 @@ function invalidateDerivedForValidMessages(chatState, validMessageIds) {
             delete fact.solidifiedByLargeSummaryId;
     }
 }
-async function prepareDerivedStageStatuses(artifact, chatState) {
-    const settings = getSettings();
-    const summaryKind = artifact.runtimeV2?.plan?.summaryKind || '';
-    const runtimePlan = artifact.runtimeV2?.plan ?? {};
-    const plan = {
-        small: summaryKind === 'small',
-        large: summaryKind === 'large',
-        summaryKind,
-        summaryJobId: String(runtimePlan.summaryJobId || ''),
-        syncJobId: String(runtimePlan.syncJobId || ''),
-    };
-    markStage(artifact, 'summary', plan.small || plan.large ? 'queued' : 'skipped');
-    const historyWorkflow = readHistoryWorkflow(chatState);
-    if (historyWorkflow.blocked) {
-        const automatic = historyWorkflow.automatic;
-        markStage(artifact, 'sync', 'blocked', automatic ? '最新正文正在自动重建，完成后将继续同步' : '历史消息已变化，等待手动重算');
-    }
-    else {
-        markStage(artifact, 'sync', resolveHostControl(settings).lorebook ? 'queued' : 'skipped');
-    }
-    await saveArtifactToMessage(artifact.messageIndex, artifact);
-    return plan;
-}
 /**
  * 只允许“最新一条 AI 正文自身发生编辑/swipe”在用户显式重新整理成功后解除历史暂停。
  * 更早位置、删除位置未知或当前消息后仍有新消息时，继续要求完整历史重算。
@@ -10900,6 +11101,13 @@ async function prepareDerivedStageStatuses(artifact, chatState) {
 /**
  * 正文被单独修正后，旧状态与旧总结已不再对应当前正文；先清除并暂停世界书，等待用户点击“生成表格”。
  */
+
+function derivedTaskError(error) {
+    return error instanceof CommitRejectedError
+        || error instanceof TaskBlockedError
+        || error instanceof TaskSkippedError
+        || (error instanceof Error && ['AbortError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
+}
 async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
     const chatState = await getChatState(artifact.chatKey);
     const validMessageIds = new Set(chatState.processedMessageKeys.filter((key) => key !== previousMessageKey));
@@ -10908,6 +11116,7 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
     if (chatState.latestSnapshotMessageKey === previousMessageKey) {
         chatState.latestSnapshotMessageKey = chatState.processedMessageKeys.at(-1);
     }
+    replayRuntimeForValidMessages(chatState, validMessageIds);
     artifact.factPackage = undefined;
     artifact.snapshot = undefined;
     markStage(artifact, 'state', 'idle');
@@ -10916,221 +11125,16 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
     await putChatState(chatState);
     await saveArtifactToMessage(artifact.messageIndex, artifact);
     try {
-        // 宿主世界书 I/O 不是修正事务的提交前提。给它一个短超时，失败后继续
-        // 状态提取，避免“修正正文已成功但按钮永远不释放”。
-        await withTimeout(
-            pauseCurrentChatLorebookEntries(artifact.chatKey),
-            Math.min(8000, Math.max(2500, Number(getSettings().requestTimeoutMs) || 8000)),
-            '暂停旧世界书条目',
-        );
+        await pauseCurrentChatLorebookEntries(artifact.chatKey);
     }
     catch (error) {
         const detail = toErrorMessage(error);
         console.warn('[MirrorAbyss] revised text saved but stale lorebook pause failed', error);
         markStage(artifact, 'sync', 'failed', `旧世界书条目暂停失败：${detail}`);
         await saveArtifactToMessage(artifact.messageIndex, artifact);
-        toast('warning', `正文已修正；旧世界书暂停未完成，但本次会继续生成状态并在随后重新同步：${detail}`);
+        toast('warning', `正文已修正，但旧世界书条目暂停失败：${detail}。请在生成表格后手动同步世界书`);
     }
 }
-function derivedTaskError(error) {
-    return error instanceof CommitRejectedError
-        || error instanceof TaskBlockedError
-        || error instanceof TaskSkippedError
-        || (error instanceof Error && ['AbortError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
-}
-function cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision) {
-    return error instanceof Error
-        && error.name === 'AbortError'
-        && currentChatKey() === chatKey
-        && currentHistoryRevision(chatKey) === historyRevision
-        && getSettings().enabled;
-}
-/**
- * 派生链按小总结 → 大总结 → 世界书单向排队。每一段独立失败，不回滚核心状态。
- */
-function queueAutomaticDerived(index, artifact, historyRevision, summaryPlan) {
-    const chatKey = artifact.chatKey;
-    const messageKey = artifact.messageKey;
-    const runWithGuards = async (guard, work) => {
-        if (currentChatKey() !== chatKey)
-            throw new CommitRejectedError('聊天已切换，旧派生任务不再运行');
-        assertHistoryRevisionCurrent(chatKey, historyRevision);
-        bindArtifactHistoryRevision(artifact, historyRevision);
-        bindArtifactTaskGuard(artifact, guard);
-        try {
-            assertArtifactCommitCurrent(artifact);
-            await work();
-            assertArtifactCommitCurrent(artifact);
-        }
-        finally {
-            unbindArtifactTaskGuard(artifact, guard);
-            unbindArtifactHistoryRevision(artifact, historyRevision);
-        }
-    };
-    const updateRuntime = async (type, status, error = '') => {
-        const state = await getChatState(chatKey);
-        const jobId = type === 'lorebook-sync' ? summaryPlan.syncJobId : summaryPlan.summaryJobId;
-        if (status === 'running')
-            markRuntimeJobRunning(state, type, messageKey, jobId);
-        else if (status === 'done')
-            markRuntimeJobDone(state, type, artifact, jobId);
-        else
-            markRuntimeJobFailed(state, type, messageKey, error, jobId);
-        await putChatState(state);
-    };
-    const queueSync = () => {
-        if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled)
-            return;
-        if (!resolveHostControl(getSettings()).lorebook)
-            return;
-        const key = `${PIPELINE_VERSION}:runtime-v2:sync:${chatKey}:${messageKey}`;
-        void taskQueue.run(key, `后台同步第 ${index + 1} 条正文世界书`, 'sync', async (guard) => {
-            await runWithGuards(guard, async () => {
-                await updateRuntime('lorebook-sync', 'running');
-                try {
-                    await syncLorebook(artifact);
-                    await updateRuntime('lorebook-sync', 'done');
-                }
-                catch (error) {
-                    await updateRuntime('lorebook-sync', 'failed', toErrorMessage(error));
-                    throw error;
-                }
-                finally {
-                    await saveArtifactToMessage(index, artifact);
-                }
-            });
-        }, {
-            priority: 40,
-            chatKey,
-            triggerSource: 'runtime-v2-sync',
-            messageKey,
-            messageFingerprint: artifact.sourceFingerprint,
-            historyRevisionAtEnqueue: historyRevision,
-            automatic: true,
-        }).catch((error) => {
-            if (derivedTaskError(error))
-                return;
-            console.warn('[MirrorAbyss] runtime-v2 lorebook sync failed', error);
-            toast('warning', `核心状态已保存，但世界书投影失败：${toErrorMessage(error)}`);
-        });
-    };
-    const kind = summaryPlan.summaryKind || (summaryPlan.small ? 'small' : summaryPlan.large ? 'large' : '');
-    if (!kind) {
-        queueSync();
-        return;
-    }
-    const jobType = `${kind}-summary`;
-    const key = `${PIPELINE_VERSION}:runtime-v2:${kind}:${chatKey}:${messageKey}`;
-    void taskQueue.run(key, `后台生成第 ${index + 1} 条正文${kind === 'small' ? '小' : '大'}总结`, kind === 'small' ? 'smallSummary' : 'largeSummary', async (guard) => {
-        await runWithGuards(guard, async () => {
-            await updateRuntime(jobType, 'running');
-            try {
-                await runSummaryStage(artifact, kind);
-                await updateRuntime(jobType, 'done');
-            }
-            catch (error) {
-                await updateRuntime(jobType, 'failed', toErrorMessage(error));
-                throw error;
-            }
-            finally {
-                await saveArtifactToMessage(index, artifact);
-            }
-        });
-    }, {
-        priority: kind === 'small' ? 30 : 20,
-        chatKey,
-        triggerSource: `runtime-v2-${kind}-summary`,
-        messageKey,
-        messageFingerprint: artifact.sourceFingerprint,
-        historyRevisionAtEnqueue: historyRevision,
-        automatic: true,
-    }).then(() => {
-        if (summaryPlan.resumeLatestSync)
-            void resumeRuntimeOutbox();
-        else
-            queueSync();
-    }, (error) => {
-        if (derivedTaskError(error)) {
-            if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision)) {
-                if (summaryPlan.resumeLatestSync)
-                    void resumeRuntimeOutbox();
-                else
-                    queueSync();
-            }
-            return;
-        }
-        console.warn(`[MirrorAbyss] runtime-v2 ${kind} summary failed`, error);
-        toast('warning', `核心状态已保存，但${kind === 'small' ? '小' : '大'}总结失败：${toErrorMessage(error)}`);
-        if (currentChatKey() === chatKey && currentHistoryRevision(chatKey) === historyRevision && getSettings().enabled) {
-            if (summaryPlan.resumeLatestSync)
-                void resumeRuntimeOutbox();
-            else
-                queueSync();
-        }
-    });
-}
-
-async function resumeRuntimeOutbox() {
-    if (!getSettings().enabled)
-        return { resumed: false, reason: 'disabled' };
-    const chatKey = currentChatKey();
-    const state = await getChatState(chatKey);
-    let runtime = normalizeRuntimeV2(state.runtimeV2);
-    const chat = getChat();
-    const artifactForTurnKey = (turnKey) => {
-        const index = chat.findIndex((message) => getAttachedArtifact(message)?.messageKey === turnKey);
-        return { index, artifact: index >= 0 ? getAttachedArtifact(chat[index]) : null };
-    };
-    const latest = [...chat].map((message, index) => ({ index, artifact: getAttachedArtifact(message) }))
-        .reverse()
-        .find((item) => item.artifact?.snapshot && item.artifact?.stages?.state?.status === 'success');
-    let stateChanged = JSON.stringify(runtime) !== JSON.stringify(state.runtimeV2);
-    let pendingSummary = [...runtime.outbox].reverse().find((job) => ['small-summary', 'large-summary'].includes(job.type) && job.status === 'pending');
-    if (!pendingSummary && runtime.machines.summary.pendingKind && runtime.machines.summary.pendingTurnKey) {
-        const target = artifactForTurnKey(runtime.machines.summary.pendingTurnKey);
-        if (target.artifact?.snapshot && target.artifact.stages?.state?.status === 'success') {
-            pendingSummary = ensureRuntimeJob(state, `${runtime.machines.summary.pendingKind}-summary`, target.artifact, runtime.revision);
-            runtime = normalizeRuntimeV2(state.runtimeV2);
-            stateChanged = true;
-        }
-    }
-    let syncJob = [...runtime.outbox].reverse().find((job) => job.type === 'lorebook-sync' && job.status === 'pending');
-    if (!syncJob && runtime.machines.publication.desiredRevision > runtime.machines.publication.confirmedRevision && latest) {
-        syncJob = ensureRuntimeJob(state, 'lorebook-sync', latest.artifact, runtime.machines.publication.desiredRevision);
-        runtime = normalizeRuntimeV2(state.runtimeV2);
-        stateChanged = true;
-    }
-    if (stateChanged)
-        await putChatState(state);
-    runtime = normalizeRuntimeV2(state.runtimeV2);
-    const nextJob = selectNextPendingPluginJob(runtime);
-    if (nextJob && ['small-summary', 'large-summary'].includes(nextJob.type)) {
-        const target = artifactForTurnKey(nextJob.turnKey);
-        if (target.artifact?.snapshot && target.artifact.stages?.state?.status === 'success') {
-            queueAutomaticDerived(target.index, target.artifact, currentHistoryRevision(chatKey), {
-                small: nextJob.type === 'small-summary',
-                large: nextJob.type === 'large-summary',
-                summaryKind: nextJob.type === 'small-summary' ? 'small' : 'large',
-                summaryJobId: nextJob.id,
-                syncJobId: '',
-                resumeLatestSync: true,
-            });
-            return { resumed: true, kind: nextJob.type, turnKey: nextJob.turnKey, jobId: nextJob.id };
-        }
-    }
-    if (nextJob?.type === 'lorebook-sync' && latest) {
-        queueAutomaticDerived(latest.index, latest.artifact, currentHistoryRevision(chatKey), {
-            small: false,
-            large: false,
-            summaryKind: '',
-            summaryJobId: '',
-            syncJobId: nextJob.id,
-        });
-        return { resumed: true, kind: 'lorebook-sync', turnKey: latest.artifact.messageKey, jobId: nextJob.id };
-    }
-    return { resumed: false, reason: runtime.outbox.some((job) => job.status === 'pending') ? 'artifact-missing' : 'empty' };
-}
-
 function isAutomaticLatestHistoryRecovery(index, chatState) {
     const workflow = readHistoryWorkflow(chatState);
     return Boolean(workflow.invalidation
@@ -11151,6 +11155,12 @@ async function processMessage(index, force = false, options = {}) {
     const identity = messageIdentity(index);
     const scheduledFingerprint = messageFingerprint(index);
     const scheduledChatKey = currentChatKey();
+    if (Boolean(activeHistoryRebuildChatKey) && !options.historyRecovery) {
+        const detail = '历史重建正在独占该聊天，本次普通任务未入队';
+        if (options.automatic)
+            return null;
+        throw new TaskBlockedError(detail);
+    }
     const scheduledHistoryRevision = currentHistoryRevision(scheduledChatKey);
     const enqueueState = await getChatState(scheduledChatKey);
     if (!messageInsideRecordingBoundary(enqueueState, index)) {
@@ -11199,6 +11209,12 @@ async function processMessage(index, force = false, options = {}) {
             throw new TaskSkippedError('目标正文已不存在或不再符合处理条件');
         if (messageFingerprint(index) !== scheduledFingerprint) {
             throw new CommitRejectedError('正文已经变化，本次排队任务不再处理');
+        }
+        if (Boolean(activeHistoryRebuildChatKey) && !options.historyRecovery) {
+            const detail = '历史重建正在独占该聊天，本次普通任务已跳过';
+            if (options.automatic)
+                throw new TaskSkippedError(detail);
+            throw new TaskBlockedError(detail);
         }
         const processingState = await getChatState(scheduledChatKey);
         const processingWorkflow = readHistoryWorkflow(processingState);
@@ -11264,11 +11280,18 @@ async function processMessage(index, force = false, options = {}) {
                 await saveArtifactToMessage(index, artifact);
             }
             if (artifact.snapshot && artifact.stages.state.status === 'success') {
-                const committedState = await commitCoreState(artifact, !options.historyRecovery);
-                const summaryPlan = await prepareDerivedStageStatuses(artifact, committedState);
+                const { plan: summaryPlan } = await commitCoreTransaction({
+                    artifact,
+                    historyRevision: scheduledHistoryRevision,
+                    resolveHistoryInvalidation: !options.historyRecovery,
+                    narrativeTail: isNarrativeTail(artifact.messageIndex),
+                    forceReprojection: force || options.historyRecovery,
+                    scheduleDerived: !options.skipDerived,
+                    notify,
+                });
                 if (!options.skipDerived) {
                     taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
-                    queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
+                    queueRuntimeOutbox(index, artifact, scheduledHistoryRevision, summaryPlan);
                 }
             }
             return artifact;
@@ -11300,6 +11323,7 @@ async function processMessage(index, force = false, options = {}) {
         historyRevisionAtEnqueue: scheduledHistoryRevision,
         historyRecoveryPhaseAtEnqueue: enqueueWorkflow.phase,
         automatic: options.automatic === true,
+        exclusiveToken: options.queueExclusiveToken,
     });
 }
 function scheduleMessage(payload, force = false, delay = 0, triggerSource = 'automatic-event') {
@@ -11440,6 +11464,7 @@ async function invalidateHistory(payload, reason) {
     invalidateDerivedForValidMessages(state, validPrefixKeys);
     state.processedMessageKeys = state.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
     state.latestSnapshotMessageKey = state.processedMessageKeys.at(-1);
+    replayRuntimeForValidMessages(state, validPrefixKeys);
     await persistChatFor(chatKey);
     await putChatState(state);
     await pauseLorebookForHistoryChange(chatKey);
@@ -11455,176 +11480,202 @@ async function recalculateInvalidatedHistory() {
     if (!getSettings().enabled)
         throw new Error('镜渊已关闭，请先启用');
     const chatKey = currentChatKey();
-    cancelScheduledMessagesForChat(chatKey);
-    const state = await getChatState(chatKey);
-    const workflow = readHistoryWorkflow(state);
-    const boundaryStart = recordingStartIndex(state);
-    const startIndex = workflow.startIndex === undefined || boundaryStart === undefined
-        ? workflow.startIndex
-        : Math.max(workflow.startIndex, boundaryStart);
-    if (startIndex === undefined || !workflow.invalidation)
-        throw new Error(boundaryStart === undefined ? '尚未设置游玩记录起点' : '尚未选择历史重算起点');
-    const endIndex = getChat().length;
-    const processableIndexes = Array.from({ length: Math.max(0, endIndex - startIndex) }, (_, offset) => startIndex + offset)
-        .filter((index) => isProcessableAssistantMessage(getMessage(index)));
-    const previousRecovery = workflow.recovery;
-    const canResumeCore = Boolean(previousRecovery
-        && previousRecovery.startIndex === startIndex
-        && ['failed', 'rebuilding-core'].includes(previousRecovery.phase)
-        && Number.isInteger(previousRecovery.currentIndex)
-        && processableIndexes.includes(Number(previousRecovery.currentIndex)));
-    const resumeOffset = canResumeCore
-        ? processableIndexes.indexOf(Number(previousRecovery?.currentIndex))
-        : previousRecovery
-            && previousRecovery.startIndex === startIndex
-            && ['rebuilding-derived', 'publishing-lorebook', 'partial'].includes(previousRecovery.phase)
-            ? processableIndexes.length
-            : 0;
-    // currentIndex 指向下一条待处理/本次失败消息；其在当前可处理序列中的位置
-    // 就是已经成功固化的数量。不要重新使用 startIndex，否则重试会重复调用前缀消息。
-    const completedBeforeRun = resumeOffset;
-    const remainingIndexes = processableIndexes.slice(resumeOffset);
-    beginHistoryRecovery(state, {
-        startIndex,
-        endIndex,
-        currentIndex: remainingIndexes[0] ?? processableIndexes.at(-1),
-        completedCount: completedBeforeRun,
-        totalCount: processableIndexes.length,
-        phase: remainingIndexes.length ? 'rebuilding-core' : 'rebuilding-derived',
-    });
-    await putChatState(state);
-    let latest = null;
-    const recoveredMessageKeys = new Set();
-    for (const index of processableIndexes.slice(0, completedBeforeRun)) {
-        const attached = getAttachedArtifact(getMessage(index));
-        if (attached?.messageKey)
-            recoveredMessageKeys.add(attached.messageKey);
-    }
-    for (const [runPosition, index] of remainingIndexes.entries()) {
-        const absolutePosition = completedBeforeRun + runPosition;
+    if (Boolean(activeHistoryRebuildChatKey))
+        throw new TaskBlockedError('已有历史重建正在执行');
+    const queueExclusiveToken = makeId('history_rebuild');
+    if (!taskQueue.beginExclusive(queueExclusiveToken, '历史重建正在独占任务队列'))
+        throw new TaskBlockedError('已有独占任务正在执行');
+    activeHistoryRebuildChatKey = chatKey;
+    try {
+        cancelScheduledMessagesForChat(chatKey);
+        const cancelledActive = taskQueue.cancelActiveMatching(() => true, '历史重建开始，旧运行任务已取消');
+        taskQueue.cancelPendingMatching(() => true, '历史重建开始，旧排队任务已取消');
+        if (cancelledActive)
+            abortActiveBusinessRequests();
+        await taskQueue.whenIdle();
         if (currentChatKey() !== chatKey)
             throw new Error('聊天已切换，历史重算已停止');
-        try {
-            latest = await processMessage(index, false, { skipDerived: true, historyRecovery: true });
-            if (latest?.messageKey)
-                recoveredMessageKeys.add(latest.messageKey);
+        const state = await getChatState(chatKey);
+        const workflow = readHistoryWorkflow(state);
+        const boundaryStart = recordingStartIndex(state);
+        const startIndex = workflow.startIndex === undefined || boundaryStart === undefined
+            ? workflow.startIndex
+            : Math.max(workflow.startIndex, boundaryStart);
+        if (startIndex === undefined || !workflow.invalidation)
+            throw new Error(boundaryStart === undefined ? '尚未设置游玩记录起点' : '尚未选择历史重算起点');
+        const endIndex = getChat().length;
+        const processableIndexes = Array.from({ length: Math.max(0, endIndex - startIndex) }, (_, offset) => startIndex + offset)
+            .filter((index) => isProcessableAssistantMessage(getMessage(index)));
+        const previousRecovery = workflow.recovery;
+        const canResumeCore = Boolean(previousRecovery
+            && previousRecovery.startIndex === startIndex
+            && ['failed', 'rebuilding-core'].includes(previousRecovery.phase)
+            && Number.isInteger(previousRecovery.currentIndex)
+            && processableIndexes.includes(Number(previousRecovery.currentIndex)));
+        const resumeOffset = canResumeCore
+            ? processableIndexes.indexOf(Number(previousRecovery?.currentIndex))
+            : previousRecovery
+                && previousRecovery.startIndex === startIndex
+                && ['rebuilding-derived', 'publishing-lorebook', 'partial'].includes(previousRecovery.phase)
+                ? processableIndexes.length
+                : 0;
+        // currentIndex 指向下一条待处理/本次失败消息；其在当前可处理序列中的位置
+        // 就是已经成功固化的数量。不要重新使用 startIndex，否则重试会重复调用前缀消息。
+        const completedBeforeRun = resumeOffset;
+        const remainingIndexes = processableIndexes.slice(resumeOffset);
+        beginHistoryRecovery(state, {
+            startIndex,
+            endIndex,
+            currentIndex: remainingIndexes[0] ?? processableIndexes.at(-1),
+            completedCount: completedBeforeRun,
+            totalCount: processableIndexes.length,
+            phase: remainingIndexes.length ? 'rebuilding-core' : 'rebuilding-derived',
+        });
+        await putChatState(state);
+        let latest = null;
+        const recoveredMessageKeys = new Set();
+        for (const index of processableIndexes.slice(0, completedBeforeRun)) {
+            const attached = getAttachedArtifact(getMessage(index));
+            if (attached?.messageKey)
+                recoveredMessageKeys.add(attached.messageKey);
+        }
+        for (const [runPosition, index] of remainingIndexes.entries()) {
+            const absolutePosition = completedBeforeRun + runPosition;
             if (currentChatKey() !== chatKey)
                 throw new Error('聊天已切换，历史重算已停止');
-            if (!latest || latest.stages.state.status === 'failed' || latest.stages.state.status === 'blocked') {
-                const stageError = latest?.stages.state.error || '状态表未成功';
-                throw new Error(stageError);
-            }
-            const completedState = await getChatState(chatKey);
-            updateHistoryRecovery(completedState, {
-                completedCount: absolutePosition + 1,
-                currentIndex: processableIndexes[absolutePosition + 1] ?? index,
-                phase: 'rebuilding-core',
-                error: undefined,
-            });
-            await putChatState(completedState);
-        }
-        catch (error) {
-            const detail = toErrorMessage(error);
-            const failedState = await getChatState(chatKey);
-            const failedWorkflow = readHistoryWorkflow(failedState);
-            if (!failedWorkflow.recovery && workflow.recovery) {
-                beginHistoryRecovery(failedState, workflow.recovery);
-            }
-            failHistoryRecovery(failedState, detail, { currentIndex: index, completedCount: absolutePosition });
-            await putChatState(failedState);
-            throw new Error(`历史重建未完成：第 ${index + 1} 条消息的状态提取失败。${detail}`);
-        }
-    }
-    if (currentChatKey() !== chatKey)
-        throw new Error('聊天已切换，历史重算已停止');
-    const recoveryInfo = latest
-        ? { index: latest.messageIndex, artifact: latest }
-        : latestSnapshotArtifact();
-    const freshState = await getChatState(chatKey);
-    if (!recoveryInfo) {
-        await clearCurrentChatLorebookEntries(chatKey);
-        completeHistoryWorkflow(freshState);
-        freshState.lastSyncError = undefined;
-        freshState.lastSyncStatus = 'success';
-        freshState.lastSyncAt = nowIso();
-        await putChatState(freshState);
-        toast('success', '历史数据重算完成；当前没有可发布状态，已清除本聊天的镜渊世界书条目');
-        return null;
-    }
-    updateHistoryRecovery(freshState, {
-        phase: 'rebuilding-derived',
-        currentIndex: recoveryInfo.index,
-    });
-    await putChatState(freshState);
-    const artifact = recoveryInfo.artifact;
-    const revision = currentHistoryRevision(chatKey);
-    const errors = [];
-    try {
-        await taskQueue.run(`${PIPELINE_VERSION}:history-recovery-derived:${chatKey}:${artifact.messageKey}`, '恢复历史总结与世界书', 'smallSummary', async (guard) => {
-            bindArtifactHistoryRevision(artifact, revision);
-            bindArtifactTaskGuard(artifact, guard);
             try {
+                latest = await processMessage(index, false, { skipDerived: true, historyRecovery: true, queueExclusiveToken });
+                if (latest?.messageKey)
+                    recoveredMessageKeys.add(latest.messageKey);
+                if (currentChatKey() !== chatKey)
+                    throw new Error('聊天已切换，历史重算已停止');
+                if (!latest || latest.stages.state.status === 'failed' || latest.stages.state.status === 'blocked') {
+                    const stageError = latest?.stages.state.error || '状态表未成功';
+                    throw new Error(stageError);
+                }
+                const completedState = await getChatState(chatKey);
+                updateHistoryRecovery(completedState, {
+                    completedCount: absolutePosition + 1,
+                    currentIndex: processableIndexes[absolutePosition + 1] ?? index,
+                    phase: 'rebuilding-core',
+                    error: undefined,
+                });
+                await putChatState(completedState);
+            }
+            catch (error) {
+                const detail = toErrorMessage(error);
+                const failedState = await getChatState(chatKey);
+                const failedWorkflow = readHistoryWorkflow(failedState);
+                if (!failedWorkflow.recovery && workflow.recovery) {
+                    beginHistoryRecovery(failedState, workflow.recovery);
+                }
+                failHistoryRecovery(failedState, detail, { currentIndex: index, completedCount: absolutePosition });
+                await putChatState(failedState);
+                throw new Error(`历史重建未完成：第 ${index + 1} 条消息的状态提取失败。${detail}`);
+            }
+        }
+        if (currentChatKey() !== chatKey)
+            throw new Error('聊天已切换，历史重算已停止');
+        const recoveryInfo = latest
+            ? { index: latest.messageIndex, artifact: latest }
+            : latestSnapshotArtifact();
+        const freshState = await getChatState(chatKey);
+        if (!recoveryInfo) {
+            await clearCurrentChatLorebookEntries(chatKey);
+            completeHistoryWorkflow(freshState);
+            freshState.lastSyncError = undefined;
+            freshState.lastSyncStatus = 'success';
+            freshState.lastSyncAt = nowIso();
+            await putChatState(freshState);
+            toast('success', '历史数据重算完成；当前没有可发布状态，已清除本聊天的镜渊世界书条目');
+            return null;
+        }
+        updateHistoryRecovery(freshState, {
+            phase: 'rebuilding-derived',
+            currentIndex: recoveryInfo.index,
+        });
+        await putChatState(freshState);
+        const artifact = recoveryInfo.artifact;
+        const revision = currentHistoryRevision(chatKey);
+        const errors = [];
+        try {
+            await taskQueue.run(`${PIPELINE_VERSION}:history-recovery-derived:${chatKey}:${artifact.messageKey}`, '恢复历史总结与世界书', 'smallSummary', async (guard) => {
+                bindArtifactHistoryRevision(artifact, revision);
+                bindArtifactTaskGuard(artifact, guard);
                 try {
-                    // 不 force；只排空因本次历史变化而重新达到条件的 event_id 与未固化小总结。
-                    await rebuildEligibleSummaries(artifact);
-                }
-                catch (error) {
-                    if (derivedTaskError(error))
-                        throw error;
-                    errors.push(`总结：${toErrorMessage(error)}`);
-                }
-                await saveArtifactToMessage(recoveryInfo.index, artifact);
-                if (resolveHostControl(getSettings()).lorebook && errors.length === 0) {
-                    const publishingState = await getChatState(chatKey);
-                    updateHistoryRecovery(publishingState, { phase: 'publishing-lorebook' });
-                    await putChatState(publishingState);
                     try {
-                        await syncLorebook(artifact, false, { allowHistoryRecovery: true });
+                        // 不 force；只排空因本次历史变化而重新达到条件的 event_id 与未固化小总结。
+                        const rebuiltKinds = await rebuildEligibleSummaries(artifact);
+                        await recordCompletedSummaryEffects(artifact, rebuiltKinds, 'history-recovery');
                     }
                     catch (error) {
-                        if (error instanceof CommitRejectedError || (error instanceof Error && error.name === 'AbortError'))
+                        if (derivedTaskError(error))
                             throw error;
-                        errors.push(`世界书：${toErrorMessage(error)}`);
+                        errors.push(`总结：${toErrorMessage(error)}`);
                     }
                     await saveArtifactToMessage(recoveryInfo.index, artifact);
+                    if (resolveHostControl(getSettings()).lorebook && errors.length === 0) {
+                        const publishingState = await getChatState(chatKey);
+                        updateHistoryRecovery(publishingState, { phase: 'publishing-lorebook' });
+                        await putChatState(publishingState);
+                        try {
+                            await runTrackedRuntimeEffect({
+                                artifact,
+                                type: 'lorebook-sync',
+                                reason: 'history-recovery',
+                                work: () => syncLorebook(artifact, false, { allowHistoryRecovery: true }),
+                            });
+                        }
+                        catch (error) {
+                            if (error instanceof CommitRejectedError || (error instanceof Error && error.name === 'AbortError'))
+                                throw error;
+                            errors.push(`世界书：${toErrorMessage(error)}`);
+                        }
+                        await saveArtifactToMessage(recoveryInfo.index, artifact);
+                    }
+                    if (errors.length)
+                        throw new Error(errors.join('；'));
+                    // 恢复提交成功前，清理恢复期间由宿主保存事件产生的陈旧自动任务。
+                    cancelScheduledMessagesForChat(chatKey);
+                    taskQueue.cancelPendingMatching((task) => Boolean(task.chatKey === chatKey
+                        && task.automatic === true
+                        && recoveredMessageKeys.has(String(task.messageKey || ''))
+                        && task.triggerSource !== 'history-recovery'), '历史恢复已提交相同正文，陈旧自动任务已取消');
                 }
-                if (errors.length)
-                    throw new Error(errors.join('；'));
-                // 恢复提交成功前，清理恢复期间由宿主保存事件产生的陈旧自动任务。
-                cancelScheduledMessagesForChat(chatKey);
-                taskQueue.cancelPendingMatching((task) => Boolean(task.chatKey === chatKey
-                    && task.automatic === true
-                    && recoveredMessageKeys.has(String(task.messageKey || ''))
-                    && task.triggerSource !== 'history-recovery'), '历史恢复已提交相同正文，陈旧自动任务已取消');
-            }
-            finally {
-                unbindArtifactTaskGuard(artifact, guard);
-                unbindArtifactHistoryRevision(artifact, revision);
-            }
-        }, { priority: 70, chatKey });
-    }
-    catch (error) {
-        if (derivedTaskError(error))
-            throw error;
-        if (errors.length === 0)
-            errors.push(toErrorMessage(error));
-    }
-    const finalState = await getChatState(chatKey);
-    if (errors.length) {
-        markHistoryRecoveryPartial(finalState, errors.join('；'));
-        await putChatState(finalState);
-        toast('warning', `历史核心状态已重算完成，但部分派生恢复失败：${errors.join('；')}`);
-    }
-    else {
-        completeHistoryWorkflow(finalState);
-        if (!resolveHostControl(getSettings()).lorebook) {
-            finalState.lastSyncStatus = 'idle';
-            finalState.lastSyncError = undefined;
+                finally {
+                    unbindArtifactTaskGuard(artifact, guard);
+                    unbindArtifactHistoryRevision(artifact, revision);
+                }
+            }, { priority: 70, chatKey, exclusiveToken: queueExclusiveToken });
         }
-        await putChatState(finalState);
-        toast('success', resolveHostControl(getSettings()).lorebook ? '历史数据重算完成，世界书同步已恢复' : '历史数据重算完成；自动世界书同步当前已关闭');
+        catch (error) {
+            if (derivedTaskError(error))
+                throw error;
+            if (errors.length === 0)
+                errors.push(toErrorMessage(error));
+        }
+        const finalState = await getChatState(chatKey);
+        if (errors.length) {
+            markHistoryRecoveryPartial(finalState, errors.join('；'));
+            await putChatState(finalState);
+            toast('warning', `历史核心状态已重算完成，但部分派生恢复失败：${errors.join('；')}`);
+        }
+        else {
+            completeHistoryWorkflow(finalState);
+            if (!resolveHostControl(getSettings()).lorebook) {
+                finalState.lastSyncStatus = 'idle';
+                finalState.lastSyncError = undefined;
+            }
+            await putChatState(finalState);
+            toast('success', resolveHostControl(getSettings()).lorebook ? '历史数据重算完成，世界书同步已恢复' : '历史数据重算完成；自动世界书同步当前已关闭');
+        }
+        return artifact;
+
     }
-    return artifact;
+    finally {
+        activeHistoryRebuildChatKey = '';
+        taskQueue.endExclusive(queueExclusiveToken);
+    }
 }
 async function chooseHistoryRecalculationStart(startIndex) {
     if (!getSettings().enabled)
@@ -11650,6 +11701,7 @@ async function chooseHistoryRecalculationStart(startIndex) {
     invalidateDerivedForValidMessages(state, validPrefixKeys);
     state.processedMessageKeys = state.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
     state.latestSnapshotMessageKey = state.processedMessageKeys.at(-1);
+    replayRuntimeForValidMessages(state, validPrefixKeys);
     await persistChatFor(chatKey);
     await putChatState(state);
     notifyFrom(index);
@@ -11718,14 +11770,6 @@ async function retryStage(index, stage) {
                 await saveArtifactToMessage(index, artifact);
                 if (result.approved) {
                     await invalidateCoreAfterManualRevision(artifact, previousMessageKey);
-                    // “修正”是整条业务链中的一个阶段，而不是需要玩家再次点击的终点。
-                    // 修正版审核通过后，在同一队列任务中继续状态提交与派生排队。
-                    await runStateExtraction(artifact, true);
-                    await saveArtifactToMessage(index, artifact);
-                    const committedState = await commitCoreState(artifact, true);
-                    const summaryPlan = await prepareDerivedStageStatuses(artifact, committedState);
-                    taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
-                    queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
                 }
                 else {
                     await applyAuditFailureAction(artifact, getSettings().revisionFallbackAction);
@@ -11738,15 +11782,27 @@ async function retryStage(index, stage) {
                 }
                 await runStateExtraction(artifact, true);
                 await saveArtifactToMessage(index, artifact);
-                const committedState = await commitCoreState(artifact, true);
-                const summaryPlan = await prepareDerivedStageStatuses(artifact, committedState);
+                const { plan: summaryPlan } = await commitCoreTransaction({
+                    artifact,
+                    historyRevision: scheduledHistoryRevision,
+                    resolveHistoryInvalidation: true,
+                    narrativeTail: isNarrativeTail(artifact.messageIndex),
+                    forceReprojection: true,
+                    notify,
+                });
                 taskQueue.cancelPendingDerivedByChatKey(artifact.chatKey);
-                queueAutomaticDerived(index, artifact, scheduledHistoryRevision, summaryPlan);
+                queueRuntimeOutbox(index, artifact, scheduledHistoryRevision, summaryPlan);
             }
             if (stage === 'summary') {
                 const errors = [];
                 try {
-                    await maybeRunSummaries(artifact, true, true);
+                    await runTrackedRuntimeEffect({
+                        artifact,
+                        type: 'summary',
+                        kind: 'small',
+                        reason: 'manual-retry-summary',
+                        work: () => maybeRunSummaries(artifact, true, true),
+                    });
                 }
                 catch (error) {
                     if (derivedTaskError(error))
@@ -11756,7 +11812,12 @@ async function retryStage(index, stage) {
                 await saveArtifactToMessage(index, artifact);
                 if (resolveHostControl(getSettings()).lorebook) {
                     try {
-                        await syncLorebook(artifact);
+                        await runTrackedRuntimeEffect({
+                            artifact,
+                            type: 'lorebook-sync',
+                            reason: 'manual-retry-summary',
+                            work: () => syncLorebook(artifact),
+                        });
                     }
                     catch (error) {
                         if (derivedTaskError(error))
@@ -11769,7 +11830,12 @@ async function retryStage(index, stage) {
                     throw new Error(errors.join('；'));
             }
             if (stage === 'sync') {
-                await syncLorebook(artifact, true);
+                await runTrackedRuntimeEffect({
+                    artifact,
+                    type: 'lorebook-sync',
+                    reason: 'manual-retry-sync',
+                    work: () => syncLorebook(artifact, true),
+                });
                 await saveArtifactToMessage(index, artifact);
             }
             return artifact;
@@ -11807,7 +11873,12 @@ async function applyLorebookMaintenance(index) {
         bindArtifactTaskGuard(artifact, guard);
         try {
             const result = await applyLorebookMaintenanceForArtifact(artifact);
-            await syncLorebook(artifact, true);
+            await runTrackedRuntimeEffect({
+                artifact,
+                type: 'lorebook-sync',
+                reason: 'lorebook-maintenance',
+                work: () => syncLorebook(artifact, true),
+            });
             await saveArtifactToMessage(index, artifact);
             return result;
         }
@@ -11857,7 +11928,13 @@ async function forceSummary(requestedIndex, kind) {
         const errors = [];
         try {
             try {
-                await runSummaryStage(artifact, kind, true);
+                await runTrackedRuntimeEffect({
+                    artifact,
+                    type: 'summary',
+                    kind,
+                    reason: 'manual-force-summary',
+                    work: () => runSummaryStage(artifact, kind, true),
+                });
             }
             catch (error) {
                 if (derivedTaskError(error))
@@ -11867,7 +11944,12 @@ async function forceSummary(requestedIndex, kind) {
             await saveArtifactToMessage(index, artifact);
             if (resolveHostControl(getSettings()).lorebook) {
                 try {
-                    await syncLorebook(artifact);
+                    await runTrackedRuntimeEffect({
+                        artifact,
+                        type: 'lorebook-sync',
+                        reason: 'manual-force-summary',
+                        work: () => syncLorebook(artifact),
+                    });
                 }
                 catch (error) {
                     if (derivedTaskError(error))
@@ -12035,15 +12117,9 @@ function installPipelineEventHandlers() {
         abortActiveRequests();
         taskQueue.cancelPendingOutsideChat(chatKey);
         cancelScheduledMessagesOutsideChat(chatKey);
-        void (async () => {
-            try {
-                await reconcileInterruptedRuntimeState();
-                await resumeRuntimeOutbox();
-            }
-            catch (error) {
-                console.warn('[MirrorAbyss] interrupted runtime reconciliation or outbox resume failed', error);
-            }
-        })();
+        void reconcileInterruptedRuntimeState().catch((error) => {
+            console.warn('[MirrorAbyss] interrupted runtime reconciliation failed', error);
+        });
     };
     eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
     eventSource.on(event_types.MESSAGE_EDITED, onEdited);
@@ -12069,22 +12145,19 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
-Object.defineProperty(__scope,"commitPreparedMessageReplacement",{enumerable:true,configurable:true,get:()=>__require("core/message-update.js")["commitPreparedMessageReplacement"]});
-Object.defineProperty(__scope,"prepareMessageReplacement",{enumerable:true,configurable:true,get:()=>__require("core/message-update.js")["prepareMessageReplacement"]});
+Object.defineProperty(__scope,"replaceMessageInPlace",{enumerable:true,configurable:true,get:()=>__require("core/message-update.js")["replaceMessageInPlace"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"revisionSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionSystemPrompt"]});
 Object.defineProperty(__scope,"revisionUserPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionUserPrompt"]});
 Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
-Object.defineProperty(__scope,"applyAuditFailureAction",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditFailureAction"]});
 Object.defineProperty(__scope,"applyAuditVisibility",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditVisibility"]});
 Object.defineProperty(__scope,"auditText",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["auditText"]});
 with(__scope){
 Object.defineProperty(exports,"runRevisionFlow",{enumerable:true,configurable:true,get:()=>runRevisionFlow});
-Object.defineProperty(exports,"revisionFailureAction",{enumerable:true,configurable:true,get:()=>revisionFailureAction});
 /**
  * 模块职责：按审核指令生成最小修正版并复审，成功后原位替换正文。
- * 维护边界：修正次数有限；技术错误不能当作再次违规，也不能改变原审核失败结论。
+ * 维护边界：修正次数有限；技术错误不能当作再次违规，也不能因此隐藏正文。
  */
 function cleanRevisionText(raw) {
     let text = safeText(raw, 200000).trim();
@@ -12093,11 +12166,6 @@ function cleanRevisionText(raw) {
         text = fenced[1].trim();
     text = text.replace(/^(?:【?修正版(?:正文)?】?|修正后的完整正文)\s*[:：]?\s*/i, '').trim();
     return text;
-}
-function revisionFailureAction(settings, error) {
-    if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name))
-        return 'preserve-hidden';
-    return settings?.revisionFallbackAction === 'mark' ? 'mark' : 'hide';
 }
 function initialRevisionRecord(artifact) {
     return artifact.revision ?? {
@@ -12157,9 +12225,10 @@ async function runRevisionFlow(artifact) {
             });
             if (candidateAudit.passed) {
                 artifact.audit = candidateAudit;
-                // 先在内存中替换正文，再写入完整的审核/修正成功终态，最后一次性保存。
-                // 避免宿主在“正文已替换、修正状态仍为 running”窗口中读取到半提交结果。
-                prepareMessageReplacement(artifact, candidate);
+                await replaceMessageInPlace(artifact, candidate);
+                // replaceMessageInPlace 负责正文与指纹原子提交；显式移除审核隐藏类，
+                // 避免宿主局部刷新保留旧 CSS，或后续保存失败时正文仍不可见。
+                applyAuditVisibility(artifact.messageIndex, false, false);
                 artifact.auditSourceFingerprint = artifact.sourceFingerprint;
                 artifact.revision.status = 'success';
                 artifact.revision.finalFingerprint = artifact.sourceFingerprint;
@@ -12167,15 +12236,10 @@ async function runRevisionFlow(artifact) {
                 // The rejected body is no longer needed after an atomic in-place commit.
                 // Purging it keeps the saved chat metadata free of the discarded prose.
                 artifact.revision.originalText = '';
-                artifact.approvedFingerprint = artifact.sourceFingerprint;
                 artifact.hiddenByAudit = false;
                 markStage(artifact, 'audit', 'success');
                 markStage(artifact, 'revision', 'success');
-                await commitPreparedMessageReplacement(artifact);
                 await putArtifact(artifact);
-                // 正文与审核终态都已落盘后，显式清除宿主消息上的隐藏/失败样式。
-                // 不能只修改 artifact.hiddenByAudit，否则旧 DOM 类名会让修正版继续不可见。
-                applyAuditVisibility(artifact.messageIndex, false, false);
                 return { approved: true, audit: candidateAudit };
             }
             const sameViolation = Boolean(settings.stopOnRepeatedViolation &&
@@ -12204,27 +12268,120 @@ async function runRevisionFlow(artifact) {
         return { approved: false, audit: artifact.audit ?? firstAudit };
     }
     catch (error) {
-        const failureAction = revisionFailureAction(settings, error);
-        if (failureAction === 'preserve-hidden') {
+        if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name)) {
             artifact.revision.status = 'cancelled';
             artifact.revision.stoppedReason = toErrorMessage(error);
-            // 被取消或提交失效时，不能把尚未通过审核的原正文重新放出。
-            // CommitRejectedError 可能意味着正文已变化，因此不再主动操作当前DOM。
-            if (error.name === 'AbortError') {
-                artifact.hiddenByAudit = true;
-                applyAuditVisibility(artifact.messageIndex, true, false);
-            }
+            artifact.hiddenByAudit = false;
+            applyAuditVisibility(artifact.messageIndex, false, true);
             markStage(artifact, 'revision', 'cancelled', artifact.revision.stoppedReason);
             await putArtifact(artifact);
             throw error;
         }
         artifact.revision.status = 'failed';
         artifact.revision.stoppedReason = toErrorMessage(error);
+        artifact.hiddenByAudit = false;
+        applyAuditVisibility(artifact.messageIndex, false, true);
         markStage(artifact, 'revision', 'failed', `修正执行失败：${artifact.revision.stoppedReason}`);
-        // 技术失败不改变原审核结论；按用户配置的修正失败处理保持隐藏或标红。
-        await applyAuditFailureAction(artifact, failureAction);
         await putArtifact(artifact);
         throw error;
+    }
+}
+
+}
+};
+__defs["pipeline/runtime-effects.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
+Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueLorebookProjection"]});
+Object.defineProperty(__scope,"enqueueSummaryEffect",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueSummaryEffect"]});
+Object.defineProperty(__scope,"markRuntimeJobCancelledById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobCancelledById"]});
+Object.defineProperty(__scope,"markRuntimeJobDoneById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobDoneById"]});
+Object.defineProperty(__scope,"markRuntimeJobFailedById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobFailedById"]});
+Object.defineProperty(__scope,"markRuntimeJobRunningById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobRunningById"]});
+Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+with(__scope){
+Object.defineProperty(exports,"transitionRuntimeJob",{enumerable:true,configurable:true,get:()=>transitionRuntimeJob});
+Object.defineProperty(exports,"runTrackedRuntimeEffect",{enumerable:true,configurable:true,get:()=>runTrackedRuntimeEffect});
+Object.defineProperty(exports,"recordCompletedSummaryEffects",{enumerable:true,configurable:true,get:()=>recordCompletedSummaryEffects});
+/**
+ * Persistent lifecycle for explicitly requested derived effects.
+ *
+ * Automatic effects are claimed by outbox-runner. Manual retries, maintenance
+ * and history recovery use this module so their successful/failed work updates
+ * the same Runtime V2 state instead of bypassing it.
+ */
+function cancellationError(error) {
+    return error instanceof CommitRejectedError
+        || (error instanceof Error && ['AbortError', 'CommitRejectedError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
+}
+
+function createJob(chatState, artifact, type, kind, reason) {
+    if (type === 'lorebook-sync')
+        return enqueueLorebookProjection(chatState, artifact, reason);
+    if (type === 'summary')
+        return enqueueSummaryEffect(chatState, artifact, kind, reason);
+    throw new Error(`未知 Runtime 派生任务：${type}`);
+}
+
+async function transitionRuntimeJob(chatKey, jobId, status, artifact, error = '') {
+    const state = await getChatState(chatKey);
+    const job = status === 'running'
+        ? markRuntimeJobRunningById(state, jobId)
+        : status === 'done'
+            ? markRuntimeJobDoneById(state, jobId, artifact)
+            : status === 'cancelled'
+                ? markRuntimeJobCancelledById(state, jobId, error || '任务已取消')
+                : markRuntimeJobFailedById(state, jobId, error);
+    await putChatState(state);
+    return job;
+}
+
+async function runTrackedRuntimeEffect({ artifact, type, kind = '', reason, work }) {
+    if (!artifact?.chatKey || !artifact?.messageKey)
+        throw new Error('派生任务缺少有效 artifact');
+    if (typeof work !== 'function')
+        throw new Error('派生任务缺少执行函数');
+
+    const initialState = await getChatState(artifact.chatKey);
+    const job = createJob(initialState, artifact, type, kind, reason);
+    markRuntimeJobRunningById(initialState, job.id);
+    await putChatState(initialState);
+
+    try {
+        const result = await work();
+        const completed = await transitionRuntimeJob(artifact.chatKey, job.id, 'done', artifact);
+        if (!completed || completed.status !== 'done')
+            throw new CommitRejectedError('派生任务已被更新修订替代，旧结果不再确认');
+        return result;
+    }
+    catch (error) {
+        try {
+            await transitionRuntimeJob(
+                artifact.chatKey,
+                job.id,
+                cancellationError(error) ? 'cancelled' : 'failed',
+                artifact,
+                toErrorMessage(error),
+            );
+        }
+        catch (transitionError) {
+            console.warn('[MirrorAbyss] failed to persist runtime effect terminal state', transitionError);
+        }
+        throw error;
+    }
+}
+
+async function recordCompletedSummaryEffects(artifact, kinds, reason = 'history-recovery') {
+    for (const kind of [...new Set(Array.isArray(kinds) ? kinds : [])]) {
+        if (!['small', 'large'].includes(kind))
+            continue;
+        const state = await getChatState(artifact.chatKey);
+        const job = enqueueSummaryEffect(state, artifact, kind, reason);
+        markRuntimeJobRunningById(state, job.id);
+        markRuntimeJobDoneById(state, job.id, artifact);
+        await putChatState(state);
     }
 }
 
@@ -12240,6 +12397,7 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
+Object.defineProperty(__scope,"FACT_EVIDENCE_KINDS",{enumerable:true,configurable:true,get:()=>__require("domain/fact-contract.js")["FACT_EVIDENCE_KINDS"]});
 Object.defineProperty(__scope,"normalizeFactPackage",{enumerable:true,configurable:true,get:()=>__require("domain/facts.js")["normalizeFactPackage"]});
 Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalObjectTitle"]});
 Object.defineProperty(__scope,"enabledTables",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["enabledTables"]});
@@ -12271,7 +12429,6 @@ Object.defineProperty(exports,"attachLocalFactMetadata",{enumerable:true,configu
 class RegistryChangedError extends CommitRejectedError {
 }
 const FACT_OPERATIONS = new Set(['create', 'update', 'append', 'close', 'supersede']);
-const FACT_CONFIDENCE = new Set(['confirmed', 'recorded', 'reported', 'uncertain']);
 const FACT_STORAGE_CLASSES = new Set(['working', 'episodic', 'event', 'durable']);
 /** 固定文本解析后再检查镜渊业务身份约束。 */
 function assertStateBusinessShape(parsed, active) {
@@ -12295,7 +12452,7 @@ function assertStateBusinessShape(parsed, active) {
         factIds.add(factId);
         if (source.operation !== undefined && !FACT_OPERATIONS.has(String(source.operation)))
             throw new Error(`facts[${index}].operation 不合法`);
-        if (source.confidence !== undefined && !FACT_CONFIDENCE.has(String(source.confidence)))
+        if (source.confidence !== undefined && !FACT_EVIDENCE_KINDS.has(String(source.confidence)))
             throw new Error(`facts[${index}].confidence 不合法`);
         if (!source.primaryHost?.type || !source.primaryHost?.id)
             throw new Error(`facts[${index}].primary_host 不完整`);
@@ -12639,21 +12796,48 @@ function minimalStateChunkPrompt(playerText, assistantChunk, index, total) {
 function retryableStateTransportError(error) {
     return /(504|502|503|gateway|timeout|timed out|超时|网关|no message generated|返回为空|响应未完成|upstream)/i.test(toErrorMessage(error));
 }
-/** 模型返回只调用一次；格式兼容全部由本地动态解析器处理。 */
-async function generateValidatedStateText(request, previous, registry, activeFacts, _repairOrigin) {
+/** 只修复标签、块和必填语义项等传输格式问题；表格/语义层权限与对象歧义属于语义校验，必须原样失败。 */
+function repairableStateParseError(error) {
+    const message = toErrorMessage(error);
+    return !/(未注册|已停用|无法确定对象表|存在歧义|多个条目命中|不允许写入|不允许直接维护|未知生命周期|只能用于已有对象|absorb 必须|merge_)/i.test(message);
+}
+function compactStateRepairSystemPrompt() {
+    return `你是固定文本整理器，不分析剧情、不补充事实。把输入中已经写出的内容整理成镜渊自然事实模块。
+只允许 <MA_TURN> 和 <MA_EVENT>。删除块外说明、JSON 外壳、代码围栏、等号键值和思考文字。
+<MA_EVENT> 第一行只写事件名，随后直接写事实模块；删除“进行中/已结束”状态行。必须保留唯一 <MA_CORE>。对象模块第一行写对象名，后续只写该对象自身的一到两句具体结果。不同模块不得重复整件事；原始返回没有表达的事实不得添加。`;
+}
+function compactStateRepairPrompt(raw) {
+    return `【待整理的模型原始返回】\n${safeText(raw, 18000)}\n\n只做格式整理。原始返回没有表达的事实不得添加。`;
+}
+async function repairStateText(raw, previous, registry, activeFacts, maxTokens, origin) {
+    const repaired = await generateTask({
+        task: 'state',
+        systemPrompt: compactStateRepairSystemPrompt(),
+        prompt: compactStateRepairPrompt(raw),
+        maxTokens: Math.min(Math.max(768, maxTokens), 1536),
+        requestPurpose: 'fixed-text',
+        requestOrigin: origin,
+    });
+    parseStateTextOutput(repaired, previous, registry, activeFacts);
+    return repaired;
+}
+async function generateValidatedStateText(request, previous, registry, activeFacts, repairOrigin) {
     const raw = await generateTask(request);
     try {
         parseStateTextOutput(raw, previous, registry, activeFacts);
         return raw;
     }
     catch (parseError) {
-        const preview = safeText(raw, 1200).replace(/\s+/g, ' ').trim();
-        const failure = new Error(`状态返回无法由统一解析器接收：${toErrorMessage(parseError)}${preview ? `；返回片段：${preview}` : ''}`, { cause: parseError });
-        failure.code = 'STATE_PROTOCOL_INVALID';
-        throw failure;
+        if (!repairableStateParseError(parseError))
+            throw parseError;
+        try {
+            return await repairStateText(raw, previous, registry, activeFacts, Number(request.maxTokens) || 1536, repairOrigin);
+        }
+        catch (repairError) {
+            throw new Error(`状态返回格式整理失败：${toErrorMessage(parseError)}；整理重试：${toErrorMessage(repairError)}`, { cause: repairError });
+        }
     }
 }
-
 async function requestStateText(artifact, previous, activeFacts, registry, systemPrompt, settings) {
     const fullPrompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry, activeFacts);
     const budget = Math.max(6000, settings.stateContextChars);
@@ -12671,12 +12855,11 @@ async function requestStateText(artifact, previous, activeFacts, registry, syste
             return await generateValidatedStateText(initialRequest, previous, registry, activeFacts, 'state-format-repair');
         }
         catch (error) {
-            // 主请求已经获得内容但统一解析器拒绝时，不再切块或调用第二个模型修格式。
-            if (error?.code === 'STATE_PROTOCOL_INVALID')
-                throw error;
-            if (!retryableStateTransportError(error))
-                throw error;
             initialError = error;
+            if (!retryableStateTransportError(error) && !repairableStateParseError(error))
+                throw error;
+            if (!retryableStateTransportError(error) && !/格式整理失败|固定文本|MA_EVENT|MA_TURN/i.test(toErrorMessage(error)))
+                throw error;
         }
     }
     const reserve = Math.max(2200, budget - systemPrompt.length - 1800);
@@ -12832,17 +13015,14 @@ Object.defineProperty(__scope,"pendingFactsByEvent",{enumerable:true,configurabl
 Object.defineProperty(__scope,"normalizeTableRegistry",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["normalizeTableRegistry"]});
 Object.defineProperty(__scope,"isEntryLifecycleHidden",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryLifecycleHidden"]});
 Object.defineProperty(__scope,"finalizeSummarySettlement",{enumerable:true,configurable:true,get:()=>__require("domain/memory-state-machine.js")["finalizeSummarySettlement"]});
-Object.defineProperty(__scope,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["markSummaryLifecycle"]});
-Object.defineProperty(__scope,"mergeEquivalentSummaryVersion",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["mergeEquivalentSummaryVersion"]});
 Object.defineProperty(__scope,"normalizeSummary",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["normalizeSummary"]});
-Object.defineProperty(__scope,"refreshSummaryFingerprint",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["refreshSummaryFingerprint"]});
-Object.defineProperty(__scope,"summaryIsCurrent",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["summaryIsCurrent"]});
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"largeSummaryPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["largeSummaryPrompt"]});
 Object.defineProperty(__scope,"largeSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["largeSummarySystemPrompt"]});
 Object.defineProperty(__scope,"smallSummaryBatchPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["smallSummaryBatchPrompt"]});
 Object.defineProperty(__scope,"smallSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["smallSummarySystemPrompt"]});
 Object.defineProperty(__scope,"parseSummaryTextOutput",{enumerable:true,configurable:true,get:()=>__require("domain/summary-text.js")["parseSummaryTextOutput"]});
+Object.defineProperty(__scope,"eventClosedFromFacts",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventClosedFromFacts"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
 Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
 Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
@@ -12860,56 +13040,10 @@ Object.defineProperty(exports,"hasEligibleLargeSummary",{enumerable:true,configu
  * 模块职责：按 event_id 消费内部事实生成小总结，并仅消费未固化小总结生成大总结。
  * 维护边界：失败不破坏核心事实；同一事实和小总结不得重复消费。
  */
-function textIdentity(value) {
-    return String(value ?? '').normalize('NFKC').toLowerCase()
-        .replace(/[\s\u3000]+/g, '')
-        .replace(/[，。！？；：、,.!?;:'"“”‘’（）()【】\[\]{}<>《》—–_-]+/g, '');
-}
-function factObjectTitle(fact) {
-    const direct = String(fact?.view?.objectTitle || '').trim();
-    if (direct)
-        return direct;
-    const title = String(fact?.title || '').trim();
-    const separator = title.lastIndexOf('·');
-    return separator > 0 ? title.slice(0, separator).trim() : '';
-}
-function factMemoryValues(fact) {
-    return [...new Set([fact?.view?.value, fact?.content, ...(fact?.occurredFacts ?? [])]
-        .map((item) => String(item ?? '').trim()).filter(Boolean))];
-}
-function deterministicSummaryDistributions(facts) {
-    const byKey = new Map();
-    for (const fact of facts ?? []) {
-        if (fact?.type === 'events' || fact?.storageClass === 'episodic')
-            continue;
-        const objectName = factObjectTitle(fact);
-        if (!objectName)
-            continue;
-        const content = factMemoryValues(fact).join('；');
-        if (!content)
-            continue;
-        const objectType = String(fact?.type || fact?.view?.semanticRole || 'object').trim();
-        byKey.set(`${textIdentity(objectType)}|${textIdentity(objectName)}|${textIdentity(content)}`, { objectType, objectName, content });
-    }
-    return [...byKey.values()];
-}
-function sameSummaryContent(left, right) {
-    return Boolean(left && right && refreshSummaryFingerprint(left).contentFingerprint === refreshSummaryFingerprint(right).contentFingerprint);
+function eventClosed(facts) {
+    return eventClosedFromFacts(facts) === true;
 }
 
-function eventClosed(facts) {
-    if (!facts.length)
-        return false;
-    // 内部事实按首次出现顺序保存，更新时 updatedAt 前移。以最后一次事件状态信号为准：
-    // 旧阶段已结束但后续阶段仍活跃时不能关闭；后续明确结果可以覆盖早期“胜负未定”等旧未决表述。
-    const latest = facts.reduce((selected, fact, index) => {
-        const selectedTime = Date.parse(selected.fact.updatedAt) || 0;
-        const factTime = Date.parse(fact.updatedAt) || 0;
-        return factTime > selectedTime || (factTime === selectedTime && index > selected.index) ? { fact, index } : selected;
-    }, { fact: facts[0], index: 0 }).fact;
-    const settled = !latest.active || /(结束|已解决|已关闭|完成|归档|closed|resolved|ended)/i.test(latest.status);
-    return settled;
-}
 function entryToken(value) {
     return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s·•._—–\-|｜:：()（）【】\[\]]+/g, '');
 }
@@ -12921,61 +13055,6 @@ function summaryMemoryText(summary) {
 function rowEventIds(row) {
     return [...new Set([...(row.eventIds ?? []), String(row.eventId || '').trim()].filter(Boolean))];
 }
-function changedSummaryLayerRowIds(before, after, layer, registryValue) {
-    const registry = normalizeTableRegistry(registryValue);
-    const changed = [];
-    for (const table of registry) {
-        const beforeById = new Map((before?.[table.key] ?? []).map((row) => [row.id, row]));
-        for (const row of after?.[table.key] ?? []) {
-            const previous = beforeById.get(row.id);
-            const oldValue = Array.isArray(previous?.fields?.[layer]) ? previous.fields[layer] : [];
-            const newValue = Array.isArray(row?.fields?.[layer]) ? row.fields[layer] : [];
-            if (JSON.stringify(oldValue) !== JSON.stringify(newValue))
-                changed.push(row.id);
-        }
-    }
-    return [...new Set(changed)];
-}
-function settlingRowIdsForEvent(snapshot, eventId, registryValue) {
-    const registry = normalizeTableRegistry(registryValue);
-    const output = [];
-    for (const table of registry) {
-        for (const row of snapshot?.[table.key] ?? []) {
-            if (row?.entryLifecycle?.state !== 'settling')
-                continue;
-            const triggerEvents = row.entryLifecycle?.triggerEventIds ?? [];
-            if (rowEventIds(row).includes(eventId) || triggerEvents.includes(eventId))
-                output.push(row.id);
-        }
-    }
-    return [...new Set(output)];
-}
-function settlementReport({ distributedRowIds, enteredSettlingRowIds, settlement, label }) {
-    const deletedRowIds = [...settlement.deletedRowIds];
-    const retainedRowIds = [...settlement.retainedRowIds];
-    const notes = [];
-    if (distributedRowIds.length)
-        notes.push(`${label}已向 ${distributedRowIds.length} 个对象写入承接层。`);
-    if (deletedRowIds.length)
-        notes.push(`${label}覆盖后由统一状态机物理删除：${deletedRowIds.join('、')}`);
-    if (retainedRowIds.length)
-        notes.push(`${retainedRowIds.length} 个待结算容器继续保留，等待承接、覆盖或终局条件。`);
-    if (!notes.length)
-        notes.push(`${label}已提交；本次没有对象分发或待结算容器变化。`);
-    return {
-        removeRowIds: [],
-        characterActivityUpdates: [],
-        distributedRowIds,
-        enteredSettlingRowIds,
-        deletedRowIds,
-        retainedRowIds,
-        retainedReasons: retainedRowIds.map((id) => `${id}：等待承接、覆盖或终局条件`),
-        // 兼容旧界面字段。
-        appliedRowIds: [...new Set([...distributedRowIds, ...deletedRowIds])],
-        ignoredRowIds: retainedRowIds,
-        notes,
-    };
-}
 /**
  * 总结不再把同一整段事件摘要复制到所有对象。事件条目只承接事件线摘要；
  * 其他对象只承接模型在 <MA_MEMORY> 中为该对象给出的短结果。
@@ -12986,7 +13065,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
     const eventTitleTokens = new Set(facts.map((fact) => entryToken(fact.title)).filter(Boolean));
     const factIds = new Set(facts.map((fact) => fact.factId).filter(Boolean));
     const next = structuredClone(snapshot);
-    const removalEventTexts = new Set(removals.map(summaryMemoryText).map(textIdentity).filter(Boolean));
+    const removalEventTexts = new Set(removals.map(summaryMemoryText).filter(Boolean));
     const removalByObject = new Map();
     for (const previous of removals) {
         for (const memory of previous.distributions ?? []) {
@@ -12994,7 +13073,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
             if (!key)
                 continue;
             const values = removalByObject.get(key) ?? new Set();
-            values.add(textIdentity(memory.content));
+            values.add(String(memory.content || '').trim());
             removalByObject.set(key, values);
         }
     }
@@ -13007,7 +13086,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
         const layerLabel = separator > 0 ? title.slice(separator + 1).trim() : '';
         if (fact.type === 'events' && objectName)
             eventNames.add(objectName);
-        if (!objectName || fact.type === 'events')
+        if (!objectName || layerLabel !== '现行事实')
             continue;
         const key = entryToken(objectName);
         const values = currentFactTextByObject.get(key) ?? new Set();
@@ -13046,44 +13125,30 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
             const removeTexts = table.role === 'events'
                 ? removalEventTexts
                 : (removalByObject.get(objectKey) ?? new Set());
-            const explicitObjectTexts = additionByObject.get(objectKey) ?? [];
-            const deterministicObjectTexts = [...(currentFactTextByObject.get(objectKey) ?? [])];
             const addTexts = table.role === 'events'
                 ? (addition ? [summaryMemoryText(addition)].filter(Boolean) : [])
-                : (explicitObjectTexts.length ? explicitObjectTexts : deterministicObjectTexts);
-            // 非事件对象没有模型分发时，只复用该对象自己的正式事实；绝不复制整段事件摘要。
+                : (additionByObject.get(objectKey) ?? []);
+            // 没有该对象自己的模块时，不把事件摘要兜底复制过来。
             if (!removeTexts.size && !addTexts.length)
                 continue;
             row.fields ||= {};
             const current = Array.isArray(row.fields[layer])
                 ? row.fields[layer].map((item) => String(item ?? '').trim()).filter(Boolean)
                 : [];
-            const values = [...new Map([...current.filter((item) => !removeTexts.has(textIdentity(item))), ...addTexts]
-                .map((item) => [textIdentity(item), item])).values()].filter(Boolean).slice(-24);
+            const values = [...new Set([...current.filter((item) => !removeTexts.has(item)), ...addTexts])].slice(-24);
             if (JSON.stringify(current) === JSON.stringify(values))
                 continue;
             row.fields[layer] = values;
             // 对象自己的低精度承接写入后，移除已经被该总结覆盖的短期“现行事实”副本；当前状态、关系、能力和基础定义继续保留。
             if (table.role !== 'events' && !row.entryLifecycle && addTexts.length) {
                 if (layer === 'recentHistory') {
-                    const objectFacts = facts.filter((fact) => entryToken(factObjectTitle(fact)) === objectKey);
-                    const removableFacts = objectFacts.filter((fact) => fact.storageClass !== 'durable');
-                    const removableIdentities = new Set(removableFacts.flatMap(factMemoryValues).map(textIdentity).filter(Boolean));
+                    const consumedTexts = new Set(currentFactTextByObject.get(objectKey) ?? []);
                     if (row.baseRevisionEvidence?.eventId === eventId)
-                        removableIdentities.add(textIdentity(row.baseRevisionEvidence.statement));
-                    if (removableIdentities.size && Array.isArray(row.fields.currentFacts)) {
+                        consumedTexts.add(String(row.baseRevisionEvidence.statement || '').trim());
+                    if (consumedTexts.size && Array.isArray(row.fields.currentFacts)) {
                         row.fields.currentFacts = row.fields.currentFacts
                             .map((item) => String(item ?? '').trim())
-                            .filter((item) => item && !removableIdentities.has(textIdentity(item)));
-                    }
-                    // 阶段状态只有在事件/事实已经终止时退出当前层；仍持续的伤势、限制等继续保留。
-                    const endedStateIdentities = new Set(removableFacts
-                        .filter((fact) => fact.active === false || fact.view?.eventClosed === true || eventClosed(facts))
-                        .flatMap(factMemoryValues).map(textIdentity).filter(Boolean));
-                    if (endedStateIdentities.size && Array.isArray(row.fields.currentStates)) {
-                        row.fields.currentStates = row.fields.currentStates
-                            .map((item) => String(item ?? '').trim())
-                            .filter((item) => item && !endedStateIdentities.has(textIdentity(item)));
+                            .filter((item) => item && !consumedTexts.has(item));
                     }
                 }
                 if (layer === 'solidifiedHistory') {
@@ -13127,13 +13192,13 @@ function pendingSmallEventGroups(facts, threshold, force, boundaryEventIds = [])
 /** 兼容旧调用：仅返回每条事件线当前活动的小总结版本。 */
 function pendingSmallSummaries(small, large) {
     const consumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
-    return small.filter((item) => summaryIsCurrent(item) && !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !consumed.has(item.id));
+    return small.filter((item) => !item.solidifiedByLargeSummaryId && !item.supersededBySmallSummaryId && !consumed.has(item.id));
 }
 function pendingLargeEventGroups(small, large, threshold, force) {
     const consumed = new Set(large.flatMap((item) => item.sourceSummaryIds ?? item.sourceKeys));
     const groups = new Map();
     for (const item of small) {
-        if (!summaryIsCurrent(item) || item.solidifiedByLargeSummaryId || consumed.has(item.id))
+        if (item.solidifiedByLargeSummaryId || consumed.has(item.id))
             continue;
         // 缺 event_id 的旧数据按自身 ID 隔离，绝不因标题相似把不同事件混线。
         const eventId = String(item.eventId || item.id).trim();
@@ -13146,9 +13211,9 @@ function pendingLargeEventGroups(small, large, threshold, force) {
         const latest = [...ordered].reverse().find((item) => !item.supersededBySmallSummaryId) ?? ordered.at(-1);
         const closed = latest.eventClosed === true;
         const rollupCount = Math.max(ordered.length, Number(latest.rollupCount) || 1);
-        if (!force && rollupCount < minimum)
+        if (!force && !closed && rollupCount < minimum)
             continue;
-        const previousLarge = [...large].reverse().find((item) => summaryIsCurrent(item) && (item.eventId === eventId || item.eventIds?.includes(eventId)));
+        const previousLarge = [...large].reverse().find((item) => item.eventId === eventId || item.eventIds?.includes(eventId));
         output.push({
             eventId,
             items: ordered,
@@ -13207,54 +13272,33 @@ async function generateSmallSummary(artifact, force = false) {
         const sourceFactIds = [...new Set([...(group.previous?.sourceFactIds ?? group.previous?.sourceKeys ?? []), ...newFactIds])];
         const text = bySlot.get(group.slot);
         const summary = normalizeSummary({ title: text.title, summary: text.summary, keywords: text.keywords, unresolved: text.unresolved }, 'small', sourceFactIds, undefined, { eventId: group.eventId, sourceFactIds });
-        summary.distributions = text.distributions?.length ? text.distributions : deterministicSummaryDistributions(group.facts);
-        refreshSummaryFingerprint(summary);
+        summary.distributions = text.distributions;
         summary.previousSmallSummaryId = group.previous?.id;
         // 小总结旧版本在对象分发后会退出，因此用累计次数保留大总结阈值进度。
         summary.rollupCount = group.previous
             ? Math.max(1, Number(group.previous.rollupCount) || 1) + 1
             : 1;
         summary.eventClosed = group.closed;
-        markSummaryLifecycle(summary, group.closed ? 'archived' : 'active', { recallEligible: true });
         if (!summary.summary)
             throw new Error(`小总结模型返回空摘要：${group.eventId}`);
         if (summary.summary.length > settings.contentLimits.smallSummary)
             throw new Error(`小总结超过白盒硬上限：${summary.summary.length}/${settings.contentLimits.smallSummary} 字（${group.eventId}）`);
-        return {
-            group,
-            summary,
-            newFactIds,
-            equivalentPrevious: sameSummaryContent(group.previous, summary),
-            removalSummary: group.previous ? structuredClone(group.previous) : undefined,
-        };
+        return { group, summary, newFactIds };
     });
     const previousSnapshot = artifact.snapshot ? structuredClone(artifact.snapshot) : undefined;
     const previousFacts = structuredClone(chatState.internalFacts);
     const previousSummaries = structuredClone(chatState.smallSummaries);
     try {
-        for (const item of generated) {
-            const { group, newFactIds } = item;
-            if (item.equivalentPrevious && group.previous) {
-                const requestedRollupCount = item.summary.rollupCount;
-                item.summary = mergeEquivalentSummaryVersion(group.previous, item.summary);
-                item.summary.rollupCount = Math.max(Number(item.summary.rollupCount) || 1, requestedRollupCount);
-                item.summary.eventClosed = item.summary.eventClosed || group.closed;
-                markSummaryLifecycle(item.summary, group.closed ? 'archived' : 'active', { recallEligible: true });
-            }
-            else {
-                chatState.smallSummaries.push(item.summary);
-                if (group.previous)
-                    markSummaryLifecycle(group.previous, 'superseded', { successorId: item.summary.id, recallEligible: false });
-            }
-            markFactsConsumed(chatState.internalFacts, newFactIds, item.summary.id);
+        chatState.smallSummaries.push(...generated.map((item) => item.summary));
+        for (const { group, summary, newFactIds } of generated) {
+            if (group.previous)
+                group.previous.supersededBySmallSummaryId = summary.id;
+            markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
         }
         if (artifact.snapshot) {
             let nextSnapshot = artifact.snapshot;
-            for (const { group, summary, removalSummary } of generated) {
-                const beforeDistribution = nextSnapshot;
-                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, group.facts, 'recentHistory', summary, removalSummary ? [removalSummary] : [], settings.tableRegistry);
-                const distributedRowIds = changedSummaryLayerRowIds(beforeDistribution, nextSnapshot, 'recentHistory', settings.tableRegistry);
-                const enteredSettlingRowIds = settlingRowIdsForEvent(nextSnapshot, group.eventId, settings.tableRegistry);
+            for (const { group, summary, newFactIds } of generated) {
+                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, group.facts, 'recentHistory', summary, group.previous ? [group.previous] : [], settings.tableRegistry);
                 const settlement = finalizeSummarySettlement({
                     snapshot: nextSnapshot,
                     eventId: group.eventId,
@@ -13266,18 +13310,22 @@ async function generateSmallSummary(artifact, force = false) {
                     focusObjectId: chatState.focusObjectId,
                 });
                 nextSnapshot = settlement.snapshot;
-                summary.sedimentation = settlementReport({
-                    distributedRowIds,
-                    enteredSettlingRowIds,
-                    settlement,
-                    label: '小总结',
-                });
+                summary.sedimentation = {
+                    removeRowIds: [],
+                    characterActivityUpdates: [],
+                    appliedRowIds: [...settlement.deletedRowIds],
+                    ignoredRowIds: [...settlement.retainedRowIds],
+                    notes: settlement.deletedRowIds.length
+                        ? [`总结覆盖后由统一状态机物理删除：${settlement.deletedRowIds.join('、')}`]
+                        : ['总结已写入覆盖标记；没有满足删除契约的待结算容器。'],
+                };
             }
             artifact.snapshot = nextSnapshot;
             assertArtifactCommitCurrent(artifact);
             await persistChatFor(artifact.chatKey);
         }
-        // 历史版本保留用于审计与 UI；superseded 版本退出召回和后续消费，不再物理删除。
+        // 小总结是加工容器：同一事件只保留当前累计版本，旧版本在完成对象分发后退出。
+        chatState.smallSummaries = chatState.smallSummaries.filter((item) => !item.supersededBySmallSummaryId);
         await putChatState(chatState);
     }
     catch (error) {
@@ -13335,60 +13383,32 @@ async function generateLargeSummary(artifact, force = false) {
             sourceSummaryIds: group.sourceSummaryIds,
             sourceFactIds: group.sourceFactIds,
         });
-        const eventFacts = chatState.internalFacts.filter((fact) => fact.eventId === group.eventId);
-        summary.distributions = text.distributions?.length ? text.distributions : deterministicSummaryDistributions(eventFacts);
-        refreshSummaryFingerprint(summary);
-        markSummaryLifecycle(summary, group.closed ? 'archived' : 'active', { recallEligible: true });
+        summary.distributions = text.distributions;
         if (!summary.summary)
             throw new Error(`大总结模型返回空摘要：${group.eventId}`);
         if (summary.summary.length > settings.contentLimits.largeSummary)
             throw new Error(`大总结超过白盒硬上限：${summary.summary.length}/${settings.contentLimits.largeSummary} 字（${group.eventId}）`);
-        return {
-            group,
-            summary,
-            equivalentPrevious: sameSummaryContent(group.previousLarge, summary),
-            removalSummary: group.previousLarge ? structuredClone(group.previousLarge) : undefined,
-        };
+        return { group, summary };
     });
     const previousLargeList = structuredClone(chatState.largeSummaries);
     const previousSmall = structuredClone(chatState.smallSummaries);
     const previousFacts = structuredClone(chatState.internalFacts);
     const previousSnapshot = artifact.snapshot ? structuredClone(artifact.snapshot) : undefined;
     try {
-        for (const item of generated) {
-            const { group } = item;
-            if (item.equivalentPrevious && group.previousLarge) {
-                item.summary = mergeEquivalentSummaryVersion(group.previousLarge, item.summary);
-                markSummaryLifecycle(item.summary, group.closed ? 'archived' : 'active', { recallEligible: true });
-            }
-            else {
-                chatState.largeSummaries.push(item.summary);
-                if (group.previousLarge)
-                    markSummaryLifecycle(group.previousLarge, 'superseded', { successorId: item.summary.id, recallEligible: false });
-            }
-            const summary = item.summary;
+        chatState.largeSummaries.push(...generated.map((item) => item.summary));
+        for (const { group, summary } of generated) {
             const selectedIds = new Set(group.consumedVersionIds);
-            for (const item of chatState.smallSummaries) {
-                if (!selectedIds.has(item.id))
-                    continue;
-                item.solidifiedByLargeSummaryId = summary.id;
-                markSummaryLifecycle(item, 'solidified', { recallEligible: false });
-            }
+            for (const item of chatState.smallSummaries)
+                if (selectedIds.has(item.id))
+                    item.solidifiedByLargeSummaryId = summary.id;
             markFactsSolidified(chatState.internalFacts, group.sourceFactIds, summary.id);
         }
         if (artifact.snapshot) {
             let nextSnapshot = artifact.snapshot;
-            for (const { group, summary, removalSummary } of generated) {
+            for (const { group, summary } of generated) {
                 const eventFacts = chatState.internalFacts.filter((fact) => fact.eventId === group.eventId);
-                const beforeRecentRetirement = nextSnapshot;
                 nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'recentHistory', undefined, group.items, settings.tableRegistry);
-                const beforeDistribution = nextSnapshot;
-                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'solidifiedHistory', summary, removalSummary ? [removalSummary] : [], settings.tableRegistry);
-                const distributedRowIds = [...new Set([
-                    ...changedSummaryLayerRowIds(beforeRecentRetirement, nextSnapshot, 'recentHistory', settings.tableRegistry),
-                    ...changedSummaryLayerRowIds(beforeDistribution, nextSnapshot, 'solidifiedHistory', settings.tableRegistry),
-                ])];
-                const enteredSettlingRowIds = settlingRowIdsForEvent(nextSnapshot, group.eventId, settings.tableRegistry);
+                nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'solidifiedHistory', summary, group.previousLarge ? [group.previousLarge] : [], settings.tableRegistry);
                 const settlement = finalizeSummarySettlement({
                     snapshot: nextSnapshot,
                     eventId: group.eventId,
@@ -13400,23 +13420,40 @@ async function generateLargeSummary(artifact, force = false) {
                     focusObjectId: chatState.focusObjectId,
                 });
                 nextSnapshot = settlement.snapshot;
-                summary.sedimentation = settlementReport({
-                    distributedRowIds,
-                    enteredSettlingRowIds,
-                    settlement,
-                    label: '大总结',
-                });
+                summary.sedimentation = {
+                    removeRowIds: [],
+                    characterActivityUpdates: [],
+                    appliedRowIds: [...settlement.deletedRowIds],
+                    ignoredRowIds: [...settlement.retainedRowIds],
+                    notes: settlement.deletedRowIds.length
+                        ? [`大总结覆盖后由统一状态机物理删除：${settlement.deletedRowIds.join('、')}`]
+                        : ['大总结已固化；没有满足删除契约的待结算容器。'],
+                };
             }
             artifact.snapshot = nextSnapshot;
             assertArtifactCommitCurrent(artifact);
             await persistChatFor(artifact.chatKey);
         }
-        // 总结是可审计状态记录：完成消费后退出召回，但不从聊天状态和 UI 历史中物理删除。
+        // 大总结完成固化后，已消费的小总结不再作为独立条目保留。
+        const consumedSmallIds = new Set(generated.flatMap(({ group }) => group.consumedVersionIds));
+        chatState.smallSummaries = chatState.smallSummaries.filter((item) => !consumedSmallIds.has(item.id));
+        // 大总结同样只是加工容器：开放事件保留当前累计版本；关闭事件已分发到长期宿主后移除正文容器。
+        const closedEventIds = new Set(generated.filter((item) => item.group.closed).map((item) => item.group.eventId));
+        const supersededLargeIds = new Set(generated.map((item) => item.summary.previousLargeSummaryId).filter(Boolean));
+        chatState.largeSummaries = chatState.largeSummaries.filter((item) => {
+            if (supersededLargeIds.has(item.id))
+                return false;
+            if (closedEventIds.has(String(item.eventId || '')))
+                return false;
+            return true;
+        });
         await putChatState(chatState);
         const readBack = await getChatState(artifact.chatKey);
-        const generatedIds = new Set(generated.map((item) => item.summary.id));
-        if (![...generatedIds].every((id) => readBack.largeSummaries.some((item) => item.id === id))) {
-            throw new Error('大总结写入后回读校验失败');
+        const retainedGeneratedIds = new Set(generated
+            .filter((item) => !item.group.closed)
+            .map((item) => item.summary.id));
+        if (![...retainedGeneratedIds].every((id) => readBack.largeSummaries.some((item) => item.id === id))) {
+            throw new Error('开放事件大总结写入后回读校验失败');
         }
     }
     catch (error) {
@@ -13507,6 +13544,7 @@ async function rebuildEligibleSummaries(artifact) {
     const settings = getSettings();
     const errors = [];
     let generatedAny = false;
+    const generatedKinds = new Set();
     const previousStatus = artifact.stages.summary.status;
     markStage(artifact, 'summary', 'running');
     await putArtifact(artifact);
@@ -13514,6 +13552,7 @@ async function rebuildEligibleSummaries(artifact) {
         try {
             while (await generateSmallSummary(artifact, false)) {
                 generatedAny = true;
+                generatedKinds.add('small');
                 // 每次成功至少消费一个 event_id 的待总结事实，循环必然收敛。
             }
         }
@@ -13527,6 +13566,7 @@ async function rebuildEligibleSummaries(artifact) {
         try {
             while (await generateLargeSummary(artifact, false)) {
                 generatedAny = true;
+                generatedKinds.add('large');
                 // 每次成功固化一批未固化小总结，剩余不足阈值时停止。
             }
         }
@@ -13545,6 +13585,7 @@ async function rebuildEligibleSummaries(artifact) {
         ? 'success'
         : 'skipped');
     await putArtifact(artifact);
+    return [...generatedKinds];
 }
 
 }
@@ -13604,6 +13645,28 @@ class TaskQueue {
     pending = [];
     active = null;
     idleWaiters = new Set();
+    exclusiveToken = '';
+    exclusiveReason = '';
+    beginExclusive(token, reason = '镜渊正在执行独占任务') {
+        const normalized = String(token || '').trim();
+        if (!normalized || !this.accepting)
+            return false;
+        if (this.exclusiveToken)
+            return this.exclusiveToken === normalized;
+        this.exclusiveToken = normalized;
+        this.exclusiveReason = reason;
+        this.notify();
+        return true;
+    }
+    endExclusive(token) {
+        if (!this.exclusiveToken || this.exclusiveToken !== String(token || '').trim())
+            return false;
+        this.exclusiveToken = '';
+        this.exclusiveReason = '';
+        this.notify();
+        this.pump();
+        return true;
+    }
     setAccepting(accepting) {
         if (this.accepting && !accepting) {
             this.generation += 1;
@@ -13819,6 +13882,9 @@ class TaskQueue {
     run(key, label, kind, work, options = {}) {
         if (!this.accepting)
             return Promise.reject(cancelledError('镜渊已禁用，不再接受新任务'));
+        if (this.exclusiveToken && options.exclusiveToken !== this.exclusiveToken) {
+            return Promise.reject(new TaskBlockedError(this.exclusiveReason || '镜渊正在执行独占任务'));
+        }
         const existing = this.inFlight.get(key);
         if (existing)
             return existing;
@@ -14615,15 +14681,20 @@ Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"tableByRole",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByRole"]});
+Object.defineProperty(__scope,"isEntryParticipationPaused",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["isEntryParticipationPaused"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
-Object.defineProperty(__scope,"applyPluginStateDecision",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state-controller.js")["applyPluginStateDecision"]});
-Object.defineProperty(__scope,"derivePluginStateDecision",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state-controller.js")["derivePluginStateDecision"]});
 with(__scope){
 Object.defineProperty(exports,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>advanceRuntimeV2});
-Object.defineProperty(exports,"ensureRuntimeJob",{enumerable:true,configurable:true,get:()=>ensureRuntimeJob});
+Object.defineProperty(exports,"runtimeOutboxJobs",{enumerable:true,configurable:true,get:()=>runtimeOutboxJobs});
+Object.defineProperty(exports,"markRuntimeJobRunningById",{enumerable:true,configurable:true,get:()=>markRuntimeJobRunningById});
+Object.defineProperty(exports,"markRuntimeJobDoneById",{enumerable:true,configurable:true,get:()=>markRuntimeJobDoneById});
+Object.defineProperty(exports,"markRuntimeJobFailedById",{enumerable:true,configurable:true,get:()=>markRuntimeJobFailedById});
 Object.defineProperty(exports,"markRuntimeJobRunning",{enumerable:true,configurable:true,get:()=>markRuntimeJobRunning});
 Object.defineProperty(exports,"markRuntimeJobDone",{enumerable:true,configurable:true,get:()=>markRuntimeJobDone});
 Object.defineProperty(exports,"markRuntimeJobFailed",{enumerable:true,configurable:true,get:()=>markRuntimeJobFailed});
+Object.defineProperty(exports,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>enqueueLorebookProjection});
+Object.defineProperty(exports,"enqueueSummaryEffect",{enumerable:true,configurable:true,get:()=>enqueueSummaryEffect});
+Object.defineProperty(exports,"markRuntimeJobCancelledById",{enumerable:true,configurable:true,get:()=>markRuntimeJobCancelledById});
 Object.defineProperty(exports,"narrativeContextText",{enumerable:true,configurable:true,get:()=>narrativeContextText});
 /**
  * Runtime V2 turn orchestrator.
@@ -14660,34 +14731,14 @@ function normalizedToken(value) {
     return text(value, 500).normalize('NFKC').toLowerCase().replace(/[\s，。；、：:｜|—–-]+/g, '');
 }
 
-const SCENE_LABEL_GROUPS = {
-    location: ['当前地点', '所在地点', '地点'],
-    stage: ['当前阶段', '场景阶段', '阶段'],
-    goal: ['当前目标', '场景目标', '目标'],
-    status: ['阶段状态', '场景状态', '进度状态'],
-};
-const ALL_SCENE_LABELS = Object.values(SCENE_LABEL_GROUPS).flat();
-function escapedAlternation(values) {
-    return values.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-}
 function labeledValue(source, labels) {
-    const wanted = escapedAlternation(labels);
-    const anyLabel = escapedAlternation(ALL_SCENE_LABELS);
-    const regex = new RegExp(`(?:^|[\\n；。]|\\s)(?:${wanted})\\s*[：:]\\s*([\\s\\S]*?)(?=(?:[\\n；。]|\\s)(?:${anyLabel})\\s*[：:]|$)`, 'i');
-    const matched = String(source || '').match(regex);
-    return matched?.[1] ? text(matched[1].replace(/^[；。\s]+|[；。\s]+$/g, ''), 500) : '';
-}
-function bareSceneLocation(value) {
-    let source = text(value, 1500);
-    if (!source)
-        return '';
-    source = source.replace(/^(?:当前地点|所在地点|地点)\s*[：:]\s*/i, '');
-    const trailingLabels = [...SCENE_LABEL_GROUPS.stage, ...SCENE_LABEL_GROUPS.goal, ...SCENE_LABEL_GROUPS.status];
-    const nextLabel = new RegExp(`(?:[\\n；。]|\\s)(?:${escapedAlternation(trailingLabels)})\\s*[：:]`, 'i');
-    const matched = nextLabel.exec(source);
-    if (matched)
-        source = source.slice(0, matched.index);
-    return text(source.replace(/[；。\s]+$/g, ''), 240);
+    for (const label of labels) {
+        const regex = new RegExp(`(?:^|[\\n；。])\\s*${label}\\s*[：:]\\s*([^\\n；。]+)`, 'i');
+        const matched = source.match(regex);
+        if (matched?.[1])
+            return text(matched[1], 500);
+    }
+    return '';
 }
 
 function latestRows(snapshot, registry, role) {
@@ -14695,8 +14746,11 @@ function latestRows(snapshot, registry, role) {
     return table ? snapshot?.[table.key] ?? [] : [];
 }
 
+function rowTerminal(row) {
+    return isEntryParticipationPaused(row) || TERMINAL_RE.test(text(row?.status, 160));
+}
 function activeRow(rows) {
-    return rows.filter((row) => !TERMINAL_RE.test(rowText(row))).at(-1) ?? rows.at(-1);
+    return rows.filter((row) => !rowTerminal(row)).at(-1) ?? rows.at(-1);
 }
 
 function eventIds(row) {
@@ -14710,14 +14764,14 @@ function sceneDescriptor(snapshot, artifact, registry) {
     const spacetime = activeRow(spacetimeRows);
     const source = [rowText(scene), rowText(spacetime), artifact?.factPackage?.turnSummary]
         .map((item) => text(item, 1500)).filter(Boolean).join('\n');
-    const location = labeledValue(source, SCENE_LABEL_GROUPS.location)
-        || bareSceneLocation(spacetime?.title || spacetime?.content)
-        || bareSceneLocation(scene?.title);
-    const stage = labeledValue(source, SCENE_LABEL_GROUPS.stage);
-    const goal = labeledValue(source, SCENE_LABEL_GROUPS.goal);
-    const explicitStatus = labeledValue(source, SCENE_LABEL_GROUPS.status);
+    const location = labeledValue(source, ['当前地点', '所在地点', '地点'])
+        || text(spacetime?.title || spacetime?.content, 240)
+        || text(scene?.title, 240);
+    const stage = labeledValue(source, ['当前阶段', '场景阶段', '阶段']);
+    const goal = labeledValue(source, ['当前目标', '场景目标', '目标']);
+    const explicitStatus = labeledValue(source, ['阶段状态', '场景状态', '进度状态']);
     const rawStatus = explicitStatus || text(scene?.status, 120);
-    const status = TERMINAL_RE.test(rawStatus || source)
+    const status = rowTerminal(scene) || TERMINAL_RE.test(rawStatus)
         ? 'closed'
         : ACTIVE_RE.test(rawStatus || source)
             ? 'active'
@@ -14781,7 +14835,7 @@ function clockDisplay(snapshot, registry) {
 function eventContext(snapshot, registry) {
     const rows = latestRows(snapshot, registry, 'events');
     return rows
-        .filter((row) => !TERMINAL_RE.test(rowText(row)))
+        .filter((row) => !rowTerminal(row))
         .slice(-8)
         .map((row) => {
             const fields = row.fields ?? {};
@@ -14905,8 +14959,26 @@ function advanceScene(runtime, descriptor, artifact) {
     return instance;
 }
 
+function cancelOutboxJob(runtime, job, reason, supersededByJobId = '') {
+    if (!job || ['done', 'cancelled'].includes(job.status))
+        return false;
+    job.status = 'cancelled';
+    job.finishedAt = nowIso();
+    job.error = text(reason, 1200);
+    if (supersededByJobId)
+        job.supersededByJobId = supersededByJobId;
+    appendJournal(runtime, 'OUTBOX_JOB_CANCELLED', job.turnKey, job.turnIndex, {
+        jobId: job.id,
+        jobType: job.type,
+        reason: job.error,
+        supersededByJobId,
+    });
+    return true;
+}
+
 function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
-    const id = `outbox_${hashText(`${type}|${artifact.messageKey}|${runtime.revision}`)}`;
+    const revision = Math.max(0, Number(sourceRevision) || 0);
+    const id = `outbox_${hashText(`${type}|${artifact.messageKey}|${revision}`)}`;
     const existing = runtime.outbox.find((item) => item.id === id);
     if (existing)
         return existing;
@@ -14915,7 +14987,7 @@ function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
         type,
         turnKey: artifact.messageKey,
         turnIndex: artifact.messageIndex,
-        sourceRevision: Math.max(0, Number(sourceRevision) || 0),
+        sourceRevision: revision,
         status: 'pending',
         attempts: 0,
         createdAt: nowIso(),
@@ -14923,10 +14995,71 @@ function enqueue(runtime, type, artifact, sourceRevision = runtime.revision) {
         finishedAt: '',
         error: '',
     };
+    // 世界书只需要发布最新投影。新的修订会淘汰尚未完成的旧投影，防止刷新后反复恢复幽灵任务。
+    if (type === 'lorebook-sync') {
+        for (const older of runtime.outbox) {
+            if (older.type !== type || older.sourceRevision > revision)
+                continue;
+            cancelOutboxJob(runtime, older, '已被更新的世界书修订替代', id);
+        }
+    }
     runtime.outbox.push(job);
     runtime.outbox = runtime.outbox.slice(-1000);
     appendJournal(runtime, 'OUTBOX_JOB_QUEUED', artifact.messageKey, artifact.messageIndex, { jobId: id, jobType: type });
     return job;
+}
+
+function supersedeOlderSummary(runtime, artifact) {
+    const machine = runtime.machines.summary;
+    if (!machine.pendingKind || !machine.pendingTurnKey || machine.pendingTurnKey === artifact.messageKey)
+        return;
+    const type = `${machine.pendingKind}-summary`;
+    for (const job of runtime.outbox) {
+        if (job.type === type && job.turnKey === machine.pendingTurnKey)
+            cancelOutboxJob(runtime, job, '已被更新正文的总结计划替代');
+    }
+    machine.pendingKind = '';
+    machine.pendingTurnKey = '';
+}
+
+function suppressAutomaticDerived(runtime, artifact, reason = '批量核心事务暂不执行派生任务') {
+    let cancelled = 0;
+    for (const job of runtime.outbox) {
+        if (['small-summary', 'large-summary', 'lorebook-sync'].includes(job.type)
+            && cancelOutboxJob(runtime, job, reason)) {
+            cancelled += 1;
+        }
+    }
+    runtime.machines.summary.pendingKind = '';
+    runtime.machines.summary.pendingTurnKey = '';
+    runtime.machines.publication.pendingJobId = '';
+    if (cancelled > 0) {
+        appendJournal(runtime, 'DERIVED_EXECUTION_DEFERRED', artifact.messageKey, artifact.messageIndex, {
+            reason,
+            cancelledJobs: cancelled,
+        });
+    }
+}
+
+function planSummary(runtime, artifact, eligibility) {
+    const machine = runtime.machines.summary;
+    supersedeOlderSummary(runtime, artifact);
+    let kind = '';
+    if (eligibility.small) {
+        kind = 'small';
+    }
+    else if (eligibility.large && artifact.messageIndex > machine.lastSmallTurnIndex) {
+        // A large summary may never be automatically scheduled on the same turn
+        // that committed a small summary.
+        kind = 'large';
+    }
+    if (!kind)
+        return { kind: '', job: undefined };
+    machine.pendingKind = kind;
+    machine.pendingTurnKey = artifact.messageKey;
+    const job = enqueue(runtime, `${kind}-summary`, artifact);
+    appendJournal(runtime, 'SUMMARY_SCHEDULED', artifact.messageKey, artifact.messageIndex, { kind, jobId: job.id });
+    return { kind, job };
 }
 
 function buildNarrativeContext(runtime, snapshot, registry, descriptor) {
@@ -14955,20 +15088,39 @@ function buildNarrativeContext(runtime, snapshot, registry, descriptor) {
     };
 }
 
-function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeEligible }) {
+function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeEligible, publicationEnabled = true, scheduleDerived = true }) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
     if (runtime.processedTurnKeys.includes(artifact.messageKey)) {
+        if (!scheduleDerived) {
+            suppressAutomaticDerived(runtime, artifact);
+            runtime.machines.publication.desiredRevision = runtime.revision;
+            runtime.machines.publication.status = publicationEnabled
+                ? (runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision ? 'clean' : 'dirty')
+                : 'suppressed';
+            runtime.machines.publication.updatedAt = nowIso();
+            runtime.updatedAt = nowIso();
+            chatState.runtimeV2 = runtime;
+            return {
+                runtime,
+                plan: { summaryKind: '', summaryJobId: '', syncJobId: '', sync: false },
+                duplicate: true,
+            };
+        }
+        const summaryJob = [...runtime.outbox].reverse().find((job) => job.turnKey === artifact.messageKey
+            && ['small-summary', 'large-summary'].includes(job.type)
+            && !['done', 'cancelled'].includes(job.status));
+        const syncJob = [...runtime.outbox].reverse().find((job) => job.type === 'lorebook-sync'
+            && !['done', 'cancelled'].includes(job.status));
         return {
             runtime,
             plan: {
                 summaryKind: runtime.machines.summary.pendingTurnKey === artifact.messageKey
                     ? runtime.machines.summary.pendingKind
                     : '',
-                summaryJobId: runtime.outbox.find((job) => ['small-summary', 'large-summary'].includes(job.type)
-                    && job.turnKey === artifact.messageKey
-                    && ['pending', 'running'].includes(job.status))?.id || '',
-                sync: runtime.machines.publication.desiredRevision > runtime.machines.publication.confirmedRevision,
-                syncJobId: runtime.machines.publication.pendingJobId || '',
+                summaryJobId: summaryJob?.id || '',
+                syncJobId: syncJob?.id || '',
+                sync: runtime.machines.publication.status !== 'suppressed'
+                    && runtime.machines.publication.desiredRevision > runtime.machines.publication.confirmedRevision,
             },
             duplicate: true,
         };
@@ -14986,31 +15138,22 @@ function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeE
     }
     const descriptor = sceneDescriptor(artifact.snapshot, artifact, settings.tableRegistry);
     advanceScene(runtime, descriptor, artifact);
+    const summaryPlan = scheduleDerived
+        ? planSummary(runtime, artifact, { small: smallEligible, large: largeEligible })
+        : (suppressAutomaticDerived(runtime, artifact), { kind: '', job: undefined });
     runtime.narrativeContext = buildNarrativeContext(runtime, artifact.snapshot, settings.tableRegistry, descriptor);
     appendJournal(runtime, 'NARRATIVE_CONTEXT_PROJECTED', artifact.messageKey, artifact.messageIndex, { revision: runtime.narrativeContext.revision });
     runtime.machines.publication.desiredRevision = runtime.revision;
-    const controllerDecision = derivePluginStateDecision({
-        runtime,
-        artifact,
-        eligibility: { small: smallEligible, large: largeEligible },
-        snapshot: artifact.snapshot,
-        reason: 'turn-commit',
-    });
-    let summaryJob;
-    if (controllerDecision.summaryKind) {
-        runtime.machines.summary.pendingKind = controllerDecision.summaryKind;
-        runtime.machines.summary.pendingTurnKey = artifact.messageKey;
-        summaryJob = enqueue(runtime, `${controllerDecision.summaryKind}-summary`, artifact);
-        appendJournal(runtime, 'SUMMARY_SCHEDULED', artifact.messageKey, artifact.messageIndex, { kind: controllerDecision.summaryKind, jobId: summaryJob.id });
-    }
-    const syncJob = enqueue(runtime, 'lorebook-sync', artifact, runtime.machines.publication.desiredRevision);
-    runtime.machines.publication.status = 'queued';
-    runtime.machines.publication.pendingJobId = syncJob.id;
+    const syncJob = publicationEnabled && scheduleDerived
+        ? enqueue(runtime, 'lorebook-sync', artifact, runtime.machines.publication.desiredRevision)
+        : undefined;
+    runtime.machines.publication.status = !publicationEnabled
+        ? 'suppressed'
+        : scheduleDerived
+            ? 'queued'
+            : (runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision ? 'clean' : 'dirty');
+    runtime.machines.publication.pendingJobId = syncJob?.id || '';
     runtime.machines.publication.updatedAt = nowIso();
-    controllerDecision.summaryJobId = summaryJob?.id || controllerDecision.summaryJobId || '';
-    controllerDecision.syncJobId = syncJob.id;
-    controllerDecision.nextJobId ||= summaryJob?.id || syncJob.id;
-    applyPluginStateDecision(runtime, controllerDecision);
     runtime.processedTurnKeys.push(artifact.messageKey);
     runtime.processedTurnKeys = runtime.processedTurnKeys.slice(-2000);
     runtime.machines.turn.status = 'committed';
@@ -15022,88 +15165,74 @@ function advanceRuntimeV2({ chatState, artifact, settings, smallEligible, largeE
     return {
         runtime,
         plan: {
-            summaryKind: controllerDecision.summaryKind,
-            summaryJobId: summaryJob?.id || '',
-            sync: true,
-            syncJobId: syncJob.id,
+            summaryKind: summaryPlan.kind,
+            summaryJobId: summaryPlan.job?.id || '',
+            syncJobId: syncJob?.id || '',
+            sync: Boolean(syncJob),
         },
         duplicate: false,
     };
 }
 
-
-function refreshController(runtime, artifact, reason) {
-    const decision = derivePluginStateDecision({
-        runtime,
-        artifact,
-        eligibility: {},
-        snapshot: artifact?.snapshot,
-        reason,
-    });
-    applyPluginStateDecision(runtime, decision);
+function findJob(runtime, type, turnKey, statuses = ['pending', 'running', 'failed']) {
+    return [...runtime.outbox].reverse().find((item) => item.type === type
+        && item.turnKey === turnKey
+        && statuses.includes(item.status));
 }
 
-function findJob(runtime, type, turnKey, jobId = '') {
-    if (jobId)
-        return runtime.outbox.find((item) => item.id === jobId && item.type === type);
-    return [...runtime.outbox].reverse().find((item) => item.type === type && item.turnKey === turnKey && !['cancelled', 'superseded'].includes(item.status));
+function findJobById(runtime, jobId) {
+    return runtime.outbox.find((item) => item.id === jobId);
 }
 
-function ensureRuntimeJob(chatState, type, artifact, sourceRevision) {
+function runtimeOutboxJobs(chatState, { statuses = ['pending'], types, turnKey } = {}) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
-    let job = findJob(runtime, type, artifact.messageKey);
-    if (!job || ['done', 'cancelled', 'superseded'].includes(job.status))
-        job = enqueue(runtime, type, artifact, sourceRevision ?? runtime.revision);
-    if (type === 'small-summary' || type === 'large-summary') {
-        runtime.machines.summary.pendingKind = type === 'small-summary' ? 'small' : 'large';
-        runtime.machines.summary.pendingTurnKey = artifact.messageKey;
+    const typeSet = Array.isArray(types) && types.length ? new Set(types) : undefined;
+    const statusSet = new Set(statuses);
+    return runtime.outbox.filter((job) => statusSet.has(job.status)
+        && (!typeSet || typeSet.has(job.type))
+        && (!turnKey || job.turnKey === turnKey));
+}
+
+function markRuntimeJobRunningById(chatState, jobId) {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const job = findJobById(runtime, jobId);
+    if (!job || ['done', 'cancelled'].includes(job.status)) {
+        chatState.runtimeV2 = runtime;
+        return job;
     }
-    if (type === 'lorebook-sync') {
-        runtime.machines.publication.desiredRevision = Math.max(runtime.machines.publication.desiredRevision, job.sourceRevision);
+    job.status = 'running';
+    job.attempts += 1;
+    job.startedAt = nowIso();
+    job.finishedAt = '';
+    job.error = '';
+    if (job.type === 'lorebook-sync') {
+        runtime.machines.publication.status = 'writing';
         runtime.machines.publication.pendingJobId = job.id;
-        runtime.machines.publication.status = 'queued';
         runtime.machines.publication.updatedAt = nowIso();
     }
-    refreshController(runtime, artifact, 'job-ensured');
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
     return job;
 }
 
-function markRuntimeJobRunning(chatState, type, turnKey, jobId = '') {
+function markRuntimeJobDoneById(chatState, jobId, artifact) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
-    const job = findJob(runtime, type, turnKey, jobId);
-    if (!job) {
+    const job = findJobById(runtime, jobId);
+    if (!job || job.status === 'cancelled') {
         chatState.runtimeV2 = runtime;
-        return undefined;
-    }
-    job.status = 'running';
-    job.attempts += 1;
-    job.startedAt = nowIso();
-    job.error = '';
-    if (type === 'lorebook-sync') {
-        runtime.machines.publication.status = 'writing';
-        runtime.machines.publication.updatedAt = nowIso();
-    }
-    refreshController(runtime, { messageKey: turnKey, messageIndex: job.turnIndex }, 'job-running');
-    chatState.runtimeV2 = runtime;
-    return job;
-}
-
-function markRuntimeJobDone(chatState, type, artifact, jobId = '') {
-    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
-    const job = findJob(runtime, type, artifact.messageKey, jobId);
-    if (!job) {
-        chatState.runtimeV2 = runtime;
-        return undefined;
+        return job;
     }
     job.status = 'done';
     job.finishedAt = nowIso();
     job.error = '';
-    if (type === 'small-summary' || type === 'large-summary') {
-        const kind = type === 'small-summary' ? 'small' : 'large';
-        runtime.machines.summary.pendingKind = '';
-        runtime.machines.summary.pendingTurnKey = '';
+    if (job.type === 'small-summary' || job.type === 'large-summary') {
+        const kind = job.type === 'small-summary' ? 'small' : 'large';
+        // 迟到旧任务不得清除新正文已经登记的总结计划。
+        if (runtime.machines.summary.pendingTurnKey === job.turnKey
+            && runtime.machines.summary.pendingKind === kind) {
+            runtime.machines.summary.pendingKind = '';
+            runtime.machines.summary.pendingTurnKey = '';
+        }
         if (kind === 'small') {
             runtime.machines.summary.lastSmallTurnIndex = artifact.messageIndex;
             runtime.machines.summary.lastSmallTurnKey = artifact.messageKey;
@@ -15112,58 +15241,146 @@ function markRuntimeJobDone(chatState, type, artifact, jobId = '') {
             runtime.machines.summary.lastLargeTurnIndex = artifact.messageIndex;
             runtime.machines.summary.lastLargeTurnKey = artifact.messageKey;
         }
-        appendJournal(runtime, 'SUMMARY_COMMITTED', artifact.messageKey, artifact.messageIndex, { kind });
+        appendJournal(runtime, 'SUMMARY_COMMITTED', artifact.messageKey, artifact.messageIndex, { kind, jobId: job.id });
     }
-    if (type === 'lorebook-sync') {
-        runtime.machines.publication.confirmedRevision = Math.max(runtime.machines.publication.confirmedRevision, job?.sourceRevision ?? runtime.revision);
+    if (job.type === 'lorebook-sync') {
+        const confirmedRevision = Math.max(runtime.machines.publication.confirmedRevision, job.sourceRevision);
+        runtime.machines.publication.confirmedRevision = confirmedRevision;
+        // 最新投影包含所有较早修订；一次成功确认即可关闭旧修订，避免幽灵 pending。
         for (const candidate of runtime.outbox) {
-            if (candidate.id !== job?.id
-                && candidate.type === 'lorebook-sync'
-                && ['pending', 'running', 'failed'].includes(candidate.status)
-                && candidate.sourceRevision <= runtime.machines.publication.confirmedRevision) {
-                candidate.status = 'superseded';
-                candidate.finishedAt ||= nowIso();
-                candidate.error = '';
-            }
+            if (candidate.type !== 'lorebook-sync'
+                || candidate.sourceRevision > confirmedRevision
+                || candidate.status === 'cancelled')
+                continue;
+            candidate.status = 'done';
+            candidate.finishedAt ||= nowIso();
+            candidate.error = '';
         }
-        const nextJob = runtime.outbox
-            .filter((candidate) => candidate.type === 'lorebook-sync'
-                && ['pending', 'running'].includes(candidate.status)
-                && candidate.sourceRevision > runtime.machines.publication.confirmedRevision)
-            .sort((a, b) => a.sourceRevision - b.sourceRevision)
-            .at(-1);
-        runtime.machines.publication.pendingJobId = nextJob?.id || '';
-        runtime.machines.publication.status = runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision && !nextJob ? 'clean' : 'dirty';
+        runtime.machines.publication.status = confirmedRevision >= runtime.machines.publication.desiredRevision ? 'clean' : 'dirty';
+        runtime.machines.publication.pendingJobId = '';
         runtime.machines.publication.lastError = '';
         runtime.machines.publication.updatedAt = nowIso();
-        appendJournal(runtime, 'LOREBOOK_PROJECTION_CONFIRMED', artifact.messageKey, artifact.messageIndex, { revision: runtime.machines.publication.confirmedRevision, jobId: job?.id || '' });
+        appendJournal(runtime, 'LOREBOOK_PROJECTION_CONFIRMED', artifact.messageKey, artifact.messageIndex, {
+            revision: confirmedRevision,
+            jobId: job.id,
+        });
     }
-    refreshController(runtime, artifact, 'job-done');
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
     return job;
 }
 
-function markRuntimeJobFailed(chatState, type, turnKey, error, jobId = '') {
+function markRuntimeJobFailedById(chatState, jobId, error) {
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
-    const job = findJob(runtime, type, turnKey, jobId);
-    if (!job) {
+    const job = findJobById(runtime, jobId);
+    if (!job || job.status === 'cancelled') {
         chatState.runtimeV2 = runtime;
-        return undefined;
+        return job;
     }
     job.status = 'failed';
     job.finishedAt = nowIso();
     job.error = text(error, 1200);
-    if (type === 'small-summary' || type === 'large-summary') {
+    if (job.type === 'small-summary' || job.type === 'large-summary') {
+        const kind = job.type === 'small-summary' ? 'small' : 'large';
+        if (runtime.machines.summary.pendingTurnKey === job.turnKey
+            && runtime.machines.summary.pendingKind === kind) {
+            runtime.machines.summary.pendingKind = '';
+            runtime.machines.summary.pendingTurnKey = '';
+        }
+    }
+    if (job.type === 'lorebook-sync') {
+        runtime.machines.publication.status = 'failed';
+        runtime.machines.publication.lastError = text(error, 1200);
+        runtime.machines.publication.pendingJobId = job.id;
+        runtime.machines.publication.updatedAt = nowIso();
+    }
+    runtime.updatedAt = nowIso();
+    chatState.runtimeV2 = runtime;
+    return job;
+}
+
+function markRuntimeJobRunning(chatState, type, turnKey) {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const job = findJob(runtime, type, turnKey);
+    chatState.runtimeV2 = runtime;
+    return job ? markRuntimeJobRunningById(chatState, job.id) : undefined;
+}
+
+function markRuntimeJobDone(chatState, type, artifact) {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const job = findJob(runtime, type, artifact.messageKey, ['pending', 'running', 'failed', 'done']);
+    chatState.runtimeV2 = runtime;
+    return job ? markRuntimeJobDoneById(chatState, job.id, artifact) : undefined;
+}
+
+function markRuntimeJobFailed(chatState, type, turnKey, error) {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const job = findJob(runtime, type, turnKey, ['pending', 'running', 'failed']);
+    chatState.runtimeV2 = runtime;
+    return job ? markRuntimeJobFailedById(chatState, job.id, error) : undefined;
+}
+
+function enqueueLorebookProjection(chatState, artifact, reason = 'manual-state') {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    runtime.revision += 1;
+    runtime.machines.publication.desiredRevision = runtime.revision;
+    const job = enqueue(runtime, 'lorebook-sync', artifact, runtime.revision);
+    runtime.machines.publication.status = 'queued';
+    runtime.machines.publication.pendingJobId = job.id;
+    runtime.machines.publication.updatedAt = nowIso();
+    runtime.updatedAt = nowIso();
+    appendJournal(runtime, 'LOREBOOK_PROJECTION_REQUESTED', artifact.messageKey, artifact.messageIndex, {
+        revision: runtime.revision,
+        reason: text(reason, 240),
+        jobId: job.id,
+    });
+    chatState.runtimeV2 = runtime;
+    return job;
+}
+
+function enqueueSummaryEffect(chatState, artifact, kind, reason = 'manual-summary') {
+    if (!['small', 'large'].includes(kind))
+        throw new Error(`未知总结类型：${kind}`);
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    runtime.revision += 1;
+    const type = `${kind}-summary`;
+    const job = enqueue(runtime, type, artifact, runtime.revision);
+    for (const older of runtime.outbox) {
+        if (older.id !== job.id && ['small-summary', 'large-summary'].includes(older.type))
+            cancelOutboxJob(runtime, older, '已被玩家发起的总结任务替代', job.id);
+    }
+    runtime.machines.summary.pendingKind = kind;
+    runtime.machines.summary.pendingTurnKey = artifact.messageKey;
+    runtime.updatedAt = nowIso();
+    appendJournal(runtime, 'SUMMARY_EFFECT_REQUESTED', artifact.messageKey, artifact.messageIndex, {
+        kind,
+        reason: text(reason, 240),
+        jobId: job.id,
+    });
+    chatState.runtimeV2 = runtime;
+    return job;
+}
+
+function markRuntimeJobCancelledById(chatState, jobId, reason = '任务已取消') {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const job = findJobById(runtime, jobId);
+    if (!job || ['done', 'cancelled'].includes(job.status)) {
+        chatState.runtimeV2 = runtime;
+        return job;
+    }
+    cancelOutboxJob(runtime, job, reason);
+    if (['small-summary', 'large-summary'].includes(job.type)
+        && runtime.machines.summary.pendingTurnKey === job.turnKey) {
         runtime.machines.summary.pendingKind = '';
         runtime.machines.summary.pendingTurnKey = '';
     }
-    if (type === 'lorebook-sync') {
-        runtime.machines.publication.status = 'failed';
-        runtime.machines.publication.lastError = text(error, 1200);
+    if (job.type === 'lorebook-sync' && runtime.machines.publication.pendingJobId === job.id) {
+        runtime.machines.publication.pendingJobId = '';
+        runtime.machines.publication.status = runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision
+            ? 'clean'
+            : 'dirty';
         runtime.machines.publication.updatedAt = nowIso();
     }
-    refreshController(runtime, { messageKey: turnKey, messageIndex: job.turnIndex }, 'job-failed');
     runtime.updatedAt = nowIso();
     chatState.runtimeV2 = runtime;
     return job;
@@ -15193,124 +15410,79 @@ function narrativeContextText(context) {
 
 }
 };
-__defs["runtime-v2/state-controller.js"]=function(exports,__require){
+__defs["runtime-v2/replay.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
-Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+Object.defineProperty(__scope,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["advanceRuntimeV2"]});
+Object.defineProperty(__scope,"emptyRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["emptyRuntimeV2"]});
+Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
 with(__scope){
-Object.defineProperty(exports,"settlingRowCount",{enumerable:true,configurable:true,get:()=>settlingRowCount});
-Object.defineProperty(exports,"derivePluginStateDecision",{enumerable:true,configurable:true,get:()=>derivePluginStateDecision});
-Object.defineProperty(exports,"applyPluginStateDecision",{enumerable:true,configurable:true,get:()=>applyPluginStateDecision});
-Object.defineProperty(exports,"selectNextPendingPluginJob",{enumerable:true,configurable:true,get:()=>selectNextPendingPluginJob});
+Object.defineProperty(exports,"rebuildRuntimeV2FromArtifacts",{enumerable:true,configurable:true,get:()=>rebuildRuntimeV2FromArtifacts});
 /**
- * Plugin-state reconciliation controller.
+ * Rebuild Runtime V2 from the surviving, already committed artifact prefix.
  *
- * This controller never reads or generates narrative prose. It observes the
- * durable plugin state (runtime machines, outbox, summaries and snapshot
- * lifecycle markers), chooses the next derived maintenance action and records
- * why that action is next. Domain modules still execute the work.
+ * Historical edits invalidate runtime machines just as they invalidate facts and
+ * summaries. Replaying the valid prefix prevents removed turns from remaining in
+ * processedTurnKeys, game time, scene instances or narrative context.
  */
-function text(value, limit = 800) {
-    return safeText(value, limit).trim();
+function committedArtifacts(artifacts) {
+    return (Array.isArray(artifacts) ? artifacts : [])
+        .filter((artifact) => Boolean(artifact?.messageKey
+            && artifact?.snapshot
+            && artifact?.stages?.state?.status === 'success'))
+        .sort((left, right) => Number(left.messageIndex) - Number(right.messageIndex));
 }
 
-function live(job) {
-    return job && ['pending', 'running'].includes(job.status);
+function preserveSummaryCheckpoint(target, previous, keySet, kind) {
+    const upper = kind === 'small' ? 'Small' : 'Large';
+    const keyField = `last${upper}TurnKey`;
+    const indexField = `last${upper}TurnIndex`;
+    const key = String(previous?.machines?.summary?.[keyField] || '');
+    if (!key || !keySet.has(key))
+        return;
+    target.machines.summary[keyField] = key;
+    const index = Number(previous.machines.summary[indexField]);
+    target.machines.summary[indexField] = Number.isInteger(index) ? index : -1;
 }
 
-function settlingRowCount(snapshot) {
-    let count = 0;
-    for (const rows of Object.values(snapshot ?? {})) {
-        if (!Array.isArray(rows))
-            continue;
-        count += rows.filter((row) => row?.entryLifecycle?.state === 'settling').length;
-    }
-    return count;
-}
+function rebuildRuntimeV2FromArtifacts(chatState, artifacts, settings, { publicationEnabled = true } = {}) {
+    const previous = normalizeRuntimeV2(chatState?.runtimeV2);
+    const prefix = committedArtifacts(artifacts);
+    chatState.runtimeV2 = emptyRuntimeV2();
 
-function derivePluginStateDecision({ runtime, artifact, eligibility = {}, snapshot, reason = 'reconcile' }) {
-    const liveSummaryJobs = runtime.outbox
-        .filter((job) => ['small-summary', 'large-summary'].includes(job.type) && live(job))
-        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
-    const liveSyncJobs = runtime.outbox
-        .filter((job) => job.type === 'lorebook-sync'
-            && live(job)
-            && job.sourceRevision > runtime.machines.publication.confirmedRevision)
-        .sort((a, b) => a.sourceRevision - b.sourceRevision);
-    const currentSummaryJob = liveSummaryJobs[0];
-    const currentSyncJob = liveSyncJobs.at(-1);
-    const publicationDirty = runtime.machines.publication.desiredRevision > runtime.machines.publication.confirmedRevision;
-    const settlingCount = settlingRowCount(snapshot);
-    let summaryKind = '';
-    let nextAction = 'idle';
-    let nextJobId = '';
-    let detail = '插件状态已对账，无待执行派生动作';
-
-    if (currentSummaryJob) {
-        const pendingKind = currentSummaryJob.type === 'small-summary' ? 'small' : 'large';
-        nextAction = currentSummaryJob.status === 'running' ? 'wait-summary' : currentSummaryJob.type;
-        nextJobId = currentSummaryJob.id;
-        detail = `${pendingKind === 'small' ? '小' : '大'}总结任务尚未完成`;
-    }
-    else if (eligibility.small) {
-        summaryKind = 'small';
-        nextAction = 'small-summary';
-        detail = '存在达到窗口、场景边界或终局条件的未消费事实';
-    }
-    else if (eligibility.large && Number(artifact?.messageIndex ?? -1) > Number(runtime.machines.summary.lastSmallTurnIndex ?? -1)) {
-        summaryKind = 'large';
-        nextAction = 'large-summary';
-        detail = '存在达到累计阈值的未固化小总结';
-    }
-    else if (publicationDirty || currentSyncJob) {
-        nextAction = currentSyncJob?.status === 'running' ? 'wait-publication' : 'lorebook-sync';
-        nextJobId = currentSyncJob?.id || '';
-        detail = '世界书投影尚未追上正式状态版本';
-    }
-    else if (settlingCount > 0) {
-        nextAction = 'await-summary-coverage';
-        detail = `${settlingCount} 个条目仍等待对象分发或总结覆盖，不允许物理删除`;
+    for (const artifact of prefix) {
+        advanceRuntimeV2({
+            chatState,
+            artifact,
+            settings,
+            smallEligible: false,
+            largeEligible: false,
+            publicationEnabled: false,
+            scheduleDerived: false,
+        });
     }
 
-    return {
-        summaryKind,
-        summaryJobId: currentSummaryJob?.id || '',
-        syncRequired: publicationDirty || Boolean(currentSyncJob),
-        syncJobId: currentSyncJob?.id || '',
-        nextAction,
-        nextJobId,
-        reason: text(detail, 500),
-        trigger: text(reason, 120),
-        settlingCount,
-        observedRevision: runtime.revision,
-    };
-}
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const survivingKeys = new Set(runtime.processedTurnKeys);
+    preserveSummaryCheckpoint(runtime, previous, survivingKeys, 'small');
+    preserveSummaryCheckpoint(runtime, previous, survivingKeys, 'large');
 
-function applyPluginStateDecision(runtime, decision) {
-    runtime.machines.controller = {
-        phase: decision.nextAction,
-        nextAction: decision.nextAction,
-        nextJobId: decision.nextJobId || decision.summaryJobId || decision.syncJobId || '',
-        reason: decision.reason,
-        settlingCount: Math.max(0, Number(decision.settlingCount) || 0),
-        observedRevision: Math.max(0, Number(decision.observedRevision) || 0),
-        trigger: decision.trigger || '',
-        updatedAt: nowIso(),
-    };
-    return runtime.machines.controller;
-}
-
-function selectNextPendingPluginJob(runtime) {
-    const summary = runtime.outbox
-        .filter((job) => ['small-summary', 'large-summary'].includes(job.type) && job.status === 'pending')
-        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))[0];
-    if (summary)
-        return summary;
-    return runtime.outbox
-        .filter((job) => job.type === 'lorebook-sync'
-            && job.status === 'pending'
-            && job.sourceRevision > runtime.machines.publication.confirmedRevision)
-        .sort((a, b) => b.sourceRevision - a.sourceRevision)[0];
+    // Rebuild never resumes effects from the invalidated timeline. A single fresh
+    // publication is requested after the complete historical transaction succeeds.
+    runtime.outbox = [];
+    runtime.machines.summary.pendingKind = '';
+    runtime.machines.summary.pendingTurnKey = '';
+    runtime.machines.publication.confirmedRevision = 0;
+    runtime.machines.publication.desiredRevision = runtime.revision;
+    runtime.machines.publication.pendingJobId = '';
+    runtime.machines.publication.lastError = '';
+    runtime.machines.publication.status = publicationEnabled
+        ? (runtime.revision > 0 ? 'dirty' : 'clean')
+        : 'suppressed';
+    runtime.machines.publication.updatedAt = nowIso();
+    runtime.updatedAt = nowIso();
+    chatState.runtimeV2 = runtime;
+    return runtime;
 }
 
 }
@@ -15388,16 +15560,6 @@ function emptyRuntimeV2() {
                 lastSmallTurnKey: '',
                 lastLargeTurnKey: '',
             },
-            controller: {
-                phase: 'idle',
-                nextAction: 'idle',
-                nextJobId: '',
-                reason: '',
-                settlingCount: 0,
-                observedRevision: 0,
-                trigger: '',
-                updatedAt: '',
-            },
             publication: {
                 desiredRevision: 0,
                 confirmedRevision: 0,
@@ -15439,7 +15601,7 @@ function normalizeSceneInstance(value, id) {
 
 function normalizeOutboxJob(value) {
     const source = value && typeof value === 'object' ? value : {};
-    const status = ['pending', 'running', 'done', 'failed', 'cancelled', 'superseded'].includes(String(source.status))
+    const status = ['pending', 'running', 'done', 'failed', 'cancelled'].includes(String(source.status))
         ? String(source.status)
         : 'pending';
     const type = ['small-summary', 'large-summary', 'lorebook-sync'].includes(String(source.type))
@@ -15460,6 +15622,7 @@ function normalizeOutboxJob(value) {
         startedAt: cleanText(source.startedAt, 80),
         finishedAt: cleanText(source.finishedAt, 80),
         error: cleanText(source.error, 1200),
+        supersededByJobId: cleanText(source.supersededByJobId, 220),
     };
 }
 
@@ -15520,18 +15683,6 @@ function normalizeRuntimeV2(value) {
                 lastSmallTurnKey: cleanText(machines.summary?.lastSmallTurnKey, 220),
                 lastLargeTurnKey: cleanText(machines.summary?.lastLargeTurnKey, 220),
             },
-            controller: {
-                ...base.machines.controller,
-                ...(machines.controller ?? {}),
-                phase: cleanText(machines.controller?.phase, 80) || 'idle',
-                nextAction: cleanText(machines.controller?.nextAction, 80) || 'idle',
-                nextJobId: cleanText(machines.controller?.nextJobId, 220),
-                reason: cleanText(machines.controller?.reason, 500),
-                settlingCount: Math.max(0, integer(machines.controller?.settlingCount, 0)),
-                observedRevision: Math.max(0, integer(machines.controller?.observedRevision, 0)),
-                trigger: cleanText(machines.controller?.trigger, 120),
-                updatedAt: cleanText(machines.controller?.updatedAt, 80),
-            },
             publication: {
                 ...base.machines.publication,
                 ...(machines.publication ?? {}),
@@ -15573,34 +15724,6 @@ function normalizeRuntimeV2(value) {
     if (runtime.machines.scene.currentInstanceId && !runtime.machines.scene.instances[runtime.machines.scene.currentInstanceId]) {
         runtime.machines.scene.currentInstanceId = '';
     }
-    // 已确认投影覆盖其之前的同步意图，旧任务不应永久停留在 pending/failed。
-    for (const job of runtime.outbox) {
-        if (job.type === 'lorebook-sync'
-            && ['pending', 'running', 'failed'].includes(job.status)
-            && job.sourceRevision <= runtime.machines.publication.confirmedRevision) {
-            job.status = 'superseded';
-            job.finishedAt ||= runtime.machines.publication.updatedAt || nowIso();
-            job.error = '';
-        }
-    }
-    const liveSyncJobs = runtime.outbox
-        .filter((job) => job.type === 'lorebook-sync'
-            && ['pending', 'running'].includes(job.status)
-            && job.sourceRevision > runtime.machines.publication.confirmedRevision)
-        .sort((a, b) => a.sourceRevision - b.sourceRevision);
-    if (!liveSyncJobs.some((job) => job.id === runtime.machines.publication.pendingJobId))
-        runtime.machines.publication.pendingJobId = liveSyncJobs.at(-1)?.id || '';
-    if (runtime.machines.publication.confirmedRevision >= runtime.machines.publication.desiredRevision && !liveSyncJobs.length)
-        runtime.machines.publication.status = 'clean';
-    else if (runtime.machines.publication.status === 'clean')
-        runtime.machines.publication.status = liveSyncJobs.some((job) => job.status === 'running') ? 'writing' : 'queued';
-    const liveSummaryJobs = runtime.outbox
-        .filter((job) => ['small-summary', 'large-summary'].includes(job.type) && ['pending', 'running'].includes(job.status));
-    const latestSummaryJob = liveSummaryJobs.at(-1);
-    if (latestSummaryJob && (!runtime.machines.summary.pendingKind || !runtime.machines.summary.pendingTurnKey)) {
-        runtime.machines.summary.pendingKind = latestSummaryJob.type === 'small-summary' ? 'small' : 'large';
-        runtime.machines.summary.pendingTurnKey = latestSummaryJob.turnKey;
-    }
     return runtime;
 }
 
@@ -15636,10 +15759,6 @@ Object.defineProperty(__scope,"normalizeRecordingBoundary",{enumerable:true,conf
 Object.defineProperty(__scope,"normalizeLorebookPublication",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["normalizeLorebookPublication"]});
 Object.defineProperty(__scope,"emptyRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["emptyRuntimeV2"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
-Object.defineProperty(__scope,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["inferSummaryLifecycle"]});
-Object.defineProperty(__scope,"markSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["markSummaryLifecycle"]});
-Object.defineProperty(__scope,"refreshSummaryFingerprint",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["refreshSummaryFingerprint"]});
-Object.defineProperty(__scope,"reconcileConsumedFactLayers",{enumerable:true,configurable:true,get:()=>__require("domain/memory-layer-reconciliation.js")["reconcileConsumedFactLayers"]});
 with(__scope){
 Object.defineProperty(exports,"putArtifact",{enumerable:true,configurable:true,get:()=>putArtifact});
 Object.defineProperty(exports,"putChatState",{enumerable:true,configurable:true,get:()=>putChatState});
@@ -15669,45 +15788,22 @@ function emptyChatState(chatKey) {
         lastSyncStatus: 'idle',
         lorebookPublication: normalizeLorebookPublication(),
         runtimeV2: emptyRuntimeV2(),
-        migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false, factContractV35: false, summaryDedupV42: false, layerReconciliationV42: false },
+        migration: { dynamicTablesV23: false, internalFactsV23: false, objectViewsV26: false, objectAllocationV27: false, summaryVersionsV27: false, regionAllocationV28: false, characterMergeV29: false, persistedCharacterMergeV30: false, uniqueObjectNamesV31: false, spacetimeSingletonV32: false, entryLifecycleV33: false, singleAuthorityV34: false, factContractV35: false },
         updatedAt: nowIso(),
     };
 }
 function normalizeSummaryArrays(value, kind) {
     if (!Array.isArray(value))
         return [];
-    const output = value.filter((item) => item && typeof item === 'object').map((item) => {
-        const normalized = {
-            ...item,
-            kind,
-            sourceKeys: Array.isArray(item.sourceKeys) ? [...new Set(item.sourceKeys.map(String))] : [],
-            sourceFactIds: Array.isArray(item.sourceFactIds) ? [...new Set(item.sourceFactIds.map(String))] : undefined,
-            sourceSummaryIds: Array.isArray(item.sourceSummaryIds) ? [...new Set(item.sourceSummaryIds.map(String))] : undefined,
-            eventIds: Array.isArray(item.eventIds) ? [...new Set(item.eventIds.map(String))] : undefined,
-            unresolvedItems: Array.isArray(item.unresolvedItems) ? [...new Set(item.unresolvedItems.map(String))] : undefined,
-        };
-        normalized.lifecycleStatus = inferSummaryLifecycle(normalized, kind);
-        normalized.recallEligible = item.recallEligible !== false && ['active', 'archived'].includes(normalized.lifecycleStatus);
-        return refreshSummaryFingerprint(normalized);
-    });
-    // 旧版本曾为完全相同的总结反复分配随机 ID。保留原记录以维护事实/大总结引用，
-    // 但把重复版本指向最新代表并退出 UI 与召回，避免旧存档出现成排相同条目。
-    const latestByIdentity = new Map();
-    for (let index = output.length - 1; index >= 0; index -= 1) {
-        const item = output[index];
-        const eventId = String(item.eventId || item.eventIds?.[0] || '').trim();
-        const key = `${kind}|${eventId}|${item.sourceFingerprint || item.contentFingerprint}`;
-        const representative = latestByIdentity.get(key);
-        if (!representative) {
-            latestByIdentity.set(key, item);
-            delete item.duplicateOfSummaryId;
-            continue;
-        }
-        item.duplicateOfSummaryId = representative.id;
-        item.recallEligible = false;
-        markSummaryLifecycle(item, 'superseded', { successorId: representative.id, recallEligible: false });
-    }
-    return output;
+    return value.filter((item) => item && typeof item === 'object').map((item) => ({
+        ...item,
+        kind,
+        sourceKeys: Array.isArray(item.sourceKeys) ? [...new Set(item.sourceKeys.map(String))] : [],
+        sourceFactIds: Array.isArray(item.sourceFactIds) ? [...new Set(item.sourceFactIds.map(String))] : undefined,
+        sourceSummaryIds: Array.isArray(item.sourceSummaryIds) ? [...new Set(item.sourceSummaryIds.map(String))] : undefined,
+        eventIds: Array.isArray(item.eventIds) ? [...new Set(item.eventIds.map(String))] : undefined,
+        unresolvedItems: Array.isArray(item.unresolvedItems) ? [...new Set(item.unresolvedItems.map(String))] : undefined,
+    }));
 }
 /**
  * rc.23 以前同一 event_id 可能累计留下多条尚未固化的小总结。迁移时把它们整理为一条
@@ -15744,11 +15840,8 @@ function migrateLegacySmallSummaryVersions(small, large) {
         latest.sourceKeys = sourceKeys.length ? sourceKeys : sourceFactIds;
         latest.previousSmallSummaryId ||= older.at(-1)?.id;
         latest.rollupCount = Math.max(Number(latest.rollupCount) || 1, rows.length);
-        for (const item of older) {
+        for (const item of older)
             item.supersededBySmallSummaryId = latest.id;
-            markSummaryLifecycle(item, 'superseded', { successorId: latest.id, recallEligible: false });
-        }
-        markSummaryLifecycle(latest, latest.eventClosed === true ? 'archived' : 'active', { recallEligible: true });
         changed = true;
     }
     return changed;
@@ -15865,8 +15958,6 @@ function migrateChatState(raw, chatKey) {
     const needsSingleAuthorityMigration = state.migration?.singleAuthorityV34 !== true;
     // core.4 为旧事实补齐主宿主、切面、保存层级和有效区间；无法确认对象时保留 legacy 宿主，不猜测归并。
     const needsFactContractMigration = state.migration?.factContractV35 !== true;
-    const needsSummaryDedupMigration = state.migration?.summaryDedupV42 !== true;
-    const needsLayerReconciliation = state.migration?.layerReconciliationV42 !== true;
     const needsFullSnapshotMigration = needsViewMigration || needsObjectViewMigration
         || needsObjectAllocationMigration || needsRegionAllocationMigration || needsCharacterMergeMigration;
     let artifactViewsChanged = false;
@@ -15896,8 +15987,6 @@ function migrateChatState(raw, chatKey) {
     const summaryVersionsChanged = needsSummaryVersionMigration
         ? migrateLegacySmallSummaryVersions(state.smallSummaries, state.largeSummaries)
         : false;
-    const summaryDedupChanged = needsSummaryDedupMigration
-        && [...state.smallSummaries, ...state.largeSummaries].some((item) => item.duplicateOfSummaryId);
     let facts = normalizeInternalFacts(state.internalFacts);
     const registry = getSettings().tableRegistry;
     let previousMigratedSnapshot;
@@ -16070,25 +16159,8 @@ function migrateChatState(raw, chatKey) {
         state.lastSyncStatus = 'idle';
         state.lastSyncError = undefined;
     }
-    if (needsFactMigration || needsSummaryVersionMigration || needsFactContractMigration || needsLayerReconciliation) {
+    if (needsFactMigration || needsSummaryVersionMigration || needsFactContractMigration) {
         migrateLegacyConsumption(facts, state.smallSummaries, state.largeSummaries);
-    }
-    if (needsLayerReconciliation) {
-        const artifacts = getChat().map((message) => message?.extra?.[MODULE_NAME])
-            .filter((artifact) => artifact?.chatKey === chatKey && artifact.snapshot);
-        const latestArtifact = artifacts.at(-1);
-        if (latestArtifact?.snapshot) {
-            const reconciled = reconcileConsumedFactLayers(latestArtifact.snapshot, facts, registry);
-            if (reconciled.changed) {
-                latestArtifact.snapshot = reconciled.snapshot;
-                if (latestArtifact.stages?.sync)
-                    latestArtifact.stages.sync = { ...latestArtifact.stages.sync, status: 'idle', error: undefined };
-                delete latestArtifact.lorebookEntryIds;
-                artifactViewsChanged = true;
-                state.lastSyncStatus = 'idle';
-                state.lastSyncError = undefined;
-            }
-        }
     }
     state.internalFacts = facts;
     if (needsEntryLifecycleMigration) {
@@ -16121,8 +16193,6 @@ function migrateChatState(raw, chatKey) {
         entryLifecycleV33: true,
         singleAuthorityV34: true,
         factContractV35: true,
-        summaryDedupV42: true,
-        layerReconciliationV42: true,
     };
     state.updatedAt ||= nowIso();
     return {
@@ -16130,8 +16200,7 @@ function migrateChatState(raw, chatKey) {
         artifactViewsChanged,
         metadataChanged: metadataBefore !== JSON.stringify(state)
             || previousSchema !== CURRENT_SCHEMA_VERSION
-            || summaryVersionsChanged
-            || summaryDedupChanged,
+            || summaryVersionsChanged,
     };
 }
 /** Canonical message artifacts live on message.extra. */
@@ -16153,8 +16222,6 @@ const REQUIRED_MIGRATIONS = [
     'entryLifecycleV33',
     'singleAuthorityV34',
     'factContractV35',
-    'summaryDedupV42',
-    'layerReconciliationV42',
 ];
 function currentStateStructure(raw, chatKey) {
     if (!raw || typeof raw !== 'object')
@@ -16386,6 +16453,8 @@ Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurabl
 with(__scope){
 Object.defineProperty(exports,"runDiagnostics",{enumerable:true,configurable:true,get:()=>runDiagnostics});
 Object.defineProperty(exports,"diagnosticReport",{enumerable:true,configurable:true,get:()=>diagnosticReport});
+Object.defineProperty(exports,"redactChatStateForDiagnostics",{enumerable:true,configurable:true,get:()=>redactChatStateForDiagnostics});
+Object.defineProperty(exports,"runtimeStateDiagnosticChecks",{enumerable:true,configurable:true,get:()=>runtimeStateDiagnosticChecks});
 /**
  * 模块职责：生成任务、请求、设置与运行状态诊断。
  * 维护边界：诊断不得包含提示词、玩家正文、角色正文、总结全文、完整响应或密钥。
@@ -16483,7 +16552,7 @@ async function runDiagnostics() {
             id: 'modelProtocol',
             label: '模型返回协议',
             status: 'ok',
-            detail: '统一使用固定文本；状态解析器按当前表格注册表动态识别模块并本地归一化，JSON仅用于插件内部存储',
+            detail: '审核、状态表、小总结和大总结统一使用固定文本；JSON仅用于插件内部存储',
         });
     }
     checks.push({
@@ -16510,21 +16579,13 @@ async function runDiagnostics() {
         const state = await getChatState(currentChatKey());
         const history = historyStatus(state);
         checks.push({ id: 'history', label: '历史数据一致性', ...history });
-        const controller = state?.runtimeV2?.machines?.controller;
-        checks.push({
-            id: 'stateController',
-            label: '统一状态协调器',
-            status: controller ? 'ok' : 'warn',
-            detail: controller
-                ? `${controller.nextAction || 'idle'}；待结算 ${controller.settlingCount ?? 0}；${controller.reason || '状态已对账'}`
-                : '旧状态尚未建立协调器视图，将在下一次状态提交时自动补齐',
-        });
         const sync = syncStatus(state);
         checks.push({ id: 'sync', label: '最近世界书同步', ...sync });
+        checks.push(...runtimeStateDiagnosticChecks(state));
     }
     return checks;
 }
-function redactedChatState(state) {
+function redactChatStateForDiagnostics(state) {
     if (!state)
         return {};
     return {
@@ -16540,10 +16601,8 @@ function redactedChatState(state) {
         suppressedLorebookEntryCount: Object.keys(state.lorebookPublication?.suppressed ?? {}).length,
         internalFactCount: Array.isArray(state.internalFacts) ? state.internalFacts.length : 0,
         pendingSmallFactCount: Array.isArray(state.internalFacts) ? state.internalFacts.filter((fact) => !fact.consumedBySmallSummaryId).length : 0,
-        smallSummaryCount: Array.isArray(state.smallSummaries) ? state.smallSummaries.filter((item) => !item.duplicateOfSummaryId).length : 0,
-        largeSummaryCount: Array.isArray(state.largeSummaries) ? state.largeSummaries.filter((item) => !item.duplicateOfSummaryId).length : 0,
-        hiddenDuplicateSmallSummaryCount: Array.isArray(state.smallSummaries) ? state.smallSummaries.filter((item) => item.duplicateOfSummaryId).length : 0,
-        hiddenDuplicateLargeSummaryCount: Array.isArray(state.largeSummaries) ? state.largeSummaries.filter((item) => item.duplicateOfSummaryId).length : 0,
+        smallSummaryCount: Array.isArray(state.smallSummaries) ? state.smallSummaries.length : 0,
+        largeSummaryCount: Array.isArray(state.largeSummaries) ? state.largeSummaries.length : 0,
         historyInvalidation: state.historyInvalidation ? {
             ...state.historyInvalidation,
             pauseError: redactedError(state.historyInvalidation.pauseError),
@@ -16556,6 +16615,12 @@ function redactedChatState(state) {
         lastSyncAt: state.lastSyncAt,
         lastSyncStatus: state.lastSyncStatus,
         lastSyncError: redactedError(state.lastSyncError),
+        lorebookPublication: state.lorebookPublication ? {
+            bookNameSet: Boolean(state.lorebookPublication.bookName),
+            publishedCount: Object.keys(state.lorebookPublication.published ?? {}).length,
+            suppressedCount: Object.keys(state.lorebookPublication.suppressed ?? {}).length,
+        } : undefined,
+        hostRecallStatus: safeHostRecallStatus(state.hostRecallStatus),
         runtimeV2: state.runtimeV2 ? {
             version: state.runtimeV2.version,
             revision: state.runtimeV2.revision,
@@ -16638,6 +16703,76 @@ function safeRequest(trace) {
         error: redactedError(trace.error),
     };
 }
+
+function safeHostRecallStatus(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return undefined;
+    const feature = (source) => source && typeof source === 'object' && !Array.isArray(source) ? {
+        requested: source.requested === true,
+        available: source.available === true,
+        enabled: source.enabled === true,
+        changed: source.changed === true,
+        liveApplied: source.liveApplied === true,
+        reloadRequired: source.reloadRequired === true,
+        source: source.source ? String(source.source) : undefined,
+        scoreThreshold: Number.isFinite(Number(source.scoreThreshold)) ? Number(source.scoreThreshold) : undefined,
+        maxEntries: Number.isFinite(Number(source.maxEntries)) ? Number(source.maxEntries) : undefined,
+        enabledForAll: source.enabledForAll === true,
+        error: redactedError(source.error),
+    } : undefined;
+    const classifications = {};
+    if (value.classifications && typeof value.classifications === 'object' && !Array.isArray(value.classifications)) {
+        for (const [key, count] of Object.entries(value.classifications)) {
+            if (Number.isFinite(Number(count)) && Number(count) >= 0)
+                classifications[String(key)] = Number(count);
+        }
+    }
+    return {
+        checkedAt: value.checkedAt ? String(value.checkedAt) : undefined,
+        classifications,
+        recursion: feature(value.recursion),
+        vector: feature(value.vector),
+    };
+}
+
+function runtimeStateDiagnosticChecks(state) {
+    const checks = [];
+    const outbox = Array.isArray(state?.runtimeV2?.outbox) ? state.runtimeV2.outbox : [];
+    const failed = outbox.filter((job) => job?.status === 'failed');
+    const active = outbox.filter((job) => ['pending', 'running'].includes(job?.status));
+    checks.push({
+        id: 'runtimeOutbox',
+        label: 'Runtime派生任务',
+        status: failed.length ? 'error' : active.length ? 'warn' : 'ok',
+        detail: failed.length
+            ? `${failed.length} 个任务失败；请在诊断任务记录中查看错误并重试`
+            : active.length
+                ? `${active.length} 个任务仍在等待或执行`
+                : '没有失败或滞留的派生任务',
+    });
+    const recall = safeHostRecallStatus(state?.hostRecallStatus);
+    if (!recall) {
+        checks.push({ id: 'hostRecall', label: 'ST召回宿主状态', status: 'warn', detail: '尚未完成一次世界书发布，暂无宿主回读结果' });
+        return checks;
+    }
+    const requested = [recall.recursion, recall.vector].filter((feature) => feature?.requested);
+    const errors = requested.filter((feature) => feature?.error);
+    const unavailable = requested.filter((feature) => !feature?.enabled);
+    checks.push({
+        id: 'hostRecall',
+        label: 'ST召回宿主状态',
+        status: errors.length ? 'error' : unavailable.length ? 'warn' : 'ok',
+        detail: errors.length
+            ? errors.map((feature) => feature.error).filter(Boolean).join('；')
+            : unavailable.length
+                ? '发布计划需要的递归或向量能力尚未在宿主中启用'
+                : requested.length
+                    ? '发布计划需要的递归与向量能力已完成宿主回读'
+                    : '当前发布计划不需要额外宿主召回能力',
+    });
+    return checks;
+}
+
 async function diagnosticReport() {
     const context = tryGetContext();
     const chatKey = context ? currentChatKey() : 'unavailable';
@@ -16655,7 +16790,7 @@ async function diagnosticReport() {
             auditPrompt: settings.auditPrompt ? '[已填写]' : '',
             revisionPrompt: settings.revisionPrompt ? '[已填写]' : '',
         } : null,
-        chatState: redactedChatState(chatState),
+        chatState: redactChatStateForDiagnostics(chatState),
         tasks: taskQueue.list().map(safeTask),
         requests: requestTraceReport().map(safeRequest),
         privacy: '诊断不包含玩家输入、AI正文、小总结正文、大总结正文、完整模型响应或API密钥',
@@ -16679,8 +16814,10 @@ Object.defineProperty(__scope,"processMessage",{enumerable:true,configurable:tru
 Object.defineProperty(__scope,"retryStage",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["retryStage"]});
 Object.defineProperty(__scope,"subscribePipeline",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["subscribePipeline"]});
 Object.defineProperty(__scope,"openWorkspace",{enumerable:true,configurable:true,get:()=>__require("ui/workspace.js")["openWorkspace"]});
+Object.defineProperty(__scope,"registerMessagePanelRenderer",{enumerable:true,configurable:true,get:()=>__require("ui/workspace.js")["registerMessagePanelRenderer"]});
 Object.defineProperty(__scope,"applyAuditVisibility",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditVisibility"]});
 Object.defineProperty(__scope,"snapshotRowCount",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["snapshotRowCount"]});
+Object.defineProperty(__scope,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["subscribeArtifactStageChanges"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
 with(__scope){
 Object.defineProperty(exports,"messageStageAvailability",{enumerable:true,configurable:true,get:()=>messageStageAvailability});
@@ -16754,9 +16891,7 @@ function messageStageAvailability(index, artifact) {
 const pendingRetryIndexes = new Set();
 const expandedPanelIndexes = new Set();
 function flowStageHtml(order, label, stage) {
-    const status = label === '修正' && stage?.status === 'skipped'
-        ? '无需修正'
-        : stageLabel(stage);
+    const status = stageLabel(stage);
     const symbol = stage?.status === 'success' || stage?.status === 'skipped'
         ? '✓'
         : stage?.status === 'failed' || stage?.status === 'blocked'
@@ -16856,6 +16991,7 @@ function renderAllMessagePanels() {
             renderMessagePanel(index);
     });
 }
+registerMessagePanelRenderer(renderAllMessagePanels);
 let installed = false;
 function installMessagePanelHandlers() {
     if (installed)
@@ -16928,12 +17064,14 @@ function installMessagePanelHandlers() {
     };
     document.addEventListener('click', click);
     const unsubscribe = subscribePipeline((index) => renderMessagePanel(index));
+    const unsubscribeStages = subscribeArtifactStageChanges((artifact) => renderMessagePanel(artifact?.messageIndex));
     return () => {
         installed = false;
         pendingRetryIndexes.clear();
         expandedPanelIndexes.clear();
         document.removeEventListener('click', click);
         unsubscribe();
+        unsubscribeStages();
     };
 }
 
@@ -17059,17 +17197,12 @@ Object.defineProperty(__scope,"latestAssistantIndex",{enumerable:true,configurab
 Object.defineProperty(__scope,"saveSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["saveSettings"]});
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
 Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
-Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
 Object.defineProperty(__scope,"escapeHtml",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["escapeHtml"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
-Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
-Object.defineProperty(__scope,"canonicalObjectTitle",{enumerable:true,configurable:true,get:()=>__require("domain/object-identity.js")["canonicalObjectTitle"]});
 Object.defineProperty(__scope,"buildEventProfiles",{enumerable:true,configurable:true,get:()=>__require("domain/event-profile.js")["buildEventProfiles"]});
-Object.defineProperty(__scope,"deleteRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["deleteRow"]});
-Object.defineProperty(__scope,"moveManualRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["moveManualRow"]});
+Object.defineProperty(__scope,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["subscribeArtifactStageChanges"]});
 Object.defineProperty(__scope,"snapshotRowCount",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["snapshotRowCount"]});
-Object.defineProperty(__scope,"upsertManualRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["upsertManualRow"]});
 Object.defineProperty(__scope,"visibleStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["visibleStateRows"]});
 Object.defineProperty(__scope,"createCustomTable",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["createCustomTable"]});
 Object.defineProperty(__scope,"customFieldText",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["customFieldText"]});
@@ -17111,24 +17244,25 @@ Object.defineProperty(__scope,"chooseHistoryRecalculationStart",{enumerable:true
 Object.defineProperty(__scope,"retryStage",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["retryStage"]});
 Object.defineProperty(__scope,"subscribePipeline",{enumerable:true,configurable:true,get:()=>__require("pipeline/pipeline.js")["subscribePipeline"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
-Object.defineProperty(__scope,"inferSummaryLifecycle",{enumerable:true,configurable:true,get:()=>__require("domain/summary.js")["inferSummaryLifecycle"]});
+Object.defineProperty(__scope,"pendingSmallSummaries",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["pendingSmallSummaries"]});
+Object.defineProperty(__scope,"deleteManualStateRow",{enumerable:true,configurable:true,get:()=>__require("pipeline/manual-state.js")["deleteManualStateRow"]});
+Object.defineProperty(__scope,"saveManualStateRow",{enumerable:true,configurable:true,get:()=>__require("pipeline/manual-state.js")["saveManualStateRow"]});
 Object.defineProperty(__scope,"largeSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["largeSummarySystemPrompt"]});
 Object.defineProperty(__scope,"smallSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["smallSummarySystemPrompt"]});
 Object.defineProperty(__scope,"stateSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/state.js")["stateSystemPrompt"]});
 Object.defineProperty(__scope,"auditSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/audit.js")["auditSystemPrompt"]});
 Object.defineProperty(__scope,"revisionSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionSystemPrompt"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
 Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
 Object.defineProperty(__scope,"diagnosticReport",{enumerable:true,configurable:true,get:()=>__require("ui/diagnostics.js")["diagnosticReport"]});
 Object.defineProperty(__scope,"runDiagnostics",{enumerable:true,configurable:true,get:()=>__require("ui/diagnostics.js")["runDiagnostics"]});
-Object.defineProperty(__scope,"renderAllMessagePanels",{enumerable:true,configurable:true,get:()=>__require("ui/message-panel.js")["renderAllMessagePanels"]});
 Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveRequests"]});
 Object.defineProperty(__scope,"setRequestAcceptance",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["setRequestAcceptance"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
 Object.defineProperty(__scope,"recordingStartIndex",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["recordingStartIndex"]});
 Object.defineProperty(__scope,"suppressedLorebookEntries",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["suppressedLorebookEntries"]});
 with(__scope){
+Object.defineProperty(exports,"registerMessagePanelRenderer",{enumerable:true,configurable:true,get:()=>registerMessagePanelRenderer});
 Object.defineProperty(exports,"resolveWorkspaceStageCommand",{enumerable:true,configurable:true,get:()=>resolveWorkspaceStageCommand});
 Object.defineProperty(exports,"workspacePipelineBusy",{enumerable:true,configurable:true,get:()=>workspacePipelineBusy});
 Object.defineProperty(exports,"resolveWorkspaceMessageSelection",{enumerable:true,configurable:true,get:()=>resolveWorkspaceMessageSelection});
@@ -17146,6 +17280,7 @@ let rendering = false;
 let renderAgain = false;
 let queueUnsubscribe = null;
 let pipelineUnsubscribe = null;
+let artifactStageUnsubscribe = null;
 let workspaceRenderScheduled = false;
 let workspaceRenderDeferred = false;
 let selectedGraphNodeId = null;
@@ -17157,6 +17292,18 @@ let workspaceViewportBound = false;
 let tableSearchQuery = "";
 let graphSearchQuery = "";
 let diagnosticPromptKind = "state";
+let messagePanelRenderer = () => undefined;
+/** UI 组合根注入消息面板刷新器，避免工作区与消息面板互相静态导入。 */
+function registerMessagePanelRenderer(renderer) {
+    messagePanelRenderer = typeof renderer === "function" ? renderer : () => undefined;
+    return () => {
+        if (messagePanelRenderer === renderer)
+            messagePanelRenderer = () => undefined;
+    };
+}
+function refreshMessagePanels() {
+    messagePanelRenderer();
+}
 function updateWorkspaceViewportHeight() {
     const height = Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight));
     document.documentElement.style.setProperty("--ma11-viewport-height", `${height}px`);
@@ -17201,6 +17348,7 @@ function clampGraphZoom(value) {
 function ensureWorkspaceSubscriptions() {
     queueUnsubscribe ||= taskQueue.subscribe(handleQueueChange);
     pipelineUnsubscribe ||= subscribePipeline(() => handlePipelineChange());
+    artifactStageUnsubscribe ||= subscribeArtifactStageChanges(() => handlePipelineChange());
 }
 const WORKSPACE_NAVIGATION = [
     { key: "overview", label: "总览", icon: "fa-gauge-high", description: "流程状态、最近任务与快捷操作" },
@@ -17572,7 +17720,6 @@ function runtimeV2OverviewHtml(chatState) {
     const current = sceneMachine.instances?.[sceneMachine.currentInstanceId];
     const summary = runtime.machines?.summary ?? {};
     const publication = runtime.machines?.publication ?? {};
-    const controller = runtime.machines?.controller ?? {};
     const pendingJobs = (runtime.outbox ?? []).filter((job) => ['pending', 'running', 'failed'].includes(job.status));
     const summaryLabel = summary.pendingKind === 'small'
         ? '小总结待执行'
@@ -17588,9 +17735,7 @@ function runtimeV2OverviewHtml(chatState) {
         <dt>游戏时间</dt><dd>${escapeHtml(runtime.machines?.clock?.display || '未发生明确时间推进')}</dd>
         <dt>当前场景实例</dt><dd>${escapeHtml(sceneLabel)}</dd>
         <dt>当前目标</dt><dd>${escapeHtml(current?.goal || '未明确')}</dd>
-        <dt>统一状态协调</dt><dd>${escapeHtml(`${controller.nextAction || 'idle'}${controller.reason ? `｜${controller.reason}` : ''}`)}</dd>
         <dt>总结调度</dt><dd>${escapeHtml(summaryLabel)}</dd>
-        <dt>待结算条目</dt><dd>${escapeHtml(String(controller.settlingCount ?? 0))}</dd>
         <dt>世界书投影</dt><dd>${escapeHtml(`${publication.status || 'clean'}｜期望 ${publication.desiredRevision ?? 0} / 已确认 ${publication.confirmedRevision ?? 0}`)}</dd>
         <dt>未完成事务</dt><dd>${escapeHtml(String(pendingJobs.length))}</dd>
       </dl>
@@ -18091,55 +18236,30 @@ function summaryPromptEditorHtml(kind) {
     <p class="ma11-help">事件分组、事实消费、版本继承、沉淀到对象和世界书同步由插件负责；这里仅调整模型筛选与表达。</p>
   </section>`;
 }
-function summaryLifecycleDisplay(item) {
-    const status = inferSummaryLifecycle(item, item?.kind);
-    const labels = {
-        active: '当前',
-        archived: '已归档',
-        solidified: '已固化',
-        superseded: '旧版本',
-    };
-    const classes = {
-        active: 'success',
-        archived: 'working',
-        solidified: 'working',
-        superseded: '',
-    };
-    return { status, label: labels[status] || status, className: classes[status] || '' };
-}
-function summarySettlementHtml(item) {
-    const value = item?.sedimentation;
-    if (!value)
-        return '';
-    const distributed = value.distributedRowIds?.length ?? 0;
-    const settling = value.enteredSettlingRowIds?.length ?? 0;
-    const deleted = value.deletedRowIds?.length ?? value.appliedRowIds?.length ?? 0;
-    const retained = value.retainedRowIds?.length ?? value.ignoredRowIds?.length ?? 0;
-    return `<div class="ma11-summary-settlement"><span>已分发 ${distributed}</span><span>待结算 ${settling}</span><span>已删除 ${deleted}</span><span>保留 ${retained}</span></div>`;
-}
-function summaryArticleHtml(item, unresolvedLabel) {
-    const lifecycle = summaryLifecycleDisplay(item);
-    return `<article class="ma11-summary"><h3>${escapeHtml(item.title)} <span class="ma11-badge ${lifecycle.className}">${escapeHtml(lifecycle.label)}</span></h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>${unresolvedLabel}</b><span>${escapeHtml(item.unresolvedItems.join('；'))}</span></div>` : ''}${summarySettlementHtml(item)}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`;
-}
 async function summariesHtml() {
     const info = latestSnapshotArtifact();
     const enabled = getSettings().enabled;
     const busy = workspacePipelineBusy(info);
     const state = info ? await getChatState(info.artifact.chatKey) : null;
     const allSmall = state?.smallSummaries ?? [];
-    const allLarge = state?.largeSummaries ?? [];
-    const small = allSmall.filter((item) => !item.duplicateOfSummaryId);
-    const large = allLarge.filter((item) => !item.duplicateOfSummaryId);
-    const smallCurrent = small.filter((item) => ['active', 'archived'].includes(inferSummaryLifecycle(item, 'small'))).length;
-    const largeCurrent = large.filter((item) => ['active', 'archived'].includes(inferSummaryLifecycle(item, 'large'))).length;
+    const large = state?.largeSummaries ?? [];
+    const small = pendingSmallSummaries(allSmall, large);
     return `
     <section class="ma11-toolbar"><div><h2>小总结与大总结</h2><p>小总结写入近期经历；大总结重新审查并写入历史事实。</p></div><div class="ma11-actions"><button data-ma11-action="force-small" ${enabled && info && !busy ? "" : "disabled"}>立即小总结</button><button data-ma11-action="force-large" ${enabled && info && !busy ? "" : "disabled"}>立即大总结</button></div></section>
     <div class="ma11-summary-columns">
-      <section class="ma11-card"><header><b>小总结</b><span>当前 ${smallCurrent} / 全部 ${small.length}</span></header>${small.length
-        ? small.slice().reverse().map((item) => summaryArticleHtml(item, '未决')).join("")
+      <section class="ma11-card"><header><b>小总结</b><span>${small.length}</span></header>${small.length
+        ? small
+            .slice()
+            .reverse()
+            .map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>未决</b><span>${escapeHtml(item.unresolvedItems.join('；'))}</span></div>` : ''}${item.sedimentation ? `<div class="ma11-summary-settlement"><span>已应用 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>保护/忽略 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`)
+            .join("")
         : '<p class="ma11-empty">尚无小总结。</p>'}</section>
-      <section class="ma11-card"><header><b>大总结</b><span>当前 ${largeCurrent} / 全部 ${large.length}</span></header>${large.length
-        ? large.slice().reverse().map((item) => summaryArticleHtml(item, '长期未决')).join("")
+      <section class="ma11-card"><header><b>大总结</b><span>${large.length}</span></header>${large.length
+        ? large
+            .slice()
+            .reverse()
+            .map((item) => `<article class="ma11-summary"><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary)}</p>${item.unresolvedItems?.length ? `<div class="ma11-summary-unresolved"><b>长期未决</b><span>${escapeHtml(item.unresolvedItems.join('；'))}</span></div>` : ''}${item.sedimentation ? `<div class="ma11-summary-settlement"><span>已应用 ${item.sedimentation.appliedRowIds?.length ?? 0}</span><span>保护/忽略 ${item.sedimentation.ignoredRowIds?.length ?? 0}</span></div>` : ""}<small>${escapeHtml(new Date(item.createdAt).toLocaleString())}</small></article>`)
+            .join("")
         : '<p class="ma11-empty">尚无大总结。</p>'}</section>
     </div>`;
 }
@@ -18159,7 +18279,7 @@ function auditHtml() {
     const canAudit = Boolean(settings.enabled && !busy && settings.hostControl.enabled && settings.auditEnabled && settings.auditPrompt.trim() && isLatest);
     const canRevise = Boolean(settings.enabled && !busy && isLatest && audit && !audit.passed && audit.decision !== "block");
     return `
-    <section class="ma11-toolbar"><div><h2>审核与修正</h2><p>审核未通过时执行修正；修正通过后会在同一次任务中继续生成状态表并排队派生处理。</p></div><div class="ma11-actions"><button data-ma11-action="run-audit" ${canAudit ? "" : "disabled"}>立即审核</button><button data-ma11-action="run-revision" ${canRevise ? "" : "disabled"}>执行修正</button></div></section>
+    <section class="ma11-toolbar"><div><h2>审核与修正</h2><p>审核和修正分开执行；修正通过后再点击“生成表格”。</p></div><div class="ma11-actions"><button data-ma11-action="run-audit" ${canAudit ? "" : "disabled"}>立即审核</button><button data-ma11-action="run-revision" ${canRevise ? "" : "disabled"}>执行修正</button></div></section>
     <section class="ma11-card ma11-form-card">
       <header><b>规则审核与定向修正</b><span>最终通过的正文才进入状态表与世界书</span></header>
       <div class="ma11-guidance-banner"><span aria-hidden="true">✓</span><div><b>只填写可以明确判定的硬规则</b><p>推荐写“必须/禁止/仅当”的可验证条件。文风偏好、模糊审美和互相冲突的要求不适合作为自动阻断规则。</p></div></div>
@@ -18181,6 +18301,30 @@ function auditHtml() {
     </section>
     ${audit ? `<section class="ma11-card"><header><b>最近审核结果</b><span class="ma11-badge ${audit.passed ? "success" : "danger"}">${audit.passed ? "通过" : audit.decision === "block" ? "阻断" : "需修正"}</span></header><p>${escapeHtml(audit.reason)}</p>${violationHtml}${revision ? `<dl class="ma11-meta"><dt>修正状态</dt><dd>${escapeHtml(revision.status)}</dd><dt>修正次数</dt><dd>${revision.attempts.length}</dd><dt>停止原因</dt><dd>${escapeHtml(revision.stoppedReason || "—")}</dd></dl>` : ""}</section>` : ""}`;
 }
+function recallClassificationText(classifications) {
+    const source = classifications && typeof classifications === 'object' ? classifications : {};
+    const labels = [
+        ['constant', '常驻'],
+        ['trigger', '直接触发'],
+        ['recursive', '递归'],
+        ['hybrid', '混合'],
+        ['vector', '纯向量'],
+        ['disabled', '暂停'],
+    ];
+    const values = labels.filter(([key]) => Number(source[key]) > 0)
+        .map(([key, label]) => `${label} ${Number(source[key])}`);
+    return values.length ? values.join(' / ') : '尚未发布';
+}
+function hostRecallFeatureText(feature) {
+    if (!feature?.requested)
+        return '本轮未请求';
+    if (!feature.available)
+        return feature.error || '宿主能力不可用';
+    if (feature.reloadRequired)
+        return '已写入设置，刷新 ST 后生效';
+    return feature.enabled ? (feature.changed ? '已由镜渊开启' : '已启用') : '未启用';
+}
+
 async function syncHtml() {
     const info = latestSnapshotArtifact();
     const state = await getChatState(currentChatKey());
@@ -18200,14 +18344,11 @@ async function syncHtml() {
       <label class="ma11-switch"><input type="checkbox" data-ma11-host-control="recursion" ${settings.hostControl.recursion ? "checked" : ""}/><span>允许镜渊托管条目参与 ST 递归触发</span></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="autoCreateLorebook" ${settings.autoCreateLorebook ? "checked" : ""}/><span>自动创建每聊天独立世界书</span></label>
       <label>发布模式<select data-ma11-setting="lorebookLayout"><option value="semantic" ${settings.lorebookLayout === "semantic" ? "selected" : ""}>按对象整理（推荐）</option><option value="detailed" ${settings.lorebookLayout === "detailed" ? "selected" : ""}>逐条排错</option></select></label>
-      <div class="ma11-guidance-banner ma11-recall-guide"><span aria-hidden="true">↗</span><div><b>镜渊会自动分配三种召回方式</b><p>极少量当前连续性始终携带；有明确关键词的内容按条件出现；其余长期记忆按语义相关性召回。普通使用无需理解底层字段或手工配置发布顺序。</p></div></div>
+      <div class="ma11-guidance-banner ma11-recall-guide"><span aria-hidden="true">↗</span><div><b>确定性动态召回</b><p>插件依据当前场景、活动事件、本轮变化、未决事项与记忆年龄，动态区分常驻、直接触发、递归桥接、关键词与向量混合、纯向量回退；规则可复现，但数值不是固定查表。</p></div></div>
       <label>世界书名称（留空自动生成）<input data-ma11-setting="lorebookName" value="${escapeHtml(settings.lorebookName)}" /></label>
       <label class="ma11-switch"><input type="checkbox" data-ma11-setting="latestContinuityConstant" ${settings.latestContinuityConstant ? "checked" : ""}/><span>将极少量当前焦点、时空、必要规则、不可缺失状态和直接相关全局变化设为常驻</span></label>
-      <div class="ma11-editor-grid ma11-recall-grid">
-        <label>语义召回参考门槛 <small>越高越严格；默认值适合多数剧情</small><input type="number" min="0" max="0.99" step="0.01" data-ma11-recall-setting="similarityThreshold" value="${settings.lorebookRecall.similarityThreshold}" /></label>
-        <label>单次最多召回条目 <small>用于限制无关信息和上下文占用</small><input type="number" min="1" max="100" data-ma11-recall-setting="maxVectorResults" value="${settings.lorebookRecall.maxVectorResults}" /></label>
-        <label>长期记忆发布上限（字符）<small>达到上限时优先保留更直接相关的内容</small><input type="number" min="2000" max="200000" step="1000" data-ma11-recall-setting="totalCapacity" value="${settings.lorebookRecall.totalCapacity}" /></label>
-      </div>
+      <div class="ma11-guidance-banner ma11-recall-guide"><span aria-hidden="true">ST</span><div><b>宿主实际状态</b><p>递归开关会在需要时由镜渊开启；向量条目的相似度阈值和单次条数仍由 SillyTavern 的 Vector Storage 设置统一控制，镜渊不会伪造一套无效参数。</p></div></div>
+      <dl class="ma11-meta"><dt>托管条目分类</dt><dd>${escapeHtml(recallClassificationText(state?.hostRecallStatus?.classifications))}</dd><dt>ST 世界书递归</dt><dd>${escapeHtml(hostRecallFeatureText(state?.hostRecallStatus?.recursion))}</dd><dt>ST 世界书向量</dt><dd>${escapeHtml(hostRecallFeatureText(state?.hostRecallStatus?.vector))}</dd><dt>向量源</dt><dd>${escapeHtml(state?.hostRecallStatus?.vector?.source || '未读取')}</dd><dt>ST 向量门槛 / 条数</dt><dd>${state?.hostRecallStatus?.vector?.scoreThreshold ?? '—'} / ${state?.hostRecallStatus?.vector?.maxEntries ?? '—'}</dd></dl>
       <div class="ma11-actions ma11-sync-actions">
         <button data-ma11-action="sync-now" ${settings.enabled && info && !busy && !historyWorkflow.blocked ? "" : "disabled"}>立即同步</button>
         ${settings.lorebookLayout === "semantic" ? `<button data-ma11-action="maintain-lorebook" ${settings.enabled && info && !busy && !historyWorkflow.blocked ? "" : "disabled"}>按对象清理并重新发布</button>` : ""}
@@ -18326,7 +18467,7 @@ function settingsHtml() {
       <div class="ma11-setting-tile-grid">
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="enabled" ${settings.enabled ? "checked" : ""}/><span><b>启用镜渊</b><small>控制所有自动任务</small></span></label>
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="enabled" ${settings.hostControl.enabled ? "checked" : ""}/><span><b>统一接管 ST 记忆外围</b><small>默认由镜渊控制托管世界书、向量与递归</small></span></label>
-        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="vector" ${settings.hostControl.vector ? "checked" : ""}/><span><b>托管向量召回</b><small>关闭后事件条目退回关键词触发</small></span></label>
+        <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="vector" ${settings.hostControl.vector ? "checked" : ""}/><span><b>托管向量召回</b><small>关闭后混合与纯向量条目按动态规则退回关键词链</small></span></label>
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-host-control="recursion" ${settings.hostControl.recursion ? "checked" : ""}/><span><b>托管递归触发</b><small>关闭后镜渊世界书条目禁止递归激活</small></span></label>
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoState" ${settings.autoState ? "checked" : ""}/><span><b>自动状态表</b><small>每条新 AI 正文后更新当前事实</small></span></label>
         <label class="ma11-setting-tile"><input type="checkbox" data-ma11-setting="autoSmallSummary" ${settings.autoSmallSummary ? "checked" : ""}/><span><b>自动小总结</b><small>整理并写入近期经历</small></span></label>
@@ -18647,27 +18788,14 @@ async function saveRow(form) {
         lifecycle,
         fields,
     };
-    info.artifact.snapshot = rowId && sourceTableKey !== tableKey
-        ? moveManualRow(info.artifact.snapshot, sourceTableKey, tableKey, rowId, rowPatch, getSettings().tableRegistry)
-        : upsertManualRow(info.artifact.snapshot, tableKey, rowPatch, getSettings().tableRegistry);
-    if (rowId) {
-        const canonical = (info.artifact.snapshot[tableKey] ?? []).find((row) => canonicalObjectTitle(row.title) === canonicalObjectTitle(title));
-        if (canonical && canonical.id !== rowId) {
-            const chatState = await getChatState(info.artifact.chatKey);
-            if (chatState.focusObjectId === rowId) {
-                chatState.focusObjectId = canonical.id;
-                await putChatState(chatState);
-            }
-        }
-    }
-    const message = getMessage(info.index);
-    if (message)
-        attachArtifactToMessage(message, info.artifact);
-    await putArtifact(info.artifact);
-    await persistChatFor(info.artifact.chatKey);
-    assertArtifactCommitCurrent(info.artifact);
-    if (getSettings().lorebookSync)
-        await retryStage(info.index, "sync");
+    await saveManualStateRow({
+        index: info.index,
+        artifact: info.artifact,
+        sourceTableKey,
+        targetTableKey: tableKey,
+        rowPatch,
+        registry: getSettings().tableRegistry,
+    });
     closeEditor();
     await renderWorkspace();
 }
@@ -18676,20 +18804,13 @@ async function deleteRowAction(rowId) {
     const tableKey = getSettings().ui.activeTable;
     if (!confirm("确定删除这条状态吗？"))
         return;
-    info.artifact.snapshot = deleteRow(info.artifact.snapshot, tableKey, rowId, getSettings().tableRegistry);
-    const chatState = await getChatState(info.artifact.chatKey);
-    if (chatState.focusObjectId === rowId) {
-        chatState.focusObjectId = undefined;
-        await putChatState(chatState);
-    }
-    const message = getMessage(info.index);
-    if (message)
-        attachArtifactToMessage(message, info.artifact);
-    await putArtifact(info.artifact);
-    await persistChatFor(info.artifact.chatKey);
-    assertArtifactCommitCurrent(info.artifact);
-    if (getSettings().lorebookSync)
-        await retryStage(info.index, "sync");
+    await deleteManualStateRow({
+        index: info.index,
+        artifact: info.artifact,
+        tableKey,
+        rowId,
+        registry: getSettings().tableRegistry,
+    });
     await renderWorkspace();
 }
 async function updateTableRegistryAndSync(registry) {
@@ -18701,7 +18822,7 @@ async function updateTableRegistryAndSync(registry) {
         settings.ui.activeTable = active[0]?.key || "";
     settings.migration.dynamicTablesV23 = true;
     saveSettings();
-    renderAllMessagePanels();
+    refreshMessagePanels();
     const latest = latestSnapshotArtifact();
     if (settings.lorebookSync && latest && !readHistoryWorkflow(await getChatState(latest.artifact.chatKey)).blocked) {
         try {
@@ -18797,11 +18918,11 @@ function updateSetting(target) {
         const quick = document.querySelector('[data-ma11-quick-setting="enabled"]');
         if (quick)
             quick.checked = Boolean(value);
-        renderAllMessagePanels();
+        refreshMessagePanels();
         void renderWorkspace();
     }
     if (key === "showMessagePanel")
-        renderAllMessagePanels();
+        refreshMessagePanels();
     if (key === "lorebookLayout")
         void renderWorkspace();
 }
@@ -19115,7 +19236,7 @@ function bindWorkspace(workspace) {
                     return;
                 const result = await resetCurrentGame();
                 resetWorkspaceContext();
-                renderAllMessagePanels();
+                refreshMessagePanels();
                 toast("success", `当前游戏已重置：清除 ${result.messages} 条消息记录、${result.lorebookEntries} 个世界书条目`);
                 await renderWorkspace();
             }
@@ -19388,6 +19509,8 @@ function disposeWorkspace() {
     queueUnsubscribe = null;
     pipelineUnsubscribe?.();
     pipelineUnsubscribe = null;
+    artifactStageUnsubscribe?.();
+    artifactStageUnsubscribe = null;
     savingRow = false;
     workspacePipelineActionPending = false;
     workspaceRenderScheduled = false;
