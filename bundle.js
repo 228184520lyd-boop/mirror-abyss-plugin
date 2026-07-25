@@ -322,7 +322,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.15';
+const VERSION = '1.4.0-alpha.16';
 const PIPELINE_VERSION = 'ma-runtime-v2-1';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -10517,6 +10517,7 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["getAttachedArtifact"]});
+Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 Object.defineProperty(__scope,"runtimeOutboxJobs",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["runtimeOutboxJobs"]});
 Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
@@ -10542,6 +10543,56 @@ function derivedTaskError(error) {
         || error instanceof TaskBlockedError
         || error instanceof TaskSkippedError
         || (error instanceof Error && ['AbortError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
+}
+
+function derivedStageTerminal(error) {
+    if (error instanceof TaskBlockedError || (error instanceof Error && error.name === 'TaskBlockedError'))
+        return 'blocked';
+    if (error instanceof Error && ['AbortError', 'CommitRejectedError', 'TaskSkippedError'].includes(error.name))
+        return 'cancelled';
+    if (error instanceof TaskSkippedError)
+        return 'cancelled';
+    return 'failed';
+}
+
+function hasLiveDerivedTask(artifact, stage) {
+    const kinds = stage === 'summary' ? ['smallSummary', 'largeSummary'] : stage === 'sync' ? ['sync'] : [];
+    if (!kinds.length)
+        return false;
+    return taskQueue.list().some((task) => Boolean(['queued', 'running'].includes(String(task.state))
+        && (!task.chatKey || task.chatKey === artifact.chatKey)
+        && (!task.messageKey || task.messageKey === artifact.messageKey)
+        && kinds.includes(String(task.kind))));
+}
+
+/**
+ * Outbox 任务可能在真正进入总结/同步函数前就被新正文、历史重建或聊天切换取消。
+ * 这类路径过去只收尾 TaskQueue/Runtime job，消息 artifact 仍停在 queued/running，
+ * 导致工作区与正文状态条长期显示不同。这里只收尾仍处于运行态的派生阶段；
+ * 已由业务函数写成 success/failed/blocked 的状态绝不覆盖。
+ */
+async function settleInterruptedDerivedStage(artifact, stage, error) {
+    const current = artifact?.stages?.[stage]?.status;
+    if (!['queued', 'running'].includes(String(current)))
+        return false;
+    // pending job 已被同一 artifact 的另一个恢复入口领取时，当前入口会拿不到 pending。
+    // 此时真实任务仍在运行，不能把共享阶段误写为 cancelled。
+    if (hasLiveDerivedTask(artifact, stage))
+        return false;
+    const status = derivedStageTerminal(error);
+    markStage(artifact, stage, status, toErrorMessage(error));
+    // 聊天已切换时不能用当前聊天索引保存旧 artifact；切回该聊天后
+    // reconcileInterruptedRuntimeState 会持久化同一终态。
+    if (currentChatKey() !== artifact.chatKey)
+        return true;
+    try {
+        await commitArtifact({ artifact });
+    }
+    catch (commitError) {
+        if (!(commitError instanceof CommitRejectedError))
+            console.warn('[MirrorAbyss] failed to persist interrupted derived stage', commitError);
+    }
+    return true;
 }
 
 function cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision) {
@@ -10600,11 +10651,19 @@ function queueSync(index, artifact, historyRevision, preferredJobId = '') {
     const chatKey = artifact.chatKey;
     if (currentChatKey() !== chatKey || currentHistoryRevision(chatKey) !== historyRevision || !getSettings().enabled)
         return;
-    if (!resolveHostControl(getSettings()).lorebook)
+    if (!resolveHostControl(getSettings()).lorebook) {
+        if (['queued', 'running'].includes(String(artifact.stages?.sync?.status))) {
+            markStage(artifact, 'sync', 'skipped', '世界书托管已关闭');
+            void commitArtifact({ artifact }).catch((error) => {
+                if (!(error instanceof CommitRejectedError))
+                    console.warn('[MirrorAbyss] failed to persist skipped sync stage', error);
+            });
+        }
         return;
+    }
     void latestPendingSync(chatKey, preferredJobId).then((job) => {
         if (!job)
-            return;
+            throw new TaskSkippedError('世界书 Outbox 任务已完成或被新正文替代');
         const key = `runtime-v2:job:${job.id}`;
         return taskQueue.run(key, `后台同步第 ${index + 1} 条正文世界书`, 'sync', async (guard) => {
             await runWithArtifactGuards(artifact, historyRevision, guard, async (commitSnapshot) => {
@@ -10632,9 +10691,11 @@ function queueSync(index, artifact, historyRevision, preferredJobId = '') {
             historyRevisionAtEnqueue: historyRevision,
             automatic: true,
         });
-    }).catch((error) => {
-        if (derivedTaskError(error))
+    }).catch(async (error) => {
+        await settleInterruptedDerivedStage(artifact, 'sync', error);
+        if (derivedTaskError(error)) {
             return;
+        }
         console.warn('[MirrorAbyss] runtime-v2 lorebook sync failed', error);
         toast('warning', `核心状态已保存，但世界书投影失败：${toErrorMessage(error)}`);
     });
@@ -10681,7 +10742,8 @@ function queueRuntimeOutbox(index, artifact, historyRevision, plan = {}) {
             historyRevisionAtEnqueue: historyRevision,
             automatic: true,
         });
-    }).then(() => queueSync(index, artifact, historyRevision, syncJobId), (error) => {
+    }).then(() => queueSync(index, artifact, historyRevision, syncJobId), async (error) => {
+        await settleInterruptedDerivedStage(artifact, 'summary', error);
         if (derivedTaskError(error)) {
             if (cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision))
                 queueSync(index, artifact, historyRevision, syncJobId);
@@ -16801,6 +16863,7 @@ async function diagnosticReport() {
 };
 __defs["ui/message-panel.js"]=function(exports,__require){
 const __scope=Object.create(null);
+Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
 Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChat"]});
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"latestAssistantIndex",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["latestAssistantIndex"]});
@@ -16852,23 +16915,17 @@ function liveTaskMatchesArtifact(artifact, kinds) {
 }
 function effectiveStageBusy(artifact, stage) {
     const status = artifact.stages[stage]?.status;
-    if (!['queued', 'running'].includes(status ?? 'idle'))
+    if (status === 'queued')
+        return true;
+    if (status !== 'running')
         return false;
+    // 派生任务运行中但队列已没有对应工作时，允许玩家重新提交；
+    // outbox-runner 会立即把 artifact 收尾为 cancelled/blocked。
     if (stage === 'summary')
         return liveTaskMatchesArtifact(artifact, ['smallSummary', 'largeSummary']);
     if (stage === 'sync')
         return liveTaskMatchesArtifact(artifact, ['sync']);
     return true;
-}
-function displayStage(artifact, stage) {
-    const value = artifact.stages[stage];
-    if (!['queued', 'running'].includes(value?.status ?? 'idle') || effectiveStageBusy(artifact, stage))
-        return value;
-    return {
-        ...value,
-        status: 'failed',
-        error: value?.error || '任务已结束但界面状态未收尾，可重新提交',
-    };
 }
 function findMessageElement(index) {
     return document.querySelector(`.mes[mesid="${index}"], .mes[data-message-id="${index}"], #chat .mes:nth-of-type(${index + 1})`);
@@ -16911,14 +16968,14 @@ function panelHtml(index, artifact) {
     const enabled = (action) => !retrying && available[action] ? '' : 'disabled';
     const expanded = expandedPanelIndexes.has(index);
     const displayStages = {
-        audit: displayStage(artifact, 'audit'),
-        revision: displayStage(artifact, 'revision'),
-        state: displayStage(artifact, 'state'),
-        summary: displayStage(artifact, 'summary'),
-        sync: displayStage(artifact, 'sync'),
+        audit: artifact.stages.audit,
+        revision: artifact.stages.revision,
+        state: artifact.stages.state,
+        summary: artifact.stages.summary,
+        sync: artifact.stages.sync,
     };
     const stages = [displayStages.audit, displayStages.revision, displayStages.state, displayStages.summary, displayStages.sync];
-    const chainBusy = Object.keys(displayStages).some((stage) => effectiveStageBusy(artifact, stage));
+    const chainBusy = stages.some((stage) => ['queued', 'running'].includes(stage?.status));
     const chainFailed = stages.some((stage) => ['failed', 'blocked'].includes(stage.status));
     const completedStages = stages.filter((stage) => ['success', 'skipped'].includes(stage.status)).length;
     const chainComplete = artifact.stages.state.status === 'success'
@@ -17064,7 +17121,10 @@ function installMessagePanelHandlers() {
     };
     document.addEventListener('click', click);
     const unsubscribe = subscribePipeline((index) => renderMessagePanel(index));
-    const unsubscribeStages = subscribeArtifactStageChanges((artifact) => renderMessagePanel(artifact?.messageIndex));
+    const unsubscribeStages = subscribeArtifactStageChanges((artifact) => {
+        if (artifact?.chatKey === currentChatKey())
+            renderMessagePanel(artifact.messageIndex);
+    });
     return () => {
         installed = false;
         pendingRetryIndexes.clear();
@@ -17348,7 +17408,10 @@ function clampGraphZoom(value) {
 function ensureWorkspaceSubscriptions() {
     queueUnsubscribe ||= taskQueue.subscribe(handleQueueChange);
     pipelineUnsubscribe ||= subscribePipeline(() => handlePipelineChange());
-    artifactStageUnsubscribe ||= subscribeArtifactStageChanges(() => handlePipelineChange());
+    artifactStageUnsubscribe ||= subscribeArtifactStageChanges((artifact) => {
+        if (artifact?.chatKey === currentChatKey())
+            handlePipelineChange();
+    });
 }
 const WORKSPACE_NAVIGATION = [
     { key: "overview", label: "总览", icon: "fa-gauge-high", description: "流程状态、最近任务与快捷操作" },
@@ -17493,16 +17556,10 @@ function workspacePipelineBusy(artifactInfo = currentArtifact()) {
         && (!task.chatKey || task.chatKey === chatKey)
         && (!artifact || !task.messageKey || task.messageKey === artifact.messageKey)));
     const queueBusy = liveTasks.length > 0;
-    const stageBusy = Boolean(artifact && Object.entries(artifact.stages).some(([stageName, stage]) => {
-        if (stage.status !== "queued" && stage.status !== "running")
-            return false;
-        // summary/sync 的 queued/running 只代表运行时；真实队列已无对应任务时不能形成永久 UI 锁。
-        if (stageName === "summary")
-            return liveTasks.some((task) => ["smallSummary", "largeSummary"].includes(String(task.kind)));
-        if (stageName === "sync")
-            return liveTasks.some((task) => String(task.kind) === "sync");
-        return true;
-    }));
+    // artifact 阶段是工作区的规范状态源。Outbox 在任务被替换、阻断或取消时会立即
+    // 收尾对应阶段；这里不再用另一套“队列存在才算忙”的规则覆盖 artifact。
+    const stageBusy = Boolean(artifact && Object.values(artifact.stages)
+        .some((stage) => stage.status === "queued" || stage.status === "running"));
     return workspacePipelineActionPending || stageBusy || queueBusy;
 }
 function workspaceHasFocusedEditor(workspace) {
@@ -17753,9 +17810,14 @@ async function overviewHtml(artifactInfo) {
     const tasks = recentTasksHtml();
     const busy = workspacePipelineBusy(artifactInfo);
     const flow = workflowState(artifact);
-    const syncText = chatState.lastSyncAt
-        ? `世界书 ${new Date(chatState.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-        : "世界书未同步";
+    const latestIndex = latestAssistantIndex();
+    const viewingHistory = Boolean(artifactInfo && artifactInfo.index !== latestIndex);
+    const currentSyncStatus = artifact?.stages?.sync?.status || "idle";
+    const syncText = ["queued", "running"].includes(currentSyncStatus)
+        ? `世界书${statusText(currentSyncStatus)}`
+        : chatState.lastSyncAt
+            ? `上次成功同步 ${new Date(chatState.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+            : "世界书未同步";
     return `
     <section class="ma11-card ma11-recording-card">
       <header><div><b>游玩记录边界</b><span>${playStart === undefined ? "尚未开始" : `从第 ${playStart + 1} 条消息起`}</span></div></header>
@@ -17763,15 +17825,18 @@ async function overviewHtml(artifactInfo) {
       <div class="ma11-actions"><button data-ma11-action="start-play-recording" ${busy ? "disabled" : ""}>${playStart === undefined ? "从下一条消息开始记录" : "重新设置记录起点"}</button></div>
     </section>
     ${historyRecoveryHtml(chatState, busy) || (historyWorkflow.invalidation ? (historyWorkflow.automatic ? `<section class="ma11-card ma11-history-warning"><header><b>最新正文正在自动恢复</b><span>世界书暂缓同步</span></header><p>检测到最新正文发生编辑或换页。镜渊会复用仍有效的审核结果，并从第一个失效阶段继续。</p></section>` : `<section class="ma11-card ma11-history-warning"><header><b>较早历史需要重算</b><span>世界书同步已暂停</span></header><p>${historyWorkflow.startIndex === undefined ? "检测到历史删除，但无法自动判断删除位置。" : `第 ${historyWorkflow.startIndex + 1} 条消息发生了${historyWorkflow.invalidation.reason === "edited" ? "编辑" : historyWorkflow.invalidation.reason === "swiped" ? "换页" : "删除"}。`}</p><div class="ma11-actions"><button data-ma11-action="recalculate-history" ${busy ? "disabled" : ""}>${historyWorkflow.startIndex === undefined ? "选择起点并重算" : "继续重建"}</button></div></section>`) : "")}
+    ${viewingHistory ? `<section class="ma11-card ma11-history-warning"><header><b>正在查看历史正文状态</b><span>第 ${artifactInfo.index + 1} 条</span></header><p>后台任务与自动流程始终作用于最新正文；此处固定显示的是历史记录，不会跟随最新任务变化。</p><div class="ma11-actions"><button data-ma11-action="view-latest">返回最新正文</button></div></section>` : ""}
     <section class="ma11-dashboard-status ${flow.tone}">
       <div class="ma11-dashboard-status-icon" aria-hidden="true"><i class="fa-solid ${flow.tone === "success" ? "fa-check" : flow.tone === "danger" ? "fa-triangle-exclamation" : flow.tone === "working" ? "fa-spinner" : "fa-circle"}"></i></div>
       <div class="ma11-dashboard-status-copy">
-        <small>当前流程</small>
+        <small>${viewingHistory ? "历史正文流程" : "当前流程"}</small>
         <h2>${escapeHtml(flow.label)}</h2>
         <p>${escapeHtml(flow.detail)}</p>
         <div class="ma11-dashboard-meta"><span>${artifact ? `第 ${artifact.messageIndex + 1} 条正文` : "当前聊天"}</span><span>${rows} 个对象</span><span>${escapeHtml(syncText)}</span></div>
       </div>
-      <button data-ma11-action="process-latest" ${enabled && playStart !== undefined && latestAssistantIndex() >= playStart && !busy ? "" : "disabled"}>${artifact ? "重新整理" : "整理最新正文"}</button>
+      ${viewingHistory
+        ? `<button data-ma11-action="view-latest">查看最新状态</button>`
+        : `<button data-ma11-action="process-latest" ${enabled && playStart !== undefined && latestIndex >= playStart && !busy ? "" : "disabled"}>${artifact ? "重新整理" : "整理最新正文"}</button>`}
     </section>
     ${runtimeV2OverviewHtml(chatState)}
     ${setupReadinessHtml(artifact, chatState)}
@@ -18332,7 +18397,12 @@ async function syncHtml() {
     const historyWorkflow = readHistoryWorkflow(state);
     const syncPaused = historyWorkflow.blocked;
     const busy = workspacePipelineBusy(info);
-    const syncDisplayStatus = syncPaused ? "blocked" : (state?.lastSyncStatus || "idle");
+    const artifactSyncStatus = info?.artifact?.stages?.sync?.status || "idle";
+    const syncDisplayStatus = syncPaused
+        ? "blocked"
+        : ["queued", "running", "failed", "blocked", "cancelled"].includes(artifactSyncStatus)
+            ? artifactSyncStatus
+            : (state?.lastSyncStatus || artifactSyncStatus || "idle");
     const syncDisplayText = syncPaused ? "暂停" : statusText(syncDisplayStatus);
     return `
     <section class="ma11-card ma11-form-card">
@@ -18983,6 +19053,11 @@ function bindWorkspace(workspace) {
                 closeWorkspace();
                 return;
             }
+            if (action === "view-latest") {
+                selectedMessageIndex = null;
+                await renderWorkspace();
+                return;
+            }
             if (action === "open-tables")
                 setTab("tables");
             if (action === "open-graph")
@@ -19484,7 +19559,10 @@ function resolveWorkspaceMessageSelection(messageIndex) {
 }
 function openWorkspace(tab, messageIndex) {
     const workspace = root();
-    selectedMessageIndex = resolveWorkspaceMessageSelection(messageIndex);
+    const requestedIndex = resolveWorkspaceMessageSelection(messageIndex);
+    // 从当前最新正文打开时进入“跟随最新”模式。后续产生新正文后，工作区会自动
+    // 切到新的 artifact；只有明确打开较早消息时才固定为历史视图。
+    selectedMessageIndex = requestedIndex === latestAssistantIndex() ? null : requestedIndex;
     if (tab)
         getSettings().ui.activeTab = tab;
     workspace.hidden = false;
