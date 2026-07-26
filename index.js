@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-alpha.9-infopoint.10-ui-status single-file build. */
+/** Mirror Abyss 2.0.0-alpha.9-infopoint.12-ui-safe single-file build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -31,12 +31,22 @@ class MirrorAbyssApplication {
         // Alpha.27 order: visible shell first; projections and optional listeners later.
         this.ui.mount();
         this.messageStatus.mount();
-        this.listen('CHAT_CHANGED', () => void this.ui.refreshEntries());
-        this.listen('MESSAGE_RECEIVED', (value) => void this.onMessage(Number(value)));
-        this.listen('MESSAGE_EDITED', (value) => void this.onMessage(Number(value)));
-        this.listen('MESSAGE_UPDATED', (value) => void this.onMessage(Number(value)));
+        this.listen('CHAT_CHANGED', () => this.ui.onChatChanged());
+        this.listen('MESSAGE_RECEIVED', (value) => {
+            this.messageStatus.refresh();
+            void this.onMessage(Number(value));
+        });
+        this.listen('MESSAGE_EDITED', (value) => {
+            this.messageStatus.refresh();
+            void this.onMessage(Number(value));
+        });
+        this.listen('MESSAGE_UPDATED', (value) => {
+            this.messageStatus.refresh();
+            void this.onMessage(Number(value));
+        });
         this.started = true;
-        void this.ui.refreshEntries();
+        // Enabling the extension must never read or redraw the complete worldbook.
+        // The projection is loaded only when the player opens or refreshes it.
     }
     stop() {
         if (!this.started)
@@ -100,7 +110,7 @@ exports.MirrorAbyssApplication = MirrorAbyssApplication;
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.STYLE_ID = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-alpha.9-infopoint.10-ui-status';
+exports.VERSION = '2.0.0-alpha.9-infopoint.12-ui-safe';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -722,12 +732,17 @@ const util_1 = require("./util");
 /**
  * Read-only status projection placed directly below the target assistant text.
  * It mirrors TaskRunner state and owns no narrative data.
+ *
+ * Important: this projection never observes the whole document. A global
+ * MutationObserver previously watched its own DOM writes and could create an
+ * endless render loop in some SillyTavern forks. Rendering now happens only
+ * when TaskRunner publishes a real phase change or the host explicitly asks
+ * for one refresh after a message redraw.
  */
 class MessageStatusIndicator {
     constructor(tasks) {
         this.tasks = tasks;
         this.unsubscribe = null;
-        this.observer = null;
         this.scheduled = false;
         this.status = tasks.currentStatus();
     }
@@ -736,17 +751,14 @@ class MessageStatusIndicator {
             this.status = status;
             this.scheduleRender();
         }));
-        if (!this.observer && typeof MutationObserver !== 'undefined') {
-            this.observer = new MutationObserver(() => this.scheduleRender());
-            this.observer.observe(document.body ?? document.documentElement, { childList: true, subtree: true });
-        }
+    }
+    /** Reattach once after a known SillyTavern message redraw. */
+    refresh() {
         this.scheduleRender();
     }
     unmount() {
         this.unsubscribe?.();
         this.unsubscribe = null;
-        this.observer?.disconnect();
-        this.observer = null;
         document.querySelectorAll('.maip-message-status').forEach((node) => node.remove());
     }
     scheduleRender() {
@@ -1985,6 +1997,7 @@ class WorkspaceUi {
         this.migrationBusy = false;
         this.migrationMessage = '';
         this.profileMessage = '';
+        this.graphScale = 1;
         this.settings = settingsStore.load(host.context());
         this.status = tasks.currentStatus();
     }
@@ -1992,11 +2005,22 @@ class WorkspaceUi {
         this.ensureWorkspaceRoot();
         this.ensureEntrypoints();
         this.unsubscribe ?? (this.unsubscribe = this.tasks.subscribe((status) => {
+            const previous = this.status;
             this.status = status;
-            this.render();
+            this.updateEntrypointState();
+            // The workspace is a projection only. A model phase change updates two
+            // small status nodes; it must not reconstruct every worldbook row.
+            if (!this.isOpen())
+                return;
+            const settled = status.phase === 'complete' || status.phase === 'error';
+            const reviewChanged = previous.pendingReview !== status.pendingReview;
+            const matchingVisible = this.tab === 'matching' && status.phase === 'matching';
+            if (settled || reviewChanged || matchingVisible)
+                this.render();
+            else
+                this.updateStatusProjection();
         }));
-        this.render();
-        void this.refreshEntries();
+        this.updateEntrypointState();
     }
     unmount() {
         this.refreshGeneration += 1;
@@ -2058,7 +2082,10 @@ class WorkspaceUi {
             console.warn('[MirrorAbyss] dialog.showModal failed; using open attribute fallback', error);
             this.root.setAttribute('open', '');
         }
-        void this.refreshEntries();
+        globalThis.setTimeout(() => {
+            if (this.isOpen())
+                void this.refreshEntries();
+        }, 0);
     }
     close() {
         if (this.root?.open && typeof this.root.close === 'function')
@@ -2067,7 +2094,23 @@ class WorkspaceUi {
             this.root?.removeAttribute('open');
         document.body?.classList.remove('maip-workspace-open');
     }
+    isOpen() {
+        return Boolean(this.root?.open);
+    }
+    onChatChanged() {
+        this.refreshGeneration += 1;
+        this.entries = [];
+        this.projectionLoading = false;
+        this.projectionError = '';
+        this.migrationPreview = null;
+        if (this.isOpen())
+            void this.refreshEntries();
+    }
     async refreshEntries() {
+        // Coalesce repeated refresh requests. Startup, chat events and UI status
+        // updates must never fan out into simultaneous full-worldbook reads.
+        if (this.projectionLoading)
+            return;
         const generation = ++this.refreshGeneration;
         this.projectionLoading = true;
         this.projectionError = '';
@@ -2094,6 +2137,29 @@ class WorkspaceUi {
                 this.render();
             }
         }
+    }
+    currentStatusText() {
+        return this.migrationMessage || this.profileMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪';
+    }
+    updateStatusProjection() {
+        if (!this.root)
+            return;
+        const top = this.root.querySelector('.maip-topbar-state');
+        if (top) {
+            top.classList.toggle('error', this.status.phase === 'error');
+            top.innerHTML = `<span></span>${(0, util_1.escapeHtml)(phaseLabel(this.status.phase))}`;
+        }
+        const footer = this.root.querySelector('.maip-status');
+        if (footer) {
+            footer.classList.toggle('error', this.status.phase === 'error' || Boolean(this.projectionError));
+            footer.innerHTML = `<span class="maip-status-dot"></span><b>${(0, util_1.escapeHtml)(phaseLabel(this.status.phase))}</b><span>${(0, util_1.escapeHtml)(this.currentStatusText())}</span>`;
+        }
+    }
+    updateEntrypointState() {
+        if (!this.opener)
+            return;
+        this.opener.dataset.phase = this.status.pendingReview ? 'review' : this.status.phase;
+        this.opener.title = this.status.error || this.status.detail || '打开 Mirror Abyss｜镜渊';
     }
     ensureWorkspaceRoot() {
         if (!this.root) {
@@ -2126,7 +2192,7 @@ class WorkspaceUi {
         if (!this.root)
             return;
         const pageLabel = TABS.find(([key]) => key === this.tab)?.[1] ?? constants_1.DISPLAY_NAME;
-        const statusText = this.migrationMessage || this.profileMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪';
+        const statusText = this.currentStatusText();
         this.root.innerHTML = `
       <section class="maip-workspace" aria-label="${constants_1.DISPLAY_NAME}">
         <header class="maip-workspace-topbar">
@@ -2163,7 +2229,8 @@ class WorkspaceUi {
           </section>
         </div>
       </section>`;
-        queueMicrotask(() => this.afterRender());
+        if (this.isOpen())
+            queueMicrotask(() => this.afterRender());
     }
     afterRender() {
         if (this.tab !== 'settings' || this.settings.modelSource !== 'profile' || !this.root)
@@ -2212,7 +2279,6 @@ class WorkspaceUi {
           <div class="maip-muted">世界书是唯一剧情数据源；本面板只显示并修改它的映射。</div>
           <div class="maip-actions">
             <button class="maip-btn primary" data-action="process">处理最新正文</button>
-            <button class="maip-btn" data-action="extract">AI 建议提取</button>
             <button class="maip-btn" data-action="small">小总结</button>
             <button class="maip-btn" data-action="large">大总结</button>
           </div>
@@ -2221,7 +2287,7 @@ class WorkspaceUi {
         <article class="maip-card maip-metric"><span>基础设定</span><strong>${foundations}</strong><small>含该关键词的条目自动常驻</small></article>
         <article class="maip-card maip-metric"><span>最近匹配</span><strong>${changed}</strong><small>${skipped} 条重复信息已跳过</small></article>
       </section>
-      ${this.status.pendingReview ? `<section class="maip-card maip-review-banner"><div><b>AI 信息点建议等待确认</b><p>${changed} 项会修改世界书。确认前不会写入。</p></div><div class="maip-actions compact"><button class="maip-btn primary" data-action="apply-pending">确认写入</button><button class="maip-btn" data-action="discard-pending">忽略</button></div></section>` : ''}
+      ${this.status.pendingReview ? `<section class="maip-card maip-review-banner"><div><b>信息点修改等待确认</b><p>${changed} 项会修改世界书。确认前不会写入。</p></div><div class="maip-actions compact"><button class="maip-btn primary" data-action="apply-pending">确认写入</button><button class="maip-btn" data-action="discard-pending">忽略</button></div></section>` : ''}
       <section class="maip-card">
         <div class="maip-section-head"><div><h3>条目总览</h3><p>总览只显示条目名称、关键词与一句当前摘要，不重复完整子条目。</p></div></div>
         <div class="maip-overview-list">${ordered.slice(0, 48).map((entry) => this.renderOverviewEntry(entry)).join('') || '<div class="maip-empty">当前世界书暂无条目</div>'}</div>
@@ -2283,13 +2349,13 @@ class WorkspaceUi {
         const sample = `人物｜莉娅\n【关键词】\n- 人物\n【当前状态】\n- 莉娅位于临海石洞，左臂受伤。\n【近期经历】\n无`;
         return `<section class="maip-two-col wide-left">
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>AI 建议信息点</h3><p>读取玩家输入、最终正文和少量相关世界书条目后生成。</p></div><button class="maip-btn small" data-action="extract">重新生成建议</button></div>
+        <div class="maip-section-head"><div><h3>最近处理结果</h3><p>只显示“处理最新正文”产生的匹配记录；本页不单独调用模型。</p></div></div>
         <pre class="maip-raw maip-readonly">${(0, util_1.escapeHtml)(raw || sample)}</pre>
         ${raw ? '' : '<p class="maip-muted">当前还没有运行记录，上方显示格式示例。</p>'}
         ${this.status.pendingReview ? '<div class="maip-actions"><button class="maip-btn primary" data-action="apply-pending">确认写入世界书</button><button class="maip-btn" data-action="discard-pending">忽略建议</button></div>' : ''}
       </article>
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>匹配与操作</h3><p>${plan ? `${plan.blocks.length} 个标题块 · ${plan.operations.length} 个操作` : '运行 AI 建议提取后自动显示'}</p></div></div>
+        <div class="maip-section-head"><div><h3>匹配与操作</h3><p>${plan ? `${plan.blocks.length} 个标题块 · ${plan.operations.length} 个操作` : '处理最新正文后自动显示'}</p></div></div>
         ${this.renderOperationList(plan?.operations ?? [], true)}
       </article>
     </section>`;
@@ -2307,11 +2373,14 @@ class WorkspaceUi {
         const layout = graphLayout(this.entries.slice(0, 80));
         if (!layout.nodes.length)
             return '<div class="maip-card maip-empty">暂无可投影条目</div>';
-        return `<section class="maip-card maip-graph-card"><div class="maip-section-head"><div><h3>世界书关系网络</h3><p>焦点或连接最多的条目位于中心；其余节点按关键词分组。边来自【关联条目】。</p></div></div>
+        const scale = Math.max(0.55, Math.min(2.4, this.graphScale));
+        return `<section class="maip-card maip-graph-card"><div class="maip-section-head"><div><h3>世界书关系网络</h3><p>焦点或连接最多的条目位于中心；其余节点按关键词分组。边来自【关联条目】。</p></div><div class="maip-graph-controls" aria-label="图谱缩放"><button class="maip-icon" data-action="graph-zoom-out" title="缩小" aria-label="缩小">−</button><span>${Math.round(scale * 100)}%</span><button class="maip-icon" data-action="graph-zoom-in" title="放大" aria-label="放大">＋</button><button class="maip-btn small" data-action="graph-reset">适配视图</button></div></div>
       <div class="maip-graph-stage"><svg class="maip-graph" viewBox="-520 -340 1040 680" preserveAspectRatio="xMidYMid meet" role="img">
         <defs><filter id="maip-node-shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity=".14"/></filter></defs>
-        ${layout.edges.map((edge) => `<path d="M ${edge.from.x} ${edge.from.y} Q ${edge.mid.x} ${edge.mid.y} ${edge.to.x} ${edge.to.y}"/>`).join('')}
-        ${layout.nodes.map((node) => `<g class="maip-graph-node ${node.center ? 'center' : ''} ${node.entry.focus ? 'focus' : ''}" transform="translate(${node.x},${node.y})"><rect x="${node.center ? -78 : -64}" y="-20" width="${node.center ? 156 : 128}" height="40" rx="13"/><text text-anchor="middle" dominant-baseline="middle">${(0, util_1.escapeHtml)((0, util_1.truncate)(node.entry.name, node.center ? 18 : 14))}</text><title>${(0, util_1.escapeHtml)(node.entry.title)}｜${(0, util_1.escapeHtml)(node.entry.keywords.join('、'))}</title></g>`).join('')}
+        <g class="maip-graph-viewport" transform="scale(${scale})">
+          ${layout.edges.map((edge) => `<path d="M ${edge.from.x} ${edge.from.y} Q ${edge.mid.x} ${edge.mid.y} ${edge.to.x} ${edge.to.y}"/>`).join('')}
+          ${layout.nodes.map((node) => `<g class="maip-graph-node ${node.center ? 'center' : ''} ${node.entry.focus ? 'focus' : ''}" transform="translate(${node.x},${node.y})"><rect x="${node.center ? -78 : -64}" y="-20" width="${node.center ? 156 : 128}" height="40" rx="13"/><text text-anchor="middle" dominant-baseline="middle">${(0, util_1.escapeHtml)((0, util_1.truncate)(node.entry.name, node.center ? 18 : 14))}</text><title>${(0, util_1.escapeHtml)(node.entry.title)}｜${(0, util_1.escapeHtml)(node.entry.keywords.join('、'))}</title></g>`).join('')}
+        </g>
       </svg></div>
       <div class="maip-graph-legend">${layout.groups.map((group) => `<span><i></i>${(0, util_1.escapeHtml)(group)}</span>`).join('')}</div>
     </section>`;
@@ -2327,13 +2396,13 @@ class WorkspaceUi {
         return `<section class="maip-settings-grid simple-settings">
       <article class="maip-card"><h3>处理 AI</h3><p class="maip-muted">不填写 API Key，直接使用 SillyTavern 当前连接或 Connection Profile。</p>
         <label>调用来源<select data-setting="modelSource"><option value="current" ${this.settings.modelSource === 'current' ? 'selected' : ''}>当前聊天连接</option><option value="profile" ${this.settings.modelSource === 'profile' ? 'selected' : ''}>独立 Connection Profile</option></select></label>
-        ${this.settings.modelSource === 'profile' ? `<label>Connection Profile<select id="maip-profile-select" data-setting="modelProfileId"><option value="${(0, util_1.escapeHtml)(this.settings.modelProfileId)}">${(0, util_1.escapeHtml)(this.host.profileName(this.settings.modelProfileId))}</option></select></label><button class="maip-btn small" data-action="test-profile" ${profileAvailable ? '' : 'disabled'}>测试处理 AI</button>` : '<div class="maip-callout"><b>当前连接</b><span>审核、提取与总结沿用当前聊天已配置的模型连接。</span></div>'}
+        ${this.settings.modelSource === 'profile' ? `<label>Connection Profile<select id="maip-profile-select" data-setting="modelProfileId"><option value="${(0, util_1.escapeHtml)(this.settings.modelProfileId)}">${(0, util_1.escapeHtml)(this.host.profileName(this.settings.modelProfileId))}</option></select></label><button class="maip-btn maip-profile-test" data-action="test-profile" ${profileAvailable ? '' : 'disabled'}>测试处理 AI</button>` : '<div class="maip-callout"><b>当前连接</b><span>审核、提取与总结沿用当前聊天已配置的模型连接。</span></div>'}
         <p class="maip-muted">${(0, util_1.escapeHtml)(this.profileMessage || (profileAvailable ? 'Connection Manager 可用。' : '当前未检测到 Connection Manager。'))}</p>
       </article>
       <article class="maip-card"><h3>世界书</h3><p class="maip-muted">通常留空，插件读取当前聊天绑定的世界书。</p>
         <label>指定世界书（可选）<input data-setting="targetLorebook" value="${(0, util_1.escapeHtml)(this.settings.targetLorebook)}" placeholder="留空＝当前聊天绑定"></label>
-        <div class="maip-actions"><button class="maip-btn" data-action="migration-apply" ${this.migrationBusy ? 'disabled' : ''}>转换旧格式</button><button class="maip-btn danger-outline" data-action="migration-undo" ${!this.worldbook.canUndoMigration() || this.migrationBusy ? 'disabled' : ''}>撤销转换</button></div>
-        <p class="maip-muted">${(0, util_1.escapeHtml)(this.migrationMessage || '保留原 UID；无法可靠拆分的内容进入【旧格式保留】。')}</p>
+        <div class="maip-actions"><button class="maip-btn" data-action="migration-apply" ${this.migrationBusy ? 'disabled' : ''}>整理世界书格式</button><button class="maip-btn danger-outline" data-action="migration-undo" ${!this.worldbook.canUndoMigration() || this.migrationBusy ? 'disabled' : ''}>撤销转换</button></div>
+        <p class="maip-muted">${(0, util_1.escapeHtml)(this.migrationMessage || '点击一次整理当前世界书格式；保留原 UID，无法可靠拆分的内容进入【旧格式保留】。')}</p>
       </article>
       <article class="maip-card"><h3>总结频率</h3><label>小总结间隔（回合）<input type="number" min="2" max="100" data-setting="smallSummaryTurns" value="${this.settings.smallSummaryTurns}"></label><label>大总结间隔（累计小总结）<input type="number" min="2" max="30" data-setting="largeSummaryCount" value="${this.settings.largeSummaryCount}"></label></article>
       <article class="maip-card maip-auto-card"><h3>插件自动处理</h3><p>Token、超时、相似度、向量、递归、深度、顺序和调度规则均采用默认值，不要求玩家填写。</p></article>
@@ -2365,6 +2434,21 @@ class WorkspaceUi {
         }
         if (action === 'refresh') {
             await this.refreshEntries();
+            return;
+        }
+        if (action === 'graph-zoom-in') {
+            this.graphScale = Math.min(2.4, this.graphScale + 0.2);
+            this.render();
+            return;
+        }
+        if (action === 'graph-zoom-out') {
+            this.graphScale = Math.max(0.55, this.graphScale - 0.2);
+            this.render();
+            return;
+        }
+        if (action === 'graph-reset') {
+            this.graphScale = 1;
+            this.render();
             return;
         }
         if (action === 'process')
