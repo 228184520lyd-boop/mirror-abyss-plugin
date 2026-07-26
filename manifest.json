@@ -1,17 +1,22 @@
 {
-  "display_name": "Mirror Abyss｜镜渊（信息点匹配候选）",
+  "display_name": "Mirror Abyss / 镜渊",
   "loading_order": 10,
-  "js": "mirror-abyss-alpha9.js",
+  "dependencies": [],
+  "js": "index.js",
   "css": "style.css",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-alpha.9-infopoint.5-keyword-map",
+  "version": "2.0.0-alpha.9-infopoint.6-alpha27-shell",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
-  "minimum_client_version": "1.18.0",
+  "minimum_client_version": "1.16.0",
   "hooks": {
-    "activate": "onActivate",
+    "install": "onInstall",
+    "update": "onUpdate",
+    "delete": "onDelete",
     "enable": "onEnable",
     "disable": "onDisable",
-    "delete": "onDelete"
-  }
+    "activate": "onActivate",
+    "clean": "onClean"
+  },
+  "description": "以世界书为唯一事实源的信息点提取、关键词匹配与映射扩展"
 }

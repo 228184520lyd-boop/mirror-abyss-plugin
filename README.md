@@ -1,4 +1,4 @@
-# Mirror Abyss｜镜渊 2.0.0-alpha.9-infopoint.5-keyword-map
+# Mirror Abyss｜镜渊 2.0.0-alpha.9-infopoint.6-alpha27-shell
 
 本候选将插件内核收敛为：
 
@@ -68,3 +68,8 @@ UI 沿用 alpha.27 的成熟发布方式：JavaScript 负责挂载，`manifest.j
 `npm run verify` 覆盖严格 TypeScript、纯信息点匹配、关键词写入、基础设定常驻、旧格式预览/转换/撤销、单文件 JavaScript 构建、独立 CSS 和安装结构。
 
 真实模型返回、用户站点的 World Info API 变体以及移动端显示仍需要真实 SillyTavern 实机结果。
+
+
+## UI 外壳修复
+
+本候选恢复 alpha.27 的 APP_READY 生命周期和 index.js + style.css 安装结构。工作区使用浏览器顶层 dialog，打开不等待世界书读取，也不依赖普通 DOM 的 z-index。
