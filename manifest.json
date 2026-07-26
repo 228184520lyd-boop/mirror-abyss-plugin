@@ -1,22 +1,17 @@
 {
-  "display_name": "Mirror Abyss / 镜渊",
+  "display_name": "Mirror Abyss｜镜渊（可安装实机候选）",
   "loading_order": 10,
-  "dependencies": [],
-  "js": "index.js",
+  "js": "dist/index.js",
   "css": "style.css",
-  "author": "Mirror Abyss contributors",
-  "version": "1.4.0-alpha.28",
+  "author": "228184520lyd-boop",
+  "version": "2.0.0-alpha.4-realtest.1",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
-  "minimum_client_version": "1.16.0",
+  "minimum_client_version": "1.18.0",
   "hooks": {
-    "install": "onInstall",
-    "update": "onUpdate",
-    "delete": "onDelete",
+    "activate": "onActivate",
     "enable": "onEnable",
     "disable": "onDisable",
-    "activate": "onActivate",
-    "clean": "onClean"
-  },
-  "description": "按官方接口逐项收口模型、聊天、世界书、事件与 UI 宿主边界的 SillyTavern 长线叙事记忆扩展"
+    "delete": "onDelete"
+  }
 }

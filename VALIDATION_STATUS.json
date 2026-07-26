@@ -1,0 +1,75 @@
+{
+  "version": "2.0.0-alpha.4-realtest.1",
+  "recordedAt": "2026-07-26T12:30:00Z",
+  "environment": {
+    "node": "22.16.0",
+    "npm": "10.9.2",
+    "typescript": "5.8.3 global fallback",
+    "sillyTavern": "not available in container"
+  },
+  "checks": [
+    {
+      "id": "source-smoke",
+      "status": "passed",
+      "detail": "34 production TS/TSX files, relative imports, manifest, forbidden concepts and FACT/EVT references valid"
+    },
+    {
+      "id": "reducer-smoke",
+      "status": "passed",
+      "detail": "same-message old fact replacement, other-message preservation, manual lock preservation and spacetime singleton passed"
+    },
+    {
+      "id": "browser-esm-fallback-build",
+      "status": "passed",
+      "detail": "local dist/index.js plus 33 runtime modules for esm.sh and 33 runtime modules for jsDelivr generated"
+    },
+    {
+      "id": "host-contract-smoke",
+      "status": "passed",
+      "detail": "mock host events and cleanup, stable chat identity, message key persistence, text/swipe replacement and stale-session rejection passed"
+    },
+    {
+      "id": "install-smoke",
+      "status": "passed",
+      "detail": "67 emitted JavaScript files parsed; dual-provider loader, lifecycle exports, version, directory layout and import mapping valid"
+    },
+    {
+      "id": "esmsh-connectivity-current-container",
+      "status": "failed",
+      "detail": "current container could not resolve esm.sh; this is not a target-browser result"
+    },
+    {
+      "id": "jsdelivr-connectivity-current-container",
+      "status": "failed",
+      "detail": "current container could not resolve cdn.jsdelivr.net; this is not a target-browser result"
+    },
+    {
+      "id": "npm-install",
+      "status": "failed",
+      "detail": "internal npm registry returned HTTP 503 repeatedly"
+    },
+    {
+      "id": "github-remote-build-write",
+      "status": "failed",
+      "detail": "GitHub App returned HTTP 403 for branch creation and temporary content write; repository unchanged"
+    },
+    {
+      "id": "formal-typecheck",
+      "status": "not-run",
+      "detail": "dependency type packages unavailable; transpile/build result is not recorded as formal typecheck"
+    },
+    {
+      "id": "webpack-self-contained-build",
+      "status": "not-run",
+      "detail": "npm dependencies unavailable"
+    },
+    {
+      "id": "sillytavern-real-machine",
+      "status": "not-run",
+      "detail": "no SillyTavern runtime available in this environment"
+    }
+  ],
+  "conclusion": "dual-provider installable candidate and local host-contract regression generated; not self-contained and not SillyTavern-real-machine-passed",
+  "runtimeDependencyMode": "pinned-browser-esm-fallback",
+  "sourceSchemaVersion": 3
+}

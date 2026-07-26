@@ -1,116 +1,56 @@
+/* Generated from src/shared/fixed-text.ts for jsDelivr +esm — do not edit dist directly. */
 /**
- * 模块职责：解析模型返回的固定标签文本协议。
- * 维护边界：只处理文本边界、重复字段和续行；业务字段、对象身份与持久化由各领域模块负责。
+ * 解析镜渊固定文本协议。允许“字段=值”和“字段：值”，不解析模型思考文本。
+ * FACT-MODEL-002：边界适度宽容，但不会猜造缺失业务字段。
  */
-import { safeText } from '../core/utils.js';
-function normalizedMarker(value) {
-    return value.trim().toUpperCase();
-}
-function appendField(block, key, value) {
-    const current = block.fields.get(key) ?? [];
-    block.fields.set(key, [...current, value]);
-}
-function appendContinuation(block, key, value) {
-    const current = block.fields.get(key) ?? [];
-    if (!current.length)
-        return;
-    const next = [...current];
-    next[next.length - 1] = `${next[next.length - 1]}\n${value}`.trim();
-    block.fields.set(key, next);
-}
-/**
- * 支持：英文/中文等号、英文/中文冒号、重复字段、多行续写、原文块。
- * 固定文本是提交协议而不是宽松标记提取：普通块必须用与起始标签配对的结束标签闭合。
- */
-export function parseFixedTextBlocks(raw, markers) {
-    const source = safeText(raw, 240000).replace(/^\uFEFF/, '');
-    const byStart = new Map(markers.map((item) => [normalizedMarker(item.start), item]));
-    const byEnd = new Map(markers.map((item) => [normalizedMarker(item.end), item]));
+export function parseBlocks(raw, markers) {
+    const text = raw.replace(/\r/g, '');
     const blocks = [];
-    let current = null;
-    let definition = null;
-    let lastKey = '';
-    let rawLines = [];
-    const flush = () => {
-        if (!current)
-            return;
-        if (definition?.rawBody)
-            current.raw = rawLines.join('\n').trim();
-        blocks.push(current);
-        current = null;
-        definition = null;
-        lastKey = '';
-        rawLines = [];
-    };
-    source.split(/\r?\n/).forEach((sourceLine, index) => {
-        const trimmed = sourceLine.trim();
-        const markerKey = normalizedMarker(trimmed);
-        // 原文块内只有自身结束标签具有结构意义；正文恰好包含其他协议标签时仍按原文保留。
-        if (current && definition?.rawBody) {
-            if (markerKey === normalizedMarker(definition.end)) {
-                flush();
+    for (const marker of markers) {
+        let cursor = 0;
+        while (cursor < text.length) {
+            const start = text.indexOf(marker.start, cursor);
+            if (start < 0)
+                break;
+            const bodyStart = start + marker.start.length;
+            const end = text.indexOf(marker.end, bodyStart);
+            if (end < 0)
+                break;
+            const body = text.slice(bodyStart, end).trim();
+            const fields = new Map();
+            for (const line of body.split('\n')) {
+                const match = line.match(/^\s*([^=：:]+?)\s*(?:=|：|:)\s*(.*)\s*$/u);
+                if (!match)
+                    continue;
+                const key = normalizeKey(match[1] ?? '');
+                const value = (match[2] ?? '').trim();
+                if (!key)
+                    continue;
+                const values = fields.get(key) ?? [];
+                values.push(value);
+                fields.set(key, values);
             }
-            else {
-                rawLines.push(sourceLine);
-            }
-            return;
+            blocks.push({ kind: marker.kind, body, fields });
+            cursor = end + marker.end.length;
         }
-        const start = byStart.get(markerKey);
-        if (start) {
-            if (current && definition) {
-                throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
-            }
-            definition = start;
-            current = { kind: start.kind, fields: new Map(), raw: '', line: index + 1 };
-            return;
-        }
-        const end = byEnd.get(markerKey);
-        if (end) {
-            if (!current || !definition)
-                throw new Error(`第 ${index + 1} 行出现未配对结束标签 ${end.end}`);
-            if (markerKey !== normalizedMarker(definition.end)) {
-                throw new Error(`第 ${current.line} 行开始的 ${definition.start} 结束标签不匹配，期望 ${definition.end}`);
-            }
-            flush();
-            return;
-        }
-        if (!current || !definition)
-            return;
-        if (definition.rawBody) {
-            rawLines.push(sourceLine);
-            return;
-        }
-        if (!trimmed || /^```/.test(trimmed))
-            return;
-        const match = sourceLine.match(/^\s*([^=＝:：]+?)\s*[=＝:：]\s*(.*)$/);
-        if (match) {
-            lastKey = match[1].trim();
-            if (lastKey)
-                appendField(current, lastKey, match[2].trim());
-            return;
-        }
-        if (lastKey)
-            appendContinuation(current, lastKey, sourceLine.trim());
-    });
-    if (current && definition) {
-        throw new Error(`第 ${current.line} 行开始的 ${definition.start} 未闭合，缺少 ${definition.end}`);
     }
-    return blocks;
+    return blocks.sort((left, right) => raw.indexOf(left.body) - raw.indexOf(right.body));
 }
-export function fixedTextValues(block, ...keys) {
-    const output = [];
-    const seen = new Set();
+export function field(block, ...keys) {
     for (const key of keys) {
-        for (const raw of block.fields.get(key) ?? []) {
-            const value = safeText(raw, 12000).trim();
-            if (!value || seen.has(value))
-                continue;
-            seen.add(value);
-            output.push(value);
-        }
+        const values = block.fields.get(normalizeKey(key));
+        if (values?.length)
+            return values[0] ?? '';
+    }
+    return '';
+}
+export function fields(block, ...keys) {
+    const output = [];
+    for (const key of keys) {
+        output.push(...(block.fields.get(normalizeKey(key)) ?? []));
     }
     return output;
 }
-export function fixedTextValue(block, ...keys) {
-    return fixedTextValues(block, ...keys).at(-1) ?? '';
+export function normalizeKey(value) {
+    return value.normalize('NFKC').trim().toLocaleLowerCase().replace(/[\s_-]+/g, '');
 }

@@ -1,13 +1,16 @@
-# Third-Party Notices
+# Third-party notices
 
-Mirror Abyss 1.1.0-alpha.10.5.4 does not bundle third-party runtime libraries.
+本项目的扩展入口与 Webpack/React 组织方式基于 SillyTavern 官方
+`Extension-ReactTemplate`，该模板使用 GNU Affero General Public License v3.0。
 
-The production bundle is generated from this repository's TypeScript source using esbuild. Development-only dependencies include TypeScript, tsx, esbuild, happy-dom, ESLint, `@eslint/js`, `globals`, and `typescript-eslint`. They are not required by SillyTavern at runtime; their license metadata remains in the npm packages and lockfile.
+运行依赖：
 
-SillyTavern provides runtime extension lifecycle hooks, account-scoped storage, chat metadata, World Info server endpoints, generation services, Connection Manager services, backend proxy endpoints, event services, and the same-origin browser environment. Mirror Abyss accesses these through public host interfaces.
+- React / ReactDOM — MIT
+- Redux Toolkit / React Redux — MIT
+- Zod — MIT
+- p-queue — MIT
+- Webpack / Babel / TypeScript 构建工具 — 各自开源许可证
 
-The cross-tab coordinator independently implements the public Web Locks API contract, with an advisory localStorage fallback and BroadcastChannel notifications. No browser-standard implementation or nonessential specification prose is bundled.
+本项目整体以 `AGPL-3.0-only` 发布。完整许可证见 `LICENSE`。
 
-Memory Books and Qvink Message Summarize were studied as AGPL-3.0 architecture/behavior references. Their source code, prompts, CSS, assets, page structure, and product naming are not redistributed. Amily2 remains a restricted behavior-only reference and is excluded from the code supply chain.
-
-The user-provided Mirror Abyss alpha.6 and alpha.7 deployment source maps were inspected as this project's own migration and compatibility baseline. References and decisions are recorded in `UPSTREAM_SOURCES.md`, `research/inventory.md`, and `research/license-matrix.md`.
+`2.0.0-alpha.4-realtest.1` 的安装候选生成 `esm.sh` 与 `jsDelivr +esm` 两套浏览器 ESM 运行映射，并按固定顺序回退。`dist/DEPENDENCIES.json` 记录直接依赖版本与实际地址。该分发方式不改变各依赖原许可证，也不表示项目复制或改写了这些库的实现。
