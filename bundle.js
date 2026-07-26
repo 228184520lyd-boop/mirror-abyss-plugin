@@ -326,7 +326,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.21';
+const VERSION = '1.4.0-alpha.22';
 const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -9394,17 +9394,36 @@ function messagesFromOptions(options) {
     }
     return messages;
 }
+function isUnsupportedTemperatureError(error) {
+    const message = toErrorMessage(error);
+    return /(?:temperature|温度)/i.test(message)
+        && /(?:not\s+(?:supported|recommended|allowed)|unsupported|does\s+not\s+(?:support|accept)|不支持|不推荐|不可用|不允许|无效)/i.test(message);
+}
+function samplingCompatibilityError(error, label, currentConnection = false) {
+    if (!isUnsupportedTemperatureError(error))
+        return null;
+    const guidance = currentConnection
+        ? '当前聊天连接会继承 SillyTavern 的采样设置；请在 ST 预设中停用温度，或为镜渊选择 Connection Profile。'
+        : '镜渊已禁止 Connection Profile 继承生成预设；若仍出现该错误，说明当前站点或网关在插件请求之后重新注入了温度。';
+    return new Error(`${label}所用模型不接受 temperature 参数。${guidance}`, { cause: error });
+}
 async function generateCurrent(options, controller) {
     const context = getContext();
     if (typeof context.generateRaw !== 'function')
         throw new Error('当前SillyTavern未提供generateRaw');
     const settings = getSettings();
-    const result = await withTimeout(Promise.resolve(context.generateRaw({
-        systemPrompt: options.systemPrompt,
-        prompt: options.prompt,
-        responseLength: responseTokens(options),
-        signal: options.signal,
-    })), Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${options.task}模型调用`, controller);
+    let result;
+    try {
+        result = await withTimeout(Promise.resolve(context.generateRaw({
+            systemPrompt: options.systemPrompt,
+            prompt: options.prompt,
+            responseLength: responseTokens(options),
+            signal: options.signal,
+        })), Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${options.task}模型调用`, controller);
+    }
+    catch (error) {
+        throw samplingCompatibilityError(error, `${options.task}当前聊天连接`, true) ?? error;
+    }
     const text = generationText(result);
     if (!text)
         throw emptyGenerationError(`${options.task}模型`, result);
@@ -9412,6 +9431,9 @@ async function generateCurrent(options, controller) {
 }
 function normalizeProfileTransportError(error, label) {
     const message = toErrorMessage(error);
+    const samplingError = samplingCompatibilityError(error, label, false);
+    if (samplingError)
+        return samplingError;
     if (/unexpected token\s*["']?<|<html|<!doctype|not valid json/i.test(message)) {
         return new Error(`${label}上游返回了HTML错误页而不是模型JSON。通常是反向代理、网关超时、接口路径错误或登录页拦截；请查看请求诊断中的HTTP状态。`, { cause: error });
     }
@@ -9465,9 +9487,10 @@ async function generateWithNativeProfile(options, profileId, controller) {
             const streamResult = await service.sendRequest(profileId, messages, responseTokens(options), {
                 stream: true,
                 extractData: true,
-                // BUGFIX：独立 Profile 必须使用其自己的生成预设与文本补全 instruct。
-                // 强制关闭会退回当前聊天的全局采样参数，并把 Text Completion 消息降级为裸文本拼接。
-                includePreset: true,
+                // 固定文本与事实提取任务不继承 Profile 的生成预设。ST 会把预设中的
+                // temperature 等采样参数合并进请求，而部分推理模型明确拒绝这些字段。
+                // 模型、API、密钥与 Text Completion 的 Instruct 仍由 Profile 提供。
+                includePreset: false,
                 includeInstruct: true,
                 signal: options.signal,
             }, { stream: true });
