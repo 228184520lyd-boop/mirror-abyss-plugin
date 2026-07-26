@@ -1,13 +1,20 @@
-/** Mirror Abyss 2.0.0-alpha.9-infopoint.2-ui single-file build. */
+/** Mirror Abyss 2.0.0-alpha.9-infopoint.5-keyword-map single-file build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MirrorAbyssApplication = void 0;
+const constants_1 = require("./constants");
 const host_1 = require("./host");
 const settings_1 = require("./settings");
 const tasks_1 = require("./tasks");
 const ui_1 = require("./ui");
 const worldbook_1 = require("./worldbook");
+/**
+ * Application shell. The UI is only a projection layer:
+ * - reads settings/worldbook/runtime projections;
+ * - sends commands to SettingsStore, TaskRunner and WorldbookAdapter;
+ * - never becomes a second narrative authority.
+ */
 class MirrorAbyssApplication {
     constructor() {
         this.host = new host_1.HostAdapter();
@@ -18,51 +25,61 @@ class MirrorAbyssApplication {
         this.cleanup = [];
         this.started = false;
     }
-    async start() {
+    start() {
         if (this.started)
             return;
-        try {
-            this.host.context();
-            this.ui.mount();
-            // UI must remain available even when a hosted/forked SillyTavern omits or renames an event.
-            // Missing listeners only disable that automatic trigger; they must never tear down the workspace.
-            this.listen('CHAT_CHANGED', () => void this.ui.refreshEntries());
-            this.listen('MESSAGE_RECEIVED', (value) => void this.onMessage(Number(value)));
-            this.listen('MESSAGE_EDITED', (value) => void this.onMessage(Number(value)));
-            this.started = true;
-            await this.ui.refreshEntries();
-            globalThis.__MIRROR_ABYSS_INFOPOINT__ = {
-                version: '2.0.0-alpha.9-infopoint.2-ui',
-                open: () => this.ui.open(),
-                processLatest: () => this.tasks.processTurn(this.settings(), false),
-                extract: () => this.tasks.runTask('extraction', this.settings()),
-                audit: () => this.tasks.runTask('audit', this.settings()),
-                smallSummary: () => this.tasks.runTask('smallSummary', this.settings()),
-                largeSummary: () => this.tasks.runTask('largeSummary', this.settings()),
-                preview: (raw) => this.tasks.previewExtraction(this.settings(), raw),
-                refresh: () => this.ui.refreshEntries(),
-                diagnostics: () => this.host.diagnostics(),
-            };
-        }
-        catch (error) {
-            this.cleanup.splice(0).forEach((remove) => remove());
-            this.ui.unmount();
-            this.started = false;
-            throw error;
-        }
+        this.host.context();
+        // Match alpha.27's proven order: mount the visible UI shell first, then attach
+        // optional host listeners and refresh projections asynchronously.
+        this.ui.mount();
+        this.listen('CHAT_CHANGED', () => void this.ui.refreshEntries());
+        this.listen('MESSAGE_RECEIVED', (value) => void this.onMessage(Number(value)));
+        this.listen('MESSAGE_EDITED', (value) => void this.onMessage(Number(value)));
+        this.listen('MESSAGE_UPDATED', (value) => void this.onMessage(Number(value)));
+        this.started = true;
+        globalThis.MirrorAbyss = {
+            version: constants_1.VERSION,
+            open: (tab) => this.ui.openTab(tab),
+            processLatest: () => this.tasks.processTurn(this.settings(), false),
+            extract: () => this.tasks.runTask('extraction', this.settings()),
+            audit: () => this.tasks.runTask('audit', this.settings()),
+            smallSummary: () => this.tasks.runTask('smallSummary', this.settings()),
+            largeSummary: () => this.tasks.runTask('largeSummary', this.settings()),
+            preview: (raw) => this.tasks.previewExtraction(this.settings(), raw),
+            previewLegacyWorldbook: () => this.worldbook.previewMigration(this.settings()),
+            migrateLegacyWorldbook: async () => {
+                const settings = this.settings();
+                const preview = await this.worldbook.previewMigration(settings);
+                return this.worldbook.migrateLegacyFormat(settings, preview);
+            },
+            undoLegacyWorldbookMigration: () => this.worldbook.undoMigration(this.settings()),
+            refresh: () => this.ui.refreshEntries(),
+            diagnostics: () => this.host.diagnostics(),
+        };
     }
     stop() {
+        if (!this.started && !globalThis.MirrorAbyss)
+            return;
         this.started = false;
-        this.cleanup.splice(0).forEach((remove) => remove());
+        this.cleanup.splice(0).forEach((remove) => {
+            try {
+                remove();
+            }
+            catch (error) {
+                console.warn('[MirrorAbyss] listener cleanup failed', error);
+            }
+        });
         this.ui.unmount();
-        delete globalThis.__MIRROR_ABYSS_INFOPOINT__;
+        delete globalThis.MirrorAbyss;
     }
+    isStarted() { return this.started; }
+    open(tab) { this.ui.openTab(tab); }
     listen(eventName, handler) {
         try {
             this.cleanup.push(this.host.subscribe(eventName, handler, false));
         }
         catch (error) {
-            console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用；仅停用该自动触发，UI 保持可用。`, error);
+            console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用；仅停用该自动触发。`, error);
         }
     }
     settings() { return this.settingsStore.load(this.host.context()); }
@@ -87,13 +104,13 @@ exports.MirrorAbyssApplication = MirrorAbyssApplication;
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.STYLE_ID = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-alpha.9-infopoint.2-ui';
+exports.VERSION = '2.0.0-alpha.9-infopoint.5-keyword-map';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.STYLE_ID = 'mirror-abyss-infopoint-style';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 1;
+exports.MANAGED_VERSION = 3;
 
 },
 "host":function(module,exports,require){
@@ -311,11 +328,77 @@ exports.onDisable = onDisable;
 exports.onDelete = onDelete;
 const application_1 = require("./application");
 let application = null;
+let enabled = true;
+let generation = 0;
+let retryTimer;
+let attempts = 0;
+const MAX_ATTEMPTS = 24;
 function app() { return application ?? (application = new application_1.MirrorAbyssApplication()); }
-async function onActivate() { await app().start(); }
-async function onEnable() { await app().start(); }
-function onDisable() { application?.stop(); }
-function onDelete() { application?.stop(); application = null; }
+function clearRetry() {
+    if (retryTimer !== undefined)
+        globalThis.clearTimeout(retryTimer);
+    retryTimer = undefined;
+}
+function startWhenReady(token) {
+    if (!enabled || token !== generation)
+        return;
+    try {
+        app().start();
+        attempts = 0;
+        clearRetry();
+        document.getElementById('maip-startup-error')?.remove();
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/上下文尚未就绪|SillyTavern/u.test(message) && attempts < MAX_ATTEMPTS) {
+            attempts += 1;
+            clearRetry();
+            retryTimer = globalThis.setTimeout(() => startWhenReady(token), 250);
+            return;
+        }
+        console.error('[MirrorAbyss] startup failed', error);
+        showStartupError(message);
+    }
+}
+function showStartupError(message) {
+    if (typeof document === 'undefined' || document.getElementById('maip-startup-error'))
+        return;
+    const button = document.createElement('button');
+    button.id = 'maip-startup-error';
+    button.className = 'maip-startup-error';
+    button.type = 'button';
+    button.textContent = '镜渊启动失败｜点击重试';
+    button.title = message;
+    button.addEventListener('click', () => {
+        attempts = 0;
+        generation += 1;
+        startWhenReady(generation);
+    });
+    (document.body ?? document.documentElement).appendChild(button);
+}
+async function onActivate() {
+    enabled = true;
+    attempts = 0;
+    generation += 1;
+    startWhenReady(generation);
+}
+async function onEnable() {
+    enabled = true;
+    attempts = 0;
+    generation += 1;
+    startWhenReady(generation);
+}
+function onDisable() {
+    enabled = false;
+    generation += 1;
+    clearRetry();
+    application?.stop();
+    document.getElementById('maip-startup-error')?.remove();
+}
+function onDelete() {
+    onDisable();
+    application = null;
+}
 
 },
 "matcher":function(module,exports,require){
@@ -501,7 +584,12 @@ function buildOperationPlan(blocks, entries, settings, contextText) {
                 score: candidates[0]?.score,
                 matchEvidence: candidates[0]?.evidence,
             });
+            for (const keyword of block.keywords) {
+                operations.push(op('merge-keywords', block.title, undefined, '关键词', undefined, keyword, '新条目关键词写入'));
+            }
             for (const section of block.sections) {
+                if (/(关键词|触发词|标签|分类)/u.test(section.name))
+                    continue;
                 if (section.empty) {
                     operations.push(noop(block.title, undefined, section.name, 'AI填写“无”，不执行写入'));
                     continue;
@@ -511,7 +599,14 @@ function buildOperationPlan(blocks, entries, settings, contextText) {
             continue;
         }
         const entry = target.entry;
+        for (const keyword of block.keywords) {
+            operations.push(entry.keywords.some((item) => (0, util_1.normalizeFact)(item) === (0, util_1.normalizeFact)(keyword))
+                ? noop(entry.title, entry.uid, '关键词', `关键词“${keyword}”已存在`, target.score, target.evidence)
+                : op('merge-keywords', entry.title, entry.uid, '关键词', undefined, keyword, '根据本轮信息点补充世界书关键词', target.score, target.evidence));
+        }
         for (const section of block.sections) {
+            if (/(关键词|触发词|标签|分类)/u.test(section.name))
+                continue;
             if (section.empty) {
                 operations.push(noop(entry.title, entry.uid, section.name, 'AI填写“无”，不执行写入', target.score, target.evidence));
                 continue;
@@ -546,7 +641,7 @@ function applyPlanToEntries(plan, entries) {
                     name: split.name,
                     content: '',
                     sections: { order: [], values: {} },
-                    keywords: (0, util_1.unique)([split.name]),
+                    keywords: (0, util_1.unique)([split.name, split.type]),
                     aliases: [],
                     references: [],
                     focus: false,
@@ -789,7 +884,7 @@ function parseInformationPoints(raw) {
             const split = (0, util_1.splitTitle)(title);
             if (!split)
                 continue;
-            block = { rawTitle, title, type: split.type, name: split.name, ...(uid ? { uid } : {}), sections: [] };
+            block = { rawTitle, title, type: split.type, name: split.name, ...(uid ? { uid } : {}), keywords: [split.type], sections: [] };
             blocks.push(block);
             section = null;
             continue;
@@ -810,6 +905,10 @@ function parseInformationPoints(raw) {
         item.sections = item.sections
             .map((candidate) => ({ ...candidate, lines: (0, util_1.unique)(candidate.lines), empty: candidate.empty || candidate.lines.length === 0 }))
             .filter((candidate) => candidate.name);
+        const keywordLines = item.sections
+            .filter((candidate) => /(关键词|触发词|标签|分类)/u.test(candidate.name) && !candidate.empty)
+            .flatMap((candidate) => candidate.lines);
+        item.keywords = (0, util_1.unique)([item.type, ...keywordLines]);
     }
     return blocks.filter((candidate) => candidate.sections.length > 0);
 }
@@ -885,18 +984,20 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractionPrompts = extractionPrompts;
 exports.auditPrompts = auditPrompts;
 exports.summaryPrompts = summaryPrompts;
-exports.tableTemplate = tableTemplate;
+exports.keywordTemplate = keywordTemplate;
 const util_1 = require("./util");
 function extractionPrompts(settings, playerText, assistantText, relevant) {
-    const template = tableTemplate(settings.tables);
+    const template = keywordTemplate(settings.keywordDefinitions);
     const existing = relevant.map(entryForPrompt).join('\n\n');
     const custom = settings.extractionPrompt.trim();
     const system = `你是“镜渊”的信息点提取器。你不是数据库管理员，也不决定世界书常驻、向量、递归、深度或顺序。
 
-你的唯一任务：阅读本轮玩家输入和最终正文，提取本轮已经明确成立、会影响后续叙事的核心信息点，并按照“条目标题＋小标题＋事实行”填写。
+你的唯一任务：阅读本轮玩家输入和最终正文，提取本轮已经明确成立、会影响后续叙事的核心信息点，并按照“条目标题＋关键词＋小标题＋事实行”填写。
 
 固定输出语法：
 类型｜稳定名称
+【关键词】
+- 与该条目匹配的世界书关键词
 【小标题】
 - 一条核心信息点
 
@@ -906,16 +1007,19 @@ function extractionPrompts(settings, playerText, assistantText, relevant) {
 
 规则：
 1. 已有对象必须沿用提供的稳定标题；同一事件的新进展继续填写到原事件标题下。
-2. 人物名称、地点名称、物品名称和事件标题不得随意改写成同义标题。
-3. 每行只表达一个主体的一项属性、动作、关系或直接结果，使用简短明确的自然语言。
-4. 只提取核心事实；忽略普通动作、瞬时表情、气氛、修辞、服装细节、无后续影响的背景信息。
-5. 不得补全正文未发生的内容，不得把可能、计划、推测和主观看法升级为事实。
-6. 已有内容已经表达或仅是近义改写时填写“无”，不要重复。
-7. 不限制条目数量；在不遗漏核心变化的前提下，只写真正必要的信息点。
-8. 可以创建未预先举例的新类型，例如组织、契约、疾病、诅咒、能力；标题仍必须是“类型｜稳定名称”。
-9. 除填写结果外，不输出解释、前言、结语、JSON、代码块或思考过程。
+2. 标题前缀只用于稳定识别对象；分类、筛选和召回使用【关键词】。一个条目可以拥有多个关键词。
+3. 默认关键词只是参考，不是白名单。遇到组织、宗教、法律、血统、货币、技术等未列出的概念，可以填写新的准确关键词。
+4. 新条目必须填写【关键词】；已有条目只有关键词新增或需要收紧时才填写，否则写“无”。
+5. 人物名称、地点名称、物品名称和事件标题不得随意改写成同义标题。
+6. 每行只表达一个主体的一项属性、动作、关系或直接结果，使用简短明确的自然语言。
+7. 只提取核心事实；忽略普通动作、瞬时表情、气氛、修辞、服装细节、无后续影响的背景信息。
+8. 不得补全正文未发生的内容，不得把可能、计划、推测和主观看法升级为事实。
+9. 已有内容已经表达或仅是近义改写时填写“无”，不要重复。
+10. 不限制条目数量；在不遗漏核心变化的前提下，只写真正必要的信息点。
+11. “基础设定”是世界规则类关键词。插件会自动将含该关键词的条目设为常驻，AI不得填写调度参数。
+12. 除填写结果外，不输出解释、前言、结语、JSON、代码块或思考过程。
 
-可用默认表头与填写方式：
+默认关键词及建议小标题：
 ${template}${custom ? `\n\n【玩家附加提取要求】\n${custom}` : ''}`;
     const user = `【当前世界书中的少量相关条目】
 ${existing || '（没有匹配到相关旧条目；确有新对象时可创建结构化标题）'}
@@ -926,7 +1030,7 @@ ${playerText || '（空）'}
 【本轮最终正文】
 ${assistantText}
 
-请直接按固定标题和小标题填写。已有标题中没有变化的栏目可填写“无”。`;
+请直接按固定标题、【关键词】和小标题填写。已有标题中没有变化的栏目填写“无”。`;
     return { system, user };
 }
 function auditPrompts(settings, playerText, assistantText) {
@@ -956,37 +1060,40 @@ function summaryPrompts(kind, settings, entries, subject) {
     const custom = (isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim();
     const system = `你是“镜渊”的${isSmall ? '场景级小总结器' : '跨场景大总结器'}。
 
-你只读取世界书中已经存在的信息点链，按相同的“类型｜名称＋【小标题】＋事实行”格式输出当前最终有效事实。
+你只读取世界书中已经存在的信息点链，按相同的“类型｜名称＋【关键词】＋【小标题】＋事实行”格式输出当前最终有效事实。
 
 要求：
 1. 同一事件的多个子信息点连起来才是完整事件事实；不要把单个过程片段误当最终结论。
 2. 删除重复、被后续结果覆盖的过程，但保留仍影响后续的因果、关系、资源、身份和限制。
-3. 将持续影响分别填写到对应人物、地区、物品、组织等条目。
-4. 临时事件、临时NPC或临时物品完成分发后，可在原条目填写：
+3. 将持续影响分别填写到对应人物、地点、物品、组织等条目。
+4. 关键词只有新增、删除错误分类或需要收紧时才输出；不得把调度参数当关键词。
+5. 临时事件、临时NPC或临时物品完成分发后，可在原条目填写：
 【沉降处理】
 归档
 或
 【沉降处理】
 删除
-5. 焦点对象和人工锁定对象不得要求删除。
-6. 没有变化填写“无”。不输出JSON、代码块、说明或分析过程。
-7. ${isSmall ? '只整理当前场景或当前事件链。' : '只固化跨场景仍成立的长期结果，不逐句缩写小总结。'}${custom ? `\n\n【玩家附加总结要求】\n${custom}` : ''}`;
+6. 焦点对象、基础设定和人工锁定对象不得要求删除。
+7. 没有变化填写“无”。不输出JSON、代码块、说明或分析过程。
+8. ${isSmall ? '只整理当前场景或当前事件链。' : '只固化跨场景仍成立的长期结果，不逐句缩写小总结。'}${custom ? `\n\n【玩家附加总结要求】\n${custom}` : ''}`;
     const user = `【总结对象】
 ${subject || '当前相关信息点链'}
 
 【世界书相关条目】
 ${entries.map(entryForPrompt).join('\n\n') || '（无）'}
 
-请直接输出需要写回世界书的标题、小标题和核心事实。`;
+请直接输出需要写回世界书的标题、关键词、小标题和核心事实。`;
     return { system, user };
 }
-function tableTemplate(tables) {
-    return tables.map((table) => {
-        const fields = table.fields.map((field) => {
+function keywordTemplate(definitions) {
+    return definitions.filter((item) => item.enabled).map((item) => {
+        const aliases = item.aliases.length ? `；近义标签：${item.aliases.join('、')}` : '';
+        const activation = item.constant ? '；插件规则：常驻' : '';
+        const fields = item.fields.map((field) => {
             const options = field.options?.length ? `；选项：${field.options.join(' / ')}` : '';
             return `- 【${field.label}】：${policyDescription(field.policy)}${options}${field.prompt ? `；${field.prompt}` : ''}`;
         }).join('\n');
-        return `${table.label}｜名称\n用途：${table.prompt}\n${fields}`;
+        return `关键词：${item.label}${aliases}${activation}\n用途：${item.description}\n${fields || '- 可按事实使用合适的小标题'}`;
     }).join('\n\n');
 }
 function entryForPrompt(entry) {
@@ -1008,47 +1115,47 @@ function policyDescription(policy) {
 "settings":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SettingsStore = exports.DEFAULT_SETTINGS = void 0;
+exports.SettingsStore = exports.DEFAULT_SETTINGS = exports.DEFAULT_KEYWORDS = void 0;
 exports.parseSettings = parseSettings;
 const constants_1 = require("./constants");
 const util_1 = require("./util");
-const DEFAULT_TABLES = [
-    { key: 'character', label: '人物', prompt: '稳定人物身份、关系、当前状态与连续经历。', fields: [
-            { key: 'fixed', label: '固定事实', policy: 'semantic-upsert' },
-            { key: 'current', label: '当前状态', policy: 'replace-by-anchor' },
-            { key: 'recent', label: '近期经历', policy: 'append-chain' },
-            { key: 'links', label: '关联条目', policy: 'merge-titles' },
-            { key: 'aliases', label: '别名', policy: 'merge-keywords' },
-        ] },
-    { key: 'event', label: '事件', prompt: '同一事件的每轮核心信息点连续追加，整条链才构成完整事实。', fields: [
-            { key: 'status', label: '事件状态', policy: 'replace-by-anchor', options: ['开始', '进行中', '暂停', '结束', '无变化', '无'] },
-            { key: 'chain', label: '事件进程', policy: 'append-chain' },
-            { key: 'result', label: '当前结果', policy: 'replace-by-anchor' },
-            { key: 'links', label: '关联条目', policy: 'merge-titles' },
-        ] },
-    { key: 'scene', label: '场景', prompt: '当前实际发生的场景与直接限制。', fields: [
-            { key: 'status', label: '当前状态', policy: 'replace-by-anchor' },
-            { key: 'change', label: '核心变化', policy: 'semantic-upsert' },
-            { key: 'links', label: '关联条目', policy: 'merge-titles' },
-        ] },
-    { key: 'item', label: '物品', prompt: '重要物品的持有、位置、完整性、用途和因果变化。', fields: [
-            { key: 'fixed', label: '固定事实', policy: 'semantic-upsert' },
-            { key: 'current', label: '当前状态', policy: 'replace-by-anchor' },
-            { key: 'holder', label: '持有关系', policy: 'replace-by-anchor' },
-            { key: 'links', label: '关联条目', policy: 'merge-titles' },
-        ] },
-    { key: 'region', label: '地区', prompt: '地点自身稳定属性、当前变化与重要事件影响。', fields: [
-            { key: 'fixed', label: '固定事实', policy: 'semantic-upsert' },
-            { key: 'current', label: '当前状态', policy: 'replace-by-anchor' },
-            { key: 'links', label: '关联条目', policy: 'merge-titles' },
-        ] },
-    { key: 'custom', label: '自定义对象', prompt: '任何未预先举例但可稳定命名、会影响后续的对象。', fields: [
-            { key: 'fixed', label: '固定事实', policy: 'semantic-upsert' },
-            { key: 'current', label: '当前状态', policy: 'replace-by-anchor' },
-            { key: 'chain', label: '变化记录', policy: 'append-chain' },
-            { key: 'links', label: '关联条目', policy: 'merge-titles' },
-        ] },
+const COMMON_LINKS = { key: 'links', label: '关联条目', policy: 'merge-titles' };
+const COMMON_ALIASES = { key: 'aliases', label: '别名', policy: 'merge-keywords' };
+const FIXED = { key: 'fixed', label: '固定事实', policy: 'semantic-upsert' };
+const CURRENT = { key: 'current', label: '当前状态', policy: 'replace-by-anchor' };
+exports.DEFAULT_KEYWORDS = [
+    keyword('spacetime', '时空', '当前时间、时间推进、总体位置与连续性。', ['时间', '时空状态'], false, [CURRENT, { key: 'history', label: '历史事实', policy: 'append-chain' }, COMMON_LINKS], 620),
+    keyword('scene', '场景', '当前实际发生的场景、参与对象、局面和直接限制。', ['当前场景'], false, [CURRENT, { key: 'change', label: '核心变化', policy: 'semantic-upsert' }, COMMON_LINKS], 700),
+    keyword('character', '人物', '稳定人物身份、关系、当前状态与连续经历。', ['角色', 'NPC'], false, [FIXED, CURRENT, { key: 'relations', label: '关系状态', policy: 'semantic-upsert' }, { key: 'recent', label: '近期经历', policy: 'append-chain' }, COMMON_LINKS, COMMON_ALIASES], 520),
+    keyword('item', '物品', '重要物品的持有、位置、数量、完整性、用途与因果变化。', ['道具', '装备'], false, [FIXED, CURRENT, { key: 'holder', label: '持有关系', policy: 'replace-by-anchor' }, COMMON_LINKS], 500),
+    keyword('event', '事件', '事件动作骨架、进展、结果和当前状态。', ['事件链'], false, [{ key: 'status', label: '事件状态', policy: 'replace-by-anchor', options: ['开始', '进行中', '暂停', '结束', '无变化', '无'] }, { key: 'chain', label: '事件进程', policy: 'append-chain' }, { key: 'result', label: '当前结果', policy: 'replace-by-anchor' }, COMMON_LINKS], 680),
+    keyword('region', '地点', '地点自身稳定属性、当前变化与重要事件影响。', ['地区', '区域', '场所'], false, [FIXED, CURRENT, COMMON_LINKS, COMMON_ALIASES], 470),
+    keyword('global', '全局变化', '组织、制度、阵营、政权、群体格局与全局影响。', ['世界变化', '全局状态'], false, [FIXED, CURRENT, { key: 'history', label: '历史事实', policy: 'append-chain' }, COMMON_LINKS], 610),
+    keyword('foundation', '基础设定', '世界规则、物种规则、制度基础、魔法体系等跨场景基础事实。', ['基础规则', '世界设定', '规则', '设定'], true, [{ key: 'definition', label: '规则定义', policy: 'semantic-upsert' }, { key: 'current', label: '现行规则', policy: 'replace-by-anchor' }, { key: 'effect', label: '持续影响', policy: 'semantic-upsert' }, COMMON_LINKS, COMMON_ALIASES], 860, false, 1),
+    keyword('ability', '能力', '可稳定识别、会持续影响后续的能力、技能或特性。', ['技能', '特性'], false, [FIXED, CURRENT, { key: 'limits', label: '限制条件', policy: 'semantic-upsert' }, COMMON_LINKS], 540),
+    keyword('relationship', '关系', '显著且会影响后续的对象关系与关系变化。', ['显著关系', '关系状态'], false, [FIXED, CURRENT, { key: 'history', label: '关系变化', policy: 'append-chain' }, COMMON_LINKS], 560),
+    keyword('organization', '组织', '组织、阵营、机构、政权与其当前行动。', ['阵营', '机构', '政权'], false, [FIXED, CURRENT, { key: 'members', label: '成员关系', policy: 'merge-titles' }, COMMON_LINKS], 560),
+    keyword('task', '任务', '明确成立的任务、目标、责任、约束与完成状态。', ['目标', '责任'], false, [CURRENT, { key: 'progress', label: '任务进程', policy: 'append-chain' }, { key: 'result', label: '当前结果', policy: 'replace-by-anchor' }, COMMON_LINKS], 600),
+    keyword('contract', '契约', '契约、誓言、承诺、债务及其约束与状态。', ['誓言', '承诺', '债务'], false, [FIXED, CURRENT, { key: 'terms', label: '约束条件', policy: 'semantic-upsert' }, COMMON_LINKS], 580),
+    keyword('condition', '状态影响', '疾病、诅咒、伤势和其他持续状态影响。', ['疾病', '诅咒', '伤势'], false, [FIXED, CURRENT, { key: 'effect', label: '持续影响', policy: 'semantic-upsert' }, COMMON_LINKS], 590),
+    keyword('resource', '资源', '数量有限且会影响后续的资源、货币、权限或配额。', ['货币', '权限', '配额'], false, [CURRENT, { key: 'change', label: '资源变化', policy: 'append-chain' }, COMMON_LINKS], 490),
+    keyword('custom', '自定义对象', '任何未预先举例但可稳定命名、会影响后续的对象。', ['自定义'], false, [FIXED, CURRENT, { key: 'chain', label: '变化记录', policy: 'append-chain' }, COMMON_LINKS, COMMON_ALIASES], 400),
 ];
+function keyword(key, label, description, aliases, constant, fields, order, vectorized = true, depth = 4) {
+    return {
+        key,
+        label,
+        description,
+        aliases,
+        enabled: true,
+        constant,
+        vectorized,
+        preventRecursion: false,
+        depth,
+        order,
+        fields: (0, util_1.clone)(fields),
+    };
+}
 exports.DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     autoProcess: false,
@@ -1066,7 +1173,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     bodyMatchThreshold: 0.48,
     smallSummaryTurns: 10,
     largeSummaryCount: 4,
-    tables: DEFAULT_TABLES,
+    keywordDefinitions: exports.DEFAULT_KEYWORDS,
     sectionPolicies: {},
     matchWeights: {
         uid: 1200,
@@ -1081,11 +1188,11 @@ exports.DEFAULT_SETTINGS = Object.freeze({
         typeMismatchPenalty: -180,
     },
     activationRules: [
-        { id: 'focus', label: '玩家焦点只控制常驻', enabled: true, match: 'focus', set: { constant: true, vectorized: false, preventRecursion: false, depth: 1, order: 900 } },
+        { id: 'focus', label: '玩家焦点常驻', enabled: true, match: 'focus', set: { constant: true, vectorized: false, preventRecursion: false, depth: 1, order: 920 } },
         { id: 'mentioned', label: '本轮直接命中', enabled: true, match: 'mentioned', set: { vectorized: true, preventRecursion: false, depth: 2, order: 720 } },
         { id: 'linked-current', label: '关联当前场景', enabled: true, match: 'linked-current', set: { vectorized: true, preventRecursion: false, depth: 2, order: 680 } },
         { id: 'active-event', label: '活跃事件链', enabled: true, match: 'active-event', set: { vectorized: true, preventRecursion: false, depth: 2, order: 760 } },
-        { id: 'default', label: '结构化条目默认召回', enabled: true, match: 'structured-default', set: { constant: false, vectorized: true, preventRecursion: false, depth: 4, order: 400 } },
+        { id: 'default', label: '结构化条目默认召回', enabled: true, match: 'structured-default', set: { vectorized: true, preventRecursion: false, depth: 4, order: 400 } },
     ],
 });
 class SettingsStore {
@@ -1108,7 +1215,6 @@ class SettingsStore {
 exports.SettingsStore = SettingsStore;
 function parseSettings(value) {
     const candidate = (0, util_1.isPlainObject)(value) ? value : {};
-    const tables = parseTables(candidate.tables);
     const sectionPolicies = {};
     if ((0, util_1.isPlainObject)(candidate.sectionPolicies)) {
         for (const [key, policy] of Object.entries(candidate.sectionPolicies)) {
@@ -1134,32 +1240,70 @@ function parseSettings(value) {
         bodyMatchThreshold: clampFloat(candidate.bodyMatchThreshold, 0.48, 0.2, 0.95),
         smallSummaryTurns: (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 2, 100),
         largeSummaryCount: (0, util_1.clampNumber)(candidate.largeSummaryCount, 4, 2, 30),
-        tables,
+        keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions, candidate.tables),
         sectionPolicies,
         matchWeights: { ...exports.DEFAULT_SETTINGS.matchWeights, ...((0, util_1.isPlainObject)(candidate.matchWeights) ? candidate.matchWeights : {}) },
         activationRules: Array.isArray(candidate.activationRules) ? candidate.activationRules : (0, util_1.clone)(exports.DEFAULT_SETTINGS.activationRules),
     };
 }
-function parseTables(value) {
-    if (!Array.isArray(value))
-        return (0, util_1.clone)(DEFAULT_TABLES);
+function parseKeywordDefinitions(value, legacyTables) {
+    const source = Array.isArray(value) ? value : legacyKeywords(legacyTables);
+    if (!Array.isArray(source) || !source.length)
+        return (0, util_1.clone)(exports.DEFAULT_KEYWORDS);
     const output = [];
-    for (const raw of value) {
+    for (const raw of source) {
         if (!(0, util_1.isPlainObject)(raw))
             continue;
         const label = String(raw.label ?? '').trim();
         if (!label)
             continue;
-        const fields = Array.isArray(raw.fields) ? raw.fields.flatMap((field) => {
-            if (!(0, util_1.isPlainObject)(field))
-                return [];
-            const fieldLabel = String(field.label ?? '').trim();
-            const policy = isPolicy(field.policy) ? field.policy : 'semantic-upsert';
-            return fieldLabel ? [{ key: String(field.key ?? fieldLabel), label: fieldLabel, policy, options: (0, util_1.normalizeStringArray)(field.options), prompt: String(field.prompt ?? '') }] : [];
-        }) : [];
-        output.push({ key: String(raw.key ?? label), label, prompt: String(raw.prompt ?? ''), fields });
+        output.push({
+            key: String(raw.key ?? (0, util_1.safeId)(label) ?? label),
+            label,
+            description: String(raw.description ?? raw.prompt ?? ''),
+            aliases: (0, util_1.normalizeStringArray)(raw.aliases),
+            enabled: raw.enabled !== false,
+            constant: raw.constant === true || label === '基础设定',
+            vectorized: raw.vectorized !== false && label !== '基础设定',
+            preventRecursion: raw.preventRecursion === true,
+            depth: (0, util_1.clampNumber)(raw.depth, label === '基础设定' ? 1 : 4, 0, 99),
+            order: (0, util_1.clampNumber)(raw.order, label === '基础设定' ? 860 : 400, 0, 9999),
+            fields: parseFields(raw.fields),
+        });
     }
-    return output.length ? output : (0, util_1.clone)(DEFAULT_TABLES);
+    // Core keywords are defaults, not a whitelist. Missing defaults are appended so old settings gain new categories.
+    const labels = new Set(output.map((item) => item.label));
+    for (const fallback of exports.DEFAULT_KEYWORDS)
+        if (!labels.has(fallback.label))
+            output.push((0, util_1.clone)(fallback));
+    return output;
+}
+function legacyKeywords(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.flatMap((raw) => {
+        if (!(0, util_1.isPlainObject)(raw))
+            return [];
+        return [{ ...raw, description: raw.prompt, aliases: [], enabled: true, constant: String(raw.label ?? '') === '基础设定', vectorized: true, preventRecursion: false, depth: 4, order: 400 }];
+    });
+}
+function parseFields(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.flatMap((field) => {
+        if (!(0, util_1.isPlainObject)(field))
+            return [];
+        const label = String(field.label ?? '').trim();
+        if (!label)
+            return [];
+        return [{
+                key: String(field.key ?? (0, util_1.safeId)(label) ?? label),
+                label,
+                policy: isPolicy(field.policy) ? field.policy : 'semantic-upsert',
+                options: (0, util_1.normalizeStringArray)(field.options),
+                prompt: String(field.prompt ?? ''),
+            }];
+    });
 }
 function isPolicy(value) {
     return ['semantic-upsert', 'replace-by-anchor', 'append-chain', 'replace-section', 'merge-titles', 'merge-keywords'].includes(String(value));
@@ -1341,8 +1485,8 @@ const constants_1 = require("./constants");
 const util_1 = require("./util");
 const parser_1 = require("./parser");
 const TABS = [
-    ['overview', '总览'], ['entries', '信息表'], ['templates', '表头'], ['matching', '匹配'],
-    ['graph', '记忆网络'], ['audit', '审核'], ['settings', '设置'], ['diagnostics', '诊断'],
+    ['overview', '总览'], ['entries', '信息表'], ['keywords', '关键词'], ['matching', '匹配'],
+    ['graph', '记忆网络'], ['worldbook', '世界书'], ['audit', '审核'], ['settings', '设置'], ['diagnostics', '诊断'],
 ];
 class WorkspaceUi {
     constructor(host, settingsStore, worldbook, tasks) {
@@ -1352,46 +1496,39 @@ class WorkspaceUi {
         this.tasks = tasks;
         this.entries = [];
         this.tab = 'overview';
-        this.selectedType = '';
+        this.selectedKeyword = '';
         this.root = null;
         this.opener = null;
         this.settingsEntry = null;
         this.observer = null;
         this.unsubscribe = null;
         this.search = '';
+        this.refreshGeneration = 0;
+        this.projectionLoading = false;
+        this.projectionError = '';
+        this.migrationPreview = null;
+        this.migrationBusy = false;
+        this.migrationMessage = '';
         this.settings = settingsStore.load(host.context());
         this.status = tasks.currentStatus();
     }
     mount() {
-        installStyle();
+        this.ensureWorkspaceRoot();
         this.ensureEntrypoints();
-        this.observer ?? (this.observer = new MutationObserver(() => this.ensureEntrypoints()));
+        this.observer ?? (this.observer = new MutationObserver(() => {
+            this.ensureWorkspaceRoot();
+            this.ensureEntrypoints();
+        }));
         this.observer.observe(document.documentElement, { childList: true, subtree: true });
         this.unsubscribe ?? (this.unsubscribe = this.tasks.subscribe((status) => {
             this.status = status;
-            if (this.root)
-                this.render();
+            this.render();
         }));
-        // A newly installed build opens once so the user cannot miss the UI.
-        // Subsequent reloads retain the visible floating and Extensions-panel entries.
-        const seenKey = `mirrorAbyssUiSeen:${constants_1.VERSION}`;
-        let seen = false;
-        try {
-            seen = sessionStorage.getItem(seenKey) === '1';
-        }
-        catch { /* storage may be disabled */ }
-        if (!seen) {
-            setTimeout(() => {
-                void this.open().finally(() => {
-                    try {
-                        sessionStorage.setItem(seenKey, '1');
-                    }
-                    catch { /* ignore */ }
-                });
-            }, 80);
-        }
+        this.render();
+        void this.refreshEntries();
     }
     unmount() {
+        this.refreshGeneration += 1;
         this.unsubscribe?.();
         this.unsubscribe = null;
         this.observer?.disconnect();
@@ -1402,6 +1539,7 @@ class WorkspaceUi {
         this.opener = null;
         this.settingsEntry?.remove();
         this.settingsEntry = null;
+        document.body?.classList.remove('maip-workspace-open');
     }
     ensureEntrypoints() {
         const parent = document.body ?? document.documentElement;
@@ -1411,7 +1549,7 @@ class WorkspaceUi {
             this.opener.type = 'button';
             this.opener.setAttribute('aria-label', '打开 Mirror Abyss 镜渊');
             this.opener.innerHTML = '<span class="maip-opener-mark">渊</span><span class="maip-opener-text">镜渊</span>';
-            this.opener.addEventListener('click', () => void this.open());
+            this.opener.addEventListener('click', () => this.open());
         }
         if (!this.opener.isConnected)
             parent.appendChild(this.opener);
@@ -1421,42 +1559,75 @@ class WorkspaceUi {
                 this.settingsEntry = document.createElement('div');
                 this.settingsEntry.className = 'maip-settings-entry';
                 this.settingsEntry.innerHTML = `
-          <div><b>Mirror Abyss｜镜渊</b><small>信息点提取与世界书匹配</small></div>
+          <div><b>Mirror Abyss｜镜渊</b><small>信息点提取、关键词匹配与世界书映射</small></div>
           <button type="button">打开工作区</button>`;
-                this.settingsEntry.querySelector('button')?.addEventListener('click', () => void this.open());
+                this.settingsEntry.querySelector('button')?.addEventListener('click', () => this.open());
             }
             if (!this.settingsEntry.isConnected)
                 settingsHost.prepend(this.settingsEntry);
         }
     }
-    async open(tab = this.tab) {
-        this.tab = tab;
-        if (!this.root) {
-            this.root = document.createElement('div');
-            this.root.className = 'maip-shell';
-            this.root.addEventListener('click', (event) => void this.onClick(event));
-            this.root.addEventListener('change', (event) => void this.onChange(event));
-            this.root.addEventListener('input', (event) => this.onInput(event));
-            document.body.appendChild(this.root);
-        }
-        await this.refreshEntries();
-        this.render();
+    openTab(tab) {
+        const candidate = TABS.some(([key]) => key === tab) ? tab : this.tab;
+        this.open(candidate);
     }
-    close() { this.root?.remove(); this.root = null; }
+    open(tab = this.tab) {
+        this.tab = tab;
+        this.ensureWorkspaceRoot();
+        if (!this.root)
+            return;
+        this.root.hidden = false;
+        document.body?.classList.add('maip-workspace-open');
+        this.render();
+        void this.refreshEntries();
+    }
+    close() {
+        if (this.root)
+            this.root.hidden = true;
+        document.body?.classList.remove('maip-workspace-open');
+    }
     async refreshEntries() {
-        this.settings = this.settingsStore.load(this.host.context());
+        const generation = ++this.refreshGeneration;
+        this.projectionLoading = true;
+        this.projectionError = '';
+        this.render();
         try {
-            this.entries = await this.worldbook.list(this.settings);
-            if (!this.selectedType)
-                this.selectedType = this.entryTypes()[0] ?? '';
+            const settings = this.settingsStore.load(this.host.context());
+            const entries = await this.worldbook.list(settings);
+            if (generation !== this.refreshGeneration)
+                return;
+            this.settings = settings;
+            this.entries = entries;
+            const keywords = this.entryKeywords();
+            if (this.selectedKeyword && !keywords.includes(this.selectedKeyword))
+                this.selectedKeyword = '';
         }
         catch (error) {
-            this.entries = [];
-            if (this.root)
-                this.status = { ...this.status, phase: 'error', error: error instanceof Error ? error.message : String(error) };
+            if (generation !== this.refreshGeneration)
+                return;
+            this.projectionError = error instanceof Error ? error.message : String(error);
         }
-        if (this.root)
-            this.render();
+        finally {
+            if (generation === this.refreshGeneration) {
+                this.projectionLoading = false;
+                this.render();
+            }
+        }
+    }
+    ensureWorkspaceRoot() {
+        if (!this.root) {
+            const root = document.createElement('div');
+            root.id = 'maip-workspace';
+            root.className = 'maip-shell';
+            root.hidden = true;
+            root.addEventListener('click', (event) => void this.onClick(event));
+            root.addEventListener('change', (event) => void this.onChange(event));
+            root.addEventListener('input', (event) => this.onInput(event));
+            this.root = root;
+        }
+        const parent = document.body ?? document.documentElement;
+        if (!this.root.isConnected)
+            parent.appendChild(this.root);
     }
     render() {
         if (!this.root)
@@ -1468,7 +1639,7 @@ class WorkspaceUi {
           <div>
             <div class="maip-kicker">WORLD INFO · INFORMATION POINT MATCHER</div>
             <h2>${constants_1.DISPLAY_NAME}</h2>
-            <p>信息点提取 → 多路匹配 → 世界书操作</p>
+            <p>信息点提取 → 关键词与正文匹配 → 世界书操作</p>
           </div>
           <div class="maip-header-actions">
             <span class="maip-version">${constants_1.VERSION}</span>
@@ -1478,10 +1649,10 @@ class WorkspaceUi {
         </header>
         <nav class="maip-tabs">${TABS.map(([key, label]) => `<button data-tab="${key}" class="${this.tab === key ? 'active' : ''}">${label}</button>`).join('')}</nav>
         <main class="maip-main">${this.renderTab()}</main>
-        <footer class="maip-status ${this.status.phase === 'error' ? 'error' : ''}">
+        <footer class="maip-status ${this.status.phase === 'error' || this.projectionError ? 'error' : ''}">
           <span class="maip-status-dot"></span>
           <b>${phaseLabel(this.status.phase)}</b>
-          <span>${(0, util_1.escapeHtml)(this.status.error || this.status.detail || '已就绪')}</span>
+          <span>${(0, util_1.escapeHtml)(this.migrationMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪')}</span>
         </footer>
       </section>`;
     }
@@ -1490,12 +1661,14 @@ class WorkspaceUi {
             return this.renderOverview();
         if (this.tab === 'entries')
             return this.renderEntries();
-        if (this.tab === 'templates')
-            return this.renderTemplates();
+        if (this.tab === 'keywords')
+            return this.renderKeywords();
         if (this.tab === 'matching')
             return this.renderMatching();
         if (this.tab === 'graph')
             return this.renderGraph();
+        if (this.tab === 'worldbook')
+            return this.renderWorldbook();
         if (this.tab === 'audit')
             return this.renderAudit();
         if (this.tab === 'settings')
@@ -1505,13 +1678,14 @@ class WorkspaceUi {
     renderOverview() {
         const changed = this.status.plan?.operations.filter((operation) => operation.kind !== 'noop').length ?? 0;
         const skipped = this.status.plan?.operations.filter((operation) => operation.kind === 'noop').length ?? 0;
-        const types = this.entryTypes();
+        const keywords = this.entryKeywords();
+        const foundations = this.entries.filter((entry) => hasKeyword(entry, '基础设定')).length;
         return `
       <section class="maip-hero-grid">
         <article class="maip-card maip-primary-card">
           <div class="maip-card-label">当前世界书</div>
-          <div class="maip-big">${(0, util_1.escapeHtml)(this.settings.targetLorebook || this.host.context().chatMetadata?.world_info || '未绑定')}</div>
-          <div class="maip-muted">世界书是唯一剧情数据源；表格和图谱均为即时投影。</div>
+          <div class="maip-big">${(0, util_1.escapeHtml)(this.bookName())}</div>
+          <div class="maip-muted">世界书是唯一剧情数据源；信息表和图谱只做即时映射。</div>
           <div class="maip-actions">
             <button class="maip-btn primary" data-action="process">处理最新正文</button>
             <button class="maip-btn" data-action="extract">仅提取</button>
@@ -1519,66 +1693,76 @@ class WorkspaceUi {
             <button class="maip-btn" data-action="large">大总结</button>
           </div>
         </article>
-        <article class="maip-card maip-metric"><span>结构化条目</span><strong>${this.entries.length}</strong><small>${types.length} 种开放类型</small></article>
+        <article class="maip-card maip-metric"><span>世界书条目</span><strong>${this.entries.length}</strong><small>${keywords.length} 个实际关键词</small></article>
+        <article class="maip-card maip-metric"><span>基础设定</span><strong>${foundations}</strong><small>含“基础设定”关键词即常驻</small></article>
         <article class="maip-card maip-metric"><span>本轮操作</span><strong>${changed}</strong><small>${skipped} 条相似信息已跳过</small></article>
-        <article class="maip-card maip-metric"><span>玩家焦点</span><strong class="maip-focus-text">${(0, util_1.escapeHtml)(this.host.getFocusTitle() || '无')}</strong><small>焦点只控制常驻资格</small></article>
       </section>
       <section class="maip-two-col">
         <article class="maip-card">
-          <div class="maip-section-head"><div><h3>最近匹配计划</h3><p>展示“为什么匹配”和“准备怎样写入”。</p></div><button class="maip-link" data-tab="matching">查看全部</button></div>
+          <div class="maip-section-head"><div><h3>最近匹配计划</h3><p>显示匹配依据和准备执行的世界书操作。</p></div><button class="maip-link" data-tab="matching">查看全部</button></div>
           ${this.renderOperationList((this.status.plan?.operations ?? []).slice(0, 8))}
         </article>
         <article class="maip-card">
-          <div class="maip-section-head"><div><h3>条目类型</h3><p>类型不是代码边界；新类型会自动出现。</p></div></div>
-          <div class="maip-type-cloud">${types.map((type) => `<button data-type="${(0, util_1.escapeHtml)(type)}" data-tab="entries"><b>${(0, util_1.escapeHtml)(type)}</b><span>${this.entries.filter((entry) => entry.type === type).length}</span></button>`).join('') || '<span class="maip-empty">暂无条目</span>'}</div>
+          <div class="maip-section-head"><div><h3>世界书关键词</h3><p>这些才是分类标签；未预设关键词同样保留。</p></div><button class="maip-link" data-tab="keywords">管理默认规则</button></div>
+          <div class="maip-type-cloud">${keywords.slice(0, 36).map((keyword) => `<button data-keyword="${(0, util_1.escapeHtml)(keyword)}" data-tab="entries"><b>${(0, util_1.escapeHtml)(keyword)}</b><span>${this.entries.filter((entry) => hasKeyword(entry, keyword)).length}</span></button>`).join('') || '<span class="maip-empty">暂无关键词</span>'}</div>
         </article>
       </section>`;
     }
     renderEntries() {
-        const types = this.entryTypes();
-        const filtered = this.entries.filter((entry) => (!this.selectedType || entry.type === this.selectedType) && (!this.search || `${entry.title}\n${entry.content}\n${entry.keywords.join(' ')}`.toLocaleLowerCase().includes(this.search.toLocaleLowerCase())));
-        const sectionNames = [...new Set(filtered.flatMap((entry) => entry.sections.order))].slice(0, 8);
+        const keywords = this.entryKeywords();
+        const filtered = this.entries.filter((entry) => (!this.selectedKeyword || hasKeyword(entry, this.selectedKeyword)) && (!this.search || `${entry.title}\n${entry.content}\n${entry.keywords.join(' ')}`.toLocaleLowerCase().includes(this.search.toLocaleLowerCase())));
+        const sectionNames = [...new Set(filtered.flatMap((entry) => entry.sections.order))].slice(0, 7);
         return `
       <section class="maip-toolbar">
-        <div class="maip-segment">${types.map((type) => `<button data-type="${(0, util_1.escapeHtml)(type)}" class="${this.selectedType === type ? 'active' : ''}">${(0, util_1.escapeHtml)(type)} <span>${this.entries.filter((entry) => entry.type === type).length}</span></button>`).join('')}</div>
+        <div class="maip-segment"><button data-keyword="" class="${this.selectedKeyword ? '' : 'active'}">全部 <span>${this.entries.length}</span></button>${keywords.map((keyword) => `<button data-keyword="${(0, util_1.escapeHtml)(keyword)}" class="${this.selectedKeyword === keyword ? 'active' : ''}">${(0, util_1.escapeHtml)(keyword)} <span>${this.entries.filter((entry) => hasKeyword(entry, keyword)).length}</span></button>`).join('')}</div>
         <input class="maip-search" data-input="search" placeholder="搜索标题、关键词或正文" value="${(0, util_1.escapeHtml)(this.search)}">
       </section>
       <section class="maip-card maip-table-card">
         <div class="maip-table-wrap"><table class="maip-table">
-          <thead><tr><th>条目</th>${sectionNames.map((name) => `<th>${(0, util_1.escapeHtml)(name)}</th>`).join('')}<th>召回</th><th>操作</th></tr></thead>
+          <thead><tr><th>条目</th><th>关键词</th>${sectionNames.map((name) => `<th>${(0, util_1.escapeHtml)(name)}</th>`).join('')}<th>召回</th><th>操作</th></tr></thead>
           <tbody>${filtered.map((entry) => `<tr>
-            <td class="maip-title-cell"><b>${(0, util_1.escapeHtml)(entry.title)}</b><small>UID ${(0, util_1.escapeHtml)(entry.uid)}</small><div class="maip-tags">${entry.keywords.slice(0, 3).map((key) => `<span>${(0, util_1.escapeHtml)(key)}</span>`).join('')}</div></td>
+            <td class="maip-title-cell"><b>${(0, util_1.escapeHtml)(entry.title)}</b><small>UID ${(0, util_1.escapeHtml)(entry.uid)}</small></td>
+            <td><textarea data-keywords-uid="${(0, util_1.escapeHtml)(entry.uid)}" rows="4">${(0, util_1.escapeHtml)(entry.keywords.join('\n'))}</textarea></td>
             ${sectionNames.map((name) => `<td><textarea data-entry-uid="${(0, util_1.escapeHtml)(entry.uid)}" data-section="${(0, util_1.escapeHtml)(name)}" rows="4">${(0, util_1.escapeHtml)((entry.sections.values[name] ?? []).join('\n'))}</textarea></td>`).join('')}
             <td><div class="maip-recall"><span>${entry.activation.constant ? '常驻' : entry.activation.vectorized ? '向量' : '关键词'}</span><small>深度 ${entry.activation.depth} · 顺序 ${entry.activation.order}</small></div></td>
             <td><button class="maip-link" data-action="save-entry" data-uid="${(0, util_1.escapeHtml)(entry.uid)}">保存</button><button class="maip-link ${entry.focus ? 'danger' : ''}" data-action="focus" data-title="${(0, util_1.escapeHtml)(entry.title)}">${entry.focus ? '取消焦点' : '设为焦点'}</button></td>
-          </tr>`).join('') || `<tr><td colspan="${sectionNames.length + 3}" class="maip-empty">当前筛选下没有条目</td></tr>`}</tbody>
+          </tr>`).join('') || `<tr><td colspan="${sectionNames.length + 5}" class="maip-empty">当前筛选下没有条目</td></tr>`}</tbody>
         </table></div>
       </section>`;
     }
-    renderTemplates() {
-        return `<section class="maip-template-grid">${this.settings.tables.map((table, tableIndex) => `
-      <article class="maip-card maip-template" data-table-index="${tableIndex}">
-        <div class="maip-section-head"><div><h3>${(0, util_1.escapeHtml)(table.label)}｜名称</h3><p>${(0, util_1.escapeHtml)(table.prompt)}</p></div><button class="maip-link danger" data-action="delete-table" data-index="${tableIndex}">删除模板</button></div>
-        <label>类型名称<input data-setting-table="label" data-index="${tableIndex}" value="${(0, util_1.escapeHtml)(table.label)}"></label>
-        <label>提取边界<textarea data-setting-table="prompt" data-index="${tableIndex}" rows="2">${(0, util_1.escapeHtml)(table.prompt)}</textarea></label>
-        <div class="maip-fields">${table.fields.map((field, fieldIndex) => this.renderField(field, tableIndex, fieldIndex)).join('')}</div>
-        <button class="maip-btn small" data-action="add-field" data-index="${tableIndex}">＋ 新增小标题</button>
-      </article>`).join('')}</section>
-      <button class="maip-btn primary" data-action="add-table">＋ 新增开放类型</button>`;
+    renderKeywords() {
+        return `<section class="maip-keyword-intro maip-card"><div><h3>默认关键词规则</h3><p>关键词是世界书真实标签，不是固定表类型。一个条目可以同时拥有多个关键词；列表外的新关键词仍可正常创建和匹配。</p></div><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词规则</button></section>
+      <section class="maip-template-grid">${this.settings.keywordDefinitions.map((definition, index) => this.renderKeywordDefinition(definition, index)).join('')}</section>`;
     }
-    renderField(field, tableIndex, fieldIndex) {
+    renderKeywordDefinition(definition, index) {
+        return `<article class="maip-card maip-template">
+      <div class="maip-section-head"><div><h3>${(0, util_1.escapeHtml)(definition.label)}</h3><p>${(0, util_1.escapeHtml)(definition.description)}</p></div><button class="maip-link danger" data-action="delete-keyword" data-index="${index}">删除规则</button></div>
+      <div class="maip-keyword-rule-grid">
+        <label>关键词<input data-keyword-prop="label" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.label)}"></label>
+        <label>近义标签<input data-keyword-prop="aliases" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.aliases.join(' / '))}" placeholder="用 / 分隔"></label>
+        <label class="maip-switch"><input type="checkbox" data-keyword-prop="constant" data-index="${index}" ${definition.constant ? 'checked' : ''}><span></span>常驻</label>
+        <label class="maip-switch"><input type="checkbox" data-keyword-prop="vectorized" data-index="${index}" ${definition.vectorized ? 'checked' : ''}><span></span>向量</label>
+        <label>深度<input type="number" data-keyword-prop="depth" data-index="${index}" value="${definition.depth}"></label>
+        <label>顺序<input type="number" data-keyword-prop="order" data-index="${index}" value="${definition.order}"></label>
+      </div>
+      <label>用途说明<textarea data-keyword-prop="description" data-index="${index}" rows="2">${(0, util_1.escapeHtml)(definition.description)}</textarea></label>
+      <div class="maip-fields">${definition.fields.map((field, fieldIndex) => this.renderField(field, index, fieldIndex)).join('')}</div>
+      <button class="maip-btn small" data-action="add-field" data-index="${index}">＋ 新增建议小标题</button>
+    </article>`;
+    }
+    renderField(field, keywordIndex, fieldIndex) {
         return `<div class="maip-field-row">
-      <input data-field-prop="label" data-table-index="${tableIndex}" data-field-index="${fieldIndex}" value="${(0, util_1.escapeHtml)(field.label)}" aria-label="小标题">
-      <select data-field-prop="policy" data-table-index="${tableIndex}" data-field-index="${fieldIndex}">${policyOptions(field.policy)}</select>
-      <input data-field-prop="options" data-table-index="${tableIndex}" data-field-index="${fieldIndex}" value="${(0, util_1.escapeHtml)((field.options ?? []).join(' / '))}" placeholder="可选项，用 / 分隔">
-      <button class="maip-icon danger" data-action="delete-field" data-table-index="${tableIndex}" data-field-index="${fieldIndex}">×</button>
+      <input data-field-prop="label" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}" value="${(0, util_1.escapeHtml)(field.label)}" aria-label="小标题">
+      <select data-field-prop="policy" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}">${policyOptions(field.policy)}</select>
+      <input data-field-prop="options" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}" value="${(0, util_1.escapeHtml)((field.options ?? []).join(' / '))}" placeholder="可选项，用 / 分隔">
+      <button class="maip-icon danger" data-action="delete-field" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}">×</button>
     </div>`;
     }
     renderMatching() {
         const plan = this.status.plan;
         return `<section class="maip-two-col wide-left">
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>AI 原始填写</h3><p>标题、小标题、信息点和“无”的固定自然语言格式。</p></div></div>
+        <div class="maip-section-head"><div><h3>AI 原始填写</h3><p>标题、【关键词】、小标题、信息点和“无”的固定自然语言格式。</p></div></div>
         <textarea class="maip-raw" data-input="raw-preview" rows="22">${(0, util_1.escapeHtml)(this.status.rawResult)}</textarea>
         <div class="maip-actions"><button class="maip-btn" data-action="preview">重新解析预览</button></div>
       </article>
@@ -1607,8 +1791,28 @@ class WorkspaceUi {
         return `<section class="maip-card maip-graph-card"><div class="maip-section-head"><div><h3>世界书关系网络</h3><p>节点来自标题，边来自【关联条目】；没有独立图数据库。</p></div></div>
       <svg class="maip-graph" viewBox="0 0 ${width} ${height}" role="img">
         ${edges.map((edge) => { const a = points.get(edge.from); const b = points.get(edge.to); return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`; }).join('')}
-        ${nodes.map((entry) => { const point = points.get(entry.title); return `<g transform="translate(${point.x},${point.y})"><circle r="${entry.focus ? 18 : 12}" class="${entry.focus ? 'focus' : ''}"/><text y="-19" text-anchor="middle">${(0, util_1.escapeHtml)((0, util_1.truncate)(entry.name, 12))}</text><title>${(0, util_1.escapeHtml)(entry.title)}</title></g>`; }).join('')}
+        ${nodes.map((entry) => { const point = points.get(entry.title); return `<g transform="translate(${point.x},${point.y})"><circle r="${entry.focus ? 18 : 12}" class="${entry.focus ? 'focus' : ''}"/><text y="-19" text-anchor="middle">${(0, util_1.escapeHtml)((0, util_1.truncate)(entry.name, 12))}</text><title>${(0, util_1.escapeHtml)(entry.title)}｜${(0, util_1.escapeHtml)(entry.keywords.join('、'))}</title></g>`; }).join('')}
       </svg></section>`;
+    }
+    renderWorldbook() {
+        const preview = this.migrationPreview;
+        return `<section class="maip-two-col wide-left">
+      <article class="maip-card">
+        <div class="maip-section-head"><div><h3>旧世界书格式转换</h3><p>保持原 UID 和原生字段，将旧标题、关键词和正文机械转换为当前结构。</p></div></div>
+        <div class="maip-callout"><b>不会直接清空旧内容</b><span>无法可靠拆分的正文进入【旧格式保留】；无法判断分类的条目使用“自定义对象”关键词。</span></div>
+        <div class="maip-actions">
+          <button class="maip-btn" data-action="migration-preview" ${this.migrationBusy ? 'disabled' : ''}>扫描并预览</button>
+          <button class="maip-btn primary" data-action="migration-apply" ${!preview?.changed || this.migrationBusy ? 'disabled' : ''}>转换 ${preview?.changed ?? 0} 条</button>
+          <button class="maip-btn danger-outline" data-action="migration-undo" ${!this.worldbook.canUndoMigration() || this.migrationBusy ? 'disabled' : ''}>撤销本次转换</button>
+        </div>
+        <p class="maip-muted">“基础设定”关键词会在转换后自动设为常驻。预览后若世界书发生变化，插件会拒绝使用旧预览写入。</p>
+      </article>
+      <article class="maip-card maip-metric"><span>当前绑定</span><strong class="maip-focus-text">${(0, util_1.escapeHtml)(this.bookName())}</strong><small>${preview ? `${preview.total} 条 · ${preview.alreadyCurrent} 条已符合新格式` : '尚未扫描旧格式'}</small></article>
+    </section>
+    <section class="maip-card maip-migration-list">
+      <div class="maip-section-head"><div><h3>转换预览</h3><p>${preview ? `需要转换 ${preview.changed} / ${preview.total} 条` : '点击“扫描并预览”后显示变更。'}</p></div></div>
+      ${preview ? preview.items.map((item) => `<details class="maip-migration-item" ${item.changed ? '' : 'data-current="true"'}><summary><span>${item.changed ? '待转换' : '已符合'}</span><b>${(0, util_1.escapeHtml)(item.oldTitle || `UID ${item.uid}`)}</b><em>→ ${(0, util_1.escapeHtml)(item.newTitle)}</em></summary><div><p>${(0, util_1.escapeHtml)(item.reason)}</p><div class="maip-migration-columns"><section><h4>旧关键词</h4><pre>${(0, util_1.escapeHtml)(item.oldKeywords.join('\n') || '无')}</pre></section><section><h4>新关键词</h4><pre>${(0, util_1.escapeHtml)(item.newKeywords.join('\n'))}</pre></section></div>${item.oldContent !== item.newContent ? `<section><h4>新正文结构</h4><pre>${(0, util_1.escapeHtml)((0, util_1.truncate)(item.newContent, 1800))}</pre></section>` : ''}</div></details>`).join('') : '<div class="maip-empty">暂无转换预览</div>'}
+    </section>`;
     }
     renderAudit() {
         return `<section class="maip-two-col">
@@ -1631,27 +1835,27 @@ class WorkspaceUi {
         <label>小总结回合兜底<input type="number" data-setting="smallSummaryTurns" value="${this.settings.smallSummaryTurns}"></label>
         <label>大总结累计小总结数<input type="number" data-setting="largeSummaryCount" value="${this.settings.largeSummaryCount}"></label>
       </article>
-      <article class="maip-card span-2"><div class="maip-section-head"><div><h3>插件调度规则</h3><p>AI不填写这些字段；插件根据文本匹配结果操作 SillyTavern 原生属性。</p></div></div>
+      <article class="maip-card span-2"><div class="maip-section-head"><div><h3>通用调度信号</h3><p>常驻优先由关键词规则和玩家焦点决定；这里仅控制提及、关联和活跃事件的原生召回参数。</p></div></div>
         <div class="maip-rule-table">${this.settings.activationRules.map((rule, index) => `<div class="maip-rule-row"><input type="checkbox" data-rule-index="${index}" data-rule-prop="enabled" ${rule.enabled ? 'checked' : ''}><b>${(0, util_1.escapeHtml)(rule.label)}</b><span>${(0, util_1.escapeHtml)(rule.match)}</span><code>${(0, util_1.escapeHtml)(JSON.stringify(rule.set))}</code></div>`).join('')}</div>
       </article>
     </section>`;
     }
     renderDiagnostics() {
-        return `<section class="maip-two-col"><article class="maip-card"><h3>宿主能力</h3><pre class="maip-diagnostics">${(0, util_1.escapeHtml)(JSON.stringify(this.host.diagnostics(), null, 2))}</pre></article><article class="maip-card"><h3>运行状态</h3><pre class="maip-diagnostics">${(0, util_1.escapeHtml)(JSON.stringify(this.status, null, 2))}</pre></article></section>`;
+        return `<section class="maip-two-col"><article class="maip-card"><h3>宿主能力</h3><pre class="maip-diagnostics">${(0, util_1.escapeHtml)(JSON.stringify(this.host.diagnostics(), null, 2))}</pre></article><article class="maip-card"><h3>运行状态</h3><pre class="maip-diagnostics">${(0, util_1.escapeHtml)(JSON.stringify({ status: this.status, migration: this.migrationPreview && { bookName: this.migrationPreview.bookName, total: this.migrationPreview.total, changed: this.migrationPreview.changed } }, null, 2))}</pre></article></section>`;
     }
     async onClick(event) {
-        const target = event.target.closest('[data-action],[data-tab],[data-type]');
+        const target = event.target.closest('[data-action],[data-tab],[data-keyword]');
         if (!target)
             return;
         if (target.dataset.tab) {
             this.tab = target.dataset.tab;
-            if (target.dataset.type)
-                this.selectedType = target.dataset.type;
+            if (target.dataset.keyword !== undefined)
+                this.selectedKeyword = target.dataset.keyword;
             this.render();
             return;
         }
-        if (target.dataset.type) {
-            this.selectedType = target.dataset.type;
+        if (target.dataset.keyword !== undefined) {
+            this.selectedKeyword = target.dataset.keyword;
             this.render();
             return;
         }
@@ -1680,27 +1884,33 @@ class WorkspaceUi {
             const title = String(target.dataset.title ?? '');
             const next = this.host.getFocusTitle() === title ? '' : title;
             await this.host.setFocusTitle(next);
-            this.entries = await this.worldbook.setFocus(this.settings, next);
-            this.render();
+            await this.worldbook.setFocus(this.settings, next);
+            await this.refreshEntries();
         }
         if (action === 'save-entry')
             await this.saveEntry(String(target.dataset.uid ?? ''));
-        if (action === 'add-table') {
-            this.settings.tables.push({ key: `custom_${Date.now()}`, label: '新类型', prompt: '可稳定命名、会影响后续的核心对象。', fields: [{ key: 'fixed', label: '固定事实', policy: 'semantic-upsert' }] });
+        if (action === 'add-keyword') {
+            this.settings.keywordDefinitions.push({ key: `custom_${Date.now()}`, label: '新关键词', description: '可稳定识别、会影响后续的信息类别。', aliases: [], enabled: true, constant: false, vectorized: true, preventRecursion: false, depth: 4, order: 400, fields: [{ key: 'fixed', label: '固定事实', policy: 'semantic-upsert' }] });
             this.persistSettings();
         }
-        if (action === 'delete-table') {
-            this.settings.tables.splice(Number(target.dataset.index), 1);
+        if (action === 'delete-keyword') {
+            this.settings.keywordDefinitions.splice(Number(target.dataset.index), 1);
             this.persistSettings();
         }
         if (action === 'add-field') {
-            this.settings.tables[Number(target.dataset.index)]?.fields.push({ key: `field_${Date.now()}`, label: '新小标题', policy: 'semantic-upsert' });
+            this.settings.keywordDefinitions[Number(target.dataset.index)]?.fields.push({ key: `field_${Date.now()}`, label: '新小标题', policy: 'semantic-upsert' });
             this.persistSettings();
         }
         if (action === 'delete-field') {
-            this.settings.tables[Number(target.dataset.tableIndex)]?.fields.splice(Number(target.dataset.fieldIndex), 1);
+            this.settings.keywordDefinitions[Number(target.dataset.keywordIndex)]?.fields.splice(Number(target.dataset.fieldIndex), 1);
             this.persistSettings();
         }
+        if (action === 'migration-preview')
+            await this.previewMigration();
+        if (action === 'migration-apply')
+            await this.applyMigration();
+        if (action === 'migration-undo')
+            await this.undoMigration();
     }
     async onChange(event) {
         const target = event.target;
@@ -1710,14 +1920,23 @@ class WorkspaceUi {
             this.settings[key] = value;
             this.persistSettings(false);
         }
-        if (target.dataset.settingTable) {
-            const table = this.settings.tables[Number(target.dataset.index)];
-            if (table)
-                table[target.dataset.settingTable] = target.value;
+        if (target.dataset.keywordProp) {
+            const definition = this.settings.keywordDefinitions[Number(target.dataset.index)];
+            if (definition) {
+                const prop = target.dataset.keywordProp;
+                const value = target.type === 'checkbox' ? target.checked : target.type === 'number' ? Number(target.value) : target.value;
+                if (prop === 'aliases')
+                    definition.aliases = String(value).split('/').map((item) => item.trim()).filter(Boolean);
+                else
+                    definition[prop] = value;
+                // Foundation is a default convention, but users may explicitly create other constant keywords.
+                if (definition.label === '基础设定')
+                    definition.constant = true;
+            }
             this.persistSettings(false);
         }
         if (target.dataset.fieldProp) {
-            const field = this.settings.tables[Number(target.dataset.tableIndex)]?.fields[Number(target.dataset.fieldIndex)];
+            const field = this.settings.keywordDefinitions[Number(target.dataset.keywordIndex)]?.fields[Number(target.dataset.fieldIndex)];
             if (field) {
                 if (target.dataset.fieldProp === 'options')
                     field.options = target.value.split('/').map((value) => value.trim()).filter(Boolean);
@@ -1752,25 +1971,97 @@ class WorkspaceUi {
             if (!sections.order.includes(name))
                 sections.order.push(name);
         }
-        this.entries = await this.worldbook.updateEntryContent(this.settings, uid, entry.title, (0, parser_1.serializeEntrySections)(sections));
+        const keywords = this.root.querySelector(`textarea[data-keywords-uid="${cssEscape(uid)}"]`)?.value.split('\n').map((line) => line.trim()).filter(Boolean) ?? entry.keywords;
+        await this.worldbook.updateEntry(this.settings, uid, entry.title, (0, parser_1.serializeEntrySections)(sections), keywords);
+        await this.refreshEntries();
+    }
+    async previewMigration() {
+        this.migrationBusy = true;
+        this.migrationMessage = '正在扫描旧世界书格式…';
         this.render();
+        try {
+            this.migrationPreview = await this.worldbook.previewMigration(this.settings);
+            this.migrationMessage = `扫描完成：${this.migrationPreview.changed} 条需要转换`;
+        }
+        catch (error) {
+            this.migrationMessage = error instanceof Error ? error.message : String(error);
+        }
+        finally {
+            this.migrationBusy = false;
+            this.render();
+        }
+    }
+    async applyMigration() {
+        if (!this.migrationPreview?.changed)
+            return;
+        const confirmed = globalThis.confirm?.(`将转换世界书“${this.migrationPreview.bookName}”中的 ${this.migrationPreview.changed} 条旧格式条目。\n\n原 UID 和原生字段会保留；无法识别的正文进入【旧格式保留】。是否继续？`) ?? true;
+        if (!confirmed)
+            return;
+        this.migrationBusy = true;
+        this.migrationMessage = '正在转换旧世界书格式…';
+        this.render();
+        try {
+            const result = await this.worldbook.migrateLegacyFormat(this.settings, this.migrationPreview);
+            this.entries = result.entries;
+            this.migrationPreview = await this.worldbook.previewMigration(this.settings);
+            this.migrationMessage = `转换完成：已处理 ${result.preview.changed} 条，可在刷新页面前撤销`;
+        }
+        catch (error) {
+            this.migrationMessage = error instanceof Error ? error.message : String(error);
+        }
+        finally {
+            this.migrationBusy = false;
+            this.render();
+        }
+    }
+    async undoMigration() {
+        const confirmed = globalThis.confirm?.('撤销本次世界书格式转换并恢复页面内备份？') ?? true;
+        if (!confirmed)
+            return;
+        this.migrationBusy = true;
+        this.migrationMessage = '正在恢复转换前世界书…';
+        this.render();
+        try {
+            this.entries = await this.worldbook.undoMigration(this.settings);
+            this.migrationPreview = await this.worldbook.previewMigration(this.settings);
+            this.migrationMessage = '已恢复转换前世界书';
+        }
+        catch (error) {
+            this.migrationMessage = error instanceof Error ? error.message : String(error);
+        }
+        finally {
+            this.migrationBusy = false;
+            this.render();
+        }
     }
     async run(action) {
         try {
-            this.entries = await action();
+            await action();
         }
         finally {
-            this.render();
+            await this.refreshEntries();
         }
     }
     persistSettings(render = true) {
-        this.settings = this.settingsStore.save(this.host.context(), this.settings);
+        this.settingsStore.save(this.host.context(), this.settings);
+        this.settings = this.settingsStore.load(this.host.context());
         if (render)
             this.render();
     }
-    entryTypes() { return [...new Set(this.entries.map((entry) => entry.type))].sort((a, b) => a.localeCompare(b)); }
+    entryKeywords() {
+        const counts = new Map();
+        for (const entry of this.entries)
+            for (const keyword of entry.keywords)
+                counts.set(keyword, (counts.get(keyword) ?? 0) + 1);
+        return [...counts.keys()].sort((left, right) => (counts.get(right) ?? 0) - (counts.get(left) ?? 0) || left.localeCompare(right));
+    }
+    bookName() { return String(this.settings.targetLorebook || this.host.context().chatMetadata?.world_info || '未绑定'); }
 }
 exports.WorkspaceUi = WorkspaceUi;
+function hasKeyword(entry, keyword) {
+    const expected = (0, util_1.normalizeFact)(keyword);
+    return entry.keywords.some((value) => (0, util_1.normalizeFact)(value) === expected);
+}
 function phaseLabel(phase) {
     return { idle: '空闲', reading: '读取', audit: '审核', extracting: '提取', matching: '匹配', worldbook: '写入', summary: '总结', complete: '完成', error: '错误' }[phase] ?? phase;
 }
@@ -1786,47 +2077,13 @@ function settingSwitch(key, label, checked) {
 }
 function cssEscape(value) { return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, '\\$&'); }
 function findSettingsHost() {
-    const selectors = [
-        '#extensions_settings2',
-        '#extensions_settings',
-        '.extensions_settings',
-        '#rm_extensions_block',
-        '#extensionsMenu',
-    ];
+    const selectors = ['#extensions_settings2', '#extensions_settings', '.extensions_settings', '#rm_extensions_block', '#extensionsMenu'];
     for (const selector of selectors) {
         const element = document.querySelector(selector);
         if (element)
             return element;
     }
     return null;
-}
-function installStyle() {
-    if (document.getElementById(constants_1.STYLE_ID))
-        return;
-    const style = document.createElement('style');
-    style.id = constants_1.STYLE_ID;
-    style.textContent = `
-:root{--maip-bg:#0d1118;--maip-panel:#151b25;--maip-panel2:#1b2330;--maip-line:rgba(255,255,255,.09);--maip-text:#edf2f7;--maip-muted:#8f9aaa;--maip-accent:#76a7ff;--maip-accent2:#9c83ff;--maip-danger:#ff7d8c}
-.maip-opener{position:fixed!important;right:max(14px,env(safe-area-inset-right))!important;bottom:max(92px,calc(env(safe-area-inset-bottom) + 76px))!important;z-index:2147483000!important;display:flex!important;align-items:center!important;gap:8px!important;min-width:92px!important;min-height:44px!important;border:1px solid rgba(145,187,255,.78)!important;border-radius:999px!important;padding:7px 14px 7px 8px!important;background:linear-gradient(135deg,#35558f,#654c9d)!important;color:#fff!important;font:700 14px/1 system-ui,-apple-system,"Segoe UI",sans-serif!important;letter-spacing:.06em!important;box-shadow:0 12px 38px rgba(0,0,0,.55),0 0 0 2px rgba(118,167,255,.12)!important;opacity:1!important;visibility:visible!important;pointer-events:auto!important}.maip-opener-mark{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.16);font-size:16px}.maip-opener-text{white-space:nowrap}.maip-settings-entry{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:10px 0;padding:12px;border:1px solid rgba(118,167,255,.28);border-radius:12px;background:rgba(118,167,255,.08)}.maip-settings-entry div{display:grid;gap:3px}.maip-settings-entry small{opacity:.7}.maip-settings-entry button{border:1px solid rgba(118,167,255,.35);border-radius:9px;padding:8px 11px;background:rgba(118,167,255,.16);color:inherit}
-.maip-shell{position:fixed;inset:0;z-index:10000;color:var(--maip-text);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}.maip-backdrop{position:absolute;inset:0;background:rgba(4,7,12,.72);backdrop-filter:blur(12px)}
-.maip-workspace{position:absolute;inset:3vh 3vw;display:grid;grid-template-rows:auto auto 1fr auto;overflow:hidden;border:1px solid rgba(255,255,255,.12);border-radius:22px;background:linear-gradient(145deg,rgba(16,22,32,.98),rgba(10,14,21,.98));box-shadow:0 30px 90px rgba(0,0,0,.55)}
-.maip-header{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:22px 28px 17px;border-bottom:1px solid var(--maip-line)}.maip-header h2{margin:2px 0 3px;font-size:24px}.maip-header p,.maip-section-head p{margin:0;color:var(--maip-muted)}.maip-kicker{font-size:10px;letter-spacing:.18em;color:var(--maip-accent)}.maip-header-actions{display:flex;align-items:center;gap:9px}.maip-version{font-size:12px;color:var(--maip-muted);padding:7px 10px;border:1px solid var(--maip-line);border-radius:999px}
-.maip-tabs{display:flex;gap:4px;padding:8px 20px;border-bottom:1px solid var(--maip-line);overflow-x:auto}.maip-tabs button,.maip-segment button{border:0;background:transparent;color:var(--maip-muted);padding:9px 13px;border-radius:10px;white-space:nowrap}.maip-tabs button.active,.maip-tabs button:hover,.maip-segment button.active{background:rgba(118,167,255,.13);color:#fff}
-.maip-main{overflow:auto;padding:22px 24px}.maip-card{border:1px solid var(--maip-line);border-radius:16px;background:linear-gradient(145deg,rgba(27,35,48,.92),rgba(18,24,34,.92));padding:18px;min-width:0}.maip-card h3{margin:0 0 6px}.maip-muted,.maip-card small{color:var(--maip-muted)}
-.maip-hero-grid{display:grid;grid-template-columns:minmax(340px,2fr) repeat(3,minmax(160px,1fr));gap:14px}.maip-primary-card{background:radial-gradient(circle at 90% 10%,rgba(118,167,255,.22),transparent 40%),linear-gradient(145deg,#1a2434,#131a25)}.maip-card-label{color:var(--maip-accent);font-size:12px;text-transform:uppercase;letter-spacing:.1em}.maip-big{font-size:22px;font-weight:750;margin:8px 0}.maip-metric{display:flex;flex-direction:column;justify-content:center}.maip-metric span{color:var(--maip-muted)}.maip-metric strong{font-size:34px;margin:8px 0}.maip-focus-text{font-size:18px!important;overflow-wrap:anywhere}
-.maip-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:17px}.maip-btn{border:1px solid rgba(255,255,255,.12);background:#202a39;color:#fff;padding:9px 13px;border-radius:10px}.maip-btn.primary{border-color:transparent;background:linear-gradient(135deg,#4f83e8,#7a5ce3)}.maip-btn.small{padding:7px 10px;font-size:12px}.maip-icon{width:36px;height:36px;border:1px solid var(--maip-line);border-radius:10px;background:rgba(255,255,255,.04);color:#fff;font-size:18px}.danger{color:var(--maip-danger)!important}
-.maip-two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.maip-two-col.wide-left{grid-template-columns:1.1fr .9fr;margin-top:0}.maip-section-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}.maip-link{border:0;background:none;color:var(--maip-accent);padding:4px;cursor:pointer}
-.maip-type-cloud{display:flex;flex-wrap:wrap;gap:8px}.maip-type-cloud button{display:flex;gap:10px;border:1px solid var(--maip-line);background:rgba(255,255,255,.035);color:#fff;padding:10px 12px;border-radius:11px}.maip-type-cloud span{color:var(--maip-muted)}
-.maip-ops{display:grid;gap:8px;max-height:540px;overflow:auto}.maip-op{display:grid;grid-template-columns:66px 1fr auto;gap:10px;align-items:start;padding:11px;border:1px solid var(--maip-line);border-radius:12px;background:rgba(255,255,255,.025)}.maip-op.muted{opacity:.55}.maip-op-kind{font-size:11px;padding:5px 7px;border-radius:7px;background:rgba(118,167,255,.13);color:var(--maip-accent);text-align:center}.maip-op p{margin:3px 0;color:var(--maip-muted);font-size:12px}.maip-op pre{white-space:pre-wrap;margin:7px 0 0;padding:7px;background:rgba(0,0,0,.18);border-radius:8px}.maip-op em{font-style:normal;color:var(--maip-muted);font-size:12px}
-.maip-toolbar{display:flex;justify-content:space-between;gap:12px;margin-bottom:12px}.maip-segment{display:flex;gap:4px;overflow:auto}.maip-segment span{opacity:.6}.maip-shell .maip-search,.maip-shell input,.maip-shell textarea,.maip-shell select{box-sizing:border-box;border:1px solid var(--maip-line);background:rgba(0,0,0,.18);color:var(--maip-text);border-radius:9px;padding:9px 10px;outline:none}.maip-search{min-width:250px}.maip-shell textarea{width:100%;resize:vertical;font:inherit}.maip-table-card{padding:0}.maip-table-wrap{overflow:auto}.maip-table{width:100%;border-collapse:separate;border-spacing:0;min-width:980px}.maip-table th{position:sticky;top:0;background:#1a2230;z-index:1;text-align:left;color:var(--maip-muted);font-size:12px}.maip-table th,.maip-table td{padding:12px;border-bottom:1px solid var(--maip-line);vertical-align:top}.maip-table td textarea{min-width:190px}.maip-title-cell{min-width:210px}.maip-title-cell small{display:block;margin:4px 0}.maip-tags{display:flex;flex-wrap:wrap;gap:4px}.maip-tags span{font-size:10px;padding:3px 6px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--maip-muted)}.maip-recall{display:grid;gap:4px;min-width:100px}
-.maip-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}.maip-template label,.maip-settings-grid label,.maip-card>label{display:grid;gap:6px;margin:11px 0;color:var(--maip-muted);font-size:12px}.maip-fields{display:grid;gap:7px;margin:13px 0}.maip-field-row{display:grid;grid-template-columns:1fr 145px 1.25fr 36px;gap:7px}.maip-raw{min-height:460px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.6}
-.maip-graph-card{padding-bottom:8px}.maip-graph{width:100%;height:min(65vh,620px);background:radial-gradient(circle at center,rgba(118,167,255,.08),transparent 55%);border-radius:14px}.maip-graph line{stroke:rgba(143,154,170,.24);stroke-width:1}.maip-graph circle{fill:#76a7ff;stroke:#c6d9ff;stroke-width:1.5}.maip-graph circle.focus{fill:#9c83ff;stroke:#fff;stroke-width:3}.maip-graph text{fill:#dce6f4;font-size:11px}
-.maip-settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.maip-settings-grid .span-2{grid-column:1/-1}.maip-switch{display:flex!important;grid-template-columns:auto auto 1fr!important;align-items:center;gap:8px!important}.maip-switch input{display:none}.maip-switch span{width:38px;height:21px;background:#303a48;border-radius:999px;position:relative}.maip-switch span:after{content:"";position:absolute;width:15px;height:15px;left:3px;top:3px;border-radius:50%;background:#fff;transition:.2s}.maip-switch input:checked+span{background:#577fdb}.maip-switch input:checked+span:after{transform:translateX(17px)}.maip-rule-table{display:grid;gap:7px}.maip-rule-row{display:grid;grid-template-columns:auto 1fr 140px 2fr;gap:10px;align-items:center;padding:9px;border:1px solid var(--maip-line);border-radius:10px}.maip-rule-row code{white-space:pre-wrap;color:#aab8cb}
-.maip-diagnostics{white-space:pre-wrap;overflow:auto;max-height:62vh;background:rgba(0,0,0,.19);padding:13px;border-radius:11px;color:#b9c5d5}.maip-empty{padding:30px;text-align:center;color:var(--maip-muted)}.maip-status{display:flex;gap:9px;align-items:center;padding:11px 24px;border-top:1px solid var(--maip-line);color:var(--maip-muted);font-size:12px}.maip-status-dot{width:8px;height:8px;border-radius:50%;background:#65d29e;box-shadow:0 0 12px rgba(101,210,158,.5)}.maip-status.error .maip-status-dot{background:var(--maip-danger)}
-@media(max-width:1100px){.maip-workspace{inset:1.5vh 1.5vw}.maip-hero-grid{grid-template-columns:1fr 1fr}.maip-primary-card{grid-column:1/-1}.maip-template-grid{grid-template-columns:1fr}}
-@media(max-width:720px){.maip-workspace{inset:0;border-radius:0}.maip-header{padding:16px}.maip-header p,.maip-version{display:none}.maip-main{padding:14px}.maip-hero-grid,.maip-two-col,.maip-two-col.wide-left,.maip-settings-grid{grid-template-columns:1fr}.maip-settings-grid .span-2{grid-column:auto}.maip-toolbar{display:grid}.maip-search{width:100%;min-width:0}.maip-field-row{grid-template-columns:1fr 1fr}.maip-field-row input:nth-child(3){grid-column:1/-1}.maip-rule-row{grid-template-columns:auto 1fr}.maip-rule-row code{grid-column:1/-1}.maip-opener{right:max(10px,env(safe-area-inset-right))!important;bottom:max(84px,calc(env(safe-area-inset-bottom) + 70px))!important}.maip-tabs{padding:7px 8px}}
-`;
-    document.head.appendChild(style);
 }
 
 },
@@ -1993,6 +2250,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorldbookAdapter = void 0;
 exports.parseEntries = parseEntries;
+exports.buildMigrationPreview = buildMigrationPreview;
 const constants_1 = require("./constants");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
@@ -2001,6 +2259,7 @@ class WorldbookAdapter {
     constructor(context) {
         this.context = context;
         this.apiPromise = null;
+        this.migrationBackup = null;
     }
     async list(settings) {
         const { data } = await this.open(settings, false);
@@ -2011,7 +2270,7 @@ class WorldbookAdapter {
         const before = parseEntries(opened.data);
         const after = (0, operations_1.applyPlanToEntries)(plan, before);
         const byUid = new Map(before.map((entry) => [entry.uid, entry]));
-        const afterByUid = new Map(after.filter((entry) => !entry.uid.startsWith('new:')).map((entry) => [entry.uid, entry]));
+        const touchedUids = new Set(plan.operations.filter((operation) => operation.kind !== 'noop' && operation.targetUid).map((operation) => String(operation.targetUid)));
         for (const entry of after) {
             if (entry.raw.__delete)
                 continue;
@@ -2022,13 +2281,15 @@ class WorldbookAdapter {
                 entry.raw = created;
             }
             else {
+                if (!touchedUids.has(entry.uid))
+                    continue;
                 const original = byUid.get(entry.uid);
                 if (!original)
                     continue;
                 hydrateRaw(original.raw, entry, sourceMessageKey);
             }
         }
-        // 先保存全部新增、替换、分发结果并回读，再执行删除，避免沉降时先丢源条目。
+        // Save additions/replacements before deletion so sedimentation never drops the source first.
         this.applyActivationRules(parseEntries(opened.data), settings, contextText, focusTitle);
         await this.save(opened);
         const verifiedData = await opened.api.loadWorldInfo(opened.name);
@@ -2040,7 +2301,8 @@ class WorldbookAdapter {
             const protectedTitle = (0, util_1.normalizeTitle)(focusTitle);
             for (const operation of deletions) {
                 const target = parseEntries(opened.data).find((entry) => entry.uid === operation.targetUid || entry.normalizedTitle === (0, util_1.normalizeTitle)(operation.title).toLocaleLowerCase());
-                if (!target || target.locked || target.focus || (0, util_1.normalizeTitle)(target.title) === protectedTitle)
+                const protectedByKeyword = target?.keywords.some((keyword) => keywordMatchesDefinition(keyword, foundationDefinition(settings)));
+                if (!target || target.locked || target.focus || protectedByKeyword || (0, util_1.normalizeTitle)(target.title) === protectedTitle)
                     continue;
                 delete opened.data.entries[String(target.uid)];
             }
@@ -2051,45 +2313,132 @@ class WorldbookAdapter {
             throw new Error('世界书最终回读失败');
         return parseEntries(finalData);
     }
-    async updateEntryContent(settings, uid, title, content) {
+    async updateEntry(settings, uid, title, content, keywords) {
         const opened = await this.open(settings, true);
-        const entry = opened.data.entries?.[String(uid)];
-        if (!entry)
+        const raw = opened.data.entries?.[String(uid)];
+        if (!raw)
             throw new Error(`世界书条目 UID ${uid} 不存在`);
-        entry.comment = (0, util_1.normalizeTitle)(title);
-        entry.content = String(content ?? '').trim();
-        markManaged(entry, '', (0, util_1.normalizeTitle)(title));
+        const normalizedTitle = (0, util_1.normalizeTitle)(title);
+        if (!(0, util_1.splitTitle)(normalizedTitle))
+            throw new Error('条目标题必须使用“类型｜稳定名称”');
+        raw.comment = normalizedTitle;
+        raw.content = String(content ?? '').trim();
+        const split = (0, util_1.splitTitle)(normalizedTitle);
+        raw.key = (0, util_1.unique)([split.type, split.name, ...keywords]);
+        markManaged(raw, '', normalizedTitle);
+        this.applyActivationRules(parseEntries(opened.data), settings, '', this.focusTitle());
         await this.save(opened);
-        return parseEntries(await opened.api.loadWorldInfo(opened.name));
+        const verified = await opened.api.loadWorldInfo(opened.name);
+        if (!verified)
+            throw new Error('世界书编辑后回读失败');
+        return parseEntries(verified);
+    }
+    /** Backward-compatible call used by older UI builds. */
+    async updateEntryContent(settings, uid, title, content) {
+        const existing = (await this.list(settings)).find((entry) => entry.uid === uid);
+        return this.updateEntry(settings, uid, title, content, existing?.keywords ?? []);
     }
     async setFocus(settings, title) {
         const opened = await this.open(settings, true);
         const normalized = (0, util_1.normalizeTitle)(title);
         for (const entry of parseEntries(opened.data)) {
-            const focus = normalized && (0, util_1.normalizeTitle)(entry.title) === normalized;
             const extension = markManaged(entry.raw, '', entry.title);
-            extension.focus = focus;
-            if (focus) {
-                entry.raw.constant = true;
-                entry.raw.vectorized = false;
-            }
-            else if (entry.focus) {
-                entry.raw.constant = false;
-            }
+            extension.focus = Boolean(normalized && (0, util_1.normalizeTitle)(entry.title) === normalized);
         }
+        this.applyActivationRules(parseEntries(opened.data), settings, '', normalized);
         await this.save(opened);
-        return parseEntries(await opened.api.loadWorldInfo(opened.name));
+        const verified = await opened.api.loadWorldInfo(opened.name);
+        if (!verified)
+            throw new Error('焦点写入后回读失败');
+        return parseEntries(verified);
+    }
+    async previewMigration(settings) {
+        const opened = await this.open(settings, false);
+        return buildMigrationPreview(opened.data, settings, opened.name);
+    }
+    async migrateLegacyFormat(settings, expected) {
+        const opened = await this.open(settings, true);
+        const preview = buildMigrationPreview(opened.data, settings, opened.name);
+        if (expected && (expected.bookName !== preview.bookName || expected.total !== preview.total)) {
+            throw new Error('世界书在预览后已经变化，请重新预览再转换');
+        }
+        if (!preview.changed)
+            return { preview, entries: parseEntries(opened.data) };
+        const backup = (0, util_1.clone)(opened.data.entries ?? {});
+        this.migrationBackup = { bookName: opened.name, entries: backup, createdAt: Date.now() };
+        try {
+            for (const item of preview.items) {
+                if (!item.changed)
+                    continue;
+                const raw = findRawEntry(opened.data, item.uid);
+                if (!raw)
+                    continue;
+                raw.comment = item.newTitle;
+                raw.content = item.newContent;
+                raw.key = (0, util_1.unique)(item.newKeywords);
+                markManaged(raw, '', item.newTitle).migratedFromLegacy = true;
+            }
+            this.applyActivationRules(parseEntries(opened.data), settings, '', this.focusTitle());
+            await this.save(opened);
+            const verified = await opened.api.loadWorldInfo(opened.name);
+            if (!verified)
+                throw new Error('旧世界书格式转换后回读失败');
+            return { preview, entries: parseEntries(verified) };
+        }
+        catch (error) {
+            opened.data.entries = backup;
+            try {
+                await this.save(opened);
+            }
+            catch (rollbackError) {
+                console.error('[MirrorAbyss] migration rollback failed', rollbackError);
+            }
+            throw error;
+        }
+    }
+    canUndoMigration() { return Boolean(this.migrationBackup); }
+    async undoMigration(settings) {
+        const backup = this.migrationBackup;
+        if (!backup)
+            throw new Error('当前页面没有可撤销的世界书格式转换');
+        const opened = await this.open(settings, true);
+        if (opened.name !== backup.bookName)
+            throw new Error('当前绑定世界书与备份不一致');
+        opened.data.entries = (0, util_1.clone)(backup.entries);
+        await this.save(opened);
+        const verified = await opened.api.loadWorldInfo(opened.name);
+        if (!verified)
+            throw new Error('撤销后回读失败');
+        this.migrationBackup = null;
+        return parseEntries(verified);
     }
     applyActivationRules(entries, settings, contextText, focusTitle) {
         const normalizedContext = (0, util_1.normalizeFact)(contextText);
-        const currentScene = entries.find((entry) => /(场景|时空)/u.test(entry.type) && /(当前场景|进行中|当前)/u.test(entry.content));
+        const currentScene = entries.find((entry) => entry.keywords.some((keyword) => ['场景', '时空'].some((label) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)(label))) && /(当前场景|进行中|当前)/u.test(entry.content));
         for (const entry of entries) {
+            const manualConstant = Boolean(entry.raw.constant && !entry.managed);
+            const profiles = matchingKeywordDefinitions(entry, settings.keywordDefinitions);
+            const profileBase = profiles.reduce((state, profile) => ({
+                constant: state.constant || profile.constant,
+                vectorized: profile.constant ? false : state.vectorized || profile.vectorized,
+                preventRecursion: state.preventRecursion || profile.preventRecursion,
+                depth: Math.min(state.depth, profile.depth),
+                order: Math.max(state.order, profile.order),
+                disabled: state.disabled,
+            }), {
+                constant: false,
+                vectorized: false,
+                preventRecursion: false,
+                depth: 99,
+                order: 0,
+                disabled: Boolean(entry.raw.disable),
+            });
             const base = {
-                constant: Boolean(entry.raw.constant),
-                vectorized: entry.raw.vectorized !== false,
-                preventRecursion: Boolean(entry.raw.preventRecursion),
-                depth: Math.max(0, Number(entry.raw.depth) || 4),
-                order: Number(entry.raw.order) || 400,
+                constant: manualConstant || profileBase.constant,
+                vectorized: profiles.length ? (profileBase.constant ? false : profileBase.vectorized) : entry.raw.vectorized !== false,
+                preventRecursion: profiles.length ? profileBase.preventRecursion : Boolean(entry.raw.preventRecursion),
+                depth: profiles.length ? (profileBase.depth === 99 ? 4 : profileBase.depth) : Math.max(0, Number(entry.raw.depth) || 4),
+                order: profiles.length ? (profileBase.order || 400) : (Number(entry.raw.order) || 400),
                 disabled: Boolean(entry.raw.disable),
             };
             const mentioned = [entry.name, ...entry.keywords, ...entry.aliases]
@@ -2097,7 +2446,7 @@ class WorldbookAdapter {
                 .filter((value) => value.length >= 2)
                 .some((value) => normalizedContext.includes(value));
             const linkedCurrent = Boolean(currentScene && entry.references.some((reference) => (0, util_1.normalizeTitle)(reference) === (0, util_1.normalizeTitle)(currentScene.title)));
-            const activeEvent = /(事件)/u.test(entry.type) && /(开始|进行中|持续中|活跃)/u.test(entry.content) && !/(结束|已结束|归档)/u.test(entry.content);
+            const activeEvent = entry.keywords.some((keyword) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)('事件')) && /(开始|进行中|持续中|活跃)/u.test(entry.content) && !/(结束|已结束|归档)/u.test(entry.content);
             const focus = Boolean(focusTitle && (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(focusTitle)) || entry.focus;
             const state = { ...base };
             const matches = {
@@ -2117,7 +2466,7 @@ class WorldbookAdapter {
                 let hit = matches[rule.match] ?? false;
                 if (rule.match === 'regex' && rule.pattern) {
                     try {
-                        hit = new RegExp(rule.pattern, 'iu').test(`${entry.title}\n${entry.content}`);
+                        hit = new RegExp(rule.pattern, 'iu').test(`${entry.title}\n${entry.keywords.join(' ')}\n${entry.content}`);
                     }
                     catch {
                         hit = false;
@@ -2125,11 +2474,21 @@ class WorldbookAdapter {
                 }
                 if (!hit)
                     continue;
-                Object.assign(state, rule.set);
+                // Generic rules may tune native recall, but constant remains controlled by focus,
+                // manual user state, or keyword profiles such as 基础设定.
+                const { constant: _ignored, ...rest } = rule.set;
+                Object.assign(state, rest);
             }
-            // 玩家焦点是唯一自动常驻资格；普通规则不能把其他条目改为常驻。
-            if (!focus)
-                state.constant = Boolean(entry.raw.constant && !entry.managed);
+            if (profiles.some((profile) => profile.constant)) {
+                state.constant = true;
+                state.vectorized = false;
+            }
+            if (focus) {
+                state.constant = true;
+                state.vectorized = false;
+                state.depth = 1;
+                state.order = Math.max(state.order, 920);
+            }
             entry.raw.constant = state.constant;
             entry.raw.vectorized = state.vectorized;
             entry.raw.preventRecursion = state.preventRecursion;
@@ -2138,8 +2497,18 @@ class WorldbookAdapter {
             entry.raw.disable = state.disabled;
             const extension = markManaged(entry.raw, '', entry.title);
             extension.focus = focus;
-            extension.activationReason = { mentioned, linkedCurrent, activeEvent, updatedAt: Date.now() };
+            extension.activationReason = {
+                keywordProfiles: profiles.map((profile) => profile.label),
+                mentioned,
+                linkedCurrent,
+                activeEvent,
+                updatedAt: Date.now(),
+            };
         }
+    }
+    focusTitle() {
+        const value = this.context().chatMetadata?.mirrorAbyssInfoPoint;
+        return value && typeof value === 'object' ? String(value.focusTitle ?? '') : '';
     }
     async open(settings, create) {
         const api = await this.api();
@@ -2215,7 +2584,7 @@ function parseEntries(data) {
         const keywords = (0, util_1.normalizeStringArray)(raw.key);
         const aliases = (0, util_1.unique)([
             ...(0, parser_1.sectionLines)(content, ['别名', '称号', '其他名称']),
-            ...keywords.filter((key) => (0, util_1.normalizeFact)(key) !== (0, util_1.normalizeFact)(split.name)),
+            ...keywords.filter((key) => (0, util_1.normalizeFact)(key) !== (0, util_1.normalizeFact)(split.name) && (0, util_1.normalizeFact)(key) !== (0, util_1.normalizeFact)(split.type)),
         ]);
         const extension = readExtension(raw);
         output.push({
@@ -2226,7 +2595,7 @@ function parseEntries(data) {
             name: split.name,
             content,
             sections,
-            keywords: (0, util_1.unique)([split.name, ...keywords]),
+            keywords: (0, util_1.unique)([split.type, split.name, ...keywords]),
             aliases,
             references: (0, parser_1.extractReferences)(content),
             focus: extension.focus === true,
@@ -2243,7 +2612,181 @@ function parseEntries(data) {
             raw,
         });
     }
-    return output.sort((left, right) => left.type.localeCompare(right.type) || left.title.localeCompare(right.title));
+    return output.sort((left, right) => left.title.localeCompare(right.title));
+}
+function buildMigrationPreview(data, settings, bookName = '') {
+    const items = [];
+    const seen = new Set();
+    for (const [mapUid, rawValue] of Object.entries(data?.entries ?? {})) {
+        if (!rawValue || typeof rawValue !== 'object')
+            continue;
+        const raw = rawValue;
+        const uid = String(raw.uid ?? mapUid);
+        const oldTitle = String(raw.comment ?? raw.name ?? raw.title ?? '').trim();
+        const oldKeywords = (0, util_1.normalizeStringArray)(raw.key);
+        const oldContent = String(raw.content ?? '').trim();
+        const inferred = inferLegacyIdentity(oldTitle, oldKeywords, oldContent, settings.keywordDefinitions, uid);
+        let newTitle = inferred.title;
+        const key = (0, util_1.normalizeTitle)(newTitle).toLocaleLowerCase();
+        if (seen.has(key)) {
+            const split = (0, util_1.splitTitle)(newTitle);
+            newTitle = `${split.type}｜${split.name}（${uid}）`;
+            inferred.reasons.push('转换后标题与其他条目重复，保留 UID 后缀以避免误合并');
+        }
+        seen.add((0, util_1.normalizeTitle)(newTitle).toLocaleLowerCase());
+        const newKeywords = (0, util_1.unique)([(0, util_1.splitTitle)(newTitle)?.type ?? '', (0, util_1.splitTitle)(newTitle)?.name ?? '', ...inferred.keywords]);
+        const newContent = convertLegacyContent(oldContent, newKeywords);
+        const changed = (0, util_1.normalizeTitle)(oldTitle) !== newTitle
+            || (0, util_1.normalizeFact)(oldKeywords.join('|')) !== (0, util_1.normalizeFact)(newKeywords.join('|'))
+            || oldContent.trim() !== newContent.trim()
+            || readExtension(raw).version !== constants_1.MANAGED_VERSION;
+        items.push({
+            uid,
+            oldTitle,
+            newTitle,
+            oldKeywords,
+            newKeywords,
+            oldContent,
+            newContent,
+            changed,
+            reason: inferred.reasons.join('；') || (changed ? '补齐新格式元数据' : '已经符合当前格式'),
+        });
+    }
+    return {
+        bookName,
+        total: items.length,
+        changed: items.filter((item) => item.changed).length,
+        alreadyCurrent: items.filter((item) => !item.changed).length,
+        items,
+        createdAt: Date.now(),
+    };
+}
+function inferLegacyIdentity(oldTitle, oldKeywords, content, definitions, uid) {
+    const reasons = [];
+    const normalized = (0, util_1.normalizeTitle)(oldTitle);
+    const existing = (0, util_1.splitTitle)(normalized);
+    if (existing) {
+        const profile = findDefinition(existing.type, definitions);
+        const canonicalType = profile?.label ?? existing.type;
+        if (canonicalType !== existing.type)
+            reasons.push(`旧标题分类“${existing.type}”归一为关键词分类“${canonicalType}”`);
+        return { title: `${canonicalType}｜${existing.name}`, keywords: (0, util_1.unique)([canonicalType, ...oldKeywords]), reasons };
+    }
+    const legacySplit = oldTitle.match(/^\s*([^：:｜|丨—-]{1,16})\s*[：:｜|丨—-]\s*(.+?)\s*$/u);
+    if (legacySplit) {
+        const profile = findDefinition(String(legacySplit[1]), definitions);
+        if (profile) {
+            reasons.push('旧标题中的分类前缀转换为结构化标题');
+            return { title: `${profile.label}｜${legacySplit[2].trim()}`, keywords: (0, util_1.unique)([profile.label, ...oldKeywords]), reasons };
+        }
+    }
+    const profile = inferDefinition(oldTitle, oldKeywords, content, definitions);
+    const label = profile?.label ?? '自定义对象';
+    const name = normalizeLegacyName(oldTitle) || `旧条目_${uid}`;
+    reasons.push(profile ? `根据旧关键词或正文识别为“${label}”` : '无法可靠识别旧分类，归入“自定义对象”');
+    return { title: `${label}｜${name}`, keywords: (0, util_1.unique)([label, ...oldKeywords]), reasons };
+}
+function inferDefinition(title, keywords, content, definitions) {
+    for (const keyword of keywords) {
+        const found = findDefinition(keyword, definitions);
+        if (found)
+            return found;
+    }
+    const haystack = `${title}\n${keywords.join(' ')}\n${content}`;
+    const heuristic = [
+        [/(世界设定|基础设定|规则|法则|物种规律|魔法体系|制度基础)/u, '基础设定'],
+        [/(事件|任务进程|追逐|冲突|战争|仪式)/u, '事件'],
+        [/(角色|人物|NPC|姓名|身份|性别|年龄)/iu, '人物'],
+        [/(地点|地区|区域|城市|村庄|洞穴|房间)/u, '地点'],
+        [/(物品|道具|装备|武器|持有者)/u, '物品'],
+        [/(场景|当前场景)/u, '场景'],
+        [/(时间|时空|日期|季节)/u, '时空'],
+        [/(组织|阵营|机构|政权)/u, '组织'],
+        [/(技能|能力|特性)/u, '能力'],
+        [/(关系|好感|敌对|盟友)/u, '关系'],
+        [/(契约|誓言|承诺|债务)/u, '契约'],
+        [/(疾病|诅咒|伤势)/u, '状态影响'],
+    ];
+    for (const [pattern, label] of heuristic)
+        if (pattern.test(haystack))
+            return findDefinition(label, definitions);
+    return null;
+}
+function convertLegacyContent(content, keywords) {
+    const text = String(content ?? '').replace(/\r/g, '').trim();
+    if (!text)
+        return '';
+    const parsed = (0, parser_1.parseEntrySections)(text);
+    if (parsed.order.length)
+        return (0, parser_1.serializeEntrySections)(parsed);
+    const sections = {};
+    let current = '';
+    const knownSection = /^(对象定义|身份定义|固定事实|现行事实|当前状态|关系状态|能力状态|事件状态|事件进程|当前结果|近期经历|历史事实|关联条目|关键词|别名|规则定义|现行规则|持续影响|限制条件|持有关系|资源变化|旧格式保留)$/u;
+    for (const sourceLine of text.split('\n')) {
+        const line = sourceLine.trim();
+        if (!line)
+            continue;
+        const heading = line.match(/^#{0,6}\s*([^：:]{1,20})\s*[：:]\s*(.*)$/u);
+        if (heading && knownSection.test(heading[1].trim())) {
+            current = heading[1].trim();
+            sections[current] ?? (sections[current] = []);
+            if (heading[2].trim())
+                sections[current].push((0, parser_1.normalizePointLine)(heading[2]));
+            continue;
+        }
+        if (!current)
+            current = defaultLegacySection(keywords);
+        sections[current] ?? (sections[current] = []);
+        sections[current].push((0, parser_1.normalizePointLine)(line));
+    }
+    const order = Object.keys(sections);
+    return (0, parser_1.serializeEntrySections)({ order, values: sections });
+}
+function defaultLegacySection(keywords) {
+    if (hasKeyword(keywords, '基础设定'))
+        return '规则定义';
+    if (hasKeyword(keywords, '事件'))
+        return '事件进程';
+    if (hasKeyword(keywords, '场景') || hasKeyword(keywords, '时空'))
+        return '当前状态';
+    if (hasKeyword(keywords, '关系'))
+        return '关系状态';
+    return '旧格式保留';
+}
+function normalizeLegacyName(value) {
+    return String(value ?? '')
+        .replace(/^\s*(角色|人物|事件|场景|物品|地点|地区|基础设定|设定|规则|组织|能力|关系)\s*[：:｜|丨—-]\s*/u, '')
+        .replace(/[【】<>]/gu, '')
+        .replace(/\s+/gu, ' ')
+        .trim()
+        .slice(0, 80);
+}
+function matchingKeywordDefinitions(entry, definitions) {
+    return definitions.filter((definition) => definition.enabled && [entry.type, ...entry.keywords].some((keyword) => keywordMatchesDefinition(keyword, definition)));
+}
+function findDefinition(value, definitions) {
+    return definitions.find((definition) => keywordMatchesDefinition(value, definition)) ?? null;
+}
+function keywordMatchesDefinition(value, definition) {
+    if (!definition)
+        return false;
+    const normalized = (0, util_1.normalizeFact)(value);
+    return [definition.label, ...definition.aliases].some((candidate) => (0, util_1.normalizeFact)(candidate) === normalized);
+}
+function foundationDefinition(settings) {
+    return settings.keywordDefinitions.find((definition) => definition.label === '基础设定') ?? null;
+}
+function hasKeyword(keywords, expected) {
+    return keywords.some((keyword) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)(expected));
+}
+function findRawEntry(data, uid) {
+    if (data.entries?.[String(uid)])
+        return data.entries[String(uid)];
+    for (const raw of Object.values(data.entries ?? {})) {
+        if (raw && typeof raw === 'object' && String(raw.uid ?? '') === uid)
+            return raw;
+    }
+    return null;
 }
 function hydrateRaw(raw, entry, sourceMessageKey) {
     raw.comment = entry.title;
