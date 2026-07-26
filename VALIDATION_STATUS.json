@@ -1,5 +1,5 @@
 {
-  "version": "2.0.0-alpha.9-infopoint.1",
+  "version": "2.0.0-alpha.9-infopoint.2-ui",
   "recordedAt": "2026-07-26",
   "architecture": {
     "storyAuthority": "SillyTavern World Info only",
@@ -10,12 +10,46 @@
     "modelOutput": "fixed natural-language title and subtitle format; no JSON"
   },
   "checks": [
-    {"id":"typecheck","status":"passed","detail":"strict TypeScript --noEmit"},
-    {"id":"core-smoke","status":"passed","detail":"无/no-op, state replacement, event-chain append, semantic duplicate skip, unknown type creation"},
-    {"id":"single-file-build","status":"passed","detail":"14 modules bundled into mirror-abyss-alpha9.js"},
-    {"id":"worldbook-smoke","status":"passed","detail":"fake SillyTavern World Info API: read, match, replace, append, create, focus constant, save and readback"},
-    {"id":"install-smoke","status":"passed","detail":"lifecycle exports, one local runtime, direct generateRaw and /scripts/world-info.js boundaries"},
-    {"id":"sillytavern-real-machine","status":"not-run","detail":"real model call, World Info save semantics and mobile UI require real SillyTavern evidence"}
+    {
+      "id": "typecheck",
+      "status": "passed",
+      "detail": "strict TypeScript --noEmit"
+    },
+    {
+      "id": "core-smoke",
+      "status": "passed",
+      "detail": "无/no-op, state replacement, event-chain append, semantic duplicate skip, unknown type creation"
+    },
+    {
+      "id": "single-file-build",
+      "status": "passed",
+      "detail": "14 modules bundled into mirror-abyss-alpha9.js"
+    },
+    {
+      "id": "worldbook-smoke",
+      "status": "passed",
+      "detail": "fake SillyTavern World Info API: read, match, replace, append, create, focus constant, save and readback"
+    },
+    {
+      "id": "install-smoke",
+      "status": "passed",
+      "detail": "lifecycle exports, one local runtime, direct generateRaw and /scripts/world-info.js boundaries"
+    },
+    {
+      "id": "sillytavern-real-machine",
+      "status": "not-run",
+      "detail": "real model call, World Info save semantics and mobile UI require real SillyTavern evidence"
+    },
+    {
+      "id": "ui-entrypoints",
+      "status": "passed",
+      "detail": "first-load auto-open, fixed floating button, Extensions-panel entry and MutationObserver reattachment"
+    },
+    {
+      "id": "optional-host-events",
+      "status": "passed",
+      "detail": "missing CHAT_CHANGED/MESSAGE_RECEIVED no longer tears down UI"
+    }
   ],
-  "conclusion": "local candidate complete; real-machine validation pending"
+  "conclusion": "local UI visibility fix complete; real-machine validation pending"
 }

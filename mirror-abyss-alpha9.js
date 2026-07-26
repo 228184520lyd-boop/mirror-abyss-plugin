@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-alpha.9-infopoint.1 single-file build. */
+/** Mirror Abyss 2.0.0-alpha.9-infopoint.2-ui single-file build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -24,13 +24,15 @@ class MirrorAbyssApplication {
         try {
             this.host.context();
             this.ui.mount();
-            this.cleanup.push(this.host.subscribe('CHAT_CHANGED', () => void this.ui.refreshEntries(), true));
-            this.cleanup.push(this.host.subscribe('MESSAGE_RECEIVED', (value) => void this.onMessage(Number(value)), true));
-            this.cleanup.push(this.host.subscribe('MESSAGE_EDITED', (value) => void this.onMessage(Number(value)), false));
+            // UI must remain available even when a hosted/forked SillyTavern omits or renames an event.
+            // Missing listeners only disable that automatic trigger; they must never tear down the workspace.
+            this.listen('CHAT_CHANGED', () => void this.ui.refreshEntries());
+            this.listen('MESSAGE_RECEIVED', (value) => void this.onMessage(Number(value)));
+            this.listen('MESSAGE_EDITED', (value) => void this.onMessage(Number(value)));
             this.started = true;
             await this.ui.refreshEntries();
             globalThis.__MIRROR_ABYSS_INFOPOINT__ = {
-                version: '2.0.0-alpha.9-infopoint.1',
+                version: '2.0.0-alpha.9-infopoint.2-ui',
                 open: () => this.ui.open(),
                 processLatest: () => this.tasks.processTurn(this.settings(), false),
                 extract: () => this.tasks.runTask('extraction', this.settings()),
@@ -55,6 +57,14 @@ class MirrorAbyssApplication {
         this.ui.unmount();
         delete globalThis.__MIRROR_ABYSS_INFOPOINT__;
     }
+    listen(eventName, handler) {
+        try {
+            this.cleanup.push(this.host.subscribe(eventName, handler, false));
+        }
+        catch (error) {
+            console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用；仅停用该自动触发，UI 保持可用。`, error);
+        }
+    }
     settings() { return this.settingsStore.load(this.host.context()); }
     async onMessage(index) {
         if (!Number.isInteger(index) || !this.host.isAssistantIndex(index))
@@ -77,7 +87,7 @@ exports.MirrorAbyssApplication = MirrorAbyssApplication;
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.STYLE_ID = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-alpha.9-infopoint.1';
+exports.VERSION = '2.0.0-alpha.9-infopoint.2-ui';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1345,6 +1355,8 @@ class WorkspaceUi {
         this.selectedType = '';
         this.root = null;
         this.opener = null;
+        this.settingsEntry = null;
+        this.observer = null;
         this.unsubscribe = null;
         this.search = '';
         this.settings = settingsStore.load(host.context());
@@ -1352,27 +1364,70 @@ class WorkspaceUi {
     }
     mount() {
         installStyle();
-        if (!this.opener) {
-            this.opener = document.createElement('button');
-            this.opener.className = 'maip-opener';
-            this.opener.type = 'button';
-            this.opener.textContent = '镜渊';
-            this.opener.addEventListener('click', () => this.open());
-            document.body.appendChild(this.opener);
-        }
+        this.ensureEntrypoints();
+        this.observer ?? (this.observer = new MutationObserver(() => this.ensureEntrypoints()));
+        this.observer.observe(document.documentElement, { childList: true, subtree: true });
         this.unsubscribe ?? (this.unsubscribe = this.tasks.subscribe((status) => {
             this.status = status;
             if (this.root)
                 this.render();
         }));
+        // A newly installed build opens once so the user cannot miss the UI.
+        // Subsequent reloads retain the visible floating and Extensions-panel entries.
+        const seenKey = `mirrorAbyssUiSeen:${constants_1.VERSION}`;
+        let seen = false;
+        try {
+            seen = sessionStorage.getItem(seenKey) === '1';
+        }
+        catch { /* storage may be disabled */ }
+        if (!seen) {
+            setTimeout(() => {
+                void this.open().finally(() => {
+                    try {
+                        sessionStorage.setItem(seenKey, '1');
+                    }
+                    catch { /* ignore */ }
+                });
+            }, 80);
+        }
     }
     unmount() {
         this.unsubscribe?.();
         this.unsubscribe = null;
+        this.observer?.disconnect();
+        this.observer = null;
         this.root?.remove();
         this.root = null;
         this.opener?.remove();
         this.opener = null;
+        this.settingsEntry?.remove();
+        this.settingsEntry = null;
+    }
+    ensureEntrypoints() {
+        const parent = document.body ?? document.documentElement;
+        if (!this.opener) {
+            this.opener = document.createElement('button');
+            this.opener.className = 'maip-opener';
+            this.opener.type = 'button';
+            this.opener.setAttribute('aria-label', '打开 Mirror Abyss 镜渊');
+            this.opener.innerHTML = '<span class="maip-opener-mark">渊</span><span class="maip-opener-text">镜渊</span>';
+            this.opener.addEventListener('click', () => void this.open());
+        }
+        if (!this.opener.isConnected)
+            parent.appendChild(this.opener);
+        const settingsHost = findSettingsHost();
+        if (settingsHost) {
+            if (!this.settingsEntry) {
+                this.settingsEntry = document.createElement('div');
+                this.settingsEntry.className = 'maip-settings-entry';
+                this.settingsEntry.innerHTML = `
+          <div><b>Mirror Abyss｜镜渊</b><small>信息点提取与世界书匹配</small></div>
+          <button type="button">打开工作区</button>`;
+                this.settingsEntry.querySelector('button')?.addEventListener('click', () => void this.open());
+            }
+            if (!this.settingsEntry.isConnected)
+                settingsHost.prepend(this.settingsEntry);
+        }
     }
     async open(tab = this.tab) {
         this.tab = tab;
@@ -1730,6 +1785,21 @@ function settingSwitch(key, label, checked) {
     return `<label class="maip-switch"><input type="checkbox" data-setting="${key}" ${checked ? 'checked' : ''}><span></span>${label}</label>`;
 }
 function cssEscape(value) { return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, '\\$&'); }
+function findSettingsHost() {
+    const selectors = [
+        '#extensions_settings2',
+        '#extensions_settings',
+        '.extensions_settings',
+        '#rm_extensions_block',
+        '#extensionsMenu',
+    ];
+    for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element)
+            return element;
+    }
+    return null;
+}
 function installStyle() {
     if (document.getElementById(constants_1.STYLE_ID))
         return;
@@ -1737,7 +1807,7 @@ function installStyle() {
     style.id = constants_1.STYLE_ID;
     style.textContent = `
 :root{--maip-bg:#0d1118;--maip-panel:#151b25;--maip-panel2:#1b2330;--maip-line:rgba(255,255,255,.09);--maip-text:#edf2f7;--maip-muted:#8f9aaa;--maip-accent:#76a7ff;--maip-accent2:#9c83ff;--maip-danger:#ff7d8c}
-.maip-opener{position:fixed;right:18px;bottom:84px;z-index:9998;border:1px solid rgba(118,167,255,.45);border-radius:999px;padding:10px 17px;background:linear-gradient(135deg,#273a61,#44356a);color:#fff;font-weight:700;letter-spacing:.08em;box-shadow:0 12px 35px rgba(0,0,0,.35)}
+.maip-opener{position:fixed!important;right:max(14px,env(safe-area-inset-right))!important;bottom:max(92px,calc(env(safe-area-inset-bottom) + 76px))!important;z-index:2147483000!important;display:flex!important;align-items:center!important;gap:8px!important;min-width:92px!important;min-height:44px!important;border:1px solid rgba(145,187,255,.78)!important;border-radius:999px!important;padding:7px 14px 7px 8px!important;background:linear-gradient(135deg,#35558f,#654c9d)!important;color:#fff!important;font:700 14px/1 system-ui,-apple-system,"Segoe UI",sans-serif!important;letter-spacing:.06em!important;box-shadow:0 12px 38px rgba(0,0,0,.55),0 0 0 2px rgba(118,167,255,.12)!important;opacity:1!important;visibility:visible!important;pointer-events:auto!important}.maip-opener-mark{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.16);font-size:16px}.maip-opener-text{white-space:nowrap}.maip-settings-entry{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:10px 0;padding:12px;border:1px solid rgba(118,167,255,.28);border-radius:12px;background:rgba(118,167,255,.08)}.maip-settings-entry div{display:grid;gap:3px}.maip-settings-entry small{opacity:.7}.maip-settings-entry button{border:1px solid rgba(118,167,255,.35);border-radius:9px;padding:8px 11px;background:rgba(118,167,255,.16);color:inherit}
 .maip-shell{position:fixed;inset:0;z-index:10000;color:var(--maip-text);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}.maip-backdrop{position:absolute;inset:0;background:rgba(4,7,12,.72);backdrop-filter:blur(12px)}
 .maip-workspace{position:absolute;inset:3vh 3vw;display:grid;grid-template-rows:auto auto 1fr auto;overflow:hidden;border:1px solid rgba(255,255,255,.12);border-radius:22px;background:linear-gradient(145deg,rgba(16,22,32,.98),rgba(10,14,21,.98));box-shadow:0 30px 90px rgba(0,0,0,.55)}
 .maip-header{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:22px 28px 17px;border-bottom:1px solid var(--maip-line)}.maip-header h2{margin:2px 0 3px;font-size:24px}.maip-header p,.maip-section-head p{margin:0;color:var(--maip-muted)}.maip-kicker{font-size:10px;letter-spacing:.18em;color:var(--maip-accent)}.maip-header-actions{display:flex;align-items:center;gap:9px}.maip-version{font-size:12px;color:var(--maip-muted);padding:7px 10px;border:1px solid var(--maip-line);border-radius:999px}
@@ -1748,13 +1818,13 @@ function installStyle() {
 .maip-two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.maip-two-col.wide-left{grid-template-columns:1.1fr .9fr;margin-top:0}.maip-section-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}.maip-link{border:0;background:none;color:var(--maip-accent);padding:4px;cursor:pointer}
 .maip-type-cloud{display:flex;flex-wrap:wrap;gap:8px}.maip-type-cloud button{display:flex;gap:10px;border:1px solid var(--maip-line);background:rgba(255,255,255,.035);color:#fff;padding:10px 12px;border-radius:11px}.maip-type-cloud span{color:var(--maip-muted)}
 .maip-ops{display:grid;gap:8px;max-height:540px;overflow:auto}.maip-op{display:grid;grid-template-columns:66px 1fr auto;gap:10px;align-items:start;padding:11px;border:1px solid var(--maip-line);border-radius:12px;background:rgba(255,255,255,.025)}.maip-op.muted{opacity:.55}.maip-op-kind{font-size:11px;padding:5px 7px;border-radius:7px;background:rgba(118,167,255,.13);color:var(--maip-accent);text-align:center}.maip-op p{margin:3px 0;color:var(--maip-muted);font-size:12px}.maip-op pre{white-space:pre-wrap;margin:7px 0 0;padding:7px;background:rgba(0,0,0,.18);border-radius:8px}.maip-op em{font-style:normal;color:var(--maip-muted);font-size:12px}
-.maip-toolbar{display:flex;justify-content:space-between;gap:12px;margin-bottom:12px}.maip-segment{display:flex;gap:4px;overflow:auto}.maip-segment span{opacity:.6}.maip-search,input,textarea,select{box-sizing:border-box;border:1px solid var(--maip-line);background:rgba(0,0,0,.18);color:var(--maip-text);border-radius:9px;padding:9px 10px;outline:none}.maip-search{min-width:250px}textarea{width:100%;resize:vertical;font:inherit}.maip-table-card{padding:0}.maip-table-wrap{overflow:auto}.maip-table{width:100%;border-collapse:separate;border-spacing:0;min-width:980px}.maip-table th{position:sticky;top:0;background:#1a2230;z-index:1;text-align:left;color:var(--maip-muted);font-size:12px}.maip-table th,.maip-table td{padding:12px;border-bottom:1px solid var(--maip-line);vertical-align:top}.maip-table td textarea{min-width:190px}.maip-title-cell{min-width:210px}.maip-title-cell small{display:block;margin:4px 0}.maip-tags{display:flex;flex-wrap:wrap;gap:4px}.maip-tags span{font-size:10px;padding:3px 6px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--maip-muted)}.maip-recall{display:grid;gap:4px;min-width:100px}
+.maip-toolbar{display:flex;justify-content:space-between;gap:12px;margin-bottom:12px}.maip-segment{display:flex;gap:4px;overflow:auto}.maip-segment span{opacity:.6}.maip-shell .maip-search,.maip-shell input,.maip-shell textarea,.maip-shell select{box-sizing:border-box;border:1px solid var(--maip-line);background:rgba(0,0,0,.18);color:var(--maip-text);border-radius:9px;padding:9px 10px;outline:none}.maip-search{min-width:250px}.maip-shell textarea{width:100%;resize:vertical;font:inherit}.maip-table-card{padding:0}.maip-table-wrap{overflow:auto}.maip-table{width:100%;border-collapse:separate;border-spacing:0;min-width:980px}.maip-table th{position:sticky;top:0;background:#1a2230;z-index:1;text-align:left;color:var(--maip-muted);font-size:12px}.maip-table th,.maip-table td{padding:12px;border-bottom:1px solid var(--maip-line);vertical-align:top}.maip-table td textarea{min-width:190px}.maip-title-cell{min-width:210px}.maip-title-cell small{display:block;margin:4px 0}.maip-tags{display:flex;flex-wrap:wrap;gap:4px}.maip-tags span{font-size:10px;padding:3px 6px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--maip-muted)}.maip-recall{display:grid;gap:4px;min-width:100px}
 .maip-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}.maip-template label,.maip-settings-grid label,.maip-card>label{display:grid;gap:6px;margin:11px 0;color:var(--maip-muted);font-size:12px}.maip-fields{display:grid;gap:7px;margin:13px 0}.maip-field-row{display:grid;grid-template-columns:1fr 145px 1.25fr 36px;gap:7px}.maip-raw{min-height:460px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.6}
 .maip-graph-card{padding-bottom:8px}.maip-graph{width:100%;height:min(65vh,620px);background:radial-gradient(circle at center,rgba(118,167,255,.08),transparent 55%);border-radius:14px}.maip-graph line{stroke:rgba(143,154,170,.24);stroke-width:1}.maip-graph circle{fill:#76a7ff;stroke:#c6d9ff;stroke-width:1.5}.maip-graph circle.focus{fill:#9c83ff;stroke:#fff;stroke-width:3}.maip-graph text{fill:#dce6f4;font-size:11px}
 .maip-settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.maip-settings-grid .span-2{grid-column:1/-1}.maip-switch{display:flex!important;grid-template-columns:auto auto 1fr!important;align-items:center;gap:8px!important}.maip-switch input{display:none}.maip-switch span{width:38px;height:21px;background:#303a48;border-radius:999px;position:relative}.maip-switch span:after{content:"";position:absolute;width:15px;height:15px;left:3px;top:3px;border-radius:50%;background:#fff;transition:.2s}.maip-switch input:checked+span{background:#577fdb}.maip-switch input:checked+span:after{transform:translateX(17px)}.maip-rule-table{display:grid;gap:7px}.maip-rule-row{display:grid;grid-template-columns:auto 1fr 140px 2fr;gap:10px;align-items:center;padding:9px;border:1px solid var(--maip-line);border-radius:10px}.maip-rule-row code{white-space:pre-wrap;color:#aab8cb}
 .maip-diagnostics{white-space:pre-wrap;overflow:auto;max-height:62vh;background:rgba(0,0,0,.19);padding:13px;border-radius:11px;color:#b9c5d5}.maip-empty{padding:30px;text-align:center;color:var(--maip-muted)}.maip-status{display:flex;gap:9px;align-items:center;padding:11px 24px;border-top:1px solid var(--maip-line);color:var(--maip-muted);font-size:12px}.maip-status-dot{width:8px;height:8px;border-radius:50%;background:#65d29e;box-shadow:0 0 12px rgba(101,210,158,.5)}.maip-status.error .maip-status-dot{background:var(--maip-danger)}
 @media(max-width:1100px){.maip-workspace{inset:1.5vh 1.5vw}.maip-hero-grid{grid-template-columns:1fr 1fr}.maip-primary-card{grid-column:1/-1}.maip-template-grid{grid-template-columns:1fr}}
-@media(max-width:720px){.maip-workspace{inset:0;border-radius:0}.maip-header{padding:16px}.maip-header p,.maip-version{display:none}.maip-main{padding:14px}.maip-hero-grid,.maip-two-col,.maip-two-col.wide-left,.maip-settings-grid{grid-template-columns:1fr}.maip-settings-grid .span-2{grid-column:auto}.maip-toolbar{display:grid}.maip-search{width:100%;min-width:0}.maip-field-row{grid-template-columns:1fr 1fr}.maip-field-row input:nth-child(3){grid-column:1/-1}.maip-rule-row{grid-template-columns:auto 1fr}.maip-rule-row code{grid-column:1/-1}.maip-opener{right:12px;bottom:72px}.maip-tabs{padding:7px 8px}}
+@media(max-width:720px){.maip-workspace{inset:0;border-radius:0}.maip-header{padding:16px}.maip-header p,.maip-version{display:none}.maip-main{padding:14px}.maip-hero-grid,.maip-two-col,.maip-two-col.wide-left,.maip-settings-grid{grid-template-columns:1fr}.maip-settings-grid .span-2{grid-column:auto}.maip-toolbar{display:grid}.maip-search{width:100%;min-width:0}.maip-field-row{grid-template-columns:1fr 1fr}.maip-field-row input:nth-child(3){grid-column:1/-1}.maip-rule-row{grid-template-columns:auto 1fr}.maip-rule-row code{grid-column:1/-1}.maip-opener{right:max(10px,env(safe-area-inset-right))!important;bottom:max(84px,calc(env(safe-area-inset-bottom) + 70px))!important}.maip-tabs{padding:7px 8px}}
 `;
     document.head.appendChild(style);
 }
