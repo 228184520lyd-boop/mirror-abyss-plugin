@@ -1,55 +1,42 @@
 {
-  "version": "2.0.0-alpha.9-infopoint.2-ui",
-  "recordedAt": "2026-07-26",
+  "version": "2.0.0-alpha.9-infopoint.10-ui-status",
+  "generatedAt": "2026-07-27T01:35:00+08:00",
+  "status": "local-validation-passed-real-xfx-sillytavern-pending",
   "architecture": {
-    "storyAuthority": "SillyTavern World Info only",
-    "core": "information-point extraction, candidate matching, worldbook operations",
-    "productionModules": 14,
-    "runtimeFiles": 1,
-    "thirdPartyRuntimeDependencies": 0,
-    "modelOutput": "fixed natural-language title and subtitle format; no JSON"
+    "sourceOfTruth": "SillyTavern World Info",
+    "ui": "white read/write projection with global top bar",
+    "model": "current SillyTavern connection or Connection Profile",
+    "messageStatus": "live TaskRunner projection below assistant body",
+    "workspace": "native top-layer dialog.showModal",
+    "installStructure": [
+      "index.js",
+      "style.css",
+      "manifest.json"
+    ]
   },
-  "checks": [
-    {
-      "id": "typecheck",
-      "status": "passed",
-      "detail": "strict TypeScript --noEmit"
-    },
-    {
-      "id": "core-smoke",
-      "status": "passed",
-      "detail": "无/no-op, state replacement, event-chain append, semantic duplicate skip, unknown type creation"
-    },
-    {
-      "id": "single-file-build",
-      "status": "passed",
-      "detail": "14 modules bundled into mirror-abyss-alpha9.js"
-    },
-    {
-      "id": "worldbook-smoke",
-      "status": "passed",
-      "detail": "fake SillyTavern World Info API: read, match, replace, append, create, focus constant, save and readback"
-    },
-    {
-      "id": "install-smoke",
-      "status": "passed",
-      "detail": "lifecycle exports, one local runtime, direct generateRaw and /scripts/world-info.js boundaries"
-    },
-    {
-      "id": "sillytavern-real-machine",
-      "status": "not-run",
-      "detail": "real model call, World Info save semantics and mobile UI require real SillyTavern evidence"
-    },
-    {
-      "id": "ui-entrypoints",
-      "status": "passed",
-      "detail": "first-load auto-open, fixed floating button, Extensions-panel entry and MutationObserver reattachment"
-    },
-    {
-      "id": "optional-host-events",
-      "status": "passed",
-      "detail": "missing CHAT_CHANGED/MESSAGE_RECEIVED no longer tears down UI"
-    }
+  "passed": [
+    "TypeScript strict typecheck",
+    "information-point syntax, no-op, state replacement and event-chain append",
+    "default subsection deduplication and compact heading chips",
+    "information table title/keyword/body mapping",
+    "overview contains entry names and current summaries only",
+    "redundant worldbook tab removed and migration moved to settings",
+    "global top-bar close control and top-right launcher",
+    "centered keyword-grouped relationship graph",
+    "SillyTavern current connection / Connection Profile settings layer",
+    "AI suggestion review before worldbook write",
+    "message status indicator directly below assistant body",
+    "message status live phase updates and cleanup",
+    "worldbook keyword mapping and foundation constant",
+    "legacy worldbook conversion and undo",
+    "SillyTavern context World Info API and same-origin HTTP fallback",
+    "install, UI, message-status and lifecycle smoke tests"
   ],
-  "conclusion": "local UI visibility fix complete; real-machine validation pending"
+  "notProven": [
+    "Real XFX-SillyTavern message DOM selectors",
+    "Real XFX-SillyTavern Connection Profile dropdown behavior",
+    "Real XFX-SillyTavern World Info API behavior",
+    "Real mobile browser visual layout",
+    "Real model responses and gateway behavior"
+  ]
 }

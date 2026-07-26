@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-alpha.9-infopoint.8-player-simple single-file build. */
+/** Mirror Abyss 2.0.0-alpha.9-infopoint.10-ui-status single-file build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -7,6 +7,7 @@ const host_1 = require("./host");
 const settings_1 = require("./settings");
 const tasks_1 = require("./tasks");
 const ui_1 = require("./ui");
+const message_status_1 = require("./message-status");
 const worldbook_1 = require("./worldbook");
 /**
  * Application shell. UI is a read/write projection over SillyTavern World Info.
@@ -19,6 +20,7 @@ class MirrorAbyssApplication {
         this.worldbook = new worldbook_1.WorldbookAdapter(() => this.host.context());
         this.tasks = new tasks_1.TaskRunner(this.host, this.worldbook);
         this.ui = new ui_1.WorkspaceUi(this.host, this.settingsStore, this.worldbook, this.tasks);
+        this.messageStatus = new message_status_1.MessageStatusIndicator(this.tasks);
         this.cleanup = [];
         this.started = false;
     }
@@ -28,6 +30,7 @@ class MirrorAbyssApplication {
         this.host.context();
         // Alpha.27 order: visible shell first; projections and optional listeners later.
         this.ui.mount();
+        this.messageStatus.mount();
         this.listen('CHAT_CHANGED', () => void this.ui.refreshEntries());
         this.listen('MESSAGE_RECEIVED', (value) => void this.onMessage(Number(value)));
         this.listen('MESSAGE_EDITED', (value) => void this.onMessage(Number(value)));
@@ -47,6 +50,7 @@ class MirrorAbyssApplication {
                 console.warn('[MirrorAbyss] listener cleanup failed', error);
             }
         });
+        this.messageStatus.unmount();
         this.ui.unmount();
     }
     isStarted() { return this.started; }
@@ -96,7 +100,7 @@ exports.MirrorAbyssApplication = MirrorAbyssApplication;
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.STYLE_ID = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-alpha.9-infopoint.8-player-simple';
+exports.VERSION = '2.0.0-alpha.9-infopoint.10-ui-status';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -171,15 +175,29 @@ class HostAdapter {
     isAssistantIndex(index) {
         return isAssistant((this.context().chat ?? [])[index]);
     }
-    async generate(systemPrompt, prompt, responseLength, chatKey, timeoutMs) {
+    async generate(systemPrompt, prompt, responseLength, chatKey, timeoutMs, profileId = '') {
         const run = async () => {
             if (this.chatKey() !== chatKey)
                 throw new Error('聊天已经切换，本次模型调用作废');
-            const generateRaw = this.context().generateRaw;
-            if (typeof generateRaw !== 'function')
-                throw new Error('当前 SillyTavern 未提供 generateRaw');
+            const context = this.context();
             const startedAt = Date.now();
-            const raw = await generateRaw({ systemPrompt, prompt, responseLength });
+            let raw;
+            if (profileId) {
+                const service = context.ConnectionManagerRequestService;
+                if (!service)
+                    throw new Error('SillyTavern Connection Profiles 服务不可用，请启用 Connection Manager 或改用当前连接');
+                const result = await service.sendRequest(profileId, [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: prompt },
+                ], responseLength, { stream: false, extractData: true, includePreset: true });
+                raw = typeof result === 'string' ? result : result?.content;
+            }
+            else {
+                const generateRaw = context.generateRaw;
+                if (typeof generateRaw !== 'function')
+                    throw new Error('当前 SillyTavern 未提供 generateRaw');
+                raw = await generateRaw({ systemPrompt, prompt, responseLength });
+            }
             if (this.chatKey() !== chatKey)
                 throw new Error('聊天已经切换，本次模型结果不再写入');
             const elapsed = Date.now() - startedAt;
@@ -193,6 +211,41 @@ class HostAdapter {
         const result = this.modelTail.then(run, run);
         this.modelTail = result.catch(() => undefined);
         return result;
+    }
+    connectionProfilesAvailable() {
+        const context = this.context();
+        return Boolean(context.ConnectionManagerRequestService)
+            && !context.extensionSettings?.disabledExtensions?.includes?.('connection-manager');
+    }
+    profileName(profileId) {
+        if (!profileId)
+            return '当前连接';
+        try {
+            return this.context().ConnectionManagerRequestService?.getProfile(profileId)?.name || profileId;
+        }
+        catch {
+            return profileId;
+        }
+    }
+    bindProfileDropdown(selector, selectedId, onChange) {
+        const service = this.context().ConnectionManagerRequestService;
+        if (!service?.handleDropdown)
+            return false;
+        service.handleDropdown(selector, selectedId, (profile) => onChange(profile?.id || ''), undefined, undefined, (profile) => { if (profile?.id === selectedId)
+            onChange(''); });
+        return true;
+    }
+    async testProfile(profileId) {
+        if (!profileId)
+            throw new Error('请先选择 Connection Profile');
+        const service = this.context().ConnectionManagerRequestService;
+        if (!service)
+            throw new Error('ConnectionManagerRequestService 不可用');
+        const result = await service.sendRequest(profileId, [{ role: 'user', content: '只回复：MIRROR_ABYSS_PROFILE_OK' }], 32, { stream: false, extractData: true });
+        const text = (typeof result === 'string' ? result : result?.content || '').trim();
+        if (!text)
+            throw new Error('Connection Profile 返回为空');
+        return text;
     }
     async replaceAssistantText(turn, text) {
         if (this.chatKey() !== turn.chatKey)
@@ -262,6 +315,7 @@ class HostAdapter {
         return {
             chatKey: this.chatKey(),
             generateRaw: typeof context.generateRaw === 'function',
+            connectionProfiles: Boolean(context.ConnectionManagerRequestService),
             saveChat: typeof context.saveChat === 'function' || typeof context.saveChatConditional === 'function',
             saveMetadata: typeof context.saveMetadata === 'function' || typeof context.saveMetadataDebounced === 'function',
             events: Object.keys(events).filter((key) => /CHAT|MESSAGE|APP_READY/u.test(key)).sort(),
@@ -660,6 +714,118 @@ function add(map, key, entry) {
 }
 
 },
+"message-status":function(module,exports,require){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MessageStatusIndicator = void 0;
+const util_1 = require("./util");
+/**
+ * Read-only status projection placed directly below the target assistant text.
+ * It mirrors TaskRunner state and owns no narrative data.
+ */
+class MessageStatusIndicator {
+    constructor(tasks) {
+        this.tasks = tasks;
+        this.unsubscribe = null;
+        this.observer = null;
+        this.scheduled = false;
+        this.status = tasks.currentStatus();
+    }
+    mount() {
+        this.unsubscribe ?? (this.unsubscribe = this.tasks.subscribe((status) => {
+            this.status = status;
+            this.scheduleRender();
+        }));
+        if (!this.observer && typeof MutationObserver !== 'undefined') {
+            this.observer = new MutationObserver(() => this.scheduleRender());
+            this.observer.observe(document.body ?? document.documentElement, { childList: true, subtree: true });
+        }
+        this.scheduleRender();
+    }
+    unmount() {
+        this.unsubscribe?.();
+        this.unsubscribe = null;
+        this.observer?.disconnect();
+        this.observer = null;
+        document.querySelectorAll('.maip-message-status').forEach((node) => node.remove());
+    }
+    scheduleRender() {
+        if (this.scheduled)
+            return;
+        this.scheduled = true;
+        queueMicrotask(() => {
+            this.scheduled = false;
+            this.render();
+        });
+    }
+    render() {
+        const index = this.status.targetMessageIndex;
+        if (!Number.isInteger(index) || index < 0)
+            return;
+        const message = findMessageElement(index);
+        if (!message)
+            return;
+        const messageKey = this.status.targetMessageKey || `index-${index}`;
+        let indicator = message.querySelector(`.maip-message-status[data-message-key="${cssEscape(messageKey)}"]`);
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = 'maip-message-status';
+            indicator.dataset.messageKey = messageKey;
+            indicator.setAttribute('role', 'status');
+            indicator.setAttribute('aria-live', 'polite');
+            const text = message.querySelector('.mes_text, .message_text, .mes-content, .message-content');
+            if (text?.parentElement)
+                text.parentElement.insertBefore(indicator, text.nextSibling);
+            else
+                message.appendChild(indicator);
+        }
+        indicator.dataset.phase = this.status.pendingReview ? 'review' : this.status.phase;
+        indicator.innerHTML = `<span class="maip-message-status-dot" aria-hidden="true"></span><b>${(0, util_1.escapeHtml)(statusTitle(this.status))}</b><span>${(0, util_1.escapeHtml)((0, util_1.truncate)(statusDetail(this.status), 160))}</span>`;
+        indicator.title = statusDetail(this.status);
+    }
+}
+exports.MessageStatusIndicator = MessageStatusIndicator;
+function findMessageElement(index) {
+    const selectors = [
+        `.mes[mesid="${index}"]`,
+        `.mes[data-message-id="${index}"]`,
+        `.mes[data-message-index="${index}"]`,
+        `[mesid="${index}"].mes`,
+        `[data-message-id="${index}"].mes`,
+    ];
+    for (const selector of selectors) {
+        const found = document.querySelector(selector);
+        if (found)
+            return found;
+    }
+    const messages = document.querySelectorAll('#chat .mes, .chat .mes, .mes');
+    return messages.item(index) || null;
+}
+function statusTitle(status) {
+    if (status.pendingReview)
+        return '镜渊 · 待确认';
+    return {
+        idle: '镜渊 · 待处理',
+        reading: '镜渊 · 读取中',
+        audit: '镜渊 · 审核中',
+        extracting: '镜渊 · 提取中',
+        matching: '镜渊 · 匹配中',
+        worldbook: '镜渊 · 写入中',
+        summary: '镜渊 · 总结中',
+        complete: '镜渊 · 已完成',
+        error: '镜渊 · 处理失败',
+    }[status.phase];
+}
+function statusDetail(status) {
+    if (status.pendingReview)
+        return status.detail || 'AI 信息点建议等待确认后写入世界书';
+    return status.error || status.detail || '等待插件处理';
+}
+function cssEscape(value) {
+    return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
+}
+
+},
 "model":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -936,6 +1102,7 @@ function operationId(kind, title, value) {
 "parser":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.canonicalSectionName = canonicalSectionName;
 exports.parseInformationPoints = parseInformationPoints;
 exports.parseEntrySections = parseEntrySections;
 exports.serializeEntrySections = serializeEntrySections;
@@ -949,6 +1116,30 @@ const TITLE_PATTERN = /^\s*(?:#{1,6}\s*)?([^【】\n]+?[｜|丨][^【】\n]+?)\s
 const BULLET_PATTERN = /^\s*(?:[-*•·]|\d+[.)、])\s*(.*?)\s*$/u;
 const EMPTY_PATTERN = /^\s*(?:无|无变化|无新增事实|无可记录事实|没有)\s*[。.]?\s*$/u;
 const UID_PATTERN = /(?:｜|\s)[（(]?UID\s*[:：=]\s*([^｜）)\s]+)[）)]?\s*$/iu;
+const SECTION_ALIASES = {
+    '固定事实': '固定事实',
+    '身份定义': '固定事实',
+    '对象定义': '固定事实',
+    '规则定义': '固定事实',
+    '能力定义': '固定事实',
+    '关系定义': '固定事实',
+    '契约定义': '固定事实',
+    '影响定义': '固定事实',
+    '现行事实': '当前状态',
+    '状态': '当前状态',
+    '事件状态': '当前状态',
+    '历史事实': '变化记录',
+    '核心变化': '变化记录',
+    '资源变化': '变化记录',
+    '关系变化': '变化记录',
+    '关系状态': '当前状态',
+    '当前结果': '最终结果',
+    '结束结论': '最终结果',
+};
+function canonicalSectionName(value) {
+    const name = String(value ?? '').replace(/\s+/gu, '').trim();
+    return SECTION_ALIASES[name] ?? String(value ?? '').trim();
+}
 function parseInformationPoints(raw) {
     const text = sanitizeModelText(raw);
     if (EMPTY_PATTERN.test(text.trim()))
@@ -961,7 +1152,7 @@ function parseInformationPoints(raw) {
         const line = sourceLine.trimEnd();
         const sectionMatch = line.match(SECTION_PATTERN);
         if (sectionMatch && block) {
-            section = { name: sectionMatch[1].trim(), lines: [], empty: false };
+            section = { name: canonicalSectionName(sectionMatch[1]), lines: [], empty: false };
             block.sections.push(section);
             continue;
         }
@@ -1011,9 +1202,15 @@ function parseInformationPoints(raw) {
         section.lines.push(normalizePointLine(bullet));
     }
     for (const item of blocks) {
-        item.sections = item.sections
-            .map((candidate) => ({ ...candidate, lines: (0, util_1.unique)(candidate.lines), empty: candidate.empty || candidate.lines.length === 0 }))
-            .filter((candidate) => candidate.name);
+        const mergedSections = new Map();
+        for (const candidate of item.sections) {
+            const name = canonicalSectionName(candidate.name);
+            const current = mergedSections.get(name) ?? { name, lines: [], empty: true };
+            current.lines = (0, util_1.unique)([...current.lines, ...candidate.lines]);
+            current.empty = current.lines.length === 0 && (current.empty || candidate.empty);
+            mergedSections.set(name, current);
+        }
+        item.sections = [...mergedSections.values()].filter((candidate) => candidate.name);
         const keywordLines = item.sections
             .filter((candidate) => /(关键词|触发词|标签|分类)/u.test(candidate.name) && !candidate.empty)
             .flatMap((candidate) => candidate.lines);
@@ -1029,7 +1226,7 @@ function parseEntrySections(content) {
         const line = sourceLine.trimEnd();
         const match = line.match(SECTION_PATTERN);
         if (match) {
-            current = match[1].trim();
+            current = canonicalSectionName(match[1]);
             if (!values[current]) {
                 values[current] = [];
                 order.push(current);
@@ -1043,7 +1240,9 @@ function parseEntrySections(content) {
             continue;
         values[current].push(normalizePointLine(bullet));
     }
-    return { order, values };
+    for (const name of Object.keys(values))
+        values[name] = (0, util_1.unique)(values[name] ?? []);
+    return { order: (0, util_1.unique)(order), values };
 }
 function serializeEntrySections(sections) {
     const order = (0, util_1.unique)([...sections.order, ...Object.keys(sections.values)]);
@@ -1233,22 +1432,100 @@ const COMMON_ALIASES = { key: 'aliases', label: '别名', policy: 'merge-keyword
 const FIXED = { key: 'fixed', label: '固定事实', policy: 'semantic-upsert' };
 const CURRENT = { key: 'current', label: '当前状态', policy: 'replace-by-anchor' };
 exports.DEFAULT_KEYWORDS = [
-    keyword('spacetime', '时空', '当前时间、时间推进、总体位置与连续性。', ['时间', '时空状态'], false, [CURRENT, { key: 'history', label: '历史事实', policy: 'append-chain' }, COMMON_LINKS], 620),
-    keyword('scene', '场景', '当前实际发生的场景、参与对象、局面和直接限制。', ['当前场景'], false, [CURRENT, { key: 'change', label: '核心变化', policy: 'semantic-upsert' }, COMMON_LINKS], 700),
-    keyword('character', '人物', '稳定人物身份、关系、当前状态与连续经历。', ['角色', 'NPC'], false, [FIXED, CURRENT, { key: 'relations', label: '关系状态', policy: 'semantic-upsert' }, { key: 'recent', label: '近期经历', policy: 'append-chain' }, COMMON_LINKS, COMMON_ALIASES], 520),
-    keyword('item', '物品', '重要物品的持有、位置、数量、完整性、用途与因果变化。', ['道具', '装备'], false, [FIXED, CURRENT, { key: 'holder', label: '持有关系', policy: 'replace-by-anchor' }, COMMON_LINKS], 500),
-    keyword('event', '事件', '事件动作骨架、进展、结果和当前状态。', ['事件链'], false, [{ key: 'status', label: '事件状态', policy: 'replace-by-anchor', options: ['开始', '进行中', '暂停', '结束', '无变化', '无'] }, { key: 'chain', label: '事件进程', policy: 'append-chain' }, { key: 'result', label: '当前结果', policy: 'replace-by-anchor' }, COMMON_LINKS], 680),
-    keyword('region', '地点', '地点自身稳定属性、当前变化与重要事件影响。', ['地区', '区域', '场所'], false, [FIXED, CURRENT, COMMON_LINKS, COMMON_ALIASES], 470),
-    keyword('global', '全局变化', '组织、制度、阵营、政权、群体格局与全局影响。', ['世界变化', '全局状态'], false, [FIXED, CURRENT, { key: 'history', label: '历史事实', policy: 'append-chain' }, COMMON_LINKS], 610),
-    keyword('foundation', '基础设定', '世界规则、物种规则、制度基础、魔法体系等跨场景基础事实。', ['基础规则', '世界设定', '规则', '设定'], true, [{ key: 'definition', label: '规则定义', policy: 'semantic-upsert' }, { key: 'current', label: '现行规则', policy: 'replace-by-anchor' }, { key: 'effect', label: '持续影响', policy: 'semantic-upsert' }, COMMON_LINKS, COMMON_ALIASES], 860, false, 1),
-    keyword('ability', '能力', '可稳定识别、会持续影响后续的能力、技能或特性。', ['技能', '特性'], false, [FIXED, CURRENT, { key: 'limits', label: '限制条件', policy: 'semantic-upsert' }, COMMON_LINKS], 540),
-    keyword('relationship', '关系', '显著且会影响后续的对象关系与关系变化。', ['显著关系', '关系状态'], false, [FIXED, CURRENT, { key: 'history', label: '关系变化', policy: 'append-chain' }, COMMON_LINKS], 560),
-    keyword('organization', '组织', '组织、阵营、机构、政权与其当前行动。', ['阵营', '机构', '政权'], false, [FIXED, CURRENT, { key: 'members', label: '成员关系', policy: 'merge-titles' }, COMMON_LINKS], 560),
-    keyword('task', '任务', '明确成立的任务、目标、责任、约束与完成状态。', ['目标', '责任'], false, [CURRENT, { key: 'progress', label: '任务进程', policy: 'append-chain' }, { key: 'result', label: '当前结果', policy: 'replace-by-anchor' }, COMMON_LINKS], 600),
-    keyword('contract', '契约', '契约、誓言、承诺、债务及其约束与状态。', ['誓言', '承诺', '债务'], false, [FIXED, CURRENT, { key: 'terms', label: '约束条件', policy: 'semantic-upsert' }, COMMON_LINKS], 580),
-    keyword('condition', '状态影响', '疾病、诅咒、伤势和其他持续状态影响。', ['疾病', '诅咒', '伤势'], false, [FIXED, CURRENT, { key: 'effect', label: '持续影响', policy: 'semantic-upsert' }, COMMON_LINKS], 590),
-    keyword('resource', '资源', '数量有限且会影响后续的资源、货币、权限或配额。', ['货币', '权限', '配额'], false, [CURRENT, { key: 'change', label: '资源变化', policy: 'append-chain' }, COMMON_LINKS], 490),
-    keyword('custom', '自定义对象', '任何未预先举例但可稳定命名、会影响后续的对象。', ['自定义'], false, [FIXED, CURRENT, { key: 'chain', label: '变化记录', policy: 'append-chain' }, COMMON_LINKS, COMMON_ALIASES], 400),
+    keyword('spacetime', '时空', '当前时间、总体位置和时间推进。', ['时间', '时空状态'], false, [
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 620),
+    keyword('scene', '场景', '当前场景、参与对象、核心局面和直接限制。', ['当前场景'], false, [
+        CURRENT,
+        { key: 'progress', label: '场景进展', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 700),
+    keyword('character', '人物', '稳定身份、当前状态和会影响后续的连续经历。', ['角色', 'NPC'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'recent', label: '近期经历', policy: 'append-chain' },
+        COMMON_LINKS,
+        COMMON_ALIASES,
+    ], 520),
+    keyword('item', '物品', '重要物品的归属、位置、数量、完整性、用途和变化。', ['道具', '装备'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 500),
+    keyword('event', '事件', '事件进展、当前状态和最终结果。', ['事件链'], false, [
+        { key: 'status', label: '当前状态', policy: 'replace-by-anchor', options: ['开始', '进行中', '暂停', '结束', '无变化', '无'] },
+        { key: 'chain', label: '事件进程', policy: 'append-chain' },
+        { key: 'result', label: '最终结果', policy: 'replace-section' },
+        COMMON_LINKS,
+    ], 680),
+    keyword('region', '地点', '地点自身稳定属性、当前状态和重要变化。', ['地区', '区域', '场所'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+        COMMON_ALIASES,
+    ], 470),
+    keyword('global', '全局变化', '组织、制度、阵营、政权和群体格局的变化。', ['世界变化', '全局状态'], false, [
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 610),
+    keyword('foundation', '基础设定', '跨场景成立的世界规则、物种规则、制度基础和魔法体系。', ['基础规则', '世界设定', '规则', '设定'], true, [
+        FIXED,
+        { key: 'current', label: '现行规则', policy: 'replace-by-anchor' },
+        COMMON_LINKS,
+        COMMON_ALIASES,
+    ], 860, false, 1),
+    keyword('ability', '能力', '会持续影响后续的能力、技能、特性和限制。', ['技能', '特性'], false, [
+        FIXED,
+        CURRENT,
+        COMMON_LINKS,
+    ], 540),
+    keyword('relationship', '关系', '显著且会影响后续的对象关系。', ['显著关系', '关系状态'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 560),
+    keyword('organization', '组织', '组织、阵营、机构、政权及其当前行动。', ['阵营', '机构', '政权'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 560),
+    keyword('task', '任务', '明确成立的任务、责任、约束和完成状态。', ['目标', '责任'], false, [
+        CURRENT,
+        { key: 'progress', label: '任务进程', policy: 'append-chain' },
+        { key: 'result', label: '最终结果', policy: 'replace-section' },
+        COMMON_LINKS,
+    ], 600),
+    keyword('contract', '契约', '契约、誓言、承诺、债务及其约束。', ['誓言', '承诺', '债务'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 580),
+    keyword('condition', '状态影响', '疾病、诅咒、伤势和其他持续影响。', ['疾病', '诅咒', '伤势'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 590),
+    keyword('resource', '资源', '数量有限且会影响后续的资源、货币、权限或配额。', ['货币', '权限', '配额'], false, [
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+    ], 490),
+    keyword('custom', '自定义对象', '未预先举例但可稳定命名、会影响后续的对象。', ['自定义'], false, [
+        FIXED,
+        CURRENT,
+        { key: 'history', label: '变化记录', policy: 'append-chain' },
+        COMMON_LINKS,
+        COMMON_ALIASES,
+    ], 400),
 ];
 function keyword(key, label, description, aliases, constant, fields, order, vectorized = true, depth = 4) {
     return {
@@ -1277,6 +1554,8 @@ exports.DEFAULT_SMALL_SUMMARY_PROMPT = `整理当前场景或当前事件链，�
 exports.DEFAULT_LARGE_SUMMARY_PROMPT = `只固化跨场景仍成立的长期事实，合并重复内容，删除已被最终结果覆盖的临时过程。`;
 exports.DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
+    modelSource: 'current',
+    modelProfileId: '',
     autoProcess: false,
     auditEnabled: false,
     targetLorebook: '',
@@ -1344,6 +1623,8 @@ function parseSettings(value) {
     return {
         ...(0, util_1.clone)(exports.DEFAULT_SETTINGS),
         enabled: candidate.enabled !== false,
+        modelSource: candidate.modelSource === 'profile' ? 'profile' : 'current',
+        modelProfileId: String(candidate.modelProfileId ?? ''),
         autoProcess: candidate.autoProcess === true,
         auditEnabled: candidate.auditEnabled === true,
         targetLorebook: String(candidate.targetLorebook ?? ''),
@@ -1478,9 +1759,11 @@ class TaskRunner {
     constructor(host, worldbook) {
         this.host = host;
         this.worldbook = worldbook;
-        this.status = { phase: 'idle', detail: '等待操作', error: '', rawResult: '', plan: null, lastCompletedMessageKey: '' };
+        this.status = { phase: 'idle', detail: '等待操作', error: '', rawResult: '', plan: null, lastCompletedMessageKey: '', pendingReview: false, targetMessageKey: '', targetMessageIndex: -1 };
+        this.pendingWrite = null;
         this.listeners = new Set();
         this.runningByChat = new Map();
+        this.activeTurn = null;
     }
     subscribe(listener) {
         this.listeners.add(listener);
@@ -1490,6 +1773,7 @@ class TaskRunner {
     currentStatus() { return structuredClone(this.status); }
     processTurn(settings, automatic = false, requestedIndex) {
         const turn = this.host.latestTurn(requestedIndex);
+        this.activeTurn = turn;
         const previous = this.runningByChat.get(turn.chatKey) ?? Promise.resolve();
         const task = previous.catch(() => undefined).then(() => this.processTurnInternal(settings, automatic, requestedIndex));
         this.runningByChat.set(turn.chatKey, task);
@@ -1499,23 +1783,60 @@ class TaskRunner {
     async runTask(kind, settings) {
         if (kind === 'audit') {
             const turn = this.host.latestTurn();
+            this.activeTurn = turn;
             await this.audit(settings, turn);
             return this.worldbook.list(settings);
         }
-        if (kind === 'extraction')
-            return this.extract(settings, this.host.latestTurn());
-        return this.summarize(kind === 'smallSummary' ? 'small' : 'large', settings, this.host.latestTurn());
+        if (kind === 'extraction') {
+            const turn = this.host.latestTurn();
+            this.activeTurn = turn;
+            return this.suggestExtraction(settings, turn);
+        }
+        const turn = this.host.latestTurn();
+        this.activeTurn = turn;
+        return this.summarize(kind === 'smallSummary' ? 'small' : 'large', settings, turn);
     }
     async previewExtraction(settings, raw) {
         const turn = this.host.latestTurn();
+        this.activeTurn = turn;
         const entries = await this.worldbook.list(settings);
         const blocks = (0, parser_1.parseInformationPoints)(raw);
         const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, `${turn.playerText}\n${turn.assistantText}`);
         this.setStatus('matching', `预览完成：${plan.operations.length} 个操作`, '', raw, plan);
         return plan;
     }
+    async applyPending(settings) {
+        const pending = this.pendingWrite;
+        if (!pending)
+            return this.worldbook.list(settings);
+        const result = await this.apply(settings, pending.plan, pending.sourceMessageKey, pending.contextText, pending.label);
+        this.pendingWrite = null;
+        this.setStatus('complete', '已确认并写入世界书', '', this.status.rawResult, pending.plan, this.status.lastCompletedMessageKey, false);
+        return result;
+    }
+    discardPending() {
+        this.pendingWrite = null;
+        this.setStatus('idle', '已忽略本次 AI 提取建议', '', '', null, this.status.lastCompletedMessageKey, false);
+    }
+    async suggestExtraction(settings, turn) {
+        this.setStatus('extracting', 'AI生成本轮信息点建议');
+        const entries = await this.worldbook.list(settings);
+        const selected = (0, matcher_1.relevantEntries)(entries, `${turn.playerText}
+${turn.assistantText}`);
+        const prompt = (0, prompts_1.extractionPrompts)(settings, turn.playerText, turn.assistantText, selected);
+        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
+        this.setRaw(raw);
+        const blocks = (0, parser_1.parseInformationPoints)(raw);
+        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, `${turn.playerText}
+${turn.assistantText}`);
+        this.pendingWrite = blocks.length ? { plan, sourceMessageKey: turn.messageKey, contextText: `${turn.playerText}
+${turn.assistantText}`, label: 'AI提取建议' } : null;
+        this.setStatus('matching', blocks.length ? `AI建议完成：${plan.operations.filter((item) => item.kind !== 'noop').length} 项待确认` : 'AI判定本轮无核心信息点', '', raw, plan, turn.messageKey, Boolean(this.pendingWrite));
+        return entries;
+    }
     async processTurnInternal(settings, automatic, requestedIndex) {
         let turn = this.host.latestTurn(requestedIndex);
+        this.activeTurn = turn;
         const cursor = this.host.cursor();
         if (automatic && cursor.lastProcessedMessageKey === turn.messageKey && cursor.lastProcessedHash === turn.contentHash) {
             this.setStatus('complete', '该正文已经处理，跳过重复事件', '', '', null, turn.messageKey);
@@ -1560,7 +1881,7 @@ class TaskRunner {
     async audit(settings, turn) {
         this.setStatus('audit', '审核当前正文');
         const prompt = (0, prompts_1.auditPrompts)(settings, turn.playerText, turn.assistantText);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs);
+        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
         this.status.rawResult = raw;
         if (/^\s*通过\s*[。.]?\s*$/u.test(raw))
             return turn;
@@ -1570,11 +1891,12 @@ class TaskRunner {
         return this.host.replaceAssistantText(turn, revised);
     }
     async extract(settings, turn) {
+        this.pendingWrite = null;
         this.setStatus('extracting', 'AI提取本轮核心信息点');
         const entries = await this.worldbook.list(settings);
         const selected = (0, matcher_1.relevantEntries)(entries, `${turn.playerText}\n${turn.assistantText}`);
         const prompt = (0, prompts_1.extractionPrompts)(settings, turn.playerText, turn.assistantText, selected);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs);
+        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
         this.setRaw(raw);
         const blocks = (0, parser_1.parseInformationPoints)(raw);
         if (!blocks.length) {
@@ -1594,7 +1916,7 @@ class TaskRunner {
             ? entries.filter((entry) => entry.focus || /(事件|场景|人物|物品|地区)/u.test(entry.type) && /(进行中|当前|近期经历|事件进程)/u.test(entry.content)).slice(-40)
             : entries.filter((entry) => /(小总结|固定事实|历史事实|大总结)/u.test(`${entry.type}\n${entry.content}`)).slice(-60);
         const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, subject);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs);
+        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
         this.setRaw(raw);
         const blocks = (0, parser_1.parseInformationPoints)(raw);
         if (!blocks.length)
@@ -1611,8 +1933,10 @@ class TaskRunner {
         return this.worldbook.apply(settings, plan, sourceMessageKey, contextText, this.host.getFocusTitle());
     }
     setRaw(raw) { this.status.rawResult = raw; this.emit(); }
-    setStatus(phase, detail, error = '', rawResult = this.status.rawResult, plan = this.status.plan, lastCompletedMessageKey = this.status.lastCompletedMessageKey) {
-        this.status = { phase, detail, error, rawResult, plan, lastCompletedMessageKey };
+    setStatus(phase, detail, error = '', rawResult = this.status.rawResult, plan = this.status.plan, lastCompletedMessageKey = this.status.lastCompletedMessageKey, pendingReview = Boolean(this.pendingWrite)) {
+        const targetMessageKey = this.activeTurn?.messageKey ?? this.status.targetMessageKey;
+        const targetMessageIndex = this.activeTurn?.messageIndex ?? this.status.targetMessageIndex;
+        this.status = { phase, detail, error, rawResult, plan, lastCompletedMessageKey, pendingReview, targetMessageKey, targetMessageIndex };
         this.emit();
     }
     emit() { for (const listener of this.listeners)
@@ -1625,6 +1949,7 @@ function trimPrompt(value) {
 function currentSceneTitle(entries) {
     return entries.find((entry) => /(场景|时空)/u.test(entry.type) && /(当前场景|当前状态|进行中)/u.test(entry.content))?.title ?? '';
 }
+function profileId(settings) { return settings.modelSource === 'profile' ? settings.modelProfileId : ''; }
 
 },
 "ui":function(module,exports,require){
@@ -1637,7 +1962,7 @@ const util_1 = require("./util");
 const parser_1 = require("./parser");
 const TABS = [
     ['overview', '总览'], ['entries', '信息表'], ['keywords', '关键词'], ['matching', '匹配'],
-    ['graph', '记忆网络'], ['worldbook', '世界书'], ['audit', '审核'], ['settings', '设置'], ['diagnostics', '诊断'],
+    ['graph', '记忆网络'], ['audit', '审核'], ['settings', '设置'], ['diagnostics', '诊断'],
 ];
 class WorkspaceUi {
     constructor(host, settingsStore, worldbook, tasks) {
@@ -1659,6 +1984,7 @@ class WorkspaceUi {
         this.migrationPreview = null;
         this.migrationBusy = false;
         this.migrationMessage = '';
+        this.profileMessage = '';
         this.settings = settingsStore.load(host.context());
         this.status = tasks.currentStatus();
     }
@@ -1691,7 +2017,8 @@ class WorkspaceUi {
             this.opener.className = 'maip-opener';
             this.opener.type = 'button';
             this.opener.setAttribute('aria-label', '打开 Mirror Abyss 镜渊');
-            this.opener.innerHTML = '<span class="maip-opener-mark">渊</span><span class="maip-opener-text">镜渊</span>';
+            this.opener.title = '打开 Mirror Abyss｜镜渊';
+            this.opener.innerHTML = `${brandSvg()}<span class="maip-opener-text">镜渊</span>`;
             this.opener.addEventListener('click', () => this.open());
         }
         if (!this.opener.isConnected)
@@ -1798,42 +2125,62 @@ class WorkspaceUi {
     render() {
         if (!this.root)
             return;
+        const pageLabel = TABS.find(([key]) => key === this.tab)?.[1] ?? constants_1.DISPLAY_NAME;
+        const statusText = this.migrationMessage || this.profileMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪';
         this.root.innerHTML = `
       <section class="maip-workspace" aria-label="${constants_1.DISPLAY_NAME}">
-        <aside class="maip-sidebar">
-          <div class="maip-brand">
-            <span class="maip-brand-mark">渊</span>
-            <div><b>${constants_1.DISPLAY_NAME}</b><small>${constants_1.VERSION}</small></div>
+        <header class="maip-workspace-topbar">
+          <div class="maip-brand">${brandSvg()}<div><b>${constants_1.DISPLAY_NAME}</b><small>${constants_1.VERSION}</small></div></div>
+          <div class="maip-topbar-state ${this.status.phase === 'error' ? 'error' : ''}"><span></span>${(0, util_1.escapeHtml)(phaseLabel(this.status.phase))}</div>
+          <div class="maip-header-actions">
+            <button class="maip-icon" data-action="refresh" title="刷新世界书映射" aria-label="刷新">${iconSvg('refresh')}</button>
+            <button class="maip-icon maip-close" data-action="close" title="退出工作区" aria-label="退出工作区">${iconSvg('close')}</button>
           </div>
-          <section class="maip-quick-panel" aria-label="功能开关">
-            <h3>功能开关</h3>
-            ${settingSwitch('enabled', '启用插件', this.settings.enabled)}
-            ${settingSwitch('autoProcess', '自动处理正文', this.settings.autoProcess)}
-            ${settingSwitch('auditEnabled', '启用审核', this.settings.auditEnabled)}
-            ${settingSwitch('autoCreateLorebook', '自动创建世界书', this.settings.autoCreateLorebook)}
-          </section>
-          <nav class="maip-tabs">${TABS.map(([key, label]) => `<button data-tab="${key}" class="${this.tab === key ? 'active' : ''}">${label}</button>`).join('')}</nav>
-        </aside>
-        <section class="maip-content">
-          <header class="maip-header">
-            <div>
+        </header>
+        <div class="maip-workspace-body">
+          <aside class="maip-sidebar">
+            <section class="maip-quick-panel" aria-label="功能开关">
+              <h3>功能开关</h3>
+              ${settingSwitch('enabled', '启用插件', this.settings.enabled)}
+              ${settingSwitch('autoProcess', '自动处理正文', this.settings.autoProcess)}
+              ${settingSwitch('auditEnabled', '启用审核', this.settings.auditEnabled)}
+              ${settingSwitch('autoCreateLorebook', '自动创建世界书', this.settings.autoCreateLorebook)}
+            </section>
+            <nav class="maip-tabs">${TABS.map(([key, label]) => `<button data-tab="${key}" class="${this.tab === key ? 'active' : ''}">${label}</button>`).join('')}</nav>
+          </aside>
+          <section class="maip-content">
+            <header class="maip-page-header">
               <div class="maip-kicker">WORLD INFO · INFORMATION POINT MATCHER</div>
-              <h2>${TABS.find(([key]) => key === this.tab)?.[1] ?? constants_1.DISPLAY_NAME}</h2>
-              <p>信息点提取 → 关键词与正文匹配 → 世界书操作</p>
-            </div>
-            <div class="maip-header-actions">
-              <button class="maip-icon" data-action="refresh" title="刷新" aria-label="刷新">${iconSvg('refresh')}</button>
-              <button class="maip-icon" data-action="close" title="关闭" aria-label="关闭">${iconSvg('close')}</button>
-            </div>
-          </header>
-          <main class="maip-main">${this.renderTab()}</main>
-          <footer class="maip-status ${this.status.phase === 'error' || this.projectionError ? 'error' : ''}">
-            <span class="maip-status-dot"></span>
-            <b>${phaseLabel(this.status.phase)}</b>
-            <span>${(0, util_1.escapeHtml)(this.migrationMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪')}</span>
-          </footer>
-        </section>
+              <h2>${pageLabel}</h2>
+              <p>${pageDescription(this.tab)}</p>
+            </header>
+            <main class="maip-main">${this.renderTab()}</main>
+            <footer class="maip-status ${this.status.phase === 'error' || this.projectionError ? 'error' : ''}">
+              <span class="maip-status-dot"></span>
+              <b>${phaseLabel(this.status.phase)}</b>
+              <span>${(0, util_1.escapeHtml)(statusText)}</span>
+            </footer>
+          </section>
+        </div>
       </section>`;
+        queueMicrotask(() => this.afterRender());
+    }
+    afterRender() {
+        if (this.tab !== 'settings' || this.settings.modelSource !== 'profile' || !this.root)
+            return;
+        const selector = '#maip-profile-select';
+        const select = this.root.querySelector(selector);
+        if (!select)
+            return;
+        const bound = this.host.bindProfileDropdown(selector, this.settings.modelProfileId, (profileId) => {
+            if (profileId === this.settings.modelProfileId)
+                return;
+            this.settings.modelProfileId = profileId;
+            this.profileMessage = profileId ? `已选择处理 AI：${this.host.profileName(profileId)}` : 'Connection Profile 已清空';
+            this.persistSettings();
+        });
+        if (!bound)
+            this.profileMessage = '当前 SillyTavern 未提供 Connection Profile 下拉服务，可改用当前连接';
     }
     renderTab() {
         if (this.tab === 'overview')
@@ -1846,8 +2193,6 @@ class WorkspaceUi {
             return this.renderMatching();
         if (this.tab === 'graph')
             return this.renderGraph();
-        if (this.tab === 'worldbook')
-            return this.renderWorldbook();
         if (this.tab === 'audit')
             return this.renderAudit();
         if (this.tab === 'settings')
@@ -1857,93 +2202,94 @@ class WorkspaceUi {
     renderOverview() {
         const changed = this.status.plan?.operations.filter((operation) => operation.kind !== 'noop').length ?? 0;
         const skipped = this.status.plan?.operations.filter((operation) => operation.kind === 'noop').length ?? 0;
-        const keywords = this.entryKeywords();
         const foundations = this.entries.filter((entry) => hasKeyword(entry, '基础设定')).length;
+        const ordered = [...this.entries].sort((left, right) => Number(right.focus) - Number(left.focus) || right.references.length - left.references.length || left.title.localeCompare(right.title));
         return `
       <section class="maip-hero-grid">
         <article class="maip-card maip-primary-card">
           <div class="maip-card-label">当前世界书</div>
           <div class="maip-big">${(0, util_1.escapeHtml)(this.bookName())}</div>
-          <div class="maip-muted">世界书是唯一剧情数据源；信息表和图谱只做即时映射。</div>
+          <div class="maip-muted">世界书是唯一剧情数据源；本面板只显示并修改它的映射。</div>
           <div class="maip-actions">
             <button class="maip-btn primary" data-action="process">处理最新正文</button>
-            <button class="maip-btn" data-action="extract">仅提取</button>
+            <button class="maip-btn" data-action="extract">AI 建议提取</button>
             <button class="maip-btn" data-action="small">小总结</button>
             <button class="maip-btn" data-action="large">大总结</button>
           </div>
         </article>
-        <article class="maip-card maip-metric"><span>世界书条目</span><strong>${this.entries.length}</strong><small>${keywords.length} 个实际关键词</small></article>
-        <article class="maip-card maip-metric"><span>基础设定</span><strong>${foundations}</strong><small>含“基础设定”关键词即常驻</small></article>
-        <article class="maip-card maip-metric"><span>本轮操作</span><strong>${changed}</strong><small>${skipped} 条相似信息已跳过</small></article>
+        <article class="maip-card maip-metric"><span>世界书条目</span><strong>${this.entries.length}</strong><small>${this.entryKeywords().length} 个实际关键词</small></article>
+        <article class="maip-card maip-metric"><span>基础设定</span><strong>${foundations}</strong><small>含该关键词的条目自动常驻</small></article>
+        <article class="maip-card maip-metric"><span>最近匹配</span><strong>${changed}</strong><small>${skipped} 条重复信息已跳过</small></article>
       </section>
-      <section class="maip-two-col">
-        <article class="maip-card">
-          <div class="maip-section-head"><div><h3>最近匹配计划</h3><p>显示匹配依据和准备执行的世界书操作。</p></div><button class="maip-link" data-tab="matching">查看全部</button></div>
-          ${this.renderOperationList((this.status.plan?.operations ?? []).slice(0, 8))}
-        </article>
-        <article class="maip-card">
-          <div class="maip-section-head"><div><h3>世界书关键词</h3><p>这些才是分类标签；未预设关键词同样保留。</p></div><button class="maip-link" data-tab="keywords">管理默认规则</button></div>
-          <div class="maip-type-cloud">${keywords.slice(0, 36).map((keyword) => `<button data-keyword="${(0, util_1.escapeHtml)(keyword)}" data-tab="entries"><b>${(0, util_1.escapeHtml)(keyword)}</b><span>${this.entries.filter((entry) => hasKeyword(entry, keyword)).length}</span></button>`).join('') || '<span class="maip-empty">暂无关键词</span>'}</div>
-        </article>
+      ${this.status.pendingReview ? `<section class="maip-card maip-review-banner"><div><b>AI 信息点建议等待确认</b><p>${changed} 项会修改世界书。确认前不会写入。</p></div><div class="maip-actions compact"><button class="maip-btn primary" data-action="apply-pending">确认写入</button><button class="maip-btn" data-action="discard-pending">忽略</button></div></section>` : ''}
+      <section class="maip-card">
+        <div class="maip-section-head"><div><h3>条目总览</h3><p>总览只显示条目名称、关键词与一句当前摘要，不重复完整子条目。</p></div></div>
+        <div class="maip-overview-list">${ordered.slice(0, 48).map((entry) => this.renderOverviewEntry(entry)).join('') || '<div class="maip-empty">当前世界书暂无条目</div>'}</div>
       </section>`;
+    }
+    renderOverviewEntry(entry) {
+        const summary = entrySummary(entry);
+        const state = [entry.focus ? '焦点' : '', entry.activation.constant ? '常驻' : '', entry.activation.disabled ? '停用' : ''].filter(Boolean);
+        return `<article class="maip-overview-entry">
+      <div class="maip-overview-title"><b>${(0, util_1.escapeHtml)(entry.title)}</b>${state.map((item) => `<span>${item}</span>`).join('')}</div>
+      <div class="maip-tags">${entry.keywords.slice(0, 8).map((keyword) => `<span>${(0, util_1.escapeHtml)(keyword)}</span>`).join('')}</div>
+      <p>${(0, util_1.escapeHtml)(summary || '暂无结构化摘要')}</p>
+    </article>`;
     }
     renderEntries() {
         const keywords = this.entryKeywords();
-        const filtered = this.entries.filter((entry) => (!this.selectedKeyword || hasKeyword(entry, this.selectedKeyword)) && (!this.search || `${entry.title}\n${entry.content}\n${entry.keywords.join(' ')}`.toLocaleLowerCase().includes(this.search.toLocaleLowerCase())));
-        const sectionNames = [...new Set(filtered.flatMap((entry) => entry.sections.order))].slice(0, 7);
+        const query = this.search.toLocaleLowerCase();
+        const filtered = this.entries.filter((entry) => (!this.selectedKeyword || hasKeyword(entry, this.selectedKeyword)) && (!query || `${entry.title}\n${entry.content}\n${entry.keywords.join(' ')}`.toLocaleLowerCase().includes(query)));
         return `
       <section class="maip-toolbar">
         <div class="maip-segment"><button data-keyword="" class="${this.selectedKeyword ? '' : 'active'}">全部 <span>${this.entries.length}</span></button>${keywords.map((keyword) => `<button data-keyword="${(0, util_1.escapeHtml)(keyword)}" class="${this.selectedKeyword === keyword ? 'active' : ''}">${(0, util_1.escapeHtml)(keyword)} <span>${this.entries.filter((entry) => hasKeyword(entry, keyword)).length}</span></button>`).join('')}</div>
-        <input class="maip-search" data-input="search" placeholder="搜索标题、关键词或正文" value="${(0, util_1.escapeHtml)(this.search)}">
+        <input class="maip-search" data-input="search" placeholder="搜索条目名称、关键词或正文" value="${(0, util_1.escapeHtml)(this.search)}">
       </section>
       <section class="maip-card maip-table-card">
-        <div class="maip-table-wrap"><table class="maip-table">
-          <thead><tr><th>条目</th><th>关键词</th>${sectionNames.map((name) => `<th>${(0, util_1.escapeHtml)(name)}</th>`).join('')}<th>召回</th><th>操作</th></tr></thead>
-          <tbody>${filtered.map((entry) => `<tr>
-            <td class="maip-title-cell" data-label="条目"><b>${(0, util_1.escapeHtml)(entry.title)}</b><small>UID ${(0, util_1.escapeHtml)(entry.uid)}</small></td>
-            <td data-label="关键词"><textarea data-keywords-uid="${(0, util_1.escapeHtml)(entry.uid)}" rows="4">${(0, util_1.escapeHtml)(entry.keywords.join('\n'))}</textarea></td>
-            ${sectionNames.map((name) => `<td data-label="${(0, util_1.escapeHtml)(name)}"><textarea data-entry-uid="${(0, util_1.escapeHtml)(entry.uid)}" data-section="${(0, util_1.escapeHtml)(name)}" rows="4">${(0, util_1.escapeHtml)((entry.sections.values[name] ?? []).join('\n'))}</textarea></td>`).join('')}
-            <td data-label="召回"><div class="maip-recall"><span>${entry.activation.constant ? '常驻' : entry.activation.vectorized ? '向量' : '关键词'}</span><small>深度 ${entry.activation.depth} · 顺序 ${entry.activation.order}</small></div></td>
-            <td data-label="操作"><button class="maip-link" data-action="save-entry" data-uid="${(0, util_1.escapeHtml)(entry.uid)}">保存</button><button class="maip-link ${entry.focus ? 'danger' : ''}" data-action="focus" data-title="${(0, util_1.escapeHtml)(entry.title)}">${entry.focus ? '取消焦点' : '设为焦点'}</button></td>
-          </tr>`).join('') || `<tr><td colspan="${sectionNames.length + 5}" class="maip-empty">当前筛选下没有条目</td></tr>`}</tbody>
+        <div class="maip-table-wrap"><table class="maip-table maip-entry-table">
+          <thead><tr><th>条目名称</th><th>关键词</th><th>子条目信息</th><th>状态与操作</th></tr></thead>
+          <tbody>${filtered.map((entry) => this.renderEntryRow(entry)).join('') || '<tr><td colspan="4" class="maip-empty">当前筛选下没有条目</td></tr>'}</tbody>
         </table></div>
       </section>`;
     }
+    renderEntryRow(entry) {
+        const sections = entry.sections.order.length ? entry.sections.order : ['固定事实'];
+        return `<tr>
+      <td class="maip-title-cell" data-label="条目名称"><b>${(0, util_1.escapeHtml)(entry.title)}</b><small>UID ${(0, util_1.escapeHtml)(entry.uid)}</small></td>
+      <td data-label="关键词"><textarea class="maip-keyword-editor" data-keywords-uid="${(0, util_1.escapeHtml)(entry.uid)}" rows="5" placeholder="每行一个关键词">${(0, util_1.escapeHtml)(entry.keywords.join('\n'))}</textarea></td>
+      <td data-label="子条目信息"><div class="maip-entry-sections">${sections.map((name) => `<label><span>${(0, util_1.escapeHtml)(name)}</span><textarea data-entry-uid="${(0, util_1.escapeHtml)(entry.uid)}" data-section="${(0, util_1.escapeHtml)(name)}" rows="3" placeholder="没有内容可留空">${(0, util_1.escapeHtml)((entry.sections.values[name] ?? []).join('\n'))}</textarea></label>`).join('')}</div></td>
+      <td data-label="状态与操作"><div class="maip-entry-state"><div class="maip-tags">${entry.focus ? '<span>焦点</span>' : ''}${entry.activation.constant ? '<span>常驻</span>' : ''}${entry.activation.vectorized ? '<span>向量</span>' : '<span>关键词</span>'}</div><button class="maip-btn small primary" data-action="save-entry" data-uid="${(0, util_1.escapeHtml)(entry.uid)}">保存条目</button><button class="maip-btn small" data-action="focus" data-title="${(0, util_1.escapeHtml)(entry.title)}">${entry.focus ? '取消焦点' : '设为焦点'}</button></div></td>
+    </tr>`;
+    }
     renderKeywords() {
-        return `<section class="maip-keyword-intro maip-card"><div><h3>关键词模板</h3><p>玩家只需要调整关键词名称、近义词、用途和建议小标题。常驻、向量、深度、顺序及匹配策略由插件使用默认规则处理。</p></div><div class="maip-actions compact"><button class="maip-btn" data-action="reset-keywords">恢复默认模板</button><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词</button></div></section>
+        return `<section class="maip-keyword-intro maip-card"><div><h3>关键词模板</h3><p>玩家只调整名称、近义词、提取范围和建议小标题。召回参数由插件自动处理。</p></div><div class="maip-actions compact"><button class="maip-btn" data-action="reset-keywords">恢复默认模板</button><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词</button></div></section>
       <section class="maip-template-grid">${this.settings.keywordDefinitions.map((definition, index) => this.renderKeywordDefinition(definition, index)).join('')}</section>`;
     }
     renderKeywordDefinition(definition, index) {
         const isDefault = settings_1.DEFAULT_KEYWORDS.some((item) => item.label === definition.label);
-        const fieldText = definition.fields.map((field) => field.label).join('\n');
         return `<article class="maip-card maip-template simple">
-      <div class="maip-section-head"><div><h3>${(0, util_1.escapeHtml)(definition.label)}</h3><p>${definition.label === '基础设定' ? '基础设定会由插件自动常驻。' : '使用默认召回设置。'}</p></div><div class="maip-template-actions"><label class="maip-switch"><input type="checkbox" data-keyword-prop="enabled" data-index="${index}" ${definition.enabled ? 'checked' : ''}><span></span>启用</label>${!isDefault ? `<button class="maip-link danger" data-action="delete-keyword" data-index="${index}">删除</button>` : ''}</div></div>
+      <div class="maip-section-head"><div><h3>${(0, util_1.escapeHtml)(definition.label)}</h3><p>${definition.label === '基础设定' ? '基础设定由插件自动常驻。' : '使用通用召回规则。'}</p></div><div class="maip-template-actions"><label class="maip-switch"><input type="checkbox" data-keyword-prop="enabled" data-index="${index}" ${definition.enabled ? 'checked' : ''}><span></span>启用</label>${!isDefault ? `<button class="maip-link danger" data-action="delete-keyword" data-index="${index}">删除</button>` : ''}</div></div>
       <div class="maip-player-fields">
         <label>关键词<input data-keyword-prop="label" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.label)}"></label>
-        <label>近义词<input data-keyword-prop="aliases" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.aliases.join(' / '))}" placeholder="可不填；用 / 分隔"></label>
+        <label>近义词<input data-keyword-prop="aliases" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.aliases.join(' / '))}" placeholder="用 / 分隔"></label>
         <label class="span-2">提取范围<textarea data-keyword-prop="description" data-index="${index}" rows="2">${(0, util_1.escapeHtml)(definition.description)}</textarea></label>
-        <label class="span-2">建议小标题<textarea data-keyword-fields data-index="${index}" rows="3" placeholder="每行一个小标题">${(0, util_1.escapeHtml)(fieldText)}</textarea></label>
+        <div class="span-2 maip-heading-editor"><span class="maip-field-label">建议小标题</span><div class="maip-heading-chips">${definition.fields.map((field, fieldIndex) => `<button type="button" data-action="remove-keyword-field" data-index="${index}" data-field-index="${fieldIndex}" title="移除">${(0, util_1.escapeHtml)(field.label)}<i>×</i></button>`).join('') || '<em>暂无</em>'}</div><div class="maip-heading-add"><input data-new-keyword-field="${index}" placeholder="新增小标题"><button type="button" class="maip-btn small" data-action="add-keyword-field" data-index="${index}">添加</button></div></div>
       </div>
     </article>`;
     }
     renderMatching() {
         const plan = this.status.plan;
         const raw = String(this.status.rawResult ?? '').trim();
-        const sample = `人物｜莉娅
-【关键词】
-- 人物
-【当前状态】
-- 莉娅位于临海石洞，左臂受伤。
-【近期经历】
-无`;
+        const sample = `人物｜莉娅\n【关键词】\n- 人物\n【当前状态】\n- 莉娅位于临海石洞，左臂受伤。\n【近期经历】\n无`;
         return `<section class="maip-two-col wide-left">
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>最近一次 AI 填写</h3><p>这里只显示模型结果，不需要玩家手工填写。</p></div>${raw ? '<button class="maip-btn small" data-action="preview">重新解析</button>' : ''}</div>
+        <div class="maip-section-head"><div><h3>AI 建议信息点</h3><p>读取玩家输入、最终正文和少量相关世界书条目后生成。</p></div><button class="maip-btn small" data-action="extract">重新生成建议</button></div>
         <pre class="maip-raw maip-readonly">${(0, util_1.escapeHtml)(raw || sample)}</pre>
-        ${raw ? '' : '<p class="maip-muted">当前还没有运行记录，上方显示默认格式示例。</p>'}
+        ${raw ? '' : '<p class="maip-muted">当前还没有运行记录，上方显示格式示例。</p>'}
+        ${this.status.pendingReview ? '<div class="maip-actions"><button class="maip-btn primary" data-action="apply-pending">确认写入世界书</button><button class="maip-btn" data-action="discard-pending">忽略建议</button></div>' : ''}
       </article>
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>匹配与操作</h3><p>${plan ? `${plan.blocks.length} 个标题块 · ${plan.operations.length} 个操作` : '运行提取后自动显示'}</p></div></div>
+        <div class="maip-section-head"><div><h3>匹配与操作</h3><p>${plan ? `${plan.blocks.length} 个标题块 · ${plan.operations.length} 个操作` : '运行 AI 建议提取后自动显示'}</p></div></div>
         ${this.renderOperationList(plan?.operations ?? [], true)}
       </article>
     </section>`;
@@ -1958,48 +2304,39 @@ class WorkspaceUi {
     </div>`).join('')}</div>`;
     }
     renderGraph() {
-        const nodes = this.entries.slice(0, 70);
-        if (!nodes.length)
+        const layout = graphLayout(this.entries.slice(0, 80));
+        if (!layout.nodes.length)
             return '<div class="maip-card maip-empty">暂无可投影条目</div>';
-        const width = 900, height = 560, cx = width / 2, cy = height / 2, radius = Math.min(width, height) * 0.38;
-        const points = new Map(nodes.map((entry, index) => [entry.title, { x: cx + Math.cos((index / nodes.length) * Math.PI * 2) * radius, y: cy + Math.sin((index / nodes.length) * Math.PI * 2) * radius }]));
-        const edges = nodes.flatMap((entry) => entry.references.map((reference) => ({ from: entry.title, to: reference }))).filter((edge) => points.has(edge.to));
-        return `<section class="maip-card maip-graph-card"><div class="maip-section-head"><div><h3>世界书关系网络</h3><p>节点来自标题，边来自【关联条目】；没有独立图数据库。</p></div></div>
-      <svg class="maip-graph" viewBox="0 0 ${width} ${height}" role="img">
-        ${edges.map((edge) => { const a = points.get(edge.from); const b = points.get(edge.to); return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`; }).join('')}
-        ${nodes.map((entry) => { const point = points.get(entry.title); return `<g transform="translate(${point.x},${point.y})"><circle r="${entry.focus ? 18 : 12}" class="${entry.focus ? 'focus' : ''}"/><text y="-19" text-anchor="middle">${(0, util_1.escapeHtml)((0, util_1.truncate)(entry.name, 12))}</text><title>${(0, util_1.escapeHtml)(entry.title)}｜${(0, util_1.escapeHtml)(entry.keywords.join('、'))}</title></g>`; }).join('')}
-      </svg></section>`;
-    }
-    renderWorldbook() {
-        return `<section class="maip-two-col wide-left">
-      <article class="maip-card">
-        <div class="maip-section-head"><div><h3>旧世界书格式转换</h3><p>点击后直接扫描当前世界书，并在确认后转换需要调整的旧条目。</p></div></div>
-        <div class="maip-callout"><b>不会清空旧内容</b><span>原 UID 和原生字段保留；无法可靠拆分的正文进入【旧格式保留】，无法判断分类的条目使用“自定义对象”关键词。</span></div>
-        <div class="maip-actions">
-          <button class="maip-btn primary" data-action="migration-apply" ${this.migrationBusy ? 'disabled' : ''}>转换旧世界书</button>
-          <button class="maip-btn danger-outline" data-action="migration-undo" ${!this.worldbook.canUndoMigration() || this.migrationBusy ? 'disabled' : ''}>撤销本次转换</button>
-        </div>
-        <p class="maip-muted">插件会在点击转换后内部扫描；没有需要转换的条目时不会写入。“基础设定”关键词转换后自动常驻。</p>
-      </article>
-      <article class="maip-card maip-metric"><span>当前绑定</span><strong class="maip-focus-text">${(0, util_1.escapeHtml)(this.bookName())}</strong><small>${(0, util_1.escapeHtml)(this.migrationMessage || '等待操作')}</small></article>
+        return `<section class="maip-card maip-graph-card"><div class="maip-section-head"><div><h3>世界书关系网络</h3><p>焦点或连接最多的条目位于中心；其余节点按关键词分组。边来自【关联条目】。</p></div></div>
+      <div class="maip-graph-stage"><svg class="maip-graph" viewBox="-520 -340 1040 680" preserveAspectRatio="xMidYMid meet" role="img">
+        <defs><filter id="maip-node-shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity=".14"/></filter></defs>
+        ${layout.edges.map((edge) => `<path d="M ${edge.from.x} ${edge.from.y} Q ${edge.mid.x} ${edge.mid.y} ${edge.to.x} ${edge.to.y}"/>`).join('')}
+        ${layout.nodes.map((node) => `<g class="maip-graph-node ${node.center ? 'center' : ''} ${node.entry.focus ? 'focus' : ''}" transform="translate(${node.x},${node.y})"><rect x="${node.center ? -78 : -64}" y="-20" width="${node.center ? 156 : 128}" height="40" rx="13"/><text text-anchor="middle" dominant-baseline="middle">${(0, util_1.escapeHtml)((0, util_1.truncate)(node.entry.name, node.center ? 18 : 14))}</text><title>${(0, util_1.escapeHtml)(node.entry.title)}｜${(0, util_1.escapeHtml)(node.entry.keywords.join('、'))}</title></g>`).join('')}
+      </svg></div>
+      <div class="maip-graph-legend">${layout.groups.map((group) => `<span><i></i>${(0, util_1.escapeHtml)(group)}</span>`).join('')}</div>
     </section>`;
     }
     renderAudit() {
         return `<section class="maip-two-col">
-      <article class="maip-card"><h3>审核规则</h3><p class="maip-muted">审核开关位于左上角；审核只修当前正文，不写世界书。</p><textarea data-setting="auditPrompt" rows="16" placeholder="一条硬规则一行">${(0, util_1.escapeHtml)(this.settings.auditPrompt)}</textarea></article>
-      <article class="maip-card"><h3>提取补充要求</h3><p class="maip-muted">核心协议已经内置，这里只放项目特有边界。</p><textarea data-setting="extractionPrompt" rows="16">${(0, util_1.escapeHtml)(this.settings.extractionPrompt)}</textarea></article>
+      <article class="maip-card"><h3>审核规则</h3><p class="maip-muted">审核只修当前正文，不写世界书。</p><textarea data-setting="auditPrompt" rows="14" placeholder="一条硬规则一行">${(0, util_1.escapeHtml)(this.settings.auditPrompt)}</textarea></article>
+      <article class="maip-card"><h3>提取补充要求</h3><p class="maip-muted">核心协议已内置，这里只填项目特有边界。</p><textarea data-setting="extractionPrompt" rows="14">${(0, util_1.escapeHtml)(this.settings.extractionPrompt)}</textarea></article>
     </section>`;
     }
     renderSettings() {
+        const profileAvailable = this.host.connectionProfilesAvailable();
         return `<section class="maip-settings-grid simple-settings">
-      <article class="maip-card"><h3>世界书</h3><p class="maip-muted">一般保持为空，插件会读取当前聊天绑定的世界书；没有绑定时按开关自动创建。</p>
+      <article class="maip-card"><h3>处理 AI</h3><p class="maip-muted">不填写 API Key，直接使用 SillyTavern 当前连接或 Connection Profile。</p>
+        <label>调用来源<select data-setting="modelSource"><option value="current" ${this.settings.modelSource === 'current' ? 'selected' : ''}>当前聊天连接</option><option value="profile" ${this.settings.modelSource === 'profile' ? 'selected' : ''}>独立 Connection Profile</option></select></label>
+        ${this.settings.modelSource === 'profile' ? `<label>Connection Profile<select id="maip-profile-select" data-setting="modelProfileId"><option value="${(0, util_1.escapeHtml)(this.settings.modelProfileId)}">${(0, util_1.escapeHtml)(this.host.profileName(this.settings.modelProfileId))}</option></select></label><button class="maip-btn small" data-action="test-profile" ${profileAvailable ? '' : 'disabled'}>测试处理 AI</button>` : '<div class="maip-callout"><b>当前连接</b><span>审核、提取与总结沿用当前聊天已配置的模型连接。</span></div>'}
+        <p class="maip-muted">${(0, util_1.escapeHtml)(this.profileMessage || (profileAvailable ? 'Connection Manager 可用。' : '当前未检测到 Connection Manager。'))}</p>
+      </article>
+      <article class="maip-card"><h3>世界书</h3><p class="maip-muted">通常留空，插件读取当前聊天绑定的世界书。</p>
         <label>指定世界书（可选）<input data-setting="targetLorebook" value="${(0, util_1.escapeHtml)(this.settings.targetLorebook)}" placeholder="留空＝当前聊天绑定"></label>
+        <div class="maip-actions"><button class="maip-btn" data-action="migration-apply" ${this.migrationBusy ? 'disabled' : ''}>转换旧格式</button><button class="maip-btn danger-outline" data-action="migration-undo" ${!this.worldbook.canUndoMigration() || this.migrationBusy ? 'disabled' : ''}>撤销转换</button></div>
+        <p class="maip-muted">${(0, util_1.escapeHtml)(this.migrationMessage || '保留原 UID；无法可靠拆分的内容进入【旧格式保留】。')}</p>
       </article>
-      <article class="maip-card"><h3>总结频率</h3><p class="maip-muted">只在需要改变默认节奏时填写。</p>
-        <label>小总结间隔（回合）<input type="number" min="2" max="100" data-setting="smallSummaryTurns" value="${this.settings.smallSummaryTurns}"></label>
-        <label>大总结间隔（累计小总结）<input type="number" min="2" max="30" data-setting="largeSummaryCount" value="${this.settings.largeSummaryCount}"></label>
-      </article>
-      <article class="maip-card span-2 maip-auto-card"><h3>已自动处理</h3><p>响应长度、超时、重复阈值、正文匹配阈值、向量、递归、深度、顺序和调度规则均使用插件默认值，不要求玩家填写。</p></article>
+      <article class="maip-card"><h3>总结频率</h3><label>小总结间隔（回合）<input type="number" min="2" max="100" data-setting="smallSummaryTurns" value="${this.settings.smallSummaryTurns}"></label><label>大总结间隔（累计小总结）<input type="number" min="2" max="30" data-setting="largeSummaryCount" value="${this.settings.largeSummaryCount}"></label></article>
+      <article class="maip-card maip-auto-card"><h3>插件自动处理</h3><p>Token、超时、相似度、向量、递归、深度、顺序和调度规则均采用默认值，不要求玩家填写。</p></article>
     </section>`;
     }
     renderDiagnostics() {
@@ -2038,10 +2375,11 @@ class WorkspaceUi {
             await this.run(() => this.tasks.runTask('smallSummary', this.settings));
         if (action === 'large')
             await this.run(() => this.tasks.runTask('largeSummary', this.settings));
-        if (action === 'preview') {
-            const raw = String(this.status.rawResult ?? '').trim();
-            if (raw)
-                await this.tasks.previewExtraction(this.settings, raw);
+        if (action === 'apply-pending')
+            await this.run(() => this.tasks.applyPending(this.settings));
+        if (action === 'discard-pending') {
+            this.tasks.discardPending();
+            this.render();
         }
         if (action === 'focus') {
             const title = String(target.dataset.title ?? '');
@@ -2053,7 +2391,7 @@ class WorkspaceUi {
         if (action === 'save-entry')
             await this.saveEntry(String(target.dataset.uid ?? ''));
         if (action === 'reset-keywords') {
-            const confirmed = globalThis.confirm?.('恢复完整默认关键词、小标题和选项？自定义关键词将被保留。') ?? true;
+            const confirmed = globalThis.confirm?.('恢复完整默认关键词和建议小标题？自定义关键词将保留。') ?? true;
             if (confirmed) {
                 const custom = this.settings.keywordDefinitions.filter((item) => !settings_1.DEFAULT_KEYWORDS.some((fallback) => fallback.label === item.label));
                 this.settings.keywordDefinitions = [...structuredClone(settings_1.DEFAULT_KEYWORDS), ...custom];
@@ -2061,17 +2399,42 @@ class WorkspaceUi {
             }
         }
         if (action === 'add-keyword') {
-            this.settings.keywordDefinitions.push({ key: `custom_${Date.now()}`, label: '新关键词', description: '可稳定识别、会影响后续的信息类别。', aliases: [], enabled: true, constant: false, vectorized: true, preventRecursion: false, depth: 4, order: 400, fields: [{ key: 'fixed', label: '固定事实', policy: 'semantic-upsert' }] });
+            this.settings.keywordDefinitions.push({ key: `custom_${Date.now()}`, label: '新关键词', description: '可稳定识别并影响后续的信息类别。', aliases: [], enabled: true, constant: false, vectorized: true, preventRecursion: false, depth: 4, order: 400, fields: [{ key: 'fixed', label: '固定事实', policy: 'semantic-upsert' }, { key: 'current', label: '当前状态', policy: 'replace-by-anchor' }] });
             this.persistSettings();
         }
         if (action === 'delete-keyword') {
             this.settings.keywordDefinitions.splice(Number(target.dataset.index), 1);
             this.persistSettings();
         }
+        if (action === 'remove-keyword-field') {
+            const definition = this.settings.keywordDefinitions[Number(target.dataset.index)];
+            if (definition)
+                definition.fields.splice(Number(target.dataset.fieldIndex), 1);
+            this.persistSettings();
+        }
+        if (action === 'add-keyword-field') {
+            const index = Number(target.dataset.index);
+            const definition = this.settings.keywordDefinitions[index];
+            const input = this.root?.querySelector(`[data-new-keyword-field="${index}"]`);
+            const label = input?.value.trim() ?? '';
+            if (definition && label && !definition.fields.some((field) => (0, util_1.normalizeFact)(field.label) === (0, util_1.normalizeFact)(label))) {
+                definition.fields.push({ key: `field_${Date.now()}`, label, policy: suggestedPolicy(label) });
+                this.persistSettings();
+            }
+        }
         if (action === 'migration-apply')
             await this.applyMigration();
         if (action === 'migration-undo')
             await this.undoMigration();
+        if (action === 'test-profile') {
+            try {
+                this.profileMessage = `测试成功：${await this.host.testProfile(this.settings.modelProfileId)}`;
+            }
+            catch (error) {
+                this.profileMessage = error instanceof Error ? error.message : String(error);
+            }
+            this.render();
+        }
     }
     async onChange(event) {
         const target = event.target;
@@ -2079,40 +2442,20 @@ class WorkspaceUi {
             const key = target.dataset.setting;
             const value = target.type === 'checkbox' ? target.checked : target.type === 'number' ? Number(target.value) : target.value;
             this.settings[key] = value;
-            this.persistSettings(false);
+            this.persistSettings(key === 'modelSource');
         }
         if (target.dataset.keywordProp) {
             const definition = this.settings.keywordDefinitions[Number(target.dataset.index)];
             if (definition) {
                 const prop = target.dataset.keywordProp;
-                const value = target.type === 'checkbox' ? target.checked : target.type === 'number' ? Number(target.value) : target.value;
+                const value = target.type === 'checkbox' ? target.checked : target.value;
                 if (prop === 'aliases')
                     definition.aliases = String(value).split('/').map((item) => item.trim()).filter(Boolean);
                 else
                     definition[prop] = value;
-                // Foundation is a default convention, but users may explicitly create other constant keywords.
                 if (definition.label === '基础设定')
                     definition.constant = true;
             }
-            this.persistSettings(false);
-        }
-        if (target.hasAttribute('data-keyword-fields')) {
-            const definition = this.settings.keywordDefinitions[Number(target.dataset.index)];
-            if (definition) {
-                const labels = target.value.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
-                const existing = new Map(definition.fields.map((field) => [field.label, field]));
-                definition.fields = labels.map((label, index) => existing.get(label) ?? {
-                    key: `field_${Date.now()}_${index}`,
-                    label,
-                    policy: 'semantic-upsert',
-                });
-            }
-            this.persistSettings(false);
-        }
-        if (target.dataset.ruleProp) {
-            const rule = this.settings.activationRules[Number(target.dataset.ruleIndex)];
-            if (rule && target.dataset.ruleProp === 'enabled')
-                rule.enabled = target.checked;
             this.persistSettings(false);
         }
     }
@@ -2139,22 +2482,6 @@ class WorkspaceUi {
         await this.worldbook.updateEntry(this.settings, uid, entry.title, (0, parser_1.serializeEntrySections)(sections), keywords);
         await this.refreshEntries();
     }
-    async previewMigration() {
-        this.migrationBusy = true;
-        this.migrationMessage = '正在扫描旧世界书格式…';
-        this.render();
-        try {
-            this.migrationPreview = await this.worldbook.previewMigration(this.settings);
-            this.migrationMessage = `扫描完成：${this.migrationPreview.changed} 条需要转换`;
-        }
-        catch (error) {
-            this.migrationMessage = error instanceof Error ? error.message : String(error);
-        }
-        finally {
-            this.migrationBusy = false;
-            this.render();
-        }
-    }
     async applyMigration() {
         this.migrationBusy = true;
         this.migrationMessage = '正在扫描旧世界书…';
@@ -2163,22 +2490,17 @@ class WorkspaceUi {
             const preview = await this.worldbook.previewMigration(this.settings);
             this.migrationPreview = preview;
             if (!preview.changed) {
-                this.migrationMessage = `无需转换：${preview.total} 条均已符合当前格式`;
+                this.migrationMessage = `无需转换：${preview.total} 条均符合当前格式`;
                 return;
             }
-            const confirmed = globalThis.confirm?.(`检测到世界书“${preview.bookName}”中有 ${preview.changed} 条旧格式条目。
-
-原 UID 和原生字段会保留；无法识别的正文进入【旧格式保留】。是否转换？`) ?? true;
+            const confirmed = globalThis.confirm?.(`检测到世界书“${preview.bookName}”中有 ${preview.changed} 条旧格式条目。\n\n原 UID 和原生字段会保留；无法识别的正文进入【旧格式保留】。是否转换？`) ?? true;
             if (!confirmed) {
-                this.migrationMessage = `已取消：检测到 ${preview.changed} 条可转换条目`;
+                this.migrationMessage = '已取消转换';
                 return;
             }
-            this.migrationMessage = `正在转换 ${preview.changed} 条旧格式条目…`;
-            this.render();
             const result = await this.worldbook.migrateLegacyFormat(this.settings, preview);
             this.entries = result.entries;
-            this.migrationPreview = await this.worldbook.previewMigration(this.settings);
-            this.migrationMessage = `转换完成：已处理 ${result.preview.changed} 条，可在刷新页面前撤销`;
+            this.migrationMessage = `转换完成：已处理 ${result.preview.changed} 条，可在当前页面撤销`;
         }
         catch (error) {
             this.migrationMessage = error instanceof Error ? error.message : String(error);
@@ -2197,7 +2519,6 @@ class WorkspaceUi {
         this.render();
         try {
             this.entries = await this.worldbook.undoMigration(this.settings);
-            this.migrationPreview = await this.worldbook.previewMigration(this.settings);
             this.migrationMessage = '已恢复转换前世界书';
         }
         catch (error) {
@@ -2236,6 +2557,72 @@ function hasKeyword(entry, keyword) {
     const expected = (0, util_1.normalizeFact)(keyword);
     return entry.keywords.some((value) => (0, util_1.normalizeFact)(value) === expected);
 }
+function entrySummary(entry) {
+    const preferred = ['当前状态', '最终结果', '现行规则', '近期经历', '事件进程', '变化记录', '固定事实', '对象定义', '规则定义'];
+    for (const name of preferred) {
+        const lines = entry.sections.values[name];
+        if (lines?.length)
+            return (0, util_1.truncate)(lines[lines.length - 1] ?? lines[0] ?? '', 100);
+    }
+    return (0, util_1.truncate)(entry.sections.order.flatMap((name) => entry.sections.values[name] ?? [])[0] ?? '', 100);
+}
+function graphLayout(entries) {
+    if (!entries.length)
+        return { nodes: [], edges: [], groups: [] };
+    const titleSet = new Set(entries.map((entry) => entry.title));
+    const degree = new Map(entries.map((entry) => [entry.title, entry.references.filter((title) => titleSet.has(title)).length]));
+    const centerEntry = entries.find((entry) => entry.focus) ?? [...entries].sort((a, b) => (degree.get(b.title) ?? 0) - (degree.get(a.title) ?? 0))[0];
+    const groups = new Map();
+    for (const entry of entries) {
+        if (entry.title === centerEntry.title)
+            continue;
+        const group = primaryGroup(entry);
+        const list = groups.get(group) ?? [];
+        list.push(entry);
+        groups.set(group, list);
+    }
+    const groupNames = [...groups.keys()].sort();
+    const nodes = [{ entry: centerEntry, x: 0, y: 0, center: true }];
+    const positions = new Map([[centerEntry.title, { x: 0, y: 0 }]]);
+    groupNames.forEach((group, groupIndex) => {
+        const list = groups.get(group) ?? [];
+        const angle = groupNames.length === 1 ? -Math.PI / 2 : (groupIndex / groupNames.length) * Math.PI * 2 - Math.PI / 2;
+        const groupRadius = groupNames.length <= 5 ? 235 : 265;
+        const gx = Math.cos(angle) * groupRadius;
+        const gy = Math.sin(angle) * groupRadius;
+        list.forEach((entry, index) => {
+            const ring = Math.floor(index / 7);
+            const position = index % 7;
+            const ringCount = Math.min(7, list.length - ring * 7);
+            const localAngle = ringCount === 1 ? 0 : (position / ringCount) * Math.PI * 2;
+            const localRadius = ringCount === 1 ? 0 : 60 + ring * 48;
+            const x = gx + Math.cos(localAngle) * localRadius;
+            const y = gy + Math.sin(localAngle) * localRadius;
+            nodes.push({ entry, x, y, center: false });
+            positions.set(entry.title, { x, y });
+        });
+    });
+    const edges = [];
+    for (const entry of entries) {
+        const from = positions.get(entry.title);
+        if (!from)
+            continue;
+        for (const reference of entry.references) {
+            const to = positions.get(reference);
+            if (!to)
+                continue;
+            edges.push({ from, to, mid: { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 - 18 } });
+        }
+    }
+    return { nodes, edges, groups: groupNames };
+}
+function primaryGroup(entry) {
+    const defaults = settings_1.DEFAULT_KEYWORDS.map((item) => item.label);
+    return entry.keywords.find((keyword) => defaults.includes(keyword)) ?? entry.type ?? entry.keywords[0] ?? '其他';
+}
+function brandSvg() {
+    return '<svg class="maip-brand-svg" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="maip-brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#315fd6"/><stop offset="1" stop-color="#745bd4"/></linearGradient></defs><rect x="2" y="2" width="28" height="28" rx="9" fill="url(#maip-brand-g)"/><path d="M9 11c4-4 10-4 14 0M8 16c5-5 11-5 16 0M10 21c4-3 8-3 12 0" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>';
+}
 function iconSvg(name) {
     if (name === 'refresh')
         return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>';
@@ -2247,8 +2634,22 @@ function phaseLabel(phase) {
 function operationLabel(kind) {
     return { 'create-entry': '创建', noop: '跳过', 'append-line': '追加', 'replace-line': '替换', 'replace-section': '整段替换', 'merge-titles': '关联', 'merge-keywords': '关键词', 'archive-entry': '归档', 'delete-entry': '删除' }[kind] ?? kind;
 }
+function suggestedPolicy(label) {
+    if (/(关联|参与|引用)/u.test(label))
+        return 'merge-titles';
+    if (/(关键词|别名|称号)/u.test(label))
+        return 'merge-keywords';
+    if (/(进程|经历|变化记录|过程)/u.test(label))
+        return 'append-chain';
+    if (/(当前|状态|位置|持有者|数量|结果)/u.test(label))
+        return 'replace-by-anchor';
+    return 'semantic-upsert';
+}
 function settingSwitch(key, label, checked) {
     return `<label class="maip-switch"><input type="checkbox" data-setting="${key}" ${checked ? 'checked' : ''}><span></span>${label}</label>`;
+}
+function pageDescription(tab) {
+    return { overview: '条目名称、关键词与当前摘要', entries: '直接编辑世界书条目、关键词和子条目信息', keywords: '控制 AI 提取时可参考的关键词与小标题', matching: '查看 AI 建议、匹配依据和写入操作', graph: '查看世界书标题之间的关联网络', audit: '填写项目级审核和提取边界', settings: '选择处理 AI、世界书与总结频率', diagnostics: '检查宿主能力和实时状态' }[tab];
 }
 function cssEscape(value) { return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, '\\$&'); }
 function findSettingsHost() {
@@ -2957,7 +3358,7 @@ function convertLegacyContent(content, keywords) {
             continue;
         const heading = line.match(/^#{0,6}\s*([^：:]{1,20})\s*[：:]\s*(.*)$/u);
         if (heading && knownSection.test(heading[1].trim())) {
-            current = heading[1].trim();
+            current = (0, parser_1.canonicalSectionName)(heading[1].trim());
             sections[current] ?? (sections[current] = []);
             if (heading[2].trim())
                 sections[current].push((0, parser_1.normalizePointLine)(heading[2]));
@@ -2973,13 +3374,13 @@ function convertLegacyContent(content, keywords) {
 }
 function defaultLegacySection(keywords) {
     if (hasKeyword(keywords, '基础设定'))
-        return '规则定义';
+        return '固定事实';
     if (hasKeyword(keywords, '事件'))
         return '事件进程';
     if (hasKeyword(keywords, '场景') || hasKeyword(keywords, '时空'))
         return '当前状态';
     if (hasKeyword(keywords, '关系'))
-        return '关系状态';
+        return '当前状态';
     return '旧格式保留';
 }
 function normalizeLegacyName(value) {
