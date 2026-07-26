@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-alpha.9-infopoint.7-white-mobile single-file build. */
+/** Mirror Abyss 2.0.0-alpha.9-infopoint.8-player-simple single-file build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -96,7 +96,7 @@ exports.MirrorAbyssApplication = MirrorAbyssApplication;
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.STYLE_ID = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-alpha.9-infopoint.7-white-mobile';
+exports.VERSION = '2.0.0-alpha.9-infopoint.8-player-simple';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1224,7 +1224,7 @@ function policyDescription(policy) {
 "settings":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SettingsStore = exports.DEFAULT_SETTINGS = exports.DEFAULT_KEYWORDS = void 0;
+exports.SettingsStore = exports.DEFAULT_SETTINGS = exports.DEFAULT_LARGE_SUMMARY_PROMPT = exports.DEFAULT_SMALL_SUMMARY_PROMPT = exports.DEFAULT_EXTRACTION_PROMPT = exports.DEFAULT_AUDIT_PROMPT = exports.DEFAULT_KEYWORDS = void 0;
 exports.parseSettings = parseSettings;
 const constants_1 = require("./constants");
 const util_1 = require("./util");
@@ -1265,16 +1265,26 @@ function keyword(key, label, description, aliases, constant, fields, order, vect
         fields: (0, util_1.clone)(fields),
     };
 }
+exports.DEFAULT_AUDIT_PROMPT = `- 不替玩家决定行动、态度、判断、目标或心理。
+- 不把未发生、未确认、仅被计划或推测的内容写成事实。
+- 不擅自改变已经成立的时间、地点、人物关系、物品状态和事件顺序。
+- 发现明确违规时只做最小修正，不扩写剧情。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `- 只提取本轮已经明确成立、会影响后续叙事的信息点。
+- 普通动作、表情、气氛、修辞、服装和无后续影响的背景信息不记录。
+- 同一对象沿用已有标题；同一事件的新进展继续写入原事件。
+- 没有核心变化的小标题填写“无”，不得用旧事实补齐。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `整理当前场景或当前事件链，保留仍会影响后续的结果、关系、资源、身份和限制；已分发的临时过程可以沉降。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `只固化跨场景仍成立的长期事实，合并重复内容，删除已被最终结果覆盖的临时过程。`;
 exports.DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     autoProcess: false,
     auditEnabled: false,
     targetLorebook: '',
     autoCreateLorebook: true,
-    auditPrompt: '',
-    extractionPrompt: '',
-    smallSummaryPrompt: '',
-    largeSummaryPrompt: '',
+    auditPrompt: exports.DEFAULT_AUDIT_PROMPT,
+    extractionPrompt: exports.DEFAULT_EXTRACTION_PROMPT,
+    smallSummaryPrompt: exports.DEFAULT_SMALL_SUMMARY_PROMPT,
+    largeSummaryPrompt: exports.DEFAULT_LARGE_SUMMARY_PROMPT,
     responseTokens: 3072,
     requestTimeoutMs: 90000,
     duplicateSimilarity: 0.86,
@@ -1338,10 +1348,10 @@ function parseSettings(value) {
         auditEnabled: candidate.auditEnabled === true,
         targetLorebook: String(candidate.targetLorebook ?? ''),
         autoCreateLorebook: candidate.autoCreateLorebook !== false,
-        auditPrompt: String(candidate.auditPrompt ?? ''),
-        extractionPrompt: String(candidate.extractionPrompt ?? ''),
-        smallSummaryPrompt: String(candidate.smallSummaryPrompt ?? ''),
-        largeSummaryPrompt: String(candidate.largeSummaryPrompt ?? ''),
+        auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
+        extractionPrompt: String(candidate.extractionPrompt ?? exports.DEFAULT_EXTRACTION_PROMPT) || exports.DEFAULT_EXTRACTION_PROMPT,
+        smallSummaryPrompt: String(candidate.smallSummaryPrompt ?? exports.DEFAULT_SMALL_SUMMARY_PROMPT) || exports.DEFAULT_SMALL_SUMMARY_PROMPT,
+        largeSummaryPrompt: String(candidate.largeSummaryPrompt ?? exports.DEFAULT_LARGE_SUMMARY_PROMPT) || exports.DEFAULT_LARGE_SUMMARY_PROMPT,
         responseTokens: (0, util_1.clampNumber)(candidate.responseTokens, 3072, 256, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         duplicateSimilarity: clampFloat(candidate.duplicateSimilarity, 0.86, 0.5, 0.99),
@@ -1812,8 +1822,8 @@ class WorkspaceUi {
               <p>信息点提取 → 关键词与正文匹配 → 世界书操作</p>
             </div>
             <div class="maip-header-actions">
-              <button class="maip-icon" data-action="refresh" title="刷新" aria-label="刷新">↻</button>
-              <button class="maip-icon" data-action="close" title="关闭" aria-label="关闭">×</button>
+              <button class="maip-icon" data-action="refresh" title="刷新" aria-label="刷新">${iconSvg('refresh')}</button>
+              <button class="maip-icon" data-action="close" title="关闭" aria-label="关闭">${iconSvg('close')}</button>
             </div>
           </header>
           <main class="maip-main">${this.renderTab()}</main>
@@ -1900,43 +1910,40 @@ class WorkspaceUi {
       </section>`;
     }
     renderKeywords() {
-        return `<section class="maip-keyword-intro maip-card"><div><h3>默认关键词与小标题</h3><p>缺失的默认关键词、小标题和选项会自动补齐；列表外的新关键词仍可正常创建和匹配。</p></div><div class="maip-actions compact"><button class="maip-btn" data-action="reset-keywords">恢复完整默认项</button><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词规则</button></div></section>
+        return `<section class="maip-keyword-intro maip-card"><div><h3>关键词模板</h3><p>玩家只需要调整关键词名称、近义词、用途和建议小标题。常驻、向量、深度、顺序及匹配策略由插件使用默认规则处理。</p></div><div class="maip-actions compact"><button class="maip-btn" data-action="reset-keywords">恢复默认模板</button><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词</button></div></section>
       <section class="maip-template-grid">${this.settings.keywordDefinitions.map((definition, index) => this.renderKeywordDefinition(definition, index)).join('')}</section>`;
     }
     renderKeywordDefinition(definition, index) {
-        return `<article class="maip-card maip-template">
-      <div class="maip-section-head"><div><h3>${(0, util_1.escapeHtml)(definition.label)}</h3><p>${(0, util_1.escapeHtml)(definition.description)}</p></div><button class="maip-link danger" data-action="delete-keyword" data-index="${index}">删除规则</button></div>
-      <div class="maip-keyword-rule-grid">
+        const isDefault = settings_1.DEFAULT_KEYWORDS.some((item) => item.label === definition.label);
+        const fieldText = definition.fields.map((field) => field.label).join('\n');
+        return `<article class="maip-card maip-template simple">
+      <div class="maip-section-head"><div><h3>${(0, util_1.escapeHtml)(definition.label)}</h3><p>${definition.label === '基础设定' ? '基础设定会由插件自动常驻。' : '使用默认召回设置。'}</p></div><div class="maip-template-actions"><label class="maip-switch"><input type="checkbox" data-keyword-prop="enabled" data-index="${index}" ${definition.enabled ? 'checked' : ''}><span></span>启用</label>${!isDefault ? `<button class="maip-link danger" data-action="delete-keyword" data-index="${index}">删除</button>` : ''}</div></div>
+      <div class="maip-player-fields">
         <label>关键词<input data-keyword-prop="label" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.label)}"></label>
-        <label>近义标签<input data-keyword-prop="aliases" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.aliases.join(' / '))}" placeholder="用 / 分隔"></label>
-        <label class="maip-switch"><input type="checkbox" data-keyword-prop="constant" data-index="${index}" ${definition.constant ? 'checked' : ''}><span></span>常驻</label>
-        <label class="maip-switch"><input type="checkbox" data-keyword-prop="vectorized" data-index="${index}" ${definition.vectorized ? 'checked' : ''}><span></span>向量</label>
-        <label>深度<input type="number" data-keyword-prop="depth" data-index="${index}" value="${definition.depth}"></label>
-        <label>顺序<input type="number" data-keyword-prop="order" data-index="${index}" value="${definition.order}"></label>
+        <label>近义词<input data-keyword-prop="aliases" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.aliases.join(' / '))}" placeholder="可不填；用 / 分隔"></label>
+        <label class="span-2">提取范围<textarea data-keyword-prop="description" data-index="${index}" rows="2">${(0, util_1.escapeHtml)(definition.description)}</textarea></label>
+        <label class="span-2">建议小标题<textarea data-keyword-fields data-index="${index}" rows="3" placeholder="每行一个小标题">${(0, util_1.escapeHtml)(fieldText)}</textarea></label>
       </div>
-      <label>用途说明<textarea data-keyword-prop="description" data-index="${index}" rows="2">${(0, util_1.escapeHtml)(definition.description)}</textarea></label>
-      <div class="maip-fields">${definition.fields.map((field, fieldIndex) => this.renderField(field, index, fieldIndex)).join('')}</div>
-      <button class="maip-btn small" data-action="add-field" data-index="${index}">＋ 新增建议小标题</button>
     </article>`;
-    }
-    renderField(field, keywordIndex, fieldIndex) {
-        return `<div class="maip-field-row">
-      <input data-field-prop="label" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}" value="${(0, util_1.escapeHtml)(field.label)}" aria-label="小标题">
-      <select data-field-prop="policy" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}">${policyOptions(field.policy)}</select>
-      <input data-field-prop="options" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}" value="${(0, util_1.escapeHtml)((field.options ?? []).join(' / '))}" placeholder="可选项，用 / 分隔">
-      <button class="maip-icon danger" data-action="delete-field" data-keyword-index="${keywordIndex}" data-field-index="${fieldIndex}">×</button>
-    </div>`;
     }
     renderMatching() {
         const plan = this.status.plan;
+        const raw = String(this.status.rawResult ?? '').trim();
+        const sample = `人物｜莉娅
+【关键词】
+- 人物
+【当前状态】
+- 莉娅位于临海石洞，左臂受伤。
+【近期经历】
+无`;
         return `<section class="maip-two-col wide-left">
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>AI 原始填写</h3><p>标题、【关键词】、小标题、信息点和“无”的固定自然语言格式。</p></div></div>
-        <textarea class="maip-raw" data-input="raw-preview" rows="22">${(0, util_1.escapeHtml)(this.status.rawResult)}</textarea>
-        <div class="maip-actions"><button class="maip-btn" data-action="preview">重新解析预览</button></div>
+        <div class="maip-section-head"><div><h3>最近一次 AI 填写</h3><p>这里只显示模型结果，不需要玩家手工填写。</p></div>${raw ? '<button class="maip-btn small" data-action="preview">重新解析</button>' : ''}</div>
+        <pre class="maip-raw maip-readonly">${(0, util_1.escapeHtml)(raw || sample)}</pre>
+        ${raw ? '' : '<p class="maip-muted">当前还没有运行记录，上方显示默认格式示例。</p>'}
       </article>
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>匹配与操作</h3><p>${plan ? `${plan.blocks.length} 个标题块 · ${plan.operations.length} 个操作` : '尚无计划'}</p></div></div>
+        <div class="maip-section-head"><div><h3>匹配与操作</h3><p>${plan ? `${plan.blocks.length} 个标题块 · ${plan.operations.length} 个操作` : '运行提取后自动显示'}</p></div></div>
         ${this.renderOperationList(plan?.operations ?? [], true)}
       </article>
     </section>`;
@@ -1984,20 +1991,15 @@ class WorkspaceUi {
     </section>`;
     }
     renderSettings() {
-        return `<section class="maip-settings-grid">
-      <article class="maip-card"><h3>基础配置</h3><p class="maip-muted">运行开关已移到左上角。</p>
-        <label>目标世界书<input data-setting="targetLorebook" value="${(0, util_1.escapeHtml)(this.settings.targetLorebook)}" placeholder="留空则读取当前聊天绑定"></label>
-        <label>响应 Token<input type="number" data-setting="responseTokens" value="${this.settings.responseTokens}"></label>
+        return `<section class="maip-settings-grid simple-settings">
+      <article class="maip-card"><h3>世界书</h3><p class="maip-muted">一般保持为空，插件会读取当前聊天绑定的世界书；没有绑定时按开关自动创建。</p>
+        <label>指定世界书（可选）<input data-setting="targetLorebook" value="${(0, util_1.escapeHtml)(this.settings.targetLorebook)}" placeholder="留空＝当前聊天绑定"></label>
       </article>
-      <article class="maip-card"><h3>信息点相似度</h3>
-        <label>普通事实重复阈值<input type="number" step="0.01" min="0.5" max="0.99" data-setting="duplicateSimilarity" value="${this.settings.duplicateSimilarity}"></label>
-        <label>事件链重复阈值<input type="number" step="0.01" min="0.6" max="0.999" data-setting="chainDuplicateSimilarity" value="${this.settings.chainDuplicateSimilarity}"></label>
-        <label>小总结回合兜底<input type="number" data-setting="smallSummaryTurns" value="${this.settings.smallSummaryTurns}"></label>
-        <label>大总结累计小总结数<input type="number" data-setting="largeSummaryCount" value="${this.settings.largeSummaryCount}"></label>
+      <article class="maip-card"><h3>总结频率</h3><p class="maip-muted">只在需要改变默认节奏时填写。</p>
+        <label>小总结间隔（回合）<input type="number" min="2" max="100" data-setting="smallSummaryTurns" value="${this.settings.smallSummaryTurns}"></label>
+        <label>大总结间隔（累计小总结）<input type="number" min="2" max="30" data-setting="largeSummaryCount" value="${this.settings.largeSummaryCount}"></label>
       </article>
-      <article class="maip-card span-2"><div class="maip-section-head"><div><h3>通用调度信号</h3><p>常驻优先由关键词规则和玩家焦点决定；这里仅控制提及、关联和活跃事件的原生召回参数。</p></div></div>
-        <div class="maip-rule-table">${this.settings.activationRules.map((rule, index) => `<div class="maip-rule-row"><input type="checkbox" data-rule-index="${index}" data-rule-prop="enabled" ${rule.enabled ? 'checked' : ''}><b>${(0, util_1.escapeHtml)(rule.label)}</b><span>${(0, util_1.escapeHtml)(rule.match)}</span><code>${(0, util_1.escapeHtml)(JSON.stringify(rule.set))}</code></div>`).join('')}</div>
-      </article>
+      <article class="maip-card span-2 maip-auto-card"><h3>已自动处理</h3><p>响应长度、超时、重复阈值、正文匹配阈值、向量、递归、深度、顺序和调度规则均使用插件默认值，不要求玩家填写。</p></article>
     </section>`;
     }
     renderDiagnostics() {
@@ -2037,8 +2039,9 @@ class WorkspaceUi {
         if (action === 'large')
             await this.run(() => this.tasks.runTask('largeSummary', this.settings));
         if (action === 'preview') {
-            const raw = this.root?.querySelector('[data-input="raw-preview"]')?.value ?? '';
-            await this.tasks.previewExtraction(this.settings, raw);
+            const raw = String(this.status.rawResult ?? '').trim();
+            if (raw)
+                await this.tasks.previewExtraction(this.settings, raw);
         }
         if (action === 'focus') {
             const title = String(target.dataset.title ?? '');
@@ -2063,14 +2066,6 @@ class WorkspaceUi {
         }
         if (action === 'delete-keyword') {
             this.settings.keywordDefinitions.splice(Number(target.dataset.index), 1);
-            this.persistSettings();
-        }
-        if (action === 'add-field') {
-            this.settings.keywordDefinitions[Number(target.dataset.index)]?.fields.push({ key: `field_${Date.now()}`, label: '新小标题', policy: 'semantic-upsert' });
-            this.persistSettings();
-        }
-        if (action === 'delete-field') {
-            this.settings.keywordDefinitions[Number(target.dataset.keywordIndex)]?.fields.splice(Number(target.dataset.fieldIndex), 1);
             this.persistSettings();
         }
         if (action === 'migration-apply')
@@ -2101,13 +2096,16 @@ class WorkspaceUi {
             }
             this.persistSettings(false);
         }
-        if (target.dataset.fieldProp) {
-            const field = this.settings.keywordDefinitions[Number(target.dataset.keywordIndex)]?.fields[Number(target.dataset.fieldIndex)];
-            if (field) {
-                if (target.dataset.fieldProp === 'options')
-                    field.options = target.value.split('/').map((value) => value.trim()).filter(Boolean);
-                else
-                    field[target.dataset.fieldProp] = target.value;
+        if (target.hasAttribute('data-keyword-fields')) {
+            const definition = this.settings.keywordDefinitions[Number(target.dataset.index)];
+            if (definition) {
+                const labels = target.value.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+                const existing = new Map(definition.fields.map((field) => [field.label, field]));
+                definition.fields = labels.map((label, index) => existing.get(label) ?? {
+                    key: `field_${Date.now()}_${index}`,
+                    label,
+                    policy: 'semantic-upsert',
+                });
             }
             this.persistSettings(false);
         }
@@ -2238,15 +2236,16 @@ function hasKeyword(entry, keyword) {
     const expected = (0, util_1.normalizeFact)(keyword);
     return entry.keywords.some((value) => (0, util_1.normalizeFact)(value) === expected);
 }
+function iconSvg(name) {
+    if (name === 'refresh')
+        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>';
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+}
 function phaseLabel(phase) {
     return { idle: '空闲', reading: '读取', audit: '审核', extracting: '提取', matching: '匹配', worldbook: '写入', summary: '总结', complete: '完成', error: '错误' }[phase] ?? phase;
 }
 function operationLabel(kind) {
     return { 'create-entry': '创建', noop: '跳过', 'append-line': '追加', 'replace-line': '替换', 'replace-section': '整段替换', 'merge-titles': '关联', 'merge-keywords': '关键词', 'archive-entry': '归档', 'delete-entry': '删除' }[kind] ?? kind;
-}
-function policyOptions(selected) {
-    const options = [['semantic-upsert', '事实匹配'], ['replace-by-anchor', '同槽替换'], ['append-chain', '链式追加'], ['replace-section', '整段替换'], ['merge-titles', '标题集合'], ['merge-keywords', '关键词集合']];
-    return options.map(([value, label]) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`).join('');
 }
 function settingSwitch(key, label, checked) {
     return `<label class="maip-switch"><input type="checkbox" data-setting="${key}" ${checked ? 'checked' : ''}><span></span>${label}</label>`;
@@ -2390,39 +2389,6 @@ function escapeHtml(value) {
 },
 "worldbook":function(module,exports,require){
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorldbookAdapter = void 0;
 exports.parseEntries = parseEntries;
@@ -2739,12 +2705,99 @@ class WorldbookAdapter {
             return Promise.resolve(globalThis.__MIRROR_ABYSS_WORLD_INFO_API__);
         if (globalThis.__MIRROR_ABYSS_LOAD_WORLD_INFO_API__)
             return globalThis.__MIRROR_ABYSS_LOAD_WORLD_INFO_API__();
-        const moduleUrl = '/scripts/world-info.js';
-        this.apiPromise ?? (this.apiPromise = Promise.resolve(`${moduleUrl}`).then(s => __importStar(require(s))));
+        if (this.apiPromise)
+            return this.apiPromise;
+        this.apiPromise = Promise.resolve(buildContextWorldInfoApi(this.context()));
         return this.apiPromise;
     }
 }
 exports.WorldbookAdapter = WorldbookAdapter;
+function buildContextWorldInfoApi(context) {
+    const headers = () => context.getRequestHeaders?.() ?? { 'Content-Type': 'application/json' };
+    const loadWorldInfo = typeof context.loadWorldInfo === 'function'
+        ? context.loadWorldInfo.bind(context)
+        : async (name) => {
+            const response = await fetch('/api/worldinfo/get', {
+                method: 'POST',
+                headers: headers(),
+                body: JSON.stringify({ name }),
+                cache: 'no-cache',
+            });
+            if (!response.ok)
+                return null;
+            return response.json();
+        };
+    const saveWorldInfo = typeof context.saveWorldInfo === 'function'
+        ? context.saveWorldInfo.bind(context)
+        : async (name, data) => {
+            const response = await fetch('/api/worldinfo/edit', {
+                method: 'POST',
+                headers: headers(),
+                body: JSON.stringify({ name, data }),
+            });
+            if (!response.ok)
+                throw new Error(`世界书保存失败：HTTP ${response.status}`);
+        };
+    return {
+        METADATA_KEY: 'world_info',
+        loadWorldInfo,
+        saveWorldInfo,
+        updateWorldInfoList: context.updateWorldInfoList?.bind(context),
+        reloadWorldInfoEditor: context.reloadWorldInfoEditor?.bind(context),
+        async createNewWorldInfo(name) {
+            await saveWorldInfo(name, { entries: {} }, true);
+            await context.updateWorldInfoList?.();
+            return true;
+        },
+        createWorldInfoEntry(_name, data) {
+            data.entries ?? (data.entries = {});
+            let uid = 0;
+            while (Object.prototype.hasOwnProperty.call(data.entries, String(uid)))
+                uid += 1;
+            const entry = createDefaultWorldInfoEntry(uid);
+            data.entries[String(uid)] = entry;
+            return entry;
+        },
+    };
+}
+function createDefaultWorldInfoEntry(uid) {
+    return {
+        uid,
+        key: [],
+        keysecondary: [],
+        comment: '',
+        content: '',
+        constant: false,
+        vectorized: false,
+        selective: true,
+        selectiveLogic: 0,
+        addMemo: false,
+        order: 100,
+        position: 0,
+        disable: false,
+        ignoreBudget: false,
+        excludeRecursion: false,
+        preventRecursion: false,
+        probability: 100,
+        useProbability: true,
+        depth: 4,
+        outletName: '',
+        group: '',
+        groupOverride: false,
+        groupWeight: 100,
+        scanDepth: null,
+        caseSensitive: null,
+        matchWholeWords: null,
+        useGroupScoring: null,
+        automationId: '',
+        role: 0,
+        sticky: null,
+        cooldown: null,
+        delay: null,
+        delayUntilRecursion: 0,
+        triggers: [],
+    };
+}
 function parseEntries(data) {
     const output = [];
     for (const [mapUid, rawValue] of Object.entries(data?.entries ?? {})) {
