@@ -1,35 +1,103 @@
 {
-  "mode": "pinned-browser-esm-fallback",
-  "generatedAt": "2026-07-26T12:22:00.684Z",
+  "mode": "pinned-browser-esm-vendor-fallback",
+  "generatedAt": "2026-07-26T12:46:02.728Z",
+  "entry": "../index.js",
+  "runtime": "./runtime/index.js",
   "providerOrder": [
     "esmsh",
     "jsdelivr"
   ],
-  "providers": {
-    "esmsh": {
-      "label": "esm.sh",
-      "entry": "./runtime/esmsh/index.js",
-      "dependencies": {
-        "react": "https://esm.sh/react@18.2.0?target=es2022",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?deps=react@18.2.0&target=es2022",
-        "react-redux": "https://esm.sh/react-redux@9.2.0?deps=react@18.2.0,redux@5.0.1&target=es2022",
-        "@reduxjs/toolkit": "https://esm.sh/@reduxjs/toolkit@2.11.0?target=es2022",
-        "zod": "https://esm.sh/zod@4.4.3?target=es2022",
-        "p-queue": "https://esm.sh/p-queue@9.3.1?target=es2022"
-      }
+  "dependencies": {
+    "react": {
+      "shim": "./runtime/vendor/react.js",
+      "candidates": [
+        {
+          "id": "esmsh",
+          "label": "esm.sh",
+          "url": "https://esm.sh/react@18.2.0?target=es2022"
+        },
+        {
+          "id": "jsdelivr",
+          "label": "jsDelivr +esm",
+          "url": "https://cdn.jsdelivr.net/npm/react@18.2.0/+esm"
+        }
+      ]
     },
-    "jsdelivr": {
-      "label": "jsDelivr +esm",
-      "entry": "./runtime/jsdelivr/index.js",
-      "dependencies": {
-        "react": "https://cdn.jsdelivr.net/npm/react@18.2.0/+esm",
-        "react-dom/client": "https://cdn.jsdelivr.net/npm/react-dom@18.2.0/client/+esm",
-        "react-redux": "https://cdn.jsdelivr.net/npm/react-redux@9.2.0/+esm",
-        "@reduxjs/toolkit": "https://cdn.jsdelivr.net/npm/@reduxjs/toolkit@2.11.0/+esm",
-        "zod": "https://cdn.jsdelivr.net/npm/zod@4.4.3/+esm",
-        "p-queue": "https://cdn.jsdelivr.net/npm/p-queue@9.3.1/+esm"
-      }
+    "react-dom/client": {
+      "shim": "./runtime/vendor/react-dom-client.js",
+      "candidates": [
+        {
+          "id": "esmsh",
+          "label": "esm.sh",
+          "url": "https://esm.sh/react-dom@18.2.0/client?deps=react@18.2.0&target=es2022"
+        },
+        {
+          "id": "jsdelivr",
+          "label": "jsDelivr +esm",
+          "url": "https://cdn.jsdelivr.net/npm/react-dom@18.2.0/client/+esm"
+        }
+      ]
+    },
+    "react-redux": {
+      "shim": "./runtime/vendor/react-redux.js",
+      "candidates": [
+        {
+          "id": "esmsh",
+          "label": "esm.sh",
+          "url": "https://esm.sh/react-redux@9.2.0?deps=react@18.2.0,redux@5.0.1&target=es2022"
+        },
+        {
+          "id": "jsdelivr",
+          "label": "jsDelivr +esm",
+          "url": "https://cdn.jsdelivr.net/npm/react-redux@9.2.0/+esm"
+        }
+      ]
+    },
+    "@reduxjs/toolkit": {
+      "shim": "./runtime/vendor/redux-toolkit.js",
+      "candidates": [
+        {
+          "id": "esmsh",
+          "label": "esm.sh",
+          "url": "https://esm.sh/@reduxjs/toolkit@2.11.0?target=es2022"
+        },
+        {
+          "id": "jsdelivr",
+          "label": "jsDelivr +esm",
+          "url": "https://cdn.jsdelivr.net/npm/@reduxjs/toolkit@2.11.0/+esm"
+        }
+      ]
+    },
+    "zod": {
+      "shim": "./runtime/vendor/zod.js",
+      "candidates": [
+        {
+          "id": "esmsh",
+          "label": "esm.sh",
+          "url": "https://esm.sh/zod@4.4.3?target=es2022"
+        },
+        {
+          "id": "jsdelivr",
+          "label": "jsDelivr +esm",
+          "url": "https://cdn.jsdelivr.net/npm/zod@4.4.3/+esm"
+        }
+      ]
+    },
+    "p-queue": {
+      "shim": "./runtime/vendor/p-queue.js",
+      "candidates": [
+        {
+          "id": "esmsh",
+          "label": "esm.sh",
+          "url": "https://esm.sh/p-queue@9.3.1?target=es2022"
+        },
+        {
+          "id": "jsdelivr",
+          "label": "jsDelivr +esm",
+          "url": "https://cdn.jsdelivr.net/npm/p-queue@9.3.1/+esm"
+        }
+      ]
     }
   },
-  "note": "The local lifecycle loader tries each exact-version provider in order and reports all failures visibly."
+  "note": "One local runtime tree; each vendor shim tries exact-version esm.sh then jsDelivr. Root index.js is the only manifest JS resource and injects CSS."
 }

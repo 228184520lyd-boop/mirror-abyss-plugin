@@ -1,5 +1,5 @@
-/* Generated from src/features/processing/processing-slice.ts for jsDelivr +esm — do not edit dist directly. */
-import { createSlice } from 'https://cdn.jsdelivr.net/npm/@reduxjs/toolkit@2.11.0/+esm';
+/* Generated from src/features/processing/processing-slice.ts — do not edit dist directly. */
+import { createSlice } from '../../vendor/redux-toolkit.js';
 const initialState = {
     status: 'idle', source: null, messageIndex: null, messageKey: null,
     detail: null, error: null, lastCompletedAt: null,

@@ -1,4 +1,4 @@
-/* Generated from src/shared/diagnostics.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/shared/diagnostics.ts — do not edit dist directly. */
 import { VERSION, DEFAULT_TABLE_KEYS } from '../constants.js';
 /**
  * 只输出宿主能力、阶段状态和数量，不包含正文、事实内容、规则文本或角色名称。
@@ -12,6 +12,8 @@ export function createDiagnosticReport(input) {
         version: VERSION,
         generatedAt: new Date().toISOString(),
         runtimeProvider: globalThis.__MIRROR_ABYSS_RUNTIME_PROVIDER__ ?? null,
+        dependencyProviders: globalThis.__MIRROR_ABYSS_DEPENDENCY_PROVIDERS__ ?? {},
+        bootstrap: globalThis.__MIRROR_ABYSS_BOOTSTRAP__ ?? null,
         environment: {
             userAgent: typeof navigator === 'undefined' ? null : navigator.userAgent,
             location: typeof location === 'undefined' ? null : location.href,

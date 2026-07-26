@@ -1,4 +1,4 @@
-/* Generated from src/shared/fixed-text.ts for jsDelivr +esm — do not edit dist directly. */
+/* Generated from src/shared/fixed-text.ts — do not edit dist directly. */
 /**
  * 解析镜渊固定文本协议。允许“字段=值”和“字段：值”，不解析模型思考文本。
  * FACT-MODEL-002：边界适度宽容，但不会猜造缺失业务字段。

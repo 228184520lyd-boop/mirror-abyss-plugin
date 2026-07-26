@@ -1,86 +1,241 @@
 {
-  "version": "2.0.0-alpha.4-realtest.1",
-  "fileCount": 80,
+  "version": "2.0.0-alpha.5-realtest.1",
+  "fileCount": 48,
   "files": [
-    "LICENSE",
-    "README.md",
-    "THIRD_PARTY_NOTICES.md",
-    "VALIDATION_STATUS.json",
-    "dist/DEPENDENCIES.json",
-    "dist/index.js",
-    "dist/runtime/esmsh/app/application.js",
-    "dist/runtime/esmsh/app/chat-session.js",
-    "dist/runtime/esmsh/app/chat-task-executor.js",
-    "dist/runtime/esmsh/app/store.js",
-    "dist/runtime/esmsh/constants.js",
-    "dist/runtime/esmsh/features/document/document-slice.js",
-    "dist/runtime/esmsh/features/processing/parsers.js",
-    "dist/runtime/esmsh/features/processing/processing-slice.js",
-    "dist/runtime/esmsh/features/processing/reducer.js",
-    "dist/runtime/esmsh/features/processing/schemas.js",
-    "dist/runtime/esmsh/features/processing/service.js",
-    "dist/runtime/esmsh/features/processing/types.js",
-    "dist/runtime/esmsh/features/session/session-slice.js",
-    "dist/runtime/esmsh/features/settings/settings-slice.js",
-    "dist/runtime/esmsh/host/message-gateway.js",
-    "dist/runtime/esmsh/host/model-gateway.js",
-    "dist/runtime/esmsh/host/settings-repository.js",
-    "dist/runtime/esmsh/host/silly-tavern.js",
-    "dist/runtime/esmsh/index.js",
-    "dist/runtime/esmsh/model/chat-document.js",
-    "dist/runtime/esmsh/model/schemas.js",
-    "dist/runtime/esmsh/model/settings.js",
-    "dist/runtime/esmsh/prompts/audit.js",
-    "dist/runtime/esmsh/prompts/extraction.js",
-    "dist/runtime/esmsh/prompts/revision.js",
-    "dist/runtime/esmsh/repository/chat-document-repository.js",
-    "dist/runtime/esmsh/shared/diagnostics.js",
-    "dist/runtime/esmsh/shared/errors.js",
-    "dist/runtime/esmsh/shared/fixed-text.js",
-    "dist/runtime/esmsh/shared/hash.js",
-    "dist/runtime/esmsh/ui/App.js",
-    "dist/runtime/esmsh/ui/mount.js",
-    "dist/runtime/esmsh/ui/store-hooks.js",
-    "dist/runtime/jsdelivr/app/application.js",
-    "dist/runtime/jsdelivr/app/chat-session.js",
-    "dist/runtime/jsdelivr/app/chat-task-executor.js",
-    "dist/runtime/jsdelivr/app/store.js",
-    "dist/runtime/jsdelivr/constants.js",
-    "dist/runtime/jsdelivr/features/document/document-slice.js",
-    "dist/runtime/jsdelivr/features/processing/parsers.js",
-    "dist/runtime/jsdelivr/features/processing/processing-slice.js",
-    "dist/runtime/jsdelivr/features/processing/reducer.js",
-    "dist/runtime/jsdelivr/features/processing/schemas.js",
-    "dist/runtime/jsdelivr/features/processing/service.js",
-    "dist/runtime/jsdelivr/features/processing/types.js",
-    "dist/runtime/jsdelivr/features/session/session-slice.js",
-    "dist/runtime/jsdelivr/features/settings/settings-slice.js",
-    "dist/runtime/jsdelivr/host/message-gateway.js",
-    "dist/runtime/jsdelivr/host/model-gateway.js",
-    "dist/runtime/jsdelivr/host/settings-repository.js",
-    "dist/runtime/jsdelivr/host/silly-tavern.js",
-    "dist/runtime/jsdelivr/index.js",
-    "dist/runtime/jsdelivr/model/chat-document.js",
-    "dist/runtime/jsdelivr/model/schemas.js",
-    "dist/runtime/jsdelivr/model/settings.js",
-    "dist/runtime/jsdelivr/prompts/audit.js",
-    "dist/runtime/jsdelivr/prompts/extraction.js",
-    "dist/runtime/jsdelivr/prompts/revision.js",
-    "dist/runtime/jsdelivr/repository/chat-document-repository.js",
-    "dist/runtime/jsdelivr/shared/diagnostics.js",
-    "dist/runtime/jsdelivr/shared/errors.js",
-    "dist/runtime/jsdelivr/shared/fixed-text.js",
-    "dist/runtime/jsdelivr/shared/hash.js",
-    "dist/runtime/jsdelivr/ui/App.js",
-    "dist/runtime/jsdelivr/ui/mount.js",
-    "dist/runtime/jsdelivr/ui/store-hooks.js",
-    "docs/CHANGE_PROTOCOL.md",
-    "docs/ENGINEERING_EVENTS.md",
-    "docs/FIXED_FACTS.md",
-    "docs/IMPLEMENTED_CAPABILITIES.md",
-    "docs/REAL_MACHINE_CHECKLIST.md",
-    "manifest.json",
-    "style.css",
-    "PACKAGE_FILES.json"
+    {
+      "path": "LICENSE",
+      "size": 239,
+      "sha256": "c8c26d75b9a212f88692568f0a7f147c4277a02b7597a74bc65913a35ff26e3d"
+    },
+    {
+      "path": "README.md",
+      "size": 2610,
+      "sha256": "a0eaf803e6f997f0e5ee4e7cf3cbd8da5a3e776582595c5c3856c9e900298597"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "size": 765,
+      "sha256": "d9018eff2c58c9c4936fc49500229d69965039c7bf554da211e2c6912240639a"
+    },
+    {
+      "path": "VALIDATION_STATUS.json",
+      "size": 2554,
+      "sha256": "b8e5a5a1d2e2a62d4ff2516d0e27b704e9573a205e3f46a944695b5983b53673"
+    },
+    {
+      "path": "dist/DEPENDENCIES.json",
+      "size": 2832,
+      "sha256": "a215541b195e282087e7fe6f3ea377068d5eb72ac4175bff2ac2a362ad6ae5bd"
+    },
+    {
+      "path": "dist/runtime/app/application.js",
+      "size": 7859,
+      "sha256": "634ca535c3be894ae43bdd34c98eb6df13a17fff8fcc6ae12c95b0670d111567"
+    },
+    {
+      "path": "dist/runtime/app/chat-session.js",
+      "size": 1446,
+      "sha256": "dd25ea87217d746af813f4fd9dcfdb04a21727dda9e185a6bb1f8b4f0d809c31"
+    },
+    {
+      "path": "dist/runtime/app/chat-task-executor.js",
+      "size": 1514,
+      "sha256": "c4ebaf9866b147dfd46e57c902b4877391d69aa59d7c3c672259c307ce594cb3"
+    },
+    {
+      "path": "dist/runtime/app/store.js",
+      "size": 933,
+      "sha256": "5311a791541c6fdf694a652a7592435776d0793149c54a878f8183bd62baf0b0"
+    },
+    {
+      "path": "dist/runtime/constants.js",
+      "size": 435,
+      "sha256": "e06818568e86bb59feb774ae3e426902f6a3e760127d08212026bba14764d0b7"
+    },
+    {
+      "path": "dist/runtime/features/document/document-slice.js",
+      "size": 799,
+      "sha256": "fe1160bca2f5c29a452b8e8b0d05fd15b78e4713b7511aacba564274954b3695"
+    },
+    {
+      "path": "dist/runtime/features/processing/parsers.js",
+      "size": 4936,
+      "sha256": "554f912f75edc7ec790130fdb86b20e9f705a9736dee4ee8ed5348007086d158"
+    },
+    {
+      "path": "dist/runtime/features/processing/processing-slice.js",
+      "size": 1672,
+      "sha256": "b40253761accae112a3ca7f3c1eb296eb50325a9fbd2429ff5f902abc3ce859d"
+    },
+    {
+      "path": "dist/runtime/features/processing/reducer.js",
+      "size": 6553,
+      "sha256": "470a9f04f142a457ea242b6454354bc22797574cfc491821d0dcec05aad5a777"
+    },
+    {
+      "path": "dist/runtime/features/processing/schemas.js",
+      "size": 1040,
+      "sha256": "67028cafde5b6b7f08d39d9acf41327c688acae1a90fdc1061602642d27a0eb8"
+    },
+    {
+      "path": "dist/runtime/features/processing/service.js",
+      "size": 8737,
+      "sha256": "39263a6181a682ba33b591c1dd7397ab22b6349c38d9ae26a5799c499a4c9c81"
+    },
+    {
+      "path": "dist/runtime/features/processing/types.js",
+      "size": 96,
+      "sha256": "32e93bbed898dba1f18fbac5d8415a6079a2dd723a30c67cfc830645db337777"
+    },
+    {
+      "path": "dist/runtime/features/session/session-slice.js",
+      "size": 1067,
+      "sha256": "7ec24c4fe9afd64aa329b3c58cd8c30d5cd42ba2826ff8f3cfdd92f69a3535a4"
+    },
+    {
+      "path": "dist/runtime/features/settings/settings-slice.js",
+      "size": 616,
+      "sha256": "800be94cbef6fdee6ec2e7fe7569d44e4d413bb15c4597cb86e6499b084260c2"
+    },
+    {
+      "path": "dist/runtime/host/message-gateway.js",
+      "size": 4663,
+      "sha256": "8edd05b28ae2dce15893e18e8fd9419c2e91f9ed43bd604053e255ca072cd709"
+    },
+    {
+      "path": "dist/runtime/host/model-gateway.js",
+      "size": 2415,
+      "sha256": "d91c4e40c26ffb2fd51626d64e1a865afa66af89c593c7be00dc8ee7a1774cb5"
+    },
+    {
+      "path": "dist/runtime/host/settings-repository.js",
+      "size": 1340,
+      "sha256": "79f9f182879de8d5029312b1cbece2f6d49e326cd18847692092860d54fceb68"
+    },
+    {
+      "path": "dist/runtime/host/silly-tavern.js",
+      "size": 3263,
+      "sha256": "d4516f902a906529250ebaddd795edc65bd64c7afcfd36e74254352d808e88c7"
+    },
+    {
+      "path": "dist/runtime/index.js",
+      "size": 501,
+      "sha256": "d3e645f2f2df62bfa779351c6ca58780289a119767226e2b58131044a4ef9704"
+    },
+    {
+      "path": "dist/runtime/model/chat-document.js",
+      "size": 716,
+      "sha256": "3bb03f9e10d50447c1a05dff8d47ed1ce2638647b22215bd032bed2c092abc17"
+    },
+    {
+      "path": "dist/runtime/model/schemas.js",
+      "size": 2539,
+      "sha256": "c55a56a92c348ef3f54856fe19d71123de08826f19568d02d6c4b696299b6261"
+    },
+    {
+      "path": "dist/runtime/model/settings.js",
+      "size": 1115,
+      "sha256": "c6ff1a568d6436b62cbf8a20ccf0e0f4bf2883b23c7ab76309a8f66498462e38"
+    },
+    {
+      "path": "dist/runtime/prompts/audit.js",
+      "size": 1825,
+      "sha256": "06282e8c7b6003e66cabbc0109c34868e75d77e1fa65b87c7e257193eb930ce4"
+    },
+    {
+      "path": "dist/runtime/prompts/extraction.js",
+      "size": 2763,
+      "sha256": "d007e6660dc19c734cc51007fbfc85fd1e36b8d220f98e6caa5ce0803ea61627"
+    },
+    {
+      "path": "dist/runtime/prompts/revision.js",
+      "size": 1804,
+      "sha256": "7147ceae19ca0239b50320e9e5d24d74f4fe692653f686c2ccfecba2904d78f4"
+    },
+    {
+      "path": "dist/runtime/repository/chat-document-repository.js",
+      "size": 2741,
+      "sha256": "a6067b84ed86497ce8a03dbe6019dbf54e2316728756df06fb091c5d67202d89"
+    },
+    {
+      "path": "dist/runtime/shared/diagnostics.js",
+      "size": 3674,
+      "sha256": "ad4e5b9ac89c4dd9f06f304d2a133af06468f36af0303cd2b562c94c0dd1b035"
+    },
+    {
+      "path": "dist/runtime/shared/errors.js",
+      "size": 535,
+      "sha256": "0c3ea81de4d4727147207f5ce3a2195dbd83eb9400a1f3c2b3ccb4e517594f12"
+    },
+    {
+      "path": "dist/runtime/shared/fixed-text.js",
+      "size": 2123,
+      "sha256": "956323bcfdd504cde3dfc0100f56ca051da8e566043d6e284028af3f28f0e700"
+    },
+    {
+      "path": "dist/runtime/shared/hash.js",
+      "size": 721,
+      "sha256": "6e8ab1d8adf547ee82e76ec079236dd660decb2c6307de12f665a45478b4058a"
+    },
+    {
+      "path": "dist/runtime/ui/App.js",
+      "size": 7337,
+      "sha256": "ba57dbcc84a2435157e95b06a5d85c2e9d863d448123336fb35dfa8a2dfd54ad"
+    },
+    {
+      "path": "dist/runtime/ui/mount.js",
+      "size": 1103,
+      "sha256": "aaf9bafe9772231a250844edea505bca15923a6bf7e146d50997b3c2cfc48036"
+    },
+    {
+      "path": "dist/runtime/ui/store-hooks.js",
+      "size": 253,
+      "sha256": "2029a2ca53ba4dad44abbcc9d0aec8fdfa562a240a27f4697954ee9320285a93"
+    },
+    {
+      "path": "dist/runtime/vendor/_load.js",
+      "size": 1516,
+      "sha256": "ffbfae66c73f6714d7e06c8de45e5f7c748f4bdd661d75eb1971abfedb044b16"
+    },
+    {
+      "path": "dist/runtime/vendor/p-queue.js",
+      "size": 424,
+      "sha256": "9599e90121b46146a7e79d904d6995c7c2a0ffa0d2ac4743b3b398936653685c"
+    },
+    {
+      "path": "dist/runtime/vendor/react-dom-client.js",
+      "size": 484,
+      "sha256": "7e0ce727a08f6b9ab007e464cb6e6ad11f5451dd0a671278830a6d074be37a60"
+    },
+    {
+      "path": "dist/runtime/vendor/react-redux.js",
+      "size": 564,
+      "sha256": "717b0e1e278136ca2e2937417d16688b01e96102e4c1311bccc4598c20b6adde"
+    },
+    {
+      "path": "dist/runtime/vendor/react.js",
+      "size": 418,
+      "sha256": "ff80ed524c74c6613535f47f602b9267f8526acefac9fe5acf79122750d0387b"
+    },
+    {
+      "path": "dist/runtime/vendor/redux-toolkit.js",
+      "size": 594,
+      "sha256": "00f0cd581af2f5d38e1194e6dc4fbb3ae1559835c7bec44836c1da5e257a9f2d"
+    },
+    {
+      "path": "dist/runtime/vendor/zod.js",
+      "size": 394,
+      "sha256": "1671fc8fe83f120d1b5741dcd1bb323ec0673b1abf46694463bb4100cc29f6a3"
+    },
+    {
+      "path": "index.js",
+      "size": 5920,
+      "sha256": "0ebed084cb9576debc888b81c6ba4be1ac46968cf2865eaa6906cb6a0952d546"
+    },
+    {
+      "path": "manifest.json",
+      "size": 456,
+      "sha256": "bdb7544e53c0730e0ef1e64f94fa670fcdb98d50270ddbd3d2a6eac1576fdabb"
+    }
   ]
 }

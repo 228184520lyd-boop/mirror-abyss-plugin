@@ -1,4 +1,4 @@
-/* Generated from src/index.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/index.ts — do not edit dist directly. */
 import { getApplication } from './app/application.js';
 /**
  * SillyTavern 生命周期入口。

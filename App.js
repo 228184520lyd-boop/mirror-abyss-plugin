@@ -1,5 +1,5 @@
-/* Generated from src/ui/App.tsx for esm.sh — do not edit dist directly. */
-import React from 'https://esm.sh/react@18.2.0?target=es2022';
+/* Generated from src/ui/App.tsx — do not edit dist directly. */
+import React from '../vendor/react.js';
 import { VERSION, DEFAULT_TABLE_KEYS } from '../constants.js';
 import { processingActions } from '../features/processing/processing-slice.js';
 import { settingsActions } from '../features/settings/settings-slice.js';
@@ -16,6 +16,7 @@ export function App() {
     const busy = !['idle', 'complete', 'blocked', 'error'].includes(processing.status);
     const [diagnosticStatus, setDiagnosticStatus] = React.useState('');
     const runtimeProvider = globalThis.__MIRROR_ABYSS_RUNTIME_PROVIDER__ ?? '未记录';
+    const dependencyProviders = globalThis.__MIRROR_ABYSS_DEPENDENCY_PROVIDERS__ ?? {};
     const copyDiagnostics = async () => {
         const report = createDiagnosticReport({ session, processing, document });
         const text = JSON.stringify(report, null, 2);

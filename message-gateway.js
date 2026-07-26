@@ -1,4 +1,4 @@
-/* Generated from src/host/message-gateway.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/host/message-gateway.ts — do not edit dist directly. */
 import { MirrorAbyssError } from '../shared/errors.js';
 import { hashText } from '../shared/hash.js';
 const MESSAGE_NAMESPACE = 'mirrorAbyssV2';

@@ -1,4 +1,4 @@
-/* Generated from src/repository/chat-document-repository.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/repository/chat-document-repository.ts — do not edit dist directly. */
 import { EXTENSION_NAMESPACE } from '../constants.js';
 import { createEmptyChatDocument } from '../model/chat-document.js';
 import { parseChatDocument } from '../model/schemas.js';

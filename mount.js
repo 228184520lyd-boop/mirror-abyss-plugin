@@ -1,7 +1,7 @@
-/* Generated from src/ui/mount.tsx for esm.sh — do not edit dist directly. */
-import React from 'https://esm.sh/react@18.2.0?target=es2022';
-import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client?deps=react@18.2.0&target=es2022';
-import { Provider } from 'https://esm.sh/react-redux@9.2.0?deps=react@18.2.0,redux@5.0.1&target=es2022';
+/* Generated from src/ui/mount.tsx — do not edit dist directly. */
+import React from '../vendor/react.js';
+import { createRoot } from '../vendor/react-dom-client.js';
+import { Provider } from '../vendor/react-redux.js';
 import { App } from './App.js';
 const ROOT_ID = 'mirror-abyss-v2-root';
 /** 挂载点沿用 SillyTavern 官方 React 模板的 extensions_settings 容器。 */

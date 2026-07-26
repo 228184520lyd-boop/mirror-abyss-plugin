@@ -1,10 +1,9 @@
 {
-  "display_name": "Mirror Abyss｜镜渊（可安装实机候选）",
+  "display_name": "Mirror Abyss｜镜渊（入口修复实机候选）",
   "loading_order": 10,
-  "js": "dist/index.js",
-  "css": "style.css",
+  "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-alpha.4-realtest.1",
+  "version": "2.0.0-alpha.5-realtest.1",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",

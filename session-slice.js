@@ -1,5 +1,5 @@
-/* Generated from src/features/session/session-slice.ts for esm.sh — do not edit dist directly. */
-import { createSlice } from 'https://esm.sh/@reduxjs/toolkit@2.11.0?target=es2022';
+/* Generated from src/features/session/session-slice.ts — do not edit dist directly. */
+import { createSlice } from '../../vendor/redux-toolkit.js';
 const initialState = {
     activeChatKey: null,
     generation: 0,

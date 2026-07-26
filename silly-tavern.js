@@ -1,4 +1,4 @@
-/* Generated from src/host/silly-tavern.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/host/silly-tavern.ts — do not edit dist directly. */
 /** SillyTavern 公共上下文的唯一入口；其他模块不得缓存宿主可变对象。 */
 export class SillyTavernGateway {
     getContext() {

@@ -1,5 +1,5 @@
-/* Generated from src/app/store.ts for esm.sh — do not edit dist directly. */
-import { configureStore, createListenerMiddleware } from 'https://esm.sh/@reduxjs/toolkit@2.11.0?target=es2022';
+/* Generated from src/app/store.ts — do not edit dist directly. */
+import { configureStore, createListenerMiddleware } from '../vendor/redux-toolkit.js';
 import { documentReducer } from '../features/document/document-slice.js';
 import { processingReducer } from '../features/processing/processing-slice.js';
 import { sessionReducer } from '../features/session/session-slice.js';

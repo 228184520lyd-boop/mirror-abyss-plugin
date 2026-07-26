@@ -1,4 +1,4 @@
-/* Generated from src/model/chat-document.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/model/chat-document.ts — do not edit dist directly. */
 import { CHAT_DOCUMENT_SCHEMA_VERSION, DEFAULT_TABLE_KEYS } from '../constants.js';
 export function createEmptyChatDocument(chatKey, now = Date.now()) {
     const tables = Object.fromEntries(DEFAULT_TABLE_KEYS.map((key) => [key, []]));

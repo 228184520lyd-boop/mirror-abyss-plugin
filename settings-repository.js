@@ -1,4 +1,4 @@
-/* Generated from src/host/settings-repository.ts for jsDelivr +esm — do not edit dist directly. */
+/* Generated from src/host/settings-repository.ts — do not edit dist directly. */
 import { EXTENSION_NAMESPACE } from '../constants.js';
 import { DEFAULT_SETTINGS, parseSettings } from '../model/settings.js';
 /** 插件全局设置只存 extensionSettings，不进入 ChatDocument。 */

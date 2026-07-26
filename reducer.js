@@ -1,4 +1,4 @@
-/* Generated from src/features/processing/reducer.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/features/processing/reducer.ts — do not edit dist directly. */
 import { DEFAULT_TABLE_KEYS } from '../../constants.js';
 import { hashText, normalizedIdentity } from '../../shared/hash.js';
 export function ensureMessageRecord(document, input) {

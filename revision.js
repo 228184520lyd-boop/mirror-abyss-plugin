@@ -1,4 +1,4 @@
-/* Generated from src/prompts/revision.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/prompts/revision.ts — do not edit dist directly. */
 export const REVISION_PROMPT_VERSION = 'revision-fixed-text-v1';
 export function revisionSystemPrompt(customPrompt) {
     return `你是“镜渊”正文定向修正器。你的任务是修正已有正文，不是重新创作。

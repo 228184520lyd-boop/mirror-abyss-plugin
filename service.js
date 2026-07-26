@@ -1,4 +1,4 @@
-/* Generated from src/features/processing/service.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/features/processing/service.ts — do not edit dist directly. */
 import { auditSystemPrompt, auditUserPrompt, AUDIT_PROMPT_VERSION } from '../../prompts/audit.js';
 import { extractionSystemPrompt, extractionUserPrompt, EXTRACTION_PROMPT_VERSION } from '../../prompts/extraction.js';
 import { revisionSystemPrompt, revisionUserPrompt, REVISION_PROMPT_VERSION } from '../../prompts/revision.js';

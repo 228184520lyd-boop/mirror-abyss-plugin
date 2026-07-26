@@ -1,4 +1,4 @@
-/* Generated from src/app/application.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/app/application.ts — do not edit dist directly. */
 import { ChatSessionController, StaleChatSessionError } from './chat-session.js';
 import { ChatTaskExecutor } from './chat-task-executor.js';
 import { createApplicationStore } from './store.js';

@@ -1,4 +1,4 @@
-/* Generated from src/app/chat-session.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/app/chat-session.ts — do not edit dist directly. */
 export class StaleChatSessionError extends Error {
     constructor() {
         super('聊天会话已经切换，旧任务结果已丢弃');

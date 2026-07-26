@@ -1,5 +1,5 @@
-/* Generated from src/features/processing/schemas.ts for esm.sh — do not edit dist directly. */
-import { z } from 'https://esm.sh/zod@4.4.3?target=es2022';
+/* Generated from src/features/processing/schemas.ts — do not edit dist directly. */
+import { z } from '../../vendor/zod.js';
 export const AuditResultSchema = z.object({
     passed: z.boolean(),
     decision: z.enum(['pass', 'revise', 'block']),

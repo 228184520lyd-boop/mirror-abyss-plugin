@@ -1,4 +1,4 @@
-/* Generated from src/features/processing/parsers.ts for jsDelivr +esm — do not edit dist directly. */
+/* Generated from src/features/processing/parsers.ts — do not edit dist directly. */
 import { MirrorAbyssError } from '../../shared/errors.js';
 import { field, fields, parseBlocks } from '../../shared/fixed-text.js';
 import { AuditResultSchema, ExtractionResultSchema } from './schemas.js';

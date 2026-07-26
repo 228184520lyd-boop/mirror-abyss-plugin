@@ -1,4 +1,4 @@
-/* Generated from src/prompts/extraction.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/prompts/extraction.ts — do not edit dist directly. */
 export const EXTRACTION_PROMPT_VERSION = 'flat-facts-v1';
 const TABLE_DESCRIPTION = `时空：当前时间、时间推进、总体位置和环境连续性
 场景：当前实际发生的场景、参与对象、核心局面和直接限制

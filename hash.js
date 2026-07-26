@@ -1,4 +1,4 @@
-/* Generated from src/shared/hash.ts for esm.sh — do not edit dist directly. */
+/* Generated from src/shared/hash.ts — do not edit dist directly. */
 /**
  * 非密码学稳定哈希。只用于消息内容、提示词版本和事实键去重。
  * FACT-DATA-003：哈希相同才允许复用阶段结果；它不承担安全用途。

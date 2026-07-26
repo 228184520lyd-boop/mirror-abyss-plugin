@@ -1,5 +1,5 @@
-/* Generated from src/features/settings/settings-slice.ts for jsDelivr +esm — do not edit dist directly. */
-import { createSlice } from 'https://cdn.jsdelivr.net/npm/@reduxjs/toolkit@2.11.0/+esm';
+/* Generated from src/features/settings/settings-slice.ts — do not edit dist directly. */
+import { createSlice } from '../../vendor/redux-toolkit.js';
 import { DEFAULT_SETTINGS } from '../../model/settings.js';
 const slice = createSlice({
     name: 'settings',

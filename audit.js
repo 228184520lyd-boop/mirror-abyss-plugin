@@ -1,4 +1,4 @@
-/* Generated from src/prompts/audit.ts for jsDelivr +esm — do not edit dist directly. */
+/* Generated from src/prompts/audit.ts — do not edit dist directly. */
 /**
  * 从 alpha.27 的审核固定文本协议迁移。业务语义不在本次重构中改写。
  * FACT-MODEL-001：审核只判断玩家硬规则，不续写、不润色。

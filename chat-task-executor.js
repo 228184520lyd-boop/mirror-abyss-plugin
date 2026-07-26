@@ -1,5 +1,5 @@
-/* Generated from src/app/chat-task-executor.ts for esm.sh — do not edit dist directly. */
-import PQueue from 'https://esm.sh/p-queue@9.3.1?target=es2022';
+/* Generated from src/app/chat-task-executor.ts — do not edit dist directly. */
+import PQueue from '../vendor/p-queue.js';
 /**
  * 每个聊天只允许一个改变业务状态的任务运行。
  * 不提供优先级、租约、心跳、恢复或第二套状态机。

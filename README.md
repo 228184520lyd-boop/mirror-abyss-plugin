@@ -1,8 +1,44 @@
-# Mirror Abyss 2.0.0-alpha.4-realtest.1
+# Mirror Abyss 2.0.0-alpha.5-realtest.1
 
-这是镜渊全面重构后的**可安装实机候选**。它不是完整功能版，也没有被标记为“实机通过”，但安装包已经包含 SillyTavern manifest 指向的本地 `dist/index.js`。
+这是镜渊全面重构后的**入口修复实机候选**。它针对上一候选在真实 SillyTavern 中出现的：
 
-当前纵向链：
+```text
+扩展程序加载失败：[object Event]
+```
+
+进行了宿主加载边界修复。
+
+## 已确认原因
+
+SillyTavern 在执行扩展生命周期 hook 之前，会先加载 manifest 指定的 JS 与 CSS。任一资源加载失败时，宿主保存的是原始 DOM Event，并直接转成字符串，因此界面只剩 `[object Event]`。上一版本的错误聚合逻辑位于 `onActivate` 之后，无法捕获这个更早阶段的失败。
+
+本版本将初始加载面收敛为一个根目录模块：
+
+```text
+manifest.json
+index.js
+```
+
+manifest 不再单独请求 `style.css`；样式由 `index.js` 注入。这样宿主初始阶段只有一个 JS 资源，进入生命周期后，后续错误由镜渊自己的可读错误面板接管。
+
+## 安装结构
+
+```text
+manifest.json
+index.js
+dist/DEPENDENCIES.json
+dist/runtime/**
+dist/runtime/vendor/**
+```
+
+业务 runtime 只保留一套。React、Redux Toolkit、Zod、p-queue 等成熟依赖通过六个 vendor shim 分别按以下顺序回退：
+
+1. `esm.sh` 精确版本；
+2. `jsDelivr +esm` 精确版本。
+
+这仍不是完全离线、自包含的 Webpack 产物，但不再复制两套业务 runtime。输出 JavaScript 从 67 个降为 41 个，安装文件总数从 80 个降为 48 个。源码包为避免 GitHub 网页上传接近 100 文件，不携带生成后的 `dist/**` 与根 `index.js`；运行 `npm run build:installable` 可重新生成。
+
+## 当前纵向链
 
 ```text
 SillyTavern 消息事件 / 手动按钮
@@ -14,79 +50,26 @@ SillyTavern 消息事件 / 手动按钮
 → Redux / React UI 刷新
 ```
 
-## 安装
-
-将安装包解压到 SillyTavern 的第三方 UI Extension 目录，保持以下结构：
-
-```text
-manifest.json
-style.css
-dist/index.js
-dist/runtime/esmsh/**
-dist/runtime/jsdelivr/**
-```
-
-启用扩展后，本地生命周期入口按顺序尝试两个运行树：
-
-1. `esm.sh` 精确版本依赖；
-2. `jsDelivr +esm` 精确版本依赖。
-
-任一来源成功即可启动。两个来源都受网络与浏览器 CSP 影响，因此当前候选仍不是完全离线、自包含的 Webpack 产物。若两者均失败，本地入口会在扩展设置区显示聚合错误，并在控制台保留每个来源的原始异常。
-
-面板提供“复制实机诊断 JSON”按钮。诊断只包含版本、宿主能力、阶段状态、聊天键与数量统计，不包含正文、事实内容、审核规则或角色名称。
-
-## 构建与简单检查
-
-标准、最终目标仍是安装 npm 依赖后执行 Webpack：
-
-```bash
-npm install --no-audit --no-fund
-npm run smoke
-npm run smoke:reducer
-npm run typecheck
-npm run build
-```
-
-当前环境无法安装 npm 依赖时，可生成同版本的双来源浏览器 ESM 候选：
-
-```bash
-npm run build:installable
-npm run smoke:host
-npm run smoke:install
-```
-
-完整的一次性候选验证：
+## 构建与验证
 
 ```bash
 npm run verify:installable
 ```
 
-## 当前结论
+当前候选已通过：
 
-已经真实完成：
-
-- 本地 `dist/index.js` 与两套各 33 个运行模块生成；
-- 67 个输出 JavaScript 的语法、相对导入、版本与安装结构检查；
-- 双来源 loader 顺序与空载生命周期检查；
-- 源码结构 smoke；
+- 源码 smoke；
 - reducer 最小回归；
-- 模拟当前宿主接口的事件注册/清理、稳定聊天键、正文读写和旧会话失效回归；
-- 可复制的无正文诊断 JSON；
-- ZIP 完整性和解包后安装结构检查。
+- 单 runtime + vendor fallback 构建；
+- 模拟宿主事件、聊天隔离和正文回写回归；
+- 41 个输出 JS 的语法、版本、导入与布局检查；
+- 根入口、内联 CSS、生命周期导出和 DOM Event 可读序列化检查。
 
 尚未完成：
 
 - 正式 npm typecheck；
 - 自包含 Webpack bundle；
-- 真实 SillyTavern 安装运行；
-- 目标浏览器对两个 ESM 来源的实际可达性；
-- 聊天切换、审核、修正、持久化等玩家流程的实机勾选。
+- `2.0.0-alpha.5-realtest.1` 在目标 SillyTavern 的真实安装复测；
+- 目标浏览器对两个 ESM 来源的实际可达性。
 
-因此本版本只能称为**可安装实机候选**。真实运行结果必须写入 `docs/REAL_MACHINE_CHECKLIST.md`。
-
-固定事实与修改循环：
-
-- `docs/FIXED_FACTS.md`
-- `docs/ENGINEERING_EVENTS.md`
-- `docs/CHANGE_PROTOCOL.md`
-- `docs/REAL_MACHINE_CHECKLIST.md`
+因此本版本仍只能称为**实机候选**。上一版本的失败已记录在 `docs/FIXED_FACTS.md`、`docs/ENGINEERING_EVENTS.md` 与 `docs/REAL_MACHINE_CHECKLIST.md`。

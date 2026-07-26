@@ -1,5 +1,5 @@
-/* Generated from src/host/model-gateway.ts for esm.sh — do not edit dist directly. */
-import PQueue from 'https://esm.sh/p-queue@9.3.1?target=es2022';
+/* Generated from src/host/model-gateway.ts — do not edit dist directly. */
+import PQueue from '../vendor/p-queue.js';
 import { MirrorAbyssError } from '../shared/errors.js';
 /**
  * 当前连接模型调用边界。调用形式直接采用 SillyTavern 官方 memory 扩展使用的 generateRaw(params)。
