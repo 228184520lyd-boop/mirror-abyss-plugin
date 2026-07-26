@@ -1,70 +1,21 @@
 {
-  "version": "2.0.0-alpha.7-realtest.1",
-  "recordedAt": "2026-07-26T14:30:00Z",
-  "environment": {
-    "node": "22.16.0",
-    "npm": "10.9.2",
-    "typescript": "5.8.3 global fallback",
-    "sillyTavern": "not available in container"
+  "version": "2.0.0-alpha.9-infopoint.1",
+  "recordedAt": "2026-07-26",
+  "architecture": {
+    "storyAuthority": "SillyTavern World Info only",
+    "core": "information-point extraction, candidate matching, worldbook operations",
+    "productionModules": 14,
+    "runtimeFiles": 1,
+    "thirdPartyRuntimeDependencies": 0,
+    "modelOutput": "fixed natural-language title and subtitle format; no JSON"
   },
   "checks": [
-    {
-      "id": "alpha6-real-machine",
-      "status": "failed",
-      "detail": "onActivate reached; GitHub default branch lacked dist/runtime/index.js, causing same-origin dynamic import 404 before any dependency provider loaded"
-    },
-    {
-      "id": "source-smoke",
-      "status": "passed",
-      "detail": "33 executable production TS/TSX modules, imports, manifest and fact/event references valid"
-    },
-    {
-      "id": "reducer-smoke",
-      "status": "passed",
-      "detail": "same-message replacement, other-message preservation, manual lock preservation and spacetime singleton passed"
-    },
-    {
-      "id": "single-file-build",
-      "status": "passed",
-      "detail": "one 98 KB manifest entry generated with 33 executable source modules and CSS embedded; no local runtime tree"
-    },
-    {
-      "id": "host-contract-smoke",
-      "status": "passed",
-      "detail": "events and cleanup, stable chat identity, message key persistence, text/swipe replacement and stale-session rejection passed against bundled registry"
-    },
-    {
-      "id": "install-smoke",
-      "status": "passed",
-      "detail": "one local JS, no dist/runtime, no local dynamic import, zero-side-effect first import and dependency fallback passed"
-    },
-    {
-      "id": "package-extract-smoke",
-      "status": "passed",
-      "detail": "archive extracted with 8 files; manifest entry present, no dist/runtime, JS syntax/lifecycle exports and zero-side-effect first import passed"
-    },
-    {
-      "id": "npm-install",
-      "status": "failed",
-      "detail": "internal npm registry returned HTTP 503 repeatedly"
-    },
-    {
-      "id": "formal-typecheck",
-      "status": "not-run",
-      "detail": "dependency type packages unavailable"
-    },
-    {
-      "id": "webpack-self-contained-build",
-      "status": "not-run",
-      "detail": "npm dependencies unavailable"
-    },
-    {
-      "id": "alpha7-sillytavern-real-machine",
-      "status": "not-run",
-      "detail": "current candidate has not yet been installed in target SillyTavern"
-    }
+    {"id":"typecheck","status":"passed","detail":"strict TypeScript --noEmit"},
+    {"id":"core-smoke","status":"passed","detail":"无/no-op, state replacement, event-chain append, semantic duplicate skip, unknown type creation"},
+    {"id":"single-file-build","status":"passed","detail":"14 modules bundled into mirror-abyss-alpha9.js"},
+    {"id":"worldbook-smoke","status":"passed","detail":"fake SillyTavern World Info API: read, match, replace, append, create, focus constant, save and readback"},
+    {"id":"install-smoke","status":"passed","detail":"lifecycle exports, one local runtime, direct generateRaw and /scripts/world-info.js boundaries"},
+    {"id":"sillytavern-real-machine","status":"not-run","detail":"real model call, World Info save semantics and mobile UI require real SillyTavern evidence"}
   ],
-  "conclusion": "alpha.6 GitHub runtime omission recorded; alpha.7 single-local-file candidate passed all available local regressions and awaits SillyTavern real-machine retest",
-  "runtimeDependencyMode": "single-local-file-pinned-browser-esm-fallback",
-  "sourceSchemaVersion": 3
+  "conclusion": "local candidate complete; real-machine validation pending"
 }

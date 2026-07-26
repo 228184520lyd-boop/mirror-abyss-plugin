@@ -1,23 +1,39 @@
-# Mirror Abyss 2.0.0-alpha.7-realtest.1
+# Mirror Abyss｜镜渊 2.0.0-alpha.9-infopoint.1
 
-Mirror Abyss 是 SillyTavern 原生 UI Extension。本候选只修复发布与启动链，不改变已冻结的审核、修正、事实提取、聊天隔离和持久化语义。
-
-## 本轮实机事实
-
-`2.0.0-alpha.6-realtest.1` 已进入 `onActivate`，但随后请求 `dist/runtime/index.js` 失败。GitHub 默认分支存在 manifest 和 bootstrap，却缺少该 runtime 文件，因此直接原因是多文件发布不完整，而不是 CDN、模型或业务处理失败。
-
-## alpha.7 发布结构
-
-安装运行只需要：
+这一版把插件内核正式定义为：
 
 ```text
-manifest.json
-mirror-abyss-alpha7.js
-dist/DEPENDENCIES.json（说明文件，不参与启动）
+本轮正文
+→ AI 按标题和小标题提取核心信息点
+→ 语法/正则匹配
+→ UID/标题/别名/关键词匹配
+→ 少量候选条目正文匹配
+→ 跳过、追加、同槽替换、链式追加、创建或沉降
+→ 直接写回 SillyTavern 世界书
 ```
 
-`mirror-abyss-alpha7.js` 内嵌 33 个本地可执行生产模块和 CSS，不再动态请求任何 `dist/runtime/**` 文件。React 18、Redux Toolkit、React Redux、Zod 与 p-queue 仍按精确版本使用成熟包，并在生命周期启动后逐依赖尝试 `esm.sh` 与 `jsDelivr +esm`。
+世界书是唯一剧情数据源。插件不保存人物库、事件库、事实账本、总结副本或图谱副本。
+
+## AI 输出
+
+```text
+人物｜莉娅
+【固定事实】
+无
+【当前状态】
+- 莉娅位于临海石洞。
+
+事件｜悬崖追逐
+【事件进程】
+- 追兵发现石洞入口，继续逼近。
+```
+
+同一事件标题下的新信息点顺序连接，整条链才构成完整事件事实。
+
+## 安装
+
+安装包根目录只需要 `manifest.json` 与 `mirror-abyss-alpha9.js`。在 SillyTavern 第三方扩展中安装后，打开“镜渊”，绑定当前聊天世界书并点击“处理最新正文”。
 
 ## 验证边界
 
-`npm run verify:installable` 验证源码、reducer、单文件构建、宿主契约和安装结构。正式 `npm run typecheck` 与 Webpack 自包含构建仍依赖 npm registry；当前环境 registry 返回 HTTP 503。所有本地验证都不替代真实 SillyTavern 结论。
+`npm run verify` 只覆盖 TypeScript、纯文本匹配、单文件构建和安装结构。真实 SillyTavern 的模型调用、世界书保存与移动端 UI 仍需实机验证。
