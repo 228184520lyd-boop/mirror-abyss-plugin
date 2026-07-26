@@ -5,7 +5,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Mirror Abyss contributors",
-  "version": "1.4.0-alpha.25",
+  "version": "1.4.0-alpha.26",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +18,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "按当前场景、活动事件、最近轮次与记忆阶段动态调度 SillyTavern 常驻、触发、递归、混合与向量召回"
+  "description": "统一状态、事务、Outbox、宿主适配与模型传输权威边界的 SillyTavern 长线叙事记忆扩展"
 }

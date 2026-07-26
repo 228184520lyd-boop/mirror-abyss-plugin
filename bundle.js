@@ -9,12 +9,289 @@ function __require(id){
   factory(exports,__require);
   return exports;
 }
+__defs["application/artifact-commands.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
+with(__scope){
+Object.defineProperty(exports,"persistArtifact",{enumerable:true,configurable:true,get:()=>persistArtifact});
+/** Application-facing compatibility boundary for message artifact persistence. */
+const persistArtifact = putArtifact;
+
+}
+};
+__defs["application/chat-commands.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"updateChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["updateChatState"]});
+with(__scope){
+Object.defineProperty(exports,"setFocusObject",{enumerable:true,configurable:true,get:()=>setFocusObject});
+/**
+ * Application command boundary for chat-scoped user actions.
+ * UI may request a command, but only this layer may mutate canonical ChatState.
+ */
+async function setFocusObject(chatKey, objectId) {
+    const normalized = String(objectId ?? '').trim();
+    const result = await updateChatState(chatKey, (state) => {
+        if (normalized)
+            state.focusObjectId = normalized;
+        else
+            delete state.focusObjectId;
+        return state;
+    }, { reason: normalized ? 'focus-set' : 'focus-clear' });
+    return result.state;
+}
+
+}
+};
+__defs["application/chat-state.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"emptyChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["emptyChatState"]});
+Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"mutateChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["mutateChatState"]});
+Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"StateConflictError",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["StateConflictError"]});
+Object.defineProperty(__scope,"projectRuntimeEffects",{enumerable:true,configurable:true,get:()=>__require("application/effect-projection.js")["projectRuntimeEffects"]});
+with(__scope){
+Object.defineProperty(exports,"StateConflictError",{enumerable:true,configurable:true,get:()=>StateConflictError});
+Object.defineProperty(exports,"commitChatState",{enumerable:true,configurable:true,get:()=>commitChatState});
+Object.defineProperty(exports,"updateChatState",{enumerable:true,configurable:true,get:()=>updateChatState});
+Object.defineProperty(exports,"createEmptyChatState",{enumerable:true,configurable:true,get:()=>createEmptyChatState});
+Object.defineProperty(exports,"readChatState",{enumerable:true,configurable:true,get:()=>readChatState});
+/**
+ * Canonical application-facing ChatState boundary.
+ * Business modules must not import storage/repository directly.
+ */
+const createEmptyChatState = emptyChatState;
+const readChatState = getChatState;
+async function commitChatState(state) {
+    projectRuntimeEffects(state);
+    return putChatState(state);
+}
+async function updateChatState(chatKey, mutate, options = {}) {
+    return mutateChatState(chatKey, async (state) => {
+        const result = await mutate(state);
+        projectRuntimeEffects(state);
+        return result;
+    }, options);
+}
+
+}
+};
+__defs["application/effect-projection.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"normalizeReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["normalizeReliableWorkflow"]});
+Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
+with(__scope){
+Object.defineProperty(exports,"projectRuntimeEffects",{enumerable:true,configurable:true,get:()=>projectRuntimeEffects});
+/**
+ * Runtime V2 Outbox is the sole authority for derived-effect lifecycle.
+ * ReliableWorkflow.effects is retained only as a compatibility/read projection.
+ */
+function projectedEffect(job) {
+    const status = ['pending', 'running', 'done', 'failed', 'cancelled', 'manual_review'].includes(String(job.status))
+        ? String(job.status)
+        : 'pending';
+    const createdAt = job.createdAt || nowIso();
+    return {
+        effectId: `runtime_effect_${job.id}`,
+        intentId: job.intentId || '',
+        commandId: `${job.intentId || 'runtime'}:outbox:${job.id}`,
+        type: job.type || '',
+        target: job.turnKey || '',
+        payloadHash: hashText(JSON.stringify({
+            jobId: job.id,
+            sourceRevision: job.sourceRevision || 0,
+            turnKey: job.turnKey || '',
+        })),
+        status,
+        attempts: Math.max(0, Number(job.attempts) || 0),
+        leaseOwner: job.claimedBy || '',
+        leaseToken: job.leaseToken || '',
+        leaseUntil: job.leaseUntil || '',
+        heartbeatAt: job.heartbeatAt || '',
+        receipt: job.receipt && typeof job.receipt === 'object' ? structuredClone(job.receipt) : undefined,
+        error: job.error || '',
+        createdAt,
+        updatedAt: job.finishedAt || job.heartbeatAt || job.startedAt || createdAt,
+    };
+}
+
+function projectRuntimeEffects(chatState) {
+    const runtime = normalizeRuntimeV2(chatState.runtimeV2);
+    const workflow = normalizeReliableWorkflow(chatState.reliableWorkflow);
+    const retained = workflow.effects.filter((effect) => !String(effect.effectId).startsWith('runtime_effect_'));
+    const projected = runtime.outbox.map(projectedEffect);
+    const nextEffects = [...retained, ...projected].slice(-1200);
+    const before = JSON.stringify(workflow.effects);
+    const after = JSON.stringify(nextEffects);
+    workflow.effects = nextEffects;
+    if (before !== after) {
+        workflow.revision += 1;
+        workflow.updatedAt = nowIso();
+    }
+    chatState.reliableWorkflow = workflow;
+    chatState.runtimeV2 = runtime;
+    return chatState;
+}
+
+}
+};
+__defs["application/unit-of-work.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
+Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
+Object.defineProperty(__scope,"assertHistoryRevisionCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertHistoryRevisionCurrent"]});
+Object.defineProperty(__scope,"currentHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["currentHistoryRevision"]});
+Object.defineProperty(__scope,"currentChatLocator",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatLocator"]});
+Object.defineProperty(__scope,"getMessage",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getMessage"]});
+Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageFingerprint"]});
+Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageIdentity"]});
+Object.defineProperty(__scope,"MODULE_NAME",{enumerable:true,configurable:true,get:()=>__require("constants.js")["MODULE_NAME"]});
+Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
+Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
+Object.defineProperty(__scope,"advanceCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["advanceCommit"]});
+Object.defineProperty(__scope,"artifactCommitHash",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["artifactCommitHash"]});
+Object.defineProperty(__scope,"prepareCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["prepareCommit"]});
+Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
+with(__scope){
+Object.defineProperty(exports,"commitArtifact",{enumerable:true,configurable:true,get:()=>commitArtifact});
+Object.defineProperty(exports,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>commitCoreBundle});
+Object.defineProperty(exports,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>captureCommitSnapshot});
+Object.defineProperty(exports,"assertCommitSnapshotCurrent",{enumerable:true,configurable:true,get:()=>assertCommitSnapshotCurrent});
+/**
+ * 模块职责：应用层 Unit of Work，统一消息 artifact 与聊天级 ChatState 的提交前校验、保存顺序和提交后复核。
+ * 维护边界：只负责“结果如何安全落地”，不决定事实、总结或世界书业务内容。
+ */
+function captureCommitSnapshot(artifact, historyRevision = currentHistoryRevision(artifact.chatKey)) {
+    return Object.freeze({
+        chatKey: String(artifact.chatKey || ''),
+        chatLocator: String(currentChatLocator() || ''),
+        messageIndex: Number(artifact.messageIndex),
+        messageKey: String(artifact.messageKey || ''),
+        sourceFingerprint: String(artifact.sourceFingerprint || ''),
+        historyRevision: Math.max(0, Number(historyRevision) || 0),
+    });
+}
+
+function assertCommitSnapshotCurrent(snapshot, artifact) {
+    if (!snapshot || !artifact)
+        throw new Error('提交快照或 artifact 缺失');
+    if (artifact.chatKey !== snapshot.chatKey
+        || artifact.messageIndex !== snapshot.messageIndex
+        || artifact.messageKey !== snapshot.messageKey
+        || artifact.sourceFingerprint !== snapshot.sourceFingerprint) {
+        throw new CommitRejectedError('artifact 身份已变化，本次旧提交不再写入');
+    }
+    if (snapshot.chatLocator && currentChatLocator() !== snapshot.chatLocator)
+        throw new CommitRejectedError('聊天实例已经变化，本次旧提交不再写入');
+    assertHistoryRevisionCurrent(snapshot.chatKey, snapshot.historyRevision);
+    assertArtifactCommitCurrent(artifact);
+    const message = getMessage(snapshot.messageIndex);
+    if (!message || message.is_user)
+        throw new CommitRejectedError('原AI正文已不存在，请重新整理');
+    if (messageIdentity(snapshot.messageIndex) !== snapshot.messageKey
+        || messageFingerprint(snapshot.messageIndex) !== snapshot.sourceFingerprint) {
+        throw new CommitRejectedError('正文身份已经变化，本次旧提交不再写入');
+    }
+}
+
+/** 保存消息级 artifact。调用方可传 notify，在物理保存成功后刷新 UI。 */
+async function commitArtifact({ artifact, snapshot = captureCommitSnapshot(artifact), notify }) {
+    assertCommitSnapshotCurrent(snapshot, artifact);
+    const message = getMessage(snapshot.messageIndex);
+    const hadExtra = Boolean(message.extra);
+    const hadArtifact = Boolean(message.extra && Object.prototype.hasOwnProperty.call(message.extra, MODULE_NAME));
+    const previousArtifact = message.extra?.[MODULE_NAME];
+    attachArtifactToMessage(message, artifact);
+    try {
+        await saveHostChat(snapshot.chatKey);
+        assertCommitSnapshotCurrent(snapshot, artifact);
+    }
+    catch (error) {
+        // 普通保存失败时恢复内存消息；聊天切换类拒绝可能发生在物理保存之后，不能反向撤销源聊天对象。
+        if (!(error instanceof CommitRejectedError)) {
+            if (hadArtifact)
+                attachArtifactToMessage(message, previousArtifact);
+            else if (message.extra) {
+                delete message.extra[MODULE_NAME];
+                if (!hadExtra && Object.keys(message.extra).length === 0)
+                    delete message.extra;
+            }
+        }
+        throw error;
+    }
+    notify?.(snapshot.messageIndex, artifact);
+    return artifact;
+}
+
+/**
+ * 核心提交顺序固定为 ChatState → artifact。
+ * Outbox/正式事实先成为可恢复来源；若随后消息保存失败，重新进入聊天时仍可根据 ChatState 恢复，
+ * 不会出现“界面显示已排队但持久 Outbox 不存在”的不可恢复状态。
+ */
+async function commitCoreBundle({ artifact, chatState, snapshot = captureCommitSnapshot(artifact), notify }) {
+    assertCommitSnapshotCurrent(snapshot, artifact);
+    const intentId = artifact.intentId || artifact.processingIntent?.intentId || '';
+    const commandId = artifact.processingCommandId || `${intentId}:core-commit`;
+    const prepared = prepareCommit(chatState.reliableWorkflow, {
+        intentId,
+        commandId,
+        chatKey: snapshot.chatKey,
+        messageKey: snapshot.messageKey,
+        sourceFingerprint: snapshot.sourceFingerprint,
+        artifactHash: artifactCommitHash(artifact),
+        stateRevision: chatState.runtimeV2?.revision || 0,
+    });
+    chatState.reliableWorkflow = prepared.workflow;
+    let chatStateWritten = false;
+    let artifactWritten = false;
+    try {
+        // prepared 与规范 ChatState 在同一次 metadata 保存中落地。若后续消息保存失败，
+        // Reconciler 可依据该记录与 artifact 哈希确定性对账，不会盲目重跑模型。
+        await commitChatState(chatState);
+        chatStateWritten = true;
+        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written').workflow;
+        assertCommitSnapshotCurrent(snapshot, artifact);
+        await commitArtifact({ artifact, snapshot, notify });
+        artifactWritten = true;
+        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written').workflow;
+        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'committed').workflow;
+        await commitChatState(chatState);
+        return { artifact, chatState, snapshot, commitId: prepared.commit.commitId };
+    }
+    catch (error) {
+        try {
+            if (!chatStateWritten) {
+                // 首次 ChatState 写入本身失败，尚无可用于恢复的 prepared 记录，允许记录为明确失败。
+                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'failed', error instanceof Error ? error.message : String(error)).workflow;
+            }
+            else if (artifactWritten) {
+                // artifact 已物理写入但最终回执未保存：保持非终态，由 Reconciler 通过 artifact 哈希确认。
+                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written', error instanceof Error ? error.message : String(error)).workflow;
+            }
+            else {
+                // commitArtifact 可能在物理保存后因聊天切换守卫拒绝，不能武断标记 failed。
+                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written', error instanceof Error ? error.message : String(error)).workflow;
+            }
+            await commitChatState(chatState);
+        }
+        catch (recordError) {
+            console.warn('[MirrorAbyss] core commit failed and commit record could not be finalized', recordError);
+        }
+        throw error;
+    }
+}
+
+}
+};
 __defs["bootstrap/app.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"MODULE_NAME",{enumerable:true,configurable:true,get:()=>__require("constants.js")["MODULE_NAME"]});
 Object.defineProperty(__scope,"VERSION",{enumerable:true,configurable:true,get:()=>__require("constants.js")["VERSION"]});
 Object.defineProperty(__scope,"getContext",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getContext"]});
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
+Object.defineProperty(__scope,"initializeSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["initializeSettings"]});
 Object.defineProperty(__scope,"isProcessableAssistantMessage",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["isProcessableAssistantMessage"]});
 Object.defineProperty(__scope,"saveSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["saveSettings"]});
 Object.defineProperty(__scope,"toast",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["toast"]});
@@ -135,7 +412,7 @@ async function initialize() {
     lastError = null;
     exposeApi();
     try {
-        const settings = getSettings();
+        const settings = initializeSettings();
         setRequestAcceptance(settings.enabled);
         taskQueue.setAccepting(settings.enabled);
         await mountSettingsPanel(() => extensionEnabled && generation === lifecycleGeneration);
@@ -292,7 +569,7 @@ async function onInstall() {
     exposeApi();
 }
 async function onUpdate() {
-    const settings = tryGetContext() ? getSettings() : null;
+    const settings = tryGetContext() ? initializeSettings() : null;
     if (settings) {
         settings.migration.legacyChecked = false;
         saveSettings();
@@ -326,7 +603,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.25';
+const VERSION = '1.4.0-alpha.26';
 const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -617,6 +894,7 @@ Object.defineProperty(exports,"persistChat",{enumerable:true,configurable:true,g
 Object.defineProperty(exports,"getContext",{enumerable:true,configurable:true,get:()=>getContext});
 Object.defineProperty(exports,"tryGetContext",{enumerable:true,configurable:true,get:()=>tryGetContext});
 Object.defineProperty(exports,"getSettings",{enumerable:true,configurable:true,get:()=>getSettings});
+Object.defineProperty(exports,"initializeSettings",{enumerable:true,configurable:true,get:()=>initializeSettings});
 Object.defineProperty(exports,"saveSettings",{enumerable:true,configurable:true,get:()=>saveSettings});
 Object.defineProperty(exports,"getChat",{enumerable:true,configurable:true,get:()=>getChat});
 Object.defineProperty(exports,"getMessage",{enumerable:true,configurable:true,get:()=>getMessage});
@@ -648,8 +926,9 @@ function tryGetContext() {
         return null;
     }
 }
-function getSettings() {
-    const context = getContext();
+const pendingHostSettingsMigrations = new WeakMap();
+
+function normalizeStoredSettings(context) {
     context.extensionSettings ||= {};
     const legacy = context.extensionSettings[LEGACY_MODULE_NAME];
     const current = context.extensionSettings[MODULE_NAME];
@@ -729,19 +1008,12 @@ function getSettings() {
         // alpha.20 曾在没有能力探测的情况下主动开启 ST 的世界书向量拦截器。
         // 升级时撤销这一危险默认；之后只允许使用玩家已经在 Vector Storage 中手动启用的能力。
         settings.hostControl.vector = false;
-        const vectorSettings = context.extensionSettings?.vectors;
-        if (upgradingManagedVector && vectorSettings && typeof vectorSettings === 'object' && vectorSettings.enabled_world_info === true) {
-            vectorSettings.enabled_world_info = false;
-            const checkbox = globalThis.document?.querySelector?.('#vectors_enabled_world_info');
-            if (checkbox) {
-                checkbox.checked = false;
-                const EventCtor = globalThis.Event;
-                if (typeof EventCtor === 'function')
-                    checkbox.dispatchEvent(new EventCtor('input', { bubbles: true }));
-            }
+        if (upgradingManagedVector) {
+            const pending = pendingHostSettingsMigrations.get(context) || {};
+            pending.disableManagedWorldInfoVector = true;
+            pendingHostSettingsMigrations.set(context, pending);
         }
         settings.migration.hostVectorSafetyV41 = true;
-        context.saveSettingsDebounced?.();
     }
     settings.migration.objectViewsV26 ??= false;
     settings.migration.sceneTableV33 ??= false;
@@ -840,6 +1112,43 @@ function getSettings() {
     }
     return settings;
 }
+
+/**
+ * Read the canonical normalized settings object. This function may normalize the
+ * extension-owned object, but never mutates other SillyTavern modules, the DOM,
+ * or physical settings storage.
+ */
+function getSettings() {
+    return normalizeStoredSettings(getContext());
+}
+
+/**
+ * Explicit startup migration boundary for host-owned settings. Host mutations
+ * are deliberately kept out of getSettings() so ordinary reads cannot trigger
+ * external side effects.
+ */
+function initializeSettings() {
+    const context = getContext();
+    const settings = normalizeStoredSettings(context);
+    const pending = pendingHostSettingsMigrations.get(context);
+    if (pending?.disableManagedWorldInfoVector) {
+        const vectorSettings = context.extensionSettings?.vectors;
+        if (vectorSettings && typeof vectorSettings === 'object' && vectorSettings.enabled_world_info === true) {
+            vectorSettings.enabled_world_info = false;
+            const checkbox = globalThis.document?.querySelector?.('#vectors_enabled_world_info');
+            if (checkbox) {
+                checkbox.checked = false;
+                const EventCtor = globalThis.Event;
+                if (typeof EventCtor === 'function')
+                    checkbox.dispatchEvent(new EventCtor('input', { bubbles: true }));
+            }
+        }
+        pendingHostSettingsMigrations.delete(context);
+        context.saveSettingsDebounced?.();
+    }
+    return settings;
+}
+
 function migrateLegacySettings(legacy) {
     if (!legacy || typeof legacy !== 'object')
         return undefined;
@@ -987,8 +1296,8 @@ Object.defineProperty(__scope,"getMessage",{enumerable:true,configurable:true,ge
 Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageFingerprint"]});
 Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageIdentity"]});
 Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
-Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
 Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
+Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
 with(__scope){
 Object.defineProperty(exports,"refreshMessageDisplay",{enumerable:true,configurable:true,get:()=>refreshMessageDisplay});
 Object.defineProperty(exports,"replaceMessageInPlace",{enumerable:true,configurable:true,get:()=>replaceMessageInPlace});
@@ -1036,7 +1345,7 @@ async function replaceMessageInPlace(artifact, text) {
     artifact.approvedFingerprint = artifact.sourceFingerprint;
     artifact.hiddenByAudit = false;
     attachArtifactToMessage(message, artifact);
-    await persistChatFor(artifact.chatKey);
+    await saveHostChat(artifact.chatKey);
     await refreshMessageDisplay(artifact.messageIndex);
     return artifact.sourceFingerprint;
 }
@@ -9063,6 +9372,64 @@ function migrateSnapshotTables(value, registry) {
 
 }
 };
+__defs["host/chat-persistence-adapter.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
+Object.defineProperty(__scope,"persistMetadataFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistMetadataFor"]});
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+with(__scope){
+Object.defineProperty(exports,"saveHostChat",{enumerable:true,configurable:true,get:()=>saveHostChat});
+Object.defineProperty(exports,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>saveHostMetadata});
+/**
+ * Sole physical persistence boundary for SillyTavern chat and chat metadata.
+ * Callers may decide *what* to commit; only this adapter talks to host save APIs.
+ */
+async function saveHostChat(chatKey) {
+    await persistChatFor(chatKey);
+    return { effectType: 'chat-save', chatKey, confirmedAt: nowIso() };
+}
+
+async function saveHostMetadata(chatKey) {
+    await persistMetadataFor(chatKey);
+    return { effectType: 'metadata-save', chatKey, confirmedAt: nowIso() };
+}
+
+}
+};
+__defs["host/world-info-adapter.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+with(__scope){
+Object.defineProperty(exports,"saveWorldInfo",{enumerable:true,configurable:true,get:()=>saveWorldInfo});
+/**
+ * Sole host-write boundary for SillyTavern World Info documents.
+ * Domain/pipeline modules prepare desired documents; only this adapter performs
+ * the external mutation and returns a durable-style receipt for reconciliation.
+ */
+function documentHash(data) {
+    return hashText(JSON.stringify(data ?? null));
+}
+
+async function saveWorldInfo(api, name, data, force = true) {
+    if (!api || typeof api.saveWorldInfo !== 'function')
+        throw new Error('SillyTavern 世界书写入接口不可用');
+    const target = String(name ?? '').trim();
+    if (!target)
+        throw new Error('世界书写入缺少目标名称');
+    const desiredHash = documentHash(data);
+    await api.saveWorldInfo(target, data, force);
+    return {
+        effectType: 'world-info-save',
+        target,
+        desiredHash,
+        confirmedAt: nowIso(),
+        force: Boolean(force),
+    };
+}
+
+}
+};
 __defs["index.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"onActivate",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onActivate"]});
@@ -9093,12 +9460,17 @@ Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"withTimeout",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["withTimeout"]});
 Object.defineProperty(__scope,"requestScheduler",{enumerable:true,configurable:true,get:()=>__require("llm/request-scheduler.js")["requestScheduler"]});
+Object.defineProperty(__scope,"SAMPLING_PARAMETER_KEYS",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["SAMPLING_PARAMETER_KEYS"]});
+Object.defineProperty(__scope,"SAMPLING_PARAMETER_SET",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["SAMPLING_PARAMETER_SET"]});
+Object.defineProperty(__scope,"stripForbiddenSamplingObject",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["stripForbiddenSamplingObject"]});
+Object.defineProperty(__scope,"transportAuthorityStatus",{enumerable:true,configurable:true,get:()=>__require("transport/authority.js")["transportAuthorityStatus"]});
 with(__scope){
 Object.defineProperty(exports,"generateTask",{enumerable:true,configurable:true,get:()=>generateTask});
 Object.defineProperty(exports,"testConnection",{enumerable:true,configurable:true,get:()=>testConnection});
 Object.defineProperty(exports,"listSupportedConnectionProfiles",{enumerable:true,configurable:true,get:()=>listSupportedConnectionProfiles});
 Object.defineProperty(exports,"describeTaskConnection",{enumerable:true,configurable:true,get:()=>describeTaskConnection});
 Object.defineProperty(exports,"requestTraceReport",{enumerable:true,configurable:true,get:()=>requestTraceReport});
+Object.defineProperty(exports,"modelTransportAuthorityStatus",{enumerable:true,configurable:true,get:()=>modelTransportAuthorityStatus});
 /**
  * 模块职责：通过 SillyTavern 当前连接或 Connection Profile 发起模型请求。
  * 维护边界：插件不保存密钥、不切换全局 Profile；同物理连接的业务请求串行，
@@ -9394,30 +9766,6 @@ function messagesFromOptions(options) {
     }
     return messages;
 }
-const SAMPLING_PARAMETER_KEYS = Object.freeze([
-    'temperature',
-    'top_p',
-    'top_k',
-    'min_p',
-    'top_a',
-    'typical_p',
-    'tfs',
-    'epsilon_cutoff',
-    'eta_cutoff',
-    'mirostat_mode',
-    'mirostat_tau',
-    'mirostat_eta',
-    'dynatemp_range',
-    'dynatemp_exponent',
-    'smoothing_factor',
-    'smoothing_curve',
-    'frequency_penalty',
-    'presence_penalty',
-    'repetition_penalty',
-    'penalty_alpha',
-    'seed',
-]);
-const SAMPLING_PARAMETER_SET = new Set(SAMPLING_PARAMETER_KEYS.map((key) => key.toLowerCase()));
 function normalizeOptionalKey(value) {
     return safeText(value, 160).trim().replace(/^['"]|['"]$/g, '');
 }
@@ -9526,16 +9874,7 @@ function samplingFreeOverride(extra = {}, existingExcludeBody = '') {
 function stripSamplingParameters(payload, existingExcludeBody = '', applyCustomPolicy = true) {
     if (!payload || typeof payload !== 'object')
         return payload;
-    for (const key of Object.keys(payload)) {
-        if (SAMPLING_PARAMETER_SET.has(key.toLowerCase()))
-            delete payload[key];
-    }
-    // 部分兼容网关把采样项包在这些标准容器内；不递归 messages，避免改动正文内容。
-    for (const key of ['parameters', 'generation_config', 'generationConfig', 'sampling_params', 'samplingParams']) {
-        const nested = payload[key];
-        if (nested && typeof nested === 'object')
-            stripSamplingParameters(nested, '', false);
-    }
+    stripForbiddenSamplingObject(payload);
     if (applyCustomPolicy) {
         payload.custom_include_body = stripSamplingFromCustomInclude(payload.custom_include_body);
         payload.custom_exclude_body = samplingExclusionYaml(payload.custom_exclude_body || existingExcludeBody);
@@ -9711,9 +10050,10 @@ function samplingCompatibilityError(error, label, currentConnection = false) {
     const parameter = unsupportedSamplingParameter(error);
     if (!parameter)
         return null;
-    const guidance = currentConnection
-        ? '镜渊已在底层请求、浏览器最终发送边界和 Custom 后端排除清单三层剔除采样参数；若仍出现该错误，请导出诊断确认报错是否来自另一条非镜渊请求。'
-        : '镜渊已关闭 Profile 预设继承，并在浏览器最终发送边界及 Custom 后端排除清单中剔除采样参数；若仍出现该错误，请导出诊断确认站点是否绕过标准 fetch 传输。';
+    const authority = transportAuthorityStatus(getContext());
+    const guidance = authority.upstreamPayloadVerified
+        ? '服务端最终边界已声明执行无采样策略；该错误表示服务端策略回执与实际行为不一致，请保留请求ID并检查服务端日志。'
+        : '镜渊已净化浏览器侧请求，但当前宿主没有可验证的服务端最终边界；SillyTavern 后端或站点网关仍可能在参数合并后重新注入该字段。此问题不能由 UI 扩展单方面证明已消除。';
     return new Error(`${label}所用模型不接受 ${parameter} 参数。${guidance}`, { cause: error });
 }
 function currentTextPrompt(context, options) {
@@ -10024,6 +10364,8 @@ async function testConnection(task) {
     };
 }
 
+function modelTransportAuthorityStatus() { return transportAuthorityStatus(getContext()); }
+
 }
 };
 __defs["llm/request-scheduler.js"]=function(exports,__require){
@@ -10303,7 +10645,7 @@ Object.defineProperty(__scope,"describeTaskConnection",{enumerable:true,configur
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"auditSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/audit.js")["auditSystemPrompt"]});
 Object.defineProperty(__scope,"auditUserPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/audit.js")["auditUserPrompt"]});
-Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
+Object.defineProperty(__scope,"persistArtifact",{enumerable:true,configurable:true,get:()=>__require("application/artifact-commands.js")["persistArtifact"]});
 Object.defineProperty(__scope,"parseAuditTextOutput",{enumerable:true,configurable:true,get:()=>__require("domain/audit-text.js")["parseAuditTextOutput"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 with(__scope){
@@ -10409,7 +10751,7 @@ async function runAudit(artifact, force = false) {
             rewriteInstruction: '',
             violationFingerprint: '',
         };
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         return artifact.audit;
     }
     if (!settings.auditPrompt.trim())
@@ -10428,7 +10770,7 @@ async function runAudit(artifact, force = false) {
         return cachedAudit;
     }
     markStage(artifact, 'audit', 'running');
-    await putArtifact(artifact);
+    await persistArtifact(artifact);
     try {
         const result = await auditText(settings.auditPrompt, artifact.playerText, artifact.assistantText, artifactIntentCorrelation(artifact, 'audit', 'audit-primary'));
         assertArtifactCommitCurrent(artifact);
@@ -10448,17 +10790,17 @@ async function runAudit(artifact, force = false) {
         alignRevisionStageWithAudit(artifact, result);
         // 审核阶段只更新内存 artifact；业务编排器负责在明确检查点统一保存。
         // 避免审核函数与主链紧邻地重复保存同一条聊天。
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         return result;
     }
     catch (error) {
         if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name)) {
             markStage(artifact, 'audit', 'cancelled', toErrorMessage(error));
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
             throw error;
         }
         markStage(artifact, 'audit', 'failed', toErrorMessage(error));
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         throw error;
     }
 }
@@ -10467,149 +10809,12 @@ async function runAudit(artifact, force = false) {
 };
 __defs["pipeline/commit-coordinator.js"]=function(exports,__require){
 const __scope=Object.create(null);
-Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
-Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
-Object.defineProperty(__scope,"assertHistoryRevisionCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertHistoryRevisionCurrent"]});
-Object.defineProperty(__scope,"currentHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["currentHistoryRevision"]});
-Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
-Object.defineProperty(__scope,"currentChatLocator",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatLocator"]});
-Object.defineProperty(__scope,"getMessage",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getMessage"]});
-Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageFingerprint"]});
-Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageIdentity"]});
-Object.defineProperty(__scope,"MODULE_NAME",{enumerable:true,configurable:true,get:()=>__require("constants.js")["MODULE_NAME"]});
-Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
-Object.defineProperty(__scope,"advanceCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["advanceCommit"]});
-Object.defineProperty(__scope,"artifactCommitHash",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["artifactCommitHash"]});
-Object.defineProperty(__scope,"prepareCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["prepareCommit"]});
+Object.defineProperty(exports,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>__require("application/unit-of-work.js")["captureCommitSnapshot"]});
+Object.defineProperty(exports,"assertCommitSnapshotCurrent",{enumerable:true,configurable:true,get:()=>__require("application/unit-of-work.js")["assertCommitSnapshotCurrent"]});
+Object.defineProperty(exports,"commitArtifact",{enumerable:true,configurable:true,get:()=>__require("application/unit-of-work.js")["commitArtifact"]});
+Object.defineProperty(exports,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>__require("application/unit-of-work.js")["commitCoreBundle"]});
 with(__scope){
-Object.defineProperty(exports,"commitArtifact",{enumerable:true,configurable:true,get:()=>commitArtifact});
-Object.defineProperty(exports,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>commitCoreBundle});
-Object.defineProperty(exports,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>captureCommitSnapshot});
-Object.defineProperty(exports,"assertCommitSnapshotCurrent",{enumerable:true,configurable:true,get:()=>assertCommitSnapshotCurrent});
-/**
- * 模块职责：统一消息 artifact 与聊天级 ChatState 的提交前校验、保存顺序和提交后复核。
- * 维护边界：只负责“结果如何安全落地”，不决定事实、总结或世界书业务内容。
- */
-function captureCommitSnapshot(artifact, historyRevision = currentHistoryRevision(artifact.chatKey)) {
-    return Object.freeze({
-        chatKey: String(artifact.chatKey || ''),
-        chatLocator: String(currentChatLocator() || ''),
-        messageIndex: Number(artifact.messageIndex),
-        messageKey: String(artifact.messageKey || ''),
-        sourceFingerprint: String(artifact.sourceFingerprint || ''),
-        historyRevision: Math.max(0, Number(historyRevision) || 0),
-    });
-}
-
-function assertCommitSnapshotCurrent(snapshot, artifact) {
-    if (!snapshot || !artifact)
-        throw new Error('提交快照或 artifact 缺失');
-    if (artifact.chatKey !== snapshot.chatKey
-        || artifact.messageIndex !== snapshot.messageIndex
-        || artifact.messageKey !== snapshot.messageKey
-        || artifact.sourceFingerprint !== snapshot.sourceFingerprint) {
-        throw new CommitRejectedError('artifact 身份已变化，本次旧提交不再写入');
-    }
-    if (snapshot.chatLocator && currentChatLocator() !== snapshot.chatLocator)
-        throw new CommitRejectedError('聊天实例已经变化，本次旧提交不再写入');
-    assertHistoryRevisionCurrent(snapshot.chatKey, snapshot.historyRevision);
-    assertArtifactCommitCurrent(artifact);
-    const message = getMessage(snapshot.messageIndex);
-    if (!message || message.is_user)
-        throw new CommitRejectedError('原AI正文已不存在，请重新整理');
-    if (messageIdentity(snapshot.messageIndex) !== snapshot.messageKey
-        || messageFingerprint(snapshot.messageIndex) !== snapshot.sourceFingerprint) {
-        throw new CommitRejectedError('正文身份已经变化，本次旧提交不再写入');
-    }
-}
-
-/** 保存消息级 artifact。调用方可传 notify，在物理保存成功后刷新 UI。 */
-async function commitArtifact({ artifact, snapshot = captureCommitSnapshot(artifact), notify }) {
-    assertCommitSnapshotCurrent(snapshot, artifact);
-    const message = getMessage(snapshot.messageIndex);
-    const hadExtra = Boolean(message.extra);
-    const hadArtifact = Boolean(message.extra && Object.prototype.hasOwnProperty.call(message.extra, MODULE_NAME));
-    const previousArtifact = message.extra?.[MODULE_NAME];
-    attachArtifactToMessage(message, artifact);
-    try {
-        await persistChatFor(snapshot.chatKey);
-        assertCommitSnapshotCurrent(snapshot, artifact);
-    }
-    catch (error) {
-        // 普通保存失败时恢复内存消息；聊天切换类拒绝可能发生在物理保存之后，不能反向撤销源聊天对象。
-        if (!(error instanceof CommitRejectedError)) {
-            if (hadArtifact)
-                attachArtifactToMessage(message, previousArtifact);
-            else if (message.extra) {
-                delete message.extra[MODULE_NAME];
-                if (!hadExtra && Object.keys(message.extra).length === 0)
-                    delete message.extra;
-            }
-        }
-        throw error;
-    }
-    notify?.(snapshot.messageIndex, artifact);
-    return artifact;
-}
-
-/**
- * 核心提交顺序固定为 ChatState → artifact。
- * Outbox/正式事实先成为可恢复来源；若随后消息保存失败，重新进入聊天时仍可根据 ChatState 恢复，
- * 不会出现“界面显示已排队但持久 Outbox 不存在”的不可恢复状态。
- */
-async function commitCoreBundle({ artifact, chatState, snapshot = captureCommitSnapshot(artifact), notify }) {
-    assertCommitSnapshotCurrent(snapshot, artifact);
-    const intentId = artifact.intentId || artifact.processingIntent?.intentId || '';
-    const commandId = artifact.processingCommandId || `${intentId}:core-commit`;
-    const prepared = prepareCommit(chatState.reliableWorkflow, {
-        intentId,
-        commandId,
-        chatKey: snapshot.chatKey,
-        messageKey: snapshot.messageKey,
-        sourceFingerprint: snapshot.sourceFingerprint,
-        artifactHash: artifactCommitHash(artifact),
-        stateRevision: chatState.runtimeV2?.revision || 0,
-    });
-    chatState.reliableWorkflow = prepared.workflow;
-    let chatStateWritten = false;
-    let artifactWritten = false;
-    try {
-        // prepared 与规范 ChatState 在同一次 metadata 保存中落地。若后续消息保存失败，
-        // Reconciler 可依据该记录与 artifact 哈希确定性对账，不会盲目重跑模型。
-        await putChatState(chatState);
-        chatStateWritten = true;
-        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written').workflow;
-        assertCommitSnapshotCurrent(snapshot, artifact);
-        await commitArtifact({ artifact, snapshot, notify });
-        artifactWritten = true;
-        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written').workflow;
-        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'committed').workflow;
-        await putChatState(chatState);
-        return { artifact, chatState, snapshot, commitId: prepared.commit.commitId };
-    }
-    catch (error) {
-        try {
-            if (!chatStateWritten) {
-                // 首次 ChatState 写入本身失败，尚无可用于恢复的 prepared 记录，允许记录为明确失败。
-                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'failed', error instanceof Error ? error.message : String(error)).workflow;
-            }
-            else if (artifactWritten) {
-                // artifact 已物理写入但最终回执未保存：保持非终态，由 Reconciler 通过 artifact 哈希确认。
-                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written', error instanceof Error ? error.message : String(error)).workflow;
-            }
-            else {
-                // commitArtifact 可能在物理保存后因聊天切换守卫拒绝，不能武断标记 failed。
-                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written', error instanceof Error ? error.message : String(error)).workflow;
-            }
-            await putChatState(chatState);
-        }
-        catch (recordError) {
-            console.warn('[MirrorAbyss] core commit failed and commit record could not be finalized', recordError);
-        }
-        throw error;
-    }
-}
+/** Compatibility facade. All commit authority lives in application/unit-of-work.js. */
 
 }
 };
@@ -10624,7 +10829,7 @@ Object.defineProperty(__scope,"mergeInternalFacts",{enumerable:true,configurable
 Object.defineProperty(__scope,"normalizeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["normalizeInternalFacts"]});
 Object.defineProperty(__scope,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["advanceRuntimeV2"]});
 Object.defineProperty(__scope,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueLorebookProjection"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
 Object.defineProperty(__scope,"resolveLatestHistoryInvalidation",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["resolveLatestHistoryInvalidation"]});
 Object.defineProperty(__scope,"hasEligibleLargeSummary",{enumerable:true,configurable:true,get:()=>__require("pipeline/summary.js")["hasEligibleLargeSummary"]});
@@ -10676,7 +10881,7 @@ async function commitCoreTransaction({
     if (!artifact.snapshot || artifactIntentStep(artifact, 'state').status !== 'success')
         throw new Error('状态表尚未成功，不能提交核心结果');
     const commitSnapshot = captureCommitSnapshot(artifact, historyRevision);
-    const chatState = await getChatState(artifact.chatKey);
+    const chatState = await readChatState(artifact.chatKey);
     if (!chatState.processedMessageKeys.includes(artifact.messageKey))
         chatState.processedMessageKeys.push(artifact.messageKey);
     if (artifact.factPackage?.facts?.length) {
@@ -10736,7 +10941,6 @@ const __scope=Object.create(null);
 Object.defineProperty(__scope,"VERSION",{enumerable:true,configurable:true,get:()=>__require("constants.js")["VERSION"]});
 Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
 Object.defineProperty(__scope,"assertChatCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertChatCommitCurrent"]});
-Object.defineProperty(__scope,"persistMetadataFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistMetadataFor"]});
 Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
 Object.defineProperty(__scope,"getChatMetadataNamespace",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChatMetadataNamespace"]});
 Object.defineProperty(__scope,"getContext",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getContext"]});
@@ -10746,9 +10950,9 @@ Object.defineProperty(__scope,"sanitizeBookName",{enumerable:true,configurable:t
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
+Object.defineProperty(__scope,"persistArtifact",{enumerable:true,configurable:true,get:()=>__require("application/artifact-commands.js")["persistArtifact"]});
 Object.defineProperty(__scope,"TaskBlockedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskBlockedError"]});
 Object.defineProperty(__scope,"buildLorebookDocuments",{enumerable:true,configurable:true,get:()=>__require("domain/lorebook-publish.js")["buildLorebookDocuments"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
@@ -10758,6 +10962,8 @@ Object.defineProperty(__scope,"applyLorebookSuppressions",{enumerable:true,confi
 Object.defineProperty(__scope,"detectPlayerDeletedLorebookEntries",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["detectPlayerDeletedLorebookEntries"]});
 Object.defineProperty(__scope,"restoreLorebookSuppression",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["restoreLorebookSuppression"]});
 Object.defineProperty(__scope,"updateLorebookPublicationLedger",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["updateLorebookPublicationLedger"]});
+Object.defineProperty(__scope,"saveWorldInfo",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["saveWorldInfo"]});
+Object.defineProperty(__scope,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostMetadata"]});
 with(__scope){
 Object.defineProperty(exports,"reloadWorldInfoEditor",{enumerable:true,configurable:true,get:()=>reloadWorldInfoEditor});
 Object.defineProperty(exports,"synchronizeHostRecallSettings",{enumerable:true,configurable:true,get:()=>synchronizeHostRecallSettings});
@@ -10866,7 +11072,7 @@ async function ensureLorebook(name, chatKey, artifact) {
     if (!data) {
         data = { entries: {} };
         assertCurrent();
-        await wi.saveWorldInfo(name, data, true);
+        await saveWorldInfo(wi, name, data, true);
         assertCurrent();
     }
     const context = getContext();
@@ -10875,7 +11081,7 @@ async function ensureLorebook(name, chatKey, artifact) {
     context.chatMetadata ||= {};
     context.chatMetadata[wi.METADATA_KEY || 'world_info'] = name;
     meta.lorebookName = name;
-    await persistMetadataFor(chatKey);
+    await saveHostMetadata(chatKey);
     assertCurrent();
     refreshChatLorebookIndicator(name);
     return wi;
@@ -10910,7 +11116,7 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
     let removed = removeManagedEntriesForChat(data, chatKey);
     if (!removed)
         return 0;
-    await wi.saveWorldInfo(name, data, true);
+    await saveWorldInfo(wi, name, data, true);
     assertArtifactCommitCurrent(artifact);
     // 保存后回读，防止旧缓存把当前聊天条目重新写回旧书。
     const verifiedData = (await wi.loadWorldInfo(name)) || data;
@@ -10918,7 +11124,7 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
     const verifiedRemoved = removeManagedEntriesForChat(verifiedData, chatKey);
     removed += verifiedRemoved;
     if (verifiedRemoved) {
-        await wi.saveWorldInfo(name, verifiedData, true);
+        await saveWorldInfo(wi, name, verifiedData, true);
         assertArtifactCommitCurrent(artifact);
     }
     const rendered = await reloadWorldInfoEditor(wi, name, false);
@@ -10929,7 +11135,7 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
         const postReloadRemoved = removeManagedEntriesForChat(postReloadData, chatKey);
         removed += postReloadRemoved;
         if (postReloadRemoved) {
-            await wi.saveWorldInfo(name, postReloadData, true);
+            await saveWorldInfo(wi, name, postReloadData, true);
             assertArtifactCommitCurrent(artifact);
             await reloadWorldInfoEditor(wi, name, true);
             assertArtifactCommitCurrent(artifact);
@@ -10937,7 +11143,7 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
             const finalRemoved = removeManagedEntriesForChat(finalData, chatKey);
             removed += finalRemoved;
             if (finalRemoved) {
-                await wi.saveWorldInfo(name, finalData, true);
+                await saveWorldInfo(wi, name, finalData, true);
                 assertArtifactCommitCurrent(artifact);
                 throw new Error('旧世界书清理刷新后持续回写旧缓存，已修正入库但界面未能稳定刷新');
             }
@@ -11215,7 +11421,7 @@ async function synchronizeHostRecallSettings(wi, desired) {
 async function desiredSpecs(artifact, committedState) {
     const settings = getSettings();
     const control = resolveHostControl(settings);
-    const state = committedState ?? await getChatState(artifact.chatKey);
+    const state = committedState ?? await readChatState(artifact.chatKey);
     const documents = buildLorebookDocuments(artifact.snapshot, state.smallSummaries, state.largeSummaries, {
         layout: settings.lorebookLayout,
         vectorize: control.vector && settings.vectorizeRows && hostVectorWorldInfoStatus().enabled,
@@ -11242,7 +11448,7 @@ async function desiredSpecs(artifact, committedState) {
     return { desired };
 }
 async function legacyCleanupScope(artifact) {
-    const state = await getChatState(artifact.chatKey);
+    const state = await readChatState(artifact.chatKey);
     const logicalKeys = new Set();
     const legacyKeys = new Set();
     const comments = new Set();
@@ -11716,7 +11922,7 @@ async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedi
     if (!postReloadVerification.changed)
         return entryIds;
     assertArtifactCommitCurrent(artifact);
-    await wi.saveWorldInfo(name, postReloadData, true);
+    await saveWorldInfo(wi, name, postReloadData, true);
     assertArtifactCommitCurrent(artifact);
     // 修正保存后再次重绘，确保当前编辑器看到的是最终入库版本，而不是刚被修掉的旧缓存。
     await reloadWorldInfoEditor(wi, name, true);
@@ -11726,7 +11932,7 @@ async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedi
     const finalVerification = reconcileLorebookEntries(finalData, desired, artifact.chatKey, wi, name, dedicatedBook);
     entryIds = finalVerification.entryIds;
     if (finalVerification.changed) {
-        await wi.saveWorldInfo(name, finalData, true);
+        await saveWorldInfo(wi, name, finalData, true);
         assertArtifactCommitCurrent(artifact);
         throw new Error('世界书编辑器刷新后持续回写旧缓存，已修正入库但界面未能稳定刷新');
     }
@@ -11744,12 +11950,12 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
     const retryingFailedSync = artifactIntentStep(artifact, 'sync').status === 'failed';
     if (!resolveHostControl(settings).lorebook && !force) {
         markStage(artifact, 'sync', 'skipped');
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         return;
     }
     markStage(artifact, 'sync', 'running');
-    await putArtifact(artifact);
-    const chatState = await getChatState(artifact.chatKey);
+    await persistArtifact(artifact);
+    const chatState = await readChatState(artifact.chatKey);
     const historyWorkflow = readHistoryWorkflow(chatState);
     if (historyWorkflow.blocked) {
         const recoveryAuthorized = Boolean(options.allowHistoryRecovery
@@ -11760,7 +11966,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
                 ? '历史删除位置未知，请先选择重算起点'
                 : `第 ${historyWorkflow.startIndex + 1} 条消息之后的数据需要重算`;
             markStage(artifact, 'sync', 'blocked', blockedReason);
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
             throw new TaskBlockedError(blockedReason);
         }
     }
@@ -11774,7 +11980,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         const detectedDeletions = detectPlayerDeletedLorebookEntries(chatState, data, plan.desired, artifact.chatKey, name);
         if (detectedDeletions.length) {
             // 玩家删除属于持久化发布否决，必须在任何可能失败的后续写入前先保存墓碑。
-            await putChatState(chatState);
+            await commitChatState(chatState);
             assertArtifactCommitCurrent(artifact);
         }
         const desired = applyLorebookSuppressions(plan.desired, chatState);
@@ -11786,7 +11992,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         let entryIds = reconciliation.entryIds;
         assertArtifactCommitCurrent(artifact);
         if (changed) {
-            await wi.saveWorldInfo(name, data, true);
+            await saveWorldInfo(wi, name, data, true);
             assertArtifactCommitCurrent(artifact);
             // 只有实际保存后做一次回读确认，清除保存路径回流的同 managedKey 副本。
             const verifiedData = (await wi.loadWorldInfo(name)) || data;
@@ -11794,7 +12000,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
             entryIds = verification.entryIds;
             if (verification.changed) {
                 assertArtifactCommitCurrent(artifact);
-                await wi.saveWorldInfo(name, verifiedData, true);
+                await saveWorldInfo(wi, name, verifiedData, true);
                 assertArtifactCommitCurrent(artifact);
             }
         }
@@ -11817,21 +12023,21 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         chatState.lastSyncAt = new Date().toISOString();
         chatState.lastSyncStatus = 'success';
         chatState.lastSyncError = undefined;
-        await putArtifact(artifact);
-        await putChatState(chatState);
+        await persistArtifact(artifact);
+        await commitChatState(chatState);
     }
     catch (error) {
         if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name)) {
             markStage(artifact, 'sync', 'cancelled', toErrorMessage(error));
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
             throw error;
         }
         const message = toErrorMessage(error);
         markStage(artifact, 'sync', 'failed', message);
         chatState.lastSyncStatus = 'failed';
         chatState.lastSyncError = message;
-        await putArtifact(artifact);
-        await putChatState(chatState);
+        await persistArtifact(artifact);
+        await commitChatState(chatState);
         throw error;
     }
 }
@@ -11846,7 +12052,7 @@ async function syncLorebook(artifact, force = false, options = {}) {
     }
     if (!name)
         throw new Error('没有可用的聊天世界书');
-    const persisted = await getChatState(artifact.chatKey);
+    const persisted = await readChatState(artifact.chatKey);
     const previousLorebookName = sanitizeBookName(persisted.lastLorebookName || '');
     await withLorebookMutations([name, previousLorebookName], async () => {
         assertArtifactCommitCurrent(artifact);
@@ -11946,16 +12152,16 @@ async function applyLorebookMaintenance(artifact) {
         data.entries ||= {};
         const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
         const preview = maintenancePreviewFromData(data, name, artifact.chatKey, dedicatedBook);
-        const state = await getChatState(artifact.chatKey);
+        const state = await readChatState(artifact.chatKey);
         const plan = await desiredSpecs(artifact, state);
         const detectedDeletions = detectPlayerDeletedLorebookEntries(state, data, plan.desired, artifact.chatKey, name);
         if (detectedDeletions.length) {
-            await putChatState(state);
+            await commitChatState(state);
             assertArtifactCommitCurrent(artifact);
         }
         const desired = applyLorebookSuppressions(plan.desired, state);
         state.hostRecallStatus = await synchronizeHostRecallSettings(wi, desired);
-        await putChatState(state);
+        await commitChatState(state);
         assertArtifactCommitCurrent(artifact);
         const cleanup = await legacyCleanupScope(artifact);
         assertArtifactCommitCurrent(artifact);
@@ -11963,14 +12169,14 @@ async function applyLorebookMaintenance(artifact) {
         let removed = first.removed;
         if (first.changed) {
             assertArtifactCommitCurrent(artifact);
-            await wi.saveWorldInfo(name, data, true);
+            await saveWorldInfo(wi, name, data, true);
             assertArtifactCommitCurrent(artifact);
             const verifiedData = (await wi.loadWorldInfo(name)) || data;
             assertArtifactCommitCurrent(artifact);
             const verification = reconcileLorebookMaintenanceEntries(verifiedData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
             removed += verification.removed;
             if (verification.changed) {
-                await wi.saveWorldInfo(name, verifiedData, true);
+                await saveWorldInfo(wi, name, verifiedData, true);
                 assertArtifactCommitCurrent(artifact);
             }
             const renderedTarget = await reloadWorldInfoEditor(wi, name, true);
@@ -11981,7 +12187,7 @@ async function applyLorebookMaintenance(artifact) {
                 const postReloadVerification = reconcileLorebookMaintenanceEntries(postReloadData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
                 removed += postReloadVerification.removed;
                 if (postReloadVerification.changed) {
-                    await wi.saveWorldInfo(name, postReloadData, true);
+                    await saveWorldInfo(wi, name, postReloadData, true);
                     assertArtifactCommitCurrent(artifact);
                     await reloadWorldInfoEditor(wi, name, true);
                     assertArtifactCommitCurrent(artifact);
@@ -11990,7 +12196,7 @@ async function applyLorebookMaintenance(artifact) {
                     const finalVerification = reconcileLorebookMaintenanceEntries(finalData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
                     removed += finalVerification.removed;
                     if (finalVerification.changed) {
-                        await wi.saveWorldInfo(name, finalData, true);
+                        await saveWorldInfo(wi, name, finalData, true);
                         assertArtifactCommitCurrent(artifact);
                         throw new Error('世界书维护刷新后持续回写旧缓存，已修正入库但界面未能稳定刷新');
                     }
@@ -12002,17 +12208,17 @@ async function applyLorebookMaintenance(artifact) {
 }
 async function restoreSuppressedLorebookEntry(artifact, key) {
     assertArtifactCommitCurrent(artifact);
-    const state = await getChatState(artifact.chatKey);
+    const state = await readChatState(artifact.chatKey);
     if (!restoreLorebookSuppression(state, key))
         return false;
-    await putChatState(state);
+    await commitChatState(state);
     assertArtifactCommitCurrent(artifact);
     await syncLorebook(artifact, true);
     return true;
 }
 
 async function knownLorebookNamesForChat(chatKey) {
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     return [...new Set([
             sanitizeBookName(state.lastLorebookName || ''),
             resolveTargetBookName(false, chatKey),
@@ -12028,13 +12234,13 @@ async function clearManagedEntriesInBook(wi, name, chatKey) {
     const removed = removeManagedEntriesForChat(data, chatKey);
     if (!removed)
         return 0;
-    await wi.saveWorldInfo(name, data, true);
+    await saveWorldInfo(wi, name, data, true);
     assertCurrent();
     const verifiedData = (await wi.loadWorldInfo(name)) || data;
     assertCurrent();
     const verifiedRemoved = removeManagedEntriesForChat(verifiedData, chatKey);
     if (verifiedRemoved) {
-        await wi.saveWorldInfo(name, verifiedData, true);
+        await saveWorldInfo(wi, name, verifiedData, true);
         assertCurrent();
     }
     const rendered = await reloadWorldInfoEditor(wi, name);
@@ -12044,14 +12250,14 @@ async function clearManagedEntriesInBook(wi, name, chatKey) {
         assertCurrent();
         const postReloadRemoved = removeManagedEntriesForChat(postReloadData, chatKey);
         if (postReloadRemoved) {
-            await wi.saveWorldInfo(name, postReloadData, true);
+            await saveWorldInfo(wi, name, postReloadData, true);
             assertCurrent();
             await reloadWorldInfoEditor(wi, name, true);
             assertCurrent();
             const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
             const finalRemoved = removeManagedEntriesForChat(finalData, chatKey);
             if (finalRemoved) {
-                await wi.saveWorldInfo(name, finalData, true);
+                await saveWorldInfo(wi, name, finalData, true);
                 assertCurrent();
                 throw new Error('世界书清理刷新后持续回写旧缓存，已修正入库但界面未能稳定刷新');
             }
@@ -12084,12 +12290,12 @@ async function pauseManagedEntriesInBook(wi, name, chatKey) {
     const first = pauseManagedEntries(data, chatKey);
     if (!first.changed)
         return first.managed;
-    await wi.saveWorldInfo(name, data, true);
+    await saveWorldInfo(wi, name, data, true);
     assertCurrent();
     const verifiedData = (await wi.loadWorldInfo(name)) || data;
     const verification = pauseManagedEntries(verifiedData, chatKey);
     if (verification.changed) {
-        await wi.saveWorldInfo(name, verifiedData, true);
+        await saveWorldInfo(wi, name, verifiedData, true);
         assertCurrent();
     }
     const rendered = await reloadWorldInfoEditor(wi, name);
@@ -12098,14 +12304,14 @@ async function pauseManagedEntriesInBook(wi, name, chatKey) {
         const postReloadData = (await wi.loadWorldInfo(name)) || verifiedData;
         const postReloadVerification = pauseManagedEntries(postReloadData, chatKey);
         if (postReloadVerification.changed) {
-            await wi.saveWorldInfo(name, postReloadData, true);
+            await saveWorldInfo(wi, name, postReloadData, true);
             assertCurrent();
             await reloadWorldInfoEditor(wi, name, true);
             assertCurrent();
             const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
             const finalVerification = pauseManagedEntries(finalData, chatKey);
             if (finalVerification.changed) {
-                await wi.saveWorldInfo(name, finalData, true);
+                await saveWorldInfo(wi, name, finalData, true);
                 assertCurrent();
                 throw new Error('世界书暂停刷新后持续回写旧缓存，已修正入库但界面未能稳定刷新');
             }
@@ -12160,7 +12366,7 @@ Object.defineProperty(__scope,"deleteRow",{enumerable:true,configurable:true,get
 Object.defineProperty(__scope,"moveManualRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["moveManualRow"]});
 Object.defineProperty(__scope,"upsertManualRow",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["upsertManualRow"]});
 Object.defineProperty(__scope,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueLorebookProjection"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
 Object.defineProperty(__scope,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["captureCommitSnapshot"]});
 Object.defineProperty(__scope,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["commitCoreBundle"]});
@@ -12218,7 +12424,7 @@ function runManualMutation({ index, artifact, label, mutate }) {
         bindArtifactTaskGuard(artifact, guard);
         try {
             assertArtifactCommitCurrent(artifact);
-            const chatState = await getChatState(chatKey);
+            const chatState = await readChatState(chatKey);
             await mutate(chatState);
             return await persistManualSnapshot(index, artifact, chatState, historyRevision);
         }
@@ -12299,8 +12505,7 @@ Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurabl
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 Object.defineProperty(__scope,"runtimeOutboxJobs",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["runtimeOutboxJobs"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
 Object.defineProperty(__scope,"commitArtifact",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["commitArtifact"]});
 Object.defineProperty(__scope,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["captureCommitSnapshot"]});
 Object.defineProperty(__scope,"syncLorebook",{enumerable:true,configurable:true,get:()=>__require("pipeline/lorebook.js")["syncLorebook"]});
@@ -12352,7 +12557,7 @@ function hasLiveDerivedTask(artifact, stage) {
  * 已由业务函数写成 success/failed/blocked 的状态绝不覆盖。
  */
 async function settleInterruptedDerivedStage(artifact, stage, error) {
-    const current = artifact?.stages?.[stage]?.status;
+    const current = artifactIntentStep(artifact, stage).status;
     if (!['queued', 'running'].includes(String(current)))
         return false;
     // pending job 已被同一 artifact 的另一个恢复入口领取时，当前入口会拿不到 pending。
@@ -12386,11 +12591,11 @@ function cancelledDerivedCanFallBackToSync(error, chatKey, historyRevision) {
 function latestSnapshotArtifact() {
     return [...getChat()].map((message, index) => ({ index, artifact: getAttachedArtifact(message) }))
         .reverse()
-        .find((item) => item.artifact?.snapshot && item.artifact?.stages?.state?.status === 'success');
+        .find((item) => item.artifact?.snapshot && artifactIntentStep(item.artifact, 'state').status === 'success');
 }
 
 async function pendingJob(chatKey, jobId) {
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     return runtimeOutboxJobs(state, { statuses: ['pending'], }).find((job) => job.id === jobId);
 }
 
@@ -12403,7 +12608,7 @@ function selectPendingSyncJob(jobs, preferredJobId = '') {
 }
 
 async function latestPendingSync(chatKey, preferredJobId = '') {
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     return selectPendingSyncJob(runtimeOutboxJobs(state, { statuses: ['pending'], types: ['lorebook-sync'] }), preferredJobId);
 }
 
@@ -12552,7 +12757,7 @@ async function resumeRuntimeOutbox() {
     if (!getSettings().enabled)
         return { resumed: false, reason: 'disabled' };
     const chatKey = currentChatKey();
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     const pending = runtimeOutboxJobs(state, { statuses: ['pending'] });
     if (!pending.length)
         return { resumed: false, reason: 'empty' };
@@ -12591,8 +12796,6 @@ Object.defineProperty(__scope,"bindArtifactTaskGuard",{enumerable:true,configura
 Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
 Object.defineProperty(__scope,"currentHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["currentHistoryRevision"]});
 Object.defineProperty(__scope,"invalidateHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["invalidateHistoryRevision"]});
-Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
-Object.defineProperty(__scope,"persistMetadataFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistMetadataFor"]});
 Object.defineProperty(__scope,"unbindArtifactHistoryRevision",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["unbindArtifactHistoryRevision"]});
 Object.defineProperty(__scope,"unbindArtifactTaskGuard",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["unbindArtifactTaskGuard"]});
 Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
@@ -12649,9 +12852,9 @@ Object.defineProperty(__scope,"runStateExtraction",{enumerable:true,configurable
 Object.defineProperty(__scope,"TaskBlockedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskBlockedError"]});
 Object.defineProperty(__scope,"TaskSkippedError",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["TaskSkippedError"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
-Object.defineProperty(__scope,"emptyChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["emptyChatState"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"createEmptyChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["createEmptyChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
 Object.defineProperty(__scope,"commitArtifact",{enumerable:true,configurable:true,get:()=>__require("pipeline/commit-coordinator.js")["commitArtifact"]});
 Object.defineProperty(__scope,"commitCoreTransaction",{enumerable:true,configurable:true,get:()=>__require("pipeline/core-transaction.js")["commitCoreTransaction"]});
 Object.defineProperty(__scope,"queueRuntimeOutbox",{enumerable:true,configurable:true,get:()=>__require("pipeline/outbox-runner.js")["queueRuntimeOutbox"]});
@@ -12662,6 +12865,8 @@ Object.defineProperty(__scope,"commandStatusForError",{enumerable:true,configura
 Object.defineProperty(__scope,"receivePersistentHostEvent",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["receivePersistentHostEvent"]});
 Object.defineProperty(__scope,"settlePersistentCommand",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["settlePersistentCommand"]});
 Object.defineProperty(__scope,"startPersistentCommandHeartbeat",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["startPersistentCommandHeartbeat"]});
+Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
+Object.defineProperty(__scope,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostMetadata"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 Object.defineProperty(__scope,"createPlayerRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["createPlayerRecordingBoundary"]});
 Object.defineProperty(__scope,"messageInsideRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["messageInsideRecordingBoundary"]});
@@ -12753,10 +12958,10 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
         }
     }
     if (changedArtifacts) {
-        await persistChatFor(chatKey);
+        await saveHostChat(chatKey);
         notifyFrom(firstChangedIndex);
     }
-    const chatState = await getChatState(chatKey);
+    const chatState = await readChatState(chatKey);
     const interruptedRecovery = interruptHistoryRecovery(chatState, reason);
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
     let runtimeChanged = false;
@@ -12787,7 +12992,7 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
         chatState.runtimeV2 = runtime;
     }
     if (interruptedRecovery || runtimeChanged)
-        await putChatState(chatState);
+        await commitChatState(chatState);
     return { artifacts: changedArtifacts, historyRecovery: interruptedRecovery, runtimeOutboxRecovered: runtimeChanged };
 }
 function subscribePipeline(listener) {
@@ -12853,19 +13058,19 @@ function isNarrativeTail(index) {
 async function pauseLorebookForHistoryChange(chatKey) {
     try {
         await pauseCurrentChatLorebookEntries(chatKey);
-        const state = await getChatState(chatKey);
+        const state = await readChatState(chatKey);
         if (readHistoryWorkflow(state).pauseError) {
             setHistoryPauseError(state);
-            await putChatState(state);
+            await commitChatState(state);
         }
     }
     catch (error) {
         const detail = toErrorMessage(error);
         console.warn('[MirrorAbyss] failed to pause stale lorebook entries', error);
-        const state = await getChatState(chatKey);
+        const state = await readChatState(chatKey);
         if (readHistoryWorkflow(state).invalidation) {
             setHistoryPauseError(state, detail);
-            await putChatState(state);
+            await commitChatState(state);
         }
         toast('warning', `历史数据已暂停，但世界书条目暂停失败：${detail}。请避免继续生成并手动重试历史重算`);
     }
@@ -12979,7 +13184,7 @@ function derivedTaskError(error) {
         || (error instanceof Error && ['AbortError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
 }
 async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
-    const chatState = await getChatState(artifact.chatKey);
+    const chatState = await readChatState(artifact.chatKey);
     const validMessageIds = new Set(chatState.processedMessageKeys.filter((key) => key !== previousMessageKey));
     invalidateDerivedForValidMessages(chatState, validMessageIds);
     chatState.processedMessageKeys = [...validMessageIds];
@@ -12993,7 +13198,7 @@ async function invalidateCoreAfterManualRevision(artifact, previousMessageKey) {
     markStage(artifact, 'summary', 'idle');
     // 旧发布已暂停；新正文的表格与世界书尚未执行，属于“等待继续”而不是业务阻断。
     markStage(artifact, 'sync', 'idle');
-    await putChatState(chatState);
+    await commitChatState(chatState);
     await saveArtifactToMessage(artifact.messageIndex, artifact);
     try {
         await pauseCurrentChatLorebookEntries(artifact.chatKey);
@@ -13033,7 +13238,7 @@ async function processMessage(index, force = false, options = {}) {
         throw new TaskBlockedError(detail);
     }
     const scheduledHistoryRevision = currentHistoryRevision(scheduledChatKey);
-    const enqueueState = await getChatState(scheduledChatKey);
+    const enqueueState = await readChatState(scheduledChatKey);
     if (!messageInsideRecordingBoundary(enqueueState, index)) {
         if (options.automatic)
             return null;
@@ -13080,7 +13285,7 @@ async function processMessage(index, force = false, options = {}) {
         && attachedAtEnqueue.sourceFingerprint === scheduledFingerprint
         && attachedAtEnqueue.messageKey === identity
         && attachedAtEnqueue.snapshot
-        && attachedAtEnqueue.stages.state.status === 'success'
+        && artifactIntentStep(attachedAtEnqueue, 'state').status === 'success'
         && enqueueState.processedMessageKeys.includes(attachedAtEnqueue.messageKey));
     if (!options.historyRecovery && !duplicateCommittedAutomatic) {
         const preempted = taskQueue.cancelActiveMatching((task) => Boolean(task.chatKey === scheduledChatKey
@@ -13108,7 +13313,7 @@ async function processMessage(index, force = false, options = {}) {
                 throw new TaskSkippedError(detail);
             throw new TaskBlockedError(detail);
         }
-        const processingState = await getChatState(scheduledChatKey);
+        const processingState = await readChatState(scheduledChatKey);
         const processingWorkflow = readHistoryWorkflow(processingState);
         if (processingWorkflow.running && !options.historyRecovery) {
             const detail = `历史恢复正在执行（${processingWorkflow.phase}），本次普通任务已跳过`;
@@ -13327,7 +13532,7 @@ function scheduleMessage(payload, force = false, delay = 0, triggerSource = 'aut
                 return;
             if (messageIdentity(index) !== scheduledIdentity || messageFingerprint(index) !== scheduledFingerprint)
                 return;
-            const state = await getChatState(scheduledChatKey);
+            const state = await readChatState(scheduledChatKey);
             if (!messageInsideRecordingBoundary(state, index))
                 return;
             const workflow = readHistoryWorkflow(state);
@@ -13397,7 +13602,7 @@ async function invalidateHistory(payload, reason) {
         console.warn('[MirrorAbyss] ignored unlocatable history event without artifact mismatch', reason, payload);
         return;
     }
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     if (currentChatKey() !== chatKey)
         throw new Error('聊天已切换，历史变化不再写入');
     const boundaryStart = recordingStartIndex(state);
@@ -13407,7 +13612,7 @@ async function invalidateHistory(payload, reason) {
         // 起点之前的内容不属于游戏记录。删除会让后续数组序号整体左移，因此只校正边界，不触发历史重建。
         if (reason === 'deleted') {
             state.recordingBoundary = { ...state.recordingBoundary, startIndex: Math.max(0, boundaryStart - 1) };
-            await putChatState(state);
+            await commitChatState(state);
         }
         return;
     }
@@ -13416,7 +13621,7 @@ async function invalidateHistory(payload, reason) {
     taskQueue.cancelPendingByChatKey(chatKey, '历史消息已变化，旧排队任务已取消');
     if (detectedIndex === null) {
         invalidateHistoryWorkflow(state, { reason });
-        await putChatState(state);
+        await commitChatState(state);
         await pauseLorebookForHistoryChange(chatKey);
         toast('warning', '检测到历史消息删除，但无法判断位置。现有记忆已保留，世界书同步暂停；请在镜渊中选择重算起点');
         notifyFrom(0);
@@ -13439,8 +13644,8 @@ async function invalidateHistory(payload, reason) {
     state.processedMessageKeys = state.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
     state.latestSnapshotMessageKey = state.processedMessageKeys.at(-1);
     replayRuntimeForValidMessages(state, validPrefixKeys);
-    await persistChatFor(chatKey);
-    await putChatState(state);
+    await saveHostChat(chatKey);
+    await commitChatState(state);
     await pauseLorebookForHistoryChange(chatKey);
     notifyFrom(index);
     if (latestOnly) {
@@ -13469,7 +13674,7 @@ async function recalculateInvalidatedHistory() {
         await taskQueue.whenIdle();
         if (currentChatKey() !== chatKey)
             throw new Error('聊天已切换，历史重算已停止');
-        const state = await getChatState(chatKey);
+        const state = await readChatState(chatKey);
         const workflow = readHistoryWorkflow(state);
         const boundaryStart = recordingStartIndex(state);
         const startIndex = workflow.startIndex === undefined || boundaryStart === undefined
@@ -13505,7 +13710,7 @@ async function recalculateInvalidatedHistory() {
             totalCount: processableIndexes.length,
             phase: remainingIndexes.length ? 'rebuilding-core' : 'rebuilding-derived',
         });
-        await putChatState(state);
+        await commitChatState(state);
         let latest = null;
         const recoveredMessageKeys = new Set();
         for (const index of processableIndexes.slice(0, completedBeforeRun)) {
@@ -13523,28 +13728,28 @@ async function recalculateInvalidatedHistory() {
                     recoveredMessageKeys.add(latest.messageKey);
                 if (currentChatKey() !== chatKey)
                     throw new Error('聊天已切换，历史重算已停止');
-                if (!latest || latest.stages.state.status === 'failed' || latest.stages.state.status === 'blocked') {
-                    const stageError = latest?.stages.state.error || '状态表未成功';
+                if (!latest || artifactIntentStep(latest, 'state').status === 'failed' || artifactIntentStep(latest, 'state').status === 'blocked') {
+                    const stageError = latest ? artifactIntentStep(latest, 'state').error || '状态表未成功' : '状态表未成功';
                     throw new Error(stageError);
                 }
-                const completedState = await getChatState(chatKey);
+                const completedState = await readChatState(chatKey);
                 updateHistoryRecovery(completedState, {
                     completedCount: absolutePosition + 1,
                     currentIndex: processableIndexes[absolutePosition + 1] ?? index,
                     phase: 'rebuilding-core',
                     error: undefined,
                 });
-                await putChatState(completedState);
+                await commitChatState(completedState);
             }
             catch (error) {
                 const detail = toErrorMessage(error);
-                const failedState = await getChatState(chatKey);
+                const failedState = await readChatState(chatKey);
                 const failedWorkflow = readHistoryWorkflow(failedState);
                 if (!failedWorkflow.recovery && workflow.recovery) {
                     beginHistoryRecovery(failedState, workflow.recovery);
                 }
                 failHistoryRecovery(failedState, detail, { currentIndex: index, completedCount: absolutePosition });
-                await putChatState(failedState);
+                await commitChatState(failedState);
                 throw new Error(`历史重建未完成：第 ${index + 1} 条消息的状态提取失败。${detail}`);
             }
         }
@@ -13553,14 +13758,14 @@ async function recalculateInvalidatedHistory() {
         const recoveryInfo = latest
             ? { index: latest.messageIndex, artifact: latest }
             : latestSnapshotArtifact();
-        const freshState = await getChatState(chatKey);
+        const freshState = await readChatState(chatKey);
         if (!recoveryInfo) {
             await clearCurrentChatLorebookEntries(chatKey);
             completeHistoryWorkflow(freshState);
             freshState.lastSyncError = undefined;
             freshState.lastSyncStatus = 'success';
             freshState.lastSyncAt = nowIso();
-            await putChatState(freshState);
+            await commitChatState(freshState);
             toast('success', '历史数据重算完成；当前没有可发布状态，已清除本聊天的镜渊世界书条目');
             return null;
         }
@@ -13568,7 +13773,7 @@ async function recalculateInvalidatedHistory() {
             phase: 'rebuilding-derived',
             currentIndex: recoveryInfo.index,
         });
-        await putChatState(freshState);
+        await commitChatState(freshState);
         const artifact = recoveryInfo.artifact;
         const revision = currentHistoryRevision(chatKey);
         const errors = [];
@@ -13589,9 +13794,9 @@ async function recalculateInvalidatedHistory() {
                     }
                     await saveArtifactToMessage(recoveryInfo.index, artifact);
                     if (resolveHostControl(getSettings()).lorebook && errors.length === 0) {
-                        const publishingState = await getChatState(chatKey);
+                        const publishingState = await readChatState(chatKey);
                         updateHistoryRecovery(publishingState, { phase: 'publishing-lorebook' });
-                        await putChatState(publishingState);
+                        await commitChatState(publishingState);
                         try {
                             await runTrackedRuntimeEffect({
                                 artifact,
@@ -13640,10 +13845,10 @@ async function recalculateInvalidatedHistory() {
             if (errors.length === 0)
                 errors.push(toErrorMessage(error));
         }
-        const finalState = await getChatState(chatKey);
+        const finalState = await readChatState(chatKey);
         if (errors.length) {
             markHistoryRecoveryPartial(finalState, errors.join('；'));
-            await putChatState(finalState);
+            await commitChatState(finalState);
             toast('warning', `历史核心状态已重算完成，但部分派生恢复失败：${errors.join('；')}`);
         }
         else {
@@ -13652,7 +13857,7 @@ async function recalculateInvalidatedHistory() {
                 finalState.lastSyncStatus = 'idle';
                 finalState.lastSyncError = undefined;
             }
-            await putChatState(finalState);
+            await commitChatState(finalState);
             toast('success', resolveHostControl(getSettings()).lorebook ? '历史数据重算完成，世界书同步已恢复' : '历史数据重算完成；自动世界书同步当前已关闭');
         }
         return artifact;
@@ -13667,7 +13872,7 @@ async function chooseHistoryRecalculationStart(startIndex) {
     if (!getSettings().enabled)
         throw new Error('镜渊已关闭，请先启用');
     const chatKey = currentChatKey();
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     if (currentChatKey() !== chatKey)
         throw new Error('聊天已切换，不再修改历史重算范围');
     if (!readHistoryWorkflow(state).invalidation)
@@ -13688,8 +13893,8 @@ async function chooseHistoryRecalculationStart(startIndex) {
     state.processedMessageKeys = state.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
     state.latestSnapshotMessageKey = state.processedMessageKeys.at(-1);
     replayRuntimeForValidMessages(state, validPrefixKeys);
-    await persistChatFor(chatKey);
-    await putChatState(state);
+    await saveHostChat(chatKey);
+    await commitChatState(state);
     notifyFrom(index);
 }
 /**
@@ -13732,7 +13937,7 @@ async function retryStage(index, stage) {
         if (currentChatKey() !== chatKey)
             throw new TaskSkippedError('聊天已切换，本次阶段重试不再处理');
         assertHistoryRevisionCurrent(chatKey, scheduledHistoryRevision);
-        const currentState = await getChatState(chatKey);
+        const currentState = await readChatState(chatKey);
         if (readHistoryWorkflow(currentState).blocked && ['state', 'summary', 'sync'].includes(stage)) {
             throw new TaskBlockedError(historyBlockedMessage(currentState));
         }
@@ -14089,10 +14294,10 @@ async function beginPlayRecording() {
             if (message?.extra?.[LEGACY_MODULE_NAME])
                 delete message.extra[LEGACY_MODULE_NAME];
         }
-        const state = emptyChatState(sourceChatKey);
+        const state = createEmptyChatState(sourceChatKey);
         state.recordingBoundary = createPlayerRecordingBoundary(getChat().length);
-        await persistChatFor(sourceChatKey);
-        await putChatState(state);
+        await saveHostChat(sourceChatKey);
+        await commitChatState(state);
         notifyFrom(0);
         return { boundary: state.recordingBoundary, clearedArtifacts, lorebookEntries };
     }
@@ -14144,10 +14349,10 @@ async function resetCurrentGame() {
         const context = getContext();
         if (context.chatMetadata?.[LEGACY_MODULE_NAME])
             delete context.chatMetadata[LEGACY_MODULE_NAME];
-        await persistChatFor(sourceChatKey);
+        await saveHostChat(sourceChatKey);
         if (currentChatKey() !== sourceChatKey)
             throw new Error('聊天已切换，已停止重置当前游戏');
-        await persistMetadataFor(sourceChatKey);
+        await saveHostMetadata(sourceChatKey);
         notifyFrom(0);
         return { messages, lorebookEntries };
     }
@@ -14257,8 +14462,9 @@ Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurabl
 Object.defineProperty(__scope,"artifactCommitHash",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["artifactCommitHash"]});
 Object.defineProperty(__scope,"reconcileReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["reconcileReliableWorkflow"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
+Object.defineProperty(__scope,"projectRuntimeEffects",{enumerable:true,configurable:true,get:()=>__require("application/effect-projection.js")["projectRuntimeEffects"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
 Object.defineProperty(__scope,"reliableWorkerId",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["reliableWorkerId"]});
 with(__scope){
@@ -14330,7 +14536,7 @@ function reconcileRuntimeOutbox(runtime, now = new Date()) {
 
 async function reconcileReliableRuntime() {
     const chatKey = currentChatKey();
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     const liveCommandIds = taskQueue.list()
         .filter((task) => ['queued', 'running'].includes(String(task.state)))
         .map((task) => task.commandId)
@@ -14343,8 +14549,9 @@ async function reconcileReliableRuntime() {
     const changed = reliable.changed || runtime.recovered > 0;
     state.reliableWorkflow = reliable.workflow;
     state.runtimeV2 = runtime.runtime;
+    projectRuntimeEffects(state);
     if (changed)
-        await putChatState(state);
+        await commitChatState(state);
     return {
         changed,
         workflow: reliable.report,
@@ -14364,8 +14571,8 @@ Object.defineProperty(__scope,"claimCommand",{enumerable:true,configurable:true,
 Object.defineProperty(__scope,"heartbeatCommand",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["heartbeatCommand"]});
 Object.defineProperty(__scope,"mapHostEvent",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["mapHostEvent"]});
 Object.defineProperty(__scope,"settleCommand",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["settleCommand"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
 with(__scope){
 Object.defineProperty(exports,"receivePersistentHostEvent",{enumerable:true,configurable:true,get:()=>receivePersistentHostEvent});
 Object.defineProperty(exports,"beginPersistentCommand",{enumerable:true,configurable:true,get:()=>beginPersistentCommand});
@@ -14387,15 +14594,15 @@ function reliableWorkerId() {
 }
 
 async function receivePersistentHostEvent(event) {
-    const state = await getChatState(event.chatKey);
+    const state = await readChatState(event.chatKey);
     const accepted = acceptHostEvent(state.reliableWorkflow, event);
     state.reliableWorkflow = accepted.workflow;
-    await putChatState(state);
+    await commitChatState(state);
     return accepted;
 }
 
 async function beginPersistentCommand(options) {
-    const state = await getChatState(options.chatKey);
+    const state = await readChatState(options.chatKey);
     const claimed = claimCommand(state.reliableWorkflow, {
         ...options,
         owner: WORKER_ID,
@@ -14411,12 +14618,12 @@ async function beginPersistentCommand(options) {
         });
         state.reliableWorkflow = mapped.workflow;
     }
-    await putChatState(state);
+    await commitChatState(state);
     return claimed;
 }
 
 async function settlePersistentCommand(options) {
-    const state = await getChatState(options.chatKey);
+    const state = await readChatState(options.chatKey);
     const settled = settleCommand(
         state.reliableWorkflow,
         options.commandId,
@@ -14440,7 +14647,7 @@ async function settlePersistentCommand(options) {
         });
         state.reliableWorkflow = mapped.workflow;
     }
-    await putChatState(state);
+    await commitChatState(state);
     return settled;
 }
 
@@ -14465,11 +14672,11 @@ function startPersistentCommandHeartbeat({ chatKey, commandId, leaseToken }) {
             return;
         running = true;
         try {
-            const state = await getChatState(chatKey);
+            const state = await readChatState(chatKey);
             const heartbeat = heartbeatCommand(state.reliableWorkflow, commandId, leaseToken, new Date(), COMMAND_LEASE_MS);
             if (heartbeat.updated) {
                 state.reliableWorkflow = heartbeat.workflow;
-                await putChatState(state);
+                await commitChatState(state);
             }
         }
         catch (error) {
@@ -14548,7 +14755,7 @@ Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"revisionSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionSystemPrompt"]});
 Object.defineProperty(__scope,"revisionUserPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionUserPrompt"]});
-Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
+Object.defineProperty(__scope,"persistArtifact",{enumerable:true,configurable:true,get:()=>__require("application/artifact-commands.js")["persistArtifact"]});
 Object.defineProperty(__scope,"applyAuditVisibility",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["applyAuditVisibility"]});
 Object.defineProperty(__scope,"auditText",{enumerable:true,configurable:true,get:()=>__require("pipeline/audit.js")["auditText"]});
 with(__scope){
@@ -14586,14 +14793,14 @@ async function runRevisionFlow(artifact) {
         artifact.revision.status = 'blocked';
         artifact.revision.stoppedReason = firstAudit.reason || '审核判定无法局部修正';
         markStage(artifact, 'revision', 'blocked', artifact.revision.stoppedReason);
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         return { approved: false, audit: firstAudit };
     }
     artifact.hiddenByAudit = true;
     applyAuditVisibility(artifact.messageIndex, true);
     artifact.revision.status = 'running';
     markStage(artifact, 'revision', 'running');
-    await putArtifact(artifact);
+    await persistArtifact(artifact);
     let sourceText = artifact.assistantText;
     let currentAudit = firstAudit;
     let previousViolationFingerprint = firstAudit.violationFingerprint;
@@ -14643,7 +14850,7 @@ async function runRevisionFlow(artifact) {
                 artifact.hiddenByAudit = false;
                 markStage(artifact, 'audit', 'success');
                 markStage(artifact, 'revision', 'success');
-                await putArtifact(artifact);
+                await persistArtifact(artifact);
                 return { approved: true, audit: candidateAudit };
             }
             const sameViolation = Boolean(settings.stopOnRepeatedViolation &&
@@ -14655,7 +14862,7 @@ async function runRevisionFlow(artifact) {
                     ? candidateAudit.reason
                     : '修正后重复出现相同违规，已停止循环';
                 markStage(artifact, 'revision', 'blocked', artifact.revision.stoppedReason);
-                await putArtifact(artifact);
+                await persistArtifact(artifact);
                 return { approved: false, audit: candidateAudit };
             }
             sourceText = candidate;
@@ -14663,12 +14870,12 @@ async function runRevisionFlow(artifact) {
             previousViolationFingerprint = candidateAudit.violationFingerprint;
             // 候选正文尚未提交，artifact.audit 必须继续对应玩家当前可见正文。
             // 候选审核保存在 revision.attempts 中，供诊断与下一次循环使用。
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
         }
         artifact.revision.status = 'failed';
         artifact.revision.stoppedReason = `达到最大自动修正次数（${maxAttempts}）`;
         markStage(artifact, 'revision', 'failed', artifact.revision.stoppedReason);
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         return { approved: false, audit: artifact.audit ?? firstAudit };
     }
     catch (error) {
@@ -14678,7 +14885,7 @@ async function runRevisionFlow(artifact) {
             artifact.hiddenByAudit = false;
             applyAuditVisibility(artifact.messageIndex, false, true);
             markStage(artifact, 'revision', 'cancelled', artifact.revision.stoppedReason);
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
             throw error;
         }
         artifact.revision.status = 'failed';
@@ -14686,7 +14893,7 @@ async function runRevisionFlow(artifact) {
         artifact.hiddenByAudit = false;
         applyAuditVisibility(artifact.messageIndex, false, true);
         markStage(artifact, 'revision', 'failed', `修正执行失败：${artifact.revision.stoppedReason}`);
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         throw error;
     }
 }
@@ -14698,10 +14905,6 @@ const __scope=Object.create(null);
 Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
 Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
-Object.defineProperty(__scope,"claimEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["claimEffect"]});
-Object.defineProperty(__scope,"heartbeatEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["heartbeatEffect"]});
-Object.defineProperty(__scope,"recordEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["recordEffect"]});
-Object.defineProperty(__scope,"settleEffect",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["settleEffect"]});
 Object.defineProperty(__scope,"enqueueLorebookProjection",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueLorebookProjection"]});
 Object.defineProperty(__scope,"enqueueSummaryEffect",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["enqueueSummaryEffect"]});
 Object.defineProperty(__scope,"markRuntimeJobCancelledById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobCancelledById"]});
@@ -14709,8 +14912,9 @@ Object.defineProperty(__scope,"markRuntimeJobDoneById",{enumerable:true,configur
 Object.defineProperty(__scope,"markRuntimeJobFailedById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobFailedById"]});
 Object.defineProperty(__scope,"markRuntimeJobRunningById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["markRuntimeJobRunningById"]});
 Object.defineProperty(__scope,"heartbeatRuntimeJobById",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["heartbeatRuntimeJobById"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
+Object.defineProperty(__scope,"projectRuntimeEffects",{enumerable:true,configurable:true,get:()=>__require("application/effect-projection.js")["projectRuntimeEffects"]});
 with(__scope){
 Object.defineProperty(exports,"transitionRuntimeJob",{enumerable:true,configurable:true,get:()=>transitionRuntimeJob});
 Object.defineProperty(exports,"runTrackedRuntimeEffect",{enumerable:true,configurable:true,get:()=>runTrackedRuntimeEffect});
@@ -14726,48 +14930,6 @@ Object.defineProperty(exports,"startRuntimeJobHeartbeat",{enumerable:true,config
 const EFFECT_WORKER_ID = makeId('effect_worker');
 const EFFECT_LEASE_MS = 10 * 60_000;
 const EFFECT_HEARTBEAT_MS = 60_000;
-function reliableEffectId(jobId) {
-    return `runtime_effect_${jobId}`;
-}
-function ensureReliableEffect(state, job) {
-    const recorded = recordEffect(state.reliableWorkflow, {
-        effectId: reliableEffectId(job.id),
-        intentId: job.intentId,
-        commandId: `${job.intentId || 'runtime'}:outbox:${job.id}`,
-        type: job.type,
-        target: job.turnKey,
-        payload: { jobId: job.id, sourceRevision: job.sourceRevision, turnKey: job.turnKey },
-    });
-    state.reliableWorkflow = recorded.workflow;
-    return recorded.effect;
-}
-function mirrorReliableEffect(state, job, status, error = '', options = {}) {
-    if (!job)
-        return;
-    const effect = ensureReliableEffect(state, job);
-    if (status === 'running') {
-        const claimed = claimEffect(state.reliableWorkflow, effect.effectId, {
-            leaseOwner: job.claimedBy,
-            leaseToken: job.leaseToken,
-            leaseUntil: job.leaseUntil,
-        });
-        state.reliableWorkflow = claimed.workflow;
-        return;
-    }
-    if (status === 'heartbeat') {
-        const heartbeat = heartbeatEffect(state.reliableWorkflow, effect.effectId, options.leaseToken, {
-            leaseUntil: job.leaseUntil,
-        });
-        state.reliableWorkflow = heartbeat.workflow;
-        return;
-    }
-    const settled = settleEffect(state.reliableWorkflow, effect.effectId, status === 'done' ? 'done' : status === 'cancelled' ? 'cancelled' : 'failed', {
-        error,
-        receipt: job.receipt,
-    });
-    state.reliableWorkflow = settled.workflow;
-}
-
 function cancellationError(error) {
     return error instanceof CommitRejectedError
         || (error instanceof Error && ['AbortError', 'CommitRejectedError', 'TaskBlockedError', 'TaskSkippedError'].includes(error.name));
@@ -14782,7 +14944,7 @@ function createJob(chatState, artifact, type, kind, reason) {
 }
 
 async function transitionRuntimeJob(chatKey, jobId, status, artifact, error = '', options = {}) {
-    const state = await getChatState(chatKey);
+    const state = await readChatState(chatKey);
     let job;
     if (status === 'running') {
         job = markRuntimeJobRunningById(state, jobId, {
@@ -14808,8 +14970,8 @@ async function transitionRuntimeJob(chatKey, jobId, status, artifact, error = ''
     else {
         job = markRuntimeJobFailedById(state, jobId, error, { leaseToken: options.leaseToken });
     }
-    mirrorReliableEffect(state, job, status, error, options);
-    await putChatState(state);
+    projectRuntimeEffects(state);
+    await commitChatState(state);
     return job;
 }
 
@@ -14838,11 +15000,11 @@ async function runTrackedRuntimeEffect({ artifact, type, kind = '', reason, work
     if (typeof work !== 'function')
         throw new Error('派生任务缺少执行函数');
 
-    const initialState = await getChatState(artifact.chatKey);
+    const initialState = await readChatState(artifact.chatKey);
     const job = createJob(initialState, artifact, type, kind, reason);
     const claimed = markRuntimeJobRunningById(initialState, job.id, { owner: EFFECT_WORKER_ID, leaseMs: EFFECT_LEASE_MS });
-    mirrorReliableEffect(initialState, claimed, 'running');
-    await putChatState(initialState);
+    projectRuntimeEffects(initialState);
+    await commitChatState(initialState);
     if (!claimed || claimed.claimAccepted === false)
         throw new CommitRejectedError('派生任务已由另一执行者持有有效租约');
     const leaseToken = claimed.leaseToken;
@@ -14880,13 +15042,13 @@ async function recordCompletedSummaryEffects(artifact, kinds, reason = 'history-
     for (const kind of [...new Set(Array.isArray(kinds) ? kinds : [])]) {
         if (!['small', 'large'].includes(kind))
             continue;
-        const state = await getChatState(artifact.chatKey);
+        const state = await readChatState(artifact.chatKey);
         const job = enqueueSummaryEffect(state, artifact, kind, reason);
         const claimed = markRuntimeJobRunningById(state, job.id);
-        mirrorReliableEffect(state, claimed, 'running');
+        projectRuntimeEffects(state);
         const completed = markRuntimeJobDoneById(state, job.id, artifact, { leaseToken: claimed.leaseToken });
-        mirrorReliableEffect(state, completed, 'done');
-        await putChatState(state);
+        projectRuntimeEffects(state);
+        await commitChatState(state);
     }
 }
 
@@ -14923,8 +15085,8 @@ Object.defineProperty(__scope,"parseStateTextOutput",{enumerable:true,configurab
 Object.defineProperty(__scope,"generateTask",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["generateTask"]});
 Object.defineProperty(__scope,"stateSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/state.js")["stateSystemPrompt"]});
 Object.defineProperty(__scope,"stateUserPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/state.js")["stateUserPrompt"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"persistArtifact",{enumerable:true,configurable:true,get:()=>__require("application/artifact-commands.js")["persistArtifact"]});
 Object.defineProperty(exports,"preserveProtectedRows",{enumerable:true,configurable:true,get:()=>__require("domain/memory-state-machine.js")["preserveProtectedRows"]});
 with(__scope){
 Object.defineProperty(exports,"runStateExtraction",{enumerable:true,configurable:true,get:()=>runStateExtraction});
@@ -15425,7 +15587,7 @@ async function runStateExtraction(artifact, force = false) {
     const active = enabledTables(registry);
     const expectedRegistryFingerprint = hashText(`${registryFingerprint(active)}|${tableLinkRulesFingerprint(settings.tableLinkRules, active)}`);
     const previous = dedupeStrongStateRows(previousSnapshot(artifact.messageIndex), registry);
-    const chatState = await getChatState(artifact.chatKey);
+    const chatState = await readChatState(artifact.chatKey);
     const activeFacts = stateContextFacts(chatState.internalFacts ?? [], previous, registry);
     const systemPrompt = stateSystemPrompt(registry, settings.statePrompts, settings.contentLimits, settings.tableLinkRules);
     const prompt = stateUserPrompt(previous, artifact.playerText, artifact.assistantText, registry, activeFacts);
@@ -15441,7 +15603,7 @@ async function runStateExtraction(artifact, force = false) {
         return normalizeSnapshot(artifact.snapshot, artifact.snapshot, registry);
     }
     markStage(artifact, 'state', 'running');
-    await putArtifact(artifact);
+    await persistArtifact(artifact);
     try {
         const raw = await requestStateText(artifact, previous, activeFacts, registry, systemPrompt, settings);
         let parsed;
@@ -15504,22 +15666,22 @@ async function runStateExtraction(artifact, force = false) {
         artifact.sceneBoundary = transition.sceneBoundary;
         artifact.stateInputFingerprint = inputFingerprint;
         markStage(artifact, 'state', 'success');
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         return normalized;
     }
     catch (error) {
         if (error instanceof RegistryChangedError) {
             markStage(artifact, 'state', 'idle');
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
             throw error;
         }
         if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name)) {
             markStage(artifact, 'state', 'cancelled', toErrorMessage(error));
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
             throw error;
         }
         markStage(artifact, 'state', 'failed', toErrorMessage(error));
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         throw error;
     }
 }
@@ -15530,7 +15692,6 @@ __defs["pipeline/summary.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
-Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
@@ -15551,9 +15712,10 @@ Object.defineProperty(__scope,"smallSummaryBatchPrompt",{enumerable:true,configu
 Object.defineProperty(__scope,"smallSummarySystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/summary.js")["smallSummarySystemPrompt"]});
 Object.defineProperty(__scope,"parseSummaryTextOutput",{enumerable:true,configurable:true,get:()=>__require("domain/summary-text.js")["parseSummaryTextOutput"]});
 Object.defineProperty(__scope,"eventClosedFromFacts",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventClosedFromFacts"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putArtifact",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putArtifact"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
+Object.defineProperty(__scope,"persistArtifact",{enumerable:true,configurable:true,get:()=>__require("application/artifact-commands.js")["persistArtifact"]});
+Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
 with(__scope){
 Object.defineProperty(exports,"generateSmallSummary",{enumerable:true,configurable:true,get:()=>generateSmallSummary});
 Object.defineProperty(exports,"generateLargeSummary",{enumerable:true,configurable:true,get:()=>generateLargeSummary});
@@ -15767,7 +15929,7 @@ function hasEligibleLargeSummary(small, large, threshold) {
 }
 async function generateSmallSummary(artifact, force = false) {
     const settings = getSettings();
-    const chatState = await getChatState(artifact.chatKey);
+    const chatState = await readChatState(artifact.chatKey);
     const threshold = Math.max(1, Math.round(Number(settings.smallSummaryTurns) || 12));
     // 尽量一次处理所有到期事件线；上限只防止极端输入重新撞上网关超时。
     const boundaryEventIds = artifact.sceneBoundary?.eventIds ?? [];
@@ -15851,11 +16013,11 @@ async function generateSmallSummary(artifact, force = false) {
             }
             artifact.snapshot = nextSnapshot;
             assertArtifactCommitCurrent(artifact);
-            await persistChatFor(artifact.chatKey);
+            await saveHostChat(artifact.chatKey);
         }
         // 小总结是加工容器：同一事件只保留当前累计版本，旧版本在完成对象分发后退出。
         chatState.smallSummaries = chatState.smallSummaries.filter((item) => !item.supersededBySmallSummaryId);
-        await putChatState(chatState);
+        await commitChatState(chatState);
     }
     catch (error) {
         artifact.snapshot = previousSnapshot;
@@ -15863,7 +16025,7 @@ async function generateSmallSummary(artifact, force = false) {
         chatState.smallSummaries = previousSummaries;
         try {
             assertArtifactCommitCurrent(artifact);
-            await persistChatFor(artifact.chatKey).catch(() => undefined);
+            await saveHostChat(artifact.chatKey).catch(() => undefined);
         }
         catch {
             // 聊天或正文已变化，旧任务回滚不得接触新聊天。
@@ -15874,7 +16036,7 @@ async function generateSmallSummary(artifact, force = false) {
 }
 async function generateLargeSummary(artifact, force = false) {
     const settings = getSettings();
-    const chatState = await getChatState(artifact.chatKey);
+    const chatState = await readChatState(artifact.chatKey);
     const threshold = Math.max(1, Number(settings.largeSummaryCount) || 4);
     // 尽量一次处理所有到期事件线；设上限只用于防止极端输入重新撞上网关超时。
     const groups = pendingLargeEventGroups(chatState.smallSummaries, chatState.largeSummaries, threshold, force).slice(0, 8);
@@ -15962,7 +16124,7 @@ async function generateLargeSummary(artifact, force = false) {
             }
             artifact.snapshot = nextSnapshot;
             assertArtifactCommitCurrent(artifact);
-            await persistChatFor(artifact.chatKey);
+            await saveHostChat(artifact.chatKey);
         }
         // 大总结完成固化后，已消费的小总结不再作为独立条目保留。
         const consumedSmallIds = new Set(generated.flatMap(({ group }) => group.consumedVersionIds));
@@ -15977,8 +16139,8 @@ async function generateLargeSummary(artifact, force = false) {
                 return false;
             return true;
         });
-        await putChatState(chatState);
-        const readBack = await getChatState(artifact.chatKey);
+        await commitChatState(chatState);
+        const readBack = await readChatState(artifact.chatKey);
         const retainedGeneratedIds = new Set(generated
             .filter((item) => !item.group.closed)
             .map((item) => item.summary.id));
@@ -15994,7 +16156,7 @@ async function generateLargeSummary(artifact, force = false) {
         if (previousSnapshot) {
             try {
                 assertArtifactCommitCurrent(artifact);
-                await persistChatFor(artifact.chatKey).catch(() => undefined);
+                await saveHostChat(artifact.chatKey).catch(() => undefined);
             }
             catch {
                 // 聊天或正文已变化，旧总结回滚不得接触新聊天。
@@ -16013,28 +16175,28 @@ async function runSummaryStage(artifact, kind, force = false) {
     const preserveEarlierFailure = !force && previousStatus === 'failed';
     if (!preserveEarlierFailure)
         markStage(artifact, 'summary', 'running');
-    await putArtifact(artifact);
+    await persistArtifact(artifact);
     try {
         const generated = kind === 'small'
             ? await generateSmallSummary(artifact, force)
             : await generateLargeSummary(artifact, force);
         if (!preserveEarlierFailure)
             markStage(artifact, 'summary', generated || previousStatus === 'success' ? 'success' : 'skipped');
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         return Boolean(generated);
     }
     catch (error) {
         if (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name)) {
             if (!preserveEarlierFailure)
                 markStage(artifact, 'summary', 'cancelled', toErrorMessage(error));
-            await putArtifact(artifact);
+            await persistArtifact(artifact);
             throw error;
         }
         const label = kind === 'small' ? '小总结' : '大总结';
         const previous = artifactIntentStep(artifact, 'summary').error;
         const current = `${label}失败：${toErrorMessage(error)}`;
         markStage(artifact, 'summary', 'failed', previous && previous !== current ? `${previous}；${current}` : current);
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         throw error;
     }
 }
@@ -16051,7 +16213,7 @@ async function maybeRunSummaries(artifact, forceSmall = false, forceLarge = fals
         return;
     }
     const settings = getSettings();
-    const state = await getChatState(artifact.chatKey);
+    const state = await readChatState(artifact.chatKey);
     if (settings.autoSmallSummary && hasEligibleSmallSummary(
         state.internalFacts ?? [],
         settings.smallSummaryTurns,
@@ -16077,7 +16239,7 @@ async function rebuildEligibleSummaries(artifact) {
     const generatedKinds = new Set();
     const previousStatus = artifactIntentStep(artifact, 'summary').status;
     markStage(artifact, 'summary', 'running');
-    await putArtifact(artifact);
+    await persistArtifact(artifact);
     if (settings.autoSmallSummary) {
         try {
             while (await generateSmallSummary(artifact, false)) {
@@ -16108,13 +16270,13 @@ async function rebuildEligibleSummaries(artifact) {
     }
     if (errors.length) {
         markStage(artifact, 'summary', 'failed', errors.join('；'));
-        await putArtifact(artifact);
+        await persistArtifact(artifact);
         throw new Error(errors.join('；'));
     }
     markStage(artifact, 'summary', generatedAny || previousStatus === 'success'
         ? 'success'
         : 'skipped');
-    await putArtifact(artifact);
+    await persistArtifact(artifact);
     return [...generatedKinds];
 }
 
@@ -18041,6 +18203,7 @@ function narrativeContextText(context) {
 __defs["runtime-v2/replay.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"advanceRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/orchestrator.js")["advanceRuntimeV2"]});
 Object.defineProperty(__scope,"emptyRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["emptyRuntimeV2"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
@@ -18057,7 +18220,7 @@ function committedArtifacts(artifacts) {
     return (Array.isArray(artifacts) ? artifacts : [])
         .filter((artifact) => Boolean(artifact?.messageKey
             && artifact?.snapshot
-            && artifact?.stages?.state?.status === 'success'))
+            && artifactIntentStep(artifact, 'state').status === 'success'))
         .sort((left, right) => Number(left.messageIndex) - Number(right.messageIndex));
 }
 
@@ -18375,8 +18538,6 @@ Object.defineProperty(__scope,"getChatMetadataNamespace",{enumerable:true,config
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"assertChatCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertChatCommitCurrent"]});
 Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
-Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
-Object.defineProperty(__scope,"persistMetadataFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistMetadataFor"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"mergeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["mergeInternalFacts"]});
 Object.defineProperty(__scope,"migrateLegacyConsumption",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["migrateLegacyConsumption"]});
@@ -18397,9 +18558,18 @@ Object.defineProperty(__scope,"emptyRuntimeV2",{enumerable:true,configurable:tru
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
 Object.defineProperty(__scope,"emptyReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["emptyReliableWorkflow"]});
 Object.defineProperty(__scope,"normalizeReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["normalizeReliableWorkflow"]});
+Object.defineProperty(__scope,"StateConflictError",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["StateConflictError"]});
+Object.defineProperty(__scope,"stateWorkingCopyMetadata",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["stateWorkingCopyMetadata"]});
+Object.defineProperty(__scope,"threeWayMergeState",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["threeWayMergeState"]});
+Object.defineProperty(__scope,"trackStateWorkingCopy",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["trackStateWorkingCopy"]});
+Object.defineProperty(__scope,"withChatStateLock",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["withChatStateLock"]});
+Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
+Object.defineProperty(__scope,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostMetadata"]});
+Object.defineProperty(exports,"StateConflictError",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["StateConflictError"]});
 with(__scope){
 Object.defineProperty(exports,"putArtifact",{enumerable:true,configurable:true,get:()=>putArtifact});
 Object.defineProperty(exports,"putChatState",{enumerable:true,configurable:true,get:()=>putChatState});
+Object.defineProperty(exports,"mutateChatState",{enumerable:true,configurable:true,get:()=>mutateChatState});
 Object.defineProperty(exports,"clearAllStorage",{enumerable:true,configurable:true,get:()=>clearAllStorage});
 Object.defineProperty(exports,"emptyChatState",{enumerable:true,configurable:true,get:()=>emptyChatState});
 Object.defineProperty(exports,"migrateLegacySmallSummaryVersions",{enumerable:true,configurable:true,get:()=>migrateLegacySmallSummaryVersions});
@@ -18409,7 +18579,7 @@ Object.defineProperty(exports,"CURRENT_SCHEMA_VERSION",{enumerable:true,configur
  * 模块职责：定义消息 artifact 与聊天级 ChatState 的存储边界，并迁移 rc.19 事实/总结数据。
  * 维护边界：消息结果附着 message.extra；内部事实与消费标记写入当前 chatMetadata，并在保存前后校验 chatKey。
  */
-const CURRENT_SCHEMA_VERSION = 7;
+const CURRENT_SCHEMA_VERSION = 8;
 /** ChatState 是持久化 JSON 数据；使用 JSON 副本兼容 SillyTavern/插件可能提供的 Proxy 包装对象。 */
 function cloneChatState(value) {
     return JSON.parse(JSON.stringify(value));
@@ -18418,6 +18588,7 @@ function emptyChatState(chatKey) {
     return {
         schemaVersion: CURRENT_SCHEMA_VERSION,
         memoryStateVersion: 2,
+        storeRevision: 0,
         chatKey,
         processedMessageKeys: [],
         internalFacts: [],
@@ -18820,6 +18991,7 @@ function migrateChatState(raw, chatKey) {
         factContractV35: true,
     };
     state.reliableWorkflow = normalizeReliableWorkflow(state.reliableWorkflow);
+    state.storeRevision = Math.max(0, Number(state.storeRevision) || 0);
     state.updatedAt ||= nowIso();
     return {
         state,
@@ -18830,8 +19002,17 @@ function migrateChatState(raw, chatKey) {
     };
 }
 /** Canonical message artifacts live on message.extra. */
-async function putArtifact(_artifact) {
-    // The live artifact object is already attached to the SillyTavern message.
+async function putArtifact(artifact) {
+    if (!artifact?.chatKey)
+        throw new Error('artifact 持久化缺少 chatKey');
+    // Artifact lives on message.extra, but mutation is not durable until the host chat is saved.
+    // Keep the compatibility API while making its contract real instead of a silent no-op.
+    await saveHostChat(artifact.chatKey);
+    return {
+        chatKey: artifact.chatKey,
+        messageKey: artifact.messageKey || '',
+        persistedAt: nowIso(),
+    };
 }
 const chatStateReads = new Map();
 const REQUIRED_MIGRATIONS = [
@@ -18854,6 +19035,8 @@ function currentStateStructure(raw, chatKey) {
         return false;
     const state = raw;
     if (state.schemaVersion !== CURRENT_SCHEMA_VERSION || state.memoryStateVersion !== 2 || state.chatKey !== chatKey)
+        return false;
+    if (!Number.isInteger(state.storeRevision) || state.storeRevision < 0)
         return false;
     if (!Array.isArray(state.processedMessageKeys)
         || !Array.isArray(state.internalFacts)
@@ -18890,7 +19073,7 @@ async function readCurrentChatStateFast(namespace, state, chatKey) {
         return cloneChatState(state);
     namespace.state = next;
     try {
-        await persistMetadataFor(chatKey);
+        await saveHostMetadata(chatKey);
         return cloneChatState(next);
     }
     catch (error) {
@@ -18932,12 +19115,12 @@ async function readChatState(chatKey) {
     let chatPersisted = false;
     try {
         if (migration.artifactViewsChanged) {
-            await persistChatFor(chatKey);
+            await saveHostChat(chatKey);
             chatPersisted = true;
         }
         namespace.state = migration.state;
         if (migration.metadataChanged)
-            await persistMetadataFor(chatKey);
+            await saveHostMetadata(chatKey);
         // 调用方拿到工作副本，只有 putChatState 成功后才进入聊天 metadata。
         // 避免保存失败时，未落盘修改仍污染当前运行期的规范状态。
         return cloneChatState(namespace.state);
@@ -18985,23 +19168,22 @@ function getChatState(chatKey) {
     const running = chatStateReads.get(chatKey);
     if (running)
         return running;
-    const pending = readChatState(chatKey).finally(() => {
+    const pending = withChatStateLock(chatKey, async () => {
+        const state = await readChatState(chatKey);
+        return trackStateWorkingCopy(state, state);
+    }).finally(() => {
         if (chatStateReads.get(chatKey) === pending)
             chatStateReads.delete(chatKey);
     });
     chatStateReads.set(chatKey, pending);
     return pending;
 }
-/** ChatState 只能写入其自身 chatKey 对应的当前聊天 metadata。 */
-async function putChatState(state) {
-    assertChatCommitCurrent(state.chatKey, '聊天已切换，不写入旧聊天状态');
-    const namespace = getChatMetadataNamespace();
-    const hadState = Object.prototype.hasOwnProperty.call(namespace, 'state');
-    const previousState = hadState ? cloneChatState(namespace.state) : undefined;
-    const hadUpdatedAt = Object.prototype.hasOwnProperty.call(namespace, 'updatedAt');
-    const previousUpdatedAt = namespace.updatedAt;
+
+function normalizeChatStateForWrite(state, latestRevision = 0) {
     const next = cloneChatState(state);
     next.schemaVersion = CURRENT_SCHEMA_VERSION;
+    next.memoryStateVersion = 2;
+    next.storeRevision = Math.max(0, Number(latestRevision) || 0) + 1;
     next.chatLocator = currentChatLocator() || next.chatLocator;
     next.internalFacts = normalizeInternalFacts(next.internalFacts);
     next.recordingBoundary = normalizeRecordingBoundary(next.recordingBoundary);
@@ -19012,16 +19194,38 @@ async function putChatState(state) {
         migrateLegacyConsumption(next.internalFacts, next.smallSummaries, next.largeSummaries);
     }
     next.updatedAt = nowIso();
+    return next;
+}
+
+async function persistChatStateUnlocked(state, sourceState = null) {
+    assertChatCommitCurrent(state.chatKey, '聊天已切换，不写入旧聊天状态');
+    const namespace = getChatMetadataNamespace();
+    const hadState = Object.prototype.hasOwnProperty.call(namespace, 'state');
+    const previousState = hadState ? cloneChatState(namespace.state) : undefined;
+    const hadUpdatedAt = Object.prototype.hasOwnProperty.call(namespace, 'updatedAt');
+    const previousUpdatedAt = namespace.updatedAt;
+    const latestRevision = Math.max(0, Number(namespace.state?.storeRevision) || 0);
+    const next = normalizeChatStateForWrite(state, latestRevision);
     namespace.state = next;
     namespace.updatedAt = next.updatedAt;
     try {
-        await persistMetadataFor(next.chatKey);
-        // 保持调用方后续继续使用同一工作对象时能看到规范化后的成功版本。
-        Object.assign(state, cloneChatState(next));
+        await saveHostMetadata(next.chatKey);
+        if (sourceState && typeof sourceState === 'object') {
+            for (const key of Object.keys(sourceState))
+                delete sourceState[key];
+            Object.assign(sourceState, cloneChatState(next));
+            trackStateWorkingCopy(sourceState, next);
+        }
+        return {
+            state: cloneChatState(next),
+            receipt: {
+                chatKey: next.chatKey,
+                revision: next.storeRevision,
+                committedAt: next.updatedAt,
+            },
+        };
     }
     catch (error) {
-        // 保存本身失败时回滚；若物理保存已完成、仅因随后切换聊天而拒绝继续提交，
-        // 源聊天对象必须保留已经落盘的状态，不能反向制造内存/磁盘分歧。
         if (!(error instanceof CommitRejectedError)) {
             if (hadState)
                 namespace.state = previousState;
@@ -19035,6 +19239,59 @@ async function putChatState(state) {
         throw error;
     }
 }
+
+/**
+ * 兼容旧调用的 ChatState 写入口。
+ *
+ * 所有写入按 chatKey 串行；若调用方基于旧修订修改状态，则执行三方合并。
+ * 非冲突字段会合并，同一字段被并发修改时显式抛出 StateConflictError，禁止静默覆盖。
+ */
+async function putChatState(state) {
+    if (!state?.chatKey)
+        throw new Error('ChatState 缺少 chatKey');
+    return withChatStateLock(state.chatKey, async () => {
+        assertChatCommitCurrent(state.chatKey, '聊天已切换，不写入旧聊天状态');
+        const namespace = getChatMetadataNamespace();
+        const latest = namespace.state && namespace.state.chatKey === state.chatKey
+            ? cloneChatState(namespace.state)
+            : emptyChatState(state.chatKey);
+        const metadata = stateWorkingCopyMetadata(state);
+        let candidate = cloneChatState(state);
+        if (metadata.revision !== Math.max(0, Number(latest.storeRevision) || 0)) {
+            if (!metadata.base) {
+                throw new StateConflictError(`ChatState 修订已变化：期望 ${metadata.revision}，实际 ${latest.storeRevision}`, ['storeRevision']);
+            }
+            candidate = threeWayMergeState(metadata.base, candidate, latest);
+        }
+        const committed = await persistChatStateUnlocked(candidate, state);
+        return committed.receipt;
+    });
+}
+
+/**
+ * 新业务代码的唯一推荐写入口。读取、修改、归一化和保存处于同一 per-chat 临界区，
+ * 因此不需要调用方自行实现重试或读改写。
+ */
+async function mutateChatState(chatKey, mutate, options = {}) {
+    if (typeof mutate !== 'function')
+        throw new TypeError('mutateChatState 需要 mutate 函数');
+    return withChatStateLock(chatKey, async () => {
+        const current = await readChatState(chatKey);
+        const draft = cloneChatState(current);
+        const result = await mutate(draft);
+        const committed = await persistChatStateUnlocked(draft);
+        return {
+            state: trackStateWorkingCopy(committed.state, committed.state),
+            receipt: {
+                ...committed.receipt,
+                commandId: String(options.commandId || ''),
+                reason: String(options.reason || ''),
+            },
+            result,
+        };
+    });
+}
+
 async function clearAllStorage(chatKey = currentChatKey()) {
     assertChatCommitCurrent(chatKey, '聊天已切换，不清理旧聊天状态');
     const namespace = getChatMetadataNamespace();
@@ -19048,7 +19305,7 @@ async function clearAllStorage(chatKey = currentChatKey()) {
     delete namespace.lorebookName;
     namespace.updatedAt = nowIso();
     try {
-        await persistMetadataFor(chatKey);
+        await saveHostMetadata(chatKey);
     }
     catch (error) {
         if (!(error instanceof CommitRejectedError)) {
@@ -19071,6 +19328,386 @@ async function clearAllStorage(chatKey = currentChatKey()) {
 
 }
 };
+__defs["storage/state-store.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"withChatStateLock",{enumerable:true,configurable:true,get:()=>withChatStateLock});
+Object.defineProperty(exports,"threeWayMergeState",{enumerable:true,configurable:true,get:()=>threeWayMergeState});
+Object.defineProperty(exports,"trackStateWorkingCopy",{enumerable:true,configurable:true,get:()=>trackStateWorkingCopy});
+Object.defineProperty(exports,"stateWorkingCopyMetadata",{enumerable:true,configurable:true,get:()=>stateWorkingCopyMetadata});
+Object.defineProperty(exports,"activeStateLocks",{enumerable:true,configurable:true,get:()=>activeStateLocks});
+Object.defineProperty(exports,"StateConflictError",{enumerable:true,configurable:true,get:()=>StateConflictError});
+/**
+ * 统一 ChatState 并发控制与三方合并。
+ *
+ * 维护边界：这里只处理持久状态的串行化、修订号和冲突检测；
+ * 不读取 SillyTavern 上下文，也不决定任何叙事业务规则。
+ */
+
+const writeTails = new Map();
+const workingCopies = new WeakMap();
+
+class StateConflictError extends Error {
+    constructor(message, paths = []) {
+        super(message);
+        this.name = 'StateConflictError';
+        this.paths = [...new Set(paths.map(String).filter(Boolean))];
+    }
+}
+
+function clone(value) {
+    return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function equal(a, b) {
+    if (Object.is(a, b))
+        return true;
+    return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function isPlainObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
+
+const IGNORED_CONFLICT_FIELDS = new Set([
+    'updatedAt',
+    'storeRevision',
+    'chatLocator',
+]);
+
+const SET_ARRAY_FIELDS = new Set([
+    'processedMessageKeys',
+    'processedTurnKeys',
+    'sourceKeys',
+    'sourceFactIds',
+    'sourceSummaryIds',
+    'eventIds',
+    'unresolvedItems',
+    'completedPrerequisites',
+    'activeEvents',
+    'effectiveFacts',
+]);
+
+const ID_FIELDS = [
+    'id',
+    'factId',
+    'eventKey',
+    'commandId',
+    'commitId',
+    'effectId',
+    'messageKey',
+];
+
+function pathTail(path) {
+    return path.split('.').at(-1)?.replace(/\[[^\]]+\]$/, '') || '';
+}
+
+function arrayIdentity(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item))
+        return '';
+    for (const field of ID_FIELDS) {
+        const value = String(item[field] ?? '').trim();
+        if (value)
+            return `${field}:${value}`;
+    }
+    return '';
+}
+
+function keyedArray(value) {
+    if (!Array.isArray(value) || value.length === 0)
+        return null;
+    const entries = [];
+    const seen = new Set();
+    for (const item of value) {
+        const key = arrayIdentity(item);
+        if (!key || seen.has(key))
+            return null;
+        seen.add(key);
+        entries.push([key, item]);
+    }
+    return entries;
+}
+
+function setArrayMerge(base, ours, theirs) {
+    const baseSet = new Set(base.map((item) => JSON.stringify(item)));
+    const ourSet = new Set(ours.map((item) => JSON.stringify(item)));
+    const output = [...theirs];
+    const outputSet = new Set(output.map((item) => JSON.stringify(item)));
+    for (const serialized of baseSet) {
+        if (!ourSet.has(serialized)) {
+            const index = output.findIndex((item) => JSON.stringify(item) === serialized);
+            if (index >= 0) {
+                output.splice(index, 1);
+                outputSet.delete(serialized);
+            }
+        }
+    }
+    for (const item of ours) {
+        const serialized = JSON.stringify(item);
+        if (!baseSet.has(serialized) && !outputSet.has(serialized)) {
+            output.push(clone(item));
+            outputSet.add(serialized);
+        }
+    }
+    return output;
+}
+
+function keyedArrayMerge(base, ours, theirs, path, conflicts) {
+    const baseEntries = keyedArray(base);
+    const ourEntries = keyedArray(ours);
+    const theirEntries = keyedArray(theirs);
+    if (!baseEntries || !ourEntries || !theirEntries)
+        return null;
+    const baseMap = new Map(baseEntries);
+    const ourMap = new Map(ourEntries);
+    const theirMap = new Map(theirEntries);
+    const keys = [...new Set([...baseMap.keys(), ...ourMap.keys(), ...theirMap.keys()])];
+    const merged = new Map();
+    for (const key of keys) {
+        const baseHas = baseMap.has(key);
+        const ourHas = ourMap.has(key);
+        const theirHas = theirMap.has(key);
+        const childPath = `${path}[${key}]`;
+        if (!ourHas && baseHas) {
+            if (!theirHas || equal(theirMap.get(key), baseMap.get(key)))
+                continue;
+            conflicts.push(childPath);
+            merged.set(key, clone(theirMap.get(key)));
+            continue;
+        }
+        if (!theirHas && baseHas) {
+            if (equal(ourMap.get(key), baseMap.get(key)))
+                continue;
+            conflicts.push(childPath);
+            merged.set(key, clone(ourMap.get(key)));
+            continue;
+        }
+        if (!baseHas) {
+            if (ourHas && theirHas && !equal(ourMap.get(key), theirMap.get(key))) {
+                conflicts.push(childPath);
+                merged.set(key, clone(theirMap.get(key)));
+            }
+            else if (ourHas) {
+                merged.set(key, clone(ourMap.get(key)));
+            }
+            else if (theirHas) {
+                merged.set(key, clone(theirMap.get(key)));
+            }
+            continue;
+        }
+        if (!ourHas || !theirHas)
+            continue;
+        merged.set(key, mergeNode(baseMap.get(key), ourMap.get(key), theirMap.get(key), childPath, conflicts));
+    }
+    const order = [];
+    for (const [key] of theirEntries)
+        if (merged.has(key))
+            order.push(key);
+    for (const [key] of ourEntries)
+        if (merged.has(key) && !order.includes(key))
+            order.push(key);
+    return order.map((key) => merged.get(key));
+}
+
+function mergeObject(base, ours, theirs, path, conflicts) {
+    const output = {};
+    const keys = new Set([
+        ...Object.keys(base ?? {}),
+        ...Object.keys(ours ?? {}),
+        ...Object.keys(theirs ?? {}),
+    ]);
+    for (const key of keys) {
+        const childPath = path ? `${path}.${key}` : key;
+        const baseHas = Object.prototype.hasOwnProperty.call(base ?? {}, key);
+        const ourHas = Object.prototype.hasOwnProperty.call(ours ?? {}, key);
+        const theirHas = Object.prototype.hasOwnProperty.call(theirs ?? {}, key);
+        if (IGNORED_CONFLICT_FIELDS.has(key)) {
+            if (theirHas)
+                output[key] = clone(theirs[key]);
+            else if (ourHas)
+                output[key] = clone(ours[key]);
+            continue;
+        }
+        if (!ourHas && baseHas) {
+            if (!theirHas || equal(theirs[key], base[key]))
+                continue;
+            conflicts.push(childPath);
+            output[key] = clone(theirs[key]);
+            continue;
+        }
+        if (!theirHas && baseHas) {
+            if (equal(ours[key], base[key]))
+                continue;
+            conflicts.push(childPath);
+            output[key] = clone(ours[key]);
+            continue;
+        }
+        if (!baseHas) {
+            if (ourHas && theirHas && !equal(ours[key], theirs[key])) {
+                if (isPlainObject(ours[key]) && isPlainObject(theirs[key]))
+                    output[key] = mergeNode({}, ours[key], theirs[key], childPath, conflicts);
+                else {
+                    conflicts.push(childPath);
+                    output[key] = clone(theirs[key]);
+                }
+            }
+            else if (ourHas) {
+                output[key] = clone(ours[key]);
+            }
+            else if (theirHas) {
+                output[key] = clone(theirs[key]);
+            }
+            continue;
+        }
+        if (!ourHas || !theirHas)
+            continue;
+        output[key] = mergeNode(base[key], ours[key], theirs[key], childPath, conflicts);
+    }
+    return output;
+}
+
+function mergeNode(base, ours, theirs, path, conflicts) {
+    if (equal(ours, base))
+        return clone(theirs);
+    if (equal(theirs, base))
+        return clone(ours);
+    if (equal(ours, theirs))
+        return clone(ours);
+    if (Array.isArray(base) && Array.isArray(ours) && Array.isArray(theirs)) {
+        const keyed = keyedArrayMerge(base, ours, theirs, path, conflicts);
+        if (keyed)
+            return keyed;
+        if (SET_ARRAY_FIELDS.has(pathTail(path)))
+            return setArrayMerge(base, ours, theirs);
+        conflicts.push(path);
+        return clone(theirs);
+    }
+    if (isPlainObject(base) && isPlainObject(ours) && isPlainObject(theirs))
+        return mergeObject(base, ours, theirs, path, conflicts);
+    conflicts.push(path);
+    return clone(theirs);
+}
+
+function threeWayMergeState(base, ours, theirs) {
+    const conflicts = [];
+    const merged = mergeNode(base ?? {}, ours ?? {}, theirs ?? {}, '', conflicts);
+    if (conflicts.length)
+        throw new StateConflictError(`ChatState 并发修改冲突：${conflicts.join(', ')}`, conflicts);
+    return merged;
+}
+
+function trackStateWorkingCopy(state, canonical = state) {
+    if (state && typeof state === 'object') {
+        workingCopies.set(state, {
+            base: clone(canonical),
+            revision: Math.max(0, Number(canonical?.storeRevision) || 0),
+        });
+    }
+    return state;
+}
+
+function stateWorkingCopyMetadata(state) {
+    const tracked = state && typeof state === 'object' ? workingCopies.get(state) : null;
+    if (tracked)
+        return { base: clone(tracked.base), revision: tracked.revision };
+    return {
+        base: null,
+        revision: Math.max(0, Number(state?.storeRevision) || 0),
+    };
+}
+
+async function withChatStateLock(chatKey, work) {
+    const key = String(chatKey || '');
+    const previous = writeTails.get(key) ?? Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => { release = resolve; });
+    writeTails.set(key, current);
+    await previous.catch(() => undefined);
+    try {
+        return await work();
+    }
+    finally {
+        release();
+        if (writeTails.get(key) === current)
+            writeTails.delete(key);
+    }
+}
+
+function activeStateLocks() {
+    return [...writeTails.keys()];
+}
+
+}
+};
+__defs["transport/authority.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"transportAuthorityStatus",{enumerable:true,configurable:true,get:()=>transportAuthorityStatus});
+/** Describes what part of the request chain Mirror Abyss can actually prove. */
+function transportAuthorityStatus(context) {
+    const bridge = context?.extensionSettings?.mirrorAbyssTransportBridge;
+    const serverVerified = bridge?.verified === true && typeof bridge?.policyVersion === 'string';
+    return {
+        mode: serverVerified ? 'server-verified' : 'browser-sanitized',
+        browserBoundary: true,
+        serverBoundary: serverVerified,
+        upstreamPayloadVerified: serverVerified,
+        policyVersion: serverVerified ? bridge.policyVersion : 'no-sampling-v1',
+        detail: serverVerified
+            ? '宿主服务端已声明在所有参数合并之后执行最终采样字段校验'
+            : '浏览器请求可净化；宿主服务端及其上游网关仍可重新构造 payload，UI 扩展不能证明最终上游请求',
+    };
+}
+
+}
+};
+__defs["transport/sampling-policy.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"stripForbiddenSamplingObject",{enumerable:true,configurable:true,get:()=>stripForbiddenSamplingObject});
+Object.defineProperty(exports,"forbiddenSamplingPaths",{enumerable:true,configurable:true,get:()=>forbiddenSamplingPaths});
+Object.defineProperty(exports,"SAMPLING_PARAMETER_KEYS",{enumerable:true,configurable:true,get:()=>SAMPLING_PARAMETER_KEYS});
+Object.defineProperty(exports,"SAMPLING_PARAMETER_SET",{enumerable:true,configurable:true,get:()=>SAMPLING_PARAMETER_SET});
+/** Shared forbidden sampling policy used by browser and server integrations. */
+const SAMPLING_PARAMETER_KEYS = Object.freeze([
+    'temperature', 'top_p', 'top_k', 'min_p', 'top_a', 'typical_p', 'tfs',
+    'epsilon_cutoff', 'eta_cutoff', 'mirostat_mode', 'mirostat_tau', 'mirostat_eta',
+    'dynatemp_range', 'dynatemp_exponent', 'smoothing_factor', 'smoothing_curve',
+    'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'penalty_alpha', 'seed',
+]);
+const SAMPLING_PARAMETER_SET = new Set(SAMPLING_PARAMETER_KEYS.map((key) => key.toLowerCase()));
+
+function stripForbiddenSamplingObject(payload, { recurseContainers = true } = {}) {
+    if (!payload || typeof payload !== 'object') return payload;
+    for (const key of Object.keys(payload)) {
+        if (SAMPLING_PARAMETER_SET.has(key.toLowerCase())) delete payload[key];
+    }
+    if (recurseContainers) {
+        for (const key of ['parameters', 'generation_config', 'generationConfig', 'sampling_params', 'samplingParams']) {
+            const nested = payload[key];
+            if (nested && typeof nested === 'object') stripForbiddenSamplingObject(nested, { recurseContainers: false });
+        }
+    }
+    return payload;
+}
+
+function forbiddenSamplingPaths(payload, prefix = '') {
+    if (!payload || typeof payload !== 'object') return [];
+    const found = [];
+    for (const [key, value] of Object.entries(payload)) {
+        const path = prefix ? `${prefix}.${key}` : key;
+        if (SAMPLING_PARAMETER_SET.has(key.toLowerCase())) found.push(path);
+        if (['parameters', 'generation_config', 'generationConfig', 'sampling_params', 'samplingParams'].includes(key))
+            found.push(...forbiddenSamplingPaths(value, path));
+    }
+    return found;
+}
+
+}
+};
 __defs["types.js"]=function(exports,__require){
 const __scope=Object.create(null);
 with(__scope){
@@ -19086,8 +19723,9 @@ Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:tru
 Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getChat"]});
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"tryGetContext",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["tryGetContext"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+Object.defineProperty(__scope,"modelTransportAuthorityStatus",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["modelTransportAuthorityStatus"]});
 Object.defineProperty(__scope,"requestTraceReport",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["requestTraceReport"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
 Object.defineProperty(__scope,"artifactIntentProjection",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentProjection"]});
@@ -19200,6 +19838,13 @@ async function runDiagnostics() {
             ? 'ConnectionManagerRequestService可用，不需要切换全局连接'
             : '不可用；Profile模式不可用，仍可使用当前聊天连接',
     });
+    const transportAuthority = context ? modelTransportAuthorityStatus() : null;
+    checks.push({
+        id: 'transportAuthority',
+        label: '模型最终请求权威边界',
+        status: transportAuthority?.upstreamPayloadVerified ? 'ok' : 'warn',
+        detail: transportAuthority?.detail || '宿主上下文不可用',
+    });
     checks.push({
         id: 'settingsPanel',
         label: '扩展设置入口',
@@ -19243,7 +19888,7 @@ async function runDiagnostics() {
             : '未启用自动修正',
     });
     if (context) {
-        const state = await getChatState(currentChatKey());
+        const state = await readChatState(currentChatKey());
         const history = historyStatus(state);
         checks.push({ id: 'history', label: '历史数据一致性', ...history });
         const sync = syncStatus(state);
@@ -19555,7 +20200,7 @@ async function diagnosticReport() {
     const context = tryGetContext();
     const chatKey = context ? currentChatKey() : 'unavailable';
     const settings = context ? getSettings() : null;
-    const chatState = context ? await getChatState(chatKey) : null;
+    const chatState = context ? await readChatState(chatKey) : null;
     return {
         version: VERSION,
         timestamp: new Date().toISOString(),
@@ -19572,6 +20217,7 @@ async function diagnosticReport() {
         intents: context ? getChat().map((message) => safeProcessingIntent(getAttachedArtifact(message))).filter(Boolean) : [],
         tasks: taskQueue.list().map(safeTask),
         requests: requestTraceReport().map(safeRequest),
+        transportAuthority: context ? modelTransportAuthorityStatus() : null,
         privacy: '诊断不包含玩家输入、AI正文、小总结正文、大总结正文、完整模型响应或API密钥；Intent仅包含状态、时间与关联ID',
     };
 }
@@ -19902,6 +20548,7 @@ Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"buildEventProfiles",{enumerable:true,configurable:true,get:()=>__require("domain/event-profile.js")["buildEventProfiles"]});
 Object.defineProperty(__scope,"artifactIntentProjection",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentProjection"]});
+Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"subscribeArtifactStageChanges",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["subscribeArtifactStageChanges"]});
 Object.defineProperty(__scope,"snapshotRowCount",{enumerable:true,configurable:true,get:()=>__require("domain/snapshot.js")["snapshotRowCount"]});
 Object.defineProperty(__scope,"visibleStateRows",{enumerable:true,configurable:true,get:()=>__require("domain/entry-lifecycle.js")["visibleStateRows"]});
@@ -19953,8 +20600,8 @@ Object.defineProperty(__scope,"smallSummarySystemPrompt",{enumerable:true,config
 Object.defineProperty(__scope,"stateSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/state.js")["stateSystemPrompt"]});
 Object.defineProperty(__scope,"auditSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/audit.js")["auditSystemPrompt"]});
 Object.defineProperty(__scope,"revisionSystemPrompt",{enumerable:true,configurable:true,get:()=>__require("prompts/revision.js")["revisionSystemPrompt"]});
-Object.defineProperty(__scope,"getChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["getChatState"]});
-Object.defineProperty(__scope,"putChatState",{enumerable:true,configurable:true,get:()=>__require("storage/repository.js")["putChatState"]});
+Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
+Object.defineProperty(__scope,"setFocusObject",{enumerable:true,configurable:true,get:()=>__require("application/chat-commands.js")["setFocusObject"]});
 Object.defineProperty(__scope,"diagnosticReport",{enumerable:true,configurable:true,get:()=>__require("ui/diagnostics.js")["diagnosticReport"]});
 Object.defineProperty(__scope,"runDiagnostics",{enumerable:true,configurable:true,get:()=>__require("ui/diagnostics.js")["runDiagnostics"]});
 Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveRequests"]});
@@ -20443,7 +21090,7 @@ async function overviewHtml(artifactInfo) {
     const settings = getSettings();
     const enabled = settings.enabled;
     const artifact = artifactInfo?.artifact;
-    const chatState = await getChatState(currentChatKey());
+    const chatState = await readChatState(currentChatKey());
     const historyWorkflow = readHistoryWorkflow(chatState);
     const playStart = recordingStartIndex(chatState);
     const rows = snapshotRowCount(artifact?.snapshot, settings.tableRegistry, true);
@@ -20532,7 +21179,7 @@ async function tableHtml(artifactInfo) {
     const visibleTables = enabledTables(registry);
     const artifact = artifactInfo?.artifact;
     const latest = latestSnapshotArtifact();
-    const chatState = await getChatState(currentChatKey());
+    const chatState = await readChatState(currentChatKey());
     const focusObjectId = chatState.focusObjectId || '';
     const busy = workspacePipelineBusy(artifactInfo);
     const editable = Boolean(settings.enabled && !busy && artifactInfo && latest && latest.artifact.messageKey === artifactInfo.artifact.messageKey);
@@ -20941,7 +21588,7 @@ async function summariesHtml() {
     const info = latestSnapshotArtifact();
     const enabled = getSettings().enabled;
     const busy = workspacePipelineBusy(info);
-    const state = info ? await getChatState(info.artifact.chatKey) : null;
+    const state = info ? await readChatState(info.artifact.chatKey) : null;
     const allSmall = state?.smallSummaries ?? [];
     const large = state?.largeSummaries ?? [];
     const small = pendingSmallSummaries(allSmall, large);
@@ -21026,12 +21673,12 @@ function hostRecallFeatureText(feature) {
 
 async function syncHtml() {
     const info = latestSnapshotArtifact();
-    const state = await getChatState(currentChatKey());
+    const state = await readChatState(currentChatKey());
     const settings = getSettings();
     const historyWorkflow = readHistoryWorkflow(state);
     const syncPaused = historyWorkflow.blocked;
     const busy = workspacePipelineBusy(info);
-    const artifactSyncStatus = info?.artifact?.stages?.sync?.status || "idle";
+    const artifactSyncStatus = info?.artifact ? artifactIntentStep(info.artifact, "sync").status : "idle";
     const syncDisplayStatus = syncPaused
         ? "blocked"
         : ["queued", "running", "failed", "blocked", "cancelled"].includes(artifactSyncStatus)
@@ -21110,7 +21757,7 @@ function eventProfileSectionHtml(profiles, graph, compact = false) {
 }
 async function memoryNetworkHtml(artifactInfo) {
     const settings = getSettings();
-    const state = await getChatState(currentChatKey());
+    const state = await readChatState(currentChatKey());
     // 记忆网络是聊天级当前视图，必须读取最近一次成功状态快照。
     // 当前选中消息可能只有审核/修正记录而没有 snapshot，直接使用它会把已有图谱误显示为空。
     const snapshotArtifact = latestSnapshotArtifact()
@@ -21534,7 +22181,7 @@ async function updateTableRegistryAndSync(registry) {
     saveSettings();
     refreshMessagePanels();
     const latest = latestSnapshotArtifact();
-    if (settings.lorebookSync && latest && !readHistoryWorkflow(await getChatState(latest.artifact.chatKey)).blocked) {
+    if (settings.lorebookSync && latest && !readHistoryWorkflow(await readChatState(latest.artifact.chatKey)).blocked) {
         try {
             await retryStage(latest.index, "sync");
         }
@@ -21711,7 +22358,7 @@ function bindWorkspace(workspace) {
                 setTab("diagnostics");
             }
             if (action === "start-play-recording") {
-                const state = await getChatState(currentChatKey());
+                const state = await readChatState(currentChatKey());
                 const existing = recordingStartIndex(state) !== undefined;
                 const warning = existing
                     ? "重新设置起点会清空当前聊天已有的镜渊事实、总结、状态表和托管世界书条目。是否继续？"
@@ -21742,7 +22389,7 @@ function bindWorkspace(workspace) {
                 await renderWorkspace();
             }
             if (action === "recalculate-history") {
-                const state = await getChatState(currentChatKey());
+                const state = await readChatState(currentChatKey());
                 if (readHistoryWorkflow(state).startIndex === undefined) {
                     const answer = window.prompt(`请输入重算起点（1-${Math.max(1, getChat().length)}）`, "1");
                     if (answer === null)
@@ -21911,10 +22558,8 @@ function bindWorkspace(workspace) {
                 const row = (info.artifact.snapshot[characterTable.key] ?? []).find((item) => item.id === rowId);
                 if (action === "set-focus" && !row)
                     throw new Error("焦点目标不是当前角色条目");
-                const state = await getChatState(info.artifact.chatKey);
                 // 焦点只是聊天级 constant 开关：不写角色正文、不改状态、不触发任何模型任务。
-                state.focusObjectId = action === "set-focus" ? rowId : undefined;
-                await putChatState(state);
+                await setFocusObject(info.artifact.chatKey, action === "set-focus" ? rowId : undefined);
                 if (getSettings().lorebookSync)
                     await retryStage(info.index, "sync");
                 toast("success", action === "set-focus" ? `已将“${row?.title || "角色"}”设为唯一常驻焦点` : "已取消常驻焦点");
