@@ -80,6 +80,7 @@ __defs["application/effect-projection.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"stableStringify",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["stableStringify"]});
 Object.defineProperty(__scope,"normalizeReliableWorkflow",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["normalizeReliableWorkflow"]});
 Object.defineProperty(__scope,"normalizeRuntimeV2",{enumerable:true,configurable:true,get:()=>__require("runtime-v2/state.js")["normalizeRuntimeV2"]});
 with(__scope){
@@ -123,8 +124,8 @@ function projectRuntimeEffects(chatState) {
     const retained = workflow.effects.filter((effect) => !String(effect.effectId).startsWith('runtime_effect_'));
     const projected = runtime.outbox.map(projectedEffect);
     const nextEffects = [...retained, ...projected].slice(-1200);
-    const before = JSON.stringify(workflow.effects);
-    const after = JSON.stringify(nextEffects);
+    const before = stableStringify(workflow.effects);
+    const after = stableStringify(nextEffects);
     workflow.effects = nextEffects;
     if (before !== after) {
         workflow.revision += 1;
@@ -621,7 +622,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.27';
+const VERSION = '1.4.0-alpha.28';
 const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -1350,9 +1351,12 @@ function abortActiveAutomaticSummaryRequests() {
 };
 __defs["core/utils.js"]=function(exports,__require){
 const __scope=Object.create(null);
+Object.defineProperty(__scope,"deterministicStringify",{enumerable:true,configurable:true,get:()=>__require("vendor/fast-json-stable-stringify.js")["stableStringify"]});
 with(__scope){
 Object.defineProperty(exports,"deepClone",{enumerable:true,configurable:true,get:()=>deepClone});
 Object.defineProperty(exports,"mergeDefaults",{enumerable:true,configurable:true,get:()=>mergeDefaults});
+Object.defineProperty(exports,"stableStringify",{enumerable:true,configurable:true,get:()=>stableStringify});
+Object.defineProperty(exports,"structuralEqual",{enumerable:true,configurable:true,get:()=>structuralEqual});
 Object.defineProperty(exports,"hashText",{enumerable:true,configurable:true,get:()=>hashText});
 Object.defineProperty(exports,"makeId",{enumerable:true,configurable:true,get:()=>makeId});
 Object.defineProperty(exports,"nowIso",{enumerable:true,configurable:true,get:()=>nowIso});
@@ -1412,6 +1416,14 @@ function mergeDefaults(defaults, current) {
     merge(output, current);
     return output;
 }
+function stableStringify(value, options) {
+    return deterministicStringify(value, options);
+}
+
+function structuralEqual(left, right) {
+    return Object.is(left, right) || stableStringify(left) === stableStringify(right);
+}
+
 function hashText(value) {
     const text = String(value ?? '');
     let hash = 2166136261;
@@ -10858,6 +10870,8 @@ const __scope=Object.create(null);
 Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"pLimit",{enumerable:true,configurable:true,get:()=>__require("vendor/p-limit.js")["pLimit"]});
+Object.defineProperty(__scope,"PriorityQueue",{enumerable:true,configurable:true,get:()=>__require("vendor/priority-queue.js")["PriorityQueue"]});
 with(__scope){
 Object.defineProperty(exports,"RequestLaneScheduler",{enumerable:true,configurable:true,get:()=>RequestLaneScheduler});
 Object.defineProperty(exports,"requestScheduler",{enumerable:true,configurable:true,get:()=>requestScheduler});
@@ -10910,16 +10924,18 @@ class RequestLaneScheduler {
     static MAX_TRACES = 200;
     lanes = new Map();
     traces = new Map();
-    sequence = 0;
+
     list() {
         return [...this.traces.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     }
+
     clearHistory() {
         for (const [id, trace] of this.traces) {
             if (!['queued', 'running'].includes(String(trace.state)) && trace.physicalState !== 'draining')
                 this.traces.delete(id);
         }
     }
+
     prune() {
         while (this.traces.size > RequestLaneScheduler.MAX_TRACES) {
             const removable = [...this.traces.entries()].find(([, trace]) => !['queued', 'running'].includes(String(trace.state)) && trace.physicalState !== 'draining');
@@ -10928,26 +10944,21 @@ class RequestLaneScheduler {
             this.traces.delete(removable[0]);
         }
     }
+
     lane(name) {
         let state = this.lanes.get(name);
         if (!state) {
-            state = { active: null, pending: [] };
+            state = {
+                active: null,
+                pending: new PriorityQueue(),
+                jobs: new Map(),
+                executor: pLimit(1),
+            };
             this.lanes.set(name, state);
         }
         return state;
     }
-    selectNext(state) {
-        if (!state.pending.length)
-            return null;
-        let selectedIndex = 0;
-        for (let index = 1; index < state.pending.length; index += 1) {
-            const candidate = state.pending[index];
-            const selected = state.pending[selectedIndex];
-            if (candidate.priority > selected.priority || (candidate.priority === selected.priority && candidate.sequence < selected.sequence))
-                selectedIndex = index;
-        }
-        return state.pending.splice(selectedIndex, 1)[0] ?? null;
-    }
+
     settleCancelled(job, message = '模型请求已取消') {
         if (job.businessSettled)
             return;
@@ -10961,16 +10972,19 @@ class RequestLaneScheduler {
         job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
         job.reject(abortError(message));
     }
+
     pump(connectionLane) {
         const state = this.lane(connectionLane);
         if (state.active)
             return;
-        const job = this.selectNext(state);
-        if (!job) {
-            if (!state.pending.length)
+        const runner = state.pending.dequeue();
+        if (!runner) {
+            if (!state.jobs.size)
                 this.lanes.delete(connectionLane);
             return;
         }
+        const job = runner.job;
+        state.jobs.delete(job.id);
         if (job.signal.aborted) {
             job.signal.removeEventListener('abort', job.abortListener);
             job.trace.transportWaitMs = Math.max(0, Date.now() - job.createdMs);
@@ -10980,49 +10994,50 @@ class RequestLaneScheduler {
             return;
         }
         state.active = job;
+        void state.executor(runner).catch((error) => {
+            console.error('[MirrorAbyss] request lane executor failed unexpectedly', error);
+        });
+    }
+
+    async execute(connectionLane, state, job) {
         job.startedMs = Date.now();
         job.trace.state = 'running';
         job.trace.physicalState = 'running';
         job.trace.startedAt = nowIso();
         job.trace.transportWaitMs = Math.max(0, job.startedMs - job.createdMs);
-        const execution = Promise.resolve()
-            .then(async () => {
+        try {
             if (job.signal.aborted)
                 throw abortError();
             const result = await job.work();
             if (job.signal.aborted)
                 throw abortError();
-            return result;
-        });
-        void execution
-            .then((result) => {
-            if (job.businessSettled)
-                return;
-            job.businessSettled = true;
-            job.businessFinishedMs = Date.now();
-            job.trace.state = 'success';
-            job.trace.finishedAt = nowIso();
-            job.trace.requestMs = Math.max(0, job.businessFinishedMs - job.startedMs);
-            job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
-            job.resolve(result);
-        })
-            .catch((error) => {
+            if (!job.businessSettled) {
+                job.businessSettled = true;
+                job.businessFinishedMs = Date.now();
+                job.trace.state = 'success';
+                job.trace.finishedAt = nowIso();
+                job.trace.requestMs = Math.max(0, job.businessFinishedMs - job.startedMs);
+                job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
+                job.resolve(result);
+            }
+        }
+        catch (error) {
             job.drainPromise = physicalDrainPromise(error);
-            if (job.businessSettled)
-                return;
-            job.businessSettled = true;
-            job.businessFinishedMs = Date.now();
-            const metadata = requestErrorMetadata(error);
-            job.trace.state = metadata.errorKind === 'cancelled' ? 'cancelled' : 'failed';
-            job.trace.error = toErrorMessage(error);
-            job.trace.errorKind = metadata.errorKind;
-            job.trace.httpStatus = metadata.httpStatus;
-            job.trace.finishedAt = nowIso();
-            job.trace.requestMs = Math.max(0, job.businessFinishedMs - job.startedMs);
-            job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
-            job.reject(error);
-        })
-            .finally(async () => {
+            if (!job.businessSettled) {
+                job.businessSettled = true;
+                job.businessFinishedMs = Date.now();
+                const metadata = requestErrorMetadata(error);
+                job.trace.state = metadata.errorKind === 'cancelled' ? 'cancelled' : 'failed';
+                job.trace.error = toErrorMessage(error);
+                job.trace.errorKind = metadata.errorKind;
+                job.trace.httpStatus = metadata.httpStatus;
+                job.trace.finishedAt = nowIso();
+                job.trace.requestMs = Math.max(0, job.businessFinishedMs - job.startedMs);
+                job.trace.totalMs = Math.max(0, job.businessFinishedMs - job.createdMs);
+                job.reject(error);
+            }
+        }
+        finally {
             if (job.drainPromise) {
                 job.trace.physicalState = 'draining';
                 await job.drainPromise;
@@ -11036,8 +11051,9 @@ class RequestLaneScheduler {
             state.active = null;
             this.prune();
             this.pump(connectionLane);
-        });
+        }
     }
+
     run(connectionLane, requestClass, task, signal, work, metadata = {}) {
         if (signal.aborted)
             return Promise.reject(abortError());
@@ -11073,7 +11089,6 @@ class RequestLaneScheduler {
             lane: connectionLane,
             task,
             priority: REQUEST_PRIORITIES[task] ?? 0,
-            sequence: this.sequence += 1,
             createdMs,
             signal,
             work,
@@ -11086,17 +11101,16 @@ class RequestLaneScheduler {
             drainPromise: null,
             abortListener: () => {
                 if (state.active === job) {
-                    // 内部超时由 withTimeout 立即返回带 drainPromise 的 TimeoutError；
-                    // 这里不能先把它降级成普通取消，否则 UI 会丢失真实超时原因。
+                    // 内部超时由 withTimeout 返回 TimeoutError，不能先降级为普通取消。
                     if (job.signal.reason instanceof Error && job.signal.reason.name === 'TimeoutError')
                         return;
                     this.settleCancelled(job);
                     return;
                 }
-                const index = state.pending.indexOf(job);
-                if (index < 0)
+                if (!state.jobs.has(job.id))
                     return;
-                state.pending.splice(index, 1);
+                state.pending.remove(job.id);
+                state.jobs.delete(job.id);
                 trace.transportWaitMs = Math.max(0, Date.now() - createdMs);
                 signal.removeEventListener('abort', job.abortListener);
                 this.settleCancelled(job);
@@ -11104,8 +11118,11 @@ class RequestLaneScheduler {
                 this.pump(connectionLane);
             },
         };
+        const runner = () => this.execute(connectionLane, state, job);
+        runner.job = job;
         signal.addEventListener('abort', job.abortListener, { once: true });
-        state.pending.push(job);
+        state.jobs.set(id, job);
+        state.pending.enqueue(runner, { id, priority: job.priority });
         this.prune();
         this.pump(connectionLane);
         return promise;
@@ -11432,6 +11449,7 @@ Object.defineProperty(__scope,"getContext",{enumerable:true,configurable:true,ge
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"sanitizeBookName",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["sanitizeBookName"]});
+Object.defineProperty(__scope,"stableStringify",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["stableStringify"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
@@ -12175,9 +12193,9 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, dedicatedBoo
         claimed.add(pair.uid);
         if (adoptedExistingLegacy)
             adoptedLegacy += 1;
-        const before = JSON.stringify(entry);
+        const before = stableStringify(entry);
         applyEntry(entry, chatKey, item.key, item.spec, wi);
-        if (before !== JSON.stringify(entry))
+        if (before !== stableStringify(entry))
             changed = true;
         if (Number.isFinite(Number(entry.uid)))
             entryIds.push(Number(entry.uid));
@@ -12342,9 +12360,9 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
             changed = true;
         }
         claimed.add(pair.uid);
-        const before = JSON.stringify(entry);
+        const before = stableStringify(entry);
         applyEntry(entry, chatKey, key, spec, wi);
-        if (before !== JSON.stringify(entry))
+        if (before !== stableStringify(entry))
             changed = true;
         if (Number.isFinite(Number(entry.uid)))
             entryIds.push(Number(entry.uid));
@@ -15510,7 +15528,7 @@ Object.defineProperty(__scope,"getChat",{enumerable:true,configurable:true,get:(
 Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getSettings"]});
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
-Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"structuralEqual",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["structuralEqual"]});
 Object.defineProperty(__scope,"artifactIntentCorrelation",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentCorrelation"]});
 Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
 Object.defineProperty(__scope,"markStage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["markStage"]});
@@ -15714,7 +15732,7 @@ function sameComparableValue(left, right) {
     if (leftObject || rightObject) {
         if (!leftObject || !rightObject)
             return false;
-        return JSON.stringify(normalizedComparableObject(left)) === JSON.stringify(normalizedComparableObject(right));
+        return structuralEqual(normalizedComparableObject(left), normalizedComparableObject(right));
     }
     return normalizedComparableText(left) === normalizedComparableText(right);
 }
@@ -16142,6 +16160,7 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["safeText"]});
+Object.defineProperty(__scope,"structuralEqual",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["structuralEqual"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"artifactIntentCorrelation",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentCorrelation"]});
 Object.defineProperty(__scope,"artifactIntentStep",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentStep"]});
@@ -16273,7 +16292,7 @@ function applySummaryLayer(snapshot, eventId, facts, layer, addition, removals, 
                 ? row.fields[layer].map((item) => String(item ?? '').trim()).filter(Boolean)
                 : [];
             const values = [...new Set([...current.filter((item) => !removeTexts.has(item)), ...addTexts])].slice(-24);
-            if (JSON.stringify(current) === JSON.stringify(values))
+            if (structuralEqual(current, values))
                 continue;
             row.fields[layer] = values;
             // 对象自己的低精度承接写入后，移除已经被该总结覆盖的短期“现行事实”副本；当前状态、关系、能力和基础定义继续保留。
@@ -16722,6 +16741,9 @@ const __scope=Object.create(null);
 Object.defineProperty(__scope,"makeId",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["makeId"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
+Object.defineProperty(__scope,"mitt",{enumerable:true,configurable:true,get:()=>__require("vendor/mitt.js")["mitt"]});
+Object.defineProperty(__scope,"pLimit",{enumerable:true,configurable:true,get:()=>__require("vendor/p-limit.js")["pLimit"]});
+Object.defineProperty(__scope,"PriorityQueue",{enumerable:true,configurable:true,get:()=>__require("vendor/priority-queue.js")["PriorityQueue"]});
 with(__scope){
 Object.defineProperty(exports,"TaskBlockedError",{enumerable:true,configurable:true,get:()=>TaskBlockedError});
 Object.defineProperty(exports,"TaskSkippedError",{enumerable:true,configurable:true,get:()=>TaskSkippedError});
@@ -16734,6 +16756,7 @@ class TaskBlockedError extends Error {
         this.name = 'TaskBlockedError';
     }
 }
+
 /** 输入已经由同版本流水线完成，不需要再次执行。 */
 class TaskSkippedError extends Error {
     constructor(message) {
@@ -16741,14 +16764,17 @@ class TaskSkippedError extends Error {
         this.name = 'TaskSkippedError';
     }
 }
+
 function cancelledError(message) {
     const error = new Error(message);
     error.name = 'AbortError';
     return error;
 }
+
 function elapsed(startedAt, finishedAt = Date.now()) {
     return startedAt === undefined ? undefined : Math.max(0, finishedAt - startedAt);
 }
+
 const DEFAULT_PRIORITIES = {
     audit: 100,
     revision: 100,
@@ -16758,22 +16784,30 @@ const DEFAULT_PRIORITIES = {
     smallSummary: 30,
     largeSummary: 10,
 };
+
 /**
- * 全插件只有一个 active 业务任务。优先级决定下一个 pending；显式取消只用于安全让位，不引入并发写入。
+ * 全插件只有一个 active 业务任务。通用排队、并发限制和事件分发分别委托给
+ * p-queue PriorityQueue、p-limit 与 mitt；镜渊只保留业务状态和提交守卫。
  */
 class TaskQueue {
     static MAX_TASKS = 200;
     inFlight = new Map();
     tasks = new Map();
-    listeners = new Set();
+    emitter = mitt();
+    scheduler = new PriorityQueue();
+    pendingJobs = new Map();
+    executor = pLimit(1);
     accepting = true;
     generation = 0;
-    sequence = 0;
-    pending = [];
     active = null;
     idleWaiters = new Set();
     exclusiveToken = '';
     exclusiveReason = '';
+
+    get pending() {
+        return [...this.pendingJobs.values()];
+    }
+
     beginExclusive(token, reason = '镜渊正在执行独占任务') {
         const normalized = String(token || '').trim();
         if (!normalized || !this.accepting)
@@ -16785,6 +16819,7 @@ class TaskQueue {
         this.notify();
         return true;
     }
+
     endExclusive(token) {
         if (!this.exclusiveToken || this.exclusiveToken !== String(token || '').trim())
             return false;
@@ -16794,6 +16829,7 @@ class TaskQueue {
         this.pump();
         return true;
     }
+
     setAccepting(accepting) {
         if (this.accepting && !accepting) {
             this.generation += 1;
@@ -16804,9 +16840,11 @@ class TaskQueue {
         if (accepting)
             this.pump();
     }
+
     isTerminal(task) {
         return !['running', 'queued'].includes(String(task.state));
     }
+
     pruneTasks() {
         while (this.tasks.size > TaskQueue.MAX_TASKS) {
             const removable = [...this.tasks.entries()].find(([, task]) => this.isTerminal(task));
@@ -16815,26 +16853,32 @@ class TaskQueue {
             this.tasks.delete(removable[0]);
         }
     }
+
     subscribe(listener) {
-        this.listeners.add(listener);
-        return () => this.listeners.delete(listener);
-    }
-    notify() {
-        for (const listener of this.listeners) {
+        const safeListener = () => {
             try {
                 listener();
             }
             catch (error) {
                 console.warn('[MirrorAbyss] task listener failed', error);
             }
-        }
+        };
+        this.emitter.on('change', safeListener);
+        return () => this.emitter.off('change', safeListener);
     }
+
+    notify() {
+        this.emitter.emit('change');
+    }
+
     list() {
         return [...this.tasks.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     }
+
     has(key) {
         return this.inFlight.has(key);
     }
+
     clearHistory() {
         for (const [id, task] of this.tasks) {
             if (this.isTerminal(task))
@@ -16842,6 +16886,7 @@ class TaskQueue {
         }
         this.notify();
     }
+
     resetRuntime() {
         this.generation += 1;
         this.cancelActiveMatching(() => true, '镜渊运行环境已重置，运行任务已请求取消');
@@ -16849,29 +16894,35 @@ class TaskQueue {
         this.clearHistory();
         this.notify();
     }
+
     resolveIdle() {
-        if (this.active || this.pending.length)
+        if (this.active || this.scheduler.size)
             return;
         for (const resolve of this.idleWaiters)
             resolve();
         this.idleWaiters.clear();
     }
+
     async whenIdle() {
-        if (!this.active && !this.pending.length)
+        if (!this.active && !this.scheduler.size)
             return;
         await new Promise((resolve) => this.idleWaiters.add(resolve));
     }
+
     cancelPendingByChatKey(chatKey, reason = '聊天已切换，旧聊天排队任务已取消') {
         return this.cancelPending((job) => job.chatKey === chatKey, reason);
     }
+
     cancelPendingOutsideChat(chatKey, reason = '聊天已切换，旧聊天排队任务已取消') {
         return this.cancelPending((job) => Boolean(job.chatKey && job.chatKey !== chatKey), reason);
     }
+
     cancelPendingDerivedByChatKey(chatKey, reason = '已有更新的正文状态，旧派生任务已取消') {
         return this.cancelPending((job) => Boolean(job.chatKey === chatKey
             && job.task.automatic === true
             && ['smallSummary', 'largeSummary', 'sync'].includes(String(job.task.kind))), reason);
     }
+
     /**
      * 只标记当前 active 任务取消；调用方负责取消其外部请求。任务守卫会阻止迟到结果提交。
      */
@@ -16885,19 +16936,20 @@ class TaskQueue {
         this.notify();
         return true;
     }
+
     cancelPendingMatching(predicate, reason = '排队任务已失效') {
         return this.cancelPending((job) => predicate(job.task), reason);
     }
+
     cancelPending(predicate, reason) {
-        const remaining = [];
         let cancelled = 0;
         const now = Date.now();
-        for (const job of this.pending) {
-            if (!predicate(job)) {
-                remaining.push(job);
+        for (const job of [...this.pendingJobs.values()]) {
+            if (!predicate(job))
                 continue;
-            }
             cancelled += 1;
+            this.scheduler.remove(job.task.id);
+            this.pendingJobs.delete(job.task.id);
             job.task.state = 'cancelled';
             job.task.error = reason;
             job.task.cancelReason = reason;
@@ -16909,7 +16961,6 @@ class TaskQueue {
                 this.inFlight.delete(job.task.key);
             job.reject(cancelledError(reason));
         }
-        this.pending = remaining;
         if (cancelled) {
             this.pruneTasks();
             this.notify();
@@ -16917,31 +16968,26 @@ class TaskQueue {
         this.resolveIdle();
         return cancelled;
     }
-    /** 从 pending 中选择最高优先级任务；同优先级保持进入顺序。 */
-    selectNext() {
-        if (!this.pending.length)
-            return null;
-        let selectedIndex = 0;
-        for (let index = 1; index < this.pending.length; index += 1) {
-            const candidate = this.pending[index];
-            const selected = this.pending[selectedIndex];
-            if (candidate.priority > selected.priority || (candidate.priority === selected.priority && candidate.sequence < selected.sequence)) {
-                selectedIndex = index;
-            }
-        }
-        return this.pending.splice(selectedIndex, 1)[0] ?? null;
-    }
+
     pump() {
         if (this.active || !this.accepting) {
             this.resolveIdle();
             return;
         }
-        const job = this.selectNext();
-        if (!job) {
+        const runner = this.scheduler.dequeue();
+        if (!runner) {
             this.resolveIdle();
             return;
         }
+        const job = runner.job;
+        this.pendingJobs.delete(job.task.id);
         this.active = job;
+        void this.executor(runner).catch((error) => {
+            console.error('[MirrorAbyss] task executor failed unexpectedly', error);
+        });
+    }
+
+    async execute(job) {
         const task = job.task;
         const startedMs = Date.now();
         task.state = 'running';
@@ -16954,26 +17000,20 @@ class TaskQueue {
             assertCurrent: () => {
                 if (job.cancelReason)
                     throw cancelledError(job.cancelReason);
-                if (!this.accepting || job.generation !== this.generation) {
+                if (!this.accepting || job.generation !== this.generation)
                     throw cancelledError('镜渊生命周期已变化，旧任务结果不再提交');
-                }
             },
         };
-        void Promise.resolve()
-            .then(async () => {
+        try {
             guard.assertCurrent();
             const result = await job.work(guard);
             guard.assertCurrent();
-            return result;
-        })
-            .then((result) => {
             task.state = 'success';
             task.businessStatus = 'succeeded';
             job.resolve(result);
-        })
-            .catch((error) => {
-            // 一旦任务已被生命周期/聊天切换明确取消，迟到的上游错误不能把终态改写成 failed。
-            // 取消意图优先；原始请求错误仍可在请求诊断中查看。
+        }
+        catch (error) {
+            // 取消意图优先；原始请求错误仍保留在请求诊断中。
             const cancelled = Boolean(job.cancelReason)
                 || (error instanceof Error && ['AbortError', 'CommitRejectedError'].includes(error.name));
             const blocked = error instanceof TaskBlockedError
@@ -16990,8 +17030,8 @@ class TaskQueue {
                 task.error = cancelled && job.cancelReason ? job.cancelReason : toErrorMessage(error);
             }
             job.reject(cancelled && job.cancelReason ? cancelledError(job.cancelReason) : error);
-        })
-            .finally(() => {
+        }
+        finally {
             const finishedMs = Date.now();
             task.finishedAt = nowIso();
             task.runMs = elapsed(startedMs, finishedMs);
@@ -17003,17 +17043,17 @@ class TaskQueue {
             this.pruneTasks();
             this.notify();
             this.pump();
-        });
+        }
     }
+
     /**
      * 相同 key 的任务共享同一 Promise；generation 与 guard 共同阻止禁用/重启后的旧任务提交。
      */
     run(key, label, kind, work, options = {}) {
         if (!this.accepting)
             return Promise.reject(cancelledError('镜渊已禁用，不再接受新任务'));
-        if (this.exclusiveToken && options.exclusiveToken !== this.exclusiveToken) {
+        if (this.exclusiveToken && options.exclusiveToken !== this.exclusiveToken)
             return Promise.reject(new TaskBlockedError(this.exclusiveReason || '镜渊正在执行独占任务'));
-        }
         const existing = this.inFlight.get(key);
         if (existing)
             return existing;
@@ -17053,14 +17093,16 @@ class TaskQueue {
             task,
             work,
             generation: this.generation,
-            sequence: this.sequence += 1,
             priority,
             chatKey: options.chatKey,
             promise,
             resolve,
             reject,
         };
-        this.pending.push(job);
+        const runner = () => this.execute(job);
+        runner.job = job;
+        this.pendingJobs.set(task.id, job);
+        this.scheduler.enqueue(runner, { id: task.id, priority });
         this.inFlight.set(key, promise);
         this.pruneTasks();
         this.notify();
@@ -17068,6 +17110,7 @@ class TaskQueue {
         return promise;
     }
 }
+
 const taskQueue = new TaskQueue();
 
 }
@@ -18974,6 +19017,8 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"assertChatCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertChatCommitCurrent"]});
 Object.defineProperty(__scope,"CommitRejectedError",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["CommitRejectedError"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+Object.defineProperty(__scope,"stableStringify",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["stableStringify"]});
+Object.defineProperty(__scope,"structuralEqual",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["structuralEqual"]});
 Object.defineProperty(__scope,"mergeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["mergeInternalFacts"]});
 Object.defineProperty(__scope,"migrateLegacyConsumption",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["migrateLegacyConsumption"]});
 Object.defineProperty(__scope,"normalizeInternalFacts",{enumerable:true,configurable:true,get:()=>__require("domain/internal-facts.js")["normalizeInternalFacts"]});
@@ -19180,7 +19225,7 @@ function applyObjectIdAliases(snapshot, aliases, registry) {
 /** 将旧 artifact 事实包与旧固定视图迁入聊天级内部事实层和当前对象视图。 */
 function migrateChatState(raw, chatKey) {
     const state = raw && raw.chatKey === chatKey ? cloneChatState(raw) : emptyChatState(chatKey);
-    const metadataBefore = JSON.stringify(raw ?? null);
+    const metadataBefore = stableStringify(raw ?? null);
     const previousSchema = Number(state.schemaVersion) || 1;
     const needsViewMigration = state.migration?.dynamicTablesV23 !== true;
     const needsFactMigration = state.migration?.internalFactsV23 !== true;
@@ -19243,7 +19288,7 @@ function migrateChatState(raw, chatKey) {
         if (!artifact || artifact.chatKey !== chatKey)
             continue;
         if ((needsFullSnapshotMigration || needsPersistedCharacterMergeMigration || needsUniqueObjectNamesMigration || needsSpacetimeSingletonMigration || needsEntryLifecycleMigration || needsSingleAuthorityMigration) && artifact.snapshot) {
-            const before = JSON.stringify({
+            const before = stableStringify({
                 snapshot: artifact.snapshot,
                 aliases: artifact.persistedCharacterIdAliasesV30,
                 uniqueAliases: artifact.uniqueObjectIdAliasesV31,
@@ -19357,7 +19402,7 @@ function migrateChatState(raw, chatKey) {
             artifact.snapshot = migrated;
             if (needsFullSnapshotMigration)
                 previousMigratedSnapshot = migrated;
-            const after = JSON.stringify({
+            const after = stableStringify({
                 snapshot: artifact.snapshot,
                 aliases: artifact.persistedCharacterIdAliasesV30,
                 uniqueAliases: artifact.uniqueObjectIdAliasesV31,
@@ -19399,7 +19444,7 @@ function migrateChatState(raw, chatKey) {
             if (!artifact || artifact.chatKey !== chatKey || !artifact.snapshot)
                 continue;
             const gc = garbageCollectLegacyEntryTombstones(artifact.snapshot, facts, registry, state.focusObjectId);
-            if (gc.deletedRowIds.length || JSON.stringify(gc.snapshot) !== JSON.stringify(artifact.snapshot)) {
+            if (gc.deletedRowIds.length || !structuralEqual(gc.snapshot, artifact.snapshot)) {
                 artifact.snapshot = gc.snapshot;
                 artifactViewsChanged = true;
                 ensureProcessingIntent(artifact);
@@ -19430,7 +19475,7 @@ function migrateChatState(raw, chatKey) {
     return {
         state,
         artifactViewsChanged,
-        metadataChanged: metadataBefore !== JSON.stringify(state)
+        metadataChanged: metadataBefore !== stableStringify(state)
             || previousSchema !== CURRENT_SCHEMA_VERSION
             || summaryVersionsChanged,
     };
@@ -19489,11 +19534,11 @@ function currentStateStructure(raw, chatKey) {
         return false;
     if (state.recordingBoundary !== undefined && !normalizeRecordingBoundary(state.recordingBoundary))
         return false;
-    if (JSON.stringify(state.lorebookPublication) !== JSON.stringify(normalizeLorebookPublication(state.lorebookPublication)))
+    if (!structuralEqual(state.lorebookPublication, normalizeLorebookPublication(state.lorebookPublication)))
         return false;
-    if (JSON.stringify(state.runtimeV2) !== JSON.stringify(normalizeRuntimeV2(state.runtimeV2)))
+    if (!structuralEqual(state.runtimeV2, normalizeRuntimeV2(state.runtimeV2)))
         return false;
-    if (JSON.stringify(state.reliableWorkflow) !== JSON.stringify(normalizeReliableWorkflow(state.reliableWorkflow)))
+    if (!structuralEqual(state.reliableWorkflow, normalizeReliableWorkflow(state.reliableWorkflow)))
         return false;
     return REQUIRED_MIGRATIONS.every((key) => state.migration?.[key] === true);
 }
@@ -19753,6 +19798,8 @@ async function clearAllStorage(chatKey = currentChatKey()) {
 };
 __defs["storage/state-store.js"]=function(exports,__require){
 const __scope=Object.create(null);
+Object.defineProperty(__scope,"stableStringify",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["stableStringify"]});
+Object.defineProperty(__scope,"structuralEqual",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["structuralEqual"]});
 with(__scope){
 Object.defineProperty(exports,"withChatStateLock",{enumerable:true,configurable:true,get:()=>withChatStateLock});
 Object.defineProperty(exports,"threeWayMergeState",{enumerable:true,configurable:true,get:()=>threeWayMergeState});
@@ -19785,7 +19832,7 @@ function clone(value) {
 function equal(a, b) {
     if (Object.is(a, b))
         return true;
-    return JSON.stringify(a) === JSON.stringify(b);
+    return structuralEqual(a, b);
 }
 
 function isPlainObject(value) {
@@ -19855,13 +19902,13 @@ function keyedArray(value) {
 }
 
 function setArrayMerge(base, ours, theirs) {
-    const baseSet = new Set(base.map((item) => JSON.stringify(item)));
-    const ourSet = new Set(ours.map((item) => JSON.stringify(item)));
+    const baseSet = new Set(base.map((item) => stableStringify(item)));
+    const ourSet = new Set(ours.map((item) => stableStringify(item)));
     const output = [...theirs];
-    const outputSet = new Set(output.map((item) => JSON.stringify(item)));
+    const outputSet = new Set(output.map((item) => stableStringify(item)));
     for (const serialized of baseSet) {
         if (!ourSet.has(serialized)) {
-            const index = output.findIndex((item) => JSON.stringify(item) === serialized);
+            const index = output.findIndex((item) => stableStringify(item) === serialized);
             if (index >= 0) {
                 output.splice(index, 1);
                 outputSet.delete(serialized);
@@ -19869,7 +19916,7 @@ function setArrayMerge(base, ours, theirs) {
         }
     }
     for (const item of ours) {
-        const serialized = JSON.stringify(item);
+        const serialized = stableStringify(item);
         if (!baseSet.has(serialized) && !outputSet.has(serialized)) {
             output.push(clone(item));
             outputSet.add(serialized);
@@ -20062,6 +20109,28 @@ async function withChatStateLock(chatKey, work) {
 function activeStateLocks() {
     return [...writeTails.keys()];
 }
+
+}
+};
+__defs["tools/entry-bundle.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"onActivate",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onActivate"]});
+Object.defineProperty(__scope,"onInstall",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onInstall"]});
+Object.defineProperty(__scope,"onUpdate",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onUpdate"]});
+Object.defineProperty(__scope,"onEnable",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onEnable"]});
+Object.defineProperty(__scope,"onDisable",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onDisable"]});
+Object.defineProperty(__scope,"onClean",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onClean"]});
+Object.defineProperty(__scope,"onDelete",{enumerable:true,configurable:true,get:()=>__require("bootstrap/app.js")["onDelete"]});
+with(__scope){
+globalThis.__MirrorAbyssBundledLifecycle = {
+    onActivate,
+    onInstall,
+    onUpdate,
+    onEnable,
+    onDisable,
+    onClean,
+    onDelete,
+};
 
 }
 };
@@ -23647,6 +23716,405 @@ function disposeWorkspace() {
 }
 function refreshWorkspace() {
     void renderWorkspace();
+}
+
+}
+};
+__defs["vendor/fast-json-stable-stringify.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"stableStringify",{enumerable:true,configurable:true,get:()=>stableStringify});
+/*
+ * Vendored from fast-json-stable-stringify 2.1.0 (MIT).
+ * Copyright (c) 2017 Evgeny Poberezkin; Copyright (c) 2013 James Halliday.
+ * Adaptation: CommonJS export changed to a named ESM export.
+ */
+function stableStringify(data, options) {
+    let opts = options;
+    if (!opts)
+        opts = {};
+    if (typeof opts === 'function')
+        opts = { cmp: opts };
+    const cycles = typeof opts.cycles === 'boolean' ? opts.cycles : false;
+    const cmp = opts.cmp && ((compare) => (node) => (a, b) => compare({ key: a, value: node[a] }, { key: b, value: node[b] }))(opts.cmp);
+    const seen = [];
+
+    return (function stringify(node) {
+        if (node && node.toJSON && typeof node.toJSON === 'function')
+            node = node.toJSON();
+        if (node === undefined)
+            return undefined;
+        if (typeof node === 'number')
+            return Number.isFinite(node) ? String(node) : 'null';
+        if (typeof node !== 'object')
+            return JSON.stringify(node);
+        let output;
+        if (Array.isArray(node)) {
+            output = '[';
+            for (let index = 0; index < node.length; index++) {
+                if (index)
+                    output += ',';
+                output += stringify(node[index]) || 'null';
+            }
+            return `${output}]`;
+        }
+        if (node === null)
+            return 'null';
+        if (seen.indexOf(node) !== -1) {
+            if (cycles)
+                return JSON.stringify('__cycle__');
+            throw new TypeError('Converting circular structure to JSON');
+        }
+        const seenIndex = seen.push(node) - 1;
+        const keys = Object.keys(node).sort(cmp && cmp(node));
+        output = '';
+        for (const key of keys) {
+            const value = stringify(node[key]);
+            if (!value)
+                continue;
+            if (output)
+                output += ',';
+            output += `${JSON.stringify(key)}:${value}`;
+        }
+        seen.splice(seenIndex, 1);
+        return `{${output}}`;
+    })(data);
+}
+
+}
+};
+__defs["vendor/lower-bound.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"lowerBound",{enumerable:true,configurable:true,get:()=>lowerBound});
+/*
+ * Vendored from p-queue 9.3.3 (MIT).
+ * Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>.
+ * Adaptation: TypeScript annotations removed and default export changed to named export.
+ */
+function lowerBound(array, value, comparator) {
+    let first = 0;
+    let count = array.length;
+    while (count > 0) {
+        const step = Math.trunc(count / 2);
+        let iterator = first + step;
+        if (comparator(array[iterator], value) <= 0) {
+            first = ++iterator;
+            count -= step + 1;
+        }
+        else {
+            count = step;
+        }
+    }
+    return first;
+}
+
+}
+};
+__defs["vendor/mitt.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"mitt",{enumerable:true,configurable:true,get:()=>mitt});
+/*
+ * Vendored from mitt 3.0.1 (MIT).
+ * Copyright (c) 2021 Jason Miller.
+ * Adaptation: TypeScript annotations removed and default export changed to named export.
+ */
+function mitt(all) {
+    all = all || new Map();
+    return {
+        all,
+        on(type, handler) {
+            const handlers = all.get(type);
+            if (handlers)
+                handlers.push(handler);
+            else
+                all.set(type, [handler]);
+        },
+        off(type, handler) {
+            const handlers = all.get(type);
+            if (handlers) {
+                if (handler)
+                    handlers.splice(handlers.indexOf(handler) >>> 0, 1);
+                else
+                    all.set(type, []);
+            }
+        },
+        emit(type, event) {
+            let handlers = all.get(type);
+            if (handlers)
+                handlers.slice().map((handler) => handler(event));
+            handlers = all.get('*');
+            if (handlers)
+                handlers.slice().map((handler) => handler(type, event));
+        },
+    };
+}
+
+}
+};
+__defs["vendor/p-limit.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"Queue",{enumerable:true,configurable:true,get:()=>__require("vendor/yocto-queue.js")["Queue"]});
+with(__scope){
+Object.defineProperty(exports,"pLimit",{enumerable:true,configurable:true,get:()=>pLimit});
+Object.defineProperty(exports,"limitFunction",{enumerable:true,configurable:true,get:()=>limitFunction});
+/*
+ * Vendored from p-limit 7.1.1 (MIT).
+ * Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>.
+ * Adaptation: package import redirected to the vendored yocto-queue named export.
+ */
+function pLimit(concurrency) {
+    validateConcurrency(concurrency);
+    const queue = new Queue();
+    let activeCount = 0;
+
+    const resumeNext = () => {
+        if (activeCount < concurrency && queue.size > 0) {
+            activeCount++;
+            queue.dequeue()();
+        }
+    };
+
+    const next = () => {
+        activeCount--;
+        resumeNext();
+    };
+
+    const run = async (function_, resolve, arguments_) => {
+        const result = (async () => function_(...arguments_))();
+        resolve(result);
+        try {
+            await result;
+        }
+        catch {
+            // The caller receives the original rejection.
+        }
+        next();
+    };
+
+    const enqueue = (function_, resolve, arguments_) => {
+        new Promise((internalResolve) => {
+            queue.enqueue(internalResolve);
+        }).then(run.bind(undefined, function_, resolve, arguments_));
+        if (activeCount < concurrency)
+            resumeNext();
+    };
+
+    const generator = (function_, ...arguments_) => new Promise((resolve) => {
+        enqueue(function_, resolve, arguments_);
+    });
+
+    Object.defineProperties(generator, {
+        activeCount: { get: () => activeCount },
+        pendingCount: { get: () => queue.size },
+        clearQueue: { value() { queue.clear(); } },
+        concurrency: {
+            get: () => concurrency,
+            set(newConcurrency) {
+                validateConcurrency(newConcurrency);
+                concurrency = newConcurrency;
+                queueMicrotask(() => {
+                    while (activeCount < concurrency && queue.size > 0)
+                        resumeNext();
+                });
+            },
+        },
+        map: {
+            async value(array, function_) {
+                const promises = array.map((value, index) => this(function_, value, index));
+                return Promise.all(promises);
+            },
+        },
+    });
+
+    return generator;
+}
+
+function limitFunction(function_, options) {
+    const { concurrency } = options;
+    const limit = pLimit(concurrency);
+    return (...arguments_) => limit(() => function_(...arguments_));
+}
+
+function validateConcurrency(concurrency) {
+    if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0))
+        throw new TypeError('Expected `concurrency` to be a number from 1 and up');
+}
+
+}
+};
+__defs["vendor/priority-queue.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"lowerBound",{enumerable:true,configurable:true,get:()=>__require("vendor/lower-bound.js")["lowerBound"]});
+with(__scope){
+Object.defineProperty(exports,"PriorityQueue",{enumerable:true,configurable:true,get:()=>PriorityQueue});
+/*
+ * Vendored from p-queue 9.3.3 source/priority-queue.ts (MIT).
+ * Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>.
+ * Adaptation: TypeScript annotations removed; dependency and export redirected locally.
+ */
+const compactionThreshold = 100;
+
+class PriorityQueue {
+    #queue = [];
+    #head = 0;
+
+    enqueue(run, options = {}) {
+        const { priority = 0, id } = options;
+        const { size } = this;
+        const element = { priority, id, run };
+        if (size === 0) {
+            this.#queue.length = 0;
+            this.#head = 0;
+            this.#queue.push(element);
+            return;
+        }
+        if (this.#queue.at(-1).priority >= priority) {
+            this.#queue.push(element);
+            return;
+        }
+        this.#compact();
+        const index = lowerBound(this.#queue, element, (a, b) => b.priority - a.priority);
+        this.#queue.splice(index, 0, element);
+    }
+
+    setPriority(id, priority) {
+        const index = this.#queue.findIndex((element, index_) => index_ >= this.#head && element.id === id);
+        if (index === -1)
+            throw new ReferenceError(`No promise function with the id "${id}" exists in the queue.`);
+        const [item] = this.#queue.splice(index, 1);
+        this.enqueue(item.run, { priority, id });
+    }
+
+    remove(idOrRun) {
+        const index = this.#queue.findIndex((element, index_) => {
+            if (index_ < this.#head)
+                return false;
+            return typeof idOrRun === 'string' ? element.id === idOrRun : element.run === idOrRun;
+        });
+        if (index !== -1)
+            this.#queue.splice(index, 1);
+    }
+
+    dequeue() {
+        if (this.#head === this.#queue.length)
+            return undefined;
+        const item = this.#queue[this.#head];
+        this.#head++;
+        if (this.#head === this.#queue.length) {
+            this.#queue.length = 0;
+            this.#head = 0;
+        }
+        else if (this.#head > compactionThreshold && this.#head > this.#queue.length / 2) {
+            this.#compact();
+        }
+        return item?.run;
+    }
+
+    filter(options) {
+        const result = [];
+        for (let index = this.#head; index < this.#queue.length; index++) {
+            const element = this.#queue[index];
+            if (element.priority === options.priority)
+                result.push(element.run);
+        }
+        return result;
+    }
+
+    get size() {
+        return this.#queue.length - this.#head;
+    }
+
+    #compact() {
+        if (this.#head === 0)
+            return;
+        this.#queue.splice(0, this.#head);
+        this.#head = 0;
+    }
+}
+
+}
+};
+__defs["vendor/yocto-queue.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"Queue",{enumerable:true,configurable:true,get:()=>Queue});
+/*
+ * Vendored from yocto-queue 1.2.2 (MIT).
+ * Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>.
+ * Adaptation: default export changed to a named export for Mirror Abyss' local bundler.
+ */
+class Node {
+    value;
+    next;
+
+    constructor(value) {
+        this.value = value;
+    }
+}
+
+class Queue {
+    #head;
+    #tail;
+    #size;
+
+    constructor() {
+        this.clear();
+    }
+
+    enqueue(value) {
+        const node = new Node(value);
+        if (this.#head) {
+            this.#tail.next = node;
+            this.#tail = node;
+        }
+        else {
+            this.#head = node;
+            this.#tail = node;
+        }
+        this.#size++;
+    }
+
+    dequeue() {
+        const current = this.#head;
+        if (!current)
+            return;
+        this.#head = this.#head.next;
+        this.#size--;
+        if (!this.#head)
+            this.#tail = undefined;
+        return current.value;
+    }
+
+    peek() {
+        if (!this.#head)
+            return;
+        return this.#head.value;
+    }
+
+    clear() {
+        this.#head = undefined;
+        this.#tail = undefined;
+        this.#size = 0;
+    }
+
+    get size() {
+        return this.#size;
+    }
+
+    *[Symbol.iterator]() {
+        let current = this.#head;
+        while (current) {
+            yield current.value;
+            current = current.next;
+        }
+    }
+
+    *drain() {
+        while (this.#head)
+            yield this.dequeue();
+    }
 }
 
 }
