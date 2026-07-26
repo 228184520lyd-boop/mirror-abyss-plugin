@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0-alpha.6-realtest.1",
-  "recordedAt": "2026-07-26T13:42:00Z",
+  "version": "2.0.0-alpha.7-realtest.1",
+  "recordedAt": "2026-07-26T14:30:00Z",
   "environment": {
     "node": "22.16.0",
     "npm": "10.9.2",
@@ -9,34 +9,39 @@
   },
   "checks": [
     {
-      "id": "previous-candidates-real-machine",
+      "id": "alpha6-real-machine",
       "status": "failed",
-      "detail": "2.0.0-alpha.4 and alpha.5 both produced SillyTavern [object Event]; alpha.5 had no manifest CSS, narrowing failure to root JS fetch, parse, or top-level evaluation"
+      "detail": "onActivate reached; GitHub default branch lacked dist/runtime/index.js, causing same-origin dynamic import 404 before any dependency provider loaded"
     },
     {
       "id": "source-smoke",
       "status": "passed",
-      "detail": "34 production TS/TSX files, relative imports, manifest, forbidden concepts and FACT/EVT references valid"
+      "detail": "33 executable production TS/TSX modules, imports, manifest and fact/event references valid"
     },
     {
       "id": "reducer-smoke",
       "status": "passed",
-      "detail": "same-message old fact replacement, other-message preservation, manual lock preservation and spacetime singleton passed"
+      "detail": "same-message replacement, other-message preservation, manual lock preservation and spacetime singleton passed"
     },
     {
-      "id": "browser-esm-vendor-fallback-build",
+      "id": "single-file-build",
       "status": "passed",
-      "detail": "versioned zero-side-effect bootstrap-alpha6.js, one 33-module business runtime tree and 7 vendor modules generated"
+      "detail": "one 98 KB manifest entry generated with 33 executable source modules and CSS embedded; no local runtime tree"
     },
     {
       "id": "host-contract-smoke",
       "status": "passed",
-      "detail": "mock host events and cleanup, stable chat identity, message key persistence, text/swipe replacement and stale-session rejection passed"
+      "detail": "events and cleanup, stable chat identity, message key persistence, text/swipe replacement and stale-session rejection passed against bundled registry"
     },
     {
       "id": "install-smoke",
       "status": "passed",
-      "detail": "41 emitted JavaScript files parsed; versioned bootstrap import has no top-level bootstrap mutation, deferred CSS, single runtime, six dual-provider shims and lifecycle exports valid"
+      "detail": "one local JS, no dist/runtime, no local dynamic import, zero-side-effect first import and dependency fallback passed"
+    },
+    {
+      "id": "package-extract-smoke",
+      "status": "passed",
+      "detail": "archive extracted with 8 files; manifest entry present, no dist/runtime, JS syntax/lifecycle exports and zero-side-effect first import passed"
     },
     {
       "id": "npm-install",
@@ -46,7 +51,7 @@
     {
       "id": "formal-typecheck",
       "status": "not-run",
-      "detail": "dependency type packages unavailable; transpile/build result is not recorded as formal typecheck"
+      "detail": "dependency type packages unavailable"
     },
     {
       "id": "webpack-self-contained-build",
@@ -54,12 +59,12 @@
       "detail": "npm dependencies unavailable"
     },
     {
-      "id": "current-candidate-sillytavern-real-machine",
+      "id": "alpha7-sillytavern-real-machine",
       "status": "not-run",
-      "detail": "2.0.0-alpha.6-realtest.1 has not yet been installed in the target SillyTavern"
+      "detail": "current candidate has not yet been installed in target SillyTavern"
     }
   ],
-  "conclusion": "alpha.4 and alpha.5 real-machine entry failures recorded as facts; alpha.6 versioned zero-side-effect candidate passed all available local regressions; SillyTavern real-machine retest pending",
-  "runtimeDependencyMode": "pinned-browser-esm-vendor-fallback",
+  "conclusion": "alpha.6 GitHub runtime omission recorded; alpha.7 single-local-file candidate passed all available local regressions and awaits SillyTavern real-machine retest",
+  "runtimeDependencyMode": "single-local-file-pinned-browser-esm-fallback",
   "sourceSchemaVersion": 3
 }
