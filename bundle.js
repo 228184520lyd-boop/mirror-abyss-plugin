@@ -326,7 +326,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.24';
+const VERSION = '1.4.0-alpha.25';
 const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -9418,16 +9418,112 @@ const SAMPLING_PARAMETER_KEYS = Object.freeze([
     'seed',
 ]);
 const SAMPLING_PARAMETER_SET = new Set(SAMPLING_PARAMETER_KEYS.map((key) => key.toLowerCase()));
-function samplingFreeOverride(extra = {}) {
+function normalizeOptionalKey(value) {
+    return safeText(value, 160).trim().replace(/^['"]|['"]$/g, '');
+}
+function parseExcludedKeys(value) {
+    const text = safeText(value, 20000).trim();
+    const output = new Set();
+    const add = (candidate) => {
+        const key = normalizeOptionalKey(candidate);
+        if (/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key))
+            output.add(key);
+    };
+    if (!text)
+        return output;
+    try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+            for (const item of parsed)
+                typeof item === 'string' ? add(item) : item && typeof item === 'object' && Object.keys(item).forEach(add);
+        }
+        else if (parsed && typeof parsed === 'object') {
+            Object.keys(parsed).forEach(add);
+        }
+        else if (typeof parsed === 'string') {
+            add(parsed);
+        }
+        return output;
+    }
+    catch {
+        // SillyTavern 的字段使用 YAML。浏览器扩展不引入 YAML 解析器，只保守读取顶层键。
+    }
+    for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.replace(/\s+#.*$/, '').trim();
+        if (!line)
+            continue;
+        const listItem = line.match(/^-\s*['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?(?:\s*:.*)?$/);
+        const objectKey = line.match(/^['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s*:/);
+        if (listItem)
+            add(listItem[1]);
+        else if (objectKey)
+            add(objectKey[1]);
+        else if (!/\s/.test(line))
+            add(line);
+    }
+    return output;
+}
+function samplingExclusionYaml(existing = '') {
+    const keys = parseExcludedKeys(existing);
+    for (const key of SAMPLING_PARAMETER_KEYS)
+        keys.add(key);
+    return [...keys].map((key) => `- ${key}`).join('\n');
+}
+function stripSamplingFromCustomInclude(value) {
+    const text = safeText(value, 50000).trim();
+    if (!text)
+        return '';
+    try {
+        const parsed = JSON.parse(text);
+        const cleanObject = (item) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item))
+                return item;
+            const copy = { ...item };
+            for (const key of Object.keys(copy)) {
+                if (SAMPLING_PARAMETER_SET.has(key.toLowerCase()))
+                    delete copy[key];
+            }
+            return copy;
+        };
+        const cleaned = Array.isArray(parsed) ? parsed.map(cleanObject) : cleanObject(parsed);
+        return JSON.stringify(cleaned);
+    }
+    catch {
+        // 兼容 YAML 顶层对象和 “- key: value” 数组。只删除顶层采样项，不扫描正文或嵌套业务对象。
+    }
+    const lines = text.split(/\r?\n/);
+    const kept = [];
+    let skippedIndent = null;
+    for (const line of lines) {
+        const indent = line.match(/^\s*/)?.[0].length ?? 0;
+        if (skippedIndent !== null) {
+            if (!line.trim() || indent > skippedIndent)
+                continue;
+            skippedIndent = null;
+        }
+        if (indent === 0) {
+            const match = line.trim().match(/^(?:-\s*)?['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s*:/);
+            if (match && SAMPLING_PARAMETER_SET.has(match[1].toLowerCase())) {
+                skippedIndent = indent;
+                continue;
+            }
+        }
+        kept.push(line);
+    }
+    return kept.join('\n').trim();
+}
+function samplingFreeOverride(extra = {}, existingExcludeBody = '') {
     const override = { ...extra };
-    // ConnectionManagerRequestService 会在生成预设之后应用 overridePayload，
-    // SillyTavern 的 createRequestData 随后删除 undefined 字段。因此这里必须显式
-    // 占位，而不是仅依赖 includePreset=false；后者无法防止当前设置或站点分支回填采样参数。
+    // 前端层：覆盖预设字段并让 SillyTavern createRequestData 删除 undefined。
     for (const key of SAMPLING_PARAMETER_KEYS)
         override[key] = undefined;
+    // 后端层：Custom(OpenAI-compatible) 会在前端清理后再次合并 Include Body Parameters。
+    // 官方后端最后才执行 custom_exclude_body，因此必须同时下发硬排除清单。
+    override.custom_include_body = stripSamplingFromCustomInclude(override.custom_include_body);
+    override.custom_exclude_body = samplingExclusionYaml(override.custom_exclude_body || existingExcludeBody);
     return override;
 }
-function stripSamplingParameters(payload) {
+function stripSamplingParameters(payload, existingExcludeBody = '', applyCustomPolicy = true) {
     if (!payload || typeof payload !== 'object')
         return payload;
     for (const key of Object.keys(payload)) {
@@ -9438,9 +9534,160 @@ function stripSamplingParameters(payload) {
     for (const key of ['parameters', 'generation_config', 'generationConfig', 'sampling_params', 'samplingParams']) {
         const nested = payload[key];
         if (nested && typeof nested === 'object')
-            stripSamplingParameters(nested);
+            stripSamplingParameters(nested, '', false);
+    }
+    if (applyCustomPolicy) {
+        payload.custom_include_body = stripSamplingFromCustomInclude(payload.custom_include_body);
+        payload.custom_exclude_body = samplingExclusionYaml(payload.custom_exclude_body || existingExcludeBody);
     }
     return payload;
+}
+const SAMPLING_GUARD_PREFIX = '__MIRROR_ABYSS_NO_SAMPLING__';
+const samplingFetchGuards = new Set();
+let samplingGuardOriginalFetch = null;
+let samplingGuardWrapper = null;
+function samplingGuardMarker() {
+    const uuid = globalThis.crypto?.randomUUID?.();
+    const suffix = uuid || `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    return `${SAMPLING_GUARD_PREFIX}${suffix}__`;
+}
+function removeGuardMarker(value, marker, depth = 0) {
+    if (depth > 12)
+        return value;
+    if (typeof value === 'string')
+        return value.replaceAll(marker, '').replace(/^\s*\n/, '');
+    if (Array.isArray(value)) {
+        for (let index = value.length - 1; index >= 0; index -= 1) {
+            const item = value[index];
+            if (item && typeof item === 'object' && typeof item.content === 'string' && item.content.trim() === marker) {
+                value.splice(index, 1);
+                continue;
+            }
+            value[index] = removeGuardMarker(item, marker, depth + 1);
+        }
+        return value;
+    }
+    if (!value || typeof value !== 'object')
+        return value;
+    for (const key of Object.keys(value))
+        value[key] = removeGuardMarker(value[key], marker, depth + 1);
+    return value;
+}
+function guardedFetchBody(body) {
+    if (typeof body !== 'string' || !body.includes(SAMPLING_GUARD_PREFIX))
+        return body;
+    let payload;
+    try {
+        payload = JSON.parse(body);
+    }
+    catch {
+        return body;
+    }
+    let matched = false;
+    for (const marker of samplingFetchGuards) {
+        if (!body.includes(marker))
+            continue;
+        removeGuardMarker(payload, marker);
+        matched = true;
+    }
+    if (!matched)
+        return body;
+    // 这是离开浏览器前的最后一道边界：既删除当前请求已有采样字段，也下发
+    // Custom(OpenAI-compatible) 后端的最终排除清单，阻止 Include Body 再次注入。
+    stripSamplingParameters(payload);
+    return JSON.stringify(payload);
+}
+function ensureSamplingFetchGuard() {
+    if (samplingGuardWrapper)
+        return true;
+    const original = globalThis.fetch;
+    if (typeof original !== 'function')
+        return false;
+    samplingGuardOriginalFetch = original;
+    samplingGuardWrapper = function mirrorAbyssSamplingGuard(input, init) {
+        if (!init || typeof init !== 'object' || typeof init.body !== 'string')
+            return samplingGuardOriginalFetch.call(this, input, init);
+        const body = guardedFetchBody(init.body);
+        if (body === init.body)
+            return samplingGuardOriginalFetch.call(this, input, init);
+        return samplingGuardOriginalFetch.call(this, input, { ...init, body });
+    };
+    try {
+        globalThis.fetch = samplingGuardWrapper;
+        return globalThis.fetch === samplingGuardWrapper;
+    }
+    catch {
+        samplingGuardOriginalFetch = null;
+        samplingGuardWrapper = null;
+        return false;
+    }
+}
+function registerSamplingFetchGuard(marker) {
+    const installed = ensureSamplingFetchGuard();
+    if (installed)
+        samplingFetchGuards.add(marker);
+    return () => {
+        samplingFetchGuards.delete(marker);
+        if (samplingFetchGuards.size > 0)
+            return;
+        let restored = globalThis.fetch !== samplingGuardWrapper;
+        if (samplingGuardWrapper && globalThis.fetch === samplingGuardWrapper) {
+            try {
+                globalThis.fetch = samplingGuardOriginalFetch;
+                restored = globalThis.fetch === samplingGuardOriginalFetch;
+            }
+            catch {
+                // 某些嵌入页会锁定全局 fetch；保留无活动标记的透传包装器即可。
+                restored = false;
+            }
+        }
+        if (restored) {
+            samplingGuardOriginalFetch = null;
+            samplingGuardWrapper = null;
+        }
+    };
+}
+function guardedMessages(options, marker) {
+    const messages = messagesFromOptions(options).map((message) => ({ ...message }));
+    const systemIndex = messages.findIndex((message) => message.role === 'system');
+    if (systemIndex >= 0)
+        messages[systemIndex].content = `${marker}\n${messages[systemIndex].content}`;
+    else
+        messages.unshift({ role: 'system', content: marker });
+    return messages;
+}
+function currentChatTransportSettings(context) {
+    const settings = context.chatCompletionSettings;
+    if (!settings || typeof settings !== 'object')
+        return {};
+    // 只复制连接与鉴权相关字段；生成预设、采样器和正文设置不进入镜渊请求。
+    const fields = [
+        'chat_completion_source',
+        'custom_url',
+        'custom_include_headers',
+        'custom_include_body',
+        'custom_exclude_body',
+        'custom_prompt_post_processing',
+        'reverse_proxy',
+        'proxy_password',
+        'secret_id',
+        'vertexai_region',
+        'vertexai_auth_mode',
+        'vertexai_express_project_id',
+        'zai_endpoint',
+        'siliconflow_endpoint',
+        'minimax_endpoint',
+        'workers_ai_account_id',
+        'azure_openai_endpoint',
+        'azure_openai_api_version',
+        'azure_openai_deployment_name',
+    ];
+    const output = {};
+    for (const field of fields) {
+        if (settings[field] !== undefined)
+            output[field] = settings[field];
+    }
+    return output;
 }
 function unsupportedSamplingParameter(error) {
     const message = toErrorMessage(error);
@@ -9465,8 +9712,8 @@ function samplingCompatibilityError(error, label, currentConnection = false) {
     if (!parameter)
         return null;
     const guidance = currentConnection
-        ? '镜渊已尝试通过当前连接的底层请求服务显式剔除采样参数；当前 SillyTavern 版本若没有该服务，则只能使用旧 generateRaw 兼容路径。'
-        : '镜渊已关闭 Profile 生成预设继承，并显式剔除采样参数；若仍出现该错误，说明当前站点或网关在插件请求之后重新注入了该字段。';
+        ? '镜渊已在底层请求、浏览器最终发送边界和 Custom 后端排除清单三层剔除采样参数；若仍出现该错误，请导出诊断确认报错是否来自另一条非镜渊请求。'
+        : '镜渊已关闭 Profile 预设继承，并在浏览器最终发送边界及 Custom 后端排除清单中剔除采样参数；若仍出现该错误，请导出诊断确认站点是否绕过标准 fetch 传输。';
     return new Error(`${label}所用模型不接受 ${parameter} 参数。${guidance}`, { cause: error });
 }
 function currentTextPrompt(context, options) {
@@ -9491,42 +9738,72 @@ async function generateCurrentWithoutSampling(options) {
     const api = safeText(context.mainApi, 80).trim();
     const maxTokens = responseTokens(options);
     const label = `${options.task}当前聊天连接`;
-    if (api === 'openai') {
-        const service = context.ChatCompletionService;
-        if (typeof service?.presetToGeneratePayload !== 'function' || typeof service?.sendRequest !== 'function')
-            return null;
-        let model;
-        try {
-            model = typeof context.getChatCompletionModel === 'function' ? context.getChatCompletionModel() : undefined;
+    const marker = samplingGuardMarker();
+    const releaseGuard = registerSamplingFetchGuard(marker);
+    try {
+        if (api === 'openai') {
+            const service = context.ChatCompletionService;
+            if (!service)
+                return null;
+            let model;
+            try {
+                model = typeof context.getChatCompletionModel === 'function' ? context.getChatCompletionModel() : undefined;
+            }
+            catch {
+                model = undefined;
+            }
+            const transport = currentChatTransportSettings(context);
+            const override = samplingFreeOverride({
+                ...transport,
+                stream: true,
+                messages: guardedMessages(options, marker),
+                max_tokens: maxTokens,
+                model: model || undefined,
+            }, transport.custom_exclude_body);
+            let streamResult;
+            // 首选 processRequest：直接使用显式连接字段，不再让当前生成预设参与请求构造。
+            if (typeof service.processRequest === 'function') {
+                const payload = stripSamplingParameters(override, transport.custom_exclude_body);
+                streamResult = await service.processRequest(payload, {}, true, options.signal);
+            }
+            else if (typeof service.presetToGeneratePayload === 'function' && typeof service.sendRequest === 'function') {
+                // 兼容 ST 1.16 早期分支：仍使用其 payload 转换器，但在转换后再次净化。
+                const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override), transport.custom_exclude_body);
+                streamResult = await service.sendRequest(payload, true, options.signal);
+            }
+            else {
+                return null;
+            }
+            return await consumeProfileStream(streamResult, label);
         }
-        catch {
-            model = undefined;
+        if (api === 'textgenerationwebui') {
+            const service = context.TextCompletionService;
+            if (!service)
+                return null;
+            const override = samplingFreeOverride({
+                stream: true,
+                prompt: `${marker}\n${currentTextPrompt(context, options)}`,
+                max_tokens: maxTokens,
+                max_new_tokens: maxTokens,
+            });
+            let streamResult;
+            if (typeof service.processRequest === 'function') {
+                streamResult = await service.processRequest(stripSamplingParameters(override), {}, true, options.signal);
+            }
+            else if (typeof service.presetToGeneratePayload === 'function' && typeof service.sendRequest === 'function') {
+                const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override));
+                streamResult = await service.sendRequest(payload, true, options.signal);
+            }
+            else {
+                return null;
+            }
+            return await consumeProfileStream(streamResult, label);
         }
-        const override = samplingFreeOverride({
-            stream: true,
-            messages: messagesFromOptions(options),
-            max_tokens: maxTokens,
-            model: model || undefined,
-        });
-        const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override));
-        const streamResult = await service.sendRequest(payload, true, options.signal);
-        return await consumeProfileStream(streamResult, label);
+        return null;
     }
-    if (api === 'textgenerationwebui') {
-        const service = context.TextCompletionService;
-        if (typeof service?.presetToGeneratePayload !== 'function' || typeof service?.sendRequest !== 'function')
-            return null;
-        const override = samplingFreeOverride({
-            stream: true,
-            prompt: currentTextPrompt(context, options),
-            max_tokens: maxTokens,
-            max_new_tokens: maxTokens,
-        });
-        const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override));
-        const streamResult = await service.sendRequest(payload, true, options.signal);
-        return await consumeProfileStream(streamResult, label);
+    finally {
+        releaseGuard();
     }
-    return null;
 }
 async function generateCurrent(options, controller) {
     const context = getContext();
@@ -9546,9 +9823,11 @@ async function generateCurrent(options, controller) {
         // 旧版 SillyTavern 没有导出底层服务时保留 generateRaw 兼容路径。
         if (typeof context.generateRaw !== 'function')
             throw new Error('当前SillyTavern既未提供底层请求服务，也未提供generateRaw');
+        const marker = samplingGuardMarker();
+        const releaseGuard = registerSamplingFetchGuard(marker);
         try {
             const result = await context.generateRaw({
-                systemPrompt: options.systemPrompt,
+                systemPrompt: `${marker}\n${options.systemPrompt}`,
                 prompt: options.prompt,
                 responseLength: responseTokens(options),
             });
@@ -9559,6 +9838,9 @@ async function generateCurrent(options, controller) {
         }
         catch (error) {
             throw samplingCompatibilityError(error, label, true) ?? error;
+        }
+        finally {
+            releaseGuard();
         }
     })();
     return await withTimeout(request, Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${options.task}模型调用`, controller);
@@ -9612,22 +9894,33 @@ async function generateWithNativeProfile(options, profileId, controller) {
         throw new Error('当前SillyTavern未提供ConnectionManagerRequestService');
     }
     const settings = getSettings();
-    const messages = messagesFromOptions(options);
     const label = `${options.task} Connection Profile`;
     const request = (async () => {
         try {
             // SillyTavern 的非流式路径会在检查 HTTP 状态前直接 response.json()。
             // 使用流式路径可先检查 4xx/5xx，并持续产生数据，避免长请求被网关误判为空闲。
-            const streamResult = await service.sendRequest(profileId, messages, responseTokens(options), {
-                stream: true,
-                extractData: true,
-                // 固定文本与事实提取任务不继承 Profile 的生成预设。模型、API、密钥与
-                // Text Completion 的 Instruct 仍由 Profile 提供。
-                includePreset: false,
-                includeInstruct: true,
-                signal: options.signal,
-            }, samplingFreeOverride({ stream: true }));
-            return await consumeProfileStream(streamResult, label);
+            const marker = samplingGuardMarker();
+            const releaseGuard = registerSamplingFetchGuard(marker);
+            let profile;
+            try {
+                profile = typeof service.getProfile === 'function' ? service.getProfile(profileId) : null;
+                const streamResult = await service.sendRequest(profileId, guardedMessages(options, marker), responseTokens(options), {
+                    stream: true,
+                    extractData: true,
+                    // 固定文本与事实提取任务不继承 Profile 的生成预设。模型、API、密钥与
+                    // Text Completion 的 Instruct 仍由 Profile 提供。
+                    includePreset: false,
+                    includeInstruct: true,
+                    signal: options.signal,
+                }, samplingFreeOverride({
+                    stream: true,
+                    custom_include_body: profile?.custom_include_body,
+                }, profile?.custom_exclude_body));
+                return await consumeProfileStream(streamResult, label);
+            }
+            finally {
+                releaseGuard();
+            }
         }
         catch (error) {
             throw normalizeProfileTransportError(error, label);
