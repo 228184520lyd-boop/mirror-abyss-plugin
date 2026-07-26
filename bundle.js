@@ -326,7 +326,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.22';
+const VERSION = '1.4.0-alpha.24';
 const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -9394,40 +9394,174 @@ function messagesFromOptions(options) {
     }
     return messages;
 }
-function isUnsupportedTemperatureError(error) {
+const SAMPLING_PARAMETER_KEYS = Object.freeze([
+    'temperature',
+    'top_p',
+    'top_k',
+    'min_p',
+    'top_a',
+    'typical_p',
+    'tfs',
+    'epsilon_cutoff',
+    'eta_cutoff',
+    'mirostat_mode',
+    'mirostat_tau',
+    'mirostat_eta',
+    'dynatemp_range',
+    'dynatemp_exponent',
+    'smoothing_factor',
+    'smoothing_curve',
+    'frequency_penalty',
+    'presence_penalty',
+    'repetition_penalty',
+    'penalty_alpha',
+    'seed',
+]);
+const SAMPLING_PARAMETER_SET = new Set(SAMPLING_PARAMETER_KEYS.map((key) => key.toLowerCase()));
+function samplingFreeOverride(extra = {}) {
+    const override = { ...extra };
+    // ConnectionManagerRequestService 会在生成预设之后应用 overridePayload，
+    // SillyTavern 的 createRequestData 随后删除 undefined 字段。因此这里必须显式
+    // 占位，而不是仅依赖 includePreset=false；后者无法防止当前设置或站点分支回填采样参数。
+    for (const key of SAMPLING_PARAMETER_KEYS)
+        override[key] = undefined;
+    return override;
+}
+function stripSamplingParameters(payload) {
+    if (!payload || typeof payload !== 'object')
+        return payload;
+    for (const key of Object.keys(payload)) {
+        if (SAMPLING_PARAMETER_SET.has(key.toLowerCase()))
+            delete payload[key];
+    }
+    // 部分兼容网关把采样项包在这些标准容器内；不递归 messages，避免改动正文内容。
+    for (const key of ['parameters', 'generation_config', 'generationConfig', 'sampling_params', 'samplingParams']) {
+        const nested = payload[key];
+        if (nested && typeof nested === 'object')
+            stripSamplingParameters(nested);
+    }
+    return payload;
+}
+function unsupportedSamplingParameter(error) {
     const message = toErrorMessage(error);
-    return /(?:temperature|温度)/i.test(message)
-        && /(?:not\s+(?:supported|recommended|allowed)|unsupported|does\s+not\s+(?:support|accept)|不支持|不推荐|不可用|不允许|无效)/i.test(message);
+    const rejected = /(?:not\s+(?:supported|recommended|allowed)|unsupported|does\s+not\s+(?:support|accept)|invalid|not\s+available|不支持|不推荐|不可用|不允许|无效|不接受|不能使用)/i.test(message);
+    if (!rejected)
+        return '';
+    if (/(?:temperature|温度)/i.test(message))
+        return 'temperature';
+    const aliases = [
+        ['top_p', /top[\s_-]?p/i],
+        ['top_k', /top[\s_-]?k/i],
+        ['min_p', /min[\s_-]?p/i],
+        ['frequency_penalty', /frequency[\s_-]?penalty/i],
+        ['presence_penalty', /presence[\s_-]?penalty/i],
+        ['repetition_penalty', /repetition[\s_-]?penalty|rep[\s_-]?pen/i],
+        ['seed', /(?:^|[^a-z])seed(?:[^a-z]|$)/i],
+    ];
+    return aliases.find(([, pattern]) => pattern.test(message))?.[0] || '';
 }
 function samplingCompatibilityError(error, label, currentConnection = false) {
-    if (!isUnsupportedTemperatureError(error))
+    const parameter = unsupportedSamplingParameter(error);
+    if (!parameter)
         return null;
     const guidance = currentConnection
-        ? '当前聊天连接会继承 SillyTavern 的采样设置；请在 ST 预设中停用温度，或为镜渊选择 Connection Profile。'
-        : '镜渊已禁止 Connection Profile 继承生成预设；若仍出现该错误，说明当前站点或网关在插件请求之后重新注入了温度。';
-    return new Error(`${label}所用模型不接受 temperature 参数。${guidance}`, { cause: error });
+        ? '镜渊已尝试通过当前连接的底层请求服务显式剔除采样参数；当前 SillyTavern 版本若没有该服务，则只能使用旧 generateRaw 兼容路径。'
+        : '镜渊已关闭 Profile 生成预设继承，并显式剔除采样参数；若仍出现该错误，说明当前站点或网关在插件请求之后重新注入了该字段。';
+    return new Error(`${label}所用模型不接受 ${parameter} 参数。${guidance}`, { cause: error });
+}
+function currentTextPrompt(context, options) {
+    const messages = messagesFromOptions(options).map((message) => ({ ...message }));
+    const service = context.TextCompletionService;
+    const instruct = context.powerUserSettings?.instruct;
+    const instructName = instruct?.enabled ? safeText(instruct?.preset, 240).trim() : '';
+    if (instructName && typeof service?.constructPrompt === 'function') {
+        try {
+            const formatted = service.constructPrompt(messages, instructName);
+            if (typeof formatted === 'string' && formatted.trim())
+                return formatted;
+        }
+        catch (error) {
+            console.warn('[MirrorAbyss] 当前 Text Completion 指令模板格式化失败，改用基础消息拼接', error);
+        }
+    }
+    return messages.map((message) => message.content).filter(Boolean).join('\n\n');
+}
+async function generateCurrentWithoutSampling(options) {
+    const context = getContext();
+    const api = safeText(context.mainApi, 80).trim();
+    const maxTokens = responseTokens(options);
+    const label = `${options.task}当前聊天连接`;
+    if (api === 'openai') {
+        const service = context.ChatCompletionService;
+        if (typeof service?.presetToGeneratePayload !== 'function' || typeof service?.sendRequest !== 'function')
+            return null;
+        let model;
+        try {
+            model = typeof context.getChatCompletionModel === 'function' ? context.getChatCompletionModel() : undefined;
+        }
+        catch {
+            model = undefined;
+        }
+        const override = samplingFreeOverride({
+            stream: true,
+            messages: messagesFromOptions(options),
+            max_tokens: maxTokens,
+            model: model || undefined,
+        });
+        const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override));
+        const streamResult = await service.sendRequest(payload, true, options.signal);
+        return await consumeProfileStream(streamResult, label);
+    }
+    if (api === 'textgenerationwebui') {
+        const service = context.TextCompletionService;
+        if (typeof service?.presetToGeneratePayload !== 'function' || typeof service?.sendRequest !== 'function')
+            return null;
+        const override = samplingFreeOverride({
+            stream: true,
+            prompt: currentTextPrompt(context, options),
+            max_tokens: maxTokens,
+            max_new_tokens: maxTokens,
+        });
+        const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override));
+        const streamResult = await service.sendRequest(payload, true, options.signal);
+        return await consumeProfileStream(streamResult, label);
+    }
+    return null;
 }
 async function generateCurrent(options, controller) {
     const context = getContext();
-    if (typeof context.generateRaw !== 'function')
-        throw new Error('当前SillyTavern未提供generateRaw');
     const settings = getSettings();
-    let result;
-    try {
-        result = await withTimeout(Promise.resolve(context.generateRaw({
-            systemPrompt: options.systemPrompt,
-            prompt: options.prompt,
-            responseLength: responseTokens(options),
-            signal: options.signal,
-        })), Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${options.task}模型调用`, controller);
-    }
-    catch (error) {
-        throw samplingCompatibilityError(error, `${options.task}当前聊天连接`, true) ?? error;
-    }
-    const text = generationText(result);
-    if (!text)
-        throw emptyGenerationError(`${options.task}模型`, result);
-    return text;
+    const label = `${options.task}当前聊天连接`;
+    const request = (async () => {
+        // 现代 SillyTavern：直接复用当前连接的底层请求构造器，只删除镜渊请求中的
+        // 采样字段。不会改写 ST 全局预设，也不会影响角色正文生成。
+        try {
+            const sanitized = await generateCurrentWithoutSampling(options);
+            if (sanitized !== null)
+                return sanitized;
+        }
+        catch (error) {
+            throw samplingCompatibilityError(error, label, true) ?? normalizeProfileTransportError(error, label);
+        }
+        // 旧版 SillyTavern 没有导出底层服务时保留 generateRaw 兼容路径。
+        if (typeof context.generateRaw !== 'function')
+            throw new Error('当前SillyTavern既未提供底层请求服务，也未提供generateRaw');
+        try {
+            const result = await context.generateRaw({
+                systemPrompt: options.systemPrompt,
+                prompt: options.prompt,
+                responseLength: responseTokens(options),
+            });
+            const text = generationText(result);
+            if (!text)
+                throw emptyGenerationError(`${options.task}模型`, result);
+            return text;
+        }
+        catch (error) {
+            throw samplingCompatibilityError(error, label, true) ?? error;
+        }
+    })();
+    return await withTimeout(request, Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${options.task}模型调用`, controller);
 }
 function normalizeProfileTransportError(error, label) {
     const message = toErrorMessage(error);
@@ -9487,13 +9621,12 @@ async function generateWithNativeProfile(options, profileId, controller) {
             const streamResult = await service.sendRequest(profileId, messages, responseTokens(options), {
                 stream: true,
                 extractData: true,
-                // 固定文本与事实提取任务不继承 Profile 的生成预设。ST 会把预设中的
-                // temperature 等采样参数合并进请求，而部分推理模型明确拒绝这些字段。
-                // 模型、API、密钥与 Text Completion 的 Instruct 仍由 Profile 提供。
+                // 固定文本与事实提取任务不继承 Profile 的生成预设。模型、API、密钥与
+                // Text Completion 的 Instruct 仍由 Profile 提供。
                 includePreset: false,
                 includeInstruct: true,
                 signal: options.signal,
-            }, { stream: true });
+            }, samplingFreeOverride({ stream: true }));
             return await consumeProfileStream(streamResult, label);
         }
         catch (error) {
