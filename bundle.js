@@ -153,10 +153,13 @@ Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:tr
 Object.defineProperty(__scope,"advanceCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["advanceCommit"]});
 Object.defineProperty(__scope,"artifactCommitHash",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["artifactCommitHash"]});
 Object.defineProperty(__scope,"prepareCommit",{enumerable:true,configurable:true,get:()=>__require("domain/reliable-workflow.js")["prepareCommit"]});
-Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
+Object.defineProperty(__scope,"saveHostSnapshot",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostSnapshot"]});
 with(__scope){
 Object.defineProperty(exports,"commitArtifact",{enumerable:true,configurable:true,get:()=>commitArtifact});
+Object.defineProperty(exports,"commitStateArtifactBundle",{enumerable:true,configurable:true,get:()=>commitStateArtifactBundle});
 Object.defineProperty(exports,"commitCoreBundle",{enumerable:true,configurable:true,get:()=>commitCoreBundle});
+Object.defineProperty(exports,"commitDerivedBundle",{enumerable:true,configurable:true,get:()=>commitDerivedBundle});
+Object.defineProperty(exports,"commitHostSnapshot",{enumerable:true,configurable:true,get:()=>commitHostSnapshot});
 Object.defineProperty(exports,"captureCommitSnapshot",{enumerable:true,configurable:true,get:()=>captureCommitSnapshot});
 Object.defineProperty(exports,"assertCommitSnapshotCurrent",{enumerable:true,configurable:true,get:()=>assertCommitSnapshotCurrent});
 /**
@@ -202,10 +205,11 @@ async function commitArtifact({ artifact, snapshot = captureCommitSnapshot(artif
     const message = getMessage(snapshot.messageIndex);
     const hadExtra = Boolean(message.extra);
     const hadArtifact = Boolean(message.extra && Object.prototype.hasOwnProperty.call(message.extra, MODULE_NAME));
-    const previousArtifact = message.extra?.[MODULE_NAME];
+    // artifact 往往已经附着在 message.extra 上；必须深拷贝，不能保存同一个可变引用充当回滚值。
+    const previousArtifact = hadArtifact ? structuredClone(message.extra[MODULE_NAME]) : undefined;
     attachArtifactToMessage(message, artifact);
     try {
-        await saveHostChat(snapshot.chatKey);
+        await saveHostSnapshot(snapshot.chatKey);
         assertCommitSnapshotCurrent(snapshot, artifact);
     }
     catch (error) {
@@ -226,14 +230,26 @@ async function commitArtifact({ artifact, snapshot = captureCommitSnapshot(artif
 }
 
 /**
- * 核心提交顺序固定为 ChatState → artifact。
- * Outbox/正式事实先成为可恢复来源；若随后消息保存失败，重新进入聊天时仍可根据 ChatState 恢复，
- * 不会出现“界面显示已排队但持久 Outbox 不存在”的不可恢复状态。
+ * ChatState 与消息 artifact 的唯一原子提交入口。
+ *
+ * SillyTavern 官方 saveChat 会把 chat_metadata 头与完整消息数组放进同一个 /api/chats/save
+ * 请求；因此这里先在内存中同时准备 ChatState 和 artifact，再只调用一次 commitChatState。
+ * commitChatState 的物理保存会同时落下二者，禁止再拆成 metadata → chat → metadata 三次保存。
  */
-async function commitCoreBundle({ artifact, chatState, snapshot = captureCommitSnapshot(artifact), notify }) {
+async function commitStateArtifactBundle({
+    artifact,
+    chatState,
+    snapshot = captureCommitSnapshot(artifact),
+    notify,
+    commandId: explicitCommandId = '',
+}) {
     assertCommitSnapshotCurrent(snapshot, artifact);
+    const message = getMessage(snapshot.messageIndex);
+    const hadExtra = Boolean(message.extra);
+    const hadArtifact = Boolean(message.extra && Object.prototype.hasOwnProperty.call(message.extra, MODULE_NAME));
+    const previousArtifact = hadArtifact ? structuredClone(message.extra[MODULE_NAME]) : undefined;
     const intentId = artifact.intentId || artifact.processingIntent?.intentId || '';
-    const commandId = artifact.processingCommandId || `${intentId}:core-commit`;
+    const commandId = explicitCommandId || artifact.processingCommandId || `${intentId}:bundle-commit`;
     const prepared = prepareCommit(chatState.reliableWorkflow, {
         intentId,
         commandId,
@@ -243,44 +259,52 @@ async function commitCoreBundle({ artifact, chatState, snapshot = captureCommitS
         artifactHash: artifactCommitHash(artifact),
         stateRevision: chatState.runtimeV2?.revision || 0,
     });
-    chatState.reliableWorkflow = prepared.workflow;
-    let chatStateWritten = false;
-    let artifactWritten = false;
+    // 这是一个宿主请求内的原子快照，不再需要跨三次物理写入保留中间 phase。
+    chatState.reliableWorkflow = advanceCommit(
+        prepared.workflow,
+        prepared.commit.commitId,
+        'committed',
+    ).workflow;
+    attachArtifactToMessage(message, artifact);
     try {
-        // prepared 与规范 ChatState 在同一次 metadata 保存中落地。若后续消息保存失败，
-        // Reconciler 可依据该记录与 artifact 哈希确定性对账，不会盲目重跑模型。
-        await commitChatState(chatState);
-        chatStateWritten = true;
-        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written').workflow;
+        // commitChatState 最终调用唯一 saveHostSnapshot；该请求同时序列化 metadata 和 messages。
+        const receipt = await commitChatState(chatState);
         assertCommitSnapshotCurrent(snapshot, artifact);
-        await commitArtifact({ artifact, snapshot, notify });
-        artifactWritten = true;
-        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written').workflow;
-        chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'committed').workflow;
-        await commitChatState(chatState);
-        return { artifact, chatState, snapshot, commitId: prepared.commit.commitId };
+        notify?.(snapshot.messageIndex, artifact);
+        return { artifact, chatState, snapshot, commitId: prepared.commit.commitId, receipt };
     }
     catch (error) {
-        try {
-            if (!chatStateWritten) {
-                // 首次 ChatState 写入本身失败，尚无可用于恢复的 prepared 记录，允许记录为明确失败。
-                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'failed', error instanceof Error ? error.message : String(error)).workflow;
+        if (!(error instanceof CommitRejectedError)) {
+            if (hadArtifact)
+                attachArtifactToMessage(message, previousArtifact);
+            else if (message.extra) {
+                delete message.extra[MODULE_NAME];
+                if (!hadExtra && Object.keys(message.extra).length === 0)
+                    delete message.extra;
             }
-            else if (artifactWritten) {
-                // artifact 已物理写入但最终回执未保存：保持非终态，由 Reconciler 通过 artifact 哈希确认。
-                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'artifact_written', error instanceof Error ? error.message : String(error)).workflow;
-            }
-            else {
-                // commitArtifact 可能在物理保存后因聊天切换守卫拒绝，不能武断标记 failed。
-                chatState.reliableWorkflow = advanceCommit(chatState.reliableWorkflow, prepared.commit.commitId, 'chat_state_written', error instanceof Error ? error.message : String(error)).workflow;
-            }
-            await commitChatState(chatState);
-        }
-        catch (recordError) {
-            console.warn('[MirrorAbyss] core commit failed and commit record could not be finalized', recordError);
         }
         throw error;
     }
+}
+
+/** 核心结果兼容入口：转发到同一个状态+artifact 原子 Unit of Work。 */
+async function commitCoreBundle(options) {
+    const artifact = options.artifact;
+    const intentId = artifact.intentId || artifact.processingIntent?.intentId || '';
+    return commitStateArtifactBundle({
+        ...options,
+        commandId: options.commandId || artifact.processingCommandId || `${intentId}:core-commit`,
+    });
+}
+
+/** 总结等派生结果兼容入口：同样禁止拆分宿主保存。 */
+async function commitDerivedBundle(options) {
+    return commitStateArtifactBundle(options);
+}
+
+/** 仅在没有 ChatState 可提交时使用的宿主快照兼容入口。 */
+async function commitHostSnapshot(chatKey) {
+    return saveHostSnapshot(chatKey);
 }
 
 }
@@ -315,6 +339,9 @@ Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurabl
 Object.defineProperty(__scope,"setRequestAcceptance",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["setRequestAcceptance"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
 Object.defineProperty(__scope,"reconcileReliableRuntime",{enumerable:true,configurable:true,get:()=>__require("pipeline/reconciler.js")["reconcileReliableRuntime"]});
+Object.defineProperty(__scope,"requestHostSettingsSave",{enumerable:true,configurable:true,get:()=>__require("host/settings-persistence-adapter.js")["requestHostSettingsSave"]});
+Object.defineProperty(__scope,"registerHostDebugFunction",{enumerable:true,configurable:true,get:()=>__require("host/event-adapter.js")["registerHostDebugFunction"]});
+Object.defineProperty(__scope,"subscribeContextEvent",{enumerable:true,configurable:true,get:()=>__require("host/event-adapter.js")["subscribeContextEvent"]});
 with(__scope){
 Object.defineProperty(exports,"restartPlugin",{enumerable:true,configurable:true,get:()=>restartPlugin});
 Object.defineProperty(exports,"initialize",{enumerable:true,configurable:true,get:()=>initialize});
@@ -338,6 +365,7 @@ let cleanupUiEvents = null;
 let appReadyHandlerInstalled = false;
 let appReadyContext = null;
 let appReadyHandler = null;
+let appReadyRelease = null;
 let startupTimer;
 let extensionEnabled = true;
 // 每次 shutdown 都递增代次，使旧 initialize continuation 即使恢复也不能继续挂载 UI 或监听器。
@@ -346,12 +374,6 @@ let debugRegistered = false;
 let startupAttempts = 0;
 let lastError = null;
 const MAX_STARTUP_ATTEMPTS = 20;
-function removeSourceListener(source, event, handler) {
-    if (typeof source?.off === 'function')
-        source.off(event, handler);
-    else
-        source?.removeListener?.(event, handler);
-}
 function clearStartupTimer() {
     if (startupTimer === undefined)
         return;
@@ -441,22 +463,19 @@ async function initialize() {
                 resetWorkspaceContext();
                 rerender();
             };
-            context.eventSource.on(context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-            context.eventSource.on(context.event_types.CHAT_CHANGED, resetAndRerender);
-            context.eventSource.on(context.event_types.MESSAGE_DELETED, resetAndRerender);
-            cleanupUiEvents = () => {
-                removeSourceListener(context.eventSource, context.event_types.CHARACTER_MESSAGE_RENDERED, rerender);
-                removeSourceListener(context.eventSource, context.event_types.CHAT_CHANGED, resetAndRerender);
-                removeSourceListener(context.eventSource, context.event_types.MESSAGE_DELETED, resetAndRerender);
-            };
+            const releases = [
+                subscribeContextEvent(context, context.event_types.CHARACTER_MESSAGE_RENDERED, rerender),
+                subscribeContextEvent(context, context.event_types.CHAT_CHANGED, resetAndRerender),
+                subscribeContextEvent(context, context.event_types.MESSAGE_DELETED, resetAndRerender),
+            ];
+            cleanupUiEvents = () => releases.splice(0).forEach((release) => release());
         }
-        if (!debugRegistered && typeof context.registerDebugFunction === 'function') {
-            context.registerDebugFunction('mirror_abyss_diagnostics', 'Mirror Abyss Diagnostics', 'Open the Mirror Abyss diagnostics panel', () => {
+        if (!debugRegistered) {
+            debugRegistered = registerHostDebugFunction(context, 'mirror_abyss_diagnostics', 'Mirror Abyss Diagnostics', 'Open the Mirror Abyss diagnostics panel', () => {
                 if (!extensionEnabled)
                     throw new Error('镜渊插件当前已禁用');
                 openWorkspace('diagnostics');
             });
-            debugRegistered = true;
         }
         document.querySelector('#ma11-fatal')?.remove();
         state = 'ready';
@@ -508,7 +527,7 @@ function installAppReadyHandler() {
             return;
         void initialize();
     };
-    context.eventSource.on(context.event_types.APP_READY, appReadyHandler);
+    appReadyRelease = subscribeContextEvent(context, context.event_types.APP_READY, appReadyHandler);
     // Third-party extensions may be loaded after APP_READY, so initialization is
     // also attempted immediately. initialize() is idempotent.
     void initialize();
@@ -518,7 +537,7 @@ async function cleanData() {
     const context = tryGetContext();
     if (context?.extensionSettings?.[MODULE_NAME])
         delete context.extensionSettings[MODULE_NAME];
-    context?.saveSettingsDebounced?.();
+    requestHostSettingsSave(context, 'plugin-clean');
 }
 function onEnable() {
     extensionEnabled = true;
@@ -540,9 +559,8 @@ function shutdown() {
     cleanupUiEvents = null;
     clearStartupTimer();
     startupAttempts = 0;
-    if (appReadyContext && appReadyHandler) {
-        removeSourceListener(appReadyContext.eventSource, appReadyContext.event_types.APP_READY, appReadyHandler);
-    }
+    appReadyRelease?.();
+    appReadyRelease = null;
     appReadyContext = null;
     appReadyHandler = null;
     appReadyHandlerInstalled = false;
@@ -603,7 +621,7 @@ Object.defineProperty(exports,"DEFAULT_SETTINGS",{enumerable:true,configurable:t
 const MODULE_NAME = 'mirrorAbyssV11';
 const LEGACY_MODULE_NAME = 'mirrorAbyss';
 const DISPLAY_NAME = '镜渊';
-const VERSION = '1.4.0-alpha.26';
+const VERSION = '1.4.0-alpha.27';
 const PIPELINE_VERSION = 'ma-reliable-v2';
 const DEFAULT_CONTENT_LIMITS = {
     tables: {
@@ -758,12 +776,9 @@ const DEFAULT_SETTINGS = {
 __defs["core/commit-guard.js"]=function(exports,__require){
 const __scope=Object.create(null);
 Object.defineProperty(__scope,"currentChatKey",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["currentChatKey"]});
-Object.defineProperty(__scope,"getContext",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getContext"]});
 Object.defineProperty(__scope,"getMessage",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getMessage"]});
 Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageFingerprint"]});
 with(__scope){
-Object.defineProperty(exports,"persistChatFor",{enumerable:true,configurable:true,get:()=>persistChatFor});
-Object.defineProperty(exports,"persistMetadataFor",{enumerable:true,configurable:true,get:()=>persistMetadataFor});
 Object.defineProperty(exports,"assertChatCommitCurrent",{enumerable:true,configurable:true,get:()=>assertChatCommitCurrent});
 Object.defineProperty(exports,"currentHistoryRevision",{enumerable:true,configurable:true,get:()=>currentHistoryRevision});
 Object.defineProperty(exports,"invalidateHistoryRevision",{enumerable:true,configurable:true,get:()=>invalidateHistoryRevision});
@@ -792,34 +807,6 @@ function assertChatCommitCurrent(chatKey, message = '聊天已切换，本次结
     if (currentChatKey() !== chatKey) {
         throw new CommitRejectedError(message);
     }
-}
-/**
- * 使用发起操作时的 chatKey 包围一次聊天保存。
- * 保存前后都校验，是为了覆盖 saveChat 内部存在 await 的切换聊天空窗。
- */
-async function persistChatFor(chatKey) {
-    assertChatCommitCurrent(chatKey);
-    const context = getContext();
-    assertChatCommitCurrent(chatKey);
-    if (typeof context.saveChat === 'function') {
-        await context.saveChat.call(context);
-    }
-    else if (typeof context.saveChatConditional === 'function') {
-        await context.saveChatConditional.call(context);
-    }
-    assertChatCommitCurrent(chatKey);
-}
-async function persistMetadataFor(chatKey) {
-    assertChatCommitCurrent(chatKey, '聊天已切换，本次元数据不再写入');
-    const context = getContext();
-    assertChatCommitCurrent(chatKey, '聊天已切换，本次元数据不再写入');
-    if (typeof context.saveMetadata === 'function') {
-        await context.saveMetadata.call(context);
-    }
-    else {
-        context.saveMetadataDebounced?.call(context);
-    }
-    assertChatCommitCurrent(chatKey, '聊天已切换，本次元数据不再写入');
 }
 function currentHistoryRevision(chatKey) {
     return historyRevisions.get(chatKey) ?? 0;
@@ -888,9 +875,9 @@ Object.defineProperty(__scope,"restoreDefaultTableRegistry",{enumerable:true,con
 Object.defineProperty(__scope,"tableByKey",{enumerable:true,configurable:true,get:()=>__require("domain/table-registry.js")["tableByKey"]});
 Object.defineProperty(__scope,"normalizeTableLinkRules",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["normalizeTableLinkRules"]});
 Object.defineProperty(__scope,"restoreDefaultTableLinkRules",{enumerable:true,configurable:true,get:()=>__require("domain/table-link-rules.js")["restoreDefaultTableLinkRules"]});
+Object.defineProperty(__scope,"disableHostWorldInfoVector",{enumerable:true,configurable:true,get:()=>__require("host/settings-persistence-adapter.js")["disableHostWorldInfoVector"]});
+Object.defineProperty(__scope,"requestHostSettingsSave",{enumerable:true,configurable:true,get:()=>__require("host/settings-persistence-adapter.js")["requestHostSettingsSave"]});
 with(__scope){
-Object.defineProperty(exports,"persistMetadata",{enumerable:true,configurable:true,get:()=>persistMetadata});
-Object.defineProperty(exports,"persistChat",{enumerable:true,configurable:true,get:()=>persistChat});
 Object.defineProperty(exports,"getContext",{enumerable:true,configurable:true,get:()=>getContext});
 Object.defineProperty(exports,"tryGetContext",{enumerable:true,configurable:true,get:()=>tryGetContext});
 Object.defineProperty(exports,"getSettings",{enumerable:true,configurable:true,get:()=>getSettings});
@@ -1132,19 +1119,9 @@ function initializeSettings() {
     const settings = normalizeStoredSettings(context);
     const pending = pendingHostSettingsMigrations.get(context);
     if (pending?.disableManagedWorldInfoVector) {
-        const vectorSettings = context.extensionSettings?.vectors;
-        if (vectorSettings && typeof vectorSettings === 'object' && vectorSettings.enabled_world_info === true) {
-            vectorSettings.enabled_world_info = false;
-            const checkbox = globalThis.document?.querySelector?.('#vectors_enabled_world_info');
-            if (checkbox) {
-                checkbox.checked = false;
-                const EventCtor = globalThis.Event;
-                if (typeof EventCtor === 'function')
-                    checkbox.dispatchEvent(new EventCtor('input', { bubbles: true }));
-            }
-        }
+        const result = disableHostWorldInfoVector(context);
         pendingHostSettingsMigrations.delete(context);
-        context.saveSettingsDebounced?.();
+        if (result.changed) requestHostSettingsSave(context, 'host-settings-migration');
     }
     return settings;
 }
@@ -1184,7 +1161,7 @@ function migrateLegacySettings(legacy) {
     };
 }
 function saveSettings() {
-    getContext().saveSettingsDebounced?.();
+    return requestHostSettingsSave(getContext(), 'mirror-settings-update');
 }
 function getChat() {
     return (getContext().chat ?? []);
@@ -1258,24 +1235,6 @@ function getChatMetadataNamespace() {
     };
     return context.chatMetadata[MODULE_NAME];
 }
-async function persistMetadata() {
-    const context = getContext();
-    if (typeof context.saveMetadata === 'function') {
-        await context.saveMetadata();
-        return;
-    }
-    context.saveMetadataDebounced?.();
-}
-async function persistChat() {
-    const context = getContext();
-    if (typeof context.saveChat === 'function') {
-        await context.saveChat();
-        return;
-    }
-    if (typeof context.saveChatConditional === 'function') {
-        await context.saveChatConditional();
-    }
-}
 function toast(kind, message) {
     const toastr = globalThis.toastr;
     if (toastr?.[kind])
@@ -1297,7 +1256,8 @@ Object.defineProperty(__scope,"messageFingerprint",{enumerable:true,configurable
 Object.defineProperty(__scope,"messageIdentity",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["messageIdentity"]});
 Object.defineProperty(__scope,"assertArtifactCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertArtifactCommitCurrent"]});
 Object.defineProperty(__scope,"attachArtifactToMessage",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["attachArtifactToMessage"]});
-Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
+Object.defineProperty(__scope,"saveHostSnapshot",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostSnapshot"]});
+Object.defineProperty(__scope,"refreshHostMessage",{enumerable:true,configurable:true,get:()=>__require("host/message-adapter.js")["refreshHostMessage"]});
 with(__scope){
 Object.defineProperty(exports,"refreshMessageDisplay",{enumerable:true,configurable:true,get:()=>refreshMessageDisplay});
 Object.defineProperty(exports,"replaceMessageInPlace",{enumerable:true,configurable:true,get:()=>replaceMessageInPlace});
@@ -1315,19 +1275,8 @@ function updateActiveSwipe(message, text) {
 async function refreshMessageDisplay(index) {
     const context = getContext();
     const message = getMessage(index);
-    // 原位修正只需要重绘这一条消息。reloadCurrentChat 会触发聊天级生命周期事件，
-    // 可能把仍在运行的“修正 → 表格”主链误当成聊天切换而取消。
-    if (typeof context.updateMessageBlock === 'function') {
-        await context.updateMessageBlock(index, message);
-        return;
-    }
-    if (context.event_types?.MESSAGE_UPDATED) {
-        context.eventSource?.emit?.(context.event_types.MESSAGE_UPDATED, index);
-        return;
-    }
-    // 仅旧版 SillyTavern 缺少单消息重绘能力时才退回整聊天刷新。
-    if (typeof context.reloadCurrentChat === 'function')
-        await context.reloadCurrentChat();
+    // 单消息重绘优先；宿主适配器只在旧 ST 缺少该能力时退回聊天刷新。
+    return await refreshHostMessage(context, index, message);
 }
 async function replaceMessageInPlace(artifact, text) {
     assertArtifactCommitCurrent(artifact);
@@ -1345,7 +1294,7 @@ async function replaceMessageInPlace(artifact, text) {
     artifact.approvedFingerprint = artifact.sourceFingerprint;
     artifact.hiddenByAudit = false;
     attachArtifactToMessage(message, artifact);
-    await saveHostChat(artifact.chatKey);
+    await saveHostSnapshot(artifact.chatKey);
     await refreshMessageDisplay(artifact.messageIndex);
     return artifact.sourceFingerprint;
 }
@@ -9374,24 +9323,171 @@ function migrateSnapshotTables(value, registry) {
 };
 __defs["host/chat-persistence-adapter.js"]=function(exports,__require){
 const __scope=Object.create(null);
-Object.defineProperty(__scope,"persistChatFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistChatFor"]});
-Object.defineProperty(__scope,"persistMetadataFor",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["persistMetadataFor"]});
+Object.defineProperty(__scope,"assertChatCommitCurrent",{enumerable:true,configurable:true,get:()=>__require("core/commit-guard.js")["assertChatCommitCurrent"]});
+Object.defineProperty(__scope,"getContext",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["getContext"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 with(__scope){
-Object.defineProperty(exports,"saveHostChat",{enumerable:true,configurable:true,get:()=>saveHostChat});
-Object.defineProperty(exports,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>saveHostMetadata});
+Object.defineProperty(exports,"saveHostSnapshot",{enumerable:true,configurable:true,get:()=>saveHostSnapshot});
 /**
- * Sole physical persistence boundary for SillyTavern chat and chat metadata.
- * Callers may decide *what* to commit; only this adapter talks to host save APIs.
+ * SillyTavern 聊天文件的唯一物理持久化边界。
+ *
+ * 官方 saveChatConditional/saveMetadata 最终都会保存同一个聊天文件；该文件同时包含
+ * chat_metadata 头和完整消息数组。因此镜渊把“正文/Artifact 保存”和“ChatState 元数据保存”
+ * 统一为一次 host snapshot 提交，禁止业务层拆成两次物理保存。
  */
-async function saveHostChat(chatKey) {
-    await persistChatFor(chatKey);
-    return { effectType: 'chat-save', chatKey, confirmedAt: nowIso() };
+async function saveHostSnapshot(chatKey) {
+    assertChatCommitCurrent(chatKey);
+    const context = getContext();
+    assertChatCommitCurrent(chatKey);
+    const save = typeof context.saveChat === 'function'
+        ? context.saveChat
+        : (typeof context.saveChatConditional === 'function' ? context.saveChatConditional : null);
+    if (!save) throw new Error('SillyTavern 聊天快照保存接口不可用');
+    await save.call(context);
+    assertChatCommitCurrent(chatKey);
+    return { effectType: 'chat-snapshot-save', chatKey, confirmedAt: nowIso() };
 }
 
-async function saveHostMetadata(chatKey) {
-    await persistMetadataFor(chatKey);
-    return { effectType: 'metadata-save', chatKey, confirmedAt: nowIso() };
+}
+};
+__defs["host/event-adapter.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"emitHostEvent",{enumerable:true,configurable:true,get:()=>emitHostEvent});
+Object.defineProperty(exports,"removeHostEventListener",{enumerable:true,configurable:true,get:()=>removeHostEventListener});
+Object.defineProperty(exports,"subscribeHostEvent",{enumerable:true,configurable:true,get:()=>subscribeHostEvent});
+Object.defineProperty(exports,"subscribeContextEvent",{enumerable:true,configurable:true,get:()=>subscribeContextEvent});
+Object.defineProperty(exports,"registerHostDebugFunction",{enumerable:true,configurable:true,get:()=>registerHostDebugFunction});
+/**
+ * Sole boundary for SillyTavern event bus subscriptions, emissions and debug registration.
+ * Every subscription returns an idempotent disposer so lifecycle owners cannot forget cleanup.
+ */
+function removeHostEventListener(source, eventName, handler) {
+    if (!source || !eventName || typeof handler !== 'function') return false;
+    if (typeof source.off === 'function') {
+        source.off(eventName, handler);
+        return true;
+    }
+    if (typeof source.removeListener === 'function') {
+        source.removeListener(eventName, handler);
+        return true;
+    }
+    return false;
+}
+
+function subscribeHostEvent(source, eventName, handler) {
+    if (!source || typeof source.on !== 'function')
+        throw new Error(`SillyTavern 事件接口不可用：${String(eventName || 'unknown')}`);
+    if (!eventName || typeof handler !== 'function')
+        throw new Error('SillyTavern 事件订阅参数无效');
+    source.on(eventName, handler);
+    let active = true;
+    return () => {
+        if (!active) return false;
+        active = false;
+        return removeHostEventListener(source, eventName, handler);
+    };
+}
+
+function subscribeContextEvent(context, eventName, handler) {
+    return subscribeHostEvent(context?.eventSource, eventName, handler);
+}
+
+async function emitHostEvent(source, eventName, ...args) {
+    if (!source || typeof source.emit !== 'function') return false;
+    await Promise.resolve(source.emit(eventName, ...args));
+    return true;
+}
+
+function registerHostDebugFunction(context, id, label, description, handler) {
+    if (typeof context?.registerDebugFunction !== 'function') return false;
+    context.registerDebugFunction(id, label, description, handler);
+    return true;
+}
+
+}
+};
+__defs["host/message-adapter.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"emitHostEvent",{enumerable:true,configurable:true,get:()=>__require("host/event-adapter.js")["emitHostEvent"]});
+with(__scope){
+Object.defineProperty(exports,"refreshHostMessage",{enumerable:true,configurable:true,get:()=>refreshHostMessage});
+/** Sole boundary for redrawing a SillyTavern message after an in-place mutation. */
+async function refreshHostMessage(context, index, message) {
+    if (typeof context?.updateMessageBlock === 'function') {
+        await context.updateMessageBlock(index, message);
+        return { method: 'updateMessageBlock', index };
+    }
+    if (context?.event_types?.MESSAGE_UPDATED) {
+        await emitHostEvent(context.eventSource, context.event_types.MESSAGE_UPDATED, index);
+        return { method: 'MESSAGE_UPDATED', index };
+    }
+    if (typeof context?.reloadCurrentChat === 'function') {
+        await context.reloadCurrentChat();
+        return { method: 'reloadCurrentChat', index };
+    }
+    throw new Error('SillyTavern 消息刷新接口不可用');
+}
+
+}
+};
+__defs["host/settings-persistence-adapter.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
+with(__scope){
+Object.defineProperty(exports,"requestHostSettingsSave",{enumerable:true,configurable:true,get:()=>requestHostSettingsSave});
+Object.defineProperty(exports,"disableHostWorldInfoVector",{enumerable:true,configurable:true,get:()=>disableHostWorldInfoVector});
+/**
+ * Sole physical persistence boundary for SillyTavern extension settings.
+ * Settings normalization may decide what changes; only this adapter asks the
+ * host to persist them. The host API is debounced, so the receipt is accepted,
+ * not an upstream durability acknowledgement.
+ */
+function requestHostSettingsSave(context, reason = 'settings-update') {
+    if (!context || typeof context.saveSettingsDebounced !== 'function') {
+        return {
+            effectType: 'settings-save',
+            accepted: false,
+            reason: String(reason || 'settings-update'),
+            requestedAt: nowIso(),
+        };
+    }
+    context.saveSettingsDebounced.call(context);
+    return {
+        effectType: 'settings-save',
+        accepted: true,
+        reason: String(reason || 'settings-update'),
+        requestedAt: nowIso(),
+    };
+}
+
+/** Explicit one-time migration for the host-owned Vector Storage switch. */
+function disableHostWorldInfoVector(context) {
+    const vectorSettings = context?.extensionSettings?.vectors;
+    if (!vectorSettings || typeof vectorSettings !== 'object' || vectorSettings.enabled_world_info !== true)
+        return { changed: false };
+    vectorSettings.enabled_world_info = false;
+    const checkbox = globalThis.document?.querySelector?.('#vectors_enabled_world_info');
+    if (checkbox) {
+        checkbox.checked = false;
+        const EventCtor = globalThis.Event;
+        if (typeof EventCtor === 'function')
+            checkbox.dispatchEvent(new EventCtor('input', { bubbles: true }));
+    }
+    return { changed: true };
+}
+
+}
+};
+__defs["host/ui-adapter.js"]=function(exports,__require){
+const __scope=Object.create(null);
+with(__scope){
+Object.defineProperty(exports,"renderHostExtensionTemplate",{enumerable:true,configurable:true,get:()=>renderHostExtensionTemplate});
+/** Sole boundary for SillyTavern-provided UI integration methods. */
+async function renderHostExtensionTemplate(context, extensionPath, templateName, data = {}) {
+    if (typeof context?.renderExtensionTemplateAsync !== 'function')
+        throw new Error('SillyTavern 扩展模板接口不可用');
+    return await context.renderExtensionTemplateAsync(extensionPath, templateName, data);
 }
 
 }
@@ -9401,12 +9497,86 @@ const __scope=Object.create(null);
 Object.defineProperty(__scope,"hashText",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["hashText"]});
 Object.defineProperty(__scope,"nowIso",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["nowIso"]});
 with(__scope){
+Object.defineProperty(exports,"getWorldInfoApi",{enumerable:true,configurable:true,get:()=>getWorldInfoApi});
 Object.defineProperty(exports,"saveWorldInfo",{enumerable:true,configurable:true,get:()=>saveWorldInfo});
+Object.defineProperty(exports,"loadWorldInfo",{enumerable:true,configurable:true,get:()=>loadWorldInfo});
+Object.defineProperty(exports,"createNewWorldInfo",{enumerable:true,configurable:true,get:()=>createNewWorldInfo});
+Object.defineProperty(exports,"refreshWorldInfoList",{enumerable:true,configurable:true,get:()=>refreshWorldInfoList});
+Object.defineProperty(exports,"showWorldInfoEditor",{enumerable:true,configurable:true,get:()=>showWorldInfoEditor});
+Object.defineProperty(exports,"reloadWorldInfoEditorHost",{enumerable:true,configurable:true,get:()=>reloadWorldInfoEditorHost});
+Object.defineProperty(exports,"resetWorldInfoAdapter",{enumerable:true,configurable:true,get:()=>resetWorldInfoAdapter});
+Object.defineProperty(exports,"setWorldInfoApiForTests",{enumerable:true,configurable:true,get:()=>setWorldInfoApiForTests});
+Object.defineProperty(exports,"getAssignedWorldInfoName",{enumerable:true,configurable:true,get:()=>getAssignedWorldInfoName});
+Object.defineProperty(exports,"assignChatWorldInfo",{enumerable:true,configurable:true,get:()=>assignChatWorldInfo});
+Object.defineProperty(exports,"getWorldInfoVectorStatus",{enumerable:true,configurable:true,get:()=>getWorldInfoVectorStatus});
+Object.defineProperty(exports,"supportsWorldInfoMethod",{enumerable:true,configurable:true,get:()=>supportsWorldInfoMethod});
+Object.defineProperty(exports,"createWorldInfoEntry",{enumerable:true,configurable:true,get:()=>createWorldInfoEntry});
+Object.defineProperty(exports,"getWorldInfoSettings",{enumerable:true,configurable:true,get:()=>getWorldInfoSettings});
+Object.defineProperty(exports,"updateWorldInfoSettings",{enumerable:true,configurable:true,get:()=>updateWorldInfoSettings});
+Object.defineProperty(exports,"getWorldInfoNames",{enumerable:true,configurable:true,get:()=>getWorldInfoNames});
+Object.defineProperty(exports,"canReloadWorldInfoEditor",{enumerable:true,configurable:true,get:()=>canReloadWorldInfoEditor});
 /**
  * Sole host-write boundary for SillyTavern World Info documents.
  * Domain/pipeline modules prepare desired documents; only this adapter performs
  * the external mutation and returns a durable-style receipt for reconciliation.
  */
+let worldInfoModulePromise = null;
+let worldInfoApiForTests = null;
+
+function resetWorldInfoAdapter() {
+    worldInfoModulePromise = null;
+    worldInfoApiForTests = null;
+}
+
+/** Node integration tests only. Production always loads SillyTavern's official module. */
+function setWorldInfoApiForTests(api) {
+    worldInfoApiForTests = api;
+    worldInfoModulePromise = null;
+}
+
+async function getWorldInfoApi() {
+    if (worldInfoApiForTests) return worldInfoApiForTests;
+    if (!worldInfoModulePromise) {
+        worldInfoModulePromise = import(/* @vite-ignore */ '/scripts/world-info.js');
+    }
+    return await worldInfoModulePromise;
+}
+
+function getAssignedWorldInfoName(context, api = null) {
+    const key = api?.METADATA_KEY || 'world_info';
+    return String(context?.chatMetadata?.[key] ?? '').trim();
+}
+
+function assignChatWorldInfo(context, api, name) {
+    if (!context || typeof context !== 'object')
+        throw new Error('SillyTavern 聊天上下文不可用');
+    const target = String(name ?? '').trim();
+    if (!target) throw new Error('聊天世界书绑定缺少名称');
+    const key = api?.METADATA_KEY || 'world_info';
+    context.chatMetadata ||= {};
+    context.chatMetadata[key] = target;
+    return { key, name: target };
+}
+
+function getWorldInfoVectorStatus(context) {
+    try {
+        const settings = context?.extensionSettings?.vectors;
+        if (!settings || typeof settings !== 'object')
+            return { available: false, enabled: false, error: 'ST Vector Storage 尚未初始化' };
+        return {
+            available: true,
+            enabled: settings.enabled_world_info === true,
+            source: String(settings.source || ''),
+            scoreThreshold: Number.isFinite(Number(settings.score_threshold)) ? Number(settings.score_threshold) : undefined,
+            maxEntries: Number.isFinite(Number(settings.max_entries)) ? Number(settings.max_entries) : undefined,
+            enabledForAll: settings.enabled_for_all === true,
+        };
+    }
+    catch (error) {
+        return { available: false, enabled: false, error: error instanceof Error ? error.message : String(error) };
+    }
+}
+
 function documentHash(data) {
     return hashText(JSON.stringify(data ?? null));
 }
@@ -9426,6 +9596,80 @@ async function saveWorldInfo(api, name, data, force = true) {
         confirmedAt: nowIso(),
         force: Boolean(force),
     };
+}
+
+function supportsWorldInfoMethod(api, method) {
+    return Boolean(api && typeof api[method] === 'function');
+}
+
+async function loadWorldInfo(api, name) {
+    if (!supportsWorldInfoMethod(api, 'loadWorldInfo'))
+        throw new Error('SillyTavern 世界书读取接口不可用');
+    return await api.loadWorldInfo(String(name ?? '').trim());
+}
+
+async function createNewWorldInfo(api, name, options = { interactive: false }) {
+    if (!supportsWorldInfoMethod(api, 'createNewWorldInfo')) return false;
+    await api.createNewWorldInfo(String(name ?? '').trim(), options);
+    return true;
+}
+
+function createWorldInfoEntry(api, name, data) {
+    if (!supportsWorldInfoMethod(api, 'createWorldInfoEntry'))
+        throw new Error('SillyTavern 世界书条目创建接口不可用');
+    return api.createWorldInfoEntry(String(name ?? '').trim(), data);
+}
+
+function getWorldInfoSettings(api) {
+    if (!supportsWorldInfoMethod(api, 'getWorldInfoSettings')) return null;
+    return api.getWorldInfoSettings();
+}
+
+function updateWorldInfoSettings(api, settings) {
+    if (!supportsWorldInfoMethod(api, 'updateWorldInfoSettings')) return false;
+    api.updateWorldInfoSettings(settings);
+    return true;
+}
+
+function getWorldInfoNames(context, api = null) {
+    if (context && typeof context.getWorldInfoNames === 'function') {
+        const names = context.getWorldInfoNames();
+        if (Array.isArray(names)) return [...names];
+    }
+    return Array.isArray(api?.world_names) ? [...api.world_names] : [];
+}
+
+async function refreshWorldInfoList(context, api) {
+    const owner = typeof context?.updateWorldInfoList === 'function' ? context : api;
+    const update = owner?.updateWorldInfoList;
+    if (typeof update !== 'function') return false;
+    await Promise.resolve(update.call(owner));
+    return true;
+}
+
+async function showWorldInfoEditor(context, api, name) {
+    const owner = typeof context?.showWorldEditor === 'function' ? context : api;
+    const show = owner?.showWorldEditor;
+    if (typeof show !== 'function') return false;
+    await Promise.resolve(show.call(owner, String(name ?? '').trim()));
+    return true;
+}
+
+async function reloadWorldInfoEditorHost(context, api, name, loadIfNotSelected = false) {
+    if (typeof context?.reloadWorldInfoEditor === 'function') {
+        await Promise.resolve(context.reloadWorldInfoEditor.call(context, name, loadIfNotSelected));
+        return true;
+    }
+    const reload = api?.reloadEditor ?? api?.reloadWorldInfoEditor;
+    if (typeof reload !== 'function') return false;
+    await Promise.resolve(reload.call(api, name, loadIfNotSelected));
+    return true;
+}
+
+function canReloadWorldInfoEditor(context, api) {
+    return typeof context?.reloadWorldInfoEditor === 'function'
+        || typeof api?.reloadEditor === 'function'
+        || typeof api?.reloadWorldInfoEditor === 'function';
 }
 
 }
@@ -9460,22 +9704,48 @@ Object.defineProperty(__scope,"safeText",{enumerable:true,configurable:true,get:
 Object.defineProperty(__scope,"toErrorMessage",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["toErrorMessage"]});
 Object.defineProperty(__scope,"withTimeout",{enumerable:true,configurable:true,get:()=>__require("core/utils.js")["withTimeout"]});
 Object.defineProperty(__scope,"requestScheduler",{enumerable:true,configurable:true,get:()=>__require("llm/request-scheduler.js")["requestScheduler"]});
-Object.defineProperty(__scope,"SAMPLING_PARAMETER_KEYS",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["SAMPLING_PARAMETER_KEYS"]});
-Object.defineProperty(__scope,"SAMPLING_PARAMETER_SET",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["SAMPLING_PARAMETER_SET"]});
-Object.defineProperty(__scope,"stripForbiddenSamplingObject",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["stripForbiddenSamplingObject"]});
 Object.defineProperty(__scope,"transportAuthorityStatus",{enumerable:true,configurable:true,get:()=>__require("transport/authority.js")["transportAuthorityStatus"]});
+Object.defineProperty(__scope,"createModelRequestMarker",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["createModelRequestMarker"]});
+Object.defineProperty(__scope,"createSamplingFreeOverride",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["createSamplingFreeOverride"]});
+Object.defineProperty(__scope,"extractProviderRequestId",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["extractProviderRequestId"]});
+Object.defineProperty(__scope,"finalizeModelPayload",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["finalizeModelPayload"]});
+Object.defineProperty(__scope,"markMessages",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["markMessages"]});
+Object.defineProperty(__scope,"modelTransportTraceReport",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["modelTransportTraceReport"]});
+Object.defineProperty(__scope,"recordModelTransportTrace",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["recordModelTransportTrace"]});
+Object.defineProperty(__scope,"registerOfficialPayloadFinalizer",{enumerable:true,configurable:true,get:()=>__require("transport/model-gateway.js")["registerOfficialPayloadFinalizer"]});
 with(__scope){
 Object.defineProperty(exports,"generateTask",{enumerable:true,configurable:true,get:()=>generateTask});
 Object.defineProperty(exports,"testConnection",{enumerable:true,configurable:true,get:()=>testConnection});
 Object.defineProperty(exports,"listSupportedConnectionProfiles",{enumerable:true,configurable:true,get:()=>listSupportedConnectionProfiles});
 Object.defineProperty(exports,"describeTaskConnection",{enumerable:true,configurable:true,get:()=>describeTaskConnection});
 Object.defineProperty(exports,"requestTraceReport",{enumerable:true,configurable:true,get:()=>requestTraceReport});
+Object.defineProperty(exports,"transportTraceReport",{enumerable:true,configurable:true,get:()=>transportTraceReport});
+Object.defineProperty(exports,"modelInterfaceCapabilities",{enumerable:true,configurable:true,get:()=>modelInterfaceCapabilities});
 Object.defineProperty(exports,"modelTransportAuthorityStatus",{enumerable:true,configurable:true,get:()=>modelTransportAuthorityStatus});
 /**
  * 模块职责：通过 SillyTavern 当前连接或 Connection Profile 发起模型请求。
  * 维护边界：插件不保存密钥、不切换全局 Profile；同物理连接的业务请求串行，
  * 只读诊断使用独立且同样受限的诊断通道，不参与数据提交。
  */
+const noSamplingRouteCache = new WeakMap();
+function currentRouteKey(context) {
+    const transport = currentChatTransportSettings(context);
+    return [
+        safeText(context?.mainApi, 80).trim(),
+        safeText(transport.chat_completion_source, 80).trim(),
+        currentChatModel(context),
+    ].join('::');
+}
+function rejectedRouteSet(context) {
+    if (!context || (typeof context !== 'object' && typeof context !== 'function')) return new Set();
+    let routes = noSamplingRouteCache.get(context);
+    if (!routes) {
+        routes = new Set();
+        noSamplingRouteCache.set(context, routes);
+    }
+    return routes;
+}
+
 const TASK_RESPONSE_TOKENS = {
     // 推理型模型的思考 token 与最终答案共用输出预算。1800 在长正文审核时
     // 可能只够生成 reasoning，尚未来得及输出 <MA_AUDIT> 就被截断。
@@ -9766,234 +10036,8 @@ function messagesFromOptions(options) {
     }
     return messages;
 }
-function normalizeOptionalKey(value) {
-    return safeText(value, 160).trim().replace(/^['"]|['"]$/g, '');
-}
-function parseExcludedKeys(value) {
-    const text = safeText(value, 20000).trim();
-    const output = new Set();
-    const add = (candidate) => {
-        const key = normalizeOptionalKey(candidate);
-        if (/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key))
-            output.add(key);
-    };
-    if (!text)
-        return output;
-    try {
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed)) {
-            for (const item of parsed)
-                typeof item === 'string' ? add(item) : item && typeof item === 'object' && Object.keys(item).forEach(add);
-        }
-        else if (parsed && typeof parsed === 'object') {
-            Object.keys(parsed).forEach(add);
-        }
-        else if (typeof parsed === 'string') {
-            add(parsed);
-        }
-        return output;
-    }
-    catch {
-        // SillyTavern 的字段使用 YAML。浏览器扩展不引入 YAML 解析器，只保守读取顶层键。
-    }
-    for (const rawLine of text.split(/\r?\n/)) {
-        const line = rawLine.replace(/\s+#.*$/, '').trim();
-        if (!line)
-            continue;
-        const listItem = line.match(/^-\s*['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?(?:\s*:.*)?$/);
-        const objectKey = line.match(/^['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s*:/);
-        if (listItem)
-            add(listItem[1]);
-        else if (objectKey)
-            add(objectKey[1]);
-        else if (!/\s/.test(line))
-            add(line);
-    }
-    return output;
-}
-function samplingExclusionYaml(existing = '') {
-    const keys = parseExcludedKeys(existing);
-    for (const key of SAMPLING_PARAMETER_KEYS)
-        keys.add(key);
-    return [...keys].map((key) => `- ${key}`).join('\n');
-}
-function stripSamplingFromCustomInclude(value) {
-    const text = safeText(value, 50000).trim();
-    if (!text)
-        return '';
-    try {
-        const parsed = JSON.parse(text);
-        const cleanObject = (item) => {
-            if (!item || typeof item !== 'object' || Array.isArray(item))
-                return item;
-            const copy = { ...item };
-            for (const key of Object.keys(copy)) {
-                if (SAMPLING_PARAMETER_SET.has(key.toLowerCase()))
-                    delete copy[key];
-            }
-            return copy;
-        };
-        const cleaned = Array.isArray(parsed) ? parsed.map(cleanObject) : cleanObject(parsed);
-        return JSON.stringify(cleaned);
-    }
-    catch {
-        // 兼容 YAML 顶层对象和 “- key: value” 数组。只删除顶层采样项，不扫描正文或嵌套业务对象。
-    }
-    const lines = text.split(/\r?\n/);
-    const kept = [];
-    let skippedIndent = null;
-    for (const line of lines) {
-        const indent = line.match(/^\s*/)?.[0].length ?? 0;
-        if (skippedIndent !== null) {
-            if (!line.trim() || indent > skippedIndent)
-                continue;
-            skippedIndent = null;
-        }
-        if (indent === 0) {
-            const match = line.trim().match(/^(?:-\s*)?['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s*:/);
-            if (match && SAMPLING_PARAMETER_SET.has(match[1].toLowerCase())) {
-                skippedIndent = indent;
-                continue;
-            }
-        }
-        kept.push(line);
-    }
-    return kept.join('\n').trim();
-}
-function samplingFreeOverride(extra = {}, existingExcludeBody = '') {
-    const override = { ...extra };
-    // 前端层：覆盖预设字段并让 SillyTavern createRequestData 删除 undefined。
-    for (const key of SAMPLING_PARAMETER_KEYS)
-        override[key] = undefined;
-    // 后端层：Custom(OpenAI-compatible) 会在前端清理后再次合并 Include Body Parameters。
-    // 官方后端最后才执行 custom_exclude_body，因此必须同时下发硬排除清单。
-    override.custom_include_body = stripSamplingFromCustomInclude(override.custom_include_body);
-    override.custom_exclude_body = samplingExclusionYaml(override.custom_exclude_body || existingExcludeBody);
-    return override;
-}
-function stripSamplingParameters(payload, existingExcludeBody = '', applyCustomPolicy = true) {
-    if (!payload || typeof payload !== 'object')
-        return payload;
-    stripForbiddenSamplingObject(payload);
-    if (applyCustomPolicy) {
-        payload.custom_include_body = stripSamplingFromCustomInclude(payload.custom_include_body);
-        payload.custom_exclude_body = samplingExclusionYaml(payload.custom_exclude_body || existingExcludeBody);
-    }
-    return payload;
-}
-const SAMPLING_GUARD_PREFIX = '__MIRROR_ABYSS_NO_SAMPLING__';
-const samplingFetchGuards = new Set();
-let samplingGuardOriginalFetch = null;
-let samplingGuardWrapper = null;
-function samplingGuardMarker() {
-    const uuid = globalThis.crypto?.randomUUID?.();
-    const suffix = uuid || `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
-    return `${SAMPLING_GUARD_PREFIX}${suffix}__`;
-}
-function removeGuardMarker(value, marker, depth = 0) {
-    if (depth > 12)
-        return value;
-    if (typeof value === 'string')
-        return value.replaceAll(marker, '').replace(/^\s*\n/, '');
-    if (Array.isArray(value)) {
-        for (let index = value.length - 1; index >= 0; index -= 1) {
-            const item = value[index];
-            if (item && typeof item === 'object' && typeof item.content === 'string' && item.content.trim() === marker) {
-                value.splice(index, 1);
-                continue;
-            }
-            value[index] = removeGuardMarker(item, marker, depth + 1);
-        }
-        return value;
-    }
-    if (!value || typeof value !== 'object')
-        return value;
-    for (const key of Object.keys(value))
-        value[key] = removeGuardMarker(value[key], marker, depth + 1);
-    return value;
-}
-function guardedFetchBody(body) {
-    if (typeof body !== 'string' || !body.includes(SAMPLING_GUARD_PREFIX))
-        return body;
-    let payload;
-    try {
-        payload = JSON.parse(body);
-    }
-    catch {
-        return body;
-    }
-    let matched = false;
-    for (const marker of samplingFetchGuards) {
-        if (!body.includes(marker))
-            continue;
-        removeGuardMarker(payload, marker);
-        matched = true;
-    }
-    if (!matched)
-        return body;
-    // 这是离开浏览器前的最后一道边界：既删除当前请求已有采样字段，也下发
-    // Custom(OpenAI-compatible) 后端的最终排除清单，阻止 Include Body 再次注入。
-    stripSamplingParameters(payload);
-    return JSON.stringify(payload);
-}
-function ensureSamplingFetchGuard() {
-    if (samplingGuardWrapper)
-        return true;
-    const original = globalThis.fetch;
-    if (typeof original !== 'function')
-        return false;
-    samplingGuardOriginalFetch = original;
-    samplingGuardWrapper = function mirrorAbyssSamplingGuard(input, init) {
-        if (!init || typeof init !== 'object' || typeof init.body !== 'string')
-            return samplingGuardOriginalFetch.call(this, input, init);
-        const body = guardedFetchBody(init.body);
-        if (body === init.body)
-            return samplingGuardOriginalFetch.call(this, input, init);
-        return samplingGuardOriginalFetch.call(this, input, { ...init, body });
-    };
-    try {
-        globalThis.fetch = samplingGuardWrapper;
-        return globalThis.fetch === samplingGuardWrapper;
-    }
-    catch {
-        samplingGuardOriginalFetch = null;
-        samplingGuardWrapper = null;
-        return false;
-    }
-}
-function registerSamplingFetchGuard(marker) {
-    const installed = ensureSamplingFetchGuard();
-    if (installed)
-        samplingFetchGuards.add(marker);
-    return () => {
-        samplingFetchGuards.delete(marker);
-        if (samplingFetchGuards.size > 0)
-            return;
-        let restored = globalThis.fetch !== samplingGuardWrapper;
-        if (samplingGuardWrapper && globalThis.fetch === samplingGuardWrapper) {
-            try {
-                globalThis.fetch = samplingGuardOriginalFetch;
-                restored = globalThis.fetch === samplingGuardOriginalFetch;
-            }
-            catch {
-                // 某些嵌入页会锁定全局 fetch；保留无活动标记的透传包装器即可。
-                restored = false;
-            }
-        }
-        if (restored) {
-            samplingGuardOriginalFetch = null;
-            samplingGuardWrapper = null;
-        }
-    };
-}
 function guardedMessages(options, marker) {
-    const messages = messagesFromOptions(options).map((message) => ({ ...message }));
-    const systemIndex = messages.findIndex((message) => message.role === 'system');
-    if (systemIndex >= 0)
-        messages[systemIndex].content = `${marker}\n${messages[systemIndex].content}`;
-    else
-        messages.unshift({ role: 'system', content: marker });
-    return messages;
+    return markMessages(messagesFromOptions(options), marker);
 }
 function currentChatTransportSettings(context) {
     const settings = context.chatCompletionSettings;
@@ -10017,6 +10061,11 @@ function currentChatTransportSettings(context) {
         'siliconflow_endpoint',
         'minimax_endpoint',
         'workers_ai_account_id',
+        // Official SillyTavern 1.17+ Azure field names. Keep the older aliases
+        // for site forks, but do not treat either family as generation settings.
+        'azure_base_url',
+        'azure_api_version',
+        'azure_deployment_name',
         'azure_openai_endpoint',
         'azure_openai_api_version',
         'azure_openai_deployment_name',
@@ -10030,7 +10079,7 @@ function currentChatTransportSettings(context) {
 }
 function unsupportedSamplingParameter(error) {
     const message = toErrorMessage(error);
-    const rejected = /(?:not\s+(?:supported|recommended|allowed)|unsupported|does\s+not\s+(?:support|accept)|invalid|not\s+available|不支持|不推荐|不可用|不允许|无效|不接受|不能使用)/i.test(message);
+    const rejected = /(?:not\s+(?:supported|recommended|allowed)|unsupported|deprecated|does\s+not\s+(?:support|accept)|invalid|not\s+available|不支持|不推荐|已弃用|弃用|不可用|不允许|无效|不接受|不能使用)/i.test(message);
     if (!rejected)
         return '';
     if (/(?:temperature|温度)/i.test(message))
@@ -10050,11 +10099,15 @@ function samplingCompatibilityError(error, label, currentConnection = false) {
     const parameter = unsupportedSamplingParameter(error);
     if (!parameter)
         return null;
-    const authority = transportAuthorityStatus(getContext());
-    const guidance = authority.upstreamPayloadVerified
-        ? '服务端最终边界已声明执行无采样策略；该错误表示服务端策略回执与实际行为不一致，请保留请求ID并检查服务端日志。'
-        : '镜渊已净化浏览器侧请求，但当前宿主没有可验证的服务端最终边界；SillyTavern 后端或站点网关仍可能在参数合并后重新注入该字段。此问题不能由 UI 扩展单方面证明已消除。';
-    return new Error(`${label}所用模型不接受 ${parameter} 参数。${guidance}`, { cause: error });
+    const traces = modelTransportTraceReport().slice(-3);
+    const last = [...traces].reverse().find((item) => item.errorParameter === parameter || item.outcome === 'finalized');
+    const requestId = extractProviderRequestId(error) || last?.requestId || '';
+    const adapter = last?.adapter || (currentConnection ? 'current-unknown' : 'profile-unknown');
+    const boundary = last?.forbiddenAfter?.length === 0
+        ? '镜渊记录的最终浏览器 payload 已不含该参数'
+        : '镜渊未取得最终 payload 的无参数回执';
+    const idText = requestId ? ` 请求ID：${requestId}。` : '';
+    return new Error(`${label}所用模型拒绝 ${parameter}。适配器：${adapter}；${boundary}。${idText}诊断已记录本次接口、事件命中和参数路径，不再笼统归因。`, { cause: error });
 }
 function currentTextPrompt(context, options) {
     const messages = messagesFromOptions(options).map((message) => ({ ...message }));
@@ -10073,118 +10126,354 @@ function currentTextPrompt(context, options) {
     }
     return messages.map((message) => message.content).filter(Boolean).join('\n\n');
 }
-async function generateCurrentWithoutSampling(options) {
+function currentChatModel(context) {
+    try {
+        return typeof context.getChatCompletionModel === 'function'
+            ? safeText(context.getChatCompletionModel(), 240).trim()
+            : '';
+    }
+    catch {
+        return '';
+    }
+}
+function chatSettingsReadyEvent(context) {
+    return context.eventTypes?.CHAT_COMPLETION_SETTINGS_READY
+        || context.event_types?.CHAT_COMPLETION_SETTINGS_READY
+        || '';
+}
+async function generateCurrentViaOfficialRaw(options) {
+    const context = getContext();
+    if (safeText(context.mainApi, 80).trim() !== 'openai')
+        return null;
+    const generate = typeof context.generateRawData === 'function'
+        ? context.generateRawData.bind(context)
+        : typeof context.generateRaw === 'function'
+            ? context.generateRaw.bind(context)
+            : null;
+    const eventName = chatSettingsReadyEvent(context);
+    if (!generate || !eventName)
+        return null;
+    const marker = createModelRequestMarker();
+    const transport = currentChatTransportSettings(context);
+    const model = currentChatModel(context);
+    const source = safeText(transport.chat_completion_source, 80);
+    const finalizer = registerOfficialPayloadFinalizer(context, {
+        marker,
+        eventName,
+        existingExcludeBody: transport.custom_exclude_body,
+        adapter: typeof context.generateRawData === 'function' ? 'current.generateRawData' : 'current.generateRaw',
+        task: options.task,
+        api: 'openai',
+        source,
+        model,
+    });
+    if (!finalizer)
+        return null;
+    try {
+        const result = await generate({
+            prompt: guardedMessages(options, marker),
+            api: 'openai',
+            responseLength: responseTokens(options),
+        });
+        if (!finalizer.matched) {
+            recordModelTransportTrace({
+                adapter: typeof context.generateRawData === 'function' ? 'current.generateRawData' : 'current.generateRaw',
+                task: options.task,
+                mode: 'official-event-finalizer',
+                api: 'openai',
+                source,
+                model,
+                event: eventName,
+                markerMatched: false,
+                requestSent: true,
+                outcome: 'event-not-matched',
+                detail: '官方最终参数事件未包含本次请求标记',
+            });
+        }
+        const text = generationText(result);
+        if (!text)
+            throw emptyGenerationError(`${options.task}模型`, result);
+        return text;
+    }
+    catch (error) {
+        recordModelTransportTrace({
+            adapter: typeof context.generateRawData === 'function' ? 'current.generateRawData' : 'current.generateRaw',
+            task: options.task,
+            mode: 'official-event-finalizer',
+            api: 'openai',
+            source,
+            model,
+            event: eventName,
+            markerMatched: finalizer.matched,
+            forbiddenBefore: finalizer.receipt?.before,
+            forbiddenAfter: finalizer.receipt?.after,
+            requestSent: true,
+            outcome: 'error',
+            errorParameter: unsupportedSamplingParameter(error),
+            requestId: extractProviderRequestId(error),
+            detail: toErrorMessage(error),
+        });
+        throw error;
+    }
+    finally {
+        finalizer.release();
+    }
+}
+async function generateCurrentViaExplicitService(options) {
     const context = getContext();
     const api = safeText(context.mainApi, 80).trim();
     const maxTokens = responseTokens(options);
     const label = `${options.task}当前聊天连接`;
-    const marker = samplingGuardMarker();
-    const releaseGuard = registerSamplingFetchGuard(marker);
-    try {
-        if (api === 'openai') {
-            const service = context.ChatCompletionService;
-            if (!service)
-                return null;
-            let model;
-            try {
-                model = typeof context.getChatCompletionModel === 'function' ? context.getChatCompletionModel() : undefined;
-            }
-            catch {
-                model = undefined;
-            }
-            const transport = currentChatTransportSettings(context);
-            const override = samplingFreeOverride({
-                ...transport,
-                stream: true,
-                messages: guardedMessages(options, marker),
-                max_tokens: maxTokens,
-                model: model || undefined,
-            }, transport.custom_exclude_body);
+    if (api === 'openai') {
+        const service = context.ChatCompletionService;
+        if (!service)
+            return null;
+        const transport = currentChatTransportSettings(context);
+        const model = currentChatModel(context);
+        const source = safeText(transport.chat_completion_source, 80);
+        const payload = createSamplingFreeOverride({
+            ...transport,
+            stream: true,
+            messages: messagesFromOptions(options),
+            max_tokens: maxTokens,
+            model: model || undefined,
+        }, transport.custom_exclude_body);
+        const receipt = finalizeModelPayload(payload, {
+            existingExcludeBody: transport.custom_exclude_body,
+            applyCustomPolicy: true,
+        });
+        recordModelTransportTrace({
+            adapter: 'current.ChatCompletionService',
+            task: options.task,
+            mode: 'explicit-no-preset',
+            api,
+            source,
+            model,
+            markerMatched: true,
+            forbiddenBefore: receipt.before,
+            forbiddenAfter: receipt.after,
+            requestSent: true,
+            outcome: receipt.after.length ? 'policy-violation' : 'finalized',
+        });
+        try {
             let streamResult;
-            // 首选 processRequest：直接使用显式连接字段，不再让当前生成预设参与请求构造。
-            if (typeof service.processRequest === 'function') {
-                const payload = stripSamplingParameters(override, transport.custom_exclude_body);
+            if (typeof service.sendRequest === 'function') {
+                const finalPayload = typeof service.createRequestData === 'function'
+                    ? service.createRequestData(payload)
+                    : { ...payload };
+                const finalReceipt = finalizeModelPayload(finalPayload, {
+                    existingExcludeBody: transport.custom_exclude_body,
+                    applyCustomPolicy: true,
+                });
+                if (finalReceipt.after.length)
+                    throw new Error(`模型请求最终策略仍含采样字段：${finalReceipt.after.join(', ')}`);
+                streamResult = await service.sendRequest(finalPayload, true, options.signal);
+            }
+            else if (typeof service.processRequest === 'function') {
                 streamResult = await service.processRequest(payload, {}, true, options.signal);
             }
-            else if (typeof service.presetToGeneratePayload === 'function' && typeof service.sendRequest === 'function') {
-                // 兼容 ST 1.16 早期分支：仍使用其 payload 转换器，但在转换后再次净化。
-                const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override), transport.custom_exclude_body);
-                streamResult = await service.sendRequest(payload, true, options.signal);
-            }
             else {
                 return null;
             }
             return await consumeProfileStream(streamResult, label);
         }
-        if (api === 'textgenerationwebui') {
-            const service = context.TextCompletionService;
-            if (!service)
-                return null;
-            const override = samplingFreeOverride({
-                stream: true,
-                prompt: `${marker}\n${currentTextPrompt(context, options)}`,
-                max_tokens: maxTokens,
-                max_new_tokens: maxTokens,
+        catch (error) {
+            recordModelTransportTrace({
+                adapter: 'current.ChatCompletionService',
+                task: options.task,
+                mode: 'explicit-no-preset',
+                api,
+                source,
+                model,
+                markerMatched: true,
+                forbiddenBefore: receipt.before,
+                forbiddenAfter: receipt.after,
+                requestSent: true,
+                outcome: 'error',
+                errorParameter: unsupportedSamplingParameter(error),
+                requestId: extractProviderRequestId(error),
+                detail: toErrorMessage(error),
             });
+            throw error;
+        }
+    }
+    if (api === 'textgenerationwebui') {
+        const service = context.TextCompletionService;
+        if (!service)
+            return null;
+        const textSettings = context.textCompletionSettings && typeof context.textCompletionSettings === 'object'
+            ? context.textCompletionSettings
+            : {};
+        const payload = createSamplingFreeOverride({
+            stream: true,
+            prompt: currentTextPrompt(context, options),
+            max_tokens: maxTokens,
+            max_new_tokens: maxTokens,
+            api_type: textSettings.type ?? textSettings.api_type,
+            api_server: textSettings.server_url ?? textSettings.api_server,
+            model: textSettings.model,
+            secret_id: textSettings.secret_id,
+        });
+        const receipt = finalizeModelPayload(payload, { applyCustomPolicy: false });
+        recordModelTransportTrace({
+            adapter: 'current.TextCompletionService',
+            task: options.task,
+            mode: 'explicit-no-preset',
+            api,
+            source: safeText(payload.api_type, 80),
+            model: safeText(payload.model, 240),
+            markerMatched: true,
+            forbiddenBefore: receipt.before,
+            forbiddenAfter: receipt.after,
+            requestSent: true,
+            outcome: receipt.after.length ? 'policy-violation' : 'finalized',
+        });
+        try {
             let streamResult;
-            if (typeof service.processRequest === 'function') {
-                streamResult = await service.processRequest(stripSamplingParameters(override), {}, true, options.signal);
+            if (typeof service.sendRequest === 'function') {
+                const finalPayload = typeof service.createRequestData === 'function'
+                    ? service.createRequestData(payload)
+                    : { ...payload };
+                const finalReceipt = finalizeModelPayload(finalPayload, { applyCustomPolicy: false });
+                if (finalReceipt.after.length)
+                    throw new Error(`模型请求最终策略仍含采样字段：${finalReceipt.after.join(', ')}`);
+                streamResult = await service.sendRequest(finalPayload, true, options.signal);
             }
-            else if (typeof service.presetToGeneratePayload === 'function' && typeof service.sendRequest === 'function') {
-                const payload = stripSamplingParameters(await service.presetToGeneratePayload({}, {}, override));
-                streamResult = await service.sendRequest(payload, true, options.signal);
+            else if (typeof service.processRequest === 'function') {
+                streamResult = await service.processRequest(payload, {}, true, options.signal);
             }
             else {
                 return null;
             }
             return await consumeProfileStream(streamResult, label);
         }
-        return null;
+        catch (error) {
+            recordModelTransportTrace({
+                adapter: 'current.TextCompletionService',
+                task: options.task,
+                mode: 'explicit-no-preset',
+                api,
+                source: safeText(payload.api_type, 80),
+                model: safeText(payload.model, 240),
+                markerMatched: true,
+                forbiddenBefore: receipt.before,
+                forbiddenAfter: receipt.after,
+                requestSent: true,
+                outcome: 'error',
+                errorParameter: unsupportedSamplingParameter(error),
+                requestId: extractProviderRequestId(error),
+                detail: toErrorMessage(error),
+            });
+            throw error;
+        }
     }
-    finally {
-        releaseGuard();
-    }
+    return null;
 }
 async function generateCurrent(options, controller) {
-    const context = getContext();
     const settings = getSettings();
     const label = `${options.task}当前聊天连接`;
     const request = (async () => {
-        // 现代 SillyTavern：直接复用当前连接的底层请求构造器，只删除镜渊请求中的
-        // 采样字段。不会改写 ST 全局预设，也不会影响角色正文生成。
-        try {
-            const sanitized = await generateCurrentWithoutSampling(options);
-            if (sanitized !== null)
-                return sanitized;
+        const context = getContext();
+        const routeKey = currentRouteKey(context);
+        const rejectedRoutes = rejectedRouteSet(context);
+        const explicitKey = `${routeKey}::explicit-service`;
+        const officialKey = `${routeKey}::official-raw`;
+        let explicitError = null;
+
+        // First choice: the official low-level Service with an explicit no-preset payload.
+        // It is the shortest official path and never needs to create a request containing
+        // the user's generation preset merely to remove samplers again later.
+        if (!rejectedRoutes.has(explicitKey)) {
+            try {
+                const result = await generateCurrentViaExplicitService(options);
+                if (result !== null)
+                    return result;
+            }
+            catch (error) {
+                const parameter = unsupportedSamplingParameter(error);
+                if (!parameter)
+                    throw normalizeProfileTransportError(error, label);
+                explicitError = error;
+                rejectedRoutes.add(explicitKey);
+                recordModelTransportTrace({
+                    adapter: 'current.capability-cache',
+                    task: options.task,
+                    mode: 'route-capability',
+                    api: safeText(context.mainApi, 80),
+                    source: safeText(currentChatTransportSettings(context).chat_completion_source, 80),
+                    model: currentChatModel(context),
+                    requestSent: false,
+                    outcome: 'explicit-service-sampling-rejected',
+                    errorParameter: parameter,
+                    requestId: extractProviderRequestId(error),
+                    detail: '官方无预设 Service 仍被该路由判定含采样字段；改走官方最终参数事件链验证',
+                });
+            }
         }
-        catch (error) {
-            throw samplingCompatibilityError(error, label, true) ?? normalizeProfileTransportError(error, label);
-        }
-        // 旧版 SillyTavern 没有导出底层服务时保留 generateRaw 兼容路径。
-        if (typeof context.generateRaw !== 'function')
-            throw new Error('当前SillyTavern既未提供底层请求服务，也未提供generateRaw');
-        const marker = samplingGuardMarker();
-        const releaseGuard = registerSamplingFetchGuard(marker);
-        try {
-            const result = await context.generateRaw({
-                systemPrompt: `${marker}\n${options.systemPrompt}`,
-                prompt: options.prompt,
-                responseLength: responseTokens(options),
+        else {
+            recordModelTransportTrace({
+                adapter: 'current.capability-cache',
+                task: options.task,
+                mode: 'route-capability',
+                api: safeText(context.mainApi, 80),
+                source: safeText(currentChatTransportSettings(context).chat_completion_source, 80),
+                model: currentChatModel(context),
+                requestSent: false,
+                outcome: 'explicit-capability-cache-hit',
+                detail: '已知该模型路由拒绝无预设 Service，跳过重复失败请求',
             });
-            const text = generationText(result);
-            if (!text)
-                throw emptyGenerationError(`${options.task}模型`, result);
-            return text;
         }
-        catch (error) {
-            throw samplingCompatibilityError(error, label, true) ?? error;
+
+        // Compatibility path: use SillyTavern's complete quiet-generation pipeline and
+        // finalize the exact SETTINGS_READY payload immediately before the official fetch.
+        if (!rejectedRoutes.has(officialKey)) {
+            try {
+                const result = await generateCurrentViaOfficialRaw(options);
+                if (result !== null)
+                    return result;
+            }
+            catch (error) {
+                const parameter = unsupportedSamplingParameter(error);
+                if (!parameter)
+                    throw normalizeProfileTransportError(error, label);
+                rejectedRoutes.add(officialKey);
+                recordModelTransportTrace({
+                    adapter: 'current.capability-cache',
+                    task: options.task,
+                    mode: 'route-capability',
+                    api: safeText(context.mainApi, 80),
+                    source: safeText(currentChatTransportSettings(context).chat_completion_source, 80),
+                    model: currentChatModel(context),
+                    requestSent: false,
+                    outcome: 'official-raw-sampling-rejected',
+                    errorParameter: parameter,
+                    requestId: extractProviderRequestId(error),
+                    detail: '官方最终参数事件链仍被路由拒绝；本页不再重复该无效接口',
+                });
+                throw samplingCompatibilityError(error, label, true) ?? normalizeProfileTransportError(error, label);
+            }
         }
-        finally {
-            releaseGuard();
+        else {
+            recordModelTransportTrace({
+                adapter: 'current.capability-cache',
+                task: options.task,
+                mode: 'route-capability',
+                api: safeText(context.mainApi, 80),
+                source: safeText(currentChatTransportSettings(context).chat_completion_source, 80),
+                model: currentChatModel(context),
+                requestSent: false,
+                outcome: 'official-capability-cache-hit',
+                detail: '已知该模型路由拒绝官方最终参数链，未重复发送',
+            });
         }
+
+        if (explicitError)
+            throw samplingCompatibilityError(explicitError, label, true) ?? normalizeProfileTransportError(explicitError, label);
+        throw new Error('当前SillyTavern没有可验证的官方模型请求接口：需要 ChatCompletionService/TextCompletionService，或 generateRawData+CHAT_COMPLETION_SETTINGS_READY');
     })();
     return await withTimeout(request, Math.max(10000, Number(settings.requestTimeoutMs) || 90000), `${options.task}模型调用`, controller);
 }
+
 function normalizeProfileTransportError(error, label) {
     const message = toErrorMessage(error);
     const samplingError = samplingCompatibilityError(error, label, false);
@@ -10227,42 +10516,174 @@ async function consumeProfileStream(streamResult, label) {
     }
     return latestText;
 }
+function resolveProfileApiMap(context, service, profile) {
+    if (typeof service?.validateProfile === 'function')
+        return service.validateProfile(profile);
+    return context.CONNECT_API_MAP?.[profile?.api] || null;
+}
 async function generateWithNativeProfile(options, profileId, controller) {
     const context = getContext();
-    const service = context.ConnectionManagerRequestService;
-    if (typeof service?.sendRequest !== 'function') {
+    const manager = context.ConnectionManagerRequestService;
+    if (typeof manager?.getProfile !== 'function' && typeof manager?.sendRequest !== 'function') {
         throw new Error('当前SillyTavern未提供ConnectionManagerRequestService');
     }
     const settings = getSettings();
     const label = `${options.task} Connection Profile`;
     const request = (async () => {
+        let profile = null;
         try {
-            // SillyTavern 的非流式路径会在检查 HTTP 状态前直接 response.json()。
-            // 使用流式路径可先检查 4xx/5xx，并持续产生数据，避免长请求被网关误判为空闲。
-            const marker = samplingGuardMarker();
-            const releaseGuard = registerSamplingFetchGuard(marker);
-            let profile;
-            try {
-                profile = typeof service.getProfile === 'function' ? service.getProfile(profileId) : null;
-                const streamResult = await service.sendRequest(profileId, guardedMessages(options, marker), responseTokens(options), {
+            profile = typeof manager.getProfile === 'function'
+                ? manager.getProfile(profileId)
+                : supportedProfiles().find((item) => item?.id === profileId);
+            if (!profile)
+                throw new Error(`Profile not found (ID: ${profileId})`);
+            const apiMap = resolveProfileApiMap(context, manager, profile);
+            const selected = safeText(apiMap?.selected, 80);
+            const maxTokens = responseTokens(options);
+            // Direct official services are preferred because the exact object passed to
+            // sendRequest is the browser payload. A named proxy is the sole exception:
+            // only ConnectionManagerRequestService can resolve its URL/password.
+            if (selected === 'openai' && !profile.proxy && context.ChatCompletionService) {
+                const service = context.ChatCompletionService;
+                const payload = createSamplingFreeOverride({
                     stream: true,
-                    extractData: true,
-                    // 固定文本与事实提取任务不继承 Profile 的生成预设。模型、API、密钥与
-                    // Text Completion 的 Instruct 仍由 Profile 提供。
-                    includePreset: false,
-                    includeInstruct: true,
-                    signal: options.signal,
-                }, samplingFreeOverride({
-                    stream: true,
-                    custom_include_body: profile?.custom_include_body,
-                }, profile?.custom_exclude_body));
+                    messages: messagesFromOptions(options),
+                    max_tokens: maxTokens,
+                    model: profile.model,
+                    chat_completion_source: apiMap?.source,
+                    secret_id: profile['secret-id'],
+                    custom_url: profile['api-url'],
+                    vertexai_region: profile['api-url'],
+                    zai_endpoint: profile['api-url'],
+                    siliconflow_endpoint: profile['api-url'],
+                    minimax_endpoint: profile['api-url'],
+                    custom_prompt_post_processing: profile['prompt-post-processing'],
+                });
+                const receipt = finalizeModelPayload(payload, { applyCustomPolicy: true });
+                recordModelTransportTrace({
+                    adapter: 'profile.ChatCompletionService',
+                    task: options.task,
+                    mode: 'explicit-profile-no-preset',
+                    api: selected,
+                    source: safeText(apiMap?.source, 80),
+                    model: profile.model,
+                    markerMatched: true,
+                    forbiddenBefore: receipt.before,
+                    forbiddenAfter: receipt.after,
+                    requestSent: true,
+                    outcome: receipt.after.length ? 'policy-violation' : 'finalized',
+                });
+                let streamResult;
+                if (typeof service.sendRequest === 'function') {
+                    const finalPayload = typeof service.createRequestData === 'function'
+                        ? service.createRequestData(payload)
+                        : { ...payload };
+                    const finalReceipt = finalizeModelPayload(finalPayload, { applyCustomPolicy: true });
+                    if (finalReceipt.after.length)
+                        throw new Error(`Profile最终策略仍含采样字段：${finalReceipt.after.join(', ')}`);
+                    streamResult = await service.sendRequest(finalPayload, true, options.signal);
+                }
+                else if (typeof service.processRequest === 'function') {
+                    streamResult = await service.processRequest(payload, {}, true, options.signal);
+                }
+                else {
+                    throw new Error('ChatCompletionService没有可用的请求方法');
+                }
                 return await consumeProfileStream(streamResult, label);
             }
-            finally {
-                releaseGuard();
+            if (selected === 'textgenerationwebui' && context.TextCompletionService) {
+                const service = context.TextCompletionService;
+                const profileMessages = messagesFromOptions(options);
+                const payload = createSamplingFreeOverride({
+                    stream: true,
+                    prompt: profileMessages,
+                    max_tokens: maxTokens,
+                    max_new_tokens: maxTokens,
+                    model: profile.model,
+                    api_type: apiMap?.type,
+                    api_server: profile['api-url'],
+                    secret_id: profile['secret-id'],
+                });
+                const receipt = finalizeModelPayload(payload, { applyCustomPolicy: false });
+                recordModelTransportTrace({
+                    adapter: 'profile.TextCompletionService',
+                    task: options.task,
+                    mode: 'explicit-profile-no-preset',
+                    api: selected,
+                    source: safeText(apiMap?.type, 80),
+                    model: profile.model,
+                    markerMatched: true,
+                    forbiddenBefore: receipt.before,
+                    forbiddenAfter: receipt.after,
+                    requestSent: true,
+                    outcome: receipt.after.length ? 'policy-violation' : 'finalized',
+                });
+                let streamResult;
+                if (typeof service.sendRequest === 'function') {
+                    let profilePrompt = profileMessages.map((message) => message.content).filter(Boolean).join('\n\n');
+                    if (profile.instruct && typeof service.constructPrompt === 'function') {
+                        const formatted = service.constructPrompt(profileMessages, profile.instruct);
+                        if (typeof formatted === 'string' && formatted.trim()) profilePrompt = formatted;
+                    }
+                    const exactPayload = { ...payload, prompt: profilePrompt };
+                    const finalPayload = typeof service.createRequestData === 'function'
+                        ? service.createRequestData(exactPayload)
+                        : exactPayload;
+                    const finalReceipt = finalizeModelPayload(finalPayload, { applyCustomPolicy: false });
+                    if (finalReceipt.after.length)
+                        throw new Error(`Profile最终策略仍含采样字段：${finalReceipt.after.join(', ')}`);
+                    streamResult = await service.sendRequest(finalPayload, true, options.signal);
+                }
+                else if (typeof service.processRequest === 'function') {
+                    streamResult = await service.processRequest(payload, {
+                        instructName: profile.instruct || undefined,
+                    }, true, options.signal);
+                }
+                else {
+                    throw new Error('TextCompletionService没有可用的请求方法');
+                }
+                return await consumeProfileStream(streamResult, label);
             }
+            if (typeof manager.sendRequest !== 'function')
+                throw new Error(`Connection Profile类型不可用：${selected || profile.api}`);
+            const override = createSamplingFreeOverride({ stream: true });
+            const receipt = finalizeModelPayload(override, { applyCustomPolicy: true });
+            recordModelTransportTrace({
+                adapter: 'profile.ConnectionManagerRequestService',
+                task: options.task,
+                mode: 'override-last-no-preset',
+                api: selected,
+                source: safeText(apiMap?.source || apiMap?.type, 80),
+                model: profile.model,
+                markerMatched: true,
+                forbiddenBefore: receipt.before,
+                forbiddenAfter: receipt.after,
+                requestSent: true,
+                outcome: receipt.after.length ? 'policy-violation' : 'finalized',
+                detail: profile.proxy ? '使用Connection Manager解析命名代理' : '兼容旧版Profile接口',
+            });
+            const streamResult = await manager.sendRequest(profileId, messagesFromOptions(options), maxTokens, {
+                stream: true,
+                extractData: true,
+                includePreset: false,
+                includeInstruct: true,
+                signal: options.signal,
+            }, override);
+            return await consumeProfileStream(streamResult, label);
         }
         catch (error) {
+            recordModelTransportTrace({
+                adapter: 'profile.error',
+                task: options.task,
+                mode: 'profile',
+                api: safeText(profile?.api, 80),
+                model: safeText(profile?.model, 240),
+                requestSent: true,
+                outcome: 'error',
+                errorParameter: unsupportedSamplingParameter(error),
+                requestId: extractProviderRequestId(error),
+                detail: toErrorMessage(error),
+            });
             throw normalizeProfileTransportError(error, label);
         }
     })();
@@ -10339,6 +10760,9 @@ async function generateTask(options) {
 function requestTraceReport() {
     return requestScheduler.list();
 }
+function transportTraceReport() {
+    return modelTransportTraceReport();
+}
 async function testConnection(task) {
     const started = performance.now();
     const raw = await generateTask({
@@ -10364,7 +10788,68 @@ async function testConnection(task) {
     };
 }
 
-function modelTransportAuthorityStatus() { return transportAuthorityStatus(getContext()); }
+function modelInterfaceCapabilities() {
+    const context = getContext();
+    const eventName = chatSettingsReadyEvent(context);
+    const chat = context.ChatCompletionService;
+    const text = context.TextCompletionService;
+    const manager = context.ConnectionManagerRequestService;
+    const mainApi = safeText(context.mainApi, 80).trim();
+    return {
+        mainApi,
+        officialRaw: {
+            generateRawData: typeof context.generateRawData === 'function',
+            generateRaw: typeof context.generateRaw === 'function',
+            finalPayloadEvent: eventName || '',
+            usable: mainApi === 'openai'
+                && (typeof context.generateRawData === 'function' || typeof context.generateRaw === 'function')
+                && Boolean(eventName),
+        },
+        chatCompletionService: {
+            processRequest: typeof chat?.processRequest === 'function',
+            sendRequest: typeof chat?.sendRequest === 'function',
+            createRequestData: typeof chat?.createRequestData === 'function',
+        },
+        textCompletionService: {
+            processRequest: typeof text?.processRequest === 'function',
+            sendRequest: typeof text?.sendRequest === 'function',
+            createRequestData: typeof text?.createRequestData === 'function',
+            constructPrompt: typeof text?.constructPrompt === 'function',
+        },
+        connectionManagerRequestService: {
+            sendRequest: typeof manager?.sendRequest === 'function',
+            getProfile: typeof manager?.getProfile === 'function',
+            validateProfile: typeof manager?.validateProfile === 'function',
+            getSupportedProfiles: typeof manager?.getSupportedProfiles === 'function',
+        },
+        policy: {
+            currentChatPrimary: 'createRequestData + final policy + sendRequest without preset',
+            currentChatFallback: 'generateRawData + CHAT_COMPLETION_SETTINGS_READY',
+            profilePrimary: 'validated profile + direct Chat/TextCompletionService without preset',
+            profileProxyFallback: 'ConnectionManagerRequestService override-last without preset',
+            globalFetchMutation: false,
+        },
+    };
+}
+function modelTransportAuthorityStatus() {
+    const base = transportAuthorityStatus(getContext());
+    const last = modelTransportTraceReport().at(-1);
+    if (!last) return base;
+    const browserFinalized = last.outcome === 'finalized'
+        && last.markerMatched === true
+        && last.forbiddenAfter.length === 0;
+    return {
+        ...base,
+        browserFinalized,
+        lastAdapter: last.adapter,
+        lastEvent: last.event,
+        lastOutcome: last.outcome,
+        lastRequestId: last.requestId,
+        detail: browserFinalized
+            ? `最近一次镜渊请求已在 ${last.adapter}${last.event ? ` / ${last.event}` : ''} 边界确认无禁用采样字段；宿主服务端之后的重组仍需服务端回执才能证明`
+            : base.detail,
+    };
+}
 
 }
 };
@@ -10962,8 +11447,25 @@ Object.defineProperty(__scope,"applyLorebookSuppressions",{enumerable:true,confi
 Object.defineProperty(__scope,"detectPlayerDeletedLorebookEntries",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["detectPlayerDeletedLorebookEntries"]});
 Object.defineProperty(__scope,"restoreLorebookSuppression",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["restoreLorebookSuppression"]});
 Object.defineProperty(__scope,"updateLorebookPublicationLedger",{enumerable:true,configurable:true,get:()=>__require("domain/publication-control.js")["updateLorebookPublicationLedger"]});
+Object.defineProperty(__scope,"assignChatWorldInfo",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["assignChatWorldInfo"]});
+Object.defineProperty(__scope,"canReloadWorldInfoEditor",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["canReloadWorldInfoEditor"]});
+Object.defineProperty(__scope,"createNewWorldInfo",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["createNewWorldInfo"]});
+Object.defineProperty(__scope,"createWorldInfoEntry",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["createWorldInfoEntry"]});
+Object.defineProperty(__scope,"getAssignedWorldInfoName",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["getAssignedWorldInfoName"]});
+Object.defineProperty(__scope,"getWorldInfoApi",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["getWorldInfoApi"]});
+Object.defineProperty(__scope,"getWorldInfoNames",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["getWorldInfoNames"]});
+Object.defineProperty(__scope,"getWorldInfoSettings",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["getWorldInfoSettings"]});
+Object.defineProperty(__scope,"getWorldInfoVectorStatus",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["getWorldInfoVectorStatus"]});
+Object.defineProperty(__scope,"loadWorldInfo",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["loadWorldInfo"]});
+Object.defineProperty(__scope,"refreshWorldInfoList",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["refreshWorldInfoList"]});
+Object.defineProperty(__scope,"resetWorldInfoAdapter",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["resetWorldInfoAdapter"]});
+Object.defineProperty(__scope,"reloadWorldInfoEditorHost",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["reloadWorldInfoEditorHost"]});
 Object.defineProperty(__scope,"saveWorldInfo",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["saveWorldInfo"]});
-Object.defineProperty(__scope,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostMetadata"]});
+Object.defineProperty(__scope,"setWorldInfoApiForTests",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["setWorldInfoApiForTests"]});
+Object.defineProperty(__scope,"showWorldInfoEditor",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["showWorldInfoEditor"]});
+Object.defineProperty(__scope,"supportsWorldInfoMethod",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["supportsWorldInfoMethod"]});
+Object.defineProperty(__scope,"updateWorldInfoSettings",{enumerable:true,configurable:true,get:()=>__require("host/world-info-adapter.js")["updateWorldInfoSettings"]});
+Object.defineProperty(__scope,"commitHostSnapshot",{enumerable:true,configurable:true,get:()=>__require("application/unit-of-work.js")["commitHostSnapshot"]});
 with(__scope){
 Object.defineProperty(exports,"reloadWorldInfoEditor",{enumerable:true,configurable:true,get:()=>reloadWorldInfoEditor});
 Object.defineProperty(exports,"synchronizeHostRecallSettings",{enumerable:true,configurable:true,get:()=>synchronizeHostRecallSettings});
@@ -10987,28 +11489,18 @@ Object.defineProperty(exports,"reconcileLorebookMaintenanceEntries",{enumerable:
  * 维护边界：普通同步只按当前 chatKey 的 managedKey / logicalKey 匹配；备注、精确签名
  * 与旧 small/large 键只在玩家主动维护时检查，禁止影响人工条目、其他插件或其他聊天。
  */
-let worldInfoModulePromise = null;
-let worldInfoApiForTests = null;
 const lorebookMutationLocks = new Map();
 function resetLorebookRuntime() {
-    worldInfoModulePromise = null;
-    worldInfoApiForTests = null;
+    resetWorldInfoAdapter();
     // 正在执行的物理世界书写入不会因插件重启而瞬间停止。清空锁表会让新实例
     // 与旧保存并发写同一本书；保留 Promise 链，待旧写入真正结束后由 finally 自行释放。
 }
-/** Node 集成测试使用；生产环境未设置时仍只加载 SillyTavern 的 world-info 模块。 */
+/** Node 集成测试兼容入口；实际 API 所有权位于 host/world-info-adapter。 */
 function setLorebookWorldInfoApiForTests(api) {
-    worldInfoApiForTests = api;
-    worldInfoModulePromise = null;
+    setWorldInfoApiForTests(api);
 }
 async function worldInfoApi() {
-    if (worldInfoApiForTests)
-        return worldInfoApiForTests;
-    if (!worldInfoModulePromise) {
-        const moduleUrl = '/scripts/world-info.js';
-        worldInfoModulePromise = import(/* @vite-ignore */ moduleUrl);
-    }
-    return worldInfoModulePromise;
+    return await getWorldInfoApi();
 }
 async function withLorebookMutation(name, action) {
     const lockKey = sanitizeBookName(name);
@@ -11045,7 +11537,7 @@ function resolveTargetBookName(create, chatKey = currentChatKey()) {
     const settings = getSettings();
     const meta = getChatMetadataNamespace();
     const context = getContext();
-    let name = sanitizeBookName(settings.lorebookName || meta.lorebookName || context.chatMetadata?.world_info || '');
+    let name = sanitizeBookName(settings.lorebookName || meta.lorebookName || getAssignedWorldInfoName(context) || '');
     if (!name && create && settings.autoCreateLorebook)
         name = generatedBookName(chatKey);
     return name;
@@ -11060,13 +11552,13 @@ async function ensureLorebook(name, chatKey, artifact) {
     assertCurrent();
     const wi = await worldInfoApi();
     assertCurrent();
-    let data = await wi.loadWorldInfo(name);
+    let data = await loadWorldInfo(wi, name);
     assertCurrent();
-    if (!data && typeof wi.createNewWorldInfo === 'function') {
+    if (!data && supportsWorldInfoMethod(wi, 'createNewWorldInfo')) {
         assertCurrent();
-        await wi.createNewWorldInfo(name, { interactive: false });
+        await createNewWorldInfo(wi, name, { interactive: false });
         assertCurrent();
-        data = await wi.loadWorldInfo(name);
+        data = await loadWorldInfo(wi, name);
         assertCurrent();
     }
     if (!data) {
@@ -11078,10 +11570,9 @@ async function ensureLorebook(name, chatKey, artifact) {
     const context = getContext();
     const meta = getChatMetadataNamespace();
     assertCurrent();
-    context.chatMetadata ||= {};
-    context.chatMetadata[wi.METADATA_KEY || 'world_info'] = name;
+    assignChatWorldInfo(context, wi, name);
     meta.lorebookName = name;
-    await saveHostMetadata(chatKey);
+    await commitHostSnapshot(chatKey);
     assertCurrent();
     refreshChatLorebookIndicator(name);
     return wi;
@@ -11109,7 +11600,7 @@ function removeManagedEntriesForChat(data, chatKey) {
  */
 async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
     assertArtifactCommitCurrent(artifact);
-    const data = await wi.loadWorldInfo(name);
+    const data = await loadWorldInfo(wi, name);
     assertArtifactCommitCurrent(artifact);
     if (!data?.entries)
         return 0;
@@ -11119,7 +11610,7 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
     await saveWorldInfo(wi, name, data, true);
     assertArtifactCommitCurrent(artifact);
     // 保存后回读，防止旧缓存把当前聊天条目重新写回旧书。
-    const verifiedData = (await wi.loadWorldInfo(name)) || data;
+    const verifiedData = (await loadWorldInfo(wi, name)) || data;
     assertArtifactCommitCurrent(artifact);
     const verifiedRemoved = removeManagedEntriesForChat(verifiedData, chatKey);
     removed += verifiedRemoved;
@@ -11130,7 +11621,7 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
     const rendered = await reloadWorldInfoEditor(wi, name, false);
     assertArtifactCommitCurrent(artifact);
     if (rendered) {
-        const postReloadData = (await wi.loadWorldInfo(name)) || verifiedData;
+        const postReloadData = (await loadWorldInfo(wi, name)) || verifiedData;
         assertArtifactCommitCurrent(artifact);
         const postReloadRemoved = removeManagedEntriesForChat(postReloadData, chatKey);
         removed += postReloadRemoved;
@@ -11139,7 +11630,7 @@ async function cleanupPreviousLorebook(wi, name, chatKey, artifact) {
             assertArtifactCommitCurrent(artifact);
             await reloadWorldInfoEditor(wi, name, true);
             assertArtifactCommitCurrent(artifact);
-            const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
+            const finalData = (await loadWorldInfo(wi, name)) || postReloadData;
             const finalRemoved = removeManagedEntriesForChat(finalData, chatKey);
             removed += finalRemoved;
             if (finalRemoved) {
@@ -11224,26 +11715,15 @@ async function waitForWorldInfoEditorPaint() {
  */
 async function reloadWorldInfoEditor(wi, name, loadIfNotSelected = false) {
     const context = getContext();
-    const contextUpdateList = context.updateWorldInfoList;
-    const moduleUpdateList = wi.updateWorldInfoList;
-    const updateList = contextUpdateList ?? moduleUpdateList;
-    if (typeof updateList === 'function') {
-        await Promise.resolve(updateList.call(contextUpdateList ? context : wi));
-    }
-    const names = typeof context.getWorldInfoNames === 'function'
-        ? context.getWorldInfoNames()
-        : Array.isArray(wi.world_names)
-            ? [...wi.world_names]
-            : [];
+    await refreshWorldInfoList(context, wi);
+    const names = getWorldInfoNames(context, wi);
     // 新建书偶尔会晚一拍进入下拉列表。直接 showWorldEditor 仍可按书名读取缓存。
     const listed = !names.length || names.includes(name);
     const editorSelect = document.querySelector('#world_editor_select');
     const selectedName = editorSelect?.selectedOptions?.[0]?.textContent?.trim() ?? '';
     const shouldRenderTarget = loadIfNotSelected || selectedName === name;
-    const contextShow = context.showWorldEditor;
-    const moduleShow = wi.showWorldEditor;
-    const show = contextShow ?? moduleShow;
-    if (shouldRenderTarget && typeof show === 'function') {
+    const canShow = typeof context.showWorldEditor === 'function' || typeof wi.showWorldEditor === 'function';
+    if (shouldRenderTarget && canShow) {
         // 只更新选择框值，不触发 change，避免再次排入一条异步旧渲染。
         if (editorSelect && listed && editorSelect.options) {
             const targetOption = Array.from(editorSelect.options).find((option) => option.textContent?.trim() === name);
@@ -11251,15 +11731,13 @@ async function reloadWorldInfoEditor(wi, name, loadIfNotSelected = false) {
                 editorSelect.value = targetOption.value;
         }
         // showWorldEditor 会从 saveWorldInfo 已更新的缓存重建列表；这里不再并发触发 reloadEditor。
-        await Promise.resolve(show.call(contextShow ? context : wi, name));
+        await showWorldInfoEditor(context, wi, name);
         await waitForWorldInfoEditorPaint();
         return true;
     }
-    const contextReload = context.reloadWorldInfoEditor;
-    const moduleReload = wi.reloadEditor ?? wi.reloadWorldInfoEditor;
-    const reload = contextReload ?? moduleReload;
-    if (typeof reload === 'function' && listed) {
-        await Promise.resolve(reload.call(contextReload ? context : wi, name, loadIfNotSelected));
+    const canReload = canReloadWorldInfoEditor(context, wi);
+    if (canReload && listed) {
+        await reloadWorldInfoEditorHost(context, wi, name, loadIfNotSelected);
         await waitForWorldInfoEditorPaint();
     }
     return false;
@@ -11352,23 +11830,7 @@ function summaryEventKey(item) {
  * 条目自身的 vectorized / recursion flags 仍是最终边界。
  */
 function hostVectorWorldInfoStatus() {
-    try {
-        const context = getContext();
-        const settings = context.extensionSettings?.vectors;
-        if (!settings || typeof settings !== 'object')
-            return { available: false, enabled: false, error: 'ST Vector Storage 尚未初始化' };
-        return {
-            available: true,
-            enabled: settings.enabled_world_info === true,
-            source: String(settings.source || ''),
-            scoreThreshold: Number.isFinite(Number(settings.score_threshold)) ? Number(settings.score_threshold) : undefined,
-            maxEntries: Number.isFinite(Number(settings.max_entries)) ? Number(settings.max_entries) : undefined,
-            enabledForAll: settings.enabled_for_all === true,
-        };
-    }
-    catch (error) {
-        return { available: false, enabled: false, error: toErrorMessage(error) };
-    }
+    return getWorldInfoVectorStatus(getContext());
 }
 
 /**
@@ -11394,13 +11856,13 @@ async function synchronizeHostRecallSettings(wi, desired) {
         vector: { requested: vectorRequested, changed: false, ...vectorStatus },
     };
 
-    if (recursionRequested && typeof wi.getWorldInfoSettings === 'function' && typeof wi.updateWorldInfoSettings === 'function') {
+    if (recursionRequested && supportsWorldInfoMethod(wi, 'getWorldInfoSettings') && supportsWorldInfoMethod(wi, 'updateWorldInfoSettings')) {
         result.recursion.available = true;
         try {
-            const current = wi.getWorldInfoSettings() ?? {};
+            const current = getWorldInfoSettings(wi) ?? {};
             result.recursion.enabled = current.world_info_recursive === true;
             if (!result.recursion.enabled) {
-                wi.updateWorldInfoSettings({ world_info_recursive: true });
+                updateWorldInfoSettings(wi, { world_info_recursive: true });
                 result.recursion.enabled = true;
                 result.recursion.changed = true;
             }
@@ -11689,7 +12151,7 @@ function reconcileLorebookEntries(data, desired, chatKey, wi, name, dedicatedBoo
         const adoptedExistingLegacy = Boolean(pair && (!pair.info?.managed || !pair.info?.chatKey));
         let entry = pair?.entry;
         if (!entry) {
-            entry = wi.createWorldInfoEntry(name, data);
+            entry = createWorldInfoEntry(wi, name, data);
             if (!entry)
                 throw new Error(`世界书条目创建失败：${item.key}`);
             const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? '');
@@ -11858,7 +12320,7 @@ function reconcileLorebookMaintenanceEntries(data, desired, chatKey, wi, name, d
         }
         let entry = pair?.entry;
         if (!entry) {
-            entry = wi.createWorldInfoEntry(name, data);
+            entry = createWorldInfoEntry(wi, name, data);
             if (!entry)
                 throw new Error(`世界书条目创建失败：${key}`);
             const createdUid = String(entry.uid ?? Object.entries(data.entries).find(([, value]) => value === entry)?.[0] ?? '');
@@ -11915,7 +12377,7 @@ async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedi
     if (!renderedTarget)
         return entryIds;
     // showWorldEditor 可能把打开前的旧缓存延迟写回。重绘后必须重新加载并按当前 desired 对账。
-    const postReloadData = (await wi.loadWorldInfo(name)) || { entries: {} };
+    const postReloadData = (await loadWorldInfo(wi, name)) || { entries: {} };
     postReloadData.entries ||= {};
     const postReloadVerification = reconcileLorebookEntries(postReloadData, desired, artifact.chatKey, wi, name, dedicatedBook);
     entryIds = postReloadVerification.entryIds;
@@ -11927,7 +12389,7 @@ async function refreshTargetLorebookAndConfirm(wi, name, desired, artifact, dedi
     // 修正保存后再次重绘，确保当前编辑器看到的是最终入库版本，而不是刚被修掉的旧缓存。
     await reloadWorldInfoEditor(wi, name, true);
     assertArtifactCommitCurrent(artifact);
-    const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
+    const finalData = (await loadWorldInfo(wi, name)) || postReloadData;
     finalData.entries ||= {};
     const finalVerification = reconcileLorebookEntries(finalData, desired, artifact.chatKey, wi, name, dedicatedBook);
     entryIds = finalVerification.entryIds;
@@ -11974,7 +12436,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
         const wi = await ensureLorebook(name, artifact.chatKey, artifact);
         if (!name)
             throw new Error('没有可用的聊天世界书');
-        const data = (await wi.loadWorldInfo(name)) || { entries: {} };
+        const data = (await loadWorldInfo(wi, name)) || { entries: {} };
         data.entries ||= {};
         const plan = await desiredSpecs(artifact, chatState);
         const detectedDeletions = detectPlayerDeletedLorebookEntries(chatState, data, plan.desired, artifact.chatKey, name);
@@ -11995,7 +12457,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
             await saveWorldInfo(wi, name, data, true);
             assertArtifactCommitCurrent(artifact);
             // 只有实际保存后做一次回读确认，清除保存路径回流的同 managedKey 副本。
-            const verifiedData = (await wi.loadWorldInfo(name)) || data;
+            const verifiedData = (await loadWorldInfo(wi, name)) || data;
             const verification = reconcileLorebookEntries(verifiedData, desired, artifact.chatKey, wi, name, dedicatedBook);
             entryIds = verification.entryIds;
             if (verification.changed) {
@@ -12014,7 +12476,7 @@ async function syncLorebookOnce(artifact, name, force = false, options = {}) {
             await cleanupPreviousLorebook(wi, previousLorebookName, artifact.chatKey, artifact);
         }
         assertArtifactCommitCurrent(artifact);
-        const finalPublicationData = (await wi.loadWorldInfo(name)) || data;
+        const finalPublicationData = (await loadWorldInfo(wi, name)) || data;
         assertArtifactCommitCurrent(artifact);
         updateLorebookPublicationLedger(chatState, finalPublicationData, artifact.chatKey, name);
         artifact.lorebookEntryIds = entryIds;
@@ -12126,7 +12588,7 @@ async function previewLorebookMaintenance(artifact) {
         assertArtifactCommitCurrent(artifact);
         const wi = await worldInfoApi();
         assertArtifactCommitCurrent(artifact);
-        const data = await wi.loadWorldInfo(name);
+        const data = await loadWorldInfo(wi, name);
         assertArtifactCommitCurrent(artifact);
         return maintenancePreviewFromData(data, name, artifact.chatKey, isDedicatedGeneratedBook(name, artifact.chatKey));
     });
@@ -12147,7 +12609,7 @@ async function applyLorebookMaintenance(artifact) {
         assertArtifactCommitCurrent(artifact);
         const wi = await ensureLorebook(name, artifact.chatKey, artifact);
         assertArtifactCommitCurrent(artifact);
-        const data = (await wi.loadWorldInfo(name)) || { entries: {} };
+        const data = (await loadWorldInfo(wi, name)) || { entries: {} };
         assertArtifactCommitCurrent(artifact);
         data.entries ||= {};
         const dedicatedBook = isDedicatedGeneratedBook(name, artifact.chatKey);
@@ -12171,7 +12633,7 @@ async function applyLorebookMaintenance(artifact) {
             assertArtifactCommitCurrent(artifact);
             await saveWorldInfo(wi, name, data, true);
             assertArtifactCommitCurrent(artifact);
-            const verifiedData = (await wi.loadWorldInfo(name)) || data;
+            const verifiedData = (await loadWorldInfo(wi, name)) || data;
             assertArtifactCommitCurrent(artifact);
             const verification = reconcileLorebookMaintenanceEntries(verifiedData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
             removed += verification.removed;
@@ -12182,7 +12644,7 @@ async function applyLorebookMaintenance(artifact) {
             const renderedTarget = await reloadWorldInfoEditor(wi, name, true);
             assertArtifactCommitCurrent(artifact);
             if (renderedTarget) {
-                const postReloadData = (await wi.loadWorldInfo(name)) || verifiedData;
+                const postReloadData = (await loadWorldInfo(wi, name)) || verifiedData;
                 assertArtifactCommitCurrent(artifact);
                 const postReloadVerification = reconcileLorebookMaintenanceEntries(postReloadData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
                 removed += postReloadVerification.removed;
@@ -12191,7 +12653,7 @@ async function applyLorebookMaintenance(artifact) {
                     assertArtifactCommitCurrent(artifact);
                     await reloadWorldInfoEditor(wi, name, true);
                     assertArtifactCommitCurrent(artifact);
-                    const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
+                    const finalData = (await loadWorldInfo(wi, name)) || postReloadData;
                     assertArtifactCommitCurrent(artifact);
                     const finalVerification = reconcileLorebookMaintenanceEntries(finalData, desired, artifact.chatKey, wi, name, dedicatedBook, cleanup);
                     removed += finalVerification.removed;
@@ -12227,7 +12689,7 @@ async function knownLorebookNamesForChat(chatKey) {
 async function clearManagedEntriesInBook(wi, name, chatKey) {
     const assertCurrent = () => assertChatCommitCurrent(chatKey, '聊天已切换，停止清理旧聊天世界书');
     assertCurrent();
-    const data = await wi.loadWorldInfo(name);
+    const data = await loadWorldInfo(wi, name);
     assertCurrent();
     if (!data?.entries)
         return 0;
@@ -12236,7 +12698,7 @@ async function clearManagedEntriesInBook(wi, name, chatKey) {
         return 0;
     await saveWorldInfo(wi, name, data, true);
     assertCurrent();
-    const verifiedData = (await wi.loadWorldInfo(name)) || data;
+    const verifiedData = (await loadWorldInfo(wi, name)) || data;
     assertCurrent();
     const verifiedRemoved = removeManagedEntriesForChat(verifiedData, chatKey);
     if (verifiedRemoved) {
@@ -12246,7 +12708,7 @@ async function clearManagedEntriesInBook(wi, name, chatKey) {
     const rendered = await reloadWorldInfoEditor(wi, name);
     assertCurrent();
     if (rendered) {
-        const postReloadData = (await wi.loadWorldInfo(name)) || verifiedData;
+        const postReloadData = (await loadWorldInfo(wi, name)) || verifiedData;
         assertCurrent();
         const postReloadRemoved = removeManagedEntriesForChat(postReloadData, chatKey);
         if (postReloadRemoved) {
@@ -12254,7 +12716,7 @@ async function clearManagedEntriesInBook(wi, name, chatKey) {
             assertCurrent();
             await reloadWorldInfoEditor(wi, name, true);
             assertCurrent();
-            const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
+            const finalData = (await loadWorldInfo(wi, name)) || postReloadData;
             const finalRemoved = removeManagedEntriesForChat(finalData, chatKey);
             if (finalRemoved) {
                 await saveWorldInfo(wi, name, finalData, true);
@@ -12283,7 +12745,7 @@ function pauseManagedEntries(data, chatKey) {
 async function pauseManagedEntriesInBook(wi, name, chatKey) {
     const assertCurrent = () => assertChatCommitCurrent(chatKey, '聊天已切换，停止暂停旧聊天世界书');
     assertCurrent();
-    const data = await wi.loadWorldInfo(name);
+    const data = await loadWorldInfo(wi, name);
     assertCurrent();
     if (!data?.entries)
         return 0;
@@ -12292,7 +12754,7 @@ async function pauseManagedEntriesInBook(wi, name, chatKey) {
         return first.managed;
     await saveWorldInfo(wi, name, data, true);
     assertCurrent();
-    const verifiedData = (await wi.loadWorldInfo(name)) || data;
+    const verifiedData = (await loadWorldInfo(wi, name)) || data;
     const verification = pauseManagedEntries(verifiedData, chatKey);
     if (verification.changed) {
         await saveWorldInfo(wi, name, verifiedData, true);
@@ -12301,14 +12763,14 @@ async function pauseManagedEntriesInBook(wi, name, chatKey) {
     const rendered = await reloadWorldInfoEditor(wi, name);
     assertCurrent();
     if (rendered) {
-        const postReloadData = (await wi.loadWorldInfo(name)) || verifiedData;
+        const postReloadData = (await loadWorldInfo(wi, name)) || verifiedData;
         const postReloadVerification = pauseManagedEntries(postReloadData, chatKey);
         if (postReloadVerification.changed) {
             await saveWorldInfo(wi, name, postReloadData, true);
             assertCurrent();
             await reloadWorldInfoEditor(wi, name, true);
             assertCurrent();
-            const finalData = (await wi.loadWorldInfo(name)) || postReloadData;
+            const finalData = (await loadWorldInfo(wi, name)) || postReloadData;
             const finalVerification = pauseManagedEntries(finalData, chatKey);
             if (finalVerification.changed) {
                 await saveWorldInfo(wi, name, finalData, true);
@@ -12865,8 +13327,8 @@ Object.defineProperty(__scope,"commandStatusForError",{enumerable:true,configura
 Object.defineProperty(__scope,"receivePersistentHostEvent",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["receivePersistentHostEvent"]});
 Object.defineProperty(__scope,"settlePersistentCommand",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["settlePersistentCommand"]});
 Object.defineProperty(__scope,"startPersistentCommandHeartbeat",{enumerable:true,configurable:true,get:()=>__require("pipeline/reliable-command.js")["startPersistentCommandHeartbeat"]});
-Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
-Object.defineProperty(__scope,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostMetadata"]});
+Object.defineProperty(__scope,"commitHostSnapshot",{enumerable:true,configurable:true,get:()=>__require("application/unit-of-work.js")["commitHostSnapshot"]});
+Object.defineProperty(__scope,"subscribeContextEvent",{enumerable:true,configurable:true,get:()=>__require("host/event-adapter.js")["subscribeContextEvent"]});
 Object.defineProperty(__scope,"resolveHostControl",{enumerable:true,configurable:true,get:()=>__require("domain/host-control.js")["resolveHostControl"]});
 Object.defineProperty(__scope,"createPlayerRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["createPlayerRecordingBoundary"]});
 Object.defineProperty(__scope,"messageInsideRecordingBoundary",{enumerable:true,configurable:true,get:()=>__require("domain/recording-boundary.js")["messageInsideRecordingBoundary"]});
@@ -12902,12 +13364,6 @@ const scheduledMessageTimers = new Map();
 // 历史重建会串行调用普通流水线，不能把整个重建再次放入同一 TaskQueue。
 // 这里提供聊天级独占门闩，并在进入重建前排空该聊天的旧任务。
 let activeHistoryRebuildChatKey = '';
-function removeSourceListener(source, event, handler) {
-    if (typeof source?.off === 'function')
-        source.off(event, handler);
-    else
-        source?.removeListener?.(event, handler);
-}
 function cancelScheduledMessagesForChat(chatKey) {
     let cancelled = 0;
     for (const [key, timer] of scheduledMessageTimers) {
@@ -12957,10 +13413,6 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
             firstChangedIndex = Math.min(firstChangedIndex, index);
         }
     }
-    if (changedArtifacts) {
-        await saveHostChat(chatKey);
-        notifyFrom(firstChangedIndex);
-    }
     const chatState = await readChatState(chatKey);
     const interruptedRecovery = interruptHistoryRecovery(chatState, reason);
     const runtime = normalizeRuntimeV2(chatState.runtimeV2);
@@ -12992,7 +13444,11 @@ async function reconcileInterruptedRuntimeState(reason = INTERRUPTED_STAGE_MESSA
         chatState.runtimeV2 = runtime;
     }
     if (interruptedRecovery || runtimeChanged)
-        await commitChatState(chatState);
+        await commitChatState(chatState); // 同一次宿主快照同时保存前面修改过的 artifacts。
+    else if (changedArtifacts)
+        await commitHostSnapshot(chatKey);
+    if (changedArtifacts)
+        notifyFrom(firstChangedIndex);
     return { artifacts: changedArtifacts, historyRecovery: interruptedRecovery, runtimeOutboxRecovered: runtimeChanged };
 }
 function subscribePipeline(listener) {
@@ -13644,8 +14100,7 @@ async function invalidateHistory(payload, reason) {
     state.processedMessageKeys = state.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
     state.latestSnapshotMessageKey = state.processedMessageKeys.at(-1);
     replayRuntimeForValidMessages(state, validPrefixKeys);
-    await saveHostChat(chatKey);
-    await commitChatState(state);
+    await commitChatState(state); // chat_metadata 与已标记 artifacts 由一次 saveChat 快照共同落盘。
     await pauseLorebookForHistoryChange(chatKey);
     notifyFrom(index);
     if (latestOnly) {
@@ -13893,8 +14348,7 @@ async function chooseHistoryRecalculationStart(startIndex) {
     state.processedMessageKeys = state.processedMessageKeys.filter((key) => validPrefixKeys.has(key));
     state.latestSnapshotMessageKey = state.processedMessageKeys.at(-1);
     replayRuntimeForValidMessages(state, validPrefixKeys);
-    await saveHostChat(chatKey);
-    await commitChatState(state);
+    await commitChatState(state); // 同一次宿主快照保存消息标记和 ChatState。
     notifyFrom(index);
 }
 /**
@@ -14296,8 +14750,7 @@ async function beginPlayRecording() {
         }
         const state = createEmptyChatState(sourceChatKey);
         state.recordingBoundary = createPlayerRecordingBoundary(getChat().length);
-        await saveHostChat(sourceChatKey);
-        await commitChatState(state);
+        await commitChatState(state); // 清除消息 artifacts 与新 recordingBoundary 原子保存。
         notifyFrom(0);
         return { boundary: state.recordingBoundary, clearedArtifacts, lorebookEntries };
     }
@@ -14349,10 +14802,9 @@ async function resetCurrentGame() {
         const context = getContext();
         if (context.chatMetadata?.[LEGACY_MODULE_NAME])
             delete context.chatMetadata[LEGACY_MODULE_NAME];
-        await saveHostChat(sourceChatKey);
+        await commitHostSnapshot(sourceChatKey); // 消息与 chat_metadata 位于同一官方 saveChat 请求。
         if (currentChatKey() !== sourceChatKey)
             throw new Error('聊天已切换，已停止重置当前游戏');
-        await saveHostMetadata(sourceChatKey);
         notifyFrom(0);
         return { messages, lorebookEntries };
     }
@@ -14382,8 +14834,8 @@ function latestSnapshotArtifact() {
     return null;
 }
 function installPipelineEventHandlers() {
-    const context = globalThis.SillyTavern.getContext();
-    const { eventSource, event_types } = context;
+    const context = getContext();
+    const { event_types } = context;
     const onReceived = (payload) => scheduleMessage(payload, false, 180, 'message-received');
     const persistControlEvent = async (payload, eventType, chatKey = currentChatKey()) => {
         const changedIndex = resolveChangedIndex(payload);
@@ -14437,18 +14889,14 @@ function installPipelineEventHandlers() {
                 console.warn('[MirrorAbyss] interrupted runtime reconciliation failed', error);
             });
     };
-    eventSource.on(event_types.MESSAGE_RECEIVED, onReceived);
-    eventSource.on(event_types.MESSAGE_EDITED, onEdited);
-    eventSource.on(event_types.MESSAGE_SWIPED, onSwiped);
-    eventSource.on(event_types.MESSAGE_DELETED, onDeleted);
-    eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
-    return () => {
-        removeSourceListener(eventSource, event_types.MESSAGE_RECEIVED, onReceived);
-        removeSourceListener(eventSource, event_types.MESSAGE_EDITED, onEdited);
-        removeSourceListener(eventSource, event_types.MESSAGE_SWIPED, onSwiped);
-        removeSourceListener(eventSource, event_types.MESSAGE_DELETED, onDeleted);
-        removeSourceListener(eventSource, event_types.CHAT_CHANGED, onChatChanged);
-    };
+    const releases = [
+        subscribeContextEvent(context, event_types.MESSAGE_RECEIVED, onReceived),
+        subscribeContextEvent(context, event_types.MESSAGE_EDITED, onEdited),
+        subscribeContextEvent(context, event_types.MESSAGE_SWIPED, onSwiped),
+        subscribeContextEvent(context, event_types.MESSAGE_DELETED, onDeleted),
+        subscribeContextEvent(context, event_types.CHAT_CHANGED, onChatChanged),
+    ];
+    return () => releases.splice(0).forEach((release) => release());
 }
 
 }
@@ -15713,9 +16161,8 @@ Object.defineProperty(__scope,"smallSummarySystemPrompt",{enumerable:true,config
 Object.defineProperty(__scope,"parseSummaryTextOutput",{enumerable:true,configurable:true,get:()=>__require("domain/summary-text.js")["parseSummaryTextOutput"]});
 Object.defineProperty(__scope,"eventClosedFromFacts",{enumerable:true,configurable:true,get:()=>__require("domain/event-status.js")["eventClosedFromFacts"]});
 Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
-Object.defineProperty(__scope,"commitChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["commitChatState"]});
 Object.defineProperty(__scope,"persistArtifact",{enumerable:true,configurable:true,get:()=>__require("application/artifact-commands.js")["persistArtifact"]});
-Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
+Object.defineProperty(__scope,"commitDerivedBundle",{enumerable:true,configurable:true,get:()=>__require("application/unit-of-work.js")["commitDerivedBundle"]});
 with(__scope){
 Object.defineProperty(exports,"generateSmallSummary",{enumerable:true,configurable:true,get:()=>generateSmallSummary});
 Object.defineProperty(exports,"generateLargeSummary",{enumerable:true,configurable:true,get:()=>generateLargeSummary});
@@ -15976,7 +16423,7 @@ async function generateSmallSummary(artifact, force = false) {
             throw new Error(`小总结超过白盒硬上限：${summary.summary.length}/${settings.contentLimits.smallSummary} 字（${group.eventId}）`);
         return { group, summary, newFactIds };
     });
-    const previousSnapshot = artifact.snapshot ? structuredClone(artifact.snapshot) : undefined;
+    const workingArtifact = structuredClone(artifact);
     const previousFacts = structuredClone(chatState.internalFacts);
     const previousSummaries = structuredClone(chatState.smallSummaries);
     try {
@@ -15986,8 +16433,8 @@ async function generateSmallSummary(artifact, force = false) {
                 group.previous.supersededBySmallSummaryId = summary.id;
             markFactsConsumed(chatState.internalFacts, newFactIds, summary.id);
         }
-        if (artifact.snapshot) {
-            let nextSnapshot = artifact.snapshot;
+        if (workingArtifact.snapshot) {
+            let nextSnapshot = workingArtifact.snapshot;
             for (const { group, summary, newFactIds } of generated) {
                 nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, group.facts, 'recentHistory', summary, group.previous ? [group.previous] : [], settings.tableRegistry);
                 const settlement = finalizeSummarySettlement({
@@ -16011,25 +16458,20 @@ async function generateSmallSummary(artifact, force = false) {
                         : ['总结已写入覆盖标记；没有满足删除契约的待结算容器。'],
                 };
             }
-            artifact.snapshot = nextSnapshot;
-            assertArtifactCommitCurrent(artifact);
-            await saveHostChat(artifact.chatKey);
+            workingArtifact.snapshot = nextSnapshot;
         }
         // 小总结是加工容器：同一事件只保留当前累计版本，旧版本在完成对象分发后退出。
         chatState.smallSummaries = chatState.smallSummaries.filter((item) => !item.supersededBySmallSummaryId);
-        await commitChatState(chatState);
+        await commitDerivedBundle({
+            artifact: workingArtifact,
+            chatState,
+            commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:summary-small:${generated.map((item) => item.summary.id).join(',')}`,
+        });
+        artifact.snapshot = workingArtifact.snapshot ? structuredClone(workingArtifact.snapshot) : undefined;
     }
     catch (error) {
-        artifact.snapshot = previousSnapshot;
         chatState.internalFacts = previousFacts;
         chatState.smallSummaries = previousSummaries;
-        try {
-            assertArtifactCommitCurrent(artifact);
-            await saveHostChat(artifact.chatKey).catch(() => undefined);
-        }
-        catch {
-            // 聊天或正文已变化，旧任务回滚不得接触新聊天。
-        }
         throw error;
     }
     return generated.at(-1)?.summary ?? null;
@@ -16085,7 +16527,7 @@ async function generateLargeSummary(artifact, force = false) {
     const previousLargeList = structuredClone(chatState.largeSummaries);
     const previousSmall = structuredClone(chatState.smallSummaries);
     const previousFacts = structuredClone(chatState.internalFacts);
-    const previousSnapshot = artifact.snapshot ? structuredClone(artifact.snapshot) : undefined;
+    const workingArtifact = structuredClone(artifact);
     try {
         chatState.largeSummaries.push(...generated.map((item) => item.summary));
         for (const { group, summary } of generated) {
@@ -16095,8 +16537,8 @@ async function generateLargeSummary(artifact, force = false) {
                     item.solidifiedByLargeSummaryId = summary.id;
             markFactsSolidified(chatState.internalFacts, group.sourceFactIds, summary.id);
         }
-        if (artifact.snapshot) {
-            let nextSnapshot = artifact.snapshot;
+        if (workingArtifact.snapshot) {
+            let nextSnapshot = workingArtifact.snapshot;
             for (const { group, summary } of generated) {
                 const eventFacts = chatState.internalFacts.filter((fact) => fact.eventId === group.eventId);
                 nextSnapshot = applySummaryLayer(nextSnapshot, group.eventId, eventFacts, 'recentHistory', undefined, group.items, settings.tableRegistry);
@@ -16122,9 +16564,7 @@ async function generateLargeSummary(artifact, force = false) {
                         : ['大总结已固化；没有满足删除契约的待结算容器。'],
                 };
             }
-            artifact.snapshot = nextSnapshot;
-            assertArtifactCommitCurrent(artifact);
-            await saveHostChat(artifact.chatKey);
+            workingArtifact.snapshot = nextSnapshot;
         }
         // 大总结完成固化后，已消费的小总结不再作为独立条目保留。
         const consumedSmallIds = new Set(generated.flatMap(({ group }) => group.consumedVersionIds));
@@ -16139,7 +16579,12 @@ async function generateLargeSummary(artifact, force = false) {
                 return false;
             return true;
         });
-        await commitChatState(chatState);
+        await commitDerivedBundle({
+            artifact: workingArtifact,
+            chatState,
+            commandId: `${artifact.intentId || artifact.processingIntent?.intentId}:summary-large:${generated.map((item) => item.summary.id).join(',')}`,
+        });
+        artifact.snapshot = workingArtifact.snapshot ? structuredClone(workingArtifact.snapshot) : undefined;
         const readBack = await readChatState(artifact.chatKey);
         const retainedGeneratedIds = new Set(generated
             .filter((item) => !item.group.closed)
@@ -16149,19 +16594,9 @@ async function generateLargeSummary(artifact, force = false) {
         }
     }
     catch (error) {
-        artifact.snapshot = previousSnapshot;
         chatState.largeSummaries = previousLargeList;
         chatState.smallSummaries = previousSmall;
         chatState.internalFacts = previousFacts;
-        if (previousSnapshot) {
-            try {
-                assertArtifactCommitCurrent(artifact);
-                await saveHostChat(artifact.chatKey).catch(() => undefined);
-            }
-            catch {
-                // 聊天或正文已变化，旧总结回滚不得接触新聊天。
-            }
-        }
         throw error;
     }
     return generated.at(-1)?.summary ?? null;
@@ -18563,8 +18998,7 @@ Object.defineProperty(__scope,"stateWorkingCopyMetadata",{enumerable:true,config
 Object.defineProperty(__scope,"threeWayMergeState",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["threeWayMergeState"]});
 Object.defineProperty(__scope,"trackStateWorkingCopy",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["trackStateWorkingCopy"]});
 Object.defineProperty(__scope,"withChatStateLock",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["withChatStateLock"]});
-Object.defineProperty(__scope,"saveHostChat",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostChat"]});
-Object.defineProperty(__scope,"saveHostMetadata",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostMetadata"]});
+Object.defineProperty(__scope,"saveHostSnapshot",{enumerable:true,configurable:true,get:()=>__require("host/chat-persistence-adapter.js")["saveHostSnapshot"]});
 Object.defineProperty(exports,"StateConflictError",{enumerable:true,configurable:true,get:()=>__require("storage/state-store.js")["StateConflictError"]});
 with(__scope){
 Object.defineProperty(exports,"putArtifact",{enumerable:true,configurable:true,get:()=>putArtifact});
@@ -19007,7 +19441,7 @@ async function putArtifact(artifact) {
         throw new Error('artifact 持久化缺少 chatKey');
     // Artifact lives on message.extra, but mutation is not durable until the host chat is saved.
     // Keep the compatibility API while making its contract real instead of a silent no-op.
-    await saveHostChat(artifact.chatKey);
+    await saveHostSnapshot(artifact.chatKey);
     return {
         chatKey: artifact.chatKey,
         messageKey: artifact.messageKey || '',
@@ -19073,7 +19507,7 @@ async function readCurrentChatStateFast(namespace, state, chatKey) {
         return cloneChatState(state);
     namespace.state = next;
     try {
-        await saveHostMetadata(chatKey);
+        await saveHostSnapshot(chatKey);
         return cloneChatState(next);
     }
     catch (error) {
@@ -19112,17 +19546,10 @@ async function readChatState(chatKey) {
         });
     }
     const migration = migrateChatState(namespace.state, chatKey);
-    let chatPersisted = false;
     try {
-        if (migration.artifactViewsChanged) {
-            await saveHostChat(chatKey);
-            chatPersisted = true;
-        }
         namespace.state = migration.state;
-        if (migration.metadataChanged)
-            await saveHostMetadata(chatKey);
-        // 调用方拿到工作副本，只有 putChatState 成功后才进入聊天 metadata。
-        // 避免保存失败时，未落盘修改仍污染当前运行期的规范状态。
+        if (migration.artifactViewsChanged || migration.metadataChanged)
+            await saveHostSnapshot(chatKey); // 官方 saveChat 一次保存迁移后的 metadata 与全部 artifacts。
         return cloneChatState(namespace.state);
     }
     catch (error) {
@@ -19130,36 +19557,32 @@ async function readChatState(chatKey) {
             namespace.state = previousState;
         else
             delete namespace.state;
-        // 若聊天尚未确认保存，恢复所有内存 artifact；若聊天已保存而 metadata 失败，
-        // 保留随聊天落盘的 V30/V31 ID 别名，让下一次读取能修复旧 focusObjectId 与对象引用后完成迁移位。
-        if (!chatPersisted) {
-            for (const backup of backups) {
-                backup.artifact.snapshot = backup.snapshot;
-                if (backup.hadAliases)
-                    backup.artifact.persistedCharacterIdAliasesV30 = backup.aliases;
-                else
-                    delete backup.artifact.persistedCharacterIdAliasesV30;
-                if (backup.hadUniqueAliases)
-                    backup.artifact.uniqueObjectIdAliasesV31 = backup.uniqueAliases;
-                else
-                    delete backup.artifact.uniqueObjectIdAliasesV31;
-                if (backup.hadStages)
-                    backup.artifact.stages = backup.stages;
-                else
-                    delete backup.artifact.stages;
-                if (backup.hadProcessingIntent)
-                    backup.artifact.processingIntent = backup.processingIntent;
-                else
-                    delete backup.artifact.processingIntent;
-                if (backup.hadIntentId)
-                    backup.artifact.intentId = backup.intentId;
-                else
-                    delete backup.artifact.intentId;
-                if (backup.hadLorebookEntryIds)
-                    backup.artifact.lorebookEntryIds = backup.lorebookEntryIds;
-                else
-                    delete backup.artifact.lorebookEntryIds;
-            }
+        for (const backup of backups) {
+            backup.artifact.snapshot = backup.snapshot;
+            if (backup.hadAliases)
+                backup.artifact.persistedCharacterIdAliasesV30 = backup.aliases;
+            else
+                delete backup.artifact.persistedCharacterIdAliasesV30;
+            if (backup.hadUniqueAliases)
+                backup.artifact.uniqueObjectIdAliasesV31 = backup.uniqueAliases;
+            else
+                delete backup.artifact.uniqueObjectIdAliasesV31;
+            if (backup.hadStages)
+                backup.artifact.stages = backup.stages;
+            else
+                delete backup.artifact.stages;
+            if (backup.hadProcessingIntent)
+                backup.artifact.processingIntent = backup.processingIntent;
+            else
+                delete backup.artifact.processingIntent;
+            if (backup.hadIntentId)
+                backup.artifact.intentId = backup.intentId;
+            else
+                delete backup.artifact.intentId;
+            if (backup.hadLorebookEntryIds)
+                backup.artifact.lorebookEntryIds = backup.lorebookEntryIds;
+            else
+                delete backup.artifact.lorebookEntryIds;
         }
         throw error;
     }
@@ -19209,7 +19632,7 @@ async function persistChatStateUnlocked(state, sourceState = null) {
     namespace.state = next;
     namespace.updatedAt = next.updatedAt;
     try {
-        await saveHostMetadata(next.chatKey);
+        await saveHostSnapshot(next.chatKey);
         if (sourceState && typeof sourceState === 'object') {
             for (const key of Object.keys(sourceState))
                 delete sourceState[key];
@@ -19305,7 +19728,7 @@ async function clearAllStorage(chatKey = currentChatKey()) {
     delete namespace.lorebookName;
     namespace.updatedAt = nowIso();
     try {
-        await saveHostMetadata(chatKey);
+        await saveHostSnapshot(chatKey);
     }
     catch (error) {
         if (!(error instanceof CommitRejectedError)) {
@@ -19664,6 +20087,312 @@ function transportAuthorityStatus(context) {
 
 }
 };
+__defs["transport/model-gateway.js"]=function(exports,__require){
+const __scope=Object.create(null);
+Object.defineProperty(__scope,"SAMPLING_PARAMETER_KEYS",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["SAMPLING_PARAMETER_KEYS"]});
+Object.defineProperty(__scope,"SAMPLING_PARAMETER_SET",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["SAMPLING_PARAMETER_SET"]});
+Object.defineProperty(__scope,"forbiddenSamplingPaths",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["forbiddenSamplingPaths"]});
+Object.defineProperty(__scope,"stripForbiddenSamplingObject",{enumerable:true,configurable:true,get:()=>__require("transport/sampling-policy.js")["stripForbiddenSamplingObject"]});
+Object.defineProperty(__scope,"subscribeHostEvent",{enumerable:true,configurable:true,get:()=>__require("host/event-adapter.js")["subscribeHostEvent"]});
+with(__scope){
+Object.defineProperty(exports,"createModelRequestMarker",{enumerable:true,configurable:true,get:()=>createModelRequestMarker});
+Object.defineProperty(exports,"markMessages",{enumerable:true,configurable:true,get:()=>markMessages});
+Object.defineProperty(exports,"markText",{enumerable:true,configurable:true,get:()=>markText});
+Object.defineProperty(exports,"samplingExclusionYaml",{enumerable:true,configurable:true,get:()=>samplingExclusionYaml});
+Object.defineProperty(exports,"stripSamplingFromCustomInclude",{enumerable:true,configurable:true,get:()=>stripSamplingFromCustomInclude});
+Object.defineProperty(exports,"createSamplingFreeOverride",{enumerable:true,configurable:true,get:()=>createSamplingFreeOverride});
+Object.defineProperty(exports,"finalizeModelPayload",{enumerable:true,configurable:true,get:()=>finalizeModelPayload});
+Object.defineProperty(exports,"recordModelTransportTrace",{enumerable:true,configurable:true,get:()=>recordModelTransportTrace});
+Object.defineProperty(exports,"modelTransportTraceReport",{enumerable:true,configurable:true,get:()=>modelTransportTraceReport});
+Object.defineProperty(exports,"registerOfficialPayloadFinalizer",{enumerable:true,configurable:true,get:()=>registerOfficialPayloadFinalizer});
+Object.defineProperty(exports,"extractProviderRequestId",{enumerable:true,configurable:true,get:()=>extractProviderRequestId});
+/**
+ * Mirror Abyss model transport boundary.
+ *
+ * The gateway does not guess that a request is safe merely because the caller
+ * omitted a sampler. It finalizes the exact payload object that SillyTavern is
+ * about to serialize, records a content-free receipt, and exposes one request
+ * marker used only for correlation with official generation events.
+ */
+const REQUEST_MARKER_PREFIX = '__MIRROR_ABYSS_REQUEST__';
+const traceLog = [];
+const TRACE_LIMIT = 40;
+
+function safeString(value, limit = 240) {
+    return String(value ?? '').slice(0, limit);
+}
+
+function createModelRequestMarker() {
+    const suffix = globalThis.crypto?.randomUUID?.()
+        || `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    return `${REQUEST_MARKER_PREFIX}${suffix}__`;
+}
+
+function markMessages(messages, marker) {
+    const output = Array.isArray(messages)
+        ? messages.map((message) => ({ ...message }))
+        : [];
+    const system = output.find((message) => message?.role === 'system' && typeof message?.content === 'string');
+    if (system) system.content = `${marker}\n${system.content}`;
+    else output.unshift({ role: 'system', content: marker });
+    return output;
+}
+
+function markText(text, marker) {
+    return `${marker}\n${safeString(text, 500000)}`;
+}
+
+function containsMarker(value, marker, depth = 0) {
+    if (depth > 12) return false;
+    if (typeof value === 'string') return value.includes(marker);
+    if (Array.isArray(value)) return value.some((item) => containsMarker(item, marker, depth + 1));
+    if (!value || typeof value !== 'object') return false;
+    return Object.values(value).some((item) => containsMarker(item, marker, depth + 1));
+}
+
+function removeMarker(value, marker, depth = 0) {
+    if (depth > 12) return value;
+    if (typeof value === 'string') {
+        return value.replaceAll(marker, '').replace(/^\s*\n/, '');
+    }
+    if (Array.isArray(value)) {
+        for (let index = value.length - 1; index >= 0; index -= 1) {
+            const item = value[index];
+            if (item && typeof item === 'object' && typeof item.content === 'string' && item.content.trim() === marker) {
+                value.splice(index, 1);
+                continue;
+            }
+            value[index] = removeMarker(item, marker, depth + 1);
+        }
+        return value;
+    }
+    if (!value || typeof value !== 'object') return value;
+    for (const key of Object.keys(value)) value[key] = removeMarker(value[key], marker, depth + 1);
+    return value;
+}
+
+function normalizeKey(value) {
+    return safeString(value, 160).trim().replace(/^['"]|['"]$/g, '');
+}
+
+function parseTopLevelKeys(value) {
+    const text = safeString(value, 50000).trim();
+    const output = new Set();
+    const add = (candidate) => {
+        const key = normalizeKey(candidate);
+        if (/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key)) output.add(key);
+    };
+    if (!text) return output;
+    try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+                if (typeof item === 'string') add(item);
+                else if (item && typeof item === 'object') Object.keys(item).forEach(add);
+            }
+        } else if (parsed && typeof parsed === 'object') {
+            Object.keys(parsed).forEach(add);
+        } else if (typeof parsed === 'string') {
+            add(parsed);
+        }
+        return output;
+    } catch {
+        // SillyTavern accepts YAML; only top-level keys are required here.
+    }
+    for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.replace(/\s+#.*$/, '').trim();
+        if (!line) continue;
+        const listItem = line.match(/^-\s*['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?(?:\s*:.*)?$/);
+        const objectKey = line.match(/^['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s*:/);
+        if (listItem) add(listItem[1]);
+        else if (objectKey) add(objectKey[1]);
+        else if (!/\s/.test(line)) add(line);
+    }
+    return output;
+}
+
+function samplingExclusionYaml(existing = '') {
+    const keys = parseTopLevelKeys(existing);
+    for (const key of SAMPLING_PARAMETER_KEYS) keys.add(key);
+    return [...keys].map((key) => `- ${key}`).join('\n');
+}
+
+function stripSamplingFromCustomInclude(value) {
+    const text = safeString(value, 50000).trim();
+    if (!text) return '';
+    try {
+        const parsed = JSON.parse(text);
+        const clean = (item) => {
+            if (Array.isArray(item)) return item.map(clean);
+            if (!item || typeof item !== 'object') return item;
+            const copy = {};
+            for (const [key, nested] of Object.entries(item)) {
+                if (SAMPLING_PARAMETER_SET.has(key.toLowerCase())) continue;
+                copy[key] = clean(nested);
+            }
+            return copy;
+        };
+        return JSON.stringify(clean(parsed));
+    } catch {
+        // YAML fallback below.
+    }
+    const lines = text.split(/\r?\n/);
+    const kept = [];
+    let skippedIndent = null;
+    for (const line of lines) {
+        const indent = line.match(/^\s*/)?.[0].length ?? 0;
+        if (skippedIndent !== null) {
+            if (!line.trim() || indent > skippedIndent) continue;
+            skippedIndent = null;
+        }
+        const trimmed = line.trim();
+        const match = trimmed.match(/^(?:-\s*)?['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s*:/);
+        if (match && SAMPLING_PARAMETER_SET.has(match[1].toLowerCase())) {
+            skippedIndent = indent;
+            continue;
+        }
+        // YAML inline objects cannot be parsed safely in the browser without importing
+        // SillyTavern's server-side YAML dependency. Drop the whole mapping line when it
+        // contains a forbidden sampler rather than forwarding an ambiguous payload.
+        const inlineKeys = [...trimmed.matchAll(/(?:^|[,{]\s*)['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s*:/g)]
+            .map((item) => item[1].toLowerCase());
+        if (inlineKeys.some((key) => SAMPLING_PARAMETER_SET.has(key))) continue;
+        kept.push(line);
+    }
+    return kept.join('\n').trim();
+}
+
+function createSamplingFreeOverride(extra = {}, existingExcludeBody = '') {
+    const override = { ...extra };
+    for (const key of SAMPLING_PARAMETER_KEYS) override[key] = undefined;
+    override.custom_include_body = stripSamplingFromCustomInclude(override.custom_include_body);
+    override.custom_exclude_body = samplingExclusionYaml(override.custom_exclude_body || existingExcludeBody);
+    return override;
+}
+
+function finalizeModelPayload(payload, {
+    marker = '',
+    existingExcludeBody = '',
+    requireMarker = false,
+    applyCustomPolicy = true,
+} = {}) {
+    if (!payload || typeof payload !== 'object') {
+        return { matched: false, before: [], after: [], markerRemoved: false };
+    }
+    const matched = marker ? containsMarker(payload, marker) : true;
+    if (requireMarker && !matched) {
+        return { matched: false, before: forbiddenSamplingPaths(payload), after: forbiddenSamplingPaths(payload), markerRemoved: false };
+    }
+    const before = forbiddenSamplingPaths(payload);
+    if (marker && matched) removeMarker(payload, marker);
+    stripForbiddenSamplingObject(payload);
+    if (applyCustomPolicy) {
+        payload.custom_include_body = stripSamplingFromCustomInclude(payload.custom_include_body);
+        payload.custom_exclude_body = samplingExclusionYaml(payload.custom_exclude_body || existingExcludeBody);
+    }
+    const after = forbiddenSamplingPaths(payload);
+    return { matched, before, after, markerRemoved: Boolean(marker && matched) };
+}
+
+
+function redactSensitiveDetail(value) {
+    return safeString(value, 1000)
+        .replace(/__MIRROR_ABYSS_REQUEST__[A-Za-z0-9_-]+__/g, '[request-marker]')
+        .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+/gi, 'Bearer [redacted]')
+        .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, 'sk-[redacted]')
+        .replace(/((?:api[_ -]?key|authorization|proxy_password|secret_id)\s*[=:]\s*)[^,;\s]+/gi, '$1[redacted]')
+        .replace(/(["']?(?:messages|prompt|content|systemPrompt)["']?\s*[:=]\s*)(?:\[[\s\S]*|\{[\s\S]*|["'][\s\S]*)/gi, '$1[redacted]')
+        .split(/\r?\n/, 1)[0]
+        .slice(0, 400);
+}
+
+function redactTrace(entry) {
+    return {
+        timestamp: new Date().toISOString(),
+        adapter: safeString(entry.adapter, 80),
+        task: safeString(entry.task, 40),
+        mode: safeString(entry.mode, 40),
+        api: safeString(entry.api, 80),
+        source: safeString(entry.source, 80),
+        model: safeString(entry.model, 240),
+        event: safeString(entry.event, 120),
+        markerMatched: entry.markerMatched === true,
+        forbiddenBefore: Array.isArray(entry.forbiddenBefore) ? entry.forbiddenBefore.slice(0, 60) : [],
+        forbiddenAfter: Array.isArray(entry.forbiddenAfter) ? entry.forbiddenAfter.slice(0, 60) : [],
+        requestSent: entry.requestSent === true,
+        outcome: safeString(entry.outcome, 40),
+        errorParameter: safeString(entry.errorParameter, 80),
+        requestId: safeString(entry.requestId, 160),
+        detail: redactSensitiveDetail(entry.detail),
+    };
+}
+
+function recordModelTransportTrace(entry) {
+    traceLog.push(redactTrace(entry));
+    if (traceLog.length > TRACE_LIMIT) traceLog.splice(0, traceLog.length - TRACE_LIMIT);
+}
+
+function modelTransportTraceReport() {
+    return traceLog.map((item) => ({ ...item, forbiddenBefore: [...item.forbiddenBefore], forbiddenAfter: [...item.forbiddenAfter] }));
+}
+
+function registerOfficialPayloadFinalizer(context, {
+    marker,
+    eventName,
+    existingExcludeBody = '',
+    adapter,
+    task,
+    api = 'openai',
+    source = '',
+    model = '',
+} = {}) {
+    const eventSource = context?.eventSource;
+    if (!eventName || typeof eventSource?.on !== 'function') return null;
+    let matched = false;
+    let receipt = null;
+    const listener = (payload) => {
+        const result = finalizeModelPayload(payload, {
+            marker,
+            existingExcludeBody,
+            requireMarker: true,
+            applyCustomPolicy: true,
+        });
+        if (!result.matched) return;
+        matched = true;
+        receipt = result;
+        recordModelTransportTrace({
+            adapter,
+            task,
+            mode: 'official-event-finalizer',
+            api,
+            source,
+            model,
+            event: eventName,
+            markerMatched: true,
+            forbiddenBefore: result.before,
+            forbiddenAfter: result.after,
+            requestSent: true,
+            outcome: result.after.length ? 'policy-violation' : 'finalized',
+        });
+    };
+    const release = subscribeHostEvent(eventSource, eventName, listener);
+    return {
+        release,
+        get matched() { return matched; },
+        get receipt() { return receipt; },
+    };
+}
+
+function extractProviderRequestId(error) {
+    const text = error instanceof Error
+        ? `${error.message}\n${error.cause instanceof Error ? error.cause.message : safeString(error.cause, 1000)}`
+        : safeString(error, 2000);
+    const match = text.match(/(?:request\s*id|请求\s*ID|请求ID)\s*[:：]?\s*([A-Za-z0-9_-]{8,})/i);
+    return match?.[1] || '';
+}
+
+}
+};
 __defs["transport/sampling-policy.js"]=function(exports,__require){
 const __scope=Object.create(null);
 with(__scope){
@@ -19673,10 +20402,18 @@ Object.defineProperty(exports,"SAMPLING_PARAMETER_KEYS",{enumerable:true,configu
 Object.defineProperty(exports,"SAMPLING_PARAMETER_SET",{enumerable:true,configurable:true,get:()=>SAMPLING_PARAMETER_SET});
 /** Shared forbidden sampling policy used by browser and server integrations. */
 const SAMPLING_PARAMETER_KEYS = Object.freeze([
-    'temperature', 'top_p', 'top_k', 'min_p', 'top_a', 'typical_p', 'tfs',
+    // OpenAI-compatible / Anthropic / Gemini common fields.
+    'temperature', 'temp', 'top_p', 'top_k', 'min_p', 'top_a', 'typical_p', 'tfs',
     'epsilon_cutoff', 'eta_cutoff', 'mirostat_mode', 'mirostat_tau', 'mirostat_eta',
-    'dynatemp_range', 'dynatemp_exponent', 'smoothing_factor', 'smoothing_curve',
-    'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'penalty_alpha', 'seed',
+    'dynatemp_range', 'dynatemp_exponent', 'dynamic_temperature', 'temperature_last',
+    'smoothing_factor', 'smoothing_curve', 'frequency_penalty', 'presence_penalty',
+    'repetition_penalty', 'penalty_alpha', 'seed',
+    // SillyTavern text-generation aliases and sampler selectors.
+    'rep_pen', 'rep_pen_range', 'rep_pen_decay', 'encoder_rep_pen', 'encoder_repetition_penalty',
+    'freq_pen', 'presence_pen', 'do_sample', 'skew', 'no_repeat_ngram_size',
+    'num_beams', 'length_penalty', 'guidance_scale', 'sampler_order', 'samplers', 'sampler_priority',
+    'dry_allowed_length', 'dry_multiplier', 'dry_base', 'dry_penalty_last_n',
+    'xtc_threshold', 'xtc_probability', 'nsigma', 'min_keep', 'adaptive_target', 'adaptive_decay',
 ]);
 const SAMPLING_PARAMETER_SET = new Set(SAMPLING_PARAMETER_KEYS.map((key) => key.toLowerCase()));
 
@@ -19725,8 +20462,10 @@ Object.defineProperty(__scope,"getSettings",{enumerable:true,configurable:true,g
 Object.defineProperty(__scope,"tryGetContext",{enumerable:true,configurable:true,get:()=>__require("core/context.js")["tryGetContext"]});
 Object.defineProperty(__scope,"readChatState",{enumerable:true,configurable:true,get:()=>__require("application/chat-state.js")["readChatState"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+Object.defineProperty(__scope,"modelInterfaceCapabilities",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["modelInterfaceCapabilities"]});
 Object.defineProperty(__scope,"modelTransportAuthorityStatus",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["modelTransportAuthorityStatus"]});
 Object.defineProperty(__scope,"requestTraceReport",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["requestTraceReport"]});
+Object.defineProperty(__scope,"transportTraceReport",{enumerable:true,configurable:true,get:()=>__require("llm/generator.js")["transportTraceReport"]});
 Object.defineProperty(__scope,"readHistoryWorkflow",{enumerable:true,configurable:true,get:()=>__require("workflow/history-workflow.js")["readHistoryWorkflow"]});
 Object.defineProperty(__scope,"artifactIntentProjection",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["artifactIntentProjection"]});
 Object.defineProperty(__scope,"getAttachedArtifact",{enumerable:true,configurable:true,get:()=>__require("domain/artifact.js")["getAttachedArtifact"]});
@@ -19824,19 +20563,36 @@ async function runDiagnostics() {
         status: context ? 'ok' : 'error',
         detail: context ? '已连接' : '不可用',
     });
+    const interfaces = context ? modelInterfaceCapabilities() : null;
     checks.push({
-        id: 'generateRaw',
-        label: '当前连接原始调用',
-        status: typeof context?.generateRaw === 'function' ? 'ok' : 'warn',
-        detail: typeof context?.generateRaw === 'function' ? 'generateRaw可用' : '当前连接模式不可用；请选择可用的Connection Profile',
+        id: 'generateRawData',
+        label: '当前连接官方完整调用链',
+        status: interfaces?.officialRaw?.usable ? 'ok' : 'warn',
+        detail: interfaces?.officialRaw?.usable
+            ? `${interfaces.officialRaw.generateRawData ? 'generateRawData' : 'generateRaw'} + ${interfaces.officialRaw.finalPayloadEvent} 可用`
+            : '完整 quiet-generation + 最终参数事件不可用；将使用无预设 Service 适配器',
+    });
+    const directServiceAvailable = Boolean(
+        interfaces?.chatCompletionService?.processRequest
+        || interfaces?.chatCompletionService?.sendRequest
+        || interfaces?.textCompletionService?.processRequest
+        || interfaces?.textCompletionService?.sendRequest,
+    );
+    checks.push({
+        id: 'directModelService',
+        label: '无预设模型服务适配器',
+        status: directServiceAvailable ? 'ok' : 'warn',
+        detail: directServiceAvailable
+            ? 'Chat/Text Completion Service 可用，可作为明确参数拒绝时的一次降级路径'
+            : '无预设 Service 不可用；当前连接必须依赖官方完整调用链',
     });
     checks.push({
         id: 'connectionService',
         label: 'Connection Profile隔离调用',
-        status: typeof context?.ConnectionManagerRequestService?.sendRequest === 'function' ? 'ok' : 'warn',
-        detail: typeof context?.ConnectionManagerRequestService?.sendRequest === 'function'
-            ? 'ConnectionManagerRequestService可用，不需要切换全局连接'
-            : '不可用；Profile模式不可用，仍可使用当前聊天连接',
+        status: interfaces?.connectionManagerRequestService?.sendRequest ? 'ok' : 'warn',
+        detail: interfaces?.connectionManagerRequestService?.sendRequest
+            ? 'Profile解析服务可用；普通Profile优先直连官方Chat/Text Service，命名代理才使用包装层'
+            : 'Connection Manager包装层不可用；仅可使用可直接解析的Profile',
     });
     const transportAuthority = context ? modelTransportAuthorityStatus() : null;
     checks.push({
@@ -20217,8 +20973,10 @@ async function diagnosticReport() {
         intents: context ? getChat().map((message) => safeProcessingIntent(getAttachedArtifact(message))).filter(Boolean) : [],
         tasks: taskQueue.list().map(safeTask),
         requests: requestTraceReport().map(safeRequest),
+        modelTransport: transportTraceReport(),
+        modelInterfaces: context ? modelInterfaceCapabilities() : null,
         transportAuthority: context ? modelTransportAuthorityStatus() : null,
-        privacy: '诊断不包含玩家输入、AI正文、小总结正文、大总结正文、完整模型响应或API密钥；Intent仅包含状态、时间与关联ID',
+        privacy: '诊断不包含玩家输入、AI正文、小总结正文、大总结正文、完整模型响应或API密钥；模型传输记录仅包含接口、事件命中、参数路径、请求ID和结果状态',
     };
 }
 
@@ -20436,6 +21194,7 @@ Object.defineProperty(__scope,"renderAllMessagePanels",{enumerable:true,configur
 Object.defineProperty(__scope,"abortActiveRequests",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["abortActiveRequests"]});
 Object.defineProperty(__scope,"setRequestAcceptance",{enumerable:true,configurable:true,get:()=>__require("core/requests.js")["setRequestAcceptance"]});
 Object.defineProperty(__scope,"taskQueue",{enumerable:true,configurable:true,get:()=>__require("pipeline/task-queue.js")["taskQueue"]});
+Object.defineProperty(__scope,"renderHostExtensionTemplate",{enumerable:true,configurable:true,get:()=>__require("host/ui-adapter.js")["renderHostExtensionTemplate"]});
 with(__scope){
 Object.defineProperty(exports,"mountSettingsPanel",{enumerable:true,configurable:true,get:()=>mountSettingsPanel});
 Object.defineProperty(exports,"mountOptionalTopButton",{enumerable:true,configurable:true,get:()=>mountOptionalTopButton});
@@ -20482,7 +21241,7 @@ async function mountSettingsPanel(isCurrent = () => true) {
     const host = await waitForElement('#extensions_settings2');
     if (!isCurrent())
         return;
-    const html = await context.renderExtensionTemplateAsync(extensionPathFromUrl(), 'settings', {
+    const html = await renderHostExtensionTemplate(context, extensionPathFromUrl(), 'settings', {
         title: DISPLAY_NAME,
         version: VERSION,
     });
