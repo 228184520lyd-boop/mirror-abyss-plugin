@@ -1,7 +1,7 @@
 {
   "mode": "pinned-browser-esm-vendor-fallback",
-  "generatedAt": "2026-07-26T12:46:02.728Z",
-  "entry": "../index.js",
+  "generatedAt": "2026-07-26T13:04:40.950Z",
+  "entry": "../bootstrap-alpha6.js",
   "runtime": "./runtime/index.js",
   "providerOrder": [
     "esmsh",
@@ -99,5 +99,5 @@
       ]
     }
   },
-  "note": "One local runtime tree; each vendor shim tries exact-version esm.sh then jsDelivr. Root index.js is the only manifest JS resource and injects CSS."
+  "note": "One local runtime tree; each vendor shim tries exact-version esm.sh then jsDelivr. The versioned bootstrap has no top-level DOM/network/runtime side effects and injects CSS only after activate/enable."
 }

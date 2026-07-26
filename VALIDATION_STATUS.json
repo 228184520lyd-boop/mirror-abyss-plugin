@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0-alpha.5-realtest.1",
-  "recordedAt": "2026-07-26T13:05:00Z",
+  "version": "2.0.0-alpha.6-realtest.1",
+  "recordedAt": "2026-07-26T13:42:00Z",
   "environment": {
     "node": "22.16.0",
     "npm": "10.9.2",
@@ -9,9 +9,9 @@
   },
   "checks": [
     {
-      "id": "previous-candidate-real-machine",
+      "id": "previous-candidates-real-machine",
       "status": "failed",
-      "detail": "2.0.0-alpha.4-realtest.1 produced SillyTavern load error [object Event]; official host code confirms raw DOM Event from initial manifest JS/CSS load before lifecycle hook"
+      "detail": "2.0.0-alpha.4 and alpha.5 both produced SillyTavern [object Event]; alpha.5 had no manifest CSS, narrowing failure to root JS fetch, parse, or top-level evaluation"
     },
     {
       "id": "source-smoke",
@@ -26,7 +26,7 @@
     {
       "id": "browser-esm-vendor-fallback-build",
       "status": "passed",
-      "detail": "root index.js, one 33-module business runtime tree and 7 vendor modules generated"
+      "detail": "versioned zero-side-effect bootstrap-alpha6.js, one 33-module business runtime tree and 7 vendor modules generated"
     },
     {
       "id": "host-contract-smoke",
@@ -36,7 +36,7 @@
     {
       "id": "install-smoke",
       "status": "passed",
-      "detail": "41 emitted JavaScript files parsed; root-only bootstrap, inline CSS, single runtime, six dual-provider dependency shims, lifecycle exports and readable DOM Event serialization valid"
+      "detail": "41 emitted JavaScript files parsed; versioned bootstrap import has no top-level bootstrap mutation, deferred CSS, single runtime, six dual-provider shims and lifecycle exports valid"
     },
     {
       "id": "npm-install",
@@ -56,10 +56,10 @@
     {
       "id": "current-candidate-sillytavern-real-machine",
       "status": "not-run",
-      "detail": "2.0.0-alpha.5-realtest.1 has not yet been installed in the target SillyTavern"
+      "detail": "2.0.0-alpha.6-realtest.1 has not yet been installed in the target SillyTavern"
     }
   ],
-  "conclusion": "previous candidate failure recorded as fact; root-only reduced-file installable candidate generated and locally regressed; current candidate not yet SillyTavern-real-machine-passed",
+  "conclusion": "alpha.4 and alpha.5 real-machine entry failures recorded as facts; alpha.6 versioned zero-side-effect candidate passed all available local regressions; SillyTavern real-machine retest pending",
   "runtimeDependencyMode": "pinned-browser-esm-vendor-fallback",
   "sourceSchemaVersion": 3
 }
