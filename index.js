@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-alpha.9-infopoint.6-alpha27-shell single-file build. */
+/** Mirror Abyss 2.0.0-alpha.9-infopoint.7-white-mobile single-file build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -96,7 +96,7 @@ exports.MirrorAbyssApplication = MirrorAbyssApplication;
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.STYLE_ID = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-alpha.9-infopoint.6-alpha27-shell';
+exports.VERSION = '2.0.0-alpha.9-infopoint.7-white-mobile';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1380,12 +1380,43 @@ function parseKeywordDefinitions(value, legacyTables) {
             fields: parseFields(raw.fields),
         });
     }
-    // Core keywords are defaults, not a whitelist. Missing defaults are appended so old settings gain new categories.
-    const labels = new Set(output.map((item) => item.label));
+    // Defaults are templates, not a whitelist. Existing old settings gain every missing
+    // keyword, subsection and option while unknown/custom keywords remain untouched.
+    const fallbackByLabel = new Map(exports.DEFAULT_KEYWORDS.map((item) => [item.label, item]));
+    const merged = output.map((item) => mergeDefaultKeyword(item, fallbackByLabel.get(item.label)));
+    const labels = new Set(merged.map((item) => item.label));
     for (const fallback of exports.DEFAULT_KEYWORDS)
         if (!labels.has(fallback.label))
-            output.push((0, util_1.clone)(fallback));
-    return output;
+            merged.push((0, util_1.clone)(fallback));
+    return merged;
+}
+function mergeDefaultKeyword(current, fallback) {
+    if (!fallback)
+        return current;
+    const fields = current.fields.map((field) => {
+        const defaultField = fallback.fields.find((candidate) => candidate.label === field.label);
+        if (!defaultField)
+            return field;
+        return {
+            ...(0, util_1.clone)(defaultField),
+            ...field,
+            options: field.options?.length ? field.options : (0, util_1.clone)(defaultField.options ?? []),
+            prompt: field.prompt || defaultField.prompt || '',
+        };
+    });
+    const fieldLabels = new Set(fields.map((field) => field.label));
+    for (const defaultField of fallback.fields)
+        if (!fieldLabels.has(defaultField.label))
+            fields.push((0, util_1.clone)(defaultField));
+    return {
+        ...(0, util_1.clone)(fallback),
+        ...current,
+        description: current.description || fallback.description,
+        aliases: (0, util_1.unique)([...fallback.aliases, ...current.aliases]),
+        constant: current.label === '基础设定' ? true : current.constant,
+        vectorized: current.label === '基础设定' ? false : current.vectorized,
+        fields,
+    };
 }
 function legacyKeywords(value) {
     if (!Array.isArray(value))
@@ -1591,6 +1622,7 @@ function currentSceneTitle(entries) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorkspaceUi = void 0;
 const constants_1 = require("./constants");
+const settings_1 = require("./settings");
 const util_1 = require("./util");
 const parser_1 = require("./parser");
 const TABS = [
@@ -1758,25 +1790,39 @@ class WorkspaceUi {
             return;
         this.root.innerHTML = `
       <section class="maip-workspace" aria-label="${constants_1.DISPLAY_NAME}">
-        <header class="maip-header">
-          <div>
-            <div class="maip-kicker">WORLD INFO · INFORMATION POINT MATCHER</div>
-            <h2>${constants_1.DISPLAY_NAME}</h2>
-            <p>信息点提取 → 关键词与正文匹配 → 世界书操作</p>
+        <aside class="maip-sidebar">
+          <div class="maip-brand">
+            <span class="maip-brand-mark">渊</span>
+            <div><b>${constants_1.DISPLAY_NAME}</b><small>${constants_1.VERSION}</small></div>
           </div>
-          <div class="maip-header-actions">
-            <span class="maip-version">${constants_1.VERSION}</span>
-            <button class="maip-icon" data-action="refresh" title="刷新">↻</button>
-            <button class="maip-icon" data-action="close" title="关闭">×</button>
-          </div>
-        </header>
-        <nav class="maip-tabs">${TABS.map(([key, label]) => `<button data-tab="${key}" class="${this.tab === key ? 'active' : ''}">${label}</button>`).join('')}</nav>
-        <main class="maip-main">${this.renderTab()}</main>
-        <footer class="maip-status ${this.status.phase === 'error' || this.projectionError ? 'error' : ''}">
-          <span class="maip-status-dot"></span>
-          <b>${phaseLabel(this.status.phase)}</b>
-          <span>${(0, util_1.escapeHtml)(this.migrationMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪')}</span>
-        </footer>
+          <section class="maip-quick-panel" aria-label="功能开关">
+            <h3>功能开关</h3>
+            ${settingSwitch('enabled', '启用插件', this.settings.enabled)}
+            ${settingSwitch('autoProcess', '自动处理正文', this.settings.autoProcess)}
+            ${settingSwitch('auditEnabled', '启用审核', this.settings.auditEnabled)}
+            ${settingSwitch('autoCreateLorebook', '自动创建世界书', this.settings.autoCreateLorebook)}
+          </section>
+          <nav class="maip-tabs">${TABS.map(([key, label]) => `<button data-tab="${key}" class="${this.tab === key ? 'active' : ''}">${label}</button>`).join('')}</nav>
+        </aside>
+        <section class="maip-content">
+          <header class="maip-header">
+            <div>
+              <div class="maip-kicker">WORLD INFO · INFORMATION POINT MATCHER</div>
+              <h2>${TABS.find(([key]) => key === this.tab)?.[1] ?? constants_1.DISPLAY_NAME}</h2>
+              <p>信息点提取 → 关键词与正文匹配 → 世界书操作</p>
+            </div>
+            <div class="maip-header-actions">
+              <button class="maip-icon" data-action="refresh" title="刷新" aria-label="刷新">↻</button>
+              <button class="maip-icon" data-action="close" title="关闭" aria-label="关闭">×</button>
+            </div>
+          </header>
+          <main class="maip-main">${this.renderTab()}</main>
+          <footer class="maip-status ${this.status.phase === 'error' || this.projectionError ? 'error' : ''}">
+            <span class="maip-status-dot"></span>
+            <b>${phaseLabel(this.status.phase)}</b>
+            <span>${(0, util_1.escapeHtml)(this.migrationMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪')}</span>
+          </footer>
+        </section>
       </section>`;
     }
     renderTab() {
@@ -1844,17 +1890,17 @@ class WorkspaceUi {
         <div class="maip-table-wrap"><table class="maip-table">
           <thead><tr><th>条目</th><th>关键词</th>${sectionNames.map((name) => `<th>${(0, util_1.escapeHtml)(name)}</th>`).join('')}<th>召回</th><th>操作</th></tr></thead>
           <tbody>${filtered.map((entry) => `<tr>
-            <td class="maip-title-cell"><b>${(0, util_1.escapeHtml)(entry.title)}</b><small>UID ${(0, util_1.escapeHtml)(entry.uid)}</small></td>
-            <td><textarea data-keywords-uid="${(0, util_1.escapeHtml)(entry.uid)}" rows="4">${(0, util_1.escapeHtml)(entry.keywords.join('\n'))}</textarea></td>
-            ${sectionNames.map((name) => `<td><textarea data-entry-uid="${(0, util_1.escapeHtml)(entry.uid)}" data-section="${(0, util_1.escapeHtml)(name)}" rows="4">${(0, util_1.escapeHtml)((entry.sections.values[name] ?? []).join('\n'))}</textarea></td>`).join('')}
-            <td><div class="maip-recall"><span>${entry.activation.constant ? '常驻' : entry.activation.vectorized ? '向量' : '关键词'}</span><small>深度 ${entry.activation.depth} · 顺序 ${entry.activation.order}</small></div></td>
-            <td><button class="maip-link" data-action="save-entry" data-uid="${(0, util_1.escapeHtml)(entry.uid)}">保存</button><button class="maip-link ${entry.focus ? 'danger' : ''}" data-action="focus" data-title="${(0, util_1.escapeHtml)(entry.title)}">${entry.focus ? '取消焦点' : '设为焦点'}</button></td>
+            <td class="maip-title-cell" data-label="条目"><b>${(0, util_1.escapeHtml)(entry.title)}</b><small>UID ${(0, util_1.escapeHtml)(entry.uid)}</small></td>
+            <td data-label="关键词"><textarea data-keywords-uid="${(0, util_1.escapeHtml)(entry.uid)}" rows="4">${(0, util_1.escapeHtml)(entry.keywords.join('\n'))}</textarea></td>
+            ${sectionNames.map((name) => `<td data-label="${(0, util_1.escapeHtml)(name)}"><textarea data-entry-uid="${(0, util_1.escapeHtml)(entry.uid)}" data-section="${(0, util_1.escapeHtml)(name)}" rows="4">${(0, util_1.escapeHtml)((entry.sections.values[name] ?? []).join('\n'))}</textarea></td>`).join('')}
+            <td data-label="召回"><div class="maip-recall"><span>${entry.activation.constant ? '常驻' : entry.activation.vectorized ? '向量' : '关键词'}</span><small>深度 ${entry.activation.depth} · 顺序 ${entry.activation.order}</small></div></td>
+            <td data-label="操作"><button class="maip-link" data-action="save-entry" data-uid="${(0, util_1.escapeHtml)(entry.uid)}">保存</button><button class="maip-link ${entry.focus ? 'danger' : ''}" data-action="focus" data-title="${(0, util_1.escapeHtml)(entry.title)}">${entry.focus ? '取消焦点' : '设为焦点'}</button></td>
           </tr>`).join('') || `<tr><td colspan="${sectionNames.length + 5}" class="maip-empty">当前筛选下没有条目</td></tr>`}</tbody>
         </table></div>
       </section>`;
     }
     renderKeywords() {
-        return `<section class="maip-keyword-intro maip-card"><div><h3>默认关键词规则</h3><p>关键词是世界书真实标签，不是固定表类型。一个条目可以同时拥有多个关键词；列表外的新关键词仍可正常创建和匹配。</p></div><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词规则</button></section>
+        return `<section class="maip-keyword-intro maip-card"><div><h3>默认关键词与小标题</h3><p>缺失的默认关键词、小标题和选项会自动补齐；列表外的新关键词仍可正常创建和匹配。</p></div><div class="maip-actions compact"><button class="maip-btn" data-action="reset-keywords">恢复完整默认项</button><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词规则</button></div></section>
       <section class="maip-template-grid">${this.settings.keywordDefinitions.map((definition, index) => this.renderKeywordDefinition(definition, index)).join('')}</section>`;
     }
     renderKeywordDefinition(definition, index) {
@@ -1918,37 +1964,28 @@ class WorkspaceUi {
       </svg></section>`;
     }
     renderWorldbook() {
-        const preview = this.migrationPreview;
         return `<section class="maip-two-col wide-left">
       <article class="maip-card">
-        <div class="maip-section-head"><div><h3>旧世界书格式转换</h3><p>保持原 UID 和原生字段，将旧标题、关键词和正文机械转换为当前结构。</p></div></div>
-        <div class="maip-callout"><b>不会直接清空旧内容</b><span>无法可靠拆分的正文进入【旧格式保留】；无法判断分类的条目使用“自定义对象”关键词。</span></div>
+        <div class="maip-section-head"><div><h3>旧世界书格式转换</h3><p>点击后直接扫描当前世界书，并在确认后转换需要调整的旧条目。</p></div></div>
+        <div class="maip-callout"><b>不会清空旧内容</b><span>原 UID 和原生字段保留；无法可靠拆分的正文进入【旧格式保留】，无法判断分类的条目使用“自定义对象”关键词。</span></div>
         <div class="maip-actions">
-          <button class="maip-btn" data-action="migration-preview" ${this.migrationBusy ? 'disabled' : ''}>扫描并预览</button>
-          <button class="maip-btn primary" data-action="migration-apply" ${!preview?.changed || this.migrationBusy ? 'disabled' : ''}>转换 ${preview?.changed ?? 0} 条</button>
+          <button class="maip-btn primary" data-action="migration-apply" ${this.migrationBusy ? 'disabled' : ''}>转换旧世界书</button>
           <button class="maip-btn danger-outline" data-action="migration-undo" ${!this.worldbook.canUndoMigration() || this.migrationBusy ? 'disabled' : ''}>撤销本次转换</button>
         </div>
-        <p class="maip-muted">“基础设定”关键词会在转换后自动设为常驻。预览后若世界书发生变化，插件会拒绝使用旧预览写入。</p>
+        <p class="maip-muted">插件会在点击转换后内部扫描；没有需要转换的条目时不会写入。“基础设定”关键词转换后自动常驻。</p>
       </article>
-      <article class="maip-card maip-metric"><span>当前绑定</span><strong class="maip-focus-text">${(0, util_1.escapeHtml)(this.bookName())}</strong><small>${preview ? `${preview.total} 条 · ${preview.alreadyCurrent} 条已符合新格式` : '尚未扫描旧格式'}</small></article>
-    </section>
-    <section class="maip-card maip-migration-list">
-      <div class="maip-section-head"><div><h3>转换预览</h3><p>${preview ? `需要转换 ${preview.changed} / ${preview.total} 条` : '点击“扫描并预览”后显示变更。'}</p></div></div>
-      ${preview ? preview.items.map((item) => `<details class="maip-migration-item" ${item.changed ? '' : 'data-current="true"'}><summary><span>${item.changed ? '待转换' : '已符合'}</span><b>${(0, util_1.escapeHtml)(item.oldTitle || `UID ${item.uid}`)}</b><em>→ ${(0, util_1.escapeHtml)(item.newTitle)}</em></summary><div><p>${(0, util_1.escapeHtml)(item.reason)}</p><div class="maip-migration-columns"><section><h4>旧关键词</h4><pre>${(0, util_1.escapeHtml)(item.oldKeywords.join('\n') || '无')}</pre></section><section><h4>新关键词</h4><pre>${(0, util_1.escapeHtml)(item.newKeywords.join('\n'))}</pre></section></div>${item.oldContent !== item.newContent ? `<section><h4>新正文结构</h4><pre>${(0, util_1.escapeHtml)((0, util_1.truncate)(item.newContent, 1800))}</pre></section>` : ''}</div></details>`).join('') : '<div class="maip-empty">暂无转换预览</div>'}
+      <article class="maip-card maip-metric"><span>当前绑定</span><strong class="maip-focus-text">${(0, util_1.escapeHtml)(this.bookName())}</strong><small>${(0, util_1.escapeHtml)(this.migrationMessage || '等待操作')}</small></article>
     </section>`;
     }
     renderAudit() {
         return `<section class="maip-two-col">
-      <article class="maip-card"><h3>审核规则</h3><p class="maip-muted">审核只修当前正文，不写世界书。</p><label class="maip-switch"><input type="checkbox" data-setting="auditEnabled" ${this.settings.auditEnabled ? 'checked' : ''}><span></span>启用审核</label><textarea data-setting="auditPrompt" rows="16" placeholder="一条硬规则一行">${(0, util_1.escapeHtml)(this.settings.auditPrompt)}</textarea></article>
+      <article class="maip-card"><h3>审核规则</h3><p class="maip-muted">审核开关位于左上角；审核只修当前正文，不写世界书。</p><textarea data-setting="auditPrompt" rows="16" placeholder="一条硬规则一行">${(0, util_1.escapeHtml)(this.settings.auditPrompt)}</textarea></article>
       <article class="maip-card"><h3>提取补充要求</h3><p class="maip-muted">核心协议已经内置，这里只放项目特有边界。</p><textarea data-setting="extractionPrompt" rows="16">${(0, util_1.escapeHtml)(this.settings.extractionPrompt)}</textarea></article>
     </section>`;
     }
     renderSettings() {
         return `<section class="maip-settings-grid">
-      <article class="maip-card"><h3>运行</h3>
-        ${settingSwitch('enabled', '启用插件', this.settings.enabled)}
-        ${settingSwitch('autoProcess', '自动处理新正文', this.settings.autoProcess)}
-        ${settingSwitch('autoCreateLorebook', '没有绑定时自动创建世界书', this.settings.autoCreateLorebook)}
+      <article class="maip-card"><h3>基础配置</h3><p class="maip-muted">运行开关已移到左上角。</p>
         <label>目标世界书<input data-setting="targetLorebook" value="${(0, util_1.escapeHtml)(this.settings.targetLorebook)}" placeholder="留空则读取当前聊天绑定"></label>
         <label>响应 Token<input type="number" data-setting="responseTokens" value="${this.settings.responseTokens}"></label>
       </article>
@@ -2012,6 +2049,14 @@ class WorkspaceUi {
         }
         if (action === 'save-entry')
             await this.saveEntry(String(target.dataset.uid ?? ''));
+        if (action === 'reset-keywords') {
+            const confirmed = globalThis.confirm?.('恢复完整默认关键词、小标题和选项？自定义关键词将被保留。') ?? true;
+            if (confirmed) {
+                const custom = this.settings.keywordDefinitions.filter((item) => !settings_1.DEFAULT_KEYWORDS.some((fallback) => fallback.label === item.label));
+                this.settings.keywordDefinitions = [...structuredClone(settings_1.DEFAULT_KEYWORDS), ...custom];
+                this.persistSettings();
+            }
+        }
         if (action === 'add-keyword') {
             this.settings.keywordDefinitions.push({ key: `custom_${Date.now()}`, label: '新关键词', description: '可稳定识别、会影响后续的信息类别。', aliases: [], enabled: true, constant: false, vectorized: true, preventRecursion: false, depth: 4, order: 400, fields: [{ key: 'fixed', label: '固定事实', policy: 'semantic-upsert' }] });
             this.persistSettings();
@@ -2028,8 +2073,6 @@ class WorkspaceUi {
             this.settings.keywordDefinitions[Number(target.dataset.keywordIndex)]?.fields.splice(Number(target.dataset.fieldIndex), 1);
             this.persistSettings();
         }
-        if (action === 'migration-preview')
-            await this.previewMigration();
         if (action === 'migration-apply')
             await this.applyMigration();
         if (action === 'migration-undo')
@@ -2115,16 +2158,26 @@ class WorkspaceUi {
         }
     }
     async applyMigration() {
-        if (!this.migrationPreview?.changed)
-            return;
-        const confirmed = globalThis.confirm?.(`将转换世界书“${this.migrationPreview.bookName}”中的 ${this.migrationPreview.changed} 条旧格式条目。\n\n原 UID 和原生字段会保留；无法识别的正文进入【旧格式保留】。是否继续？`) ?? true;
-        if (!confirmed)
-            return;
         this.migrationBusy = true;
-        this.migrationMessage = '正在转换旧世界书格式…';
+        this.migrationMessage = '正在扫描旧世界书…';
         this.render();
         try {
-            const result = await this.worldbook.migrateLegacyFormat(this.settings, this.migrationPreview);
+            const preview = await this.worldbook.previewMigration(this.settings);
+            this.migrationPreview = preview;
+            if (!preview.changed) {
+                this.migrationMessage = `无需转换：${preview.total} 条均已符合当前格式`;
+                return;
+            }
+            const confirmed = globalThis.confirm?.(`检测到世界书“${preview.bookName}”中有 ${preview.changed} 条旧格式条目。
+
+原 UID 和原生字段会保留；无法识别的正文进入【旧格式保留】。是否转换？`) ?? true;
+            if (!confirmed) {
+                this.migrationMessage = `已取消：检测到 ${preview.changed} 条可转换条目`;
+                return;
+            }
+            this.migrationMessage = `正在转换 ${preview.changed} 条旧格式条目…`;
+            this.render();
+            const result = await this.worldbook.migrateLegacyFormat(this.settings, preview);
             this.entries = result.entries;
             this.migrationPreview = await this.worldbook.previewMigration(this.settings);
             this.migrationMessage = `转换完成：已处理 ${result.preview.changed} 条，可在刷新页面前撤销`;
