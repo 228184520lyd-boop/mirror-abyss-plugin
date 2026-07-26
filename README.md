@@ -1,53 +1,27 @@
-# Mirror Abyss｜镜渊 2.0.0-alpha.9-infopoint.12-ui-safe
+# Mirror Abyss｜镜渊 Core 2.0.0-core.1
 
-Mirror Abyss 是 SillyTavern 世界书信息点提取与匹配扩展。世界书仍是唯一剧情事实源，UI 只做读取、编辑和回读映射。
+这是无 UI 核心版，只保留四项功能：
 
-## 本轮只处理稳定性
+1. 正文审核（不通过时只修正一次）
+2. 事实与状态提取
+3. 小总结
+4. 大总结
 
-上一版启用后卡死的直接原因不是模型，而是正文状态条使用全局 `MutationObserver` 监听整个页面。状态条写入 DOM 后又触发自身监听，部分 SillyTavern 分支会形成连续重绘循环。
+插件只监听 SillyTavern 的 `MESSAGE_RECEIVED` 事件。启用时不读取世界书、不调用模型、不扫描消息、不创建 DOM。
 
-本版改为：
+自动流程：审核 → 提取 → 达到回合数时小总结 → 达到小总结数量时大总结。任何一步失败立即停止；只有整轮成功才更新 `lastProcessedMessageKey`。
 
-- 完全删除全局 DOM 监听；
-- 正文状态条只在真实任务阶段变化时更新；
-- 已知消息重绘事件发生时只补挂一次状态条；
-- 启用插件时不读取世界书；
-- 切换聊天且工作区关闭时不读取世界书；
-- 只有玩家打开工作区或点击刷新时才读取世界书；
-- 工作区关闭时，模型任务状态变化不会重建整套 UI；
-- 工作区打开时，处理中间阶段只更新顶部和底部两个状态节点；
-- 世界书投影读取自动合并重复请求，避免并发全量读取。
+默认使用当前聊天连接。旧版本已保存的设置会继续沿用。控制台可用：
 
-## 同步修正
-
-- 悬浮入口移到左下安全区域，不再遮挡右上角色卡；
-- Connection Profile 选择器与测试按钮增大到触控尺寸；
-- 关系网络增加放大、缩小和适配视图按钮；
-- “AI 建议提取”不再作为独立正文处理按钮显示；
-- 世界书维护按钮改名为“整理世界书格式”。
-
-## 正文下方处理指示灯
-
-状态条仍会显示：读取、审核、提取、匹配、写入、总结、完成、失败。它只映射 TaskRunner 的真实状态，不保存剧情数据，也不扫描整个页面。
-
-## 安装结构
-
-```text
-manifest.json
-index.js
-style.css
-README.md
-LICENSE
+```js
+MirrorAbyss.audit()
+MirrorAbyss.extract()
+MirrorAbyss.smallSummary()
+MirrorAbyss.largeSummary()
+MirrorAbyss.processLatest()
+MirrorAbyss.getSettings()
+MirrorAbyss.configure({ autoProcess: true, auditEnabled: true, smallSummaryTurns: 10, largeSummaryCount: 4 })
+MirrorAbyss.status()
 ```
 
-## 本地验证
-
-运行：
-
-```bash
-npm run verify
-```
-
-门禁包含：启用阶段零世界书读取、无全局 MutationObserver、状态条事件驱动更新、工作区延迟读取、图谱缩放、信息点匹配、世界书写入、旧格式转换与完整生命周期。
-
-真实 XFX-SillyTavern 仍需实机确认。若此版启用后仍卡死，应先保留控制台首个错误，不再继续增加 UI 功能。
+没有自定义工作区、状态灯、图谱、表格、迁移页面或全局 DOM 监听。成功/失败只使用 SillyTavern 已有 Toast；Toast 不可用时写入控制台。

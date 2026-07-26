@@ -1,11 +1,10 @@
 {
-  "display_name": "Mirror Abyss / 镜渊",
+  "display_name": "Mirror Abyss / 镜渊 Core",
   "loading_order": 10,
   "dependencies": [],
   "js": "index.js",
-  "css": "style.css",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-alpha.9-infopoint.12-ui-safe",
+  "version": "2.0.0-core.1",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -18,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "以世界书为唯一事实源的信息点提取、关键词匹配与映射扩展"
+  "description": "仅保留审核、事实提取、小总结和大总结的无 UI 核心版"
 }

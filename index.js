@@ -1,125 +1,170 @@
-/** Mirror Abyss 2.0.0-alpha.9-infopoint.12-ui-safe single-file build. */
+/** Mirror Abyss 2.0.0-core.1 no-UI core build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MirrorAbyssApplication = void 0;
 const host_1 = require("./host");
 const settings_1 = require("./settings");
-const tasks_1 = require("./tasks");
-const ui_1 = require("./ui");
-const message_status_1 = require("./message-status");
+const audit_1 = require("./audit");
+const memory_1 = require("./memory");
 const worldbook_1 = require("./worldbook");
-/**
- * Application shell. UI is a read/write projection over SillyTavern World Info.
- * It does not own a second narrative database.
- */
+const util_1 = require("./util");
 class MirrorAbyssApplication {
     constructor() {
         this.host = new host_1.HostAdapter();
         this.settingsStore = new settings_1.SettingsStore();
-        this.worldbook = new worldbook_1.WorldbookAdapter(() => this.host.context());
-        this.tasks = new tasks_1.TaskRunner(this.host, this.worldbook);
-        this.ui = new ui_1.WorkspaceUi(this.host, this.settingsStore, this.worldbook, this.tasks);
-        this.messageStatus = new message_status_1.MessageStatusIndicator(this.tasks);
+        this.worldbook = new worldbook_1.WorldbookAdapter(() => this.host.context(), () => this.host.chatKey());
+        this.auditRunner = new audit_1.AuditRunner(this.host);
+        this.memoryRunner = new memory_1.MemoryRunner(this.host, this.worldbook);
         this.cleanup = [];
+        this.runningByChat = new Map();
         this.started = false;
     }
     start() {
-        if (this.started)
-            return;
+        if (this.started) return;
         this.host.context();
-        // Alpha.27 order: visible shell first; projections and optional listeners later.
-        this.ui.mount();
-        this.messageStatus.mount();
-        this.listen('CHAT_CHANGED', () => this.ui.onChatChanged());
-        this.listen('MESSAGE_RECEIVED', (value) => {
-            this.messageStatus.refresh();
-            void this.onMessage(Number(value));
-        });
-        this.listen('MESSAGE_EDITED', (value) => {
-            this.messageStatus.refresh();
-            void this.onMessage(Number(value));
-        });
-        this.listen('MESSAGE_UPDATED', (value) => {
-            this.messageStatus.refresh();
-            void this.onMessage(Number(value));
-        });
+        this.listen('MESSAGE_RECEIVED', (value) => void this.onMessage(Number(value)));
         this.started = true;
-        // Enabling the extension must never read or redraw the complete worldbook.
-        // The projection is loaded only when the player opens or refreshes it.
     }
     stop() {
-        if (!this.started)
-            return;
+        if (!this.started) return;
         this.started = false;
-        this.cleanup.splice(0).forEach((remove) => {
-            try {
-                remove();
-            }
-            catch (error) {
-                console.warn('[MirrorAbyss] listener cleanup failed', error);
-            }
-        });
-        this.messageStatus.unmount();
-        this.ui.unmount();
+        this.cleanup.splice(0).forEach((remove) => { try { remove(); } catch (error) { console.warn('[MirrorAbyss] listener cleanup failed', error); } });
+        this.runningByChat.clear();
     }
     isStarted() { return this.started; }
-    open(tab) { this.ui.openTab(tab); }
-    refresh() { return this.ui.refreshEntries(); }
-    processLatest() { return this.tasks.processTurn(this.settings(), false); }
-    extract() { return this.tasks.runTask('extraction', this.settings()); }
-    audit() { return this.tasks.runTask('audit', this.settings()); }
-    smallSummary() { return this.tasks.runTask('smallSummary', this.settings()); }
-    largeSummary() { return this.tasks.runTask('largeSummary', this.settings()); }
-    preview(raw) { return this.tasks.previewExtraction(this.settings(), raw); }
-    previewLegacyWorldbook() { return this.worldbook.previewMigration(this.settings()); }
-    async migrateLegacyWorldbook() {
-        const settings = this.settings();
-        const preview = await this.worldbook.previewMigration(settings);
-        return this.worldbook.migrateLegacyFormat(settings, preview);
-    }
-    undoLegacyWorldbookMigration() { return this.worldbook.undoMigration(this.settings()); }
-    diagnostics() { return this.host.diagnostics(); }
-    listen(eventName, handler) {
-        try {
-            this.cleanup.push(this.host.subscribe(eventName, handler, false));
-        }
-        catch (error) {
-            console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用；仅停用该自动触发。`, error);
-        }
-    }
     settings() { return this.settingsStore.load(this.host.context()); }
+    configure(patch) { return this.settingsStore.save(this.host.context(), patch); }
+    audit() { return this.auditRunner.process(this.settings(), false); }
+    extract() { return this.memoryRunner.runTask('extraction', this.settings()); }
+    smallSummary() { return this.memoryRunner.runTask('smallSummary', this.settings()); }
+    largeSummary() { return this.memoryRunner.runTask('largeSummary', this.settings()); }
+    processLatest() { return this.enqueue(undefined, false); }
+    status() { return { audit: this.auditRunner.currentStatus(), memory: this.memoryRunner.currentStatus() }; }
+    listen(eventName, handler) {
+        try { this.cleanup.push(this.host.subscribe(eventName, handler, false)); }
+        catch (error) { console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用`, error); }
+    }
     async onMessage(index) {
-        if (!Number.isInteger(index) || !this.host.isAssistantIndex(index))
-            return;
+        if (!Number.isInteger(index) || !this.host.isAssistantIndex(index)) return;
         const settings = this.settings();
-        if (!settings.enabled || !settings.autoProcess)
-            return;
+        if (!settings.enabled || !settings.autoProcess) return;
+        try { await this.enqueue(index, true); }
+        catch (error) { console.error('[MirrorAbyss] automatic core flow failed', error); }
+    }
+    enqueue(index, automatic) {
+        const turn = this.host.latestTurn(index);
+        const previous = this.runningByChat.get(turn.chatKey) ?? Promise.resolve();
+        const task = previous.catch(() => undefined).then(() => this.runCore(index, automatic));
+        this.runningByChat.set(turn.chatKey, task);
+        return task.finally(() => { if (this.runningByChat.get(turn.chatKey) === task) this.runningByChat.delete(turn.chatKey); });
+    }
+    async runCore(index, automatic) {
+        const settings = this.settings();
         try {
-            await this.tasks.processTurn(settings, true, index);
-        }
-        catch (error) {
-            console.error('[MirrorAbyss] automatic information-point extraction failed', error);
+            if (settings.auditEnabled && settings.auditPrompt.trim()) await this.auditRunner.process(settings, automatic, index);
+            const result = await this.memoryRunner.processTurn(settings, automatic, index);
+            notify('success', '镜渊：本轮处理完成');
+            return result;
+        } catch (error) {
+            notify('error', `镜渊：${(0, util_1.errorText)(error)}`);
+            throw error;
         }
     }
 }
 exports.MirrorAbyssApplication = MirrorAbyssApplication;
-
+function notify(kind, message) {
+    const toast = globalThis.toastr?.[kind];
+    if (typeof toast === 'function') toast(message);
+    else console[kind === 'error' ? 'error' : 'info'](`[MirrorAbyss] ${message}`);
+}
+},
+"audit":function(module,exports,require){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AuditRunner = void 0;
+const constants_1 = require("./constants");
+const prompts_1 = require("./prompts");
+const util_1 = require("./util");
+class AuditRunner {
+    constructor(host) {
+        this.host = host;
+        this.status = { phase: 'idle', detail: '等待审核', error: '' };
+        this.runningByChat = new Map();
+    }
+    currentStatus() { return structuredClone(this.status); }
+    process(settings, automatic = false, requestedIndex) {
+        const turn = this.host.latestTurn(requestedIndex);
+        const previous = this.runningByChat.get(turn.chatKey) ?? Promise.resolve();
+        const task = previous.catch(() => undefined).then(() => this.processInternal(settings, automatic, requestedIndex));
+        this.runningByChat.set(turn.chatKey, task);
+        return task.finally(() => { if (this.runningByChat.get(turn.chatKey) === task) this.runningByChat.delete(turn.chatKey); });
+    }
+    async processInternal(settings, automatic, requestedIndex) {
+        const turn = this.host.latestTurn(requestedIndex);
+        const cursor = this.host.cursor();
+        if (automatic && cursor.lastProcessedMessageKey === turn.messageKey && cursor.lastProcessedHash === turn.contentHash) {
+            this.status = { phase: 'complete', detail: '正文已经完整处理，跳过重复审核', error: '' };
+            return turn;
+        }
+        if (!settings.auditEnabled || !settings.auditPrompt.trim()) {
+            this.status = { phase: 'complete', detail: '审核未启用', error: '' };
+            return turn;
+        }
+        try {
+            this.status = { phase: 'audit', detail: '审核正文', error: '' };
+            const prompt = (0, prompts_1.auditPrompts)(settings, turn.playerText, turn.assistantText);
+            const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
+            const decision = clean(raw);
+            if (/^通过[。.]?$/u.test(decision)) {
+                this.status = { phase: 'complete', detail: '审核通过', error: '' };
+                return turn;
+            }
+            if (!/^需要修正(?:\s|$)/u.test(decision)) throw new Error('审核返回既不是“通过”，也不是“需要修正”');
+            this.status = { phase: 'revision', detail: '生成一次完整修正版', error: '' };
+            const revisionPrompt = (0, prompts_1.revisionPrompts)(settings, turn.playerText, turn.assistantText, decision);
+            const revisionRaw = await this.host.generate(revisionPrompt.system, trimPrompt(revisionPrompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
+            const revised = parseRevision(revisionRaw);
+            if (!revised) throw new Error('修正模型没有返回完整正文');
+            if (revised === turn.assistantText) {
+                this.status = { phase: 'complete', detail: '修正文与原文相同，正文未替换', error: '' };
+                return turn;
+            }
+            const updated = await this.host.replaceAssistantText(turn, revised);
+            this.status = { phase: 'complete', detail: '正文已修正', error: '' };
+            return updated;
+        } catch (error) {
+            this.status = { phase: 'error', detail: '审核停止', error: (0, util_1.errorText)(error) };
+            throw error;
+        }
+    }
+}
+exports.AuditRunner = AuditRunner;
+function profileId(settings) { return settings.modelSource === 'profile' ? settings.modelProfileId : ''; }
+function trimPrompt(value) { return value.length <= constants_1.MAX_CONTEXT_CHARS ? value : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`; }
+function clean(value) {
+    return String(value ?? '').replace(/^```(?:text|markdown)?\s*/iu, '').replace(/\s*```$/u, '').trim();
+}
+function parseRevision(value) {
+    let text = clean(value);
+    text = text.replace(/^\s*(?:完整修正版|修正版|修正文)\s*[：:]?\s*/u, '');
+    text = text.replace(/^\s*【正文】\s*/u, '');
+    return text.trim();
+}
 },
 "constants":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.STYLE_ID = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-alpha.9-infopoint.12-ui-safe';
-exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
+exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
+exports.VERSION = '2.0.0-core.1';
+exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊 Core';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
-exports.STYLE_ID = 'mirror-abyss-infopoint-style';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 3;
-
+exports.MANAGED_VERSION = 4;
 },
 "host":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HostAdapter = void 0;
@@ -196,17 +241,17 @@ class HostAdapter {
                 const service = context.ConnectionManagerRequestService;
                 if (!service)
                     throw new Error('SillyTavern Connection Profiles 服务不可用，请启用 Connection Manager 或改用当前连接');
-                const result = await service.sendRequest(profileId, [
+                const result = await withTimeout(service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
-                ], responseLength, { stream: false, extractData: true, includePreset: true });
+                ], responseLength, { stream: false, extractData: true, includePreset: true }), timeoutMs);
                 raw = typeof result === 'string' ? result : result?.content;
             }
             else {
                 const generateRaw = context.generateRaw;
                 if (typeof generateRaw !== 'function')
                     throw new Error('当前 SillyTavern 未提供 generateRaw');
-                raw = await generateRaw({ systemPrompt, prompt, responseLength });
+                raw = await withTimeout(generateRaw({ systemPrompt, prompt, responseLength }), timeoutMs);
             }
             if (this.chatKey() !== chatKey)
                 throw new Error('聊天已经切换，本次模型结果不再写入');
@@ -374,6 +419,12 @@ function previousPlayerText(chat, before) {
     return '';
 }
 
+
+function withTimeout(promise, timeoutMs) {
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = globalThis.setTimeout(() => reject(new Error(`模型调用超时（${timeoutMs}ms）`)), timeoutMs); });
+    return Promise.race([Promise.resolve(promise), timeout]).finally(() => globalThis.clearTimeout(timer));
+}
 },
 "index":function(module,exports,require){
 "use strict";
@@ -388,193 +439,59 @@ exports.onClean = onClean;
 const application_1 = require("./application");
 const constants_1 = require("./constants");
 let application = null;
-let runtimeState = 'idle';
 let extensionEnabled = true;
-let lifecycleGeneration = 0;
+let initializing = false;
 let retryTimer;
-let startupAttempts = 0;
-let appReadyContext = null;
-let appReadyHandler = null;
-let lastError = '';
-const MAX_STARTUP_ATTEMPTS = 40;
-function tryContext() {
-    try {
-        return globalThis.SillyTavern?.getContext?.() ?? null;
-    }
-    catch {
-        return null;
-    }
-}
-function clearRetry() {
-    if (retryTimer !== undefined)
-        globalThis.clearTimeout(retryTimer);
-    retryTimer = undefined;
-}
-function removeListener(context, event, handler) {
-    if (!context || !event || !handler)
-        return;
-    if (typeof context.eventSource.off === 'function')
-        context.eventSource.off(event, handler);
-    else
-        context.eventSource.removeListener?.(event, handler);
-}
+function contextReady() { try { return Boolean(globalThis.SillyTavern?.getContext?.()); } catch { return false; } }
 async function requireApplication() {
-    if (!extensionEnabled)
-        throw new Error('镜渊插件当前已禁用');
+    if (!extensionEnabled) throw new Error('镜渊插件当前已禁用');
     await initialize();
-    if (!application?.isStarted())
-        throw new Error(lastError || '镜渊尚未完成启动');
+    if (!application?.isStarted()) throw new Error('镜渊尚未完成启动');
     return application;
 }
 function exposeApi() {
     globalThis.MirrorAbyss = {
         version: constants_1.VERSION,
-        open: async (tab = 'overview') => (await requireApplication()).open(tab),
         processLatest: async () => (await requireApplication()).processLatest(),
-        extract: async () => (await requireApplication()).extract(),
         audit: async () => (await requireApplication()).audit(),
+        extract: async () => (await requireApplication()).extract(),
         smallSummary: async () => (await requireApplication()).smallSummary(),
         largeSummary: async () => (await requireApplication()).largeSummary(),
-        preview: async (raw) => (await requireApplication()).preview(raw),
-        previewLegacyWorldbook: async () => (await requireApplication()).previewLegacyWorldbook(),
-        migrateLegacyWorldbook: async () => (await requireApplication()).migrateLegacyWorldbook(),
-        undoLegacyWorldbookMigration: async () => (await requireApplication()).undoLegacyWorldbookMigration(),
-        refresh: async () => (await requireApplication()).refresh(),
-        diagnostics: () => ({
-            version: constants_1.VERSION,
-            state: runtimeState,
-            lastError,
-            contextReady: Boolean(tryContext()),
-            workspaceMounted: Boolean(document.getElementById('maip-workspace')),
-            workspaceOpen: Boolean(document.getElementById('maip-workspace')?.open),
-            host: application?.diagnostics() ?? null,
-        }),
-        restart: async () => {
-            shutdown(false);
-            extensionEnabled = true;
-            startupAttempts = 0;
-            installAppReadyHandler();
-            await initialize();
-        },
+        getSettings: async () => (await requireApplication()).settings(),
+        configure: async (patch) => (await requireApplication()).configure(patch),
+        status: async () => (await requireApplication()).status(),
+        restart: async () => { shutdown(false); extensionEnabled = true; await initialize(); },
     };
 }
 async function initialize() {
-    if (!extensionEnabled)
-        return;
-    if (runtimeState === 'ready' && application?.isStarted())
-        return;
-    if (runtimeState === 'initializing')
-        return;
-    const context = tryContext();
-    if (!context) {
-        runtimeState = 'waiting';
-        installAppReadyHandler();
-        return;
-    }
-    const generation = lifecycleGeneration;
-    runtimeState = 'initializing';
-    lastError = '';
+    if (!extensionEnabled || initializing || application?.isStarted()) return;
+    if (!contextReady()) { scheduleRetry(); return; }
+    initializing = true;
     exposeApi();
-    try {
-        application ?? (application = new application_1.MirrorAbyssApplication());
-        application.start();
-        if (!extensionEnabled || generation !== lifecycleGeneration)
-            return;
-        runtimeState = 'ready';
-        document.getElementById('maip-fatal')?.remove();
-    }
-    catch (error) {
-        if (!extensionEnabled || generation !== lifecycleGeneration)
-            return;
-        runtimeState = 'error';
-        lastError = error instanceof Error ? error.message : String(error);
-        console.error('[MirrorAbyss] initialization failed', error);
-        showFatal(lastError);
-    }
+    try { application ?? (application = new application_1.MirrorAbyssApplication()); application.start(); console.info(`[MirrorAbyss] ${constants_1.VERSION} ready`); }
+    catch (error) { console.error('[MirrorAbyss] initialization failed', error); globalThis.toastr?.error?.(`镜渊启动失败：${error instanceof Error ? error.message : String(error)}`); }
+    finally { initializing = false; }
 }
-function installAppReadyHandler() {
-    if (!extensionEnabled)
-        return;
-    exposeApi();
-    const context = tryContext();
-    if (!context) {
-        runtimeState = 'waiting';
-        startupAttempts += 1;
-        if (startupAttempts >= MAX_STARTUP_ATTEMPTS) {
-            lastError = '等待 SillyTavern 上下文超时，请刷新页面后重试';
-            runtimeState = 'error';
-            showFatal(lastError);
-            return;
-        }
-        if (retryTimer === undefined) {
-            const generation = lifecycleGeneration;
-            retryTimer = globalThis.setTimeout(() => {
-                retryTimer = undefined;
-                if (extensionEnabled && generation === lifecycleGeneration)
-                    installAppReadyHandler();
-            }, 250);
-        }
-        return;
-    }
-    clearRetry();
-    startupAttempts = 0;
-    const events = context.eventTypes ?? context.event_types ?? {};
-    const readyEvent = events.APP_READY;
-    if (appReadyContext !== context || !appReadyHandler) {
-        const oldEvents = appReadyContext?.eventTypes ?? appReadyContext?.event_types ?? {};
-        removeListener(appReadyContext, oldEvents.APP_READY, appReadyHandler);
-        appReadyContext = context;
-        appReadyHandler = () => { if (extensionEnabled)
-            void initialize(); };
-        if (readyEvent)
-            context.eventSource.on(readyEvent, appReadyHandler);
-    }
-    // Extensions can activate after APP_READY, so initialization is also attempted now.
-    void initialize();
-}
-function showFatal(message) {
-    if (typeof document === 'undefined')
-        return;
-    let button = document.getElementById('maip-fatal');
-    if (!button) {
-        button = document.createElement('button');
-        button.id = 'maip-fatal';
-        button.className = 'maip-startup-error';
-        button.type = 'button';
-        button.textContent = '镜渊启动失败｜点击重试';
-        button.addEventListener('click', () => {
-            runtimeState = 'idle';
-            startupAttempts = 0;
-            lifecycleGeneration += 1;
-            installAppReadyHandler();
-        });
-        (document.body ?? document.documentElement).appendChild(button);
-    }
-    button.title = message;
+function scheduleRetry() {
+    if (retryTimer !== undefined || !extensionEnabled) return;
+    retryTimer = globalThis.setTimeout(() => { retryTimer = undefined; void initialize(); }, 250);
 }
 function shutdown(removeApi = true) {
-    lifecycleGeneration += 1;
-    clearRetry();
-    const events = appReadyContext?.eventTypes ?? appReadyContext?.event_types ?? {};
-    removeListener(appReadyContext, events.APP_READY, appReadyHandler);
-    appReadyContext = null;
-    appReadyHandler = null;
+    if (retryTimer !== undefined) globalThis.clearTimeout(retryTimer);
+    retryTimer = undefined;
     application?.stop();
-    document.getElementById('maip-fatal')?.remove();
-    runtimeState = 'idle';
-    if (removeApi)
-        delete globalThis.MirrorAbyss;
+    if (removeApi) delete globalThis.MirrorAbyss;
 }
-function onActivate() { extensionEnabled = true; exposeApi(); installAppReadyHandler(); }
-function onEnable() { extensionEnabled = true; exposeApi(); installAppReadyHandler(); }
+function onActivate() { extensionEnabled = true; exposeApi(); void initialize(); }
+function onEnable() { extensionEnabled = true; exposeApi(); void initialize(); }
 function onDisable() { extensionEnabled = false; shutdown(); }
 function onDelete() { extensionEnabled = false; shutdown(); application = null; }
 function onInstall() { exposeApi(); }
 function onUpdate() { exposeApi(); }
 function onClean() { }
-
 },
 "matcher":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildEntryIndex = buildEntryIndex;
@@ -722,128 +639,153 @@ function add(map, key, entry) {
         list.push(entry);
     map.set(key, list);
 }
-
 },
-"message-status":function(module,exports,require){
+"memory":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MessageStatusIndicator = void 0;
+exports.MemoryRunner = void 0;
+const constants_1 = require("./constants");
+const matcher_1 = require("./matcher");
+const operations_1 = require("./operations");
+const parser_1 = require("./parser");
+const prompts_1 = require("./prompts");
 const util_1 = require("./util");
-/**
- * Read-only status projection placed directly below the target assistant text.
- * It mirrors TaskRunner state and owns no narrative data.
- *
- * Important: this projection never observes the whole document. A global
- * MutationObserver previously watched its own DOM writes and could create an
- * endless render loop in some SillyTavern forks. Rendering now happens only
- * when TaskRunner publishes a real phase change or the host explicitly asks
- * for one refresh after a message redraw.
- */
-class MessageStatusIndicator {
-    constructor(tasks) {
-        this.tasks = tasks;
-        this.unsubscribe = null;
-        this.scheduled = false;
-        this.status = tasks.currentStatus();
+class MemoryRunner {
+    constructor(host, worldbook) {
+        this.host = host;
+        this.worldbook = worldbook;
+        this.status = { phase: 'idle', detail: '等待处理', error: '', rawResult: '', plan: null };
+        this.runningByChat = new Map();
     }
-    mount() {
-        this.unsubscribe ?? (this.unsubscribe = this.tasks.subscribe((status) => {
-            this.status = status;
-            this.scheduleRender();
-        }));
+    currentStatus() { return structuredClone(this.status); }
+    processTurn(settings, automatic = false, requestedIndex) {
+        const turn = this.host.latestTurn(requestedIndex);
+        const previous = this.runningByChat.get(turn.chatKey) ?? Promise.resolve();
+        const task = previous.catch(() => undefined).then(() => this.processTurnInternal(settings, automatic, requestedIndex));
+        this.runningByChat.set(turn.chatKey, task);
+        return task.finally(() => { if (this.runningByChat.get(turn.chatKey) === task) this.runningByChat.delete(turn.chatKey); });
     }
-    /** Reattach once after a known SillyTavern message redraw. */
-    refresh() {
-        this.scheduleRender();
-    }
-    unmount() {
-        this.unsubscribe?.();
-        this.unsubscribe = null;
-        document.querySelectorAll('.maip-message-status').forEach((node) => node.remove());
-    }
-    scheduleRender() {
-        if (this.scheduled)
-            return;
-        this.scheduled = true;
-        queueMicrotask(() => {
-            this.scheduled = false;
-            this.render();
-        });
-    }
-    render() {
-        const index = this.status.targetMessageIndex;
-        if (!Number.isInteger(index) || index < 0)
-            return;
-        const message = findMessageElement(index);
-        if (!message)
-            return;
-        const messageKey = this.status.targetMessageKey || `index-${index}`;
-        let indicator = message.querySelector(`.maip-message-status[data-message-key="${cssEscape(messageKey)}"]`);
-        if (!indicator) {
-            indicator = document.createElement('div');
-            indicator.className = 'maip-message-status';
-            indicator.dataset.messageKey = messageKey;
-            indicator.setAttribute('role', 'status');
-            indicator.setAttribute('aria-live', 'polite');
-            const text = message.querySelector('.mes_text, .message_text, .mes-content, .message-content');
-            if (text?.parentElement)
-                text.parentElement.insertBefore(indicator, text.nextSibling);
-            else
-                message.appendChild(indicator);
+    async runTask(kind, settings) {
+        const turn = this.host.latestTurn();
+        if (kind === 'extraction') {
+            const result = await this.extract(settings, turn);
+            this.setStatus('complete', '提取完成');
+            return result;
         }
-        indicator.dataset.phase = this.status.pendingReview ? 'review' : this.status.phase;
-        indicator.innerHTML = `<span class="maip-message-status-dot" aria-hidden="true"></span><b>${(0, util_1.escapeHtml)(statusTitle(this.status))}</b><span>${(0, util_1.escapeHtml)((0, util_1.truncate)(statusDetail(this.status), 160))}</span>`;
-        indicator.title = statusDetail(this.status);
+        if (kind === 'smallSummary') {
+            const result = await this.summarize('small', settings, turn);
+            const cursor = this.host.cursor();
+            cursor.turnsSinceSmall = 0;
+            cursor.smallCountSinceLarge += 1;
+            await this.assertChat(turn.chatKey);
+            await this.host.saveCursor(cursor);
+            this.setStatus('complete', '小总结完成');
+            return result;
+        }
+        const result = await this.summarize('large', settings, turn);
+        const cursor = this.host.cursor();
+        cursor.smallCountSinceLarge = 0;
+        await this.assertChat(turn.chatKey);
+        await this.host.saveCursor(cursor);
+        this.setStatus('complete', '大总结完成');
+        return result;
+    }
+    async processTurnInternal(settings, automatic, requestedIndex) {
+        const turn = this.host.latestTurn(requestedIndex);
+        const cursor = this.host.cursor();
+        if (automatic && cursor.lastProcessedMessageKey === turn.messageKey && cursor.lastProcessedHash === turn.contentHash) {
+            this.setStatus('complete', '该正文已经处理，跳过重复事件');
+            return [];
+        }
+        try {
+            this.setStatus('reading', '读取最终正文与相关世界书条目');
+            await this.extract(settings, turn);
+            const nextCursor = { ...cursor, turnsSinceSmall: cursor.turnsSinceSmall + 1 };
+            if (nextCursor.turnsSinceSmall >= settings.smallSummaryTurns) {
+                await this.summarize('small', settings, turn, '当前事件线');
+                nextCursor.turnsSinceSmall = 0;
+                nextCursor.smallCountSinceLarge += 1;
+                if (nextCursor.smallCountSinceLarge >= settings.largeSummaryCount) {
+                    await this.summarize('large', settings, turn, '跨场景长期连续性');
+                    nextCursor.smallCountSinceLarge = 0;
+                }
+            }
+            await this.assertChat(turn.chatKey);
+            nextCursor.lastProcessedMessageKey = turn.messageKey;
+            nextCursor.lastProcessedHash = turn.contentHash;
+            await this.host.saveCursor(nextCursor);
+            this.setStatus('complete', '提取与总结调度完成');
+            return [];
+        } catch (error) {
+            this.setStatus('error', '当前步骤失败，后续步骤已停止', (0, util_1.errorText)(error));
+            throw error;
+        }
+    }
+    async extract(settings, turn) {
+        this.setStatus('extracting', '提取事实与状态');
+        const entries = await this.worldbook.list(settings);
+        await this.assertChat(turn.chatKey);
+        const selected = (0, matcher_1.relevantEntries)(entries, `${turn.playerText}\n${turn.assistantText}`);
+        const prompt = (0, prompts_1.extractionPrompts)(settings, turn.playerText, turn.assistantText, selected);
+        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
+        this.status.rawResult = raw;
+        const blocks = (0, parser_1.parseInformationPoints)(raw);
+        if (!blocks.length) {
+            this.setStatus('matching', '本轮无可写入信息', '', raw, { blocks: [], operations: [], createdAt: Date.now() });
+            return entries;
+        }
+        this.setStatus('matching', '匹配条目并去重');
+        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, `${turn.playerText}\n${turn.assistantText}`);
+        return this.apply(settings, plan, turn, `${turn.playerText}\n${turn.assistantText}`, '提取');
+    }
+    async summarize(kind, settings, turn, subject = '') {
+        const label = kind === 'small' ? '小总结' : '大总结';
+        this.setStatus(kind === 'small' ? 'small-summary' : 'large-summary', label);
+        const entries = await this.worldbook.list(settings);
+        await this.assertChat(turn.chatKey);
+        const selected = kind === 'small'
+            ? entries.filter((entry) => entry.focus || /(事件|场景|时空|人物|物品|地点)/u.test(`${entry.type}\n${entry.keywords.join(' ')}`)).slice(-50)
+            : entries.filter((entry) => /(小总结|大总结|固定事实|历史事实|事件|关系|组织|契约|基础设定)/u.test(`${entry.type}\n${entry.keywords.join(' ')}\n${entry.content}`)).slice(-80);
+        const recent = kind === 'small' ? recentConversation(this.host, turn.messageIndex, Math.max(8, settings.smallSummaryTurns * 2 + 2)) : '';
+        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, subject, recent);
+        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
+        this.status.rawResult = raw;
+        const blocks = (0, parser_1.parseInformationPoints)(raw);
+        if (!blocks.length) {
+            this.setStatus(kind === 'small' ? 'small-summary' : 'large-summary', `${label}无更新`, '', raw, { blocks: [], operations: [], createdAt: Date.now() });
+            return entries;
+        }
+        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'));
+        return this.apply(settings, plan, turn, recent || `${turn.playerText}\n${turn.assistantText}`, label);
+    }
+    async apply(settings, plan, turn, contextText, label) {
+        this.status.plan = plan;
+        if (!plan.operations.some((operation) => operation.kind !== 'noop')) return [];
+        this.setStatus('worldbook', `${label}写入世界书`, '', this.status.rawResult, plan);
+        await this.assertChat(turn.chatKey);
+        return this.worldbook.apply(settings, plan, turn.messageKey, contextText, this.host.getFocusTitle(), turn.chatKey);
+    }
+    async assertChat(expected) {
+        if (this.host.chatKey() !== expected) throw new Error('聊天已经切换，本次结果作废');
+    }
+    setStatus(phase, detail, error = '', rawResult = this.status.rawResult, plan = this.status.plan) {
+        this.status = { phase, detail, error, rawResult, plan };
     }
 }
-exports.MessageStatusIndicator = MessageStatusIndicator;
-function findMessageElement(index) {
-    const selectors = [
-        `.mes[mesid="${index}"]`,
-        `.mes[data-message-id="${index}"]`,
-        `.mes[data-message-index="${index}"]`,
-        `[mesid="${index}"].mes`,
-        `[data-message-id="${index}"].mes`,
-    ];
-    for (const selector of selectors) {
-        const found = document.querySelector(selector);
-        if (found)
-            return found;
-    }
-    const messages = document.querySelectorAll('#chat .mes, .chat .mes, .mes');
-    return messages.item(index) || null;
+exports.MemoryRunner = MemoryRunner;
+function profileId(settings) { return settings.modelSource === 'profile' ? settings.modelProfileId : ''; }
+function trimPrompt(value) { return value.length <= constants_1.MAX_CONTEXT_CHARS ? value : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`; }
+function recentConversation(host, messageIndex, maxMessages) {
+    const chat = host.context().chat ?? [];
+    const start = Math.max(0, messageIndex - maxMessages + 1);
+    return chat.slice(start, messageIndex + 1).map((message) => {
+        const role = message?.is_user === true || message?.isUser === true ? '玩家' : 'AI';
+        return `${role}：${String(message?.mes ?? '').trim()}`;
+    }).filter((line) => !/：\s*$/u.test(line)).join('\n\n');
 }
-function statusTitle(status) {
-    if (status.pendingReview)
-        return '镜渊 · 待确认';
-    return {
-        idle: '镜渊 · 待处理',
-        reading: '镜渊 · 读取中',
-        audit: '镜渊 · 审核中',
-        extracting: '镜渊 · 提取中',
-        matching: '镜渊 · 匹配中',
-        worldbook: '镜渊 · 写入中',
-        summary: '镜渊 · 总结中',
-        complete: '镜渊 · 已完成',
-        error: '镜渊 · 处理失败',
-    }[status.phase];
-}
-function statusDetail(status) {
-    if (status.pendingReview)
-        return status.detail || 'AI 信息点建议等待确认后写入世界书';
-    return status.error || status.detail || '等待插件处理';
-}
-function cssEscape(value) {
-    return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
-}
-
-},
-"model":function(module,exports,require){
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-
 },
 "operations":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildOperationPlan = buildOperationPlan;
@@ -1109,9 +1051,9 @@ function noop(title, targetUid, section, reason, score, matchEvidence) {
 function operationId(kind, title, value) {
     return `${kind}:${(0, util_1.hashText)(`${kind}|${title}|${value}`)}`;
 }
-
 },
 "parser":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.canonicalSectionName = canonicalSectionName;
@@ -1296,143 +1238,116 @@ function normalizePointLine(value) {
         .replace(/[。.]\s*$/u, '。')
         .trim();
 }
-
 },
 "prompts":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractionPrompts = extractionPrompts;
 exports.auditPrompts = auditPrompts;
+exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
 exports.keywordTemplate = keywordTemplate;
 const util_1 = require("./util");
+function auditPrompts(settings, playerText, assistantText) {
+    const system = `你是“镜渊”的正文审核器。你只判断待审核正文是否违反玩家硬规则，不续写、不润色、不修正文。
+
+只允许返回以下两种格式之一：
+
+通过
+
+或：
+需要修正
+【违反规则】
+- 具体违反的规则
+
+要求：
+1. 只依据玩家硬规则和待审核正文判断。
+2. 不把偏好当硬规则，不扩大规则含义。
+3. 不输出修正版正文，不输出分析过程、JSON或代码块。`;
+    const user = `【玩家硬规则】\n${settings.auditPrompt || '（无）'}\n\n【玩家输入】\n${playerText || '（空）'}\n\n【待审核正文】\n${assistantText}`;
+    return { system, user };
+}
+function revisionPrompts(settings, playerText, assistantText, auditResult) {
+    const system = `你是“镜渊”的正文修正器。只根据审核结果修正明确违规处。
+
+固定输出格式：
+【正文】
+完整修正版正文
+
+要求：
+1. 必须返回完整正文，不返回局部补丁。
+2. 保留原有时间、地点、事件顺序、NPC已发生行为、物品状态和外部结果。
+3. 不增加新事件，不扩写，不解释，不输出JSON或代码块。
+4. 只做满足玩家硬规则所需的最小修改。`;
+    const user = `【玩家硬规则】\n${settings.auditPrompt || '（无）'}\n\n【玩家输入】\n${playerText || '（空）'}\n\n【审核结果】\n${auditResult}\n\n【原正文】\n${assistantText}`;
+    return { system, user };
+}
 function extractionPrompts(settings, playerText, assistantText, relevant) {
     const template = keywordTemplate(settings.keywordDefinitions);
     const existing = relevant.map(entryForPrompt).join('\n\n');
     const custom = settings.extractionPrompt.trim();
-    const system = `你是“镜渊”的信息点提取器。你不是数据库管理员，也不决定世界书常驻、向量、递归、深度或顺序。
-
-你的唯一任务：阅读本轮玩家输入和最终正文，提取本轮已经明确成立、会影响后续叙事的核心信息点，并按照“条目标题＋关键词＋小标题＋事实行”填写。
+    const system = `你是“镜渊”的事实与状态提取器。你不管理数据库，也不决定世界书常驻、向量、递归、深度、顺序或概率。
 
 固定输出语法：
 类型｜稳定名称
 【关键词】
-- 与该条目匹配的世界书关键词
+- 关键词
 【小标题】
-- 一条核心信息点
+- 一条明确事实
 
-没有变化的小标题填写：
-【小标题】
+本轮没有任何值得写入世界书的信息时，只返回：
 无
 
 规则：
-1. 已有对象必须沿用提供的稳定标题；同一事件的新进展继续填写到原事件标题下。
-2. 标题前缀只用于稳定识别对象；分类、筛选和召回使用【关键词】。一个条目可以拥有多个关键词。
-3. 默认关键词只是参考，不是白名单。遇到组织、宗教、法律、血统、货币、技术等未列出的概念，可以填写新的准确关键词。
-4. 新条目必须填写【关键词】；已有条目只有关键词新增或需要收紧时才填写，否则写“无”。
-5. 人物名称、地点名称、物品名称和事件标题不得随意改写成同义标题。
-6. 每行只表达一个主体的一项属性、动作、关系或直接结果，使用简短明确的自然语言。
-7. 只提取核心事实；忽略普通动作、瞬时表情、气氛、修辞、服装细节、无后续影响的背景信息。
-8. 不得补全正文未发生的内容，不得把可能、计划、推测和主观看法升级为事实。
-9. 已有内容已经表达或仅是近义改写时填写“无”，不要重复。
-10. 不限制条目数量；在不遗漏核心变化的前提下，只写真正必要的信息点。
-11. “基础设定”是世界规则类关键词。插件会自动将含该关键词的条目设为常驻，AI不得填写调度参数。
-12. 除填写结果外，不输出解释、前言、结语、JSON、代码块或思考过程。
+1. 只提取最终可见正文中已经明确形成、会影响后续叙事的事实。
+2. 已有对象沿用提供的稳定标题；不得随意改名。
+3. 每行只表达一个主体的一项事实、状态、动作、关系或直接结果。
+4. 当前状态写最新值；不要重复旧当前位置、旧持有者或旧阶段。
+5. 普通动作、瞬时表情、气氛、修辞、服装细节和无后续影响的背景信息不记录。
+6. 不得补全未发生内容，不得把计划、可能、推测或角色不知道的信息升级为事实。
+7. 已有内容已经表达或只是近义改写时填写“无”。
+8. 默认关键词不是白名单；必要时可以使用准确的新关键词。
+9. 除结果外不输出解释、前言、结语、JSON、代码块或思考过程。
 
 默认关键词及建议小标题：
 ${template}${custom ? `\n\n【玩家附加提取要求】\n${custom}` : ''}`;
-    const user = `【当前世界书中的少量相关条目】
-${existing || '（没有匹配到相关旧条目；确有新对象时可创建结构化标题）'}
-
-【玩家本轮输入】
-${playerText || '（空）'}
-
-【本轮最终正文】
-${assistantText}
-
-请直接按固定标题、【关键词】和小标题填写。已有标题中没有变化的栏目填写“无”。`;
+    const user = `【当前世界书中的直接相关条目】\n${existing || '（无）'}\n\n【玩家本轮输入】\n${playerText || '（空）'}\n\n【本轮最终可见正文】\n${assistantText}\n\n请直接填写；没有核心变化时只返回“无”。`;
     return { system, user };
 }
-function auditPrompts(settings, playerText, assistantText) {
-    const system = `你是“镜渊”的正文审核器。只检查正文是否违反玩家给出的硬规则，不续写、不润色、不扩展剧情。
-
-只允许两种输出：
-通过
-
-或：
-修正文
-【正文】
-完整修正正文
-
-修正时只改明确违规处，保留时间、地点、事件顺序、NPC已发生行为、物品状态和外部结果。不得增加新事件。`;
-    const user = `【玩家硬规则】
-${settings.auditPrompt || '（无）'}
-
-【玩家输入】
-${playerText || '（空）'}
-
-【待审核正文】
-${assistantText}`;
-    return { system, user };
-}
-function summaryPrompts(kind, settings, entries, subject) {
+function summaryPrompts(kind, settings, entries, subject, recentConversation = '') {
     const isSmall = kind === 'small';
     const custom = (isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim();
-    const system = `你是“镜渊”的${isSmall ? '场景级小总结器' : '跨场景大总结器'}。
+    const system = `你是“镜渊”的${isSmall ? '小总结器' : '大总结器'}。只整理已经明确存在的叙事事实。
 
-你只读取世界书中已经存在的信息点链，按相同的“类型｜名称＋【关键词】＋【小标题】＋事实行”格式输出当前最终有效事实。
+输出仍使用：类型｜名称＋【关键词】＋【小标题】＋事实行。没有更新只返回“无”。
 
 要求：
-1. 同一事件的多个子信息点连起来才是完整事件事实；不要把单个过程片段误当最终结论。
-2. 删除重复、被后续结果覆盖的过程，但保留仍影响后续的因果、关系、资源、身份和限制。
-3. 将持续影响分别填写到对应人物、地点、物品、组织等条目。
-4. 关键词只有新增、删除错误分类或需要收紧时才输出；不得把调度参数当关键词。
-5. 临时事件、临时NPC或临时物品完成分发后，可在原条目填写：
-【沉降处理】
-归档
-或
-【沉降处理】
-删除
-6. 焦点对象、基础设定和人工锁定对象不得要求删除。
-7. 没有变化填写“无”。不输出JSON、代码块、说明或分析过程。
-8. ${isSmall ? '只整理当前场景或当前事件链。' : '只固化跨场景仍成立的长期结果，不逐句缩写小总结。'}${custom ? `\n\n【玩家附加总结要求】\n${custom}` : ''}`;
-    const user = `【总结对象】
-${subject || '当前相关信息点链'}
-
-【世界书相关条目】
-${entries.map(entryForPrompt).join('\n\n') || '（无）'}
-
-请直接输出需要写回世界书的标题、关键词、小标题和核心事实。`;
+1. ${isSmall ? '回答“继续当前事件线必须知道什么”，保留当前场景、参与者、关键行动、直接后果、客观存在的未解决问题及必须连续的状态。' : '回答“跨场景继续叙事仍必须知道什么”，保留长期关系、永久后果、长期目标立场、重要资源、组织制度变化、契约承诺和世界规则变化。'}
+2. ${isSmall ? '不得只是压缩全文。' : '不得把小总结简单缩短。'}
+3. 删除重复和被后续事实覆盖的过程，但不得删除仍有约束力的因果。
+4. 临时条目影响完成分发后，可填写【沉降处理】归档或【沉降处理】删除。
+5. 焦点、基础设定和手动锁定条目不得要求删除。
+6. 不补全、不推测、不输出JSON、代码块、说明或分析过程。${custom ? `\n\n【玩家附加总结要求】\n${custom}` : ''}`;
+    const recent = isSmall ? `\n\n【最近对话】\n${recentConversation || '（无）'}` : '';
+    const user = `【总结范围】\n${subject || (isSmall ? '当前事件线' : '长期叙事')}\n${recent}\n\n【世界书相关条目】\n${entries.map(entryForPrompt).join('\n\n') || '（无）'}\n\n请直接输出需要写回世界书的事实；没有变化只返回“无”。`;
     return { system, user };
 }
 function keywordTemplate(definitions) {
     return definitions.filter((item) => item.enabled).map((item) => {
         const aliases = item.aliases.length ? `；近义标签：${item.aliases.join('、')}` : '';
-        const activation = item.constant ? '；插件规则：常驻' : '';
         const fields = item.fields.map((field) => {
             const options = field.options?.length ? `；选项：${field.options.join(' / ')}` : '';
-            return `- 【${field.label}】：${policyDescription(field.policy)}${options}${field.prompt ? `；${field.prompt}` : ''}`;
+            return `- 【${field.label}】${options}${field.prompt ? `；${field.prompt}` : ''}`;
         }).join('\n');
-        return `关键词：${item.label}${aliases}${activation}\n用途：${item.description}\n${fields || '- 可按事实使用合适的小标题'}`;
+        return `关键词：${item.label}${aliases}\n用途：${item.description}\n${fields || '- 可按事实使用合适的小标题'}`;
     }).join('\n\n');
 }
 function entryForPrompt(entry) {
-    const activation = [entry.focus ? '焦点' : '', entry.activation.constant ? '常驻' : ''].filter(Boolean).join('、');
-    return `标题：${entry.title}${activation ? `（${activation}）` : ''}\nUID：${entry.uid}\n关键词：${entry.keywords.join('、') || '无'}\n正文：\n${(0, util_1.truncate)(entry.content || '（空）', 2200)}`;
+    return `标题：${entry.title}\nUID：${entry.uid}\n关键词：${entry.keywords.join('、') || '无'}\n正文：\n${(0, util_1.truncate)(entry.content || '（空）', 2200)}`;
 }
-function policyDescription(policy) {
-    return {
-        'semantic-upsert': '固定事实；相似内容不重复，同一信息槽变化时更新',
-        'replace-by-anchor': '当前值；同一主体与属性只保留新值',
-        'append-chain': '过程链；同一事件的新信息点顺序追加',
-        'replace-section': '完整段落；用当前完整内容替换',
-        'merge-titles': '固定标题集合；合并去重',
-        'merge-keywords': '关键词或别名集合；合并去重',
-    }[policy] ?? '按核心事实填写';
-}
-
 },
 "settings":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SettingsStore = exports.DEFAULT_SETTINGS = exports.DEFAULT_LARGE_SUMMARY_PROMPT = exports.DEFAULT_SMALL_SUMMARY_PROMPT = exports.DEFAULT_EXTRACTION_PROMPT = exports.DEFAULT_AUDIT_PROMPT = exports.DEFAULT_KEYWORDS = void 0;
@@ -1568,8 +1483,8 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     modelSource: 'current',
     modelProfileId: '',
-    autoProcess: false,
-    auditEnabled: false,
+    autoProcess: true,
+    auditEnabled: true,
     targetLorebook: '',
     autoCreateLorebook: true,
     auditPrompt: exports.DEFAULT_AUDIT_PROMPT,
@@ -1597,13 +1512,6 @@ exports.DEFAULT_SETTINGS = Object.freeze({
         bodySimilarity: 420,
         typeMismatchPenalty: -180,
     },
-    activationRules: [
-        { id: 'focus', label: '玩家焦点常驻', enabled: true, match: 'focus', set: { constant: true, vectorized: false, preventRecursion: false, depth: 1, order: 920 } },
-        { id: 'mentioned', label: '本轮直接命中', enabled: true, match: 'mentioned', set: { vectorized: true, preventRecursion: false, depth: 2, order: 720 } },
-        { id: 'linked-current', label: '关联当前场景', enabled: true, match: 'linked-current', set: { vectorized: true, preventRecursion: false, depth: 2, order: 680 } },
-        { id: 'active-event', label: '活跃事件链', enabled: true, match: 'active-event', set: { vectorized: true, preventRecursion: false, depth: 2, order: 760 } },
-        { id: 'default', label: '结构化条目默认召回', enabled: true, match: 'structured-default', set: { vectorized: true, preventRecursion: false, depth: 4, order: 400 } },
-    ],
 });
 class SettingsStore {
     load(context) {
@@ -1655,7 +1563,6 @@ function parseSettings(value) {
         keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions, candidate.tables),
         sectionPolicies,
         matchWeights: { ...exports.DEFAULT_SETTINGS.matchWeights, ...((0, util_1.isPlainObject)(candidate.matchWeights) ? candidate.matchWeights : {}) },
-        activationRules: Array.isArray(candidate.activationRules) ? candidate.activationRules : (0, util_1.clone)(exports.DEFAULT_SETTINGS.activationRules),
     };
 }
 function parseKeywordDefinitions(value, legacyTables) {
@@ -1755,999 +1662,9 @@ function clampFloat(value, fallback, min, max) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
 }
-
-},
-"tasks":function(module,exports,require){
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.TaskRunner = void 0;
-const constants_1 = require("./constants");
-const matcher_1 = require("./matcher");
-const operations_1 = require("./operations");
-const parser_1 = require("./parser");
-const prompts_1 = require("./prompts");
-const util_1 = require("./util");
-class TaskRunner {
-    constructor(host, worldbook) {
-        this.host = host;
-        this.worldbook = worldbook;
-        this.status = { phase: 'idle', detail: '等待操作', error: '', rawResult: '', plan: null, lastCompletedMessageKey: '', pendingReview: false, targetMessageKey: '', targetMessageIndex: -1 };
-        this.pendingWrite = null;
-        this.listeners = new Set();
-        this.runningByChat = new Map();
-        this.activeTurn = null;
-    }
-    subscribe(listener) {
-        this.listeners.add(listener);
-        listener(this.currentStatus());
-        return () => this.listeners.delete(listener);
-    }
-    currentStatus() { return structuredClone(this.status); }
-    processTurn(settings, automatic = false, requestedIndex) {
-        const turn = this.host.latestTurn(requestedIndex);
-        this.activeTurn = turn;
-        const previous = this.runningByChat.get(turn.chatKey) ?? Promise.resolve();
-        const task = previous.catch(() => undefined).then(() => this.processTurnInternal(settings, automatic, requestedIndex));
-        this.runningByChat.set(turn.chatKey, task);
-        return task.finally(() => { if (this.runningByChat.get(turn.chatKey) === task)
-            this.runningByChat.delete(turn.chatKey); });
-    }
-    async runTask(kind, settings) {
-        if (kind === 'audit') {
-            const turn = this.host.latestTurn();
-            this.activeTurn = turn;
-            await this.audit(settings, turn);
-            return this.worldbook.list(settings);
-        }
-        if (kind === 'extraction') {
-            const turn = this.host.latestTurn();
-            this.activeTurn = turn;
-            return this.suggestExtraction(settings, turn);
-        }
-        const turn = this.host.latestTurn();
-        this.activeTurn = turn;
-        return this.summarize(kind === 'smallSummary' ? 'small' : 'large', settings, turn);
-    }
-    async previewExtraction(settings, raw) {
-        const turn = this.host.latestTurn();
-        this.activeTurn = turn;
-        const entries = await this.worldbook.list(settings);
-        const blocks = (0, parser_1.parseInformationPoints)(raw);
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, `${turn.playerText}\n${turn.assistantText}`);
-        this.setStatus('matching', `预览完成：${plan.operations.length} 个操作`, '', raw, plan);
-        return plan;
-    }
-    async applyPending(settings) {
-        const pending = this.pendingWrite;
-        if (!pending)
-            return this.worldbook.list(settings);
-        const result = await this.apply(settings, pending.plan, pending.sourceMessageKey, pending.contextText, pending.label);
-        this.pendingWrite = null;
-        this.setStatus('complete', '已确认并写入世界书', '', this.status.rawResult, pending.plan, this.status.lastCompletedMessageKey, false);
-        return result;
-    }
-    discardPending() {
-        this.pendingWrite = null;
-        this.setStatus('idle', '已忽略本次 AI 提取建议', '', '', null, this.status.lastCompletedMessageKey, false);
-    }
-    async suggestExtraction(settings, turn) {
-        this.setStatus('extracting', 'AI生成本轮信息点建议');
-        const entries = await this.worldbook.list(settings);
-        const selected = (0, matcher_1.relevantEntries)(entries, `${turn.playerText}
-${turn.assistantText}`);
-        const prompt = (0, prompts_1.extractionPrompts)(settings, turn.playerText, turn.assistantText, selected);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
-        this.setRaw(raw);
-        const blocks = (0, parser_1.parseInformationPoints)(raw);
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, `${turn.playerText}
-${turn.assistantText}`);
-        this.pendingWrite = blocks.length ? { plan, sourceMessageKey: turn.messageKey, contextText: `${turn.playerText}
-${turn.assistantText}`, label: 'AI提取建议' } : null;
-        this.setStatus('matching', blocks.length ? `AI建议完成：${plan.operations.filter((item) => item.kind !== 'noop').length} 项待确认` : 'AI判定本轮无核心信息点', '', raw, plan, turn.messageKey, Boolean(this.pendingWrite));
-        return entries;
-    }
-    async processTurnInternal(settings, automatic, requestedIndex) {
-        let turn = this.host.latestTurn(requestedIndex);
-        this.activeTurn = turn;
-        const cursor = this.host.cursor();
-        if (automatic && cursor.lastProcessedMessageKey === turn.messageKey && cursor.lastProcessedHash === turn.contentHash) {
-            this.setStatus('complete', '该正文已经处理，跳过重复事件', '', '', null, turn.messageKey);
-            return this.worldbook.list(settings);
-        }
-        try {
-            this.setStatus('reading', '读取本轮正文与当前世界书');
-            if (settings.auditEnabled && settings.auditPrompt.trim())
-                turn = await this.audit(settings, turn);
-            const entries = await this.extract(settings, turn);
-            const sceneTitle = currentSceneTitle(entries);
-            const nextCursor = this.host.cursor();
-            nextCursor.lastProcessedMessageKey = turn.messageKey;
-            nextCursor.lastProcessedHash = turn.contentHash;
-            nextCursor.turnsSinceSmall += 1;
-            const sceneChanged = Boolean(sceneTitle && nextCursor.lastSceneTitle && (0, util_1.normalizeTitle)(sceneTitle) !== (0, util_1.normalizeTitle)(nextCursor.lastSceneTitle));
-            if (sceneTitle)
-                nextCursor.lastSceneTitle = sceneTitle;
-            await this.host.saveCursor(nextCursor);
-            if (sceneChanged || nextCursor.turnsSinceSmall >= settings.smallSummaryTurns) {
-                await this.summarize('small', settings, turn, sceneChanged ? `上一场景：${cursor.lastSceneTitle}` : `当前阶段：${sceneTitle || '未命名场景'}`);
-                const afterSmall = this.host.cursor();
-                afterSmall.turnsSinceSmall = 0;
-                afterSmall.smallCountSinceLarge += 1;
-                await this.host.saveCursor(afterSmall);
-                if (afterSmall.smallCountSinceLarge >= settings.largeSummaryCount) {
-                    await this.summarize('large', settings, turn, '未固化的小总结与长期条目');
-                    const afterLarge = this.host.cursor();
-                    afterLarge.smallCountSinceLarge = 0;
-                    await this.host.saveCursor(afterLarge);
-                }
-            }
-            const finalEntries = await this.worldbook.list(settings);
-            this.setStatus('complete', `处理完成：世界书共 ${finalEntries.length} 个结构化条目`, '', this.status.rawResult, this.status.plan, turn.messageKey);
-            return finalEntries;
-        }
-        catch (error) {
-            this.setStatus('error', '本轮停止，世界书未强行写入错误结果', (0, util_1.errorText)(error));
-            throw error;
-        }
-    }
-    async audit(settings, turn) {
-        this.setStatus('audit', '审核当前正文');
-        const prompt = (0, prompts_1.auditPrompts)(settings, turn.playerText, turn.assistantText);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
-        this.status.rawResult = raw;
-        if (/^\s*通过\s*[。.]?\s*$/u.test(raw))
-            return turn;
-        const revised = raw.match(/修正文\s*\n\s*【正文】\s*\n([\s\S]+)$/u)?.[1]?.trim();
-        if (!revised)
-            throw new Error('审核输出既不是“通过”，也没有合法的修正文');
-        return this.host.replaceAssistantText(turn, revised);
-    }
-    async extract(settings, turn) {
-        this.pendingWrite = null;
-        this.setStatus('extracting', 'AI提取本轮核心信息点');
-        const entries = await this.worldbook.list(settings);
-        const selected = (0, matcher_1.relevantEntries)(entries, `${turn.playerText}\n${turn.assistantText}`);
-        const prompt = (0, prompts_1.extractionPrompts)(settings, turn.playerText, turn.assistantText, selected);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
-        this.setRaw(raw);
-        const blocks = (0, parser_1.parseInformationPoints)(raw);
-        if (!blocks.length) {
-            this.setStatus('matching', 'AI判定本轮无核心信息点', '', raw, { blocks: [], operations: [], createdAt: Date.now() });
-            return entries;
-        }
-        this.setStatus('matching', '语法、标题、关键词与少量正文匹配');
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, `${turn.playerText}\n${turn.assistantText}`);
-        this.status.plan = plan;
-        this.emit();
-        return this.apply(settings, plan, turn.messageKey, `${turn.playerText}\n${turn.assistantText}`, '信息点');
-    }
-    async summarize(kind, settings, turn, subject = '') {
-        this.setStatus('summary', `${kind === 'small' ? '小总结' : '大总结'}读取信息点链`);
-        const entries = await this.worldbook.list(settings);
-        const selected = kind === 'small'
-            ? entries.filter((entry) => entry.focus || /(事件|场景|人物|物品|地区)/u.test(entry.type) && /(进行中|当前|近期经历|事件进程)/u.test(entry.content)).slice(-40)
-            : entries.filter((entry) => /(小总结|固定事实|历史事实|大总结)/u.test(`${entry.type}\n${entry.content}`)).slice(-60);
-        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, subject);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, turn.chatKey, settings.requestTimeoutMs, profileId(settings));
-        this.setRaw(raw);
-        const blocks = (0, parser_1.parseInformationPoints)(raw);
-        if (!blocks.length)
-            return entries;
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'));
-        this.status.plan = plan;
-        this.emit();
-        return this.apply(settings, plan, turn.messageKey, `${turn.playerText}\n${turn.assistantText}`, kind === 'small' ? '小总结' : '大总结');
-    }
-    async apply(settings, plan, sourceMessageKey, contextText, label) {
-        if (!plan.operations.some((operation) => operation.kind !== 'noop'))
-            return this.worldbook.list(settings);
-        this.setStatus('worldbook', `${label}匹配结果直接写入世界书`, '', this.status.rawResult, plan);
-        return this.worldbook.apply(settings, plan, sourceMessageKey, contextText, this.host.getFocusTitle());
-    }
-    setRaw(raw) { this.status.rawResult = raw; this.emit(); }
-    setStatus(phase, detail, error = '', rawResult = this.status.rawResult, plan = this.status.plan, lastCompletedMessageKey = this.status.lastCompletedMessageKey, pendingReview = Boolean(this.pendingWrite)) {
-        const targetMessageKey = this.activeTurn?.messageKey ?? this.status.targetMessageKey;
-        const targetMessageIndex = this.activeTurn?.messageIndex ?? this.status.targetMessageIndex;
-        this.status = { phase, detail, error, rawResult, plan, lastCompletedMessageKey, pendingReview, targetMessageKey, targetMessageIndex };
-        this.emit();
-    }
-    emit() { for (const listener of this.listeners)
-        listener(this.currentStatus()); }
-}
-exports.TaskRunner = TaskRunner;
-function trimPrompt(value) {
-    return value.length <= constants_1.MAX_CONTEXT_CHARS ? value : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`;
-}
-function currentSceneTitle(entries) {
-    return entries.find((entry) => /(场景|时空)/u.test(entry.type) && /(当前场景|当前状态|进行中)/u.test(entry.content))?.title ?? '';
-}
-function profileId(settings) { return settings.modelSource === 'profile' ? settings.modelProfileId : ''; }
-
-},
-"ui":function(module,exports,require){
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.WorkspaceUi = void 0;
-const constants_1 = require("./constants");
-const settings_1 = require("./settings");
-const util_1 = require("./util");
-const parser_1 = require("./parser");
-const TABS = [
-    ['overview', '总览'], ['entries', '信息表'], ['keywords', '关键词'], ['matching', '匹配'],
-    ['graph', '记忆网络'], ['audit', '审核'], ['settings', '设置'], ['diagnostics', '诊断'],
-];
-class WorkspaceUi {
-    constructor(host, settingsStore, worldbook, tasks) {
-        this.host = host;
-        this.settingsStore = settingsStore;
-        this.worldbook = worldbook;
-        this.tasks = tasks;
-        this.entries = [];
-        this.tab = 'overview';
-        this.selectedKeyword = '';
-        this.root = null;
-        this.opener = null;
-        this.settingsEntry = null;
-        this.unsubscribe = null;
-        this.search = '';
-        this.refreshGeneration = 0;
-        this.projectionLoading = false;
-        this.projectionError = '';
-        this.migrationPreview = null;
-        this.migrationBusy = false;
-        this.migrationMessage = '';
-        this.profileMessage = '';
-        this.graphScale = 1;
-        this.settings = settingsStore.load(host.context());
-        this.status = tasks.currentStatus();
-    }
-    mount() {
-        this.ensureWorkspaceRoot();
-        this.ensureEntrypoints();
-        this.unsubscribe ?? (this.unsubscribe = this.tasks.subscribe((status) => {
-            const previous = this.status;
-            this.status = status;
-            this.updateEntrypointState();
-            // The workspace is a projection only. A model phase change updates two
-            // small status nodes; it must not reconstruct every worldbook row.
-            if (!this.isOpen())
-                return;
-            const settled = status.phase === 'complete' || status.phase === 'error';
-            const reviewChanged = previous.pendingReview !== status.pendingReview;
-            const matchingVisible = this.tab === 'matching' && status.phase === 'matching';
-            if (settled || reviewChanged || matchingVisible)
-                this.render();
-            else
-                this.updateStatusProjection();
-        }));
-        this.updateEntrypointState();
-    }
-    unmount() {
-        this.refreshGeneration += 1;
-        this.unsubscribe?.();
-        this.unsubscribe = null;
-        this.root?.remove();
-        this.root = null;
-        this.opener?.remove();
-        this.opener = null;
-        this.settingsEntry?.remove();
-        this.settingsEntry = null;
-        document.body?.classList.remove('maip-workspace-open');
-    }
-    ensureEntrypoints() {
-        const parent = document.body ?? document.documentElement;
-        if (!this.opener) {
-            this.opener = document.createElement('button');
-            this.opener.className = 'maip-opener';
-            this.opener.type = 'button';
-            this.opener.setAttribute('aria-label', '打开 Mirror Abyss 镜渊');
-            this.opener.title = '打开 Mirror Abyss｜镜渊';
-            this.opener.innerHTML = `${brandSvg()}<span class="maip-opener-text">镜渊</span>`;
-            this.opener.addEventListener('click', () => this.open());
-        }
-        if (!this.opener.isConnected)
-            parent.appendChild(this.opener);
-        const settingsHost = findSettingsHost();
-        if (settingsHost) {
-            if (!this.settingsEntry) {
-                this.settingsEntry = document.createElement('div');
-                this.settingsEntry.className = 'maip-settings-entry';
-                this.settingsEntry.innerHTML = `
-          <div><b>Mirror Abyss｜镜渊</b><small>信息点提取、关键词匹配与世界书映射</small></div>
-          <button type="button">打开工作区</button>`;
-                this.settingsEntry.querySelector('button')?.addEventListener('click', () => this.open());
-            }
-            if (!this.settingsEntry.isConnected)
-                settingsHost.prepend(this.settingsEntry);
-        }
-    }
-    openTab(tab) {
-        const candidate = TABS.some(([key]) => key === tab) ? tab : this.tab;
-        this.open(candidate);
-    }
-    open(tab = this.tab) {
-        this.tab = tab;
-        this.ensureWorkspaceRoot();
-        if (!this.root)
-            return;
-        this.render();
-        document.body?.classList.add('maip-workspace-open');
-        try {
-            if (!this.root.open && typeof this.root.showModal === 'function')
-                this.root.showModal();
-            else if (!this.root.open)
-                this.root.setAttribute('open', '');
-        }
-        catch (error) {
-            console.warn('[MirrorAbyss] dialog.showModal failed; using open attribute fallback', error);
-            this.root.setAttribute('open', '');
-        }
-        globalThis.setTimeout(() => {
-            if (this.isOpen())
-                void this.refreshEntries();
-        }, 0);
-    }
-    close() {
-        if (this.root?.open && typeof this.root.close === 'function')
-            this.root.close();
-        else
-            this.root?.removeAttribute('open');
-        document.body?.classList.remove('maip-workspace-open');
-    }
-    isOpen() {
-        return Boolean(this.root?.open);
-    }
-    onChatChanged() {
-        this.refreshGeneration += 1;
-        this.entries = [];
-        this.projectionLoading = false;
-        this.projectionError = '';
-        this.migrationPreview = null;
-        if (this.isOpen())
-            void this.refreshEntries();
-    }
-    async refreshEntries() {
-        // Coalesce repeated refresh requests. Startup, chat events and UI status
-        // updates must never fan out into simultaneous full-worldbook reads.
-        if (this.projectionLoading)
-            return;
-        const generation = ++this.refreshGeneration;
-        this.projectionLoading = true;
-        this.projectionError = '';
-        this.render();
-        try {
-            const settings = this.settingsStore.load(this.host.context());
-            const entries = await this.worldbook.list(settings);
-            if (generation !== this.refreshGeneration)
-                return;
-            this.settings = settings;
-            this.entries = entries;
-            const keywords = this.entryKeywords();
-            if (this.selectedKeyword && !keywords.includes(this.selectedKeyword))
-                this.selectedKeyword = '';
-        }
-        catch (error) {
-            if (generation !== this.refreshGeneration)
-                return;
-            this.projectionError = error instanceof Error ? error.message : String(error);
-        }
-        finally {
-            if (generation === this.refreshGeneration) {
-                this.projectionLoading = false;
-                this.render();
-            }
-        }
-    }
-    currentStatusText() {
-        return this.migrationMessage || this.profileMessage || this.projectionError || (this.projectionLoading ? '正在读取世界书投影…' : '') || this.status.error || this.status.detail || '已就绪';
-    }
-    updateStatusProjection() {
-        if (!this.root)
-            return;
-        const top = this.root.querySelector('.maip-topbar-state');
-        if (top) {
-            top.classList.toggle('error', this.status.phase === 'error');
-            top.innerHTML = `<span></span>${(0, util_1.escapeHtml)(phaseLabel(this.status.phase))}`;
-        }
-        const footer = this.root.querySelector('.maip-status');
-        if (footer) {
-            footer.classList.toggle('error', this.status.phase === 'error' || Boolean(this.projectionError));
-            footer.innerHTML = `<span class="maip-status-dot"></span><b>${(0, util_1.escapeHtml)(phaseLabel(this.status.phase))}</b><span>${(0, util_1.escapeHtml)(this.currentStatusText())}</span>`;
-        }
-    }
-    updateEntrypointState() {
-        if (!this.opener)
-            return;
-        this.opener.dataset.phase = this.status.pendingReview ? 'review' : this.status.phase;
-        this.opener.title = this.status.error || this.status.detail || '打开 Mirror Abyss｜镜渊';
-    }
-    ensureWorkspaceRoot() {
-        if (!this.root) {
-            const root = document.createElement('dialog');
-            root.id = 'maip-workspace';
-            root.className = 'maip-shell';
-            root.setAttribute('aria-label', constants_1.DISPLAY_NAME);
-            root.style.position = 'fixed';
-            root.style.inset = '0';
-            root.style.width = '100vw';
-            root.style.height = '100dvh';
-            root.style.maxWidth = 'none';
-            root.style.maxHeight = 'none';
-            root.style.margin = '0';
-            root.style.padding = '0';
-            root.style.border = '0';
-            root.style.background = 'transparent';
-            root.addEventListener('cancel', (event) => { event.preventDefault(); this.close(); });
-            root.addEventListener('close', () => document.body?.classList.remove('maip-workspace-open'));
-            root.addEventListener('click', (event) => void this.onClick(event));
-            root.addEventListener('change', (event) => void this.onChange(event));
-            root.addEventListener('input', (event) => this.onInput(event));
-            this.root = root;
-        }
-        const parent = document.body ?? document.documentElement;
-        if (!this.root.isConnected)
-            parent.appendChild(this.root);
-    }
-    render() {
-        if (!this.root)
-            return;
-        const pageLabel = TABS.find(([key]) => key === this.tab)?.[1] ?? constants_1.DISPLAY_NAME;
-        const statusText = this.currentStatusText();
-        this.root.innerHTML = `
-      <section class="maip-workspace" aria-label="${constants_1.DISPLAY_NAME}">
-        <header class="maip-workspace-topbar">
-          <div class="maip-brand">${brandSvg()}<div><b>${constants_1.DISPLAY_NAME}</b><small>${constants_1.VERSION}</small></div></div>
-          <div class="maip-topbar-state ${this.status.phase === 'error' ? 'error' : ''}"><span></span>${(0, util_1.escapeHtml)(phaseLabel(this.status.phase))}</div>
-          <div class="maip-header-actions">
-            <button class="maip-icon" data-action="refresh" title="刷新世界书映射" aria-label="刷新">${iconSvg('refresh')}</button>
-            <button class="maip-icon maip-close" data-action="close" title="退出工作区" aria-label="退出工作区">${iconSvg('close')}</button>
-          </div>
-        </header>
-        <div class="maip-workspace-body">
-          <aside class="maip-sidebar">
-            <section class="maip-quick-panel" aria-label="功能开关">
-              <h3>功能开关</h3>
-              ${settingSwitch('enabled', '启用插件', this.settings.enabled)}
-              ${settingSwitch('autoProcess', '自动处理正文', this.settings.autoProcess)}
-              ${settingSwitch('auditEnabled', '启用审核', this.settings.auditEnabled)}
-              ${settingSwitch('autoCreateLorebook', '自动创建世界书', this.settings.autoCreateLorebook)}
-            </section>
-            <nav class="maip-tabs">${TABS.map(([key, label]) => `<button data-tab="${key}" class="${this.tab === key ? 'active' : ''}">${label}</button>`).join('')}</nav>
-          </aside>
-          <section class="maip-content">
-            <header class="maip-page-header">
-              <div class="maip-kicker">WORLD INFO · INFORMATION POINT MATCHER</div>
-              <h2>${pageLabel}</h2>
-              <p>${pageDescription(this.tab)}</p>
-            </header>
-            <main class="maip-main">${this.renderTab()}</main>
-            <footer class="maip-status ${this.status.phase === 'error' || this.projectionError ? 'error' : ''}">
-              <span class="maip-status-dot"></span>
-              <b>${phaseLabel(this.status.phase)}</b>
-              <span>${(0, util_1.escapeHtml)(statusText)}</span>
-            </footer>
-          </section>
-        </div>
-      </section>`;
-        if (this.isOpen())
-            queueMicrotask(() => this.afterRender());
-    }
-    afterRender() {
-        if (this.tab !== 'settings' || this.settings.modelSource !== 'profile' || !this.root)
-            return;
-        const selector = '#maip-profile-select';
-        const select = this.root.querySelector(selector);
-        if (!select)
-            return;
-        const bound = this.host.bindProfileDropdown(selector, this.settings.modelProfileId, (profileId) => {
-            if (profileId === this.settings.modelProfileId)
-                return;
-            this.settings.modelProfileId = profileId;
-            this.profileMessage = profileId ? `已选择处理 AI：${this.host.profileName(profileId)}` : 'Connection Profile 已清空';
-            this.persistSettings();
-        });
-        if (!bound)
-            this.profileMessage = '当前 SillyTavern 未提供 Connection Profile 下拉服务，可改用当前连接';
-    }
-    renderTab() {
-        if (this.tab === 'overview')
-            return this.renderOverview();
-        if (this.tab === 'entries')
-            return this.renderEntries();
-        if (this.tab === 'keywords')
-            return this.renderKeywords();
-        if (this.tab === 'matching')
-            return this.renderMatching();
-        if (this.tab === 'graph')
-            return this.renderGraph();
-        if (this.tab === 'audit')
-            return this.renderAudit();
-        if (this.tab === 'settings')
-            return this.renderSettings();
-        return this.renderDiagnostics();
-    }
-    renderOverview() {
-        const changed = this.status.plan?.operations.filter((operation) => operation.kind !== 'noop').length ?? 0;
-        const skipped = this.status.plan?.operations.filter((operation) => operation.kind === 'noop').length ?? 0;
-        const foundations = this.entries.filter((entry) => hasKeyword(entry, '基础设定')).length;
-        const ordered = [...this.entries].sort((left, right) => Number(right.focus) - Number(left.focus) || right.references.length - left.references.length || left.title.localeCompare(right.title));
-        return `
-      <section class="maip-hero-grid">
-        <article class="maip-card maip-primary-card">
-          <div class="maip-card-label">当前世界书</div>
-          <div class="maip-big">${(0, util_1.escapeHtml)(this.bookName())}</div>
-          <div class="maip-muted">世界书是唯一剧情数据源；本面板只显示并修改它的映射。</div>
-          <div class="maip-actions">
-            <button class="maip-btn primary" data-action="process">处理最新正文</button>
-            <button class="maip-btn" data-action="small">小总结</button>
-            <button class="maip-btn" data-action="large">大总结</button>
-          </div>
-        </article>
-        <article class="maip-card maip-metric"><span>世界书条目</span><strong>${this.entries.length}</strong><small>${this.entryKeywords().length} 个实际关键词</small></article>
-        <article class="maip-card maip-metric"><span>基础设定</span><strong>${foundations}</strong><small>含该关键词的条目自动常驻</small></article>
-        <article class="maip-card maip-metric"><span>最近匹配</span><strong>${changed}</strong><small>${skipped} 条重复信息已跳过</small></article>
-      </section>
-      ${this.status.pendingReview ? `<section class="maip-card maip-review-banner"><div><b>信息点修改等待确认</b><p>${changed} 项会修改世界书。确认前不会写入。</p></div><div class="maip-actions compact"><button class="maip-btn primary" data-action="apply-pending">确认写入</button><button class="maip-btn" data-action="discard-pending">忽略</button></div></section>` : ''}
-      <section class="maip-card">
-        <div class="maip-section-head"><div><h3>条目总览</h3><p>总览只显示条目名称、关键词与一句当前摘要，不重复完整子条目。</p></div></div>
-        <div class="maip-overview-list">${ordered.slice(0, 48).map((entry) => this.renderOverviewEntry(entry)).join('') || '<div class="maip-empty">当前世界书暂无条目</div>'}</div>
-      </section>`;
-    }
-    renderOverviewEntry(entry) {
-        const summary = entrySummary(entry);
-        const state = [entry.focus ? '焦点' : '', entry.activation.constant ? '常驻' : '', entry.activation.disabled ? '停用' : ''].filter(Boolean);
-        return `<article class="maip-overview-entry">
-      <div class="maip-overview-title"><b>${(0, util_1.escapeHtml)(entry.title)}</b>${state.map((item) => `<span>${item}</span>`).join('')}</div>
-      <div class="maip-tags">${entry.keywords.slice(0, 8).map((keyword) => `<span>${(0, util_1.escapeHtml)(keyword)}</span>`).join('')}</div>
-      <p>${(0, util_1.escapeHtml)(summary || '暂无结构化摘要')}</p>
-    </article>`;
-    }
-    renderEntries() {
-        const keywords = this.entryKeywords();
-        const query = this.search.toLocaleLowerCase();
-        const filtered = this.entries.filter((entry) => (!this.selectedKeyword || hasKeyword(entry, this.selectedKeyword)) && (!query || `${entry.title}\n${entry.content}\n${entry.keywords.join(' ')}`.toLocaleLowerCase().includes(query)));
-        return `
-      <section class="maip-toolbar">
-        <div class="maip-segment"><button data-keyword="" class="${this.selectedKeyword ? '' : 'active'}">全部 <span>${this.entries.length}</span></button>${keywords.map((keyword) => `<button data-keyword="${(0, util_1.escapeHtml)(keyword)}" class="${this.selectedKeyword === keyword ? 'active' : ''}">${(0, util_1.escapeHtml)(keyword)} <span>${this.entries.filter((entry) => hasKeyword(entry, keyword)).length}</span></button>`).join('')}</div>
-        <input class="maip-search" data-input="search" placeholder="搜索条目名称、关键词或正文" value="${(0, util_1.escapeHtml)(this.search)}">
-      </section>
-      <section class="maip-card maip-table-card">
-        <div class="maip-table-wrap"><table class="maip-table maip-entry-table">
-          <thead><tr><th>条目名称</th><th>关键词</th><th>子条目信息</th><th>状态与操作</th></tr></thead>
-          <tbody>${filtered.map((entry) => this.renderEntryRow(entry)).join('') || '<tr><td colspan="4" class="maip-empty">当前筛选下没有条目</td></tr>'}</tbody>
-        </table></div>
-      </section>`;
-    }
-    renderEntryRow(entry) {
-        const sections = entry.sections.order.length ? entry.sections.order : ['固定事实'];
-        return `<tr>
-      <td class="maip-title-cell" data-label="条目名称"><b>${(0, util_1.escapeHtml)(entry.title)}</b><small>UID ${(0, util_1.escapeHtml)(entry.uid)}</small></td>
-      <td data-label="关键词"><textarea class="maip-keyword-editor" data-keywords-uid="${(0, util_1.escapeHtml)(entry.uid)}" rows="5" placeholder="每行一个关键词">${(0, util_1.escapeHtml)(entry.keywords.join('\n'))}</textarea></td>
-      <td data-label="子条目信息"><div class="maip-entry-sections">${sections.map((name) => `<label><span>${(0, util_1.escapeHtml)(name)}</span><textarea data-entry-uid="${(0, util_1.escapeHtml)(entry.uid)}" data-section="${(0, util_1.escapeHtml)(name)}" rows="3" placeholder="没有内容可留空">${(0, util_1.escapeHtml)((entry.sections.values[name] ?? []).join('\n'))}</textarea></label>`).join('')}</div></td>
-      <td data-label="状态与操作"><div class="maip-entry-state"><div class="maip-tags">${entry.focus ? '<span>焦点</span>' : ''}${entry.activation.constant ? '<span>常驻</span>' : ''}${entry.activation.vectorized ? '<span>向量</span>' : '<span>关键词</span>'}</div><button class="maip-btn small primary" data-action="save-entry" data-uid="${(0, util_1.escapeHtml)(entry.uid)}">保存条目</button><button class="maip-btn small" data-action="focus" data-title="${(0, util_1.escapeHtml)(entry.title)}">${entry.focus ? '取消焦点' : '设为焦点'}</button></div></td>
-    </tr>`;
-    }
-    renderKeywords() {
-        return `<section class="maip-keyword-intro maip-card"><div><h3>关键词模板</h3><p>玩家只调整名称、近义词、提取范围和建议小标题。召回参数由插件自动处理。</p></div><div class="maip-actions compact"><button class="maip-btn" data-action="reset-keywords">恢复默认模板</button><button class="maip-btn primary" data-action="add-keyword">＋ 新增关键词</button></div></section>
-      <section class="maip-template-grid">${this.settings.keywordDefinitions.map((definition, index) => this.renderKeywordDefinition(definition, index)).join('')}</section>`;
-    }
-    renderKeywordDefinition(definition, index) {
-        const isDefault = settings_1.DEFAULT_KEYWORDS.some((item) => item.label === definition.label);
-        return `<article class="maip-card maip-template simple">
-      <div class="maip-section-head"><div><h3>${(0, util_1.escapeHtml)(definition.label)}</h3><p>${definition.label === '基础设定' ? '基础设定由插件自动常驻。' : '使用通用召回规则。'}</p></div><div class="maip-template-actions"><label class="maip-switch"><input type="checkbox" data-keyword-prop="enabled" data-index="${index}" ${definition.enabled ? 'checked' : ''}><span></span>启用</label>${!isDefault ? `<button class="maip-link danger" data-action="delete-keyword" data-index="${index}">删除</button>` : ''}</div></div>
-      <div class="maip-player-fields">
-        <label>关键词<input data-keyword-prop="label" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.label)}"></label>
-        <label>近义词<input data-keyword-prop="aliases" data-index="${index}" value="${(0, util_1.escapeHtml)(definition.aliases.join(' / '))}" placeholder="用 / 分隔"></label>
-        <label class="span-2">提取范围<textarea data-keyword-prop="description" data-index="${index}" rows="2">${(0, util_1.escapeHtml)(definition.description)}</textarea></label>
-        <div class="span-2 maip-heading-editor"><span class="maip-field-label">建议小标题</span><div class="maip-heading-chips">${definition.fields.map((field, fieldIndex) => `<button type="button" data-action="remove-keyword-field" data-index="${index}" data-field-index="${fieldIndex}" title="移除">${(0, util_1.escapeHtml)(field.label)}<i>×</i></button>`).join('') || '<em>暂无</em>'}</div><div class="maip-heading-add"><input data-new-keyword-field="${index}" placeholder="新增小标题"><button type="button" class="maip-btn small" data-action="add-keyword-field" data-index="${index}">添加</button></div></div>
-      </div>
-    </article>`;
-    }
-    renderMatching() {
-        const plan = this.status.plan;
-        const raw = String(this.status.rawResult ?? '').trim();
-        const sample = `人物｜莉娅\n【关键词】\n- 人物\n【当前状态】\n- 莉娅位于临海石洞，左臂受伤。\n【近期经历】\n无`;
-        return `<section class="maip-two-col wide-left">
-      <article class="maip-card">
-        <div class="maip-section-head"><div><h3>最近处理结果</h3><p>只显示“处理最新正文”产生的匹配记录；本页不单独调用模型。</p></div></div>
-        <pre class="maip-raw maip-readonly">${(0, util_1.escapeHtml)(raw || sample)}</pre>
-        ${raw ? '' : '<p class="maip-muted">当前还没有运行记录，上方显示格式示例。</p>'}
-        ${this.status.pendingReview ? '<div class="maip-actions"><button class="maip-btn primary" data-action="apply-pending">确认写入世界书</button><button class="maip-btn" data-action="discard-pending">忽略建议</button></div>' : ''}
-      </article>
-      <article class="maip-card">
-        <div class="maip-section-head"><div><h3>匹配与操作</h3><p>${plan ? `${plan.blocks.length} 个标题块 · ${plan.operations.length} 个操作` : '处理最新正文后自动显示'}</p></div></div>
-        ${this.renderOperationList(plan?.operations ?? [], true)}
-      </article>
-    </section>`;
-    }
-    renderOperationList(operations, detailed = false) {
-        if (!operations.length)
-            return '<div class="maip-empty">暂无匹配记录</div>';
-        return `<div class="maip-ops">${operations.map((operation) => `<div class="maip-op ${operation.kind === 'noop' ? 'muted' : ''}">
-      <span class="maip-op-kind">${operationLabel(operation.kind)}</span>
-      <div><b>${(0, util_1.escapeHtml)(operation.title)}${operation.section ? ` · ${(0, util_1.escapeHtml)(operation.section)}` : ''}</b><p>${(0, util_1.escapeHtml)(operation.reason)}</p>${detailed && operation.matchEvidence?.length ? `<small>${operation.matchEvidence.map((item) => `${(0, util_1.escapeHtml)(item.kind)} +${item.score}`).join(' · ')}</small>` : ''}${operation.newValue ? `<pre>${(0, util_1.escapeHtml)((0, util_1.truncate)(operation.newValue, 220))}</pre>` : ''}</div>
-      ${operation.score !== undefined ? `<em>${operation.score}</em>` : ''}
-    </div>`).join('')}</div>`;
-    }
-    renderGraph() {
-        const layout = graphLayout(this.entries.slice(0, 80));
-        if (!layout.nodes.length)
-            return '<div class="maip-card maip-empty">暂无可投影条目</div>';
-        const scale = Math.max(0.55, Math.min(2.4, this.graphScale));
-        return `<section class="maip-card maip-graph-card"><div class="maip-section-head"><div><h3>世界书关系网络</h3><p>焦点或连接最多的条目位于中心；其余节点按关键词分组。边来自【关联条目】。</p></div><div class="maip-graph-controls" aria-label="图谱缩放"><button class="maip-icon" data-action="graph-zoom-out" title="缩小" aria-label="缩小">−</button><span>${Math.round(scale * 100)}%</span><button class="maip-icon" data-action="graph-zoom-in" title="放大" aria-label="放大">＋</button><button class="maip-btn small" data-action="graph-reset">适配视图</button></div></div>
-      <div class="maip-graph-stage"><svg class="maip-graph" viewBox="-520 -340 1040 680" preserveAspectRatio="xMidYMid meet" role="img">
-        <defs><filter id="maip-node-shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity=".14"/></filter></defs>
-        <g class="maip-graph-viewport" transform="scale(${scale})">
-          ${layout.edges.map((edge) => `<path d="M ${edge.from.x} ${edge.from.y} Q ${edge.mid.x} ${edge.mid.y} ${edge.to.x} ${edge.to.y}"/>`).join('')}
-          ${layout.nodes.map((node) => `<g class="maip-graph-node ${node.center ? 'center' : ''} ${node.entry.focus ? 'focus' : ''}" transform="translate(${node.x},${node.y})"><rect x="${node.center ? -78 : -64}" y="-20" width="${node.center ? 156 : 128}" height="40" rx="13"/><text text-anchor="middle" dominant-baseline="middle">${(0, util_1.escapeHtml)((0, util_1.truncate)(node.entry.name, node.center ? 18 : 14))}</text><title>${(0, util_1.escapeHtml)(node.entry.title)}｜${(0, util_1.escapeHtml)(node.entry.keywords.join('、'))}</title></g>`).join('')}
-        </g>
-      </svg></div>
-      <div class="maip-graph-legend">${layout.groups.map((group) => `<span><i></i>${(0, util_1.escapeHtml)(group)}</span>`).join('')}</div>
-    </section>`;
-    }
-    renderAudit() {
-        return `<section class="maip-two-col">
-      <article class="maip-card"><h3>审核规则</h3><p class="maip-muted">审核只修当前正文，不写世界书。</p><textarea data-setting="auditPrompt" rows="14" placeholder="一条硬规则一行">${(0, util_1.escapeHtml)(this.settings.auditPrompt)}</textarea></article>
-      <article class="maip-card"><h3>提取补充要求</h3><p class="maip-muted">核心协议已内置，这里只填项目特有边界。</p><textarea data-setting="extractionPrompt" rows="14">${(0, util_1.escapeHtml)(this.settings.extractionPrompt)}</textarea></article>
-    </section>`;
-    }
-    renderSettings() {
-        const profileAvailable = this.host.connectionProfilesAvailable();
-        return `<section class="maip-settings-grid simple-settings">
-      <article class="maip-card"><h3>处理 AI</h3><p class="maip-muted">不填写 API Key，直接使用 SillyTavern 当前连接或 Connection Profile。</p>
-        <label>调用来源<select data-setting="modelSource"><option value="current" ${this.settings.modelSource === 'current' ? 'selected' : ''}>当前聊天连接</option><option value="profile" ${this.settings.modelSource === 'profile' ? 'selected' : ''}>独立 Connection Profile</option></select></label>
-        ${this.settings.modelSource === 'profile' ? `<label>Connection Profile<select id="maip-profile-select" data-setting="modelProfileId"><option value="${(0, util_1.escapeHtml)(this.settings.modelProfileId)}">${(0, util_1.escapeHtml)(this.host.profileName(this.settings.modelProfileId))}</option></select></label><button class="maip-btn maip-profile-test" data-action="test-profile" ${profileAvailable ? '' : 'disabled'}>测试处理 AI</button>` : '<div class="maip-callout"><b>当前连接</b><span>审核、提取与总结沿用当前聊天已配置的模型连接。</span></div>'}
-        <p class="maip-muted">${(0, util_1.escapeHtml)(this.profileMessage || (profileAvailable ? 'Connection Manager 可用。' : '当前未检测到 Connection Manager。'))}</p>
-      </article>
-      <article class="maip-card"><h3>世界书</h3><p class="maip-muted">通常留空，插件读取当前聊天绑定的世界书。</p>
-        <label>指定世界书（可选）<input data-setting="targetLorebook" value="${(0, util_1.escapeHtml)(this.settings.targetLorebook)}" placeholder="留空＝当前聊天绑定"></label>
-        <div class="maip-actions"><button class="maip-btn" data-action="migration-apply" ${this.migrationBusy ? 'disabled' : ''}>整理世界书格式</button><button class="maip-btn danger-outline" data-action="migration-undo" ${!this.worldbook.canUndoMigration() || this.migrationBusy ? 'disabled' : ''}>撤销转换</button></div>
-        <p class="maip-muted">${(0, util_1.escapeHtml)(this.migrationMessage || '点击一次整理当前世界书格式；保留原 UID，无法可靠拆分的内容进入【旧格式保留】。')}</p>
-      </article>
-      <article class="maip-card"><h3>总结频率</h3><label>小总结间隔（回合）<input type="number" min="2" max="100" data-setting="smallSummaryTurns" value="${this.settings.smallSummaryTurns}"></label><label>大总结间隔（累计小总结）<input type="number" min="2" max="30" data-setting="largeSummaryCount" value="${this.settings.largeSummaryCount}"></label></article>
-      <article class="maip-card maip-auto-card"><h3>插件自动处理</h3><p>Token、超时、相似度、向量、递归、深度、顺序和调度规则均采用默认值，不要求玩家填写。</p></article>
-    </section>`;
-    }
-    renderDiagnostics() {
-        return `<section class="maip-two-col"><article class="maip-card"><h3>宿主能力</h3><pre class="maip-diagnostics">${(0, util_1.escapeHtml)(JSON.stringify(this.host.diagnostics(), null, 2))}</pre></article><article class="maip-card"><h3>运行状态</h3><pre class="maip-diagnostics">${(0, util_1.escapeHtml)(JSON.stringify({ status: this.status, migration: this.migrationPreview && { bookName: this.migrationPreview.bookName, total: this.migrationPreview.total, changed: this.migrationPreview.changed } }, null, 2))}</pre></article></section>`;
-    }
-    async onClick(event) {
-        const target = event.target.closest('[data-action],[data-tab],[data-keyword]');
-        if (!target)
-            return;
-        if (target.dataset.tab) {
-            this.tab = target.dataset.tab;
-            if (target.dataset.keyword !== undefined)
-                this.selectedKeyword = target.dataset.keyword;
-            this.render();
-            return;
-        }
-        if (target.dataset.keyword !== undefined) {
-            this.selectedKeyword = target.dataset.keyword;
-            this.render();
-            return;
-        }
-        const action = target.dataset.action;
-        if (action === 'close') {
-            this.close();
-            return;
-        }
-        if (action === 'refresh') {
-            await this.refreshEntries();
-            return;
-        }
-        if (action === 'graph-zoom-in') {
-            this.graphScale = Math.min(2.4, this.graphScale + 0.2);
-            this.render();
-            return;
-        }
-        if (action === 'graph-zoom-out') {
-            this.graphScale = Math.max(0.55, this.graphScale - 0.2);
-            this.render();
-            return;
-        }
-        if (action === 'graph-reset') {
-            this.graphScale = 1;
-            this.render();
-            return;
-        }
-        if (action === 'process')
-            await this.run(() => this.tasks.processTurn(this.settings, false));
-        if (action === 'extract')
-            await this.run(() => this.tasks.runTask('extraction', this.settings));
-        if (action === 'small')
-            await this.run(() => this.tasks.runTask('smallSummary', this.settings));
-        if (action === 'large')
-            await this.run(() => this.tasks.runTask('largeSummary', this.settings));
-        if (action === 'apply-pending')
-            await this.run(() => this.tasks.applyPending(this.settings));
-        if (action === 'discard-pending') {
-            this.tasks.discardPending();
-            this.render();
-        }
-        if (action === 'focus') {
-            const title = String(target.dataset.title ?? '');
-            const next = this.host.getFocusTitle() === title ? '' : title;
-            await this.host.setFocusTitle(next);
-            await this.worldbook.setFocus(this.settings, next);
-            await this.refreshEntries();
-        }
-        if (action === 'save-entry')
-            await this.saveEntry(String(target.dataset.uid ?? ''));
-        if (action === 'reset-keywords') {
-            const confirmed = globalThis.confirm?.('恢复完整默认关键词和建议小标题？自定义关键词将保留。') ?? true;
-            if (confirmed) {
-                const custom = this.settings.keywordDefinitions.filter((item) => !settings_1.DEFAULT_KEYWORDS.some((fallback) => fallback.label === item.label));
-                this.settings.keywordDefinitions = [...structuredClone(settings_1.DEFAULT_KEYWORDS), ...custom];
-                this.persistSettings();
-            }
-        }
-        if (action === 'add-keyword') {
-            this.settings.keywordDefinitions.push({ key: `custom_${Date.now()}`, label: '新关键词', description: '可稳定识别并影响后续的信息类别。', aliases: [], enabled: true, constant: false, vectorized: true, preventRecursion: false, depth: 4, order: 400, fields: [{ key: 'fixed', label: '固定事实', policy: 'semantic-upsert' }, { key: 'current', label: '当前状态', policy: 'replace-by-anchor' }] });
-            this.persistSettings();
-        }
-        if (action === 'delete-keyword') {
-            this.settings.keywordDefinitions.splice(Number(target.dataset.index), 1);
-            this.persistSettings();
-        }
-        if (action === 'remove-keyword-field') {
-            const definition = this.settings.keywordDefinitions[Number(target.dataset.index)];
-            if (definition)
-                definition.fields.splice(Number(target.dataset.fieldIndex), 1);
-            this.persistSettings();
-        }
-        if (action === 'add-keyword-field') {
-            const index = Number(target.dataset.index);
-            const definition = this.settings.keywordDefinitions[index];
-            const input = this.root?.querySelector(`[data-new-keyword-field="${index}"]`);
-            const label = input?.value.trim() ?? '';
-            if (definition && label && !definition.fields.some((field) => (0, util_1.normalizeFact)(field.label) === (0, util_1.normalizeFact)(label))) {
-                definition.fields.push({ key: `field_${Date.now()}`, label, policy: suggestedPolicy(label) });
-                this.persistSettings();
-            }
-        }
-        if (action === 'migration-apply')
-            await this.applyMigration();
-        if (action === 'migration-undo')
-            await this.undoMigration();
-        if (action === 'test-profile') {
-            try {
-                this.profileMessage = `测试成功：${await this.host.testProfile(this.settings.modelProfileId)}`;
-            }
-            catch (error) {
-                this.profileMessage = error instanceof Error ? error.message : String(error);
-            }
-            this.render();
-        }
-    }
-    async onChange(event) {
-        const target = event.target;
-        if (target.dataset.setting) {
-            const key = target.dataset.setting;
-            const value = target.type === 'checkbox' ? target.checked : target.type === 'number' ? Number(target.value) : target.value;
-            this.settings[key] = value;
-            this.persistSettings(key === 'modelSource');
-        }
-        if (target.dataset.keywordProp) {
-            const definition = this.settings.keywordDefinitions[Number(target.dataset.index)];
-            if (definition) {
-                const prop = target.dataset.keywordProp;
-                const value = target.type === 'checkbox' ? target.checked : target.value;
-                if (prop === 'aliases')
-                    definition.aliases = String(value).split('/').map((item) => item.trim()).filter(Boolean);
-                else
-                    definition[prop] = value;
-                if (definition.label === '基础设定')
-                    definition.constant = true;
-            }
-            this.persistSettings(false);
-        }
-    }
-    onInput(event) {
-        const target = event.target;
-        if (target.dataset.input === 'search') {
-            this.search = target.value;
-            this.render();
-        }
-    }
-    async saveEntry(uid) {
-        const entry = this.entries.find((candidate) => candidate.uid === uid);
-        if (!entry || !this.root)
-            return;
-        const textareas = Array.from(this.root.querySelectorAll(`textarea[data-entry-uid="${cssEscape(uid)}"]`));
-        const sections = structuredClone(entry.sections);
-        for (const textarea of textareas) {
-            const name = textarea.dataset.section ?? '';
-            sections.values[name] = textarea.value.split('\n').map((line) => line.trim()).filter(Boolean);
-            if (!sections.order.includes(name))
-                sections.order.push(name);
-        }
-        const keywords = this.root.querySelector(`textarea[data-keywords-uid="${cssEscape(uid)}"]`)?.value.split('\n').map((line) => line.trim()).filter(Boolean) ?? entry.keywords;
-        await this.worldbook.updateEntry(this.settings, uid, entry.title, (0, parser_1.serializeEntrySections)(sections), keywords);
-        await this.refreshEntries();
-    }
-    async applyMigration() {
-        this.migrationBusy = true;
-        this.migrationMessage = '正在扫描旧世界书…';
-        this.render();
-        try {
-            const preview = await this.worldbook.previewMigration(this.settings);
-            this.migrationPreview = preview;
-            if (!preview.changed) {
-                this.migrationMessage = `无需转换：${preview.total} 条均符合当前格式`;
-                return;
-            }
-            const confirmed = globalThis.confirm?.(`检测到世界书“${preview.bookName}”中有 ${preview.changed} 条旧格式条目。\n\n原 UID 和原生字段会保留；无法识别的正文进入【旧格式保留】。是否转换？`) ?? true;
-            if (!confirmed) {
-                this.migrationMessage = '已取消转换';
-                return;
-            }
-            const result = await this.worldbook.migrateLegacyFormat(this.settings, preview);
-            this.entries = result.entries;
-            this.migrationMessage = `转换完成：已处理 ${result.preview.changed} 条，可在当前页面撤销`;
-        }
-        catch (error) {
-            this.migrationMessage = error instanceof Error ? error.message : String(error);
-        }
-        finally {
-            this.migrationBusy = false;
-            this.render();
-        }
-    }
-    async undoMigration() {
-        const confirmed = globalThis.confirm?.('撤销本次世界书格式转换并恢复页面内备份？') ?? true;
-        if (!confirmed)
-            return;
-        this.migrationBusy = true;
-        this.migrationMessage = '正在恢复转换前世界书…';
-        this.render();
-        try {
-            this.entries = await this.worldbook.undoMigration(this.settings);
-            this.migrationMessage = '已恢复转换前世界书';
-        }
-        catch (error) {
-            this.migrationMessage = error instanceof Error ? error.message : String(error);
-        }
-        finally {
-            this.migrationBusy = false;
-            this.render();
-        }
-    }
-    async run(action) {
-        try {
-            await action();
-        }
-        finally {
-            await this.refreshEntries();
-        }
-    }
-    persistSettings(render = true) {
-        this.settingsStore.save(this.host.context(), this.settings);
-        this.settings = this.settingsStore.load(this.host.context());
-        if (render)
-            this.render();
-    }
-    entryKeywords() {
-        const counts = new Map();
-        for (const entry of this.entries)
-            for (const keyword of entry.keywords)
-                counts.set(keyword, (counts.get(keyword) ?? 0) + 1);
-        return [...counts.keys()].sort((left, right) => (counts.get(right) ?? 0) - (counts.get(left) ?? 0) || left.localeCompare(right));
-    }
-    bookName() { return String(this.settings.targetLorebook || this.host.context().chatMetadata?.world_info || '未绑定'); }
-}
-exports.WorkspaceUi = WorkspaceUi;
-function hasKeyword(entry, keyword) {
-    const expected = (0, util_1.normalizeFact)(keyword);
-    return entry.keywords.some((value) => (0, util_1.normalizeFact)(value) === expected);
-}
-function entrySummary(entry) {
-    const preferred = ['当前状态', '最终结果', '现行规则', '近期经历', '事件进程', '变化记录', '固定事实', '对象定义', '规则定义'];
-    for (const name of preferred) {
-        const lines = entry.sections.values[name];
-        if (lines?.length)
-            return (0, util_1.truncate)(lines[lines.length - 1] ?? lines[0] ?? '', 100);
-    }
-    return (0, util_1.truncate)(entry.sections.order.flatMap((name) => entry.sections.values[name] ?? [])[0] ?? '', 100);
-}
-function graphLayout(entries) {
-    if (!entries.length)
-        return { nodes: [], edges: [], groups: [] };
-    const titleSet = new Set(entries.map((entry) => entry.title));
-    const degree = new Map(entries.map((entry) => [entry.title, entry.references.filter((title) => titleSet.has(title)).length]));
-    const centerEntry = entries.find((entry) => entry.focus) ?? [...entries].sort((a, b) => (degree.get(b.title) ?? 0) - (degree.get(a.title) ?? 0))[0];
-    const groups = new Map();
-    for (const entry of entries) {
-        if (entry.title === centerEntry.title)
-            continue;
-        const group = primaryGroup(entry);
-        const list = groups.get(group) ?? [];
-        list.push(entry);
-        groups.set(group, list);
-    }
-    const groupNames = [...groups.keys()].sort();
-    const nodes = [{ entry: centerEntry, x: 0, y: 0, center: true }];
-    const positions = new Map([[centerEntry.title, { x: 0, y: 0 }]]);
-    groupNames.forEach((group, groupIndex) => {
-        const list = groups.get(group) ?? [];
-        const angle = groupNames.length === 1 ? -Math.PI / 2 : (groupIndex / groupNames.length) * Math.PI * 2 - Math.PI / 2;
-        const groupRadius = groupNames.length <= 5 ? 235 : 265;
-        const gx = Math.cos(angle) * groupRadius;
-        const gy = Math.sin(angle) * groupRadius;
-        list.forEach((entry, index) => {
-            const ring = Math.floor(index / 7);
-            const position = index % 7;
-            const ringCount = Math.min(7, list.length - ring * 7);
-            const localAngle = ringCount === 1 ? 0 : (position / ringCount) * Math.PI * 2;
-            const localRadius = ringCount === 1 ? 0 : 60 + ring * 48;
-            const x = gx + Math.cos(localAngle) * localRadius;
-            const y = gy + Math.sin(localAngle) * localRadius;
-            nodes.push({ entry, x, y, center: false });
-            positions.set(entry.title, { x, y });
-        });
-    });
-    const edges = [];
-    for (const entry of entries) {
-        const from = positions.get(entry.title);
-        if (!from)
-            continue;
-        for (const reference of entry.references) {
-            const to = positions.get(reference);
-            if (!to)
-                continue;
-            edges.push({ from, to, mid: { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 - 18 } });
-        }
-    }
-    return { nodes, edges, groups: groupNames };
-}
-function primaryGroup(entry) {
-    const defaults = settings_1.DEFAULT_KEYWORDS.map((item) => item.label);
-    return entry.keywords.find((keyword) => defaults.includes(keyword)) ?? entry.type ?? entry.keywords[0] ?? '其他';
-}
-function brandSvg() {
-    return '<svg class="maip-brand-svg" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="maip-brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#315fd6"/><stop offset="1" stop-color="#745bd4"/></linearGradient></defs><rect x="2" y="2" width="28" height="28" rx="9" fill="url(#maip-brand-g)"/><path d="M9 11c4-4 10-4 14 0M8 16c5-5 11-5 16 0M10 21c4-3 8-3 12 0" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>';
-}
-function iconSvg(name) {
-    if (name === 'refresh')
-        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>';
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-}
-function phaseLabel(phase) {
-    return { idle: '空闲', reading: '读取', audit: '审核', extracting: '提取', matching: '匹配', worldbook: '写入', summary: '总结', complete: '完成', error: '错误' }[phase] ?? phase;
-}
-function operationLabel(kind) {
-    return { 'create-entry': '创建', noop: '跳过', 'append-line': '追加', 'replace-line': '替换', 'replace-section': '整段替换', 'merge-titles': '关联', 'merge-keywords': '关键词', 'archive-entry': '归档', 'delete-entry': '删除' }[kind] ?? kind;
-}
-function suggestedPolicy(label) {
-    if (/(关联|参与|引用)/u.test(label))
-        return 'merge-titles';
-    if (/(关键词|别名|称号)/u.test(label))
-        return 'merge-keywords';
-    if (/(进程|经历|变化记录|过程)/u.test(label))
-        return 'append-chain';
-    if (/(当前|状态|位置|持有者|数量|结果)/u.test(label))
-        return 'replace-by-anchor';
-    return 'semantic-upsert';
-}
-function settingSwitch(key, label, checked) {
-    return `<label class="maip-switch"><input type="checkbox" data-setting="${key}" ${checked ? 'checked' : ''}><span></span>${label}</label>`;
-}
-function pageDescription(tab) {
-    return { overview: '条目名称、关键词与当前摘要', entries: '直接编辑世界书条目、关键词和子条目信息', keywords: '控制 AI 提取时可参考的关键词与小标题', matching: '查看 AI 建议、匹配依据和写入操作', graph: '查看世界书标题之间的关联网络', audit: '填写项目级审核和提取边界', settings: '选择处理 AI、世界书与总结频率', diagnostics: '检查宿主能力和实时状态' }[tab];
-}
-function cssEscape(value) { return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, '\\$&'); }
-function findSettingsHost() {
-    const selectors = ['#extensions_settings2', '#extensions_settings', '.extensions_settings', '#rm_extensions_block', '#extensionsMenu'];
-    for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element)
-            return element;
-    }
-    return null;
-}
-
 },
 "util":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.clone = clone;
@@ -2870,272 +1787,88 @@ function truncate(value, max) {
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] ?? char));
 }
-
 },
 "worldbook":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorldbookAdapter = void 0;
 exports.parseEntries = parseEntries;
-exports.buildMigrationPreview = buildMigrationPreview;
 const constants_1 = require("./constants");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
 const util_1 = require("./util");
 class WorldbookAdapter {
-    constructor(context) {
+    constructor(context, chatKey) {
         this.context = context;
+        this.chatKey = chatKey ?? (() => '');
         this.apiPromise = null;
-        this.migrationBackup = null;
     }
     async list(settings) {
         const { data } = await this.open(settings, false);
         return parseEntries(data);
     }
-    async apply(settings, plan, sourceMessageKey, contextText, focusTitle) {
+    async apply(settings, plan, sourceMessageKey, contextText, focusTitle, expectedChatKey = '') {
+        this.assertChat(expectedChatKey);
         const opened = await this.open(settings, true);
+        this.assertChat(expectedChatKey);
         const before = parseEntries(opened.data);
         const after = (0, operations_1.applyPlanToEntries)(plan, before);
         const byUid = new Map(before.map((entry) => [entry.uid, entry]));
         const touchedUids = new Set(plan.operations.filter((operation) => operation.kind !== 'noop' && operation.targetUid).map((operation) => String(operation.targetUid)));
         for (const entry of after) {
-            if (entry.raw.__delete)
-                continue;
+            if (entry.raw.__delete) continue;
             if (entry.uid.startsWith('new:')) {
                 const created = this.createEntry(opened.api, opened.name, opened.data);
                 hydrateRaw(created, entry, sourceMessageKey);
                 entry.uid = String(created.uid);
                 entry.raw = created;
-            }
-            else {
-                if (!touchedUids.has(entry.uid))
-                    continue;
+            } else {
+                if (!touchedUids.has(entry.uid)) continue;
                 const original = byUid.get(entry.uid);
-                if (!original)
-                    continue;
+                if (!original) continue;
                 hydrateRaw(original.raw, entry, sourceMessageKey);
             }
         }
-        // Save additions/replacements before deletion so sedimentation never drops the source first.
-        this.applyActivationRules(parseEntries(opened.data), settings, contextText, focusTitle);
+        this.applyProtectedNativeFields(parseEntries(opened.data), settings, focusTitle);
+        this.assertChat(expectedChatKey);
         await this.save(opened);
+        this.assertChat(expectedChatKey);
         const verifiedData = await opened.api.loadWorldInfo(opened.name);
-        if (!verifiedData)
-            throw new Error('世界书写入后回读失败');
+        if (!verifiedData) throw new Error('世界书写入后回读失败');
         opened.data = verifiedData;
-        const deletions = plan.operations.filter((operation) => operation.kind === 'delete-entry');
+        const deletions = plan.operations.filter((operation) => operation.kind === 'delete-entry' && operation.targetUid);
         if (deletions.length) {
             const protectedTitle = (0, util_1.normalizeTitle)(focusTitle);
             for (const operation of deletions) {
-                const target = parseEntries(opened.data).find((entry) => entry.uid === operation.targetUid || entry.normalizedTitle === (0, util_1.normalizeTitle)(operation.title).toLocaleLowerCase());
-                const protectedByKeyword = target?.keywords.some((keyword) => keywordMatchesDefinition(keyword, foundationDefinition(settings)));
-                if (!target || target.locked || target.focus || protectedByKeyword || (0, util_1.normalizeTitle)(target.title) === protectedTitle)
-                    continue;
+                const target = parseEntries(opened.data).find((entry) => entry.uid === String(operation.targetUid));
+                const foundation = target?.keywords.some((keyword) => isFoundation(keyword, settings));
+                if (!target || target.locked || target.focus || foundation || (0, util_1.normalizeTitle)(target.title) === protectedTitle) continue;
                 delete opened.data.entries[String(target.uid)];
             }
+            this.assertChat(expectedChatKey);
             await this.save(opened);
         }
+        this.assertChat(expectedChatKey);
         const finalData = await opened.api.loadWorldInfo(opened.name);
-        if (!finalData)
-            throw new Error('世界书最终回读失败');
+        if (!finalData) throw new Error('世界书最终回读失败');
         return parseEntries(finalData);
     }
-    async updateEntry(settings, uid, title, content, keywords) {
-        const opened = await this.open(settings, true);
-        const raw = opened.data.entries?.[String(uid)];
-        if (!raw)
-            throw new Error(`世界书条目 UID ${uid} 不存在`);
-        const normalizedTitle = (0, util_1.normalizeTitle)(title);
-        if (!(0, util_1.splitTitle)(normalizedTitle))
-            throw new Error('条目标题必须使用“类型｜稳定名称”');
-        raw.comment = normalizedTitle;
-        raw.content = String(content ?? '').trim();
-        const split = (0, util_1.splitTitle)(normalizedTitle);
-        raw.key = (0, util_1.unique)([split.type, split.name, ...keywords]);
-        markManaged(raw, '', normalizedTitle);
-        this.applyActivationRules(parseEntries(opened.data), settings, '', this.focusTitle());
-        await this.save(opened);
-        const verified = await opened.api.loadWorldInfo(opened.name);
-        if (!verified)
-            throw new Error('世界书编辑后回读失败');
-        return parseEntries(verified);
-    }
-    /** Backward-compatible call used by older UI builds. */
-    async updateEntryContent(settings, uid, title, content) {
-        const existing = (await this.list(settings)).find((entry) => entry.uid === uid);
-        return this.updateEntry(settings, uid, title, content, existing?.keywords ?? []);
-    }
-    async setFocus(settings, title) {
-        const opened = await this.open(settings, true);
-        const normalized = (0, util_1.normalizeTitle)(title);
-        for (const entry of parseEntries(opened.data)) {
-            const extension = markManaged(entry.raw, '', entry.title);
-            extension.focus = Boolean(normalized && (0, util_1.normalizeTitle)(entry.title) === normalized);
-        }
-        this.applyActivationRules(parseEntries(opened.data), settings, '', normalized);
-        await this.save(opened);
-        const verified = await opened.api.loadWorldInfo(opened.name);
-        if (!verified)
-            throw new Error('焦点写入后回读失败');
-        return parseEntries(verified);
-    }
-    async previewMigration(settings) {
-        const opened = await this.open(settings, false);
-        return buildMigrationPreview(opened.data, settings, opened.name);
-    }
-    async migrateLegacyFormat(settings, expected) {
-        const opened = await this.open(settings, true);
-        const preview = buildMigrationPreview(opened.data, settings, opened.name);
-        if (expected && (expected.bookName !== preview.bookName || expected.total !== preview.total)) {
-            throw new Error('世界书在预览后已经变化，请重新预览再转换');
-        }
-        if (!preview.changed)
-            return { preview, entries: parseEntries(opened.data) };
-        const backup = (0, util_1.clone)(opened.data.entries ?? {});
-        this.migrationBackup = { bookName: opened.name, entries: backup, createdAt: Date.now() };
-        try {
-            for (const item of preview.items) {
-                if (!item.changed)
-                    continue;
-                const raw = findRawEntry(opened.data, item.uid);
-                if (!raw)
-                    continue;
-                raw.comment = item.newTitle;
-                raw.content = item.newContent;
-                raw.key = (0, util_1.unique)(item.newKeywords);
-                markManaged(raw, '', item.newTitle).migratedFromLegacy = true;
-            }
-            this.applyActivationRules(parseEntries(opened.data), settings, '', this.focusTitle());
-            await this.save(opened);
-            const verified = await opened.api.loadWorldInfo(opened.name);
-            if (!verified)
-                throw new Error('旧世界书格式转换后回读失败');
-            return { preview, entries: parseEntries(verified) };
-        }
-        catch (error) {
-            opened.data.entries = backup;
-            try {
-                await this.save(opened);
-            }
-            catch (rollbackError) {
-                console.error('[MirrorAbyss] migration rollback failed', rollbackError);
-            }
-            throw error;
-        }
-    }
-    canUndoMigration() { return Boolean(this.migrationBackup); }
-    async undoMigration(settings) {
-        const backup = this.migrationBackup;
-        if (!backup)
-            throw new Error('当前页面没有可撤销的世界书格式转换');
-        const opened = await this.open(settings, true);
-        if (opened.name !== backup.bookName)
-            throw new Error('当前绑定世界书与备份不一致');
-        opened.data.entries = (0, util_1.clone)(backup.entries);
-        await this.save(opened);
-        const verified = await opened.api.loadWorldInfo(opened.name);
-        if (!verified)
-            throw new Error('撤销后回读失败');
-        this.migrationBackup = null;
-        return parseEntries(verified);
-    }
-    applyActivationRules(entries, settings, contextText, focusTitle) {
-        const normalizedContext = (0, util_1.normalizeFact)(contextText);
-        const currentScene = entries.find((entry) => entry.keywords.some((keyword) => ['场景', '时空'].some((label) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)(label))) && /(当前场景|进行中|当前)/u.test(entry.content));
+    applyProtectedNativeFields(entries, settings, focusTitle) {
+        const normalizedFocus = (0, util_1.normalizeTitle)(focusTitle);
         for (const entry of entries) {
-            const manualConstant = Boolean(entry.raw.constant && !entry.managed);
-            const profiles = matchingKeywordDefinitions(entry, settings.keywordDefinitions);
-            const profileBase = profiles.reduce((state, profile) => ({
-                constant: state.constant || profile.constant,
-                vectorized: profile.constant ? false : state.vectorized || profile.vectorized,
-                preventRecursion: state.preventRecursion || profile.preventRecursion,
-                depth: Math.min(state.depth, profile.depth),
-                order: Math.max(state.order, profile.order),
-                disabled: state.disabled,
-            }), {
-                constant: false,
-                vectorized: false,
-                preventRecursion: false,
-                depth: 99,
-                order: 0,
-                disabled: Boolean(entry.raw.disable),
-            });
-            const base = {
-                constant: manualConstant || profileBase.constant,
-                vectorized: profiles.length ? (profileBase.constant ? false : profileBase.vectorized) : entry.raw.vectorized !== false,
-                preventRecursion: profiles.length ? profileBase.preventRecursion : Boolean(entry.raw.preventRecursion),
-                depth: profiles.length ? (profileBase.depth === 99 ? 4 : profileBase.depth) : Math.max(0, Number(entry.raw.depth) || 4),
-                order: profiles.length ? (profileBase.order || 400) : (Number(entry.raw.order) || 400),
-                disabled: Boolean(entry.raw.disable),
-            };
-            const mentioned = [entry.name, ...entry.keywords, ...entry.aliases]
-                .map(util_1.normalizeFact)
-                .filter((value) => value.length >= 2)
-                .some((value) => normalizedContext.includes(value));
-            const linkedCurrent = Boolean(currentScene && entry.references.some((reference) => (0, util_1.normalizeTitle)(reference) === (0, util_1.normalizeTitle)(currentScene.title)));
-            const activeEvent = entry.keywords.some((keyword) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)('事件')) && /(开始|进行中|持续中|活跃)/u.test(entry.content) && !/(结束|已结束|归档)/u.test(entry.content);
-            const focus = Boolean(focusTitle && (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(focusTitle)) || entry.focus;
-            const state = { ...base };
-            const matches = {
-                focus,
-                mentioned,
-                'linked-current': linkedCurrent,
-                'active-event': activeEvent,
-                'structured-default': Boolean((0, util_1.splitTitle)(entry.title)),
-            };
-            const orderedRules = [...settings.activationRules].sort((left, right) => {
-                const rank = (value) => value === 'structured-default' ? 0 : value === 'focus' ? 2 : 1;
-                return rank(left.match) - rank(right.match);
-            });
-            for (const rule of orderedRules) {
-                if (!rule.enabled)
-                    continue;
-                let hit = matches[rule.match] ?? false;
-                if (rule.match === 'regex' && rule.pattern) {
-                    try {
-                        hit = new RegExp(rule.pattern, 'iu').test(`${entry.title}\n${entry.keywords.join(' ')}\n${entry.content}`);
-                    }
-                    catch {
-                        hit = false;
-                    }
-                }
-                if (!hit)
-                    continue;
-                // Generic rules may tune native recall, but constant remains controlled by focus,
-                // manual user state, or keyword profiles such as 基础设定.
-                const { constant: _ignored, ...rest } = rule.set;
-                Object.assign(state, rest);
+            const foundation = entry.keywords.some((keyword) => isFoundation(keyword, settings));
+            const focus = Boolean(normalizedFocus && (0, util_1.normalizeTitle)(entry.title) === normalizedFocus) || entry.focus;
+            if (foundation) {
+                entry.raw.constant = true;
+                entry.raw.vectorized = false;
             }
-            if (profiles.some((profile) => profile.constant)) {
-                state.constant = true;
-                state.vectorized = false;
-            }
-            if (focus) {
-                state.constant = true;
-                state.vectorized = false;
-                state.depth = 1;
-                state.order = Math.max(state.order, 920);
-            }
-            entry.raw.constant = state.constant;
-            entry.raw.vectorized = state.vectorized;
-            entry.raw.preventRecursion = state.preventRecursion;
-            entry.raw.depth = state.depth;
-            entry.raw.order = state.order;
-            entry.raw.disable = state.disabled;
+            if (focus) entry.raw.constant = true;
             const extension = markManaged(entry.raw, '', entry.title);
             extension.focus = focus;
-            extension.activationReason = {
-                keywordProfiles: profiles.map((profile) => profile.label),
-                mentioned,
-                linkedCurrent,
-                activeEvent,
-                updatedAt: Date.now(),
-            };
         }
     }
-    focusTitle() {
-        const value = this.context().chatMetadata?.mirrorAbyssInfoPoint;
-        return value && typeof value === 'object' ? String(value.focusTitle ?? '') : '';
+    assertChat(expected) {
+        if (expected && this.chatKey() !== expected) throw new Error('聊天已经切换，拒绝写入世界书');
     }
     async open(settings, create) {
         const api = await this.api();
@@ -3146,52 +1879,41 @@ class WorldbookAdapter {
             const display = (0, util_1.safeId)(context.name2 || context.name1 || 'Chat') || 'Chat';
             name = `MA_${display}`;
         }
-        if (!name)
-            throw new Error('未绑定目标世界书，请在设置中选择或填写名称');
+        if (!name) throw new Error('当前聊天未绑定世界书');
         let data = await api.loadWorldInfo(name);
         if (!data && create) {
-            if (typeof api.createNewWorldInfo !== 'function')
-                throw new Error('SillyTavern 未提供 createNewWorldInfo');
+            if (typeof api.createNewWorldInfo !== 'function') throw new Error('SillyTavern 未提供 createNewWorldInfo');
             await api.createNewWorldInfo(name, { interactive: false });
             data = await api.loadWorldInfo(name);
         }
-        if (!data)
-            throw new Error(`世界书“${name}”不存在`);
+        if (!data) throw new Error(`世界书“${name}”不存在`);
         data.entries ?? (data.entries = {});
         if (context.chatMetadata?.[metadataKey] !== name) {
             context.chatMetadata ?? (context.chatMetadata = {});
             context.chatMetadata[metadataKey] = name;
             context.chatMetadata.world_info = name;
-            if (typeof context.saveMetadata === 'function')
-                await context.saveMetadata();
-            else
-                context.saveMetadataDebounced?.();
+            if (typeof context.saveMetadata === 'function') await context.saveMetadata();
+            else context.saveMetadataDebounced?.();
         }
         return { api, name, data };
     }
     createEntry(api, name, data) {
-        if (typeof api.createWorldInfoEntry !== 'function')
-            throw new Error('SillyTavern 未提供 createWorldInfoEntry');
+        if (typeof api.createWorldInfoEntry !== 'function') throw new Error('SillyTavern 未提供 createWorldInfoEntry');
         const entry = api.createWorldInfoEntry(name, data);
-        if (!entry)
-            throw new Error('世界书条目创建失败');
+        if (!entry) throw new Error('世界书条目创建失败');
         return entry;
     }
     async save(opened) {
-        if (typeof opened.api.saveWorldInfo !== 'function')
-            throw new Error('SillyTavern 未提供 saveWorldInfo');
+        if (typeof opened.api.saveWorldInfo !== 'function') throw new Error('SillyTavern 未提供 saveWorldInfo');
         await opened.api.saveWorldInfo(opened.name, opened.data, true);
         const context = this.context();
         await context.updateWorldInfoList?.();
         await context.reloadWorldInfoEditor?.(opened.name, false);
     }
     api() {
-        if (globalThis.__MIRROR_ABYSS_WORLD_INFO_API__)
-            return Promise.resolve(globalThis.__MIRROR_ABYSS_WORLD_INFO_API__);
-        if (globalThis.__MIRROR_ABYSS_LOAD_WORLD_INFO_API__)
-            return globalThis.__MIRROR_ABYSS_LOAD_WORLD_INFO_API__();
-        if (this.apiPromise)
-            return this.apiPromise;
+        if (globalThis.__MIRROR_ABYSS_WORLD_INFO_API__) return Promise.resolve(globalThis.__MIRROR_ABYSS_WORLD_INFO_API__);
+        if (globalThis.__MIRROR_ABYSS_LOAD_WORLD_INFO_API__) return globalThis.__MIRROR_ABYSS_LOAD_WORLD_INFO_API__();
+        if (this.apiPromise) return this.apiPromise;
         this.apiPromise = Promise.resolve(buildContextWorldInfoApi(this.context()));
         return this.apiPromise;
     }
@@ -3199,308 +1921,44 @@ class WorldbookAdapter {
 exports.WorldbookAdapter = WorldbookAdapter;
 function buildContextWorldInfoApi(context) {
     const headers = () => context.getRequestHeaders?.() ?? { 'Content-Type': 'application/json' };
-    const loadWorldInfo = typeof context.loadWorldInfo === 'function'
-        ? context.loadWorldInfo.bind(context)
-        : async (name) => {
-            const response = await fetch('/api/worldinfo/get', {
-                method: 'POST',
-                headers: headers(),
-                body: JSON.stringify({ name }),
-                cache: 'no-cache',
-            });
-            if (!response.ok)
-                return null;
-            return response.json();
-        };
-    const saveWorldInfo = typeof context.saveWorldInfo === 'function'
-        ? context.saveWorldInfo.bind(context)
-        : async (name, data) => {
-            const response = await fetch('/api/worldinfo/edit', {
-                method: 'POST',
-                headers: headers(),
-                body: JSON.stringify({ name, data }),
-            });
-            if (!response.ok)
-                throw new Error(`世界书保存失败：HTTP ${response.status}`);
-        };
+    const loadWorldInfo = typeof context.loadWorldInfo === 'function' ? context.loadWorldInfo.bind(context) : async (name) => {
+        const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: headers(), body: JSON.stringify({ name }), cache: 'no-cache' });
+        if (!response.ok) return null;
+        return response.json();
+    };
+    const saveWorldInfo = typeof context.saveWorldInfo === 'function' ? context.saveWorldInfo.bind(context) : async (name, data) => {
+        const response = await fetch('/api/worldinfo/edit', { method: 'POST', headers: headers(), body: JSON.stringify({ name, data }) });
+        if (!response.ok) throw new Error(`世界书保存失败：HTTP ${response.status}`);
+    };
     return {
-        METADATA_KEY: 'world_info',
-        loadWorldInfo,
-        saveWorldInfo,
-        updateWorldInfoList: context.updateWorldInfoList?.bind(context),
-        reloadWorldInfoEditor: context.reloadWorldInfoEditor?.bind(context),
-        async createNewWorldInfo(name) {
-            await saveWorldInfo(name, { entries: {} }, true);
-            await context.updateWorldInfoList?.();
-            return true;
-        },
+        METADATA_KEY: 'world_info', loadWorldInfo, saveWorldInfo,
+        async createNewWorldInfo(name) { await saveWorldInfo(name, { entries: {} }, true); await context.updateWorldInfoList?.(); return true; },
         createWorldInfoEntry(_name, data) {
             data.entries ?? (data.entries = {});
-            let uid = 0;
-            while (Object.prototype.hasOwnProperty.call(data.entries, String(uid)))
-                uid += 1;
-            const entry = createDefaultWorldInfoEntry(uid);
-            data.entries[String(uid)] = entry;
-            return entry;
+            let uid = 0; while (Object.prototype.hasOwnProperty.call(data.entries, String(uid))) uid += 1;
+            const entry = createDefaultWorldInfoEntry(uid); data.entries[String(uid)] = entry; return entry;
         },
     };
 }
 function createDefaultWorldInfoEntry(uid) {
-    return {
-        uid,
-        key: [],
-        keysecondary: [],
-        comment: '',
-        content: '',
-        constant: false,
-        vectorized: false,
-        selective: true,
-        selectiveLogic: 0,
-        addMemo: false,
-        order: 100,
-        position: 0,
-        disable: false,
-        ignoreBudget: false,
-        excludeRecursion: false,
-        preventRecursion: false,
-        probability: 100,
-        useProbability: true,
-        depth: 4,
-        outletName: '',
-        group: '',
-        groupOverride: false,
-        groupWeight: 100,
-        scanDepth: null,
-        caseSensitive: null,
-        matchWholeWords: null,
-        useGroupScoring: null,
-        automationId: '',
-        role: 0,
-        sticky: null,
-        cooldown: null,
-        delay: null,
-        delayUntilRecursion: 0,
-        triggers: [],
-    };
+    return { uid, key: [], keysecondary: [], comment: '', content: '', constant: false, vectorized: true, selective: false, selectiveLogic: 0, addMemo: false, order: 400, position: 0, disable: false, ignoreBudget: false, excludeRecursion: false, preventRecursion: false, probability: 100, useProbability: true, depth: 4, outletName: '', group: '', groupOverride: false, groupWeight: 100, scanDepth: null, caseSensitive: null, matchWholeWords: null, useGroupScoring: null, automationId: '', role: 0, sticky: null, cooldown: null, delay: null, delayUntilRecursion: 0, triggers: [] };
 }
 function parseEntries(data) {
     const output = [];
     for (const [mapUid, rawValue] of Object.entries(data?.entries ?? {})) {
-        if (!rawValue || typeof rawValue !== 'object')
-            continue;
+        if (!rawValue || typeof rawValue !== 'object') continue;
         const raw = rawValue;
         const title = (0, util_1.normalizeTitle)(String(raw.comment ?? raw.name ?? raw.title ?? ''));
         const split = (0, util_1.splitTitle)(title);
-        if (!split)
-            continue;
+        if (!split) continue;
         const content = String(raw.content ?? '');
         const sections = (0, parser_1.parseEntrySections)(content);
         const keywords = (0, util_1.normalizeStringArray)(raw.key);
-        const aliases = (0, util_1.unique)([
-            ...(0, parser_1.sectionLines)(content, ['别名', '称号', '其他名称']),
-            ...keywords.filter((key) => (0, util_1.normalizeFact)(key) !== (0, util_1.normalizeFact)(split.name) && (0, util_1.normalizeFact)(key) !== (0, util_1.normalizeFact)(split.type)),
-        ]);
+        const aliases = (0, util_1.unique)([...(0, parser_1.sectionLines)(content, ['别名', '称号', '其他名称']), ...keywords.filter((key) => (0, util_1.normalizeFact)(key) !== (0, util_1.normalizeFact)(split.name) && (0, util_1.normalizeFact)(key) !== (0, util_1.normalizeFact)(split.type))]);
         const extension = readExtension(raw);
-        output.push({
-            uid: String(raw.uid ?? mapUid),
-            title,
-            normalizedTitle: title.toLocaleLowerCase(),
-            type: split.type,
-            name: split.name,
-            content,
-            sections,
-            keywords: (0, util_1.unique)([split.type, split.name, ...keywords]),
-            aliases,
-            references: (0, parser_1.extractReferences)(content),
-            focus: extension.focus === true,
-            locked: extension.locked === true || raw.locked === true,
-            managed: extension.managed === true,
-            activation: {
-                constant: raw.constant === true,
-                vectorized: raw.vectorized !== false,
-                preventRecursion: raw.preventRecursion === true,
-                depth: Math.max(0, Number(raw.depth) || 4),
-                order: Number(raw.order) || 400,
-                disabled: raw.disable === true,
-            },
-            raw,
-        });
+        output.push({ uid: String(raw.uid ?? mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.type, split.name, ...keywords]), aliases, references: (0, parser_1.extractReferences)(content), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, activation: { constant: raw.constant === true, vectorized: raw.vectorized !== false, preventRecursion: raw.preventRecursion === true, depth: Math.max(0, Number(raw.depth) || 4), order: Number(raw.order) || 400, disabled: raw.disable === true }, raw });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
-}
-function buildMigrationPreview(data, settings, bookName = '') {
-    const items = [];
-    const seen = new Set();
-    for (const [mapUid, rawValue] of Object.entries(data?.entries ?? {})) {
-        if (!rawValue || typeof rawValue !== 'object')
-            continue;
-        const raw = rawValue;
-        const uid = String(raw.uid ?? mapUid);
-        const oldTitle = String(raw.comment ?? raw.name ?? raw.title ?? '').trim();
-        const oldKeywords = (0, util_1.normalizeStringArray)(raw.key);
-        const oldContent = String(raw.content ?? '').trim();
-        const inferred = inferLegacyIdentity(oldTitle, oldKeywords, oldContent, settings.keywordDefinitions, uid);
-        let newTitle = inferred.title;
-        const key = (0, util_1.normalizeTitle)(newTitle).toLocaleLowerCase();
-        if (seen.has(key)) {
-            const split = (0, util_1.splitTitle)(newTitle);
-            newTitle = `${split.type}｜${split.name}（${uid}）`;
-            inferred.reasons.push('转换后标题与其他条目重复，保留 UID 后缀以避免误合并');
-        }
-        seen.add((0, util_1.normalizeTitle)(newTitle).toLocaleLowerCase());
-        const newKeywords = (0, util_1.unique)([(0, util_1.splitTitle)(newTitle)?.type ?? '', (0, util_1.splitTitle)(newTitle)?.name ?? '', ...inferred.keywords]);
-        const newContent = convertLegacyContent(oldContent, newKeywords);
-        const changed = (0, util_1.normalizeTitle)(oldTitle) !== newTitle
-            || (0, util_1.normalizeFact)(oldKeywords.join('|')) !== (0, util_1.normalizeFact)(newKeywords.join('|'))
-            || oldContent.trim() !== newContent.trim()
-            || readExtension(raw).version !== constants_1.MANAGED_VERSION;
-        items.push({
-            uid,
-            oldTitle,
-            newTitle,
-            oldKeywords,
-            newKeywords,
-            oldContent,
-            newContent,
-            changed,
-            reason: inferred.reasons.join('；') || (changed ? '补齐新格式元数据' : '已经符合当前格式'),
-        });
-    }
-    return {
-        bookName,
-        total: items.length,
-        changed: items.filter((item) => item.changed).length,
-        alreadyCurrent: items.filter((item) => !item.changed).length,
-        items,
-        createdAt: Date.now(),
-    };
-}
-function inferLegacyIdentity(oldTitle, oldKeywords, content, definitions, uid) {
-    const reasons = [];
-    const normalized = (0, util_1.normalizeTitle)(oldTitle);
-    const existing = (0, util_1.splitTitle)(normalized);
-    if (existing) {
-        const profile = findDefinition(existing.type, definitions);
-        const canonicalType = profile?.label ?? existing.type;
-        if (canonicalType !== existing.type)
-            reasons.push(`旧标题分类“${existing.type}”归一为关键词分类“${canonicalType}”`);
-        return { title: `${canonicalType}｜${existing.name}`, keywords: (0, util_1.unique)([canonicalType, ...oldKeywords]), reasons };
-    }
-    const legacySplit = oldTitle.match(/^\s*([^：:｜|丨—-]{1,16})\s*[：:｜|丨—-]\s*(.+?)\s*$/u);
-    if (legacySplit) {
-        const profile = findDefinition(String(legacySplit[1]), definitions);
-        if (profile) {
-            reasons.push('旧标题中的分类前缀转换为结构化标题');
-            return { title: `${profile.label}｜${legacySplit[2].trim()}`, keywords: (0, util_1.unique)([profile.label, ...oldKeywords]), reasons };
-        }
-    }
-    const profile = inferDefinition(oldTitle, oldKeywords, content, definitions);
-    const label = profile?.label ?? '自定义对象';
-    const name = normalizeLegacyName(oldTitle) || `旧条目_${uid}`;
-    reasons.push(profile ? `根据旧关键词或正文识别为“${label}”` : '无法可靠识别旧分类，归入“自定义对象”');
-    return { title: `${label}｜${name}`, keywords: (0, util_1.unique)([label, ...oldKeywords]), reasons };
-}
-function inferDefinition(title, keywords, content, definitions) {
-    for (const keyword of keywords) {
-        const found = findDefinition(keyword, definitions);
-        if (found)
-            return found;
-    }
-    const haystack = `${title}\n${keywords.join(' ')}\n${content}`;
-    const heuristic = [
-        [/(世界设定|基础设定|规则|法则|物种规律|魔法体系|制度基础)/u, '基础设定'],
-        [/(事件|任务进程|追逐|冲突|战争|仪式)/u, '事件'],
-        [/(角色|人物|NPC|姓名|身份|性别|年龄)/iu, '人物'],
-        [/(地点|地区|区域|城市|村庄|洞穴|房间)/u, '地点'],
-        [/(物品|道具|装备|武器|持有者)/u, '物品'],
-        [/(场景|当前场景)/u, '场景'],
-        [/(时间|时空|日期|季节)/u, '时空'],
-        [/(组织|阵营|机构|政权)/u, '组织'],
-        [/(技能|能力|特性)/u, '能力'],
-        [/(关系|好感|敌对|盟友)/u, '关系'],
-        [/(契约|誓言|承诺|债务)/u, '契约'],
-        [/(疾病|诅咒|伤势)/u, '状态影响'],
-    ];
-    for (const [pattern, label] of heuristic)
-        if (pattern.test(haystack))
-            return findDefinition(label, definitions);
-    return null;
-}
-function convertLegacyContent(content, keywords) {
-    const text = String(content ?? '').replace(/\r/g, '').trim();
-    if (!text)
-        return '';
-    const parsed = (0, parser_1.parseEntrySections)(text);
-    if (parsed.order.length)
-        return (0, parser_1.serializeEntrySections)(parsed);
-    const sections = {};
-    let current = '';
-    const knownSection = /^(对象定义|身份定义|固定事实|现行事实|当前状态|关系状态|能力状态|事件状态|事件进程|当前结果|近期经历|历史事实|关联条目|关键词|别名|规则定义|现行规则|持续影响|限制条件|持有关系|资源变化|旧格式保留)$/u;
-    for (const sourceLine of text.split('\n')) {
-        const line = sourceLine.trim();
-        if (!line)
-            continue;
-        const heading = line.match(/^#{0,6}\s*([^：:]{1,20})\s*[：:]\s*(.*)$/u);
-        if (heading && knownSection.test(heading[1].trim())) {
-            current = (0, parser_1.canonicalSectionName)(heading[1].trim());
-            sections[current] ?? (sections[current] = []);
-            if (heading[2].trim())
-                sections[current].push((0, parser_1.normalizePointLine)(heading[2]));
-            continue;
-        }
-        if (!current)
-            current = defaultLegacySection(keywords);
-        sections[current] ?? (sections[current] = []);
-        sections[current].push((0, parser_1.normalizePointLine)(line));
-    }
-    const order = Object.keys(sections);
-    return (0, parser_1.serializeEntrySections)({ order, values: sections });
-}
-function defaultLegacySection(keywords) {
-    if (hasKeyword(keywords, '基础设定'))
-        return '固定事实';
-    if (hasKeyword(keywords, '事件'))
-        return '事件进程';
-    if (hasKeyword(keywords, '场景') || hasKeyword(keywords, '时空'))
-        return '当前状态';
-    if (hasKeyword(keywords, '关系'))
-        return '当前状态';
-    return '旧格式保留';
-}
-function normalizeLegacyName(value) {
-    return String(value ?? '')
-        .replace(/^\s*(角色|人物|事件|场景|物品|地点|地区|基础设定|设定|规则|组织|能力|关系)\s*[：:｜|丨—-]\s*/u, '')
-        .replace(/[【】<>]/gu, '')
-        .replace(/\s+/gu, ' ')
-        .trim()
-        .slice(0, 80);
-}
-function matchingKeywordDefinitions(entry, definitions) {
-    return definitions.filter((definition) => definition.enabled && [entry.type, ...entry.keywords].some((keyword) => keywordMatchesDefinition(keyword, definition)));
-}
-function findDefinition(value, definitions) {
-    return definitions.find((definition) => keywordMatchesDefinition(value, definition)) ?? null;
-}
-function keywordMatchesDefinition(value, definition) {
-    if (!definition)
-        return false;
-    const normalized = (0, util_1.normalizeFact)(value);
-    return [definition.label, ...definition.aliases].some((candidate) => (0, util_1.normalizeFact)(candidate) === normalized);
-}
-function foundationDefinition(settings) {
-    return settings.keywordDefinitions.find((definition) => definition.label === '基础设定') ?? null;
-}
-function hasKeyword(keywords, expected) {
-    return keywords.some((keyword) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)(expected));
-}
-function findRawEntry(data, uid) {
-    if (data.entries?.[String(uid)])
-        return data.entries[String(uid)];
-    for (const raw of Object.values(data.entries ?? {})) {
-        if (raw && typeof raw === 'object' && String(raw.uid ?? '') === uid)
-            return raw;
-    }
-    return null;
 }
 function hydrateRaw(raw, entry, sourceMessageKey) {
     raw.comment = entry.title;
@@ -3525,22 +1983,17 @@ function markManaged(raw, sourceMessageKey, title) {
     const extensions = (raw.extensions ?? (raw.extensions = {}));
     const current = extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
     const extension = current && typeof current === 'object' ? current : {};
-    extensions[constants_1.WORLD_INFO_EXTENSION_KEY] = {
-        ...extension,
-        managed: true,
-        version: constants_1.MANAGED_VERSION,
-        title,
-        ...(sourceMessageKey ? { sourceMessageKey } : {}),
-        updatedAt: Date.now(),
-    };
+    extensions[constants_1.WORLD_INFO_EXTENSION_KEY] = { ...extension, managed: true, version: constants_1.MANAGED_VERSION, title, ...(sourceMessageKey ? { sourceMessageKey } : {}), updatedAt: Date.now() };
     return extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
 }
-function readExtension(raw) {
-    const value = raw.extensions?.[constants_1.WORLD_INFO_EXTENSION_KEY];
-    return value && typeof value === 'object' ? value : {};
+function readExtension(raw) { const value = raw.extensions?.[constants_1.WORLD_INFO_EXTENSION_KEY]; return value && typeof value === 'object' ? value : {}; }
+function isFoundation(keyword, settings) {
+    const normalized = (0, util_1.normalizeFact)(keyword);
+    const definition = settings.keywordDefinitions.find((item) => item.label === '基础设定');
+    return definition ? [definition.label, ...definition.aliases].some((item) => (0, util_1.normalizeFact)(item) === normalized) : normalized === (0, util_1.normalizeFact)('基础设定');
 }
-
-}};
+}
+};
 var MA_CACHE=Object.create(null);
 function maResolve(from,spec){if(!spec.startsWith('.'))return spec;var base=from.split('/');base.pop();for(var part of spec.split('/')){if(!part||part==='.')continue;if(part==='..')base.pop();else base.push(part)}return base.join('/')}
 function maRequire(id){if(MA_CACHE[id])return MA_CACHE[id].exports;var factory=MA_MODULES[id];if(!factory)throw new Error('内部模块不存在：'+id);var module={exports:{}};MA_CACHE[id]=module;factory(module,module.exports,function(spec){return maRequire(maResolve(id,spec))});return module.exports}
