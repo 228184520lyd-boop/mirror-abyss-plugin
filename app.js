@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.2 — audit/extraction UI mapping build. */
+/** Mirror Abyss 2.0.0-lite.ui.5 — audit/extraction UI mapping build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -18,7 +18,8 @@ class MirrorAbyssApplication {
         this.worldbook = new worldbook_1.WorldbookAdapter(() => this.host.context(), () => this.host.chatKey());
         this.auditRunner = new audit_1.AuditRunner(this.host, () => this.settings());
         this.memoryRunner = new memory_1.MemoryRunner(this.host, this.worldbook, () => this.settings(), (progress) => {
-            this.controlPanel?.setTaskProgress?.('extract', progress?.state || 'running', progress?.detail || '', progress || {});
+            const active = this.activeSnapshots.get(safeChatKey(this.host));
+            this.controlPanel?.setTaskProgress?.('extract', progress?.state || 'running', progress?.detail || '', { ...(progress || {}), messageIndex: progress?.messageIndex ?? active?.messageIndex ?? null });
         });
         this.migrationService = new migration_1.MigrationService(this.host, this.worldbook, () => this.settings());
         this.controlPanel = new control_panel_1.ControlPanel({
@@ -39,8 +40,8 @@ class MirrorAbyssApplication {
         });
         this.cleanup = [];
         this.runningByChat = new Map();
+        this.taskQueues = new Map();
         this.pendingTaskKeys = new Set();
-        this.pendingAutomaticByChat = new Map();
         this.activeSnapshots = new Map();
         this.activeTokens = new Map();
         this.started = false;
@@ -60,8 +61,8 @@ class MirrorAbyssApplication {
         this.cancelAll('插件已停止');
         this.cleanup.splice(0).forEach((remove) => { try { remove(); } catch (error) { console.warn('[MirrorAbyss] listener cleanup failed', error); } });
         this.runningByChat.clear();
+        this.taskQueues.clear();
         this.pendingTaskKeys.clear();
-        this.pendingAutomaticByChat.clear();
         this.activeSnapshots.clear();
         this.host.clearInternalMessageMutations();
         this.controlPanel.unmount();
@@ -79,18 +80,22 @@ class MirrorAbyssApplication {
     cancel() {
         const key = this.host.chatKey();
         const token = this.activeTokens.get(key);
-        if (!token) {
-            this.controlPanel.setStatus('当前聊天没有正在执行的任务');
+        const queued = this.rejectQueuedTasks('用户已取消排队任务', key);
+        if (!token && !queued) {
+            this.controlPanel.setStatus('当前聊天没有正在执行或排队的任务');
             return false;
         }
-        token.cancelled = true;
-        token.reason = '用户已取消任务';
-        this.controlPanel.setStatus('已请求取消当前任务');
+        if (token) {
+            token.cancelled = true;
+            token.reason = '用户已取消任务';
+        }
+        this.controlPanel.setStatus(`已取消${token ? '当前任务' : ''}${token && queued ? '及' : ''}${queued ? `${queued}个排队任务` : ''}`);
         return true;
     }
     status() {
         const key = safeChatKey(this.host);
-        return { audit: this.auditRunner.currentStatus(key), memory: this.memoryRunner.currentStatus(key), active: this.activeTokens.has(key) };
+        const queue = this.taskQueues.get(key);
+        return { audit: this.auditRunner.currentStatus(key), memory: this.memoryRunner.currentStatus(key), active: this.activeTokens.has(key), queued: queue?.items?.length ?? 0 };
     }
     async loadWorkspace() {
         const settings = this.settings();
@@ -131,74 +136,67 @@ class MirrorAbyssApplication {
         catch (error) { console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用`, error); }
     }
     async onMessage(index) {
-        if (!this.started)
-            return;
+        if (!this.started) return;
         if (!Number.isInteger(index)) {
             try { index = this.host.latestTurn().messageIndex; }
             catch { return; }
         }
         if (!this.host.isAssistantIndex(index)) return;
         const settings = this.settings();
-        if (!settings.enabled || !settings.autoProcess) return;
+        if (!settings.enabled) return;
+        const autoAudit = settings.autoAudit === true && settings.auditEnabled !== false;
+        const autoExtraction = settings.autoExtraction === true && settings.extractionEnabled !== false;
+        if (!autoAudit && !autoExtraction) return;
+        const automaticTaskType = autoAudit && autoExtraction ? 'full' : autoAudit ? 'audit' : 'extraction';
         const chatKey = this.host.chatKey();
-        if (this.runningByChat.has(chatKey)) {
+        try {
             const turn = this.host.latestTurn(index);
             const active = this.activeSnapshots.get(chatKey);
-            if (active && active.messageKey === turn.messageKey && active.contentHash === turn.contentHash)
-                return;
-            this.host.bumpScopeRevision(chatKey);
-            const token = this.activeTokens.get(chatKey);
-            if (token) {
-                token.cancelled = true;
-                token.reason = '检测到更新的 AI 正文，旧任务已取消';
+            if (active && (active.messageKey !== turn.messageKey || active.contentHash !== turn.contentHash)) {
+                const token = this.activeTokens.get(chatKey);
+                if (token) {
+                    token.cancelled = true;
+                    token.reason = '检测到更新的 AI 正文，旧任务已取消';
+                }
             }
-            this.pendingAutomaticByChat.set(chatKey, { index: turn.messageIndex, messageKey: turn.messageKey, contentHash: turn.contentHash });
-            this.controlPanel.setStatus('检测到更新正文；当前任务停止后将处理最新一条');
-            return;
+            void this.enqueueTask(automaticTaskType, turn.messageIndex, true).catch((error) => {
+                const message = (0, util_1.errorText)(error);
+                if (!/同一任务已经在执行或等待/u.test(message)) console.error('[MirrorAbyss] automatic core flow failed', error);
+            });
         }
-        this.host.bumpScopeRevision(chatKey);
-        try { await this.enqueueTask('full', index, true); }
-        catch (error) { console.error('[MirrorAbyss] automatic core flow failed', error); }
+        catch (error) { console.error('[MirrorAbyss] automatic task enqueue failed', error); }
     }
     onScopeChanged(eventName, eventValue) {
         if (this.host.consumeInternalScopeEvent(eventName, eventValue))
             return;
         this.cancelAll(`SillyTavern 事件 ${eventName} 使旧任务失效`);
-        this.pendingAutomaticByChat.clear();
         try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
         this.controlPanel.resetTaskStates?.('聊天或正文范围已变化');
         this.controlPanel.setStatus('聊天或正文范围已变化，旧任务已取消');
     }
     enqueueTask(taskType, index, automatic) {
-        const settings = this.settings();
-        const token = { cancelled: false, reason: '' };
         const maintenance = taskType === 'migration' || taskType === 'undoMigration';
-        const snapshot = maintenance
-            ? this.host.captureMaintenanceSnapshot(settings, taskType, token)
-            : this.host.captureSnapshot(settings, index, taskType, token);
-        const taskKey = `${snapshot.chatKey}|${taskType}|${snapshot.messageKey}|${snapshot.contentHash}`;
+        const chatKey = this.host.chatKey();
+        const turn = maintenance
+            ? { messageIndex: -1, messageKey: `maintenance:${taskType}`, contentHash: '' }
+            : this.host.latestTurn(index);
+        const taskKey = `${chatKey}|${taskType}|${turn.messageKey}|${turn.contentHash}`;
         if (this.pendingTaskKeys.has(taskKey)) return Promise.reject(new Error('同一任务已经在执行或等待，不重复排队'));
-        if (this.runningByChat.has(snapshot.chatKey)) return Promise.reject(new Error('当前聊天已有核心任务正在执行'));
+        let resolveTask;
+        let rejectTask;
+        const promise = new Promise((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
+        const queue = this.taskQueues.get(chatKey) ?? { running: false, items: [] };
+        const item = { taskType, index: turn.messageIndex, automatic: Boolean(automatic), maintenance, taskKey, promise, resolve: resolveTask, reject: rejectTask, queuedAt: Date.now() };
+        queue.items.push(item);
+        this.taskQueues.set(chatKey, queue);
         this.pendingTaskKeys.add(taskKey);
-        this.activeTokens.set(snapshot.chatKey, token);
-        this.activeSnapshots.set(snapshot.chatKey, snapshot);
-        const task = Promise.resolve().then(async () => {
-            try {
-                if (!this.started || token.cancelled)
-                    return [];
-                return await this.runTask(taskType, snapshot, automatic, settings);
-            }
-            finally {
-                if (this.activeTokens.get(snapshot.chatKey) === token) this.activeTokens.delete(snapshot.chatKey);
-                if (this.activeSnapshots.get(snapshot.chatKey) === snapshot) this.activeSnapshots.delete(snapshot.chatKey);
-            }
-        });
-        this.runningByChat.set(snapshot.chatKey, task);
-        return task.finally(() => {
-            this.pendingTaskKeys.delete(taskKey);
-            if (this.runningByChat.get(snapshot.chatKey) === task) this.runningByChat.delete(snapshot.chatKey);
-            this.schedulePendingAutomatic(snapshot.chatKey);
-        });
+        const position = queue.items.length + (queue.running ? 1 : 0);
+        const queuedDetail = `${automatic ? '自动' : ''}${taskType === 'audit' ? '审核' : taskType === 'extraction' ? '提取' : taskType === 'full' ? '审核与提取' : '任务'}已进入异步队列（第${position}项）`;
+        if (taskType === 'audit' || taskType === 'full') this.controlPanel.setTaskProgress?.('audit', 'queued', queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
+        if (taskType === 'extraction' || taskType === 'full') this.controlPanel.setTaskProgress?.('extract', 'queued', queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
+        this.controlPanel.setStatus(queuedDetail);
+        globalThis.setTimeout(() => { void this.drainTaskQueue(chatKey); }, 0);
+        return promise;
     }
     async runTask(taskType, snapshot, automatic, settings) {
         if (!this.started || snapshot.token?.cancelled)
@@ -211,26 +209,38 @@ class MirrorAbyssApplication {
                 if (!automatic) notify('info', '镜渊：该正文已经完整处理');
                 return [];
             }
-            if (taskType === 'audit' || taskType === 'full') this.controlPanel.setTaskProgress?.('audit', 'running', automatic ? '自动审核处理中' : '审核处理中');
-            if (taskType === 'extraction' || taskType === 'full') this.controlPanel.setTaskProgress?.('extract', 'running', automatic ? '等待审核后自动提取' : '提取、解析与语义合并处理中');
+            if (taskType === 'audit' || taskType === 'full') this.controlPanel.setTaskProgress?.('audit', 'running', automatic ? '自动审核处理中' : '审核处理中', { messageIndex: snapshot.messageIndex });
+            if (taskType === 'extraction' || taskType === 'full') this.controlPanel.setTaskProgress?.('extract', 'running', automatic ? '等待审核后自动提取' : '提取、解析与语义合并处理中', { messageIndex: snapshot.messageIndex });
             this.controlPanel.setStatus(taskType === 'audit' ? '审核处理中…' : taskType === 'extraction' ? '提取、解析与语义合并处理中…' : taskType === 'full' ? '自动处理中…' : '任务处理中…');
             let activeSnapshot = snapshot;
             let result;
-            if (taskType === 'audit') result = await this.auditRunner.process(settings, activeSnapshot);
+            if (taskType === 'audit') {
+                activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
+                result = activeSnapshot;
+            }
             else if (taskType === 'extraction') result = await this.memoryRunner.runTask('extraction', settings, activeSnapshot);
             else if (taskType === 'smallSummary') result = await this.memoryRunner.runTask('smallSummary', settings, activeSnapshot);
             else if (taskType === 'largeSummary') result = await this.memoryRunner.runTask('largeSummary', settings, activeSnapshot);
             else if (taskType === 'migration') result = await this.migrationService.migrate(settings, activeSnapshot);
             else if (taskType === 'undoMigration') result = await this.migrationService.undo(settings, activeSnapshot);
             else {
-                if (settings.auditEnabled && settings.auditPrompt.trim()) activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
+                if (settings.auditEnabled && settings.auditPrompt.trim()) {
+                    activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
+                    this.controlPanel.setTaskProgress?.('audit', 'success', activeSnapshot.auditDetail || (activeSnapshot.auditReplaced ? '自动审核完成，正文已替换' : '自动审核通过，正文未修改'));
+                }
                 this.host.assertSnapshot(activeSnapshot, this.settings());
-                result = await this.memoryRunner.processTurn(settings, activeSnapshot);
+                result = settings.extractionEnabled === false
+                    ? []
+                    : await this.memoryRunner.runTask('extraction', settings, activeSnapshot);
             }
             this.host.assertSnapshot(activeSnapshot, this.settings());
-            if (taskType === 'audit') this.controlPanel.setTaskProgress?.('audit', 'success', '审核完成');
-            if (taskType === 'full') this.controlPanel.setTaskProgress?.('audit', 'success', '自动审核完成');
-            this.controlPanel.setStatus(taskType === 'audit' ? '审核完成' : taskType === 'extraction' ? '提取与世界书合并完成' : '本轮处理完成');
+            if (taskType === 'audit') {
+                const detail = activeSnapshot.auditDetail || (activeSnapshot.auditReplaced ? '审核未通过，正文已替换' : '审核通过，正文未修改');
+                this.controlPanel.setTaskProgress?.('audit', 'success', detail);
+                this.controlPanel.setStatus(detail);
+            }
+            else if (taskType === 'extraction') this.controlPanel.setStatus('提取与世界书合并完成');
+            else this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核未执行'}；自动提取完成`);
             notify('success', '镜渊：本轮处理完成');
             return result;
         } catch (error) {
@@ -280,39 +290,65 @@ class MirrorAbyssApplication {
         return task.finally(() => {
             if (this.runningByChat.get(snapshot.chatKey) === task)
                 this.runningByChat.delete(snapshot.chatKey);
-            this.schedulePendingAutomatic(snapshot.chatKey);
         });
     }
-    schedulePendingAutomatic(chatKey) {
-        if (!this.started) {
-            this.pendingAutomaticByChat.delete(chatKey);
-            return;
+    async drainTaskQueue(chatKey) {
+        const queue = this.taskQueues.get(chatKey);
+        if (!queue || queue.running) return;
+        queue.running = true;
+        try {
+            while (this.started && queue.items.length) {
+                const item = queue.items.shift();
+                const token = { cancelled: false, reason: '' };
+                let snapshot = null;
+                try {
+                    if (this.host.chatKey() !== chatKey) throw new Error('聊天已经切换，排队任务取消');
+                    const settings = this.settings();
+                    snapshot = item.maintenance
+                        ? this.host.captureMaintenanceSnapshot(settings, item.taskType, token)
+                        : this.host.captureSnapshot(settings, item.index, item.taskType, token);
+                    this.activeTokens.set(chatKey, token);
+                    this.activeSnapshots.set(chatKey, snapshot);
+                    this.runningByChat.set(chatKey, item.promise);
+                    const result = await this.runTask(item.taskType, snapshot, item.automatic, settings);
+                    item.resolve(result);
+                }
+                catch (error) {
+                    item.reject(error);
+                }
+                finally {
+                    this.pendingTaskKeys.delete(item.taskKey);
+                    if (this.activeTokens.get(chatKey) === token) this.activeTokens.delete(chatKey);
+                    if (snapshot && this.activeSnapshots.get(chatKey) === snapshot) this.activeSnapshots.delete(chatKey);
+                    if (this.runningByChat.get(chatKey) === item.promise) this.runningByChat.delete(chatKey);
+                }
+            }
         }
-        const pending = this.pendingAutomaticByChat.get(chatKey);
-        if (!pending || this.runningByChat.has(chatKey))
-            return;
-        this.pendingAutomaticByChat.delete(chatKey);
-        globalThis.queueMicrotask?.(() => {
-            try {
-                if (!this.started)
-                    return;
-                if (this.host.chatKey() !== chatKey)
-                    return;
-                const turn = this.host.latestTurn(pending.index);
-                if (turn.messageKey !== pending.messageKey || turn.contentHash !== pending.contentHash)
-                    return;
-                void this.onMessage(pending.index);
+        finally {
+            queue.running = false;
+            if (!queue.items.length) this.taskQueues.delete(chatKey);
+            else globalThis.setTimeout(() => { void this.drainTaskQueue(chatKey); }, 0);
+        }
+    }
+    rejectQueuedTasks(reason, onlyChatKey = '') {
+        let count = 0;
+        for (const [chatKey, queue] of this.taskQueues.entries()) {
+            if (onlyChatKey && chatKey !== onlyChatKey) continue;
+            for (const item of queue.items.splice(0)) {
+                this.pendingTaskKeys.delete(item.taskKey);
+                item.reject(new Error(reason));
+                count += 1;
             }
-            catch (error) {
-                console.error('[MirrorAbyss] pending automatic task discarded', error);
-            }
-        });
+            if (!queue.running) this.taskQueues.delete(chatKey);
+        }
+        return count;
     }
     cancelAll(reason) {
         for (const token of this.activeTokens.values()) {
             token.cancelled = true;
             token.reason = reason;
         }
+        this.rejectQueuedTasks(reason);
     }
 }
 exports.MirrorAbyssApplication = MirrorAbyssApplication;
@@ -377,8 +413,10 @@ class AuditRunner {
                 finalSnapshot = await this.host.replaceAssistantText(snapshot, revisedText, this.getSettings());
                 this.setStatus(snapshot.chatKey, 'revision', '完整修正版正文已落地');
             }
-            this.setStatus(snapshot.chatKey, 'complete', result.decision === 'pass' ? '审核通过' : '审核完成，正文已修正');
-            return finalSnapshot;
+            const auditReplaced = result.decision === 'revision';
+            const auditDetail = auditReplaced ? '审核未通过，正文已替换' : '审核通过，正文未修改';
+            this.setStatus(snapshot.chatKey, 'complete', auditDetail);
+            return { ...finalSnapshot, auditDecision: result.decision, auditReplaced, auditDetail };
         } catch (error) {
             this.setStatus(snapshot.chatKey, 'error', '审核停止', (0, util_1.errorText)(error));
             throw error;
@@ -422,7 +460,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.2';
+exports.VERSION = '2.0.0-lite.ui.5';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -450,12 +488,11 @@ class ControlPanel {
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
-        this.busy = false;
-        this.busyKind = '';
+        this.pendingActions = new Set();
         this.lastOutcome = null;
         this.taskStates = {
-            audit: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [] },
-            extract: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [] },
+            audit: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], messageIndex: null, queuePosition: 0 },
+            extract: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], messageIndex: null, queuePosition: 0 },
         };
         this.statusText = '就绪';
         this.statusError = false;
@@ -477,18 +514,22 @@ class ControlPanel {
             return;
         }
         this.unmount(false);
+        document.getElementById('mirror-abyss-loader-control')?.remove();
+        document.getElementById('mirror-abyss-startup-control')?.remove();
+        document.getElementById(ROOT_ID)?.remove();
         this.installStyle();
         const root = document.createElement('div');
         root.id = ROOT_ID;
         root.className = 'ma-lite-top-entry';
         const launcher = document.createElement('button');
         launcher.type = 'button';
-        launcher.className = 'ma-lite-launcher interactable';
+        launcher.className = 'ma-lite-launcher';
         launcher.setAttribute('aria-label', '打开镜渊面板');
         launcher.setAttribute('aria-expanded', 'false');
         launcher.title = 'Mirror Abyss｜审核与提取';
         launcher.innerHTML = '<i class="fa-solid fa-circle-nodes" aria-hidden="true"></i><span>镜渊</span>';
-        launcher.addEventListener('click', () => this.togglePanel());
+        launcher.addEventListener('pointerdown', (event) => event.stopPropagation());
+        launcher.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); this.togglePanel(); });
         root.append(launcher);
         root.classList.add('ma-lite-edge-entry');
         document.body.append(root);
@@ -522,17 +563,16 @@ class ControlPanel {
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
-        this.busy = false;
-        this.busyKind = '';
+        this.pendingActions = new Set();
     }
     installStyle() {
         document.getElementById(STYLE_ID)?.remove();
         const style = document.createElement('style');
         style.id = STYLE_ID;
         style.textContent = `
-#${ROOT_ID}.ma-lite-top-entry{display:flex;align-items:center;justify-content:center;z-index:2147483638}
-#${ROOT_ID}.ma-lite-edge-entry{position:fixed;top:max(calc(var(--topBarBlockSize,44px) + 6px),calc(env(safe-area-inset-top) + 48px));right:max(4px,env(safe-area-inset-right));}
-.ma-lite-launcher{box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:0;width:34px;height:34px;min-width:34px;min-height:34px;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.22));border-radius:8px;background:var(--black50a,rgba(20,20,24,.82));color:var(--SmartThemeBodyColor,#fff);cursor:pointer;touch-action:manipulation}
+#${ROOT_ID}.ma-lite-top-entry{display:flex;align-items:center;justify-content:center;z-index:2147483638;pointer-events:auto!important}
+#${ROOT_ID}.ma-lite-edge-entry{position:fixed;top:max(calc(var(--topBarBlockSize,44px) + 8px),calc(env(safe-area-inset-top) + 52px));right:max(2px,env(safe-area-inset-right));}
+.ma-lite-launcher{box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:0;width:34px;height:34px;min-width:34px;min-height:34px;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.22));border-radius:8px;background:var(--black50a,rgba(20,20,24,.82));color:var(--SmartThemeBodyColor,#fff);cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}
 .ma-lite-launcher span{display:none}
 #${PANEL_ID}{position:fixed;top:max(58px,calc(48px + env(safe-area-inset-top)));right:max(10px,env(safe-area-inset-right));z-index:2147483639;box-sizing:border-box;width:min(360px,calc(100vw - 20px));max-height:calc(100dvh - 78px);overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#17171c) 94%,transparent);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #${PANEL_ID}[hidden]{display:none!important}
@@ -543,10 +583,10 @@ class ControlPanel {
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
-.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
+.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .${INDICATOR_CLASS}{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
-.${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
+.${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
 `;
         document.head.append(style);
     }
@@ -573,9 +613,10 @@ class ControlPanel {
         switches.className = 'ma-lite-switches';
         switches.append(
             this.makeSwitch('enabled', '总开关', '关闭后两个功能都不能执行。'),
-            this.makeSwitch('autoProcess', '自动审核与提取', 'AI 正文生成完成后，自动依次执行审核和提取。'),
-            this.makeSwitch('auditEnabled', '审核开关', '审核不通过时生成完整修正版并替换正文。'),
-            this.makeSwitch('extractionEnabled', '提取开关', '固定格式解析、语义合并后写入当前聊天世界书。'),
+            this.makeSwitch('autoAudit', '自动审核', 'AI 正文生成完成后自动审核；不通过时自动替换正文。'),
+            this.makeSwitch('autoExtraction', '自动提取', 'AI 正文生成完成后自动提取并合并到当前聊天世界书。'),
+            this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核是否可用。'),
+            this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取是否可用。'),
         );
         const actions = document.createElement('div');
         actions.className = 'ma-lite-actions';
@@ -633,7 +674,7 @@ class ControlPanel {
         return button;
     }
     async runAction(kind) {
-        if (this.busy) return;
+        if (this.pendingActions.has(kind)) return;
         const settings = this.getSettings();
         if (!settings.enabled) {
             this.setStatus('总开关已关闭', true);
@@ -652,15 +693,14 @@ class ControlPanel {
             this.setStatus(`${kind === 'audit' ? '审核' : '提取'}功能未连接`, true);
             return;
         }
-        this.busy = true;
-        this.busyKind = kind;
+        this.pendingActions.add(kind);
         this.lastOutcome = null;
         this.syncDisabledState();
-        this.setTaskProgress(kind, 'running', kind === 'audit' ? '审核处理中' : '提取、解析与语义合并处理中', { titles: [], created: [], updated: [], skipped: [] });
+        this.setTaskProgress(kind, 'queued', kind === 'audit' ? '审核已进入异步队列' : '提取已进入异步队列', { titles: [], created: [], updated: [], skipped: [] });
         try {
             await action();
             this.lastOutcome = { kind, state: 'success' };
-            if (this.taskStates[kind]?.state === 'running') this.setTaskProgress(kind, 'success', kind === 'audit' ? '审核完成' : '提取完成');
+            if (['queued', 'running'].includes(this.taskStates[kind]?.state)) this.setTaskProgress(kind, 'success', kind === 'audit' ? '审核完成' : '提取完成');
         }
         catch (error) {
             this.lastOutcome = { kind, state: 'error' };
@@ -668,8 +708,7 @@ class ControlPanel {
             this.setStatus(`${kind === 'audit' ? '审核' : '提取'}失败：${(0, util_1.errorText)(error)}`, true);
         }
         finally {
-            this.busy = false;
-            this.busyKind = '';
+            this.pendingActions.delete(kind);
             this.syncDisabledState();
             this.scheduleIndicatorRefresh();
         }
@@ -681,7 +720,8 @@ class ControlPanel {
     refresh() {
         const settings = this.getSettings();
         if (this.inputs.enabled) this.inputs.enabled.checked = settings.enabled !== false;
-        if (this.inputs.autoProcess) this.inputs.autoProcess.checked = settings.autoProcess === true;
+        if (this.inputs.autoAudit) this.inputs.autoAudit.checked = settings.autoAudit === true;
+        if (this.inputs.autoExtraction) this.inputs.autoExtraction.checked = settings.autoExtraction === true;
         if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
         if (this.inputs.extractionEnabled) this.inputs.extractionEnabled.checked = settings.extractionEnabled !== false;
         this.syncDisabledState();
@@ -694,9 +734,9 @@ class ControlPanel {
     syncDisabledState() {
         const settings = this.getSettings();
         const master = settings.enabled !== false;
-        if (this.buttons.audit) this.buttons.audit.disabled = this.busy || !master || settings.auditEnabled === false;
-        if (this.buttons.extract) this.buttons.extract.disabled = this.busy || !master || settings.extractionEnabled === false;
-        for (const input of Object.values(this.inputs)) input.disabled = this.busy;
+        if (this.buttons.audit) this.buttons.audit.disabled = this.pendingActions.has('audit') || !master || settings.auditEnabled === false;
+        if (this.buttons.extract) this.buttons.extract.disabled = this.pendingActions.has('extract') || !master || settings.extractionEnabled === false;
+        for (const input of Object.values(this.inputs)) input.disabled = false;
     }
     setStatus(text, isError = false) {
         this.statusText = String(text || '');
@@ -718,6 +758,8 @@ class ControlPanel {
             created: Array.isArray(meta.created) ? [...meta.created] : previous.created,
             updated: Array.isArray(meta.updated) ? [...meta.updated] : previous.updated,
             skipped: Array.isArray(meta.skipped) ? [...meta.skipped] : previous.skipped,
+            messageIndex: Number.isInteger(meta.messageIndex) ? meta.messageIndex : previous.messageIndex,
+            queuePosition: Number.isFinite(meta.queuePosition) ? Number(meta.queuePosition) : previous.queuePosition,
         };
         if (detail) {
             this.statusText = `${kind === 'audit' ? '审核' : '提取'}：${detail}`;
@@ -730,8 +772,8 @@ class ControlPanel {
         this.scheduleIndicatorRefresh();
     }
     resetTaskStates(detail = '待命') {
-        this.taskStates.audit = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [] };
-        this.taskStates.extract = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [] };
+        this.taskStates.audit = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], messageIndex: null, queuePosition: 0 };
+        this.taskStates.extract = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], messageIndex: null, queuePosition: 0 };
         this.lastOutcome = null;
         this.scheduleIndicatorRefresh();
     }
@@ -806,22 +848,39 @@ class ControlPanel {
         const extract = this.taskStates.extract;
         const auditText = audit.detail || this.stateLabel(auditState);
         const extractText = extract.detail || this.stateLabel(extractState);
-        const titleText = (extract.titles || []).slice(0, 4).join('、');
-        const extraCount = Math.max(0, (extract.titles || []).length - 4);
-        const detail = titleText ? `${titleText}${extraCount ? ` 等${extract.titles.length}条` : ''}` : '';
-        indicator.title = [this.statusText, detail].filter(Boolean).join('\n') || '镜渊状态';
+        const compactList = (label, values) => {
+            const list = Array.isArray(values) ? values : [];
+            if (!list.length) return '';
+            const shown = list.slice(0, 4).join('、');
+            return `${label}：${shown}${list.length > 4 ? ` 等${list.length}条` : ''}`;
+        };
+        const resultParts = [
+            compactList('新建', extract.created),
+            compactList('更新', extract.updated),
+            compactList('跳过', extract.skipped),
+        ].filter(Boolean);
+        const titleDetail = compactList(extract.state === 'running' ? '处理中' : '条目', extract.titles);
+        const detail = resultParts.length ? resultParts.join('；') : titleDetail;
+        const fullDetail = [
+            compactList('提取条目', extract.titles),
+            compactList('新建', extract.created),
+            compactList('更新', extract.updated),
+            compactList('跳过', extract.skipped),
+        ].filter(Boolean).join('\n');
+        indicator.title = [this.statusText, fullDetail].filter(Boolean).join('\n') || '镜渊状态';
         indicator.innerHTML = `<span class="ma-ind-label">镜渊</span><span class="ma-ind-part"><i class="ma-ind-dot" data-state="${auditState}"></i>审核：${escapeHtml(auditText)}</span><span class="ma-ind-part"><i class="ma-ind-dot" data-state="${extractState}"></i>提取：${escapeHtml(extractText)}</span>${detail ? `<span class="ma-ind-detail">${escapeHtml(detail)}</span>` : ''}`;
     }
     indicatorState(kind, enabled) {
         if (!enabled) return 'disabled';
         const state = this.taskStates[kind]?.state;
+        if (state === 'queued') return 'queued';
         if (state === 'running') return 'running';
         if (state === 'success') return 'success';
         if (state === 'error') return 'error';
         return 'ready';
     }
     stateLabel(state) {
-        return ({ disabled: '关闭', running: '处理中', success: '完成', error: '失败', ready: '待命' })[state] || '待命';
+        return ({ disabled: '关闭', queued: '排队', running: '处理中', success: '完成', error: '失败', ready: '待命' })[state] || '待命';
     }
 }
 function escapeHtml(value) {
@@ -971,6 +1030,7 @@ class HostAdapter {
             requestTimeoutMs: settings.requestTimeoutMs,
             targetLorebook: settings.targetLorebook,
             auditEnabled: settings.auditEnabled,
+            extractionEnabled: settings.extractionEnabled,
             auditPrompt: settings.auditPrompt,
             revisionPrompt: settings.revisionPrompt,
             extractionPrompt: settings.extractionPrompt,
@@ -1224,30 +1284,42 @@ class HostAdapter {
     }
     async replaceAssistantText(snapshot, text, currentSettings) {
         this.assertSnapshot(snapshot, currentSettings);
-        const chat = this.context().chat ?? [];
+        const context = this.context();
+        const chat = context.chat ?? [];
         const message = chat[snapshot.messageIndex];
         if (!isAssistant(message)) throw new Error('待修正正文已经不存在');
         if (readMessageKey(message) !== snapshot.messageKey || (0, util_1.hashText)(String(message.mes ?? '')) !== snapshot.contentHash) throw new Error('正文已经变化，拒绝覆盖旧版本');
+        const nextText = String(text ?? '').trim();
         const originalText = String(message.mes ?? '');
+        if (!nextText) throw new Error('修正版正文为空，拒绝替换');
+        if ((0, util_1.normalizeFact)(nextText) === (0, util_1.normalizeFact)(originalText)) throw new Error('修正版与原正文没有实质变化，未执行替换');
         const swipeIndex = Array.isArray(message.swipes) && Number.isInteger(message.swipe_id) && Number(message.swipe_id) >= 0
             ? Number(message.swipe_id)
             : -1;
         const originalSwipe = swipeIndex >= 0 ? message.swipes[swipeIndex] : undefined;
+        const extra = message.extra && typeof message.extra === 'object' ? message.extra : null;
+        const hadDisplayText = Boolean(extra && Object.prototype.hasOwnProperty.call(extra, 'display_text'));
+        const originalDisplayText = hadDisplayText ? extra.display_text : undefined;
         try {
-            message.mes = text;
-            if (swipeIndex >= 0) message.swipes[swipeIndex] = text;
+            message.mes = nextText;
+            if (swipeIndex >= 0) message.swipes[swipeIndex] = nextText;
+            if (extra && hadDisplayText) delete extra.display_text;
             this.updateMessageBlock(snapshot.messageIndex, message);
             await this.saveChat();
+            const persisted = this.context().chat?.[snapshot.messageIndex];
+            if (!persisted || String(persisted.mes ?? '') !== nextText) throw new Error('聊天数据校验未通过');
+            this.updateMessageBlock(snapshot.messageIndex, persisted);
         }
         catch (error) {
             message.mes = originalText;
             if (swipeIndex >= 0) message.swipes[swipeIndex] = originalSwipe;
+            if (extra && hadDisplayText) extra.display_text = originalDisplayText;
             try { this.updateMessageBlock(snapshot.messageIndex, message); }
             catch { }
             throw new Error(`修正版正文保存失败，已恢复原正文：${(0, util_1.errorText)(error)}`);
         }
         const turn = this.latestTurn(snapshot.messageIndex);
-        return this.refreshSnapshot(snapshot, turn, currentSettings);
+        return { ...this.refreshSnapshot(snapshot, turn, currentSettings), auditReplacementVerified: true };
     }
     cursor() {
         const root = this.chatNamespace();
@@ -1367,7 +1439,9 @@ class HostAdapter {
         expected.timer = globalThis.setTimeout(() => this.clearInternalMessageMutation(index, expected), 2000);
         expected.timer?.unref?.();
         this.internalMessageMutations.set(index, expected);
-        this.context().updateMessageBlock?.(index, message);
+        const update = this.context().updateMessageBlock;
+        if (typeof update !== 'function') throw new Error('SillyTavern 未提供正文刷新接口 updateMessageBlock');
+        update(index, message);
     }
     clearInternalMessageMutation(index, expected) {
         if (this.internalMessageMutations.get(index) !== expected)
@@ -1496,7 +1570,7 @@ const constants_1 = require("./constants");
 let application = null;
 let extensionEnabled = true;
 let initializing = false;
-const STARTUP_ROOT_ID = 'mirror-abyss-core-control';
+const STARTUP_ROOT_ID = 'mirror-abyss-startup-control';
 let startupDomListener = null;
 function mountStartupIndicator() {
     if (typeof document === 'undefined') return;
@@ -1513,12 +1587,14 @@ function mountStartupIndicator() {
     if (document.getElementById(STARTUP_ROOT_ID)) return;
     const root = document.createElement('div');
     root.id = STARTUP_ROOT_ID;
-    root.style.cssText = 'position:fixed!important;inset-inline-end:max(10px,env(safe-area-inset-right,0px))!important;bottom:max(84px,calc(68px + env(safe-area-inset-bottom,0px)))!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;transform:none!important;';
+    root.style.cssText = 'position:fixed!important;right:max(2px,env(safe-area-inset-right))!important;top:max(calc(var(--topBarBlockSize,44px) + 8px),calc(env(safe-area-inset-top) + 52px))!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;transform:none!important;pointer-events:auto!important;';
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = '镜渊…';
     button.title = '镜渊正在等待 SillyTavern 完成初始化';
-    button.style.cssText = 'display:block!important;min-width:56px;min-height:44px;padding:0 12px;border:1px solid rgba(255,255,255,.24);border-radius:10px;background:rgba(20,20,24,.96);color:#fff;font-weight:700;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.42);touch-action:manipulation;';
+    button.style.cssText = 'display:block!important;min-width:56px;min-height:34px;padding:0 10px;border:1px solid rgba(255,255,255,.24);border-radius:9px;background:rgba(20,20,24,.96);color:#fff;font-weight:700;font-size:13px;box-shadow:0 3px 12px rgba(0,0,0,.42);touch-action:manipulation;pointer-events:auto!important;cursor:pointer!important;';
+    button.addEventListener('pointerdown', (event) => event.stopPropagation());
+    button.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); void initialize(); });
     root.append(button);
     document.body.append(root);
 }
@@ -1529,6 +1605,14 @@ function removeStartupIndicator() {
     document.getElementById(STARTUP_ROOT_ID)?.remove();
 }
 function contextReady() { try { return Boolean(globalThis.SillyTavern?.getContext?.()); } catch { return false; } }
+async function waitForContext(timeoutMs = 20000) {
+    const startedAt = Date.now();
+    while (!contextReady()) {
+        if (!extensionEnabled) throw new Error('镜渊插件当前已禁用');
+        if (Date.now() - startedAt >= timeoutMs) throw new Error('等待 SillyTavern 上下文超时，点击镜渊图标可重试');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+}
 async function requireApplication() {
     if (!extensionEnabled) throw new Error('镜渊插件当前已禁用');
     await initialize();
@@ -1553,13 +1637,26 @@ function exposeApi() {
     };
 }
 async function initialize() {
-    if (!extensionEnabled || initializing || application?.isStarted()) return;
-    mountStartupIndicator();
-    if (!contextReady()) throw new Error('SillyTavern 上下文尚未就绪');
+    if (!extensionEnabled || application?.isStarted()) return;
+    if (initializing) {
+        while (initializing) await new Promise((resolve) => setTimeout(resolve, 50));
+        if (application?.isStarted()) return;
+    }
     initializing = true;
+    mountStartupIndicator();
     exposeApi();
-    try { application ?? (application = new application_1.MirrorAbyssApplication()); application.start(); console.info(`[MirrorAbyss] ${constants_1.VERSION} ready`); }
-    catch (error) { console.error('[MirrorAbyss] initialization failed', error); globalThis.toastr?.error?.(`镜渊启动失败：${error instanceof Error ? error.message : String(error)}`); }
+    try {
+        await waitForContext();
+        application ?? (application = new application_1.MirrorAbyssApplication());
+        application.start();
+        removeStartupIndicator();
+        console.info(`[MirrorAbyss] ${constants_1.VERSION} ready`);
+    }
+    catch (error) {
+        console.error('[MirrorAbyss] initialization failed', error);
+        globalThis.toastr?.error?.(`镜渊启动失败：${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+    }
     finally { initializing = false; }
 }
 function shutdown(removeApi = true) {
@@ -1777,6 +1874,8 @@ class MemoryRunner {
             const cursor = this.host.cursor();
             await this.host.saveCursor({
                 ...cursor,
+                lastProcessedMessageKey: snapshot.messageKey,
+                lastProcessedHash: snapshot.contentHash,
                 turnsSinceSmall: cursor.turnsSinceSmall + 1,
             }, snapshot, this.getSettings());
             this.setStatus(snapshot.chatKey, 'complete', '提取完成');
@@ -2596,6 +2695,7 @@ function parseStrictExtractionBlocks(raw) {
     if (residue) throw new Error('提取格式错误：条目标记外存在多余文本');
     const output = [];
     const titles = new Set();
+    const globalFacts = new Map();
     for (const match of matches) {
         const type = String(match[1] ?? '').trim();
         const name = String(match[2] ?? '').trim();
@@ -2606,7 +2706,7 @@ function parseStrictExtractionBlocks(raw) {
         if (titles.has(normalizedTitle)) throw new Error(`提取格式错误：重复条目 ${title}`);
         titles.add(normalizedTitle);
         const keywords = String(match[3] ?? '').replace(/\r/g, '').split('\n').flatMap((line) => stripListMarker(line).split(/[,，]/u)).map((item) => item.trim()).filter(Boolean);
-        if (!keywords.length) throw new Error(`提取格式错误：${title}缺少关键词`);
+        if (keywords.length < 2 || keywords.length > 6) throw new Error(`提取格式错误：${title}必须包含2至6个关键词`);
         if ((0, util_1.normalizeFact)(keywords[0]) !== (0, util_1.normalizeFact)(name)) throw new Error(`提取格式错误：${title}的第一个关键词必须是稳定名称`);
         const content = String(match[4] ?? '').trim();
         if (!content || /<<<(?:ENTRY|KEYWORDS|CONTENT|END_ENTRY)/u.test(content)) throw new Error(`提取格式错误：${title}正文为空或含非法标记`);
@@ -2624,8 +2724,16 @@ function parseStrictExtractionBlocks(raw) {
             for (const line of section.lines) {
                 if (/完整事实句|稳定名称|甲与乙/u.test(line)) throw new Error(`提取格式错误：${title}仍包含模板占位词`);
                 const normalized = (0, util_1.normalizeFact)(line);
-                if (seenFacts.has(normalized)) throw new Error(`提取格式错误：${title}内部存在重复事实：${line}`);
+                const core = (0, util_1.normalizeFact)(line.replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, ''));
+                if (seenFacts.has(normalized) || (core && seenFacts.has(`core:${core}`))) throw new Error(`提取格式错误：${title}内部存在重复事实：${line}`);
                 seenFacts.add(normalized);
+                if (core) seenFacts.add(`core:${core}`);
+                for (const key of [normalized, core ? `core:${core}` : '']) {
+                    if (!key) continue;
+                    const owner = globalFacts.get(key);
+                    if (owner && owner !== title) throw new Error(`提取格式错误：事实在多个条目中重复：${owner} 与 ${title}`);
+                    globalFacts.set(key, title);
+                }
             }
         }
         output.push(block);
@@ -2891,8 +2999,11 @@ function extractionPrompts(settings, playerText, assistantText, relevant) {
 3. 物品条目只记录物品性质、持有、位置、完整性和用途变化。
 4. 事件的发生过程只写入事件条目；其他条目只通过【关联条目】引用事件，不得复述事件经过。
 5. 关系变化只写入关系条目；人物条目不得重复展开关系事实。
-6. 同一事实不得出现在两个条目中，也不得换词复述。
-7. 当前状态与变化过程不得重复。没有信息的栏目保留并填写“- 无”。“无”表示本轮没有新信息，不表示删除旧事实。
+6. 同一事实只能有一个归属条目，不得出现在两个条目中，也不得换词复述。
+7. 人物的位置、身体和个人事务只写人物条目；地点条目不得重复列出人物位置，除非地点本身发生占用、封锁或控制权变化。
+8. 事件经过、结果和阶段只写事件条目；人物、地点、物品只用【关联条目】引用该事件。
+9. 关系性质、双方立场和关系变化只写关系条目；人物条目只引用关系标题。
+10. 当前状态与变化过程不得重复。没有信息的栏目保留并填写“- 无”。“无”表示本轮没有新信息，不表示删除旧事实。
 
 【唯一允许的外层语法】
 每个条目必须严格使用：
@@ -2982,7 +3093,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant) {
 - 无
 
 每条事实必须是完整句：明确主体＋状态或变化＋对象、结果或必要条件。禁止碎片词。当前状态必须有明确状态槽。
-输出前检查：标记完整、类型合法、名称明确、关键词第一项等于稳定名称、小标题顺序完全正确、正文不含标题和关键词、没有跨条目重复。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
+输出前检查：标记完整、类型合法、名称明确、每条2至6个关键词且第一项等于稳定名称、小标题顺序完全正确、正文不含标题和关键词、每个事实只归属一个条目、没有跨条目重复。任何一条事实可能同时适用于两个对象时，只写入叙事责任最直接的对象，并在另一个对象中只填写【关联条目】。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
     const user = `玩家本轮输入：
 ${playerText || '（空）'}
 
@@ -3336,7 +3447,8 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     smallSummaryProfileId: '',
     largeSummaryProfileId: '',
     migrationProfileId: '',
-    autoProcess: false,
+    autoAudit: false,
+    autoExtraction: false,
     auditEnabled: true,
     extractionEnabled: true,
     targetLorebook: '',
@@ -3391,7 +3503,8 @@ function parseSettings(value) {
         smallSummaryProfileId: profileValue(candidate, 'smallSummaryProfileId'),
         largeSummaryProfileId: profileValue(candidate, 'largeSummaryProfileId'),
         migrationProfileId: profileValue(candidate, 'migrationProfileId'),
-        autoProcess: candidate.autoProcess === true,
+        autoAudit: candidate.autoAudit === true || (candidate.autoProcess === true && candidate.auditEnabled !== false),
+        autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
         auditEnabled: candidate.auditEnabled !== false,
         extractionEnabled: candidate.extractionEnabled !== false,
         targetLorebook: String(candidate.targetLorebook ?? ''),

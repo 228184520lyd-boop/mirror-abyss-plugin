@@ -1,28 +1,104 @@
-/** Mirror Abyss mobile-safe loader 2.0.0-lite.ui.2. */
-const ROOT_ID='mirror-abyss-core-control';
+/** Mirror Abyss mobile-safe loader 2.0.0-lite.ui.5. */
+const LOADER_ID = 'mirror-abyss-loader-control';
+const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
-function mount(text='镜渊…',title='镜渊正在加载'){
-  if(typeof document==='undefined')return;
-  if(!document.body){document.addEventListener('DOMContentLoaded',()=>mount(text,title),{once:true});return;}
-  if(document.getElementById(ROOT_ID))return;
-  const root=document.createElement('div');root.id=ROOT_ID;
-  root.style.cssText='position:fixed!important;right:4px!important;top:max(calc(var(--topBarBlockSize,44px) + 6px),calc(env(safe-area-inset-top) + 48px))!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;';
-  const button=document.createElement('button');button.type='button';button.textContent=text;button.title=title;
-  button.style.cssText='display:block!important;width:34px;height:34px;min-width:34px;min-height:34px;padding:0;border:1px solid rgba(255,255,255,.24);border-radius:9px;background:#141418;color:#fff;font-weight:700;font-size:0;box-shadow:0 3px 12px rgba(0,0,0,.42);';button.innerHTML='<i class="fa-solid fa-circle-nodes" style="font-size:14px"></i>'; ;
-  root.append(button);document.body.append(root);
+let activating;
+
+function mount(title = '点击启动镜渊') {
+  if (typeof document === 'undefined') return;
+  if (!document.body) {
+    document.addEventListener('DOMContentLoaded', () => mount(title), { once: true });
+    return;
+  }
+  if (document.getElementById(APP_ROOT_ID) || document.getElementById(LOADER_ID)) return;
+  const root = document.createElement('div');
+  root.id = LOADER_ID;
+  root.style.cssText = 'position:fixed!important;right:max(2px,env(safe-area-inset-right))!important;top:max(calc(var(--topBarBlockSize,44px) + 8px),calc(env(safe-area-inset-top) + 52px))!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.title = title;
+  button.setAttribute('aria-label', '启动并打开镜渊');
+  button.style.cssText = 'display:flex!important;align-items:center!important;justify-content:center!important;width:34px!important;height:34px!important;min-width:34px!important;min-height:34px!important;padding:0!important;border:1px solid rgba(255,255,255,.24)!important;border-radius:9px!important;background:#141418!important;color:#fff!important;box-shadow:0 3px 12px rgba(0,0,0,.42)!important;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation!important;user-select:none!important;-webkit-tap-highlight-color:transparent!important;';
+  button.innerHTML = '<i class="fa-solid fa-circle-nodes" style="font-size:14px;pointer-events:none"></i>';
+  button.addEventListener('pointerdown', event => event.stopPropagation());
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    void activate(true);
+  });
+  root.append(button);
+  document.body.append(root);
 }
-function showError(error){
-  const root=document.getElementById(ROOT_ID);const button=root&&root.querySelector?root.querySelector('button'):root?.children?.[0];
-  const message=error instanceof Error?error.message:String(error);
-  if(button){button.textContent='镜渊错误';button.title=message;button.onclick=()=>globalThis.alert?.('镜渊主体加载失败：'+message);}
-  console.error('[MirrorAbyss] application bundle failed to load',error);
+
+function showError(error) {
+  const button = document.getElementById(LOADER_ID)?.querySelector?.('button');
+  const message = error instanceof Error ? error.message : String(error);
+  if (button) {
+    button.disabled = false;
+    button.title = `镜渊启动失败，点击重试：${message}`;
+    button.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="font-size:14px;pointer-events:none"></i>';
+  }
+  console.error('[MirrorAbyss] application bundle failed to load', error);
 }
-function load(){mount();return loaded??=(import('./app.js').catch(error=>{showError(error);throw error;}));}
-export async function onActivate(){return (await load()).onActivate();}
-export async function onEnable(){return (await load()).onEnable();}
-export async function onDisable(){if(loaded)return (await loaded).onDisable();document.getElementById(ROOT_ID)?.remove();}
-export async function onDelete(){if(loaded)return (await loaded).onDelete();document.getElementById(ROOT_ID)?.remove();}
-export async function onInstall(){return (await load()).onInstall();}
-export async function onUpdate(){return (await load()).onUpdate();}
-export async function onClean(){if(loaded)return (await loaded).onClean();}
+
+function load() {
+  mount();
+  return loaded ??= import('./app.js').catch(error => {
+    loaded = undefined;
+    showError(error);
+    throw error;
+  });
+}
+
+async function openRealPanel() {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const launcher = document.querySelector(`#${APP_ROOT_ID} .ma-lite-launcher`);
+    if (launcher) {
+      launcher.click();
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+}
+
+async function activate(fromClick = false) {
+  if (activating) return activating;
+  const button = document.getElementById(LOADER_ID)?.querySelector?.('button');
+  if (button) {
+    button.disabled = true;
+    button.title = '镜渊正在启动';
+  }
+  activating = (async () => {
+    try {
+      const mod = await load();
+      await mod.onActivate();
+      document.getElementById(LOADER_ID)?.remove();
+      if (fromClick) await openRealPanel();
+    } catch (error) {
+      showError(error);
+      throw error;
+    } finally {
+      activating = undefined;
+      const current = document.getElementById(LOADER_ID)?.querySelector?.('button');
+      if (current) current.disabled = false;
+    }
+  })();
+  return activating;
+}
+
+export async function onActivate() { return activate(false); }
+export async function onEnable() { return activate(false); }
+export async function onDisable() {
+  document.getElementById(LOADER_ID)?.remove();
+  if (loaded) return (await loaded).onDisable();
+  document.getElementById(APP_ROOT_ID)?.remove();
+}
+export async function onDelete() {
+  document.getElementById(LOADER_ID)?.remove();
+  if (loaded) return (await loaded).onDelete();
+  document.getElementById(APP_ROOT_ID)?.remove();
+}
+export async function onInstall() { return (await load()).onInstall(); }
+export async function onUpdate() { return (await load()).onUpdate(); }
+export async function onClean() { if (loaded) return (await loaded).onClean(); }
 mount();
