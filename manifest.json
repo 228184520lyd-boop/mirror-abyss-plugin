@@ -1,10 +1,10 @@
 {
-  "display_name": "Mirror Abyss / 镜渊 Core",
+  "display_name": "Mirror Abyss / 镜渊",
   "loading_order": 10,
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-core.3",
+  "version": "2.0.0-frozen.1",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "固定基准 V1.0：四脚本、单次审核、唯一提交器、世界书唯一长期事实源"
+  "description": "开放世界叙事审核与长期记忆插件｜冻结架构 V1.0"
 }
