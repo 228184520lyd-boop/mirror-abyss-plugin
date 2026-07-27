@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe loader 2.0.0-lite.ui.1. */
+/** Mirror Abyss mobile-safe loader 2.0.0-lite.ui.2. */
 const ROOT_ID='mirror-abyss-core-control';
 let loaded;
 function mount(text='镜渊…',title='镜渊正在加载'){
@@ -6,9 +6,9 @@ function mount(text='镜渊…',title='镜渊正在加载'){
   if(!document.body){document.addEventListener('DOMContentLoaded',()=>mount(text,title),{once:true});return;}
   if(document.getElementById(ROOT_ID))return;
   const root=document.createElement('div');root.id=ROOT_ID;
-  root.style.cssText='position:fixed!important;right:64px!important;top:8px!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;';
+  root.style.cssText='position:fixed!important;right:4px!important;top:max(calc(var(--topBarBlockSize,44px) + 6px),calc(env(safe-area-inset-top) + 48px))!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;';
   const button=document.createElement('button');button.type='button';button.textContent=text;button.title=title;
-  button.style.cssText='display:block!important;min-width:56px;min-height:44px;padding:0 12px;border:1px solid rgba(255,255,255,.24);border-radius:10px;background:#141418;color:#fff;font-weight:700;font-size:14px;';
+  button.style.cssText='display:block!important;width:34px;height:34px;min-width:34px;min-height:34px;padding:0;border:1px solid rgba(255,255,255,.24);border-radius:9px;background:#141418;color:#fff;font-weight:700;font-size:0;box-shadow:0 3px 12px rgba(0,0,0,.42);';button.innerHTML='<i class="fa-solid fa-circle-nodes" style="font-size:14px"></i>'; ;
   root.append(button);document.body.append(root);
 }
 function showError(error){

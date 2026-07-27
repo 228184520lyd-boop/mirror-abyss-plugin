@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.1",
+  "version": "2.0.0-lite.ui.2",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "审核与固定格式世界书提取轻量版｜右上角双按钮、独立开关、正文状态灯、内置解析与本地语义合并"
+  "description": "审核与固定格式世界书提取轻量版｜右上角无按钮遮挡入口、手动双按钮、自动独立开关、可读条目状态灯、严格语法解析与本地语义合并"
 }
