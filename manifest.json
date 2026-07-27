@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-core.1",
+  "version": "2.0.0-core.3",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "仅保留审核、事实提取、小总结和大总结的无 UI 核心版"
+  "description": "固定基准 V1.0：四脚本、单次审核、唯一提交器、世界书唯一长期事实源"
 }
