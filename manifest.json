@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-frozen.1",
+  "version": "2.0.0-core.realtest.7",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "开放世界叙事审核与长期记忆插件｜冻结架构 V1.0"
+  "description": "开放世界叙事审核与世界书长期记忆插件｜固定总结格式、UID关键词、确定性匹配与 ST 原生字段保留版"
 }
