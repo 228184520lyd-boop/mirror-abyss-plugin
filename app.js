@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-core.realtest.7 — core real-test architecture. */
+/** Mirror Abyss 2.0.0-lite.ui.1 — audit/extraction UI mapping build. */
 var MA_MODULES={"application":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -207,7 +207,7 @@ class MirrorAbyssApplication {
                 if (!automatic) notify('info', '镜渊：该正文已经完整处理');
                 return [];
             }
-            this.controlPanel.setStatus(taskType === 'full' ? '自动处理中…' : '任务处理中…');
+            this.controlPanel.setStatus(taskType === 'audit' ? '审核处理中…' : taskType === 'extraction' ? '提取、解析与语义合并处理中…' : taskType === 'full' ? '自动处理中…' : '任务处理中…');
             let activeSnapshot = snapshot;
             let result;
             if (taskType === 'audit') result = await this.auditRunner.process(settings, activeSnapshot);
@@ -222,7 +222,7 @@ class MirrorAbyssApplication {
                 result = await this.memoryRunner.processTurn(settings, activeSnapshot);
             }
             this.host.assertSnapshot(activeSnapshot, this.settings());
-            this.controlPanel.setStatus('本轮处理完成');
+            this.controlPanel.setStatus(taskType === 'audit' ? '审核完成' : taskType === 'extraction' ? '提取与世界书合并完成' : '本轮处理完成');
             notify('success', '镜渊：本轮处理完成');
             return result;
         } catch (error) {
@@ -412,9 +412,9 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-core.realtest.7';
+exports.VERSION = '2.0.0-lite.ui.1';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
-exports.EXTENSION_NAMESPACE = 'mirrorAbyssInfoPoint';
+exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
 exports.MANAGED_VERSION = 8;
@@ -426,67 +426,28 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ControlPanel = void 0;
 const util_1 = require("./util");
 const ROOT_ID = 'mirror-abyss-core-control';
-const TAB_DEFINITIONS = [
-    ['overview', '总览'],
-    ['information', '信息表'],
-    ['keywords', '关键词'],
-    ['matching', '匹配'],
-    ['graph', '记忆网络'],
-    ['settings', '设置'],
-];
-const PROFILE_FIELDS = [
-    ['auditProfileId', '审核 Connection Profile'],
-    ['revisionProfileId', '修正 Connection Profile'],
-    ['extractionProfileId', '提取 Connection Profile'],
-    ['smallSummaryProfileId', '小总结 Connection Profile'],
-    ['largeSummaryProfileId', '大总结 Connection Profile'],
-    ['migrationProfileId', '整理 Connection Profile'],
-];
-const OPERATION_LABELS = {
-    noop: '不操作',
-    'no-op': '不操作',
-    append: '追加',
-    'append-section': '追加',
-    'append-chain': '追加',
-    'replace-slot': '替换状态槽',
-    'replace-section': '替换小标题',
-    create: '创建',
-    'create-entry': '创建',
-    delete: '删除',
-    'delete-entry': '删除',
-};
+const PANEL_ID = 'mirror-abyss-lite-panel';
+const SETTINGS_ID = 'mirror-abyss-lite-settings-entry';
+const STYLE_ID = 'mirror-abyss-lite-style';
+const INDICATOR_CLASS = 'mirror-abyss-message-indicator';
 class ControlPanel {
     constructor(actions) {
         this.actions = actions;
         this.root = null;
-        this.settingsEntry = null;
         this.launcher = null;
         this.panel = null;
         this.statusNode = null;
-        this.autoInput = null;
-        this.auditInput = null;
-        this.enabledInput = null;
-        this.actionButtons = [];
+        this.settingsEntry = null;
+        this.inputs = {};
+        this.buttons = {};
         this.busy = false;
+        this.busyKind = '';
+        this.lastOutcome = null;
+        this.statusText = '就绪';
+        this.statusError = false;
+        this.observer = null;
+        this.pendingIndicatorFrame = 0;
         this.waitingForDom = false;
-        this.workspaceLoaded = false;
-        this.workspaceLoading = null;
-        this.workspaceLoadRevision = 0;
-        this.workspace = emptyWorkspace();
-        this.currentSettings = {};
-        this.activeTab = 'overview';
-        this.tabButtons = new Map();
-        this.viewNodes = new Map();
-        this.selectedEntryUid = '';
-        this.settingInputs = {};
-        this.graphViewport = null;
-        this.graphCanvas = null;
-        this.graphDetail = null;
-        this.graphLayout = null;
-        this.workspaceRevision = 0;
-        this.graphRevision = -1;
-        this.graphTransform = { scale: 1, x: 0, y: 0 };
-        this.graphDrag = null;
         this.onDomReady = () => {
             this.waitingForDom = false;
             this.mount();
@@ -501,1130 +462,323 @@ class ControlPanel {
             }
             return;
         }
-        const existing = document.getElementById(ROOT_ID);
-        if (existing) existing.remove();
-        this.actionButtons = [];
-        this.tabButtons.clear();
-        this.viewNodes.clear();
+        this.unmount(false);
+        this.installStyle();
         const root = document.createElement('div');
         root.id = ROOT_ID;
-        root.style.cssText = 'position:fixed!important;inset-inline-end:max(10px,env(safe-area-inset-right,0px))!important;bottom:max(84px,calc(68px + env(safe-area-inset-bottom,0px)))!important;z-index:2147483640!important;max-width:calc(100vw - 20px);visibility:visible!important;opacity:1!important;transform:none!important;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f2f2f2;line-height:1.35;';
+        root.className = 'ma-lite-top-entry';
         const launcher = document.createElement('button');
         launcher.type = 'button';
-        launcher.textContent = '镜渊';
-        launcher.title = '打开或收起镜渊工作区';
+        launcher.className = 'ma-lite-launcher interactable';
+        launcher.setAttribute('aria-label', '打开镜渊面板');
         launcher.setAttribute('aria-expanded', 'false');
-        launcher.style.cssText = 'display:block!important;margin-left:auto;min-width:56px;min-height:44px;padding:0 12px;border:1px solid rgba(255,255,255,.24);border-radius:10px;background:rgba(20,20,24,.96);color:#fff;font-weight:700;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.42);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;';
-        const panel = document.createElement('section');
-        panel.hidden = true;
-        panel.setAttribute('aria-label', '镜渊叙事记忆工作区');
-        panel.style.cssText = 'box-sizing:border-box;width:min(920px,calc(100vw - 20px));max-height:calc(100dvh - 150px);overflow-y:auto;overscroll-behavior:contain;margin-top:8px;border:1px solid rgba(255,255,255,.18);border-radius:12px;background:rgba(20,20,24,.985);box-shadow:0 8px 28px rgba(0,0,0,.48);-webkit-overflow-scrolling:touch;';
-        const header = document.createElement('div');
-        header.style.cssText = 'position:sticky;top:0;z-index:5;padding:12px 12px 9px;background:rgba(20,20,24,.985);border-bottom:1px solid rgba(255,255,255,.1);';
-        const headingRow = document.createElement('div');
-        headingRow.style.cssText = 'display:flex;align-items:center;gap:10px;';
-        const titleWrap = document.createElement('div');
-        titleWrap.style.cssText = 'min-width:0;flex:1;';
-        const title = document.createElement('div');
-        title.textContent = 'Mirror Abyss｜镜渊';
-        title.style.cssText = 'font-size:15px;font-weight:750;';
-        const subtitle = document.createElement('div');
-        subtitle.textContent = '世界书被动映射工作区';
-        subtitle.style.cssText = 'margin-top:2px;font-size:11px;color:rgba(255,255,255,.58);';
-        titleWrap.append(title, subtitle);
-        const closeButton = plainButton('收起');
-        closeButton.title = '收起镜渊工作区';
-        headingRow.append(titleWrap, closeButton);
-        const taskBar = document.createElement('div');
-        taskBar.style.cssText = 'display:flex;gap:7px;overflow-x:auto;padding:10px 0 2px;-webkit-overflow-scrolling:touch;';
-        taskBar.append(
-            this.makeActionButton('审核', () => this.requireAction('audit')(), true, { audit: true }),
-            this.makeActionButton('提取', () => this.requireAction('extract')()),
-            this.makeActionButton('小总结', () => this.requireAction('smallSummary')()),
-            this.makeActionButton('大总结', () => this.requireAction('largeSummary')()),
-            this.makeCancelButton(),
-        );
-        const status = document.createElement('div');
-        status.textContent = '就绪；打开工作区后才读取世界书';
-        status.setAttribute('aria-live', 'polite');
-        status.style.cssText = 'margin-top:8px;min-height:18px;font-size:12px;color:rgba(255,255,255,.72);overflow-wrap:anywhere;';
-        this.statusNode = status;
-        header.append(headingRow, taskBar, status);
-        const tabs = document.createElement('div');
-        tabs.setAttribute('role', 'tablist');
-        tabs.style.cssText = 'display:flex;gap:6px;overflow-x:auto;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.025);-webkit-overflow-scrolling:touch;';
-        for (const [key, label] of TAB_DEFINITIONS) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = label;
-            button.setAttribute('role', 'tab');
-            button.dataset.tabKey = key;
-            button.style.cssText = tabButtonStyle(key === this.activeTab);
-            button.addEventListener('click', () => void this.openTab(key));
-            this.tabButtons.set(key, button);
-            tabs.append(button);
+        launcher.title = 'Mirror Abyss｜审核与提取';
+        launcher.innerHTML = '<i class="fa-solid fa-circle-nodes" aria-hidden="true"></i><span>镜渊</span>';
+        launcher.addEventListener('click', () => this.togglePanel());
+        root.append(launcher);
+        const topHolder = document.getElementById('top-settings-holder');
+        const characterHolder = document.getElementById('rightNavHolder');
+        if (topHolder) {
+            root.classList.add('ma-lite-in-topbar');
+            topHolder.insertBefore(root, characterHolder || null);
         }
-        const body = document.createElement('div');
-        body.style.cssText = 'min-height:280px;padding:12px;';
-        for (const [key, label] of TAB_DEFINITIONS) {
-            const view = document.createElement('section');
-            view.hidden = key !== this.activeTab;
-            view.setAttribute('role', 'tabpanel');
-            view.setAttribute('aria-label', label);
-            this.viewNodes.set(key, view);
-            body.append(view);
+        else {
+            root.classList.add('ma-lite-fallback');
+            document.body.append(root);
         }
-        panel.append(header, tabs, body);
-        root.append(launcher, panel);
-        document.body.append(root);
+        const panel = this.buildPanel();
+        document.body.append(panel);
         this.root = root;
         this.launcher = launcher;
         this.panel = panel;
-        launcher.addEventListener('click', () => void this.togglePanel());
-        closeButton.addEventListener('click', () => this.closePanel());
         this.mountOfficialSettingsEntry();
-        this.renderOverview();
-        this.renderInformation();
-        this.renderKeywords();
-        this.renderMatching();
+        this.observeChat();
         this.refresh();
+        this.scheduleIndicatorRefresh();
     }
-    unmount() {
-        if (typeof document !== 'undefined' && this.waitingForDom) {
-            document.removeEventListener('DOMContentLoaded', this.onDomReady);
-        }
+    unmount(removeStyle = true) {
+        if (typeof document === 'undefined') return;
+        if (this.waitingForDom) document.removeEventListener('DOMContentLoaded', this.onDomReady);
         this.waitingForDom = false;
-        this.graphDrag = null;
-        this.workspaceLoading = null;
+        this.observer?.disconnect();
+        this.observer = null;
+        if (this.pendingIndicatorFrame) cancelAnimationFrame(this.pendingIndicatorFrame);
+        this.pendingIndicatorFrame = 0;
         this.root?.remove();
+        this.panel?.remove();
         this.settingsEntry?.remove();
+        document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => node.remove());
+        if (removeStyle) document.getElementById(STYLE_ID)?.remove();
         this.root = null;
-        this.settingsEntry = null;
         this.launcher = null;
         this.panel = null;
         this.statusNode = null;
-        this.autoInput = null;
-        this.auditInput = null;
-        this.enabledInput = null;
-        this.actionButtons = [];
-        this.tabButtons.clear();
-        this.viewNodes.clear();
-        this.graphViewport = null;
-        this.graphCanvas = null;
-        this.graphDetail = null;
-        this.graphLayout = null;
-        this.workspaceRevision = 0;
-        this.graphRevision = -1;
+        this.settingsEntry = null;
+        this.inputs = {};
+        this.buttons = {};
         this.busy = false;
-        this.workspaceLoaded = false;
-        this.workspace = emptyWorkspace();
+        this.busyKind = '';
     }
-    mountOfficialSettingsEntry() {
-        const container = document.getElementById('extensions_settings2');
-        if (!container) return;
-        document.getElementById('mirror-abyss-settings-entry')?.remove();
-        const entry = document.createElement('div');
-        entry.id = 'mirror-abyss-settings-entry';
-        entry.className = 'inline-drawer';
+    installStyle() {
+        document.getElementById(STYLE_ID)?.remove();
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = `
+#${ROOT_ID}.ma-lite-top-entry{display:flex;align-items:center;justify-content:center;flex:0 0 auto;z-index:3002}
+#${ROOT_ID}.ma-lite-fallback{position:fixed;top:max(8px,env(safe-area-inset-top));right:max(64px,calc(54px + env(safe-area-inset-right)));z-index:2147483638}
+.ma-lite-launcher{box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:5px;min-width:42px;min-height:36px;padding:6px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.22));border-radius:8px;background:var(--black50a,rgba(20,20,24,.82));color:var(--SmartThemeBodyColor,#fff);cursor:pointer;touch-action:manipulation}
+.ma-lite-in-topbar .ma-lite-launcher{min-width:36px;min-height:36px;padding:5px 7px;background:transparent;border-color:transparent}
+.ma-lite-launcher span{font-size:12px;font-weight:700;white-space:nowrap}
+@media(max-width:700px){.ma-lite-in-topbar .ma-lite-launcher span{display:none}.ma-lite-in-topbar .ma-lite-launcher{width:36px;padding:5px}}
+#${PANEL_ID}{position:fixed;top:max(58px,calc(48px + env(safe-area-inset-top)));right:max(10px,env(safe-area-inset-right));z-index:2147483639;box-sizing:border-box;width:min(360px,calc(100vw - 20px));max-height:calc(100dvh - 78px);overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#17171c) 94%,transparent);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#${PANEL_ID}[hidden]{display:none!important}
+.ma-lite-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:12px;border-bottom:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));background:inherit}
+.ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
+.ma-lite-close{min-width:34px;min-height:34px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
+.ma-lite-body{display:flex;flex-direction:column;gap:12px;padding:12px}
+.ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
+.ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
+.ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
+.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
+.ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
+.${INDICATOR_CLASS}{display:flex;align-items:center;gap:9px;width:max-content;max-width:100%;margin-top:7px;padding:4px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
+.${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
+`;
+        document.head.append(style);
+    }
+    buildPanel() {
+        const panel = document.createElement('section');
+        panel.id = PANEL_ID;
+        panel.hidden = true;
+        panel.setAttribute('aria-label', '镜渊操作面板');
+        const header = document.createElement('div');
+        header.className = 'ma-lite-header';
+        const title = document.createElement('div');
+        title.className = 'ma-lite-title';
+        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>UI 只映射审核、提取与独立开关</small>';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'ma-lite-close';
+        close.title = '收起';
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        close.addEventListener('click', () => this.closePanel());
+        header.append(title, close);
+        const body = document.createElement('div');
+        body.className = 'ma-lite-body';
+        const switches = document.createElement('div');
+        switches.className = 'ma-lite-switches';
+        switches.append(
+            this.makeSwitch('enabled', '总开关', '关闭后两个功能都不能执行。'),
+            this.makeSwitch('auditEnabled', '审核开关', '审核不通过时生成完整修正版并替换正文。'),
+            this.makeSwitch('extractionEnabled', '提取开关', '固定格式解析、语义合并后写入当前聊天世界书。'),
+        );
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-actions';
+        const audit = this.makeActionButton('audit', '审核');
+        const extract = this.makeActionButton('extract', '提取');
+        actions.append(audit, extract);
+        const status = document.createElement('div');
+        status.className = 'ma-lite-status';
+        status.setAttribute('aria-live', 'polite');
+        this.statusNode = status;
+        const note = document.createElement('div');
+        note.className = 'ma-lite-note';
+        note.textContent = '提取解析和语义去重已内置，不再依赖外部 Regex 脚本。按钮只处理当前聊天中最新一条 AI 正文。';
+        body.append(switches, actions, status, note);
+        panel.append(header, body);
+        return panel;
+    }
+    makeSwitch(key, labelText, description) {
+        const label = document.createElement('label');
+        label.className = 'ma-lite-switch';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.dataset.setting = key;
+        const text = document.createElement('span');
+        text.className = 'ma-lite-switch-text';
+        const title = document.createElement('b');
+        title.textContent = labelText;
+        const detail = document.createElement('small');
+        detail.textContent = description;
+        text.append(title, detail);
+        label.append(input, text);
+        input.addEventListener('change', () => {
+            try {
+                this.actions.configure?.({ [key]: input.checked });
+                this.lastOutcome = null;
+                this.setStatus(`${labelText}已${input.checked ? '开启' : '关闭'}`);
+                this.refresh();
+            }
+            catch (error) {
+                input.checked = !input.checked;
+                this.setStatus(`保存设置失败：${(0, util_1.errorText)(error)}`, true);
+            }
+        });
+        this.inputs[key] = input;
+        return label;
+    }
+    makeActionButton(kind, label) {
         const button = document.createElement('button');
         button.type = 'button';
-        button.textContent = 'Mirror Abyss｜打开镜渊设置';
-        button.title = '打开镜渊工作区的设置页面';
-        button.style.cssText = 'box-sizing:border-box;width:100%;min-height:44px;padding:8px 10px;text-align:left;';
-        button.addEventListener('click', async () => {
-            if (this.panel?.hidden) await this.togglePanel();
-            await this.openTab('settings');
-        });
-        entry.append(button);
-        container.append(entry);
-        this.settingsEntry = entry;
+        button.className = 'ma-lite-action';
+        button.dataset.kind = kind;
+        button.textContent = label;
+        button.addEventListener('click', () => void this.runAction(kind));
+        this.buttons[kind] = button;
+        return button;
     }
-    async togglePanel() {
-        if (!this.panel) return;
-        if (!this.panel.hidden) {
-            this.closePanel();
+    async runAction(kind) {
+        if (this.busy) return;
+        const settings = this.getSettings();
+        if (!settings.enabled) {
+            this.setStatus('总开关已关闭', true);
             return;
         }
-        this.panel.hidden = false;
-        this.launcher?.setAttribute('aria-expanded', 'true');
-        this.refresh();
+        if (kind === 'audit' && settings.auditEnabled === false) {
+            this.setStatus('审核开关已关闭', true);
+            return;
+        }
+        if (kind === 'extract' && settings.extractionEnabled === false) {
+            this.setStatus('提取开关已关闭', true);
+            return;
+        }
+        const action = this.actions[kind];
+        if (typeof action !== 'function') {
+            this.setStatus(`${kind === 'audit' ? '审核' : '提取'}功能未连接`, true);
+            return;
+        }
+        this.busy = true;
+        this.busyKind = kind;
+        this.lastOutcome = null;
+        this.syncDisabledState();
+        this.setStatus(kind === 'audit' ? '审核处理中…' : '提取、解析与语义合并处理中…');
         try {
-            await this.ensureWorkspaceLoaded();
-            if (this.activeTab === 'graph' && !this.panel?.hidden) this.renderGraph();
+            await action();
+            this.lastOutcome = { kind, state: 'success' };
+            this.setStatus(kind === 'audit' ? '审核完成' : '提取与世界书合并完成');
         }
-        catch {
-            // ensureWorkspaceLoaded has already exposed the read error in the local status node.
+        catch (error) {
+            this.lastOutcome = { kind, state: 'error' };
+            this.setStatus(`${kind === 'audit' ? '审核' : '提取'}失败：${(0, util_1.errorText)(error)}`, true);
         }
+        finally {
+            this.busy = false;
+            this.busyKind = '';
+            this.syncDisabledState();
+            this.scheduleIndicatorRefresh();
+        }
+    }
+    getSettings() {
+        try { return this.actions.getSettings?.() ?? {}; }
+        catch { return {}; }
+    }
+    refresh() {
+        const settings = this.getSettings();
+        if (this.inputs.enabled) this.inputs.enabled.checked = settings.enabled !== false;
+        if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
+        if (this.inputs.extractionEnabled) this.inputs.extractionEnabled.checked = settings.extractionEnabled !== false;
+        this.syncDisabledState();
+        if (this.statusNode) {
+            this.statusNode.textContent = this.statusText;
+            this.statusNode.dataset.error = this.statusError ? 'true' : 'false';
+        }
+        this.scheduleIndicatorRefresh();
+    }
+    syncDisabledState() {
+        const settings = this.getSettings();
+        const master = settings.enabled !== false;
+        if (this.buttons.audit) this.buttons.audit.disabled = this.busy || !master || settings.auditEnabled === false;
+        if (this.buttons.extract) this.buttons.extract.disabled = this.busy || !master || settings.extractionEnabled === false;
+        for (const input of Object.values(this.inputs)) input.disabled = this.busy;
+    }
+    setStatus(text, isError = false) {
+        this.statusText = String(text || '');
+        this.statusError = Boolean(isError);
+        if (this.statusNode) {
+            this.statusNode.textContent = this.statusText;
+            this.statusNode.dataset.error = this.statusError ? 'true' : 'false';
+        }
+        this.scheduleIndicatorRefresh();
+    }
+    togglePanel() {
+        if (!this.panel) return;
+        const opening = this.panel.hidden;
+        this.panel.hidden = !opening;
+        this.launcher?.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        if (opening) this.refresh();
     }
     closePanel() {
         if (!this.panel) return;
         this.panel.hidden = true;
         this.launcher?.setAttribute('aria-expanded', 'false');
-        this.graphDrag = null;
-        this.graphLayout = null;
-        this.workspaceLoadRevision += 1;
-        this.workspaceLoading = null;
-        this.workspaceLoaded = false;
-        this.workspace = emptyWorkspace();
     }
-    async openTab(key) {
-        if (!this.viewNodes.has(key)) return;
-        this.activeTab = key;
-        for (const [tabKey, button] of this.tabButtons) {
-            const selected = tabKey === key;
-            button.style.cssText = tabButtonStyle(selected);
-            button.setAttribute('aria-selected', selected ? 'true' : 'false');
-        }
-        for (const [tabKey, view] of this.viewNodes) view.hidden = tabKey !== key;
-        if (key === 'graph') {
-            try {
-                await this.ensureWorkspaceLoaded();
-            }
-            catch {
-                return;
-            }
-            if (this.activeTab === 'graph' && !this.panel?.hidden) this.renderGraph(true);
-        }
-    }
-    async ensureWorkspaceLoaded(force = false) {
-        if (!force && this.workspaceLoaded) return this.workspace;
-        if (this.workspaceLoading) return this.workspaceLoading;
-        if (typeof this.actions.loadWorkspace !== 'function') {
-            this.workspaceLoaded = true;
-            this.setStatus('当前核心未提供 loadWorkspace；工作区以空状态显示', true);
-            this.renderDataViews();
-            return this.workspace;
-        }
-        this.setStatus(force ? '正在重新读取世界书…' : '正在读取当前绑定世界书…');
-        const loadRevision = this.workspaceLoadRevision;
-        const load = Promise.resolve()
-            .then(() => this.actions.loadWorkspace())
-            .then((raw) => {
-            if (!this.root || this.panel?.hidden || loadRevision !== this.workspaceLoadRevision) return this.workspace;
-            this.workspace = normalizeWorkspace(raw, this.currentSettings);
-            if (this.workspace.settings) this.currentSettings = { ...this.currentSettings, ...this.workspace.settings };
-            this.workspaceRevision += 1;
-            this.workspaceLoaded = true;
-            this.renderDataViews();
-            this.setStatus(`世界书映射已读取：${this.workspace.entries.length} 个条目`);
-            return this.workspace;
-        })
-            .catch((error) => {
-            this.workspaceLoaded = false;
-            this.setStatus(`读取世界书失败：${(0, util_1.errorText)(error)}`, true);
-            throw error;
-        })
-            .finally(() => {
-            if (this.workspaceLoading === load) this.workspaceLoading = null;
-        });
-        this.workspaceLoading = load;
-        return load;
-    }
-    async reloadWorkspace() {
-        if (!this.panel || this.panel.hidden) {
-            this.workspaceLoaded = false;
-            return this.workspace;
-        }
-        const workspace = await this.ensureWorkspaceLoaded(true);
-        if (this.activeTab === 'graph' && !this.panel?.hidden) this.renderGraph();
-        return workspace;
-    }
-    renderDataViews() {
-        this.renderOverview();
-        this.renderInformation();
-        this.renderKeywords();
-        this.renderMatching();
-        this.renderSettings();
-        this.pruneActionButtons();
-        this.syncDisabledState();
-    }
-    refresh() {
-        try {
-            const settings = this.actions.getSettings?.() ?? this.currentSettings;
-            if (settings && typeof settings === 'object') this.currentSettings = { ...this.currentSettings, ...settings };
-            if (this.viewNodes.has('settings')) this.renderSettings();
-            if (this.viewNodes.has('keywords')) this.renderKeywords();
-            this.syncDisabledState();
-        }
-        catch (error) {
-            this.setStatus(`读取设置失败：${(0, util_1.errorText)(error)}`, true);
-        }
-    }
-    setStatus(text, isError = false) {
-        if (!this.statusNode) return;
-        this.statusNode.textContent = String(text || '');
-        this.statusNode.style.color = isError ? '#ffb4b4' : 'rgba(255,255,255,.72)';
-    }
-    renderOverview() {
-        const view = this.viewNodes.get('overview');
-        if (!view) return;
-        clearNode(view);
-        view.append(sectionHeading('总览', '只显示当前已读取世界书的被动映射。'));
-        if (!this.workspaceLoaded) {
-            view.append(emptyState('首次打开工作区后读取当前绑定世界书。'));
-            return;
-        }
-        const summary = document.createElement('div');
-        summary.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px;';
-        summary.append(
-            pill(`世界书：${this.workspace.worldbookName || '当前绑定'}`),
-            pill(`条目：${this.workspace.entries.length}`),
-            pill(`处理：${workspaceStatusText(this.workspace)}`),
-        );
-        view.append(summary);
-        if (!this.workspace.entries.length) {
-            view.append(emptyState('当前世界书没有可显示条目。'));
-            return;
-        }
-        const list = document.createElement('div');
-        list.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:9px;';
-        for (const entry of this.workspace.entries) {
-            const card = document.createElement('article');
-            card.style.cssText = cardStyle();
-            const heading = document.createElement('button');
-            heading.type = 'button';
-            heading.textContent = entry.title;
-            heading.style.cssText = 'display:block;width:100%;padding:0;border:0;background:transparent;color:#fff;text-align:left;font-size:14px;font-weight:700;cursor:pointer;overflow-wrap:anywhere;';
-            heading.addEventListener('click', () => {
-                this.selectedEntryUid = entry.uid;
-                this.renderInformation();
-                void this.openTab('information');
-            });
-            const keywords = keywordRow(entry.keywords);
-            const summaryText = document.createElement('div');
-            summaryText.textContent = entry.summary || '暂无摘要';
-            summaryText.style.cssText = 'margin-top:8px;color:rgba(255,255,255,.76);font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;';
-            const metadata = document.createElement('div');
-            metadata.textContent = `${entryStateLabel(entry)} · ${formatUpdatedAt(entry.updatedAt)}`;
-            metadata.style.cssText = 'margin-top:8px;font-size:11px;color:rgba(255,255,255,.48);';
-            card.append(heading, keywords, summaryText, metadata);
-            list.append(card);
-        }
-        view.append(list);
-    }
-    renderInformation() {
-        const view = this.viewNodes.get('information');
-        if (!view) return;
-        clearNode(view);
-        view.append(sectionHeading('信息表', '关键词与正文信息分区显示；保存后重新读取世界书。'));
-        if (!this.workspaceLoaded) {
-            view.append(emptyState('尚未读取世界书。'));
-            return;
-        }
-        const entries = this.workspace.entries;
-        if (!entries.length) {
-            view.append(emptyState('当前没有可编辑条目。'));
-            return;
-        }
-        if (!entries.some((entry) => entry.uid === this.selectedEntryUid)) this.selectedEntryUid = entries[0].uid;
-        const layout = document.createElement('div');
-        layout.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:10px;';
-        const entryList = document.createElement('div');
-        entryList.style.cssText = 'display:flex;flex-direction:column;gap:6px;max-height:520px;overflow:auto;';
-        for (const entry of entries) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = entry.title;
-            button.style.cssText = `min-height:40px;padding:8px;border:1px solid ${entry.uid === this.selectedEntryUid ? 'rgba(124,194,255,.65)' : 'rgba(255,255,255,.12)'};border-radius:8px;background:${entry.uid === this.selectedEntryUid ? 'rgba(70,139,200,.24)' : 'rgba(255,255,255,.045)'};color:#fff;text-align:left;cursor:pointer;overflow-wrap:anywhere;`;
-            button.addEventListener('click', () => {
-                this.selectedEntryUid = entry.uid;
-                this.renderInformation();
-            });
-            entryList.append(button);
-        }
-        const entry = entries.find((item) => item.uid === this.selectedEntryUid);
-        const detail = entry ? this.buildEntryEditor(entry) : emptyState('请选择条目。');
-        layout.append(entryList, detail);
-        view.append(layout);
-    }
-    buildEntryEditor(entry) {
-        const detail = document.createElement('div');
-        detail.style.cssText = cardStyle();
-        const titleField = fieldControl('条目名称', 'text', entry.title);
-        const keywordField = fieldControl('关键词', 'text', entry.keywords.join('、'));
-        keywordField.input.placeholder = '只填写关键词，以逗号、顿号或换行分隔';
-        const keywordDisplayLabel = document.createElement('div');
-        keywordDisplayLabel.textContent = '关键词';
-        keywordDisplayLabel.style.cssText = smallLabelStyle();
-        const keywords = keywordRow(entry.keywords);
-        const sectionsLabel = document.createElement('div');
-        sectionsLabel.textContent = '小标题与信息点';
-        sectionsLabel.style.cssText = `${smallLabelStyle()}margin-top:12px;`;
-        const sections = document.createElement('div');
-        sections.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
-        for (const section of entry.sections) {
-            if (!section.points.length) continue;
-            const block = document.createElement('div');
-            block.style.cssText = 'padding:8px 9px;border-left:3px solid rgba(110,177,233,.72);background:rgba(255,255,255,.035);border-radius:0 7px 7px 0;';
-            const heading = document.createElement('div');
-            heading.textContent = `【${section.title}】`;
-            heading.style.cssText = 'font-size:12px;font-weight:700;color:#bfe2ff;';
-            const points = document.createElement('div');
-            points.style.cssText = 'margin-top:5px;display:flex;flex-direction:column;gap:4px;';
-            for (const point of section.points) {
-                const line = document.createElement('div');
-                line.textContent = `• ${point}`;
-                line.style.cssText = 'font-size:12px;color:rgba(255,255,255,.78);overflow-wrap:anywhere;';
-                points.append(line);
-            }
-            block.append(heading, points);
-            sections.append(block);
-        }
-        if (!sections.children?.length) sections.append(emptyState('正文中没有可解析的信息点。'));
-        const contentField = fieldControl('正文编辑', 'textarea', entry.content);
-        contentField.input.style.minHeight = '180px';
-        const controls = document.createElement('div');
-        controls.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center;';
-        const focusControl = checkControl('玩家焦点', entry.focus);
-        const lockedControl = checkControl('手动锁定', entry.locked);
-        const saveButton = this.makeActionButton('保存条目', async () => {
-            const action = this.requireAction('updateEntry');
-            return action(entry.uid, {
-                title: String(titleField.input.value ?? '').trim(),
-                keywords: splitList(keywordField.input.value),
-                content: String(contentField.input.value ?? ''),
-            });
-        });
-        focusControl.input.addEventListener('change', () => void this.runAction('更新玩家焦点', () => this.requireAction('setFocus')(entry.uid, focusControl.input.checked), true));
-        lockedControl.input.addEventListener('change', () => void this.runAction('更新手动锁定', () => this.requireAction('setLocked')(entry.uid, lockedControl.input.checked), true));
-        controls.append(focusControl.label, lockedControl.label, saveButton);
-        detail.append(titleField.label, keywordField.label, keywordDisplayLabel, keywords, sectionsLabel, sections, contentField.label, controls);
-        return detail;
-    }
-    renderKeywords() {
-        const view = this.viewNodes.get('keywords');
-        if (!view) return;
-        clearNode(view);
-        view.append(sectionHeading('关键词', '管理名称、近义词、提取范围与建议小标题。'));
-        const definitions = Array.isArray(this.currentSettings.keywordDefinitions) ? this.currentSettings.keywordDefinitions : [];
-        if (!definitions.length) {
-            view.append(emptyState('当前没有关键词模板。可在下方添加自定义关键词。'));
-        }
-        const list = document.createElement('div');
-        list.style.cssText = 'display:flex;flex-direction:column;gap:9px;';
-        definitions.forEach((definition, index) => list.append(this.buildKeywordEditor(definition, index, definitions)));
-        view.append(list, this.buildKeywordCreator(definitions));
-    }
-    buildKeywordEditor(definition, index, definitions) {
-        const card = document.createElement('article');
-        card.style.cssText = cardStyle();
-        const name = fieldControl('关键词名称', 'text', definition.label ?? '');
-        const aliases = fieldControl('近义词', 'text', normalizeStringList(definition.aliases).join('、'));
-        const description = fieldControl('提取范围', 'textarea', definition.description ?? '');
-        description.input.style.minHeight = '58px';
-        const fieldLabels = normalizeFieldLabels(definition.fields);
-        const subtitles = fieldControl('建议小标题', 'text', fieldLabels.join('、'));
-        subtitles.input.placeholder = '用逗号或顿号分隔';
-        const compactLabel = document.createElement('div');
-        compactLabel.textContent = '当前建议小标题';
-        compactLabel.style.cssText = smallLabelStyle();
-        const compact = keywordRow(fieldLabels);
-        const save = this.makeActionButton('保存关键词', async () => {
-            const updated = definitions.map((item, itemIndex) => itemIndex === index
-                ? updateKeyword(item, name.input.value, aliases.input.value, description.input.value, subtitles.input.value)
-                : item);
-            return this.requireAction('configure')({ keywordDefinitions: updated });
-        });
-        card.append(name.label, aliases.label, description.label, subtitles.label, compactLabel, compact, save);
-        return card;
-    }
-    buildKeywordCreator(definitions) {
-        const card = document.createElement('article');
-        card.style.cssText = `${cardStyle()}margin-top:10px;border-style:dashed;`;
-        const heading = document.createElement('div');
-        heading.textContent = '添加自定义关键词';
-        heading.style.cssText = 'font-size:13px;font-weight:700;margin-bottom:7px;';
-        const name = fieldControl('名称', 'text', '');
-        const aliases = fieldControl('近义词', 'text', '');
-        const description = fieldControl('提取范围', 'textarea', '');
-        const subtitles = fieldControl('建议小标题', 'text', '');
-        const add = this.makeActionButton('添加关键词', async () => {
-            const label = String(name.input.value ?? '').trim();
-            if (!label) throw new Error('关键词名称不能为空');
-            if (definitions.some((item) => normalizeLookup(item.label) === normalizeLookup(label))) throw new Error('同名关键词已经存在');
-            const created = updateKeyword({ key: safeKey(label), enabled: true, constant: label === '基础设定', vectorized: label !== '基础设定', fields: [] }, label, aliases.input.value, description.input.value, subtitles.input.value);
-            return this.requireAction('configure')({ keywordDefinitions: [...definitions, created] });
-        });
-        card.append(heading, name.label, aliases.label, description.label, subtitles.label, add);
-        return card;
-    }
-    renderMatching() {
-        const view = this.viewNodes.get('matching');
-        if (!view) return;
-        clearNode(view);
-        view.append(sectionHeading('匹配', '最近一次处理的只读结果；此页不参与事实判断或提交。'));
-        const result = normalizeMatching(this.workspace.matching);
-        if (!result.operations.length && !result.rawResult) {
-            view.append(emptyState('尚无处理记录。处理后这里会显示“新信息点 → 匹配条目 → 匹配依据 → 最终操作”。'));
-            return;
-        }
-        if (result.rawResult) {
-            const raw = document.createElement('details');
-            const summary = document.createElement('summary');
-            summary.textContent = '模型返回文本';
-            summary.style.cssText = 'cursor:pointer;font-size:12px;color:#bfe2ff;';
-            const text = document.createElement('pre');
-            text.textContent = result.rawResult;
-            text.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;background:rgba(0,0,0,.22);border-radius:7px;font-size:11px;color:rgba(255,255,255,.72);';
-            raw.append(summary, text);
-            view.append(raw);
-        }
-        if (!result.operations.length) {
-            view.append(emptyState('本次处理没有生成世界书操作。'));
-            return;
-        }
-        const list = document.createElement('div');
-        list.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:9px;';
-        for (const operation of result.operations) {
-            const row = document.createElement('article');
-            row.style.cssText = cardStyle();
-            row.append(
-                readonlyField('新信息点', operation.information || '—'),
-                readonlyField('匹配到的条目', operation.target || '新条目 / 未匹配'),
-                readonlyField('匹配依据', operation.evidence || '—'),
-                readonlyField('最终操作', OPERATION_LABELS[operation.kind] || operation.kind || '—'),
-            );
-            list.append(row);
-        }
-        view.append(list);
-    }
-    renderGraph(force = false) {
-        const view = this.viewNodes.get('graph');
-        if (!view || this.activeTab !== 'graph' || this.panel?.hidden) return;
-        if (!force && this.graphRevision === this.workspaceRevision && this.graphViewport && belongsTo(this.graphViewport, this.root)) return;
-        clearNode(view);
-        view.append(sectionHeading('记忆网络', '仅在本页打开时，根据已经读取的世界书条目计算。'));
-        if (!this.workspaceLoaded) {
-            view.append(emptyState('尚未读取世界书。'));
-            return;
-        }
-        const layout = computeGraph(this.workspace.entries);
-        this.graphLayout = layout;
-        this.graphRevision = this.workspaceRevision;
-        const toolbar = document.createElement('div');
-        toolbar.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px;';
-        const center = plainButton('居中');
-        const zoomIn = plainButton('放大');
-        const zoomOut = plainButton('缩小');
-        const fit = plainButton('适配全部');
-        const reset = plainButton('复位');
-        toolbar.append(center, zoomIn, zoomOut, fit, reset);
-        const viewport = document.createElement('div');
-        viewport.style.cssText = 'position:relative;height:min(54vh,470px);min-height:320px;overflow:hidden;border:1px solid rgba(255,255,255,.13);border-radius:9px;background:radial-gradient(circle at center,rgba(80,120,160,.12),rgba(0,0,0,.24));touch-action:none;cursor:grab;user-select:none;';
-        const canvas = document.createElement('div');
-        canvas.style.cssText = `position:absolute;left:0;top:0;width:${layout.width}px;height:${layout.height}px;transform-origin:0 0;`;
-        const svg = createSvg('svg');
-        svg.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
-        svg.setAttribute('aria-hidden', 'true');
-        svg.style.cssText = `position:absolute;inset:0;width:${layout.width}px;height:${layout.height}px;overflow:visible;pointer-events:none;`;
-        for (const edge of layout.edges) {
-            const line = createSvg('line');
-            line.setAttribute('x1', String(edge.from.x + 70));
-            line.setAttribute('y1', String(edge.from.y + 23));
-            line.setAttribute('x2', String(edge.to.x + 70));
-            line.setAttribute('y2', String(edge.to.y + 23));
-            line.setAttribute('stroke', 'rgba(145,196,235,.42)');
-            line.setAttribute('stroke-width', '2');
-            svg.append(line);
-        }
-        canvas.append(svg);
-        for (const node of layout.nodes) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.dataset.graphNode = 'true';
-            button.textContent = node.entry.title;
-            button.title = `查看 ${node.entry.title}`;
-            button.style.cssText = `position:absolute;left:${node.x}px;top:${node.y}px;width:140px;min-height:46px;padding:7px;border:1px solid ${node.entry.focus ? '#ffd37a' : 'rgba(159,207,245,.62)'};border-radius:9px;background:${node.entry.focus ? 'rgba(143,105,31,.94)' : 'rgba(31,63,89,.95)'};color:#fff;font-size:12px;box-shadow:0 3px 10px rgba(0,0,0,.28);cursor:pointer;touch-action:manipulation;overflow:hidden;text-overflow:ellipsis;`;
-            button.addEventListener('click', () => this.showGraphEntry(node.entry));
-            canvas.append(button);
-        }
-        viewport.append(canvas);
-        const detail = document.createElement('div');
-        detail.style.cssText = 'margin-top:9px;';
-        detail.append(emptyState('点击节点查看条目。'));
-        view.append(toolbar, viewport, detail);
-        this.graphViewport = viewport;
-        this.graphCanvas = canvas;
-        this.graphDetail = detail;
-        this.graphTransform = { scale: 1, x: 0, y: 0 };
-        center.addEventListener('click', () => this.centerGraph());
-        zoomIn.addEventListener('click', () => this.zoomGraph(1.2));
-        zoomOut.addEventListener('click', () => this.zoomGraph(1 / 1.2));
-        fit.addEventListener('click', () => this.fitGraph());
-        reset.addEventListener('click', () => this.resetGraph());
-        viewport.addEventListener('pointerdown', (event) => this.beginGraphDrag(event));
-        viewport.addEventListener('pointermove', (event) => this.moveGraphDrag(event));
-        viewport.addEventListener('pointerup', (event) => this.endGraphDrag(event));
-        viewport.addEventListener('pointercancel', (event) => this.endGraphDrag(event));
-        viewport.addEventListener('wheel', (event) => {
-            event.preventDefault?.();
-            this.zoomGraph(Number(event.deltaY) < 0 ? 1.1 : 1 / 1.1);
-        });
-        this.fitGraph();
-    }
-    beginGraphDrag(event) {
-        if (!this.graphViewport || event?.target?.dataset?.graphNode === 'true') return;
-        if (event?.button !== undefined && event.button !== 0) return;
-        this.graphDrag = {
-            pointerId: event?.pointerId,
-            startX: Number(event?.clientX) || 0,
-            startY: Number(event?.clientY) || 0,
-            baseX: this.graphTransform.x,
-            baseY: this.graphTransform.y,
-        };
-        this.graphViewport.style.cursor = 'grabbing';
-        this.graphViewport.setPointerCapture?.(event?.pointerId);
-    }
-    moveGraphDrag(event) {
-        if (!this.graphDrag) return;
-        if (this.graphDrag.pointerId !== undefined && event?.pointerId !== undefined && event.pointerId !== this.graphDrag.pointerId) return;
-        this.graphTransform.x = this.graphDrag.baseX + (Number(event?.clientX) || 0) - this.graphDrag.startX;
-        this.graphTransform.y = this.graphDrag.baseY + (Number(event?.clientY) || 0) - this.graphDrag.startY;
-        this.applyGraphTransform();
-    }
-    endGraphDrag(event) {
-        if (!this.graphDrag) return;
-        this.graphViewport?.releasePointerCapture?.(event?.pointerId);
-        if (this.graphViewport) this.graphViewport.style.cursor = 'grab';
-        this.graphDrag = null;
-    }
-    zoomGraph(multiplier) {
-        if (!this.graphCanvas) return;
-        this.graphTransform.scale = clamp(this.graphTransform.scale * multiplier, 0.25, 2.5);
-        this.applyGraphTransform();
-    }
-    centerGraph() {
-        if (!this.graphViewport || !this.graphLayout) return;
-        const width = Number(this.graphViewport.clientWidth) || 760;
-        const height = Number(this.graphViewport.clientHeight) || 420;
-        this.graphTransform.x = (width - this.graphLayout.width * this.graphTransform.scale) / 2;
-        this.graphTransform.y = (height - this.graphLayout.height * this.graphTransform.scale) / 2;
-        this.applyGraphTransform();
-    }
-    fitGraph() {
-        if (!this.graphViewport || !this.graphLayout) return;
-        const width = Math.max(240, Number(this.graphViewport.clientWidth) || 760);
-        const height = Math.max(240, Number(this.graphViewport.clientHeight) || 420);
-        const scale = Math.min((width - 32) / this.graphLayout.width, (height - 32) / this.graphLayout.height, 1.25);
-        this.graphTransform.scale = clamp(scale, 0.25, 1.25);
-        this.centerGraph();
-    }
-    resetGraph() {
-        this.graphTransform = { scale: 1, x: 0, y: 0 };
-        this.applyGraphTransform();
-    }
-    applyGraphTransform() {
-        if (!this.graphCanvas) return;
-        this.graphCanvas.style.transform = `translate(${this.graphTransform.x}px,${this.graphTransform.y}px) scale(${this.graphTransform.scale})`;
-    }
-    showGraphEntry(entry) {
-        if (!this.graphDetail) return;
-        clearNode(this.graphDetail);
-        const card = document.createElement('article');
-        card.style.cssText = cardStyle();
-        const title = document.createElement('div');
-        title.textContent = entry.title;
-        title.style.cssText = 'font-size:14px;font-weight:700;';
-        card.append(title, keywordRow(entry.keywords));
-        for (const section of entry.sections.slice(0, 4)) {
-            if (!section.points.length) continue;
-            const block = document.createElement('div');
-            block.textContent = `【${section.title}】${section.points.join('；')}`;
-            block.style.cssText = 'margin-top:7px;font-size:12px;color:rgba(255,255,255,.76);overflow-wrap:anywhere;';
-            card.append(block);
-        }
-        const open = plainButton('在信息表中打开');
-        open.style.marginTop = '9px';
-        open.addEventListener('click', () => {
-            this.selectedEntryUid = entry.uid;
-            this.renderInformation();
-            void this.openTab('information');
-        });
-        card.append(open);
-        this.graphDetail.append(card);
-    }
-    renderSettings() {
-        const view = this.viewNodes.get('settings');
-        if (!view) return;
-        clearNode(view);
-        this.settingInputs = {};
-        view.append(sectionHeading('设置', '只暴露玩家需要的开关、连接、规则、频率与世界书维护。'));
-        const settings = this.currentSettings ?? {};
-        const switches = document.createElement('div');
-        switches.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px;';
-        const enabled = checkControl('插件功能', settings.enabled !== false);
-        const auto = checkControl('自动处理', settings.autoProcess === true);
-        const audit = checkControl('审核开关', settings.auditEnabled === true);
-        this.enabledInput = enabled.input;
-        this.autoInput = auto.input;
-        this.auditInput = audit.input;
-        enabled.input.addEventListener('change', () => void this.saveSwitch('enabled', enabled.input.checked, '插件功能'));
-        auto.input.addEventListener('change', () => void this.saveSwitch('autoProcess', auto.input.checked, '自动处理'));
-        audit.input.addEventListener('change', () => void this.saveSwitch('auditEnabled', audit.input.checked, '审核'));
-        switches.append(enabled.label, auto.label, audit.label);
-        const profiles = document.createElement('div');
-        profiles.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;';
-        const profileBindings = [];
-        for (const [key, label] of PROFILE_FIELDS) {
-            const field = fieldControl(label, 'text', settings[key] ?? '');
-            field.input.placeholder = '留空使用当前聊天连接';
-            field.input.id = `mirror-abyss-${key}`;
-            this.settingInputs[key] = field.input;
-            profileBindings.push([key, field.input]);
-            profiles.append(field.label);
-        }
-        const promptNote = document.createElement('div');
-        promptNote.textContent = '下列文本是玩家附加规则；核心输出语法、事实边界和安全限制由插件固定，不会被覆盖。';
-        promptNote.style.cssText = 'margin:10px 0 7px;font-size:11px;color:rgba(255,255,255,.54);';
-        const auditPrompt = fieldControl('审核规则模板', 'textarea', settings.auditPrompt ?? '');
-        auditPrompt.input.style.minHeight = '105px';
-        const revisionPrompt = fieldControl('修正附加要求模板', 'textarea', settings.revisionPrompt ?? '');
-        revisionPrompt.input.style.minHeight = '105px';
-        const extractionPrompt = fieldControl('事实提取附加规则模板', 'textarea', settings.extractionPrompt ?? '');
-        extractionPrompt.input.style.minHeight = '120px';
-        const smallSummaryPrompt = fieldControl('小总结附加规则模板', 'textarea', settings.smallSummaryPrompt ?? '');
-        smallSummaryPrompt.input.style.minHeight = '90px';
-        const largeSummaryPrompt = fieldControl('大总结附加规则模板', 'textarea', settings.largeSummaryPrompt ?? '');
-        largeSummaryPrompt.input.style.minHeight = '90px';
-        const frequencies = document.createElement('div');
-        frequencies.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;';
-        const small = fieldControl('小总结触发回合数', 'number', settings.smallSummaryTurns ?? 10);
-        small.input.min = '1';
-        const large = fieldControl('大总结触发小总结数', 'number', settings.largeSummaryCount ?? 5);
-        large.input.min = '1';
-        const worldbook = fieldControl('指定世界书', 'text', settings.targetLorebook ?? '');
-        worldbook.input.placeholder = '留空使用当前聊天绑定世界书';
-        frequencies.append(small.label, large.label);
-        this.settingInputs.auditPrompt = auditPrompt.input;
-        this.settingInputs.revisionPrompt = revisionPrompt.input;
-        this.settingInputs.extractionPrompt = extractionPrompt.input;
-        this.settingInputs.smallSummaryPrompt = smallSummaryPrompt.input;
-        this.settingInputs.largeSummaryPrompt = largeSummaryPrompt.input;
-        this.settingInputs.smallSummaryTurns = small.input;
-        this.settingInputs.largeSummaryCount = large.input;
-        this.settingInputs.targetLorebook = worldbook.input;
-        const save = this.makeActionButton('保存设置', async () => {
-            const patch = {
-                enabled: this.enabledInput?.checked === true,
-                autoProcess: this.autoInput?.checked === true,
-                auditEnabled: this.auditInput?.checked === true,
-                auditPrompt: String(this.settingInputs.auditPrompt?.value ?? ''),
-                revisionPrompt: String(this.settingInputs.revisionPrompt?.value ?? ''),
-                extractionPrompt: String(this.settingInputs.extractionPrompt?.value ?? ''),
-                smallSummaryPrompt: String(this.settingInputs.smallSummaryPrompt?.value ?? ''),
-                largeSummaryPrompt: String(this.settingInputs.largeSummaryPrompt?.value ?? ''),
-                smallSummaryTurns: positiveInteger(this.settingInputs.smallSummaryTurns?.value, 10),
-                largeSummaryCount: positiveInteger(this.settingInputs.largeSummaryCount?.value, 5),
-                targetLorebook: String(this.settingInputs.targetLorebook?.value ?? '').trim(),
-            };
-            for (const [key] of PROFILE_FIELDS) patch[key] = String(this.settingInputs[key]?.value ?? '').trim();
-            const result = await this.requireAction('configure')(patch);
-            this.currentSettings = { ...this.currentSettings, ...patch, ...(result && typeof result === 'object' ? result : {}) };
-            return result;
-        });
-        const maintenance = document.createElement('div');
-        maintenance.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.1);';
-        const migrate = this.makeActionButton('整理世界书格式', () => this.callFirstAction(['migrate', 'migrateWorldbook', 'organizeWorldbook', 'formatWorldbook']));
-        const undo = this.makeActionButton('撤销上次整理', () => this.callFirstAction(['undoMigration', 'undoWorldbookMigration', 'undoWorldbookFormat']));
-        maintenance.append(migrate, undo);
-        view.append(switches, profiles, promptNote, auditPrompt.label, revisionPrompt.label, extractionPrompt.label, smallSummaryPrompt.label, largeSummaryPrompt.label, frequencies, worldbook.label, save, maintenance);
-        for (const [key, input] of profileBindings) {
-            try {
-                this.actions.bindProfileDropdown?.(`#${input.id}`, String(settings[key] ?? ''), (profileId) => {
-                    input.value = String(profileId ?? '');
-                });
-            }
-            catch (error) {
-                console.warn(`[MirrorAbyss] ${key} Connection Profile 下拉绑定失败，保留文本输入`, error);
-            }
-        }
-    }
-    makeActionButton(label, action, reload = true, metadata = {}) {
-        const button = plainButton(label);
-        if (metadata.audit) button.dataset.auditAction = 'true';
-        button.addEventListener('click', () => void this.runAction(label, action, reload));
-        this.actionButtons.push(button);
-        return button;
-    }
-    makeCancelButton() {
-        const button = plainButton('取消任务');
-        button.dataset.cancelAction = 'true';
-        button.addEventListener('click', () => void this.runCancel());
-        this.actionButtons.push(button);
-        return button;
-    }
-    async saveSwitch(key, value, label) {
-        try {
-            const result = await this.requireAction('configure')({ [key]: value });
-            this.currentSettings = { ...this.currentSettings, [key]: value, ...(result && typeof result === 'object' ? result : {}) };
-            await this.reloadWorkspace();
-            this.setStatus(`${label}已${value ? '开启' : '关闭'}`);
+    mountOfficialSettingsEntry() {
+        const container = document.getElementById('extensions_settings2');
+        if (!container) return;
+        document.getElementById(SETTINGS_ID)?.remove();
+        const entry = document.createElement('div');
+        entry.id = SETTINGS_ID;
+        entry.className = 'inline-drawer';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Mirror Abyss｜打开审核与提取面板';
+        button.style.cssText = 'box-sizing:border-box;width:100%;min-height:42px;padding:8px 10px;text-align:left;';
+        button.addEventListener('click', () => {
+            if (this.panel) this.panel.hidden = false;
+            this.launcher?.setAttribute('aria-expanded', 'true');
             this.refresh();
-        }
-        catch (error) {
-            this.setStatus(`${label}设置失败：${(0, util_1.errorText)(error)}`, true);
-            this.refresh();
-        }
+        });
+        entry.append(button);
+        container.append(entry);
+        this.settingsEntry = entry;
     }
-    async runAction(label, action, reload = true) {
-        if (this.busy) return;
-        this.busy = true;
-        this.syncDisabledState();
-        this.setStatus(`${label}中…`);
-        try {
-            const result = await action();
-            if (reload) await this.reloadWorkspace();
-            this.setStatus(`${label}完成`);
-            notify('success', `镜渊：${label}完成`);
-            return result;
-        }
-        catch (error) {
-            const text = (0, util_1.errorText)(error);
-            this.setStatus(`${label}失败：${text}`, true);
-            notify('error', `镜渊：${label}失败：${text}`);
-            return undefined;
-        }
-        finally {
-            this.busy = false;
-            this.refresh();
-            this.syncDisabledState();
-        }
+    observeChat() {
+        this.observer?.disconnect();
+        const chat = document.getElementById('chat');
+        if (!chat || typeof MutationObserver === 'undefined') return;
+        this.observer = new MutationObserver(() => this.scheduleIndicatorRefresh());
+        this.observer.observe(chat, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'is_user', 'is_system', 'mesid'] });
     }
-    async runCancel() {
-        try {
-            const action = this.requireAction('cancel');
-            await action();
-            this.setStatus('已请求取消当前任务');
-        }
-        catch (error) {
-            this.setStatus(`取消失败：${(0, util_1.errorText)(error)}`, true);
-        }
+    scheduleIndicatorRefresh() {
+        if (typeof document === 'undefined') return;
+        if (this.pendingIndicatorFrame) return;
+        this.pendingIndicatorFrame = requestAnimationFrame(() => {
+            this.pendingIndicatorFrame = 0;
+            this.renderIndicator();
+        });
     }
-    syncDisabledState() {
-        const auditEnabled = this.auditInput?.checked === true;
-        this.pruneActionButtons();
-        for (const button of this.actionButtons) {
-            const cancel = button.dataset?.cancelAction === 'true';
-            const disabled = (!cancel && this.busy) || (button.dataset?.auditAction === 'true' && !auditEnabled);
-            button.disabled = disabled;
-            button.style.opacity = disabled ? '.48' : '1';
-            button.style.cursor = disabled ? 'not-allowed' : 'pointer';
+    renderIndicator() {
+        const messages = [...document.querySelectorAll('#chat .mes[is_user="false"][is_system="false"]')];
+        const target = messages.at(-1);
+        document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => {
+            if (!target || !target.contains(node)) node.remove();
+        });
+        if (!target) return;
+        const text = target.querySelector('.mes_text');
+        const block = target.querySelector('.mes_block') || target;
+        if (!text || !block) return;
+        let indicator = block.querySelector(`.${INDICATOR_CLASS}`);
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = INDICATOR_CLASS;
+            text.insertAdjacentElement('afterend', indicator);
         }
-        if (this.autoInput) this.autoInput.disabled = this.busy;
-        if (this.auditInput) this.auditInput.disabled = this.busy;
-        if (this.enabledInput) this.enabledInput.disabled = this.busy;
+        const settings = this.getSettings();
+        const master = settings.enabled !== false;
+        const auditState = this.indicatorState('audit', master && settings.auditEnabled !== false);
+        const extractState = this.indicatorState('extract', master && settings.extractionEnabled !== false);
+        indicator.title = this.statusText || '镜渊状态';
+        indicator.innerHTML = `<span class="ma-ind-label">镜渊</span><span class="ma-ind-part"><i class="ma-ind-dot" data-state="${auditState}"></i>审核</span><span class="ma-ind-part"><i class="ma-ind-dot" data-state="${extractState}"></i>提取</span>`;
     }
-    pruneActionButtons() {
-        this.actionButtons = this.actionButtons.filter((button) => belongsTo(button, this.root));
-    }
-    requireAction(name) {
-        const action = this.actions?.[name];
-        if (typeof action !== 'function') throw new Error(`当前核心未提供 ${name} 操作`);
-        return action.bind(this.actions);
-    }
-    callFirstAction(names) {
-        for (const name of names) {
-            const action = this.actions?.[name];
-            if (typeof action === 'function') return action.call(this.actions);
-        }
-        throw new Error(`当前核心未提供 ${names.join(' / ')} 操作`);
+    indicatorState(kind, enabled) {
+        if (!enabled) return 'disabled';
+        if (this.busy && this.busyKind === kind) return 'running';
+        if (this.lastOutcome?.kind === kind) return this.lastOutcome.state;
+        if (this.statusError && this.statusText.includes(kind === 'audit' ? '审核' : '提取')) return 'error';
+        return 'ready';
     }
 }
 exports.ControlPanel = ControlPanel;
-function emptyWorkspace() {
-    return { entries: [], worldbookName: '', matching: null, status: '', settings: null };
-}
-function normalizeWorkspace(raw, fallbackSettings) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    const entries = Array.isArray(source.entries) ? source.entries : [];
-    return {
-        entries: entries.map((entry, index) => normalizeEntry(entry, index)),
-        worldbookName: String(source.worldbookName ?? fallbackSettings?.targetLorebook ?? ''),
-        matching: source.matching ?? null,
-        status: source.status ?? '',
-        settings: source.settings && typeof source.settings === 'object' ? source.settings : null,
-    };
-}
-function normalizeEntry(raw, index) {
-    const entry = raw && typeof raw === 'object' ? raw : {};
-    const uid = String(entry.uid ?? index);
-    const content = String(entry.content ?? '');
-    const title = String(entry.title ?? `未命名条目 ${index + 1}`).trim() || `未命名条目 ${index + 1}`;
-    const keywords = normalizeStringList(entry.keywords);
-    const sections = normalizeSections(entry.sections);
-    const references = normalizeStringList(entry.references);
-    return {
-        ...entry,
-        uid,
-        title,
-        name: String(entry.name ?? ''),
-        content,
-        keywords,
-        sections,
-        references,
-        summary: String(entry.summary ?? firstInformationPoint(sections) ?? ''),
-        focus: entry.focus === true,
-        locked: entry.locked === true,
-        constant: entry.activation?.constant === true,
-        enabled: entry.activation?.disabled !== true,
-        updatedAt: Number(entry.updatedAt ?? 0) || 0,
-    };
-}
-function normalizeSections(value) {
-    const output = [];
-    if (value && typeof value === 'object' && !Array.isArray(value) && value.values && typeof value.values === 'object') {
-        const order = Array.isArray(value.order) ? value.order : Object.keys(value.values);
-        for (const title of [...new Set([...order, ...Object.keys(value.values)])]) {
-            const points = normalizeStringList(value.values[title]);
-            if (points.length) output.push({ title: String(title), points });
-        }
-    }
-    return output.filter((section) => section.points.length);
-}
-function computeGraph(entries) {
-    const nodes = [];
-    const columns = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, entries.length) * 1.4)));
-    const rows = Math.max(1, Math.ceil(entries.length / columns));
-    const width = Math.max(520, columns * 180 + 60);
-    const height = Math.max(360, rows * 105 + 70);
-    entries.forEach((entry, index) => {
-        const column = index % columns;
-        const row = Math.floor(index / columns);
-        nodes.push({ entry, x: 40 + column * 180, y: 36 + row * 105 });
-    });
-    const lookup = new Map();
-    for (const node of nodes) {
-        for (const value of [node.entry.uid, node.entry.title, node.entry.name]) {
-            const key = normalizeLookup(value);
-            if (key && !lookup.has(key)) lookup.set(key, node);
-        }
-    }
-    const edges = [];
-    const seen = new Set();
-    for (const from of nodes) {
-        for (const reference of from.entry.references) {
-            const to = lookup.get(normalizeLookup(reference));
-            if (!to || to === from) continue;
-            const key = [from.entry.uid, to.entry.uid].sort().join('|');
-            if (seen.has(key)) continue;
-            seen.add(key);
-            edges.push({ from, to });
-        }
-    }
-    return { nodes, edges, width, height };
-}
-function normalizeMatching(value) {
-    const source = value && typeof value === 'object' ? value : {};
-    const plan = source.plan && typeof source.plan === 'object' ? source.plan : source;
-    const rawOperations = Array.isArray(plan.operations) ? plan.operations : [];
-    return {
-        rawResult: String(source.rawResult ?? source.raw ?? ''),
-        operations: rawOperations.map((operation) => ({
-            information: String(operation.newValue ?? operation.information ?? operation.value ?? operation.line ?? ''),
-            target: String(operation.targetTitle ?? operation.title ?? operation.targetUid ?? ''),
-            evidence: evidenceText(operation.matchEvidence ?? operation.evidence ?? operation.reason ?? operation.matchBasis),
-            kind: String(operation.operation ?? operation.kind ?? ''),
-        })),
-    };
-}
-function evidenceText(value) {
-    if (Array.isArray(value)) return value.map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join('；');
-    if (value && typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}:${String(item)}`).join('；');
-    return String(value ?? '');
-}
-function sectionHeading(titleText, descriptionText) {
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'margin-bottom:10px;';
-    const title = document.createElement('h3');
-    title.textContent = titleText;
-    title.style.cssText = 'margin:0;font-size:15px;';
-    const description = document.createElement('div');
-    description.textContent = descriptionText;
-    description.style.cssText = 'margin-top:3px;font-size:11px;color:rgba(255,255,255,.56);';
-    wrapper.append(title, description);
-    return wrapper;
-}
-function fieldControl(labelText, type, value) {
-    const label = document.createElement('label');
-    label.style.cssText = 'display:block;margin-bottom:8px;font-size:12px;color:rgba(255,255,255,.68);';
-    const caption = document.createElement('span');
-    caption.textContent = labelText;
-    caption.style.cssText = 'display:block;margin-bottom:4px;';
-    const input = document.createElement(type === 'textarea' ? 'textarea' : 'input');
-    if (type !== 'textarea') input.type = type;
-    input.value = String(value ?? '');
-    input.style.cssText = 'box-sizing:border-box;width:100%;min-height:40px;padding:8px;border:1px solid rgba(255,255,255,.15);border-radius:7px;background:rgba(0,0,0,.22);color:#fff;font:inherit;resize:vertical;';
-    label.append(caption, input);
-    return { label, input };
-}
-function checkControl(text, checked) {
-    const label = document.createElement('label');
-    label.style.cssText = 'display:flex;align-items:center;gap:7px;min-height:40px;padding:7px 8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;font-size:13px;cursor:pointer;user-select:none;';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = checked === true;
-    input.style.cssText = 'margin:0;';
-    const caption = document.createElement('span');
-    caption.textContent = text;
-    label.append(input, caption);
-    return { label, input };
-}
-function readonlyField(labelText, value) {
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'display:grid;grid-template-columns:minmax(84px,130px) minmax(0,1fr);gap:8px;padding:4px 0;font-size:12px;';
-    const label = document.createElement('div');
-    label.textContent = labelText;
-    label.style.cssText = 'color:rgba(255,255,255,.5);';
-    const text = document.createElement('div');
-    text.textContent = value;
-    text.style.cssText = 'color:rgba(255,255,255,.82);overflow-wrap:anywhere;';
-    wrapper.append(label, text);
-    return wrapper;
-}
-function keywordRow(values) {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;margin-top:6px;';
-    const keywords = normalizeStringList(values);
-    if (!keywords.length) {
-        const empty = document.createElement('span');
-        empty.textContent = '无关键词';
-        empty.style.cssText = 'font-size:11px;color:rgba(255,255,255,.4);';
-        row.append(empty);
-        return row;
-    }
-    for (const keyword of keywords) {
-        const tag = document.createElement('span');
-        tag.textContent = keyword;
-        tag.style.cssText = 'display:inline-flex;align-items:center;min-height:22px;padding:1px 7px;border-radius:999px;background:rgba(88,151,202,.18);border:1px solid rgba(125,190,242,.26);font-size:11px;color:#cbe9ff;';
-        row.append(tag);
-    }
-    return row;
-}
-function pill(text) {
-    const node = document.createElement('span');
-    node.textContent = text;
-    node.style.cssText = 'display:inline-flex;align-items:center;min-height:25px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.07);font-size:11px;color:rgba(255,255,255,.72);';
-    return node;
-}
-function emptyState(text) {
-    const node = document.createElement('div');
-    node.textContent = text;
-    node.style.cssText = 'padding:18px 12px;border:1px dashed rgba(255,255,255,.15);border-radius:8px;text-align:center;font-size:12px;color:rgba(255,255,255,.48);';
-    return node;
-}
-function plainButton(label) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = label;
-    button.style.cssText = 'min-height:44px;padding:6px 10px;border:1px solid rgba(255,255,255,.17);border-radius:8px;background:rgba(255,255,255,.08);color:#fff;font-size:12px;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;white-space:nowrap;';
-    return button;
-}
-function createSvg(tag) {
-    if (typeof document.createElementNS === 'function') return document.createElementNS('http://www.w3.org/2000/svg', tag);
-    return document.createElement(tag);
-}
-function clearNode(node) {
-    if (!node) return;
-    if (Array.isArray(node.children)) {
-        for (const child of [...node.children]) child.remove?.();
-        return;
-    }
-    while (node.firstChild) node.removeChild(node.firstChild);
-}
-function belongsTo(node, root) {
-    if (!node || !root) return false;
-    let current = node;
-    while (current) {
-        if (current === root) return true;
-        current = current.parentNode;
-    }
-    return false;
-}
-function normalizeStringList(value) {
-    if (Array.isArray(value)) return [...new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean))];
-    if (value instanceof Set) return normalizeStringList([...value]);
-    return splitList(value);
-}
-function splitList(value) {
-    return [...new Set(String(value ?? '').split(/[\n,，、;；|]+/u).map((item) => item.trim()).filter(Boolean))];
-}
-function firstInformationPoint(sections) {
-    for (const section of sections) if (section.points.length) return section.points[0];
-    return '';
-}
-function normalizeLookup(value) {
-    return String(value ?? '').normalize?.('NFKC').toLocaleLowerCase().replace(/[\s｜|:：_\-—·•"'“”‘’《》【】()[\]{}]/gu, '') || '';
-}
-function normalizeFieldLabels(fields) {
-    if (!Array.isArray(fields)) return [];
-    return [...new Set(fields.map((field) => typeof field === 'string' ? field : field?.label ?? field?.name ?? '').map((value) => String(value).trim()).filter(Boolean))];
-}
-function updateKeyword(original, labelValue, aliasesValue, descriptionValue, subtitlesValue) {
-    const label = String(labelValue ?? '').trim();
-    if (!label) throw new Error('关键词名称不能为空');
-    const labels = splitList(subtitlesValue);
-    const existing = Array.isArray(original.fields) ? original.fields : [];
-    const fields = labels.map((fieldLabel) => {
-        const found = existing.find((field) => typeof field === 'object' && String(field.label ?? '').trim() === fieldLabel);
-        return found ? { ...found, label: fieldLabel } : { key: safeKey(fieldLabel), label: fieldLabel, policy: 'semantic-upsert', options: [] };
-    });
-    return {
-        ...original,
-        key: String(original.key ?? '').trim() || safeKey(label),
-        label,
-        aliases: splitList(aliasesValue),
-        description: String(descriptionValue ?? '').trim(),
-        enabled: original.enabled !== false,
-        fields,
-    };
-}
-function safeKey(value) {
-    const normalized = String(value ?? '').normalize?.('NFKC').toLocaleLowerCase().replace(/[^\p{Letter}\p{Number}]+/gu, '-').replace(/^-+|-+$/gu, '');
-    return normalized || `custom-${Date.now()}`;
-}
-function positiveInteger(value, fallback) {
-    const number = Math.round(Number(value));
-    return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, Number(value) || min));
-}
-function formatUpdatedAt(value) {
-    if (!value) return '更新时间未知';
-    try {
-        return `更新于 ${new Date(value).toLocaleString()}`;
-    }
-    catch {
-        return '更新时间未知';
-    }
-}
-function entryStateLabel(entry) {
-    const labels = [];
-    if (entry.focus) labels.push('焦点');
-    if (entry.locked) labels.push('锁定');
-    if (entry.constant && !entry.focus) labels.push('常驻');
-    if (!entry.enabled) labels.push('非活跃');
-    return labels.join(' / ') || '普通';
-}
-function workspaceStatusText(workspace) {
-    if (typeof workspace.status === 'string' && workspace.status.trim()) return workspace.status.trim();
-    if (workspace.status && typeof workspace.status === 'object') return String(workspace.status.detail ?? workspace.status.phase ?? '就绪');
-    return '就绪';
-}
-function cardStyle() {
-    return 'box-sizing:border-box;padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:9px;background:rgba(255,255,255,.04);overflow:hidden;';
-}
-function smallLabelStyle() {
-    return 'display:block;margin-bottom:4px;font-size:11px;color:rgba(255,255,255,.5);';
-}
-function tabButtonStyle(selected) {
-    return `flex:0 0 auto;min-height:44px;padding:6px 11px;border:1px solid ${selected ? 'rgba(126,194,247,.56)' : 'rgba(255,255,255,.12)'};border-radius:8px;background:${selected ? 'rgba(68,133,187,.28)' : 'rgba(255,255,255,.04)'};color:${selected ? '#d9efff' : 'rgba(255,255,255,.68)'};font-size:12px;font-weight:${selected ? '700' : '500'};cursor:pointer;touch-action:manipulation;white-space:nowrap;`;
-}
-function notify(kind, message) {
-    const toast = globalThis.toastr?.[kind];
-    if (typeof toast === 'function') toast(message);
-    else console[kind === 'error' ? 'error' : 'info'](`[MirrorAbyss] ${message}`);
-}
 
 },
 "domain/entry-section":function(module,exports,require){
@@ -2595,6 +1749,10 @@ class MemoryRunner {
         return result.entries;
     }
     async extract(settings, snapshot) {
+        if (settings.extractionEnabled === false) {
+            this.setStatus(snapshot.chatKey, 'complete', '提取未启用');
+            return { entries: [], changed: false };
+        }
         this.setStatus(snapshot.chatKey, 'extracting', '提取事实与状态');
         this.validate(snapshot);
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
@@ -2615,35 +1773,21 @@ class MemoryRunner {
     }
     async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
         const byUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
-        const pairs = [];
+        let skipped = 0;
         for (const operation of plan.operations) {
             if (operation.kind !== 'append-line' || !operation.targetUid || !operation.section || !operation.newValue) continue;
             const entry = byUid.get(String(operation.targetUid));
             const oldLines = entry?.sections?.values?.[operation.section] ?? [];
-            for (const oldValue of oldLines) {
-                if ((0, util_1.normalizeFact)(oldValue) === (0, util_1.normalizeFact)(operation.newValue)) continue;
-                pairs.push({ operation, oldValue, newValue: operation.newValue });
-                if (pairs.length >= 80) break;
+            const threshold = /(事件进程|近期经历|变化记录|历史事实)/u.test(operation.section) ? 0.93 : 0.86;
+            const best = oldLines.reduce((score, oldValue) => Math.max(score, localSemanticSimilarity(oldValue, operation.newValue)), 0);
+            if (best >= threshold) {
+                operation.kind = 'noop';
+                operation.operation = 'no-op';
+                operation.reason = `本地语义解析器判定与已有事实相似度 ${(best * 100).toFixed(0)}%，跳过追加`;
+                skipped += 1;
             }
-            if (pairs.length >= 80) break;
         }
-        if (!pairs.length) return;
-        const prompt = (0, prompts_1.duplicatePrompts)(pairs);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), Math.min(1200, settings.responseTokens), snapshot, settings, settings.requestTimeoutMs, settings.extractionProfileId);
-        this.validate(snapshot);
-        const decisions = new Map();
-        for (const line of (0, parser_1.sanitizeModelText)(raw).split('\n')) {
-            const match = line.match(/^\s*(\d+)\s*[|｜:：]\s*(SAME|DIFFERENT)\s*$/iu);
-            if (match) decisions.set(Number(match[1]) - 1, String(match[2]).toUpperCase());
-        }
-        if (decisions.size !== pairs.length) throw new Error('重复事实判断返回格式不完整');
-        const sameOperations = new Set();
-        pairs.forEach((pair, index) => { if (decisions.get(index) === 'SAME') sameOperations.add(pair.operation); });
-        for (const operation of sameOperations) {
-            operation.kind = 'noop';
-            operation.operation = 'no-op';
-            operation.reason = '重复判断模型确认与已有事实表达同一含义，跳过追加';
-        }
+        if (skipped) this.setStatus(snapshot.chatKey, 'matching', `本地语义解析器跳过 ${skipped} 条重复事实`);
     }
     async summarize(kind, settings, snapshot) {
         const label = kind === 'small' ? '小总结' : '大总结';
@@ -2718,6 +1862,39 @@ function summaryScope(entries, snapshot) {
 }
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
 function trimPrompt(value) { return value.length <= constants_1.MAX_CONTEXT_CHARS ? value : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`; }
+
+function localSemanticSimilarity(left, right) {
+    const a = localBigrams(left);
+    const b = localBigrams(right);
+    if (!a.length || !b.length) return localNormalizeSemantic(left) === localNormalizeSemantic(right) ? 1 : 0;
+    const counts = new Map();
+    for (const value of a) counts.set(value, (counts.get(value) ?? 0) + 1);
+    let overlap = 0;
+    for (const value of b) {
+        const count = counts.get(value) ?? 0;
+        if (count > 0) {
+            overlap += 1;
+            counts.set(value, count - 1);
+        }
+    }
+    return (2 * overlap) / (a.length + b.length);
+}
+function localBigrams(value) {
+    const text = localNormalizeSemantic(value);
+    if (text.length < 2) return text ? [text] : [];
+    const output = [];
+    for (let index = 0; index < text.length - 1; index += 1) output.push(text.slice(index, index + 2));
+    return output;
+}
+function localNormalizeSemantic(value) {
+    return String(value ?? '')
+        .toLocaleLowerCase()
+        .replace(/(?:目前|当前|此时|现在)/gu, '')
+        .replace(/(?:取得|拿到|得到)/gu, '获得')
+        .replace(/(?:拥有着|持有着)/gu, '持有')
+        .replace(/(?:身处于|处在|位在)/gu, '位于')
+        .replace(/[\s，。！？；：、“”‘’（）()《》〈〉【】\[\]—…·,.!?:;'"`~|｜]/gu, '');
+}
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 
 },
@@ -3330,6 +2507,7 @@ const TITLE_PATTERN = /^\s*(?:#{1,6}\s*)?([^【】\n]+?[｜|丨][^【】\n]+?)\s
 const COLON_TITLE_PATTERN = /^\s*(?:#{1,6}\s*)?((?:人物|角色|NPC|事件|地点|场景|物品|组织|关系|能力|任务|契约|资源|状态影响|基础设定|全局变化|时空|自定义对象|小总结|大总结|总结))\s*[:：]\s*([^：:\n]+?)\s*$/u;
 const BULLET_PATTERN = /^\s*(?:[-*]\s+|[•·]\s*|\d+、\s*|\d+[.)]\s+)(.*?)\s*$/u;
 const EMPTY_PATTERN = /^\s*(?:无|无变化|无新增事实|无可记录事实|没有)\s*[。.]?\s*$/u;
+const EMPTY_VALUE_PATTERN = /^\s*[^：:\n]{1,24}\s*[:：]\s*(?:无|无变化|没有|未知|未说明)\s*[。.]*\s*$/u;
 const PLAIN_SECTION_NAMES = new Set([
     '固定事实', '当前状态', '近期经历', '事件进程', '关系状态', '能力状态', '历史事实', '关联条目',
     '变化记录', '最终结果', '关键词', '触发词', '标签', '分类', '别名',
@@ -3358,17 +2536,17 @@ function parseInformationPoints(raw) {
             const bullet = bulletMatch[1] ?? '';
             if (!bullet)
                 continue;
-            if (EMPTY_PATTERN.test(bullet)) {
-                section.empty = true;
-                section.lines = [];
+            if (EMPTY_PATTERN.test(bullet) || EMPTY_VALUE_PATTERN.test(bullet)) {
+                if (!section.lines.length) section.empty = true;
             }
-            else
+            else {
+                section.empty = false;
                 section.lines.push(normalizePointLine(bullet));
+            }
             continue;
         }
-        if (block && section && EMPTY_PATTERN.test(line)) {
-            section.empty = true;
-            section.lines = [];
+        if (block && section && (EMPTY_PATTERN.test(line) || EMPTY_VALUE_PATTERN.test(line))) {
+            if (!section.lines.length) section.empty = true;
             continue;
         }
         // 冒号形式与“契约要求：”等事实天然歧义，只允许它开启首个条目。
@@ -3420,7 +2598,7 @@ function parseEntrySections(content) {
         if (!current || !line.trim())
             continue;
         const bullet = line.match(BULLET_PATTERN)?.[1] ?? line.trim();
-        if (!bullet || EMPTY_PATTERN.test(bullet))
+        if (!bullet || EMPTY_PATTERN.test(bullet) || EMPTY_VALUE_PATTERN.test(bullet))
             continue;
         values[current].push(normalizePointLine(bullet));
     }
@@ -3580,81 +2758,140 @@ ${assistantText}`;
 function extractionPrompts(settings, playerText, assistantText, relevant) {
     const existing = relevant.map(entryForPrompt).join('\n\n');
     const custom = settings.extractionPrompt.trim();
-    const system = `你是 Mirror Abyss 事实与状态提取脚本，也是世界书记员。
+    const system = `你是 Mirror Abyss 固定格式事实提取器。
 
-你的唯一任务：
-从已经生成的剧情文本中提取明确发生、会影响后续叙事的事实。
+你的任务是把已经生成的剧情正文压缩为可写入世界书的独立事实条目。
+你不是叙事模型，不续写、不改写剧情、不复制正文段落。
 
-你不是作者。
-你不是编剧。
-你不是总结者。
-你不是推理者。
+只允许建立五类条目：人物、地点、物品、事件、关系。
+同一对象只能输出一个条目；最多输出十二个条目。
 
-最高原则：
-只记录文本中已经明确发生的事情。宁可少记，不可编造。
+只提取已经明确发生、明确表达、明确确认，或正文结束时仍然成立且会影响后续的事实。
+不得提取或推测：NPC未表达的真实心理、幕后计划、隐藏原因、未来结果、无载体远处事件、玩家尚未实现的愿望、纯气氛、普通动作、对白全文、一次性背景人物和无持续价值物品。
+记录、传闻、档案和人物说法只能保留来源性质，不能升级为确定真相。
 
-禁止：
-1. 推测。
-2. 补充背景。
-3. 预测未来。
-4. 心理分析；除非角色明确说出或正文明确确认。
-5. 文学化总结。
-6. 决定 UID、保存位置、覆盖对象、删除、合并、常驻、向量、递归、深度、顺序或概率。
-7. 多个物品、能力、任务或关系不得挤进人物【当前状态】，应分别输出对应对象条目。
+每条事实必须压缩成一句能够独立理解的完整事实句：主体＋状态或变化＋对象、结果或必要条件。
+禁止只写“受伤”“在石洞”“调查中”“关系恶化”等碎片。
+同一事实只写一次；当前状态与变化过程不得重复。
+没有信息的小标题保留并填写“- 无”。“无”表示本轮没有新信息，不表示删除旧事实。
 
-允许提取：
-【人物】持续出现或可能有后续影响的人物，其身份变化、当前状态、身体状态、能力变化和关系变化。
-【NPC】正文明确只是一次性背景角色时使用；不确定时使用“人物”。
-【地点】新地点、到达或离开、地点状态变化。
-【物品】获得、丢失、使用、损坏和状态变化。
-【事件】开始、推进、结束和结果。
-【组织】加入、离开和关系变化。
-【规则】正文明确出现的新规则。
-
-严格输出格式：
-类型｜名称
-
-【信息类别】
-
-信息1
-信息2
-
-等价格式示意：
+严格输出语法：
 类型｜稳定名称
-【小标题】
-一条自然语言事实句
+【关键词】
+- 稳定名称
+- 别名或高识别度关键词
 
-多个对象之间空一行。
-模型标题不得包含 UID；已有对象沿用提供的稳定标题。
-当前状态类信息优先使用“字段：当前值。”，便于代码执行状态槽替换。
-每个信息点单独一行。
-没有任何符合条件的信息时只输出：
-无
+【固定小标题】
+- 状态槽：完整事实句。
 
-不要输出解释、原因、分析、备注、JSON 或代码块。${custom ? `\n\n用户额外要求：\n${custom}` : ''}`;
-    const user = `当前剧情正文：
-${assistantText}
+多个条目之间只空一行。
+标题不得包含UID。关键词必须放在【关键词】中，正文信息不得重复关键词。
+不得输出JSON、代码块、解释、序号、前言或后记。
+没有任何可记录事实时只输出：无
 
-玩家本轮输入：
+人物条目固定顺序：
+人物｜稳定名称
+【关键词】
+- 稳定名称
+【固定事实】
+- 身份：完整事实句。
+- 稳定特征：完整事实句。
+【当前状态】
+- 位置：完整事实句。
+- 身体状态：完整事实句。
+- 当前事务：完整事实句。
+【近期经历】
+- 完整事实句。
+【关联条目】
+- 类型｜稳定名称
+【别名】
+- 别名
+
+地点条目固定顺序：
+地点｜稳定名称
+【关键词】
+- 稳定名称
+【固定事实】
+- 地点属性：完整事实句。
+- 稳定结构：完整事实句。
+【当前状态】
+- 环境状态：完整事实句。
+- 在场情况：完整事实句。
+- 当前功能：完整事实句。
+【变化记录】
+- 完整事实句。
+【关联条目】
+- 类型｜稳定名称
+【别名】
+- 别名
+
+物品条目固定顺序：
+物品｜稳定名称
+【关键词】
+- 稳定名称
+【固定事实】
+- 物品性质：完整事实句。
+- 已知用途：完整事实句。
+【当前状态】
+- 持有者：完整事实句。
+- 所在位置：完整事实句。
+- 完整性：完整事实句。
+- 当前用途：完整事实句。
+【变化记录】
+- 完整事实句。
+【关联条目】
+- 类型｜稳定名称
+【别名】
+- 别名
+
+事件条目固定顺序：
+事件｜稳定名称
+【关键词】
+- 稳定名称
+【当前状态】
+- 阶段：开始、进行中、暂停或结束。
+- 当前局面：完整事实句。
+【事件进程】
+- 完整事实句。
+【最终结果】
+- 完整事实句。
+【关联条目】
+- 类型｜稳定名称
+【别名】
+- 别名
+
+关系条目固定顺序：
+关系｜甲与乙
+【关键词】
+- 甲与乙
+- 甲
+- 乙
+【固定事实】
+- 关系对象：该关系连接甲与乙。
+- 关系基础：完整事实句。
+【当前状态】
+- 关系性质：完整事实句。
+- 双方立场：完整事实句。
+- 当前互动条件：完整事实句。
+【变化记录】
+- 完整事实句。
+【关联条目】
+- 人物｜甲
+- 人物｜乙
+【别名】
+- 无
+
+当前状态必须使用明确状态槽。相同状态槽会由本地解析器替换旧值；固定事实同槽变更会保留旧值到历史事实；经历、事件进程和变化记录会按顺序追加并进行本地语义去重。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
+    const user = `玩家本轮输入：
 ${playerText || '（空）'}
 
-相关世界书：
+AI最终正文：
+${assistantText}
+
+可能相关的既有世界书条目：
 ${existing || '（无）'}
 
-可用分类：
-人物
-NPC
-地点
-事件
-物品
-组织
-能力
-关系
-规则
-任务
-契约
-资源
-状态影响`;
+只输出本轮新出现或发生变化的事实条目，不要重抄既有条目中没有变化的内容。`;
     return { system, user };
 }
 
@@ -3974,9 +3211,18 @@ function keyword(key, label, description, aliases, constant, fields, order, vect
         })),
     };
 }
-exports.DEFAULT_AUDIT_PROMPT = `检查玩家控制、知识限制、世界规则和人物一致性。`;
-exports.DEFAULT_REVISION_PROMPT = `只修正审核指出的违规处，保持原剧情方向、事件结果、人物关系和角色身份。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `只提取正文明确发生且会影响后续的信息；宁可少记，不可编造。`;
+exports.DEFAULT_AUDIT_PROMPT = `只在存在明确违规时判定失败。检查：
+1. 不得替焦点增加玩家未输入的台词、主动行动、重要决定、目标、价值判断或心理结论。
+2. 玩家已声明的动作和语言按原意承接，不得顺势扩展为新决定。
+3. 玩家无法单方面控制的外部结果，应依据人物意愿、能力、资源、权限、环境和既有事实判定。
+4. 不得直接确认NPC未表达的真实心理、幕后计划、隐藏原因、无载体远处事件或玩家尚未获得的最终答案。
+5. 记录、传闻、公告和人物说法不得自动升级为完整真相，也不得仅因表面相似强行建立因果。
+6. NPC与世界应保持合理主动性；已完成流程不得无理由重复，重要场景应有具体反馈，但短对话与过渡场景不必强行制造重大变化。
+7. 正文不得包含选项栏、行动列表、下一步建议、攻略、规则说明、自我解释、内部检查、属性面板、管理标签、回合编号或作者总结。
+8. 自然段落、对白换行、正常标点、简短场景标题、文学性描写和NPC正常提问本身不构成违规。
+有疑问但没有明确违规证据时判定通过。`;
+exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、地点、物品、事件、关系五类固定格式；标题、关键词和事实正文必须分离；事实必须是完整句，不复制叙事正文，不跨栏目重复。`;
 exports.DEFAULT_SMALL_SUMMARY_PROMPT = `生成下一阶段继续当前剧情必须知道的信息；保留当前地点、当前人物、当前目标、当前冲突、已经发生的结果和未解决事项。`;
 exports.DEFAULT_LARGE_SUMMARY_PROMPT = `整理跨场景继续剧情仍需保留的长期影响；保留永久关系、重大事件结果、世界变化、长期规则和长期目标。`;
 exports.DEFAULT_SETTINGS = Object.freeze({
@@ -3989,8 +3235,9 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     smallSummaryProfileId: '',
     largeSummaryProfileId: '',
     migrationProfileId: '',
-    autoProcess: true,
+    autoProcess: false,
     auditEnabled: true,
+    extractionEnabled: true,
     targetLorebook: '',
     autoCreateLorebook: false,
     auditPrompt: exports.DEFAULT_AUDIT_PROMPT,
@@ -4043,8 +3290,9 @@ function parseSettings(value) {
         smallSummaryProfileId: profileValue(candidate, 'smallSummaryProfileId'),
         largeSummaryProfileId: profileValue(candidate, 'largeSummaryProfileId'),
         migrationProfileId: profileValue(candidate, 'migrationProfileId'),
-        autoProcess: candidate.autoProcess !== false,
+        autoProcess: candidate.autoProcess === true,
         auditEnabled: candidate.auditEnabled !== false,
+        extractionEnabled: candidate.extractionEnabled !== false,
         targetLorebook: String(candidate.targetLorebook ?? ''),
         autoCreateLorebook: candidate.autoCreateLorebook === true,
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,

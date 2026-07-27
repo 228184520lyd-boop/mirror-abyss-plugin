@@ -4,10 +4,10 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-core.realtest.7",
+  "version": "2.0.0-lite.ui.1",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
-  "minimum_client_version": "1.16.0",
+  "minimum_client_version": "1.18.0",
   "hooks": {
     "install": "onInstall",
     "update": "onUpdate",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "开放世界叙事审核与世界书长期记忆插件｜固定总结格式、UID关键词、确定性匹配与 ST 原生字段保留版"
+  "description": "审核与固定格式世界书提取轻量版｜右上角双按钮、独立开关、正文状态灯、内置解析与本地语义合并"
 }
