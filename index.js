@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe loader 2.0.0-lite.ui.5. */
+/** Mirror Abyss mobile-safe loader 2.0.0-lite.ui.6. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;

@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.5",
+  "version": "2.0.0-lite.ui.6",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "审核与固定格式世界书提取轻量版｜可点击右上侧入口、异步任务队列、自动审核/自动提取独立开关、正文替换落地校验、条目级状态灯、严格语法解析与本地语义合并"
+  "description": "审核与语义世界书轻量版｜严格顺序异步队列、提取容错与部分提交、宽场景卡、小总结/大总结沉降分发、受限递归与确定性召回重排"
 }
