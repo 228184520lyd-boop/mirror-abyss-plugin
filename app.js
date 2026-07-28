@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.12 — scene-centered recall, five entry types, event settlement and low-coupling requests. */
+/** Mirror Abyss 2.0.0-lite.ui.13 — scene-centered recall, five entry types, event settlement and low-coupling requests. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -530,7 +530,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.12';
+exports.VERSION = '2.0.0-lite.ui.13';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1478,29 +1478,32 @@ exports.ControlPanel = ControlPanel;
 
 "use strict";
 const { parseEntrySections, serializeEntrySections } = require("../parser");
-const { canonicalSectionName } = require("./information-point");
+const { canonicalSectionName, mergeCanonicalLines } = require("./information-point");
 const { normalizeTitle, splitTitle, unique } = require("../util");
-function normalizeEntrySections(parsed) {
+
+// [MA-SECTION-02] 读取旧世界书正文时按条目类型合并同义小标题。
+// 例如人物【当前状态】与【当前】统一为【当前】；场景【当前】统一为【当前状态】。
+function normalizeEntrySections(parsed, type = '') {
     const order = [];
     const values = {};
     for (const rawName of parsed.order ?? []) {
-        const name = canonicalSectionName(rawName);
+        const name = canonicalSectionName(rawName, type);
         if (!name) continue;
         if (!values[name]) {
             values[name] = [];
             order.push(name);
         }
-        values[name] = unique([...values[name], ...(parsed.values?.[rawName] ?? [])]);
+        values[name] = mergeCanonicalLines(name, values[name], parsed.values?.[rawName] ?? []);
     }
     return { order, values };
 }
-function sectionLines(content, names) {
-    const parsed = normalizeEntrySections(parseEntrySections(content));
-    const normalized = new Set(names.map((name) => canonicalSectionName(name).replace(/\s+/g, '').toLocaleLowerCase()));
+function sectionLines(content, names, type = '') {
+    const parsed = normalizeEntrySections(parseEntrySections(content), type);
+    const normalized = new Set(names.map((name) => canonicalSectionName(name, type).replace(/\s+/g, '').toLocaleLowerCase()));
     return parsed.order.flatMap((name) => normalized.has(name.replace(/\s+/g, '').toLocaleLowerCase()) ? parsed.values[name] ?? [] : []);
 }
-function extractReferences(content) {
-    const parsed = normalizeEntrySections(parseEntrySections(content));
+function extractReferences(content, type = '') {
+    const parsed = normalizeEntrySections(parseEntrySections(content), type);
     const output = [];
     for (const [name, lines] of Object.entries(parsed.values)) {
         if (!/(关联|关系对象|涉及条目|参与对象|引用)/u.test(name)) continue;
@@ -1513,7 +1516,7 @@ function extractReferences(content) {
 }
 exports.canonicalSectionName = canonicalSectionName;
 exports.normalizeEntrySections = normalizeEntrySections;
-exports.parseEntrySections = (content) => normalizeEntrySections(parseEntrySections(content));
+exports.parseEntrySections = (content, type = '') => normalizeEntrySections(parseEntrySections(content), type);
 exports.serializeEntrySections = serializeEntrySections;
 exports.sectionLines = sectionLines;
 exports.extractReferences = extractReferences;
@@ -1521,33 +1524,101 @@ exports.extractReferences = extractReferences;
 
 "use strict";
 const { unique } = require("../util");
-const SECTION_ALIASES = {
-    '身份定义': '固定事实',
-    '对象定义': '固定事实',
-    '规则定义': '固定事实',
-    '能力定义': '固定事实',
-    '关系定义': '固定事实',
-    '契约定义': '固定事实',
-    '影响定义': '固定事实',
-    '现行事实': '当前状态',
-    '状态': '当前状态',
-    '事件状态': '当前状态',
-    '当前结果': '最终结果',
-    '结束结论': '最终结果',
+
+// [MA-SECTION-01] 小标题必须先按条目类型归一化。
+// 同一个语义不能同时保留“当前”和“当前状态”，否则二次提取会把它们当成两个子条目。
+const COMMON_SECTION_ALIASES = {
+    '其他名称': '别名',
+    '称号': '别名',
 };
-function canonicalSectionName(value) {
+const TYPE_SECTION_ALIASES = {
+    人物: {
+        '身份定义': '身份',
+        '固定事实': '稳定',
+        '当前状态': '当前',
+        '现行事实': '当前',
+        '状态': '当前',
+        '近期经历': '持续经历',
+        '变化记录': '持续经历',
+    },
+    场景: {
+        '固定事实': '定义',
+        '地点属性': '定义',
+        '稳定空间': '空间结构',
+        '当前': '当前状态',
+        '现行事实': '当前状态',
+        '状态': '当前状态',
+        '局部变化': '持续变化',
+        '变化记录': '持续变化',
+    },
+    物品: {
+        '固定事实': '定义',
+        '对象定义': '定义',
+        '当前状态': '当前',
+        '现行事实': '当前',
+        '状态': '当前',
+        '变化记录': '持续变化',
+    },
+    事件: {
+        '当前': '阶段',
+        '当前状态': '阶段',
+        '状态': '阶段',
+        '事件状态': '阶段',
+        '事件进程': '关键进展',
+        '最终结果': '结果',
+        '当前结果': '结果',
+        '结束结论': '结果',
+    },
+    世界: {
+        '当前': '公开局势',
+        '当前状态': '公开局势',
+        '现行事实': '公开局势',
+        '状态': '公开局势',
+        '全局状态': '公开局势',
+        '变化记录': '世界变化',
+    },
+};
+
+function canonicalSectionName(value, type = '') {
     const raw = String(value ?? '').trim();
     const compact = raw.replace(/\s+/gu, '');
-    return SECTION_ALIASES[compact] ?? raw;
+    return TYPE_SECTION_ALIASES[String(type ?? '')]?.[compact]
+        ?? COMMON_SECTION_ALIASES[compact]
+        ?? raw;
 }
+
+function sectionSlot(line) {
+    return String(line ?? '').match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1]?.replace(/\s+/gu, '') ?? '';
+}
+
+function mergeCanonicalLines(section, oldLines, incomingLines) {
+    const replaceBySlot = /^(当前|当前状态|关系|阶段|时代|权力|制度|公开局势|持续影响)$/u.test(String(section ?? ''));
+    if (!replaceBySlot) return unique([...(oldLines ?? []), ...(incomingLines ?? [])]);
+    const output = [...(oldLines ?? [])];
+    const slots = new Map();
+    output.forEach((line, index) => {
+        const slot = sectionSlot(line);
+        if (slot) slots.set(slot, index);
+    });
+    for (const line of incomingLines ?? []) {
+        const slot = sectionSlot(line);
+        if (slot && slots.has(slot)) output[slots.get(slot)] = line;
+        else {
+            if (slot) slots.set(slot, output.length);
+            output.push(line);
+        }
+    }
+    return unique(output);
+}
+
 function prepareInformationBlocks(parsedBlocks) {
     return parsedBlocks.map((block) => {
         const merged = new Map();
         for (const rawSection of block.sections ?? []) {
-            const name = canonicalSectionName(rawSection.name);
+            const name = canonicalSectionName(rawSection.name, block.type);
             if (!name) continue;
             const current = merged.get(name) ?? { name, lines: [], empty: true };
-            current.lines = unique([...current.lines, ...(rawSection.lines ?? [])]);
+            current.lines = mergeCanonicalLines(name, current.lines, rawSection.lines ?? []);
             current.empty = current.lines.length === 0 && (current.empty || rawSection.empty === true);
             merged.set(name, current);
         }
@@ -1559,6 +1630,7 @@ function prepareInformationBlocks(parsedBlocks) {
     });
 }
 exports.canonicalSectionName = canonicalSectionName;
+exports.mergeCanonicalLines = mergeCanonicalLines;
 exports.prepareInformationBlocks = prepareInformationBlocks;
 },"host":function(module,exports,require){
 
@@ -3575,6 +3647,7 @@ exports.normalizePointLine = normalizePointLine;
 exports.parseLabeledSections = parseLabeledSections;
 exports.stripListMarker = stripListMarker;
 const util_1 = require("./util");
+const information_point_1 = require("./domain/information-point");
 const SECTION_PATTERN = /^\s*【\s*([^】]+?)\s*】\s*$/u;
 const PLAIN_SECTION_PATTERN = /^\s*([^：:\n]{1,24})\s*[:：]\s*$/u;
 const TITLE_PATTERN = /^\s*(?:#{1,6}\s*)?([^【】\n]+?[｜|丨][^【】\n]+?)\s*$/u;
@@ -3758,17 +3831,9 @@ function recoverSections(type, content, diagnostics, title) {
     return sections;
 }
 function canonicalExtractionSection(type, value) {
-    const raw = String(value ?? '').replace(/\s+/gu, '').trim();
-    const common = { 其他名称: '别名', 称号: '别名' };
-    const legacy = {
-        人物: { 固定事实: '稳定', 身份定义: '身份', 当前状态: '当前', 近期经历: '持续经历', 变化记录: '持续经历' },
-        场景: { 固定事实: '定义', 地点属性: '定义', 稳定空间: '空间结构', 局部变化: '持续变化', 变化记录: '持续变化' },
-        物品: { 固定事实: '定义', 对象定义: '定义', 当前状态: '当前', 变化记录: '持续变化' },
-        事件: { 当前状态: '阶段', 事件状态: '阶段', 事件进程: '关键进展', 最终结果: '结果', 当前结果: '结果', 结束结论: '结果' },
-        世界: { 当前状态: '公开局势', 变化记录: '世界变化', 全局状态: '公开局势' },
-    };
-    return legacy[type]?.[raw] ?? common[raw] ?? raw;
+    return (0, information_point_1.canonicalSectionName)(value, type);
 }
+
 function mergeDuplicateBlocks(blocks, diagnostics) {
     const map = new Map();
     for (const block of blocks) {
@@ -5600,12 +5665,12 @@ function parseEntries(data) {
         const split = (0, util_1.splitTitle)(title);
         if (!split) continue;
         const content = String(raw.content ?? '');
-        const sections = (0, entry_section_1.parseEntrySections)(content);
+        const sections = (0, entry_section_1.parseEntrySections)(content, split.type);
         const triggerKeywords = (0, util_1.normalizeStringArray)(raw.key).filter((item) => !(0, util_1.isUidKeyword)(item));
-        const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称']));
+        const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称'], split.type));
         const extension = readExtension(raw);
         const storedKeywords = (0, util_1.normalizeStringArray)(extension.recallKeywords);
-        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
+        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
 }
