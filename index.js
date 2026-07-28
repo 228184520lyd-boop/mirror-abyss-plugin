@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe loader 2.0.0-lite.ui.8. */
+/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.11. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
@@ -13,12 +13,12 @@ function mount(title = '点击启动镜渊') {
   if (document.getElementById(APP_ROOT_ID) || document.getElementById(LOADER_ID)) return;
   const root = document.createElement('div');
   root.id = LOADER_ID;
-  root.style.cssText = 'position:fixed!important;right:max(2px,env(safe-area-inset-right))!important;top:max(calc(var(--topBarBlockSize,44px) + 8px),calc(env(safe-area-inset-top) + 52px))!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;';
+  root.style.cssText = 'position:fixed!important;right:max(10px,env(safe-area-inset-right))!important;top:50dvh!important;transform:translateY(-50%)!important;z-index:2147483640!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;';
   const button = document.createElement('button');
   button.type = 'button';
   button.title = title;
   button.setAttribute('aria-label', '启动并打开镜渊');
-  button.style.cssText = 'display:flex!important;align-items:center!important;justify-content:center!important;width:34px!important;height:34px!important;min-width:34px!important;min-height:34px!important;padding:0!important;border:1px solid rgba(255,255,255,.24)!important;border-radius:9px!important;background:#141418!important;color:#fff!important;box-shadow:0 3px 12px rgba(0,0,0,.42)!important;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation!important;user-select:none!important;-webkit-tap-highlight-color:transparent!important;';
+  button.style.cssText = 'display:flex!important;align-items:center!important;justify-content:center!important;width:44px!important;height:44px!important;min-width:44px!important;min-height:44px!important;padding:0!important;border:1px solid rgba(255,255,255,.24)!important;border-radius:50%!important;background:#141418!important;color:#fff!important;box-shadow:0 3px 12px rgba(0,0,0,.42)!important;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation!important;user-select:none!important;-webkit-tap-highlight-color:transparent!important;';
   button.innerHTML = '<i class="fa-solid fa-circle-nodes" style="font-size:14px;pointer-events:none"></i>';
   button.addEventListener('pointerdown', event => event.stopPropagation());
   button.addEventListener('click', event => {
