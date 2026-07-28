@@ -1,5 +1,6 @@
-/** Mirror Abyss 2.0.0-lite.ui.6 — lightweight audit, extraction, summary settlement and recall scheduling build. */
+/** Mirror Abyss 2.0.0-lite.ui.9 — verified audit replacement and low-coupling 504-resistant model requests. */
 var MA_MODULES={"application":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MirrorAbyssApplication = void 0;
@@ -421,17 +422,18 @@ function messageIndexFromEvent(value) {
     const number = Number(value);
     return Number.isInteger(number) ? number : undefined;
 }
-
 },"audit":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuditRunner = void 0;
 exports.parseAuditResult = parseAuditResult;
-const constants_1 = require("./constants");
 const prompts_1 = require("./prompts");
 const parser_1 = require("./parser");
 const revision_1 = require("./revision");
+const model_request_1 = require("./model-request");
 const util_1 = require("./util");
+
 class AuditRunner {
     constructor(host, getSettings) {
         this.host = host;
@@ -443,6 +445,11 @@ class AuditRunner {
         const key = chatKey || safeChatKey(this.host);
         return structuredClone(this.statusByChat.get(key) ?? { phase: 'idle', detail: '等待审核', error: '' });
     }
+
+    /**
+     * [MA-AUDIT-01] 审核只负责“判定”。FAIL 时交给 RevisionService 生成完整正文，
+     * 最后由 HostAdapter 原子式替换并保存。审核模块不接触 DOM 和世界书。
+     */
     async process(settings, snapshot) {
         if (!settings.auditEnabled || !settings.auditPrompt.trim()) {
             this.setStatus(snapshot.chatKey, 'complete', '审核未启用');
@@ -452,7 +459,17 @@ class AuditRunner {
             this.host.assertSnapshot(snapshot, this.getSettings());
             this.setStatus(snapshot.chatKey, 'audit', '审核正文');
             const prompt = (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, snapshot.characterCard);
-            const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, snapshot, settings, settings.requestTimeoutMs, settings.auditProfileId);
+            const raw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'audit',
+                prompt,
+                fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, snapshot.characterCard, { compact: true }),
+                settings,
+                snapshot,
+                profileId: settings.auditProfileId,
+                sourceText: snapshot.assistantText,
+                onRetry: () => this.setStatus(snapshot.chatKey, 'audit', '审核网关异常，已缩短上下文并重试一次'),
+            });
             this.host.assertSnapshot(snapshot, this.getSettings());
             const result = parseAuditResult(raw);
             let finalSnapshot = snapshot;
@@ -460,13 +477,14 @@ class AuditRunner {
                 this.setStatus(snapshot.chatKey, 'revision', '审核不通过，生成一次完整修正版');
                 const revisedText = await this.revisionService.revise(settings, snapshot, result.issues);
                 finalSnapshot = await this.host.replaceAssistantText(snapshot, revisedText, this.getSettings());
-                this.setStatus(snapshot.chatKey, 'revision', '完整修正版正文已落地');
+                this.setStatus(snapshot.chatKey, 'revision', '完整修正版正文已替换并保存');
             }
             const auditReplaced = result.decision === 'revision';
-            const auditDetail = auditReplaced ? '审核未通过，正文已替换' : '审核通过，正文未修改';
+            const auditDetail = auditReplaced ? '审核未通过，正文已替换并保存' : '审核通过，正文未修改';
             this.setStatus(snapshot.chatKey, 'complete', auditDetail);
             return { ...finalSnapshot, auditDecision: result.decision, auditReplaced, auditDetail };
-        } catch (error) {
+        }
+        catch (error) {
             this.setStatus(snapshot.chatKey, 'error', '审核停止', (0, util_1.errorText)(error));
             throw error;
         }
@@ -476,6 +494,8 @@ class AuditRunner {
     }
 }
 exports.AuditRunner = AuditRunner;
+
+/** [MA-AUDIT-02] 审核结果协议：PASS 只能单独出现；FAIL 必须附具体问题。 */
 function parseAuditResult(raw) {
     const text = (0, parser_1.sanitizeModelText)(raw);
     if (/^(?:PASS|通过)[。.]?$/iu.test(text)) return { decision: 'pass', issues: [] };
@@ -483,10 +503,8 @@ function parseAuditResult(raw) {
         throw new Error('审核模型越权返回了修正版正文');
     const rawConclusion = text.match(/^\s*(PASS|FAIL|通过|需要修正)\s*[。.]?\s*(?:\n|$)/iu)?.[1] || '';
     const conclusion = /^(?:PASS|通过)$/iu.test(rawConclusion) ? 'PASS' : /^(?:FAIL|需要修正)$/iu.test(rawConclusion) ? 'FAIL' : '';
-    if (conclusion === 'PASS')
-        throw new Error('审核结论为 PASS 时必须只返回 PASS');
-    if (conclusion !== 'FAIL')
-        throw new Error('审核返回缺少明确的 PASS 或 FAIL 结论');
+    if (conclusion === 'PASS') throw new Error('审核结论为 PASS 时必须只返回 PASS');
+    if (conclusion !== 'FAIL') throw new Error('审核返回缺少明确的 PASS 或 FAIL 结论');
     const sections = (0, parser_1.parseLabeledSections)(text);
     let issues = ['原因', '违反规则', '问题', '违规'].flatMap((name) => nonEmptyLines(sections.get(name))).filter((line) => !isNone(line));
     if (!issues.length) {
@@ -497,28 +515,26 @@ function parseAuditResult(raw) {
     if (!issues.length) throw new Error('审核返回 FAIL，但没有指出具体问题或原因');
     return { decision: 'revision', issues };
 }
-function nonEmptyLines(lines = []) {
-    return lines.map((line) => (0, parser_1.stripListMarker)(line).trim()).filter(Boolean);
-}
+function nonEmptyLines(lines = []) { return lines.map((line) => (0, parser_1.stripListMarker)(line).trim()).filter(Boolean); }
 function isNone(value) { return /^\s*(?:无|没有|无问题)\s*[。.]?\s*$/u.test(String(value ?? '')); }
-function trimPrompt(value) { return value.length <= constants_1.MAX_CONTEXT_CHARS ? value : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`; }
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
-
 },"constants":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.6';
+exports.VERSION = '2.0.0-lite.ui.9';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 8;
-
+exports.MANAGED_VERSION = 9;
 },"control-panel":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ControlPanel = void 0;
+exports.buildRecallViewModel = buildRecallViewModel;
 const util_1 = require("./util");
 const ROOT_ID = 'mirror-abyss-core-control';
 const PANEL_ID = 'mirror-abyss-lite-panel';
@@ -532,6 +548,10 @@ class ControlPanel {
         this.launcher = null;
         this.panel = null;
         this.statusNode = null;
+        this.recallNode = null;
+        this.recallStatusNode = null;
+        this.recallRefreshButton = null;
+        this.recallLoadSerial = 0;
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
@@ -607,6 +627,10 @@ class ControlPanel {
         this.launcher = null;
         this.panel = null;
         this.statusNode = null;
+        this.recallNode = null;
+        this.recallStatusNode = null;
+        this.recallRefreshButton = null;
+        this.recallLoadSerial += 1;
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
@@ -632,6 +656,7 @@ class ControlPanel {
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
 .ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
+.ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="evidence"]{background:rgba(226,177,89,.13)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
 .${INDICATOR_CLASS}{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
 .${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
 `;
@@ -671,9 +696,11 @@ class ControlPanel {
         thresholds.className = 'ma-lite-thresholds';
         thresholds.append(
             this.makeNumberInput('smallSummaryTurns', '小总结轮数', 1, 100),
+            this.makeNumberInput('criticalChangesForSmall', '关键变化阈值', 1, 50),
             this.makeNumberInput('largeSummaryCount', '大总结计数', 1, 30),
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
         );
+        const recall = this.buildRecallSection();
         const actions = document.createElement('div');
         actions.className = 'ma-lite-actions';
         const audit = this.makeActionButton('audit', '审核');
@@ -686,9 +713,126 @@ class ControlPanel {
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
         note.textContent = '提取异常会先本地修复、合并重复条目并部分提交；仍无法解析时只修复一次异常输出。自动流程严格按“审核→正文替换落地→提取→总结”执行。';
-        body.append(switches, thresholds, actions, status, note);
+        body.append(switches, thresholds, recall, actions, status, note);
         panel.append(header, body);
         return panel;
+    }
+    buildRecallSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-recall';
+        const head = document.createElement('div');
+        head.className = 'ma-lite-recall-head';
+        const title = document.createElement('strong');
+        title.textContent = '世界书语义与召回状态';
+        const refresh = document.createElement('button');
+        refresh.type = 'button';
+        refresh.className = 'ma-lite-recall-refresh';
+        refresh.title = '刷新召回状态';
+        refresh.setAttribute('aria-label', '刷新世界书召回状态');
+        refresh.innerHTML = '<i class="fa-solid fa-rotate" aria-hidden="true"></i>';
+        refresh.addEventListener('click', () => void this.refreshRecallMap(true));
+        head.append(title, refresh);
+        const status = document.createElement('div');
+        status.className = 'ma-lite-recall-status';
+        status.textContent = '打开面板后读取生命周期、证据与原生召回字段；UI 只显示，不参与调度。';
+        const content = document.createElement('div');
+        content.className = 'ma-lite-recall-empty';
+        content.textContent = '尚未读取';
+        section.append(head, status, content);
+        this.recallNode = content;
+        this.recallStatusNode = status;
+        this.recallRefreshButton = refresh;
+        return section;
+    }
+    async refreshRecallMap(force = false) {
+        if (!this.recallNode || typeof this.actions.loadWorkspace !== 'function') return;
+        if (!force && this.panel?.hidden) return;
+        const serial = ++this.recallLoadSerial;
+        if (this.recallRefreshButton) this.recallRefreshButton.disabled = true;
+        if (this.recallStatusNode) this.recallStatusNode.textContent = '正在读取当前世界书…';
+        try {
+            const workspace = await this.actions.loadWorkspace();
+            if (serial !== this.recallLoadSerial || !this.recallNode) return;
+            const model = buildRecallViewModel(workspace?.entries ?? []);
+            this.renderRecallMap(model, workspace?.worldbookName || '');
+        }
+        catch (error) {
+            if (serial !== this.recallLoadSerial || !this.recallNode) return;
+            this.recallNode.className = 'ma-lite-recall-empty';
+            this.recallNode.textContent = `读取失败：${(0, util_1.errorText)(error)}`;
+            if (this.recallStatusNode) this.recallStatusNode.textContent = '未修改任何世界书字段。';
+        }
+        finally {
+            if (serial === this.recallLoadSerial && this.recallRefreshButton) this.recallRefreshButton.disabled = false;
+        }
+    }
+    renderRecallMap(model, worldbookName) {
+        if (!this.recallNode) return;
+        this.recallNode.className = '';
+        this.recallNode.replaceChildren();
+        if (this.recallStatusNode) this.recallStatusNode.textContent = `${worldbookName ? `世界书：${worldbookName}；` : ''}仅显示镜渊管理条目，共 ${model.total} 条。`;
+        if (!model.total) {
+            this.recallNode.className = 'ma-lite-recall-empty';
+            this.recallNode.textContent = '当前世界书没有镜渊管理条目';
+            return;
+        }
+        const summary = document.createElement('div');
+        summary.className = 'ma-lite-recall-summary';
+        for (const item of model.summary) {
+            const chip = document.createElement('span');
+            chip.className = 'ma-lite-chip';
+            chip.textContent = `${item.label} ${item.count}`;
+            chip.title = item.description;
+            summary.append(chip);
+        }
+        const list = document.createElement('div');
+        list.className = 'ma-lite-recall-list';
+        for (const item of model.entries) {
+            const row = document.createElement('div');
+            row.className = 'ma-lite-recall-row';
+            const title = document.createElement('div');
+            title.className = 'ma-lite-recall-title';
+            title.textContent = item.title;
+            title.title = item.title;
+            const meta = document.createElement('div');
+            meta.className = 'ma-lite-recall-meta';
+            for (const badge of item.badges) {
+                const node = document.createElement('span');
+                node.className = 'ma-lite-badge';
+                node.dataset.kind = badge.kind;
+                node.textContent = badge.label;
+                meta.append(node);
+            }
+            if (item.lifecycleLabel) {
+                const node = document.createElement('span');
+                node.className = 'ma-lite-badge';
+                node.dataset.kind = item.lifecycleKind;
+                node.textContent = item.lifecycleLabel;
+                meta.append(node);
+            }
+            if (item.evidenceText) {
+                const node = document.createElement('span');
+                node.className = 'ma-lite-badge';
+                node.dataset.kind = 'evidence';
+                node.textContent = item.evidenceText;
+                meta.append(node);
+            }
+            for (const text of [item.position, `顺序 ${item.order}`, item.scanDepth == null ? '扫描 继承' : `扫描 ${item.scanDepth}`]) {
+                const node = document.createElement('span');
+                node.className = 'ma-lite-badge';
+                node.textContent = text;
+                meta.append(node);
+            }
+            row.append(title, meta);
+            list.append(row);
+        }
+        this.recallNode.append(summary, list);
+        if (model.omitted > 0) {
+            const omitted = document.createElement('div');
+            omitted.className = 'ma-lite-recall-status';
+            omitted.textContent = `另有 ${model.omitted} 条未展开；统计已包含。`;
+            this.recallNode.append(omitted);
+        }
     }
     makeSwitch(key, labelText, description) {
         const label = document.createElement('label');
@@ -782,6 +926,7 @@ class ControlPanel {
         try {
             await action();
             this.lastOutcome = { kind, state: 'success' };
+            if (kind === 'extract') void this.refreshRecallMap();
             if (['queued', 'running'].includes(this.taskStates[kind]?.state)) this.setTaskProgress(kind, 'success', kind === 'audit' ? '审核完成' : '提取完成');
         }
         catch (error) {
@@ -807,6 +952,7 @@ class ControlPanel {
         if (this.inputs.autoSmallSummary) this.inputs.autoSmallSummary.checked = settings.autoSmallSummary !== false;
         if (this.inputs.autoLargeSummary) this.inputs.autoLargeSummary.checked = settings.autoLargeSummary !== false;
         if (this.inputs.smallSummaryTurns) this.inputs.smallSummaryTurns.value = String(settings.smallSummaryTurns ?? 10);
+        if (this.inputs.criticalChangesForSmall) this.inputs.criticalChangesForSmall.value = String(settings.criticalChangesForSmall ?? 6);
         if (this.inputs.largeSummaryCount) this.inputs.largeSummaryCount.value = String(settings.largeSummaryCount ?? 5);
         if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
         if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
@@ -850,6 +996,7 @@ class ControlPanel {
             messageIndex: Number.isInteger(meta.messageIndex) ? meta.messageIndex : previous.messageIndex,
             queuePosition: Number.isFinite(meta.queuePosition) ? Number(meta.queuePosition) : previous.queuePosition,
         };
+        if (kind === 'extract' && state === 'success') void this.refreshRecallMap();
         if (detail) {
             this.statusText = `${kind === 'audit' ? '审核' : '提取'}：${detail}`;
             this.statusError = state === 'error';
@@ -871,7 +1018,7 @@ class ControlPanel {
         const opening = this.panel.hidden;
         this.panel.hidden = !opening;
         this.launcher?.setAttribute('aria-expanded', opening ? 'true' : 'false');
-        if (opening) this.refresh();
+        if (opening) { this.refresh(); void this.refreshRecallMap(true); }
     }
     closePanel() {
         if (!this.panel) return;
@@ -893,6 +1040,7 @@ class ControlPanel {
             if (this.panel) this.panel.hidden = false;
             this.launcher?.setAttribute('aria-expanded', 'true');
             this.refresh();
+            void this.refreshRecallMap(true);
         });
         entry.append(button);
         container.append(entry);
@@ -977,12 +1125,89 @@ class ControlPanel {
         return ({ disabled: '关闭', queued: '排队', running: '处理中', success: '完成', error: '失败', ready: '待命' })[state] || '待命';
     }
 }
+function buildRecallViewModel(entries) {
+    const managed = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.managed === true);
+    const mapped = managed.map((entry) => {
+        const activation = entry.activation ?? {};
+        const constant = activation.constant === true;
+        const trigger = !constant && (entry.keywords ?? []).some((keyword) => !(0, util_1.isUidKeyword)(keyword));
+        const vector = activation.vectorized === true;
+        const prevent = activation.preventRecursion === true;
+        const exclude = activation.excludeRecursion === true;
+        let recursion = { key: 'source', label: '递归源', kind: 'bridge' };
+        if (!prevent && !exclude) recursion = { key: 'bridge', label: '递归桥', kind: 'bridge' };
+        else if (prevent && !exclude) recursion = { key: 'terminal', label: '递归终点', kind: 'terminal' };
+        else if (prevent && exclude) recursion = { key: 'isolated', label: '递归隔离', kind: 'isolated' };
+        const lifecycle = String(entry.lifecycle || entry.memoryTier || 'background');
+        const lifecycleInfo = lifecycleBadge(lifecycle);
+        const evidence = entry.evidence && typeof entry.evidence === 'object' ? entry.evidence : {};
+        const evidenceParts = [Number(evidence.confirmed || 0) ? `确认${Number(evidence.confirmed || 0)}` : '', Number(evidence.reported || 0) ? `转述${Number(evidence.reported || 0)}` : '', Number(evidence.uncertain || 0) ? `存疑${Number(evidence.uncertain || 0)}` : ''].filter(Boolean);
+        const position = Number(activation.position ?? 0);
+        const depth = Math.max(0, Number(activation.depth ?? 0));
+        const positionLabel = position === 0 ? '角色定义前' : position === 1 ? '角色定义后' : position === 4 ? `对话深度 ${depth}` : `位置 ${position}${depth ? ` / 深度 ${depth}` : ''}`;
+        const badges = [];
+        if (activation.disabled === true || activation.enabled === false) badges.push({ label: '停用', kind: 'isolated' });
+        if (constant) badges.push({ label: '常驻', kind: 'constant' });
+        else if (trigger) badges.push({ label: '关键词触发', kind: 'trigger' });
+        if (vector) badges.push({ label: '向量', kind: 'vector' });
+        if (Number(activation.delayUntilRecursion || 0) > 0) badges.push({ label: `仅递归 ${activation.delayUntilRecursion}`, kind: 'bridge' });
+        badges.push({ label: recursion.label, kind: recursion.kind });
+        return {
+            title: String(entry.title || entry.name || entry.uid || '未命名条目'),
+            lifecycle,
+            lifecycleLabel: lifecycleInfo.label,
+            lifecycleKind: lifecycleInfo.kind,
+            semanticRole: String(entry.semanticRole || ''),
+            evidenceText: evidenceParts.length ? `证据 ${evidenceParts.join('/')}` : '',
+            constant,
+            trigger,
+            vector,
+            recursion: recursion.key,
+            disabled: activation.disabled === true || activation.enabled === false,
+            badges,
+            position: positionLabel,
+            depth,
+            order: Number(activation.order ?? 400),
+            scanDepth: activation.scanDepth == null ? null : Number(activation.scanDepth),
+            updatedAt: Number(entry.updatedAt || 0),
+        };
+    });
+    mapped.sort((left, right) => Number(left.disabled) - Number(right.disabled) || Number(right.constant) - Number(left.constant) || Number(right.recursion === 'bridge') - Number(left.recursion === 'bridge') || right.order - left.order || right.updatedAt - left.updatedAt || left.title.localeCompare(right.title, 'zh-CN'));
+    const summary = [
+        { label: '活动', count: mapped.filter((item) => item.lifecycle === 'active').length, description: '当前场景或正在进行的事件' },
+        { label: '已关闭', count: mapped.filter((item) => item.lifecycle === 'closed').length, description: '事件已经结束，禁止继续递归传播' },
+        { label: '历史', count: mapped.filter((item) => ['historical', 'historical-summary'].includes(item.lifecycle)).length, description: '已经沉降的长期历史' },
+        { label: '常驻', count: mapped.filter((item) => item.constant).length, description: '每轮直接激活' },
+        { label: '关键词', count: mapped.filter((item) => item.trigger).length, description: '存在非 UID 关键词的触发条目' },
+        { label: '向量', count: mapped.filter((item) => item.vector).length, description: '允许 Vector Storage 语义召回' },
+        { label: '递归桥', count: mapped.filter((item) => item.recursion === 'bridge').length, description: '可以被递归带出，也能继续触发其他条目' },
+        { label: '递归终点', count: mapped.filter((item) => item.recursion === 'terminal').length, description: '可以被递归带出，但不会继续扩散' },
+        { label: '隔离', count: mapped.filter((item) => item.recursion === 'isolated').length, description: '不被递归带出，也不继续扩散' },
+    ];
+    const limit = 60;
+    return { total: mapped.length, summary, entries: mapped.slice(0, limit), omitted: Math.max(0, mapped.length - limit) };
+}
+function lifecycleBadge(value) {
+    return ({
+        core: { label: '核心', kind: 'constant' },
+        active: { label: '活动', kind: 'active' },
+        recent: { label: '近期', kind: 'active' },
+        'recent-summary': { label: '近期总结', kind: 'active' },
+        'long-term': { label: '长期', kind: 'history' },
+        historical: { label: '历史', kind: 'history' },
+        'historical-summary': { label: '历史总结', kind: 'history' },
+        closed: { label: '已关闭', kind: 'closed' },
+        settled: { label: '已离场', kind: 'closed' },
+        temporary: { label: '临时', kind: 'closed' },
+        background: { label: '背景', kind: 'isolated' },
+    })[String(value ?? '')] ?? { label: String(value || '背景'), kind: 'isolated' };
+}
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>\"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
 exports.ControlPanel = ControlPanel;
-
 },"domain/entry-section":function(module,exports,require){
+
 "use strict";
 const { parseEntrySections, serializeEntrySections } = require("../parser");
 const { canonicalSectionName } = require("./information-point");
@@ -1024,8 +1249,8 @@ exports.parseEntrySections = (content) => normalizeEntrySections(parseEntrySecti
 exports.serializeEntrySections = serializeEntrySections;
 exports.sectionLines = sectionLines;
 exports.extractReferences = extractReferences;
-
 },"domain/information-point":function(module,exports,require){
+
 "use strict";
 const { unique } = require("../util");
 const SECTION_ALIASES = {
@@ -1067,8 +1292,8 @@ function prepareInformationBlocks(parsedBlocks) {
 }
 exports.canonicalSectionName = canonicalSectionName;
 exports.prepareInformationBlocks = prepareInformationBlocks;
-
 },"host":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HostAdapter = void 0;
@@ -1319,6 +1544,7 @@ class HostAdapter {
         }
         return selected.reverse().join('\n\n');
     }
+    /** [MA-HOST-03] 宿主模型调用原语；重试和阶段预算由 model-request.js 负责。 */
     async generate(systemPrompt, prompt, responseLength, snapshot, currentSettings, timeoutMs, profileId = '') {
         this.assertSnapshot(snapshot, currentSettings);
         const context = this.context();
@@ -1373,17 +1599,23 @@ class HostAdapter {
         service.handleDropdown(selector, selectedId, (profile) => onChange(profile?.id || ''), undefined, undefined, (profile) => { if (profile?.id === selectedId) onChange(''); });
         return true;
     }
+    /**
+     * [MA-HOST-01] 正文替换的唯一写入口。
+     * 顺序固定为：校验旧版本 → 修改 mes/当前 swipe → 清除 display_text → 刷新 UI → 保存聊天 → 回读校验。
+     */
     async replaceAssistantText(snapshot, text, currentSettings) {
         this.assertSnapshot(snapshot, currentSettings);
         const context = this.context();
         const chat = context.chat ?? [];
         const message = chat[snapshot.messageIndex];
         if (!isAssistant(message)) throw new Error('待修正正文已经不存在');
-        if (readMessageKey(message) !== snapshot.messageKey || (0, util_1.hashText)(String(message.mes ?? '')) !== snapshot.contentHash) throw new Error('正文已经变化，拒绝覆盖旧版本');
+        if (readMessageKey(message) !== snapshot.messageKey || (0, util_1.hashText)(String(message.mes ?? '')) !== snapshot.contentHash)
+            throw new Error('正文已经变化，拒绝覆盖旧版本');
         const nextText = String(text ?? '').trim();
         const originalText = String(message.mes ?? '');
         if (!nextText) throw new Error('修正版正文为空，拒绝替换');
-        if ((0, util_1.normalizeFact)(nextText) === (0, util_1.normalizeFact)(originalText)) throw new Error('修正版与原正文没有实质变化，未执行替换');
+        if ((0, util_1.normalizeFact)(nextText) === (0, util_1.normalizeFact)(originalText))
+            throw new Error('修正版与原正文没有实质变化，未执行替换');
         const swipeIndex = Array.isArray(message.swipes) && Number.isInteger(message.swipe_id) && Number(message.swipe_id) >= 0
             ? Number(message.swipe_id)
             : -1;
@@ -1397,8 +1629,8 @@ class HostAdapter {
             if (extra && hadDisplayText) delete extra.display_text;
             this.updateMessageBlock(snapshot.messageIndex, message);
             await this.saveChat();
-            const persisted = this.context().chat?.[snapshot.messageIndex];
-            if (!persisted || String(persisted.mes ?? '') !== nextText) throw new Error('聊天数据校验未通过');
+            await Promise.resolve();
+            const persisted = this.verifyAssistantReplacement(snapshot.messageIndex, nextText, swipeIndex);
             this.updateMessageBlock(snapshot.messageIndex, persisted);
         }
         catch (error) {
@@ -1410,7 +1642,23 @@ class HostAdapter {
             throw new Error(`修正版正文保存失败，已恢复原正文：${(0, util_1.errorText)(error)}`);
         }
         const turn = this.latestTurn(snapshot.messageIndex);
-        return { ...this.refreshSnapshot(snapshot, turn, currentSettings), auditReplacementVerified: true };
+        return {
+            ...this.refreshSnapshot(snapshot, turn, currentSettings),
+            auditReplacementVerified: true,
+            auditReplacementDetail: `消息${snapshot.messageIndex}正文、当前 swipe 与显示缓存已同步`,
+        };
+    }
+
+    /** [MA-HOST-02] 保存完成后的单点回读校验，不负责写入。 */
+    verifyAssistantReplacement(messageIndex, expectedText, swipeIndex = -1) {
+        const persisted = this.context().chat?.[messageIndex];
+        if (!persisted || String(persisted.mes ?? '') !== expectedText)
+            throw new Error('聊天正文回读校验未通过');
+        if (swipeIndex >= 0 && String(persisted.swipes?.[swipeIndex] ?? '') !== expectedText)
+            throw new Error('当前 swipe 回读校验未通过');
+        if (persisted.extra && Object.prototype.hasOwnProperty.call(persisted.extra, 'display_text'))
+            throw new Error('旧 display_text 仍存在，可能遮挡修正版正文');
+        return persisted;
     }
     cursor() {
         const root = this.chatNamespace();
@@ -1419,6 +1667,7 @@ class HostAdapter {
             lastProcessedMessageKey: String(value.lastProcessedMessageKey ?? ''),
             lastProcessedHash: String(value.lastProcessedHash ?? ''),
             turnsSinceSmall: Math.max(0, Number(value.turnsSinceSmall) || 0),
+            criticalChangesSinceSmall: Math.max(0, Number(value.criticalChangesSinceSmall) || 0),
             smallCountSinceLarge: Math.max(0, Number(value.smallCountSinceLarge) || 0),
         };
     }
@@ -1488,8 +1737,9 @@ class HostAdapter {
     }
     async saveChat() {
         const context = this.context();
-        if (typeof context.saveChat === 'function') await context.saveChat();
-        else if (typeof context.saveChatConditional === 'function') await context.saveChatConditional();
+        if (typeof context.saveChat === 'function') return context.saveChat();
+        if (typeof context.saveChatConditional === 'function') return context.saveChatConditional();
+        throw new Error('SillyTavern 未提供聊天保存接口');
     }
     diagnostics() {
         let context = null;
@@ -1644,8 +1894,8 @@ function sanitizeConnectionValue(value, depth = 0) {
     }
     return output;
 }
-
 },"index":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.onActivate = onActivate;
@@ -1763,8 +2013,8 @@ function onUpdate() { exposeApi(); }
 function onClean() { }
 
 // SillyTavern 1.18 loads this module, then invokes the manifest activate hook.
-
 },"matcher":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildEntryIndex = buildEntryIndex;
@@ -1895,16 +2145,17 @@ function add(map, key, entry) {
     if (!list.some((candidate) => candidate.uid === entry.uid)) list.push(entry);
     map.set(key, list);
 }
-
 },"memory":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryRunner = void 0;
-const constants_1 = require("./constants");
 const matcher_1 = require("./matcher");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
 const prompts_1 = require("./prompts");
+const semantic_1 = require("./semantic");
+const model_request_1 = require("./model-request");
 const util_1 = require("./util");
 class MemoryRunner {
     constructor(host, worldbook, getSettings, onProgress = null) {
@@ -1931,7 +2182,7 @@ class MemoryRunner {
         try {
             this.setStatus(snapshot.chatKey, 'reading', '读取最终正文与相关世界书条目');
             const extraction = await this.extract(settings, snapshot);
-            await this.advanceSummarySchedule(settings, snapshot, cursor);
+            await this.advanceSummarySchedule(settings, snapshot, cursor, extraction.criticalChanges || 0);
             this.setStatus(snapshot.chatKey, 'complete', '核心事实已提交，总结调度完成');
             return extraction.entries;
         } catch (error) {
@@ -1943,7 +2194,7 @@ class MemoryRunner {
         if (kind === 'extraction') {
             const cursor = this.host.cursor();
             const result = await this.extract(settings, snapshot);
-            await this.advanceSummarySchedule(settings, snapshot, cursor);
+            await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0);
             this.setStatus(snapshot.chatKey, 'complete', '提取与总结调度完成');
             return result.entries;
         }
@@ -1955,7 +2206,7 @@ class MemoryRunner {
                 await this.summarize('large', settings, snapshot);
                 smallCountSinceLarge = 0;
             }
-            await this.host.saveCursor({ ...cursor, turnsSinceSmall: 0, smallCountSinceLarge }, snapshot, this.getSettings());
+            await this.host.saveCursor({ ...cursor, turnsSinceSmall: 0, criticalChangesSinceSmall: 0, smallCountSinceLarge }, snapshot, this.getSettings());
             this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : '小总结无更新');
             return result.entries;
         }
@@ -1965,13 +2216,18 @@ class MemoryRunner {
         this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结无更新');
         return result.entries;
     }
-    async advanceSummarySchedule(settings, snapshot, cursor) {
+    async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0) {
         let turnsSinceSmall = Number(cursor.turnsSinceSmall || 0) + 1;
+        let criticalChangesSinceSmall = Number(cursor.criticalChangesSinceSmall || 0) + Math.max(0, Number(criticalChanges || 0));
         let smallCountSinceLarge = Number(cursor.smallCountSinceLarge || 0);
-        if (settings.autoSmallSummary !== false && turnsSinceSmall >= settings.smallSummaryTurns) {
-            this.progress('running', `达到${settings.smallSummaryTurns}轮，开始小总结与分发`, { titles: ['总结｜当前事件'] });
+        const turnReady = turnsSinceSmall >= settings.smallSummaryTurns;
+        const changeReady = criticalChangesSinceSmall >= settings.criticalChangesForSmall;
+        if (settings.autoSmallSummary !== false && (turnReady || changeReady)) {
+            const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `累计${criticalChangesSinceSmall}个关键变化`;
+            this.progress('running', `${reason}，开始小总结与分发`, { titles: ['总结｜当前事件'], criticalChanges: criticalChangesSinceSmall });
             const small = await this.summarize('small', settings, snapshot);
             turnsSinceSmall = 0;
+            criticalChangesSinceSmall = 0;
             if (small.changed) smallCountSinceLarge += 1;
         }
         if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
@@ -1984,6 +2240,7 @@ class MemoryRunner {
             lastProcessedMessageKey: snapshot.messageKey,
             lastProcessedHash: snapshot.contentHash,
             turnsSinceSmall,
+            criticalChangesSinceSmall,
             smallCountSinceLarge,
         }, snapshot, this.getSettings());
     }
@@ -1996,9 +2253,20 @@ class MemoryRunner {
         this.validate(snapshot);
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
-        const selected = (0, matcher_1.relevantEntries)(entries, `${snapshot.playerText}\n${snapshot.assistantText}`);
+        const selected = (0, matcher_1.relevantEntries)(entries, `${snapshot.playerText}\n${snapshot.assistantText}`, 6);
         const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, snapshot, settings, settings.requestTimeoutMs, settings.extractionProfileId);
+        // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
+        const raw = await (0, model_request_1.callModel)({
+            host: this.host,
+            stage: 'extraction',
+            prompt,
+            fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true }),
+            settings,
+            snapshot,
+            profileId: settings.extractionProfileId,
+            sourceText: snapshot.assistantText,
+            onRetry: () => this.progress('running', '提取网关异常，已缩短上下文并重试一次', { titles: [] }),
+        });
         this.validate(snapshot);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
         let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
@@ -2006,7 +2274,17 @@ class MemoryRunner {
         if (!blocks.length && diagnostics.hadInput) {
             this.progress('running', '首次格式无法提交，启动一次格式修复后手', { titles: [] });
             const repairPrompt = (0, prompts_1.extractionRepairPrompts)(raw);
-            repairRaw = await this.host.generate(repairPrompt.system, trimPrompt(repairPrompt.user), settings.responseTokens, snapshot, settings, settings.requestTimeoutMs, settings.extractionProfileId);
+            repairRaw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'extractionRepair',
+                prompt: repairPrompt,
+                fallbackPrompt: () => (0, prompts_1.extractionRepairPrompts)(raw, { compact: true }),
+                settings,
+                snapshot,
+                profileId: settings.extractionProfileId,
+                sourceText: raw,
+                onRetry: () => this.progress('running', '格式修复网关异常，缩短异常文本后重试一次', { titles: [] }),
+            });
             this.validate(snapshot);
             blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
             const next = blocks.diagnostics ?? {};
@@ -2036,7 +2314,8 @@ class MemoryRunner {
         const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...plan.operations.filter((operation) => operation.kind === 'noop').map((operation) => operation.title)])];
         this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
         const result = await this.apply(settings, plan, snapshot, `${snapshot.playerText}\n${snapshot.assistantText}`, '提取', raw);
-        this.progress('success', `完成：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
+        result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
+        this.progress('success', `完成：新建${created.length}、更新${updated.length}、关键变化${result.criticalChanges}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges });
         return result;
     }
     async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
@@ -2073,17 +2352,28 @@ class MemoryRunner {
             : '';
         const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation);
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, snapshot, settings, settings.requestTimeoutMs, profile);
+        const raw = await (0, model_request_1.callModel)({
+            host: this.host,
+            stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
+            prompt,
+            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { compact: true }),
+            settings,
+            snapshot,
+            profileId: profile,
+            sourceText: recentConversation,
+            onRetry: () => this.progress('running', `${label}网关异常，缩短上下文后重试一次`, { titles: [expectedTitle] }),
+        });
         this.validate(snapshot);
-        const blocks = (0, parser_1.parseInformationPoints)(raw);
-        if (!blocks.length) {
-            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', `${label}明确返回“无”`, '', raw, emptyPlan());
-            return { entries, changed: false };
+        const recovered = parseSummaryWithRecovery(raw, kind);
+        if (!recovered.block) {
+            if (recovered.explicitNone) {
+                this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', `${label}明确返回“无”`, '', raw, emptyPlan());
+                return { entries, changed: false };
+            }
+            throw new Error(`${label}无法从模型返回中恢复“${expectedTitle}”`);
         }
-        const summaryBlocks = blocks.filter((block) => block.type === '总结');
-        if (blocks.length !== 1 || summaryBlocks.length !== 1) throw new Error(`${label}必须包含且只包含一个“${expectedTitle}”总结条目`);
-        if ((0, util_1.normalizeTitle)(summaryBlocks[0].title) !== (0, util_1.normalizeTitle)(expectedTitle)) throw new Error(`${label}标题必须是“${expectedTitle}”`);
-        const summaryBlock = summaryBlocks[0];
+        const summaryBlock = recovered.block;
+        if (recovered.repaired) this.progress('running', `${label}已本地修复${recovered.repaired}处格式问题`, { titles: [expectedTitle], repaired: recovered.repaired, skipped: recovered.skipped });
         const distribution = distributionBlocksFromSummary(summaryBlock);
         summaryBlock.sections = summaryBlock.sections.filter((section) => !/^(分发事实|沉降分发)$/u.test(section.name));
         const plan = (0, operations_1.buildOperationPlan)([summaryBlock, ...distribution], entries, settings, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'), { cleanupTemporaryAfterSummary: true, consumeSmallSummaryAfterLarge: kind === 'large' });
@@ -2160,8 +2450,52 @@ function distributionBlocksFromSummary(summaryBlock) {
     return [...blocks.values()];
 }
 
+function parseSummaryWithRecovery(raw, kind) {
+    const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
+    const text = (0, parser_1.sanitizeModelText)(raw);
+    if (/^(?:无|EMPTY)$/u.test(text.trim())) return { block: null, explicitNone: true, repaired: 0, skipped: [] };
+    let repaired = 0;
+    let blocks = [];
+    try { blocks = (0, parser_1.parseInformationPoints)(text); }
+    catch {
+        if (/【[^】]+】/u.test(text) && !/(?:总结|小总结|大总结)[｜|丨]/u.test(text)) {
+            try {
+                blocks = (0, parser_1.parseInformationPoints)(`${expectedTitle}\n\n${text}`);
+                repaired += 1;
+            }
+            catch { blocks = []; }
+        }
+    }
+    const candidates = blocks.filter((block) => {
+        const normalized = (0, util_1.normalizeTitle)(block.title);
+        if (normalized === (0, util_1.normalizeTitle)(expectedTitle)) return true;
+        if (kind === 'small') return /^(?:总结|小总结)[｜|丨](?:当前事件|当前事件线|当前阶段)$/u.test(normalized);
+        return /^(?:总结|大总结)[｜|丨](?:世界历史|长期历史|长期记忆)$/u.test(normalized);
+    });
+    if (!candidates.length && blocks.length === 1 && blocks[0].sections?.length) {
+        candidates.push(blocks[0]);
+        repaired += 1;
+    }
+    if (!candidates.length) return { block: null, explicitNone: false, repaired, skipped: blocks.map((block) => block.title) };
+    const merged = { rawTitle: expectedTitle, title: expectedTitle, type: '总结', name: kind === 'small' ? '当前事件' : '世界历史', keywords: [kind === 'small' ? '当前事件' : '世界历史', '总结'], sections: [] };
+    const sectionMap = new Map();
+    for (const block of candidates) {
+        if ((0, util_1.normalizeTitle)(block.title) !== (0, util_1.normalizeTitle)(expectedTitle)) repaired += 1;
+        for (const section of block.sections ?? []) {
+            const name = String(section.name ?? '').trim();
+            if (!name) continue;
+            const target = sectionMap.get(name) ?? { name, lines: [], empty: false };
+            target.lines = (0, util_1.unique)([...target.lines, ...(section.lines ?? [])]);
+            target.empty = target.lines.length === 0;
+            sectionMap.set(name, target);
+        }
+    }
+    merged.sections = [...sectionMap.values()];
+    if (candidates.length > 1) repaired += candidates.length - 1;
+    return { block: merged, explicitNone: false, repaired, skipped: blocks.filter((block) => !candidates.includes(block)).map((block) => block.title) };
+}
+
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
-function trimPrompt(value) { return value.length <= constants_1.MAX_CONTEXT_CHARS ? value : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`; }
 
 function localSemanticSimilarity(left, right) {
     const a = localBigrams(left);
@@ -2196,8 +2530,8 @@ function localNormalizeSemantic(value) {
         .replace(/[\s，。！？；：、“”‘’（）()《》〈〉【】\[\]—…·,.!?:;'"`~|｜]/gu, '');
 }
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
-
 },"migration":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MigrationService = void 0;
@@ -2350,8 +2684,105 @@ function trimPrompt(value) {
         ? value
         : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`;
 }
+},"model-request":function(module,exports,require){
 
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.callModel = callModel;
+exports.stageResponseTokens = stageResponseTokens;
+exports.isRetryableGatewayError = isRetryableGatewayError;
+exports.limitPromptPair = limitPromptPair;
+const util_1 = require("./util");
+
+// [MA-MODEL-01] 每个模型阶段只声明输入/输出预算和一次网关重试。
+// 该模块不理解审核、提取或总结业务，也不接触世界书，避免请求控制与业务逻辑耦合。
+const INPUT_LIMITS = Object.freeze({
+    audit: 24000,
+    revision: 30000,
+    extraction: 26000,
+    extractionRepair: 14000,
+    smallSummary: 28000,
+    largeSummary: 30000,
+    migration: 24000,
+});
+
+/**
+ * [MA-MODEL-02] 调用模型；仅在 502/503/504、HTML 网关页或 No message generated 时，
+ * 使用调用方提供的精简提示词再试一次。解析错误和业务校验错误绝不重试。
+ */
+async function callModel(options) {
+    const {
+        host,
+        stage,
+        prompt,
+        fallbackPrompt,
+        settings,
+        snapshot,
+        profileId = '',
+        sourceText = '',
+        onRetry,
+    } = options;
+    const responseLength = stageResponseTokens(stage, settings, sourceText);
+    const primary = limitPromptPair(prompt, stage);
+    try {
+        return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
+    }
+    catch (error) {
+        if (snapshot?.token?.cancelled || !fallbackPrompt || !isRetryableGatewayError(error))
+            throw error;
+        const fallbackValue = typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt;
+        const fallback = limitPromptPair(fallbackValue, stage, true);
+        const fallbackTokens = Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
+        try { onRetry?.(error); }
+        catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
+        return host.generate(fallback.system, fallback.user, fallbackTokens, snapshot, settings, settings.requestTimeoutMs, profileId);
+    }
+}
+
+/** [MA-MODEL-03] 不同任务不再共用 3072 输出上限。 */
+function stageResponseTokens(stage, settings, sourceText = '') {
+    const configured = Math.max(256, Number(settings?.responseTokens) || 3072);
+    if (stage === 'audit') return Math.min(configured, 384);
+    if (stage === 'revision') {
+        const estimated = Math.max(1024, Math.ceil(String(sourceText ?? '').length * 1.15) + 256);
+        return Math.min(configured, Math.min(4096, estimated));
+    }
+    if (stage === 'extraction') return Math.min(configured, 2560);
+    if (stage === 'extractionRepair') return Math.min(configured, 1536);
+    if (stage === 'smallSummary') return Math.min(configured, 1792);
+    if (stage === 'largeSummary') return Math.min(configured, 2304);
+    return configured;
+}
+
+/** [MA-MODEL-04] 识别常见上游网关失败；本地取消和格式错误不属于此类。 */
+function isRetryableGatewayError(error) {
+    const text = (0, util_1.errorText)(error).toLocaleLowerCase();
+    return /(?:\b502\b|\b503\b|\b504\b|gateway\s*(?:timeout|time-out)|upstream|no message generated|html\s*错误页|returned\s*html|fetch failed|network error|connection reset)/iu.test(text);
+}
+
+/**
+ * [MA-MODEL-05] 最后的硬上限保护。业务提示词应先自行裁剪；这里仅防止异常配置把请求再次膨胀。
+ */
+function limitPromptPair(prompt, stage, retry = false) {
+    const system = String(prompt?.system ?? '');
+    const user = String(prompt?.user ?? '');
+    const baseLimit = INPUT_LIMITS[stage] ?? 30000;
+    const totalLimit = retry ? Math.floor(baseLimit * 0.72) : baseLimit;
+    const userLimit = Math.max(2000, totalLimit - system.length);
+    return { system, user: clipMiddle(user, userLimit) };
+}
+
+function clipMiddle(value, maxChars) {
+    const text = String(value ?? '');
+    if (text.length <= maxChars) return text;
+    const marker = '\n[中间内容因请求预算被省略]\n';
+    const remaining = Math.max(0, maxChars - marker.length);
+    const head = Math.ceil(remaining * 0.62);
+    const tail = Math.floor(remaining * 0.38);
+    return `${text.slice(0, head)}${marker}${text.slice(text.length - tail)}`;
+}
 },"operations":function(module,exports,require){
+
 
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -2797,8 +3228,8 @@ function businessOperationKind(kind) {
         noop: 'no-op',
     })[kind] ?? kind;
 }
-
 },"parser":function(module,exports,require){
+
 
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -3212,8 +3643,8 @@ function parseLabeledSections(text) {
     }
     return map;
 }
-
 },"prompts":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractionPrompts = extractionPrompts;
@@ -3226,100 +3657,62 @@ exports.migrationPrompts = migrationPrompts;
 exports.keywordTemplate = keywordTemplate;
 const util_1 = require("./util");
 
-function auditPrompts(settings, playerText, assistantText, characterCard = '') {
+function auditPrompts(settings, playerText, assistantText, characterCard = '', options = {}) {
+    const compact = options.compact === true;
     const system = `你是 Mirror Abyss 正文审核脚本。
 
-你的职责只有一个：
-判断 AI 生成文本是否违反用户设定。
+你的职责只有一个：判断 AI 生成文本是否明确违反用户设定。
+你不是作者，不得改写、续写、补充背景、推测未来或优化文风。
 
-你不是作者。
-你不能：
-- 改写剧情
-- 添加剧情
-- 补充背景
-- 推测未来
-- 优化文风
-- 判断剧情是否精彩
+检查：
+1. 玩家控制：不得替玩家决定动作、语言、思考、情绪和选择。
+2. 知识限制：角色不得突然知道隐藏事实。
+3. 世界规则：不得违反能力、种族、时间线和既有事实。
+4. 角色一致性：不得无依据改变身份、性格、能力和目标。
 
-你需要检查：
-
-【玩家控制】
-禁止 AI 替玩家决定动作、语言、思考、情绪和选择。
-
-【知识限制】
-角色只能知道自己看到、听到或已经公开的信息，禁止突然知道隐藏事实。
-
-【世界规则】
-检查能力限制、世界规则、种族规则和时间线。
-
-【角色一致性】
-检查身份、性格、能力和目标。
-
-返回格式：
-没有违规时只输出：
-PASS
-
-存在违规时输出：
-FAIL
-
-原因:
-1. xxx
-2. xxx
-
-只能输出以上内容。`;
+返回格式：无明确违规只输出 PASS；存在明确违规时输出 FAIL，随后列出简短原因。禁止输出修正版正文。`;
     const user = `审核规则：
-${settings.auditPrompt || '（无）'}
+${clipText(settings.auditPrompt || '（无）', compact ? 2200 : 3500)}
 
 角色设定：
-${characterCard || '（无）'}
+${clipText(characterCard || '（无）', compact ? 2200 : 3500)}
 
 玩家输入：
-${playerText || '（空）'}
+${clipText(playerText || '（空）', compact ? 1500 : 2000)}
 
 需要审核正文：
-${assistantText}`;
+${clipText(assistantText, compact ? 10000 : 14000)}`;
     return { system, user };
 }
 
-function revisionPrompts(settings, playerText, assistantText, issues) {
+function revisionPrompts(settings, playerText, assistantText, issues, options = {}) {
+    const compact = options.compact === true;
+    const issueLimit = compact ? 5 : 10;
+    const issueChars = compact ? 160 : 260;
     const system = `你是 Mirror Abyss 正文修正脚本。
 
-你的任务：
-修正违反规则的正文。
-
-必须保持：
-1. 原剧情方向。
-2. 原事件结果。
-3. 原人物关系。
-4. 原角色身份。
-
-禁止：
-1. 添加新的事件。
-2. 删除已有事件。
-3. 改变人物目标。
-4. 修改世界规则。
-5. 替玩家决定行动。
-6. 输出解释。
-
-你的输出只能是修正后的完整正文。
-不要输出分析、原因、说明或修改记录。
+只修正审核指出的明确违规部分，保留原剧情方向、事件结果、人物关系、角色身份、叙事视角和合规内容。
+禁止添加新事件、删除已有事件、改变人物目标、修改世界规则、替玩家决定行动、续写或输出解释。
+你的输出只能是可直接替换原消息的完整正文。
 
 用户附加修正规则：
-${settings.revisionPrompt || '（无）'}`;
+${clipText(settings.revisionPrompt || '（无）', compact ? 1500 : 3000)}`;
     const user = `违规原因：
-${issues.map((item) => `- ${item}`).join('\n')}
+${issues.slice(0, issueLimit).map((item) => `- ${clipText(item, issueChars)}`).join('\n')}
 
 玩家输入：
-${playerText || '（空）'}
+${clipText(playerText || '（空）', compact ? 1600 : 3000)}
 
 原正文：
-${assistantText}`;
+${clipText(assistantText, compact ? 15000 : 20000)}`;
     return { system, user };
 }
 
-function extractionPrompts(settings, playerText, assistantText, relevant) {
-    const existing = relevant.map(entryForPrompt).join('\n\n');
-    const custom = settings.extractionPrompt.trim();
+function extractionPrompts(settings, playerText, assistantText, relevant, options = {}) {
+    const compact = options.compact === true;
+    const contextEntries = relevant.slice(0, compact ? 3 : 6);
+    const existing = contextEntries.map((entry) => entryForPrompt(entry, compact ? 450 : 700)).join('\n\n');
+    const custom = clipText(settings.extractionPrompt.trim(), compact ? 900 : 2000);
     const system = `你是 Mirror Abyss 严格语法事实提取器。
 
 任务：把已经生成的剧情正文压缩为世界书事实条目。你不续写、不改写剧情、不复制正文段落。
@@ -3327,22 +3720,19 @@ function extractionPrompts(settings, playerText, assistantText, relevant) {
 只允许六类条目：人物、地点、场景、物品、事件、关系。同一对象最多一条，单次最多十二条。
 只提取明确发生、明确表达、明确确认，或正文结束时仍成立并会影响后续的事实。
 不得提取NPC未表达心理、幕后计划、隐藏原因、未来结果、无载体远处事件、玩家未实现愿望、纯气氛、普通动作、对白全文、一次性背景人物和无持续价值物品。
+证据必须保真：人物说法、文件和传闻必须保留来源；推测、怀疑和未确认结论必须保留不确定性。
 
 【事实归属规则】
-1. 人物条目只记录该人物的稳定事实、当前状态和个人经历。
-2. 地点条目记录跨场景稳定存在的地点属性、结构、控制与功能变化。
-3. 场景条目记录一段连续互动空间的完整工作面：场景范围、稳定空间、在场对象、可交互资源、空间限制、当前功能和局部变化。场景不能只缩成一句地点状态。
-4. 物品条目只记录物品性质、持有、位置、完整性和用途变化。
-5. 事件的发生过程只写入事件条目；其他条目只通过【关联条目】引用事件，不得复述事件经过。
-6. 关系变化只写入关系条目；人物条目不得重复展开关系事实。
-7. 同一事实只能有一个归属条目，不得出现在两个条目中，也不得换词复述。
-8. 人物的位置、身体和个人事务只写人物条目；地点条目不得重复列出人物位置，除非地点本身发生占用、封锁或控制权变化。
-9. 事件经过、结果和阶段只写事件条目；人物、地点、物品只用【关联条目】引用该事件。
-10. 关系性质、双方立场和关系变化只写关系条目；人物条目只引用关系标题。
-11. 当前状态与变化过程不得重复。没有信息的栏目保留并填写“- 无”。“无”表示本轮没有新信息，不表示删除旧事实。
+1. 人物：稳定事实、当前状态和个人经历。
+2. 地点：跨场景稳定存在的地点属性、结构、控制与功能变化。
+3. 场景：连续互动空间的场景范围、稳定空间、在场对象、可交互资源、空间限制、当前功能和局部变化。
+4. 物品：性质、持有、位置、完整性和用途变化。
+5. 事件：发生过程、阶段和结果；其他条目仅通过【关联条目】引用。
+6. 关系：关系性质、双方立场和关系变化；人物条目不得重复展开。
+7. 同一事实只能归属一个条目，不得换词跨条目复述。
+8. 当前状态与变化过程不得重复；“- 无”只表示本轮无新信息，不删除旧事实。
 
 【唯一允许的外层语法】
-每个条目必须严格使用：
 <<<ENTRY:类型:稳定名称>>>
 <<<KEYWORDS>>>
 - 稳定名称
@@ -3354,104 +3744,56 @@ function extractionPrompts(settings, playerText, assistantText, relevant) {
 多个条目连续输出，条目之间只空一行。禁止JSON、代码块、序号、解释、前言、后记和标记外文本。没有可记录事实时只输出“无”。
 
 【人物正文固定顺序】
-【固定事实】
-- 身份：完整事实句。
-- 稳定特征：完整事实句。
-【当前状态】
-- 位置：完整事实句。
-- 身体状态：完整事实句。
-- 当前事务：完整事实句。
+【固定事实】身份、稳定特征
+【当前状态】位置、身体状态、当前事务
 【近期经历】
-- 完整事实句。
 【关联条目】
-- 类型｜稳定名称
 【别名】
-- 别名
 
 【地点正文固定顺序】
-【固定事实】
-- 地点属性：完整事实句。
-- 稳定结构：完整事实句。
-【当前状态】
-- 环境状态：完整事实句。
-- 在场情况：完整事实句。
-- 当前功能：完整事实句。
+【固定事实】地点属性、稳定结构
+【当前状态】环境状态、在场情况、当前功能
 【变化记录】
-- 完整事实句。
 【关联条目】
-- 类型｜稳定名称
 【别名】
-- 别名
 
 【场景正文固定顺序】
-【固定事实】
-- 场景范围：完整事实句。
-- 稳定空间：完整事实句。
-【当前状态】
-- 环境状态：完整事实句。
-- 在场对象：完整事实句，可概括列出直接参与当前场景的对象。
-- 可交互资源：完整事实句，包括当前可使用、可接触或可争夺的资源与设施。
-- 空间限制：完整事实句，包括封锁、出入口、视野、距离、危险区和移动限制。
-- 当前功能：完整事实句。
+【固定事实】场景范围、稳定空间
+【当前状态】环境状态、在场对象、可交互资源、空间限制、当前功能
 【局部变化】
-- 完整事实句。
 【关联条目】
-- 类型｜稳定名称
 【别名】
-- 别名
 
 【物品正文固定顺序】
-【固定事实】
-- 物品性质：完整事实句。
-- 已知用途：完整事实句。
-【当前状态】
-- 持有者：完整事实句。
-- 所在位置：完整事实句。
-- 完整性：完整事实句。
-- 当前用途：完整事实句。
+【固定事实】物品性质、已知用途
+【当前状态】持有者、所在位置、完整性、当前用途
 【变化记录】
-- 完整事实句。
 【关联条目】
-- 类型｜稳定名称
 【别名】
-- 别名
 
 【事件正文固定顺序】
-【当前状态】
-- 阶段：开始、进行中、暂停或结束。
-- 当前局面：完整事实句。
+【当前状态】阶段、当前局面
 【事件进程】
-- 完整事实句。
 【最终结果】
-- 完整事实句。
 【关联条目】
-- 类型｜稳定名称
 【别名】
-- 别名
 
 【关系正文固定顺序】
-【固定事实】
-- 关系对象：该关系连接甲与乙。
-- 关系基础：完整事实句。
-【当前状态】
-- 关系性质：完整事实句。
-- 双方立场：完整事实句。
-- 当前互动条件：完整事实句。
+【固定事实】关系对象、关系基础
+【当前状态】关系性质、双方立场、当前互动条件
 【变化记录】
-- 完整事实句。
 【关联条目】
-- 人物｜甲
-- 人物｜乙
 【别名】
-- 无
 
-每条事实必须是完整句：明确主体＋状态或变化＋对象、结果或必要条件。禁止碎片词。当前状态必须有明确状态槽。
-输出前检查：标记完整、类型合法、名称明确、每条2至6个关键词且第一项等于稳定名称、小标题顺序完全正确、正文不含标题和关键词、每个事实只归属一个条目、没有跨条目重复。任何一条事实可能同时适用于两个对象时，只写入叙事责任最直接的对象，并在另一个对象中只填写【关联条目】。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
+每条事实必须是完整句，当前状态必须有明确状态槽。每条2至6个关键词且第一项等于稳定名称。${custom ? `
+
+用户附加要求：
+${custom}` : ''}`;
     const user = `玩家本轮输入：
-${playerText || '（空）'}
+${clipText(playerText || '（空）', compact ? 1500 : 2500)}
 
 AI最终正文：
-${assistantText}
+${clipText(assistantText, compact ? 10000 : 14000)}
 
 可能相关的既有世界书条目：
 ${existing || '（无）'}
@@ -3460,9 +3802,10 @@ ${existing || '（无）'}
     return { system, user };
 }
 
-function summaryPrompts(kind, settings, entries, subject, recentConversation = '') {
+function summaryPrompts(kind, settings, entries, subject, recentConversation = '', options = {}) {
     const isSmall = kind === 'small';
-    const custom = (isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim();
+    const compact = options.compact === true;
+    const custom = clipText((isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim(), compact ? 1200 : 2500);
     const system = isSmall
         ? `你是 Mirror Abyss 小总结模块。
 
@@ -3483,6 +3826,8 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 添加推测。
 - 创造未来。
 - 不得输出 UID、关键词、删除、退出、归档或任何操作命令；只允许在【分发事实】中按指定四段格式列出事实归属。
+- 人物说法、传闻和推测必须保留证据性质，不得在总结中升级为确定事实。
+- 事件只有明确结束且形成可陈述结果时，才在分发事实中写入“阶段：结束”或最终结果。
 
 严格输出：
 总结｜当前事件
@@ -3524,6 +3869,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 无影响细节
 
 不得输出 UID、关键词、删除、退出、归档或任何操作命令；只允许在【分发事实】中按指定四段格式列出事实归属。
+人物说法、传闻和推测必须保留证据性质；长期未出现不等于死亡、结束或退出。
 
 严格输出：
 总结｜世界历史
@@ -3547,16 +3893,17 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 “分发事实”用于把永久变化、长期关系、事件结果和所有权变化回写到对应对象；不得写删除、状态字段或操作命令。没有分发事实时写“- 无”。
 
 没有可总结内容时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
-    const recent = isSmall ? `\n\n最近聊天：\n${recentConversation || '（无）'}` : '';
+    const recent = isSmall ? `\n\n最近聊天：\n${clipText(recentConversation || '（无）', compact ? 9000 : 14000)}` : '';
     const user = `总结范围：
 ${subject || (isSmall ? '当前事件' : '世界历史')}${recent}
 
 相关世界书：
-${entries.map(entryForPrompt).join('\n\n') || '（无）'}`;
+${entries.slice(0, compact ? (isSmall ? 8 : 12) : (isSmall ? 16 : 24)).map((entry) => entryForPrompt(entry, compact ? 550 : 900)).join('\n\n') || '（无）'}`;
     return { system, user };
 }
 
-function extractionRepairPrompts(raw) {
+function extractionRepairPrompts(raw, options = {}) {
+    const compact = options.compact === true;
     const system = `你是 Mirror Abyss 提取格式修复器。
 只修复给定提取结果的语法、重复条目和事实归属，不得阅读原剧情，不得新增、扩写或推测事实。
 必须使用 <<<ENTRY:类型:稳定名称>>>、<<<KEYWORDS>>>、<<<CONTENT>>>、<<<END_ENTRY>>>。
@@ -3564,7 +3911,7 @@ function extractionRepairPrompts(raw) {
 同名条目必须合并；同一事实只能保留在责任最直接的一个条目中；无法修复的片段删除。
 禁止解释、JSON和代码块。没有可保留条目时只输出“无”。`;
     const user = `需要修复的提取结果：
-${String(raw ?? '')}`;
+${clipText(String(raw ?? ''), compact ? 8000 : 12000)}`;
     return { system, user };
 }
 
@@ -3621,29 +3968,54 @@ function keywordTemplate(definitions) {
     }).join('\n\n');
 }
 
-function entryForPrompt(entry) {
+function entryForPrompt(entry, contentLimit = 1000) {
     const keywords = (entry.keywords ?? []).filter((item) => !(0, util_1.isUidKeyword)(item));
-    return `标题：${entry.title}\n关键词：${keywords.join('、') || '无'}\n正文：\n${(0, util_1.truncate)(entry.content || '（空）', 2200)}`;
+    return `标题：${entry.title}\n关键词：${keywords.join('、') || '无'}\n正文：\n${clipText(entry.content || '（空）', contentLimit)}`;
 }
 
+// [MA-PROMPT-01] 保留文本开头与结尾，避免简单截断丢失结论或最终状态。
+function clipText(value, maxChars) {
+    const text = String(value ?? '');
+    if (!Number.isFinite(maxChars) || maxChars <= 0 || text.length <= maxChars) return text;
+    const marker = '\n[中间内容已按请求预算省略]\n';
+    const remaining = Math.max(0, maxChars - marker.length);
+    const head = Math.ceil(remaining * 0.62);
+    const tail = Math.floor(remaining * 0.38);
+    return `${text.slice(0, head)}${marker}${text.slice(text.length - tail)}`;
+}
 },"revision":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RevisionService = void 0;
 exports.parseRevisionResult = parseRevisionResult;
-const constants_1 = require("./constants");
 const parser_1 = require("./parser");
 const prompts_1 = require("./prompts");
+const model_request_1 = require("./model-request");
 
 class RevisionService {
     constructor(host, getSettings) {
         this.host = host;
         this.getSettings = getSettings;
     }
+
+    /**
+     * [MA-REVISION-01] 修正服务只生成完整替换文本，不直接修改聊天。
+     * 这样正文落地仍由 HostAdapter 单点负责，避免审核与宿主写入高耦合。
+     */
     async revise(settings, snapshot, issues) {
         this.host.assertSnapshot(snapshot, this.getSettings());
         const prompt = (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues);
-        const raw = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, snapshot, settings, settings.requestTimeoutMs, settings.revisionProfileId);
+        const raw = await (0, model_request_1.callModel)({
+            host: this.host,
+            stage: 'revision',
+            prompt,
+            fallbackPrompt: () => (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { compact: true }),
+            settings,
+            snapshot,
+            profileId: settings.revisionProfileId,
+            sourceText: snapshot.assistantText,
+        });
         this.host.assertSnapshot(snapshot, this.getSettings());
         const revisedText = parseRevisionResult(raw);
         if (revisedText === snapshot.assistantText)
@@ -3653,10 +4025,10 @@ class RevisionService {
 }
 exports.RevisionService = RevisionService;
 
+/** [MA-REVISION-02] 只接受可直接替换的完整自然正文。 */
 function parseRevisionResult(raw) {
     const text = (0, parser_1.sanitizeModelText)(raw).trim();
-    if (!text)
-        throw new Error('修正模型没有返回完整正文');
+    if (!text) throw new Error('修正模型没有返回完整正文');
     if (/^\s*(?:以下是|这是|修正版|修改后|完整修正版|修改说明|修改建议|局部补丁)\s*[：:]/u.test(text)
         || /^\s*【\s*(?:结论|问题|违反规则|修正版正文|修改说明)\s*】/u.test(text))
         throw new Error('修正模型返回了解释或包装标题，不是纯完整正文');
@@ -3664,14 +4036,119 @@ function parseRevisionResult(raw) {
         throw new Error('修正模型返回了局部补丁，不是完整正文');
     return text;
 }
+},"semantic":function(module,exports,require){
 
-function trimPrompt(value) {
-    return value.length <= constants_1.MAX_CONTEXT_CHARS
-        ? value
-        : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`;
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.describeEntry = describeEntry;
+exports.isEventClosed = isEventClosed;
+exports.classifyEvidence = classifyEvidence;
+exports.countCriticalChanges = countCriticalChanges;
+const util_1 = require("./util");
+
+function describeEntry(entry, settings, currentContinuityUids = new Set(), focus = false) {
+    const foundation = entry.type === '基础设定' || isFoundationEntry(entry, settings);
+    const tier = String(entry.memoryTier ?? entry.raw?.extensions?.mirrorAbyssInfoPoint?.memoryTier ?? 'background');
+    const temporary = entry.keywords?.some((keyword) => ['临时', '临时对象', '临时条目'].includes((0, util_1.normalizeFact)(keyword)));
+    let lifecycle = 'background';
+    let semanticRole = 'object';
+    if (foundation || focus) {
+        lifecycle = 'core';
+        semanticRole = foundation ? 'foundation' : 'focus';
+    }
+    else if (entry.title === '总结｜当前事件') {
+        lifecycle = 'recent-summary';
+        semanticRole = 'summary-container';
+    }
+    else if (entry.title === '总结｜世界历史') {
+        lifecycle = 'historical-summary';
+        semanticRole = 'summary-container';
+    }
+    else if (entry.type === '事件') {
+        lifecycle = isEventClosed(entry) ? 'closed' : (currentContinuityUids.has(entry.uid) ? 'active' : tierName(tier));
+        semanticRole = 'event-container';
+    }
+    else if (['场景', '时空'].includes(entry.type)) {
+        lifecycle = currentContinuityUids.has(entry.uid) ? 'active' : (tier === 'historical' ? 'historical' : 'settled');
+        semanticRole = 'scene-container';
+    }
+    else if (temporary) {
+        lifecycle = 'temporary';
+        semanticRole = 'temporary-object';
+    }
+    else {
+        lifecycle = tierName(tier);
+        semanticRole = /^(人物|关系|能力|契约)$/u.test(entry.type) ? 'identity-object' : 'object';
+    }
+    return {
+        lifecycle,
+        semanticRole,
+        evidence: evidenceProfile(entry),
+    };
 }
 
+function tierName(value) {
+    return ({
+        core: 'core',
+        active: 'active',
+        recent: 'recent',
+        'recent-summary': 'recent-summary',
+        'long-term': 'long-term',
+        historical: 'historical',
+        'historical-summary': 'historical-summary',
+        background: 'background',
+    })[String(value ?? '')] ?? 'background';
+}
+
+function isEventClosed(entry) {
+    if (!entry || entry.type !== '事件') return false;
+    const current = entry.sections?.values?.['当前状态'] ?? [];
+    const result = entry.sections?.values?.['最终结果'] ?? [];
+    const text = `${current.join('\n')}\n${result.join('\n')}\n${entry.content ?? ''}`;
+    if (/阶段\s*[：:]\s*(?:结束|已结束|完成|已完成|关闭|已关闭)/u.test(text)) return true;
+    if (/(?:事件|任务|追逐|冲突|调查|战斗|谈判|仪式)(?:已经|已|正式)?(?:结束|完成|关闭)/u.test(text)) return true;
+    return result.some((line) => line && !/^(?:无|未知|未说明|尚未结束)/u.test(String(line).trim()));
+}
+
+function classifyEvidence(line) {
+    const text = String(line ?? '');
+    if (/(?:可能|或许|似乎|疑似|推测|猜测|怀疑|尚未确认|未能确认|不确定|无法确定)/u.test(text)) return 'uncertain';
+    if (/(?:据说|传闻|声称|宣称|表示|报告|记录|公告|信件|文件|证词|听说|告知|提到)/u.test(text)) return 'reported';
+    return 'confirmed';
+}
+
+function evidenceProfile(entry) {
+    const output = { confirmed: 0, reported: 0, uncertain: 0 };
+    for (const [section, lines] of Object.entries(entry.sections?.values ?? {})) {
+        if (/(关联条目|别名|关键词|触发词|标签|分类)/u.test(section)) continue;
+        for (const line of lines ?? []) output[classifyEvidence(line)] += 1;
+    }
+    return output;
+}
+
+function countCriticalChanges(plan) {
+    const keys = new Set();
+    for (const operation of plan?.operations ?? []) {
+        if (!operation || operation.kind === 'noop' || operation.kind === 'merge-keywords' || operation.kind === 'merge-titles') continue;
+        const section = String(operation.section ?? '');
+        const important = operation.kind === 'create-entry'
+            || operation.kind === 'delete-entry'
+            || operation.kind === 'replace-line'
+            || operation.kind === 'replace-section'
+            || /(固定事实|当前状态|最终结果|事件进程|变化记录|近期经历|历史事实|关系|阶段|局部变化)/u.test(section);
+        if (!important) continue;
+        keys.add(`${operation.title}|${section}|${operation.kind}`);
+    }
+    return keys.size;
+}
+
+function isFoundationEntry(entry, settings) {
+    const definition = settings?.keywordDefinitions?.find?.((item) => item.label === '基础设定');
+    const names = definition ? [definition.label, ...(definition.aliases ?? [])] : ['基础设定'];
+    return (entry.keywords ?? []).some((keyword) => names.some((name) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)(name)));
+}
 },"settings":function(module,exports,require){
+
 
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -3840,6 +4317,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     responseTokens: 3072,
     requestTimeoutMs: 90000,
     smallSummaryTurns: 10,
+    criticalChangesForSmall: 6,
     largeSummaryCount: 5,
     queueCompactThreshold: 6,
     keywordDefinitions: exports.DEFAULT_KEYWORDS,
@@ -3899,6 +4377,7 @@ function parseSettings(value) {
         responseTokens: (0, util_1.clampNumber)(candidate.responseTokens, 3072, 256, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 1, 100),
+        criticalChangesForSmall: (0, util_1.clampNumber)(candidate.criticalChangesForSmall, 6, 1, 50),
         largeSummaryCount: (0, util_1.clampNumber)(candidate.largeSummaryCount, 5, 1, 30),
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
         keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions, candidate.tables),
@@ -4003,8 +4482,8 @@ function parseFields(value) {
 function isPolicy(value) {
     return ['semantic-upsert', 'replace-by-anchor', 'append-chain', 'replace-section', 'merge-titles', 'merge-keywords'].includes(String(value));
 }
-
 },"util":function(module,exports,require){
+
 
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -4118,9 +4597,8 @@ function truncate(value, max) {
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] ?? char));
 }
-
-
 },"worldbook":function(module,exports,require){
+
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorldbookAdapter = void 0;
@@ -4128,6 +4606,7 @@ exports.parseEntries = parseEntries;
 const constants_1 = require("./constants");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
+const semantic_1 = require("./semantic");
 const entry_section_1 = require("./domain/entry-section");
 const util_1 = require("./util");
 class WorldbookAdapter {
@@ -4440,7 +4919,12 @@ class WorldbookAdapter {
             const extension = markManaged(entry.raw, '', entry.title, '');
             if (!touchedUids.has(entry.uid) && previousUpdatedAt) extension.updatedAt = previousUpdatedAt;
             extension.focus = focus;
+            extension.chatKey = this.chatKey();
             extension.recallProfile = profile.name;
+            const semantic = (0, semantic_1.describeEntry)(entry, settings, currentContinuityUids, focus);
+            extension.lifecycle = semantic.lifecycle;
+            extension.semanticRole = semantic.semanticRole;
+            extension.evidence = semantic.evidence;
         }
     }
     assertChat(expected) { if (expected && this.chatKey() !== expected) throw new Error('聊天已经切换，拒绝写入世界书'); }
@@ -4552,7 +5036,7 @@ function parseEntries(data) {
         const keywords = (0, util_1.normalizeStringArray)(raw.key);
         const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称']));
         const extension = readExtension(raw);
-        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...keywords]), aliases, references: (0, entry_section_1.extractReferences)(content), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
+        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...keywords]), aliases, references: (0, entry_section_1.extractReferences)(content), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), evidence: extension.evidence && typeof extension.evidence === 'object' ? { confirmed: Number(extension.evidence.confirmed || 0), reported: Number(extension.evidence.reported || 0), uncertain: Number(extension.evidence.uncertain || 0) } : { confirmed: 0, reported: 0, uncertain: 0 }, chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
 }
@@ -4593,7 +5077,7 @@ function selectCurrentContinuityUids(entries) {
         .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))[0];
     if (currentScene) output.add(currentScene.uid);
     const activeEvent = entries
-        .filter((entry) => entry.managed && entry.type === '事件' && !entry.activation.disabled && !/阶段[：:]结束|【最终结果】[\s\S]*?- (?!无)/u.test(entry.content))
+        .filter((entry) => entry.managed && entry.type === '事件' && !entry.activation.disabled && !(0, semantic_1.isEventClosed)(entry))
         .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))[0];
     if (activeEvent) output.add(activeEvent.uid);
     return output;
@@ -4606,12 +5090,14 @@ function nativeProfileFor(entry, settings, currentContinuityUids, focus = false)
     if (foundation) profile = { name: '基础设定', constant: true, vectorized: false, preventRecursion: true, excludeRecursion: true, depth: 0, order: 860, position: 0, scanDepth: null, delayUntilRecursion: 0 };
     else if (entry.title === '总结｜当前事件') profile = { name: '小总结', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: false, depth: 6, order: 460, position: 4, scanDepth: 24, delayUntilRecursion: 0 };
     else if (entry.title === '总结｜世界历史') profile = { name: '大总结', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: true, depth: 8, order: 360, position: 4, scanDepth: 32, delayUntilRecursion: 0 };
+    else if (entry.type === '事件' && (0, semantic_1.isEventClosed)(entry)) profile = { name: '已关闭事件', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: true, depth: 8, order: Math.min(baseOrder, 340), position: 4, scanDepth: 32, delayUntilRecursion: 0 };
     else if (currentContinuityUids.has(entry.uid)) profile = { name: '活动桥接', constant: false, vectorized: true, preventRecursion: false, excludeRecursion: false, depth: 4, order: baseOrder, position: 4, scanDepth: 12, delayUntilRecursion: 0 };
     else if (tier === 'historical') profile = { name: '历史向量', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: true, depth: 8, order: Math.min(baseOrder, 340), position: 4, scanDepth: 32, delayUntilRecursion: 0 };
+    else if (tier === 'long-term' && /^(人物|关系|能力|契约)$/u.test(entry.type)) profile = { name: '长期定义', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: false, depth: 0, order: Math.min(baseOrder, 520), position: 1, scanDepth: 24, delayUntilRecursion: 0 };
     else if (tier === 'long-term') profile = { name: '长期触发', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: false, depth: 6, order: Math.min(baseOrder, 520), position: 4, scanDepth: 24, delayUntilRecursion: 0 };
     else if (tier === 'recent') profile = { name: '近期触发', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: false, depth: 4, order: baseOrder, position: 4, scanDepth: 16, delayUntilRecursion: 0 };
     else profile = { name: '普通触发', constant: false, vectorized: true, preventRecursion: true, excludeRecursion: false, depth: 4, order: baseOrder, position: 4, scanDepth: 16, delayUntilRecursion: 0 };
-    if (focus) return { ...profile, name: '玩家焦点', constant: true };
+    if (focus) return { ...profile, name: '玩家焦点', constant: true, preventRecursion: true, excludeRecursion: true, delayUntilRecursion: 0 };
     return profile;
 }
 function applyNativeProfile(raw, profile) {

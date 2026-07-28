@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.6",
+  "version": "2.0.0-lite.ui.9",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "审核与语义世界书轻量版｜严格顺序异步队列、提取容错与部分提交、宽场景卡、小总结/大总结沉降分发、受限递归与确定性召回重排"
+  "description": "审核与语义世界书轻量版｜审核正文替换回读校验、分阶段模型预算、504精简重试、轻量语义匹配与总结沉降"
 }
