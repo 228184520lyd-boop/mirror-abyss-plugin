@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.11. */
+/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.12. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
@@ -18,7 +18,7 @@ function mount(title = '点击启动镜渊') {
   button.type = 'button';
   button.title = title;
   button.setAttribute('aria-label', '启动并打开镜渊');
-  button.style.cssText = 'display:flex!important;align-items:center!important;justify-content:center!important;width:44px!important;height:44px!important;min-width:44px!important;min-height:44px!important;padding:0!important;border:1px solid rgba(255,255,255,.24)!important;border-radius:50%!important;background:#141418!important;color:#fff!important;box-shadow:0 3px 12px rgba(0,0,0,.42)!important;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation!important;user-select:none!important;-webkit-tap-highlight-color:transparent!important;';
+  button.style.cssText = 'display:flex!important;align-items:center!important;justify-content:center!important;width:44px!important;height:44px!important;min-width:44px!important;min-height:44px!important;padding:0!important;border:1px solid rgba(255,255,255,.24)!important;border-radius:50%!important;background:#141418!important;color:#fff!important;box-shadow:0 3px 12px rgba(0,0,0,.42)!important;cursor:pointer!important;pointer-events:auto!important;touch-action:none!important;user-select:none!important;-webkit-tap-highlight-color:transparent!important;';
   button.innerHTML = '<i class="fa-solid fa-circle-nodes" style="font-size:14px;pointer-events:none"></i>';
   button.addEventListener('pointerdown', event => event.stopPropagation());
   button.addEventListener('click', event => {

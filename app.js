@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.11 — scene-centered recall, five entry types, event settlement and low-coupling requests. */
+/** Mirror Abyss 2.0.0-lite.ui.12 — scene-centered recall, five entry types, event settlement and low-coupling requests. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -530,12 +530,12 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.11';
+exports.VERSION = '2.0.0-lite.ui.12';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 11;
+exports.MANAGED_VERSION = 12;
 },"control-panel":function(module,exports,require){
 
 "use strict";
@@ -550,6 +550,9 @@ const SETTINGS_ID = 'mirror-abyss-lite-settings-entry';
 const STYLE_ID = 'mirror-abyss-lite-style';
 const INDICATOR_CLASS = 'mirror-abyss-message-indicator';
 const PROFILE_SELECT_ID = 'mirror-abyss-lite-profile-select';
+const LAUNCHER_POSITION_KEY = 'mirrorAbyssLite.launcherPosition.v1';
+const LAUNCHER_SIZE = 44;
+const LAUNCHER_MARGIN = 8;
 class ControlPanel {
     constructor(actions) {
         this.actions = actions;
@@ -579,6 +582,9 @@ class ControlPanel {
         this.observer = null;
         this.pendingIndicatorFrame = 0;
         this.waitingForDom = false;
+        this.launcherCleanup = [];
+        this.dragState = null;
+        this.suppressLauncherClick = false;
         this.onDomReady = () => {
             this.waitingForDom = false;
             this.mount();
@@ -608,8 +614,15 @@ class ControlPanel {
         launcher.setAttribute('aria-expanded', 'false');
         launcher.title = 'Mirror Abyss｜审核与提取';
         launcher.innerHTML = '<i class="fa-solid fa-circle-nodes" aria-hidden="true"></i><span>镜渊</span>';
-        launcher.addEventListener('pointerdown', (event) => event.stopPropagation());
-        launcher.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); this.togglePanel(); });
+        launcher.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (this.suppressLauncherClick) {
+                this.suppressLauncherClick = false;
+                return;
+            }
+            this.togglePanel();
+        });
         root.append(launcher);
         document.body.append(root);
         const panel = this.buildPanel();
@@ -617,6 +630,10 @@ class ControlPanel {
         this.root = root;
         this.launcher = launcher;
         this.panel = panel;
+        // [MA-UI-DRAG-01] 浮动入口使用 Pointer Events，鼠标和触屏共用同一套拖动逻辑。
+        // 拖动位置只保存到浏览器 localStorage，不进入剧情设置，也不耦合审核/提取模块。
+        this.applySavedLauncherPosition();
+        this.bindLauncherDrag();
         this.bindApiProfileSelector();
         this.mountOfficialSettingsEntry();
         this.observeChat();
@@ -629,6 +646,9 @@ class ControlPanel {
         this.waitingForDom = false;
         this.observer?.disconnect();
         this.observer = null;
+        this.launcherCleanup.splice(0).forEach((cleanup) => { try { cleanup(); } catch { } });
+        this.dragState = null;
+        this.suppressLauncherClick = false;
         if (this.pendingIndicatorFrame) cancelAnimationFrame(this.pendingIndicatorFrame);
         this.pendingIndicatorFrame = 0;
         this.root?.remove();
@@ -653,14 +673,116 @@ class ControlPanel {
         this.buttons = {};
         this.pendingActions = new Set();
     }
+    applySavedLauncherPosition() {
+        if (!this.root || typeof window === 'undefined') return;
+        try {
+            const saved = JSON.parse(window.localStorage?.getItem(LAUNCHER_POSITION_KEY) || 'null');
+            if (!saved || !Number.isFinite(saved.xRatio) || !Number.isFinite(saved.yRatio)) return;
+            const maxLeft = Math.max(LAUNCHER_MARGIN, window.innerWidth - LAUNCHER_SIZE - LAUNCHER_MARGIN);
+            const maxTop = Math.max(LAUNCHER_MARGIN, window.innerHeight - LAUNCHER_SIZE - LAUNCHER_MARGIN);
+            const left = LAUNCHER_MARGIN + clamp01(saved.xRatio) * Math.max(0, maxLeft - LAUNCHER_MARGIN);
+            const top = LAUNCHER_MARGIN + clamp01(saved.yRatio) * Math.max(0, maxTop - LAUNCHER_MARGIN);
+            this.setLauncherPosition(left, top, false);
+        }
+        catch { }
+    }
+    bindLauncherDrag() {
+        const launcher = this.launcher;
+        const root = this.root;
+        if (!launcher || !root || typeof window === 'undefined') return;
+        const onPointerDown = (event) => {
+            if (event.pointerType === 'mouse' && event.button !== 0) return;
+            event.stopPropagation();
+            const rect = root.getBoundingClientRect();
+            this.dragState = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                left: rect.left,
+                top: rect.top,
+                moved: false,
+            };
+            try { launcher.setPointerCapture?.(event.pointerId); } catch { }
+        };
+        const onPointerMove = (event) => {
+            const state = this.dragState;
+            if (!state || state.pointerId !== event.pointerId) return;
+            const dx = event.clientX - state.startX;
+            const dy = event.clientY - state.startY;
+            if (!state.moved && Math.hypot(dx, dy) < 6) return;
+            state.moved = true;
+            event.preventDefault();
+            event.stopPropagation();
+            root.classList.add('is-dragging');
+            this.setLauncherPosition(state.left + dx, state.top + dy, false);
+        };
+        const finish = (event) => {
+            const state = this.dragState;
+            if (!state || state.pointerId !== event.pointerId) return;
+            if (state.moved) event.preventDefault();
+            event.stopPropagation();
+            try { launcher.releasePointerCapture?.(event.pointerId); } catch { }
+            root.classList.remove('is-dragging');
+            if (state.moved) {
+                this.suppressLauncherClick = true;
+                window.setTimeout(() => { this.suppressLauncherClick = false; }, 500);
+                this.persistLauncherPosition();
+            }
+            this.dragState = null;
+        };
+        const onResize = () => {
+            if (!this.root || this.dragState) return;
+            const rect = this.root.getBoundingClientRect();
+            if (this.root.style.left) this.setLauncherPosition(rect.left, rect.top, true);
+        };
+        launcher.addEventListener('pointerdown', onPointerDown);
+        launcher.addEventListener('pointermove', onPointerMove);
+        launcher.addEventListener('pointerup', finish);
+        launcher.addEventListener('pointercancel', finish);
+        window.addEventListener('resize', onResize, { passive: true });
+        this.launcherCleanup.push(() => launcher.removeEventListener('pointerdown', onPointerDown));
+        this.launcherCleanup.push(() => launcher.removeEventListener('pointermove', onPointerMove));
+        this.launcherCleanup.push(() => launcher.removeEventListener('pointerup', finish));
+        this.launcherCleanup.push(() => launcher.removeEventListener('pointercancel', finish));
+        this.launcherCleanup.push(() => window.removeEventListener('resize', onResize));
+    }
+    setLauncherPosition(left, top, persist = false) {
+        if (!this.root || typeof window === 'undefined') return;
+        const maxLeft = Math.max(LAUNCHER_MARGIN, window.innerWidth - LAUNCHER_SIZE - LAUNCHER_MARGIN);
+        const maxTop = Math.max(LAUNCHER_MARGIN, window.innerHeight - LAUNCHER_SIZE - LAUNCHER_MARGIN);
+        const nextLeft = Math.min(maxLeft, Math.max(LAUNCHER_MARGIN, Number(left) || LAUNCHER_MARGIN));
+        const nextTop = Math.min(maxTop, Math.max(LAUNCHER_MARGIN, Number(top) || LAUNCHER_MARGIN));
+        this.root.style.left = `${Math.round(nextLeft)}px`;
+        this.root.style.top = `${Math.round(nextTop)}px`;
+        this.root.style.right = 'auto';
+        this.root.style.bottom = 'auto';
+        this.root.style.transform = 'none';
+        if (persist) this.persistLauncherPosition();
+    }
+    persistLauncherPosition() {
+        if (!this.root || typeof window === 'undefined') return;
+        try {
+            const rect = this.root.getBoundingClientRect();
+            const horizontal = Math.max(1, window.innerWidth - LAUNCHER_SIZE - LAUNCHER_MARGIN * 2);
+            const vertical = Math.max(1, window.innerHeight - LAUNCHER_SIZE - LAUNCHER_MARGIN * 2);
+            const value = {
+                xRatio: clamp01((rect.left - LAUNCHER_MARGIN) / horizontal),
+                yRatio: clamp01((rect.top - LAUNCHER_MARGIN) / vertical),
+            };
+            window.localStorage?.setItem(LAUNCHER_POSITION_KEY, JSON.stringify(value));
+        }
+        catch { }
+    }
     installStyle() {
         document.getElementById(STYLE_ID)?.remove();
         const style = document.createElement('style');
         style.id = STYLE_ID;
         style.textContent = `
-#${ROOT_ID}.ma-lite-floating-entry{position:fixed;right:max(10px,env(safe-area-inset-right));top:50dvh;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;z-index:2147483638;pointer-events:auto!important}
-.ma-lite-launcher{box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.28));border-radius:50%;background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#17171c) 92%,transparent);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 6px 20px rgba(0,0,0,.46);backdrop-filter:blur(10px);font-size:17px;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}
+#${ROOT_ID}.ma-lite-floating-entry{position:fixed;right:max(10px,env(safe-area-inset-right));top:50dvh;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;z-index:2147483638;pointer-events:auto!important;user-select:none;-webkit-user-select:none}
+#${ROOT_ID}.ma-lite-floating-entry.is-dragging{transform:none!important}
+.ma-lite-launcher{box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.28));border-radius:50%;background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#17171c) 92%,transparent);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 6px 20px rgba(0,0,0,.46);backdrop-filter:blur(10px);font-size:17px;cursor:pointer;touch-action:none;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}
 .ma-lite-launcher:hover,.ma-lite-launcher:focus-visible{transform:scale(1.06)}
+#${ROOT_ID}.is-dragging .ma-lite-launcher{transform:none!important;cursor:grabbing}
 .ma-lite-launcher span{display:none}
 #${PANEL_ID}{position:fixed;top:max(58px,calc(48px + env(safe-area-inset-top)));right:max(10px,env(safe-area-inset-right));z-index:2147483639;box-sizing:border-box;width:min(360px,calc(100vw - 20px));max-height:calc(100dvh - 78px);overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#17171c) 94%,transparent);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #${PANEL_ID}[hidden]{display:none!important}
@@ -1344,6 +1466,9 @@ function lifecycleBadge(value) {
         temporary: { label: '临时', kind: 'closed' },
         background: { label: '背景', kind: 'isolated' },
     })[String(value ?? '')] ?? { label: String(value || '背景'), kind: 'isolated' };
+}
+function clamp01(value) {
+    return Math.min(1, Math.max(0, Number(value) || 0));
 }
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>\"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -2087,7 +2212,7 @@ function mountStartupIndicator() {
     button.innerHTML = '<i class="fa-solid fa-circle-nodes" aria-hidden="true"></i>';
     button.setAttribute('aria-label', '启动镜渊');
     button.title = '镜渊正在等待 SillyTavern 完成初始化';
-    button.style.cssText = 'display:flex!important;align-items:center!important;justify-content:center!important;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:1px solid rgba(255,255,255,.24);border-radius:50%;background:rgba(20,20,24,.96);color:#fff;font-weight:700;font-size:13px;box-shadow:0 3px 12px rgba(0,0,0,.42);touch-action:manipulation;pointer-events:auto!important;cursor:pointer!important;';
+    button.style.cssText = 'display:flex!important;align-items:center!important;justify-content:center!important;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:1px solid rgba(255,255,255,.24);border-radius:50%;background:rgba(20,20,24,.96);color:#fff;font-weight:700;font-size:13px;box-shadow:0 3px 12px rgba(0,0,0,.42);touch-action:none;pointer-events:auto!important;cursor:pointer!important;';
     button.addEventListener('pointerdown', (event) => event.stopPropagation());
     button.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); void initialize(); });
     root.append(button);
@@ -2959,6 +3084,11 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     const index = (0, matcher_1.buildEntryIndex)(entries);
     const operations = [];
     for (const block of blocks) {
+        // [MA-ITEM-02] 二次防线：即使候选来自总结或迁移，也不允许集合物品创建独立条目。
+        if (block.type === '物品' && isCollectiveItemTitle(block.name)) {
+            operations.push(noop(block.title, undefined, '', '物品条目只允许单个可追踪实例；同类集合应保留在场景资源'));
+            continue;
+        }
         const candidates = (0, matcher_1.matchBlock)(block, index, contextText);
         const target = (0, matcher_1.selectBestCandidate)(candidates, 80);
         if (!target) {
@@ -3078,7 +3208,7 @@ function applyPlanToEntries(plan, entries) {
 }
 // [MA-CONTENT-01] 单条目正文预算：允许场景知识持续补全，但阻止模型把动作流水或重复描述无限写入世界书。
 const SECTION_BUDGETS = {
-    人物: { 身份: 8, 稳定: 12, 当前: 8, 关系: 16, 持有: 10, 持续经历: 16, 别名: 4 },
+    人物: { 身份: 4, 稳定: 3, 当前: 8, 关系: 16, 持有: 10, 持续经历: 16, 别名: 4 },
     场景: { 定义: 8, 空间结构: 24, 固定资源: 16, 持续变化: 20, 当前状态: 8, 在场: 12, 当前资源: 12, 活动关联: 8, 世界影响: 6, 局部约束: 16, 别名: 4 },
     物品: { 定义: 8, 功能: 10, 当前: 8, 限制: 10, 持续变化: 12, 别名: 4 },
     事件: { 目标: 6, 参与: 12, 场景: 8, 阶段: 2, 关键进展: 16, 未决: 12, 结果: 8, 别名: 4 },
@@ -3284,6 +3414,13 @@ function linesWithoutCrossSectionDuplicates(block, section) {
     return section.lines.filter((line) => !current.includes((0, util_1.normalizeFact)(line)));
 }
 
+function isCollectiveItemTitle(name) {
+    const text = String(name ?? '').trim();
+    const normalized = (0, util_1.normalizeFact)(text);
+    if (!text) return true;
+    if (new Set(['物品','道具','装备','武器','工具','家具','桌椅','餐具','衣物','服装','食物','食品','药品','药物','物资','用品','器材','车辆','书籍','文件','货物','资源']).has(normalized)) return true;
+    return /[、,，]|(?:若干|多个|数个|几(?:个|件|把|瓶|辆|本|枚|支|套|张)|多(?:个|件|把|瓶|辆|本|枚|支|套|张)|一批|一组|一堆|大量|成排|所有|各种|各类|同类)/u.test(text);
+}
 function isMultiValueLabel(label) {
     return /^(持有物|物品|装备|关系|关联对象|关联条目|资源列表|成员)$/u.test(String(label ?? '').trim());
 }
@@ -3530,8 +3667,10 @@ function parseExtractionWithRecovery(raw) {
         parsedBlocks.push({ rawTitle: title, title, type, name, sections, keywords });
     }
     const merged = mergeDuplicateBlocks(parsedBlocks, diagnostics);
-    removeCrossEntryDuplicates(merged, diagnostics);
-    let usable = merged.filter((block) => block.sections.some((section) => section.lines.length));
+    // [MA-ITEM-01] 物品条目只允许单个可追踪实例；同类集合回收到当前场景资源。
+    const normalizedBlocks = relocateCollectiveItemBlocks(merged, diagnostics);
+    removeCrossEntryDuplicates(normalizedBlocks, diagnostics);
+    let usable = normalizedBlocks.filter((block) => block.sections.some((section) => section.lines.length));
     // [MA-SCENE-02] 单轮正文只有一个“正文结束时当前场景”。模型误报多个场景时只保留首个，
     // 其他地点不会被误标为当前场景；历史场景由事件分发或后续实际进入时补全。
     const sceneBlocks = usable.filter((block) => block.type === '场景');
@@ -3606,7 +3745,7 @@ function recoverSections(type, content, diagnostics, title) {
     const sections = [];
     for (const name of expected.filter((item) => item !== '关键词')) {
         let lines = (0, util_1.unique)((aliases.get(name) ?? [])
-            .map(sanitizeExtractionLine)
+            .map((line) => sanitizeExtractionLine(line, type, name))
             .filter((line) => line && !EMPTY_PATTERN.test(line) && !EMPTY_VALUE_PATTERN.test(line) && !/完整事实句|稳定名称|甲与乙/u.test(line)));
         const maxLines = sectionLineLimit(type, name);
         if (lines.length > maxLines) {
@@ -3672,6 +3811,57 @@ function mergeSectionLines(section, oldLines, newLines) {
 function extractionSlot(line) {
     return String(line ?? '').match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1]?.replace(/\s+/gu, '') ?? '';
 }
+const COLLECTIVE_ITEM_NAMES = new Set([
+    '物品', '道具', '装备', '武器', '工具', '家具', '桌椅', '餐具', '衣物', '服装', '食物', '食品', '药品', '药物', '物资', '用品', '器材', '车辆', '书籍', '文件', '货物', '资源',
+]);
+function relocateCollectiveItemBlocks(blocks, diagnostics) {
+    const scene = blocks.find((block) => block.type === '场景');
+    const output = [];
+    for (const block of blocks) {
+        if (block.type !== '物品' || !isCollectiveItemBlock(block)) {
+            output.push(block);
+            continue;
+        }
+        const label = collectiveItemLabel(block);
+        if (scene) {
+            let section = scene.sections.find((item) => item.name === '当前资源');
+            if (!section) {
+                section = { name: '当前资源', lines: [], empty: true };
+                scene.sections.push(section);
+            }
+            section.lines = (0, util_1.unique)([...section.lines, label]);
+            section.empty = section.lines.length === 0;
+            diagnostics.repaired += 1;
+            diagnostics.warnings.push(`${block.title}是同类物品集合，已转入${scene.title}【当前资源】`);
+        }
+        else {
+            diagnostics.skipped.push({ title: block.title, reason: '物品条目只允许单个可追踪实例；集合物品需要写入当前场景资源' });
+        }
+    }
+    return output;
+}
+function isCollectiveItemBlock(block) {
+    const name = String(block?.name ?? '').trim();
+    const normalized = (0, util_1.normalizeFact)(name);
+    if (!name) return true;
+    if (COLLECTIVE_ITEM_NAMES.has(normalized)) return true;
+    if (/[、,，]|(?:和|与|及)其他/u.test(name)) return true;
+    if (/(?:若干|多个|数个|几(?:个|件|把|瓶|辆|本|枚|支|套|张)|多(?:个|件|把|瓶|辆|本|枚|支|套|张)|一批|一组|一堆|大量|成排|所有|各种|各类|同类)/u.test(name)) return true;
+    if (/(?:桌椅|刀具|餐具|药品|药物|食品|食物|物资|用品|器材|家具|衣物|服装|武器|装备|工具|车辆|书籍|文件|货物|资源)$/u.test(name)
+        && !/(?:的|专用|唯一|编号|号|遗失|染血|破损|封印|核心|钥匙|短剑|长剑|戒指|项链|徽章|信件|日记|手杖|王冠)$/u.test(name)) return true;
+    const current = block.sections?.find((section) => section.name === '当前')?.lines ?? [];
+    return current.some((line) => {
+        const value = String(line ?? '').match(/^\s*数量\s*[：:]\s*(.+)$/u)?.[1] ?? '';
+        if (!value) return false;
+        const numeric = Number(value.match(/\d+(?:\.\d+)?/u)?.[0]);
+        return (Number.isFinite(numeric) && numeric > 1) || /(?:多|数|若干|几|一批|一组|大量)/u.test(value);
+    });
+}
+function collectiveItemLabel(block) {
+    const current = block.sections?.find((section) => section.name === '当前')?.lines ?? [];
+    const quantity = current.find((line) => /^\s*数量\s*[：:]/u.test(String(line ?? '')));
+    return quantity ? `${block.name}（${String(quantity).replace(/^\s*数量\s*[：:]\s*/u, '').replace(/[。.]+$/u, '')}）` : block.name;
+}
 function removeCrossEntryDuplicates(blocks, diagnostics) {
     const owners = new Map();
     for (const block of blocks) {
@@ -3727,13 +3917,25 @@ function sanitizeExtractionKeywords(name, type, values) {
     }
     return output.length ? output : [String(name ?? '').trim()].filter(Boolean);
 }
-function sanitizeExtractionLine(value) {
-    const line = normalizePointLine(value).slice(0, 180).trim();
+function sanitizeExtractionLine(value, type = '', section = '') {
+    let line = normalizePointLine(value).slice(0, 180).trim();
     if (!line) return '';
     if (/(?:供|给).{0,6}(?:AI|模型).{0,8}(?:参考|推测|判断)|(?:AI|模型)(?:可以|可|应当|应该)|可能意味着|建议后续|便于后续|用于推理|剧情建议/u.test(line)) return '';
-    return line;
+    // [MA-CHAR-01] 只机械移除明确的审美评价词；身份、能力、伤势和可识别特征仍由模型保留。
+    if (type === '人物' && /^(身份|稳定)$/u.test(section)) {
+        line = line
+            .replace(/(?:绝美|倾国倾城|美若天仙|完美无瑕|惊艳绝伦|极其漂亮|非常漂亮|异常英俊|俊美无双|迷人至极|性感迷人|高贵优雅|冷艳绝伦)/gu, '')
+            .replace(/[，,]{2,}/gu, '，')
+            .replace(/^\s*[，,；;。.、]+|[，,；;。.、]+\s*$/gu, '')
+            .trim();
+        const compact = line.replace(/[^\p{L}\p{N}]/gu, '');
+        if (!compact || /^(?:的)?(?:脸庞|面容|容貌|气质|身姿|外表)$/u.test(compact)) return '';
+    }
+    return line.slice(0, type === '人物' && /^(身份|稳定)$/u.test(section) ? 100 : 180);
 }
 function sectionLineLimit(type, section) {
+    if (type === '人物' && section === '稳定') return 3;
+    if (type === '人物' && section === '身份') return 4;
     if (type === '场景' && /^(空间结构|固定资源|持续变化)$/u.test(section)) return 8;
     if (/^(在场|当前资源|活动关联|世界影响|局部约束|参与|未决|持有)$/u.test(section)) return 6;
     return 6;
@@ -3955,7 +4157,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【只允许五类】
 1. 人物：身份、稳定能力、当前状态、该人物自身的关系、关键持有物、持续经历。
 2. 场景：同一稳定地点持续更新同一条目；保存稳定空间知识、当前局部条件和关联名称。
-3. 物品：会持续存在且影响后续的关键物品。
+3. 物品：只记录一个可单独追踪的具体物品实例；同类物品集合、批量物资和泛称只写入场景资源。
 4. 事件：尚在发展的多对象过程、必要因果节点、未决事项和结果。
 5. 世界：跨多个场景持续生效的世界整体变化。
 
@@ -3974,6 +4176,8 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 禁止“供AI参考”“可据此推测”“可能意味着”“建议后续”等解释。
 - 禁止推测、隐藏心理、未来结果、未实现愿望、纯气氛、普通动作、对白全文和无持续价值背景物。
 - 每条事实一行，尽量不超过80字；每个小标题最多6行。
+- 人物描写只保留最多3项会影响身份识别、能力或行动限制的客观特征；禁止连续堆叠外貌、气质和审美形容词。
+- 物品条目必须对应单个实例。‘桌椅、武器、药品、食物、工具、一批短剑、三辆车’等集合只能写入场景【固定资源】或【当前资源】，不得建立物品条目。
 - 不写空栏目，不写“- 无”。
 - 每条1至4个关键词；第一项必须是稳定名称；其余只能是专名或唯一别名，禁止“人物、角色、场景、事件、物品、世界、当前、活动”等泛词。
 - 单次最多8条；其中场景最多1条。
@@ -3991,7 +4195,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 
 【人物正文固定顺序】
 【身份】职业、种族、组织或家庭身份
-【稳定】稳定能力、长期特征、持续限制
+【稳定】稳定能力、持续限制，以及最多3项会影响识别或剧情判断的客观特征；不写审美评价和形容词堆砌
 【当前】位置、身体、目标、立场等明确状态槽
 【关系】对方名称：该人物自身的长期关系或当前立场
 【持有】当前关键物品完整列表
@@ -4011,10 +4215,14 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【局部约束】模型不能忽略的可见限制完整列表
 【别名】
 
+【物品建立条件】
+只为一个可单独追踪的具体实例建立条目：有稳定专名、明确所有者、唯一编号、独特功能、独立位置/损坏状态，或将持续影响后续。
+集合、类别、批量物资、普通场景用品不得建立物品条目，写入当前场景资源即可。
+
 【物品正文固定顺序】
-【定义】稳定身份和识别特征
+【定义】该单个实例的稳定身份和必要识别特征
 【功能】已确认用途或能力
-【当前】位置、持有者、状态、数量、完整性等状态槽
+【当前】位置、持有者、状态、完整性等状态槽；单体物品不写大于1的数量
 【限制】使用、访问或能力限制
 【持续变化】会影响后续的变化
 【别名】
@@ -4531,7 +4739,7 @@ exports.DEFAULT_KEYWORDS = [
         { key: 'constraints', label: '局部约束', policy: 'replace-section' },
         COMMON_ALIASES,
     ], 700, false),
-    keyword('character', '人物', '角色身份、稳定能力、当前状态、角色自身关系、关键持有物与持续经历。', ['角色', 'NPC'], false, [
+    keyword('character', '人物', '角色身份、稳定能力、当前状态、角色自身关系、关键持有物与持续经历；人物描写只保留少量影响识别或剧情判断的客观特征。', ['角色', 'NPC'], false, [
         { key: 'identity', label: '身份', policy: 'semantic-upsert' },
         { key: 'stable', label: '稳定', policy: 'semantic-upsert' },
         { key: 'current', label: '当前', policy: 'replace-by-anchor' },
@@ -4540,7 +4748,7 @@ exports.DEFAULT_KEYWORDS = [
         { key: 'experience', label: '持续经历', policy: 'append-chain' },
         COMMON_ALIASES,
     ], 520, false),
-    keyword('item', '物品', '会持续存在并影响后续的关键物品、功能、位置、持有、状态与限制。', ['道具', '装备'], false, [
+    keyword('item', '物品', '只记录可单独追踪的具体物品实例；同类集合和批量物资留在场景资源。', ['道具', '装备'], false, [
         { key: 'definition', label: '定义', policy: 'semantic-upsert' },
         { key: 'function', label: '功能', policy: 'semantic-upsert' },
         { key: 'current', label: '当前', policy: 'replace-by-anchor' },
@@ -4603,7 +4811,7 @@ exports.DEFAULT_AUDIT_PROMPT = `只在存在明确违规时判定失败。检查
 8. 自然段落、对白换行、正常标点、简短场景标题、文学性描写和NPC正常提问本身不构成违规。
 有疑问但没有明确违规证据时判定通过。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界五类固定格式。关系写入对应人物，地点知识写入场景，跨场景整体变化写入世界。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界五类固定格式。关系写入对应人物，地点知识写入场景，跨场景整体变化写入世界。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 exports.DEFAULT_SMALL_SUMMARY_PROMPT = `结算当前事件线；保留当前场景、人物状态、事件阶段、已成立结果和未决事项，并把持续影响分发到人物、场景、物品或世界。`;
 exports.DEFAULT_LARGE_SUMMARY_PROMPT = `整理跨场景仍需保留的长期影响；关系并入人物，地点并入场景，宏观变化进入世界，只分发永久变化和重大结果。`;
 exports.DEFAULT_SETTINGS = Object.freeze({
