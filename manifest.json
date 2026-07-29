@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.15-rebuild.2",
+  "version": "2.0.0-lite.ui.15-rebuild.3",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "基于ui.15的AI辅助世界书重建｜角色信息来源边界、事件生命周期聚合、后台任务固定源快照"
+  "description": "基于ui.15的AI辅助世界书重建｜修复模型返回解析与重建请求过慢"
 }

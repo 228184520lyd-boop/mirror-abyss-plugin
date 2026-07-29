@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.1 — ui.15 baseline with AI-assisted worldbook rebuild and source-bounded character knowledge. */
+/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.3 — ui.15 baseline with AI-assisted worldbook rebuild and source-bounded character knowledge. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -604,7 +604,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.15-rebuild.2';
+exports.VERSION = '2.0.0-lite.ui.15-rebuild.3';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -3461,12 +3461,15 @@ const information_point_1 = require("./domain/information-point");
 const matcher_1 = require("./matcher");
 const prompts_1 = require("./prompts");
 const util_1 = require("./util");
+const model_request_1 = require("./model-request");
 
 const ALLOWED_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
 const KNOWLEDGE_SECTIONS = new Set(['已知', '误信']);
-const SOURCE_MARKER = /〔(?:证据|来源)\s*[：:]\s*([^〕]+)〕/gu;
+const SOURCE_MARKER = /(?:〔|【|\[|（|\()\s*(?:证据|来源|证据UID|来源UID|旧UID)\s*[：:]\s*([^〕】\]）)]+)\s*(?:〕|】|\]|）|\))/giu;
 const SOURCE_KIND_PATTERN = /(?:信息来源|认知来源)\s*[：:]\s*(亲眼观察|听到对白|收到消息|查看记录|他人转述|亲身经历|可靠推理|特殊能力|公开信息|自身身份|自身行动|直接告知)/u;
-const BATCH_BUDGET = Math.max(12000, constants_1.MAX_CONTEXT_CHARS - 14000);
+const BATCH_BUDGET = Math.min(20000, Math.max(14000, constants_1.MAX_CONTEXT_CHARS - 30000));
+const MAX_BATCH_RECORDS = 12;
+const RECORD_FRAGMENT_BUDGET = 7000;
 exports.INFORMATION_BOUNDARY_TITLE = '基础设定｜角色信息边界';
 
 class MigrationService {
@@ -3492,18 +3495,37 @@ class MigrationService {
             return { changed: false, previewReady: false, message: '当前世界书没有可重建的镜渊旧条目', candidates: 0 };
         }
         const catalog = records.map((record) => `${record.uid}|${record.title}`).join('\n');
-        const batches = packRecords(records, BATCH_BUDGET);
+        const batches = packRecords(expandRecordFragments(records, RECORD_FRAGMENT_BUDGET), BATCH_BUDGET, MAX_BATCH_RECORDS);
         const parsedBlocks = [];
-        const diagnostics = { invalidLines: [], warnings: [], modelBatches: batches.length };
+        const diagnostics = { invalidLines: [], warnings: [], modelBatches: batches.length, parserRepairs: 0 };
         const knownUids = new Set(records.map((record) => record.uid));
         for (let index = 0; index < batches.length; index += 1) {
             validate();
             const prompt = (0, prompts_1.migrationPrompts)(batches[index], catalog, { batchIndex: index + 1, batchCount: batches.length });
-            const response = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, snapshot, settings, settings.requestTimeoutMs, settings.migrationProfileId);
+            const response = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'migration',
+                prompt: { system: prompt.system, user: trimPrompt(prompt.user) },
+                fallbackPrompt: () => ({
+                    system: prompt.system,
+                    user: trimPrompt(`${prompt.user}\n\n网关重试要求：只保留必要事实；每个旧UID最多输出六行，禁止解释。`),
+                }),
+                settings,
+                snapshot,
+                profileId: settings.migrationProfileId,
+                sourceText: batches[index].map((record) => record.content || '').join('\n'),
+                onRetry: () => diagnostics.warnings.push(`第${index + 1}批遇到网关错误，已使用精简请求重试一次`),
+            });
             validate();
-            const parsed = parseRebuildResponse(response, knownUids, diagnostics);
-            parsedBlocks.push(...parsed);
+            try {
+                const parsed = parseRebuildResponse(response, knownUids, diagnostics);
+                parsedBlocks.push(...parsed);
+            }
+            catch (error) {
+                throw new Error(`世界书重建第${index + 1}/${batches.length}批解析失败：${(0, util_1.errorText)(error)}`);
+            }
         }
+        if (!parsedBlocks.length) throw new Error('模型没有返回任何带旧UID证据的可验证重建条目，旧表未修改');
         const blocks = mergeRebuildBlocks(parsedBlocks);
         const built = buildRebuildSnapshot(original.data, records, blocks, diagnostics);
         const summary = {
@@ -3605,13 +3627,46 @@ function isRebuildCandidate(raw) {
     return keys.some((item) => (0, util_1.isUidKeyword)(item));
 }
 
-function packRecords(records, budget) {
+function expandRecordFragments(records, fragmentBudget = RECORD_FRAGMENT_BUDGET) {
+    const output = [];
+    for (const record of records) {
+        const content = String(record.content ?? '');
+        if (content.length <= fragmentBudget) {
+            output.push(record);
+            continue;
+        }
+        const lines = content.replace(/\r/g, '').split('\n');
+        let current = [];
+        let size = 0;
+        const fragments = [];
+        for (const line of lines) {
+            const nextSize = size + line.length + 1;
+            if (current.length && nextSize > fragmentBudget) {
+                fragments.push(current.join('\n'));
+                current = [];
+                size = 0;
+            }
+            current.push(line);
+            size += line.length + 1;
+        }
+        if (current.length) fragments.push(current.join('\n'));
+        fragments.forEach((fragment, index) => output.push({
+            ...record,
+            content: fragment,
+            fragmentIndex: index + 1,
+            fragmentCount: fragments.length,
+        }));
+    }
+    return output;
+}
+
+function packRecords(records, budget, maxRecords = MAX_BATCH_RECORDS) {
     const batches = [];
     let current = [];
     let size = 0;
     for (const record of records) {
         const serialized = serializeRecord(record);
-        if (current.length && size + serialized.length > budget) {
+        if (current.length && (size + serialized.length > budget || current.length >= maxRecords)) {
             batches.push(current);
             current = [];
             size = 0;
@@ -3624,11 +3679,13 @@ function packRecords(records, budget) {
 }
 
 function serializeRecord(record) {
-    return `<<<SOURCE uid=${record.uid}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
+    const part = Number(record.fragmentCount || 0) > 1 ? ` part=${record.fragmentIndex}/${record.fragmentCount}` : '';
+    return `<<<SOURCE uid=${record.uid}${part}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
 }
 
 function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], warnings: [] }) {
-    const parsed = (0, information_point_1.prepareInformationBlocks)((0, parser_1.parseInformationPoints)(raw));
+    const prepared = parseRebuildEnvelope(raw, diagnostics);
+    const parsed = (0, information_point_1.prepareInformationBlocks)(prepared);
     const output = [];
     for (const block of parsed) {
         if (!ALLOWED_TYPES.has(block.type)) {
@@ -3667,7 +3724,204 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
         if (!sections.length) continue;
         output.push({ ...block, sections, sourceUids: [...sourceUids] });
     }
+    if (!output.length) {
+        const invalid = diagnostics.invalidLines?.length || 0;
+        throw new Error(invalid
+            ? `已识别条目格式，但${invalid}行缺少有效旧UID证据或人物信息来源`
+            : '未找到可验证的重建条目');
+    }
     return output;
+}
+
+function parseRebuildEnvelope(raw, diagnostics) {
+    const jsonBlocks = parseRebuildJson(raw, diagnostics);
+    if (jsonBlocks.length) return jsonBlocks;
+    const normalized = normalizeRebuildText(raw, diagnostics);
+    if (/^(?:无|EMPTY)$/iu.test(normalized.trim())) return [];
+    try {
+        if (/<<<\s*ENTRY\s*[:：]/iu.test(normalized)) {
+            const strict = (0, parser_1.parseStrictExtractionBlocks)(normalized);
+            if (strict.length) return strict;
+        }
+        return (0, parser_1.parseInformationPoints)(normalized);
+    }
+    catch (error) {
+        const sample = normalized.replace(/\s+/gu, ' ').slice(0, 220);
+        throw new Error(`模型返回无法解析；已兼容代码块、Markdown标题、冒号标题和JSON。返回开头：${sample || '（空）'}`);
+    }
+}
+
+const REBUILD_SECTION_NAMES = new Set([
+    '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名',
+    '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
+    '功能', '限制', '目标', '参与', '场景', '阶段', '关键进展', '未决', '结果',
+    '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响',
+    '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架',
+]);
+
+function normalizeRebuildText(raw, diagnostics) {
+    let text = String(raw ?? '')
+        .replace(/<think>[\s\S]*?<\/think>/giu, '')
+        .replace(/```(?:json|text|markdown|md)?/giu, '')
+        .replace(/[＜﹤]/gu, '<')
+        .replace(/[＞﹥]/gu, '>')
+        .replace(/\r/g, '')
+        .trim();
+    const lines = [];
+    let repairs = 0;
+    for (const original of text.split('\n')) {
+        let line = original.trimEnd();
+        const title = line.match(/^\s*(?:#{1,6}\s*)?(?:\*\*|__|`)?(人物|角色|NPC|事件|地点|场景|物品|道具|世界|全局|全局状态|全局变化|基础设定|基础规则|世界设定|总结)\s*(?:[｜|丨]|[:：]|[-—–])\s*(.+?)(?:\*\*|__|`)?\s*$/iu);
+        if (title) {
+            const type = (0, parser_1.canonicalExtractionType)(title[1]);
+            const name = String(title[2] ?? '').replace(/(?:\*\*|__|`)$/u, '').trim().replace(/^[【\[]|[】\]]$/gu, '');
+            if (type && name) {
+                const canonical = `${type}｜${name}`;
+                if (canonical !== line.trim()) repairs += 1;
+                lines.push(canonical);
+                continue;
+            }
+        }
+        const headingLine = line.replace(/^\s*#{1,6}\s*/u, '').replace(/\*\*|__/gu, '').replace(/`/gu, '').trim();
+        const section = headingLine.match(/^(?:【|\[)?([^】\]\n]{1,24}?)(?:】|\])?\s*[:：]?\s*$/u);
+        if (section) {
+            const name = String(section[1] ?? '').replace(/\s+/gu, '').trim();
+            if (REBUILD_SECTION_NAMES.has(name)) {
+                const canonical = `【${name}】`;
+                if (canonical !== line.trim()) repairs += 1;
+                lines.push(canonical);
+                continue;
+            }
+        }
+        lines.push(line);
+    }
+    if (repairs) {
+        diagnostics.parserRepairs = Number(diagnostics.parserRepairs || 0) + repairs;
+        diagnostics.warnings.push(`本地解析器修复了${repairs}处Markdown或标题格式，不追加模型调用`);
+    }
+    return lines.join('\n').trim();
+}
+
+function parseRebuildJson(raw, diagnostics) {
+    const text = String(raw ?? '')
+        .replace(/<think>[\s\S]*?<\/think>/giu, '')
+        .replace(/```(?:json)?/giu, '')
+        .trim();
+    const candidates = [text];
+    const objectStart = text.indexOf('{');
+    const objectEnd = text.lastIndexOf('}');
+    if (objectStart >= 0 && objectEnd > objectStart) candidates.push(text.slice(objectStart, objectEnd + 1));
+    const arrayStart = text.indexOf('[');
+    const arrayEnd = text.lastIndexOf(']');
+    if (arrayStart >= 0 && arrayEnd > arrayStart) candidates.push(text.slice(arrayStart, arrayEnd + 1));
+    let value = null;
+    for (const candidate of candidates) {
+        try {
+            value = JSON.parse(candidate);
+            break;
+        }
+        catch { }
+    }
+    if (value == null) return [];
+    const entries = jsonEntries(value);
+    const blocks = entries.map(([key, entry]) => jsonEntryToBlock(entry, key)).filter(Boolean);
+    if (blocks.length) {
+        diagnostics.parserRepairs = Number(diagnostics.parserRepairs || 0) + 1;
+        diagnostics.warnings.push('模型返回了JSON，已在本地转换为可验证重建条目，未追加模型调用');
+    }
+    return blocks;
+}
+
+function jsonEntries(value) {
+    if (Array.isArray(value)) return value.map((entry, index) => [String(index), entry]);
+    if (!value || typeof value !== 'object') return [];
+    for (const key of ['entries', 'blocks', 'items', 'results', 'data']) {
+        const nested = value[key];
+        if (Array.isArray(nested)) return nested.map((entry, index) => [String(index), entry]);
+        if (nested && typeof nested === 'object') return Object.entries(nested);
+    }
+    const keys = Object.keys(value);
+    if (keys.some((key) => (0, util_1.splitTitle)((0, util_1.normalizeTitle)(key)))) return Object.entries(value);
+    return [['0', value]];
+}
+
+function jsonEntryToBlock(entry, key = '') {
+    if (!entry || typeof entry !== 'object') return null;
+    let type = (0, parser_1.canonicalExtractionType)(entry.type ?? entry.kind ?? entry.category ?? '');
+    let name = String(entry.name ?? entry.entity ?? entry.stableName ?? '').trim();
+    const rawTitle = String(entry.title ?? entry.comment ?? key ?? '').trim();
+    const split = (0, util_1.splitTitle)((0, util_1.normalizeTitle)(rawTitle));
+    if (split) {
+        type ||= (0, parser_1.canonicalExtractionType)(split.type);
+        name ||= split.name;
+    }
+    if (!type || !name || !ALLOWED_TYPES.has(type)) return null;
+    const defaultSources = jsonSourceIds(entry.sourceUids ?? entry.evidence ?? entry.sources ?? entry.sourceUid);
+    const sections = [];
+    const explicitSource = entry.sections ?? entry.fields ?? entry.content;
+    const source = explicitSource !== undefined
+        ? explicitSource
+        : Object.fromEntries(Object.entries(entry).filter(([field]) => REBUILD_SECTION_NAMES.has(String(field).replace(/\s+/gu, ''))));
+    if (Array.isArray(source)) {
+        for (const section of source) {
+            if (!section || typeof section !== 'object') continue;
+            const sectionName = String(section.name ?? section.section ?? section.title ?? '').trim();
+            const lines = jsonLines(section.lines ?? section.items ?? section.facts ?? section.content ?? section.value, defaultSources);
+            if (sectionName && lines.length) sections.push({ name: sectionName, lines, empty: false });
+        }
+    }
+    else if (typeof source === 'string') {
+        const parsed = (0, parser_1.parseEntrySections)(source);
+        for (const sectionName of parsed.order) {
+            const lines = jsonLines(parsed.values[sectionName], defaultSources);
+            if (lines.length) sections.push({ name: sectionName, lines, empty: false });
+        }
+    }
+    else if (source && typeof source === 'object') {
+        for (const [sectionName, sectionValue] of Object.entries(source)) {
+            const lines = jsonLines(sectionValue, defaultSources);
+            if (lines.length) sections.push({ name: sectionName, lines, empty: false });
+        }
+    }
+    if (!sections.length && Array.isArray(entry.facts)) {
+        const lines = jsonLines(entry.facts, defaultSources);
+        if (lines.length) sections.push({ name: type === '事件' ? '关键进展' : type === '场景' ? '当前状态' : '当前', lines, empty: false });
+    }
+    if (!sections.length) return null;
+    return {
+        rawTitle: `${type}｜${name}`,
+        title: `${type}｜${name}`,
+        type,
+        name,
+        sections,
+        keywords: (0, util_1.normalizeStringArray)(entry.keywords ?? entry.keys),
+    };
+}
+
+function jsonLines(value, defaultSources = []) {
+    const values = Array.isArray(value) ? value : value == null ? [] : [value];
+    const lines = [];
+    for (const item of values) {
+        let text = '';
+        let ids = defaultSources;
+        if (typeof item === 'string' || typeof item === 'number') text = String(item);
+        else if (item && typeof item === 'object') {
+            text = String(item.text ?? item.fact ?? item.line ?? item.value ?? item.content ?? '');
+            ids = jsonSourceIds(item.sourceUids ?? item.evidence ?? item.sources ?? item.sourceUid);
+            if (!ids.length) ids = defaultSources;
+        }
+        text = text.trim();
+        if (!text) continue;
+        if (!SOURCE_MARKER.test(text) && ids.length) text = `${text}〔证据:${ids.join(',')}〕`;
+        SOURCE_MARKER.lastIndex = 0;
+        lines.push(text);
+    }
+    return lines;
+}
+
+function jsonSourceIds(value) {
+    const values = Array.isArray(value) ? value : value == null ? [] : String(value).split(/[,，、\s]+/u);
+    return (0, util_1.unique)(values.map((item) => String(item).trim()).filter(Boolean));
 }
 
 function mergeRebuildBlocks(blocks) {
@@ -3934,7 +4188,7 @@ const INPUT_LIMITS = Object.freeze({
     extractionRepair: 14000,
     smallSummary: 28000,
     largeSummary: 30000,
-    migration: 24000,
+    migration: 20000,
 });
 
 /**
@@ -3982,6 +4236,7 @@ function stageResponseTokens(stage, settings, sourceText = '') {
     if (stage === 'extractionRepair') return Math.min(configured, 1536);
     if (stage === 'smallSummary') return Math.min(configured, 1792);
     if (stage === 'largeSummary') return Math.min(configured, 2304);
+    if (stage === 'migration') return Math.min(configured, 2304);
     return configured;
 }
 
@@ -5553,8 +5808,8 @@ function migrationPrompts(records, catalog, options = {}) {
 4. 世界真相不等于角色已知。人物【已知】和【误信】每行必须写明信息来源类型。
 5. 允许的信息来源类型只有：亲眼观察、听到对白、收到消息、查看记录、他人转述、亲身经历、可靠推理、特殊能力、公开信息、自身身份、自身行动、直接告知。
 6. 玩家未表达的内心、其他人物私密认知、未公开远处事件不得写入该人物【已知】。
-7. 旧过程压缩为一句已经发生的结果；当前状态可以较详细，其他栏目应短。
-8. 每个事实行末必须附带一个或多个旧条目UID证据，格式为〔证据:UID〕或〔证据:UID1,UID2〕。没有证据的行会被插件丢弃。
+7. 旧过程压缩为一句已经发生的结果；当前状态可以较详细，其他栏目应短。删除同义重复，不复述输入原文。
+8. 每个事实行末必须附带一个或多个旧条目UID证据，格式为〔证据:UID〕或〔证据:UID1,UID2〕。没有证据的行会被插件丢弃。每个来源UID最多保留六行高价值事实。
 9. 可把一个旧条目拆分到多个新条目，也可把多个旧条目合并为一个新条目；同一目标、参与者与未决因果连续发展的旧事件必须重建为一个事件生命周期，不得按每轮动作或标题变化拆分。
 10. 只有目标和因果独立、能够单独结束的过程才保留为不同事件；已结束事件与后续独立事件不得强行合并。
 11. 不输出UID作为新条目标识；UID只允许出现在事实行末的证据标记中。
@@ -5582,8 +5837,11 @@ function migrationPrompts(records, catalog, options = {}) {
 - 完整事实〔证据:UID〕
 
 多个条目连续输出。禁止JSON、代码块、解释、前言、后记和思考过程。没有可重建内容时只输出“无”。`;
-    const body = records.map((record) => `<<<SOURCE uid=${record.uid}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`).join('\n\n');
-    const user = `这是第 ${batchIndex}/${batchCount} 批旧条目。\n\n全部旧条目目录：\n${clipText(catalog, 6000)}\n\n本批原始条目：\n${clipText(body, 36000)}\n\n只输出本批证据能够支持的新条目候选。跨批同一对象使用相同稳定名称，插件会再次合并。`;
+    const body = records.map((record) => {
+        const part = Number(record.fragmentCount || 0) > 1 ? ` part=${record.fragmentIndex}/${record.fragmentCount}` : '';
+        return `<<<SOURCE uid=${record.uid}${part}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
+    }).join('\n\n');
+    const user = `这是第 ${batchIndex}/${batchCount} 批旧条目。\n\n全部旧条目目录：\n${clipText(catalog, 6000)}\n\n本批原始条目：\n${clipText(body, 36000)}\n\n只输出本批证据能够支持的新条目候选。跨批同一对象使用相同稳定名称，插件会再次合并。优先输出当前有效事实与必要认知，禁止逐句复述旧正文。`;
     return { system, user };
 }
 
