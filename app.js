@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.9 — ui.15 baseline with semantic multi-pass worldbook rebuild and source-bounded character knowledge. */
+/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.10 — ui.15 baseline with semantic multi-pass worldbook rebuild and source-bounded character knowledge. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -323,7 +323,7 @@ class MirrorAbyssApplication {
                 this.controlPanel.setStatus('大总结、沉降分发与召回重排完成');
             }
             else if (taskType === 'migration') {
-                this.controlPanel.setStatus(result?.previewReady ? `世界书重建预览已生成：${result.batches ?? 0}批、请求${result.requests ?? 0}次、失败批次${result.failedBatches ?? 0}个，新条目${result.rebuiltEntries}个；提交前未修改旧表` : (result?.message || '没有可重建条目'));
+                this.controlPanel.setStatus(result?.previewReady ? `世界书重建预览已生成：${result.batches ?? 0}批、请求${result.requests ?? 0}次、失败批次${result.failedBatches ?? 0}个，新条目${result.rebuiltEntries}个、附属并入${result.absorbedEntries ?? 0}个；提交前未修改旧表` : (result?.message || '没有可重建条目'));
             }
             else if (taskType === 'commitMigration') {
                 this.controlPanel.setStatus(`世界书重建已提交：旧表删除${result?.deletedOldEntries ?? 0}条，新结构${result?.rebuiltEntries ?? 0}条`);
@@ -606,7 +606,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.15-rebuild.9';
+exports.VERSION = '2.0.0-lite.ui.15-rebuild.10';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1181,6 +1181,8 @@ class ControlPanel {
             ['地区轮', summary.regionPasses ?? 0],
             ['设定轮', summary.foundationPasses ?? 0],
             ['新条目', summary.rebuiltEntries ?? 0],
+            ['同义收束', summary.convergedEntries ?? 0],
+            ['附属并入', summary.absorbedEntries ?? 0],
             ['新增类型', Array.isArray(summary.newTypes) ? summary.newTypes.length : 0],
             ['合并', summary.mergedOldEntries ?? 0],
             ['待确认', summary.archivedEntries ?? 0],
@@ -3505,7 +3507,9 @@ const TYPE_ALLOWED_SECTIONS = {
     人物: new Set(['身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名']),
     场景: new Set(['定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
     物品: new Set(['定义', '功能', '限制', '当前', '关系', '持有', '持续变化', '别名']),
-    事件: new Set(['目标', '参与', '场景', '阶段', '关键进展', '未决', '结果', '别名']),
+    // [MA-REBUILD-10] 重建后的事件只保存已经发生的参与、场景、进展与结果。
+    // 目标和未决只可用于内部聚类，不再写回新事件条目。
+    事件: new Set(['参与', '场景', '阶段', '关键进展', '结果', '别名']),
     世界: new Set(['范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响', '别名']),
     基础设定: new Set(['世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名']),
 };
@@ -3524,7 +3528,7 @@ const MIGRATION_DEFAULT_INTERVAL_MS = 2200;
 const MIGRATION_RATE_LIMIT_BACKOFF_MS = [8000, 20000];
 const MIGRATION_MAX_RATE_LIMIT_RETRIES = 2;
 const UNIVERSAL_ENTRY_MARKER = '新条目';
-const UNIVERSAL_METADATA_NAMES = new Set(['名称', '归入类型', '建议类型', '与现有类型区别', '别名', '合并来源']);
+const UNIVERSAL_METADATA_NAMES = new Set(['名称', '归入类型', '建议类型', '与现有类型区别', '别名', '合并来源', '保留方式', '并入条目', '并入栏目']);
 const UNIVERSAL_SECTION_NAMES = new Set(['内容', '角色认知', '过去结果', '关键词']);
 const MIGRATION_TYPE_DECORATION_PATTERN = /(?:档案|信息|记录|条目|资料|表格|表|类型|类别|对象|实体)$/gu;
 const MIGRATION_TYPE_SYNONYMS = new Map([
@@ -3567,13 +3571,11 @@ const UNIVERSAL_FIELD_ALIASES = {
         别名: ['别名', '其他名称'],
     },
     事件: {
-        目标: ['目标', '目的'],
         参与: ['参与', '参与者', '相关人物'],
         场景: ['场景', '地点', '发生地点'],
         阶段: ['阶段', '状态', '当前阶段', '当前状态'],
-        关键进展: ['关键进展', '进展', '过程结果'],
-        未决: ['未决', '待解决', '未完成'],
-        结果: ['结果', '过去结果', '最终结果'],
+        关键进展: ['关键进展', '进展', '过程结果', '已发生经过'],
+        结果: ['结果', '过去结果', '最终结果', '已发生结果'],
         别名: ['别名', '其他名称'],
     },
     世界: {
@@ -3895,7 +3897,8 @@ class MigrationService {
             try {
                 const parsed = parseRebuildResponse(response, knownUids, state.diagnostics, rebuildParsePolicy(batch, records, state.schema));
                 if (!parsed.length) throw new Error('没有返回带旧UID证据的有效条目');
-                state.parsedBlocks.push(...parsed);
+                // [MA-REBUILD-10] 保留生成阶段，最终全局收束时优先采用后续规则/地区/设定轮的归属判断。
+                state.parsedBlocks.push(...parsed.map((block) => ({ ...block, migrationPhase: batch.phase || 'entity', migrationOrder: index })));
             }
             catch (error) {
                 // [MA-REBUILD-09] 模型格式或证据校验失败不再把断点永久钉在同一批。
@@ -3948,6 +3951,8 @@ class MigrationService {
             regionPasses: state.diagnostics.regionPasses || 0,
             foundationPasses: state.diagnostics.foundationPasses || 0,
             failedBatches: state.failedBatches?.length || 0,
+            convergedEntries: Number(state.diagnostics.convergedEntries || 0),
+            absorbedEntries: Number(state.diagnostics.absorbedEntries || 0),
             newTypes: [...state.schema.definitions.values()].filter((definition) => definition.modelProposed === true).map((definition) => definition.label),
             rebuiltEntries: built.rebuiltEntries,
             mergedOldEntries: built.mergedOldEntries,
@@ -4755,10 +4760,49 @@ function removeUnresolvedSlotConflicts(section, lines, diagnostics = { warnings:
 function normalizeEventCompletionBlock(block) {
     if (block?.type !== '事件') return block;
     const output = (0, util_1.clone)(block);
-    const stage = output.sections?.find((section) => section.name === '阶段');
-    const ended = (stage?.lines ?? []).some((line) => /(?:已结束|结束|已完成|完成|失败|取消|终止|已解决)/u.test(line));
-    if (ended) output.sections = (output.sections ?? []).filter((section) => section.name !== '未决');
+    const identitySections = { ...(output.eventIdentitySections ?? {}) };
+    for (const section of output.sections ?? []) {
+        if (section.name === '目标' || section.name === '未决') identitySections[section.name] = (0, util_1.unique)([...(identitySections[section.name] ?? []), ...(section.lines ?? [])]);
+    }
+    output.eventIdentitySections = identitySections;
+    const filtered = [];
+    for (const section of output.sections ?? []) {
+        // [MA-REBUILD-10] “目标/未决”只参与旧条目识别，不进入重建结果。
+        if (section.name === '目标' || section.name === '未决') continue;
+        const lines = (section.lines ?? []).filter((line) => !isPendingEventLine(line));
+        if (!lines.length) continue;
+        filtered.push({ ...section, lines: (0, util_1.unique)(lines) });
+    }
+    output.sections = collapseEventNarrativeSections(filtered);
     return output;
+}
+
+function isPendingEventLine(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return true;
+    // 明确描述“尚未发生/准备发生”的句子不写回；已经发生、已经开始、已经决定等不受影响。
+    if (/(?:尚未|还未|仍未|未能|待解决|待确认|待完成|有待|下一步|之后需要|接下来|计划|打算|准备|将会|将要|希望|目标是|目的在于)/u.test(text)
+        && !/(?:已经|已|曾|此前|当时|后来|最终|完成|发生|开始|决定|确认|证实|导致|造成|形成)/u.test(text)) return true;
+    return false;
+}
+
+function collapseEventNarrativeSections(sections) {
+    const byName = new Map();
+    for (const section of sections ?? []) {
+        const targetName = section.name === '阶段' ? '关键进展' : section.name;
+        const current = byName.get(targetName) ?? [];
+        current.push(...(section.lines ?? []));
+        byName.set(targetName, current);
+    }
+    const resultLines = byName.get('结果') ?? [];
+    if (resultLines.length && byName.has('关键进展')) {
+        const normalizedResults = resultLines.map((line) => (0, util_1.normalizeFact)(stripGenericFactLabel(line))).filter(Boolean);
+        byName.set('关键进展', (byName.get('关键进展') ?? []).filter((line) => {
+            const fact = (0, util_1.normalizeFact)(stripGenericFactLabel(line));
+            return !normalizedResults.some((result) => fact && (result.includes(fact) || fact.includes(result)));
+        }));
+    }
+    return [...byName.entries()].map(([name, lines]) => ({ name, lines: (0, util_1.unique)(lines), empty: false })).filter((section) => section.lines.length);
 }
 
 function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], warnings: [] }, policy = {}) {
@@ -5008,6 +5052,9 @@ function parseUniversalRebuildFormat(raw, diagnostics, policy = {}) {
             mergeSourceUids: parseUniversalUidList(metadata.合并来源),
             newTypeProposalAccepted: proposalAccepted,
             proposedTypeDescription: proposalDescription,
+            retentionMode: String(metadata.保留方式 ?? '').trim(),
+            mergeIntoTitle: (0, util_1.normalizeTitle)(String(metadata.并入条目 ?? '').trim()),
+            mergeIntoSection: String(metadata.并入栏目 ?? '').trim(),
         });
     }
     if (blocks.length) {
@@ -5286,14 +5333,12 @@ function jsonSourceIds(value) {
 
 function mergeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
     const output = [];
+    diagnostics.convergedEntries ?? (diagnostics.convergedEntries = 0);
+    diagnostics.absorbedEntries ?? (diagnostics.absorbedEntries = 0);
     for (const rawIncoming of blocks) {
         const incoming = normalizeEventCompletionBlock(rawIncoming);
-        const candidate = output.find((current) => {
-            const left = blockAsEntry(current);
-            const right = blockAsEntry(incoming);
-            return (0, matcher_1.sameEntryIdentity)(left, right)
-                || (left.type === '事件' && right.type === '事件' && (0, matcher_1.sameEventLifecycle)(left, right));
-        });
+        if (!(incoming.sections ?? []).length) continue;
+        const candidate = output.find((current) => sameConvergentBlock(current, incoming));
         if (!candidate) {
             const clone = (0, util_1.clone)(incoming);
             clone.sections = (clone.sections ?? []).map((section) => ({
@@ -5304,6 +5349,12 @@ function mergeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
             continue;
         }
         candidate.sourceUids = (0, util_1.unique)([...(candidate.sourceUids ?? []), ...(incoming.sourceUids ?? [])]);
+        if (candidate.type === '事件') {
+            candidate.eventIdentitySections = {
+                目标: (0, util_1.unique)([...(candidate.eventIdentitySections?.目标 ?? []), ...(incoming.eventIdentitySections?.目标 ?? [])]),
+                未决: (0, util_1.unique)([...(candidate.eventIdentitySections?.未决 ?? []), ...(incoming.eventIdentitySections?.未决 ?? [])]),
+            };
+        }
         candidate.keywords = (0, util_1.unique)([...(candidate.keywords ?? []), ...(incoming.keywords ?? []), incoming.name]);
         const byName = new Map(candidate.sections.map((section) => [section.name, section]));
         if (candidate.type === '事件' && (0, util_1.normalizeFact)(candidate.name) !== (0, util_1.normalizeFact)(incoming.name)) {
@@ -5331,8 +5382,161 @@ function mergeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
         }
         const normalized = normalizeEventCompletionBlock(candidate);
         candidate.sections = normalized.sections;
+        diagnostics.convergedEntries += 1;
     }
-    return output;
+    return applyAbsorptionProposals(output, diagnostics);
+}
+
+function sameConvergentBlock(leftBlock, rightBlock) {
+    const left = blockAsEntry(leftBlock);
+    const right = blockAsEntry(rightBlock);
+    if ((0, matcher_1.sameEntryIdentity)(left, right)) return true;
+    if (left.type !== right.type) return false;
+    if (left.type === '事件') {
+        return (0, matcher_1.sameEventLifecycle)(left, right) || sameEventNarrative(leftBlock, rightBlock);
+    }
+    const sourceOverlap = (leftBlock.sourceUids ?? []).some((uid) => (rightBlock.sourceUids ?? []).includes(uid));
+    const nameRelated = convergenceNameRelated(leftBlock, rightBlock);
+    const factOverlap = convergenceFactOverlap(leftBlock, rightBlock);
+    return (sourceOverlap && (nameRelated || factOverlap)) || (nameRelated && factOverlap);
+}
+
+function sameEventNarrative(left, right) {
+    const leftValues = Object.fromEntries((left.sections ?? []).map((section) => [section.name, section.lines ?? []]));
+    const rightValues = Object.fromEntries((right.sections ?? []).map((section) => [section.name, section.lines ?? []]));
+    const participants = listFactOverlap(leftValues['参与'], rightValues['参与']);
+    const scenes = listFactOverlap(leftValues['场景'], rightValues['场景']);
+    const narrativeLeft = [...(leftValues['关键进展'] ?? []), ...(leftValues['结果'] ?? [])];
+    const narrativeRight = [...(rightValues['关键进展'] ?? []), ...(rightValues['结果'] ?? [])];
+    const narrative = listFactOverlap(narrativeLeft, narrativeRight);
+    const names = convergenceNameRelated(left, right);
+    const sourceOverlap = (left.sourceUids ?? []).some((uid) => (right.sourceUids ?? []).includes(uid));
+    if (sourceOverlap && (participants || scenes || narrative || names)) return true;
+    if (participants && scenes && (narrative || names)) return true;
+    if (narrative && names && (participants || scenes)) return true;
+    return false;
+}
+
+function convergenceNameRelated(left, right) {
+    const leftNames = (0, util_1.unique)([left.name, ...(left.keywords ?? []), ...sectionLines(left, '别名')].map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    const rightNames = (0, util_1.unique)([right.name, ...(right.keywords ?? []), ...sectionLines(right, '别名')].map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    return leftNames.some((a) => rightNames.some((b) => a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a)))));
+}
+
+function convergenceFactOverlap(left, right) {
+    return listFactOverlap(allBlockFactLines(left), allBlockFactLines(right));
+}
+
+function listFactOverlap(leftLines = [], rightLines = []) {
+    const left = (leftLines ?? []).map((line) => (0, util_1.normalizeFact)(stripGenericFactLabel(line))).filter((line) => line.length >= 4);
+    const right = (rightLines ?? []).map((line) => (0, util_1.normalizeFact)(stripGenericFactLabel(line))).filter((line) => line.length >= 4);
+    return left.some((a) => right.some((b) => a === b || (Math.min(a.length, b.length) >= 5 && (a.includes(b) || b.includes(a))) || bigramSimilarity(a, b) >= 0.62));
+}
+
+function bigramSimilarity(left, right) {
+    const grams = (value) => {
+        const text = String(value ?? '');
+        const out = new Set();
+        for (let i = 0; i < text.length - 1; i += 1) out.add(text.slice(i, i + 2));
+        return out;
+    };
+    const a = grams(left);
+    const b = grams(right);
+    if (!a.size || !b.size) return 0;
+    let shared = 0;
+    for (const gram of a) if (b.has(gram)) shared += 1;
+    return (2 * shared) / (a.size + b.size);
+}
+
+function sectionLines(block, name) {
+    return (block.sections ?? []).find((section) => section.name === name)?.lines ?? [];
+}
+
+function allBlockFactLines(block) {
+    return (block.sections ?? []).filter((section) => section.name !== '别名').flatMap((section) => section.lines ?? []);
+}
+
+function stripGenericFactLabel(value) {
+    return String(value ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').trim();
+}
+
+function applyAbsorptionProposals(blocks, diagnostics) {
+    const output = blocks.map((block) => (0, util_1.clone)(block));
+    const removed = new Set();
+    const ordered = [...output].sort((a, b) => Number(b.migrationOrder ?? 0) - Number(a.migrationOrder ?? 0));
+    for (const child of ordered) {
+        if (removed.has(child)) continue;
+        const explicit = /(?:并入|归并|附属|不独立)/u.test(String(child.retentionMode ?? '')) && child.mergeIntoTitle;
+        const inferred = !explicit ? inferDependentTarget(child, output, removed) : null;
+        const target = explicit ? findConvergenceTarget(child.mergeIntoTitle, child, output, removed) : inferred;
+        if (!target || target === child) {
+            if (explicit) diagnostics.warnings.push(`${child.title}要求并入“${child.mergeIntoTitle}”，但没有找到有效目标，已暂时保留独立条目`);
+            continue;
+        }
+        const sectionName = resolveAbsorptionSection(target, child.mergeIntoSection);
+        const summary = summarizeAbsorbedBlock(child);
+        if (!summary) continue;
+        let section = target.sections.find((item) => item.name === sectionName);
+        if (!section) {
+            section = { name: sectionName, lines: [], empty: false };
+            target.sections.push(section);
+        }
+        section.lines = (0, util_1.unique)([...(section.lines ?? []), summary]);
+        target.sourceUids = (0, util_1.unique)([...(target.sourceUids ?? []), ...(child.sourceUids ?? [])]);
+        target.keywords = (0, util_1.unique)([...(target.keywords ?? []), child.name, ...(child.keywords ?? []), ...sectionLines(child, '别名')]).filter(Boolean);
+        removed.add(child);
+        diagnostics.absorbedEntries += 1;
+        diagnostics.warnings.push(`${child.title}已作为从属信息收束进${target.title}【${sectionName}】，不再保留独立条目`);
+    }
+    return output.filter((block) => !removed.has(block));
+}
+
+function findConvergenceTarget(rawTitle, child, blocks, removed) {
+    const normalized = (0, util_1.normalizeTitle)(rawTitle);
+    const direct = blocks.find((block) => block !== child && !removed.has(block) && (0, util_1.normalizeTitle)(block.title) === normalized);
+    if (direct) return direct;
+    const split = (0, util_1.splitTitle)(normalized);
+    return blocks.find((block) => block !== child && !removed.has(block)
+        && (!split?.type || block.type === split.type)
+        && convergenceNameRelated(block, { name: split?.name || rawTitle, keywords: [], sections: [] }));
+}
+
+function inferDependentTarget(child, blocks, removed) {
+    // 仅在证据非常强时自动收束：独立物品没有当前状态/关系/经历，且后续规则条目覆盖其全部来源并明确提到名称。
+    if (child.type !== '物品') return null;
+    const independentSections = new Set(['当前', '关系', '持有', '持续变化', '已知', '误信']);
+    if ((child.sections ?? []).some((section) => independentSections.has(section.name))) return null;
+    const facts = allBlockFactLines(child);
+    if (!facts.length || facts.length > 3) return null;
+    const sourceUids = child.sourceUids ?? [];
+    if (!sourceUids.length) return null;
+    const name = (0, util_1.normalizeFact)(child.name);
+    return blocks.find((candidate) => {
+        if (candidate === child || removed.has(candidate)) return false;
+        if (!['世界', '基础设定', '场景'].includes(candidate.type) && candidate.migrationPhase !== 'custom') return false;
+        if (Number(candidate.migrationOrder ?? -1) <= Number(child.migrationOrder ?? -1)) return false;
+        if (!sourceUids.every((uid) => (candidate.sourceUids ?? []).includes(uid))) return false;
+        const text = (0, util_1.normalizeFact)(`${candidate.title}\n${allBlockFactLines(candidate).join('\n')}`);
+        return Boolean(name && text.includes(name));
+    }) || null;
+}
+
+function resolveAbsorptionSection(target, requested) {
+    const raw = String(requested ?? '').trim();
+    const allowed = TYPE_ALLOWED_SECTIONS[target.type];
+    if (raw && (!(allowed instanceof Set) || allowed.has(raw))) return raw;
+    if (target.type === '基础设定') return '社会规则';
+    if (target.type === '世界') return '制度';
+    if (target.type === '场景') return '局部约束';
+    if (target.type === '事件') return '结果';
+    return (target.sections ?? []).find((section) => section.name !== '别名')?.name || '持续变化';
+}
+
+function summarizeAbsorbedBlock(block) {
+    const lines = (0, util_1.unique)(allBlockFactLines(block).map(stripGenericFactLabel).filter(Boolean));
+    if (!lines.length) return '';
+    const summary = lines.slice(0, 3).join('；');
+    return `${block.name}：${summary.slice(0, 260)}`;
 }
 
 function blockAsEntry(block) {
@@ -5344,7 +5548,10 @@ function blockAsEntry(block) {
         name: block.name,
         aliases,
         keywords: block.keywords ?? [],
-        sections: { values: Object.fromEntries((block.sections ?? []).map((section) => [section.name, section.lines ?? []])) },
+        sections: { values: {
+            ...Object.fromEntries((block.sections ?? []).map((section) => [section.name, section.lines ?? []])),
+            ...(block.type === '事件' ? (block.eventIdentitySections ?? {}) : {}),
+        } },
     };
 }
 
@@ -7215,7 +7422,7 @@ function migrationPrompts(records, catalog, options = {}) {
     const preferred = preferredType ? `\n本批旧条目当前归类为“${preferredType}”，这只是优先参考，不是必须沿用；若其他已有类型更准确，应直接归入该已有类型。` : '';
     const phaseInstructions = ({
         entity: `【本轮：对象重建】\n当前请求可包含一个或多个完整语义簇；同一 cluster 是同一候选对象，不同 cluster 不得仅因同批出现而合并。本轮主要处理人物、场景、物品、世界对象和已有自定义类型。`,
-        event: `【本轮：事件重建】\n只重建同一事件生命周期。共同目标、参与者、场景和未决因果连续发展的来源应合并；不同目标或可以独立结束的过程不得合并。已结束事件只保留一句过去时结果。`,
+        event: `【本轮：事件重建】\n按完整因果链收束同一事件。标题不同但参与者、场景、已发生进展和结果属于同一件事时，应合并成一个生命周期条目。目标和未决只用于识别，不得写入新条目；最终只保留已经发生的参与、场景、进展与结果。`,
         custom: `【本轮：通用条目重建】${preferred}\n先判断能否归入现有类型。不要因为旧标题使用某个类型就机械沿用，也不要创建该类型的近义词。`,
         organization: `【本轮：通用条目重建】${preferred}\n组织只是可能的现有或自定义类型之一；先匹配现有类型，不得把其他内容强行改成组织。`,
         region: `【本轮：地区规则】\n把地区证据归入现有“世界”类型，提炼该地区特有的地理、制度、资源交通、公开局势和持续影响。`,
@@ -7234,12 +7441,14 @@ ${typeCatalog}
 4. 类型是稳定类别，不是具体条目名称。不得把“月誓”“人鱼村”“北境议会”这类专名当成类型。
 5. 只写材料中明确存在的内容；没有内容的部分不要输出，不要为了填格式而补全。
 6. 【内容】中的每行使用“栏目：事实”，栏目名称应简短、通用；同一含义不要建立多个相似栏目。
-7. 当前事实写在【内容】；已经结束的事情写在【过去结果】，使用过去时。
+7. 当前已经成立的事实写在【内容】；已经发生的经过和结果写在【过去结果】，使用过去时。事件条目禁止输出目标、未决、计划、下一步或尚未发生的内容。
 8. 角色只能知道自己通过信息来源获得的内容。人物条目的【角色认知】必须写“人物｜知道/误以为/怀疑：内容｜来源：获得方式”。
 9. “合并来源”必须填写该新条目使用的全部旧UID，它同时作为整个条目的默认证据。
 10. 某一行只使用部分来源或需要特别说明时，才在行末补充〔证据:UID〕；不必在每一行机械重复全部UID。没有合并来源且没有行内证据的内容会被插件丢弃。
 11. 同一对象存在不同解释时，区分世界事实、人物已知、人物误信和不同时间，不得按最后一条或多数表述强行覆盖。
-12. 不输出空栏目，不写“无”，不解释处理过程。
+12. 重建的目标是收束，不是逐条翻写。描述同一件事的同类型来源必须生成一个条目；只承担某条规则、制度、地区设定或其他主体功能的从属对象，不应保留独立条目。
+13. 若某对象仍需独立检索，填写“保留方式：独立条目”；若它只是其他条目的附属说明，填写“保留方式：并入其他条目”，并给出“并入条目”和“并入栏目”。
+14. 不输出空栏目，不写“无”，不解释处理过程。
 
 【唯一输出格式】
 【新条目】
@@ -7247,6 +7456,7 @@ ${typeCatalog}
 归入类型：从现有类型中填写一个
 别名：仅在有证据时填写
 合并来源：旧UID1、旧UID2
+保留方式：独立条目
 
 【内容】
 - 栏目：明确事实
@@ -7261,6 +7471,11 @@ ${typeCatalog}
 【关键词】
 - 稳定名称或别名
 
+从属内容改用以下头部，不再单独保留：
+保留方式：并入其他条目
+并入条目：类型｜稳定名称
+并入栏目：目标条目的栏目名称
+
 没有内容的区块直接省略。多个条目重复以上格式。${allowProposal ? `确实无法归入现有类型时，将头部改为：
 归入类型：新类型建议
 建议类型：稳定类别名称
@@ -7274,7 +7489,7 @@ ${typeCatalog}
         return `<<<SOURCE uid=${record.uid}${part}${recordCluster}>>>\n标题：${record.title}${clusterName}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
     }).join('\n\n');
     const prior = priorContext ? `\n\n前序轮候选（只用于名称、关系和层级对齐，不能代替本批UID证据）：\n${clipText(priorContext, 2600)}` : '';
-    const user = `这是世界书重建第 ${batchIndex}/${batchCount} 个串行任务；当前阶段：${phase}；语义簇：${clusterId || '未标记'}；建议稳定名称：${stableName || '由证据确定'}；整本旧表共有${totalRecords}个镜渊条目。\n\n旧条目目录（仅用于稳定命名和避免重复类型，不能作为事实证据）：\n${clipText(catalog, catalogBudget)}${prior}\n\n本批原始条目：\n${clipText(body, 7600)}\n\n按通用“新条目”格式输出。先归入现有类型；只有确实无法容纳时才提出不重叠的新类型建议。`;
+    const user = `这是世界书重建第 ${batchIndex}/${batchCount} 个串行任务；当前阶段：${phase}；语义簇：${clusterId || '未标记'}；建议稳定名称：${stableName || '由证据确定'}；整本旧表共有${totalRecords}个镜渊条目。\n\n旧条目目录（仅用于稳定命名和避免重复类型，不能作为事实证据）：\n${clipText(catalog, catalogBudget)}${prior}\n\n本批原始条目：\n${clipText(body, 7600)}\n\n按通用“新条目”格式输出。先决定最终语义归属：同一件事只建立一个条目，从属内容并入其真正所属的规则、地区、事件或对象；再选择现有类型，确实无法容纳时才提出不重叠的新类型建议。`;
     return { system, user };
 }
 
