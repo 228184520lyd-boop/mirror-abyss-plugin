@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.8 — ui.15 baseline with semantic multi-pass worldbook rebuild and source-bounded character knowledge. */
+/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.9 — ui.15 baseline with semantic multi-pass worldbook rebuild and source-bounded character knowledge. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -323,7 +323,7 @@ class MirrorAbyssApplication {
                 this.controlPanel.setStatus('大总结、沉降分发与召回重排完成');
             }
             else if (taskType === 'migration') {
-                this.controlPanel.setStatus(result?.previewReady ? `世界书重建预览已生成：${result.batches ?? 0}批、请求${result.requests ?? 0}次、限流重试${result.retries ?? 0}次，新条目${result.rebuiltEntries}个；提交前未修改旧表` : (result?.message || '没有可重建条目'));
+                this.controlPanel.setStatus(result?.previewReady ? `世界书重建预览已生成：${result.batches ?? 0}批、请求${result.requests ?? 0}次、失败批次${result.failedBatches ?? 0}个，新条目${result.rebuiltEntries}个；提交前未修改旧表` : (result?.message || '没有可重建条目'));
             }
             else if (taskType === 'commitMigration') {
                 this.controlPanel.setStatus(`世界书重建已提交：旧表删除${result?.deletedOldEntries ?? 0}条，新结构${result?.rebuiltEntries ?? 0}条`);
@@ -606,7 +606,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.15-rebuild.8';
+exports.VERSION = '2.0.0-lite.ui.15-rebuild.9';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1174,6 +1174,7 @@ class ControlPanel {
             ['批次', summary.batches ?? 0],
             ['模型请求', summary.requests ?? 0],
             ['限流重试', summary.retries ?? 0],
+            ['失败批次', summary.failedBatches ?? 0],
             ['对象簇', summary.semanticClusters ?? 0],
             ['事件轮', summary.eventPasses ?? 0],
             ['扩展轮', summary.customPasses ?? summary.organizationPasses ?? 0],
@@ -3897,15 +3898,21 @@ class MigrationService {
                 state.parsedBlocks.push(...parsed);
             }
             catch (error) {
+                // [MA-REBUILD-09] 模型格式或证据校验失败不再把断点永久钉在同一批。
+                // 该批来源保持未覆盖，最终只会进入禁用待确认档案；其他批次继续重建。
+                state.failedBatches ?? (state.failedBatches = []);
+                state.failedBatches.push({ index, phase: batch.phase || 'entity', label: batch.label || batch.clusterId || '', reason: (0, util_1.errorText)(error) });
+                state.diagnostics.warnings.push(`第 ${index + 1} 批未通过证据校验，已跳过；相关旧条目将在预览中保留为禁用待确认档案`);
+                state.nextBatchIndex += 1;
                 this.emitProgress({
-                    state: 'paused',
-                    current: index,
+                    state: 'running',
+                    current: state.nextBatchIndex,
                     total: state.batches.length,
                     requests: state.requests,
                     retries: state.retries,
-                    detail: `第 ${index + 1} 批解析失败；下次仍从该批继续`,
+                    detail: `第 ${index + 1} 批未通过校验，已释放并继续下一批`,
                 });
-                throw new Error(`世界书重建第 ${index + 1}/${state.batches.length} 批解析失败；不会重发已完成批次，下次点击从本批继续：${(0, util_1.errorText)(error)}`);
+                continue;
             }
             state.nextBatchIndex += 1;
             this.emitProgress({
@@ -3917,7 +3924,13 @@ class MigrationService {
                 detail: `已完成 ${state.nextBatchIndex}/${state.batches.length} 批`,
             });
         }
-        if (!state.parsedBlocks.length) throw new Error('模型没有返回任何带旧UID证据的可验证重建条目，旧表未修改');
+        if (!state.parsedBlocks.length) {
+            const failed = state.failedBatches?.length || 0;
+            this.resume = null;
+            this.preview = null;
+            this.emitProgress({ state: 'failed', current: state.batches.length, total: state.batches.length, requests: state.requests, retries: state.retries, detail: '所有批次均未通过证据校验，已释放重建状态' });
+            throw new Error(`模型没有返回可验证重建条目；${failed || state.batches.length}个批次已结束且重建状态已释放，旧表未修改。可重新生成预览，不会卡在原批次`);
+        }
         const blocks = mergeRebuildBlocks(state.parsedBlocks, state.diagnostics);
         const built = buildRebuildSnapshot(state.sourceData, records, blocks, state.diagnostics, state.schema);
         const summary = {
@@ -3934,6 +3947,7 @@ class MigrationService {
             customPasses: state.diagnostics.customPasses || 0,
             regionPasses: state.diagnostics.regionPasses || 0,
             foundationPasses: state.diagnostics.foundationPasses || 0,
+            failedBatches: state.failedBatches?.length || 0,
             newTypes: [...state.schema.definitions.values()].filter((definition) => definition.modelProposed === true).map((definition) => definition.label),
             rebuiltEntries: built.rebuiltEntries,
             mergedOldEntries: built.mergedOldEntries,
@@ -4748,6 +4762,9 @@ function normalizeEventCompletionBlock(block) {
 }
 
 function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], warnings: [] }, policy = {}) {
+    diagnostics.invalidLines ?? (diagnostics.invalidLines = []);
+    diagnostics.warnings ?? (diagnostics.warnings = []);
+    const invalidStart = diagnostics.invalidLines.length;
     const allowedTypes = new Set(policy.allowedTypes instanceof Set ? policy.allowedTypes : ALLOWED_TYPES);
     const minimumEvidence = Math.max(1, Number(policy.minimumEvidence || 1));
     const explicitFoundationUids = policy.explicitFoundationUids instanceof Set ? policy.explicitFoundationUids : new Set();
@@ -4768,6 +4785,13 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
         }
         const sections = [];
         const sourceUids = new Set();
+        const entryEvidenceUids = (0, util_1.unique)((block.mergeSourceUids ?? [])
+            .map((uid) => String(uid))
+            .filter((uid) => knownUids.has(uid) && (!allowedEvidenceUids || allowedEvidenceUids.has(uid))));
+        const singleBatchUid = allowedEvidenceUids?.size === 1
+            ? [...allowedEvidenceUids].map((uid) => String(uid)).find((uid) => knownUids.has(uid)) || ''
+            : '';
+        let inheritedEvidenceLines = 0;
         for (const section of block.sections ?? []) {
             if (/(关键词|触发词|标签|分类)/u.test(section.name) || section.empty) continue;
             const allowedSections = allowedSectionsByType?.[block.type];
@@ -4789,9 +4813,19 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
                     return '';
                 });
                 const line = String(rawLine).replace(SOURCE_MARKER, '').trim();
-                const uniqueIds = (0, util_1.unique)(ids);
+                let uniqueIds = (0, util_1.unique)(ids);
+                // [MA-REBUILD-09] 通用格式以“合并来源”为条目级证据。模型若没有在每一行重复UID，
+                // 可继承该条目的有效合并来源；单来源批次也可安全继承唯一UID。多来源且没有条目级来源时仍拒绝。
+                if (!uniqueIds.length && entryEvidenceUids.length) {
+                    uniqueIds = entryEvidenceUids;
+                    inheritedEvidenceLines += 1;
+                }
+                else if (!uniqueIds.length && singleBatchUid) {
+                    uniqueIds = [singleBatchUid];
+                    inheritedEvidenceLines += 1;
+                }
                 if (!uniqueIds.length) {
-                    diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '缺少可追溯旧条目UID' });
+                    diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '缺少可追溯旧条目UID，且没有可继承的条目级合并来源' });
                     continue;
                 }
                 if (uniqueIds.length < minimumEvidence && !uniqueIds.some((id) => explicitFoundationUids.has(id))) {
@@ -4810,6 +4844,9 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
                 if (safeLines.length) sections.push({ name: section.name, lines: safeLines, empty: false });
             }
         }
+        if (inheritedEvidenceLines > 0) {
+            diagnostics.warnings.push(`${block.title}有${inheritedEvidenceLines}行未逐行标注旧UID，已继承该条目的有效合并来源`);
+        }
         if (!sections.length) continue;
         for (const uid of block.mergeSourceUids ?? []) {
             const id = String(uid);
@@ -4818,9 +4855,9 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
         output.push({ ...block, sections, sourceUids: [...sourceUids] });
     }
     if (!output.length) {
-        const invalid = diagnostics.invalidLines?.length || 0;
+        const invalid = Math.max(0, (diagnostics.invalidLines?.length || 0) - invalidStart);
         throw new Error(invalid
-            ? `已识别条目格式，但${invalid}行缺少有效旧UID证据或人物信息来源`
+            ? `已识别条目格式，但本批${invalid}行缺少有效旧UID证据或人物信息来源`
             : '未找到可验证的重建条目');
     }
     return output;
@@ -7199,8 +7236,8 @@ ${typeCatalog}
 6. 【内容】中的每行使用“栏目：事实”，栏目名称应简短、通用；同一含义不要建立多个相似栏目。
 7. 当前事实写在【内容】；已经结束的事情写在【过去结果】，使用过去时。
 8. 角色只能知道自己通过信息来源获得的内容。人物条目的【角色认知】必须写“人物｜知道/误以为/怀疑：内容｜来源：获得方式”。
-9. 每条事实末尾必须附带旧条目证据，格式为〔证据:UID〕或〔证据:UID1,UID2〕。没有证据的事实会被插件丢弃。
-10. 合并来源只填写需要被同一新条目替代的旧UID，不等于事实证据；事实仍需逐行标注证据。
+9. “合并来源”必须填写该新条目使用的全部旧UID，它同时作为整个条目的默认证据。
+10. 某一行只使用部分来源或需要特别说明时，才在行末补充〔证据:UID〕；不必在每一行机械重复全部UID。没有合并来源且没有行内证据的内容会被插件丢弃。
 11. 同一对象存在不同解释时，区分世界事实、人物已知、人物误信和不同时间，不得按最后一条或多数表述强行覆盖。
 12. 不输出空栏目，不写“无”，不解释处理过程。
 
@@ -7208,18 +7245,18 @@ ${typeCatalog}
 【新条目】
 名称：稳定名称
 归入类型：从现有类型中填写一个
-别名：仅在有证据时填写〔证据:UID〕
+别名：仅在有证据时填写
 合并来源：旧UID1、旧UID2
 
 【内容】
-- 栏目：明确事实〔证据:UID〕
+- 栏目：明确事实
 
 【角色认知】
-- 人物名称｜知道：内容｜来源：亲眼观察/听到对白/收到消息/查看记录/他人转述/亲身经历/可靠推理/特殊能力/公开信息/自身身份/自身行动/直接告知〔证据:UID〕
-- 人物名称｜误以为：内容｜来源：信息来源〔证据:UID〕
+- 人物名称｜知道：内容｜来源：亲眼观察/听到对白/收到消息/查看记录/他人转述/亲身经历/可靠推理/特殊能力/公开信息/自身身份/自身行动/直接告知
+- 人物名称｜误以为：内容｜来源：信息来源
 
 【过去结果】
-- 已经发生并结束的结果〔证据:UID〕
+- 已经发生并结束的结果
 
 【关键词】
 - 稳定名称或别名

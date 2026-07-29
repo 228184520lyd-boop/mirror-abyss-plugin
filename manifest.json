@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.15-rebuild.8",
+  "version": "2.0.0-lite.ui.15-rebuild.9",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "基于ui.15的AI辅助世界书重建｜通用新条目提案、已有类型优先与非重叠新类型建议"
+  "description": "基于ui.15的AI辅助世界书重建｜条目级证据继承与失败批次自动释放"
 }
