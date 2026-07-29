@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.3 — ui.15 baseline with AI-assisted worldbook rebuild and source-bounded character knowledge. */
+/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.8 — ui.15 baseline with semantic multi-pass worldbook rebuild and source-bounded character knowledge. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -22,7 +22,9 @@ class MirrorAbyssApplication {
             const active = this.activeSnapshots.get(safeChatKey(this.host));
             this.controlPanel?.setTaskProgress?.('extract', progress?.state || 'running', progress?.detail || '', { ...(progress || {}), messageIndex: progress?.messageIndex ?? active?.messageIndex ?? null });
         });
-        this.migrationService = new migration_1.MigrationService(this.host, this.worldbook, () => this.settings());
+        this.migrationService = new migration_1.MigrationService(this.host, this.worldbook, () => this.settings(), (progress) => {
+            this.controlPanel?.setMigrationProgress?.(progress);
+        }, (patch) => this.configure(patch));
         this.controlPanel = new control_panel_1.ControlPanel({
             getSettings: () => this.settings(),
             configure: (patch) => this.configure(patch),
@@ -321,7 +323,7 @@ class MirrorAbyssApplication {
                 this.controlPanel.setStatus('大总结、沉降分发与召回重排完成');
             }
             else if (taskType === 'migration') {
-                this.controlPanel.setStatus(result?.previewReady ? `世界书重建预览已生成：${result.rebuiltEntries}个新条目，提交前未修改旧表` : (result?.message || '没有可重建条目'));
+                this.controlPanel.setStatus(result?.previewReady ? `世界书重建预览已生成：${result.batches ?? 0}批、请求${result.requests ?? 0}次、限流重试${result.retries ?? 0}次，新条目${result.rebuiltEntries}个；提交前未修改旧表` : (result?.message || '没有可重建条目'));
             }
             else if (taskType === 'commitMigration') {
                 this.controlPanel.setStatus(`世界书重建已提交：旧表删除${result?.deletedOldEntries ?? 0}条，新结构${result?.rebuiltEntries ?? 0}条`);
@@ -604,7 +606,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.15-rebuild.3';
+exports.VERSION = '2.0.0-lite.ui.15-rebuild.8';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1084,7 +1086,7 @@ class ControlPanel {
         head.textContent = 'AI辅助世界书重建';
         const help = document.createElement('div');
         help.className = 'ma-lite-rebuild-help';
-        help.textContent = '先只读扫描并生成预览；提交时才用新结构替换镜渊旧表。非镜渊条目与手动锁定条目保持不动。角色认知只保留带信息来源的【已知】与【误信】。';
+        help.textContent = '旧表按小批次串行重建；每批完成后记录进度，限流会等待并重试，最终失败时下次从断点继续。提交时才替换镜渊旧表；非镜渊条目与手动锁定条目保持不动。';
         const actions = document.createElement('div');
         actions.className = 'ma-lite-rebuild-actions';
         const preview = document.createElement('button');
@@ -1123,7 +1125,7 @@ class ControlPanel {
         }
         this.pendingActions.add(kind);
         this.syncDisabledState();
-        if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = kind === 'migrate' ? '正在只读扫描旧表并调用AI生成迁移计划…' : kind === 'commitMigration' ? '正在原子提交新结构并回读校验…' : '正在恢复上次重建前的旧表…';
+        if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = kind === 'migrate' ? '正在串行处理世界书重建批次…' : kind === 'commitMigration' ? '正在原子提交新结构并回读校验…' : '正在恢复上次重建前的旧表…';
         try {
             const result = await action();
             const summary = kind === 'migrate' ? result : this.actions.migrationPreview?.();
@@ -1169,7 +1171,16 @@ class ControlPanel {
         metrics.className = 'ma-lite-rebuild-summary';
         const items = [
             ['旧表', summary.candidates ?? 0],
+            ['批次', summary.batches ?? 0],
+            ['模型请求', summary.requests ?? 0],
+            ['限流重试', summary.retries ?? 0],
+            ['对象簇', summary.semanticClusters ?? 0],
+            ['事件轮', summary.eventPasses ?? 0],
+            ['扩展轮', summary.customPasses ?? summary.organizationPasses ?? 0],
+            ['地区轮', summary.regionPasses ?? 0],
+            ['设定轮', summary.foundationPasses ?? 0],
             ['新条目', summary.rebuiltEntries ?? 0],
+            ['新增类型', Array.isArray(summary.newTypes) ? summary.newTypes.length : 0],
             ['合并', summary.mergedOldEntries ?? 0],
             ['待确认', summary.archivedEntries ?? 0],
             ['认知事实', summary.knowledgeLines ?? 0],
@@ -1504,6 +1515,17 @@ class ControlPanel {
         if (this.rebuildCommitButton) this.rebuildCommitButton.disabled = this.pendingActions.size > 0 || !master || !this.actions.migrationPreview?.();
         if (this.rebuildUndoButton && this.pendingActions.size > 0) this.rebuildUndoButton.disabled = true;
         for (const input of Object.values(this.inputs)) input.disabled = false;
+    }
+
+    setMigrationProgress(progress = {}) {
+        if (!this.rebuildStatusNode) return;
+        const detail = String(progress.detail || '').trim();
+        const current = Number(progress.current || 0);
+        const total = Number(progress.total || 0);
+        const requests = Number(progress.requests || 0);
+        const retries = Number(progress.retries || 0);
+        const prefix = total > 0 ? `${current}/${total}批` : '重建';
+        this.rebuildStatusNode.textContent = `${prefix}；请求${requests}次${retries ? `，限流重试${retries}次` : ''}${detail ? `；${detail}` : ''}`;
     }
     setStatus(text, isError = false) {
         this.statusText = String(text || '');
@@ -3455,6 +3477,18 @@ exports.isRebuildCandidate = isRebuildCandidate;
 exports.parseRebuildResponse = parseRebuildResponse;
 exports.mergeRebuildBlocks = mergeRebuildBlocks;
 exports.buildRebuildSnapshot = buildRebuildSnapshot;
+exports.buildRebuildBatches = buildRebuildBatches;
+exports.buildSemanticClusters = buildSemanticClusters;
+exports.buildRebuildPlan = buildRebuildPlan;
+exports.buildRegionalSynthesisTasks = buildRegionalSynthesisTasks;
+exports.buildOrganizationSynthesisTasks = buildOrganizationSynthesisTasks;
+exports.buildEventSynthesisTasks = buildEventSynthesisTasks;
+exports.buildFoundationSynthesisTasks = buildFoundationSynthesisTasks;
+exports.buildMigrationSchema = buildMigrationSchema;
+exports.buildExtendedSynthesisTasks = buildExtendedSynthesisTasks;
+exports.mergeProposedKeywordDefinitions = mergeProposedKeywordDefinitions;
+exports.findOverlappingMigrationType = findOverlappingMigrationType;
+exports.isMigrationRateLimitError = isMigrationRateLimitError;
 const constants_1 = require("./constants");
 const parser_1 = require("./parser");
 const information_point_1 = require("./domain/information-point");
@@ -3464,90 +3498,509 @@ const util_1 = require("./util");
 const model_request_1 = require("./model-request");
 
 const ALLOWED_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
+const NON_EVENT_TYPES = new Set(['人物', '场景', '物品', '世界', '基础设定']);
 const KNOWLEDGE_SECTIONS = new Set(['已知', '误信']);
+const TYPE_ALLOWED_SECTIONS = {
+    人物: new Set(['身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名']),
+    场景: new Set(['定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
+    物品: new Set(['定义', '功能', '限制', '当前', '关系', '持有', '持续变化', '别名']),
+    事件: new Set(['目标', '参与', '场景', '阶段', '关键进展', '未决', '结果', '别名']),
+    世界: new Set(['范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响', '别名']),
+    基础设定: new Set(['世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名']),
+};
+const MIGRATION_EXCLUSIVE_SECTIONS = new Set(['身份', '稳定', '当前', '定义', '功能', '限制', '当前状态', '阶段', '结果', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '持续影响', '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架']);
 const SOURCE_MARKER = /(?:〔|【|\[|（|\()\s*(?:证据|来源|证据UID|来源UID|旧UID)\s*[：:]\s*([^〕】\]）)]+)\s*(?:〕|】|\]|）|\))/giu;
 const SOURCE_KIND_PATTERN = /(?:信息来源|认知来源)\s*[：:]\s*(亲眼观察|听到对白|收到消息|查看记录|他人转述|亲身经历|可靠推理|特殊能力|公开信息|自身身份|自身行动|直接告知)/u;
-const BATCH_BUDGET = Math.min(20000, Math.max(14000, constants_1.MAX_CONTEXT_CHARS - 30000));
-const MAX_BATCH_RECORDS = 12;
-const RECORD_FRAGMENT_BUDGET = 7000;
+const MIGRATION_BATCH_BODY_BUDGET = 7200;
+const MIGRATION_BATCH_CATALOG_BUDGET = 1800;
+const MIGRATION_FRAGMENT_BUDGET = 3200;
+const MIGRATION_BATCH_MAX_RECORDS = 5;
+const MIGRATION_CLUSTER_BODY_BUDGET = 6800;
+const MIGRATION_DERIVED_BODY_BUDGET = 6800;
+const REGION_SUFFIX_PATTERN = /([\p{Script=Han}A-Za-z0-9·]{2,20}(?:大陆|王国|帝国|公国|领地|地区|区域|州|省|郡|城|镇|村|港|关|岛|群岛|海域|森林|山脉|荒原|边境|北境|南境|东境|西境))/gu;
+const ORGANIZATION_SUFFIX_PATTERN = /([\p{Script=Han}A-Za-z0-9·]{2,24}(?:王室|议会|教会|教团|公会|商会|协会|学院|军团|军|卫队|骑士团|调查局|委员会|家族|公司|组织|势力|联盟|同盟|帮派|工坊|研究院))/gu;
+const MIGRATION_DEFAULT_INTERVAL_MS = 2200;
+const MIGRATION_RATE_LIMIT_BACKOFF_MS = [8000, 20000];
+const MIGRATION_MAX_RATE_LIMIT_RETRIES = 2;
+const UNIVERSAL_ENTRY_MARKER = '新条目';
+const UNIVERSAL_METADATA_NAMES = new Set(['名称', '归入类型', '建议类型', '与现有类型区别', '别名', '合并来源']);
+const UNIVERSAL_SECTION_NAMES = new Set(['内容', '角色认知', '过去结果', '关键词']);
+const MIGRATION_TYPE_DECORATION_PATTERN = /(?:档案|信息|记录|条目|资料|表格|表|类型|类别|对象|实体)$/gu;
+const MIGRATION_TYPE_SYNONYMS = new Map([
+    ['角色', '人物'], ['npc', '人物'], ['人物档案', '人物'], ['角色档案', '人物'], ['人员', '人物'],
+    ['地点', '场景'], ['地区', '场景'], ['区域', '场景'], ['场所', '场景'], ['地理区域', '场景'], ['地区规则', '场景'],
+    ['道具', '物品'], ['装备', '物品'], ['物件', '物品'], ['物资', '物品'],
+    ['事件链', '事件'], ['任务', '事件'], ['行动', '事件'], ['剧情事件', '事件'],
+    ['全局', '世界'], ['局势', '世界'], ['世界状态', '世界'], ['全局状态', '世界'],
+    ['世界设定', '基础设定'], ['基础规则', '基础设定'], ['世界规则', '基础设定'], ['设定规则', '基础设定'],
+]);
+const UNIVERSAL_FIELD_ALIASES = {
+    人物: {
+        身份: ['身份', '姓名', '真名', '职业', '种族', '性别', '年龄', '血统', '阵营', '称号'],
+        稳定: ['稳定', '性格', '能力', '长期能力', '长期限制', '习惯', '稳定特征', '外貌特征'],
+        当前: ['当前', '位置', '所在地', '当前地点', '目标', '当前目标', '状态', '当前状态', '伤势', '情绪'],
+        关系: ['关系', '关系状态', '立场', '态度'],
+        持有: ['持有', '装备', '携带', '资源', '持有物'],
+        持续经历: ['持续经历', '经历', '过去结果', '历史结果', '近期经历'],
+        别名: ['别名', '称呼', '其他名称'],
+    },
+    场景: {
+        定义: ['定义', '性质', '位置', '所属', '地点属性'],
+        空间结构: ['空间结构', '空间', '结构', '布局'],
+        固定资源: ['固定资源', '设施', '固定设施'],
+        持续变化: ['持续变化', '变化', '过去结果', '历史结果'],
+        当前状态: ['当前状态', '当前', '状态'],
+        在场: ['在场', '在场人物', '人物'],
+        当前资源: ['当前资源', '资源'],
+        活动关联: ['活动关联', '活动', '关联事件'],
+        世界影响: ['世界影响', '影响'],
+        局部约束: ['局部约束', '规则', '局部规则', '通行规则', '限制'],
+        别名: ['别名', '其他名称'],
+    },
+    物品: {
+        定义: ['定义', '外观', '材质', '类型', '来源'],
+        功能: ['功能', '用途', '效果', '能力'],
+        当前: ['当前', '状态', '当前状态', '位置', '持有者', '所有者'],
+        限制: ['限制', '代价', '条件', '使用条件'],
+        持续变化: ['持续变化', '变化', '过去结果', '历史结果'],
+        别名: ['别名', '其他名称'],
+    },
+    事件: {
+        目标: ['目标', '目的'],
+        参与: ['参与', '参与者', '相关人物'],
+        场景: ['场景', '地点', '发生地点'],
+        阶段: ['阶段', '状态', '当前阶段', '当前状态'],
+        关键进展: ['关键进展', '进展', '过程结果'],
+        未决: ['未决', '待解决', '未完成'],
+        结果: ['结果', '过去结果', '最终结果'],
+        别名: ['别名', '其他名称'],
+    },
+    世界: {
+        范围: ['范围', '影响范围'], 地理: ['地理', '区域', '地区'], 组织: ['组织', '势力'],
+        权力: ['权力', '权力结构'], 制度: ['制度', '规则', '法律'], 资源与交通: ['资源与交通', '资源', '交通'],
+        公开局势: ['公开局势', '当前局势', '局势', '当前状态'], 世界变化: ['世界变化', '变化', '过去结果'],
+        持续影响: ['持续影响', '影响'], 别名: ['别名', '其他名称'],
+    },
+    基础设定: {
+        世界常识: ['世界常识', '常识'], 自然规则: ['自然规则', '基础规则', '世界规则'],
+        种族与生命: ['种族与生命', '种族', '生命规则'], 能力与技术: ['能力与技术', '能力体系', '技术体系'],
+        社会规则: ['社会规则', '社会制度'], 地理框架: ['地理框架', '地理'], 别名: ['别名', '其他名称'],
+    },
+};
 exports.INFORMATION_BOUNDARY_TITLE = '基础设定｜角色信息边界';
 
+// [MA-REBUILD-07] 重建格式来自当前设置中的表定义，而不是把“组织”写死成唯一扩展类型。
+function buildMigrationSchema(keywordDefinitions = [], records = []) {
+    const definitions = new Map();
+    const aliasToType = new Map();
+    const addDefinition = (raw, inferred = false) => {
+        const label = String(raw?.label ?? raw?.type ?? '').trim();
+        if (!label) return;
+        const canonicalBuiltin = (0, parser_1.canonicalExtractionType)(label);
+        const type = ALLOWED_TYPES.has(canonicalBuiltin) ? canonicalBuiltin : label;
+        const existing = definitions.get(type);
+        const fields = (0, util_1.unique)([
+            ...((existing?.fields ?? []).map((field) => field.label)),
+            ...((raw?.fields ?? []).map((field) => String(field?.label ?? field?.name ?? '').trim()).filter(Boolean)),
+            '别名',
+        ]).map((labelValue) => ({
+            label: labelValue,
+            policy: String((raw?.fields ?? []).find((field) => String(field?.label ?? field?.name ?? '').trim() === labelValue)?.policy
+                ?? (existing?.fields ?? []).find((field) => field.label === labelValue)?.policy
+                ?? 'semantic-upsert'),
+        }));
+        const aliases = (0, util_1.unique)([
+            type,
+            label,
+            ...(existing?.aliases ?? []),
+            ...(0, util_1.normalizeStringArray)(raw?.aliases),
+        ]);
+        const definition = {
+            key: String(raw?.key ?? existing?.key ?? (0, util_1.safeId)(type) ?? type),
+            label: type,
+            description: String(raw?.description ?? raw?.prompt ?? existing?.description ?? ''),
+            aliases,
+            fields,
+            enabled: raw?.enabled !== false,
+            constant: raw?.constant === true || existing?.constant === true,
+            vectorized: raw?.vectorized !== false && existing?.vectorized !== false,
+            preventRecursion: raw?.preventRecursion === true || existing?.preventRecursion === true,
+            depth: Number.isFinite(Number(raw?.depth)) ? Number(raw.depth) : Number(existing?.depth ?? 4),
+            order: Number.isFinite(Number(raw?.order)) ? Number(raw.order) : Number(existing?.order ?? 400),
+            inferred: Boolean(inferred && !existing),
+            modelProposed: raw?.modelProposed === true || existing?.modelProposed === true,
+        };
+        definitions.set(type, definition);
+        for (const alias of aliases) aliasToType.set((0, util_1.normalizeFact)(alias), type);
+    };
+    for (const [type, sections] of Object.entries(TYPE_ALLOWED_SECTIONS)) {
+        addDefinition({ label: type, aliases: [], fields: [...sections].map((label) => ({ label })) });
+    }
+    for (const raw of Array.isArray(keywordDefinitions) ? keywordDefinitions : []) {
+        if (raw?.enabled === false) continue;
+        addDefinition(raw);
+    }
+    // 已由镜渊管理、但设置中已被删掉的旧自定义表仍按旧正文栏目推导格式，避免重建时整表丢失。
+    for (const record of Array.isArray(records) ? records : []) {
+        const split = (0, util_1.splitTitle)((0, util_1.normalizeTitle)(record.title));
+        if (!split || ALLOWED_TYPES.has((0, parser_1.canonicalExtractionType)(split.type))) continue;
+        if (definitions.has(split.type) || aliasToType.has((0, util_1.normalizeFact)(split.type))) continue;
+        const sections = (0, parser_1.parseEntrySections)(record.content || '');
+        addDefinition({ label: split.type, fields: sections.order.map((label) => ({ label })) }, true);
+    }
+    const allowedSectionsByType = Object.fromEntries([...definitions.entries()].map(([type, definition]) => [type, new Set(definition.fields.map((field) => field.label))]));
+    const customDefinitions = [...definitions.values()].filter((definition) => !ALLOWED_TYPES.has(definition.label));
+    return { definitions, aliasToType, allowedSectionsByType, customDefinitions };
+}
+
+function resolveMigrationType(value, schema) {
+    const raw = String(value ?? '').trim();
+    const builtin = (0, parser_1.canonicalExtractionType)(raw);
+    if (schema?.definitions?.has(builtin)) return builtin;
+    return schema?.aliasToType?.get((0, util_1.normalizeFact)(raw)) ?? builtin;
+}
+
+function migrationDefinition(schema, type) {
+    return schema?.definitions?.get(resolveMigrationType(type, schema)) ?? null;
+}
+
+
+function migrationTypeCore(value) {
+    return (0, util_1.normalizeFact)(String(value ?? ''))
+        .replace(MIGRATION_TYPE_DECORATION_PATTERN, '')
+        .replace(/(?:一览|总览|清单)$/gu, '');
+}
+
+function findOverlappingMigrationType(value, schema = buildMigrationSchema()) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    const normalized = (0, util_1.normalizeFact)(raw);
+    const synonym = MIGRATION_TYPE_SYNONYMS.get(normalized);
+    if (synonym && schema?.definitions?.has(synonym)) return synonym;
+    const resolved = resolveMigrationType(raw, schema);
+    if (schema?.definitions?.has(resolved)) return resolved;
+    const core = migrationTypeCore(raw);
+    if (!core) return '';
+    for (const definition of schema?.definitions?.values?.() ?? []) {
+        for (const candidate of [definition.label, ...(definition.aliases ?? [])]) {
+            const candidateCore = migrationTypeCore(candidate);
+            if (!candidateCore) continue;
+            if (candidateCore === core) return definition.label;
+            const shorter = Math.min(candidateCore.length, core.length);
+            const delta = Math.abs(candidateCore.length - core.length);
+            if (shorter >= 2 && delta <= 3 && (candidateCore.includes(core) || core.includes(candidateCore))) return definition.label;
+        }
+    }
+    return '';
+}
+
+function sanitizeProposedTypeLabel(value, entryName = '') {
+    const label = String(value ?? '').trim().replace(/[｜|丨\r\n]/gu, '').replace(/^【|】$/gu, '');
+    if (!label || label.length > 12 || /[：:，,。.!！?？\/\\]/u.test(label)) return '';
+    if ((0, util_1.normalizeFact)(label) === (0, util_1.normalizeFact)(entryName)) return '';
+    return label;
+}
+
+function registerProposedMigrationType(schema, labelValue, sectionNames, description, entryName, diagnostics) {
+    const label = sanitizeProposedTypeLabel(labelValue, entryName);
+    if (!label) {
+        diagnostics.warnings.push(`新类型建议“${String(labelValue ?? '').trim() || '空'}”不是稳定类别名称，已拒绝`);
+        return null;
+    }
+    const overlap = findOverlappingMigrationType(label, schema);
+    if (overlap) {
+        diagnostics.warnings.push(`新类型建议“${label}”与已有类型“${overlap}”重叠，已归入已有类型`);
+        return { type: overlap, created: false, overlapped: true };
+    }
+    const fields = (0, util_1.unique)((sectionNames ?? [])
+        .map((name) => String(name ?? '').trim().replace(/[【】\r\n]/gu, ''))
+        .filter((name) => name && !new Set(['内容', '角色认知', '关键词']).has(name) && !UNIVERSAL_METADATA_NAMES.has(name))
+        .slice(0, 8));
+    if (!fields.length) {
+        diagnostics.warnings.push(`新类型建议“${label}”没有可验证栏目，已拒绝`);
+        return null;
+    }
+    if (!fields.includes('别名')) fields.push('别名');
+    const definition = {
+        key: `model-${(0, util_1.safeId)(label) || label}`,
+        label,
+        description: String(description ?? '').trim() || `由世界书重建模型根据旧条目证据提出的${label}类型`,
+        aliases: [label],
+        fields: fields.map((field) => ({ label: field, policy: /(?:当前|状态|阶段|位置|归属|持有者)/u.test(field) ? 'replace-by-anchor' : 'semantic-upsert' })),
+        enabled: true,
+        constant: false,
+        vectorized: true,
+        preventRecursion: true,
+        depth: 4,
+        order: 700,
+        inferred: true,
+        modelProposed: true,
+    };
+    schema.definitions.set(label, definition);
+    schema.aliasToType.set((0, util_1.normalizeFact)(label), label);
+    schema.allowedSectionsByType[label] = new Set(fields);
+    schema.customDefinitions.push(definition);
+    diagnostics.warnings.push(`模型提出新类型“${label}”，已通过非重叠校验并加入本次重建预览`);
+    return { type: label, created: true, overlapped: false };
+}
+
+function mergeProposedKeywordDefinitions(currentDefinitions = [], schema = buildMigrationSchema()) {
+    const output = (0, util_1.clone)(Array.isArray(currentDefinitions) ? currentDefinitions : []);
+    const existing = buildMigrationSchema(output);
+    for (const definition of schema?.definitions?.values?.() ?? []) {
+        if (definition?.modelProposed !== true) continue;
+        if (findOverlappingMigrationType(definition.label, existing)) continue;
+        const next = {
+            key: definition.key || `model-${(0, util_1.safeId)(definition.label) || definition.label}`,
+            label: definition.label,
+            description: definition.description || '',
+            aliases: (0, util_1.unique)(definition.aliases ?? [definition.label]),
+            enabled: true,
+            constant: definition.constant === true,
+            vectorized: definition.vectorized !== false,
+            preventRecursion: definition.preventRecursion !== false,
+            depth: Number(definition.depth ?? 4),
+            order: Number(definition.order ?? 700),
+            fields: (definition.fields ?? []).map((field) => ({ label: field.label, prompt: '', policy: field.policy || 'semantic-upsert', options: [] })),
+        };
+        output.push(next);
+        existing.definitions.set(next.label, next);
+        for (const alias of next.aliases) existing.aliasToType.set((0, util_1.normalizeFact)(alias), next.label);
+    }
+    return output;
+}
+
 class MigrationService {
-    constructor(host, worldbook, getSettings) {
+    constructor(host, worldbook, getSettings, onProgress = null, saveSettings = null) {
         this.host = host;
         this.worldbook = worldbook;
         this.getSettings = getSettings;
+        this.onProgress = typeof onProgress === 'function' ? onProgress : () => {};
+        this.saveSettings = typeof saveSettings === 'function' ? saveSettings : null;
         this.backup = null;
         this.preview = null;
+        this.resume = null;
     }
     canUndo() { return Boolean(this.backup); }
     hasPreview() { return Boolean(this.preview); }
     previewSummary() { return this.preview ? (0, util_1.clone)(this.preview.summary) : null; }
 
     // [MA-REBUILD-01] “整理”改为只读扫描与 AI 重建预览。此步骤不写世界书。
+    // [MA-REBUILD-05] 重建属于一次性迁移，允许受控多次请求：串行小批次、批次间隔、429退避和断点续跑。
     async migrate(settings, snapshot) {
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         validate();
         const original = await this.worldbook.readRaw(settings, snapshot, validate);
-        const records = collectRebuildRecords(original.data);
+        const initialSchema = buildMigrationSchema(settings?.keywordDefinitions);
+        const records = collectRebuildRecords(original.data, initialSchema);
+        const schema = buildMigrationSchema(settings?.keywordDefinitions, records);
+        for (const record of records) annotateRecordSchema(record, schema);
         if (!records.length) {
             this.preview = null;
+            this.resume = null;
             return { changed: false, previewReady: false, message: '当前世界书没有可重建的镜渊旧条目', candidates: 0 };
         }
-        const catalog = records.map((record) => `${record.uid}|${record.title}`).join('\n');
-        const batches = packRecords(expandRecordFragments(records, RECORD_FRAGMENT_BUDGET), BATCH_BUDGET, MAX_BATCH_RECORDS);
-        const parsedBlocks = [];
-        const diagnostics = { invalidLines: [], warnings: [], modelBatches: batches.length, parserRepairs: 0 };
+        const fingerprint = rebuildFingerprint(original.name, records);
+        const canResume = Boolean(this.resume
+            && this.resume.chatKey === snapshot.chatKey
+            && this.resume.worldbookName === original.name
+            && this.resume.fingerprint === fingerprint);
+        if (!canResume) {
+            const prepared = buildRebuildPlan(records, schema);
+            this.resume = {
+                chatKey: snapshot.chatKey,
+                worldbookName: original.name,
+                fingerprint,
+                sourceData: (0, util_1.clone)(original.data),
+                records,
+                schema,
+                catalog: records.map((record) => `${record.uid}|${record.title}`).join('\n'),
+                batches: prepared.tasks,
+                nextBatchIndex: 0,
+                parsedBlocks: [],
+                requests: 0,
+                retries: 0,
+                lastRequestAt: 0,
+                diagnostics: {
+                    invalidLines: [],
+                    warnings: [...prepared.warnings],
+                    modelBatches: prepared.tasks.length,
+                    modelRequests: 0,
+                    parserRepairs: 0,
+                    compactedRecords: prepared.compactedRecords,
+                    fragmentedRecords: 0,
+                    semanticClusters: prepared.semanticClusters,
+                    eventPasses: prepared.eventPasses,
+                    organizationPasses: prepared.organizationPasses,
+                    customPasses: prepared.customPasses,
+                    regionPasses: prepared.regionPasses,
+                    foundationPasses: prepared.foundationPasses,
+                },
+            };
+        }
+        const state = this.resume;
         const knownUids = new Set(records.map((record) => record.uid));
-        for (let index = 0; index < batches.length; index += 1) {
+        for (; state.nextBatchIndex < state.batches.length;) {
             validate();
-            const prompt = (0, prompts_1.migrationPrompts)(batches[index], catalog, { batchIndex: index + 1, batchCount: batches.length });
-            const response = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'migration',
-                prompt: { system: prompt.system, user: trimPrompt(prompt.user) },
-                fallbackPrompt: () => ({
-                    system: prompt.system,
-                    user: trimPrompt(`${prompt.user}\n\n网关重试要求：只保留必要事实；每个旧UID最多输出六行，禁止解释。`),
-                }),
-                settings,
-                snapshot,
-                profileId: settings.migrationProfileId,
-                sourceText: batches[index].map((record) => record.content || '').join('\n'),
-                onRetry: () => diagnostics.warnings.push(`第${index + 1}批遇到网关错误，已使用精简请求重试一次`),
+            const index = state.nextBatchIndex;
+            const batch = state.batches[index];
+            this.emitProgress({
+                state: 'running',
+                current: index + 1,
+                total: state.batches.length,
+                requests: state.requests,
+                retries: state.retries,
+                detail: `正在执行${migrationPhaseLabel(batch.phase)} ${index + 1}/${state.batches.length}：${batch.label || batch.clusterId || '未命名簇'}`,
             });
-            validate();
+            const prompt = (0, prompts_1.migrationPrompts)(batch, state.catalog, {
+                batchIndex: index + 1,
+                batchCount: state.batches.length,
+                totalRecords: records.length,
+                catalogBudget: MIGRATION_BATCH_CATALOG_BUDGET,
+                phase: batch.phase || 'entity',
+                clusterId: batch.clusterId || '',
+                stableName: batch.stableName || batch.label || '',
+                priorContext: buildPriorCandidateContext(state.parsedBlocks, batch),
+                schema: state.schema,
+            });
+            let response;
             try {
-                const parsed = parseRebuildResponse(response, knownUids, diagnostics);
-                parsedBlocks.push(...parsed);
+                response = await this.requestBatch({
+                    prompt,
+                    batch,
+                    settings,
+                    snapshot,
+                    validate,
+                    state,
+                    batchIndex: index,
+                });
             }
             catch (error) {
-                throw new Error(`世界书重建第${index + 1}/${batches.length}批解析失败：${(0, util_1.errorText)(error)}`);
+                this.emitProgress({
+                    state: 'paused',
+                    current: index,
+                    total: state.batches.length,
+                    requests: state.requests,
+                    retries: state.retries,
+                    detail: `已完成 ${index}/${state.batches.length} 批；下次从第 ${index + 1} 批继续`,
+                });
+                const reason = (0, util_1.errorText)(error);
+                if (isMigrationRateLimitError(error)) {
+                    throw new Error(`世界书重建被限流；已完成 ${index}/${state.batches.length} 批，下次点击将从第 ${index + 1} 批继续。${reason}`);
+                }
+                throw new Error(`世界书重建第 ${index + 1}/${state.batches.length} 批请求失败；已保存批次进度。${reason}`);
             }
+            validate();
+            try {
+                const parsed = parseRebuildResponse(response, knownUids, state.diagnostics, rebuildParsePolicy(batch, records, state.schema));
+                if (!parsed.length) throw new Error('没有返回带旧UID证据的有效条目');
+                state.parsedBlocks.push(...parsed);
+            }
+            catch (error) {
+                this.emitProgress({
+                    state: 'paused',
+                    current: index,
+                    total: state.batches.length,
+                    requests: state.requests,
+                    retries: state.retries,
+                    detail: `第 ${index + 1} 批解析失败；下次仍从该批继续`,
+                });
+                throw new Error(`世界书重建第 ${index + 1}/${state.batches.length} 批解析失败；不会重发已完成批次，下次点击从本批继续：${(0, util_1.errorText)(error)}`);
+            }
+            state.nextBatchIndex += 1;
+            this.emitProgress({
+                state: 'running',
+                current: state.nextBatchIndex,
+                total: state.batches.length,
+                requests: state.requests,
+                retries: state.retries,
+                detail: `已完成 ${state.nextBatchIndex}/${state.batches.length} 批`,
+            });
         }
-        if (!parsedBlocks.length) throw new Error('模型没有返回任何带旧UID证据的可验证重建条目，旧表未修改');
-        const blocks = mergeRebuildBlocks(parsedBlocks);
-        const built = buildRebuildSnapshot(original.data, records, blocks, diagnostics);
+        if (!state.parsedBlocks.length) throw new Error('模型没有返回任何带旧UID证据的可验证重建条目，旧表未修改');
+        const blocks = mergeRebuildBlocks(state.parsedBlocks, state.diagnostics);
+        const built = buildRebuildSnapshot(state.sourceData, records, blocks, state.diagnostics, state.schema);
         const summary = {
             worldbookName: original.name,
             candidates: records.length,
-            batches: batches.length,
+            batches: state.batches.length,
+            requests: state.requests,
+            retries: state.retries,
+            compactedRecords: state.diagnostics.compactedRecords,
+            fragmentedRecords: state.diagnostics.fragmentedRecords,
+            semanticClusters: state.diagnostics.semanticClusters || 0,
+            eventPasses: state.diagnostics.eventPasses || 0,
+            organizationPasses: state.diagnostics.organizationPasses || 0,
+            customPasses: state.diagnostics.customPasses || 0,
+            regionPasses: state.diagnostics.regionPasses || 0,
+            foundationPasses: state.diagnostics.foundationPasses || 0,
+            newTypes: [...state.schema.definitions.values()].filter((definition) => definition.modelProposed === true).map((definition) => definition.label),
             rebuiltEntries: built.rebuiltEntries,
             mergedOldEntries: built.mergedOldEntries,
             archivedEntries: built.archivedEntries,
             knowledgeLines: built.knowledgeLines,
             deletedOldEntries: records.length,
             preservedEntries: built.preservedEntries,
-            warnings: diagnostics.warnings.slice(0, 12),
+            warnings: state.diagnostics.warnings.slice(0, 12),
         };
         this.preview = {
             chatKey: snapshot.chatKey,
             worldbookName: original.name,
-            sourceData: (0, util_1.clone)(original.data),
+            sourceData: (0, util_1.clone)(state.sourceData),
             nextData: (0, util_1.clone)(built.data),
             summary,
+            nextKeywordDefinitions: mergeProposedKeywordDefinitions(settings?.keywordDefinitions, state.schema),
         };
+        this.resume = null;
+        this.emitProgress({ state: 'success', current: summary.batches, total: summary.batches, requests: summary.requests, retries: summary.retries, detail: '所有批次完成，重建预览已生成' });
         return { changed: false, previewReady: true, ...summary };
+    }
+
+    async requestBatch({ prompt, batch, settings, snapshot, validate, state, batchIndex }) {
+        const retryLimit = migrationRateLimitRetries(settings);
+        for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
+            validate();
+            const interval = migrationBatchIntervalMs(settings);
+            const elapsed = Date.now() - Number(state.lastRequestAt || 0);
+            if (state.lastRequestAt && elapsed < interval)
+                await waitForMigration(interval - elapsed, validate, snapshot);
+            try {
+                state.requests += 1;
+                state.diagnostics.modelRequests = state.requests;
+                state.lastRequestAt = Date.now();
+                return await (0, model_request_1.callModel)({
+                    host: this.host,
+                    stage: 'migration',
+                    prompt: { system: prompt.system, user: trimPrompt(prompt.user) },
+                    fallbackPrompt: null,
+                    settings,
+                    snapshot,
+                    profileId: settings.migrationProfileId,
+                    sourceText: batch.map((record) => record.content || '').join('\n'),
+                });
+            }
+            catch (error) {
+                if (!isMigrationRateLimitError(error) || attempt >= retryLimit) throw error;
+                state.retries += 1;
+                const waitMs = migrationRateLimitBackoffMs(settings, attempt);
+                state.diagnostics.warnings.push(`第${batchIndex + 1}批触发限流，等待后进行第${attempt + 1}次重试`);
+                this.emitProgress({
+                    state: 'waiting',
+                    current: batchIndex,
+                    total: state.batches.length,
+                    requests: state.requests,
+                    retries: state.retries,
+                    detail: `第 ${batchIndex + 1} 批限流，等待 ${Math.ceil(waitMs / 1000)} 秒后重试`,
+                });
+                await waitForMigration(waitMs, validate, snapshot);
+            }
+        }
+        throw new Error('世界书重建请求未完成');
+    }
+
+    emitProgress(progress) {
+        try { this.onProgress({ ...(progress || {}) }); }
+        catch (error) { console.warn('[MirrorAbyss] migration progress callback failed', error); }
     }
 
     // [MA-REBUILD-02] 只有预览仍对应当前世界书时才原子提交；提交后重算召回并回读。
@@ -3563,11 +4016,18 @@ class MigrationService {
             await this.worldbook.replanRecall(settings, snapshot, validate);
             const verified = await this.worldbook.readRaw(settings, snapshot, validate);
             verifyCommittedSnapshot(verified.data, preview.summary);
+            const beforeKeywordDefinitions = (0, util_1.clone)(settings?.keywordDefinitions ?? []);
+            const afterKeywordDefinitions = (0, util_1.clone)(preview.nextKeywordDefinitions ?? beforeKeywordDefinitions);
+            if (this.saveSettings && JSON.stringify(beforeKeywordDefinitions) !== JSON.stringify(afterKeywordDefinitions)) {
+                this.saveSettings({ keywordDefinitions: afterKeywordDefinitions });
+            }
             this.backup = {
                 chatKey: snapshot.chatKey,
                 worldbookName: preview.worldbookName,
                 data: (0, util_1.clone)(preview.sourceData),
                 afterData: (0, util_1.clone)(verified.data),
+                beforeKeywordDefinitions,
+                afterKeywordDefinitions,
             };
             this.preview = null;
             return { changed: true, committed: true, ...preview.summary };
@@ -3595,100 +4055,714 @@ class MigrationService {
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         const backup = this.backup;
         await this.worldbook.replaceRaw(settings, backup.worldbookName, backup.data, snapshot, validate, backup.afterData);
+        if (this.saveSettings && Array.isArray(backup.beforeKeywordDefinitions)) this.saveSettings({ keywordDefinitions: backup.beforeKeywordDefinitions });
         this.backup = null;
         this.preview = null;
+        this.resume = null;
         return { changed: true, restored: true };
     }
 }
 exports.MigrationService = MigrationService;
 
-function collectRebuildRecords(data) {
+function buildRebuildBatches(records, bodyBudget = MIGRATION_CLUSTER_BODY_BUDGET, maxRecords = MIGRATION_BATCH_MAX_RECORDS) {
+    const clusters = buildSemanticClusters(records);
+    const batches = [];
+    let currentClusters = [];
+    let currentRecords = [];
+    let currentSize = 0;
+    const flush = () => {
+        if (!currentRecords.length) return;
+        const ids = currentClusters.map((cluster) => cluster.id);
+        const labels = currentClusters.map((cluster) => cluster.name);
+        batches.push(createMigrationTask('entity', ids.join(','), labels.length === 1 ? labels[0] : `${labels[0]}等${labels.length}个对象`, currentRecords, bodyBudget));
+        currentClusters = [];
+        currentRecords = [];
+        currentSize = 0;
+    };
+    for (const cluster of clusters) {
+        const tagged = cluster.records.map((record) => ({ ...record, semanticClusterId: cluster.id, semanticClusterName: cluster.name }));
+        const clusterSize = tagged.reduce((sum, record) => sum + serializeRecord(record).length, 0);
+        const wouldExceed = currentRecords.length && (currentRecords.length + tagged.length > maxRecords || currentSize + clusterSize > bodyBudget);
+        if (wouldExceed) flush();
+        currentClusters.push(cluster);
+        currentRecords.push(...tagged);
+        currentSize += clusterSize;
+        if (tagged.length > maxRecords || clusterSize > bodyBudget) flush();
+    }
+    flush();
+    const compactedRecords = batches.reduce((sum, batch) => sum + Number(batch.compactedRecords || 0), 0);
+    const warnings = [];
+    if (clusters.length) warnings.push(`旧条目已按对象身份归为${clusters.length}个语义簇；语义簇不会跨请求拆分`);
+    if (batches.length < clusters.length) warnings.push(`多个小语义簇已安全合批为${batches.length}次对象请求，簇标记仍独立`);
+    if (compactedRecords) warnings.push(`${compactedRecords}个来源正文已按簇内公平预算压缩，但UID、标题和首尾事实均保留`);
+    return { batches, compactedRecords, fragmentedRecords: 0, warnings, semanticClusters: clusters.length };
+}
+
+function buildRebuildPlan(records, schema = buildMigrationSchema()) {
+    const source = Array.isArray(records) ? records : [];
+    for (const record of source) annotateRecordSchema(record, schema);
+    const builtinEntityTypes = new Set([...NON_EVENT_TYPES]);
+    // 自定义表不在普通对象轮定型，统一进入扩展类型轮，确保使用其自身栏目与规则。
+    const entity = buildRebuildBatches(source.filter((record) => builtinEntityTypes.has(recordType(record, schema))));
+    const eventTasks = buildEventSynthesisTasks(source);
+    const extendedTasks = buildExtendedSynthesisTasks(source, schema);
+    const regionTasks = buildRegionalSynthesisTasks(source);
+    const foundationTasks = buildFoundationSynthesisTasks(source);
+    const tasks = [...entity.batches, ...eventTasks, ...extendedTasks, ...regionTasks, ...foundationTasks];
+    const compactedRecords = tasks.reduce((sum, task) => sum + Number(task.compactedRecords || 0), 0);
+    const organizationPasses = extendedTasks.filter((task) => task.extensionKind === 'organization').length;
+    const customPasses = extendedTasks.length;
+    const warnings = [
+        ...entity.warnings,
+        eventTasks.length ? `事件轮将对${eventTasks.length}个事件生命周期独立重建` : '',
+        customPasses ? `扩展类型轮将按当前表定义重建${customPasses}个组织或自定义实体簇` : '',
+        regionTasks.length ? `地区轮将对${regionTasks.length}个地区证据簇提炼局部规则` : '',
+        foundationTasks.length ? `基础设定轮将按${foundationTasks.length}个规则主题提出候选` : '',
+        '事件、扩展类型、地区和基础设定均必须引用当前任务来源UID；超出当前任务的目录UID不能充当证据',
+    ].filter(Boolean);
+    return {
+        tasks,
+        compactedRecords,
+        warnings,
+        semanticClusters: entity.semanticClusters,
+        eventPasses: eventTasks.length,
+        organizationPasses,
+        customPasses,
+        regionPasses: regionTasks.length,
+        foundationPasses: foundationTasks.length,
+    };
+}
+
+function buildSemanticClusters(records) {
+    const clusters = [];
+    for (const record of Array.isArray(records) ? records : []) {
+        const entry = recordAsEntry(record);
+        let cluster = clusters.find((candidate) => semanticClusterMatch(candidate.entry, entry));
+        if (!cluster) {
+            cluster = {
+                id: `entity:${entry.type}:${stableClusterName(entry)}`,
+                type: entry.type,
+                name: entry.name || record.title,
+                entry,
+                records: [],
+            };
+            clusters.push(cluster);
+        }
+        cluster.records.push(record);
+        cluster.entry = mergeClusterEntry(cluster.entry, entry);
+    }
+    return clusters.sort((left, right) => left.id.localeCompare(right.id, 'zh-CN'));
+}
+
+function buildEventSynthesisTasks(records) {
+    const source = Array.isArray(records) ? records : [];
+    const explicitEvents = source.filter((record) => recordType(record) === '事件');
+    const clusters = [];
+    for (const record of explicitEvents) {
+        const entry = recordAsEntry(record);
+        let cluster = clusters.find((candidate) => semanticClusterMatch(candidate.entry, entry));
+        if (!cluster) {
+            cluster = {
+                id: `event:${stableClusterName(entry)}`,
+                name: entry.name || record.title,
+                entry,
+                records: [],
+            };
+            clusters.push(cluster);
+        }
+        cluster.records.push(record);
+        cluster.entry = mergeClusterEntry(cluster.entry, entry);
+    }
+    // 场景【活动关联】能够恢复旧版本中缺失的显式事件条目，但不会从普通经历句任意造事件。
+    for (const record of source.filter((item) => recordType(item) !== '事件')) {
+        const entry = recordAsEntry(record);
+        for (const rawName of entry.sections?.values?.['活动关联'] ?? []) {
+            const name = stripEventField(rawName);
+            if (!isStableEventAnchor(name)) continue;
+            const synthetic = {
+                uid: record.uid,
+                title: `事件｜${name}`,
+                type: '事件',
+                name,
+                aliases: [],
+                keywords: [name],
+                content: record.content,
+                sections: { values: { 场景: [entry.name], 关键进展: [rawName] } },
+            };
+            let cluster = clusters.find((candidate) => semanticClusterMatch(candidate.entry, synthetic));
+            if (!cluster) {
+                cluster = { id: `event:${stableClusterName(synthetic)}`, name, entry: synthetic, records: [] };
+                clusters.push(cluster);
+            }
+            if (!cluster.records.some((item) => item.uid === record.uid)) cluster.records.push(record);
+            cluster.entry = mergeClusterEntry(cluster.entry, synthetic);
+        }
+    }
+    return clusters
+        .map((cluster) => {
+            const related = collectEventRelatedRecords(source, cluster);
+            return createMigrationTask('event', cluster.id, `事件｜${cluster.name}`, related, MIGRATION_DERIVED_BODY_BUDGET, cluster.name);
+        })
+        .filter((task) => task.length)
+        .sort((left, right) => String(left.stableName).localeCompare(String(right.stableName), 'zh-CN'));
+}
+
+function collectEventRelatedRecords(records, cluster) {
+    const signature = eventClusterSignature(cluster.entry);
+    const scored = [];
+    for (const record of records) {
+        if (cluster.records.some((item) => item.uid === record.uid)) {
+            scored.push({ record, score: 1000 });
+            continue;
+        }
+        const text = (0, util_1.normalizeFact)(`${record.title}\n${record.content}\n${record.keywords.join(' ')}`);
+        if (!text) continue;
+        const nameHit = signature.names.some((value) => value.length >= 3 && text.includes(value));
+        const participantHit = signature.participants.some((value) => value.length >= 2 && text.includes(value));
+        const sceneHit = signature.scenes.some((value) => value.length >= 2 && text.includes(value));
+        const goalHit = signature.goals.some((value) => value.length >= 3 && text.includes(value));
+        const groups = [participantHit, sceneHit, goalHit].filter(Boolean).length;
+        const eventContext = /【(?:持续经历|持续变化|活动关联|世界影响|关键进展|未决|结果|当前状态|当前)】/u.test(record.content || '');
+        if (!nameHit && !(eventContext && groups >= 2)) continue;
+        scored.push({ record, score: Number(nameHit) * 120 + groups * 35 + Number(eventContext) * 10 });
+    }
+    return scored.sort((left, right) => right.score - left.score || left.record.uid.localeCompare(right.record.uid, 'zh-CN', { numeric: true })).map((item) => item.record);
+}
+
+function eventClusterSignature(entry) {
+    const values = entry?.sections?.values ?? {};
+    const participants = (0, util_1.unique)((values['参与'] ?? []).flatMap(splitEventFieldValues).map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    const scenes = (0, util_1.unique)((values['场景'] ?? []).flatMap(splitEventFieldValues).map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    const participantSet = new Set(participants);
+    const sceneSet = new Set(scenes);
+    const eventKeywords = (entry?.keywords ?? []).filter((value) => {
+        const key = (0, util_1.normalizeFact)(value);
+        return key.length >= 3 && !participantSet.has(key) && !sceneSet.has(key);
+    });
+    const names = (0, util_1.unique)([
+        entry?.name,
+        ...(entry?.aliases ?? []),
+        ...eventKeywords,
+        ...(values['别名'] ?? []),
+    ].map((value) => (0, util_1.normalizeFact)(stripEventField(value))).filter(isStableEventAnchor));
+    const goals = (0, util_1.unique)([...(values['目标'] ?? []), ...(values['未决'] ?? [])].map(stripEventField).map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    return { names, participants, scenes, goals };
+}
+
+function splitEventFieldValues(value) {
+    return stripEventField(value).split(/[、,，/；;]|(?:以及|并且|与|和|及)/u).map((item) => item.trim()).filter(Boolean);
+}
+
+function stripEventField(value) {
+    return String(value ?? '').replace(/^\s*[-*]?\s*[^：:]{1,24}\s*[：:]\s*/u, '').replace(/[。；;]+$/u, '').trim();
+}
+
+function isStableEventAnchor(value) {
+    const text = String(value ?? '').trim();
+    return text.length >= 3 && text.length <= 48 && !/^(?:无|未知|未说明|活动|事件|当前事件|相关事件|进行中|已结束|暂无)$/u.test(text);
+}
+
+function buildOrganizationSynthesisTasks(records, schema = buildMigrationSchema()) {
+    return buildExtendedSynthesisTasks(records, schema).filter((task) => task.extensionKind === 'organization');
+}
+
+function buildExtendedSynthesisTasks(records, schema = buildMigrationSchema()) {
+    const source = Array.isArray(records) ? records : [];
+    const tasks = [];
+    const organizationDefinition = [...(schema?.definitions?.values?.() ?? [])].find((definition) => {
+        const names = [definition.label, ...(definition.aliases ?? [])].map((value) => (0, util_1.normalizeFact)(value));
+        return names.includes((0, util_1.normalizeFact)('组织'));
+    });
+    const organizationTasks = buildAnchorTasks(source, extractOrganizationAnchors, 'organization', '组织', MIGRATION_DERIVED_BODY_BUDGET, (anchor, related) => {
+        return related.length >= 2 || related.some((record) => recordType(record, schema) === '世界' && /【(?:组织|权力|制度)】/u.test(record.content));
+    });
+    for (const task of organizationTasks) {
+        decorateCustomTask(task, organizationDefinition ?? schema?.definitions?.get('世界'), organizationDefinition ? 'organization' : 'organization-world');
+        tasks.push(task);
+    }
+    for (const definition of schema?.customDefinitions ?? []) {
+        const direct = source.filter((record) => recordType(record, schema) === definition.label);
+        if (!direct.length) continue;
+        for (const cluster of buildSemanticClusters(direct)) {
+            const related = collectCustomRelatedRecords(source, cluster, definition, schema);
+            const task = createMigrationTask('custom', `custom:${(0, util_1.safeId)(definition.label)}:${stableClusterName(cluster.entry)}`, `${definition.label}｜${cluster.name}`, related, MIGRATION_DERIVED_BODY_BUDGET, cluster.name);
+            decorateCustomTask(task, definition, (0, util_1.normalizeFact)(definition.label) === (0, util_1.normalizeFact)('组织') ? 'organization' : 'custom');
+            tasks.push(task);
+        }
+    }
+    const deduped = [];
+    const seen = new Set();
+    for (const task of tasks.sort((left, right) => String(left.label).localeCompare(String(right.label), 'zh-CN'))) {
+        const key = `${task.outputType}|${(0, util_1.normalizeFact)(task.stableName)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(task);
+    }
+    return deduped;
+}
+
+function decorateCustomTask(task, definition, kind = 'custom') {
+    const safeDefinition = definition ?? { label: '世界', fields: [...TYPE_ALLOWED_SECTIONS.世界].map((label) => ({ label })) };
+    task.outputType = safeDefinition.label;
+    task.allowedSections = (safeDefinition.fields ?? []).map((field) => field.label).filter(Boolean);
+    task.typeDescription = safeDefinition.description || '';
+    task.extensionKind = kind;
+    task.schemaDefinition = safeDefinition;
+    return task;
+}
+
+function collectCustomRelatedRecords(records, cluster, definition, schema) {
+    const directUids = new Set(cluster.records.map((record) => record.uid));
+    const names = (0, util_1.unique)([cluster.name, cluster.entry?.name, ...(cluster.entry?.aliases ?? []), ...(cluster.entry?.keywords ?? [])]
+        .map((value) => (0, util_1.normalizeFact)(value)).filter((value) => value.length >= 2));
+    const scored = [];
+    for (const record of records) {
+        if (directUids.has(record.uid)) {
+            scored.push({ record, score: 1000 });
+            continue;
+        }
+        const haystack = (0, util_1.normalizeFact)(`${record.title}\n${record.content}\n${record.keywords.join(' ')}`);
+        const hits = names.filter((name) => haystack.includes(name)).length;
+        if (!hits) continue;
+        const sameType = recordType(record, schema) === definition.label;
+        scored.push({ record, score: Number(sameType) * 200 + hits * 60 });
+    }
+    return scored.sort((left, right) => right.score - left.score || left.record.uid.localeCompare(right.record.uid, 'zh-CN', { numeric: true })).map((item) => item.record);
+}
+
+function buildRegionalSynthesisTasks(records) {
+    return buildAnchorTasks(records, extractRegionAnchors, 'region', '地区', MIGRATION_DERIVED_BODY_BUDGET, (anchor, related) => {
+        if (related.length >= 2) return true;
+        const needle = (0, util_1.normalizeFact)(anchor);
+        return related.some((record) => {
+            const split = (0, util_1.splitTitle)((0, util_1.normalizeTitle)(record.title));
+            const titleName = (0, util_1.normalizeFact)(split?.name ?? '');
+            const keywordHit = (record.keywords ?? []).some((value) => (0, util_1.normalizeFact)(value) === needle);
+            return titleName === needle || keywordHit;
+        });
+    });
+}
+
+function buildFoundationSynthesisTasks(records) {
+    const themes = [
+        ['世界常识', /(?:世界常识|普遍|通常|公认|通用|所有地区|各国|整个世界)/u],
+        ['自然规则', /(?:自然规则|自然规律|魔力|能量|时间|空间|死亡|复活|灵魂|昼夜|气候)/u],
+        ['种族与生命', /(?:种族|血统|族群|寿命|生育|生命形态|变形|遗传)/u],
+        ['能力与技术', /(?:能力|魔法|技术|施法|炼金|武器|媒介|能源|传送|通讯)/u],
+        ['社会规则', /(?:社会规则|法律|制度|阶级|货币|婚姻|继承|登记|教育|宗教|贸易)/u],
+        ['地理框架', /(?:地理框架|大陆|海洋|山脉|区域关系|气候带|交通网络|边境)/u],
+    ];
+    const tasks = [];
+    for (const [theme, pattern] of themes) {
+        const related = records.filter((record) => pattern.test(`${record.title}\n${record.content}\n${record.keywords.join(' ')}`));
+        const hasExplicitFoundation = related.some((record) => recordType(record) === '基础设定');
+        if (!related.length || (!hasExplicitFoundation && new Set(related.map((record) => record.uid)).size < 2)) continue;
+        tasks.push(createMigrationTask('foundation', `foundation:${theme}`, theme, related, MIGRATION_DERIVED_BODY_BUDGET));
+    }
+    return tasks;
+}
+
+function buildAnchorTasks(records, extractor, phase, labelPrefix, bodyBudget, accept) {
+    const anchors = new Map();
+    for (const record of records) {
+        for (const anchor of extractor(record)) {
+            const key = (0, util_1.normalizeFact)(anchor);
+            if (!key || key.length < 2) continue;
+            if (!anchors.has(key)) anchors.set(key, { anchor, records: [] });
+        }
+    }
+    for (const item of anchors.values()) {
+        item.records = records.filter((record) => recordContainsAnchor(record, item.anchor));
+    }
+    return [...anchors.values()]
+        .filter((item) => accept(item.anchor, item.records))
+        .sort((left, right) => left.anchor.localeCompare(right.anchor, 'zh-CN'))
+        .map((item) => createMigrationTask(phase, `${phase}:${(0, util_1.normalizeFact)(item.anchor)}`, `${labelPrefix}｜${item.anchor}`, item.records, bodyBudget, item.anchor));
+}
+
+function createMigrationTask(phase, clusterId, label, records, bodyBudget, stableName = '') {
+    const compacted = compactTaskRecords(records, bodyBudget);
+    const task = compacted.records;
+    task.phase = phase;
+    task.clusterId = clusterId;
+    task.label = label;
+    task.stableName = stableName || label.replace(/^.+?｜/u, '');
+    task.compactedRecords = compacted.compactedRecords;
+    return task;
+}
+
+function compactTaskRecords(records, bodyBudget) {
+    const source = [...new Map((records || []).map((record) => [record.uid, record])).values()];
+    if (!source.length) return { records: [], compactedRecords: 0 };
+    const overhead = source.reduce((sum, record) => sum + serializeRecord({ ...record, content: '' }).length, 0);
+    const available = Math.max(1200, bodyBudget - overhead);
+    const share = Math.max(260, Math.floor(available / source.length));
+    let compactedRecords = 0;
+    const output = source.map((record) => {
+        const content = String(record.content ?? '').replace(/\r/g, '').trim();
+        if (content.length <= share) return { ...record, content };
+        compactedRecords += 1;
+        return { ...record, content: clipRecordContent(content, share) };
+    });
+    return { records: output, compactedRecords };
+}
+
+function clipRecordContent(content, maxChars) {
+    const text = String(content ?? '').trim();
+    if (text.length <= maxChars) return text;
+    const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+    const priority = lines.filter((line) => /^(?:【(?:身份|定义|稳定|当前|当前状态|关系|目标|阶段|未决|结果|范围|地理|组织|权力|制度|公开局势|世界常识|自然规则|种族与生命|能力与技术|社会规则|地理框架)】|-\s*(?:身份|种族|位置|目标|结果|范围|组织|制度|规则|来源|真相|当前))/u.test(line));
+    const ordered = (0, util_1.unique)([...priority, ...lines.slice(0, 8), ...lines.slice(-8)]);
+    let out = '';
+    for (const line of ordered) {
+        if (out && out.length + line.length + 1 > maxChars) continue;
+        out += `${out ? '\n' : ''}${line}`;
+    }
+    if (!out) out = `${text.slice(0, Math.ceil(maxChars * .62))}\n[中间历史已压缩]\n${text.slice(-Math.floor(maxChars * .3))}`;
+    return out.slice(0, maxChars);
+}
+
+function recordAsEntry(record) {
+    const splitRaw = (0, util_1.splitTitle)((0, util_1.normalizeTitle)(record.title)) || { type: record.type || '世界', name: record.name || record.title };
+    const split = { type: record.type || splitRaw.type, name: record.name || splitRaw.name };
+    const sections = (0, parser_1.parseEntrySections)(record.content || '');
+    const aliases = (0, util_1.unique)([
+        ...(sections.values?.['别名'] || []),
+    ].map((value) => String(value).replace(/^\s*[-*]\s*/u, '').trim()).filter(Boolean));
+    return {
+        uid: record.uid,
+        title: `${split.type}｜${split.name}`,
+        type: split.type,
+        name: split.name,
+        aliases,
+        keywords: record.keywords || [],
+        content: record.content || '',
+        sections,
+    };
+}
+
+function semanticClusterMatch(clusterEntry, incomingEntry) {
+    if (clusterEntry.type === '事件' && incomingEntry.type === '事件') {
+        const left = stableClusterName(clusterEntry);
+        const right = stableClusterName(incomingEntry);
+        return Boolean(left && right && left === right)
+            || (0, matcher_1.sameEventLifecycle)(sanitizeEventEntryForLifecycle(clusterEntry), sanitizeEventEntryForLifecycle(incomingEntry));
+    }
+    if ((0, matcher_1.sameEntryIdentity)(clusterEntry, incomingEntry)) return true;
+    if (clusterEntry.type !== incomingEntry.type) return false;
+    const left = stableClusterName(clusterEntry);
+    const right = stableClusterName(incomingEntry);
+    if (left && right && left === right) return true;
+    return identityKeywordMatch(clusterEntry, incomingEntry);
+}
+
+function sanitizeEventEntryForLifecycle(entry) {
+    const values = entry?.sections?.values ?? {};
+    const participants = new Set((values['参与'] ?? []).flatMap(splitEventFieldValues).map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    const scenes = new Set((values['场景'] ?? []).flatMap(splitEventFieldValues).map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    const keywords = (entry?.keywords ?? []).filter((value) => {
+        const key = (0, util_1.normalizeFact)(value);
+        return key.length >= 3 && !participants.has(key) && !scenes.has(key);
+    });
+    return { ...entry, keywords };
+}
+
+function identityKeywordMatch(left, right) {
+    const leftNames = (0, util_1.unique)([left?.name, ...(left?.aliases ?? [])].map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    const rightNames = (0, util_1.unique)([right?.name, ...(right?.aliases ?? [])].map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
+    const leftKeywords = (0, util_1.unique)((left?.keywords ?? []).map((value) => (0, util_1.normalizeFact)(value)).filter((value) => value.length >= 3));
+    const rightKeywords = (0, util_1.unique)((right?.keywords ?? []).map((value) => (0, util_1.normalizeFact)(value)).filter((value) => value.length >= 3));
+    const anchorMatchesName = leftKeywords.some((keyword) => rightNames.includes(keyword)) || rightKeywords.some((keyword) => leftNames.includes(keyword));
+    if (anchorMatchesName) return true;
+    const shared = leftKeywords.filter((keyword) => rightKeywords.includes(keyword));
+    return shared.some((keyword) => leftNames.some((name) => name.includes(keyword)) && rightNames.some((name) => name.includes(keyword)));
+}
+
+function stableClusterName(entry) {
+    return (0, util_1.normalizeFact)(String(entry?.name ?? ''))
+        .replace(/(?:老师|教授|医生|主任|队长|会长|店长|老板|先生|女士|小姐|大人|殿下|陛下|学姐|学长|师姐|师兄|姐姐|哥哥|前辈)$/u, '')
+        .replace(/^(?:人物|角色|物品|道具|事件|场景|世界|基础设定)/u, '') || (0, util_1.normalizeFact)(entry?.title ?? '未命名');
+}
+
+function mergeClusterEntry(left, right) {
+    return {
+        ...left,
+        aliases: (0, util_1.unique)([...(left.aliases || []), ...(right.aliases || []), right.name]),
+        keywords: (0, util_1.unique)([...(left.keywords || []), ...(right.keywords || [])]),
+        content: `${left.content || ''}\n${right.content || ''}`,
+    };
+}
+
+function recordType(record, schema = null) {
+    if (record?.type) return resolveMigrationType(record.type, schema);
+    return resolveMigrationType((0, util_1.splitTitle)((0, util_1.normalizeTitle)(record.title))?.type || '', schema);
+}
+
+function annotateRecordSchema(record, schema) {
+    const split = (0, util_1.splitTitle)((0, util_1.normalizeTitle)(record.title));
+    record.type = resolveMigrationType(split?.type || '', schema);
+    record.name = split?.name || record.title;
+    return record;
+}
+
+function extractRegionAnchors(record) {
+    return (0, util_1.unique)(extractAnchors(`${record.title}
+${record.content}
+${record.keywords.join(' ')}`, REGION_SUFFIX_PATTERN)
+        .map(cleanRegionAnchor)
+        .filter((value) => value && !/^(?:当前地区|某地区|该地区|世界地区)$/u.test(value)));
+}
+
+function cleanRegionAnchor(value) {
+    let text = String(value ?? '').trim();
+    for (const marker of ['负责', '位于', '坐落于', '属于', '进入', '离开', '抵达', '前往', '通往', '控制', '覆盖']) {
+        if (text.includes(marker)) text = text.split(marker).at(-1).trim();
+    }
+    text = text.replace(/^(?:在|从|向|至|到)/u, '').replace(/地区$/u, '').trim();
+    if (/^([东南西北]境)边境$/u.test(text)) text = text.replace(/边境$/u, '');
+    return text;
+}
+
+function extractOrganizationAnchors(record) {
+    return extractAnchors(`${record.title}\n${record.content}\n${record.keywords.join(' ')}`, ORGANIZATION_SUFFIX_PATTERN)
+        .filter((value) => !/^(?:某组织|该组织|世界组织|组织势力)$/u.test(value));
+}
+
+function extractAnchors(text, pattern) {
+    const output = [];
+    pattern.lastIndex = 0;
+    for (const match of String(text || '').matchAll(pattern)) output.push(String(match[1] || '').trim());
+    pattern.lastIndex = 0;
+    return (0, util_1.unique)(output);
+}
+
+function recordContainsAnchor(record, anchor) {
+    const needle = (0, util_1.normalizeFact)(anchor);
+    const haystack = (0, util_1.normalizeFact)(`${record.title}\n${record.content}\n${record.keywords.join(' ')}`);
+    return Boolean(needle && haystack.includes(needle));
+}
+
+function migrationPhaseLabel(phase) {
+    return ({ entity: '对象重建', event: '事件重建', custom: '通用条目重建', organization: '通用条目重建', region: '地区规则', foundation: '基础设定' })[phase] || '世界书重建';
+}
+
+function rebuildParsePolicy(batch, records, schema = buildMigrationSchema()) {
+    const phase = batch?.phase || 'entity';
+    const explicitFoundationUids = new Set(records.filter((record) => recordType(record, schema) === '基础设定').map((record) => record.uid));
+    const allowedEvidenceUids = new Set((Array.isArray(batch) ? batch : []).map((record) => String(record.uid)));
+    const common = {
+        minimumEvidence: 1,
+        explicitFoundationUids,
+        allowedEvidenceUids,
+        allowedSectionsByType: schema.allowedSectionsByType,
+        schema,
+    };
+    if (phase === 'event') return { ...common, allowedTypes: new Set(['事件']), allowNewTypes: false };
+    if (phase === 'custom' || phase === 'organization') {
+        return { ...common, allowedTypes: new Set([...schema.definitions.keys()]), allowNewTypes: true };
+    }
+    if (phase === 'region') return { ...common, allowedTypes: new Set(['世界']), allowNewTypes: false };
+    if (phase === 'foundation') return { ...common, allowedTypes: new Set(['基础设定']), minimumEvidence: 2, allowNewTypes: false };
+    return { ...common, allowedTypes: new Set([...NON_EVENT_TYPES, ...schema.customDefinitions.map((definition) => definition.label)]), allowNewTypes: true };
+}
+
+function buildPriorCandidateContext(blocks, batch, maxChars = 2600) {
+    const phase = batch?.phase || 'entity';
+    if (phase === 'entity' || !Array.isArray(blocks) || !blocks.length) return '';
+    const preferred = ({
+        event: new Set(['人物', '场景', '物品', '世界']),
+        custom: new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']),
+        organization: new Set(['人物', '场景', '事件', '世界']),
+        region: new Set(['场景', '事件', '世界']),
+        foundation: new Set(['世界', '基础设定']),
+    })[phase] ?? new Set();
+    const sourceUids = new Set((Array.isArray(batch) ? batch : []).map((record) => String(record.uid)));
+    const anchor = (0, util_1.normalizeFact)(batch?.stableName || batch?.label || '');
+    const ranked = blocks.map((block, index) => {
+        const serialized = serializeCandidateBlock(block);
+        const overlap = (block.sourceUids ?? []).some((uid) => sourceUids.has(String(uid)));
+        const anchorHit = Boolean(anchor && (0, util_1.normalizeFact)(serialized).includes(anchor));
+        const score = Number(overlap) * 100 + Number(anchorHit) * 60 + Number(preferred.has(block.type)) * 10 + index / 10000;
+        return { block, serialized, score };
+    }).filter((item) => item.score >= 60 || (phase === 'foundation' && preferred.has(item.block.type)))
+        .sort((left, right) => right.score - left.score)
+        .slice(0, 12);
+    let output = '';
+    for (const item of ranked) {
+        const next = `${output ? '\n\n' : ''}${item.serialized}`;
+        if (output && output.length + next.length > maxChars) continue;
+        output += next;
+    }
+    return output.slice(0, maxChars);
+}
+
+function serializeCandidateBlock(block) {
+    const sections = (block.sections ?? []).map((section) => `【${section.name}】\n${(section.lines ?? []).map((line) => `- ${line}`).join('\n')}`).join('\n');
+    const sources = (block.sourceUids ?? []).join(',') || '无';
+    return `${block.title}\n候选来源UID：${sources}\n${sections}`.trim();
+}
+
+function splitRecordContent(content, maxChars) {
+    const text = String(content ?? '').trim();
+    if (!text || text.length <= maxChars) return [text];
+    const lines = text.split('\n');
+    const fragments = [];
+    let current = [];
+    let size = 0;
+    for (const rawLine of lines) {
+        const line = String(rawLine ?? '');
+        if (line.length > maxChars) {
+            if (current.length) {
+                fragments.push(current.join('\n'));
+                current = [];
+                size = 0;
+            }
+            for (let offset = 0; offset < line.length; offset += maxChars)
+                fragments.push(line.slice(offset, offset + maxChars));
+            continue;
+        }
+        const next = size + line.length + (current.length ? 1 : 0);
+        if (current.length && next > maxChars) {
+            fragments.push(current.join('\n'));
+            current = [];
+            size = 0;
+        }
+        current.push(line);
+        size += line.length + (current.length > 1 ? 1 : 0);
+    }
+    if (current.length) fragments.push(current.join('\n'));
+    return fragments.filter(Boolean);
+}
+
+function rebuildFingerprint(worldbookName, records) {
+    const source = [String(worldbookName ?? ''), ...records.map((record) => `${record.uid}|${record.title}|${record.content}|${record.keywords.join(',')}`)].join('\n');
+    return (0, util_1.hashText)(source);
+}
+
+function isMigrationRateLimitError(error) {
+    return /(?:\b429\b|too many requests|rate limit|requests per minute|tokens per minute|请求过多|频率限制|限流)/iu.test((0, util_1.errorText)(error));
+}
+
+function migrationBatchIntervalMs(settings) {
+    const configured = Number(settings?.migrationBatchIntervalMs);
+    if (Number.isFinite(configured)) return Math.min(60000, Math.max(0, Math.round(configured)));
+    return MIGRATION_DEFAULT_INTERVAL_MS;
+}
+
+function migrationRateLimitRetries(settings) {
+    const configured = Number(settings?.migrationRateLimitRetries);
+    if (Number.isFinite(configured)) return Math.min(4, Math.max(0, Math.round(configured)));
+    return MIGRATION_MAX_RATE_LIMIT_RETRIES;
+}
+
+function migrationRateLimitBackoffMs(settings, attempt) {
+    const configured = Number(settings?.migrationRateLimitBackoffMs);
+    if (Number.isFinite(configured)) return Math.min(120000, Math.max(0, Math.round(configured)));
+    return MIGRATION_RATE_LIMIT_BACKOFF_MS[Math.min(Math.max(0, attempt), MIGRATION_RATE_LIMIT_BACKOFF_MS.length - 1)];
+}
+
+async function waitForMigration(ms, validate, snapshot) {
+    let remaining = Math.max(0, Number(ms) || 0);
+    while (remaining > 0) {
+        if (snapshot?.token?.cancelled) throw new Error(snapshot.token.reason || '任务已取消');
+        const slice = Math.min(250, remaining);
+        await new Promise((resolve) => setTimeout(resolve, slice));
+        remaining -= slice;
+        validate();
+    }
+}
+
+function collectRebuildRecords(data, schema = buildMigrationSchema()) {
     const output = [];
     for (const [mapKey, raw] of Object.entries(data?.entries ?? {})) {
-        if (!raw || typeof raw !== 'object' || !isRebuildCandidate(raw)) continue;
+        if (!raw || typeof raw !== 'object' || !isRebuildCandidate(raw, schema)) continue;
         const uid = String(raw.uid ?? mapKey);
         const title = (0, util_1.stripUidSuffix)(String(raw.comment ?? raw.name ?? raw.title ?? '')) || `未命名｜${uid}`;
         const keywords = (0, util_1.normalizeStringArray)(raw.key).filter((item) => !(0, util_1.isUidKeyword)(item));
-        output.push({ mapKey: String(mapKey), uid, title, content: String(raw.content ?? ''), keywords, raw: (0, util_1.clone)(raw) });
+        const split = (0, util_1.splitTitle)((0, util_1.normalizeTitle)(title));
+        output.push({ mapKey: String(mapKey), uid, title, type: resolveMigrationType(split?.type || '', schema), name: split?.name || title, content: String(raw.content ?? ''), keywords, raw: (0, util_1.clone)(raw) });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title, 'zh-CN'));
 }
 
-function isRebuildCandidate(raw) {
+function isRebuildCandidate(raw, schema = buildMigrationSchema()) {
     if (!raw || typeof raw !== 'object') return false;
     const extension = raw.extensions?.[constants_1.WORLD_INFO_EXTENSION_KEY];
     if (extension?.locked === true || raw.locked === true) return false;
     if (extension?.managed === true) return true;
     const title = (0, util_1.stripUidSuffix)((0, util_1.normalizeTitle)(String(raw.comment ?? raw.name ?? raw.title ?? '')));
     const split = (0, util_1.splitTitle)(title);
-    if (!split || !ALLOWED_TYPES.has(split.type)) return false;
+    if (!split || !schema?.definitions?.has(resolveMigrationType(split.type, schema))) return false;
     const keys = (0, util_1.normalizeStringArray)(raw.key);
     // 非镜渊用户条目即使标题属于六类、正文格式较旧，也不参与重建和删除。
     return keys.some((item) => (0, util_1.isUidKeyword)(item));
 }
 
-function expandRecordFragments(records, fragmentBudget = RECORD_FRAGMENT_BUDGET) {
-    const output = [];
-    for (const record of records) {
-        const content = String(record.content ?? '');
-        if (content.length <= fragmentBudget) {
-            output.push(record);
-            continue;
-        }
-        const lines = content.replace(/\r/g, '').split('\n');
-        let current = [];
-        let size = 0;
-        const fragments = [];
-        for (const line of lines) {
-            const nextSize = size + line.length + 1;
-            if (current.length && nextSize > fragmentBudget) {
-                fragments.push(current.join('\n'));
-                current = [];
-                size = 0;
-            }
-            current.push(line);
-            size += line.length + 1;
-        }
-        if (current.length) fragments.push(current.join('\n'));
-        fragments.forEach((fragment, index) => output.push({
-            ...record,
-            content: fragment,
-            fragmentIndex: index + 1,
-            fragmentCount: fragments.length,
-        }));
+function serializeRecord(record) {
+    const part = Number(record.fragmentCount || 0) > 1 ? ` part=${record.fragmentIndex}/${record.fragmentCount}` : '';
+    const cluster = record.semanticClusterId ? ` cluster=${record.semanticClusterId}` : '';
+    const clusterName = record.semanticClusterName ? `
+对象簇：${record.semanticClusterName}` : '';
+    return `<<<SOURCE uid=${record.uid}${part}${cluster}>>>
+标题：${record.title}${clusterName}
+关键词：${record.keywords.join('、') || '无'}
+快照正文：
+${record.content || '（空）'}
+<<<END_SOURCE>>>`;
+}
+
+function migrationLineSlot(line) {
+    return String(line ?? '').match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1]?.replace(/\s+/gu, '') ?? '';
+}
+
+function removeUnresolvedSlotConflicts(section, lines, diagnostics = { warnings: [] }, title = '') {
+    const source = (0, util_1.unique)(lines ?? []);
+    if (!MIGRATION_EXCLUSIVE_SECTIONS.has(String(section ?? ''))) return source;
+    const bySlot = new Map();
+    for (const line of source) {
+        const slot = migrationLineSlot(line);
+        if (!slot) continue;
+        const list = bySlot.get(slot) ?? [];
+        list.push(line);
+        bySlot.set(slot, list);
     }
+    const conflicts = new Set();
+    for (const [slot, values] of bySlot.entries()) {
+        const distinct = (0, util_1.unique)(values.map((value) => (0, util_1.normalizeFact)(value)));
+        if (distinct.length <= 1) continue;
+        conflicts.add(slot);
+        diagnostics.warnings ?? (diagnostics.warnings = []);
+        diagnostics.warnings.push(`${title || '重建条目'}【${section}】“${slot}”存在互斥解释，未自动裁决；请改写为人物【已知/误信】、不同时间状态或待确认事实`);
+    }
+    if (!conflicts.size) return source;
+    return source.filter((line) => !conflicts.has(migrationLineSlot(line)));
+}
+
+function normalizeEventCompletionBlock(block) {
+    if (block?.type !== '事件') return block;
+    const output = (0, util_1.clone)(block);
+    const stage = output.sections?.find((section) => section.name === '阶段');
+    const ended = (stage?.lines ?? []).some((line) => /(?:已结束|结束|已完成|完成|失败|取消|终止|已解决)/u.test(line));
+    if (ended) output.sections = (output.sections ?? []).filter((section) => section.name !== '未决');
     return output;
 }
 
-function packRecords(records, budget, maxRecords = MAX_BATCH_RECORDS) {
-    const batches = [];
-    let current = [];
-    let size = 0;
-    for (const record of records) {
-        const serialized = serializeRecord(record);
-        if (current.length && (size + serialized.length > budget || current.length >= maxRecords)) {
-            batches.push(current);
-            current = [];
-            size = 0;
-        }
-        current.push(record);
-        size += serialized.length;
-    }
-    if (current.length) batches.push(current);
-    return batches;
-}
-
-function serializeRecord(record) {
-    const part = Number(record.fragmentCount || 0) > 1 ? ` part=${record.fragmentIndex}/${record.fragmentCount}` : '';
-    return `<<<SOURCE uid=${record.uid}${part}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
-}
-
-function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], warnings: [] }) {
-    const prepared = parseRebuildEnvelope(raw, diagnostics);
-    const parsed = (0, information_point_1.prepareInformationBlocks)(prepared);
+function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], warnings: [] }, policy = {}) {
+    const allowedTypes = new Set(policy.allowedTypes instanceof Set ? policy.allowedTypes : ALLOWED_TYPES);
+    const minimumEvidence = Math.max(1, Number(policy.minimumEvidence || 1));
+    const explicitFoundationUids = policy.explicitFoundationUids instanceof Set ? policy.explicitFoundationUids : new Set();
+    const allowedEvidenceUids = policy.allowedEvidenceUids instanceof Set ? policy.allowedEvidenceUids : null;
+    const allowedSectionsByType = policy.allowedSectionsByType && typeof policy.allowedSectionsByType === 'object' ? policy.allowedSectionsByType : TYPE_ALLOWED_SECTIONS;
+    const prepared = parseRebuildEnvelope(raw, diagnostics, policy);
+    for (const block of prepared) if (block?.newTypeProposalAccepted === true) allowedTypes.add(block.type);
+    const normalizedPrepared = prepared.map((block) => {
+        const type = resolveMigrationType(block.type, policy.schema);
+        return { ...block, type, title: `${type}｜${block.name}` };
+    });
+    const parsed = (0, information_point_1.prepareInformationBlocks)(normalizedPrepared);
     const output = [];
     for (const block of parsed) {
-        if (!ALLOWED_TYPES.has(block.type)) {
+        if (!allowedTypes.has(block.type)) {
             diagnostics.warnings.push(`已丢弃不允许的重建类型：${block.title}`);
             continue;
         }
@@ -3696,6 +4770,11 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
         const sourceUids = new Set();
         for (const section of block.sections ?? []) {
             if (/(关键词|触发词|标签|分类)/u.test(section.name) || section.empty) continue;
+            const allowedSections = allowedSectionsByType?.[block.type];
+            if (allowedSections instanceof Set && !allowedSections.has(section.name)) {
+                diagnostics.warnings.push(`${block.title}【${section.name}】不属于${block.type}固定格式，已丢弃`);
+                continue;
+            }
             if (KNOWLEDGE_SECTIONS.has(section.name) && block.type !== '人物') {
                 diagnostics.warnings.push(`${block.title}【${section.name}】不是人物认知，已丢弃`);
                 continue;
@@ -3704,24 +4783,38 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
             for (const rawLine of section.lines ?? []) {
                 const ids = [];
                 String(rawLine).replace(SOURCE_MARKER, (_match, group) => {
-                    for (const id of String(group).split(/[,，、\s]+/u).map((item) => item.trim()).filter(Boolean)) if (knownUids.has(id)) ids.push(id);
+                    for (const id of String(group).split(/[,，、\s]+/u).map((item) => item.trim()).filter(Boolean)) {
+                        if (knownUids.has(id) && (!allowedEvidenceUids || allowedEvidenceUids.has(id))) ids.push(id);
+                    }
                     return '';
                 });
                 const line = String(rawLine).replace(SOURCE_MARKER, '').trim();
-                if (!ids.length) {
+                const uniqueIds = (0, util_1.unique)(ids);
+                if (!uniqueIds.length) {
                     diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '缺少可追溯旧条目UID' });
+                    continue;
+                }
+                if (uniqueIds.length < minimumEvidence && !uniqueIds.some((id) => explicitFoundationUids.has(id))) {
+                    diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: `该推导层至少需要${minimumEvidence}个独立旧UID证据` });
                     continue;
                 }
                 if (KNOWLEDGE_SECTIONS.has(section.name) && !SOURCE_KIND_PATTERN.test(line)) {
                     diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '人物认知缺少明确的信息来源类型' });
                     continue;
                 }
-                ids.forEach((id) => sourceUids.add(id));
+                uniqueIds.forEach((id) => sourceUids.add(id));
                 lines.push((0, parser_1.normalizePointLine)(line));
             }
-            if (lines.length) sections.push({ name: section.name, lines: (0, util_1.unique)(lines), empty: false });
+            if (lines.length) {
+                const safeLines = removeUnresolvedSlotConflicts(section.name, (0, util_1.unique)(lines), diagnostics, block.title);
+                if (safeLines.length) sections.push({ name: section.name, lines: safeLines, empty: false });
+            }
         }
         if (!sections.length) continue;
+        for (const uid of block.mergeSourceUids ?? []) {
+            const id = String(uid);
+            if (knownUids.has(id) && (!allowedEvidenceUids || allowedEvidenceUids.has(id))) sourceUids.add(id);
+        }
         output.push({ ...block, sections, sourceUids: [...sourceUids] });
     }
     if (!output.length) {
@@ -3733,14 +4826,16 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
     return output;
 }
 
-function parseRebuildEnvelope(raw, diagnostics) {
-    const jsonBlocks = parseRebuildJson(raw, diagnostics);
+function parseRebuildEnvelope(raw, diagnostics, policy = {}) {
+    const universalBlocks = parseUniversalRebuildFormat(raw, diagnostics, policy);
+    if (universalBlocks.length) return universalBlocks;
+    const jsonBlocks = parseRebuildJson(raw, diagnostics, policy);
     if (jsonBlocks.length) return jsonBlocks;
-    const normalized = normalizeRebuildText(raw, diagnostics);
+    const normalized = normalizeRebuildText(raw, diagnostics, policy);
     if (/^(?:无|EMPTY)$/iu.test(normalized.trim())) return [];
     try {
         if (/<<<\s*ENTRY\s*[:：]/iu.test(normalized)) {
-            const strict = (0, parser_1.parseStrictExtractionBlocks)(normalized);
+            const strict = parseStrictRebuildBlocks(normalized, policy);
             if (strict.length) return strict;
         }
         return (0, parser_1.parseInformationPoints)(normalized);
@@ -3751,6 +4846,227 @@ function parseRebuildEnvelope(raw, diagnostics) {
     }
 }
 
+
+function parseUniversalRebuildFormat(raw, diagnostics, policy = {}) {
+    const text = String(raw ?? '')
+        .replace(/<think>[\s\S]*?<\/think>/giu, '')
+        .replace(/```(?:json|text|markdown|md)?/giu, '')
+        .replace(/\r/g, '')
+        .trim();
+    if (!new RegExp(`^\\s*【\\s*${UNIVERSAL_ENTRY_MARKER}\\s*】\\s*$`, 'mu').test(text)) return [];
+    const segments = text.split(new RegExp(`^\\s*【\\s*${UNIVERSAL_ENTRY_MARKER}\\s*】\\s*$`, 'gmu')).slice(1);
+    const blocks = [];
+    for (const segment of segments) {
+        const metadata = {};
+        const contentLines = [];
+        const knowledgeLines = [];
+        const pastLines = [];
+        const keywords = [];
+        let section = '';
+        for (const rawLine of segment.split('\n')) {
+            const line = String(rawLine ?? '').trim();
+            if (!line) continue;
+            const heading = line.match(/^【\s*([^】]+?)\s*】$/u)?.[1]?.trim();
+            if (heading && UNIVERSAL_SECTION_NAMES.has(heading)) {
+                section = heading;
+                continue;
+            }
+            const plain = (0, parser_1.stripListMarker)(line).trim();
+            if (!section) {
+                const meta = plain.match(/^([^：:]{1,24})\s*[：:]\s*(.*?)\s*$/u);
+                if (meta && UNIVERSAL_METADATA_NAMES.has(meta[1].trim())) metadata[meta[1].trim()] = meta[2].trim();
+                continue;
+            }
+            if (section === '内容') contentLines.push(plain);
+            else if (section === '角色认知') knowledgeLines.push(plain);
+            else if (section === '过去结果') pastLines.push(plain);
+            else if (section === '关键词') keywords.push(...plain.split(/[,，、]/u).map((item) => item.trim()).filter(Boolean));
+        }
+        const name = String(metadata.名称 ?? '').trim();
+        const targetType = String(metadata.归入类型 ?? '').trim();
+        if (!name || !targetType) {
+            diagnostics.warnings.push('通用新条目缺少“名称”或“归入类型”，已丢弃');
+            continue;
+        }
+        const rawFields = contentLines.map((line) => line.match(/^([^：:]{1,24})\s*[：:]\s*(.+)$/u)?.[1]?.trim()).filter(Boolean);
+        if (pastLines.length) rawFields.push('过去结果');
+        let type = '';
+        let proposalAccepted = false;
+        let proposalDescription = '';
+        if ((0, util_1.normalizeFact)(targetType) === (0, util_1.normalizeFact)('新类型建议')) {
+            if (policy.allowNewTypes !== true) {
+                diagnostics.warnings.push(`“${name}”所在重建阶段不允许创建新类型，已丢弃建议`);
+                continue;
+            }
+            proposalDescription = String(metadata.与现有类型区别 ?? '').trim();
+            const accepted = registerProposedMigrationType(policy.schema, metadata.建议类型, rawFields, proposalDescription, name, diagnostics);
+            if (!accepted) continue;
+            type = accepted.type;
+            proposalAccepted = accepted.created;
+        }
+        else {
+            type = resolveMigrationType(targetType, policy.schema);
+            if (!policy.schema?.definitions?.has(type)) {
+                diagnostics.warnings.push(`“${name}”填写了不存在的归入类型“${targetType}”；应使用已有类型或明确写“新类型建议”`);
+                continue;
+            }
+        }
+        const allowedTypes = policy.allowedTypes instanceof Set ? policy.allowedTypes : ALLOWED_TYPES;
+        if (!proposalAccepted && !allowedTypes.has(type)) {
+            diagnostics.warnings.push(`“${name}”归入类型“${type}”不属于当前重建阶段，已丢弃`);
+            continue;
+        }
+        const sectionsByName = new Map();
+        const addLine = (sectionName, line) => {
+            if (!sectionName || !line) return;
+            const current = sectionsByName.get(sectionName) ?? [];
+            current.push(line);
+            sectionsByName.set(sectionName, current);
+        };
+        for (const line of contentLines) {
+            const field = line.match(/^([^：:]{1,24})\s*[：:]\s*(.+)$/u);
+            if (!field) {
+                diagnostics.warnings.push(`${type}｜${name}【内容】存在无法识别的行，已丢弃：${line.slice(0, 80)}`);
+                continue;
+            }
+            const rawField = field[1].trim();
+            const value = field[2].trim();
+            const sectionName = resolveUniversalFieldSection(type, rawField, policy.schema, proposalAccepted);
+            if (!sectionName) {
+                diagnostics.warnings.push(`${type}｜${name}的栏目“${rawField}”无法归入该类型，已丢弃`);
+                continue;
+            }
+            addLine(sectionName, `${rawField}：${value}`);
+        }
+        for (const line of knowledgeLines) {
+            if (type !== '人物') {
+                diagnostics.warnings.push(`${type}｜${name}的【角色认知】不属于人物条目，已丢弃`);
+                continue;
+            }
+            const parsed = parseUniversalKnowledgeLine(line, name, metadata.别名);
+            if (!parsed) {
+                diagnostics.warnings.push(`人物｜${name}存在无法验证的角色认知行，已丢弃`);
+                continue;
+            }
+            addLine(parsed.section, parsed.line);
+        }
+        const pastSection = universalPastSection(type, policy.schema, proposalAccepted);
+        if (pastSection) for (const line of pastLines) addLine(pastSection, line);
+        else if (pastLines.length) diagnostics.warnings.push(`${type}｜${name}没有适合保存【过去结果】的栏目，相关行已丢弃`);
+        if (metadata.别名) {
+            const marker = sourceMarkerSuffix(metadata.别名);
+            const clean = String(metadata.别名).replace(SOURCE_MARKER, '').trim();
+            SOURCE_MARKER.lastIndex = 0;
+            for (const alias of clean.split(/[,，、]/u).map((item) => item.trim()).filter(Boolean)) addLine('别名', `${alias}${marker}`);
+        }
+        const sections = [...sectionsByName.entries()].map(([sectionName, lines]) => ({ name: sectionName, lines: (0, util_1.unique)(lines), empty: false })).filter((sectionItem) => sectionItem.lines.length);
+        if (!sections.length) continue;
+        blocks.push({
+            rawTitle: `${type}｜${name}`,
+            title: `${type}｜${name}`,
+            type,
+            name,
+            sections,
+            keywords: (0, util_1.unique)(keywords),
+            mergeSourceUids: parseUniversalUidList(metadata.合并来源),
+            newTypeProposalAccepted: proposalAccepted,
+            proposedTypeDescription: proposalDescription,
+        });
+    }
+    if (blocks.length) {
+        diagnostics.parserRepairs = Number(diagnostics.parserRepairs || 0) + 1;
+        diagnostics.warnings.push('模型返回了通用“新条目提案”格式，已在本地转换为世界书条目');
+    }
+    return blocks;
+}
+
+function parseUniversalUidList(value) {
+    return (0, util_1.unique)(String(value ?? '')
+        .replace(SOURCE_MARKER, (_match, group) => String(group ?? ''))
+        .split(/[,，、\s]+/u)
+        .map((item) => item.replace(/^(?:UID|旧UID|来源)\s*[:：]?/iu, '').trim())
+        .filter(Boolean));
+}
+
+function sourceMarkerSuffix(value) {
+    const markers = [];
+    String(value ?? '').replace(SOURCE_MARKER, (match) => { markers.push(match); return ''; });
+    SOURCE_MARKER.lastIndex = 0;
+    return markers.join('');
+}
+
+function resolveUniversalFieldSection(type, rawField, schema, proposed = false) {
+    const field = String(rawField ?? '').trim().replace(/\s+/gu, '');
+    if (!field) return '';
+    const allowed = schema?.allowedSectionsByType?.[type];
+    if (allowed instanceof Set && allowed.has(field)) return field;
+    if (proposed) return field;
+    const aliases = UNIVERSAL_FIELD_ALIASES[type] ?? {};
+    const normalized = (0, util_1.normalizeFact)(field);
+    for (const [section, values] of Object.entries(aliases)) {
+        if (values.some((value) => (0, util_1.normalizeFact)(value) === normalized)) return allowed instanceof Set && !allowed.has(section) ? '' : section;
+    }
+    if (allowed instanceof Set) {
+        const candidates = [...allowed].filter((section) => section !== '别名');
+        const direct = candidates.find((section) => {
+            const left = (0, util_1.normalizeFact)(section);
+            return left === normalized || (Math.min(left.length, normalized.length) >= 2 && (left.includes(normalized) || normalized.includes(left)));
+        });
+        if (direct) return direct;
+    }
+    return '';
+}
+
+function parseUniversalKnowledgeLine(value, entryName, aliasText = '') {
+    const marker = sourceMarkerSuffix(value);
+    const clean = String(value ?? '').replace(SOURCE_MARKER, '').trim();
+    SOURCE_MARKER.lastIndex = 0;
+    const match = clean.match(/^([^｜|]+)[｜|](知道|已知|误以为|误信|怀疑|认为)\s*[：:]\s*(.*?)\s*[｜|]\s*(?:来源|信息来源|认知来源)\s*[：:]\s*(.+)$/u);
+    if (!match) return null;
+    const observer = match[1].trim();
+    const aliases = String(aliasText ?? '').replace(SOURCE_MARKER, '').split(/[,，、]/u).map((item) => item.trim()).filter(Boolean);
+    SOURCE_MARKER.lastIndex = 0;
+    const validObserver = [entryName, ...aliases].some((name) => (0, util_1.normalizeFact)(name) === (0, util_1.normalizeFact)(observer));
+    if (!validObserver) return null;
+    const mode = match[2];
+    const fact = match[3].trim();
+    const source = match[4].trim();
+    if (!fact || !source) return null;
+    const mistaken = /(?:误以为|误信|怀疑|认为)/u.test(mode);
+    return {
+        section: mistaken ? '误信' : '已知',
+        line: `${fact}｜${mistaken ? '认知来源' : '信息来源'}：${source}${marker}`,
+    };
+}
+
+function universalPastSection(type, schema, proposed = false) {
+    if (proposed) return '过去结果';
+    const builtin = ({ 人物: '持续经历', 场景: '持续变化', 物品: '持续变化', 事件: '结果', 世界: '世界变化' })[type];
+    if (builtin) return builtin;
+    const allowed = schema?.allowedSectionsByType?.[type];
+    if (!(allowed instanceof Set)) return '';
+    return [...allowed].find((section) => /(?:历史|变化|结果|进展|经历)/u.test(section)) ?? '';
+}
+
+function parseStrictRebuildBlocks(raw, policy = {}) {
+    const allowedTypes = policy.allowedTypes instanceof Set ? policy.allowedTypes : ALLOWED_TYPES;
+    const blocks = [];
+    const pattern = /<<<ENTRY\s*[:：]\s*([^:\r\n>]+)\s*[:：]\s*([^>\r\n]+)>>>([\s\S]*?)(?=<<<ENTRY\s*[:：]|$)/giu;
+    for (const match of String(raw ?? '').matchAll(pattern)) {
+        const type = resolveMigrationType(match[1], policy.schema);
+        const name = String(match[2] ?? '').trim();
+        if (!allowedTypes.has(type) || !name) continue;
+        const segment = String(match[3] ?? '');
+        const contentIndex = segment.search(/<<<CONTENT>>>/iu);
+        const content = contentIndex >= 0 ? segment.slice(contentIndex + '<<<CONTENT>>>'.length).replace(/<<<END_ENTRY>>>[\s\S]*$/iu, '') : segment;
+        const parsed = (0, parser_1.parseEntrySections)(content);
+        const allowedSections = policy.allowedSectionsByType?.[type];
+        const sections = parsed.order.filter((section) => !(allowedSections instanceof Set) || allowedSections.has(section)).map((section) => ({ name: section, lines: parsed.values[section] ?? [], empty: false })).filter((section) => section.lines.length);
+        if (sections.length) blocks.push({ rawTitle: `${type}｜${name}`, title: `${type}｜${name}`, type, name, sections, keywords: [] });
+    }
+    return blocks;
+}
+
 const REBUILD_SECTION_NAMES = new Set([
     '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名',
     '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
@@ -3759,7 +5075,7 @@ const REBUILD_SECTION_NAMES = new Set([
     '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架',
 ]);
 
-function normalizeRebuildText(raw, diagnostics) {
+function normalizeRebuildText(raw, diagnostics, policy = {}) {
     let text = String(raw ?? '')
         .replace(/<think>[\s\S]*?<\/think>/giu, '')
         .replace(/```(?:json|text|markdown|md)?/giu, '')
@@ -3771,11 +5087,12 @@ function normalizeRebuildText(raw, diagnostics) {
     let repairs = 0;
     for (const original of text.split('\n')) {
         let line = original.trimEnd();
-        const title = line.match(/^\s*(?:#{1,6}\s*)?(?:\*\*|__|`)?(人物|角色|NPC|事件|地点|场景|物品|道具|世界|全局|全局状态|全局变化|基础设定|基础规则|世界设定|总结)\s*(?:[｜|丨]|[:：]|[-—–])\s*(.+?)(?:\*\*|__|`)?\s*$/iu);
+        const title = line.match(/^\s*(?:#{1,6}\s*)?(?:\*\*|__|`)?([^｜|丨:：—–\n]{1,32})\s*(?:[｜|丨]|[:：]|[-—–])\s*(.+?)(?:\*\*|__|`)?\s*$/iu);
         if (title) {
-            const type = (0, parser_1.canonicalExtractionType)(title[1]);
+            const type = resolveMigrationType(title[1], policy.schema);
             const name = String(title[2] ?? '').replace(/(?:\*\*|__|`)$/u, '').trim().replace(/^[【\[]|[】\]]$/gu, '');
-            if (type && name) {
+            const allowedTitleTypes = policy.allowedTypes instanceof Set ? policy.allowedTypes : ALLOWED_TYPES;
+            if (type && name && allowedTitleTypes.has(type)) {
                 const canonical = `${type}｜${name}`;
                 if (canonical !== line.trim()) repairs += 1;
                 lines.push(canonical);
@@ -3786,7 +5103,8 @@ function normalizeRebuildText(raw, diagnostics) {
         const section = headingLine.match(/^(?:【|\[)?([^】\]\n]{1,24}?)(?:】|\])?\s*[:：]?\s*$/u);
         if (section) {
             const name = String(section[1] ?? '').replace(/\s+/gu, '').trim();
-            if (REBUILD_SECTION_NAMES.has(name)) {
+            const allowedSectionNames = new Set([...REBUILD_SECTION_NAMES, ...Object.values(policy.allowedSectionsByType ?? {}).flatMap((value) => value instanceof Set ? [...value] : [])]);
+            if (allowedSectionNames.has(name)) {
                 const canonical = `【${name}】`;
                 if (canonical !== line.trim()) repairs += 1;
                 lines.push(canonical);
@@ -3802,7 +5120,7 @@ function normalizeRebuildText(raw, diagnostics) {
     return lines.join('\n').trim();
 }
 
-function parseRebuildJson(raw, diagnostics) {
+function parseRebuildJson(raw, diagnostics, policy = {}) {
     const text = String(raw ?? '')
         .replace(/<think>[\s\S]*?<\/think>/giu, '')
         .replace(/```(?:json)?/giu, '')
@@ -3824,7 +5142,7 @@ function parseRebuildJson(raw, diagnostics) {
     }
     if (value == null) return [];
     const entries = jsonEntries(value);
-    const blocks = entries.map(([key, entry]) => jsonEntryToBlock(entry, key)).filter(Boolean);
+    const blocks = entries.map(([key, entry]) => jsonEntryToBlock(entry, key, policy)).filter(Boolean);
     if (blocks.length) {
         diagnostics.parserRepairs = Number(diagnostics.parserRepairs || 0) + 1;
         diagnostics.warnings.push('模型返回了JSON，已在本地转换为可验证重建条目，未追加模型调用');
@@ -3845,23 +5163,28 @@ function jsonEntries(value) {
     return [['0', value]];
 }
 
-function jsonEntryToBlock(entry, key = '') {
+function jsonEntryToBlock(entry, key = '', policy = {}) {
     if (!entry || typeof entry !== 'object') return null;
-    let type = (0, parser_1.canonicalExtractionType)(entry.type ?? entry.kind ?? entry.category ?? '');
+    let type = resolveMigrationType(entry.type ?? entry.kind ?? entry.category ?? '', policy.schema);
     let name = String(entry.name ?? entry.entity ?? entry.stableName ?? '').trim();
     const rawTitle = String(entry.title ?? entry.comment ?? key ?? '').trim();
     const split = (0, util_1.splitTitle)((0, util_1.normalizeTitle)(rawTitle));
     if (split) {
-        type ||= (0, parser_1.canonicalExtractionType)(split.type);
+        type ||= resolveMigrationType(split.type, policy.schema);
         name ||= split.name;
     }
-    if (!type || !name || !ALLOWED_TYPES.has(type)) return null;
+    const allowedTypes = policy.allowedTypes instanceof Set ? policy.allowedTypes : ALLOWED_TYPES;
+    if (!type || !name || !allowedTypes.has(type)) return null;
     const defaultSources = jsonSourceIds(entry.sourceUids ?? entry.evidence ?? entry.sources ?? entry.sourceUid);
     const sections = [];
     const explicitSource = entry.sections ?? entry.fields ?? entry.content;
     const source = explicitSource !== undefined
         ? explicitSource
-        : Object.fromEntries(Object.entries(entry).filter(([field]) => REBUILD_SECTION_NAMES.has(String(field).replace(/\s+/gu, ''))));
+        : Object.fromEntries(Object.entries(entry).filter(([field]) => {
+            const name = String(field).replace(/\s+/gu, '');
+            const allowed = policy.allowedSectionsByType?.[type];
+            return REBUILD_SECTION_NAMES.has(name) || (allowed instanceof Set && allowed.has(name));
+        }));
     if (Array.isArray(source)) {
         for (const section of source) {
             if (!section || typeof section !== 'object') continue;
@@ -3924,9 +5247,10 @@ function jsonSourceIds(value) {
     return (0, util_1.unique)(values.map((item) => String(item).trim()).filter(Boolean));
 }
 
-function mergeRebuildBlocks(blocks) {
+function mergeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
     const output = [];
-    for (const incoming of blocks) {
+    for (const rawIncoming of blocks) {
+        const incoming = normalizeEventCompletionBlock(rawIncoming);
         const candidate = output.find((current) => {
             const left = blockAsEntry(current);
             const right = blockAsEntry(incoming);
@@ -3934,7 +5258,12 @@ function mergeRebuildBlocks(blocks) {
                 || (left.type === '事件' && right.type === '事件' && (0, matcher_1.sameEventLifecycle)(left, right));
         });
         if (!candidate) {
-            output.push((0, util_1.clone)(incoming));
+            const clone = (0, util_1.clone)(incoming);
+            clone.sections = (clone.sections ?? []).map((section) => ({
+                ...section,
+                lines: removeUnresolvedSlotConflicts(section.name, section.lines, diagnostics, clone.title),
+            })).filter((section) => section.lines.length);
+            if (clone.sections.length) output.push(clone);
             continue;
         }
         candidate.sourceUids = (0, util_1.unique)([...(candidate.sourceUids ?? []), ...(incoming.sourceUids ?? [])]);
@@ -3953,11 +5282,18 @@ function mergeRebuildBlocks(blocks) {
         for (const section of incoming.sections ?? []) {
             const current = byName.get(section.name);
             if (!current) {
-                candidate.sections.push((0, util_1.clone)(section));
-                byName.set(section.name, candidate.sections.at(-1));
+                const safe = removeUnresolvedSlotConflicts(section.name, section.lines, diagnostics, candidate.title);
+                if (safe.length) {
+                    candidate.sections.push({ ...(0, util_1.clone)(section), lines: safe });
+                    byName.set(section.name, candidate.sections.at(-1));
+                }
             }
-            else current.lines = (0, information_point_1.mergeCanonicalLines)(section.name, current.lines, section.lines);
+            else {
+                current.lines = removeUnresolvedSlotConflicts(section.name, [...current.lines, ...section.lines], diagnostics, candidate.title);
+            }
         }
+        const normalized = normalizeEventCompletionBlock(candidate);
+        candidate.sections = normalized.sections;
     }
     return output;
 }
@@ -3975,7 +5311,7 @@ function blockAsEntry(block) {
     };
 }
 
-function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { invalidLines: [], warnings: [] }) {
+function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { invalidLines: [], warnings: [] }, schema = buildMigrationSchema()) {
     const data = (0, util_1.clone)(originalData);
     data.entries ?? (data.entries = {});
     const candidateKeys = new Set(records.map((record) => record.mapKey));
@@ -3990,7 +5326,8 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
     let rebuiltEntries = 0;
     let knowledgeLines = 0;
     let mergedOldEntries = 0;
-    for (const block of ensureInformationBoundary(blocks)) {
+    for (const rawBlock of ensureInformationBoundary(blocks)) {
+        const block = enrichRebuildBlockAliases(rawBlock, recordByUid);
         const sourceUids = (block.sourceUids ?? []).filter((uid) => recordByUid.has(uid));
         const primaryUid = sourceUids.find((uid) => !usedRecordUids.has(uid));
         const primary = primaryUid ? recordByUid.get(primaryUid) : null;
@@ -4015,6 +5352,7 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
         raw.key = (0, util_1.unique)([block.name, ...(block.keywords ?? []), ...aliases, (0, util_1.uidKeyword)(uid)]).filter(Boolean);
         raw.keysecondary ?? (raw.keysecondary = []);
         raw.disable = false;
+        applyMigrationDefinition(raw, block.type, schema);
         const extensions = raw.extensions ?? (raw.extensions = {});
         const extension = extensions[constants_1.WORLD_INFO_EXTENSION_KEY] && typeof extensions[constants_1.WORLD_INFO_EXTENSION_KEY] === 'object'
             ? extensions[constants_1.WORLD_INFO_EXTENSION_KEY]
@@ -4025,7 +5363,7 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
             version: constants_1.MANAGED_VERSION,
             title: block.title,
             rebuilt: true,
-            rebuildVersion: 1,
+            rebuildVersion: 3,
             epistemic: block.type === '人物' || block.title === exports.INFORMATION_BOUNDARY_TITLE,
             sourceUids,
             updatedAt: Date.now(),
@@ -4069,7 +5407,7 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
                 version: constants_1.MANAGED_VERSION,
                 title: raw.comment,
                 rebuilt: true,
-                rebuildVersion: 1,
+                rebuildVersion: 3,
                 archive: true,
                 sourceUids: [record.uid],
                 updatedAt: Date.now(),
@@ -4086,6 +5424,36 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
         knowledgeLines,
         preservedEntries: preservedEntryCount,
     };
+}
+
+function applyMigrationDefinition(raw, type, schema) {
+    const definition = migrationDefinition(schema, type);
+    if (!definition) return raw;
+    raw.constant = definition.constant === true;
+    raw.vectorized = definition.vectorized !== false;
+    raw.preventRecursion = definition.preventRecursion === true;
+    raw.excludeRecursion = definition.preventRecursion === true;
+    raw.depth = Math.max(0, Number(definition.depth ?? raw.depth ?? 4));
+    raw.order = Math.max(0, Number(definition.order ?? raw.order ?? 400));
+    return raw;
+}
+
+function enrichRebuildBlockAliases(block, recordByUid) {
+    const output = (0, util_1.clone)(block);
+    if (output.type !== '事件') return output;
+    const names = (0, util_1.unique)((output.sourceUids ?? []).map((uid) => recordByUid.get(uid))
+        .filter((record) => record && recordType(record) === '事件')
+        .map((record) => (0, util_1.splitTitle)((0, util_1.normalizeTitle)(record.title))?.name)
+        .filter((name) => name && (0, util_1.normalizeFact)(name) !== (0, util_1.normalizeFact)(output.name)));
+    if (!names.length) return output;
+    let aliases = output.sections.find((section) => section.name === '别名');
+    if (!aliases) {
+        aliases = { name: '别名', lines: [], empty: false };
+        output.sections.push(aliases);
+    }
+    aliases.lines = (0, util_1.unique)([...(aliases.lines ?? []), ...names]);
+    aliases.empty = false;
+    return output;
 }
 
 function ensureInformationBoundary(blocks) {
@@ -4236,7 +5604,7 @@ function stageResponseTokens(stage, settings, sourceText = '') {
     if (stage === 'extractionRepair') return Math.min(configured, 1536);
     if (stage === 'smallSummary') return Math.min(configured, 1792);
     if (stage === 'largeSummary') return Math.min(configured, 2304);
-    if (stage === 'migration') return Math.min(configured, 2304);
+    if (stage === 'migration') return Math.min(configured, 1792);
     return configured;
 }
 
@@ -5796,53 +7164,98 @@ function duplicatePrompts(pairs) {
 }
 
 function migrationPrompts(records, catalog, options = {}) {
-    const batchIndex = Number(options.batchIndex || 1);
-    const batchCount = Number(options.batchCount || 1);
-    const system = `你是 Mirror Abyss 世界书重建规划模型。
-你的任务不是逐条改格式，而是把给定旧条目重组为不重复、可持续更新的新世界书候选。
+    const batchIndex = Math.max(1, Number(options.batchIndex || 1));
+    const batchCount = Math.max(1, Number(options.batchCount || 1));
+    const totalRecords = Math.max(0, Number(options.totalRecords || records.length || 0));
+    const catalogBudget = Math.max(800, Number(options.catalogBudget || 1800));
+    const phase = String(options.phase || 'entity');
+    const clusterId = String(options.clusterId || '');
+    const stableName = String(options.stableName || '');
+    const priorContext = String(options.priorContext || '').trim();
+    const preferredType = String(records?.outputType || '').trim();
+    const schema = options.schema;
+    const typeCatalog = migrationTypeCatalog(schema);
+    const preferred = preferredType ? `\n本批旧条目当前归类为“${preferredType}”，这只是优先参考，不是必须沿用；若其他已有类型更准确，应直接归入该已有类型。` : '';
+    const phaseInstructions = ({
+        entity: `【本轮：对象重建】\n当前请求可包含一个或多个完整语义簇；同一 cluster 是同一候选对象，不同 cluster 不得仅因同批出现而合并。本轮主要处理人物、场景、物品、世界对象和已有自定义类型。`,
+        event: `【本轮：事件重建】\n只重建同一事件生命周期。共同目标、参与者、场景和未决因果连续发展的来源应合并；不同目标或可以独立结束的过程不得合并。已结束事件只保留一句过去时结果。`,
+        custom: `【本轮：通用条目重建】${preferred}\n先判断能否归入现有类型。不要因为旧标题使用某个类型就机械沿用，也不要创建该类型的近义词。`,
+        organization: `【本轮：通用条目重建】${preferred}\n组织只是可能的现有或自定义类型之一；先匹配现有类型，不得把其他内容强行改成组织。`,
+        region: `【本轮：地区规则】\n把地区证据归入现有“世界”类型，提炼该地区特有的地理、制度、资源交通、公开局势和持续影响。`,
+        foundation: `【本轮：世界基础设定】\n把跨地区、跨组织长期成立的规则归入现有“基础设定”类型。局部制度和单次事件不得升级为基础规则。`,
+    })[phase] || '';
+    const allowProposal = !['event', 'region', 'foundation'].includes(phase);
+    const system = `你是 Mirror Abyss 世界书重建规划模型。\n\n${phaseInstructions}
 
-【基本原则】
-1. 只使用输入旧条目中已经存在的事实；禁止补写、猜测或把传闻升级为真相。
-2. 同一对象的轻微标题变化、称谓和明确别名应合并；身份未明对象没有充分证据时不得并入已知人物。
-3. 当前事实、历史结果、角色认知必须分层。角色只能知道自己通过信息来源获得的内容。
-4. 世界真相不等于角色已知。人物【已知】和【误信】每行必须写明信息来源类型。
-5. 允许的信息来源类型只有：亲眼观察、听到对白、收到消息、查看记录、他人转述、亲身经历、可靠推理、特殊能力、公开信息、自身身份、自身行动、直接告知。
-6. 玩家未表达的内心、其他人物私密认知、未公开远处事件不得写入该人物【已知】。
-7. 旧过程压缩为一句已经发生的结果；当前状态可以较详细，其他栏目应短。删除同义重复，不复述输入原文。
-8. 每个事实行末必须附带一个或多个旧条目UID证据，格式为〔证据:UID〕或〔证据:UID1,UID2〕。没有证据的行会被插件丢弃。每个来源UID最多保留六行高价值事实。
-9. 可把一个旧条目拆分到多个新条目，也可把多个旧条目合并为一个新条目；同一目标、参与者与未决因果连续发展的旧事件必须重建为一个事件生命周期，不得按每轮动作或标题变化拆分。
-10. 只有目标和因果独立、能够单独结束的过程才保留为不同事件；已结束事件与后续独立事件不得强行合并。
-11. 不输出UID作为新条目标识；UID只允许出现在事实行末的证据标记中。
+【现有类型】
+${typeCatalog}
 
-【人物认知格式】
-【已知】
-- 事实内容｜信息来源：亲眼观察〔证据:12〕
-【误信】
-- 角色当前相信但未被世界事实确认的内容｜认知来源：他人转述〔证据:18〕
-未写入【已知】的世界事实默认对该人物不可用，不要建立冗长的【未知】清单。
-
-【推荐栏目】
-人物：【身份】【稳定】【当前】【关系】【持有】【已知】【误信】【持续经历】【别名】
-场景：【定义】【空间结构】【固定资源】【持续变化】【当前状态】【在场】【当前资源】【活动关联】【世界影响】【局部约束】【别名】
-物品：【定义】【功能】【当前】【限制】【持续变化】【别名】
-事件：【目标】【参与】【场景】【阶段】【关键进展】【未决】【结果】【别名】
-世界：【范围】【地理】【组织】【权力】【制度】【资源与交通】【公开局势】【世界变化】【持续影响】【别名】
-基础设定：【世界常识】【自然规则】【种族与生命】【能力与技术】【社会规则】【地理框架】【别名】
-不写空栏目，不写“无”。
+【分类原则】
+1. 每个新条目先从上面的现有类型中选择一个最合适的“归入类型”。
+2. 人物、角色、NPC、人物档案属于同一类型；地点、地区、区域属于同一类型；道具、装备、物件属于同一类型；任务与持续事件属于事件。禁止创建这些近义重复类型。
+3. ${allowProposal ? '只有所有现有类型都无法合理容纳，而且该类别可以反复用于多个对象时，才写“归入类型：新类型建议”，并填写简短的“建议类型”和“与现有类型区别”。' : '本轮禁止提出新类型，必须归入本轮指定的现有类型。'}
+4. 类型是稳定类别，不是具体条目名称。不得把“月誓”“人鱼村”“北境议会”这类专名当成类型。
+5. 只写材料中明确存在的内容；没有内容的部分不要输出，不要为了填格式而补全。
+6. 【内容】中的每行使用“栏目：事实”，栏目名称应简短、通用；同一含义不要建立多个相似栏目。
+7. 当前事实写在【内容】；已经结束的事情写在【过去结果】，使用过去时。
+8. 角色只能知道自己通过信息来源获得的内容。人物条目的【角色认知】必须写“人物｜知道/误以为/怀疑：内容｜来源：获得方式”。
+9. 每条事实末尾必须附带旧条目证据，格式为〔证据:UID〕或〔证据:UID1,UID2〕。没有证据的事实会被插件丢弃。
+10. 合并来源只填写需要被同一新条目替代的旧UID，不等于事实证据；事实仍需逐行标注证据。
+11. 同一对象存在不同解释时，区分世界事实、人物已知、人物误信和不同时间，不得按最后一条或多数表述强行覆盖。
+12. 不输出空栏目，不写“无”，不解释处理过程。
 
 【唯一输出格式】
-类型｜稳定名称
+【新条目】
+名称：稳定名称
+归入类型：从现有类型中填写一个
+别名：仅在有证据时填写〔证据:UID〕
+合并来源：旧UID1、旧UID2
 
-【小标题】
-- 完整事实〔证据:UID〕
+【内容】
+- 栏目：明确事实〔证据:UID〕
 
-多个条目连续输出。禁止JSON、代码块、解释、前言、后记和思考过程。没有可重建内容时只输出“无”。`;
+【角色认知】
+- 人物名称｜知道：内容｜来源：亲眼观察/听到对白/收到消息/查看记录/他人转述/亲身经历/可靠推理/特殊能力/公开信息/自身身份/自身行动/直接告知〔证据:UID〕
+- 人物名称｜误以为：内容｜来源：信息来源〔证据:UID〕
+
+【过去结果】
+- 已经发生并结束的结果〔证据:UID〕
+
+【关键词】
+- 稳定名称或别名
+
+没有内容的区块直接省略。多个条目重复以上格式。${allowProposal ? `确实无法归入现有类型时，将头部改为：
+归入类型：新类型建议
+建议类型：稳定类别名称
+与现有类型区别：一句话说明为什么现有类型不能容纳` : ''}
+
+禁止JSON、代码块、前言、后记和思考过程。没有可重建内容时只输出“无”。`;
     const body = records.map((record) => {
         const part = Number(record.fragmentCount || 0) > 1 ? ` part=${record.fragmentIndex}/${record.fragmentCount}` : '';
-        return `<<<SOURCE uid=${record.uid}${part}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
+        const recordCluster = record.semanticClusterId ? ` cluster=${record.semanticClusterId}` : clusterId ? ` cluster=${clusterId}` : '';
+        const clusterName = record.semanticClusterName ? `\n对象簇：${record.semanticClusterName}` : '';
+        return `<<<SOURCE uid=${record.uid}${part}${recordCluster}>>>\n标题：${record.title}${clusterName}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
     }).join('\n\n');
-    const user = `这是第 ${batchIndex}/${batchCount} 批旧条目。\n\n全部旧条目目录：\n${clipText(catalog, 6000)}\n\n本批原始条目：\n${clipText(body, 36000)}\n\n只输出本批证据能够支持的新条目候选。跨批同一对象使用相同稳定名称，插件会再次合并。优先输出当前有效事实与必要认知，禁止逐句复述旧正文。`;
+    const prior = priorContext ? `\n\n前序轮候选（只用于名称、关系和层级对齐，不能代替本批UID证据）：\n${clipText(priorContext, 2600)}` : '';
+    const user = `这是世界书重建第 ${batchIndex}/${batchCount} 个串行任务；当前阶段：${phase}；语义簇：${clusterId || '未标记'}；建议稳定名称：${stableName || '由证据确定'}；整本旧表共有${totalRecords}个镜渊条目。\n\n旧条目目录（仅用于稳定命名和避免重复类型，不能作为事实证据）：\n${clipText(catalog, catalogBudget)}${prior}\n\n本批原始条目：\n${clipText(body, 7600)}\n\n按通用“新条目”格式输出。先归入现有类型；只有确实无法容纳时才提出不重叠的新类型建议。`;
     return { system, user };
+}
+
+function migrationTypeCatalog(schema) {
+    const purpose = {
+        人物: '单个可识别角色及其当前状态、关系和个人认知',
+        场景: '地点、地区、区域及其空间和局部规则',
+        物品: '单个可追踪道具、装备或物件',
+        事件: '具有目标、参与者、进展与结果的持续过程或任务',
+        世界: '跨场景的地区局势、组织格局、制度和资源网络',
+        基础设定: '长期稳定的自然、种族、能力、社会与地理规则',
+    };
+    const definitions = [...(schema?.definitions?.values?.() ?? [])].filter((definition) => definition?.enabled !== false);
+    return definitions.map((definition) => {
+        const aliases = (definition.aliases ?? []).filter((alias) => alias !== definition.label);
+        const description = String(definition.description || purpose[definition.label] || '当前世界书已经存在的自定义类型').trim();
+        return `- ${definition.label}：${description}${aliases.length ? `；已有别名：${aliases.join('、')}` : ''}`;
+    }).join('\n') || '- 当前没有可用类型';
 }
 
 function keywordTemplate(definitions) {
