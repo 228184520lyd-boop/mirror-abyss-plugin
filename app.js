@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.13 — scene-centered recall, five entry types, event settlement and low-coupling requests. */
+/** Mirror Abyss 2.0.0-lite.ui.15 — scene-centered recall, provisional identities, active world/foundation capture and low-coupling requests. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -260,10 +260,27 @@ class MirrorAbyssApplication {
                 this.controlPanel.setTaskProgress?.('audit', 'success', detail);
                 this.controlPanel.setStatus(detail);
             }
-            else if (taskType === 'extraction') this.controlPanel.setStatus('提取、总结调度与世界书合并完成');
-            else if (taskType === 'smallSummary') this.controlPanel.setStatus('小总结、分发与召回重排完成');
-            else if (taskType === 'largeSummary') this.controlPanel.setStatus('大总结、沉降分发与召回重排完成');
-            else this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${settings.autoExtraction === true ? '自动提取完成' : '自动提取已关闭'}`);
+            else if (taskType === 'extraction') {
+                this.controlPanel.setTaskProgress?.('extract', 'success', '提取、总结调度与世界书合并完成');
+                this.controlPanel.setStatus('提取、总结调度与世界书合并完成');
+            }
+            else if (taskType === 'smallSummary') {
+                this.controlPanel.setTaskProgress?.('extract', 'success', '小总结、分发与召回重排完成');
+                this.controlPanel.setStatus('小总结、分发与召回重排完成');
+            }
+            else if (taskType === 'largeSummary') {
+                this.controlPanel.setTaskProgress?.('extract', 'success', '大总结、沉降分发与召回重排完成');
+                this.controlPanel.setStatus('大总结、沉降分发与召回重排完成');
+            }
+            else {
+                if (settings.autoExtraction === true && settings.extractionEnabled !== false) this.controlPanel.setTaskProgress?.('extract', 'success', '自动提取、总结调度与世界书合并完成');
+                else this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭');
+                this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${settings.autoExtraction === true ? '自动提取完成' : '自动提取已关闭'}`);
+            }
+            // [MA-UI-SYNC-02] 只在提取、总结与召回重排全部结束后回读一次世界书，避免 UI 显示中间状态。
+            if (['extraction', 'smallSummary', 'largeSummary', 'full', 'migration', 'undoMigration'].includes(taskType)) {
+                await this.controlPanel.refreshRecallMap?.();
+            }
             notify('success', '镜渊：本轮处理完成');
             return result;
         } catch (error) {
@@ -530,12 +547,12 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.13';
+exports.VERSION = '2.0.0-lite.ui.15';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 12;
+exports.MANAGED_VERSION = 13;
 },"control-panel":function(module,exports,require){
 
 "use strict";
@@ -565,6 +582,13 @@ class ControlPanel {
         this.recallRefreshButton = null;
         this.recallReplanButton = null;
         this.recallLoadSerial = 0;
+        this.recallModel = null;
+        this.recallWorldbookName = '';
+        this.recallPage = 1;
+        this.recallPageSize = 12;
+        this.pageNodes = {};
+        this.pageButtons = {};
+        this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
         this.profileDropdownBound = false;
@@ -665,6 +689,12 @@ class ControlPanel {
         this.recallRefreshButton = null;
         this.recallReplanButton = null;
         this.recallLoadSerial += 1;
+        this.recallModel = null;
+        this.recallWorldbookName = '';
+        this.recallPage = 1;
+        this.pageNodes = {};
+        this.pageButtons = {};
+        this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
         this.profileDropdownBound = false;
@@ -789,14 +819,15 @@ class ControlPanel {
 .ma-lite-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:12px;border-bottom:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));background:inherit}
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
 .ma-lite-close{min-width:34px;min-height:34px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
-.ma-lite-body{display:flex;flex-direction:column;gap:12px;padding:12px}
+.ma-lite-body{display:flex;flex-direction:column;gap:10px;padding:12px}
+.ma-lite-page-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:inherit}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
 .ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:38px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
 .ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
-.ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
+.ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .${INDICATOR_CLASS}{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
 .${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
 `;
@@ -821,6 +852,17 @@ class ControlPanel {
         header.append(title, close);
         const body = document.createElement('div');
         body.className = 'ma-lite-body';
+        const pageNav = document.createElement('nav');
+        pageNav.className = 'ma-lite-page-nav';
+        pageNav.setAttribute('aria-label', '镜渊面板分页');
+        pageNav.append(
+            this.makePageButton('run', '运行'),
+            this.makePageButton('recall', '召回'),
+            this.makePageButton('settings', '设置'),
+        );
+        const runPage = this.makePage('run');
+        const recallPage = this.makePage('recall');
+        const settingsPage = this.makePage('settings');
         const apiSection = this.buildApiSection();
         const switches = document.createElement('div');
         switches.className = 'ma-lite-switches';
@@ -854,9 +896,39 @@ class ControlPanel {
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
         note.textContent = '提取异常会先本地修复、合并重复条目并部分提交；仍无法解析时只修复一次异常输出。自动流程严格按“审核→正文替换落地→提取→总结”执行。';
-        body.append(apiSection, switches, thresholds, recall, actions, status, note);
+        runPage.append(actions, status);
+        recallPage.append(recall);
+        settingsPage.append(apiSection, switches, thresholds, note);
+        body.append(pageNav, runPage, recallPage, settingsPage);
         panel.append(header, body);
+        this.showPage('run', false);
         return panel;
+    }
+    makePage(key) {
+        const page = document.createElement('section');
+        page.className = 'ma-lite-page';
+        page.setAttribute('data-page', key);
+        page.hidden = key !== this.activePage;
+        this.pageNodes[key] = page;
+        return page;
+    }
+    makePageButton(key, label) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'ma-lite-page-tab';
+        button.setAttribute('data-page', key);
+        button.setAttribute('aria-selected', key === this.activePage ? 'true' : 'false');
+        button.textContent = label;
+        button.addEventListener('click', () => this.showPage(key, true));
+        this.pageButtons[key] = button;
+        return button;
+    }
+    showPage(key, refresh = true) {
+        if (!this.pageNodes[key]) return;
+        this.activePage = key;
+        for (const [pageKey, page] of Object.entries(this.pageNodes)) page.hidden = pageKey !== key;
+        for (const [pageKey, button] of Object.entries(this.pageButtons)) button.setAttribute('aria-selected', pageKey === key ? 'true' : 'false');
+        if (refresh && key === 'recall') void this.refreshRecallMap(true);
     }
     /** [MA-UI-API-01] 只创建一个轻量下拉框；选项由 SillyTavern 官方服务负责填充。 */
     buildApiSection() {
@@ -1015,10 +1087,18 @@ class ControlPanel {
         }
     }
     renderRecallMap(model, worldbookName) {
-        if (!this.recallNode) return;
+        this.recallModel = model;
+        this.recallWorldbookName = worldbookName;
+        const pageCount = Math.max(1, Math.ceil(Number(model?.total || 0) / this.recallPageSize));
+        this.recallPage = Math.min(Math.max(1, this.recallPage), pageCount);
+        this.renderRecallPage();
+    }
+    renderRecallPage() {
+        if (!this.recallNode || !this.recallModel) return;
+        const model = this.recallModel;
         this.recallNode.className = '';
         this.recallNode.replaceChildren();
-        if (this.recallStatusNode) this.recallStatusNode.textContent = `${worldbookName ? `世界书：${worldbookName}；` : ''}仅显示镜渊管理条目，共 ${model.total} 条。`;
+        if (this.recallStatusNode) this.recallStatusNode.textContent = `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}仅显示镜渊管理条目，共 ${model.total} 条。`;
         if (!model.total) {
             this.recallNode.className = 'ma-lite-recall-empty';
             this.recallNode.textContent = '当前世界书没有镜渊管理条目';
@@ -1033,9 +1113,13 @@ class ControlPanel {
             chip.title = item.description;
             summary.append(chip);
         }
+        const pageCount = Math.max(1, Math.ceil(model.entries.length / this.recallPageSize));
+        this.recallPage = Math.min(Math.max(1, this.recallPage), pageCount);
+        const start = (this.recallPage - 1) * this.recallPageSize;
+        const visibleEntries = model.entries.slice(start, start + this.recallPageSize);
         const list = document.createElement('div');
         list.className = 'ma-lite-recall-list';
-        for (const item of model.entries) {
+        for (const item of visibleEntries) {
             const row = document.createElement('div');
             row.className = 'ma-lite-recall-row';
             const title = document.createElement('div');
@@ -1068,11 +1152,26 @@ class ControlPanel {
             list.append(row);
         }
         this.recallNode.append(summary, list);
-        if (model.omitted > 0) {
-            const omitted = document.createElement('div');
-            omitted.className = 'ma-lite-recall-status';
-            omitted.textContent = `另有 ${model.omitted} 条未展开；统计已包含。`;
-            this.recallNode.append(omitted);
+        if (pageCount > 1) {
+            const pager = document.createElement('div');
+            pager.className = 'ma-lite-recall-pager';
+            const previous = document.createElement('button');
+            previous.type = 'button';
+            previous.className = 'ma-lite-recall-page-button';
+            previous.textContent = '上一页';
+            previous.disabled = this.recallPage <= 1;
+            previous.addEventListener('click', () => { this.recallPage -= 1; this.renderRecallPage(); });
+            const status = document.createElement('span');
+            status.className = 'ma-lite-recall-page-status';
+            status.textContent = `第 ${this.recallPage} / ${pageCount} 页`;
+            const next = document.createElement('button');
+            next.type = 'button';
+            next.className = 'ma-lite-recall-page-button';
+            next.textContent = '下一页';
+            next.disabled = this.recallPage >= pageCount;
+            next.addEventListener('click', () => { this.recallPage += 1; this.renderRecallPage(); });
+            pager.append(previous, status, next);
+            this.recallNode.append(pager);
         }
     }
     makeSwitch(key, labelText, description) {
@@ -1167,7 +1266,6 @@ class ControlPanel {
         try {
             await action();
             this.lastOutcome = { kind, state: 'success' };
-            if (kind === 'extract') void this.refreshRecallMap();
             if (['queued', 'running'].includes(this.taskStates[kind]?.state)) this.setTaskProgress(kind, 'success', kind === 'audit' ? '审核完成' : '提取完成');
         }
         catch (error) {
@@ -1242,7 +1340,6 @@ class ControlPanel {
             messageIndex: Number.isInteger(meta.messageIndex) ? meta.messageIndex : previous.messageIndex,
             queuePosition: Number.isFinite(meta.queuePosition) ? Number(meta.queuePosition) : previous.queuePosition,
         };
-        if (kind === 'extract' && state === 'success') void this.refreshRecallMap();
         if (detail) {
             this.statusText = `${kind === 'audit' ? '审核' : '提取'}：${detail}`;
             this.statusError = state === 'error';
@@ -1448,8 +1545,7 @@ function buildRecallViewModel(entries) {
         { label: '关联终点', count: mapped.filter((item) => item.recursion === 'terminal').length, description: '人物、物品和活动事件被带出后停止' },
         { label: '隔离', count: mapped.filter((item) => item.recursion === 'isolated').length, description: '基础设定、焦点与历史容器不参与递归' },
     ];
-    const limit = 60;
-    return { total: mapped.length, summary, entries: mapped.slice(0, limit), omitted: Math.max(0, mapped.length - limit) };
+    return { total: mapped.length, summary, entries: mapped, omitted: 0 };
 }
 
 function lifecycleBadge(value) {
@@ -1570,12 +1666,30 @@ const TYPE_SECTION_ALIASES = {
         '结束结论': '结果',
     },
     世界: {
+        '对象范围': '范围',
+        '影响范围': '范围',
+        '区域': '地理',
+        '势力': '组织',
+        '组织格局': '组织',
+        '交通': '资源与交通',
+        '资源网络': '资源与交通',
         '当前': '公开局势',
         '当前状态': '公开局势',
         '现行事实': '公开局势',
         '状态': '公开局势',
         '全局状态': '公开局势',
         '变化记录': '世界变化',
+    },
+    基础设定: {
+        '世界规则': '自然规则',
+        '基础规则': '自然规则',
+        '规则': '自然规则',
+        '种族': '种族与生命',
+        '生命规则': '种族与生命',
+        '魔法与技术': '能力与技术',
+        '技术体系': '能力与技术',
+        '社会制度': '社会规则',
+        '地理': '地理框架',
     },
 };
 
@@ -1592,7 +1706,7 @@ function sectionSlot(line) {
 }
 
 function mergeCanonicalLines(section, oldLines, incomingLines) {
-    const replaceBySlot = /^(当前|当前状态|关系|阶段|时代|权力|制度|公开局势|持续影响)$/u.test(String(section ?? ''));
+    const replaceBySlot = /^(当前|当前状态|关系|阶段|范围|地理|组织|权力|制度|资源与交通|公开局势|持续影响)$/u.test(String(section ?? ''));
     if (!replaceBySlot) return unique([...(oldLines ?? []), ...(incomingLines ?? [])]);
     const output = [...(oldLines ?? [])];
     const slots = new Map();
@@ -2367,7 +2481,6 @@ function onClean() { }
 
 // SillyTavern 1.18 loads this module, then invokes the manifest activate hook.
 },"matcher":function(module,exports,require){
-
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildEntryIndex = buildEntryIndex;
@@ -2375,17 +2488,28 @@ exports.matchBlock = matchBlock;
 exports.selectBestCandidate = selectBestCandidate;
 exports.relevantEntries = relevantEntries;
 exports.titleTokens = titleTokens;
+exports.sameEntryIdentity = sameEntryIdentity;
+exports.explicitContextIdentity = explicitContextIdentity;
+exports.isProvisionalName = isProvisionalName;
+exports.isProvisionalEntry = isProvisionalEntry;
 const util_1 = require("./util");
 
 const DEFAULT_SCORES = Object.freeze({
     uid: 100,
     exactTitle: 95,
     normalizedTitle: 90,
+    contextIdentity: 110,
+    alias: 85,
+    nameVariant: 84,
     typeAndName: 80,
-    alias: 70,
     keyword: 50,
     content: 30,
 });
+const HONORIFIC_SUFFIXES = Object.freeze([
+    '老师', '教授', '医生', '主任', '队长', '会长', '店长', '老板',
+    '先生', '女士', '小姐', '大人', '殿下', '陛下', '学姐', '学长',
+    '师姐', '师兄', '姐姐', '哥哥', '前辈',
+]);
 
 function buildEntryIndex(entries) {
     const byUid = new Map();
@@ -2394,6 +2518,7 @@ function buildEntryIndex(entries) {
     const byTypeAndName = new Map();
     const byAlias = new Map();
     const byKeyword = new Map();
+    const byVariantName = new Map();
     for (const entry of entries) {
         byUid.set(String(entry.uid), entry);
         add(byExactTitle, String(entry.title ?? ''), entry);
@@ -2404,11 +2529,16 @@ function buildEntryIndex(entries) {
             if ((0, util_1.isUidKeyword)(keyword)) continue;
             add(byKeyword, typedLookup(entry.type, keyword), entry);
         }
+        const identityNames = [entry.name, ...(entry.aliases ?? []), ...(entry.triggerKeywords ?? entry.keywords ?? [])];
+        for (const identityName of identityNames) {
+            if ((0, util_1.isUidKeyword)(identityName)) continue;
+            for (const variant of nameVariants(identityName)) add(byVariantName, typedLookup(entry.type, variant), entry);
+        }
     }
-    return { entries, byUid, byExactTitle, byTitle, byTypeAndName, byAlias, byKeyword };
+    return { entries, byUid, byExactTitle, byTitle, byTypeAndName, byAlias, byKeyword, byVariantName };
 }
 
-function matchBlock(block, index, _contextText, weights = {}) {
+function matchBlock(block, index, contextText, weights = {}) {
     const scores = { ...DEFAULT_SCORES, ...weights };
     const collected = [];
     if (block.uid) {
@@ -2418,15 +2548,32 @@ function matchBlock(block, index, _contextText, weights = {}) {
     collected.push(...candidates(index.byExactTitle.get(String(block.title ?? '')) ?? [], scores.exactTitle, 'exact-title', '标题完全相同'));
     collected.push(...candidates(index.byTitle.get(normalizeTitleLookup(block.title)) ?? [], scores.normalizedTitle, 'normalized-title', '标准化标题相同'));
     collected.push(...candidates(index.byTypeAndName.get(typeNameKey(block.type, block.name)) ?? [], scores.typeAndName, 'type-name', '类型与名称相同'));
-    collected.push(...candidates(index.byAlias.get(typedLookup(block.type, block.name)) ?? [], scores.alias, 'alias', `同类型别名“${block.name}”命中`));
-    collected.push(...candidates(index.byKeyword.get(typedLookup(block.type, block.name)) ?? [], scores.keyword, 'keyword', `同类型关键词“${block.name}”命中`));
+    const provisionalBlock = canonicalTypeLookup(block.type) === '人物' && isProvisionalName(block.name);
+    const identitySafe = (entries) => provisionalBlock ? entries.filter((entry) => isProvisionalEntry(entry)) : entries;
+    collected.push(...candidates(identitySafe(index.byAlias.get(typedLookup(block.type, block.name)) ?? []), scores.alias, 'alias', `同类型正式别名“${block.name}”命中`));
+    for (const variant of nameVariants(block.name)) {
+        collected.push(...candidates(identitySafe(index.byVariantName.get(typedLookup(block.type, variant)) ?? []), scores.nameVariant, 'name-variant', `称谓或标题轻微变化归一为“${variant}”`));
+    }
+    collected.push(...candidates(identitySafe(index.byKeyword.get(typedLookup(block.type, block.name)) ?? []), scores.keyword, 'keyword', `同类型关键词“${block.name}”命中`));
+
+    if (String(contextText ?? '').trim()) {
+        for (const entry of index.entries) {
+            if (canonicalTypeLookup(entry.type) !== canonicalTypeLookup(block.type)) continue;
+            if (explicitContextIdentity(block.name, entry, contextText)) {
+                const identityScore = provisionalBlock && !isProvisionalEntry(entry)
+                    ? scores.contextIdentity
+                    : (!provisionalBlock && isProvisionalEntry(entry) ? 79 : 88);
+                collected.push(candidate(entry, identityScore, 'context-identity', `本轮正文明确说明“${block.name}”与“${entry.name}”为同一身份`));
+            }
+        }
+    }
 
     const name = normalizeLookup(block.name);
     if (name.length >= 2) {
         for (const entry of index.entries) {
             if (canonicalTypeLookup(entry.type) !== canonicalTypeLookup(block.type)) continue;
-            const haystack = normalizeLookup(`${entry.content}\n${entry.keywords.join(' ')}\n${entry.aliases.join(' ')}`);
-            if (haystack.includes(name)) collected.push(candidate(entry, scores.content, 'content', `正文或关键词包含名称“${block.name}”，仅作辅助`));
+            const haystack = normalizeLookup(`${entry.content ?? ''}\n${(entry.keywords ?? []).join(' ')}\n${(entry.aliases ?? []).join(' ')}`);
+            if (haystack.includes(name) && (!provisionalBlock || isProvisionalEntry(entry))) collected.push(candidate(entry, scores.content, 'content', `正文或关键词包含名称“${block.name}”，仅作辅助`));
         }
     }
 
@@ -2436,7 +2583,7 @@ function matchBlock(block, index, _contextText, weights = {}) {
         if (!current || item.score > current.score) byUid.set(item.entry.uid, item);
         else if (current && item.score === current.score) current.evidence.push(...item.evidence);
     }
-    return [...byUid.values()].sort((a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title));
+    return [...byUid.values()].sort((a, b) => b.score - a.score || compareEntryPriority(a.entry, b.entry));
 }
 
 function selectBestCandidate(candidates, minimumScore = 80) {
@@ -2444,7 +2591,13 @@ function selectBestCandidate(candidates, minimumScore = 80) {
     if (!eligible.length) return null;
     const topScore = eligible[0].score;
     const top = eligible.filter((item) => item.score === topScore);
-    return top.length === 1 ? top[0] : null;
+    if (top.length === 1) return top[0];
+    if (!top.every((item) => sameEntryIdentity(item.entry, top[0].entry))) return null;
+    const selected = [...top].sort((left, right) => compareEntryPriority(left.entry, right.entry))[0];
+    return {
+        ...selected,
+        evidence: [...selected.evidence, { kind: 'duplicate-primary', score: Number(topScore), detail: `发现${top.length}个同一身份候选，确定性选择主档 UID ${selected.entry.uid}` }],
+    };
 }
 
 function relevantEntries(entries, text, limit = 24) {
@@ -2482,17 +2635,91 @@ function titleTokens(value) {
     const split = (0, util_1.splitTitle)(value);
     return (0, util_1.unique)([split?.type, split?.name, value].map((item) => (0, util_1.normalizeFact)(String(item ?? ''))));
 }
+function sameEntryIdentity(left, right) {
+    if (!left || !right) return false;
+    if (canonicalTypeLookup(left.type) !== canonicalTypeLookup(right.type)) return false;
+    if (normalizeTitleLookup(left.title) && normalizeTitleLookup(left.title) === normalizeTitleLookup(right.title)) return true;
+    const leftNames = new Set([left.name, ...(left.aliases ?? [])].flatMap(nameVariants));
+    const rightNames = [right.name, ...(right.aliases ?? [])].flatMap(nameVariants);
+    return rightNames.some((name) => leftNames.has(name));
+}
 function candidates(entries, score, kind, detail) {
     return [...new Map(entries.map((entry) => [entry.uid, entry])).values()].map((entry) => candidate(entry, score, kind, detail));
 }
 function candidate(entry, score, kind, detail) {
     return { entry, score: Number(score), evidence: [{ kind, score: Number(score), detail }] };
 }
+function explicitContextIdentity(blockName, entry, contextText) {
+    const context = normalizeLookup(contextText);
+    if (!context) return false;
+    const leftNames = nameVariants(blockName);
+    const rightNames = [entry.name, ...(entry.aliases ?? [])].flatMap(nameVariants);
+    for (const left of leftNames) {
+        for (const right of rightNames) {
+            if (!left || !right || left === right) continue;
+            const patterns = [
+                `${left}就是${right}`, `${left}其实是${right}`, `${left}正是${right}`, `${left}原来是${right}`,
+                `${right}就是${left}`, `${right}其实是${left}`, `${right}正是${left}`, `${right}原来是${left}`,
+                `${left}真实身份是${right}`, `${left}的真实身份是${right}`, `${left}身份为${right}`,
+                `${right}真实身份是${left}`, `${right}的真实身份是${left}`, `${right}身份为${left}`,
+                `${right}伪装成${left}`, `${right}假扮成${left}`, `${right}冒充${left}`,
+                `${left}伪装成${right}`, `${left}假扮成${right}`, `${left}冒充${right}`,
+                `${left}是${right}的伪装身份`, `${right}是${left}的伪装身份`,
+                `${left}账号属于${right}`, `${left}的账号属于${right}`, `${right}账号属于${left}`, `${right}的账号属于${left}`,
+            ];
+            if (patterns.some((pattern) => context.includes(pattern))) return true;
+        }
+    }
+    return false;
+}
+
+function isProvisionalName(value) {
+    const text = normalizeLookup(value);
+    if (!text) return false;
+    return /(?:身份未明|身份不明|未知身份|未识别|不明身份|陌生|神秘|匿名|未知)(?:的)?(?:人物|人|男人|女人|男子|女子|少年|少女|老人|孩子|来客|访客|账号|联系人|发信者|来电者|声音|身影)?/u.test(text)
+        || /^(?:黑衣|蒙面|戴面具|兜帽|遮脸)(?:人|男人|女人|男子|女子|身影)$/u.test(text);
+}
+function isProvisionalEntry(entry) {
+    if (!entry) return false;
+    if (isProvisionalName(entry.name)) return true;
+    return [...(entry.keywords ?? []), ...(entry.aliases ?? [])].some((value) => /^(?:身份未明|身份不明|未知身份|临时)$/u.test((0, util_1.normalizeFact)(value)));
+}
+
+function nameVariants(value) {
+    const raw = normalizeLookup(String(value ?? '').replace(/[（(][^）)]*[）)]/gu, ''));
+    if (!raw) return [];
+    const variants = new Set([raw]);
+    for (const suffix of HONORIFIC_SUFFIXES) {
+        if (!raw.endsWith(suffix)) continue;
+        const base = raw.slice(0, -suffix.length);
+        if (base.length >= 2) variants.add(base);
+    }
+    return [...variants];
+}
+function compareEntryPriority(left, right) {
+    const leftScore = entryPriority(left);
+    const rightScore = entryPriority(right);
+    if (leftScore !== rightScore) return rightScore - leftScore;
+    const leftUpdated = Number(left?.updatedAt || 0);
+    const rightUpdated = Number(right?.updatedAt || 0);
+    if (leftUpdated !== rightUpdated) return leftUpdated - rightUpdated;
+    return String(left?.uid ?? '').localeCompare(String(right?.uid ?? ''), 'zh-CN', { numeric: true });
+}
+function entryPriority(entry) {
+    const contentSize = String(entry?.content ?? '').length;
+    const sectionCount = Object.values(entry?.sections?.values ?? {}).reduce((sum, lines) => sum + (Array.isArray(lines) ? lines.length : 0), 0);
+    return Number(entry?.focus === true) * 10000
+        + Number(entry?.locked === true) * 5000
+        + Number(entry?.managed === true) * 1000
+        + Number(entry?.activation?.disabled !== true && entry?.activation?.enabled !== false) * 200
+        + Math.min(150, contentSize)
+        + Math.min(50, sectionCount * 5);
+}
 function typeNameKey(type, name) { return `${canonicalTypeLookup(type)}｜${normalizeLookup(name)}`; }
 function typedLookup(type, value) { return `${canonicalTypeLookup(type)}｜${normalizeLookup(value)}`; }
 function canonicalTypeLookup(type) {
     const value = normalizeLookup(type);
-    return ({ 角色: '人物', npc: '人物', 地点: '场景', 地区: '场景', 区域: '场景', 全局变化: '世界', 世界变化: '世界' })[value] ?? value;
+    return ({ 角色: '人物', npc: '人物', 地点: '场景', 地区: '场景', 区域: '场景', 全局: '世界', 全局状态: '世界', 全局变化: '世界', 当前局势: '世界', 世界局势: '世界', 世界变化: '世界', 基础规则: '基础设定', 世界设定: '基础设定', 设定: '基础设定' })[value] ?? value;
 }
 function normalizeTitleLookup(value) { return (0, util_1.normalizeTitle)(String(value ?? '')).toLocaleLowerCase(); }
 function normalizeLookup(value) { return (0, util_1.normalizeFact)(String(value ?? '')).replace(/[｜|]/gu, '').toLocaleLowerCase(); }
@@ -2787,7 +3014,7 @@ function distributionBlocksFromSummary(summaryBlock) {
     if (!section || section.empty) return [];
     const blocks = new Map();
     for (const line of section.lines) {
-        const match = String(line ?? '').match(/^\s*(人物|角色|场景|地点|物品|事件|世界|全局变化)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*(.+)$/u);
+        const match = String(line ?? '').match(/^\s*(人物|角色|场景|地点|物品|事件|世界|全局变化|基础设定|世界设定)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*(.+)$/u);
         if (!match) continue;
         const type = (0, parser_1.canonicalExtractionType)(match[1].trim());
         const name = match[2].trim();
@@ -3162,10 +3389,13 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             continue;
         }
         const candidates = (0, matcher_1.matchBlock)(block, index, contextText);
+        const resolvedProvisionalCandidates = candidates
+            .filter((candidate) => (0, matcher_1.isProvisionalEntry)(candidate.entry))
+            .filter((candidate) => candidate.evidence?.some((item) => item.kind === 'context-identity'));
         const target = (0, matcher_1.selectBestCandidate)(candidates, 80);
         if (!target) {
             const auxiliary = candidates[0];
-            if (auxiliary && auxiliary.score >= 50) {
+            if (auxiliary && auxiliary.score >= 50 && !resolvedProvisionalCandidates.length) {
                 operations.push(noop(block.title, auxiliary.entry.uid, '', `仅得到 ${auxiliary.score} 分辅助匹配，低于自动覆盖阈值 80；保留世界书并等待人工确认`, auxiliary.score, auxiliary.evidence));
                 continue;
             }
@@ -3185,9 +3415,18 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 matchEvidence: candidates[0]?.evidence,
             });
             const initialKeywords = [...block.keywords];
-            if (shouldMarkTemporary(block)) initialKeywords.push('临时');
+            if (shouldMarkTemporary(block)) initialKeywords.push('临时', '身份未明');
             for (const keyword of (0, util_1.unique)(initialKeywords)) {
-                operations.push(op('merge-keywords', block.title, undefined, '关键词', undefined, keyword, keyword === '临时' ? '插件按一次性背景对象规则标记临时条目' : '新条目关键词写入'));
+                operations.push(op('merge-keywords', block.title, undefined, '关键词', undefined, keyword, keyword === '临时' ? '插件按身份未明对象规则标记临时条目' : keyword === '身份未明' ? '插件标记该人物身份尚未揭示' : '新条目关键词写入'));
+            }
+            for (const provisional of [...new Map(resolvedProvisionalCandidates.map((candidate) => [candidate.entry.uid, candidate.entry])).values()]) {
+                operations.push({
+                    id: operationId('merge-entry', block.title, `new|${provisional.uid}`),
+                    kind: 'merge-entry', operation: 'merge', title: block.title, sourceUid: provisional.uid,
+                    newValue: provisional.title, reason: `正文已经揭示身份，临时档“${provisional.title}”合并到新主档“${block.title}”`,
+                    score: candidates[0]?.score, matchEvidence: candidates[0]?.evidence,
+                });
+                operations.push({ ...op('delete-entry', provisional.title, provisional.uid, '身份揭示合并', undefined, '删除', `身份已经归入主档“${block.title}”`), mergedIntoTitle: block.title, requiresDistributionProof: false, distributionTargets: [] });
             }
             for (const section of block.sections) {
                 if (/(关键词|触发词|标签|分类)/u.test(section.name))
@@ -3206,6 +3445,33 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             continue;
         }
         const entry = target.entry;
+        // [MA-MATCH-02] 同一身份出现多个镜渊管理档案时，先把非锁定重复档合并到确定性主档，再删除重复档。
+        const duplicates = candidates
+            .filter((candidate) => candidate.entry.uid !== entry.uid)
+            .filter((candidate) => Number(candidate.score) >= 80 || ((0, matcher_1.isProvisionalEntry)(candidate.entry) && candidate.evidence?.some((item) => item.kind === 'context-identity')))
+            .map((candidate) => candidate.entry)
+            .filter((candidate) => candidate.managed === true && candidate.locked !== true && candidate.focus !== true)
+            .filter((candidate) => (0, matcher_1.sameEntryIdentity)(entry, candidate) || ((0, matcher_1.isProvisionalEntry)(candidate) && !(0, matcher_1.isProvisionalEntry)(entry) && (0, matcher_1.explicitContextIdentity)(block.name, entry, contextText)));
+        for (const duplicate of [...new Map(duplicates.map((candidate) => [candidate.uid, candidate])).values()]) {
+            operations.push({
+                id: operationId('merge-entry', entry.title, `${entry.uid}|${duplicate.uid}`),
+                kind: 'merge-entry',
+                operation: 'merge',
+                title: entry.title,
+                targetUid: entry.uid,
+                sourceUid: duplicate.uid,
+                newValue: duplicate.title,
+                reason: `同一身份重复档“${duplicate.title}”合并到主档“${entry.title}”`,
+                score: target.score,
+                matchEvidence: target.evidence,
+            });
+            operations.push({
+                ...op('delete-entry', duplicate.title, duplicate.uid, '重复档合并', undefined, '删除', `内容已合并到主档“${entry.title}”`),
+                mergedIntoUid: entry.uid,
+                requiresDistributionProof: false,
+                distributionTargets: [],
+            });
+        }
         for (const keyword of block.keywords) {
             operations.push(entry.keywords.some((item) => (0, util_1.normalizeFact)(item) === (0, util_1.normalizeFact)(keyword))
                 ? noop(entry.title, entry.uid, '关键词', `关键词“${keyword}”已存在`, target.score, target.evidence)
@@ -3272,7 +3538,11 @@ function applyPlanToEntries(plan, entries) {
         const target = operation.targetUid ? byUid.get(operation.targetUid) : createdByTitle.get((0, util_1.normalizeTitle)(operation.title));
         if (!target)
             continue;
-        applyOne(target, operation);
+        if (operation.kind === 'merge-entry') {
+            const source = byUid.get(String(operation.sourceUid ?? ''));
+            if (source && source.uid !== target.uid) mergeEntryData(target, source);
+        }
+        else applyOne(target, operation);
         modifiedEntries.add(target);
     }
     for (const entry of modifiedEntries) enforceEntryBudgets(entry);
@@ -3280,33 +3550,87 @@ function applyPlanToEntries(plan, entries) {
 }
 // [MA-CONTENT-01] 单条目正文预算：允许场景知识持续补全，但阻止模型把动作流水或重复描述无限写入世界书。
 const SECTION_BUDGETS = {
-    人物: { 身份: 4, 稳定: 3, 当前: 8, 关系: 16, 持有: 10, 持续经历: 16, 别名: 4 },
-    场景: { 定义: 8, 空间结构: 24, 固定资源: 16, 持续变化: 20, 当前状态: 8, 在场: 12, 当前资源: 12, 活动关联: 8, 世界影响: 6, 局部约束: 16, 别名: 4 },
-    物品: { 定义: 8, 功能: 10, 当前: 8, 限制: 10, 持续变化: 12, 别名: 4 },
-    事件: { 目标: 6, 参与: 12, 场景: 8, 阶段: 2, 关键进展: 16, 未决: 12, 结果: 8, 别名: 4 },
-    世界: { 时代: 10, 权力: 14, 制度: 14, 公开局势: 14, 世界变化: 20, 持续影响: 16, 别名: 4 },
+    // 当前快照拥有最大预算；稳定信息保持短小；历史与变化栏目统一压成一句结果。
+    人物: { 身份: 2, 稳定: 3, 当前: 8, 关系: 5, 持有: 5, 持续经历: 1, 别名: 4 },
+    场景: { 定义: 3, 空间结构: 6, 固定资源: 5, 持续变化: 1, 当前状态: 8, 在场: 8, 当前资源: 8, 活动关联: 4, 世界影响: 1, 局部约束: 4, 别名: 4 },
+    物品: { 定义: 2, 功能: 3, 当前: 8, 限制: 3, 持续变化: 1, 别名: 4 },
+    事件: { 目标: 2, 参与: 5, 场景: 2, 阶段: 4, 关键进展: 1, 未决: 4, 结果: 1, 别名: 4 },
+    世界: { 范围: 3, 地理: 5, 组织: 6, 权力: 6, 制度: 6, 资源与交通: 5, 公开局势: 8, 世界变化: 1, 持续影响: 4, 别名: 4 },
+    基础设定: { 世界常识: 6, 自然规则: 6, 种族与生命: 6, 能力与技术: 6, 社会规则: 6, 地理框架: 6, 别名: 4 },
 };
+const RESULT_ONLY_SECTIONS = /^(持续经历|近期经历|持续变化|变化记录|世界变化|世界影响|关键进展|事件进程|历史事实|结果)$/u;
 function enforceEntryBudgets(entry) {
     const budgets = SECTION_BUDGETS[String(entry?.type ?? '')] ?? {};
     for (const [section, limitValue] of Object.entries(budgets)) {
         const limit = Math.max(1, Number(limitValue || 1));
         const lines = (0, util_1.unique)(entry.sections?.values?.[section] ?? []);
+        if (RESULT_ONLY_SECTIONS.test(section)) {
+            if (entry.sections?.values) entry.sections.values[section] = lines.length ? [compactPastResult(lines)] : [];
+            continue;
+        }
         if (lines.length <= limit) {
             if (entry.sections?.values) entry.sections.values[section] = lines;
             continue;
         }
-        // 场景稳定知识保留最早的定义骨架与最新发现；过程、状态和经历只保留最近有效内容。
+        // 场景稳定知识保留最早的定义骨架与最新发现；其他非当前栏目只保留最近有效信息。
         const preserveEdges = entry.type === '场景' && /^(定义|空间结构|固定资源)$/u.test(section);
         if (preserveEdges) {
             const headCount = Math.ceil(limit / 2);
             const tailCount = limit - headCount;
             entry.sections.values[section] = (0, util_1.unique)([...lines.slice(0, headCount), ...lines.slice(-tailCount)]).slice(0, limit);
         }
-        else {
-            entry.sections.values[section] = lines.slice(-limit);
-        }
+        else entry.sections.values[section] = lines.slice(-limit);
     }
     return entry;
+}
+function compactPastResult(lines) {
+    const latest = [...lines].reverse().map((item) => String(item ?? '').replace(/^\s*[-*]\s*/u, '').trim()).find(Boolean) || '';
+    if (!latest) return '已发生：相关变化已经形成结果。';
+    let clause = latest.split(/[。！？；\n]+/u).map((item) => item.trim()).filter(Boolean).at(-1) || latest;
+    const finalMarkers = ['最后', '最终', '结果是', '结果为', '因此', '从而', '导致'];
+    let markerIndex = -1;
+    let marker = '';
+    for (const candidate of finalMarkers) {
+        const index = clause.lastIndexOf(candidate);
+        if (index > markerIndex) { markerIndex = index; marker = candidate; }
+    }
+    if (markerIndex >= 0) clause = clause.slice(markerIndex + marker.length).replace(/^[，,:：\s]*/u, '');
+    else {
+        const explicitPastResult = clause.match(/[，,](?:已经|已)(.+)$/u);
+        if (explicitPastResult) clause = explicitPastResult[1].trim();
+    }
+    clause = clause.replace(/^(?:随后|接着|然后|后来|此后|目前|当前|现在|本轮|过程中)[，,:：\s]*/u, '');
+    clause = clause.replace(/^(?:已发生|结果)\s*[：:]\s*/u, '');
+    clause = clause.replace(/^(.{0,16}?)正在进行(.+?)(?:，|,|并|且|$).*/u, '$1$2已经完成');
+    clause = clause.replace(/^(.{0,16}?)正在向(.+?)发送(.+)$/u, '$1已向$2发送$3');
+    clause = clause.replace(/(?:先.+?然后.+?(?:最后|最终))/u, '');
+    clause = clause.replace(/(?:正在|开始|继续)(?=[^。]{1,50}$)/u, '已');
+    clause = clause.trim();
+    if (!clause) clause = '相关变化已经形成结果';
+    if (clause.length > 96) clause = `${clause.slice(0, 95)}…`;
+    return `已发生：${clause.replace(/[。！？；]+$/u, '')}。`;
+}
+function mergeEntryData(target, source) {
+    target.keywords = (0, util_1.unique)([...(target.keywords ?? []), ...(source.keywords ?? [])]);
+    target.aliases = (0, util_1.unique)([...(target.aliases ?? []), ...(source.aliases ?? []), source.name].filter(Boolean));
+    target.references = (0, util_1.unique)([...(target.references ?? []), ...(source.references ?? [])]);
+    target.sections ??= { order: [], values: {} };
+    target.sections.order ??= [];
+    target.sections.values ??= {};
+    for (const section of source.sections?.order ?? Object.keys(source.sections?.values ?? {})) {
+        const incoming = source.sections?.values?.[section] ?? [];
+        if (!incoming.length) continue;
+        if (!target.sections.values[section]) {
+            target.sections.values[section] = [];
+            target.sections.order.push(section);
+        }
+        const current = target.sections.values[section];
+        for (const line of incoming) {
+            const anchor = informationAnchor(line);
+            if (anchor && /^(当前|当前状态|阶段)$/u.test(section) && current.some((item) => informationAnchor(item) === anchor)) continue;
+            if (!current.some((item) => (0, util_1.normalizeFact)(item) === (0, util_1.normalizeFact)(line))) current.push(line);
+        }
+    }
 }
 
 function operationsForNewSection(title, type, section, lines, policy, normalized = false) {
@@ -3470,10 +3794,9 @@ function temporaryCleanupOperations(entries, settings, summaryBlocks = []) {
     });
 }
 function shouldMarkTemporary(block) {
-    // “临时”是插件根据明确的 NPC 类型打出的管理标记，不根据姓名猜测人物重要性。
-    if (String(block.type ?? '').trim() !== 'NPC') return false;
-    const longTerm = block.sections.some((section) => !section.empty && /(身份|稳定|关系|持有|持续经历)/u.test(section.name));
-    return !longTerm;
+    if (String(block.type ?? '').trim() !== '人物') return false;
+    if ((0, matcher_1.isProvisionalName)(block.name)) return true;
+    return block.keywords?.some((keyword) => /^(?:身份未明|未知身份|临时)$/u.test((0, util_1.normalizeFact)(keyword))) === true;
 }
 function isFoundationProtected(entry, settings) {
     const definition = settings.keywordDefinitions.find((item) => item.label === '基础设定');
@@ -3520,36 +3843,47 @@ function policyFor(section, settings) {
         return 'merge-titles';
     if (/(关键进展|事件进程|事件链|进程|过程|阶段记录|持续经历|近期经历|行动记录|持续变化|世界变化|变化记录)/u.test(section))
         return 'append-chain';
-    if (/(当前|状态|位置|持有者|所有者|归属|数量|完整性|可用性|阶段|当前结果|活动状态)/u.test(section))
+    if (/(当前|状态|位置|持有者|所有者|归属|数量|完整性|可用性|阶段|当前结果|活动状态|范围|地理|组织|权力|制度|资源与交通|公开局势|持续影响)/u.test(section))
         return 'replace-by-anchor';
     if (/(完整摘要|当前总结|长期总结|对象定义|基础定义|在场|当前资源|活动关联|世界影响|局部约束|持有|参与|场景|未决|结果|目标)/u.test(section))
         return 'replace-section';
     return 'semantic-upsert';
 }
 function normalizeStateLine(section, line) {
-    if (/^\s*[^：:]{1,24}\s*[：:]/u.test(line)) return line;
+    const labelMatch = line.match(/^\s*([^：:]{1,24})\s*[：:]\s*(.*)$/u);
+    if (labelMatch) {
+        const canonical = canonicalInformationLabel(labelMatch[1], section);
+        return canonical ? `${canonical}：${labelMatch[2].trim()}` : line;
+    }
     if (informationAnchor(line)) return line;
     const name = String(section ?? '').trim();
-    const canonical = [
+    const canonical = canonicalInformationLabel(name, section);
+    return canonical ? `${canonical}：${line}` : line;
+}
+function canonicalInformationLabel(label, section = '') {
+    const name = String(label ?? '').trim();
+    const normalized = (0, util_1.normalizeFact)(name);
+    const mappings = [
         [/^(当前位置|位置|所在地|所在地点|当前地点)$/u, '当前位置'],
-        [/^(身体状态|身体情况|健康状态|伤势|受伤)$/u, '身体状态'],
+        [/^(身体状态|身体情况|健康状态|伤势|受伤|身体)$/u, '身体状态'],
         [/^(当前身份|身份|职位|阵营|职业)$/u, '当前身份'],
         [/^(当前目标|目标|目的|计划)$/u, '当前目标'],
         [/^(当前持有者|持有者|所有者|归属)$/u, '当前持有者'],
-        [/^(事件状态|当前阶段|阶段)$/u, name.includes('阶段') ? '当前阶段' : '事件状态'],
+        [/^(事件状态|当前阶段|阶段)$/u, String(section).includes('阶段') || normalized.includes('阶段') ? '当前阶段' : '事件状态'],
         [/^(数量|库存|完整性|可用性|魔力|体力|生命值|金币)$/u, name],
-        [/^(关系状态|关系|态度|敌友|合作)$/u, '关系状态'],
-        [/^(能力状态|能力|技能状态)$/u, '能力状态'],
-        [/^(当前状态|状态)$/u, '当前状态'],
-    ].find(([pattern]) => pattern.test(name))?.[1];
-    return canonical ? `${canonical}：${line}` : line;
+        [/^(关系状态|态度|敌友|合作)$/u, '关系状态'],
+        [/^(能力状态|技能状态)$/u, '能力状态'],
+        [/^(当前状态|一般状态|状态)$/u, '当前状态'],
+    ];
+    return mappings.find(([pattern]) => pattern.test(normalized))?.[1] || '';
 }
 function informationAnchor(line) {
     const normalized = (0, util_1.normalizeFact)(line);
     const label = line.match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1]?.trim();
     if (label) {
         if (isMultiValueLabel(label)) return '';
-        return `label:${(0, util_1.normalizeFact)(label)}`;
+        const canonical = canonicalInformationLabel(label);
+        return `label:${(0, util_1.normalizeFact)(canonical || label)}`;
     }
     if (isMultiValueFact(line)) return '';
     const fieldPattern = /^(.{1,24}?)(?:的)?(身份|血统|种族|职业|阵营|所有者|持有者|位置|当前位置|阶段|当前阶段|结果|当前结果|生死状态|意识状态|身体状况|身体状态|健康状态|当前目标|目标|数量|库存|等级|进度|完整性|可用性|魔力|体力|生命值|金币)(?:是|为|变为|变成|升至|降至|增至|减至|恢复至|恢复到|减少到|增加到|只剩|剩余)(.+)$/u;
@@ -3585,8 +3919,15 @@ function applyOne(entry, operation) {
         values[section] = [];
         entry.sections.order.push(section);
     }
-    if (operation.kind === 'append-line' && operation.newValue)
-        values[section] = (0, util_1.unique)([...(values[section] ?? []), operation.newValue]);
+    if (operation.kind === 'append-line' && operation.newValue) {
+        const current = [...(values[section] ?? [])];
+        const replaceAtApply = /^(当前|当前状态|关系|阶段|权力|制度|资源与交通|公开局势|持续影响)$/u.test(section);
+        const anchor = replaceAtApply ? informationAnchor(operation.newValue) : '';
+        const index = anchor ? current.findIndex((line) => informationAnchor(line) === anchor) : -1;
+        if (index >= 0) current[index] = operation.newValue;
+        else current.push(operation.newValue);
+        values[section] = (0, util_1.unique)(current);
+    }
     if (operation.kind === 'replace-line' && operation.newValue) {
         const previous = values[section] ?? [];
         const index = previous.findIndex((line) => line === operation.oldValue);
@@ -3626,6 +3967,7 @@ function businessOperationKind(kind) {
         'replace-section': 'replace-section',
         'merge-keywords': 'append',
         'merge-titles': 'append',
+        'merge-entry': 'merge',
         'create-entry': 'create',
         'delete-entry': 'delete',
         noop: 'no-op',
@@ -3651,7 +3993,7 @@ const information_point_1 = require("./domain/information-point");
 const SECTION_PATTERN = /^\s*【\s*([^】]+?)\s*】\s*$/u;
 const PLAIN_SECTION_PATTERN = /^\s*([^：:\n]{1,24})\s*[:：]\s*$/u;
 const TITLE_PATTERN = /^\s*(?:#{1,6}\s*)?([^【】\n]+?[｜|丨][^【】\n]+?)\s*$/u;
-const COLON_TITLE_PATTERN = /^\s*(?:#{1,6}\s*)?((?:人物|角色|NPC|事件|地点|场景|物品|道具|世界|全局变化|基础设定|总结))\s*[:：]\s*([^：:\n]+?)\s*$/u;
+const COLON_TITLE_PATTERN = /^\s*(?:#{1,6}\s*)?((?:人物|角色|NPC|事件|地点|场景|物品|道具|世界|全局|全局状态|全局变化|基础设定|基础规则|世界设定|总结))\s*[:：]\s*([^：:\n]+?)\s*$/u;
 const BULLET_PATTERN = /^\s*(?:[-*]\s+|[•·]\s*|\d+、\s*|\d+[.)]\s+)(.*?)\s*$/u;
 const EMPTY_PATTERN = /^\s*(?:无|无变化|无新增事实|无可记录事实|没有)\s*[。.]?\s*$/u;
 const EMPTY_VALUE_PATTERN = /^\s*[^：:\n]{1,24}\s*[:：]\s*(?:无|无变化|没有|未知|未说明)\s*[。.]*\s*$/u;
@@ -3659,17 +4001,19 @@ const PLAIN_SECTION_NAMES = new Set([
     '身份', '稳定', '当前', '关系', '持有', '持续经历',
     '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
     '功能', '限制', '目标', '参与', '场景', '阶段', '关键进展', '未决', '结果',
-    '时代', '权力', '制度', '公开局势', '世界变化', '持续影响', '别名',
+    '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响',
+    '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名',
     '固定事实', '近期经历', '事件进程', '变化记录', '最终结果', '关联条目', '关键词', '触发词', '标签', '分类',
 ]);
 const STRICT_ENTRY_PATTERN = /<<<ENTRY:([^:\r\n>]+):([^>\r\n]+)>>>\s*<<<KEYWORDS>>>\s*([\s\S]*?)\s*<<<CONTENT>>>\s*([\s\S]*?)\s*<<<END_ENTRY>>>/gu;
-const STRICT_TYPES = new Set(['人物', '场景', '物品', '事件', '世界']);
+const STRICT_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
 const STRICT_SECTION_ORDER = {
     人物: ['关键词', '身份', '稳定', '当前', '关系', '持有', '持续经历', '别名'],
     场景: ['关键词', '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名'],
     物品: ['关键词', '定义', '功能', '当前', '限制', '持续变化', '别名'],
     事件: ['关键词', '目标', '参与', '场景', '阶段', '关键进展', '未决', '结果', '别名'],
-    世界: ['关键词', '时代', '权力', '制度', '公开局势', '世界变化', '持续影响', '别名'],
+    世界: ['关键词', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响', '别名'],
+    基础设定: ['关键词', '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名'],
 };
 function parseStrictExtractionBlocks(raw) {
     return parseExtractionWithRecovery(raw);
@@ -3787,7 +4131,7 @@ function normalizeExtractionEnvelope(raw, diagnostics) {
 }
 function canonicalExtractionType(value) {
     const raw = String(value ?? '').trim();
-    return ({ 角色: '人物', NPC: '人物', 地点: '场景', 地区: '场景', 区域: '场景', 场所: '场景', 当前场景: '场景', 道具: '物品', 装备: '物品', 事件链: '事件', 全局变化: '世界', 世界变化: '世界', 当前局势: '世界' })[raw] ?? raw;
+    return ({ 角色: '人物', NPC: '人物', 地点: '场景', 地区: '场景', 区域: '场景', 场所: '场景', 当前场景: '场景', 道具: '物品', 装备: '物品', 事件链: '事件', 全局: '世界', 全局状态: '世界', 全局变化: '世界', 世界变化: '世界', 当前局势: '世界', 世界局势: '世界', 基础规则: '基础设定', 世界设定: '基础设定', 设定: '基础设定' })[raw] ?? raw;
 }
 function recoverSections(type, content, diagnostics, title) {
     const expected = STRICT_SECTION_ORDER[type] ?? [];
@@ -3809,7 +4153,7 @@ function recoverSections(type, content, diagnostics, title) {
     if (!parsed.order.length) {
         const loose = String(content ?? '').split('\n').map((line) => stripListMarker(line).trim()).filter((line) => line && !/^<<<.+>>>$/u.test(line));
         if (loose.length) {
-            const fallback = type === '事件' ? '关键进展' : type === '场景' ? '当前状态' : type === '世界' ? '公开局势' : '当前';
+            const fallback = type === '事件' ? '关键进展' : type === '场景' ? '当前状态' : type === '世界' ? '公开局势' : type === '基础设定' ? '世界常识' : '当前';
             aliases.set(fallback, loose);
             diagnostics.repaired += 1;
             diagnostics.warnings.push(`${title}缺少小标题，已归入【${fallback}】`);
@@ -3858,7 +4202,7 @@ function mergeDuplicateBlocks(blocks, diagnostics) {
     return [...map.values()];
 }
 function mergeSectionLines(section, oldLines, newLines) {
-    const replaceBySlot = /^(当前|当前状态|关系|阶段|时代|权力|制度|公开局势|持续影响)$/u.test(section);
+    const replaceBySlot = /^(当前|当前状态|关系|阶段|范围|地理|组织|权力|制度|资源与交通|公开局势|持续影响)$/u.test(section);
     if (!replaceBySlot) return (0, util_1.unique)([...oldLines, ...newLines]);
     const output = [...oldLines];
     const slots = new Map();
@@ -3964,7 +4308,8 @@ function factOwnershipScore(type, section, line) {
     if (type === '人物' && /(身份|稳定|身体|位置|目标|关系|持有|经历)/u.test(`${section}${line}`)) score += 35;
     if (type === '物品' && /(持有|位置|状态|完整|功能|限制|物品)/u.test(`${section}${line}`)) score += 35;
     if (type === '场景' && /(定义|空间|资源|在场|约束|控制|环境|场景)/u.test(`${section}${line}`)) score += 38;
-    if (type === '世界' && /(时代|权力|制度|公开|世界|跨场景|地区)/u.test(`${section}${line}`)) score += 36;
+    if (type === '世界' && /(范围|地理|组织|权力|制度|资源|交通|公开|世界|全局|跨场景|地区)/u.test(`${section}${line}`)) score += 36;
+    if (type === '基础设定' && /(常识|自然|规则|种族|生命|能力|技术|社会|地理|世界设定|基础设定)/u.test(`${section}${line}`)) score += 36;
     return score;
 }
 
@@ -4219,28 +4564,39 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 
 任务：把审核后的最终正文转为精简世界书更新。只记录已经成立、仍会影响后续的事实；不续写、不解释、不评价、不预测。
 
-【只允许五类】
+【只允许六类】
 1. 人物：身份、稳定能力、当前状态、该人物自身的关系、关键持有物、持续经历。
 2. 场景：同一稳定地点持续更新同一条目；保存稳定空间知识、当前局部条件和关联名称。
 3. 物品：只记录一个可单独追踪的具体物品实例；同类物品集合、批量物资和泛称只写入场景资源。
 4. 事件：尚在发展的多对象过程、必要因果节点、未决事项和结果。
-5. 世界：跨多个场景持续生效的世界整体变化。
+5. 世界：会随剧情变化、但影响范围超出单一人物或单一场景的全局状态；包括区域、组织、权力、制度、资源网络和公开局势。
+6. 基础设定：跨场景成立且不随普通剧情变化的世界框架、自然规则、种族共性、能力技术、社会常识和地理框架。
 
 关系不得单独建条目，写入对应人物的【关系】。
 地点不得单独建条目，写入对应【场景】。
-组织、制度、政权、战争和公开局势只有影响跨越多个场景时才写入【世界】。
+组织、制度、政权、战争、区域关系、资源网络和公开局势只要明确会影响场景外对象或后续多个地点，就写入【世界】；不要求本轮已经跨越多个场景。
+不随普通剧情变化的自然规律、种族共性、能力体系、技术边界、社会常识和地理框架写入【基础设定】。
 
 【事实分流】
-- 已经成立且宿主明确的事实，直接写人物、场景、物品或世界。
+- 已经成立且宿主明确的事实，直接写人物、场景、物品、世界或基础设定。
+- 每轮都检查是否出现新的全局状态或世界设定；事实明确时主动创建或更新，不得等待小总结或大总结。
 - 事件只保存过程与因果；人物伤势、物品位置、场景损坏和世界变化应同时直接进入各自宿主，但不得复制同一句长叙述。
 - 场景不保存事件流水。场景稳定知识持续补全；当前栏目必须给出正文结束时的完整快照。
 - 单轮最多输出一个场景条目，并把它放在第一条；它必须是正文结束时人物实际所在的当前场景。只被提及但未进入的地点不得另建场景条目。
 - 同一事实只能有一个主要宿主。其他条目只保留必要名称或因果联系。
 
+【身份未明人物】
+- 正文没有明确说明陌生人、匿名账号、蒙面者或未知声音是谁时，不得猜成任何已知人物。
+- 只有该对象已经产生会持续影响后续的状态、关系、持有物、行动结果或未决联系时，才建立人物临时档。
+- 稳定名称使用“身份未明的可观察类型（唯一可观察锚点）”；例如“身份未明的女人（银色耳坠）”或“身份未明的账号（夜航）”。没有唯一锚点时使用正文中的稳定称呼，但不得添加真实身份。
+- 关键词必须包含“身份未明”；相同对象后续继续使用既有临时档标题。存在两个无法区分的陌生对象时分别建档，不得强行合并。
+- 后续正文明确揭示身份后，输出已知人物主档；插件会把对应临时档合并并删除。
+
 【内容限制】
 - 禁止“供AI参考”“可据此推测”“可能意味着”“建议后续”等解释。
 - 禁止推测、隐藏心理、未来结果、未实现愿望、纯气氛、普通动作、对白全文和无持续价值背景物。
-- 每条事实一行，尽量不超过80字；每个小标题最多6行。
+- 子条目分层：人物【当前】、场景【当前状态/在场/当前资源】、物品【当前】可以最详细，最多8行；身份、稳定、关系、定义、功能等稳定栏目只保留1至5行；【持续经历】【持续变化】【关键进展】【结果】【世界变化】【持续影响】最多1行。
+- 非当前的变化与经历只能写已经形成的结果，使用过去时结果句；禁止按先后顺序描写动作过程。每条尽量不超过80字。
 - 人物描写只保留最多3项会影响身份识别、能力或行动限制的客观特征；禁止连续堆叠外貌、气质和审美形容词。
 - 物品条目必须对应单个实例。‘桌椅、武器、药品、食物、工具、一批短剑、三辆车’等集合只能写入场景【固定资源】或【当前资源】，不得建立物品条目。
 - 不写空栏目，不写“- 无”。
@@ -4264,19 +4620,19 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【当前】位置、身体、目标、立场等明确状态槽
 【关系】对方名称：该人物自身的长期关系或当前立场
 【持有】当前关键物品完整列表
-【持续经历】产生后续影响的经历
+【持续经历】最多一句过去时结果，只写已经造成的后续影响，不写过程
 【别名】
 
 【场景正文固定顺序】
 【定义】地点是什么、位置、用途或归属
 【空间结构】入口、出口、区域连接、障碍和影响行动的布局
 【固定资源】长期存在且可利用的资源
-【持续变化】已确认的新发现、永久损坏、控制权或访问条件变化
+【持续变化】最多一句过去时结果，只写已确认的新发现、永久损坏、控制权或访问条件变化
 【当前状态】时间、环境、控制、危险等状态槽
 【在场】正文结束时确认在场的人物完整列表
 【当前资源】正文结束时可使用、争夺或影响结果的关键物品完整列表
 【活动关联】仍在本场运行的事件名称完整列表
-【世界影响】直接作用于本场的世界整体变化名称
+【世界影响】最多一句过去时结果，概括直接作用于本场的世界整体变化
 【局部约束】模型不能忽略的可见限制完整列表
 【别名】
 
@@ -4289,7 +4645,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【功能】已确认用途或能力
 【当前】位置、持有者、状态、完整性等状态槽；单体物品不写大于1的数量
 【限制】使用、访问或能力限制
-【持续变化】会影响后续的变化
+【持续变化】最多一句过去时结果，只写会影响后续的最终变化
 【别名】
 
 【事件正文固定顺序】
@@ -4297,21 +4653,33 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【参与】参与者完整列表
 【场景】事件涉及的场景名称
 【阶段】阶段：开始/进行中/暂停/结束
-【关键进展】只写改变目标、阶段或因果的节点
+【关键进展】最多一句过去时结果，只写已经改变目标、阶段或因果的节点
 【未决】尚未解决的明确事项完整列表
-【结果】形成明确结果后填写
+【结果】最多一句过去时结果，只有形成明确结果后填写
 【别名】
 
 【世界正文固定顺序】
-【时代】长期时代条件
-【权力】地区或组织控制格局
-【制度】跨场景执行的制度与公开规则
-【公开局势】公众可知的整体状态
-【世界变化】重大且持续的整体变化
-【持续影响】明确对象或区域：持续影响
+【范围】该条目覆盖的区域、组织、群体、网络或全局问题
+【地理】跨场景区域关系、边界、通路和公开地理条件
+【组织】组织性质、职能、成员结构、公开关系与稳定存在状态
+【权力】地区、组织或群体的控制格局；使用“对象：当前控制或地位”
+【制度】正在跨场景执行的法律、政策、程序与公开规则；使用“制度名：现行内容”
+【资源与交通】跨场景资源供应、贸易、通信、交通与封锁网络；使用“对象：当前状态”
+【公开局势】公众可知的战争、灾害、经济、外交、治安与社会整体状态；使用“对象：当前状态”
+【世界变化】最多一句过去时结果，概括重大且持续的整体变化
+【持续影响】最多4行，格式为“明确对象或区域：已形成的持续影响”
 【别名】
 
-人物【当前】、人物【关系】、物品【当前】、事件【阶段】和场景【当前状态】必须使用“状态槽：内容”形式。${custom ? `
+【基础设定正文固定顺序】
+【世界常识】世界内普遍成立、角色通常可以知道的稳定常识
+【自然规则】物理、超自然、时间、空间、因果和不可违背的运行规则
+【种族与生命】种族共性、生理、寿命、繁衍、弱点和生命形态规则
+【能力与技术】魔法、能力、科技、制作、使用条件与能力上限
+【社会规则】长期文化、身份制度、货币、教育、婚姻、礼法和通行惯例
+【地理框架】跨场景稳定存在的区域层级、方位、连接与环境框架
+【别名】
+
+人物【当前】、人物【关系】、物品【当前】、事件【阶段】、场景【当前状态】以及世界【权力/制度/资源与交通/公开局势/持续影响】必须使用“状态槽：内容”形式。${custom ? `
 
 用户附加要求：
 ${custom}` : ''}`;
@@ -4324,7 +4692,7 @@ ${clipText(assistantText, compact ? 9000 : 13000)}
 可能相关的既有世界书条目：
 ${existing || '（无）'}
 
-只输出本轮新事实或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容。`;
+只输出本轮新事实或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容；历史、经历和变化栏目只能输出一句过去时结果。必须主动检查并输出本轮明确出现的世界或基础设定事实。`;
     return { system, user };
 }
 
@@ -4373,7 +4741,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 
 - 类型｜稳定名称｜小标题｜完整事实句
 
-“分发事实”只写需要更新回人物、场景、物品、事件或世界条目的事实；关系写入人物【关系】，地点写入场景。不得写操作命令。没有分发事实时写“- 无”。
+“分发事实”只写需要更新回人物、场景、物品、事件、世界或基础设定条目的事实；关系写入人物【关系】，地点写入场景，可变化的宏观状态写入世界，稳定世界框架写入基础设定。不得写操作命令。没有分发事实时写“- 无”。
 
 没有可总结内容时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`
         : `你是 Mirror Abyss 长期世界记录员。
@@ -4415,7 +4783,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 
 - 类型｜稳定名称｜小标题｜完整事实句
 
-“分发事实”用于把永久变化、长期关系、事件结果和所有权变化回写到人物、场景、物品、事件或世界；长期关系写入人物【关系】。不得写删除、状态字段或操作命令。没有分发事实时写“- 无”。
+“分发事实”用于把永久变化、长期关系、事件结果、所有权变化、全局状态和稳定世界框架回写到人物、场景、物品、事件、世界或基础设定；长期关系写入人物【关系】。不得写删除、状态字段或操作命令。没有分发事实时写“- 无”。
 
 没有可总结内容时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
     const recent = isSmall ? `\n\n最近聊天：\n${clipText(recentConversation || '（无）', compact ? 9000 : 14000)}` : '';
@@ -4432,7 +4800,7 @@ function extractionRepairPrompts(raw, options = {}) {
     const system = `你是 Mirror Abyss 提取格式修复器。
 只修复给定提取结果的语法、重复条目和事实归属，不得阅读原剧情，不得新增、扩写或推测事实。
 必须使用 <<<ENTRY:类型:稳定名称>>>、<<<KEYWORDS>>>、<<<CONTENT>>>、<<<END_ENTRY>>>。
-允许类型：人物、场景、物品、事件、世界。关系必须并入人物，地点必须并入场景。
+允许类型：人物、场景、物品、事件、世界、基础设定。关系必须并入人物，地点必须并入场景；可变化的全局状态写入世界，不随普通剧情变化的框架写入基础设定。
 同名条目必须合并；同一事实只能保留在责任最直接的一个条目中；无法修复的片段删除。
 禁止解释、JSON和代码块。没有可保留条目时只输出“无”。`;
     const user = `需要修复的提取结果：
@@ -4532,7 +4900,7 @@ function isSceneType(type) {
     return ['场景', '时空'].includes(String(type ?? '').trim());
 }
 function isWorldType(type) {
-    return ['世界', '全局变化'].includes(String(type ?? '').trim());
+    return ['世界', '全局', '全局状态', '全局变化', '当前局势', '世界局势'].includes(String(type ?? '').trim());
 }
 function isRoleType(type) {
     return ['人物', '角色', 'NPC'].includes(String(type ?? '').trim());
@@ -4575,7 +4943,7 @@ function buildRecallPlan(entries, settings, focusUid = '') {
 function profileFor(entry, settings, sceneStage, focus) {
     const type = String(entry.type ?? '');
     const tier = String(entry.memoryTier ?? entry.raw?.extensions?.mirrorAbyssInfoPoint?.memoryTier ?? 'background');
-    const baseOrder = ({ 场景: 700, 时空: 700, 事件: 680, 世界: 610, 全局变化: 610, 人物: 520, 角色: 520, NPC: 500, 物品: 500 })[type] ?? 400;
+    const baseOrder = ({ 场景: 700, 时空: 700, 事件: 680, 世界: 610, 全局: 610, 全局状态: 610, 全局变化: 610, 当前局势: 610, 世界局势: 610, 人物: 520, 角色: 520, NPC: 500, 物品: 500 })[type] ?? 400;
 
     if (isFoundationEntry(entry, settings)) {
         return profile('基础设定', 'core', 'foundation', 'none', true, false, true, true, 0, 860, 0, null);
@@ -4831,18 +5199,25 @@ exports.DEFAULT_KEYWORDS = [
         { key: 'result', label: '结果', policy: 'replace-section' },
         COMMON_ALIASES,
     ], 680, false),
-    keyword('world', '世界', '跨多个场景持续生效的世界整体变化、权力、制度、公开局势与长期影响。', ['世界变化', '当前局势'], false, [
-        { key: 'era', label: '时代', policy: 'replace-by-anchor' },
+    keyword('world', '世界', '会随剧情变化、但影响范围超出单一人物或单一场景的全局状态；包括区域、组织、权力、制度、资源网络和公开局势。', ['全局', '全局状态', '世界变化', '当前局势', '世界局势'], false, [
+        { key: 'scope', label: '范围', policy: 'semantic-upsert' },
+        { key: 'geography', label: '地理', policy: 'semantic-upsert' },
+        { key: 'organizations', label: '组织', policy: 'semantic-upsert' },
         { key: 'power', label: '权力', policy: 'replace-by-anchor' },
         { key: 'system', label: '制度', policy: 'replace-by-anchor' },
+        { key: 'network', label: '资源与交通', policy: 'replace-by-anchor' },
         { key: 'public', label: '公开局势', policy: 'replace-by-anchor' },
         { key: 'changes', label: '世界变化', policy: 'append-chain' },
         { key: 'impact', label: '持续影响', policy: 'replace-by-anchor' },
         COMMON_ALIASES,
     ], 610, false),
-    keyword('foundation', '基础设定', '跨场景成立且不随剧情变化的世界运行规则。', ['基础规则', '世界设定', '规则', '设定'], true, [
-        { key: 'rules', label: '规则', policy: 'semantic-upsert' },
-        { key: 'current', label: '现行规则', policy: 'replace-by-anchor' },
+    keyword('foundation', '基础设定', '跨场景成立且不随普通剧情变化的世界框架、自然规律、种族共性、能力技术与社会常识。', ['基础规则', '世界设定', '规则', '设定'], true, [
+        { key: 'common', label: '世界常识', policy: 'semantic-upsert' },
+        { key: 'nature', label: '自然规则', policy: 'semantic-upsert' },
+        { key: 'species', label: '种族与生命', policy: 'semantic-upsert' },
+        { key: 'ability', label: '能力与技术', policy: 'semantic-upsert' },
+        { key: 'society', label: '社会规则', policy: 'semantic-upsert' },
+        { key: 'geography', label: '地理框架', policy: 'semantic-upsert' },
         COMMON_ALIASES,
     ], 860, false, 0),
 ];
@@ -4876,9 +5251,9 @@ exports.DEFAULT_AUDIT_PROMPT = `只在存在明确违规时判定失败。检查
 8. 自然段落、对白换行、正常标点、简短场景标题、文学性描写和NPC正常提问本身不构成违规。
 有疑问但没有明确违规证据时判定通过。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界五类固定格式。关系写入对应人物，地点知识写入场景，跨场景整体变化写入世界。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 exports.DEFAULT_SMALL_SUMMARY_PROMPT = `结算当前事件线；保留当前场景、人物状态、事件阶段、已成立结果和未决事项，并把持续影响分发到人物、场景、物品或世界。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `整理跨场景仍需保留的长期影响；关系并入人物，地点并入场景，宏观变化进入世界，只分发永久变化和重大结果。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `整理跨场景仍需保留的长期影响；关系并入人物，地点并入场景，可变化的宏观状态进入世界，稳定世界框架进入基础设定，只分发永久变化和重大结果。`;
 exports.DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     modelSource: 'current',
@@ -5023,7 +5398,7 @@ function parseKeywordDefinitions(value, legacyTables) {
 function mergeDefaultKeyword(current, fallback) {
     if (!fallback)
         return current;
-    // [MA-SETTINGS-01] 内置五类使用当前固定字段，不把旧版“关系/地点/全局”等字段继续混进新模板。
+    // [MA-SETTINGS-01] 内置六类使用当前固定字段，不把旧版“关系/地点/全局”等字段继续混进新模板。
     // 同名字段只继承用户填写的 prompt/options；未知自定义类型仍由上层原样保留。
     const currentByLabel = new Map((current.fields ?? []).map((field) => [field.label, field]));
     const fields = fallback.fields.map((defaultField) => {

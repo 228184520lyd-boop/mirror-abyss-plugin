@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.13",
+  "version": "2.0.0-lite.ui.15",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "场景中心世界书轻量版｜小标题同义归一、可拖动入口、单体物品约束与场景中心召回"
+  "description": "场景中心世界书轻量版｜未知身份临时档、主动全局/世界设定建档、分层压缩、最终态刷新与分页面板"
 }
