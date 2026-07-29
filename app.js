@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.15 — scene-centered recall, provisional identities, active world/foundation capture and low-coupling requests. */
+/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.1 — ui.15 baseline with AI-assisted worldbook rebuild and source-bounded character knowledge. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -37,7 +37,9 @@ class MirrorAbyssApplication {
             setFocus: (uid, enabled) => this.setFocus(uid, enabled),
             setLocked: (uid, locked) => this.setLocked(uid, locked),
             migrate: () => this.migrate(),
+            commitMigration: () => this.commitMigration(),
             undoMigration: () => this.undoMigration(),
+            migrationPreview: () => this.migrationPreview(),
             // [MA-APP-API-01] UI 只调用 SillyTavern 官方 Connection Profile 服务，不保存密钥或自建 API 配置。
             bindProfileDropdown: (selector, selectedId, onChange) => this.host.bindProfileDropdown(selector, selectedId, onChange),
             connectionProfilesAvailable: () => this.host.connectionProfilesAvailable(),
@@ -80,7 +82,9 @@ class MirrorAbyssApplication {
     smallSummary() { return this.enqueueTask('smallSummary', undefined, false); }
     largeSummary() { return this.enqueueTask('largeSummary', undefined, false); }
     migrate() { return this.enqueueTask('migration', undefined, false); }
+    commitMigration() { return this.enqueueTask('commitMigration', undefined, false); }
     undoMigration() { return this.enqueueTask('undoMigration', undefined, false); }
+    migrationPreview() { return this.migrationService.previewSummary(); }
     processLatest() { return this.enqueueTask('full', undefined, false); }
     cancel() {
         const key = this.host.chatKey();
@@ -113,6 +117,8 @@ class MirrorAbyssApplication {
             matching: this.memoryRunner.currentStatus(this.host.chatKey()),
             task: this.status(),
             canUndoMigration: this.migrationService.canUndo(),
+            hasMigrationPreview: this.migrationService.hasPreview(),
+            migrationPreview: this.migrationService.previewSummary(),
         };
     }
     updateEntry(uid, patch) {
@@ -159,14 +165,8 @@ class MirrorAbyssApplication {
         const chatKey = this.host.chatKey();
         try {
             const turn = this.host.latestTurn(index);
-            const active = this.activeSnapshots.get(chatKey);
-            if (active && (active.messageKey !== turn.messageKey || active.contentHash !== turn.contentHash)) {
-                const token = this.activeTokens.get(chatKey);
-                if (token) {
-                    token.cancelled = true;
-                    token.reason = '检测到更新的 AI 正文，旧任务已取消';
-                }
-            }
+            // [MA-QUEUE-04] 新正文只追加到当前聊天队列。正在处理的旧正文继续使用固定源快照，
+            // 不再因为“出现更新的 AI 正文”而主动取消。聊天切换、源正文编辑/删除和用户取消仍会中断。
             void this.enqueueTask(automaticTaskType, turn.messageIndex, true).catch((error) => {
                 const message = (0, util_1.errorText)(error);
                 if (!/同一任务已经在执行或等待/u.test(message)) console.error('[MirrorAbyss] automatic core flow failed', error);
@@ -175,15 +175,62 @@ class MirrorAbyssApplication {
         catch (error) { console.error('[MirrorAbyss] automatic task enqueue failed', error); }
     }
     onScopeChanged(eventName, eventValue) {
-        if (this.host.consumeInternalScopeEvent(eventName, eventValue))
+        if (this.host.consumeInternalScopeEvent(eventName, eventValue)) return;
+        const reason = `SillyTavern 事件 ${eventName} 使源正文失效`;
+        if (eventName === 'CHAT_CHANGED') {
+            this.cancelAll(reason);
+            try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
+            this.controlPanel.resetTaskStates?.('聊天已经切换');
+            this.controlPanel.setStatus('聊天已经切换，旧聊天任务已取消');
             return;
-        this.cancelAll(`SillyTavern 事件 ${eventName} 使旧任务失效`);
-        try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
-        this.controlPanel.resetTaskStates?.('聊天或正文范围已变化');
-        this.controlPanel.setStatus('聊天或正文范围已变化，旧任务已取消');
+        }
+        const index = messageIndexFromEvent(eventValue);
+        if (!Number.isInteger(index)) {
+            this.cancelAll(reason);
+            try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
+            this.controlPanel.resetTaskStates?.('正文范围发生无法定位的变化');
+            this.controlPanel.setStatus('正文范围发生无法定位的变化，旧任务已取消');
+            return;
+        }
+        const affected = this.cancelAffectedMessageTasks(eventName, index, reason);
+        if (affected > 0) {
+            this.controlPanel.resetTaskStates?.('源正文已被修改、切换或删除');
+            this.controlPanel.setStatus(`源正文已变化，已取消${affected}个受影响任务；其他后台任务继续运行`);
+        }
+    }
+
+    cancelAffectedMessageTasks(eventName, index, reason) {
+        const affectedSnapshot = (snapshot) => {
+            if (!snapshot || snapshot.maintenance || !Number.isInteger(snapshot.messageIndex)) return false;
+            if (eventName === 'MESSAGE_DELETED') return snapshot.messageIndex >= index || snapshot.messageIndex - 1 >= index;
+            if (eventName === 'MESSAGE_EDITED') return snapshot.messageIndex === index || snapshot.messageIndex - 1 === index;
+            return snapshot.messageIndex === index;
+        };
+        let count = 0;
+        for (const [chatKey, snapshot] of this.activeSnapshots.entries()) {
+            if (!affectedSnapshot(snapshot)) continue;
+            const token = this.activeTokens.get(chatKey);
+            if (token && !token.cancelled) { token.cancelled = true; token.reason = reason; count += 1; }
+        }
+        for (const [chatKey, queue] of this.taskQueues.entries()) {
+            for (let position = queue.items.length - 1; position >= 0; position -= 1) {
+                const item = queue.items[position];
+                const affected = item.maintenance !== true && Number.isInteger(item.index)
+                    && (eventName === 'MESSAGE_DELETED' ? item.index >= index || item.index - 1 >= index
+                        : eventName === 'MESSAGE_EDITED' ? item.index === index || item.index - 1 === index
+                            : item.index === index);
+                if (!affected) continue;
+                queue.items.splice(position, 1);
+                this.pendingTaskKeys.delete(item.taskKey);
+                item.reject(new Error(reason));
+                count += 1;
+            }
+            if (!queue.running && !queue.items.length) this.taskQueues.delete(chatKey);
+        }
+        return count;
     }
     enqueueTask(taskType, index, automatic) {
-        const maintenance = taskType === 'migration' || taskType === 'undoMigration';
+        const maintenance = ['migration', 'commitMigration', 'undoMigration'].includes(taskType);
         const chatKey = this.host.chatKey();
         const turn = maintenance
             ? { messageIndex: -1, messageKey: `maintenance:${taskType}`, contentHash: '' }
@@ -241,6 +288,7 @@ class MirrorAbyssApplication {
             else if (taskType === 'smallSummary') result = await this.memoryRunner.runTask('smallSummary', settings, activeSnapshot);
             else if (taskType === 'largeSummary') result = await this.memoryRunner.runTask('largeSummary', settings, activeSnapshot);
             else if (taskType === 'migration') result = await this.migrationService.migrate(settings, activeSnapshot);
+            else if (taskType === 'commitMigration') result = await this.migrationService.commit(settings, activeSnapshot);
             else if (taskType === 'undoMigration') result = await this.migrationService.undo(settings, activeSnapshot);
             else {
                 const shouldAudit = settings.auditEnabled !== false && settings.auditPrompt.trim() && (!automatic || settings.autoAudit === true);
@@ -272,13 +320,22 @@ class MirrorAbyssApplication {
                 this.controlPanel.setTaskProgress?.('extract', 'success', '大总结、沉降分发与召回重排完成');
                 this.controlPanel.setStatus('大总结、沉降分发与召回重排完成');
             }
+            else if (taskType === 'migration') {
+                this.controlPanel.setStatus(result?.previewReady ? `世界书重建预览已生成：${result.rebuiltEntries}个新条目，提交前未修改旧表` : (result?.message || '没有可重建条目'));
+            }
+            else if (taskType === 'commitMigration') {
+                this.controlPanel.setStatus(`世界书重建已提交：旧表删除${result?.deletedOldEntries ?? 0}条，新结构${result?.rebuiltEntries ?? 0}条`);
+            }
+            else if (taskType === 'undoMigration') {
+                this.controlPanel.setStatus('上次世界书重建已撤销，旧表已恢复');
+            }
             else {
                 if (settings.autoExtraction === true && settings.extractionEnabled !== false) this.controlPanel.setTaskProgress?.('extract', 'success', '自动提取、总结调度与世界书合并完成');
                 else this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭');
                 this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${settings.autoExtraction === true ? '自动提取完成' : '自动提取已关闭'}`);
             }
             // [MA-UI-SYNC-02] 只在提取、总结与召回重排全部结束后回读一次世界书，避免 UI 显示中间状态。
-            if (['extraction', 'smallSummary', 'largeSummary', 'full', 'migration', 'undoMigration'].includes(taskType)) {
+            if (['extraction', 'smallSummary', 'largeSummary', 'full', 'migration', 'commitMigration', 'undoMigration'].includes(taskType)) {
                 await this.controlPanel.refreshRecallMap?.();
             }
             notify('success', '镜渊：本轮处理完成');
@@ -547,12 +604,12 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.15';
+exports.VERSION = '2.0.0-lite.ui.15-rebuild.2';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 13;
+exports.MANAGED_VERSION = 14;
 },"control-panel":function(module,exports,require){
 
 "use strict";
@@ -581,6 +638,11 @@ class ControlPanel {
         this.recallStatusNode = null;
         this.recallRefreshButton = null;
         this.recallReplanButton = null;
+        this.rebuildNode = null;
+        this.rebuildStatusNode = null;
+        this.rebuildPreviewButton = null;
+        this.rebuildCommitButton = null;
+        this.rebuildUndoButton = null;
         this.recallLoadSerial = 0;
         this.recallModel = null;
         this.recallWorldbookName = '';
@@ -688,6 +750,11 @@ class ControlPanel {
         this.recallStatusNode = null;
         this.recallRefreshButton = null;
         this.recallReplanButton = null;
+        this.rebuildNode = null;
+        this.rebuildStatusNode = null;
+        this.rebuildPreviewButton = null;
+        this.rebuildCommitButton = null;
+        this.rebuildUndoButton = null;
         this.recallLoadSerial += 1;
         this.recallModel = null;
         this.recallWorldbookName = '';
@@ -820,7 +887,7 @@ class ControlPanel {
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
 .ma-lite-close{min-width:34px;min-height:34px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
 .ma-lite-body{display:flex;flex-direction:column;gap:10px;padding:12px}
-.ma-lite-page-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:inherit}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
+.ma-lite-page-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:inherit}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
 .ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:38px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
@@ -828,6 +895,7 @@ class ControlPanel {
 .ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
+.ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
 .${INDICATOR_CLASS}{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
 .${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
 `;
@@ -859,10 +927,12 @@ class ControlPanel {
             this.makePageButton('run', '运行'),
             this.makePageButton('recall', '召回'),
             this.makePageButton('settings', '设置'),
+            this.makePageButton('rebuild', '重建'),
         );
         const runPage = this.makePage('run');
         const recallPage = this.makePage('recall');
         const settingsPage = this.makePage('settings');
+        const rebuildPage = this.makePage('rebuild');
         const apiSection = this.buildApiSection();
         const switches = document.createElement('div');
         switches.className = 'ma-lite-switches';
@@ -884,6 +954,7 @@ class ControlPanel {
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
         );
         const recall = this.buildRecallSection();
+        const rebuild = this.buildRebuildSection();
         const actions = document.createElement('div');
         actions.className = 'ma-lite-actions';
         const audit = this.makeActionButton('audit', '审核');
@@ -899,7 +970,8 @@ class ControlPanel {
         runPage.append(actions, status);
         recallPage.append(recall);
         settingsPage.append(apiSection, switches, thresholds, note);
-        body.append(pageNav, runPage, recallPage, settingsPage);
+        rebuildPage.append(rebuild);
+        body.append(pageNav, runPage, recallPage, settingsPage, rebuildPage);
         panel.append(header, body);
         this.showPage('run', false);
         return panel;
@@ -929,6 +1001,7 @@ class ControlPanel {
         for (const [pageKey, page] of Object.entries(this.pageNodes)) page.hidden = pageKey !== key;
         for (const [pageKey, button] of Object.entries(this.pageButtons)) button.setAttribute('aria-selected', pageKey === key ? 'true' : 'false');
         if (refresh && key === 'recall') void this.refreshRecallMap(true);
+        if (refresh && key === 'rebuild') void this.refreshRebuildState();
     }
     /** [MA-UI-API-01] 只创建一个轻量下拉框；选项由 SillyTavern 官方服务负责填充。 */
     buildApiSection() {
@@ -1002,6 +1075,120 @@ class ControlPanel {
         try { name ||= this.actions.profileName?.(profileId) || profileId; }
         catch { name ||= profileId; }
         this.apiProfileStatusNode.textContent = `当前：${name}；仅用于镜渊审核、修正、提取和总结，不切换主聊天 API。`;
+    }
+    buildRebuildSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-rebuild';
+        const head = document.createElement('strong');
+        head.className = 'ma-lite-rebuild-head';
+        head.textContent = 'AI辅助世界书重建';
+        const help = document.createElement('div');
+        help.className = 'ma-lite-rebuild-help';
+        help.textContent = '先只读扫描并生成预览；提交时才用新结构替换镜渊旧表。非镜渊条目与手动锁定条目保持不动。角色认知只保留带信息来源的【已知】与【误信】。';
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-rebuild-actions';
+        const preview = document.createElement('button');
+        preview.type = 'button';
+        preview.textContent = '生成AI重建预览';
+        preview.addEventListener('click', () => void this.runRebuildAction('migrate'));
+        const commit = document.createElement('button');
+        commit.type = 'button';
+        commit.textContent = '提交并替换旧表';
+        commit.addEventListener('click', () => void this.runRebuildAction('commitMigration'));
+        const undo = document.createElement('button');
+        undo.type = 'button';
+        undo.textContent = '撤销上次重建';
+        undo.addEventListener('click', () => void this.runRebuildAction('undoMigration'));
+        actions.append(preview, commit, undo);
+        const status = document.createElement('div');
+        status.className = 'ma-lite-rebuild-status';
+        status.textContent = '预览阶段不会修改世界书。提交后会回读校验；失败自动恢复旧表。';
+        const content = document.createElement('div');
+        content.className = 'ma-lite-rebuild-empty';
+        content.textContent = '尚未生成重建预览';
+        section.append(head, help, actions, status, content);
+        this.rebuildNode = content;
+        this.rebuildStatusNode = status;
+        this.rebuildPreviewButton = preview;
+        this.rebuildCommitButton = commit;
+        this.rebuildUndoButton = undo;
+        return section;
+    }
+    async runRebuildAction(kind) {
+        if (this.pendingActions.has(kind)) return;
+        const action = this.actions[kind];
+        if (typeof action !== 'function') {
+            this.setStatus('世界书重建功能未连接', true);
+            return;
+        }
+        this.pendingActions.add(kind);
+        this.syncDisabledState();
+        if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = kind === 'migrate' ? '正在只读扫描旧表并调用AI生成迁移计划…' : kind === 'commitMigration' ? '正在原子提交新结构并回读校验…' : '正在恢复上次重建前的旧表…';
+        try {
+            const result = await action();
+            const summary = kind === 'migrate' ? result : this.actions.migrationPreview?.();
+            this.renderRebuildPreview(summary);
+            if (kind === 'migrate') this.setStatus(result?.previewReady ? '世界书重建预览已生成，旧表未修改' : (result?.message || '没有可重建条目'));
+            else if (kind === 'commitMigration') this.setStatus('世界书重建已提交，旧表已由新结构替换');
+            else this.setStatus('上次世界书重建已撤销');
+            await this.refreshRecallMap(true);
+        }
+        catch (error) {
+            const text = (0, util_1.errorText)(error);
+            this.setStatus(`世界书重建失败：${text}`, true);
+            if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = `失败：${text}`;
+        }
+        finally {
+            this.pendingActions.delete(kind);
+            this.syncDisabledState();
+            void this.refreshRebuildState();
+        }
+    }
+    async refreshRebuildState() {
+        let preview = null;
+        let workspace = null;
+        try {
+            preview = this.actions.migrationPreview?.() ?? null;
+            workspace = await this.actions.loadWorkspace?.();
+        }
+        catch { }
+        this.renderRebuildPreview(preview);
+        if (this.rebuildCommitButton) this.rebuildCommitButton.disabled = !preview || this.pendingActions.size > 0;
+        if (this.rebuildUndoButton) this.rebuildUndoButton.disabled = workspace?.canUndoMigration !== true || this.pendingActions.size > 0;
+    }
+    renderRebuildPreview(summary) {
+        if (!this.rebuildNode) return;
+        this.rebuildNode.replaceChildren();
+        if (!summary?.previewReady && !summary?.worldbookName) {
+            this.rebuildNode.className = 'ma-lite-rebuild-empty';
+            this.rebuildNode.textContent = '尚未生成重建预览';
+            return;
+        }
+        this.rebuildNode.className = 'ma-lite-rebuild-preview';
+        const metrics = document.createElement('div');
+        metrics.className = 'ma-lite-rebuild-summary';
+        const items = [
+            ['旧表', summary.candidates ?? 0],
+            ['新条目', summary.rebuiltEntries ?? 0],
+            ['合并', summary.mergedOldEntries ?? 0],
+            ['待确认', summary.archivedEntries ?? 0],
+            ['认知事实', summary.knowledgeLines ?? 0],
+            ['保留外部条目', summary.preservedEntries ?? 0],
+        ];
+        for (const [label, value] of items) {
+            const chip = document.createElement('span');
+            chip.className = 'ma-lite-chip';
+            chip.textContent = `${label}：${value}`;
+            metrics.append(chip);
+        }
+        this.rebuildNode.append(metrics);
+        for (const warningText of (summary.warnings ?? []).slice(0, 5)) {
+            const warning = document.createElement('div');
+            warning.className = 'ma-lite-rebuild-warning';
+            warning.textContent = warningText;
+            this.rebuildNode.append(warning);
+        }
+        if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = summary.previewReady === false ? '没有可提交预览。' : '预览已就绪；提交前旧表保持不变。';
     }
     buildRecallSection() {
         const section = document.createElement('section');
@@ -1313,6 +1500,9 @@ class ControlPanel {
         const master = settings.enabled !== false;
         if (this.buttons.audit) this.buttons.audit.disabled = this.pendingActions.has('audit') || !master || settings.auditEnabled === false;
         if (this.buttons.extract) this.buttons.extract.disabled = this.pendingActions.has('extract') || !master || settings.extractionEnabled === false;
+        if (this.rebuildPreviewButton) this.rebuildPreviewButton.disabled = this.pendingActions.size > 0 || !master;
+        if (this.rebuildCommitButton) this.rebuildCommitButton.disabled = this.pendingActions.size > 0 || !master || !this.actions.migrationPreview?.();
+        if (this.rebuildUndoButton && this.pendingActions.size > 0) this.rebuildUndoButton.disabled = true;
         for (const input of Object.values(this.inputs)) input.disabled = false;
     }
     setStatus(text, isError = false) {
@@ -1858,6 +2048,8 @@ class HostAdapter {
             settingsSignature: this.settingsSignature(settings),
             taskId: randomId(),
             taskType,
+            // [MA-QUEUE-03] 提取、总结和完整后台流程固定到源正文；后续新正文只会排队，不使该源正文任务失效。
+            allowNewerTurns: ['extraction', 'smallSummary', 'largeSummary', 'full'].includes(String(taskType ?? '')),
             token,
         };
     }
@@ -1891,17 +2083,19 @@ class HostAdapter {
         if (snapshot.runtimeSessionId !== this.runtimeSessionId) throw new Error('运行会话已经变化，旧任务作废');
         if (this.chatKey() !== snapshot.chatKey) throw new Error('聊天已经切换，旧任务作废');
         const context = this.context();
-        if (context.chat !== snapshot.chatInstance) throw new Error('聊天实例已经变化，旧任务作废');
+        if (context.chat !== snapshot.chatInstance && snapshot.allowNewerTurns !== true) throw new Error('聊天实例已经变化，旧任务作废');
         if (this.roleKey() !== snapshot.roleKey) throw new Error('当前角色或群组已经变化，旧任务作废');
         if (this.scopeRevision(snapshot.chatKey) !== snapshot.scopeRevision) throw new Error('聊天作用域版本已经变化，旧任务作废');
         let turn = snapshot;
         if (!snapshot.maintenance) {
-            turn = this.latestTurn();
-            if (turn.messageIndex !== snapshot.messageIndex)
+            turn = snapshot.allowNewerTurns === true
+                ? this.latestTurn(snapshot.messageIndex)
+                : this.latestTurn();
+            if (snapshot.allowNewerTurns !== true && turn.messageIndex !== snapshot.messageIndex)
                 throw new Error('当前最新 AI 正文已经变化，旧任务作废');
-            if (turn.messageKey !== snapshot.messageKey || turn.contentHash !== snapshot.contentHash) throw new Error('正文版本已经变化，旧任务作废');
+            if (turn.messageKey !== snapshot.messageKey || turn.contentHash !== snapshot.contentHash) throw new Error('源正文版本已经变化，旧任务作废');
             if (turn.playerText !== snapshot.playerText)
-                throw new Error('与正文直接相关的玩家输入已经变化，旧任务作废');
+                throw new Error('与源正文直接相关的玩家输入已经变化，旧任务作废');
         }
         if (currentSettings) {
             if (this.targetWorldbookName(currentSettings) !== snapshot.worldbookName) throw new Error('目标世界书已经变化，旧任务作废');
@@ -2434,6 +2628,9 @@ function exposeApi() {
         smallSummary: async () => (await requireApplication()).smallSummary(),
         largeSummary: async () => (await requireApplication()).largeSummary(),
         replanRecall: async () => (await requireApplication()).replanRecall(),
+        previewWorldbookRebuild: async () => (await requireApplication()).migrate(),
+        commitWorldbookRebuild: async () => (await requireApplication()).commitMigration(),
+        getWorldbookRebuildPreview: async () => (await requireApplication()).migrationPreview(),
         migrateWorldbook: async () => (await requireApplication()).migrate(),
         undoWorldbookMigration: async () => (await requireApplication()).undoMigration(),
         cancel: async () => (await requireApplication()).cancel(),
@@ -2492,7 +2689,10 @@ exports.sameEntryIdentity = sameEntryIdentity;
 exports.explicitContextIdentity = explicitContextIdentity;
 exports.isProvisionalName = isProvisionalName;
 exports.isProvisionalEntry = isProvisionalEntry;
+exports.sameEventLifecycle = sameEventLifecycle;
+exports.eventLifecycleScore = eventLifecycleScore;
 const util_1 = require("./util");
+const semantic_1 = require("./semantic");
 
 const DEFAULT_SCORES = Object.freeze({
     uid: 100,
@@ -2564,6 +2764,18 @@ function matchBlock(block, index, contextText, weights = {}) {
                     ? scores.contextIdentity
                     : (!provisionalBlock && isProvisionalEntry(entry) ? 79 : 88);
                 collected.push(candidate(entry, identityScore, 'context-identity', `本轮正文明确说明“${block.name}”与“${entry.name}”为同一身份`));
+            }
+        }
+    }
+
+    // [MA-EVENT-01] 事件按同一目标、参与者与场景形成的生命周期匹配，不再只靠每轮标题。
+    // 已结束事件不会被新的活动过程重新打开；标题变化只作为辅助证据。
+    if (canonicalTypeLookup(block.type) === '事件') {
+        for (const entry of index.entries) {
+            if (canonicalTypeLookup(entry.type) !== '事件' || (0, semantic_1.isEventClosed)(entry)) continue;
+            const lifecycle = eventLifecycleScore(block, entry);
+            if (lifecycle.score >= 80) {
+                collected.push(candidate(entry, lifecycle.score, 'event-lifecycle', lifecycle.detail));
             }
         }
     }
@@ -2671,6 +2883,126 @@ function explicitContextIdentity(blockName, entry, contextText) {
         }
     }
     return false;
+}
+
+
+function sameEventLifecycle(left, right) {
+    return eventLifecycleScore(left, right).score >= 80;
+}
+
+function eventLifecycleScore(left, right) {
+    if (canonicalTypeLookup(left?.type) !== '事件' || canonicalTypeLookup(right?.type) !== '事件') return { score: 0, detail: '不是同类型事件' };
+    const a = eventSignature(left);
+    const b = eventSignature(right);
+    const participants = tokenSetsOverlap(a.participants, b.participants);
+    const scenes = tokenSetsOverlap(a.scenes, b.scenes);
+    const goals = phraseSetsOverlap(a.goals, b.goals);
+    const titles = phraseSimilar(a.title, b.title) || tokenSetsOverlap(a.aliases, b.aliases);
+    const explicitGoalConflict = a.goals.length > 0 && b.goals.length > 0 && !goals;
+
+    let score = 0;
+    const evidence = [];
+    if (participants) { score += 35; evidence.push('参与者重合'); }
+    if (scenes) { score += 30; evidence.push('场景重合'); }
+    if (goals) { score += 35; evidence.push('目标或未决事项连续'); }
+    if (titles) { score += 24; evidence.push('事件名称或别名近似'); }
+
+    // 两边都有明确但不同的目标时，不因人物和地点相同就强行合并。
+    if (explicitGoalConflict && !titles) return { score: 0, detail: '参与者或场景相同，但目标明确不同，视为独立事件' };
+    if (participants && scenes && (!explicitGoalConflict || goals)) score = Math.max(score, 88);
+    else if (participants && goals) score = Math.max(score, 86);
+    else if (scenes && goals) score = Math.max(score, 84);
+    else if (titles && (participants || scenes || goals)) score = Math.max(score, 82);
+    score = Math.min(92, score);
+    return { score, detail: evidence.length ? `同一事件生命周期：${evidence.join('、')}` : '没有足够的事件连续性证据' };
+}
+
+function eventSignature(value) {
+    const sections = sectionMap(value);
+    const participants = splitEventValues(sections.get('参与') ?? []);
+    const scenes = splitEventValues(sections.get('场景') ?? []);
+    const goals = [
+        ...(sections.get('目标') ?? []),
+        ...(sections.get('未决') ?? []),
+    ].map(stripEventLabel).map(cleanEventPhrase).filter(Boolean);
+    const aliases = [
+        value?.name,
+        ...(value?.aliases ?? []),
+        ...(value?.keywords ?? []),
+        ...(value?.triggerKeywords ?? []),
+        ...(sections.get('别名') ?? []),
+    ].map(cleanEventPhrase).filter(Boolean);
+    return {
+        title: cleanEventPhrase(value?.name ?? value?.title ?? ''),
+        participants: (0, util_1.unique)(participants),
+        scenes: (0, util_1.unique)(scenes),
+        goals: (0, util_1.unique)(goals),
+        aliases: (0, util_1.unique)(aliases),
+    };
+}
+
+function sectionMap(value) {
+    const map = new Map();
+    if (Array.isArray(value?.sections)) {
+        for (const section of value.sections) map.set(String(section?.name ?? '').trim(), section?.lines ?? []);
+        return map;
+    }
+    for (const [name, lines] of Object.entries(value?.sections?.values ?? {})) map.set(String(name).trim(), Array.isArray(lines) ? lines : []);
+    return map;
+}
+
+function stripEventLabel(value) {
+    return String(value ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').trim();
+}
+function splitEventValues(lines) {
+    const output = [];
+    for (const raw of lines ?? []) {
+        const text = String(raw ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').trim();
+        for (const part of text.split(/[、,，/；;]|(?:以及|并且|与|和|及)/u)) {
+            const normalized = cleanEventPhrase(part);
+            if (!normalized || /^(?:无|未知|未说明|参与者|人物|当前场景|场景)$/u.test(normalized)) continue;
+            output.push(normalized);
+        }
+    }
+    return output;
+}
+
+function tokenSetsOverlap(left, right) {
+    if (!left.length || !right.length) return false;
+    return left.some((a) => right.some((b) => a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a)))));
+}
+function phraseSetsOverlap(left, right) {
+    if (!left.length || !right.length) return false;
+    return left.some((a) => right.some((b) => phraseSimilar(a, b)));
+}
+function phraseSimilar(left, right) {
+    const a = cleanEventPhrase(left);
+    const b = cleanEventPhrase(right);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (Math.min(a.length, b.length) >= 4 && (a.includes(b) || b.includes(a))) return true;
+    const aa = bigrams(a);
+    const bb = bigrams(b);
+    if (!aa.length || !bb.length) return false;
+    const counts = new Map();
+    for (const item of aa) counts.set(item, (counts.get(item) ?? 0) + 1);
+    let overlap = 0;
+    for (const item of bb) {
+        const count = counts.get(item) ?? 0;
+        if (count > 0) { overlap += 1; counts.set(item, count - 1); }
+    }
+    return (2 * overlap) / (aa.length + bb.length) >= 0.46;
+}
+function bigrams(text) {
+    if (text.length < 2) return text ? [text] : [];
+    const output = [];
+    for (let index = 0; index < text.length - 1; index += 1) output.push(text.slice(index, index + 2));
+    return output;
+}
+function cleanEventPhrase(value) {
+    return normalizeLookup(String(value ?? ''))
+        .replace(/^(?:事件|任务|活动|当前|本轮|相关|进行中|已经|已)/u, '')
+        .replace(/(?:事件|任务|活动)$/u, '');
 }
 
 function isProvisionalName(value) {
@@ -3115,16 +3447,27 @@ function localNormalizeSemantic(value) {
 }
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 },"migration":function(module,exports,require){
-
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MigrationService = void 0;
+exports.INFORMATION_BOUNDARY_TITLE = exports.MigrationService = void 0;
 exports.needsMigration = needsMigration;
+exports.isRebuildCandidate = isRebuildCandidate;
+exports.parseRebuildResponse = parseRebuildResponse;
+exports.mergeRebuildBlocks = mergeRebuildBlocks;
+exports.buildRebuildSnapshot = buildRebuildSnapshot;
 const constants_1 = require("./constants");
 const parser_1 = require("./parser");
 const information_point_1 = require("./domain/information-point");
+const matcher_1 = require("./matcher");
 const prompts_1 = require("./prompts");
 const util_1 = require("./util");
+
+const ALLOWED_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
+const KNOWLEDGE_SECTIONS = new Set(['已知', '误信']);
+const SOURCE_MARKER = /〔(?:证据|来源)\s*[：:]\s*([^〕]+)〕/gu;
+const SOURCE_KIND_PATTERN = /(?:信息来源|认知来源)\s*[：:]\s*(亲眼观察|听到对白|收到消息|查看记录|他人转述|亲身经历|可靠推理|特殊能力|公开信息|自身身份|自身行动|直接告知)/u;
+const BATCH_BUDGET = Math.max(12000, constants_1.MAX_CONTEXT_CHARS - 14000);
+exports.INFORMATION_BOUNDARY_TITLE = '基础设定｜角色信息边界';
 
 class MigrationService {
     constructor(host, worldbook, getSettings) {
@@ -3132,128 +3475,432 @@ class MigrationService {
         this.worldbook = worldbook;
         this.getSettings = getSettings;
         this.backup = null;
+        this.preview = null;
     }
-    canUndo() {
-        return Boolean(this.backup);
-    }
+    canUndo() { return Boolean(this.backup); }
+    hasPreview() { return Boolean(this.preview); }
+    previewSummary() { return this.preview ? (0, util_1.clone)(this.preview.summary) : null; }
+
+    // [MA-REBUILD-01] “整理”改为只读扫描与 AI 重建预览。此步骤不写世界书。
     async migrate(settings, snapshot) {
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         validate();
         const original = await this.worldbook.readRaw(settings, snapshot, validate);
-        const candidates = Object.entries(original.data.entries ?? {})
-            .filter(([, raw]) => raw && typeof raw === 'object' && needsMigration(raw));
-        if (!candidates.length)
-            return { changed: false, converted: [], skipped: 0 };
-        const next = (0, util_1.clone)(original.data);
-        const converted = [];
-        for (const [mapKey, raw] of candidates) {
+        const records = collectRebuildRecords(original.data);
+        if (!records.length) {
+            this.preview = null;
+            return { changed: false, previewReady: false, message: '当前世界书没有可重建的镜渊旧条目', candidates: 0 };
+        }
+        const catalog = records.map((record) => `${record.uid}|${record.title}`).join('\n');
+        const batches = packRecords(records, BATCH_BUDGET);
+        const parsedBlocks = [];
+        const diagnostics = { invalidLines: [], warnings: [], modelBatches: batches.length };
+        const knownUids = new Set(records.map((record) => record.uid));
+        for (let index = 0; index < batches.length; index += 1) {
             validate();
-            const uid = String(raw.uid ?? mapKey);
-            const title = (0, util_1.stripUidSuffix)(String(raw.comment ?? raw.name ?? raw.title ?? ''));
-            const content = String(raw.content ?? '');
-            const keywords = (0, util_1.normalizeStringArray)(raw.key).filter((item) => !(0, util_1.isUidKeyword)(item));
-            const prompt = (0, prompts_1.migrationPrompts)(title, content, keywords);
+            const prompt = (0, prompts_1.migrationPrompts)(batches[index], catalog, { batchIndex: index + 1, batchCount: batches.length });
             const response = await this.host.generate(prompt.system, trimPrompt(prompt.user), settings.responseTokens, snapshot, settings, settings.requestTimeoutMs, settings.migrationProfileId);
             validate();
-            const blocks = (0, information_point_1.prepareInformationBlocks)((0, parser_1.parseInformationPoints)(response));
-            if (blocks.length !== 1)
-                throw new Error(`旧条目“${title || mapKey}”整理结果必须只有一个条目`);
-            const block = blocks[0];
-            const migrated = next.entries[mapKey];
-            const sections = sectionsWithPreservedOldText(block, content);
-            migrated.comment = block.title;
-            migrated.content = (0, parser_1.serializeEntrySections)(sections);
-            migrated.key = (0, util_1.unique)([...keywords, ...block.keywords.filter((item) => !(0, util_1.isUidKeyword)(item)), (0, util_1.uidKeyword)(uid)]);
-            converted.push({ uid, from: title, to: block.title });
+            const parsed = parseRebuildResponse(response, knownUids, diagnostics);
+            parsedBlocks.push(...parsed);
         }
-        this.backup = {
+        const blocks = mergeRebuildBlocks(parsedBlocks);
+        const built = buildRebuildSnapshot(original.data, records, blocks, diagnostics);
+        const summary = {
+            worldbookName: original.name,
+            candidates: records.length,
+            batches: batches.length,
+            rebuiltEntries: built.rebuiltEntries,
+            mergedOldEntries: built.mergedOldEntries,
+            archivedEntries: built.archivedEntries,
+            knowledgeLines: built.knowledgeLines,
+            deletedOldEntries: records.length,
+            preservedEntries: built.preservedEntries,
+            warnings: diagnostics.warnings.slice(0, 12),
+        };
+        this.preview = {
             chatKey: snapshot.chatKey,
             worldbookName: original.name,
-            data: (0, util_1.clone)(original.data),
-            afterData: (0, util_1.clone)(next),
+            sourceData: (0, util_1.clone)(original.data),
+            nextData: (0, util_1.clone)(built.data),
+            summary,
         };
+        return { changed: false, previewReady: true, ...summary };
+    }
+
+    // [MA-REBUILD-02] 只有预览仍对应当前世界书时才原子提交；提交后重算召回并回读。
+    async commit(settings, snapshot) {
+        if (!this.preview) throw new Error('没有可提交的世界书重建预览');
+        if (this.preview.chatKey !== snapshot.chatKey || this.preview.worldbookName !== snapshot.worldbookName)
+            throw new Error('重建预览属于其他聊天或世界书，请重新生成预览');
+        const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
+        const preview = this.preview;
+        validate();
         try {
-            await this.worldbook.replaceRaw(settings, original.name, next, snapshot, validate, original.data);
+            await this.worldbook.replaceRaw(settings, preview.worldbookName, preview.nextData, snapshot, validate, preview.sourceData);
+            await this.worldbook.replanRecall(settings, snapshot, validate);
+            const verified = await this.worldbook.readRaw(settings, snapshot, validate);
+            verifyCommittedSnapshot(verified.data, preview.summary);
+            this.backup = {
+                chatKey: snapshot.chatKey,
+                worldbookName: preview.worldbookName,
+                data: (0, util_1.clone)(preview.sourceData),
+                afterData: (0, util_1.clone)(verified.data),
+            };
+            this.preview = null;
+            return { changed: true, committed: true, ...preview.summary };
         }
         catch (error) {
-            if (/整理期间已被其他操作修改/u.test((0, util_1.errorText)(error))) {
-                this.backup = null;
-                throw error;
-            }
             try {
-                await this.worldbook.replaceRaw(settings, original.name, original.data, snapshot, validate);
+                const current = await this.worldbook.readRaw(settings, snapshot, validate);
+                await this.worldbook.replaceRaw(settings, preview.worldbookName, preview.sourceData, snapshot, validate, current.data);
             }
             catch (rollbackError) {
+                this.preview = null;
                 this.backup = null;
-                throw new Error(`整理失败且恢复备份失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+                throw new Error(`世界书重建失败且恢复旧表失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
             }
+            this.preview = null;
             this.backup = null;
             throw error;
         }
-        return { changed: true, converted, skipped: Object.keys(original.data.entries ?? {}).length - candidates.length };
     }
+
     async undo(settings, snapshot) {
-        if (!this.backup)
-            throw new Error('没有可撤销的上次整理');
+        if (!this.backup) throw new Error('没有可撤销的上次世界书重建');
         if (this.backup.chatKey !== snapshot.chatKey || this.backup.worldbookName !== snapshot.worldbookName)
-            throw new Error('上次整理属于其他聊天或世界书，不能在当前范围撤销');
+            throw new Error('上次重建属于其他聊天或世界书，不能在当前范围撤销');
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         const backup = this.backup;
         await this.worldbook.replaceRaw(settings, backup.worldbookName, backup.data, snapshot, validate, backup.afterData);
         this.backup = null;
-        return { changed: true };
+        this.preview = null;
+        return { changed: true, restored: true };
     }
 }
 exports.MigrationService = MigrationService;
 
+function collectRebuildRecords(data) {
+    const output = [];
+    for (const [mapKey, raw] of Object.entries(data?.entries ?? {})) {
+        if (!raw || typeof raw !== 'object' || !isRebuildCandidate(raw)) continue;
+        const uid = String(raw.uid ?? mapKey);
+        const title = (0, util_1.stripUidSuffix)(String(raw.comment ?? raw.name ?? raw.title ?? '')) || `未命名｜${uid}`;
+        const keywords = (0, util_1.normalizeStringArray)(raw.key).filter((item) => !(0, util_1.isUidKeyword)(item));
+        output.push({ mapKey: String(mapKey), uid, title, content: String(raw.content ?? ''), keywords, raw: (0, util_1.clone)(raw) });
+    }
+    return output.sort((left, right) => left.title.localeCompare(right.title, 'zh-CN'));
+}
+
+function isRebuildCandidate(raw) {
+    if (!raw || typeof raw !== 'object') return false;
+    const extension = raw.extensions?.[constants_1.WORLD_INFO_EXTENSION_KEY];
+    if (extension?.locked === true || raw.locked === true) return false;
+    if (extension?.managed === true) return true;
+    const title = (0, util_1.stripUidSuffix)((0, util_1.normalizeTitle)(String(raw.comment ?? raw.name ?? raw.title ?? '')));
+    const split = (0, util_1.splitTitle)(title);
+    if (!split || !ALLOWED_TYPES.has(split.type)) return false;
+    const keys = (0, util_1.normalizeStringArray)(raw.key);
+    // 非镜渊用户条目即使标题属于六类、正文格式较旧，也不参与重建和删除。
+    return keys.some((item) => (0, util_1.isUidKeyword)(item));
+}
+
+function packRecords(records, budget) {
+    const batches = [];
+    let current = [];
+    let size = 0;
+    for (const record of records) {
+        const serialized = serializeRecord(record);
+        if (current.length && size + serialized.length > budget) {
+            batches.push(current);
+            current = [];
+            size = 0;
+        }
+        current.push(record);
+        size += serialized.length;
+    }
+    if (current.length) batches.push(current);
+    return batches;
+}
+
+function serializeRecord(record) {
+    return `<<<SOURCE uid=${record.uid}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`;
+}
+
+function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], warnings: [] }) {
+    const parsed = (0, information_point_1.prepareInformationBlocks)((0, parser_1.parseInformationPoints)(raw));
+    const output = [];
+    for (const block of parsed) {
+        if (!ALLOWED_TYPES.has(block.type)) {
+            diagnostics.warnings.push(`已丢弃不允许的重建类型：${block.title}`);
+            continue;
+        }
+        const sections = [];
+        const sourceUids = new Set();
+        for (const section of block.sections ?? []) {
+            if (/(关键词|触发词|标签|分类)/u.test(section.name) || section.empty) continue;
+            if (KNOWLEDGE_SECTIONS.has(section.name) && block.type !== '人物') {
+                diagnostics.warnings.push(`${block.title}【${section.name}】不是人物认知，已丢弃`);
+                continue;
+            }
+            const lines = [];
+            for (const rawLine of section.lines ?? []) {
+                const ids = [];
+                String(rawLine).replace(SOURCE_MARKER, (_match, group) => {
+                    for (const id of String(group).split(/[,，、\s]+/u).map((item) => item.trim()).filter(Boolean)) if (knownUids.has(id)) ids.push(id);
+                    return '';
+                });
+                const line = String(rawLine).replace(SOURCE_MARKER, '').trim();
+                if (!ids.length) {
+                    diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '缺少可追溯旧条目UID' });
+                    continue;
+                }
+                if (KNOWLEDGE_SECTIONS.has(section.name) && !SOURCE_KIND_PATTERN.test(line)) {
+                    diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '人物认知缺少明确的信息来源类型' });
+                    continue;
+                }
+                ids.forEach((id) => sourceUids.add(id));
+                lines.push((0, parser_1.normalizePointLine)(line));
+            }
+            if (lines.length) sections.push({ name: section.name, lines: (0, util_1.unique)(lines), empty: false });
+        }
+        if (!sections.length) continue;
+        output.push({ ...block, sections, sourceUids: [...sourceUids] });
+    }
+    return output;
+}
+
+function mergeRebuildBlocks(blocks) {
+    const output = [];
+    for (const incoming of blocks) {
+        const candidate = output.find((current) => {
+            const left = blockAsEntry(current);
+            const right = blockAsEntry(incoming);
+            return (0, matcher_1.sameEntryIdentity)(left, right)
+                || (left.type === '事件' && right.type === '事件' && (0, matcher_1.sameEventLifecycle)(left, right));
+        });
+        if (!candidate) {
+            output.push((0, util_1.clone)(incoming));
+            continue;
+        }
+        candidate.sourceUids = (0, util_1.unique)([...(candidate.sourceUids ?? []), ...(incoming.sourceUids ?? [])]);
+        candidate.keywords = (0, util_1.unique)([...(candidate.keywords ?? []), ...(incoming.keywords ?? []), incoming.name]);
+        const byName = new Map(candidate.sections.map((section) => [section.name, section]));
+        if (candidate.type === '事件' && (0, util_1.normalizeFact)(candidate.name) !== (0, util_1.normalizeFact)(incoming.name)) {
+            let aliases = byName.get('别名');
+            if (!aliases) {
+                aliases = { name: '别名', lines: [], empty: false };
+                candidate.sections.push(aliases);
+                byName.set('别名', aliases);
+            }
+            aliases.lines = (0, util_1.unique)([...aliases.lines, incoming.name]);
+            aliases.empty = false;
+        }
+        for (const section of incoming.sections ?? []) {
+            const current = byName.get(section.name);
+            if (!current) {
+                candidate.sections.push((0, util_1.clone)(section));
+                byName.set(section.name, candidate.sections.at(-1));
+            }
+            else current.lines = (0, information_point_1.mergeCanonicalLines)(section.name, current.lines, section.lines);
+        }
+    }
+    return output;
+}
+
+function blockAsEntry(block) {
+    const aliases = (block.sections ?? []).filter((section) => section.name === '别名').flatMap((section) => section.lines ?? []);
+    return {
+        uid: block.title,
+        title: block.title,
+        type: block.type,
+        name: block.name,
+        aliases,
+        keywords: block.keywords ?? [],
+        sections: { values: Object.fromEntries((block.sections ?? []).map((section) => [section.name, section.lines ?? []])) },
+    };
+}
+
+function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { invalidLines: [], warnings: [] }) {
+    const data = (0, util_1.clone)(originalData);
+    data.entries ?? (data.entries = {});
+    const candidateKeys = new Set(records.map((record) => record.mapKey));
+    const preserved = Object.fromEntries(Object.entries(data.entries).filter(([mapKey]) => !candidateKeys.has(String(mapKey))));
+    const preservedEntryCount = Object.keys(preserved).length;
+    data.entries = preserved;
+    const recordByUid = new Map(records.map((record) => [record.uid, record]));
+    const usedRecordUids = new Set();
+    const usedMapKeys = new Set(Object.keys(data.entries));
+    // 新建条目从原世界书最大UID之后分配；旧条目主档仍可复用原mapKey与UID。
+    const usedNumericUids = new Set(Object.values(originalData?.entries ?? {}).map((raw) => Number(raw?.uid)).filter(Number.isFinite));
+    let rebuiltEntries = 0;
+    let knowledgeLines = 0;
+    let mergedOldEntries = 0;
+    for (const block of ensureInformationBoundary(blocks)) {
+        const sourceUids = (block.sourceUids ?? []).filter((uid) => recordByUid.has(uid));
+        const primaryUid = sourceUids.find((uid) => !usedRecordUids.has(uid));
+        const primary = primaryUid ? recordByUid.get(primaryUid) : null;
+        let mapKey;
+        let raw;
+        if (primary && !usedMapKeys.has(primary.mapKey)) {
+            mapKey = primary.mapKey;
+            raw = (0, util_1.clone)(primary.raw);
+            usedRecordUids.add(primary.uid);
+        }
+        else {
+            const uid = nextNumericUid(usedNumericUids);
+            mapKey = String(uid);
+            raw = defaultRaw(uid);
+        }
+        usedMapKeys.add(mapKey);
+        const uid = String(raw.uid ?? mapKey);
+        raw.uid = Number.isFinite(Number(raw.uid)) ? Number(raw.uid) : Number(mapKey);
+        raw.comment = block.title;
+        raw.content = (0, parser_1.serializeEntrySections)({ order: block.sections.map((section) => section.name), values: Object.fromEntries(block.sections.map((section) => [section.name, section.lines])) });
+        const aliases = block.sections.filter((section) => section.name === '别名').flatMap((section) => section.lines);
+        raw.key = (0, util_1.unique)([block.name, ...(block.keywords ?? []), ...aliases, (0, util_1.uidKeyword)(uid)]).filter(Boolean);
+        raw.keysecondary ?? (raw.keysecondary = []);
+        raw.disable = false;
+        const extensions = raw.extensions ?? (raw.extensions = {});
+        const extension = extensions[constants_1.WORLD_INFO_EXTENSION_KEY] && typeof extensions[constants_1.WORLD_INFO_EXTENSION_KEY] === 'object'
+            ? extensions[constants_1.WORLD_INFO_EXTENSION_KEY]
+            : {};
+        extensions[constants_1.WORLD_INFO_EXTENSION_KEY] = {
+            ...extension,
+            managed: true,
+            version: constants_1.MANAGED_VERSION,
+            title: block.title,
+            rebuilt: true,
+            rebuildVersion: 1,
+            epistemic: block.type === '人物' || block.title === exports.INFORMATION_BOUNDARY_TITLE,
+            sourceUids,
+            updatedAt: Date.now(),
+        };
+        if (block.title === exports.INFORMATION_BOUNDARY_TITLE) {
+            raw.constant = true;
+            raw.vectorized = false;
+            raw.preventRecursion = true;
+            raw.excludeRecursion = true;
+            raw.depth = 1;
+            raw.order = 900;
+        }
+        data.entries[mapKey] = raw;
+        rebuiltEntries += 1;
+        knowledgeLines += block.sections.filter((section) => KNOWLEDGE_SECTIONS.has(section.name)).reduce((sum, section) => sum + section.lines.length, 0);
+        if (sourceUids.length > 1) mergedOldEntries += sourceUids.length - 1;
+        sourceUids.forEach((uidValue) => usedRecordUids.add(uidValue));
+    }
+    const uncovered = records.filter((record) => !usedRecordUids.has(record.uid));
+    for (const record of uncovered) {
+        const uid = nextNumericUid(usedNumericUids);
+        const mapKey = String(uid);
+        const raw = defaultRaw(uid);
+        raw.comment = `世界｜重建待确认·${record.uid}`;
+        raw.content = (0, parser_1.serializeEntrySections)({
+            order: ['来源条目', '旧格式保留'],
+            values: {
+                来源条目: [record.title],
+                旧格式保留: originalLines(record.content).length ? originalLines(record.content) : ['原条目正文为空。'],
+            },
+        });
+        raw.key = [(0, util_1.uidKeyword)(String(uid))];
+        raw.disable = true;
+        raw.vectorized = false;
+        raw.preventRecursion = true;
+        raw.excludeRecursion = true;
+        raw.extensions = {
+            ...(raw.extensions ?? {}),
+            [constants_1.WORLD_INFO_EXTENSION_KEY]: {
+                managed: true,
+                version: constants_1.MANAGED_VERSION,
+                title: raw.comment,
+                rebuilt: true,
+                rebuildVersion: 1,
+                archive: true,
+                sourceUids: [record.uid],
+                updatedAt: Date.now(),
+            },
+        };
+        data.entries[mapKey] = raw;
+        diagnostics.warnings.push(`旧条目“${record.title}”未被AI可靠覆盖，已转为禁用待确认档案`);
+    }
+    return {
+        data,
+        rebuiltEntries,
+        mergedOldEntries,
+        archivedEntries: uncovered.length,
+        knowledgeLines,
+        preservedEntries: preservedEntryCount,
+    };
+}
+
+function ensureInformationBoundary(blocks) {
+    const output = blocks.map((block) => (0, util_1.clone)(block));
+    const existing = output.find((block) => (0, util_1.normalizeTitle)(block.title) === (0, util_1.normalizeTitle)(exports.INFORMATION_BOUNDARY_TITLE));
+    const section = {
+        name: '叙事信息边界',
+        empty: false,
+        lines: [
+            '世界事实不等于角色已知；角色只能依据自身【已知】、当前可观察内容和本轮明确获得的信息行动或发言。',
+            '未列入角色【已知】且没有亲眼观察、对白、消息、记录、转述、亲身经历、可靠推理或特殊能力来源的信息，对该角色不可用。',
+            '【误信】是角色当前相信但未被世界事实确认的内容；不得自动升级为真相。',
+            '玩家未表达的内心、他人私密认知和未公开远处事件，不得成为NPC行动依据。',
+            '信息转移必须保留获得方式；仅因世界书中存在某条事实，不代表所有角色知道。',
+        ],
+    };
+    if (existing) {
+        const current = existing.sections.find((item) => item.name === section.name);
+        if (current) current.lines = (0, util_1.unique)([...current.lines, ...section.lines]);
+        else existing.sections.push(section);
+        return output;
+    }
+    output.unshift({
+        title: exports.INFORMATION_BOUNDARY_TITLE,
+        type: '基础设定',
+        name: '角色信息边界',
+        keywords: ['角色信息边界', '信息来源边界'],
+        sections: [section],
+        sourceUids: [],
+    });
+    return output;
+}
+
+function verifyCommittedSnapshot(data, summary) {
+    const entries = Object.values(data?.entries ?? {}).filter((raw) => raw && typeof raw === 'object');
+    const boundary = entries.find((raw) => (0, util_1.normalizeTitle)(String(raw.comment ?? '')) === (0, util_1.normalizeTitle)(exports.INFORMATION_BOUNDARY_TITLE));
+    if (!boundary || boundary.constant !== true || boundary.vectorized !== false)
+        throw new Error('角色信息边界条目未以常驻隔离方式保存');
+    const rebuilt = entries.filter((raw) => raw.extensions?.[constants_1.WORLD_INFO_EXTENSION_KEY]?.rebuilt === true);
+    if (rebuilt.length < Number(summary.rebuiltEntries || 0)) throw new Error('重建条目回读数量不足');
+}
+
+function defaultRaw(uid) {
+    return { uid, key: [], keysecondary: [], comment: '', content: '', constant: false, vectorized: true, selective: false, selectiveLogic: 0, addMemo: false, order: 400, position: 0, disable: false, ignoreBudget: false, excludeRecursion: false, preventRecursion: true, probability: 100, useProbability: true, depth: 4, outletName: '', group: '', groupOverride: false, groupWeight: 100, scanDepth: null, caseSensitive: null, matchWholeWords: null, useGroupScoring: null, automationId: '', role: 0, sticky: null, cooldown: null, delay: null, delayUntilRecursion: 0, triggers: [] };
+}
+
+function nextNumericUid(used) {
+    let uid = 0;
+    while (used.has(uid)) uid += 1;
+    used.add(uid);
+    return uid;
+}
+
 function needsMigration(raw) {
     const title = (0, util_1.normalizeTitle)(String(raw?.comment ?? raw?.name ?? raw?.title ?? ''));
-    if (!(0, util_1.splitTitle)(title))
-        return true;
+    if (!(0, util_1.splitTitle)(title)) return true;
     const content = String(raw?.content ?? '').trim();
-    if (!content)
-        return false;
-    if (!/【\s*[^】]+\s*】/u.test(content))
-        return true;
+    if (!content) return false;
+    if (!/【\s*[^】]+\s*】/u.test(content)) return true;
     const parsed = (0, parser_1.parseEntrySections)(content);
-    if (!parsed.order.length)
-        return true;
+    if (!parsed.order.length) return true;
     let insideSection = false;
     for (const rawLine of content.replace(/\r/g, '').split('\n')) {
         const line = rawLine.trim();
-        if (!line)
-            continue;
-        if (/^【\s*[^】]+\s*】$/u.test(line)) {
-            insideSection = true;
-            continue;
-        }
-        if (!insideSection)
-            return true;
+        if (!line) continue;
+        if (/^【\s*[^】]+\s*】$/u.test(line)) { insideSection = true; continue; }
+        if (!insideSection) return true;
     }
     return false;
-}
-
-function sectionsWithPreservedOldText(block, originalContent) {
-    const sections = { order: [], values: {} };
-    for (const section of block.sections) {
-        if (/(关键词|触发词|标签|分类)/u.test(section.name) || section.empty)
-            continue;
-        sections.order.push(section.name);
-        sections.values[section.name] = (0, util_1.unique)(section.lines);
-    }
-    const migratedLines = Object.values(sections.values).flat();
-    const unresolved = originalLines(originalContent).filter((line) => {
-        const normalized = (0, util_1.normalizeFact)(line);
-        return !migratedLines.some((candidate) => {
-            const target = (0, util_1.normalizeFact)(candidate);
-            return target === normalized || target.includes(normalized) || normalized.includes(target);
-        });
-    });
-    if (unresolved.length) {
-        sections.order.push('旧格式保留');
-        sections.values['旧格式保留'] = (0, util_1.unique)(unresolved);
-    }
-    return sections;
 }
 
 function originalLines(content) {
@@ -3379,7 +4026,7 @@ const parser_1 = require("./parser");
 const information_point_1 = require("./domain/information-point");
 const util_1 = require("./util");
 function buildOperationPlan(blocks, entries, settings, contextText, options = {}) {
-    blocks = (0, information_point_1.prepareInformationBlocks)(blocks);
+    blocks = coalesceEventBlocks((0, information_point_1.prepareInformationBlocks)(blocks));
     const index = (0, matcher_1.buildEntryIndex)(entries);
     const operations = [];
     for (const block of blocks) {
@@ -3498,6 +4145,45 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
         operations.push(...consumeSmallSummaryOperations(entries));
     return { blocks, operations: dedupeOperations(operations), createdAt: Date.now() };
 }
+function coalesceEventBlocks(blocks) {
+    const output = [];
+    for (const incoming of blocks) {
+        if (String(incoming?.type ?? '') !== '事件') {
+            output.push(structuredClone(incoming));
+            continue;
+        }
+        const current = output.find((candidate) => candidate.type === '事件' && (0, matcher_1.sameEventLifecycle)(candidate, incoming));
+        if (!current) {
+            output.push(structuredClone(incoming));
+            continue;
+        }
+        current.keywords = (0, util_1.unique)([...(current.keywords ?? []), ...(incoming.keywords ?? []), incoming.name].filter(Boolean));
+        const byName = new Map(current.sections.map((section) => [section.name, section]));
+        for (const section of incoming.sections ?? []) {
+            const target = byName.get(section.name);
+            if (!target) {
+                current.sections.push(structuredClone(section));
+                byName.set(section.name, current.sections.at(-1));
+            }
+            else {
+                target.lines = (0, information_point_1.mergeCanonicalLines)(section.name, target.lines, section.lines);
+                target.empty = target.lines.length === 0;
+            }
+        }
+        if ((0, util_1.normalizeFact)(current.name) !== (0, util_1.normalizeFact)(incoming.name)) {
+            let aliases = byName.get('别名');
+            if (!aliases) {
+                aliases = { name: '别名', lines: [], empty: false };
+                current.sections.push(aliases);
+                byName.set('别名', aliases);
+            }
+            aliases.lines = (0, util_1.unique)([...aliases.lines, incoming.name]);
+            aliases.empty = false;
+        }
+    }
+    return output;
+}
+
 function applyPlanToEntries(plan, entries) {
     const output = entries.map((entry) => structuredClone(entry));
     const byUid = new Map(output.map((entry) => [entry.uid, entry]));
@@ -3551,7 +4237,7 @@ function applyPlanToEntries(plan, entries) {
 // [MA-CONTENT-01] 单条目正文预算：允许场景知识持续补全，但阻止模型把动作流水或重复描述无限写入世界书。
 const SECTION_BUDGETS = {
     // 当前快照拥有最大预算；稳定信息保持短小；历史与变化栏目统一压成一句结果。
-    人物: { 身份: 2, 稳定: 3, 当前: 8, 关系: 5, 持有: 5, 持续经历: 1, 别名: 4 },
+    人物: { 身份: 2, 稳定: 3, 当前: 8, 关系: 5, 持有: 5, 已知: 8, 误信: 6, 持续经历: 1, 别名: 4 },
     场景: { 定义: 3, 空间结构: 6, 固定资源: 5, 持续变化: 1, 当前状态: 8, 在场: 8, 当前资源: 8, 活动关联: 4, 世界影响: 1, 局部约束: 4, 别名: 4 },
     物品: { 定义: 2, 功能: 3, 当前: 8, 限制: 3, 持续变化: 1, 别名: 4 },
     事件: { 目标: 2, 参与: 5, 场景: 2, 阶段: 4, 关键进展: 1, 未决: 4, 结果: 1, 别名: 4 },
@@ -3706,6 +4392,13 @@ function operationsForExisting(entry, section, lines, policy, score, evidence) {
             continue;
         }
         const anchor = informationAnchor(incoming);
+        if (entry.type === '人物' && /^(已知|误信)$/u.test(section) && anchor) {
+            const oppositeSection = section === '已知' ? '误信' : '已知';
+            const opposite = entry.sections.values[oppositeSection] ?? [];
+            for (const oldLine of opposite.filter((line) => informationAnchor(line) === anchor)) {
+                result.push(op('delete-line', entry.title, entry.uid, oppositeSection, oldLine, undefined, `人物认知槽“${anchor.replace(/^label:/u, '')}”已转入【${section}】，清除相反认知`, score, evidence));
+            }
+        }
         const anchoredOld = anchor ? current.find((line) => informationAnchor(line) === anchor) : undefined;
         if (policy === 'replace-by-anchor') {
             if (!anchor) {
@@ -3783,7 +4476,7 @@ function temporaryCleanupOperations(entries, settings, summaryBlocks = []) {
         if (entry.references?.length) return [];
         const protectedSection = Object.entries(entry.sections.values ?? {}).some(([section, lines]) => {
             if (!lines?.length) return false;
-            return /(身份|稳定|关系|持有|持续经历)/u.test(section);
+            return /(身份|稳定|关系|持有|已知|误信|持续经历)/u.test(section);
         });
         if (protectedSection) return [];
         return [{
@@ -3843,6 +4536,8 @@ function policyFor(section, settings) {
         return 'merge-titles';
     if (/(关键进展|事件进程|事件链|进程|过程|阶段记录|持续经历|近期经历|行动记录|持续变化|世界变化|变化记录)/u.test(section))
         return 'append-chain';
+    if (/^(已知|误信)$/u.test(section))
+        return 'semantic-upsert';
     if (/(当前|状态|位置|持有者|所有者|归属|数量|完整性|可用性|阶段|当前结果|活动状态|范围|地理|组织|权力|制度|资源与交通|公开局势|持续影响)/u.test(section))
         return 'replace-by-anchor';
     if (/(完整摘要|当前总结|长期总结|对象定义|基础定义|在场|当前资源|活动关联|世界影响|局部约束|持有|参与|场景|未决|结果|目标)/u.test(section))
@@ -3998,7 +4693,7 @@ const BULLET_PATTERN = /^\s*(?:[-*]\s+|[•·]\s*|\d+、\s*|\d+[.)]\s+)(.*?)\s*$
 const EMPTY_PATTERN = /^\s*(?:无|无变化|无新增事实|无可记录事实|没有)\s*[。.]?\s*$/u;
 const EMPTY_VALUE_PATTERN = /^\s*[^：:\n]{1,24}\s*[:：]\s*(?:无|无变化|没有|未知|未说明)\s*[。.]*\s*$/u;
 const PLAIN_SECTION_NAMES = new Set([
-    '身份', '稳定', '当前', '关系', '持有', '持续经历',
+    '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历',
     '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
     '功能', '限制', '目标', '参与', '场景', '阶段', '关键进展', '未决', '结果',
     '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响',
@@ -4008,7 +4703,7 @@ const PLAIN_SECTION_NAMES = new Set([
 const STRICT_ENTRY_PATTERN = /<<<ENTRY:([^:\r\n>]+):([^>\r\n]+)>>>\s*<<<KEYWORDS>>>\s*([\s\S]*?)\s*<<<CONTENT>>>\s*([\s\S]*?)\s*<<<END_ENTRY>>>/gu;
 const STRICT_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
 const STRICT_SECTION_ORDER = {
-    人物: ['关键词', '身份', '稳定', '当前', '关系', '持有', '持续经历', '别名'],
+    人物: ['关键词', '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名'],
     场景: ['关键词', '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名'],
     物品: ['关键词', '定义', '功能', '当前', '限制', '持续变化', '别名'],
     事件: ['关键词', '目标', '参与', '场景', '阶段', '关键进展', '未决', '结果', '别名'],
@@ -4305,7 +5000,7 @@ function removeCrossEntryDuplicates(blocks, diagnostics) {
 function factOwnershipScore(type, section, line) {
     let score = 10;
     if (type === '事件' && /(目标|参与|阶段|关键进展|未决|结果|因果)/u.test(`${section}${line}`)) score += 40;
-    if (type === '人物' && /(身份|稳定|身体|位置|目标|关系|持有|经历)/u.test(`${section}${line}`)) score += 35;
+    if (type === '人物' && /(身份|稳定|身体|位置|目标|关系|持有|已知|误信|信息来源|认知来源|经历)/u.test(`${section}${line}`)) score += 35;
     if (type === '物品' && /(持有|位置|状态|完整|功能|限制|物品)/u.test(`${section}${line}`)) score += 35;
     if (type === '场景' && /(定义|空间|资源|在场|约束|控制|环境|场景)/u.test(`${section}${line}`)) score += 38;
     if (type === '世界' && /(范围|地理|组织|权力|制度|资源|交通|公开|世界|全局|跨场景|地区)/u.test(`${section}${line}`)) score += 36;
@@ -4331,6 +5026,13 @@ function sanitizeExtractionLine(value, type = '', section = '') {
     let line = normalizePointLine(value).slice(0, 180).trim();
     if (!line) return '';
     if (/(?:供|给).{0,6}(?:AI|模型).{0,8}(?:参考|推测|判断)|(?:AI|模型)(?:可以|可|应当|应该)|可能意味着|建议后续|便于后续|用于推理|剧情建议/u.test(line)) return '';
+    // [MA-EPISTEMIC-02] 正常提取也必须保存角色获得信息的渠道；无来源或无认知槽的内容不进入【已知/误信】。
+    if (type === '人物' && /^(已知|误信)$/u.test(section)) {
+        const source = line.match(/(?:信息来源|认知来源)\s*[：:]\s*(亲眼观察|听到对白|收到消息|查看记录|他人转述|亲身经历|可靠推理|特殊能力|公开信息|自身身份|自身行动|直接告知)/u);
+        const slot = line.match(/^\s*([^：:｜|]{1,24})\s*[：:]/u);
+        if (!source || !slot) return '';
+        line = line.replace(/认知来源\s*[：:]/u, '信息来源：');
+    }
     // [MA-CHAR-01] 只机械移除明确的审美评价词；身份、能力、伤势和可识别特征仍由模型保留。
     if (type === '人物' && /^(身份|稳定)$/u.test(section)) {
         line = line
@@ -4346,6 +5048,8 @@ function sanitizeExtractionLine(value, type = '', section = '') {
 function sectionLineLimit(type, section) {
     if (type === '人物' && section === '稳定') return 3;
     if (type === '人物' && section === '身份') return 4;
+    if (type === '人物' && section === '已知') return 8;
+    if (type === '人物' && section === '误信') return 6;
     if (type === '场景' && /^(空间结构|固定资源|持续变化)$/u.test(section)) return 8;
     if (/^(在场|当前资源|活动关联|世界影响|局部约束|参与|未决|持有)$/u.test(section)) return 6;
     return 6;
@@ -4565,7 +5269,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 任务：把审核后的最终正文转为精简世界书更新。只记录已经成立、仍会影响后续的事实；不续写、不解释、不评价、不预测。
 
 【只允许六类】
-1. 人物：身份、稳定能力、当前状态、该人物自身的关系、关键持有物、持续经历。
+1. 人物：身份、稳定能力、当前状态、该人物自身的关系、关键持有物、具有信息来源的已知或误信、持续经历。
 2. 场景：同一稳定地点持续更新同一条目；保存稳定空间知识、当前局部条件和关联名称。
 3. 物品：只记录一个可单独追踪的具体物品实例；同类物品集合、批量物资和泛称只写入场景资源。
 4. 事件：尚在发展的多对象过程、必要因果节点、未决事项和结果。
@@ -4581,6 +5285,8 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 已经成立且宿主明确的事实，直接写人物、场景、物品、世界或基础设定。
 - 每轮都检查是否出现新的全局状态或世界设定；事实明确时主动创建或更新，不得等待小总结或大总结。
 - 事件只保存过程与因果；人物伤势、物品位置、场景损坏和世界变化应同时直接进入各自宿主，但不得复制同一句长叙述。
+- 同一目标、参与者和未决因果持续发展的内容属于同一个事件生命周期；动作变化、地点内移动、阶段推进和标题措辞变化不得拆成新事件条目。
+- 若“可能相关的既有世界书条目”中已有尚未结束的同一事件，必须复用其稳定标题；只有目标和因果独立、能够单独结束的过程才建立新事件。已结束事件不得因普通后续影响重新打开。
 - 场景不保存事件流水。场景稳定知识持续补全；当前栏目必须给出正文结束时的完整快照。
 - 单轮最多输出一个场景条目，并把它放在第一条；它必须是正文结束时人物实际所在的当前场景。只被提及但未进入的地点不得另建场景条目。
 - 同一事实只能有一个主要宿主。其他条目只保留必要名称或因果联系。
@@ -4591,6 +5297,12 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 稳定名称使用“身份未明的可观察类型（唯一可观察锚点）”；例如“身份未明的女人（银色耳坠）”或“身份未明的账号（夜航）”。没有唯一锚点时使用正文中的稳定称呼，但不得添加真实身份。
 - 关键词必须包含“身份未明”；相同对象后续继续使用既有临时档标题。存在两个无法区分的陌生对象时分别建档，不得强行合并。
 - 后续正文明确揭示身份后，输出已知人物主档；插件会把对应临时档合并并删除。
+
+【角色认知边界】
+- 世界事实不自动等于角色已知。只把该人物通过本轮明确渠道获得、并会影响后续判断的信息写入该人物【已知】。
+- 【已知】和【误信】每行必须使用“认知槽：内容｜信息来源：类型”。允许类型仅限：亲眼观察、听到对白、收到消息、查看记录、他人转述、亲身经历、可靠推理、特殊能力、公开信息、自身身份、自身行动、直接告知。
+- 【误信】只保存该人物当前仍相信但未被世界事实确认的内容。人物后来确认同一认知槽的真实内容时，写入【已知】，插件会清除该槽的旧误信。
+- 玩家未表达的内心、其他人物私密认知和未公开远处事件，不得写入该人物【已知】；不得为了“完整”复制所有世界事实到每个人物。
 
 【内容限制】
 - 禁止“供AI参考”“可据此推测”“可能意味着”“建议后续”等解释。
@@ -4620,6 +5332,8 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【当前】位置、身体、目标、立场等明确状态槽
 【关系】对方名称：该人物自身的长期关系或当前立场
 【持有】当前关键物品完整列表
+【已知】该人物当前能够使用的关键信息；格式“认知槽：内容｜信息来源：允许类型”
+【误信】该人物当前仍相信但未被世界事实确认的信息；格式“认知槽：内容｜信息来源：允许类型”
 【持续经历】最多一句过去时结果，只写已经造成的后续影响，不写过程
 【别名】
 
@@ -4826,30 +5540,50 @@ function duplicatePrompts(pairs) {
     return { system, user };
 }
 
-function migrationPrompts(title, content, keywords) {
-    const system = `你是 Mirror Abyss 世界书格式整理模块。
-只整理给定旧条目的文字格式，不改变事实，不补充推测。
+function migrationPrompts(records, catalog, options = {}) {
+    const batchIndex = Number(options.batchIndex || 1);
+    const batchCount = Number(options.batchCount || 1);
+    const system = `你是 Mirror Abyss 世界书重建规划模型。
+你的任务不是逐条改格式，而是把给定旧条目重组为不重复、可持续更新的新世界书候选。
 
-输出：
+【基本原则】
+1. 只使用输入旧条目中已经存在的事实；禁止补写、猜测或把传闻升级为真相。
+2. 同一对象的轻微标题变化、称谓和明确别名应合并；身份未明对象没有充分证据时不得并入已知人物。
+3. 当前事实、历史结果、角色认知必须分层。角色只能知道自己通过信息来源获得的内容。
+4. 世界真相不等于角色已知。人物【已知】和【误信】每行必须写明信息来源类型。
+5. 允许的信息来源类型只有：亲眼观察、听到对白、收到消息、查看记录、他人转述、亲身经历、可靠推理、特殊能力、公开信息、自身身份、自身行动、直接告知。
+6. 玩家未表达的内心、其他人物私密认知、未公开远处事件不得写入该人物【已知】。
+7. 旧过程压缩为一句已经发生的结果；当前状态可以较详细，其他栏目应短。
+8. 每个事实行末必须附带一个或多个旧条目UID证据，格式为〔证据:UID〕或〔证据:UID1,UID2〕。没有证据的行会被插件丢弃。
+9. 可把一个旧条目拆分到多个新条目，也可把多个旧条目合并为一个新条目；同一目标、参与者与未决因果连续发展的旧事件必须重建为一个事件生命周期，不得按每轮动作或标题变化拆分。
+10. 只有目标和因果独立、能够单独结束的过程才保留为不同事件；已结束事件与后续独立事件不得强行合并。
+11. 不输出UID作为新条目标识；UID只允许出现在事实行末的证据标记中。
+
+【人物认知格式】
+【已知】
+- 事实内容｜信息来源：亲眼观察〔证据:12〕
+【误信】
+- 角色当前相信但未被世界事实确认的内容｜认知来源：他人转述〔证据:18〕
+未写入【已知】的世界事实默认对该人物不可用，不要建立冗长的【未知】清单。
+
+【推荐栏目】
+人物：【身份】【稳定】【当前】【关系】【持有】【已知】【误信】【持续经历】【别名】
+场景：【定义】【空间结构】【固定资源】【持续变化】【当前状态】【在场】【当前资源】【活动关联】【世界影响】【局部约束】【别名】
+物品：【定义】【功能】【当前】【限制】【持续变化】【别名】
+事件：【目标】【参与】【场景】【阶段】【关键进展】【未决】【结果】【别名】
+世界：【范围】【地理】【组织】【权力】【制度】【资源与交通】【公开局势】【世界变化】【持续影响】【别名】
+基础设定：【世界常识】【自然规则】【种族与生命】【能力与技术】【社会规则】【地理框架】【别名】
+不写空栏目，不写“无”。
+
+【唯一输出格式】
 类型｜稳定名称
 
-【合适的小标题】
+【小标题】
+- 完整事实〔证据:UID〕
 
-原有信息点
-
-要求：
-1. 保留所有原有事实、限定词、否定、时间关系和不确定性。
-2. 不输出 UID，不决定常驻、向量、递归、深度、顺序、位置或概率。
-3. 无法可靠归类的原文放入【旧格式保留】，不得删除。
-4. 不输出解释、JSON、代码块或思考过程。`;
-    const user = `原标题：
-${title || '（空）'}
-
-原关键词：
-${keywords.join('、') || '（无）'}
-
-原正文：
-${content || '（空）'}`;
+多个条目连续输出。禁止JSON、代码块、解释、前言、后记和思考过程。没有可重建内容时只输出“无”。`;
+    const body = records.map((record) => `<<<SOURCE uid=${record.uid}>>>\n标题：${record.title}\n关键词：${record.keywords.join('、') || '无'}\n正文：\n${record.content || '（空）'}\n<<<END_SOURCE>>>`).join('\n\n');
+    const user = `这是第 ${batchIndex}/${batchCount} 批旧条目。\n\n全部旧条目目录：\n${clipText(catalog, 6000)}\n\n本批原始条目：\n${clipText(body, 36000)}\n\n只输出本批证据能够支持的新条目候选。跨批同一对象使用相同稳定名称，插件会再次合并。`;
     return { system, user };
 }
 
