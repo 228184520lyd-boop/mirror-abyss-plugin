@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.15-rebuild.10",
+  "version": "2.0.0-lite.ui.17",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "基于ui.15的AI辅助世界书重建｜全局收束、附属归并与已发生事件整理"
+  "description": "上下文白盒审核｜最终状态收束、轻量宿主协调、同名保护与近期撤回"
 }

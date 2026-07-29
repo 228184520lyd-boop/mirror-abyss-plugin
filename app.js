@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.15-rebuild.10 — ui.15 baseline with semantic multi-pass worldbook rebuild and source-bounded character knowledge. */
+/** Mirror Abyss 2.0.0-lite.ui.17 — context-only white-box audit, final-state convergence, lightweight host coordination, source rollback, and focus controls. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -17,7 +17,18 @@ class MirrorAbyssApplication {
         this.host = new host_1.HostAdapter();
         this.settingsStore = new settings_1.SettingsStore();
         this.worldbook = new worldbook_1.WorldbookAdapter(() => this.host.context(), () => this.host.chatKey());
-        this.auditRunner = new audit_1.AuditRunner(this.host, () => this.settings());
+        this.auditRunner = new audit_1.AuditRunner(this.host, () => this.settings(), (progress) => {
+            const snapshot = this.activeSnapshots.get(progress?.chatKey || safeChatKey(this.host));
+            const messageIndex = Number.isInteger(snapshot?.messageIndex) ? snapshot.messageIndex : null;
+            if (progress?.phase === 'revision') {
+                const detail = progress.detail || '审核未通过，正在生成修正版';
+                this.controlPanel?.setTaskProgress?.('audit', 'running', detail, { messageIndex });
+                if (snapshot?.taskType === 'full') {
+                    this.controlPanel?.setTaskProgress?.('extract', 'queued', '上一轮审核未通过，等待修正版后提取', { messageIndex });
+                }
+                this.controlPanel?.setStatus?.(detail);
+            }
+        });
         this.memoryRunner = new memory_1.MemoryRunner(this.host, this.worldbook, () => this.settings(), (progress) => {
             const active = this.activeSnapshots.get(safeChatKey(this.host));
             this.controlPanel?.setTaskProgress?.('extract', progress?.state || 'running', progress?.detail || '', { ...(progress || {}), messageIndex: progress?.messageIndex ?? active?.messageIndex ?? null });
@@ -53,13 +64,17 @@ class MirrorAbyssApplication {
         this.pendingTaskKeys = new Set();
         this.activeSnapshots = new Map();
         this.activeTokens = new Map();
+        this.pendingMessageTimers = new Map();
+        this.pendingSourceReconcileTimers = new Map();
         this.started = false;
     }
     start() {
         if (this.started) return;
         this.host.context();
-        this.listen('MESSAGE_RECEIVED', (value) => void this.onMessage(messageIndexFromEvent(value)));
-        this.listen('CHARACTER_MESSAGE_RENDERED', (value) => void this.onMessage(messageIndexFromEvent(value)));
+        this.listen('MESSAGE_RECEIVED', (value) => this.scheduleMessage(messageIndexFromEvent(value)));
+        this.listen('CHARACTER_MESSAGE_RENDERED', (value) => this.scheduleMessage(messageIndexFromEvent(value)));
+        // [MA-DIALOGUE-01] 优先等待完整生成结束；旧版宿主没有该事件时，由稳定检测兜底。
+        this.listen('GENERATION_ENDED', (value) => this.scheduleMessage(messageIndexFromEvent(value), true));
         for (const event of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED']) this.listen(event, (value) => this.onScopeChanged(event, value));
         this.controlPanel.mount();
         this.started = true;
@@ -73,6 +88,8 @@ class MirrorAbyssApplication {
         this.taskQueues.clear();
         this.pendingTaskKeys.clear();
         this.activeSnapshots.clear();
+        this.clearPendingMessageTimers();
+        this.clearPendingSourceReconcileTimers();
         this.host.clearInternalMessageMutations();
         this.controlPanel.unmount();
     }
@@ -151,6 +168,46 @@ class MirrorAbyssApplication {
         try { this.cleanup.push(this.host.subscribe(eventName, handler, false)); }
         catch (error) { console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用`, error); }
     }
+    scheduleMessage(index, immediate = false) {
+        if (!this.started) return;
+        let turn;
+        try { turn = this.host.latestTurn(index); }
+        catch { return; }
+        const key = `${turn.chatKey}|${turn.messageIndex}`;
+        const previous = this.pendingMessageTimers.get(key);
+        if (previous) globalThis.clearTimeout(previous);
+        const delay = immediate ? 0 : 650;
+        const timer = globalThis.setTimeout(async () => {
+            if (this.pendingMessageTimers.get(key) !== timer) return;
+            this.pendingMessageTimers.delete(key);
+            try {
+                const first = this.host.latestTurn(turn.messageIndex);
+                if (!immediate) {
+                    await new Promise((resolve) => globalThis.setTimeout(resolve, 220));
+                    const stable = this.host.latestTurn(turn.messageIndex);
+                    if (stable.contentHash !== first.contentHash) {
+                        this.scheduleMessage(turn.messageIndex, false);
+                        return;
+                    }
+                }
+                await this.onMessage(turn.messageIndex);
+            }
+            catch (error) {
+                const message = (0, util_1.errorText)(error);
+                if (!/源正文|聊天已经切换|没有可处理/u.test(message)) console.error('[MirrorAbyss] dialogue scheduling failed', error);
+            }
+        }, delay);
+        timer?.unref?.();
+        this.pendingMessageTimers.set(key, timer);
+    }
+    clearPendingMessageTimers() {
+        for (const timer of this.pendingMessageTimers.values()) globalThis.clearTimeout(timer);
+        this.pendingMessageTimers.clear();
+    }
+    clearPendingSourceReconcileTimers() {
+        for (const pending of this.pendingSourceReconcileTimers.values()) globalThis.clearTimeout(pending.timer);
+        this.pendingSourceReconcileTimers.clear();
+    }
     async onMessage(index) {
         if (!this.started) return;
         if (!Number.isInteger(index)) {
@@ -178,8 +235,10 @@ class MirrorAbyssApplication {
     }
     onScopeChanged(eventName, eventValue) {
         if (this.host.consumeInternalScopeEvent(eventName, eventValue)) return;
-        const reason = `SillyTavern 事件 ${eventName} 使源正文失效`;
+        this.clearPendingMessageTimers();
+        const reason = `SillyTavern 事件 ${eventName} 使源对话失效`;
         if (eventName === 'CHAT_CHANGED') {
+            this.clearPendingSourceReconcileTimers();
             this.cancelAll(reason);
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
             this.controlPanel.resetTaskStates?.('聊天已经切换');
@@ -199,6 +258,63 @@ class MirrorAbyssApplication {
             this.controlPanel.resetTaskStates?.('源正文已被修改、切换或删除');
             this.controlPanel.setStatus(`源正文已变化，已取消${affected}个受影响任务；其他后台任务继续运行`);
         }
+        this.scheduleSourceReconcile(eventName, index);
+    }
+
+    scheduleSourceReconcile(eventName, index) {
+        let chatKey;
+        try { chatKey = this.host.chatKey(); }
+        catch { return; }
+        if (!chatKey || !Number.isInteger(index)) return;
+        const previous = this.pendingSourceReconcileTimers.get(chatKey);
+        if (previous?.timer) globalThis.clearTimeout(previous.timer);
+        const nextIndex = Math.min(index, Number.isInteger(previous?.index) ? previous.index : index);
+        const nextEvent = eventName === 'MESSAGE_DELETED' || previous?.eventName === 'MESSAGE_DELETED' ? 'MESSAGE_DELETED' : eventName;
+        const timer = globalThis.setTimeout(() => {
+            const pending = this.pendingSourceReconcileTimers.get(chatKey);
+            if (!pending || pending.timer !== timer) return;
+            this.pendingSourceReconcileTimers.delete(chatKey);
+            void this.reconcileCommittedSource(nextEvent, nextIndex, chatKey).catch((error) => {
+                const text = (0, util_1.errorText)(error);
+                this.controlPanel.setStatus(`近期世界书回滚失败：${text}；可使用世界书重建重新收束`, true);
+                console.error('[MirrorAbyss] source reconciliation failed', error);
+            });
+        }, 320);
+        timer?.unref?.();
+        this.pendingSourceReconcileTimers.set(chatKey, { timer, index: nextIndex, eventName: nextEvent });
+    }
+    async reconcileCommittedSource(eventName, index, chatKey) {
+        if (!this.started || this.host.chatKey() !== chatKey) return;
+        const receipts = typeof this.host.getCommitReceipts === 'function' ? this.host.getCommitReceipts() : [];
+        const affected = receipts.filter((receipt) => receiptAffectedBySourceChange(receipt, eventName, index));
+        if (!affected.length) return;
+        await this.waitForChatIdle(chatKey);
+        if (!this.started || this.host.chatKey() !== chatKey) return;
+        const sourceKeys = [...new Set(affected.map((receipt) => String(receipt.sourceMessageKey ?? '')).filter(Boolean))];
+        const ids = affected.map((receipt) => String(receipt.id ?? '')).filter(Boolean);
+        await this.enqueueMaintenance('sourceRollback', async (settings, snapshot) => {
+            const focusUid = this.host.getFocusUid();
+            const result = await this.worldbook.rollbackReceipts(settings, affected, focusUid, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
+            await this.host.removeCommitReceipts(ids);
+            const cursor = this.host.cursor();
+            await this.host.saveCursor({ ...cursor, lastProcessedMessageKey: '', lastProcessedHash: '' }, snapshot, this.settings());
+            return result;
+        });
+        this.controlPanel.resetTaskStates?.('源对话已变化，近期写入已回滚');
+        this.controlPanel.setStatus(`已回滚${affected.length}次近期世界书提交，正在按当前对话重新排队`);
+        await this.controlPanel.refreshRecallMap?.();
+        const indexes = sourceKeys
+            .map((messageKey) => this.host.assistantIndexByMessageKey(messageKey))
+            .filter((value) => Number.isInteger(value) && value >= 0)
+            .sort((left, right) => left - right);
+        for (const messageIndex of indexes) this.scheduleMessage(messageIndex, false);
+    }
+    async waitForChatIdle(chatKey) {
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+            if (!this.activeTokens.has(chatKey) && !this.runningByChat.has(chatKey)) return;
+            await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
+        }
+        throw new Error('受影响的旧任务尚未停止');
     }
 
     cancelAffectedMessageTasks(eventName, index, reason) {
@@ -491,6 +607,20 @@ function notify(kind, message) {
     if (typeof toast === 'function') toast(message);
     else console[kind === 'error' ? 'error' : 'info'](`[MirrorAbyss] ${message}`);
 }
+function receiptAffectedBySourceChange(receipt, eventName, index) {
+    const assistantIndex = Number(receipt?.messageIndex);
+    const playerIndex = Number(receipt?.playerMessageIndex);
+    if (!Number.isInteger(index)) return false;
+    if (eventName === 'MESSAGE_EDITED') {
+        return (Number.isInteger(assistantIndex) && assistantIndex >= index)
+            || (Number.isInteger(playerIndex) && playerIndex >= index);
+    }
+    if (eventName === 'MESSAGE_SWIPED' || eventName === 'MESSAGE_DELETED') {
+        return (Number.isInteger(assistantIndex) && assistantIndex >= index)
+            || (Number.isInteger(playerIndex) && playerIndex >= index);
+    }
+    return false;
+}
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 function messageIndexFromEvent(value) {
     if (Number.isInteger(value))
@@ -518,9 +648,10 @@ const model_request_1 = require("./model-request");
 const util_1 = require("./util");
 
 class AuditRunner {
-    constructor(host, getSettings) {
+    constructor(host, getSettings, onProgress = () => undefined) {
         this.host = host;
         this.getSettings = getSettings;
+        this.onProgress = typeof onProgress === 'function' ? onProgress : () => undefined;
         this.revisionService = new revision_1.RevisionService(host, getSettings);
         this.statusByChat = new Map();
     }
@@ -541,16 +672,16 @@ class AuditRunner {
         try {
             this.host.assertSnapshot(snapshot, this.getSettings());
             this.setStatus(snapshot.chatKey, 'audit', '审核正文');
-            const prompt = (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, snapshot.characterCard);
+            const prompt = (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, { dialogueContext: snapshot.dialogueContext });
             const raw = await (0, model_request_1.callModel)({
                 host: this.host,
                 stage: 'audit',
                 prompt,
-                fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, snapshot.characterCard, { compact: true }),
+                fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, { compact: true, dialogueContext: snapshot.dialogueContext }),
                 settings,
                 snapshot,
                 profileId: settings.auditProfileId,
-                sourceText: snapshot.assistantText,
+                sourceText: snapshot.turnText || snapshot.assistantText,
                 onRetry: () => this.setStatus(snapshot.chatKey, 'audit', '审核网关异常，已缩短上下文并重试一次'),
             });
             this.host.assertSnapshot(snapshot, this.getSettings());
@@ -573,7 +704,10 @@ class AuditRunner {
         }
     }
     setStatus(chatKey, phase, detail, error = '') {
+        const status = { chatKey, phase, detail, error };
         this.statusByChat.set(chatKey, { phase, detail, error });
+        try { this.onProgress(status); }
+        catch (callbackError) { console.warn('[MirrorAbyss] audit progress callback failed', callbackError); }
     }
 }
 exports.AuditRunner = AuditRunner;
@@ -606,12 +740,12 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.15-rebuild.10';
+exports.VERSION = '2.0.0-lite.ui.17';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 14;
+exports.MANAGED_VERSION = 15;
 },"control-panel":function(module,exports,require){
 
 "use strict";
@@ -896,7 +1030,8 @@ class ControlPanel {
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
 .ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
-.ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
+.ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:34px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
+.ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:26px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
 .${INDICATOR_CLASS}{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
 .${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
@@ -955,6 +1090,11 @@ class ControlPanel {
             this.makeNumberInput('largeSummaryCount', '大总结计数', 1, 30),
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
         );
+        const auditPromptEditor = this.makePromptEditor(
+            'auditPrompt',
+            '基础审核提示词',
+            '审核只读取这里的规则、最近完整对话、本轮玩家输入和本轮AI回复；不读取角色卡或世界书。',
+        );
         const recall = this.buildRecallSection();
         const rebuild = this.buildRebuildSection();
         const actions = document.createElement('div');
@@ -971,7 +1111,7 @@ class ControlPanel {
         note.textContent = '提取异常会先本地修复、合并重复条目并部分提交；仍无法解析时只修复一次异常输出。自动流程严格按“审核→正文替换落地→提取→总结”执行。';
         runPage.append(actions, status);
         recallPage.append(recall);
-        settingsPage.append(apiSection, switches, thresholds, note);
+        settingsPage.append(apiSection, switches, auditPromptEditor, thresholds, note);
         rebuildPage.append(rebuild);
         body.append(pageNav, runPage, recallPage, settingsPage, rebuildPage);
         panel.append(header, body);
@@ -1323,10 +1463,32 @@ class ControlPanel {
         for (const item of visibleEntries) {
             const row = document.createElement('div');
             row.className = 'ma-lite-recall-row';
+            const head = document.createElement('div');
+            head.className = 'ma-lite-recall-row-head';
             const title = document.createElement('div');
             title.className = 'ma-lite-recall-title';
             title.textContent = item.title;
             title.title = item.title;
+            head.append(title);
+            if (item.type === '人物' && typeof this.actions.setFocus === 'function') {
+                const focus = document.createElement('button');
+                focus.type = 'button';
+                focus.className = 'ma-lite-recall-focus';
+                focus.dataset.active = item.focus ? 'true' : 'false';
+                focus.textContent = item.focus ? '取消焦点' : '设为焦点';
+                focus.title = item.focus ? '取消玩家主焦点' : '设为玩家主焦点；只调整召回，不改变事实内容';
+                focus.addEventListener('click', async () => {
+                    focus.disabled = true;
+                    try {
+                        await this.actions.setFocus(item.uid, !item.focus);
+                        this.setStatus(item.focus ? `已取消主焦点：${item.title}` : `已设为主焦点：${item.title}`);
+                        await this.refreshRecallMap(true);
+                    }
+                    catch (error) { this.setStatus(`焦点设置失败：${(0, util_1.errorText)(error)}`, true); }
+                    finally { focus.disabled = false; }
+                });
+                head.append(focus);
+            }
             const meta = document.createElement('div');
             meta.className = 'ma-lite-recall-meta';
             for (const badge of item.badges) {
@@ -1349,7 +1511,7 @@ class ControlPanel {
                 node.textContent = text;
                 meta.append(node);
             }
-            row.append(title, meta);
+            row.append(head, meta);
             list.append(row);
         }
         this.recallNode.append(summary, list);
@@ -1374,6 +1536,42 @@ class ControlPanel {
             pager.append(previous, status, next);
             this.recallNode.append(pager);
         }
+    }
+    makePromptEditor(key, labelText, description) {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-prompt-editor';
+        const title = document.createElement('strong');
+        title.textContent = labelText;
+        const help = document.createElement('small');
+        help.textContent = description;
+        const textarea = document.createElement('textarea');
+        textarea.dataset.setting = key;
+        textarea.setAttribute('aria-label', labelText);
+        textarea.spellcheck = false;
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'ma-lite-prompt-save';
+        save.textContent = '保存审核提示词';
+        save.addEventListener('click', () => {
+            const value = String(textarea.value || '').trim();
+            if (!value) {
+                this.setStatus('审核提示词不能为空；关闭审核请使用审核功能开关', true);
+                return;
+            }
+            try {
+                this.actions.configure?.({ [key]: value });
+                this.lastOutcome = null;
+                this.setStatus('审核提示词已保存');
+            }
+            catch (error) {
+                this.setStatus(`保存审核提示词失败：${(0, util_1.errorText)(error)}`, true);
+                this.refresh();
+            }
+        });
+        section.append(title, help, textarea, save);
+        this.inputs[key] = textarea;
+        this.buttons[`${key}Save`] = save;
+        return section;
     }
     makeSwitch(key, labelText, description) {
         const label = document.createElement('label');
@@ -1497,6 +1695,9 @@ class ControlPanel {
         if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
         if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
         if (this.inputs.extractionEnabled) this.inputs.extractionEnabled.checked = settings.extractionEnabled !== false;
+        if (this.inputs.auditPrompt && (typeof document === 'undefined' || document.activeElement !== this.inputs.auditPrompt)) {
+            this.inputs.auditPrompt.value = String(settings.auditPrompt || '');
+        }
         if (this.apiProfileSelect && this.profileDropdownBound) {
             const selectedId = settings.modelSource === 'profile' ? String(settings.modelProfileId || '') : '';
             this.apiProfileSelect.value = selectedId;
@@ -1514,6 +1715,7 @@ class ControlPanel {
         const master = settings.enabled !== false;
         if (this.buttons.audit) this.buttons.audit.disabled = this.pendingActions.has('audit') || !master || settings.auditEnabled === false;
         if (this.buttons.extract) this.buttons.extract.disabled = this.pendingActions.has('extract') || !master || settings.extractionEnabled === false;
+        if (this.buttons.auditPromptSave) this.buttons.auditPromptSave.disabled = this.pendingActions.size > 0;
         if (this.rebuildPreviewButton) this.rebuildPreviewButton.disabled = this.pendingActions.size > 0 || !master;
         if (this.rebuildCommitButton) this.rebuildCommitButton.disabled = this.pendingActions.size > 0 || !master || !this.actions.migrationPreview?.();
         if (this.rebuildUndoButton && this.pendingActions.size > 0) this.rebuildUndoButton.disabled = true;
@@ -1728,6 +1930,9 @@ function buildRecallViewModel(entries) {
         if (Number(activation.delayUntilRecursion || 0) > 0) badges.push({ label: `仅递归 ${activation.delayUntilRecursion}`, kind: 'bridge' });
         badges.push({ label: recursion.label, kind: recursion.kind });
         return {
+            uid: String(entry.uid ?? ''),
+            type: String(entry.type ?? ''),
+            focus: entry.focus === true,
             title: String(entry.title || entry.name || entry.uid || '未命名条目'),
             lifecycle,
             lifecycleLabel: lifecycleInfo.label,
@@ -1845,30 +2050,31 @@ const COMMON_SECTION_ALIASES = {
 const TYPE_SECTION_ALIASES = {
     人物: {
         '身份定义': '身份',
-        '固定事实': '稳定',
+        '持续经历': '固定事实',
+        '近期经历': '固定事实',
+        '变化记录': '固定事实',
         '当前状态': '当前',
         '现行事实': '当前',
         '状态': '当前',
-        '近期经历': '持续经历',
-        '变化记录': '持续经历',
+
     },
     场景: {
-        '固定事实': '定义',
         '地点属性': '定义',
+        '持续变化': '固定事实',
         '稳定空间': '空间结构',
         '当前': '当前状态',
         '现行事实': '当前状态',
         '状态': '当前状态',
-        '局部变化': '持续变化',
-        '变化记录': '持续变化',
+        '局部变化': '固定事实',
+        '变化记录': '固定事实',
     },
     物品: {
-        '固定事实': '定义',
         '对象定义': '定义',
+        '持续变化': '固定事实',
         '当前状态': '当前',
         '现行事实': '当前',
         '状态': '当前',
-        '变化记录': '持续变化',
+        '变化记录': '固定事实',
     },
     事件: {
         '当前': '阶段',
@@ -1893,7 +2099,8 @@ const TYPE_SECTION_ALIASES = {
         '现行事实': '公开局势',
         '状态': '公开局势',
         '全局状态': '公开局势',
-        '变化记录': '世界变化',
+        '世界变化': '固定事实',
+        '变化记录': '固定事实',
     },
     基础设定: {
         '世界规则': '自然规则',
@@ -2090,6 +2297,9 @@ class HostAdapter {
             messageKey: `maintenance:${taskType}`,
             assistantText: '',
             playerText: '',
+            turnText: '',
+            dialogueContext: '',
+            dialogueHash: '',
             contentHash: '',
             runtimeSessionId: this.runtimeSessionId,
             chatInstance: context.chat,
@@ -2121,6 +2331,8 @@ class HostAdapter {
             if (turn.messageKey !== snapshot.messageKey || turn.contentHash !== snapshot.contentHash) throw new Error('源正文版本已经变化，旧任务作废');
             if (turn.playerText !== snapshot.playerText)
                 throw new Error('与源正文直接相关的玩家输入已经变化，旧任务作废');
+            if (String(turn.dialogueHash ?? '') !== String(snapshot.dialogueHash ?? ''))
+                throw new Error('源对话上下文已经变化，旧任务作废');
         }
         if (currentSettings) {
             if (this.targetWorldbookName(currentSettings) !== snapshot.worldbookName) throw new Error('目标世界书已经变化，旧任务作废');
@@ -2192,17 +2404,34 @@ class HostAdapter {
         const message = chat[messageIndex];
         const assistantText = String(message.mes ?? '');
         const messageKey = this.ensureMessageKey(messageIndex, message);
+        const playerInfo = previousPlayerMessage(chat, messageIndex);
+        const playerText = playerInfo.text;
+        const dialogueContext = dialogueContextBeforeTurn(chat, playerInfo.index, 4);
+        const turnText = formatDialogueTurn(playerText, assistantText);
         return {
             chatKey,
             messageIndex,
             messageKey,
             assistantText,
-            playerText: previousPlayerText(chat, messageIndex),
+            playerText,
+            playerMessageIndex: playerInfo.index,
+            turnText,
+            dialogueContext,
+            dialogueHash: (0, util_1.hashText)(`${dialogueContext}\n---TARGET---\n${turnText}`),
             characterCard: characterCardText(this.context()),
             contentHash: (0, util_1.hashText)(assistantText),
         };
     }
     isAssistantIndex(index) { return isAssistant((this.context().chat ?? [])[index]); }
+    assistantIndexByMessageKey(messageKey) {
+        const target = String(messageKey ?? '');
+        if (!target) return -1;
+        const chat = this.context().chat ?? [];
+        for (let index = 0; index < chat.length; index += 1) {
+            if (isAssistant(chat[index]) && readMessageKey(chat[index]) === target) return index;
+        }
+        return -1;
+    }
     recentConversation(snapshot, turnCount) {
         this.assertSnapshot(snapshot);
         const chat = this.context().chat ?? [];
@@ -2373,6 +2602,39 @@ class HostAdapter {
             throw error;
         }
     }
+    getCommitReceipts() {
+        const receipts = this.chatNamespace().commitReceipts;
+        return Array.isArray(receipts) ? structuredClone(receipts) : [];
+    }
+    async appendCommitReceipt(receipt, limit = 12) {
+        if (!receipt || typeof receipt !== 'object' || !Array.isArray(receipt.changes) || !receipt.changes.length) return false;
+        const root = this.chatNamespace();
+        const previous = Array.isArray(root.commitReceipts) ? structuredClone(root.commitReceipts) : [];
+        const next = [...previous.filter((item) => item?.id !== receipt.id), structuredClone(receipt)].slice(-Math.max(1, Number(limit) || 12));
+        root.commitReceipts = next;
+        try { await this.saveMetadata(); return true; }
+        catch (error) {
+            if (previous.length) root.commitReceipts = previous;
+            else delete root.commitReceipts;
+            throw error;
+        }
+    }
+    async removeCommitReceipts(ids = []) {
+        const targets = new Set((Array.isArray(ids) ? ids : [ids]).map((value) => String(value ?? '')).filter(Boolean));
+        if (!targets.size) return false;
+        const root = this.chatNamespace();
+        const previous = Array.isArray(root.commitReceipts) ? structuredClone(root.commitReceipts) : [];
+        const next = previous.filter((item) => !targets.has(String(item?.id ?? '')));
+        if (next.length === previous.length) return false;
+        if (next.length) root.commitReceipts = next;
+        else delete root.commitReceipts;
+        try { await this.saveMetadata(); return true; }
+        catch (error) {
+            if (previous.length) root.commitReceipts = previous;
+            else delete root.commitReceipts;
+            throw error;
+        }
+    }
     getFocusUid() { return String(this.chatNamespace().focusUid ?? '').trim(); }
     async setFocusUid(uid) {
         const root = this.chatNamespace();
@@ -2500,12 +2762,28 @@ function characterCardText(context) {
 }
 function isAssistant(message) { return Boolean(message && !message.is_user && !message.is_system && typeof message.mes === 'string' && message.mes.trim()); }
 function findLatestAssistant(chat) { for (let index = chat.length - 1; index >= 0; index -= 1) if (isAssistant(chat[index])) return index; return -1; }
-function previousPlayerText(chat, before) {
+function previousPlayerMessage(chat, before) {
     for (let index = before - 1; index >= 0; index -= 1) {
         const message = chat[index];
-        if (message?.is_user && !message.is_system && typeof message.mes === 'string') return message.mes;
+        if (message?.is_user && !message.is_system && typeof message.mes === 'string') {
+            return { index, text: String(message.mes ?? '') };
+        }
     }
-    return '';
+    return { index: -1, text: '' };
+}
+function previousPlayerText(chat, before) { return previousPlayerMessage(chat, before).text; }
+function dialogueContextBeforeTurn(chat, playerIndex, maxMessages = 4) {
+    if (!Number.isInteger(playerIndex) || playerIndex <= 0) return '';
+    const selected = [];
+    for (let index = playerIndex - 1; index >= 0 && selected.length < Math.max(0, Number(maxMessages) || 0); index -= 1) {
+        const message = chat[index];
+        if (!message || message.is_system || typeof message.mes !== 'string' || !message.mes.trim()) continue;
+        selected.push(`${message.is_user ? '玩家' : 'AI'}：${message.mes.trim()}`);
+    }
+    return selected.reverse().join('\n\n');
+}
+function formatDialogueTurn(playerText, assistantText) {
+    return `玩家：${String(playerText || '（空）').trim() || '（空）'}\n\nAI：${String(assistantText || '').trim()}`;
 }
 function messageIndexFromEvent(value) {
     if (Number.isInteger(value))
@@ -2716,6 +2994,7 @@ exports.isProvisionalName = isProvisionalName;
 exports.isProvisionalEntry = isProvisionalEntry;
 exports.sameEventLifecycle = sameEventLifecycle;
 exports.eventLifecycleScore = eventLifecycleScore;
+exports.identityConflict = identityConflict;
 const util_1 = require("./util");
 const semantic_1 = require("./semantic");
 
@@ -2816,6 +3095,15 @@ function matchBlock(block, index, contextText, weights = {}) {
 
     const byUid = new Map();
     for (const item of collected) {
+        const hasStrongIdentity = item.evidence.some((evidence) => ['uid', 'context-identity'].includes(evidence.kind));
+        if (!hasStrongIdentity && identityConflict(block, item.entry)) {
+            item.score = Math.min(Number(item.score), 40);
+            item.evidence.push({ kind: 'identity-conflict', score: 0, detail: '稳定区分锚点或多个身份字段冲突，禁止按相似名称覆盖' });
+        }
+        else if (!hasStrongIdentity && anchorNeedsConfirmation(block, item.entry, item.evidence)) {
+            item.score = Math.min(Number(item.score), 60);
+            item.evidence.push({ kind: 'anchor-unconfirmed', score: 0, detail: '名称只在去除区分锚点后相同，缺少同一身份确认' });
+        }
         const current = byUid.get(item.entry.uid);
         if (!current || item.score > current.score) byUid.set(item.entry.uid, item);
         else if (current && item.score === current.score) current.evidence.push(...item.evidence);
@@ -2865,7 +3153,20 @@ function relevantEntries(entries, text, limit = 24) {
         .filter((entry) => entry.focus || entry.activation?.constant || entry.type === '总结' || /(进行中|当前场景|当前相关|活跃)/u.test(entry.content ?? ''))
         .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))
         .slice(0, 12);
-    return [...new Map([...selected, ...fallback].map((entry) => [entry.uid, entry])).values()].slice(0, limit);
+    const merged = [...new Map([...selected, ...fallback].map((entry) => [entry.uid, entry])).values()];
+    if (limit <= 8) {
+        // [MA-CONTEXT-01] 逐轮提取的小上下文中固定保留最新世界与基础设定各一条，
+        // 防止人物名称命中把全局框架完全挤出模型视野。
+        const reserved = ['基础设定', '世界'].map((type) => entries
+            .filter((entry) => entry.type === type && !entry.activation?.disabled)
+            .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))[0])
+            .filter(Boolean);
+        const reservedUids = new Set(reserved.map((entry) => entry.uid));
+        const ordinary = merged.filter((entry) => !reservedUids.has(entry.uid));
+        const budget = Math.max(0, Number(limit) - reserved.length);
+        return [...ordinary.slice(0, budget), ...reserved].slice(0, limit);
+    }
+    return merged.slice(0, limit);
 }
 
 function titleTokens(value) {
@@ -2874,7 +3175,9 @@ function titleTokens(value) {
 }
 function sameEntryIdentity(left, right) {
     if (!left || !right) return false;
+    if (String(left.uid ?? '') && String(left.uid ?? '') === String(right.uid ?? '')) return true;
     if (canonicalTypeLookup(left.type) !== canonicalTypeLookup(right.type)) return false;
+    if (identityConflict(left, right)) return false;
     if (normalizeTitleLookup(left.title) && normalizeTitleLookup(left.title) === normalizeTitleLookup(right.title)) return true;
     const leftNames = new Set([left.name, ...(left.aliases ?? [])].flatMap(nameVariants));
     const rightNames = [right.name, ...(right.aliases ?? [])].flatMap(nameVariants);
@@ -3043,15 +3346,66 @@ function isProvisionalEntry(entry) {
 }
 
 function nameVariants(value) {
+    const full = normalizeLookup(String(value ?? ''));
     const raw = normalizeLookup(String(value ?? '').replace(/[（(][^）)]*[）)]/gu, ''));
-    if (!raw) return [];
-    const variants = new Set([raw]);
-    for (const suffix of HONORIFIC_SUFFIXES) {
-        if (!raw.endsWith(suffix)) continue;
-        const base = raw.slice(0, -suffix.length);
-        if (base.length >= 2) variants.add(base);
+    if (!full && !raw) return [];
+    const variants = new Set([full, raw].filter(Boolean));
+    for (const source of [full, raw]) {
+        for (const suffix of HONORIFIC_SUFFIXES) {
+            if (!source.endsWith(suffix)) continue;
+            const base = source.slice(0, -suffix.length);
+            if (base.length >= 2) variants.add(base);
+        }
     }
     return [...variants];
+}
+function identityConflict(left, right) {
+    if (!left || !right) return false;
+    if (canonicalTypeLookup(left.type) !== canonicalTypeLookup(right.type)) return true;
+    const leftAnchors = parentheticalAnchors(left.name ?? left.title);
+    const rightAnchors = parentheticalAnchors(right.name ?? right.title);
+    if (leftAnchors.length && rightAnchors.length && !leftAnchors.some((value) => rightAnchors.includes(value))) return true;
+    const leftSlots = stableIdentitySlots(left);
+    const rightSlots = stableIdentitySlots(right);
+    let conflicts = 0;
+    for (const [key, leftValue] of leftSlots.entries()) {
+        const rightValue = rightSlots.get(key);
+        if (!rightValue || compatibleIdentityValue(leftValue, rightValue)) continue;
+        // 唯一编号、种族、型号和类别属于强区分锚点，单项冲突即可确认不是同一对象。
+        if (/^(?:唯一编号|编号|序列号|账号id|id|种族|型号|类别)$/u.test(key)) return true;
+        conflicts += 1;
+    }
+    return conflicts >= 2;
+}
+function anchorNeedsConfirmation(block, entry, evidence = []) {
+    if (!evidence.some((item) => ['name-variant', 'type-name'].includes(item.kind))) return false;
+    const blockAnchors = parentheticalAnchors(block?.name ?? block?.title);
+    const entryAnchors = parentheticalAnchors(entry?.name ?? entry?.title);
+    return blockAnchors.length !== entryAnchors.length && (blockAnchors.length > 0 || entryAnchors.length > 0);
+}
+function parentheticalAnchors(value) {
+    return [...String(value ?? '').matchAll(/[（(]([^）)]+)[）)]/gu)]
+        .map((match) => normalizeLookup(match[1]))
+        .filter(Boolean);
+}
+function stableIdentitySlots(value) {
+    const map = new Map();
+    const sections = sectionMap(value);
+    for (const [section, lines] of sections.entries()) {
+        if (!/^(?:身份|稳定|定义|当前)$/u.test(section)) continue;
+        for (const line of lines ?? []) {
+            const match = String(line ?? '').match(/^\s*([^：:]{1,24})\s*[：:]\s*(.+)$/u);
+            if (!match) continue;
+            const key = normalizeLookup(match[1]);
+            if (!/^(?:唯一编号|编号|序列号|账号id|id|种族|职业|组织|阵营|身份|型号|类别)$/u.test(key)) continue;
+            map.set(key, normalizeLookup(match[2]));
+        }
+    }
+    return map;
+}
+function compatibleIdentityValue(left, right) {
+    if (!left || !right) return true;
+    return left === right || (Math.min(left.length, right.length) >= 3 && (left.includes(right) || right.includes(left)));
 }
 function compareEntryPriority(left, right) {
     const leftScore = entryPriority(left);
@@ -3194,18 +3548,19 @@ class MemoryRunner {
         this.validate(snapshot);
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
-        const selected = (0, matcher_1.relevantEntries)(entries, `${snapshot.playerText}\n${snapshot.assistantText}`, 6);
-        const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected);
+        const dialogueInput = [snapshot.dialogueContext, snapshot.turnText || `${snapshot.playerText}\n${snapshot.assistantText}`].filter(Boolean).join('\n\n');
+        const selected = (0, matcher_1.relevantEntries)(entries, dialogueInput, 6);
+        const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { dialogueContext: snapshot.dialogueContext });
         // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
         const raw = await (0, model_request_1.callModel)({
             host: this.host,
             stage: 'extraction',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true }),
+            fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true, dialogueContext: snapshot.dialogueContext }),
             settings,
             snapshot,
             profileId: settings.extractionProfileId,
-            sourceText: snapshot.assistantText,
+            sourceText: snapshot.turnText || snapshot.assistantText,
             onRetry: () => this.progress('running', '提取网关异常，已缩短上下文并重试一次', { titles: [] }),
         });
         this.validate(snapshot);
@@ -3248,13 +3603,13 @@ class MemoryRunner {
         const titles = blocks.map((block) => block.title);
         this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
         this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, `${snapshot.playerText}\n${snapshot.assistantText}`);
+        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput);
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
         const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...plan.operations.filter((operation) => operation.kind === 'noop').map((operation) => operation.title)])];
         this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
-        const result = await this.apply(settings, plan, snapshot, `${snapshot.playerText}\n${snapshot.assistantText}`, '提取', raw);
+        const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', raw);
         result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
         this.progress('success', `完成：新建${created.length}、更新${updated.length}、关键变化${result.criticalChanges}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges });
         return result;
@@ -3266,8 +3621,8 @@ class MemoryRunner {
             if (operation.kind !== 'append-line' || !operation.targetUid || !operation.section || !operation.newValue) continue;
             const entry = byUid.get(String(operation.targetUid));
             const oldLines = entry?.sections?.values?.[operation.section] ?? [];
-            const threshold = /(关键进展|持续经历|持续变化|世界变化|事件进程|近期经历|变化记录|历史事实)/u.test(operation.section) ? 0.93 : 0.86;
-            const best = oldLines.reduce((score, oldValue) => Math.max(score, localSemanticSimilarity(oldValue, operation.newValue)), 0);
+            const threshold = /(固定事实|关键进展|持续经历|持续变化|世界变化|事件进程|近期经历|变化记录|历史事实)/u.test(operation.section) ? 0.93 : 0.86;
+            const best = oldLines.reduce((score, oldValue) => distinctNumericFacts(oldValue, operation.newValue) ? score : Math.max(score, localSemanticSimilarity(oldValue, operation.newValue)), 0);
             if (best >= threshold) {
                 operation.kind = 'noop';
                 operation.operation = 'no-op';
@@ -3332,7 +3687,11 @@ class MemoryRunner {
         const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
         const entries = await this.worldbook.apply(settings, plan, snapshot.messageKey, contextText, focusUid, snapshot, () => this.validate(snapshot), { sourceKind: label === '提取' ? 'extraction' : 'summary' });
         this.validate(snapshot);
-        return { entries, changed: entries.changed === true };
+        if (entries.receipt && typeof this.host.appendCommitReceipt === 'function') {
+            try { await this.host.appendCommitReceipt(entries.receipt); }
+            catch (error) { console.warn('[MirrorAbyss] 近期写入回执保存失败；本次世界书提交已完成，但无法自动撤回', error); }
+        }
+        return { entries, changed: entries.changed === true, receipt: entries.receipt ?? null };
     }
     validate(snapshot) { this.host.assertSnapshot(snapshot, this.getSettings()); }
     setStatus(chatKey, phase, detail, error = '', rawResult = '', plan = null) {
@@ -3438,6 +3797,14 @@ function parseSummaryWithRecovery(raw, kind) {
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
 
+
+function distinctNumericFacts(left, right) {
+    const values = (value) => [...String(value ?? '').matchAll(/\d+(?:\.\d+)?/gu)].map((match) => match[0]);
+    const leftValues = values(left);
+    const rightValues = values(right);
+    if (!leftValues.length && !rightValues.length) return false;
+    return JSON.stringify(leftValues) !== JSON.stringify(rightValues);
+}
 function localSemanticSimilarity(left, right) {
     const a = localBigrams(left);
     const b = localBigrams(right);
@@ -3504,13 +3871,13 @@ const ALLOWED_TYPES = new Set(['人物', '场景', '物品', '事件', '世界',
 const NON_EVENT_TYPES = new Set(['人物', '场景', '物品', '世界', '基础设定']);
 const KNOWLEDGE_SECTIONS = new Set(['已知', '误信']);
 const TYPE_ALLOWED_SECTIONS = {
-    人物: new Set(['身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名']),
-    场景: new Set(['定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
-    物品: new Set(['定义', '功能', '限制', '当前', '关系', '持有', '持续变化', '别名']),
+    人物: new Set(['身份', '稳定', '当前', '关系', '持有', '已知', '误信', '固定事实', '别名']),
+    场景: new Set(['定义', '空间结构', '固定资源', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
+    物品: new Set(['定义', '功能', '限制', '当前', '关系', '持有', '固定事实', '别名']),
     // [MA-REBUILD-10] 重建后的事件只保存已经发生的参与、场景、进展与结果。
     // 目标和未决只可用于内部聚类，不再写回新事件条目。
     事件: new Set(['参与', '场景', '阶段', '关键进展', '结果', '别名']),
-    世界: new Set(['范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响', '别名']),
+    世界: new Set(['范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名']),
     基础设定: new Set(['世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名']),
 };
 const MIGRATION_EXCLUSIVE_SECTIONS = new Set(['身份', '稳定', '当前', '定义', '功能', '限制', '当前状态', '阶段', '结果', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '持续影响', '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架']);
@@ -3546,14 +3913,14 @@ const UNIVERSAL_FIELD_ALIASES = {
         当前: ['当前', '位置', '所在地', '当前地点', '目标', '当前目标', '状态', '当前状态', '伤势', '情绪'],
         关系: ['关系', '关系状态', '立场', '态度'],
         持有: ['持有', '装备', '携带', '资源', '持有物'],
-        持续经历: ['持续经历', '经历', '过去结果', '历史结果', '近期经历'],
+        固定事实: ['固定事实', '持续经历', '经历', '过去结果', '历史结果', '近期经历'],
         别名: ['别名', '称呼', '其他名称'],
     },
     场景: {
         定义: ['定义', '性质', '位置', '所属', '地点属性'],
         空间结构: ['空间结构', '空间', '结构', '布局'],
         固定资源: ['固定资源', '设施', '固定设施'],
-        持续变化: ['持续变化', '变化', '过去结果', '历史结果'],
+        固定事实: ['固定事实', '持续变化', '变化', '过去结果', '历史结果'],
         当前状态: ['当前状态', '当前', '状态'],
         在场: ['在场', '在场人物', '人物'],
         当前资源: ['当前资源', '资源'],
@@ -3567,7 +3934,7 @@ const UNIVERSAL_FIELD_ALIASES = {
         功能: ['功能', '用途', '效果', '能力'],
         当前: ['当前', '状态', '当前状态', '位置', '持有者', '所有者'],
         限制: ['限制', '代价', '条件', '使用条件'],
-        持续变化: ['持续变化', '变化', '过去结果', '历史结果'],
+        固定事实: ['固定事实', '持续变化', '变化', '过去结果', '历史结果'],
         别名: ['别名', '其他名称'],
     },
     事件: {
@@ -3581,7 +3948,7 @@ const UNIVERSAL_FIELD_ALIASES = {
     世界: {
         范围: ['范围', '影响范围'], 地理: ['地理', '区域', '地区'], 组织: ['组织', '势力'],
         权力: ['权力', '权力结构'], 制度: ['制度', '规则', '法律'], 资源与交通: ['资源与交通', '资源', '交通'],
-        公开局势: ['公开局势', '当前局势', '局势', '当前状态'], 世界变化: ['世界变化', '变化', '过去结果'],
+        公开局势: ['公开局势', '当前局势', '局势', '当前状态'], 固定事实: ['固定事实', '世界变化', '变化', '过去结果'],
         持续影响: ['持续影响', '影响'], 别名: ['别名', '其他名称'],
     },
     基础设定: {
@@ -4241,7 +4608,7 @@ function collectEventRelatedRecords(records, cluster) {
         const sceneHit = signature.scenes.some((value) => value.length >= 2 && text.includes(value));
         const goalHit = signature.goals.some((value) => value.length >= 3 && text.includes(value));
         const groups = [participantHit, sceneHit, goalHit].filter(Boolean).length;
-        const eventContext = /【(?:持续经历|持续变化|活动关联|世界影响|关键进展|未决|结果|当前状态|当前)】/u.test(record.content || '');
+        const eventContext = /【(?:固定事实|持续经历|持续变化|活动关联|世界影响|关键进展|未决|结果|当前状态|当前)】/u.test(record.content || '');
         if (!nameHit && !(eventContext && groups >= 2)) continue;
         scored.push({ record, score: Number(nameHit) * 120 + groups * 35 + Number(eventContext) * 10 });
     }
@@ -5125,7 +5492,7 @@ function parseUniversalKnowledgeLine(value, entryName, aliasText = '') {
 
 function universalPastSection(type, schema, proposed = false) {
     if (proposed) return '过去结果';
-    const builtin = ({ 人物: '持续经历', 场景: '持续变化', 物品: '持续变化', 事件: '结果', 世界: '世界变化' })[type];
+    const builtin = ({ 人物: '固定事实', 场景: '固定事实', 物品: '固定事实', 事件: '结果', 世界: '固定事实' })[type];
     if (builtin) return builtin;
     const allowed = schema?.allowedSectionsByType?.[type];
     if (!(allowed instanceof Set)) return '';
@@ -5152,10 +5519,10 @@ function parseStrictRebuildBlocks(raw, policy = {}) {
 }
 
 const REBUILD_SECTION_NAMES = new Set([
-    '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名',
-    '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
+    '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '固定事实', '持续经历', '别名',
+    '定义', '空间结构', '固定资源', '固定事实', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
     '功能', '限制', '目标', '参与', '场景', '阶段', '关键进展', '未决', '结果',
-    '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响',
+    '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '世界变化', '持续影响',
     '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架',
 ]);
 
@@ -5504,7 +5871,7 @@ function findConvergenceTarget(rawTitle, child, blocks, removed) {
 function inferDependentTarget(child, blocks, removed) {
     // 仅在证据非常强时自动收束：独立物品没有当前状态/关系/经历，且后续规则条目覆盖其全部来源并明确提到名称。
     if (child.type !== '物品') return null;
-    const independentSections = new Set(['当前', '关系', '持有', '持续变化', '已知', '误信']);
+    const independentSections = new Set(['当前', '关系', '持有', '固定事实', '已知', '误信']);
     if ((child.sections ?? []).some((section) => independentSections.has(section.name))) return null;
     const facts = allBlockFactLines(child);
     if (!facts.length || facts.length > 3) return null;
@@ -5529,7 +5896,7 @@ function resolveAbsorptionSection(target, requested) {
     if (target.type === '世界') return '制度';
     if (target.type === '场景') return '局部约束';
     if (target.type === '事件') return '结果';
-    return (target.sections ?? []).find((section) => section.name !== '别名')?.name || '持续变化';
+    return (target.sections ?? []).find((section) => section.name !== '别名')?.name || '固定事实';
 }
 
 function summarizeAbsorbedBlock(block) {
@@ -5894,6 +6261,8 @@ const information_point_1 = require("./domain/information-point");
 const util_1 = require("./util");
 function buildOperationPlan(blocks, entries, settings, contextText, options = {}) {
     blocks = coalesceEventBlocks((0, information_point_1.prepareInformationBlocks)(blocks));
+    blocks = ensureDisambiguatedTitles(blocks, entries);
+    blocks = suppressStateProjectionNarratives(blocks);
     const index = (0, matcher_1.buildEntryIndex)(entries);
     const operations = [];
     for (const block of blocks) {
@@ -5997,7 +6366,13 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             if (isLifecycleCommandSection(section.name))
                 continue;
             if (section.empty) {
-                operations.push(noop(entry.title, entry.uid, section.name, 'AI填写“无”，不执行写入', target.score, target.evidence));
+                if (allowsExplicitClear(section.name)) {
+                    const current = entry.sections.values[section.name] ?? [];
+                    operations.push(current.length
+                        ? op('replace-section', entry.title, entry.uid, section.name, current.join('\n'), '', '完整快照明确为空，清除旧状态', target.score, target.evidence)
+                        : noop(entry.title, entry.uid, section.name, '完整快照已经为空', target.score, target.evidence));
+                }
+                else operations.push(noop(entry.title, entry.uid, section.name, '非快照栏目填写“无”，不执行写入', target.score, target.evidence));
                 continue;
             }
             const lines = linesWithoutCrossSectionDuplicates(block, section);
@@ -6010,7 +6385,45 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
         operations.push(...temporaryCleanupOperations(entries, settings, blocks));
     if (options.consumeSmallSummaryAfterLarge === true)
         operations.push(...consumeSmallSummaryOperations(entries));
-    return { blocks, operations: dedupeOperations(operations), createdAt: Date.now() };
+    const primaryOperations = dedupeOperations(operations);
+    // [MA-REL-01] 独立物品条目是物品状态的权威宿主；人物【持有】与场景【当前资源】只做最短引用。
+    // 只对本轮触及的物品做机械一致性校正，不扫描或重写无关条目。
+    const projectedEntries = applyPlanToEntries({ operations: primaryOperations }, entries);
+    const relationOperations = relationshipConsistencyOperations(blocks, projectedEntries);
+    return { blocks, operations: dedupeOperations([...primaryOperations, ...relationOperations]), createdAt: Date.now() };
+}
+function ensureDisambiguatedTitles(blocks, entries) {
+    return blocks.map((source) => {
+        const block = structuredClone(source);
+        const collisions = entries.filter((entry) => (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(block.title));
+        if (!collisions.length || !collisions.some((entry) => (0, matcher_1.identityConflict)(block, entry))) return block;
+        if (/[（(][^）)]+[）)]/u.test(block.name)) return block;
+        const anchor = disambiguationAnchor(block);
+        if (!anchor) return block;
+        block.name = `${block.name}（${anchor}）`;
+        block.title = `${block.type}｜${block.name}`;
+        block.keywords = (0, util_1.unique)([block.name, ...(block.keywords ?? [])]).slice(0, 4);
+        return block;
+    });
+}
+function disambiguationAnchor(block) {
+    const priority = ['唯一编号', '编号', '序列号', '型号', '种族', '职业', '组织', '阵营', '身份', '类别'];
+    const values = new Map();
+    for (const section of block.sections ?? []) {
+        if (!/^(?:身份|稳定|定义|当前)$/u.test(section.name)) continue;
+        for (const line of section.lines ?? []) {
+            const match = String(line).match(/^\s*([^：:]{1,24})\s*[：:]\s*(.+)$/u);
+            if (!match) continue;
+            const label = (0, util_1.normalizeFact)(match[1]).replace(/^所属/u, '');
+            const canonical = ({ 账号id: '编号', id: '编号', 所属组织: '组织' })[label] ?? label;
+            if (priority.includes(canonical) && !values.has(canonical)) values.set(canonical, String(match[2] ?? '').trim());
+        }
+    }
+    for (const key of priority) {
+        const value = values.get(key);
+        if (value && !/^(?:无|未知|未说明)$/u.test((0, util_1.normalizeFact)(value))) return value.slice(0, 20);
+    }
+    return '';
 }
 function coalesceEventBlocks(blocks) {
     const output = [];
@@ -6103,65 +6516,44 @@ function applyPlanToEntries(plan, entries) {
 }
 // [MA-CONTENT-01] 单条目正文预算：允许场景知识持续补全，但阻止模型把动作流水或重复描述无限写入世界书。
 const SECTION_BUDGETS = {
-    // 当前快照拥有最大预算；稳定信息保持短小；历史与变化栏目统一压成一句结果。
-    人物: { 身份: 2, 稳定: 3, 当前: 8, 关系: 5, 持有: 5, 已知: 8, 误信: 6, 持续经历: 1, 别名: 4 },
-    场景: { 定义: 3, 空间结构: 6, 固定资源: 5, 持续变化: 1, 当前状态: 8, 在场: 8, 当前资源: 8, 活动关联: 4, 世界影响: 1, 局部约束: 4, 别名: 4 },
-    物品: { 定义: 2, 功能: 3, 当前: 8, 限制: 3, 持续变化: 1, 别名: 4 },
-    事件: { 目标: 2, 参与: 5, 场景: 2, 阶段: 4, 关键进展: 1, 未决: 4, 结果: 1, 别名: 4 },
-    世界: { 范围: 3, 地理: 5, 组织: 6, 权力: 6, 制度: 6, 资源与交通: 5, 公开局势: 8, 世界变化: 1, 持续影响: 4, 别名: 4 },
-    基础设定: { 世界常识: 6, 自然规则: 6, 种族与生命: 6, 能力与技术: 6, 社会规则: 6, 地理框架: 6, 别名: 4 },
+    // 动态对象：当前快照最大，固定事实次之，稳定定义与历史引用依次递减。
+    人物: { 身份: 2, 稳定: 4, 当前: 8, 固定事实: 6, 关系: 5, 持有: 5, 已知: 6, 误信: 4, 别名: 4 },
+    场景: { 定义: 3, 空间结构: 5, 固定资源: 5, 当前状态: 8, 在场: 8, 当前资源: 8, 活动关联: 4, 固定事实: 6, 世界影响: 3, 局部约束: 4, 别名: 4 },
+    物品: { 定义: 3, 功能: 4, 当前: 8, 限制: 3, 固定事实: 6, 别名: 4 },
+    事件: { 目标: 3, 参与: 5, 场景: 3, 阶段: 4, 关键进展: 3, 未决: 6, 结果: 4, 别名: 4 },
+    世界: { 范围: 3, 地理: 5, 组织: 5, 权力: 8, 制度: 8, 资源与交通: 8, 公开局势: 8, 固定事实: 6, 持续影响: 5, 别名: 4 },
+    // 基础设定的核心就是稳定规则，因此规则栏目拥有最大预算。
+    基础设定: { 世界常识: 8, 自然规则: 8, 种族与生命: 8, 能力与技术: 8, 社会规则: 8, 地理框架: 8, 别名: 4 },
 };
-const RESULT_ONLY_SECTIONS = /^(持续经历|近期经历|持续变化|变化记录|世界变化|世界影响|关键进展|事件进程|历史事实|结果)$/u;
 function enforceEntryBudgets(entry) {
     const budgets = SECTION_BUDGETS[String(entry?.type ?? '')] ?? {};
     for (const [section, limitValue] of Object.entries(budgets)) {
         const limit = Math.max(1, Number(limitValue || 1));
-        const lines = (0, util_1.unique)(entry.sections?.values?.[section] ?? []);
-        if (RESULT_ONLY_SECTIONS.test(section)) {
-            if (entry.sections?.values) entry.sections.values[section] = lines.length ? [compactPastResult(lines)] : [];
-            continue;
-        }
+        const lines = (0, util_1.unique)(entry.sections?.values?.[section] ?? []).map(compactFactLine).filter(Boolean);
         if (lines.length <= limit) {
             if (entry.sections?.values) entry.sections.values[section] = lines;
             continue;
         }
-        // 场景稳定知识保留最早的定义骨架与最新发现；其他非当前栏目只保留最近有效信息。
-        const preserveEdges = entry.type === '场景' && /^(定义|空间结构|固定资源)$/u.test(section);
+        // 固定事实超过预算时，把较早结果压缩为一行并保留最新结果；不再简单删除中间经历。
+        if (section === '固定事实') {
+            entry.sections.values[section] = compressOlderFixedFacts(lines, limit);
+            continue;
+        }
+        // 稳定骨架保留早期根基与最新补充；当前快照由整段替换保证不会堆积。
+        const preserveEdges = /^(身份|稳定|定义|空间结构|固定资源|世界常识|自然规则|种族与生命|能力与技术|社会规则|地理框架)$/u.test(section);
         if (preserveEdges) {
-            const headCount = Math.ceil(limit / 2);
-            const tailCount = limit - headCount;
+            const headCount = Math.min(2, Math.ceil(limit / 3));
+            const tailCount = Math.max(0, limit - headCount);
             entry.sections.values[section] = (0, util_1.unique)([...lines.slice(0, headCount), ...lines.slice(-tailCount)]).slice(0, limit);
         }
         else entry.sections.values[section] = lines.slice(-limit);
     }
     return entry;
 }
-function compactPastResult(lines) {
-    const latest = [...lines].reverse().map((item) => String(item ?? '').replace(/^\s*[-*]\s*/u, '').trim()).find(Boolean) || '';
-    if (!latest) return '已发生：相关变化已经形成结果。';
-    let clause = latest.split(/[。！？；\n]+/u).map((item) => item.trim()).filter(Boolean).at(-1) || latest;
-    const finalMarkers = ['最后', '最终', '结果是', '结果为', '因此', '从而', '导致'];
-    let markerIndex = -1;
-    let marker = '';
-    for (const candidate of finalMarkers) {
-        const index = clause.lastIndexOf(candidate);
-        if (index > markerIndex) { markerIndex = index; marker = candidate; }
-    }
-    if (markerIndex >= 0) clause = clause.slice(markerIndex + marker.length).replace(/^[，,:：\s]*/u, '');
-    else {
-        const explicitPastResult = clause.match(/[，,](?:已经|已)(.+)$/u);
-        if (explicitPastResult) clause = explicitPastResult[1].trim();
-    }
-    clause = clause.replace(/^(?:随后|接着|然后|后来|此后|目前|当前|现在|本轮|过程中)[，,:：\s]*/u, '');
-    clause = clause.replace(/^(?:已发生|结果)\s*[：:]\s*/u, '');
-    clause = clause.replace(/^(.{0,16}?)正在进行(.+?)(?:，|,|并|且|$).*/u, '$1$2已经完成');
-    clause = clause.replace(/^(.{0,16}?)正在向(.+?)发送(.+)$/u, '$1已向$2发送$3');
-    clause = clause.replace(/(?:先.+?然后.+?(?:最后|最终))/u, '');
-    clause = clause.replace(/(?:正在|开始|继续)(?=[^。]{1,50}$)/u, '已');
-    clause = clause.trim();
-    if (!clause) clause = '相关变化已经形成结果';
-    if (clause.length > 96) clause = `${clause.slice(0, 95)}…`;
-    return `已发生：${clause.replace(/[。！？；]+$/u, '')}。`;
+function compactFactLine(value) {
+    const line = String(value ?? '').replace(/^\s*[-*]\s*/u, '').trim();
+    if (!line) return '';
+    return line.length > 140 ? `${line.slice(0, 139)}…` : line;
 }
 function mergeEntryData(target, source) {
     target.keywords = (0, util_1.unique)([...(target.keywords ?? []), ...(source.keywords ?? [])]);
@@ -6203,7 +6595,8 @@ function operationsForNewSection(title, type, section, lines, policy, normalized
         return lines.map((line) => op('merge-titles', title, undefined, section, undefined, line, '新条目关联标题合并'));
     }
     if (policy === 'replace-section') {
-        return [op('replace-section', title, undefined, section, undefined, lines.join('\n'), '新条目整段写入')];
+        const snapshot = normalizeSnapshotLines(section, lines);
+        return [op('replace-section', title, undefined, section, undefined, snapshot.join('\n'), '新条目整段写入')];
     }
     if (policy === 'replace-by-anchor') {
         return collapseIncomingBySlot(lines, policy).map((rawLine) => {
@@ -6220,7 +6613,7 @@ function operationsForExisting(entry, section, lines, policy, score, evidence) {
     if (entry.type === '总结') policy = 'replace-section';
     const current = entry.sections.values[section] ?? [];
     if (policy === 'replace-section') {
-        const next = (0, util_1.unique)(lines).join('\n');
+        const next = normalizeSnapshotLines(section, lines).join('\n');
         if ((0, util_1.normalizeFact)(current.join('\n')) === (0, util_1.normalizeFact)(next))
             return [noop(entry.title, entry.uid, section, '整段内容未变化', score, evidence)];
         return [op('replace-section', entry.title, entry.uid, section, current.join('\n'), next, '该小标题配置为整段替换', score, evidence)];
@@ -6288,6 +6681,21 @@ function operationsForExisting(entry, section, lines, policy, score, evidence) {
     }
     return result;
 }
+function normalizeSnapshotLines(section, lines) {
+    if (!/^(?:当前|当前状态)$/u.test(String(section ?? ''))) return (0, util_1.unique)(lines);
+    const output = [];
+    const positions = new Map();
+    for (const rawLine of lines ?? []) {
+        const line = normalizeStateLine(section, (0, parser_1.normalizePointLine)(rawLine));
+        const anchor = informationAnchor(line);
+        if (anchor && positions.has(anchor)) output[positions.get(anchor)] = line;
+        else {
+            if (anchor) positions.set(anchor, output.length);
+            output.push(line);
+        }
+    }
+    return (0, util_1.unique)(output);
+}
 function collapseIncomingBySlot(lines, policy) {
     if (policy !== 'replace-by-anchor' && policy !== 'semantic-upsert')
         return lines;
@@ -6307,6 +6715,9 @@ function collapseIncomingBySlot(lines, policy) {
         }
     }
     return output;
+}
+function allowsExplicitClear(section) {
+    return /^(当前|当前状态|在场|当前资源|活动关联|持有|未决)$/u.test(String(section ?? '').trim());
 }
 function isLifecycleCommandSection(section) {
     return /(沉降处理|条目处理|生命周期|退出处理|退出建议|分发目标|长期影响)/u.test(String(section ?? ''));
@@ -6343,11 +6754,11 @@ function temporaryCleanupOperations(entries, settings, summaryBlocks = []) {
         if (entry.references?.length) return [];
         const protectedSection = Object.entries(entry.sections.values ?? {}).some(([section, lines]) => {
             if (!lines?.length) return false;
-            return /(身份|稳定|关系|持有|已知|误信|持续经历)/u.test(section);
+            return /(身份|稳定|关系|持有|已知|误信|固定事实)/u.test(section);
         });
         if (protectedSection) return [];
         return [{
-            ...op('delete-entry', entry.title, entry.uid, '临时条目清理', undefined, '删除', '总结未继续承接该一次性背景人物，且没有身份、稳定能力、关系、持有物或持续经历；插件机械退出'),
+            ...op('delete-entry', entry.title, entry.uid, '临时条目清理', undefined, '删除', '总结未继续承接该一次性背景人物，且没有身份、稳定能力、关系、持有物或固定事实；插件机械退出'),
             requiresDistributionProof: false,
             distributionTargets: [],
         }];
@@ -6364,9 +6775,177 @@ function isFoundationProtected(entry, settings) {
     return entry.keywords.some((keyword) => names.some((name) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)(name)));
 }
 function linesWithoutCrossSectionDuplicates(block, section) {
-    if (!/(持续经历|近期经历)/u.test(section.name)) return section.lines;
+    if (!/(固定事实|持续经历|近期经历|持续变化|世界变化)/u.test(section.name)) return section.lines;
     const current = block.sections.filter((item) => /^(当前|当前状态)$/u.test(item.name)).flatMap((item) => item.lines).map(util_1.normalizeFact);
     return section.lines.filter((line) => !current.includes((0, util_1.normalizeFact)(line)));
+}
+
+function compressOlderFixedFacts(lines, limit) {
+    if (lines.length <= limit) return lines;
+    const recentCount = Math.max(1, limit - 1);
+    const older = lines.slice(0, -recentCount)
+        .flatMap((line) => String(line).replace(/^较早结果[：:]/u, '').split(/；/u))
+        .map((line) => line.trim().replace(/[。；;]+$/u, ''))
+        .filter(Boolean);
+    const recent = lines.slice(-recentCount);
+    const compressed = historicalDigest(older);
+    return (0, util_1.unique)([compressed, ...recent]).slice(0, limit);
+}
+function historicalDigest(lines) {
+    const facts = (0, util_1.unique)(lines).map((line) => line.length > 30 ? `${line.slice(0, 29)}…` : line);
+    const all = `较早结果：${facts.join('；')}`;
+    if (all.length <= 140) return all;
+    const head = facts.slice(0, 2);
+    const tail = facts.slice(-2);
+    return compactFactLine(`较早结果：${head.join('；')}；……（共${facts.length}项）；${tail.join('；')}`);
+}
+
+function suppressStateProjectionNarratives(blocks) {
+    const claims = blocks
+        .filter((block) => block.type === '物品')
+        .map((block) => ({
+            item: block.name,
+            holder: blockStateValue(block, '当前持有者'),
+            location: blockStateValue(block, '当前位置'),
+        }))
+        .filter((claim) => claim.item && (claim.holder || claim.location));
+    if (!claims.length) return blocks;
+    return blocks.map((block) => {
+        if (block.type === '物品') return block;
+        const next = structuredClone(block);
+        for (const section of next.sections ?? []) {
+            if (!/^(固定事实|关键进展|结果)$/u.test(section.name)) continue;
+            section.lines = (section.lines ?? []).filter((line) => !claims.some((claim) => isPureStateProjection(line, claim)));
+            section.empty = section.lines.length === 0;
+        }
+        return next;
+    });
+}
+function blockStateValue(block, label) {
+    const section = (block.sections ?? []).find((item) => /^(当前|当前状态)$/u.test(item.name));
+    const line = section?.lines?.find((item) => canonicalInformationLabel(item.match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1] ?? '', section.name) === label);
+    return String(line?.match(/^\s*[^：:]{1,24}\s*[：:]\s*(.*)$/u)?.[1] ?? '').trim();
+}
+function isPureStateProjection(line, claim) {
+    const normalized = (0, util_1.normalizeFact)(line);
+    const item = (0, util_1.normalizeFact)(claim.item);
+    const holder = (0, util_1.normalizeFact)(claim.holder);
+    const location = (0, util_1.normalizeFact)(claim.location);
+    if (!normalized || !item || !normalized.includes(item)) return false;
+    // 含有独立事件结果时保留，只删除“换角度重述物品状态”的短句。
+    if (/(击败|杀死|死亡|受伤|获胜|失败|逃离|摧毁|签署|解散|建立|发现|结束战斗|冲突结束)/u.test(normalized)) return false;
+    if (normalized.length > item.length + holder.length + location.length + 14) return false;
+    if (holder && !isNoneStateValue(holder)) {
+        const patterns = [
+            `${holder}把${item}收回`, `${holder}将${item}收回`, `${holder}收回${item}`,
+            `${holder}拿回${item}`, `${holder}带走${item}`, `${holder}携带${item}`, `${holder}持有${item}`,
+            `${item}由${holder}持有`, `${item}由${holder}携带`, `${item}被${holder}收回`,
+        ];
+        if (patterns.some((value) => normalized === value || normalized.startsWith(value))) return true;
+    }
+    if (location) {
+        const patterns = [`${item}位于${location}`, `${item}留在${location}`, `${item}被放回${location}`, `${item}已归还${location}`];
+        if (patterns.some((value) => normalized === value || normalized.startsWith(value))) return true;
+    }
+    // 即使人物角度写出的动作与最终物品快照矛盾，独立物品当前状态仍是权威宿主。
+    const transferVerbs = ['收回', '拿回', '带走', '携带', '持有', '放回', '归还', '交还', '取走'];
+    if (transferVerbs.some((verb) => normalized.endsWith(`${verb}${item}`) || normalized.includes(`把${item}${verb}`) || normalized.includes(`将${item}${verb}`))) return true;
+    return false;
+}
+
+function relationshipConsistencyOperations(blocks, projectedEntries) {
+    const directItems = blocks.filter((block) => block.type === '物品').map((block) => block.name).filter(Boolean);
+    const referencedItems = projectedEntries
+        .filter((entry) => entry.type === '物品')
+        .filter((item) => blocks.some((block) => block.sections?.some((section) => /^(?:持有|当前资源)$/u.test(section.name)
+            && section.lines?.some((line) => referencesObject(line, item.name)))))
+        .map((item) => item.name);
+    const touchedItems = (0, util_1.unique)([...directItems, ...referencedItems]);
+    if (!touchedItems.length) return [];
+    const operations = [];
+    for (const itemName of touchedItems) {
+        const item = findEntryByName(projectedEntries, '物品', itemName);
+        if (!item || item.locked) continue;
+        const holderValue = entryStateValue(item, '当前持有者');
+        const locationValue = entryStateValue(item, '当前位置');
+        const holder = isNoneStateValue(holderValue) ? null : findEntryByName(projectedEntries, '人物', holderValue);
+        const scene = holder ? null : findContainingEntry(projectedEntries, '场景', locationValue);
+        const projectToHolder = holder ? itemProjectsToPerson(item, holderValue) : false;
+
+        for (const person of projectedEntries.filter((entry) => entry.type === '人物' && !entry.locked)) {
+            const current = [...(person.sections?.values?.['持有'] ?? [])];
+            const withoutItem = current.filter((line) => !referencesObject(line, item.name));
+            const shouldHold = projectToHolder && holder?.uid === person.uid;
+            const next = shouldHold ? (0, util_1.unique)([...withoutItem, item.name]) : withoutItem;
+            if ((0, util_1.normalizeFact)(current.join('\n')) !== (0, util_1.normalizeFact)(next.join('\n'))) {
+                operations.push(op('replace-section', person.title, person.uid, '持有', current.join('\n'), next.join('\n'), shouldHold
+                    ? `独立物品“${item.name}”当前由该人物持有，人物卡只保留最短引用`
+                    : `独立物品“${item.name}”的权威持有状态不在该人物，移除旧引用`));
+            }
+        }
+
+        for (const candidate of projectedEntries.filter((entry) => entry.type === '场景' && !entry.locked)) {
+            const current = [...(candidate.sections?.values?.['当前资源'] ?? [])];
+            const withoutItem = current.filter((line) => !referencesObject(line, item.name));
+            const shouldContain = scene?.uid === candidate.uid;
+            const next = shouldContain ? (0, util_1.unique)([...withoutItem, item.name]) : withoutItem;
+            if ((0, util_1.normalizeFact)(current.join('\n')) !== (0, util_1.normalizeFact)(next.join('\n'))) {
+                operations.push(op('replace-section', candidate.title, candidate.uid, '当前资源', current.join('\n'), next.join('\n'), shouldContain
+                    ? `独立物品“${item.name}”无人持有且位于本场景，场景仅保留资源引用`
+                    : `独立物品“${item.name}”已不属于本场景当前资源，移除旧引用`));
+            }
+        }
+    }
+    return operations;
+}
+function itemProjectsToPerson(item, holderValue) {
+    const holder = (0, util_1.normalizeFact)(holderValue);
+    if (!holder) return false;
+    const owner = (0, util_1.normalizeFact)(entryStateValue(item, '所有权'));
+    const keeper = (0, util_1.normalizeFact)(entryStateValue(item, '保管者'));
+    const permission = (0, util_1.normalizeFact)(entryStateValue(item, '使用权限'));
+    const text = (0, util_1.normalizeFact)(Object.values(item.sections?.values ?? {}).flat().join('；'));
+    const shared = /(?:公用|公共|共享|共用|任何人|所有人|全体|合格学员|组织成员|授权人员)/u.test(`${permission}${text}`)
+        || Boolean(owner && owner !== holder)
+        || Boolean(keeper && keeper !== holder);
+    if (!shared) return true;
+    if (owner === holder || keeper === holder) return true;
+    const escaped = holder.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    return new RegExp(`(?:正式分配给|授予|专属(?:于)?|长期由|绑定(?:于)?|归)${escaped}|${escaped}(?:个人所有|长期保管|专属使用)`, 'u').test(text);
+}
+function entryStateValue(entry, label) {
+    const lines = entry.sections?.values?.['当前'] ?? entry.sections?.values?.['当前状态'] ?? [];
+    for (const line of lines) {
+        const match = String(line).match(/^\s*([^：:]{1,24})\s*[：:]\s*(.*)$/u);
+        if (!match) continue;
+        if (canonicalInformationLabel(match[1], '当前') === label) return String(match[2] ?? '').trim();
+    }
+    return '';
+}
+function findEntryByName(entries, type, value) {
+    const target = (0, util_1.normalizeFact)(String(value ?? '').replace(/(?:随身|手中|身上|腰间|背包中)$/u, ''));
+    if (!target) return null;
+    return entries.find((entry) => entry.type === type && [entry.name, ...(entry.aliases ?? []), ...(entry.keywords ?? [])]
+        .some((name) => (0, util_1.normalizeFact)(name) === target)) ?? null;
+}
+function findContainingEntry(entries, type, value) {
+    const target = (0, util_1.normalizeFact)(value);
+    if (!target) return null;
+    return entries
+        .filter((entry) => entry.type === type)
+        .sort((left, right) => (0, util_1.normalizeFact)(right.name).length - (0, util_1.normalizeFact)(left.name).length)
+        .find((entry) => {
+            const names = [entry.name, ...(entry.aliases ?? []), ...(entry.keywords ?? [])].map(util_1.normalizeFact).filter((name) => name.length >= 2);
+            return names.some((name) => target.includes(name) || name.includes(target));
+        }) ?? null;
+}
+function referencesObject(line, name) {
+    const target = (0, util_1.normalizeFact)(name);
+    const value = (0, util_1.normalizeFact)(line);
+    return Boolean(target && value && (value === target || value.includes(target)));
+}
+function isNoneStateValue(value) {
+    return /^(?:无|没有|无人|空|未持有|未使用|不适用|null|none)$/iu.test((0, util_1.normalizeFact)(value));
 }
 
 function isCollectiveItemTitle(name) {
@@ -6401,8 +6980,10 @@ function policyFor(section, settings) {
         return 'merge-keywords';
     if (/(关联条目|关联对象|涉及条目|参与对象|引用|影响对象)/u.test(section))
         return 'merge-titles';
-    if (/(关键进展|事件进程|事件链|进程|过程|阶段记录|持续经历|近期经历|行动记录|持续变化|世界变化|变化记录)/u.test(section))
+    if (/(关键进展|事件进程|事件链|进程|过程|阶段记录|行动记录)/u.test(section))
         return 'append-chain';
+    if (/^(固定事实|持续经历|近期经历|持续变化|世界变化|变化记录)$/u.test(section))
+        return 'semantic-upsert';
     if (/^(已知|误信)$/u.test(section))
         return 'semantic-upsert';
     if (/(当前|状态|位置|持有者|所有者|归属|数量|完整性|可用性|阶段|当前结果|活动状态|范围|地理|组织|权力|制度|资源与交通|公开局势|持续影响)/u.test(section))
@@ -6430,7 +7011,11 @@ function canonicalInformationLabel(label, section = '') {
         [/^(身体状态|身体情况|健康状态|伤势|受伤|身体)$/u, '身体状态'],
         [/^(当前身份|身份|职位|阵营|职业)$/u, '当前身份'],
         [/^(当前目标|目标|目的|计划)$/u, '当前目标'],
-        [/^(当前持有者|持有者|所有者|归属)$/u, '当前持有者'],
+        [/^(所有权|所有者|产权方|归属方)$/u, '所有权'],
+        [/^(保管者|保管方|管理者)$/u, '保管者'],
+        [/^(当前持有者|持有者|携带者)$/u, '当前持有者'],
+        [/^(当前使用者|使用者|操作者)$/u, '当前使用者'],
+        [/^(使用权限|可使用者|授权对象)$/u, '使用权限'],
         [/^(事件状态|当前阶段|阶段)$/u, String(section).includes('阶段') || normalized.includes('阶段') ? '当前阶段' : '事件状态'],
         [/^(数量|库存|完整性|可用性|魔力|体力|生命值|金币)$/u, name],
         [/^(关系状态|态度|敌友|合作)$/u, '关系状态'],
@@ -6448,7 +7033,7 @@ function informationAnchor(line) {
         return `label:${(0, util_1.normalizeFact)(canonical || label)}`;
     }
     if (isMultiValueFact(line)) return '';
-    const fieldPattern = /^(.{1,24}?)(?:的)?(身份|血统|种族|职业|阵营|所有者|持有者|位置|当前位置|阶段|当前阶段|结果|当前结果|生死状态|意识状态|身体状况|身体状态|健康状态|当前目标|目标|数量|库存|等级|进度|完整性|可用性|魔力|体力|生命值|金币)(?:是|为|变为|变成|升至|降至|增至|减至|恢复至|恢复到|减少到|增加到|只剩|剩余)(.+)$/u;
+    const fieldPattern = /^(.{1,24}?)(?:的)?(身份|血统|种族|职业|阵营|所有权|所有者|保管者|当前持有者|持有者|当前使用者|使用者|使用权限|位置|当前位置|阶段|当前阶段|结果|当前结果|生死状态|意识状态|身体状况|身体状态|健康状态|当前目标|目标|数量|库存|等级|进度|完整性|可用性|魔力|体力|生命值|金币)(?:是|为|变为|变成|升至|降至|增至|减至|恢复至|恢复到|减少到|增加到|只剩|剩余)(.+)$/u;
     const fieldMatch = line.match(fieldPattern);
     if (fieldMatch)
         return `${(0, util_1.normalizeFact)(fieldMatch[1] ?? '')}|${(0, util_1.normalizeFact)(fieldMatch[2] ?? '')}`;
@@ -6460,7 +7045,10 @@ function informationAnchor(line) {
         return `${(0, util_1.normalizeFact)(resourceCountMatch[1] ?? '')}|${(0, util_1.normalizeFact)(resourceCountMatch[4] ?? '')}数量`;
     const patterns = [
         [/^(.{1,24}?)(?:当前)?(?:位于|身处|在)(.+)$/u, '当前位置'],
-        [/^(.{1,24}?)(?:当前)?(?:由|归)(.{1,24}?)(?:持有|拥有|保管)$/u, '持有者'],
+        [/^(.{1,24}?)(?:当前)?由(.{1,24}?)持有$/u, '当前持有者'],
+        [/^(.{1,24}?)(?:当前)?由(.{1,24}?)使用$/u, '当前使用者'],
+        [/^(.{1,24}?)(?:当前)?由(.{1,24}?)保管$/u, '保管者'],
+        [/^(.{1,24}?)(?:归|属于)(.{1,24}?)所有$/u, '所有权'],
         [/^(.{1,24}?)(?:当前)?(?:状态为|处于)(.+)$/u, '一般状态'],
         [/^(.{1,24}?)(?:死亡|身亡|存活|复活)(.*)$/u, '生死状态'],
         [/^(.{1,24}?)(?:昏迷|清醒|失去意识|恢复意识)(.*)$/u, '意识状态'],
@@ -6499,8 +7087,11 @@ function applyOne(entry, operation) {
             previous.push(operation.newValue);
         values[section] = (0, util_1.unique)(previous);
     }
+    if (operation.kind === 'delete-line' && operation.oldValue !== undefined) {
+        values[section] = (values[section] ?? []).filter((line) => line !== operation.oldValue);
+    }
     if (operation.kind === 'replace-section')
-        values[section] = (0, util_1.unique)(String(operation.newValue ?? '').split('\n'));
+        values[section] = (0, util_1.unique)(String(operation.newValue ?? '').split('\n').map((line) => line.trim()).filter(Boolean));
     if (operation.kind === 'merge-titles' && operation.newValue) {
         values[section] = (0, util_1.unique)([...(values[section] ?? []), (0, util_1.normalizeTitle)(operation.newValue)]);
         entry.references = (0, util_1.unique)([...entry.references, (0, util_1.normalizeTitle)(operation.newValue)]);
@@ -6527,6 +7118,7 @@ function businessOperationKind(kind) {
         'append-line': 'append',
         'replace-line': 'replace-slot',
         'replace-section': 'replace-section',
+        'delete-line': 'delete-line',
         'merge-keywords': 'append',
         'merge-titles': 'append',
         'merge-entry': 'merge',
@@ -6570,11 +7162,11 @@ const PLAIN_SECTION_NAMES = new Set([
 const STRICT_ENTRY_PATTERN = /<<<ENTRY:([^:\r\n>]+):([^>\r\n]+)>>>\s*<<<KEYWORDS>>>\s*([\s\S]*?)\s*<<<CONTENT>>>\s*([\s\S]*?)\s*<<<END_ENTRY>>>/gu;
 const STRICT_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
 const STRICT_SECTION_ORDER = {
-    人物: ['关键词', '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历', '别名'],
-    场景: ['关键词', '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名'],
-    物品: ['关键词', '定义', '功能', '当前', '限制', '持续变化', '别名'],
+    人物: ['关键词', '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '固定事实', '别名'],
+    场景: ['关键词', '定义', '空间结构', '固定资源', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名'],
+    物品: ['关键词', '定义', '功能', '当前', '限制', '固定事实', '别名'],
     事件: ['关键词', '目标', '参与', '场景', '阶段', '关键进展', '未决', '结果', '别名'],
-    世界: ['关键词', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响', '别名'],
+    世界: ['关键词', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名'],
     基础设定: ['关键词', '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名'],
 };
 function parseStrictExtractionBlocks(raw) {
@@ -6639,7 +7231,7 @@ function parseExtractionWithRecovery(raw) {
             diagnostics.warnings.push(`${title}关键词超过四个，已截取为稳定专名`);
         }
         const sections = recoverSections(type, contentText, diagnostics, title);
-        if (!sections.length || !sections.some((section) => section.lines.length)) {
+        if (!sections.length || !sections.some((section) => section.lines.length || section.empty === true)) {
             diagnostics.skipped.push({ title, reason: '正文没有可写入事实', raw: contentText.slice(0, 600) });
             continue;
         }
@@ -6647,9 +7239,12 @@ function parseExtractionWithRecovery(raw) {
     }
     const merged = mergeDuplicateBlocks(parsedBlocks, diagnostics);
     // [MA-ITEM-01] 物品条目只允许单个可追踪实例；同类集合回收到当前场景资源。
-    const normalizedBlocks = relocateCollectiveItemBlocks(merged, diagnostics);
+    const collectiveNormalized = relocateCollectiveItemBlocks(merged, diagnostics);
+    // [MA-ITEM-03] 普通个人附属物并入人物【持有】；普通公用物并入当前场景资源。
+    // 只有具备唯一编号、独特功能、独立状态变化或跨场景追踪价值的单体物品保留独立条目。
+    const normalizedBlocks = relocateDependentItemBlocks(collectiveNormalized, diagnostics);
     removeCrossEntryDuplicates(normalizedBlocks, diagnostics);
-    let usable = normalizedBlocks.filter((block) => block.sections.some((section) => section.lines.length));
+    let usable = normalizedBlocks.filter((block) => block.sections.some((section) => section.lines.length || section.empty === true));
     // [MA-SCENE-02] 单轮正文只有一个“正文结束时当前场景”。模型误报多个场景时只保留首个，
     // 其他地点不会被误标为当前场景；历史场景由事件分发或后续实际进入时补全。
     const sceneBlocks = usable.filter((block) => block.type === '场景');
@@ -6723,9 +7318,11 @@ function recoverSections(type, content, diagnostics, title) {
     }
     const sections = [];
     for (const name of expected.filter((item) => item !== '关键词')) {
+        // 未输出的小标题不等于“明确为空”；只有模型实际给出该标题且内容为“无”时才允许清空旧快照。
+        if (!aliases.has(name)) continue;
         let lines = (0, util_1.unique)((aliases.get(name) ?? [])
             .map((line) => sanitizeExtractionLine(line, type, name))
-            .filter((line) => line && !EMPTY_PATTERN.test(line) && !EMPTY_VALUE_PATTERN.test(line) && !/完整事实句|稳定名称|甲与乙/u.test(line)));
+            .filter((line) => line && !EMPTY_PATTERN.test(line) && (!EMPTY_VALUE_PATTERN.test(line) || /^(当前|当前状态|阶段|公开局势)$/u.test(name)) && !/完整事实句|稳定名称|甲与乙/u.test(line)));
         const maxLines = sectionLineLimit(type, name);
         if (lines.length > maxLines) {
             diagnostics.repaired += lines.length - maxLines;
@@ -6833,15 +7430,108 @@ function collectiveItemLabel(block) {
     const quantity = current.find((line) => /^\s*数量\s*[：:]/u.test(String(line ?? '')));
     return quantity ? `${block.name}（${String(quantity).replace(/^\s*数量\s*[：:]\s*/u, '').replace(/[。.]+$/u, '')}）` : block.name;
 }
+function relocateDependentItemBlocks(blocks, diagnostics) {
+    const output = [];
+    const scene = blocks.find((block) => block.type === '场景');
+    const people = blocks.filter((block) => block.type === '人物');
+    for (const block of blocks) {
+        if (block.type !== '物品' || hasIndependentItemValue(block)) {
+            output.push(block);
+            continue;
+        }
+        const state = itemStateMap(block);
+        const holder = state.get('当前持有者') || '';
+        const publicItem = isPublicItemBlock(block, state);
+        if (!publicItem && holder) {
+            const person = people.find((candidate) => identityNameMatches(candidate, holder));
+            if (person) {
+                mergeReferenceSection(person, '持有', block.name);
+                diagnostics.repaired += 1;
+                diagnostics.warnings.push(`${block.title}没有独立追踪价值，已并入${person.title}【持有】`);
+                continue;
+            }
+        }
+        if (scene && (publicItem || !holder)) {
+            mergeReferenceSection(scene, '当前资源', block.name);
+            diagnostics.repaired += 1;
+            diagnostics.warnings.push(`${block.title}是普通${publicItem ? '公用' : '场景'}物品，已并入${scene.title}【当前资源】`);
+            continue;
+        }
+        output.push(block);
+    }
+    return output;
+}
+function hasIndependentItemValue(block) {
+    const name = String(block?.name ?? '');
+    if (/(?:唯一|编号|序列号|型号|专属|核心|封印|神器|遗物|王冠|徽章|日记|信件|契约|钥匙卡|[A-Za-z]*\d+[A-Za-z0-9-]*)/u.test(name)) return true;
+    const importantSections = new Set(['功能', '限制', '固定事实']);
+    if ((block.sections ?? []).some((section) => importantSections.has(section.name) && (section.lines?.length ?? 0) > 0)) return true;
+    const definition = (block.sections ?? []).find((section) => section.name === '定义')?.lines ?? [];
+    if (definition.some((line) => /(?:唯一|编号|序列号|型号|独特|专属|不可替代|跨场景|持续追踪|长期使用|长期携带|重要物品)/u.test(String(line)))) return true;
+    const state = itemStateMap(block);
+    return [...state.keys()].some((label) => /^(?:完整性|可用性|当前状态|能力状态|损坏状态|封印状态)$/u.test(label));
+}
+function itemStateMap(block) {
+    const map = new Map();
+    const lines = (block.sections ?? []).find((section) => section.name === '当前')?.lines ?? [];
+    for (const line of lines) {
+        const match = String(line).match(/^\s*([^：:]{1,24})\s*[：:]\s*(.*)$/u);
+        if (!match) continue;
+        const label = canonicalItemStateLabel(match[1]);
+        if (label) map.set(label, String(match[2] ?? '').trim());
+    }
+    return map;
+}
+function canonicalItemStateLabel(value) {
+    const label = (0, util_1.normalizeFact)(value);
+    const mappings = [
+        [/^(?:所有权|所有者|产权方|归属方)$/u, '所有权'],
+        [/^(?:保管者|保管方|管理者)$/u, '保管者'],
+        [/^(?:当前持有者|持有者|携带者)$/u, '当前持有者'],
+        [/^(?:当前使用者|使用者|操作者)$/u, '当前使用者'],
+        [/^(?:使用权限|可使用者|授权对象)$/u, '使用权限'],
+        [/^(?:当前位置|位置|所在地)$/u, '当前位置'],
+        [/^(?:完整性|损坏状态)$/u, '完整性'],
+        [/^(?:可用性)$/u, '可用性'],
+        [/^(?:当前状态|状态)$/u, '当前状态'],
+        [/^(?:能力状态)$/u, '能力状态'],
+        [/^(?:封印状态)$/u, '封印状态'],
+    ];
+    return mappings.find(([pattern]) => pattern.test(label))?.[1] || '';
+}
+function isPublicItemBlock(block, state) {
+    const holder = (0, util_1.normalizeFact)(state.get('当前持有者') || '');
+    const owner = (0, util_1.normalizeFact)(state.get('所有权') || '');
+    const keeper = (0, util_1.normalizeFact)(state.get('保管者') || '');
+    const permission = (0, util_1.normalizeFact)(state.get('使用权限') || '');
+    const text = (0, util_1.normalizeFact)((block.sections ?? []).flatMap((section) => section.lines ?? []).join('；'));
+    if (/(?:公用|公共|共享|共用|任何人|所有人|全体|合格学员|组织成员|授权人员)/u.test(`${permission}${text}`)) return true;
+    if (owner && holder && owner !== holder) return true;
+    if (keeper && holder && keeper !== holder) return true;
+    return false;
+}
+function identityNameMatches(block, value) {
+    const target = (0, util_1.normalizeFact)(String(value ?? '').replace(/(?:随身|手中|身上|腰间|背包中)$/u, ''));
+    if (!target) return false;
+    return [block.name, ...(block.keywords ?? [])].some((name) => (0, util_1.normalizeFact)(name) === target);
+}
+function mergeReferenceSection(block, sectionName, value) {
+    let section = (block.sections ?? []).find((item) => item.name === sectionName);
+    if (!section) {
+        section = { name: sectionName, lines: [], empty: false };
+        block.sections.push(section);
+    }
+    section.lines = (0, util_1.unique)([...(section.lines ?? []), value]);
+    section.empty = section.lines.length === 0;
+}
 function removeCrossEntryDuplicates(blocks, diagnostics) {
     const owners = new Map();
+    const knownNames = blocks.map((item) => ({ title: item.title, name: (0, util_1.normalizeFact)(item.name) })).filter((item) => item.name);
     for (const block of blocks) {
         for (const section of block.sections) {
             if (['关联条目', '别名'].includes(section.name)) continue;
             section.lines = section.lines.filter((line) => {
-                const normalized = (0, util_1.normalizeFact)(line);
-                const core = (0, util_1.normalizeFact)(line.replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, ''));
-                const key = core || normalized;
+                const key = crossEntryFactKey(block, section.name, line, knownNames);
                 if (!key) return false;
                 const score = factOwnershipScore(block.type, section.name, line);
                 const existing = owners.get(key);
@@ -6863,6 +7553,18 @@ function removeCrossEntryDuplicates(blocks, diagnostics) {
             section.empty = section.lines.length === 0;
         }
     }
+}
+function crossEntryFactKey(block, sectionName, line, knownNames) {
+    const normalized = (0, util_1.normalizeFact)(line);
+    if (!normalized) return '';
+    const explicitSubjects = knownNames.filter((item) => normalized.includes(item.name)).map((item) => item.title).sort();
+    // 只有正文明确点名对象的完整事实，才允许在不同条目间竞争唯一宿主。
+    // “身份：教师”“所有权：学院”这类依赖当前条目主体的槽值必须包含主体和关系。
+    if (explicitSubjects.length && !/^\s*[^：:]{1,24}\s*[：:]/u.test(String(line ?? ''))) {
+        return `explicit:${normalized}`;
+    }
+    const label = String(line ?? '').match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1] ?? '';
+    return `host:${(0, util_1.normalizeTitle)(block.title)}|section:${(0, util_1.normalizeFact)(sectionName)}|label:${(0, util_1.normalizeFact)(label)}|fact:${normalized}`;
 }
 function factOwnershipScore(type, section, line) {
     let score = 10;
@@ -6913,12 +7615,19 @@ function sanitizeExtractionLine(value, type = '', section = '') {
     return line.slice(0, type === '人物' && /^(身份|稳定)$/u.test(section) ? 100 : 180);
 }
 function sectionLineLimit(type, section) {
+    // 当前快照拥有最大输入预算；固定事实次之；稳定定义和关系类依次递减。
+    if (/^(?:当前|当前状态)$/u.test(section)) return 8;
+    if (type === '场景' && /^(?:在场|当前资源)$/u.test(section)) return 8;
+    if (type === '世界' && /^(?:权力|制度|资源与交通|公开局势)$/u.test(section)) return 8;
+    if (type === '基础设定') return section === '别名' ? 4 : 8;
+    if (section === '固定事实') return 6;
     if (type === '人物' && section === '稳定') return 3;
     if (type === '人物' && section === '身份') return 4;
     if (type === '人物' && section === '已知') return 8;
     if (type === '人物' && section === '误信') return 6;
-    if (type === '场景' && /^(空间结构|固定资源|持续变化)$/u.test(section)) return 8;
-    if (/^(在场|当前资源|活动关联|世界影响|局部约束|参与|未决|持有)$/u.test(section)) return 6;
+    if (type === '场景' && /^(空间结构|固定资源)$/u.test(section)) return 5;
+    if (/^(关系|持有|活动关联|局部约束|参与|未决|持续影响)$/u.test(section)) return 5;
+    if (/^(定义|功能|限制|范围|地理|组织|结果|关键进展)$/u.test(section)) return 4;
     return 6;
 }
 function attachDiagnostics(blocks, diagnostics) {
@@ -7009,7 +7718,7 @@ function parseEntrySections(content) {
         if (!current || !line.trim())
             continue;
         const bullet = line.match(BULLET_PATTERN)?.[1] ?? line.trim();
-        if (!bullet || EMPTY_PATTERN.test(bullet) || EMPTY_VALUE_PATTERN.test(bullet))
+        if (!bullet || EMPTY_PATTERN.test(bullet))
             continue;
         values[current].push(normalizePointLine(bullet));
     }
@@ -7075,36 +7784,41 @@ exports.migrationPrompts = migrationPrompts;
 exports.keywordTemplate = keywordTemplate;
 const util_1 = require("./util");
 
-function auditPrompts(settings, playerText, assistantText, characterCard = '', options = {}) {
+function auditPrompts(settings, playerText, assistantText, optionsOrLegacyCard = {}, legacyOptions = {}) {
+    // 兼容旧调用签名，但审核不再读取角色卡。第四个参数为对象时直接作为 options；
+    // 旧代码即使仍传入角色卡字符串，也会被明确忽略。
+    const options = optionsOrLegacyCard && typeof optionsOrLegacyCard === 'object' && !Array.isArray(optionsOrLegacyCard)
+        ? optionsOrLegacyCard
+        : legacyOptions;
     const compact = options.compact === true;
-    const system = `你是 Mirror Abyss 正文审核脚本。
+    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 2600 : 5200);
+    const system = `你是 Mirror Abyss 基础正文审核器。
 
-你的职责只有一个：判断 AI 生成文本是否明确违反用户设定。
-你不是作者，不得改写、续写、补充背景、推测未来或优化文风。
+只依据玩家填写的审核规则和提供的对话上下文，检查本轮AI最终回复。
+不要读取、补全或假设角色卡、世界书、隐藏设定和未提供的信息。
+你不是作者，不得改写、续写、补充背景、优化文风或扩大审核范围。
 
-检查：
-1. 玩家控制：不得替玩家决定动作、语言、思考、情绪和选择。
-2. 知识限制：角色不得突然知道隐藏事实。
-3. 世界规则：不得违反能力、种族、时间线和既有事实。
-4. 角色一致性：不得无依据改变身份、性格、能力和目标。
+输出协议：
+- 通过：只能输出 PASS。
+- 不通过：第一行输出 FAIL，随后用简短条目指出明确触发的规则。
+- 禁止输出修正版正文。`;
+    const user = `玩家填写的审核规则：
+${clipText(settings.auditPrompt || '（无）', compact ? 2600 : 5200)}
 
-返回格式：无明确违规只输出 PASS；存在明确违规时输出 FAIL，随后列出简短原因。禁止输出修正版正文。`;
-    const user = `审核规则：
-${clipText(settings.auditPrompt || '（无）', compact ? 2200 : 3500)}
+最近完整对话（仅用于理解指代与承接；不得重新审核旧消息）：
+${dialogueContext || '（无）'}
 
-角色设定：
-${clipText(characterCard || '（无）', compact ? 2200 : 3500)}
+本轮玩家输入：
+${clipText(playerText || '（空）', compact ? 1800 : 3000)}
 
-玩家输入：
-${clipText(playerText || '（空）', compact ? 1500 : 2000)}
-
-需要审核正文：
+需要审核的本轮AI最终回复：
 ${clipText(assistantText, compact ? 10000 : 14000)}`;
     return { system, user };
 }
 
 function revisionPrompts(settings, playerText, assistantText, issues, options = {}) {
     const compact = options.compact === true;
+    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1800 : 3600);
     const issueLimit = compact ? 5 : 10;
     const issueChars = compact ? 160 : 260;
     const system = `你是 Mirror Abyss 正文修正脚本。
@@ -7118,25 +7832,29 @@ ${clipText(settings.revisionPrompt || '（无）', compact ? 1500 : 3000)}`;
     const user = `违规原因：
 ${issues.slice(0, issueLimit).map((item) => `- ${clipText(item, issueChars)}`).join('\n')}
 
-玩家输入：
+最近完整对话（只用于保持承接与角色知识，不得改写旧消息）：
+${dialogueContext || '（无）'}
+
+本轮玩家输入：
 ${clipText(playerText || '（空）', compact ? 1600 : 3000)}
 
-原正文：
+需要替换的本轮AI完整回复：
 ${clipText(assistantText, compact ? 15000 : 20000)}`;
     return { system, user };
 }
 
 function extractionPrompts(settings, playerText, assistantText, relevant, options = {}) {
     const compact = options.compact === true;
-    const contextEntries = relevant.slice(0, compact ? 3 : 5);
+    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 2200 : 4600);
+    const contextEntries = promptContextEntries(relevant, compact ? 3 : 5);
     const existing = contextEntries.map((entry) => entryForPrompt(entry, compact ? 420 : 650)).join('\n\n');
     const custom = clipText(settings.extractionPrompt.trim(), compact ? 800 : 1600);
     const system = `你是 Mirror Abyss 严格语法事实提取器。
 
-任务：把审核后的最终正文转为精简世界书更新。只记录已经成立、仍会影响后续的事实；不续写、不解释、不评价、不预测。
+任务：以一轮完整对话为单位，把审核后的本轮AI最终回复转为精简世界书更新。最近对话只用于理解指代、承接、身份与因果；只提取本轮新形成或被本轮明确改变的最终事实，不重抄旧轮内容。只记录已经成立、仍会影响后续的事实；不续写、不解释、不评价、不预测。
 
 【只允许六类】
-1. 人物：身份、稳定能力、当前状态、该人物自身的关系、关键持有物、具有信息来源的已知或误信、持续经历。
+1. 人物：身份、稳定能力、当前状态、该人物自身的关系、关键持有物、具有信息来源的已知或误信、固定事实。
 2. 场景：同一稳定地点持续更新同一条目；保存稳定空间知识、当前局部条件和关联名称。
 3. 物品：只记录一个可单独追踪的具体物品实例；同类物品集合、批量物资和泛称只写入场景资源。
 4. 事件：尚在发展的多对象过程、必要因果节点、未决事项和结果。
@@ -7156,7 +7874,8 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 若“可能相关的既有世界书条目”中已有尚未结束的同一事件，必须复用其稳定标题；只有目标和因果独立、能够单独结束的过程才建立新事件。已结束事件不得因普通后续影响重新打开。
 - 场景不保存事件流水。场景稳定知识持续补全；当前栏目必须给出正文结束时的完整快照。
 - 单轮最多输出一个场景条目，并把它放在第一条；它必须是正文结束时人物实际所在的当前场景。只被提及但未进入的地点不得另建场景条目。
-- 同一事实只能有一个主要宿主。其他条目只保留必要名称或因果联系。
+- 同一事实只能有一个权威宿主。其他条目只保留最短引用或该事实对自身形成的独立结果，禁止换角度重复叙述。
+- 物品的所有权、保管者、当前持有者、当前使用者、使用权限和当前位置是不同关系，不得互相替代。公共物品被某人临时使用，不等于归该人物所有或长期持有。
 
 【身份未明人物】
 - 正文没有明确说明陌生人、匿名账号、蒙面者或未知声音是谁时，不得猜成任何已知人物。
@@ -7164,6 +7883,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 稳定名称使用“身份未明的可观察类型（唯一可观察锚点）”；例如“身份未明的女人（银色耳坠）”或“身份未明的账号（夜航）”。没有唯一锚点时使用正文中的稳定称呼，但不得添加真实身份。
 - 关键词必须包含“身份未明”；相同对象后续继续使用既有临时档标题。存在两个无法区分的陌生对象时分别建档，不得强行合并。
 - 后续正文明确揭示身份后，输出已知人物主档；插件会把对应临时档合并并删除。
+- 同名或近似名称不是同一身份的证明。两个对象的职业、组织、编号、种族、来源或括号区分锚点冲突时，必须分别建档；稳定标题写成“名称（区分锚点）”。
 
 【角色认知边界】
 - 世界事实不自动等于角色已知。只把该人物通过本轮明确渠道获得、并会影响后续判断的信息写入该人物【已知】。
@@ -7174,11 +7894,11 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【内容限制】
 - 禁止“供AI参考”“可据此推测”“可能意味着”“建议后续”等解释。
 - 禁止推测、隐藏心理、未来结果、未实现愿望、纯气氛、普通动作、对白全文和无持续价值背景物。
-- 子条目分层：人物【当前】、场景【当前状态/在场/当前资源】、物品【当前】可以最详细，最多8行；身份、稳定、关系、定义、功能等稳定栏目只保留1至5行；【持续经历】【持续变化】【关键进展】【结果】【世界变化】【持续影响】最多1行。
-- 非当前的变化与经历只能写已经形成的结果，使用过去时结果句；禁止按先后顺序描写动作过程。每条尽量不超过80字。
+- 子条目分层：人物【当前】、场景【当前状态/在场/当前资源】、物品【当前】容量最大，最多8行；【固定事实】最多6行；身份、稳定、关系、定义、功能等栏目依次递减。事件【关键进展/结果】只保留必要因果结论。
+- 【固定事实】只写已经形成并仍影响后续的最终结果；一项结果一行，禁止按先后顺序描写动作过程。每条尽量不超过80字。
 - 人物描写只保留最多3项会影响身份识别、能力或行动限制的客观特征；禁止连续堆叠外貌、气质和审美形容词。
 - 物品条目必须对应单个实例。‘桌椅、武器、药品、食物、工具、一批短剑、三辆车’等集合只能写入场景【固定资源】或【当前资源】，不得建立物品条目。
-- 不写空栏目，不写“- 无”。
+- 稳定栏目没有新事实时省略。完整快照栏目【当前】【当前状态】【在场】【当前资源】【活动关联】【持有】在正文结束时为空，必须保留小标题并写“- 无”，用于清除旧状态。
 - 每条1至4个关键词；第一项必须是稳定名称；其余只能是专名或唯一别名，禁止“人物、角色、场景、事件、物品、世界、当前、活动”等泛词。
 - 单次最多8条；其中场景最多1条。
 
@@ -7201,14 +7921,14 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【持有】当前关键物品完整列表
 【已知】该人物当前能够使用的关键信息；格式“认知槽：内容｜信息来源：允许类型”
 【误信】该人物当前仍相信但未被世界事实确认的信息；格式“认知槽：内容｜信息来源：允许类型”
-【持续经历】最多一句过去时结果，只写已经造成的后续影响，不写过程
+【固定事实】已经形成并仍影响后续的个人结果，一项结果一行，不写过程
 【别名】
 
 【场景正文固定顺序】
 【定义】地点是什么、位置、用途或归属
 【空间结构】入口、出口、区域连接、障碍和影响行动的布局
 【固定资源】长期存在且可利用的资源
-【持续变化】最多一句过去时结果，只写已确认的新发现、永久损坏、控制权或访问条件变化
+【固定事实】已确认的新发现、永久损坏、控制权或访问条件变化，一项结果一行
 【当前状态】时间、环境、控制、危险等状态槽
 【在场】正文结束时确认在场的人物完整列表
 【当前资源】正文结束时可使用、争夺或影响结果的关键物品完整列表
@@ -7218,15 +7938,16 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【别名】
 
 【物品建立条件】
-只为一个可单独追踪的具体实例建立条目：有稳定专名、明确所有者、唯一编号、独特功能、独立位置/损坏状态，或将持续影响后续。
-集合、类别、批量物资、普通场景用品不得建立物品条目，写入当前场景资源即可。
+只为一个可单独追踪的具体实例建立条目：有稳定专名或唯一编号，存在独特功能、独立状态变化，或确实需要跨场景持续追踪。仅有明确所有者、临时持有者或普通位置不足以单独建档。
+人物普通随身物、证件、服装和一般工具可写入人物【持有】；公共物品、固定设施和同类集合写入场景【固定资源】或【当前资源】；组织跨场景资源写入【世界】。
+公共物品归还后不得继续写入人物【持有】；正文结束时无人持有应写“当前持有者：无”。
 
 【物品正文固定顺序】
 【定义】该单个实例的稳定身份和必要识别特征
 【功能】已确认用途或能力
-【当前】位置、持有者、状态、完整性等状态槽；单体物品不写大于1的数量
+【当前】当前位置、所有权、保管者、当前持有者、当前使用者、使用权限、状态、完整性等独立状态槽；单体物品不写大于1的数量
 【限制】使用、访问或能力限制
-【持续变化】最多一句过去时结果，只写会影响后续的最终变化
+【固定事实】会影响后续的最终变化，一项结果一行
 【别名】
 
 【事件正文固定顺序】
@@ -7247,7 +7968,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【制度】正在跨场景执行的法律、政策、程序与公开规则；使用“制度名：现行内容”
 【资源与交通】跨场景资源供应、贸易、通信、交通与封锁网络；使用“对象：当前状态”
 【公开局势】公众可知的战争、灾害、经济、外交、治安与社会整体状态；使用“对象：当前状态”
-【世界变化】最多一句过去时结果，概括重大且持续的整体变化
+【固定事实】重大且持续的整体变化，一项结果一行
 【持续影响】最多4行，格式为“明确对象或区域：已形成的持续影响”
 【别名】
 
@@ -7264,16 +7985,19 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 
 用户附加要求：
 ${custom}` : ''}`;
-    const user = `玩家本轮输入：
+    const user = `最近完整对话（只用于解析指代、承接与因果；禁止从旧轮重复提取）：
+${dialogueContext || '（无）'}
+
+本轮玩家输入：
 ${clipText(playerText || '（空）', compact ? 1300 : 2200)}
 
-AI最终正文：
+本轮AI最终回复（唯一提取目标；无论包含多少段正文都视为同一完整回复）：
 ${clipText(assistantText, compact ? 9000 : 13000)}
 
 可能相关的既有世界书条目：
 ${existing || '（无）'}
 
-只输出本轮新事实或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容；历史、经历和变化栏目只能输出一句过去时结果。必须主动检查并输出本轮明确出现的世界或基础设定事实。`;
+只输出本轮新事实或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容；固定事实只输出本轮新形成或被修正的最终结果，不重抄已有结果。必须主动检查并输出本轮明确出现的世界或基础设定事实。`;
     return { system, user };
 }
 
@@ -7518,6 +8242,12 @@ function keywordTemplate(definitions) {
     }).join('\n\n');
 }
 
+function promptContextEntries(relevant, limit) {
+    const globals = relevant.filter((entry) => /^(基础设定|世界)$/u.test(String(entry?.type ?? '')));
+    const ordinary = relevant.filter((entry) => !/^(基础设定|世界)$/u.test(String(entry?.type ?? '')));
+    const reservedCount = limit >= 5 ? Math.min(2, globals.length) : Math.min(1, globals.length);
+    return [...ordinary.slice(0, Math.max(0, limit - reservedCount)), ...globals.slice(0, reservedCount)].slice(0, limit);
+}
 function entryForPrompt(entry, contentLimit = 1000) {
     const keywords = (entry.keywords ?? []).filter((item) => !(0, util_1.isUidKeyword)(item));
     return `标题：${entry.title}\n关键词：${keywords.join('、') || '无'}\n正文：\n${clipText(entry.content || '（空）', contentLimit)}`;
@@ -7703,16 +8433,16 @@ class RevisionService {
      */
     async revise(settings, snapshot, issues) {
         this.host.assertSnapshot(snapshot, this.getSettings());
-        const prompt = (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues);
+        const prompt = (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { dialogueContext: snapshot.dialogueContext });
         const raw = await (0, model_request_1.callModel)({
             host: this.host,
             stage: 'revision',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { compact: true }),
+            fallbackPrompt: () => (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { compact: true, dialogueContext: snapshot.dialogueContext }),
             settings,
             snapshot,
             profileId: settings.revisionProfileId,
-            sourceText: snapshot.assistantText,
+            sourceText: snapshot.turnText || snapshot.assistantText,
         });
         this.host.assertSnapshot(snapshot, this.getSettings());
         const revisedText = parseRevisionResult(raw);
@@ -7793,7 +8523,7 @@ function countCriticalChanges(plan) {
             || operation.kind === 'delete-entry'
             || operation.kind === 'replace-line'
             || operation.kind === 'replace-section'
-            || /(身份|稳定|当前|当前状态|关系|持有|持续经历|定义|空间结构|持续变化|在场|当前资源|活动关联|局部约束|目标|参与|阶段|关键进展|未决|结果|时代|权力|制度|公开局势|世界变化|持续影响)/u.test(section);
+            || /(身份|稳定|当前|当前状态|关系|持有|固定事实|持续经历|定义|空间结构|持续变化|在场|当前资源|活动关联|局部约束|目标|参与|阶段|关键进展|未决|结果|时代|权力|制度|公开局势|世界变化|持续影响)/u.test(section);
         if (!important) continue;
         keys.add(`${operation.title}|${section}|${operation.kind}`);
     }
@@ -7816,12 +8546,12 @@ const constants_1 = require("./constants");
 const util_1 = require("./util");
 const COMMON_ALIASES = { key: 'aliases', label: '别名', policy: 'merge-keywords' };
 exports.DEFAULT_KEYWORDS = [
-    keyword('scene', '场景', '稳定空间知识、当前局部条件与关联入口；同一地点持续补全同一条目。', ['当前场景'], false, [
+    keyword('scene', '场景', '稳定空间知识、当前局部条件、固定事实与关联入口；同一地点持续补全同一条目。', ['当前场景'], false, [
         { key: 'definition', label: '定义', policy: 'semantic-upsert' },
         { key: 'space', label: '空间结构', policy: 'semantic-upsert' },
         { key: 'fixedResources', label: '固定资源', policy: 'semantic-upsert' },
-        { key: 'persistentChanges', label: '持续变化', policy: 'append-chain' },
-        { key: 'current', label: '当前状态', policy: 'replace-by-anchor' },
+        { key: 'fixedFacts', label: '固定事实', policy: 'semantic-upsert' },
+        { key: 'current', label: '当前状态', policy: 'replace-section' },
         { key: 'present', label: '在场', policy: 'replace-section' },
         { key: 'currentResources', label: '当前资源', policy: 'replace-section' },
         { key: 'activities', label: '活动关联', policy: 'replace-section' },
@@ -7829,21 +8559,21 @@ exports.DEFAULT_KEYWORDS = [
         { key: 'constraints', label: '局部约束', policy: 'replace-section' },
         COMMON_ALIASES,
     ], 700, false),
-    keyword('character', '人物', '角色身份、稳定能力、当前状态、角色自身关系、关键持有物与持续经历；人物描写只保留少量影响识别或剧情判断的客观特征。', ['角色', 'NPC'], false, [
+    keyword('character', '人物', '角色身份、稳定能力、当前状态、角色自身关系、关键持有物与固定事实；人物描写只保留少量影响识别或剧情判断的客观特征。', ['角色', 'NPC'], false, [
         { key: 'identity', label: '身份', policy: 'semantic-upsert' },
         { key: 'stable', label: '稳定', policy: 'semantic-upsert' },
-        { key: 'current', label: '当前', policy: 'replace-by-anchor' },
+        { key: 'current', label: '当前', policy: 'replace-section' },
         { key: 'relations', label: '关系', policy: 'replace-by-anchor' },
         { key: 'holding', label: '持有', policy: 'replace-section' },
-        { key: 'experience', label: '持续经历', policy: 'append-chain' },
+        { key: 'fixedFacts', label: '固定事实', policy: 'semantic-upsert' },
         COMMON_ALIASES,
     ], 520, false),
     keyword('item', '物品', '只记录可单独追踪的具体物品实例；同类集合和批量物资留在场景资源。', ['道具', '装备'], false, [
         { key: 'definition', label: '定义', policy: 'semantic-upsert' },
         { key: 'function', label: '功能', policy: 'semantic-upsert' },
-        { key: 'current', label: '当前', policy: 'replace-by-anchor' },
+        { key: 'current', label: '当前', policy: 'replace-section' },
         { key: 'limits', label: '限制', policy: 'semantic-upsert' },
-        { key: 'changes', label: '持续变化', policy: 'append-chain' },
+        { key: 'fixedFacts', label: '固定事实', policy: 'semantic-upsert' },
         COMMON_ALIASES,
     ], 500, false),
     keyword('event', '事件', '尚在发展的多对象过程、阶段、必要因果节点、未决事项与结果。', ['事件链'], false, [
@@ -7864,7 +8594,7 @@ exports.DEFAULT_KEYWORDS = [
         { key: 'system', label: '制度', policy: 'replace-by-anchor' },
         { key: 'network', label: '资源与交通', policy: 'replace-by-anchor' },
         { key: 'public', label: '公开局势', policy: 'replace-by-anchor' },
-        { key: 'changes', label: '世界变化', policy: 'append-chain' },
+        { key: 'fixedFacts', label: '固定事实', policy: 'semantic-upsert' },
         { key: 'impact', label: '持续影响', policy: 'replace-by-anchor' },
         COMMON_ALIASES,
     ], 610, false),
@@ -7897,16 +8627,13 @@ function keyword(key, label, description, aliases, constant, fields, order, vect
         })),
     };
 }
-exports.DEFAULT_AUDIT_PROMPT = `只在存在明确违规时判定失败。检查：
-1. 不得替焦点增加玩家未输入的台词、主动行动、重要决定、目标、价值判断或心理结论。
-2. 玩家已声明的动作和语言按原意承接，不得顺势扩展为新决定。
-3. 玩家无法单方面控制的外部结果，应依据人物意愿、能力、资源、权限、环境和既有事实判定。
-4. 不得直接确认NPC未表达的真实心理、幕后计划、隐藏原因、无载体远处事件或玩家尚未获得的最终答案。
-5. 记录、传闻、公告和人物说法不得自动升级为完整真相，也不得仅因表面相似强行建立因果。
-6. NPC与世界应保持合理主动性；已完成流程不得无理由重复，重要场景应有具体反馈，但短对话与过渡场景不必强行制造重大变化。
-7. 正文不得包含选项栏、行动列表、下一步建议、攻略、规则说明、自我解释、内部检查、属性面板、管理标签、回合编号或作者总结。
-8. 自然段落、对白换行、正常标点、简短场景标题、文学性描写和NPC正常提问本身不构成违规。
-有疑问但没有明确违规证据时判定通过。`;
+exports.DEFAULT_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判定 FAIL：
+1. AI不得替玩家新增玩家未输入的台词、主动行动、重要决定、明确心理结论或价值判断。
+2. AI不得把玩家已表达的动作、语言或选择扩大成新的关键决定。
+3. AI回复不得与当前可见对话中的明确事实直接矛盾。
+4. AI回复不得输出选项栏、行动列表、攻略、内部检查、系统规则、自我解释、管理标签、回合编号或作者总结。
+5. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。
+只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
 exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 exports.DEFAULT_SMALL_SUMMARY_PROMPT = `结算当前事件线；保留当前场景、人物状态、事件阶段、已成立结果和未决事项，并把持续影响分发到人物、场景、物品或世界。`;
@@ -7944,8 +8671,8 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     sectionPolicies: {
         在场: 'replace-section', 当前资源: 'replace-section', 活动关联: 'replace-section', 世界影响: 'replace-section', 局部约束: 'replace-section',
         持有: 'replace-section', 目标: 'replace-section', 参与: 'replace-section', 场景: 'replace-section', 未决: 'replace-section', 结果: 'replace-section',
-        当前: 'replace-by-anchor', 当前状态: 'replace-by-anchor', 关系: 'replace-by-anchor', 阶段: 'replace-by-anchor',
-        持续经历: 'append-chain', 持续变化: 'append-chain', 关键进展: 'append-chain', 世界变化: 'append-chain',
+        当前: 'replace-section', 当前状态: 'replace-section', 关系: 'replace-by-anchor', 阶段: 'replace-by-anchor',
+        固定事实: 'semantic-upsert', 关键进展: 'append-chain',
     },
 });
 class SettingsStore {
@@ -8477,6 +9204,7 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName) throw new Error('目标世界书已经变化，拒绝提交');
         validate?.();
         const beforeVersion = digestWorldbook(opened.data);
+        const receiptBefore = snapshotRawEntries(opened.data);
         const before = parseEntries(opened.data);
         const writeOperations = plan.operations.filter((operation) => !['noop', 'delete-entry'].includes(operation.kind));
         const exitOperations = plan.operations.filter((operation) => operation.kind === 'delete-entry');
@@ -8567,6 +9295,71 @@ class WorldbookAdapter {
         result.changed = writeOperations.length > 0 || deletedCount > 0;
         result.writeCount = writeOperations.length;
         result.deleteCount = deletedCount;
+        result.receipt = buildCommitReceipt(receiptBefore, opened.data, {
+            id: operationId,
+            sourceMessageKey,
+            messageIndex: snapshot?.messageIndex,
+            playerMessageIndex: snapshot?.playerMessageIndex,
+            contentHash: snapshot?.contentHash,
+            dialogueHash: snapshot?.dialogueHash,
+            sourceKind: options.sourceKind || '',
+            worldbookName: opened.name,
+        });
+        return result;
+    }
+    async rollbackReceipts(settings, receipts, focusUid, snapshot, validate) {
+        const ordered = (Array.isArray(receipts) ? receipts : []).filter((item) => item && Array.isArray(item.changes) && item.changes.length);
+        if (!ordered.length) return { entries: [], changed: false, rolledBack: 0 };
+        validate?.();
+        this.assertChat(snapshot?.chatKey ?? '');
+        const opened = await this.open(settings, false, validate, snapshot?.chatKey, snapshot?.worldbookName);
+        if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName) throw new Error('目标世界书已经变化，拒绝回滚');
+        if (ordered.some((item) => item.worldbookName && item.worldbookName !== opened.name)) throw new Error('近期写入回执属于其他世界书');
+        const beforeVersion = digestWorldbook(opened.data);
+        const touchedUids = new Set();
+        for (const receipt of [...ordered].reverse()) {
+            for (const change of [...receipt.changes].reverse()) {
+                const uid = String(change.uid ?? '');
+                if (!uid) continue;
+                const current = findRawEntry(opened.data, uid);
+                const currentDigest = current ? semanticRawDigest(current.raw) : '';
+                if (String(change.afterDigest ?? '') !== currentDigest) {
+                    throw new Error(`条目 UID ${uid} 在写入回执后又被修改，已停止自动回滚`);
+                }
+                if (!change.before) {
+                    if (!current) continue;
+                    const extension = readExtension(current.raw);
+                    if (extension.focus === true || extension.locked === true || current.raw.locked === true)
+                        throw new Error(`条目“${current.raw.comment || uid}”已被设为焦点或锁定，不能自动删除`);
+                    delete opened.data.entries[current.mapKey];
+                    continue;
+                }
+                const restored = structuredClone(change.before);
+                if (current) {
+                    const currentExtension = readExtension(current.raw);
+                    const restoredExtension = markManaged(restored, '', String(restored.comment ?? ''), '');
+                    restoredExtension.focus = currentExtension.focus === true;
+                    restoredExtension.locked = currentExtension.locked === true;
+                    restored.locked = current.raw.locked === true;
+                }
+                const mapKey = current?.mapKey || String(change.beforeMapKey ?? restored.uid ?? uid);
+                opened.data.entries[mapKey] = restored;
+                touchedUids.add(String(restored.uid ?? uid));
+            }
+        }
+        const restoredEntries = parseEntries(opened.data);
+        this.applyNativeFields(restoredEntries, settings, focusUid, touchedUids);
+        validate?.();
+        const latest = await opened.api.loadWorldInfo(opened.name);
+        if (!latest || digestWorldbook(latest) !== beforeVersion) throw new Error('世界书在回滚前已被其他操作修改，拒绝覆盖');
+        validate?.();
+        await this.save(opened);
+        validate?.();
+        const verified = await opened.api.loadWorldInfo(opened.name);
+        if (!verified) throw new Error('世界书回滚后回读失败');
+        const result = parseEntries(verified);
+        result.changed = true;
+        result.rolledBack = ordered.length;
         return result;
     }
     applyNativeFields(entries, settings, focusUid, touchedUids, _createdUids = new Set()) {
@@ -8787,6 +9580,57 @@ function ensureUidIdentity(raw, uid, logicalTitle) {
         ...(0, util_1.normalizeStringArray)(raw.key).filter((item) => !(0, util_1.isUidKeyword)(item) && (0, util_1.normalizeFact)(item) !== (0, util_1.normalizeFact)(split?.type ?? '')),
         (0, util_1.uidKeyword)(effectiveUid),
     ]);
+}
+function snapshotRawEntries(data) {
+    const output = new Map();
+    for (const [mapKey, raw] of Object.entries(data?.entries ?? {})) {
+        if (!raw || typeof raw !== 'object') continue;
+        const uid = String(raw.uid ?? mapKey);
+        output.set(uid, { mapKey: String(mapKey), raw: structuredClone(raw), digest: semanticRawDigest(raw) });
+    }
+    return output;
+}
+function buildCommitReceipt(before, data, meta = {}) {
+    const after = snapshotRawEntries(data);
+    const changes = [];
+    const uids = new Set([...before.keys(), ...after.keys()]);
+    for (const uid of uids) {
+        const previous = before.get(uid);
+        const current = after.get(uid);
+        const beforeDigest = previous?.digest ?? '';
+        const afterDigest = current?.digest ?? '';
+        if (beforeDigest === afterDigest) continue;
+        changes.push({
+            uid,
+            beforeMapKey: previous?.mapKey ?? '',
+            before: previous ? previous.raw : null,
+            afterDigest,
+        });
+    }
+    if (!changes.length) return null;
+    return {
+        id: String(meta.id || (0, util_1.hashText)(`${meta.sourceMessageKey || ''}|${Date.now()}`)),
+        sourceMessageKey: String(meta.sourceMessageKey ?? ''),
+        messageIndex: Number.isInteger(meta.messageIndex) ? meta.messageIndex : -1,
+        playerMessageIndex: Number.isInteger(meta.playerMessageIndex) ? meta.playerMessageIndex : -1,
+        contentHash: String(meta.contentHash ?? ''),
+        dialogueHash: String(meta.dialogueHash ?? ''),
+        sourceKind: String(meta.sourceKind ?? ''),
+        worldbookName: String(meta.worldbookName ?? ''),
+        createdAt: Date.now(),
+        changes,
+    };
+}
+function semanticRawDigest(raw) {
+    if (!raw || typeof raw !== 'object') return '';
+    const extension = readExtension(raw);
+    return (0, util_1.hashText)(JSON.stringify({
+        uid: String(raw.uid ?? ''),
+        title: String(raw.comment ?? raw.name ?? raw.title ?? ''),
+        content: String(raw.content ?? ''),
+        sourceMessageKey: String(extension.sourceMessageKey ?? ''),
+        lastOperationId: String(extension.lastOperationId ?? ''),
+    }));
 }
 function digestWorldbook(data) { return (0, util_1.hashText)(JSON.stringify(data?.entries ?? {})); }
 function commitOperationId(sourceMessageKey, operations) { return (0, util_1.hashText)(`${sourceMessageKey}|${operations.map((operation) => operation.id).sort().join('|')}`); }
