@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.21 — context-only white-box audit, final-state convergence, lightweight host coordination, source rollback, and focus controls. */
+/** Mirror Abyss 2.0.0-lite.ui.23 — context-only white-box audit, final-state convergence, lightweight host coordination, source rollback, and focus controls. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -10,6 +10,7 @@ const audit_1 = require("./audit");
 const memory_1 = require("./memory");
 const worldbook_1 = require("./worldbook");
 const migration_1 = require("./migration");
+const world_setting_import_1 = require("./world-setting-import");
 const util_1 = require("./util");
 const control_panel_1 = require("./control-panel");
 class MirrorAbyssApplication {
@@ -36,6 +37,9 @@ class MirrorAbyssApplication {
         this.migrationService = new migration_1.MigrationService(this.host, this.worldbook, () => this.settings(), (progress) => {
             this.controlPanel?.setMigrationProgress?.(progress);
         }, (patch) => this.configure(patch));
+        this.worldSettingImportService = new world_setting_import_1.WorldSettingImportService(this.host, this.worldbook, () => this.settings(), (progress) => {
+            this.controlPanel?.setWorldSettingProgress?.(progress);
+        });
         this.controlPanel = new control_panel_1.ControlPanel({
             getSettings: () => this.settings(),
             configure: (patch) => this.configure(patch),
@@ -53,6 +57,10 @@ class MirrorAbyssApplication {
             commitMigration: () => this.commitMigration(),
             undoMigration: () => this.undoMigration(),
             migrationPreview: () => this.migrationPreview(),
+            previewWorldSettings: (sourceText) => this.previewWorldSettings(sourceText),
+            commitWorldSettings: (sourceText) => this.commitWorldSettings(sourceText),
+            clearWorldSettingsPreview: () => this.clearWorldSettingsPreview(),
+            worldSettingsPreview: () => this.worldSettingsPreview(),
             // [MA-APP-API-01] UI 只调用 SillyTavern 官方 Connection Profile 服务，不保存密钥或自建 API 配置。
             bindProfileDropdown: (selector, selectedId, onChange) => this.host.bindProfileDropdown(selector, selectedId, onChange),
             connectionProfilesAvailable: () => this.host.connectionProfilesAvailable(),
@@ -104,6 +112,14 @@ class MirrorAbyssApplication {
     commitMigration() { return this.enqueueTask('commitMigration', undefined, false); }
     undoMigration() { return this.enqueueTask('undoMigration', undefined, false); }
     migrationPreview() { return this.migrationService.previewSummary(); }
+    previewWorldSettings(sourceText) {
+        return this.enqueueMaintenance('worldSettingPreview', async (settings, snapshot) => this.worldSettingImportService.preview(settings, snapshot, sourceText));
+    }
+    commitWorldSettings(sourceText) {
+        return this.enqueueMaintenance('worldSettingCommit', async (settings, snapshot) => this.worldSettingImportService.commit(settings, snapshot, sourceText));
+    }
+    clearWorldSettingsPreview() { return this.worldSettingImportService.clearPreview(); }
+    worldSettingsPreview() { return this.worldSettingImportService.previewSummary(); }
     processLatest() { return this.enqueueTask('full', undefined, false); }
     cancel() {
         const key = this.host.chatKey();
@@ -138,6 +154,7 @@ class MirrorAbyssApplication {
             canUndoMigration: this.migrationService.canUndo(),
             hasMigrationPreview: this.migrationService.hasPreview(),
             migrationPreview: this.migrationService.previewSummary(),
+            worldSettingsPreview: this.worldSettingImportService.previewSummary(),
         };
     }
     updateEntry(uid, patch) {
@@ -740,7 +757,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.22';
+exports.VERSION = '2.0.0-lite.ui.23';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -779,6 +796,13 @@ class ControlPanel {
         this.rebuildPreviewButton = null;
         this.rebuildCommitButton = null;
         this.rebuildUndoButton = null;
+        this.worldSettingTextarea = null;
+        this.worldSettingStatusNode = null;
+        this.worldSettingPreviewNode = null;
+        this.worldSettingPreviewButton = null;
+        this.worldSettingCommitButton = null;
+        this.worldSettingClearButton = null;
+        this.worldSettingDirty = false;
         this.recallLoadSerial = 0;
         this.recallModel = null;
         this.recallWorldbookName = '';
@@ -891,6 +915,13 @@ class ControlPanel {
         this.rebuildPreviewButton = null;
         this.rebuildCommitButton = null;
         this.rebuildUndoButton = null;
+        this.worldSettingTextarea = null;
+        this.worldSettingStatusNode = null;
+        this.worldSettingPreviewNode = null;
+        this.worldSettingPreviewButton = null;
+        this.worldSettingCommitButton = null;
+        this.worldSettingClearButton = null;
+        this.worldSettingDirty = false;
         this.recallLoadSerial += 1;
         this.recallModel = null;
         this.recallWorldbookName = '';
@@ -1023,7 +1054,7 @@ class ControlPanel {
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
 .ma-lite-close{min-width:34px;min-height:34px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
 .ma-lite-body{display:flex;flex-direction:column;gap:10px;padding:12px}
-.ma-lite-page-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:inherit}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
+.ma-lite-page-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:inherit}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
 .ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:38px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
@@ -1032,6 +1063,7 @@ class ControlPanel {
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:34px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:26px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
+.ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
 .ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
 .${INDICATOR_CLASS}{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
 .${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
@@ -1064,11 +1096,13 @@ class ControlPanel {
             this.makePageButton('run', '运行'),
             this.makePageButton('recall', '召回'),
             this.makePageButton('settings', '设置'),
+            this.makePageButton('worldSetting', '设定'),
             this.makePageButton('rebuild', '重建'),
         );
         const runPage = this.makePage('run');
         const recallPage = this.makePage('recall');
         const settingsPage = this.makePage('settings');
+        const worldSettingPage = this.makePage('worldSetting');
         const rebuildPage = this.makePage('rebuild');
         const apiSection = this.buildApiSection();
         const switches = document.createElement('div');
@@ -1096,6 +1130,7 @@ class ControlPanel {
             '审核只读取这里的规则、最近完整对话、本轮玩家输入和本轮AI回复；不读取角色卡或世界书。',
         );
         const recall = this.buildRecallSection();
+        const worldSetting = this.buildWorldSettingSection();
         const rebuild = this.buildRebuildSection();
         const actions = document.createElement('div');
         actions.className = 'ma-lite-actions';
@@ -1112,8 +1147,9 @@ class ControlPanel {
         runPage.append(actions, status);
         recallPage.append(recall);
         settingsPage.append(apiSection, switches, auditPromptEditor, thresholds, note);
+        worldSettingPage.append(worldSetting);
         rebuildPage.append(rebuild);
-        body.append(pageNav, runPage, recallPage, settingsPage, rebuildPage);
+        body.append(pageNav, runPage, recallPage, settingsPage, worldSettingPage, rebuildPage);
         panel.append(header, body);
         this.showPage('run', false);
         return panel;
@@ -1143,6 +1179,7 @@ class ControlPanel {
         for (const [pageKey, page] of Object.entries(this.pageNodes)) page.hidden = pageKey !== key;
         for (const [pageKey, button] of Object.entries(this.pageButtons)) button.setAttribute('aria-selected', pageKey === key ? 'true' : 'false');
         if (refresh && key === 'recall') void this.refreshRecallMap(true);
+        if (refresh && key === 'worldSetting') void this.refreshWorldSettingState();
         if (refresh && key === 'rebuild') void this.refreshRebuildState();
     }
     /** [MA-UI-API-01] 只创建一个轻量下拉框；选项由 SillyTavern 官方服务负责填充。 */
@@ -1217,6 +1254,167 @@ class ControlPanel {
         try { name ||= this.actions.profileName?.(profileId) || profileId; }
         catch { name ||= profileId; }
         this.apiProfileStatusNode.textContent = `当前：${name}；仅用于镜渊审核、修正、提取和总结，不切换主聊天 API。`;
+    }
+    buildWorldSettingSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-world-setting';
+        const head = document.createElement('strong');
+        head.className = 'ma-lite-world-setting-head';
+        head.textContent = '玩家世界设定初始化';
+        const help = document.createElement('div');
+        help.className = 'ma-lite-world-setting-help';
+        help.textContent = '只在玩家明确点击后读取下方文本。普通聊天仍保持防误触：玩家输入只用于理解行动，不会自动写成世界设定。先生成预览，确认后再写入当前绑定世界书。';
+        const textarea = document.createElement('textarea');
+        textarea.maxLength = 24000;
+        textarea.placeholder = '粘贴世界框架、自然规则、种族、能力体系、地区组织、制度、开局地点与已存在人物。写作要求、文风和未来剧情计划不会进入世界书。';
+        textarea.setAttribute('aria-label', '玩家世界设定文本');
+        textarea.addEventListener('input', () => {
+            if (this.actions.worldSettingsPreview?.()) {
+                this.worldSettingDirty = true;
+                if (this.worldSettingStatusNode) this.worldSettingStatusNode.textContent = '设定文本已修改，旧预览不可提交；请重新生成预览。';
+            }
+            this.syncDisabledState();
+        });
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-world-setting-actions';
+        const preview = document.createElement('button');
+        preview.type = 'button';
+        preview.textContent = '生成设定预览';
+        preview.addEventListener('click', () => void this.runWorldSettingAction('previewWorldSettings'));
+        const commit = document.createElement('button');
+        commit.type = 'button';
+        commit.textContent = '确认写入世界书';
+        commit.addEventListener('click', () => void this.runWorldSettingAction('commitWorldSettings'));
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.textContent = '清空';
+        clear.addEventListener('click', () => void this.runWorldSettingAction('clearWorldSettingsPreview'));
+        actions.append(preview, commit, clear);
+        const status = document.createElement('div');
+        status.className = 'ma-lite-world-setting-status';
+        status.textContent = '文本只保留在当前面板中，不写入插件设置；预览阶段不会修改世界书。';
+        const content = document.createElement('div');
+        content.className = 'ma-lite-world-setting-empty';
+        content.textContent = '尚未生成设定预览';
+        section.append(head, help, textarea, actions, status, content);
+        this.worldSettingTextarea = textarea;
+        this.worldSettingStatusNode = status;
+        this.worldSettingPreviewNode = content;
+        this.worldSettingPreviewButton = preview;
+        this.worldSettingCommitButton = commit;
+        this.worldSettingClearButton = clear;
+        return section;
+    }
+    async runWorldSettingAction(kind) {
+        if (this.pendingActions.has(kind)) return;
+        const action = this.actions[kind];
+        if (typeof action !== 'function') {
+            this.setStatus('玩家设定导入功能未连接', true);
+            return;
+        }
+        const source = String(this.worldSettingTextarea?.value || '').trim();
+        if (kind !== 'clearWorldSettingsPreview' && !source) {
+            this.setStatus('请先粘贴玩家世界设定', true);
+            return;
+        }
+        this.pendingActions.add(kind);
+        this.syncDisabledState();
+        if (this.worldSettingStatusNode) {
+            this.worldSettingStatusNode.textContent = kind === 'previewWorldSettings'
+                ? '正在解析玩家设定并生成只读预览…'
+                : kind === 'commitWorldSettings'
+                    ? '正在原子写入当前绑定世界书并回读校验…'
+                    : '正在清空设定文本与预览…';
+        }
+        try {
+            if (kind === 'clearWorldSettingsPreview') {
+                await action();
+                if (this.worldSettingTextarea) this.worldSettingTextarea.value = '';
+                this.worldSettingDirty = false;
+                this.renderWorldSettingPreview(null);
+                this.setStatus('玩家设定文本与预览已清空');
+            }
+            else if (kind === 'previewWorldSettings') {
+                const result = await action(source);
+                this.worldSettingDirty = false;
+                this.renderWorldSettingPreview(result);
+                this.setStatus(`玩家设定预览已生成：新建${result?.created?.length ?? 0}、更新${result?.updated?.length ?? 0}；世界书尚未修改`);
+            }
+            else {
+                const result = await action(source);
+                if (this.worldSettingTextarea) this.worldSettingTextarea.value = '';
+                this.worldSettingDirty = false;
+                this.renderWorldSettingPreview(null);
+                this.setStatus(`玩家设定已写入：新建${result?.created?.length ?? 0}、更新${result?.updated?.length ?? 0}`);
+                await this.refreshRecallMap(true);
+            }
+        }
+        catch (error) {
+            const text = (0, util_1.errorText)(error);
+            this.setStatus(`玩家设定导入失败：${text}`, true);
+            if (this.worldSettingStatusNode) this.worldSettingStatusNode.textContent = `失败：${text}`;
+        }
+        finally {
+            this.pendingActions.delete(kind);
+            this.syncDisabledState();
+        }
+    }
+    async refreshWorldSettingState() {
+        let preview = null;
+        try { preview = this.actions.worldSettingsPreview?.() ?? null; }
+        catch { }
+        this.renderWorldSettingPreview(preview);
+        this.syncDisabledState();
+    }
+    renderWorldSettingPreview(summary) {
+        if (!this.worldSettingPreviewNode) return;
+        this.worldSettingPreviewNode.replaceChildren();
+        if (!summary?.previewReady) {
+            this.worldSettingPreviewNode.className = 'ma-lite-world-setting-empty';
+            this.worldSettingPreviewNode.textContent = '尚未生成设定预览';
+            if (this.worldSettingStatusNode && !this.pendingActions.size) this.worldSettingStatusNode.textContent = '文本只保留在当前面板中，不写入插件设置；预览阶段不会修改世界书。';
+            return;
+        }
+        this.worldSettingPreviewNode.className = 'ma-lite-world-setting-preview';
+        const metrics = document.createElement('div');
+        metrics.className = 'ma-lite-rebuild-summary';
+        for (const [label, value] of [['新建', summary.created?.length ?? 0], ['更新', summary.updated?.length ?? 0], ['条目', summary.entries?.length ?? 0], ['格式修复', summary.repaired ?? 0], ['隔离', summary.skipped?.length ?? 0]]) {
+            const chip = document.createElement('span');
+            chip.className = 'ma-lite-chip';
+            chip.textContent = `${label}：${value}`;
+            metrics.append(chip);
+        }
+        this.worldSettingPreviewNode.append(metrics);
+        for (const entry of (summary.entries ?? []).slice(0, 16)) {
+            const row = document.createElement('div');
+            row.className = 'ma-lite-world-setting-entry';
+            const title = document.createElement('strong');
+            title.textContent = entry.title;
+            const content = document.createElement('pre');
+            content.textContent = entry.content;
+            row.append(title, content);
+            this.worldSettingPreviewNode.append(row);
+        }
+        for (const skipped of (summary.skipped ?? []).slice(0, 6)) {
+            const warning = document.createElement('div');
+            warning.className = 'ma-lite-world-setting-warning';
+            warning.textContent = `已隔离“${skipped.title}”${skipped.reason ? `：${skipped.reason}` : ''}`;
+            this.worldSettingPreviewNode.append(warning);
+        }
+        for (const warningText of (summary.warnings ?? []).slice(0, 4)) {
+            const warning = document.createElement('div');
+            warning.className = 'ma-lite-world-setting-warning';
+            warning.textContent = warningText;
+            this.worldSettingPreviewNode.append(warning);
+        }
+        if (this.worldSettingStatusNode) this.worldSettingStatusNode.textContent = this.worldSettingDirty
+            ? '设定文本已修改，旧预览不可提交；请重新生成预览。'
+            : `预览已就绪；目标世界书：${summary.worldbookName || '当前绑定世界书'}。`;
+    }
+    setWorldSettingProgress(progress = {}) {
+        if (!this.worldSettingStatusNode) return;
+        const detail = String(progress.detail || '').trim();
+        if (detail) this.worldSettingStatusNode.textContent = detail;
     }
     buildRebuildSection() {
         const section = document.createElement('section');
@@ -1722,6 +1920,9 @@ class ControlPanel {
         if (this.buttons.audit) this.buttons.audit.disabled = this.pendingActions.has('audit') || !master || settings.auditEnabled === false;
         if (this.buttons.extract) this.buttons.extract.disabled = this.pendingActions.has('extract') || !master || settings.extractionEnabled === false;
         if (this.buttons.auditPromptSave) this.buttons.auditPromptSave.disabled = this.pendingActions.size > 0;
+        if (this.worldSettingPreviewButton) this.worldSettingPreviewButton.disabled = this.pendingActions.size > 0 || !master || !String(this.worldSettingTextarea?.value || '').trim();
+        if (this.worldSettingCommitButton) this.worldSettingCommitButton.disabled = this.pendingActions.size > 0 || !master || this.worldSettingDirty || !this.actions.worldSettingsPreview?.();
+        if (this.worldSettingClearButton) this.worldSettingClearButton.disabled = this.pendingActions.size > 0 || (!String(this.worldSettingTextarea?.value || '').trim() && !this.actions.worldSettingsPreview?.());
         if (this.rebuildPreviewButton) this.rebuildPreviewButton.disabled = this.pendingActions.size > 0 || !master;
         if (this.rebuildCommitButton) this.rebuildCommitButton.disabled = this.pendingActions.size > 0 || !master || !this.actions.migrationPreview?.();
         if (this.rebuildUndoButton && this.pendingActions.size > 0) this.rebuildUndoButton.disabled = true;
@@ -2943,6 +3144,10 @@ function exposeApi() {
         getWorldbookRebuildPreview: async () => (await requireApplication()).migrationPreview(),
         migrateWorldbook: async () => (await requireApplication()).migrate(),
         undoWorldbookMigration: async () => (await requireApplication()).undoMigration(),
+        previewWorldSettings: async (text) => (await requireApplication()).previewWorldSettings(text),
+        commitWorldSettings: async (text) => (await requireApplication()).commitWorldSettings(text),
+        getWorldSettingsPreview: async () => (await requireApplication()).worldSettingsPreview(),
+        clearWorldSettingsPreview: async () => (await requireApplication()).clearWorldSettingsPreview(),
         cancel: async () => (await requireApplication()).cancel(),
         getSettings: async () => (await requireApplication()).settings(),
         configure: async (patch) => (await requireApplication()).configure(patch),
@@ -7305,6 +7510,7 @@ const INPUT_LIMITS = Object.freeze({
     revision: 30000,
     extraction: 26000,
     extractionRepair: 14000,
+    worldSettingImport: 42000,
     smallSummary: 28000,
     largeSummary: 30000,
     migration: 20000,
@@ -7355,6 +7561,7 @@ function stageResponseTokens(stage, settings, sourceText = '') {
     }
     if (stage === 'extraction') return Math.min(configured, 2560);
     if (stage === 'extractionRepair') return Math.min(configured, 1536);
+    if (stage === 'worldSettingImport') return Math.min(Math.max(configured, 3072), 4096);
     if (stage === 'smallSummary') return Math.min(configured, 1792);
     if (stage === 'largeSummary') return Math.min(configured, 2304);
     if (stage === 'migration') return Math.min(configured, 1792);
@@ -8982,6 +9189,7 @@ exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
 exports.duplicatePrompts = duplicatePrompts;
 exports.extractionRepairPrompts = extractionRepairPrompts;
+exports.worldSettingImportPrompts = worldSettingImportPrompts;
 exports.migrationPrompts = migrationPrompts;
 exports.migrationPlanningPrompts = migrationPlanningPrompts;
 exports.plannedMigrationPrompts = plannedMigrationPrompts;
@@ -9204,6 +9412,55 @@ ${clipText(assistantText, compact ? 9000 : 13000)}
 ${existing || '（无）'}
 
 只输出本轮新事实或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容；固定事实只输出本轮新形成或被修正的最终结果，不重抄已有结果。必须主动检查并输出本轮明确出现的世界或基础设定事实。`;
+    return { system, user };
+}
+
+
+function worldSettingImportPrompts(settings, sourceText, relevant, options = {}) {
+    const compact = options.compact === true;
+    const contextEntries = promptContextEntries(relevant, compact ? 4 : 8);
+    const existing = contextEntries.map((entry) => entryForPrompt(entry, compact ? 360 : 620)).join('\n\n');
+    const schema = keywordTemplate(settings.keywordDefinitions ?? []).trim();
+    const system = `你是 Mirror Abyss 玩家设定初始化器。
+
+玩家已经明确点击“导入世界设定”。只把玩家粘贴的设定文档结构化为世界书候选，不处理普通聊天，不把玩家的愿望误当成剧情行动。
+
+允许类型：基础设定、世界、场景、人物、物品、事件。
+
+分流规则：
+1. 跨场景稳定成立的自然规律、种族共性、能力技术、社会常识、长期地理框架写入【基础设定】。
+2. 初始地区、组织、制度、权力、资源网络和公开局势写入【世界】。
+3. 只有设定明确指定的一个实际开局地点写入【场景】；其他地点写入世界或基础设定，不批量建立场景。
+4. 只为已有稳定身份、专名或唯一锚点且会持续存在的对象建立【人物】。
+5. 只为需要跨场景单独追踪的唯一物品实例建立【物品】；普通装备、批量物资和泛称写入人物持有或场景/世界资源。
+6. 只有文档明确说明“已经发生”或“正在发生”的过程才能建立【事件】。计划、可能、将来、希望发生、开局后再发生的内容不得建立事件。
+7. 写作要求、文风、视角、输出格式、角色扮演规则、AI/玩家指令、系统提示、审核规则、提示词边界不得进入世界书。
+8. 不补全未写出的设定，不创造人物、组织、地点、事件或因果。
+9. 与既有条目属于同一稳定对象时复用原题，不因措辞变化重复建档。
+10. 同一事实只放在一个权威宿主；禁止把整份设定复制到多个条目。
+
+输出协议：
+<<<ENTRY:类型:稳定名称>>>
+<<<KEYWORDS>>>
+- 稳定名称
+- 唯一别名
+<<<CONTENT>>>
+【小标题】
+- 完整事实
+<<<END_ENTRY>>>
+
+多个条目连续输出。禁止JSON、代码块、序号、解释、前言、后记和标记外文本。没有可导入事实时只输出“无”。单次最多16条。
+
+可用类型与栏目：
+${schema || '使用基础设定、世界、场景、人物、物品、事件的标准栏目。'}`;
+    const sourceLimit = 24000;
+    const user = `玩家主动提交的世界设定文档（唯一事实来源）：
+${clipText(sourceText, sourceLimit)}
+
+可能相关的既有世界书条目（只用于复用稳定对象和避免重复）：
+${existing || '（无）'}
+
+请生成可供玩家预览的设定条目。不要把写作要求或未来计划写成世界事实。`;
     return { system, user };
 }
 
@@ -10293,6 +10550,248 @@ function truncate(value, max) {
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] ?? char));
 }
+},"world-setting-import":function(module,exports,require){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.WorldSettingImportService = void 0;
+exports.sanitizeWorldSettingBlocks = sanitizeWorldSettingBlocks;
+exports.worldSettingPreviewSummary = worldSettingPreviewSummary;
+const matcher_1 = require("./matcher");
+const model_request_1 = require("./model-request");
+const operations_1 = require("./operations");
+const parser_1 = require("./parser");
+const prompts_1 = require("./prompts");
+const util_1 = require("./util");
+const ALLOWED_TYPES = new Set(['基础设定', '世界', '场景', '人物', '物品', '事件']);
+const MAX_SOURCE_CHARS = 24000;
+const MAX_BLOCKS = 16;
+const CONTROL_TITLE = /^(?:基础设定|世界|人物|场景|事件|物品)｜(?:角色信息边界|系统提示|开发者消息|写作要求|文风要求|输出格式|提取规则|审核规则|控制提示|控制规则)$/u;
+const CONTROL_MARKER = /(?:<<<\s*(?:ENTRY|END_ENTRY)|\bUID\s*:|来源行\s*:|系统提示|开发者消息|提示词模板)/iu;
+const FUTURE_ONLY_EVENT = /(?:尚未开始|未开始|计划中|准备开始|将要|未来会|以后会)/u;
+const VALID_EVENT_STAGE = /(?:开始|进行中|暂停|结束|已结束|已完成|closed|active|paused)/iu;
+class WorldSettingImportService {
+    constructor(host, worldbook, getSettings, onProgress = null) {
+        this.host = host;
+        this.worldbook = worldbook;
+        this.getSettings = getSettings;
+        this.onProgress = typeof onProgress === 'function' ? onProgress : null;
+        this.previewState = null;
+    }
+    progress(state, detail, meta = {}) {
+        try { this.onProgress?.({ state, detail, ...meta }); }
+        catch (error) { console.warn('[MirrorAbyss] world setting import progress callback failed', error); }
+    }
+    hasPreview() { return Boolean(this.previewState?.previewReady); }
+    clearPreview() { this.previewState = null; return true; }
+    previewSummary() { return worldSettingPreviewSummary(this.previewState); }
+    async preview(settings, snapshot, sourceText) {
+        const source = normalizeSource(sourceText);
+        validateSource(source);
+        this.validate(snapshot, settings);
+        this.progress('running', '正在读取当前世界书并整理设定来源');
+        const opened = await this.worldbook.readRaw(settings, snapshot, () => this.validate(snapshot, settings));
+        const entries = (0, require("./worldbook").parseEntries)(opened.data);
+        const selected = (0, matcher_1.relevantEntries)(entries, source, 8);
+        const prompt = (0, prompts_1.worldSettingImportPrompts)(settings, source, selected);
+        const raw = await (0, model_request_1.callModel)({
+            host: this.host,
+            stage: 'worldSettingImport',
+            prompt,
+            fallbackPrompt: () => (0, prompts_1.worldSettingImportPrompts)(settings, source, selected, { compact: true }),
+            settings,
+            snapshot,
+            profileId: settings.extractionProfileId,
+            sourceText: source,
+            onRetry: () => this.progress('running', '设定导入网关异常，已缩短既有条目上下文并重试一次'),
+        });
+        this.validate(snapshot, settings);
+        let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
+        let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
+        let repairRaw = '';
+        if (!blocks.length && diagnostics.hadInput) {
+            this.progress('running', '设定返回格式异常，启动一次格式修复');
+            repairRaw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'extractionRepair',
+                prompt: (0, prompts_1.extractionRepairPrompts)(raw),
+                fallbackPrompt: () => (0, prompts_1.extractionRepairPrompts)(raw, { compact: true }),
+                settings,
+                snapshot,
+                profileId: settings.extractionProfileId,
+                sourceText: raw,
+            });
+            this.validate(snapshot, settings);
+            blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
+            const next = blocks.diagnostics ?? {};
+            diagnostics = {
+                repaired: Number(diagnostics.repaired || 0) + Number(next.repaired || 0) + 1,
+                merged: [...(diagnostics.merged || []), ...(next.merged || [])],
+                skipped: [...(diagnostics.skipped || []), ...(next.skipped || [])],
+                warnings: [...(diagnostics.warnings || []), '已执行一次模型格式修复', ...(next.warnings || [])],
+                hadInput: true,
+            };
+        }
+        if (!blocks.length) throw new Error('没有从玩家设定中解析出可预览条目');
+        const sanitized = sanitizeWorldSettingBlocks(blocks, source, diagnostics);
+        if (!sanitized.length) throw new Error('玩家设定只包含写作要求、控制文本或尚未成立的未来事件，没有可导入事实');
+        const plan = (0, operations_1.buildOperationPlan)(sanitized, entries, settings, source);
+        plan.operations = plan.operations.map((operation) => {
+            if (!['delete-entry', 'merge-entry'].includes(operation.kind)) return operation;
+            return { ...operation, kind: 'noop', operation: 'no-op', reason: '设定导入只新增或更新，不执行档案合并与删除' };
+        });
+        const meaningful = plan.operations.filter((operation) => operation.kind !== 'noop');
+        if (!meaningful.length) throw new Error('这些设定与当前世界书一致，没有需要提交的变化');
+        const sourceHash = (0, util_1.hashText)(source);
+        const worldbookHash = digestWorldbook(opened.data);
+        const created = [...new Set(meaningful.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
+        const updated = [...new Set(meaningful.filter((operation) => operation.kind !== 'create-entry').map((operation) => operation.title))];
+        this.previewState = {
+            previewReady: true,
+            source,
+            sourceHash,
+            worldbookName: opened.name,
+            worldbookHash,
+            chatKey: snapshot.chatKey,
+            plan,
+            blocks: sanitized,
+            raw: repairRaw || raw,
+            diagnostics,
+            created,
+            updated,
+            generatedAt: Date.now(),
+        };
+        const summary = this.previewSummary();
+        this.progress('success', `设定预览已生成：新建${created.length}、更新${updated.length}，世界书尚未修改`, summary);
+        return summary;
+    }
+    async commit(settings, snapshot, sourceText) {
+        const preview = this.previewState;
+        if (!preview?.previewReady) throw new Error('尚未生成可提交的设定预览');
+        const source = normalizeSource(sourceText);
+        if ((0, util_1.hashText)(source) !== preview.sourceHash) throw new Error('设定文本已修改，请重新生成预览');
+        if (snapshot.chatKey !== preview.chatKey) throw new Error('聊天已经切换，请重新生成设定预览');
+        this.validate(snapshot, settings);
+        const opened = await this.worldbook.readRaw(settings, snapshot, () => this.validate(snapshot, settings));
+        if (opened.name !== preview.worldbookName || digestWorldbook(opened.data) !== preview.worldbookHash)
+            throw new Error('世界书在预览后已经变化，请重新生成设定预览');
+        this.progress('running', '正在原子提交玩家设定并回读校验');
+        const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
+        const result = await this.worldbook.apply(
+            settings,
+            preview.plan,
+            `world-setting:${preview.sourceHash}`,
+            source,
+            focusUid,
+            snapshot,
+            () => this.validate(snapshot, settings),
+            { sourceKind: 'setting-import' },
+        );
+        const summary = {
+            committed: true,
+            changed: result.changed === true,
+            created: [...preview.created],
+            updated: [...preview.updated],
+            writeCount: Number(result.writeCount || 0),
+            worldbookName: preview.worldbookName,
+        };
+        this.previewState = null;
+        this.progress('success', `玩家设定已提交：新建${summary.created.length}、更新${summary.updated.length}`, summary);
+        return summary;
+    }
+    validate(snapshot, settings) {
+        if (typeof this.host.assertSnapshot === 'function') this.host.assertSnapshot(snapshot, settings ?? this.getSettings?.());
+    }
+}
+exports.WorldSettingImportService = WorldSettingImportService;
+function normalizeSource(value) {
+    return String(value ?? '').replace(/\r\n?/g, '\n').trim();
+}
+function validateSource(source) {
+    if (source.length < 12) throw new Error('请粘贴更完整的世界设定，至少12个字符');
+    if (source.length > MAX_SOURCE_CHARS) throw new Error(`世界设定超过${MAX_SOURCE_CHARS}字符，请分为多次导入`);
+}
+function sanitizeWorldSettingBlocks(blocks, source, diagnostics = {}) {
+    const warnings = diagnostics.warnings ?? (diagnostics.warnings = []);
+    const skipped = diagnostics.skipped ?? (diagnostics.skipped = []);
+    const output = [];
+    let sceneCount = 0;
+    for (const original of blocks.slice(0, MAX_BLOCKS)) {
+        const block = structuredClone(original);
+        if (!ALLOWED_TYPES.has(String(block.type ?? ''))) {
+            skipped.push({ title: block.title || '未知条目', reason: '设定导入不支持该类型' });
+            continue;
+        }
+        const title = String(block.title ?? '').trim();
+        const content = blockText(block);
+        if (!title || CONTROL_TITLE.test(title) || controlContentOnly(content)) {
+            skipped.push({ title: title || '控制文本', reason: '写作或控制文本不进入世界书' });
+            continue;
+        }
+        if (block.type === '事件') {
+            const stage = (block.sections ?? []).filter((section) => section.name === '阶段').flatMap((section) => section.lines ?? []).join(' ');
+            if (!VALID_EVENT_STAGE.test(stage) || FUTURE_ONLY_EVENT.test(`${stage}\n${content}`)) {
+                skipped.push({ title, reason: '尚未发生或缺少明确阶段的计划不建立事件条目' });
+                continue;
+            }
+        }
+        if (block.type === '场景') {
+            sceneCount += 1;
+            if (sceneCount > 1) {
+                skipped.push({ title, reason: '设定初始化只允许一个明确开局场景；其余地点应归入世界或基础设定' });
+                continue;
+            }
+        }
+        block.keywords = (0, util_1.unique)((block.keywords ?? [])
+            .map((item) => (0, parser_1.sanitizeWorldbookLine)(item))
+            .filter((item) => item && !(0, util_1.isUidKeyword)(item) && !CONTROL_MARKER.test(item)))
+            .slice(0, 4);
+        if (!block.keywords.length && block.name) block.keywords = [block.name];
+        block.sections = (block.sections ?? []).map((section) => ({
+            ...section,
+            lines: (section.lines ?? []).map((line) => (0, parser_1.sanitizeWorldbookLine)(line)).filter((line) => line && !CONTROL_MARKER.test(line)),
+        })).filter((section) => section.lines.length || section.empty === true);
+        if (!block.sections.some((section) => (section.lines ?? []).length)) {
+            skipped.push({ title, reason: '清理控制文本后没有正文' });
+            continue;
+        }
+        output.push(block);
+    }
+    if (blocks.length > MAX_BLOCKS) warnings.push(`模型返回${blocks.length}个条目，只保留前${MAX_BLOCKS}个`);
+    if (skipped.length) warnings.push(`已隔离${skipped.length}个不应进入世界书的候选`);
+    return output;
+}
+function blockText(block) {
+    return (block.sections ?? []).flatMap((section) => (section.lines ?? []).map((line) => `【${section.name}】${line}`)).join('\n');
+}
+function controlContentOnly(content) {
+    const text = String(content ?? '');
+    if (!text) return true;
+    const controlHits = (text.match(/(?:AI|模型|玩家|提示词|系统消息|开发者消息|写作|文风|输出格式|审核|提取)/giu) || []).length;
+    const factualHits = (text.match(/(?:世界|地区|城市|组织|种族|魔法|技术|货币|制度|人物|位于|存在|当前|已经|发生)/gu) || []).length;
+    return controlHits >= 2 && factualHits === 0;
+}
+function digestWorldbook(data) {
+    return (0, util_1.hashText)(JSON.stringify(data?.entries ?? {}));
+}
+function worldSettingPreviewSummary(preview) {
+    if (!preview?.previewReady) return null;
+    return {
+        previewReady: true,
+        sourceHash: preview.sourceHash,
+        worldbookName: preview.worldbookName,
+        created: [...(preview.created ?? [])],
+        updated: [...(preview.updated ?? [])],
+        entries: (preview.blocks ?? []).map((block) => ({
+            title: block.title,
+            type: block.type,
+            content: blockText(block),
+        })),
+        repaired: Number(preview.diagnostics?.repaired || 0),
+        skipped: (preview.diagnostics?.skipped ?? []).map((item) => ({ title: item.title || '候选', reason: item.reason || '' })),
+        warnings: [...(preview.diagnostics?.warnings ?? [])],
+        generatedAt: preview.generatedAt,
+    };
+}
 },"worldbook":function(module,exports,require){
 
 "use strict";
@@ -10573,7 +11072,7 @@ class WorldbookAdapter {
             }
             // [MA-SCENE-01] 单轮只有一个正文结束时的当前场景。只给提取结果中的首个场景刷新活动时间；
             // 事件分发、总结或对其他场景的补全不会误抢当前场景。
-            if (options.sourceKind === 'extraction') {
+            if (['extraction', 'setting-import'].includes(options.sourceKind)) {
                 const currentSceneTitle = plan.blocks?.find?.((block) => (0, recall_policy_1.isSceneType)(block.type))?.title || '';
                 const activeAt = Date.now();
                 for (const entry of expectedAfterWrites) {
