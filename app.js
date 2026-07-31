@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.30 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.32 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -381,6 +381,8 @@ class MirrorAbyssApplication {
             commitWorldSettings: (sourceText) => this.commitWorldSettings(sourceText),
             clearWorldSettingsPreview: () => this.clearWorldSettingsPreview(),
             worldSettingsPreview: () => this.worldSettingsPreview(),
+            resetCurrentChat: () => this.resetCurrentChat(),
+            resetPlugin: () => this.resetPlugin(),
             // [MA-APP-API-01] UI 只调用 SillyTavern 官方 Connection Profile 服务，不保存密钥或自建 API 配置。
             bindProfileDropdown: (selector, selectedId, onChange) => this.host.bindProfileDropdown(selector, selectedId, onChange),
             connectionProfilesAvailable: () => this.host.connectionProfilesAvailable(),
@@ -394,7 +396,6 @@ class MirrorAbyssApplication {
         this.activeTokens = new Map();
         this.pendingMessageTimers = new Map();
         this.pendingSourceReconcileTimers = new Map();
-        this.scopeRecoveryGeneration = 0;
         this.started = false;
     }
     start() {
@@ -419,7 +420,6 @@ class MirrorAbyssApplication {
         this.activeSnapshots.clear();
         this.clearPendingMessageTimers();
         this.clearPendingSourceReconcileTimers();
-        this.scopeRecoveryGeneration += 1;
         this.host.clearInternalMessageMutations();
         this.controlPanel.unmount();
     }
@@ -442,6 +442,47 @@ class MirrorAbyssApplication {
     }
     clearWorldSettingsPreview() { return this.worldSettingImportService.clearPreview(); }
     worldSettingsPreview() { return this.worldSettingImportService.previewSummary(); }
+    async resetCurrentChat() {
+        const chatKey = this.host.chatKey();
+        this.clearPendingMessageTimers(chatKey);
+        this.clearPendingSourceReconcileTimers(chatKey);
+        const token = this.activeTokens.get(chatKey);
+        if (token) { token.cancelled = true; token.reason = '当前聊天正在重置'; }
+        this.rejectQueuedTasks('当前聊天正在重置', chatKey);
+        this.host.bumpScopeRevision(chatKey);
+        const running = this.runningByChat.get(chatKey);
+        if (running) await Promise.allSettled([running]);
+        await this.host.resetCurrentChatState();
+        this.auditRunner.resetStatus?.(chatKey);
+        this.memoryRunner.resetStatus?.(chatKey);
+        this.migrationService.clearPreview?.();
+        this.worldSettingImportService.clearPreview();
+        this.controlPanel.resetTaskStates?.('当前聊天已重置');
+        return { chatKey, worldbookPreserved: true };
+    }
+    async resetPlugin() {
+        this.clearPendingMessageTimers();
+        this.clearPendingSourceReconcileTimers();
+        this.cancelAll('插件正在重置');
+        for (const chatKey of this.activeTokens.keys()) this.host.bumpScopeRevision(chatKey);
+        const running = [...this.runningByChat.values()];
+        if (running.length) await Promise.allSettled(running);
+        const chatKey = safeChatKey(this.host);
+        if (chatKey) await this.host.resetCurrentChatState();
+        const settings = this.settingsStore.reset(this.host.context());
+        this.auditRunner.resetStatus?.();
+        this.memoryRunner.resetStatus?.();
+        this.migrationService.clearPreview?.();
+        this.worldSettingImportService.clearPreview();
+        this.taskQueues.clear();
+        this.pendingTaskKeys.clear();
+        this.activeSnapshots.clear();
+        this.activeTokens.clear();
+        this.runningByChat.clear();
+        this.host.clearInternalMessageMutations();
+        this.controlPanel.resetTaskStates?.('插件已恢复默认设置');
+        return { settings, currentChatReset: Boolean(chatKey), worldbookPreserved: true };
+    }
     processLatest() { return this.enqueueTask('full', undefined, false); }
     cancel() {
         const key = this.host.chatKey();
@@ -518,11 +559,10 @@ class MirrorAbyssApplication {
         catch { return; }
         const key = `${turn.chatKey}|${turn.messageIndex}`;
         const previous = this.pendingMessageTimers.get(key);
-        if (previous?.timer) globalThis.clearTimeout(previous.timer);
+        if (previous) globalThis.clearTimeout(previous);
         const delay = immediate ? 0 : 650;
-        const source = { ...turn, roleKey: safeRoleKey(this.host) };
         const timer = globalThis.setTimeout(async () => {
-            if (this.pendingMessageTimers.get(key)?.timer !== timer) return;
+            if (this.pendingMessageTimers.get(key) !== timer) return;
             this.pendingMessageTimers.delete(key);
             try {
                 const first = this.host.latestTurn(turn.messageIndex);
@@ -542,15 +582,21 @@ class MirrorAbyssApplication {
             }
         }, delay);
         timer?.unref?.();
-        this.pendingMessageTimers.set(key, { timer, source, immediate: Boolean(immediate) });
+        this.pendingMessageTimers.set(key, timer);
     }
-    clearPendingMessageTimers() {
-        for (const pending of this.pendingMessageTimers.values()) if (pending?.timer) globalThis.clearTimeout(pending.timer);
-        this.pendingMessageTimers.clear();
+    clearPendingMessageTimers(chatKey = '') {
+        for (const [key, timer] of this.pendingMessageTimers.entries()) {
+            if (chatKey && !key.startsWith(`${chatKey}|`)) continue;
+            globalThis.clearTimeout(timer);
+            this.pendingMessageTimers.delete(key);
+        }
     }
-    clearPendingSourceReconcileTimers() {
-        for (const pending of this.pendingSourceReconcileTimers.values()) globalThis.clearTimeout(pending.timer);
-        this.pendingSourceReconcileTimers.clear();
+    clearPendingSourceReconcileTimers(chatKey = '') {
+        for (const [key, pending] of this.pendingSourceReconcileTimers.entries()) {
+            if (chatKey && key !== chatKey) continue;
+            globalThis.clearTimeout(pending.timer);
+            this.pendingSourceReconcileTimers.delete(key);
+        }
     }
     async onMessage(index) {
         if (!this.started) return;
@@ -579,18 +625,14 @@ class MirrorAbyssApplication {
     }
     onScopeChanged(eventName, eventValue) {
         if (this.host.consumeInternalScopeEvent(eventName, eventValue)) return;
-        const interruptedSources = eventName === 'CHAT_CHANGED' ? this.captureInterruptedAutomaticSources() : [];
-        const interruptedRuns = eventName === 'CHAT_CHANGED' ? [...this.runningByChat.values()] : [];
         this.clearPendingMessageTimers();
         const reason = `SillyTavern 事件 ${eventName} 使源对话失效`;
         if (eventName === 'CHAT_CHANGED') {
-            const recoveryGeneration = ++this.scopeRecoveryGeneration;
             this.clearPendingSourceReconcileTimers();
             this.cancelAll(reason);
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
             this.controlPanel.resetTaskStates?.('聊天已经切换');
             this.controlPanel.setStatus('聊天已经切换，旧聊天任务已取消');
-            void this.recoverInterruptedAutomaticSources(interruptedSources, interruptedRuns, recoveryGeneration);
             return;
         }
         const index = messageIndexFromEvent(eventValue);
@@ -607,54 +649,6 @@ class MirrorAbyssApplication {
             this.controlPanel.setStatus(`源正文已变化，已取消${affected}个受影响任务；其他后台任务继续运行`);
         }
         this.scheduleSourceReconcile(eventName, index);
-    }
-
-    captureInterruptedAutomaticSources() {
-        const candidates = [];
-        const add = (source) => {
-            if (!source || !Number.isInteger(source.messageIndex) || !source.messageKey || !source.contentHash) return;
-            candidates.push({ ...source, roleKey: source.roleKey || safeRoleKey(this.host) });
-        };
-        for (const pending of this.pendingMessageTimers.values()) add(pending?.source);
-        for (const queue of this.taskQueues.values()) {
-            for (const item of queue.items) {
-                if (item?.automatic !== true || item?.maintenance === true) continue;
-                if (!['audit', 'extraction', 'full'].includes(String(item.taskType ?? ''))) continue;
-                add(item.sourceTurn);
-            }
-        }
-        for (const snapshot of this.activeSnapshots.values()) {
-            if (snapshot?.automatic !== true || snapshot?.maintenance === true) continue;
-            if (!['audit', 'extraction', 'full'].includes(String(snapshot.taskType ?? ''))) continue;
-            add(snapshot);
-        }
-        const unique = new Map();
-        for (const candidate of candidates) unique.set(`${candidate.messageKey}|${candidate.contentHash}`, candidate);
-        return [...unique.values()];
-    }
-    matchingInterruptedSource(candidate) {
-        if (!candidate || candidate.roleKey !== safeRoleKey(this.host)) return null;
-        let turn;
-        try { turn = this.host.latestTurn(candidate.messageIndex); }
-        catch { return null; }
-        if (turn.messageKey !== candidate.messageKey || turn.contentHash !== candidate.contentHash) return null;
-        if (String(turn.playerText ?? '') !== String(candidate.playerText ?? '')) return null;
-        if (String(turn.dialogueHash ?? '') !== String(candidate.dialogueHash ?? '')) return null;
-        return { ...turn, roleKey: candidate.roleKey };
-    }
-    async recoverInterruptedAutomaticSources(candidates, interruptedRuns, recoveryGeneration) {
-        if (!this.started || !Array.isArray(candidates) || !candidates.length) return;
-        await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
-        if (!this.started || recoveryGeneration !== this.scopeRecoveryGeneration) return;
-        let matched = candidates.map((candidate) => this.matchingInterruptedSource(candidate)).filter(Boolean);
-        if (!matched.length) return;
-        if (Array.isArray(interruptedRuns) && interruptedRuns.length) await Promise.allSettled(interruptedRuns);
-        if (!this.started || recoveryGeneration !== this.scopeRecoveryGeneration) return;
-        matched = matched.map((turn) => this.matchingInterruptedSource(turn)).filter(Boolean);
-        if (!matched.length) return;
-        const uniqueIndexes = [...new Set(matched.map((turn) => turn.messageIndex))].sort((left, right) => left - right);
-        this.controlPanel.setStatus('新存档已完成首次落盘，正在恢复被聊天切换中断的首轮正文处理');
-        for (const messageIndex of uniqueIndexes) this.scheduleMessage(messageIndex, false);
     }
 
     scheduleSourceReconcile(eventName, index) {
@@ -755,7 +749,7 @@ class MirrorAbyssApplication {
         let rejectTask;
         const promise = new Promise((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
         const queue = this.taskQueues.get(chatKey) ?? { running: false, items: [] };
-        const item = { taskType, index: turn.messageIndex, automatic: Boolean(automatic), maintenance, sourceTurn: maintenance ? null : { ...turn, roleKey: safeRoleKey(this.host) }, taskKey, promise, resolve: resolveTask, reject: rejectTask, queuedAt: Date.now() };
+        const item = { taskType, index: turn.messageIndex, automatic: Boolean(automatic), maintenance, taskKey, promise, resolve: resolveTask, reject: rejectTask, queuedAt: Date.now() };
         queue.items.push(item);
         this.taskQueues.set(chatKey, queue);
         this.pendingTaskKeys.add(taskKey);
@@ -823,9 +817,9 @@ class MirrorAbyssApplication {
                 this.controlPanel.setStatus(detail);
             }
             else if (taskType === 'extraction') {
-                const detail = extractionOutcomeDetail(result, false);
-                this.controlPanel.setTaskProgress?.('extract', 'success', detail, extractionOutcomeMeta(result));
-                this.controlPanel.setStatus(detail);
+                const completion = extractionCompletion(result, activeSnapshot.worldbookName);
+                this.controlPanel.setTaskProgress?.('extract', 'success', completion.detail, completion.meta);
+                this.controlPanel.setStatus(completion.detail);
             }
             else if (taskType === 'smallSummary') {
                 this.controlPanel.setTaskProgress?.('extract', 'success', '小总结、分发与召回重排完成');
@@ -846,9 +840,9 @@ class MirrorAbyssApplication {
             }
             else {
                 if (settings.autoExtraction === true && settings.extractionEnabled !== false) {
-                    const detail = extractionOutcomeDetail(result, true);
-                    this.controlPanel.setTaskProgress?.('extract', 'success', detail, extractionOutcomeMeta(result));
-                    this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${detail}`);
+                    const completion = extractionCompletion(result, activeSnapshot.worldbookName);
+                    this.controlPanel.setTaskProgress?.('extract', 'success', completion.detail, completion.meta);
+                    this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${completion.detail}`);
                 }
                 else {
                     this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭');
@@ -966,7 +960,6 @@ class MirrorAbyssApplication {
                     snapshot = item.maintenance
                         ? this.host.captureMaintenanceSnapshot(settings, item.taskType, token)
                         : this.host.captureSnapshot(settings, item.index, item.taskType, token);
-                    snapshot.automatic = Boolean(item.automatic);
                     this.activeTokens.set(chatKey, token);
                     this.activeSnapshots.set(chatKey, snapshot);
                     this.runningByChat.set(chatKey, item.promise);
@@ -1014,27 +1007,19 @@ class MirrorAbyssApplication {
     }
 }
 exports.MirrorAbyssApplication = MirrorAbyssApplication;
-function extractionOutcomeDetail(result, automatic = false) {
-    const prefix = automatic ? '自动提取完成' : '提取完成';
-    if (!result || Array.isArray(result) || typeof result !== 'object') return `${prefix}：总结调度与世界书合并完成`;
-    if (result.outcome === 'explicit-none') return `${prefix}：本轮无可记录事实，世界书零写入`;
-    if (result.outcome === 'verified-no-change') return `${prefix}：首次重复候选已经过AI正文差量复核，确认本轮没有新增状态变化，世界书零写入`;
-    if (result.outcome === 'no-change' || result.changed === false) {
-        return `${prefix}：候选均为已有事实或无状态变化，世界书零写入${result.skipped?.length ? `；整条跳过${result.skipped.length}条` : ''}`;
-    }
-    return `${prefix}：新建${result.created?.length || 0}、更新${result.updated?.length || 0}、关键变化${result.criticalChanges || 0}、合并${result.merged?.length || 0}、格式恢复${result.repaired || 0}、跳过${result.skipped?.length || 0}`;
-}
-function extractionOutcomeMeta(result) {
-    if (!result || Array.isArray(result) || typeof result !== 'object') return {};
+function extractionCompletion(result, fallbackWorldbookName = '') {
+    const worldbookName = String(result?.worldbookName || fallbackWorldbookName || '当前绑定世界书');
+    const warehouse = result?.warehouse ?? {};
+    const created = Array.isArray(warehouse.created) ? warehouse.created : [];
+    const updated = Array.isArray(warehouse.updated) ? warehouse.updated : [];
+    const deleted = Array.isArray(warehouse.deleted) ? warehouse.deleted : [];
+    const businessWriteCount = created.length + updated.length + deleted.length;
+    const activityPackChanged = result?.activityPackChanged === true;
     return {
-        titles: Array.isArray(result.titles) ? result.titles : [],
-        created: Array.isArray(result.created) ? result.created : [],
-        updated: Array.isArray(result.updated) ? result.updated : [],
-        skipped: Array.isArray(result.skipped) ? result.skipped : [],
-        merged: Array.isArray(result.merged) ? result.merged : [],
-        repaired: Number(result.repaired || 0),
-        skippedDetails: Array.isArray(result.skippedDetails) ? result.skippedDetails : [],
-        deltaRechecked: result.deltaRechecked === true,
+        detail: businessWriteCount > 0
+            ? `已写入世界书“${worldbookName}”：新建${created.length}、更新${updated.length}、删除${deleted.length}；活动包${activityPackChanged ? '已刷新' : '未变化'}`
+            : `世界书“${worldbookName}”业务条目零写入；活动包${activityPackChanged ? '仅刷新运行投影' : '未变化'}`,
+        meta: { created, updated, deleted, worldbookName, businessWriteCount, activityPackChanged },
     };
 }
 
@@ -1058,7 +1043,6 @@ function receiptAffectedBySourceChange(receipt, eventName, index) {
     return false;
 }
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
-function safeRoleKey(host) { try { return host.roleKey(); } catch { return ''; } }
 function messageIndexFromEvent(value) {
     if (Number.isInteger(value))
         return value;
@@ -1095,6 +1079,11 @@ class AuditRunner {
     currentStatus(chatKey = '') {
         const key = chatKey || safeChatKey(this.host);
         return structuredClone(this.statusByChat.get(key) ?? { phase: 'idle', detail: '等待审核', error: '' });
+    }
+
+    resetStatus(chatKey = '') {
+        if (chatKey) this.statusByChat.delete(chatKey);
+        else this.statusByChat.clear();
     }
 
     /**
@@ -1177,7 +1166,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.30';
+exports.VERSION = '2.0.0-lite.ui.32';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1244,8 +1233,8 @@ class ControlPanel {
         this.pendingActions = new Set();
         this.lastOutcome = null;
         this.taskStates = {
-            audit: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0 },
-            extract: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0 },
+            audit: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false },
+            extract: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false },
         };
         this.statusText = '就绪';
         this.statusError = false;
@@ -1489,6 +1478,7 @@ class ControlPanel {
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
 .ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
+.ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:38px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-pack{margin:0;max-height:250px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:34px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:26px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
@@ -1567,6 +1557,7 @@ class ControlPanel {
         const management = this.buildManagementSection();
         const worldSetting = this.buildWorldSettingSection();
         const rebuild = this.buildRebuildSection();
+        const reset = this.buildResetSection();
         const actions = document.createElement('div');
         actions.className = 'ma-lite-actions';
         const audit = this.makeActionButton('audit', '审核');
@@ -1582,7 +1573,7 @@ class ControlPanel {
         runPage.append(actions, status);
         recallPage.append(recall);
         managementPage.append(management);
-        settingsPage.append(apiSection, switches, auditPromptEditor, thresholds, note);
+        settingsPage.append(apiSection, switches, auditPromptEditor, thresholds, note, reset);
         worldSettingPage.append(worldSetting);
         rebuildPage.append(rebuild);
         body.append(pageNav, runPage, recallPage, managementPage, settingsPage, worldSettingPage, rebuildPage);
@@ -1692,6 +1683,61 @@ class ControlPanel {
         catch { name ||= profileId; }
         this.apiProfileStatusNode.textContent = `当前：${name}；仅用于镜渊审核、修正、提取和总结，不切换主聊天 API。`;
     }
+    buildResetSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-reset';
+        const head = document.createElement('strong');
+        head.className = 'ma-lite-reset-head';
+        head.textContent = '重置';
+        const help = document.createElement('div');
+        help.className = 'ma-lite-reset-help';
+        help.textContent = '重置当前聊天会清除该聊天的处理游标、提交回执、焦点和游戏时间；重置插件还会恢复全部插件设置。两者都不会删除或清空世界书正文。';
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-reset-actions';
+        const chat = document.createElement('button');
+        chat.type = 'button';
+        chat.textContent = '重置当前聊天';
+        chat.addEventListener('click', () => void this.runResetAction('resetCurrentChat'));
+        const plugin = document.createElement('button');
+        plugin.type = 'button';
+        plugin.textContent = '重置插件';
+        plugin.addEventListener('click', () => void this.runResetAction('resetPlugin'));
+        actions.append(chat, plugin);
+        section.append(head, help, actions);
+        this.buttons.resetCurrentChat = chat;
+        this.buttons.resetPlugin = plugin;
+        return section;
+    }
+    async runResetAction(kind) {
+        if (this.pendingActions.has(kind)) return;
+        const action = this.actions[kind];
+        if (typeof action !== 'function') { this.setStatus('重置功能未连接', true); return; }
+        const pluginReset = kind === 'resetPlugin';
+        const question = pluginReset
+            ? '确定重置 Mirror Abyss 插件设置及当前聊天状态吗？世界书正文不会被删除。'
+            : '确定重置当前聊天的镜渊状态吗？世界书正文不会被删除。';
+        if (typeof globalThis.confirm === 'function' && !globalThis.confirm(question)) return;
+        this.pendingActions.add(kind);
+        this.syncDisabledState();
+        this.setStatus(pluginReset ? '正在重置插件…' : '正在重置当前聊天…');
+        try {
+            await action();
+            this.resetTaskStates(pluginReset ? '插件已恢复默认设置' : '当前聊天已重置');
+            this.setStatus(pluginReset ? '插件设置与当前聊天状态已重置；世界书正文保持不变' : '当前聊天状态已重置；可以重新提取当前正文');
+            this.refresh();
+            await this.refreshWorldSettingState();
+            await this.refreshRebuildState();
+            await this.refreshRecallMap(true);
+        }
+        catch (error) {
+            this.setStatus(`重置失败：${(0, util_1.errorText)(error)}`, true);
+        }
+        finally {
+            this.pendingActions.delete(kind);
+            this.syncDisabledState();
+        }
+    }
+
     buildWorldSettingSection() {
         const section = document.createElement('section');
         section.className = 'ma-lite-world-setting';
@@ -2086,9 +2132,17 @@ class ControlPanel {
             if (issue.entries?.length) node.title = issue.entries.join('\n');
             this.managementNode.append(node);
         }
+        if (model.activityPack?.includedEntries?.length) {
+            const title = document.createElement('strong');
+            title.textContent = '活动包来源条目';
+            const source = document.createElement('div');
+            source.className = 'ma-lite-management-relation';
+            source.textContent = model.activityPack.includedEntries.join('、');
+            this.managementNode.append(title, source);
+        }
         if (model.activityPack?.content) {
             const title = document.createElement('strong');
-            title.textContent = '最终发送活动包';
+            title.textContent = '最终发送活动包（由上方世界书条目编译）';
             const pack = document.createElement('pre');
             pack.className = 'ma-lite-management-pack';
             pack.textContent = model.activityPack.content;
@@ -2474,6 +2528,8 @@ class ControlPanel {
         if (this.rebuildPreviewButton) this.rebuildPreviewButton.disabled = this.pendingActions.size > 0 || !master;
         if (this.rebuildCommitButton) this.rebuildCommitButton.disabled = this.pendingActions.size > 0 || !master || !this.actions.migrationPreview?.();
         if (this.rebuildUndoButton && this.pendingActions.size > 0) this.rebuildUndoButton.disabled = true;
+        if (this.buttons.resetCurrentChat) this.buttons.resetCurrentChat.disabled = this.pendingActions.size > 0;
+        if (this.buttons.resetPlugin) this.buttons.resetPlugin.disabled = this.pendingActions.size > 0;
         for (const input of Object.values(this.inputs)) input.disabled = false;
     }
 
@@ -2511,6 +2567,9 @@ class ControlPanel {
             repaired: Number.isFinite(meta.repaired) ? Number(meta.repaired) : previous.repaired,
             messageIndex: Number.isInteger(meta.messageIndex) ? meta.messageIndex : previous.messageIndex,
             queuePosition: Number.isFinite(meta.queuePosition) ? Number(meta.queuePosition) : previous.queuePosition,
+            worldbookName: typeof meta.worldbookName === 'string' ? meta.worldbookName : previous.worldbookName,
+            businessWriteCount: Number.isFinite(meta.businessWriteCount) ? Number(meta.businessWriteCount) : previous.businessWriteCount,
+            activityPackChanged: typeof meta.activityPackChanged === 'boolean' ? meta.activityPackChanged : previous.activityPackChanged,
         };
         if (detail) {
             this.statusText = `${kind === 'audit' ? '审核' : '提取'}：${detail}`;
@@ -2523,8 +2582,8 @@ class ControlPanel {
         this.scheduleIndicatorRefresh();
     }
     resetTaskStates(detail = '待命') {
-        this.taskStates.audit = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0 };
-        this.taskStates.extract = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0 };
+        this.taskStates.audit = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false };
+        this.taskStates.extract = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false };
         this.lastOutcome = null;
         this.scheduleIndicatorRefresh();
     }
@@ -2616,6 +2675,8 @@ class ControlPanel {
         const titleDetail = compactList(extract.state === 'running' ? '处理中' : '条目', extract.titles);
         const detail = resultParts.length ? resultParts.join('；') : titleDetail;
         const fullDetail = [
+            extract.worldbookName ? `目标世界书：${extract.worldbookName}` : '',
+            Number.isFinite(extract.businessWriteCount) ? `业务写入：${extract.businessWriteCount}条；活动包：${extract.activityPackChanged ? '刷新' : '未变化'}` : '',
             compactList('提取条目', extract.titles),
             compactList('新建', extract.created),
             compactList('更新', extract.updated),
@@ -3286,10 +3347,13 @@ class HostAdapter {
     }
     targetWorldbookName(settings) {
         const context = this.context();
-        const assigned = String(settings.targetLorebook || context.chatMetadata?.world_info || context.chat_metadata?.world_info || '').trim();
+        // [MA-WB-SCOPE-01] 当前聊天在 SillyTavern 中绑定的世界书是唯一写入目标。
+        // 旧版 targetLorebook 是全局隐藏覆盖项，会把不同聊天分叉到另一本文字同名或旧名称世界书；运行时不再读取它。
+        const assigned = String(context.chatMetadata?.world_info || context.chat_metadata?.world_info || '').trim();
         if (assigned || !settings.autoCreateLorebook) return assigned;
         const display = (0, util_1.safeId)(context.name2 || context.name1 || 'Chat') || 'Chat';
-        return `MA_${display}`;
+        const suffix = (0, util_1.hashText)(this.chatKey() || `${this.roleKey()}|${context.getCurrentChatId?.() ?? context.chatId ?? ''}`).slice(-6) || 'chat';
+        return `MA_${display}_${suffix}`;
     }
     settingsSignature(settings) {
         return (0, util_1.hashText)(JSON.stringify({
@@ -3303,7 +3367,6 @@ class HostAdapter {
             migrationProfileId: settings.migrationProfileId,
             responseTokens: settings.responseTokens,
             requestTimeoutMs: settings.requestTimeoutMs,
-            targetLorebook: settings.targetLorebook,
             auditEnabled: settings.auditEnabled,
             extractionEnabled: settings.extractionEnabled,
             auditPrompt: settings.auditPrompt,
@@ -3802,6 +3865,21 @@ class HostAdapter {
         if (typeof context.saveChat === 'function') return context.saveChat();
         if (typeof context.saveChatConditional === 'function') return context.saveChatConditional();
         throw new Error('SillyTavern 未提供聊天保存接口');
+    }
+    async resetCurrentChatState() {
+        const context = this.context();
+        const metadata = (context.chatMetadata ?? (context.chatMetadata = {}));
+        const hadState = Object.prototype.hasOwnProperty.call(metadata, constants_1.EXTENSION_NAMESPACE);
+        const previous = hadState ? (0, util_1.clone)(metadata[constants_1.EXTENSION_NAMESPACE]) : undefined;
+        delete metadata[constants_1.EXTENSION_NAMESPACE];
+        try {
+            await this.saveMetadata();
+        }
+        catch (error) {
+            if (hadState) metadata[constants_1.EXTENSION_NAMESPACE] = previous;
+            throw error;
+        }
+        return hadState;
     }
     diagnostics() {
         let context = null;
@@ -4681,6 +4759,10 @@ class MemoryRunner {
         const key = chatKey || safeChatKey(this.host);
         return structuredClone(this.statusByChat.get(key) ?? { phase: 'idle', detail: '等待处理', error: '', rawResult: '', plan: null });
     }
+    resetStatus(chatKey = '') {
+        if (chatKey) this.statusByChat.delete(chatKey);
+        else this.statusByChat.clear();
+    }
     async processTurn(settings, snapshot) {
         const cursor = this.host.cursor();
         if (cursor.lastProcessedMessageKey === snapshot.messageKey && cursor.lastProcessedHash === snapshot.contentHash) {
@@ -4692,7 +4774,7 @@ class MemoryRunner {
             const extraction = await this.extract(settings, snapshot);
             await this.advanceSummarySchedule(settings, snapshot, cursor, extraction.criticalChanges || 0);
             this.setStatus(snapshot.chatKey, 'complete', '核心事实已提交，总结调度完成');
-            return extraction.entries;
+            return taskResultEntries(extraction);
         } catch (error) {
             this.setStatus(snapshot.chatKey, 'error', '当前步骤失败，后续步骤已停止', (0, util_1.errorText)(error));
             throw error;
@@ -4703,8 +4785,8 @@ class MemoryRunner {
             const cursor = this.host.cursor();
             const result = await this.extract(settings, snapshot);
             await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0);
-            this.setStatus(snapshot.chatKey, 'complete', extractionCompletionDetail(result));
-            return result;
+            this.setStatus(snapshot.chatKey, 'complete', '提取与总结调度完成');
+            return taskResultEntries(result);
         }
         if (kind === 'smallSummary') {
             const result = await this.summarize('small', settings, snapshot);
@@ -4721,13 +4803,13 @@ class MemoryRunner {
                 smallCountSinceLarge,
             }, snapshot, this.getSettings());
             this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : '小总结无更新');
-            return result.entries;
+            return taskResultEntries(result);
         }
         const result = await this.summarize('large', settings, snapshot);
         const cursor = this.host.cursor();
         await this.host.saveCursor({ ...cursor, smallCountSinceLarge: result.changed ? 0 : cursor.smallCountSinceLarge }, snapshot, this.getSettings());
         this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结无更新');
-        return result.entries;
+        return taskResultEntries(result);
     }
     async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0) {
         let turnsSinceSmall = Number(cursor.turnsSinceSmall || 0) + 1;
@@ -4784,18 +4866,11 @@ class MemoryRunner {
             onRetry: () => this.progress('running', '提取网关异常，已缩短上下文并重试一次', { titles: [] }),
         });
         this.validate(snapshot);
-        let parsedRaw = raw;
-        let deltaRechecked = false;
-        let blocks = (0, parser_1.parseExtractionWithRecovery)(parsedRaw);
+        let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
         let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
-        const initialExplicitNone = isExplicitNone(raw);
-        let recoveryAttempts = 0;
         let repairRaw = '';
-        let retryRaw = '';
         if (!blocks.length && diagnostics.hadInput) {
-            const initialDiagnostics = diagnostics;
-            recoveryAttempts += 1;
-            this.progress('running', '首次格式无法提交，启动一次格式修复后手', { titles: [], created: [], updated: [], skipped: [], repaired: 0 });
+            this.progress('running', '首次格式无法提交，启动一次格式修复后手', { titles: [] });
             const repairPrompt = (0, prompts_1.extractionRepairPrompts)(raw);
             repairRaw = await (0, model_request_1.callModel)({
                 host: this.host,
@@ -4809,146 +4884,44 @@ class MemoryRunner {
                 onRetry: () => this.progress('running', '格式修复网关异常，缩短异常文本后重试一次', { titles: [] }),
             });
             this.validate(snapshot);
-            parsedRaw = repairRaw;
-            blocks = (0, parser_1.parseExtractionWithRecovery)(parsedRaw);
+            blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
             const next = blocks.diagnostics ?? {};
-            diagnostics = successfulRecoveryDiagnostics(next, initialDiagnostics, recoveryAttempts, '已执行一次模型格式修复');
-        }
-        if (!blocks.length && !initialExplicitNone) {
-            const failedRepairDiagnostics = diagnostics;
-            recoveryAttempts += 1;
-            this.progress('running', '格式修复仍无可提交条目，重新依据本轮正文执行一次精简提取', { titles: [], created: [], updated: [], skipped: [], repaired: recoveryAttempts - 1 });
-            retryRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'extraction',
-                prompt: (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true, dialogueContext: snapshot.dialogueContext }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: snapshot.turnText || snapshot.assistantText,
-            });
-            this.validate(snapshot);
-            parsedRaw = retryRaw;
-            blocks = (0, parser_1.parseExtractionWithRecovery)(parsedRaw);
-            const next = blocks.diagnostics ?? {};
-            diagnostics = successfulRecoveryDiagnostics(next, failedRepairDiagnostics, recoveryAttempts, '格式修复失败后已重新执行一次精简提取');
+            diagnostics = {
+                repaired: Number(diagnostics.repaired || 0) + Number(next.repaired || 0) + 1,
+                merged: [...(diagnostics.merged || []), ...(next.merged || [])],
+                skipped: [...(diagnostics.skipped || []), ...(next.skipped || [])],
+                warnings: [...(diagnostics.warnings || []), '已执行一次模型格式修复', ...(next.warnings || [])],
+                hadInput: true,
+            };
         }
         if (!blocks.length) {
-            const explicitNone = initialExplicitNone || isExplicitNone(parsedRaw);
+            const explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
             const skippedTitles = (diagnostics.skipped || []).map((item) => item.title || '异常片段');
-            if (!explicitNone) {
-                const reason = diagnosticReason(diagnostics);
-                const detail = `提取结果连续恢复失败，世界书未写入，且本轮不会标记为已处理${reason ? `：${reason}` : ''}`;
-                this.setStatus(snapshot.chatKey, 'error', detail, detail, parsedRaw || repairRaw || raw, emptyPlan());
-                this.progress('error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || recoveryAttempts });
-                throw new Error(detail);
-            }
-            const detail = '本轮明确返回“无”，世界书零写入';
-            this.setStatus(snapshot.chatKey, 'complete', detail, '', parsedRaw || raw, emptyPlan());
-            this.progress('success', detail, { titles: [], created: [], updated: [], skipped: [], repaired: diagnostics.repaired || recoveryAttempts });
-            return { entries, changed: false, completed: true, outcome: 'explicit-none', diagnostics, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: diagnostics.repaired || recoveryAttempts, criticalChanges: 0 };
+            const detail = explicitNone ? '本轮明确返回“无”，世界书零写入' : `没有可安全提交的条目；已隔离${skippedTitles.length}个异常片段`;
+            this.setStatus(snapshot.chatKey, 'matching', detail, '', repairRaw || raw, emptyPlan());
+            this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0 });
+            return { entries, changed: false, diagnostics };
         }
-        let titles = blocks.map((block) => block.title);
-        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式恢复${diagnostics.repaired || recoveryAttempts}处`, '', parsedRaw);
+        const titles = blocks.map((block) => block.title);
+        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
         this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
-        let plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
+        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
-        if (!hasWriteOperations(plan)) {
-            const firstNoChangeDetails = noOpDetails(plan);
-            deltaRechecked = true;
-            this.progress('running', `首次${titles.length}个候选全部为已有事实或无状态变化，启动一次AI正文差量复核`, { titles, created: [], updated: [], skipped: [], merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
-            const deltaRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'extraction',
-                prompt: (0, prompts_1.extractionDeltaPrompts)(settings, snapshot.assistantText, selected, firstNoChangeDetails, { compact: true }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: snapshot.assistantText,
-            });
-            this.validate(snapshot);
-            const deltaExplicitNone = isExplicitNone(deltaRaw);
-            let deltaBlocks = (0, parser_1.parseExtractionWithRecovery)(deltaRaw);
-            const deltaDiagnostics = deltaBlocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
-            if (!deltaBlocks.length && !deltaExplicitNone) {
-                const reason = diagnosticReason(deltaDiagnostics);
-                const detail = `首次候选全部零写入，AI正文差量复核格式异常，世界书未写入，且本轮不会标记为已处理${reason ? `：${reason}` : ''}`;
-                this.setStatus(snapshot.chatKey, 'error', detail, detail, deltaRaw, plan);
-                this.progress('error', detail, { titles, created: [], updated: [], skipped: [], repaired: diagnostics.repaired || recoveryAttempts });
-                throw new Error(detail);
-            }
-            if (deltaExplicitNone) {
-                const detail = '首次候选全部重复；AI正文差量复核确认本轮没有新增状态变化，世界书零写入';
-                this.setStatus(snapshot.chatKey, 'complete', detail, '', deltaRaw, plan);
-                this.progress('success', detail, { titles, created: [], updated: [], skipped: [], merged: [], repaired: diagnostics.repaired || recoveryAttempts });
-                return {
-                    entries,
-                    changed: false,
-                    completed: true,
-                    outcome: 'verified-no-change',
-                    diagnostics,
-                    titles,
-                    created: [],
-                    updated: [],
-                    skipped: [],
-                    skippedDetails: firstNoChangeDetails,
-                    merged: [],
-                    repaired: diagnostics.repaired || recoveryAttempts,
-                    criticalChanges: 0,
-                    deltaRechecked: true,
-                };
-            }
-            const deltaTitles = deltaBlocks.map((block) => block.title);
-            const deltaPlan = (0, operations_1.buildOperationPlan)(deltaBlocks, entries, settings, snapshot.assistantText, { sourceKind: 'extraction' });
-            await this.resolveSemanticDuplicates(deltaPlan, entries, settings, snapshot);
-            if (!hasWriteOperations(deltaPlan)) {
-                const detail = `AI正文差量复核仍确认${deltaTitles.length}个候选均为已有事实或无状态变化，世界书零写入`;
-                const deltaNoChangeDetails = noOpDetails(deltaPlan);
-                this.setStatus(snapshot.chatKey, 'complete', detail, '', deltaRaw, deltaPlan);
-                this.progress('success', detail, { titles: deltaTitles, created: [], updated: [], skipped: [], merged: deltaDiagnostics.merged || [], repaired: Number(diagnostics.repaired || recoveryAttempts) + Number(deltaDiagnostics.repaired || 0) });
-                return {
-                    entries,
-                    changed: false,
-                    completed: true,
-                    outcome: 'verified-no-change',
-                    diagnostics: deltaDiagnostics,
-                    titles: deltaTitles,
-                    created: [],
-                    updated: [],
-                    skipped: [],
-                    skippedDetails: deltaNoChangeDetails,
-                    merged: deltaDiagnostics.merged || [],
-                    repaired: Number(diagnostics.repaired || recoveryAttempts) + Number(deltaDiagnostics.repaired || 0),
-                    criticalChanges: 0,
-                    deltaRechecked: true,
-                };
-            }
-            parsedRaw = deltaRaw;
-            blocks = deltaBlocks;
-            diagnostics = successfulRecoveryDiagnostics(deltaDiagnostics, diagnostics, 0, '首次候选零写入后已执行一次AI正文差量复核');
-            titles = deltaTitles;
-            plan = deltaPlan;
-        }
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
-        const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...fullySkippedTitles(plan)])];
-        const skippedDetails = noOpDetails(plan).filter((item) => skipped.includes(item.title));
-        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、整条跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
-        const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', parsedRaw);
+        const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...plan.operations.filter((operation) => operation.kind === 'noop').map((operation) => operation.title)])];
+        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
+        const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', raw);
         result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
-        result.completed = true;
-        result.outcome = result.changed ? 'written' : 'no-change';
-        result.diagnostics = diagnostics;
-        result.titles = titles;
-        result.created = created;
-        result.updated = updated;
-        result.skipped = skipped;
-        result.skippedDetails = skippedDetails;
-        result.merged = diagnostics.merged || [];
-        result.repaired = diagnostics.repaired || recoveryAttempts;
-        result.deltaRechecked = deltaRechecked;
-        const detail = extractionCompletionDetail(result);
-        this.progress('success', detail, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: result.repaired, criticalChanges: result.criticalChanges });
+        const destination = result.worldbookName || snapshot.worldbookName || '当前绑定世界书';
+        const actualCreated = result.warehouse?.created ?? [];
+        const actualUpdated = result.warehouse?.updated ?? [];
+        const actualDeleted = result.warehouse?.deleted ?? [];
+        const businessWrites = actualCreated.length + actualUpdated.length + actualDeleted.length;
+        const detail = businessWrites > 0
+            ? `已写入世界书“${destination}”：新建${actualCreated.length}、更新${actualUpdated.length}、删除${actualDeleted.length}；活动包${result.activityPackChanged ? '已刷新' : '未变化'}`
+            : `世界书“${destination}”业务条目零写入；活动包${result.activityPackChanged ? '仅刷新运行投影' : '未变化'}`;
+        this.progress('success', detail, { titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites, activityPackChanged: result.activityPackChanged === true });
         return result;
     }
     async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
@@ -5024,7 +4997,12 @@ class MemoryRunner {
     }
     async apply(settings, plan, snapshot, contextText, label, raw, options = {}) {
         this.setStatus(snapshot.chatKey, 'matching', `${label}生成确定性操作计划`, '', raw, plan);
-        if (!plan.operations.some((operation) => operation.kind !== 'noop')) return { entries: [], changed: false };
+        if (!plan.operations.some((operation) => operation.kind !== 'noop')) return {
+            entries: [], changed: false, businessChanged: false,
+            worldbookName: snapshot.worldbookName || '',
+            warehouse: { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
+            activityPack: null, activityPackChanged: false,
+        };
         this.setStatus(snapshot.chatKey, 'worldbook', `${label}通过唯一提交器写入世界书`, '', raw, plan);
         this.validate(snapshot);
         const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
@@ -5058,7 +5036,17 @@ class MemoryRunner {
             }
             throw new Error(`当前游戏时间保存失败，世界书已恢复提交前状态：${(0, util_1.errorText)(error)}`);
         }
-        return { entries, changed: entries.changed === true, receipt: entries.receipt ?? null, activityPack: entries.activityPack ?? null, currentGameTime: nextGameTime };
+        return {
+            entries,
+            changed: entries.changed === true,
+            businessChanged: entries.businessChanged === true,
+            worldbookName: entries.worldbookName || snapshot.worldbookName || '',
+            warehouse: entries.warehouse ?? { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
+            receipt: entries.receipt ?? null,
+            activityPack: entries.activityPack ?? null,
+            activityPackChanged: entries.activityPackChanged === true,
+            currentGameTime: nextGameTime,
+        };
     }
     validate(snapshot) { this.host.assertSnapshot(snapshot, this.getSettings()); }
     setStatus(chatKey, phase, detail, error = '', rawResult = '', plan = null) {
@@ -5068,62 +5056,16 @@ class MemoryRunner {
 }
 exports.MemoryRunner = MemoryRunner;
 
-function isExplicitNone(value) {
-    return /^(?:无|EMPTY)$/u.test(String(value ?? '').trim());
-}
-function successfulRecoveryDiagnostics(current, previous, recoveryAttempts, message) {
-    const currentDiagnostics = current ?? {};
-    const previousReasons = (previous?.skipped || []).map((item) => item?.reason).filter(Boolean);
-    return {
-        repaired: Number(currentDiagnostics.repaired || 0) + Math.max(0, Number(recoveryAttempts || 0)),
-        merged: [...(currentDiagnostics.merged || [])],
-        // 前一次失败输出不是最终候选，不能继续显示为本轮“跳过条目”。
-        skipped: [...(currentDiagnostics.skipped || [])],
-        warnings: [...(previous?.warnings || []), ...previousReasons.map((reason) => `前一次输出未采用：${reason}`), message, ...(currentDiagnostics.warnings || [])],
-        hadInput: currentDiagnostics.hadInput === true,
-    };
-}
-function diagnosticReason(diagnostics) {
-    const reasons = (diagnostics?.skipped || []).map((item) => String(item?.reason || '').trim()).filter(Boolean);
-    return [...new Set(reasons)].slice(0, 3).join('；');
-}
-function hasWriteOperations(plan) {
-    return Boolean(plan?.operations?.some((operation) => operation.kind !== 'noop'));
-}
-function noOpDetails(plan) {
-    const seen = new Set();
-    const output = [];
-    for (const operation of plan?.operations ?? []) {
-        if (operation.kind !== 'noop') continue;
-        const item = {
-            title: String(operation.title || '候选'),
-            section: String(operation.section || ''),
-            reason: String(operation.reason || '没有形成可提交变化'),
-        };
-        const key = `${item.title}|${item.section}|${item.reason}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        output.push(item);
-    }
-    return output;
-}
-function fullySkippedTitles(plan) {
-    const grouped = new Map();
-    for (const operation of plan?.operations ?? []) {
-        const title = String(operation.title || '').trim();
-        if (!title) continue;
-        const state = grouped.get(title) ?? { total: 0, writes: 0 };
-        state.total += 1;
-        if (operation.kind !== 'noop') state.writes += 1;
-        grouped.set(title, state);
-    }
-    return [...grouped.entries()].filter(([, state]) => state.total > 0 && state.writes === 0).map(([title]) => title);
-}
-function extractionCompletionDetail(result) {
-    if (result?.outcome === 'explicit-none') return '提取完成：本轮无可记录事实，世界书零写入';
-    if (result?.outcome === 'verified-no-change') return '提取完成：首次重复候选已经过AI正文差量复核，确认本轮没有新增状态变化，世界书零写入';
-    if (result?.outcome === 'no-change' || result?.changed === false) return `提取完成：候选均为已有事实或无状态变化，世界书零写入${result?.skipped?.length ? `；整条跳过${result.skipped.length}条` : ''}`;
-    return `提取完成：新建${result?.created?.length || 0}、更新${result?.updated?.length || 0}、关键变化${result?.criticalChanges || 0}、合并${result?.merged?.length || 0}、格式恢复${result?.repaired || 0}、跳过${result?.skipped?.length || 0}`;
+function taskResultEntries(result) {
+    const entries = Array.isArray(result?.entries) ? result.entries : [];
+    entries.changed = result?.changed === true;
+    entries.businessChanged = result?.businessChanged === true;
+    entries.worldbookName = String(result?.worldbookName ?? entries.worldbookName ?? '');
+    entries.warehouse = result?.warehouse ?? entries.warehouse ?? { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 };
+    entries.activityPack = result?.activityPack ?? entries.activityPack ?? null;
+    entries.activityPackChanged = result?.activityPackChanged === true;
+    entries.criticalChanges = Number(result?.criticalChanges || 0);
+    return entries;
 }
 
 function ensureSummarySnapshotSections(block, kind) {
@@ -5676,6 +5618,7 @@ class MigrationService {
     }
     canUndo() { return Boolean(this.backup); }
     hasPreview() { return Boolean(this.preview); }
+    clearPreview() { this.preview = null; return true; }
     previewSummary() { return this.preview ? (0, util_1.clone)(this.preview.summary) : null; }
 
     // [MA-REBUILD-01] “整理”改为只读扫描与 AI 重建预览。此步骤不写世界书。
@@ -11426,7 +11369,6 @@ function parseLabeledSections(text) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractionPrompts = extractionPrompts;
-exports.extractionDeltaPrompts = extractionDeltaPrompts;
 exports.auditPrompts = auditPrompts;
 exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
@@ -11679,20 +11621,6 @@ ${existing || '（无）'}
     return { system, user };
 }
 
-
-function extractionDeltaPrompts(settings, assistantText, relevant, noChangeDetails = [], options = {}) {
-    const compact = options.compact !== false;
-    const base = extractionPrompts(settings, '', assistantText, relevant, { compact, dialogueContext: '' });
-    const rejected = (noChangeDetails ?? []).slice(0, 16).map((item) => {
-        const section = String(item?.section || '').trim();
-        const reason = String(item?.reason || '').trim();
-        return `- ${String(item?.title || '候选')}${section ? `【${section}】` : ''}${reason ? `：${reason}` : ''}`;
-    }).join('\n');
-    return {
-        system: `${base.system}\n\n【零写入差量复核】\n上一次提取已经成功解析，但本地确定性规划确认所有候选都与世界书相同或没有形成状态变化。现在只重新检查“本轮AI最终回复”本身，寻找上一次遗漏的新增状态、替换后的完整当前快照、稳定结果或必要因果。\n- 玩家输入中的世界基础设定已经由独立设定初始化链处理，禁止再次提取、改写或复制。\n- 不得仅换一种说法重抄既有条目。\n- 普通动作、短暂姿态、气氛与没有造成状态变化的对白仍然过滤。\n- 确实没有新增事实时只能输出“无”。`,
-        user: `${base.user}\n\n上一次被本地规划为零写入的候选：\n${rejected || '（没有可展示的候选原因）'}\n\n只依据本轮AI最终回复做一次差量复核。`,
-    };
-}
 
 function worldSettingImportPrompts(settings, sourceText, relevant, options = {}) {
     const compact = options.compact === true;
@@ -12633,6 +12561,12 @@ class SettingsStore {
         context.saveSettingsDebounced?.();
         return settings;
     }
+    reset(context) {
+        const root = (context.extensionSettings ?? (context.extensionSettings = {}));
+        delete root[constants_1.EXTENSION_NAMESPACE];
+        context.saveSettingsDebounced?.();
+        return this.load(context);
+    }
 }
 exports.SettingsStore = SettingsStore;
 function parseSettings(value) {
@@ -12663,7 +12597,8 @@ function parseSettings(value) {
         entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
         auditEnabled: candidate.auditEnabled !== false,
         extractionEnabled: candidate.extractionEnabled !== false,
-        targetLorebook: String(candidate.targetLorebook ?? ''),
+        // [MA-WB-SCOPE-01] 旧版全局目标世界书字段只保留兼容键，不再允许覆盖当前聊天绑定。
+        targetLorebook: '',
         autoCreateLorebook: candidate.autoCreateLorebook === true,
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
@@ -13352,7 +13287,7 @@ class WorldbookAdapter {
         validate?.();
         await this.save(opened);
         validate?.();
-        const verified = await opened.api.loadWorldInfo(opened.name);
+        const verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!verified || digestWorldbook(verified) !== digestWorldbook(opened.data))
             throw new Error('世界书完整快照保存后回读不一致');
         return parseEntries(verified);
@@ -13501,13 +13436,13 @@ class WorldbookAdapter {
         const beforeVersion = digestWorldbook(opened.data);
         const verifier = mutate(opened) ?? {};
         validate?.();
-        const latest = await opened.api.loadWorldInfo(opened.name);
+        const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!latest || digestWorldbook(latest) !== beforeVersion)
             throw new Error('世界书在编辑前已被其他操作修改，拒绝覆盖');
         validate?.();
         await this.save(opened);
         validate?.();
-        const verified = await opened.api.loadWorldInfo(opened.name);
+        const verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!verified)
             throw new Error('世界书编辑后回读失败');
         verifier.verify?.(verified);
@@ -13593,14 +13528,19 @@ class WorldbookAdapter {
             gameTime: options.currentGameTime,
         });
         if (packResult.uid) touchedUids.add(String(packResult.uid));
-        const changed = writeOperations.length > 0 || deletedCount > 0 || packResult.changed === true;
+        const businessChanged = writeOperations.length > 0 || deletedCount > 0;
+        const changed = businessChanged || packResult.changed === true;
         if (!changed) {
             const result = parseEntries(opened.data);
             result.changed = false;
+            result.businessChanged = false;
+            result.worldbookName = opened.name;
             result.writeCount = 0;
             result.deleteCount = 0;
+            result.warehouse = { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 };
             result.receipt = null;
             result.activityPack = packResult;
+            result.activityPackChanged = false;
             return result;
         }
 
@@ -13612,14 +13552,14 @@ class WorldbookAdapter {
         }
 
         validate?.();
-        const latest = await opened.api.loadWorldInfo(opened.name);
+        const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!latest || digestWorldbook(latest) !== beforeVersion) throw new Error('世界书在提交前已被其他操作修改，拒绝覆盖');
         validate?.();
         await this.save(opened);
         validate?.();
         let verifiedData;
         try {
-            verifiedData = await opened.api.loadWorldInfo(opened.name);
+            verifiedData = await loadWorldInfoAuthoritative(opened.api, opened.name);
             if (!verifiedData) throw new Error('世界书提交后回读失败');
             verifyWriteResults(verifiedData, expectedAfterWrites, writeOperations, operationId, settings, focusUid);
             verifyExitResults(verifiedData, deleted);
@@ -13630,7 +13570,7 @@ class WorldbookAdapter {
             opened.data = (0, util_1.clone)(beforeData);
             try {
                 await this.save(opened);
-                const restored = await opened.api.loadWorldInfo(opened.name);
+                const restored = await loadWorldInfoAuthoritative(opened.api, opened.name);
                 if (!restored || digestWorldbook(restored) !== digestWorldbook(beforeData)) throw new Error('恢复后快照不一致');
             }
             catch (rollbackError) {
@@ -13641,10 +13581,29 @@ class WorldbookAdapter {
         opened.data = verifiedData;
 
         const result = parseEntries(verifiedData);
+        const createdTitles = result
+            .filter((entry) => createdUids.has(String(entry.uid)) && entry.title !== governance_1.ACTIVITY_PACK_TITLE)
+            .map((entry) => entry.title);
+        const updatedTitles = result
+            .filter((entry) => touchedUids.has(String(entry.uid)) && !createdUids.has(String(entry.uid)) && entry.title !== governance_1.ACTIVITY_PACK_TITLE)
+            .map((entry) => entry.title);
+        const deletedTitles = deleted.map((entry) => entry.title);
         result.changed = true;
-        result.writeCount = writeOperations.length + Number(packResult.changed === true);
+        result.businessChanged = businessChanged;
+        result.worldbookName = opened.name;
+        result.writeCount = createdTitles.length + updatedTitles.length;
         result.deleteCount = deletedCount;
+        result.warehouse = {
+            created: [...new Set(createdTitles)],
+            updated: [...new Set(updatedTitles)],
+            deleted: [...new Set(deletedTitles)],
+            createdCount: new Set(createdTitles).size,
+            updatedCount: new Set(updatedTitles).size,
+            deletedCount,
+            operationCount: writeOperations.length,
+        };
         result.activityPack = packResult;
+        result.activityPackChanged = packResult.changed === true;
         result.receipt = buildCommitReceipt(receiptBefore, verifiedData, {
             id: operationId,
             sourceMessageKey,
@@ -13705,12 +13664,12 @@ class WorldbookAdapter {
         const restoredEntries = parseEntries(opened.data);
         this.applyNativeFields(restoredEntries, settings, focusUid, touchedUids);
         validate?.();
-        const latest = await opened.api.loadWorldInfo(opened.name);
+        const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!latest || digestWorldbook(latest) !== beforeVersion) throw new Error('世界书在回滚前已被其他操作修改，拒绝覆盖');
         validate?.();
         await this.save(opened);
         validate?.();
-        const verified = await opened.api.loadWorldInfo(opened.name);
+        const verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!verified) throw new Error('世界书回滚后回读失败');
         const result = parseEntries(verified);
         result.changed = true;
@@ -13811,18 +13770,21 @@ class WorldbookAdapter {
         this.assertChat(expectedChatKey);
         const context = this.context();
         const metadataKey = String(api.METADATA_KEY ?? 'world_info');
-        let name = String(settings.targetLorebook || context.chatMetadata?.[metadataKey] || context.chatMetadata?.world_info || '').trim();
+        const chatMetadata = context.chatMetadata ?? context.chat_metadata ?? {};
+        // [MA-WB-SCOPE-01] 唯一目标来自当前聊天绑定；禁止插件全局名称覆盖宿主绑定。
+        let name = String(chatMetadata?.[metadataKey] || chatMetadata?.world_info || '').trim();
         let generatedName = false;
         if (!name && settings.autoCreateLorebook) {
             const display = (0, util_1.safeId)(context.name2 || context.name1 || 'Chat') || 'Chat';
-            name = `MA_${display}`;
+            const suffix = (0, util_1.hashText)(expectedChatKey || this.chatKey() || `${context.characterId ?? context.name2 ?? 'chat'}|${context.getCurrentChatId?.() ?? context.chatId ?? ''}`).slice(-6) || 'chat';
+            name = `MA_${display}_${suffix}`;
             generatedName = true;
         }
         if (!name) throw new Error('当前聊天未绑定世界书');
         if (expectedName && name !== expectedName)
             throw new Error('目标世界书已经变化，拒绝继续');
         validate?.();
-        let data = await api.loadWorldInfo(name);
+        let data = await loadWorldInfoAuthoritative(api, name);
         validate?.();
         this.assertChat(expectedChatKey);
         if (!data && create) {
@@ -13831,19 +13793,23 @@ class WorldbookAdapter {
             await api.createNewWorldInfo(name, { interactive: false });
             validate?.();
             this.assertChat(expectedChatKey);
-            data = await api.loadWorldInfo(name);
+            data = await loadWorldInfoAuthoritative(api, name);
             validate?.();
         }
         if (!data && !create && generatedName)
             data = { entries: {} };
         if (!data) throw new Error(`世界书“${name}”不存在`);
         data.entries ?? (data.entries = {});
-        if (create && context.chatMetadata?.[metadataKey] !== name) {
+        if (create && String(chatMetadata?.[metadataKey] || chatMetadata?.world_info || '') !== name) {
             validate?.();
             this.assertChat(expectedChatKey);
-            context.chatMetadata ?? (context.chatMetadata = {});
+            context.chatMetadata ?? (context.chatMetadata = chatMetadata);
             context.chatMetadata[metadataKey] = name;
             context.chatMetadata.world_info = name;
+            if (context.chat_metadata && context.chat_metadata !== context.chatMetadata) {
+                context.chat_metadata[metadataKey] = name;
+                context.chat_metadata.world_info = name;
+            }
             if (typeof context.saveMetadata === 'function') await context.saveMetadata();
             else context.saveMetadataDebounced?.();
             validate?.();
@@ -13899,17 +13865,33 @@ function applySummaryRebalance(adapter, data, settings, kind, summaryText, focus
 }
 function buildContextWorldInfoApi(context) {
     const headers = () => context.getRequestHeaders?.() ?? { 'Content-Type': 'application/json' };
-    const loadWorldInfo = typeof context.loadWorldInfo === 'function' ? context.loadWorldInfo.bind(context) : async (name) => {
-        const response = await fetch('/api/worldinfo/get', { method: 'POST', headers: headers(), body: JSON.stringify({ name }), cache: 'no-cache' });
-        if (!response.ok) return null;
-        return response.json();
+    const cachedLoadWorldInfo = typeof context.loadWorldInfo === 'function' ? context.loadWorldInfo.bind(context) : null;
+    const loadWorldInfoFresh = async (name) => {
+        if (typeof globalThis.fetch !== 'function' || typeof globalThis.location === 'undefined') {
+            return cachedLoadWorldInfo ? cachedLoadWorldInfo(name) : null;
+        }
+        try {
+            const response = await globalThis.fetch('/api/worldinfo/get', {
+                method: 'POST',
+                headers: headers(),
+                body: JSON.stringify({ name }),
+                cache: 'no-cache',
+            });
+            if (!response.ok) return null;
+            return response.json();
+        }
+        catch (error) {
+            if (cachedLoadWorldInfo) return cachedLoadWorldInfo(name);
+            throw error;
+        }
     };
+    const loadWorldInfo = cachedLoadWorldInfo ?? loadWorldInfoFresh;
     const saveWorldInfo = typeof context.saveWorldInfo === 'function' ? context.saveWorldInfo.bind(context) : async (name, data) => {
         const response = await fetch('/api/worldinfo/edit', { method: 'POST', headers: headers(), body: JSON.stringify({ name, data }) });
         if (!response.ok) throw new Error(`世界书保存失败：HTTP ${response.status}`);
     };
     return {
-        METADATA_KEY: 'world_info', loadWorldInfo, saveWorldInfo,
+        METADATA_KEY: 'world_info', loadWorldInfo, loadWorldInfoFresh, saveWorldInfo,
         async createNewWorldInfo(name) { await saveWorldInfo(name, { entries: {} }, true); await context.updateWorldInfoList?.(); return true; },
         createWorldInfoEntry(_name, data) {
             data.entries ?? (data.entries = {});
@@ -13918,6 +13900,12 @@ function buildContextWorldInfoApi(context) {
         },
     };
 }
+function loadWorldInfoAuthoritative(api, name) {
+    if (typeof api?.loadWorldInfoFresh === 'function') return api.loadWorldInfoFresh(name);
+    if (typeof api?.loadWorldInfo === 'function') return api.loadWorldInfo(name);
+    throw new Error('SillyTavern 未提供 loadWorldInfo');
+}
+
 function createDefaultWorldInfoEntry(uid) {
     return { uid, key: [], keysecondary: [], comment: '', content: '', constant: false, vectorized: true, selective: false, selectiveLogic: 0, addMemo: false, order: 400, position: 0, disable: false, ignoreBudget: false, excludeRecursion: false, preventRecursion: true, probability: 100, useProbability: true, depth: 4, outletName: '', group: '', groupOverride: false, groupWeight: 100, scanDepth: null, caseSensitive: null, matchWholeWords: null, useGroupScoring: null, automationId: '', role: 0, sticky: null, cooldown: null, delay: null, delayUntilRecursion: 0, triggers: [] };
 }
