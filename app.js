@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.29 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.30 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1018,8 +1018,9 @@ function extractionOutcomeDetail(result, automatic = false) {
     const prefix = automatic ? '自动提取完成' : '提取完成';
     if (!result || Array.isArray(result) || typeof result !== 'object') return `${prefix}：总结调度与世界书合并完成`;
     if (result.outcome === 'explicit-none') return `${prefix}：本轮无可记录事实，世界书零写入`;
+    if (result.outcome === 'verified-no-change') return `${prefix}：首次重复候选已经过AI正文差量复核，确认本轮没有新增状态变化，世界书零写入`;
     if (result.outcome === 'no-change' || result.changed === false) {
-        return `${prefix}：候选均为已有事实或无状态变化，世界书零写入${result.skipped?.length ? `；跳过${result.skipped.length}条` : ''}`;
+        return `${prefix}：候选均为已有事实或无状态变化，世界书零写入${result.skipped?.length ? `；整条跳过${result.skipped.length}条` : ''}`;
     }
     return `${prefix}：新建${result.created?.length || 0}、更新${result.updated?.length || 0}、关键变化${result.criticalChanges || 0}、合并${result.merged?.length || 0}、格式恢复${result.repaired || 0}、跳过${result.skipped?.length || 0}`;
 }
@@ -1032,6 +1033,8 @@ function extractionOutcomeMeta(result) {
         skipped: Array.isArray(result.skipped) ? result.skipped : [],
         merged: Array.isArray(result.merged) ? result.merged : [],
         repaired: Number(result.repaired || 0),
+        skippedDetails: Array.isArray(result.skippedDetails) ? result.skippedDetails : [],
+        deltaRechecked: result.deltaRechecked === true,
     };
 }
 
@@ -1174,7 +1177,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.29';
+exports.VERSION = '2.0.0-lite.ui.30';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -4782,6 +4785,7 @@ class MemoryRunner {
         });
         this.validate(snapshot);
         let parsedRaw = raw;
+        let deltaRechecked = false;
         let blocks = (0, parser_1.parseExtractionWithRecovery)(parsedRaw);
         let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
         const initialExplicitNone = isExplicitNone(raw);
@@ -4844,15 +4848,92 @@ class MemoryRunner {
             this.progress('success', detail, { titles: [], created: [], updated: [], skipped: [], repaired: diagnostics.repaired || recoveryAttempts });
             return { entries, changed: false, completed: true, outcome: 'explicit-none', diagnostics, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: diagnostics.repaired || recoveryAttempts, criticalChanges: 0 };
         }
-        const titles = blocks.map((block) => block.title);
+        let titles = blocks.map((block) => block.title);
         this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式恢复${diagnostics.repaired || recoveryAttempts}处`, '', parsedRaw);
         this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
+        let plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
+        if (!hasWriteOperations(plan)) {
+            const firstNoChangeDetails = noOpDetails(plan);
+            deltaRechecked = true;
+            this.progress('running', `首次${titles.length}个候选全部为已有事实或无状态变化，启动一次AI正文差量复核`, { titles, created: [], updated: [], skipped: [], merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
+            const deltaRaw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'extraction',
+                prompt: (0, prompts_1.extractionDeltaPrompts)(settings, snapshot.assistantText, selected, firstNoChangeDetails, { compact: true }),
+                settings,
+                snapshot,
+                profileId: settings.extractionProfileId,
+                sourceText: snapshot.assistantText,
+            });
+            this.validate(snapshot);
+            const deltaExplicitNone = isExplicitNone(deltaRaw);
+            let deltaBlocks = (0, parser_1.parseExtractionWithRecovery)(deltaRaw);
+            const deltaDiagnostics = deltaBlocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
+            if (!deltaBlocks.length && !deltaExplicitNone) {
+                const reason = diagnosticReason(deltaDiagnostics);
+                const detail = `首次候选全部零写入，AI正文差量复核格式异常，世界书未写入，且本轮不会标记为已处理${reason ? `：${reason}` : ''}`;
+                this.setStatus(snapshot.chatKey, 'error', detail, detail, deltaRaw, plan);
+                this.progress('error', detail, { titles, created: [], updated: [], skipped: [], repaired: diagnostics.repaired || recoveryAttempts });
+                throw new Error(detail);
+            }
+            if (deltaExplicitNone) {
+                const detail = '首次候选全部重复；AI正文差量复核确认本轮没有新增状态变化，世界书零写入';
+                this.setStatus(snapshot.chatKey, 'complete', detail, '', deltaRaw, plan);
+                this.progress('success', detail, { titles, created: [], updated: [], skipped: [], merged: [], repaired: diagnostics.repaired || recoveryAttempts });
+                return {
+                    entries,
+                    changed: false,
+                    completed: true,
+                    outcome: 'verified-no-change',
+                    diagnostics,
+                    titles,
+                    created: [],
+                    updated: [],
+                    skipped: [],
+                    skippedDetails: firstNoChangeDetails,
+                    merged: [],
+                    repaired: diagnostics.repaired || recoveryAttempts,
+                    criticalChanges: 0,
+                    deltaRechecked: true,
+                };
+            }
+            const deltaTitles = deltaBlocks.map((block) => block.title);
+            const deltaPlan = (0, operations_1.buildOperationPlan)(deltaBlocks, entries, settings, snapshot.assistantText, { sourceKind: 'extraction' });
+            await this.resolveSemanticDuplicates(deltaPlan, entries, settings, snapshot);
+            if (!hasWriteOperations(deltaPlan)) {
+                const detail = `AI正文差量复核仍确认${deltaTitles.length}个候选均为已有事实或无状态变化，世界书零写入`;
+                const deltaNoChangeDetails = noOpDetails(deltaPlan);
+                this.setStatus(snapshot.chatKey, 'complete', detail, '', deltaRaw, deltaPlan);
+                this.progress('success', detail, { titles: deltaTitles, created: [], updated: [], skipped: [], merged: deltaDiagnostics.merged || [], repaired: Number(diagnostics.repaired || recoveryAttempts) + Number(deltaDiagnostics.repaired || 0) });
+                return {
+                    entries,
+                    changed: false,
+                    completed: true,
+                    outcome: 'verified-no-change',
+                    diagnostics: deltaDiagnostics,
+                    titles: deltaTitles,
+                    created: [],
+                    updated: [],
+                    skipped: [],
+                    skippedDetails: deltaNoChangeDetails,
+                    merged: deltaDiagnostics.merged || [],
+                    repaired: Number(diagnostics.repaired || recoveryAttempts) + Number(deltaDiagnostics.repaired || 0),
+                    criticalChanges: 0,
+                    deltaRechecked: true,
+                };
+            }
+            parsedRaw = deltaRaw;
+            blocks = deltaBlocks;
+            diagnostics = successfulRecoveryDiagnostics(deltaDiagnostics, diagnostics, 0, '首次候选零写入后已执行一次AI正文差量复核');
+            titles = deltaTitles;
+            plan = deltaPlan;
+        }
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
-        const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...plan.operations.filter((operation) => operation.kind === 'noop').map((operation) => operation.title)])];
-        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
+        const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...fullySkippedTitles(plan)])];
+        const skippedDetails = noOpDetails(plan).filter((item) => skipped.includes(item.title));
+        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、整条跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
         const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', parsedRaw);
         result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
         result.completed = true;
@@ -4862,8 +4943,10 @@ class MemoryRunner {
         result.created = created;
         result.updated = updated;
         result.skipped = skipped;
+        result.skippedDetails = skippedDetails;
         result.merged = diagnostics.merged || [];
         result.repaired = diagnostics.repaired || recoveryAttempts;
+        result.deltaRechecked = deltaRechecked;
         const detail = extractionCompletionDetail(result);
         this.progress('success', detail, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: result.repaired, criticalChanges: result.criticalChanges });
         return result;
@@ -5004,9 +5087,42 @@ function diagnosticReason(diagnostics) {
     const reasons = (diagnostics?.skipped || []).map((item) => String(item?.reason || '').trim()).filter(Boolean);
     return [...new Set(reasons)].slice(0, 3).join('；');
 }
+function hasWriteOperations(plan) {
+    return Boolean(plan?.operations?.some((operation) => operation.kind !== 'noop'));
+}
+function noOpDetails(plan) {
+    const seen = new Set();
+    const output = [];
+    for (const operation of plan?.operations ?? []) {
+        if (operation.kind !== 'noop') continue;
+        const item = {
+            title: String(operation.title || '候选'),
+            section: String(operation.section || ''),
+            reason: String(operation.reason || '没有形成可提交变化'),
+        };
+        const key = `${item.title}|${item.section}|${item.reason}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        output.push(item);
+    }
+    return output;
+}
+function fullySkippedTitles(plan) {
+    const grouped = new Map();
+    for (const operation of plan?.operations ?? []) {
+        const title = String(operation.title || '').trim();
+        if (!title) continue;
+        const state = grouped.get(title) ?? { total: 0, writes: 0 };
+        state.total += 1;
+        if (operation.kind !== 'noop') state.writes += 1;
+        grouped.set(title, state);
+    }
+    return [...grouped.entries()].filter(([, state]) => state.total > 0 && state.writes === 0).map(([title]) => title);
+}
 function extractionCompletionDetail(result) {
     if (result?.outcome === 'explicit-none') return '提取完成：本轮无可记录事实，世界书零写入';
-    if (result?.outcome === 'no-change' || result?.changed === false) return `提取完成：候选均为已有事实或无状态变化，世界书零写入${result?.skipped?.length ? `；跳过${result.skipped.length}条` : ''}`;
+    if (result?.outcome === 'verified-no-change') return '提取完成：首次重复候选已经过AI正文差量复核，确认本轮没有新增状态变化，世界书零写入';
+    if (result?.outcome === 'no-change' || result?.changed === false) return `提取完成：候选均为已有事实或无状态变化，世界书零写入${result?.skipped?.length ? `；整条跳过${result.skipped.length}条` : ''}`;
     return `提取完成：新建${result?.created?.length || 0}、更新${result?.updated?.length || 0}、关键变化${result?.criticalChanges || 0}、合并${result?.merged?.length || 0}、格式恢复${result?.repaired || 0}、跳过${result?.skipped?.length || 0}`;
 }
 
@@ -11310,6 +11426,7 @@ function parseLabeledSections(text) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractionPrompts = extractionPrompts;
+exports.extractionDeltaPrompts = extractionDeltaPrompts;
 exports.auditPrompts = auditPrompts;
 exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
@@ -11562,6 +11679,20 @@ ${existing || '（无）'}
     return { system, user };
 }
 
+
+function extractionDeltaPrompts(settings, assistantText, relevant, noChangeDetails = [], options = {}) {
+    const compact = options.compact !== false;
+    const base = extractionPrompts(settings, '', assistantText, relevant, { compact, dialogueContext: '' });
+    const rejected = (noChangeDetails ?? []).slice(0, 16).map((item) => {
+        const section = String(item?.section || '').trim();
+        const reason = String(item?.reason || '').trim();
+        return `- ${String(item?.title || '候选')}${section ? `【${section}】` : ''}${reason ? `：${reason}` : ''}`;
+    }).join('\n');
+    return {
+        system: `${base.system}\n\n【零写入差量复核】\n上一次提取已经成功解析，但本地确定性规划确认所有候选都与世界书相同或没有形成状态变化。现在只重新检查“本轮AI最终回复”本身，寻找上一次遗漏的新增状态、替换后的完整当前快照、稳定结果或必要因果。\n- 玩家输入中的世界基础设定已经由独立设定初始化链处理，禁止再次提取、改写或复制。\n- 不得仅换一种说法重抄既有条目。\n- 普通动作、短暂姿态、气氛与没有造成状态变化的对白仍然过滤。\n- 确实没有新增事实时只能输出“无”。`,
+        user: `${base.user}\n\n上一次被本地规划为零写入的候选：\n${rejected || '（没有可展示的候选原因）'}\n\n只依据本轮AI最终回复做一次差量复核。`,
+    };
+}
 
 function worldSettingImportPrompts(settings, sourceText, relevant, options = {}) {
     const compact = options.compact === true;

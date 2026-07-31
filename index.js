@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.29. */
+/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.30. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
