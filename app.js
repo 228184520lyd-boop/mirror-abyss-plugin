@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.28 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.29 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -823,8 +823,9 @@ class MirrorAbyssApplication {
                 this.controlPanel.setStatus(detail);
             }
             else if (taskType === 'extraction') {
-                this.controlPanel.setTaskProgress?.('extract', 'success', '提取、总结调度与世界书合并完成');
-                this.controlPanel.setStatus('提取、总结调度与世界书合并完成');
+                const detail = extractionOutcomeDetail(result, false);
+                this.controlPanel.setTaskProgress?.('extract', 'success', detail, extractionOutcomeMeta(result));
+                this.controlPanel.setStatus(detail);
             }
             else if (taskType === 'smallSummary') {
                 this.controlPanel.setTaskProgress?.('extract', 'success', '小总结、分发与召回重排完成');
@@ -844,9 +845,15 @@ class MirrorAbyssApplication {
                 this.controlPanel.setStatus('上次世界书重建已撤销，旧表已恢复');
             }
             else {
-                if (settings.autoExtraction === true && settings.extractionEnabled !== false) this.controlPanel.setTaskProgress?.('extract', 'success', '自动提取、总结调度与世界书合并完成');
-                else this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭');
-                this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${settings.autoExtraction === true ? '自动提取完成' : '自动提取已关闭'}`);
+                if (settings.autoExtraction === true && settings.extractionEnabled !== false) {
+                    const detail = extractionOutcomeDetail(result, true);
+                    this.controlPanel.setTaskProgress?.('extract', 'success', detail, extractionOutcomeMeta(result));
+                    this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${detail}`);
+                }
+                else {
+                    this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭');
+                    this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；自动提取已关闭`);
+                }
             }
             // [MA-UI-SYNC-02] 只在提取、总结与召回重排全部结束后回读一次世界书，避免 UI 显示中间状态。
             if (['extraction', 'smallSummary', 'largeSummary', 'full', 'migration', 'commitMigration', 'undoMigration'].includes(taskType)) {
@@ -1007,6 +1014,27 @@ class MirrorAbyssApplication {
     }
 }
 exports.MirrorAbyssApplication = MirrorAbyssApplication;
+function extractionOutcomeDetail(result, automatic = false) {
+    const prefix = automatic ? '自动提取完成' : '提取完成';
+    if (!result || Array.isArray(result) || typeof result !== 'object') return `${prefix}：总结调度与世界书合并完成`;
+    if (result.outcome === 'explicit-none') return `${prefix}：本轮无可记录事实，世界书零写入`;
+    if (result.outcome === 'no-change' || result.changed === false) {
+        return `${prefix}：候选均为已有事实或无状态变化，世界书零写入${result.skipped?.length ? `；跳过${result.skipped.length}条` : ''}`;
+    }
+    return `${prefix}：新建${result.created?.length || 0}、更新${result.updated?.length || 0}、关键变化${result.criticalChanges || 0}、合并${result.merged?.length || 0}、格式恢复${result.repaired || 0}、跳过${result.skipped?.length || 0}`;
+}
+function extractionOutcomeMeta(result) {
+    if (!result || Array.isArray(result) || typeof result !== 'object') return {};
+    return {
+        titles: Array.isArray(result.titles) ? result.titles : [],
+        created: Array.isArray(result.created) ? result.created : [],
+        updated: Array.isArray(result.updated) ? result.updated : [],
+        skipped: Array.isArray(result.skipped) ? result.skipped : [],
+        merged: Array.isArray(result.merged) ? result.merged : [],
+        repaired: Number(result.repaired || 0),
+    };
+}
+
 function notify(kind, message) {
     const toast = globalThis.toastr?.[kind];
     if (typeof toast === 'function') toast(message);
@@ -1146,7 +1174,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.28';
+exports.VERSION = '2.0.0-lite.ui.29';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -4672,8 +4700,8 @@ class MemoryRunner {
             const cursor = this.host.cursor();
             const result = await this.extract(settings, snapshot);
             await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0);
-            this.setStatus(snapshot.chatKey, 'complete', '提取与总结调度完成');
-            return result.entries;
+            this.setStatus(snapshot.chatKey, 'complete', extractionCompletionDetail(result));
+            return result;
         }
         if (kind === 'smallSummary') {
             const result = await this.summarize('small', settings, snapshot);
@@ -4753,11 +4781,17 @@ class MemoryRunner {
             onRetry: () => this.progress('running', '提取网关异常，已缩短上下文并重试一次', { titles: [] }),
         });
         this.validate(snapshot);
-        let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
+        let parsedRaw = raw;
+        let blocks = (0, parser_1.parseExtractionWithRecovery)(parsedRaw);
         let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
+        const initialExplicitNone = isExplicitNone(raw);
+        let recoveryAttempts = 0;
         let repairRaw = '';
+        let retryRaw = '';
         if (!blocks.length && diagnostics.hadInput) {
-            this.progress('running', '首次格式无法提交，启动一次格式修复后手', { titles: [] });
+            const initialDiagnostics = diagnostics;
+            recoveryAttempts += 1;
+            this.progress('running', '首次格式无法提交，启动一次格式修复后手', { titles: [], created: [], updated: [], skipped: [], repaired: 0 });
             const repairPrompt = (0, prompts_1.extractionRepairPrompts)(raw);
             repairRaw = await (0, model_request_1.callModel)({
                 host: this.host,
@@ -4771,26 +4805,47 @@ class MemoryRunner {
                 onRetry: () => this.progress('running', '格式修复网关异常，缩短异常文本后重试一次', { titles: [] }),
             });
             this.validate(snapshot);
-            blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
+            parsedRaw = repairRaw;
+            blocks = (0, parser_1.parseExtractionWithRecovery)(parsedRaw);
             const next = blocks.diagnostics ?? {};
-            diagnostics = {
-                repaired: Number(diagnostics.repaired || 0) + Number(next.repaired || 0) + 1,
-                merged: [...(diagnostics.merged || []), ...(next.merged || [])],
-                skipped: [...(diagnostics.skipped || []), ...(next.skipped || [])],
-                warnings: [...(diagnostics.warnings || []), '已执行一次模型格式修复', ...(next.warnings || [])],
-                hadInput: true,
-            };
+            diagnostics = successfulRecoveryDiagnostics(next, initialDiagnostics, recoveryAttempts, '已执行一次模型格式修复');
+        }
+        if (!blocks.length && !initialExplicitNone) {
+            const failedRepairDiagnostics = diagnostics;
+            recoveryAttempts += 1;
+            this.progress('running', '格式修复仍无可提交条目，重新依据本轮正文执行一次精简提取', { titles: [], created: [], updated: [], skipped: [], repaired: recoveryAttempts - 1 });
+            retryRaw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'extraction',
+                prompt: (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true, dialogueContext: snapshot.dialogueContext }),
+                settings,
+                snapshot,
+                profileId: settings.extractionProfileId,
+                sourceText: snapshot.turnText || snapshot.assistantText,
+            });
+            this.validate(snapshot);
+            parsedRaw = retryRaw;
+            blocks = (0, parser_1.parseExtractionWithRecovery)(parsedRaw);
+            const next = blocks.diagnostics ?? {};
+            diagnostics = successfulRecoveryDiagnostics(next, failedRepairDiagnostics, recoveryAttempts, '格式修复失败后已重新执行一次精简提取');
         }
         if (!blocks.length) {
-            const explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
+            const explicitNone = initialExplicitNone || isExplicitNone(parsedRaw);
             const skippedTitles = (diagnostics.skipped || []).map((item) => item.title || '异常片段');
-            const detail = explicitNone ? '本轮明确返回“无”，世界书零写入' : `没有可安全提交的条目；已隔离${skippedTitles.length}个异常片段`;
-            this.setStatus(snapshot.chatKey, 'matching', detail, '', repairRaw || raw, emptyPlan());
-            this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0 });
-            return { entries, changed: false, diagnostics };
+            if (!explicitNone) {
+                const reason = diagnosticReason(diagnostics);
+                const detail = `提取结果连续恢复失败，世界书未写入，且本轮不会标记为已处理${reason ? `：${reason}` : ''}`;
+                this.setStatus(snapshot.chatKey, 'error', detail, detail, parsedRaw || repairRaw || raw, emptyPlan());
+                this.progress('error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || recoveryAttempts });
+                throw new Error(detail);
+            }
+            const detail = '本轮明确返回“无”，世界书零写入';
+            this.setStatus(snapshot.chatKey, 'complete', detail, '', parsedRaw || raw, emptyPlan());
+            this.progress('success', detail, { titles: [], created: [], updated: [], skipped: [], repaired: diagnostics.repaired || recoveryAttempts });
+            return { entries, changed: false, completed: true, outcome: 'explicit-none', diagnostics, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: diagnostics.repaired || recoveryAttempts, criticalChanges: 0 };
         }
         const titles = blocks.map((block) => block.title);
-        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
+        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式恢复${diagnostics.repaired || recoveryAttempts}处`, '', parsedRaw);
         this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
         const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
@@ -4798,9 +4853,19 @@ class MemoryRunner {
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
         const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...plan.operations.filter((operation) => operation.kind === 'noop').map((operation) => operation.title)])];
         this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
-        const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', raw);
+        const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', parsedRaw);
         result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
-        this.progress('success', `完成：新建${created.length}、更新${updated.length}、关键变化${result.criticalChanges}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges });
+        result.completed = true;
+        result.outcome = result.changed ? 'written' : 'no-change';
+        result.diagnostics = diagnostics;
+        result.titles = titles;
+        result.created = created;
+        result.updated = updated;
+        result.skipped = skipped;
+        result.merged = diagnostics.merged || [];
+        result.repaired = diagnostics.repaired || recoveryAttempts;
+        const detail = extractionCompletionDetail(result);
+        this.progress('success', detail, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: result.repaired, criticalChanges: result.criticalChanges });
         return result;
     }
     async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
@@ -4919,6 +4984,31 @@ class MemoryRunner {
     }
 }
 exports.MemoryRunner = MemoryRunner;
+
+function isExplicitNone(value) {
+    return /^(?:无|EMPTY)$/u.test(String(value ?? '').trim());
+}
+function successfulRecoveryDiagnostics(current, previous, recoveryAttempts, message) {
+    const currentDiagnostics = current ?? {};
+    const previousReasons = (previous?.skipped || []).map((item) => item?.reason).filter(Boolean);
+    return {
+        repaired: Number(currentDiagnostics.repaired || 0) + Math.max(0, Number(recoveryAttempts || 0)),
+        merged: [...(currentDiagnostics.merged || [])],
+        // 前一次失败输出不是最终候选，不能继续显示为本轮“跳过条目”。
+        skipped: [...(currentDiagnostics.skipped || [])],
+        warnings: [...(previous?.warnings || []), ...previousReasons.map((reason) => `前一次输出未采用：${reason}`), message, ...(currentDiagnostics.warnings || [])],
+        hadInput: currentDiagnostics.hadInput === true,
+    };
+}
+function diagnosticReason(diagnostics) {
+    const reasons = (diagnostics?.skipped || []).map((item) => String(item?.reason || '').trim()).filter(Boolean);
+    return [...new Set(reasons)].slice(0, 3).join('；');
+}
+function extractionCompletionDetail(result) {
+    if (result?.outcome === 'explicit-none') return '提取完成：本轮无可记录事实，世界书零写入';
+    if (result?.outcome === 'no-change' || result?.changed === false) return `提取完成：候选均为已有事实或无状态变化，世界书零写入${result?.skipped?.length ? `；跳过${result.skipped.length}条` : ''}`;
+    return `提取完成：新建${result?.created?.length || 0}、更新${result?.updated?.length || 0}、关键变化${result?.criticalChanges || 0}、合并${result?.merged?.length || 0}、格式恢复${result?.repaired || 0}、跳过${result?.skipped?.length || 0}`;
+}
 
 function ensureSummarySnapshotSections(block, kind) {
     const output = structuredClone(block);
