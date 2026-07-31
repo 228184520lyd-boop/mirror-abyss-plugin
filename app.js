@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.27 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.28 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -394,6 +394,7 @@ class MirrorAbyssApplication {
         this.activeTokens = new Map();
         this.pendingMessageTimers = new Map();
         this.pendingSourceReconcileTimers = new Map();
+        this.scopeRecoveryGeneration = 0;
         this.started = false;
     }
     start() {
@@ -418,6 +419,7 @@ class MirrorAbyssApplication {
         this.activeSnapshots.clear();
         this.clearPendingMessageTimers();
         this.clearPendingSourceReconcileTimers();
+        this.scopeRecoveryGeneration += 1;
         this.host.clearInternalMessageMutations();
         this.controlPanel.unmount();
     }
@@ -516,10 +518,11 @@ class MirrorAbyssApplication {
         catch { return; }
         const key = `${turn.chatKey}|${turn.messageIndex}`;
         const previous = this.pendingMessageTimers.get(key);
-        if (previous) globalThis.clearTimeout(previous);
+        if (previous?.timer) globalThis.clearTimeout(previous.timer);
         const delay = immediate ? 0 : 650;
+        const source = { ...turn, roleKey: safeRoleKey(this.host) };
         const timer = globalThis.setTimeout(async () => {
-            if (this.pendingMessageTimers.get(key) !== timer) return;
+            if (this.pendingMessageTimers.get(key)?.timer !== timer) return;
             this.pendingMessageTimers.delete(key);
             try {
                 const first = this.host.latestTurn(turn.messageIndex);
@@ -539,10 +542,10 @@ class MirrorAbyssApplication {
             }
         }, delay);
         timer?.unref?.();
-        this.pendingMessageTimers.set(key, timer);
+        this.pendingMessageTimers.set(key, { timer, source, immediate: Boolean(immediate) });
     }
     clearPendingMessageTimers() {
-        for (const timer of this.pendingMessageTimers.values()) globalThis.clearTimeout(timer);
+        for (const pending of this.pendingMessageTimers.values()) if (pending?.timer) globalThis.clearTimeout(pending.timer);
         this.pendingMessageTimers.clear();
     }
     clearPendingSourceReconcileTimers() {
@@ -576,14 +579,18 @@ class MirrorAbyssApplication {
     }
     onScopeChanged(eventName, eventValue) {
         if (this.host.consumeInternalScopeEvent(eventName, eventValue)) return;
+        const interruptedSources = eventName === 'CHAT_CHANGED' ? this.captureInterruptedAutomaticSources() : [];
+        const interruptedRuns = eventName === 'CHAT_CHANGED' ? [...this.runningByChat.values()] : [];
         this.clearPendingMessageTimers();
         const reason = `SillyTavern 事件 ${eventName} 使源对话失效`;
         if (eventName === 'CHAT_CHANGED') {
+            const recoveryGeneration = ++this.scopeRecoveryGeneration;
             this.clearPendingSourceReconcileTimers();
             this.cancelAll(reason);
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
             this.controlPanel.resetTaskStates?.('聊天已经切换');
             this.controlPanel.setStatus('聊天已经切换，旧聊天任务已取消');
+            void this.recoverInterruptedAutomaticSources(interruptedSources, interruptedRuns, recoveryGeneration);
             return;
         }
         const index = messageIndexFromEvent(eventValue);
@@ -600,6 +607,54 @@ class MirrorAbyssApplication {
             this.controlPanel.setStatus(`源正文已变化，已取消${affected}个受影响任务；其他后台任务继续运行`);
         }
         this.scheduleSourceReconcile(eventName, index);
+    }
+
+    captureInterruptedAutomaticSources() {
+        const candidates = [];
+        const add = (source) => {
+            if (!source || !Number.isInteger(source.messageIndex) || !source.messageKey || !source.contentHash) return;
+            candidates.push({ ...source, roleKey: source.roleKey || safeRoleKey(this.host) });
+        };
+        for (const pending of this.pendingMessageTimers.values()) add(pending?.source);
+        for (const queue of this.taskQueues.values()) {
+            for (const item of queue.items) {
+                if (item?.automatic !== true || item?.maintenance === true) continue;
+                if (!['audit', 'extraction', 'full'].includes(String(item.taskType ?? ''))) continue;
+                add(item.sourceTurn);
+            }
+        }
+        for (const snapshot of this.activeSnapshots.values()) {
+            if (snapshot?.automatic !== true || snapshot?.maintenance === true) continue;
+            if (!['audit', 'extraction', 'full'].includes(String(snapshot.taskType ?? ''))) continue;
+            add(snapshot);
+        }
+        const unique = new Map();
+        for (const candidate of candidates) unique.set(`${candidate.messageKey}|${candidate.contentHash}`, candidate);
+        return [...unique.values()];
+    }
+    matchingInterruptedSource(candidate) {
+        if (!candidate || candidate.roleKey !== safeRoleKey(this.host)) return null;
+        let turn;
+        try { turn = this.host.latestTurn(candidate.messageIndex); }
+        catch { return null; }
+        if (turn.messageKey !== candidate.messageKey || turn.contentHash !== candidate.contentHash) return null;
+        if (String(turn.playerText ?? '') !== String(candidate.playerText ?? '')) return null;
+        if (String(turn.dialogueHash ?? '') !== String(candidate.dialogueHash ?? '')) return null;
+        return { ...turn, roleKey: candidate.roleKey };
+    }
+    async recoverInterruptedAutomaticSources(candidates, interruptedRuns, recoveryGeneration) {
+        if (!this.started || !Array.isArray(candidates) || !candidates.length) return;
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+        if (!this.started || recoveryGeneration !== this.scopeRecoveryGeneration) return;
+        let matched = candidates.map((candidate) => this.matchingInterruptedSource(candidate)).filter(Boolean);
+        if (!matched.length) return;
+        if (Array.isArray(interruptedRuns) && interruptedRuns.length) await Promise.allSettled(interruptedRuns);
+        if (!this.started || recoveryGeneration !== this.scopeRecoveryGeneration) return;
+        matched = matched.map((turn) => this.matchingInterruptedSource(turn)).filter(Boolean);
+        if (!matched.length) return;
+        const uniqueIndexes = [...new Set(matched.map((turn) => turn.messageIndex))].sort((left, right) => left - right);
+        this.controlPanel.setStatus('新存档已完成首次落盘，正在恢复被聊天切换中断的首轮正文处理');
+        for (const messageIndex of uniqueIndexes) this.scheduleMessage(messageIndex, false);
     }
 
     scheduleSourceReconcile(eventName, index) {
@@ -700,7 +755,7 @@ class MirrorAbyssApplication {
         let rejectTask;
         const promise = new Promise((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
         const queue = this.taskQueues.get(chatKey) ?? { running: false, items: [] };
-        const item = { taskType, index: turn.messageIndex, automatic: Boolean(automatic), maintenance, taskKey, promise, resolve: resolveTask, reject: rejectTask, queuedAt: Date.now() };
+        const item = { taskType, index: turn.messageIndex, automatic: Boolean(automatic), maintenance, sourceTurn: maintenance ? null : { ...turn, roleKey: safeRoleKey(this.host) }, taskKey, promise, resolve: resolveTask, reject: rejectTask, queuedAt: Date.now() };
         queue.items.push(item);
         this.taskQueues.set(chatKey, queue);
         this.pendingTaskKeys.add(taskKey);
@@ -904,6 +959,7 @@ class MirrorAbyssApplication {
                     snapshot = item.maintenance
                         ? this.host.captureMaintenanceSnapshot(settings, item.taskType, token)
                         : this.host.captureSnapshot(settings, item.index, item.taskType, token);
+                    snapshot.automatic = Boolean(item.automatic);
                     this.activeTokens.set(chatKey, token);
                     this.activeSnapshots.set(chatKey, snapshot);
                     this.runningByChat.set(chatKey, item.promise);
@@ -971,6 +1027,7 @@ function receiptAffectedBySourceChange(receipt, eventName, index) {
     return false;
 }
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
+function safeRoleKey(host) { try { return host.roleKey(); } catch { return ''; } }
 function messageIndexFromEvent(value) {
     if (Number.isInteger(value))
         return value;
@@ -1089,7 +1146,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.27';
+exports.VERSION = '2.0.0-lite.ui.28';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
