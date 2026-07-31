@@ -1,5 +1,324 @@
-/** Mirror Abyss 2.0.0-lite.ui.25 — serialized worldbook operations, atomic summary settlement, authoritative snapshots, durable receipts, and source-line rebuild coverage. */
-var MA_MODULES={"application":function(module,exports,require){
+/** Mirror Abyss 2.0.0-lite.ui.27 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+var MA_MODULES={"activity-pack":function(module,exports,require){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.compileActivityPack = compileActivityPack;
+exports.activityPackSections = activityPackSections;
+exports.activityPackBudget = activityPackBudget;
+const governance_1 = require("./governance");
+const util_1 = require("./util");
+
+const SECTION_LIMITS = Object.freeze({
+    核心规则: 260,
+    当前时空: 180,
+    当前场景: 260,
+    现场人物: 900,
+    当前事件: 300,
+    生效规则: 220,
+    必要历史: 260,
+});
+
+function compileActivityPack(entries, options = {}) {
+    const list = (entries ?? []).filter((entry) => entry?.title !== governance_1.ACTIVITY_PACK_TITLE);
+    const focusUid = String(options.focusUid ?? '');
+    const context = (0, governance_1.activeContext)(list, focusUid, options.currentSceneTitle || '');
+    const gameTime = options.gameTime ?? null;
+    const budget = activityPackBudget(context.characters.length);
+    if (Number(options.hardMax) > 0) {
+        budget.hardMax = Math.max(600, Math.min(4000, Number(options.hardMax)));
+        budget.target = Math.min(budget.target, budget.hardMax);
+    }
+    const sections = activityPackSections(list, context, gameTime, budget);
+    const contentLength = measureSerializedSections(sections);
+    const diagnostics = activityDiagnostics(list, context, sections, budget, contentLength);
+    return {
+        rawTitle: governance_1.ACTIVITY_PACK_TITLE,
+        title: governance_1.ACTIVITY_PACK_TITLE,
+        type: '运行包',
+        name: '当前活动',
+        keywords: ['当前活动'],
+        sections,
+        budget,
+        contentLength,
+        diagnostics,
+    };
+}
+
+function activityPackBudget(characterCount) {
+    const characters = Math.max(0, Math.min(6, Number(characterCount || 0)));
+    return {
+        target: Math.min(1800, 760 + characters * 180),
+        hardMax: Math.min(2200, 980 + characters * 210),
+        characterCount: characters,
+    };
+}
+
+function activityPackSections(entries, context, gameTime, budget) {
+    const foundations = entries.filter((entry) => entry.type === '基础设定');
+    const currentScene = context.scene;
+    const activeEvent = selectActiveEvent(context.activeEvents, currentScene, context.characters);
+    const characters = prioritizeCharacters(context.characters, context.focus, activeEvent);
+    const relationIndex = (0, governance_1.buildDirectRelationIndex)(entries);
+    const history = selectNecessaryHistory(entries, activeEvent, currentScene, characters, relationIndex);
+    const sections = [];
+    pushSection(sections, '核心规则', compactEntries(foundations, ['世界常识', '自然规则', '社会规则', '能力与技术'], SECTION_LIMITS.核心规则, 4));
+    const timeLines = [];
+    if (gameTime?.label) timeLines.push(`当前游戏时间：${gameTime.label}`);
+    if (currentScene?.name) timeLines.push(`当前场景：${currentScene.name}`);
+    pushSection(sections, '当前时空', timeLines);
+    pushSection(sections, '当前场景', compactScene(currentScene));
+    pushSection(sections, '现场人物', compactCharacters(characters, SECTION_LIMITS.现场人物));
+    pushSection(sections, '当前事件', compactEvent(activeEvent, SECTION_LIMITS.当前事件));
+    pushSection(sections, '生效规则', compactApplicableRules(entries, currentScene, activeEvent));
+    pushSection(sections, '必要历史', history.map((entry) => compactHistory(entry)).filter(Boolean));
+    return trimSectionsToBudget(sections, budget.hardMax);
+}
+
+function pushSection(sections, name, lines) {
+    const clean = (0, util_1.unique)((lines ?? []).map(cleanLine).filter(Boolean));
+    if (!clean.length) return;
+    sections.push({ name, lines: clean, empty: false });
+}
+function cleanLine(value) {
+    return String(value ?? '').replace(/^\s*[-*]\s*/u, '').replace(/\s+/gu, ' ').trim();
+}
+function compactEntries(entries, sectionNames, maxChars, maxLines) {
+    const lines = [];
+    for (const entry of entries) {
+        for (const section of sectionNames) {
+            for (const line of entry.sections?.values?.[section] ?? []) {
+                const cleaned = cleanLine(line);
+                if (!cleaned) continue;
+                lines.push(cleaned);
+                if (lines.length >= maxLines) return fitLines(lines, maxChars);
+            }
+        }
+    }
+    return fitLines(lines, maxChars);
+}
+function compactScene(scene) {
+    if (!scene) return [];
+    const lines = [];
+    for (const section of ['定义', '当前状态', '在场', '活动关联', '局部约束']) {
+        for (const line of scene.sections?.values?.[section] ?? []) {
+            if (section === '在场') lines.push(`在场：${stripLabel(line)}`);
+            else if (section === '活动关联') lines.push(`活动：${stripLabel(line)}`);
+            else lines.push(cleanLine(line));
+        }
+    }
+    const fixedRoles = scene.sections?.values?.['常驻角色'] ?? [];
+    if (fixedRoles.length) lines.push(`场景固定角色：${fixedRoles.slice(0, 3).map(stripLabel).join('；')}`);
+    return fitLines(lines, SECTION_LIMITS.当前场景);
+}
+function compactCharacters(characters, maxChars) {
+    const output = [];
+    let used = 0;
+    const selected = characters.slice(0, 6);
+    const perCharacter = Math.max(140, Math.floor(maxChars / Math.max(1, selected.length)));
+    for (const entry of selected) {
+        const parts = [];
+        for (const [label, section, cap] of [
+            ['身份', '身份', 1],
+            ['性格', '性格核心', 2],
+            ['表达', '表达方式', 2],
+            ['决策', '决策倾向', 2],
+            ['关系', '关系立场', 2],
+            ['当前', '当前', 3],
+        ]) {
+            const lines = (entry.sections?.values?.[section] ?? []).slice(0, cap).map(stripLabel).filter(Boolean);
+            if (lines.length) parts.push({ label, lines });
+        }
+        if (!parts.some((item) => item.label === '性格')) {
+            const stable = (entry.sections?.values?.['稳定'] ?? []).slice(0, 2).map(stripLabel).filter(Boolean);
+            if (stable.length) parts.push({ label: '稳定', lines: stable });
+        }
+        if (!parts.length) continue;
+        let line = renderCharacterLine(entry.name, parts);
+        if (line.length > perCharacter) line = compressCharacterLine(entry.name, parts, perCharacter);
+        if (!line) continue;
+        if (used + line.length > maxChars && output.length) break;
+        if (line.length > maxChars) continue;
+        output.push(line);
+        used += line.length;
+    }
+    return output;
+}
+function renderCharacterLine(name, parts) {
+    return `${name}｜${parts.map((item) => `${item.label}：${item.lines.join('；')}`).join('｜')}`;
+}
+function compressCharacterLine(name, parts, maxLength) {
+    const required = ['身份', '性格', '表达', '决策', '当前'];
+    const ordered = [...parts].sort((left, right) => {
+        const a = required.includes(left.label) ? required.indexOf(left.label) : required.length + 1;
+        const b = required.includes(right.label) ? required.indexOf(right.label) : required.length + 1;
+        return a - b;
+    });
+    for (const partMax of [34, 28, 22, 18]) {
+        const compacted = ordered.map((item) => {
+            const value = compactPackLine(item.lines.join('；'), partMax);
+            return value ? { label: item.label, lines: [value] } : null;
+        }).filter(Boolean);
+        const line = renderCharacterLine(name, compacted);
+        if (line.length <= maxLength) return line;
+    }
+    // 关系是条件信息；硬预算下最后移除关系，但五个生成约束栏目不主动删除。
+    const core = ordered.filter((item) => item.label !== '关系').map((item) => {
+        const value = compactPackLine(item.lines.join('；'), 18);
+        return value ? { label: item.label, lines: [value] } : null;
+    }).filter(Boolean);
+    const line = renderCharacterLine(name, core);
+    return line.length <= maxLength ? line : '';
+}
+function compactEvent(event, maxChars) {
+    if (!event) return [];
+    const lines = [];
+    const participants = (event.sections?.values?.['参与'] ?? []).flatMap(splitNames);
+    if (participants.length) lines.push(`参与：${(0, util_1.unique)(participants).join('、')}`);
+    for (const section of ['已发生进展', '结果']) {
+        for (const line of event.sections?.values?.[section] ?? []) lines.push(cleanLine(line));
+    }
+    return fitLines(lines, maxChars);
+}
+function compactApplicableRules(entries, scene, event) {
+    const names = new Set([scene?.name, event?.name, ...eventNames(event)].filter(Boolean).map(util_1.normalizeFact));
+    const rules = entries.filter((entry) => /^(?:世界|基础设定)$/u.test(entry.type) && entry.type !== '基础设定');
+    const selected = rules.filter((entry) => {
+        const text = (0, util_1.normalizeFact)(`${entry.title}\n${entry.content}`);
+        return [...names].some((name) => name && text.includes(name));
+    });
+    return compactEntries(selected, ['制度', '固定事实', '持续影响', '公开局势'], SECTION_LIMITS.生效规则, 3);
+}
+function compactHistory(entry) {
+    const results = (entry.sections?.values?.['结果'] ?? []).slice(0, 1).map(cleanLine);
+    const progress = (entry.sections?.values?.['已发生进展'] ?? []).slice(-1).map(cleanLine);
+    const body = [...results, ...progress].filter(Boolean).slice(0, 1)[0];
+    return body ? `${entry.name}：${body}` : '';
+}
+function selectActiveEvent(events, scene, characters) {
+    const names = new Set(characters.map((entry) => (0, util_1.normalizeFact)(entry.name)));
+    const sceneName = (0, util_1.normalizeFact)(scene?.name ?? '');
+    return [...(events ?? [])].sort((left, right) => {
+        const score = (entry) => {
+            const text = (0, util_1.normalizeFact)(`${entry.content}\n${entry.name}`);
+            let value = Number(entry.updatedAt || 0) / 1e13;
+            if (sceneName && text.includes(sceneName)) value += 4;
+            for (const name of names) if (name && text.includes(name)) value += 2;
+            return value;
+        };
+        return score(right) - score(left);
+    })[0] ?? null;
+}
+function prioritizeCharacters(characters, focus, event) {
+    const participants = new Set(eventNames(event).map(util_1.normalizeFact));
+    return [...characters].sort((left, right) => {
+        const score = (entry) => Number(entry === focus || entry.focus === true) * 10 + Number(participants.has((0, util_1.normalizeFact)(entry.name))) * 5 + Number(entry.updatedAt || 0) / 1e13;
+        return score(right) - score(left) || left.title.localeCompare(right.title, 'zh-CN');
+    });
+}
+function selectNecessaryHistory(entries, event, scene, characters, relationIndex = new Map()) {
+    if (!event) return [];
+    const activeNames = new Set([...eventNames(event), ...characters.map((entry) => entry.name)].map(util_1.normalizeFact));
+    const sceneName = (0, util_1.normalizeFact)(scene?.name ?? '');
+    const seedUids = new Set([event?.uid, scene?.uid, ...characters.map((entry) => entry.uid)].filter(Boolean).map(String));
+    return entries
+        .filter((entry) => entry.type === '事件' && (0, governance_1.currentEventState)(entry) === 'completed' && entry.uid !== event.uid)
+        .map((entry) => {
+            const text = (0, util_1.normalizeFact)(`${entry.name}\n${entry.content}`);
+            let score = 0;
+            for (const name of activeNames) if (name && text.includes(name)) score += 1;
+            if (sceneName && text.includes(sceneName)) score += 1;
+            const related = relationIndex.get(String(entry.uid)) ?? new Set();
+            if ([...related].some((uid) => seedUids.has(String(uid)))) score += 3;
+            return { entry, score };
+        })
+        .filter((item) => item.score >= 2)
+        .sort((left, right) => right.score - left.score || Number(right.entry.updatedAt || 0) - Number(left.entry.updatedAt || 0))
+        .slice(0, 2)
+        .map((item) => item.entry);
+}
+function eventNames(event) {
+    return (event?.sections?.values?.['参与'] ?? []).flatMap(splitNames);
+}
+function splitNames(value) {
+    return String(value ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').split(/[、,，/与和及]/u).map((item) => item.trim()).filter(Boolean);
+}
+function stripLabel(value) {
+    return cleanLine(value).replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').trim();
+}
+function fitLines(lines, maxChars) {
+    const output = [];
+    let used = 0;
+    for (const source of (0, util_1.unique)(lines.map(cleanLine).filter(Boolean))) {
+        const line = compactPackLine(source, Math.min(120, maxChars));
+        if (!line) continue;
+        if (used + line.length > maxChars && output.length) break;
+        if (line.length > maxChars) continue;
+        output.push(line);
+        used += line.length;
+    }
+    return output;
+}
+function compactPackLine(value, maxLength) {
+    const line = cleanLine(value);
+    if (line.length <= maxLength) return line;
+    const chunks = line.split(/(?<=[。；！？!?])|[，,、｜]/u).map((item) => item.trim()).filter(Boolean);
+    let result = '';
+    for (const chunk of chunks) {
+        const candidate = result ? `${result}，${chunk}` : chunk;
+        if (candidate.length > maxLength) break;
+        result = candidate;
+    }
+    return result ? (/[。；！？!?]$/u.test(result) ? result : `${result}。`) : '';
+}
+function measureSerializedSections(sections) {
+    return sections.map((section) => `【${section.name}】\n${section.lines.map((line) => `- ${line}`).join('\n')}`).join('\n\n').length;
+}
+function trimSectionsToBudget(sections, hardMax) {
+    const priority = ['核心规则', '当前时空', '当前场景', '现场人物', '当前事件', '生效规则', '必要历史'];
+    const byName = new Map(sections.map((section) => [section.name, structuredClone(section)]));
+    const output = priority.map((name) => byName.get(name)).filter(Boolean);
+    const measure = () => measureSerializedSections(output);
+    for (const name of ['必要历史', '生效规则']) {
+        const section = output.find((item) => item.name === name);
+        while (section?.lines?.length && measure() > hardMax) section.lines.pop();
+    }
+    for (const name of ['当前场景', '当前事件', '核心规则']) {
+        const section = output.find((item) => item.name === name);
+        while (section?.lines?.length > 1 && measure() > hardMax) section.lines.pop();
+    }
+    if (measure() > hardMax) {
+        const lineCount = output.reduce((sum, section) => sum + section.lines.length, 0);
+        const structural = output.reduce((sum, section) => sum + section.name.length + 5 + Math.max(0, section.lines.length - 1) * 3, 0) + Math.max(0, output.length - 1) * 2;
+        let perLine = Math.max(18, Math.floor((hardMax - structural) / Math.max(1, lineCount)));
+        while (perLine >= 18 && measure() > hardMax) {
+            for (const section of output) section.lines = section.lines.map((line) => compactPackLine(line, perLine)).filter(Boolean);
+            perLine -= 4;
+        }
+    }
+    const cleaned = output.filter((section) => section.lines.length > 0);
+    if (measureSerializedSections(cleaned) > hardMax) throw new Error(`当前活动包无法在不破坏核心内容的情况下压缩到 ${hardMax} 字以内`);
+    return cleaned;
+}
+function activityDiagnostics(entries, context, sections, budget, contentLength) {
+    const includedTitles = new Set();
+    if (context.scene) includedTitles.add(context.scene.title);
+    for (const entry of context.characters) includedTitles.add(entry.title);
+    for (const entry of context.activeEvents) includedTitles.add(entry.title);
+    return {
+        currentScene: context.scene?.title ?? '',
+        activeCharacters: context.characters.map((entry) => entry.title),
+        activeEvents: context.activeEvents.map((entry) => entry.title),
+        includedEntries: [...includedTitles],
+        excludedWarehouseEntries: Math.max(0, entries.length - includedTitles.size),
+        sectionChars: Object.fromEntries(sections.map((section) => [section.name, section.lines.join('\n').length])),
+        contentLength,
+        target: budget.target,
+        hardMax: budget.hardMax,
+        overTarget: contentLength > budget.target,
+        overHardMax: contentLength > budget.hardMax,
+    };
+}
+},"application":function(module,exports,require){
 
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -13,6 +332,7 @@ const migration_1 = require("./migration");
 const world_setting_import_1 = require("./world-setting-import");
 const util_1 = require("./util");
 const control_panel_1 = require("./control-panel");
+const worldbook_management_1 = require("./worldbook-management");
 class MirrorAbyssApplication {
     constructor() {
         this.host = new host_1.HostAdapter();
@@ -144,10 +464,14 @@ class MirrorAbyssApplication {
     async loadWorkspace() {
         const settings = this.settings();
         const worldbook = await this.worldbook.read(settings);
+        const currentGameTime = this.host.getCurrentGameTime();
+        const management = (0, worldbook_management_1.buildWorldbookManagementView)(worldbook.entries, currentGameTime, settings);
         return {
             entries: worldbook.entries,
             worldbookName: worldbook.name,
             settings,
+            currentGameTime,
+            management,
             focusUid: this.host.getFocusUid(),
             matching: this.memoryRunner.currentStatus(this.host.chatKey()),
             task: this.status(),
@@ -765,12 +1089,12 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.25';
+exports.VERSION = '2.0.0-lite.ui.27';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
-exports.MANAGED_VERSION = 17;
+exports.MANAGED_VERSION = 19;
 },"control-panel":function(module,exports,require){
 
 "use strict";
@@ -799,6 +1123,10 @@ class ControlPanel {
         this.recallStatusNode = null;
         this.recallRefreshButton = null;
         this.recallReplanButton = null;
+        this.managementNode = null;
+        this.managementStatusNode = null;
+        this.managementRefreshButton = null;
+        this.managementLoadSerial = 0;
         this.rebuildNode = null;
         this.rebuildStatusNode = null;
         this.rebuildPreviewButton = null;
@@ -918,6 +1246,10 @@ class ControlPanel {
         this.recallStatusNode = null;
         this.recallRefreshButton = null;
         this.recallReplanButton = null;
+        this.managementNode = null;
+        this.managementStatusNode = null;
+        this.managementRefreshButton = null;
+        this.managementLoadSerial = 0;
         this.rebuildNode = null;
         this.rebuildStatusNode = null;
         this.rebuildPreviewButton = null;
@@ -1062,13 +1394,14 @@ class ControlPanel {
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
 .ma-lite-close{min-width:34px;min-height:34px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
 .ma-lite-body{display:flex;flex-direction:column;gap:10px;padding:12px}
-.ma-lite-page-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
+.ma-lite-page-nav{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
 .ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:38px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
 .ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
+.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-pack{margin:0;max-height:250px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:34px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:26px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
@@ -1103,12 +1436,14 @@ class ControlPanel {
         pageNav.append(
             this.makePageButton('run', '运行'),
             this.makePageButton('recall', '召回'),
+            this.makePageButton('management', '管理'),
             this.makePageButton('settings', '设置'),
             this.makePageButton('worldSetting', '设定'),
             this.makePageButton('rebuild', '重建'),
         );
         const runPage = this.makePage('run');
         const recallPage = this.makePage('recall');
+        const managementPage = this.makePage('management');
         const settingsPage = this.makePage('settings');
         const worldSettingPage = this.makePage('worldSetting');
         const rebuildPage = this.makePage('rebuild');
@@ -1123,6 +1458,8 @@ class ControlPanel {
             this.makeSwitch('autoLargeSummary', '自动大总结', '累计小总结后沉降为长期历史并重新调度条目。'),
             this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核是否可用。'),
             this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取是否可用。'),
+            this.makeSwitch('activityPackEnabled', '活动包发送', '镜渊条目作为仓库，只由唯一活动包进入正文。'),
+            this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目压缩超长条目，不使用字符串硬截断。'),
         );
         const thresholds = document.createElement('div');
         thresholds.className = 'ma-lite-thresholds';
@@ -1131,6 +1468,7 @@ class ControlPanel {
             this.makeNumberInput('criticalChangesForSmall', '关键变化阈值', 1, 50),
             this.makeNumberInput('largeSummaryCount', '大总结计数', 1, 30),
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
+            this.makeNumberInput('activityPackHardMax', '活动包硬上限', 600, 4000),
         );
         const auditPromptEditor = this.makePromptEditor(
             'auditPrompt',
@@ -1138,6 +1476,7 @@ class ControlPanel {
             '审核只读取这里的规则、最近完整对话、本轮玩家输入和本轮AI回复；不读取角色卡或世界书。',
         );
         const recall = this.buildRecallSection();
+        const management = this.buildManagementSection();
         const worldSetting = this.buildWorldSettingSection();
         const rebuild = this.buildRebuildSection();
         const actions = document.createElement('div');
@@ -1154,10 +1493,11 @@ class ControlPanel {
         note.textContent = '提取异常会先本地修复、合并重复条目并部分提交；仍无法解析时只修复一次异常输出。自动流程严格按“审核→正文替换落地→提取→总结”执行。';
         runPage.append(actions, status);
         recallPage.append(recall);
+        managementPage.append(management);
         settingsPage.append(apiSection, switches, auditPromptEditor, thresholds, note);
         worldSettingPage.append(worldSetting);
         rebuildPage.append(rebuild);
-        body.append(pageNav, runPage, recallPage, settingsPage, worldSettingPage, rebuildPage);
+        body.append(pageNav, runPage, recallPage, managementPage, settingsPage, worldSettingPage, rebuildPage);
         panel.append(header, body);
         this.showPage('run', false);
         return panel;
@@ -1187,6 +1527,7 @@ class ControlPanel {
         for (const [pageKey, page] of Object.entries(this.pageNodes)) page.hidden = pageKey !== key;
         for (const [pageKey, button] of Object.entries(this.pageButtons)) button.setAttribute('aria-selected', pageKey === key ? 'true' : 'false');
         if (refresh && key === 'recall') void this.refreshRecallMap(true);
+        if (refresh && key === 'management') void this.refreshManagement(true);
         if (refresh && key === 'worldSetting') void this.refreshWorldSettingState();
         if (refresh && key === 'rebuild') void this.refreshRebuildState();
     }
@@ -1525,6 +1866,8 @@ class ControlPanel {
             ['未覆盖', summary.uncoveredEntries ?? 0],
             ['关键遗漏', summary.criticalUncoveredEntries ?? 0],
             ['对象簇', summary.semanticClusters ?? 0],
+            ['场景锚点', summary.sceneAnchors ?? 0],
+            ['时间未知', summary.unknownGameTimeAnchors ?? 0],
             ['事件轮', summary.eventPasses ?? 0],
             ['扩展轮', summary.customPasses ?? summary.organizationPasses ?? 0],
             ['地区轮', summary.regionPasses ?? 0],
@@ -1556,6 +1899,115 @@ class ControlPanel {
         }
         if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = summary.previewReady === false ? '没有可提交预览。' : '预览已就绪；提交前旧表保持不变。';
     }
+    buildManagementSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-management';
+        const head = document.createElement('div');
+        head.className = 'ma-lite-management-head';
+        const title = document.createElement('strong');
+        title.textContent = '三维世界书与活动包';
+        const refresh = document.createElement('button');
+        refresh.type = 'button';
+        refresh.className = 'ma-lite-management-refresh';
+        refresh.title = '刷新世界书管理视图';
+        refresh.setAttribute('aria-label', '刷新世界书管理视图');
+        refresh.innerHTML = '<i class="fa-solid fa-rotate" aria-hidden="true"></i>';
+        refresh.addEventListener('click', () => void this.refreshManagement(true));
+        head.append(title, refresh);
+        const status = document.createElement('div');
+        status.className = 'ma-lite-management-status';
+        status.textContent = '只读投影：当前游戏时间、当前场景、人物沉降、容量问题与最终活动包。';
+        const content = document.createElement('div');
+        content.className = 'ma-lite-management-empty';
+        content.textContent = '尚未读取';
+        section.append(head, status, content);
+        this.managementNode = content;
+        this.managementStatusNode = status;
+        this.managementRefreshButton = refresh;
+        return section;
+    }
+    async refreshManagement(force = false) {
+        if (!this.managementNode || typeof this.actions.loadWorkspace !== 'function') return;
+        if (!force && this.panel?.hidden) return;
+        const serial = ++this.managementLoadSerial;
+        if (this.managementRefreshButton) this.managementRefreshButton.disabled = true;
+        if (this.managementStatusNode) this.managementStatusNode.textContent = '正在读取世界书管理视图…';
+        try {
+            const workspace = await this.actions.loadWorkspace();
+            if (serial !== this.managementLoadSerial || !this.managementNode) return;
+            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '');
+        }
+        catch (error) {
+            if (serial !== this.managementLoadSerial || !this.managementNode) return;
+            this.managementNode.className = 'ma-lite-management-empty';
+            this.managementNode.textContent = `读取失败：${(0, util_1.errorText)(error)}`;
+            if (this.managementStatusNode) this.managementStatusNode.textContent = '未修改世界书。';
+        }
+        finally {
+            if (serial === this.managementLoadSerial && this.managementRefreshButton) this.managementRefreshButton.disabled = false;
+        }
+    }
+    renderManagement(model, worldbookName) {
+        if (!this.managementNode) return;
+        this.managementNode.className = '';
+        this.managementNode.replaceChildren();
+        if (!model) {
+            this.managementNode.className = 'ma-lite-management-empty';
+            this.managementNode.textContent = '没有管理数据';
+            return;
+        }
+        if (this.managementStatusNode) this.managementStatusNode.textContent = `${worldbookName ? `世界书：${worldbookName}；` : ''}${model.healthy ? '硬约束未发现阻断问题' : '存在需要处理的硬约束问题'}。`;
+        const grid = document.createElement('div');
+        grid.className = 'ma-lite-management-grid';
+        const cards = [
+            ['当前游戏时间', model.gameTime?.label || '未知', model.gameTime?.sceneTitle || '只保存当前值'],
+            ['当前场景', model.currentScene?.title || '未识别', `在场${model.currentScene?.present?.length || 0}；固定角色${model.currentScene?.fixedSceneRoles?.length || 0}；固定设施${model.currentScene?.fixedFacilities?.length || 0}`],
+            ['当前事件', String(model.counts?.activeEvents || 0), (model.activeEvents || []).map((item) => item.title).slice(0, 3).join('、') || '无'],
+            ['人物投影', `当前${model.counts?.currentPeople || 0} / 沉降${model.counts?.settledPeople || 0}`, '人物不使用全局状态机；按当前场景、事件和焦点投影'],
+            ['活动包', model.activityPack ? `${model.activityPack.length}/${model.activityPack.hardMax}字` : '未生成', `排除仓储条目${model.activityPack?.excludedWarehouseEntries || 0}条`],
+            ['直接关联', String(model.counts?.directRelations || 0), (model.directRelations || []).slice(0, 2).map((item) => `${item.sourceTitle}↔${item.targetTitle}`).join('；') || '无'],
+            ['数据健康', model.healthy ? '通过' : '有阻断项', `问题${model.issues?.length || 0}项`],
+        ];
+        for (const [label, value, detail] of cards) {
+            const card = document.createElement('div');
+            card.className = 'ma-lite-management-card';
+            const strong = document.createElement('strong');
+            strong.textContent = `${label}：${value}`;
+            const small = document.createElement('small');
+            small.textContent = detail;
+            card.append(strong, small);
+            grid.append(card);
+        }
+        this.managementNode.append(grid);
+        if (model.directRelations?.length) {
+            const title = document.createElement('strong');
+            title.textContent = '一层直接关联';
+            this.managementNode.append(title);
+            for (const relation of model.directRelations.slice(0, 12)) {
+                const node = document.createElement('div');
+                node.className = 'ma-lite-management-relation';
+                node.textContent = `${relation.sourceTitle} ↔ ${relation.targetTitle}`;
+                this.managementNode.append(node);
+            }
+        }
+        for (const issue of model.issues || []) {
+            const node = document.createElement('div');
+            node.className = 'ma-lite-management-issue';
+            node.dataset.level = issue.level || 'info';
+            node.textContent = issue.message;
+            if (issue.entries?.length) node.title = issue.entries.join('\n');
+            this.managementNode.append(node);
+        }
+        if (model.activityPack?.content) {
+            const title = document.createElement('strong');
+            title.textContent = '最终发送活动包';
+            const pack = document.createElement('pre');
+            pack.className = 'ma-lite-management-pack';
+            pack.textContent = model.activityPack.content;
+            this.managementNode.append(title, pack);
+        }
+    }
+
     buildRecallSection() {
         const section = document.createElement('section');
         section.className = 'ma-lite-recall';
@@ -2271,6 +2723,13 @@ const TYPE_SECTION_ALIASES = {
         '当前状态': '当前',
         '现行事实': '当前',
         '状态': '当前',
+        '性格': '性格核心',
+        '人格': '性格核心',
+        '说话方式': '表达方式',
+        '语言风格': '表达方式',
+        '行为倾向': '决策倾向',
+        '判断倾向': '决策倾向',
+        '关系态度': '关系立场',
 
     },
     场景: {
@@ -2282,6 +2741,10 @@ const TYPE_SECTION_ALIASES = {
         '状态': '当前状态',
         '局部变化': '固定事实',
         '变化记录': '固定事实',
+        '固定人员': '常驻角色',
+        '常驻人员': '常驻角色',
+        '固定设备': '固定设施',
+        '场景设施': '固定设施',
     },
     物品: {
         '对象定义': '定义',
@@ -2290,6 +2753,10 @@ const TYPE_SECTION_ALIASES = {
         '现行事实': '当前',
         '状态': '当前',
         '变化记录': '固定事实',
+        '固定人员': '常驻角色',
+        '常驻人员': '常驻角色',
+        '固定设备': '固定设施',
+        '场景设施': '固定设施',
     },
     事件: {
         '事件进程': '已发生进展',
@@ -2318,6 +2785,10 @@ const TYPE_SECTION_ALIASES = {
         '全局状态': '公开局势',
         '世界变化': '固定事实',
         '变化记录': '固定事实',
+        '固定人员': '常驻角色',
+        '常驻人员': '常驻角色',
+        '固定设备': '固定设施',
+        '场景设施': '固定设施',
     },
     基础设定: {
         '世界规则': '自然规则',
@@ -2386,6 +2857,312 @@ function prepareInformationBlocks(parsedBlocks) {
 exports.canonicalSectionName = canonicalSectionName;
 exports.mergeCanonicalLines = mergeCanonicalLines;
 exports.prepareInformationBlocks = prepareInformationBlocks;
+},"governance":function(module,exports,require){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ACTIVITY_PACK_TITLE = void 0;
+exports.governInformationBlocks = governInformationBlocks;
+exports.sceneSettlementOperations = sceneSettlementOperations;
+exports.currentEventState = currentEventState;
+exports.canTransitionCurrentEvent = canTransitionCurrentEvent;
+exports.deriveCurrentGameTime = deriveCurrentGameTime;
+exports.activeContext = activeContext;
+exports.isGenericBackgroundPerson = isGenericBackgroundPerson;
+exports.isFixedSceneRole = isFixedSceneRole;
+exports.buildDirectRelationIndex = buildDirectRelationIndex;
+const semantic_1 = require("./semantic");
+const util_1 = require("./util");
+
+exports.ACTIVITY_PACK_TITLE = '运行包｜当前活动';
+
+const EVENT_TRANSITIONS = Object.freeze({
+    active: new Set(['active', 'blocked', 'completed', 'terminated']),
+    blocked: new Set(['active', 'blocked', 'completed', 'terminated']),
+    completed: new Set(['completed', 'archived']),
+    terminated: new Set(['terminated', 'archived']),
+    archived: new Set(['archived']),
+});
+
+const GENERIC_PERSON_PATTERN = /(?:路人|行人|群众|围观者|学生|同学|顾客|客人|乘客|司机|店员|服务员|工作人员|办事员|职员|管理员|门卫|保安|守卫|士兵|侍卫|仆人|侍者|医生|护士|药师|监考|裁判|主持人|接待员|售货员|收银员|快递员|邻居|居民|村民|市民|男人|女人|男子|女子|青年|老人|小孩|孩子|声音|账号)$/u;
+const TEMPORARY_MARKER = /(?:临时|一次性|路过|偶遇|无名|不知名|陌生|普通|随机|现场一名|某个|一位|一名)/u;
+const FIXED_SCENE_MARKER = /(?:常驻|固定|长期负责|日常负责|值班|驻守|驻场|本店|本楼|本校|该场景|负责此处|管理此处|看守此处)/u;
+const INDEPENDENT_MARKER = /(?:独立目标|持续职责|关键证人|核心线索|长期关系|长期任务|持续影响|独立行动线|必须单独追踪)/u;
+
+function governInformationBlocks(sourceBlocks, entries, contextText = '', options = {}) {
+    const blocks = (sourceBlocks ?? []).map((block) => structuredClone(block));
+    const diagnostics = { attached: [], filtered: [], promoted: [], warnings: [] };
+    const currentScene = blocks.find((block) => block.type === '场景') ?? null;
+    const output = [];
+    for (const block of blocks) {
+        if (!/^(?:人物|角色|NPC)$/u.test(String(block.type ?? ''))) {
+            output.push(block);
+            continue;
+        }
+        if (!isGenericBackgroundPerson(block)) {
+            output.push(block);
+            continue;
+        }
+        if (revealsExistingIdentity(block, entries, contextText)) {
+            diagnostics.promoted.push(block.title);
+            output.push(block);
+            continue;
+        }
+        const body = blockText(block);
+        const independent = INDEPENDENT_MARKER.test(body)
+            || hasIndependentPersonMaterial(block)
+            || hasStableProperName(block.name);
+        if (independent) {
+            diagnostics.promoted.push(block.title);
+            output.push(block);
+            continue;
+        }
+        if (currentScene && isFixedSceneRole(block, currentScene, contextText)) {
+            attachFixedRole(currentScene, block);
+            diagnostics.attached.push({ title: block.title, host: currentScene.title });
+            continue;
+        }
+        diagnostics.filtered.push(block.title);
+    }
+    return { blocks: output, diagnostics, currentSceneTitle: currentScene?.title ?? '' };
+}
+
+function revealsExistingIdentity(block, entries, contextText) {
+    const provisional = String(block?.name ?? '').trim();
+    const text = String(contextText ?? '');
+    if (!provisional || !text.includes(provisional) || !/(?:就是|原来是|身份(?:为|是)|真实身份|摘下伪装|承认身份)/u.test(text)) return false;
+    return (entries ?? []).some((entry) => /^(?:人物|角色|NPC)$/u.test(String(entry?.type ?? ''))
+        && entry.name && text.includes(String(entry.name)) && !governanceNameIsGeneric(entry.name));
+}
+function governanceNameIsGeneric(value) {
+    const name = String(value ?? '').replace(/(?:甲|乙|丙|丁|A|B|C|D|\d+)$/iu, '');
+    return TEMPORARY_MARKER.test(name) || GENERIC_PERSON_PATTERN.test(name);
+}
+
+function hasIndependentPersonMaterial(block) {
+    const sections = new Map((block.sections ?? []).map((section) => [String(section.name ?? ''), section.lines ?? []]));
+    return ['关系', '已知', '误信', '性格核心', '表达方式', '决策倾向']
+        .some((name) => (sections.get(name) ?? []).length > 0)
+        || (sections.get('当前') ?? []).some((line) => /(?:当前目标|独立目标|持续任务|关键线索|掌握|追查|调查)/u.test(String(line ?? '')));
+}
+
+function hasStableProperName(name) {
+    const text = String(name ?? '').trim();
+    const roleName = text.replace(/(?:甲|乙|丙|丁|A|B|C|D|\d+)$/iu, '');
+    if (!text || TEMPORARY_MARKER.test(text) || GENERIC_PERSON_PATTERN.test(roleName)) return false;
+    if (/^身份未明/u.test(text)) return true;
+    // 中文专名、账号或编号可独立追踪；纯岗位称呼不算专名。
+    return text.length >= 2 && !/(?:老师|主任|经理|队长|老板|店长|管理员|工作人员)$/u.test(text);
+}
+
+function isGenericBackgroundPerson(block) {
+    if (!block) return false;
+    const name = String(block.name ?? '').trim();
+    const roleName = name.replace(/(?:甲|乙|丙|丁|A|B|C|D|\d+)$/iu, '');
+    const body = blockText(block);
+    if (/^身份未明/u.test(name)) return false;
+    if (TEMPORARY_MARKER.test(name) || TEMPORARY_MARKER.test(body)) return true;
+    return GENERIC_PERSON_PATTERN.test(roleName);
+}
+
+
+function isFixedSceneRole(block, currentScene, _contextText = '') {
+    if (!block || !currentScene) return false;
+    const body = blockText(block);
+    const sceneName = String(currentScene.name ?? '').trim();
+    if (FIXED_SCENE_MARKER.test(body)) return true;
+    if (sceneName && body.includes(sceneName) && /(?:负责|管理|值班|驻守|工作|看守|经营)/u.test(body)) return true;
+    return false;
+}
+
+function attachFixedRole(sceneBlock, personBlock) {
+    const section = ensureSection(sceneBlock, '常驻角色');
+    const identity = firstUsefulLine(personBlock, ['身份', '稳定', '当前']) || '固定承担本场景岗位职责。';
+    const line = `${personBlock.name}：${stripSlot(identity)}`;
+    section.lines = (0, util_1.unique)([...(section.lines ?? []), line]);
+    section.empty = false;
+}
+
+function firstUsefulLine(block, names) {
+    for (const name of names) {
+        const section = (block.sections ?? []).find((item) => String(item.name ?? '') === name);
+        const line = (section?.lines ?? []).find((item) => String(item ?? '').trim());
+        if (line) return String(line).trim();
+    }
+    return '';
+}
+function stripSlot(value) {
+    return String(value ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').trim();
+}
+function ensureSection(block, name) {
+    let section = (block.sections ?? []).find((item) => String(item.name ?? '') === name);
+    if (!section) {
+        section = { name, lines: [], empty: true };
+        block.sections ??= [];
+        block.sections.push(section);
+    }
+    return section;
+}
+function blockText(block) {
+    return [block?.name, ...(block?.sections ?? []).flatMap((section) => section.lines ?? [])].filter(Boolean).join('\n');
+}
+
+function currentEventState(value) {
+    if (!value) return 'active';
+    if ((0, semantic_1.isEventClosed)(value)) return 'completed';
+    const text = eventText(value);
+    if (/(?:终止|取消|放弃|失败结束|不再进行)/u.test(text)) return 'terminated';
+    if (/(?:受阻|暂停|卡住|无法推进|等待条件)/u.test(text)) return 'blocked';
+    return 'active';
+}
+function canTransitionCurrentEvent(from, to) {
+    const source = String(from || 'active');
+    const target = String(to || 'active');
+    return EVENT_TRANSITIONS[source]?.has(target) === true;
+}
+function eventText(value) {
+    if (Array.isArray(value?.sections)) return value.sections.flatMap((section) => section.lines ?? []).join('\n');
+    return Object.values(value?.sections?.values ?? {}).flat().join('\n');
+}
+
+function sceneSettlementOperations(blocks, entries) {
+    const currentSceneBlock = (blocks ?? []).find((block) => block.type === '场景');
+    if (!currentSceneBlock) return [];
+    const incomingTitle = (0, util_1.normalizeTitle)(currentSceneBlock.title);
+    const previous = previousCurrentScene(entries, incomingTitle);
+    if (!previous) return [];
+    const operations = [];
+    for (const section of ['当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束']) {
+        const current = previous.sections?.values?.[section] ?? [];
+        if (!current.length) continue;
+        operations.push({
+            id: `scene-settle|${previous.uid}|${section}`,
+            kind: 'replace-section',
+            operation: 'replace',
+            title: previous.title,
+            targetUid: previous.uid,
+            section,
+            oldValue: current.join('\n'),
+            newValue: '',
+            reason: `离开当前场景“${previous.name}”，结算并清除旧场景的活动快照`,
+        });
+    }
+    return operations;
+}
+function previousCurrentScene(entries, incomingTitle) {
+    const scenes = (entries ?? []).filter((entry) => entry?.managed && /^(?:场景|时空)$/u.test(String(entry.type ?? '')));
+    const sorted = [...scenes].sort((left, right) => {
+        const a = Number(left?.raw?.extensions?.mirrorAbyssInfoPoint?.sceneLastActiveAt || left.updatedAt || 0);
+        const b = Number(right?.raw?.extensions?.mirrorAbyssInfoPoint?.sceneLastActiveAt || right.updatedAt || 0);
+        return b - a;
+    });
+    const current = sorted.find((entry) => String(entry.semanticRole ?? '') === 'scene-current') ?? sorted[0];
+    if (!current || (0, util_1.normalizeTitle)(current.title) === incomingTitle) return null;
+    return current;
+}
+
+function deriveCurrentGameTime(blocks, previous = null) {
+    const scene = (blocks ?? []).find((block) => block.type === '场景');
+    if (!scene) return previous ? structuredClone(previous) : null;
+    const lines = (scene.sections ?? [])
+        .filter((section) => /^(?:当前状态|定义)$/u.test(String(section.name ?? '')))
+        .flatMap((section) => section.lines ?? []);
+    const match = lines.map((line) => String(line ?? '').match(/^\s*(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*[：:]\s*(.+)$/u)).find(Boolean);
+    if (!match) return previous ? structuredClone(previous) : null;
+    const label = String(match[1] ?? '').trim();
+    if (!label) return previous ? structuredClone(previous) : null;
+    return {
+        label,
+        sceneTitle: scene.title,
+        source: /^(?:未知|不明|未说明)$/u.test(label) ? 'unknown' : 'explicit',
+    };
+}
+
+function activeContext(entries, focusUid = '', preferredSceneTitle = '') {
+    const list = (entries ?? []).filter((entry) => entry?.title !== exports.ACTIVITY_PACK_TITLE);
+    const scenes = list.filter((entry) => /^(?:场景|时空)$/u.test(String(entry.type ?? '')));
+    scenes.sort((left, right) => {
+        const a = Number(left?.raw?.extensions?.mirrorAbyssInfoPoint?.sceneLastActiveAt || left.updatedAt || 0);
+        const b = Number(right?.raw?.extensions?.mirrorAbyssInfoPoint?.sceneLastActiveAt || right.updatedAt || 0);
+        return b - a;
+    });
+    const preferred = preferredSceneTitle
+        ? scenes.find((entry) => (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(preferredSceneTitle))
+        : null;
+    // 当前场景以本轮明确标题或真实 sceneLastActiveAt 排序为准；semanticRole 只是由本函数生成的投影，不能反向决定自身。
+    const scene = preferred ?? scenes[0] ?? null;
+    const names = new Set();
+    for (const line of scene?.sections?.values?.['在场'] ?? []) for (const name of splitNames(line)) names.add(name);
+    const openEvents = list.filter((entry) => entry.type === '事件' && !['completed', 'terminated', 'archived'].includes(currentEventState(entry)));
+    const activeEvents = selectCurrentEvents(openEvents, scene, names);
+    for (const event of activeEvents) for (const line of event.sections?.values?.['参与'] ?? []) for (const name of splitNames(line)) names.add(name);
+    const focus = list.find((entry) => String(entry.uid) === String(focusUid || '') || entry.focus === true);
+    if (focus && /^(?:人物|角色|NPC)$/u.test(focus.type)) names.add(focus.name);
+    const characters = list.filter((entry) => /^(?:人物|角色|NPC)$/u.test(String(entry.type ?? '')) && [...names].some((name) => sameName(entry, name)));
+    return { scene, activeEvents, characters, activeNames: names, focus };
+}
+function selectCurrentEvents(events, scene, presentNames) {
+    if (!(events ?? []).length) return [];
+    const sceneName = (0, util_1.normalizeFact)(scene?.name ?? '');
+    const sceneActivities = new Set((scene?.sections?.values?.['活动关联'] ?? []).map(util_1.normalizeFact));
+    const present = new Set([...presentNames].map(util_1.normalizeFact));
+    const ranked = events.map((entry) => {
+        const text = (0, util_1.normalizeFact)(`${entry.name}
+${eventText(entry)}`);
+        let relationScore = 0;
+        if (sceneName && text.includes(sceneName)) relationScore += 8;
+        if ([...sceneActivities].some((name) => name && ((0, util_1.normalizeFact)(entry.name).includes(name) || name.includes((0, util_1.normalizeFact)(entry.name))))) relationScore += 10;
+        for (const name of (entry.sections?.values?.['参与'] ?? []).flatMap(splitNames).map(util_1.normalizeFact)) if (present.has(name)) relationScore += 3;
+        return { entry, relationScore, updatedAt: Number(entry.updatedAt || 0) };
+    }).sort((left, right) => right.relationScore - left.relationScore || right.updatedAt - left.updatedAt || left.entry.title.localeCompare(right.entry.title, 'zh-CN'));
+    if (ranked[0]?.relationScore > 0) return [ranked[0].entry];
+    // 当前世界只有一个未结束事件时，它就是可接受的当前事件；多个无关联事件不猜测。
+    return ranked.length === 1 ? [ranked[0].entry] : [];
+}
+function splitNames(value) {
+    return String(value ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').split(/[、,，/与和及]/u).map((item) => item.trim()).filter((item) => item && !/^(?:无|无人)$/u.test(item));
+}
+function sameName(entry, name) {
+    const target = (0, util_1.normalizeFact)(name);
+    return [entry.name, ...(entry.aliases ?? []), ...(entry.keywords ?? [])].some((value) => (0, util_1.normalizeFact)(value) === target);
+}
+
+// [MA-RELATION-01] 直接关联只从结构化栏目推导，并可随世界书重建；不建立独立图数据库。
+function buildDirectRelationIndex(entries) {
+    const list = (entries ?? []).filter((entry) => entry && entry.title !== exports.ACTIVITY_PACK_TITLE);
+    const index = new Map(list.map((entry) => [String(entry.uid), new Set()]));
+    const terms = list.map((entry) => ({
+        entry,
+        terms: (0, util_1.unique)([entry.name, ...(entry.aliases ?? [])])
+            .map(util_1.normalizeFact)
+            .filter((value) => value && value.length >= 2),
+    }));
+    for (const source of list) {
+        const sourceUid = String(source.uid);
+        const text = (0, util_1.normalizeFact)(relationText(source));
+        if (!text) continue;
+        for (const candidate of terms) {
+            const targetUid = String(candidate.entry.uid);
+            if (!sourceUid || sourceUid === targetUid) continue;
+            if (!candidate.terms.some((term) => text.includes(term))) continue;
+            index.get(sourceUid)?.add(targetUid);
+            index.get(targetUid)?.add(sourceUid);
+        }
+    }
+    return new Map([...index.entries()].map(([uid, related]) => [uid, new Set([...related].slice(0, 16))]));
+}
+function relationText(entry) {
+    const sections = entry?.sections?.values ?? {};
+    const selected = /^(?:人物|角色|NPC)$/u.test(String(entry?.type ?? ''))
+        ? ['关系', '关系立场', '当前', '持有', '已知', '误信']
+        : /^(?:场景|时空)$/u.test(String(entry?.type ?? ''))
+            ? ['在场', '当前资源', '活动关联']
+            : entry?.type === '事件'
+                ? ['参与', '场景', '已发生进展', '结果']
+                : entry?.type === '物品'
+                    ? ['当前', '固定事实']
+                    : [];
+    return selected.flatMap((section) => sections[section] ?? []).join('\n');
+}
 },"host":function(module,exports,require){
 
 "use strict";
@@ -2448,6 +3225,9 @@ class HostAdapter {
             largeSummaryPrompt: settings.largeSummaryPrompt,
             smallSummaryTurns: settings.smallSummaryTurns,
             largeSummaryCount: settings.largeSummaryCount,
+            activityPackEnabled: settings.activityPackEnabled,
+            activityPackHardMax: settings.activityPackHardMax,
+            entryBudgetEnabled: settings.entryBudgetEnabled,
             keywordDefinitions: settings.keywordDefinitions,
             sectionPolicies: settings.sectionPolicies,
             bodyMatchThreshold: settings.bodyMatchThreshold,
@@ -2817,6 +3597,34 @@ class HostAdapter {
                 root.cursor = previous;
             else
                 delete root.cursor;
+            throw error;
+        }
+    }
+    getCurrentGameTime() {
+        const value = this.chatNamespace().currentGameTime;
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        const label = String(value.label ?? '').trim();
+        if (!label) return null;
+        return { label, sceneTitle: String(value.sceneTitle ?? ''), source: String(value.source ?? 'explicit') };
+    }
+    async setCurrentGameTime(value, snapshot, currentSettings) {
+        const next = value && typeof value === 'object' && String(value.label ?? '').trim()
+            ? { label: String(value.label).trim(), sceneTitle: String(value.sceneTitle ?? ''), source: String(value.source ?? 'explicit') }
+            : null;
+        const previous = this.getCurrentGameTime();
+        if (JSON.stringify(previous) === JSON.stringify(next)) return false;
+        if (snapshot) this.assertSnapshot(snapshot, currentSettings);
+        const root = this.chatNamespace();
+        if (next) root.currentGameTime = structuredClone(next);
+        else delete root.currentGameTime;
+        try {
+            await this.saveMetadata();
+            if (snapshot) this.assertSnapshot(snapshot, currentSettings);
+            return true;
+        }
+        catch (error) {
+            if (previous) root.currentGameTime = previous;
+            else delete root.currentGameTime;
             throw error;
         }
     }
@@ -3766,6 +4574,7 @@ const operations_1 = require("./operations");
 const parser_1 = require("./parser");
 const prompts_1 = require("./prompts");
 const semantic_1 = require("./semantic");
+const governance_1 = require("./governance");
 const model_request_1 = require("./model-request");
 const util_1 = require("./util");
 class MemoryRunner {
@@ -3872,7 +4681,7 @@ class MemoryRunner {
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
         const dialogueInput = [snapshot.dialogueContext, snapshot.turnText || `${snapshot.playerText}\n${snapshot.assistantText}`].filter(Boolean).join('\n\n');
-        const selected = (0, matcher_1.relevantEntries)(entries, dialogueInput, 6);
+        const selected = (0, matcher_1.relevantEntries)(entries.filter((entry) => entry.title !== governance_1.ACTIVITY_PACK_TITLE), dialogueInput, 6);
         const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { dialogueContext: snapshot.dialogueContext });
         // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
         const raw = await (0, model_request_1.callModel)({
@@ -3926,7 +4735,7 @@ class MemoryRunner {
         const titles = blocks.map((block) => block.title);
         this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
         this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput);
+        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
@@ -4001,7 +4810,7 @@ class MemoryRunner {
         }
         const distribution = distributionBlocksFromSummary(summaryBlock);
         summaryBlock.sections = summaryBlock.sections.filter((section) => !/^(分发事实|沉降分发)$/u.test(section.name));
-        const plan = (0, operations_1.buildOperationPlan)([summaryBlock, ...distribution], entries, settings, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'), { cleanupTemporaryAfterSummary: true, consumeSmallSummaryAfterLarge: kind === 'large', compactEventProgressFromSummary: true });
+        const plan = (0, operations_1.buildOperationPlan)([summaryBlock, ...distribution], entries, settings, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'), { sourceKind: 'summary', cleanupTemporaryAfterSummary: true, consumeSmallSummaryAfterLarge: kind === 'large', compactEventProgressFromSummary: true });
         const summaryText = `${summaryBlock.title}\n${summaryBlock.sections.flatMap((section) => section.lines).join('\n')}`;
         const applied = await this.apply(settings, plan, snapshot, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'), label, raw, { rebalanceKind: kind, summaryText });
         this.progress('running', `${label}已完成分发，正在重算召回状态`, { titles: [summaryBlock.title, ...distribution.map((block) => block.title)] });
@@ -4014,10 +4823,13 @@ class MemoryRunner {
         this.setStatus(snapshot.chatKey, 'worldbook', `${label}通过唯一提交器写入世界书`, '', raw, plan);
         this.validate(snapshot);
         const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
-        const entries = await this.worldbook.apply(settings, plan, snapshot.messageKey, contextText, focusUid, snapshot, () => this.validate(snapshot), { sourceKind: label === '提取' ? 'extraction' : 'summary', ...options });
+        const previousGameTime = typeof this.host.getCurrentGameTime === 'function' ? this.host.getCurrentGameTime() : null;
+        const nextGameTime = (0, governance_1.deriveCurrentGameTime)(plan.blocks, previousGameTime);
+        const entries = await this.worldbook.apply(settings, plan, snapshot.messageKey, contextText, focusUid, snapshot, () => this.validate(snapshot), { sourceKind: label === '提取' ? 'extraction' : 'summary', currentGameTime: nextGameTime, ...options });
         this.validate(snapshot);
+        let receiptSaved = false;
         if (entries.receipt && typeof this.host.appendCommitReceipt === 'function') {
-            try { await this.host.appendCommitReceipt(entries.receipt); }
+            try { await this.host.appendCommitReceipt(entries.receipt); receiptSaved = true; }
             catch (error) {
                 try {
                     await this.worldbook.rollbackReceipts(settings, [entries.receipt], focusUid, snapshot, () => this.validate(snapshot));
@@ -4028,7 +4840,20 @@ class MemoryRunner {
                 throw new Error(`提交回执保存失败，世界书已自动恢复提交前状态：${(0, util_1.errorText)(error)}`);
             }
         }
-        return { entries, changed: entries.changed === true, receipt: entries.receipt ?? null };
+        try {
+            if (typeof this.host.setCurrentGameTime === 'function') await this.host.setCurrentGameTime(nextGameTime, snapshot, this.getSettings());
+        }
+        catch (error) {
+            try {
+                if (entries.receipt) await this.worldbook.rollbackReceipts(settings, [entries.receipt], focusUid, snapshot, () => this.validate(snapshot));
+                if (receiptSaved && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts([entries.receipt.id]);
+            }
+            catch (rollbackError) {
+                throw new Error(`当前游戏时间保存失败，且世界书恢复失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+            }
+            throw new Error(`当前游戏时间保存失败，世界书已恢复提交前状态：${(0, util_1.errorText)(error)}`);
+        }
+        return { entries, changed: entries.changed === true, receipt: entries.receipt ?? null, activityPack: entries.activityPack ?? null, currentGameTime: nextGameTime };
     }
     validate(snapshot) { this.host.assertSnapshot(snapshot, this.getSettings()); }
     setStatus(chatKey, phase, detail, error = '', rawResult = '', plan = null) {
@@ -4083,7 +4908,7 @@ function summarySnapshotHasFacts(block, kind) {
 }
 
 function summaryEntries(kind, entries, snapshot) {
-    const active = entries.filter((entry) => !entry.activation.disabled);
+    const active = entries.filter((entry) => !entry.activation.disabled && entry.title !== governance_1.ACTIVITY_PACK_TITLE);
     if (kind === 'small') {
         const candidates = active.filter((entry) => entry.title !== '总结｜世界历史');
         const required = [
@@ -4109,7 +4934,7 @@ function summaryEntries(kind, entries, snapshot) {
 function hasStableSummaryMaterial(entry) {
     const values = entry?.sections?.values ?? {};
     if (entry.type === '事件') return (values['结果'] ?? []).length > 0;
-    if (entry.type === '人物' || entry.type === '角色') return ['身份', '稳定', '关系', '固定事实'].some((section) => (values[section] ?? []).length > 0);
+    if (entry.type === '人物' || entry.type === '角色') return ['身份', '稳定', '性格核心', '表达方式', '决策倾向', '关系立场', '关系', '固定事实'].some((section) => (values[section] ?? []).length > 0);
     if (entry.type === '场景' || entry.type === '时空') return ['定义', '空间结构', '固定资源', '固定事实', '世界影响'].some((section) => (values[section] ?? []).length > 0);
     if (entry.type === '物品') return ['定义', '功能', '限制', '固定事实'].some((section) => (values[section] ?? []).length > 0);
     return /^(世界|全局变化|基础设定)$/u.test(entry.type);
@@ -4265,6 +5090,8 @@ exports.packPlannedRebuildTasks = packPlannedRebuildTasks;
 exports.buildRebuildReviewCatalog = buildRebuildReviewCatalog;
 exports.analyzeRebuildCoverage = analyzeRebuildCoverage;
 exports.restoreUncoveredRebuildSourceLines = restoreUncoveredRebuildSourceLines;
+exports.applyRebuildTemporalSettlement = applyRebuildTemporalSettlement;
+exports.buildRebuildSpacetimeSection = buildRebuildSpacetimeSection;
 exports.parseRebuildReviewResponse = parseRebuildReviewResponse;
 exports.buildRegionalSynthesisTasks = buildRegionalSynthesisTasks;
 exports.buildOrganizationSynthesisTasks = buildOrganizationSynthesisTasks;
@@ -4292,14 +5119,14 @@ const ALLOWED_TYPES = new Set(['人物', '场景', '物品', '事件', '世界',
 const NON_EVENT_TYPES = new Set(['人物', '场景', '物品', '世界', '基础设定']);
 const KNOWLEDGE_SECTIONS = new Set(['已知', '误信']);
 const TYPE_ALLOWED_SECTIONS = {
-    人物: new Set(['身份', '稳定', '当前', '关系', '持有', '已知', '误信', '固定事实', '别名']),
-    场景: new Set(['定义', '空间结构', '固定资源', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
-    物品: new Set(['定义', '功能', '限制', '当前', '关系', '持有', '固定事实', '别名']),
+    人物: new Set(['时空锚点', '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '固定事实', '别名']),
+    场景: new Set(['时空锚点', '定义', '空间结构', '固定资源', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
+    物品: new Set(['时空锚点', '定义', '功能', '限制', '当前', '关系', '持有', '固定事实', '别名']),
     // [MA-REBUILD-10] 重建后的事件只保存已经发生的参与、场景、进展与结果。
     // 目标和未决只可用于内部聚类，不再写回新事件条目。
-    事件: new Set(['参与', '场景', '已发生进展', '未发生进展', '结果', '别名']),
-    世界: new Set(['范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名']),
-    基础设定: new Set(['世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名']),
+    事件: new Set(['时空锚点', '参与', '场景', '已发生进展', '未发生进展', '结果', '别名']),
+    世界: new Set(['时空锚点', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名']),
+    基础设定: new Set(['时空锚点', '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名']),
 };
 const MIGRATION_EXCLUSIVE_SECTIONS = new Set(['身份', '当前', '当前状态', '功能']);
 const MIGRATION_STRONG_SINGLE_SLOTS = new Set(['唯一编号', '编号', '序列号', '账号id', 'id', '种族', '型号', '类别', '身份形态', '存在形态', '身体形态', '本体关系', '当前位置', '当前持有者', '当前使用者', '所有权', '保管者']);
@@ -4322,8 +5149,14 @@ const MIGRATION_DEFAULT_INTERVAL_MS = 2200;
 const MIGRATION_RATE_LIMIT_BACKOFF_MS = [8000, 20000];
 const MIGRATION_MAX_RATE_LIMIT_RETRIES = 2;
 const UNIVERSAL_ENTRY_MARKER = '新条目';
-const UNIVERSAL_METADATA_NAMES = new Set(['组ID', '名称', '归入类型', '建议类型', '与现有类型区别', '别名', '合并来源', '来源行', '保留方式', '并入条目', '并入栏目']);
+const UNIVERSAL_METADATA_NAMES = new Set(['组ID', '名称', '归入类型', '建议类型', '与现有类型区别', '别名', '合并来源', '来源行', '保留方式', '并入条目', '并入栏目', '场景锚点', '游戏时间', '时间来源', '时态']);
 const UNIVERSAL_SECTION_NAMES = new Set(['内容', '角色认知', '过去结果', '关键词']);
+const TEMPORAL_STATES = new Set(['当前', '持续', '已完成', '已结束', '长期']);
+const TIME_SOURCES = new Set(['明确', '推定', '未知']);
+const REBUILD_SPACETIME_SECTION = '时空锚点';
+const REBUILD_TYPE_CODES = new Map([
+    ['人物', 'C'], ['场景', 'L'], ['物品', 'I'], ['事件', 'E'], ['世界', 'W'], ['基础设定', 'R'],
+]);
 const MIGRATION_TYPE_DECORATION_PATTERN = /(?:档案|信息|记录|条目|资料|表格|表|类型|类别|对象|实体)$/gu;
 const MIGRATION_TYPE_SYNONYMS = new Map([
     ['角色', '人物'], ['npc', '人物'], ['人物档案', '人物'], ['角色档案', '人物'], ['人员', '人物'],
@@ -4625,7 +5458,7 @@ class MigrationService {
                 lastRequestAt: 0,
                 diagnostics: {
                     invalidLines: [],
-                    warnings: ['重建将先进行一次全局来源行规划，再按容量联合处理多个候选组；同一来源行不会重复发送给多个对象'],
+                    warnings: ['重建将先建立场景锚点与游戏时间，再规划来源行的唯一宿主；同一来源行不会重复发送给多个对象'],
                     modelBatches: 0,
                     modelRequests: 0,
                     parserRepairs: 0,
@@ -4651,7 +5484,7 @@ class MigrationService {
                 total: 1,
                 requests: state.requests,
                 retries: state.retries,
-                detail: `正在规划${state.sourceIndex.lines.length}条旧事实的唯一宿主与事件边界`,
+                detail: `正在规划${state.sourceIndex.lines.length}条旧事实的场景锚点、游戏时间、唯一宿主与事件边界`,
             });
             const prompt = (0, prompts_1.migrationPlanningPrompts)(state.sourceIndex.text, { schema: state.schema });
             let response;
@@ -4693,6 +5526,8 @@ class MigrationService {
             state.diagnostics.organizationPasses = plan.groups.filter((group) => (0, util_1.normalizeFact)(group.type) === (0, util_1.normalizeFact)('组织')).length;
             state.diagnostics.regionPasses = 0;
             state.diagnostics.planningGroups = plan.groups.length;
+            state.diagnostics.sceneAnchors = plan.anchors?.length || 0;
+            state.diagnostics.unknownGameTimeAnchors = (plan.anchors ?? []).filter((anchor) => anchor.gameTime === '未知').length;
             state.diagnostics.droppedSourceLines = plan.droppedRefs.length;
             state.diagnostics.fragmentedRecords = groupTasks.filter((batch) => Number(batch.fragmentCount || 1) > 1).length;
             state.diagnostics.jointBatches = batches.filter((batch) => batch.phase === 'planned-joint').length;
@@ -4831,6 +5666,8 @@ class MigrationService {
             fragmentedRecords: state.diagnostics.fragmentedRecords,
             semanticClusters: state.diagnostics.semanticClusters || 0,
             planningGroups: state.diagnostics.planningGroups || 0,
+            sceneAnchors: state.diagnostics.sceneAnchors || 0,
+            unknownGameTimeAnchors: state.diagnostics.unknownGameTimeAnchors || 0,
             sourceLines: state.diagnostics.sourceLines || 0,
             droppedSourceLines: state.diagnostics.droppedSourceLines || 0,
             reviewPassed: state.diagnostics.reviewPassed === true,
@@ -5071,6 +5908,7 @@ function buildRebuildSourceIndex(records, schema = buildMigrationSchema()) {
         const type = resolveMigrationType(restoredSplit?.type || recordType(record, schema), schema);
         const name = restoredSplit?.name || record.name || record.title;
         const parsed = (0, parser_1.parseEntrySections)(record.content || '');
+        const existingSpacetime = readExistingRebuildSpacetime(record, parsed);
         const entry = {
             uid: String(record.uid),
             type,
@@ -5079,6 +5917,7 @@ function buildRebuildSourceIndex(records, schema = buildMigrationSchema()) {
             keywords: (0, util_1.unique)((record.keywords ?? []).filter(isMeaningfulRebuildKeyword)).slice(0, 6),
             refs: [],
             empty: true,
+            existingSpacetime,
         };
         const sectionOrder = parsed.order?.length ? parsed.order : ['旧格式正文'];
         const rawFallback = parsed.order?.length
@@ -5086,6 +5925,8 @@ function buildRebuildSourceIndex(records, schema = buildMigrationSchema()) {
             : String(record.content ?? '').replace(/\r/g, '').split('\n').map((line) => line.trim()).filter(Boolean);
         for (let sectionIndex = 0; sectionIndex < sectionOrder.length; sectionIndex += 1) {
             const section = sectionOrder[sectionIndex];
+            // 【时空锚点】不作为剧情事实重复送入模型；旧锚点只以规划元数据提示复用。
+            if (section === REBUILD_SPACETIME_SECTION) continue;
             const values = rawFallback ?? (parsed.values?.[section] ?? []);
             let lineIndex = 0;
             for (const rawLine of values) {
@@ -5102,6 +5943,11 @@ function buildRebuildSourceIndex(records, schema = buildMigrationSchema()) {
                     section,
                     text,
                     order: order++,
+                    priorSceneAnchors: [...existingSpacetime.sceneAnchors],
+                    priorGameTime: existingSpacetime.gameTime,
+                    priorTimeSource: existingSpacetime.timeSource,
+                    priorLocation: existingSpacetime.location,
+                    priorTemporalState: existingSpacetime.temporalState,
                 };
                 lines.push(item);
                 lineByRef.set(ref, item);
@@ -5112,7 +5958,11 @@ function buildRebuildSourceIndex(records, schema = buildMigrationSchema()) {
         entries.push(entry);
     }
     const text = entries.map((entry) => {
-        const header = `ENTRY|${entry.uid}|${entry.type}|${entry.name}|关键词:${entry.keywords.join('、') || '无'}`;
+        const prior = entry.existingSpacetime;
+        const priorText = prior.sceneAnchors.length
+            ? `|已有时空:${prior.sceneAnchors.join('、')}@${prior.gameTime}@${prior.location}[${prior.timeSource};${prior.temporalState}]`
+            : '';
+        const header = `ENTRY|${entry.uid}|${entry.type}|${entry.name}|关键词:${entry.keywords.join('、') || '无'}${priorText}`;
         if (!entry.refs.length) return `${header}\nEMPTY|${entry.uid}`;
         const body = entry.refs.map((ref) => {
             const item = lineByRef.get(ref);
@@ -5121,6 +5971,27 @@ function buildRebuildSourceIndex(records, schema = buildMigrationSchema()) {
         return `${header}\n${body}`;
     }).join('\n\n');
     return { text, lines, entries, lineByRef, refs: new Set(lines.map((line) => line.ref)) };
+}
+
+
+function readExistingRebuildSpacetime(record, parsed) {
+    const extension = record?.raw?.extensions?.[constants_1.WORLD_INFO_EXTENSION_KEY] ?? {};
+    const metadataLines = parsed?.values?.[REBUILD_SPACETIME_SECTION] ?? [];
+    const metadata = new Map(metadataLines.map((line) => {
+        const match = String(line ?? '').match(/^([^：:]{1,24})\s*[：:]\s*(.*)$/u);
+        return match ? [match[1].trim(), match[2].trim()] : ['', ''];
+    }).filter(([key]) => key));
+    const sceneAnchors = (0, util_1.unique)([
+        ...(0, util_1.normalizeStringArray)(extension.sceneAnchors),
+        ...parseSceneAnchorList(metadata.get('场景锚点') || ''),
+    ]).filter((anchor) => /^S\d{3,6}$/u.test(String(anchor)));
+    return {
+        sceneAnchors,
+        gameTime: normalizeRebuildGameTime(extension.gameTime || metadata.get('游戏时间')),
+        timeSource: normalizeRebuildTimeSource(extension.timeSource || metadata.get('时间来源')),
+        location: String(extension.anchorLocation || metadata.get('地点') || '未知').trim() || '未知',
+        temporalState: normalizeRebuildTemporalState(extension.temporalState || metadata.get('时态'), record?.type),
+    };
 }
 
 function clipPlanningLine(value, maxChars) {
@@ -5133,6 +6004,7 @@ function parseRebuildPlanningResponse(raw, sourceIndex, schema = buildMigrationS
     const knownRefs = sourceIndex?.refs instanceof Set ? sourceIndex.refs : new Set();
     const assigned = new Set();
     const groups = [];
+    const rawAnchors = [];
     const droppedRefs = new Set();
     const warnings = [];
     const text = String(raw ?? '').replace(/```(?:text|markdown|md)?/giu, '').replace(/\r/g, '').trim();
@@ -5140,6 +6012,21 @@ function parseRebuildPlanningResponse(raw, sourceIndex, schema = buildMigrationS
         const line = rawLine.trim();
         if (!line) continue;
         const parts = line.split('|').map((part) => part.trim());
+        if (parts[0] === 'ANCHOR' && parts.length >= 6) {
+            const id = parts[1] || `A${rawAnchors.length + 1}`;
+            const gameTime = normalizeRebuildGameTime(parts[2]);
+            const location = String(parts[3] || '未知').trim() || '未知';
+            const timeSource = normalizeRebuildTimeSource(parts[4]);
+            const refs = parsePlanningRefs(parts.slice(5).join('|')).filter((ref) => {
+                if (!knownRefs.has(ref)) {
+                    warnings.push(`场景锚点${id}引用了不存在的来源行${ref}，已忽略`);
+                    return false;
+                }
+                return true;
+            });
+            if (refs.length) rawAnchors.push({ id, gameTime, location, timeSource, refs, modelOrder: rawAnchors.length });
+            continue;
+        }
         if (parts[0] === 'GROUP' && parts.length >= 6) {
             const id = parts[1] || `G${groups.length + 1}`;
             const rawType = String(parts[2] || '').trim();
@@ -5200,8 +6087,18 @@ function parseRebuildPlanningResponse(raw, sourceIndex, schema = buildMigrationS
             converged.push(next);
         }
     }
+    const sortedGroups = converged.map((group) => ({ ...group, refs: (0, util_1.unique)(group.refs).sort((a, b) => (sourceIndex.lineByRef.get(a)?.order ?? 0) - (sourceIndex.lineByRef.get(b)?.order ?? 0)) }));
+    const anchorResult = canonicalizeRebuildAnchors(rawAnchors, sortedGroups, sourceIndex, warnings);
+    const anchorOrder = new Map((anchorResult.anchors ?? []).map((anchor, index) => [anchor.id, index]));
+    const anchoredGroups = sortedGroups.map((group) => ({
+        ...group,
+        sceneAnchors: (0, util_1.unique)((group.refs ?? []).map((ref) => anchorResult.anchorByRef.get(ref)).filter(Boolean))
+            .sort((left, right) => Number(anchorOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - Number(anchorOrder.get(right) ?? Number.MAX_SAFE_INTEGER)),
+    }));
     return {
-        groups: converged.map((group) => ({ ...group, refs: (0, util_1.unique)(group.refs).sort((a, b) => (sourceIndex.lineByRef.get(a)?.order ?? 0) - (sourceIndex.lineByRef.get(b)?.order ?? 0)) })),
+        groups: anchoredGroups,
+        anchors: anchorResult.anchors,
+        anchorByRef: anchorResult.anchorByRef,
         droppedRefs: [...droppedRefs],
         warnings,
         totalRefs: knownRefs.size,
@@ -5211,6 +6108,226 @@ function parseRebuildPlanningResponse(raw, sourceIndex, schema = buildMigrationS
 
 function parsePlanningRefs(value) {
     return (0, util_1.unique)(String(value ?? '').split(/[,，、\s]+/u).map((item) => item.trim()).filter((item) => /^.+:s\d+:l\d+$/u.test(item)));
+}
+
+function canonicalizeRebuildAnchors(rawAnchors, groups, sourceIndex, warnings) {
+    const byRef = new Map();
+    const candidates = [];
+    for (const anchor of rawAnchors ?? []) {
+        const refs = [];
+        for (const ref of anchor.refs ?? []) {
+            if (byRef.has(ref)) {
+                warnings.push(`来源行${ref}被重复分配到多个场景锚点，已保留首次归属`);
+                continue;
+            }
+            byRef.set(ref, anchor.id);
+            refs.push(ref);
+        }
+        if (refs.length) candidates.push({ ...anchor, refs });
+    }
+    let fallbackCount = 0;
+    for (const group of groups ?? []) {
+        const missing = (group.refs ?? []).filter((ref) => !byRef.has(ref));
+        if (!missing.length) continue;
+        fallbackCount += missing.length;
+        const buckets = new Map();
+        for (const ref of missing) {
+            const item = sourceIndex?.lineByRef?.get(ref);
+            const prior = (item?.priorSceneAnchors ?? []).length === 1 ? item.priorSceneAnchors[0] : '';
+            const key = prior || `AUTO-${group.id}`;
+            const current = buckets.get(key) ?? [];
+            current.push(ref);
+            buckets.set(key, current);
+        }
+        for (const [key, refs] of buckets.entries()) {
+            const priorItems = refs.map((ref) => sourceIndex?.lineByRef?.get(ref)).filter(Boolean);
+            const gameTimes = (0, util_1.unique)(priorItems.map((item) => normalizeRebuildGameTime(item.priorGameTime)).filter((value) => value !== '未知'));
+            const locations = (0, util_1.unique)(priorItems.map((item) => String(item.priorLocation || '').trim()).filter((value) => value && value !== '未知'));
+            const timeSources = priorItems.map((item) => normalizeRebuildTimeSource(item.priorTimeSource));
+            const id = /^S\d{3,6}$/u.test(key) ? `EXIST-${key}` : key;
+            const fallback = {
+                id,
+                preferredSceneAnchor: /^S\d{3,6}$/u.test(key) ? key : '',
+                gameTime: gameTimes.length === 1 ? gameTimes[0] : '未知',
+                location: locations.length === 1 ? locations[0] : (group.type === '场景' ? group.name : '未知'),
+                timeSource: gameTimes.length === 1 ? (timeSources.includes('未知') ? '未知' : timeSources.includes('推定') ? '推定' : '明确') : '未知',
+                refs,
+                modelOrder: (rawAnchors?.length ?? 0) + candidates.length,
+            };
+            candidates.push(fallback);
+            for (const ref of refs) byRef.set(ref, id);
+        }
+    }
+    if (fallbackCount) warnings.push(`规划模型未给${fallbackCount}条来源事实分配游戏时间或地点，已建立“时间未知”的场景锚点，未虚构日期`);
+    const merged = [];
+    const mergeByKey = new Map();
+    for (const anchor of candidates) {
+        // 相同地点和时段仍可能存在多个连续事件段；只有规划器明确复用同一锚点ID时才合并。
+        const key = String(anchor.id);
+        const existing = mergeByKey.get(key);
+        if (existing) {
+            existing.refs.push(...anchor.refs);
+            existing.modelOrder = Math.min(Number(existing.modelOrder ?? Number.MAX_SAFE_INTEGER), Number(anchor.modelOrder ?? Number.MAX_SAFE_INTEGER));
+        }
+        else {
+            const next = { ...anchor, refs: [...anchor.refs] };
+            mergeByKey.set(key, next);
+            merged.push(next);
+        }
+    }
+    const validated = merged.map((anchor) => ({
+        ...anchor,
+        preferredSceneAnchor: preferredExistingSceneAnchor(anchor, sourceIndex),
+        ...validateRebuildAnchorTime(anchor, anchor.refs, sourceIndex, warnings),
+        location: validateRebuildAnchorLocation(anchor, anchor.refs, sourceIndex, warnings),
+    }));
+    validated.sort((left, right) => compareRebuildGameTime(left.gameTime, right.gameTime)
+        || Number(left.modelOrder ?? Number.MAX_SAFE_INTEGER) - Number(right.modelOrder ?? Number.MAX_SAFE_INTEGER)
+        || Math.min(...left.refs.map((ref) => sourceIndex?.lineByRef?.get(ref)?.order ?? Number.MAX_SAFE_INTEGER)) - Math.min(...right.refs.map((ref) => sourceIndex?.lineByRef?.get(ref)?.order ?? Number.MAX_SAFE_INTEGER))
+        || String(left.id).localeCompare(String(right.id), 'zh-CN', { numeric: true }));
+    const existingIds = new Set((sourceIndex?.lines ?? []).flatMap((item) => item.priorSceneAnchors ?? []).filter((anchor) => /^S\d{3,6}$/u.test(String(anchor))));
+    let nextAnchorNumber = Math.max(0, ...[...existingIds].map((anchor) => Number(String(anchor).slice(1)) || 0)) + 1;
+    const claimedIds = new Set();
+    const anchorByRef = new Map();
+    const anchors = validated.map((anchor, index) => {
+        let sceneAnchor = String(anchor.preferredSceneAnchor || '');
+        if (!/^S\d{3,6}$/u.test(sceneAnchor) || claimedIds.has(sceneAnchor)) sceneAnchor = '';
+        if (!sceneAnchor) {
+            if (!existingIds.size) sceneAnchor = `S${String(index + 1).padStart(3, '0')}`;
+            else {
+                while (existingIds.has(`S${String(nextAnchorNumber).padStart(3, '0')}`) || claimedIds.has(`S${String(nextAnchorNumber).padStart(3, '0')}`)) nextAnchorNumber += 1;
+                sceneAnchor = `S${String(nextAnchorNumber).padStart(3, '0')}`;
+                nextAnchorNumber += 1;
+            }
+        }
+        claimedIds.add(sceneAnchor);
+        const refs = (0, util_1.unique)(anchor.refs).sort((a, b) => (sourceIndex?.lineByRef?.get(a)?.order ?? 0) - (sourceIndex?.lineByRef?.get(b)?.order ?? 0));
+        for (const ref of refs) anchorByRef.set(ref, sceneAnchor);
+        return {
+            id: sceneAnchor,
+            modelId: anchor.id,
+            gameTime: anchor.gameTime,
+            location: String(anchor.location || '未知').trim() || '未知',
+            timeSource: anchor.timeSource,
+            refs,
+        };
+    });
+    return { anchors, anchorByRef };
+}
+
+
+function preferredExistingSceneAnchor(anchor, sourceIndex) {
+    if (/^S\d{3,6}$/u.test(String(anchor?.preferredSceneAnchor || ''))) return String(anchor.preferredSceneAnchor);
+    const perRef = (anchor?.refs ?? []).map((ref) => {
+        const anchors = sourceIndex?.lineByRef?.get(ref)?.priorSceneAnchors ?? [];
+        return anchors.length === 1 ? anchors[0] : '';
+    });
+    if (!perRef.length || perRef.some((value) => !value)) return '';
+    const unique = (0, util_1.unique)(perRef);
+    return unique.length === 1 && /^S\d{3,6}$/u.test(unique[0]) ? unique[0] : '';
+}
+
+function validateRebuildAnchorTime(anchor, refs, sourceIndex, warnings) {
+    let gameTime = normalizeRebuildGameTime(anchor?.gameTime);
+    let timeSource = normalizeRebuildTimeSource(anchor?.timeSource);
+    if (gameTime === '未知') return { gameTime, timeSource: '未知' };
+    const evidence = (refs ?? []).map((ref) => {
+        const item = sourceIndex?.lineByRef?.get(ref);
+        return item ? `${item.title}\n${item.section}\n${item.text}\n${item.priorGameTime || ''}` : '';
+    }).join('\n');
+    const temporalMarker = /(?:第\s*\d+\s*天|\d{4}\s*年|\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|凌晨|黎明|清晨|早晨|上午|中午|下午|傍晚|晚上|夜晚|深夜|当晚|次日|翌日|第二天|几天后|数日后|周后|月后|年后|小时后|分钟后|此前|后来|随后)/u.test(evidence);
+    if (!temporalMarker) {
+        warnings.push(`场景锚点${anchor.id}缺少可验证的游戏时间线索，模型给出的“${gameTime}”已降级为未知`);
+        return { gameTime: '未知', timeSource: '未知' };
+    }
+    if (timeSource === '明确' && !rebuildExplicitTimeMatches(gameTime, evidence)) {
+        timeSource = '推定';
+        warnings.push(`场景锚点${anchor.id}的游戏时间只能由相对时间或上下文推出，已从“明确”降级为“推定”`);
+    }
+    return { gameTime, timeSource };
+}
+
+function rebuildExplicitTimeMatches(gameTime, evidence) {
+    const time = String(gameTime ?? '');
+    const source = String(evidence ?? '');
+    const day = time.match(/第\s*(\d+)\s*天/u)?.[1];
+    if (day && !new RegExp(`第\\s*${day}\\s*天`, 'u').test(source)) return false;
+    const date = time.match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/u);
+    if (date && !new RegExp(`${date[1]}\\D+${Number(date[2])}\\D+${Number(date[3])}`, 'u').test(source)) return false;
+    const dayparts = ['凌晨', '黎明', '清晨', '早晨', '上午', '中午', '下午', '傍晚', '晚上', '夜晚', '深夜'];
+    const named = dayparts.find((part) => time.includes(part));
+    if (named && !source.includes(named)) return false;
+    return Boolean(day || date || named || source.includes(time));
+}
+
+
+function validateRebuildAnchorLocation(anchor, refs, sourceIndex, warnings) {
+    const location = String(anchor?.location || '未知').trim() || '未知';
+    if (location === '未知') return '未知';
+    const evidence = (refs ?? []).map((ref) => {
+        const item = sourceIndex?.lineByRef?.get(ref);
+        return item ? `${item.title}\n${item.section}\n${item.text}\n${item.priorLocation || ''}` : '';
+    }).join('\n');
+    const normalizedLocation = normalizeRebuildLocationEvidence(location);
+    const normalizedEvidence = normalizeRebuildLocationEvidence(evidence);
+    const roomTokens = location.match(/(?:[A-Za-z]?\d{2,6}(?:号|室|房)?)/gu) ?? [];
+    const roomMatched = roomTokens.some((token) => evidence.includes(token));
+    const directMatched = normalizedLocation.length >= 2 && normalizedEvidence.length >= 2
+        && (normalizedEvidence.includes(normalizedLocation) || normalizedLocation.includes(normalizedEvidence));
+    if (directMatched || roomMatched) return location;
+    warnings.push(`场景锚点${anchor.id}缺少可验证的地点线索，模型给出的“${location}”已降级为未知`);
+    return '未知';
+}
+
+function normalizeRebuildLocationEvidence(value) {
+    return (0, util_1.normalizeFact)(String(value ?? ''))
+        .replace(/(?:发生地点|当前地点|所在地|场景|地点|位置)/gu, '')
+        .replace(/(?:内部|内|外部|外)$/gu, '');
+}
+
+function compareRebuildGameTime(leftValue, rightValue) {
+    const left = parseComparableRebuildGameTime(leftValue);
+    const right = parseComparableRebuildGameTime(rightValue);
+    if (!left || !right || left.kind !== right.kind) return 0;
+    return left.value - right.value;
+}
+
+function parseComparableRebuildGameTime(value) {
+    const text = String(value ?? '').trim();
+    let match = text.match(/第\s*(\d{1,6})\s*天/u);
+    if (match) return { kind: 'relative-day', value: Number(match[1]) * 10 + rebuildDaypartOrder(text) };
+    match = text.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/u) || text.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/u);
+    if (match) return { kind: 'date', value: Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000 + rebuildDaypartOrder(text) / 10 };
+    return null;
+}
+
+function rebuildDaypartOrder(value) {
+    const text = String(value ?? '');
+    if (/(?:凌晨|黎明)/u.test(text)) return 0;
+    if (/(?:清晨|早晨|上午)/u.test(text)) return 1;
+    if (/(?:中午|午间)/u.test(text)) return 2;
+    if (/(?:下午|傍晚)/u.test(text)) return 3;
+    if (/(?:晚上|夜晚|深夜|当晚)/u.test(text)) return 4;
+    return 5;
+}
+
+function normalizeRebuildGameTime(value) {
+    const text = String(value ?? '').replace(/\s+/gu, ' ').trim();
+    if (!text || /^(?:无|不明|未知时间|无法确定)$/u.test(text)) return '未知';
+    return text.slice(0, 80);
+}
+
+function normalizeRebuildTimeSource(value) {
+    const text = String(value ?? '').trim();
+    return TIME_SOURCES.has(text) ? text : '未知';
+}
+
+function normalizeRebuildTemporalState(value, type = '') {
+    const text = String(value ?? '').trim();
+    if (TEMPORAL_STATES.has(text)) return text;
+    if (type === '事件') return '已完成';
+    if (type === '基础设定') return '长期';
+    return '当前';
 }
 
 function buildPlannedRebuildTasks(plan, sourceIndex, bodyBudget = MIGRATION_PLANNED_GROUP_BUDGET) {
@@ -5260,6 +6377,9 @@ function buildPlannedRebuildTasks(plan, sourceIndex, bodyBudget = MIGRATION_PLAN
             task.fragmentCount = chunks.length;
             task.sourceRefs = chunk.map((item) => item.ref);
             task.allowedSourceRefs = new Set(task.sourceRefs);
+            task.sourceLineByRef = new Map(chunk.map((item) => [item.ref, item]));
+            task.sceneAnchors = (0, util_1.unique)(task.sourceRefs.map((ref) => plan?.anchorByRef?.get(ref)).filter(Boolean));
+            task.anchorCatalog = (plan?.anchors ?? []).filter((anchor) => task.sceneAnchors.includes(anchor.id));
             task.sourceLineBody = formatPlannedSourceLines(chunk);
             task.compactedRecords = 0;
             tasks.push(task);
@@ -5295,10 +6415,15 @@ function packPlannedRebuildTasks(tasks, bodyBudget = MIGRATION_PLANNED_JOINT_BUD
             name: task.stableName,
             newTypeProposal: task.newTypeProposal === true,
             sourceRefs: [...(task.sourceRefs ?? [])],
+            sceneAnchors: [...(task.sceneAnchors ?? [])],
+            anchorCatalog: (0, util_1.clone)(task.anchorCatalog ?? []),
             sourceLineBody: task.sourceLineBody,
         }));
         batch.sourceRefs = (0, util_1.unique)(current.flatMap((task) => task.sourceRefs ?? []));
         batch.allowedSourceRefs = new Set(batch.sourceRefs);
+        batch.sourceLineByRef = new Map(current.flatMap((task) => [...(task.sourceLineByRef ?? new Map()).entries()]));
+        batch.sceneAnchors = (0, util_1.unique)(current.flatMap((task) => task.sceneAnchors ?? []));
+        batch.anchorCatalog = [...new Map(current.flatMap((task) => task.anchorCatalog ?? []).map((anchor) => [anchor.id, (0, util_1.clone)(anchor)])).values()];
         batch.sourceLineBody = current.map((task) => `===GROUP ${task.planGroupId}|${task.outputType}|${task.stableName}===\n${task.sourceLineBody}`).join('\n\n');
         batch.compactedRecords = current.reduce((sum, task) => sum + Number(task.compactedRecords || 0), 0);
         output.push(batch);
@@ -5472,6 +6597,10 @@ function rebuildSourceLineRepresented(item, blocks) {
     const uidCandidates = (blocks ?? []).filter((block) => (block.sourceUids ?? []).includes(String(item.uid)));
     const exactRefCandidates = uidCandidates.filter((block) => (block.sourceRefs ?? []).includes(String(item.ref)));
     const candidates = exactRefCandidates.length ? exactRefCandidates : uidCandidates;
+    for (const block of candidates) {
+        const explicit = (block.lineEvidence ?? []).some((evidence) => evidence.explicit === true && (evidence.refs ?? []).includes(String(item.ref)));
+        if (explicit) return true;
+    }
     const metadataMayRepresentSource = /(?:别名|名称|关键词|触发词)/u.test(String(item?.section ?? ''));
     for (const block of candidates) {
         const evidenceLines = [
@@ -6060,6 +7189,11 @@ function rebuildParsePolicy(batch, records, schema = buildMigrationSchema()) {
         allowedEvidenceUids,
         evidenceRecordByUid: new Map(records.map((record) => [String(record.uid), record])),
         allowedSectionsByType: schema.allowedSectionsByType,
+        sourceLineByRef: batch?.sourceLineByRef instanceof Map ? batch.sourceLineByRef : new Map(),
+        defaultSceneAnchors: [...(batch?.sceneAnchors ?? [])],
+        allowedSceneAnchors: new Set(batch?.sceneAnchors ?? []),
+        anchorCatalog: new Map((batch?.anchorCatalog ?? []).map((anchor) => [anchor.id, anchor])),
+        sceneAnchorsByGroup: new Map((batch?.jointGroups ?? []).map((group) => [String(group.id), new Set(group.sceneAnchors ?? [])])),
         schema,
     };
     if (phase === 'planned' || phase === 'planned-joint') {
@@ -6374,7 +7508,14 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
     for (const block of prepared) if (block?.newTypeProposalAccepted === true) allowedTypes.add(block.type);
     const normalizedPrepared = prepared.map((block) => {
         const type = resolveMigrationType(block.type, policy.schema);
-        return { ...block, type, title: `${type}｜${block.name}` };
+        const temporal = resolveBlockTemporalMetadata({
+            sceneAnchors: (block.sceneAnchors ?? []).length ? block.sceneAnchors : policy.defaultSceneAnchors,
+            gameTime: block.gameTime,
+            timeSource: block.timeSource,
+            temporalState: block.temporalState,
+            type,
+        }, policy);
+        return { ...block, ...temporal, type, title: `${type}｜${block.name}` };
     });
     const parsed = (0, information_point_1.prepareInformationBlocks)(normalizedPrepared);
     const output = [];
@@ -6386,6 +7527,7 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
         const sections = [];
         const sourceUids = new Set();
         const sourceRefs = new Set();
+        const lineEvidence = [];
         const entryEvidenceUids = (0, util_1.unique)((block.mergeSourceUids ?? [])
             .map((uid) => String(uid))
             .filter((uid) => knownUids.has(uid) && (!allowedEvidenceUids || allowedEvidenceUids.has(uid))));
@@ -6437,7 +7579,8 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
                     continue;
                 }
                 let uniqueIds = (0, util_1.unique)(ids);
-                const uniqueRefs = (0, util_1.unique)(lineRefs.length ? lineRefs : entrySourceRefs);
+                const explicitLineRefs = (0, util_1.unique)(lineRefs);
+                const uniqueRefs = (0, util_1.unique)(explicitLineRefs.length ? explicitLineRefs : entrySourceRefs);
                 // [MA-REBUILD-09] 通用格式以“合并来源”为条目级证据。模型若没有在每一行重复UID，
                 // 可继承该条目的有效合并来源；单来源批次也可安全继承唯一UID。多来源且没有条目级来源时仍拒绝。
                 if (!uniqueIds.length && entryEvidenceUids.length) {
@@ -6472,9 +7615,16 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
                     diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '该行与所引用旧条目缺少足够的词语或事实锚点，已阻止无证据改写' });
                     continue;
                 }
+                if (explicitLineRefs.length && isGeneralizedRebuildRuleLine(block.type, section.name, line)
+                    && !rebuildRuleLineSupported(line, explicitLineRefs, policy)) {
+                    diagnostics.invalidLines.push({ title: block.title, section: section.name, line, reason: '单次行为或单一场景证据不足以提炼为长期运行规则' });
+                    continue;
+                }
                 uniqueIds.forEach((id) => sourceUids.add(id));
                 uniqueRefs.forEach((ref) => sourceRefs.add(ref));
-                lines.push((0, parser_1.normalizePointLine)(line));
+                const normalizedLine = (0, parser_1.normalizePointLine)(line);
+                lines.push(normalizedLine);
+                lineEvidence.push({ section: section.name, line: normalizedLine, refs: uniqueRefs, explicit: explicitLineRefs.length > 0 });
             }
             if (lines.length) {
                 const safeLines = removeUnresolvedSlotConflicts(section.name, (0, util_1.unique)(lines), diagnostics, block.title);
@@ -6489,7 +7639,7 @@ function parseRebuildResponse(raw, knownUids, diagnostics = { invalidLines: [], 
             const id = String(uid);
             if (knownUids.has(id) && (!allowedEvidenceUids || allowedEvidenceUids.has(id))) sourceUids.add(id);
         }
-        output.push({ ...block, sections, sourceUids: [...sourceUids], sourceRefs: [...sourceRefs] });
+        output.push(applyRebuildTemporalSettlement({ ...block, sections, sourceUids: [...sourceUids], sourceRefs: [...sourceRefs], lineEvidence }, diagnostics));
     }
     if (!output.length) {
         const invalid = Math.max(0, (diagnostics.invalidLines?.length || 0) - invalidStart);
@@ -6542,6 +7692,106 @@ function migrationBigrams(value) {
     return out;
 }
 
+function isGeneralizedRebuildRuleLine(type, section, line) {
+    const ruleSections = new Set(['自然规则', '社会规则', '制度', '局部约束', '功能', '限制', '稳定', '关系']);
+    if (!ruleSections.has(String(section ?? ''))) return false;
+    if (!['基础设定', '世界', '场景', '物品', '人物'].includes(String(type ?? ''))) return false;
+    return /(?:每当|一旦|只要|必须|不得|只能|固定|通常|会在|持续至|触发|条件|约定|制度|规则|机制|流程|权限|限制)/u.test(String(line ?? ''));
+}
+
+function rebuildRuleLineSupported(line, refs, policy = {}) {
+    const sourceLineByRef = policy.sourceLineByRef instanceof Map ? policy.sourceLineByRef : null;
+    if (!sourceLineByRef?.size) return true;
+    const sourceItems = (refs ?? []).map((ref) => sourceLineByRef.get(ref)).filter(Boolean);
+    if (!sourceItems.length) return false;
+    const explicitRule = sourceItems.some((item) => /(?:每当|一旦|只要|必须|不得|只能|固定|通常|触发|条件|约定|制度|规则|机制|流程|权限|限制)/u.test(String(item.text ?? '')));
+    if (explicitRule) return true;
+    const refToAnchor = new Map();
+    const catalog = policy.anchorCatalog instanceof Map ? [...policy.anchorCatalog.values()] : (policy.anchorCatalog ?? []);
+    for (const anchor of catalog) for (const ref of anchor.refs ?? []) refToAnchor.set(ref, anchor.id);
+    const anchors = new Set((refs ?? []).map((ref) => refToAnchor.get(ref)).filter(Boolean));
+    if (anchors.size < 2) return false;
+    const fact = normalizeMigrationEvidenceText(stripGenericFactLabel(line));
+    const factAnchors = migrationEvidenceAnchors(fact);
+    const factGrams = migrationBigrams(fact);
+    const repeatedSupport = sourceItems.filter((item) => {
+        const source = normalizeMigrationEvidenceText(item.text);
+        const anchorHit = factAnchors.some((anchor) => source.includes(anchor));
+        const shared = [...factGrams].filter((gram) => source.includes(gram)).length;
+        const coverage = factGrams.size ? shared / factGrams.size : 0;
+        return anchorHit || coverage >= 0.28;
+    }).length;
+    return repeatedSupport >= 2;
+}
+
+function applyRebuildTemporalSettlement(rawBlock, diagnostics = { warnings: [] }) {
+    const block = (0, util_1.clone)(rawBlock);
+    block.temporalState = normalizeRebuildTemporalState(block.temporalState, block.type);
+    block.sceneAnchors = (0, util_1.unique)(block.sceneAnchors ?? []);
+    block.primarySceneAnchor = block.primarySceneAnchor || block.sceneAnchors[0] || '';
+    block.gameTime = normalizeRebuildGameTime(block.gameTime);
+    block.timeSource = normalizeRebuildTimeSource(block.timeSource);
+    block.anchorLocation = String(block.anchorLocation || '未知').trim() || '未知';
+    if (!['已完成', '已结束'].includes(block.temporalState)) return block;
+    const dynamicByType = {
+        人物: new Set(['当前']),
+        场景: new Set(['当前状态', '在场', '当前资源', '活动关联']),
+        物品: new Set(['当前']),
+    };
+    const dynamic = dynamicByType[block.type];
+    if (!(dynamic instanceof Set)) return block;
+    const retained = [];
+    const moved = [];
+    const lineMap = new Map();
+    for (const section of block.sections ?? []) {
+        if (!dynamic.has(section.name)) {
+            retained.push(section);
+            continue;
+        }
+        for (const line of section.lines ?? []) {
+            const pastLine = toCompletedRebuildFactLine(line, section.name);
+            moved.push(pastLine);
+            lineMap.set(`${section.name}\u0000${line}`, pastLine);
+        }
+    }
+    if (!moved.length) return block;
+    let history = retained.find((section) => section.name === '固定事实');
+    if (!history) {
+        history = { name: '固定事实', lines: [], empty: false };
+        retained.push(history);
+    }
+    history.lines = dedupeMigrationLines([...(history.lines ?? []), ...moved]);
+    history.empty = history.lines.length === 0;
+    block.sections = retained.filter((section) => section.lines?.length);
+    block.lineEvidence = (block.lineEvidence ?? []).map((evidence) => {
+        const replacement = lineMap.get(`${evidence.section}\u0000${evidence.line}`);
+        return replacement ? { ...evidence, section: '固定事实', line: replacement } : evidence;
+    });
+    diagnostics.warnings ?? (diagnostics.warnings = []);
+    diagnostics.warnings.push(`${block.title}已标记为${block.temporalState}，${moved.length}条旧动态状态已转为过去完成态，未继续占用当前栏目`);
+    return block;
+}
+
+function toCompletedRebuildFactLine(value, sourceSection = '') {
+    const line = (0, parser_1.normalizePointLine)(String(value ?? '').trim());
+    if (/^(?:曾|过去|此前|当时|已结束|已完成|历史状态)/u.test(line)) return line;
+    const field = line.match(/^([^：:]{1,24})\s*[：:]\s*(.+)$/u);
+    const rawLabel = String(field?.[1] || '').replace(/^当前/u, '').trim();
+    const valueText = String(field?.[2] || line)
+        .replace(/正在/gu, '曾')
+        .replace(/当前/gu, '当时')
+        .replace(/仍然|仍在/gu, '当时')
+        .trim();
+    const label = ({
+        在场: '历史在场',
+        当前状态: '历史状态',
+        当前资源: '历史资源',
+        活动关联: '历史关联',
+        当前: /位置/u.test(rawLabel) ? '历史位置' : /目标/u.test(rawLabel) ? '历史目标' : /状态|伤势|情绪/u.test(rawLabel) ? '历史状态' : `历史${rawLabel || '事实'}`,
+    })[sourceSection] || `历史${rawLabel || '事实'}`;
+    return `${label}：${valueText}`;
+}
+
 function preserveSparseRebuildBlocks(blocks, records, schema, diagnostics = { warnings: [] }) {
     const recordByUid = new Map((records ?? []).map((record) => [String(record.uid), record]));
     return (blocks ?? []).map((rawBlock) => {
@@ -6552,6 +7802,9 @@ function preserveSparseRebuildBlocks(blocks, records, schema, diagnostics = { wa
         })).filter((section) => section.lines.length);
         const factCount = allBlockFactLines(block).length;
         if (block.type === '世界' && isGenericWorldName(block.name)) stabilizeGenericWorldBlockName(block, recordByUid);
+        const explicitlyCoveredRefs = new Set((block.lineEvidence ?? []).filter((item) => item.explicit === true).flatMap((item) => item.refs ?? []));
+        const allPlannedRefsCompressed = (block.sourceRefs ?? []).length > 0 && (block.sourceRefs ?? []).every((ref) => explicitlyCoveredRefs.has(String(ref)));
+        if (allPlannedRefsCompressed) return block;
         if (factCount >= 2 || !['世界', '基础设定', '物品', '场景', '人物'].includes(block.type)) return block;
         const allowed = schema?.allowedSectionsByType?.[block.type] ?? TYPE_ALLOWED_SECTIONS[block.type];
         const byName = new Map((block.sections ?? []).map((section) => [section.name, section]));
@@ -6756,6 +8009,26 @@ function parseUniversalRebuildFormat(raw, diagnostics, policy = {}) {
         }
         const sections = [...sectionsByName.entries()].map(([sectionName, lines]) => ({ name: sectionName, lines: (0, util_1.unique)(lines), empty: false })).filter((sectionItem) => sectionItem.lines.length);
         if (!sections.length) continue;
+        const groupId = String(metadata.组ID ?? '').trim();
+        const groupSceneAnchors = policy.sceneAnchorsByGroup instanceof Map ? policy.sceneAnchorsByGroup.get(groupId) : null;
+        const allowedSceneAnchors = groupSceneAnchors instanceof Set
+            ? groupSceneAnchors
+            : policy.allowedSceneAnchors instanceof Set ? policy.allowedSceneAnchors : null;
+        const requestedSceneAnchors = parseSceneAnchorList(metadata.场景锚点);
+        const fallbackSceneAnchors = (0, util_1.unique)(groupSceneAnchors instanceof Set ? [...groupSceneAnchors] : policy.defaultSceneAnchors ?? []);
+        const sceneAnchors = (0, util_1.unique)((requestedSceneAnchors.length ? requestedSceneAnchors : fallbackSceneAnchors)
+            .filter((anchor) => !allowedSceneAnchors || allowedSceneAnchors.has(anchor)));
+        if (requestedSceneAnchors.length && !sceneAnchors.length && fallbackSceneAnchors.length) {
+            diagnostics.warnings.push(`${type}｜${name}填写了不属于当前规划组的场景锚点，已改用规划阶段锚点`);
+            sceneAnchors.push(...fallbackSceneAnchors.filter((anchor) => !allowedSceneAnchors || allowedSceneAnchors.has(anchor)));
+        }
+        const temporal = resolveBlockTemporalMetadata({
+            sceneAnchors,
+            gameTime: metadata.游戏时间,
+            timeSource: metadata.时间来源,
+            temporalState: metadata.时态,
+            type,
+        }, policy);
         blocks.push({
             rawTitle: `${type}｜${name}`,
             title: `${type}｜${name}`,
@@ -6767,9 +8040,16 @@ function parseUniversalRebuildFormat(raw, diagnostics, policy = {}) {
             sourceRefs: parseSourceRefList(metadata.来源行),
             newTypeProposalAccepted: proposalAccepted,
             proposedTypeDescription: proposalDescription,
+            planGroupId: groupId,
             retentionMode: String(metadata.保留方式 ?? '').trim(),
             mergeIntoTitle: (0, util_1.normalizeTitle)(String(metadata.并入条目 ?? '').trim()),
             mergeIntoSection: String(metadata.并入栏目 ?? '').trim(),
+            sceneAnchors: temporal.sceneAnchors,
+            primarySceneAnchor: temporal.primarySceneAnchor,
+            gameTime: temporal.gameTime,
+            timeSource: temporal.timeSource,
+            temporalState: temporal.temporalState,
+            anchorLocation: temporal.anchorLocation,
         });
     }
     if (blocks.length) {
@@ -6777,6 +8057,39 @@ function parseUniversalRebuildFormat(raw, diagnostics, policy = {}) {
         diagnostics.warnings.push('模型返回了通用“新条目提案”格式，已在本地转换为世界书条目');
     }
     return blocks;
+}
+
+function parseSceneAnchorList(value) {
+    return (0, util_1.unique)(String(value ?? '').toUpperCase().match(/S\d{1,6}/gu) ?? [])
+        .map((anchor) => `S${String(Number(anchor.slice(1)) || 0).padStart(3, '0')}`)
+        .filter((anchor) => anchor !== 'S000');
+}
+
+function resolveBlockTemporalMetadata(metadata, policy = {}) {
+    const catalog = policy.anchorCatalog instanceof Map
+        ? policy.anchorCatalog
+        : new Map((policy.anchorCatalog ?? []).map((anchor) => [anchor.id, anchor]));
+    const sceneAnchors = (0, util_1.unique)(metadata.sceneAnchors ?? []).filter(Boolean);
+    const primarySceneAnchor = sceneAnchors[0] || '';
+    const selected = sceneAnchors.map((anchor) => catalog.get(anchor)).filter(Boolean);
+    const gameTimes = (0, util_1.unique)(selected.map((anchor) => normalizeRebuildGameTime(anchor.gameTime)).filter((value) => value && value !== '未知'));
+    const locations = (0, util_1.unique)(selected.map((anchor) => String(anchor.location || '').trim()).filter((value) => value && value !== '未知'));
+    const sources = selected.map((anchor) => normalizeRebuildTimeSource(anchor.timeSource));
+    const gameTime = selected.length && gameTimes.length < selected.length
+        ? (gameTimes.length ? `${gameTimes[0]} 至 未知` : '未知')
+        : gameTimes.length > 1 ? `${gameTimes[0]} 至 ${gameTimes.at(-1)}` : gameTimes[0] || normalizeRebuildGameTime(metadata.gameTime);
+    const timeSource = selected.length
+        ? (sources.includes('未知') ? '未知' : sources.includes('推定') ? '推定' : '明确')
+        : normalizeRebuildTimeSource(metadata.timeSource);
+    const anchorLocation = locations.length > 1 ? locations.join('、') : locations[0] || '未知';
+    return {
+        sceneAnchors,
+        primarySceneAnchor,
+        gameTime,
+        timeSource,
+        temporalState: normalizeRebuildTemporalState(metadata.temporalState, metadata.type),
+        anchorLocation,
+    };
 }
 
 function parseUniversalUidList(value) {
@@ -7109,6 +8422,8 @@ function mergeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
         }
         candidate.sourceUids = (0, util_1.unique)([...(candidate.sourceUids ?? []), ...(incoming.sourceUids ?? [])]);
         candidate.sourceRefs = (0, util_1.unique)([...(candidate.sourceRefs ?? []), ...(incoming.sourceRefs ?? [])]);
+        candidate.lineEvidence = [...(candidate.lineEvidence ?? []), ...(incoming.lineEvidence ?? [])];
+        mergeRebuildTemporalMetadata(candidate, incoming);
         candidate.keywords = (0, util_1.unique)([...(candidate.keywords ?? []), ...(incoming.keywords ?? []), incoming.name]);
         const byName = new Map(candidate.sections.map((section) => [section.name, section]));
         if (candidate.type === '事件' && (0, util_1.normalizeFact)(candidate.name) !== (0, util_1.normalizeFact)(incoming.name)) {
@@ -7139,6 +8454,20 @@ function mergeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
         diagnostics.convergedEntries += 1;
     }
     return finalizeRebuildBlocks(applyAbsorptionProposals(output, diagnostics), diagnostics);
+}
+
+function mergeRebuildTemporalMetadata(target, incoming) {
+    target.sceneAnchors = (0, util_1.unique)([...(target.sceneAnchors ?? []), ...(incoming.sceneAnchors ?? [])]);
+    target.primarySceneAnchor ||= incoming.primarySceneAnchor || target.sceneAnchors[0] || '';
+    if ((!target.gameTime || target.gameTime === '未知') && incoming.gameTime) target.gameTime = incoming.gameTime;
+    if ((!target.anchorLocation || target.anchorLocation === '未知') && incoming.anchorLocation) target.anchorLocation = incoming.anchorLocation;
+    if (target.timeSource === '未知' && incoming.timeSource) target.timeSource = incoming.timeSource;
+    const states = new Set([target.temporalState, incoming.temporalState].filter(Boolean));
+    if (states.has('长期')) target.temporalState = '长期';
+    else if (states.has('持续')) target.temporalState = '持续';
+    else if (states.has('当前')) target.temporalState = '当前';
+    else if (states.has('已完成')) target.temporalState = '已完成';
+    else if (states.has('已结束')) target.temporalState = '已结束';
 }
 
 function sameConvergentBlock(leftBlock, rightBlock) {
@@ -7236,7 +8565,7 @@ function sectionLines(block, name) {
 }
 
 function allBlockFactLines(block) {
-    return (block.sections ?? []).filter((section) => section.name !== '别名').flatMap((section) => section.lines ?? []);
+    return (block.sections ?? []).filter((section) => section.name !== '别名' && section.name !== REBUILD_SPACETIME_SECTION).flatMap((section) => section.lines ?? []);
 }
 
 function stripGenericFactLabel(value) {
@@ -7245,7 +8574,7 @@ function stripGenericFactLabel(value) {
 
 
 function finalizeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
-    const output = disambiguateRebuildIdentities((blocks ?? []).map((block) => (0, util_1.clone)(block)), diagnostics);
+    const output = disambiguateRebuildIdentities((blocks ?? []).map((block) => applyRebuildTemporalSettlement((0, util_1.clone)(block), diagnostics)), diagnostics);
     diagnostics.removedDuplicateFacts ?? (diagnostics.removedDuplicateFacts = 0);
     for (const block of output) {
         const seen = [];
@@ -7255,11 +8584,13 @@ function finalizeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
             for (const line of dedupeMigrationLines(section.lines ?? [])) {
                 const fact = normalizeRebuildFact(line);
                 if (!fact || isTautologicalRebuildLine(block, line)) continue;
-                if (seen.some((item) => equivalentRebuildFacts(item, fact))) {
+                const duplicate = seen.find((item) => equivalentRebuildFacts(item.fact, fact));
+                if (duplicate) {
+                    transferBlockLineEvidence(block, section.name, line, block, duplicate.section, duplicate.line);
                     diagnostics.removedDuplicateFacts += 1;
                     continue;
                 }
-                seen.push(fact);
+                seen.push({ fact, section: section.name, line });
                 next.push(line);
             }
             section.lines = next;
@@ -7283,6 +8614,8 @@ function finalizeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
             const leftScore = rebuildFactHostScore(left.block, left.section, left.line);
             const rightScore = rebuildFactHostScore(right.block, right.section, right.line);
             const loser = rightScore > leftScore ? left : right;
+            const winner = loser === left ? right : left;
+            transferBlockLineEvidence(loser.block, loser.section.name, loser.line, winner.block, winner.section.name, winner.line);
             loser.removed = true;
             diagnostics.removedDuplicateFacts += 1;
         }
@@ -7290,9 +8623,50 @@ function finalizeRebuildBlocks(blocks, diagnostics = { warnings: [] }) {
     for (const ref of references.filter((item) => item.removed)) {
         ref.section.lines = (ref.section.lines ?? []).filter((line) => line !== ref.line);
     }
-    for (const block of output) block.sections = (block.sections ?? []).filter((section) => section.lines?.length);
+    for (const block of output) {
+        block.sections = (block.sections ?? []).filter((section) => section.lines?.length);
+        block.lineEvidence = normalizeBlockLineEvidence(block);
+    }
     if (diagnostics.removedDuplicateFacts) diagnostics.warnings.push(`全局收束已移除${diagnostics.removedDuplicateFacts}条重复子项或跨条目重复事实`);
     return output.filter((block) => block.sections?.length);
+}
+
+function transferBlockLineEvidence(fromBlock, fromSection, fromLine, toBlock, toSection, toLine) {
+    const source = (fromBlock.lineEvidence ?? []).filter((item) => item.section === fromSection && item.line === fromLine);
+    if (!source.length) return;
+    const target = (toBlock.lineEvidence ?? []).find((item) => item.section === toSection && item.line === toLine);
+    const refs = (0, util_1.unique)(source.flatMap((item) => item.refs ?? []));
+    if (target) {
+        target.refs = (0, util_1.unique)([...(target.refs ?? []), ...refs]);
+        target.explicit = target.explicit === true || source.some((item) => item.explicit === true);
+    }
+    else {
+        toBlock.lineEvidence ?? (toBlock.lineEvidence = []);
+        toBlock.lineEvidence.push({ section: toSection, line: toLine, refs, explicit: source.some((item) => item.explicit === true) });
+    }
+    toBlock.sourceRefs = (0, util_1.unique)([...(toBlock.sourceRefs ?? []), ...refs]);
+}
+
+function normalizeBlockLineEvidence(block) {
+    const facts = new Map();
+    for (const section of block.sections ?? []) {
+        for (const line of section.lines ?? []) facts.set(`${section.name}\u0000${line}`, { section: section.name, line });
+    }
+    const output = new Map();
+    for (const evidence of block.lineEvidence ?? []) {
+        let key = `${evidence.section}\u0000${evidence.line}`;
+        if (!facts.has(key)) {
+            const fact = normalizeRebuildFact(evidence.line);
+            const match = [...facts.values()].find((item) => equivalentRebuildFacts(normalizeRebuildFact(item.line), fact));
+            if (!match) continue;
+            key = `${match.section}\u0000${match.line}`;
+        }
+        const current = output.get(key) ?? { ...facts.get(key), refs: [], explicit: false };
+        current.refs = (0, util_1.unique)([...(current.refs ?? []), ...(evidence.refs ?? [])]);
+        current.explicit = current.explicit === true || evidence.explicit === true;
+        output.set(key, current);
+    }
+    return [...output.values()];
 }
 
 function disambiguateRebuildIdentities(blocks, diagnostics) {
@@ -7399,6 +8773,15 @@ function applyAbsorptionProposals(blocks, diagnostics) {
         }
         section.lines = (0, util_1.unique)([...(section.lines ?? []), summary]);
         target.sourceUids = (0, util_1.unique)([...(target.sourceUids ?? []), ...(child.sourceUids ?? [])]);
+        target.sourceRefs = (0, util_1.unique)([...(target.sourceRefs ?? []), ...(child.sourceRefs ?? [])]);
+        target.lineEvidence ?? (target.lineEvidence = []);
+        target.lineEvidence.push({
+            section: sectionName,
+            line: summary,
+            refs: (0, util_1.unique)(child.sourceRefs ?? []),
+            explicit: (child.lineEvidence ?? []).some((item) => item.explicit === true),
+        });
+        mergeRebuildTemporalMetadata(target, child);
         target.keywords = (0, util_1.unique)([...(target.keywords ?? []), child.name, ...(child.keywords ?? []), ...sectionLines(child, '别名')]).filter(Boolean);
         removed.add(child);
         diagnostics.absorbedEntries += 1;
@@ -7594,6 +8977,7 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
     const usedNumericUids = new Set(Object.values(originalData?.entries ?? {}).map((raw) => Number(raw?.uid)).filter(Number.isFinite));
     const rebuildBatchId = nextRebuildBatchId(originalData);
     let rebuildSequence = 0;
+    const anchorTypeSequences = new Map();
     let rebuiltEntries = 0;
     let knowledgeLines = 0;
     let mergedOldEntries = 0;
@@ -7619,9 +9003,20 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
         const uid = String(raw.uid ?? mapKey);
         raw.uid = Number.isFinite(Number(raw.uid)) ? Number(raw.uid) : Number(mapKey);
         rebuildSequence += 1;
-        const numberedTitle = `${block.type}｜${rebuildBatchId}-${String(rebuildSequence).padStart(2, '0')}｜${block.name}`;
+        const primarySceneAnchor = /^S\d{3,6}$/u.test(String(block.primarySceneAnchor ?? '')) ? String(block.primarySceneAnchor) : '';
+        const typeCode = rebuildTypeCode(block.type);
+        const sequenceKey = `${primarySceneAnchor || rebuildBatchId}|${typeCode}`;
+        const anchorSequence = Number(anchorTypeSequences.get(sequenceKey) || 0) + 1;
+        anchorTypeSequences.set(sequenceKey, anchorSequence);
+        const derivedCode = primarySceneAnchor ? `${primarySceneAnchor}-${typeCode}${String(anchorSequence).padStart(2, '0')}` : `${rebuildBatchId}-${String(rebuildSequence).padStart(2, '0')}`;
+        const numberedTitle = `${block.type}｜${derivedCode}｜${block.name}`;
         raw.comment = numberedTitle;
-        const safeSections = block.sections.map((section) => ({
+        const spacetimeSection = buildRebuildSpacetimeSection(block);
+        const sourceSections = [
+            ...(spacetimeSection ? [spacetimeSection] : []),
+            ...(block.sections ?? []).filter((section) => section.name !== REBUILD_SPACETIME_SECTION),
+        ];
+        const safeSections = sourceSections.map((section) => ({
             ...section,
             lines: (0, util_1.unique)((section.lines ?? []).map((line) => (0, parser_1.sanitizeWorldbookLine)(line)).filter(Boolean)),
         })).filter((section) => section.lines.length);
@@ -7647,10 +9042,18 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
             semanticTitle: block.title,
             rebuildBatchId,
             rebuildSequence,
+            derivedCode,
             rebuilt: true,
-            rebuildVersion: 8,
+            rebuildVersion: 9,
             epistemic: block.type === '人物',
             sourceUids,
+            sourceRefs: (0, util_1.unique)(block.sourceRefs ?? []),
+            sceneAnchors: (0, util_1.unique)(block.sceneAnchors ?? []),
+            primarySceneAnchor: primarySceneAnchor || undefined,
+            gameTime: normalizeRebuildGameTime(block.gameTime),
+            timeSource: normalizeRebuildTimeSource(block.timeSource),
+            temporalState: normalizeRebuildTemporalState(block.temporalState, block.type),
+            anchorLocation: String(block.anchorLocation || '未知').trim() || '未知',
             updatedAt: Date.now(),
         };
         // 成功重建后的新主档必须解除旧归档标记，避免“disable=false 但 archive=true”的半归档状态。
@@ -7680,7 +9083,7 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
             if (extension && typeof extension === 'object') {
                 delete extension.archive;
                 extension.rebuilt = true;
-                extension.rebuildVersion = 8;
+                extension.rebuildVersion = 9;
                 extension.updatedAt = Date.now();
             }
             recoveredUi20Archives += 1;
@@ -7722,6 +9125,25 @@ function nextRebuildBatchId(data) {
         if (extMatch) max = Math.max(max, Number(extMatch[1]) || 0);
     }
     return `R${String(max + 1).padStart(3, '0')}`;
+}
+
+function rebuildTypeCode(type) {
+    if (REBUILD_TYPE_CODES.has(type)) return REBUILD_TYPE_CODES.get(type);
+    const normalized = (0, util_1.safeId)(String(type ?? '')).replace(/[^A-Za-z0-9]/gu, '').toUpperCase();
+    return normalized.slice(0, 1) || 'X';
+}
+
+function buildRebuildSpacetimeSection(block) {
+    const sceneAnchors = (0, util_1.unique)(block?.sceneAnchors ?? []).filter((anchor) => /^S\d{3,6}$/u.test(String(anchor)));
+    if (!sceneAnchors.length) return null;
+    const lines = [
+        `场景锚点：${sceneAnchors.join('、')}`,
+        `游戏时间：${normalizeRebuildGameTime(block?.gameTime)}`,
+        `地点：${String(block?.anchorLocation || '未知').trim() || '未知'}`,
+        `时间来源：${normalizeRebuildTimeSource(block?.timeSource)}`,
+        `时态：${normalizeRebuildTemporalState(block?.temporalState, block?.type)}`,
+    ];
+    return { name: REBUILD_SPACETIME_SECTION, lines, empty: false };
 }
 
 function applyMigrationDefinition(raw, type, schema) {
@@ -7924,9 +9346,12 @@ exports.enforceEntryBudgets = enforceEntryBudgets;
 const matcher_1 = require("./matcher");
 const parser_1 = require("./parser");
 const information_point_1 = require("./domain/information-point");
+const governance_1 = require("./governance");
+const semantic_1 = require("./semantic");
 const util_1 = require("./util");
 function buildOperationPlan(blocks, entries, settings, contextText, options = {}) {
-    blocks = coalesceEventBlocks((0, information_point_1.prepareInformationBlocks)(blocks));
+    const governed = (0, governance_1.governInformationBlocks)(blocks, entries, contextText, options);
+    blocks = coalesceEventBlocks((0, information_point_1.prepareInformationBlocks)(governed.blocks));
     blocks = ensureDisambiguatedTitles(blocks, entries);
     blocks = suppressStateProjectionNarratives(blocks);
     const index = (0, matcher_1.buildEntryIndex)(entries);
@@ -7942,6 +9367,13 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             .filter((candidate) => (0, matcher_1.isProvisionalEntry)(candidate.entry))
             .filter((candidate) => candidate.evidence?.some((item) => item.kind === 'context-identity'));
         const target = (0, matcher_1.selectBestCandidate)(candidates, 80);
+        const exactClosedEvent = block.type === '事件'
+            ? entries.find((entry) => entry.type === '事件' && (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(block.title) && (0, semantic_1.isEventClosed)(entry))
+            : null;
+        if (!target && exactClosedEvent && (0, governance_1.currentEventState)(block) !== 'completed') {
+            operations.push(noop(exactClosedEvent.title, exactClosedEvent.uid, '事件状态', '已完成事件不能重新变为活动；新的事件必须使用新的事件标题与因果签名'));
+            continue;
+        }
         if (!target) {
             const auxiliary = candidates[0];
             if (auxiliary && auxiliary.score >= 50 && !resolvedProvisionalCandidates.length) {
@@ -7998,6 +9430,13 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             continue;
         }
         const entry = target.entry;
+        // [MA-EVENT-SM-01] 状态机只管理当前事件。总结不得把已完成事件重新写成活动进展；
+        // 真正的新事件必须拥有不同的参与、场景或因果签名并建立新条目。
+        if (block.type === '事件' && (0, semantic_1.isEventClosed)(entry)
+            && (0, governance_1.currentEventState)(block) !== 'completed') {
+            operations.push(noop(entry.title, entry.uid, '事件状态', '已完成事件不能重新变为活动；新的事件必须使用新的事件标题与因果签名', target.score, target.evidence));
+            continue;
+        }
         // [MA-MATCH-02] 同一身份出现多个镜渊管理档案时，先把非锁定重复档合并到确定性主档，再删除重复档。
         const duplicates = candidates
             .filter((candidate) => candidate.entry.uid !== entry.uid)
@@ -8062,6 +9501,8 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             }
         }
     }
+    // [MA-SCENE-SETTLE-01] 当前场景切换时，结算旧场景的活动快照；固定角色和固定设施继续留在场景主条目。
+    operations.push(...(0, governance_1.sceneSettlementOperations)(blocks, entries));
     if (options.cleanupTemporaryAfterSummary === true)
         operations.push(...temporaryCleanupOperations(entries, settings, blocks));
     if (options.consumeSmallSummaryAfterLarge === true)
@@ -8069,9 +9510,9 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     const primaryOperations = dedupeOperations(operations);
     // [MA-REL-01] 独立物品条目是物品状态的权威宿主；人物【持有】与场景【当前资源】只做最短引用。
     // 只对本轮触及的物品做机械一致性校正，不扫描或重写无关条目。
-    const projectedEntries = applyPlanToEntries({ operations: primaryOperations }, entries);
+    const projectedEntries = applyPlanToEntries({ operations: primaryOperations }, entries, settings);
     const relationOperations = relationshipConsistencyOperations(blocks, projectedEntries);
-    return { blocks, operations: dedupeOperations([...primaryOperations, ...relationOperations]), createdAt: Date.now() };
+    return { blocks, operations: dedupeOperations([...primaryOperations, ...relationOperations]), governance: governed.diagnostics, currentSceneTitle: governed.currentSceneTitle, createdAt: Date.now() };
 }
 function ensureDisambiguatedTitles(blocks, entries) {
     return blocks.map((source) => {
@@ -8145,7 +9586,7 @@ function coalesceEventBlocks(blocks) {
     return output;
 }
 
-function applyPlanToEntries(plan, entries) {
+function applyPlanToEntries(plan, entries, settings = undefined) {
     const output = entries.map((entry) => structuredClone(entry));
     const byUid = new Map(output.map((entry) => [entry.uid, entry]));
     const createdByTitle = new Map();
@@ -8192,16 +9633,17 @@ function applyPlanToEntries(plan, entries) {
         else applyOne(target, operation);
         modifiedEntries.add(target);
     }
-    for (const entry of modifiedEntries) enforceEntryBudgets(entry);
+    if (settings?.entryBudgetEnabled !== false) for (const entry of modifiedEntries) enforceEntryBudgets(entry);
     return output;
 }
 // [MA-CONTENT-01] 单条目正文预算：允许场景知识持续补全，但阻止模型把动作流水或重复描述无限写入世界书。
 const SECTION_BUDGETS = {
     // 动态对象：当前快照最大，固定事实次之，稳定定义与历史引用依次递减。
-    人物: { 身份: 2, 稳定: 4, 当前: 8, 固定事实: 6, 关系: 5, 持有: 5, 已知: 6, 误信: 4, 别名: 4 },
-    场景: { 定义: 3, 空间结构: 5, 固定资源: 5, 当前状态: 8, 在场: 8, 当前资源: 8, 活动关联: 4, 固定事实: 6, 世界影响: 3, 局部约束: 4, 别名: 4 },
+    人物: { 身份: 2, 稳定: 3, 性格核心: 4, 表达方式: 3, 决策倾向: 3, 当前: 8, 固定事实: 6, 关系: 5, 关系立场: 5, 持有: 5, 已知: 6, 误信: 4, 别名: 4 },
+    // 常驻角色与固定设施属于场景稳定骨架；在场、当前资源与活动关联只保存当前场景快照，离场即结算清空。
+    场景: { 定义: 3, 空间结构: 5, 固定资源: 5, 固定设施: 8, 常驻角色: 5, 当前状态: 8, 在场: 12, 当前资源: 8, 活动关联: 4, 固定事实: 6, 世界影响: 3, 局部约束: 4, 别名: 4 },
     物品: { 定义: 3, 功能: 4, 当前: 8, 限制: 3, 固定事实: 6, 别名: 4 },
-    事件: { 参与: 5, 场景: 3, 已发生进展: 4, 未发生进展: 2, 结果: 2, 别名: 4 },
+    事件: { 参与: 6, 附属人员: 4, 场景: 3, 已发生进展: 4, 未发生进展: 2, 结果: 2, 别名: 4 },
     世界: { 范围: 3, 地理: 5, 组织: 5, 权力: 8, 制度: 8, 资源与交通: 8, 公开局势: 8, 固定事实: 6, 持续影响: 5, 别名: 4 },
     // 基础设定的核心就是稳定规则，因此规则栏目拥有最大预算。
     基础设定: { 世界常识: 8, 自然规则: 8, 种族与生命: 8, 能力与技术: 8, 社会规则: 8, 地理框架: 8, 别名: 4 },
@@ -8210,7 +9652,9 @@ function enforceEntryBudgets(entry) {
     const budgets = SECTION_BUDGETS[String(entry?.type ?? '')] ?? {};
     for (const [section, limitValue] of Object.entries(budgets)) {
         const limit = Math.max(1, Number(limitValue || 1));
-        const lines = (0, util_1.unique)(entry.sections?.values?.[section] ?? []).map(compactFactLine).filter(Boolean);
+        let lines = (0, util_1.unique)(entry.sections?.values?.[section] ?? []).map(compactFactLine).filter(Boolean);
+        if (entry.type === '场景' && section === '常驻角色') lines = compactFixedSceneRoles(lines);
+        if (entry.type === '事件' && section === '附属人员') lines = compactAuxiliaryPeople(lines);
         if (lines.length <= limit) {
             if (entry.sections?.values) entry.sections.values[section] = lines;
             continue;
@@ -8239,12 +9683,161 @@ function enforceEntryBudgets(entry) {
         const progressed = (0, util_1.unique)(entry.sections.values['已发生进展'] ?? []).filter(Boolean);
         if (progressed.length > 2) entry.sections.values['已发生进展'] = compressOlderEventProgress(progressed, 2);
     }
+    enforceTotalCharacterBudget(entry);
     return entry;
 }
+function compactFixedSceneRoles(lines) {
+    const grouped = new Map();
+    const named = [];
+    for (const line of lines) {
+        const [rawName, rawDuty = '固定承担本场景岗位职责。'] = String(line).split(/[:：]/u, 2);
+        const role = canonicalBackgroundRole(rawName);
+        if (!role) { named.push(line); continue; }
+        const duties = grouped.get(role) ?? [];
+        duties.push(String(rawDuty).trim());
+        grouped.set(role, duties);
+    }
+    const generic = [...grouped.entries()].map(([role, duties]) => `${role}：${(0, util_1.unique)(duties).slice(0, 2).join('；')}`);
+    return (0, util_1.unique)([...named, ...generic]);
+}
+function compactAuxiliaryPeople(lines) {
+    const named = [];
+    const generic = new Map();
+    for (const line of lines) {
+        const [rawName, rawDuty = '参与本次事件。'] = String(line).split(/[:：]/u, 2);
+        const role = canonicalBackgroundRole(rawName);
+        if (!role) { named.push(line); continue; }
+        const duties = generic.get(role) ?? [];
+        duties.push(String(rawDuty).trim());
+        generic.set(role, duties);
+    }
+    return (0, util_1.unique)([...named, ...[...generic.entries()].map(([role, duties]) => `${role}：${(0, util_1.unique)(duties).slice(0, 1).join('；')}`)]);
+}
+function canonicalBackgroundRole(value) {
+    const text = String(value ?? '').replace(/(?:甲|乙|丙|丁|A|B|C|D|\d+)$/iu, '').trim();
+    const mappings = [
+        [/(?:管理员|门卫|保安|守卫)/u, '管理与守卫人员'],
+        [/(?:店员|售货员|收银员|服务员|侍者|接待员)/u, '服务人员'],
+        [/(?:工作人员|办事员|职员)/u, '工作人员'],
+        [/(?:监考|裁判|主持人)/u, '赛务人员'],
+        [/(?:医生|护士|药师)/u, '医疗人员'],
+        [/(?:士兵|侍卫)/u, '守备人员'],
+        [/(?:学生|同学|居民|村民|市民|群众|路人|顾客|客人)/u, '普通在场人员'],
+    ];
+    return mappings.find(([pattern]) => pattern.test(text))?.[1] || '';
+}
+
 function compactFactLine(value) {
-    const line = String(value ?? '').replace(/^\s*[-*]\s*/u, '').trim();
-    if (!line) return '';
-    return line.length > 140 ? `${line.slice(0, 139)}…` : line;
+    const line = String(value ?? '').replace(/^\s*[-*]\s*/u, '').replace(/\s+/gu, ' ').trim();
+    if (!line || line.length <= 140) return line;
+    const sentence = line.slice(0, 140).match(/^(.{28,139}?[。；！？!?])/u)?.[1];
+    return sentence || `${line.slice(0, 136).replace(/[，、：:；;\s]+$/u, '')}…`;
+}
+
+// [MA-BUDGET-02] 总字数预算由条目结构决定，不随旧条目平均长度无限膨胀。
+const ENTRY_CHAR_LIMITS = Object.freeze({ 人物: [300, 520], 场景: [260, 520], 物品: [140, 260], 事件: [180, 360], 世界: [300, 620], 基础设定: [320, 680], 运行包: [900, 2200], 总结: [420, 900] });
+function dynamicEntryCharLimit(entry) {
+    const [base, hard] = ENTRY_CHAR_LIMITS[String(entry?.type ?? '')] ?? [220, 520];
+    const values = entry?.sections?.values ?? {};
+    let extra = 0;
+    if (entry.type === '人物') {
+        if ((values['性格核心'] ?? []).length) extra += 45;
+        if ((values['表达方式'] ?? []).length) extra += 35;
+        if ((values['决策倾向'] ?? []).length) extra += 35;
+        extra += Math.min(80, Math.max(0, (values['关系立场'] ?? values['关系'] ?? []).length - 1) * 20);
+        if ((values['当前'] ?? []).length >= 4) extra += 25;
+    }
+    else if (entry.type === '场景') {
+        extra += Math.min(80, (values['空间结构'] ?? []).length * 12);
+        extra += Math.min(60, (values['固定设施'] ?? []).length * 8);
+        extra += Math.min(50, (values['常驻角色'] ?? []).length * 10);
+    }
+    else if (entry.type === '事件') {
+        extra += Math.min(80, Math.max(0, (values['已发生进展'] ?? []).length - 1) * 24);
+        if ((values['结果'] ?? []).length) extra += 30;
+    }
+    return Math.min(hard, base + extra);
+}
+function measureEntryCharacters(entry) {
+    const values = entry?.sections?.values ?? {};
+    return String(entry?.title ?? '').length + Object.entries(values).reduce((sum, [section, lines]) => sum + section.length + (lines ?? []).join('\n').length + 4, 0);
+}
+function enforceTotalCharacterBudget(entry) {
+    const limit = dynamicEntryCharLimit(entry);
+    if (measureEntryCharacters(entry) <= limit) return;
+    const values = entry.sections?.values ?? {};
+    // 先删低价值过程和背景附属，再压缩历史；身份、性格、表达、决策和当前状态受保护。
+    const dropOrder = entry.type === '人物'
+        ? ['误信', '已知', '固定事实', '持有', '关系', '稳定', '别名']
+        : entry.type === '场景'
+            ? ['世界影响', '局部约束', '当前资源', '活动关联', '固定事实', '固定资源', '固定设施', '常驻角色', '空间结构']
+            : entry.type === '事件'
+                ? ['未发生进展', '附属人员']
+                : Object.keys(values).reverse();
+    for (const section of dropOrder) {
+        const lines = values[section] ?? [];
+        while (lines.length > protectedMinimum(entry.type, section) && measureEntryCharacters(entry) > limit) lines.shift();
+        if (measureEntryCharacters(entry) <= limit) return;
+    }
+    // [MA-BUDGET-03] 多个受保护栏目同时过长时，先降低每栏行数，再按标点边界缩短句子。
+    // 不从句子中间硬切；若没有可用语义边界而仍超限，则拒绝本次提交。
+    shrinkProtectedSections(entry);
+    if (measureEntryCharacters(entry) <= limit) return;
+    compactProtectedSections(entry, limit);
+    if (measureEntryCharacters(entry) > limit) {
+        throw new Error(`条目“${entry.title || entry.name || entry.type}”无法在不破坏受保护内容的情况下压缩到 ${limit} 字以内`);
+    }
+}
+const PRESSURE_SECTION_LIMITS = Object.freeze({
+    人物: { 身份: 1, 性格核心: 2, 表达方式: 1, 决策倾向: 1, 关系立场: 2, 当前: 5 },
+    场景: { 定义: 1, 当前状态: 4, 在场: 12 },
+    事件: { 参与: 6, 场景: 1, 已发生进展: 2, 结果: 1 },
+});
+function shrinkProtectedSections(entry) {
+    const limits = PRESSURE_SECTION_LIMITS[String(entry?.type ?? '')] ?? {};
+    const values = entry.sections?.values ?? {};
+    for (const [section, maxLines] of Object.entries(limits)) {
+        const lines = values[section] ?? [];
+        if (lines.length <= maxLines) continue;
+        const preserveRoot = /^(?:身份|性格核心|定义)$/u.test(section);
+        if (maxLines <= 1) values[section] = [preserveRoot ? lines[0] : lines.at(-1)].filter(Boolean);
+        else {
+            const head = preserveRoot ? 1 : 0;
+            values[section] = (0, util_1.unique)([...lines.slice(0, head), ...lines.slice(-(maxLines - head))]).slice(0, maxLines);
+        }
+    }
+}
+function compactProtectedSections(entry, limit) {
+    const limits = PRESSURE_SECTION_LIMITS[String(entry?.type ?? '')] ?? {};
+    const values = entry.sections?.values ?? {};
+    const protectedSections = Object.keys(limits).filter((section) => (values[section] ?? []).length);
+    if (!protectedSections.length) return;
+    const lineCount = protectedSections.reduce((sum, section) => sum + (values[section] ?? []).length, 0);
+    const structuralCost = String(entry?.title ?? '').length + protectedSections.reduce((sum, section) => sum + section.length + 4, 0) + Math.max(0, lineCount - 1);
+    let perLine = Math.max(18, Math.floor((limit - structuralCost) / Math.max(1, lineCount)));
+    while (perLine >= 18 && measureEntryCharacters(entry) > limit) {
+        for (const section of protectedSections) values[section] = (values[section] ?? []).map((line) => compactAtSemanticBoundary(line, perLine));
+        perLine -= 4;
+    }
+}
+function compactAtSemanticBoundary(value, maxLength) {
+    const line = compactFactLine(value);
+    if (line.length <= maxLength) return line;
+    const chunks = line.split(/(?<=[。；！？!?])|[，,、]/u).map((item) => item.trim()).filter(Boolean);
+    let result = '';
+    for (const chunk of chunks) {
+        const candidate = result ? `${result}，${chunk}` : chunk;
+        if (candidate.length > maxLength) break;
+        result = candidate;
+    }
+    if (result) return /[。；！？!?]$/u.test(result) ? result : `${result}。`;
+    throw new Error(`事实行缺少可安全压缩的语义边界：${line}`);
+}
+function protectedMinimum(type, section) {
+    if (type === '人物' && /^(?:身份|性格核心|表达方式|决策倾向|关系立场|当前)$/u.test(section)) return 1;
+    if (type === '场景' && /^(?:定义|当前状态|在场)$/u.test(section)) return 1;
+    if (type === '事件' && /^(?:参与|场景|已发生进展|结果)$/u.test(section)) return 1;
+    return 0;
 }
 function mergeEntryData(target, source) {
     target.keywords = (0, util_1.unique)([...(target.keywords ?? []), ...(source.keywords ?? [])]);
@@ -8865,9 +10458,9 @@ const BULLET_PATTERN = /^\s*(?:[-*]\s+|[•·]\s*|\d+、\s*|\d+[.)]\s+)(.*?)\s*$
 const EMPTY_PATTERN = /^\s*(?:无|无变化|无新增事实|无可记录事实|没有)\s*[。.]?\s*$/u;
 const EMPTY_VALUE_PATTERN = /^\s*[^：:\n]{1,24}\s*[:：]\s*(?:无|无变化|没有|未知|未说明)\s*[。.]*\s*$/u;
 const PLAIN_SECTION_NAMES = new Set([
-    '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '持续经历',
-    '定义', '空间结构', '固定资源', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
-    '功能', '限制', '目标', '参与', '场景', '阶段', '关键进展', '未决', '已发生进展', '未发生进展', '结果',
+    '身份', '稳定', '性格核心', '表达方式', '决策倾向', '当前', '关系', '关系立场', '持有', '已知', '误信', '持续经历',
+    '定义', '空间结构', '固定资源', '固定设施', '常驻角色', '持续变化', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束',
+    '功能', '限制', '目标', '参与', '附属人员', '场景', '阶段', '关键进展', '未决', '已发生进展', '未发生进展', '结果',
     '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '世界变化', '持续影响',
     '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名',
     '固定事实', '近期经历', '事件进程', '变化记录', '最终结果', '关联条目', '关键词', '触发词', '标签', '分类',
@@ -8887,10 +10480,10 @@ const CONTROL_LINE_PATTERNS = [
     /^(?:禁止JSON、代码块|禁止解释、JSON|多个条目连续输出|每个来源行只能出现一次)/u,
 ];
 const STRICT_SECTION_ORDER = {
-    人物: ['关键词', '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '固定事实', '别名'],
-    场景: ['关键词', '定义', '空间结构', '固定资源', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名'],
+    人物: ['关键词', '身份', '稳定', '性格核心', '表达方式', '决策倾向', '当前', '关系', '关系立场', '持有', '已知', '误信', '固定事实', '别名'],
+    场景: ['关键词', '定义', '空间结构', '固定资源', '固定设施', '常驻角色', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名'],
     物品: ['关键词', '定义', '功能', '当前', '限制', '固定事实', '别名'],
-    事件: ['关键词', '参与', '场景', '已发生进展', '未发生进展', '结果', '别名'],
+    事件: ['关键词', '参与', '附属人员', '场景', '已发生进展', '未发生进展', '结果', '别名'],
     世界: ['关键词', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名'],
     基础设定: ['关键词', '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名'],
 };
@@ -9328,7 +10921,7 @@ function crossEntryFactKey(block, sectionName, line, knownNames) {
 function factOwnershipScore(type, section, line) {
     let score = 10;
     if (type === '事件' && /(参与|已发生进展|未发生进展|关键进展|结果|因果|状态变化)/u.test(`${section}${line}`)) score += 40;
-    if (type === '人物' && /(身份|稳定|身体|位置|目标|关系|持有|已知|误信|信息来源|认知来源|经历)/u.test(`${section}${line}`)) score += 35;
+    if (type === '人物' && /(身份|稳定|性格|表达|决策|身体|位置|目标|关系|持有|已知|误信|信息来源|认知来源|经历)/u.test(`${section}${line}`)) score += 35;
     if (type === '物品' && /(持有|位置|状态|完整|功能|限制|物品)/u.test(`${section}${line}`)) score += 35;
     if (type === '场景' && /(定义|空间|资源|在场|约束|控制|环境|场景)/u.test(`${section}${line}`)) score += 38;
     if (type === '世界' && /(范围|地理|组织|权力|制度|资源|交通|公开|世界|全局|跨场景|地区)/u.test(`${section}${line}`)) score += 36;
@@ -9374,7 +10967,7 @@ function sanitizeExtractionLine(value, type = '', section = '') {
         line = line.replace(/认知来源\s*[：:]/u, '信息来源：');
     }
     // [MA-CHAR-01] 只机械移除明确的审美评价词；身份、能力、伤势和可识别特征仍由模型保留。
-    if (type === '人物' && /^(身份|稳定)$/u.test(section)) {
+    if (type === '人物' && /^(身份|稳定|性格核心|表达方式|决策倾向)$/u.test(section)) {
         line = line
             .replace(/(?:绝美|倾国倾城|美若天仙|完美无瑕|惊艳绝伦|极其漂亮|非常漂亮|异常英俊|俊美无双|迷人至极|性感迷人|高贵优雅|冷艳绝伦)/gu, '')
             .replace(/[，,]{2,}/gu, '，')
@@ -9383,7 +10976,13 @@ function sanitizeExtractionLine(value, type = '', section = '') {
         const compact = line.replace(/[^\p{L}\p{N}]/gu, '');
         if (!compact || /^(?:的)?(?:脸庞|面容|容貌|气质|身姿|外表)$/u.test(compact)) return '';
     }
-    return line.slice(0, type === '人物' && /^(身份|稳定)$/u.test(section) ? 100 : 180);
+    return compactExtractionLine(line, type === '人物' && /^(身份|稳定|性格核心|表达方式|决策倾向)$/u.test(section) ? 110 : 180);
+}
+function compactExtractionLine(line, limit) {
+    const text = String(line ?? '').trim();
+    if (text.length <= limit) return text;
+    const punctuated = text.slice(0, limit + 1).match(/^(.{24,}?[。；！？!?])/u)?.[1];
+    return punctuated || `${text.slice(0, Math.max(1, limit - 4)).replace(/[，、：:；;\s]+$/u, '')}…`;
 }
 function isLowValueEventLine(value) {
     const text = (0, util_1.normalizeFact)(value);
@@ -9397,16 +10996,23 @@ function isLowValueEventLine(value) {
 function sectionLineLimit(type, section) {
     // 当前快照拥有最大输入预算；固定事实次之；稳定定义和关系类依次递减。
     if (/^(?:当前|当前状态)$/u.test(section)) return 8;
-    if (type === '场景' && /^(?:在场|当前资源)$/u.test(section)) return 8;
+    if (type === '场景' && section === '在场') return 12;
+    if (type === '场景' && section === '当前资源') return 8;
+    if (type === '场景' && section === '常驻角色') return 5;
+    if (type === '场景' && section === '固定设施') return 8;
     if (type === '世界' && /^(?:权力|制度|资源与交通|公开局势)$/u.test(section)) return 8;
     if (type === '基础设定') return section === '别名' ? 4 : 8;
     if (section === '固定事实') return 6;
     if (type === '人物' && section === '稳定') return 3;
+    if (type === '人物' && section === '性格核心') return 4;
+    if (type === '人物' && /^(?:表达方式|决策倾向)$/u.test(section)) return 3;
+    if (type === '人物' && section === '关系立场') return 5;
     if (type === '人物' && section === '身份') return 4;
     if (type === '人物' && section === '已知') return 8;
     if (type === '人物' && section === '误信') return 6;
     if (type === '场景' && /^(空间结构|固定资源)$/u.test(section)) return 5;
-    if (/^(关系|持有|活动关联|局部约束|参与|持续影响)$/u.test(section)) return 5;
+    if (/^(关系|关系立场|持有|活动关联|局部约束|参与|持续影响)$/u.test(section)) return 5;
+    if (type === '事件' && section === '附属人员') return 4;
     if (type === '事件' && section === '已发生进展') return 4;
     if (type === '事件' && section === '未发生进展') return 2;
     if (/^(定义|功能|限制|范围|地理|组织|结果|关键进展)$/u.test(section)) return 4;
@@ -9640,7 +11246,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 任务：以一轮完整对话为单位，把审核后的本轮AI最终回复转为精简世界书更新。最近对话只用于理解指代、承接、身份与因果；只提取本轮已经发生的状态变化、稳定结果和必要因果证据，不重抄旧轮内容。普通动作、短暂姿态和没有改变状态的细节优先过滤；不续写、不解释、不评价、不预测。
 
 【只允许六类】
-1. 人物：身份、稳定能力、当前状态、该人物自身的关系、关键持有物、具有信息来源的已知、极少量已被明确证伪但人物仍相信的误信、固定事实。
+1. 人物：身份、稳定能力、性格核心、表达方式、决策倾向、当前状态、关系与关系立场、关键持有物、具有信息来源的已知、极少量已被明确证伪但人物仍相信的误信、固定事实。
 2. 场景：同一稳定地点持续更新同一条目；保存稳定空间知识、当前局部条件和关联名称。
 3. 物品：只记录一个可单独追踪的具体物品实例；同类物品集合、批量物资和泛称只写入场景资源。
 4. 事件：由同一组参与者、场景和直接因果连续形成的状态变化。普通移动、开门、落座、视线、表情和没有形成变化的对话不得独立建事件。
@@ -9671,6 +11277,17 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 后续正文明确揭示身份后，输出已知人物主档；插件会把对应临时档合并并删除。
 - 同名或近似名称不是同一身份的证明。两个对象的职业、组织、编号、种族、来源或括号区分锚点冲突时，必须分别建档；稳定标题写成“名称（区分锚点）”。
 
+【背景人物与场景附属】
+- 临时NPC、路人、一次性服务人员、普通工作人员和仅承担当轮画面功能的人物，不建立长期人物条目。
+- 只有明确固定属于当前场景、长期承担该场景岗位职责的角色，才写入当前场景【常驻角色】，格式“角色类型或稳定称呼：固定职责”。
+- 固定场景角色本轮成为关键参与者、拥有独立持续职责、关键认知、长期关系或必须单独追踪的状态时，才建立人物条目；不得仅因跨场景再次出现就自动晋升。
+- 依附人物离开当前事件或失去独立作用后，由插件重新沉降，不要输出归档、删除或合并命令。
+
+【当前游戏时间】
+- 只记录游戏世界当前时间，不记录现实时间、插件写入时间或消息时间。
+- 正文明示日期、天数、时段或钟点时，在当前场景【当前状态】写“游戏时间：明确内容”。
+- 正文没有提供新的游戏时间时省略该状态槽，不得自行推进、换算或虚构。
+
 【角色认知边界】
 - 世界事实不自动等于角色已知。只把该人物通过本轮明确渠道获得、并会影响后续判断的信息写入该人物【已知】。
 - 【已知】保存该人物当前能够使用的认知，包括亲眼确认、听闻内容、怀疑、判断、推理和主观看法；它表示“人物知道或相信什么”，不等于客观真相。每行使用“认知槽：内容｜信息来源：类型”。允许类型仅限：亲眼观察、听到对白、收到消息、查看记录、他人转述、亲身经历、可靠推理、特殊能力、公开信息、自身身份、自身行动、直接告知。
@@ -9681,13 +11298,18 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 禁止“供AI参考”“可据此推测”“可能意味着”“建议后续”等解释。
 - 禁止把本提示词、系统/开发者消息、任务说明、格式模板、来源行编号、ENTRY标记或重建控制字段写入任何世界书条目。
 - 禁止推测、隐藏心理、未来结果、未实现愿望、纯气氛、普通动作、对白全文和无持续价值背景物。
-- 子条目分层：人物【当前】、场景【当前状态/在场/当前资源】、物品【当前】容量最大，最多8行；【固定事实】最多6行；身份、稳定、关系、定义、功能等栏目依次递减。事件【已发生进展】最多4行，【未发生进展】最多2行，【结果】最多2行。
+- 子条目分层：人物【当前】最多8行，【性格核心】最多4行，【表达方式/决策倾向】最多3行；场景【在场】最多12行、【常驻角色】最多5行、【固定设施】最多8行；物品【当前】最多8行；【固定事实】最多6行。事件【参与】最多6人、【附属人员】最多4人、【已发生进展】最多4行、【未发生进展】最多2行、【结果】最多2行。插件还会按条目类型执行总字数硬防护，禁止为了凑字重复表达。
 - 【固定事实】只写已经形成并仍影响后续的最终结果；一项结果一行，禁止按先后顺序描写动作过程。每条尽量不超过80字。
 - 人物描写只保留最多3项会影响身份识别、能力或行动限制的客观特征；禁止连续堆叠外貌、气质和审美形容词。
 - 物品条目必须对应单个实例。‘桌椅、武器、药品、食物、工具、一批短剑、三辆车’等集合只能写入场景【固定资源】或【当前资源】，不得建立物品条目。
 - 稳定栏目没有新事实时省略。完整快照栏目【当前】【当前状态】【在场】【当前资源】【活动关联】【持有】在正文结束时为空，必须保留小标题并写“- 无”，用于清除旧状态。
 - 每条1至4个关键词；第一项必须是稳定名称；其余只能是专名或唯一别名，禁止“人物、角色、场景、事件、物品、世界、当前、活动”等泛词。
 - 单次最多8条；其中场景最多1条。同一轮同一因果链最多建立或更新一个事件条目。
+
+【输出密度】
+- 每个事实必须是一条可独立成立的短句；同义、包含式和过程复述只保留信息密度最高的一条。
+- 人物候选优先控制在约300至520个中文字符以内；场景约260至520；事件约180至360；物品约140至260。信息不足时允许更短，不得补写虚构内容。
+- 超出范围时先删除普通过程、重复说明和无持续价值背景；不得牺牲人物性格、表达方式、决策倾向和当前状态。
 
 【唯一允许的外层语法】
 <<<ENTRY:类型:稳定名称>>>
@@ -9703,8 +11325,12 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【人物正文固定顺序】
 【身份】职业、种族、组织或家庭身份
 【稳定】稳定能力、持续限制，以及最多3项会影响识别或剧情判断的客观特征；不写审美评价和形容词堆砌
-【当前】位置、身体、目标、立场等明确状态槽
-【关系】对方名称：该人物自身的长期关系或当前立场
+【性格核心】已经明确设定或经多次稳定表现确认的人格原则；单次情绪和例外行为不得写入
+【表达方式】稳定的语言、情绪表达和沟通方式
+【决策倾向】面对风险、冲突、关系和资源时反复成立的选择偏好
+【当前】位置、身体、目标、情绪和当轮立场等明确状态槽
+【关系】对方名称：客观长期关系
+【关系立场】对方名称：该人物当前持续成立的态度与互动边界
 【持有】当前关键物品完整列表
 【已知】该人物当前能够使用的认知，包括怀疑、判断和推理；格式“认知槽：内容｜信息来源：允许类型”
 【误信】仅保存已有明确证伪依据、但人物仍相信的错误认知；格式“认知槽：错误内容｜信息来源：允许类型｜证伪依据：已确认事实”
@@ -9715,6 +11341,8 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【定义】地点是什么、位置、用途或归属
 【空间结构】入口、出口、区域连接、障碍和影响行动的布局
 【固定资源】长期存在且可利用的资源
+【固定设施】固定属于本场景并影响行动的设施，最多8项
+【常驻角色】固定属于本场景并长期承担岗位职责的角色类型或稳定称呼，最多5项；临时NPC不得写入
 【固定事实】已确认的新发现、永久损坏、控制权或访问条件变化，一项结果一行
 【当前状态】时间、环境、控制、危险等状态槽
 【在场】正文结束时确认在场的人物完整列表
@@ -9738,7 +11366,8 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 【别名】
 
 【事件正文固定顺序】
-【参与】参与者完整列表
+【参与】直接推动当前事件的参与者完整列表，最多6人
+【附属人员】只承担当前事件辅助作用、无需独立人物条目的人员，最多4人
 【场景】事件涉及的稳定场景名称；门口、床边、桌旁、走廊拐角等局部位置不得独立建场景
 【已发生进展】已经造成状态、关系、控制、资源、能力或因果变化的事实；使用过去时，最多4行；被更完整结果覆盖的动作不得单独保留
 【未发生进展】已经发生但没有造成状态变化、且仍有必要解释当前连续性的过程材料；不是未来事项、目标或计划，最多2行；普通动作直接省略
@@ -9850,7 +11479,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 3. 普通移动、开门、落座、视线、表情、寒暄、重复确认和当轮立即恢复的轻微状态直接过滤。
 4. 小动作若是后续结果不可缺少的直接因果证据，可以吸收到一条进展中，但不得独立保存。
 5. 同一参与者、稳定场景和直接因果连续的内容必须合并；不得按动作、段落或地点局部区域拆成多个事件。
-6. 已有事件的进展必须压缩覆盖旧进展，不得把旧过程重新抄一遍后继续追加。
+6. 已有活动事件的进展必须压缩覆盖旧进展，不得把旧过程重新抄一遍后继续追加；已经有明确【结果】的完成事件不得重新写入活动进展或重新打开。
 7. 不得输出“下一步、仍需、等待、是否、可能、计划、目标、未决”等未来导向内容。
 8. 不得输出 UID、删除、归档、退出或操作命令。
 
@@ -9870,7 +11499,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 类型｜稳定名称｜小标题｜完整事实句
 
 分发规则：
-- 必须把压缩后的事件完整快照写回对应事件：事件｜稳定名称｜已发生进展｜完整压缩事实。
+- 只允许把压缩后的活动事件完整快照写回对应事件：事件｜稳定名称｜已发生进展｜完整压缩事实。已完成事件不得重新写入进展。
 - 若存在必要的未发生进展，写：事件｜稳定名称｜未发生进展｜完整事实；若当前没有必要材料，仍写：事件｜稳定名称｜未发生进展｜无，用于覆盖旧的暂存过程。
 - 稳定影响写回人物、场景、物品、世界或基础设定的权威栏目。
 - 同一事实只分发一次，不得同时保留长事件叙述和对象固定事实的同义复述。
@@ -10063,21 +11692,25 @@ ${typeCatalog}
 
 【规划规则】
 1. 每个来源行引用只能出现一次：归入一个 GROUP，或进入 DROP。禁止把同一来源行投影到人物、事件、世界等多个组。
-2. 同一稳定对象的来源行归入同一组；不同对象不得因名称相似、同批出现或共享地点而合并。
-3. 真身、本体、假身、替身、分身、复制体、投影体、载体是不同身份形态。只有材料明确说明两个称呼是同一独立身体的名称时才合并。
-4. 一个事件组对应一条连续的状态变化链。参与者、稳定场景和直接因果连续时，即使动作、段落、标题或地点局部位置变化，也应归入同组；只有变化对象或直接因果明显独立时才分组。普通移动、开门、落座、视线、表情和寒暄不得单独形成事件组。
-5. 场景组只对应一个稳定地点。酒馆、决斗台、遗迹入口等不同空间不得互为别名。
-6. 世界组只保存跨场景的制度、组织格局、区域网络和公开局势；人物经历、单个物品状态、单场事件不得归入世界组。
-7. 基础设定组只保存跨普通剧情长期成立的规则。旧“重建待确认”若来源标题是基础设定，应恢复到基础设定组。
-8. 普通随身消耗品、无独立状态的小道具可归入人物组；简单公共设施可归入场景组；唯一、关键、有功能限制或独立状态的物品保留物品组。
-9. 标题相同但内容属于不同实体时必须分组并使用区分锚点，例如“绯（真身）”“绯（残留替身）”。
-10. 无正文、纯格式残留、标题复述、无长期价值的重复句进入 DROP。
+2. 先为全部来源行建立最小场景锚点。一个锚点表示同一段连续世界时间与同一稳定地点；相同地点在不同日期、时段或事件阶段必须拆成不同锚点。索引中的“已有时空”是上次重建元数据：没有更强的新证据时优先沿用，但不要把它重复写成剧情事实。
+3. 游戏时间只使用材料明确给出的日期、时段、相对时间或可由前后文可靠推定的时间。不得为了完整而虚构日期；无法判断时填写“未知”。
+4. 时间来源只允许“明确、推定、未知”。明确是正文直接给出；推定是由“次日、当晚、三天后”等关系确定；没有依据时为未知。
+5. 同一稳定对象的来源行归入同一组；不同对象不得因名称相似、同批出现或共享地点而合并。
+6. 真身、本体、假身、替身、分身、复制体、投影体、载体是不同身份形态。只有材料明确说明两个称呼是同一独立身体的名称时才合并。
+7. 一个事件组对应一条连续的状态变化链。参与者、稳定场景和直接因果连续时，即使动作、段落、标题或地点局部位置变化，也应归入同组；只有变化对象或直接因果明显独立时才分组。普通移动、开门、落座、视线、表情和寒暄不得单独形成事件组。
+8. 场景组只对应一个稳定地点。酒馆、决斗台、遗迹入口等不同空间不得互为别名。
+9. 世界组只保存跨场景的制度、组织格局、区域网络和公开局势；人物经历、单个物品状态、单场事件不得归入世界组。
+10. 基础设定组只保存跨普通剧情长期成立的规则。单次行为不得升级为规则；只有明确约定、制度、条件约束，或多个不同场景反复证明的机制，才可归入规则宿主。
+11. 普通随身消耗品、无独立状态的小道具可归入人物组；简单公共设施可归入场景组；唯一、关键、有功能限制或独立状态的物品保留物品组。
+12. 标题相同但内容属于不同实体时必须分组并使用区分锚点，例如“绯（真身）”“绯（残留替身）”。
+13. 无正文、纯格式残留、标题复述、同义重复、过程性复述和无长期价值的句子进入 DROP；同一事实只保留一份最小表达。
 
 【唯一输出格式】
+ANCHOR|锚点ID|游戏时间|地点|明确/推定/未知|来源行1,来源行2,...
 GROUP|组ID|类型或新类型建议:类别名|稳定名称|独立/并入|来源行1,来源行2,...
 DROP|简短原因|来源行1,来源行2,...
 
-组ID使用 G1、G2……；优先使用现有类型。只有现有类型都无法容纳且该类别可反复用于多个对象时，才使用“新类型建议:类别名”。若“并入”，稳定名称填写真正宿主名称。
+锚点ID使用 A1、A2……，ANCHOR行必须按游戏时间从早到晚排列；时间无法比较时按剧情叙述先后排列。组ID使用 G1、G2……。每个非DROP来源行必须同时出现在一个ANCHOR和一个GROUP中。优先使用现有类型。只有现有类型都无法容纳且该类别可反复用于多个对象时，才使用“新类型建议:类别名”。若“并入”，稳定名称填写真正宿主名称。
 禁止解释、JSON、代码块、Markdown标题或其他文本。`;
     const user = `旧世界书精简来源索引：
 ${String(sourceIndex || '').trim() || '（空）'}
@@ -10097,11 +11730,14 @@ function plannedMigrationPrompts(task, options = {}) {
         name: String(task?.stableName || '').trim(),
         newTypeProposal: task?.newTypeProposal === true,
         sourceRefs: [...(task?.sourceRefs ?? [])],
+        sceneAnchors: [...(task?.sceneAnchors ?? [])],
+        anchorCatalog: [...(task?.anchorCatalog ?? [])],
         sourceLineBody: String(task?.sourceLineBody || '').trim(),
     }];
     const descriptors = groups.map((group) => {
-        const allowed = [...(schema?.allowedSectionsByType?.[group.type] ?? [])].filter(Boolean);
-        return `- 组${group.id}｜类型：${group.newTypeProposal ? `新类型建议:${group.type}` : group.type}｜稳定名称：${group.name}｜允许栏目：${allowed.join('、') || '使用该类型现有栏目'}｜来源行：${group.sourceRefs.join('、')}`;
+        const allowed = [...(schema?.allowedSectionsByType?.[group.type] ?? [])].filter((section) => section && section !== '时空锚点');
+        const anchorText = (group.anchorCatalog ?? []).map((anchor) => `${anchor.id}=${anchor.gameTime}@${anchor.location}[${anchor.timeSource}]`).join('、') || (group.sceneAnchors ?? []).join('、') || 'S000=未知@未知[未知]';
+        return `- 组${group.id}｜类型：${group.newTypeProposal ? `新类型建议:${group.type}` : group.type}｜稳定名称：${group.name}｜允许栏目：${allowed.join('、') || '使用该类型现有栏目'}｜场景锚点：${anchorText}｜来源行：${group.sourceRefs.join('、')}`;
     }).join('\n');
     const system = `你是 Mirror Abyss 联合世界书重建器。
 
@@ -10111,22 +11747,32 @@ ${descriptors}
 总规则：
 1. 每个组只能使用该组列出的来源行；不得在组之间借用证据，不得引用常识或自行补全。
 2. 每组最多输出一个最终条目。只有来源确实没有有效事实时可以省略该组。
-3. 同义重复、包含式重复和动作流水必须收束；只保留稳定身份、状态变化、必要因果与最终结果。
+3. 提炼不是改写旧句。先删除同义重复、包含式重复、过程性复述和低价值措辞，再只保留最小事实集、当前有效状态、完成结果与真正可运行的规则。
 4. 场景只代表稳定地点。房门口、床边、桌旁、拐角、区域内移动等并入主体场景的【空间结构】或事件材料，不得单独建场景。
 5. 同一地点的名称改写必须归入稳定名称，并把其他真实称呼写入【别名】；不得因模型改名制造新地点。
-6. 事件只保存已经发生的变化：
+6. 每个条目必须选择本组已有的场景锚点，并填写游戏时间、时间来源和时态。禁止自造锚点或日期。跨多个锚点时按剧情先后列出，首个填写主要发生或首次成立的锚点。
+7. 时态只允许“当前、持续、已完成、已结束、长期”：
+   - 当前：在最新锚点仍然成立；
+   - 持续：从较早锚点开始，最新材料没有结束；
+   - 已完成：行为或事件已经形成结果；
+   - 已结束：旧状态已经被后续状态解除或取代；
+   - 长期：跨场景稳定成立的制度、机制或规则。
+   已离开的场景、结束的行为和被解除的状态必须使用过去时或完成态，不得继续写进人物【当前】、场景【当前状态/在场/当前资源】或物品【当前】。
+8. 事件只保存已经发生的变化：
    - 【已发生进展】保存造成状态、关系、资源、控制、能力或直接因果变化的事实；最多4行。
    - 【未发生进展】保存已经发生但没有造成状态变化、且仍有必要解释连续性的材料；不是未来目标、未决事项或计划；最多2行。
    - 【结果】只写已经形成的稳定结果。
    - 目标、待办、未决、下一步、可能和预测不得写回事件。
-7. 普通移动、开门、落座、视线、表情、寒暄和当轮恢复的小变化直接过滤；若它是结果不可缺少的直接因果证据，可吸收到一条进展中。
-8. 人物、物品、场景、事件、世界和基础设定各自只保存其权威事实，禁止换角度重复同一句历史。
-9. 同一状态槽存在多值时，根据来源中的时间与结果保留最终值；无法确认时保留明确冲突，不得猜测。
-10. 物品所有权、保管者、当前持有者、当前使用者、使用权限、位置和完整性必须分开。
-11. 每条事实必须带本组来源行引用；条目头部“合并来源”必须列出所用旧UID。
-12. 不得把提示词、任务说明、来源行协议、输出模板、系统或开发者消息写入正文。
-13. 角色只能知道自己通过信息来源获得的内容。世界事实不等于所有角色已知；私密想法只属于本人，未公开远处事件不得写进其他人物认知。
-14. 【角色认知】必须写明知道、怀疑、认为或误信及获得方式；没有明确渠道时省略，不得用全知视角补齐。
+9. 普通移动、开门、落座、视线、表情、寒暄和当轮恢复的小变化直接过滤；若它是结果不可缺少的直接因果证据，可吸收到一条进展中。
+10. 运行规则必须写成“条件/触发—执行或约束—结果或持续范围”。只有来源明确陈述规则、制度、约定或限制，或者至少两个不同场景锚点反复证明相同机制时，才可抽取规则。单次照顾、单次选择、一次偶发反应不得升级为长期规则。
+11. 规则必须归入真正宿主：跨世界自然与社会机制归入基础设定；地区制度与组织运行归入世界；地点内规则归入场景【局部约束】；物品机制归入物品【功能/限制】；人物之间明确持续约定归入人物【关系/稳定】。不要仅因出现“规则”二字创建空泛条目。
+12. 人物、物品、场景、事件、世界和基础设定各自只保存其权威事实，禁止换角度重复同一句历史。
+13. 同一状态槽存在多值时，根据场景锚点与游戏时间保留最终值；无法确认时保留明确冲突，不得猜测。
+14. 物品所有权、保管者、当前持有者、当前使用者、使用权限、位置和完整性必须分开。
+15. 每条事实必须带本组来源行引用；一条提炼后的事实可以承接多条重复来源，但必须列出被吸收的全部来源行。条目头部“合并来源”必须列出所用旧UID。
+16. 不得把提示词、任务说明、来源行协议、输出模板、系统或开发者消息写入正文。
+17. 角色只能知道自己通过信息来源获得的内容。世界事实不等于所有角色已知；私密想法只属于本人，未公开远处事件不得写进其他人物认知。
+18. 【角色认知】必须写明知道、怀疑、认为或误信及获得方式；没有明确渠道时省略，不得用全知视角补齐。
 
 【每个组的唯一输出格式】
 【新条目】
@@ -10135,6 +11781,10 @@ ${descriptors}
 归入类型：现有类型或新类型建议
 合并来源：旧UID1、旧UID2
 来源行：来源行1、来源行2
+场景锚点：S001、S002
+游戏时间：使用所选锚点的游戏时间；跨锚点时写起止范围
+时间来源：明确/推定/未知
+时态：当前/持续/已完成/已结束/长期
 保留方式：独立条目
 
 【内容】
@@ -10242,6 +11892,7 @@ exports.isRoleType = isRoleType;
 exports.isFoundationEntry = isFoundationEntry;
 exports.sanitizeRecallKeywords = sanitizeRecallKeywords;
 const semantic_1 = require("./semantic");
+const governance_1 = require("./governance");
 const util_1 = require("./util");
 
 // [MA-RECALL-01] 召回策略是纯函数：只读取世界书条目，返回原生字段规划，不执行任何写入。
@@ -10287,17 +11938,43 @@ function sceneActivityTime(entry) {
 function buildRecallPlan(entries, settings, focusUid = '') {
     const stages = sceneStageMap(entries);
     const profiles = new Map();
+    const context = (0, governance_1.activeContext)(entries ?? [], focusUid);
+    const activeUids = new Set([
+        context.scene?.uid,
+        ...context.characters.map((entry) => entry.uid),
+        ...context.activeEvents.map((entry) => entry.uid),
+        context.focus?.uid,
+    ].filter(Boolean).map(String));
     for (const entry of entries ?? []) {
         const focus = String(focusUid || '') ? String(entry.uid) === String(focusUid) : entry.focus === true;
-        profiles.set(String(entry.uid), profileFor(entry, settings, stages.get(String(entry.uid)) || '', focus));
+        profiles.set(String(entry.uid), profileFor(entry, settings, stages.get(String(entry.uid)) || '', focus, activeUids));
     }
-    return { profiles, sceneStages: stages };
+    return { profiles, sceneStages: stages, activeUids };
 }
 
-function profileFor(entry, settings, sceneStage, focus) {
+function profileFor(entry, settings, sceneStage, focus, activeUids = new Set()) {
     const type = String(entry.type ?? '');
     const tier = String(entry.memoryTier ?? entry.raw?.extensions?.mirrorAbyssInfoPoint?.memoryTier ?? 'background');
     const baseOrder = ({ 场景: 700, 时空: 700, 事件: 680, 世界: 610, 全局: 610, 全局状态: 610, 全局变化: 610, 当前局势: 610, 世界局势: 610, 人物: 520, 角色: 520, NPC: 500, 物品: 500 })[type] ?? 400;
+
+    if (entry.title === governance_1.ACTIVITY_PACK_TITLE) {
+        return settings?.activityPackEnabled !== false
+            ? profile('当前活动包', 'active', 'activity-pack', 'none', true, false, true, true, 0, 900, 1, null)
+            : profile('活动包关闭', 'background', 'activity-pack-disabled', 'none', false, false, true, true, 0, 100, 4, null);
+    }
+    // [MA-PACK-RECALL-01] 活动包模式下，完整条目退回仓储态；ST只负责发送已经编译好的唯一活动包。
+    if (settings?.activityPackEnabled !== false) {
+        const active = activeUids.has(String(entry.uid));
+        if (isFoundationEntry(entry, settings)) return profile('核心仓储', 'core', 'foundation-storage', 'none', false, false, true, true, 0, 860, 0, null);
+        if (isSceneType(type)) return profile(active ? '当前场景仓储' : '历史场景仓储', active ? 'current' : 'historical', active ? 'scene-current-storage' : 'scene-history-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
+        if (type === '事件') {
+            const closed = (0, semantic_1.isEventClosed)(entry);
+            return profile(active && !closed ? '活动事件仓储' : '历史事件仓储', active && !closed ? 'active' : closed ? 'closed' : 'settled', active && !closed ? 'event-active-storage' : 'event-history-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
+        }
+        if (isRoleType(type)) return profile(active || focus ? '现场人物仓储' : '人物沉降仓储', active || focus ? 'current' : 'settled', active || focus ? 'role-current-storage' : 'role-settled-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
+        if (type === '物品') return profile(active ? '活动物品仓储' : '物品仓储', active ? 'current' : 'settled', active ? 'item-current-storage' : 'item-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
+        return profile('世界书仓储', active ? 'current' : tierLifecycle(tier), 'warehouse-object', 'none', false, false, true, true, 0, baseOrder, 4, null);
+    }
 
     if (isFoundationEntry(entry, settings)) {
         return profile('基础设定', 'core', 'foundation', 'none', true, false, true, true, 0, 860, 0, null);
@@ -10498,7 +12175,7 @@ function countCriticalChanges(plan) {
             || operation.kind === 'delete-entry'
             || operation.kind === 'replace-line'
             || operation.kind === 'replace-section'
-            || /(身份|稳定|当前|当前状态|关系|持有|固定事实|持续经历|定义|空间结构|持续变化|在场|当前资源|活动关联|局部约束|参与|已发生进展|未发生进展|结果|时代|权力|制度|公开局势|世界变化|持续影响)/u.test(section);
+            || /(身份|稳定|性格核心|表达方式|决策倾向|关系立场|当前|当前状态|关系|持有|固定事实|持续经历|定义|空间结构|持续变化|在场|常驻角色|固定设施|当前资源|活动关联|局部约束|参与|附属人员|已发生进展|未发生进展|结果|时代|权力|制度|公开局势|世界变化|持续影响)/u.test(section);
         if (!important) continue;
         keys.add(`${operation.title}|${section}|${operation.kind}`);
     }
@@ -10525,6 +12202,8 @@ exports.DEFAULT_KEYWORDS = [
         { key: 'definition', label: '定义', policy: 'semantic-upsert' },
         { key: 'space', label: '空间结构', policy: 'semantic-upsert' },
         { key: 'fixedResources', label: '固定资源', policy: 'semantic-upsert' },
+        { key: 'fixedFacilities', label: '固定设施', policy: 'semantic-upsert' },
+        { key: 'residentRoles', label: '常驻角色', policy: 'semantic-upsert' },
         { key: 'fixedFacts', label: '固定事实', policy: 'semantic-upsert' },
         { key: 'current', label: '当前状态', policy: 'replace-section' },
         { key: 'present', label: '在场', policy: 'replace-section' },
@@ -10537,8 +12216,12 @@ exports.DEFAULT_KEYWORDS = [
     keyword('character', '人物', '角色身份、稳定能力、当前状态、角色自身关系、关键持有物与固定事实；人物描写只保留少量影响识别或剧情判断的客观特征。', ['角色', 'NPC'], false, [
         { key: 'identity', label: '身份', policy: 'semantic-upsert' },
         { key: 'stable', label: '稳定', policy: 'semantic-upsert' },
+        { key: 'personality', label: '性格核心', policy: 'semantic-upsert' },
+        { key: 'expression', label: '表达方式', policy: 'semantic-upsert' },
+        { key: 'decision', label: '决策倾向', policy: 'semantic-upsert' },
         { key: 'current', label: '当前', policy: 'replace-section' },
         { key: 'relations', label: '关系', policy: 'replace-by-anchor' },
+        { key: 'relationshipStance', label: '关系立场', policy: 'replace-by-anchor' },
         { key: 'holding', label: '持有', policy: 'replace-section' },
         { key: 'fixedFacts', label: '固定事实', policy: 'semantic-upsert' },
         COMMON_ALIASES,
@@ -10553,6 +12236,7 @@ exports.DEFAULT_KEYWORDS = [
     ], 500, false),
     keyword('event', '事件', '由同一因果链形成的状态变化记录；普通动作过滤，过程压缩，稳定结果分发。', ['事件链'], false, [
         { key: 'participants', label: '参与', policy: 'replace-section' },
+        { key: 'auxiliaryPeople', label: '附属人员', policy: 'replace-section' },
         { key: 'scenes', label: '场景', policy: 'replace-section' },
         { key: 'progressed', label: '已发生进展', policy: 'semantic-upsert' },
         { key: 'notProgressed', label: '未发生进展', policy: 'replace-section' },
@@ -10608,7 +12292,7 @@ exports.DEFAULT_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判
 5. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。
 只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只记录已经造成状态变化的进展，普通动作过滤，未造成变化但暂时必要的材料最多保留两条。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 exports.DEFAULT_SMALL_SUMMARY_PROMPT = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
 exports.DEFAULT_LARGE_SUMMARY_PROMPT = `将已经压缩完成的事件结果和稳定变化沉降为长期历史；覆盖旧世界历史，不接收普通动作、未发生进展、未来目标或重复过程，只分发长期有效的结果。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
@@ -10628,6 +12312,8 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     autoExtraction: false,
     autoSmallSummary: true,
     autoLargeSummary: true,
+    activityPackEnabled: true,
+    entryBudgetEnabled: true,
     auditEnabled: true,
     extractionEnabled: true,
     targetLorebook: '',
@@ -10643,11 +12329,13 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     criticalChangesForSmall: 6,
     largeSummaryCount: 5,
     queueCompactThreshold: 6,
+    activityPackHardMax: 1800,
     keywordDefinitions: exports.DEFAULT_KEYWORDS,
     sectionPolicies: {
         在场: 'replace-section', 当前资源: 'replace-section', 活动关联: 'replace-section', 世界影响: 'replace-section', 局部约束: 'replace-section',
+        常驻角色: 'semantic-upsert', 固定设施: 'semantic-upsert',
         持有: 'replace-section', 参与: 'replace-section', 场景: 'replace-section', 结果: 'replace-section',
-        当前: 'replace-section', 当前状态: 'replace-section', 关系: 'replace-by-anchor',
+        当前: 'replace-section', 当前状态: 'replace-section', 关系: 'replace-by-anchor', 关系立场: 'replace-by-anchor',
         固定事实: 'semantic-upsert', 已发生进展: 'semantic-upsert', 未发生进展: 'replace-section',
     },
 });
@@ -10693,6 +12381,8 @@ function parseSettings(value) {
         autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
         autoSmallSummary: candidate.autoSmallSummary !== false,
         autoLargeSummary: candidate.autoLargeSummary !== false,
+        activityPackEnabled: candidate.activityPackEnabled !== false,
+        entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
         auditEnabled: candidate.auditEnabled !== false,
         extractionEnabled: candidate.extractionEnabled !== false,
         targetLorebook: String(candidate.targetLorebook ?? ''),
@@ -10708,6 +12398,7 @@ function parseSettings(value) {
         criticalChangesForSmall: (0, util_1.clampNumber)(candidate.criticalChangesForSmall, 6, 1, 50),
         largeSummaryCount: (0, util_1.clampNumber)(candidate.largeSummaryCount, 5, 1, 30),
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
+        activityPackHardMax: (0, util_1.clampNumber)(candidate.activityPackHardMax, 1800, 600, 4000),
         keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions, candidate.tables),
         sectionPolicies,
     };
@@ -10907,7 +12598,7 @@ function splitTitle(value) {
     const parts = normalized.split('｜').map((part) => part.trim()).filter(Boolean);
     if (parts.length < 2) return null;
     const type = parts[0];
-    const batchId = parts.length >= 3 && /^(?:[A-Z]{1,3})?\d{2,5}-\d{2,4}$/iu.test(parts[1]) ? parts[1] : '';
+    const batchId = parts.length >= 3 && /^(?:(?:[A-Z]{1,3})?\d{2,5}-\d{2,4}|S\d{3,6}-[A-Z]\d{2,4})$/iu.test(parts[1]) ? parts[1] : '';
     const name = (batchId ? parts.slice(2) : parts.slice(1)).join('｜').trim();
     return type && name ? { type, name, batchId } : null;
 }
@@ -11182,6 +12873,139 @@ function worldSettingPreviewSummary(preview) {
         generatedAt: preview.generatedAt,
     };
 }
+},"worldbook-management":function(module,exports,require){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildWorldbookManagementView = buildWorldbookManagementView;
+const activity_pack_1 = require("./activity-pack");
+const governance_1 = require("./governance");
+const semantic_1 = require("./semantic");
+
+function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
+    const list = Array.isArray(entries) ? entries : [];
+    const pack = list.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE) ?? null;
+    const context = (0, governance_1.activeContext)(list, list.find((entry) => entry.focus)?.uid || '');
+    const issues = [];
+    const managed = list.filter((entry) => entry?.managed === true && entry.title !== governance_1.ACTIVITY_PACK_TITLE);
+    const currentScenes = managed.filter((entry) => /^(?:scene-current|scene-current-storage)$/u.test(String(entry.semanticRole ?? '')));
+    if (currentScenes.length > 1) issues.push(issue('error', 'multiple-current-scenes', `检测到${currentScenes.length}个当前场景`, currentScenes.map((entry) => entry.title)));
+    if (!context.scene) issues.push(issue('warning', 'missing-current-scene', '没有可识别的当前场景', []));
+    if (!gameTime?.label) issues.push(issue('info', 'unknown-game-time', '当前游戏时间尚未记录', []));
+
+    const fixedSceneRoles = lines(context.scene, '常驻角色');
+    const fixedFacilities = lines(context.scene, '固定设施');
+    const present = lines(context.scene, '在场');
+    if (fixedSceneRoles.length > 5) issues.push(issue('error', 'scene-role-capacity', `当前场景常驻角色超过5个：${fixedSceneRoles.length}`, [context.scene?.title].filter(Boolean)));
+    if (fixedFacilities.length > 8) issues.push(issue('error', 'scene-facility-capacity', `当前场景固定设施超过8个：${fixedFacilities.length}`, [context.scene?.title].filter(Boolean)));
+
+    const activeEvents = context.activeEvents ?? [];
+    for (const entry of activeEvents) {
+        const participants = lines(entry, '参与');
+        const auxiliary = lines(entry, '附属人员');
+        if (participants.length > 6) issues.push(issue('error', 'event-participant-capacity', `${entry.title}直接参与者超过6个`, [entry.title]));
+        if (auxiliary.length > 4) issues.push(issue('error', 'event-auxiliary-capacity', `${entry.title}附属人员超过4个`, [entry.title]));
+    }
+
+    const people = managed.filter((entry) => /^(?:人物|角色|NPC)$/u.test(String(entry.type ?? '')));
+    const currentPeople = new Set((context.characters ?? []).map((entry) => String(entry.uid)));
+    const settledPeople = people.filter((entry) => !currentPeople.has(String(entry.uid)) && entry.focus !== true);
+    for (const entry of people) {
+        const stable = ['性格核心', '表达方式', '决策倾向'].some((section) => lines(entry, section).length > 0);
+        if (currentPeople.has(String(entry.uid)) && !stable) issues.push(issue('warning', 'missing-character-style', `${entry.title}进入当前活动包但缺少性格/表达/决策信息`, [entry.title]));
+        if ((0, governance_1.isGenericBackgroundPerson)({ type: entry.type, name: entry.name, sections: sectionBlocks(entry) })) {
+            issues.push(issue('warning', 'temporary-npc-entry', `${entry.title}看起来仍是临时NPC独立条目`, [entry.title]));
+        }
+    }
+
+    const closedEvents = managed.filter((entry) => entry.type === '事件' && (0, semantic_1.isEventClosed)(entry));
+    const reopened = closedEvents.filter((entry) => /^(?:active|event-active|event-active-storage)$/u.test(String(entry.lifecycle || entry.semanticRole || '')));
+    for (const entry of reopened) issues.push(issue('error', 'closed-event-active', `${entry.title}已经完成却仍被标记为活动`, [entry.title]));
+
+    const hardMax = Math.max(600, Number(settings?.activityPackHardMax || 1800));
+    const packLength = String(pack?.content ?? '').length;
+    if (!pack) issues.push(issue(settings?.activityPackEnabled === false ? 'info' : 'error', 'missing-activity-pack', '当前活动包不存在', []));
+    else if (packLength > hardMax) issues.push(issue('error', 'activity-pack-over-budget', `活动包${packLength}字，超过硬上限${hardMax}`, [pack.title]));
+
+    const orphanRelations = [];
+    const idSet = new Set(managed.map((entry) => String(entry.uid)));
+    const titleById = new Map(managed.map((entry) => [String(entry.uid), entry.title]));
+    const directRelations = [];
+    const relationKeys = new Set();
+    for (const entry of managed) {
+        const extension = entry.raw?.extensions?.mirrorAbyssInfoPoint ?? {};
+        const relatedIds = Array.isArray(entry.relatedIds) ? entry.relatedIds : Array.isArray(extension.relatedIds) ? extension.relatedIds : [];
+        for (const related of relatedIds) {
+            const relatedId = String(related);
+            if (!idSet.has(relatedId)) {
+                orphanRelations.push(`${entry.title} → ${relatedId}`);
+                continue;
+            }
+            const pair = [String(entry.uid), relatedId].sort();
+            const key = pair.join('|');
+            if (relationKeys.has(key)) continue;
+            relationKeys.add(key);
+            directRelations.push({
+                sourceUid: pair[0], sourceTitle: titleById.get(pair[0]) || pair[0],
+                targetUid: pair[1], targetTitle: titleById.get(pair[1]) || pair[1],
+            });
+        }
+    }
+    if (orphanRelations.length) issues.push(issue('warning', 'orphan-relations', `发现${orphanRelations.length}个孤立关联`, orphanRelations.slice(0, 8)));
+
+    const diagnostics = pack?.activityPackDiagnostics ?? null;
+    const sectionChars = diagnostics?.sectionChars ?? sectionCharCounts(pack);
+    return {
+        gameTime: gameTime ? { ...gameTime } : null,
+        currentScene: context.scene ? {
+            uid: context.scene.uid,
+            title: context.scene.title,
+            present,
+            fixedSceneRoles,
+            fixedFacilities,
+        } : null,
+        activeEvents: activeEvents.map((entry) => ({ uid: entry.uid, title: entry.title, state: (0, governance_1.currentEventState)(entry) })),
+        currentPeople: (context.characters ?? []).map((entry) => ({ uid: entry.uid, title: entry.title })),
+        settledPeople: settledPeople.map((entry) => ({ uid: entry.uid, title: entry.title })).slice(0, 50),
+        directRelations: directRelations.slice(0, 100),
+        activityPack: pack ? {
+            uid: pack.uid,
+            title: pack.title,
+            content: pack.content,
+            length: packLength,
+            target: Number(diagnostics?.target || 0),
+            hardMax: Number(diagnostics?.hardMax || hardMax),
+            sectionChars,
+            includedEntries: diagnostics?.includedEntries ?? [],
+            excludedWarehouseEntries: Number(diagnostics?.excludedWarehouseEntries || 0),
+        } : null,
+        counts: {
+            managed: managed.length,
+            currentPeople: currentPeople.size,
+            settledPeople: settledPeople.length,
+            activeEvents: activeEvents.length,
+            closedEvents: closedEvents.length,
+            fixedSceneRoles: fixedSceneRoles.length,
+            fixedFacilities: fixedFacilities.length,
+            directRelations: directRelations.length,
+        },
+        issues,
+        healthy: !issues.some((item) => item.level === 'error'),
+        budget: (0, activity_pack_1.activityPackBudget)(context.characters?.length ?? 0, { hardMax }),
+    };
+}
+
+function lines(entry, section) {
+    return [...(entry?.sections?.values?.[section] ?? [])].map((line) => String(line ?? '').trim()).filter(Boolean);
+}
+function sectionBlocks(entry) {
+    return Object.entries(entry?.sections?.values ?? {}).map(([name, values]) => ({ name, lines: values ?? [], empty: !(values ?? []).length }));
+}
+function sectionCharCounts(pack) {
+    const output = {};
+    for (const [name, values] of Object.entries(pack?.sections?.values ?? {})) output[name] = (values ?? []).join('\n').length;
+    return output;
+}
+function issue(level, code, message, entries) { return { level, code, message, entries }; }
 },"worldbook":function(module,exports,require){
 
 "use strict";
@@ -11193,6 +13017,8 @@ const operations_1 = require("./operations");
 const parser_1 = require("./parser");
 const semantic_1 = require("./semantic");
 const recall_policy_1 = require("./recall-policy");
+const activity_pack_1 = require("./activity-pack");
+const governance_1 = require("./governance");
 const entry_section_1 = require("./domain/entry-section");
 const util_1 = require("./util");
 class WorldbookAdapter {
@@ -11209,10 +13035,12 @@ class WorldbookAdapter {
         return this.mutate(settings, snapshot, validate, (opened) => {
             const entries = parseEntries(opened.data);
             const focusUid = entries.find((entry) => entry.focus)?.uid ?? '';
-            this.applyNativeFields(entries, settings, focusUid, new Set());
+            this.upsertActivityPack(opened, settings, focusUid, { operationId: 'activity-pack-replan' });
+            this.applyNativeFields(parseEntries(opened.data), settings, focusUid, new Set());
             return {
                 verify(data) {
                     verifyRecallConstraints(parseEntries(data));
+                    verifyActivityPack(data, settings);
                 },
             };
         });
@@ -11275,8 +13103,10 @@ class WorldbookAdapter {
                 ...requestedKeywords.filter((item) => !(0, util_1.isUidKeyword)(item) && (0, util_1.normalizeFact)(item) !== (0, util_1.normalizeFact)(split?.type ?? '')),
             ]);
             markManaged(located.raw, '', logicalTitle, '');
-            const parsed = parseEntries(opened.data);
+            let parsed = parseEntries(opened.data);
             const focusedUid = parsed.find((entry) => entry.focus)?.uid ?? '';
+            this.upsertActivityPack(opened, settings, focusedUid, { operationId: 'activity-pack-edit' });
+            parsed = parseEntries(opened.data);
             this.applyNativeFields(parsed, settings, focusedUid, new Set([String(uid)]));
             return {
                 verify(data) {
@@ -11311,8 +13141,10 @@ class WorldbookAdapter {
             const extension = markManaged(located.raw, '', (0, util_1.stripUidSuffix)(String(located.raw.comment ?? '')), '');
             if (previousUpdatedAt) extension.updatedAt = previousUpdatedAt;
             extension.locked = locked === true;
-            const parsed = parseEntries(opened.data);
+            let parsed = parseEntries(opened.data);
             const focusedUid = parsed.find((entry) => entry.focus)?.uid ?? '';
+            this.upsertActivityPack(opened, settings, focusedUid, { operationId: 'activity-pack-lock' });
+            parsed = parseEntries(opened.data);
             this.applyNativeFields(parsed, settings, focusedUid, new Set());
             return {
                 verify(data) {
@@ -11348,6 +13180,7 @@ class WorldbookAdapter {
                     marked.focus = true;
                 }
             }
+            this.upsertActivityPack(opened, settings, nextUid, { operationId: 'activity-pack-focus' });
             const parsed = parseEntries(opened.data);
             this.applyNativeFields(parsed, settings, nextUid, new Set());
             return {
@@ -11359,8 +13192,10 @@ class WorldbookAdapter {
                         throw new Error('玩家焦点保存后未保持唯一');
                     if (!nextUid && focused.length)
                         throw new Error('玩家焦点清除失败');
-                    if (nextUid && findRawEntry(data, nextUid)?.raw.constant !== true)
+                    if (nextUid && settings.activityPackEnabled === false && findRawEntry(data, nextUid)?.raw.constant !== true)
                         throw new Error('焦点条目未设置为 constant');
+                    if (nextUid && settings.activityPackEnabled !== false && findRawEntry(data, nextUid)?.raw.constant === true)
+                        throw new Error('活动包模式下焦点原条目不应直接常驻');
                 },
             };
         });
@@ -11369,6 +13204,7 @@ class WorldbookAdapter {
         return this.mutate(settings, snapshot, validate, (opened) => {
             const focusedUid = parseEntries(opened.data).find((entry) => entry.focus)?.uid ?? '';
             applySummaryRebalance(this, opened.data, settings, kind, summaryText, focusedUid);
+            this.upsertActivityPack(opened, settings, focusedUid, { operationId: `activity-pack-${kind}` });
             return {
                 verify(data) {
                     const after = parseEntries(data);
@@ -11406,6 +13242,7 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName) throw new Error('目标世界书已经变化，拒绝提交');
         validate?.();
         const beforeVersion = digestWorldbook(opened.data);
+        const beforeData = (0, util_1.clone)(opened.data);
         const receiptBefore = snapshotRawEntries(opened.data);
         const before = parseEntries(opened.data);
         const writeOperations = plan.operations.filter((operation) => !['noop', 'delete-entry'].includes(operation.kind));
@@ -11417,7 +13254,7 @@ class WorldbookAdapter {
 
         if (writeOperations.length) {
             const phasePlan = { ...plan, operations: writeOperations };
-            expectedAfterWrites = (0, operations_1.applyPlanToEntries)(phasePlan, before);
+            expectedAfterWrites = (0, operations_1.applyPlanToEntries)(phasePlan, before, settings);
             const byUid = new Map(before.map((entry) => [entry.uid, entry]));
             for (const entry of expectedAfterWrites) {
                 if (entry.uid.startsWith('new:')) {
@@ -11432,6 +13269,9 @@ class WorldbookAdapter {
                     const original = byUid.get(entry.uid);
                     if (!original) throw new Error(`待更新条目 UID ${entry.uid} 不存在`);
                     hydrateRaw(original.raw, entry, sourceMessageKey, operationId);
+                    // [MA-SCENE-REAL-01] 后续场景活动时间与扩展字段必须写到真实世界书对象，不能停留在投影副本。
+                    entry.raw = original.raw;
+                    entry.mapKey = original.mapKey;
                 }
             }
             // [MA-SCENE-01] 单轮只有一个正文结束时的当前场景。只给提取结果中的首个场景刷新活动时间。
@@ -11464,18 +13304,25 @@ class WorldbookAdapter {
                     if (requiredTargets.some((title) => !currentTitles.has(title))) continue;
                 }
                 delete opened.data.entries[target.mapKey];
-                deleted.push(target.uid);
+                deleted.push({ uid: target.uid, title: target.title });
             }
             deletedCount = deleted.length;
         }
 
-        const changed = writeOperations.length > 0 || deletedCount > 0;
+        const packResult = this.upsertActivityPack(opened, settings, focusUid, {
+            operationId,
+            currentSceneTitle: plan.currentSceneTitle || plan.blocks?.find?.((block) => (0, recall_policy_1.isSceneType)(block.type))?.title || '',
+            gameTime: options.currentGameTime,
+        });
+        if (packResult.uid) touchedUids.add(String(packResult.uid));
+        const changed = writeOperations.length > 0 || deletedCount > 0 || packResult.changed === true;
         if (!changed) {
             const result = parseEntries(opened.data);
             result.changed = false;
             result.writeCount = 0;
             result.deleteCount = 0;
             result.receipt = null;
+            result.activityPack = packResult;
             return result;
         }
 
@@ -11492,16 +13339,34 @@ class WorldbookAdapter {
         validate?.();
         await this.save(opened);
         validate?.();
-        const verifiedData = await opened.api.loadWorldInfo(opened.name);
-        if (!verifiedData) throw new Error('世界书提交后回读失败');
-        verifyWriteResults(verifiedData, expectedAfterWrites, writeOperations, operationId, settings, focusUid);
-        verifyExitResults(verifiedData, deleted);
+        let verifiedData;
+        try {
+            verifiedData = await opened.api.loadWorldInfo(opened.name);
+            if (!verifiedData) throw new Error('世界书提交后回读失败');
+            verifyWriteResults(verifiedData, expectedAfterWrites, writeOperations, operationId, settings, focusUid);
+            verifyExitResults(verifiedData, deleted);
+            verifyActivityPack(verifiedData, settings);
+        }
+        catch (error) {
+            // [MA-ATOMIC-02] 保存后的验证也属于提交事务。验证失败必须恢复完整旧快照，不能留下半成功写入。
+            opened.data = (0, util_1.clone)(beforeData);
+            try {
+                await this.save(opened);
+                const restored = await opened.api.loadWorldInfo(opened.name);
+                if (!restored || digestWorldbook(restored) !== digestWorldbook(beforeData)) throw new Error('恢复后快照不一致');
+            }
+            catch (rollbackError) {
+                throw new Error(`世界书提交后验证失败，且旧快照恢复失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+            }
+            throw new Error(`世界书提交后验证失败，已恢复提交前快照：${(0, util_1.errorText)(error)}`);
+        }
         opened.data = verifiedData;
 
         const result = parseEntries(verifiedData);
         result.changed = true;
-        result.writeCount = writeOperations.length;
+        result.writeCount = writeOperations.length + Number(packResult.changed === true);
         result.deleteCount = deletedCount;
+        result.activityPack = packResult;
         result.receipt = buildCommitReceipt(receiptBefore, verifiedData, {
             id: operationId,
             sourceMessageKey,
@@ -11536,7 +13401,12 @@ class WorldbookAdapter {
                 if (!change.before) {
                     if (!current) continue;
                     const extension = readExtension(current.raw);
-                    if (extension.focus === true || extension.locked === true || current.raw.locked === true)
+                    const isRuntimePack = String(current.raw.comment || '') === governance_1.ACTIVITY_PACK_TITLE
+                        || String(extension.semanticRole || '') === 'activity-pack'
+                        || String(extension.storageRole || '') === 'runtime';
+                    // 活动包是本次事务生成的可重建投影。回执证明它在事务前不存在时，
+                    // 即使运行态为了防误改而被锁定，也必须允许随事务一起删除。
+                    if (!isRuntimePack && (extension.focus === true || extension.locked === true || current.raw.locked === true))
                         throw new Error(`条目“${current.raw.comment || uid}”已被设为焦点或锁定，不能自动删除`);
                     delete opened.data.entries[current.mapKey];
                     continue;
@@ -11569,9 +13439,62 @@ class WorldbookAdapter {
         result.rolledBack = ordered.length;
         return result;
     }
+    upsertActivityPack(opened, settings, focusUid = '', options = {}) {
+        const existingEntries = parseEntries(opened.data);
+        if (settings?.activityPackEnabled === false) {
+            const existingPack = existingEntries.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE);
+            if (existingPack?.mapKey != null) delete opened.data.entries[existingPack.mapKey];
+            return { changed: Boolean(existingPack), disabled: true, title: governance_1.ACTIVITY_PACK_TITLE, contentLength: 0, budget: null };
+        }
+        const gameTime = options.gameTime ?? currentGameTimeFromContext(this.context());
+        const block = (0, activity_pack_1.compileActivityPack)(existingEntries, {
+            focusUid,
+            currentSceneTitle: options.currentSceneTitle || '',
+            gameTime,
+            hardMax: settings.activityPackHardMax,
+        });
+        let located = existingEntries.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE);
+        let raw = located?.raw;
+        if (!raw) {
+            raw = this.createEntry(opened.api, opened.name, opened.data);
+            located = null;
+        }
+        const sections = {
+            order: block.sections.map((section) => section.name),
+            values: Object.fromEntries(block.sections.map((section) => [section.name, section.lines])),
+        };
+        const entry = located ? structuredClone(located) : {
+            uid: String(raw.uid ?? ''), mapKey: findMapKey(opened.data, raw), title: block.title,
+            normalizedTitle: (0, util_1.normalizeTitle)(block.title).toLocaleLowerCase(), type: block.type, name: block.name,
+            content: '', sections, keywords: block.keywords, aliases: [], references: [], focus: false, locked: true,
+            managed: true, activation: {}, raw,
+        };
+        entry.title = block.title;
+        entry.type = block.type;
+        entry.name = block.name;
+        entry.sections = sections;
+        entry.keywords = block.keywords;
+        entry.locked = true;
+        const nextContent = (0, parser_1.serializeEntrySections)(sections);
+        const hash = (0, util_1.hashText)(`${nextContent}|${gameTime?.label || ''}|${block.diagnostics.currentScene || ''}`);
+        const oldExtension = readExtension(raw);
+        const changed = String(raw.content ?? '') !== nextContent || String(oldExtension.activityPackHash ?? '') !== hash || raw.comment !== block.title;
+        if (changed) hydrateRaw(raw, entry, '', String(options.operationId || 'activity-pack'));
+        const extension = markManaged(raw, '', block.title, changed ? String(options.operationId || 'activity-pack') : '');
+        if (!changed && Number(oldExtension.updatedAt || 0)) extension.updatedAt = Number(oldExtension.updatedAt);
+        extension.locked = true;
+        extension.storageRole = 'runtime';
+        extension.lifecycle = 'active';
+        extension.semanticRole = 'activity-pack';
+        extension.activityPackHash = hash;
+        extension.activityPackDiagnostics = block.diagnostics;
+        raw.locked = true;
+        return { changed, uid: String(raw.uid ?? ''), title: block.title, diagnostics: block.diagnostics, contentLength: block.contentLength, budget: block.budget };
+    }
     applyNativeFields(entries, settings, focusUid, touchedUids, _createdUids = new Set()) {
         const normalizedFocusUid = String(focusUid ?? '');
         const recall = (0, recall_policy_1.buildRecallPlan)(entries, settings, normalizedFocusUid);
+        const relationIndex = (0, governance_1.buildDirectRelationIndex)(entries);
         for (const entry of entries) {
             const focus = normalizedFocusUid ? entry.uid === normalizedFocusUid : entry.focus;
             const managed = entry.managed || touchedUids.has(entry.uid) || focus;
@@ -11588,6 +13511,15 @@ class WorldbookAdapter {
             extension.recallProfile = profile.name;
             extension.lifecycle = profile.lifecycle;
             extension.semanticRole = profile.semanticRole;
+            extension.storageRole = entry.title === governance_1.ACTIVITY_PACK_TITLE ? 'runtime' : 'warehouse';
+            extension.entityClass = /^(?:人物|角色|NPC)$/u.test(String(entry.type ?? ''))
+                ? (profile.lifecycle === 'settled' ? 'settled-character' : 'character')
+                : /^(?:场景|时空)$/u.test(String(entry.type ?? '')) ? 'scene'
+                    : entry.type === '事件' ? 'event' : String(entry.type ?? 'object');
+            extension.hostSceneTitle = profile.lifecycle === 'current' && /^(?:人物|角色|NPC)$/u.test(String(entry.type ?? ''))
+                ? (entries.find((candidate) => /^(?:scene-current|scene-current-storage)$/u.test(String(candidate.semanticRole ?? '')))?.title || '')
+                : String(extension.hostSceneTitle || '');
+            extension.relatedIds = [...(relationIndex.get(String(entry.uid)) ?? new Set())];
             extension.sceneStage = recall.sceneStages.get(String(entry.uid)) || '';
             delete extension.evidence;
         }
@@ -11726,7 +13658,7 @@ function parseEntries(data) {
         const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称'], split.type));
         const extension = readExtension(raw);
         const storedKeywords = (0, util_1.normalizeStringArray)(extension.recallKeywords);
-        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
+        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], activityPackDiagnostics: extension.activityPackDiagnostics && typeof extension.activityPackDiagnostics === 'object' ? structuredClone(extension.activityPackDiagnostics) : null, sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
 }
@@ -11794,16 +13726,33 @@ function applyKeywordPolicy(raw, entry, profile, extension) {
     raw.key = (0, util_1.unique)(candidates);
 }
 function verifyRecallConstraints(entries) {
-    const currentScenes = entries.filter((entry) => entry.managed && entry.semanticRole === 'scene-current');
-    if (currentScenes.length > 1) throw new Error('当前场景常驻超过一条');
+    const currentScenes = entries.filter((entry) => entry.managed && /^(?:scene-current|scene-current-storage)$/u.test(entry.semanticRole));
+    if (currentScenes.length > 1) throw new Error('当前场景超过一条');
+    const pack = entries.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE && entry.activation.constant === true);
     for (const entry of entries.filter((item) => item.managed)) {
-        if (entry.focus && (!entry.activation.constant || !entry.activation.preventRecursion || !entry.activation.excludeRecursion)) throw new Error(`长期焦点未保持常驻递归隔离：${entry.title}`);
+        if (entry.focus && !pack && (!entry.activation.constant || !entry.activation.preventRecursion || !entry.activation.excludeRecursion)) throw new Error(`长期焦点未保持常驻递归隔离：${entry.title}`);
+        if (pack && entry.title !== governance_1.ACTIVITY_PACK_TITLE && (entry.activation.constant || entry.activation.vectorized || entry.triggerKeywords?.length)) throw new Error(`活动包模式下仓储条目仍可直接召回：${entry.title}`);
         if (entry.activation.vectorized && entry.triggerKeywords?.length) throw new Error(`纯向量条目仍保留关键词：${entry.title}`);
         const maySpread = /^(scene-|world-state)/u.test(entry.semanticRole || '');
         if (!maySpread && entry.activation.preventRecursion !== true) throw new Error(`非场景/世界条目仍可继续递归：${entry.title}`);
     }
 }
 
+function currentGameTimeFromContext(context) {
+    const root = context?.chatMetadata?.[constants_1.EXTENSION_NAMESPACE];
+    const value = root?.currentGameTime;
+    return value && typeof value === 'object' ? structuredClone(value) : null;
+}
+function verifyActivityPack(data, settings) {
+    const entries = parseEntries(data);
+    const packs = entries.filter((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE);
+    if (settings?.activityPackEnabled !== false) {
+        if (packs.length !== 1) throw new Error(`当前活动包数量异常：${packs.length}`);
+        if (!packs[0].activation.constant || !packs[0].activation.preventRecursion || !packs[0].activation.excludeRecursion) throw new Error('当前活动包没有保持常驻递归隔离');
+        const hardMax = Math.max(600, Number(settings?.activityPackHardMax || 1800));
+        if (String(packs[0].content ?? '').length > hardMax + 240) throw new Error('当前活动包超过硬预算');
+    }
+}
 function ensureUidIdentity(raw, uid, logicalTitle) {
     const effectiveUid = String(uid ?? raw.uid ?? '').trim();
     const title = (0, util_1.stripUidSuffix)(logicalTitle || String(raw.comment ?? raw.name ?? raw.title ?? ''));
@@ -11918,7 +13867,12 @@ function verifyWriteResults(data, expectedEntries, operations, operationId, sett
 }
 function verifyExitResults(data, deleted) {
     const entries = parseEntries(data);
-    for (const uid of deleted) if (entries.some((item) => item.uid === uid)) throw new Error(`条目删除未正确落盘：UID ${uid}`);
+    for (const record of deleted) {
+        const uid = String(record?.uid ?? record ?? '');
+        const title = String(record?.title ?? '');
+        const sameOldEntry = entries.some((item) => item.uid === uid && (!title || (0, util_1.normalizeTitle)(item.title) === (0, util_1.normalizeTitle)(title)));
+        if (sameOldEntry) throw new Error(`条目删除未正确落盘：${title || `UID ${uid}`}`);
+    }
 }
 function normalizeContent(value) { return String(value ?? '').replace(/\r/g, '').trim(); }
 function finiteNumber(value, fallback) {

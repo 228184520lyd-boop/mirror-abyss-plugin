@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.25",
+  "version": "2.0.0-lite.ui.27",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "上下文白盒审核｜玩家设定初始化、事实提取、来源行重建与轻量召回"
+  "description": "三维世界书治理｜活动包、当前游戏时间、分发沉降与容量防护"
 }
