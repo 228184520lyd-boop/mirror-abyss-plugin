@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.32 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.33 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1166,7 +1166,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.32';
+exports.VERSION = '2.0.0-lite.ui.33';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -3317,6 +3317,9 @@ function relationText(entry) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HostAdapter = void 0;
+exports.extractModelText = extractModelText;
+exports.extractReasoningText = extractReasoningText;
+exports.describeModelResponse = describeModelResponse;
 const constants_1 = require("./constants");
 const util_1 = require("./util");
 class HostAdapter {
@@ -3599,21 +3602,40 @@ class HostAdapter {
     async generate(systemPrompt, prompt, responseLength, snapshot, currentSettings, timeoutMs, profileId = '') {
         this.assertSnapshot(snapshot, currentSettings);
         const context = this.context();
+        const route = describeModelRoute(context, profileId);
         let request;
         try {
             if (profileId) {
                 const service = context.ConnectionManagerRequestService;
                 if (!service) throw new Error('Connection Profile 服务不可用');
+                if (typeof service.getProfile === 'function') {
+                    let profile = null;
+                    try { profile = service.getProfile(profileId); }
+                    catch (error) { throw new Error(`无法读取 Connection Profile：${(0, util_1.errorText)(error)}`); }
+                    if (!profile) throw new Error(`所选 Connection Profile 已不存在：${profileId}`);
+                }
                 request = service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
                 ], responseLength, { stream: false, extractData: true, includePreset: true });
-            } else {
-                const generateRaw = context.generateRaw;
-                if (typeof generateRaw !== 'function') throw new Error('当前 SillyTavern 未提供 generateRaw');
-                request = generateRaw({ systemPrompt, prompt, responseLength });
             }
-        } catch (error) {
+            else {
+                // [MA-HOST-MODEL-01] 当前连接优先使用 SillyTavern 官方“原始响应 + 官方解析器”组合。
+                // generateRawData 能保留不同 API 的真实返回结构，extractMessageFromData 负责按宿主当前 API 解析，
+                // 避免插件自行猜测 OpenAI / Claude / Gemini / Text Completion 等响应格式。
+                const generateRawData = context.generateRawData;
+                const extractMessageFromData = context.extractMessageFromData;
+                if (typeof generateRawData === 'function' && typeof extractMessageFromData === 'function') {
+                    request = generateRawData({ systemPrompt, prompt, responseLength });
+                }
+                else {
+                    const generateRaw = context.generateRaw;
+                    if (typeof generateRaw !== 'function') throw new Error('当前 SillyTavern 未提供 generateRawData 或 generateRaw');
+                    request = generateRaw({ systemPrompt, prompt, responseLength });
+                }
+            }
+        }
+        catch (error) {
             throw new Error(`模型请求启动失败：${(0, util_1.errorText)(error)}`);
         }
         let raw;
@@ -3624,13 +3646,29 @@ class HostAdapter {
                     snapshot.token.reason = `模型调用超时（${timeoutMs}ms）`;
                 }
             });
-        } catch (error) {
+        }
+        catch (error) {
             if (snapshot.token?.cancelled) throw new Error(snapshot.token.reason || '任务已取消');
             throw new Error(`模型请求失败：${(0, util_1.errorText)(error)}`);
         }
         this.assertSnapshot(snapshot, currentSettings);
-        const text = extractModelText(raw).trim();
-        if (!text) throw new Error('模型返回为空或没有文本内容');
+        const text = extractModelText(raw, context).trim();
+        if (!text) {
+            const reasoning = extractReasoningText(raw).trim();
+            const responseShape = describeModelResponse(raw);
+            console.warn('[MirrorAbyss] model response contained no final text', {
+                route: route.label,
+                responseShape,
+                reasoningLength: reasoning.length,
+            });
+            if (reasoning) {
+                throw new Error(`模型只返回了推理内容，没有最终文本（推理 ${reasoning.length} 字）。${route.label}；返回结构：${responseShape}`);
+            }
+            if (route.noModelLikely) {
+                throw new Error(`模型连接未识别到可用模型。${route.label}；请在 API Connections 中选择模型并确认连接成功`);
+            }
+            throw new Error(`模型请求已完成，但 SillyTavern 未解析出最终文本。${route.label}；返回结构：${responseShape}`);
+        }
         if (looksLikeHtml(text)) throw new Error('模型返回了 HTML 错误页');
         return text;
     }
@@ -3889,7 +3927,11 @@ class HostAdapter {
         return {
             chatKey: this.chatKey(),
             generateRaw: typeof context.generateRaw === 'function',
+            generateRawData: typeof context.generateRawData === 'function',
+            extractMessageFromData: typeof context.extractMessageFromData === 'function',
             connectionProfiles: Boolean(context.ConnectionManagerRequestService),
+            mainApi: String(context.mainApi ?? context.main_api ?? ''),
+            currentModel: readCurrentModel(context),
             saveChat: typeof context.saveChat === 'function' || typeof context.saveChatConditional === 'function',
             saveMetadata: typeof context.saveMetadata === 'function' || typeof context.saveMetadataDebounced === 'function',
             events: Object.keys(events).filter((key) => /CHAT|MESSAGE|APP_READY/u.test(key)).sort(),
@@ -4011,14 +4053,149 @@ function withTimeout(promise, timeoutMs, onTimeout) {
     });
     return Promise.race([Promise.resolve(promise), timeout]).finally(() => globalThis.clearTimeout(timer));
 }
-function extractModelText(raw) {
+function extractModelText(raw, context = null) {
     if (typeof raw === 'string') return raw;
-    if (!raw || typeof raw !== 'object') return '';
-    if (typeof raw.content === 'string') return raw.content;
-    if (Array.isArray(raw.content)) return raw.content.map((item) => typeof item === 'string' ? item : String(item?.text ?? item?.content ?? '')).join('');
-    if (typeof raw.text === 'string') return raw.text;
-    if (typeof raw.message?.content === 'string') return raw.message.content;
-    if (typeof raw.choices?.[0]?.message?.content === 'string') return raw.choices[0].message.content;
+    if (raw === null || raw === undefined) return '';
+    // [MA-HOST-MODEL-02] 先让 SillyTavern 用当前 API 的官方解析器处理原始响应。
+    if (context && typeof context.extractMessageFromData === 'function' && typeof raw === 'object') {
+        try {
+            const official = context.extractMessageFromData(raw, context.mainApi ?? context.main_api ?? null);
+            const officialText = finalTextValue(official);
+            if (officialText.trim()) return officialText;
+        }
+        catch (error) {
+            console.warn('[MirrorAbyss] SillyTavern official response parser failed', (0, util_1.errorText)(error));
+        }
+    }
+    return finalTextValue(raw);
+}
+function finalTextValue(value, depth = 0) {
+    if (depth > 8 || value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return '';
+    if (Array.isArray(value)) {
+        return value.map((item) => finalTextValue(item, depth + 1)).filter(Boolean).join('');
+    }
+    if (typeof value !== 'object') return '';
+    // 已提取响应、OpenAI Chat Completions、Anthropic content blocks。
+    for (const key of ['content', 'text', 'output_text', 'generated_text', 'completion']) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+        const text = finalTextValue(value[key], depth + 1);
+        if (text.trim()) return text;
+    }
+    if (value.message) {
+        const text = finalTextValue(value.message, depth + 1);
+        if (text.trim()) return text;
+    }
+    if (Array.isArray(value.choices) && value.choices.length) {
+        for (const choice of value.choices) {
+            const text = finalTextValue(choice?.message ?? choice?.text ?? choice?.delta, depth + 1);
+            if (text.trim()) return text;
+        }
+    }
+    // OpenAI Responses API: output[].content[].text；Gemini: candidates[].content.parts[].text。
+    for (const key of ['output', 'candidates', 'results', 'parts']) {
+        if (!Array.isArray(value[key])) continue;
+        const text = finalTextValue(value[key], depth + 1);
+        if (text.trim()) return text;
+    }
+    if (value.data && value.data !== value) {
+        const text = finalTextValue(value.data, depth + 1);
+        if (text.trim()) return text;
+    }
+    if (value.response && value.response !== value) {
+        const text = finalTextValue(value.response, depth + 1);
+        if (text.trim()) return text;
+    }
+    return '';
+}
+function extractReasoningText(raw, depth = 0) {
+    if (depth > 8 || raw === null || raw === undefined) return '';
+    if (Array.isArray(raw)) return raw.map((item) => extractReasoningText(item, depth + 1)).filter(Boolean).join('');
+    if (typeof raw !== 'object') return '';
+    const output = [];
+    for (const key of ['reasoning', 'reasoning_content', 'thinking', 'analysis']) {
+        const value = raw[key];
+        if (typeof value === 'string' && value.trim()) output.push(value);
+        else if (value && typeof value === 'object') {
+            const nested = finalTextValue(value, depth + 1);
+            if (nested.trim()) output.push(nested);
+        }
+    }
+    if (raw.state?.reasoning) output.push(String(raw.state.reasoning));
+    if (Array.isArray(raw.content)) {
+        for (const block of raw.content) {
+            if (block?.type === 'thinking' || block?.type === 'reasoning') {
+                const text = String(block?.thinking ?? block?.reasoning ?? block?.text ?? block?.content ?? '');
+                if (text.trim()) output.push(text);
+            }
+        }
+    }
+    if (Array.isArray(raw.choices)) {
+        for (const choice of raw.choices) {
+            const nested = extractReasoningText(choice?.message ?? choice?.delta ?? choice, depth + 1);
+            if (nested.trim()) output.push(nested);
+        }
+    }
+    return output.join('\n');
+}
+function describeModelResponse(raw) {
+    if (raw === null) return 'null';
+    if (raw === undefined) return 'undefined';
+    if (typeof raw === 'string') return `string(${raw.length})`;
+    if (Array.isArray(raw)) return `array(${raw.length})`;
+    if (typeof raw !== 'object') return typeof raw;
+    const ctor = raw?.constructor?.name && raw.constructor.name !== 'Object' ? raw.constructor.name : 'object';
+    const keys = Object.keys(raw).slice(0, 12);
+    return `${ctor}{${keys.join(',') || '无字段'}}`;
+}
+function describeModelRoute(context, profileId) {
+    const mainApi = String(context.mainApi ?? context.main_api ?? '').trim() || '未知';
+    if (profileId) {
+        let profile = null;
+        try { profile = context.ConnectionManagerRequestService?.getProfile?.(profileId) ?? null; }
+        catch { profile = null; }
+        const name = String(profile?.name ?? profileId);
+        const model = readModelFromObject(profile);
+        const modelExcluded = Array.isArray(profile?.exclude) && profile.exclude.includes('model');
+        return {
+            label: `连接配置：${name}；模式：${String(profile?.mode ?? '未知')}${model ? `；模型：${model}` : '；模型：未记录'}`,
+            noModelLikely: Boolean(profile && profile.mode === 'cc' && !model && !modelExcluded),
+        };
+    }
+    const model = readCurrentModel(context);
+    const chatCompletion = mainApi === 'openai';
+    return {
+        label: `当前连接；主 API：${mainApi}；模型：${model || '未识别'}`,
+        noModelLikely: chatCompletion && !model,
+    };
+}
+function readCurrentModel(context) {
+    try {
+        const direct = context.getChatCompletionModel?.();
+        if (direct) return String(direct);
+    }
+    catch { /* ignore host getter failure */ }
+    return String(
+        context.chatCompletionSettings?.model
+        ?? context.chat_completion_model
+        ?? context.textgenerationwebui_settings?.model
+        ?? context.textgenerationwebui_settings?.model_name
+        ?? context.textgenerationwebui_settings?.vllm_model
+        ?? context.textgenerationwebui_settings?.ollama_model
+        ?? '',
+    ).trim();
+}
+function readModelFromObject(value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 5) return '';
+    for (const key of ['model', 'modelId', 'model_id', 'modelName', 'model_name']) {
+        const candidate = value[key];
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    for (const key of ['settings', 'config', 'connection', 'api']) {
+        const nested = readModelFromObject(value[key], depth + 1);
+        if (nested) return nested;
+    }
     return '';
 }
 function looksLikeHtml(text) {
@@ -9483,15 +9660,47 @@ async function callModel(options) {
         return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
     }
     catch (error) {
-        if (snapshot?.token?.cancelled || !fallbackPrompt || !isRetryableGatewayError(error))
+        const emptyResponse = isEmptyModelResponseError(error);
+        if (snapshot?.token?.cancelled || !fallbackPrompt || (!isRetryableGatewayError(error) && !emptyResponse))
             throw error;
         const fallbackValue = typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt;
         const fallback = limitPromptPair(fallbackValue, stage, true);
-        const fallbackTokens = Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
+        const fallbackTokens = emptyResponse
+            ? emptyResponseRetryTokens(stage, settings, responseLength)
+            : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
         try { onRetry?.(error); }
         catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
-        return host.generate(fallback.system, fallback.user, fallbackTokens, snapshot, settings, settings.requestTimeoutMs, profileId);
+        return host.generate(
+            fallback.system,
+            fallback.user,
+            fallbackTokens,
+            snapshot,
+            settings,
+            settings.requestTimeoutMs,
+            profileId,
+            emptyResponse ? { includePreset: false } : undefined,
+        );
     }
+}
+
+function isEmptyModelResponseError(error) {
+    return error?.code === 'MA_EMPTY_MODEL_RESPONSE' || error?.code === 'MA_REASONING_ONLY';
+}
+function emptyResponseRetryTokens(stage, settings, firstTokens) {
+    const minimums = {
+        audit: 1536,
+        revision: 4096,
+        extraction: 6144,
+        extractionRepair: 4096,
+        worldSettingImport: 8192,
+        smallSummary: 4096,
+        largeSummary: 6144,
+        migration: 4096,
+        migrationPlan: 8192,
+        migrationReview: 4096,
+    };
+    const configured = Math.max(256, Number(settings?.responseTokens) || 3072);
+    return Math.min(8192, Math.max(Number(firstTokens) * 2, configured, minimums[stage] || 4096));
 }
 
 /** [MA-MODEL-03] 不同任务不再共用 3072 输出上限。 */
@@ -12754,14 +12963,23 @@ function hashText(value) {
     return (hash >>> 0).toString(36);
 }
 function errorText(error) {
-    if (error instanceof Error)
-        return `${error.name}: ${error.message}`;
-    try {
-        return JSON.stringify(error);
-    }
-    catch {
-        return String(error);
-    }
+    const seen = new Set();
+    const render = (value, depth = 0) => {
+        if (depth > 4) return '';
+        if (value instanceof Error) {
+            if (seen.has(value)) return '';
+            seen.add(value);
+            const head = `${value.name}: ${value.message}`;
+            const cause = value.cause ? render(value.cause, depth + 1) : '';
+            return cause && cause !== head ? `${head} ← ${cause}` : head;
+        }
+        if (value && typeof value === 'object') {
+            try { return JSON.stringify(value); }
+            catch { return String(value); }
+        }
+        return String(value ?? '');
+    };
+    return render(error);
 }
 function isPlainObject(value) {
     return Boolean(value && typeof value === 'object' && !Array.isArray(value));

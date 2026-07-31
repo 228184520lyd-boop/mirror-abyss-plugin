@@ -1,8 +1,17 @@
-# Mirror Abyss 2.0.0-lite.ui.32
+# Mirror Abyss 2.0.0-lite.ui.33
 
 面向 SillyTavern 1.18 的轻量正文审核、事实提取、事件结算、总结沉降与世界书活动包扩展。
 
 本版继续以 **SillyTavern 聊天世界书作为唯一长期数据源**。没有第二剧情数据库、图数据库、持久 Outbox、全局人物状态机或独立时间数据库。
+
+
+## ui.33 SillyTavern 官方模型响应适配
+
+- 当前连接优先调用 SillyTavern 的 `generateRawData` 获取原始响应，再由宿主 `extractMessageFromData` 按当前 API 解析最终文本；宿主不提供这组接口时回退原有 `generateRaw`。
+- Connection Profile 继续通过官方 `ConnectionManagerRequestService.sendRequest` 调用，不读取或保存 API Key。
+- 兼容常见响应结构，并区分“Profile 已失效”“聊天补全 Profile 未记录模型”“只返回推理”“请求完成但无最终文本”。
+- 错误状态会显示连接名称、API/模式、模型和返回字段结构，不再使用含糊的“为空或无模型”。
+- 自动化回归：109/109 通过。
 
 
 ## ui.32 当前聊天唯一世界书与真实提交结果
