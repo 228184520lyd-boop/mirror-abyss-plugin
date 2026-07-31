@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.33 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.36 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -25,7 +25,8 @@ function compileActivityPack(entries, options = {}) {
     const gameTime = options.gameTime ?? null;
     const budget = activityPackBudget(context.characters.length);
     if (Number(options.hardMax) > 0) {
-        budget.hardMax = Math.max(600, Math.min(4000, Number(options.hardMax)));
+        budget.configuredHardMax = Math.max(600, Math.min(4000, Number(options.hardMax)));
+        budget.hardMax = budget.configuredHardMax;
         budget.target = Math.min(budget.target, budget.hardMax);
     }
     const sections = activityPackSections(list, context, gameTime, budget);
@@ -49,6 +50,7 @@ function activityPackBudget(characterCount) {
     return {
         target: Math.min(1800, 760 + characters * 180),
         hardMax: Math.min(2200, 980 + characters * 210),
+        configuredHardMax: Math.min(2200, 980 + characters * 210),
         characterCount: characters,
     };
 }
@@ -304,6 +306,13 @@ function activityDiagnostics(entries, context, sections, budget, contentLength) 
     if (context.scene) includedTitles.add(context.scene.title);
     for (const entry of context.characters) includedTitles.add(entry.title);
     for (const entry of context.activeEvents) includedTitles.add(entry.title);
+    const foundationFacts = entries
+        .filter((entry) => entry.type === '基础设定')
+        .flatMap((entry) => ['世界常识', '自然规则', '社会规则', '能力与技术']
+            .flatMap((section) => entry.sections?.values?.[section] ?? []))
+        .map(cleanLine)
+        .filter(Boolean);
+    const includedFoundationFacts = sections.find((section) => section.name === '核心规则')?.lines?.length ?? 0;
     return {
         currentScene: context.scene?.title ?? '',
         activeCharacters: context.characters.map((entry) => entry.title),
@@ -314,6 +323,11 @@ function activityDiagnostics(entries, context, sections, budget, contentLength) 
         contentLength,
         target: budget.target,
         hardMax: budget.hardMax,
+        configuredHardMax: budget.configuredHardMax || budget.hardMax,
+        foundationFactsTotal: foundationFacts.length,
+        foundationFactsIncluded: includedFoundationFacts,
+        foundationFactsOmitted: Math.max(0, foundationFacts.length - includedFoundationFacts),
+        strictBudget: true,
         overTarget: contentLength > budget.target,
         overHardMax: contentLength > budget.hardMax,
     };
@@ -333,26 +347,32 @@ const world_setting_import_1 = require("./world-setting-import");
 const util_1 = require("./util");
 const control_panel_1 = require("./control-panel");
 const worldbook_management_1 = require("./worldbook-management");
+const diagnostics_1 = require("./diagnostics");
 class MirrorAbyssApplication {
     constructor() {
         this.host = new host_1.HostAdapter();
         this.settingsStore = new settings_1.SettingsStore();
         this.worldbook = new worldbook_1.WorldbookAdapter(() => this.host.context(), () => this.host.chatKey());
+        this.diagnostics = new diagnostics_1.DiagnosticsService(this.host, this.worldbook, () => this.settings(), (progress) => {
+            this.controlPanel?.setDiagnosticProgress?.(progress);
+        });
         this.auditRunner = new audit_1.AuditRunner(this.host, () => this.settings(), (progress) => {
             const snapshot = this.activeSnapshots.get(progress?.chatKey || safeChatKey(this.host));
             const messageIndex = Number.isInteger(snapshot?.messageIndex) ? snapshot.messageIndex : null;
-            if (progress?.phase === 'revision') {
-                const detail = progress.detail || '审核未通过，正在生成修正版';
-                this.controlPanel?.setTaskProgress?.('audit', 'running', detail, { messageIndex });
-                if (snapshot?.taskType === 'full') {
-                    this.controlPanel?.setTaskProgress?.('extract', 'queued', '上一轮审核未通过，等待修正版后提取', { messageIndex });
-                }
-                this.controlPanel?.setStatus?.(detail);
+            if (progress?.phase === 'audit') {
+                this.controlPanel?.setTaskProgress?.('audit', 'running', progress.detail || '正在审核正文', { messageIndex });
+            } else if (progress?.phase === 'revision') {
+                this.controlPanel?.setTaskProgress?.('audit', 'warning', '审核未通过，已进入修正', { messageIndex });
+                this.controlPanel?.setTaskProgress?.('revision', 'running', progress.detail || '正在生成完整修正版', { messageIndex });
+                if (snapshot?.taskType === 'full') this.controlPanel?.setTaskProgress?.('extract', 'queued', '等待修正完成', { messageIndex });
             }
         });
         this.memoryRunner = new memory_1.MemoryRunner(this.host, this.worldbook, () => this.settings(), (progress) => {
             const active = this.activeSnapshots.get(safeChatKey(this.host));
-            this.controlPanel?.setTaskProgress?.('extract', progress?.state || 'running', progress?.detail || '', { ...(progress || {}), messageIndex: progress?.messageIndex ?? active?.messageIndex ?? null });
+            const phase = progress?.phase === 'write' ? 'write' : 'extract';
+            const meta = { ...(progress || {}), messageIndex: progress?.messageIndex ?? active?.messageIndex ?? null };
+            if (phase === 'write' && progress?.state === 'running') this.controlPanel?.setTaskProgress?.('extract', 'success', '最终协议已形成，等待写入', meta);
+            this.controlPanel?.setTaskProgress?.(phase, progress?.state || 'running', progress?.detail || '', meta);
         });
         this.migrationService = new migration_1.MigrationService(this.host, this.worldbook, () => this.settings(), (progress) => {
             this.controlPanel?.setMigrationProgress?.(progress);
@@ -363,6 +383,7 @@ class MirrorAbyssApplication {
         this.controlPanel = new control_panel_1.ControlPanel({
             getSettings: () => this.settings(),
             configure: (patch) => this.configure(patch),
+            process: () => this.processLatest(),
             audit: () => this.audit(),
             extract: () => this.extract(),
             smallSummary: () => this.smallSummary(),
@@ -383,6 +404,9 @@ class MirrorAbyssApplication {
             worldSettingsPreview: () => this.worldSettingsPreview(),
             resetCurrentChat: () => this.resetCurrentChat(),
             resetPlugin: () => this.resetPlugin(),
+            runAcceptance: () => this.runAcceptance(),
+            exportDiagnostics: () => this.exportDiagnostics(),
+            getDiagnostics: () => this.diagnosticsReport(),
             // [MA-APP-API-01] UI 只调用 SillyTavern 官方 Connection Profile 服务，不保存密钥或自建 API 配置。
             bindProfileDropdown: (selector, selectedId, onChange) => this.host.bindProfileDropdown(selector, selectedId, onChange),
             connectionProfilesAvailable: () => this.host.connectionProfilesAvailable(),
@@ -443,6 +467,11 @@ class MirrorAbyssApplication {
     }
     clearWorldSettingsPreview() { return this.worldSettingImportService.clearPreview(); }
     worldSettingsPreview() { return this.worldSettingImportService.previewSummary(); }
+    runAcceptance() {
+        return this.enqueueMaintenance('acceptance', async (settings, snapshot) => this.diagnostics.run(settings, snapshot, () => this.host.assertSnapshot(snapshot, this.settings())));
+    }
+    exportDiagnostics() { return this.diagnostics.exportLast(); }
+    diagnosticsReport() { return this.diagnostics.currentReport(); }
     async resetCurrentChat() {
         const chatKey = this.host.chatKey();
         this.clearPendingMessageTimers(chatKey);
@@ -458,6 +487,8 @@ class MirrorAbyssApplication {
         this.memoryRunner.resetStatus?.(chatKey);
         this.migrationService.clearPreview?.();
         this.worldSettingImportService.clearPreview();
+        this.diagnostics.clear();
+        this.controlPanel.renderDiagnosticReport?.(null);
         this.controlPanel.resetTaskStates?.('当前聊天已重置');
         return { chatKey, worldbookPreserved: true };
     }
@@ -475,6 +506,8 @@ class MirrorAbyssApplication {
         this.memoryRunner.resetStatus?.();
         this.migrationService.clearPreview?.();
         this.worldSettingImportService.clearPreview();
+        this.diagnostics.clear();
+        this.controlPanel.renderDiagnosticReport?.(null);
         this.taskQueues.clear();
         this.pendingTaskKeys.clear();
         this.activeSnapshots.clear();
@@ -632,6 +665,8 @@ class MirrorAbyssApplication {
             this.clearPendingSourceReconcileTimers();
             this.cancelAll(reason);
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
+            this.diagnostics.clear();
+            this.controlPanel.renderDiagnosticReport?.(null);
             this.controlPanel.resetTaskStates?.('聊天已经切换');
             this.controlPanel.setStatus('聊天已经切换，旧聊天任务已取消');
             return;
@@ -757,8 +792,14 @@ class MirrorAbyssApplication {
         if (automatic) this.compactAutomaticQueue(chatKey, queue, this.settings(), turn);
         const position = queue.items.length + (queue.running ? 1 : 0);
         const queuedDetail = `${automatic ? '自动' : ''}${taskType === 'audit' ? '审核' : taskType === 'extraction' ? '提取' : taskType === 'full' ? '审核与提取' : '任务'}已进入异步队列（第${position}项）`;
-        if (taskType === 'audit' || taskType === 'full') this.controlPanel.setTaskProgress?.('audit', 'queued', queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
-        if (taskType === 'extraction' || taskType === 'full') this.controlPanel.setTaskProgress?.('extract', 'queued', queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
+        if (taskType === 'audit' || taskType === 'full') {
+            this.controlPanel.setTaskProgress?.('audit', 'queued', queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
+            this.controlPanel.setTaskProgress?.('revision', 'queued', '等待审核结论', { messageIndex: turn.messageIndex, queuePosition: position });
+        }
+        if (taskType === 'extraction' || taskType === 'full') {
+            this.controlPanel.setTaskProgress?.('extract', 'queued', taskType === 'full' ? '等待审核/修正' : queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
+            this.controlPanel.setTaskProgress?.('write', 'queued', '等待提取协议', { messageIndex: turn.messageIndex, queuePosition: position });
+        }
         this.controlPanel.setStatus(queuedDetail);
         globalThis.setTimeout(() => { void this.drainTaskQueue(chatKey); }, 0);
         return promise;
@@ -774,8 +815,14 @@ class MirrorAbyssApplication {
                 if (!automatic) notify('info', '镜渊：该正文已经完整处理');
                 return [];
             }
-            if (taskType === 'audit' || taskType === 'full') this.controlPanel.setTaskProgress?.('audit', 'running', automatic ? '自动审核处理中' : '审核处理中', { messageIndex: snapshot.messageIndex });
-            if (taskType === 'extraction' || taskType === 'full') this.controlPanel.setTaskProgress?.('extract', 'running', automatic ? '等待审核后自动提取' : '提取、解析与语义合并处理中', { messageIndex: snapshot.messageIndex });
+            if (taskType === 'audit' || taskType === 'full') {
+                this.controlPanel.setTaskProgress?.('audit', 'running', automatic ? '自动审核处理中' : '审核处理中', { messageIndex: snapshot.messageIndex });
+                this.controlPanel.setTaskProgress?.('revision', 'queued', '等待审核结论', { messageIndex: snapshot.messageIndex });
+            }
+            if (taskType === 'extraction') {
+                this.controlPanel.setTaskProgress?.('extract', 'running', '提取与协议解析处理中', { messageIndex: snapshot.messageIndex });
+                this.controlPanel.setTaskProgress?.('write', 'queued', '等待提取协议', { messageIndex: snapshot.messageIndex });
+            }
             this.controlPanel.setStatus(taskType === 'audit' ? '审核处理中…' : taskType === 'extraction' ? '提取、解析与语义合并处理中…' : taskType === 'full' ? '自动处理中…' : '任务处理中…');
             let activeSnapshot = snapshot;
             let result;
@@ -804,9 +851,11 @@ class MirrorAbyssApplication {
                 const shouldExtract = settings.extractionEnabled !== false && (!automatic || settings.autoExtraction === true);
                 if (shouldAudit) {
                     activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
-                    this.controlPanel.setTaskProgress?.('audit', 'success', activeSnapshot.auditDetail || (activeSnapshot.auditReplaced ? '自动审核完成，正文已替换' : '自动审核通过，正文未修改'));
+                    this.controlPanel.setTaskProgress?.('audit', activeSnapshot.auditReplaced ? 'warning' : 'success', activeSnapshot.auditReplaced ? '审核未通过' : '审核通过');
+                    this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已校验并替换' : '无需修正');
                 } else {
-                    this.controlPanel.setTaskProgress?.('audit', 'disabled', automatic ? '自动审核已关闭，完全跳过' : '审核功能已关闭');
+                    this.controlPanel.setTaskProgress?.('audit', 'disabled', automatic ? '自动审核已关闭' : '审核功能已关闭');
+                    this.controlPanel.setTaskProgress?.('revision', 'disabled', '审核未执行');
                 }
                 this.host.assertSnapshot(activeSnapshot, this.settings());
                 result = shouldExtract ? await this.memoryRunner.runTask('extraction', settings, activeSnapshot) : [];
@@ -814,12 +863,14 @@ class MirrorAbyssApplication {
             this.host.assertSnapshot(activeSnapshot, this.settings());
             if (taskType === 'audit') {
                 const detail = activeSnapshot.auditDetail || (activeSnapshot.auditReplaced ? '审核未通过，正文已替换' : '审核通过，正文未修改');
-                this.controlPanel.setTaskProgress?.('audit', 'success', detail);
+                this.controlPanel.setTaskProgress?.('audit', activeSnapshot.auditReplaced ? 'warning' : 'success', activeSnapshot.auditReplaced ? '审核未通过' : '审核通过');
+                this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已校验并替换' : '无需修正');
                 this.controlPanel.setStatus(detail);
             }
             else if (taskType === 'extraction') {
                 const completion = extractionCompletion(result, activeSnapshot.worldbookName);
-                this.controlPanel.setTaskProgress?.('extract', 'success', completion.detail, completion.meta);
+                this.controlPanel.setTaskProgress?.('extract', 'success', '提取协议完成', completion.meta);
+                this.controlPanel.setTaskProgress?.('write', 'success', completion.detail, completion.meta);
                 this.controlPanel.setStatus(completion.detail);
             }
             else if (taskType === 'smallSummary') {
@@ -842,11 +893,13 @@ class MirrorAbyssApplication {
             else {
                 if (settings.autoExtraction === true && settings.extractionEnabled !== false) {
                     const completion = extractionCompletion(result, activeSnapshot.worldbookName);
-                    this.controlPanel.setTaskProgress?.('extract', 'success', completion.detail, completion.meta);
-                    this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；${completion.detail}`);
+                    this.controlPanel.setTaskProgress?.('extract', 'success', '提取协议完成', completion.meta);
+                    this.controlPanel.setTaskProgress?.('write', 'success', completion.detail, completion.meta);
+                    this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '审核已跳过'}；${completion.detail}`);
                 }
                 else {
                     this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭');
+                    this.controlPanel.setTaskProgress?.('write', 'disabled', '提取未执行');
                     this.controlPanel.setStatus(`${activeSnapshot.auditDetail || '自动审核已跳过'}；自动提取已关闭`);
                 }
             }
@@ -864,8 +917,14 @@ class MirrorAbyssApplication {
                     notify('info', `镜渊：${snapshot.token.reason || '任务已取消'}`);
                 return [];
             }
-            if (taskType === 'audit' || taskType === 'full') this.controlPanel.setTaskProgress?.('audit', 'error', text, { error: text });
-            if (taskType === 'extraction' || taskType === 'full') this.controlPanel.setTaskProgress?.('extract', 'error', text, { error: text });
+            if (taskType === 'audit' || taskType === 'full') {
+                const revisionRunning = this.controlPanel.taskStates?.revision?.state === 'running';
+                this.controlPanel.setTaskProgress?.(revisionRunning ? 'revision' : 'audit', 'error', text, { error: text });
+            }
+            if (taskType === 'extraction' || taskType === 'full') {
+                const writeRunning = this.controlPanel.taskStates?.write?.state === 'running';
+                this.controlPanel.setTaskProgress?.(writeRunning ? 'write' : 'extract', 'error', text, { error: text });
+            }
             this.controlPanel.setStatus(`处理失败：${text}`, true);
             notify('error', `镜渊：${text}`);
             throw error;
@@ -1109,14 +1168,14 @@ class AuditRunner {
                 snapshot,
                 profileId: settings.auditProfileId,
                 sourceText: snapshot.turnText || snapshot.assistantText,
-                onRetry: () => this.setStatus(snapshot.chatKey, 'audit', '审核未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次'),
+                onRetry: (error) => this.setStatus(snapshot.chatKey, 'audit', (0, model_request_1.describeRetryReason)(error, '审核模型')),
             });
             this.host.assertSnapshot(snapshot, this.getSettings());
             const result = parseAuditResult(raw);
             let finalSnapshot = snapshot;
             if (result.decision === 'revision') {
                 this.setStatus(snapshot.chatKey, 'revision', '审核不通过，生成一次完整修正版');
-                const revisedText = await this.revisionService.revise(settings, snapshot, result.issues);
+                const revisedText = await this.revisionService.revise(settings, snapshot, result.issues, (detail) => this.setStatus(snapshot.chatKey, 'revision', detail));
                 finalSnapshot = await this.host.replaceAssistantText(snapshot, revisedText, this.getSettings());
                 this.setStatus(snapshot.chatKey, 'revision', '完整修正版正文已替换并保存');
             }
@@ -1167,7 +1226,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.34';
+exports.VERSION = '2.0.0-lite.ui.36';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1217,6 +1276,10 @@ class ControlPanel {
         this.worldSettingCommitButton = null;
         this.worldSettingClearButton = null;
         this.worldSettingDirty = false;
+        this.diagnosticStatusNode = null;
+        this.diagnosticReportNode = null;
+        this.diagnosticRunButton = null;
+        this.diagnosticExportButton = null;
         this.recallLoadSerial = 0;
         this.recallModel = null;
         this.recallWorldbookName = '';
@@ -1233,10 +1296,8 @@ class ControlPanel {
         this.buttons = {};
         this.pendingActions = new Set();
         this.lastOutcome = null;
-        this.taskStates = {
-            audit: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false },
-            extract: { state: 'idle', detail: '待命', titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false },
-        };
+        this.taskStates = { audit: freshTaskState('待命'), revision: freshTaskState('待命'), extract: freshTaskState('待命'), write: freshTaskState('待命') };
+        this.pipelineNodes = {};
         this.statusText = '就绪';
         this.statusError = false;
         this.observer = null;
@@ -1340,6 +1401,10 @@ class ControlPanel {
         this.worldSettingCommitButton = null;
         this.worldSettingClearButton = null;
         this.worldSettingDirty = false;
+        this.diagnosticStatusNode = null;
+        this.diagnosticReportNode = null;
+        this.diagnosticRunButton = null;
+        this.diagnosticExportButton = null;
         this.recallLoadSerial += 1;
         this.recallModel = null;
         this.recallWorldbookName = '';
@@ -1472,21 +1537,22 @@ class ControlPanel {
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
 .ma-lite-close{min-width:34px;min-height:34px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
 .ma-lite-body{display:flex;flex-direction:column;gap:10px;padding:12px}
-.ma-lite-page-nav{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
+.ma-lite-page-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
 .ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:38px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
-.ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}
-.ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
+.ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
+.ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:38px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
+.ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:40px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-pack{margin:0;max-height:250px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:34px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:26px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
 .ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
-.${INDICATOR_CLASS}{display:flex;flex-wrap:wrap;align-items:center;gap:6px 9px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
-.${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{flex-basis:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.72}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
+.${INDICATOR_CLASS}{display:flex;align-items:center;gap:8px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
+.${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{display:none}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="warning"]{background:#f0a94f}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
 `;
         document.head.append(style);
     }
@@ -1499,7 +1565,7 @@ class ControlPanel {
         header.className = 'ma-lite-header';
         const title = document.createElement('div');
         title.className = 'ma-lite-title';
-        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>审核、提取、总结调度与召回状态映射</small>';
+        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>正文处理、世界书与维护</small>';
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'ma-lite-close';
@@ -1514,31 +1580,51 @@ class ControlPanel {
         pageNav.setAttribute('aria-label', '镜渊面板分页');
         pageNav.append(
             this.makePageButton('run', '运行'),
-            this.makePageButton('recall', '召回'),
-            this.makePageButton('management', '管理'),
+            this.makePageButton('worldbook', '世界书'),
             this.makePageButton('settings', '设置'),
-            this.makePageButton('worldSetting', '设定'),
-            this.makePageButton('rebuild', '重建'),
+            this.makePageButton('maintenance', '维护'),
         );
         const runPage = this.makePage('run');
-        const recallPage = this.makePage('recall');
-        const managementPage = this.makePage('management');
+        const worldbookPage = this.makePage('worldbook');
         const settingsPage = this.makePage('settings');
-        const worldSettingPage = this.makePage('worldSetting');
-        const rebuildPage = this.makePage('rebuild');
+        const maintenancePage = this.makePage('maintenance');
+        const pipeline = this.buildPipelineSection();
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-actions';
+        actions.append(
+            this.makeActionButton('process', '完整处理当前正文'),
+            this.makeActionButton('audit', '仅审核'),
+            this.makeActionButton('extract', '仅提取'),
+            this.makeActionButton('cancel', '取消当前任务'),
+        );
+        const status = document.createElement('div');
+        status.className = 'ma-lite-status';
+        status.setAttribute('aria-live', 'polite');
+        this.statusNode = status;
+        runPage.append(pipeline, actions, status);
+
+        const management = this.buildManagementSection();
+        const recall = this.buildRecallSection();
+        const worldSetting = this.buildWorldSettingSection();
+        worldbookPage.append(
+            this.wrapToolSection('世界书状态与活动包', management, true),
+            this.wrapToolSection('召回映射', recall, false),
+            this.wrapToolSection('导入世界基础设定', worldSetting, false),
+        );
+
         const apiSection = this.buildApiSection();
         const switches = document.createElement('div');
         switches.className = 'ma-lite-switches';
         switches.append(
-            this.makeSwitch('enabled', '总开关', '关闭后两个功能都不能执行。'),
-            this.makeSwitch('autoAudit', '自动审核', 'AI 正文生成完成后自动审核；不通过时自动替换正文。'),
-            this.makeSwitch('autoExtraction', '自动提取', 'AI 正文生成完成后，在审核完成或被跳过后提取最终正文。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '达到轮数或异步队列积压时，压缩近期正文并分发事实。'),
-            this.makeSwitch('autoLargeSummary', '自动大总结', '累计小总结后沉降为长期历史并重新调度条目。'),
-            this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核是否可用。'),
-            this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取是否可用。'),
-            this.makeSwitch('activityPackEnabled', '活动包发送', '镜渊条目作为仓库，只由唯一活动包进入正文。'),
-            this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目压缩超长条目，不使用字符串硬截断。'),
+            this.makeSwitch('enabled', '总开关', '关闭后镜渊不执行任何处理。'),
+            this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核。'),
+            this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取。'),
+            this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
+            this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
+            this.makeSwitch('activityPackEnabled', '活动包发送', '世界书仓储只通过活动包注入正文。'),
+            this.makeSwitch('autoSmallSummary', '自动小总结', '按轮数或关键变化触发。'),
+            this.makeSwitch('autoLargeSummary', '自动大总结', '累计小总结后沉降。'),
+            this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目进行容量治理。'),
         );
         const thresholds = document.createElement('div');
         thresholds.className = 'ma-lite-thresholds';
@@ -1549,38 +1635,63 @@ class ControlPanel {
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
             this.makeNumberInput('activityPackHardMax', '活动包硬上限', 600, 4000),
         );
-        const auditPromptEditor = this.makePromptEditor(
-            'auditPrompt',
-            '基础审核提示词',
-            '审核只读取这里的规则、最近完整对话、本轮玩家输入和本轮AI回复；不读取角色卡或世界书。',
-        );
-        const recall = this.buildRecallSection();
-        const management = this.buildManagementSection();
-        const worldSetting = this.buildWorldSettingSection();
-        const rebuild = this.buildRebuildSection();
-        const reset = this.buildResetSection();
-        const actions = document.createElement('div');
-        actions.className = 'ma-lite-actions';
-        const audit = this.makeActionButton('audit', '审核');
-        const extract = this.makeActionButton('extract', '提取');
-        actions.append(audit, extract);
-        const status = document.createElement('div');
-        status.className = 'ma-lite-status';
-        status.setAttribute('aria-live', 'polite');
-        this.statusNode = status;
+        const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；不读取角色卡或世界书；修正失败或疑似截断时保留原正文。');
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
-        note.textContent = '提取异常会先本地修复、合并重复条目并部分提交；仍无法解析时只修复一次异常输出。自动流程严格按“审核→正文替换落地→提取→总结”执行。';
-        runPage.append(actions, status);
-        recallPage.append(recall);
-        managementPage.append(management);
-        settingsPage.append(apiSection, switches, auditPromptEditor, thresholds, note, reset);
-        worldSettingPage.append(worldSetting);
-        rebuildPage.append(rebuild);
-        body.append(pageNav, runPage, recallPage, managementPage, settingsPage, worldSettingPage, rebuildPage);
+        note.textContent = '四阶段状态固定为：审核 → 修正 → 提取 → 写入。任一阶段失败都会停止后续步骤，不推进处理游标。';
+        settingsPage.append(apiSection, this.wrapToolSection('自动化与功能开关', switches, true), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与调度阈值', thresholds, false), note);
+
+        const rebuild = this.buildRebuildSection();
+        const diagnostic = this.buildDiagnosticSection();
+        const reset = this.buildResetSection();
+        maintenancePage.append(this.wrapToolSection('自动验收与诊断', diagnostic, true), this.wrapToolSection('世界书重建', rebuild, false), this.wrapToolSection('重置与故障恢复', reset, false));
+        body.append(pageNav, runPage, worldbookPage, settingsPage, maintenancePage);
         panel.append(header, body);
         this.showPage('run', false);
         return panel;
+    }
+    wrapToolSection(title, content, open = false) {
+        const details = document.createElement('details');
+        details.className = 'ma-lite-tool-group';
+        details.open = open;
+        const summary = document.createElement('summary');
+        summary.textContent = title;
+        const body = document.createElement('div');
+        body.className = 'ma-lite-tool-content';
+        body.append(content);
+        details.append(summary, body);
+        return details;
+    }
+    buildPipelineSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-pipeline';
+        for (const [kind, label] of [['audit', '审核'], ['revision', '修正'], ['extract', '提取'], ['write', '写入']]) {
+            const card = document.createElement('div');
+            card.className = 'ma-lite-stage';
+            const head = document.createElement('div');
+            head.className = 'ma-lite-stage-head';
+            head.innerHTML = `<i class="ma-ind-dot" data-state="ready"></i><span>${label}</span>`;
+            const detail = document.createElement('div');
+            detail.className = 'ma-lite-stage-detail';
+            detail.textContent = '待命';
+            card.append(head, detail);
+            section.append(card);
+            this.pipelineNodes[kind] = { card, dot: head.querySelector('.ma-ind-dot'), detail };
+        }
+        return section;
+    }
+    renderPipeline() {
+        const settings = this.getSettings();
+        const master = settings.enabled !== false;
+        const enabled = { audit: master && settings.auditEnabled !== false, revision: master && settings.auditEnabled !== false, extract: master && settings.extractionEnabled !== false, write: master && settings.extractionEnabled !== false };
+        for (const kind of ['audit', 'revision', 'extract', 'write']) {
+            const nodes = this.pipelineNodes[kind];
+            if (!nodes) continue;
+            const state = this.indicatorState(kind, enabled[kind]);
+            nodes.dot.dataset.state = state;
+            nodes.detail.textContent = this.taskStates[kind]?.detail || this.stateLabel(state);
+            nodes.card.title = this.taskStates[kind]?.detail || this.stateLabel(state);
+        }
     }
     makePage(key) {
         const page = document.createElement('section');
@@ -1606,10 +1717,8 @@ class ControlPanel {
         this.activePage = key;
         for (const [pageKey, page] of Object.entries(this.pageNodes)) page.hidden = pageKey !== key;
         for (const [pageKey, button] of Object.entries(this.pageButtons)) button.setAttribute('aria-selected', pageKey === key ? 'true' : 'false');
-        if (refresh && key === 'recall') void this.refreshRecallMap(true);
-        if (refresh && key === 'management') void this.refreshManagement(true);
-        if (refresh && key === 'worldSetting') void this.refreshWorldSettingState();
-        if (refresh && key === 'rebuild') void this.refreshRebuildState();
+        if (refresh && key === 'worldbook') { void this.refreshManagement(true); void this.refreshRecallMap(true); void this.refreshWorldSettingState(); }
+        if (refresh && key === 'maintenance') void this.refreshRebuildState();
     }
     /** [MA-UI-API-01] 只创建一个轻量下拉框；选项由 SillyTavern 官方服务负责填充。 */
     buildApiSection() {
@@ -1631,7 +1740,7 @@ class ControlPanel {
         status.textContent = '默认跟随当前 SillyTavern 连接。';
         const help = document.createElement('div');
         help.className = 'ma-lite-api-help';
-        help.textContent = '连接、模型、地址和密钥仍在 SillyTavern「API Connections → Connection Profiles」中管理。推理模型请在 SillyTavern 的 Reasoning 设置中使用最低或低推理强度；镜渊保留该预设，不跨后端强制推理参数。';
+        help.textContent = '连接、模型、地址和密钥仍在 SillyTavern「API Connections → Connection Profiles」中管理。建议选择独立 Profile：镜渊使用“当前连接”时会沿用主聊天全局响应长度，绝不临时覆盖它，以免后台处理影响下一轮正文。推理强度继续由 SillyTavern Reasoning 设置管理。';
         section.append(head, select, status, help);
         this.apiProfileSelect = select;
         this.apiProfileStatusNode = status;
@@ -1680,7 +1789,7 @@ class ControlPanel {
         catch { summary = null; }
         if (!summary) {
             if (!profileId) {
-                this.apiProfileStatusNode.textContent = '当前：跟随 SillyTavern 主连接；实际 API/模型无法读取。';
+                this.apiProfileStatusNode.textContent = '当前：跟随 SillyTavern 主连接；沿用主聊天全局响应长度，不执行局部覆盖。';
                 return;
             }
             let name = knownName;
@@ -1695,6 +1804,101 @@ class ControlPanel {
         const warning = summary.warning ? `；提示：${summary.warning}` : '';
         const scope = profileId ? '；仅用于镜渊处理，不切换主聊天 API' : '';
         this.apiProfileStatusNode.textContent = `${prefix}｜API：${summary.api || '未知'}｜模型：${model}${invalid}${warning}${scope}`;
+    }
+    buildDiagnosticSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-diagnostic';
+        const help = document.createElement('div');
+        help.className = 'ma-lite-diagnostic-help';
+        help.textContent = '在当前 SillyTavern 宿主中检查聊天、模型路由、世界书权威读取、真实写入回读与自动回滚。诊断报告不包含正文、提示词、密钥或完整模型响应。';
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-diagnostic-actions';
+        const run = document.createElement('button');
+        run.type = 'button';
+        run.dataset.kind = 'runAcceptance';
+        run.textContent = '运行自动验收';
+        run.addEventListener('click', () => void this.runDiagnosticAction());
+        const exportButton = document.createElement('button');
+        exportButton.type = 'button';
+        exportButton.dataset.kind = 'exportDiagnostics';
+        exportButton.textContent = '导出诊断';
+        exportButton.addEventListener('click', () => this.exportDiagnostics());
+        const status = document.createElement('div');
+        status.className = 'ma-lite-diagnostic-status';
+        status.textContent = '尚未运行';
+        const report = document.createElement('pre');
+        report.className = 'ma-lite-diagnostic-report';
+        report.textContent = '自动验收会产生真实模型请求，并对当前世界书执行可回滚临时写入。';
+        actions.append(run, exportButton);
+        section.append(help, actions, status, report);
+        this.diagnosticStatusNode = status;
+        this.diagnosticReportNode = report;
+        this.diagnosticRunButton = run;
+        this.diagnosticExportButton = exportButton;
+        this.buttons.runAcceptance = run;
+        this.buttons.exportDiagnostics = exportButton;
+        this.renderDiagnosticReport(this.actions.getDiagnostics?.());
+        return section;
+    }
+    async runDiagnosticAction() {
+        const kind = 'runAcceptance';
+        if (this.pendingActions.has(kind)) return;
+        const action = this.actions.runAcceptance;
+        if (typeof action !== 'function') { this.setStatus('自动验收功能未连接', true); return; }
+        this.pendingActions.add(kind);
+        this.syncDisabledState();
+        this.setDiagnosticProgress({ state: 'running', detail: '正在启动自动验收…' });
+        this.setStatus('正在运行实机自动验收…');
+        try {
+            const report = await action();
+            this.renderDiagnosticReport(report);
+            this.setStatus(report?.accepted ? '自动验收通过，可以导出诊断报告' : '自动验收未通过，请导出诊断报告', report?.accepted !== true);
+        }
+        catch (error) {
+            this.setDiagnosticProgress({ state: 'error', detail: `自动验收执行失败：${(0, util_1.errorText)(error)}` });
+            this.setStatus(`自动验收执行失败：${(0, util_1.errorText)(error)}`, true);
+        }
+        finally {
+            this.pendingActions.delete(kind);
+            this.syncDisabledState();
+        }
+    }
+    exportDiagnostics() {
+        try {
+            const result = this.actions.exportDiagnostics?.();
+            if (!result) throw new Error('诊断导出功能未连接');
+            this.setStatus(`诊断报告已导出：${result.filename || 'Mirror Abyss diagnostic'}`);
+        }
+        catch (error) { this.setStatus(`导出诊断失败：${(0, util_1.errorText)(error)}`, true); }
+        this.syncDisabledState();
+    }
+    setDiagnosticProgress(progress = {}) {
+        const detail = String(progress.detail || '').trim();
+        if (this.diagnosticStatusNode) {
+            this.diagnosticStatusNode.textContent = detail || '自动验收处理中';
+            this.diagnosticStatusNode.dataset.state = String(progress.state || 'running');
+        }
+        if (progress.report) this.renderDiagnosticReport(progress.report);
+    }
+    renderDiagnosticReport(report) {
+        if (!this.diagnosticReportNode) return;
+        if (!report) {
+            this.diagnosticReportNode.textContent = '自动验收会产生真实模型请求，并对当前世界书执行可回滚临时写入。';
+            if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = '尚未运行';
+            return;
+        }
+        const summary = report.summary || {};
+        const failed = (report.checks || []).filter((check) => check.status === 'fail');
+        const warnings = (report.checks || []).filter((check) => check.status === 'warn');
+        const lines = [
+            `${report.accepted ? '通过' : '未通过'}｜通过 ${summary.pass || 0}｜警告 ${summary.warn || 0}｜失败 ${summary.fail || 0}｜跳过 ${summary.skip || 0}`,
+            `耗时 ${report.durationMs || 0} ms｜世界书 ${report.scope?.worldbookName || '未绑定'}`,
+        ];
+        for (const check of failed.slice(0, 4)) lines.push(`失败｜${check.label}：${check.detail}`);
+        for (const check of warnings.slice(0, 3)) lines.push(`警告｜${check.label}：${check.detail}`);
+        if (!failed.length && !warnings.length) lines.push('全部验收项目通过。');
+        this.diagnosticReportNode.textContent = lines.join('\n');
+        if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = report.accepted ? '自动验收通过' : '自动验收未通过';
     }
     buildResetSection() {
         const section = document.createElement('section');
@@ -2460,38 +2664,36 @@ class ControlPanel {
     async runAction(kind) {
         if (this.pendingActions.has(kind)) return;
         const settings = this.getSettings();
-        if (!settings.enabled) {
-            this.setStatus('总开关已关闭', true);
+        if (kind === 'cancel') {
+            try { await this.actions.cancel?.(); this.setStatus('已请求取消当前任务'); }
+            catch (error) { this.setStatus(`取消失败：${(0, util_1.errorText)(error)}`, true); }
             return;
         }
-        if (kind === 'audit' && settings.auditEnabled === false) {
-            this.setStatus('审核开关已关闭', true);
-            return;
-        }
-        if (kind === 'extract' && settings.extractionEnabled === false) {
-            this.setStatus('提取开关已关闭', true);
-            return;
-        }
+        if (!settings.enabled) { this.setStatus('总开关已关闭', true); return; }
+        if (kind === 'audit' && settings.auditEnabled === false) { this.setStatus('审核功能已关闭', true); return; }
+        if (kind === 'extract' && settings.extractionEnabled === false) { this.setStatus('提取功能已关闭', true); return; }
         const action = this.actions[kind];
-        if (typeof action !== 'function') {
-            this.setStatus(`${kind === 'audit' ? '审核' : '提取'}功能未连接`, true);
-            return;
-        }
+        if (typeof action !== 'function') { this.setStatus('该操作未连接', true); return; }
         this.pendingActions.add(kind);
         this.lastOutcome = null;
         this.syncDisabledState();
-        this.setTaskProgress(kind, 'queued', kind === 'audit' ? '审核已进入异步队列' : '提取已进入异步队列', { titles: [], created: [], updated: [], skipped: [] });
+        if (kind === 'process') {
+            this.setTaskProgress('audit', 'queued', '等待处理');
+            this.setTaskProgress('revision', 'queued', '等待审核结果');
+            this.setTaskProgress('extract', 'queued', '等待审核/修正');
+            this.setTaskProgress('write', 'queued', '等待提取结果');
+        } else {
+            this.setTaskProgress(kind, 'queued', kind === 'audit' ? '等待审核' : '等待提取');
+            if (kind === 'extract') this.setTaskProgress('write', 'queued', '等待提取结果');
+        }
+        this.setStatus(kind === 'process' ? '正在完整处理当前正文…' : kind === 'audit' ? '正在审核当前正文…' : '正在提取当前正文…');
         try {
             await action();
             this.lastOutcome = { kind, state: 'success' };
-            if (['queued', 'running'].includes(this.taskStates[kind]?.state)) this.setTaskProgress(kind, 'success', kind === 'audit' ? '审核完成' : '提取完成');
-        }
-        catch (error) {
+        } catch (error) {
             this.lastOutcome = { kind, state: 'error' };
-            this.setTaskProgress(kind, 'error', `${(0, util_1.errorText)(error)}`, { error: (0, util_1.errorText)(error) });
-            this.setStatus(`${kind === 'audit' ? '审核' : '提取'}失败：${(0, util_1.errorText)(error)}`, true);
-        }
-        finally {
+            this.setStatus(`处理失败：${(0, util_1.errorText)(error)}`, true);
+        } finally {
             this.pendingActions.delete(kind);
             this.syncDisabledState();
             this.scheduleIndicatorRefresh();
@@ -2527,11 +2729,15 @@ class ControlPanel {
             this.statusNode.textContent = this.statusText;
             this.statusNode.dataset.error = this.statusError ? 'true' : 'false';
         }
+        this.renderPipeline();
+        this.renderDiagnosticReport(this.actions.getDiagnostics?.());
         this.scheduleIndicatorRefresh();
     }
     syncDisabledState() {
         const settings = this.getSettings();
         const master = settings.enabled !== false;
+        if (this.buttons.process) this.buttons.process.disabled = this.pendingActions.size > 0 || !master || (settings.auditEnabled === false && settings.extractionEnabled === false);
+        if (this.buttons.cancel) this.buttons.cancel.disabled = this.pendingActions.size === 0;
         if (this.buttons.audit) this.buttons.audit.disabled = this.pendingActions.has('audit') || !master || settings.auditEnabled === false;
         if (this.buttons.extract) this.buttons.extract.disabled = this.pendingActions.has('extract') || !master || settings.extractionEnabled === false;
         if (this.buttons.auditPromptSave) this.buttons.auditPromptSave.disabled = this.pendingActions.size > 0;
@@ -2543,6 +2749,8 @@ class ControlPanel {
         if (this.rebuildUndoButton && this.pendingActions.size > 0) this.rebuildUndoButton.disabled = true;
         if (this.buttons.resetCurrentChat) this.buttons.resetCurrentChat.disabled = this.pendingActions.size > 0;
         if (this.buttons.resetPlugin) this.buttons.resetPlugin.disabled = this.pendingActions.size > 0;
+        if (this.diagnosticRunButton) this.diagnosticRunButton.disabled = this.pendingActions.size > 0 || !master;
+        if (this.diagnosticExportButton) this.diagnosticExportButton.disabled = this.pendingActions.size > 0 || !this.actions.getDiagnostics?.();
         for (const input of Object.values(this.inputs)) input.disabled = false;
     }
 
@@ -2584,19 +2792,12 @@ class ControlPanel {
             businessWriteCount: Number.isFinite(meta.businessWriteCount) ? Number(meta.businessWriteCount) : previous.businessWriteCount,
             activityPackChanged: typeof meta.activityPackChanged === 'boolean' ? meta.activityPackChanged : previous.activityPackChanged,
         };
-        if (detail) {
-            this.statusText = `${kind === 'audit' ? '审核' : '提取'}：${detail}`;
-            this.statusError = state === 'error';
-            if (this.statusNode) {
-                this.statusNode.textContent = this.statusText;
-                this.statusNode.dataset.error = this.statusError ? 'true' : 'false';
-            }
-        }
+        this.renderPipeline();
         this.scheduleIndicatorRefresh();
     }
     resetTaskStates(detail = '待命') {
-        this.taskStates.audit = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false };
-        this.taskStates.extract = { state: 'idle', detail, titles: [], created: [], updated: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false };
+        this.taskStates = { audit: freshTaskState(detail), revision: freshTaskState(detail), extract: freshTaskState(detail), write: freshTaskState(detail) };
+        this.renderPipeline();
         this.lastOutcome = null;
         this.scheduleIndicatorRefresh();
     }
@@ -2651,54 +2852,30 @@ class ControlPanel {
     renderIndicator() {
         const messages = [...document.querySelectorAll('#chat .mes[is_user="false"][is_system="false"]')];
         const target = messages.at(-1);
-        document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => {
-            if (!target || !target.contains(node)) node.remove();
-        });
+        document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => { if (!target || !target.contains(node)) node.remove(); });
         if (!target) return;
         const text = target.querySelector('.mes_text');
         const block = target.querySelector('.mes_block') || target;
         if (!text || !block) return;
         let indicator = block.querySelector(`.${INDICATOR_CLASS}`);
-        if (!indicator) {
-            indicator = document.createElement('div');
-            indicator.className = INDICATOR_CLASS;
-            text.insertAdjacentElement('afterend', indicator);
-        }
+        if (!indicator) { indicator = document.createElement('div'); indicator.className = INDICATOR_CLASS; text.insertAdjacentElement('afterend', indicator); }
         const settings = this.getSettings();
         const master = settings.enabled !== false;
-        const auditState = this.indicatorState('audit', master && settings.auditEnabled !== false);
-        const extractState = this.indicatorState('extract', master && settings.extractionEnabled !== false);
-        const audit = this.taskStates.audit;
-        const extract = this.taskStates.extract;
-        const auditText = audit.detail || this.stateLabel(auditState);
-        const extractText = extract.detail || this.stateLabel(extractState);
-        const compactList = (label, values) => {
-            const list = Array.isArray(values) ? values : [];
-            if (!list.length) return '';
-            const shown = list.slice(0, 4).join('、');
-            return `${label}：${shown}${list.length > 4 ? ` 等${list.length}条` : ''}`;
-        };
-        const resultParts = [
-            compactList('新建', extract.created),
-            compactList('更新', extract.updated),
-            compactList('合并', extract.merged),
-            extract.repaired ? `修复：${extract.repaired}处` : '',
-            compactList('跳过', extract.skipped),
-        ].filter(Boolean);
-        const titleDetail = compactList(extract.state === 'running' ? '处理中' : '条目', extract.titles);
-        const detail = resultParts.length ? resultParts.join('；') : titleDetail;
-        const fullDetail = [
-            extract.worldbookName ? `目标世界书：${extract.worldbookName}` : '',
-            Number.isFinite(extract.businessWriteCount) ? `业务写入：${extract.businessWriteCount}条；活动包：${extract.activityPackChanged ? '刷新' : '未变化'}` : '',
-            compactList('提取条目', extract.titles),
-            compactList('新建', extract.created),
-            compactList('更新', extract.updated),
-            compactList('合并', extract.merged),
-            extract.repaired ? `修复：${extract.repaired}处` : '',
-            compactList('跳过', extract.skipped),
-        ].filter(Boolean).join('\n');
-        indicator.title = [this.statusText, fullDetail].filter(Boolean).join('\n') || '镜渊状态';
-        indicator.innerHTML = `<span class="ma-ind-label">镜渊</span><span class="ma-ind-part"><i class="ma-ind-dot" data-state="${auditState}"></i>审核：${escapeHtml(auditText)}</span><span class="ma-ind-part"><i class="ma-ind-dot" data-state="${extractState}"></i>提取：${escapeHtml(extractText)}</span>${detail ? `<span class="ma-ind-detail">${escapeHtml(detail)}</span>` : ''}`;
+        const enabled = { audit: master && settings.auditEnabled !== false, revision: master && settings.auditEnabled !== false, extract: master && settings.extractionEnabled !== false, write: master && settings.extractionEnabled !== false };
+        const labels = { audit: '审', revision: '修', extract: '提', write: '写' };
+        const fullLabels = { audit: '审核', revision: '修正', extract: '提取', write: '写入' };
+        const parts = [];
+        const titleLines = [this.statusText];
+        for (const kind of ['audit', 'revision', 'extract', 'write']) {
+            const state = this.indicatorState(kind, enabled[kind]);
+            parts.push(`<span class="ma-ind-part"><i class="ma-ind-dot" data-state="${state}"></i>${labels[kind]}</span>`);
+            titleLines.push(`${fullLabels[kind]}：${this.taskStates[kind]?.detail || this.stateLabel(state)}`);
+        }
+        const write = this.taskStates.write;
+        if (write.worldbookName) titleLines.push(`目标世界书：${write.worldbookName}`);
+        if (Number.isFinite(write.businessWriteCount)) titleLines.push(`业务写入：${write.businessWriteCount}条；活动包：${write.activityPackChanged ? '刷新' : '未变化'}`);
+        indicator.title = titleLines.filter(Boolean).join('\n');
+        indicator.innerHTML = `<span class="ma-ind-label">镜渊</span>${parts.join('')}`;
     }
     indicatorState(kind, enabled) {
         if (!enabled) return 'disabled';
@@ -2706,13 +2883,17 @@ class ControlPanel {
         if (state === 'queued') return 'queued';
         if (state === 'running') return 'running';
         if (state === 'success') return 'success';
+        if (state === 'warning') return 'warning';
         if (state === 'error') return 'error';
         if (state === 'disabled') return 'disabled';
         return 'ready';
     }
     stateLabel(state) {
-        return ({ disabled: '关闭', queued: '排队', running: '处理中', success: '完成', error: '失败', ready: '待命' })[state] || '待命';
+        return ({ disabled: '关闭', queued: '排队', running: '处理中', warning: '需修正', success: '完成', error: '失败', ready: '待命' })[state] || '待命';
     }
+}
+function freshTaskState(detail = '待命') {
+    return { state: 'idle', detail, titles: [], created: [], updated: [], deleted: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false };
 }
 /** [MA-UI-API-03] 一个 Profile 统一覆盖所有模型阶段；空值恢复当前连接。 */
 function buildUnifiedProfilePatch(profileId) {
@@ -2819,6 +3000,458 @@ function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>\"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
 exports.ControlPanel = ControlPanel;
+},"diagnostics":function(module,exports,require){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DiagnosticsService = void 0;
+exports.buildDiagnosticFilename = buildDiagnosticFilename;
+exports.summarizeDiagnosticReport = summarizeDiagnosticReport;
+exports.findFreeDiagnosticUid = findFreeDiagnosticUid;
+const constants_1 = require("./constants");
+const util_1 = require("./util");
+const prompts_1 = require("./prompts");
+const audit_1 = require("./audit");
+const parser_1 = require("./parser");
+const model_request_1 = require("./model-request");
+
+/**
+ * [MA-DIAG-01] 真实宿主验收与诊断导出。
+ * 只读取聊天正文；世界书写入测试使用禁用临时条目并在同一事务内恢复完整快照。
+ * 报告只记录结构、计数、哈希与错误，不导出正文、提示词、API Key 或完整模型响应。
+ */
+class DiagnosticsService {
+    constructor(host, worldbook, getSettings, onProgress) {
+        this.host = host;
+        this.worldbook = worldbook;
+        this.getSettings = getSettings;
+        this.onProgress = onProgress;
+        this.lastReport = null;
+    }
+    currentReport() { return this.lastReport ? (0, util_1.clone)(this.lastReport) : null; }
+    clear() { this.lastReport = null; }
+    async run(settings, snapshot, validate) {
+        const startedAt = new Date();
+        const report = {
+            schemaVersion: 1,
+            plugin: { name: constants_1.DISPLAY_NAME, version: constants_1.VERSION },
+            startedAt: startedAt.toISOString(),
+            finishedAt: '',
+            durationMs: 0,
+            accepted: false,
+            summary: { pass: 0, warn: 0, fail: 0, skip: 0, total: 0 },
+            environment: {},
+            scope: {},
+            settings: sanitizeSettings(settings),
+            checks: [],
+        };
+        const runCheck = async (id, label, category, action, options = {}) => {
+            const checkStarted = Date.now();
+            this.progress({ state: 'running', detail: label, checkId: id });
+            try {
+                validate?.();
+                const evidence = await action();
+                validate?.();
+                const status = options.status === 'warn' ? 'warn' : 'pass';
+                report.checks.push({ id, label, category, status, durationMs: Date.now() - checkStarted, detail: options.detail || '通过', evidence: sanitizeEvidence(evidence) });
+            }
+            catch (error) {
+                const optional = options.optional === true;
+                report.checks.push({ id, label, category, status: optional ? 'warn' : 'fail', durationMs: Date.now() - checkStarted, detail: (0, util_1.errorText)(error), evidence: sanitizeEvidence(error?.diagnosticEvidence) });
+            }
+        };
+        try {
+            const context = this.host.context();
+            report.environment = collectEnvironment(context);
+            report.scope = collectScope(this.host, context, settings);
+            const chatBefore = chatDigest(context.chat);
+            const generationStateBefore = collectGenerationState(this.host, context, settings);
+
+            await runCheck('host-context', 'SillyTavern 宿主上下文', '宿主', async () => {
+                const required = ['eventSource', 'chat', 'saveSettingsDebounced'];
+                const missing = required.filter((key) => context[key] == null);
+                if (missing.length) throw new Error(`缺少宿主字段：${missing.join('、')}`);
+                return { eventApi: typeof context.eventSource?.on === 'function', messageCount: Array.isArray(context.chat) ? context.chat.length : 0 };
+            });
+
+            await runCheck('chat-scope', '当前聊天作用域', '宿主', async () => {
+                const chatKey = this.host.chatKey();
+                if (!chatKey) throw new Error('当前没有活动聊天');
+                return { chatKeyHash: (0, util_1.hashText)(chatKey), roleKeyHash: (0, util_1.hashText)(this.host.roleKey()), messageCount: context.chat?.length ?? 0 };
+            });
+
+            await runCheck('latest-assistant', '最新 AI 正文可定位', '正文', async () => {
+                const turn = this.host.latestTurn();
+                return { messageIndex: turn.messageIndex, messageKeyHash: (0, util_1.hashText)(turn.messageKey), contentChars: turn.assistantText.length, contentHash: turn.contentHash };
+            }, { optional: true });
+
+            await runCheck('worldbook-binding', '当前聊天世界书绑定', '世界书', async () => {
+                const name = this.host.targetWorldbookName(settings);
+                if (!name) throw new Error('当前聊天未绑定世界书，且未启用自动创建');
+                return { worldbookName: name };
+            });
+
+            let rawBefore = null;
+            await runCheck('worldbook-authoritative-read', '世界书后端权威读取', '世界书', async () => {
+                rawBefore = await this.worldbook.readRaw(settings, snapshot, validate);
+                return {
+                    worldbookName: rawBefore.name,
+                    entryCount: Object.keys(rawBefore.data?.entries ?? {}).length,
+                    digest: digestWorldbook(rawBefore.data),
+                };
+            });
+
+            const routes = configuredModelRoutes(settings);
+            for (const route of routes) {
+                await runCheck(`model-route:${route.id || 'current'}`, `模型实机调用：${route.label}`, '模型', async () => {
+                    const childToken = { cancelled: false, reason: '' };
+                    const modelSnapshot = this.host.captureMaintenanceSnapshot(settings, `acceptanceModel:${route.id || 'current'}`, childToken);
+                    const routeBefore = collectGenerationState(this.host, context, settings);
+                    const output = await this.host.generate(
+                        '你正在执行插件连接验收。不得解释、不得输出推理，只输出指定字符串。',
+                        '只输出：MA_ACCEPTANCE_OK',
+                        256,
+                        modelSnapshot,
+                        settings,
+                        Math.min(Math.max(10000, Number(settings.requestTimeoutMs) || 90000), 60000),
+                        route.id,
+                    );
+                    const routeAfter = collectGenerationState(this.host, context, settings);
+                    if (!/MA_ACCEPTANCE_OK/iu.test(String(output))) {
+                        const error = new Error(`模型没有返回验收协议；最终文本长度 ${String(output).length} 字`);
+                        error.diagnosticEvidence = { route: route.summary, outputChars: String(output).length, outputHash: (0, util_1.hashText)(String(output)) };
+                        throw error;
+                    }
+                    if (JSON.stringify(routeBefore) !== JSON.stringify(routeAfter)) throw new Error('模型测试后主连接状态发生变化');
+                    return { route: route.summary, outputChars: String(output).length, outputHash: (0, util_1.hashText)(String(output)), mainGenerationStatePreserved: true };
+                });
+            }
+
+            if (settings.auditEnabled !== false) {
+                await runCheck('audit-protocol', '审核提示词与 PASS 协议', '业务协议', async () => {
+                    const childToken = { cancelled: false, reason: '' };
+                    const protocolSnapshot = this.host.captureMaintenanceSnapshot(settings, 'acceptanceAuditProtocol', childToken);
+                    const playerText = '我推开大厅的门。';
+                    const assistantText = '门向内打开，灯火照亮青石地面。守门人站在远处看向门口。';
+                    const prompt = (0, prompts_1.auditPrompts)(settings, playerText, assistantText, { dialogueContext: '' });
+                    const raw = await (0, model_request_1.callModel)({
+                        host: this.host,
+                        stage: 'audit',
+                        prompt,
+                        fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, playerText, assistantText, { compact: true, dialogueContext: '' }),
+                        settings,
+                        snapshot: protocolSnapshot,
+                        profileId: settings.auditProfileId,
+                        sourceText: `${playerText}
+${assistantText}`,
+                    });
+                    const parsed = (0, audit_1.parseAuditResult)(raw);
+                    if (parsed.decision !== 'pass') throw new Error(`合规样本被判定需要修正：${parsed.issues?.slice(0, 3).join('；') || '未提供原因'}`);
+                    return { decision: parsed.decision, route: settings.auditProfileId ? 'profile' : 'current' };
+                });
+            }
+
+            if (settings.extractionEnabled !== false) {
+                await runCheck('extraction-protocol', '提取提示词与 ENTRY 协议', '业务协议', async () => {
+                    const childToken = { cancelled: false, reason: '' };
+                    const protocolSnapshot = this.host.captureMaintenanceSnapshot(settings, 'acceptanceExtractionProtocol', childToken);
+                    const playerText = '我走进青石大厅。';
+                    const assistantText = '青石大厅灯火通明，北侧铁门已经打开。守门人阿洛站在门旁，明确告诉你这里是王城议事厅的入口。';
+                    const prompt = (0, prompts_1.extractionPrompts)(settings, playerText, assistantText, [], { dialogueContext: '' });
+                    const raw = await (0, model_request_1.callModel)({
+                        host: this.host,
+                        stage: 'extraction',
+                        prompt,
+                        fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, playerText, assistantText, [], { compact: true, dialogueContext: '' }),
+                        settings,
+                        snapshot: protocolSnapshot,
+                        profileId: settings.extractionProfileId,
+                        sourceText: `${playerText}
+${assistantText}`,
+                    });
+                    const blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
+                    if (!blocks.length) {
+                        const diagnostics = blocks.diagnostics || {};
+                        throw new Error(`合成状态变化未形成 ENTRY 协议；异常片段${(diagnostics.skipped || []).length}个`);
+                    }
+                    return { entryCount: blocks.length, titles: blocks.map((block) => String(block.title || '')).slice(0, 8), repaired: Number(blocks.diagnostics?.repaired || 0), route: settings.extractionProfileId ? 'profile' : 'current' };
+                });
+            }
+
+            if (rawBefore) {
+                await runCheck('worldbook-reversible-write', '世界书写入—回读—回滚', '世界书', async () => {
+                    return this.reversibleWorldbookWrite(settings, snapshot, rawBefore, validate);
+                });
+            }
+            else {
+                report.checks.push({ id: 'worldbook-reversible-write', label: '世界书写入—回读—回滚', category: '世界书', status: 'skip', durationMs: 0, detail: '权威读取未通过，未执行写入测试', evidence: null });
+            }
+
+            await runCheck('ui-surface', '插件 UI 与四阶段状态面板', '界面', async () => {
+                if (typeof document === 'undefined') return { environment: 'headless', skippedDomInspection: true };
+                const panel = document.getElementById('mirror-abyss-lite-panel');
+                if (!panel) throw new Error('未找到镜渊面板');
+                const requiredActions = ['process', 'audit', 'extract', 'cancel', 'runAcceptance', 'exportDiagnostics'];
+                const missing = requiredActions.filter((kind) => !panel.querySelector(`[data-kind="${kind}"]`));
+                if (missing.length) throw new Error(`缺少按钮：${missing.join('、')}`);
+                const stages = [...panel.querySelectorAll('.ma-lite-stage')].length;
+                if (stages !== 4) throw new Error(`四阶段状态数量异常：${stages}`);
+                return { buttonCount: panel.querySelectorAll('button').length, stageCount: stages };
+            }, { optional: typeof document === 'undefined' });
+
+            await runCheck('chat-nonmutation', '聊天正文未被验收修改', '安全', async () => {
+                const after = chatDigest(this.host.context().chat);
+                if (JSON.stringify(chatBefore) !== JSON.stringify(after)) throw new Error('验收期间聊天正文或消息数量发生变化');
+                return after;
+            });
+
+            await runCheck('generation-state-nonmutation', '主生成连接状态未被验收污染', '安全', async () => {
+                const after = collectGenerationState(this.host, this.host.context(), settings);
+                if (JSON.stringify(generationStateBefore) !== JSON.stringify(after)) throw new Error('验收期间主模型连接或生成状态发生变化');
+                return after;
+            });
+        }
+        catch (error) {
+            report.checks.push({ id: 'diagnostic-runner', label: '自动验收执行器', category: '诊断', status: 'fail', durationMs: Date.now() - startedAt.getTime(), detail: (0, util_1.errorText)(error), evidence: null });
+        }
+        finally {
+            report.finishedAt = new Date().toISOString();
+            report.durationMs = Date.now() - startedAt.getTime();
+            report.summary = countStatuses(report.checks);
+            report.accepted = report.summary.fail === 0 && report.summary.pass > 0;
+            this.lastReport = (0, util_1.clone)(report);
+            this.progress({ state: report.accepted ? 'success' : 'error', detail: summarizeDiagnosticReport(report), report: this.currentReport() });
+        }
+        return this.currentReport();
+    }
+    async reversibleWorldbookWrite(settings, snapshot, rawBefore, validate) {
+        const original = (0, util_1.clone)(rawBefore.data);
+        const originalDigest = digestWorldbook(original);
+        const testData = (0, util_1.clone)(original);
+        testData.entries ?? (testData.entries = {});
+        const uid = findFreeDiagnosticUid(testData);
+        const mapKey = String(uid);
+        const marker = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        testData.entries[mapKey] = diagnosticEntry(uid, marker);
+        let writeAttempted = false;
+        let mutated = false;
+        let restored = false;
+        let restoreError = '';
+        try {
+            writeAttempted = true;
+            await this.worldbook.replaceRaw(settings, rawBefore.name, testData, snapshot, validate, original);
+            mutated = true;
+            const readBack = await this.worldbook.readRaw(settings, snapshot, validate);
+            const found = Object.values(readBack.data?.entries ?? {}).find((entry) => String(entry?.comment ?? '') === `诊断｜临时验收-${marker}`);
+            if (!found || String(found.content ?? '') !== `Mirror Abyss acceptance ${marker}`) throw new Error('临时验收条目回读不一致');
+            await this.worldbook.replaceRaw(settings, rawBefore.name, original, snapshot, validate, readBack.data);
+            const restoredRead = await this.worldbook.readRaw(settings, snapshot, validate);
+            if (digestWorldbook(restoredRead.data) !== originalDigest) throw new Error('删除临时条目后世界书未恢复到原快照');
+            restored = true;
+            return { worldbookName: rawBefore.name, temporaryUid: String(uid), writeVerified: true, rollbackVerified: true, originalDigest };
+        }
+        catch (error) {
+            if (writeAttempted && !restored) {
+                try {
+                    const current = await this.worldbook.readRaw(settings, snapshot, validate);
+                    await this.worldbook.replaceRaw(settings, rawBefore.name, original, snapshot, validate, current.data);
+                    const emergencyRead = await this.worldbook.readRaw(settings, snapshot, validate);
+                    restored = digestWorldbook(emergencyRead.data) === originalDigest;
+                    if (!restored) restoreError = '紧急恢复后摘要不一致';
+                }
+                catch (restoreFailure) { restoreError = (0, util_1.errorText)(restoreFailure); }
+            }
+            const wrapped = new Error(`${(0, util_1.errorText)(error)}${restored ? '；原世界书已恢复' : `；原世界书恢复失败：${restoreError || '未知错误'}`}`);
+            wrapped.diagnosticEvidence = { worldbookName: rawBefore.name, temporaryUid: String(uid), writeAttempted, mutated, restored, originalDigest };
+            throw wrapped;
+        }
+    }
+    exportLast() {
+        if (!this.lastReport) throw new Error('尚未运行自动验收，没有可导出的诊断报告');
+        const filename = buildDiagnosticFilename(this.lastReport);
+        const content = JSON.stringify(this.lastReport, null, 2);
+        if (typeof document === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
+            return { filename, content };
+        }
+        const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.style.display = 'none';
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        return { filename, bytes: blob.size };
+    }
+    progress(value) {
+        try { this.onProgress?.(value); }
+        catch (error) { console.warn('[MirrorAbyss] diagnostic progress callback failed', error); }
+    }
+}
+exports.DiagnosticsService = DiagnosticsService;
+
+function configuredModelRoutes(settings) {
+    const stages = [
+        ['审核', settings.auditEnabled !== false ? settings.auditProfileId : null],
+        ['修正', settings.auditEnabled !== false ? settings.revisionProfileId : null],
+        ['提取', settings.extractionEnabled !== false ? settings.extractionProfileId : null],
+        ['小总结', settings.autoSmallSummary !== false ? settings.smallSummaryProfileId : null],
+        ['大总结', settings.autoLargeSummary !== false ? settings.largeSummaryProfileId : null],
+        ['重建', settings.migrationProfileId],
+    ].filter(([, value]) => value !== null);
+    const grouped = new Map();
+    for (const [label, idValue] of stages) {
+        const id = String(idValue || '');
+        const key = id || 'current';
+        const current = grouped.get(key) ?? { id, labels: [] };
+        current.labels.push(label);
+        grouped.set(key, current);
+    }
+    if (!grouped.size) grouped.set('current', { id: '', labels: ['当前连接'] });
+    return [...grouped.values()].map((route) => {
+        const label = route.id ? `Profile ${route.id}（${route.labels.join('、')}）` : `当前连接（${route.labels.join('、')}）`;
+        return { id: route.id, label, summary: { kind: route.id ? 'profile' : 'current', profileId: route.id, stages: route.labels } };
+    });
+}
+function sanitizeSettings(settings) {
+    return {
+        enabled: settings.enabled !== false,
+        auditEnabled: settings.auditEnabled !== false,
+        extractionEnabled: settings.extractionEnabled !== false,
+        autoAudit: settings.autoAudit === true,
+        autoExtraction: settings.autoExtraction === true,
+        activityPackEnabled: settings.activityPackEnabled !== false,
+        entryBudgetEnabled: settings.entryBudgetEnabled !== false,
+        responseTokens: Number(settings.responseTokens || 0),
+        requestTimeoutMs: Number(settings.requestTimeoutMs || 0),
+        activityPackHardMax: Number(settings.activityPackHardMax || 0),
+        routeIds: [...new Set([
+            settings.auditProfileId,
+            settings.revisionProfileId,
+            settings.extractionProfileId,
+            settings.smallSummaryProfileId,
+            settings.largeSummaryProfileId,
+            settings.migrationProfileId,
+        ].map((value) => String(value || '')).filter(Boolean))],
+    };
+}
+function collectEnvironment(context) {
+    return {
+        userAgent: typeof navigator !== 'undefined' ? String(navigator.userAgent || '') : 'headless',
+        language: typeof navigator !== 'undefined' ? String(navigator.language || '') : '',
+        locationOrigin: typeof location !== 'undefined' ? String(location.origin || '') : '',
+        sillyTavernVersion: String(context.version ?? context.sillyTavernVersion ?? context.appVersion ?? ''),
+        hasConnectionManager: Boolean(context.ConnectionManagerRequestService),
+        hasGenerateRawData: typeof context.generateRawData === 'function',
+        hasGenerateRaw: typeof context.generateRaw === 'function',
+        hasWorldInfoApi: typeof context.loadWorldInfo === 'function' && typeof context.saveWorldInfo === 'function',
+    };
+}
+function collectScope(host, context, settings) {
+    const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? '';
+    return {
+        chatKeyHash: host.chatKey() ? (0, util_1.hashText)(host.chatKey()) : '',
+        roleKeyHash: host.roleKey() ? (0, util_1.hashText)(host.roleKey()) : '',
+        chatIdHash: chatId ? (0, util_1.hashText)(String(chatId)) : '',
+        characterId: String(context.characterId ?? ''),
+        groupId: String(context.groupId ?? ''),
+        worldbookName: host.targetWorldbookName(settings),
+        messageCount: Array.isArray(context.chat) ? context.chat.length : 0,
+    };
+}
+function collectGenerationState(host, context, settings) {
+    const summary = host.connectionStateSignature(settings);
+    const chatSettings = context.chatCompletionSettings ?? {};
+    return {
+        connection: summary,
+        mainApi: String(context.mainApi ?? context.main_api ?? ''),
+        maxContext: Number(context.maxContext ?? context.max_context ?? 0),
+        chatModel: String(chatSettings.model ?? context.chat_completion_model ?? ''),
+        chatSource: String(chatSettings.source ?? context.chat_completion_source ?? ''),
+        responseLength: finiteValue(chatSettings.max_tokens ?? chatSettings.openai_max_tokens ?? context.amount_gen ?? context.responseLength),
+    };
+}
+function chatDigest(chat) {
+    const list = Array.isArray(chat) ? chat : [];
+    return {
+        count: list.length,
+        digest: (0, util_1.hashText)(JSON.stringify(list.map((message) => ({
+            user: message?.is_user === true,
+            system: message?.is_system === true,
+            mes: String(message?.mes ?? ''),
+            swipeId: Number.isInteger(message?.swipe_id) ? Number(message.swipe_id) : null,
+            swipe: Number.isInteger(message?.swipe_id) ? String(message?.swipes?.[message.swipe_id] ?? '') : '',
+        })))),
+    };
+}
+function diagnosticEntry(uid, marker) {
+    return {
+        uid,
+        key: [],
+        keysecondary: [],
+        comment: `诊断｜临时验收-${marker}`,
+        content: `Mirror Abyss acceptance ${marker}`,
+        constant: false,
+        vectorized: false,
+        selective: false,
+        selectiveLogic: 0,
+        addMemo: false,
+        order: 0,
+        position: 0,
+        disable: true,
+        ignoreBudget: false,
+        excludeRecursion: true,
+        preventRecursion: true,
+        probability: 100,
+        useProbability: true,
+        depth: 0,
+        scanDepth: null,
+        caseSensitive: null,
+        matchWholeWords: null,
+        useGroupScoring: null,
+        triggers: [],
+        extensions: { mirrorAbyssDiagnostic: { temporary: true, marker, createdAt: Date.now() } },
+    };
+}
+function findFreeDiagnosticUid(data) {
+    const occupied = new Set();
+    for (const [key, entry] of Object.entries(data?.entries ?? {})) {
+        if (/^\d+$/u.test(String(key))) occupied.add(Number(key));
+        if (Number.isInteger(Number(entry?.uid)) && Number(entry.uid) >= 0) occupied.add(Number(entry.uid));
+    }
+    let uid = 0;
+    while (occupied.has(uid)) uid += 1;
+    return uid;
+}
+function digestWorldbook(data) { return (0, util_1.hashText)(JSON.stringify(data?.entries ?? {})); }
+function countStatuses(checks) {
+    const summary = { pass: 0, warn: 0, fail: 0, skip: 0, total: checks.length };
+    for (const check of checks) {
+        if (Object.prototype.hasOwnProperty.call(summary, check.status)) summary[check.status] += 1;
+    }
+    return summary;
+}
+function summarizeDiagnosticReport(report) {
+    const value = report?.summary ?? countStatuses(report?.checks ?? []);
+    return `${report?.accepted ? '自动验收通过' : '自动验收未通过'}：通过${value.pass}，警告${value.warn}，失败${value.fail}，跳过${value.skip}`;
+}
+function buildDiagnosticFilename(report) {
+    const stamp = String(report?.finishedAt || report?.startedAt || new Date().toISOString()).replace(/[:.]/gu, '-');
+    return `Mirror-Abyss-${constants_1.VERSION}-diagnostic-${stamp}.json`;
+}
+function sanitizeEvidence(value) {
+    if (value == null) return null;
+    try {
+        return JSON.parse(JSON.stringify(value, (_key, item) => {
+            if (typeof item === 'string' && item.length > 500) return `${item.slice(0, 240)}…[${item.length} chars]…${item.slice(-120)}`;
+            if (typeof item === 'function') return `[Function ${item.name || 'anonymous'}]`;
+            return item;
+        }));
+    }
+    catch { return { value: String(value) }; }
+}
+function finiteValue(value) { const number = Number(value); return Number.isFinite(number) ? number : null; }
 },"domain/entry-section":function(module,exports,require){
 
 "use strict";
@@ -3645,12 +4278,16 @@ class HostAdapter {
                 const generateRawData = context.generateRawData;
                 const extractMessageFromData = context.extractMessageFromData;
                 if (typeof generateRawData === 'function' && typeof extractMessageFromData === 'function') {
-                    request = generateRawData({ systemPrompt, prompt, responseLength });
+                    // [MA-HOST-MODEL-03] 当前连接绝不传 responseLength。
+                    // SillyTavern 官方 generateRawData 会通过 TempResponseLength 临时改写全局响应长度；
+                    // 后台审核与下一轮主正文并发时可能产生竞态，导致主正文继承审核/提取的短上限。
+                    // 当前连接因此沿用用户的全局响应长度；需要独立阶段预算时必须选择 Connection Profile。
+                    request = generateRawData({ systemPrompt, prompt });
                 }
                 else {
                     const generateRaw = context.generateRaw;
                     if (typeof generateRaw !== 'function') throw new Error('当前 SillyTavern 未提供 generateRawData 或 generateRaw');
-                    request = generateRaw({ systemPrompt, prompt, responseLength });
+                    request = generateRaw({ systemPrompt, prompt });
                 }
             }
         }
@@ -4397,6 +5034,9 @@ function exposeApi() {
         getSettings: async () => (await requireApplication()).settings(),
         configure: async (patch) => (await requireApplication()).configure(patch),
         status: async () => (await requireApplication()).status(),
+        runAcceptance: async () => (await requireApplication()).runAcceptance(),
+        exportDiagnostics: async () => (await requireApplication()).exportDiagnostics(),
+        getDiagnostics: async () => (await requireApplication()).diagnosticsReport(),
         restart: async () => { shutdown(false); extensionEnabled = true; await initialize(); },
     };
 }
@@ -5122,14 +5762,14 @@ class MemoryRunner {
             snapshot,
             profileId: settings.extractionProfileId,
             sourceText: snapshot.turnText || snapshot.assistantText,
-            onRetry: () => this.progress('running', '提取未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次', { titles: [] }),
+            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '提取模型'), { titles: [], phase: 'extract' }),
         });
         this.validate(snapshot);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
         let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
         let repairRaw = '';
         if (!blocks.length && diagnostics.hadInput) {
-            this.progress('running', '首次格式无法提交，启动一次格式修复后手', { titles: [] });
+            this.progress('running', '提取结果不是可提交的 ENTRY 协议，启动一次格式修复', { titles: [], phase: 'extract' });
             const repairPrompt = (0, prompts_1.extractionRepairPrompts)(raw);
             repairRaw = await (0, model_request_1.callModel)({
                 host: this.host,
@@ -5140,7 +5780,7 @@ class MemoryRunner {
                 snapshot,
                 profileId: settings.extractionProfileId,
                 sourceText: raw,
-                onRetry: () => this.progress('running', '格式修复未得到最终协议或网关异常，已扩大输出预算并缩短文本重试一次', { titles: [] }),
+                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '格式修复模型'), { titles: [], phase: 'extract' }),
             });
             this.validate(snapshot);
             blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
@@ -5158,18 +5798,22 @@ class MemoryRunner {
             const skippedTitles = (diagnostics.skipped || []).map((item) => item.title || '异常片段');
             const detail = explicitNone ? '本轮明确返回“无”，世界书零写入' : `没有可安全提交的条目；已隔离${skippedTitles.length}个异常片段`;
             this.setStatus(snapshot.chatKey, 'matching', detail, '', repairRaw || raw, emptyPlan());
-            this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0 });
+            this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0, phase: 'extract' });
+            if (!explicitNone) {
+                const reasons = (diagnostics.skipped || []).map((item) => `${item.title || '异常片段'}：${item.reason || '协议不完整'}`).slice(0, 4).join('；');
+                throw new Error(`提取未形成最终 ENTRY 协议，世界书未写入且处理游标未推进${reasons ? `：${reasons}` : ''}`);
+            }
             return { entries, changed: false, diagnostics };
         }
         const titles = blocks.map((block) => block.title);
         this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
-        this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
+        this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { phase: 'extract', titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
         const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
         const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...plan.operations.filter((operation) => operation.kind === 'noop').map((operation) => operation.title)])];
-        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
+        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { phase: 'write', titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
         const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', raw);
         result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
         const destination = result.worldbookName || snapshot.worldbookName || '当前绑定世界书';
@@ -5180,7 +5824,7 @@ class MemoryRunner {
         const detail = businessWrites > 0
             ? `已写入世界书“${destination}”：新建${actualCreated.length}、更新${actualUpdated.length}、删除${actualDeleted.length}；活动包${result.activityPackChanged ? '已刷新' : '未变化'}`
             : `世界书“${destination}”业务条目零写入；活动包${result.activityPackChanged ? '仅刷新运行投影' : '未变化'}`;
-        this.progress('success', detail, { titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites, activityPackChanged: result.activityPackChanged === true });
+        this.progress('success', detail, { phase: 'write', titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites, activityPackChanged: result.activityPackChanged === true });
         return result;
     }
     async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
@@ -5226,7 +5870,7 @@ class MemoryRunner {
             snapshot,
             profileId: profile,
             sourceText: recentConversation,
-            onRetry: () => this.progress('running', `${label}未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次`, { titles: [expectedTitle] }),
+            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'extract' }),
         });
         this.validate(snapshot);
         const recovered = parseSummaryWithRecovery(raw, kind);
@@ -9704,6 +10348,7 @@ exports.stageResponseTokens = stageResponseTokens;
 exports.isRetryableGatewayError = isRetryableGatewayError;
 exports.limitPromptPair = limitPromptPair;
 exports.outputContractForStage = outputContractForStage;
+exports.describeRetryReason = describeRetryReason;
 const util_1 = require("./util");
 
 // [MA-MODEL-01] 每个模型阶段只声明输入/输出预算和一次网关重试。
@@ -9736,8 +10381,12 @@ async function callModel(options) {
         profileId = '',
         sourceText = '',
         onRetry,
+        responseTokens = 0,
     } = options;
-    const responseLength = stageResponseTokens(stage, settings, sourceText);
+    const configuredOverride = Number(responseTokens || 0);
+    const responseLength = configuredOverride > 0
+        ? Math.max(256, Math.min(16384, Math.floor(configuredOverride)))
+        : stageResponseTokens(stage, settings, sourceText);
     const primary = limitPromptPair(withOutputContract(prompt, stage, responseLength, sourceText), stage);
     try {
         return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
@@ -9794,8 +10443,8 @@ function stageResponseTokens(stage, settings, sourceText = '') {
     const configured = Math.max(1024, Number(settings?.responseTokens) || 8192);
     if (stage === 'audit') return Math.min(configured, 1536);
     if (stage === 'revision') {
-        const estimated = Math.max(2048, Math.ceil(String(sourceText ?? '').length * 1.35) + 768);
-        return Math.min(configured, Math.min(6144, estimated));
+        const estimated = Math.max(3072, Math.ceil(String(sourceText ?? '').length * 1.8) + 1536);
+        return Math.min(configured, estimated);
     }
     if (stage === 'extraction') return Math.min(configured, 6144);
     if (stage === 'extractionRepair') return Math.min(configured, 4096);
@@ -9823,7 +10472,7 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
     const sourceLength = String(sourceText ?? '').length;
     const stageRules = {
         audit: ['- 最终结论必须首先出现。通过只输出 PASS；不通过输出 FAIL 与最多8条短原因；总长度不超过300个中文字符。'],
-        revision: [`- 只输出可直接替换的完整正文。除修复违规所必需的改动外不得扩写；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
+        revision: [`- 只输出可直接替换的完整正文。必须从原文开头写到原文结尾，不得中途停止、缺段或用省略号代替剩余内容。除删除明确违规内容外，修正版应保留原文至少85%的有效正文；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
         extraction: ['- 只输出规定的 ENTRY 协议或“无”。最多8条，最终协议总长度不超过5000个中文字符。'],
         extractionRepair: ['- 只输出修复后的 ENTRY 协议或“无”。不得补充事实；最终协议总长度不超过5000个中文字符。'],
         worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
@@ -9844,10 +10493,19 @@ function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
     };
 }
 
+
+function describeRetryReason(error, label = '模型请求') {
+    const text = (0, util_1.errorText)(error);
+    if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；已扩大输出预算并缩短上下文重试一次`;
+    if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；已扩大输出预算并缩短上下文重试一次`;
+    if (isRetryableGatewayError(error)) return `${label}遇到网关或网络异常：${text}；已缩短上下文重试一次`;
+    return `${label}失败：${text}；已执行一次安全重试`;
+}
+
 /** [MA-MODEL-04] 识别常见上游网关失败；本地取消和格式错误不属于此类。 */
 function isRetryableGatewayError(error) {
     const text = (0, util_1.errorText)(error).toLocaleLowerCase();
-    return /(?:\b502\b|\b503\b|\b504\b|gateway\s*(?:timeout|time-out)|upstream|no message generated|html\s*错误页|returned\s*html|fetch failed|network error|connection reset)/iu.test(text);
+    return /(?:\b502\b|\b503\b|\b504\b|gateway\s*(?:timeout|time-out)|upstream|no message generated|html\s*错误页|returned\s*html|unexpected token ['"]?<['"]?|<html|not valid json|invalid json|json parse|fetch failed|network error|connection reset)/iu.test(text);
 }
 
 /**
@@ -11750,11 +12408,15 @@ function revisionPrompts(settings, playerText, assistantText, issues, options = 
     const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1800 : 3600);
     const issueLimit = compact ? 5 : 10;
     const issueChars = compact ? 160 : 260;
+    const completenessRetry = options.completenessRetry === true;
+    const retryReason = String(options.retryReason || '').trim();
     const system = `你是 Mirror Abyss 正文修正脚本。
 
 只修正审核指出的明确违规部分，保留原剧情方向、事件结果、人物关系、角色身份、叙事视角和合规内容。
 禁止添加新事件、删除已有事件、改变人物目标、修改世界规则、替玩家决定行动、续写或输出解释。
 你的输出只能是可直接替换原消息的完整正文。
+必须从原正文第一段完整输出到最后一段；禁止中途截断、缺失结尾、用省略号代替剩余段落或只返回局部修补。
+除审核明确要求删除的违规内容外，保留原正文至少85%的有效内容。${completenessRetry ? `\n上一次修正版被本地完整性闸门判定为疑似截断（${retryReason || '长度或结尾不完整'}）。本次必须重新从头输出完整正文，不得沿用截断结果。` : ''}
 
 用户附加修正规则：
 ${clipText(settings.revisionPrompt || '（无）', compact ? 1500 : 3000)}`;
@@ -12598,6 +13260,8 @@ function sanitizeRecallKeywords(name, values, type = '', max = 4) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RevisionService = void 0;
 exports.parseRevisionResult = parseRevisionResult;
+exports.assessRevisionCompleteness = assessRevisionCompleteness;
+exports.revisionRetryTokens = revisionRetryTokens;
 const parser_1 = require("./parser");
 const prompts_1 = require("./prompts");
 const model_request_1 = require("./model-request");
@@ -12612,7 +13276,7 @@ class RevisionService {
      * [MA-REVISION-01] 修正服务只生成完整替换文本，不直接修改聊天。
      * 这样正文落地仍由 HostAdapter 单点负责，避免审核与宿主写入高耦合。
      */
-    async revise(settings, snapshot, issues) {
+    async revise(settings, snapshot, issues, onProgress = () => undefined) {
         this.host.assertSnapshot(snapshot, this.getSettings());
         const prompt = (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { dialogueContext: snapshot.dialogueContext });
         const raw = await (0, model_request_1.callModel)({
@@ -12626,7 +13290,27 @@ class RevisionService {
             sourceText: snapshot.turnText || snapshot.assistantText,
         });
         this.host.assertSnapshot(snapshot, this.getSettings());
-        const revisedText = parseRevisionResult(raw);
+        let revisedText = parseRevisionResult(raw);
+        let assessment = assessRevisionCompleteness(snapshot.assistantText, revisedText);
+        if (!assessment.ok) {
+            try { onProgress(`修正版疑似截断：${assessment.reason}；扩大预算重新生成完整正文`); } catch { }
+            const retryPrompt = (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { dialogueContext: snapshot.dialogueContext, completenessRetry: true, retryReason: assessment.reason });
+            const retryRaw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'revision',
+                prompt: retryPrompt,
+                fallbackPrompt: () => (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { compact: true, dialogueContext: snapshot.dialogueContext, completenessRetry: true, retryReason: assessment.reason }),
+                settings,
+                snapshot,
+                profileId: settings.revisionProfileId,
+                sourceText: snapshot.turnText || snapshot.assistantText,
+                responseTokens: revisionRetryTokens(settings, snapshot.assistantText),
+            });
+            this.host.assertSnapshot(snapshot, this.getSettings());
+            revisedText = parseRevisionResult(retryRaw);
+            assessment = assessRevisionCompleteness(snapshot.assistantText, revisedText);
+        }
+        if (!assessment.ok) throw new Error(`修正版疑似截断，已拒绝覆盖并保留原正文：${assessment.reason}`);
         if (revisedText === snapshot.assistantText)
             throw new Error('修正模型返回的正文与原正文完全相同');
         return revisedText;
@@ -12644,6 +13328,29 @@ function parseRevisionResult(raw) {
     if (/^(?:将|把).{0,80}(?:改为|替换为|删除)/u.test(text) && text.split('\n').length <= 3)
         throw new Error('修正模型返回了局部补丁，不是完整正文');
     return text;
+}
+
+function revisionRetryTokens(settings, sourceText) {
+    const configured = Math.max(8192, Number(settings?.responseTokens) || 8192);
+    const estimated = Math.ceil(String(sourceText ?? '').length * 2.2) + 2048;
+    return Math.min(16384, Math.max(configured, estimated));
+}
+function assessRevisionCompleteness(original, candidate) {
+    const source = String(original ?? '').trim();
+    const next = String(candidate ?? '').trim();
+    if (!next) return { ok: false, reason: '修正版为空', ratio: 0 };
+    const ratio = source.length ? next.length / source.length : 1;
+    const sourceParagraphs = source.split(/\n\s*\n|\n/u).map((x) => x.trim()).filter(Boolean).length;
+    const nextParagraphs = next.split(/\n\s*\n|\n/u).map((x) => x.trim()).filter(Boolean).length;
+    const dangling = /[，、：:；;（(\[【“‘《〈—-]$/u.test(next);
+    const sourceHasEnding = /[。！？!?…」』）)】]$/u.test(source);
+    const nextHasEnding = /[。！？!?…」』）)】]$/u.test(next);
+    if (dangling) return { ok: false, reason: '结尾停在未完成的标点或结构上', ratio };
+    if (source.length >= 300 && ratio < 0.72) return { ok: false, reason: `修正版仅保留原文约${Math.round(ratio * 100)}%`, ratio };
+    if (sourceParagraphs >= 4 && nextParagraphs < Math.max(2, Math.ceil(sourceParagraphs * 0.55)) && ratio < 0.88)
+        return { ok: false, reason: `段落由${sourceParagraphs}段骤减为${nextParagraphs}段`, ratio };
+    if (sourceHasEnding && !nextHasEnding && ratio < 0.98) return { ok: false, reason: '修正版缺少完整句末，疑似输出到上限', ratio };
+    return { ok: true, reason: '', ratio };
 }
 },"semantic":function(module,exports,require){
 
@@ -13240,7 +13947,7 @@ class WorldSettingImportService {
             snapshot,
             profileId: settings.extractionProfileId,
             sourceText: source,
-            onRetry: () => this.progress('running', '设定导入未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次'),
+            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '设定导入模型')),
         });
         this.validate(snapshot, settings);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
