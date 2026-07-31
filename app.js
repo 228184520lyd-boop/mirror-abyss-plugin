@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.36 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.37 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -355,6 +355,9 @@ class MirrorAbyssApplication {
         this.worldbook = new worldbook_1.WorldbookAdapter(() => this.host.context(), () => this.host.chatKey());
         this.diagnostics = new diagnostics_1.DiagnosticsService(this.host, this.worldbook, () => this.settings(), (progress) => {
             this.controlPanel?.setDiagnosticProgress?.(progress);
+        }, {
+            executeTurn: (taskType, index, automatic, settings) => this.runDiagnosticTurn(taskType, index, automatic, settings),
+            pipelineState: () => (0, util_1.clone)(this.controlPanel?.taskStates ?? {}),
         });
         this.auditRunner = new audit_1.AuditRunner(this.host, () => this.settings(), (progress) => {
             const snapshot = this.activeSnapshots.get(progress?.chatKey || safeChatKey(this.host));
@@ -421,6 +424,7 @@ class MirrorAbyssApplication {
         this.activeTokens = new Map();
         this.pendingMessageTimers = new Map();
         this.pendingSourceReconcileTimers = new Map();
+        this.acceptanceMode = false;
         this.started = false;
     }
     start() {
@@ -468,7 +472,35 @@ class MirrorAbyssApplication {
     clearWorldSettingsPreview() { return this.worldSettingImportService.clearPreview(); }
     worldSettingsPreview() { return this.worldSettingImportService.previewSummary(); }
     runAcceptance() {
-        return this.enqueueMaintenance('acceptance', async (settings, snapshot) => this.diagnostics.run(settings, snapshot, () => this.host.assertSnapshot(snapshot, this.settings())));
+        return this.enqueueMaintenance('acceptance', async (settings, snapshot) => {
+            this.acceptanceMode = true;
+            this.clearPendingMessageTimers(snapshot.chatKey);
+            try {
+                return await this.diagnostics.run(settings, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
+            }
+            finally {
+                this.acceptanceMode = false;
+                this.clearPendingMessageTimers(snapshot.chatKey);
+            }
+        });
+    }
+    async runDiagnosticTurn(taskType, index, automatic, settings) {
+        const token = { cancelled: false, reason: '' };
+        const snapshot = this.host.captureSnapshot(settings, index, taskType, token);
+        const chatKey = snapshot.chatKey;
+        const previousSnapshot = this.activeSnapshots.get(chatKey);
+        const previousToken = this.activeTokens.get(chatKey);
+        this.activeSnapshots.set(chatKey, snapshot);
+        this.activeTokens.set(chatKey, token);
+        try {
+            return await this.runTask(taskType, snapshot, automatic, settings);
+        }
+        finally {
+            if (previousSnapshot) this.activeSnapshots.set(chatKey, previousSnapshot);
+            else this.activeSnapshots.delete(chatKey);
+            if (previousToken) this.activeTokens.set(chatKey, previousToken);
+            else this.activeTokens.delete(chatKey);
+        }
     }
     exportDiagnostics() { return this.diagnostics.exportLast(); }
     diagnosticsReport() { return this.diagnostics.currentReport(); }
@@ -587,7 +619,7 @@ class MirrorAbyssApplication {
         catch (error) { console.warn(`[MirrorAbyss] 宿主事件 ${eventName} 不可用`, error); }
     }
     scheduleMessage(index, immediate = false) {
-        if (!this.started) return;
+        if (!this.started || this.acceptanceMode) return;
         let turn;
         try { turn = this.host.latestTurn(index); }
         catch { return; }
@@ -633,7 +665,7 @@ class MirrorAbyssApplication {
         }
     }
     async onMessage(index) {
-        if (!this.started) return;
+        if (!this.started || this.acceptanceMode) return;
         if (!Number.isInteger(index)) {
             try { index = this.host.latestTurn().messageIndex; }
             catch { return; }
@@ -1226,7 +1258,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.36';
+exports.VERSION = '2.0.0-lite.ui.37';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1810,13 +1842,13 @@ class ControlPanel {
         section.className = 'ma-lite-diagnostic';
         const help = document.createElement('div');
         help.className = 'ma-lite-diagnostic-help';
-        help.textContent = '在当前 SillyTavern 宿主中检查聊天、模型路由、世界书权威读取、真实写入回读与自动回滚。诊断报告不包含正文、提示词、密钥或完整模型响应。';
+        help.textContent = '全自动实机验收会临时发送玩家消息、调用主模型生成正文，并完整运行审核、修正、提取、写入与活动包链；结束后自动恢复聊天、元数据和世界书。诊断报告不包含正文、提示词、密钥或完整模型响应。';
         const actions = document.createElement('div');
         actions.className = 'ma-lite-diagnostic-actions';
         const run = document.createElement('button');
         run.type = 'button';
         run.dataset.kind = 'runAcceptance';
-        run.textContent = '运行自动验收';
+        run.textContent = '运行全自动实机验收';
         run.addEventListener('click', () => void this.runDiagnosticAction());
         const exportButton = document.createElement('button');
         exportButton.type = 'button';
@@ -1828,7 +1860,7 @@ class ControlPanel {
         status.textContent = '尚未运行';
         const report = document.createElement('pre');
         report.className = 'ma-lite-diagnostic-report';
-        report.textContent = '自动验收会产生真实模型请求，并对当前世界书执行可回滚临时写入。';
+        report.textContent = '全自动实机验收会临时发送消息并调用主模型，随后运行完整处理链和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
         actions.append(run, exportButton);
         section.append(help, actions, status, report);
         this.diagnosticStatusNode = status;
@@ -1848,7 +1880,7 @@ class ControlPanel {
         this.pendingActions.add(kind);
         this.syncDisabledState();
         this.setDiagnosticProgress({ state: 'running', detail: '正在启动自动验收…' });
-        this.setStatus('正在运行实机自动验收…');
+        this.setStatus('正在运行全自动端到端实机验收…');
         try {
             const report = await action();
             this.renderDiagnosticReport(report);
@@ -1883,7 +1915,7 @@ class ControlPanel {
     renderDiagnosticReport(report) {
         if (!this.diagnosticReportNode) return;
         if (!report) {
-            this.diagnosticReportNode.textContent = '自动验收会产生真实模型请求，并对当前世界书执行可回滚临时写入。';
+            this.diagnosticReportNode.textContent = '全自动实机验收会临时发送消息并调用主模型，随后运行完整处理链和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
             if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = '尚未运行';
             return;
         }
@@ -3013,6 +3045,7 @@ const prompts_1 = require("./prompts");
 const audit_1 = require("./audit");
 const parser_1 = require("./parser");
 const model_request_1 = require("./model-request");
+const governance_1 = require("./governance");
 
 /**
  * [MA-DIAG-01] 真实宿主验收与诊断导出。
@@ -3020,11 +3053,12 @@ const model_request_1 = require("./model-request");
  * 报告只记录结构、计数、哈希与错误，不导出正文、提示词、API Key 或完整模型响应。
  */
 class DiagnosticsService {
-    constructor(host, worldbook, getSettings, onProgress) {
+    constructor(host, worldbook, getSettings, onProgress, hooks = {}) {
         this.host = host;
         this.worldbook = worldbook;
         this.getSettings = getSettings;
         this.onProgress = onProgress;
+        this.hooks = hooks && typeof hooks === 'object' ? hooks : {};
         this.lastReport = null;
     }
     currentReport() { return this.lastReport ? (0, util_1.clone)(this.lastReport) : null; }
@@ -3032,12 +3066,13 @@ class DiagnosticsService {
     async run(settings, snapshot, validate) {
         const startedAt = new Date();
         const report = {
-            schemaVersion: 1,
+            schemaVersion: 2,
             plugin: { name: constants_1.DISPLAY_NAME, version: constants_1.VERSION },
             startedAt: startedAt.toISOString(),
             finishedAt: '',
             durationMs: 0,
             accepted: false,
+            executionMode: 'real-host-e2e-with-controlled-fault-matrix',
             summary: { pass: 0, warn: 0, fail: 0, skip: 0, total: 0 },
             environment: {},
             scope: {},
@@ -3053,24 +3088,43 @@ class DiagnosticsService {
                 validate?.();
                 const status = options.status === 'warn' ? 'warn' : 'pass';
                 report.checks.push({ id, label, category, status, durationMs: Date.now() - checkStarted, detail: options.detail || '通过', evidence: sanitizeEvidence(evidence) });
+                return evidence;
             }
             catch (error) {
                 const optional = options.optional === true;
                 report.checks.push({ id, label, category, status: optional ? 'warn' : 'fail', durationMs: Date.now() - checkStarted, detail: (0, util_1.errorText)(error), evidence: sanitizeEvidence(error?.diagnosticEvidence) });
+                return null;
             }
         };
+        const pushSkip = (id, label, category, detail) => {
+            report.checks.push({ id, label, category, status: 'skip', durationMs: 0, detail, evidence: null });
+        };
+        let context = null;
+        let transaction = null;
+        let rawBefore = null;
+        let chatBefore = null;
+        let generationStateBefore = null;
+        let sandboxRestored = false;
         try {
-            const context = this.host.context();
+            context = this.host.context();
             report.environment = collectEnvironment(context);
             report.scope = collectScope(this.host, context, settings);
-            const chatBefore = chatDigest(context.chat);
-            const generationStateBefore = collectGenerationState(this.host, context, settings);
+            chatBefore = chatDigest(context.chat);
+            generationStateBefore = collectGenerationState(this.host, context, settings);
+            transaction = this.host.captureDiagnosticTransaction();
 
             await runCheck('host-context', 'SillyTavern 宿主上下文', '宿主', async () => {
                 const required = ['eventSource', 'chat', 'saveSettingsDebounced'];
                 const missing = required.filter((key) => context[key] == null);
                 if (missing.length) throw new Error(`缺少宿主字段：${missing.join('、')}`);
-                return { eventApi: typeof context.eventSource?.on === 'function', messageCount: Array.isArray(context.chat) ? context.chat.length : 0 };
+                const APIs = {
+                    eventApi: typeof context.eventSource?.on === 'function',
+                    stscript: typeof (context.executeSlashCommandsWithOptions ?? context.executeSlashCommands) === 'function',
+                    mainGenerate: typeof (context.generate ?? context.Generate) === 'function',
+                    saveChat: typeof context.saveChat === 'function' || typeof context.saveChatConditional === 'function',
+                };
+                if (Object.values(APIs).some((value) => !value)) throw new Error(`端到端宿主 API 不完整：${Object.entries(APIs).filter(([, value]) => !value).map(([key]) => key).join('、')}`);
+                return { ...APIs, messageCount: Array.isArray(context.chat) ? context.chat.length : 0 };
             });
 
             await runCheck('chat-scope', '当前聊天作用域', '宿主', async () => {
@@ -3079,18 +3133,12 @@ class DiagnosticsService {
                 return { chatKeyHash: (0, util_1.hashText)(chatKey), roleKeyHash: (0, util_1.hashText)(this.host.roleKey()), messageCount: context.chat?.length ?? 0 };
             });
 
-            await runCheck('latest-assistant', '最新 AI 正文可定位', '正文', async () => {
-                const turn = this.host.latestTurn();
-                return { messageIndex: turn.messageIndex, messageKeyHash: (0, util_1.hashText)(turn.messageKey), contentChars: turn.assistantText.length, contentHash: turn.contentHash };
-            }, { optional: true });
-
             await runCheck('worldbook-binding', '当前聊天世界书绑定', '世界书', async () => {
                 const name = this.host.targetWorldbookName(settings);
                 if (!name) throw new Error('当前聊天未绑定世界书，且未启用自动创建');
                 return { worldbookName: name };
             });
 
-            let rawBefore = null;
             await runCheck('worldbook-authoritative-read', '世界书后端权威读取', '世界书', async () => {
                 rawBefore = await this.worldbook.readRaw(settings, snapshot, validate);
                 return {
@@ -3118,11 +3166,11 @@ class DiagnosticsService {
                     const routeAfter = collectGenerationState(this.host, context, settings);
                     if (!/MA_ACCEPTANCE_OK/iu.test(String(output))) {
                         const error = new Error(`模型没有返回验收协议；最终文本长度 ${String(output).length} 字`);
-                        error.diagnosticEvidence = { route: route.summary, outputChars: String(output).length, outputHash: (0, util_1.hashText)(String(output)) };
+                        error.diagnosticEvidence = { mode: 'real-host', route: route.summary, outputChars: String(output).length, outputHash: (0, util_1.hashText)(String(output)) };
                         throw error;
                     }
                     if (JSON.stringify(routeBefore) !== JSON.stringify(routeAfter)) throw new Error('模型测试后主连接状态发生变化');
-                    return { route: route.summary, outputChars: String(output).length, outputHash: (0, util_1.hashText)(String(output)), mainGenerationStatePreserved: true };
+                    return { mode: 'real-host', route: route.summary, outputChars: String(output).length, outputHash: (0, util_1.hashText)(String(output)), mainGenerationStatePreserved: true };
                 });
             }
 
@@ -3141,14 +3189,14 @@ class DiagnosticsService {
                         settings,
                         snapshot: protocolSnapshot,
                         profileId: settings.auditProfileId,
-                        sourceText: `${playerText}
-${assistantText}`,
+                        sourceText: `${playerText}\n${assistantText}`,
                     });
                     const parsed = (0, audit_1.parseAuditResult)(raw);
                     if (parsed.decision !== 'pass') throw new Error(`合规样本被判定需要修正：${parsed.issues?.slice(0, 3).join('；') || '未提供原因'}`);
-                    return { decision: parsed.decision, route: settings.auditProfileId ? 'profile' : 'current' };
+                    return { mode: 'real-model-protocol', decision: parsed.decision, route: settings.auditProfileId ? 'profile' : 'current' };
                 });
             }
+            else pushSkip('audit-protocol', '审核提示词与 PASS 协议', '业务协议', '审核功能已关闭');
 
             if (settings.extractionEnabled !== false) {
                 await runCheck('extraction-protocol', '提取提示词与 ENTRY 协议', '业务协议', async () => {
@@ -3165,26 +3213,142 @@ ${assistantText}`,
                         settings,
                         snapshot: protocolSnapshot,
                         profileId: settings.extractionProfileId,
-                        sourceText: `${playerText}
-${assistantText}`,
+                        sourceText: `${playerText}\n${assistantText}`,
                     });
                     const blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
                     if (!blocks.length) {
                         const diagnostics = blocks.diagnostics || {};
                         throw new Error(`合成状态变化未形成 ENTRY 协议；异常片段${(diagnostics.skipped || []).length}个`);
                     }
-                    return { entryCount: blocks.length, titles: blocks.map((block) => String(block.title || '')).slice(0, 8), repaired: Number(blocks.diagnostics?.repaired || 0), route: settings.extractionProfileId ? 'profile' : 'current' };
+                    return { mode: 'real-model-protocol', entryCount: blocks.length, titles: blocks.map((block) => String(block.title || '')).slice(0, 8), repaired: Number(blocks.diagnostics?.repaired || 0), route: settings.extractionProfileId ? 'profile' : 'current' };
                 });
             }
+            else pushSkip('extraction-protocol', '提取提示词与 ENTRY 协议', '业务协议', '提取功能已关闭');
 
             if (rawBefore) {
                 await runCheck('worldbook-reversible-write', '世界书写入—回读—回滚', '世界书', async () => {
-                    return this.reversibleWorldbookWrite(settings, snapshot, rawBefore, validate);
+                    return { mode: 'real-host', ...(await this.reversibleWorldbookWrite(settings, snapshot, rawBefore, validate)) };
+                });
+            }
+            else pushSkip('worldbook-reversible-write', '世界书写入—回读—回滚', '世界书', '权威读取未通过，未执行写入测试');
+
+            let sent = null;
+            let generated = null;
+            if (rawBefore && typeof this.hooks.executeTurn === 'function') {
+                sent = await runCheck('e2e-user-send', '自动发送玩家测试消息', '端到端', async () => {
+                    const result = await this.host.sendDiagnosticUserMessage(
+                        '【镜渊自动验收临时消息】请自然回复三段完整叙事，约五百字。正文中明确写出：镜渊验收庭灯火通明，北侧银门已经打开，守门人洛恩站在门旁，并说明这里是王城议事厅入口。不要替玩家行动或决定，结尾必须完整。'
+                    );
+                    return { mode: 'real-host', ...result };
+                });
+
+                if (sent) {
+                    generated = await runCheck('e2e-main-generation', '主模型真实正文生成', '端到端', async () => {
+                        const before = collectGenerationState(this.host, context, settings);
+                        const result = await this.host.generateDiagnosticAssistant(Math.max(60000, Number(settings.requestTimeoutMs) || 90000));
+                        const after = collectGenerationState(this.host, context, settings);
+                        if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error('主正文生成后连接或响应长度状态发生变化');
+                        if (result.chars < 120) throw new Error(`主正文仅 ${result.chars} 字，明显过短`);
+                        if (!result.completeEnding) throw new Error('主正文结尾不完整，疑似被截断');
+                        return { mode: 'real-host-main-generation', ...result, mainGenerationStatePreserved: true };
+                    });
+                }
+
+                let pipelineResult = null;
+                if (generated) {
+                    pipelineResult = await runCheck('e2e-full-pipeline', '真实正文完整处理链', '端到端', async () => {
+                        const result = await this.hooks.executeTurn('full', generated.index, false, settings);
+                        const warehouse = result?.warehouse ?? {};
+                        const created = Array.isArray(warehouse.created) ? warehouse.created : [];
+                        const updated = Array.isArray(warehouse.updated) ? warehouse.updated : [];
+                        const deleted = Array.isArray(warehouse.deleted) ? warehouse.deleted : [];
+                        const businessWrites = created.length + updated.length + deleted.length;
+                        const readBack = await this.worldbook.readRaw(settings, snapshot, validate);
+                        const entries = Object.values(readBack.data?.entries ?? {});
+                        const activityPack = entries.find((entry) => String(entry?.comment ?? '') === governance_1.ACTIVITY_PACK_TITLE);
+                        if (settings.extractionEnabled !== false && businessWrites < 1) throw new Error('真实正文完成提取但业务条目零写入');
+                        if (settings.activityPackEnabled !== false && !activityPack) throw new Error('完整处理后未生成当前活动包');
+                        const stages = this.hooks.pipelineState?.() ?? {};
+                        for (const key of ['audit', 'revision', 'extract', 'write']) {
+                            if (!stages[key]) throw new Error(`四阶段状态缺少 ${key}`);
+                            if (stages[key].state === 'running' || stages[key].state === 'queued') throw new Error(`阶段 ${key} 未收敛`);
+                        }
+                        return {
+                            mode: 'real-host-full-pipeline',
+                            businessWrites,
+                            created,
+                            updated,
+                            deleted,
+                            activityPackPresent: Boolean(activityPack),
+                            activityPackChars: String(activityPack?.content ?? '').length,
+                            stages,
+                        };
+                    });
+                }
+
+                if (pipelineResult && generated) {
+                    await runCheck('e2e-idempotency', '同一正文重复处理幂等性', '组合', async () => {
+                        const before = await this.worldbook.readRaw(settings, snapshot, validate);
+                        const beforeDigest = digestWorldbook(before.data);
+                        const result = await this.hooks.executeTurn('full', generated.index, false, settings);
+                        const after = await this.worldbook.readRaw(settings, snapshot, validate);
+                        const afterDigest = digestWorldbook(after.data);
+                        if (beforeDigest !== afterDigest) throw new Error('同一正文重复处理改变了世界书');
+                        return { mode: 'real-host-combination', skippedResult: Array.isArray(result) && result.length === 0, beforeDigest, afterDigest };
+                    });
+                }
+
+                if (settings.auditEnabled !== false) {
+                    await runCheck('e2e-revision-branch', '审核失败—完整修正—安全替换', '端到端', async () => {
+                        const violation = '你立刻拔剑冲进银门，替自己决定接受守门人的命令；你心中已经认定洛恩绝对可信。';
+                        const turn = await this.host.appendDiagnosticAssistantTurn('我站在原地观察，没有采取行动。', violation);
+                        const result = await this.hooks.executeTurn('audit', turn.assistantIndex, false, settings);
+                        const revised = this.host.latestTurn(turn.assistantIndex).assistantText;
+                        if (result?.auditReplaced !== true) throw new Error('确定性违规样本未触发正文修正');
+                        if (!revised || revised === violation) throw new Error('修正分支没有替换违规正文');
+                        if (/你立刻拔剑|你心中已经认定/u.test(revised)) throw new Error('修正版仍保留替玩家行动或心理结论');
+                        if (revised.length < Math.max(20, Math.floor(violation.length * 0.35))) throw new Error('修正版异常短，疑似截断');
+                        return { mode: 'real-host-revision', originalChars: violation.length, revisedChars: revised.length, revisedHash: (0, util_1.hashText)(revised) };
+                    });
+                }
+                else pushSkip('e2e-revision-branch', '审核失败—完整修正—安全替换', '端到端', '审核功能已关闭');
+
+                await runCheck('e2e-current-chat-reset', '当前聊天重置作用域', '组合', async () => {
+                    const before = await this.worldbook.readRaw(settings, snapshot, validate);
+                    const digestBefore = digestWorldbook(before.data);
+                    const hadState = await this.host.resetCurrentChatState();
+                    const after = await this.worldbook.readRaw(settings, snapshot, validate);
+                    const digestAfter = digestWorldbook(after.data);
+                    if (digestBefore !== digestAfter) throw new Error('重置当前聊天改变了世界书正文');
+                    return { mode: 'real-host-combination', hadPluginState: hadState, worldbookPreserved: true, digestBefore, digestAfter };
                 });
             }
             else {
-                report.checks.push({ id: 'worldbook-reversible-write', label: '世界书写入—回读—回滚', category: '世界书', status: 'skip', durationMs: 0, detail: '权威读取未通过，未执行写入测试', evidence: null });
+                pushSkip('e2e-user-send', '自动发送玩家测试消息', '端到端', rawBefore ? '完整链执行器未连接' : '世界书未通过权威读取');
+                pushSkip('e2e-main-generation', '主模型真实正文生成', '端到端', '玩家测试消息未发送');
+                pushSkip('e2e-full-pipeline', '真实正文完整处理链', '端到端', '主正文未生成');
+                pushSkip('e2e-idempotency', '同一正文重复处理幂等性', '组合', '完整处理链未执行');
+                pushSkip('e2e-revision-branch', '审核失败—完整修正—安全替换', '端到端', '完整链执行器未连接');
+                pushSkip('e2e-current-chat-reset', '当前聊天重置作用域', '组合', '完整链执行器未连接');
             }
+
+            await runCheck('controlled-fault-matrix', '网关与协议故障分类矩阵', '受控故障', async () => {
+                const gatewayErrors = [
+                    new SyntaxError('Unexpected token \'<\', "<html><h1>504</h1>" is not valid JSON'),
+                    new Error('502 Bad Gateway'),
+                    new Error('503 upstream unavailable'),
+                    new Error('504 Gateway Timeout'),
+                    new Error('fetch failed: connection reset'),
+                ];
+                const failed = gatewayErrors.filter((error) => !(0, model_request_1.isRetryableGatewayError)(error));
+                if (failed.length) throw new Error(`未识别${failed.length}类可重试网关错误`);
+                let auditRejected = false;
+                try { (0, audit_1.parseAuditResult)('这里没有 PASS 或 FAIL'); }
+                catch { auditRejected = true; }
+                const malformed = (0, parser_1.parseExtractionWithRecovery)('<html>bad gateway</html>');
+                if (!auditRejected || malformed.length) throw new Error('协议错误没有被严格拒绝');
+                return { mode: 'controlled-fault-injection', gatewayCases: gatewayErrors.length, auditMalformedRejected: auditRejected, extractionMalformedRejected: malformed.length === 0 };
+            });
 
             await runCheck('ui-surface', '插件 UI 与四阶段状态面板', '界面', async () => {
                 if (typeof document === 'undefined') return { environment: 'headless', skippedDomInspection: true };
@@ -3195,12 +3359,30 @@ ${assistantText}`,
                 if (missing.length) throw new Error(`缺少按钮：${missing.join('、')}`);
                 const stages = [...panel.querySelectorAll('.ma-lite-stage')].length;
                 if (stages !== 4) throw new Error(`四阶段状态数量异常：${stages}`);
-                return { buttonCount: panel.querySelectorAll('button').length, stageCount: stages };
+                return { mode: 'real-dom', buttonCount: panel.querySelectorAll('button').length, stageCount: stages };
             }, { optional: typeof document === 'undefined' });
 
-            await runCheck('chat-nonmutation', '聊天正文未被验收修改', '安全', async () => {
+            await runCheck('sandbox-restore', '验收沙箱完整恢复', '安全', async () => {
+                let worldbookEvidence = { restored: true, changed: false };
+                if (rawBefore) {
+                    const current = await this.worldbook.readRaw(settings, snapshot, validate);
+                    const currentDigest = digestWorldbook(current.data);
+                    const originalDigest = digestWorldbook(rawBefore.data);
+                    if (currentDigest !== originalDigest) {
+                        await this.worldbook.replaceRaw(settings, rawBefore.name, (0, util_1.clone)(rawBefore.data), snapshot, validate, current.data);
+                        const restored = await this.worldbook.readRaw(settings, snapshot, validate);
+                        if (digestWorldbook(restored.data) !== originalDigest) throw new Error('世界书无法恢复到验收前快照');
+                        worldbookEvidence = { restored: true, changed: true, originalDigest };
+                    }
+                }
+                const chatEvidence = transaction ? await this.host.restoreDiagnosticTransaction(transaction) : null;
+                sandboxRestored = true;
+                return { mode: 'real-host-rollback', worldbook: worldbookEvidence, chat: chatEvidence };
+            });
+
+            await runCheck('chat-nonmutation', '聊天正文与元数据已恢复', '安全', async () => {
                 const after = chatDigest(this.host.context().chat);
-                if (JSON.stringify(chatBefore) !== JSON.stringify(after)) throw new Error('验收期间聊天正文或消息数量发生变化');
+                if (JSON.stringify(chatBefore) !== JSON.stringify(after)) throw new Error('验收结束后聊天正文或消息数量与原快照不一致');
                 return after;
             });
 
@@ -3214,10 +3396,26 @@ ${assistantText}`,
             report.checks.push({ id: 'diagnostic-runner', label: '自动验收执行器', category: '诊断', status: 'fail', durationMs: Date.now() - startedAt.getTime(), detail: (0, util_1.errorText)(error), evidence: null });
         }
         finally {
+            if (!sandboxRestored && context && transaction) {
+                let restoreError = '';
+                try {
+                    if (rawBefore) {
+                        const current = await this.worldbook.readRaw(settings, snapshot, undefined);
+                        if (digestWorldbook(current.data) !== digestWorldbook(rawBefore.data))
+                            await this.worldbook.replaceRaw(settings, rawBefore.name, (0, util_1.clone)(rawBefore.data), snapshot, undefined, current.data);
+                    }
+                    await this.host.restoreDiagnosticTransaction(transaction);
+                    sandboxRestored = true;
+                }
+                catch (error) { restoreError = (0, util_1.errorText)(error); }
+                if (!sandboxRestored) report.checks.push({ id: 'emergency-restore', label: '验收紧急恢复', category: '安全', status: 'fail', durationMs: 0, detail: restoreError || '恢复失败', evidence: null });
+            }
             report.finishedAt = new Date().toISOString();
             report.durationMs = Date.now() - startedAt.getTime();
             report.summary = countStatuses(report.checks);
-            report.accepted = report.summary.fail === 0 && report.summary.pass > 0;
+            const requiredE2E = ['e2e-user-send', 'e2e-main-generation', 'e2e-full-pipeline', 'e2e-idempotency', 'sandbox-restore'];
+            const passed = new Set(report.checks.filter((check) => check.status === 'pass').map((check) => check.id));
+            report.accepted = report.summary.fail === 0 && requiredE2E.every((id) => passed.has(id));
             this.lastReport = (0, util_1.clone)(report);
             this.progress({ state: report.accepted ? 'success' : 'error', detail: summarizeDiagnosticReport(report), report: this.currentReport() });
         }
@@ -3443,7 +3641,10 @@ function buildDiagnosticFilename(report) {
 function sanitizeEvidence(value) {
     if (value == null) return null;
     try {
-        return JSON.parse(JSON.stringify(value, (_key, item) => {
+        return JSON.parse(JSON.stringify(value, (key, item) => {
+            if (/(?:secret|password|api[-_]?key|authorization|cookie)/iu.test(String(key || ''))) return '[redacted]';
+            if (/(?:api[-_]?url|endpoint|reverse[-_]?proxy)/iu.test(String(key || '')) && typeof item === 'string')
+                return item ? `[redacted:${(0, util_1.hashText)(item)}]` : '';
             if (typeof item === 'string' && item.length > 500) return `${item.slice(0, 240)}…[${item.length} chars]…${item.slice(-120)}`;
             if (typeof item === 'function') return `[Function ${item.name || 'anonymous'}]`;
             return item;
@@ -4567,6 +4768,106 @@ class HostAdapter {
         if (typeof context.saveChat === 'function') return context.saveChat();
         if (typeof context.saveChatConditional === 'function') return context.saveChatConditional();
         throw new Error('SillyTavern 未提供聊天保存接口');
+    }
+
+    /**
+     * [MA-DIAG-E2E-01] 捕获当前聊天与元数据快照。
+     * 端到端验收只在当前聊天末尾追加临时消息，结束后按此快照原位恢复。
+     */
+    captureDiagnosticTransaction() {
+        const context = this.context();
+        const metadata = context.chatMetadata ?? context.chat_metadata ?? {};
+        return {
+            chatKey: this.chatKey(),
+            chat: (0, util_1.clone)(Array.isArray(context.chat) ? context.chat : []),
+            metadata: (0, util_1.clone)(metadata),
+            messageCount: Array.isArray(context.chat) ? context.chat.length : 0,
+            chatDigest: chatFingerprint(Array.isArray(context.chat) ? context.chat : []),
+            metadataDigest: (0, util_1.hashText)(JSON.stringify(metadata ?? {})),
+        };
+    }
+    async sendDiagnosticUserMessage(text) {
+        const context = this.context();
+        const chat = context.chat ?? [];
+        const before = chat.length;
+        const execute = context.executeSlashCommandsWithOptions ?? context.executeSlashCommands;
+        if (typeof execute !== 'function') throw new Error('SillyTavern 未提供 STscript 执行接口，无法自动发送测试消息');
+        const body = String(text ?? '').replace(/[|\r\n]+/gu, ' ').trim();
+        if (!body) throw new Error('自动验收测试消息为空');
+        await execute(`/send ${body}`, { handleParserErrors: true, source: 'mirror-abyss-diagnostic' });
+        const message = chat[chat.length - 1];
+        if (chat.length !== before + 1 || message?.is_user !== true || String(message?.mes ?? '').trim() !== body)
+            throw new Error('SillyTavern /send 未按预期追加玩家消息');
+        await this.saveChat();
+        return { index: chat.length - 1, chars: body.length, hash: (0, util_1.hashText)(body) };
+    }
+    async generateDiagnosticAssistant(timeoutMs = 120000) {
+        const context = this.context();
+        const chat = context.chat ?? [];
+        const before = chat.length;
+        const generate = context.generate ?? context.Generate;
+        if (typeof generate !== 'function') throw new Error('SillyTavern 未提供主正文 Generate 接口');
+        await withTimeout(generate('normal', { automatic_trigger: true }), timeoutMs, () => {
+            try { context.stopGeneration?.(); } catch { }
+        });
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+            for (let index = chat.length - 1; index >= before; index -= 1) {
+                if (isAssistant(chat[index])) {
+                    const text = String(chat[index].mes ?? '');
+                    return {
+                        index,
+                        chars: text.length,
+                        hash: (0, util_1.hashText)(text),
+                        completeEnding: /[。！？!?…」』）)】]$/u.test(text.trim()),
+                    };
+                }
+            }
+            await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
+        }
+        throw new Error('主正文生成结束后没有新增 AI 消息');
+    }
+    async appendDiagnosticAssistantTurn(playerText, assistantText) {
+        const player = await this.sendDiagnosticUserMessage(playerText);
+        const context = this.context();
+        const chat = context.chat ?? [];
+        const message = {
+            name: String(context.name2 ?? 'AI'),
+            is_user: false,
+            is_system: false,
+            send_date: new Date().toISOString(),
+            mes: String(assistantText ?? ''),
+            extra: { mirrorAbyssDiagnostic: { synthetic: true, createdAt: Date.now() } },
+        };
+        chat.push(message);
+        try { context.addOneMessage?.(message, { scroll: false }); } catch { }
+        await this.saveChat();
+        return { playerIndex: player.index, assistantIndex: chat.length - 1, assistantHash: (0, util_1.hashText)(message.mes) };
+    }
+    async restoreDiagnosticTransaction(transaction) {
+        if (!transaction || transaction.chatKey !== this.chatKey()) throw new Error('验收恢复时聊天作用域已经变化');
+        const context = this.context();
+        const chat = context.chat ?? [];
+        chat.splice(0, chat.length, ...(0, util_1.clone)(transaction.chat ?? []));
+        const targetMetadata = context.chatMetadata ?? context.chat_metadata;
+        if (!targetMetadata || typeof targetMetadata !== 'object') throw new Error('SillyTavern 聊天元数据不可写');
+        for (const key of Object.keys(targetMetadata)) delete targetMetadata[key];
+        Object.assign(targetMetadata, (0, util_1.clone)(transaction.metadata ?? {}));
+        await this.saveChat();
+        await this.saveMetadata();
+        if (typeof document !== 'undefined') {
+            const originalCount = Number(transaction.messageCount || 0);
+            const nodes = [...document.querySelectorAll('#chat .mes, .mes[mesid]')];
+            for (const node of nodes) {
+                const id = Number(node.getAttribute?.('mesid'));
+                if (Number.isInteger(id) && id >= originalCount) node.remove();
+            }
+        }
+        const restoredChatDigest = chatFingerprint(chat);
+        const restoredMetadataDigest = (0, util_1.hashText)(JSON.stringify(targetMetadata ?? {}));
+        if (restoredChatDigest !== transaction.chatDigest) throw new Error('验收结束后聊天正文未恢复到原快照');
+        if (restoredMetadataDigest !== transaction.metadataDigest) throw new Error('验收结束后聊天元数据未恢复到原快照');
+        return { messageCount: chat.length, chatDigest: restoredChatDigest, metadataDigest: restoredMetadataDigest };
     }
     async resetCurrentChatState() {
         const context = this.context();
