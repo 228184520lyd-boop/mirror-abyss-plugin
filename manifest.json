@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.33",
+  "version": "2.0.0-lite.ui.34",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "三维世界书治理｜官方模型响应适配、当前聊天唯一世界书与安全重置"
+  "description": "三维世界书治理｜官方推理预算、最终输出协议、当前聊天唯一世界书与安全重置"
 }

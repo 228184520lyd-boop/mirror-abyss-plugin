@@ -387,6 +387,7 @@ class MirrorAbyssApplication {
             bindProfileDropdown: (selector, selectedId, onChange) => this.host.bindProfileDropdown(selector, selectedId, onChange),
             connectionProfilesAvailable: () => this.host.connectionProfilesAvailable(),
             profileName: (profileId) => this.host.profileName(profileId),
+            profileSummary: (profileId) => this.host.profileSummary(profileId),
         });
         this.cleanup = [];
         this.runningByChat = new Map();
@@ -1108,7 +1109,7 @@ class AuditRunner {
                 snapshot,
                 profileId: settings.auditProfileId,
                 sourceText: snapshot.turnText || snapshot.assistantText,
-                onRetry: () => this.setStatus(snapshot.chatKey, 'audit', '审核网关异常，已缩短上下文并重试一次'),
+                onRetry: () => this.setStatus(snapshot.chatKey, 'audit', '审核未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次'),
             });
             this.host.assertSnapshot(snapshot, this.getSettings());
             const result = parseAuditResult(raw);
@@ -1166,7 +1167,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.33';
+exports.VERSION = '2.0.0-lite.ui.34';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1630,7 +1631,7 @@ class ControlPanel {
         status.textContent = '默认跟随当前 SillyTavern 连接。';
         const help = document.createElement('div');
         help.className = 'ma-lite-api-help';
-        help.textContent = '连接、模型、地址和密钥仍在 SillyTavern「API Connections → Connection Profiles」中管理；镜渊不保存密钥。';
+        help.textContent = '连接、模型、地址和密钥仍在 SillyTavern「API Connections → Connection Profiles」中管理。推理模型请在 SillyTavern 的 Reasoning 设置中使用最低或低推理强度；镜渊保留该预设，不跨后端强制推理参数。';
         section.append(head, select, status, help);
         this.apiProfileSelect = select;
         this.apiProfileStatusNode = status;
@@ -1674,14 +1675,26 @@ class ControlPanel {
     }
     updateApiProfileStatus(profileId, knownName = '') {
         if (!this.apiProfileStatusNode) return;
-        if (!profileId) {
-            this.apiProfileStatusNode.textContent = '当前：跟随 SillyTavern 主连接；不会改变聊天正文使用的 API。';
+        let summary = null;
+        try { summary = this.actions.profileSummary?.(profileId) || null; }
+        catch { summary = null; }
+        if (!summary) {
+            if (!profileId) {
+                this.apiProfileStatusNode.textContent = '当前：跟随 SillyTavern 主连接；实际 API/模型无法读取。';
+                return;
+            }
+            let name = knownName;
+            try { name ||= this.actions.profileName?.(profileId) || profileId; }
+            catch { name ||= profileId; }
+            this.apiProfileStatusNode.textContent = `当前：${name}；实际 API/模型无法读取。`;
             return;
         }
-        let name = knownName;
-        try { name ||= this.actions.profileName?.(profileId) || profileId; }
-        catch { name ||= profileId; }
-        this.apiProfileStatusNode.textContent = `当前：${name}；仅用于镜渊审核、修正、提取和总结，不切换主聊天 API。`;
+        const model = summary.model || (summary.mode === 'cc' ? '未设置' : '由后端决定');
+        const prefix = profileId ? `当前：${summary.name || knownName || profileId}` : '当前：SillyTavern 主连接';
+        const invalid = summary.error ? `；不可用：${summary.error}` : '';
+        const warning = summary.warning ? `；提示：${summary.warning}` : '';
+        const scope = profileId ? '；仅用于镜渊处理，不切换主聊天 API' : '';
+        this.apiProfileStatusNode.textContent = `${prefix}｜API：${summary.api || '未知'}｜模型：${model}${invalid}${warning}${scope}`;
     }
     buildResetSection() {
         const section = document.createElement('section');
@@ -3599,10 +3612,11 @@ class HostAdapter {
         return selected.reverse().join('\n\n');
     }
     /** [MA-HOST-03] 宿主模型调用原语；重试和阶段预算由 model-request.js 负责。 */
-    async generate(systemPrompt, prompt, responseLength, snapshot, currentSettings, timeoutMs, profileId = '') {
+    async generate(systemPrompt, prompt, responseLength, snapshot, currentSettings, timeoutMs, profileId = '', generationOptions = {}) {
         this.assertSnapshot(snapshot, currentSettings);
         const context = this.context();
         const route = describeModelRoute(context, profileId);
+        if (route.error) throw new Error(route.error);
         let request;
         try {
             if (profileId) {
@@ -3617,7 +3631,12 @@ class HostAdapter {
                 request = service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
-                ], responseLength, { stream: false, extractData: true, includePreset: true });
+                ], responseLength, {
+                    stream: false,
+                    extractData: true,
+                    includePreset: generationOptions?.includePreset !== false,
+                    includeInstruct: true,
+                });
             }
             else {
                 // [MA-HOST-MODEL-01] 当前连接优先使用 SillyTavern 官方“原始响应 + 官方解析器”组合。
@@ -3662,12 +3681,16 @@ class HostAdapter {
                 reasoningLength: reasoning.length,
             });
             if (reasoning) {
-                throw new Error(`模型只返回了推理内容，没有最终文本（推理 ${reasoning.length} 字）。${route.label}；返回结构：${responseShape}`);
+                const error = new Error(`模型只返回了推理内容，没有最终文本（推理 ${reasoning.length} 字）。${route.label}；返回结构：${responseShape}`);
+                error.code = 'MA_REASONING_ONLY';
+                throw error;
             }
             if (route.noModelLikely) {
                 throw new Error(`模型连接未识别到可用模型。${route.label}；请在 API Connections 中选择模型并确认连接成功`);
             }
-            throw new Error(`模型请求已完成，但 SillyTavern 未解析出最终文本。${route.label}；返回结构：${responseShape}`);
+            const error = new Error(`模型请求已完成，但 SillyTavern 未解析出最终文本。${route.label}；返回结构：${responseShape}`);
+            error.code = 'MA_EMPTY_MODEL_RESPONSE';
+            throw error;
         }
         if (looksLikeHtml(text)) throw new Error('模型返回了 HTML 错误页');
         return text;
@@ -3681,6 +3704,10 @@ class HostAdapter {
         if (!profileId) return '当前连接';
         try { return this.context().ConnectionManagerRequestService?.getProfile(profileId)?.name || profileId; }
         catch { return profileId; }
+    }
+    /** [MA-HOST-MODEL-02] 返回 UI 可见的实际请求路由，不包含密钥。 */
+    profileSummary(profileId = '') {
+        return describeModelRoute(this.context(), profileId);
     }
     /**
      * [MA-HOST-API-01] 把 UI 下拉框交给 SillyTavern 官方 ConnectionManagerRequestService 填充和维护。
@@ -4154,21 +4181,76 @@ function describeModelRoute(context, profileId) {
     if (profileId) {
         let profile = null;
         try { profile = context.ConnectionManagerRequestService?.getProfile?.(profileId) ?? null; }
-        catch { profile = null; }
+        catch (error) {
+            return {
+                profileId,
+                name: profileId,
+                api: '未知',
+                model: '',
+                mode: '',
+                label: `连接配置：${profileId}`,
+                noModelLikely: false,
+                error: `无法读取 Connection Profile“${profileId}”：${(0, util_1.errorText)(error)}`,
+            };
+        }
+        if (!profile) {
+            return {
+                profileId,
+                name: profileId,
+                api: '未知',
+                model: '',
+                mode: '',
+                label: `连接配置：${profileId}`,
+                noModelLikely: false,
+                error: `所选 Connection Profile 已不存在：${profileId}`,
+            };
+        }
         const name = String(profile?.name ?? profileId);
+        const apiValue = String(profile?.api ?? '').trim();
+        const api = apiValue || '未设置';
+        const mode = String(profile?.mode ?? '').trim();
         const model = readModelFromObject(profile);
-        const modelExcluded = Array.isArray(profile?.exclude) && profile.exclude.includes('model');
+        const modelRequired = mode === 'cc';
+        const error = !apiValue ? `处理连接“${name}”没有选择 API` : '';
+        const warning = modelRequired && !model
+            ? `连接配置“${name}”未记录模型；部分后端允许由服务器决定模型`
+            : '';
         return {
-            label: `连接配置：${name}；模式：${String(profile?.mode ?? '未知')}${model ? `；模型：${model}` : '；模型：未记录'}`,
-            noModelLikely: Boolean(profile && profile.mode === 'cc' && !model && !modelExcluded),
+            profileId,
+            name,
+            api,
+            model,
+            mode,
+            label: `连接配置：${name}；API：${api}；模型：${model || (modelRequired ? '未设置' : '由后端决定')}`,
+            noModelLikely: modelRequired && !model,
+            warning,
+            error,
         };
     }
     const model = readCurrentModel(context);
+    const api = readCurrentApi(context, mainApi);
     const chatCompletion = mainApi === 'openai';
     return {
-        label: `当前连接；主 API：${mainApi}；模型：${model || '未识别'}`,
+        profileId: '',
+        name: '当前连接',
+        api,
+        model,
+        mode: chatCompletion ? 'cc' : 'tc',
+        label: `当前连接；API：${api}；模型：${model || (chatCompletion ? '未识别' : '由后端决定')}`,
         noModelLikely: chatCompletion && !model,
+        warning: chatCompletion && !model ? '当前聊天补全连接未识别到模型；仍将交由 SillyTavern 发起请求' : '',
+        error: '',
     };
+}
+function readCurrentApi(context, mainApi) {
+    if (mainApi === 'openai') {
+        return String(
+            context.chatCompletionSettings?.chat_completion_source
+            ?? context.chatCompletionSettings?.source
+            ?? mainApi,
+        ).trim() || 'openai';
+    }
+    return String(mainApi || '未知');
 }
 function readCurrentModel(context) {
     try {
@@ -5040,7 +5122,7 @@ class MemoryRunner {
             snapshot,
             profileId: settings.extractionProfileId,
             sourceText: snapshot.turnText || snapshot.assistantText,
-            onRetry: () => this.progress('running', '提取网关异常，已缩短上下文并重试一次', { titles: [] }),
+            onRetry: () => this.progress('running', '提取未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次', { titles: [] }),
         });
         this.validate(snapshot);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
@@ -5058,7 +5140,7 @@ class MemoryRunner {
                 snapshot,
                 profileId: settings.extractionProfileId,
                 sourceText: raw,
-                onRetry: () => this.progress('running', '格式修复网关异常，缩短异常文本后重试一次', { titles: [] }),
+                onRetry: () => this.progress('running', '格式修复未得到最终协议或网关异常，已扩大输出预算并缩短文本重试一次', { titles: [] }),
             });
             this.validate(snapshot);
             blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
@@ -5144,7 +5226,7 @@ class MemoryRunner {
             snapshot,
             profileId: profile,
             sourceText: recentConversation,
-            onRetry: () => this.progress('running', `${label}网关异常，缩短上下文后重试一次`, { titles: [expectedTitle] }),
+            onRetry: () => this.progress('running', `${label}未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次`, { titles: [expectedTitle] }),
         });
         this.validate(snapshot);
         const recovered = parseSummaryWithRecovery(raw, kind);
@@ -9621,6 +9703,7 @@ exports.callModel = callModel;
 exports.stageResponseTokens = stageResponseTokens;
 exports.isRetryableGatewayError = isRetryableGatewayError;
 exports.limitPromptPair = limitPromptPair;
+exports.outputContractForStage = outputContractForStage;
 const util_1 = require("./util");
 
 // [MA-MODEL-01] 每个模型阶段只声明输入/输出预算和一次网关重试。
@@ -9639,8 +9722,8 @@ const INPUT_LIMITS = Object.freeze({
 });
 
 /**
- * [MA-MODEL-02] 调用模型；仅在 502/503/504、HTML 网关页或 No message generated 时，
- * 使用调用方提供的精简提示词再试一次。解析错误和业务校验错误绝不重试。
+ * [MA-MODEL-02] 调用模型；网关失败使用精简提示词重试一次。
+ * 模型空正文或仅返回推理时，使用更大的输出预算并保留 Profile 预设重试一次。
  */
 async function callModel(options) {
     const {
@@ -9655,19 +9738,22 @@ async function callModel(options) {
         onRetry,
     } = options;
     const responseLength = stageResponseTokens(stage, settings, sourceText);
-    const primary = limitPromptPair(prompt, stage);
+    const primary = limitPromptPair(withOutputContract(prompt, stage, responseLength, sourceText), stage);
     try {
         return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
     }
     catch (error) {
         const emptyResponse = isEmptyModelResponseError(error);
-        if (snapshot?.token?.cancelled || !fallbackPrompt || (!isRetryableGatewayError(error) && !emptyResponse))
+        const gatewayRetry = isRetryableGatewayError(error);
+        if (snapshot?.token?.cancelled || (!gatewayRetry && !emptyResponse) || (gatewayRetry && !fallbackPrompt))
             throw error;
-        const fallbackValue = typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt;
-        const fallback = limitPromptPair(fallbackValue, stage, true);
+        const fallbackValue = fallbackPrompt
+            ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
+            : prompt;
         const fallbackTokens = emptyResponse
             ? emptyResponseRetryTokens(stage, settings, responseLength)
             : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
+        const fallback = limitPromptPair(withOutputContract(fallbackValue, stage, fallbackTokens, sourceText), stage, true);
         try { onRetry?.(error); }
         catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
         return host.generate(
@@ -9678,7 +9764,7 @@ async function callModel(options) {
             settings,
             settings.requestTimeoutMs,
             profileId,
-            emptyResponse ? { includePreset: false } : undefined,
+            undefined,
         );
     }
 }
@@ -9688,38 +9774,74 @@ function isEmptyModelResponseError(error) {
 }
 function emptyResponseRetryTokens(stage, settings, firstTokens) {
     const minimums = {
-        audit: 1536,
-        revision: 4096,
-        extraction: 6144,
-        extractionRepair: 4096,
-        worldSettingImport: 8192,
-        smallSummary: 4096,
-        largeSummary: 6144,
-        migration: 4096,
-        migrationPlan: 8192,
-        migrationReview: 4096,
+        audit: 3072,
+        revision: 6144,
+        extraction: 8192,
+        extractionRepair: 6144,
+        worldSettingImport: 12288,
+        smallSummary: 6144,
+        largeSummary: 8192,
+        migration: 6144,
+        migrationPlan: 12288,
+        migrationReview: 3072,
     };
-    const configured = Math.max(256, Number(settings?.responseTokens) || 3072);
-    return Math.min(8192, Math.max(Number(firstTokens) * 2, configured, minimums[stage] || 4096));
+    const configured = Math.max(1024, Number(settings?.responseTokens) || 8192);
+    return Math.min(configured, Math.max(Number(firstTokens) * 2, minimums[stage] || 4096));
 }
 
-/** [MA-MODEL-03] 不同任务不再共用 3072 输出上限。 */
+/** [MA-MODEL-03] 阶段预算同时覆盖最终文本与后端可能消耗的推理 token。 */
 function stageResponseTokens(stage, settings, sourceText = '') {
-    const configured = Math.max(256, Number(settings?.responseTokens) || 3072);
-    if (stage === 'audit') return Math.min(configured, 384);
+    const configured = Math.max(1024, Number(settings?.responseTokens) || 8192);
+    if (stage === 'audit') return Math.min(configured, 1536);
     if (stage === 'revision') {
-        const estimated = Math.max(1024, Math.ceil(String(sourceText ?? '').length * 1.15) + 256);
-        return Math.min(configured, Math.min(4096, estimated));
+        const estimated = Math.max(2048, Math.ceil(String(sourceText ?? '').length * 1.35) + 768);
+        return Math.min(configured, Math.min(6144, estimated));
     }
-    if (stage === 'extraction') return Math.min(configured, 2560);
-    if (stage === 'extractionRepair') return Math.min(configured, 1536);
-    if (stage === 'worldSettingImport') return Math.min(Math.max(configured, 3072), 4096);
-    if (stage === 'smallSummary') return Math.min(configured, 1792);
-    if (stage === 'largeSummary') return Math.min(configured, 2304);
+    if (stage === 'extraction') return Math.min(configured, 6144);
+    if (stage === 'extractionRepair') return Math.min(configured, 4096);
+    if (stage === 'worldSettingImport') return Math.min(configured, 8192);
+    if (stage === 'smallSummary') return Math.min(configured, 4096);
+    if (stage === 'largeSummary') return Math.min(configured, 6144);
     if (stage === 'migration') return Math.min(configured, 1792);
-    if (stage === 'migrationPlan') return Math.min(Math.max(configured, 3072), 4096);
+    if (stage === 'migrationPlan') return Math.min(configured, 4096);
     if (stage === 'migrationReview') return Math.min(configured, 1024);
     return configured;
+}
+
+/**
+ * [MA-MODEL-OUTPUT-01] 提示词中的“字数限制”与请求层 max tokens 分开。
+ * 这里统一要求最终答案优先、禁止显式思考，并告诉模型总响应预算会包含推理 token。
+ */
+function outputContractForStage(stage, responseTokens, sourceText = '') {
+    const budget = Math.max(1, Number(responseTokens) || 1);
+    const common = [
+        '【最终输出纪律】',
+        '- 不得输出分析、推理过程、思考草稿、<think> 标签、reasoning、解释、前言或后记；直接输出本阶段规定的最终协议。',
+        `- 本次最大响应预算为 ${budget} tokens；该预算可能同时包含后端内部推理与最终文本。即使内部推理无法关闭，也必须为最终答案保留足够额度。`,
+        '- 最终协议完成后立即停止，不得为了用满上限重复或扩写。',
+    ];
+    const sourceLength = String(sourceText ?? '').length;
+    const stageRules = {
+        audit: ['- 最终结论必须首先出现。通过只输出 PASS；不通过输出 FAIL 与最多8条短原因；总长度不超过300个中文字符。'],
+        revision: [`- 只输出可直接替换的完整正文。除修复违规所必需的改动外不得扩写；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
+        extraction: ['- 只输出规定的 ENTRY 协议或“无”。最多8条，最终协议总长度不超过5000个中文字符。'],
+        extractionRepair: ['- 只输出修复后的 ENTRY 协议或“无”。不得补充事实；最终协议总长度不超过5000个中文字符。'],
+        worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
+        smallSummary: ['- 只输出规定的小总结协议或“无”。总长度不超过1800个中文字符。'],
+        largeSummary: ['- 只输出规定的大总结协议或“无”。总长度不超过2600个中文字符。'],
+        migrationReview: ['- 最终结论必须首先出现。通过只输出 PASS；不通过只输出 FAIL 协议行；总长度不超过800个中文字符。'],
+        migrationPlan: ['- 只输出 ANCHOR、GROUP、DROP 协议行；覆盖全部来源后立即停止，不输出说明。'],
+        migration: ['- 只输出规定的重建条目协议；完成本批全部对象后立即停止，不输出说明。'],
+    };
+    return [...common, ...(stageRules[stage] || [])].join('\n');
+}
+
+function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
+    const contract = outputContractForStage(stage, responseTokens, sourceText);
+    return {
+        system: `${String(prompt?.system ?? '').trim()}\n\n${contract}`.trim(),
+        user: String(prompt?.user ?? ''),
+    };
 }
 
 /** [MA-MODEL-04] 识别常见上游网关失败；本地取消和格式错误不属于此类。 */
@@ -12738,7 +12860,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     extractionPrompt: exports.DEFAULT_EXTRACTION_PROMPT,
     smallSummaryPrompt: exports.DEFAULT_SMALL_SUMMARY_PROMPT,
     largeSummaryPrompt: exports.DEFAULT_LARGE_SUMMARY_PROMPT,
-    responseTokens: 3072,
+    responseTokens: 8192,
     requestTimeoutMs: 90000,
     smallSummaryTurns: 10,
     criticalChangesForSmall: 6,
@@ -12814,7 +12936,7 @@ function parseSettings(value) {
         extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, LEGACY_EXTRACTION_PROMPT_UI23, exports.DEFAULT_EXTRACTION_PROMPT),
         smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, LEGACY_SMALL_SUMMARY_PROMPT_UI23, exports.DEFAULT_SMALL_SUMMARY_PROMPT),
         largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, LEGACY_LARGE_SUMMARY_PROMPT_UI23, exports.DEFAULT_LARGE_SUMMARY_PROMPT),
-        responseTokens: (0, util_1.clampNumber)(candidate.responseTokens, 3072, 256, 16384),
+        responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 1, 100),
         criticalChangesForSmall: (0, util_1.clampNumber)(candidate.criticalChangesForSmall, 6, 1, 50),
@@ -12825,6 +12947,14 @@ function parseSettings(value) {
         sectionPolicies,
     };
 }
+
+function migrateResponseTokens(value) {
+    const numeric = Number(value);
+    // ui.33 及更早版本没有暴露该字段，3072 是旧隐藏默认值；升级时迁移到推理模型安全预算。
+    if (!Number.isFinite(numeric) || numeric === 3072) return 8192;
+    return numeric;
+}
+
 function migrateBuiltinPrompt(value, legacyValue, currentDefault) {
     const text = String(value ?? '').trim();
     if (!text || text === String(legacyValue).trim()) return currentDefault;
@@ -13110,7 +13240,7 @@ class WorldSettingImportService {
             snapshot,
             profileId: settings.extractionProfileId,
             sourceText: source,
-            onRetry: () => this.progress('running', '设定导入网关异常，已缩短既有条目上下文并重试一次'),
+            onRetry: () => this.progress('running', '设定导入未得到最终协议或网关异常，已扩大输出预算并缩短上下文重试一次'),
         });
         this.validate(snapshot, settings);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
