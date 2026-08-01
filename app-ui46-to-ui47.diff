@@ -1,0 +1,207 @@
+--- /mnt/data/inspect-ui46/app.js	2026-08-01 12:46:20.000000000 +0000
++++ /mnt/data/ma-ui47-source/app.js	2026-08-01 14:11:16.166176162 +0000
+@@ -1,4 +1,4 @@
+-/** Mirror Abyss 2.0.0-lite.ui.46-progress-recall — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
++/** Mirror Abyss 2.0.0-lite.ui.47-worldbook-source — governed worldbook storage, source-level host boundaries, native recall dispatch, and hard content budgets. */
+ var MA_MODULES={"activity-pack":function(module,exports,require){
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+@@ -1376,7 +1376,7 @@
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
+-exports.VERSION = '2.0.0-lite.ui.46-progress-recall';
++exports.VERSION = '2.0.0-lite.ui.47-worldbook-source';
+ exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
+ exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
+ exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
+@@ -1759,7 +1759,7 @@
+         const recall = this.buildRecallSection();
+         const worldSetting = this.buildWorldSettingSection();
+         worldbookPage.append(
+-            this.wrapToolSection('世界书状态与活动包', management, true),
++            this.wrapToolSection('世界书状态', management, true),
+             this.wrapToolSection('召回映射', recall, false),
+             this.wrapToolSection('导入世界基础设定', worldSetting, false),
+         );
+@@ -1773,7 +1773,6 @@
+             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取。'),
+             this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
+             this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
+-            this.makeSwitch('activityPackEnabled', '活动包发送', '世界书仓储只通过活动包注入正文。'),
+             this.makeSwitch('autoSmallSummary', '自动小总结', '按轮数或关键变化触发。'),
+             this.makeSwitch('autoLargeSummary', '自动大总结', '累计小总结后沉降。'),
+             this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目进行容量治理。'),
+@@ -1785,7 +1784,6 @@
+             this.makeNumberInput('criticalChangesForSmall', '关键变化阈值', 1, 50),
+             this.makeNumberInput('largeSummaryCount', '大总结计数', 1, 30),
+             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
+-            this.makeNumberInput('activityPackHardMax', '活动包硬上限', 600, 4000),
+         );
+         const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；不读取角色卡或世界书；修正失败或疑似截断时保留原正文。');
+         const note = document.createElement('div');
+@@ -1983,7 +1981,7 @@
+         section.className = 'ma-lite-diagnostic';
+         const help = document.createElement('div');
+         help.className = 'ma-lite-diagnostic-help';
+-        help.textContent = '全自动验收一次运行两条链：玩家主聊天真实生成链，以及不依赖玩家主 API 的镜渊确定性完整闭环。两条链都会验证审核、修正、提取、写入、活动包与恢复；主聊天连接失败会单独报告，不会阻止插件闭环继续。诊断报告不包含正文、提示词、密钥或完整模型响应。';
++        help.textContent = '全自动验收一次运行两条链：玩家主聊天真实生成链，以及不依赖玩家主 API 的镜渊确定性完整闭环。两条链都会验证审核、修正、提取、写入、世界书召回配置与恢复；主聊天连接失败会单独报告，不会阻止插件闭环继续。诊断报告不包含正文、提示词、密钥或完整模型响应。';
+         const actions = document.createElement('div');
+         actions.className = 'ma-lite-diagnostic-actions';
+         const run = document.createElement('button');
+@@ -2434,7 +2432,7 @@
+         const head = document.createElement('div');
+         head.className = 'ma-lite-management-head';
+         const title = document.createElement('strong');
+-        title.textContent = '三维世界书与活动包';
++        title.textContent = '三维世界书状态';
+         const refresh = document.createElement('button');
+         refresh.type = 'button';
+         refresh.className = 'ma-lite-management-refresh';
+@@ -2445,7 +2443,7 @@
+         head.append(title, refresh);
+         const status = document.createElement('div');
+         status.className = 'ma-lite-management-status';
+-        status.textContent = '只读投影：当前游戏时间、当前场景、人物沉降、容量问题与最终活动包。';
++        status.textContent = '只读投影：当前游戏时间、当前场景、人物沉降、容量问题与原生召回配置。';
+         const content = document.createElement('div');
+         content.className = 'ma-lite-management-empty';
+         content.textContent = '尚未读取';
+@@ -2493,7 +2491,7 @@
+             ['当前场景', model.currentScene?.title || '未识别', `在场${model.currentScene?.present?.length || 0}；固定角色${model.currentScene?.fixedSceneRoles?.length || 0}；固定设施${model.currentScene?.fixedFacilities?.length || 0}`],
+             ['当前事件', String(model.counts?.activeEvents || 0), (model.activeEvents || []).map((item) => item.title).slice(0, 3).join('、') || '无'],
+             ['人物投影', `当前${model.counts?.currentPeople || 0} / 沉降${model.counts?.settledPeople || 0}`, '人物不使用全局状态机；按当前场景、事件和焦点投影'],
+-            ['活动包', model.activityPack ? `${model.activityPack.length}/${model.activityPack.hardMax}字` : '未生成', `排除仓储条目${model.activityPack?.excludedWarehouseEntries || 0}条`],
++            ['正文发送', '世界书单通道', '活动包已暂停；由 SillyTavern 原生常驻、关键词、递归与向量召回'],
+             ['直接关联', String(model.counts?.directRelations || 0), (model.directRelations || []).slice(0, 2).map((item) => `${item.sourceTitle}↔${item.targetTitle}`).join('；') || '无'],
+             ['数据健康', model.healthy ? '通过' : model.hasErrors ? '有阻断项' : '有警告', `问题${model.issues?.length || 0}项`],
+         ];
+@@ -3571,7 +3569,7 @@
+                 });
+ 
+                 if (pluginFixture) {
+-                    pluginPipeline = await runCheck('plugin-e2e-full-pipeline', '插件闭环：审核—提取—写入—活动包', '插件端到端', async () => {
++                    pluginPipeline = await runCheck('plugin-e2e-full-pipeline', '插件闭环：审核—提取—写入—召回配置', '插件端到端', async () => {
+                         // Keep the deterministic commit chain immutable.  The
+                         // real audit protocol and real violation/revision
+                         // branch are tested as separate hard gates below.
+@@ -3624,7 +3622,7 @@
+                 pushSkip('main-e2e-full-pipeline', '主聊天链：真实正文完整处理', '主聊天端到端', '主正文未生成');
+                 pushSkip('main-e2e-idempotency', '主聊天链：同一正文重复处理幂等性', '主聊天组合', '完整处理链未执行');
+                 pushSkip('plugin-e2e-fixture', '插件闭环：自动建立完整测试回合', '插件端到端', '完整链执行器未连接');
+-                pushSkip('plugin-e2e-full-pipeline', '插件闭环：审核—提取—写入—活动包', '插件端到端', '完整链执行器未连接');
++                pushSkip('plugin-e2e-full-pipeline', '插件闭环：审核—提取—写入—召回配置', '插件端到端', '完整链执行器未连接');
+                 pushSkip('plugin-e2e-idempotency', '插件闭环：重复处理幂等性', '插件组合', '完整链执行器未连接');
+                 pushSkip('e2e-revision-branch', '审核失败—完整修正—安全替换', '端到端', '完整链执行器未连接');
+                 pushSkip('e2e-current-chat-reset', '当前聊天重置作用域', '组合', '完整链执行器未连接');
+@@ -3876,7 +3874,7 @@
+         extractionEnabled: settings.extractionEnabled !== false,
+         autoAudit: settings.autoAudit === true,
+         autoExtraction: settings.autoExtraction === true,
+-        activityPackEnabled: settings.activityPackEnabled !== false,
++        activityPackEnabled: false,
+         entryBudgetEnabled: settings.entryBudgetEnabled !== false,
+         responseTokens: Number(settings.responseTokens || 0),
+         requestTimeoutMs: Number(settings.requestTimeoutMs || 0),
+@@ -13884,6 +13882,18 @@
+ - 同一事实只能有一个权威宿主。其他条目只保留最短引用或该事实对自身形成的独立结果，禁止换角度重复叙述。
+ - 物品的所有权、保管者、当前持有者、当前使用者、使用权限和当前位置是不同关系，不得互相替代。公共物品被某人临时使用，不等于归该人物所有或长期持有。
+ 
++【唯一宿主分发表】
++插件不会替模型重新判断语义或跨条目改写事实；以下边界必须由模型在输出源头执行：
++- 场景【在场】是当前场景人员存在状态的唯一宿主。人物正在当前场景时，人物【当前】不得重复“位置：当前场景”；只有人物与当前场景分离、位于别处且该位置需要持续追踪时，才在人物【当前】写位置。
++- 场景【当前资源】只写正文结束时由场景公共持有、无人持有、固定放置或可被现场直接操作、争夺的关键资源名称。人物正在携带、穿戴、握持或保管的物品不得同时写入场景【当前资源】。
++- 人物【持有】只写当前由该人物携带或保管的物品名称，不写功能、位置、完整性、转交过程或物品内部内容。普通物品没有独立条目时，以人物【持有】为宿主；建立独立物品条目后，详细状态只写物品【当前】，人物只保留名称引用。
++- 物品【当前】是独立物品所有权、保管者、当前持有者、当前位置、使用权限和完整性的唯一详细宿主。不得把同一详细状态复制到人物、场景或事件。
++- 场景【活动关联】只写仍在本场运行的事件稳定名称，不写事件进展或结果。事件【场景】只写场景名称，事件【参与】只写人物名称。
++- 事件【已发生进展】只写该事项本身取得的状态变化；人物具体状态写人物，场景具体损坏写场景，物品内部文字或精确位置写物品。事件可以概括“某项设计已完成”，但不得逐字复制物品中“具体画在何处、写了什么”的详细事实。
++- 人物关系没有独立条目。客观双向关系确实发生改变时，可在双方人物【关系】分别写最短关系值；除此之外不得把同一关系过程复制到【当前】【固定事实】或事件中。
++- 世界条目只保存跨场景状态；基础设定只保存不随普通剧情变化的规则。场景内局部事实不得为了显得重要而再复制到世界或基础设定。
++- 同一完整句义若已经有详细宿主，其他条目最多保留用于召回的稳定名称，不得改写同义句再次保存。
++
+ 【身份未明人物】
+ - 正文没有明确说明陌生人、匿名账号、蒙面者或未知声音是谁时，不得猜成任何已知人物。
+ - 只有该对象已经产生会持续影响后续的状态、关系、持有物或行动结果时，才建立人物临时档。
+@@ -13947,10 +13957,10 @@
+ 【性格核心】已经明确设定或经多次稳定表现确认的人格原则；单次情绪和例外行为不得写入
+ 【表达方式】稳定的语言、情绪表达和沟通方式
+ 【决策倾向】面对风险、冲突、关系和资源时反复成立的选择偏好
+-【当前】位置、身体、目标、情绪和当轮立场等明确状态槽
++【当前】身体、目标、情绪、当轮立场及必要的离场后位置等明确状态槽；人物在当前场景时不重复场景名称
+ 【关系】对方名称：客观长期关系
+ 【关系立场】对方名称：该人物当前持续成立的态度与互动边界
+-【持有】当前关键物品完整列表
++【持有】当前由该人物携带或保管的关键物品名称完整列表；只写名称引用
+ 【已知】该人物当前能够使用的认知，包括怀疑、判断和推理；格式“认知槽：内容｜信息来源：允许类型”
+ 【误信】仅保存已有明确证伪依据、但人物仍相信的错误认知；格式“认知槽：错误内容｜信息来源：允许类型｜证伪依据：已确认事实”
+ 【固定事实】已经形成并仍影响后续的个人结果，一项结果一行，不写过程
+@@ -13965,8 +13975,8 @@
+ 【固定事实】已确认的新发现、永久损坏、控制权或访问条件变化，一项结果一行
+ 【当前状态】时间、环境、控制、危险等状态槽
+ 【在场】正文结束时确认在场的人物完整列表
+-【当前资源】正文结束时可使用、争夺或影响结果的关键物品完整列表
+-【活动关联】仍在本场运行的事件名称完整列表
++【当前资源】正文结束时由场景公共持有、无人持有、固定放置或可被现场直接操作、争夺的关键资源名称完整列表；排除人物随身物
++【活动关联】仍在本场运行的事件稳定名称完整列表；不得复制进展或结果
+ 【世界影响】最多一句过去时结果，概括直接作用于本场的世界整体变化
+ 【局部约束】模型不能忽略的可见限制完整列表
+ 【别名】
+@@ -13988,7 +13998,7 @@
+ 【参与】直接推动当前事件的参与者完整列表，最多6人
+ 【附属人员】只承担当前事件辅助作用、无需独立人物条目的人员，最多4人
+ 【场景】事件涉及的稳定场景名称；门口、床边、桌旁、走廊拐角等局部位置不得独立建场景
+-【已发生进展】已经造成状态、关系、控制、资源、能力或因果变化的事实；使用过去时，最多4行；被更完整结果覆盖的动作不得单独保留
++【已发生进展】该事项本身已经取得的状态变化；使用过去时，最多4行；人物、场景、物品的详细事实写回各自宿主，本栏只保留事项级概括
+ 【未发生进展】已经发生但没有造成状态变化、且仍有必要解释当前连续性的过程材料；不是未来事项、目标或计划，最多2行；普通动作直接省略
+ 【结果】已经形成的稳定结果，最多2行；没有明确结果时省略
+ 【别名】
+@@ -14917,10 +14927,11 @@
+ 5. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。
+ 只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
+ exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
+-exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
++exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
+ exports.DEFAULT_SMALL_SUMMARY_PROMPT = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
+ exports.DEFAULT_LARGE_SUMMARY_PROMPT = `将已经压缩完成的事件结果和稳定变化沉降为长期历史；覆盖旧世界历史，不接收普通动作、未发生进展、未来目标或重复过程，只分发长期有效的结果。`;
+ const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
++const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
+ const LEGACY_SMALL_SUMMARY_PROMPT_UI23 = `结算当前事件线；保留当前场景、人物状态、事件阶段、已成立结果和未决事项，并把持续影响分发到人物、场景、物品或世界。`;
+ const LEGACY_LARGE_SUMMARY_PROMPT_UI23 = `整理跨场景仍需保留的长期影响；关系并入人物，地点并入场景，可变化的宏观状态进入世界，稳定世界框架进入基础设定，只分发永久变化和重大结果。`;
+ exports.DEFAULT_SETTINGS = Object.freeze({
+@@ -14937,7 +14948,7 @@
+     autoExtraction: false,
+     autoSmallSummary: true,
+     autoLargeSummary: true,
+-    activityPackEnabled: true,
++    activityPackEnabled: false,
+     entryBudgetEnabled: true,
+     auditEnabled: true,
+     extractionEnabled: true,
+@@ -15049,7 +15060,7 @@
+         autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
+         autoSmallSummary: candidate.autoSmallSummary !== false,
+         autoLargeSummary: candidate.autoLargeSummary !== false,
+-        activityPackEnabled: candidate.activityPackEnabled !== false,
++        activityPackEnabled: false,
+         entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
+         auditEnabled: candidate.auditEnabled !== false,
+         extractionEnabled: candidate.extractionEnabled !== false,
+@@ -15058,7 +15069,7 @@
+         autoCreateLorebook: candidate.autoCreateLorebook === true,
+         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
+         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
+-        extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, LEGACY_EXTRACTION_PROMPT_UI23, exports.DEFAULT_EXTRACTION_PROMPT),
++        extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46], exports.DEFAULT_EXTRACTION_PROMPT),
+         smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, LEGACY_SMALL_SUMMARY_PROMPT_UI23, exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+         largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, LEGACY_LARGE_SUMMARY_PROMPT_UI23, exports.DEFAULT_LARGE_SUMMARY_PROMPT),
+         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
+@@ -15082,7 +15093,8 @@
+ 
+ function migrateBuiltinPrompt(value, legacyValue, currentDefault) {
+     const text = String(value ?? '').trim();
+-    if (!text || text === String(legacyValue).trim()) return currentDefault;
++    const legacyValues = Array.isArray(legacyValue) ? legacyValue : [legacyValue];
++    if (!text || legacyValues.some((item) => text === String(item ?? '').trim())) return currentDefault;
+     return text;
+ }
+ function profileValue(candidate, key) {
