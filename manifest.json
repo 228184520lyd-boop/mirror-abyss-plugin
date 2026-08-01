@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.48-concise-prompts",
+  "version": "2.0.0-lite.ui.49-scene-settlement",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜精简审核、修正与提取提示词，移除修正版语义截断复审"
+  "description": "按完整场景字段结算｜场景变化时提取与小总结｜每六个场景生成大总结"
 }
