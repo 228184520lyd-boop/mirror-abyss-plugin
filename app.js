@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.39 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.46-progress-recall — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -13,6 +13,7 @@ const SECTION_LIMITS = Object.freeze({
     当前时空: 180,
     当前场景: 260,
     现场人物: 900,
+    关键物品: 300,
     当前事件: 300,
     生效规则: 220,
     必要历史: 260,
@@ -22,7 +23,7 @@ function compileActivityPack(entries, options = {}) {
     const list = (entries ?? []).filter((entry) => entry?.title !== governance_1.ACTIVITY_PACK_TITLE);
     const focusUid = String(options.focusUid ?? '');
     const context = (0, governance_1.activeContext)(list, focusUid, options.currentSceneTitle || '');
-    const gameTime = options.gameTime ?? null;
+    const gameTime = options.gameTime ?? inferGameTimeFromSceneEntry(context.scene);
     const budget = activityPackBudget(context.characters.length);
     if (Number(options.hardMax) > 0) {
         budget.configuredHardMax = Math.max(600, Math.min(4000, Number(options.hardMax)));
@@ -44,6 +45,12 @@ function compileActivityPack(entries, options = {}) {
         diagnostics,
     };
 }
+function inferGameTimeFromSceneEntry(scene) {
+    const lines = ['当前状态', '定义'].flatMap((section) => scene?.sections?.values?.[section] ?? []);
+    const match = lines.map((line) => String(line ?? '').match(/(?:^|[，。；;\s])(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])\s*([^，。；;]+)/u)).find(Boolean);
+    const label = String(match?.[1] ?? '').trim();
+    return label ? { label, sceneTitle: scene?.title ?? '', source: 'scene-fallback' } : null;
+}
 
 function activityPackBudget(characterCount) {
     const characters = Math.max(0, Math.min(6, Number(characterCount || 0)));
@@ -60,6 +67,7 @@ function activityPackSections(entries, context, gameTime, budget) {
     const currentScene = context.scene;
     const activeEvent = selectActiveEvent(context.activeEvents, currentScene, context.characters);
     const characters = prioritizeCharacters(context.characters, context.focus, activeEvent);
+    const activeItems = selectActiveItems(entries, currentScene, characters, activeEvent);
     const relationIndex = (0, governance_1.buildDirectRelationIndex)(entries);
     const history = selectNecessaryHistory(entries, activeEvent, currentScene, characters, relationIndex);
     const sections = [];
@@ -70,6 +78,7 @@ function activityPackSections(entries, context, gameTime, budget) {
     pushSection(sections, '当前时空', timeLines);
     pushSection(sections, '当前场景', compactScene(currentScene));
     pushSection(sections, '现场人物', compactCharacters(characters, SECTION_LIMITS.现场人物));
+    pushSection(sections, '关键物品', compactItems(activeItems, SECTION_LIMITS.关键物品));
     pushSection(sections, '当前事件', compactEvent(activeEvent, SECTION_LIMITS.当前事件));
     pushSection(sections, '生效规则', compactApplicableRules(entries, currentScene, activeEvent));
     pushSection(sections, '必要历史', history.map((entry) => compactHistory(entry)).filter(Boolean));
@@ -171,6 +180,57 @@ function compressCharacterLine(name, parts, maxLength) {
     const line = renderCharacterLine(name, core);
     return line.length <= maxLength ? line : '';
 }
+function selectActiveItems(entries, scene, characters, event) {
+    const items = (entries ?? []).filter((entry) => entry?.type === '物品');
+    if (!items.length) return [];
+    const characterText = characters.map((entry) => [
+        ...(entry.sections?.values?.['持有'] ?? []),
+        ...(entry.sections?.values?.['当前'] ?? []),
+    ].join('；')).join('；');
+    const sceneText = [
+        ...(scene?.sections?.values?.['当前资源'] ?? []),
+        ...(scene?.sections?.values?.['固定资源'] ?? []),
+    ].join('；');
+    const eventBody = event ? `${event.name}
+${event.content ?? ''}` : '';
+    const activeCharacterNames = characters.map((entry) => (0, util_1.normalizeFact)(entry.name)).filter(Boolean);
+    const sceneName = (0, util_1.normalizeFact)(scene?.name ?? '');
+    return items.map((entry) => {
+        const terms = (0, util_1.unique)([entry.name, ...(entry.aliases ?? []), ...(entry.keywords ?? [])])
+            .map(util_1.normalizeFact).filter((value) => value && value.length >= 2);
+        const mentioned = (text) => {
+            const normalized = (0, util_1.normalizeFact)(text);
+            return terms.some((term) => normalized.includes(term));
+        };
+        const current = entry.sections?.values?.['当前'] ?? [];
+        const facts = entry.sections?.values?.['固定事实'] ?? [];
+        const itemText = (0, util_1.normalizeFact)(`${current.join('；')}；${facts.join('；')}`);
+        let score = 0;
+        if (mentioned(characterText)) score += 10;
+        if (mentioned(sceneText)) score += 8;
+        if (mentioned(eventBody)) score += 5;
+        if (activeCharacterNames.some((name) => name && itemText.includes(name))) score += 8;
+        if (sceneName && itemText.includes(sceneName)) score += 6;
+        return { entry, score, updatedAt: Number(entry.updatedAt || 0) };
+    }).filter((item) => item.score > 0)
+        .sort((left, right) => right.score - left.score || right.updatedAt - left.updatedAt || left.entry.title.localeCompare(right.entry.title, 'zh-CN'))
+        .slice(0, 3).map((item) => item.entry);
+}
+function compactItems(items, maxChars) {
+    const lines = [];
+    for (const entry of items ?? []) {
+        const parts = [];
+        const current = (entry.sections?.values?.['当前'] ?? []).slice(0, 2).map(cleanLine).filter(Boolean);
+        const facts = (entry.sections?.values?.['固定事实'] ?? []).slice(-2).map(stripLabel).filter(Boolean);
+        const limits = (entry.sections?.values?.['限制'] ?? []).slice(0, 1).map(stripLabel).filter(Boolean);
+        if (current.length) parts.push(current.join('；'));
+        if (facts.length) parts.push(`事实：${facts.join('；')}`);
+        if (limits.length) parts.push(`限制：${limits.join('；')}`);
+        if (!parts.length) continue;
+        lines.push(`${entry.name}｜${parts.join('｜')}`);
+    }
+    return fitLines(lines, maxChars);
+}
 function compactEvent(event, maxChars) {
     if (!event) return [];
     const lines = [];
@@ -194,7 +254,12 @@ function compactHistory(entry) {
     const results = (entry.sections?.values?.['结果'] ?? []).slice(0, 1).map(cleanLine);
     const progress = (entry.sections?.values?.['已发生进展'] ?? []).slice(-1).map(cleanLine);
     const body = [...results, ...progress].filter(Boolean).slice(0, 1)[0];
-    return body ? `${entry.name}：${body}` : '';
+    if (!body) return '';
+    // Intermediate occupancy/stage snapshots become false current facts after a
+    // later event closes.  They belong in warehouse history, not the live pack.
+    const transient = /(?:仅余|只剩|仍有|仍在|正在|进入第.{0,8}阶段|暂时|尚有|尚未)/u.test(body);
+    const terminal = /(?:完成|结束|失败|终止|撤退|撤离|离开|死亡|摧毁|解除|恢复)/u.test(body);
+    return transient && !terminal ? '' : `${entry.name}：${body}`;
 }
 function selectActiveEvent(events, scene, characters) {
     const names = new Set(characters.map((entry) => (0, util_1.normalizeFact)(entry.name)));
@@ -276,7 +341,7 @@ function measureSerializedSections(sections) {
     return sections.map((section) => `【${section.name}】\n${section.lines.map((line) => `- ${line}`).join('\n')}`).join('\n\n').length;
 }
 function trimSectionsToBudget(sections, hardMax) {
-    const priority = ['核心规则', '当前时空', '当前场景', '现场人物', '当前事件', '生效规则', '必要历史'];
+    const priority = ['核心规则', '当前时空', '当前场景', '现场人物', '关键物品', '当前事件', '生效规则', '必要历史'];
     const byName = new Map(sections.map((section) => [section.name, structuredClone(section)]));
     const output = priority.map((name) => byName.get(name)).filter(Boolean);
     const measure = () => measureSerializedSections(output);
@@ -284,7 +349,7 @@ function trimSectionsToBudget(sections, hardMax) {
         const section = output.find((item) => item.name === name);
         while (section?.lines?.length && measure() > hardMax) section.lines.pop();
     }
-    for (const name of ['当前场景', '当前事件', '核心规则']) {
+    for (const name of ['当前场景', '关键物品', '当前事件', '核心规则']) {
         const section = output.find((item) => item.name === name);
         while (section?.lines?.length > 1 && measure() > hardMax) section.lines.pop();
     }
@@ -305,6 +370,7 @@ function activityDiagnostics(entries, context, sections, budget, contentLength) 
     const includedTitles = new Set();
     if (context.scene) includedTitles.add(context.scene.title);
     for (const entry of context.characters) includedTitles.add(entry.title);
+    for (const entry of selectActiveItems(entries, context.scene, context.characters, selectActiveEvent(context.activeEvents, context.scene, context.characters))) includedTitles.add(entry.title);
     for (const entry of context.activeEvents) includedTitles.add(entry.title);
     const foundationFacts = entries
         .filter((entry) => entry.type === '基础设定')
@@ -337,6 +403,8 @@ function activityDiagnostics(entries, context, sections, budget, contentLength) 
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MirrorAbyssApplication = void 0;
+exports.receiptAffectedBySourceChange = receiptAffectedBySourceChange;
+exports.messageIndexFromEvent = messageIndexFromEvent;
 const host_1 = require("./host");
 const settings_1 = require("./settings");
 const audit_1 = require("./audit");
@@ -432,7 +500,8 @@ class MirrorAbyssApplication {
         if (this.started) return;
         this.host.context();
         this.listen('MESSAGE_RECEIVED', (value) => this.scheduleMessage(messageIndexFromEvent(value)));
-        this.listen('CHARACTER_MESSAGE_RENDERED', (value) => this.scheduleMessage(messageIndexFromEvent(value)));
+        // SillyTavern 在同一次正文落盘中先发 MESSAGE_RECEIVED，再发 CHARACTER_MESSAGE_RENDERED；
+        // 后者不再重复订阅，避免同一消息进入两次稳定检测与队列去重链。
         // [MA-DIALOGUE-01] 优先等待完整生成结束；旧版宿主没有该事件时，由稳定检测兜底。
         this.listen('GENERATION_ENDED', (value) => this.scheduleMessage(messageIndexFromEvent(value), true));
         for (const event of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED']) this.listen(event, (value) => this.onScopeChanged(event, value));
@@ -543,8 +612,20 @@ class MirrorAbyssApplication {
         const running = [...this.runningByChat.values()];
         if (running.length) await Promise.allSettled(running);
         const chatKey = safeChatKey(this.host);
-        if (chatKey) await this.host.resetCurrentChatState();
-        const settings = this.settingsStore.reset(this.host.context());
+        const context = this.host.context();
+        const settingsSnapshot = this.settingsStore.capture(context);
+        let settings;
+        try {
+            settings = this.settingsStore.reset(context);
+            if (chatKey) await this.host.resetCurrentChatState();
+        }
+        catch (error) {
+            try { this.settingsStore.restore(context, settingsSnapshot); }
+            catch (rollbackError) {
+                throw new Error(`插件重置失败，且旧设置恢复失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+            }
+            throw new Error(`插件重置失败，已恢复旧设置：${(0, util_1.errorText)(error)}`);
+        }
         this.auditRunner.resetStatus?.();
         this.memoryRunner.resetStatus?.();
         this.migrationService.clearPreview?.();
@@ -614,15 +695,20 @@ class MirrorAbyssApplication {
         return this.enqueueMaintenance('setFocus', async (settings, snapshot) => {
             const previous = this.host.getFocusUid();
             const next = enabled === false ? '' : String(uid ?? '');
-            await this.worldbook.setFocus(settings, previous, next, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
+            const committedEntries = await this.worldbook.setFocus(settings, previous, next, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
             try {
                 await this.host.setFocusUid(next);
             }
             catch (error) {
-                await this.worldbook.setFocus(settings, next, previous, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
-                throw error;
+                try {
+                    await this.worldbook.setFocus(settings, next, previous, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
+                }
+                catch (rollbackError) {
+                    throw new Error(`焦点元数据保存失败，且世界书焦点恢复失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+                }
+                throw new Error(`焦点元数据保存失败，世界书焦点已恢复：${(0, util_1.errorText)(error)}`);
             }
-            return this.worldbook.list(settings, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
+            return committedEntries;
         });
     }
     listen(eventName, handler) {
@@ -764,9 +850,11 @@ class MirrorAbyssApplication {
         await this.enqueueMaintenance('sourceRollback', async (settings, snapshot) => {
             const focusUid = this.host.getFocusUid();
             const result = await this.worldbook.rollbackReceipts(settings, affected, focusUid, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
-            await this.host.removeCommitReceipts(ids);
             const cursor = this.host.cursor();
+            // 回执必须最后清理。游标保存失败时保留回执，后续可再次执行幂等回滚；
+            // 否则会出现“世界书已恢复、回执已删除、游标仍标记已处理”的不可重试半状态。
             await this.host.saveCursor({ ...cursor, lastProcessedMessageKey: '', lastProcessedHash: '' }, snapshot, this.settings());
+            await this.host.removeCommitReceipts(ids);
             return result;
         });
         this.controlPanel.resetTaskStates?.('源对话已变化，近期写入已回滚');
@@ -862,27 +950,46 @@ class MirrorAbyssApplication {
                 this.controlPanel.setTaskProgress?.('audit', 'running', automatic ? '自动审核处理中' : '审核处理中', { messageIndex: snapshot.messageIndex });
                 this.controlPanel.setTaskProgress?.('revision', 'queued', '等待审核结论', { messageIndex: snapshot.messageIndex });
             }
-            if (taskType === 'extraction') {
+            if (taskType === 'extraction' || taskType === 'diagnosticExtraction') {
                 this.controlPanel.setTaskProgress?.('extract', 'running', '提取与协议解析处理中', { messageIndex: snapshot.messageIndex });
                 this.controlPanel.setTaskProgress?.('write', 'queued', '等待提取协议', { messageIndex: snapshot.messageIndex });
             }
             this.controlPanel.setStatus(taskType === 'audit' ? '审核处理中…' : taskType === 'extraction' ? '提取、解析与语义合并处理中…' : taskType === 'full' ? '自动处理中…' : '任务处理中…');
             let activeSnapshot = snapshot;
             let result;
+            const fullShouldExtract = taskType === 'full' && settings.extractionEnabled !== false && (!automatic || settings.autoExtraction === true);
             if (taskType === 'audit') {
+                if (settings.auditEnabled === false || !String(settings.auditPrompt || '').trim()) {
+                    this.controlPanel.setTaskProgress?.('audit', 'disabled', '审核功能已关闭');
+                    this.controlPanel.setTaskProgress?.('revision', 'disabled', '审核未执行');
+                    this.controlPanel.setStatus('审核功能已关闭');
+                    return [];
+                }
                 if (automatic && settings.autoAudit !== true) {
                     this.controlPanel.setTaskProgress?.('audit', 'disabled', '自动审核已关闭，已跳过');
+                    this.controlPanel.setTaskProgress?.('revision', 'disabled', '审核未执行');
+                    this.controlPanel.setStatus('自动审核已关闭，本轮未执行');
                     return [];
                 }
                 activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
                 result = activeSnapshot;
             }
-            else if (taskType === 'extraction') {
-                if (automatic && settings.autoExtraction !== true) {
-                    this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭，已跳过');
+            else if (taskType === 'extraction' || taskType === 'diagnosticExtraction') {
+                if (settings.extractionEnabled === false) {
+                    this.controlPanel.setTaskProgress?.('extract', 'disabled', '提取功能已关闭');
+                    this.controlPanel.setTaskProgress?.('write', 'disabled', '提取未执行');
+                    this.controlPanel.setStatus('提取功能已关闭');
                     return [];
                 }
-                result = await this.memoryRunner.runTask('extraction', settings, activeSnapshot);
+                if (automatic && settings.autoExtraction !== true) {
+                    this.controlPanel.setTaskProgress?.('extract', 'disabled', '自动提取已关闭，已跳过');
+                    this.controlPanel.setTaskProgress?.('write', 'disabled', '提取未执行');
+                    this.controlPanel.setStatus('自动提取已关闭，本轮未执行');
+                    return [];
+                }
+                result = taskType === 'diagnosticExtraction'
+                    ? await this.memoryRunner.runExtractionOnly(settings, activeSnapshot)
+                    : await this.memoryRunner.runTask('extraction', settings, activeSnapshot);
             }
             else if (taskType === 'smallSummary') result = await this.memoryRunner.runTask('smallSummary', settings, activeSnapshot);
             else if (taskType === 'largeSummary') result = await this.memoryRunner.runTask('largeSummary', settings, activeSnapshot);
@@ -910,7 +1017,7 @@ class MirrorAbyssApplication {
                 this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已校验并替换' : '无需修正');
                 this.controlPanel.setStatus(detail);
             }
-            else if (taskType === 'extraction') {
+            else if (taskType === 'extraction' || taskType === 'diagnosticExtraction') {
                 const completion = extractionCompletion(result, activeSnapshot.worldbookName);
                 this.controlPanel.setTaskProgress?.('extract', 'success', '提取协议完成', completion.meta);
                 this.controlPanel.setTaskProgress?.('write', 'success', completion.detail, completion.meta);
@@ -934,7 +1041,7 @@ class MirrorAbyssApplication {
                 this.controlPanel.setStatus('上次世界书重建已撤销，旧表已恢复');
             }
             else {
-                if (settings.autoExtraction === true && settings.extractionEnabled !== false) {
+                if (fullShouldExtract) {
                     const completion = extractionCompletion(result, activeSnapshot.worldbookName);
                     this.controlPanel.setTaskProgress?.('extract', 'success', '提取协议完成', completion.meta);
                     this.controlPanel.setTaskProgress?.('write', 'success', completion.detail, completion.meta);
@@ -1269,7 +1376,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.40';
+exports.VERSION = '2.0.0-lite.ui.46-progress-recall';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1334,6 +1441,7 @@ class ControlPanel {
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
         this.profileDropdownBound = false;
+        this.profileSelectionRevision = 0;
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
@@ -1458,6 +1566,7 @@ class ControlPanel {
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
         this.profileDropdownBound = false;
+        this.profileSelectionRevision = 0;
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
@@ -1806,11 +1915,7 @@ class ControlPanel {
         }
         try {
             const bound = this.actions.bindProfileDropdown?.(`#${PROFILE_SELECT_ID}`, selectedId, (profile) => {
-                const profileId = String(profile?.id || '');
-                this.actions.configure?.(buildUnifiedProfilePatch(profileId));
-                this.lastOutcome = null;
-                this.updateApiProfileStatus(profileId, profile?.name || '');
-                this.setStatus(profileId ? `镜渊处理 API 已切换为：${profile?.name || profileId}` : '镜渊处理 API 已改为当前 SillyTavern 连接');
+                void this.persistProfileSelection(profile || null);
             });
             if (!bound) throw new Error('官方 Connection Profile 下拉服务不可用');
             this.profileDropdownBound = true;
@@ -1823,6 +1928,31 @@ class ControlPanel {
             select.replaceChildren(new Option('当前 SillyTavern 连接', ''));
             select.disabled = true;
             if (this.apiProfileStatusNode) this.apiProfileStatusNode.textContent = `无法读取 Connection Profiles：${(0, util_1.errorText)(error)}`;
+        }
+    }
+    async persistProfileSelection(profile) {
+        const revision = ++this.profileSelectionRevision;
+        const previousSettings = this.getSettings();
+        const previousId = previousSettings.modelSource === 'profile' ? String(previousSettings.modelProfileId || '') : '';
+        const profileId = String(profile?.id || '');
+        const select = this.apiProfileSelect;
+        if (select) select.disabled = true;
+        try {
+            await this.actions.configure?.(buildUnifiedProfilePatch(profileId));
+            if (revision !== this.profileSelectionRevision) return;
+            this.lastOutcome = null;
+            if (select) select.value = profileId;
+            this.updateApiProfileStatus(profileId, profile?.name || '');
+            this.setStatus(profileId ? `镜渊处理 API 已切换为：${profile?.name || profileId}` : '镜渊处理 API 已改为当前 SillyTavern 连接');
+        }
+        catch (error) {
+            if (revision !== this.profileSelectionRevision) return;
+            if (select) select.value = previousId;
+            this.updateApiProfileStatus(previousId);
+            this.setStatus(`保存镜渊处理 API 失败：${(0, util_1.errorText)(error)}`, true);
+        }
+        finally {
+            if (revision === this.profileSelectionRevision && select) select.disabled = false;
         }
     }
     updateApiProfileStatus(profileId, knownName = '') {
@@ -2365,7 +2495,7 @@ class ControlPanel {
             ['人物投影', `当前${model.counts?.currentPeople || 0} / 沉降${model.counts?.settledPeople || 0}`, '人物不使用全局状态机；按当前场景、事件和焦点投影'],
             ['活动包', model.activityPack ? `${model.activityPack.length}/${model.activityPack.hardMax}字` : '未生成', `排除仓储条目${model.activityPack?.excludedWarehouseEntries || 0}条`],
             ['直接关联', String(model.counts?.directRelations || 0), (model.directRelations || []).slice(0, 2).map((item) => `${item.sourceTitle}↔${item.targetTitle}`).join('；') || '无'],
-            ['数据健康', model.healthy ? '通过' : '有阻断项', `问题${model.issues?.length || 0}项`],
+            ['数据健康', model.healthy ? '通过' : model.hasErrors ? '有阻断项' : '有警告', `问题${model.issues?.length || 0}项`],
         ];
         for (const [label, value, detail] of cards) {
             const card = document.createElement('div');
@@ -2623,20 +2753,26 @@ class ControlPanel {
         save.type = 'button';
         save.className = 'ma-lite-prompt-save';
         save.textContent = '保存审核提示词';
-        save.addEventListener('click', () => {
+        save.addEventListener('click', async () => {
             const value = String(textarea.value || '').trim();
             if (!value) {
                 this.setStatus('审核提示词不能为空；关闭审核请使用审核功能开关', true);
                 return;
             }
+            const previous = String(this.getSettings()?.[key] || '');
+            save.disabled = true;
             try {
-                this.actions.configure?.({ [key]: value });
+                await this.actions.configure?.({ [key]: value });
                 this.lastOutcome = null;
                 this.setStatus('审核提示词已保存');
             }
             catch (error) {
+                textarea.value = previous;
                 this.setStatus(`保存审核提示词失败：${(0, util_1.errorText)(error)}`, true);
                 this.refresh();
+            }
+            finally {
+                save.disabled = this.pendingActions.size > 0;
             }
         });
         section.append(title, help, textarea, save);
@@ -2658,16 +2794,22 @@ class ControlPanel {
         detail.textContent = description;
         text.append(title, detail);
         label.append(input, text);
-        input.addEventListener('change', () => {
+        input.addEventListener('change', async () => {
+            const requested = input.checked;
+            const previous = !requested;
+            input.disabled = true;
             try {
-                this.actions.configure?.({ [key]: input.checked });
+                await this.actions.configure?.({ [key]: requested });
                 this.lastOutcome = null;
-                this.setStatus(`${labelText}已${input.checked ? '开启' : '关闭'}`);
+                this.setStatus(`${labelText}已${requested ? '开启' : '关闭'}`);
                 this.refresh();
             }
             catch (error) {
-                input.checked = !input.checked;
+                input.checked = previous;
                 this.setStatus(`保存设置失败：${(0, util_1.errorText)(error)}`, true);
+            }
+            finally {
+                input.disabled = false;
             }
         });
         this.inputs[key] = input;
@@ -2684,15 +2826,21 @@ class ControlPanel {
         input.max = String(max);
         input.step = '1';
         input.dataset.setting = key;
-        input.addEventListener('change', () => {
+        input.addEventListener('change', async () => {
+            const previous = Number(this.getSettings()?.[key]);
             const value = Math.max(min, Math.min(max, Number(input.value || min)));
+            input.disabled = true;
             try {
-                this.actions.configure?.({ [key]: value });
+                await this.actions.configure?.({ [key]: value });
                 input.value = String(value);
                 this.setStatus(`${labelText}已设为 ${value}`);
             } catch (error) {
+                if (Number.isFinite(previous)) input.value = String(previous);
                 this.setStatus(`保存设置失败：${(0, util_1.errorText)(error)}`, true);
                 this.refresh();
+            }
+            finally {
+                input.disabled = false;
             }
         });
         label.append(text, input);
@@ -3044,9 +3192,6 @@ function lifecycleBadge(value) {
 function clamp01(value) {
     return Math.min(1, Math.max(0, Number(value) || 0));
 }
-function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>\"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-}
 exports.ControlPanel = ControlPanel;
 },"diagnostics":function(module,exports,require){
 "use strict";
@@ -3096,7 +3241,7 @@ class DiagnosticsService {
         const mainAttemptRounds = rounds.filter((round) => round.checks?.some((check) => check.id === 'main-e2e-generation' && check.status !== 'skip')).length;
         const safetyAllPass = rounds.length === totalRounds && rounds.every(roundSafetyPassed);
         const transportAllPass = rounds.every((round) => round.checks?.some((check) => check.id === 'official-transport-integrity' && check.status === 'pass'));
-        const selected = [...rounds].reverse().find((round) => round.pluginAccepted === true) ?? rounds.at(-1);
+        const selected = rounds.at(-1);
         const report = selected ? (0, util_1.clone)(selected) : {
             schemaVersion: 4,
             plugin: { name: constants_1.DISPLAY_NAME, version: constants_1.VERSION },
@@ -3119,11 +3264,11 @@ class DiagnosticsService {
             transportAllPass,
             selectedRound: Number(selected?.roundIndex || 0),
         };
-        report.pluginAccepted = pluginPassRounds >= 1 && safetyAllPass && transportAllPass;
-        report.mainChatAccepted = mainPassRounds >= 1 ? true : (mainAttemptRounds > 0 ? false : null);
+        report.pluginAccepted = pluginPassRounds === totalRounds && safetyAllPass && transportAllPass;
+        report.mainChatAccepted = mainPassRounds === totalRounds ? true : (mainAttemptRounds > 0 ? false : null);
         report.acceptance = {
-            pluginClosedLoop: pluginPassRounds === totalRounds ? 'stable-pass' : (pluginPassRounds >= 1 ? 'pass-after-full-restart' : 'fail'),
-            mainChat: mainPassRounds === totalRounds ? 'stable-pass' : (mainPassRounds >= 1 ? 'pass-after-full-restart' : (mainAttemptRounds > 0 ? 'fail' : 'unavailable')),
+            pluginClosedLoop: pluginPassRounds === totalRounds ? 'stable-pass' : (pluginPassRounds > 0 ? 'unstable' : 'fail'),
+            mainChat: mainPassRounds === totalRounds ? 'stable-pass' : (mainPassRounds > 0 ? 'unstable' : (mainAttemptRounds > 0 ? 'fail' : 'unavailable')),
             transportIntegrity: transportAllPass ? 'pass' : 'fail',
             roundIsolation: safetyAllPass ? 'pass' : 'fail',
         };
@@ -3136,8 +3281,8 @@ class DiagnosticsService {
             status: report.accepted ? (pluginPassRounds === totalRounds && mainPassRounds === totalRounds ? 'pass' : 'warn') : 'fail',
             durationMs: report.durationMs,
             detail: report.accepted
-                ? `插件闭环 ${pluginPassRounds}/${totalRounds} 轮完整通过；每轮均从原快照重头开始`
-                : `插件闭环 ${pluginPassRounds}/${totalRounds} 轮通过；未达到至少一轮完整通过或安全恢复条件`,
+                ? `插件闭环 ${pluginPassRounds}/${totalRounds} 轮稳定通过；每轮均从原快照重头开始`
+                : `插件闭环仅 ${pluginPassRounds}/${totalRounds} 轮通过；最终候选要求三轮全部通过且安全恢复、官方传输均通过`,
             evidence: {
                 requestedRounds: totalRounds,
                 completedRounds: rounds.length,
@@ -3215,9 +3360,9 @@ class DiagnosticsService {
                 if (missing.length) throw new Error(`缺少宿主字段：${missing.join('、')}`);
                 const APIs = {
                     eventApi: typeof context.eventSource?.on === 'function',
-                    stscript: typeof (context.executeSlashCommandsWithOptions ?? context.executeSlashCommands) === 'function',
-                    mainTrigger: typeof (context.executeSlashCommandsWithOptions ?? context.executeSlashCommands) === 'function',
-                    saveChat: typeof context.saveChat === 'function' || typeof context.saveChatConditional === 'function',
+                    stscript: typeof context.executeSlashCommandsWithOptions === 'function',
+                    mainTrigger: typeof context.executeSlashCommandsWithOptions === 'function',
+                    saveChat: typeof context.saveChat === 'function',
                 };
                 if (Object.values(APIs).some((value) => !value)) throw new Error(`端到端宿主 API 不完整：${Object.entries(APIs).filter(([, value]) => !value).map(([key]) => key).join('、')}`);
                 return { ...APIs, messageCount: Array.isArray(context.chat) ? context.chat.length : 0 };
@@ -3415,11 +3560,11 @@ class DiagnosticsService {
                 // [MA-DIAG-E2E-PLUGIN-01] 无论玩家主 API 是否可用，都创建确定性临时 AI 正文，
                 // 使用真实审核/修正/提取/世界书模块跑完整插件闭环。该链是候选包验收的硬门槛。
                 pluginFixture = await runCheck('plugin-e2e-fixture', '插件闭环：自动建立完整测试回合', '插件端到端', async () => {
-                    const playerText = '我停在镜渊验收庭门外，观察大厅与守门人，没有替自己作出决定。';
+                    const playerText = '我停在镜渊原子校验厅门外，观察大厅与守门人，没有替自己作出决定。';
                     const assistantText = [
-                        '镜渊验收庭内灯火通明，青石地面映着稳定的暖光。北侧银门已经完全打开，门后的长廊通向王城议事厅。',
-                        '守门人洛恩站在银门右侧，佩戴刻有王城徽记的铜牌。他明确说明这里是王城议事厅入口，来访者需要在门外登记姓名，随后等待值守人员放行。',
-                        '洛恩把登记册放到门边的石台上，没有催促，也没有替来访者作出选择。大厅中的钟声响过一次，银门与登记册的位置都没有变化，当前场景在完整句号处结束。',
+                        '当前场景为镜渊原子校验厅，当前在场者只有守门人伊珞。厅内灯火通明，青石地面映着稳定的暖光。',
+                        '东侧青铜门已经完全打开。守门人伊珞站在门旁，佩戴刻有镜渊徽记的铜牌。他明确说明这里是原子校验厅的唯一入口。',
+                        '伊珞始终保持在门旁的原位，没有提出命令，没有要求来访者行动，也没有替任何人作出选择。大厅中的钟声响过一次，青铜门与伊珞的位置都没有变化。',
                     ].join('\n\n');
                     const turn = await this.host.appendDiagnosticAssistantTurn(playerText, assistantText);
                     return { mode: 'real-host-deterministic-fixture', ...turn, assistantChars: assistantText.length, assistantHash: (0, util_1.hashText)(assistantText) };
@@ -3427,7 +3572,10 @@ class DiagnosticsService {
 
                 if (pluginFixture) {
                     pluginPipeline = await runCheck('plugin-e2e-full-pipeline', '插件闭环：审核—提取—写入—活动包', '插件端到端', async () => {
-                        const result = await this.hooks.executeTurn('full', pluginFixture.assistantIndex, false, settings);
+                        // Keep the deterministic commit chain immutable.  The
+                        // real audit protocol and real violation/revision
+                        // branch are tested as separate hard gates below.
+                        const result = await this.hooks.executeTurn('diagnosticExtraction', pluginFixture.assistantIndex, false, settings);
                         return verifyPipeline(result, 'real-host-plugin-full-pipeline');
                     });
                 }
@@ -3436,7 +3584,7 @@ class DiagnosticsService {
                     await runCheck('plugin-e2e-idempotency', '插件闭环：重复处理幂等性', '插件组合', async () => {
                         const before = await this.worldbook.readRaw(settings, snapshot, validate);
                         const beforeDigest = digestWorldbook(before.data);
-                        const result = await this.hooks.executeTurn('full', pluginFixture.assistantIndex, false, settings);
+                        const result = await this.hooks.executeTurn('diagnosticExtraction', pluginFixture.assistantIndex, false, settings);
                         const after = await this.worldbook.readRaw(settings, snapshot, validate);
                         const afterDigest = digestWorldbook(after.data);
                         if (beforeDigest !== afterDigest) throw new Error('插件闭环同一正文重复处理改变了世界书');
@@ -3454,7 +3602,7 @@ class DiagnosticsService {
                         if (result?.auditReplaced !== true) throw new Error('确定性违规样本未触发正文修正');
                         if (!revised || revised === violation) throw new Error('修正分支没有替换违规正文');
                         if (/你立刻拔剑|你心中已经认定/u.test(revised)) throw new Error('修正版仍保留替玩家行动或心理结论');
-                        if (revised.length < Math.max(20, Math.floor(violation.length * 0.35))) throw new Error('修正版异常短，疑似截断');
+                        if (revised.length < Math.max(10, Math.floor(violation.length * 0.25)) || !/[。！？!?]”?’?$/u.test(revised)) throw new Error('修正版异常短或结尾不完整，疑似截断');
                         return { mode: 'real-host-revision', originalChars: violation.length, revisedChars: revised.length, revisedHash: (0, util_1.hashText)(revised) };
                     });
                 }
@@ -3563,7 +3711,7 @@ class DiagnosticsService {
             report.finishedAt = new Date().toISOString();
             report.durationMs = Date.now() - startedAt.getTime();
             report.summary = countStatuses(report.checks);
-            const requiredPlugin = ['host-context', 'official-transport-integrity', 'worldbook-authoritative-read', 'worldbook-reversible-write', 'plugin-e2e-fixture', 'plugin-e2e-full-pipeline', 'plugin-e2e-idempotency', 'controlled-fault-matrix', 'sandbox-restore', 'chat-nonmutation', 'generation-state-nonmutation'];
+            const requiredPlugin = ['host-context', 'official-transport-integrity', 'worldbook-authoritative-read', 'worldbook-reversible-write', 'audit-protocol', 'plugin-e2e-fixture', 'plugin-e2e-full-pipeline', 'plugin-e2e-idempotency', 'e2e-revision-branch', 'controlled-fault-matrix', 'sandbox-restore', 'chat-nonmutation', 'generation-state-nonmutation'];
             const passed = new Set(report.checks.filter((check) => check.status === 'pass').map((check) => check.id));
             const failed = new Set(report.checks.filter((check) => check.status === 'fail').map((check) => check.id));
             report.pluginAccepted = requiredPlugin.every((id) => passed.has(id)) && !requiredPlugin.some((id) => failed.has(id));
@@ -3709,7 +3857,7 @@ function collectOfficialTransportEvidence(host, context, settings) {
         mainTransport: 'SillyTavern STscript /trigger',
         profileTransport: 'SillyTavern ConnectionManagerRequestService.sendRequest',
         directEndpointFetch: false,
-        mainUsesOfficialGenerate: typeof (context.executeSlashCommandsWithOptions ?? context.executeSlashCommands) === 'function',
+        mainUsesOfficialGenerate: typeof context.executeSlashCommandsWithOptions === 'function',
         profileUsesOfficialService: Boolean(context.ConnectionManagerRequestService?.sendRequest),
         profileCount: profiles.length,
         invalidProfileUrls,
@@ -3756,7 +3904,7 @@ function collectEnvironment(context) {
     };
 }
 function collectScope(host, context, settings) {
-    const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id ?? '';
+    const chatId = context.getCurrentChatId?.() ?? context.chatId ?? '';
     return {
         chatKeyHash: host.chatKey() ? (0, util_1.hashText)(host.chatKey()) : '',
         roleKeyHash: host.roleKey() ? (0, util_1.hashText)(host.roleKey()) : '',
@@ -3772,11 +3920,11 @@ function collectGenerationState(host, context, settings) {
     const chatSettings = context.chatCompletionSettings ?? {};
     return {
         connection: summary,
-        mainApi: String(context.mainApi ?? context.main_api ?? ''),
-        maxContext: Number(context.maxContext ?? context.max_context ?? 0),
-        chatModel: String(chatSettings.model ?? context.chat_completion_model ?? ''),
-        chatSource: String(chatSettings.source ?? context.chat_completion_source ?? ''),
-        responseLength: finiteValue(chatSettings.max_tokens ?? chatSettings.openai_max_tokens ?? context.amount_gen ?? context.responseLength),
+        mainApi: String(context.mainApi ?? ''),
+        maxContext: Number(context.maxContext ?? 0),
+        chatModel: String(summary.chatCompletionModel ?? ''),
+        chatSource: String(summary.chatCompletionSource ?? ''),
+        responseLength: finiteValue(chatSettings.openai_max_tokens ?? chatSettings.max_tokens),
     };
 }
 function chatDigest(chat) {
@@ -4097,6 +4245,15 @@ const INDEPENDENT_MARKER = /(?:独立目标|持续职责|关键证人|核心线�
 
 function governInformationBlocks(sourceBlocks, entries, contextText = '', options = {}) {
     const blocks = (sourceBlocks ?? []).map((block) => structuredClone(block));
+    const explicitSceneName = explicitCurrentSceneName(contextText);
+    if (explicitSceneName && !blocks.some((block) => block.type === '场景')) {
+        blocks.unshift({
+            type: '场景', name: explicitSceneName, title: `场景｜${explicitSceneName}`,
+            keywords: [explicitSceneName], sections: [],
+        });
+    }
+    synthesizeDocumentItemUpdates(blocks, entries, contextText);
+    enforceExplicitDialogueFacts(blocks, contextText);
     const diagnostics = { attached: [], filtered: [], promoted: [], warnings: [] };
     const currentScene = blocks.find((block) => block.type === '场景') ?? null;
     const output = [];
@@ -4130,7 +4287,184 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
         }
         diagnostics.filtered.push(block.title);
     }
+    for (const block of output) if (block.type === '场景') normalizeSceneSnapshot(block, contextText);
     return { blocks: output, diagnostics, currentSceneTitle: currentScene?.title ?? '' };
+}
+
+function enforceExplicitDialogueFacts(blocks, contextText) {
+    const context = String(contextText ?? '');
+    const explicitScene = explicitCurrentSceneName(context);
+    const hasUndecidedFuture = /(?:明天|明日|次日|未来)[^。；\n]{0,80}(?:提议|计划|调查|前往)[^。；\n]{0,80}(?:尚未.{0,12}(?:决定|定案)|未决定|未定案)|(?:提议|计划)[^。；\n]{0,80}(?:尚未.{0,12}(?:决定|定案)|未决定|未定案)/u.test(context);
+    const hasExplicitRelationship = /(?:朋友|同伴|恋人|夫妻|兄弟|姐妹|亲属|盟友|敌人|仇敌|合作关系|隶属|上下级|信任关系|敌对关系|结盟|搭档)/u.test(context);
+    const transfer = context.match(/([\p{Script=Han}A-Za-z0-9·]{2,16})把([^，。；;\n]{2,20}?)(?:转交|交给|递给)([\p{Script=Han}A-Za-z0-9·]{2,16})/u);
+    if (transfer) {
+        const [, from, itemName, to] = transfer.map(value => String(value ?? '').trim());
+        let item = blocks.find(block => block.type === '物品' && (0, util_1.normalizeFact)(block.name) === (0, util_1.normalizeFact)(itemName));
+        if (!item) {
+            item = { type: '物品', name: itemName, title: `物品｜${itemName}`, keywords: [itemName], sections: [] };
+            blocks.push(item);
+        }
+        // A transfer sentence is authoritative only for ownership.  Rebuild
+        // the candidate from that evidence so the model cannot invent a
+        // material, purpose, condition or duplicate wording around it.
+        item.sections = [
+            { name: '当前', lines: [`当前持有者：${to}`], empty: false },
+            { name: '固定事实', lines: [`${itemName}已由${from}转交给${to}`], empty: false },
+        ];
+        for (const block of blocks) {
+            if (block === item) continue;
+            for (const section of block.sections ?? []) {
+                section.lines = (section.lines ?? []).filter(line => {
+                    const text = String(line ?? '');
+                    if (text.includes(itemName)) return false;
+                    return true;
+                });
+                section.empty = !(section.lines ?? []).length;
+            }
+        }
+    }
+    const relocation = context.match(/([^，。；;\n]{2,20}?)(?:已经|已)?从([^，。；;\n]{2,20}?)转移到(?:了)?([^，。；;\n]{2,20})/u);
+    if (relocation) {
+        const [, subject, from, to] = relocation.map(value => String(value ?? '').trim());
+        let world = blocks.find(block => block.type === '世界' && (0, util_1.normalizeFact)(block.name) === (0, util_1.normalizeFact)(subject));
+        if (!world) {
+            world = { type: '世界', name: subject, title: `世界｜${subject}`, keywords: [subject], sections: [] };
+            blocks.push(world);
+        }
+        // The relocation clause likewise defines exactly one current state
+        // and one historical transition; unrelated model prose is discarded.
+        world.sections = [
+            { name: '公开局势', lines: [`${subject}当前位置：${to}`], empty: false },
+            { name: '固定事实', lines: [`${subject}已从${from}转移到${to}`], empty: false },
+        ];
+        for (const block of blocks) {
+            if (block === world) continue;
+            for (const section of block.sections ?? []) {
+                section.lines = (section.lines ?? []).filter(line => {
+                    const text = String(line ?? '');
+                    if (text.includes(subject) || text.includes(to)) return false;
+                    return true;
+                });
+                section.empty = !(section.lines ?? []).length;
+            }
+        }
+        if (!explicitScene && !new RegExp(`(?:抵达|进入|来到|位于|身处)${escapeRegExp(to)}`, 'u').test(context)) {
+            for (let index = blocks.length - 1; index >= 0; index -= 1) {
+                if (blocks[index].type === '场景' && (0, util_1.normalizeFact)(blocks[index].name) === (0, util_1.normalizeFact)(to)) blocks.splice(index, 1);
+            }
+        }
+    }
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        if (hasUndecidedFuture && /^(?:事件|世界)$/u.test(String(blocks[index].type ?? ''))
+            && (/(?:行动安排|未来计划|调查计划|后续安排)/u.test(String(blocks[index].name ?? ''))
+                || /(?:行动计划|明天|明日|调查北门|尚未.{0,12}(?:决定|定案)|未决定|未定案)/u.test(blockText(blocks[index])))) blocks.splice(index, 1);
+        else if (blocks[index].type === '世界' && /^(?:局部局势|当前行动|行动局面|行动链)$/u.test(String(blocks[index].name ?? '').trim())
+            && !context.includes(String(blocks[index].name ?? '').trim())) blocks.splice(index, 1);
+    }
+    for (const block of blocks) {
+        for (const section of block.sections ?? []) {
+            section.lines = (section.lines ?? []).filter(line => {
+                const text = String(line ?? '');
+                if (block.type === '人物' && /^(?:关系|关系立场)$/u.test(section.name) && !hasExplicitRelationship) return false;
+                if (/^(?:未明|身份未明|未明身份|身份不明|身份未明者|未明身份者)(?:的)?(?:男性|女性|者)?[.。]?$/u.test(text)) return false;
+                if ((0, util_1.normalizeFact)(text) === (0, util_1.normalizeFact)(block.name)) return false;
+                if (/(?:明天|明日|次日|未来).*(?:提议|计划|调查|前往)|(?:提议|计划).*(?:尚未.{0,12}(?:决定|定案)|未决定|未定案)/u.test(text)) return false;
+                if (/(?:尚未.{0,12}(?:决定|定案)|未决定|未定案|后续调查建议|行动计划)/u.test(text) && hasUndecidedFuture) return false;
+                if (/(?:下雨|降雨|雨势|雨水)|(?:斗篷|衣物|衣服).*(?:湿透|打湿|淋湿)/u.test(text)
+                    && !/(?:导致|阻断|危险|无法|受限|积水|洪水|损坏)/u.test(text)) return false;
+                if (/(?:斗篷|衣物|衣服)/u.test(text) && /(?:斗篷|衣物|衣服).*(?:湿透|打湿|淋湿)/u.test(context)
+                    && !/(?:导致|阻断|危险|无法|受限|损坏)/u.test(context)) return false;
+                if (!explicitScene && block.type === '人物' && section.name === '当前' && /(?:位于|身处|同处)/u.test(text)) return false;
+                if (transfer && block.type === '人物' && /^(?:当前|关系|关系立场|持有|固定事实)$/u.test(section.name)
+                    && /(?:同行|同伴|钥匙|交付|转交|接收|收到|获得|持有|告知转移|继续商议|当前行动链|接受其说明|继续对话|合作关系)/u.test(text)) return false;
+                if (block.type === '人物' && /^(?:身份|关系|关系立场)$/u.test(section.name)
+                    && /(?:协作对象|同行者|同伴|对话对象|共同处于|共同使用|共同藏身处|进行协商|参与后续讨论|听取其信息|当前行动链|接受其说明|继续对话|合作关系)/u.test(text)) return false;
+                return true;
+            });
+            section.empty = !(section.lines ?? []).length;
+        }
+    }
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        const block = blocks[index];
+        if (block.type === '事件' && !eventBlockHasLandedFact(block)) {
+            blocks.splice(index, 1);
+            continue;
+        }
+        const preservesExplicitScene = block.type === '场景'
+            && explicitScene && (0, util_1.normalizeFact)(block.name) === (0, util_1.normalizeFact)(explicitScene);
+        if (!preservesExplicitScene && (block.sections ?? []).every(section => !(section.lines ?? []).length)) blocks.splice(index, 1);
+    }
+}
+function eventBlockHasLandedFact(block) {
+    return (block?.sections ?? []).some((section) => /^(?:已发生进展|结果)$/u.test(String(section.name ?? ''))
+        && (section.lines ?? []).some((line) => String(line ?? '').trim()));
+}
+
+function escapeRegExp(value) {
+    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function synthesizeDocumentItemUpdates(blocks, entries, contextText) {
+    const context = String(contextText ?? '');
+    if (!/(?:标注|记录|写入|刻入|登记)/u.test(context)) return;
+    const quotes = [...context.matchAll(/[“"]([^”"\n]{2,160})[”"]/gu)];
+    if (!quotes.length) return;
+    for (const item of (entries ?? []).filter((entry) => entry.type === '物品' && entry.name && context.includes(String(entry.name)))) {
+        const quote = [...quotes].reverse().find((match) => {
+            const tail = context.slice(Number(match.index || 0) + match[0].length, Number(match.index || 0) + match[0].length + 96);
+            return /(?:标注|记录|写入|刻入|登记)/u.test(tail) && tail.includes(String(item.name));
+        });
+        if (!quote) continue;
+        let block = blocks.find((candidate) => candidate.type === '物品' && (0, util_1.normalizeFact)(candidate.name) === (0, util_1.normalizeFact)(item.name));
+        if (!block) {
+            block = { type: '物品', name: item.name, title: item.title, keywords: [item.name], sections: [] };
+            blocks.push(block);
+        }
+        const section = ensureSection(block, '固定事实');
+        section.lines = (0, util_1.unique)([...(section.lines ?? []), `已记录：${String(quote[1]).trim()}`]);
+        section.empty = false;
+    }
+}
+
+function explicitCurrentSceneName(contextText) {
+    const match = String(contextText ?? '').match(/(?:当前场景|当前地点)[ \t]*(?:为|是|[：:])[ \t]*[“”"']?([^,，。；;\n“”"']+)/u);
+    return String(match?.[1] ?? '').trim();
+}
+
+// Models occasionally put structured current-scene facts inside one natural
+// sentence.  Normalize the two fields that drive the production projection so
+// activity-pack, recall and the management panel observe the same state.
+function normalizeSceneSnapshot(block, contextText = '') {
+    const current = (block.sections ?? []).filter((section) => /^(?:当前状态|定义)$/u.test(String(section.name ?? ''))).flatMap((section) => section.lines ?? []);
+    const inferred = [];
+    for (const line of current) {
+        const match = String(line ?? '').match(/(?:当前)?在场(?:者|人物)?\s*(?:为|是|有|包括|包含|：|:)\s*([^，。；;]+)/u);
+        if (!match) continue;
+        inferred.push(...splitNames(match[1]));
+    }
+    const context = String(contextText ?? '');
+    const currentSceneMatch = context.match(/(?:当前场景|当前地点)[ \t]*(?:为|是|[：:])[ \t]*[“”"']?([^,，。；;\n“”"']+)/u);
+    const contextNamesMatch = context.match(/(?:当前)?在场(?:者|人物)?[ \t]*(?:只有|为|是|有|包括|包含|[：:])[ \t]*([^,，。；;\n]+)/u);
+    const sceneMatches = currentSceneMatch
+        && (0, util_1.normalizeFact)(currentSceneMatch[1]).includes((0, util_1.normalizeFact)(block.name));
+    if (sceneMatches && contextNamesMatch) inferred.push(...splitNames(contextNamesMatch[1]));
+    let present = (block.sections ?? []).find((section) => String(section.name ?? '') === '在场');
+    if (present || inferred.length) {
+        present ??= ensureSection(block, '在场');
+        present.lines = (0, util_1.unique)([...(present.lines ?? []), ...inferred]);
+        present.empty = !(present.lines ?? []).length;
+    }
+    if (!sceneMatches) return;
+    const timeMatch = context.match(/(?:推进到|当前游戏时间|游戏时间|当前时间|时间)[ \t]*(?:为|是|到|[：:])?[ \t]*((?:凌晨|清晨|黎明|晨间|早晨|上午|正午|中午|午后|下午|傍晚|黄昏|日落暮色|暮色|夜初|夜晚|深夜|午夜|子夜|白昼|白天))/u);
+    const time = String(timeMatch?.[1] ?? '').trim();
+    const snapshot = ensureSection(block, '当前状态');
+    const facts = [
+        `当前场景为${block.name}`,
+        inferred.length ? `当前在场者为${(0, util_1.unique)(inferred).join('、')}` : '',
+        time ? `时间为${time}` : '',
+    ].filter(Boolean).join('，');
+    if (facts) snapshot.lines = (0, util_1.unique)([...(snapshot.lines ?? []), facts]);
+    snapshot.empty = !(snapshot.lines ?? []).length;
 }
 
 function revealsExistingIdentity(block, entries, contextText) {
@@ -4238,6 +4572,20 @@ function sceneSettlementOperations(blocks, entries) {
     const previous = previousCurrentScene(entries, incomingTitle);
     if (!previous) return [];
     const operations = [];
+    const previousState = previous.sections?.values?.['当前状态'] ?? [];
+    const previousPresent = previous.sections?.values?.['在场'] ?? [];
+    const historicalLines = (0, util_1.unique)([
+        ...previousState.slice(-1).map((line) => `离场时状态：${stripSlot(line)}`),
+        ...(previousState.length ? [] : previousPresent.length ? [`离场时在场：${previousPresent.flatMap(splitNames).join('、')}`] : []),
+    ]).filter(Boolean);
+    for (const line of historicalLines) {
+        operations.push({
+            id: `scene-settle-history|${previous.uid}|${(0, util_1.hashText)(line)}`,
+            kind: 'append-line', operation: 'append', title: previous.title, targetUid: previous.uid,
+            section: '固定事实', newValue: line,
+            reason: `离开当前场景“${previous.name}”，保留一条过去时场景锚点`,
+        });
+    }
     for (const section of ['当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束']) {
         const current = previous.sections?.values?.[section] ?? [];
         if (!current.length) continue;
@@ -4273,7 +4621,7 @@ function deriveCurrentGameTime(blocks, previous = null) {
     const lines = (scene.sections ?? [])
         .filter((section) => /^(?:当前状态|定义)$/u.test(String(section.name ?? '')))
         .flatMap((section) => section.lines ?? []);
-    const match = lines.map((line) => String(line ?? '').match(/^\s*(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*[：:]\s*(.+)$/u)).find(Boolean);
+    const match = lines.map((line) => String(line ?? '').match(/(?:^|[，。；;\s])(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])\s*([^，。；;]+)/u)).find(Boolean);
     if (!match) return previous ? structuredClone(previous) : null;
     const label = String(match[1] ?? '').trim();
     if (!label) return previous ? structuredClone(previous) : null;
@@ -4299,6 +4647,12 @@ function activeContext(entries, focusUid = '', preferredSceneTitle = '') {
     const scene = preferred ?? scenes[0] ?? null;
     const names = new Set();
     for (const line of scene?.sections?.values?.['在场'] ?? []) for (const name of splitNames(line)) names.add(name);
+    if (!names.size) {
+        for (const line of scene?.sections?.values?.['当前状态'] ?? []) {
+            const match = String(line ?? '').match(/(?:当前)?在场(?:者|人物)?\s*(?:为|是|有|包括|包含|：|:)\s*([^，。；;]+)/u);
+            if (match) for (const name of splitNames(match[1])) names.add(name);
+        }
+    }
     const openEvents = list.filter((entry) => entry.type === '事件' && !['completed', 'terminated', 'archived'].includes(currentEventState(entry)));
     const activeEvents = selectCurrentEvents(openEvents, scene, names);
     for (const event of activeEvents) for (const line of event.sections?.values?.['参与'] ?? []) for (const name of splitNames(line)) names.add(name);
@@ -4393,7 +4747,7 @@ class HostAdapter {
     }
     chatKey() {
         const context = this.context();
-        const chatId = context.getCurrentChatId?.() ?? context.chatId ?? context.chat_metadata?.chat_id;
+        const chatId = context.getCurrentChatId?.() ?? context.chatId;
         if (chatId === null || chatId === undefined || String(chatId) === '') return '';
         const scope = context.groupId !== null && context.groupId !== undefined
             ? `group:${context.groupId}`
@@ -4410,7 +4764,7 @@ class HostAdapter {
         const context = this.context();
         // [MA-WB-SCOPE-01] 当前聊天在 SillyTavern 中绑定的世界书是唯一写入目标。
         // 旧版 targetLorebook 是全局隐藏覆盖项，会把不同聊天分叉到另一本文字同名或旧名称世界书；运行时不再读取它。
-        const assigned = String(context.chatMetadata?.world_info || context.chat_metadata?.world_info || '').trim();
+        const assigned = String(context.chatMetadata?.world_info || '').trim();
         if (assigned || !settings.autoCreateLorebook) return assigned;
         const display = (0, util_1.safeId)(context.name2 || context.name1 || 'Chat') || 'Chat';
         const suffix = (0, util_1.hashText)(this.chatKey() || `${this.roleKey()}|${context.getCurrentChatId?.() ?? context.chatId ?? ''}`).slice(-6) || 'chat';
@@ -4462,11 +4816,13 @@ class HostAdapter {
             try { return [id, sanitizeConnectionValue(service?.getProfile?.(id))]; }
             catch { return [id, null]; }
         });
+        const chatSettings = context.chatCompletionSettings ?? {};
+        const textSettings = context.textCompletionSettings ?? {};
         return {
-            mainApi: String(context.mainApi ?? context.main_api ?? ''),
-            chatCompletionSource: String(context.chatCompletionSettings?.source ?? context.chat_completion_source ?? ''),
-            chatCompletionModel: String(context.chatCompletionSettings?.model ?? context.chat_completion_model ?? ''),
-            textGenerationType: String(context.textgenerationwebui_settings?.type ?? ''),
+            mainApi: String(context.mainApi ?? ''),
+            chatCompletionSource: String(chatSettings.chat_completion_source ?? chatSettings.source ?? ''),
+            chatCompletionModel: readCurrentModel(context),
+            textGenerationType: String(textSettings.type ?? textSettings.api_type ?? ''),
             profiles,
         };
     }
@@ -4563,7 +4919,7 @@ class HostAdapter {
     }
     subscribe(eventName, handler, required = false) {
         const context = this.context();
-        const events = context.eventTypes ?? context.event_types ?? {};
+        const events = context.eventTypes ?? {};
         const event = events[eventName];
         if (!event) {
             if (required) throw new Error(`SillyTavern 未提供事件 ${eventName}`);
@@ -4676,15 +5032,18 @@ class HostAdapter {
                 // [MA-HOST-MODEL-04] Profile 的 API 类型、服务器 URL、端口、模型与密钥全部由
                 // SillyTavern ConnectionManagerRequestService 从已保存 Profile 读取。插件不拼接 URL、
                 // 不追加 /v1 或 /chat/completions，也不通过 override payload 改写路由字段。
+                const requestController = typeof AbortController === 'function' ? new AbortController() : null;
                 request = service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
                 ], responseLength, {
                     stream: false,
+                    signal: requestController?.signal ?? null,
                     extractData: true,
                     includePreset: generationOptions?.includePreset !== false,
                     includeInstruct: generationOptions?.includeInstruct !== false,
                 }, {});
+                generationOptions = { ...generationOptions, requestController };
             }
             else {
                 // [MA-HOST-MODEL-01] 当前连接优先使用 SillyTavern 官方“原始响应 + 官方解析器”组合。
@@ -4711,11 +5070,10 @@ class HostAdapter {
         }
         let raw;
         try {
-            raw = await withTimeout(request, timeoutMs, () => {
-                if (snapshot.token) {
-                    snapshot.token.cancelled = true;
-                    snapshot.token.reason = `模型调用超时（${timeoutMs}ms）`;
-                }
+            raw = await waitForModelRequest(request, {
+                timeoutMs,
+                token: snapshot.token,
+                controller: generationOptions?.requestController ?? null,
             });
         }
         catch (error) {
@@ -4790,6 +5148,8 @@ class HostAdapter {
     async replaceAssistantText(snapshot, text, currentSettings) {
         this.assertSnapshot(snapshot, currentSettings);
         const context = this.context();
+        const expectedChatKey = snapshot.chatKey || this.chatKey();
+        const expectedChatInstance = context.chat;
         const chat = context.chat ?? [];
         const message = chat[snapshot.messageIndex];
         if (!isAssistant(message)) throw new Error('待修正正文已经不存在');
@@ -4813,6 +5173,8 @@ class HostAdapter {
             if (extra && hadDisplayText) delete extra.display_text;
             this.updateMessageBlock(snapshot.messageIndex, message);
             await this.saveChat();
+            if (this.chatKey() !== expectedChatKey || this.context().chat !== expectedChatInstance)
+                throw new Error('正文保存期间聊天作用域已经变化');
             await Promise.resolve();
             const persisted = this.verifyAssistantReplacement(snapshot.messageIndex, nextText, swipeIndex);
             this.updateMessageBlock(snapshot.messageIndex, persisted);
@@ -4823,7 +5185,16 @@ class HostAdapter {
             if (extra && hadDisplayText) extra.display_text = originalDisplayText;
             try { this.updateMessageBlock(snapshot.messageIndex, message); }
             catch { }
-            throw new Error(`修正版正文保存失败，已恢复原正文：${(0, util_1.errorText)(error)}`);
+            try {
+                if (this.chatKey() !== expectedChatKey || this.context().chat !== expectedChatInstance)
+                    throw new Error('聊天作用域已经变化；已恢复原聊天内存，未向新聊天执行反向保存');
+                await this.saveChat();
+                throw new Error(`修正版正文保存失败，已恢复并重新保存原正文：${(0, util_1.errorText)(error)}`);
+            }
+            catch (rollbackError) {
+                if (/已恢复并重新保存原正文/u.test(String(rollbackError?.message || ''))) throw rollbackError;
+                throw new Error(`修正版正文保存失败，且原正文反向保存失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+            }
         }
         const turn = this.latestTurn(snapshot.messageIndex);
         return {
@@ -4861,17 +5232,10 @@ class HostAdapter {
         const hadCursor = Object.prototype.hasOwnProperty.call(root, 'cursor');
         const previous = hadCursor ? structuredClone(root.cursor) : undefined;
         root.cursor = structuredClone(cursor);
-        try {
-            await this.saveMetadata();
-            if (snapshot) this.assertSnapshot(snapshot, currentSettings);
-        }
-        catch (error) {
-            if (hadCursor)
-                root.cursor = previous;
-            else
-                delete root.cursor;
-            throw error;
-        }
+        await this.persistMetadataMutation(() => {
+            if (hadCursor) root.cursor = previous;
+            else delete root.cursor;
+        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '处理游标保存');
     }
     getCurrentGameTime() {
         const value = this.chatNamespace().currentGameTime;
@@ -4890,16 +5254,11 @@ class HostAdapter {
         const root = this.chatNamespace();
         if (next) root.currentGameTime = structuredClone(next);
         else delete root.currentGameTime;
-        try {
-            await this.saveMetadata();
-            if (snapshot) this.assertSnapshot(snapshot, currentSettings);
-            return true;
-        }
-        catch (error) {
+        await this.persistMetadataMutation(() => {
             if (previous) root.currentGameTime = previous;
             else delete root.currentGameTime;
-            throw error;
-        }
+        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '游戏时间保存');
+        return true;
     }
     getCommitReceipts() {
         const receipts = this.chatNamespace().commitReceipts;
@@ -4913,12 +5272,11 @@ class HostAdapter {
         const numericLimit = Math.max(0, Number(limit) || 0);
         const next = numericLimit > 0 ? merged.slice(-numericLimit) : merged;
         root.commitReceipts = next;
-        try { await this.saveMetadata(); return true; }
-        catch (error) {
+        await this.persistMetadataMutation(() => {
             if (previous.length) root.commitReceipts = previous;
             else delete root.commitReceipts;
-            throw error;
-        }
+        }, null, '写入回执保存');
+        return true;
     }
     async removeCommitReceipts(ids = []) {
         const targets = new Set((Array.isArray(ids) ? ids : [ids]).map((value) => String(value ?? '')).filter(Boolean));
@@ -4929,12 +5287,11 @@ class HostAdapter {
         if (next.length === previous.length) return false;
         if (next.length) root.commitReceipts = next;
         else delete root.commitReceipts;
-        try { await this.saveMetadata(); return true; }
-        catch (error) {
+        await this.persistMetadataMutation(() => {
             if (previous.length) root.commitReceipts = previous;
             else delete root.commitReceipts;
-            throw error;
-        }
+        }, null, '写入回执删除');
+        return true;
     }
     getFocusUid() { return String(this.chatNamespace().focusUid ?? '').trim(); }
     async setFocusUid(uid) {
@@ -4945,48 +5302,47 @@ class HostAdapter {
         const previousTitle = root.focusTitle;
         root.focusUid = String(uid ?? '').trim();
         delete root.focusTitle;
-        try {
-            await this.saveMetadata();
-        }
-        catch (error) {
-            if (hadUid)
-                root.focusUid = previousUid;
-            else
-                delete root.focusUid;
-            if (hadTitle)
-                root.focusTitle = previousTitle;
-            else
-                delete root.focusTitle;
-            throw error;
-        }
-    }
-    getFocusTitle() { return String(this.chatNamespace().focusTitle ?? '').trim(); }
-    async setFocusTitle(title) {
-        const root = this.chatNamespace();
-        const hadTitle = Object.prototype.hasOwnProperty.call(root, 'focusTitle');
-        const previousTitle = root.focusTitle;
-        root.focusTitle = String(title ?? '').trim();
-        try {
-            await this.saveMetadata();
-        }
-        catch (error) {
-            if (hadTitle)
-                root.focusTitle = previousTitle;
-            else
-                delete root.focusTitle;
-            throw error;
-        }
+        await this.persistMetadataMutation(() => {
+            if (hadUid) root.focusUid = previousUid;
+            else delete root.focusUid;
+            if (hadTitle) root.focusTitle = previousTitle;
+            else delete root.focusTitle;
+        }, null, '焦点 UID 保存');
     }
     async saveMetadata() {
         const context = this.context();
-        if (typeof context.saveMetadata === 'function') await context.saveMetadata();
-        else context.saveMetadataDebounced?.();
+        if (typeof context.saveMetadata !== 'function') throw new Error('SillyTavern 未提供聊天元数据保存接口 saveMetadata');
+        await context.saveMetadata();
+    }
+    async persistMetadataMutation(rollback, verify, label) {
+        const expectedChatKey = this.chatKey();
+        const expectedMetadata = this.context().chatMetadata;
+        try {
+            await this.saveMetadata();
+            if (this.chatKey() !== expectedChatKey || this.context().chatMetadata !== expectedMetadata)
+                throw new Error('元数据保存期间聊天作用域已经变化');
+            verify?.();
+        }
+        catch (error) {
+            try { rollback?.(); }
+            catch (rollbackMutationError) {
+                throw new Error(`${label}失败，且内存回滚失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackMutationError)}`);
+            }
+            try {
+                if (this.chatKey() !== expectedChatKey || this.context().chatMetadata !== expectedMetadata)
+                    throw new Error('聊天作用域已经变化；已恢复原聊天内存，未向新聊天执行反向保存');
+                await this.saveMetadata();
+            }
+            catch (rollbackSaveError) {
+                throw new Error(`${label}失败，且旧元数据反向保存失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackSaveError)}`);
+            }
+            throw new Error(`${label}失败，已恢复并重新保存旧元数据：${(0, util_1.errorText)(error)}`);
+        }
     }
     async saveChat() {
         const context = this.context();
-        if (typeof context.saveChat === 'function') return context.saveChat();
-        if (typeof context.saveChatConditional === 'function') return context.saveChatConditional();
-        throw new Error('SillyTavern 未提供聊天保存接口');
+        if (typeof context.saveChat !== 'function') throw new Error('SillyTavern 未提供聊天保存接口 saveChat');
+        return context.saveChat();
     }
 
     /**
@@ -4995,9 +5351,10 @@ class HostAdapter {
      */
     captureDiagnosticTransaction() {
         const context = this.context();
-        const metadata = context.chatMetadata ?? context.chat_metadata ?? {};
+        const metadata = context.chatMetadata ?? {};
         return {
             chatKey: this.chatKey(),
+            roleKey: this.roleKey(),
             chat: (0, util_1.clone)(Array.isArray(context.chat) ? context.chat : []),
             metadata: (0, util_1.clone)(metadata),
             messageCount: Array.isArray(context.chat) ? context.chat.length : 0,
@@ -5009,7 +5366,7 @@ class HostAdapter {
         const context = this.context();
         const chat = context.chat ?? [];
         const before = chat.length;
-        const execute = context.executeSlashCommandsWithOptions ?? context.executeSlashCommands;
+        const execute = context.executeSlashCommandsWithOptions;
         if (typeof execute !== 'function') throw new Error('SillyTavern 未提供 STscript 执行接口，无法自动发送测试消息');
         const body = String(text ?? '').replace(/[|\r\n]+/gu, ' ').trim();
         if (!body) throw new Error('自动验收测试消息为空');
@@ -5024,27 +5381,75 @@ class HostAdapter {
         const context = this.context();
         const chat = context.chat ?? [];
         const before = chat.length;
-        const execute = context.executeSlashCommandsWithOptions ?? context.executeSlashCommands;
+        const execute = context.executeSlashCommandsWithOptions;
         if (typeof execute !== 'function') throw new Error('SillyTavern 未提供 STscript /trigger 接口');
-        await withTimeout(execute('/trigger', { handleParserErrors: true, source: 'mirror-abyss-diagnostic' }), timeoutMs, () => {
-            try { context.stopGeneration?.(); } catch { }
-        });
-        const deadline = Date.now() + 4000;
-        while (Date.now() < deadline) {
+        let interval = null;
+        const cleanups = [];
+        let found = null;
+        const inspect = () => {
             for (let index = chat.length - 1; index >= before; index -= 1) {
-                if (isAssistant(chat[index])) {
-                    const text = String(chat[index].mes ?? '');
-                    return {
-                        index,
-                        chars: text.length,
-                        hash: (0, util_1.hashText)(text),
-                        completeEnding: /[。！？!?…」』）)】]$/u.test(text.trim()),
-                    };
-                }
+                if (!isAssistant(chat[index])) continue;
+                const text = String(chat[index].mes ?? '');
+                found = {
+                    index,
+                    chars: text.length,
+                    hash: (0, util_1.hashText)(text),
+                    completeEnding: /[。！？!?…」』）)】]$/u.test(text.trim()),
+                };
+                return found;
             }
-            await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
+            return null;
+        };
+        let resolveAssistant;
+        let stableHash = '';
+        let stableTicks = 0;
+        const assistantReady = new Promise((resolve) => { resolveAssistant = resolve; });
+        const wake = () => {
+            const result = inspect();
+            // STscript /trigger may resolve as soon as streaming starts.  A newly
+            // inserted "..." message is only a placeholder, not the final reply.
+            // Require a plausible complete ending and one second of stable text.
+            if (!result || result.chars < 8 || !result.completeEnding) {
+                stableHash = '';
+                stableTicks = 0;
+                return;
+            }
+            if (result.hash === stableHash) stableTicks += 1;
+            else {
+                stableHash = result.hash;
+                stableTicks = 1;
+            }
+            if (stableTicks >= 20) resolveAssistant(result);
+        };
+        try {
+            for (const eventName of ['MESSAGE_RECEIVED', 'GENERATION_ENDED']) {
+                try { cleanups.push(this.subscribe(eventName, wake, false)); }
+                catch { }
+            }
+            interval = globalThis.setInterval(wake, 50);
+            interval?.unref?.();
+            wake();
+            const trigger = Promise.resolve(execute('/trigger', { handleParserErrors: true, source: 'mirror-abyss-diagnostic' }));
+            await withTimeout(Promise.all([trigger, assistantReady]), timeoutMs, () => {
+                try { context.stopGeneration?.(); } catch { }
+            });
+            // Always re-read after both /trigger and the stable-final detector settle.
+            const result = inspect();
+            if (!result) throw new Error('主正文生成完成后没有形成新的 AI 消息');
+            return result;
         }
-        throw new Error('主正文生成结束后没有新增 AI 消息');
+        catch (error) {
+            if (/模型调用超时/u.test(String(error?.message || ''))) {
+                throw new Error(`主正文生成在 ${timeoutMs}ms 内没有形成新的 AI 消息`);
+            }
+            throw error;
+        }
+        finally {
+            if (interval) globalThis.clearInterval(interval);
+            for (const cleanup of cleanups.splice(0)) {
+                try { cleanup?.(); } catch { }
+            }
+        }
     }
     async appendDiagnosticAssistantTurn(playerText, assistantText) {
         const player = await this.sendDiagnosticUserMessage(playerText);
@@ -5064,16 +5469,47 @@ class HostAdapter {
         return { playerIndex: player.index, assistantIndex: chat.length - 1, assistantHash: (0, util_1.hashText)(message.mes) };
     }
     async restoreDiagnosticTransaction(transaction) {
-        if (!transaction || transaction.chatKey !== this.chatKey()) throw new Error('验收恢复时聊天作用域已经变化');
-        const context = this.context();
-        const chat = context.chat ?? [];
-        chat.splice(0, chat.length, ...(0, util_1.clone)(transaction.chat ?? []));
-        const targetMetadata = context.chatMetadata ?? context.chat_metadata;
-        if (!targetMetadata || typeof targetMetadata !== 'object') throw new Error('SillyTavern 聊天元数据不可写');
-        for (const key of Object.keys(targetMetadata)) delete targetMetadata[key];
-        Object.assign(targetMetadata, (0, util_1.clone)(transaction.metadata ?? {}));
-        await this.saveChat();
-        await this.saveMetadata();
+        if (!transaction || transaction.chatKey !== this.chatKey() || (transaction.roleKey && transaction.roleKey !== this.roleKey()))
+            throw new Error('验收恢复时聊天作用域已经变化');
+        // SillyTavern is allowed to replace getContext(), chat and chatMetadata object
+        // identities after saveChat/saveMetadata.  Production safety is therefore based
+        // on the stable chat/role keys, not JavaScript reference identity.
+        const assertOriginalScope = () => {
+            if (transaction.chatKey !== this.chatKey() || (transaction.roleKey && transaction.roleKey !== this.roleKey()))
+                throw new Error('验收恢复期间聊天作用域已经变化');
+        };
+        const applySnapshotToCurrentContext = () => {
+            assertOriginalScope();
+            const current = this.context();
+            const chat = current.chat;
+            const metadata = current.chatMetadata;
+            if (!Array.isArray(chat)) throw new Error('SillyTavern 聊天正文不可写');
+            if (!metadata || typeof metadata !== 'object') throw new Error('SillyTavern 聊天元数据不可写');
+            chat.splice(0, chat.length, ...(0, util_1.clone)(transaction.chat ?? []));
+            for (const key of Object.keys(metadata)) delete metadata[key];
+            Object.assign(metadata, (0, util_1.clone)(transaction.metadata ?? {}));
+            return { chat, metadata };
+        };
+        applySnapshotToCurrentContext();
+        const persistRestored = async (action, label) => {
+            let lastError = null;
+            for (let attempt = 1; attempt <= 2; attempt += 1) {
+                try {
+                    applySnapshotToCurrentContext();
+                    await action();
+                    assertOriginalScope();
+                    return attempt;
+                }
+                catch (error) {
+                    lastError = error;
+                    if (attempt < 2) await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
+                }
+            }
+            throw new Error(`${label}连续2次失败：${(0, util_1.errorText)(lastError)}`);
+        };
+        const chatSaveAttempts = await persistRestored(() => this.saveChat(), '验收聊天快照保存');
+        const metadataSaveAttempts = await persistRestored(() => this.saveMetadata(), '验收元数据快照保存');
+        const finalState = applySnapshotToCurrentContext();
         if (typeof document !== 'undefined') {
             const originalCount = Number(transaction.messageCount || 0);
             const nodes = [...document.querySelectorAll('#chat .mes, .mes[mesid]')];
@@ -5082,11 +5518,11 @@ class HostAdapter {
                 if (Number.isInteger(id) && id >= originalCount) node.remove();
             }
         }
-        const restoredChatDigest = chatFingerprint(chat);
-        const restoredMetadataDigest = (0, util_1.hashText)(JSON.stringify(targetMetadata ?? {}));
+        const restoredChatDigest = chatFingerprint(finalState.chat);
+        const restoredMetadataDigest = (0, util_1.hashText)(JSON.stringify(finalState.metadata ?? {}));
         if (restoredChatDigest !== transaction.chatDigest) throw new Error('验收结束后聊天正文未恢复到原快照');
         if (restoredMetadataDigest !== transaction.metadataDigest) throw new Error('验收结束后聊天元数据未恢复到原快照');
-        return { messageCount: chat.length, chatDigest: restoredChatDigest, metadataDigest: restoredMetadataDigest };
+        return { messageCount: finalState.chat.length, chatDigest: restoredChatDigest, metadataDigest: restoredMetadataDigest, chatSaveAttempts, metadataSaveAttempts };
     }
     async resetCurrentChatState() {
         const context = this.context();
@@ -5094,29 +5530,25 @@ class HostAdapter {
         const hadState = Object.prototype.hasOwnProperty.call(metadata, constants_1.EXTENSION_NAMESPACE);
         const previous = hadState ? (0, util_1.clone)(metadata[constants_1.EXTENSION_NAMESPACE]) : undefined;
         delete metadata[constants_1.EXTENSION_NAMESPACE];
-        try {
-            await this.saveMetadata();
-        }
-        catch (error) {
+        await this.persistMetadataMutation(() => {
             if (hadState) metadata[constants_1.EXTENSION_NAMESPACE] = previous;
-            throw error;
-        }
+        }, null, '当前聊天插件状态重置');
         return hadState;
     }
     diagnostics() {
         let context = null;
         try { context = this.context(); }
         catch (error) { return { version: 1, error: (0, util_1.errorText)(error) }; }
-        const events = context.eventTypes ?? context.event_types ?? {};
+        const events = context.eventTypes ?? {};
         return {
             chatKey: this.chatKey(),
             generateRaw: typeof context.generateRaw === 'function',
             generateRawData: typeof context.generateRawData === 'function',
             extractMessageFromData: typeof context.extractMessageFromData === 'function',
             connectionProfiles: Boolean(context.ConnectionManagerRequestService),
-            mainApi: String(context.mainApi ?? context.main_api ?? ''),
+            mainApi: String(context.mainApi ?? ''),
             currentModel: readCurrentModel(context),
-            saveChat: typeof context.saveChat === 'function' || typeof context.saveChatConditional === 'function',
+            saveChat: typeof context.saveChat === 'function',
             saveMetadata: typeof context.saveMetadata === 'function' || typeof context.saveMetadataDebounced === 'function',
             events: Object.keys(events).filter((key) => /CHAT|MESSAGE|APP_READY/u.test(key)).sort(),
             assignedWorldbook: String(context.chatMetadata?.world_info ?? ''),
@@ -5125,11 +5557,16 @@ class HostAdapter {
     ensureMessageKey(index, message) {
         const existing = readMessageKey(message);
         if (existing) return existing;
-        const generated = this.context().uuidv4?.() ?? randomId();
+        const stableSource = [
+            this.chatKey(),
+            Number(index),
+            String(message?.send_date ?? ''),
+            String(message?.name ?? ''),
+            String(message?.mes ?? ''),
+        ].join('|');
+        const generated = `ma-${(0, util_1.hashText)(stableSource)}`;
         const extra = (message.extra ?? (message.extra = {}));
         extra[constants_1.EXTENSION_NAMESPACE] = { ...(extra[constants_1.EXTENSION_NAMESPACE] ?? {}), messageKey: generated };
-        this.updateMessageBlock(index, message);
-        void this.saveChat();
         return generated;
     }
     updateMessageBlock(index, message) {
@@ -5191,7 +5628,6 @@ function previousPlayerMessage(chat, before) {
     }
     return { index: -1, text: '' };
 }
-function previousPlayerText(chat, before) { return previousPlayerMessage(chat, before).text; }
 function dialogueContextBeforeTurn(chat, playerIndex, maxMessages = 4) {
     if (!Number.isInteger(playerIndex) || playerIndex <= 0) return '';
     const selected = [];
@@ -5227,6 +5663,47 @@ function chatFingerprint(chat) {
         swipe: Number.isInteger(message?.swipe_id) ? Number(message.swipe_id) : null,
     }))));
 }
+function waitForModelRequest(promise, { timeoutMs, token, controller }) {
+    let timer;
+    let cancelPoll;
+    const abortRequest = (reason) => {
+        if (!controller || controller.signal?.aborted) return;
+        try { controller.abort(reason); }
+        catch { try { controller.abort(); } catch { } }
+    };
+    const control = new Promise((_, reject) => {
+        const rejectCancelled = () => {
+            const reason = String(token?.reason || '任务已取消');
+            abortRequest(reason);
+            reject(new Error(reason));
+        };
+        if (token?.cancelled) {
+            rejectCancelled();
+            return;
+        }
+        if (Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0) {
+            timer = globalThis.setTimeout(() => {
+                const reason = `模型调用超时（${timeoutMs}ms）`;
+                if (token) {
+                    token.cancelled = true;
+                    token.reason = reason;
+                }
+                abortRequest(reason);
+                reject(new Error(reason));
+            }, Number(timeoutMs));
+        }
+        if (token) {
+            cancelPoll = globalThis.setInterval(() => {
+                if (token.cancelled) rejectCancelled();
+            }, 25);
+            cancelPoll?.unref?.();
+        }
+    });
+    return Promise.race([Promise.resolve(promise), control]).finally(() => {
+        if (timer) globalThis.clearTimeout(timer);
+        if (cancelPoll) globalThis.clearInterval(cancelPoll);
+    });
+}
 function withTimeout(promise, timeoutMs, onTimeout) {
     let timer;
     const timeout = new Promise((_, reject) => {
@@ -5243,7 +5720,7 @@ function extractModelText(raw, context = null) {
     // [MA-HOST-MODEL-02] 先让 SillyTavern 用当前 API 的官方解析器处理原始响应。
     if (context && typeof context.extractMessageFromData === 'function' && typeof raw === 'object') {
         try {
-            const official = context.extractMessageFromData(raw, context.mainApi ?? context.main_api ?? null);
+            const official = context.extractMessageFromData(raw, context.mainApi ?? null);
             const officialText = finalTextValue(official);
             if (officialText.trim()) return officialText;
         }
@@ -5334,7 +5811,7 @@ function describeModelResponse(raw) {
     return `${ctor}{${keys.join(',') || '无字段'}}`;
 }
 function describeModelRoute(context, profileId) {
-    const mainApi = String(context.mainApi ?? context.main_api ?? '').trim() || '未知';
+    const mainApi = String(context.mainApi ?? '').trim() || '未知';
     if (profileId) {
         let profile = null;
         try { profile = context.ConnectionManagerRequestService?.getProfile?.(profileId) ?? null; }
@@ -5417,11 +5894,7 @@ function readCurrentModel(context) {
     catch { /* ignore host getter failure */ }
     return String(
         context.chatCompletionSettings?.model
-        ?? context.chat_completion_model
-        ?? context.textgenerationwebui_settings?.model
-        ?? context.textgenerationwebui_settings?.model_name
-        ?? context.textgenerationwebui_settings?.vllm_model
-        ?? context.textgenerationwebui_settings?.ollama_model
+        ?? readModelFromObject(context.textCompletionSettings)
         ?? '',
     ).trim();
 }
@@ -5604,7 +6077,6 @@ exports.buildEntryIndex = buildEntryIndex;
 exports.matchBlock = matchBlock;
 exports.selectBestCandidate = selectBestCandidate;
 exports.relevantEntries = relevantEntries;
-exports.titleTokens = titleTokens;
 exports.sameEntryIdentity = sameEntryIdentity;
 exports.explicitContextIdentity = explicitContextIdentity;
 exports.isProvisionalName = isProvisionalName;
@@ -5795,10 +6267,6 @@ function relevantEntries(entries, text, limit = 24) {
     return merged.slice(0, limit);
 }
 
-function titleTokens(value) {
-    const split = (0, util_1.splitTitle)(value);
-    return (0, util_1.unique)([split?.type, split?.name, value].map((item) => (0, util_1.normalizeFact)(String(item ?? ''))));
-}
 function sameEntryIdentity(left, right) {
     if (!left || !right) return false;
     if (String(left.uid ?? '') && String(left.uid ?? '') === String(right.uid ?? '')) return true;
@@ -6184,85 +6652,123 @@ class MemoryRunner {
         if (chatKey) this.statusByChat.delete(chatKey);
         else this.statusByChat.clear();
     }
-    async processTurn(settings, snapshot) {
-        const cursor = this.host.cursor();
-        if (cursor.lastProcessedMessageKey === snapshot.messageKey && cursor.lastProcessedHash === snapshot.contentHash) {
-            this.setStatus(snapshot.chatKey, 'complete', '该正文已经完整处理，跳过重复任务');
-            return [];
-        }
-        try {
-            this.setStatus(snapshot.chatKey, 'reading', '读取最终正文与相关世界书条目');
-            const extraction = await this.extract(settings, snapshot);
-            await this.advanceSummarySchedule(settings, snapshot, cursor, extraction.criticalChanges || 0);
-            this.setStatus(snapshot.chatKey, 'complete', '核心事实已提交，总结调度完成');
-            return taskResultEntries(extraction);
-        } catch (error) {
-            this.setStatus(snapshot.chatKey, 'error', '当前步骤失败，后续步骤已停止', (0, util_1.errorText)(error));
-            throw error;
-        }
+    async runExtractionOnly(settings, snapshot) {
+        // The deterministic acceptance chain validates the parser/governance,
+        // matcher, transaction, authoritative reread and activity-pack path
+        // independently of model formatting variance. Real model ENTRY output
+        // is exercised by the separate extraction-protocol hard gate.
+        const result = await this.extract(settings, snapshot, { deterministicOnly: true });
+        this.setStatus(snapshot.chatKey, 'complete', '诊断提取与写入完成');
+        return taskResultEntries(result);
     }
     async runTask(kind, settings, snapshot) {
         if (kind === 'extraction') {
             const cursor = this.host.cursor();
             const result = await this.extract(settings, snapshot);
-            await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0);
+            await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0, result);
             this.setStatus(snapshot.chatKey, 'complete', '提取与总结调度完成');
             return taskResultEntries(result);
         }
         if (kind === 'smallSummary') {
             const result = await this.summarize('small', settings, snapshot);
+            const committed = [result];
             const cursor = this.host.cursor();
             let smallCountSinceLarge = cursor.smallCountSinceLarge + (result.changed ? 1 : 0);
-            if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
-                const large = await this.summarize('large', settings, snapshot);
-                if (large.changed) smallCountSinceLarge = 0;
+            try {
+                if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
+                    const large = await this.summarize('large', settings, snapshot);
+                    committed.push(large);
+                    if (large.changed) smallCountSinceLarge = 0;
+                }
+                await this.host.saveCursor({
+                    ...cursor,
+                    turnsSinceSmall: result.changed ? 0 : cursor.turnsSinceSmall,
+                    criticalChangesSinceSmall: result.changed ? 0 : cursor.criticalChangesSinceSmall,
+                    smallCountSinceLarge,
+                }, snapshot, this.getSettings());
             }
-            await this.host.saveCursor({
-                ...cursor,
-                turnsSinceSmall: result.changed ? 0 : cursor.turnsSinceSmall,
-                criticalChangesSinceSmall: result.changed ? 0 : cursor.criticalChangesSinceSmall,
-                smallCountSinceLarge,
-            }, snapshot, this.getSettings());
+            catch (error) {
+                await this.rollbackCommittedResults(settings, snapshot, committed, result.previousGameTime, error, '小总结回合');
+            }
             this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : '小总结无更新');
             return taskResultEntries(result);
         }
         const result = await this.summarize('large', settings, snapshot);
         const cursor = this.host.cursor();
-        await this.host.saveCursor({ ...cursor, smallCountSinceLarge: result.changed ? 0 : cursor.smallCountSinceLarge }, snapshot, this.getSettings());
+        try {
+            await this.host.saveCursor({ ...cursor, smallCountSinceLarge: result.changed ? 0 : cursor.smallCountSinceLarge }, snapshot, this.getSettings());
+        }
+        catch (error) {
+            await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, error, '大总结回合');
+        }
         this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结无更新');
         return taskResultEntries(result);
     }
-    async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0) {
+    async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0, rootResult = null) {
+        const committed = rootResult ? [rootResult] : [];
+        const previousGameTime = rootResult?.previousGameTime ?? (typeof this.host.getCurrentGameTime === 'function' ? this.host.getCurrentGameTime() : null);
         let turnsSinceSmall = Number(cursor.turnsSinceSmall || 0) + 1;
         let criticalChangesSinceSmall = Number(cursor.criticalChangesSinceSmall || 0) + Math.max(0, Number(criticalChanges || 0));
         let smallCountSinceLarge = Number(cursor.smallCountSinceLarge || 0);
-        const turnReady = turnsSinceSmall >= settings.smallSummaryTurns;
-        const changeReady = criticalChangesSinceSmall >= settings.criticalChangesForSmall;
-        if (settings.autoSmallSummary !== false && (turnReady || changeReady)) {
-            const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `累计${criticalChangesSinceSmall}个关键变化`;
-            this.progress('running', `${reason}，开始小总结与分发`, { titles: ['总结｜当前事件'], criticalChanges: criticalChangesSinceSmall });
-            const small = await this.summarize('small', settings, snapshot);
-            if (small.changed) {
-                turnsSinceSmall = 0;
-                criticalChangesSinceSmall = 0;
-                smallCountSinceLarge += 1;
+        try {
+            const turnReady = turnsSinceSmall >= settings.smallSummaryTurns;
+            const changeReady = criticalChangesSinceSmall >= settings.criticalChangesForSmall;
+            if (settings.autoSmallSummary !== false && (turnReady || changeReady)) {
+                const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `累计${criticalChangesSinceSmall}个关键变化`;
+                this.progress('running', `${reason}，开始小总结与分发`, { titles: ['总结｜当前事件'], criticalChanges: criticalChangesSinceSmall });
+                const small = await this.summarize('small', settings, snapshot);
+                committed.push(small);
+                if (small.changed) {
+                    turnsSinceSmall = 0;
+                    criticalChangesSinceSmall = 0;
+                    smallCountSinceLarge += 1;
+                }
+            }
+            if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
+                this.progress('running', `累计${settings.largeSummaryCount}个小总结，开始大总结、沉降与分发`, { titles: ['总结｜世界历史'] });
+                const large = await this.summarize('large', settings, snapshot);
+                committed.push(large);
+                if (large.changed) smallCountSinceLarge = 0;
+            }
+            await this.host.saveCursor({
+                ...cursor,
+                lastProcessedMessageKey: snapshot.messageKey,
+                lastProcessedHash: snapshot.contentHash,
+                turnsSinceSmall,
+                criticalChangesSinceSmall,
+                smallCountSinceLarge,
+            }, snapshot, this.getSettings());
+        }
+        catch (error) {
+            await this.rollbackCommittedResults(settings, snapshot, committed, previousGameTime, error, '正文处理回合');
+        }
+    }
+    async rollbackCommittedResults(settings, snapshot, results, previousGameTime, cause, label) {
+        const committed = (results ?? []).filter((item) => item?.receipt?.changes?.length);
+        const receipts = committed.map((item) => item.receipt);
+        const receiptIds = receipts.map((item) => String(item.id ?? '')).filter(Boolean);
+        const failures = [];
+        const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
+        if (receipts.length) {
+            let worldbookRestored = false;
+            try {
+                await this.worldbook.rollbackReceipts(settings, receipts, focusUid, snapshot, () => this.validate(snapshot));
+                worldbookRestored = true;
+            }
+            catch (error) { failures.push(`世界书回滚失败：${(0, util_1.errorText)(error)}`); }
+            if (worldbookRestored) {
+                try { if (receiptIds.length && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts(receiptIds); }
+                catch (error) { failures.push(`回执清理失败：${(0, util_1.errorText)(error)}`); }
             }
         }
-        if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
-            this.progress('running', `累计${settings.largeSummaryCount}个小总结，开始大总结、沉降与分发`, { titles: ['总结｜世界历史'] });
-            const large = await this.summarize('large', settings, snapshot);
-            if (large.changed) smallCountSinceLarge = 0;
+        try {
+            if (typeof this.host.setCurrentGameTime === 'function') await this.host.setCurrentGameTime(previousGameTime, snapshot, this.getSettings());
         }
-        await this.host.saveCursor({
-            ...cursor,
-            lastProcessedMessageKey: snapshot.messageKey,
-            lastProcessedHash: snapshot.contentHash,
-            turnsSinceSmall,
-            criticalChangesSinceSmall,
-            smallCountSinceLarge,
-        }, snapshot, this.getSettings());
+        catch (error) { failures.push(`游戏时间恢复失败：${(0, util_1.errorText)(error)}`); }
+        if (failures.length) throw new Error(`${label}失败，且逆向恢复不完整：${(0, util_1.errorText)(cause)}；${failures.join('；')}`);
+        throw new Error(`${label}失败，已回滚本回合世界书、回执与游戏时间：${(0, util_1.errorText)(cause)}`);
     }
-    async extract(settings, snapshot) {
+    async extract(settings, snapshot, options = {}) {
         if (settings.extractionEnabled === false) {
             this.setStatus(snapshot.chatKey, 'complete', '提取未启用');
             return { entries: [], changed: false };
@@ -6275,9 +6781,9 @@ class MemoryRunner {
         const selected = (0, matcher_1.relevantEntries)(entries.filter((entry) => entry.title !== governance_1.ACTIVITY_PACK_TITLE), dialogueInput, 6);
         const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { dialogueContext: snapshot.dialogueContext });
         // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
-        let raw = '';
+        let raw = options.deterministicOnly === true ? 'EMPTY' : '';
         try {
-            raw = await (0, model_request_1.callModel)({
+            if (options.deterministicOnly !== true) raw = await (0, model_request_1.callModel)({
                 host: this.host,
                 stage: 'extraction',
                 prompt,
@@ -6323,8 +6829,12 @@ class MemoryRunner {
                 hadInput: true,
             };
         }
+        let explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
+        if (!blocks.length && explicitNone) {
+            const deterministicBlocks = (0, governance_1.governInformationBlocks)([], entries, dialogueInput).blocks;
+            if (deterministicBlocks.length) blocks = deterministicBlocks;
+        }
         if (!blocks.length) {
-            const explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
             const skippedTitles = (diagnostics.skipped || []).map((item) => item.title || '异常片段');
             const detail = explicitNone ? '本轮明确返回“无”，世界书零写入' : `没有可安全提交的条目；已隔离${skippedTitles.length}个异常片段`;
             this.setStatus(snapshot.chatKey, 'matching', detail, '', repairRaw || raw, emptyPlan());
@@ -6460,14 +6970,24 @@ class MemoryRunner {
             if (typeof this.host.setCurrentGameTime === 'function') await this.host.setCurrentGameTime(nextGameTime, snapshot, this.getSettings());
         }
         catch (error) {
-            try {
-                if (entries.receipt) await this.worldbook.rollbackReceipts(settings, [entries.receipt], focusUid, snapshot, () => this.validate(snapshot));
-                if (receiptSaved && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts([entries.receipt.id]);
+            const failures = [];
+            let worldbookRestored = !entries.receipt;
+            if (entries.receipt) {
+                try {
+                    await this.worldbook.rollbackReceipts(settings, [entries.receipt], focusUid, snapshot, () => this.validate(snapshot));
+                    worldbookRestored = true;
+                }
+                catch (rollbackError) {
+                    failures.push(`世界书回滚失败：${(0, util_1.errorText)(rollbackError)}`);
+                }
             }
-            catch (rollbackError) {
-                throw new Error(`当前游戏时间保存失败，且世界书恢复失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+            if (worldbookRestored && receiptSaved && typeof this.host.removeCommitReceipts === 'function') {
+                try { await this.host.removeCommitReceipts([entries.receipt.id]); }
+                catch (receiptError) { failures.push(`回执清理失败：${(0, util_1.errorText)(receiptError)}`); }
             }
-            throw new Error(`当前游戏时间保存失败，世界书已恢复提交前状态：${(0, util_1.errorText)(error)}`);
+            if (failures.length)
+                throw new Error(`当前游戏时间保存失败，且逆向恢复不完整：${(0, util_1.errorText)(error)}；${failures.join('；')}`);
+            throw new Error(`当前游戏时间保存失败，世界书与回执已恢复提交前状态：${(0, util_1.errorText)(error)}`);
         }
         return {
             entries,
@@ -6479,6 +6999,7 @@ class MemoryRunner {
             activityPack: entries.activityPack ?? null,
             activityPackChanged: entries.activityPackChanged === true,
             currentGameTime: nextGameTime,
+            previousGameTime,
         };
     }
     validate(snapshot) { this.host.assertSnapshot(snapshot, this.getSettings()); }
@@ -6778,7 +7299,6 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.INFORMATION_BOUNDARY_TITLE = exports.MigrationService = void 0;
-exports.needsMigration = needsMigration;
 exports.isRebuildCandidate = isRebuildCandidate;
 exports.parseRebuildResponse = parseRebuildResponse;
 exports.mergeRebuildBlocks = mergeRebuildBlocks;
@@ -6797,7 +7317,6 @@ exports.applyRebuildTemporalSettlement = applyRebuildTemporalSettlement;
 exports.buildRebuildSpacetimeSection = buildRebuildSpacetimeSection;
 exports.parseRebuildReviewResponse = parseRebuildReviewResponse;
 exports.buildRegionalSynthesisTasks = buildRegionalSynthesisTasks;
-exports.buildOrganizationSynthesisTasks = buildOrganizationSynthesisTasks;
 exports.buildEventSynthesisTasks = buildEventSynthesisTasks;
 exports.buildFoundationSynthesisTasks = buildFoundationSynthesisTasks;
 exports.buildWorldSynthesisTasks = buildWorldSynthesisTasks;
@@ -7407,6 +7926,7 @@ class MigrationService {
         this.preview = {
             chatKey: snapshot.chatKey,
             worldbookName: original.name,
+            settingsSignature: typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '',
             sourceData: (0, util_1.clone)(state.sourceData),
             nextData: (0, util_1.clone)(built.data),
             summary,
@@ -7469,6 +7989,9 @@ class MigrationService {
         if (!this.preview) throw new Error('没有可提交的世界书重建预览');
         if (this.preview.chatKey !== snapshot.chatKey || this.preview.worldbookName !== snapshot.worldbookName)
             throw new Error('重建预览属于其他聊天或世界书，请重新生成预览');
+        const currentSettingsSignature = typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '';
+        if (this.preview.settingsSignature && currentSettingsSignature !== this.preview.settingsSignature)
+            throw new Error('插件设置在重建预览后已经变化，请重新生成预览');
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         const preview = this.preview;
         validate();
@@ -7480,7 +8003,16 @@ class MigrationService {
             const beforeKeywordDefinitions = (0, util_1.clone)(settings?.keywordDefinitions ?? []);
             const afterKeywordDefinitions = (0, util_1.clone)(preview.nextKeywordDefinitions ?? beforeKeywordDefinitions);
             if (this.saveSettings && JSON.stringify(beforeKeywordDefinitions) !== JSON.stringify(afterKeywordDefinitions)) {
-                this.saveSettings({ keywordDefinitions: afterKeywordDefinitions });
+                try {
+                    await this.saveSettings({ keywordDefinitions: afterKeywordDefinitions });
+                }
+                catch (settingsError) {
+                    try { await this.saveSettings({ keywordDefinitions: beforeKeywordDefinitions }); }
+                    catch (settingsRollbackError) {
+                        throw new Error(`重建关键词定义保存失败，且旧定义恢复失败：${(0, util_1.errorText)(settingsError)}；${(0, util_1.errorText)(settingsRollbackError)}`);
+                    }
+                    throw new Error(`重建关键词定义保存失败，已恢复旧定义：${(0, util_1.errorText)(settingsError)}`);
+                }
             }
             this.backup = {
                 chatKey: snapshot.chatKey,
@@ -7515,8 +8047,34 @@ class MigrationService {
             throw new Error('上次重建属于其他聊天或世界书，不能在当前范围撤销');
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         const backup = this.backup;
+        if (Array.isArray(backup.afterKeywordDefinitions)
+            && JSON.stringify(settings?.keywordDefinitions ?? []) !== JSON.stringify(backup.afterKeywordDefinitions))
+            throw new Error('重建提交后关键词定义已经再次变化，不能覆盖新设置；请先恢复对应设置或重新重建');
         await this.worldbook.replaceRaw(settings, backup.worldbookName, backup.data, snapshot, validate, backup.afterData);
-        if (this.saveSettings && Array.isArray(backup.beforeKeywordDefinitions)) this.saveSettings({ keywordDefinitions: backup.beforeKeywordDefinitions });
+        try {
+            if (this.saveSettings && Array.isArray(backup.beforeKeywordDefinitions)) {
+                await this.saveSettings({ keywordDefinitions: backup.beforeKeywordDefinitions });
+            }
+        }
+        catch (settingsError) {
+            let settingsRollbackError = null;
+            let worldbookRollbackError = null;
+            try {
+                if (this.saveSettings && Array.isArray(backup.afterKeywordDefinitions)) {
+                    await this.saveSettings({ keywordDefinitions: backup.afterKeywordDefinitions });
+                }
+            }
+            catch (error) { settingsRollbackError = error; }
+            try {
+                const current = await this.worldbook.readRaw(settings, snapshot, validate);
+                await this.worldbook.replaceRaw(settings, backup.worldbookName, backup.afterData, snapshot, validate, current.data);
+            }
+            catch (error) { worldbookRollbackError = error; }
+            if (settingsRollbackError || worldbookRollbackError) {
+                throw new Error(`撤销重建时关键词定义保存失败，且事务恢复不完整：${(0, util_1.errorText)(settingsError)}${settingsRollbackError ? `；设置恢复失败：${(0, util_1.errorText)(settingsRollbackError)}` : ''}${worldbookRollbackError ? `；世界书恢复失败：${(0, util_1.errorText)(worldbookRollbackError)}` : ''}`);
+            }
+            throw new Error(`撤销重建时关键词定义保存失败，世界书与设置已恢复撤销前状态：${(0, util_1.errorText)(settingsError)}`);
+        }
         this.backup = null;
         this.preview = null;
         this.resume = null;
@@ -8540,10 +9098,6 @@ function isStableEventAnchor(value) {
     return text.length >= 3 && text.length <= 48 && !/^(?:无|未知|未说明|活动|事件|当前事件|相关事件|进行中|已结束|暂无)$/u.test(text);
 }
 
-function buildOrganizationSynthesisTasks(records, schema = buildMigrationSchema()) {
-    return buildExtendedSynthesisTasks(records, schema).filter((task) => task.extensionKind === 'organization');
-}
-
 function buildExtendedSynthesisTasks(records, schema = buildMigrationSchema()) {
     const source = Array.isArray(records) ? records : [];
     const tasks = [];
@@ -8955,38 +9509,6 @@ function serializeCandidateBlock(block) {
     const sections = (block.sections ?? []).map((section) => `【${section.name}】\n${(section.lines ?? []).map((line) => `- ${line}`).join('\n')}`).join('\n');
     const sources = (block.sourceUids ?? []).join(',') || '无';
     return `${block.title}\n候选来源UID：${sources}\n${sections}`.trim();
-}
-
-function splitRecordContent(content, maxChars) {
-    const text = String(content ?? '').trim();
-    if (!text || text.length <= maxChars) return [text];
-    const lines = text.split('\n');
-    const fragments = [];
-    let current = [];
-    let size = 0;
-    for (const rawLine of lines) {
-        const line = String(rawLine ?? '');
-        if (line.length > maxChars) {
-            if (current.length) {
-                fragments.push(current.join('\n'));
-                current = [];
-                size = 0;
-            }
-            for (let offset = 0; offset < line.length; offset += maxChars)
-                fragments.push(line.slice(offset, offset + maxChars));
-            continue;
-        }
-        const next = size + line.length + (current.length ? 1 : 0);
-        if (current.length && next > maxChars) {
-            fragments.push(current.join('\n'));
-            current = [];
-            size = 0;
-        }
-        current.push(line);
-        size += line.length + (current.length > 1 ? 1 : 0);
-    }
-    if (current.length) fragments.push(current.join('\n'));
-    return fragments.filter(Boolean);
 }
 
 function rebuildFingerprint(worldbookName, records) {
@@ -10880,11 +11402,6 @@ function enrichRebuildBlockAliases(block, recordByUid) {
     return output;
 }
 
-function ensureInformationBoundary(blocks) {
-    // [MA-CONTROL-02] 认知边界只属于请求控制层，不再写入世界书。
-    return blocks.map((block) => (0, util_1.clone)(block));
-}
-
 function verifyCommittedSnapshot(data, summary) {
     const entries = Object.values(data?.entries ?? {}).filter((raw) => raw && typeof raw === 'object');
     if (entries.some((raw) => (0, util_1.normalizeTitle)(String(raw.comment ?? '')) === (0, util_1.normalizeTitle)(exports.INFORMATION_BOUNDARY_TITLE)))
@@ -10904,31 +11421,6 @@ function nextNumericUid(used) {
     return uid;
 }
 
-function needsMigration(raw) {
-    const title = (0, util_1.normalizeTitle)(String(raw?.comment ?? raw?.name ?? raw?.title ?? ''));
-    if (!(0, util_1.splitTitle)(title)) return true;
-    const content = String(raw?.content ?? '').trim();
-    if (!content) return false;
-    if (!/【\s*[^】]+\s*】/u.test(content)) return true;
-    const parsed = (0, parser_1.parseEntrySections)(content);
-    if (!parsed.order.length) return true;
-    let insideSection = false;
-    for (const rawLine of content.replace(/\r/g, '').split('\n')) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        if (/^【\s*[^】]+\s*】$/u.test(line)) { insideSection = true; continue; }
-        if (!insideSection) return true;
-    }
-    return false;
-}
-
-function originalLines(content) {
-    return String(content ?? '').replace(/\r/g, '').split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line && !/^【\s*[^】]+\s*】$/u.test(line))
-        .map((line) => (0, parser_1.normalizePointLine)(line));
-}
-
 function trimPrompt(value) {
     return value.length <= constants_1.MAX_CONTEXT_CHARS
         ? value
@@ -10941,6 +11433,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.callModel = callModel;
 exports.stageResponseTokens = stageResponseTokens;
 exports.isRetryableGatewayError = isRetryableGatewayError;
+exports.isTransientNetworkError = isTransientNetworkError;
+exports.gatewayRetryDelayMs = gatewayRetryDelayMs;
 exports.limitPromptPair = limitPromptPair;
 exports.outputContractForStage = outputContractForStage;
 exports.describeRetryReason = describeRetryReason;
@@ -10948,7 +11442,7 @@ exports.salvageStrictFinalProtocol = salvageStrictFinalProtocol;
 exports.protocolRescuePrompt = protocolRescuePrompt;
 const util_1 = require("./util");
 
-// [MA-MODEL-01] 每个模型阶段只声明输入/输出预算和一次网关重试。
+// [MA-MODEL-01] 每个模型阶段只声明输入/输出预算；网关失败使用紧凑请求，瞬时断线最多再退避重放一次。
 // 该模块不理解审核、提取或总结业务，也不接触世界书，避免请求控制与业务逻辑耦合。
 const INPUT_LIMITS = Object.freeze({
     audit: 24000,
@@ -10964,7 +11458,7 @@ const INPUT_LIMITS = Object.freeze({
 });
 
 /**
- * [MA-MODEL-02] 调用模型；网关失败使用精简提示词重试一次。
+ * [MA-MODEL-02] 调用模型；网关失败使用精简提示词，明确的瞬时网络中断最多执行两次有限重试。
  * 模型空正文或仅返回推理时，使用更大的输出预算并保留 Profile 预设重试一次。
  */
 async function callModel(options) {
@@ -10986,14 +11480,15 @@ async function callModel(options) {
         : stageResponseTokens(stage, settings, sourceText);
     const primary = limitPromptPair(withOutputContract(prompt, stage, responseLength, sourceText), stage);
     let firstError = null;
+    let firstGatewayRetry = false;
     try {
         return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
     }
     catch (error) {
         firstError = error;
         const emptyResponse = isEmptyModelResponseError(error);
-        const gatewayRetry = isRetryableGatewayError(error);
-        if (snapshot?.token?.cancelled || (!gatewayRetry && !emptyResponse) || (gatewayRetry && !fallbackPrompt))
+        firstGatewayRetry = isRetryableGatewayError(error);
+        if (snapshot?.token?.cancelled || (!firstGatewayRetry && !emptyResponse))
             throw error;
     }
 
@@ -11007,6 +11502,7 @@ async function callModel(options) {
     const fallback = limitPromptPair(withOutputContract(fallbackValue, stage, fallbackTokens, sourceText), stage, true);
     try { onRetry?.(firstError); }
     catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
+    if (firstGatewayRetry) await waitForGatewayRetry(firstError, 1, settings, snapshot);
 
     let secondError = null;
     try {
@@ -11023,6 +11519,42 @@ async function callModel(options) {
     }
     catch (error) {
         secondError = error;
+    }
+
+    // [MA-MODEL-NETWORK-RETRY-01]
+    // 移动端浏览器与反向代理常把瞬时断线抛成 TypeError: Failed to fetch。
+    // 该错误过去没有命中“fetch failed”规则，导致本应重试的请求直接失败。
+    // 只对明确的瞬时网络错误增加一次退避重试；协议错误、仅推理和取消不进入此分支。
+    if (isTransientNetworkError(secondError) && !snapshot?.token?.cancelled) {
+        try { onRetry?.(Object.assign(new Error('瞬时网络错误仍存在，退避后执行最后一次紧凑请求'), { code: 'MA_TRANSIENT_NETWORK_RETRY' })); }
+        catch { }
+        await waitForGatewayRetry(secondError, 2, settings, snapshot);
+        try {
+            return await host.generate(
+                fallback.system,
+                fallback.user,
+                fallbackTokens,
+                snapshot,
+                settings,
+                settings.requestTimeoutMs,
+                profileId,
+                undefined,
+            );
+        }
+        catch (error) {
+            if (!isTransientNetworkError(error)) throw error;
+            const detail = (0, util_1.errorText)(error);
+            const exhausted = new Error(`瞬时网络请求连续3次失败：${detail}`);
+            exhausted.code = 'MA_NETWORK_RETRY_EXHAUSTED';
+            exhausted.cause = error;
+            exhausted.retryAttempts = 3;
+            exhausted.diagnosticEvidence = {
+                ...(error?.diagnosticEvidence || {}),
+                retryAttempts: 3,
+                transientNetwork: true,
+            };
+            secondError = exhausted;
+        }
     }
 
     // [MA-MODEL-REASONING-RESCUE-01]
@@ -11236,6 +11768,8 @@ function describeRetryReason(error, label = '模型请求') {
     const text = (0, util_1.errorText)(error);
     if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；已扩大输出预算并缩短上下文重试一次`;
     if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；已扩大输出预算并缩短上下文重试一次`;
+    if (error?.code === 'MA_NETWORK_RETRY_EXHAUSTED') return `${label}连续3次网络请求失败：${text}`;
+    if (isTransientNetworkError(error)) return `${label}遇到瞬时网络中断：${text}；已缩短上下文并退避重试，最多3次`;
     if (isRetryableGatewayError(error)) return `${label}遇到网关或网络异常：${text}；已缩短上下文重试一次`;
     return `${label}失败：${text}；已执行一次安全重试`;
 }
@@ -11243,7 +11777,34 @@ function describeRetryReason(error, label = '模型请求') {
 /** [MA-MODEL-04] 识别常见上游网关失败；本地取消和格式错误不属于此类。 */
 function isRetryableGatewayError(error) {
     const text = (0, util_1.errorText)(error).toLocaleLowerCase();
-    return /(?:\b502\b|\b503\b|\b504\b|gateway\s*(?:timeout|time-out)|upstream|no message generated|html\s*错误页|returned\s*html|unexpected token ['"]?<['"]?|<html|not valid json|invalid json|json parse|fetch failed|network error|connection reset)/iu.test(text);
+    return /(?:\b502\b|\b503\b|\b504\b|gateway\s*(?:timeout|time-out)|upstream|no message generated|html\s*错误页|returned\s*html|unexpected token ['"]?<['"]?|<html|not valid json|invalid json|json parse|failed to fetch|fetch failed|network request failed|network error|networkerror|load failed|err_network|connection reset|connection aborted|socket hang up)/iu.test(text);
+}
+
+/** 仅识别可安全重放的瞬时网络中断，不把 HTTP 400、协议错误或仅推理归入其中。 */
+function isTransientNetworkError(error) {
+    const text = (0, util_1.errorText)(error).toLocaleLowerCase();
+    return /(?:failed to fetch|fetch failed|network request failed|network error|networkerror|load failed|err_network|connection reset|connection aborted|socket hang up)/iu.test(text);
+}
+
+/** 网络重试采用短退避；测试可用 requestRetryBaseDelayMs=0 禁用等待。 */
+function gatewayRetryDelayMs(attempt, settings = {}) {
+    const configured = Number(settings?.requestRetryBaseDelayMs);
+    const base = Number.isFinite(configured) ? Math.max(0, Math.min(5000, configured)) : 800;
+    return attempt <= 1 ? base : Math.min(5000, Math.max(base, Math.floor(base * 2.5)));
+}
+
+async function waitForGatewayRetry(error, attempt, settings, snapshot) {
+    if (!isRetryableGatewayError(error)) return;
+    const delay = gatewayRetryDelayMs(attempt, settings);
+    if (delay <= 0) return;
+    const step = 100;
+    let elapsed = 0;
+    while (elapsed < delay) {
+        if (snapshot?.token?.cancelled) throw new Error(snapshot.token.reason || '任务已取消');
+        const current = Math.min(step, delay - elapsed);
+        await new Promise((resolve) => setTimeout(resolve, current));
+        elapsed += current;
+    }
 }
 
 /**
@@ -11445,7 +12006,18 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     // 只对本轮触及的物品做机械一致性校正，不扫描或重写无关条目。
     const projectedEntries = applyPlanToEntries({ operations: primaryOperations }, entries, settings);
     const relationOperations = relationshipConsistencyOperations(blocks, projectedEntries);
-    return { blocks, operations: dedupeOperations([...primaryOperations, ...relationOperations]), governance: governed.diagnostics, currentSceneTitle: governed.currentSceneTitle, createdAt: Date.now() };
+    let plannedOperations = dedupeOperations([...primaryOperations, ...relationOperations]);
+    // A create operation is emitted before section-level governance finishes.
+    // If every candidate fact is later rejected or absorbed, do not leave a
+    // newly-created empty shell in the real worldbook.
+    const blankCreatedTitles = new Set(applyPlanToEntries({ operations: plannedOperations }, entries, settings)
+        .filter((entry) => String(entry.uid ?? '').startsWith('new:'))
+        .filter((entry) => !Object.values(entry.sections?.values ?? {}).flat().some((line) => String(line ?? '').trim()))
+        .map((entry) => (0, util_1.normalizeTitle)(entry.title)));
+    if (blankCreatedTitles.size) plannedOperations = plannedOperations.filter((operation) => !blankCreatedTitles.has((0, util_1.normalizeTitle)(operation.title)));
+    const reconciledEntries = applyPlanToEntries({ operations: plannedOperations }, entries, settings);
+    const cleanupOperations = emptyEntryCleanupOperations(reconciledEntries, settings);
+    return { blocks, operations: dedupeOperations([...plannedOperations, ...cleanupOperations]), governance: governed.diagnostics, currentSceneTitle: governed.currentSceneTitle, createdAt: Date.now() };
 }
 function ensureDisambiguatedTitles(blocks, entries) {
     return blocks.map((source) => {
@@ -11581,7 +12153,16 @@ const SECTION_BUDGETS = {
     // 基础设定的核心就是稳定规则，因此规则栏目拥有最大预算。
     基础设定: { 世界常识: 8, 自然规则: 8, 种族与生命: 8, 能力与技术: 8, 社会规则: 8, 地理框架: 8, 别名: 4 },
 };
+const TEMPLATE_SECTION_ORDER = Object.freeze({
+    '人物': ['身份', '稳定', '性格核心', '表达方式', '决策倾向', '当前', '关系', '关系立场', '持有', '已知', '误信', '固定事实', '别名'],
+    '场景': ['定义', '空间结构', '固定资源', '固定设施', '常驻角色', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名'],
+    '物品': ['定义', '功能', '当前', '限制', '固定事实', '别名'],
+    '事件': ['参与', '附属人员', '场景', '已发生进展', '未发生进展', '结果', '别名'],
+    '世界': ['范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名'],
+    '基础设定': ['世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名'],
+});
 function enforceEntryBudgets(entry) {
+    normalizeEntryTemplate(entry);
     const budgets = SECTION_BUDGETS[String(entry?.type ?? '')] ?? {};
     for (const [section, limitValue] of Object.entries(budgets)) {
         const limit = Math.max(1, Number(limitValue || 1));
@@ -11618,6 +12199,42 @@ function enforceEntryBudgets(entry) {
     }
     enforceTotalCharacterBudget(entry);
     return entry;
+}
+function normalizeEntryTemplate(entry) {
+    const order = TEMPLATE_SECTION_ORDER[String(entry?.type ?? '')];
+    if (!order || !entry?.sections?.values) return entry;
+    const allowed = new Set(order);
+    const next = Object.fromEntries(order.map((name) => [name, []]));
+    const append = (section, line) => {
+        if (!section || !line) return;
+        next[section] = (0, util_1.unique)([...(next[section] ?? []), String(line).trim()]);
+    };
+    for (const rawName of (0, util_1.unique)([...(entry.sections.order ?? []), ...Object.keys(entry.sections.values)])) {
+        const canonical = (0, information_point_1.canonicalSectionName)(rawName, entry.type);
+        for (const rawLine of entry.sections.values[rawName] ?? []) {
+            const inline = String(rawLine ?? '').match(/^\s*【\s*([^】]+?)\s*】\s*(.+)$/u);
+            const inlineSection = inline ? (0, information_point_1.canonicalSectionName)(inline[1], entry.type) : '';
+            const target = allowed.has(inlineSection) ? inlineSection : allowed.has(canonical) ? canonical : fallbackTemplateSection(entry.type, rawName);
+            append(target, inline ? inline[2] : rawLine);
+        }
+    }
+    entry.sections.order = order.filter((name) => (next[name] ?? []).length);
+    entry.sections.values = Object.fromEntries(entry.sections.order.map((name) => [name, next[name]]));
+    return entry;
+}
+function fallbackTemplateSection(type, rawName) {
+    const name = String(rawName ?? '');
+    if (type === '人物') {
+        if (/(?:稳定名称|身份|职业|阵营)/u.test(name)) return '身份';
+        if (/(?:立场|关系|同行|盟友|信任|照看|护卫)/u.test(name)) return '关系立场';
+        return '固定事实';
+    }
+    if (type === '场景') return '固定事实';
+    if (type === '物品') return '固定事实';
+    if (type === '事件') return '已发生进展';
+    if (type === '世界') return '固定事实';
+    if (type === '基础设定') return '世界常识';
+    return '';
 }
 function compactFixedSceneRoles(lines) {
     const grouped = new Map();
@@ -11697,6 +12314,7 @@ function measureEntryCharacters(entry) {
 }
 function enforceTotalCharacterBudget(entry) {
     const limit = dynamicEntryCharLimit(entry);
+    const hardLimit = (ENTRY_CHAR_LIMITS[String(entry?.type ?? '')] ?? [220, 520])[1];
     if (measureEntryCharacters(entry) <= limit) return;
     const values = entry.sections?.values ?? {};
     // 先删低价值过程和背景附属，再压缩历史；身份、性格、表达、决策和当前状态受保护。
@@ -11712,13 +12330,17 @@ function enforceTotalCharacterBudget(entry) {
         while (lines.length > protectedMinimum(entry.type, section) && measureEntryCharacters(entry) > limit) lines.shift();
         if (measureEntryCharacters(entry) <= limit) return;
     }
+    // The dynamic target is a soft compaction goal.  Stable character and
+    // world facts may legitimately exceed it; preserve them up to the fixed
+    // per-type hard ceiling instead of blocking every future update.
+    if (measureEntryCharacters(entry) <= hardLimit) return;
     // [MA-BUDGET-03] 多个受保护栏目同时过长时，先降低每栏行数，再按标点边界缩短句子。
-    // 不从句子中间硬切；若没有可用语义边界而仍超限，则拒绝本次提交。
+    // 不从句子中间硬切；若没有可用语义边界而仍超硬上限，则拒绝本次提交。
     shrinkProtectedSections(entry);
-    if (measureEntryCharacters(entry) <= limit) return;
-    compactProtectedSections(entry, limit);
-    if (measureEntryCharacters(entry) > limit) {
-        throw new Error(`条目“${entry.title || entry.name || entry.type}”无法在不破坏受保护内容的情况下压缩到 ${limit} 字以内`);
+    if (measureEntryCharacters(entry) <= hardLimit) return;
+    compactProtectedSections(entry, hardLimit);
+    if (measureEntryCharacters(entry) > hardLimit) {
+        throw new Error(`条目“${entry.title || entry.name || entry.type}”无法在不破坏受保护内容的情况下压缩到硬上限 ${hardLimit} 字以内`);
     }
 }
 const PRESSURE_SECTION_LIMITS = Object.freeze({
@@ -12087,17 +12709,21 @@ function relationshipConsistencyOperations(blocks, projectedEntries) {
         .filter((item) => blocks.some((block) => block.sections?.some((section) => /^(?:持有|当前资源)$/u.test(section.name)
             && section.lines?.some((line) => referencesObject(line, item.name)))))
         .map((item) => item.name);
-    const touchedItems = (0, util_1.unique)([...directItems, ...referencedItems]);
+    // Terminal item states are globally authoritative even when the model does
+    // not repeat the old scene/person reference in the same extraction block.
+    const unavailableItems = projectedEntries.filter((entry) => entry.type === '物品' && itemIsUnavailable(entry)).map((entry) => entry.name);
+    const touchedItems = (0, util_1.unique)([...directItems, ...referencedItems, ...unavailableItems]);
     if (!touchedItems.length) return [];
     const operations = [];
     for (const itemName of touchedItems) {
         const item = findEntryByName(projectedEntries, '物品', itemName);
         if (!item || item.locked) continue;
+        const unavailable = itemIsUnavailable(item);
         const holderValue = entryStateValue(item, '当前持有者');
         const locationValue = entryStateValue(item, '当前位置');
-        const holder = isNoneStateValue(holderValue) ? null : findEntryByName(projectedEntries, '人物', holderValue);
-        const scene = holder ? null : findContainingEntry(projectedEntries, '场景', locationValue);
-        const projectToHolder = holder ? itemProjectsToPerson(item, holderValue) : false;
+        const holder = unavailable || isNoneStateValue(holderValue) ? null : findEntryByName(projectedEntries, '人物', holderValue);
+        const scene = unavailable || holder ? null : findContainingEntry(projectedEntries, '场景', locationValue);
+        const projectToHolder = !unavailable && holder ? itemProjectsToPerson(item, holderValue) : false;
 
         for (const person of projectedEntries.filter((entry) => entry.type === '人物' && !entry.locked)) {
             const current = [...(person.sections?.values?.['持有'] ?? [])];
@@ -12124,6 +12750,33 @@ function relationshipConsistencyOperations(blocks, projectedEntries) {
         }
     }
     return operations;
+}
+function itemIsUnavailable(item) {
+    const text = (0, util_1.normalizeFact)(Object.values(item?.sections?.values ?? {}).flat().join('；'));
+    if (!text) return false;
+    const terminal = /(?:已消耗|消耗完毕|已经用尽|已用尽|已碎裂|彻底碎裂|已销毁|已经销毁|已失效|碎裂失效|不复存在|已不存在|永久遗失)/u.test(text);
+    const restored = /(?:已修复|恢复可用|重新获得|再次持有|找回|重铸|复原)/u.test(text);
+    return terminal && !restored;
+}
+function emptyEntryCleanupOperations(entries, settings) {
+    const context = (0, governance_1.activeContext)(entries ?? [], entries.find((entry) => entry.focus)?.uid || '');
+    const protectedUids = new Set([
+        context.scene?.uid, context.focus?.uid,
+        ...(context.characters ?? []).map((entry) => entry.uid),
+        ...(context.activeEvents ?? []).map((entry) => entry.uid),
+    ].filter(Boolean).map(String));
+    const foundationLabels = new Set((settings?.keywordDefinitions ?? []).filter((item) => item?.label === '基础设定').flatMap((item) => [item.label, ...(item.aliases ?? [])]).map(util_1.normalizeFact));
+    return (entries ?? []).filter((entry) => {
+        if (!entry?.managed || entry.locked || entry.focus || entry.title === governance_1.ACTIVITY_PACK_TITLE) return false;
+        if (protectedUids.has(String(entry.uid))) return false;
+        if (entry.type === '基础设定' || (entry.keywords ?? []).some((key) => foundationLabels.has((0, util_1.normalizeFact)(key)))) return false;
+        return !Object.values(entry.sections?.values ?? {}).flat().some((line) => String(line ?? '').trim());
+    }).map((entry) => ({
+        id: `empty-entry-cleanup|${entry.uid}`,
+        kind: 'delete-entry', operation: 'delete', title: entry.title, targetUid: entry.uid,
+        oldValue: entry.title, newValue: '删除', reason: '条目已无任何业务事实且不属于当前活动上下文，清理空仓储占位',
+        requiresDistributionProof: false, distributionTargets: [],
+    }));
 }
 function itemProjectsToPerson(item, holderValue) {
     const holder = (0, util_1.normalizeFact)(holderValue);
@@ -12371,7 +13024,6 @@ function businessOperationKind(kind) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.parseInformationPoints = parseInformationPoints;
-exports.parseStrictExtractionBlocks = parseStrictExtractionBlocks;
 exports.parseExtractionWithRecovery = parseExtractionWithRecovery;
 exports.canonicalExtractionType = canonicalExtractionType;
 exports.parseEntrySections = parseEntrySections;
@@ -12420,9 +13072,6 @@ const STRICT_SECTION_ORDER = {
     世界: ['关键词', '范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名'],
     基础设定: ['关键词', '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名'],
 };
-function parseStrictExtractionBlocks(raw) {
-    return parseExtractionWithRecovery(raw);
-}
 function parseExtractionWithRecovery(raw) {
     const diagnostics = { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
     const text = normalizeExtractionEnvelope(raw, diagnostics);
@@ -13027,6 +13676,19 @@ function parseEntrySections(content) {
     let current = '';
     for (const sourceLine of String(content ?? '').replace(/\r/g, '').split('\n')) {
         const line = sourceLine.trimEnd();
+        const inline = line.match(/^\s*【\s*([^】]+?)\s*】\s*(.+?)\s*$/u);
+        if (inline) {
+            current = inline[1].trim();
+            if (!values[current]) {
+                values[current] = [];
+                order.push(current);
+            }
+            const inlineValues = String(inline[2] ?? '').split(/[；;]/u).map(value => value.trim()).filter(Boolean);
+            for (const value of inlineValues) {
+                if (!EMPTY_PATTERN.test(value)) values[current].push(normalizePointLine(value));
+            }
+            continue;
+        }
         const match = line.match(SECTION_PATTERN) ?? matchPlainSection(line);
         if (match) {
             current = match[1].trim();
@@ -13099,13 +13761,11 @@ exports.extractionPrompts = extractionPrompts;
 exports.auditPrompts = auditPrompts;
 exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
-exports.duplicatePrompts = duplicatePrompts;
 exports.extractionRepairPrompts = extractionRepairPrompts;
 exports.worldSettingImportPrompts = worldSettingImportPrompts;
 exports.migrationPrompts = migrationPrompts;
 exports.migrationPlanningPrompts = migrationPlanningPrompts;
 exports.plannedMigrationPrompts = plannedMigrationPrompts;
-exports.migrationReviewPrompts = migrationReviewPrompts;
 exports.keywordTemplate = keywordTemplate;
 const util_1 = require("./util");
 
@@ -13180,7 +13840,25 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
     const custom = clipText(settings.extractionPrompt.trim(), compact ? 800 : 1600);
     const system = `你是 Mirror Abyss 严格语法事实提取器。
 
-任务：以一轮完整对话为单位，把审核后的本轮AI最终回复转为精简世界书更新。最近对话只用于理解指代、承接、身份与因果；只提取本轮已经发生的状态变化、稳定结果和必要因果证据，不重抄旧轮内容。普通动作、短暂姿态和没有改变状态的细节优先过滤；不续写、不解释、不评价、不预测。
+任务：以一轮完整对话为单位，把审核后的本轮AI最终回复转为精简世界书更新。你不是在收集所有已经发生的动作，也不是在给信息划分重要等级；你只提取本轮正文的主要固定事实——正文结束时已经确定成立，并且相对既有状态发生了新增、改变或终结的事实。
+
+【唯一提取边界：本轮正文的落点】
+每个候选事实必须同时满足以下条件：
+1. 到本轮正文结束时，它已经明确成立。意图、提议、猜测、可能性、将来安排、尚未完成的动作和没有得到结果的尝试不成立。
+2. 它相对既有状态形成了新增、改变或终结；没有变化的旧事实不得重复。只有【当前】【当前状态】【在场】【当前资源】【活动关联】【持有】等完整快照栏目可以为表达正文结束时的当前状态而重列仍成立的值。
+3. 它是本轮正文的主要落点之一：能够直接回答“这一轮实际让哪个对象变成了什么状态”。一个动作即使已经做完，只要没有留下需要表达的对象状态、关系、内容、位置、持有、认知、控制、损坏或结果，就不是固定事实。
+4. 它有明确现实宿主。剧本、小说、梦境、假设、角色扮演、转述故事等嵌套内容，只能更新其作品、记录或认知宿主，不得直接改写现实人物关系、现实场景或现实事件。
+5. 它来自正文明确写出的结果，而不是对表情、语气、停顿、视线、修辞、暗示或潜台词的解释。不得把“看起来像”“仿佛”“意味深长”等表现推断成关系、动机或承诺。
+
+【边界判例】
+- 人物把一句表白写进剧本：固定事实是剧本内容被更新；现实人物没有因此表白或成为恋人。
+- 人物脸红、停顿、轻声回应、动作变轻：除非正文明确赋予持续状态或结果，否则不是固定事实。
+- 人物走向门口、转身往外走：只有正文明确说明已经离开当前场景，才能更新【在场】或人物位置。
+- 物品被拿起、使用、放在桌面或暂时查看：不等于所有权、保管权或长期持有发生变化。
+- 人物明确接受长期职责、双方明确确认关系、物品明确永久转交、地点明确抵达、物品明确损坏或失效：属于已落地的固定事实。
+- 传闻、误会和单方说法：不得写成客观世界事实；只有它确实改变了某人物可用认知时，才写入该人物【已知】，并保留来源。
+
+先判断是否越过上述边界，再决定条目类型和栏目。边界未通过时，不得为了填满条目而输出。
 
 【只允许六类】
 1. 人物：身份、稳定能力、性格核心、表达方式、决策倾向、当前状态、关系与关系立场、关键持有物、具有信息来源的已知、极少量已被明确证伪但人物仍相信的误信、固定事实。
@@ -13232,6 +13910,10 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 玩家未表达的内心、其他人物私密认知和未公开远处事件，不得写入该人物【已知】；不得为了“完整”复制所有世界事实到每个人物。
 
 【内容限制】
+- 硬性排除：天气、衣物被雨打湿、光影、气味、姿态等短暂氛围不得提取，除非它们已经造成明确损坏、阻断、危险或行动限制。
+- 硬性排除：提议、计划、明天或未来可能进行的事项，只要尚未决定、尚未开始或尚未发生，就不得进入任何人物、场景、事件、已知或固定事实栏目。
+- 地点仅被告知、讨论或作为迁移目标，不等于人物已经身处该地；只有正文明确写出抵达、进入、位于或“当前场景”时才能建立本轮场景快照。
+- 明确的物品转交必须以物品【当前持有者】为权威状态；人物只保留最短【持有】引用，不得把同一转交事实复制到双方人物、场景和事件多个长期栏目。
 - 禁止“供AI参考”“可据此推测”“可能意味着”“建议后续”等解释。
 - 禁止把本提示词、系统/开发者消息、任务说明、格式模板、来源行编号、ENTRY标记或重建控制字段写入任何世界书条目。
 - 禁止推测、隐藏心理、未来结果、未实现愿望、纯气氛、普通动作、对白全文和无持续价值背景物。
@@ -13348,7 +14030,7 @@ ${clipText(assistantText, compact ? 9000 : 13000)}
 可能相关的既有世界书条目：
 ${existing || '（无）'}
 
-只输出本轮新事实或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容；固定事实只输出本轮新形成或被修正的最终结果，不重抄已有结果。必须主动检查并输出本轮明确出现的世界或基础设定事实。`;
+只输出通过“本轮正文的落点”边界的新增事实、状态变化、终结结果，或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容；固定事实只输出本轮新形成或被修正的最终结果，不重抄已有结果。已完成但没有留下状态结果的普通动作必须省略。必须主动检查并输出本轮明确出现的世界或基础设定事实。`;
     return { system, user };
 }
 
@@ -13504,24 +14186,6 @@ function extractionRepairPrompts(raw, options = {}) {
 禁止解释、JSON和代码块。没有可保留条目时只输出“无”。`;
     const user = `需要修复的提取结果：
 ${clipText(String(raw ?? ''), compact ? 8000 : 12000)}`;
-    return { system, user };
-}
-
-function duplicatePrompts(pairs) {
-    const system = `你是 Mirror Abyss 重复事实判断器。
-
-判断每一组事实是否表达同一件事。
-否定、失去、不再、身份改变、关系改变、位置改变、数值升降和状态变化必须判为 DIFFERENT。
-
-只按以下格式逐行返回：
-序号|SAME
-或
-序号|DIFFERENT
-
-禁止输出解释、JSON、代码块或其他内容。`;
-    const user = pairs.map((pair, index) => `${index + 1}
-事实A：${pair.oldValue}
-事实B：${pair.newValue}`).join('\n\n');
     return { system, user };
 }
 
@@ -13746,31 +14410,6 @@ ${body}
     return { system, user };
 }
 
-// [MA-REBUILD-11] 第三阶段只做结构覆盖校验，不再自由改写候选正文。
-function migrationReviewPrompts(candidateCatalog, options = {}) {
-    const system = `你是 Mirror Abyss 世界书重建结构校验器。
-
-只检查候选目录是否存在以下结构性错误：
-1. 同一来源行被两个条目占用。
-2. 同一对象或同一事件生命周期被重复建档。
-3. 真身、假身、替身、分身、载体被错误合并。
-4. 不同稳定地点被合并为同一场景。
-5. 事件正文包含未来目标、未决事项、计划、阶段标签，或把普通动作误当作独立进展。
-6. 条目只有标题、别名或标题复述，没有有效事实。
-7. 具体人物、物品、场景或事件事实被错误放入世界或基础设定。
-
-通过时只能输出 PASS。
-不通过时逐行输出：
-FAIL|错误代码|条目A|条目B或简短原因
-
-禁止改写正文、输出建议方案、JSON、代码块或解释。`;
-    const user = `重建候选精简目录：
-${String(candidateCatalog || '').trim() || '（空）'}
-
-只做结构校验。`;
-    return { system, user };
-}
-
 function migrationTypeCatalog(schema) {
     const purpose = {
         人物: '单个可识别角色及其当前状态、关系和个人认知',
@@ -13835,7 +14474,7 @@ const util_1 = require("./util");
 // [MA-RECALL-01] 召回策略是纯函数：只读取世界书条目，返回原生字段规划，不执行任何写入。
 const GENERIC_KEYWORDS = new Set([
     '人物', '角色', 'npc', '物品', '道具', '装备', '事件', '活动', '场景', '地点', '世界', '当前', '状态',
-    '关系', '男人', '女人', '男孩', '女孩', '少女', '房间', '区域', '地方', '目标', '任务', '未知', '无', '当前局势', '世界局势', '世界状态', '世界变化',
+    '关系', '男人', '女人', '男孩', '女孩', '少女', '房间', '区域', '地方', '目标', '任务', '规则', '设定', '未知', '无', '当前局势', '世界局势', '世界状态', '世界变化',
 ]);
 
 function isSceneType(type) {
@@ -13935,7 +14574,11 @@ function profileFor(entry, settings, sceneStage, focus, activeUids = new Set()) 
         return profile('活动事件关键词', 'active', 'event-active', 'keyword', false, false, true, false, 4, baseOrder, 4, 4);
     }
     if (isWorldType(type)) {
-        return profile('世界变化关联', tier === 'historical' ? 'long-term' : 'active', 'world-state', 'keyword', false, false, false, false, 6, baseOrder, 4, 6);
+        // World-state entries may be reached from an explicit scene/world
+        // reference, but stop there.  Making them bidirectional bridges lets
+        // unrelated world entries recursively awaken one another and can form
+        // cycles as the book grows.
+        return profile('世界变化终点', tier === 'historical' ? 'long-term' : 'active', 'world-state', 'keyword', false, false, true, false, 6, baseOrder, 4, 6);
     }
     if (isRoleType(type)) {
         const longTerm = tier === 'long-term';
@@ -14322,6 +14965,26 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     },
 });
 class SettingsStore {
+    capture(context) {
+        const root = (context.extensionSettings ?? (context.extensionSettings = {}));
+        const exists = Object.prototype.hasOwnProperty.call(root, constants_1.EXTENSION_NAMESPACE);
+        return { exists, value: exists ? (0, util_1.clone)(root[constants_1.EXTENSION_NAMESPACE]) : undefined };
+    }
+    restore(context, snapshot) {
+        const root = (context.extensionSettings ?? (context.extensionSettings = {}));
+        const current = this.capture(context);
+        if (snapshot?.exists) root[constants_1.EXTENSION_NAMESPACE] = (0, util_1.clone)(snapshot.value);
+        else delete root[constants_1.EXTENSION_NAMESPACE];
+        try {
+            context.saveSettingsDebounced?.();
+        }
+        catch (error) {
+            if (current.exists) root[constants_1.EXTENSION_NAMESPACE] = (0, util_1.clone)(current.value);
+            else delete root[constants_1.EXTENSION_NAMESPACE];
+            throw error;
+        }
+        return this.load(context);
+    }
     load(context) {
         const root = (context.extensionSettings ?? (context.extensionSettings = {}));
         const namespace = (0, util_1.isPlainObject)(root[constants_1.EXTENSION_NAMESPACE]) ? root[constants_1.EXTENSION_NAMESPACE] : {};
@@ -14331,16 +14994,33 @@ class SettingsStore {
     }
     save(context, patch) {
         const root = (context.extensionSettings ?? (context.extensionSettings = {}));
+        const hadNamespace = Object.prototype.hasOwnProperty.call(root, constants_1.EXTENSION_NAMESPACE);
+        const previousNamespace = hadNamespace ? (0, util_1.clone)(root[constants_1.EXTENSION_NAMESPACE]) : undefined;
         const namespace = (0, util_1.isPlainObject)(root[constants_1.EXTENSION_NAMESPACE]) ? root[constants_1.EXTENSION_NAMESPACE] : {};
         const settings = parseSettings({ ...this.load(context), ...patch });
         root[constants_1.EXTENSION_NAMESPACE] = { ...namespace, settings: (0, util_1.clone)(settings) };
-        context.saveSettingsDebounced?.();
+        try {
+            context.saveSettingsDebounced?.();
+        }
+        catch (error) {
+            if (hadNamespace) root[constants_1.EXTENSION_NAMESPACE] = previousNamespace;
+            else delete root[constants_1.EXTENSION_NAMESPACE];
+            throw error;
+        }
         return settings;
     }
     reset(context) {
         const root = (context.extensionSettings ?? (context.extensionSettings = {}));
+        const hadNamespace = Object.prototype.hasOwnProperty.call(root, constants_1.EXTENSION_NAMESPACE);
+        const previousNamespace = hadNamespace ? (0, util_1.clone)(root[constants_1.EXTENSION_NAMESPACE]) : undefined;
         delete root[constants_1.EXTENSION_NAMESPACE];
-        context.saveSettingsDebounced?.();
+        try {
+            context.saveSettingsDebounced?.();
+        }
+        catch (error) {
+            if (hadNamespace) root[constants_1.EXTENSION_NAMESPACE] = previousNamespace;
+            throw error;
+        }
         return this.load(context);
     }
 }
@@ -14520,14 +15200,10 @@ exports.clampNumber = clampNumber;
 exports.normalizeTitle = normalizeTitle;
 exports.stripUidSuffix = stripUidSuffix;
 exports.stripBatchTitleId = stripBatchTitleId;
-exports.uidKeyword = uidKeyword;
-exports.titleWithUid = titleWithUid;
 exports.isUidKeyword = isUidKeyword;
 exports.splitTitle = splitTitle;
 exports.normalizeFact = normalizeFact;
 exports.safeId = safeId;
-exports.truncate = truncate;
-exports.escapeHtml = escapeHtml;
 function clone(value) { return value === undefined ? value : structuredClone(value); }
 function hashText(value) {
     let hash = 0x811c9dc5;
@@ -14587,15 +15263,6 @@ function stripUidSuffix(value) {
         .replace(/(?:｜|\s)[（(]?UID\s*[:：=]\s*[^｜）)\s]+[）)]?\s*$/iu, '')
         .trim();
 }
-function uidKeyword(uid) {
-    const value = String(uid ?? '').trim();
-    return value ? `UID:${value}` : '';
-}
-function titleWithUid(title, uid) {
-    const logical = stripUidSuffix(title);
-    const token = uidKeyword(uid);
-    return token ? `${logical}｜${token}` : logical;
-}
 function isUidKeyword(value) {
     return /^UID\s*[:：=]\s*[^\s]+$/iu.test(String(value ?? '').trim());
 }
@@ -14627,12 +15294,6 @@ function normalizeFact(value) {
 }
 function safeId(value) {
     return String(value ?? '').trim().replace(/[^\p{L}\p{N}_:.-]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 120);
-}
-function truncate(value, max) {
-    return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
-}
-function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] ?? char));
 }
 },"world-setting-import":function(module,exports,require){
 "use strict";
@@ -14735,6 +15396,7 @@ class WorldSettingImportService {
             worldbookName: opened.name,
             worldbookHash,
             chatKey: snapshot.chatKey,
+            settingsSignature: typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '',
             plan,
             blocks: sanitized,
             raw: repairRaw || raw,
@@ -14753,6 +15415,9 @@ class WorldSettingImportService {
         const source = normalizeSource(sourceText);
         if ((0, util_1.hashText)(source) !== preview.sourceHash) throw new Error('设定文本已修改，请重新生成预览');
         if (snapshot.chatKey !== preview.chatKey) throw new Error('聊天已经切换，请重新生成设定预览');
+        const currentSettingsSignature = typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '';
+        if (preview.settingsSignature && currentSettingsSignature !== preview.settingsSignature)
+            throw new Error('插件设置在预览后已经变化，请重新生成设定预览');
         this.validate(snapshot, settings);
         const opened = await this.worldbook.readRaw(settings, snapshot, () => this.validate(snapshot, settings));
         if (opened.name !== preview.worldbookName || digestWorldbook(opened.data) !== preview.worldbookHash)
@@ -14896,11 +15561,12 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const currentScenes = managed.filter((entry) => /^(?:scene-current|scene-current-storage)$/u.test(String(entry.semanticRole ?? '')));
     if (currentScenes.length > 1) issues.push(issue('error', 'multiple-current-scenes', `检测到${currentScenes.length}个当前场景`, currentScenes.map((entry) => entry.title)));
     if (!context.scene) issues.push(issue('warning', 'missing-current-scene', '没有可识别的当前场景', []));
-    if (!gameTime?.label) issues.push(issue('info', 'unknown-game-time', '当前游戏时间尚未记录', []));
+    const effectiveGameTime = gameTime?.label ? gameTime : managementGameTimeFromScene(context.scene);
+    if (!effectiveGameTime?.label) issues.push(issue('info', 'unknown-game-time', '当前游戏时间尚未记录', []));
 
     const fixedSceneRoles = lines(context.scene, '常驻角色');
     const fixedFacilities = lines(context.scene, '固定设施');
-    const present = lines(context.scene, '在场');
+    const present = managementPresent(context.scene);
     if (fixedSceneRoles.length > 5) issues.push(issue('error', 'scene-role-capacity', `当前场景常驻角色超过5个：${fixedSceneRoles.length}`, [context.scene?.title].filter(Boolean)));
     if (fixedFacilities.length > 8) issues.push(issue('error', 'scene-facility-capacity', `当前场景固定设施超过8个：${fixedFacilities.length}`, [context.scene?.title].filter(Boolean)));
 
@@ -14926,6 +15592,15 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const closedEvents = managed.filter((entry) => entry.type === '事件' && (0, semantic_1.isEventClosed)(entry));
     const reopened = closedEvents.filter((entry) => /^(?:active|event-active|event-active-storage)$/u.test(String(entry.lifecycle || entry.semanticRole || '')));
     for (const entry of reopened) issues.push(issue('error', 'closed-event-active', `${entry.title}已经完成却仍被标记为活动`, [entry.title]));
+
+    const currentResources = lines(context.scene, '当前资源');
+    for (const item of managed.filter((entry) => entry.type === '物品' && managementItemUnavailable(entry))) {
+        if (currentResources.some((line) => managementReferences(line, item.name))) {
+            issues.push(issue('error', 'unavailable-item-in-current-scene', `${item.title}已不可用但仍列在当前场景资源中`, [item.title, context.scene?.title].filter(Boolean)));
+        }
+    }
+    const emptyEntries = managed.filter((entry) => !Object.values(entry.sections?.values ?? {}).flat().some((line) => String(line ?? '').trim()));
+    if (emptyEntries.length) issues.push(issue('warning', 'empty-managed-entries', `发现${emptyEntries.length}个空的镜渊管理条目`, emptyEntries.slice(0, 8).map((entry) => entry.title)));
 
     const hardMax = Math.max(600, Number(settings?.activityPackHardMax || 1800));
     const packLength = String(pack?.content ?? '').length;
@@ -14961,7 +15636,7 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const diagnostics = pack?.activityPackDiagnostics ?? null;
     const sectionChars = diagnostics?.sectionChars ?? sectionCharCounts(pack);
     return {
-        gameTime: gameTime ? { ...gameTime } : null,
+        gameTime: effectiveGameTime ? { ...effectiveGameTime } : null,
         currentScene: context.scene ? {
             uid: context.scene.uid,
             title: context.scene.title,
@@ -14995,13 +15670,40 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
             directRelations: directRelations.length,
         },
         issues,
-        healthy: !issues.some((item) => item.level === 'error'),
+        healthy: issues.length === 0,
+        hasErrors: issues.some((item) => item.level === 'error'),
         budget: (0, activity_pack_1.activityPackBudget)(context.characters?.length ?? 0, { hardMax }),
     };
 }
 
 function lines(entry, section) {
     return [...(entry?.sections?.values?.[section] ?? [])].map((line) => String(line ?? '').trim()).filter(Boolean);
+}
+function managementPresent(scene) {
+    const explicit = lines(scene, '在场');
+    if (explicit.length) return explicit;
+    const output = [];
+    for (const line of lines(scene, '当前状态')) {
+        const match = String(line ?? '').match(/(?:当前)?在场(?:者|人物)?\s*(?:为|是|有|包括|包含|：|:)\s*([^，。；;]+)/u);
+        if (!match) continue;
+        output.push(...String(match[1]).split(/[、,，/与和及]/u).map((item) => item.trim()).filter(Boolean));
+    }
+    return [...new Set(output)];
+}
+function managementGameTimeFromScene(scene) {
+    const match = ['当前状态', '定义'].flatMap((section) => lines(scene, section)).map((line) => String(line ?? '').match(/(?:^|[，。；;\s])(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])\s*([^，。；;]+)/u)).find(Boolean);
+    const label = String(match?.[1] ?? '').trim();
+    return label ? { label, sceneTitle: scene?.title ?? '', source: 'scene-fallback' } : null;
+}
+function managementItemUnavailable(entry) {
+    const text = Object.values(entry?.sections?.values ?? {}).flat().join('；');
+    return /(?:已消耗|消耗完毕|已经用尽|已用尽|已碎裂|彻底碎裂|已销毁|已经销毁|已失效|碎裂失效|不复存在|已不存在|永久遗失)/u.test(text)
+        && !/(?:已修复|恢复可用|重新获得|再次持有|找回|重铸|复原)/u.test(text);
+}
+function managementReferences(line, name) {
+    const source = String(line ?? '').replace(/\s+/gu, '').toLocaleLowerCase();
+    const target = String(name ?? '').replace(/\s+/gu, '').toLocaleLowerCase();
+    return Boolean(source && target && source.includes(target));
 }
 function sectionBlocks(entry) {
     return Object.entries(entry?.sections?.values ?? {}).map(([name, values]) => ({ name, lines: values ?? [], empty: !(values ?? []).length }));
@@ -15075,14 +15777,15 @@ class WorldbookAdapter {
             throw new Error('目标世界书已经变化，拒绝恢复或整理');
         if (expectedCurrentData && digestWorldbook(opened.data) !== digestWorldbook(expectedCurrentData))
             throw new Error('世界书在整理期间已被其他操作修改，拒绝覆盖');
+        const beforeData = (0, util_1.clone)(opened.data);
         opened.data = (0, util_1.clone)(nextData);
         opened.data.entries ?? (opened.data.entries = {});
         validate?.();
-        await this.save(opened);
-        validate?.();
-        const verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
-        if (!verified || digestWorldbook(verified) !== digestWorldbook(opened.data))
-            throw new Error('世界书完整快照保存后回读不一致');
+        const intendedDigest = digestWorldbook(opened.data);
+        const verified = await this.commitWithRollback(opened, beforeData, validate, (data) => {
+            if (digestWorldbook(data) !== intendedDigest)
+                throw new Error('世界书完整快照保存后回读不一致');
+        }, '世界书完整快照保存', '保存前快照');
         return parseEntries(verified);
     }
     async updateEntry(settings, uid, patch, snapshot, validate) {
@@ -15227,18 +15930,16 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName)
             throw new Error('目标世界书已经变化，拒绝编辑');
         const beforeVersion = digestWorldbook(opened.data);
+        const beforeData = (0, util_1.clone)(opened.data);
         const verifier = mutate(opened) ?? {};
         validate?.();
         const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!latest || digestWorldbook(latest) !== beforeVersion)
             throw new Error('世界书在编辑前已被其他操作修改，拒绝覆盖');
         validate?.();
-        await this.save(opened);
-        validate?.();
-        const verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
-        if (!verified)
-            throw new Error('世界书编辑后回读失败');
-        verifier.verify?.(verified);
+        const verified = await this.commitWithRollback(opened, beforeData, validate, (data) => {
+            verifier.verify?.(data);
+        }, '世界书编辑', '编辑前快照');
         return parseEntries(verified);
     }
     async apply(settings, plan, sourceMessageKey, contextText, focusUid, snapshot, validate, options = {}) {
@@ -15348,29 +16049,14 @@ class WorldbookAdapter {
         const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!latest || digestWorldbook(latest) !== beforeVersion) throw new Error('世界书在提交前已被其他操作修改，拒绝覆盖');
         validate?.();
-        await this.save(opened);
-        validate?.();
-        let verifiedData;
-        try {
-            verifiedData = await loadWorldInfoAuthoritative(opened.api, opened.name);
-            if (!verifiedData) throw new Error('世界书提交后回读失败');
-            verifyWriteResults(verifiedData, expectedAfterWrites, writeOperations, operationId, settings, focusUid);
-            verifyExitResults(verifiedData, deleted);
-            verifyActivityPack(verifiedData, settings);
-        }
-        catch (error) {
-            // [MA-ATOMIC-02] 保存后的验证也属于提交事务。验证失败必须恢复完整旧快照，不能留下半成功写入。
-            opened.data = (0, util_1.clone)(beforeData);
-            try {
-                await this.save(opened);
-                const restored = await loadWorldInfoAuthoritative(opened.api, opened.name);
-                if (!restored || digestWorldbook(restored) !== digestWorldbook(beforeData)) throw new Error('恢复后快照不一致');
-            }
-            catch (rollbackError) {
-                throw new Error(`世界书提交后验证失败，且旧快照恢复失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
-            }
-            throw new Error(`世界书提交后验证失败，已恢复提交前快照：${(0, util_1.errorText)(error)}`);
-        }
+        const verifiedData = await this.commitWithRollback(opened, beforeData, validate, (data) => {
+            // Verify against the complete plan so an entry intentionally
+            // settled/deleted after its final write is not falsely required
+            // to remain present in the authoritative reread.
+            verifyWriteResults(data, expectedAfterWrites, plan.operations, operationId, settings, focusUid);
+            verifyExitResults(data, deleted);
+            verifyActivityPack(data, settings);
+        }, '世界书提交后验证', '提交前快照');
         opened.data = verifiedData;
 
         const result = parseEntries(verifiedData);
@@ -15418,13 +16104,21 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName) throw new Error('目标世界书已经变化，拒绝回滚');
         if (ordered.some((item) => item.worldbookName && item.worldbookName !== opened.name)) throw new Error('近期写入回执属于其他世界书');
         const beforeVersion = digestWorldbook(opened.data);
+        const beforeData = (0, util_1.clone)(opened.data);
         const touchedUids = new Set();
+        let changedCount = 0;
+        let alreadyRolledBack = 0;
         for (const receipt of [...ordered].reverse()) {
             for (const change of [...receipt.changes].reverse()) {
                 const uid = String(change.uid ?? '');
                 if (!uid) continue;
                 const current = findRawEntry(opened.data, uid);
                 const currentDigest = current ? semanticRawDigest(current.raw) : '';
+                const beforeDigest = change.before ? semanticRawDigest(change.before) : '';
+                if (currentDigest === beforeDigest) {
+                    alreadyRolledBack += 1;
+                    continue;
+                }
                 if (String(change.afterDigest ?? '') !== currentDigest) {
                     throw new Error(`条目 UID ${uid} 在写入回执后又被修改，已停止自动回滚`);
                 }
@@ -15439,6 +16133,7 @@ class WorldbookAdapter {
                     if (!isRuntimePack && (extension.focus === true || extension.locked === true || current.raw.locked === true))
                         throw new Error(`条目“${current.raw.comment || uid}”已被设为焦点或锁定，不能自动删除`);
                     delete opened.data.entries[current.mapKey];
+                    changedCount += 1;
                     continue;
                 }
                 const restored = structuredClone(change.before);
@@ -15452,7 +16147,15 @@ class WorldbookAdapter {
                 const mapKey = current?.mapKey || String(change.beforeMapKey ?? restored.uid ?? uid);
                 opened.data.entries[mapKey] = restored;
                 touchedUids.add(String(restored.uid ?? uid));
+                changedCount += 1;
             }
+        }
+        if (!changedCount) {
+            const unchanged = parseEntries(opened.data);
+            unchanged.changed = false;
+            unchanged.rolledBack = 0;
+            unchanged.alreadyRolledBack = alreadyRolledBack;
+            return unchanged;
         }
         const restoredEntries = parseEntries(opened.data);
         this.applyNativeFields(restoredEntries, settings, focusUid, touchedUids);
@@ -15460,14 +16163,58 @@ class WorldbookAdapter {
         const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         if (!latest || digestWorldbook(latest) !== beforeVersion) throw new Error('世界书在回滚前已被其他操作修改，拒绝覆盖');
         validate?.();
-        await this.save(opened);
-        validate?.();
-        const verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
-        if (!verified) throw new Error('世界书回滚后回读失败');
+        const verified = await this.commitWithRollback(opened, beforeData, validate, (data) => {
+            if (!data) throw new Error('世界书回滚后回读失败');
+        }, '世界书回滚', '回滚前快照');
         const result = parseEntries(verified);
         result.changed = true;
         result.rolledBack = ordered.length;
+        result.alreadyRolledBack = alreadyRolledBack;
         return result;
+    }
+    async commitWithRollback(opened, beforeData, validate, verify, failureLabel, snapshotLabel) {
+        const beforeDigest = digestWorldbook(beforeData);
+        const intendedDigest = digestWorldbook(opened.data);
+        let saveError = null;
+        let verified = null;
+        try {
+            await this.save(opened);
+        }
+        catch (error) {
+            saveError = error;
+        }
+        try {
+            validate?.();
+            verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
+            if (!verified) throw new Error(`${failureLabel}后权威回读失败`);
+            validate?.();
+            const actualDigest = digestWorldbook(verified);
+            if (saveError && actualDigest !== intendedDigest) throw saveError;
+            verify?.(verified);
+            return verified;
+        }
+        catch (error) {
+            let current = verified;
+            if (!current) {
+                try { current = await loadWorldInfoAuthoritative(opened.api, opened.name); }
+                catch { }
+            }
+            if (current && digestWorldbook(current) === beforeDigest) {
+                const primary = saveError || error;
+                throw new Error(`${failureLabel}失败，后端保持${snapshotLabel}：${(0, util_1.errorText)(primary)}`);
+            }
+            opened.data = (0, util_1.clone)(beforeData);
+            try {
+                await this.save(opened);
+                const restored = await loadWorldInfoAuthoritative(opened.api, opened.name);
+                if (!restored || digestWorldbook(restored) !== beforeDigest)
+                    throw new Error('恢复后快照不一致');
+            }
+            catch (rollbackError) {
+                throw new Error(`${failureLabel}失败，且${snapshotLabel}恢复失败：${(0, util_1.errorText)(saveError || error)}；${(0, util_1.errorText)(rollbackError)}`);
+            }
+            throw new Error(`${failureLabel}失败，已恢复${snapshotLabel}：${(0, util_1.errorText)(saveError || error)}`);
+        }
     }
     upsertActivityPack(opened, settings, focusUid = '', options = {}) {
         const existingEntries = parseEntries(opened.data);
@@ -15563,7 +16310,7 @@ class WorldbookAdapter {
         this.assertChat(expectedChatKey);
         const context = this.context();
         const metadataKey = String(api.METADATA_KEY ?? 'world_info');
-        const chatMetadata = context.chatMetadata ?? context.chat_metadata ?? {};
+        const chatMetadata = context.chatMetadata ?? {};
         // [MA-WB-SCOPE-01] 唯一目标来自当前聊天绑定；禁止插件全局名称覆盖宿主绑定。
         let name = String(chatMetadata?.[metadataKey] || chatMetadata?.world_info || '').trim();
         let generatedName = false;
@@ -15597,16 +16344,35 @@ class WorldbookAdapter {
             validate?.();
             this.assertChat(expectedChatKey);
             context.chatMetadata ?? (context.chatMetadata = chatMetadata);
-            context.chatMetadata[metadataKey] = name;
-            context.chatMetadata.world_info = name;
-            if (context.chat_metadata && context.chat_metadata !== context.chatMetadata) {
-                context.chat_metadata[metadataKey] = name;
-                context.chat_metadata.world_info = name;
+            const metadataRef = context.chatMetadata;
+            const bindingChatKey = expectedChatKey || this.chatKey();
+            const hadMetadataKey = Object.prototype.hasOwnProperty.call(metadataRef, metadataKey);
+            const hadWorldInfo = Object.prototype.hasOwnProperty.call(metadataRef, 'world_info');
+            const previousMetadataKey = metadataRef[metadataKey];
+            const previousWorldInfo = metadataRef.world_info;
+            metadataRef[metadataKey] = name;
+            metadataRef.world_info = name;
+            if (typeof context.saveMetadata !== 'function') {
+                restoreWorldbookBinding(metadataRef, metadataKey, hadMetadataKey, previousMetadataKey, hadWorldInfo, previousWorldInfo);
+                throw new Error('SillyTavern 未提供聊天元数据保存接口 saveMetadata');
             }
-            if (typeof context.saveMetadata === 'function') await context.saveMetadata();
-            else context.saveMetadataDebounced?.();
-            validate?.();
-            this.assertChat(expectedChatKey);
+            try {
+                await context.saveMetadata();
+                validate?.();
+                this.assertChat(bindingChatKey);
+                if (this.context().chatMetadata !== metadataRef)
+                    throw new Error('世界书绑定保存期间聊天元数据对象已经变化');
+            }
+            catch (error) {
+                restoreWorldbookBinding(metadataRef, metadataKey, hadMetadataKey, previousMetadataKey, hadWorldInfo, previousWorldInfo);
+                if (this.chatKey() !== bindingChatKey || this.context().chatMetadata !== metadataRef)
+                    throw new Error(`世界书已经创建，但聊天绑定保存失败；已恢复原聊天内存，未向新聊天反向保存：${(0, util_1.errorText)(error)}`);
+                try { await context.saveMetadata(); }
+                catch (rollbackError) {
+                    throw new Error(`世界书已经创建，但聊天绑定保存失败，且旧绑定反向保存失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+                }
+                throw new Error(`世界书已经创建，但聊天绑定保存失败；已恢复并重新保存旧绑定：${(0, util_1.errorText)(error)}`);
+            }
         }
         return { api, name, data };
     }
@@ -15663,26 +16429,20 @@ function buildContextWorldInfoApi(context) {
         if (typeof globalThis.fetch !== 'function' || typeof globalThis.location === 'undefined') {
             return cachedLoadWorldInfo ? cachedLoadWorldInfo(name) : null;
         }
-        try {
-            const response = await globalThis.fetch('/api/worldinfo/get', {
-                method: 'POST',
-                headers: headers(),
-                body: JSON.stringify({ name }),
-                cache: 'no-cache',
-            });
-            if (!response.ok) return null;
-            return response.json();
-        }
-        catch (error) {
-            if (cachedLoadWorldInfo) return cachedLoadWorldInfo(name);
-            throw error;
-        }
+        const response = await globalThis.fetch('/api/worldinfo/get', {
+            method: 'POST',
+            headers: headers(),
+            body: JSON.stringify({ name }),
+            cache: 'no-cache',
+        });
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error(`世界书权威读取失败：HTTP ${response.status}`);
+        return response.json();
     };
-    const loadWorldInfo = cachedLoadWorldInfo ?? loadWorldInfoFresh;
-    const saveWorldInfo = typeof context.saveWorldInfo === 'function' ? context.saveWorldInfo.bind(context) : async (name, data) => {
-        const response = await fetch('/api/worldinfo/edit', { method: 'POST', headers: headers(), body: JSON.stringify({ name, data }) });
-        if (!response.ok) throw new Error(`世界书保存失败：HTTP ${response.status}`);
-    };
+    if (!cachedLoadWorldInfo) throw new Error('SillyTavern 未提供官方 loadWorldInfo');
+    if (typeof context.saveWorldInfo !== 'function') throw new Error('SillyTavern 未提供官方 saveWorldInfo');
+    const loadWorldInfo = cachedLoadWorldInfo;
+    const saveWorldInfo = context.saveWorldInfo.bind(context);
     return {
         METADATA_KEY: 'world_info', loadWorldInfo, loadWorldInfoFresh, saveWorldInfo,
         async createNewWorldInfo(name) { await saveWorldInfo(name, { entries: {} }, true); await context.updateWorldInfoList?.(); return true; },
@@ -15692,6 +16452,13 @@ function buildContextWorldInfoApi(context) {
             const entry = createDefaultWorldInfoEntry(uid); data.entries[String(uid)] = entry; return entry;
         },
     };
+}
+
+function restoreWorldbookBinding(metadata, metadataKey, hadMetadataKey, previousMetadataKey, hadWorldInfo, previousWorldInfo) {
+    if (hadMetadataKey) metadata[metadataKey] = previousMetadataKey;
+    else delete metadata[metadataKey];
+    if (hadWorldInfo) metadata.world_info = previousWorldInfo;
+    else delete metadata.world_info;
 }
 function loadWorldInfoAuthoritative(api, name) {
     if (typeof api?.loadWorldInfoFresh === 'function') return api.loadWorldInfoFresh(name);
@@ -15752,7 +16519,6 @@ function isFoundation(keyword, settings) {
     const definition = settings.keywordDefinitions.find((item) => item.label === '基础设定');
     return definition ? [definition.label, ...definition.aliases].some((item) => (0, util_1.normalizeFact)(item) === normalized) : normalized === (0, util_1.normalizeFact)('基础设定');
 }
-function isFoundationEntry(entry, settings) { return entry.keywords.some((keyword) => isFoundation(keyword, settings)); }
 function applyNativeProfile(raw, profile) {
     raw.constant = profile.constant === true;
     raw.vectorized = profile.vectorized === true;
@@ -15886,23 +16652,16 @@ function findRawEntry(data, uid) {
     }
     return null;
 }
-function preservedNativeSnapshot(raw) {
-    const copy = (0, util_1.clone)(raw ?? {});
-    delete copy.comment;
-    delete copy.name;
-    delete copy.title;
-    delete copy.content;
-    delete copy.key;
-    if (copy.extensions && typeof copy.extensions === 'object')
-        delete copy.extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
-    return copy;
-}
 function verifyWriteResults(data, expectedEntries, operations, operationId, settings, focusUid) {
-    if (!operations.length) return;
+    const writes = operations.filter((operation) => !['noop', 'delete-entry'].includes(operation.kind));
+    if (!writes.length) return;
     const actual = parseEntries(data);
-    const touched = new Set(operations.filter((operation) => operation.kind !== 'create-entry' && operation.targetUid).map((operation) => String(operation.targetUid)));
-    const createdTitles = new Set(operations.filter((operation) => operation.kind === 'create-entry').map((operation) => (0, util_1.normalizeTitle)(operation.title)));
-    const expected = expectedEntries.filter((entry) => touched.has(entry.uid) || createdTitles.has((0, util_1.normalizeTitle)(entry.title)));
+    const touched = new Set(writes.filter((operation) => operation.kind !== 'create-entry' && operation.targetUid).map((operation) => String(operation.targetUid)));
+    const createdTitles = new Set(writes.filter((operation) => operation.kind === 'create-entry').map((operation) => (0, util_1.normalizeTitle)(operation.title)));
+    const deletedUids = new Set(operations.filter((operation) => operation.kind === 'delete-entry' && operation.targetUid).map((operation) => String(operation.targetUid)));
+    const deletedTitles = new Set(operations.filter((operation) => operation.kind === 'delete-entry').map((operation) => (0, util_1.normalizeTitle)(operation.title)));
+    const expected = expectedEntries.filter((entry) => (touched.has(entry.uid) || createdTitles.has((0, util_1.normalizeTitle)(entry.title)))
+        && !deletedUids.has(String(entry.uid)) && !deletedTitles.has((0, util_1.normalizeTitle)(entry.title)));
     for (const item of expected) {
         const found = actual.find((entry) => entry.uid === item.uid) ?? actual.find((entry) => (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(item.title));
         if (!found) throw new Error(`世界书回读未找到已提交条目：${item.title}`);

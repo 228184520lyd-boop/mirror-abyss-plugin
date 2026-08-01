@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.40",
+  "version": "2.0.0-lite.ui.46-progress-recall",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "三维世界书治理｜官方端点透传、三轮全量重启验收、仅推理救援与完整沙箱恢复"
+  "description": "三维世界书治理｜官方宿主胶水、原子回合事务、正逆向恢复与稳定全量验收"
 }
