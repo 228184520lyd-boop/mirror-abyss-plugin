@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.49-scene-settlement",
+  "version": "2.0.0-lite.ui.50-default-recall",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "按完整场景字段结算｜场景变化时提取与小总结｜每六个场景生成大总结"
+  "description": "基础设定唯一常驻｜其余条目默认位置稀疏触发｜按场景结算并可选每回合提取"
 }

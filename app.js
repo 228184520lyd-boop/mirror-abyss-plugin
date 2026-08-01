@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.49-scene-settlement — scene-bound extraction and summaries with six-scene large-summary cadence. */
+/** Mirror Abyss 2.0.0-lite.ui.50-default-recall — default-position sparse recall with optional per-turn extraction. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -772,12 +772,15 @@ class MirrorAbyssApplication {
         if (!settings.enabled) return;
         const autoAudit = settings.autoAudit === true && settings.auditEnabled !== false;
         const autoExtraction = settings.autoExtraction === true && settings.extractionEnabled !== false;
+        const extractEveryTurn = autoExtraction && settings.extractEveryTurn === true;
         if (!autoAudit && !autoExtraction) return;
         try {
             const turn = this.host.latestTurn(index);
             const sceneField = autoExtraction ? this.host.sceneField(turn.assistantText) : null;
-            // 没有明确场景字段时，不参与场景计数与结算；自动审核仍可独立逐轮运行。
-            const automaticTaskType = autoExtraction && sceneField ? 'sceneFlow' : autoAudit ? 'audit' : '';
+            // 默认按场景字段结算；可选逐轮提取。逐轮模式仍保留场景小总结与六场景大总结。
+            const automaticTaskType = extractEveryTurn
+                ? (sceneField ? 'sceneFlow' : autoAudit ? 'full' : 'extraction')
+                : autoExtraction && sceneField ? 'sceneFlow' : autoAudit ? 'audit' : '';
             if (!automaticTaskType) return;
             // [MA-QUEUE-04] 新正文只追加到当前聊天队列。正在处理的旧正文继续使用固定源快照，
             // 不再因为“出现更新的 AI 正文”而主动取消。聊天切换、源正文编辑/删除和用户取消仍会中断。
@@ -1004,7 +1007,14 @@ class MirrorAbyssApplication {
                     this.controlPanel.setTaskProgress?.('revision', 'disabled', '审核未执行');
                 }
                 this.host.assertSnapshot(activeSnapshot, this.settings());
-                result = await this.memoryRunner.handleSceneTurn(settings, activeSnapshot);
+                const perTurn = settings.extractEveryTurn === true;
+                const sceneResult = await this.memoryRunner.handleSceneTurn(settings, activeSnapshot, { skipExtraction: perTurn });
+                if (perTurn) {
+                    const turnEntries = await this.memoryRunner.runTask('extraction', settings, activeSnapshot);
+                    result = { ...sceneResult, turnExtracted: true, turnEntries };
+                } else {
+                    result = sceneResult;
+                }
             }
             else if (taskType === 'smallSummary') result = await this.memoryRunner.runTask('smallSummary', settings, activeSnapshot);
             else if (taskType === 'largeSummary') result = await this.memoryRunner.runTask('largeSummary', settings, activeSnapshot);
@@ -1040,9 +1050,13 @@ class MirrorAbyssApplication {
             }
             else if (taskType === 'sceneFlow') {
                 if (result?.settled) {
-                    this.controlPanel.setTaskProgress?.('extract', 'success', `场景“${result.previousScene || ''}”提取完成`);
+                    this.controlPanel.setTaskProgress?.('extract', 'success', result.turnExtracted ? '本回合提取完成；旧场景已结算' : `场景“${result.previousScene || ''}”提取完成`);
                     this.controlPanel.setTaskProgress?.('write', 'success', `小总结完成；大总结进度 ${result.sceneCount || 0}/${settings.largeSummaryCount}`);
-                    this.controlPanel.setStatus(`已结算场景“${result.previousScene || ''}”，新场景为“${result.currentScene || ''}”；大总结进度 ${result.sceneCount || 0}/${settings.largeSummaryCount}`);
+                    this.controlPanel.setStatus(`已结算场景“${result.previousScene || ''}”，新场景为“${result.currentScene || ''}”；${result.turnExtracted ? '本回合已提取；' : ''}大总结进度 ${result.sceneCount || 0}/${settings.largeSummaryCount}`);
+                } else if (result?.turnExtracted) {
+                    this.controlPanel.setTaskProgress?.('extract', 'success', '本回合提取完成');
+                    this.controlPanel.setTaskProgress?.('write', 'success', '固定事实已写入；场景总结等待字段变化');
+                    this.controlPanel.setStatus(result?.started ? `已开始记录场景“${result.currentScene || ''}”，本回合已提取` : `场景“${result?.currentScene || ''}”继续，本回合已提取`);
                 } else if (result?.started) {
                     this.controlPanel.setTaskProgress?.('extract', 'disabled', '已记录首个场景，尚无旧场景可结算');
                     this.controlPanel.setTaskProgress?.('write', 'disabled', '等待场景字段变化');
@@ -1084,7 +1098,7 @@ class MirrorAbyssApplication {
                 }
             }
             // [MA-UI-SYNC-02] 只在提取、总结与召回重排全部结束后回读一次世界书，避免 UI 显示中间状态。
-            if (['extraction', 'smallSummary', 'largeSummary', 'full', 'migration', 'commitMigration', 'undoMigration'].includes(taskType) || (taskType === 'sceneFlow' && result?.settled)) {
+            if (['extraction', 'smallSummary', 'largeSummary', 'full', 'migration', 'commitMigration', 'undoMigration'].includes(taskType) || (taskType === 'sceneFlow' && (result?.settled || result?.turnExtracted))) {
                 await this.controlPanel.refreshRecallMap?.();
             }
             notify('success', '镜渊：本轮处理完成');
@@ -1406,7 +1420,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.49-scene-settlement';
+exports.VERSION = '2.0.0-lite.ui.50-default-recall';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1800,7 +1814,8 @@ class ControlPanel {
         switches.append(
             this.makeSwitch('enabled', '总开关', '关闭后镜渊不执行任何处理。'),
             this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核。'),
-            this.makeSwitch('autoExtraction', '自动提取', '完整场景字段改变时，结算上一场景。'),
+            this.makeSwitch('autoExtraction', '自动提取', '开启自动提取；默认按场景结算。'),
+            this.makeSwitch('extractEveryTurn', '每回合提取', '可选：每条 AI 正文都提取固定事实；小总结与大总结仍按场景结算。'),
             this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
             this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
             this.makeSwitch('autoSmallSummary', '自动小总结', '场景结算时生成一次。'),
@@ -1816,7 +1831,7 @@ class ControlPanel {
         const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；修正模型只改明确问题并返回完整正文。');
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
-        note.textContent = '自动审核逐轮运行；自动提取与小总结只在完整场景字段改变时结算上一场景。未识别场景字段的正文不参与场景调度。';
+        note.textContent = '默认按完整场景字段结算提取与小总结；可开启“每回合提取”。无论哪种提取模式，小总结仍在场景变化时生成，大总结每六个已结算场景生成。';
         settingsPage.append(apiSection, this.wrapToolSection('自动化与功能开关', switches, true), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与调度阈值', thresholds, false), note);
 
         const rebuild = this.buildRebuildSection();
@@ -2930,6 +2945,7 @@ class ControlPanel {
         if (this.inputs.enabled) this.inputs.enabled.checked = settings.enabled !== false;
         if (this.inputs.autoAudit) this.inputs.autoAudit.checked = settings.autoAudit === true;
         if (this.inputs.autoExtraction) this.inputs.autoExtraction.checked = settings.autoExtraction === true;
+        if (this.inputs.extractEveryTurn) this.inputs.extractEveryTurn.checked = settings.extractEveryTurn === true;
         if (this.inputs.autoSmallSummary) this.inputs.autoSmallSummary.checked = settings.autoSmallSummary !== false;
         if (this.inputs.autoLargeSummary) this.inputs.autoLargeSummary.checked = settings.autoLargeSummary !== false;
         if (this.inputs.largeSummaryCount) this.inputs.largeSummaryCount.value = String(settings.largeSummaryCount ?? 6);
@@ -3184,7 +3200,7 @@ function buildRecallViewModel(entries) {
     });
     mapped.sort((left, right) => Number(left.disabled) - Number(right.disabled) || Number(right.constant) - Number(left.constant) || Number(right.sceneStage === 'current') - Number(left.sceneStage === 'current') || Number(right.recursion === 'bridge') - Number(left.recursion === 'bridge') || right.order - left.order || right.updatedAt - left.updatedAt || left.title.localeCompare(right.title, 'zh-CN'));
     const summary = [
-        { label: '当前场景', count: mapped.filter((item) => item.sceneStage === 'current').length, description: '常驻并负责关联当前局部世界' },
+        { label: '当前场景', count: mapped.filter((item) => item.sceneStage === 'current').length, description: '按完整场景名关键词触发，不再常驻或浅层插入' },
         { label: '上一场景', count: mapped.filter((item) => item.sceneStage === 'previous').length, description: '通过稳定场景名触发并恢复关联' },
         { label: '远期场景', count: mapped.filter((item) => item.sceneStage === 'remote').length, description: '通过纯向量召回并恢复场景关联' },
         { label: '焦点/基础', count: mapped.filter((item) => ['focus', 'foundation'].includes(item.semanticRole)).length, description: '长期常驻且完全递归隔离' },
@@ -3899,6 +3915,7 @@ function sanitizeSettings(settings) {
         extractionEnabled: settings.extractionEnabled !== false,
         autoAudit: settings.autoAudit === true,
         autoExtraction: settings.autoExtraction === true,
+        extractEveryTurn: settings.extractEveryTurn === true,
         activityPackEnabled: false,
         entryBudgetEnabled: settings.entryBudgetEnabled !== false,
         responseTokens: Number(settings.responseTokens || 0),
@@ -4807,6 +4824,8 @@ class HostAdapter {
             requestTimeoutMs: settings.requestTimeoutMs,
             auditEnabled: settings.auditEnabled,
             extractionEnabled: settings.extractionEnabled,
+            autoExtraction: settings.autoExtraction,
+            extractEveryTurn: settings.extractEveryTurn,
             auditPrompt: settings.auditPrompt,
             revisionPrompt: settings.revisionPrompt,
             extractionPrompt: settings.extractionPrompt,
@@ -6820,7 +6839,7 @@ class MemoryRunner {
         this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结无更新');
         return taskResultEntries(result);
     }
-    async handleSceneTurn(settings, snapshot) {
+    async handleSceneTurn(settings, snapshot, options = {}) {
         const scene = this.host.sceneField(snapshot.assistantText);
         if (!scene) return { ignored: true, settled: false };
         const cursor = this.host.cursor();
@@ -6854,7 +6873,9 @@ class MemoryRunner {
         let largeTriggered = false;
         try {
             this.progress('running', `场景字段由“${cursor.currentSceneField}”变为“${scene.raw}”，开始结算旧场景`, { titles: [], phase: 'extract' });
-            const extraction = await this.extract(settings, settlementSnapshot);
+            const extraction = options.skipExtraction === true
+                ? await this.extract(settings, settlementSnapshot, { deterministicOnly: true })
+                : await this.extract(settings, settlementSnapshot);
             committed.push(extraction);
             if (settings.autoSmallSummary !== false) {
                 const small = await this.summarize('small', settings, settlementSnapshot);
@@ -14587,43 +14608,39 @@ function profileFor(entry, settings, sceneStage, focus, activeUids = new Set()) 
         return profile('世界书仓储', active ? 'current' : tierLifecycle(tier), 'warehouse-object', 'none', false, false, true, true, 0, baseOrder, 4, null);
     }
 
+    // [MA-DEFAULT-RECALL-01] 复用旧快照的稀疏召回原则：基础设定唯一常驻；其他条目只由关键词或向量触发。
+    // 位置、顺序与深度统一回到 SillyTavern 新建世界书条目的默认值，避免浅层插入放大近期正文。
+    const defaultDepth = 4;
+    const defaultOrder = 100;
+    const defaultPosition = 0;
     if (isFoundationEntry(entry, settings)) {
-        return profile('基础设定', 'core', 'foundation', 'none', true, false, true, true, 0, 860, 0, null);
-    }
-    if (focus) {
-        return profile('长期焦点', 'core', 'focus', 'none', true, false, true, true, 0, 840, 1, null);
+        return profile('基础设定常驻', 'core', 'foundation', 'none', true, false, true, true, defaultDepth, defaultOrder, defaultPosition, null);
     }
     if (entry.title === '总结｜当前事件') {
-        return profile('小总结向量', 'recent-summary', 'summary-container', 'vector', false, true, true, true, 6, 450, 4, null, true);
+        return profile('小总结向量', 'recent-summary', 'summary-container', 'vector', false, true, true, true, defaultDepth, defaultOrder, defaultPosition, null, true);
     }
     if (entry.title === '总结｜世界历史') {
-        return profile('大总结向量', 'historical-summary', 'summary-container', 'vector', false, true, true, true, 8, 360, 4, null, true);
+        return profile('大总结向量', 'historical-summary', 'summary-container', 'vector', false, true, true, true, defaultDepth, defaultOrder, defaultPosition, null, true);
     }
     if (isSceneType(type)) {
-        if (sceneStage === 'current') return profile('当前场景常驻', 'active', 'scene-current', 'none', true, false, false, true, 2, 760, 4, null);
-        if (sceneStage === 'previous') return profile('上一场景关键词', 'recent', 'scene-previous', 'keyword', false, false, false, true, 5, 620, 4, 4);
-        return profile('远期场景向量', 'historical', 'scene-remote', 'vector', false, true, false, true, 8, 380, 4, null, true);
+        if (sceneStage === 'remote') return profile('远期场景向量', 'historical', 'scene-remote', 'vector', false, true, true, true, defaultDepth, defaultOrder, defaultPosition, null, true);
+        return profile(sceneStage === 'current' ? '当前场景关键词' : '上一场景关键词', sceneStage === 'current' ? 'active' : 'recent', sceneStage === 'current' ? 'scene-current' : 'scene-previous', 'keyword', false, false, true, true, defaultDepth, defaultOrder, defaultPosition, null);
     }
     if (type === '事件') {
-        if ((0, semantic_1.isEventClosed)(entry)) return profile('历史事件向量', 'closed', 'event-history', 'vector', false, true, true, true, 8, 340, 4, null, true);
-        return profile('活动事件关键词', 'active', 'event-active', 'keyword', false, false, true, false, 4, baseOrder, 4, 4);
+        if ((0, semantic_1.isEventClosed)(entry)) return profile('历史事件向量', 'closed', 'event-history', 'vector', false, true, true, true, defaultDepth, defaultOrder, defaultPosition, null, true);
+        return profile('活动事件关键词', 'active', 'event-active', 'keyword', false, false, true, true, defaultDepth, defaultOrder, defaultPosition, null);
     }
     if (isWorldType(type)) {
-        // World-state entries may be reached from an explicit scene/world
-        // reference, but stop there.  Making them bidirectional bridges lets
-        // unrelated world entries recursively awaken one another and can form
-        // cycles as the book grows.
-        return profile('世界变化终点', tier === 'historical' ? 'long-term' : 'active', 'world-state', 'keyword', false, false, true, false, 6, baseOrder, 4, 6);
+        return profile('世界变化关键词', tier === 'historical' ? 'long-term' : 'active', 'world-state', 'keyword', false, false, true, true, defaultDepth, defaultOrder, defaultPosition, null);
     }
     if (isRoleType(type)) {
-        const longTerm = tier === 'long-term';
-        return profile(longTerm ? '长期角色关键词' : '角色关键词', longTerm ? 'long-term' : tierLifecycle(tier), 'role-object', 'keyword', false, false, true, false, longTerm ? 0 : 4, baseOrder, longTerm ? 1 : 4, longTerm ? 6 : 4);
+        return profile(focus ? '焦点角色关键词' : '角色关键词', focus ? 'core' : tierLifecycle(tier), focus ? 'focus' : 'role-object', 'keyword', false, false, true, true, defaultDepth, defaultOrder, defaultPosition, null);
     }
     if (type === '物品') {
-        return profile('物品关键词', tierLifecycle(tier), 'item-object', 'keyword', false, false, true, false, 4, baseOrder, 4, 4);
+        return profile('物品关键词', tierLifecycle(tier), 'item-object', 'keyword', false, false, true, true, defaultDepth, defaultOrder, defaultPosition, null);
     }
-    // 旧版遗留类型不再扩散，也不默认开启向量；等待后续人工或总结迁移。
-    return profile('旧类型关键词终点', tierLifecycle(tier), 'legacy-object', 'keyword', false, false, true, false, 5, baseOrder, 4, 4);
+    return profile('旧类型关键词', tierLifecycle(tier), 'legacy-object', 'keyword', false, false, true, true, defaultDepth, defaultOrder, defaultPosition, null);
+
 }
 
 function profile(name, lifecycle, semanticRole, keywordMode, constant, vectorized, preventRecursion, excludeRecursion, depth, order, position, scanDepth, pureVector = false) {
@@ -14936,6 +14953,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     migrationProfileId: '',
     autoAudit: false,
     autoExtraction: false,
+    extractEveryTurn: false,
     autoSmallSummary: true,
     autoLargeSummary: true,
     activityPackEnabled: false,
@@ -15048,6 +15066,7 @@ function parseSettings(value) {
         migrationProfileId: profileValue(candidate, 'migrationProfileId'),
         autoAudit: candidate.autoAudit === true || (candidate.autoProcess === true && candidate.auditEnabled !== false),
         autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
+        extractEveryTurn: candidate.extractEveryTurn === true,
         autoSmallSummary: candidate.autoSmallSummary !== false,
         autoLargeSummary: candidate.autoLargeSummary !== false,
         activityPackEnabled: false,
@@ -15112,7 +15131,7 @@ function parseKeywordDefinitions(value, legacyTables) {
             description: String(raw.description ?? raw.prompt ?? ''),
             aliases: (0, util_1.normalizeStringArray)(raw.aliases),
             enabled: raw.enabled !== false,
-            constant: raw.constant === true || label === '基础设定',
+            constant: label === '基础设定',
             vectorized: raw.vectorized !== false && label !== '基础设定',
             preventRecursion: raw.preventRecursion === true,
             depth: (0, util_1.clampNumber)(raw.depth, label === '基础设定' ? 1 : 4, 0, 99),
