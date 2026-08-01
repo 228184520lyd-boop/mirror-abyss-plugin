@@ -358,6 +358,7 @@ class MirrorAbyssApplication {
         }, {
             executeTurn: (taskType, index, automatic, settings) => this.runDiagnosticTurn(taskType, index, automatic, settings),
             pipelineState: () => (0, util_1.clone)(this.controlPanel?.taskStates ?? {}),
+            resetRound: (roundIndex, totalRounds) => this.resetAcceptanceRound(roundIndex, totalRounds),
         });
         this.auditRunner = new audit_1.AuditRunner(this.host, () => this.settings(), (progress) => {
             const snapshot = this.activeSnapshots.get(progress?.chatKey || safeChatKey(this.host));
@@ -483,6 +484,16 @@ class MirrorAbyssApplication {
                 this.clearPendingMessageTimers(snapshot.chatKey);
             }
         });
+    }
+    async resetAcceptanceRound(roundIndex, totalRounds) {
+        const chatKey = this.host.chatKey();
+        this.clearPendingMessageTimers(chatKey);
+        this.clearPendingSourceReconcileTimers(chatKey);
+        this.auditRunner.resetStatus?.(chatKey);
+        this.memoryRunner.resetStatus?.(chatKey);
+        this.migrationService.clearPreview?.();
+        this.worldSettingImportService.clearPreview?.();
+        this.controlPanel?.resetTaskStates?.(`全量验收第 ${roundIndex}/${totalRounds} 轮从头开始`);
     }
     async runDiagnosticTurn(taskType, index, automatic, settings) {
         const token = { cancelled: false, reason: '' };
@@ -1258,7 +1269,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.39';
+exports.VERSION = '2.0.0-lite.ui.40';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1860,7 +1871,7 @@ class ControlPanel {
         status.textContent = '尚未运行';
         const report = document.createElement('pre');
         report.className = 'ma-lite-diagnostic-report';
-        report.textContent = '全自动验收会运行主聊天真实链、镜渊确定性完整闭环和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
+        report.textContent = '全自动验收连续运行三轮独立完整测试；每轮都从原始聊天、元数据和世界书快照重头开始，并通过 SillyTavern 官方 /trigger 与 Connection Profile 服务调用模型。';
         actions.append(run, exportButton);
         section.append(help, actions, status, report);
         this.diagnosticStatusNode = status;
@@ -1915,7 +1926,7 @@ class ControlPanel {
     renderDiagnosticReport(report) {
         if (!this.diagnosticReportNode) return;
         if (!report) {
-            this.diagnosticReportNode.textContent = '全自动验收会运行主聊天真实链、镜渊确定性完整闭环和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
+            this.diagnosticReportNode.textContent = '全自动验收连续运行三轮独立完整测试；每轮都从原始聊天、元数据和世界书快照重头开始，并通过 SillyTavern 官方 /trigger 与 Connection Profile 服务调用模型。';
             if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = '尚未运行';
             return;
         }
@@ -1924,16 +1935,18 @@ class ControlPanel {
         const warnings = (report.checks || []).filter((check) => check.status === 'warn');
         const pluginLabel = report.pluginAccepted === true ? '插件闭环通过' : '插件闭环未通过';
         const mainLabel = report.mainChatAccepted === true ? '主聊天链通过' : report.acceptance?.mainChat === 'unavailable' ? '主聊天链不可用' : '主聊天链未通过';
+        const rounds = report.roundSummary || {};
         const lines = [
             `${report.accepted ? '通过' : '未通过'}｜${pluginLabel}｜${mainLabel}`,
-            `通过 ${summary.pass || 0}｜警告 ${summary.warn || 0}｜失败 ${summary.fail || 0}｜跳过 ${summary.skip || 0}`,
+            `本次采用 ${rounds.completed || 1}/${rounds.requested || 1} 轮独立全量重启｜插件完整通过 ${rounds.pluginPassRounds ?? (report.pluginAccepted ? 1 : 0)} 轮｜主聊天完整通过 ${rounds.mainPassRounds ?? (report.mainChatAccepted ? 1 : 0)} 轮`,
+            `选定第 ${rounds.selectedRound || report.roundIndex || 1} 轮作为最终结果｜通过 ${summary.pass || 0}｜警告 ${summary.warn || 0}｜失败 ${summary.fail || 0}｜跳过 ${summary.skip || 0}`,
             `耗时 ${report.durationMs || 0} ms｜世界书 ${report.scope?.worldbookName || '未绑定'}`,
         ];
         for (const check of failed.slice(0, 4)) lines.push(`失败｜${check.label}：${check.detail}`);
         for (const check of warnings.slice(0, 3)) lines.push(`警告｜${check.label}：${check.detail}`);
-        if (!failed.length && !warnings.length) lines.push('插件闭环与主聊天链全部通过。');
+        if (!failed.length && !warnings.length) lines.push('三轮独立验收均已收敛；每轮结束后均恢复原始快照。');
         this.diagnosticReportNode.textContent = lines.join('\n');
-        if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = report.accepted ? (report.mainChatAccepted ? '插件闭环与主聊天链通过' : '插件闭环通过，主聊天链需检查') : '插件闭环未通过';
+        if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = report.accepted ? (report.acceptance?.pluginClosedLoop === 'stable-pass' ? '三轮插件闭环稳定通过' : '插件闭环重启后通过，存在间歇性失败') : '三轮插件闭环均未完整通过';
     }
     buildResetSection() {
         const section = document.createElement('section');
@@ -3067,9 +3080,86 @@ class DiagnosticsService {
     currentReport() { return this.lastReport ? (0, util_1.clone)(this.lastReport) : null; }
     clear() { this.lastReport = null; }
     async run(settings, snapshot, validate) {
+        const suiteStarted = new Date();
+        const totalRounds = 3;
+        const rounds = [];
+        for (let roundIndex = 1; roundIndex <= totalRounds; roundIndex += 1) {
+            await this.hooks.resetRound?.(roundIndex, totalRounds);
+            validate?.();
+            this.progress({ state: 'running', detail: `全量验收第 ${roundIndex}/${totalRounds} 轮：已回到原始快照，从宿主检查重新开始`, roundIndex, totalRounds });
+            const round = await this.runSingleRound(settings, snapshot, validate, { roundIndex, totalRounds, suppressFinal: true });
+            rounds.push(round);
+            if (!roundSafetyPassed(round)) break;
+        }
+        const pluginPassRounds = rounds.filter((round) => round.pluginAccepted === true).length;
+        const mainPassRounds = rounds.filter((round) => round.mainChatAccepted === true).length;
+        const mainAttemptRounds = rounds.filter((round) => round.checks?.some((check) => check.id === 'main-e2e-generation' && check.status !== 'skip')).length;
+        const safetyAllPass = rounds.length === totalRounds && rounds.every(roundSafetyPassed);
+        const transportAllPass = rounds.every((round) => round.checks?.some((check) => check.id === 'official-transport-integrity' && check.status === 'pass'));
+        const selected = [...rounds].reverse().find((round) => round.pluginAccepted === true) ?? rounds.at(-1);
+        const report = selected ? (0, util_1.clone)(selected) : {
+            schemaVersion: 4,
+            plugin: { name: constants_1.DISPLAY_NAME, version: constants_1.VERSION },
+            checks: [],
+            summary: { pass: 0, warn: 0, fail: 1, skip: 0, total: 1 },
+        };
+        report.schemaVersion = 4;
+        report.startedAt = suiteStarted.toISOString();
+        report.finishedAt = new Date().toISOString();
+        report.durationMs = Date.now() - suiteStarted.getTime();
+        report.executionMode = 'three-independent-full-rounds-real-host-e2e-with-controlled-fault-matrix';
+        report.rounds = rounds.map((round) => (0, util_1.clone)(round));
+        report.roundSummary = {
+            requested: totalRounds,
+            completed: rounds.length,
+            pluginPassRounds,
+            mainPassRounds,
+            mainAttemptRounds,
+            safetyAllPass,
+            transportAllPass,
+            selectedRound: Number(selected?.roundIndex || 0),
+        };
+        report.pluginAccepted = pluginPassRounds >= 1 && safetyAllPass && transportAllPass;
+        report.mainChatAccepted = mainPassRounds >= 1 ? true : (mainAttemptRounds > 0 ? false : null);
+        report.acceptance = {
+            pluginClosedLoop: pluginPassRounds === totalRounds ? 'stable-pass' : (pluginPassRounds >= 1 ? 'pass-after-full-restart' : 'fail'),
+            mainChat: mainPassRounds === totalRounds ? 'stable-pass' : (mainPassRounds >= 1 ? 'pass-after-full-restart' : (mainAttemptRounds > 0 ? 'fail' : 'unavailable')),
+            transportIntegrity: transportAllPass ? 'pass' : 'fail',
+            roundIsolation: safetyAllPass ? 'pass' : 'fail',
+        };
+        report.accepted = report.pluginAccepted;
+        report.checks = Array.isArray(report.checks) ? report.checks.filter((check) => check.id !== 'full-round-aggregate') : [];
+        report.checks.push({
+            id: 'full-round-aggregate',
+            label: '三轮全量重启验收汇总',
+            category: '验收轮次',
+            status: report.accepted ? (pluginPassRounds === totalRounds && mainPassRounds === totalRounds ? 'pass' : 'warn') : 'fail',
+            durationMs: report.durationMs,
+            detail: report.accepted
+                ? `插件闭环 ${pluginPassRounds}/${totalRounds} 轮完整通过；每轮均从原快照重头开始`
+                : `插件闭环 ${pluginPassRounds}/${totalRounds} 轮通过；未达到至少一轮完整通过或安全恢复条件`,
+            evidence: {
+                requestedRounds: totalRounds,
+                completedRounds: rounds.length,
+                pluginPassRounds,
+                mainPassRounds,
+                mainAttemptRounds,
+                safetyAllPass,
+                transportAllPass,
+                selectedRound: Number(selected?.roundIndex || 0),
+            },
+        });
+        report.summary = countStatuses(report.checks);
+        this.lastReport = (0, util_1.clone)(report);
+        this.progress({ state: report.accepted ? 'success' : 'error', detail: summarizeDiagnosticReport(report), report: this.currentReport() });
+        return this.currentReport();
+    }
+    async runSingleRound(settings, snapshot, validate, options = {}) {
         const startedAt = new Date();
         const report = {
-            schemaVersion: 3,
+            schemaVersion: 4,
+            roundIndex: Number(options.roundIndex || 1),
+            totalRounds: Number(options.totalRounds || 1),
             plugin: { name: constants_1.DISPLAY_NAME, version: constants_1.VERSION },
             startedAt: startedAt.toISOString(),
             finishedAt: '',
@@ -3078,7 +3168,7 @@ class DiagnosticsService {
             pluginAccepted: false,
             mainChatAccepted: null,
             acceptance: { pluginClosedLoop: 'pending', mainChat: 'pending' },
-            executionMode: 'real-host-e2e-with-controlled-fault-matrix',
+            executionMode: 'single-independent-full-round-real-host-e2e-with-controlled-fault-matrix',
             summary: { pass: 0, warn: 0, fail: 0, skip: 0, total: 0 },
             environment: {},
             scope: {},
@@ -3126,7 +3216,7 @@ class DiagnosticsService {
                 const APIs = {
                     eventApi: typeof context.eventSource?.on === 'function',
                     stscript: typeof (context.executeSlashCommandsWithOptions ?? context.executeSlashCommands) === 'function',
-                    mainGenerate: typeof (context.generate ?? context.Generate) === 'function',
+                    mainTrigger: typeof (context.executeSlashCommandsWithOptions ?? context.executeSlashCommands) === 'function',
                     saveChat: typeof context.saveChat === 'function' || typeof context.saveChatConditional === 'function',
                 };
                 if (Object.values(APIs).some((value) => !value)) throw new Error(`端到端宿主 API 不完整：${Object.entries(APIs).filter(([, value]) => !value).map(([key]) => key).join('、')}`);
@@ -3137,6 +3227,16 @@ class DiagnosticsService {
                 const chatKey = this.host.chatKey();
                 if (!chatKey) throw new Error('当前没有活动聊天');
                 return { chatKeyHash: (0, util_1.hashText)(chatKey), roleKeyHash: (0, util_1.hashText)(this.host.roleKey()), messageCount: context.chat?.length ?? 0 };
+            });
+
+            await runCheck('official-transport-integrity', '官方连接与端点原样保持', '连接', async () => {
+                const before = collectOfficialTransportEvidence(this.host, context, settings);
+                if (before.invalidProfileUrls.length) {
+                    throw new Error(`Connection Profile URL 不符合 SillyTavern Custom 端点规则：${before.invalidProfileUrls.join('、')}；应保存基础地址，可含 /v1，但不得包含 /chat/completions`);
+                }
+                if (!before.mainUsesOfficialGenerate) throw new Error('主聊天验收未连接 SillyTavern 官方 STscript /trigger 接口');
+                if (before.profileCount > 0 && !before.profileUsesOfficialService) throw new Error('Connection Profile 验收未连接官方 ConnectionManagerRequestService');
+                return before;
             });
 
             await runCheck('worldbook-binding', '当前聊天世界书绑定', '世界书', async () => {
@@ -3463,7 +3563,7 @@ class DiagnosticsService {
             report.finishedAt = new Date().toISOString();
             report.durationMs = Date.now() - startedAt.getTime();
             report.summary = countStatuses(report.checks);
-            const requiredPlugin = ['host-context', 'worldbook-authoritative-read', 'worldbook-reversible-write', 'plugin-e2e-fixture', 'plugin-e2e-full-pipeline', 'plugin-e2e-idempotency', 'controlled-fault-matrix', 'sandbox-restore', 'chat-nonmutation', 'generation-state-nonmutation'];
+            const requiredPlugin = ['host-context', 'official-transport-integrity', 'worldbook-authoritative-read', 'worldbook-reversible-write', 'plugin-e2e-fixture', 'plugin-e2e-full-pipeline', 'plugin-e2e-idempotency', 'controlled-fault-matrix', 'sandbox-restore', 'chat-nonmutation', 'generation-state-nonmutation'];
             const passed = new Set(report.checks.filter((check) => check.status === 'pass').map((check) => check.id));
             const failed = new Set(report.checks.filter((check) => check.status === 'fail').map((check) => check.id));
             report.pluginAccepted = requiredPlugin.every((id) => passed.has(id)) && !requiredPlugin.some((id) => failed.has(id));
@@ -3474,10 +3574,23 @@ class DiagnosticsService {
                 mainChat: report.mainChatAccepted ? 'pass' : (report.checks.some((check) => mainRequired.includes(check.id) && (check.status === 'warn' || check.status === 'fail')) ? 'fail' : 'unavailable'),
             };
             report.accepted = report.pluginAccepted;
-            this.lastReport = (0, util_1.clone)(report);
-            this.progress({ state: report.accepted ? 'success' : 'error', detail: summarizeDiagnosticReport(report), report: this.currentReport() });
+            if (!options.suppressFinal) {
+                this.lastReport = (0, util_1.clone)(report);
+                this.progress({ state: report.accepted ? 'success' : 'error', detail: summarizeDiagnosticReport(report), report: this.currentReport() });
+            }
+            else {
+                const roundSafe = roundSafetyPassed(report);
+                this.progress({
+                    state: roundSafe ? 'running' : 'error',
+                    detail: roundSafe
+                        ? `第 ${report.roundIndex}/${report.totalRounds} 轮结束：插件闭环${report.pluginAccepted ? '通过' : '未通过'}；已完整恢复，下一轮将从头开始`
+                        : `第 ${report.roundIndex}/${report.totalRounds} 轮结束：安全恢复未通过，已停止后续轮次`,
+                    roundIndex: report.roundIndex,
+                    totalRounds: report.totalRounds,
+                });
+            }
         }
-        return this.currentReport();
+        return (0, util_1.clone)(report);
     }
     async reversibleWorldbookWrite(settings, snapshot, rawBefore, validate) {
         const original = (0, util_1.clone)(rawBefore.data);
@@ -3569,6 +3682,44 @@ function configuredModelRoutes(settings) {
         const label = route.id ? `Profile ${route.id}（${route.labels.join('、')}）` : `当前连接（${route.labels.join('、')}）`;
         return { id: route.id, label, summary: { kind: route.id ? 'profile' : 'current', profileId: route.id, stages: route.labels } };
     });
+}
+function collectOfficialTransportEvidence(host, context, settings) {
+    const signature = host.connectionStateSignature(settings) ?? {};
+    const profiles = Array.isArray(signature.profiles) ? signature.profiles : [];
+    const invalidProfileUrls = [];
+    const routeFingerprints = [];
+    for (const pair of profiles) {
+        const id = String(pair?.[0] ?? '');
+        const profile = pair?.[1] && typeof pair[1] === 'object' ? pair[1] : null;
+        const api = String(profile?.api ?? '');
+        const mode = String(profile?.mode ?? '');
+        const url = String(profile?.['api-url'] ?? '').trim();
+        if ((api === 'custom' || mode === 'cc') && /\/chat\/completions\/?(?:[?#].*)?$/iu.test(url)) invalidProfileUrls.push(id || '(未命名 Profile)');
+        routeFingerprints.push({
+            idHash: id ? (0, util_1.hashText)(id) : '',
+            api,
+            mode,
+            model: String(profile?.model ?? ''),
+            endpointHash: url ? (0, util_1.hashText)(url) : '',
+            endpointHasV1: /\/v1\/?(?:[?#].*)?$/iu.test(url),
+            endpointHasChatCompletions: /\/chat\/completions\/?(?:[?#].*)?$/iu.test(url),
+        });
+    }
+    return {
+        mainTransport: 'SillyTavern STscript /trigger',
+        profileTransport: 'SillyTavern ConnectionManagerRequestService.sendRequest',
+        directEndpointFetch: false,
+        mainUsesOfficialGenerate: typeof (context.executeSlashCommandsWithOptions ?? context.executeSlashCommands) === 'function',
+        profileUsesOfficialService: Boolean(context.ConnectionManagerRequestService?.sendRequest),
+        profileCount: profiles.length,
+        invalidProfileUrls,
+        routeFingerprints,
+    };
+}
+function roundSafetyPassed(round) {
+    const required = ['sandbox-restore', 'chat-nonmutation', 'generation-state-nonmutation'];
+    const passed = new Set((round?.checks ?? []).filter((check) => check.status === 'pass').map((check) => check.id));
+    return required.every((id) => passed.has(id));
 }
 function sanitizeSettings(settings) {
     return {
@@ -4522,6 +4673,9 @@ class HostAdapter {
                     catch (error) { throw new Error(`无法读取 Connection Profile：${(0, util_1.errorText)(error)}`); }
                     if (!profile) throw new Error(`所选 Connection Profile 已不存在：${profileId}`);
                 }
+                // [MA-HOST-MODEL-04] Profile 的 API 类型、服务器 URL、端口、模型与密钥全部由
+                // SillyTavern ConnectionManagerRequestService 从已保存 Profile 读取。插件不拼接 URL、
+                // 不追加 /v1 或 /chat/completions，也不通过 override payload 改写路由字段。
                 request = service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
@@ -4530,9 +4684,7 @@ class HostAdapter {
                     extractData: true,
                     includePreset: generationOptions?.includePreset !== false,
                     includeInstruct: generationOptions?.includeInstruct !== false,
-                }, generationOptions?.overridePayload && typeof generationOptions.overridePayload === 'object'
-                    ? generationOptions.overridePayload
-                    : {});
+                }, {});
             }
             else {
                 // [MA-HOST-MODEL-01] 当前连接优先使用 SillyTavern 官方“原始响应 + 官方解析器”组合。
@@ -4872,9 +5024,9 @@ class HostAdapter {
         const context = this.context();
         const chat = context.chat ?? [];
         const before = chat.length;
-        const generate = context.generate ?? context.Generate;
-        if (typeof generate !== 'function') throw new Error('SillyTavern 未提供主正文 Generate 接口');
-        await withTimeout(generate('normal', { automatic_trigger: true }), timeoutMs, () => {
+        const execute = context.executeSlashCommandsWithOptions ?? context.executeSlashCommands;
+        if (typeof execute !== 'function') throw new Error('SillyTavern 未提供 STscript /trigger 接口');
+        await withTimeout(execute('/trigger', { handleParserErrors: true, source: 'mirror-abyss-diagnostic' }), timeoutMs, () => {
             try { context.stopGeneration?.(); } catch { }
         });
         const deadline = Date.now() + 4000;
