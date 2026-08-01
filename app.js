@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.37 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.39 — governed worldbook storage, current game time, scene settlement, activity-pack projection, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1258,7 +1258,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.37';
+exports.VERSION = '2.0.0-lite.ui.39';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1842,7 +1842,7 @@ class ControlPanel {
         section.className = 'ma-lite-diagnostic';
         const help = document.createElement('div');
         help.className = 'ma-lite-diagnostic-help';
-        help.textContent = '全自动实机验收会临时发送玩家消息、调用主模型生成正文，并完整运行审核、修正、提取、写入与活动包链；结束后自动恢复聊天、元数据和世界书。诊断报告不包含正文、提示词、密钥或完整模型响应。';
+        help.textContent = '全自动验收一次运行两条链：玩家主聊天真实生成链，以及不依赖玩家主 API 的镜渊确定性完整闭环。两条链都会验证审核、修正、提取、写入、活动包与恢复；主聊天连接失败会单独报告，不会阻止插件闭环继续。诊断报告不包含正文、提示词、密钥或完整模型响应。';
         const actions = document.createElement('div');
         actions.className = 'ma-lite-diagnostic-actions';
         const run = document.createElement('button');
@@ -1860,7 +1860,7 @@ class ControlPanel {
         status.textContent = '尚未运行';
         const report = document.createElement('pre');
         report.className = 'ma-lite-diagnostic-report';
-        report.textContent = '全自动实机验收会临时发送消息并调用主模型，随后运行完整处理链和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
+        report.textContent = '全自动验收会运行主聊天真实链、镜渊确定性完整闭环和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
         actions.append(run, exportButton);
         section.append(help, actions, status, report);
         this.diagnosticStatusNode = status;
@@ -1915,22 +1915,25 @@ class ControlPanel {
     renderDiagnosticReport(report) {
         if (!this.diagnosticReportNode) return;
         if (!report) {
-            this.diagnosticReportNode.textContent = '全自动实机验收会临时发送消息并调用主模型，随后运行完整处理链和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
+            this.diagnosticReportNode.textContent = '全自动验收会运行主聊天真实链、镜渊确定性完整闭环和受控故障矩阵；结束后自动恢复聊天、元数据和世界书。';
             if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = '尚未运行';
             return;
         }
         const summary = report.summary || {};
         const failed = (report.checks || []).filter((check) => check.status === 'fail');
         const warnings = (report.checks || []).filter((check) => check.status === 'warn');
+        const pluginLabel = report.pluginAccepted === true ? '插件闭环通过' : '插件闭环未通过';
+        const mainLabel = report.mainChatAccepted === true ? '主聊天链通过' : report.acceptance?.mainChat === 'unavailable' ? '主聊天链不可用' : '主聊天链未通过';
         const lines = [
-            `${report.accepted ? '通过' : '未通过'}｜通过 ${summary.pass || 0}｜警告 ${summary.warn || 0}｜失败 ${summary.fail || 0}｜跳过 ${summary.skip || 0}`,
+            `${report.accepted ? '通过' : '未通过'}｜${pluginLabel}｜${mainLabel}`,
+            `通过 ${summary.pass || 0}｜警告 ${summary.warn || 0}｜失败 ${summary.fail || 0}｜跳过 ${summary.skip || 0}`,
             `耗时 ${report.durationMs || 0} ms｜世界书 ${report.scope?.worldbookName || '未绑定'}`,
         ];
         for (const check of failed.slice(0, 4)) lines.push(`失败｜${check.label}：${check.detail}`);
         for (const check of warnings.slice(0, 3)) lines.push(`警告｜${check.label}：${check.detail}`);
-        if (!failed.length && !warnings.length) lines.push('全部验收项目通过。');
+        if (!failed.length && !warnings.length) lines.push('插件闭环与主聊天链全部通过。');
         this.diagnosticReportNode.textContent = lines.join('\n');
-        if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = report.accepted ? '自动验收通过' : '自动验收未通过';
+        if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = report.accepted ? (report.mainChatAccepted ? '插件闭环与主聊天链通过' : '插件闭环通过，主聊天链需检查') : '插件闭环未通过';
     }
     buildResetSection() {
         const section = document.createElement('section');
@@ -3066,12 +3069,15 @@ class DiagnosticsService {
     async run(settings, snapshot, validate) {
         const startedAt = new Date();
         const report = {
-            schemaVersion: 2,
+            schemaVersion: 3,
             plugin: { name: constants_1.DISPLAY_NAME, version: constants_1.VERSION },
             startedAt: startedAt.toISOString(),
             finishedAt: '',
             durationMs: 0,
             accepted: false,
+            pluginAccepted: false,
+            mainChatAccepted: null,
+            acceptance: { pluginClosedLoop: 'pending', mainChat: 'pending' },
             executionMode: 'real-host-e2e-with-controlled-fault-matrix',
             summary: { pass: 0, warn: 0, fail: 0, skip: 0, total: 0 },
             environment: {},
@@ -3232,18 +3238,49 @@ class DiagnosticsService {
             }
             else pushSkip('worldbook-reversible-write', '世界书写入—回读—回滚', '世界书', '权威读取未通过，未执行写入测试');
 
-            let sent = null;
-            let generated = null;
+            let mainSent = null;
+            let mainGenerated = null;
+            let mainPipeline = null;
+            let pluginFixture = null;
+            let pluginPipeline = null;
+            const verifyPipeline = async (result, mode) => {
+                const warehouse = result?.warehouse ?? {};
+                const created = Array.isArray(warehouse.created) ? warehouse.created : [];
+                const updated = Array.isArray(warehouse.updated) ? warehouse.updated : [];
+                const deleted = Array.isArray(warehouse.deleted) ? warehouse.deleted : [];
+                const businessWrites = created.length + updated.length + deleted.length;
+                const readBack = await this.worldbook.readRaw(settings, snapshot, validate);
+                const entries = Object.values(readBack.data?.entries ?? {});
+                const activityPack = entries.find((entry) => String(entry?.comment ?? '') === governance_1.ACTIVITY_PACK_TITLE);
+                if (settings.extractionEnabled !== false && businessWrites < 1) throw new Error('正文完成提取但业务条目零写入');
+                if (settings.activityPackEnabled !== false && !activityPack) throw new Error('完整处理后未生成当前活动包');
+                const stages = this.hooks.pipelineState?.() ?? {};
+                for (const key of ['audit', 'revision', 'extract', 'write']) {
+                    if (!stages[key]) throw new Error(`四阶段状态缺少 ${key}`);
+                    if (stages[key].state === 'running' || stages[key].state === 'queued') throw new Error(`阶段 ${key} 未收敛`);
+                }
+                return {
+                    mode,
+                    businessWrites,
+                    created,
+                    updated,
+                    deleted,
+                    activityPackPresent: Boolean(activityPack),
+                    activityPackChars: String(activityPack?.content ?? '').length,
+                    stages,
+                };
+            };
+
             if (rawBefore && typeof this.hooks.executeTurn === 'function') {
-                sent = await runCheck('e2e-user-send', '自动发送玩家测试消息', '端到端', async () => {
+                mainSent = await runCheck('main-e2e-user-send', '主聊天链：自动发送玩家测试消息', '主聊天端到端', async () => {
                     const result = await this.host.sendDiagnosticUserMessage(
                         '【镜渊自动验收临时消息】请自然回复三段完整叙事，约五百字。正文中明确写出：镜渊验收庭灯火通明，北侧银门已经打开，守门人洛恩站在门旁，并说明这里是王城议事厅入口。不要替玩家行动或决定，结尾必须完整。'
                     );
-                    return { mode: 'real-host', ...result };
+                    return { mode: 'real-host-main-chat', ...result };
                 });
 
-                if (sent) {
-                    generated = await runCheck('e2e-main-generation', '主模型真实正文生成', '端到端', async () => {
+                if (mainSent) {
+                    mainGenerated = await runCheck('main-e2e-generation', '主聊天链：主模型真实正文生成', '主聊天端到端', async () => {
                         const before = collectGenerationState(this.host, context, settings);
                         const result = await this.host.generateDiagnosticAssistant(Math.max(60000, Number(settings.requestTimeoutMs) || 90000));
                         const after = collectGenerationState(this.host, context, settings);
@@ -3251,52 +3288,62 @@ class DiagnosticsService {
                         if (result.chars < 120) throw new Error(`主正文仅 ${result.chars} 字，明显过短`);
                         if (!result.completeEnding) throw new Error('主正文结尾不完整，疑似被截断');
                         return { mode: 'real-host-main-generation', ...result, mainGenerationStatePreserved: true };
-                    });
+                    }, { optional: true });
                 }
 
-                let pipelineResult = null;
-                if (generated) {
-                    pipelineResult = await runCheck('e2e-full-pipeline', '真实正文完整处理链', '端到端', async () => {
-                        const result = await this.hooks.executeTurn('full', generated.index, false, settings);
-                        const warehouse = result?.warehouse ?? {};
-                        const created = Array.isArray(warehouse.created) ? warehouse.created : [];
-                        const updated = Array.isArray(warehouse.updated) ? warehouse.updated : [];
-                        const deleted = Array.isArray(warehouse.deleted) ? warehouse.deleted : [];
-                        const businessWrites = created.length + updated.length + deleted.length;
-                        const readBack = await this.worldbook.readRaw(settings, snapshot, validate);
-                        const entries = Object.values(readBack.data?.entries ?? {});
-                        const activityPack = entries.find((entry) => String(entry?.comment ?? '') === governance_1.ACTIVITY_PACK_TITLE);
-                        if (settings.extractionEnabled !== false && businessWrites < 1) throw new Error('真实正文完成提取但业务条目零写入');
-                        if (settings.activityPackEnabled !== false && !activityPack) throw new Error('完整处理后未生成当前活动包');
-                        const stages = this.hooks.pipelineState?.() ?? {};
-                        for (const key of ['audit', 'revision', 'extract', 'write']) {
-                            if (!stages[key]) throw new Error(`四阶段状态缺少 ${key}`);
-                            if (stages[key].state === 'running' || stages[key].state === 'queued') throw new Error(`阶段 ${key} 未收敛`);
-                        }
-                        return {
-                            mode: 'real-host-full-pipeline',
-                            businessWrites,
-                            created,
-                            updated,
-                            deleted,
-                            activityPackPresent: Boolean(activityPack),
-                            activityPackChars: String(activityPack?.content ?? '').length,
-                            stages,
-                        };
-                    });
+                if (mainGenerated) {
+                    mainPipeline = await runCheck('main-e2e-full-pipeline', '主聊天链：真实正文完整处理', '主聊天端到端', async () => {
+                        const result = await this.hooks.executeTurn('full', mainGenerated.index, false, settings);
+                        return verifyPipeline(result, 'real-host-main-pipeline');
+                    }, { optional: true });
                 }
+                else pushSkip('main-e2e-full-pipeline', '主聊天链：真实正文完整处理', '主聊天端到端', '主正文生成不可用，插件闭环将继续独立验收');
 
-                if (pipelineResult && generated) {
-                    await runCheck('e2e-idempotency', '同一正文重复处理幂等性', '组合', async () => {
+                if (mainPipeline && mainGenerated) {
+                    await runCheck('main-e2e-idempotency', '主聊天链：同一正文重复处理幂等性', '主聊天组合', async () => {
                         const before = await this.worldbook.readRaw(settings, snapshot, validate);
                         const beforeDigest = digestWorldbook(before.data);
-                        const result = await this.hooks.executeTurn('full', generated.index, false, settings);
+                        const result = await this.hooks.executeTurn('full', mainGenerated.index, false, settings);
                         const after = await this.worldbook.readRaw(settings, snapshot, validate);
                         const afterDigest = digestWorldbook(after.data);
-                        if (beforeDigest !== afterDigest) throw new Error('同一正文重复处理改变了世界书');
-                        return { mode: 'real-host-combination', skippedResult: Array.isArray(result) && result.length === 0, beforeDigest, afterDigest };
+                        if (beforeDigest !== afterDigest) throw new Error('同一主正文重复处理改变了世界书');
+                        return { mode: 'real-host-main-combination', skippedResult: Array.isArray(result) && result.length === 0, beforeDigest, afterDigest };
+                    }, { optional: true });
+                }
+                else pushSkip('main-e2e-idempotency', '主聊天链：同一正文重复处理幂等性', '主聊天组合', '主聊天完整处理未通过');
+
+                // [MA-DIAG-E2E-PLUGIN-01] 无论玩家主 API 是否可用，都创建确定性临时 AI 正文，
+                // 使用真实审核/修正/提取/世界书模块跑完整插件闭环。该链是候选包验收的硬门槛。
+                pluginFixture = await runCheck('plugin-e2e-fixture', '插件闭环：自动建立完整测试回合', '插件端到端', async () => {
+                    const playerText = '我停在镜渊验收庭门外，观察大厅与守门人，没有替自己作出决定。';
+                    const assistantText = [
+                        '镜渊验收庭内灯火通明，青石地面映着稳定的暖光。北侧银门已经完全打开，门后的长廊通向王城议事厅。',
+                        '守门人洛恩站在银门右侧，佩戴刻有王城徽记的铜牌。他明确说明这里是王城议事厅入口，来访者需要在门外登记姓名，随后等待值守人员放行。',
+                        '洛恩把登记册放到门边的石台上，没有催促，也没有替来访者作出选择。大厅中的钟声响过一次，银门与登记册的位置都没有变化，当前场景在完整句号处结束。',
+                    ].join('\n\n');
+                    const turn = await this.host.appendDiagnosticAssistantTurn(playerText, assistantText);
+                    return { mode: 'real-host-deterministic-fixture', ...turn, assistantChars: assistantText.length, assistantHash: (0, util_1.hashText)(assistantText) };
+                });
+
+                if (pluginFixture) {
+                    pluginPipeline = await runCheck('plugin-e2e-full-pipeline', '插件闭环：审核—提取—写入—活动包', '插件端到端', async () => {
+                        const result = await this.hooks.executeTurn('full', pluginFixture.assistantIndex, false, settings);
+                        return verifyPipeline(result, 'real-host-plugin-full-pipeline');
                     });
                 }
+
+                if (pluginPipeline && pluginFixture) {
+                    await runCheck('plugin-e2e-idempotency', '插件闭环：重复处理幂等性', '插件组合', async () => {
+                        const before = await this.worldbook.readRaw(settings, snapshot, validate);
+                        const beforeDigest = digestWorldbook(before.data);
+                        const result = await this.hooks.executeTurn('full', pluginFixture.assistantIndex, false, settings);
+                        const after = await this.worldbook.readRaw(settings, snapshot, validate);
+                        const afterDigest = digestWorldbook(after.data);
+                        if (beforeDigest !== afterDigest) throw new Error('插件闭环同一正文重复处理改变了世界书');
+                        return { mode: 'real-host-plugin-combination', skippedResult: Array.isArray(result) && result.length === 0, beforeDigest, afterDigest };
+                    });
+                }
+                else pushSkip('plugin-e2e-idempotency', '插件闭环：重复处理幂等性', '插件组合', '插件完整处理链未通过');
 
                 if (settings.auditEnabled !== false) {
                     await runCheck('e2e-revision-branch', '审核失败—完整修正—安全替换', '端到端', async () => {
@@ -3324,10 +3371,13 @@ class DiagnosticsService {
                 });
             }
             else {
-                pushSkip('e2e-user-send', '自动发送玩家测试消息', '端到端', rawBefore ? '完整链执行器未连接' : '世界书未通过权威读取');
-                pushSkip('e2e-main-generation', '主模型真实正文生成', '端到端', '玩家测试消息未发送');
-                pushSkip('e2e-full-pipeline', '真实正文完整处理链', '端到端', '主正文未生成');
-                pushSkip('e2e-idempotency', '同一正文重复处理幂等性', '组合', '完整处理链未执行');
+                pushSkip('main-e2e-user-send', '主聊天链：自动发送玩家测试消息', '主聊天端到端', rawBefore ? '完整链执行器未连接' : '世界书未通过权威读取');
+                pushSkip('main-e2e-generation', '主聊天链：主模型真实正文生成', '主聊天端到端', '玩家测试消息未发送');
+                pushSkip('main-e2e-full-pipeline', '主聊天链：真实正文完整处理', '主聊天端到端', '主正文未生成');
+                pushSkip('main-e2e-idempotency', '主聊天链：同一正文重复处理幂等性', '主聊天组合', '完整处理链未执行');
+                pushSkip('plugin-e2e-fixture', '插件闭环：自动建立完整测试回合', '插件端到端', '完整链执行器未连接');
+                pushSkip('plugin-e2e-full-pipeline', '插件闭环：审核—提取—写入—活动包', '插件端到端', '完整链执行器未连接');
+                pushSkip('plugin-e2e-idempotency', '插件闭环：重复处理幂等性', '插件组合', '完整链执行器未连接');
                 pushSkip('e2e-revision-branch', '审核失败—完整修正—安全替换', '端到端', '完整链执行器未连接');
                 pushSkip('e2e-current-chat-reset', '当前聊天重置作用域', '组合', '完整链执行器未连接');
             }
@@ -3413,9 +3463,17 @@ class DiagnosticsService {
             report.finishedAt = new Date().toISOString();
             report.durationMs = Date.now() - startedAt.getTime();
             report.summary = countStatuses(report.checks);
-            const requiredE2E = ['e2e-user-send', 'e2e-main-generation', 'e2e-full-pipeline', 'e2e-idempotency', 'sandbox-restore'];
+            const requiredPlugin = ['host-context', 'worldbook-authoritative-read', 'worldbook-reversible-write', 'plugin-e2e-fixture', 'plugin-e2e-full-pipeline', 'plugin-e2e-idempotency', 'controlled-fault-matrix', 'sandbox-restore', 'chat-nonmutation', 'generation-state-nonmutation'];
             const passed = new Set(report.checks.filter((check) => check.status === 'pass').map((check) => check.id));
-            report.accepted = report.summary.fail === 0 && requiredE2E.every((id) => passed.has(id));
+            const failed = new Set(report.checks.filter((check) => check.status === 'fail').map((check) => check.id));
+            report.pluginAccepted = requiredPlugin.every((id) => passed.has(id)) && !requiredPlugin.some((id) => failed.has(id));
+            const mainRequired = ['main-e2e-user-send', 'main-e2e-generation', 'main-e2e-full-pipeline'];
+            report.mainChatAccepted = mainRequired.every((id) => passed.has(id));
+            report.acceptance = {
+                pluginClosedLoop: report.pluginAccepted ? 'pass' : 'fail',
+                mainChat: report.mainChatAccepted ? 'pass' : (report.checks.some((check) => mainRequired.includes(check.id) && (check.status === 'warn' || check.status === 'fail')) ? 'fail' : 'unavailable'),
+            };
+            report.accepted = report.pluginAccepted;
             this.lastReport = (0, util_1.clone)(report);
             this.progress({ state: report.accepted ? 'success' : 'error', detail: summarizeDiagnosticReport(report), report: this.currentReport() });
         }
@@ -3632,7 +3690,9 @@ function countStatuses(checks) {
 }
 function summarizeDiagnosticReport(report) {
     const value = report?.summary ?? countStatuses(report?.checks ?? []);
-    return `${report?.accepted ? '自动验收通过' : '自动验收未通过'}：通过${value.pass}，警告${value.warn}，失败${value.fail}，跳过${value.skip}`;
+    const plugin = report?.pluginAccepted === true ? '插件闭环通过' : '插件闭环未通过';
+    const main = report?.mainChatAccepted === true ? '主聊天链通过' : report?.acceptance?.mainChat === 'unavailable' ? '主聊天链不可用' : '主聊天链未通过';
+    return `${report?.accepted ? '自动验收通过' : '自动验收未通过'}｜${plugin}｜${main}：通过${value.pass}，警告${value.warn}，失败${value.fail}，跳过${value.skip}`;
 }
 function buildDiagnosticFilename(report) {
     const stamp = String(report?.finishedAt || report?.startedAt || new Date().toISOString()).replace(/[:.]/gu, '-');
@@ -4469,8 +4529,10 @@ class HostAdapter {
                     stream: false,
                     extractData: true,
                     includePreset: generationOptions?.includePreset !== false,
-                    includeInstruct: true,
-                });
+                    includeInstruct: generationOptions?.includeInstruct !== false,
+                }, generationOptions?.overridePayload && typeof generationOptions.overridePayload === 'object'
+                    ? generationOptions.overridePayload
+                    : {});
             }
             else {
                 // [MA-HOST-MODEL-01] 当前连接优先使用 SillyTavern 官方“原始响应 + 官方解析器”组合。
@@ -4521,6 +4583,11 @@ class HostAdapter {
             if (reasoning) {
                 const error = new Error(`模型只返回了推理内容，没有最终文本（推理 ${reasoning.length} 字）。${route.label}；返回结构：${responseShape}`);
                 error.code = 'MA_REASONING_ONLY';
+                error.diagnosticEvidence = { route: route.label, responseShape, reasoningLength: reasoning.length };
+                try {
+                    Object.defineProperty(error, 'reasoningText', { value: reasoning, enumerable: false, configurable: false });
+                }
+                catch { error.reasoningText = reasoning; }
                 throw error;
             }
             if (route.noModelLikely) {
@@ -5935,6 +6002,8 @@ function add(map, key, entry) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryRunner = void 0;
+exports.segmentedExtractionRescue = segmentedExtractionRescue;
+exports.splitExtractionSource = splitExtractionSource;
 const matcher_1 = require("./matcher");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
@@ -6054,17 +6123,25 @@ class MemoryRunner {
         const selected = (0, matcher_1.relevantEntries)(entries.filter((entry) => entry.title !== governance_1.ACTIVITY_PACK_TITLE), dialogueInput, 6);
         const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { dialogueContext: snapshot.dialogueContext });
         // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
-        const raw = await (0, model_request_1.callModel)({
-            host: this.host,
-            stage: 'extraction',
-            prompt,
-            fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true, dialogueContext: snapshot.dialogueContext }),
-            settings,
-            snapshot,
-            profileId: settings.extractionProfileId,
-            sourceText: snapshot.turnText || snapshot.assistantText,
-            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '提取模型'), { titles: [], phase: 'extract' }),
-        });
+        let raw = '';
+        try {
+            raw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'extraction',
+                prompt,
+                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true, dialogueContext: snapshot.dialogueContext }),
+                settings,
+                snapshot,
+                profileId: settings.extractionProfileId,
+                sourceText: snapshot.turnText || snapshot.assistantText,
+                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '提取模型'), { titles: [], phase: 'extract' }),
+            });
+        }
+        catch (error) {
+            if (!isReasoningOrEmptyError(error) || !settings.extractionProfileId) throw error;
+            this.progress('running', '提取模型连续只返回推理；切分正文并逐段提交最终协议', { titles: [], phase: 'extract' });
+            raw = await segmentedExtractionRescue(this.host, settings, snapshot, this.getSettings, (detail) => this.progress('running', detail, { titles: [], phase: 'extract' }));
+        }
         this.validate(snapshot);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
         let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
@@ -6435,6 +6512,71 @@ function parseSummaryWithRecovery(raw, kind) {
     merged.sections = [...sectionMap.values()];
     if (candidates.length > 1) repaired += candidates.length - 1;
     return { block: merged, explicitNone: false, repaired, skipped: blocks.filter((block) => !candidates.includes(block)).map((block) => block.title) };
+}
+
+
+async function segmentedExtractionRescue(host, settings, snapshot, getSettings, onProgress = () => undefined) {
+    const segments = splitExtractionSource(snapshot.assistantText, 420, 6);
+    if (!segments.length) throw new Error('提取救援没有可处理的正文片段');
+    const outputs = [];
+    for (let index = 0; index < segments.length; index += 1) {
+        host.assertSnapshot(snapshot, getSettings());
+        const segment = segments[index];
+        const prompt = (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, [], { compact: true, dialogueContext: '' });
+        try {
+            const output = await (0, model_request_1.callModel)({
+                host,
+                stage: 'extraction',
+                prompt,
+                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, [], { compact: true, dialogueContext: '' }),
+                settings,
+                snapshot,
+                profileId: settings.extractionProfileId,
+                sourceText: segment,
+                responseTokens: 4096,
+                onRetry: (error) => onProgress(`分段提取 ${index + 1}/${segments.length}：${(0, model_request_1.describeRetryReason)(error, '模型')}`),
+            });
+            outputs.push(String(output ?? '').trim());
+        }
+        catch (error) {
+            throw new Error(`分段提取 ${index + 1}/${segments.length} 仍失败：${(0, util_1.errorText)(error)}`);
+        }
+    }
+    const nonEmpty = outputs.filter((value) => value && !/^(?:无|EMPTY)$/u.test(value));
+    return nonEmpty.length ? nonEmpty.join('\n\n') : '无';
+}
+
+function splitExtractionSource(value, maxChars = 420, maxSegments = 6) {
+    const text = String(value ?? '').trim();
+    if (!text) return [];
+    const units = text.split(/(?<=[。！？!?…])\s*|\n+/u).map((item) => item.trim()).filter(Boolean);
+    const segments = [];
+    let current = '';
+    const flush = () => {
+        if (!current.trim()) return;
+        segments.push(current.trim());
+        current = '';
+    };
+    for (const unit of units) {
+        if (unit.length > maxChars) {
+            flush();
+            for (let offset = 0; offset < unit.length; offset += maxChars) segments.push(unit.slice(offset, offset + maxChars));
+            continue;
+        }
+        const next = current ? `${current}${unit}` : unit;
+        if (next.length > maxChars) flush();
+        current += unit;
+    }
+    flush();
+    if (segments.length <= maxSegments) return segments;
+    const kept = segments.slice(0, maxSegments - 1);
+    kept.push(segments.slice(maxSegments - 1).join('').slice(0, maxChars));
+    return kept;
+}
+
+function isReasoningOrEmptyError(error) {
+    return error?.code === 'MA_REASONING_ONLY' || error?.code === 'MA_EMPTY_MODEL_RESPONSE'
+        || /只返回了推理内容|没有最终文本|未解析出最终文本/u.test((0, util_1.errorText)(error));
 }
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
@@ -10650,6 +10792,8 @@ exports.isRetryableGatewayError = isRetryableGatewayError;
 exports.limitPromptPair = limitPromptPair;
 exports.outputContractForStage = outputContractForStage;
 exports.describeRetryReason = describeRetryReason;
+exports.salvageStrictFinalProtocol = salvageStrictFinalProtocol;
+exports.protocolRescuePrompt = protocolRescuePrompt;
 const util_1 = require("./util");
 
 // [MA-MODEL-01] 每个模型阶段只声明输入/输出预算和一次网关重试。
@@ -10689,24 +10833,32 @@ async function callModel(options) {
         ? Math.max(256, Math.min(16384, Math.floor(configuredOverride)))
         : stageResponseTokens(stage, settings, sourceText);
     const primary = limitPromptPair(withOutputContract(prompt, stage, responseLength, sourceText), stage);
+    let firstError = null;
     try {
         return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
     }
     catch (error) {
+        firstError = error;
         const emptyResponse = isEmptyModelResponseError(error);
         const gatewayRetry = isRetryableGatewayError(error);
         if (snapshot?.token?.cancelled || (!gatewayRetry && !emptyResponse) || (gatewayRetry && !fallbackPrompt))
             throw error;
-        const fallbackValue = fallbackPrompt
-            ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
-            : prompt;
-        const fallbackTokens = emptyResponse
-            ? emptyResponseRetryTokens(stage, settings, responseLength)
-            : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
-        const fallback = limitPromptPair(withOutputContract(fallbackValue, stage, fallbackTokens, sourceText), stage, true);
-        try { onRetry?.(error); }
-        catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
-        return host.generate(
+    }
+
+    const fallbackValue = fallbackPrompt
+        ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
+        : prompt;
+    const emptyResponse = isEmptyModelResponseError(firstError);
+    const fallbackTokens = emptyResponse
+        ? emptyResponseRetryTokens(stage, settings, responseLength)
+        : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
+    const fallback = limitPromptPair(withOutputContract(fallbackValue, stage, fallbackTokens, sourceText), stage, true);
+    try { onRetry?.(firstError); }
+    catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
+
+    let secondError = null;
+    try {
+        return await host.generate(
             fallback.system,
             fallback.user,
             fallbackTokens,
@@ -10717,6 +10869,47 @@ async function callModel(options) {
             undefined,
         );
     }
+    catch (error) {
+        secondError = error;
+    }
+
+    // [MA-MODEL-REASONING-RESCUE-01]
+    // 部分推理模型会把整个响应预算都放进 reasoning 字段。先只从 reasoning 中提取
+    // 已经完整出现的严格协议；绝不把自由推理文本当作正文或事实提交。
+    const reasoning = String(secondError?.reasoningText || firstError?.reasoningText || '');
+    const salvaged = salvageStrictFinalProtocol(stage, reasoning);
+    if (salvaged) {
+        try { onRetry?.(Object.assign(new Error('已从推理字段隔离出完整最终协议'), { code: 'MA_REASONING_PROTOCOL_SALVAGED' })); }
+        catch { }
+        return salvaged;
+    }
+
+    // 第三次只在独立 Connection Profile 上执行：去掉生成 preset，使用最短最终协议提示。
+    // 这不会改写玩家主连接，也不会把供应商私有 reasoning 参数硬编码进请求。
+    if (profileId && isEmptyModelResponseError(secondError) && !snapshot?.token?.cancelled) {
+        const rescueTokens = reasoningRescueTokens(stage, settings, fallbackTokens);
+        const rescue = protocolRescuePrompt(stage, fallbackValue, sourceText, rescueTokens);
+        try { onRetry?.(Object.assign(new Error('模型连续只返回推理，切换无 preset 最终协议救援'), { code: 'MA_REASONING_RESCUE' })); }
+        catch { }
+        try {
+            return await host.generate(
+                rescue.system,
+                rescue.user,
+                rescueTokens,
+                snapshot,
+                settings,
+                settings.requestTimeoutMs,
+                profileId,
+                { includePreset: false },
+            );
+        }
+        catch (rescueError) {
+            const finalSalvage = salvageStrictFinalProtocol(stage, String(rescueError?.reasoningText || ''));
+            if (finalSalvage) return finalSalvage;
+            throw rescueError;
+        }
+    }
+    throw secondError;
 }
 
 function isEmptyModelResponseError(error) {
@@ -10794,6 +10987,98 @@ function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
     };
 }
 
+
+
+function reasoningRescueTokens(stage, settings, previousTokens) {
+    const configured = Math.max(2048, Number(settings?.responseTokens) || 8192);
+    const minimums = {
+        audit: 2048,
+        revision: 8192,
+        extraction: 6144,
+        extractionRepair: 4096,
+        worldSettingImport: 8192,
+        smallSummary: 4096,
+        largeSummary: 6144,
+        migration: 4096,
+        migrationPlan: 8192,
+        migrationReview: 2048,
+    };
+    return Math.min(16384, Math.max(Math.min(configured, Number(previousTokens) || 0), minimums[stage] || 4096));
+}
+
+function protocolRescuePrompt(stage, fallbackValue, sourceText, responseTokens) {
+    const source = String(sourceText ?? '').trim();
+    const fallbackSystem = String(fallbackValue?.system ?? '').trim();
+    const fallbackUser = String(fallbackValue?.user ?? '').trim();
+    const stageInstructions = {
+        audit: '判断输入是否违反审核规则。只提交 PASS，或以 FAIL 开头并列出短原因。',
+        revision: '输出可直接替换的完整修正版正文，从开头写到结尾。',
+        extraction: '从输入中提取已经发生的高价值事实，只输出完整 ENTRY 协议或“无”。',
+        extractionRepair: '只修复已有候选的 ENTRY 协议语法，不新增事实。',
+        worldSettingImport: '只输出完整 ENTRY 协议或“无”。',
+        smallSummary: '只输出“总结｜当前事件”完整协议或“无”。',
+        largeSummary: '只输出“总结｜世界历史”完整协议或“无”。',
+        migrationReview: '只输出 PASS 或 FAIL 协议。',
+        migrationPlan: '只输出 ANCHOR、GROUP、DROP 协议行。',
+        migration: '只输出完整重建条目协议。',
+    };
+    const system = [
+        '你是最终答案提交器。上一次请求只产生了内部推理，没有形成最终文本。',
+        '禁止继续分析、解释或输出任何思考过程。直接提交最终答案；第一字符就必须属于最终协议。',
+        stageInstructions[stage] || '只输出原任务规定的最终协议。',
+        outputContractForStage(stage, responseTokens, source),
+        fallbackSystem ? `原任务约束摘要：\n${clipMiddle(fallbackSystem, 3200)}` : '',
+    ].filter(Boolean).join('\n\n');
+    const user = source
+        ? `需要处理的原始内容：\n${clipMiddle(source, 7000)}`
+        : `原任务输入：\n${clipMiddle(fallbackUser, 7000)}`;
+    return limitPromptPair({ system, user }, stage, true);
+}
+
+function salvageStrictFinalProtocol(stage, reasoningText) {
+    const text = String(reasoningText ?? '').trim();
+    if (!text) return '';
+    // reasoning 里可能复述提示词示例。只有明确标记为“最终答案/最终协议”的尾部区域
+    // 才允许隔离，且只接受能够严格解析的协议；自由叙事正文永不从 reasoning 恢复。
+    const markers = [...text.matchAll(/(?:最终(?:答案|协议|输出|结论)|final\s*(?:answer|output))/giu)];
+    if (!markers.length) return '';
+    const region = text.slice(markers.at(-1).index).trim();
+    if (stage === 'audit' || stage === 'migrationReview') {
+        const lines = region.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+            if (/^(?:PASS|通过)[。.]?$/iu.test(lines[index])) return 'PASS';
+            if (/^(?:FAIL|需要修正)(?:\s|$)/iu.test(lines[index])) {
+                const tail = lines.slice(index).join('\n');
+                if (tail.length <= 1200) return tail;
+            }
+        }
+        return '';
+    }
+    if (['extraction', 'extractionRepair', 'worldSettingImport', 'migration'].includes(stage)) {
+        const matches = [...region.matchAll(/<<<ENTRY:[\s\S]*?<<<END_ENTRY>>>/gu)].map((match) => ({ text: match[0], end: match.index + match[0].length }));
+        if (matches.length) {
+            const last = matches.at(-1);
+            const trailing = region.slice(last.end).replace(/[\s。.!！?？:：;；"'“”‘’`]+/gu, '');
+            if (!trailing) return matches.slice(-16).map((item) => item.text).join('\n\n');
+        }
+        const lastLine = region.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).at(-1) || '';
+        if (/^(?:无|EMPTY)$/u.test(lastLine)) return lastLine;
+        return '';
+    }
+    if (stage === 'smallSummary') {
+        const index = region.lastIndexOf('总结｜当前事件');
+        return index >= 0 ? region.slice(index).trim() : '';
+    }
+    if (stage === 'largeSummary') {
+        const index = region.lastIndexOf('总结｜世界历史');
+        return index >= 0 ? region.slice(index).trim() : '';
+    }
+    if (stage === 'migrationPlan') {
+        const lines = region.split(/\r?\n/u).map((line) => line.trim()).filter((line) => /^(?:ANCHOR|GROUP|DROP)\b/u.test(line));
+        return lines.length ? lines.join('\n') : '';
+    }
+    return '';
+}
 
 function describeRetryReason(error, label = '模型请求') {
     const text = (0, util_1.errorText)(error);

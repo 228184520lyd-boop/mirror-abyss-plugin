@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.37",
+  "version": "2.0.0-lite.ui.39",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "三维世界书治理｜自动验收、实机诊断导出、主正文预算隔离与可回滚世界书测试"
+  "description": "三维世界书治理｜双链自动验收、仅推理救援、分段提取与完整沙箱恢复"
 }
