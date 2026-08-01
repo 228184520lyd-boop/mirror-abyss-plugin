@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.47-worldbook-source — governed worldbook storage, source-level host boundaries, native recall dispatch, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.48-concise-prompts — governed worldbook storage, source-level host boundaries, native recall dispatch, and hard content budgets. */
 var MA_MODULES={"activity-pack":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1002,7 +1002,7 @@ class MirrorAbyssApplication {
                 if (shouldAudit) {
                     activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
                     this.controlPanel.setTaskProgress?.('audit', activeSnapshot.auditReplaced ? 'warning' : 'success', activeSnapshot.auditReplaced ? '审核未通过' : '审核通过');
-                    this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已校验并替换' : '无需修正');
+                    this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已替换' : '无需修正');
                 } else {
                     this.controlPanel.setTaskProgress?.('audit', 'disabled', automatic ? '自动审核已关闭' : '审核功能已关闭');
                     this.controlPanel.setTaskProgress?.('revision', 'disabled', '审核未执行');
@@ -1014,7 +1014,7 @@ class MirrorAbyssApplication {
             if (taskType === 'audit') {
                 const detail = activeSnapshot.auditDetail || (activeSnapshot.auditReplaced ? '审核未通过，正文已替换' : '审核通过，正文未修改');
                 this.controlPanel.setTaskProgress?.('audit', activeSnapshot.auditReplaced ? 'warning' : 'success', activeSnapshot.auditReplaced ? '审核未通过' : '审核通过');
-                this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已校验并替换' : '无需修正');
+                this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已替换' : '无需修正');
                 this.controlPanel.setStatus(detail);
             }
             else if (taskType === 'extraction' || taskType === 'diagnosticExtraction') {
@@ -1376,7 +1376,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.47-worldbook-source';
+exports.VERSION = '2.0.0-lite.ui.48-concise-prompts';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1785,7 +1785,7 @@ class ControlPanel {
             this.makeNumberInput('largeSummaryCount', '大总结计数', 1, 30),
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
         );
-        const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；不读取角色卡或世界书；修正失败或疑似截断时保留原正文。');
+        const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；修正模型只改明确问题并返回完整正文。');
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
         note.textContent = '四阶段状态固定为：审核 → 修正 → 提取 → 写入。任一阶段失败都会停止后续步骤，不推进处理游标。';
@@ -3600,7 +3600,6 @@ class DiagnosticsService {
                         if (result?.auditReplaced !== true) throw new Error('确定性违规样本未触发正文修正');
                         if (!revised || revised === violation) throw new Error('修正分支没有替换违规正文');
                         if (/你立刻拔剑|你心中已经认定/u.test(revised)) throw new Error('修正版仍保留替玩家行动或心理结论');
-                        if (revised.length < Math.max(10, Math.floor(violation.length * 0.25)) || !/[。！？!?]”?’?$/u.test(revised)) throw new Error('修正版异常短或结尾不完整，疑似截断');
                         return { mode: 'real-host-revision', originalChars: violation.length, revisedChars: revised.length, revisedHash: (0, util_1.hashText)(revised) };
                     });
                 }
@@ -11638,27 +11637,20 @@ function stageResponseTokens(stage, settings, sourceText = '') {
  * 这里统一要求最终答案优先、禁止显式思考，并告诉模型总响应预算会包含推理 token。
  */
 function outputContractForStage(stage, responseTokens, sourceText = '') {
-    const budget = Math.max(1, Number(responseTokens) || 1);
-    const common = [
-        '【最终输出纪律】',
-        '- 不得输出分析、推理过程、思考草稿、<think> 标签、reasoning、解释、前言或后记；直接输出本阶段规定的最终协议。',
-        `- 本次最大响应预算为 ${budget} tokens；该预算可能同时包含后端内部推理与最终文本。即使内部推理无法关闭，也必须为最终答案保留足够额度。`,
-        '- 最终协议完成后立即停止，不得为了用满上限重复或扩写。',
-    ];
-    const sourceLength = String(sourceText ?? '').length;
     const stageRules = {
-        audit: ['- 最终结论必须首先出现。通过只输出 PASS；不通过输出 FAIL 与最多8条短原因；总长度不超过300个中文字符。'],
-        revision: [`- 只输出可直接替换的完整正文。必须从原文开头写到原文结尾，不得中途停止、缺段或用省略号代替剩余内容。除删除明确违规内容外，修正版应保留原文至少85%的有效正文；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
-        extraction: ['- 只输出规定的 ENTRY 协议或“无”。最多8条，最终协议总长度不超过5000个中文字符。'],
-        extractionRepair: ['- 只输出修复后的 ENTRY 协议或“无”。不得补充事实；最终协议总长度不超过5000个中文字符。'],
-        worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
-        smallSummary: ['- 只输出规定的小总结协议或“无”。总长度不超过1800个中文字符。'],
-        largeSummary: ['- 只输出规定的大总结协议或“无”。总长度不超过2600个中文字符。'],
-        migrationReview: ['- 最终结论必须首先出现。通过只输出 PASS；不通过只输出 FAIL 协议行；总长度不超过800个中文字符。'],
-        migrationPlan: ['- 只输出 ANCHOR、GROUP、DROP 协议行；覆盖全部来源后立即停止，不输出说明。'],
-        migration: ['- 只输出规定的重建条目协议；完成本批全部对象后立即停止，不输出说明。'],
+        audit: '只输出 PASS，或以 FAIL 开头并列出简短原因。',
+        revision: '只输出可直接替换的完整修正版正文。',
+        extraction: '只输出规定的 ENTRY 协议或“无”，最多8条。',
+        extractionRepair: '只输出修复后的 ENTRY 协议或“无”。',
+        worldSettingImport: '只输出规定的 ENTRY 协议或“无”。',
+        smallSummary: '只输出规定的小总结协议或“无”。',
+        largeSummary: '只输出规定的大总结协议或“无”。',
+        migrationReview: '只输出 PASS 或 FAIL 协议。',
+        migrationPlan: '只输出 ANCHOR、GROUP、DROP 协议行。',
+        migration: '只输出规定的重建条目协议。',
     };
-    return [...common, ...(stageRules[stage] || [])].join('\n');
+    return `直接输出本阶段规定的最终结果，不输出分析、思考过程、前言或后记。
+${stageRules[stage] || ''}`.trim();
 }
 
 function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
@@ -13768,282 +13760,101 @@ exports.keywordTemplate = keywordTemplate;
 const util_1 = require("./util");
 
 function auditPrompts(settings, playerText, assistantText, optionsOrLegacyCard = {}, legacyOptions = {}) {
-    // 兼容旧调用签名，但审核不再读取角色卡。第四个参数为对象时直接作为 options；
-    // 旧代码即使仍传入角色卡字符串，也会被明确忽略。
     const options = optionsOrLegacyCard && typeof optionsOrLegacyCard === 'object' && !Array.isArray(optionsOrLegacyCard)
         ? optionsOrLegacyCard
         : legacyOptions;
     const compact = options.compact === true;
-    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 2600 : 5200);
-    const system = `你是 Mirror Abyss 基础正文审核器。
+    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1800 : 3200);
+    const system = `你是 Mirror Abyss 正文审核器。
 
-只依据玩家填写的审核规则和提供的对话上下文，检查本轮AI最终回复。
-不要读取、补全或假设角色卡、世界书、隐藏设定和未提供的信息。
-你不是作者，不得改写、续写、补充背景、优化文风或扩大审核范围。
+依据玩家填写的审核规则，审核本轮AI最终回复。最近对话只用于理解指代与承接。
+通过时只输出 PASS。
+不通过时第一行输出 FAIL，随后用简短条目指出明确触发的规则。
+只做审核，不改写正文，不扩展未提供的设定。`;
+    const user = `审核规则：
+${clipText(settings.auditPrompt || '（无）', compact ? 1800 : 3200)}
 
-输出协议：
-- 通过：只能输出 PASS。
-- 不通过：第一行输出 FAIL，随后用简短条目指出明确触发的规则。
-- 禁止输出修正版正文。`;
-    const user = `玩家填写的审核规则：
-${clipText(settings.auditPrompt || '（无）', compact ? 2600 : 5200)}
-
-最近完整对话（仅用于理解指代与承接；不得重新审核旧消息）：
+最近对话：
 ${dialogueContext || '（无）'}
 
 本轮玩家输入：
-${clipText(playerText || '（空）', compact ? 1800 : 3000)}
+${clipText(playerText || '（空）', compact ? 1200 : 2200)}
 
-需要审核的本轮AI最终回复：
-${clipText(assistantText, compact ? 10000 : 14000)}`;
+本轮AI最终回复：
+${clipText(assistantText, compact ? 9000 : 13000)}`;
     return { system, user };
 }
 
 function revisionPrompts(settings, playerText, assistantText, issues, options = {}) {
     const compact = options.compact === true;
-    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1800 : 3600);
-    const issueLimit = compact ? 5 : 10;
-    const issueChars = compact ? 160 : 260;
-    const completenessRetry = options.completenessRetry === true;
-    const retryReason = String(options.retryReason || '').trim();
-    const system = `你是 Mirror Abyss 正文修正脚本。
+    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1400 : 2600);
+    const issueLimit = compact ? 5 : 8;
+    const issueChars = compact ? 140 : 220;
+    const system = `你是 Mirror Abyss 正文修正器。
 
-只修正审核指出的明确违规部分，保留原剧情方向、事件结果、人物关系、角色身份、叙事视角和合规内容。
-禁止添加新事件、删除已有事件、改变人物目标、修改世界规则、替玩家决定行动、续写或输出解释。
-你的输出只能是可直接替换原消息的完整正文。
-必须从原正文第一段完整输出到最后一段；禁止中途截断、缺失结尾、用省略号代替剩余段落或只返回局部修补。
-除审核明确要求删除的违规内容外，保留原正文至少85%的有效内容。${completenessRetry ? `\n上一次修正版被本地完整性闸门判定为疑似截断（${retryReason || '长度或结尾不完整'}）。本次必须重新从头输出完整正文，不得沿用截断结果。` : ''}
+按审核指出的问题修正本轮正文。
+保留未涉及问题的内容、事件顺序、人物关系、叙事视角、段落与输出格式；不得续写或加入新的剧情事实。
+只输出可直接替换原消息的完整修正版正文，不输出解释、标题或审核报告。
 
 用户附加修正规则：
-${clipText(settings.revisionPrompt || '（无）', compact ? 1500 : 3000)}`;
-    const user = `违规原因：
+${clipText(settings.revisionPrompt || '（无）', compact ? 900 : 1800)}`;
+    const user = `需要修正的问题：
 ${issues.slice(0, issueLimit).map((item) => `- ${clipText(item, issueChars)}`).join('\n')}
 
-最近完整对话（只用于保持承接与角色知识，不得改写旧消息）：
+最近对话：
 ${dialogueContext || '（无）'}
 
 本轮玩家输入：
-${clipText(playerText || '（空）', compact ? 1600 : 3000)}
+${clipText(playerText || '（空）', compact ? 1200 : 2200)}
 
 需要替换的本轮AI完整回复：
-${clipText(assistantText, compact ? 15000 : 20000)}`;
+${clipText(assistantText, compact ? 12000 : 18000)}`;
     return { system, user };
 }
 
 function extractionPrompts(settings, playerText, assistantText, relevant, options = {}) {
     const compact = options.compact === true;
-    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 2200 : 4600);
-    const contextEntries = promptContextEntries(relevant, compact ? 3 : 5);
-    const existing = contextEntries.map((entry) => entryForPrompt(entry, compact ? 420 : 650)).join('\n\n');
-    const custom = clipText(settings.extractionPrompt.trim(), compact ? 800 : 1600);
-    const system = `你是 Mirror Abyss 严格语法事实提取器。
+    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1600 : 2800);
+    const contextEntries = promptContextEntries(relevant, compact ? 2 : 3);
+    const existing = contextEntries.map((entry) => entryForPrompt(entry, compact ? 360 : 520)).join('\n\n');
+    const custom = clipText(settings.extractionPrompt.trim(), compact ? 500 : 900);
+    const schema = keywordTemplate(settings.keywordDefinitions ?? []).trim();
+    const system = `你是 Mirror Abyss 世界书事实提取器。
 
-任务：以一轮完整对话为单位，把审核后的本轮AI最终回复转为精简世界书更新。你不是在收集所有已经发生的动作，也不是在给信息划分重要等级；你只提取本轮正文的主要固定事实——正文结束时已经确定成立，并且相对既有状态发生了新增、改变或终结的事实。
+任务：从本轮玩家输入与AI最终回复中，提取正文结束时已经确定成立的重点固定事实，并按既有世界书对象更新。
 
-【唯一提取边界：本轮正文的落点】
-每个候选事实必须同时满足以下条件：
-1. 到本轮正文结束时，它已经明确成立。意图、提议、猜测、可能性、将来安排、尚未完成的动作和没有得到结果的尝试不成立。
-2. 它相对既有状态形成了新增、改变或终结；没有变化的旧事实不得重复。只有【当前】【当前状态】【在场】【当前资源】【活动关联】【持有】等完整快照栏目可以为表达正文结束时的当前状态而重列仍成立的值。
-3. 它是本轮正文的主要落点之一：能够直接回答“这一轮实际让哪个对象变成了什么状态”。一个动作即使已经做完，只要没有留下需要表达的对象状态、关系、内容、位置、持有、认知、控制、损坏或结果，就不是固定事实。
-4. 它有明确现实宿主。剧本、小说、梦境、假设、角色扮演、转述故事等嵌套内容，只能更新其作品、记录或认知宿主，不得直接改写现实人物关系、现实场景或现实事件。
-5. 它来自正文明确写出的结果，而不是对表情、语气、停顿、视线、修辞、暗示或潜台词的解释。不得把“看起来像”“仿佛”“意味深长”等表现推断成关系、动机或承诺。
+边界：
+- 只记录相对既有状态发生的新增、改变或终结；没有形成固定结果的普通动作与描写不记录。
+- 计划不等于已执行；引用、创作、梦境或想象不等于现实事实；物品使用或放置不等于归属变化。
+- 玩笑、猜测、传闻、瞬时情绪和短暂环境不写成客观固定事实。
 
-【边界判例】
-- 人物把一句表白写进剧本：固定事实是剧本内容被更新；现实人物没有因此表白或成为恋人。
-- 人物脸红、停顿、轻声回应、动作变轻：除非正文明确赋予持续状态或结果，否则不是固定事实。
-- 人物走向门口、转身往外走：只有正文明确说明已经离开当前场景，才能更新【在场】或人物位置。
-- 物品被拿起、使用、放在桌面或暂时查看：不等于所有权、保管权或长期持有发生变化。
-- 人物明确接受长期职责、双方明确确认关系、物品明确永久转交、地点明确抵达、物品明确损坏或失效：属于已落地的固定事实。
-- 传闻、误会和单方说法：不得写成客观世界事实；只有它确实改变了某人物可用认知时，才写入该人物【已知】，并保留来源。
+宿主：
+- 场景：当前地点、在场人物、公共资源、活动名称与局部状态。
+- 人物：身份、稳定特征、关系、认知、当前状态与个人持有物名称。
+- 物品：需要单独追踪的实例及其所有权、持有人、位置、权限、完整性和内部内容。
+- 事件：持续事项已经取得的阶段进展与结果；人物、场景、物品细节写回各自宿主。
+- 世界：跨场景变化；基础设定：不随普通剧情变化的规则。
+同一完整事实只写入一个详细宿主，其他条目只保留名称引用。临时路人和一次性工作人员通常不建长期人物条目。
 
-先判断是否越过上述边界，再决定条目类型和栏目。边界未通过时，不得为了填满条目而输出。
+输出：严格使用 ENTRY 协议；当前快照栏目输出正文结束时的完整状态，稳定栏目只补充新事实。没有可记录内容时输出“无”。禁止JSON、解释和标记外文本。
 
-【只允许六类】
-1. 人物：身份、稳定能力、性格核心、表达方式、决策倾向、当前状态、关系与关系立场、关键持有物、具有信息来源的已知、极少量已被明确证伪但人物仍相信的误信、固定事实。
-2. 场景：同一稳定地点持续更新同一条目；保存稳定空间知识、当前局部条件和关联名称。
-3. 物品：只记录一个可单独追踪的具体物品实例；同类物品集合、批量物资和泛称只写入场景资源。
-4. 事件：由同一组参与者、场景和直接因果连续形成的状态变化。普通移动、开门、落座、视线、表情和没有形成变化的对话不得独立建事件。
-5. 世界：会随剧情变化、但影响范围超出单一人物或单一场景的全局状态；包括区域、组织、权力、制度、资源网络和公开局势。
-6. 基础设定：跨场景成立且不随普通剧情变化的世界框架、自然规则、种族共性、能力技术、社会常识和地理框架。
-
-关系不得单独建条目，写入对应人物的【关系】。
-地点不得单独建条目，写入对应【场景】。
-组织、制度、政权、战争、区域关系、资源网络和公开局势只要明确会影响场景外对象或后续多个地点，就写入【世界】；不要求本轮已经跨越多个场景。
-不随普通剧情变化的自然规律、种族共性、能力体系、技术边界、社会常识和地理框架写入【基础设定】。
-
-【事实分流】
-- 已经成立且宿主明确的事实，直接写人物、场景、物品、世界或基础设定。
-- 每轮都检查是否出现新的全局状态或世界设定；事实明确时主动创建或更新，不得等待小总结或大总结。
-- 事件只保存对状态变化有解释力的因果；人物伤势、物品位置、场景损坏和世界变化应直接进入各自宿主，事件只保留最短变化链，不得复制同一句长叙述。
-- 同一批次中，只要参与者、场景和直接因果连续，就属于同一个事件；动作变化、地点内移动、叙述段落变化和标题措辞变化不得拆成新事件条目。
-- 若“可能相关的既有世界书条目”中已有同一变化链，必须复用其稳定标题；只有参与者、状态变化对象或直接因果明显独立时才建立新事件。
-- 场景不保存事件流水。场景稳定知识持续补全；当前栏目必须给出正文结束时的完整快照。
-- 单轮最多输出一个场景条目，并把它放在第一条；它必须是正文结束时人物实际所在的当前场景。只被提及但未进入的地点不得另建场景条目。
-- 同一事实只能有一个权威宿主。其他条目只保留最短引用或该事实对自身形成的独立结果，禁止换角度重复叙述。
-- 物品的所有权、保管者、当前持有者、当前使用者、使用权限和当前位置是不同关系，不得互相替代。公共物品被某人临时使用，不等于归该人物所有或长期持有。
-
-【唯一宿主分发表】
-插件不会替模型重新判断语义或跨条目改写事实；以下边界必须由模型在输出源头执行：
-- 场景【在场】是当前场景人员存在状态的唯一宿主。人物正在当前场景时，人物【当前】不得重复“位置：当前场景”；只有人物与当前场景分离、位于别处且该位置需要持续追踪时，才在人物【当前】写位置。
-- 场景【当前资源】只写正文结束时由场景公共持有、无人持有、固定放置或可被现场直接操作、争夺的关键资源名称。人物正在携带、穿戴、握持或保管的物品不得同时写入场景【当前资源】。
-- 人物【持有】只写当前由该人物携带或保管的物品名称，不写功能、位置、完整性、转交过程或物品内部内容。普通物品没有独立条目时，以人物【持有】为宿主；建立独立物品条目后，详细状态只写物品【当前】，人物只保留名称引用。
-- 物品【当前】是独立物品所有权、保管者、当前持有者、当前位置、使用权限和完整性的唯一详细宿主。不得把同一详细状态复制到人物、场景或事件。
-- 场景【活动关联】只写仍在本场运行的事件稳定名称，不写事件进展或结果。事件【场景】只写场景名称，事件【参与】只写人物名称。
-- 事件【已发生进展】只写该事项本身取得的状态变化；人物具体状态写人物，场景具体损坏写场景，物品内部文字或精确位置写物品。事件可以概括“某项设计已完成”，但不得逐字复制物品中“具体画在何处、写了什么”的详细事实。
-- 人物关系没有独立条目。客观双向关系确实发生改变时，可在双方人物【关系】分别写最短关系值；除此之外不得把同一关系过程复制到【当前】【固定事实】或事件中。
-- 世界条目只保存跨场景状态；基础设定只保存不随普通剧情变化的规则。场景内局部事实不得为了显得重要而再复制到世界或基础设定。
-- 同一完整句义若已经有详细宿主，其他条目最多保留用于召回的稳定名称，不得改写同义句再次保存。
-
-【身份未明人物】
-- 正文没有明确说明陌生人、匿名账号、蒙面者或未知声音是谁时，不得猜成任何已知人物。
-- 只有该对象已经产生会持续影响后续的状态、关系、持有物或行动结果时，才建立人物临时档。
-- 稳定名称使用“身份未明的可观察类型（唯一可观察锚点）”；例如“身份未明的女人（银色耳坠）”或“身份未明的账号（夜航）”。没有唯一锚点时使用正文中的稳定称呼，但不得添加真实身份。
-- 关键词必须包含“身份未明”；相同对象后续继续使用既有临时档标题。存在两个无法区分的陌生对象时分别建档，不得强行合并。
-- 后续正文明确揭示身份后，输出已知人物主档；插件会把对应临时档合并并删除。
-- 同名或近似名称不是同一身份的证明。两个对象的职业、组织、编号、种族、来源或括号区分锚点冲突时，必须分别建档；稳定标题写成“名称（区分锚点）”。
-
-【背景人物与场景附属】
-- 临时NPC、路人、一次性服务人员、普通工作人员和仅承担当轮画面功能的人物，不建立长期人物条目。
-- 只有明确固定属于当前场景、长期承担该场景岗位职责的角色，才写入当前场景【常驻角色】，格式“角色类型或稳定称呼：固定职责”。
-- 固定场景角色本轮成为关键参与者、拥有独立持续职责、关键认知、长期关系或必须单独追踪的状态时，才建立人物条目；不得仅因跨场景再次出现就自动晋升。
-- 依附人物离开当前事件或失去独立作用后，由插件重新沉降，不要输出归档、删除或合并命令。
-
-【当前游戏时间】
-- 只记录游戏世界当前时间，不记录现实时间、插件写入时间或消息时间。
-- 正文明示日期、天数、时段或钟点时，在当前场景【当前状态】写“游戏时间：明确内容”。
-- 正文没有提供新的游戏时间时省略该状态槽，不得自行推进、换算或虚构。
-
-【角色认知边界】
-- 世界事实不自动等于角色已知。只把该人物通过本轮明确渠道获得、并会影响后续判断的信息写入该人物【已知】。
-- 【已知】保存该人物当前能够使用的认知，包括亲眼确认、听闻内容、怀疑、判断、推理和主观看法；它表示“人物知道或相信什么”，不等于客观真相。每行使用“认知槽：内容｜信息来源：类型”。允许类型仅限：亲眼观察、听到对白、收到消息、查看记录、他人转述、亲身经历、可靠推理、特殊能力、公开信息、自身身份、自身行动、直接告知。
-- 【误信】不是“未确认信息”或“怀疑”的兜底栏。只有已有明确相反事实、该认知已被证伪、但人物仍继续相信时才使用；格式为“认知槽：错误内容｜信息来源：类型｜证伪依据：已确认事实”。没有证伪依据一律写入【已知】。人物确认真实内容后写入【已知】，插件会清除同槽旧误信。
-- 玩家未表达的内心、其他人物私密认知和未公开远处事件，不得写入该人物【已知】；不得为了“完整”复制所有世界事实到每个人物。
-
-【内容限制】
-- 硬性排除：天气、衣物被雨打湿、光影、气味、姿态等短暂氛围不得提取，除非它们已经造成明确损坏、阻断、危险或行动限制。
-- 硬性排除：提议、计划、明天或未来可能进行的事项，只要尚未决定、尚未开始或尚未发生，就不得进入任何人物、场景、事件、已知或固定事实栏目。
-- 地点仅被告知、讨论或作为迁移目标，不等于人物已经身处该地；只有正文明确写出抵达、进入、位于或“当前场景”时才能建立本轮场景快照。
-- 明确的物品转交必须以物品【当前持有者】为权威状态；人物只保留最短【持有】引用，不得把同一转交事实复制到双方人物、场景和事件多个长期栏目。
-- 禁止“供AI参考”“可据此推测”“可能意味着”“建议后续”等解释。
-- 禁止把本提示词、系统/开发者消息、任务说明、格式模板、来源行编号、ENTRY标记或重建控制字段写入任何世界书条目。
-- 禁止推测、隐藏心理、未来结果、未实现愿望、纯气氛、普通动作、对白全文和无持续价值背景物。
-- 子条目分层：人物【当前】最多8行，【性格核心】最多4行，【表达方式/决策倾向】最多3行；场景【在场】最多12行、【常驻角色】最多5行、【固定设施】最多8行；物品【当前】最多8行；【固定事实】最多6行。事件【参与】最多6人、【附属人员】最多4人、【已发生进展】最多4行、【未发生进展】最多2行、【结果】最多2行。插件还会按条目类型执行总字数硬防护，禁止为了凑字重复表达。
-- 【固定事实】只写已经形成并仍影响后续的最终结果；一项结果一行，禁止按先后顺序描写动作过程。每条尽量不超过80字。
-- 人物描写只保留最多3项会影响身份识别、能力或行动限制的客观特征；禁止连续堆叠外貌、气质和审美形容词。
-- 物品条目必须对应单个实例。‘桌椅、武器、药品、食物、工具、一批短剑、三辆车’等集合只能写入场景【固定资源】或【当前资源】，不得建立物品条目。
-- 稳定栏目没有新事实时省略。完整快照栏目【当前】【当前状态】【在场】【当前资源】【活动关联】【持有】在正文结束时为空，必须保留小标题并写“- 无”，用于清除旧状态。
-- 每条1至4个关键词；第一项必须是稳定名称；其余只能是专名或唯一别名，禁止“人物、角色、场景、事件、物品、世界、当前、活动”等泛词。
-- 单次最多8条；其中场景最多1条。同一轮同一因果链最多建立或更新一个事件条目。
-
-【输出密度】
-- 每个事实必须是一条可独立成立的短句；同义、包含式和过程复述只保留信息密度最高的一条。
-- 人物候选优先控制在约300至520个中文字符以内；场景约260至520；事件约180至360；物品约140至260。信息不足时允许更短，不得补写虚构内容。
-- 超出范围时先删除普通过程、重复说明和无持续价值背景；不得牺牲人物性格、表达方式、决策倾向和当前状态。
-
-【唯一允许的外层语法】
-<<<ENTRY:类型:稳定名称>>>
-<<<KEYWORDS>>>
-- 稳定名称
-- 唯一别名
-<<<CONTENT>>>
-固定小标题正文
-<<<END_ENTRY>>>
-
-多个条目连续输出，条目间只空一行。禁止JSON、代码块、序号、解释、前言、后记和标记外文本。没有可记录事实时只输出“无”。
-
-【人物正文固定顺序】
-【身份】职业、种族、组织或家庭身份
-【稳定】稳定能力、持续限制，以及最多3项会影响识别或剧情判断的客观特征；不写审美评价和形容词堆砌
-【性格核心】已经明确设定或经多次稳定表现确认的人格原则；单次情绪和例外行为不得写入
-【表达方式】稳定的语言、情绪表达和沟通方式
-【决策倾向】面对风险、冲突、关系和资源时反复成立的选择偏好
-【当前】身体、目标、情绪、当轮立场及必要的离场后位置等明确状态槽；人物在当前场景时不重复场景名称
-【关系】对方名称：客观长期关系
-【关系立场】对方名称：该人物当前持续成立的态度与互动边界
-【持有】当前由该人物携带或保管的关键物品名称完整列表；只写名称引用
-【已知】该人物当前能够使用的认知，包括怀疑、判断和推理；格式“认知槽：内容｜信息来源：允许类型”
-【误信】仅保存已有明确证伪依据、但人物仍相信的错误认知；格式“认知槽：错误内容｜信息来源：允许类型｜证伪依据：已确认事实”
-【固定事实】已经形成并仍影响后续的个人结果，一项结果一行，不写过程
-【别名】
-
-【场景正文固定顺序】
-【定义】地点是什么、位置、用途或归属
-【空间结构】入口、出口、区域连接、障碍和影响行动的布局
-【固定资源】长期存在且可利用的资源
-【固定设施】固定属于本场景并影响行动的设施，最多8项
-【常驻角色】固定属于本场景并长期承担岗位职责的角色类型或稳定称呼，最多5项；临时NPC不得写入
-【固定事实】已确认的新发现、永久损坏、控制权或访问条件变化，一项结果一行
-【当前状态】时间、环境、控制、危险等状态槽
-【在场】正文结束时确认在场的人物完整列表
-【当前资源】正文结束时由场景公共持有、无人持有、固定放置或可被现场直接操作、争夺的关键资源名称完整列表；排除人物随身物
-【活动关联】仍在本场运行的事件稳定名称完整列表；不得复制进展或结果
-【世界影响】最多一句过去时结果，概括直接作用于本场的世界整体变化
-【局部约束】模型不能忽略的可见限制完整列表
-【别名】
-
-【物品建立条件】
-只为一个可单独追踪的具体实例建立条目：有稳定专名或唯一编号，存在独特功能、独立状态变化，或确实需要跨场景持续追踪。仅有明确所有者、临时持有者或普通位置不足以单独建档。
-人物普通随身物、证件、服装和一般工具可写入人物【持有】；公共物品、固定设施和同类集合写入场景【固定资源】或【当前资源】；组织跨场景资源写入【世界】。
-公共物品归还后不得继续写入人物【持有】；正文结束时无人持有应写“当前持有者：无”。
-
-【物品正文固定顺序】
-【定义】该单个实例的稳定身份和必要识别特征
-【功能】已确认用途或能力
-【当前】当前位置、所有权、保管者、当前持有者、当前使用者、使用权限、状态、完整性等独立状态槽；单体物品不写大于1的数量
-【限制】使用、访问或能力限制
-【固定事实】会影响后续的最终变化，一项结果一行
-【别名】
-
-【事件正文固定顺序】
-【参与】直接推动当前事件的参与者完整列表，最多6人
-【附属人员】只承担当前事件辅助作用、无需独立人物条目的人员，最多4人
-【场景】事件涉及的稳定场景名称；门口、床边、桌旁、走廊拐角等局部位置不得独立建场景
-【已发生进展】该事项本身已经取得的状态变化；使用过去时，最多4行；人物、场景、物品的详细事实写回各自宿主，本栏只保留事项级概括
-【未发生进展】已经发生但没有造成状态变化、且仍有必要解释当前连续性的过程材料；不是未来事项、目标或计划，最多2行；普通动作直接省略
-【结果】已经形成的稳定结果，最多2行；没有明确结果时省略
-【别名】
-
-【世界正文固定顺序】
-【范围】该条目覆盖的区域、组织、群体、网络或全局问题
-【地理】跨场景区域关系、边界、通路和公开地理条件
-【组织】组织性质、职能、成员结构、公开关系与稳定存在状态
-【权力】地区、组织或群体的控制格局；使用“对象：当前控制或地位”
-【制度】正在跨场景执行的法律、政策、程序与公开规则；使用“制度名：现行内容”
-【资源与交通】跨场景资源供应、贸易、通信、交通与封锁网络；使用“对象：当前状态”
-【公开局势】公众可知的战争、灾害、经济、外交、治安与社会整体状态；使用“对象：当前状态”
-【固定事实】重大且持续的整体变化，一项结果一行
-【持续影响】最多4行，格式为“明确对象或区域：已形成的持续影响”
-【别名】
-
-【基础设定正文固定顺序】
-【世界常识】世界内普遍成立、角色通常可以知道的稳定常识
-【自然规则】物理、超自然、时间、空间、因果和不可违背的运行规则
-【种族与生命】种族共性、生理、寿命、繁衍、弱点和生命形态规则
-【能力与技术】魔法、能力、科技、制作、使用条件与能力上限
-【社会规则】长期文化、身份制度、货币、教育、婚姻、礼法和通行惯例
-【地理框架】跨场景稳定存在的区域层级、方位、连接与环境框架
-【别名】
-
-人物【当前】、人物【关系】、物品【当前】、场景【当前状态】以及世界【权力/制度/资源与交通/公开局势/持续影响】必须使用“状态槽：内容”形式。${custom ? `
-
-用户附加要求：
-${custom}` : ''}`;
-    const user = `最近完整对话（只用于解析指代、承接与因果；禁止从旧轮重复提取）：
+可用类型与栏目：
+${schema || '使用人物、场景、物品、事件、世界、基础设定的标准栏目。'}${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
+    const user = `最近对话（只用于理解指代与承接，不重复提取旧轮）：
 ${dialogueContext || '（无）'}
 
 本轮玩家输入：
-${clipText(playerText || '（空）', compact ? 1300 : 2200)}
+${clipText(playerText || '（空）', compact ? 1100 : 1900)}
 
-本轮AI最终回复（唯一提取目标；无论包含多少段正文都视为同一完整回复）：
-${clipText(assistantText, compact ? 9000 : 13000)}
+本轮AI最终回复（唯一提取目标）：
+${clipText(assistantText, compact ? 8500 : 12000)}
 
 可能相关的既有世界书条目：
 ${existing || '（无）'}
 
-只输出通过“本轮正文的落点”边界的新增事实、状态变化、终结结果，或需要替换的完整当前快照。若正文明确存在当前场景，场景条目必须排在第一条。稳定栏目只补充新发现或修正，不得重抄已有内容；固定事实只输出本轮新形成或被修正的最终结果，不重抄已有结果。已完成但没有留下状态结果的普通动作必须省略。必须主动检查并输出本轮明确出现的世界或基础设定事实。`;
+只输出本轮新增、改变、终结的固定事实，或需要替换的完整当前快照。正文明确存在当前场景时，场景条目排在第一条。`;
     return { system, user };
 }
-
 
 function worldSettingImportPrompts(settings, sourceText, relevant, options = {}) {
     const compact = options.compact === true;
@@ -14681,27 +14492,7 @@ class RevisionService {
             sourceText: snapshot.turnText || snapshot.assistantText,
         });
         this.host.assertSnapshot(snapshot, this.getSettings());
-        let revisedText = parseRevisionResult(raw);
-        let assessment = assessRevisionCompleteness(snapshot.assistantText, revisedText);
-        if (!assessment.ok) {
-            try { onProgress(`修正版疑似截断：${assessment.reason}；扩大预算重新生成完整正文`); } catch { }
-            const retryPrompt = (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { dialogueContext: snapshot.dialogueContext, completenessRetry: true, retryReason: assessment.reason });
-            const retryRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'revision',
-                prompt: retryPrompt,
-                fallbackPrompt: () => (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { compact: true, dialogueContext: snapshot.dialogueContext, completenessRetry: true, retryReason: assessment.reason }),
-                settings,
-                snapshot,
-                profileId: settings.revisionProfileId,
-                sourceText: snapshot.turnText || snapshot.assistantText,
-                responseTokens: revisionRetryTokens(settings, snapshot.assistantText),
-            });
-            this.host.assertSnapshot(snapshot, this.getSettings());
-            revisedText = parseRevisionResult(retryRaw);
-            assessment = assessRevisionCompleteness(snapshot.assistantText, revisedText);
-        }
-        if (!assessment.ok) throw new Error(`修正版疑似截断，已拒绝覆盖并保留原正文：${assessment.reason}`);
+        const revisedText = parseRevisionResult(raw);
         if (revisedText === snapshot.assistantText)
             throw new Error('修正模型返回的正文与原正文完全相同');
         return revisedText;
@@ -14709,15 +14500,10 @@ class RevisionService {
 }
 exports.RevisionService = RevisionService;
 
-/** [MA-REVISION-02] 只接受可直接替换的完整自然正文。 */
+/** [MA-REVISION-02] 修正结果只做技术验收：可读取且非空。 */
 function parseRevisionResult(raw) {
     const text = (0, parser_1.sanitizeModelText)(raw).trim();
-    if (!text) throw new Error('修正模型没有返回完整正文');
-    if (/^\s*(?:以下是|这是|修正版|修改后|完整修正版|修改说明|修改建议|局部补丁)\s*[：:]/u.test(text)
-        || /^\s*【\s*(?:结论|问题|违反规则|修正版正文|修改说明)\s*】/u.test(text))
-        throw new Error('修正模型返回了解释或包装标题，不是纯完整正文');
-    if (/^(?:将|把).{0,80}(?:改为|替换为|删除)/u.test(text) && text.split('\n').length <= 3)
-        throw new Error('修正模型返回了局部补丁，不是完整正文');
+    if (!text) throw new Error('修正模型没有返回正文');
     return text;
 }
 
@@ -14727,21 +14513,8 @@ function revisionRetryTokens(settings, sourceText) {
     return Math.min(16384, Math.max(configured, estimated));
 }
 function assessRevisionCompleteness(original, candidate) {
-    const source = String(original ?? '').trim();
     const next = String(candidate ?? '').trim();
-    if (!next) return { ok: false, reason: '修正版为空', ratio: 0 };
-    const ratio = source.length ? next.length / source.length : 1;
-    const sourceParagraphs = source.split(/\n\s*\n|\n/u).map((x) => x.trim()).filter(Boolean).length;
-    const nextParagraphs = next.split(/\n\s*\n|\n/u).map((x) => x.trim()).filter(Boolean).length;
-    const dangling = /[，、：:；;（(\[【“‘《〈—-]$/u.test(next);
-    const sourceHasEnding = /[。！？!?…」』）)】]$/u.test(source);
-    const nextHasEnding = /[。！？!?…」』）)】]$/u.test(next);
-    if (dangling) return { ok: false, reason: '结尾停在未完成的标点或结构上', ratio };
-    if (source.length >= 300 && ratio < 0.72) return { ok: false, reason: `修正版仅保留原文约${Math.round(ratio * 100)}%`, ratio };
-    if (sourceParagraphs >= 4 && nextParagraphs < Math.max(2, Math.ceil(sourceParagraphs * 0.55)) && ratio < 0.88)
-        return { ok: false, reason: `段落由${sourceParagraphs}段骤减为${nextParagraphs}段`, ratio };
-    if (sourceHasEnding && !nextHasEnding && ratio < 0.98) return { ok: false, reason: '修正版缺少完整句末，疑似输出到上限', ratio };
-    return { ok: true, reason: '', ratio };
+    return { ok: Boolean(next), reason: next ? '' : '修正版为空', ratio: next ? 1 : 0 };
 }
 },"semantic":function(module,exports,require){
 
@@ -14919,17 +14692,20 @@ function keyword(key, label, description, aliases, constant, fields, order, vect
         })),
     };
 }
-exports.DEFAULT_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判定 FAIL：
+exports.DEFAULT_AUDIT_PROMPT = `只做基础审核：检查AI是否替玩家新增台词、行动、决定或心理结论，是否扩大玩家输入，是否与当前可见事实矛盾，是否输出选项、攻略、系统说明或管理标签。正常叙事、NPC自主行动和对白换行不算违规。只依据当前对话审核。`;
+exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的问题。保留其余内容、事件顺序、人物关系、叙事视角、语气、段落和输出格式；不得续写或加入新的剧情事实。只输出可直接替换原正文的完整自然正文。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `提取本轮正文结束时已经确定成立的重点固定事实，只记录相对旧状态的新增、改变或终结。计划不等于执行，嵌套作品不等于现实，物品使用不等于归属变化。事实写入最直接的唯一宿主：场景保存当前局部状态，人物保存关系与个人状态，物品保存独立实例详情，事件保存事项级进展，世界保存跨场景变化，基础设定保存稳定规则。其他条目只保留名称引用。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `将已经压缩完成的事件结果和稳定变化沉降为长期历史；覆盖旧世界历史，不接收普通动作、未发生进展、未来目标或重复过程，只分发长期有效的结果。`;
+const LEGACY_AUDIT_PROMPT_UI47 = `只做基础审核；明确触发任一条时判定 FAIL：
 1. AI不得替玩家新增玩家未输入的台词、主动行动、重要决定、明确心理结论或价值判断。
 2. AI不得把玩家已表达的动作、语言或选择扩大成新的关键决定。
 3. AI回复不得与当前可见对话中的明确事实直接矛盾。
 4. AI回复不得输出选项栏、行动列表、攻略、内部检查、系统规则、自我解释、管理标签、回合编号或作者总结。
 5. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。
 只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
-exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `将已经压缩完成的事件结果和稳定变化沉降为长期历史；覆盖旧世界历史，不接收普通动作、未发生进展、未来目标或重复过程，只分发长期有效的结果。`;
+const LEGACY_REVISION_PROMPT_UI47 = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
+const LEGACY_EXTRACTION_PROMPT_UI47 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI23 = `结算当前事件线；保留当前场景、人物状态、事件阶段、已成立结果和未决事项，并把持续影响分发到人物、场景、物品或世界。`;
@@ -15067,9 +14843,9 @@ function parseSettings(value) {
         // [MA-WB-SCOPE-01] 旧版全局目标世界书字段只保留兼容键，不再允许覆盖当前聊天绑定。
         targetLorebook: '',
         autoCreateLorebook: candidate.autoCreateLorebook === true,
-        auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
-        revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
-        extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46], exports.DEFAULT_EXTRACTION_PROMPT),
+        auditPrompt: migrateBuiltinPrompt(candidate.auditPrompt, LEGACY_AUDIT_PROMPT_UI47, exports.DEFAULT_AUDIT_PROMPT),
+        revisionPrompt: migrateBuiltinPrompt(candidate.revisionPrompt, LEGACY_REVISION_PROMPT_UI47, exports.DEFAULT_REVISION_PROMPT),
+        extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI47], exports.DEFAULT_EXTRACTION_PROMPT),
         smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, LEGACY_SMALL_SUMMARY_PROMPT_UI23, exports.DEFAULT_SMALL_SUMMARY_PROMPT),
         largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, LEGACY_LARGE_SUMMARY_PROMPT_UI23, exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
