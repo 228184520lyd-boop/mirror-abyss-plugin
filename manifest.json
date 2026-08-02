@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.52-full-matrix",
+  "version": "2.0.0-lite.final-audit-candidate",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜源头唯一宿主、原生召回、原子事务与稳定验收"
+  "description": "真实宿主闭环候选｜ST 原生模型请求、世界书原子事务与轻量诊断"
 }

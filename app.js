@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.52-full-matrix — governed worldbook storage, native ST recall, user-owned placement, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.final-audit-candidate — real-host diagnostic correction, governed worldbook storage, and native ST recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -601,9 +601,24 @@ class MirrorAbyssApplication {
                 const shouldAudit = settings.auditEnabled !== false && settings.auditPrompt.trim() && (!automatic || settings.autoAudit === true);
                 const shouldExtract = settings.extractionEnabled !== false && (!automatic || settings.autoExtraction === true);
                 if (shouldAudit) {
-                    activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
-                    this.controlPanel.setTaskProgress?.('audit', activeSnapshot.auditReplaced ? 'warning' : 'success', activeSnapshot.auditReplaced ? '审核未通过' : '审核通过');
-                    this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已校验并替换' : '无需修正');
+                    try {
+                        activeSnapshot = await this.auditRunner.process(settings, activeSnapshot);
+                        this.controlPanel.setTaskProgress?.('audit', activeSnapshot.auditReplaced ? 'warning' : 'success', activeSnapshot.auditReplaced ? '审核未通过' : '审核通过');
+                        this.controlPanel.setTaskProgress?.('revision', activeSnapshot.auditReplaced ? 'success' : 'disabled', activeSnapshot.auditReplaced ? '完整修正版已校验并替换' : '无需修正');
+                    }
+                    catch (error) {
+                        if (error?.code !== 'MA_REVISION_NO_CHANGE') throw error;
+                        this.host.assertSnapshot(snapshot, this.settings());
+                        activeSnapshot = {
+                            ...snapshot,
+                            auditDecision: 'revision',
+                            auditReplaced: false,
+                            auditUnresolved: true,
+                            auditDetail: '审核提出修正，但修正模型未改变正文；已保留原正文继续提取',
+                        };
+                        this.controlPanel.setTaskProgress?.('audit', 'warning', '审核提出修正');
+                        this.controlPanel.setTaskProgress?.('revision', 'warning', '修正未改变正文，已保留原文并继续提取');
+                    }
                 } else {
                     this.controlPanel.setTaskProgress?.('audit', 'disabled', automatic ? '自动审核已关闭' : '审核功能已关闭');
                     this.controlPanel.setTaskProgress?.('revision', 'disabled', '审核未执行');
@@ -658,7 +673,8 @@ class MirrorAbyssApplication {
             if (['extraction', 'smallSummary', 'largeSummary', 'full', 'migration', 'commitMigration', 'undoMigration'].includes(taskType)) {
                 await this.controlPanel.refreshRecallMap?.();
             }
-            notify('success', '镜渊：本轮处理完成');
+            if (activeSnapshot.auditUnresolved) notify('warning', '镜渊：提取已完成，但审核修正未改变正文');
+            else notify('success', '镜渊：本轮处理完成');
             return result;
         } catch (error) {
             const text = (0, util_1.errorText)(error);
@@ -974,7 +990,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.52-full-matrix';
+exports.VERSION = '2.0.0-lite.final-audit-candidate';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1727,7 +1743,7 @@ class ControlPanel {
         status.textContent = '尚未运行';
         const report = document.createElement('pre');
         report.className = 'ma-lite-diagnostic-report';
-        report.textContent = '全自动验收连续运行三轮独立完整测试；每轮都从原始聊天、元数据和世界书快照重头开始，并通过 SillyTavern 官方 /trigger 与 Connection Profile 服务调用模型。';
+        report.textContent = '全自动验收运行一轮真实宿主闭环；从原始聊天、元数据和世界书快照开始，通过 SillyTavern 官方生成与 Connection Profile 服务调用模型，结束后恢复原始快照。';
         actions.append(run, exportButton);
         section.append(help, actions, status, report);
         this.diagnosticStatusNode = status;
@@ -1782,7 +1798,7 @@ class ControlPanel {
     renderDiagnosticReport(report) {
         if (!this.diagnosticReportNode) return;
         if (!report) {
-            this.diagnosticReportNode.textContent = '全自动验收连续运行三轮独立完整测试；每轮都从原始聊天、元数据和世界书快照重头开始，并通过 SillyTavern 官方 /trigger 与 Connection Profile 服务调用模型。';
+            this.diagnosticReportNode.textContent = '全自动验收运行一轮真实宿主闭环；从原始聊天、元数据和世界书快照开始，通过 SillyTavern 官方生成与 Connection Profile 服务调用模型，结束后恢复原始快照。';
             if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = '尚未运行';
             return;
         }
@@ -1794,15 +1810,15 @@ class ControlPanel {
         const rounds = report.roundSummary || {};
         const lines = [
             `${report.accepted ? '通过' : '未通过'}｜${pluginLabel}｜${mainLabel}`,
-            `本次采用 ${rounds.completed || 1}/${rounds.requested || 1} 轮独立全量重启｜插件完整通过 ${rounds.pluginPassRounds ?? (report.pluginAccepted ? 1 : 0)} 轮｜主聊天完整通过 ${rounds.mainPassRounds ?? (report.mainChatAccepted ? 1 : 0)} 轮`,
+            `本次采用 ${rounds.completed || 1}/${rounds.requested || 1} 轮真实宿主验收｜插件闭环通过 ${rounds.pluginPassRounds ?? (report.pluginAccepted ? 1 : 0)} 轮｜主聊天链通过 ${rounds.mainPassRounds ?? (report.mainChatAccepted ? 1 : 0)} 轮`,
             `选定第 ${rounds.selectedRound || report.roundIndex || 1} 轮作为最终结果｜通过 ${summary.pass || 0}｜警告 ${summary.warn || 0}｜失败 ${summary.fail || 0}｜跳过 ${summary.skip || 0}`,
             `耗时 ${report.durationMs || 0} ms｜世界书 ${report.scope?.worldbookName || '未绑定'}`,
         ];
         for (const check of failed.slice(0, 4)) lines.push(`失败｜${check.label}：${check.detail}`);
         for (const check of warnings.slice(0, 3)) lines.push(`警告｜${check.label}：${check.detail}`);
-        if (!failed.length && !warnings.length) lines.push('三轮独立验收均已收敛；每轮结束后均恢复原始快照。');
+        if (!failed.length && !warnings.length) lines.push('本轮真实宿主验收已收敛，并已恢复原始快照。');
         this.diagnosticReportNode.textContent = lines.join('\n');
-        if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = report.accepted ? (report.acceptance?.pluginClosedLoop === 'stable-pass' ? '三轮插件闭环稳定通过' : '插件闭环重启后通过，存在间歇性失败') : '三轮插件闭环均未完整通过';
+        if (this.diagnosticStatusNode) this.diagnosticStatusNode.textContent = report.accepted ? '本轮插件闭环通过' : '本轮插件闭环未完整通过';
     }
     buildResetSection() {
         const section = document.createElement('section');
@@ -2945,10 +2961,8 @@ exports.summarizeDiagnosticReport = summarizeDiagnosticReport;
 exports.findFreeDiagnosticUid = findFreeDiagnosticUid;
 const constants_1 = require("./constants");
 const util_1 = require("./util");
-const prompts_1 = require("./prompts");
 const audit_1 = require("./audit");
 const parser_1 = require("./parser");
-const model_request_1 = require("./model-request");
 const governance_1 = require("./governance");
 
 /**
@@ -2969,7 +2983,7 @@ class DiagnosticsService {
     clear() { this.lastReport = null; }
     async run(settings, snapshot, validate) {
         const suiteStarted = new Date();
-        const totalRounds = 3;
+        const totalRounds = 1;
         const rounds = [];
         for (let roundIndex = 1; roundIndex <= totalRounds; roundIndex += 1) {
             await this.hooks.resetRound?.(roundIndex, totalRounds);
@@ -2995,7 +3009,7 @@ class DiagnosticsService {
         report.startedAt = suiteStarted.toISOString();
         report.finishedAt = new Date().toISOString();
         report.durationMs = Date.now() - suiteStarted.getTime();
-        report.executionMode = 'three-independent-full-rounds-real-host-e2e-with-controlled-fault-matrix';
+        report.executionMode = 'single-real-host-e2e-with-controlled-fault-matrix';
         report.rounds = rounds.map((round) => (0, util_1.clone)(round));
         report.roundSummary = {
             requested: totalRounds,
@@ -3019,13 +3033,13 @@ class DiagnosticsService {
         report.checks = Array.isArray(report.checks) ? report.checks.filter((check) => check.id !== 'full-round-aggregate') : [];
         report.checks.push({
             id: 'full-round-aggregate',
-            label: '三轮全量重启验收汇总',
+            label: '单轮真实宿主验收汇总',
             category: '验收轮次',
             status: report.accepted ? (pluginPassRounds === totalRounds && mainPassRounds === totalRounds ? 'pass' : 'warn') : 'fail',
             durationMs: report.durationMs,
             detail: report.accepted
-                ? `插件闭环 ${pluginPassRounds}/${totalRounds} 轮稳定通过；每轮均从原快照重头开始`
-                : `插件闭环仅 ${pluginPassRounds}/${totalRounds} 轮通过；最终候选要求三轮全部通过且安全恢复、官方传输均通过`,
+                ? `插件闭环 ${pluginPassRounds}/${totalRounds} 轮通过；验收已从原快照开始并完整恢复`
+                : `插件闭环 ${pluginPassRounds}/${totalRounds} 轮通过；候选要求本轮闭环、安全恢复与官方传输全部通过`,
             evidence: {
                 requestedRounds: totalRounds,
                 completedRounds: rounds.length,
@@ -3154,7 +3168,7 @@ class DiagnosticsService {
                         256,
                         modelSnapshot,
                         settings,
-                        Math.min(Math.max(10000, Number(settings.requestTimeoutMs) || 90000), 60000),
+                        Math.max(10000, Number(settings.requestTimeoutMs) || 90000),
                         route.id,
                     );
                     const routeAfter = collectGenerationState(this.host, context, settings);
@@ -3169,53 +3183,26 @@ class DiagnosticsService {
             }
 
             if (settings.auditEnabled !== false) {
-                await runCheck('audit-protocol', '审核提示词与 PASS 协议', '业务协议', async () => {
-                    const childToken = { cancelled: false, reason: '' };
-                    const protocolSnapshot = this.host.captureMaintenanceSnapshot(settings, 'acceptanceAuditProtocol', childToken);
-                    const playerText = '我推开大厅的门。';
-                    const assistantText = '门向内打开，灯火照亮青石地面。守门人站在远处看向门口。';
-                    const prompt = (0, prompts_1.auditPrompts)(settings, playerText, assistantText, { dialogueContext: '' });
-                    const raw = await (0, model_request_1.callModel)({
-                        host: this.host,
-                        stage: 'audit',
-                        prompt,
-                        settings,
-                        snapshot: protocolSnapshot,
-                        profileId: settings.auditProfileId,
-                        sourceText: `${playerText}\n${assistantText}`,
-                    });
-                    const parsed = (0, audit_1.parseAuditResult)(raw);
-                    if (parsed.decision !== 'pass') throw new Error(`合规样本被判定需要修正：${parsed.issues?.slice(0, 3).join('；') || '未提供原因'}`);
-                    return { mode: 'real-model-protocol', decision: parsed.decision, route: settings.auditProfileId ? 'profile' : 'current' };
+                await runCheck('audit-protocol', '审核结果协议解析', '业务协议', async () => {
+                    const pass = (0, audit_1.parseAuditResult)('PASS');
+                    const fail = (0, audit_1.parseAuditResult)('FAIL\n【原因】\n- 替玩家作出决定');
+                    if (pass.decision !== 'pass' || fail.decision !== 'revision' || !fail.issues.length)
+                        throw new Error('审核 PASS / FAIL 协议解析不一致');
+                    return { mode: 'local-parser-contract', passDecision: pass.decision, failDecision: fail.decision };
                 });
             }
-            else pushSkip('audit-protocol', '审核提示词与 PASS 协议', '业务协议', '审核功能已关闭');
+            else pushSkip('audit-protocol', '审核结果协议解析', '业务协议', '审核功能已关闭');
 
             if (settings.extractionEnabled !== false) {
-                await runCheck('extraction-protocol', '提取提示词与 ENTRY 协议', '业务协议', async () => {
-                    const childToken = { cancelled: false, reason: '' };
-                    const protocolSnapshot = this.host.captureMaintenanceSnapshot(settings, 'acceptanceExtractionProtocol', childToken);
-                    const playerText = '我走进青石大厅。';
-                    const assistantText = '青石大厅灯火通明，北侧铁门已经打开。守门人阿洛站在门旁，明确告诉你这里是王城议事厅的入口。';
-                    const prompt = (0, prompts_1.extractionPrompts)(settings, playerText, assistantText, [], { dialogueContext: '' });
-                    const raw = await (0, model_request_1.callModel)({
-                        host: this.host,
-                        stage: 'extraction',
-                        prompt,
-                        settings,
-                        snapshot: protocolSnapshot,
-                        profileId: settings.extractionProfileId,
-                        sourceText: `${playerText}\n${assistantText}`,
-                    });
+                await runCheck('extraction-protocol', 'ENTRY 协议解析', '业务协议', async () => {
+                    const raw = `<<<ENTRY:场景:镜渊协议校验厅>>>\n<<<KEYWORDS>>>\n- 镜渊协议校验厅\n<<<CONTENT>>>\n【当前状态】\n- 北侧银门已经打开\n【固定事实】\n- 此处是王城议事厅入口\n<<<END_ENTRY>>>`;
                     const blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
-                    if (!blocks.length) {
-                        const diagnostics = blocks.diagnostics || {};
-                        throw new Error(`合成状态变化未形成 ENTRY 协议；异常片段${(diagnostics.skipped || []).length}个`);
-                    }
-                    return { mode: 'real-model-protocol', entryCount: blocks.length, titles: blocks.map((block) => String(block.title || '')).slice(0, 8), repaired: Number(blocks.diagnostics?.repaired || 0), route: settings.extractionProfileId ? 'profile' : 'current' };
+                    if (blocks.length !== 1 || String(blocks[0]?.title || '') !== '场景｜镜渊协议校验厅')
+                        throw new Error('有效 ENTRY 协议未形成唯一场景条目');
+                    return { mode: 'local-parser-contract', entryCount: blocks.length, titles: blocks.map((block) => String(block.title || '')) };
                 });
             }
-            else pushSkip('extraction-protocol', '提取提示词与 ENTRY 协议', '业务协议', '提取功能已关闭');
+            else pushSkip('extraction-protocol', 'ENTRY 协议解析', '业务协议', '提取功能已关闭');
 
             if (rawBefore) {
                 await runCheck('worldbook-reversible-write', '世界书写入—回读—回滚', '世界书', async () => {
@@ -4732,23 +4719,24 @@ class HostAdapter {
                     catch (error) { throw new Error(`无法读取 Connection Profile：${(0, util_1.errorText)(error)}`); }
                     if (!profile) throw new Error(`所选 Connection Profile 已不存在：${profileId}`);
                 }
-                // [MA-HOST-MODEL-05] Profile 请求只提交标准消息和取消信号。
-                // API、地址、密钥、模型、Completion Preset、Instruct、推理模板、响应解析与 max tokens
-                // 全部沿用 SillyTavern Connection Profile 的原生配置；镜渊不再覆盖或兼容供应商字段。
+                // [MA-HOST-MODEL-05] Profile 请求只提交标准消息、阶段输出上限和取消信号。
+                // API、地址、密钥、模型、Completion Preset、Instruct、推理模板与响应解析
+                // 全部沿用 SillyTavern Connection Profile；镜渊只通过 ST 官方参数限制本阶段最终输出。
                 requestController = typeof AbortController === 'function' ? new AbortController() : null;
                 request = service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
-                ], undefined, {
+                ], responseLength, {
                     signal: requestController?.signal ?? null,
                 });
             }
             else {
                 // [MA-HOST-MODEL-06] 未选择 Profile 时只调用 SillyTavern 的 generateRaw。
-                // 当前连接的 API、模型、Preset、Instruct、推理格式与响应解析均由 ST 负责。
+                // 当前连接的 API、模型、Preset、Instruct、推理格式与响应解析均由 ST 负责；
+                // responseLength 使用 ST 官方参数，避免后台任务继承正文的超长输出上限。
                 const generateRaw = context.generateRaw;
                 if (typeof generateRaw !== 'function') throw new Error('当前 SillyTavern 未提供 generateRaw');
-                request = generateRaw({ systemPrompt, prompt });
+                request = generateRaw({ systemPrompt, prompt, responseLength });
             }
         }
         catch (error) {
@@ -13888,8 +13876,11 @@ class RevisionService {
             try { onProgress(`修正版疑似截断：${assessment.reason}；已拒绝覆盖，不自动再次请求模型`); } catch { }
             throw new Error(`修正版疑似截断，已拒绝覆盖并保留原正文：${assessment.reason}`);
         }
-        if (revisedText === snapshot.assistantText)
-            throw new Error('修正模型返回的正文与原正文完全相同');
+        if (revisedText === snapshot.assistantText) {
+            const error = new Error('修正模型返回的正文与原正文完全相同');
+            error.code = 'MA_REVISION_NO_CHANGE';
+            throw error;
+        }
         return revisedText;
     }
 }
