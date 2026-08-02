@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.51-st-native-request — governed worldbook storage, native ST recall, user-owned placement, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.52-full-matrix — governed worldbook storage, native ST recall, user-owned placement, and hard content budgets. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -829,7 +829,7 @@ function extractionCompletion(result, fallbackWorldbookName = '') {
         detail: businessWriteCount > 0
             ? `已写入世界书“${worldbookName}”：新建${created.length}、更新${updated.length}、删除${deleted.length}；原生召回字段已同步`
             : `世界书“${worldbookName}”业务条目零写入；原生召回字段未产生额外正文`,
-        meta: { created, updated, deleted, worldbookName, businessWriteCount, activityPackChanged: false },
+        meta: { created, updated, deleted, worldbookName, businessWriteCount },
     };
 }
 
@@ -974,7 +974,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.51-st-native-request';
+exports.VERSION = '2.0.0-lite.ui.52-full-matrix';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -987,6 +987,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ControlPanel = void 0;
 exports.buildRecallViewModel = buildRecallViewModel;
 exports.buildUnifiedProfilePatch = buildUnifiedProfilePatch;
+exports.buildStageProfilePatch = buildStageProfilePatch;
+exports.profileRoutingMatrix = profileRoutingMatrix;
 const util_1 = require("./util");
 const ROOT_ID = 'mirror-abyss-core-control';
 const PANEL_ID = 'mirror-abyss-lite-panel';
@@ -994,6 +996,15 @@ const SETTINGS_ID = 'mirror-abyss-lite-settings-entry';
 const STYLE_ID = 'mirror-abyss-lite-style';
 const INDICATOR_CLASS = 'mirror-abyss-message-indicator';
 const PROFILE_SELECT_ID = 'mirror-abyss-lite-profile-select';
+const PROFILE_MIXED_VALUE = '__ma_mixed_profiles__';
+const PROFILE_STAGES = Object.freeze([
+    { key: 'auditProfileId', label: '审核', hint: '判定 PASS / FAIL' },
+    { key: 'revisionProfileId', label: '修正', hint: '审核失败后的完整修正版' },
+    { key: 'extractionProfileId', label: '提取与设定导入', hint: '事实提取、玩家设定预览' },
+    { key: 'smallSummaryProfileId', label: '小总结', hint: '近期事件压缩' },
+    { key: 'largeSummaryProfileId', label: '大总结', hint: '长期历史沉降' },
+    { key: 'migrationProfileId', label: '世界书重建', hint: '重建规划与批次转换' },
+]);
 const LAUNCHER_POSITION_KEY = 'mirrorAbyssLite.launcherPosition.v1';
 const LAUNCHER_SIZE = 44;
 const LAUNCHER_MARGIN = 8;
@@ -1038,8 +1049,10 @@ class ControlPanel {
         this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
+        this.stageProfileSelects = {};
+        this.stageProfileStatusNodes = {};
         this.profileDropdownBound = false;
-        this.profileSelectionRevision = 0;
+        this.stageProfileBindings = new Set();
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
@@ -1163,8 +1176,10 @@ class ControlPanel {
         this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
+        this.stageProfileSelects = {};
+        this.stageProfileStatusNodes = {};
         this.profileDropdownBound = false;
-        this.profileSelectionRevision = 0;
+        this.stageProfileBindings = new Set();
         this.settingsEntry = null;
         this.inputs = {};
         this.buttons = {};
@@ -1281,19 +1296,19 @@ class ControlPanel {
 .ma-lite-launcher:hover,.ma-lite-launcher:focus-visible{transform:scale(1.06)}
 #${ROOT_ID}.is-dragging .ma-lite-launcher{transform:none!important;cursor:grabbing}
 .ma-lite-launcher span{display:none}
-#${PANEL_ID}{position:fixed;top:max(58px,calc(48px + env(safe-area-inset-top)));right:max(10px,env(safe-area-inset-right));z-index:2147483639;box-sizing:border-box;width:min(360px,calc(100vw - 20px));max-height:calc(100dvh - 78px);overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#${PANEL_ID}{position:fixed;top:max(58px,calc(48px + env(safe-area-inset-top)));right:max(10px,env(safe-area-inset-right));z-index:2147483639;box-sizing:border-box;width:min(430px,calc(100vw - 20px));max-height:calc(100dvh - 78px);overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #${PANEL_ID}[hidden]{display:none!important}
 .ma-lite-header{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:10px;padding:12px;border-bottom:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none;box-shadow:0 4px 10px rgba(0,0,0,.22)}
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
 .ma-lite-close{min-width:34px;min-height:34px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
 .ma-lite-body{display:flex;flex-direction:column;gap:10px;padding:12px}
 .ma-lite-page-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;position:sticky;top:59px;z-index:1;padding-bottom:2px;background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none}.ma-lite-page-tab{min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
-.ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:38px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}
+.ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:38px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}.ma-lite-route-details{border-top:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));padding-top:7px}.ma-lite-route-details>summary{cursor:pointer;font-size:11px;font-weight:700}.ma-lite-route-grid{display:flex;flex-direction:column;gap:7px;margin-top:8px}.ma-lite-route-row{display:grid;grid-template-columns:minmax(92px,.8fr) minmax(0,1.5fr);gap:7px;align-items:center}.ma-lite-route-label b{display:block;font-size:11px}.ma-lite-route-label small{display:block;margin-top:2px;font-size:9px;line-height:1.25;opacity:.52}.ma-lite-route-select{box-sizing:border-box;width:100%;min-height:36px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-route-status{grid-column:1/-1;margin-top:-3px;font-size:9px;line-height:1.35;opacity:.58;overflow-wrap:anywhere}
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
 .ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
-.ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
+.ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;min-height:24px;overflow-wrap:anywhere;white-space:normal;font-size:9px;line-height:1.3;opacity:.68}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:38px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:40px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-pack{margin:0;max-height:250px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
@@ -1303,6 +1318,7 @@ class ControlPanel {
 .ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
 .${INDICATOR_CLASS}{display:flex;align-items:center;gap:8px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
 .${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{display:none}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="warning"]{background:#f0a94f}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
+@media(max-width:640px){#${PANEL_ID}{top:max(52px,calc(44px + env(safe-area-inset-top)));right:max(6px,env(safe-area-inset-right));width:calc(100vw - 12px);max-height:calc(100dvh - 62px);border-radius:10px}.ma-lite-body{padding:9px}.ma-lite-page-nav{top:57px}.ma-lite-thresholds{grid-template-columns:repeat(2,minmax(0,1fr))}.ma-lite-route-row{grid-template-columns:1fr}.ma-lite-route-status{grid-column:1}.ma-lite-actions{gap:7px}.ma-lite-action{min-height:44px}.ma-lite-pipeline{gap:4px}.ma-lite-stage{padding:7px 4px}.ma-lite-stage-head{font-size:9px}}
 `;
         document.head.append(style);
     }
@@ -1474,22 +1490,50 @@ class ControlPanel {
         section.className = 'ma-lite-api';
         const head = document.createElement('div');
         head.className = 'ma-lite-api-head';
-        head.innerHTML = '<i class="fa-solid fa-plug" aria-hidden="true"></i><strong>镜渊处理 API</strong>';
+        head.innerHTML = '<i class="fa-solid fa-plug" aria-hidden="true"></i><strong>镜渊处理连接</strong>';
         const select = document.createElement('select');
         select.id = PROFILE_SELECT_ID;
         select.className = 'ma-lite-api-select';
-        select.setAttribute('aria-label', '选择镜渊审核、提取和总结使用的连接配置');
+        select.setAttribute('aria-label', '统一设置镜渊所有阶段使用的 Connection Profile');
         const loading = document.createElement('option');
         loading.value = '';
         loading.textContent = '正在读取 SillyTavern Connection Profiles…';
         select.append(loading);
         const status = document.createElement('div');
         status.className = 'ma-lite-api-status';
+        status.setAttribute('aria-live', 'polite');
         status.textContent = '默认跟随当前 SillyTavern 连接。';
+        const details = document.createElement('details');
+        details.className = 'ma-lite-route-details';
+        const summary = document.createElement('summary');
+        summary.textContent = '按阶段分别选择（高级）';
+        const grid = document.createElement('div');
+        grid.className = 'ma-lite-route-grid';
+        for (const stage of PROFILE_STAGES) {
+            const row = document.createElement('div');
+            row.className = 'ma-lite-route-row';
+            const label = document.createElement('label');
+            label.className = 'ma-lite-route-label';
+            label.setAttribute('for', profileSelectId(stage.key));
+            label.innerHTML = `<b>${stage.label}</b><small>${stage.hint}</small>`;
+            const stageSelect = document.createElement('select');
+            stageSelect.id = profileSelectId(stage.key);
+            stageSelect.className = 'ma-lite-route-select';
+            stageSelect.setAttribute('aria-label', `${stage.label}使用的 Connection Profile`);
+            stageSelect.append(new Option('正在读取…', ''));
+            const stageStatus = document.createElement('div');
+            stageStatus.className = 'ma-lite-route-status';
+            stageStatus.textContent = '等待读取实际路由';
+            row.append(label, stageSelect, stageStatus);
+            grid.append(row);
+            this.stageProfileSelects[stage.key] = stageSelect;
+            this.stageProfileStatusNodes[stage.key] = stageStatus;
+        }
+        details.append(summary, grid);
         const help = document.createElement('div');
         help.className = 'ma-lite-api-help';
-        help.textContent = '连接、模型、地址和密钥仍在 SillyTavern「API Connections → Connection Profiles」中管理。选择 Profile 后，Completion Preset、Instruct、推理模板和输出上限也全部沿用该 Profile；镜渊不覆盖这些配置，也不自动重试失败请求。使用“当前连接”时则完全跟随当前 SillyTavern 连接。';
-        section.append(head, select, status, help);
+        help.textContent = '上方下拉会一键统一六个阶段；高级映射只修改对应阶段。API、模型、密钥、Preset、Instruct、推理模板和输出上限全部由 SillyTavern Connection Profile 管理。切换主聊天模型不会取消正在使用独立 Profile 的镜渊任务。';
+        section.append(head, select, status, details, help);
         this.apiProfileSelect = select;
         this.apiProfileStatusNode = status;
         return section;
@@ -1502,11 +1546,15 @@ class ControlPanel {
         const select = this.apiProfileSelect;
         if (!select || this.profileDropdownBound) return;
         const settings = this.getSettings();
-        const selectedId = settings.modelSource === 'profile' ? String(settings.modelProfileId || '') : '';
-        if (this.actions.connectionProfilesAvailable?.() === false) {
-            select.replaceChildren(new Option('当前 SillyTavern 连接', ''));
-            select.disabled = true;
-            if (this.apiProfileStatusNode) this.apiProfileStatusNode.textContent = 'Connection Profiles 已禁用或不可用，镜渊继续使用当前连接。';
+        const unified = unifiedProfileState(settings);
+        const selectedId = unified.mixed ? '' : unified.id;
+        const available = this.actions.connectionProfilesAvailable?.() !== false;
+        if (!available) {
+            for (const node of [select, ...Object.values(this.stageProfileSelects)]) {
+                node?.replaceChildren(new Option('当前 SillyTavern 连接', ''));
+                if (node) node.disabled = true;
+            }
+            if (this.apiProfileStatusNode) this.apiProfileStatusNode.textContent = 'Connection Profiles 已禁用或不可用，所有阶段使用当前连接。';
             return;
         }
         try {
@@ -1515,10 +1563,11 @@ class ControlPanel {
             });
             if (!bound) throw new Error('官方 Connection Profile 下拉服务不可用');
             this.profileDropdownBound = true;
-            const defaultOption = select.querySelector('option[value=""]');
-            if (defaultOption) defaultOption.textContent = '当前 SillyTavern 连接';
-            select.value = selectedId;
-            this.updateApiProfileStatus(selectedId);
+            renameCurrentOption(select);
+            ensureMixedOption(select, unified.mixed);
+            select.value = unified.mixed ? PROFILE_MIXED_VALUE : selectedId;
+            this.bindStageProfileSelectors(settings);
+            this.updateApiProfileStatus(selectedId, '', settings);
         }
         catch (error) {
             select.replaceChildren(new Option('当前 SillyTavern 连接', ''));
@@ -1526,33 +1575,93 @@ class ControlPanel {
             if (this.apiProfileStatusNode) this.apiProfileStatusNode.textContent = `无法读取 Connection Profiles：${(0, util_1.errorText)(error)}`;
         }
     }
+    bindStageProfileSelectors(settings = this.getSettings()) {
+        for (const stage of PROFILE_STAGES) {
+            if (this.stageProfileBindings.has(stage.key)) continue;
+            const select = this.stageProfileSelects[stage.key];
+            if (!select) continue;
+            const selectedId = String(settings?.[stage.key] || '');
+            try {
+                const bound = this.actions.bindProfileDropdown?.(`#${profileSelectId(stage.key)}`, selectedId, (profile) => {
+                    void this.persistStageProfileSelection(stage.key, profile || null);
+                });
+                if (!bound) throw new Error('官方 Connection Profile 下拉服务不可用');
+                this.stageProfileBindings.add(stage.key);
+                renameCurrentOption(select);
+                select.value = selectedId;
+            }
+            catch (error) {
+                select.replaceChildren(new Option('当前 SillyTavern 连接', ''));
+                select.disabled = true;
+                const status = this.stageProfileStatusNodes[stage.key];
+                if (status) status.textContent = `无法读取：${(0, util_1.errorText)(error)}`;
+            }
+        }
+        this.updateProfileRouteMatrix(settings);
+    }
+    setProfileSelectorsDisabled(disabled) {
+        if (this.apiProfileSelect && this.profileDropdownBound) this.apiProfileSelect.disabled = Boolean(disabled);
+        for (const stage of PROFILE_STAGES) {
+            const select = this.stageProfileSelects[stage.key];
+            if (select && this.stageProfileBindings.has(stage.key)) select.disabled = Boolean(disabled);
+        }
+    }
     async persistProfileSelection(profile) {
-        const revision = ++this.profileSelectionRevision;
         const previousSettings = this.getSettings();
-        const previousId = previousSettings.modelSource === 'profile' ? String(previousSettings.modelProfileId || '') : '';
+        const previousUnified = unifiedProfileState(previousSettings);
+        const previousId = previousUnified.mixed ? PROFILE_MIXED_VALUE : previousUnified.id;
         const profileId = String(profile?.id || '');
         const select = this.apiProfileSelect;
-        if (select) select.disabled = true;
+        this.setProfileSelectorsDisabled(true);
         try {
             await this.actions.configure?.(buildUnifiedProfilePatch(profileId));
-            if (revision !== this.profileSelectionRevision) return;
             this.lastOutcome = null;
             if (select) select.value = profileId;
-            this.updateApiProfileStatus(profileId, profile?.name || '');
+            this.refresh();
+            this.updateApiProfileStatus(profileId, profile?.name || '', this.getSettings());
             this.setStatus(profileId ? `镜渊处理 API 已切换为：${profile?.name || profileId}` : '镜渊处理 API 已改为当前 SillyTavern 连接');
         }
         catch (error) {
-            if (revision !== this.profileSelectionRevision) return;
             if (select) select.value = previousId;
-            this.updateApiProfileStatus(previousId);
+            ensureMixedOption(select, previousUnified.mixed);
+            this.updateApiProfileStatus(previousUnified.mixed ? '' : previousUnified.id, '', previousSettings);
             this.setStatus(`保存镜渊处理 API 失败：${(0, util_1.errorText)(error)}`, true);
         }
         finally {
-            if (revision === this.profileSelectionRevision && select) select.disabled = false;
+            this.setProfileSelectorsDisabled(false);
         }
     }
-    updateApiProfileStatus(profileId, knownName = '') {
+    async persistStageProfileSelection(stageKey, profile) {
+        if (!PROFILE_STAGES.some((stage) => stage.key === stageKey)) return;
+        const previousSettings = this.getSettings();
+        const previousId = String(previousSettings?.[stageKey] || '');
+        const profileId = String(profile?.id || '');
+        const select = this.stageProfileSelects[stageKey];
+        this.setProfileSelectorsDisabled(true);
+        try {
+            await this.actions.configure?.(buildStageProfilePatch(previousSettings, stageKey, profileId));
+            this.lastOutcome = null;
+            this.refresh();
+            const label = PROFILE_STAGES.find((stage) => stage.key === stageKey)?.label || stageKey;
+            this.setStatus(`${label}连接已切换为：${profileId ? (profile?.name || profileId) : '当前 SillyTavern 连接'}；其他阶段保持不变`);
+        }
+        catch (error) {
+            if (select) select.value = previousId;
+            this.updateProfileRouteMatrix(previousSettings);
+            this.setStatus(`保存阶段连接失败：${(0, util_1.errorText)(error)}`, true);
+        }
+        finally {
+            this.setProfileSelectorsDisabled(false);
+        }
+    }
+    updateApiProfileStatus(profileId, knownName = '', settings = this.getSettings()) {
         if (!this.apiProfileStatusNode) return;
+        const unified = unifiedProfileState(settings);
+        if (unified.mixed) {
+            this.apiProfileStatusNode.textContent = '当前：按阶段分别设置；下方六个阶段显示实际 Connection Profile。主聊天连接变化只影响使用“当前连接”的阶段。';
+            this.updateProfileRouteMatrix(settings);
+            return;
+        }
         let summary = null;
         try { summary = this.actions.profileSummary?.(profileId) || null; }
         catch { summary = null; }
@@ -1575,6 +1684,25 @@ class ControlPanel {
         const protocol = summary.mode === 'cc' ? 'Chat Completion' : summary.mode === 'tc' ? 'Text Completion' : '未知';
         const owner = profileId ? '｜路由：ST 原生 Connection Profile' : '｜路由：ST 当前连接';
         this.apiProfileStatusNode.textContent = `${prefix}｜协议：${protocol}｜API：${summary.api || '未知'}｜模型：${model}${owner}${invalid}${warning}${scope}`;
+    }
+    updateProfileRouteMatrix(settings = this.getSettings()) {
+        for (const stage of PROFILE_STAGES) {
+            const id = String(settings?.[stage.key] || '');
+            const select = this.stageProfileSelects[stage.key];
+            if (select && this.stageProfileBindings.has(stage.key)) select.value = id;
+            const node = this.stageProfileStatusNodes[stage.key];
+            if (!node) continue;
+            let summary = null;
+            try { summary = this.actions.profileSummary?.(id) || null; }
+            catch { summary = null; }
+            if (!summary) {
+                node.textContent = id ? `Profile：${this.actions.profileName?.(id) || id}` : '当前 SillyTavern 连接';
+                continue;
+            }
+            const protocol = summary.mode === 'cc' ? 'Chat Completion' : summary.mode === 'tc' ? 'Text Completion' : '未知协议';
+            const model = summary.model || (summary.mode === 'tc' ? '由后端决定' : '未识别');
+            node.textContent = `${id ? (summary.name || id) : '当前连接'}｜${protocol}｜${summary.api || '未知 API'}｜${model}${summary.error ? `｜不可用：${summary.error}` : ''}${summary.warning ? `｜提示：${summary.warning}` : ''}`;
+        }
     }
     buildDiagnosticSection() {
         const section = document.createElement('section');
@@ -1987,7 +2115,6 @@ class ControlPanel {
             ['旧表', summary.candidates ?? 0],
             ['批次', summary.batches ?? 0],
             ['模型请求', summary.requests ?? 0],
-            ['限流重试', summary.retries ?? 0],
             ['失败批次', summary.failedBatches ?? 0],
             ['覆盖率', `${summary.coveragePercent ?? 0}%`],
             ['未覆盖', summary.uncoveredEntries ?? 0],
@@ -2498,9 +2625,11 @@ class ControlPanel {
             this.inputs.auditPrompt.value = String(settings.auditPrompt || '');
         }
         if (this.apiProfileSelect && this.profileDropdownBound) {
-            const selectedId = settings.modelSource === 'profile' ? String(settings.modelProfileId || '') : '';
-            this.apiProfileSelect.value = selectedId;
-            this.updateApiProfileStatus(selectedId);
+            const unified = unifiedProfileState(settings);
+            ensureMixedOption(this.apiProfileSelect, unified.mixed);
+            this.apiProfileSelect.value = unified.mixed ? PROFILE_MIXED_VALUE : unified.id;
+            this.updateApiProfileStatus(unified.mixed ? '' : unified.id, '', settings);
+            this.updateProfileRouteMatrix(settings);
         }
         this.syncDisabledState();
         if (this.statusNode) {
@@ -2538,9 +2667,8 @@ class ControlPanel {
         const current = Number(progress.current || 0);
         const total = Number(progress.total || 0);
         const requests = Number(progress.requests || 0);
-        const retries = Number(progress.retries || 0);
         const prefix = total > 0 ? `${current}/${total}批` : '重建';
-        this.rebuildStatusNode.textContent = `${prefix}；请求${requests}次${retries ? `，限流重试${retries}次` : ''}${detail ? `；${detail}` : ''}`;
+        this.rebuildStatusNode.textContent = `${prefix}；请求${requests}次${detail ? `；${detail}` : ''}`;
     }
     setStatus(text, isError = false) {
         this.statusText = String(text || '');
@@ -2568,7 +2696,6 @@ class ControlPanel {
             queuePosition: Number.isFinite(meta.queuePosition) ? Number(meta.queuePosition) : previous.queuePosition,
             worldbookName: typeof meta.worldbookName === 'string' ? meta.worldbookName : previous.worldbookName,
             businessWriteCount: Number.isFinite(meta.businessWriteCount) ? Number(meta.businessWriteCount) : previous.businessWriteCount,
-            activityPackChanged: typeof meta.activityPackChanged === 'boolean' ? meta.activityPackChanged : previous.activityPackChanged,
         };
         this.renderPipeline();
         this.scheduleIndicatorRefresh();
@@ -2671,9 +2798,43 @@ class ControlPanel {
     }
 }
 function freshTaskState(detail = '待命') {
-    return { state: 'idle', detail, titles: [], created: [], updated: [], deleted: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false };
+    return { state: 'idle', detail, titles: [], created: [], updated: [], deleted: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0 };
 }
 /** [MA-UI-API-03] 一个 Profile 统一覆盖所有模型阶段；空值恢复当前连接。 */
+function profileSelectId(key) { return `mirror-abyss-lite-profile-${String(key).replace(/ProfileId$/u, '')}`; }
+function renameCurrentOption(select) {
+    const option = select?.querySelector?.('option[value=""]');
+    if (option) option.textContent = '当前 SillyTavern 连接';
+}
+function ensureMixedOption(select, needed) {
+    if (!select) return;
+    let option = select.querySelector?.(`option[value="${PROFILE_MIXED_VALUE}"]`);
+    if (needed && !option) {
+        option = new Option('按阶段分别设置', PROFILE_MIXED_VALUE);
+        option.disabled = true;
+        select.prepend(option);
+    }
+    if (!needed && option) option.remove();
+}
+function unifiedProfileState(settings = {}) {
+    const values = PROFILE_STAGES.map((stage) => String(settings?.[stage.key] || ''));
+    const first = values[0] || '';
+    return { mixed: values.some((value) => value !== first), id: first };
+}
+function profileRoutingMatrix(settings = {}) {
+    return PROFILE_STAGES.map((stage) => ({ ...stage, profileId: String(settings?.[stage.key] || '') }));
+}
+function buildStageProfilePatch(settings, stageKey, profileId) {
+    if (!PROFILE_STAGES.some((stage) => stage.key === stageKey)) return {};
+    const id = String(profileId || '');
+    const next = { ...settings, [stageKey]: id };
+    const unified = unifiedProfileState(next);
+    return {
+        [stageKey]: id,
+        modelSource: unified.mixed ? 'current' : unified.id ? 'profile' : 'current',
+        modelProfileId: unified.mixed ? '' : unified.id,
+    };
+}
 function buildUnifiedProfilePatch(profileId) {
     const id = String(profileId || '');
     return {
@@ -4338,52 +4499,25 @@ class HostAdapter {
         const suffix = (0, util_1.hashText)(this.chatKey() || `${this.roleKey()}|${context.getCurrentChatId?.() ?? context.chatId ?? ''}`).slice(-6) || 'chat';
         return `MA_${display}_${suffix}`;
     }
-    settingsSignature(settings) {
+    settingsSignature(settings, taskType = '') {
+        const task = String(taskType || '');
         return (0, util_1.hashText)(JSON.stringify({
-            modelSource: settings.modelSource,
-            modelProfileId: settings.modelProfileId,
-            auditProfileId: settings.auditProfileId,
-            revisionProfileId: settings.revisionProfileId,
-            extractionProfileId: settings.extractionProfileId,
-            smallSummaryProfileId: settings.smallSummaryProfileId,
-            largeSummaryProfileId: settings.largeSummaryProfileId,
-            migrationProfileId: settings.migrationProfileId,
-            responseTokens: settings.responseTokens,
-            requestTimeoutMs: settings.requestTimeoutMs,
-            auditEnabled: settings.auditEnabled,
-            extractionEnabled: settings.extractionEnabled,
-            auditPrompt: settings.auditPrompt,
-            revisionPrompt: settings.revisionPrompt,
-            extractionPrompt: settings.extractionPrompt,
-            smallSummaryPrompt: settings.smallSummaryPrompt,
-            largeSummaryPrompt: settings.largeSummaryPrompt,
-            smallSummaryTurns: settings.smallSummaryTurns,
-            largeSummaryCount: settings.largeSummaryCount,
-            activityPackEnabled: settings.activityPackEnabled,
-            activityPackHardMax: settings.activityPackHardMax,
-            entryBudgetEnabled: settings.entryBudgetEnabled,
-            keywordDefinitions: settings.keywordDefinitions,
-            sectionPolicies: settings.sectionPolicies,
-            bodyMatchThreshold: settings.bodyMatchThreshold,
-            matchWeights: settings.matchWeights,
-            connectionState: this.connectionStateSignature(settings),
+            task,
+            settings: taskSettingsSignature(settings, task),
+            connectionState: this.connectionStateSignature(settings, task),
         }));
     }
-    connectionStateSignature(settings) {
+    connectionStateSignature(settings, taskType = '') {
         const context = this.context();
-        const ids = (0, util_1.unique)([
-            settings.auditProfileId,
-            settings.revisionProfileId,
-            settings.extractionProfileId,
-            settings.smallSummaryProfileId,
-            settings.largeSummaryProfileId,
-            settings.migrationProfileId,
-        ]);
+        const profileKeys = profileKeysForTask(taskType);
+        const ids = (0, util_1.unique)(profileKeys.map((key) => String(settings?.[key] || '')).filter(Boolean));
         const service = context.ConnectionManagerRequestService;
         const profiles = ids.map((id) => {
             try { return [id, sanitizeConnectionValue(service?.getProfile?.(id))]; }
             catch { return [id, null]; }
         });
+        const usesCurrentConnection = profileKeys.some((key) => !String(settings?.[key] || ''));
+        if (!usesCurrentConnection) return { profiles };
         const chatSettings = context.chatCompletionSettings ?? {};
         const textSettings = context.textCompletionSettings ?? {};
         return {
@@ -4411,7 +4545,7 @@ class HostAdapter {
             roleKey: this.roleKey(),
             scopeRevision: this.scopeRevision(turn.chatKey),
             worldbookName: this.targetWorldbookName(settings),
-            settingsSignature: this.settingsSignature(settings),
+            settingsSignature: this.settingsSignature(settings, taskType),
             taskId: randomId(),
             taskType,
             // [MA-QUEUE-03] 提取、总结和完整后台流程固定到源正文；后续新正文只会排队，不使该源正文任务失效。
@@ -4440,7 +4574,7 @@ class HostAdapter {
             roleKey: this.roleKey(),
             scopeRevision: this.scopeRevision(chatKey),
             worldbookName: this.targetWorldbookName(settings),
-            settingsSignature: this.settingsSignature(settings),
+            settingsSignature: this.settingsSignature(settings, taskType),
             taskId: randomId(),
             taskType,
             token,
@@ -4470,7 +4604,7 @@ class HostAdapter {
         }
         if (currentSettings) {
             if (this.targetWorldbookName(currentSettings) !== snapshot.worldbookName) throw new Error('目标世界书已经变化，旧任务作废');
-            if (this.settingsSignature(currentSettings) !== snapshot.settingsSignature) throw new Error('模型或任务设置已经变化，旧任务作废');
+            if (this.settingsSignature(currentSettings, snapshot.taskType) !== snapshot.settingsSignature) throw new Error('模型或任务设置已经变化，旧任务作废');
         }
         return turn;
     }
@@ -4481,7 +4615,7 @@ class HostAdapter {
             chatInstance: this.context().chat,
             roleKey: this.roleKey(),
             worldbookName: this.targetWorldbookName(currentSettings),
-            settingsSignature: this.settingsSignature(currentSettings),
+            settingsSignature: this.settingsSignature(currentSettings, snapshot.taskType),
             scopeRevision: this.scopeRevision(turn.chatKey),
         };
     }
@@ -4581,12 +4715,13 @@ class HostAdapter {
         return selected.reverse().join('\n\n');
     }
     /** [MA-HOST-03] 宿主模型调用原语；API 与响应兼容完全交由 SillyTavern。 */
-    async generate(systemPrompt, prompt, responseLength, snapshot, currentSettings, timeoutMs, profileId = '', generationOptions = {}) {
+    async generate(systemPrompt, prompt, responseLength, snapshot, currentSettings, timeoutMs, profileId = '') {
         this.assertSnapshot(snapshot, currentSettings);
         const context = this.context();
         const route = describeModelRoute(context, profileId);
         if (route.error) throw new Error(route.error);
         let request;
+        let requestController = null;
         try {
             if (profileId) {
                 const service = context.ConnectionManagerRequestService;
@@ -4600,14 +4735,13 @@ class HostAdapter {
                 // [MA-HOST-MODEL-05] Profile 请求只提交标准消息和取消信号。
                 // API、地址、密钥、模型、Completion Preset、Instruct、推理模板、响应解析与 max tokens
                 // 全部沿用 SillyTavern Connection Profile 的原生配置；镜渊不再覆盖或兼容供应商字段。
-                const requestController = typeof AbortController === 'function' ? new AbortController() : null;
+                requestController = typeof AbortController === 'function' ? new AbortController() : null;
                 request = service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
                 ], undefined, {
                     signal: requestController?.signal ?? null,
                 });
-                generationOptions = { ...generationOptions, requestController };
             }
             else {
                 // [MA-HOST-MODEL-06] 未选择 Profile 时只调用 SillyTavern 的 generateRaw。
@@ -4625,7 +4759,7 @@ class HostAdapter {
             raw = await waitForModelRequest(request, {
                 timeoutMs,
                 token: snapshot.token,
-                controller: generationOptions?.requestController ?? null,
+                controller: requestController,
             });
         }
         catch (error) {
@@ -5382,6 +5516,72 @@ function sanitizeConnectionValue(value, depth = 0) {
     }
     return output;
 }
+function profileKeysForTask(taskType = '') {
+    const task = String(taskType || '');
+    if (task === 'audit') return ['auditProfileId', 'revisionProfileId'];
+    if (task === 'extraction' || task === 'diagnosticExtraction' || task === 'worldSettingPreview' || task === 'worldSettingCommit') return ['extractionProfileId'];
+    if (task === 'smallSummary') return ['smallSummaryProfileId'];
+    if (task === 'largeSummary') return ['largeSummaryProfileId'];
+    if (task === 'migration') return ['migrationProfileId'];
+    if (task === 'full') return ['auditProfileId', 'revisionProfileId', 'extractionProfileId'];
+    if (!task || task === 'acceptance' || task.startsWith('acceptanceModel:')) {
+        return ['auditProfileId', 'revisionProfileId', 'extractionProfileId', 'smallSummaryProfileId', 'largeSummaryProfileId', 'migrationProfileId'];
+    }
+    return [];
+}
+function taskSettingsSignature(settings, taskType = '') {
+    const task = String(taskType || '');
+    const profileKeys = profileKeysForTask(task);
+    const output = {
+        responseTokens: settings?.responseTokens,
+        requestTimeoutMs: settings?.requestTimeoutMs,
+    };
+    for (const key of profileKeys) output[key] = String(settings?.[key] || '');
+    const worldbookFields = () => Object.assign(output, {
+        entryBudgetEnabled: settings?.entryBudgetEnabled,
+        keywordDefinitions: settings?.keywordDefinitions,
+        sectionPolicies: settings?.sectionPolicies,
+    });
+    if (task === 'audit') Object.assign(output, { auditPrompt: settings?.auditPrompt, revisionPrompt: settings?.revisionPrompt });
+    else if (task === 'extraction' || task === 'diagnosticExtraction' || task === 'worldSettingPreview' || task === 'worldSettingCommit') {
+        Object.assign(output, { extractionPrompt: settings?.extractionPrompt });
+        worldbookFields();
+    }
+    else if (task === 'smallSummary') {
+        Object.assign(output, { smallSummaryPrompt: settings?.smallSummaryPrompt, smallSummaryTurns: settings?.smallSummaryTurns, criticalChangesForSmall: settings?.criticalChangesForSmall });
+        worldbookFields();
+    }
+    else if (task === 'largeSummary') {
+        Object.assign(output, { largeSummaryPrompt: settings?.largeSummaryPrompt, largeSummaryCount: settings?.largeSummaryCount });
+        worldbookFields();
+    }
+    else if (task === 'migration' || task === 'commitMigration' || task === 'undoMigration') worldbookFields();
+    else if (task === 'full') {
+        Object.assign(output, {
+            auditPrompt: settings?.auditPrompt,
+            revisionPrompt: settings?.revisionPrompt,
+            extractionPrompt: settings?.extractionPrompt,
+        });
+        worldbookFields();
+    }
+    else if (!task || task === 'acceptance' || task.startsWith('acceptanceModel:')) {
+        Object.assign(output, {
+            auditPrompt: settings?.auditPrompt,
+            revisionPrompt: settings?.revisionPrompt,
+            extractionPrompt: settings?.extractionPrompt,
+            smallSummaryPrompt: settings?.smallSummaryPrompt,
+            largeSummaryPrompt: settings?.largeSummaryPrompt,
+            smallSummaryTurns: settings?.smallSummaryTurns,
+            criticalChangesForSmall: settings?.criticalChangesForSmall,
+            largeSummaryCount: settings?.largeSummaryCount,
+        });
+        worldbookFields();
+    }
+    else if (['editEntry', 'setLocked', 'replanRecall', 'setFocus'].includes(task)) worldbookFields();
+    return output;
+}
+
+
 },"index":function(module,exports,require){
 
 "use strict";
@@ -6274,7 +6474,7 @@ class MemoryRunner {
         const detail = businessWrites > 0
             ? `已写入世界书“${destination}”：新建${actualCreated.length}、更新${actualUpdated.length}、删除${actualDeleted.length}；原生召回字段已同步`
             : `世界书“${destination}”业务条目零写入；原生召回字段未产生额外正文`;
-        this.progress('success', detail, { phase: 'write', titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites, activityPackChanged: result.activityPackChanged === true });
+        this.progress('success', detail, { phase: 'write', titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites });
         return result;
     }
     async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
@@ -6352,7 +6552,7 @@ class MemoryRunner {
             entries: [], changed: false, businessChanged: false,
             worldbookName: snapshot.worldbookName || '',
             warehouse: { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
-            activityPack: null, activityPackChanged: false,
+            activityPack: null,
         };
         this.setStatus(snapshot.chatKey, 'worldbook', `${label}通过唯一提交器写入世界书`, '', raw, plan);
         this.validate(snapshot);
@@ -6405,7 +6605,6 @@ class MemoryRunner {
             warehouse: entries.warehouse ?? { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
             receipt: entries.receipt ?? null,
             activityPack: entries.activityPack ?? null,
-            activityPackChanged: entries.activityPackChanged === true,
             currentGameTime: nextGameTime,
             previousGameTime,
         };
@@ -6425,7 +6624,6 @@ function taskResultEntries(result) {
     entries.worldbookName = String(result?.worldbookName ?? entries.worldbookName ?? '');
     entries.warehouse = result?.warehouse ?? entries.warehouse ?? { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 };
     entries.activityPack = result?.activityPack ?? entries.activityPack ?? null;
-    entries.activityPackChanged = result?.activityPackChanged === true;
     entries.criticalChanges = Number(result?.criticalChanges || 0);
     return entries;
 }
@@ -6712,8 +6910,6 @@ const MIGRATION_PLAN_LINE_PREVIEW = 68;
 const REGION_SUFFIX_PATTERN = /([\p{Script=Han}A-Za-z0-9·]{2,20}(?:大陆|王国|帝国|公国|领地|地区|区域|州|省|郡|城|镇|村|港|关|岛|群岛|海域|森林|山脉|荒原|边境|北境|南境|东境|西境))/gu;
 const ORGANIZATION_SUFFIX_PATTERN = /([\p{Script=Han}A-Za-z0-9·]{2,24}(?:王室|议会|教会|教团|公会|商会|协会|学院|军团|军|卫队|骑士团|调查局|委员会|家族|公司|组织|势力|联盟|同盟|帮派|工坊|研究院))/gu;
 const MIGRATION_DEFAULT_INTERVAL_MS = 2200;
-const MIGRATION_RATE_LIMIT_BACKOFF_MS = [8000, 20000];
-const MIGRATION_MAX_RATE_LIMIT_RETRIES = 2;
 const UNIVERSAL_ENTRY_MARKER = '新条目';
 const UNIVERSAL_METADATA_NAMES = new Set(['组ID', '名称', '归入类型', '建议类型', '与现有类型区别', '别名', '合并来源', '来源行', '保留方式', '并入条目', '并入栏目', '场景锚点', '游戏时间', '时间来源', '时态']);
 const UNIVERSAL_SECTION_NAMES = new Set(['内容', '角色认知', '过去结果', '关键词']);
@@ -7021,7 +7217,6 @@ class MigrationService {
                 parsedBlocks: [],
                 reviewComplete: false,
                 requests: 0,
-                retries: 0,
                 lastRequestAt: 0,
                 diagnostics: {
                     invalidLines: [],
@@ -7050,8 +7245,7 @@ class MigrationService {
                 current: 0,
                 total: 1,
                 requests: state.requests,
-                retries: state.retries,
-                detail: `正在规划${state.sourceIndex.lines.length}条旧事实的场景锚点、游戏时间、唯一宿主与事件边界`,
+                    detail: `正在规划${state.sourceIndex.lines.length}条旧事实的场景锚点、游戏时间、唯一宿主与事件边界`,
             });
             const prompt = (0, prompts_1.migrationPlanningPrompts)(state.sourceIndex.text, { schema: state.schema });
             let response;
@@ -7063,14 +7257,12 @@ class MigrationService {
                     snapshot,
                     validate,
                     state,
-                    batchIndex: -1,
                     stage: 'migrationPlan',
                     sourceText: state.sourceIndex.text,
-                    progressTotal: 1,
                 });
             }
             catch (error) {
-                this.emitProgress({ state: 'paused', current: 0, total: 1, requests: state.requests, retries: state.retries, detail: '全局重建规划请求未完成；下次点击将从规划阶段继续' });
+                this.emitProgress({ state: 'paused', current: 0, total: 1, requests: state.requests, detail: '全局重建规划请求未完成；下次点击将从规划阶段继续' });
                 throw new Error(`世界书重建规划失败；尚未发送任何对象正文。${(0, util_1.errorText)(error)}`);
             }
             const plan = parseRebuildPlanningResponse(response, state.sourceIndex, state.schema);
@@ -7098,7 +7290,7 @@ class MigrationService {
             state.diagnostics.droppedSourceLines = plan.droppedRefs.length;
             state.diagnostics.fragmentedRecords = groupTasks.filter((batch) => Number(batch.fragmentCount || 1) > 1).length;
             state.diagnostics.jointBatches = batches.filter((batch) => batch.phase === 'planned-joint').length;
-            this.emitProgress({ state: 'running', current: 0, total: batches.length, requests: state.requests, retries: state.retries, detail: `规划完成：${plan.groups.length}个候选，已按容量合并为${batches.length}次重建请求` });
+            this.emitProgress({ state: 'running', current: 0, total: batches.length, requests: state.requests, detail: `规划完成：${plan.groups.length}个候选，已按容量合并为${batches.length}次重建请求` });
         }
         for (; state.nextBatchIndex < state.batches.length;) {
             validate();
@@ -7109,8 +7301,7 @@ class MigrationService {
                 current: index + 1,
                 total: state.batches.length,
                 requests: state.requests,
-                retries: state.retries,
-                detail: `正在执行${migrationPhaseLabel(batch.phase)} ${index + 1}/${state.batches.length}：${batch.label || batch.clusterId || '未命名簇'}`,
+                    detail: `正在执行${migrationPhaseLabel(batch.phase)} ${index + 1}/${state.batches.length}：${batch.label || batch.clusterId || '未命名簇'}`,
             });
             const prompt = /^(?:planned|planned-joint)$/u.test(batch.phase)
                 ? (0, prompts_1.plannedMigrationPrompts)(batch, { schema: state.schema })
@@ -7134,7 +7325,6 @@ class MigrationService {
                     snapshot,
                     validate,
                     state,
-                    batchIndex: index,
                     stage: 'migration',
                     sourceText: batch.sourceLineBody || batch.map((record) => record.content || '').join('\n'),
                 });
@@ -7145,8 +7335,7 @@ class MigrationService {
                     current: index,
                     total: state.batches.length,
                     requests: state.requests,
-                    retries: state.retries,
-                    detail: `已完成 ${index}/${state.batches.length} 批；下次从第 ${index + 1} 批继续`,
+                            detail: `已完成 ${index}/${state.batches.length} 批；下次从第 ${index + 1} 批继续`,
                 });
                 const reason = (0, util_1.errorText)(error);
                 if (isMigrationRateLimitError(error)) {
@@ -7175,8 +7364,7 @@ class MigrationService {
                     current: state.nextBatchIndex,
                     total: state.batches.length,
                     requests: state.requests,
-                    retries: state.retries,
-                    detail: `第 ${index + 1} 批未通过校验，已释放并继续下一批`,
+                            detail: `第 ${index + 1} 批未通过校验，已释放并继续下一批`,
                 });
                 continue;
             }
@@ -7186,8 +7374,7 @@ class MigrationService {
                 current: state.nextBatchIndex,
                 total: state.batches.length,
                 requests: state.requests,
-                retries: state.retries,
-                detail: `已完成 ${state.nextBatchIndex}/${state.batches.length} 批`,
+                    detail: `已完成 ${state.nextBatchIndex}/${state.batches.length} 批`,
             });
         }
         if ((state.failedBatches?.length || 0) > 0) {
@@ -7198,7 +7385,7 @@ class MigrationService {
             const failed = state.failedBatches?.length || 0;
             this.resume = null;
             this.preview = null;
-            this.emitProgress({ state: 'failed', current: state.batches.length, total: state.batches.length, requests: state.requests, retries: state.retries, detail: '所有批次均未通过证据校验，已释放重建状态' });
+            this.emitProgress({ state: 'failed', current: state.batches.length, total: state.batches.length, requests: state.requests, detail: '所有批次均未通过证据校验，已释放重建状态' });
             throw new Error(`模型没有返回可验证重建条目；${failed || state.batches.length}个批次已结束且重建状态已释放，旧表未修改。可重新生成预览，不会卡在原批次`);
         }
         let blocks = preserveEventPendingFacts(mergeRebuildBlocks(state.parsedBlocks, state.diagnostics), records, state.diagnostics);
@@ -7228,7 +7415,6 @@ class MigrationService {
             candidates: records.length,
             batches: state.totalBatchCount || state.batches.length,
             requests: state.requests,
-            retries: state.retries,
             compactedRecords: state.diagnostics.compactedRecords,
             fragmentedRecords: state.diagnostics.fragmentedRecords,
             semanticClusters: state.diagnostics.semanticClusters || 0,
@@ -7270,18 +7456,18 @@ class MigrationService {
         this.preview = {
             chatKey: snapshot.chatKey,
             worldbookName: original.name,
-            settingsSignature: typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '',
+            settingsSignature: typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings, 'migration') : '',
             sourceData: (0, util_1.clone)(state.sourceData),
             nextData: (0, util_1.clone)(built.data),
             summary,
             nextKeywordDefinitions: mergeProposedKeywordDefinitions(settings?.keywordDefinitions, state.schema),
         };
         this.resume = null;
-        this.emitProgress({ state: 'success', current: summary.batches, total: summary.batches, requests: summary.requests, retries: summary.retries, detail: '联合批次处理完成，重建预览已生成；失败来源已原样保留' });
+        this.emitProgress({ state: 'success', current: summary.batches, total: summary.batches, requests: summary.requests, detail: '联合批次处理完成，重建预览已生成；失败来源已原样保留' });
         return { changed: false, previewReady: true, ...summary };
     }
 
-    async requestBatch({ prompt, batch, settings, snapshot, validate, state, batchIndex, stage = 'migration', sourceText = '', progressTotal = 0 }) {
+    async requestBatch({ prompt, batch, settings, snapshot, validate, state, stage = 'migration', sourceText = '' }) {
         validate();
         const interval = migrationBatchIntervalMs(settings);
         const elapsed = Date.now() - Number(state.lastRequestAt || 0);
@@ -7311,7 +7497,7 @@ class MigrationService {
         if (!this.preview) throw new Error('没有可提交的世界书重建预览');
         if (this.preview.chatKey !== snapshot.chatKey || this.preview.worldbookName !== snapshot.worldbookName)
             throw new Error('重建预览属于其他聊天或世界书，请重新生成预览');
-        const currentSettingsSignature = typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '';
+        const currentSettingsSignature = typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings, 'migration') : '';
         if (this.preview.settingsSignature && currentSettingsSignature !== this.preview.settingsSignature)
             throw new Error('插件设置在重建预览后已经变化，请重新生成预览');
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
@@ -8846,18 +9032,6 @@ function migrationBatchIntervalMs(settings) {
     const configured = Number(settings?.migrationBatchIntervalMs);
     if (Number.isFinite(configured)) return Math.min(60000, Math.max(0, Math.round(configured)));
     return MIGRATION_DEFAULT_INTERVAL_MS;
-}
-
-function migrationRateLimitRetries(settings) {
-    const configured = Number(settings?.migrationRateLimitRetries);
-    if (Number.isFinite(configured)) return Math.min(4, Math.max(0, Math.round(configured)));
-    return MIGRATION_MAX_RATE_LIMIT_RETRIES;
-}
-
-function migrationRateLimitBackoffMs(settings, attempt) {
-    const configured = Number(settings?.migrationRateLimitBackoffMs);
-    if (Number.isFinite(configured)) return Math.min(120000, Math.max(0, Math.round(configured)));
-    return MIGRATION_RATE_LIMIT_BACKOFF_MS[Math.min(Math.max(0, attempt), MIGRATION_RATE_LIMIT_BACKOFF_MS.length - 1)];
 }
 
 async function waitForMigration(ms, validate, snapshot) {
@@ -10758,13 +10932,12 @@ exports.limitPromptPair = limitPromptPair;
 exports.outputContractForStage = outputContractForStage;
 const util_1 = require("./util");
 
-// [MA-MODEL-01] 每个模型阶段只声明输入/输出预算；网关失败使用紧凑请求，瞬时断线最多再退避重放一次。
-// 该模块不理解审核、提取或总结业务，也不接触世界书，避免请求控制与业务逻辑耦合。
+// [MA-MODEL-01] 每个模型阶段只声明输入/输出契约；实际连接、预设、鉴权与响应适配全部交给 SillyTavern。
+// 该模块不理解供应商协议、不自动重试，也不接触世界书，避免请求控制与业务逻辑耦合。
 const INPUT_LIMITS = Object.freeze({
     audit: 24000,
     revision: 30000,
     extraction: 26000,
-    extractionRepair: 14000,
     worldSettingImport: 42000,
     smallSummary: 28000,
     largeSummary: 30000,
@@ -10774,8 +10947,8 @@ const INPUT_LIMITS = Object.freeze({
 });
 
 /**
- * [MA-MODEL-02] 调用模型；网关失败使用精简提示词，明确的瞬时网络中断最多执行两次有限重试。
- * 模型空正文、仅返回推理、网关或瞬时网络异常时，只允许一次紧凑重试；不扩大预算、不分段重跑。
+ * [MA-MODEL-02] 每个业务阶段只向 SillyTavern 提交一次标准生成任务。
+ * 失败、空正文或仅推理响应均由调用方显式处理，不自动重放。
  */
 async function callModel(options) {
     const {
@@ -10818,7 +10991,6 @@ function stageResponseTokens(stage, settings, sourceText = '') {
         return Math.min(configured, estimated);
     }
     if (stage === 'extraction') return Math.min(configured, 3072);
-    if (stage === 'extractionRepair') return Math.min(configured, 2048);
     if (stage === 'worldSettingImport') return Math.min(configured, 8192);
     if (stage === 'smallSummary') return Math.min(configured, 4096);
     if (stage === 'largeSummary') return Math.min(configured, 6144);
@@ -10845,7 +11017,6 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
         audit: ['- 最终结论必须首先出现。通过只输出 PASS；不通过输出 FAIL 与最多8条短原因；总长度不超过300个中文字符。'],
         revision: [`- 只输出可直接替换的完整正文。必须从原文开头写到原文结尾，不得中途停止、缺段或用省略号代替剩余内容。除删除明确违规内容外，修正版应保留原文至少85%的有效正文；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
         extraction: ['- 只输出规定的 ENTRY 协议或“无”。最多8条，最终协议总长度不超过5000个中文字符。'],
-        extractionRepair: ['- 只输出修复后的 ENTRY 协议或“无”。不得补充事实；最终协议总长度不超过5000个中文字符。'],
         worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
         smallSummary: ['- 只输出规定的小总结协议或“无”。总长度不超过1800个中文字符。'],
         largeSummary: ['- 只输出规定的大总结协议或“无”。总长度不超过2600个中文字符。'],
@@ -12820,7 +12991,6 @@ exports.extractionPrompts = extractionPrompts;
 exports.auditPrompts = auditPrompts;
 exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
-exports.extractionRepairPrompts = extractionRepairPrompts;
 exports.worldSettingImportPrompts = worldSettingImportPrompts;
 exports.migrationPrompts = migrationPrompts;
 exports.migrationPlanningPrompts = migrationPlanningPrompts;
@@ -13244,19 +13414,6 @@ ${subject || (isSmall ? '当前事件压缩' : '长期历史沉降')}${recent}
 
 相关世界书：
 ${entries.slice(0, compact ? (isSmall ? 8 : 14) : (isSmall ? 16 : 30)).map((entry) => entryForPrompt(entry, compact ? 500 : 820)).join('\n\n') || '（无）'}`;
-    return { system, user };
-}
-
-function extractionRepairPrompts(raw, options = {}) {
-    const compact = options.compact === true;
-    const system = `你是 Mirror Abyss 提取格式修复器。
-只修复给定提取结果的语法、重复条目和事实归属，不得阅读原剧情，不得新增、扩写或推测事实。
-必须使用 <<<ENTRY:类型:稳定名称>>>、<<<KEYWORDS>>>、<<<CONTENT>>>、<<<END_ENTRY>>>。
-允许类型：人物、场景、物品、事件、世界、基础设定。关系必须并入人物，地点必须并入场景；可变化的全局状态写入世界，不随普通剧情变化的框架写入基础设定。
-同名条目必须合并；同一事实只能保留在责任最直接的一个条目中；无法修复的片段删除。
-禁止解释、JSON和代码块。没有可保留条目时只输出“无”。`;
-    const user = `需要修复的提取结果：
-${clipText(String(raw ?? ''), compact ? 8000 : 12000)}`;
     return { system, user };
 }
 
@@ -14406,7 +14563,7 @@ class WorldSettingImportService {
             worldbookName: opened.name,
             worldbookHash,
             chatKey: snapshot.chatKey,
-            settingsSignature: typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '',
+            settingsSignature: typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings, 'worldSettingPreview') : '',
             plan,
             blocks: sanitized,
             raw,
@@ -14425,7 +14582,7 @@ class WorldSettingImportService {
         const source = normalizeSource(sourceText);
         if ((0, util_1.hashText)(source) !== preview.sourceHash) throw new Error('设定文本已修改，请重新生成预览');
         if (snapshot.chatKey !== preview.chatKey) throw new Error('聊天已经切换，请重新生成设定预览');
-        const currentSettingsSignature = typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '';
+        const currentSettingsSignature = typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings, 'worldSettingPreview') : '';
         if (preview.settingsSignature && currentSettingsSignature !== preview.settingsSignature)
             throw new Error('插件设置在预览后已经变化，请重新生成设定预览');
         this.validate(snapshot, settings);
@@ -14701,11 +14858,6 @@ function managementReferences(line, name) {
 }
 function sectionBlocks(entry) {
     return Object.entries(entry?.sections?.values ?? {}).map(([name, values]) => ({ name, lines: values ?? [], empty: !(values ?? []).length }));
-}
-function sectionCharCounts(pack) {
-    const output = {};
-    for (const [name, values] of Object.entries(pack?.sections?.values ?? {})) output[name] = (values ?? []).join('\n').length;
-    return output;
 }
 function issue(level, code, message, entries) { return { level, code, message, entries }; }
 },"worldbook":function(module,exports,require){
@@ -15028,7 +15180,6 @@ class WorldbookAdapter {
             result.warehouse = { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 };
             result.receipt = null;
             result.activityPack = packResult;
-            result.activityPackChanged = false;
             return result;
         }
 
@@ -15077,7 +15228,6 @@ class WorldbookAdapter {
             operationCount: writeOperations.length,
         };
         result.activityPack = packResult;
-        result.activityPackChanged = packResult.changed === true;
         result.receipt = buildCommitReceipt(receiptBefore, verifiedData, {
             id: operationId,
             sourceMessageKey,
@@ -15522,11 +15672,6 @@ function verifyRecallConstraints(entries) {
     }
 }
 
-function currentGameTimeFromContext(context) {
-    const root = context?.chatMetadata?.[constants_1.EXTENSION_NAMESPACE];
-    const value = root?.currentGameTime;
-    return value && typeof value === 'object' ? structuredClone(value) : null;
-}
 function verifyNoActivityPack(data) {
     const entries = parseEntries(data);
     const packs = entries.filter((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE);
