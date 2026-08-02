@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.50-profile-fast-path — governed worldbook storage, native ST recall, user-owned placement, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.51-st-native-request — governed worldbook storage, native ST recall, user-owned placement, and hard content budgets. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -913,12 +913,10 @@ class AuditRunner {
                 host: this.host,
                 stage: 'audit',
                 prompt,
-                fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, { compact: true, dialogueContext: snapshot.dialogueContext }),
                 settings,
                 snapshot,
                 profileId: settings.auditProfileId,
                 sourceText: snapshot.turnText || snapshot.assistantText,
-                onRetry: (error) => this.setStatus(snapshot.chatKey, 'audit', (0, model_request_1.describeRetryReason)(error, '审核模型')),
             });
             this.host.assertSnapshot(snapshot, this.getSettings());
             const result = parseAuditResult(raw);
@@ -976,7 +974,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.50-profile-fast-path';
+exports.VERSION = '2.0.0-lite.ui.51-st-native-request';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1490,7 +1488,7 @@ class ControlPanel {
         status.textContent = '默认跟随当前 SillyTavern 连接。';
         const help = document.createElement('div');
         help.className = 'ma-lite-api-help';
-        help.textContent = '连接、模型、地址和密钥仍在 SillyTavern「API Connections → Connection Profiles」中管理。建议选择独立 Profile：镜渊使用“当前连接”时会沿用主聊天全局响应长度，绝不临时覆盖它，以免后台处理影响下一轮正文。推理强度继续由 SillyTavern Reasoning 设置管理。';
+        help.textContent = '连接、模型、地址和密钥仍在 SillyTavern「API Connections → Connection Profiles」中管理。选择 Profile 后，Completion Preset、Instruct、推理模板和输出上限也全部沿用该 Profile；镜渊不覆盖这些配置，也不自动重试失败请求。使用“当前连接”时则完全跟随当前 SillyTavern 连接。';
         section.append(head, select, status, help);
         this.apiProfileSelect = select;
         this.apiProfileStatusNode = status;
@@ -3020,7 +3018,6 @@ class DiagnosticsService {
                         host: this.host,
                         stage: 'audit',
                         prompt,
-                        fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, playerText, assistantText, { compact: true, dialogueContext: '' }),
                         settings,
                         snapshot: protocolSnapshot,
                         profileId: settings.auditProfileId,
@@ -3044,7 +3041,6 @@ class DiagnosticsService {
                         host: this.host,
                         stage: 'extraction',
                         prompt,
-                        fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, playerText, assistantText, [], { compact: true, dialogueContext: '' }),
                         settings,
                         snapshot: protocolSnapshot,
                         profileId: settings.extractionProfileId,
@@ -3214,22 +3210,13 @@ class DiagnosticsService {
                 pushSkip('e2e-current-chat-reset', '当前聊天重置作用域', '组合', '完整链执行器未连接');
             }
 
-            await runCheck('controlled-fault-matrix', '网关与协议故障分类矩阵', '受控故障', async () => {
-                const gatewayErrors = [
-                    new SyntaxError('Unexpected token \'<\', "<html><h1>504</h1>" is not valid JSON'),
-                    new Error('502 Bad Gateway'),
-                    new Error('503 upstream unavailable'),
-                    new Error('504 Gateway Timeout'),
-                    new Error('fetch failed: connection reset'),
-                ];
-                const failed = gatewayErrors.filter((error) => !(0, model_request_1.isRetryableGatewayError)(error));
-                if (failed.length) throw new Error(`未识别${failed.length}类可重试网关错误`);
+            await runCheck('controlled-fault-matrix', '业务协议故障拒绝矩阵', '受控故障', async () => {
                 let auditRejected = false;
                 try { (0, audit_1.parseAuditResult)('这里没有 PASS 或 FAIL'); }
                 catch { auditRejected = true; }
                 const malformed = (0, parser_1.parseExtractionWithRecovery)('<html>bad gateway</html>');
                 if (!auditRejected || malformed.length) throw new Error('协议错误没有被严格拒绝');
-                return { mode: 'controlled-fault-injection', gatewayCases: gatewayErrors.length, auditMalformedRejected: auditRejected, extractionMalformedRejected: malformed.length === 0 };
+                return { mode: 'controlled-fault-injection', providerErrorsDelegatedToST: true, auditMalformedRejected: auditRejected, extractionMalformedRejected: malformed.length === 0 };
             });
 
             await runCheck('ui-surface', '插件 UI 与四阶段状态面板', '界面', async () => {
@@ -4313,9 +4300,6 @@ function relationText(entry) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HostAdapter = void 0;
-exports.extractModelText = extractModelText;
-exports.extractReasoningText = extractReasoningText;
-exports.describeModelResponse = describeModelResponse;
 const constants_1 = require("./constants");
 const util_1 = require("./util");
 class HostAdapter {
@@ -4596,7 +4580,7 @@ class HostAdapter {
         }
         return selected.reverse().join('\n\n');
     }
-    /** [MA-HOST-03] 宿主模型调用原语；重试和阶段预算由 model-request.js 负责。 */
+    /** [MA-HOST-03] 宿主模型调用原语；API 与响应兼容完全交由 SillyTavern。 */
     async generate(systemPrompt, prompt, responseLength, snapshot, currentSettings, timeoutMs, profileId = '', generationOptions = {}) {
         this.assertSnapshot(snapshot, currentSettings);
         const context = this.context();
@@ -4613,43 +4597,24 @@ class HostAdapter {
                     catch (error) { throw new Error(`无法读取 Connection Profile：${(0, util_1.errorText)(error)}`); }
                     if (!profile) throw new Error(`所选 Connection Profile 已不存在：${profileId}`);
                 }
-                // [MA-HOST-MODEL-04] Profile 的 API 类型、服务器 URL、端口、模型与密钥全部由
-                // SillyTavern ConnectionManagerRequestService 从已保存 Profile 读取。插件不拼接 URL、
-                // 不追加 /v1 或 /chat/completions，也不通过 override payload 改写路由字段。
+                // [MA-HOST-MODEL-05] Profile 请求只提交标准消息和取消信号。
+                // API、地址、密钥、模型、Completion Preset、Instruct、推理模板、响应解析与 max tokens
+                // 全部沿用 SillyTavern Connection Profile 的原生配置；镜渊不再覆盖或兼容供应商字段。
                 const requestController = typeof AbortController === 'function' ? new AbortController() : null;
                 request = service.sendRequest(profileId, [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: prompt },
-                ], responseLength, {
-                    stream: false,
+                ], undefined, {
                     signal: requestController?.signal ?? null,
-                    extractData: true,
-                    // [MA-HOST-MODEL-FAST-01] 后台任务只复用 Profile 的 API、模型、地址与鉴权。
-                    // 默认不加载正文生成 preset，避免把高推理强度、长输出和正文采样配置带入提取；
-                    // Text Completion 仍保留 ST 原生 instruct 转换。
-                    includePreset: generationOptions?.includePreset === true,
-                    includeInstruct: generationOptions?.includeInstruct !== false,
-                }, {});
+                });
                 generationOptions = { ...generationOptions, requestController };
             }
             else {
-                // [MA-HOST-MODEL-01] 当前连接优先使用 SillyTavern 官方“原始响应 + 官方解析器”组合。
-                // generateRawData 能保留不同 API 的真实返回结构，extractMessageFromData 负责按宿主当前 API 解析，
-                // 避免插件自行猜测 OpenAI / Claude / Gemini / Text Completion 等响应格式。
-                const generateRawData = context.generateRawData;
-                const extractMessageFromData = context.extractMessageFromData;
-                if (typeof generateRawData === 'function' && typeof extractMessageFromData === 'function') {
-                    // [MA-HOST-MODEL-03] 当前连接绝不传 responseLength。
-                    // SillyTavern 官方 generateRawData 会通过 TempResponseLength 临时改写全局响应长度；
-                    // 后台审核与下一轮主正文并发时可能产生竞态，导致主正文继承审核/提取的短上限。
-                    // 当前连接因此沿用用户的全局响应长度；需要独立阶段预算时必须选择 Connection Profile。
-                    request = generateRawData({ systemPrompt, prompt });
-                }
-                else {
-                    const generateRaw = context.generateRaw;
-                    if (typeof generateRaw !== 'function') throw new Error('当前 SillyTavern 未提供 generateRawData 或 generateRaw');
-                    request = generateRaw({ systemPrompt, prompt });
-                }
+                // [MA-HOST-MODEL-06] 未选择 Profile 时只调用 SillyTavern 的 generateRaw。
+                // 当前连接的 API、模型、Preset、Instruct、推理格式与响应解析均由 ST 负责。
+                const generateRaw = context.generateRaw;
+                if (typeof generateRaw !== 'function') throw new Error('当前 SillyTavern 未提供 generateRaw');
+                request = generateRaw({ systemPrompt, prompt });
             }
         }
         catch (error) {
@@ -4665,45 +4630,25 @@ class HostAdapter {
         }
         catch (error) {
             if (snapshot.token?.cancelled) throw new Error(snapshot.token.reason || '任务已取消');
-            const detail = (0, util_1.errorText)(error);
-            // [MA-AUTH-ROUTE-01] 401/未授权属于 ST 当前连接或 Connection Profile 的凭据问题，
-            // 不是提示词、世界书或原生召回错误。错误中明确给出实际路由，避免玩家只能看到笼统“未授权”。
-            if (/(?:\b401\b|unauthori[sz]ed|未授权|认证失败|鉴权失败|invalid\s*(?:api[-_ ]?key|token)|incorrect\s*(?:api[-_ ]?key|token)|authentication\s*(?:failed|required)|permission\s*denied)/iu.test(detail)) {
-                const remedy = profileId
-                    ? '请在镜渊“处理 API”中重新选择该 Connection Profile，或在 SillyTavern Connection Profiles 中重新保存密钥；也可切换为“当前 SillyTavern 连接”。'
-                    : '请检查 SillyTavern 当前主连接的 API 密钥/登录状态，重新连接后再试。';
-                throw new Error(`模型请求未授权；实际连接：${route.label}；原始错误：${detail}。${remedy}`);
-            }
-            throw new Error(`模型请求失败：${detail}`);
+            // [MA-HOST-MODEL-07] 不再分类、改写或重试供应商错误；保留 ST 原始错误并附加所选路由。
+            throw new Error(`模型请求失败；${route.label}；${(0, util_1.errorText)(error)}`);
         }
         this.assertSnapshot(snapshot, currentSettings);
-        const text = extractModelText(raw, context).trim();
+        // ConnectionManagerRequestService 已返回 ST 标准化的 ExtractedData；generateRaw 直接返回最终文本。
+        // 镜渊只读取标准最终正文，不再递归猜测 OpenAI/Claude/Gemini/SSE/HTML 等供应商结构。
+        const text = profileId
+            ? String(raw?.content ?? '').trim()
+            : String(typeof raw === 'string' ? raw : raw?.content ?? '').trim();
         if (!text) {
-            const reasoning = extractReasoningText(raw).trim();
-            const responseShape = describeModelResponse(raw);
-            console.warn('[MirrorAbyss] model response contained no final text', {
-                route: route.label,
-                responseShape,
-                reasoningLength: reasoning.length,
-            });
+            const reasoning = profileId ? String(raw?.reasoning ?? '').trim() : '';
             if (reasoning) {
-                const error = new Error(`模型只返回了推理内容，没有最终文本（推理 ${reasoning.length} 字）。${route.label}；返回结构：${responseShape}`);
-                error.code = 'MA_REASONING_ONLY';
-                error.diagnosticEvidence = { route: route.label, responseShape, reasoningLength: reasoning.length };
-                try {
-                    Object.defineProperty(error, 'reasoningText', { value: reasoning, enumerable: false, configurable: false });
-                }
-                catch { error.reasoningText = reasoning; }
-                throw error;
+                throw new Error(`所选 SillyTavern Connection Profile 只返回了推理内容，没有最终正文；${route.label}`);
             }
             if (route.noModelLikely) {
-                throw new Error(`模型连接未识别到可用模型。${route.label}；请在 API Connections 中选择模型并确认连接成功`);
+                throw new Error(`模型连接未识别到可用模型；${route.label}；请在 SillyTavern 中完成连接与模型配置`);
             }
-            const error = new Error(`模型请求已完成，但 SillyTavern 未解析出最终文本。${route.label}；返回结构：${responseShape}`);
-            error.code = 'MA_EMPTY_MODEL_RESPONSE';
-            throw error;
+            throw new Error(`SillyTavern 未返回可用最终正文；${route.label}`);
         }
-        if (looksLikeHtml(text)) throw new Error('模型返回了 HTML 错误页');
         return text;
     }
     connectionProfilesAvailable() {
@@ -5310,102 +5255,6 @@ function withTimeout(promise, timeoutMs, onTimeout) {
     });
     return Promise.race([Promise.resolve(promise), timeout]).finally(() => globalThis.clearTimeout(timer));
 }
-function extractModelText(raw, context = null) {
-    if (typeof raw === 'string') return raw;
-    if (raw === null || raw === undefined) return '';
-    // [MA-HOST-MODEL-02] 先让 SillyTavern 用当前 API 的官方解析器处理原始响应。
-    if (context && typeof context.extractMessageFromData === 'function' && typeof raw === 'object') {
-        try {
-            const official = context.extractMessageFromData(raw, context.mainApi ?? null);
-            const officialText = finalTextValue(official);
-            if (officialText.trim()) return officialText;
-        }
-        catch (error) {
-            console.warn('[MirrorAbyss] SillyTavern official response parser failed', (0, util_1.errorText)(error));
-        }
-    }
-    return finalTextValue(raw);
-}
-function finalTextValue(value, depth = 0) {
-    if (depth > 8 || value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' || typeof value === 'boolean') return '';
-    if (Array.isArray(value)) {
-        return value.map((item) => finalTextValue(item, depth + 1)).filter(Boolean).join('');
-    }
-    if (typeof value !== 'object') return '';
-    // 已提取响应、OpenAI Chat Completions、Anthropic content blocks。
-    for (const key of ['content', 'text', 'output_text', 'generated_text', 'completion']) {
-        if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
-        const text = finalTextValue(value[key], depth + 1);
-        if (text.trim()) return text;
-    }
-    if (value.message) {
-        const text = finalTextValue(value.message, depth + 1);
-        if (text.trim()) return text;
-    }
-    if (Array.isArray(value.choices) && value.choices.length) {
-        for (const choice of value.choices) {
-            const text = finalTextValue(choice?.message ?? choice?.text ?? choice?.delta, depth + 1);
-            if (text.trim()) return text;
-        }
-    }
-    // OpenAI Responses API: output[].content[].text；Gemini: candidates[].content.parts[].text。
-    for (const key of ['output', 'candidates', 'results', 'parts']) {
-        if (!Array.isArray(value[key])) continue;
-        const text = finalTextValue(value[key], depth + 1);
-        if (text.trim()) return text;
-    }
-    if (value.data && value.data !== value) {
-        const text = finalTextValue(value.data, depth + 1);
-        if (text.trim()) return text;
-    }
-    if (value.response && value.response !== value) {
-        const text = finalTextValue(value.response, depth + 1);
-        if (text.trim()) return text;
-    }
-    return '';
-}
-function extractReasoningText(raw, depth = 0) {
-    if (depth > 8 || raw === null || raw === undefined) return '';
-    if (Array.isArray(raw)) return raw.map((item) => extractReasoningText(item, depth + 1)).filter(Boolean).join('');
-    if (typeof raw !== 'object') return '';
-    const output = [];
-    for (const key of ['reasoning', 'reasoning_content', 'thinking', 'analysis']) {
-        const value = raw[key];
-        if (typeof value === 'string' && value.trim()) output.push(value);
-        else if (value && typeof value === 'object') {
-            const nested = finalTextValue(value, depth + 1);
-            if (nested.trim()) output.push(nested);
-        }
-    }
-    if (raw.state?.reasoning) output.push(String(raw.state.reasoning));
-    if (Array.isArray(raw.content)) {
-        for (const block of raw.content) {
-            if (block?.type === 'thinking' || block?.type === 'reasoning') {
-                const text = String(block?.thinking ?? block?.reasoning ?? block?.text ?? block?.content ?? '');
-                if (text.trim()) output.push(text);
-            }
-        }
-    }
-    if (Array.isArray(raw.choices)) {
-        for (const choice of raw.choices) {
-            const nested = extractReasoningText(choice?.message ?? choice?.delta ?? choice, depth + 1);
-            if (nested.trim()) output.push(nested);
-        }
-    }
-    return output.join('\n');
-}
-function describeModelResponse(raw) {
-    if (raw === null) return 'null';
-    if (raw === undefined) return 'undefined';
-    if (typeof raw === 'string') return `string(${raw.length})`;
-    if (Array.isArray(raw)) return `array(${raw.length})`;
-    if (typeof raw !== 'object') return typeof raw;
-    const ctor = raw?.constructor?.name && raw.constructor.name !== 'Object' ? raw.constructor.name : 'object';
-    const keys = Object.keys(raw).slice(0, 12);
-    return `${ctor}{${keys.join(',') || '无字段'}}`;
-}
 function describeModelRoute(context, profileId) {
     const mainApi = String(context.mainApi ?? '').trim() || '未知';
     if (profileId) {
@@ -5507,10 +5356,6 @@ function readModelFromObject(value, depth = 0) {
         if (nested) return nested;
     }
     return '';
-}
-function looksLikeHtml(text) {
-    const value = text.trim().slice(0, 1000).toLocaleLowerCase();
-    return /^<!doctype\s+html/u.test(value) || /^<html(?:\s|>)/u.test(value) || (/<body(?:\s|>)/u.test(value) && /<\/body>/u.test(value));
 }
 function randomId() {
     try { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
@@ -6376,14 +6221,12 @@ class MemoryRunner {
         const dialogueInput = [snapshot.dialogueContext, snapshot.turnText || `${snapshot.playerText}\n${snapshot.assistantText}`].filter(Boolean).join('\n\n');
         const selected = (0, matcher_1.relevantEntries)(entries.filter((entry) => entry.title !== governance_1.ACTIVITY_PACK_TITLE), dialogueInput, 6);
         const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { dialogueContext: snapshot.dialogueContext });
-        // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
+        // [MA-MEMORY-01] 提取只通过通用请求模块向 SillyTavern 提交一次模型任务。
         let raw = options.deterministicOnly === true ? 'EMPTY' : '';
-        try {
-            if (options.deterministicOnly !== true) raw = await (0, model_request_1.callModel)({
+        if (options.deterministicOnly !== true) raw = await (0, model_request_1.callModel)({
                 host: this.host,
                 stage: 'extraction',
                 prompt,
-                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { compact: true, dialogueContext: snapshot.dialogueContext }),
                 settings,
                 snapshot,
                 profileId: settings.extractionProfileId,
@@ -6392,49 +6235,10 @@ class MemoryRunner {
                     const route = this.host.profileSummary(settings.extractionProfileId);
                     this.progress('running', `提取请求 ${attempt}/${total}；${route.label}`, { titles: [], phase: 'extract' });
                 },
-                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '提取模型'), { titles: [], phase: 'extract' }),
             });
-        }
-        catch (error) {
-            // [MA-MEMORY-FAST-01] 通用请求层已经完成最多一次紧凑重试；
-            // 提取不再把正文拆成最多六段再次请求，避免一次失败放大为多次慢调用。
-            throw error;
-        }
         this.validate(snapshot);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
-        let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
-        let repairRaw = '';
-        if (!blocks.length && diagnostics.hadInput) {
-            this.progress('running', '提取结果不是可提交的 ENTRY 协议，启动一次格式修复', { titles: [], phase: 'extract' });
-            const repairPrompt = (0, prompts_1.extractionRepairPrompts)(raw);
-            repairRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'extractionRepair',
-                prompt: repairPrompt,
-                fallbackPrompt: () => (0, prompts_1.extractionRepairPrompts)(raw, { compact: true }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: raw,
-                responseTokens: 2048,
-                maxAttempts: 1,
-                onAttempt: () => {
-                    const route = this.host.profileSummary(settings.extractionProfileId);
-                    this.progress('running', `格式修复请求 1/1；${route.label}`, { titles: [], phase: 'extract' });
-                },
-                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '格式修复模型'), { titles: [], phase: 'extract' }),
-            });
-            this.validate(snapshot);
-            blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
-            const next = blocks.diagnostics ?? {};
-            diagnostics = {
-                repaired: Number(diagnostics.repaired || 0) + Number(next.repaired || 0) + 1,
-                merged: [...(diagnostics.merged || []), ...(next.merged || [])],
-                skipped: [...(diagnostics.skipped || []), ...(next.skipped || [])],
-                warnings: [...(diagnostics.warnings || []), '已执行一次模型格式修复', ...(next.warnings || [])],
-                hadInput: true,
-            };
-        }
+        const diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
         let explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
         if (!blocks.length && explicitNone) {
             const deterministicBlocks = (0, governance_1.governInformationBlocks)([], entries, dialogueInput).blocks;
@@ -6443,7 +6247,7 @@ class MemoryRunner {
         if (!blocks.length) {
             const skippedTitles = (diagnostics.skipped || []).map((item) => item.title || '异常片段');
             const detail = explicitNone ? '本轮明确返回“无”，世界书零写入' : `没有可安全提交的条目；已隔离${skippedTitles.length}个异常片段`;
-            this.setStatus(snapshot.chatKey, 'matching', detail, '', repairRaw || raw, emptyPlan());
+            this.setStatus(snapshot.chatKey, 'matching', detail, '', raw, emptyPlan());
             this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0, phase: 'extract' });
             if (!explicitNone) {
                 const reasons = (diagnostics.skipped || []).map((item) => `${item.title || '异常片段'}：${item.reason || '协议不完整'}`).slice(0, 4).join('；');
@@ -6452,8 +6256,8 @@ class MemoryRunner {
             return { entries, changed: false, diagnostics };
         }
         const titles = blocks.map((block) => block.title);
-        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
-        this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { phase: 'extract', titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
+        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；本地格式修复${diagnostics.repaired || 0}处`, '', raw);
+        this.progress('running', `已提取 ${titles.length} 个，正在匹配；本地修复${diagnostics.repaired || 0}处`, { phase: 'extract', titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
         const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
@@ -6511,12 +6315,10 @@ class MemoryRunner {
             host: this.host,
             stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { compact: true }),
             settings,
             snapshot,
             profileId: profile,
             sourceText: recentConversation,
-            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'extract' }),
         });
         this.validate(snapshot);
         const recovered = parseSummaryWithRecovery(raw, kind);
@@ -7480,45 +7282,23 @@ class MigrationService {
     }
 
     async requestBatch({ prompt, batch, settings, snapshot, validate, state, batchIndex, stage = 'migration', sourceText = '', progressTotal = 0 }) {
-        const retryLimit = migrationRateLimitRetries(settings);
-        for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
-            validate();
-            const interval = migrationBatchIntervalMs(settings);
-            const elapsed = Date.now() - Number(state.lastRequestAt || 0);
-            if (state.lastRequestAt && elapsed < interval)
-                await waitForMigration(interval - elapsed, validate, snapshot);
-            try {
-                state.requests += 1;
-                state.diagnostics.modelRequests = state.requests;
-                state.lastRequestAt = Date.now();
-                return await (0, model_request_1.callModel)({
-                    host: this.host,
-                    stage,
-                    prompt: { system: prompt.system, user: trimPrompt(prompt.user) },
-                    fallbackPrompt: null,
-                    settings,
-                    snapshot,
-                    profileId: settings.migrationProfileId,
-                    sourceText: sourceText || batch.map((record) => record.content || '').join('\n'),
-                });
-            }
-            catch (error) {
-                if (!isMigrationRateLimitError(error) || attempt >= retryLimit) throw error;
-                state.retries += 1;
-                const waitMs = migrationRateLimitBackoffMs(settings, attempt);
-                state.diagnostics.warnings.push(`第${batchIndex + 1}批触发限流，等待后进行第${attempt + 1}次重试`);
-                this.emitProgress({
-                    state: 'waiting',
-                    current: batchIndex,
-                    total: progressTotal || state.batches.length,
-                    requests: state.requests,
-                    retries: state.retries,
-                    detail: `第 ${batchIndex + 1} 批限流，等待 ${Math.ceil(waitMs / 1000)} 秒后重试`,
-                });
-                await waitForMigration(waitMs, validate, snapshot);
-            }
-        }
-        throw new Error('世界书重建请求未完成');
+        validate();
+        const interval = migrationBatchIntervalMs(settings);
+        const elapsed = Date.now() - Number(state.lastRequestAt || 0);
+        if (state.lastRequestAt && elapsed < interval)
+            await waitForMigration(interval - elapsed, validate, snapshot);
+        state.requests += 1;
+        state.diagnostics.modelRequests = state.requests;
+        state.lastRequestAt = Date.now();
+        return await (0, model_request_1.callModel)({
+            host: this.host,
+            stage,
+            prompt: { system: prompt.system, user: trimPrompt(prompt.user) },
+            settings,
+            snapshot,
+            profileId: settings.migrationProfileId,
+            sourceText: sourceText || batch.map((record) => record.content || '').join('\n'),
+        });
     }
 
     emitProgress(progress) {
@@ -10974,13 +10754,8 @@ function trimPrompt(value) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.callModel = callModel;
 exports.stageResponseTokens = stageResponseTokens;
-exports.isRetryableGatewayError = isRetryableGatewayError;
-exports.isTransientNetworkError = isTransientNetworkError;
-exports.gatewayRetryDelayMs = gatewayRetryDelayMs;
 exports.limitPromptPair = limitPromptPair;
 exports.outputContractForStage = outputContractForStage;
-exports.describeRetryReason = describeRetryReason;
-exports.salvageStrictFinalProtocol = salvageStrictFinalProtocol;
 const util_1 = require("./util");
 
 // [MA-MODEL-01] 每个模型阶段只声明输入/输出预算；网关失败使用紧凑请求，瞬时断线最多再退避重放一次。
@@ -11007,102 +10782,33 @@ async function callModel(options) {
         host,
         stage,
         prompt,
-        fallbackPrompt,
         settings,
         snapshot,
         profileId = '',
         sourceText = '',
-        onRetry,
         onAttempt,
         responseTokens = 0,
-        maxAttempts = 2,
     } = options;
     const configuredOverride = Number(responseTokens || 0);
     const responseLength = configuredOverride > 0
         ? Math.max(256, Math.min(16384, Math.floor(configuredOverride)))
         : stageResponseTokens(stage, settings, sourceText);
     const primary = limitPromptPair(withOutputContract(prompt, stage, responseLength, sourceText), stage);
-    const allowedAttempts = Math.max(1, Math.min(2, Number(maxAttempts) || 1));
-    let firstError = null;
-    try {
-        try { onAttempt?.(1, allowedAttempts); }
-        catch { }
-        return await host.generate(
-            primary.system,
-            primary.user,
-            responseLength,
-            snapshot,
-            settings,
-            settings.requestTimeoutMs,
-            profileId,
-            { includePreset: false, includeInstruct: true },
-        );
-    }
-    catch (error) {
-        firstError = error;
-        const retryable = isRetryableGatewayError(error)
-            || isTransientNetworkError(error)
-            || isEmptyModelResponseError(error);
-        if (snapshot?.token?.cancelled || !retryable || allowedAttempts < 2) throw error;
-    }
-
-    // [MA-MODEL-FAST-01] 任何阶段最多只执行一次紧凑重试。
-    // 不扩大 token 预算，不追加第三次无 preset 救援，也不把一次失败拆成多段重新提取。
-    const fallbackValue = fallbackPrompt
-        ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
-        : prompt;
-    const fallbackTokens = compactRetryTokens(stage, responseLength);
-    const fallback = limitPromptPair(withOutputContract(fallbackValue, stage, fallbackTokens, sourceText), stage, true);
-    try { onRetry?.(firstError); }
-    catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
-    try { onAttempt?.(2, allowedAttempts); }
+    try { onAttempt?.(1, 1); }
     catch { }
-    if (isRetryableGatewayError(firstError) || isTransientNetworkError(firstError)) {
-        await waitForGatewayRetry(firstError, 1, settings, snapshot);
-    }
-    try {
-        return await host.generate(
-            fallback.system,
-            fallback.user,
-            fallbackTokens,
-            snapshot,
-            settings,
-            settings.requestTimeoutMs,
-            profileId,
-            { includePreset: false, includeInstruct: true },
-        );
-    }
-    catch (secondError) {
-        const reasoning = String(secondError?.reasoningText || firstError?.reasoningText || '');
-        const salvaged = salvageStrictFinalProtocol(stage, reasoning);
-        if (salvaged) {
-            try { onRetry?.(Object.assign(new Error('已从推理字段隔离出完整最终协议'), { code: 'MA_REASONING_PROTOCOL_SALVAGED' })); }
-            catch { }
-            return salvaged;
-        }
-        throw secondError;
-    }
+    // [MA-MODEL-NATIVE-01] 每个业务阶段只提交一次 ST 原生生成任务。
+    // 不进行网关重试、空正文重试、reasoning 救援、紧凑重放或供应商错误分类。
+    return await host.generate(
+        primary.system,
+        primary.user,
+        responseLength,
+        snapshot,
+        settings,
+        settings.requestTimeoutMs,
+        profileId,
+    );
 }
 
-function compactRetryTokens(stage, firstTokens) {
-    const caps = {
-        audit: 1024,
-        revision: 6144,
-        extraction: 3072,
-        extractionRepair: 2048,
-        worldSettingImport: 6144,
-        smallSummary: 3072,
-        largeSummary: 4096,
-        migration: 1792,
-        migrationPlan: 4096,
-        migrationReview: 1024,
-    };
-    return Math.max(256, Math.min(Number(firstTokens) || 1024, caps[stage] || Number(firstTokens) || 1024));
-}
-
-function isEmptyModelResponseError(error) {
-    return error?.code === 'MA_EMPTY_MODEL_RESPONSE' || error?.code === 'MA_REASONING_ONLY';
-}
 /** [MA-MODEL-03] 阶段预算同时覆盖最终文本与后端可能消耗的推理 token。 */
 function stageResponseTokens(stage, settings, sourceText = '') {
     const configured = Math.max(1024, Number(settings?.responseTokens) || 8192);
@@ -11131,8 +10837,8 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
     const common = [
         '【最终输出纪律】',
         '- 不得输出分析、推理过程、思考草稿、<think> 标签、reasoning、解释、前言或后记；直接输出本阶段规定的最终协议。',
-        `- 本次最大响应预算为 ${budget} tokens；该预算可能同时包含后端内部推理与最终文本。即使内部推理无法关闭，也必须为最终答案保留足够额度。`,
-        '- 最终协议完成后立即停止，不得为了用满上限重复或扩写。',
+        '- 响应长度、推理模式和采样参数由当前 SillyTavern 连接或所选 Connection Profile 控制；必须优先完成最终协议。',
+        '- 最终协议完成后立即停止，不得重复或扩写。',
     ];
     const sourceLength = String(sourceText ?? '').length;
     const stageRules = {
@@ -11160,101 +10866,14 @@ function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
 
 
 
-function salvageStrictFinalProtocol(stage, reasoningText) {
-    const text = String(reasoningText ?? '').trim();
-    if (!text) return '';
-    // reasoning 里可能复述提示词示例。只有明确标记为“最终答案/最终协议”的尾部区域
-    // 才允许隔离，且只接受能够严格解析的协议；自由叙事正文永不从 reasoning 恢复。
-    const markers = [...text.matchAll(/(?:最终(?:答案|协议|输出|结论)|final\s*(?:answer|output))/giu)];
-    if (!markers.length) return '';
-    const region = text.slice(markers.at(-1).index).trim();
-    if (stage === 'audit' || stage === 'migrationReview') {
-        const lines = region.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
-        for (let index = lines.length - 1; index >= 0; index -= 1) {
-            if (/^(?:PASS|通过)[。.]?$/iu.test(lines[index])) return 'PASS';
-            if (/^(?:FAIL|需要修正)(?:\s|$)/iu.test(lines[index])) {
-                const tail = lines.slice(index).join('\n');
-                if (tail.length <= 1200) return tail;
-            }
-        }
-        return '';
-    }
-    if (['extraction', 'extractionRepair', 'worldSettingImport', 'migration'].includes(stage)) {
-        const matches = [...region.matchAll(/<<<ENTRY:[\s\S]*?<<<END_ENTRY>>>/gu)].map((match) => ({ text: match[0], end: match.index + match[0].length }));
-        if (matches.length) {
-            const last = matches.at(-1);
-            const trailing = region.slice(last.end).replace(/[\s。.!！?？:：;；"'“”‘’`]+/gu, '');
-            if (!trailing) return matches.slice(-16).map((item) => item.text).join('\n\n');
-        }
-        const lastLine = region.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).at(-1) || '';
-        if (/^(?:无|EMPTY)$/u.test(lastLine)) return lastLine;
-        return '';
-    }
-    if (stage === 'smallSummary') {
-        const index = region.lastIndexOf('总结｜当前事件');
-        return index >= 0 ? region.slice(index).trim() : '';
-    }
-    if (stage === 'largeSummary') {
-        const index = region.lastIndexOf('总结｜世界历史');
-        return index >= 0 ? region.slice(index).trim() : '';
-    }
-    if (stage === 'migrationPlan') {
-        const lines = region.split(/\r?\n/u).map((line) => line.trim()).filter((line) => /^(?:ANCHOR|GROUP|DROP)\b/u.test(line));
-        return lines.length ? lines.join('\n') : '';
-    }
-    return '';
-}
-
-function describeRetryReason(error, label = '模型请求') {
-    const text = (0, util_1.errorText)(error);
-    if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；已保持预算并缩短上下文重试一次`;
-    if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；已保持预算并缩短上下文重试一次`;
-        if (isTransientNetworkError(error)) return `${label}遇到瞬时网络中断：${text}；已缩短上下文并退避重试一次`;
-    if (isRetryableGatewayError(error)) return `${label}遇到网关或网络异常：${text}；已缩短上下文重试一次`;
-    return `${label}失败：${text}；已执行一次安全重试`;
-}
-
-/** [MA-MODEL-04] 识别常见上游网关失败；本地取消和格式错误不属于此类。 */
-function isRetryableGatewayError(error) {
-    const text = (0, util_1.errorText)(error).toLocaleLowerCase();
-    return /(?:\b502\b|\b503\b|\b504\b|gateway\s*(?:timeout|time-out)|upstream|no message generated|html\s*错误页|returned\s*html|unexpected token ['"]?<['"]?|<html|not valid json|invalid json|json parse|failed to fetch|fetch failed|network request failed|network error|networkerror|load failed|err_network|connection reset|connection aborted|socket hang up)/iu.test(text);
-}
-
-/** 仅识别可安全重放的瞬时网络中断，不把 HTTP 400、协议错误或仅推理归入其中。 */
-function isTransientNetworkError(error) {
-    const text = (0, util_1.errorText)(error).toLocaleLowerCase();
-    return /(?:failed to fetch|fetch failed|network request failed|network error|networkerror|load failed|err_network|connection reset|connection aborted|socket hang up)/iu.test(text);
-}
-
-/** 网络重试采用短退避；测试可用 requestRetryBaseDelayMs=0 禁用等待。 */
-function gatewayRetryDelayMs(attempt, settings = {}) {
-    const configured = Number(settings?.requestRetryBaseDelayMs);
-    const base = Number.isFinite(configured) ? Math.max(0, Math.min(5000, configured)) : 800;
-    return attempt <= 1 ? base : Math.min(5000, Math.max(base, Math.floor(base * 2.5)));
-}
-
-async function waitForGatewayRetry(error, attempt, settings, snapshot) {
-    if (!isRetryableGatewayError(error)) return;
-    const delay = gatewayRetryDelayMs(attempt, settings);
-    if (delay <= 0) return;
-    const step = 100;
-    let elapsed = 0;
-    while (elapsed < delay) {
-        if (snapshot?.token?.cancelled) throw new Error(snapshot.token.reason || '任务已取消');
-        const current = Math.min(step, delay - elapsed);
-        await new Promise((resolve) => setTimeout(resolve, current));
-        elapsed += current;
-    }
-}
-
 /**
  * [MA-MODEL-05] 最后的硬上限保护。业务提示词应先自行裁剪；这里仅防止异常配置把请求再次膨胀。
  */
-function limitPromptPair(prompt, stage, retry = false) {
+function limitPromptPair(prompt, stage) {
     const system = String(prompt?.system ?? '');
     const user = String(prompt?.user ?? '');
     const baseLimit = INPUT_LIMITS[stage] ?? 30000;
-    const totalLimit = retry ? Math.floor(baseLimit * 0.72) : baseLimit;
+    const totalLimit = baseLimit;
     const userLimit = Math.max(2000, totalLimit - system.length);
     return { system, user: clipMiddle(user, userLimit) };
 }
@@ -14079,7 +13698,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.RevisionService = void 0;
 exports.parseRevisionResult = parseRevisionResult;
 exports.assessRevisionCompleteness = assessRevisionCompleteness;
-exports.revisionRetryTokens = revisionRetryTokens;
 const parser_1 = require("./parser");
 const prompts_1 = require("./prompts");
 const model_request_1 = require("./model-request");
@@ -14101,34 +13719,18 @@ class RevisionService {
             host: this.host,
             stage: 'revision',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { compact: true, dialogueContext: snapshot.dialogueContext }),
             settings,
             snapshot,
             profileId: settings.revisionProfileId,
             sourceText: snapshot.turnText || snapshot.assistantText,
         });
         this.host.assertSnapshot(snapshot, this.getSettings());
-        let revisedText = parseRevisionResult(raw);
-        let assessment = assessRevisionCompleteness(snapshot.assistantText, revisedText);
+        const revisedText = parseRevisionResult(raw);
+        const assessment = assessRevisionCompleteness(snapshot.assistantText, revisedText);
         if (!assessment.ok) {
-            try { onProgress(`修正版疑似截断：${assessment.reason}；扩大预算重新生成完整正文`); } catch { }
-            const retryPrompt = (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { dialogueContext: snapshot.dialogueContext, completenessRetry: true, retryReason: assessment.reason });
-            const retryRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'revision',
-                prompt: retryPrompt,
-                fallbackPrompt: () => (0, prompts_1.revisionPrompts)(settings, snapshot.playerText, snapshot.assistantText, issues, { compact: true, dialogueContext: snapshot.dialogueContext, completenessRetry: true, retryReason: assessment.reason }),
-                settings,
-                snapshot,
-                profileId: settings.revisionProfileId,
-                sourceText: snapshot.turnText || snapshot.assistantText,
-                responseTokens: revisionRetryTokens(settings, snapshot.assistantText),
-            });
-            this.host.assertSnapshot(snapshot, this.getSettings());
-            revisedText = parseRevisionResult(retryRaw);
-            assessment = assessRevisionCompleteness(snapshot.assistantText, revisedText);
+            try { onProgress(`修正版疑似截断：${assessment.reason}；已拒绝覆盖，不自动再次请求模型`); } catch { }
+            throw new Error(`修正版疑似截断，已拒绝覆盖并保留原正文：${assessment.reason}`);
         }
-        if (!assessment.ok) throw new Error(`修正版疑似截断，已拒绝覆盖并保留原正文：${assessment.reason}`);
         if (revisedText === snapshot.assistantText)
             throw new Error('修正模型返回的正文与原正文完全相同');
         return revisedText;
@@ -14148,11 +13750,6 @@ function parseRevisionResult(raw) {
     return text;
 }
 
-function revisionRetryTokens(settings, sourceText) {
-    const configured = Math.max(8192, Number(settings?.responseTokens) || 8192);
-    const estimated = Math.ceil(String(sourceText ?? '').length * 2.2) + 2048;
-    return Math.min(16384, Math.max(configured, estimated));
-}
 function assessRevisionCompleteness(original, candidate) {
     const source = String(original ?? '').trim();
     const next = String(candidate ?? '').trim();
@@ -14780,40 +14377,14 @@ class WorldSettingImportService {
             host: this.host,
             stage: 'worldSettingImport',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.worldSettingImportPrompts)(settings, source, selected, { compact: true }),
             settings,
             snapshot,
             profileId: settings.extractionProfileId,
             sourceText: source,
-            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '设定导入模型')),
         });
         this.validate(snapshot, settings);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
-        let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
-        let repairRaw = '';
-        if (!blocks.length && diagnostics.hadInput) {
-            this.progress('running', '设定返回格式异常，启动一次格式修复');
-            repairRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'extractionRepair',
-                prompt: (0, prompts_1.extractionRepairPrompts)(raw),
-                fallbackPrompt: () => (0, prompts_1.extractionRepairPrompts)(raw, { compact: true }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: raw,
-            });
-            this.validate(snapshot, settings);
-            blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
-            const next = blocks.diagnostics ?? {};
-            diagnostics = {
-                repaired: Number(diagnostics.repaired || 0) + Number(next.repaired || 0) + 1,
-                merged: [...(diagnostics.merged || []), ...(next.merged || [])],
-                skipped: [...(diagnostics.skipped || []), ...(next.skipped || [])],
-                warnings: [...(diagnostics.warnings || []), '已执行一次模型格式修复', ...(next.warnings || [])],
-                hadInput: true,
-            };
-        }
+        const diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
         if (!blocks.length) throw new Error('没有从玩家设定中解析出可预览条目');
         const sanitized = sanitizeWorldSettingBlocks(blocks, source, diagnostics);
         if (!sanitized.length) throw new Error('玩家设定只包含写作要求、控制文本或尚未成立的未来事件，没有可导入事实');
@@ -14838,7 +14409,7 @@ class WorldSettingImportService {
             settingsSignature: typeof this.host.settingsSignature === 'function' ? this.host.settingsSignature(settings) : '',
             plan,
             blocks: sanitized,
-            raw: repairRaw || raw,
+            raw,
             diagnostics,
             created,
             updated,
