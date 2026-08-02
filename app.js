@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.48-native-recall — governed worldbook storage, native ST recall, user-owned placement, and hard content budgets. */
+/** Mirror Abyss 2.0.0-lite.ui.50-profile-fast-path — governed worldbook storage, native ST recall, user-owned placement, and hard content budgets. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -976,7 +976,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.48-native-recall';
+exports.VERSION = '2.0.0-lite.ui.50-profile-fast-path';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1574,7 +1574,9 @@ class ControlPanel {
         const invalid = summary.error ? `；不可用：${summary.error}` : '';
         const warning = summary.warning ? `；提示：${summary.warning}` : '';
         const scope = profileId ? '；仅用于镜渊处理，不切换主聊天 API' : '';
-        this.apiProfileStatusNode.textContent = `${prefix}｜API：${summary.api || '未知'}｜模型：${model}${invalid}${warning}${scope}`;
+        const protocol = summary.mode === 'cc' ? 'Chat Completion' : summary.mode === 'tc' ? 'Text Completion' : '未知';
+        const owner = profileId ? '｜路由：ST 原生 Connection Profile' : '｜路由：ST 当前连接';
+        this.apiProfileStatusNode.textContent = `${prefix}｜协议：${protocol}｜API：${summary.api || '未知'}｜模型：${model}${owner}${invalid}${warning}${scope}`;
     }
     buildDiagnosticSection() {
         const section = document.createElement('section');
@@ -4622,7 +4624,10 @@ class HostAdapter {
                     stream: false,
                     signal: requestController?.signal ?? null,
                     extractData: true,
-                    includePreset: generationOptions?.includePreset !== false,
+                    // [MA-HOST-MODEL-FAST-01] 后台任务只复用 Profile 的 API、模型、地址与鉴权。
+                    // 默认不加载正文生成 preset，避免把高推理强度、长输出和正文采样配置带入提取；
+                    // Text Completion 仍保留 ST 原生 instruct 转换。
+                    includePreset: generationOptions?.includePreset === true,
                     includeInstruct: generationOptions?.includeInstruct !== false,
                 }, {});
                 generationOptions = { ...generationOptions, requestController };
@@ -4660,7 +4665,16 @@ class HostAdapter {
         }
         catch (error) {
             if (snapshot.token?.cancelled) throw new Error(snapshot.token.reason || '任务已取消');
-            throw new Error(`模型请求失败：${(0, util_1.errorText)(error)}`);
+            const detail = (0, util_1.errorText)(error);
+            // [MA-AUTH-ROUTE-01] 401/未授权属于 ST 当前连接或 Connection Profile 的凭据问题，
+            // 不是提示词、世界书或原生召回错误。错误中明确给出实际路由，避免玩家只能看到笼统“未授权”。
+            if (/(?:\b401\b|unauthori[sz]ed|未授权|认证失败|鉴权失败|invalid\s*(?:api[-_ ]?key|token)|incorrect\s*(?:api[-_ ]?key|token)|authentication\s*(?:failed|required)|permission\s*denied)/iu.test(detail)) {
+                const remedy = profileId
+                    ? '请在镜渊“处理 API”中重新选择该 Connection Profile，或在 SillyTavern Connection Profiles 中重新保存密钥；也可切换为“当前 SillyTavern 连接”。'
+                    : '请检查 SillyTavern 当前主连接的 API 密钥/登录状态，重新连接后再试。';
+                throw new Error(`模型请求未授权；实际连接：${route.label}；原始错误：${detail}。${remedy}`);
+            }
+            throw new Error(`模型请求失败：${detail}`);
         }
         this.assertSnapshot(snapshot, currentSettings);
         const text = extractModelText(raw, context).trim();
@@ -5430,14 +5444,16 @@ function describeModelRoute(context, profileId) {
         const error = !apiValue ? `处理连接“${name}”没有选择 API` : '';
         const warning = modelRequired && !model
             ? `连接配置“${name}”未记录模型；部分后端允许由服务器决定模型`
-            : '';
+            : mode === 'tc'
+                ? 'Text Completion 依赖 ST 的 Instruct 配置；OpenAI 兼容网站通常应建立 Chat Completion Profile'
+                : '';
         return {
             profileId,
             name,
             api,
             model,
             mode,
-            label: `连接配置：${name}；API：${api}；模型：${model || (modelRequired ? '未设置' : '由后端决定')}`,
+            label: `连接配置：${name}；协议：${mode === 'cc' ? 'Chat Completion' : mode === 'tc' ? 'Text Completion' : '未知'}；API：${api}；模型：${model || (modelRequired ? '未设置' : '由后端决定')}`,
             noModelLikely: modelRequired && !model,
             warning,
             error,
@@ -5452,7 +5468,7 @@ function describeModelRoute(context, profileId) {
         api,
         model,
         mode: chatCompletion ? 'cc' : 'tc',
-        label: `当前连接；API：${api}；模型：${model || (chatCompletion ? '未识别' : '由后端决定')}`,
+        label: `当前连接；协议：${chatCompletion ? 'Chat Completion' : 'Text Completion'}；API：${api}；模型：${model || (chatCompletion ? '未识别' : '由后端决定')}`,
         noModelLikely: chatCompletion && !model,
         warning: chatCompletion && !model ? '当前聊天补全连接未识别到模型；仍将交由 SillyTavern 发起请求' : '',
         error: '',
@@ -6204,8 +6220,6 @@ function add(map, key, entry) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryRunner = void 0;
-exports.segmentedExtractionRescue = segmentedExtractionRescue;
-exports.splitExtractionSource = splitExtractionSource;
 const matcher_1 = require("./matcher");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
@@ -6374,13 +6388,17 @@ class MemoryRunner {
                 snapshot,
                 profileId: settings.extractionProfileId,
                 sourceText: snapshot.turnText || snapshot.assistantText,
+                onAttempt: (attempt, total) => {
+                    const route = this.host.profileSummary(settings.extractionProfileId);
+                    this.progress('running', `提取请求 ${attempt}/${total}；${route.label}`, { titles: [], phase: 'extract' });
+                },
                 onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '提取模型'), { titles: [], phase: 'extract' }),
             });
         }
         catch (error) {
-            if (!isReasoningOrEmptyError(error) || !settings.extractionProfileId) throw error;
-            this.progress('running', '提取模型连续只返回推理；切分正文并逐段提交最终协议', { titles: [], phase: 'extract' });
-            raw = await segmentedExtractionRescue(this.host, settings, snapshot, this.getSettings, (detail) => this.progress('running', detail, { titles: [], phase: 'extract' }));
+            // [MA-MEMORY-FAST-01] 通用请求层已经完成最多一次紧凑重试；
+            // 提取不再把正文拆成最多六段再次请求，避免一次失败放大为多次慢调用。
+            throw error;
         }
         this.validate(snapshot);
         let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
@@ -6398,6 +6416,12 @@ class MemoryRunner {
                 snapshot,
                 profileId: settings.extractionProfileId,
                 sourceText: raw,
+                responseTokens: 2048,
+                maxAttempts: 1,
+                onAttempt: () => {
+                    const route = this.host.profileSummary(settings.extractionProfileId);
+                    this.progress('running', `格式修复请求 1/1；${route.label}`, { titles: [], phase: 'extract' });
+                },
                 onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '格式修复模型'), { titles: [], phase: 'extract' }),
             });
             this.validate(snapshot);
@@ -6769,70 +6793,6 @@ function parseSummaryWithRecovery(raw, kind) {
     return { block: merged, explicitNone: false, repaired, skipped: blocks.filter((block) => !candidates.includes(block)).map((block) => block.title) };
 }
 
-
-async function segmentedExtractionRescue(host, settings, snapshot, getSettings, onProgress = () => undefined) {
-    const segments = splitExtractionSource(snapshot.assistantText, 420, 6);
-    if (!segments.length) throw new Error('提取救援没有可处理的正文片段');
-    const outputs = [];
-    for (let index = 0; index < segments.length; index += 1) {
-        host.assertSnapshot(snapshot, getSettings());
-        const segment = segments[index];
-        const prompt = (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, [], { compact: true, dialogueContext: '' });
-        try {
-            const output = await (0, model_request_1.callModel)({
-                host,
-                stage: 'extraction',
-                prompt,
-                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, [], { compact: true, dialogueContext: '' }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: segment,
-                responseTokens: 4096,
-                onRetry: (error) => onProgress(`分段提取 ${index + 1}/${segments.length}：${(0, model_request_1.describeRetryReason)(error, '模型')}`),
-            });
-            outputs.push(String(output ?? '').trim());
-        }
-        catch (error) {
-            throw new Error(`分段提取 ${index + 1}/${segments.length} 仍失败：${(0, util_1.errorText)(error)}`);
-        }
-    }
-    const nonEmpty = outputs.filter((value) => value && !/^(?:无|EMPTY)$/u.test(value));
-    return nonEmpty.length ? nonEmpty.join('\n\n') : '无';
-}
-
-function splitExtractionSource(value, maxChars = 420, maxSegments = 6) {
-    const text = String(value ?? '').trim();
-    if (!text) return [];
-    const units = text.split(/(?<=[。！？!?…])\s*|\n+/u).map((item) => item.trim()).filter(Boolean);
-    const segments = [];
-    let current = '';
-    const flush = () => {
-        if (!current.trim()) return;
-        segments.push(current.trim());
-        current = '';
-    };
-    for (const unit of units) {
-        if (unit.length > maxChars) {
-            flush();
-            for (let offset = 0; offset < unit.length; offset += maxChars) segments.push(unit.slice(offset, offset + maxChars));
-            continue;
-        }
-        const next = current ? `${current}${unit}` : unit;
-        if (next.length > maxChars) flush();
-        current += unit;
-    }
-    flush();
-    if (segments.length <= maxSegments) return segments;
-    const kept = segments.slice(0, maxSegments - 1);
-    kept.push(segments.slice(maxSegments - 1).join('').slice(0, maxChars));
-    return kept;
-}
-
-function isReasoningOrEmptyError(error) {
-    return error?.code === 'MA_REASONING_ONLY' || error?.code === 'MA_EMPTY_MODEL_RESPONSE'
-        || /只返回了推理内容|没有最终文本|未解析出最终文本/u.test((0, util_1.errorText)(error));
-}
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
 
@@ -11021,7 +10981,6 @@ exports.limitPromptPair = limitPromptPair;
 exports.outputContractForStage = outputContractForStage;
 exports.describeRetryReason = describeRetryReason;
 exports.salvageStrictFinalProtocol = salvageStrictFinalProtocol;
-exports.protocolRescuePrompt = protocolRescuePrompt;
 const util_1 = require("./util");
 
 // [MA-MODEL-01] 每个模型阶段只声明输入/输出预算；网关失败使用紧凑请求，瞬时断线最多再退避重放一次。
@@ -11041,7 +11000,7 @@ const INPUT_LIMITS = Object.freeze({
 
 /**
  * [MA-MODEL-02] 调用模型；网关失败使用精简提示词，明确的瞬时网络中断最多执行两次有限重试。
- * 模型空正文或仅返回推理时，使用更大的输出预算并保留 Profile 预设重试一次。
+ * 模型空正文、仅返回推理、网关或瞬时网络异常时，只允许一次紧凑重试；不扩大预算、不分段重跑。
  */
 async function callModel(options) {
     const {
@@ -11054,39 +11013,53 @@ async function callModel(options) {
         profileId = '',
         sourceText = '',
         onRetry,
+        onAttempt,
         responseTokens = 0,
+        maxAttempts = 2,
     } = options;
     const configuredOverride = Number(responseTokens || 0);
     const responseLength = configuredOverride > 0
         ? Math.max(256, Math.min(16384, Math.floor(configuredOverride)))
         : stageResponseTokens(stage, settings, sourceText);
     const primary = limitPromptPair(withOutputContract(prompt, stage, responseLength, sourceText), stage);
+    const allowedAttempts = Math.max(1, Math.min(2, Number(maxAttempts) || 1));
     let firstError = null;
-    let firstGatewayRetry = false;
     try {
-        return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
+        try { onAttempt?.(1, allowedAttempts); }
+        catch { }
+        return await host.generate(
+            primary.system,
+            primary.user,
+            responseLength,
+            snapshot,
+            settings,
+            settings.requestTimeoutMs,
+            profileId,
+            { includePreset: false, includeInstruct: true },
+        );
     }
     catch (error) {
         firstError = error;
-        const emptyResponse = isEmptyModelResponseError(error);
-        firstGatewayRetry = isRetryableGatewayError(error);
-        if (snapshot?.token?.cancelled || (!firstGatewayRetry && !emptyResponse))
-            throw error;
+        const retryable = isRetryableGatewayError(error)
+            || isTransientNetworkError(error)
+            || isEmptyModelResponseError(error);
+        if (snapshot?.token?.cancelled || !retryable || allowedAttempts < 2) throw error;
     }
 
+    // [MA-MODEL-FAST-01] 任何阶段最多只执行一次紧凑重试。
+    // 不扩大 token 预算，不追加第三次无 preset 救援，也不把一次失败拆成多段重新提取。
     const fallbackValue = fallbackPrompt
         ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
         : prompt;
-    const emptyResponse = isEmptyModelResponseError(firstError);
-    const fallbackTokens = emptyResponse
-        ? emptyResponseRetryTokens(stage, settings, responseLength)
-        : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
+    const fallbackTokens = compactRetryTokens(stage, responseLength);
     const fallback = limitPromptPair(withOutputContract(fallbackValue, stage, fallbackTokens, sourceText), stage, true);
     try { onRetry?.(firstError); }
     catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
-    if (firstGatewayRetry) await waitForGatewayRetry(firstError, 1, settings, snapshot);
-
-    let secondError = null;
+    try { onAttempt?.(2, allowedAttempts); }
+    catch { }
+    if (isRetryableGatewayError(firstError) || isTransientNetworkError(firstError)) {
+        await waitForGatewayRetry(firstError, 1, settings, snapshot);
+    }
     try {
         return await host.generate(
             fallback.system,
@@ -11096,108 +11069,40 @@ async function callModel(options) {
             settings,
             settings.requestTimeoutMs,
             profileId,
-            undefined,
+            { includePreset: false, includeInstruct: true },
         );
     }
-    catch (error) {
-        secondError = error;
+    catch (secondError) {
+        const reasoning = String(secondError?.reasoningText || firstError?.reasoningText || '');
+        const salvaged = salvageStrictFinalProtocol(stage, reasoning);
+        if (salvaged) {
+            try { onRetry?.(Object.assign(new Error('已从推理字段隔离出完整最终协议'), { code: 'MA_REASONING_PROTOCOL_SALVAGED' })); }
+            catch { }
+            return salvaged;
+        }
+        throw secondError;
     }
+}
 
-    // [MA-MODEL-NETWORK-RETRY-01]
-    // 移动端浏览器与反向代理常把瞬时断线抛成 TypeError: Failed to fetch。
-    // 该错误过去没有命中“fetch failed”规则，导致本应重试的请求直接失败。
-    // 只对明确的瞬时网络错误增加一次退避重试；协议错误、仅推理和取消不进入此分支。
-    if (isTransientNetworkError(secondError) && !snapshot?.token?.cancelled) {
-        try { onRetry?.(Object.assign(new Error('瞬时网络错误仍存在，退避后执行最后一次紧凑请求'), { code: 'MA_TRANSIENT_NETWORK_RETRY' })); }
-        catch { }
-        await waitForGatewayRetry(secondError, 2, settings, snapshot);
-        try {
-            return await host.generate(
-                fallback.system,
-                fallback.user,
-                fallbackTokens,
-                snapshot,
-                settings,
-                settings.requestTimeoutMs,
-                profileId,
-                undefined,
-            );
-        }
-        catch (error) {
-            if (!isTransientNetworkError(error)) throw error;
-            const detail = (0, util_1.errorText)(error);
-            const exhausted = new Error(`瞬时网络请求连续3次失败：${detail}`);
-            exhausted.code = 'MA_NETWORK_RETRY_EXHAUSTED';
-            exhausted.cause = error;
-            exhausted.retryAttempts = 3;
-            exhausted.diagnosticEvidence = {
-                ...(error?.diagnosticEvidence || {}),
-                retryAttempts: 3,
-                transientNetwork: true,
-            };
-            secondError = exhausted;
-        }
-    }
-
-    // [MA-MODEL-REASONING-RESCUE-01]
-    // 部分推理模型会把整个响应预算都放进 reasoning 字段。先只从 reasoning 中提取
-    // 已经完整出现的严格协议；绝不把自由推理文本当作正文或事实提交。
-    const reasoning = String(secondError?.reasoningText || firstError?.reasoningText || '');
-    const salvaged = salvageStrictFinalProtocol(stage, reasoning);
-    if (salvaged) {
-        try { onRetry?.(Object.assign(new Error('已从推理字段隔离出完整最终协议'), { code: 'MA_REASONING_PROTOCOL_SALVAGED' })); }
-        catch { }
-        return salvaged;
-    }
-
-    // 第三次只在独立 Connection Profile 上执行：去掉生成 preset，使用最短最终协议提示。
-    // 这不会改写玩家主连接，也不会把供应商私有 reasoning 参数硬编码进请求。
-    if (profileId && isEmptyModelResponseError(secondError) && !snapshot?.token?.cancelled) {
-        const rescueTokens = reasoningRescueTokens(stage, settings, fallbackTokens);
-        const rescue = protocolRescuePrompt(stage, fallbackValue, sourceText, rescueTokens);
-        try { onRetry?.(Object.assign(new Error('模型连续只返回推理，切换无 preset 最终协议救援'), { code: 'MA_REASONING_RESCUE' })); }
-        catch { }
-        try {
-            return await host.generate(
-                rescue.system,
-                rescue.user,
-                rescueTokens,
-                snapshot,
-                settings,
-                settings.requestTimeoutMs,
-                profileId,
-                { includePreset: false },
-            );
-        }
-        catch (rescueError) {
-            const finalSalvage = salvageStrictFinalProtocol(stage, String(rescueError?.reasoningText || ''));
-            if (finalSalvage) return finalSalvage;
-            throw rescueError;
-        }
-    }
-    throw secondError;
+function compactRetryTokens(stage, firstTokens) {
+    const caps = {
+        audit: 1024,
+        revision: 6144,
+        extraction: 3072,
+        extractionRepair: 2048,
+        worldSettingImport: 6144,
+        smallSummary: 3072,
+        largeSummary: 4096,
+        migration: 1792,
+        migrationPlan: 4096,
+        migrationReview: 1024,
+    };
+    return Math.max(256, Math.min(Number(firstTokens) || 1024, caps[stage] || Number(firstTokens) || 1024));
 }
 
 function isEmptyModelResponseError(error) {
     return error?.code === 'MA_EMPTY_MODEL_RESPONSE' || error?.code === 'MA_REASONING_ONLY';
 }
-function emptyResponseRetryTokens(stage, settings, firstTokens) {
-    const minimums = {
-        audit: 3072,
-        revision: 6144,
-        extraction: 8192,
-        extractionRepair: 6144,
-        worldSettingImport: 12288,
-        smallSummary: 6144,
-        largeSummary: 8192,
-        migration: 6144,
-        migrationPlan: 12288,
-        migrationReview: 3072,
-    };
-    const configured = Math.max(1024, Number(settings?.responseTokens) || 8192);
-    return Math.min(configured, Math.max(Number(firstTokens) * 2, minimums[stage] || 4096));
-}
-
 /** [MA-MODEL-03] 阶段预算同时覆盖最终文本与后端可能消耗的推理 token。 */
 function stageResponseTokens(stage, settings, sourceText = '') {
     const configured = Math.max(1024, Number(settings?.responseTokens) || 8192);
@@ -11206,8 +11111,8 @@ function stageResponseTokens(stage, settings, sourceText = '') {
         const estimated = Math.max(3072, Math.ceil(String(sourceText ?? '').length * 1.8) + 1536);
         return Math.min(configured, estimated);
     }
-    if (stage === 'extraction') return Math.min(configured, 6144);
-    if (stage === 'extractionRepair') return Math.min(configured, 4096);
+    if (stage === 'extraction') return Math.min(configured, 3072);
+    if (stage === 'extractionRepair') return Math.min(configured, 2048);
     if (stage === 'worldSettingImport') return Math.min(configured, 8192);
     if (stage === 'smallSummary') return Math.min(configured, 4096);
     if (stage === 'largeSummary') return Math.min(configured, 6144);
@@ -11254,52 +11159,6 @@ function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
 }
 
 
-
-function reasoningRescueTokens(stage, settings, previousTokens) {
-    const configured = Math.max(2048, Number(settings?.responseTokens) || 8192);
-    const minimums = {
-        audit: 2048,
-        revision: 8192,
-        extraction: 6144,
-        extractionRepair: 4096,
-        worldSettingImport: 8192,
-        smallSummary: 4096,
-        largeSummary: 6144,
-        migration: 4096,
-        migrationPlan: 8192,
-        migrationReview: 2048,
-    };
-    return Math.min(16384, Math.max(Math.min(configured, Number(previousTokens) || 0), minimums[stage] || 4096));
-}
-
-function protocolRescuePrompt(stage, fallbackValue, sourceText, responseTokens) {
-    const source = String(sourceText ?? '').trim();
-    const fallbackSystem = String(fallbackValue?.system ?? '').trim();
-    const fallbackUser = String(fallbackValue?.user ?? '').trim();
-    const stageInstructions = {
-        audit: '判断输入是否违反审核规则。只提交 PASS，或以 FAIL 开头并列出短原因。',
-        revision: '输出可直接替换的完整修正版正文，从开头写到结尾。',
-        extraction: '从输入中提取已经发生的高价值事实，只输出完整 ENTRY 协议或“无”。',
-        extractionRepair: '只修复已有候选的 ENTRY 协议语法，不新增事实。',
-        worldSettingImport: '只输出完整 ENTRY 协议或“无”。',
-        smallSummary: '只输出“总结｜当前事件”完整协议或“无”。',
-        largeSummary: '只输出“总结｜世界历史”完整协议或“无”。',
-        migrationReview: '只输出 PASS 或 FAIL 协议。',
-        migrationPlan: '只输出 ANCHOR、GROUP、DROP 协议行。',
-        migration: '只输出完整重建条目协议。',
-    };
-    const system = [
-        '你是最终答案提交器。上一次请求只产生了内部推理，没有形成最终文本。',
-        '禁止继续分析、解释或输出任何思考过程。直接提交最终答案；第一字符就必须属于最终协议。',
-        stageInstructions[stage] || '只输出原任务规定的最终协议。',
-        outputContractForStage(stage, responseTokens, source),
-        fallbackSystem ? `原任务约束摘要：\n${clipMiddle(fallbackSystem, 3200)}` : '',
-    ].filter(Boolean).join('\n\n');
-    const user = source
-        ? `需要处理的原始内容：\n${clipMiddle(source, 7000)}`
-        : `原任务输入：\n${clipMiddle(fallbackUser, 7000)}`;
-    return limitPromptPair({ system, user }, stage, true);
-}
 
 function salvageStrictFinalProtocol(stage, reasoningText) {
     const text = String(reasoningText ?? '').trim();
@@ -11348,10 +11207,9 @@ function salvageStrictFinalProtocol(stage, reasoningText) {
 
 function describeRetryReason(error, label = '模型请求') {
     const text = (0, util_1.errorText)(error);
-    if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；已扩大输出预算并缩短上下文重试一次`;
-    if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；已扩大输出预算并缩短上下文重试一次`;
-    if (error?.code === 'MA_NETWORK_RETRY_EXHAUSTED') return `${label}连续3次网络请求失败：${text}`;
-    if (isTransientNetworkError(error)) return `${label}遇到瞬时网络中断：${text}；已缩短上下文并退避重试，最多3次`;
+    if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；已保持预算并缩短上下文重试一次`;
+    if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；已保持预算并缩短上下文重试一次`;
+        if (isTransientNetworkError(error)) return `${label}遇到瞬时网络中断：${text}；已缩短上下文并退避重试一次`;
     if (isRetryableGatewayError(error)) return `${label}遇到网关或网络异常：${text}；已缩短上下文重试一次`;
     return `${label}失败：${text}；已执行一次安全重试`;
 }

@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.48-native-recall
+# Mirror Abyss 2.0.0-lite.ui.50-profile-fast-path
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -23,11 +23,11 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.48-native-recall 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.50-profile-fast-path 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
-- 独立模型路由：`ConnectionManagerRequestService.sendRequest`；API 类型、URL、端口、模型、密钥和 preset 均由 Connection Profile 原样提供。
+- 独立模型路由：`ConnectionManagerRequestService.sendRequest`；API 类型、URL、端口、模型和密钥由 Connection Profile 提供；后台任务默认不加载正文生成 preset。
 - 世界书：`loadWorldInfo`、`saveWorldInfo`、`updateWorldInfoList`、`reloadWorldInfoEditor`。
 - 聊天和元数据：`saveChat`、`saveMetadata`、`chatMetadata`。
 - STscript：`executeSlashCommandsWithOptions`。
@@ -41,7 +41,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 1. 固定当前聊天、正文、消息键、内容哈希、角色和世界书快照。
 2. 审核正文。
 3. 审核失败时生成完整修正版；截断、缺段、异常缩短或结尾不完整的修正版禁止覆盖。
-4. 提取严格 `ENTRY` 协议；格式异常时只允许一次修复，连续仅推理时进入最终协议救援或分段提取。
+4. 提取严格 `ENTRY` 协议；主提取最多一次紧凑重试，格式异常只允许一次独立修复，不再分段重跑正文。
 5. 插件生成确定性操作计划并提交世界书。
 6. 保存提交回执和当前游戏时间。
 7. 按阈值执行小总结、大总结和沉降分发。
@@ -93,13 +93,22 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 本地矩阵验证插件可控的有限状态、故障注入和宿主模拟，不等同于对所有第三方模型和网关的永久可用性保证。真实环境结果以插件导出的自动验收报告为准。
 
+## 2.0.0-lite.ui.50-profile-fast-path 本轮改动
 
-## 2.0.0-lite.ui.48-native-recall 本轮改动
+- 不新增自建 API、地址、密钥或模型配置；镜渊继续只选择 ST 原生 Connection Profile。
+- Profile 请求仍通过 `ConnectionManagerRequestService.sendRequest`，API、网站、模型和鉴权由 ST 读取。
+- 后台任务默认不继承正文生成 preset，避免把高推理强度、长输出和正文采样配置带入提取；Text Completion 仍由 ST 执行 Instruct 转换。
+- 提取最大响应预算由 6144 降为 3072 tokens；格式修复固定为 2048 tokens。
+- 单阶段最多执行“主请求 + 一次紧凑重试”，401、协议错误和用户取消不重试。
+- 删除第三次无 preset 救援、三次网络重放和最多六段的分段提取救援。
+- 完整提取结果格式异常时，只执行一次最小格式修复，不重新提取正文。
+- 面板与提取进度显示实际使用的 Chat Completion/Text Completion、API、模型及 ST 路由。
+- Text Completion Profile 保留支持；面板提示其依赖 ST Instruct 配置。OpenAI 兼容网站通常应建立 Chat Completion Profile。
+- 世界书正文、ENTRY 协议、提示词、匹配、生命周期、原生召回和 ST 所有的位置字段均未修改。
 
-- 世界书正文格式保持不变，本轮不执行自然语言化或栏目清洗。
-- 删除活动包的运行时生成路径；旧活动包只会在下一次世界书提交、编辑、总结、焦点或召回重排时被清理。
-- 正文上下文只由 SillyTavern 原生世界书机制生成，插件不再拼接固定块或执行额外 Prompt 注入。
-- 插件继续维护常驻、关键词、向量、递归、概率、扫描深度和 Order。
-- `Position`、`Depth`、`Role`、`Outlet` 改为 ST/玩家所有；插件只读取和展示，不再覆盖。
-- 世界书事务增加位置字段不变校验；异常改写会触发回滚。
-- ENTRY 协议、栏目结构、提交事务、事件治理、场景结算、总结和条目容量规则保持不变。
+## 使用建议
+
+- 另一个网站：在 ST 中建立该网站的 Chat Completion Connection Profile，再在镜渊“处理 API”中选择。
+- 同一网站不同模型：复制 ST Profile，只修改模型，再由镜渊选择该 Profile。
+- 使用“当前 SillyTavern 连接”时，后台请求仍沿用主连接全局响应长度；需要独立且受控的 3072-token 提取请求时，应选择 Connection Profile。
+- 提取模型应优先选择能直接输出最终文本的轻量非推理模型；仅返回 reasoning 的模型现在会在一次紧凑重试后明确失败，不再触发多段慢请求。
