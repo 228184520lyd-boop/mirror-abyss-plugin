@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.51-authoritative-diff — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
+/** Mirror Abyss 2.0.0-lite.ui.52-summary-granularity — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -975,7 +975,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.51-authoritative-diff';
+exports.VERSION = '2.0.0-lite.ui.52-summary-granularity';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -4860,6 +4860,8 @@ class HostAdapter {
             turnsSinceSmall: Math.max(0, Number(value.turnsSinceSmall) || 0),
             criticalChangesSinceSmall: Math.max(0, Number(value.criticalChangesSinceSmall) || 0),
             smallCountSinceLarge: Math.max(0, Number(value.smallCountSinceLarge) || 0),
+            pendingSmallSummaryUids: [...new Set((Array.isArray(value.pendingSmallSummaryUids) ? value.pendingSmallSummaryUids : []).map((item) => String(item ?? '').trim()).filter(Boolean))].slice(-96),
+            pendingLargeSummaryUids: [...new Set((Array.isArray(value.pendingLargeSummaryUids) ? value.pendingLargeSummaryUids : []).map((item) => String(item ?? '').trim()).filter(Boolean))].slice(-128),
         };
     }
     async saveCursor(cursor, snapshot, currentSettings) {
@@ -6279,6 +6281,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryRunner = void 0;
 exports.segmentedExtractionRescue = segmentedExtractionRescue;
 exports.splitExtractionSource = splitExtractionSource;
+exports.__testSummaryEntries = summaryEntries;
+exports.__testAbsorbedSourceOperations = absorbedSourceOperations;
+exports.__testParseSummaryWithRecovery = parseSummaryWithRecovery;
 const matcher_1 = require("./matcher");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
@@ -6329,17 +6334,26 @@ class MemoryRunner {
             const committed = [result];
             const cursor = this.host.cursor();
             let smallCountSinceLarge = cursor.smallCountSinceLarge + (result.changed ? 1 : 0);
+            let pendingSmallSummaryUids = result.changed ? [] : [...(cursor.pendingSmallSummaryUids ?? [])];
+            let pendingLargeSummaryUids = result.changed
+                ? mergePendingUids(cursor.pendingLargeSummaryUids, resultChangedUids(result), 128)
+                : [...(cursor.pendingLargeSummaryUids ?? [])];
             try {
                 if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
-                    const large = await this.summarize('large', settings, snapshot);
+                    const large = await this.summarize('large', settings, snapshot, { pendingUids: pendingLargeSummaryUids });
                     committed.push(large);
-                    if (large.changed) smallCountSinceLarge = 0;
+                    if (large.changed) {
+                        smallCountSinceLarge = 0;
+                        pendingLargeSummaryUids = [];
+                    }
                 }
                 await this.host.saveCursor({
                     ...cursor,
                     turnsSinceSmall: result.changed ? 0 : cursor.turnsSinceSmall,
                     criticalChangesSinceSmall: result.changed ? 0 : cursor.criticalChangesSinceSmall,
                     smallCountSinceLarge,
+                    pendingSmallSummaryUids,
+                    pendingLargeSummaryUids,
                 }, snapshot, this.getSettings());
             }
             catch (error) {
@@ -6351,7 +6365,11 @@ class MemoryRunner {
         const result = await this.summarize('large', settings, snapshot);
         const cursor = this.host.cursor();
         try {
-            await this.host.saveCursor({ ...cursor, smallCountSinceLarge: result.changed ? 0 : cursor.smallCountSinceLarge }, snapshot, this.getSettings());
+            await this.host.saveCursor({
+                ...cursor,
+                smallCountSinceLarge: result.changed ? 0 : cursor.smallCountSinceLarge,
+                pendingLargeSummaryUids: result.changed ? [] : [...(cursor.pendingLargeSummaryUids ?? [])],
+            }, snapshot, this.getSettings());
         }
         catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, error, '大总结回合');
@@ -6365,25 +6383,32 @@ class MemoryRunner {
         let turnsSinceSmall = Number(cursor.turnsSinceSmall || 0) + 1;
         let criticalChangesSinceSmall = Number(cursor.criticalChangesSinceSmall || 0) + Math.max(0, Number(criticalChanges || 0));
         let smallCountSinceLarge = Number(cursor.smallCountSinceLarge || 0);
+        let pendingSmallSummaryUids = mergePendingUids(cursor.pendingSmallSummaryUids, resultChangedUids(rootResult), 96);
+        let pendingLargeSummaryUids = [...(cursor.pendingLargeSummaryUids ?? [])];
         try {
             const turnReady = turnsSinceSmall >= settings.smallSummaryTurns;
             const changeReady = criticalChangesSinceSmall >= settings.criticalChangesForSmall;
             if (settings.autoSmallSummary !== false && (turnReady || changeReady)) {
                 const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `累计${criticalChangesSinceSmall}个关键变化`;
                 this.progress('running', `${reason}，开始小总结与分发`, { titles: ['总结｜当前事件'], criticalChanges: criticalChangesSinceSmall });
-                const small = await this.summarize('small', settings, snapshot);
+                const small = await this.summarize('small', settings, snapshot, { pendingUids: pendingSmallSummaryUids });
                 committed.push(small);
                 if (small.changed) {
                     turnsSinceSmall = 0;
                     criticalChangesSinceSmall = 0;
                     smallCountSinceLarge += 1;
+                    pendingSmallSummaryUids = [];
+                    pendingLargeSummaryUids = mergePendingUids(pendingLargeSummaryUids, resultChangedUids(small), 128);
                 }
             }
             if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
                 this.progress('running', `累计${settings.largeSummaryCount}个小总结，开始大总结、沉降与分发`, { titles: ['总结｜世界历史'] });
-                const large = await this.summarize('large', settings, snapshot);
+                const large = await this.summarize('large', settings, snapshot, { pendingUids: pendingLargeSummaryUids });
                 committed.push(large);
-                if (large.changed) smallCountSinceLarge = 0;
+                if (large.changed) {
+                    smallCountSinceLarge = 0;
+                    pendingLargeSummaryUids = [];
+                }
             }
             await this.host.saveCursor({
                 ...cursor,
@@ -6392,6 +6417,8 @@ class MemoryRunner {
                 turnsSinceSmall,
                 criticalChangesSinceSmall,
                 smallCountSinceLarge,
+                pendingSmallSummaryUids,
+                pendingLargeSummaryUids,
             }, snapshot, this.getSettings());
         }
         catch (error) {
@@ -6539,27 +6566,31 @@ class MemoryRunner {
         }
         if (skipped) this.setStatus(snapshot.chatKey, 'matching', `本地语义解析器跳过 ${skipped} 条重复事实`);
     }
-    async summarize(kind, settings, snapshot) {
+    async summarize(kind, settings, snapshot, options = {}) {
         const label = kind === 'small' ? '小总结' : '大总结';
         this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', label);
         this.validate(snapshot);
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
-        const selected = summaryEntries(kind, entries, snapshot);
-        const scope = kind === 'small' ? summaryScope(selected, snapshot) : '当前';
+        const cursor = this.host.cursor();
+        const pendingUids = Array.isArray(options.pendingUids)
+            ? options.pendingUids
+            : (kind === 'small' ? cursor.pendingSmallSummaryUids : cursor.pendingLargeSummaryUids);
+        const selected = summaryEntries(kind, entries, snapshot, pendingUids);
+        const scope = summaryScope(kind, selected, pendingUids);
         const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
         const recentConversation = kind === 'small'
             ? (typeof this.host.recentConversation === 'function'
                 ? this.host.recentConversation(snapshot, settings.smallSummaryTurns)
                 : `${snapshot.playerText || ''}\n${snapshot.assistantText || ''}`.trim())
             : '';
-        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation);
+        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { pendingUids, allEntries: entries });
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
         const raw = await (0, model_request_1.callModel)({
             host: this.host,
             stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { compact: true }),
+            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { compact: true, pendingUids, allEntries: entries }),
             settings,
             snapshot,
             profileId: profile,
@@ -6584,8 +6615,10 @@ class MemoryRunner {
             return { entries, changed: false };
         }
         const distribution = distributionBlocksFromSummary(summaryBlock);
-        summaryBlock.sections = summaryBlock.sections.filter((section) => !/^(分发事实|沉降分发)$/u.test(section.name));
+        const absorption = kind === 'small' ? absorbedSourceOperations(summaryBlock, selected, distribution) : [];
+        summaryBlock.sections = summaryBlock.sections.filter((section) => !/^(分发事实|沉降分发|吸收来源)$/u.test(section.name));
         const plan = (0, operations_1.buildOperationPlan)([summaryBlock, ...distribution], entries, settings, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'), { sourceKind: 'summary', cleanupTemporaryAfterSummary: true, consumeSmallSummaryAfterLarge: kind === 'large', compactEventProgressFromSummary: true });
+        plan.operations.push(...absorption);
         const summaryText = `${summaryBlock.title}\n${summaryBlock.sections.flatMap((section) => section.lines).join('\n')}`;
         const applied = await this.apply(settings, plan, snapshot, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'), label, raw, { rebalanceKind: kind, summaryText });
         this.progress('running', `${label}已完成分发，正在重算召回状态`, { titles: [summaryBlock.title, ...distribution.map((block) => block.title)] });
@@ -6671,6 +6704,13 @@ function taskResultEntries(result) {
     return entries;
 }
 
+function resultChangedUids(result) {
+    return [...new Set((result?.receipt?.changes ?? []).map((change) => String(change?.uid ?? '').trim()).filter(Boolean))];
+}
+function mergePendingUids(left, right, limit = 96) {
+    return [...new Set([...(left ?? []), ...(right ?? [])].map((item) => String(item ?? '').trim()).filter(Boolean))].slice(-Math.max(1, Number(limit) || 96));
+}
+
 function ensureSummarySnapshotSections(block, kind) {
     const output = structuredClone(block);
     const expected = kind === 'small'
@@ -6700,7 +6740,7 @@ function ensureSummarySnapshotSections(block, kind) {
     for (const name of expected) {
         if (!merged.has(name)) merged.set(name, { name, lines: [], empty: true });
     }
-    const passthrough = ['分发事实', '沉降分发'].map((name) => merged.get(name)).filter(Boolean);
+    const passthrough = ['分发事实', '沉降分发', '吸收来源'].map((name) => merged.get(name)).filter(Boolean);
     output.sections = [...expected.map((name) => merged.get(name)), ...passthrough];
     return output;
 }
@@ -6715,29 +6755,45 @@ function summarySnapshotHasFacts(block, kind) {
     }));
 }
 
-function summaryEntries(kind, entries, snapshot) {
+function summaryEntries(kind, entries, snapshot, pendingUids = []) {
     const active = entries.filter((entry) => !entry.activation.disabled);
+    const pending = new Set((pendingUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
     if (kind === 'small') {
         const candidates = active.filter((entry) => entry.title !== '总结｜世界历史');
-        const required = [
-            ...candidates.filter((entry) => entry.title === '总结｜当前事件'),
-            ...candidates.filter((entry) => entry.type === '事件' && !(0, semantic_1.isEventClosed)(entry))
-                .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0)),
-        ];
-        const continuity = candidates
-            .filter((entry) => /^(事件|场景|时空)$/u.test(entry.type) || entry.title === '总结｜当前事件')
-            .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))
-            .slice(0, 10);
-        const relevant = (0, matcher_1.relevantEntries)(candidates, `${snapshot.playerText}\n${snapshot.assistantText}`, 36);
-        return [...new Map([...required, ...continuity, ...relevant].map((entry) => [entry.uid, entry])).values()].slice(0, 36);
+        const currentSummary = candidates.filter((entry) => entry.title === '总结｜当前事件');
+        let changed = candidates.filter((entry) => pending.has(String(entry.uid)) && entry.title !== '总结｜当前事件');
+        if (!changed.length) {
+            changed = candidates
+                .filter((entry) => entry.title !== '总结｜当前事件')
+                .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))
+                .slice(0, 16);
+        }
+        const changedText = changed.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
+        const context = [changedText, snapshot.playerText, snapshot.assistantText].filter(Boolean).join('\n\n');
+        const related = (0, matcher_1.relevantEntries)(
+            candidates.filter((entry) => !pending.has(String(entry.uid)) && entry.title !== '总结｜当前事件'),
+            context,
+            28,
+        );
+        return [...new Map([...currentSummary, ...changed, ...related].map((entry) => [entry.uid, entry])).values()].slice(0, 48);
     }
     const currentWorldHistory = active.filter((entry) => entry.title === '总结｜世界历史');
     const currentEvent = active.filter((entry) => entry.title === '总结｜当前事件');
     const requiredUids = new Set([...currentWorldHistory, ...currentEvent].map((entry) => entry.uid));
-    const stable = active.filter(hasStableSummaryMaterial)
-        .filter((entry) => !requiredUids.has(entry.uid))
-        .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
-    return [...new Map([...currentWorldHistory, ...currentEvent, ...stable].map((entry) => [entry.uid, entry])).values()].slice(0, 72);
+    let changed = active.filter((entry) => pending.has(String(entry.uid)) && !requiredUids.has(entry.uid));
+    if (!changed.length) {
+        changed = active.filter(hasStableSummaryMaterial)
+            .filter((entry) => !requiredUids.has(entry.uid))
+            .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))
+            .slice(0, 40);
+    }
+    const changedText = changed.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
+    const relatedStable = (0, matcher_1.relevantEntries)(
+        active.filter(hasStableSummaryMaterial).filter((entry) => !requiredUids.has(entry.uid) && !pending.has(String(entry.uid))),
+        changedText || '长期稳定结果',
+        28,
+    );
+    return [...new Map([...currentWorldHistory, ...currentEvent, ...changed, ...relatedStable].map((entry) => [entry.uid, entry])).values()].slice(0, 72);
 }
 function hasStableSummaryMaterial(entry) {
     const values = entry?.sections?.values ?? {};
@@ -6748,14 +6804,10 @@ function hasStableSummaryMaterial(entry) {
     return /^(世界|全局变化|基础设定)$/u.test(entry.type);
 }
 
-function summaryScope(entries, snapshot) {
-    const event = entries.find((entry) => entry.type === '事件' && !entry.activation.disabled);
-    if (event) return event.name;
-    const scene = entries.find((entry) => entry.type === '场景' && !entry.activation.disabled);
-    if (scene) return scene.name;
-    const existing = entries.find((entry) => entry.title === '总结｜当前事件');
-    if (existing) return existing.name;
-    return '当前事件线';
+function summaryScope(kind, entries, pendingUids = []) {
+    const count = new Set((pendingUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean)).size;
+    if (kind === 'small') return count ? `上次小总结后实际变更的${count}个世界书条目` : '近期实际变更的世界书条目';
+    return count ? `最近若干次小总结后实际变更的${count}个运行条目` : '已经整理并趋于稳定的运行条目';
 }
 function distributionBlocksFromSummary(summaryBlock) {
     const section = summaryBlock.sections.find((item) => /^(分发事实|沉降分发)$/u.test(item.name));
@@ -6899,6 +6951,44 @@ function splitExtractionSource(value, maxChars = 420, maxSegments = 6) {
 function isReasoningOrEmptyError(error) {
     return error?.code === 'MA_REASONING_ONLY' || error?.code === 'MA_EMPTY_MODEL_RESPONSE'
         || /只返回了推理内容|没有最终文本|未解析出最终文本/u.test((0, util_1.errorText)(error));
+}
+
+
+function absorbedSourceOperations(summaryBlock, selectedEntries, distributionBlocks) {
+    const section = summaryBlock.sections.find((item) => item.name === '吸收来源');
+    if (!section || section.empty) return [];
+    const eligible = new Map((selectedEntries ?? [])
+        .filter((entry) => entry.type === '事件' && entry.managed === true && entry.locked !== true && entry.focus !== true)
+        .map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
+    const distributedTargets = new Set((distributionBlocks ?? [])
+        .filter((block) => block.type === '事件')
+        .map((block) => (0, util_1.normalizeTitle)(block.title)));
+    const operations = [];
+    const deleted = new Set();
+    for (const rawLine of section.lines ?? []) {
+        const match = String(rawLine ?? '').match(/^\s*事件\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*并入\s*[｜|丨]\s*事件\s*[｜|丨]\s*(.+?)\s*$/u);
+        if (!match) continue;
+        const sourceTitle = `事件｜${match[1].trim()}`;
+        const targetTitle = `事件｜${match[2].trim()}`;
+        const source = eligible.get((0, util_1.normalizeTitle)(sourceTitle));
+        const normalizedTarget = (0, util_1.normalizeTitle)(targetTitle);
+        if (!source || deleted.has(source.uid) || (0, util_1.normalizeTitle)(source.title) === normalizedTarget || !distributedTargets.has(normalizedTarget)) continue;
+        operations.push({
+            id: `summary-absorb:${source.uid}:${(0, util_1.hashText)(normalizedTarget)}`,
+            kind: 'delete-entry',
+            operation: 'delete',
+            title: source.title,
+            targetUid: source.uid,
+            oldValue: source.title,
+            newValue: '删除',
+            reason: `小总结已将该细颗粒事件完整抽象并分发到“${targetTitle}”`,
+            mergedIntoTitle: targetTitle,
+            requiresDistributionProof: true,
+            distributionTargets: [targetTitle],
+        });
+        deleted.add(source.uid);
+    }
+    return operations;
 }
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
@@ -13616,62 +13706,110 @@ ${existing || '（无）'}
 function summaryPrompts(kind, settings, entries, subject, recentConversation = '', options = {}) {
     const isSmall = kind === 'small';
     const compact = options.compact === true;
+    const pending = new Set((options.pendingUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
+    const allEntries = Array.isArray(options.allEntries) ? options.allEntries : entries;
+    const changedEntries = entries.filter((entry) => pending.has(String(entry.uid)));
+    const workingEntries = changedEntries.length ? changedEntries : entries.filter((entry) => !/^总结[｜|丨]/u.test(entry.title));
+    const relatedEntries = entries.filter((entry) => !workingEntries.some((changed) => changed.uid === entry.uid));
+    const index = extractionWorldbookIndex(allEntries, compact);
     const custom = clipText((isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim(), compact ? 900 : 1800);
     const system = isSmall
-        ? `你是 Mirror Abyss 当前事件压缩器。
+        ? `你是 Mirror Abyss 近期世界书整理器。
 
-你的任务不是续写、安排剧情或判断未来，而是把已经发生的同一变化链压缩，并把稳定影响分发回权威宿主。
+你会收到【权威世界书轻量索引】、【本期实际变更条目】、【直接关联条目】与最近聊天。你的任务不是续写剧情，而是把近期提取形成的细颗粒内容，整理成适合继续游玩的较粗世界书结构。
 
-判断标准：
-1. 【已发生进展】只保留已经造成状态、关系、控制、资源、能力或直接因果变化的事实。
-2. 【未发生进展】只表示“已经发生但没有造成状态变化”的必要过程材料；它不是未完成目标、待办、未决事项或未来计划。
-3. 普通移动、开门、落座、视线、表情、寒暄、重复确认和当轮立即恢复的轻微状态直接过滤。
-4. 小动作若是后续结果不可缺少的直接因果证据，可以吸收到一条进展中，但不得独立保存。
-5. 同一参与者、稳定场景和直接因果连续的内容必须合并；不得按动作、段落或地点局部区域拆成多个事件。
-6. 已有活动事件的进展必须压缩覆盖旧进展，不得把旧过程重新抄一遍后继续追加；已经有明确【结果】的完成事件不得重新写入活动进展或重新打开。
-7. 不得输出“下一步、仍需、等待、是否、可能、计划、目标、未决”等未来导向内容。
-8. 不得输出 UID、删除、归档、退出或操作命令。
+【核心锚点】
+- 本期变更条目：上次小总结后，提取链实际新建或更新过的世界书条目，是本次整理的主材料。
+- 直接关联条目：与主材料存在对象、因果、目标、场景、规则或引用关系的既有条目，只用于校准归属与避免重复。
+- 语义簇：围绕同一作用对象、持续目标或直接因果形成的一组变化；场景只是判断维度之一。
+- 游玩颗粒度：能够直接支持后续剧情运行，但不保留动作流水、重复角度和过细阶段壳的表达层级。
+- 吸收来源：已经被更粗目标条目完整承接、因而可以退出的细颗粒事件条目。
 
-严格输出：
+【处理路径】
+1. 先以本期实际变更条目确定整理范围，再用权威索引和关联条目寻找已有宏观宿主。
+2. 按作用对象、直接因果、持续目标、时间连续性、场景关系和规则范围形成语义簇；不得只按类型或单一场景分组。
+3. 将每个语义簇抽象成较粗的当前运行状态、事件阶段、局部机制或明确结果。
+4. 把粗化后的事实分发回最直接的权威宿主；同一事实只保留一个详细宿主。
+5. 只有某个细颗粒事件已被目标事件完整表达时，才在【吸收来源】中声明并入；部分承接或仍有独立目标时必须保留。
+
+【颗粒度边界】
+- 人物：把连续的身体、能力、立场、关系、持有和认知变化整理成当前可用的人物状态；不要保留动作流水。
+- 场景：把设施、通路、资源、在场与局部条件整理成场景运行状态；场景不是全部内容的唯一作用域。
+- 物品：把取得、转移、使用、损坏和功能变化整理成可追踪的物品状态。
+- 事件：把目标和直接因果连续的小阶段整理成适合持续游玩的事件进展；同一大场景中的独立目标不得强行合并，小场景变化也不自动拆分同一因果链。
+- 世界：整理跨单一人物或场景、但仍会随剧情变化的组织、制度、权力、资源网络和公开局势。
+- 基础设定：整理已经明确成立、作用范围跨场景且不随普通剧情变化的规则。规则可以在一次剧情中被正式建立；角色猜测、传闻和无解释异常不能晋升为规则。
+
+【重点规则】
+- 小总结处理的是近期实际变更的全部业务条目，不是只处理第一个活动事件。
+- 抽象必须提高语义颗粒度，但不得扩大事实作用范围、补写因果或把局部特例改成世界通则。
+- 已有宏观宿主优先更新；没有合适宿主时才建立新条目。
+- 当前状态、局部机制和阶段结果可以覆盖旧的同类快照；长期永久性结论留给大总结固化。
+- 普通移动、开门、落座、视线、表情、寒暄、重复确认和当轮立即恢复的轻微状态直接过滤。
+- 不得输出未来目标、待办、未决、推测、计划、UID、删除命令或解释。
+
+【唯一输出格式】
 总结｜当前事件
 
 【已发生进展】
-- 最多4条压缩后的状态变化
+- 最多4条：本期细颗粒内容抽象后的阶段变化或当前运行结果
 
 【未发生进展】
-- 最多2条尚未被吸收、但对当前连续性仍必要的已发生材料；没有则写“- 无”
+- 最多2条：已经发生但尚未被更粗结果吸收、且对近期连续性仍必要的材料；没有则写“- 无”
 
 【稳定影响】
-- 已经持续成立并需要写回人物、场景、物品、世界或基础设定的结果；没有则写“- 无”
+- 已经形成、可直接用于后续游玩的对象状态、局部机制或阶段性影响；没有则写“- 无”
 
 【分发事实】
 - 类型｜稳定名称｜小标题｜完整事实句
 
-分发规则：
-- 只允许把压缩后的活动事件完整快照写回对应事件：事件｜稳定名称｜已发生进展｜完整压缩事实。已完成事件不得重新写入进展。
-- 若存在必要的未发生进展，写：事件｜稳定名称｜未发生进展｜完整事实；若当前没有必要材料，仍写：事件｜稳定名称｜未发生进展｜无，用于覆盖旧的暂存过程。
-- 稳定影响写回人物、场景、物品、世界或基础设定的权威栏目。
-- 同一事实只分发一次，不得同时保留长事件叙述和对象固定事实的同义复述。
-- 没有分发事实时写“- 无”。
+【吸收来源】
+- 事件｜来源稳定名称｜并入｜事件｜目标稳定名称
 
-没有可压缩内容时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`
-        : `你是 Mirror Abyss 长期历史沉降器。
+分发与吸收规则：
+- 分发事实必须是抽象后的较粗表达，不得逐条翻写原始细节。
+- 事件进展写回事件【已发生进展】；当前没有必要暂存材料时，可写“事件｜稳定名称｜未发生进展｜无”覆盖旧暂存。
+- 人物、场景、物品、世界和基础设定分别写回其直接栏目。
+- 【吸收来源】当前只允许完整吸收事件壳；目标事件必须同时出现在【分发事实】中。没有可安全吸收的来源时写“- 无”。
+- 没有可整理内容时只输出“无”。
 
-你的输入只能视为已经压缩过的历史材料。你的任务是用更短的长期结果覆盖旧世界历史，并把尚未写入权威宿主的稳定影响分发出去。
+【示范】
+本期出现“切断长廊栅栏”“跨过拱桥”“进入祭坛”三个细事件，并确认祭坛终端永久失效。可整理为：
+- 事件｜旧神殿探索｜已发生进展｜已解除长廊阻断并进入中央祭坛阶段。
+- 场景｜中央祭坛｜当前状态｜圣化终端已经永久失效。
+三个细事件只有在上述进展完整承接其有效信息时，才可在【吸收来源】中并入“事件｜旧神殿探索”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`
+        : `你是 Mirror Abyss 长期世界结构固化器。
 
-只保留：
-- 已经形成并持续成立的人物变化、长期关系和身份结果；
-- 已经形成明确结果且具有长期检索价值的重要事件；
-- 已经改变场景、物品、组织、制度、权力、资源网络或世界规则的稳定结果。
+你会收到【权威世界书轻量索引】、最近若干次小总结后实际变更的运行条目与关联条目。你的任务是把已经整理过的游玩颗粒度内容，继续抽象为跨场景、跨阶段仍然有效的长期事实、历史结果和系统规则。
 
-必须过滤：
-- 【未发生进展】中的全部材料；
-- 普通动作、过程流水、场景内移动、普通对话和短暂情绪；
-- 未来目标、未决事项、推测和计划；
-- 已经被更高密度结果完整覆盖的旧叙述；
-- 已经在当前“总结｜世界历史”中以同义表达存在的内容。
+【核心锚点】
+- 运行条目：已经经过小总结整理、仍直接参与近期剧情运行的状态和阶段结果。
+- 长期事实：脱离当前局部过程后仍然成立，并会持续影响后续的权威内容。
+- 历史结果：已经完成、值得长期检索的重要事件结论，不保留过程流水。
+- 系统规则：已经明确建立并具有相应广泛作用范围的制度、机制或世界规则；一次明确且永久的剧情建立即可成立。
 
-严格输出：
+【处理路径】
+1. 以最近若干次小总结后实际变更的运行条目为主材料，用权威索引检查已有长期宿主。
+2. 判断哪些内容已经跨场景、跨阶段或明确永久成立；短期状态、局部过程和仍依赖当前事件条件的内容不固化。
+3. 将多条运行状态进一步抽象为人物长期变化、重要事件结果、长期关系、组织制度变化或稳定世界规则。
+4. 把长期结果分发到最直接的权威宿主，并用更高密度表达覆盖旧世界历史中的同义内容。
+
+【颗粒度边界】
+- 人物：长期身份、能力、身体、立场、关系和持续特征。
+- 场景：永久性结构、设施、资源和长期影响；普通当前快照不进入长期历史。
+- 物品：长期归属、永久损坏、稳定功能与限制。
+- 事件：只保留明确结果和长期影响，不保留阶段过程。
+- 世界：区域、组织、制度、权力、资源网络和公开格局的长期变化。
+- 基础设定：跨场景且不随普通剧情变化的规则；明确永久建立的新规则可首次出现即固化，猜测和局部特例不得升级。
+
+【重点规则】
+- 大总结只接收已经整理过的运行材料，不重新处理原始动作流水。
+- 只固化长期有效的结果，不把“当前、暂时、仍依赖条件”的状态改写成永久事实。
+- 同一事实只分发一次；已有权威宿主中的同义内容不得重复建立。
+- 已结束重要事件可以保留结果和一条高密度进展；不得重新打开或写入未发生进展。
+- 不得输出未来目标、计划、推测、UID、删除、归档或操作命令。
+
+【唯一输出格式】
 总结｜世界历史
 
 【长期变化】
@@ -13690,19 +13828,25 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 类型｜稳定名称｜小标题｜完整事实句
 
 分发规则：
-- 只分发稳定结果，不分发过程。
+- 只分发较粗的长期结果，不分发过程。
 - 已经存在于权威宿主的同义事实不得再次分发。
 - 若事件已经形成结果，可写回事件【结果】和一条压缩后的【已发生进展】；不得分发【未发生进展】。
-- 不得输出 UID、删除、归档、退出或操作命令。
 - 没有分发事实时写“- 无”。
+- 本次输出覆盖旧“总结｜世界历史”的对应栏目，不得追加一套重复历史。没有新的长期结果时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
+    const changedLabel = isSmall ? '本期实际变更条目' : '本期小总结后实际变更的运行条目';
+    const recent = isSmall ? `\n\n【最近聊天】\n${clipText(recentConversation || '（无）', compact ? 7000 : 11000)}` : '';
+    const user = `【处理范围】\n${subject || (isSmall ? '近期世界书变更整理' : '长期世界结构固化')}
 
-本次输出必须覆盖旧“总结｜世界历史”的对应栏目，不得追加一套重复历史。没有新的长期结果时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
-    const recent = isSmall ? `\n\n最近聊天（只用于确认本轮已经发生的变化，不得提取未来）：\n${clipText(recentConversation || '（无）', compact ? 7000 : 11000)}` : '';
-    const user = `处理范围：
-${subject || (isSmall ? '当前事件压缩' : '长期历史沉降')}${recent}
+【权威世界书轻量索引】
+${index || '（无）'}
 
-相关世界书：
-${entries.slice(0, compact ? (isSmall ? 8 : 14) : (isSmall ? 16 : 30)).map((entry) => entryForPrompt(entry, compact ? 500 : 820)).join('\n\n') || '（无）'}`;
+【${changedLabel}】
+${workingEntries.slice(0, compact ? 10 : 24).map((entry) => entryForPrompt(entry, compact ? 560 : 920)).join('\n\n') || '（无）'}
+
+【直接关联条目】
+${relatedEntries.slice(0, compact ? 8 : 18).map((entry) => entryForPrompt(entry, compact ? 420 : 680)).join('\n\n') || '（无）'}${recent}
+
+按规定格式完成颗粒度升阶、重新分发和必要的事件来源吸收。`;
     return { system, user };
 }
 
@@ -14436,11 +14580,13 @@ exports.DEFAULT_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判
 只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
 const LEGACY_EXTRACTION_PROMPT_UI50 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `将已经压缩完成的事件结果和稳定变化沉降为长期历史；覆盖旧世界历史，不接收普通动作、未发生进展、未来目标或重复过程，只分发长期有效的结果。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `以上次小总结后实际变更的世界书条目为主材料，按对象、目标、因果、时间、场景和规则范围形成语义簇；将细颗粒内容抽象为适合继续游玩的较粗状态、事件进展和局部机制，重新分发到直接宿主，并只吸收已经被目标事件完整承接的细事件壳。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
 exports.DEFAULT_EXTRACTION_PROMPT = `优先更新上一轮权威条目；只输出本轮变化；正式姓名、身份、外形或状态变化继续更新原人物条目；同一事实写入最直接宿主。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
+const LEGACY_SMALL_SUMMARY_PROMPT_UI51 = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
+const LEGACY_LARGE_SUMMARY_PROMPT_UI51 = `将已经压缩完成的事件结果和稳定变化沉降为长期历史；覆盖旧世界历史，不接收普通动作、未发生进展、未来目标或重复过程，只分发长期有效的结果。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI23 = `结算当前事件线；保留当前场景、人物状态、事件阶段、已成立结果和未决事项，并把持续影响分发到人物、场景、物品或世界。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI23 = `整理跨场景仍需保留的长期影响；关系并入人物，地点并入场景，可变化的宏观状态进入世界，稳定世界框架进入基础设定，只分发永久变化和重大结果。`;
 exports.DEFAULT_SETTINGS = Object.freeze({
@@ -14576,8 +14722,8 @@ function parseSettings(value) {
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
         extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI50], exports.DEFAULT_EXTRACTION_PROMPT),
-        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, LEGACY_SMALL_SUMMARY_PROMPT_UI23, exports.DEFAULT_SMALL_SUMMARY_PROMPT),
-        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, LEGACY_LARGE_SUMMARY_PROMPT_UI23, exports.DEFAULT_LARGE_SUMMARY_PROMPT),
+        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 1, 100),

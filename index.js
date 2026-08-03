@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.51-authoritative-diff. */
+/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.52-summary-granularity. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
