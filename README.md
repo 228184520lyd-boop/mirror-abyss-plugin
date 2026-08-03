@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.50-no-activity-pack
+# Mirror Abyss 2.0.0-lite.ui.51-authoritative-diff
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -23,7 +23,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.50-no-activity-pack 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.51-authoritative-diff 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -94,12 +94,14 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 本地矩阵验证插件可控的有限状态、故障注入和宿主模拟，不等同于对所有第三方模型和网关的永久可用性保证。真实环境结果以插件导出的自动验收报告为准。
 
 
-## 2.0.0-lite.ui.50-no-activity-pack 本轮改动
+## 2.0.0-lite.ui.51-authoritative-diff 本轮改动
 
-- 完整移除已经停用的活动包运行投影模块。
-- 世界书不再生成、刷新或验证 `运行包｜当前活动` 条目。
-- 删除活动包设置、预算、诊断、UI、状态和专用召回分支。
-- 固定使用 SillyTavern 原生常驻、关键词、递归与向量召回。
-- 后续世界书写事务会清理旧版本遗留的活动包条目，但不会重新创建。
-- API Profile、审核、提取、总结、世界书事务、回执、回滚和重建主链保持不变。
-- 本版本实机确认后进入性格栏、普通 NPC 升级和大事件结算的第二阶段开发。
+- 提取模型不再只接收最多 6 条相关候选，而是接收上一轮全部业务世界书条目的轻量视图。
+- 上一轮世界书作为本轮唯一权威底稿；模型优先沿用旧类型和旧标题，只填写本轮差异，没有宿主时才新建。
+- 保持原 `ENTRY / KEYWORDS / CONTENT / END_ENTRY` 文本协议，不引入 JSON、UID、概率或第二次匹配请求。
+- 内置提取提示词收敛为少量锚点、统一元词汇、正向路径、栏目边界、少量重点规则和一个示范。
+- 单轮最多 8 条、最多 1 个当前场景的解析约束保持不变；旧场景快照仍由插件确定性结算。
+- 分段提取救援继续携带同一份权威世界书轻量视图。
+- ui.50 旧内置提示词自动迁移到新默认；用户自定义提取要求保持不变。
+- API Profile、审核、修正、总结、事务、回执、回滚、原生召回和活动包移除结果不变。
+- 详细范围与重合审计见 `PATCH-SCOPE.md`，固定验证见 `AUTHORITATIVE-DIFF-VALIDATION.md`。
