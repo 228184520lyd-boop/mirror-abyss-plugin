@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.48-api-profile-secret
+# Mirror Abyss 2.0.0-lite.ui.50-no-activity-pack
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -23,7 +23,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.48-api-profile-secret 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.50-no-activity-pack 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -94,11 +94,12 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 本地矩阵验证插件可控的有限状态、故障注入和宿主模拟，不等同于对所有第三方模型和网关的永久可用性保证。真实环境结果以插件导出的自动验收报告为准。
 
 
-## 2.0.0-lite.ui.48-api-profile-secret 本轮改动
+## 2.0.0-lite.ui.50-no-activity-pack 本轮改动
 
-- Chat Completion Profile 优先复用 SillyTavern 官方 `ChatCompletionService.processRequest`，显式传递所选 Profile 的 `secret-id`、模型、自定义 URL 和 API 映射。
-- 命名代理、Text Completion 或宿主未暴露直达服务时，继续使用官方 `ConnectionManagerRequestService.sendRequest`。
-- 设置页显示所选 Profile 的密钥绑定状态和实际官方请求路径。
-- 401/未授权错误区分“Profile 未绑定 Secret ID”和“已绑定密钥被上游拒绝”。
-- 插件不读取、显示或保存原始 API Key，也不直接请求第三方模型端点。
-- ui.47 的世界书唯一宿主、原生召回、提取协议和事务逻辑全部保持不变。
+- 完整移除已经停用的活动包运行投影模块。
+- 世界书不再生成、刷新或验证 `运行包｜当前活动` 条目。
+- 删除活动包设置、预算、诊断、UI、状态和专用召回分支。
+- 固定使用 SillyTavern 原生常驻、关键词、递归与向量召回。
+- 后续世界书写事务会清理旧版本遗留的活动包条目，但不会重新创建。
+- API Profile、审核、提取、总结、世界书事务、回执、回滚和重建主链保持不变。
+- 本版本实机确认后进入性格栏、普通 NPC 升级和大事件结算的第二阶段开发。

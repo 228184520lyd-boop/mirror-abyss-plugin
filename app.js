@@ -1,404 +1,5 @@
-/** Mirror Abyss 2.0.0-lite.ui.48-api-profile-secret — governed worldbook storage, source-level host boundaries, native recall dispatch, and hard content budgets. */
-var MA_MODULES={"activity-pack":function(module,exports,require){
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.compileActivityPack = compileActivityPack;
-exports.activityPackSections = activityPackSections;
-exports.activityPackBudget = activityPackBudget;
-const governance_1 = require("./governance");
-const util_1 = require("./util");
-
-const SECTION_LIMITS = Object.freeze({
-    核心规则: 260,
-    当前时空: 180,
-    当前场景: 260,
-    现场人物: 900,
-    关键物品: 300,
-    当前事件: 300,
-    生效规则: 220,
-    必要历史: 260,
-});
-
-function compileActivityPack(entries, options = {}) {
-    const list = (entries ?? []).filter((entry) => entry?.title !== governance_1.ACTIVITY_PACK_TITLE);
-    const focusUid = String(options.focusUid ?? '');
-    const context = (0, governance_1.activeContext)(list, focusUid, options.currentSceneTitle || '');
-    const gameTime = options.gameTime ?? inferGameTimeFromSceneEntry(context.scene);
-    const budget = activityPackBudget(context.characters.length);
-    if (Number(options.hardMax) > 0) {
-        budget.configuredHardMax = Math.max(600, Math.min(4000, Number(options.hardMax)));
-        budget.hardMax = budget.configuredHardMax;
-        budget.target = Math.min(budget.target, budget.hardMax);
-    }
-    const sections = activityPackSections(list, context, gameTime, budget);
-    const contentLength = measureSerializedSections(sections);
-    const diagnostics = activityDiagnostics(list, context, sections, budget, contentLength);
-    return {
-        rawTitle: governance_1.ACTIVITY_PACK_TITLE,
-        title: governance_1.ACTIVITY_PACK_TITLE,
-        type: '运行包',
-        name: '当前活动',
-        keywords: ['当前活动'],
-        sections,
-        budget,
-        contentLength,
-        diagnostics,
-    };
-}
-function inferGameTimeFromSceneEntry(scene) {
-    const lines = ['当前状态', '定义'].flatMap((section) => scene?.sections?.values?.[section] ?? []);
-    const match = lines.map((line) => String(line ?? '').match(/(?:^|[，。；;\s])(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])\s*([^，。；;]+)/u)).find(Boolean);
-    const label = String(match?.[1] ?? '').trim();
-    return label ? { label, sceneTitle: scene?.title ?? '', source: 'scene-fallback' } : null;
-}
-
-function activityPackBudget(characterCount) {
-    const characters = Math.max(0, Math.min(6, Number(characterCount || 0)));
-    return {
-        target: Math.min(1800, 760 + characters * 180),
-        hardMax: Math.min(2200, 980 + characters * 210),
-        configuredHardMax: Math.min(2200, 980 + characters * 210),
-        characterCount: characters,
-    };
-}
-
-function activityPackSections(entries, context, gameTime, budget) {
-    const foundations = entries.filter((entry) => entry.type === '基础设定');
-    const currentScene = context.scene;
-    const activeEvent = selectActiveEvent(context.activeEvents, currentScene, context.characters);
-    const characters = prioritizeCharacters(context.characters, context.focus, activeEvent);
-    const activeItems = selectActiveItems(entries, currentScene, characters, activeEvent);
-    const relationIndex = (0, governance_1.buildDirectRelationIndex)(entries);
-    const history = selectNecessaryHistory(entries, activeEvent, currentScene, characters, relationIndex);
-    const sections = [];
-    pushSection(sections, '核心规则', compactEntries(foundations, ['世界常识', '自然规则', '社会规则', '能力与技术'], SECTION_LIMITS.核心规则, 4));
-    const timeLines = [];
-    if (gameTime?.label) timeLines.push(`当前游戏时间：${gameTime.label}`);
-    if (currentScene?.name) timeLines.push(`当前场景：${currentScene.name}`);
-    pushSection(sections, '当前时空', timeLines);
-    pushSection(sections, '当前场景', compactScene(currentScene));
-    pushSection(sections, '现场人物', compactCharacters(characters, SECTION_LIMITS.现场人物));
-    pushSection(sections, '关键物品', compactItems(activeItems, SECTION_LIMITS.关键物品));
-    pushSection(sections, '当前事件', compactEvent(activeEvent, SECTION_LIMITS.当前事件));
-    pushSection(sections, '生效规则', compactApplicableRules(entries, currentScene, activeEvent));
-    pushSection(sections, '必要历史', history.map((entry) => compactHistory(entry)).filter(Boolean));
-    return trimSectionsToBudget(sections, budget.hardMax);
-}
-
-function pushSection(sections, name, lines) {
-    const clean = (0, util_1.unique)((lines ?? []).map(cleanLine).filter(Boolean));
-    if (!clean.length) return;
-    sections.push({ name, lines: clean, empty: false });
-}
-function cleanLine(value) {
-    return String(value ?? '').replace(/^\s*[-*]\s*/u, '').replace(/\s+/gu, ' ').trim();
-}
-function compactEntries(entries, sectionNames, maxChars, maxLines) {
-    const lines = [];
-    for (const entry of entries) {
-        for (const section of sectionNames) {
-            for (const line of entry.sections?.values?.[section] ?? []) {
-                const cleaned = cleanLine(line);
-                if (!cleaned) continue;
-                lines.push(cleaned);
-                if (lines.length >= maxLines) return fitLines(lines, maxChars);
-            }
-        }
-    }
-    return fitLines(lines, maxChars);
-}
-function compactScene(scene) {
-    if (!scene) return [];
-    const lines = [];
-    for (const section of ['定义', '当前状态', '在场', '活动关联', '局部约束']) {
-        for (const line of scene.sections?.values?.[section] ?? []) {
-            if (section === '在场') lines.push(`在场：${stripLabel(line)}`);
-            else if (section === '活动关联') lines.push(`活动：${stripLabel(line)}`);
-            else lines.push(cleanLine(line));
-        }
-    }
-    const fixedRoles = scene.sections?.values?.['常驻角色'] ?? [];
-    if (fixedRoles.length) lines.push(`场景固定角色：${fixedRoles.slice(0, 3).map(stripLabel).join('；')}`);
-    return fitLines(lines, SECTION_LIMITS.当前场景);
-}
-function compactCharacters(characters, maxChars) {
-    const output = [];
-    let used = 0;
-    const selected = characters.slice(0, 6);
-    const perCharacter = Math.max(140, Math.floor(maxChars / Math.max(1, selected.length)));
-    for (const entry of selected) {
-        const parts = [];
-        for (const [label, section, cap] of [
-            ['身份', '身份', 1],
-            ['性格', '性格核心', 2],
-            ['表达', '表达方式', 2],
-            ['决策', '决策倾向', 2],
-            ['关系', '关系立场', 2],
-            ['当前', '当前', 3],
-        ]) {
-            const lines = (entry.sections?.values?.[section] ?? []).slice(0, cap).map(stripLabel).filter(Boolean);
-            if (lines.length) parts.push({ label, lines });
-        }
-        if (!parts.some((item) => item.label === '性格')) {
-            const stable = (entry.sections?.values?.['稳定'] ?? []).slice(0, 2).map(stripLabel).filter(Boolean);
-            if (stable.length) parts.push({ label: '稳定', lines: stable });
-        }
-        if (!parts.length) continue;
-        let line = renderCharacterLine(entry.name, parts);
-        if (line.length > perCharacter) line = compressCharacterLine(entry.name, parts, perCharacter);
-        if (!line) continue;
-        if (used + line.length > maxChars && output.length) break;
-        if (line.length > maxChars) continue;
-        output.push(line);
-        used += line.length;
-    }
-    return output;
-}
-function renderCharacterLine(name, parts) {
-    return `${name}｜${parts.map((item) => `${item.label}：${item.lines.join('；')}`).join('｜')}`;
-}
-function compressCharacterLine(name, parts, maxLength) {
-    const required = ['身份', '性格', '表达', '决策', '当前'];
-    const ordered = [...parts].sort((left, right) => {
-        const a = required.includes(left.label) ? required.indexOf(left.label) : required.length + 1;
-        const b = required.includes(right.label) ? required.indexOf(right.label) : required.length + 1;
-        return a - b;
-    });
-    for (const partMax of [34, 28, 22, 18]) {
-        const compacted = ordered.map((item) => {
-            const value = compactPackLine(item.lines.join('；'), partMax);
-            return value ? { label: item.label, lines: [value] } : null;
-        }).filter(Boolean);
-        const line = renderCharacterLine(name, compacted);
-        if (line.length <= maxLength) return line;
-    }
-    // 关系是条件信息；硬预算下最后移除关系，但五个生成约束栏目不主动删除。
-    const core = ordered.filter((item) => item.label !== '关系').map((item) => {
-        const value = compactPackLine(item.lines.join('；'), 18);
-        return value ? { label: item.label, lines: [value] } : null;
-    }).filter(Boolean);
-    const line = renderCharacterLine(name, core);
-    return line.length <= maxLength ? line : '';
-}
-function selectActiveItems(entries, scene, characters, event) {
-    const items = (entries ?? []).filter((entry) => entry?.type === '物品');
-    if (!items.length) return [];
-    const characterText = characters.map((entry) => [
-        ...(entry.sections?.values?.['持有'] ?? []),
-        ...(entry.sections?.values?.['当前'] ?? []),
-    ].join('；')).join('；');
-    const sceneText = [
-        ...(scene?.sections?.values?.['当前资源'] ?? []),
-        ...(scene?.sections?.values?.['固定资源'] ?? []),
-    ].join('；');
-    const eventBody = event ? `${event.name}
-${event.content ?? ''}` : '';
-    const activeCharacterNames = characters.map((entry) => (0, util_1.normalizeFact)(entry.name)).filter(Boolean);
-    const sceneName = (0, util_1.normalizeFact)(scene?.name ?? '');
-    return items.map((entry) => {
-        const terms = (0, util_1.unique)([entry.name, ...(entry.aliases ?? []), ...(entry.keywords ?? [])])
-            .map(util_1.normalizeFact).filter((value) => value && value.length >= 2);
-        const mentioned = (text) => {
-            const normalized = (0, util_1.normalizeFact)(text);
-            return terms.some((term) => normalized.includes(term));
-        };
-        const current = entry.sections?.values?.['当前'] ?? [];
-        const facts = entry.sections?.values?.['固定事实'] ?? [];
-        const itemText = (0, util_1.normalizeFact)(`${current.join('；')}；${facts.join('；')}`);
-        let score = 0;
-        if (mentioned(characterText)) score += 10;
-        if (mentioned(sceneText)) score += 8;
-        if (mentioned(eventBody)) score += 5;
-        if (activeCharacterNames.some((name) => name && itemText.includes(name))) score += 8;
-        if (sceneName && itemText.includes(sceneName)) score += 6;
-        return { entry, score, updatedAt: Number(entry.updatedAt || 0) };
-    }).filter((item) => item.score > 0)
-        .sort((left, right) => right.score - left.score || right.updatedAt - left.updatedAt || left.entry.title.localeCompare(right.entry.title, 'zh-CN'))
-        .slice(0, 3).map((item) => item.entry);
-}
-function compactItems(items, maxChars) {
-    const lines = [];
-    for (const entry of items ?? []) {
-        const parts = [];
-        const current = (entry.sections?.values?.['当前'] ?? []).slice(0, 2).map(cleanLine).filter(Boolean);
-        const facts = (entry.sections?.values?.['固定事实'] ?? []).slice(-2).map(stripLabel).filter(Boolean);
-        const limits = (entry.sections?.values?.['限制'] ?? []).slice(0, 1).map(stripLabel).filter(Boolean);
-        if (current.length) parts.push(current.join('；'));
-        if (facts.length) parts.push(`事实：${facts.join('；')}`);
-        if (limits.length) parts.push(`限制：${limits.join('；')}`);
-        if (!parts.length) continue;
-        lines.push(`${entry.name}｜${parts.join('｜')}`);
-    }
-    return fitLines(lines, maxChars);
-}
-function compactEvent(event, maxChars) {
-    if (!event) return [];
-    const lines = [];
-    const participants = (event.sections?.values?.['参与'] ?? []).flatMap(splitNames);
-    if (participants.length) lines.push(`参与：${(0, util_1.unique)(participants).join('、')}`);
-    for (const section of ['已发生进展', '结果']) {
-        for (const line of event.sections?.values?.[section] ?? []) lines.push(cleanLine(line));
-    }
-    return fitLines(lines, maxChars);
-}
-function compactApplicableRules(entries, scene, event) {
-    const names = new Set([scene?.name, event?.name, ...eventNames(event)].filter(Boolean).map(util_1.normalizeFact));
-    const rules = entries.filter((entry) => /^(?:世界|基础设定)$/u.test(entry.type) && entry.type !== '基础设定');
-    const selected = rules.filter((entry) => {
-        const text = (0, util_1.normalizeFact)(`${entry.title}\n${entry.content}`);
-        return [...names].some((name) => name && text.includes(name));
-    });
-    return compactEntries(selected, ['制度', '固定事实', '持续影响', '公开局势'], SECTION_LIMITS.生效规则, 3);
-}
-function compactHistory(entry) {
-    const results = (entry.sections?.values?.['结果'] ?? []).slice(0, 1).map(cleanLine);
-    const progress = (entry.sections?.values?.['已发生进展'] ?? []).slice(-1).map(cleanLine);
-    const body = [...results, ...progress].filter(Boolean).slice(0, 1)[0];
-    if (!body) return '';
-    // Intermediate occupancy/stage snapshots become false current facts after a
-    // later event closes.  They belong in warehouse history, not the live pack.
-    const transient = /(?:仅余|只剩|仍有|仍在|正在|进入第.{0,8}阶段|暂时|尚有|尚未)/u.test(body);
-    const terminal = /(?:完成|结束|失败|终止|撤退|撤离|离开|死亡|摧毁|解除|恢复)/u.test(body);
-    return transient && !terminal ? '' : `${entry.name}：${body}`;
-}
-function selectActiveEvent(events, scene, characters) {
-    const names = new Set(characters.map((entry) => (0, util_1.normalizeFact)(entry.name)));
-    const sceneName = (0, util_1.normalizeFact)(scene?.name ?? '');
-    return [...(events ?? [])].sort((left, right) => {
-        const score = (entry) => {
-            const text = (0, util_1.normalizeFact)(`${entry.content}\n${entry.name}`);
-            let value = Number(entry.updatedAt || 0) / 1e13;
-            if (sceneName && text.includes(sceneName)) value += 4;
-            for (const name of names) if (name && text.includes(name)) value += 2;
-            return value;
-        };
-        return score(right) - score(left);
-    })[0] ?? null;
-}
-function prioritizeCharacters(characters, focus, event) {
-    const participants = new Set(eventNames(event).map(util_1.normalizeFact));
-    return [...characters].sort((left, right) => {
-        const score = (entry) => Number(entry === focus || entry.focus === true) * 10 + Number(participants.has((0, util_1.normalizeFact)(entry.name))) * 5 + Number(entry.updatedAt || 0) / 1e13;
-        return score(right) - score(left) || left.title.localeCompare(right.title, 'zh-CN');
-    });
-}
-function selectNecessaryHistory(entries, event, scene, characters, relationIndex = new Map()) {
-    if (!event) return [];
-    const activeNames = new Set([...eventNames(event), ...characters.map((entry) => entry.name)].map(util_1.normalizeFact));
-    const sceneName = (0, util_1.normalizeFact)(scene?.name ?? '');
-    const seedUids = new Set([event?.uid, scene?.uid, ...characters.map((entry) => entry.uid)].filter(Boolean).map(String));
-    return entries
-        .filter((entry) => entry.type === '事件' && (0, governance_1.currentEventState)(entry) === 'completed' && entry.uid !== event.uid)
-        .map((entry) => {
-            const text = (0, util_1.normalizeFact)(`${entry.name}\n${entry.content}`);
-            let score = 0;
-            for (const name of activeNames) if (name && text.includes(name)) score += 1;
-            if (sceneName && text.includes(sceneName)) score += 1;
-            const related = relationIndex.get(String(entry.uid)) ?? new Set();
-            if ([...related].some((uid) => seedUids.has(String(uid)))) score += 3;
-            return { entry, score };
-        })
-        .filter((item) => item.score >= 2)
-        .sort((left, right) => right.score - left.score || Number(right.entry.updatedAt || 0) - Number(left.entry.updatedAt || 0))
-        .slice(0, 2)
-        .map((item) => item.entry);
-}
-function eventNames(event) {
-    return (event?.sections?.values?.['参与'] ?? []).flatMap(splitNames);
-}
-function splitNames(value) {
-    return String(value ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').split(/[、,，/与和及]/u).map((item) => item.trim()).filter(Boolean);
-}
-function stripLabel(value) {
-    return cleanLine(value).replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').trim();
-}
-function fitLines(lines, maxChars) {
-    const output = [];
-    let used = 0;
-    for (const source of (0, util_1.unique)(lines.map(cleanLine).filter(Boolean))) {
-        const line = compactPackLine(source, Math.min(120, maxChars));
-        if (!line) continue;
-        if (used + line.length > maxChars && output.length) break;
-        if (line.length > maxChars) continue;
-        output.push(line);
-        used += line.length;
-    }
-    return output;
-}
-function compactPackLine(value, maxLength) {
-    const line = cleanLine(value);
-    if (line.length <= maxLength) return line;
-    const chunks = line.split(/(?<=[。；！？!?])|[，,、｜]/u).map((item) => item.trim()).filter(Boolean);
-    let result = '';
-    for (const chunk of chunks) {
-        const candidate = result ? `${result}，${chunk}` : chunk;
-        if (candidate.length > maxLength) break;
-        result = candidate;
-    }
-    return result ? (/[。；！？!?]$/u.test(result) ? result : `${result}。`) : '';
-}
-function measureSerializedSections(sections) {
-    return sections.map((section) => `【${section.name}】\n${section.lines.map((line) => `- ${line}`).join('\n')}`).join('\n\n').length;
-}
-function trimSectionsToBudget(sections, hardMax) {
-    const priority = ['核心规则', '当前时空', '当前场景', '现场人物', '关键物品', '当前事件', '生效规则', '必要历史'];
-    const byName = new Map(sections.map((section) => [section.name, structuredClone(section)]));
-    const output = priority.map((name) => byName.get(name)).filter(Boolean);
-    const measure = () => measureSerializedSections(output);
-    for (const name of ['必要历史', '生效规则']) {
-        const section = output.find((item) => item.name === name);
-        while (section?.lines?.length && measure() > hardMax) section.lines.pop();
-    }
-    for (const name of ['当前场景', '关键物品', '当前事件', '核心规则']) {
-        const section = output.find((item) => item.name === name);
-        while (section?.lines?.length > 1 && measure() > hardMax) section.lines.pop();
-    }
-    if (measure() > hardMax) {
-        const lineCount = output.reduce((sum, section) => sum + section.lines.length, 0);
-        const structural = output.reduce((sum, section) => sum + section.name.length + 5 + Math.max(0, section.lines.length - 1) * 3, 0) + Math.max(0, output.length - 1) * 2;
-        let perLine = Math.max(18, Math.floor((hardMax - structural) / Math.max(1, lineCount)));
-        while (perLine >= 18 && measure() > hardMax) {
-            for (const section of output) section.lines = section.lines.map((line) => compactPackLine(line, perLine)).filter(Boolean);
-            perLine -= 4;
-        }
-    }
-    const cleaned = output.filter((section) => section.lines.length > 0);
-    if (measureSerializedSections(cleaned) > hardMax) throw new Error(`当前活动包无法在不破坏核心内容的情况下压缩到 ${hardMax} 字以内`);
-    return cleaned;
-}
-function activityDiagnostics(entries, context, sections, budget, contentLength) {
-    const includedTitles = new Set();
-    if (context.scene) includedTitles.add(context.scene.title);
-    for (const entry of context.characters) includedTitles.add(entry.title);
-    for (const entry of selectActiveItems(entries, context.scene, context.characters, selectActiveEvent(context.activeEvents, context.scene, context.characters))) includedTitles.add(entry.title);
-    for (const entry of context.activeEvents) includedTitles.add(entry.title);
-    const foundationFacts = entries
-        .filter((entry) => entry.type === '基础设定')
-        .flatMap((entry) => ['世界常识', '自然规则', '社会规则', '能力与技术']
-            .flatMap((section) => entry.sections?.values?.[section] ?? []))
-        .map(cleanLine)
-        .filter(Boolean);
-    const includedFoundationFacts = sections.find((section) => section.name === '核心规则')?.lines?.length ?? 0;
-    return {
-        currentScene: context.scene?.title ?? '',
-        activeCharacters: context.characters.map((entry) => entry.title),
-        activeEvents: context.activeEvents.map((entry) => entry.title),
-        includedEntries: [...includedTitles],
-        excludedWarehouseEntries: Math.max(0, entries.length - includedTitles.size),
-        sectionChars: Object.fromEntries(sections.map((section) => [section.name, section.lines.join('\n').length])),
-        contentLength,
-        target: budget.target,
-        hardMax: budget.hardMax,
-        configuredHardMax: budget.configuredHardMax || budget.hardMax,
-        foundationFactsTotal: foundationFacts.length,
-        foundationFactsIncluded: includedFoundationFacts,
-        foundationFactsOmitted: Math.max(0, foundationFacts.length - includedFoundationFacts),
-        strictBudget: true,
-        overTarget: contentLength > budget.target,
-        overHardMax: contentLength > budget.hardMax,
-    };
-}
-},"application":function(module,exports,require){
+/** Mirror Abyss 2.0.0-lite.ui.50-no-activity-pack — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
+var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -774,7 +375,6 @@ class MirrorAbyssApplication {
         const autoExtraction = settings.autoExtraction === true && settings.extractionEnabled !== false;
         if (!autoAudit && !autoExtraction) return;
         const automaticTaskType = autoAudit && autoExtraction ? 'full' : autoAudit ? 'audit' : 'extraction';
-        const chatKey = this.host.chatKey();
         try {
             const turn = this.host.latestTurn(index);
             // [MA-QUEUE-04] 新正文只追加到当前聊天队列。正在处理的旧正文继续使用固定源快照，
@@ -1224,12 +824,11 @@ function extractionCompletion(result, fallbackWorldbookName = '') {
     const updated = Array.isArray(warehouse.updated) ? warehouse.updated : [];
     const deleted = Array.isArray(warehouse.deleted) ? warehouse.deleted : [];
     const businessWriteCount = created.length + updated.length + deleted.length;
-    const activityPackChanged = result?.activityPackChanged === true;
     return {
         detail: businessWriteCount > 0
-            ? `已写入世界书“${worldbookName}”：新建${created.length}、更新${updated.length}、删除${deleted.length}；活动包${activityPackChanged ? '已刷新' : '未变化'}`
-            : `世界书“${worldbookName}”业务条目零写入；活动包${activityPackChanged ? '仅刷新运行投影' : '未变化'}`,
-        meta: { created, updated, deleted, worldbookName, businessWriteCount, activityPackChanged },
+            ? `已写入世界书“${worldbookName}”：新建${created.length}、更新${updated.length}、删除${deleted.length}`
+            : `世界书“${worldbookName}”业务条目零写入`,
+        meta: { created, updated, deleted, worldbookName, businessWriteCount },
     };
 }
 
@@ -1376,7 +975,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.48-api-profile-secret';
+exports.VERSION = '2.0.0-lite.ui.50-no-activity-pack';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1698,7 +1297,7 @@ class ControlPanel {
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:38px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:40px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
-.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-pack{margin:0;max-height:250px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
+.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:34px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:26px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
@@ -2493,7 +2092,7 @@ class ControlPanel {
             ['当前场景', model.currentScene?.title || '未识别', `在场${model.currentScene?.present?.length || 0}；固定角色${model.currentScene?.fixedSceneRoles?.length || 0}；固定设施${model.currentScene?.fixedFacilities?.length || 0}`],
             ['当前事件', String(model.counts?.activeEvents || 0), (model.activeEvents || []).map((item) => item.title).slice(0, 3).join('、') || '无'],
             ['人物投影', `当前${model.counts?.currentPeople || 0} / 沉降${model.counts?.settledPeople || 0}`, '人物不使用全局状态机；按当前场景、事件和焦点投影'],
-            ['正文发送', '世界书单通道', '活动包已暂停；由 SillyTavern 原生常驻、关键词、递归与向量召回'],
+            ['正文发送', '世界书单通道', '由 SillyTavern 原生常驻、关键词、递归与向量召回'],
             ['直接关联', String(model.counts?.directRelations || 0), (model.directRelations || []).slice(0, 2).map((item) => `${item.sourceTitle}↔${item.targetTitle}`).join('；') || '无'],
             ['数据健康', model.healthy ? '通过' : model.hasErrors ? '有阻断项' : '有警告', `问题${model.issues?.length || 0}项`],
         ];
@@ -2526,22 +2125,6 @@ class ControlPanel {
             node.textContent = issue.message;
             if (issue.entries?.length) node.title = issue.entries.join('\n');
             this.managementNode.append(node);
-        }
-        if (model.activityPack?.includedEntries?.length) {
-            const title = document.createElement('strong');
-            title.textContent = '活动包来源条目';
-            const source = document.createElement('div');
-            source.className = 'ma-lite-management-relation';
-            source.textContent = model.activityPack.includedEntries.join('、');
-            this.managementNode.append(title, source);
-        }
-        if (model.activityPack?.content) {
-            const title = document.createElement('strong');
-            title.textContent = '最终发送活动包（由上方世界书条目编译）';
-            const pack = document.createElement('pre');
-            pack.className = 'ma-lite-management-pack';
-            pack.textContent = model.activityPack.content;
-            this.managementNode.append(title, pack);
         }
     }
 
@@ -2986,7 +2569,6 @@ class ControlPanel {
             queuePosition: Number.isFinite(meta.queuePosition) ? Number(meta.queuePosition) : previous.queuePosition,
             worldbookName: typeof meta.worldbookName === 'string' ? meta.worldbookName : previous.worldbookName,
             businessWriteCount: Number.isFinite(meta.businessWriteCount) ? Number(meta.businessWriteCount) : previous.businessWriteCount,
-            activityPackChanged: typeof meta.activityPackChanged === 'boolean' ? meta.activityPackChanged : previous.activityPackChanged,
         };
         this.renderPipeline();
         this.scheduleIndicatorRefresh();
@@ -3069,7 +2651,7 @@ class ControlPanel {
         }
         const write = this.taskStates.write;
         if (write.worldbookName) titleLines.push(`目标世界书：${write.worldbookName}`);
-        if (Number.isFinite(write.businessWriteCount)) titleLines.push(`业务写入：${write.businessWriteCount}条；活动包：${write.activityPackChanged ? '刷新' : '未变化'}`);
+        if (Number.isFinite(write.businessWriteCount)) titleLines.push(`业务写入：${write.businessWriteCount}条`);
         indicator.title = titleLines.filter(Boolean).join('\n');
         indicator.innerHTML = `<span class="ma-ind-label">镜渊</span>${parts.join('')}`;
     }
@@ -3089,7 +2671,7 @@ class ControlPanel {
     }
 }
 function freshTaskState(detail = '待命') {
-    return { state: 'idle', detail, titles: [], created: [], updated: [], deleted: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0, activityPackChanged: false };
+    return { state: 'idle', detail, titles: [], created: [], updated: [], deleted: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0 };
 }
 /** [MA-UI-API-03] 一个 Profile 统一覆盖所有模型阶段；空值恢复当前连接。 */
 function buildUnifiedProfilePatch(profileId) {
@@ -3206,7 +2788,6 @@ const prompts_1 = require("./prompts");
 const audit_1 = require("./audit");
 const parser_1 = require("./parser");
 const model_request_1 = require("./model-request");
-const governance_1 = require("./governance");
 
 /**
  * [MA-DIAG-01] 真实宿主验收与诊断导出。
@@ -3495,10 +3076,7 @@ class DiagnosticsService {
                 const deleted = Array.isArray(warehouse.deleted) ? warehouse.deleted : [];
                 const businessWrites = created.length + updated.length + deleted.length;
                 const readBack = await this.worldbook.readRaw(settings, snapshot, validate);
-                const entries = Object.values(readBack.data?.entries ?? {});
-                const activityPack = entries.find((entry) => String(entry?.comment ?? '') === governance_1.ACTIVITY_PACK_TITLE);
                 if (settings.extractionEnabled !== false && businessWrites < 1) throw new Error('正文完成提取但业务条目零写入');
-                if (settings.activityPackEnabled !== false && !activityPack) throw new Error('完整处理后未生成当前活动包');
                 const stages = this.hooks.pipelineState?.() ?? {};
                 for (const key of ['audit', 'revision', 'extract', 'write']) {
                     if (!stages[key]) throw new Error(`四阶段状态缺少 ${key}`);
@@ -3510,8 +3088,6 @@ class DiagnosticsService {
                     created,
                     updated,
                     deleted,
-                    activityPackPresent: Boolean(activityPack),
-                    activityPackChars: String(activityPack?.content ?? '').length,
                     stages,
                 };
             };
@@ -3876,11 +3452,9 @@ function sanitizeSettings(settings) {
         extractionEnabled: settings.extractionEnabled !== false,
         autoAudit: settings.autoAudit === true,
         autoExtraction: settings.autoExtraction === true,
-        activityPackEnabled: false,
         entryBudgetEnabled: settings.entryBudgetEnabled !== false,
         responseTokens: Number(settings.responseTokens || 0),
         requestTimeoutMs: Number(settings.requestTimeoutMs || 0),
-        activityPackHardMax: Number(settings.activityPackHardMax || 0),
         routeIds: [...new Set([
             settings.auditProfileId,
             settings.revisionProfileId,
@@ -4217,7 +3791,6 @@ exports.prepareInformationBlocks = prepareInformationBlocks;
 },"governance":function(module,exports,require){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ACTIVITY_PACK_TITLE = void 0;
 exports.governInformationBlocks = governInformationBlocks;
 exports.sceneSettlementOperations = sceneSettlementOperations;
 exports.currentEventState = currentEventState;
@@ -4229,8 +3802,6 @@ exports.isFixedSceneRole = isFixedSceneRole;
 exports.buildDirectRelationIndex = buildDirectRelationIndex;
 const semantic_1 = require("./semantic");
 const util_1 = require("./util");
-
-exports.ACTIVITY_PACK_TITLE = '运行包｜当前活动';
 
 const EVENT_TRANSITIONS = Object.freeze({
     active: new Set(['active', 'blocked', 'completed', 'terminated']),
@@ -4435,7 +4006,7 @@ function explicitCurrentSceneName(contextText) {
 
 // Models occasionally put structured current-scene facts inside one natural
 // sentence.  Normalize the two fields that drive the production projection so
-// activity-pack, recall and the management panel observe the same state.
+// recall and the management panel observe the same state.
 function normalizeSceneSnapshot(block, contextText = '') {
     const current = (block.sections ?? []).filter((section) => /^(?:当前状态|定义)$/u.test(String(section.name ?? ''))).flatMap((section) => section.lines ?? []);
     const inferred = [];
@@ -4635,7 +4206,7 @@ function deriveCurrentGameTime(blocks, previous = null) {
 }
 
 function activeContext(entries, focusUid = '', preferredSceneTitle = '') {
-    const list = (entries ?? []).filter((entry) => entry?.title !== exports.ACTIVITY_PACK_TITLE);
+    const list = (entries ?? []).filter(Boolean);
     const scenes = list.filter((entry) => /^(?:场景|时空)$/u.test(String(entry.type ?? '')));
     scenes.sort((left, right) => {
         const a = Number(left?.raw?.extensions?.mirrorAbyssInfoPoint?.sceneLastActiveAt || left.updatedAt || 0);
@@ -4691,7 +4262,7 @@ function sameName(entry, name) {
 
 // [MA-RELATION-01] 直接关联只从结构化栏目推导，并可随世界书重建；不建立独立图数据库。
 function buildDirectRelationIndex(entries) {
-    const list = (entries ?? []).filter((entry) => entry && entry.title !== exports.ACTIVITY_PACK_TITLE);
+    const list = (entries ?? []).filter(Boolean);
     const index = new Map(list.map((entry) => [String(entry.uid), new Set()]));
     const terms = list.map((entry) => ({
         entry,
@@ -4793,8 +4364,6 @@ class HostAdapter {
             largeSummaryPrompt: settings.largeSummaryPrompt,
             smallSummaryTurns: settings.smallSummaryTurns,
             largeSummaryCount: settings.largeSummaryCount,
-            activityPackEnabled: settings.activityPackEnabled,
-            activityPackHardMax: settings.activityPackHardMax,
             entryBudgetEnabled: settings.entryBudgetEnabled,
             keywordDefinitions: settings.keywordDefinitions,
             sectionPolicies: settings.sectionPolicies,
@@ -6740,7 +6309,7 @@ class MemoryRunner {
     }
     async runExtractionOnly(settings, snapshot) {
         // The deterministic acceptance chain validates the parser/governance,
-        // matcher, transaction, authoritative reread and activity-pack path
+        // matcher, transaction and authoritative reread path
         // independently of model formatting variance. Real model ENTRY output
         // is exercised by the separate extraction-protocol hard gate.
         const result = await this.extract(settings, snapshot, { deterministicOnly: true });
@@ -6864,7 +6433,7 @@ class MemoryRunner {
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
         const dialogueInput = [snapshot.dialogueContext, snapshot.turnText || `${snapshot.playerText}\n${snapshot.assistantText}`].filter(Boolean).join('\n\n');
-        const selected = (0, matcher_1.relevantEntries)(entries.filter((entry) => entry.title !== governance_1.ACTIVITY_PACK_TITLE), dialogueInput, 6);
+        const selected = (0, matcher_1.relevantEntries)(entries, dialogueInput, 6);
         const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, selected, { dialogueContext: snapshot.dialogueContext });
         // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
         let raw = options.deterministicOnly === true ? 'EMPTY' : '';
@@ -6948,9 +6517,9 @@ class MemoryRunner {
         const actualDeleted = result.warehouse?.deleted ?? [];
         const businessWrites = actualCreated.length + actualUpdated.length + actualDeleted.length;
         const detail = businessWrites > 0
-            ? `已写入世界书“${destination}”：新建${actualCreated.length}、更新${actualUpdated.length}、删除${actualDeleted.length}；活动包${result.activityPackChanged ? '已刷新' : '未变化'}`
-            : `世界书“${destination}”业务条目零写入；活动包${result.activityPackChanged ? '仅刷新运行投影' : '未变化'}`;
-        this.progress('success', detail, { phase: 'write', titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites, activityPackChanged: result.activityPackChanged === true });
+            ? `已写入世界书“${destination}”：新建${actualCreated.length}、更新${actualUpdated.length}、删除${actualDeleted.length}`
+            : `世界书“${destination}”业务条目零写入`;
+        this.progress('success', detail, { phase: 'write', titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites });
         return result;
     }
     async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
@@ -7030,7 +6599,6 @@ class MemoryRunner {
             entries: [], changed: false, businessChanged: false,
             worldbookName: snapshot.worldbookName || '',
             warehouse: { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
-            activityPack: null, activityPackChanged: false,
         };
         this.setStatus(snapshot.chatKey, 'worldbook', `${label}通过唯一提交器写入世界书`, '', raw, plan);
         this.validate(snapshot);
@@ -7082,8 +6650,6 @@ class MemoryRunner {
             worldbookName: entries.worldbookName || snapshot.worldbookName || '',
             warehouse: entries.warehouse ?? { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
             receipt: entries.receipt ?? null,
-            activityPack: entries.activityPack ?? null,
-            activityPackChanged: entries.activityPackChanged === true,
             currentGameTime: nextGameTime,
             previousGameTime,
         };
@@ -7102,8 +6668,6 @@ function taskResultEntries(result) {
     entries.businessChanged = result?.businessChanged === true;
     entries.worldbookName = String(result?.worldbookName ?? entries.worldbookName ?? '');
     entries.warehouse = result?.warehouse ?? entries.warehouse ?? { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 };
-    entries.activityPack = result?.activityPack ?? entries.activityPack ?? null;
-    entries.activityPackChanged = result?.activityPackChanged === true;
     entries.criticalChanges = Number(result?.criticalChanges || 0);
     return entries;
 }
@@ -7153,7 +6717,7 @@ function summarySnapshotHasFacts(block, kind) {
 }
 
 function summaryEntries(kind, entries, snapshot) {
-    const active = entries.filter((entry) => !entry.activation.disabled && entry.title !== governance_1.ACTIVITY_PACK_TITLE);
+    const active = entries.filter((entry) => !entry.activation.disabled);
     if (kind === 'small') {
         const candidates = active.filter((entry) => entry.title !== '总结｜世界历史');
         const required = [
@@ -7421,7 +6985,6 @@ const matcher_1 = require("./matcher");
 const prompts_1 = require("./prompts");
 const util_1 = require("./util");
 const model_request_1 = require("./model-request");
-const semantic_1 = require("./semantic");
 
 const ALLOWED_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
 const NON_EVENT_TYPES = new Set(['人物', '场景', '物品', '世界', '基础设定']);
@@ -7441,9 +7004,7 @@ const MIGRATION_STRONG_SINGLE_SLOTS = new Set(['唯一编号', '编号', '序列
 const SOURCE_MARKER = /(?:〔|【|\[|（|\()\s*(?:证据|来源|证据UID|来源UID|旧UID)\s*[：:]\s*([^〕】\]）)]+)\s*(?:〕|】|\]|）|\))/giu;
 const SOURCE_LINE_MARKER = /(?:〔|【|\[|（|\()\s*(?:来源行|证据行|sourceLine)\s*[：:]\s*([^〕】\]）)]+)\s*(?:〕|】|\]|）|\))/giu;
 const SOURCE_KIND_PATTERN = /(?:信息来源|认知来源)\s*[：:]\s*(亲眼观察|听到对白|收到消息|查看记录|他人转述|亲身经历|可靠推理|特殊能力|公开信息|自身身份|自身行动|直接告知)/u;
-const MIGRATION_BATCH_BODY_BUDGET = 7200;
 const MIGRATION_BATCH_CATALOG_BUDGET = 1800;
-const MIGRATION_FRAGMENT_BUDGET = 3200;
 const MIGRATION_BATCH_MAX_RECORDS = 5;
 const MIGRATION_CLUSTER_BODY_BUDGET = 6800;
 const MIGRATION_DERIVED_BODY_BUDGET = 6800;
@@ -10690,8 +10251,6 @@ function jsonSourceIds(value) {
 }
 
 
-const EVENT_PENDING_FACT_PATTERN = /(?:等待|尚未|未完成|未回复|未解决|未见面|尚待|还未|仍需|待确认|目标尚未|双方尚未)/u;
-const EVENT_EXPLICIT_CLOSED_PATTERN = /(?:阶段|状态|当前状态)\s*[：:]\s*(?:结束|已结束|完成|已完成|关闭|已关闭)/u;
 
 function preserveEventPendingFacts(blocks, records, diagnostics = { warnings: [] }) {
     // 兼容旧函数名：ui.24 不再把“未决/目标”回填进世界书，只规范已经发生的变化。
@@ -11312,7 +10871,6 @@ function buildRebuildSnapshot(originalData, records, blocks, diagnostics = { inv
             raw = defaultRaw(uid);
         }
         usedMapKeys.add(mapKey);
-        const uid = String(raw.uid ?? mapKey);
         raw.uid = Number.isFinite(Number(raw.uid)) ? Number(raw.uid) : Number(mapKey);
         rebuildSequence += 1;
         const primarySceneAnchor = /^S\d{3,6}$/u.test(String(block.primarySceneAnchor ?? '')) ? String(block.primarySceneAnchor) : '';
@@ -12853,7 +12411,7 @@ function emptyEntryCleanupOperations(entries, settings) {
     ].filter(Boolean).map(String));
     const foundationLabels = new Set((settings?.keywordDefinitions ?? []).filter((item) => item?.label === '基础设定').flatMap((item) => [item.label, ...(item.aliases ?? [])]).map(util_1.normalizeFact));
     return (entries ?? []).filter((entry) => {
-        if (!entry?.managed || entry.locked || entry.focus || entry.title === governance_1.ACTIVITY_PACK_TITLE) return false;
+        if (!entry?.managed || entry.locked || entry.focus) return false;
         if (protectedUids.has(String(entry.uid))) return false;
         if (entry.type === '基础设定' || (entry.keywords ?? []).some((key) => foundationLabels.has((0, util_1.normalizeFact)(key)))) return false;
         return !Object.values(entry.sections?.values ?? {}).flat().some((line) => String(line ?? '').trim());
@@ -13002,7 +12560,6 @@ function canonicalInformationLabel(label, section = '') {
     return mappings.find(([pattern]) => pattern.test(normalized))?.[1] || '';
 }
 function informationAnchor(line) {
-    const normalized = (0, util_1.normalizeFact)(line);
     const label = line.match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1]?.trim();
     if (label) {
         if (isMultiValueLabel(label)) return '';
@@ -13136,7 +12693,6 @@ const PLAIN_SECTION_NAMES = new Set([
     '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名',
     '固定事实', '近期经历', '事件进程', '变化记录', '最终结果', '关联条目', '关键词', '触发词', '标签', '分类',
 ]);
-const STRICT_ENTRY_PATTERN = /<<<ENTRY:([^:\r\n>]+):([^>\r\n]+)>>>\s*<<<KEYWORDS>>>\s*([\s\S]*?)\s*<<<CONTENT>>>\s*([\s\S]*?)\s*<<<END_ENTRY>>>/gu;
 const STRICT_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
 // [MA-CONTROL-01] 模型控制层文本不得进入世界书。这里仅过滤插件自身的协议、任务说明和来源标记，
 // 不按普通“规则/禁止”字样泛删，避免误伤真实世界设定。
@@ -14566,7 +14122,6 @@ exports.isRoleType = isRoleType;
 exports.isFoundationEntry = isFoundationEntry;
 exports.sanitizeRecallKeywords = sanitizeRecallKeywords;
 const semantic_1 = require("./semantic");
-const governance_1 = require("./governance");
 const util_1 = require("./util");
 
 // [MA-RECALL-01] 召回策略是纯函数：只读取世界书条目，返回原生字段规划，不执行任何写入。
@@ -14612,43 +14167,18 @@ function sceneActivityTime(entry) {
 function buildRecallPlan(entries, settings, focusUid = '') {
     const stages = sceneStageMap(entries);
     const profiles = new Map();
-    const context = (0, governance_1.activeContext)(entries ?? [], focusUid);
-    const activeUids = new Set([
-        context.scene?.uid,
-        ...context.characters.map((entry) => entry.uid),
-        ...context.activeEvents.map((entry) => entry.uid),
-        context.focus?.uid,
-    ].filter(Boolean).map(String));
     for (const entry of entries ?? []) {
         const focus = String(focusUid || '') ? String(entry.uid) === String(focusUid) : entry.focus === true;
-        profiles.set(String(entry.uid), profileFor(entry, settings, stages.get(String(entry.uid)) || '', focus, activeUids));
+        profiles.set(String(entry.uid), profileFor(entry, settings, stages.get(String(entry.uid)) || '', focus));
     }
-    return { profiles, sceneStages: stages, activeUids };
+    return { profiles, sceneStages: stages };
 }
 
-function profileFor(entry, settings, sceneStage, focus, activeUids = new Set()) {
+function profileFor(entry, settings, sceneStage, focus) {
     const type = String(entry.type ?? '');
     const tier = String(entry.memoryTier ?? entry.raw?.extensions?.mirrorAbyssInfoPoint?.memoryTier ?? 'background');
     const baseOrder = ({ 场景: 700, 时空: 700, 事件: 680, 世界: 610, 全局: 610, 全局状态: 610, 全局变化: 610, 当前局势: 610, 世界局势: 610, 人物: 520, 角色: 520, NPC: 500, 物品: 500 })[type] ?? 400;
 
-    if (entry.title === governance_1.ACTIVITY_PACK_TITLE) {
-        return settings?.activityPackEnabled !== false
-            ? profile('当前活动包', 'active', 'activity-pack', 'none', true, false, true, true, 0, 900, 1, null)
-            : profile('活动包关闭', 'background', 'activity-pack-disabled', 'none', false, false, true, true, 0, 100, 4, null);
-    }
-    // [MA-PACK-RECALL-01] 活动包模式下，完整条目退回仓储态；ST只负责发送已经编译好的唯一活动包。
-    if (settings?.activityPackEnabled !== false) {
-        const active = activeUids.has(String(entry.uid));
-        if (isFoundationEntry(entry, settings)) return profile('核心仓储', 'core', 'foundation-storage', 'none', false, false, true, true, 0, 860, 0, null);
-        if (isSceneType(type)) return profile(active ? '当前场景仓储' : '历史场景仓储', active ? 'current' : 'historical', active ? 'scene-current-storage' : 'scene-history-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
-        if (type === '事件') {
-            const closed = (0, semantic_1.isEventClosed)(entry);
-            return profile(active && !closed ? '活动事件仓储' : '历史事件仓储', active && !closed ? 'active' : closed ? 'closed' : 'settled', active && !closed ? 'event-active-storage' : 'event-history-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
-        }
-        if (isRoleType(type)) return profile(active || focus ? '现场人物仓储' : '人物沉降仓储', active || focus ? 'current' : 'settled', active || focus ? 'role-current-storage' : 'role-settled-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
-        if (type === '物品') return profile(active ? '活动物品仓储' : '物品仓储', active ? 'current' : 'settled', active ? 'item-current-storage' : 'item-storage', 'none', false, false, true, true, 0, baseOrder, 4, null);
-        return profile('世界书仓储', active ? 'current' : tierLifecycle(tier), 'warehouse-object', 'none', false, false, true, true, 0, baseOrder, 4, null);
-    }
 
     if (isFoundationEntry(entry, settings)) {
         return profile('基础设定', 'core', 'foundation', 'none', true, false, true, true, 0, 860, 0, null);
@@ -15036,7 +14566,6 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     autoExtraction: false,
     autoSmallSummary: true,
     autoLargeSummary: true,
-    activityPackEnabled: false,
     entryBudgetEnabled: true,
     auditEnabled: true,
     extractionEnabled: true,
@@ -15053,7 +14582,6 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     criticalChangesForSmall: 6,
     largeSummaryCount: 5,
     queueCompactThreshold: 6,
-    activityPackHardMax: 1800,
     keywordDefinitions: exports.DEFAULT_KEYWORDS,
     sectionPolicies: {
         在场: 'replace-section', 当前资源: 'replace-section', 活动关联: 'replace-section', 世界影响: 'replace-section', 局部约束: 'replace-section',
@@ -15148,7 +14676,6 @@ function parseSettings(value) {
         autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
         autoSmallSummary: candidate.autoSmallSummary !== false,
         autoLargeSummary: candidate.autoLargeSummary !== false,
-        activityPackEnabled: false,
         entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
         auditEnabled: candidate.auditEnabled !== false,
         extractionEnabled: candidate.extractionEnabled !== false,
@@ -15166,7 +14693,6 @@ function parseSettings(value) {
         criticalChangesForSmall: (0, util_1.clampNumber)(candidate.criticalChangesForSmall, 6, 1, 50),
         largeSummaryCount: (0, util_1.clampNumber)(candidate.largeSummaryCount, 5, 1, 30),
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
-        activityPackHardMax: (0, util_1.clampNumber)(candidate.activityPackHardMax, 1800, 600, 4000),
         keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions, candidate.tables),
         sectionPolicies,
     };
@@ -15648,16 +15174,14 @@ function worldSettingPreviewSummary(preview) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildWorldbookManagementView = buildWorldbookManagementView;
-const activity_pack_1 = require("./activity-pack");
 const governance_1 = require("./governance");
 const semantic_1 = require("./semantic");
 
 function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const list = Array.isArray(entries) ? entries : [];
-    const pack = list.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE) ?? null;
     const context = (0, governance_1.activeContext)(list, list.find((entry) => entry.focus)?.uid || '');
     const issues = [];
-    const managed = list.filter((entry) => entry?.managed === true && entry.title !== governance_1.ACTIVITY_PACK_TITLE);
+    const managed = list.filter((entry) => entry?.managed === true);
     const currentScenes = managed.filter((entry) => /^(?:scene-current|scene-current-storage)$/u.test(String(entry.semanticRole ?? '')));
     if (currentScenes.length > 1) issues.push(issue('error', 'multiple-current-scenes', `检测到${currentScenes.length}个当前场景`, currentScenes.map((entry) => entry.title)));
     if (!context.scene) issues.push(issue('warning', 'missing-current-scene', '没有可识别的当前场景', []));
@@ -15683,7 +15207,7 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const settledPeople = people.filter((entry) => !currentPeople.has(String(entry.uid)) && entry.focus !== true);
     for (const entry of people) {
         const stable = ['性格核心', '表达方式', '决策倾向'].some((section) => lines(entry, section).length > 0);
-        if (currentPeople.has(String(entry.uid)) && !stable) issues.push(issue('warning', 'missing-character-style', `${entry.title}进入当前活动包但缺少性格/表达/决策信息`, [entry.title]));
+        if (currentPeople.has(String(entry.uid)) && !stable) issues.push(issue('warning', 'missing-character-style', `${entry.title}处于当前人物投影但缺少性格/表达/决策信息`, [entry.title]));
         if ((0, governance_1.isGenericBackgroundPerson)({ type: entry.type, name: entry.name, sections: sectionBlocks(entry) })) {
             issues.push(issue('warning', 'temporary-npc-entry', `${entry.title}看起来仍是临时NPC独立条目`, [entry.title]));
         }
@@ -15702,10 +15226,6 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const emptyEntries = managed.filter((entry) => !Object.values(entry.sections?.values ?? {}).flat().some((line) => String(line ?? '').trim()));
     if (emptyEntries.length) issues.push(issue('warning', 'empty-managed-entries', `发现${emptyEntries.length}个空的镜渊管理条目`, emptyEntries.slice(0, 8).map((entry) => entry.title)));
 
-    const hardMax = Math.max(600, Number(settings?.activityPackHardMax || 1800));
-    const packLength = String(pack?.content ?? '').length;
-    if (!pack) issues.push(issue(settings?.activityPackEnabled === false ? 'info' : 'error', 'missing-activity-pack', '当前活动包不存在', []));
-    else if (packLength > hardMax) issues.push(issue('error', 'activity-pack-over-budget', `活动包${packLength}字，超过硬上限${hardMax}`, [pack.title]));
 
     const orphanRelations = [];
     const idSet = new Set(managed.map((entry) => String(entry.uid)));
@@ -15733,8 +15253,6 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     }
     if (orphanRelations.length) issues.push(issue('warning', 'orphan-relations', `发现${orphanRelations.length}个孤立关联`, orphanRelations.slice(0, 8)));
 
-    const diagnostics = pack?.activityPackDiagnostics ?? null;
-    const sectionChars = diagnostics?.sectionChars ?? sectionCharCounts(pack);
     return {
         gameTime: effectiveGameTime ? { ...effectiveGameTime } : null,
         currentScene: context.scene ? {
@@ -15748,17 +15266,6 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
         currentPeople: (context.characters ?? []).map((entry) => ({ uid: entry.uid, title: entry.title })),
         settledPeople: settledPeople.map((entry) => ({ uid: entry.uid, title: entry.title })).slice(0, 50),
         directRelations: directRelations.slice(0, 100),
-        activityPack: pack ? {
-            uid: pack.uid,
-            title: pack.title,
-            content: pack.content,
-            length: packLength,
-            target: Number(diagnostics?.target || 0),
-            hardMax: Number(diagnostics?.hardMax || hardMax),
-            sectionChars,
-            includedEntries: diagnostics?.includedEntries ?? [],
-            excludedWarehouseEntries: Number(diagnostics?.excludedWarehouseEntries || 0),
-        } : null,
         counts: {
             managed: managed.length,
             currentPeople: currentPeople.size,
@@ -15772,7 +15279,6 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
         issues,
         healthy: issues.length === 0,
         hasErrors: issues.some((item) => item.level === 'error'),
-        budget: (0, activity_pack_1.activityPackBudget)(context.characters?.length ?? 0, { hardMax }),
     };
 }
 
@@ -15808,11 +15314,6 @@ function managementReferences(line, name) {
 function sectionBlocks(entry) {
     return Object.entries(entry?.sections?.values ?? {}).map(([name, values]) => ({ name, lines: values ?? [], empty: !(values ?? []).length }));
 }
-function sectionCharCounts(pack) {
-    const output = {};
-    for (const [name, values] of Object.entries(pack?.sections?.values ?? {})) output[name] = (values ?? []).join('\n').length;
-    return output;
-}
 function issue(level, code, message, entries) { return { level, code, message, entries }; }
 },"worldbook":function(module,exports,require){
 
@@ -15825,10 +15326,10 @@ const operations_1 = require("./operations");
 const parser_1 = require("./parser");
 const semantic_1 = require("./semantic");
 const recall_policy_1 = require("./recall-policy");
-const activity_pack_1 = require("./activity-pack");
 const governance_1 = require("./governance");
 const entry_section_1 = require("./domain/entry-section");
 const util_1 = require("./util");
+const LEGACY_RUNTIME_PROJECTION_TITLE = '运行包｜当前活动';
 class WorldbookAdapter {
     constructor(context, chatKey) {
         this.context = context;
@@ -15843,12 +15344,10 @@ class WorldbookAdapter {
         return this.mutate(settings, snapshot, validate, (opened) => {
             const entries = parseEntries(opened.data);
             const focusUid = entries.find((entry) => entry.focus)?.uid ?? '';
-            this.upsertActivityPack(opened, settings, focusUid, { operationId: 'activity-pack-replan' });
-            this.applyNativeFields(parseEntries(opened.data), settings, focusUid, new Set());
+            this.applyNativeFields(entries, settings, focusUid, new Set());
             return {
                 verify(data) {
                     verifyRecallConstraints(parseEntries(data));
-                    verifyActivityPack(data, settings);
                 },
             };
         });
@@ -15893,7 +15392,6 @@ class WorldbookAdapter {
             const located = findRawEntry(opened.data, uid);
             if (!located)
                 throw new Error(`世界书条目 UID ${uid} 不存在`);
-            const effectiveUid = String(located.raw.uid ?? uid);
             let logicalTitle = (0, util_1.stripUidSuffix)(String(located.raw.comment ?? ''));
             if (patch.title !== undefined) {
                 logicalTitle = (0, util_1.stripUidSuffix)(String(patch.title ?? ''));
@@ -15912,10 +15410,8 @@ class WorldbookAdapter {
                 ...requestedKeywords.filter((item) => !(0, util_1.isUidKeyword)(item) && (0, util_1.normalizeFact)(item) !== (0, util_1.normalizeFact)(split?.type ?? '')),
             ]);
             markManaged(located.raw, '', logicalTitle, '');
-            let parsed = parseEntries(opened.data);
+            const parsed = parseEntries(opened.data);
             const focusedUid = parsed.find((entry) => entry.focus)?.uid ?? '';
-            this.upsertActivityPack(opened, settings, focusedUid, { operationId: 'activity-pack-edit' });
-            parsed = parseEntries(opened.data);
             this.applyNativeFields(parsed, settings, focusedUid, new Set([String(uid)]));
             return {
                 verify(data) {
@@ -15950,10 +15446,8 @@ class WorldbookAdapter {
             const extension = markManaged(located.raw, '', (0, util_1.stripUidSuffix)(String(located.raw.comment ?? '')), '');
             if (previousUpdatedAt) extension.updatedAt = previousUpdatedAt;
             extension.locked = locked === true;
-            let parsed = parseEntries(opened.data);
+            const parsed = parseEntries(opened.data);
             const focusedUid = parsed.find((entry) => entry.focus)?.uid ?? '';
-            this.upsertActivityPack(opened, settings, focusedUid, { operationId: 'activity-pack-lock' });
-            parsed = parseEntries(opened.data);
             this.applyNativeFields(parsed, settings, focusedUid, new Set());
             return {
                 verify(data) {
@@ -15989,7 +15483,6 @@ class WorldbookAdapter {
                     marked.focus = true;
                 }
             }
-            this.upsertActivityPack(opened, settings, nextUid, { operationId: 'activity-pack-focus' });
             const parsed = parseEntries(opened.data);
             this.applyNativeFields(parsed, settings, nextUid, new Set());
             return {
@@ -16001,10 +15494,8 @@ class WorldbookAdapter {
                         throw new Error('玩家焦点保存后未保持唯一');
                     if (!nextUid && focused.length)
                         throw new Error('玩家焦点清除失败');
-                    if (nextUid && settings.activityPackEnabled === false && findRawEntry(data, nextUid)?.raw.constant !== true)
+                    if (nextUid && findRawEntry(data, nextUid)?.raw.constant !== true)
                         throw new Error('焦点条目未设置为 constant');
-                    if (nextUid && settings.activityPackEnabled !== false && findRawEntry(data, nextUid)?.raw.constant === true)
-                        throw new Error('活动包模式下焦点原条目不应直接常驻');
                 },
             };
         });
@@ -16013,7 +15504,6 @@ class WorldbookAdapter {
         return this.mutate(settings, snapshot, validate, (opened) => {
             const focusedUid = parseEntries(opened.data).find((entry) => entry.focus)?.uid ?? '';
             applySummaryRebalance(this, opened.data, settings, kind, summaryText, focusedUid);
-            this.upsertActivityPack(opened, settings, focusedUid, { operationId: `activity-pack-${kind}` });
             return {
                 verify(data) {
                     const after = parseEntries(data);
@@ -16031,6 +15521,7 @@ class WorldbookAdapter {
             throw new Error('目标世界书已经变化，拒绝编辑');
         const beforeVersion = digestWorldbook(opened.data);
         const beforeData = (0, util_1.clone)(opened.data);
+        removeLegacyRuntimeProjection(opened.data);
         const verifier = mutate(opened) ?? {};
         validate?.();
         const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
@@ -16051,6 +15542,7 @@ class WorldbookAdapter {
         const beforeVersion = digestWorldbook(opened.data);
         const beforeData = (0, util_1.clone)(opened.data);
         const receiptBefore = snapshotRawEntries(opened.data);
+        const legacyProjectionRemoved = removeLegacyRuntimeProjection(opened.data);
         const before = parseEntries(opened.data);
         const writeOperations = plan.operations.filter((operation) => !['noop', 'delete-entry'].includes(operation.kind));
         const exitOperations = plan.operations.filter((operation) => operation.kind === 'delete-entry');
@@ -16116,14 +15608,8 @@ class WorldbookAdapter {
             deletedCount = deleted.length;
         }
 
-        const packResult = this.upsertActivityPack(opened, settings, focusUid, {
-            operationId,
-            currentSceneTitle: plan.currentSceneTitle || plan.blocks?.find?.((block) => (0, recall_policy_1.isSceneType)(block.type))?.title || '',
-            gameTime: options.currentGameTime,
-        });
-        if (packResult.uid) touchedUids.add(String(packResult.uid));
         const businessChanged = writeOperations.length > 0 || deletedCount > 0;
-        const changed = businessChanged || packResult.changed === true;
+        const changed = businessChanged || legacyProjectionRemoved;
         if (!changed) {
             const result = parseEntries(opened.data);
             result.changed = false;
@@ -16133,8 +15619,6 @@ class WorldbookAdapter {
             result.deleteCount = 0;
             result.warehouse = { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 };
             result.receipt = null;
-            result.activityPack = packResult;
-            result.activityPackChanged = false;
             return result;
         }
 
@@ -16155,16 +15639,15 @@ class WorldbookAdapter {
             // to remain present in the authoritative reread.
             verifyWriteResults(data, expectedAfterWrites, plan.operations, operationId, settings, focusUid);
             verifyExitResults(data, deleted);
-            verifyActivityPack(data, settings);
         }, '世界书提交后验证', '提交前快照');
         opened.data = verifiedData;
 
         const result = parseEntries(verifiedData);
         const createdTitles = result
-            .filter((entry) => createdUids.has(String(entry.uid)) && entry.title !== governance_1.ACTIVITY_PACK_TITLE)
+            .filter((entry) => createdUids.has(String(entry.uid)))
             .map((entry) => entry.title);
         const updatedTitles = result
-            .filter((entry) => touchedUids.has(String(entry.uid)) && !createdUids.has(String(entry.uid)) && entry.title !== governance_1.ACTIVITY_PACK_TITLE)
+            .filter((entry) => touchedUids.has(String(entry.uid)) && !createdUids.has(String(entry.uid)))
             .map((entry) => entry.title);
         const deletedTitles = deleted.map((entry) => entry.title);
         result.changed = true;
@@ -16181,8 +15664,6 @@ class WorldbookAdapter {
             deletedCount,
             operationCount: writeOperations.length,
         };
-        result.activityPack = packResult;
-        result.activityPackChanged = packResult.changed === true;
         result.receipt = buildCommitReceipt(receiptBefore, verifiedData, {
             id: operationId,
             sourceMessageKey,
@@ -16225,12 +15706,7 @@ class WorldbookAdapter {
                 if (!change.before) {
                     if (!current) continue;
                     const extension = readExtension(current.raw);
-                    const isRuntimePack = String(current.raw.comment || '') === governance_1.ACTIVITY_PACK_TITLE
-                        || String(extension.semanticRole || '') === 'activity-pack'
-                        || String(extension.storageRole || '') === 'runtime';
-                    // 活动包是本次事务生成的可重建投影。回执证明它在事务前不存在时，
-                    // 即使运行态为了防误改而被锁定，也必须允许随事务一起删除。
-                    if (!isRuntimePack && (extension.focus === true || extension.locked === true || current.raw.locked === true))
+                    if (extension.focus === true || extension.locked === true || current.raw.locked === true)
                         throw new Error(`条目“${current.raw.comment || uid}”已被设为焦点或锁定，不能自动删除`);
                     delete opened.data.entries[current.mapKey];
                     changedCount += 1;
@@ -16316,58 +15792,6 @@ class WorldbookAdapter {
             throw new Error(`${failureLabel}失败，已恢复${snapshotLabel}：${(0, util_1.errorText)(saveError || error)}`);
         }
     }
-    upsertActivityPack(opened, settings, focusUid = '', options = {}) {
-        const existingEntries = parseEntries(opened.data);
-        if (settings?.activityPackEnabled === false) {
-            const existingPack = existingEntries.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE);
-            if (existingPack?.mapKey != null) delete opened.data.entries[existingPack.mapKey];
-            return { changed: Boolean(existingPack), disabled: true, title: governance_1.ACTIVITY_PACK_TITLE, contentLength: 0, budget: null };
-        }
-        const gameTime = options.gameTime ?? currentGameTimeFromContext(this.context());
-        const block = (0, activity_pack_1.compileActivityPack)(existingEntries, {
-            focusUid,
-            currentSceneTitle: options.currentSceneTitle || '',
-            gameTime,
-            hardMax: settings.activityPackHardMax,
-        });
-        let located = existingEntries.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE);
-        let raw = located?.raw;
-        if (!raw) {
-            raw = this.createEntry(opened.api, opened.name, opened.data);
-            located = null;
-        }
-        const sections = {
-            order: block.sections.map((section) => section.name),
-            values: Object.fromEntries(block.sections.map((section) => [section.name, section.lines])),
-        };
-        const entry = located ? structuredClone(located) : {
-            uid: String(raw.uid ?? ''), mapKey: findMapKey(opened.data, raw), title: block.title,
-            normalizedTitle: (0, util_1.normalizeTitle)(block.title).toLocaleLowerCase(), type: block.type, name: block.name,
-            content: '', sections, keywords: block.keywords, aliases: [], references: [], focus: false, locked: true,
-            managed: true, activation: {}, raw,
-        };
-        entry.title = block.title;
-        entry.type = block.type;
-        entry.name = block.name;
-        entry.sections = sections;
-        entry.keywords = block.keywords;
-        entry.locked = true;
-        const nextContent = (0, parser_1.serializeEntrySections)(sections);
-        const hash = (0, util_1.hashText)(`${nextContent}|${gameTime?.label || ''}|${block.diagnostics.currentScene || ''}`);
-        const oldExtension = readExtension(raw);
-        const changed = String(raw.content ?? '') !== nextContent || String(oldExtension.activityPackHash ?? '') !== hash || raw.comment !== block.title;
-        if (changed) hydrateRaw(raw, entry, '', String(options.operationId || 'activity-pack'));
-        const extension = markManaged(raw, '', block.title, changed ? String(options.operationId || 'activity-pack') : '');
-        if (!changed && Number(oldExtension.updatedAt || 0)) extension.updatedAt = Number(oldExtension.updatedAt);
-        extension.locked = true;
-        extension.storageRole = 'runtime';
-        extension.lifecycle = 'active';
-        extension.semanticRole = 'activity-pack';
-        extension.activityPackHash = hash;
-        extension.activityPackDiagnostics = block.diagnostics;
-        raw.locked = true;
-        return { changed, uid: String(raw.uid ?? ''), title: block.title, diagnostics: block.diagnostics, contentLength: block.contentLength, budget: block.budget };
-    }
     applyNativeFields(entries, settings, focusUid, touchedUids, _createdUids = new Set()) {
         const normalizedFocusUid = String(focusUid ?? '');
         const recall = (0, recall_policy_1.buildRecallPlan)(entries, settings, normalizedFocusUid);
@@ -16388,7 +15812,7 @@ class WorldbookAdapter {
             extension.recallProfile = profile.name;
             extension.lifecycle = profile.lifecycle;
             extension.semanticRole = profile.semanticRole;
-            extension.storageRole = entry.title === governance_1.ACTIVITY_PACK_TITLE ? 'runtime' : 'warehouse';
+            extension.storageRole = 'warehouse';
             extension.entityClass = /^(?:人物|角色|NPC)$/u.test(String(entry.type ?? ''))
                 ? (profile.lifecycle === 'settled' ? 'settled-character' : 'character')
                 : /^(?:场景|时空)$/u.test(String(entry.type ?? '')) ? 'scene'
@@ -16584,12 +16008,11 @@ function parseEntries(data) {
         const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称'], split.type));
         const extension = readExtension(raw);
         const storedKeywords = (0, util_1.normalizeStringArray)(extension.recallKeywords);
-        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], activityPackDiagnostics: extension.activityPackDiagnostics && typeof extension.activityPackDiagnostics === 'object' ? structuredClone(extension.activityPackDiagnostics) : null, sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
+        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, locked: extension.locked === true || raw.locked === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
 }
 function hydrateRaw(raw, entry, sourceMessageKey, operationId) {
-    const uid = String(raw.uid ?? entry.uid ?? '');
     const split = (0, util_1.splitTitle)(entry.title);
     raw.comment = entry.title;
     const safeSections = {
@@ -16653,33 +16076,28 @@ function applyKeywordPolicy(raw, entry, profile, extension) {
 function verifyRecallConstraints(entries) {
     const currentScenes = entries.filter((entry) => entry.managed && /^(?:scene-current|scene-current-storage)$/u.test(entry.semanticRole));
     if (currentScenes.length > 1) throw new Error('当前场景超过一条');
-    const pack = entries.find((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE && entry.activation.constant === true);
     for (const entry of entries.filter((item) => item.managed)) {
-        if (entry.focus && !pack && (!entry.activation.constant || !entry.activation.preventRecursion || !entry.activation.excludeRecursion)) throw new Error(`长期焦点未保持常驻递归隔离：${entry.title}`);
-        if (pack && entry.title !== governance_1.ACTIVITY_PACK_TITLE && (entry.activation.constant || entry.activation.vectorized || entry.triggerKeywords?.length)) throw new Error(`活动包模式下仓储条目仍可直接召回：${entry.title}`);
+        if (entry.focus && (!entry.activation.constant || !entry.activation.preventRecursion || !entry.activation.excludeRecursion)) throw new Error(`长期焦点未保持常驻递归隔离：${entry.title}`);
         if (entry.activation.vectorized && entry.triggerKeywords?.length) throw new Error(`纯向量条目仍保留关键词：${entry.title}`);
         const maySpread = /^(scene-|world-state)/u.test(entry.semanticRole || '');
         if (!maySpread && entry.activation.preventRecursion !== true) throw new Error(`非场景/世界条目仍可继续递归：${entry.title}`);
     }
 }
 
-function currentGameTimeFromContext(context) {
-    const root = context?.chatMetadata?.[constants_1.EXTENSION_NAMESPACE];
-    const value = root?.currentGameTime;
-    return value && typeof value === 'object' ? structuredClone(value) : null;
-}
-function verifyActivityPack(data, settings) {
-    const entries = parseEntries(data);
-    const packs = entries.filter((entry) => entry.title === governance_1.ACTIVITY_PACK_TITLE);
-    if (settings?.activityPackEnabled !== false) {
-        if (packs.length !== 1) throw new Error(`当前活动包数量异常：${packs.length}`);
-        if (!packs[0].activation.constant || !packs[0].activation.preventRecursion || !packs[0].activation.excludeRecursion) throw new Error('当前活动包没有保持常驻递归隔离');
-        const hardMax = Math.max(600, Number(settings?.activityPackHardMax || 1800));
-        if (String(packs[0].content ?? '').length > hardMax + 240) throw new Error('当前活动包超过硬预算');
+function removeLegacyRuntimeProjection(data) {
+    let removed = false;
+    for (const [mapKey, raw] of Object.entries(data?.entries ?? {})) {
+        if (!raw || typeof raw !== 'object') continue;
+        const extension = readExtension(raw);
+        const legacy = String(raw.comment ?? '') === LEGACY_RUNTIME_PROJECTION_TITLE
+            || String(extension.semanticRole ?? '') === 'activity-pack';
+        if (!legacy) continue;
+        delete data.entries[mapKey];
+        removed = true;
     }
+    return removed;
 }
 function ensureUidIdentity(raw, uid, logicalTitle) {
-    const effectiveUid = String(uid ?? raw.uid ?? '').trim();
     const title = (0, util_1.stripUidSuffix)(logicalTitle || String(raw.comment ?? raw.name ?? raw.title ?? ''));
     const split = (0, util_1.splitTitle)(title);
     if (title) raw.comment = title;
