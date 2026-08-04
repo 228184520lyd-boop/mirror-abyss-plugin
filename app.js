@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.52-summary-granularity — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
+/** Mirror Abyss 2.0.0-lite.ui.53-protocol-status-controls — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -61,6 +61,7 @@ class MirrorAbyssApplication {
             extract: () => this.extract(),
             smallSummary: () => this.smallSummary(),
             largeSummary: () => this.largeSummary(),
+            testApiProbe: () => this.testApiProbe(),
             cancel: () => this.cancel(),
             loadWorkspace: () => this.loadWorkspace(),
             replanRecall: () => this.replanRecall(),
@@ -153,6 +154,36 @@ class MirrorAbyssApplication {
                 this.acceptanceMode = false;
                 this.clearPendingMessageTimers(snapshot.chatKey);
             }
+        });
+    }
+    testApiProbe() {
+        return this.enqueueMaintenance('apiProbe', async (settings, snapshot) => {
+            this.host.assertSnapshot(snapshot, this.settings());
+            const profileId = settings.modelSource === 'profile' ? String(settings.modelProfileId || '') : '';
+            const route = this.host.profileSummary(profileId) || {};
+            const startedAt = Date.now();
+            const raw = await this.host.generate(
+                '你是 Mirror Abyss API 连接探针。不要解释，只输出 MA_PROBE_OK。',
+                '只输出 MA_PROBE_OK。',
+                512,
+                snapshot,
+                settings,
+                Math.min(Math.max(5000, Number(settings.requestTimeoutMs || 30000)), 45000),
+                profileId,
+            );
+            this.host.assertSnapshot(snapshot, this.settings());
+            const text = String(raw || '').trim();
+            if (!/MA_PROBE_OK/u.test(text)) throw new Error(`API 已返回文本，但探针协议不匹配：${text.slice(0, 120) || '空响应'}`);
+            return {
+                ok: true,
+                elapsedMs: Date.now() - startedAt,
+                route: {
+                    name: route.name || (profileId ? profileId : '当前 SillyTavern 连接'),
+                    api: route.api || '未知',
+                    model: route.model || '未知',
+                    transport: route.transport || '',
+                },
+            };
         });
     }
     async resetAcceptanceRound(roundIndex, totalRounds) {
@@ -702,21 +733,23 @@ class MirrorAbyssApplication {
         this.taskQueues.set(chatKey, queue);
         this.pendingTaskKeys.add(taskKey);
         const position = queue.items.length + (queue.running ? 1 : 0);
-        this.controlPanel.setStatus(`世界书操作已进入异步队列（第${position}项）`);
+        const label = taskType === 'apiProbe' ? 'API 探针' : '世界书操作';
+        this.controlPanel.setStatus(`${label}已进入异步队列（第${position}项）`);
         globalThis.setTimeout(() => { void this.drainTaskQueue(chatKey); }, 0);
         return promise;
     }
 
     async runMaintenanceAction(item, settings, snapshot) {
         if (!this.started || snapshot.token?.cancelled) return [];
+        const label = item.taskType === 'apiProbe' ? 'API 探针' : '世界书操作';
         try {
-            this.controlPanel.setStatus('世界书操作中…');
+            this.controlPanel.setStatus(`${label}处理中…`);
             const result = await item.maintenanceAction(settings, snapshot);
-            this.controlPanel.setStatus('世界书操作完成');
+            this.controlPanel.setStatus(`${label}完成`);
             return result;
         }
         catch (error) {
-            this.controlPanel.setStatus(`世界书操作失败：${(0, util_1.errorText)(error)}`, true);
+            this.controlPanel.setStatus(`${label}失败：${(0, util_1.errorText)(error)}`, true);
             throw error;
         }
     }
@@ -975,7 +1008,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.52-summary-granularity';
+exports.VERSION = '2.0.0-lite.ui.53-protocol-status-controls';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1039,6 +1072,7 @@ class ControlPanel {
         this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
+        this.worldbookQuickStatusNode = null;
         this.profileDropdownBound = false;
         this.profileSelectionRevision = 0;
         this.settingsEntry = null;
@@ -1052,6 +1086,7 @@ class ControlPanel {
         this.statusError = false;
         this.observer = null;
         this.pendingIndicatorFrame = 0;
+        this.messageTaskStates = new Map();
         this.waitingForDom = false;
         this.launcherCleanup = [];
         this.dragState = null;
@@ -1126,6 +1161,7 @@ class ControlPanel {
         this.panel?.remove();
         this.settingsEntry?.remove();
         document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => node.remove());
+        this.messageTaskStates.clear();
         if (removeStyle) document.getElementById(STYLE_ID)?.remove();
         this.root = null;
         this.launcher = null;
@@ -1164,6 +1200,7 @@ class ControlPanel {
         this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
+        this.worldbookQuickStatusNode = null;
         this.profileDropdownBound = false;
         this.profileSelectionRevision = 0;
         this.settingsEntry = null;
@@ -1297,13 +1334,13 @@ class ControlPanel {
 .ma-lite-status{min-height:38px;padding:9px 10px;border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{color:#ffb4b4}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:38px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:40px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
-.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
+.ma-lite-worldbook-quick{display:flex;flex-direction:column;gap:7px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-worldbook-quick-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-worldbook-quick button{min-height:36px;padding:6px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-worldbook-quick button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-worldbook-quick-status{font-size:10px;line-height:1.4;opacity:.72}.ma-lite-worldbook-quick-status[data-error="true"]{color:#ffb4b4;opacity:1}.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:34px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:32px;min-height:30px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:26px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:32px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
 .ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:40px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
 .${INDICATOR_CLASS}{display:flex;align-items:center;gap:8px;width:max-content;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.78;user-select:none}
-.${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{display:none}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"],.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="warning"]{background:#f0a94f}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
+.${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{display:none}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"]{background:#777}.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="warning"]{background:#f0a94f}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
 `;
         document.head.append(style);
     }
@@ -1354,10 +1391,12 @@ class ControlPanel {
         this.statusNode = status;
         runPage.append(pipeline, actions, status);
 
+        const worldbookQuickActions = this.buildWorldbookQuickActions();
         const management = this.buildManagementSection();
         const recall = this.buildRecallSection();
         const worldSetting = this.buildWorldSettingSection();
         worldbookPage.append(
+            worldbookQuickActions,
             this.wrapToolSection('世界书状态', management, true),
             this.wrapToolSection('召回映射', recall, false),
             this.wrapToolSection('导入世界基础设定', worldSetting, false),
@@ -2027,6 +2066,81 @@ class ControlPanel {
         }
         if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = summary.previewReady === false ? '没有可提交预览。' : '预览已就绪；提交前旧表保持不变。';
     }
+    buildWorldbookQuickActions() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-worldbook-quick';
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-worldbook-quick-actions';
+        for (const [kind, label, title] of [
+            ['smallSummary', '运行小总结', '整理上次小总结后实际变更的世界书条目'],
+            ['largeSummary', '运行大总结', '把已经整理并稳定的运行内容固化为长期事实'],
+            ['testApiProbe', '测试 API', '只测试当前镜渊处理 API，不修改聊天或世界书'],
+        ]) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.title = title;
+            button.addEventListener('click', () => void this.runWorldbookQuickAction(kind));
+            actions.append(button);
+            this.buttons[kind] = button;
+        }
+        const status = document.createElement('div');
+        status.className = 'ma-lite-worldbook-quick-status';
+        status.setAttribute('aria-live', 'polite');
+        status.textContent = '小总结整理近期变更；大总结固化长期结果；API 探针不写入世界书。';
+        section.append(actions, status);
+        this.worldbookQuickStatusNode = status;
+        return section;
+    }
+    async runWorldbookQuickAction(kind) {
+        if (this.pendingActions.has(kind)) return;
+        const action = this.actions[kind];
+        if (typeof action !== 'function') {
+            this.setStatus('该操作未连接', true);
+            return;
+        }
+        const settings = this.getSettings();
+        if (kind !== 'testApiProbe' && settings.enabled === false) {
+            this.setStatus('总开关已关闭', true);
+            return;
+        }
+        const labels = { smallSummary: '小总结', largeSummary: '大总结', testApiProbe: 'API 探针' };
+        const label = labels[kind] || '操作';
+        this.pendingActions.add(kind);
+        this.syncDisabledState();
+        if (this.worldbookQuickStatusNode) {
+            this.worldbookQuickStatusNode.dataset.error = 'false';
+            this.worldbookQuickStatusNode.textContent = `${label}正在运行…`;
+        }
+        try {
+            const result = await action();
+            if (kind === 'testApiProbe') {
+                const route = result?.route || {};
+                const detail = `API 探针通过｜${Number(result?.elapsedMs || 0)} ms｜${route.name || '当前连接'}｜${route.api || '未知'}｜${route.model || '未知'}${route.transport ? `｜${route.transport}` : ''}`;
+                if (this.worldbookQuickStatusNode) this.worldbookQuickStatusNode.textContent = detail;
+                this.setStatus(detail);
+            }
+            else {
+                const detail = `${label}已完成；世界书状态已回读`;
+                if (this.worldbookQuickStatusNode) this.worldbookQuickStatusNode.textContent = detail;
+                this.setStatus(detail);
+                await this.refreshManagement(true);
+                await this.refreshRecallMap(true);
+            }
+        }
+        catch (error) {
+            const text = `${label}失败：${(0, util_1.errorText)(error)}`;
+            if (this.worldbookQuickStatusNode) {
+                this.worldbookQuickStatusNode.dataset.error = 'true';
+                this.worldbookQuickStatusNode.textContent = text;
+            }
+            this.setStatus(text, true);
+        }
+        finally {
+            this.pendingActions.delete(kind);
+            this.syncDisabledState();
+        }
+    }
     buildManagementSection() {
         const section = document.createElement('section');
         section.className = 'ma-lite-management';
@@ -2088,12 +2202,11 @@ class ControlPanel {
         const grid = document.createElement('div');
         grid.className = 'ma-lite-management-grid';
         const cards = [
-            ['当前游戏时间', model.gameTime?.label || '未知', model.gameTime?.sceneTitle || '只保存当前值'],
+            ['当前游戏时间', model.gameTime?.label || '未知', model.gameTime?.sceneTitle || '尚未从当前场景取得游戏时间'],
             ['当前场景', model.currentScene?.title || '未识别', `在场${model.currentScene?.present?.length || 0}；固定角色${model.currentScene?.fixedSceneRoles?.length || 0}；固定设施${model.currentScene?.fixedFacilities?.length || 0}`],
-            ['当前事件', String(model.counts?.activeEvents || 0), (model.activeEvents || []).map((item) => item.title).slice(0, 3).join('、') || '无'],
-            ['人物投影', `当前${model.counts?.currentPeople || 0} / 沉降${model.counts?.settledPeople || 0}`, '人物不使用全局状态机；按当前场景、事件和焦点投影'],
-            ['正文发送', '世界书单通道', '由 SillyTavern 原生常驻、关键词、递归与向量召回'],
-            ['直接关联', String(model.counts?.directRelations || 0), (model.directRelations || []).slice(0, 2).map((item) => `${item.sourceTitle}↔${item.targetTitle}`).join('；') || '无'],
+            ['活动事件', String(model.counts?.activeEvents || 0), (model.activeEvents || []).map((item) => item.title).slice(0, 3).join('、') || '无'],
+            ['人物投影', `当前${model.counts?.currentPeople || 0} / 沉降${model.counts?.settledPeople || 0}`, '按当前场景、事件和焦点生成运行投影'],
+            ['镜渊条目', String(model.counts?.managed || 0), `已关闭事件${model.counts?.closedEvents || 0}；直接关联${model.counts?.directRelations || 0}`],
             ['数据健康', model.healthy ? '通过' : model.hasErrors ? '有阻断项' : '有警告', `问题${model.issues?.length || 0}项`],
         ];
         for (const [label, value, detail] of cards) {
@@ -2519,6 +2632,9 @@ class ControlPanel {
         if (this.buttons.cancel) this.buttons.cancel.disabled = this.pendingActions.size === 0;
         if (this.buttons.audit) this.buttons.audit.disabled = this.pendingActions.has('audit') || !master || settings.auditEnabled === false;
         if (this.buttons.extract) this.buttons.extract.disabled = this.pendingActions.has('extract') || !master || settings.extractionEnabled === false;
+        if (this.buttons.smallSummary) this.buttons.smallSummary.disabled = this.pendingActions.size > 0 || !master;
+        if (this.buttons.largeSummary) this.buttons.largeSummary.disabled = this.pendingActions.size > 0 || !master;
+        if (this.buttons.testApiProbe) this.buttons.testApiProbe.disabled = this.pendingActions.size > 0;
         if (this.buttons.auditPromptSave) this.buttons.auditPromptSave.disabled = this.pendingActions.size > 0;
         if (this.worldSettingPreviewButton) this.worldSettingPreviewButton.disabled = this.pendingActions.size > 0 || !master || !String(this.worldSettingTextarea?.value || '').trim();
         if (this.worldSettingCommitButton) this.worldSettingCommitButton.disabled = this.pendingActions.size > 0 || !master || this.worldSettingDirty || !this.actions.worldSettingsPreview?.();
@@ -2555,7 +2671,7 @@ class ControlPanel {
     setTaskProgress(kind, state, detail = '', meta = {}) {
         if (!this.taskStates[kind]) return;
         const previous = this.taskStates[kind];
-        this.taskStates[kind] = {
+        const next = {
             ...previous,
             state: state || previous.state || 'idle',
             detail: String(detail || previous.detail || ''),
@@ -2570,11 +2686,19 @@ class ControlPanel {
             worldbookName: typeof meta.worldbookName === 'string' ? meta.worldbookName : previous.worldbookName,
             businessWriteCount: Number.isFinite(meta.businessWriteCount) ? Number(meta.businessWriteCount) : previous.businessWriteCount,
         };
+        this.taskStates[kind] = next;
+        if (Number.isInteger(next.messageIndex) && next.messageIndex >= 0) {
+            const current = this.messageTaskStates.get(next.messageIndex) || freshMessageTaskStates();
+            current[kind] = { ...next };
+            this.messageTaskStates.set(next.messageIndex, current);
+            while (this.messageTaskStates.size > 24) this.messageTaskStates.delete(this.messageTaskStates.keys().next().value);
+        }
         this.renderPipeline();
         this.scheduleIndicatorRefresh();
     }
     resetTaskStates(detail = '待命') {
         this.taskStates = { audit: freshTaskState(detail), revision: freshTaskState(detail), extract: freshTaskState(detail), write: freshTaskState(detail) };
+        this.messageTaskStates.clear();
         this.renderPipeline();
         this.lastOutcome = null;
         this.scheduleIndicatorRefresh();
@@ -2629,35 +2753,53 @@ class ControlPanel {
     }
     renderIndicator() {
         const messages = [...document.querySelectorAll('#chat .mes[is_user="false"][is_system="false"]')];
-        const target = messages.at(-1);
-        document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => { if (!target || !target.contains(node)) node.remove(); });
-        if (!target) return;
+        const visible = new Set();
+        for (const message of messages) {
+            const index = messageDomIndex(message);
+            if (!Number.isInteger(index)) continue;
+            const states = this.messageTaskStates.get(index);
+            if (!states) continue;
+            visible.add(index);
+            this.renderIndicatorForMessage(message, states);
+        }
+        document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => {
+            const index = Number(node.dataset.messageIndex);
+            if (!visible.has(index)) node.remove();
+        });
+    }
+    renderIndicatorForMessage(target, taskStates) {
         const text = target.querySelector('.mes_text');
         const block = target.querySelector('.mes_block') || target;
         if (!text || !block) return;
+        const messageIndex = messageDomIndex(target);
         let indicator = block.querySelector(`.${INDICATOR_CLASS}`);
-        if (!indicator) { indicator = document.createElement('div'); indicator.className = INDICATOR_CLASS; text.insertAdjacentElement('afterend', indicator); }
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = INDICATOR_CLASS;
+            text.insertAdjacentElement('afterend', indicator);
+        }
+        indicator.dataset.messageIndex = String(messageIndex);
         const settings = this.getSettings();
         const master = settings.enabled !== false;
         const enabled = { audit: master && settings.auditEnabled !== false, revision: master && settings.auditEnabled !== false, extract: master && settings.extractionEnabled !== false, write: master && settings.extractionEnabled !== false };
         const labels = { audit: '审', revision: '修', extract: '提', write: '写' };
         const fullLabels = { audit: '审核', revision: '修正', extract: '提取', write: '写入' };
         const parts = [];
-        const titleLines = [this.statusText];
+        const titleLines = [`正文 #${messageIndex} 的镜渊处理状态`];
         for (const kind of ['audit', 'revision', 'extract', 'write']) {
-            const state = this.indicatorState(kind, enabled[kind]);
+            const state = this.indicatorState(kind, enabled[kind], taskStates);
             parts.push(`<span class="ma-ind-part"><i class="ma-ind-dot" data-state="${state}"></i>${labels[kind]}</span>`);
-            titleLines.push(`${fullLabels[kind]}：${this.taskStates[kind]?.detail || this.stateLabel(state)}`);
+            titleLines.push(`${fullLabels[kind]}：${taskStates[kind]?.detail || this.stateLabel(state)}`);
         }
-        const write = this.taskStates.write;
+        const write = taskStates.write || {};
         if (write.worldbookName) titleLines.push(`目标世界书：${write.worldbookName}`);
         if (Number.isFinite(write.businessWriteCount)) titleLines.push(`业务写入：${write.businessWriteCount}条`);
-        indicator.title = titleLines.filter(Boolean).join('\n');
+        indicator.title = titleLines.join('\n');
         indicator.innerHTML = `<span class="ma-ind-label">镜渊</span>${parts.join('')}`;
     }
-    indicatorState(kind, enabled) {
+    indicatorState(kind, enabled, taskStates = this.taskStates) {
         if (!enabled) return 'disabled';
-        const state = this.taskStates[kind]?.state;
+        const state = taskStates[kind]?.state;
         if (state === 'queued') return 'queued';
         if (state === 'running') return 'running';
         if (state === 'success') return 'success';
@@ -2672,6 +2814,16 @@ class ControlPanel {
 }
 function freshTaskState(detail = '待命') {
     return { state: 'idle', detail, titles: [], created: [], updated: [], deleted: [], skipped: [], merged: [], repaired: 0, messageIndex: null, queuePosition: 0, worldbookName: '', businessWriteCount: 0 };
+}
+function freshMessageTaskStates() {
+    return { audit: freshTaskState('待命'), revision: freshTaskState('待命'), extract: freshTaskState('待命'), write: freshTaskState('待命') };
+}
+function messageDomIndex(node) {
+    for (const name of ['mesid', 'data-message-id', 'data-mesid']) {
+        const value = node?.getAttribute?.(name);
+        if (value !== null && value !== undefined && /^-?\d+$/u.test(String(value))) return Number(value);
+    }
+    return null;
 }
 /** [MA-UI-API-03] 一个 Profile 统一覆盖所有模型阶段；空值恢复当前连接。 */
 function buildUnifiedProfilePatch(profileId) {
@@ -3017,7 +3169,7 @@ class DiagnosticsService {
                         host: this.host,
                         stage: 'audit',
                         prompt,
-                        fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, playerText, assistantText, { compact: true, dialogueContext: '' }),
+                        fallbackPrompt: () => (0, prompts_1.auditPrompts)(settings, playerText, assistantText, { compact: true, dialogueContext: '', requestTime: snapshot.capturedAt, currentGameTime: host.getCurrentGameTime?.() || null }),
                         settings,
                         snapshot: protocolSnapshot,
                         profileId: settings.auditProfileId,
@@ -4415,6 +4567,7 @@ class HostAdapter {
             scopeRevision: this.scopeRevision(turn.chatKey),
             worldbookName: this.targetWorldbookName(settings),
             settingsSignature: this.settingsSignature(settings),
+            capturedAt: Date.now(),
             taskId: randomId(),
             taskType,
             // [MA-QUEUE-03] 提取、总结和完整后台流程固定到源正文；后续新正文只会排队，不使该源正文任务失效。
@@ -4444,6 +4597,7 @@ class HostAdapter {
             scopeRevision: this.scopeRevision(chatKey),
             worldbookName: this.targetWorldbookName(settings),
             settingsSignature: this.settingsSignature(settings),
+            capturedAt: Date.now(),
             taskId: randomId(),
             taskType,
             token,
@@ -6460,7 +6614,7 @@ class MemoryRunner {
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
         const dialogueInput = [snapshot.dialogueContext, snapshot.turnText || `${snapshot.playerText}\n${snapshot.assistantText}`].filter(Boolean).join('\n\n');
-        const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { dialogueContext: snapshot.dialogueContext });
+        const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { dialogueContext: snapshot.dialogueContext, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null });
         // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
         let raw = options.deterministicOnly === true ? 'EMPTY' : '';
         try {
@@ -6468,7 +6622,7 @@ class MemoryRunner {
                 host: this.host,
                 stage: 'extraction',
                 prompt,
-                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { compact: true, dialogueContext: snapshot.dialogueContext }),
+                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { compact: true, dialogueContext: snapshot.dialogueContext, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null }),
                 settings,
                 snapshot,
                 profileId: settings.extractionProfileId,
@@ -6584,13 +6738,13 @@ class MemoryRunner {
                 ? this.host.recentConversation(snapshot, settings.smallSummaryTurns)
                 : `${snapshot.playerText || ''}\n${snapshot.assistantText || ''}`.trim())
             : '';
-        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { pendingUids, allEntries: entries });
+        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { pendingUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null });
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
         const raw = await (0, model_request_1.callModel)({
             host: this.host,
             stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { compact: true, pendingUids, allEntries: entries }),
+            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { compact: true, pendingUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null }),
             settings,
             snapshot,
             profileId: profile,
@@ -6896,7 +7050,7 @@ async function segmentedExtractionRescue(host, settings, snapshot, entries, getS
     for (let index = 0; index < segments.length; index += 1) {
         host.assertSnapshot(snapshot, getSettings());
         const segment = segments[index];
-        const prompt = (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, entries, { compact: true, dialogueContext: '' });
+        const prompt = (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, entries, { compact: true, dialogueContext: '', requestTime: snapshot.capturedAt, currentGameTime: host.getCurrentGameTime?.() || null });
         try {
             const output = await (0, model_request_1.callModel)({
                 host,
@@ -6966,10 +7120,10 @@ function absorbedSourceOperations(summaryBlock, selectedEntries, distributionBlo
     const operations = [];
     const deleted = new Set();
     for (const rawLine of section.lines ?? []) {
-        const match = String(rawLine ?? '').match(/^\s*事件\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*并入\s*[｜|丨]\s*事件\s*[｜|丨]\s*(.+?)\s*$/u);
-        if (!match) continue;
-        const sourceTitle = `事件｜${match[1].trim()}`;
-        const targetTitle = `事件｜${match[2].trim()}`;
+        const pair = parseAbsorptionLine(rawLine);
+        if (!pair) continue;
+        const sourceTitle = pair.sourceTitle;
+        const targetTitle = pair.targetTitle;
         const source = eligible.get((0, util_1.normalizeTitle)(sourceTitle));
         const normalizedTarget = (0, util_1.normalizeTitle)(targetTitle);
         if (!source || deleted.has(source.uid) || (0, util_1.normalizeTitle)(source.title) === normalizedTarget || !distributedTargets.has(normalizedTarget)) continue;
@@ -6989,6 +7143,23 @@ function absorbedSourceOperations(summaryBlock, selectedEntries, distributionBlo
         deleted.add(source.uid);
     }
     return operations;
+}
+
+function parseAbsorptionLine(rawLine) {
+    const line = String(rawLine ?? '').replace(/^\s*[-*•]+\s*/u, '').trim();
+    let match = line.match(/^事件\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*并入\s*[｜|丨]\s*事件\s*[｜|丨]\s*(.+?)\s*$/u);
+    if (match) return { sourceTitle: `事件｜${match[1].trim()}`, targetTitle: `事件｜${match[2].trim()}` };
+    match = line.match(/^来源\s*[:：]\s*事件\s*[｜|丨]\s*(.+?)\s*[；;，,]\s*目标\s*[:：]\s*事件\s*[｜|丨]\s*(.+?)\s*$/u);
+    if (match) return { sourceTitle: `事件｜${match[1].trim()}`, targetTitle: `事件｜${match[2].trim()}` };
+    const quoted = [...line.matchAll(/[“"']([^”"']+)[”"']/gu)].map((item) => item[1].trim());
+    if (/并入/u.test(line) && quoted.length >= 2) {
+        const source = quoted[0].replace(/^事件\s*[｜|丨:：]\s*/u, '').trim();
+        const target = quoted[1].replace(/^事件\s*[｜|丨:：]\s*/u, '').trim();
+        if (source && target) return { sourceTitle: `事件｜${source}`, targetTitle: `事件｜${target}` };
+    }
+    match = line.match(/^将\s*事件\s*[｜|丨:：]\s*(.+?)\s*并入\s*事件\s*[｜|丨:：]\s*(.+?)\s*$/u);
+    if (match) return { sourceTitle: `事件｜${match[1].trim()}`, targetTitle: `事件｜${match[2].trim()}` };
+    return null;
 }
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
@@ -13639,7 +13810,11 @@ ${schema || '使用人物、场景、物品、事件、世界、基础设定的�
 
 用户附加要求：
 ${custom}` : ''}`;
-    const user = `【上一轮权威世界书】
+    const timeContext = promptTimeContext(options);
+    const user = `【本次处理时间】
+${timeContext}
+
+【上一轮权威世界书】
 ${existing || '（无）'}
 
 【最近完整对话】
@@ -13764,13 +13939,13 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 类型｜稳定名称｜小标题｜完整事实句
 
 【吸收来源】
-- 事件｜来源稳定名称｜并入｜事件｜目标稳定名称
+- 将事件｜来源稳定名称并入事件｜目标稳定名称
 
 分发与吸收规则：
 - 分发事实必须是抽象后的较粗表达，不得逐条翻写原始细节。
 - 事件进展写回事件【已发生进展】；当前没有必要暂存材料时，可写“事件｜稳定名称｜未发生进展｜无”覆盖旧暂存。
 - 人物、场景、物品、世界和基础设定分别写回其直接栏目。
-- 【吸收来源】当前只允许完整吸收事件壳；目标事件必须同时出现在【分发事实】中。没有可安全吸收的来源时写“- 无”。
+- 【吸收来源】当前只允许完整吸收事件壳；使用自然句“将事件｜来源并入事件｜目标”。目标事件必须同时出现在【分发事实】中。没有可安全吸收的来源时写“- 无”。
 - 没有可整理内容时只输出“无”。
 
 【示范】
@@ -13835,7 +14010,8 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 本次输出覆盖旧“总结｜世界历史”的对应栏目，不得追加一套重复历史。没有新的长期结果时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
     const changedLabel = isSmall ? '本期实际变更条目' : '本期小总结后实际变更的运行条目';
     const recent = isSmall ? `\n\n【最近聊天】\n${clipText(recentConversation || '（无）', compact ? 7000 : 11000)}` : '';
-    const user = `【处理范围】\n${subject || (isSmall ? '近期世界书变更整理' : '长期世界结构固化')}
+    const timeContext = promptTimeContext(options);
+    const user = `【本次处理时间】\n${timeContext}\n\n【处理范围】\n${subject || (isSmall ? '近期世界书变更整理' : '长期世界结构固化')}
 
 【权威世界书轻量索引】
 ${index || '（无）'}
@@ -14135,6 +14311,23 @@ function entryForPrompt(entry, contentLimit = 1000) {
 }
 
 // [MA-PROMPT-01] 保留文本开头与结尾，避免简单截断丢失结论或最终状态。
+function promptTimeContext(options = {}) {
+    const value = options.requestTime ?? Date.now();
+    const date = new Date(value);
+    const valid = Number.isFinite(date.getTime());
+    const pad = (number) => String(number).padStart(2, '0');
+    const offsetMinutes = valid ? -date.getTimezoneOffset() : 0;
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const offset = `${sign}${pad(Math.floor(Math.abs(offsetMinutes) / 60))}:${pad(Math.abs(offsetMinutes) % 60)}`;
+    const request = valid
+        ? `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${offset}`
+        : '未知';
+    const game = options.currentGameTime?.label ? String(options.currentGameTime.label) : '未知';
+    const source = options.currentGameTime?.sceneTitle ? `（来源：${options.currentGameTime.sceneTitle}）` : '';
+    return `- 请求时间：${request}（仅用于批次先后，不得写成剧情事实）
+- 当前游戏时间：${game}${source}`;
+}
+
 function clipText(value, maxChars) {
     const text = String(value ?? '');
     if (!Number.isFinite(maxChars) || maxChars <= 0 || text.length <= maxChars) return text;
