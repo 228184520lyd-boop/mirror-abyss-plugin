@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.53-protocol-status-controls
+# Mirror Abyss 2.0.0-lite.ui.54-revision-gate-contrast
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -23,7 +23,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.53-protocol-status-controls 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.54-revision-gate-contrast 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -109,7 +109,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 详细实现范围见 `PATCH-SCOPE.md`，固定验证见 `SUMMARY-GRANULARITY-VALIDATION.md`。
 
-## 2.0.0-lite.ui.53-protocol-status-controls 本轮改动
+## 2.0.0-lite.ui.53-protocol-status-controls
 
 - 小总结 `【吸收来源】` 改用自然句：`将事件｜来源并入事件｜目标`，降低模型填写符号协议的失败率。
 - 本地解析器同时兼容自然句、`来源/目标` 标签式写法和 ui.52 旧竖线协议，升级后不破坏旧模型输出。
@@ -123,3 +123,14 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 真实 SillyTavern 安装、第三方模型格式稳定性和移动端界面仍需实机验证。
 
+
+
+## 2.0.0-lite.ui.54-revision-gate-contrast 本轮改动
+
+- 修复审核修正版完整性闸门误判：中文正文以 `”`、`’`、书名号或其他闭合符号结尾时，现在会被识别为完整句末。
+- 删除“只要缺少终止标点且比原文稍短就判定截断”的单一条件；现在必须同时出现明显缩短、段落骤减、悬空标点或明确未完成词尾，才拒绝覆盖。
+- 保留真正截断的安全闸门：空正文、严重缩短、段落丢失、结尾悬空结构仍会触发重试并保留原正文。
+- 插件面板状态说明框提高对比度：增加实边框、主题色前景、完整换行与文本选择；错误状态使用不透明深红背景和白色文字，避免浅色或透明主题下看不清。
+- 新增 `revision-gate-contrast.test.mjs`，覆盖中文右引号结尾、无句号完整收尾、真实截断、悬空标点和错误说明框对比度。
+
+真实 SillyTavern 中不同主题、移动端字体渲染和第三方修正模型输出仍需实机验证。
