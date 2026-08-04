@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.54-revision-gate-contrast — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
+/** Mirror Abyss 2.0.0-lite.ui.56-granularity-ladder — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -941,7 +941,7 @@ class AuditRunner {
             this.host.assertSnapshot(snapshot, this.getSettings());
             this.setStatus(snapshot.chatKey, 'audit', '审核正文');
             const prompt = (0, prompts_1.auditPrompts)(settings, snapshot.playerText, snapshot.assistantText, { dialogueContext: snapshot.dialogueContext });
-            const raw = await (0, model_request_1.callModel)({
+            let raw = await (0, model_request_1.callModel)({
                 host: this.host,
                 stage: 'audit',
                 prompt,
@@ -953,7 +953,45 @@ class AuditRunner {
                 onRetry: (error) => this.setStatus(snapshot.chatKey, 'audit', (0, model_request_1.describeRetryReason)(error, '审核模型')),
             });
             this.host.assertSnapshot(snapshot, this.getSettings());
-            const result = parseAuditResult(raw);
+            let result;
+            try {
+                result = parseAuditResult(raw);
+            }
+            catch (protocolError) {
+                if (/越权返回了修正版正文/u.test((0, util_1.errorText)(protocolError))) throw protocolError;
+                this.setStatus(snapshot.chatKey, 'audit', '审核结论格式不完整，正在进行一次自然格式重试');
+                const repairPrompt = {
+                    system: `你是 Mirror Abyss 审核结论整理器。
+重新检查给定审核规则与本轮回复，只提交最终结论。
+通过时只写“审核结论：通过”。
+不通过时写“审核结论：需要修正”，随后写“问题：”并列出最多8条具体原因。
+禁止输出修正版正文、分析、前言和后记。`,
+                    user: `玩家审核规则：
+${String(settings.auditPrompt || '（无）').slice(0, 5200)}
+
+本轮玩家输入：
+${String(snapshot.playerText || '（空）').slice(0, 3000)}
+
+本轮AI最终回复：
+${String(snapshot.assistantText || '').slice(0, 14000)}
+
+上一次未能解析的审核返回：
+${String(raw || '').slice(0, 2400)}`,
+                };
+                raw = await (0, model_request_1.callModel)({
+                    host: this.host,
+                    stage: 'audit',
+                    prompt: repairPrompt,
+                    fallbackPrompt: () => repairPrompt,
+                    settings,
+                    snapshot,
+                    profileId: settings.auditProfileId,
+                    sourceText: snapshot.turnText || snapshot.assistantText,
+                    onRetry: (error) => this.setStatus(snapshot.chatKey, 'audit', (0, model_request_1.describeRetryReason)(error, '审核格式重试')),
+                });
+                this.host.assertSnapshot(snapshot, this.getSettings());
+                result = parseAuditResult(raw);
+            }
             let finalSnapshot = snapshot;
             if (result.decision === 'revision') {
                 this.setStatus(snapshot.chatKey, 'revision', '审核不通过，生成一次完整修正版');
@@ -980,24 +1018,65 @@ class AuditRunner {
 }
 exports.AuditRunner = AuditRunner;
 
-/** [MA-AUDIT-02] 审核结果协议：PASS 只能单独出现；FAIL 必须附具体问题。 */
+/** [MA-AUDIT-02] 审核结果协议：优先使用自然中文结论，同时兼容旧 PASS/FAIL。 */
 function parseAuditResult(raw) {
     const text = (0, parser_1.sanitizeModelText)(raw);
-    if (/^(?:PASS|通过)[。.]?$/iu.test(text)) return { decision: 'pass', issues: [] };
+    if (!text) throw new Error('审核模型没有返回可识别内容');
     if (/【\s*(?:最小修正版正文|修正版正文|完整正文|正文)\s*】/u.test(text))
         throw new Error('审核模型越权返回了修正版正文');
-    const rawConclusion = text.match(/^\s*(PASS|FAIL|通过|需要修正)\s*[。.]?\s*(?:\n|$)/iu)?.[1] || '';
-    const conclusion = /^(?:PASS|通过)$/iu.test(rawConclusion) ? 'PASS' : /^(?:FAIL|需要修正)$/iu.test(rawConclusion) ? 'FAIL' : '';
-    if (conclusion === 'PASS') throw new Error('审核结论为 PASS 时必须只返回 PASS');
-    if (conclusion !== 'FAIL') throw new Error('审核返回缺少明确的 PASS 或 FAIL 结论');
-    const sections = (0, parser_1.parseLabeledSections)(text);
-    let issues = ['原因', '违反规则', '问题', '违规'].flatMap((name) => nonEmptyLines(sections.get(name))).filter((line) => !isNone(line));
-    if (!issues.length) {
-        issues = text.split('\n').slice(1)
-            .map((line) => (0, parser_1.stripListMarker)(line.replace(/^\s*【[^】]+】\s*$/u, '').replace(/^\s*原因\s*[:：]?\s*$/u, '')).trim())
-            .filter((line) => line && !isNone(line));
+    const lines = text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+    let decision = '';
+    let decisionLineIndex = -1;
+    let inlineReason = '';
+    for (let index = 0; index < Math.min(lines.length, 12); index += 1) {
+        const clean = (0, parser_1.stripListMarker)(lines[index])
+            .replace(/^#{1,6}\s*/u, '')
+            .replace(/^\*\*(.*?)\*\*$/u, '$1')
+            .trim();
+        const match = clean.match(/^(?:(?:审核|检查)?(?:结论|结果|判定)\s*[：:]\s*)?(PASS|FAIL|不通过|未通过|需要修正|通过)(?:\s*[。.!！]?)?(?:\s*[：:]\s*(.*))?$/iu);
+        if (!match) continue;
+        const token = String(match[1] || '').toUpperCase();
+        decision = /^(?:PASS|通过)$/iu.test(token) ? 'pass' : 'revision';
+        decisionLineIndex = index;
+        inlineReason = String(match[2] || '').trim();
+        break;
     }
-    if (!issues.length) throw new Error('审核返回 FAIL，但没有指出具体问题或原因');
+    const passCue = /(?:未发现|没有发现|不存在)[^。；;\n]{0,28}(?:违规|问题|违反)|(?:符合|满足)[^。；;\n]{0,24}(?:审核规则|规则|要求)|(?:审核|检查)(?:结论|结果)?\s*[：:]?\s*通过|无需(?:修正|修改)/u.test(text);
+    const negativeStripped = text
+        .replace(/(?:未发现|没有发现|不存在)[^。；;\n]{0,28}(?:违规|问题|违反)/gu, '')
+        .replace(/无需(?:修正|修改)/gu, '');
+    const failCue = /(?:需要修正|不通过|未通过)|(?:发现|存在|出现)[^。；;\n]{0,20}(?:违规|问题)|违反[^。；;\n]{0,24}(?:规则|要求)|触发[^。；;\n]{0,24}(?:规则|禁止)/u.test(negativeStripped);
+    if (!decision) {
+        if (passCue && !failCue) decision = 'pass';
+        else if (failCue) decision = 'revision';
+    }
+    if (!decision) throw new Error('审核返回缺少可识别的“通过”或“需要修正”结论');
+    if (decision === 'pass') return { decision: 'pass', issues: [] };
+    const sections = (0, parser_1.parseLabeledSections)(text);
+    let issues = ['原因', '违反规则', '问题', '违规', '需要修正']
+        .flatMap((name) => nonEmptyLines(sections.get(name)))
+        .filter((line) => !isNone(line));
+    if (inlineReason) issues.unshift(inlineReason);
+    if (!issues.length) {
+        issues = lines
+            .filter((_line, index) => index !== decisionLineIndex)
+            .map((line) => (0, parser_1.stripListMarker)(line
+                .replace(/^#{1,6}\s*/u, '')
+                .replace(/^\*\*(.*?)\*\*$/u, '$1')
+                .replace(/^\s*【[^】]+】\s*$/u, '')
+                .replace(/^\s*(?:原因|问题|违规|违反规则|需要修正)\s*[：:]?\s*$/u, '')).trim())
+            .filter((line) => line && !isNone(line) && !/(?:审核|检查)(?:结论|结果|判定)\s*[：:]?\s*(?:需要修正|不通过|未通过|FAIL)/iu.test(line));
+    }
+    if (!issues.length) {
+        issues = text.split(/[。；;\n]/u)
+            .map((line) => line.trim())
+            .filter((line) => /(?:违规|问题|违反|触发|读心|越权|预设成功|未提供信息)/u.test(line))
+            .slice(0, 8);
+    }
+    issues = [...new Set(issues
+        .map((line) => line.replace(/^[：:\-—–\s]+/u, '').trim())
+        .filter(Boolean))].slice(0, 8);
+    if (!issues.length) throw new Error('审核判断为需要修正，但没有指出具体问题或原因');
     return { decision: 'revision', issues };
 }
 function nonEmptyLines(lines = []) { return lines.map((line) => (0, parser_1.stripListMarker)(line).trim()).filter(Boolean); }
@@ -1008,7 +1087,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.54-revision-gate-contrast';
+exports.VERSION = '2.0.0-lite.ui.56-granularity-ladder';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -3183,7 +3262,7 @@ class DiagnosticsService {
             else pushSkip('audit-protocol', '审核提示词与 PASS 协议', '业务协议', '审核功能已关闭');
 
             if (settings.extractionEnabled !== false) {
-                await runCheck('extraction-protocol', '提取提示词与 ENTRY 协议', '业务协议', async () => {
+                await runCheck('extraction-protocol', '提取提示词与条目格式', '业务协议', async () => {
                     const childToken = { cancelled: false, reason: '' };
                     const protocolSnapshot = this.host.captureMaintenanceSnapshot(settings, 'acceptanceExtractionProtocol', childToken);
                     const playerText = '我走进青石大厅。';
@@ -3202,12 +3281,12 @@ class DiagnosticsService {
                     const blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
                     if (!blocks.length) {
                         const diagnostics = blocks.diagnostics || {};
-                        throw new Error(`合成状态变化未形成 ENTRY 协议；异常片段${(diagnostics.skipped || []).length}个`);
+                        throw new Error(`合成状态变化未形成可识别条目格式；异常片段${(diagnostics.skipped || []).length}个`);
                     }
                     return { mode: 'real-model-protocol', entryCount: blocks.length, titles: blocks.map((block) => String(block.title || '')).slice(0, 8), repaired: Number(blocks.diagnostics?.repaired || 0), route: settings.extractionProfileId ? 'profile' : 'current' };
                 });
             }
-            else pushSkip('extraction-protocol', '提取提示词与 ENTRY 协议', '业务协议', '提取功能已关闭');
+            else pushSkip('extraction-protocol', '提取提示词与条目格式', '业务协议', '提取功能已关闭');
 
             if (rawBefore) {
                 await runCheck('worldbook-reversible-write', '世界书写入—回读—回滚', '世界书', async () => {
@@ -6640,7 +6719,7 @@ class MemoryRunner {
         let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
         let repairRaw = '';
         if (!blocks.length && diagnostics.hadInput) {
-            this.progress('running', '提取结果不是可提交的 ENTRY 协议，启动一次格式修复', { titles: [], phase: 'extract' });
+            this.progress('running', '提取结果不是可识别的条目格式，启动一次格式修复', { titles: [], phase: 'extract' });
             const repairPrompt = (0, prompts_1.extractionRepairPrompts)(raw);
             repairRaw = await (0, model_request_1.callModel)({
                 host: this.host,
@@ -6676,7 +6755,7 @@ class MemoryRunner {
             this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0, phase: 'extract' });
             if (!explicitNone) {
                 const reasons = (diagnostics.skipped || []).map((item) => `${item.title || '异常片段'}：${item.reason || '协议不完整'}`).slice(0, 4).join('；');
-                throw new Error(`提取未形成最终 ENTRY 协议，世界书未写入且处理游标未推进${reasons ? `：${reasons}` : ''}`);
+                throw new Error(`提取未形成可识别的条目格式，世界书未写入且处理游标未推进${reasons ? `：${reasons}` : ''}`);
             }
             return { entries, changed: false, diagnostics };
         }
@@ -6769,7 +6848,7 @@ class MemoryRunner {
             return { entries, changed: false };
         }
         const distribution = distributionBlocksFromSummary(summaryBlock);
-        const absorption = kind === 'small' ? absorbedSourceOperations(summaryBlock, selected, distribution) : [];
+        const absorption = absorbedSourceOperations(summaryBlock, selected, distribution, { kind, pendingUids });
         summaryBlock.sections = summaryBlock.sections.filter((section) => !/^(分发事实|沉降分发|吸收来源)$/u.test(section.name));
         const plan = (0, operations_1.buildOperationPlan)([summaryBlock, ...distribution], entries, settings, selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n'), { sourceKind: 'summary', cleanupTemporaryAfterSummary: true, consumeSmallSummaryAfterLarge: kind === 'large', compactEventProgressFromSummary: true });
         plan.operations.push(...absorption);
@@ -6880,8 +6959,20 @@ function ensureSummarySnapshotSections(block, kind) {
             '未解决事项': '未发生进展',
             '待处理事项': '未发生进展',
             '持续影响': '稳定影响',
+            '升阶来源': '吸收来源',
+            '来源升阶': '吸收来源',
+            '合并来源': '吸收来源',
         }
-        : { '长期结果': '长期变化', '重要事件': '重要事件结果', '事件结果': '重要事件结果', '关系变化': '长期关系', '世界影响': '稳定世界影响' };
+        : {
+            '长期结果': '长期变化',
+            '重要事件': '重要事件结果',
+            '事件结果': '重要事件结果',
+            '关系变化': '长期关系',
+            '世界影响': '稳定世界影响',
+            '升阶来源': '吸收来源',
+            '来源升阶': '吸收来源',
+            '合并来源': '吸收来源',
+        };
     const merged = new Map();
     for (const section of output.sections ?? []) {
         const name = aliases[String(section.name ?? '').trim()] ?? String(section.name ?? '').trim();
@@ -7108,58 +7199,96 @@ function isReasoningOrEmptyError(error) {
 }
 
 
-function absorbedSourceOperations(summaryBlock, selectedEntries, distributionBlocks) {
-    const section = summaryBlock.sections.find((item) => item.name === '吸收来源');
+function absorbedSourceOperations(summaryBlock, selectedEntries, distributionBlocks, options = {}) {
+    const section = summaryBlock.sections.find((item) => /^(?:吸收来源|升阶来源|来源升阶|合并来源)$/u.test(String(item.name ?? '').trim()));
     if (!section || section.empty) return [];
-    const eligible = new Map((selectedEntries ?? [])
-        .filter((entry) => entry.type === '事件' && entry.managed === true && entry.locked !== true && entry.focus !== true)
-        .map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
-    const distributedTargets = new Set((distributionBlocks ?? [])
-        .filter((block) => block.type === '事件')
-        .map((block) => (0, util_1.normalizeTitle)(block.title)));
+    const kind = options.kind === 'large' ? 'large' : 'small';
+    const pending = new Set((options.pendingUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
+    if (!pending.size) return [];
+    const selected = (selectedEntries ?? []).filter((entry) => {
+        if (!pending.has(String(entry.uid))) return false;
+        if (entry.managed !== true || entry.locked === true || entry.focus === true || entry.activation?.disabled === true) return false;
+        if (entry.type === '场景' && (entry.sceneStage === 'current' || entry.semanticRole === 'scene-current')) return false;
+        return true;
+    });
+    const eligible = new Map(selected.map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
+    const distributedTargets = new Map((distributionBlocks ?? []).map((block) => [(0, util_1.normalizeTitle)(block.title), block]));
     const operations = [];
     const deleted = new Set();
     for (const rawLine of section.lines ?? []) {
         const pair = parseAbsorptionLine(rawLine);
         if (!pair) continue;
-        const sourceTitle = pair.sourceTitle;
-        const targetTitle = pair.targetTitle;
-        const source = eligible.get((0, util_1.normalizeTitle)(sourceTitle));
-        const normalizedTarget = (0, util_1.normalizeTitle)(targetTitle);
-        if (!source || deleted.has(source.uid) || (0, util_1.normalizeTitle)(source.title) === normalizedTarget || !distributedTargets.has(normalizedTarget)) continue;
+        const source = eligible.get((0, util_1.normalizeTitle)(pair.sourceTitle));
+        const normalizedTarget = (0, util_1.normalizeTitle)(pair.targetTitle);
+        const targetBlock = distributedTargets.get(normalizedTarget);
+        if (!source || !targetBlock || deleted.has(source.uid)) continue;
+        if ((0, util_1.normalizeTitle)(source.title) === normalizedTarget) continue;
+        if (!granularityMergeAllowed(kind, source.type, targetBlock.type)) continue;
         operations.push({
-            id: `summary-absorb:${source.uid}:${(0, util_1.hashText)(normalizedTarget)}`,
+            id: `summary-absorb:${kind}:${source.uid}:${(0, util_1.hashText)(normalizedTarget)}`,
             kind: 'delete-entry',
             operation: 'delete',
             title: source.title,
             targetUid: source.uid,
             oldValue: source.title,
             newValue: '删除',
-            reason: `小总结已将该细颗粒事件完整抽象并分发到“${targetTitle}”`,
-            mergedIntoTitle: targetTitle,
+            reason: `${kind === 'small' ? '小总结' : '大总结'}已将该${source.type}运行壳的宏观原貌与持续影响完整抽象并分发到“${pair.targetTitle}”`,
+            mergedIntoTitle: pair.targetTitle,
             requiresDistributionProof: true,
-            distributionTargets: [targetTitle],
+            distributionTargets: [pair.targetTitle],
+            granularitySourceType: source.type,
+            granularityTargetType: targetBlock.type,
         });
         deleted.add(source.uid);
     }
     return operations;
 }
 
+function granularityMergeAllowed(kind, sourceType, targetType) {
+    const source = (0, parser_1.canonicalExtractionType)(sourceType);
+    const target = (0, parser_1.canonicalExtractionType)(targetType);
+    const rules = kind === 'large'
+        ? {
+            '事件': new Set(['事件', '世界']),
+            '场景': new Set(['世界']),
+            '世界': new Set(['世界']),
+        }
+        : {
+            '事件': new Set(['事件']),
+            '场景': new Set(['场景', '世界']),
+        };
+    return rules[source]?.has(target) === true;
+}
+
 function parseAbsorptionLine(rawLine) {
     const line = String(rawLine ?? '').replace(/^\s*[-*•]+\s*/u, '').trim();
-    let match = line.match(/^事件\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*并入\s*[｜|丨]\s*事件\s*[｜|丨]\s*(.+?)\s*$/u);
-    if (match) return { sourceTitle: `事件｜${match[1].trim()}`, targetTitle: `事件｜${match[2].trim()}` };
-    match = line.match(/^来源\s*[:：]\s*事件\s*[｜|丨]\s*(.+?)\s*[；;，,]\s*目标\s*[:：]\s*事件\s*[｜|丨]\s*(.+?)\s*$/u);
-    if (match) return { sourceTitle: `事件｜${match[1].trim()}`, targetTitle: `事件｜${match[2].trim()}` };
-    const quoted = [...line.matchAll(/[“"']([^”"']+)[”"']/gu)].map((item) => item[1].trim());
-    if (/并入/u.test(line) && quoted.length >= 2) {
-        const source = quoted[0].replace(/^事件\s*[｜|丨:：]\s*/u, '').trim();
-        const target = quoted[1].replace(/^事件\s*[｜|丨:：]\s*/u, '').trim();
-        if (source && target) return { sourceTitle: `事件｜${source}`, targetTitle: `事件｜${target}` };
+    if (!line || /^(?:无|没有|暂无)$/u.test(line)) return null;
+    const sourceTarget = line.match(/^来源\s*[:：]\s*(.+?)\s*[；;，,]\s*目标\s*[:：]\s*(.+?)\s*$/u);
+    if (sourceTarget) {
+        const source = parseAbsorptionTitle(sourceTarget[1]);
+        const target = parseAbsorptionTitle(sourceTarget[2]);
+        return source && target ? { sourceTitle: source.title, sourceType: source.type, targetTitle: target.title, targetType: target.type } : null;
     }
-    match = line.match(/^将\s*事件\s*[｜|丨:：]\s*(.+?)\s*并入\s*事件\s*[｜|丨:：]\s*(.+?)\s*$/u);
-    if (match) return { sourceTitle: `事件｜${match[1].trim()}`, targetTitle: `事件｜${match[2].trim()}` };
-    return null;
+    const parts = line.split(/\s*并入\s*/u);
+    if (parts.length !== 2) return null;
+    const source = parseAbsorptionTitle(parts[0].replace(/^将\s*/u, ''));
+    const target = parseAbsorptionTitle(parts[1]);
+    return source && target ? { sourceTitle: source.title, sourceType: source.type, targetTitle: target.title, targetType: target.type } : null;
+}
+
+function parseAbsorptionTitle(value) {
+    const cleaned = String(value ?? '')
+        .trim()
+        .replace(/^[“”"'‘’\s]+|[“”"'‘’。；;，,\s]+$/gu, '')
+        .replace(/^[｜|丨\s]+|[｜|丨\s]+$/gu, '')
+        .replace(/^(?:来源|目标)\s*[:：]\s*/u, '')
+        .trim();
+    const match = cleaned.match(/^(人物|角色|NPC|场景|地点|地区|区域|物品|道具|装备|事件|事件链|世界|全局变化|基础设定|世界设定)\s*[｜|丨:：]\s*(.+)$/u);
+    if (!match) return null;
+    const type = (0, parser_1.canonicalExtractionType)(match[1]);
+    const name = match[2].trim().replace(/[“”"'‘’。；;，,\s]+$/gu, '');
+    if (!name || !['人物', '场景', '物品', '事件', '世界', '基础设定'].includes(type)) return null;
+    return { type, name, title: `${type}｜${name}` };
 }
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
@@ -11553,10 +11682,10 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
     ];
     const sourceLength = String(sourceText ?? '').length;
     const stageRules = {
-        audit: ['- 最终结论必须首先出现。通过只输出 PASS；不通过输出 FAIL 与最多8条短原因；总长度不超过300个中文字符。'],
+        audit: ['- 最终结论必须首先出现。通过只输出“审核结论：通过”；不通过先输出“审核结论：需要修正”，再列最多8条短原因；总长度不超过300个中文字符。'],
         revision: [`- 只输出可直接替换的完整正文。必须从原文开头写到原文结尾，不得中途停止、缺段或用省略号代替剩余内容。除删除明确违规内容外，修正版应保留原文至少85%的有效正文；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
-        extraction: ['- 只输出规定的 ENTRY 协议或“无”。最多8条，最终协议总长度不超过5000个中文字符。'],
-        extractionRepair: ['- 只输出修复后的 ENTRY 协议或“无”。不得补充事实；最终协议总长度不超过5000个中文字符。'],
+        extraction: ['- 只输出规定的自然中文条目格式或“无”。最多8条，最终文本总长度不超过5000个中文字符。'],
+        extractionRepair: ['- 只输出修复后的自然中文条目格式或“无”。不得补充事实；最终文本总长度不超过5000个中文字符。'],
         worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
         smallSummary: ['- 只输出规定的小总结协议或“无”。总长度不超过1800个中文字符。'],
         largeSummary: ['- 只输出规定的大总结协议或“无”。总长度不超过2600个中文字符。'],
@@ -11599,10 +11728,10 @@ function protocolRescuePrompt(stage, fallbackValue, sourceText, responseTokens) 
     const fallbackSystem = String(fallbackValue?.system ?? '').trim();
     const fallbackUser = String(fallbackValue?.user ?? '').trim();
     const stageInstructions = {
-        audit: '判断输入是否违反审核规则。只提交 PASS，或以 FAIL 开头并列出短原因。',
+        audit: '判断输入是否违反审核规则。通过只写“审核结论：通过”；不通过写“审核结论：需要修正”并列出短原因。',
         revision: '输出可直接替换的完整修正版正文，从开头写到结尾。',
-        extraction: '从输入中提取已经发生的高价值事实，只输出完整 ENTRY 协议或“无”。',
-        extractionRepair: '只修复已有候选的 ENTRY 协议语法，不新增事实。',
+        extraction: '从输入中提取已经发生的高价值事实，只输出自然中文条目格式或“无”。',
+        extractionRepair: '只把已有候选修复为自然中文条目格式，不新增事实。',
         worldSettingImport: '只输出完整 ENTRY 协议或“无”。',
         smallSummary: '只输出“总结｜当前事件”完整协议或“无”。',
         largeSummary: '只输出“总结｜世界历史”完整协议或“无”。',
@@ -11634,8 +11763,8 @@ function salvageStrictFinalProtocol(stage, reasoningText) {
     if (stage === 'audit' || stage === 'migrationReview') {
         const lines = region.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
         for (let index = lines.length - 1; index >= 0; index -= 1) {
-            if (/^(?:PASS|通过)[。.]?$/iu.test(lines[index])) return 'PASS';
-            if (/^(?:FAIL|需要修正)(?:\s|$)/iu.test(lines[index])) {
+            if (/^(?:PASS|通过|审核结论\s*[：:]\s*通过)[。.]?$/iu.test(lines[index])) return lines[index];
+            if (/^(?:FAIL|需要修正|不通过|未通过|审核结论\s*[：:]\s*(?:需要修正|不通过|未通过))(?:\s|[：:]|$)/iu.test(lines[index])) {
                 const tail = lines.slice(index).join('\n');
                 if (tail.length <= 1200) return tail;
             }
@@ -11649,6 +11778,8 @@ function salvageStrictFinalProtocol(stage, reasoningText) {
             const trailing = region.slice(last.end).replace(/[\s。.!！?？:：;；"'“”‘’`]+/gu, '');
             if (!trailing) return matches.slice(-16).map((item) => item.text).join('\n\n');
         }
+        const naturalIndex = region.search(/^(?:条目|新条目|ENTRY)(?:\s*\d+)?\s*[：:]\s*(?:人物|角色|NPC|场景|地点|地区|区域|物品|道具|装备|事件|事件链|世界|全局|基础设定|基础规则|世界设定|设定)\s*[｜|丨]/imu);
+        if (naturalIndex >= 0) return region.slice(naturalIndex).trim();
         const lastLine = region.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).at(-1) || '';
         if (/^(?:无|EMPTY)$/u.test(lastLine)) return lastLine;
         return '';
@@ -12981,7 +13112,7 @@ function parseExtractionWithRecovery(raw) {
     diagnostics.hadInput = Boolean(text.trim());
     const starts = [...text.matchAll(/<<<ENTRY\s*[:：]\s*([^:\r\n>]+)\s*[:：]\s*([^>\r\n]+)>>>/giu)];
     if (!starts.length) {
-        diagnostics.skipped.push({ title: '未知条目', reason: '缺少 ENTRY 标记', raw: text.slice(0, 600) });
+        diagnostics.skipped.push({ title: '未知条目', reason: '缺少可识别的条目起始行（“条目”或旧 ENTRY）', raw: text.slice(0, 600) });
         return attachDiagnostics([], diagnostics);
     }
     const parsedBlocks = [];
@@ -13062,8 +13193,120 @@ function parseExtractionWithRecovery(raw) {
     }
     return attachDiagnostics(usable, diagnostics);
 }
+function normalizeNaturalExtractionProtocol(raw, diagnostics) {
+    const source = String(raw ?? '').trim();
+    if (!source || /<<<\s*ENTRY\s*[:：]/iu.test(source) || /^(?:无|EMPTY)$/iu.test(source)) return source;
+    const allowedTypePattern = '(?:人物|角色|NPC|场景|地点|地区|区域|场所|当前场景|物品|道具|装备|事件|事件链|世界|全局|全局状态|全局变化|世界变化|当前局势|世界局势|基础设定|基础规则|世界设定|设定)';
+    const sectionNames = new Set(Object.values(STRICT_SECTION_ORDER).flat().filter((name) => name && name !== '关键词'));
+    const blocks = [];
+    let current = null;
+    let mode = '';
+    const ensureCurrent = () => {
+        if (!current) current = { type: '', name: '', keywords: [], content: [] };
+        return current;
+    };
+    const flush = () => {
+        if (!current) return;
+        current.type = canonicalExtractionType(current.type);
+        current.name = String(current.name || '').trim().replace(/[<>\r\n]/gu, '').replace(/[：:]+/gu, '·');
+        current.keywords = [...new Set((current.keywords || []).map((item) => String(item || '').trim()).filter(Boolean))];
+        if (STRICT_TYPES.has(current.type) && current.name && current.content.some((line) => String(line || '').trim())) blocks.push(current);
+        current = null;
+        mode = '';
+    };
+    for (const originalLine of source
+        .replace(/<think>[\s\S]*?<\/think>/giu, '')
+        .replace(/```(?:text|markdown|md)?/giu, '')
+        .replace(/\r/g, '')
+        .split('\n')) {
+        const line = String(originalLine || '').trim()
+            .replace(/^#{1,6}\s*/u, '')
+            .replace(/^\*\*(.*?)\*\*$/u, '$1')
+            .trim();
+        if (!line) continue;
+        const header = line.match(new RegExp(`^(?:条目|新条目|ENTRY)(?:\\s*\\d+)?\\s*[：:]\\s*(${allowedTypePattern})\\s*[｜|丨：:]\\s*(.+?)\\s*$`, 'iu'))
+            || line.match(new RegExp(`^(${allowedTypePattern})\\s*[｜|丨：:]\\s*(.+?)\\s*$`, 'iu'));
+        if (header) {
+            flush();
+            current = { type: header[1].trim(), name: header[2].trim(), keywords: [], content: [] };
+            mode = '';
+            continue;
+        }
+        const entryTypeOnly = line.match(new RegExp(`^(?:条目|新条目|ENTRY)(?:\\s*\\d+)?\\s*[：:]\\s*(${allowedTypePattern})\\s*$`, 'iu'));
+        if (entryTypeOnly) {
+            flush();
+            current = { type: entryTypeOnly[1].trim(), name: '', keywords: [], content: [] };
+            mode = '';
+            continue;
+        }
+        if (/^(?:条目|新条目|条目开始|开始条目)\s*[：:]?$/iu.test(line)) {
+            flush();
+            current = { type: '', name: '', keywords: [], content: [] };
+            continue;
+        }
+        if (/^(?:条目结束|结束条目)\s*[。.]?$/u.test(line)) {
+            flush();
+            continue;
+        }
+        const typeLine = line.match(new RegExp(`^(?:类型|条目类型)\\s*[：:]\\s*(${allowedTypePattern})\\s*$`, 'iu'));
+        if (typeLine) {
+            if (current && current.type && current.name && current.content.length) flush();
+            ensureCurrent().type = typeLine[1].trim();
+            mode = '';
+            continue;
+        }
+        const nameLine = line.match(/^(?:名称|稳定名称|条目名称)\s*[：:]\s*(.+?)\s*$/u);
+        if (nameLine) {
+            ensureCurrent().name = nameLine[1].trim();
+            mode = '';
+            continue;
+        }
+        const keywordLine = line.match(/^关键词\s*[：:]\s*(.*?)\s*$/u);
+        if (keywordLine) {
+            const value = keywordLine[1].trim();
+            ensureCurrent();
+            if (value) current.keywords.push(...value.split(/[,，、]/u).map((item) => item.trim()).filter(Boolean));
+            mode = value ? '' : 'keywords';
+            continue;
+        }
+        if (/^内容\s*[：:]?\s*$/u.test(line)) {
+            ensureCurrent();
+            mode = 'content';
+            continue;
+        }
+        const bracketSection = line.match(/^【\s*([^】]+?)\s*】\s*$/u)?.[1]?.trim();
+        const plainSection = line.match(/^([^：:]{1,16})\s*[：:]\s*$/u)?.[1]?.trim();
+        const section = bracketSection && sectionNames.has(bracketSection)
+            ? bracketSection
+            : plainSection && sectionNames.has(plainSection) ? plainSection : '';
+        if (section) {
+            ensureCurrent().content.push(`【${section}】`);
+            mode = 'content';
+            continue;
+        }
+        if (!current) continue;
+        if (mode === 'keywords') {
+            current.keywords.push(...stripListMarker(line)
+                .split(/[,，、]/u)
+                .map((item) => item.trim())
+                .filter(Boolean));
+            continue;
+        }
+        current.content.push(line);
+        mode = 'content';
+    }
+    flush();
+    if (!blocks.length) return source;
+    diagnostics.repaired += 1;
+    diagnostics.warnings.push(`已将${blocks.length}个自然中文条目转换为内部 ENTRY 协议`);
+    return blocks.map((block) => {
+        const keywords = block.keywords.length ? block.keywords : [block.name];
+        return `<<<ENTRY:${block.type}:${block.name}>>>\n<<<KEYWORDS>>>\n${keywords.map((item) => `- ${item}`).join('\n')}\n<<<CONTENT>>>\n${block.content.join('\n')}\n<<<END_ENTRY>>>`;
+    }).join('\n\n');
+}
+
 function normalizeExtractionEnvelope(raw, diagnostics) {
-    let text = String(raw ?? '')
+    let text = normalizeNaturalExtractionProtocol(raw, diagnostics)
         .replace(/<think>[\s\S]*?<\/think>/giu, '')
         .replace(/```(?:text|markdown|md)?/giu, '')
         .replace(/[＜﹤]/gu, '<')
@@ -13685,10 +13928,11 @@ function auditPrompts(settings, playerText, assistantText, optionsOrLegacyCard =
 不要读取、补全或假设角色卡、世界书、隐藏设定和未提供的信息。
 你不是作者，不得改写、续写、补充背景、优化文风或扩大审核范围。
 
-输出协议：
-- 通过：只能输出 PASS。
-- 不通过：第一行输出 FAIL，随后用简短条目指出明确触发的规则。
-- 禁止输出修正版正文。`;
+输出格式：
+- 通过时只写：审核结论：通过
+- 不通过时第一行写：审核结论：需要修正
+- 随后写“问题：”，再用最多8条短句指出明确触发的规则。
+- 禁止输出修正版正文、分析过程、前言或后记。`;
     const user = `玩家填写的审核规则：
 ${clipText(settings.auditPrompt || '（无）', compact ? 2600 : 5200)}
 
@@ -13759,8 +14003,8 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 1. 先阅读上一轮权威世界书，再阅读本轮正文。
 2. 从本轮正文中识别具有记录价值的信息，并为每条信息寻找最直接的条目宿主。
 3. 信息属于已有对象时，完整沿用旧条目的类型和标题，只填写本轮发生变化的栏目。
-4. 同一对象的多项变化合并在同一个 ENTRY 中；旧条目已有且本轮没有变化的信息不重复输出。
-5. 现有条目没有对应对象时，建立新的 ENTRY。
+4. 同一对象的多项变化合并在同一个条目中；旧条目已有且本轮没有变化的信息不重复输出。
+5. 现有条目没有对应对象时，建立新的条目。
 6. 场景变化时，只输出正文结束时实际所在的当前场景一条，并放在第一条；旧场景活动快照由插件结算。
 
 【栏目边界】
@@ -13779,31 +14023,27 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 同一事实写入最直接的权威宿主；其他条目只保留必要的名称级引用或对自身形成的独立变化。
 - 单次行动、短暂情绪和临时表现写入当前状态，不直接升级为稳定人格或长期规则。
 
-【唯一输出语法】
-<<<ENTRY:类型:稳定名称>>>
-<<<KEYWORDS>>>
-- 稳定名称
-- 唯一别名
-<<<CONTENT>>>
-【栏目】
+【唯一输出格式】
+条目
+类型：人物、场景、物品、事件、世界或基础设定
+名称：稳定名称
+关键词：稳定名称、唯一别名
+栏目名称：
 - 本轮新增或变化的信息
-<<<END_ENTRY>>>
 
-多个条目连续输出，条目间只空一行；单次最多 8 条。同一对象只输出一个 ENTRY。没有世界书变化时只输出“无”。禁止 JSON、代码块、分析过程、前言、后记和标记外文本。
+每个条目从单独一行“条目”开始，类型、名称、关键词各写一行；栏目直接写“栏目名：”。下一条目再次写“条目”，不需要结束符。单次最多 8 条，同一对象只输出一个条目。没有世界书变化时只输出“无”。禁止 JSON、代码块、分析过程、前言和后记。
 
 【示范】
 上一轮已有“人物｜披斗篷的商人”，本轮该人物说明自己叫伊莱并进入码头仓库。正确输出：
 
-<<<ENTRY:人物:披斗篷的商人>>>
-<<<KEYWORDS>>>
-- 披斗篷的商人
-- 伊莱
-<<<CONTENT>>>
-【身份】
+条目
+类型：人物
+名称：披斗篷的商人
+关键词：披斗篷的商人、伊莱
+身份：
 - 正式姓名：伊莱
-【当前】
+当前：
 - 位置：码头仓库
-<<<END_ENTRY>>>
 
 可用类型与栏目：
 ${schema || '使用人物、场景、物品、事件、世界、基础设定的现有栏目。'}${custom ? `
@@ -13826,7 +14066,7 @@ ${clipText(playerText || '（空）', compact ? 1100 : 1800)}
 【本轮AI最终回复】
 ${clipText(assistantText, compact ? 8500 : 12500)}
 
-对照上一轮权威世界书，按原 ENTRY 格式只填写本轮变化。`;
+对照上一轮权威世界书，按上面的自然中文条目格式只填写本轮变化。`;
     return { system, user };
 }
 
@@ -13898,18 +14138,19 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 直接关联条目：与主材料存在对象、因果、目标、场景、规则或引用关系的既有条目，只用于校准归属与避免重复。
 - 语义簇：围绕同一作用对象、持续目标或直接因果形成的一组变化；场景只是判断维度之一。
 - 游玩颗粒度：能够直接支持后续剧情运行，但不保留动作流水、重复角度和过细阶段壳的表达层级。
-- 吸收来源：已经被更粗目标条目完整承接、因而可以退出的细颗粒事件条目。
+- 运行壳：为当前局部游玩提供高分辨率状态的事件或场景条目；离开该阶段后不必永久保留。
+- 吸收来源：宏观原貌与持续影响已经被更粗目标条目完整承接、因而可以退出的低层运行壳。
 
 【处理路径】
 1. 先以本期实际变更条目确定整理范围，再用权威索引和关联条目寻找已有宏观宿主。
 2. 按作用对象、直接因果、持续目标、时间连续性、场景关系和规则范围形成语义簇；不得只按类型或单一场景分组。
 3. 将每个语义簇抽象成较粗的当前运行状态、事件阶段、局部机制或明确结果。
 4. 把粗化后的事实分发回最直接的权威宿主；同一事实只保留一个详细宿主。
-5. 只有某个细颗粒事件已被目标事件完整表达时，才在【吸收来源】中声明并入；部分承接或仍有独立目标时必须保留。
+5. 对已经完成局部使命的事件或场景运行壳，先把事件原貌、持续影响和后续运行条件抽象进更宽目标，再在【吸收来源】中声明并入；部分承接、仍在运行或仍有独立目标时必须保留。
 
 【颗粒度边界】
 - 人物：把连续的身体、能力、立场、关系、持有和认知变化整理成当前可用的人物状态；不要保留动作流水。
-- 场景：把设施、通路、资源、在场与局部条件整理成场景运行状态；场景不是全部内容的唯一作用域。
+- 场景：把设施、通路、资源、在场与局部条件整理成场景运行状态。离开局部场景后，将其宏观事件痕迹、持续影响与后续运行条件提升到更大的场景或世界宿主；小场景壳退出，之后再次进入时由提取按当时世界状态重新创建。场景不是全部内容的唯一作用域。
 - 物品：把取得、转移、使用、损坏和功能变化整理成可追踪的物品状态。
 - 事件：把目标和直接因果连续的小阶段整理成适合持续游玩的事件进展；同一大场景中的独立目标不得强行合并，小场景变化也不自动拆分同一因果链。
 - 世界：整理跨单一人物或场景、但仍会随剧情变化的组织、制度、权力、资源网络和公开局势。
@@ -13919,7 +14160,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 小总结处理的是近期实际变更的全部业务条目，不是只处理第一个活动事件。
 - 抽象必须提高语义颗粒度，但不得扩大事实作用范围、补写因果或把局部特例改成世界通则。
 - 已有宏观宿主优先更新；没有合适宿主时才建立新条目。
-- 当前状态、局部机制和阶段结果可以覆盖旧的同类快照；长期永久性结论留给大总结固化。
+- 当前状态、局部机制和阶段结果可以覆盖旧的同类快照；已离开的低层运行壳可以在完整升阶后退出；长期永久性结论留给大总结继续固化。
 - 普通移动、开门、落座、视线、表情、寒暄、重复确认和当轮立即恢复的轻微状态直接过滤。
 - 不得输出未来目标、待办、未决、推测、计划、UID、删除命令或解释。
 
@@ -13940,19 +14181,20 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 
 【吸收来源】
 - 将事件｜来源稳定名称并入事件｜目标稳定名称
+- 将场景｜来源稳定名称并入场景｜目标稳定名称
 
 分发与吸收规则：
 - 分发事实必须是抽象后的较粗表达，不得逐条翻写原始细节。
 - 事件进展写回事件【已发生进展】；当前没有必要暂存材料时，可写“事件｜稳定名称｜未发生进展｜无”覆盖旧暂存。
 - 人物、场景、物品、世界和基础设定分别写回其直接栏目。
-- 【吸收来源】当前只允许完整吸收事件壳；使用自然句“将事件｜来源并入事件｜目标”。目标事件必须同时出现在【分发事实】中。没有可安全吸收的来源时写“- 无”。
+- 【吸收来源】允许事件运行壳并入更粗事件，也允许已离开的场景运行壳并入更大的场景或世界。目标必须同时出现在【分发事实】中，并完整保留来源的宏观事件原貌、持续影响和后续运行条件。当前场景、人物、物品、基础设定不得作为吸收来源。没有可安全吸收的来源时写“- 无”。
 - 没有可整理内容时只输出“无”。
 
 【示范】
 本期出现“切断长廊栅栏”“跨过拱桥”“进入祭坛”三个细事件，并确认祭坛终端永久失效。可整理为：
 - 事件｜旧神殿探索｜已发生进展｜已解除长廊阻断并进入中央祭坛阶段。
 - 场景｜中央祭坛｜当前状态｜圣化终端已经永久失效。
-三个细事件只有在上述进展完整承接其有效信息时，才可在【吸收来源】中并入“事件｜旧神殿探索”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`
+三个细事件只有在上述进展完整承接其有效信息时，才可在【吸收来源】中并入“事件｜旧神殿探索”。若玩家已离开中央祭坛，可把终端失效、路线变化和该次调查的宏观痕迹分发到“场景｜旧神殿遗址”，再写“将场景｜中央祭坛并入场景｜旧神殿遗址”；之后再次进入中央祭坛时，由提取重新建立新的当前场景壳。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`
         : `你是 Mirror Abyss 长期世界结构固化器。
 
 你会收到【权威世界书轻量索引】、最近若干次小总结后实际变更的运行条目与关联条目。你的任务是把已经整理过的游玩颗粒度内容，继续抽象为跨场景、跨阶段仍然有效的长期事实、历史结果和系统规则。
@@ -13962,23 +14204,27 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 长期事实：脱离当前局部过程后仍然成立，并会持续影响后续的权威内容。
 - 历史结果：已经完成、值得长期检索的重要事件结论，不保留过程流水。
 - 系统规则：已经明确建立并具有相应广泛作用范围的制度、机制或世界规则；一次明确且永久的剧情建立即可成立。
+- 层级拓宽：把小总结形成的中层事件、场景和世界状态继续提升到更宽的历史、地区、组织或世界结构，同时保留宏观原貌和持续影响。
+- 吸收来源：已经被更宽长期宿主完整承接、因而可以退出的中层事件、场景或世界运行条目。
 
 【处理路径】
 1. 以最近若干次小总结后实际变更的运行条目为主材料，用权威索引检查已有长期宿主。
 2. 判断哪些内容已经跨场景、跨阶段或明确永久成立；短期状态、局部过程和仍依赖当前事件条件的内容不固化。
 3. 将多条运行状态进一步抽象为人物长期变化、重要事件结果、长期关系、组织制度变化或稳定世界规则。
-4. 把长期结果分发到最直接的权威宿主，并用更高密度表达覆盖旧世界历史中的同义内容。
+4. 把长期结果分发到最直接的更宽权威宿主，并用更高密度表达覆盖旧世界历史中的同义内容。
+5. 当一个中层事件、场景或区域状态的宏观原貌与持续影响已被更宽目标完整承接时，可在【吸收来源】中声明其退出；仍会独立运行或仍有未承接信息时必须保留。
 
 【颗粒度边界】
 - 人物：长期身份、能力、身体、立场、关系和持续特征。
-- 场景：永久性结构、设施、资源和长期影响；普通当前快照不进入长期历史。
+- 场景：永久性结构、设施、资源和长期影响；多个中层场景影响可以继续抽象为地区或世界结构，普通当前快照不进入长期历史。
 - 物品：长期归属、永久损坏、稳定功能与限制。
-- 事件：只保留明确结果和长期影响，不保留阶段过程。
+- 事件：只保留谁参与、发生了什么性质的事情、最终结果和持续影响；多个阶段事件可以继续抽象为大事件、历史节点或世界变化，不保留过程流水。
 - 世界：区域、组织、制度、权力、资源网络和公开格局的长期变化。
 - 基础设定：跨场景且不随普通剧情变化的规则；明确永久建立的新规则可首次出现即固化，猜测和局部特例不得升级。
 
 【重点规则】
 - 大总结只接收已经整理过的运行材料，不重新处理原始动作流水。
+- 每次颗粒度升阶都要同时保留更宏观的结果与影响，并消费已被完整承接的低层运行壳；不得只叠加一层重复摘要。
 - 只固化长期有效的结果，不把“当前、暂时、仍依赖条件”的状态改写成永久事实。
 - 同一事实只分发一次；已有权威宿主中的同义内容不得重复建立。
 - 已结束重要事件可以保留结果和一条高密度进展；不得重新打开或写入未发生进展。
@@ -14002,10 +14248,16 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 【分发事实】
 - 类型｜稳定名称｜小标题｜完整事实句
 
-分发规则：
+【吸收来源】
+- 将事件｜来源稳定名称并入世界｜目标稳定名称
+- 将场景｜来源稳定名称并入世界｜目标稳定名称
+- 将世界｜来源稳定名称并入世界｜目标稳定名称
+
+分发与吸收规则：
 - 只分发较粗的长期结果，不分发过程。
 - 已经存在于权威宿主的同义事实不得再次分发。
 - 若事件已经形成结果，可写回事件【结果】和一条压缩后的【已发生进展】；不得分发【未发生进展】。
+- 【吸收来源】只允许：事件并入更粗事件或世界、场景并入世界、区域级世界条目并入更宽世界条目。目标必须同时出现在【分发事实】中。人物、物品、基础设定和当前场景不得作为吸收来源。没有可安全吸收的来源时写“- 无”。
 - 没有分发事实时写“- 无”。
 - 本次输出覆盖旧“总结｜世界历史”的对应栏目，不得追加一套重复历史。没有新的长期结果时只输出“无”。${custom ? `\n\n用户附加要求：\n${custom}` : ''}`;
     const changedLabel = isSmall ? '本期实际变更条目' : '本期小总结后实际变更的运行条目';
@@ -14022,7 +14274,7 @@ ${workingEntries.slice(0, compact ? 10 : 24).map((entry) => entryForPrompt(entry
 【直接关联条目】
 ${relatedEntries.slice(0, compact ? 8 : 18).map((entry) => entryForPrompt(entry, compact ? 420 : 680)).join('\n\n') || '（无）'}${recent}
 
-按规定格式完成颗粒度升阶、重新分发和必要的事件来源吸收。`;
+按规定格式完成颗粒度升阶、重新分发和必要的来源吸收。`;
     return { system, user };
 }
 
@@ -14030,7 +14282,14 @@ function extractionRepairPrompts(raw, options = {}) {
     const compact = options.compact === true;
     const system = `你是 Mirror Abyss 提取格式修复器。
 只修复给定提取结果的语法、重复条目和事实归属，不得阅读原剧情，不得新增、扩写或推测事实。
-必须使用 <<<ENTRY:类型:稳定名称>>>、<<<KEYWORDS>>>、<<<CONTENT>>>、<<<END_ENTRY>>>。
+每个条目使用以下自然中文格式：
+条目
+类型：人物、场景、物品、事件、世界或基础设定
+名称：稳定名称
+关键词：稳定名称、唯一别名
+栏目名称：
+- 已有事实
+下一条目再次从单独一行“条目”开始，不需要结束符。
 允许类型：人物、场景、物品、事件、世界、基础设定。关系必须并入人物，地点必须并入场景；可变化的全局状态写入世界，不随普通剧情变化的框架写入基础设定。
 同名条目必须合并；同一事实只能保留在责任最直接的一个条目中；无法修复的片段删除。
 禁止解释、JSON和代码块。没有可保留条目时只输出“无”。`;
@@ -14787,8 +15046,10 @@ exports.DEFAULT_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判
 只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
 const LEGACY_EXTRACTION_PROMPT_UI50 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `以上次小总结后实际变更的世界书条目为主材料，按对象、目标、因果、时间、场景和规则范围形成语义簇；将细颗粒内容抽象为适合继续游玩的较粗状态、事件进展和局部机制，重新分发到直接宿主，并只吸收已经被目标事件完整承接的细事件壳。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
+const LEGACY_SMALL_SUMMARY_PROMPT_UI55 = `以上次小总结后实际变更的世界书条目为主材料，按对象、目标、因果、时间、场景和规则范围形成语义簇；将细颗粒内容抽象为适合继续游玩的较粗状态、事件进展和局部机制，重新分发到直接宿主，并只吸收已经被目标事件完整承接的细事件壳。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `以上次小总结后实际变更的世界书条目为主材料，按对象、目标、因果、时间、场景和规则范围形成语义簇；将细颗粒内容抽象为适合继续游玩的较粗状态、事件进展和局部机制，重新分发到更宽宿主；事件或已离开场景的运行壳只有在宏观原貌、持续影响与后续条件被完整承接后才退出。`;
+const LEGACY_LARGE_SUMMARY_PROMPT_UI55 = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为更宽的长期人物变化、历史节点、地区组织格局和系统规则；保留宏观事件原貌与持续影响，并消费已被长期宿主完整承接的中层事件、场景或区域运行壳。`;
 exports.DEFAULT_EXTRACTION_PROMPT = `优先更新上一轮权威条目；只输出本轮变化；正式姓名、身份、外形或状态变化继续更新原人物条目；同一事实写入最直接宿主。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
@@ -14929,8 +15190,8 @@ function parseSettings(value) {
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
         extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI50], exports.DEFAULT_EXTRACTION_PROMPT),
-        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
-        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
+        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 1, 100),
