@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.57-scene-recall-stability
+# Mirror Abyss 2.0.0-lite.ui.58-local-controls-indicator
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -23,7 +23,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.57-scene-recall-stability 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.58-local-controls-indicator 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -175,4 +175,15 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 详细范围见 `PATCH-SCOPE.md`，验证见 `SCENE-RECALL-STABILITY-VALIDATION.md`。
 
-尚未完成用户当前 SillyTavern 环境中的真实提交回读验证。
+## 2.0.0-lite.ui.58-local-controls-indicator 本轮改动
+
+- 世界书页顶部改为清晰的“世界书控制”区，直接提供“运行小总结”“运行大总结”“整理世界书”“测试 API”四个按钮。
+- “整理世界书”会依次执行小总结、大总结和召回重排；每一步继续使用现有队列、权威回读、原子提交与失败回滚，不绕过安全链。
+- 正文下方状态灯不再依赖单一 `is_user=false` 选择器；兼容多种消息属性、DOM id 和消息顺序回退，并保证最新 AI 正文至少显示待命状态灯。
+- 状态灯样式增加强制可见性、主题色和层级，避免被 SillyTavern 主题或消息布局隐藏。
+- 面板错误说明条由整块深红改为低饱和浅红渐变与左侧提示线，保留可读性但降低视觉压迫。
+- 新增 `local-controls-indicator.test.mjs`，覆盖按钮入口、整理动作、状态灯回退和错误条样式。
+
+详细范围见 `PATCH-SCOPE.md`，验证见 `LOCAL-CONTROLS-INDICATOR-VALIDATION.md`。
+
+真实 SillyTavern 不同主题、移动端消息 DOM 与长时间运行状态仍需实机确认。
