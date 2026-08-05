@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.56-granularity-ladder
+# Mirror Abyss 2.0.0-lite.ui.57-scene-recall-stability
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -23,7 +23,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.56-granularity-ladder 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.57-scene-recall-stability 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -163,3 +163,16 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 详细范围见 `PATCH-SCOPE.md`，固定验证见 `GRANULARITY-LADDER-VALIDATION.md`。
 
 真实 SillyTavern 安装、用户当前第三方模型对“完整承接”的判断稳定性和长时间连续游玩仍需实机验证。
+
+
+## 2.0.0-lite.ui.57-scene-recall-stability 本轮改动
+
+- 修复小总结或大总结同时更新多个场景后，召回字段投影再次刷新 `updatedAt`，导致场景阶段在提交前后漂移的问题。
+- 原生召回字段现在只投影 constant、vectorized、递归、深度、顺序、关键词等宿主字段，不再改变业务条目的更新时间。
+- 当前场景与上一场景优先由正文提取写入的 `sceneLastActiveAt` 决定；总结创建或更新的宏观场景不会仅因更新时间较新而抢占当前场景。
+- 旧世界书若完全没有 `sceneLastActiveAt`，仍兼容使用旧更新时间排序；一旦出现明确活动时间，无活动时间的场景统一作为远期场景。
+- 新增 `scene-recall-stability.test.mjs`，覆盖总结大场景抢占当前场景及同批次多场景关键词策略漂移。
+
+详细范围见 `PATCH-SCOPE.md`，验证见 `SCENE-RECALL-STABILITY-VALIDATION.md`。
+
+尚未完成用户当前 SillyTavern 环境中的真实提交回读验证。

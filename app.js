@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.56-granularity-ladder — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
+/** Mirror Abyss 2.0.0-lite.ui.57-scene-recall-stability — governed worldbook storage, source-level host boundaries, native recall dispatch, and atomic transactions. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1087,7 +1087,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.56-granularity-ladder';
+exports.VERSION = '2.0.0-lite.ui.57-scene-recall-stability';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -14637,17 +14637,32 @@ function isFoundationEntry(entry, settings) {
 // 场景阶段由“最后一次作为实际当前场景被正文提取”的时间决定；普通编辑与总结分发不会抢占当前场景。
 function sceneStageMap(entries) {
     const scenes = (entries ?? [])
-        .filter((entry) => entry?.managed && isSceneType(entry.type) && !entry.activation?.disabled)
-        .sort((left, right) => sceneActivityTime(right) - sceneActivityTime(left) || Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
+        .filter((entry) => entry?.managed && isSceneType(entry.type) && !entry.activation?.disabled);
+    // 只有正文提取明确刷新过 sceneLastActiveAt 的场景，才有资格成为当前/上一场景。
+    // 小总结、大总结和手工编辑创建或更新的大场景属于仓库宿主，不能仅因 updatedAt 较新而抢占当前场景。
+    const explicitlyActive = scenes.filter((entry) => sceneExplicitActivityTime(entry) > 0);
+    const ranked = (explicitlyActive.length ? explicitlyActive : scenes)
+        .slice()
+        .sort((left, right) => sceneActivityTime(right) - sceneActivityTime(left)
+            || Number(right.updatedAt || 0) - Number(left.updatedAt || 0)
+            || String(left.title || '').localeCompare(String(right.title || '')));
+    const currentUid = ranked[0] ? String(ranked[0].uid) : '';
+    const previousUid = ranked[1] ? String(ranked[1].uid) : '';
     const output = new Map();
-    scenes.forEach((entry, index) => output.set(String(entry.uid), index === 0 ? 'current' : index === 1 ? 'previous' : 'remote'));
+    for (const entry of scenes) {
+        const uid = String(entry.uid);
+        output.set(uid, uid === currentUid ? 'current' : uid === previousUid ? 'previous' : 'remote');
+    }
     return output;
 }
 
-function sceneActivityTime(entry) {
+function sceneExplicitActivityTime(entry) {
     const extension = entry?.raw?.extensions?.mirrorAbyssInfoPoint;
-    const activeAt = Number(extension?.sceneLastActiveAt || 0);
-    return activeAt || Number(entry?.updatedAt || 0);
+    return Number(extension?.sceneLastActiveAt || 0);
+}
+
+function sceneActivityTime(entry) {
+    return sceneExplicitActivityTime(entry) || Number(entry?.updatedAt || 0);
 }
 
 function buildRecallPlan(entries, settings, focusUid = '') {
@@ -16301,6 +16316,11 @@ class WorldbookAdapter {
         const normalizedFocusUid = String(focusUid ?? '');
         const recall = (0, recall_policy_1.buildRecallPlan)(entries, settings, normalizedFocusUid);
         const relationIndex = (0, governance_1.buildDirectRelationIndex)(entries);
+        // 原生召回字段只是对现有业务状态的投影，不能再次刷新业务 updatedAt。
+        // 否则同批次触及多个场景时，循环顺序会改变场景新旧排序：
+        // 规划时还是“上一场景”的条目，落盘后可能因更晚的 Date.now() 变成“当前场景”，
+        // 从而出现“非关键词条目仍保留触发词”的回读失败。
+        const projectionTimestamp = Date.now();
         for (const entry of entries) {
             const focus = normalizedFocusUid ? entry.uid === normalizedFocusUid : entry.focus;
             const managed = entry.managed || touchedUids.has(entry.uid) || focus;
@@ -16310,7 +16330,7 @@ class WorldbookAdapter {
             const previousUpdatedAt = Number(readExtension(entry.raw).updatedAt) || 0;
             applyNativeProfile(entry.raw, profile);
             const extension = markManaged(entry.raw, '', entry.title, '');
-            if (!touchedUids.has(entry.uid) && previousUpdatedAt) extension.updatedAt = previousUpdatedAt;
+            extension.updatedAt = previousUpdatedAt || projectionTimestamp;
             applyKeywordPolicy(entry.raw, entry, profile, extension);
             extension.focus = focus;
             extension.chatKey = this.chatKey();

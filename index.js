@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.56-granularity-ladder. */
+/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.57-scene-recall-stability. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
