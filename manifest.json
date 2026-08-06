@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.58-local-controls-indicator",
+  "version": "2.0.0-lite.ui.61-deterministic-settlement",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜独立 Profile 密钥直达、源头唯一宿主、原生召回与原子事务；已移除活动包运行投影"
+  "description": "世界书单通道｜逐来源历史分发、确定性结算、幂等退出、无裁剪待处理队列与跨模块父事务"
 }
