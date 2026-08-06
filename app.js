@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.62-fixed-summary-contract — governed worldbook storage, fixed summary protocol recovery, source-bound history distribution, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.63-missing-source-completion — governed worldbook storage, mandatory pending-source coverage, targeted summary completion, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1263,7 +1263,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.62-fixed-summary-contract';
+exports.VERSION = '2.0.0-lite.ui.63-missing-source-completion';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -7219,28 +7219,82 @@ class MemoryRunner {
         this.validate(snapshot);
         let effectiveRaw = raw;
         let protocol = inspectSummaryProtocol(effectiveRaw, kind, selected, validPendingUids);
-        if (!protocol.ok && !protocol.explicitNone) {
-            this.progress('running', `${label}固定格式校验失败，正在执行一次只改格式的专用恢复`, { titles: [expectedTitle], phase: 'format-repair', error: protocol.error });
-            const pendingSources = selected.filter((entry) => validPendingUids.includes(String(entry.uid))).map((entry) => entry.title);
-            const repairPrompt = (0, prompts_1.summaryRepairPrompts)(effectiveRaw, kind, pendingSources, protocol.error);
-            effectiveRaw = await (0, model_request_1.callModel)({
+        const repairSummaryCandidate = async (candidateRaw, candidateProtocol, candidateSelected, candidatePendingUids, phaseDetail) => {
+            this.progress('running', phaseDetail, { titles: [expectedTitle], phase: 'format-repair', error: candidateProtocol.error });
+            const pendingSources = candidateSelected.filter((entry) => candidatePendingUids.includes(String(entry.uid))).map((entry) => entry.title);
+            const repairPrompt = (0, prompts_1.summaryRepairPrompts)(candidateRaw, kind, pendingSources, candidateProtocol.error);
+            const repairedRaw = await (0, model_request_1.callModel)({
                 host: this.host,
                 stage: 'summaryRepair',
                 prompt: repairPrompt,
-                fallbackPrompt: () => (0, prompts_1.summaryRepairPrompts)(raw, kind, pendingSources, protocol.error, { compact: true }),
+                fallbackPrompt: () => (0, prompts_1.summaryRepairPrompts)(candidateRaw, kind, pendingSources, candidateProtocol.error, { compact: true }),
                 settings,
                 snapshot,
                 profileId: profile,
-                sourceText: effectiveRaw,
+                sourceText: candidateRaw,
                 responseTokens: kind === 'small' ? 4096 : 6144,
                 onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}格式修复模型`), { titles: [expectedTitle], phase: 'format-repair' }),
             });
             this.validate(snapshot);
-            protocol = inspectSummaryProtocol(effectiveRaw, kind, selected, validPendingUids);
-            if (!protocol.ok) throw new Error(`${label}固定格式修复失败：${protocol.error}`);
-            const preservation = summaryRepairPreservesSemantics(raw, protocol);
+            const repairedProtocol = inspectSummaryProtocol(repairedRaw, kind, candidateSelected, candidatePendingUids);
+            const preservation = summaryRepairPreservesSemantics(candidateRaw, repairedProtocol);
             if (!preservation.ok) throw new Error(`${label}固定格式修复被拒绝：修复结果改变或补写了原返回语义（${preservation.issues.slice(0, 3).join('；')}）`);
+            return { raw: repairedRaw, protocol: repairedProtocol };
+        };
+        const unresolvedOnly = protocol.unresolvedPendingUids?.length > 0
+            && protocol.recovered?.block
+            && !(protocol.historyPlan?.invalidLines?.length);
+        if (!protocol.ok && !protocol.explicitNone && !unresolvedOnly) {
+            const repaired = await repairSummaryCandidate(effectiveRaw, protocol, selected, validPendingUids, `${label}固定格式校验失败，正在执行一次只改格式的专用恢复`);
+            effectiveRaw = repaired.raw;
+            protocol = repaired.protocol;
+            if (!protocol.ok && !protocol.unresolvedPendingUids?.length) throw new Error(`${label}固定格式修复失败：${protocol.error}`);
             this.progress('running', `${label}已通过专用请求恢复固定协议格式`, { titles: [expectedTitle], phase: 'format-repair' });
+        }
+        // ui.63: 遗漏来源属于语义任务未完成，不允许格式修复器擅自补结论。
+        // 只对遗漏来源分批追加带完整来源上下文的定向总结请求，再与首轮协议合并。
+        if (!protocol.ok && protocol.unresolvedPendingUids?.length) {
+            const missingPendingUids = [...protocol.unresolvedPendingUids];
+            const completionBatchSize = kind === 'small' ? 10 : 8;
+            const completionRaws = [];
+            this.progress('running', `${label}主返回遗漏${missingPendingUids.length}个来源，正在分批定向补齐`, { titles: [expectedTitle], phase: 'source-completion', unresolvedPendingUids: missingPendingUids });
+            for (let offset = 0; offset < missingPendingUids.length; offset += completionBatchSize) {
+                const batchUids = missingPendingUids.slice(offset, offset + completionBatchSize);
+                const missingSelected = summaryEntries(kind, entries, snapshot, batchUids);
+                const missingSelectedUids = new Set(missingSelected.map((entry) => String(entry.uid)));
+                const internallyMissing = batchUids.filter((uid) => !missingSelectedUids.has(String(uid)));
+                if (internallyMissing.length) throw new Error(`${label}内部工作集不完整：${internallyMissing.length}个遗漏来源未进入定向补齐上下文`);
+                const missingScope = summaryScope(kind, missingSelected, batchUids);
+                const missingPrompt = (0, prompts_1.summaryPrompts)(kind, settings, missingSelected, missingScope, recentConversation, { pendingUids: batchUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null });
+                let completionRaw = await (0, model_request_1.callModel)({
+                    host: this.host,
+                    stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
+                    prompt: missingPrompt,
+                    fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, missingSelected, missingScope, recentConversation, { compact: true, pendingUids: batchUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null }),
+                    settings,
+                    snapshot,
+                    profileId: profile,
+                    sourceText: recentConversation,
+                    onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}遗漏来源补齐模型`), { titles: [expectedTitle], phase: 'source-completion' }),
+                });
+                this.validate(snapshot);
+                let completionProtocol = inspectSummaryProtocol(completionRaw, kind, missingSelected, batchUids);
+                const completionUnresolvedOnly = completionProtocol.unresolvedPendingUids?.length > 0
+                    && completionProtocol.recovered?.block
+                    && !(completionProtocol.historyPlan?.invalidLines?.length);
+                if (!completionProtocol.ok && !completionProtocol.explicitNone && !completionUnresolvedOnly) {
+                    const repairedCompletion = await repairSummaryCandidate(completionRaw, completionProtocol, missingSelected, batchUids, `${label}遗漏来源补齐结果格式不合格，正在只改格式`);
+                    completionRaw = repairedCompletion.raw;
+                    completionProtocol = repairedCompletion.protocol;
+                }
+                if (!completionProtocol.ok) throw new Error(`${label}遗漏来源补齐失败：${completionProtocol.error}`);
+                completionRaws.push(completionRaw.trim());
+                this.progress('running', `${label}已补齐遗漏来源 ${Math.min(offset + batchUids.length, missingPendingUids.length)}/${missingPendingUids.length}`, { titles: [expectedTitle], phase: 'source-completion', resolvedPendingUids: batchUids });
+            }
+            effectiveRaw = [effectiveRaw.trim(), ...completionRaws].filter(Boolean).join('\n\n').trim();
+            protocol = inspectSummaryProtocol(effectiveRaw, kind, selected, validPendingUids);
+            if (!protocol.ok) throw new Error(`${label}遗漏来源补齐后协议仍不完整：${protocol.error}`);
+            this.progress('running', `${label}已补齐全部遗漏来源`, { titles: [expectedTitle], phase: 'source-completion', resolvedPendingUids: missingPendingUids });
         }
         if (!protocol.ok) {
             if (protocol.explicitNone && !validPendingUids.length) return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: stalePendingUids, processedPendingUids: [] };
@@ -7443,7 +7497,10 @@ function summaryEntries(kind, entries, snapshot, pendingUids = []) {
         const changedText = changed.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
         const context = [changedText, snapshot.playerText, snapshot.assistantText].filter(Boolean).join('\n\n');
         const related = (0, matcher_1.relevantEntries)(candidates.filter((entry) => !pending.has(String(entry.uid)) && entry.title !== '总结｜当前事件'), context, 28);
-        return [...new Map([...currentSummary, ...changed, ...related].map((entry) => [entry.uid, entry])).values()].slice(0, 48);
+        const required = [...new Map([...currentSummary, ...changed].map((entry) => [entry.uid, entry])).values()];
+        const relatedBudget = Math.max(0, 48 - required.length);
+        // ui.63: pending 来源属于强制工作集，不能被关联条目数量上限挤出。
+        return [...required, ...related.filter((entry) => !required.some((item) => item.uid === entry.uid)).slice(0, relatedBudget)];
     }
     const currentWorldHistory = active.filter((entry) => entry.title === '总结｜世界历史');
     const currentEvent = active.filter((entry) => entry.title === '总结｜当前事件');
@@ -7455,7 +7512,10 @@ function summaryEntries(kind, entries, snapshot, pendingUids = []) {
     }
     const changedText = changed.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
     const relatedStable = (0, matcher_1.relevantEntries)(active.filter(hasStableSummaryMaterial).filter((entry) => !requiredUids.has(entry.uid) && !pending.has(String(entry.uid))), changedText || '长期稳定结果', 28);
-    return [...new Map([...currentWorldHistory, ...currentEvent, ...changed, ...relatedStable].map((entry) => [entry.uid, entry])).values()].slice(0, 72);
+    const required = [...new Map([...currentWorldHistory, ...currentEvent, ...changed].map((entry) => [entry.uid, entry])).values()];
+    const relatedBudget = Math.max(0, 72 - required.length);
+    // ui.63: 大总结必须保留全部 pending 来源；只裁剪关联上下文。
+    return [...required, ...relatedStable.filter((entry) => !required.some((item) => item.uid === entry.uid)).slice(0, relatedBudget)];
 }
 function hasStableSummaryMaterial(entry) {
     const values = entry?.sections?.values ?? {};
@@ -7675,14 +7735,20 @@ function inspectSummaryProtocol(raw, kind, selectedEntries, pendingUids = []) {
     const validPendingUids = [...new Set((pendingUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
     const recovered = parseSummaryWithRecovery(raw, kind);
     if (!recovered.block) {
-        if (recovered.explicitNone) return { ok: false, explicitNone: true, error: `${label}协议不完整：当前有${validPendingUids.length}个待处理来源，模型必须逐一输出“吸收”或“保留完成”，不能返回“无”` };
+        if (recovered.explicitNone) return { ok: false, explicitNone: true, error: `${label}协议不完整：当前有${validPendingUids.length}个待处理来源，模型必须逐一输出“吸收”或“保留完成”，不能返回“无”`, unresolvedPendingUids: validPendingUids };
         return { ok: false, explicitNone: false, error: `${label}无法识别固定标题“${expectedTitle}”及“【历史分发】”协议块` };
     }
     const summaryBlock = ensureSummarySnapshotSections(recovered.block, kind);
     const historyPlan = historicalDistributionPlan(summaryBlock, selectedEntries, { kind, pendingUids: validPendingUids });
     if (historyPlan.invalidLines?.length) return { ok: false, error: `${label}协议不完整：有${historyPlan.invalidLines.length}条历史分发行无法识别`, recovered, summaryBlock, historyPlan };
     const unresolvedPendingUids = validPendingUids.filter((uid) => !historyPlan.settledSourceUids.includes(String(uid)));
-    if (unresolvedPendingUids.length) return { ok: false, error: `${label}协议不完整：${unresolvedPendingUids.length}个待处理来源没有得到“吸收”或“保留完成”的确定结论`, recovered, summaryBlock, historyPlan, unresolvedPendingUids };
+    if (unresolvedPendingUids.length) {
+        const unresolvedTitles = selectedEntries
+            .filter((entry) => unresolvedPendingUids.includes(String(entry.uid)))
+            .map((entry) => entry.title);
+        const suffix = unresolvedTitles.length ? `（${unresolvedTitles.slice(0, 4).join('、')}${unresolvedTitles.length > 4 ? '等' : ''}）` : '';
+        return { ok: false, error: `${label}协议不完整：${unresolvedPendingUids.length}个待处理来源没有得到“吸收”或“保留完成”的确定结论${suffix}`, recovered, summaryBlock, historyPlan, unresolvedPendingUids, unresolvedTitles };
+    }
     if (!summarySnapshotHasFacts(summaryBlock, kind) || (!historyPlan.distributionBlocks.length && !historyPlan.completionProofs.length && !historyPlan.directCompletionUids.length)) {
         return { ok: false, error: `${label}没有形成可执行的逐来源结算计划`, recovered, summaryBlock, historyPlan };
     }
@@ -14810,11 +14876,11 @@ ${custom ? `用户附加要求：\n${custom}` : ''}`;
     const timeContext = promptTimeContext(options);
     const user = `【本次处理时间】\n${timeContext}\n\n【处理范围】\n${subject || (isSmall ? '近期世界书变更整理' : '长期世界结构固化')}
 
+【${changedLabel}】
+${workingEntries.map((entry) => entryForPrompt(entry, compact ? 560 : 920)).join('\n\n') || '（无）'}
+
 【上一轮权威世界书轻量索引】
 ${index || '（无）'}
-
-【${changedLabel}】
-${workingEntries.slice(0, compact ? 10 : 24).map((entry) => entryForPrompt(entry, compact ? 560 : 920)).join('\n\n') || '（无）'}
 
 【直接关联条目】
 ${relatedEntries.slice(0, compact ? 8 : 18).map((entry) => entryForPrompt(entry, compact ? 420 : 680)).join('\n\n') || '（无）'}${recent}
