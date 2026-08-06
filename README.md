@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.61-deterministic-settlement
+# Mirror Abyss 2.0.0-lite.ui.62-fixed-summary-contract
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -23,7 +23,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.61-deterministic-settlement 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.62-fixed-summary-contract 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -94,6 +94,18 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 本地矩阵验证插件可控的有限状态、故障注入和宿主模拟，不等同于对所有第三方模型和网关的永久可用性保证。真实环境结果以插件导出的自动验收报告为准。
 
 
+
+
+## 2.0.0-lite.ui.62-fixed-summary-contract 本轮改动
+
+- 小总结和大总结继续要求固定标题、固定 `【历史分发】` 栏目及固定字段顺序；事实内容、宿主选择和颗粒度判断仍由总结提示词结合权威世界书与正文决定。
+- 请求层删除“小总结协议或无”“大总结协议或无”的冲突表述；存在 pending 来源时禁止返回“无”。
+- 模型返回非空但固定协议无法识别时，只执行一次独立 `summaryRepair` 格式恢复请求；第二次仍失败则整体回滚，不无限重试。
+- 格式恢复只允许归一化标题、栏目、标点、换行与字段顺序。修复结果中的来源、目标、栏目、事实或处理结论无法在原返回中找到时，机械拒绝，防止借格式修复补写语义。
+- 自动小总结新增“关键变化最小间隔”，默认 5 回合。关键变化达到阈值也不能在不足最小间隔时触发；普通轮数阈值默认仍为 10 回合。
+- ui.61 的确定性结算、幂等回读、无裁剪 pending、逐来源历史分发和父事务回滚保持不变。
+
+详细实现见 `PATCH-SCOPE-UI62.md`、`UI62-FIXED-SUMMARY-CONTRACT-VALIDATION.md` 与 `UI62-REALTEST-CHECKLIST.md`。
 
 ## 2.0.0-lite.ui.61-deterministic-settlement 本轮改动
 

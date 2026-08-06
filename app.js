@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.61-deterministic-settlement — governed worldbook storage, source-bound history distribution, deterministic lifecycle settlement, native recall, and cross-module transaction repair. */
+/** Mirror Abyss 2.0.0-lite.ui.62-fixed-summary-contract — governed worldbook storage, fixed summary protocol recovery, source-bound history distribution, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1263,7 +1263,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.61-deterministic-settlement';
+exports.VERSION = '2.0.0-lite.ui.62-fixed-summary-contract';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1684,7 +1684,7 @@ class ControlPanel {
             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取。'),
             this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
             this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '按轮数或关键变化触发。'),
+            this.makeSwitch('autoSmallSummary', '自动小总结', '按轮数触发；关键变化达到阈值时仍需满足最小回合间隔。'),
             this.makeSwitch('autoLargeSummary', '自动大总结', '累计小总结后沉降。'),
             this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目进行容量治理。'),
         );
@@ -1692,6 +1692,7 @@ class ControlPanel {
         thresholds.className = 'ma-lite-thresholds';
         thresholds.append(
             this.makeNumberInput('smallSummaryTurns', '小总结轮数', 1, 100),
+            this.makeNumberInput('smallSummaryMinTurns', '关键变化最小间隔', 1, 100),
             this.makeNumberInput('criticalChangesForSmall', '关键变化阈值', 1, 50),
             this.makeNumberInput('largeSummaryCount', '大总结计数', 1, 30),
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
@@ -2939,6 +2940,7 @@ class ControlPanel {
         if (this.inputs.autoSmallSummary) this.inputs.autoSmallSummary.checked = settings.autoSmallSummary !== false;
         if (this.inputs.autoLargeSummary) this.inputs.autoLargeSummary.checked = settings.autoLargeSummary !== false;
         if (this.inputs.smallSummaryTurns) this.inputs.smallSummaryTurns.value = String(settings.smallSummaryTurns ?? 10);
+        if (this.inputs.smallSummaryMinTurns) this.inputs.smallSummaryMinTurns.value = String(settings.smallSummaryMinTurns ?? 5);
         if (this.inputs.criticalChangesForSmall) this.inputs.criticalChangesForSmall.value = String(settings.criticalChangesForSmall ?? 6);
         if (this.inputs.largeSummaryCount) this.inputs.largeSummaryCount.value = String(settings.largeSummaryCount ?? 5);
         if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
@@ -4908,6 +4910,8 @@ class HostAdapter {
             smallSummaryPrompt: settings.smallSummaryPrompt,
             largeSummaryPrompt: settings.largeSummaryPrompt,
             smallSummaryTurns: settings.smallSummaryTurns,
+            smallSummaryMinTurns: settings.smallSummaryMinTurns,
+            criticalChangesForSmall: settings.criticalChangesForSmall,
             largeSummaryCount: settings.largeSummaryCount,
             entryBudgetEnabled: settings.entryBudgetEnabled,
             keywordDefinitions: settings.keywordDefinitions,
@@ -6860,6 +6864,8 @@ exports.splitExtractionSource = splitExtractionSource;
 exports.__testSummaryEntries = summaryEntries;
 exports.__testAbsorbedSourceOperations = absorbedSourceOperations;
 exports.__testParseSummaryWithRecovery = parseSummaryWithRecovery;
+exports.__testInspectSummaryProtocol = inspectSummaryProtocol;
+exports.__testSummaryRepairPreservesSemantics = summaryRepairPreservesSemantics;
 exports.__testHistoricalDistributionPlan = historicalDistributionPlan;
 exports.__testResolvedHistoricalSourceUids = resolvedHistoricalSourceUids;
 exports.__testMergePendingUids = mergePendingUids;
@@ -6969,9 +6975,10 @@ class MemoryRunner {
         let pendingLargeSummaryUids = [...(cursor.pendingLargeSummaryUids ?? [])];
         try {
             const turnReady = turnsSinceSmall >= settings.smallSummaryTurns;
-            const changeReady = criticalChangesSinceSmall >= settings.criticalChangesForSmall;
+            const minimumInterval = Math.max(1, Math.min(settings.smallSummaryTurns, Number(settings.smallSummaryMinTurns || 5)));
+            const changeReady = turnsSinceSmall >= minimumInterval && criticalChangesSinceSmall >= settings.criticalChangesForSmall;
             if (settings.autoSmallSummary !== false && (turnReady || changeReady)) {
-                const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `累计${criticalChangesSinceSmall}个关键变化`;
+                const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `经过${turnsSinceSmall}轮并累计${criticalChangesSinceSmall}个关键变化`;
                 this.progress('running', `${reason}，开始小总结与分发`, { titles: ['总结｜当前事件'], criticalChanges: criticalChangesSinceSmall });
                 const small = await this.summarize('small', settings, snapshot, { pendingUids: pendingSmallSummaryUids });
                 committed.push(small);
@@ -7210,31 +7217,41 @@ class MemoryRunner {
             onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'extract' }),
         });
         this.validate(snapshot);
-        const recovered = parseSummaryWithRecovery(raw, kind);
-        if (!recovered.block) {
-            if (recovered.explicitNone) {
-                if (validPendingUids.length) throw new Error(`${label}协议不完整：当前有${validPendingUids.length}个待处理来源，模型必须逐一输出“吸收”或“保留完成”，不能返回“无”`);
-                return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: stalePendingUids, processedPendingUids: [] };
-            }
-            throw new Error(`${label}无法从模型返回中恢复“${expectedTitle}”`);
+        let effectiveRaw = raw;
+        let protocol = inspectSummaryProtocol(effectiveRaw, kind, selected, validPendingUids);
+        if (!protocol.ok && !protocol.explicitNone) {
+            this.progress('running', `${label}固定格式校验失败，正在执行一次只改格式的专用恢复`, { titles: [expectedTitle], phase: 'format-repair', error: protocol.error });
+            const pendingSources = selected.filter((entry) => validPendingUids.includes(String(entry.uid))).map((entry) => entry.title);
+            const repairPrompt = (0, prompts_1.summaryRepairPrompts)(effectiveRaw, kind, pendingSources, protocol.error);
+            effectiveRaw = await (0, model_request_1.callModel)({
+                host: this.host,
+                stage: 'summaryRepair',
+                prompt: repairPrompt,
+                fallbackPrompt: () => (0, prompts_1.summaryRepairPrompts)(raw, kind, pendingSources, protocol.error, { compact: true }),
+                settings,
+                snapshot,
+                profileId: profile,
+                sourceText: effectiveRaw,
+                responseTokens: kind === 'small' ? 4096 : 6144,
+                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}格式修复模型`), { titles: [expectedTitle], phase: 'format-repair' }),
+            });
+            this.validate(snapshot);
+            protocol = inspectSummaryProtocol(effectiveRaw, kind, selected, validPendingUids);
+            if (!protocol.ok) throw new Error(`${label}固定格式修复失败：${protocol.error}`);
+            const preservation = summaryRepairPreservesSemantics(raw, protocol);
+            if (!preservation.ok) throw new Error(`${label}固定格式修复被拒绝：修复结果改变或补写了原返回语义（${preservation.issues.slice(0, 3).join('；')}）`);
+            this.progress('running', `${label}已通过专用请求恢复固定协议格式`, { titles: [expectedTitle], phase: 'format-repair' });
         }
-        const summaryBlock = ensureSummarySnapshotSections(recovered.block, kind);
-        if (recovered.repaired) this.progress('running', `${label}已本地修复${recovered.repaired}处格式问题`, { titles: [expectedTitle], repaired: recovered.repaired, skipped: recovered.skipped });
-        const historyPlan = historicalDistributionPlan(summaryBlock, selected, { kind, pendingUids: validPendingUids });
-        if (historyPlan.invalidLines?.length) {
-            throw new Error(`${label}协议不完整：有${historyPlan.invalidLines.length}条历史分发行无法识别；本轮不写入、不结算，保留全部待处理来源`);
+        if (!protocol.ok) {
+            if (protocol.explicitNone && !validPendingUids.length) return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: stalePendingUids, processedPendingUids: [] };
+            throw new Error(protocol.error);
         }
-        const unresolvedPendingUids = validPendingUids.filter((uid) => !historyPlan.settledSourceUids.includes(String(uid)));
-        if (unresolvedPendingUids.length) {
-            throw new Error(`${label}协议不完整：${unresolvedPendingUids.length}个待处理来源没有得到“吸收”或“保留完成”的确定结论`);
-        }
-        if (!summarySnapshotHasFacts(summaryBlock, kind) || (!historyPlan.distributionBlocks.length && !historyPlan.completionProofs.length && !historyPlan.directCompletionUids.length)) {
-            throw new Error(`${label}没有形成可执行的逐来源结算计划`);
-        }
+        const { recovered, summaryBlock, historyPlan } = protocol;
+        if (recovered.repaired) this.progress('running', `${label}已本地归一化${recovered.repaired}处表面格式`, { titles: [expectedTitle], repaired: recovered.repaired, skipped: recovered.skipped });
         if (!historyPlan.distributionBlocks.length && !historyPlan.absorptionOperations.length) {
             const resolvedSourceUids = [...new Set([...historyPlan.directCompletionUids, ...stalePendingUids])];
             const detail = `${label}已完成确定性判断：${historyPlan.directCompletionUids.length}个来源保留完成，无需修改世界书`;
-            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', raw, emptyPlan());
+            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', effectiveRaw, emptyPlan());
             this.progress('success', detail, { titles: [], resolvedSourceUids });
             return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids, processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
         }
@@ -7249,11 +7266,11 @@ class MemoryRunner {
             const unresolvedAfterProof = validPendingUids.filter((uid) => !resolvedSourceUids.includes(String(uid)));
             if (unresolvedAfterProof.length) throw new Error(`${label}结算证明不足：${unresolvedAfterProof.length}个来源的目标事实未通过权威回读`);
             const detail = `${label}已幂等完成确定性结算，无需重复写入世界书`;
-            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', raw, plan);
+            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', effectiveRaw, plan);
             this.progress('success', detail, { titles: historyPlan.distributionBlocks.map((block) => block.title), resolvedSourceUids });
             return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids, processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
         }
-        const applied = await this.apply(settings, plan, snapshot, sourceContext, label, raw, { rebalanceKind: kind, summaryText });
+        const applied = await this.apply(settings, plan, snapshot, sourceContext, label, effectiveRaw, { rebalanceKind: kind, summaryText });
         const remainingUids = new Set((applied.entries ?? []).map((entry) => String(entry.uid)));
         const absorbedUids = historyPlan.absorptionOperations.map((operation) => String(operation.targetUid ?? '')).filter((uid) => uid && !remainingUids.has(uid));
         const completedUids = resolvedHistoricalSourceUids(applied, historyPlan.completionProofs);
@@ -7629,6 +7646,47 @@ function resolvedHistoricalSourceUids(applied, completionProofs = []) {
         if (passed) resolved.push(String(group.sourceUid));
     }
     return [...new Set(resolved.filter(Boolean))];
+}
+
+
+function summaryRepairPreservesSemantics(originalRaw, protocol) {
+    const original = (0, util_1.normalizeFact)((0, parser_1.sanitizeModelText)(originalRaw));
+    const issues = [];
+    for (const record of protocol?.historyPlan?.records ?? []) {
+        const sourceName = (0, util_1.splitTitle)(record.sourceTitle)?.name || String(record.sourceTitle ?? '').split('｜').slice(1).join('｜');
+        const targetName = (0, util_1.splitTitle)(record.targetTitle)?.name || String(record.targetTitle ?? '').split('｜').slice(1).join('｜');
+        if (sourceName && !original.includes((0, util_1.normalizeFact)(sourceName))) issues.push(`来源“${sourceName}”不在原返回中`);
+        if (record.directCompletion === true) {
+            if (!/(?:保留完成|保留|独立存在|继续存在)/u.test((0, parser_1.sanitizeModelText)(originalRaw))) issues.push(`来源“${sourceName}”缺少原有保留结论`);
+            continue;
+        }
+        if (targetName && !original.includes((0, util_1.normalizeFact)(targetName))) issues.push(`目标“${targetName}”不在原返回中`);
+        if (record.section && !original.includes((0, util_1.normalizeFact)(record.section))) issues.push(`栏目“${record.section}”不在原返回中`);
+        if (record.fact && !original.includes((0, util_1.normalizeFact)(record.fact))) issues.push(`事实“${record.fact}”不是原返回中的原文事实`);
+        if (record.disposition === '吸收' && !/(?:吸收|并入|退出|删除来源)/u.test((0, parser_1.sanitizeModelText)(originalRaw))) issues.push(`来源“${sourceName}”缺少原有吸收结论`);
+        if (record.disposition === '保留完成' && !/(?:保留完成|保留|独立存在|继续存在)/u.test((0, parser_1.sanitizeModelText)(originalRaw))) issues.push(`来源“${sourceName}”缺少原有保留结论`);
+    }
+    return { ok: issues.length === 0, issues: [...new Set(issues)] };
+}
+
+function inspectSummaryProtocol(raw, kind, selectedEntries, pendingUids = []) {
+    const label = kind === 'small' ? '小总结' : '大总结';
+    const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
+    const validPendingUids = [...new Set((pendingUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
+    const recovered = parseSummaryWithRecovery(raw, kind);
+    if (!recovered.block) {
+        if (recovered.explicitNone) return { ok: false, explicitNone: true, error: `${label}协议不完整：当前有${validPendingUids.length}个待处理来源，模型必须逐一输出“吸收”或“保留完成”，不能返回“无”` };
+        return { ok: false, explicitNone: false, error: `${label}无法识别固定标题“${expectedTitle}”及“【历史分发】”协议块` };
+    }
+    const summaryBlock = ensureSummarySnapshotSections(recovered.block, kind);
+    const historyPlan = historicalDistributionPlan(summaryBlock, selectedEntries, { kind, pendingUids: validPendingUids });
+    if (historyPlan.invalidLines?.length) return { ok: false, error: `${label}协议不完整：有${historyPlan.invalidLines.length}条历史分发行无法识别`, recovered, summaryBlock, historyPlan };
+    const unresolvedPendingUids = validPendingUids.filter((uid) => !historyPlan.settledSourceUids.includes(String(uid)));
+    if (unresolvedPendingUids.length) return { ok: false, error: `${label}协议不完整：${unresolvedPendingUids.length}个待处理来源没有得到“吸收”或“保留完成”的确定结论`, recovered, summaryBlock, historyPlan, unresolvedPendingUids };
+    if (!summarySnapshotHasFacts(summaryBlock, kind) || (!historyPlan.distributionBlocks.length && !historyPlan.completionProofs.length && !historyPlan.directCompletionUids.length)) {
+        return { ok: false, error: `${label}没有形成可执行的逐来源结算计划`, recovered, summaryBlock, historyPlan };
+    }
+    return { ok: true, recovered, summaryBlock, historyPlan, unresolvedPendingUids: [] };
 }
 
 function parseSummaryWithRecovery(raw, kind) {
@@ -12030,6 +12088,7 @@ const INPUT_LIMITS = Object.freeze({
     revision: 30000,
     extraction: 26000,
     extractionRepair: 14000,
+    summaryRepair: 18000,
     worldSettingImport: 42000,
     smallSummary: 28000,
     largeSummary: 30000,
@@ -12186,6 +12245,7 @@ function emptyResponseRetryTokens(stage, settings, firstTokens) {
         revision: 6144,
         extraction: 8192,
         extractionRepair: 6144,
+        summaryRepair: 6144,
         worldSettingImport: 12288,
         smallSummary: 6144,
         largeSummary: 8192,
@@ -12207,6 +12267,7 @@ function stageResponseTokens(stage, settings, sourceText = '') {
     }
     if (stage === 'extraction') return Math.min(configured, 6144);
     if (stage === 'extractionRepair') return Math.min(configured, 4096);
+    if (stage === 'summaryRepair') return Math.min(configured, 4096);
     if (stage === 'worldSettingImport') return Math.min(configured, 8192);
     if (stage === 'smallSummary') return Math.min(configured, 4096);
     if (stage === 'largeSummary') return Math.min(configured, 6144);
@@ -12234,9 +12295,10 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
         revision: [`- 只输出可直接替换的完整正文。必须从原文开头写到原文结尾，不得中途停止、缺段或用省略号代替剩余内容。除删除明确违规内容外，修正版应保留原文至少85%的有效正文；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
         extraction: ['- 只输出规定的自然中文条目格式或“无”。最多8条，最终文本总长度不超过5000个中文字符。'],
         extractionRepair: ['- 只输出修复后的自然中文条目格式或“无”。不得补充事实；最终文本总长度不超过5000个中文字符。'],
+        summaryRepair: ['- 只输出修复后的固定总结协议。不得新增、删除、改写或重新判断任何事实、来源、目标、栏目和处理结论；最终文本总长度不超过3200个中文字符。'],
         worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
-        smallSummary: ['- 只输出规定的小总结协议或“无”。总长度不超过1800个中文字符。'],
-        largeSummary: ['- 只输出规定的大总结协议或“无”。总长度不超过2600个中文字符。'],
+        smallSummary: ['- 只输出规定的小总结协议。当前存在待处理来源时禁止输出“无”；总长度不超过1800个中文字符。'],
+        largeSummary: ['- 只输出规定的大总结协议。当前存在待处理来源时禁止输出“无”；总长度不超过2600个中文字符。'],
         migrationReview: ['- 最终结论必须首先出现。通过只输出 PASS；不通过只输出 FAIL 协议行；总长度不超过800个中文字符。'],
         migrationPlan: ['- 只输出 ANCHOR、GROUP、DROP 协议行；覆盖全部来源后立即停止，不输出说明。'],
         migration: ['- 只输出规定的重建条目协议；完成本批全部对象后立即停止，不输出说明。'],
@@ -12261,6 +12323,7 @@ function reasoningRescueTokens(stage, settings, previousTokens) {
         revision: 8192,
         extraction: 6144,
         extractionRepair: 4096,
+        summaryRepair: 4096,
         worldSettingImport: 8192,
         smallSummary: 4096,
         largeSummary: 6144,
@@ -12280,9 +12343,10 @@ function protocolRescuePrompt(stage, fallbackValue, sourceText, responseTokens) 
         revision: '输出可直接替换的完整修正版正文，从开头写到结尾。',
         extraction: '从输入中提取已经发生的高价值事实，只输出自然中文条目格式或“无”。',
         extractionRepair: '只把已有候选修复为自然中文条目格式，不新增事实。',
+        summaryRepair: '只把已有总结候选修复成固定协议格式，不新增、删除、改写或重新判断任何语义内容。',
         worldSettingImport: '只输出完整 ENTRY 协议或“无”。',
-        smallSummary: '只输出“总结｜当前事件”完整协议或“无”。',
-        largeSummary: '只输出“总结｜世界历史”完整协议或“无”。',
+        smallSummary: '只输出“总结｜当前事件”完整固定协议；当前存在待处理来源时禁止输出“无”。',
+        largeSummary: '只输出“总结｜世界历史”完整固定协议；当前存在待处理来源时禁止输出“无”。',
         migrationReview: '只输出 PASS 或 FAIL 协议。',
         migrationPlan: '只输出 ANCHOR、GROUP、DROP 协议行。',
         migration: '只输出完整重建条目协议。',
@@ -12338,6 +12402,12 @@ function salvageStrictFinalProtocol(stage, reasoningText) {
     }
     if (stage === 'largeSummary') {
         const index = region.lastIndexOf('总结｜世界历史');
+        return index >= 0 ? region.slice(index).trim() : '';
+    }
+    if (stage === 'summaryRepair') {
+        const smallIndex = region.lastIndexOf('总结｜当前事件');
+        const largeIndex = region.lastIndexOf('总结｜世界历史');
+        const index = Math.max(smallIndex, largeIndex);
         return index >= 0 ? region.slice(index).trim() : '';
     }
     if (stage === 'migrationPlan') {
@@ -14433,6 +14503,7 @@ exports.extractionPrompts = extractionPrompts;
 exports.auditPrompts = auditPrompts;
 exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
+exports.summaryRepairPrompts = summaryRepairPrompts;
 exports.extractionRepairPrompts = extractionRepairPrompts;
 exports.worldSettingImportPrompts = worldSettingImportPrompts;
 exports.migrationPrompts = migrationPrompts;
@@ -14748,7 +14819,39 @@ ${workingEntries.slice(0, compact ? 10 : 24).map((entry) => entryForPrompt(entry
 【直接关联条目】
 ${relatedEntries.slice(0, compact ? 8 : 18).map((entry) => entryForPrompt(entry, compact ? 420 : 680)).join('\n\n') || '（无）'}${recent}
 
-按规定格式输出逐来源历史分发；不要生成或复述总结容器正文。`;
+严格按固定标题、固定栏目、固定字段顺序输出逐来源历史分发；内容依据上述提示词和上下文判断，不要生成或复述总结容器正文。`;
+    return { system, user };
+}
+
+function summaryRepairPrompts(raw, kind, pendingSources = [], reason = '', options = {}) {
+    const compact = options.compact === true;
+    const isSmall = kind !== 'large';
+    const title = isSmall ? '总结｜当前事件' : '总结｜世界历史';
+    const expected = (pendingSources ?? []).map((value) => String(value ?? '').trim()).filter(Boolean);
+    const system = `你是 Mirror Abyss 总结格式修复器。
+
+你只负责把“已有模型返回”整理成固定协议格式。不得阅读原剧情，不得新增、删除、改写、压缩、扩写、推测或重新判断任何来源、目标、栏目、事实与处理结论。
+
+固定格式：
+${title}
+
+【历史分发】
+- 来源：类型｜稳定名称；目标：类型｜稳定名称；栏目：栏目名称；事实：原文已有完整事实；处理：吸收或保留完成
+- 来源：类型｜稳定名称；处理：保留完成
+
+格式纪律：
+1. 标题必须逐字写为“${title}”，栏目必须逐字写为“【历史分发】”。
+2. 每条记录必须单行；字段顺序固定为“来源；目标；栏目；事实；处理”，短格式固定为“来源；处理”。
+3. 只允许把中文或英文冒号、分号、换行和 Markdown 列表归一化；不得改变语义内容。
+4. 原文没有明确处理结论的来源不得擅自补成“保留完成”；原文缺少来源、目标、栏目或事实时不得猜测。
+5. 禁止解释、前言、后记、JSON、代码块与“无”。`;
+    const user = `原返回未通过固定格式校验：${clipText(reason || '格式无法识别', 800)}
+
+本次必须覆盖的来源（仅用于核对；不得据此生成原文没有的结论）：
+${expected.length ? expected.map((item) => `- ${item}`).join('\n') : '（无）'}
+
+需要仅做格式修复的原返回：
+${clipText(String(raw ?? ''), compact ? 9000 : 14000)}`;
     return { system, user };
 }
 
@@ -15574,6 +15677,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     responseTokens: 8192,
     requestTimeoutMs: 90000,
     smallSummaryTurns: 10,
+    smallSummaryMinTurns: 5,
     criticalChangesForSmall: 6,
     largeSummaryCount: 5,
     queueCompactThreshold: 6,
@@ -15685,6 +15789,7 @@ function parseSettings(value) {
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 1, 100),
+        smallSummaryMinTurns: (0, util_1.clampNumber)(candidate.smallSummaryMinTurns, 5, 1, 100),
         criticalChangesForSmall: (0, util_1.clampNumber)(candidate.criticalChangesForSmall, 6, 1, 50),
         largeSummaryCount: (0, util_1.clampNumber)(candidate.largeSummaryCount, 5, 1, 30),
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
