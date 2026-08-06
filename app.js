@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.63-missing-source-completion — governed worldbook storage, mandatory pending-source coverage, targeted summary completion, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.64-source-title-identity — governed worldbook storage, mandatory pending-source coverage, targeted summary completion, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1263,7 +1263,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.63-missing-source-completion';
+exports.VERSION = '2.0.0-lite.ui.64-source-title-identity';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -7553,16 +7553,37 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
     const pending = new Set((options.pendingUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
     const selected = selectedEntries ?? [];
     const selectedByTitle = new Map();
+    const selectedByIdentity = new Map();
+    const registerCandidate = (map, key, entry) => {
+        if (!key) return;
+        const group = map.get(key) ?? [];
+        if (!group.some((item) => String(item.uid) === String(entry.uid))) group.push(entry);
+        map.set(key, group);
+    };
+    const registerIdentity = (entry, type, name) => registerCandidate(selectedByIdentity, historySourceIdentityKey(type, name), entry);
     for (const entry of selected) {
-        selectedByTitle.set((0, util_1.normalizeTitle)(entry.title), entry);
+        registerCandidate(selectedByTitle, (0, util_1.normalizeTitle)(entry.title), entry);
         const canonicalType = canonicalHistoryType(entry.type);
         const canonicalName = String(entry.name ?? '').trim();
-        if (canonicalType && canonicalName) selectedByTitle.set((0, util_1.normalizeTitle)(`${canonicalType}｜${canonicalName}`), entry);
+        if (canonicalType && canonicalName) {
+            registerCandidate(selectedByTitle, (0, util_1.normalizeTitle)(`${canonicalType}｜${canonicalName}`), entry);
+            registerIdentity(entry, canonicalType, canonicalName);
+        }
+        for (const alias of [...(entry.aliases ?? []), ...(entry.keywords ?? [])]) registerIdentity(entry, canonicalType, alias);
     }
     const eligibleSource = (entry) => {
         if (!entry || entry.managed !== true) return false;
         if (/^总结｜(?:当前事件|世界历史)$/u.test(String(entry.title ?? ''))) return true;
         return pending.has(String(entry.uid));
+    };
+    const uniqueEligible = (candidates) => {
+        const eligible = (candidates ?? []).filter(eligibleSource);
+        return eligible.length === 1 ? eligible[0] : null;
+    };
+    const resolveSelectedSource = (record) => {
+        const exact = uniqueEligible(selectedByTitle.get((0, util_1.normalizeTitle)(record.sourceTitle)));
+        if (exact) return exact;
+        return uniqueEligible(selectedByIdentity.get(historySourceIdentityKey(record.sourceType, record.sourceName)));
     };
     const sourceMayExit = (entry) => {
         if (!entry || entry.locked === true || entry.focus === true || entry.activation?.disabled === true) return false;
@@ -7572,13 +7593,17 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
     const historySection = summaryBlock.sections.find((section) => section.name === '历史分发');
     const records = [];
     const invalidLines = [];
+    const unmatchedSourceTitles = [];
     for (const raw of historySection?.lines ?? []) {
         const text = String(raw ?? '').trim();
         if (!text || /^(?:无|没有|暂无)$/u.test(text)) continue;
         const record = parseHistoricalDistributionLine(raw);
         if (!record) { invalidLines.push(text); continue; }
-        const source = selectedByTitle.get((0, util_1.normalizeTitle)(record.sourceTitle));
-        if (!eligibleSource(source)) continue;
+        const source = resolveSelectedSource(record);
+        if (!eligibleSource(source)) {
+            unmatchedSourceTitles.push(record.sourceTitle);
+            continue;
+        }
         if (record.directCompletion === true) {
             records.push({ ...record, section: '', explicitEmpty: false, sourceUid: String(source.uid), sourceType: canonicalHistoryType(source.type), sourceEntry: source });
             continue;
@@ -7589,10 +7614,10 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
         records.push({ ...record, section: targetSection, explicitEmpty, sourceUid: String(source.uid), sourceType: canonicalHistoryType(source.type), sourceEntry: source });
     }
     if (!records.length) {
-        if (historySection) return { records: [], distributionBlocks: [], absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], invalidLines };
+        if (historySection) return { records: [], distributionBlocks: [], absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], invalidLines, unmatchedSourceTitles: (0, util_1.unique)(unmatchedSourceTitles) };
         const distributionBlocks = distributionBlocksFromSummary(summaryBlock);
         // 旧协议缺少逐来源事实绑定，只兼容事实写入，不再允许据此删除来源。
-        return { records: [], distributionBlocks, absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], invalidLines: [] };
+        return { records: [], distributionBlocks, absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], invalidLines: [], unmatchedSourceTitles: [] };
     }
     const grouped = new Map();
     for (const record of records) {
@@ -7632,15 +7657,26 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
             settledSourceUids.push(String(group.source.uid));
         }
     }
-    return { records: validRecords, distributionBlocks: [...blocks.values()], absorptionOperations, completionProofs, directCompletionUids, settledSourceUids, invalidLines };
+    return { records: validRecords, distributionBlocks: [...blocks.values()], absorptionOperations, completionProofs, directCompletionUids, settledSourceUids, invalidLines, unmatchedSourceTitles: (0, util_1.unique)(unmatchedSourceTitles) };
 }
+function historySourceIdentityKey(type, name) {
+    const canonicalType = canonicalHistoryType(type);
+    const canonicalName = String(name ?? '')
+        .normalize('NFKC')
+        .toLocaleLowerCase()
+        .replace(/[‐‑‒–—―−﹣－]/gu, '-')
+        .replace(/[“”‘’"'`（）()【】\[\]{}《》<>，,。.!！?？：:；;、·•・_\/\s-]+/gu, '')
+        .trim();
+    return canonicalType && canonicalName ? `${canonicalType}|${canonicalName}` : '';
+}
+
 function parseHistoricalDistributionLine(rawLine) {
     const line = String(rawLine ?? '').replace(/^\s*[-*•]+\s*/u, '').trim();
     if (!line || /^(?:无|没有|暂无)$/u.test(line)) return null;
     const direct = line.match(/^来源\s*[:：]\s*([^；;]+?)\s*[；;]\s*(?:处理|来源处理)\s*[:：]\s*(保留完成)\s*$/u);
     if (direct) {
         const source = parseHistoryTitle(direct[1], true);
-        return source ? { sourceTitle: source.title, sourceType: source.type, targetTitle: '', targetType: '', targetName: '', section: '', fact: '', disposition: '保留完成', directCompletion: true } : null;
+        return source ? { sourceTitle: source.title, sourceType: source.type, sourceName: source.name, targetTitle: '', targetType: '', targetName: '', section: '', fact: '', disposition: '保留完成', directCompletion: true } : null;
     }
     const match = line.match(/^来源\s*[:：]\s*(.+?)\s*[；;]\s*目标\s*[:：]\s*(.+?)\s*[；;]\s*栏目\s*[:：]\s*([^；;]+?)\s*[；;]\s*事实\s*[:：]\s*([\s\S]+?)\s*[；;]\s*(?:处理|来源处理)\s*[:：]\s*(吸收|保留完成)\s*$/u);
     if (!match) return null;
@@ -7648,7 +7684,7 @@ function parseHistoricalDistributionLine(rawLine) {
     if (!source || !target) return null;
     const section = match[3].trim(); const fact = match[4].trim().replace(/[；;]+$/u, '');
     if (!section || !fact) return null;
-    return { sourceTitle: source.title, sourceType: source.type, targetTitle: target.title, targetType: target.type, targetName: target.name, section, fact, disposition: match[5], directCompletion: false };
+    return { sourceTitle: source.title, sourceType: source.type, sourceName: source.name, targetTitle: target.title, targetType: target.type, targetName: target.name, section, fact, disposition: match[5], directCompletion: false };
 }
 function parseHistoryTitle(value, allowSummary = false) {
     const cleaned = String(value ?? '').trim().replace(/^[“”"'‘’\s]+|[“”"'‘’。；;，,\s]+$/gu, '');
@@ -7747,7 +7783,10 @@ function inspectSummaryProtocol(raw, kind, selectedEntries, pendingUids = []) {
             .filter((entry) => unresolvedPendingUids.includes(String(entry.uid)))
             .map((entry) => entry.title);
         const suffix = unresolvedTitles.length ? `（${unresolvedTitles.slice(0, 4).join('、')}${unresolvedTitles.length > 4 ? '等' : ''}）` : '';
-        return { ok: false, error: `${label}协议不完整：${unresolvedPendingUids.length}个待处理来源没有得到“吸收”或“保留完成”的确定结论${suffix}`, recovered, summaryBlock, historyPlan, unresolvedPendingUids, unresolvedTitles };
+        const unmatched = historyPlan.unmatchedSourceTitles?.length
+            ? `；模型返回了无法唯一绑定的来源：${historyPlan.unmatchedSourceTitles.slice(0, 4).join('、')}${historyPlan.unmatchedSourceTitles.length > 4 ? '等' : ''}`
+            : '';
+        return { ok: false, error: `${label}协议不完整：${unresolvedPendingUids.length}个待处理来源没有得到“吸收”或“保留完成”的确定结论${suffix}${unmatched}`, recovered, summaryBlock, historyPlan, unresolvedPendingUids, unresolvedTitles };
     }
     if (!summarySnapshotHasFacts(summaryBlock, kind) || (!historyPlan.distributionBlocks.length && !historyPlan.completionProofs.length && !historyPlan.directCompletionUids.length)) {
         return { ok: false, error: `${label}没有形成可执行的逐来源结算计划`, recovered, summaryBlock, historyPlan };
@@ -14824,7 +14863,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 
 格式规则：
 - 每条必须单行。吸收或带新事实的保留完成严格按“来源；目标；栏目；事实；处理”顺序；无新事实的保留完成使用“来源；处理”短格式。
-- 来源必须是本期实际变更条目或输入中的旧总结容器；目标必须是直接事实宿主。
+- 来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题，包括类型、空格和连接符；目标必须是直接事实宿主。
 - “吸收”必须覆盖来源所有仍有价值的事实；不能完整覆盖、证据不足、仍在运行或当前不宜退出时写“保留完成”。
 - 同一来源的多条分发行必须使用一致的处理值。
 - 对象仍在运行、证据不足、当前场景或受保护时，必须选择“保留完成”，不能留下长期悬而未决状态。
@@ -14865,6 +14904,7 @@ ${custom ? `用户附加要求：\n${custom}` : ''}`
 
 格式规则：
 - 每条必须单行。吸收或带新事实的保留完成严格按“来源；目标；栏目；事实；处理”顺序；无新事实的保留完成使用“来源；处理”短格式。
+- 来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题，包括类型、空格和连接符。
 - “吸收”必须完整覆盖来源仍有长期价值的宏观原貌、结果与持续影响。
 - 同一来源的多条分发行必须使用一致处理值。
 - 不写当前状态、短期过程、未发生事项、未来目标、推测、UID或解释。
@@ -14878,6 +14918,9 @@ ${custom ? `用户附加要求：\n${custom}` : ''}`;
 
 【${changedLabel}】
 ${workingEntries.map((entry) => entryForPrompt(entry, compact ? 560 : 920)).join('\n\n') || '（无）'}
+
+【本次必须逐字复制的来源标题】
+${workingEntries.map((entry) => `- ${entry.title}`).join('\n') || '（无）'}
 
 【上一轮权威世界书轻量索引】
 ${index || '（无）'}

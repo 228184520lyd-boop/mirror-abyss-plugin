@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.63-missing-source-completion
+# Mirror Abyss 2.0.0-lite.ui.64-source-title-identity
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -9,6 +9,13 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 - 模型只产生候选协议；匹配、合并、原生字段设置、提交与回滚由插件确定性执行。
 - 当前聊天绑定的世界书是唯一写入目标；全局旧字段不能覆盖聊天绑定。
 - 所有模型路由和世界书保存均通过 SillyTavern 官方接口。
+
+## ui.64 来源标题身份修复
+
+- 总结提示词集中列出必须逐字复制的来源标题。
+- 同标题关联条目不再覆盖唯一 pending 来源。
+- 常见连接符与空格差异只在候选唯一时映射回权威来源。
+- 多个 pending 来源身份冲突时拒绝猜测并保留回滚。
 
 ## 安装
 
@@ -23,7 +30,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.63-missing-source-completion 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.64-source-title-identity 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -96,7 +103,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 
 
-## 2.0.0-lite.ui.63-missing-source-completion 本轮改动
+## 2.0.0-lite.ui.64-source-title-identity 本轮改动
 
 - 修复大总结工作集与提示词不一致：pending 来源不再被 24 条工作条目上限或 72 条选材上限挤出；只裁剪关联上下文。
 - 强制来源内容块排在权威世界书轻量索引之前，避免请求层中间裁剪优先删掉必须判断的来源。

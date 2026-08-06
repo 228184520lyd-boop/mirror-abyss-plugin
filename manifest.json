@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.63-missing-source-completion",
+  "version": "2.0.0-lite.ui.64-source-title-identity",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜固定总结格式、pending 来源强制覆盖、遗漏来源定向补齐与确定性历史分发"
+  "description": "世界书单通道｜固定总结格式、来源标题稳定识别、遗漏来源定向补齐与确定性历史分发"
 }
