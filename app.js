@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.65-guarded-settlement — governed worldbook storage, mandatory pending-source coverage, targeted summary completion, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.68-ai-game-time-anchor — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -56,6 +56,8 @@ class MirrorAbyssApplication {
         this.controlPanel = new control_panel_1.ControlPanel({
             getSettings: () => this.settings(),
             configure: (patch) => this.configure(patch),
+            getGameTimeAnchor: () => this.host.getCurrentGameTime(),
+            setGameTimeAnchor: (value) => this.setGameTimeAnchor(value),
             process: () => this.processLatest(),
             audit: () => this.audit(),
             extract: () => this.extract(),
@@ -132,6 +134,11 @@ class MirrorAbyssApplication {
     isStarted() { return this.started; }
     settings() { return this.settingsStore.load(this.host.context()); }
     configure(patch) { return this.settingsStore.save(this.host.context(), patch); }
+    async setGameTimeAnchor(value) {
+        const label = String(value ?? '').trim().slice(0, 80);
+        await this.host.setCurrentGameTime(label ? { label, sceneTitle: '玩家设置', source: 'player' } : null, null, this.settings());
+        return this.host.getCurrentGameTime();
+    }
     audit() { return this.enqueueTask('audit', undefined, false); }
     extract() { return this.enqueueTask('extraction', undefined, false); }
     smallSummary() {
@@ -270,7 +277,7 @@ class MirrorAbyssApplication {
             const route = this.host.profileSummary(profileId) || {};
             const startedAt = Date.now();
             const raw = await this.host.generate(
-                '你是 Mirror Abyss API 连接探针。不要解释，只输出 MA_PROBE_OK。',
+                '职责：API连接探针。只输出 MA_PROBE_OK。',
                 '只输出 MA_PROBE_OK。',
                 512,
                 snapshot,
@@ -1137,7 +1144,7 @@ class AuditRunner {
                 if (/越权返回了修正版正文/u.test((0, util_1.errorText)(protocolError))) throw protocolError;
                 this.setStatus(snapshot.chatKey, 'audit', '审核结论格式不完整，正在进行一次自然格式重试');
                 const repairPrompt = {
-                    system: `你是 Mirror Abyss 审核结论整理器。
+                    system: `职责：整理审核结论。
 重新检查给定审核规则与本轮回复，只提交最终结论。
 通过时只写“审核结论：通过”。
 不通过时写“审核结论：需要修正”，随后写“问题：”并列出最多8条具体原因。
@@ -1263,7 +1270,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.65-guarded-settlement';
+exports.VERSION = '2.0.0-lite.ui.68-ai-game-time-anchor';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1596,7 +1603,7 @@ class ControlPanel {
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{box-sizing:border-box;display:flex;align-items:center;gap:9px;min-height:44px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
-.ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
+.ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-text-setting{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-text-setting b{font-size:13px}.ma-lite-text-setting small{font-size:11px;line-height:1.35;opacity:.58}.ma-lite-text-setting input{box-sizing:border-box;width:100%;min-height:40px;padding:7px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
 .ma-lite-status{min-height:38px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:8px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);font-size:12px;font-weight:500;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{box-sizing:border-box;display:flex;align-items:center;min-height:44px;padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{border-color:rgba(255,126,126,.38);border-left:3px solid rgba(255,126,126,.72);background:linear-gradient(90deg,rgba(255,96,96,.10),rgba(0,0,0,.07));color:var(--SmartThemeBodyColor,#fff);font-weight:520;box-shadow:none}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:44px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:44px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
@@ -1688,6 +1695,7 @@ class ControlPanel {
             this.makeSwitch('autoLargeSummary', '自动大总结', '累计小总结后沉降。'),
             this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目进行容量治理。'),
         );
+        const gameTimeAnchor = this.makeGameTimeInput('游戏时间（可选）', '需要时为当前聊天填写世界内时间锚点，例如“第三日 14:30”或“春季第12日清晨”；留空则当前聊天不启用。后续时间推进由AI判断。', '例如：第三日 14:30');
         const thresholds = document.createElement('div');
         thresholds.className = 'ma-lite-thresholds';
         thresholds.append(
@@ -1701,7 +1709,7 @@ class ControlPanel {
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
         note.textContent = '四阶段状态固定为：审核 → 修正 → 提取 → 写入。任一阶段失败都会停止后续步骤，不推进处理游标。';
-        settingsPage.append(apiSection, this.wrapToolSection('自动化与功能开关', switches, true), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与调度阈值', thresholds, false), note);
+        settingsPage.append(apiSection, this.wrapToolSection('自动化与功能开关', switches, true), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与调度阈值', thresholds, false), note);
 
         const rebuild = this.buildRebuildSection();
         const diagnostic = this.buildDiagnosticSection();
@@ -2848,6 +2856,37 @@ class ControlPanel {
         this.inputs[key] = input;
         return label;
     }
+    makeGameTimeInput(labelText, description, placeholder = '') {
+        const wrap = document.createElement('label');
+        wrap.className = 'ma-lite-text-setting';
+        const title = document.createElement('b');
+        title.textContent = labelText;
+        const detail = document.createElement('small');
+        detail.textContent = description;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = placeholder;
+        input.maxLength = 80;
+        input.addEventListener('change', async () => {
+            const previous = String(this.actions.getGameTimeAnchor?.()?.label || '');
+            const value = String(input.value || '').trim();
+            input.disabled = true;
+            try {
+                await this.actions.setGameTimeAnchor?.(value);
+                this.lastOutcome = null;
+                this.setStatus(value ? `当前聊天游戏时间已设为：${value}；后续推进交由AI` : '当前聊天游戏时间已清空；该聊天不启用游戏时间');
+                this.refresh();
+            }
+            catch (error) {
+                input.value = previous;
+                this.setStatus(`保存游戏时间失败：${(0, util_1.errorText)(error)}`, true);
+            }
+            finally { input.disabled = false; }
+        });
+        wrap.append(title, detail, input);
+        this.gameTimeInput = input;
+        return wrap;
+    }
     makeNumberInput(key, labelText, min, max) {
         const label = document.createElement('label');
         label.className = 'ma-lite-number';
@@ -2946,6 +2985,7 @@ class ControlPanel {
         if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
         if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
         if (this.inputs.extractionEnabled) this.inputs.extractionEnabled.checked = settings.extractionEnabled !== false;
+        if (this.gameTimeInput && (typeof document === 'undefined' || document.activeElement !== this.gameTimeInput)) this.gameTimeInput.value = String(this.actions.getGameTimeAnchor?.()?.label || '');
         if (this.inputs.auditPrompt && (typeof document === 'undefined' || document.activeElement !== this.inputs.auditPrompt)) {
             this.inputs.auditPrompt.value = String(settings.auditPrompt || '');
         }
@@ -2998,6 +3038,7 @@ class ControlPanel {
         if (this.diagnosticRunButton) this.diagnosticRunButton.disabled = busy || !master;
         if (this.diagnosticExportButton) this.diagnosticExportButton.disabled = busy || !this.actions.getDiagnostics?.();
         for (const input of Object.values(this.inputs)) input.disabled = busy;
+        if (this.gameTimeInput) this.gameTimeInput.disabled = busy;
         if (this.apiProfileSelect && this.profileDropdownBound) this.apiProfileSelect.disabled = busy;
     }
 
@@ -4407,7 +4448,7 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
         }
         diagnostics.filtered.push(block.title);
     }
-    for (const block of output) if (block.type === '场景') normalizeSceneSnapshot(block, contextText);
+    for (const block of output) if (block.type === '场景') normalizeSceneSnapshot(block, contextText, { gameTimeEnabled: options.gameTimeEnabled !== false });
     return { blocks: output, diagnostics, currentSceneTitle: currentScene?.title ?? '' };
 }
 
@@ -4554,7 +4595,7 @@ function explicitCurrentSceneName(contextText) {
 // Models occasionally put structured current-scene facts inside one natural
 // sentence.  Normalize the two fields that drive the production projection so
 // recall and the management panel observe the same state.
-function normalizeSceneSnapshot(block, contextText = '') {
+function normalizeSceneSnapshot(block, contextText = '', options = {}) {
     const current = (block.sections ?? []).filter((section) => /^(?:当前状态|定义)$/u.test(String(section.name ?? ''))).flatMap((section) => section.lines ?? []);
     const inferred = [];
     for (const line of current) {
@@ -4574,16 +4615,20 @@ function normalizeSceneSnapshot(block, contextText = '') {
         present.lines = (0, util_1.unique)([...(present.lines ?? []), ...inferred]);
         present.empty = !(present.lines ?? []).length;
     }
+    const gameTimeEnabled = options.gameTimeEnabled !== false;
+    if (!gameTimeEnabled) {
+        for (const section of (block.sections ?? []).filter((item) => /^(?:当前状态|定义)$/u.test(String(item.name ?? '')))) {
+            section.lines = (section.lines ?? []).filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(String(line ?? '')));
+            section.empty = !(section.lines ?? []).length;
+        }
+    }
     if (!sceneMatches) return;
-    const timeMatch = context.match(/(?:推进到|当前游戏时间|游戏时间|当前时间|时间)[ \t]*(?:为|是|到|[：:])?[ \t]*((?:凌晨|清晨|黎明|晨间|早晨|上午|正午|中午|午后|下午|傍晚|黄昏|日落暮色|暮色|夜初|夜晚|深夜|午夜|子夜|白昼|白天))/u);
-    const time = String(timeMatch?.[1] ?? '').trim();
     const snapshot = ensureSection(block, '当前状态');
     const facts = [
         `当前场景为${block.name}`,
         inferred.length ? `当前在场者为${(0, util_1.unique)(inferred).join('、')}` : '',
-        time ? `时间为${time}` : '',
-    ].filter(Boolean).join('，');
-    if (facts) snapshot.lines = (0, util_1.unique)([...(snapshot.lines ?? []), facts]);
+    ].filter(Boolean);
+    if (facts.length) snapshot.lines = (0, util_1.unique)([...(snapshot.lines ?? []), ...facts]);
     snapshot.empty = !(snapshot.lines ?? []).length;
 }
 
@@ -4735,21 +4780,22 @@ function previousCurrentScene(entries, incomingTitle) {
     return current;
 }
 
-function deriveCurrentGameTime(blocks, previous = null) {
+function deriveCurrentGameTime(blocks, previous = null, contextText = '') {
     const scene = (blocks ?? []).find((block) => block.type === '场景');
     if (!scene) return previous ? structuredClone(previous) : null;
     const lines = (scene.sections ?? [])
         .filter((section) => /^(?:当前状态|定义)$/u.test(String(section.name ?? '')))
         .flatMap((section) => section.lines ?? []);
     const match = lines.map((line) => String(line ?? '').match(/(?:^|[，。；;\s])(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])\s*([^，。；;]+)/u)).find(Boolean);
-    if (!match) return previous ? structuredClone(previous) : null;
-    const label = String(match[1] ?? '').trim();
-    if (!label) return previous ? structuredClone(previous) : null;
-    return {
-        label,
-        sceneTitle: scene.title,
-        source: /^(?:未知|不明|未说明)$/u.test(label) ? 'unknown' : 'explicit',
-    };
+    const explicitLabel = String(match?.[1] ?? '').trim();
+    if (explicitLabel) {
+        return {
+            label: explicitLabel,
+            sceneTitle: scene.title,
+            source: /^(?:未知|不明|未说明)$/u.test(explicitLabel) ? 'unknown' : 'model',
+        };
+    }
+    return previous ? structuredClone(previous) : null;
 }
 
 function activeContext(entries, focusUid = '', preferredSceneTitle = '') {
@@ -7120,7 +7166,7 @@ class MemoryRunner {
         }
         let explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
         if (!blocks.length && explicitNone) {
-            const deterministicBlocks = (0, governance_1.governInformationBlocks)([], entries, dialogueInput).blocks;
+            const deterministicBlocks = (0, governance_1.governInformationBlocks)([], entries, dialogueInput, { gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) }).blocks;
             if (deterministicBlocks.length) blocks = deterministicBlocks;
         }
         if (!blocks.length) {
@@ -7137,7 +7183,7 @@ class MemoryRunner {
         const titles = blocks.map((block) => block.title);
         this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
         this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { phase: 'extract', titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
-        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction' });
+        const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction', gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
         await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
@@ -7315,7 +7361,7 @@ class MemoryRunner {
         }
         const sourceContext = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n');
         // ui.61: “总结”只作为模型协议包；每个 pending 来源必须得到吸收或保留完成的确定结论。
-        const plan = (0, operations_1.buildOperationPlan)(historyPlan.distributionBlocks, entries, settings, sourceContext, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true });
+        const plan = (0, operations_1.buildOperationPlan)(historyPlan.distributionBlocks, entries, settings, sourceContext, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
         plan.operations.push(...historyPlan.absorptionOperations);
         const summaryText = historyPlan.records.filter((record) => record.directCompletion !== true).map((record) => `${record.sourceTitle}→${record.targetTitle}【${record.section}】${record.fact}`).join('\n');
         if (!plan.operations.some((operation) => operation.kind !== 'noop')) {
@@ -7354,7 +7400,11 @@ class MemoryRunner {
         const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
         const previousCursor = typeof this.host.cursor === 'function' ? this.host.cursor() : null;
         const previousGameTime = typeof this.host.getCurrentGameTime === 'function' ? this.host.getCurrentGameTime() : null;
-        const nextGameTime = (0, governance_1.deriveCurrentGameTime)(plan.blocks, previousGameTime);
+        // ui.68: 游戏时间由玩家为当前聊天提供锚点，并由提取模型显式推进；插件不从正文机械推算时间。
+        const gameTimeEnabled = Boolean(previousGameTime?.label);
+        const nextGameTime = label === '提取' && gameTimeEnabled
+            ? (0, governance_1.deriveCurrentGameTime)(plan.blocks, previousGameTime, '')
+            : (previousGameTime ? structuredClone(previousGameTime) : null);
         const entries = await this.worldbook.apply(settings, plan, snapshot.messageKey, contextText, focusUid, snapshot, () => this.validate(snapshot), { sourceKind: label === '提取' ? 'extraction' : 'summary', currentGameTime: nextGameTime, ...options });
         this.validate(snapshot);
         let receiptSaved = false;
@@ -7552,6 +7602,23 @@ function distributionBlocksFromSummary(summaryBlock) {
     }
     return [...blocks.values()];
 }
+function personNeedsPersonalityAbstraction(entry) {
+    if (!entry || !/^(?:人物|角色|NPC)$/u.test(String(entry.type ?? ''))) return false;
+    const values = entry.sections?.values ?? {};
+    const hasTendency = (values['行为倾向'] ?? []).some((line) => String(line ?? '').trim());
+    const hasStable = ['性格核心', '表达方式', '决策倾向'].some((section) => (values[section] ?? []).some((line) => String(line ?? '').trim()));
+    return hasTendency && !hasStable;
+}
+function groupHasPersonalityAbstraction(group) {
+    if (!group?.source) return false;
+    const sourceKey = historySourceIdentityKey('人物', group.source.name);
+    return group.records.some((record) => record.directCompletion !== true
+        && canonicalHistoryType(record.targetType) === '人物'
+        && historySourceIdentityKey('人物', record.targetName) === sourceKey
+        && /^(?:性格核心|表达方式|决策倾向)$/u.test(String(record.section ?? ''))
+        && String(record.fact ?? '').trim());
+}
+
 function historicalDistributionPlan(summaryBlock, selectedEntries, options = {}) {
     const kind = options.kind === 'large' ? 'large' : 'small';
     const pending = new Set((options.pendingUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
@@ -7628,7 +7695,16 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
         const group = grouped.get(record.sourceUid) ?? { source: record.sourceEntry, records: [], dispositions: new Set() };
         group.records.push(record); group.dispositions.add(record.disposition); grouped.set(record.sourceUid, group);
     }
-    const validGroups = [...grouped.values()].filter((group) => group.dispositions.size === 1);
+    const validGroups = [...grouped.values()].filter((group) => {
+        if (group.dispositions.size !== 1) return false;
+        // ui.66: 【行为倾向】就是小总结已经完成的抽象证据层。大总结遇到尚无稳定性格栏的人物时，
+        // 必须至少生成一条性格核心/表达方式/决策倾向，不能用短格式“保留完成”永久跳过人格固化。
+        if (kind === 'large' && personNeedsPersonalityAbstraction(group.source) && !groupHasPersonalityAbstraction(group)) {
+            unmatchedSourceTitles.push(group.source.title);
+            return false;
+        }
+        return true;
+    });
     const validRecords = validGroups.flatMap((group) => group.records);
     const blocks = new Map();
     for (const record of validRecords) { if (record.directCompletion !== true) mergeDistributionBlock(blocks, record); }
@@ -12621,7 +12697,7 @@ const governance_1 = require("./governance");
 const semantic_1 = require("./semantic");
 const util_1 = require("./util");
 function buildOperationPlan(blocks, entries, settings, contextText, options = {}) {
-    const governed = (0, governance_1.governInformationBlocks)(blocks, entries, contextText, options);
+    const governed = (0, governance_1.governInformationBlocks)(blocks, entries, contextText, { ...options, gameTimeEnabled: options.gameTimeEnabled === true });
     blocks = coalesceEventBlocks((0, information_point_1.prepareInformationBlocks)(governed.blocks));
     blocks = ensureDisambiguatedTitles(blocks, entries);
     blocks = suppressStateProjectionNarratives(blocks);
@@ -14637,34 +14713,47 @@ exports.keywordTemplate = keywordTemplate;
 const util_1 = require("./util");
 
 function auditPrompts(settings, playerText, assistantText, optionsOrLegacyCard = {}, legacyOptions = {}) {
-    // 兼容旧调用签名，但审核不再读取角色卡。第四个参数为对象时直接作为 options；
-    // 旧代码即使仍传入角色卡字符串，也会被明确忽略。
     const options = optionsOrLegacyCard && typeof optionsOrLegacyCard === 'object' && !Array.isArray(optionsOrLegacyCard)
         ? optionsOrLegacyCard
         : legacyOptions;
     const compact = options.compact === true;
     const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 2600 : 5200);
-    const system = `你是 Mirror Abyss 基础正文审核器。
+    const system = `职责：基础正文审核。
 
-只依据玩家填写的审核规则和提供的对话上下文，检查本轮AI最终回复。
-不要读取、补全或假设角色卡、世界书、隐藏设定和未提供的信息。
-你不是作者，不得改写、续写、补充背景、优化文风或扩大审核范围。
+【输入锚点】
+- 审核规则：玩家明确填写的规则。
+- 对话上下文：只用于理解指代、承接和已明确事实。
+- 审核对象：本轮AI最终回复。
 
-输出格式：
+【处理路径】
+1. 先读审核规则，再读最近对话和本轮玩家输入。
+2. 只检查本轮AI最终回复是否明确触发审核规则。
+3. 明确触发时判定“需要修正”；没有明确触发时判定“通过”。
+
+【边界】
+- 只审核当前提供的信息，不扩展到角色卡、世界书或隐藏设定。
+- 最近对话只用于理解本轮，不重新审核旧消息。
+- 审核阶段只给结论和问题，不改写正文。
+
+【重要规则】
+- 判定依据只能来自玩家审核规则与当前提供的对话。
+- 不确定是否触发时按未触发处理，不自行扩大规则含义。
+
+【固定输出】
 - 通过时只写：审核结论：通过
 - 不通过时第一行写：审核结论：需要修正
 - 随后写“问题：”，再用最多8条短句指出明确触发的规则。
-- 禁止输出修正版正文、分析过程、前言或后记。`;
-    const user = `玩家填写的审核规则：
+- 不输出分析过程、前言、后记或修正版正文。`;
+    const user = `【审核规则】
 ${clipText(settings.auditPrompt || '（无）', compact ? 2600 : 5200)}
 
-最近完整对话（仅用于理解指代与承接；不得重新审核旧消息）：
+【最近对话】
 ${dialogueContext || '（无）'}
 
-本轮玩家输入：
+【本轮玩家输入】
 ${clipText(playerText || '（空）', compact ? 1800 : 3000)}
 
-需要审核的本轮AI最终回复：
+【本轮AI最终回复】
 ${clipText(assistantText, compact ? 10000 : 14000)}`;
     return { system, user };
 }
@@ -14676,26 +14765,39 @@ function revisionPrompts(settings, playerText, assistantText, issues, options = 
     const issueChars = compact ? 160 : 260;
     const completenessRetry = options.completenessRetry === true;
     const retryReason = String(options.retryReason || '').trim();
-    const system = `你是 Mirror Abyss 正文修正脚本。
+    const system = `职责：按审核问题修正本轮正文，并返回可直接替换原消息的完整正文。
 
-只修正审核指出的明确违规部分，保留原剧情方向、事件结果、人物关系、角色身份、叙事视角和合规内容。
-禁止添加新事件、删除已有事件、改变人物目标、修改世界规则、替玩家决定行动、续写或输出解释。
-你的输出只能是可直接替换原消息的完整正文。
-必须从原正文第一段完整输出到最后一段；禁止中途截断、缺失结尾、用省略号代替剩余段落或只返回局部修补。
-除审核明确要求删除的违规内容外，保留原正文至少85%的有效内容。${completenessRetry ? `\n上一次修正版被本地完整性闸门判定为疑似截断（${retryReason || '长度或结尾不完整'}）。本次必须重新从头输出完整正文，不得沿用截断结果。` : ''}
+【输入锚点】
+- 审核问题：本轮必须修正的明确问题。
+- 原正文：需要被完整替换的文本。
+- 最近对话与玩家输入：只用于保持承接、人物知识和事实一致。
 
-用户附加修正规则：
+【处理路径】
+1. 定位审核指出的违规部分。
+2. 只修改这些部分，保留其余有效内容、事件顺序、人物关系、叙事视角和语气。
+3. 从原正文第一段重新输出到最后一段，形成完整替换文本。
+
+【边界】
+- 不续写原正文之后的内容，不新增人物、秘密、因果或新的剧情结论。
+- 不全面重写与审核问题无关的合规内容。
+- 不输出标签、解释、审核报告、选项或系统提示。
+
+【重要规则】
+- 除明确需要删除或改写的违规内容外，保留原正文至少85%的有效内容。
+- 输出必须完整到原正文结尾，不用省略号代替剩余段落。${completenessRetry ? `\n- 上一次修正版被完整性闸门判定为疑似截断（${retryReason || '长度或结尾不完整'}）；本次重新从头输出完整正文。` : ''}
+
+【附加修正规则】
 ${clipText(settings.revisionPrompt || '（无）', compact ? 1500 : 3000)}`;
-    const user = `违规原因：
+    const user = `【审核问题】
 ${issues.slice(0, issueLimit).map((item) => `- ${clipText(item, issueChars)}`).join('\n')}
 
-最近完整对话（只用于保持承接与角色知识，不得改写旧消息）：
+【最近对话】
 ${dialogueContext || '（无）'}
 
-本轮玩家输入：
+【本轮玩家输入】
 ${clipText(playerText || '（空）', compact ? 1600 : 3000)}
 
-需要替换的本轮AI完整回复：
+【需要替换的完整正文】
 ${clipText(assistantText, compact ? 15000 : 20000)}`;
     return { system, user };
 }
@@ -14703,47 +14805,44 @@ ${clipText(assistantText, compact ? 15000 : 20000)}`;
 function extractionPrompts(settings, playerText, assistantText, relevant, options = {}) {
     const compact = options.compact === true;
     const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1600 : 3200);
-    const existing = extractionWorldbookIndex(relevant, compact);
+    const gameTimeEnabled = Boolean(options.currentGameTime?.label);
+    const stripTimeLines = (text) => String(text ?? '').split('\n').filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(line)).join('\n');
+    const rawExisting = extractionWorldbookIndex(relevant, compact);
+    const existing = gameTimeEnabled ? rawExisting : stripTimeLines(rawExisting);
     const custom = clipText(settings.extractionPrompt.trim(), compact ? 500 : 900);
     const schema = keywordTemplate(settings.keywordDefinitions ?? []).trim();
-    const system = `你是 Mirror Abyss 世界书差异提取器。
+    const gameTimeClause = gameTimeEnabled ? `\n\n【游戏时间】\n- 【当前已知游戏时间】是本轮世界内部时间锚点。根据本轮正文中实际发生的时间流逝判断正文结束时的游戏时间。\n- 时间发生推进或正文明确了更具体的世界内时间时，在当前场景【当前状态】写“游戏时间：内容”；没有推进时不必重复输出。\n- 只根据当前时间锚点与剧情中明确发生的时间流逝推进，不引入现实时间，不补造没有依据的日期。\n- 游戏时间只进入当前场景，不复制到人物、物品、事件或世界。` : '';
+    const system = `职责：世界书差异提取。对照上一轮权威世界书，只输出本轮已经发生的有效变化，并写入最直接的条目宿主候选。
 
-你会收到【上一轮权威世界书】与【本轮正文】。上一轮权威世界书是当前唯一有效底稿，也是本轮对象匹配与差异填写的依据。
-
-你的任务不是重写完整世界书，而是对照旧条目，把本轮新增、改变、失效、转移、完成或明确揭示的信息，填写到对应条目中。
-
-【核心锚点】
+【元词汇与锚点】
 - 权威旧条目：上一轮已经存在且当前有效的条目。
-- 本轮变化：本轮正文相对于旧条目发生的有效变化。
-- 条目宿主：信息真正所属的人物、场景、物品、事件、世界或基础设定。
-- 已有对象：旧世界书中已经存在，并与本轮信息指向同一对象的条目。
-- 新对象：无法归入任何已有条目的独立对象。
+- 本轮变化：本轮正文相对于权威旧条目新增、改变、失效、转移、完成或明确揭示的事实。
+- 直接宿主：事实真正所属的人物、场景、物品、事件、世界或基础设定。
 - 当前状态：此刻成立、后续可能继续变化的信息。
-- 稳定事实：能够持续成立，不会因普通动作或短暂状态立即改变的信息。
+- 稳定事实：能够持续成立，不会因普通动作立即变化的信息。
 
 【处理路径】
-1. 先阅读上一轮权威世界书，再阅读本轮正文。
-2. 从本轮正文中识别具有记录价值的信息，并为每条信息寻找最直接的条目宿主。
-3. 信息属于已有对象时，完整沿用旧条目的类型和标题，只填写本轮发生变化的栏目。
-4. 同一对象的多项变化合并在同一个条目中；旧条目已有且本轮没有变化的信息不重复输出。
-5. 现有条目没有对应对象时，建立新的条目。
-6. 场景变化时，只输出正文结束时实际所在的当前场景一条，并放在第一条；旧场景活动快照由插件结算。
+1. 先读上一轮权威世界书，再读最近对话、本轮玩家输入和本轮AI最终回复。
+2. 识别本轮变化，为每条事实寻找最直接宿主。
+3. 属于已有对象时，完整沿用旧类型和旧标题，只填写发生变化的栏目。
+4. 同一对象的多项变化合并为一个条目；旧条目未变化内容不重复输出。
+5. 没有合适旧宿主时才建立新对象。
+6. 场景发生变化时，只输出正文结束时实际所在的当前场景一条，并放在第一条。
 
-【栏目边界】
-- 人物：身份与正式名称写【身份】；长期能力和持久特征写【稳定】；本轮可观察到的行为、态度和选择只写【固定事实】或相应关系栏目，不得由一次行为直接填写【行为倾向】【性格核心】【表达方式】【决策倾向】；此刻位置、行动、目标、短期身体状态和持续处境写【当前】；关系、持有、认知和个人结果写入对应固定栏目。
-- 场景：固定空间、设施、资源和地点机制写稳定栏目；场景状态、在场人物、当前资源与活动关联写当前快照栏目。
+【局部边界】
+- 人物：身份与正式名称写【身份】；长期能力和持久特征写【稳定】；单轮可观察行为、态度和选择写【固定事实】或对应关系栏目；位置、行动、目标、短期身体状态和持续处境写【当前】；关系、持有、认知和个人结果写对应栏目。一次行为不直接填写【行为倾向】【性格核心】【表达方式】【决策倾向】。
+- 场景：固定空间、设施、资源和地点机制写稳定栏目；场景状态、在场人物、当前资源与活动关联写当前快照栏目。只输出正文结束时实际所在的当前场景一条。
 - 物品：固定功能、性质与限制写稳定栏目；持有者、位置、使用状态、完整性和本轮变化写【当前】。
-- 事件：记录同一因果链已经形成的阶段、进展和结果；人物、场景和物品的详细状态写回各自宿主。
-- 世界：记录影响范围超出单一人物或单一场景、并会随剧情变化的区域、组织、制度、权力、资源网络和公开局势。
-- 基础设定：记录跨场景成立且不随普通剧情变化的世界框架、自然规则、种族共性、能力技术和社会常识。
+- 事件：记录同一因果链已经形成的阶段、进展和结果；人物、场景和物品的详细状态回到各自宿主。
+- 世界：记录超出单一人物或单一场景、并会随剧情变化的区域、组织、制度、权力、资源网络和公开局势。
+- 基础设定：记录跨场景成立且不随普通剧情变化的世界框架、自然规则、种族共性、能力技术和社会常识。${gameTimeClause}
 
-【重点规则】
+【重要规则】
 - 优先更新已有条目，确认没有宿主后才新建。
-- 只输出本轮变化，不重写完整条目。
-- 类型和标题用于锁定已有对象；匹配旧条目后，原样沿用旧类型和旧标题。
-- 正式姓名揭示、身份变化、外形变化或状态变化，继续更新原人物条目。
-- 同一事实写入最直接的权威宿主；其他条目只保留必要的名称级引用或对自身形成的独立变化。
-- 单次行动、短暂情绪和临时表现写入当前状态，不直接升级为稳定人格或长期规则。
+- 只输出本轮变化；同一事实只进入一个最直接宿主。
+- 匹配旧对象后原样沿用旧类型和旧标题。
+- 正式姓名、身份、外形或状态变化继续更新原人物条目。
+- 单次行动、短暂情绪和临时表现停留在事实或当前状态层，不升级为稳定人格或长期规则。
 
 【唯一输出格式】
 条目
@@ -14753,11 +14852,9 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 栏目名称：
 - 本轮新增或变化的信息
 
-每个条目从单独一行“条目”开始，类型、名称、关键词各写一行；栏目直接写“栏目名：”。下一条目再次写“条目”，不需要结束符。单次最多 8 条，同一对象只输出一个条目。没有世界书变化时只输出“无”。禁止 JSON、代码块、分析过程、前言和后记。
+每个条目从单独一行“条目”开始，类型、名称、关键词各写一行；栏目直接写“栏目名：”。下一条目再次写“条目”，不需要结束符。单次最多 8 条，同一对象只输出一个条目。没有世界书变化时只输出“无”。不输出 JSON、代码块、分析过程、前言或后记。
 
 【示范】
-上一轮已有“人物｜披斗篷的商人”，本轮该人物说明自己叫伊莱并进入码头仓库。正确输出：
-
 条目
 类型：人物
 名称：披斗篷的商人
@@ -14768,18 +14865,14 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 - 位置：码头仓库
 
 可用类型与栏目：
-${schema || '使用人物、场景、物品、事件、世界、基础设定的现有栏目。'}${custom ? `
+${schema || '使用人物、场景、物品、事件、世界、基础设定的现有栏目。'}${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
+    const gameTimeAnchor = gameTimeEnabled && options.currentGameTime?.label
+        ? `\n\n【当前已知游戏时间】\n${String(options.currentGameTime.label)}${options.currentGameTime?.sceneTitle ? `（${String(options.currentGameTime.sceneTitle)}）` : ''}`
+        : '';
+    const user = `【上一轮权威世界书】
+${existing || '（无）'}${gameTimeAnchor}
 
-用户附加要求：
-${custom}` : ''}`;
-    const timeContext = promptTimeContext(options);
-    const user = `【本次处理时间】
-${timeContext}
-
-【上一轮权威世界书】
-${existing || '（无）'}
-
-【最近完整对话】
+【最近对话】
 ${dialogueContext || '（无）'}
 
 【本轮玩家输入】
@@ -14788,7 +14881,7 @@ ${clipText(playerText || '（空）', compact ? 1100 : 1800)}
 【本轮AI最终回复】
 ${clipText(assistantText, compact ? 8500 : 12500)}
 
-对照上一轮权威世界书，按上面的自然中文条目格式只填写本轮变化。`;
+按固定格式只填写本轮变化。`;
     return { system, user };
 }
 
@@ -14797,7 +14890,7 @@ function worldSettingImportPrompts(settings, sourceText, relevant, options = {})
     const contextEntries = promptContextEntries(relevant, compact ? 4 : 8);
     const existing = contextEntries.map((entry) => entryForPrompt(entry, compact ? 360 : 620)).join('\n\n');
     const schema = keywordTemplate(settings.keywordDefinitions ?? []).trim();
-    const system = `你是 Mirror Abyss 玩家设定初始化器。
+    const system = `职责：把玩家提交的世界设定结构化为世界书候选。
 
 玩家已经明确点击“导入世界设定”。只把玩家粘贴的设定文档结构化为世界书候选，不处理普通聊天，不把玩家的愿望误当成剧情行动。
 
@@ -14848,27 +14941,41 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
     const changedEntries = entries.filter((entry) => pending.has(String(entry.uid)));
     const workingEntries = changedEntries.length ? changedEntries : entries.filter((entry) => !/^总结[｜|丨]/u.test(entry.title));
     const relatedEntries = entries.filter((entry) => !workingEntries.some((changed) => changed.uid === entry.uid));
-    const index = extractionWorldbookIndex(allEntries, compact);
+    const gameTimeEnabled = Boolean(options.currentGameTime?.label);
+    const stripTimeLines = (text) => String(text ?? '').split('\n').filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(line)).join('\n');
+    const promptEntry = (entry, limit) => gameTimeEnabled ? entryForPrompt(entry, limit) : stripTimeLines(entryForPrompt(entry, limit));
+    const rawIndex = extractionWorldbookIndex(allEntries, compact);
+    const index = gameTimeEnabled ? rawIndex : stripTimeLines(rawIndex);
     const custom = clipText((isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim(), compact ? 900 : 1800);
     const system = isSmall
-        ? `你是 Mirror Abyss 近期历史分发器。
+        ? `职责：近期历史分发。逐个结算本期变更来源，把已经发生的事实按合适颗粒度写入直接宿主。
 
-你会收到【上一轮权威世界书轻量索引】、【本期实际变更条目】、【直接关联条目】与【最近聊天】。权威世界书与本轮正文共同决定人物、物品、事件和场景在本轮结束后是否还需要独立存在。
+【元词汇与锚点】
+- 来源：本期必须结算的权威条目。
+- 目标：承接某条历史事实的直接宿主。
+- 历史事实：已经发生并在当前结算中仍有保存价值的结果、状态或持续影响。
+- 吸收：来源必要事实已完整分发，来源可以退出。
+- 保留完成：来源当前仍应独立存在，本期判断已经完成。
+- 行为倾向：人物近期重复行为提炼出的“倾向于如何判断、选择、表达或应对”的抽象模式。
 
-你的任务不是写一个新的总结条目，而是把已经发生的历史按合适颗粒度直接分发到人物、场景、物品、事件、世界或基础设定。输出中的“总结｜当前事件”只是协议外壳，插件不会把它写入世界书。
+【处理路径】
+1. 逐个读取本期变更来源、相关权威条目和最近聊天。
+2. 先判断来源当前是否仍需独立存在，再确定每条必要历史的直接宿主。
+3. 需要分发时写明来源、目标、栏目、事实和处理；没有新事实但来源应继续存在时使用“保留完成”短格式。
+4. 每个待处理来源都必须在本轮得到“吸收”或“保留完成”的确定结论。
 
-【判断原则】
-1. 逐个检查本期变更来源，先判断它是否仍需独立运行，再决定事实应进入哪个直接宿主。
-2. 临时人物资格必须根据上一轮相关世界书与本轮正文语义判断，不得只看标题、姓名或“临时”关键词。
-3. 场景只记录场景自身已经形成的事实，例如完成的核验、通行结果、设施状态、局部秩序和持续影响；不得把人物简历、性格、完整经历或台词搬进场景。
-4. 普通个人用品可沉入人物；设施、零件和地点资源可沉入场景；只服务一次事项的钥匙、证据或媒介可沉入事件或场景；已消耗或毁坏物品在影响被承接后可以退出。独特且持续发挥作用的物品保留独立条目。
-5. 局部事件、已离开的小场景和旧总结容器按颗粒度分发历史；只有必要的宏观原貌、结果、持续影响与后续运行条件全部进入直接宿主后，来源才可吸收。
-6. 人物单轮行为只属于事实证据。近期多次、同方向的行为可写入人物【行为倾向】；不得在小总结中直接固化【性格核心】【表达方式】【决策倾向】。
-7. 同一来源可以分发到多个直接宿主，但每一行必须明确绑定来源、目标、栏目、事实和来源处理。
+【局部边界】
+- 临时人物资格必须根据上一轮相关世界书与本轮正文语义判断，不只看标题、姓名或“临时”关键词。
+- 场景只记录场景自身已经形成的事实，例如完成的核验、通行结果、设施状态、局部秩序和持续影响；人物简历、性格、完整经历和台词留在人物或事件事实层。
+- 普通个人用品可沉入人物；设施、零件和地点资源可沉入场景；只服务一次事项的钥匙、证据或媒介可沉入事件或场景；独特且持续发挥作用的物品保留独立条目。
+- 局部事件、已离开的小场景和旧总结容器按颗粒度分发；来源只有在必要的宏观原貌、结果、持续影响和后续运行条件完整承接后才可吸收。
+- 人物近期多次、同方向的行为可写入【行为倾向】；行为倾向只写抽象判断、选择、表达或应对模式，不写具体物品名、具体场景名、单次动作或一次性事件细节；小总结不直接固化【性格核心】【表达方式】【决策倾向】。
 
-【来源处理】
-- 吸收：来源已经没有必须独立保留的事实；所有必要历史均已在本次分发中表达，写入成功后可删除来源。
-- 保留完成：来源在当前权威状态下仍需独立存在，或证据不足以安全吸收；来源保留，并从本期待处理工作集退出。没有需要写入的新事实时，使用短格式“来源：类型｜名称；处理：保留完成”。
+【重要规则】
+- 同一来源可以分发到多个直接宿主，但同一来源的处理值必须一致。
+- “吸收”必须覆盖来源全部仍有价值的事实；无法完整覆盖、仍在运行、证据不足、当前场景或受保护时选择“保留完成”。
+- 历史事实只写已经发生的内容，不写未来计划、推测、UID或解释。
+- 每个待处理来源都必须结算；禁止输出“无”，禁止遗漏来源。
 
 【唯一输出格式】
 总结｜当前事件
@@ -14877,39 +14984,39 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 来源：人物｜来源稳定名称；目标：场景｜目标稳定名称；栏目：固定事实；事实：只属于该场景的已发生结果；处理：吸收
 - 来源：物品｜来源稳定名称；目标：人物｜目标稳定名称；栏目：持有；事实：人物当前持有该普通用品；处理：吸收
 - 来源：事件｜来源稳定名称；目标：事件｜目标稳定名称；栏目：已发生进展；事实：粗化后的阶段历史；处理：吸收
-- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：行为倾向；事实：由本期重复行为支持的阶段性倾向；处理：保留完成
+- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：行为倾向；事实：倾向于在压力下优先保护他人；处理：保留完成
 - 来源：人物｜仍需独立存在的来源；处理：保留完成
 
-格式规则：
-- 每条必须单行。吸收或带新事实的保留完成严格按“来源；目标；栏目；事实；处理”顺序；无新事实的保留完成使用“来源；处理”短格式。
-- 来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题，包括类型、空格和连接符；目标必须是直接事实宿主。
-- “吸收”必须覆盖来源所有仍有价值的事实；不能完整覆盖、证据不足、仍在运行或当前不宜退出时写“保留完成”。
-- 同一来源的多条分发行必须使用一致的处理值。
-- 对象仍在运行、证据不足、当前场景或受保护时，必须选择“保留完成”，不能留下长期悬而未决状态。
-- 事实必须是已发生事实，不写未来计划、推测、删除命令、UID或解释。
-- 每个待处理来源都必须得到确定结论，只允许“吸收”或“保留完成”；禁止输出“无”，禁止遗漏来源。
+每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。${custom ? `\n\n【附加要求】\n${custom}` : ''}`
+        : `职责：长期历史分发。逐个结算经过小总结整理的来源，把长期有效内容继续抽象并写入长期宿主。
 
-【示范】
-- 来源：人物｜议事厅守卫；目标：场景｜议事厅入口；栏目：固定事实；事实：入口曾完成对来访者身份的核验并允许其进入议事厅；处理：吸收
-- 来源：人物｜卡拉；目标：人物｜卡拉；栏目：行为倾向；事实：近期在压力情境中反复优先保护同伴；处理：保留完成
+【元词汇与锚点】
+- 来源：本期必须结算的中层权威条目。
+- 长期宿主：人物、事件、场景、地区、组织、世界或基础设定中的直接承接对象。
+- 长期事实：跨阶段持续成立、已经形成结果或明确永久成立的内容。
+- 吸收：来源长期必要事实已完整分发，来源可以退出。
+- 保留完成：来源仍需独立存在，本期判断已经完成。
+- 行为倾向：小总结已经提炼出的抽象行为模式，是性格抽象的直接证据层。
 
-${custom ? `用户附加要求：\n${custom}` : ''}`
-        : `你是 Mirror Abyss 长期历史分发器。
+【处理路径】
+1. 逐个读取本期来源和相关权威条目。
+2. 把过程压缩为长期性质、结果、持续影响或稳定人物模式。
+3. 人物已有【行为倾向】且尚无稳定性格栏目时，继续抽象到【性格核心】【表达方式】或【决策倾向】至少一项。
+4. 每个待处理来源都必须在本轮得到“吸收”或“保留完成”的确定结论。
 
-你会收到经过小总结整理的权威运行条目与关联条目。你的任务是把跨场景、跨阶段或明确永久成立的历史继续分发到长期人物、事件、场景、地区、组织、世界或基础设定宿主。输出中的“总结｜世界历史”只是协议外壳，插件不会把它写入世界书。
+【局部边界】
+- 事件保留宏观性质、参与范围、最终结果和持续影响，过程流水停留在较低层。
+- 已离开场景保留永久结构、设施、资源和长期影响；更宽宿主完整承接后可吸收低层场景壳。
+- 【行为倾向】本身就是重复行为提炼后的证据，不要求额外场景锚点或重复动作明细；稳定倾向继续抽象为【性格核心】【表达方式】或【决策倾向】。一次行为、一次情绪或角色自述不直接固化性格。
+- 普通物品在长期归属、消耗、毁坏或历史作用被直接宿主承接后可以退出；独特、持续发挥作用或仍需追踪状态的物品保留。
+- 旧总结容器中的历史逐条进入直接宿主，完整分发后可以吸收旧容器。
 
-【判断原则】
-1. 历史按颗粒度逐来源分发并完成层级拓宽，不得只叠加一层重复摘要，也不再建立“世界历史总结”作为重复数据层。
-2. 事件只保留宏观性质、参与范围、最终结果和持续影响；过程流水不得进入长期宿主。
-3. 已离开场景只保留永久结构、设施、资源和长期影响；更宽地区或世界已经完整承接后可吸收低层场景壳。
-4. 人物【行为倾向】只有在跨场景重复稳定时，才可固化为【性格核心】【表达方式】或【决策倾向】；一次行为、一次情绪或角色自述不得固化性格。
-5. 普通物品在长期归属、消耗、毁坏或历史作用被直接宿主承接后可以退出；独特、持续发挥作用或仍需追踪状态的物品保留。
-6. 旧“总结｜当前事件”与“总结｜世界历史”中的历史必须逐条进入直接宿主，完整分发后以“吸收”退出旧容器。
-7. 同一来源可以分发到多个长期宿主；每行必须明确来源、目标、栏目、事实和处理。
-
-【来源处理】
-- 吸收：所有长期必要事实均已分发，来源可退出。
-- 保留完成：来源当前仍需独立存在，或尚不足以安全吸收；从本期待处理工作集退出。没有需要写入的新事实时使用短格式。
+【重要规则】
+- 历史必须按颗粒度完成层级拓宽，不只叠加一层重复摘要。
+- 同一来源可分发到多个长期宿主，但同一来源处理值必须一致。
+- “吸收”必须完整覆盖来源仍有长期价值的宏观原貌、结果与持续影响。
+- 只写长期有效事实，不写当前短期状态、未发生事项、未来目标、推测、UID或解释。
+- 每个待处理来源都必须结算；禁止输出“无”，禁止遗漏来源。
 
 【唯一输出格式】
 总结｜世界历史
@@ -14917,26 +15024,17 @@ ${custom ? `用户附加要求：\n${custom}` : ''}`
 【历史分发】
 - 来源：事件｜来源稳定名称；目标：世界｜目标稳定名称；栏目：固定事实；事实：高密度历史结果；处理：吸收
 - 来源：场景｜来源稳定名称；目标：世界｜目标稳定名称；栏目：持续影响；事实：跨场景仍成立的长期影响；处理：吸收
-- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：性格核心；事实：由跨场景稳定行为倾向支持的长期人格结论；处理：保留完成
-- 来源：人物｜尚未形成长期固化条件的来源；处理：保留完成
-- 来源：总结｜世界历史；目标：世界｜目标稳定名称；栏目：固定事实；事实：旧总结中尚未进入直接宿主的历史；处理：吸收
+- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：性格核心；事实：由已有行为倾向抽象出的长期人格结论；处理：保留完成
+- 来源：人物｜仍需独立存在的来源；处理：保留完成
 
-格式规则：
-- 每条必须单行。吸收或带新事实的保留完成严格按“来源；目标；栏目；事实；处理”顺序；无新事实的保留完成使用“来源；处理”短格式。
-- 来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题，包括类型、空格和连接符。
-- “吸收”必须完整覆盖来源仍有长期价值的宏观原貌、结果与持续影响。
-- 同一来源的多条分发行必须使用一致处理值。
-- 不写当前状态、短期过程、未发生事项、未来目标、推测、UID或解释。
-- 每个待处理来源都必须得到确定结论，只允许“吸收”或“保留完成”；禁止输出“无”，禁止遗漏来源。
-
-${custom ? `用户附加要求：\n${custom}` : ''}`;
+每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
     const changedLabel = isSmall ? '本期实际变更条目' : '本期小总结后实际变更的运行条目';
     const recent = isSmall ? `\n\n【最近聊天】\n${clipText(recentConversation || '（无）', compact ? 7000 : 11000)}` : '';
-    const timeContext = promptTimeContext(options);
-    const user = `【本次处理时间】\n${timeContext}\n\n【处理范围】\n${subject || (isSmall ? '近期世界书变更整理' : '长期世界结构固化')}
+    const user = `【处理范围】
+${subject || (isSmall ? '近期世界书变更整理' : '长期世界结构固化')}
 
 【${changedLabel}】
-${workingEntries.map((entry) => entryForPrompt(entry, compact ? 560 : 920)).join('\n\n') || '（无）'}
+${workingEntries.map((entry) => promptEntry(entry, compact ? 560 : 920)).join('\n\n') || '（无）'}
 
 【本次必须逐字复制的来源标题】
 ${workingEntries.map((entry) => `- ${entry.title}`).join('\n') || '（无）'}
@@ -14945,9 +15043,9 @@ ${workingEntries.map((entry) => `- ${entry.title}`).join('\n') || '（无）'}
 ${index || '（无）'}
 
 【直接关联条目】
-${relatedEntries.slice(0, compact ? 8 : 18).map((entry) => entryForPrompt(entry, compact ? 420 : 680)).join('\n\n') || '（无）'}${recent}
+${relatedEntries.slice(0, compact ? 8 : 18).map((entry) => promptEntry(entry, compact ? 420 : 680)).join('\n\n') || '（无）'}${recent}
 
-严格按固定标题、固定栏目、固定字段顺序输出逐来源历史分发；内容依据上述提示词和上下文判断，不要生成或复述总结容器正文。`;
+按固定格式逐来源结算。`;
     return { system, user };
 }
 
@@ -14956,7 +15054,7 @@ function summaryRepairPrompts(raw, kind, pendingSources = [], reason = '', optio
     const isSmall = kind !== 'large';
     const title = isSmall ? '总结｜当前事件' : '总结｜世界历史';
     const expected = (pendingSources ?? []).map((value) => String(value ?? '').trim()).filter(Boolean);
-    const system = `你是 Mirror Abyss 总结格式修复器。
+    const system = `职责：把已有总结返回整理成固定协议格式。
 
 你只负责把“已有模型返回”整理成固定协议格式。不得阅读原剧情，不得新增、删除、改写、压缩、扩写、推测或重新判断任何来源、目标、栏目、事实与处理结论。
 
@@ -14985,7 +15083,7 @@ ${clipText(String(raw ?? ''), compact ? 9000 : 14000)}`;
 
 function extractionRepairPrompts(raw, options = {}) {
     const compact = options.compact === true;
-    const system = `你是 Mirror Abyss 提取格式修复器。
+    const system = `职责：把已有提取返回整理成固定条目格式。
 只修复给定提取结果的语法、重复条目和事实归属，不得阅读原剧情，不得新增、扩写或推测事实。
 每个条目使用以下自然中文格式：
 条目
@@ -15026,7 +15124,7 @@ function migrationPrompts(records, catalog, options = {}) {
         foundation: `【本轮：世界基础设定】\n把跨地区、跨组织长期成立的规则归入现有“基础设定”类型。局部制度和单次事件不得升级为基础规则。`,
     })[phase] || '';
     const allowProposal = !['event', 'region', 'foundation'].includes(phase);
-    const system = `你是 Mirror Abyss 世界书重建规划模型。\n\n${phaseInstructions}
+    const system = `职责：按当前重建阶段把旧世界书材料收束为候选条目。\n\n${phaseInstructions}
 
 【现有类型】
 ${typeCatalog}
@@ -15098,7 +15196,7 @@ ${typeCatalog}
 function migrationPlanningPrompts(sourceIndex, options = {}) {
     const schema = options.schema;
     const typeCatalog = migrationTypeCatalog(schema);
-    const system = `你是 Mirror Abyss 世界书重建规划器。
+    const system = `职责：规划旧世界书来源行的唯一场景锚点与最终归属。
 
 你只规划旧世界书来源行的最终归属，不重写事实，不生成世界书正文。
 
@@ -15154,7 +15252,7 @@ function plannedMigrationPrompts(task, options = {}) {
         const anchorText = (group.anchorCatalog ?? []).map((anchor) => `${anchor.id}=${anchor.gameTime}@${anchor.location}[${anchor.timeSource}]`).join('、') || (group.sceneAnchors ?? []).join('、') || 'S000=未知@未知[未知]';
         return `- 组${group.id}｜类型：${group.newTypeProposal ? `新类型建议:${group.type}` : group.type}｜稳定名称：${group.name}｜允许栏目：${allowed.join('、') || '使用该类型现有栏目'}｜场景锚点：${anchorText}｜来源行：${group.sourceRefs.join('、')}`;
     }).join('\n');
-    const system = `你是 Mirror Abyss 联合世界书重建器。
+    const system = `职责：按既定分组联合重建世界书候选条目。
 
 本次同时处理${groups.length}个已经完成全局规划的候选组：
 ${descriptors}
@@ -15275,23 +15373,6 @@ function entryForPrompt(entry, contentLimit = 1000) {
 }
 
 // [MA-PROMPT-01] 保留文本开头与结尾，避免简单截断丢失结论或最终状态。
-function promptTimeContext(options = {}) {
-    const value = options.requestTime ?? Date.now();
-    const date = new Date(value);
-    const valid = Number.isFinite(date.getTime());
-    const pad = (number) => String(number).padStart(2, '0');
-    const offsetMinutes = valid ? -date.getTimezoneOffset() : 0;
-    const sign = offsetMinutes >= 0 ? '+' : '-';
-    const offset = `${sign}${pad(Math.floor(Math.abs(offsetMinutes) / 60))}:${pad(Math.abs(offsetMinutes) % 60)}`;
-    const request = valid
-        ? `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${offset}`
-        : '未知';
-    const game = options.currentGameTime?.label ? String(options.currentGameTime.label) : '未知';
-    const source = options.currentGameTime?.sceneTitle ? `（来源：${options.currentGameTime.sceneTitle}）` : '';
-    return `- 请求时间：${request}（仅用于批次先后，不得写成剧情事实）
-- 当前游戏时间：${game}${source}`;
-}
-
 function clipText(value, maxChars) {
     const text = String(value ?? '');
     if (!Number.isFinite(maxChars) || maxChars <= 0 || text.length <= maxChars) return text;
@@ -15766,12 +15847,15 @@ exports.DEFAULT_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判
 5. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。
 只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
+const LEGACY_EXTRACTION_PROMPT_UI66 = `优先更新上一轮权威条目；只输出本轮变化；正式姓名、身份、外形或状态变化继续更新原人物条目；同一事实写入最直接宿主。`;
+const LEGACY_SMALL_SUMMARY_PROMPT_UI66 = `以上轮权威世界书、本轮正文和本期实际变更条目为依据，逐来源判断事实应进入哪个直接宿主；总结只生成历史分发计划，不建立总结条目。临时人物、普通物品、局部事件和已离开场景只有在必要事实完整分发后才退出；人物近期重复行为只提炼为不含具体物品和单次情节的抽象行为倾向。`;
+const LEGACY_LARGE_SUMMARY_PROMPT_UI66 = `以经过小总结整理的权威条目为依据，把跨场景、跨阶段或永久成立的内容逐来源分发到长期宿主；总结只生成历史分发计划，不建立世界历史容器。已有行为倾向视为小总结提炼后的重复行为证据；大总结应将稳定倾向继续抽象为性格核心、表达方式或决策倾向。`;
 const LEGACY_EXTRACTION_PROMPT_UI50 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI55 = `以上次小总结后实际变更的世界书条目为主材料，按对象、目标、因果、时间、场景和规则范围形成语义簇；将细颗粒内容抽象为适合继续游玩的较粗状态、事件进展和局部机制，重新分发到直接宿主，并只吸收已经被目标事件完整承接的细事件壳。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `以上轮权威世界书、本轮正文和本期实际变更条目为依据，逐来源判断事实应进入哪个直接宿主；总结只生成历史分发计划，不建立总结条目。临时人物、普通物品、局部事件和已离开场景只有在必要事实完整分发后才退出；人物近期重复行为只提炼为行为倾向。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `逐来源结算本期实际变更条目：把已发生事实分发到直接宿主；必要事实完整承接后才吸收来源；人物近期重复行为只提炼为不含具体物品、具体场景和单次情节的抽象行为倾向。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI55 = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `以经过小总结整理的权威条目为依据，把跨场景、跨阶段或永久成立的内容逐来源分发到长期宿主；总结只生成历史分发计划，不建立世界历史容器。多场景稳定行为倾向才可固化为性格核心、表达方式或决策倾向。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `优先更新上一轮权威条目；只输出本轮变化；正式姓名、身份、外形或状态变化继续更新原人物条目；同一事实写入最直接宿主。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `逐来源结算中层权威条目：把跨阶段或长期成立的内容分发到长期宿主；已有行为倾向作为性格抽象证据，继续提炼为性格核心、表达方式或决策倾向。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `优先更新上一轮权威条目；只输出本轮已发生变化；正式姓名、身份、外形或状态变化继续更新原人物条目；同一事实写入最直接宿主。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI51 = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
@@ -15911,9 +15995,9 @@ function parseSettings(value) {
         autoCreateLorebook: candidate.autoCreateLorebook === true,
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
-        extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI50], exports.DEFAULT_EXTRACTION_PROMPT),
-        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
-        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
+        extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI50, LEGACY_EXTRACTION_PROMPT_UI66], exports.DEFAULT_EXTRACTION_PROMPT),
+        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55, LEGACY_SMALL_SUMMARY_PROMPT_UI66], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 1, 100),
@@ -16414,8 +16498,9 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const currentScenes = managed.filter((entry) => /^(?:scene-current|scene-current-storage)$/u.test(String(entry.semanticRole ?? '')));
     if (currentScenes.length > 1) issues.push(issue('error', 'multiple-current-scenes', `检测到${currentScenes.length}个当前场景`, currentScenes.map((entry) => entry.title)));
     if (!context.scene) issues.push(issue('warning', 'missing-current-scene', '没有可识别的当前场景', []));
-    const effectiveGameTime = gameTime?.label ? gameTime : managementGameTimeFromScene(context.scene);
-    if (!effectiveGameTime?.label) issues.push(issue('info', 'unknown-game-time', '当前游戏时间尚未记录', []));
+    const gameTimeEnabled = Boolean(gameTime?.label);
+    const effectiveGameTime = gameTimeEnabled ? gameTime : null;
+    if (gameTimeEnabled && !effectiveGameTime?.label) issues.push(issue('info', 'unknown-game-time', '当前游戏时间尚未由AI记录', []));
 
     const fixedSceneRoles = lines(context.scene, '常驻角色');
     const fixedFacilities = lines(context.scene, '固定设施');
@@ -16484,7 +16569,7 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     if (orphanRelations.length) issues.push(issue('warning', 'orphan-relations', `发现${orphanRelations.length}个孤立关联`, orphanRelations.slice(0, 8)));
 
     return {
-        gameTime: effectiveGameTime ? { ...effectiveGameTime } : null,
+        gameTime: gameTimeEnabled ? (effectiveGameTime ? { ...effectiveGameTime } : null) : { label: '未启用', sceneTitle: '当前聊天未设置游戏时间' },
         currentScene: context.scene ? {
             uid: context.scene.uid,
             title: context.scene.title,

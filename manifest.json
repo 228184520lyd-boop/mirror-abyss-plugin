@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.65-guarded-settlement",
+  "version": "2.0.0-lite.ui.68-ai-game-time-anchor",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜固定总结格式、删除安全闸门与确定性历史结算"
+  "description": "世界书单通道｜分层提示词、可选游戏时间检测与确定性历史结算"
 }
