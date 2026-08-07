@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.70-turn-pipeline-isolation — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.71-summary-character-state — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1234,7 +1234,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.70-turn-pipeline-isolation';
+exports.VERSION = '2.0.0-lite.ui.71-summary-character-state';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -4212,6 +4212,28 @@ const TYPE_SECTION_ALIASES = {
         '行为模式': '行为倾向',
         '判断倾向': '决策倾向',
         '关系态度': '关系立场',
+        '人物状态': '当前',
+        '近期状态': '当前',
+        '短期状态': '当前',
+        '即时状态': '当前',
+        '当前情况': '当前',
+        '长期倾向': '行为倾向',
+        '近期行为倾向': '行为倾向',
+        '重复行为倾向': '行为倾向',
+        '稳定性格': '性格核心',
+        '人格核心': '性格核心',
+        '核心性格': '性格核心',
+        '表达风格': '表达方式',
+        '说话风格': '表达方式',
+        '语言习惯': '表达方式',
+        '决策模式': '决策倾向',
+        '判断模式': '决策倾向',
+        '选择倾向': '决策倾向',
+        '长期关系': '关系',
+        '稳定关系': '关系',
+        '关系变化': '关系',
+        '长期关系立场': '关系立场',
+        '稳定关系立场': '关系立场',
 
     },
     场景: {
@@ -7735,20 +7757,51 @@ function historySourceIdentityKey(type, name) {
 }
 
 function parseHistoricalDistributionLine(rawLine) {
-    const line = String(rawLine ?? '').replace(/^\s*[-*•]+\s*/u, '').trim();
+    const line = String(rawLine ?? '')
+        .replace(/^\s*(?:[-*•]+|\d+[.)、])\s*/u, '')
+        .replace(/\*\*/gu, '')
+        .trim();
     if (!line || /^(?:无|没有|暂无)$/u.test(line)) return null;
-    const direct = line.match(/^来源\s*[:：]\s*([^；;]+?)\s*[；;]\s*(?:处理|来源处理)\s*[:：]\s*(保留完成)\s*$/u);
-    if (direct) {
-        const source = parseHistoryTitle(direct[1], true);
-        return source ? { sourceTitle: source.title, sourceType: source.type, sourceName: source.name, targetTitle: '', targetType: '', targetName: '', section: '', fact: '', disposition: '保留完成', directCompletion: true } : null;
+    const labelPattern = /(?:^|[；;])\s*(来源条目|来源|源|目标条目|目标|宿主|栏目|小标题|字段|事实|内容|处理|来源处理|结论)\s*[:：]\s*/gu;
+    const markers = [...line.matchAll(labelPattern)];
+    if (!markers.length) return null;
+    const fields = new Map();
+    const canonicalLabel = (value) => ({
+        来源条目: 'source', 来源: 'source', 源: 'source',
+        目标条目: 'target', 目标: 'target', 宿主: 'target',
+        栏目: 'section', 小标题: 'section', 字段: 'section',
+        事实: 'fact', 内容: 'fact',
+        处理: 'disposition', 来源处理: 'disposition', 结论: 'disposition',
+    })[String(value ?? '').trim()] ?? '';
+    for (let index = 0; index < markers.length; index += 1) {
+        const marker = markers[index];
+        const key = canonicalLabel(marker[1]);
+        if (!key) continue;
+        const valueStart = Number(marker.index || 0) + marker[0].length;
+        const valueEnd = index + 1 < markers.length ? Number(markers[index + 1].index || line.length) : line.length;
+        const value = line.slice(valueStart, valueEnd).replace(/^[；;\s]+|[；;\s]+$/gu, '').trim();
+        if (value && !fields.has(key)) fields.set(key, value);
     }
-    const match = line.match(/^来源\s*[:：]\s*(.+?)\s*[；;]\s*目标\s*[:：]\s*(.+?)\s*[；;]\s*栏目\s*[:：]\s*([^；;]+?)\s*[；;]\s*事实\s*[:：]\s*([\s\S]+?)\s*[；;]\s*(?:处理|来源处理)\s*[:：]\s*(吸收|保留完成)\s*$/u);
-    if (!match) return null;
-    const source = parseHistoryTitle(match[1], true); const target = parseHistoryTitle(match[2], false);
-    if (!source || !target) return null;
-    const section = match[3].trim(); const fact = match[4].trim().replace(/[；;]+$/u, '');
+    const source = parseHistoryTitle(fields.get('source'), true);
+    if (!source) return null;
+    const rawDisposition = String(fields.get('disposition') ?? '').trim();
+    const disposition = /^(?:吸收|吸收完成|已吸收|并入完成)$/u.test(rawDisposition)
+        ? '吸收'
+        : /^(?:保留完成|保留|继续保留|保留独立|继续存在)$/u.test(rawDisposition) ? '保留完成' : '';
+    if (!disposition) return null;
+    const hasDetail = ['target', 'section', 'fact'].some((key) => fields.has(key));
+    if (!hasDetail) {
+        return disposition === '保留完成'
+            ? { sourceTitle: source.title, sourceType: source.type, sourceName: source.name, targetTitle: '', targetType: '', targetName: '', section: '', fact: '', disposition, directCompletion: true }
+            : null;
+    }
+    if (!fields.get('target') || !fields.get('section') || !fields.get('fact')) return null;
+    const target = parseHistoryTitle(fields.get('target'), false);
+    if (!target) return null;
+    const section = String(fields.get('section') ?? '').trim();
+    const fact = String(fields.get('fact') ?? '').trim().replace(/[；;]+$/u, '');
     if (!section || !fact) return null;
-    return { sourceTitle: source.title, sourceType: source.type, sourceName: source.name, targetTitle: target.title, targetType: target.type, targetName: target.name, section, fact, disposition: match[5], directCompletion: false };
+    return { sourceTitle: source.title, sourceType: source.type, sourceName: source.name, targetTitle: target.title, targetType: target.type, targetName: target.name, section, fact, disposition, directCompletion: false };
 }
 function parseHistoryTitle(value, allowSummary = false) {
     const cleaned = String(value ?? '').trim().replace(/^[“”"'‘’\s]+|[“”"'‘’。；;，,\s]+$/gu, '');
@@ -7858,11 +7911,36 @@ function inspectSummaryProtocol(raw, kind, selectedEntries, pendingUids = []) {
     return { ok: true, recovered, summaryBlock, historyPlan, unresolvedPendingUids: [] };
 }
 
+function normalizeSummarySurfaceProtocol(raw, kind) {
+    const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
+    const source = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '');
+    const output = [];
+    for (const rawLine of source.split('\n')) {
+        let line = String(rawLine ?? '').trim();
+        if (!line) { output.push(''); continue; }
+        line = line.replace(/^#{1,6}\s*/u, '').replace(/^\*\*(.*?)\*\*$/u, '$1').replace(/^__(.*?)__$/u, '$1').trim();
+        const titleText = line.replace(/^(?:标题|总结标题)\s*[：:]\s*/u, '').trim();
+        if ((kind === 'small' && /^(?:总结|小总结)[｜|丨:：](?:当前事件|当前事件线|当前阶段)$/u.test(titleText))
+            || (kind === 'large' && /^(?:总结|大总结)[｜|丨:：](?:世界历史|长期历史|长期记忆)$/u.test(titleText))) {
+            output.push(expectedTitle);
+            continue;
+        }
+        const sectionText = line.replace(/^【\s*([^】]+?)\s*】\s*[：:]?$/u, '$1').replace(/[：:]$/u, '').trim();
+        if (/^(?:历史分发|逐来源分发|来源分发|颗粒度分发|逐来源结算|来源结算|分发结算)$/u.test(sectionText)) {
+            output.push('【历史分发】');
+            continue;
+        }
+        output.push(line);
+    }
+    return output.join('\n').trim();
+}
+
 function parseSummaryWithRecovery(raw, kind) {
     const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
-    const text = (0, parser_1.sanitizeModelText)(raw);
+    const sanitized = (0, parser_1.sanitizeModelText)(raw);
+    const text = normalizeSummarySurfaceProtocol(raw, kind);
     if (/^(?:无|EMPTY)$/u.test(text.trim())) return { block: null, explicitNone: true, repaired: 0, skipped: [] };
-    let repaired = 0;
+    let repaired = text !== sanitized ? 1 : 0;
     let blocks = [];
     try { blocks = (0, parser_1.parseInformationPoints)(text); }
     catch {
@@ -8153,7 +8231,7 @@ const ALLOWED_TYPES = new Set(['人物', '场景', '物品', '事件', '世界',
 const NON_EVENT_TYPES = new Set(['人物', '场景', '物品', '世界', '基础设定']);
 const KNOWLEDGE_SECTIONS = new Set(['已知', '误信']);
 const TYPE_ALLOWED_SECTIONS = {
-    人物: new Set(['时空锚点', '身份', '稳定', '当前', '关系', '持有', '已知', '误信', '固定事实', '别名']),
+    人物: new Set(['时空锚点', '身份', '稳定', '行为倾向', '性格核心', '表达方式', '决策倾向', '当前', '关系', '关系立场', '持有', '已知', '误信', '固定事实', '别名']),
     场景: new Set(['时空锚点', '定义', '空间结构', '固定资源', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
     物品: new Set(['时空锚点', '定义', '功能', '限制', '当前', '关系', '持有', '固定事实', '别名']),
     // [MA-REBUILD-10] 重建后的事件只保存已经发生的参与、场景、进展与结果。
@@ -8201,9 +8279,14 @@ const MIGRATION_TYPE_SYNONYMS = new Map([
 const UNIVERSAL_FIELD_ALIASES = {
     人物: {
         身份: ['身份', '姓名', '真名', '职业', '种族', '性别', '年龄', '血统', '阵营', '称号'],
-        稳定: ['稳定', '性格', '能力', '长期能力', '长期限制', '习惯', '稳定特征', '外貌特征'],
-        当前: ['当前', '位置', '所在地', '当前地点', '目标', '当前目标', '状态', '当前状态', '伤势', '情绪'],
-        关系: ['关系', '关系状态', '立场', '态度'],
+        稳定: ['稳定', '能力', '长期能力', '长期限制', '习惯', '稳定特征', '外貌特征'],
+        行为倾向: ['行为倾向', '长期倾向', '近期行为倾向', '重复行为倾向', '行为模式'],
+        性格核心: ['性格核心', '稳定性格', '人格核心', '核心性格', '性格'],
+        表达方式: ['表达方式', '表达风格', '说话方式', '说话风格', '语言风格', '语言习惯'],
+        决策倾向: ['决策倾向', '决策模式', '判断倾向', '判断模式', '选择倾向'],
+        当前: ['当前', '人物状态', '近期状态', '短期状态', '位置', '所在地', '当前地点', '目标', '当前目标', '状态', '当前状态', '伤势', '情绪'],
+        关系: ['关系', '长期关系', '稳定关系', '关系变化', '关系状态'],
+        关系立场: ['关系立场', '长期关系立场', '稳定关系立场', '关系态度', '立场', '态度'],
         持有: ['持有', '装备', '携带', '资源', '持有物'],
         固定事实: ['固定事实', '持续经历', '经历', '过去结果', '历史结果', '近期经历'],
         别名: ['别名', '称呼', '其他名称'],
@@ -12744,7 +12827,8 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 // ui.69: 总结分发的是已经结算过的历史/长期事实。无显式槽标签时不能按
                 // extraction 的 replace-by-anchor 规则直接拒绝；降为 semantic-upsert，
                 // 有明确锚点时仍会替换同槽事实，无锚点时按事实追加并接受权威回读。
-                if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
+                if (options.sourceKind === 'summary' && block.type === '人物' && section.name === '当前') sectionPolicy = 'semantic-upsert';
+                else if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
                 operations.push(...operationsForNewSection(block.title, block.type, section.name, lines, sectionPolicy));
             }
             continue;
@@ -12811,7 +12895,10 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 ?? (options.compactEventProgressFromSummary === true && block.type === '事件' && /^(已发生进展|未发生进展|结果)$/u.test(section.name)
                     ? 'replace-section'
                     : policyFor(section.name, settings));
-            if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
+            // ui.71: 正文提取的【当前】是完整快照；总结只携带已结算的局部状态变化。
+            // 因此人物总结必须按明确状态槽增量更新，不能用整段替换擦掉未参与本次总结的位置/目标等现状。
+            if (options.sourceKind === 'summary' && block.type === '人物' && section.name === '当前') sectionPolicy = 'semantic-upsert';
+            else if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
             operations.push(...operationsForExisting(entry, section.name, lines, sectionPolicy, target.score, target.evidence));
         }
         if (options.compactEventProgressFromSummary === true && block.type === '事件') {
@@ -14943,7 +15030,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 场景只记录场景自身已经形成的事实，例如完成的核验、通行结果、设施状态、局部秩序和持续影响；人物简历、性格、完整经历和台词留在人物或事件事实层。
 - 普通个人用品可沉入人物；设施、零件和地点资源可沉入场景；只服务一次事项的钥匙、证据或媒介可沉入事件或场景；独特且持续发挥作用的物品保留独立条目。
 - 局部事件、已离开的小场景和旧总结容器按颗粒度分发；来源只有在必要的宏观原貌、结果、持续影响和后续运行条件完整承接后才可吸收。
-- 人物近期多次、同方向的行为可写入【行为倾向】；行为倾向只写抽象判断、选择、表达或应对模式，不写具体物品名、具体场景名、单次动作或一次性事件细节；小总结不直接固化【性格核心】【表达方式】【决策倾向】。
+- 人物本轮结束时仍成立的位置、身体状态、当前目标、身份状态等短期现状写入人物【当前】，并使用“字段：当前值”的明确状态槽；这类现状不得改写成【固定事实】。人物近期多次、同方向的行为可写入【行为倾向】；行为倾向只写抽象判断、选择、表达或应对模式，不写具体物品名、具体场景名、单次动作或一次性事件细节；小总结不直接固化【性格核心】【表达方式】【决策倾向】。
 
 【重要规则】
 - 同一来源可以分发到多个直接宿主，但同一来源的处理值必须一致。
@@ -14958,10 +15045,11 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 来源：人物｜来源稳定名称；目标：场景｜目标稳定名称；栏目：固定事实；事实：只属于该场景的已发生结果；处理：吸收
 - 来源：物品｜来源稳定名称；目标：人物｜目标稳定名称；栏目：持有；事实：人物当前持有该普通用品；处理：吸收
 - 来源：事件｜来源稳定名称；目标：事件｜目标稳定名称；栏目：已发生进展；事实：粗化后的阶段历史；处理：吸收
+- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：当前；事实：身体状态：受伤但意识清醒；处理：保留完成
 - 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：行为倾向；事实：倾向于在压力下优先保护他人；处理：保留完成
 - 来源：人物｜仍需独立存在的来源；处理：保留完成
 
-每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。${custom ? `\n\n【附加要求】\n${custom}` : ''}`
+每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。不要给标题或栏目增加 Markdown 粗体、编号或额外层级。${custom ? `\n\n【附加要求】\n${custom}` : ''}`
         : `职责：长期历史分发。逐个结算经过小总结整理的来源，把长期有效内容继续抽象并写入长期宿主。
 
 【元词汇与锚点】
@@ -14981,7 +15069,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 【局部边界】
 - 事件保留宏观性质、参与范围、最终结果和持续影响，过程流水停留在较低层。
 - 已离开场景保留永久结构、设施、资源和长期影响；更宽宿主完整承接后可吸收低层场景壳。
-- 【行为倾向】本身就是重复行为提炼后的证据，不要求额外场景锚点或重复动作明细；稳定倾向继续抽象为【性格核心】【表达方式】或【决策倾向】。一次行为、一次情绪或角色自述不直接固化性格。
+- 【行为倾向】本身就是重复行为提炼后的证据，不要求额外场景锚点或重复动作明细；稳定倾向继续抽象为【性格核心】【表达方式】或【决策倾向】。长期稳定的人际关系写【关系】或【关系立场】；已经结束、只具历史意义的个人经历才写【固定事实】。一次行为、一次情绪或角色自述不直接固化性格；大总结不把短期【当前】状态固化为人格。
 - 普通物品在长期归属、消耗、毁坏或历史作用被直接宿主承接后可以退出；独特、持续发挥作用或仍需追踪状态的物品保留。
 - 旧总结容器中的历史逐条进入直接宿主，完整分发后可以吸收旧容器。
 
@@ -14999,9 +15087,10 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 来源：事件｜来源稳定名称；目标：世界｜目标稳定名称；栏目：固定事实；事实：高密度历史结果；处理：吸收
 - 来源：场景｜来源稳定名称；目标：世界｜目标稳定名称；栏目：持续影响；事实：跨场景仍成立的长期影响；处理：吸收
 - 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：性格核心；事实：由已有行为倾向抽象出的长期人格结论；处理：保留完成
+- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：关系立场；事实：关系对象：长期保持警惕但愿意合作；处理：保留完成
 - 来源：人物｜仍需独立存在的来源；处理：保留完成
 
-每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
+每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。不要给标题或栏目增加 Markdown 粗体、编号或额外层级。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
     const changedLabel = isSmall ? '本期实际变更条目' : '本期小总结后实际变更的运行条目';
     const recent = isSmall ? `\n\n【最近聊天】\n${clipText(recentConversation || '（无）', compact ? 7000 : 11000)}` : '';
     const user = `【处理范围】
@@ -15826,9 +15915,9 @@ const LEGACY_SMALL_SUMMARY_PROMPT_UI66 = `以上轮权威世界书、本轮正�
 const LEGACY_LARGE_SUMMARY_PROMPT_UI66 = `以经过小总结整理的权威条目为依据，把跨场景、跨阶段或永久成立的内容逐来源分发到长期宿主；总结只生成历史分发计划，不建立世界历史容器。已有行为倾向视为小总结提炼后的重复行为证据；大总结应将稳定倾向继续抽象为性格核心、表达方式或决策倾向。`;
 const LEGACY_EXTRACTION_PROMPT_UI50 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI55 = `以上次小总结后实际变更的世界书条目为主材料，按对象、目标、因果、时间、场景和规则范围形成语义簇；将细颗粒内容抽象为适合继续游玩的较粗状态、事件进展和局部机制，重新分发到直接宿主，并只吸收已经被目标事件完整承接的细事件壳。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `逐来源结算本期实际变更条目：把已发生事实分发到直接宿主；必要事实完整承接后才吸收来源；人物近期重复行为只提炼为不含具体物品、具体场景和单次情节的抽象行为倾向。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `逐来源结算本期实际变更条目：把本轮结束时仍成立的人物现状写入【当前】明确状态槽，把重复行为提炼为【行为倾向】，把历史结果分发到直接宿主；必要事实完整承接后才吸收来源。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI55 = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `逐来源结算中层权威条目：把跨阶段或长期成立的内容分发到长期宿主；已有行为倾向作为性格抽象证据，继续提炼为性格核心、表达方式或决策倾向。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `逐来源结算中层权威条目：把跨阶段或长期成立的内容分发到长期宿主；已有行为倾向继续提炼为【性格核心】【表达方式】【决策倾向】，长期关系进入【关系/关系立场】，历史经历才进入【固定事实】。`;
 exports.DEFAULT_EXTRACTION_PROMPT = `优先更新上一轮权威条目；只输出本轮已发生变化；正式姓名、身份、外形或状态变化继续更新原人物条目；同一事实写入最直接宿主。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
