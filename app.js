@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.68-ai-game-time-anchor — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.70-turn-pipeline-isolation — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -689,7 +689,7 @@ class MirrorAbyssApplication {
         const queuedDetail = `${automatic ? '自动' : ''}${taskType === 'audit' ? '审核' : taskType === 'extraction' ? '提取' : taskType === 'full' ? '审核与提取' : '任务'}已进入异步队列（第${position}项）`;
         if (taskType === 'audit' || taskType === 'full') {
             this.controlPanel.setTaskProgress?.('audit', 'queued', queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
-            this.controlPanel.setTaskProgress?.('revision', 'queued', '等待审核结论', { messageIndex: turn.messageIndex, queuePosition: position });
+            this.controlPanel.setTaskProgress?.('revision', 'idle', '等待审核结论', { messageIndex: turn.messageIndex, queuePosition: position });
         }
         if (taskType === 'extraction' || taskType === 'full') {
             this.controlPanel.setTaskProgress?.('extract', 'queued', taskType === 'full' ? '等待审核/修正' : queuedDetail, { messageIndex: turn.messageIndex, queuePosition: position });
@@ -718,7 +718,7 @@ class MirrorAbyssApplication {
             }
             if (taskType === 'audit' || taskType === 'full') {
                 this.controlPanel.setTaskProgress?.('audit', 'running', automatic ? '自动审核处理中' : '审核处理中', { messageIndex: snapshot.messageIndex });
-                this.controlPanel.setTaskProgress?.('revision', 'queued', '等待审核结论', { messageIndex: snapshot.messageIndex });
+                this.controlPanel.setTaskProgress?.('revision', 'idle', '等待审核结论', { messageIndex: snapshot.messageIndex });
             }
             if (taskType === 'extraction' || taskType === 'diagnosticExtraction') {
                 this.controlPanel.setTaskProgress?.('extract', 'running', '提取与协议解析处理中', { messageIndex: snapshot.messageIndex });
@@ -924,47 +924,11 @@ class MirrorAbyssApplication {
         const candidates = queue.items.filter((item) => item.automatic && ['full', 'extraction'].includes(item.taskType));
         const threshold = Math.max(2, Number(settings.queueCompactThreshold || settings.smallSummaryTurns || 6));
         if (candidates.length < threshold) return;
-        let collapsed = 0;
-        for (const item of [...candidates]) {
-            if (item.taskType === 'full' && settings.autoAudit === true && settings.auditEnabled !== false) {
-                const previousKey = item.taskKey;
-                const nextKey = `${chatKey}|audit|${item.messageKey || latestTurn.messageKey}|${item.contentHash || latestTurn.contentHash}`;
-                this.pendingTaskKeys.delete(previousKey);
-                if (this.pendingTaskKeys.has(nextKey)) {
-                    const index = queue.items.indexOf(item);
-                    if (index >= 0) queue.items.splice(index, 1);
-                    item.resolve({ superseded: true, reason: '队列压缩后已有同源审核任务' });
-                } else {
-                    item.taskType = 'audit';
-                    item.taskKey = nextKey;
-                    this.pendingTaskKeys.add(nextKey);
-                }
-                collapsed += 1;
-                continue;
-            }
-            const index = queue.items.indexOf(item);
-            if (index >= 0) queue.items.splice(index, 1);
-            this.pendingTaskKeys.delete(item.taskKey);
-            item.resolve({ superseded: true, reason: '队列积压，逐轮提取已由总结压缩替代' });
-            collapsed += 1;
-        }
-        const cursor = this.host.cursor();
-        const pendingSmall = queue.items.filter((item) => item.taskType === 'smallSummary').length;
-        const summaryType = settings.autoLargeSummary !== false && Number(cursor.smallCountSinceLarge || 0) + pendingSmall >= Number(settings.largeSummaryCount || 5)
-            ? 'largeSummary'
-            : 'smallSummary';
-        const summaryKey = `${chatKey}|${summaryType}|${latestTurn.messageKey}|compact`;
-        if (!this.pendingTaskKeys.has(summaryKey) && !queue.items.some((item) => item.taskType === summaryType)) {
-            let resolveTask;
-            let rejectTask;
-            const promise = new Promise((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
-            queue.items.push({ taskType: summaryType, index: latestTurn.messageIndex, automatic: true, maintenance: false, taskKey: summaryKey, promise, resolve: resolveTask, reject: rejectTask, queuedAt: Date.now(), compacted: true });
-            this.pendingTaskKeys.add(summaryKey);
-            promise.catch((error) => console.warn('[MirrorAbyss] compacted summary failed', error));
-        }
-        const label = summaryType === 'largeSummary' ? '大总结' : '小总结';
-        this.controlPanel.setTaskProgress?.('extract', 'queued', `队列积压${candidates.length}项，已压缩逐轮提取并改为${label}`, { messageIndex: latestTurn.messageIndex, compacted: collapsed });
-        this.controlPanel.setStatus(`异步队列已压缩：保留审核，逐轮提取改为${label}`);
+        // [MA-QUEUE-05] 不再把尚未执行的逐轮提取替换成小总结/大总结。
+        // 每个正文回合的事实提取都必须先完成；总结只能由提取完成后的正式总结调度触发。
+        // 队列积压时仅提示当前状态，不改变任何任务类型、顺序或处理承诺。
+        this.controlPanel.setTaskProgress?.('extract', 'queued', `队列积压${candidates.length}项，逐轮提取按原顺序保留`, { messageIndex: latestTurn.messageIndex, queuePosition: queue.items.length });
+        this.controlPanel.setStatus(`异步队列积压${candidates.length}项；逐轮审核/提取按原顺序处理，未改写为总结`);
     }
     async drainTaskQueue(chatKey) {
         const queue = this.taskQueues.get(chatKey);
@@ -1270,7 +1234,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.68-ai-game-time-anchor';
+exports.VERSION = '2.0.0-lite.ui.70-turn-pipeline-isolation';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -3180,8 +3144,7 @@ class ControlPanel {
             let states = this.messageTaskStates.get(index);
             if (!states && message === latest) {
                 const globalBelongsHere = Object.values(this.taskStates).some((state) => Number.isInteger(state?.messageIndex) && state.messageIndex === index);
-                const hasLiveGlobalState = Object.values(this.taskStates).some((state) => ['queued', 'running', 'warning', 'error'].includes(String(state?.state || '')));
-                states = globalBelongsHere || hasLiveGlobalState ? this.taskStates : freshMessageTaskStates();
+                states = globalBelongsHere ? this.taskStates : freshMessageTaskStates();
             }
             if (!states) continue;
             visible.add(index);
@@ -4406,6 +4369,13 @@ const INDEPENDENT_MARKER = /(?:独立目标|持续职责|关键证人|核心线�
 
 function governInformationBlocks(sourceBlocks, entries, contextText = '', options = {}) {
     const blocks = (sourceBlocks ?? []).map((block) => structuredClone(block));
+    const diagnostics = { attached: [], filtered: [], promoted: [], warnings: [] };
+    // ui.69: 历史总结输出已经由【历史分发】协议完成来源、目标、栏目与事实绑定。
+    // 这里不能再次套用“本轮正文显式证据”治理，否则长期关系、历史状态等合法分发会被
+    // extraction 专用过滤器删掉，随后操作计划为空并触发“结算证明不足”的假失败。
+    if (options.sourceKind === 'summary') {
+        return { blocks, diagnostics, currentSceneTitle: blocks.find((block) => block.type === '场景')?.title ?? '' };
+    }
     const explicitSceneName = explicitCurrentSceneName(contextText);
     if (explicitSceneName && !blocks.some((block) => block.type === '场景')) {
         blocks.unshift({
@@ -4415,7 +4385,6 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
     }
     synthesizeDocumentItemUpdates(blocks, entries, contextText);
     enforceExplicitDialogueFacts(blocks, contextText);
-    const diagnostics = { attached: [], filtered: [], promoted: [], warnings: [] };
     const currentScene = blocks.find((block) => block.type === '场景') ?? null;
     const output = [];
     for (const block of blocks) {
@@ -12768,10 +12737,14 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 const lines = linesWithoutCrossSectionDuplicates(block, section);
                 if (!lines.length) { operations.push(noop(block.title, undefined, section.name, '该信息已在同一对象的主要归属小标题中表达')); continue; }
                 if (/(事件进程|关键进展|已发生进展|未发生进展)/u.test(section.name) && block.type !== '事件') { operations.push(noop(block.title, undefined, section.name, '事件过程只能写入事件条目')); continue; }
-                const sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
+                let sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
                     ?? (options.compactEventProgressFromSummary === true && block.type === '事件' && /^(已发生进展|未发生进展|结果)$/u.test(section.name)
                         ? 'replace-section'
                         : policyFor(section.name, settings));
+                // ui.69: 总结分发的是已经结算过的历史/长期事实。无显式槽标签时不能按
+                // extraction 的 replace-by-anchor 规则直接拒绝；降为 semantic-upsert，
+                // 有明确锚点时仍会替换同槽事实，无锚点时按事实追加并接受权威回读。
+                if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
                 operations.push(...operationsForNewSection(block.title, block.type, section.name, lines, sectionPolicy));
             }
             continue;
@@ -12834,10 +12807,11 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             const lines = linesWithoutCrossSectionDuplicates(block, section);
             if (!lines.length) { operations.push(noop(entry.title, entry.uid, section.name, '该信息已在同一对象的主要归属小标题中表达', target.score, target.evidence)); continue; }
             if (/(事件进程|关键进展|已发生进展|未发生进展)/u.test(section.name) && block.type !== '事件') { operations.push(noop(entry.title, entry.uid, section.name, '事件过程只能写入事件条目', target.score, target.evidence)); continue; }
-            const sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
+            let sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
                 ?? (options.compactEventProgressFromSummary === true && block.type === '事件' && /^(已发生进展|未发生进展|结果)$/u.test(section.name)
                     ? 'replace-section'
                     : policyFor(section.name, settings));
+            if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
             operations.push(...operationsForExisting(entry, section.name, lines, sectionPolicy, target.score, target.evidence));
         }
         if (options.compactEventProgressFromSummary === true && block.type === '事件') {
