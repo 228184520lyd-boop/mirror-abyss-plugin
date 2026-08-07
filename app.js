@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.64-source-title-identity — governed worldbook storage, mandatory pending-source coverage, targeted summary completion, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.65-guarded-settlement — governed worldbook storage, mandatory pending-source coverage, targeted summary completion, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1263,7 +1263,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.64-source-title-identity';
+exports.VERSION = '2.0.0-lite.ui.65-guarded-settlement';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -7302,6 +7302,10 @@ class MemoryRunner {
         }
         const { recovered, summaryBlock, historyPlan } = protocol;
         if (recovered.repaired) this.progress('running', `${label}已本地归一化${recovered.repaired}处表面格式`, { titles: [expectedTitle], repaired: recovered.repaired, skipped: recovered.skipped });
+        if (historyPlan.guardRetainedSourceUids?.length) {
+            const titles = (historyPlan.guardRetentionReasons ?? []).map((item) => item.sourceTitle).filter(Boolean);
+            this.progress('warning', `${label}有${historyPlan.guardRetainedSourceUids.length}个来源已给出“吸收”，但删除被安全闸门拦截；将保留来源并在分发事实回读成功后完成本期结算`, { titles, guardRetainedSourceUids: historyPlan.guardRetainedSourceUids, guardRetentionReasons: historyPlan.guardRetentionReasons });
+        }
         if (!historyPlan.distributionBlocks.length && !historyPlan.absorptionOperations.length) {
             const resolvedSourceUids = [...new Set([...historyPlan.directCompletionUids, ...stalePendingUids])];
             const detail = `${label}已完成确定性判断：${historyPlan.directCompletionUids.length}个来源保留完成，无需修改世界书`;
@@ -7614,10 +7618,10 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
         records.push({ ...record, section: targetSection, explicitEmpty, sourceUid: String(source.uid), sourceType: canonicalHistoryType(source.type), sourceEntry: source });
     }
     if (!records.length) {
-        if (historySection) return { records: [], distributionBlocks: [], absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], invalidLines, unmatchedSourceTitles: (0, util_1.unique)(unmatchedSourceTitles) };
+        if (historySection) return { records: [], distributionBlocks: [], absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], guardRetainedSourceUids: [], guardRetentionReasons: [], invalidLines, unmatchedSourceTitles: (0, util_1.unique)(unmatchedSourceTitles) };
         const distributionBlocks = distributionBlocksFromSummary(summaryBlock);
         // 旧协议缺少逐来源事实绑定，只兼容事实写入，不再允许据此删除来源。
-        return { records: [], distributionBlocks, absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], invalidLines: [], unmatchedSourceTitles: [] };
+        return { records: [], distributionBlocks, absorptionOperations: [], completionProofs: [], directCompletionUids: [], settledSourceUids: [], guardRetainedSourceUids: [], guardRetentionReasons: [], invalidLines: [], unmatchedSourceTitles: [] };
     }
     const grouped = new Map();
     for (const record of records) {
@@ -7632,14 +7636,29 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
     const completionProofs = [];
     const directCompletionUids = [];
     const settledSourceUids = [];
+    const guardRetainedSourceUids = [];
+    const guardRetentionReasons = [];
     for (const group of validGroups) {
         const dispositions = [...group.dispositions];
         const proofs = distributionProofsForRecords(group.records.filter((record) => record.directCompletion !== true));
         if (invalidLines.length) continue;
         if (dispositions[0] === '吸收') {
-            if (!proofs.length || !sourceMayExit(group.source)) continue;
-            if (group.records.some((record) => (0, util_1.normalizeTitle)(record.sourceTitle) === (0, util_1.normalizeTitle)(record.targetTitle))) continue;
-            if (!historicalAbsorptionAllowed(kind, group.source, group.records)) continue;
+            // ui.65: “模型已给出结论”与“删除动作是否通过安全闸门”必须分离。
+            // 当前场景、锁定/焦点来源、自指吸收或不允许的颗粒度路径都不能删除来源，
+            // 但这不代表模型遗漏了来源。保留来源，并在分发事实通过权威回读后完成本期待处理。
+            const guardReasons = [];
+            if (!proofs.length) guardReasons.push('缺少可验证的目标事实');
+            if (!sourceMayExit(group.source)) guardReasons.push('来源受当前场景/锁定/焦点/禁用保护');
+            if (group.records.some((record) => (0, util_1.normalizeTitle)(record.sourceTitle) === (0, util_1.normalizeTitle)(record.targetTitle))) guardReasons.push('来源与目标相同');
+            if (!historicalAbsorptionAllowed(kind, group.source, group.records)) guardReasons.push('颗粒度吸收路径不允许');
+            if (guardReasons.length) {
+                if (proofs.length) completionProofs.push({ sourceUid: String(group.source.uid), sourceTitle: group.source.title, proofs });
+                else directCompletionUids.push(String(group.source.uid));
+                settledSourceUids.push(String(group.source.uid));
+                guardRetainedSourceUids.push(String(group.source.uid));
+                guardRetentionReasons.push({ sourceUid: String(group.source.uid), sourceTitle: group.source.title, reasons: guardReasons });
+                continue;
+            }
             absorptionOperations.push({
                 id: `history-absorb:${kind}:${group.source.uid}:${(0, util_1.hashText)(group.records.map((record) => `${record.targetTitle}|${record.section}|${record.fact}`).join('|'))}`,
                 kind: 'delete-entry', operation: 'delete', title: group.source.title, targetUid: group.source.uid,
@@ -7657,7 +7676,7 @@ function historicalDistributionPlan(summaryBlock, selectedEntries, options = {})
             settledSourceUids.push(String(group.source.uid));
         }
     }
-    return { records: validRecords, distributionBlocks: [...blocks.values()], absorptionOperations, completionProofs, directCompletionUids, settledSourceUids, invalidLines, unmatchedSourceTitles: (0, util_1.unique)(unmatchedSourceTitles) };
+    return { records: validRecords, distributionBlocks: [...blocks.values()], absorptionOperations, completionProofs, directCompletionUids, settledSourceUids, guardRetainedSourceUids, guardRetentionReasons, invalidLines, unmatchedSourceTitles: (0, util_1.unique)(unmatchedSourceTitles) };
 }
 function historySourceIdentityKey(type, name) {
     const canonicalType = canonicalHistoryType(type);

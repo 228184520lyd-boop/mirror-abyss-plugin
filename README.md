@@ -1,4 +1,4 @@
-# Mirror Abyss 2.0.0-lite.ui.64-source-title-identity
+# Mirror Abyss 2.0.0-lite.ui.65-guarded-settlement
 
 Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成后执行可选审核、完整修正、事实提取、分层总结、世界书提交和原生召回配置。
 
@@ -30,7 +30,7 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 ## 官方宿主接口
 
-2.0.0-lite.ui.64-source-title-identity 只使用 SillyTavern 当前公开宿主字段：
+2.0.0-lite.ui.65-guarded-settlement 只使用 SillyTavern 当前公开宿主字段：
 
 - 生命周期和消息：`eventSource`、`eventTypes`、`MESSAGE_RECEIVED`、`GENERATION_ENDED`。
 - 主连接原始生成：`generateRawData`，旧宿主回退到 `generateRaw`；当前连接不传 `responseLength`，避免修改主正文全局输出长度。
@@ -103,18 +103,23 @@ Mirror Abyss（镜渊）是 SillyTavern 前端扩展，用于在 AI 正文完成
 
 
 
+## 2.0.0-lite.ui.65-guarded-settlement 本轮改动
+
+- 修复“模型已给出吸收结论，但删除安全闸门拦截后被误报为遗漏来源”的协议/执行语义混淆。
+- `历史分发`现在把“模型是否给出确定结论”与“来源是否允许删除”分离：合法的`吸收`或`保留完成`都先完成协议覆盖检查。
+- 当前场景、锁定/焦点/禁用来源、自指吸收、颗粒度路径不允许时，来源不会删除；插件保留来源并把其目标事实纳入权威回读证明。
+- 被安全闸门保留的来源在目标事实已经写入或权威世界书已包含全部绑定事实后，从本期 pending 结算，不再进入遗漏来源补齐死循环。
+- 新增明确状态提示：模型给出“吸收”但删除被安全闸门拦截时，显示“保留来源并在分发事实回读成功后完成本期结算”。
+- 保留 ui.64 的来源标题唯一绑定、连接符规范化，ui.63 的遗漏来源定向补齐，ui.62 的固定格式恢复，ui.61 的确定性 pending 结算。
+
+详细实现见 `PATCH-SCOPE-UI65.md`、`UI65-GUARDED-SETTLEMENT-VALIDATION.md` 与 `UI65-REALTEST-CHECKLIST.md`。
+
 ## 2.0.0-lite.ui.64-source-title-identity 本轮改动
 
-- 修复大总结工作集与提示词不一致：pending 来源不再被 24 条工作条目上限或 72 条选材上限挤出；只裁剪关联上下文。
-- 强制来源内容块排在权威世界书轻量索引之前，避免请求层中间裁剪优先删掉必须判断的来源。
-- 主总结返回遗漏来源时，不再交给 `summaryRepair` 补作结论；插件只对遗漏来源发起一次语义补齐流程。
-- 遗漏来源数量较多时，小总结每批最多 10 条、大总结每批最多 8 条，逐批携带完整来源内容和关联上下文。
-- 主返回“无”但存在 pending 时，视为全部来源遗漏，进入同一批量补齐流程；仍不把“无”当作成功结算。
-- 补齐结果格式不合格时仍只允许一次纯格式修复；补齐后重新合并并校验全部原 pending 来源。
-- 错误信息会列出具体遗漏来源标题，便于实机定位模型遗漏还是内部工作集缺失。
-- ui.62 的固定格式、语义防补写、最小总结间隔，以及 ui.61 的确定性结算与无裁剪 pending 全部保留。
-
-详细实现见 `PATCH-SCOPE-UI63.md`、`UI63-MISSING-SOURCE-COMPLETION-VALIDATION.md` 与 `UI63-REALTEST-CHECKLIST.md`。
+- 来源标题索引改为候选集合，并优先绑定唯一 pending 来源，避免同标题关联条目覆盖真正待结算 UID。
+- 对连接符、破折号、全角符号和空格做唯一性规范化；规范化后不唯一时拒绝猜测。
+- 提示词增加“本次必须逐字复制的来源标题”，降低模型改写来源标题造成的身份漂移。
+- 保留 ui.63 的遗漏来源定向补齐与 ui.62 的固定格式边界。
 
 ## 2.0.0-lite.ui.62-fixed-summary-contract 本轮改动
 
