@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.71-summary-character-state — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.72-fresh-audit-scheduler — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1234,7 +1234,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.71-summary-character-state';
+exports.VERSION = '2.0.0-lite.ui.72-fresh-audit-scheduler';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -5448,6 +5448,8 @@ class HostAdapter {
             turnsSinceSmall: Math.max(0, Number(value.turnsSinceSmall) || 0),
             criticalChangesSinceSmall: Math.max(0, Number(value.criticalChangesSinceSmall) || 0),
             smallCountSinceLarge: Math.max(0, Number(value.smallCountSinceLarge) || 0),
+            smallSummaryRetryCooldown: Math.max(0, Number(value.smallSummaryRetryCooldown) || 0),
+            largeSummaryRetryCooldown: Math.max(0, Number(value.largeSummaryRetryCooldown) || 0),
             pendingSmallSummaryUids: [...new Set((Array.isArray(value.pendingSmallSummaryUids) ? value.pendingSmallSummaryUids : []).map((item) => String(item ?? '').trim()).filter(Boolean))],
             pendingLargeSummaryUids: [...new Set((Array.isArray(value.pendingLargeSummaryUids) ? value.pendingLargeSummaryUids : []).map((item) => String(item ?? '').trim()).filter(Boolean))],
         };
@@ -6945,34 +6947,40 @@ class MemoryRunner {
         return taskResultEntries(result);
     }
     async runTask(kind, settings, snapshot, options = {}) {
+        const summaryRetryInterval = Math.max(1, Math.min(Number(settings.smallSummaryTurns || 30), Number(settings.smallSummaryMinTurns || 5)));
         if (kind === 'extraction') {
+            // ui.72: 防线下沉到 MemoryRunner。即使上层 UI/队列漏掉禁用判断，
+            // 提取模块关闭时也不得推进处理游标、总结轮数或 pending 工作集。
+            if (settings.extractionEnabled === false) {
+                const result = await this.extract(settings, snapshot);
+                this.setStatus(snapshot.chatKey, 'complete', '提取未启用，本回合未推进处理游标');
+                return taskResultEntries(result);
+            }
             const cursor = this.host.cursor();
             const result = await this.extract(settings, snapshot);
-            await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0, result);
-            this.setStatus(snapshot.chatKey, 'complete', '提取与总结调度完成');
+            const schedule = await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0, result);
+            this.setStatus(snapshot.chatKey, 'complete', schedule?.warning ? `提取完成；${schedule.warning}` : '提取与总结调度完成');
             return taskResultEntries(result);
         }
         if (kind === 'smallSummary') {
             const result = await this.summarize('small', settings, snapshot);
             const committed = [result];
             const cursor = this.host.cursor();
-            let smallCountSinceLarge = cursor.smallCountSinceLarge + (result.changed ? 1 : 0);
-            let pendingSmallSummaryUids = subtractPendingUids(cursor.pendingSmallSummaryUids, resultResolvedSourceUids(result));
-            let pendingLargeSummaryUids = result.changed
+            // 只有“已经结算”的小总结才属于一个完成层级，才能推动大总结。
+            // 部分写入但未完成结算时保留 pending，并进入冷却，不得每回合重试或累计大总结次数。
+            const completedAndChanged = result.settled === true && result.changed === true;
+            const smallCountSinceLarge = cursor.smallCountSinceLarge + (completedAndChanged ? 1 : 0);
+            const pendingSmallSummaryUids = subtractPendingUids(cursor.pendingSmallSummaryUids, resultResolvedSourceUids(result));
+            const pendingLargeSummaryUids = completedAndChanged
                 ? mergePendingUids(cursor.pendingLargeSummaryUids, resultActiveChangedUids(result))
                 : [...(cursor.pendingLargeSummaryUids ?? [])];
             try {
-                if (options.allowCascade !== false && settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
-                    const large = await this.summarize('large', settings, snapshot, { pendingUids: pendingLargeSummaryUids });
-                    committed.push(large);
-                    pendingLargeSummaryUids = subtractPendingUids(pendingLargeSummaryUids, resultResolvedSourceUids(large));
-                    if (large.changed) smallCountSinceLarge = 0;
-                }
                 const nextCursor = {
                     ...cursor,
                     turnsSinceSmall: result.settled ? 0 : cursor.turnsSinceSmall,
                     criticalChangesSinceSmall: result.settled ? 0 : cursor.criticalChangesSinceSmall,
                     smallCountSinceLarge,
+                    smallSummaryRetryCooldown: result.settled ? 0 : summaryRetryInterval,
                     pendingSmallSummaryUids,
                     pendingLargeSummaryUids,
                 };
@@ -6982,7 +6990,7 @@ class MemoryRunner {
             catch (error) {
                 await this.rollbackCommittedResults(settings, snapshot, committed, result.previousGameTime, cursor, error, '小总结回合');
             }
-            this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : (result.settled ? '小总结已结算，无需写入' : '小总结未完成'));
+            this.setStatus(snapshot.chatKey, 'complete', result.changed ? (result.settled ? '小总结完成' : `小总结部分写入但未完成结算；${summaryRetryInterval}个正文回合后再尝试`) : (result.settled ? '小总结已结算，无需写入' : '小总结未完成'));
             return taskResultEntries(result);
         }
         const result = await this.summarize('large', settings, snapshot);
@@ -6991,6 +6999,7 @@ class MemoryRunner {
             const nextCursor = {
                 ...cursor,
                 smallCountSinceLarge: result.settled ? 0 : cursor.smallCountSinceLarge,
+                largeSummaryRetryCooldown: result.settled ? 0 : summaryRetryInterval,
                 pendingLargeSummaryUids: subtractPendingUids(cursor.pendingLargeSummaryUids, resultResolvedSourceUids(result)),
             };
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
@@ -6999,7 +7008,7 @@ class MemoryRunner {
         catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '大总结回合');
         }
-        this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : (result.settled ? '大总结已结算，无需写入' : '大总结未完成'));
+        this.setStatus(snapshot.chatKey, 'complete', result.changed ? (result.settled ? '大总结完成' : `大总结部分写入但未完成结算；${summaryRetryInterval}个正文回合后再尝试`) : (result.settled ? '大总结已结算，无需写入' : '大总结未完成'));
         return taskResultEntries(result);
     }
     async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0, rootResult = null) {
@@ -7008,34 +7017,75 @@ class MemoryRunner {
         let turnsSinceSmall = Number(cursor.turnsSinceSmall || 0) + 1;
         let criticalChangesSinceSmall = Number(cursor.criticalChangesSinceSmall || 0) + Math.max(0, Number(criticalChanges || 0));
         let smallCountSinceLarge = Number(cursor.smallCountSinceLarge || 0);
+        let smallSummaryRetryCooldown = Math.max(0, Number(cursor.smallSummaryRetryCooldown || 0) - 1);
+        let largeSummaryRetryCooldown = Math.max(0, Number(cursor.largeSummaryRetryCooldown || 0) - 1);
         let pendingSmallSummaryUids = mergePendingUids(cursor.pendingSmallSummaryUids, resultChangedUids(rootResult));
         let pendingLargeSummaryUids = [...(cursor.pendingLargeSummaryUids ?? [])];
+        const largeReadyBeforeTurn = smallCountSinceLarge >= settings.largeSummaryCount;
+        const minimumInterval = Math.max(1, Math.min(settings.smallSummaryTurns, Number(settings.smallSummaryMinTurns || 5)));
+        let smallRanThisTurn = false;
+        let summaryWarning = '';
         try {
             const turnReady = turnsSinceSmall >= settings.smallSummaryTurns;
-            const minimumInterval = Math.max(1, Math.min(settings.smallSummaryTurns, Number(settings.smallSummaryMinTurns || 5)));
             const changeReady = turnsSinceSmall >= minimumInterval && criticalChangesSinceSmall >= settings.criticalChangesForSmall;
-            if (settings.autoSmallSummary !== false && (turnReady || changeReady)) {
-                const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `经过${turnsSinceSmall}轮并累计${criticalChangesSinceSmall}个关键变化`;
+            const smallEligible = settings.autoSmallSummary !== false && (turnReady || changeReady) && smallSummaryRetryCooldown <= 0;
+            if (smallEligible) {
+                smallRanThisTurn = true;
+                const reason = turnReady ? `达到${settings.smallSummaryTurns}轮` : `经过${turnsSinceSmall}轮并累计${criticalChangesSinceSmall}个关键变化回合`;
                 this.progress('running', `${reason}，开始小总结与分发`, { titles: ['总结｜当前事件'], criticalChanges: criticalChangesSinceSmall });
-                const small = await this.summarize('small', settings, snapshot, { pendingUids: pendingSmallSummaryUids });
-                committed.push(small);
-                pendingSmallSummaryUids = subtractPendingUids(pendingSmallSummaryUids, resultResolvedSourceUids(small));
-                if (small.settled) {
-                    turnsSinceSmall = 0;
-                    criticalChangesSinceSmall = 0;
+                const beforeReceiptIds = this.currentReceiptIds();
+                try {
+                    const small = await this.summarize('small', settings, snapshot, { pendingUids: pendingSmallSummaryUids });
+                    committed.push(small);
+                    pendingSmallSummaryUids = subtractPendingUids(pendingSmallSummaryUids, resultResolvedSourceUids(small));
+                    if (small.settled) {
+                        turnsSinceSmall = 0;
+                        criticalChangesSinceSmall = 0;
+                        smallSummaryRetryCooldown = 0;
+                        if (small.changed) {
+                            smallCountSinceLarge += 1;
+                            pendingLargeSummaryUids = mergePendingUids(pendingLargeSummaryUids, resultActiveChangedUids(small));
+                        }
+                    }
+                    else {
+                        // 未完成的总结可能已经安全写入一部分事实，但它不是一个“完成的小总结”。
+                        // 保留工作集与累计证据，并用最小间隔做重试冷却，避免每正文回合重复请求。
+                        smallSummaryRetryCooldown = minimumInterval;
+                        summaryWarning = `小总结未完成结算，已保留待处理来源并延后${minimumInterval}个正文回合重试`;
+                        this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], pendingSmallSummaryUids });
+                    }
                 }
-                if (small.changed) {
-                    smallCountSinceLarge += 1;
-                    pendingLargeSummaryUids = mergePendingUids(pendingLargeSummaryUids, resultActiveChangedUids(small));
+                catch (error) {
+                    await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
+                    smallSummaryRetryCooldown = minimumInterval;
+                    summaryWarning = `小总结失败，正文提取已保留；${minimumInterval}个正文回合后重试：${(0, util_1.errorText)(error)}`;
+                    this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], error: (0, util_1.errorText)(error) });
                 }
             }
-            if (settings.autoLargeSummary !== false && smallCountSinceLarge >= settings.largeSummaryCount) {
-                this.progress('running', `累计${settings.largeSummaryCount}个小总结，开始大总结、沉降与分发`, { titles: ['总结｜世界历史'] });
-                const large = await this.summarize('large', settings, snapshot, { pendingUids: pendingLargeSummaryUids });
-                committed.push(large);
-                pendingLargeSummaryUids = subtractPendingUids(pendingLargeSummaryUids, resultResolvedSourceUids(large));
-                if (large.settled) {
-                    smallCountSinceLarge = 0;
+            // 小总结正处于失败/未结算冷却时，不允许大总结跨过这个未完成层级。
+            const smallLayerBlocked = smallSummaryRetryCooldown > 0;
+            if (settings.autoLargeSummary !== false && !smallRanThisTurn && !smallLayerBlocked && largeReadyBeforeTurn && largeSummaryRetryCooldown <= 0) {
+                this.progress('running', `此前已累计${settings.largeSummaryCount}个已结算小总结，开始独立大总结、沉降与分发`, { titles: ['总结｜世界历史'] });
+                const beforeReceiptIds = this.currentReceiptIds();
+                try {
+                    const large = await this.summarize('large', settings, snapshot, { pendingUids: pendingLargeSummaryUids });
+                    committed.push(large);
+                    pendingLargeSummaryUids = subtractPendingUids(pendingLargeSummaryUids, resultResolvedSourceUids(large));
+                    if (large.settled) {
+                        smallCountSinceLarge = 0;
+                        largeSummaryRetryCooldown = 0;
+                    }
+                    else {
+                        largeSummaryRetryCooldown = minimumInterval;
+                        summaryWarning = `大总结未完成结算，已保留待处理来源并延后${minimumInterval}个正文回合重试`;
+                        this.progress('warning', summaryWarning, { titles: ['总结｜世界历史'], pendingLargeSummaryUids });
+                    }
+                }
+                catch (error) {
+                    await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '大总结');
+                    largeSummaryRetryCooldown = minimumInterval;
+                    summaryWarning = `大总结失败，正文提取已保留；${minimumInterval}个正文回合后重试：${(0, util_1.errorText)(error)}`;
+                    this.progress('warning', summaryWarning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error) });
                 }
             }
             const nextCursor = {
@@ -7045,14 +7095,39 @@ class MemoryRunner {
                 turnsSinceSmall,
                 criticalChangesSinceSmall,
                 smallCountSinceLarge,
+                smallSummaryRetryCooldown,
+                largeSummaryRetryCooldown,
                 pendingSmallSummaryUids,
                 pendingLargeSummaryUids,
             };
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
             await this.finalizeReceiptStates(committed, nextCursor);
+            return { warning: summaryWarning, cursor: nextCursor };
         }
         catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, committed, previousGameTime, cursor, error, '正文处理回合');
+        }
+    }
+    currentReceiptIds() {
+        if (typeof this.host.getCommitReceipts !== 'function') return new Set();
+        return new Set((this.host.getCommitReceipts() ?? []).map((receipt) => String(receipt?.id ?? '')).filter(Boolean));
+    }
+    async rollbackSummaryAttemptReceipts(settings, snapshot, beforeIds, label) {
+        if (typeof this.host.getCommitReceipts !== 'function' || typeof this.host.removeCommitReceipts !== 'function') return 0;
+        const known = beforeIds instanceof Set ? beforeIds : new Set();
+        const added = (this.host.getCommitReceipts() ?? []).filter((receipt) => {
+            const id = String(receipt?.id ?? '');
+            return id && !known.has(id) && (!receipt?.sourceKind || receipt.sourceKind === 'summary');
+        });
+        if (!added.length) return 0;
+        const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
+        try {
+            await this.worldbook.rollbackReceipts(settings, added, focusUid, snapshot, () => this.validate(snapshot));
+            await this.host.removeCommitReceipts(added.map((receipt) => String(receipt.id ?? '')).filter(Boolean));
+            return added.length;
+        }
+        catch (error) {
+            throw new Error(`${label}失败后的局部事务回滚失败：${(0, util_1.errorText)(error)}`);
         }
     }
     async finalizeReceiptStates(results, cursor) {
@@ -7762,7 +7837,8 @@ function parseHistoricalDistributionLine(rawLine) {
         .replace(/\*\*/gu, '')
         .trim();
     if (!line || /^(?:无|没有|暂无)$/u.test(line)) return null;
-    const labelPattern = /(?:^|[；;])\s*(来源条目|来源|源|目标条目|目标|宿主|栏目|小标题|字段|事实|内容|处理|来源处理|结论)\s*[:：]\s*/gu;
+    // ui.72: 只归一化标签之间的表面分隔符；标题内部的“｜”只有在后面紧跟已知标签时才会被识别为边界。
+    const labelPattern = /(?:^|[；;，,|｜]|(?:->|→|⇒))\s*(来源条目|来源|源|目标条目|目标|宿主|栏目|小标题|字段|事实|内容|处理|来源处理|结论)\s*[:：]\s*/gu;
     const markers = [...line.matchAll(labelPattern)];
     if (!markers.length) return null;
     const fields = new Map();
@@ -7915,6 +7991,8 @@ function normalizeSummarySurfaceProtocol(raw, kind) {
     const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
     const source = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '');
     const output = [];
+    let inHistoryDistribution = false;
+    const fieldOnly = /^(?:来源条目|来源|源|目标条目|目标|宿主|栏目|小标题|字段|事实|内容|处理|来源处理|结论)\s*[:：]/u;
     for (const rawLine of source.split('\n')) {
         let line = String(rawLine ?? '').trim();
         if (!line) { output.push(''); continue; }
@@ -7923,12 +8001,29 @@ function normalizeSummarySurfaceProtocol(raw, kind) {
         if ((kind === 'small' && /^(?:总结|小总结)[｜|丨:：](?:当前事件|当前事件线|当前阶段)$/u.test(titleText))
             || (kind === 'large' && /^(?:总结|大总结)[｜|丨:：](?:世界历史|长期历史|长期记忆)$/u.test(titleText))) {
             output.push(expectedTitle);
+            inHistoryDistribution = false;
             continue;
         }
         const sectionText = line.replace(/^【\s*([^】]+?)\s*】\s*[：:]?$/u, '$1').replace(/[：:]$/u, '').trim();
         if (/^(?:历史分发|逐来源分发|来源分发|颗粒度分发|逐来源结算|来源结算|分发结算)$/u.test(sectionText)) {
             output.push('【历史分发】');
+            inHistoryDistribution = true;
             continue;
+        }
+        if (/^【[^】]+】/u.test(line)) inHistoryDistribution = false;
+        // 模型常把一条固定记录拆成多行字段。仅当处于【历史分发】且当前行就是已知字段标签时，
+        // 把它机械拼回上一条记录；不读取或改写字段值，因此不产生新语义。
+        if (inHistoryDistribution && fieldOnly.test(line) && !/^\s*(?:[-*•]+|\d+[.)、])\s*/u.test(line)) {
+            for (let index = output.length - 1; index >= 0; index -= 1) {
+                if (!String(output[index] ?? '').trim()) continue;
+                if (String(output[index]).includes('【历史分发】')) break;
+                if (/^(?:[-*•]+|\d+[.)、])\s*/u.test(String(output[index]).trim()) || /(?:来源条目|来源|源)\s*[:：]/u.test(String(output[index]))) {
+                    output[index] = `${String(output[index]).replace(/[；;\s]+$/gu, '')}；${line}`;
+                    line = '';
+                }
+                break;
+            }
+            if (!line) continue;
         }
         output.push(line);
     }
@@ -15784,19 +15879,19 @@ function isEventClosed(entry) {
 
 
 function countCriticalChanges(plan) {
-    const keys = new Set();
+    // ui.72: 关键变化按“正文回合”计 0/1，而不是按写入操作数量累加。
+    // 【当前】等易变快照属于正常流水刷新，不应推动小总结；只有身份、关系、稳定事实、
+    // 事件进展/结果、长期世界结构等会跨回合保留的变化才视为关键变化回合。
+    const volatileSections = /^(?:当前|当前状态|在场|当前资源|活动关联|局部约束|持有|参与|场景|未发生进展)$/u;
+    const durableSections = /(?:身份|稳定|行为倾向|性格核心|表达方式|决策倾向|关系立场|关系|固定事实|持续经历|定义|空间结构|持续变化|常驻角色|固定设施|附属人员|已发生进展|结果|时代|权力|制度|公开局势|世界变化|持续影响|范围|地理|组织|资源与交通|世界常识|自然规则|种族与生命|能力与技术|社会规则|地理框架)/u;
     for (const operation of plan?.operations ?? []) {
         if (!operation || operation.kind === 'noop' || operation.kind === 'merge-keywords' || operation.kind === 'merge-titles') continue;
-        const section = String(operation.section ?? '');
-        const important = operation.kind === 'create-entry'
-            || operation.kind === 'delete-entry'
-            || operation.kind === 'replace-line'
-            || operation.kind === 'replace-section'
-            || /(身份|稳定|行为倾向|性格核心|表达方式|决策倾向|关系立场|当前|当前状态|关系|持有|固定事实|持续经历|定义|空间结构|持续变化|在场|常驻角色|固定设施|当前资源|活动关联|局部约束|参与|附属人员|已发生进展|未发生进展|结果|时代|权力|制度|公开局势|世界变化|持续影响)/u.test(section);
-        if (!important) continue;
-        keys.add(`${operation.title}|${section}|${operation.kind}`);
+        if (operation.kind === 'create-entry' || operation.kind === 'delete-entry') return 1;
+        const section = String(operation.section ?? '').trim();
+        if (!section || volatileSections.test(section)) continue;
+        if (durableSections.test(section)) return 1;
     }
-    return keys.size;
+    return 0;
 }
 
 function isFoundationEntry(entry, settings) {
@@ -17106,11 +17201,20 @@ class WorldbookAdapter {
                 }
                 const restored = structuredClone(change.before);
                 if (current) {
+                    // ui.72: 回滚应尽可能恢复写入前的原始快照。过去这里调用 markManaged() 会刷新 updatedAt，
+                    // 并无条件写入 locked:false，导致“业务内容已回滚、内部生命周期却被当成刚更新”。
+                    // 只有玩家在提交后确实手工改变了焦点/锁定时，才把这两个交互状态带回恢复快照。
                     const currentExtension = readExtension(current.raw);
-                    const restoredExtension = markManaged(restored, '', String(restored.comment ?? ''), '');
-                    restoredExtension.focus = currentExtension.focus === true;
-                    restoredExtension.locked = currentExtension.locked === true;
-                    restored.locked = current.raw.locked === true;
+                    const beforeExtension = readExtension(change.before);
+                    const ensureRestoredExtension = () => {
+                        restored.extensions ?? (restored.extensions = {});
+                        const existing = restored.extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
+                        if (!existing || typeof existing !== 'object') restored.extensions[constants_1.WORLD_INFO_EXTENSION_KEY] = structuredClone(beforeExtension || {});
+                        return restored.extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
+                    };
+                    if ((currentExtension.focus === true) !== (beforeExtension.focus === true)) ensureRestoredExtension().focus = currentExtension.focus === true;
+                    if ((currentExtension.locked === true) !== (beforeExtension.locked === true)) ensureRestoredExtension().locked = currentExtension.locked === true;
+                    if ((current.raw.locked === true) !== (change.before.locked === true)) restored.locked = current.raw.locked === true;
                 }
                 const mapKey = current?.mapKey || String(change.beforeMapKey ?? restored.uid ?? uid);
                 opened.data.entries[mapKey] = restored;
