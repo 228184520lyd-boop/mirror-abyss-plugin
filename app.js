@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.89-person-schema-simplification — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.90-summary-granularity-maintenance — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -75,6 +75,8 @@ class MirrorAbyssApplication {
             extract: () => this.extract(),
             smallSummary: () => this.smallSummary(),
             largeSummary: () => this.largeSummary(),
+            mergeEntries: (uids) => this.mergeEntries(uids),
+            deleteEntries: (uids) => this.deleteEntries(uids),
             organizeWorldbook: () => this.organizeWorldbook(),
             testApiProbe: () => this.testApiProbe(),
             cancel: () => this.cancel(),
@@ -158,6 +160,16 @@ class MirrorAbyssApplication {
     }
     largeSummary() {
         return this.enqueueMaintenance('largeSummary', async (settings, snapshot) => this.memoryRunner.runTask('largeSummary', settings, snapshot, { allowCascade: false }));
+    }
+    mergeEntries(uids) {
+        const selectedUids = [...new Set((uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
+        if (selectedUids.length < 2) throw new Error('至少选择两个条目才能合并');
+        return this.enqueueMaintenance('mergeEntries', async (settings, snapshot) => this.memoryRunner.mergeSelected(settings, snapshot, selectedUids));
+    }
+    deleteEntries(uids) {
+        const selectedUids = [...new Set((uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
+        if (!selectedUids.length) throw new Error('至少选择一个条目才能删除');
+        return this.enqueueMaintenance('deleteEntries', async (settings, snapshot) => this.worldbook.deleteEntries(settings, selectedUids, snapshot, () => this.host.assertSnapshot(snapshot, this.settings())));
     }
     organizeWorldbook() {
         return this.enqueueMaintenance('organizeWorldbook', async (settings, snapshot) => {
@@ -1287,7 +1299,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.89-person-schema-simplification';
+exports.VERSION = '2.0.0-lite.ui.90-summary-granularity-maintenance';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1624,7 +1636,7 @@ class ControlPanel {
 .ma-lite-status{min-height:38px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:8px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);font-size:12px;font-weight:500;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{box-sizing:border-box;display:flex;align-items:center;min-height:44px;padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{border-color:rgba(255,126,126,.38);border-left:3px solid rgba(255,126,126,.72);background:linear-gradient(90deg,rgba(255,96,96,.10),rgba(0,0,0,.07));color:var(--SmartThemeBodyColor,#fff);font-weight:520;box-shadow:none}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:44px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:44px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
-.ma-lite-worldbook-quick{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-worldbook-quick-head{display:flex;flex-direction:column;gap:2px}.ma-lite-worldbook-quick-head strong{font-size:13px}.ma-lite-worldbook-quick-head small{font-size:10px;line-height:1.4;opacity:.62}.ma-lite-worldbook-advanced{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px}.ma-lite-worldbook-advanced>summary{min-height:44px;box-sizing:border-box;padding:12px;cursor:pointer;font-size:11px}.ma-lite-worldbook-quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 7px 7px}.ma-lite-worldbook-quick button{min-height:44px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-worldbook-quick button[data-kind="organizeWorldbook"]{border-color:rgba(111,214,164,.42);background:rgba(40,130,88,.13);font-weight:700}.ma-lite-worldbook-quick button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-worldbook-quick-status{font-size:10px;line-height:1.45;opacity:.76}.ma-lite-worldbook-quick-status[data-error="true"]{color:#ffb4b4;opacity:1}.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}
+.ma-lite-worldbook-quick{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-worldbook-quick-head{display:flex;flex-direction:column;gap:2px}.ma-lite-worldbook-quick-head strong{font-size:13px}.ma-lite-worldbook-quick-head small{font-size:10px;line-height:1.4;opacity:.62}.ma-lite-worldbook-advanced{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px}.ma-lite-worldbook-advanced>summary{min-height:44px;box-sizing:border-box;padding:12px;cursor:pointer;font-size:11px}.ma-lite-worldbook-quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 7px 7px}.ma-lite-worldbook-quick button{min-height:44px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-worldbook-quick button[data-kind="organizeWorldbook"]{border-color:rgba(111,214,164,.42);background:rgba(40,130,88,.13);font-weight:700}.ma-lite-worldbook-quick button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-worldbook-quick-status{font-size:10px;line-height:1.45;opacity:.76}.ma-lite-worldbook-quick-status[data-error="true"]{color:#ffb4b4;opacity:1}.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}.ma-lite-management .ma-lite-worldbook-quick-actions{padding:0}.ma-lite-management .ma-lite-worldbook-quick-actions button{min-height:40px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-management .ma-lite-worldbook-quick-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management-entry-list{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;padding:4px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.09));border-radius:8px}.ma-lite-management-entry{display:flex;align-items:flex-start;gap:7px;padding:6px;border-radius:6px;font-size:10px;line-height:1.35;cursor:pointer}.ma-lite-management-entry:hover{background:rgba(255,255,255,.05)}.ma-lite-management-entry input{margin-top:1px;flex:0 0 auto}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:44px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:44px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
@@ -1686,15 +1698,14 @@ class ControlPanel {
         status.className = 'ma-lite-status';
         status.setAttribute('aria-live', 'polite');
         this.statusNode = status;
-        runPage.append(pipeline, actions, status);
-
         const worldbookQuickActions = this.buildWorldbookQuickActions();
+        runPage.append(pipeline, actions, this.wrapToolSection('总结控制', worldbookQuickActions, false), status);
+
         const management = this.buildManagementSection();
         const recall = this.buildRecallSection();
         const worldSetting = this.buildWorldSettingSection();
         worldbookPage.append(
-            worldbookQuickActions,
-            this.wrapToolSection('世界书状态', management, true),
+            this.wrapToolSection('条目管理与状态', management, true),
             this.wrapToolSection('召回映射', recall, false),
             this.wrapToolSection('导入世界基础设定', worldSetting, false),
         );
@@ -1708,16 +1719,15 @@ class ControlPanel {
             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取。'),
             this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
             this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '只按正文回合数或当前大场景族切换触发；同一大场景内的子地点切换不触发，人物、关系、物品和普通事件变化也不参与调度。'),
-            this.makeSwitch('autoLargeSummary', '自动大总结', '只累计成功结算的小总结次数；达到设定次数后在独立正文回合触发。'),
+            this.makeSwitch('autoSmallSummary', '自动小总结', '按成功正文回合数触发；触发后只整理这段期间已经写入世界书的变化条目，并读取必要关联条目。'),
+            this.makeSwitch('autoLargeSummary', '自动大总结', '累计成功完成的小总结次数；达到设定次数后把局部层继续上升为整体层。'),
             this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目进行容量治理。'),
         );
         const gameTimeAnchor = this.makeGameTimeInput('游戏时间（可选）', '需要时为当前聊天填写世界内时间锚点，例如“第三日 14:30”或“春季第12日清晨”；留空则当前聊天不启用。后续时间推进由AI判断。', '例如：第三日 14:30');
         const thresholds = document.createElement('div');
         thresholds.className = 'ma-lite-thresholds';
         thresholds.append(
-            this.makeNumberInput('smallSummaryTurns', '小总结正文回合数', 2, 100),
-            this.makeNumberInput('smallSummaryMinTurns', '总结失败重试间隔', 2, 100),
+            this.makeNumberInput('smallSummaryTurns', '小总结间隔（正文回合）', 2, 50),
             this.makeNumberInput('largeSummaryCount', '大总结所需小总结数', 2, 30),
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
         );
@@ -2377,23 +2387,12 @@ class ControlPanel {
         section.className = 'ma-lite-worldbook-quick';
         const head = document.createElement('div');
         head.className = 'ma-lite-worldbook-quick-head';
-        head.innerHTML = '<strong>世界书控制</strong><small>日常只使用“整理世界书”；单级总结保留为诊断入口。</small>';
-        const primary = document.createElement('button');
-        primary.type = 'button';
-        primary.dataset.kind = 'organizeWorldbook';
-        primary.textContent = '整理世界书';
-        primary.title = '以一个父事务依次运行小总结、大总结和召回重排；任一步失败会恢复整体状态';
-        primary.addEventListener('click', () => void this.runWorldbookQuickAction('organizeWorldbook'));
-        this.buttons.organizeWorldbook = primary;
-        const advanced = document.createElement('details');
-        advanced.className = 'ma-lite-worldbook-advanced';
-        const summary = document.createElement('summary');
-        summary.textContent = '高级手动总结';
+        head.innerHTML = '<strong>总结控制</strong><small>立即执行自动链中的单层总结；条目人工合并与删除在下方“条目管理”。</small>';
         const actions = document.createElement('div');
         actions.className = 'ma-lite-worldbook-quick-actions';
         for (const [kind, label, title] of [
-            ['smallSummary', '仅运行小总结', '只处理当前待小总结工作集，不自动级联大总结'],
-            ['largeSummary', '仅运行大总结', '只处理当前待大总结工作集'],
+            ['smallSummary', '立即小总结', '把当前阶段已提取的细事实上升为各主体的局部层'],
+            ['largeSummary', '立即大总结', '把已经形成的局部层内容上升为各主体的整体层'],
         ]) {
             const button = document.createElement('button');
             button.type = 'button';
@@ -2404,15 +2403,15 @@ class ControlPanel {
             actions.append(button);
             this.buttons[kind] = button;
         }
-        advanced.append(summary, actions);
         const status = document.createElement('div');
         status.className = 'ma-lite-worldbook-quick-status';
         status.setAttribute('aria-live', 'polite');
-        status.textContent = '整理世界书使用统一父事务；取消或任一步失败会恢复操作前状态，切换聊天时将在返回原聊天后优先恢复。';
-        section.append(head, primary, advanced, status);
+        status.textContent = '自动总结按设置中的触发阈值运行；这里仅用于立即执行单层总结。';
+        section.append(head, actions, status);
         this.worldbookQuickStatusNode = status;
         return section;
     }
+
     async runWorldbookQuickAction(kind) {
         if (this.pendingActions.has(kind)) return;
         const action = this.actions[kind];
@@ -2488,11 +2487,22 @@ class ControlPanel {
         head.append(title, refresh);
         const status = document.createElement('div');
         status.className = 'ma-lite-management-status';
-        status.textContent = '只读投影：当前游戏时间、当前场景、人物沉降、容量问题与原生召回配置。';
+        status.textContent = '勾选世界书条目后可人工合并或批量删除。';
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-worldbook-quick-actions';
+        const merge = document.createElement('button');
+        merge.type = 'button'; merge.textContent = '合并'; merge.title = '让AI判断近期局部或跨阶段整体抽象后合并所选条目';
+        merge.addEventListener('click', () => void this.mergeSelectedEntries());
+        const remove = document.createElement('button');
+        remove.type = 'button'; remove.textContent = '删除'; remove.title = '批量删除玩家明确选中的条目';
+        remove.addEventListener('click', () => void this.deleteSelectedEntries());
+        actions.append(merge, remove);
+        this.buttons.mergeEntries = merge;
+        this.buttons.deleteEntries = remove;
         const content = document.createElement('div');
         content.className = 'ma-lite-management-empty';
         content.textContent = '尚未读取';
-        section.append(head, status, content);
+        section.append(head, status, actions, content);
         this.managementNode = content;
         this.managementStatusNode = status;
         this.managementRefreshButton = refresh;
@@ -2510,7 +2520,7 @@ class ControlPanel {
         try {
             const workspace = await this.actions.loadWorkspace();
             if (managementSerial !== this.managementLoadSerial || recallSerial !== this.recallLoadSerial) return;
-            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '');
+            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? []);
             const recallModel = buildRecallViewModel(workspace?.entries ?? []);
             this.renderRecallMap(recallModel, workspace?.worldbookName || '');
             this.refreshWorldSettingState();
@@ -2536,7 +2546,7 @@ class ControlPanel {
         try {
             const workspace = await this.actions.loadWorkspace();
             if (serial !== this.managementLoadSerial || !this.managementNode) return;
-            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '');
+            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? []);
         }
         catch (error) {
             if (serial !== this.managementLoadSerial || !this.managementNode) return;
@@ -2548,7 +2558,7 @@ class ControlPanel {
             if (serial === this.managementLoadSerial && this.managementRefreshButton) this.managementRefreshButton.disabled = false;
         }
     }
-    renderManagement(model, worldbookName) {
+    renderManagement(model, worldbookName, entries = []) {
         if (!this.managementNode) return;
         this.managementNode.className = '';
         this.managementNode.replaceChildren();
@@ -2590,6 +2600,25 @@ class ControlPanel {
                 this.managementNode.append(node);
             }
         }
+        const listTitle = document.createElement('strong');
+        listTitle.textContent = '条目管理';
+        this.managementNode.append(listTitle);
+        const list = document.createElement('div');
+        list.className = 'ma-lite-management-entry-list';
+        this.managementEntries = Array.isArray(entries) ? entries : [];
+        for (const entry of this.managementEntries) {
+            const row = document.createElement('label');
+            row.className = 'ma-lite-management-entry';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.dataset.entryUid = String(entry.uid ?? '');
+            const text = document.createElement('span');
+            text.textContent = entry.title || `${entry.type || '条目'}｜${entry.name || ''}`;
+            row.append(checkbox, text);
+            list.append(row);
+        }
+        if (!this.managementEntries.length) list.textContent = '没有可管理条目';
+        this.managementNode.append(list);
         for (const issue of model.issues || []) {
             const node = document.createElement('div');
             node.className = 'ma-lite-management-issue';
@@ -2598,6 +2627,42 @@ class ControlPanel {
             if (issue.entries?.length) node.title = issue.entries.join('\n');
             this.managementNode.append(node);
         }
+    }
+
+    selectedManagementUids() {
+        if (!this.managementNode) return [];
+        return [...this.managementNode.querySelectorAll('input[data-entry-uid]:checked')]
+            .map((node) => String(node.dataset.entryUid || '')).filter(Boolean);
+    }
+    async mergeSelectedEntries() {
+        const uids = this.selectedManagementUids();
+        if (uids.length < 2) { this.setStatus('至少选择两个条目才能合并', true); return; }
+        if (this.pendingActions.has('mergeEntries')) return;
+        this.pendingActions.add('mergeEntries'); this.syncDisabledState();
+        if (this.managementStatusNode) this.managementStatusNode.textContent = `正在合并${uids.length}个条目…`;
+        try {
+            const result = await this.actions.mergeEntries?.(uids);
+            const detail = `合并完成：写入${Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0)}，沉降删除${Number(result?.warehouse?.deletedCount || 0)}`;
+            this.setStatus(detail); if (this.managementStatusNode) this.managementStatusNode.textContent = detail;
+            await this.refreshWorldbookPage(true);
+        } catch (error) {
+            const text = `合并失败：${(0, util_1.errorText)(error)}`; this.setStatus(text, true); if (this.managementStatusNode) this.managementStatusNode.textContent = text;
+        } finally { this.pendingActions.delete('mergeEntries'); this.syncDisabledState(); }
+    }
+    async deleteSelectedEntries() {
+        const uids = this.selectedManagementUids();
+        if (!uids.length) { this.setStatus('至少选择一个条目才能删除', true); return; }
+        if (typeof globalThis.confirm === 'function' && !globalThis.confirm(`确定删除选中的${uids.length}个世界书条目吗？`)) return;
+        if (this.pendingActions.has('deleteEntries')) return;
+        this.pendingActions.add('deleteEntries'); this.syncDisabledState();
+        try {
+            const result = await this.actions.deleteEntries?.(uids);
+            const detail = `已删除${Number(result?.deletedCount || result?.warehouse?.deletedCount || 0)}个条目`;
+            this.setStatus(detail); if (this.managementStatusNode) this.managementStatusNode.textContent = detail;
+            await this.refreshWorldbookPage(true);
+        } catch (error) {
+            const text = `删除失败：${(0, util_1.errorText)(error)}`; this.setStatus(text, true); if (this.managementStatusNode) this.managementStatusNode.textContent = text;
+        } finally { this.pendingActions.delete('deleteEntries'); this.syncDisabledState(); }
     }
 
     buildRecallSection() {
@@ -3045,6 +3110,8 @@ class ControlPanel {
         if (this.buttons.extract) this.buttons.extract.disabled = busy || !master || settings.extractionEnabled === false;
         if (this.buttons.smallSummary) this.buttons.smallSummary.disabled = busy || !master;
         if (this.buttons.largeSummary) this.buttons.largeSummary.disabled = busy || !master;
+        if (this.buttons.mergeEntries) this.buttons.mergeEntries.disabled = busy || !master;
+        if (this.buttons.deleteEntries) this.buttons.deleteEntries.disabled = busy || !master;
         if (this.buttons.organizeWorldbook) this.buttons.organizeWorldbook.disabled = busy || !master;
         if (this.buttons.testApiProbe) this.buttons.testApiProbe.disabled = busy;
         if (this.buttons.auditPromptSave) this.buttons.auditPromptSave.disabled = busy;
@@ -7125,6 +7192,9 @@ exports.__testResolvedHistoricalSourceUids = resolvedHistoricalSourceUids;
 exports.__testMergePendingUids = mergePendingUids;
 exports.__testSceneSummaryGroupKey = sceneSummaryGroupKey;
 exports.__testCurrentSceneBoundaryChanged = currentSceneBoundaryChanged;
+exports.__testSedimentationOperationsFromSummary = sedimentationOperationsFromSummary;
+exports.__testDistributionBlocksFromSummary = distributionBlocksFromSummary;
+exports.__testParseManualMergeWithRecovery = parseManualMergeWithRecovery;
 const matcher_1 = require("./matcher");
 const operations_1 = require("./operations");
 const parser_1 = require("./parser");
@@ -7193,156 +7263,97 @@ class MemoryRunner {
         }
         if (kind === 'smallSummary') {
             const result = await this.summarize('small', settings, snapshot);
-            const committed = [result];
             const cursor = this.host.cursor();
-            // 只有“已经结算”的小总结才属于一个完成层级，才能推动大总结。
-            // 部分写入但未完成结算时保留 pending，并进入冷却，不得每回合重试或累计大总结次数。
-            const activeChangedUids = result.settled === true && result.changed === true ? resultActiveChangedUids(result) : [];
-            const smallCountSinceLarge = cursor.smallCountSinceLarge + (result.settled === true ? 1 : 0);
-            const pendingSmallSummaryUids = subtractPendingUids(cursor.pendingSmallSummaryUids, resultResolvedSourceUids(result));
-            const pendingLargeSummaryUids = activeChangedUids.length > 0
-                ? mergePendingUids(cursor.pendingLargeSummaryUids, activeChangedUids)
-                : [...(cursor.pendingLargeSummaryUids ?? [])];
-            try {
-                const nextCursor = {
-                    ...cursor,
-                    turnsSinceSmall: result.settled ? 0 : cursor.turnsSinceSmall,
-                    criticalChangesSinceSmall: 0,
-                    smallCountSinceLarge,
-                    sceneBoundaryPending: result.settled ? false : cursor.sceneBoundaryPending === true,
-                    turnsSinceAnySummary: 0,
-                    smallSummaryRetryCooldown: result.settled ? 0 : summaryRetryInterval,
-                    pendingSmallSummaryUids,
-                    pendingLargeSummaryUids,
-                };
-                await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
-                await this.finalizeReceiptStates(committed, nextCursor);
-            }
-            catch (error) {
-                await this.rollbackCommittedResults(settings, snapshot, committed, result.previousGameTime, cursor, error, '小总结回合');
-            }
-            this.setStatus(snapshot.chatKey, 'complete', result.changed ? (result.settled ? '小总结完成' : `小总结部分写入但未完成结算；${summaryRetryInterval}个正文回合后再尝试`) : (result.settled ? '小总结已结算，无需写入' : '小总结未完成'));
-            return taskResultEntries(result);
-        }
-        const result = await this.summarize('large', settings, snapshot);
-        const cursor = this.host.cursor();
-        try {
+            const activeChangedUids = result.changed === true ? resultActiveChangedUids(result) : [];
             const nextCursor = {
                 ...cursor,
-                smallCountSinceLarge: result.settled ? 0 : cursor.smallCountSinceLarge,
+                turnsSinceSmall: 0,
+                criticalChangesSinceSmall: 0,
+                smallCountSinceLarge: cursor.smallCountSinceLarge + 1,
+                sceneBoundaryPending: false,
                 turnsSinceAnySummary: 0,
-                largeSummaryRetryCooldown: result.settled ? 0 : summaryRetryInterval,
-                pendingLargeSummaryUids: subtractPendingUids(cursor.pendingLargeSummaryUids, resultResolvedSourceUids(result)),
+                smallSummaryRetryCooldown: 0,
+                pendingSmallSummaryUids: subtractPendingUids(cursor.pendingSmallSummaryUids, result.processedPendingUids ?? []),
+                pendingLargeSummaryUids: activeChangedUids.length ? mergePendingUids(cursor.pendingLargeSummaryUids, activeChangedUids) : [...(cursor.pendingLargeSummaryUids ?? [])],
             };
+            try {
+                await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
+                await this.finalizeReceiptStates([result], nextCursor);
+            } catch (error) {
+                await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '小总结回合');
+            }
+            this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : '小总结完成，无新增写入');
+            return taskResultEntries(result);
+        }
+
+        const result = await this.summarize('large', settings, snapshot);
+        const cursor = this.host.cursor();
+        const nextCursor = {
+            ...cursor,
+            smallCountSinceLarge: 0,
+            turnsSinceAnySummary: 0,
+            largeSummaryRetryCooldown: 0,
+            pendingLargeSummaryUids: subtractPendingUids(cursor.pendingLargeSummaryUids, result.processedPendingUids ?? []),
+        };
+        try {
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
             await this.finalizeReceiptStates([result], nextCursor);
-        }
-        catch (error) {
+        } catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '大总结回合');
         }
-        this.setStatus(snapshot.chatKey, 'complete', result.changed ? (result.settled ? '大总结完成' : `大总结部分写入但未完成结算；${summaryRetryInterval}个正文回合后再尝试`) : (result.settled ? '大总结已结算，无需写入' : '大总结未完成'));
+        this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结完成，无新增写入');
         return taskResultEntries(result);
     }
+
     async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0, rootResult = null) {
         const committed = rootResult ? [rootResult] : [];
         const previousGameTime = rootResult?.previousGameTime ?? (typeof this.host.getCurrentGameTime === 'function' ? this.host.getCurrentGameTime() : null);
         const changedUidsThisTurn = resultChangedUids(rootResult);
         let pendingSmallSummaryUids = mergePendingUids(cursor.pendingSmallSummaryUids, changedUidsThisTurn);
         let pendingLargeSummaryUids = [...(cursor.pendingLargeSummaryUids ?? [])];
-
-        // ui.80: 自动小总结只由“成功处理的唯一正文回合数”与“当前大场景族切换”调度。
-        // 人物/关系/物品/普通事件变化数量、写入操作数量和 criticalChanges 均不参与触发。
         let turnsSinceSmall = Math.max(0, Number(cursor.turnsSinceSmall || 0)) + 1;
-        let sceneBoundaryPending = cursor.sceneBoundaryPending === true || rootResult?.sceneBoundaryChanged === true;
         let smallCountSinceLarge = Math.max(0, Number(cursor.smallCountSinceLarge || 0));
         let turnsSinceAnySummary = Math.max(0, Number(cursor.turnsSinceAnySummary || 0)) + 1;
-        let smallSummaryRetryCooldown = Math.max(0, Number(cursor.smallSummaryRetryCooldown || 0) - 1);
-        let largeSummaryRetryCooldown = Math.max(0, Number(cursor.largeSummaryRetryCooldown || 0) - 1);
         const smallTurnThreshold = Math.max(2, Number(settings.smallSummaryTurns || 10));
-        const retryInterval = Math.max(2, Math.min(smallTurnThreshold, Math.max(2, Number(settings.smallSummaryMinTurns || 5))));
         const largeThreshold = Math.max(2, Number(settings.largeSummaryCount || 5));
-
-        // ui.81: 总结流水线严格固定为“提取 -> 小总结 -> 大总结”。
-        // 大总结绝不能抢在本轮应执行的小总结之前；若本轮小总结成功后刚好达到大总结阈值，
-        // 允许在同一正文处理回合的后半段继续执行大总结。
         let smallRanThisTurn = false;
         let largeRanThisTurn = false;
         let summaryWarning = '';
         try {
-            const turnReady = turnsSinceSmall >= smallTurnThreshold;
-            const sceneReady = sceneBoundaryPending === true;
-            const smallEligible = settings.autoSmallSummary !== false
-                && (turnReady || sceneReady)
-                && smallSummaryRetryCooldown <= 0;
-
-            if (smallEligible) {
+            if (settings.autoSmallSummary !== false && turnsSinceSmall >= smallTurnThreshold) {
                 smallRanThisTurn = true;
                 turnsSinceAnySummary = 0;
-                const reason = sceneReady
-                    ? (turnReady ? `正文累计${smallTurnThreshold}回合且当前大场景已切换` : '当前大场景已切换')
-                    : `正文累计${smallTurnThreshold}回合`;
-                this.progress('running', `${reason}，开始小总结与分发`, { titles: ['总结｜当前事件'], sceneBoundary: sceneReady, turnsSinceSmall });
+                this.progress('running', `正文累计${smallTurnThreshold}回合，开始小总结：细事实上升为主体局部`, { titles: ['总结｜当前事件'], turnsSinceSmall });
                 const beforeReceiptIds = this.currentReceiptIds();
                 try {
                     const small = await this.summarize('small', settings, snapshot, { pendingUids: pendingSmallSummaryUids });
                     committed.push(small);
-                    pendingSmallSummaryUids = subtractPendingUids(pendingSmallSummaryUids, resultResolvedSourceUids(small));
-                    if (small.settled) {
-                        turnsSinceSmall = 0;
-                        sceneBoundaryPending = false;
-                        smallSummaryRetryCooldown = 0;
-                        // 每个成功结算的小总结都计入大总结节奏，不要求它必须产生新的长期写入。
-                        smallCountSinceLarge += 1;
-                        if (small.changed) {
-                            const activeChangedUids = resultActiveChangedUids(small);
-                            if (activeChangedUids.length > 0)
-                                pendingLargeSummaryUids = mergePendingUids(pendingLargeSummaryUids, activeChangedUids);
-                        }
+                    pendingSmallSummaryUids = subtractPendingUids(pendingSmallSummaryUids, small.processedPendingUids ?? []);
+                    turnsSinceSmall = 0;
+                    smallCountSinceLarge += 1;
+                    if (small.changed) {
+                        const activeChangedUids = resultActiveChangedUids(small);
+                        if (activeChangedUids.length) pendingLargeSummaryUids = mergePendingUids(pendingLargeSummaryUids, activeChangedUids);
                     }
-                    else {
-                        smallSummaryRetryCooldown = retryInterval;
-                        summaryWarning = `小总结未完成结算，已保留当前回合计数与场景边界；${retryInterval}个正文回合后重试`;
-                        this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], pendingSmallSummaryUids });
-                    }
-                }
-                catch (error) {
+                } catch (error) {
                     await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
-                    smallSummaryRetryCooldown = retryInterval;
-                    summaryWarning = `小总结失败，正文提取已保留；${retryInterval}个正文回合后重试：${(0, util_1.errorText)(error)}`;
+                    summaryWarning = `小总结失败，正文提取已保留：${(0, util_1.errorText)(error)}`;
                     this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], error: (0, util_1.errorText)(error) });
                 }
             }
-
-            // 小总结阶段结束后才检查大总结。小总结失败/未结算时，大总结不得跨越该层。
-            // 如果本轮成功小总结使 smallCountSinceLarge 达到阈值，则按既定流水线继续 large。
-            const smallLayerBlocked = smallSummaryRetryCooldown > 0;
-            const largeReadyAfterSmall = smallCountSinceLarge >= largeThreshold;
-            if (settings.autoLargeSummary !== false
-                && !smallLayerBlocked
-                && largeReadyAfterSmall
-                && largeSummaryRetryCooldown <= 0) {
+            if (settings.autoLargeSummary !== false && smallCountSinceLarge >= largeThreshold) {
                 largeRanThisTurn = true;
                 turnsSinceAnySummary = 0;
-                this.progress('running', `此前已完成${largeThreshold}个小总结，开始独立大总结、沉降与分发`, { titles: ['总结｜世界历史'], smallCountSinceLarge });
+                this.progress('running', `已完成${largeThreshold}个小总结，开始大总结：局部上升为主体整体`, { titles: ['总结｜世界历史'], smallCountSinceLarge });
                 const beforeReceiptIds = this.currentReceiptIds();
                 try {
                     const large = await this.summarize('large', settings, snapshot, { pendingUids: pendingLargeSummaryUids });
                     committed.push(large);
-                    pendingLargeSummaryUids = subtractPendingUids(pendingLargeSummaryUids, resultResolvedSourceUids(large));
-                    if (large.settled) {
-                        smallCountSinceLarge = 0;
-                        largeSummaryRetryCooldown = 0;
-                    }
-                    else {
-                        largeSummaryRetryCooldown = retryInterval;
-                        summaryWarning = `大总结未完成结算，已保留已完成小总结计数；${retryInterval}个正文回合后重试`;
-                        this.progress('warning', summaryWarning, { titles: ['总结｜世界历史'], pendingLargeSummaryUids });
-                    }
-                }
-                catch (error) {
+                    pendingLargeSummaryUids = subtractPendingUids(pendingLargeSummaryUids, large.processedPendingUids ?? []);
+                    smallCountSinceLarge = 0;
+                } catch (error) {
                     await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '大总结');
-                    largeSummaryRetryCooldown = retryInterval;
-                    summaryWarning = `大总结失败，正文提取已保留；${retryInterval}个正文回合后重试：${(0, util_1.errorText)(error)}`;
+                    summaryWarning = `大总结失败，已完成的小总结结果保留：${(0, util_1.errorText)(error)}`;
                     this.progress('warning', summaryWarning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error) });
                 }
             }
@@ -7353,21 +7364,21 @@ class MemoryRunner {
                 turnsSinceSmall,
                 criticalChangesSinceSmall: 0,
                 smallCountSinceLarge,
-                sceneBoundaryPending,
+                sceneBoundaryPending: false,
                 turnsSinceAnySummary,
-                smallSummaryRetryCooldown,
-                largeSummaryRetryCooldown,
+                smallSummaryRetryCooldown: 0,
+                largeSummaryRetryCooldown: 0,
                 pendingSmallSummaryUids,
                 pendingLargeSummaryUids,
             };
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
             await this.finalizeReceiptStates(committed, nextCursor);
             return { warning: summaryWarning, cursor: nextCursor, ranSmall: smallRanThisTurn, ranLarge: largeRanThisTurn };
-        }
-        catch (error) {
+        } catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, committed, previousGameTime, cursor, error, '正文处理回合');
         }
     }
+
     currentReceiptIds() {
         if (typeof this.host.getCommitReceipts !== 'function') return new Set();
         return new Set((this.host.getCommitReceipts() ?? []).map((receipt) => String(receipt?.id ?? '')).filter(Boolean));
@@ -7596,195 +7607,90 @@ class MemoryRunner {
         const existingUids = new Set(entries.map((entry) => String(entry.uid)));
         const stalePendingUids = requestedPendingUids.filter((uid) => !existingUids.has(uid));
         const validPendingUids = requestedPendingUids.filter((uid) => existingUids.has(uid));
-        if (requestedPendingUids.length && !validPendingUids.length) {
-            const detail = `${label}已停止：待总结工作集中的${stalePendingUids.length}个 UID 已不存在；未回退处理其他近期条目`;
-            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', '', emptyPlan());
-            this.progress('success', detail, { titles: [], skipped: stalePendingUids });
-            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: stalePendingUids, processedPendingUids: [] };
-        }
         const selected = summaryEntries(kind, entries, snapshot, validPendingUids);
         const scope = summaryScope(kind, selected, validPendingUids);
         const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
-        const recentConversation = kind === 'small'
-            ? (typeof this.host.recentConversation === 'function'
-                ? this.host.recentConversation(snapshot, settings.smallSummaryTurns)
-                : `${snapshot.playerText || ''}\n${snapshot.assistantText || ''}`.trim())
-            : '';
-        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { pendingUids: validPendingUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null });
+        if (!selected.length) {
+            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedPendingUids, processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
+        }
+        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { pendingUids: validPendingUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null });
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
+        const sourceContext = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
         const raw = await (0, model_request_1.callModel)({
             host: this.host,
             stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, recentConversation, { compact: true, pendingUids: validPendingUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null }),
+            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { compact: true, pendingUids: validPendingUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null }),
             settings,
             snapshot,
             profileId: profile,
-            sourceText: recentConversation,
+            sourceText: sourceContext,
             onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'summary' }),
         });
         this.validate(snapshot);
-        let effectiveRaw = raw;
-        let protocol = inspectSummaryProtocol(effectiveRaw, kind, selected, validPendingUids);
-        const repairSummaryCandidate = async (candidateRaw, candidateProtocol, candidateSelected, candidatePendingUids, phaseDetail) => {
-            this.progress('running', phaseDetail, { titles: [expectedTitle], phase: 'format-repair', error: candidateProtocol.error });
-            const pendingSources = candidateSelected.filter((entry) => candidatePendingUids.includes(String(entry.uid))).map((entry) => entry.title);
-            const repairPrompt = (0, prompts_1.summaryRepairPrompts)(candidateRaw, kind, pendingSources, candidateProtocol.error);
-            const repairedRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'summaryRepair',
-                prompt: repairPrompt,
-                fallbackPrompt: () => (0, prompts_1.summaryRepairPrompts)(candidateRaw, kind, pendingSources, candidateProtocol.error, { compact: true }),
-                settings,
-                snapshot,
-                profileId: profile,
-                sourceText: candidateRaw,
-                responseTokens: kind === 'small' ? 4096 : 6144,
-                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}格式修复模型`), { titles: [expectedTitle], phase: 'format-repair' }),
-            });
-            this.validate(snapshot);
-            const repairedProtocol = inspectSummaryProtocol(repairedRaw, kind, candidateSelected, candidatePendingUids);
-            const preservation = summaryRepairPreservesSemantics(candidateRaw, repairedProtocol);
-            if (!preservation.ok) throw new Error(`${label}固定格式修复被拒绝：修复结果改变或补写了原返回语义（${preservation.issues.slice(0, 3).join('；')}）`);
-            return { raw: repairedRaw, protocol: repairedProtocol };
-        };
-        const unresolvedOnly = protocol.unresolvedPendingUids?.length > 0
-            && protocol.recovered?.block
-            && !(protocol.historyPlan?.invalidLines?.length);
-        if (!protocol.ok && !protocol.explicitNone && !unresolvedOnly) {
-            const repaired = await repairSummaryCandidate(effectiveRaw, protocol, selected, validPendingUids, `${label}固定格式校验失败，正在执行一次只改格式的专用恢复`);
-            effectiveRaw = repaired.raw;
-            protocol = repaired.protocol;
-            if (!protocol.ok && !protocol.unresolvedPendingUids?.length) throw new Error(`${label}固定格式修复失败：${protocol.error}`);
-            this.progress('running', `${label}已通过专用请求恢复固定协议格式`, { titles: [expectedTitle], phase: 'format-repair' });
+        const recovered = parseSummaryWithRecovery(raw, kind);
+        if (recovered.explicitNone) {
+            const detail = `${label}模型判断本批次无需新增上层事实`;
+            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', raw, emptyPlan());
+            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedPendingUids, processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
         }
-        // ui.88: 遗漏来源优先用小批次定向补齐；补齐后仍遗漏时，不再让整个小总结抛错回滚。
-        // 已有明确结论的来源照常提交，未结算来源继续保留在 pending 工作集，后续重试。
-        let partialUnresolvedUids = [];
-        if (!protocol.ok && protocol.unresolvedPendingUids?.length) {
-            const missingPendingUids = [...protocol.unresolvedPendingUids];
-            const completionBatchSize = kind === 'small' ? 4 : 8;
-            const completionRaws = [];
-            this.progress('running', `${label}主返回遗漏${missingPendingUids.length}个来源，正在分批定向补齐`, { titles: [expectedTitle], phase: 'source-completion', unresolvedPendingUids: missingPendingUids });
-            for (let offset = 0; offset < missingPendingUids.length; offset += completionBatchSize) {
-                const batchUids = missingPendingUids.slice(offset, offset + completionBatchSize);
-                const missingSelected = summaryEntries(kind, entries, snapshot, batchUids);
-                const missingSelectedUids = new Set(missingSelected.map((entry) => String(entry.uid)));
-                const internallyMissing = batchUids.filter((uid) => !missingSelectedUids.has(String(uid)));
-                if (internallyMissing.length) throw new Error(`${label}内部工作集不完整：${internallyMissing.length}个遗漏来源未进入定向补齐上下文`);
-                const missingScope = summaryScope(kind, missingSelected, batchUids);
-                const missingPrompt = (0, prompts_1.summaryPrompts)(kind, settings, missingSelected, missingScope, recentConversation, { pendingUids: batchUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null });
-                let completionRaw = await (0, model_request_1.callModel)({
-                    host: this.host,
-                    stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
-                    prompt: missingPrompt,
-                    fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, missingSelected, missingScope, recentConversation, { compact: true, pendingUids: batchUids, allEntries: entries, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null }),
-                    settings,
-                    snapshot,
-                    profileId: profile,
-                    sourceText: recentConversation,
-                    onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}遗漏来源补齐模型`), { titles: [expectedTitle], phase: 'source-completion' }),
-                });
-                this.validate(snapshot);
-                let completionProtocol = inspectSummaryProtocol(completionRaw, kind, missingSelected, batchUids);
-                const completionUnresolvedOnly = completionProtocol.unresolvedPendingUids?.length > 0
-                    && completionProtocol.recovered?.block
-                    && !(completionProtocol.historyPlan?.invalidLines?.length);
-                if (!completionProtocol.ok && !completionProtocol.explicitNone && !completionUnresolvedOnly) {
-                    const repairedCompletion = await repairSummaryCandidate(completionRaw, completionProtocol, missingSelected, batchUids, `${label}遗漏来源补齐结果格式不合格，正在只改格式`);
-                    completionRaw = repairedCompletion.raw;
-                    completionProtocol = repairedCompletion.protocol;
-                }
-                if (!completionProtocol.ok) {
-                    if (completionProtocol.explicitNone) {
-                        this.progress('warning', `${label}定向补齐未给出任何来源结论；本批来源继续保留，不阻断本次其他来源结算`, { titles: [expectedTitle], phase: 'source-completion', unresolvedPendingUids: batchUids });
-                        continue;
-                    }
-                    const recoverableOmission = completionProtocol.unresolvedPendingUids?.length > 0
-                        && completionProtocol.recovered?.block
-                        && !(completionProtocol.historyPlan?.invalidLines?.length);
-                    if (!recoverableOmission) throw new Error(`${label}遗漏来源补齐格式失败：${completionProtocol.error}`);
-                    completionRaws.push(completionRaw.trim());
-                    this.progress('warning', `${label}定向补齐仍遗漏${completionProtocol.unresolvedPendingUids.length}个来源；已保留原来源，不阻断本次其他来源结算`, { titles: [expectedTitle], phase: 'source-completion', unresolvedPendingUids: completionProtocol.unresolvedPendingUids });
-                    continue;
-                }
-                completionRaws.push(completionRaw.trim());
-                this.progress('running', `${label}已补齐遗漏来源 ${Math.min(offset + batchUids.length, missingPendingUids.length)}/${missingPendingUids.length}`, { titles: [expectedTitle], phase: 'source-completion', resolvedPendingUids: batchUids });
-            }
-            effectiveRaw = [effectiveRaw.trim(), ...completionRaws].filter(Boolean).join('\n\n').trim();
-            protocol = inspectSummaryProtocol(effectiveRaw, kind, selected, validPendingUids);
-            if (!protocol.ok && protocol.unresolvedPendingUids?.length
-                && protocol.recovered?.block
-                && !(protocol.historyPlan?.invalidLines?.length)) {
-                partialUnresolvedUids = [...protocol.unresolvedPendingUids];
-                protocol = { ...protocol, ok: true, partial: true };
-                this.progress('warning', `${label}仍有${partialUnresolvedUids.length}个来源未得到明确结论；已保留来源并继续提交其余已结算结果`, { titles: [expectedTitle], phase: 'source-completion', unresolvedPendingUids: partialUnresolvedUids });
-            } else if (!protocol.ok && protocol.explicitNone) {
-                // 模型对全部来源返回“无”时也不再硬失败：不提交、不丢来源，留待后续冷却重试。
-                partialUnresolvedUids = [...validPendingUids];
-                const detail = `${label}未形成任何来源结论；已保留${partialUnresolvedUids.length}个来源，稍后重试`;
-                this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', effectiveRaw, emptyPlan());
-                this.progress('warning', detail, { titles: [expectedTitle], unresolvedPendingUids: partialUnresolvedUids });
-                return { entries, changed: false, settled: false, previousGameTime, stalePendingUids, resolvedSourceUids: stalePendingUids, processedPendingUids: [], unresolvedSourceUids: partialUnresolvedUids };
-            } else if (!protocol.ok) {
-                throw new Error(`${label}遗漏来源补齐后协议仍不完整：${protocol.error}`);
-            } else {
-                this.progress('running', `${label}已补齐全部遗漏来源`, { titles: [expectedTitle], phase: 'source-completion', resolvedPendingUids: missingPendingUids });
-            }
-        }
-        if (!protocol.ok) {
-            if (protocol.explicitNone && !validPendingUids.length) return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: stalePendingUids, processedPendingUids: [] };
-            throw new Error(protocol.error);
-        }
-        const { recovered, summaryBlock, historyPlan } = protocol;
-        if (recovered.repaired) this.progress('running', `${label}已本地归一化${recovered.repaired}处表面格式`, { titles: [expectedTitle], repaired: recovered.repaired, skipped: recovered.skipped });
-        if (historyPlan.guardRetainedSourceUids?.length) {
-            const titles = (historyPlan.guardRetentionReasons ?? []).map((item) => item.sourceTitle).filter(Boolean);
-            this.progress('warning', `${label}有${historyPlan.guardRetainedSourceUids.length}个来源已给出“吸收”，但删除被安全闸门拦截；将保留来源并在分发事实回读成功后完成本期结算`, { titles, guardRetainedSourceUids: historyPlan.guardRetainedSourceUids, guardRetentionReasons: historyPlan.guardRetentionReasons });
-        }
-        if (!historyPlan.distributionBlocks.length && !historyPlan.absorptionOperations.length) {
-            const resolvedSourceUids = [...new Set([...historyPlan.directCompletionUids, ...stalePendingUids])];
-            const settled = partialUnresolvedUids.length === 0;
-            const detail = settled
-                ? `${label}已完成确定性判断：${historyPlan.directCompletionUids.length}个来源保留完成，无需修改世界书`
-                : `${label}已完成${historyPlan.directCompletionUids.length}个来源判断，另有${partialUnresolvedUids.length}个来源继续保留待处理`;
-            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', effectiveRaw, emptyPlan());
-            this.progress(settled ? 'success' : 'warning', detail, { titles: [], resolvedSourceUids, unresolvedSourceUids: partialUnresolvedUids });
-            return { entries, changed: false, settled, previousGameTime, stalePendingUids, resolvedSourceUids, processedPendingUids: validPendingUids, unresolvedSourceUids: partialUnresolvedUids, warehouse: { created: [], updated: [], deleted: [] } };
-        }
-        const sourceContext = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n');
-        // ui.61: “总结”只作为模型协议包；每个 pending 来源必须得到吸收或保留完成的确定结论。
-        const plan = (0, operations_1.buildOperationPlan)(historyPlan.distributionBlocks, entries, settings, sourceContext, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
-        plan.operations.push(...historyPlan.absorptionOperations);
-        const summaryText = historyPlan.records.filter((record) => record.directCompletion !== true).map((record) => `${record.sourceTitle}→${record.targetTitle}【${record.section}】${record.fact}`).join('\n');
+        if (!recovered.block) throw new Error(`${label}无法识别固定分发格式`);
+        const summaryBlock = ensureSummarySnapshotSections(recovered.block, kind);
+        const distributionBlocks = distributionBlocksFromSummary(summaryBlock);
+        const sedimentationOperations = sedimentationOperationsFromSummary(summaryBlock, entries, validPendingUids, kind);
+        if (!distributionBlocks.length && !sedimentationOperations.length) throw new Error(`${label}没有形成可执行的分发内容`);
+        const plan = (0, operations_1.buildOperationPlan)(distributionBlocks, entries, settings, sourceContext, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
+        plan.operations.push(...sedimentationOperations);
+        const summaryText = distributionBlocks.map((block) => `${block.title}\n${block.sections.map((section) => `【${section.name}】${(section.lines ?? []).join('；')}`).join('\n')}`).join('\n\n');
         if (!plan.operations.some((operation) => operation.kind !== 'noop')) {
-            const completedUids = resolvedHistoricalSourceUids({ entries, warehouse: { created: [], updated: [], deleted: [] } }, historyPlan.completionProofs);
-            const resolvedSourceUids = [...new Set([...completedUids, ...historyPlan.directCompletionUids, ...stalePendingUids])];
-            const unresolvedAfterProof = validPendingUids.filter((uid) => !resolvedSourceUids.includes(String(uid)));
-            const proofFailures = unresolvedAfterProof.filter((uid) => !partialUnresolvedUids.includes(String(uid)));
-            if (proofFailures.length) throw new Error(`${label}结算证明不足：${proofFailures.length}个已声明结算来源的目标事实未通过权威回读`);
-            const settled = unresolvedAfterProof.length === 0;
-            const detail = settled
-                ? `${label}已幂等完成确定性结算，无需重复写入世界书`
-                : `${label}已提交可验证结算，另有${unresolvedAfterProof.length}个来源保留待处理`;
-            this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', effectiveRaw, plan);
-            this.progress(settled ? 'success' : 'warning', detail, { titles: historyPlan.distributionBlocks.map((block) => block.title), resolvedSourceUids, unresolvedSourceUids: unresolvedAfterProof });
-            return { entries, changed: false, settled, previousGameTime, stalePendingUids, resolvedSourceUids, processedPendingUids: validPendingUids, unresolvedSourceUids: unresolvedAfterProof, warehouse: { created: [], updated: [], deleted: [] } };
+            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedPendingUids, processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
         }
-        const applied = await this.apply(settings, plan, snapshot, sourceContext, label, effectiveRaw, { rebalanceKind: kind, summaryText });
-        const remainingUids = new Set((applied.entries ?? []).map((entry) => String(entry.uid)));
-        const absorbedUids = historyPlan.absorptionOperations.map((operation) => String(operation.targetUid ?? '')).filter((uid) => uid && !remainingUids.has(uid));
-        const completedUids = resolvedHistoricalSourceUids(applied, historyPlan.completionProofs);
-        applied.resolvedSourceUids = [...new Set([...absorbedUids, ...completedUids, ...historyPlan.directCompletionUids, ...stalePendingUids])];
-        applied.updatedWorkingUids = completedUids;
-        applied.settled = validPendingUids.every((uid) => applied.resolvedSourceUids.includes(String(uid)));
-        if (!applied.settled) this.progress('warning', `${label}有来源未通过最终退出或完成证明，已继续保留在待处理工作集`, { unresolvedSourceUids: validPendingUids.filter((uid) => !applied.resolvedSourceUids.includes(String(uid))) });
+        const applied = await this.apply(settings, plan, snapshot, sourceContext, label, raw, { rebalanceKind: kind, summaryText });
+        applied.settled = true;
+        applied.previousGameTime = previousGameTime;
         applied.stalePendingUids = stalePendingUids;
         applied.processedPendingUids = validPendingUids;
-        this.progress('running', `${label}已完成逐来源历史分发，正在重算召回状态`, { titles: historyPlan.distributionBlocks.map((block) => block.title), resolvedSourceUids: applied.resolvedSourceUids });
+        applied.resolvedSourceUids = requestedPendingUids;
+        this.progress('running', `${label}已按格式完成分发与沉降`, { titles: distributionBlocks.map((block) => block.title), deleted: applied.warehouse?.deleted ?? [] });
         return applied;
-
     }
+
+    async mergeSelected(settings, snapshot, selectedUids) {
+        this.setStatus(snapshot.chatKey, 'small-summary', '人工合并');
+        this.validate(snapshot);
+        const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
+        const wanted = new Set((selectedUids ?? []).map((uid) => String(uid)));
+        const selected = entries.filter((entry) => wanted.has(String(entry.uid)) && entry.activation?.disabled !== true);
+        if (selected.length < 2) throw new Error('选中的可用条目不足两个');
+        const selectedText = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
+        const related = (0, matcher_1.relevantEntries)(entries.filter((entry) => !wanted.has(String(entry.uid)) && entry.activation?.disabled !== true), selectedText, 12);
+        const prompt = (0, prompts_1.manualMergePrompts)(settings, selected, related);
+        const profile = settings.smallSummaryProfileId || settings.largeSummaryProfileId;
+        const raw = await (0, model_request_1.callModel)({
+            host: this.host,
+            stage: 'smallSummary',
+            prompt,
+            fallbackPrompt: () => (0, prompts_1.manualMergePrompts)(settings, selected, related, { compact: true }),
+            settings,
+            snapshot,
+            profileId: profile,
+            sourceText: selectedText,
+            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '人工合并模型'), { phase: 'summary' }),
+        });
+        this.validate(snapshot);
+        const recovered = parseManualMergeWithRecovery(raw);
+        if (!recovered.block) throw new Error('人工合并无法识别固定格式');
+        const distributionBlocks = distributionBlocksFromSummary(recovered.block);
+        const sedimentationOperations = sedimentationOperationsFromSummary(recovered.block, entries, selected.map((entry) => String(entry.uid)), 'manual');
+        if (!distributionBlocks.length) throw new Error('人工合并没有形成可写入的合并结果');
+        const plan = (0, operations_1.buildOperationPlan)(distributionBlocks, entries, settings, selectedText, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
+        plan.operations.push(...sedimentationOperations);
+        const summaryText = distributionBlocks.map((block) => block.title).join('、');
+        const applied = await this.apply(settings, plan, snapshot, selectedText, '人工合并', raw, { rebalanceKind: recovered.level === 'overall' ? 'large' : 'small', summaryText });
+        this.setStatus(snapshot.chatKey, 'complete', `人工合并完成：${distributionBlocks.length}个目标条目`);
+        return applied;
+    }
+
     async apply(settings, plan, snapshot, contextText, label, raw, options = {}) {
         this.setStatus(snapshot.chatKey, 'matching', `${label}生成确定性操作计划`, '', raw, plan);
         if (!plan.operations.some((operation) => operation.kind !== 'noop')) return {
@@ -7940,7 +7846,7 @@ function subtractPendingUids(source, resolved) {
     return [...new Set((source ?? []).map((uid) => String(uid ?? '').trim()).filter((uid) => uid && !removed.has(uid)))];
 }
 function mergePendingUids(left, right) {
-    // ui.61: pending 是尚未完成确定性结算的工作集，禁止因容量上限静默丢弃旧 UID。
+    // ui.61: pending 只记录本阶段发生过变化的条目 UID，禁止因容量上限静默丢弃旧 UID。
     return [...new Set([...(left ?? []), ...(right ?? [])].map((item) => String(item ?? '').trim()).filter(Boolean))];
 }
 
@@ -7972,6 +7878,55 @@ function ensureSummarySnapshotSections(block, kind) {
     return output;
 }
 
+function sedimentationOperationsFromSummary(summaryBlock, entries, allowedSourceUids = [], kind = 'small') {
+    const section = summaryBlock.sections?.find((item) => /^(?:沉降来源|融合来源|删除来源)$/u.test(String(item.name ?? '').trim()));
+    if (!section || section.empty) return [];
+    const allowed = new Set((allowedSourceUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
+    const distributedTargets = new Set(distributionBlocksFromSummary(summaryBlock).map((block) => (0, util_1.normalizeTitle)(block.title)));
+    const byTitle = new Map(entries.map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
+    const operations = [];
+    for (const raw of section.lines ?? []) {
+        const line = String(raw ?? '').replace(/^\s*(?:[-*•]+|\d+[.)、])\s*/u, '').trim();
+        const match = line.match(/^来源\s*[:：]\s*((?:人物|角色|NPC|场景|地点|地区|区域|物品|道具|装备|事件|事件链|世界|全局变化|基础设定|世界设定)\s*[｜|丨:：]\s*[^；;]+)\s*[；;]\s*目标\s*[:：]\s*((?:人物|角色|NPC|场景|地点|地区|区域|物品|道具|装备|事件|事件链|世界|全局变化|基础设定|世界设定)\s*[｜|丨:：]\s*[^；;]+)\s*$/u);
+        if (!match) continue;
+        const sourceTitle = canonicalHistoryTitle(match[1]);
+        const targetTitle = canonicalHistoryTitle(match[2]);
+        if (!sourceTitle || !targetTitle || (0, util_1.normalizeTitle)(sourceTitle) === (0, util_1.normalizeTitle)(targetTitle)) continue;
+        if (!distributedTargets.has((0, util_1.normalizeTitle)(targetTitle))) continue;
+        const source = byTitle.get((0, util_1.normalizeTitle)(sourceTitle));
+        if (!source || (allowed.size && !allowed.has(String(source.uid)))) continue;
+        if (source.locked === true || source.focus === true || source.activation?.disabled === true) continue;
+        const target = byTitle.get((0, util_1.normalizeTitle)(targetTitle));
+        operations.push({
+            id: `summary-sediment:${kind}:${source.uid}:${(0, util_1.hashText)(targetTitle)}`,
+            kind: 'delete-entry', operation: 'delete', title: source.title, targetUid: source.uid,
+            oldValue: source.title, newValue: '删除', mergedIntoTitle: targetTitle,
+            reason: `${kind === 'manual' ? '人工合并' : kind === 'small' ? '小总结' : '大总结'}已声明该旧条目内容融合到目标条目`,
+            requiresDistributionProof: true,
+            distributionTargets: [targetTitle],
+            distributionProofs: [],
+            requiresTargetExistenceOnly: true,
+        });
+    }
+    return operations;
+}
+function canonicalHistoryTitle(value) {
+    const parsed = parseHistoryTitle(String(value ?? '').trim(), false);
+    return parsed?.title || '';
+}
+function parseManualMergeWithRecovery(raw) {
+    const text = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '');
+    if (/^(?:无|EMPTY)$/u.test(text.trim())) return { block: null, level: '' };
+    let blocks = [];
+    try { blocks = (0, parser_1.parseInformationPoints)(text); } catch { blocks = []; }
+    let block = blocks.find((item) => /^(?:总结|合并)[｜|丨](?:手动合并|人工合并)$/u.test((0, util_1.normalizeTitle)(item.title)));
+    if (!block && blocks.length === 1) block = blocks[0];
+    if (!block) return { block: null, level: '' };
+    const levelSection = block.sections?.find((item) => String(item.name ?? '').trim() === '抽象层级');
+    const levelText = (levelSection?.lines ?? []).join('');
+    return { block, level: /整体/u.test(levelText) ? 'overall' : 'local' };
+}
+
 function summarySnapshotHasFacts(block, kind) {
     const history = block.sections?.find((section) => section.name === '历史分发');
     if (history?.lines?.some((line) => parseHistoricalDistributionLine(line))) return true;
@@ -7989,41 +7944,33 @@ function summarySnapshotHasFacts(block, kind) {
 function summaryEntries(kind, entries, snapshot, pendingUids = []) {
     const active = entries.filter((entry) => !entry.activation.disabled);
     const pending = new Set((pendingUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
+    const candidates = active.filter((entry) => !/^总结｜/u.test(String(entry.title ?? '')));
     if (kind === 'small') {
-        const candidates = active.filter((entry) => entry.title !== '总结｜世界历史');
-        const currentSummary = candidates.filter((entry) => entry.title === '总结｜当前事件');
-        let changed = candidates.filter((entry) => pending.has(String(entry.uid)) && entry.title !== '总结｜当前事件');
-        if (!changed.length && !pending.size) {
-            changed = candidates.filter((entry) => entry.title !== '总结｜当前事件')
-                .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0)).slice(0, 16);
-        }
+        let changed = candidates.filter((entry) => pending.has(String(entry.uid)));
+        if (!changed.length && !pending.size) changed = candidates.sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0)).slice(0, 16);
         const changedText = changed.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
         const context = [changedText, snapshot.playerText, snapshot.assistantText].filter(Boolean).join('\n\n');
-        const related = (0, matcher_1.relevantEntries)(candidates.filter((entry) => !pending.has(String(entry.uid)) && entry.title !== '总结｜当前事件'), context, 28);
-        const required = [...new Map([...currentSummary, ...changed].map((entry) => [entry.uid, entry])).values()];
-        const relatedBudget = Math.max(0, 48 - required.length);
-        // ui.63: pending 来源属于强制工作集，不能被关联条目数量上限挤出。
+        const related = (0, matcher_1.relevantEntries)(candidates.filter((entry) => !pending.has(String(entry.uid))), context, 24);
+        const required = [...new Map(changed.map((entry) => [entry.uid, entry])).values()];
+        const relatedBudget = Math.max(0, 40 - required.length);
         return [...required, ...related.filter((entry) => !required.some((item) => item.uid === entry.uid)).slice(0, relatedBudget)];
     }
-    const currentWorldHistory = active.filter((entry) => entry.title === '总结｜世界历史');
-    const currentEvent = active.filter((entry) => entry.title === '总结｜当前事件');
-    const requiredUids = new Set([...currentWorldHistory, ...currentEvent].map((entry) => entry.uid));
-    let changed = active.filter((entry) => pending.has(String(entry.uid)) && !requiredUids.has(entry.uid));
+    let changed = candidates.filter((entry) => pending.has(String(entry.uid)));
     if (!changed.length && !pending.size) {
-        changed = active.filter(hasStableSummaryMaterial).filter((entry) => !requiredUids.has(entry.uid))
-            .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0)).slice(0, 40);
+        changed = candidates.filter(hasStableSummaryMaterial)
+            .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0)).slice(0, 32);
     }
     const changedText = changed.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
-    const relatedStable = (0, matcher_1.relevantEntries)(active.filter(hasStableSummaryMaterial).filter((entry) => !requiredUids.has(entry.uid) && !pending.has(String(entry.uid))), changedText || '长期稳定结果', 28);
-    const required = [...new Map([...currentWorldHistory, ...currentEvent, ...changed].map((entry) => [entry.uid, entry])).values()];
-    const relatedBudget = Math.max(0, 72 - required.length);
-    // ui.63: 大总结必须保留全部 pending 来源；只裁剪关联上下文。
+    const relatedStable = (0, matcher_1.relevantEntries)(candidates.filter(hasStableSummaryMaterial).filter((entry) => !pending.has(String(entry.uid))), changedText || '整体稳定结果', 24);
+    const required = [...new Map(changed.map((entry) => [entry.uid, entry])).values()];
+    const relatedBudget = Math.max(0, 56 - required.length);
     return [...required, ...relatedStable.filter((entry) => !required.some((item) => item.uid === entry.uid)).slice(0, relatedBudget)];
 }
+
 function hasStableSummaryMaterial(entry) {
     const values = entry?.sections?.values ?? {};
     if (entry.type === '事件') return (values['结果'] ?? []).length > 0 || (values['已发生进展'] ?? []).length > 0;
-    if (entry.type === '人物' || entry.type === '角色') return ['身份', '稳定', '行为倾向', '表达方式', '关系立场', '关系', '固定事实'].some((section) => (values[section] ?? []).length > 0);
+    if (entry.type === '人物' || entry.type === '角色') return ['身份', '稳定', '关系立场', '关系', '固定事实'].some((section) => (values[section] ?? []).length > 0);
     if (entry.type === '场景' || entry.type === '时空') return ['定义', '空间结构', '固定资源', '固定事实', '世界影响'].some((section) => (values[section] ?? []).length > 0);
     if (entry.type === '物品') return ['定义', '功能', '限制', '固定事实', '当前'].some((section) => (values[section] ?? []).length > 0);
     return /^(世界|全局变化|基础设定)$/u.test(entry.type);
@@ -8034,7 +7981,7 @@ function summaryScope(kind, entries, pendingUids = []) {
     return count ? `最近若干次小总结后实际变更的${count}个运行条目` : '已经整理并趋于稳定的运行条目';
 }
 function distributionBlocksFromSummary(summaryBlock) {
-    const section = summaryBlock.sections.find((item) => /^(分发事实|沉降分发)$/u.test(item.name));
+    const section = summaryBlock.sections.find((item) => /^(?:分发事实|条目分发)$/u.test(String(item.name ?? '').trim()));
     if (!section || section.empty) return [];
     const blocks = new Map();
     for (const line of section.lines) {
@@ -15320,6 +15267,7 @@ function parseLabeledSections(text) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractionPrompts = extractionPrompts;
+exports.manualMergePrompts = manualMergePrompts;
 exports.auditPrompts = auditPrompts;
 exports.revisionPrompts = revisionPrompts;
 exports.summaryPrompts = summaryPrompts;
@@ -15424,45 +15372,22 @@ ${clipText(assistantText, compact ? 15000 : 20000)}`;
 
 function extractionPrompts(settings, playerText, assistantText, relevant, options = {}) {
     const compact = options.compact === true;
-    const dialogueContext = clipText(String(options.dialogueContext || '').trim(), compact ? 1600 : 3200);
     const gameTimeEnabled = Boolean(options.currentGameTime?.label);
     const stripTimeLines = (text) => String(text ?? '').split('\n').filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(line)).join('\n');
-    const rawExisting = extractionWorldbookIndex(relevant, compact);
+    const rawExisting = extractionWorldbookIndex(relevant, true);
     const existing = gameTimeEnabled ? rawExisting : stripTimeLines(rawExisting);
-    const custom = clipText(settings.extractionPrompt.trim(), compact ? 500 : 900);
+    const custom = clipText(settings.extractionPrompt.trim(), compact ? 360 : 620);
     const schema = keywordTemplate(settings.keywordDefinitions ?? []).trim();
-    const gameTimeClause = gameTimeEnabled ? `\n\n【游戏时间】\n- 【当前已知游戏时间】是本轮世界内部时间锚点。根据本轮正文中实际发生的时间流逝判断正文结束时的游戏时间。\n- 时间发生推进或正文明确了更具体的世界内时间时，在当前场景【当前状态】写“游戏时间：内容”；没有推进时不必重复输出。\n- 只根据当前时间锚点与剧情中明确发生的时间流逝推进，不引入现实时间，不补造没有依据的日期。\n- 游戏时间只进入当前场景，不复制到人物、物品、事件或世界。` : '';
-    const system = `职责：世界书差异提取。对照上一轮权威世界书，只输出本轮已经发生的有效变化，并写入最直接的条目宿主候选。
+    const gameTimeClause = gameTimeEnabled ? `\n- 若本轮正文明确推进了世界内时间，可在当前场景对应栏目追加新的游戏时间事实；没有明确推进则不输出。` : '';
+    const system = `职责：提取本轮正文已经明确发生或明确成立的固定事实，并生成世界书增量候选。
 
-【元词汇与锚点】
-- 权威旧条目：上一轮已经存在且当前有效的条目。
-- 本轮变化：本轮正文相对于权威旧条目新增、改变、失效、转移、完成或明确揭示的事实。
-- 直接宿主：事实真正所属的人物、场景、物品、事件、世界或基础设定。
-- 当前状态：此刻成立、后续可能继续变化的信息。
-- 稳定事实：能够持续成立，不会因普通动作立即变化的信息。
-
-【处理路径】
-1. 先读上一轮权威世界书，再读最近对话、本轮玩家输入和本轮AI最终回复。
-2. 识别本轮变化，为每条事实寻找最直接宿主。
-3. 属于已有对象时，完整沿用旧类型和旧标题，只填写发生变化的栏目。
-4. 同一对象的多项变化合并为一个条目；旧条目未变化内容不重复输出。
-5. 没有合适旧宿主时才建立新对象。
-6. 场景发生变化时，只输出正文结束时实际所在的当前场景一条，并放在第一条。
-
-【局部边界】
-- 人物：身份与正式名称写【身份】；长期能力和持久特征写【稳定】；单轮可观察行为、态度和选择写【固定事实】或对应关系栏目；位置、行动、目标、短期身体状态和持续处境写【当前】；关系、持有、认知和个人结果写对应栏目。一次行为不直接填写【行为倾向】或【表达方式】；【行为倾向】只来自重复行为，【表达方式】只来自跨阶段重复且可观察的语言习惯。
-- 场景：固定空间、设施、资源和地点机制写稳定栏目；场景状态、在场人物、当前资源与活动关联写当前快照栏目。只输出正文结束时实际所在的当前场景一条。
-- 物品：固定功能、性质与限制写稳定栏目；持有者、位置、使用状态、完整性和本轮变化写【当前】。
-- 事件：记录同一因果链已经形成的阶段、进展和结果；人物、场景和物品的详细状态回到各自宿主。
-- 世界：记录超出单一人物或单一场景、并会随剧情变化的区域、组织、制度、权力、资源网络和公开局势。
-- 基础设定：记录跨场景成立且不随普通剧情变化的世界框架、自然规则、种族共性、能力技术和社会常识。${gameTimeClause}
-
-【重要规则】
-- 优先更新已有条目，确认没有宿主后才新建。
-- 只输出本轮变化；同一事实只进入一个最直接宿主。
-- 匹配旧对象后原样沿用旧类型和旧标题。
-- 正式姓名、身份、外形或状态变化继续更新原人物条目。
-- 单次行动、短暂情绪和临时表现停留在事实或当前状态层，不升级为稳定人格或长期规则。
+规则：
+1. 事实来源只以【本轮AI最终回复】为准；上一轮世界书仅用于识别已有主体、沿用稳定标题和避免重复。
+2. 只追加本轮新出现且已经成立的事实。不要删除、吸收、沉降、退出、清空或重写旧事实。
+3. 内容必须精简；同一事实只写一次，并写入最直接的主体：人物、场景、物品、事件、世界或基础设定。
+4. 已有主体必须沿用原类型与原稳定名称；没有合适主体时才新建条目。
+5. 不从一次行为推断人物性格、行为倾向、决策倾向、表达方式或其他人格标签；只记录正文明确发生的事实。
+6. 不写未来计划、可能性、推测、分析、解释或正文没有确认的内容。${gameTimeClause}
 
 【唯一输出格式】
 条目
@@ -15470,38 +15395,22 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 名称：稳定名称
 关键词：稳定名称、唯一别名
 栏目名称：
-- 本轮新增或变化的信息
+- 精简事实
 
-每个条目从单独一行“条目”开始，类型、名称、关键词各写一行；栏目直接写“栏目名：”。下一条目再次写“条目”，不需要结束符。单次最多 8 条，同一对象只输出一个条目。没有世界书变化时只输出“无”。不输出 JSON、代码块、分析过程、前言或后记。
-
-【示范】
-条目
-类型：人物
-名称：披斗篷的商人
-关键词：披斗篷的商人、伊莱
-身份：
-- 正式姓名：伊莱
-当前：
-- 位置：码头仓库
+每个条目从单独一行“条目”开始。类型、名称、关键词各一行；栏目直接写“栏目名：”。下一条再次写“条目”。同一主体本轮只输出一个条目，单次最多8条。若模型判断确无可写事实，可输出“无”。禁止JSON、代码块、前言、后记和分析过程。
 
 可用类型与栏目：
 ${schema || '使用人物、场景、物品、事件、世界、基础设定的现有栏目。'}${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
     const gameTimeAnchor = gameTimeEnabled && options.currentGameTime?.label
         ? `\n\n【当前已知游戏时间】\n${String(options.currentGameTime.label)}${options.currentGameTime?.sceneTitle ? `（${String(options.currentGameTime.sceneTitle)}）` : ''}`
         : '';
-    const user = `【上一轮权威世界书】
-${existing || '（无）'}${gameTimeAnchor}
-
-【最近对话】
-${dialogueContext || '（无）'}
-
-【本轮玩家输入】
-${clipText(playerText || '（空）', compact ? 1100 : 1800)}
+    const user = `【上一轮世界书轻量索引】
+${clipText(existing || '（无）', compact ? 5000 : 7500)}${gameTimeAnchor}
 
 【本轮AI最终回复】
-${clipText(assistantText, compact ? 8500 : 12500)}
+${clipText(assistantText, compact ? 6500 : 9000)}
 
-按固定格式只填写本轮变化。`;
+只提取本轮正文新增的已确认事实。`;
     return { system, user };
 }
 
@@ -15557,146 +15466,95 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
     const isSmall = kind === 'small';
     const compact = options.compact === true;
     const pending = new Set((options.pendingUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
-    const allEntries = Array.isArray(options.allEntries) ? options.allEntries : entries;
     const changedEntries = entries.filter((entry) => pending.has(String(entry.uid)));
     const workingEntries = changedEntries.length ? changedEntries : entries.filter((entry) => !/^总结[｜|丨]/u.test(entry.title));
     const relatedEntries = entries.filter((entry) => !workingEntries.some((changed) => changed.uid === entry.uid));
     const gameTimeEnabled = Boolean(options.currentGameTime?.label);
     const stripTimeLines = (text) => String(text ?? '').split('\n').filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(line)).join('\n');
     const promptEntry = (entry, limit) => gameTimeEnabled ? entryForPrompt(entry, limit) : stripTimeLines(entryForPrompt(entry, limit));
-    const rawIndex = extractionWorldbookIndex(allEntries, compact);
-    const index = gameTimeEnabled ? rawIndex : stripTimeLines(rawIndex);
-    const custom = clipText((isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim(), compact ? 900 : 1800);
-    const system = isSmall
-        ? `职责：近期历史分发。逐个结算本期变更来源，把已经发生的事实按合适颗粒度写入直接宿主。
+    const custom = clipText((isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim(), compact ? 600 : 1100);
+    const title = isSmall ? '总结｜当前事件' : '总结｜世界历史';
+    const level = isSmall ? '局部' : '整体';
+    const system = `职责：把已经写入世界书的${isSmall ? '细颗粒度事实' : '局部层内容'}抽象为对应主体的${level}层内容，并按固定格式分发回世界书条目。
 
-【元词汇与锚点】
-- 来源：本期必须结算的权威条目。
-- 目标：承接某条历史事实的直接宿主。
-- 历史事实：已经发生并在当前结算中仍有保存价值的结果、状态或持续影响。
-- 吸收：来源必要事实已完整分发，来源可以退出。
-- 保留完成：来源当前仍应独立存在，本期判断已经完成。
-- 行为倾向：人物近期重复行为提炼出的“倾向于如何判断、选择、表达或应对”的抽象模式。
+【颗粒度】
+- 小总结：从本阶段细事实上升到“对应主体的局部”。人物、事件、场景、物品、组织/世界等都按各自主体形成局部阶段，不把“局部”固定理解为地点。
+- 大总结：从已经形成的局部层继续上升到“对应主体的整体”。只做更高层的归纳，不重复堆叠局部流水。
+- 关联条目用于理解同一局部或同一整体中的关系，可以参与判断，但不是必须逐项结算的来源清单。
 
-【处理路径】
-1. 逐个读取本期变更来源、相关权威条目和最近聊天。
-2. 先判断来源当前是否仍需独立存在，再确定每条必要历史的直接宿主。
-3. 需要分发时写明来源、目标、栏目、事实和处理；没有新事实但来源应继续存在时使用“保留完成”短格式。
-4. 每个待处理来源都必须在本轮得到“吸收”或“保留完成”的确定结论。
-
-【直接宿主边界｜不可被附加要求覆盖】
-- 每写一条事实，先判断“这条事实直接描述谁/什么本身”；目标必须是这个直接宿主，不能因为句子里出现某个人名就把场景事实写进人物。
-- 人物自身的身份、身体状态、当前目标、认知、关系立场、重复行为模式写人物；场景自身的设施、局部秩序、场景资源、场景活动、通行/核验结果和离场快照写场景；物品自身状态写物品；事件阶段、事件结果和事件因果写事件。
-- “登记册成为场景当前资源”“场景活动转向护理记录整理”“离场时场景处于某状态”属于场景，不得改写为某人物【固定事实】或人物长期经历。人物仅仅位于该场景、使用过该资源或参与过该活动，不足以改变直接宿主。
-- 同一完整事实只能有一个权威直接宿主；其他条目最多保留必要名称级关系，不得换角度复述同一事实。
-
-【场景离场快照｜单值槽】
-- 场景离开时如需保留离场快照，只允许对该场景输出最多一条，固定写成“离场时状态：<一个合并后的简洁快照>”。
-- 离场时人物位置、场景活动、场景资源等若都需要保留，必须合并在这一条“离场时状态：”中，不得拆成多条“离场时状态”，也不得改写成“离场时观察……”“离场时持有……”等无字段标签的近义句。
-- 已有旧“离场时状态”时，本轮输出代表该槽的新权威值；不要同时保留旧措辞和新措辞。
-- 场景资源本身不得作为人物离场经历写入人物【固定事实】。
-
-【局部边界】
-- 临时人物资格必须根据上一轮相关世界书与本轮正文语义判断，不只看标题、姓名或“临时”关键词。
-- 场景只记录场景自身已经形成的事实，例如完成的核验、通行结果、设施状态、局部秩序和持续影响；人物简历、性格、完整经历和台词留在人物或事件事实层。
-- 普通个人用品可沉入人物；设施、零件和地点资源可沉入场景；只服务一次事项的钥匙、证据或媒介可沉入事件或场景；独特且持续发挥作用的物品保留独立条目。
-- 局部事件、已离开的小场景和旧总结容器按颗粒度分发；来源只有在必要的宏观原貌、结果、持续影响和后续运行条件完整承接后才可吸收。
-- 人物本轮结束时仍成立的位置、身体状态、当前目标、身份状态等短期现状写入人物【当前】，并使用“字段：当前值”的明确状态槽；这类现状不得改写成【固定事实】。人物近期多次、同方向的行为可写入【行为倾向】；行为倾向只写抽象判断、选择、表达或应对模式，不写具体物品名、具体场景名、单次动作或一次性事件细节。小总结不从一次行为生成【表达方式】；只有跨阶段反复出现且可直接观察的语言习惯才允许写【表达方式】。
-
-【重要规则｜高于附加要求】
-- 同一来源可以分发到多个直接宿主，但每一条事实仍必须分别满足直接宿主边界，同一来源的处理值必须一致。
-- “吸收”必须覆盖来源全部仍有价值的事实；无法完整覆盖、仍在运行、证据不足、当前场景或受保护时选择“保留完成”。
-- 历史事实只写已经发生的内容，不写未来计划、推测、UID或解释。
-- 每个待处理来源都必须结算；禁止输出“无”，禁止遗漏来源。
-- 【附加要求】只能补充偏好，不能覆盖直接宿主边界、场景离场快照单值槽、当前状态归属和禁止短期固化规则；冲突时以上硬规则优先。
+【内容边界】
+1. 只依据给出的世界书条目进行抽象，不重新读取剧情正文，不补造事实。
+2. 每条结果先确定最直接的目标主体，再选择该主体已有的合适栏目。
+3. 人物只归纳已经明确成立的人物事实、关系、经历和状态，不自动制造性格、行为倾向、决策倾向或表达方式。
+4. 同一事实只分发到一个权威宿主；结果保持精简，删除过程性重复。
+5. 不要求覆盖输入中的每个条目，不做遗漏来源检查，也不输出“保留完成”。模型自行判断哪些内容值得上升。
+6. 只有当某个旧条目的有效内容已经被融合进另一个目标条目、旧条目本身不再需要独立存在时，才在【沉降来源】中声明它。沉降只是“先分发成功，再删除旧条目”。
 
 【唯一输出格式】
-总结｜当前事件
+${title}
 
-【历史分发】
-- 来源：人物｜来源稳定名称；目标：场景｜目标稳定名称；栏目：固定事实；事实：只属于该场景的已发生结果；处理：吸收
-- 来源：物品｜来源稳定名称；目标：人物｜目标稳定名称；栏目：持有；事实：人物当前持有该普通用品；处理：吸收
-- 来源：事件｜来源稳定名称；目标：事件｜目标稳定名称；栏目：已发生进展；事实：粗化后的阶段历史；处理：吸收
-- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：当前；事实：身体状态：受伤但意识清醒；处理：保留完成
-- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：行为倾向；事实：倾向于在压力下优先保护他人；处理：保留完成
-- 来源：人物｜仍需独立存在的来源；处理：保留完成
+【分发事实】
+- 类型｜稳定名称｜栏目名称｜抽象后的精简事实
 
-每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。不要给标题或栏目增加 Markdown 粗体、编号或额外层级。${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n【最终边界锁】\n附加要求不得改变以下三条：事实必须写入唯一直接宿主；场景离场快照只能使用单一“离场时状态：”槽；短期当前状态和单次行为不得固化为长期事实。`
-        : `职责：长期历史分发。逐个结算经过小总结整理的来源，把长期有效内容继续抽象并写入长期宿主。
+【沉降来源】
+- 来源：类型｜旧稳定名称；目标：类型｜承接后的稳定名称
 
-【元词汇与锚点】
-- 来源：本期必须结算的中层权威条目。
-- 长期宿主：人物、事件、场景、地区、组织、世界或基础设定中的直接承接对象。
-- 长期事实：跨阶段持续成立、已经形成结果或明确永久成立的内容。
-- 吸收：来源长期必要事实已完整分发，来源可以退出。
-- 保留完成：来源仍需独立存在，本期判断已经完成。
-- 行为倾向：小总结已经提炼出的重复行为模式，本身就是人物长期行为层，不要求继续升格为更抽象的人格栏目。
-
-【处理路径】
-1. 逐个读取本期来源和相关权威条目。
-2. 把过程压缩为长期结果、持续影响或稳定人物模式；人物已有【行为倾向】时可以直接保留或合并，不要求继续升格。
-3. 只有跨阶段重复且可直接观察的语言习惯，才允许更新人物【表达方式】。
-4. 每个待处理来源都必须在本轮得到“吸收”或“保留完成”的确定结论。
-
-【直接宿主边界｜不可被附加要求覆盖】
-- 长期抽象仍必须先判断直接宿主；长期并不意味着可以跨宿主搬运。人物长期行为模式与稳定表达方式归人物，场景永久结构/固定资源/场景长期影响归场景，事件最终结果与事件级影响归事件，世界级变化才进入世界或基础设定。
-- 场景资源、场景活动、场景离场状态不能因为涉及某个人就写入人物【固定事实】；人物只在该场景出现、使用一次资源或完成一次动作，不构成人物长期事实。
-- 同一完整事实只能有一个权威直接宿主，禁止把场景事实换成人物视角再复制一遍。
-
-【长期证据门槛｜不可被附加要求覆盖】
-- 大总结只能从已经存在的中长期证据继续抽象。人物【行为倾向】本身就是长期行为层，可以保留、合并或在新证据下修正，不要求再升格；【表达方式】只接受跨阶段重复且可直接观察的语言习惯证据。已经稳定的【关系/关系立场】可继续压缩关系结论；事件【结果/持续影响】、场景永久结构/固定资源/世界影响可继续向更宽层沉降。
-- 以下内容本身只属于短期或单次状态，不得直接升级为长期人格、长期场景特征、长期关系或持续影响：人物【当前】、人物【持有】、场景【当前状态】、场景【当前资源】、场景【活动关联】、任何“离场时状态”、当前位置、当前目标、当前持有/使用、单次观察、单次使用物品、单次移动、单次情绪、单次对话或单次选择。
-- 例如“观察水面”“持有放大镜”即使在离场时仍成立，也只能作为当时状态；不得写成“观察式取样与检视已形成长期场景特征”。只有来源中已经存在非当前层的长期证据，才允许形成长期性质。
-- 证据不足时使用“保留完成”，不要为了必须结算而制造长期结论。
-
-【场景离场快照】
-- “离场时状态”属于场景历史快照，不属于长期场景性质。大总结原则上不把它再次抽象；若必须保留，只能仍归原场景，并保持单一“离场时状态：<简洁快照>”表达。
-- 不得把离场快照拆成多个长期事实，也不得把其中的资源、活动或人物临时位置分别升级。
-
-【局部边界】
-- 事件保留宏观性质、参与范围、最终结果和持续影响，过程流水停留在较低层。
-- 已离开场景保留永久结构、设施、固定资源和真正跨阶段成立的长期影响；更宽宿主完整承接后可吸收低层场景壳。
-- 【行为倾向】本身就是重复行为提炼后的长期行为层，不要求继续升格，也不要求额外制造人格结论；已有倾向可在后续重复证据下合并、修正或保留。只有长期反复出现且可直接观察的说话习惯才写【表达方式】。长期稳定的人际关系写【关系】或【关系立场】；已经结束、只具历史意义且确实属于人物自身的个人经历才写【固定事实】。一次行为、一次情绪或角色自述不直接形成长期倾向或表达方式；大总结不把短期【当前】状态固化为长期人物性质。
-- 普通物品在长期归属、消耗、毁坏或历史作用被直接宿主承接后可以退出；独特、持续发挥作用或仍需追踪状态的物品保留。
-- 旧总结容器中的历史逐条进入直接宿主，完整分发后可以吸收旧容器。
-
-【重要规则｜高于附加要求】
-- 历史必须按颗粒度完成层级拓宽，不只叠加一层重复摘要。
-- 同一来源可分发到多个长期宿主，但每一条事实仍必须分别满足直接宿主与长期证据门槛，同一来源处理值必须一致。
-- “吸收”必须完整覆盖来源仍有长期价值的宏观原貌、结果与持续影响。
-- 只写长期有效事实，不写当前短期状态、未发生事项、未来目标、推测、UID或解释。
-- 每个待处理来源都必须结算；禁止输出“无”，禁止遗漏来源。
-- 【附加要求】只能补充偏好，不能覆盖直接宿主边界、长期证据门槛、短期状态升级禁区和场景离场快照规则；冲突时以上硬规则优先。
-
-【唯一输出格式】
-总结｜世界历史
-
-【历史分发】
-- 来源：事件｜来源稳定名称；目标：世界｜目标稳定名称；栏目：固定事实；事实：高密度历史结果；处理：吸收
-- 来源：场景｜来源稳定名称；目标：世界｜目标稳定名称；栏目：持续影响；事实：跨场景仍成立的长期影响；处理：吸收
-- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：行为倾向；事实：跨阶段仍反复成立的行为模式；处理：保留完成
-- 来源：人物｜来源稳定名称；目标：人物｜同一稳定名称；栏目：关系立场；事实：关系对象：长期保持警惕但愿意合作；处理：保留完成
-- 来源：人物｜仍需独立存在的来源；处理：保留完成
-
-每条必须单行。带事实时固定顺序为“来源；目标；栏目；事实；处理”；无新事实的保留完成使用“来源；处理”。来源必须逐字复制【本次必须逐字复制的来源标题】中的完整标题。不要给标题或栏目增加 Markdown 粗体、编号或额外层级。${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n【最终边界锁】\n附加要求不得改变以下三条：长期事实必须写入唯一直接宿主；人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】及单次行为不得直接升级长期性质；证据不足必须“保留完成”，不得制造长期结论。`;
-    const changedLabel = isSmall ? '本期实际变更条目' : '本期小总结后实际变更的运行条目';
-    const recent = isSmall ? `\n\n【最近聊天】\n${clipText(recentConversation || '（无）', compact ? 7000 : 11000)}` : '';
+规则：
+- 【分发事实】可以有多行，每行恰好四段，以“｜”分隔。
+- 【沉降来源】是可选栏目；没有需要融合删除的旧条目时省略该栏目。
+- 沉降来源必须对应已经被本次分发内容承接的旧条目，来源与目标不得相同。
+- 不输出UID、JSON、代码块、分析过程、前言或后记。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
     const user = `【处理范围】
-${subject || (isSmall ? '近期世界书变更整理' : '长期世界结构固化')}
+${subject || (isSmall ? '本阶段世界书变化' : '已经形成的局部层内容')}
 
-【${changedLabel}】
-${workingEntries.map((entry) => promptEntry(entry, compact ? 560 : 920)).join('\n\n') || '（无）'}
+【本阶段主要条目】
+${workingEntries.map((entry) => promptEntry(entry, compact ? 520 : 760)).join('\n\n') || '（无）'}
 
-【本次必须逐字复制的来源标题】
-${workingEntries.map((entry) => `- ${entry.title}`).join('\n') || '（无）'}
+【必要关联条目】
+${relatedEntries.slice(0, compact ? 8 : 16).map((entry) => promptEntry(entry, compact ? 360 : 520)).join('\n\n') || '（无）'}
 
-【上一轮权威世界书轻量索引】
-${index || '（无）'}
+按固定格式生成${level}层分发结果。`;
+    return { system, user };
+}
 
-【直接关联条目】
-${relatedEntries.slice(0, compact ? 8 : 18).map((entry) => promptEntry(entry, compact ? 420 : 680)).join('\n\n') || '（无）'}${recent}
+function manualMergePrompts(settings, selectedEntries, relatedEntries = [], options = {}) {
+    const compact = options.compact === true;
+    const promptEntry = (entry, limit) => entryForPrompt(entry, limit);
+    const system = `职责：合并玩家明确选中的世界书条目。
 
-按固定格式逐来源结算。`;
+先判断所选条目在时间、阶段和空间/关系跨度上属于哪一种抽象：
+- 若主要属于近期、同阶段、同一局部链条：按“局部抽象”合并。
+- 若明显跨较远场景、跨阶段、跨较长时间或已经形成稳定全貌：按“整体抽象”合并。
+
+要求：
+1. 只依据玩家选择的条目进行合并；关联条目只用于识别已有宿主与关系，不得反客为主。
+2. 合并结果必须写回最直接的主体条目，可以创建更合适的上层条目。
+3. 内容保持高密度和精简，不补造事实，不自动生成性格、行为倾向、决策倾向或表达方式。
+4. 某个来源的有效内容已经被目标完整融合、来源不再需要独立存在时，在【沉降来源】声明“来源→目标”。代码会先写目标，成功后再删除来源。
+5. 不要求逐项解释为什么合并，不输出分析过程。
+
+【唯一输出格式】
+总结｜手动合并
+
+【抽象层级】
+- 局部
+或
+- 整体
+
+【分发事实】
+- 类型｜稳定名称｜栏目名称｜合并后的精简事实
+
+【沉降来源】
+- 来源：类型｜旧稳定名称；目标：类型｜承接后的稳定名称
+
+禁止UID、JSON、代码块、前言和后记。`;
+    const user = `【玩家选中的条目】
+${selectedEntries.map((entry) => promptEntry(entry, compact ? 700 : 1100)).join('\n\n') || '（无）'}
+
+【关联条目（仅辅助识别宿主）】
+${relatedEntries.slice(0, compact ? 6 : 12).map((entry) => promptEntry(entry, compact ? 320 : 480)).join('\n\n') || '（无）'}
+
+请直接完成合并。`;
     return { system, user };
 }
 
@@ -16504,11 +16362,11 @@ const LEGACY_LARGE_SUMMARY_PROMPT_UI86 = `逐来源结算中层权威条目：�
 const LEGACY_EXTRACTION_PROMPT_UI50 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。插件只负责按模型结果分发和提交，因此模型必须在源头完成唯一宿主分配：同一完整事实只能写入一个详细宿主，其他条目只能保留名称级引用。场景【在场】是当前场景人员存在状态的唯一宿主；在场人物的【当前】不重复普通位置。场景【当前资源】只写公共、无人持有或由场景保管的关键资源，不写人物正在携带、穿戴或持有的物品。人物【持有】只写物品名称引用，不复制功能、位置、完整性或转交流程；独立物品【当前】保存其详细权威状态。场景【活动关联】只写事件名称，事件【场景/参与】只写名称引用；事件【已发生进展】写事项取得的状态变化，不逐字复制人物、场景或物品内部细节。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI55 = `以上次小总结后实际变更的世界书条目为主材料，按对象、目标、因果、时间、场景和规则范围形成语义簇；将细颗粒内容抽象为适合继续游玩的较粗状态、事件进展和局部机制，重新分发到直接宿主，并只吸收已经被目标事件完整承接的细事件壳。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI87 = `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，单次动作和短期状态不得固化为长期事实；必要事实完整承接后才吸收来源。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，跨阶段重复且可观察的语言习惯才写【表达方式】；人物长期行为层只使用这两个栏目；必要事实完整承接后才吸收来源。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `把本阶段已经提取进世界书的细事实上升为对应主体的局部层内容；保留直接宿主边界，删除过程性重复，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI55 = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI87 = `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；只有已有【行为倾向】、稳定关系、事件结果/持续影响、场景永久结构/固定资源/世界影响等中长期证据才允许继续抽象。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人格、长期场景特征或持续影响。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；【行为倾向】本身就是长期行为层，可保留、合并或修正，不要求继续升格；【表达方式】只依据跨阶段重复且可观察的语言习惯。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人物性质、长期场景特征或持续影响；人物长期行为层只使用【行为倾向】与【表达方式】。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `优先更新上一轮权威条目；只输出本轮已发生变化；正式姓名、身份、外形或状态变化继续更新原人物条目；同一事实写入最直接宿主。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `把已经形成的局部层内容继续上升为对应主体的整体层内容；跨阶段压缩为整体结果与稳定事实，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `只追加本轮正文已经明确发生或明确成立的精简事实；沿用已有主体稳定标题，同一事实写入最直接宿主；不删除旧事实，不做人格抽象。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI51 = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
@@ -16618,7 +16476,7 @@ class SettingsStore {
 exports.SettingsStore = SettingsStore;
 function parseSettings(value) {
     const candidate = (0, util_1.isPlainObject)(value) ? value : {};
-    const normalizedSmallSummaryTurns = (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 2, 100);
+    const normalizedSmallSummaryTurns = (0, util_1.clampNumber)(candidate.smallSummaryTurns, 10, 2, 50);
     // ui.80: 该兼容字段只承担总结失败后的重试冷却，不再作为正常总结触发间隔。
     const normalizedSmallSummaryMinTurns = (0, util_1.clampNumber)(candidate.smallSummaryMinTurns, 5, 2, 100);
     const sectionPolicies = { ...(0, util_1.clone)(exports.DEFAULT_SETTINGS.sectionPolicies) };
@@ -16654,8 +16512,8 @@ function parseSettings(value) {
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
         extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI50, LEGACY_EXTRACTION_PROMPT_UI66], exports.DEFAULT_EXTRACTION_PROMPT),
-        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55, LEGACY_SMALL_SUMMARY_PROMPT_UI66, LEGACY_SMALL_SUMMARY_PROMPT_UI86, LEGACY_SMALL_SUMMARY_PROMPT_UI87], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
-        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66, LEGACY_LARGE_SUMMARY_PROMPT_UI86, LEGACY_LARGE_SUMMARY_PROMPT_UI87], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
+        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55, LEGACY_SMALL_SUMMARY_PROMPT_UI66, LEGACY_SMALL_SUMMARY_PROMPT_UI86, LEGACY_SMALL_SUMMARY_PROMPT_UI87, `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，跨阶段重复且可观察的语言习惯才写【表达方式】；人物长期行为层只使用这两个栏目；必要事实完整承接后才吸收来源。`], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66, LEGACY_LARGE_SUMMARY_PROMPT_UI86, LEGACY_LARGE_SUMMARY_PROMPT_UI87, `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；【行为倾向】本身就是长期行为层，可保留、合并或修正，不要求继续升格；【表达方式】只依据跨阶段重复且可观察的语言习惯。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人物性质、长期场景特征或持续影响；人物长期行为层只使用【行为倾向】与【表达方式】。`], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: normalizedSmallSummaryTurns,
@@ -17407,6 +17265,35 @@ class WorldbookAdapter {
             };
         });
     }
+    async deleteEntries(settings, uids, snapshot, validate) {
+        const requested = new Set((uids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
+        if (!requested.size) return { entries: [], changed: false, deletedCount: 0, warehouse: { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 } };
+        let deletedTitles = [];
+        const result = await this.mutate(settings, snapshot, validate, (opened) => {
+            deletedTitles = [];
+            for (const [mapKey, raw] of Object.entries(opened.data.entries ?? {})) {
+                const uid = String(raw?.uid ?? mapKey);
+                if (!requested.has(uid)) continue;
+                const parsed = parseEntries({ ...opened.data, entries: { [mapKey]: raw } })[0];
+                if (!parsed || parsed.locked === true || parsed.focus === true) continue;
+                deletedTitles.push(parsed.title);
+                delete opened.data.entries[mapKey];
+            }
+            return { verify(data) {
+                const remaining = new Set(parseEntries(data).map((entry) => String(entry.uid)));
+                for (const uid of requested) {
+                    if (remaining.has(uid)) {
+                        const original = parseEntries(data).find((entry) => String(entry.uid) === uid);
+                        if (original?.locked === true || original?.focus === true) continue;
+                        throw new Error(`条目 UID ${uid} 删除后仍存在`);
+                    }
+                }
+            } };
+        });
+        result.deletedCount = deletedTitles.length;
+        result.warehouse = { ...(result.warehouse ?? {}), deleted: deletedTitles, deletedCount: deletedTitles.length };
+        return result;
+    }
     async setLocked(settings, uid, locked, snapshot, validate) {
         return this.mutate(settings, snapshot, validate, (opened) => {
             const located = findRawEntry(opened.data, uid);
@@ -17574,7 +17461,10 @@ class WorldbookAdapter {
                     const currentByTitle = new Map(currentEntriesForProof.map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
                     if (requiredTargets.some((title) => !currentByTitle.has(title))) continue;
                     const proofs = Array.isArray(operation.distributionProofs) ? operation.distributionProofs : [];
-                    const proofPassed = proofs.length > 0 && proofs.every((proof) => {
+                    if (operation.requiresTargetExistenceOnly === true) {
+                        if (requiredTargets.some((title) => !currentByTitle.has(title))) continue;
+                    }
+                    const proofPassed = operation.requiresTargetExistenceOnly === true || (proofs.length > 0 && proofs.every((proof) => {
                         const normalizedTitle = (0, util_1.normalizeTitle)(proof?.targetTitle || '');
                         const targetEntry = currentByTitle.get(normalizedTitle);
                         if (!targetEntry) return false;
@@ -17584,7 +17474,7 @@ class WorldbookAdapter {
                         return (facts.length > 0 || emptySections.length > 0)
                             && facts.every((fact) => content.includes(fact))
                             && emptySections.every((section) => !(targetEntry.sections?.values?.[section] ?? []).length);
-                    });
+                    }));
                     if (!proofPassed) continue;
                 }
                 delete opened.data.entries[target.mapKey];
