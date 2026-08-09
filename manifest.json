@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.96-hidden-summary-marks",
+  "version": "2.0.0-lite.ui.98-bedrock-semantic-lifecycle",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜按实际变更执行小/大总结、单次即时重试、直接分发、先写后删沉降与召回标签分层合并"
+  "description": "世界书单通道｜隐藏UID变更标点、单一基石锁、局部规律/整体规律总结、基础设定运行规律与生命周期收束"
 }
