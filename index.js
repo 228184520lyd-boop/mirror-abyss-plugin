@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.98-bedrock-semantic-lifecycle. */
+/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.98-semantic-lifecycle-manual-merge. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
@@ -43,7 +43,7 @@ function showError(error) {
 
 function load() {
   mount();
-  return loaded ??= import('./app.js?ui=98-bedrock-semantic-lifecycle').catch(error => {
+  return loaded ??= import('./app.js?ui=98-semantic-lifecycle-manual-merge').catch(error => {
     loaded = undefined;
     showError(error);
     throw error;

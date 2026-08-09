@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.98-bedrock-semantic-lifecycle — semantic summary lifecycle, hidden UID marks, single bedrock lock, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.98-semantic-lifecycle-manual-merge — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -172,14 +172,15 @@ class MirrorAbyssApplication {
         return this.enqueueMaintenance('deleteEntries', async (settings, snapshot) => {
             const validate = () => this.host.assertSnapshot(snapshot, this.settings());
             const result = await this.worldbook.deleteEntries(settings, selectedUids, snapshot, validate);
-            if (Number(result?.deletedCount || 0) > 0) {
+            const deletedUids = (result?.deletedEntries ?? []).map((entry) => String(entry.uid ?? '')).filter(Boolean);
+            if (deletedUids.length) {
                 const cursor = this.host.cursor();
                 const nextCursor = {
                     ...cursor,
-                    pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, selectedUids),
-                    pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, selectedUids),
-                    failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, selectedUids),
-                    failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, selectedUids),
+                    pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, deletedUids),
+                    failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, deletedUids),
+                    pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, deletedUids),
+                    failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, deletedUids),
                 };
                 await this.host.saveCursor(nextCursor, snapshot, this.settings());
             }
@@ -476,13 +477,7 @@ class MirrorAbyssApplication {
         };
     }
     updateEntry(uid, patch) {
-        return this.enqueueMaintenance('editEntry', async (settings, snapshot) => {
-            const result = await this.worldbook.updateEntry(settings, uid, patch, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
-            const cursor = this.host.cursor();
-            const nextCursor = { ...cursor, pendingSmallSummaryMarks: mergeSummaryMarks(cursor.pendingSmallSummaryMarks, [{ uid: String(uid ?? '') }]) };
-            await this.host.saveCursor(nextCursor, snapshot, this.settings());
-            return result;
-        });
+        return this.enqueueMaintenance('editEntry', async (settings, snapshot) => this.worldbook.updateEntry(settings, uid, patch, snapshot, () => this.host.assertSnapshot(snapshot, this.settings())));
     }
     setBedrockLocked(uid, locked) {
         return this.enqueueMaintenance('setBedrockLocked', async (settings, snapshot) => this.worldbook.setBedrockLocked(settings, uid, locked, snapshot, () => this.host.assertSnapshot(snapshot, this.settings())));
@@ -1319,7 +1314,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.98-bedrock-semantic-lifecycle';
+exports.VERSION = '2.0.0-lite.ui.98-semantic-lifecycle-manual-merge';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -1745,7 +1740,7 @@ class ControlPanel {
             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取。'),
             this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
             this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '按成功正文回合数触发；系统只整理这段期间被动过的条目。'),
+            this.makeSwitch('autoSmallSummary', '自动小总结', '按成功正文回合数触发；只整理这段期间实际新增、修改与删除的条目。'),
             this.makeSwitch('autoLargeSummary', '自动大总结', '累计成功完成的小总结次数；达到设定次数后把局部层继续上升为整体层。'),
             this.makeSwitch('entryBudgetEnabled', '条目容量防护', '按类型和栏目进行容量治理。'),
         );
@@ -2122,10 +2117,10 @@ class ControlPanel {
         head.textContent = '玩家世界设定初始化';
         const help = document.createElement('div');
         help.className = 'ma-lite-world-setting-help';
-        help.textContent = '只在玩家明确点击后读取下方文本。基础设定用于总结世界长期运行规律，导入后默认开启基石锁；系统不能自动改变，玩家可自行解锁或编辑。先生成预览，确认后再写入当前绑定世界书。';
+        help.textContent = '只在玩家明确点击后读取下方文本。普通聊天仍保持防误触：玩家输入只用于理解行动，不会自动写成世界设定。先生成预览，确认后再写入当前绑定世界书。';
         const textarea = document.createElement('textarea');
         textarea.maxLength = 24000;
-        textarea.placeholder = '粘贴世界设定。长期稳定的运行规律会整理为基础设定；其他内容按实际宿主进入世界、场景、人物、物品或事件。写作要求和未来剧情计划不会进入世界书。';
+        textarea.placeholder = '粘贴世界框架、自然规则、种族、能力体系、地区组织、制度、开局地点与已存在人物。写作要求、文风和未来剧情计划不会进入世界书。';
         textarea.setAttribute('aria-label', '玩家世界设定文本');
         textarea.addEventListener('input', () => {
             if (this.actions.worldSettingsPreview?.()) {
@@ -2418,8 +2413,8 @@ class ControlPanel {
         const actions = document.createElement('div');
         actions.className = 'ma-lite-worldbook-quick-actions';
         for (const [kind, label, title] of [
-            ['smallSummary', '立即小总结', '把系统选定的本批事实整理为局部范围内持续成立的规律，并保留可召回锚点'],
-            ['largeSummary', '立即大总结', '把系统选定的局部规律整理为更高层、长期成立的整体规律，并保留可召回锚点'],
+            ['smallSummary', '立即小总结', '把本批被系统选中的具体事实整理为局部范围内持续成立的规律，并保留可召回的历史锚点'],
+            ['largeSummary', '立即大总结', '把多个局部规律整理为更高层、长期成立的整体规律，并保留可召回的历史锚点'],
         ]) {
             const button = document.createElement('button');
             button.type = 'button';
@@ -2637,7 +2632,7 @@ class ControlPanel {
         if (uids.length < 2) { this.setStatus('至少选择两个条目才能合并', true); return; }
         if (this.pendingActions.has('mergeEntries')) return;
         this.pendingActions.add('mergeEntries'); this.syncDisabledState();
-        if (this.recallStatusNode) this.recallStatusNode.textContent = `正在按召回标签合并${uids.length}个条目…`;
+        if (this.recallStatusNode) this.recallStatusNode.textContent = `正在整理${uids.length}个玩家选中条目之间的结构关系…`;
         try {
             const result = await this.actions.mergeEntries?.(uids);
             const detail = `合并完成：写入${Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0)}，沉降删除${Number(result?.warehouse?.deletedCount || 0)}`;
@@ -2697,12 +2692,12 @@ class ControlPanel {
         status.textContent = '读取场景阶段与原生召回字段；需要维护条目时点击“修改”。';
         const lockHelp = document.createElement('div');
         lockHelp.className = 'ma-lite-lock-help';
-        lockHelp.innerHTML = '<strong>基石锁：</strong>开启后系统不能自动追加、修改、删减、压缩或沉降该条目；玩家仍可自行编辑、解锁、删除或主动合并。通过“世界设定”入口建立的初始【基础设定】默认加锁。';
+        lockHelp.innerHTML = '<strong>基石锁：</strong>开启后系统不会自动追加、修改、删减、重写、压缩或沉降该条目；玩家可随时解除。玩家主动执行合并或删除时，视为对本次操作的明确授权。通过“世界设定”入口建立的初始【基础设定】默认开启基石锁。';
         const manageActions = document.createElement('div');
         manageActions.className = 'ma-lite-worldbook-quick-actions ma-lite-recall-edit-actions';
         manageActions.hidden = true;
         const merge = document.createElement('button');
-        merge.type = 'button'; merge.textContent = '合并'; merge.title = '按选中条目的召回标签决定使用小总结或大总结逻辑，并直接生成更高颗粒度场景';
+        merge.type = 'button'; merge.textContent = '合并'; merge.title = '整理玩家选中的条目结构，理解真实归属、承接与演化关系并消除冗余；不按小总结/大总结颗粒度判断';
         merge.addEventListener('click', () => void this.mergeSelectedEntries());
         const remove = document.createElement('button');
         remove.type = 'button'; remove.textContent = '删除'; remove.title = '批量删除玩家明确选中的条目';
@@ -2834,27 +2829,28 @@ class ControlPanel {
             }
             head.append(title);
             if (this.recallEditMode && typeof this.actions.setBedrockLocked === 'function') {
-                const lockControls = document.createElement('div');
-                lockControls.className = 'ma-lite-recall-locks';
-                const bedrock = document.createElement('button');
-                bedrock.type = 'button';
-                bedrock.className = 'ma-lite-recall-lock';
-                bedrock.dataset.mode = 'bedrock';
-                bedrock.dataset.active = item.bedrockLocked ? 'true' : 'false';
-                bedrock.textContent = item.bedrockLocked ? '基石锁✓' : '基石锁';
-                bedrock.title = item.bedrockLocked ? '已开启基石锁：系统不能自动改变该条目；点击解除' : '开启基石锁：系统不能自动追加、修改、删减、压缩或沉降该条目';
-                bedrock.addEventListener('click', async () => {
-                    if (this.pendingActions.has('setBedrockLocked')) return;
-                    this.pendingActions.add('setBedrockLocked'); this.syncDisabledState();
-                    try {
-                        await this.actions.setBedrockLocked(item.uid, !item.bedrockLocked);
-                        this.setStatus(item.bedrockLocked ? `已解除基石锁：${item.title}` : `已开启基石锁：${item.title}`);
-                        await this.refreshRecallMap(true);
-                    } catch (error) { this.setStatus(`基石锁设置失败：${(0, util_1.errorText)(error)}`, true); }
-                    finally { this.pendingActions.delete('setBedrockLocked'); this.syncDisabledState(); }
-                });
-                lockControls.append(bedrock);
-                head.append(lockControls);
+                const locks = document.createElement('div');
+                locks.className = 'ma-lite-recall-locks';
+                if (typeof this.actions.setBedrockLocked === 'function') {
+                    const bedrock = document.createElement('button');
+                    bedrock.type = 'button';
+                    bedrock.className = 'ma-lite-recall-lock';
+                    bedrock.dataset.mode = 'bedrock';
+                    bedrock.dataset.active = item.bedrockLocked ? 'true' : 'false';
+                    bedrock.textContent = item.bedrockLocked ? '基石锁✓' : '基石锁';
+                    bedrock.title = item.bedrockLocked ? '已开启基石锁：系统完全只读，连追加也不允许；点击解除' : '开启基石锁：系统对该条目完全只读，只有玩家手动编辑或解锁后才能改变';
+                    bedrock.addEventListener('click', async () => {
+                        bedrock.disabled = true;
+                        try {
+                            await this.actions.setBedrockLocked(item.uid, !item.bedrockLocked);
+                            this.setStatus(item.bedrockLocked ? `已解除基石锁：${item.title}` : `已开启基石锁：${item.title}`);
+                            await this.refreshRecallMap(true);
+                        } catch (error) { this.setStatus(`基石锁设置失败：${(0, util_1.errorText)(error)}`, true); }
+                        finally { bedrock.disabled = false; }
+                    });
+                    locks.append(bedrock);
+                }
+                head.append(locks);
             }
             if (item.type === '人物' && typeof this.actions.setFocus === 'function') {
                 const focus = document.createElement('button');
@@ -5703,23 +5699,22 @@ class HostAdapter {
         const root = this.chatNamespace();
         const value = root.cursor && typeof root.cursor === 'object' ? root.cursor : {};
         const normalizeMarks = (marks, legacyUids = []) => {
-            const output = new Set();
-            for (const item of Array.isArray(marks) ? marks : []) {
+            const output = new Map();
+            const add = (item) => {
                 const uid = String(typeof item === 'string' ? item : item?.uid ?? '').trim();
-                if (uid) output.add(uid);
-            }
-            for (const uid of Array.isArray(legacyUids) ? legacyUids : []) {
-                const normalized = String(uid ?? '').trim();
-                if (normalized) output.add(normalized);
-            }
-            return [...output].map((uid) => ({ uid }));
+                if (uid) output.set(uid, { uid });
+            };
+            for (const item of Array.isArray(marks) ? marks : []) add(item);
+            for (const uid of Array.isArray(legacyUids) ? legacyUids : []) add(uid);
+            return [...output.values()];
         };
         return {
             lastProcessedMessageKey: String(value.lastProcessedMessageKey ?? ''),
             lastProcessedHash: String(value.lastProcessedHash ?? ''),
             turnsSinceSmall: Math.max(0, Number(value.turnsSinceSmall) || 0),
             smallCountSinceLarge: Math.max(0, Number(value.smallCountSinceLarge) || 0),
-            // ui.98: summary marks are only internal UID-level touched flags. They carry no semantic action and are never shown to the model.
+            // ui.96: summary marks only exist in chat-level internal metadata. Legacy pending UIDs are migrated once,
+            // 不写入世界书，也不在玩家界面展示。
             pendingSmallSummaryMarks: normalizeMarks(value.pendingSmallSummaryMarks, value.pendingSmallSummaryUids),
             pendingLargeSummaryMarks: normalizeMarks(value.pendingLargeSummaryMarks, value.pendingLargeSummaryUids),
             failedSmallSummaryMarks: normalizeMarks(value.failedSmallSummaryMarks),
@@ -7260,7 +7255,6 @@ exports.__testSummaryEntries = summaryEntries;
 exports.__testNormalizeSummaryMarks = normalizeSummaryMarks;
 exports.__testMergeSummaryMarks = mergeSummaryMarks;
 exports.__testSummaryMarksFromResult = summaryMarksFromResult;
-exports.__testRecallSummaryKind = recallSummaryKind;
 exports.__testParseSummaryWithRecovery = parseSummaryWithRecovery;
 exports.__testSedimentationOperationsFromSummary = sedimentationOperationsFromSummary;
 exports.__testDistributionBlocksFromSummary = distributionBlocksFromSummary;
@@ -7274,13 +7268,6 @@ const governance_1 = require("./governance");
 const model_request_1 = require("./model-request");
 const util_1 = require("./util");
 const information_point_1 = require("./domain/information-point");
-function recallSummaryKind(entry) {
-    const stage = String(entry?.sceneStage || '');
-    const lifecycle = String(entry?.lifecycle || entry?.memoryTier || '');
-    if (stage === 'remote' || /^(?:long-term|historical|historical-summary|closed|settled)$/u.test(lifecycle)) return 'large';
-    if (stage === 'current' || stage === 'previous' || /^(?:active|recent|recent-summary|temporary)$/u.test(lifecycle)) return 'small';
-    return '';
-}
 class MemoryRunner {
     constructor(host, worldbook, getSettings, onProgress = null) {
         this.host = host;
@@ -7334,16 +7321,17 @@ class MemoryRunner {
         }
         if (kind === 'smallSummary') {
             const cursor = this.host.cursor();
-            const failedMarks = normalizeSummaryMarks(cursor.failedSmallSummaryMarks);
-            const marks = failedMarks.length ? failedMarks : normalizeSummaryMarks(cursor.pendingSmallSummaryMarks);
+            const marks = mergeSummaryMarks(cursor.failedSmallSummaryMarks, cursor.pendingSmallSummaryMarks);
+            notify('info', `镜渊：开始手动小总结（${marks.length}个条目）`);
             const result = await this.summarize('small', settings, snapshot, { marks });
             const producedMarks = summaryMarksFromResult(result);
+            const processed = result.processedPendingUids ?? [];
             const nextCursor = {
                 ...cursor,
                 turnsSinceSmall: 0,
                 smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (producedMarks.length ? 1 : 0),
-                pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, result.processedPendingUids ?? []),
-                failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, result.processedPendingUids ?? []),
+                pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
+                failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
                 pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
             };
             try {
@@ -7353,18 +7341,20 @@ class MemoryRunner {
                 await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '小总结回合');
             }
             this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : '小总结完成，无新增写入');
+            notify('success', `镜渊：手动小总结完成（处理${processed.length}个条目）`);
             return taskResultEntries(result);
         }
 
         const cursor = this.host.cursor();
-        const failedMarks = normalizeSummaryMarks(cursor.failedLargeSummaryMarks);
-        const marks = failedMarks.length ? failedMarks : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks);
+        const marks = mergeSummaryMarks(cursor.failedLargeSummaryMarks, cursor.pendingLargeSummaryMarks);
+        notify('info', `镜渊：开始手动大总结（${marks.length}个条目）`);
         const result = await this.summarize('large', settings, snapshot, { marks });
+        const processed = result.processedPendingUids ?? [];
         const nextCursor = {
             ...cursor,
             smallCountSinceLarge: 0,
-            pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, result.processedPendingUids ?? []),
-            failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, result.processedPendingUids ?? []),
+            pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, processed),
+            failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, processed),
         };
         try {
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
@@ -7373,6 +7363,7 @@ class MemoryRunner {
             await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '大总结回合');
         }
         this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结完成，无新增写入');
+        notify('success', `镜渊：手动大总结完成（处理${processed.length}个条目）`);
         return taskResultEntries(result);
     }
 
@@ -7397,7 +7388,8 @@ class MemoryRunner {
                     turnsSinceSmall = 0;
                 } else {
                     smallRanThisTurn = true;
-                    this.progress('running', `正文累计${smallTurnThreshold}回合，开始小总结：只读取本批被动过的条目`, { titles: ['总结｜当前事件'], turnsSinceSmall });
+                    this.progress('running', `正文累计${smallTurnThreshold}回合，开始小总结：本批${pendingSmallSummaryMarks.length}个条目`, { titles: ['总结｜当前事件'], turnsSinceSmall });
+                    notify('info', `镜渊：开始小总结（${pendingSmallSummaryMarks.length}个条目）`);
                     const beforeReceiptIds = this.currentReceiptIds();
                     try {
                         const small = await this.summarize('small', settings, snapshot, { marks: pendingSmallSummaryMarks });
@@ -7409,14 +7401,16 @@ class MemoryRunner {
                             smallCountSinceLarge += 1;
                             pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
                         }
+                        notify('success', `镜渊：小总结完成（处理${small.processedPendingUids?.length || 0}个条目）`);
                     } catch (error) {
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
-                        // 本批已经在 summarize() 内最多即时重试一次；失败后移出自动队列，但保留给玩家手动总结。
+                        // 自动批次失败后不跨回合追赶：移入仅供手动总结使用的内部 UID 集，新变化重新累计。
                         failedSmallSummaryMarks = mergeSummaryMarks(failedSmallSummaryMarks, pendingSmallSummaryMarks);
                         pendingSmallSummaryMarks = [];
                         turnsSinceSmall = 0;
-                        summaryWarning = `小总结失败；本批已即时重试一次并停止自动处理，材料已保留，可手动小总结：${(0, util_1.errorText)(error)}`;
+                        summaryWarning = `小总结失败；本批已即时重试一次并退出自动队列，可由玩家手动小总结再次处理：${(0, util_1.errorText)(error)}`;
                         this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
+                        notify('error', `镜渊：小总结失败：${(0, util_1.errorText)(error)}`);
                     }
                 }
             }
@@ -7425,20 +7419,23 @@ class MemoryRunner {
                     smallCountSinceLarge = 0;
                 } else {
                     largeRanThisTurn = true;
-                    this.progress('running', `已形成${largeThreshold}次有效小总结，开始大总结：只读取本批被动过的条目`, { titles: ['总结｜世界历史'], smallCountSinceLarge });
+                    this.progress('running', `已形成${largeThreshold}次有效小总结，开始大总结：本批${pendingLargeSummaryMarks.length}个条目`, { titles: ['总结｜世界历史'], smallCountSinceLarge });
+                    notify('info', `镜渊：开始大总结（${pendingLargeSummaryMarks.length}个条目）`);
                     const beforeReceiptIds = this.currentReceiptIds();
                     try {
                         const large = await this.summarize('large', settings, snapshot, { marks: pendingLargeSummaryMarks });
                         committed.push(large);
                         pendingLargeSummaryMarks = subtractSummaryMarks(pendingLargeSummaryMarks, large.processedPendingUids ?? []);
                         smallCountSinceLarge = 0;
+                        notify('success', `镜渊：大总结完成（处理${large.processedPendingUids?.length || 0}个条目）`);
                     } catch (error) {
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '大总结');
                         failedLargeSummaryMarks = mergeSummaryMarks(failedLargeSummaryMarks, pendingLargeSummaryMarks);
                         pendingLargeSummaryMarks = [];
                         smallCountSinceLarge = 0;
-                        summaryWarning = `大总结失败；本批已即时重试一次并停止自动处理，材料已保留，可手动大总结：${(0, util_1.errorText)(error)}`;
+                        summaryWarning = `大总结失败；本批已即时重试一次并退出自动队列，可由玩家手动大总结再次处理：${(0, util_1.errorText)(error)}`;
                         this.progress('warning', summaryWarning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
+                        notify('error', `镜渊：大总结失败：${(0, util_1.errorText)(error)}`);
                     }
                 }
             }
@@ -7697,7 +7694,7 @@ class MemoryRunner {
         const scope = summaryScope(kind, validMarks);
         const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
         if (!selected.length) throw new Error(`${label}当前没有待整理条目`);
-        const promptOptions = { marks: validMarks, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null };
+        const promptOptions = { requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null };
         const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', promptOptions);
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
         const sourceContext = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
@@ -7765,59 +7762,65 @@ class MemoryRunner {
     }
 
     async mergeSelected(settings, snapshot, selectedUids) {
-        this.setStatus(snapshot.chatKey, 'small-summary', '人工合并');
+        const label = '人工结构合并';
+        this.setStatus(snapshot.chatKey, 'small-summary', label);
         this.validate(snapshot);
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         const wanted = new Set((selectedUids ?? []).map((uid) => String(uid)));
         const selected = entries.filter((entry) => wanted.has(String(entry.uid)) && entry.activation?.disabled !== true);
         if (selected.length < 2) throw new Error('选中的可用条目不足两个');
-        const classified = selected.map((entry) => ({ entry, kind: recallSummaryKind(entry) }));
-        const unknown = classified.filter((item) => !item.kind);
-        if (unknown.length) throw new Error(`以下条目没有明确的近期/远期召回标签，不能自动决定合并层级：${unknown.map((item) => item.entry.title).join('、')}`);
-        const kinds = new Set(classified.map((item) => item.kind));
-        if (kinds.size !== 1) throw new Error('选中的条目混合了近期与远期召回层级，请分开合并');
-        const kind = classified[0].kind;
-        const label = kind === 'large' ? '人工大总结合并' : '人工小总结合并';
-        this.setStatus(snapshot.chatKey, kind === 'large' ? 'large-summary' : 'small-summary', label);
+        const selectedIds = selected.map((entry) => String(entry.uid));
         const selectedText = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
-        const prompt = (0, prompts_1.manualMergePrompts)(settings, selected, kind);
-        const profile = kind === 'large' ? settings.largeSummaryProfileId : settings.smallSummaryProfileId;
+        const prompt = (0, prompts_1.manualMergePrompts)(settings, selected);
+        const profile = settings.largeSummaryProfileId || settings.smallSummaryProfileId;
         const raw = await (0, model_request_1.callModel)({
             host: this.host,
-            stage: kind === 'large' ? 'largeSummary' : 'smallSummary',
+            stage: 'manualMerge',
             prompt,
-            fallbackPrompt: () => (0, prompts_1.manualMergePrompts)(settings, selected, kind, { compact: true }),
+            fallbackPrompt: () => (0, prompts_1.manualMergePrompts)(settings, selected, { compact: true }),
             settings,
             snapshot,
             profileId: profile,
             sourceText: selectedText,
-            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, label), { phase: 'summary' }),
+            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, label), { phase: 'manual-merge' }),
         });
         this.validate(snapshot);
         const recovered = parseManualMergeWithRecovery(raw);
         if (!recovered.block) throw new Error('人工合并无法识别固定格式');
         const distributionBlocks = distributionBlocksFromSummary(recovered.block);
-        const sedimentationOperations = sedimentationOperationsFromSummary(recovered.block, entries, selected.map((entry) => String(entry.uid)), 'manual');
-        if (!distributionBlocks.length) throw new Error('人工合并没有形成可写入的合并结果');
-        const plan = (0, operations_1.buildOperationPlan)(distributionBlocks, entries, settings, selectedText, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
+        const sedimentationOperations = sedimentationOperationsFromSummary(recovered.block, entries, selectedIds, 'manual');
+        if (!distributionBlocks.length) throw new Error('人工合并没有形成可写入的整理结果');
+        const plan = (0, operations_1.buildOperationPlan)(distributionBlocks, entries, settings, selectedText, { sourceKind: 'manual-merge', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: false, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
         plan.operations.push(...sedimentationOperations);
-        const summaryText = distributionBlocks.map((block) => block.title).join('、');
         const cursor = this.host.cursor();
-        const applied = await this.apply(settings, plan, snapshot, selectedText, label, raw, { rebalanceKind: kind, summaryText, playerAuthorizedUids: selected.map((entry) => String(entry.uid)), inheritBedrockLock: selected.some((entry) => entry.bedrockLocked === true) });
-        const selectedIds = selected.map((entry) => String(entry.uid));
+        const selectedSet = new Set(selectedIds);
+        const wasPendingSmall = normalizeSummaryMarks(cursor.pendingSmallSummaryMarks).some((mark) => selectedSet.has(mark.uid));
+        const wasFailedSmall = normalizeSummaryMarks(cursor.failedSmallSummaryMarks).some((mark) => selectedSet.has(mark.uid));
+        const wasPendingLarge = normalizeSummaryMarks(cursor.pendingLargeSummaryMarks).some((mark) => selectedSet.has(mark.uid));
+        const wasFailedLarge = normalizeSummaryMarks(cursor.failedLargeSummaryMarks).some((mark) => selectedSet.has(mark.uid));
+        const inheritBedrockLock = selected.some((entry) => entry.bedrockLocked === true);
+        const applied = await this.apply(settings, plan, snapshot, selectedText, label, raw, {
+            sourceKind: 'manual-merge',
+            manualAuthorizedUids: selectedIds,
+            inheritBedrockLock,
+            summaryText: distributionBlocks.map((block) => block.title).join('、'),
+        });
         const producedMarks = applied.changed ? summaryMarksFromResult(applied) : [];
-        const nextCursor = kind === 'small'
-            ? {
-                ...cursor,
-                pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, selectedIds),
-                failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, selectedIds),
-                pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
-            }
-            : {
-                ...cursor,
-                pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, selectedIds),
-                failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, selectedIds),
-            };
+        const removeSelected = (marks) => subtractSummaryMarks(marks, selectedIds);
+        let nextPendingSmall = removeSelected(cursor.pendingSmallSummaryMarks);
+        let nextFailedSmall = removeSelected(cursor.failedSmallSummaryMarks);
+        let nextPendingLarge = removeSelected(cursor.pendingLargeSummaryMarks);
+        let nextFailedLarge = removeSelected(cursor.failedLargeSummaryMarks);
+        // 手动合并只整理结构，不改变这些事实原本所处的总结生命周期。
+        if (producedMarks.length && (wasPendingSmall || wasFailedSmall)) nextPendingSmall = mergeSummaryMarks(nextPendingSmall, producedMarks);
+        if (producedMarks.length && (wasPendingLarge || wasFailedLarge)) nextPendingLarge = mergeSummaryMarks(nextPendingLarge, producedMarks);
+        const nextCursor = {
+            ...cursor,
+            pendingSmallSummaryMarks: nextPendingSmall,
+            failedSmallSummaryMarks: nextFailedSmall,
+            pendingLargeSummaryMarks: nextPendingLarge,
+            failedLargeSummaryMarks: nextFailedLarge,
+        };
         delete nextCursor.pendingSmallSummaryUids;
         delete nextCursor.pendingLargeSummaryUids;
         delete nextCursor.smallSummaryRetryCooldown;
@@ -7828,7 +7831,8 @@ class MemoryRunner {
         } catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, [applied], applied.previousGameTime, cursor, error, label);
         }
-        this.setStatus(snapshot.chatKey, 'complete', `${label}完成：${distributionBlocks.length}个目标条目`);
+        this.setStatus(snapshot.chatKey, 'complete', `${label}完成：写入${distributionBlocks.length}个目标`);
+        notify('success', `镜渊：手动合并完成（整理${selected.length}个来源）`);
         return applied;
     }
 
@@ -7939,42 +7943,43 @@ function taskResultEntries(result) {
 function resultChangedUids(result) {
     return summaryMarksFromResult(result).map((mark) => mark.uid);
 }
-function summaryMarkKey(mark) { return String(mark?.uid ?? '').trim(); }
+function summaryMarkKey(mark) { return String(typeof mark === 'string' ? mark : mark?.uid ?? '').trim(); }
 function normalizeSummaryMarks(value, legacyUids = []) {
-    const output = new Set();
-    for (const item of Array.isArray(value) ? value : []) {
-        const uid = String(typeof item === 'string' ? item : item?.uid ?? '').trim();
-        if (uid) output.add(uid);
-    }
-    for (const uid of Array.isArray(legacyUids) ? legacyUids : []) {
-        const normalized = String(uid ?? '').trim();
-        if (normalized) output.add(normalized);
-    }
-    return [...output].map((uid) => ({ uid }));
+    const output = new Map();
+    const add = (item) => {
+        const uid = summaryMarkKey(item);
+        if (uid) output.set(uid, { uid });
+    };
+    for (const item of Array.isArray(value) ? value : []) add(item);
+    for (const uid of Array.isArray(legacyUids) ? legacyUids : []) add(uid);
+    return [...output.values()];
 }
 function mergeSummaryMarks(left, right) {
-    const output = new Set([...normalizeSummaryMarks(left), ...normalizeSummaryMarks(right)].map(summaryMarkKey).filter(Boolean));
-    return [...output].map((uid) => ({ uid }));
+    const output = new Map();
+    for (const mark of [...normalizeSummaryMarks(left), ...normalizeSummaryMarks(right)]) {
+        const uid = summaryMarkKey(mark);
+        if (uid) output.set(uid, { uid });
+    }
+    return [...output.values()];
 }
 function subtractSummaryMarks(source, resolvedUids) {
     const resolved = new Set((resolvedUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
     return normalizeSummaryMarks(source).filter((mark) => !resolved.has(summaryMarkKey(mark)));
 }
 function summaryMarksFromResult(result) {
-    const currentByUid = new Map((result?.entries ?? []).map((entry) => [String(entry?.uid ?? '').trim(), entry]));
-    const output = new Set();
-    const precise = Array.isArray(result?.businessChanges) ? result.businessChanges : [];
-    for (const change of precise) {
+    const existing = new Set((result?.entries ?? []).map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean));
+    const changed = new Set();
+    for (const change of Array.isArray(result?.businessChanges) ? result.businessChanges : []) {
         const uid = String(change?.uid ?? '').trim();
-        if (uid && currentByUid.has(uid)) output.add(uid);
+        if (uid && existing.has(uid)) changed.add(uid);
     }
-    if (!output.size) {
+    if (!changed.size) {
         for (const change of result?.receipt?.changes ?? []) {
             const uid = String(change?.uid ?? '').trim();
-            if (uid && currentByUid.has(uid)) output.add(uid);
+            if (uid && existing.has(uid)) changed.add(uid);
         }
     }
-    return [...output].map((uid) => ({ uid }));
+    return [...changed].map((uid) => ({ uid }));
 }
 function ensureSummarySnapshotSections(block) {
     // ui.96: current summary protocol already uses only 【分发事实】 / 【沉降来源】.
@@ -7999,18 +8004,8 @@ function sedimentationOperationsFromSummary(summaryBlock, entries, allowedSource
         if (!distributedTargets.has((0, util_1.normalizeTitle)(targetTitle))) continue;
         const source = byTitle.get((0, util_1.normalizeTitle)(sourceTitle));
         if (!source || (allowed.size && !allowed.has(String(source.uid)))) continue;
-        if (source.locked === true || source.focus === true || source.activation?.disabled === true) continue;
+        if ((kind !== 'manual' && source.locked === true) || source.focus === true || source.activation?.disabled === true) continue;
         const target = byTitle.get((0, util_1.normalizeTitle)(targetTitle));
-        const targetEntry = byTitle.get((0, util_1.normalizeTitle)(targetTitle));
-        if (source.name) {
-            operations.push({
-                id: `summary-anchor:${kind}:${source.uid}:${(0, util_1.hashText)(targetTitle)}`,
-                kind: 'merge-keywords', operation: 'append', title: targetTitle,
-                ...(targetEntry?.uid ? { targetUid: targetEntry.uid } : {}),
-                newValue: source.name,
-                reason: '沉降前迁移来源稳定名称作为召回锚点',
-            });
-        }
         operations.push({
             id: `summary-sediment:${kind}:${source.uid}:${(0, util_1.hashText)(targetTitle)}`,
             kind: 'delete-entry', operation: 'delete', title: source.title, targetUid: source.uid,
@@ -8033,7 +8028,7 @@ function parseManualMergeWithRecovery(raw) {
     if (/^(?:无|EMPTY)$/u.test(text.trim())) return { block: null };
     let blocks = [];
     try { blocks = (0, parser_1.parseInformationPoints)(text); } catch { blocks = []; }
-    let block = blocks.find((item) => /^(?:总结|合并)[｜|丨](?:手动合并|人工合并)$/u.test((0, util_1.normalizeTitle)(item.title)));
+    let block = blocks.find((item) => /^(?:总结|合并)[｜|丨](?:手动合并|人工合并|手动整理)$/u.test((0, util_1.normalizeTitle)(item.title)));
     if (!block && blocks.length === 1) block = blocks[0];
     return { block: block || null };
 }
@@ -8046,7 +8041,7 @@ function summaryEntries(entries, marks = []) {
 }
 function summaryScope(kind, marks = []) {
     const count = normalizeSummaryMarks(marks).length;
-    return kind === 'small' ? `本批系统选定条目：${count}` : `本批系统选定局部结果：${count}`;
+    return kind === 'small' ? `本批待小总结条目：${count}条` : `本批待大总结条目：${count}条`;
 }
 
 function distributionBlocksFromSummary(summaryBlock) {
@@ -8054,7 +8049,7 @@ function distributionBlocksFromSummary(summaryBlock) {
     if (!section || section.empty) return [];
     const blocks = new Map();
     for (const line of section.lines) {
-        const match = String(line ?? '').match(/^\s*(人物|角色|场景|地点|物品|事件|世界|全局变化|基础设定|世界设定)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*(.+)$/u);
+        const match = String(line ?? '').match(/^\s*(?:[-*•]+|\d+[.)、])?\s*(人物|角色|场景|地点|物品|事件|世界|全局变化|基础设定|世界设定)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*(.+)$/u);
         if (!match) continue;
         const type = (0, parser_1.canonicalExtractionType)(match[1].trim());
         const name = match[2].trim();
@@ -10557,7 +10552,7 @@ function collectRebuildRecords(data, schema = buildMigrationSchema()) {
 function isRebuildCandidate(raw, schema = buildMigrationSchema()) {
     if (!raw || typeof raw !== 'object') return false;
     const extension = raw.extensions?.[constants_1.WORLD_INFO_EXTENSION_KEY];
-    if (extension?.bedrockLocked === true) return false;
+    if (extension?.locked === true || raw.locked === true) return false;
     if (extension?.managed === true) return true;
     const title = (0, util_1.stripUidSuffix)((0, util_1.normalizeTitle)(String(raw.comment ?? raw.name ?? raw.title ?? '')));
     const split = (0, util_1.splitTitle)(title);
@@ -12425,6 +12420,7 @@ const INPUT_LIMITS = Object.freeze({
     worldSettingImport: 42000,
     smallSummary: 28000,
     largeSummary: 30000,
+    manualMerge: 30000,
     migration: 20000,
     migrationPlan: 28000,
     migrationReview: 24000,
@@ -12604,6 +12600,7 @@ function stageResponseTokens(stage, settings, sourceText = '') {
     if (stage === 'worldSettingImport') return Math.min(configured, 8192);
     if (stage === 'smallSummary') return Math.min(configured, 4096);
     if (stage === 'largeSummary') return Math.min(configured, 6144);
+    if (stage === 'manualMerge') return Math.min(configured, 6144);
     if (stage === 'migration') return Math.min(configured, 1792);
     if (stage === 'migrationPlan') return Math.min(configured, 4096);
     if (stage === 'migrationReview') return Math.min(configured, 1024);
@@ -12630,8 +12627,9 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
         extractionRepair: ['- 只输出修复后的自然中文条目格式或“无”。不得补充事实；最终文本总长度不超过5000个中文字符。'],
         summaryRepair: ['- 只输出修复后的固定总结协议。不得新增、删除、改写或重新判断任何事实、来源、目标、栏目和处理结论；最终文本总长度不超过3200个中文字符。'],
         worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
-        smallSummary: ['- 只输出规定的小总结协议或“无”；以完整表达本批局部规律为准，不设置额外字符硬上限。'],
-        largeSummary: ['- 只输出规定的大总结协议或“无”；以完整表达本批整体规律为准，不设置额外字符硬上限。'],
+        smallSummary: ['- 只输出规定的小总结协议或“无”；以完整表达本批形成的局部规律为准，不设置额外字符硬上限。'],
+        largeSummary: ['- 只输出规定的大总结协议或“无”；以完整表达本批形成的整体规律为准，不设置额外字符硬上限。'],
+        manualMerge: ['- 只输出规定的手动整理协议；目标是重新组织玩家选中的材料并消除语义冗余，不设置额外字符硬上限。'],
         migrationReview: ['- 最终结论必须首先出现。通过只输出 PASS；不通过只输出 FAIL 协议行；总长度不超过800个中文字符。'],
         migrationPlan: ['- 只输出 ANCHOR、GROUP、DROP 协议行；覆盖全部来源后立即停止，不输出说明。'],
         migration: ['- 只输出规定的重建条目协议；完成本批全部对象后立即停止，不输出说明。'],
@@ -12660,6 +12658,7 @@ function reasoningRescueTokens(stage, settings, previousTokens) {
         worldSettingImport: 8192,
         smallSummary: 4096,
         largeSummary: 6144,
+        manualMerge: 6144,
         migration: 4096,
         migrationPlan: 8192,
         migrationReview: 2048,
@@ -12680,6 +12679,7 @@ function protocolRescuePrompt(stage, fallbackValue, sourceText, responseTokens) 
         worldSettingImport: '只输出完整 ENTRY 协议或“无”。',
         smallSummary: '只输出“总结｜当前事件”完整固定协议或“无”。',
         largeSummary: '只输出“总结｜世界历史”完整固定协议或“无”。',
+        manualMerge: '只输出“合并｜手动整理”完整固定协议。',
         migrationReview: '只输出 PASS 或 FAIL 协议。',
         migrationPlan: '只输出 ANCHOR、GROUP、DROP 协议行。',
         migration: '只输出完整重建条目协议。',
@@ -12735,6 +12735,10 @@ function salvageStrictFinalProtocol(stage, reasoningText) {
     }
     if (stage === 'largeSummary') {
         const index = region.lastIndexOf('总结｜世界历史');
+        return index >= 0 ? region.slice(index).trim() : '';
+    }
+    if (stage === 'manualMerge') {
+        const index = Math.max(region.lastIndexOf('合并｜手动整理'), region.lastIndexOf('合并｜手动合并'));
         return index >= 0 ? region.slice(index).trim() : '';
     }
     if (stage === 'summaryRepair') {
@@ -13124,7 +13128,7 @@ function applyPlanToEntries(plan, entries, settings = undefined) {
             continue;
         if (operation.kind === 'merge-entry') {
             const source = byUid.get(String(operation.sourceUid ?? ''));
-            if (source && source.uid !== target.uid) mergeEntryData(target, source);
+            if (!target.bedrockLocked && source && source.uid !== target.uid) mergeEntryData(target, source);
         }
         else applyOne(target, operation);
         modifiedEntries.add(target);
@@ -13913,6 +13917,7 @@ function informationAnchor(line) {
     return '';
 }
 function applyOne(entry, operation) {
+    if (entry?.bedrockLocked === true) return;
     const section = operation.section ?? '';
     const values = entry.sections.values;
     const aliasSection = operation.kind === 'merge-keywords' && /(别名|称号|其他名称)/u.test(section);
@@ -15005,7 +15010,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
 3. 内容必须精简；同一事实只写一次，并写入最直接的主体：人物、场景、物品、事件或世界。普通正文提取不新增、修改基础设定；跨局部的长期规则变化留给大总结处理。
 4. 已有主体必须沿用原类型与原稳定名称；没有合适主体时才新建条目。
 5. 不从一次行为推断人物性格、行为倾向、决策倾向、表达方式或其他人格标签；只记录正文明确发生的事实。
-6. 不写未来计划、可能性、推测、分析、解释或正文没有确认的内容。若索引标注【基石锁】，不得写回该条目，需要表达后续变化时另建合适的新条目。${gameTimeClause}
+6. 不写未来计划、可能性、推测、分析、解释或正文没有确认的内容。若索引标注【保护锁】，只能追加不改变旧事实的新信息；若标注【基石锁】，不得写回该条目，需要表达后续变化时另建合适的新条目。${gameTimeClause}
 
 【唯一输出格式】
 条目
@@ -15024,9 +15029,6 @@ ${schema || '使用人物、场景、物品、事件、世界的现有栏目；�
         : '';
     const user = `【上一轮世界书轻量索引】
 ${clipText(existing || '（无）', compact ? 5000 : 7500)}${gameTimeAnchor}
-
-【本轮玩家输入】
-${clipText(playerText || '（空）', compact ? 1800 : 3000)}
 
 【本轮AI最终回复】
 ${clipText(assistantText, compact ? 6500 : 9000)}
@@ -15047,9 +15049,9 @@ function worldSettingImportPrompts(settings, sourceText, relevant, options = {})
 允许类型：基础设定、世界、场景、人物、物品、事件。
 
 分流规则：
-1. 【基础设定】用于从材料中总结这个世界长期稳定的运行规律；它回答“这个世界通常如何运行”，而不是记录局部事实或当前状态。
+1. 【基础设定】只提炼这个世界长期如何运行：从玩家明确给出的材料中总结稳定的运行规律，不把局部状态、一次性结果或具体对象说明升级成基础规律。
 2. 初始地区、组织、制度、权力、资源网络和公开局势写入【世界】。
-3. 只有设定明确指定的一个实际开局地点写入【场景】；其他地点与地区资料写入【世界】。只有其中真正表达长期运行规律的部分才进入【基础设定】，不因地点描述本身升级。
+3. 只有设定明确指定的一个实际开局地点写入【场景】；其他地点与地区资料写入【世界】，不因地点描述本身升级为基础设定，也不批量建立场景。
 4. 只为已有稳定身份、专名或唯一锚点且会持续存在的对象建立【人物】。
 5. 只为需要跨场景单独追踪的唯一物品实例建立【物品】；普通装备、批量物资和泛称写入人物持有或场景/世界资源。
 6. 只有文档明确说明“已经发生”或“正在发生”的过程才能建立【事件】。计划、可能、将来、希望发生、开局后再发生的内容不得建立事件。
@@ -15086,35 +15088,32 @@ ${existing || '（无）'}
 function summaryPrompts(kind, settings, entries, subject, recentConversation = '', options = {}) {
     const isSmall = kind === 'small';
     const compact = options.compact === true;
-    const marks = normalizePromptMarks(options.marks ?? []);
-    const byUid = new Map(entries.map((entry) => [String(entry.uid ?? ''), entry]));
-    const workingEntries = marks.length ? marks.map((mark) => byUid.get(mark.uid)).filter(Boolean) : entries;
     const gameTimeEnabled = Boolean(options.currentGameTime?.label);
     const stripTimeLines = (text) => String(text ?? '').split('\n').filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(line)).join('\n');
     const materialBudget = compact ? (isSmall ? 15000 : 17000) : (isSmall ? 22000 : 24000);
-    const perEntryLimit = Math.max(520, Math.min(5200, Math.floor(materialBudget / Math.max(1, workingEntries.length)) - 140));
+    const perEntryLimit = Math.max(520, Math.min(5200, Math.floor(materialBudget / Math.max(1, entries.length)) - 140));
     const promptEntry = (entry) => gameTimeEnabled ? entryForPrompt(entry, perEntryLimit) : stripTimeLines(entryForPrompt(entry, perEntryLimit));
     const customRaw = (isSmall ? settings.smallSummaryPrompt : settings.largeSummaryPrompt).trim();
-    const builtinDefault = isSmall
-        ? '把本批具体事实整理为局部范围内持续成立的规律，并保留足以重新召回这段历史的稳定锚点。'
-        : '把本批局部规律整理为更高层、长期成立的整体规律，并保留必要的历史召回锚点。';
-    const custom = customRaw && customRaw !== builtinDefault ? clipText(customRaw, compact ? 900 : 1800) : '';
+    const builtinDefaults = isSmall
+        ? ['把系统选中的本批具体事实整理为局部范围内持续成立的规律；先理解材料之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。', '把本阶段已经发生的固定事实整理为局部状态：关注这段事情结束或推进后留下的变化和后续条件；事件经过可以淡化，相关场景名继续作为召回线索。']
+        : ['把系统选中的多个局部规律整理为更高层、长期成立的整体规律；先理解局部之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。', '把多个已经形成的局部状态整理为更高层的整体状态：关注这些局部共同使阶段、区域或事件链变成了什么，以及由此留下的后续条件；局部经过可以淡化，相关历史场景名继续作为召回线索。'];
+    const custom = customRaw && !builtinDefaults.includes(customRaw) ? clipText(customRaw, compact ? 900 : 1800) : '';
     const title = isSmall ? '总结｜当前事件' : '总结｜世界历史';
+    const level = isSmall ? '局部规律' : '整体规律';
     const purpose = isSmall
-        ? '从系统选定的本批条目中提炼局部范围内持续成立的规律。过程细节可以淡化，但要保留足以让玩家重新定位这段历史的稳定名称与关键锚点。'
-        : '从系统选定的局部规律中进一步提炼更高层、长期成立的整体规律。降低细节颗粒度时，保留必要的历史召回锚点。';
-    const permission = isSmall
-        ? '- 小总结不产生或修改基础设定。'
-        : '- 只有当材料已经形成长期运行规律时，大总结才可以形成基础设定。';
-    const system = `职责：${isSmall ? '局部规律整理' : '整体规律整理'}。
+        ? '把系统选中的本批具体事实整理成这个局部范围内持续成立的规律。先理解材料之间真实的连续关系，再做抽象；同一事物或过程的前后变化不要机械拆成互不相干的平行结论。'
+        : '把系统选中的多个局部规律继续整理成更高层、长期成立的整体规律。先理解这些局部之间真实的连续关系，再决定哪些变化已经共同形成更稳定的整体结构。';
+    const system = `职责：把系统指定的本批世界书材料整理为${level}，并按固定格式分发回世界书条目。
 
 【整理目标】
 ${purpose}
+抽象时保留足以让玩家以后通过历史名称重新召回相关经历的锚点；过程细节可以淡化，召回身份不能丢失。
 
 【边界】
-- 只依据系统提供的本批条目，不额外召回其他材料，不补写未成立事实。
-${permission}
-- 只有当旧条目的有效信息已被本次结果完整承接、继续独立存在只会造成冗余时，才在【沉降来源】声明。
+- 只依据系统提供的材料，不补写没有发生或没有成立的内容。
+- 小总结不新增或修改【基础设定】；大总结只有在材料已经形成长期世界运行规律时才可新增或更新未被基石锁保护的【基础设定】。
+- 基石锁条目由代码层完全只读。
+- 旧条目只有在有效内容与召回身份已经被本次结果完整承接、继续独立存在只会造成冗余时，才在【沉降来源】声明；代码会先写目标成功，再删除来源。
 
 【唯一输出格式】
 ${title}
@@ -15128,51 +15127,37 @@ ${title}
 格式规则：
 - 【分发事实】可有多行，每行恰好四段，以“｜”分隔。
 - 【沉降来源】可省略；来源与目标不得相同。
-- 如果本批材料不需要形成新的上层规律，可以只输出“无”。
+- 如果本批材料没有形成需要写回世界书的上层规律，可以只输出“无”。
 - 不输出UID、JSON、代码块、分析过程、前言或后记。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
     const user = `【处理范围】
-${subject || (isSmall ? '本批系统选定条目' : '本批系统选定局部结果')}
+${subject || (isSmall ? '本批待小总结条目' : '本批待大总结条目')}
 
-【系统选定的本批条目】
-${workingEntries.map((entry) => promptEntry(entry)).join('\n\n') || '（无）'}
+【系统选中的世界书条目】
+${entries.map((entry) => promptEntry(entry)).join('\n\n') || '（无）'}
 
 按上述职责整理，并只输出固定格式。`;
     return { system, user };
 }
 
-function normalizePromptMarks(value) {
-    const output = new Set();
-    for (const item of Array.isArray(value) ? value : []) {
-        const uid = String(typeof item === 'string' ? item : item?.uid ?? '').trim();
-        if (uid) output.add(uid);
-    }
-    return [...output].map((uid) => ({ uid }));
-}
-
-function manualMergePrompts(settings, selectedEntries, kind = 'small', options = {}) {
+function manualMergePrompts(settings, selectedEntries, options = {}) {
     const compact = options.compact === true;
-    const isLarge = kind === 'large';
     const materialBudget = compact ? 16000 : 23000;
     const perEntryLimit = Math.max(520, Math.min(5200, Math.floor(materialBudget / Math.max(1, selectedEntries.length)) - 140));
     const promptEntry = (entry) => entryForPrompt(entry, perEntryLimit);
-    const purpose = isLarge
-        ? '把玩家选中的冗余材料整理为更高层、长期成立的整体规律，并保留必要的历史召回锚点。'
-        : '把玩家选中的冗余材料整理为局部范围内持续成立的规律，并保留足以重新召回这段历史的稳定锚点。';
-    const permission = isLarge
-        ? '- 只有当材料已经形成长期运行规律时，才可以形成基础设定。'
-        : '- 小总结合并不产生或修改基础设定。';
-    const system = `职责：按代码已经确定的${isLarge ? '大总结' : '小总结'}层级，消除玩家所选条目之间的语义冗余。
+    const system = `职责：整理玩家明确选择的一组世界书条目，消除其中的语义冗余并恢复更合理的条目结构。
 
 【整理目标】
-${purpose}
+玩家的选择表示这些材料需要被共同整理。先理解它们之间真实的归属、组成、前后承接或演化关系，再决定怎样重新组织；不要把“小总结颗粒度”或“大总结颗粒度”当作本任务的判断标准。
+结果可以收束为一个条目，也可以重新分配为多个更清晰的条目；目标是让结构更准确、冗余更少，而不是机械提高抽象层级。
 
 【边界】
-- 只依据玩家选中的材料，不额外召回其他条目，不补写未成立事实。
-${permission}
-- 玩家主动合并代表本次操作已获得整理与替换这些来源条目的授权。只有当旧条目的有效信息已被新结果完整承接、继续独立存在只会造成冗余时，才在【沉降来源】声明。
+- 只依据玩家选中的材料，不额外召回或补抓其他条目。
+- 不虚构材料中不存在的关系，不为了合并而强行把独立对象写成同一对象。
+- 保留重要事实和足以让玩家重新召回相关历史的身份锚点。
+- 玩家主动发起本次合并，视为对所选来源的一次性整理授权；只有内容和召回身份已经被新结构完整承接的来源，才在【沉降来源】声明。
 
 【唯一输出格式】
-总结｜手动合并
+合并｜手动整理
 
 【分发事实】
 - 类型｜稳定名称｜栏目名称｜整理后的事实
@@ -15180,11 +15165,14 @@ ${permission}
 【沉降来源】
 - 来源：类型｜旧稳定名称；目标：类型｜承接后的稳定名称
 
-不输出UID、JSON、代码块、分析过程、前言或后记。`;
+格式规则：
+- 【分发事实】可有多行，可写入一个或多个目标条目。
+- 【沉降来源】可省略；只声明确实已经变成冗余的来源。
+- 不输出UID、JSON、代码块、分析过程、前言或后记。`;
     const user = `【玩家选中的材料】
 ${selectedEntries.map((entry) => promptEntry(entry)).join('\n\n') || '（无）'}
 
-按上述职责整理，并只输出固定格式。`;
+理解这些材料的真实结构后重新整理，并只输出固定格式。`;
     return { system, user };
 }
 
@@ -15228,7 +15216,7 @@ function migrationPrompts(records, catalog, options = {}) {
         organization: `【本轮：通用条目重建】${preferred}\n组织只是可能的现有或自定义类型之一；先匹配现有类型，不得把其他内容强行改成组织。`,
         world: `【本轮：世界全局收束】\n本轮统一处理现有世界条目中的地区、组织、权力、制度、资源交通和公开局势，并纠正被误放进世界条目的具体人物、场景、物品或基础规则。不要按同一事实的不同观察角度重复建档；优先归入已有类型和稳定专名，只有确实无法归类时才提出新类型；禁止用“世界”“世界状态”“全局”“公开局势”等泛化词作为唯一标题。`,
         region: `【本轮：地区规则】\n把地区证据归入现有“世界”类型，提炼该地区特有的地理、制度、资源交通、公开局势和持续影响。`,
-        foundation: `【本轮：世界基础设定】\n把材料中长期稳定的世界运行规律整理为“基础设定”。不要把局部事实或当前状态升级为基础设定。`,
+        foundation: `【本轮：世界基础设定】\n把材料中长期稳定的世界运行规律归入现有“基础设定”类型。这里回答“这个世界长期如何运行”，不把局部状态或一次性结果升级成基础规律。`,
     })[phase] || '';
     const allowProposal = !['event', 'region', 'foundation'].includes(phase);
     const system = `职责：按当前重建阶段把旧世界书材料收束为候选条目。\n\n${phaseInstructions}
@@ -15477,7 +15465,7 @@ function promptContextEntries(relevant, limit) {
 function entryForPrompt(entry, contentLimit = 1000) {
     const keywords = (entry.keywords ?? []).filter((item) => !(0, util_1.isUidKeyword)(item));
     const lockNote = entry.bedrockLocked === true
-        ? '系统权限：基石锁（系统不可自动写入原条目；如需表达后续变化，请另建新条目）'
+        ? '系统权限：基石锁（系统完全只读；只有玩家主动操作可改变）'
         : '';
     return `标题：${entry.title}\n关键词：${keywords.join('、') || '无'}${lockNote ? `\n${lockNote}` : ''}\n正文：\n${clipText(entry.content || '（空）', contentLimit)}`;
 }
@@ -15918,7 +15906,7 @@ exports.DEFAULT_KEYWORDS = [
         { key: 'impact', label: '持续影响', policy: 'replace-by-anchor' },
         COMMON_ALIASES,
     ], 610, false),
-    keyword('foundation', '基础设定', '长期稳定的世界运行规律；回答这个世界通常如何运行，而不是记录局部事实或当前状态。', ['基础规则', '世界设定'], true, [
+    keyword('foundation', '基础设定', '长期稳定的世界运行规律：说明这个世界通常如何运作，而不是记录某个局部当前发生了什么。', ['基础规则', '世界设定'], true, [
         { key: 'common', label: '世界常识', policy: 'semantic-upsert' },
         { key: 'nature', label: '自然规则', policy: 'semantic-upsert' },
         { key: 'species', label: '种族与生命', policy: 'semantic-upsert' },
@@ -15965,14 +15953,12 @@ const LEGACY_SMALL_SUMMARY_PROMPT_UI55 = `以上次小总结后实际变更的�
 const LEGACY_SMALL_SUMMARY_PROMPT_UI87 = `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，单次动作和短期状态不得固化为长期事实；必要事实完整承接后才吸收来源。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI91 = `把本阶段细事实转换为局部结果：丢弃不再影响后续的过程细节，保留关键场景名、已形成结果、持续状态、资源与路径变化、关系变化及后续可作用条件；提高颗粒度但不降低关键事实覆盖率。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI92 = `把本阶段固定事实做局部状态结算：丢弃事件经过，保留关键场景名，并记录该局部对场景、人物、物品、关系、资源、路径、威胁及后续条件造成的已成立变化。`;
-const LEGACY_SMALL_SUMMARY_PROMPT_UI97 = `把本阶段已经发生的固定事实整理为局部状态：关注这段事情结束或推进后留下的变化和后续条件；事件经过可以淡化，相关场景名继续作为召回线索。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `把本批具体事实整理为局部范围内持续成立的规律，并保留足以重新召回这段历史的稳定锚点。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `把系统选中的本批具体事实整理为局部范围内持续成立的规律；先理解材料之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI55 = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI87 = `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；只有已有【行为倾向】、稳定关系、事件结果/持续影响、场景永久结构/固定资源/世界影响等中长期证据才允许继续抽象。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人格、长期场景特征或持续影响。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI91 = `把多个局部结果继续上升为整体状态与结构性影响：保留关键旧场景名作为召回锚点，保留关键因果、重大结果、人物与资源去向、持续异常及后续阶段条件；只降低描述分辨率，不降低关键事实覆盖率。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI92 = `把多个局部状态变化做整体状态结算：保留关键旧场景名作为召回锚点，结算这些局部累积后对阶段、区域、事件链及相关人事物形成的结构性变化与后续可作用条件。`;
-const LEGACY_LARGE_SUMMARY_PROMPT_UI97 = `把多个已经形成的局部状态整理为更高层的整体状态：关注这些局部共同使阶段、区域或事件链变成了什么，以及由此留下的后续条件；局部经过可以淡化，相关历史场景名继续作为召回线索。`;
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `把本批局部规律整理为更高层、长期成立的整体规律，并保留必要的历史召回锚点。`;
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = `把系统选中的多个局部规律整理为更高层、长期成立的整体规律；先理解局部之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。`;
 exports.DEFAULT_EXTRACTION_PROMPT = `只追加本轮正文已经明确发生或明确成立的精简事实；沿用已有主体稳定标题，同一事实写入最直接宿主；不删除旧事实，不做人格抽象。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
@@ -16119,8 +16105,8 @@ function parseSettings(value) {
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
         extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI50, LEGACY_EXTRACTION_PROMPT_UI66], exports.DEFAULT_EXTRACTION_PROMPT),
-        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55, LEGACY_SMALL_SUMMARY_PROMPT_UI66, LEGACY_SMALL_SUMMARY_PROMPT_UI86, LEGACY_SMALL_SUMMARY_PROMPT_UI87, LEGACY_SMALL_SUMMARY_PROMPT_UI91, LEGACY_SMALL_SUMMARY_PROMPT_UI92, LEGACY_SMALL_SUMMARY_PROMPT_UI97, `把本阶段已经提取进世界书的细事实上升为对应主体的局部层内容；保留直接宿主边界，删除过程性重复，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，跨阶段重复且可观察的语言习惯才写【表达方式】；人物长期行为层只使用这两个栏目；必要事实完整承接后才吸收来源。`], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
-        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66, LEGACY_LARGE_SUMMARY_PROMPT_UI86, LEGACY_LARGE_SUMMARY_PROMPT_UI87, LEGACY_LARGE_SUMMARY_PROMPT_UI91, LEGACY_LARGE_SUMMARY_PROMPT_UI92, LEGACY_LARGE_SUMMARY_PROMPT_UI97, `把已经形成的局部层内容继续上升为对应主体的整体层内容；跨阶段压缩为整体结果与稳定事实，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；【行为倾向】本身就是长期行为层，可保留、合并或修正，不要求继续升格；【表达方式】只依据跨阶段重复且可观察的语言习惯。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人物性质、长期场景特征或持续影响；人物长期行为层只使用【行为倾向】与【表达方式】。`], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
+        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55, LEGACY_SMALL_SUMMARY_PROMPT_UI66, LEGACY_SMALL_SUMMARY_PROMPT_UI86, LEGACY_SMALL_SUMMARY_PROMPT_UI87, LEGACY_SMALL_SUMMARY_PROMPT_UI91, LEGACY_SMALL_SUMMARY_PROMPT_UI92, `把本阶段已经发生的固定事实整理为局部状态：关注这段事情结束或推进后留下的变化和后续条件；事件经过可以淡化，相关场景名继续作为召回线索。`, `把本阶段已经提取进世界书的细事实上升为对应主体的局部层内容；保留直接宿主边界，删除过程性重复，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，跨阶段重复且可观察的语言习惯才写【表达方式】；人物长期行为层只使用这两个栏目；必要事实完整承接后才吸收来源。`], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66, LEGACY_LARGE_SUMMARY_PROMPT_UI86, LEGACY_LARGE_SUMMARY_PROMPT_UI87, LEGACY_LARGE_SUMMARY_PROMPT_UI91, LEGACY_LARGE_SUMMARY_PROMPT_UI92, `把多个已经形成的局部状态整理为更高层的整体状态：关注这些局部共同使阶段、区域或事件链变成了什么，以及由此留下的后续条件；局部经过可以淡化，相关历史场景名继续作为召回线索。`, `把已经形成的局部层内容继续上升为对应主体的整体层内容；跨阶段压缩为整体结果与稳定事实，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；【行为倾向】本身就是长期行为层，可保留、合并或修正，不要求继续升格；【表达方式】只依据跨阶段重复且可观察的语言习惯。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人物性质、长期场景特征或持续影响；人物长期行为层只使用【行为倾向】与【表达方式】。`], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         smallSummaryTurns: normalizedSmallSummaryTurns,
@@ -16911,6 +16897,7 @@ class WorldbookAdapter {
             const extension = markManaged(located.raw, '', (0, util_1.stripUidSuffix)(String(located.raw.comment ?? '')), '');
             if (previousUpdatedAt) extension.updatedAt = previousUpdatedAt;
             extension.bedrockLocked = locked === true;
+            delete extension.locked;
             const parsed = parseEntries(opened.data);
             const focusedUid = parsed.find((entry) => entry.focus)?.uid ?? '';
             this.applyNativeFields(parsed, settings, focusedUid, new Set());
@@ -17019,7 +17006,11 @@ class WorldbookAdapter {
         if (writeOperations.length) {
             const phasePlan = { ...plan, operations: writeOperations };
             const projectionSettings = options.sourceKind === 'setting-import' ? { ...settings, entryBudgetEnabled: false } : settings;
-            expectedAfterWrites = (0, operations_1.applyPlanToEntries)(phasePlan, before, projectionSettings);
+            const manualAuthorized = new Set((options.manualAuthorizedUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
+            const projectionEntries = options.sourceKind === 'manual-merge'
+                ? before.map((entry) => manualAuthorized.has(String(entry.uid)) ? { ...entry, bedrockLocked: false, locked: false } : entry)
+                : before;
+            expectedAfterWrites = (0, operations_1.applyPlanToEntries)(phasePlan, projectionEntries, projectionSettings);
             const byUid = new Map(before.map((entry) => [entry.uid, entry]));
             for (const entry of expectedAfterWrites) {
                 if (entry.uid.startsWith('new:')) {
@@ -17039,7 +17030,19 @@ class WorldbookAdapter {
                     entry.mapKey = original.mapKey;
                 }
             }
-            // ui.98: 玩家从“世界设定”入口建立的初始基础设定默认基石锁；其他类型不自动上锁。
+            if (options.sourceKind === 'manual-merge' && options.inheritBedrockLock === true) {
+                for (const entry of expectedAfterWrites) {
+                    const uid = String(entry.uid ?? '');
+                    if (!createdUids.has(uid) && !touchedUids.has(uid)) continue;
+                    const extension = markManaged(entry.raw, sourceMessageKey, entry.title, operationId);
+                    extension.bedrockLocked = true;
+                    delete extension.locked;
+                    entry.bedrockLocked = true;
+                    entry.locked = true;
+                }
+            }
+
+            // ui.98: 玩家通过“世界设定”入口建立的初始基础设定默认基石锁；其他条目不自动锁。
             if (options.sourceKind === 'setting-import') {
                 for (const entry of expectedAfterWrites) {
                     const uid = String(entry.uid ?? '');
@@ -17047,7 +17050,6 @@ class WorldbookAdapter {
                     const extension = markManaged(entry.raw, sourceMessageKey, entry.title, operationId);
                     extension.settingImportSource = true;
                     delete extension.locked;
-                    delete extension.settingImportLocked;
                     if (String(entry.type ?? '') === '基础设定') {
                         extension.initialFoundation = true;
                         extension.bedrockLocked = true;
@@ -17057,19 +17059,7 @@ class WorldbookAdapter {
                     }
                 }
             }
-            // 玩家主动合并锁定来源时，合并目标在同一事务内继承基石锁。
-            if (options.inheritBedrockLock === true) {
-                for (const entry of expectedAfterWrites) {
-                    const uid = String(entry.uid ?? '');
-                    if (!createdUids.has(uid) && !touchedUids.has(uid)) continue;
-                    const extension = markManaged(entry.raw, sourceMessageKey, entry.title, operationId);
-                    extension.bedrockLocked = true;
-                    entry.bedrockLocked = true;
-                    entry.locked = true;
-                }
-            }
-
-            // ui.97: 大总结产生/更新的非初始基础设定标记为演化型基础设定。
+            // ui.98: 大总结产生/更新的非初始基础设定标记为演化型基础设定。
             if (options.sourceKind === 'summary' && options.rebalanceKind === 'large') {
                 for (const entry of expectedAfterWrites) {
                     const uid = String(entry.uid ?? '');
@@ -17101,9 +17091,9 @@ class WorldbookAdapter {
             const currentEntries = parseEntries(opened.data);
             for (const operation of exitOperations) {
                 const target = currentEntries.find((entry) => entry.uid === String(operation.targetUid));
-                const playerAuthorized = new Set((options.playerAuthorizedUids ?? []).map((uid) => String(uid)));
-                const authorizedTarget = target ? playerAuthorized.has(String(target.uid)) : false;
-                if (!target || (!authorizedTarget && target.bedrockLocked) || target.focus || target.uid === String(focusUid ?? '')) continue;
+                const manualAuthorized = options.sourceKind === 'manual-merge' && (options.manualAuthorizedUids ?? []).map(String).includes(String(target?.uid ?? ''));
+                if (!target || target.focus || target.uid === String(focusUid ?? '')) continue;
+                if (!manualAuthorized && target.bedrockLocked) continue;
                 if (operation.requiresDistributionProof === true) {
                     const requiredTargets = (0, util_1.normalizeStringArray)(operation.distributionTargets).map(util_1.normalizeTitle);
                     if (!requiredTargets.length) continue;
@@ -17251,7 +17241,9 @@ class WorldbookAdapter {
                 }
                 if (!change.before) {
                     if (!current) continue;
-                    // 回滚是撤销同一事务自身的写入；afterDigest 已经证明条目未被玩家再次修改，因此不受基石锁阻挡。
+                    const extension = readExtension(current.raw);
+                    if (extension.focus === true || extension.locked === true || current.raw.locked === true)
+                        throw new Error(`条目“${current.raw.comment || uid}”已被设为焦点或锁定，不能自动删除`);
                     delete opened.data.entries[current.mapKey];
                     changedCount += 1;
                     continue;
@@ -17260,7 +17252,7 @@ class WorldbookAdapter {
                 if (current) {
                     // ui.72: 回滚应尽可能恢复写入前的原始快照。过去这里调用 markManaged() 会刷新 updatedAt，
                     // 并无条件写入 locked:false，导致“业务内容已回滚、内部生命周期却被当成刚更新”。
-                    // 只有玩家在提交后确实手工改变了焦点/基石锁时，才把这两个交互状态带回恢复快照。
+                    // 只有玩家在提交后确实手工改变了焦点/锁定时，才把这两个交互状态带回恢复快照。
                     const currentExtension = readExtension(current.raw);
                     const beforeExtension = readExtension(change.before);
                     const ensureRestoredExtension = () => {
@@ -17270,7 +17262,8 @@ class WorldbookAdapter {
                         return restored.extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
                     };
                     if ((currentExtension.focus === true) !== (beforeExtension.focus === true)) ensureRestoredExtension().focus = currentExtension.focus === true;
-                    if ((currentExtension.bedrockLocked === true) !== (beforeExtension.bedrockLocked === true)) ensureRestoredExtension().bedrockLocked = currentExtension.bedrockLocked === true;
+                    if ((currentExtension.locked === true) !== (beforeExtension.locked === true)) ensureRestoredExtension().locked = currentExtension.locked === true;
+                    if ((current.raw.locked === true) !== (change.before.locked === true)) restored.locked = current.raw.locked === true;
                 }
                 const mapKey = current?.mapKey || String(change.beforeMapKey ?? restored.uid ?? uid);
                 opened.data.entries[mapKey] = restored;
@@ -17561,23 +17554,21 @@ function createDefaultWorldInfoEntry(uid) {
 function guardSystemOperations(operations, entries, options = {}) {
     const sourceKind = String(options?.sourceKind ?? '');
     const summaryKind = String(options?.rebalanceKind ?? '');
-    const playerAuthorized = new Set((options?.playerAuthorizedUids ?? []).map((uid) => String(uid)));
+    const manualAuthorized = new Set((options?.manualAuthorizedUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
     const byUid = new Map((entries ?? []).map((entry) => [String(entry.uid ?? ''), entry]));
     const asNoop = (operation, reason) => ({ ...operation, kind: 'noop', operation: 'no-op', reason });
     return (operations ?? []).map((operation) => {
         if (!operation || operation.kind === 'noop') return operation;
         const split = (0, util_1.splitTitle)(String(operation.title ?? ''));
         const existing = operation.targetUid ? byUid.get(String(operation.targetUid)) : null;
-        const sourceEntry = operation.sourceUid ? byUid.get(String(operation.sourceUid)) : null;
         const type = String(existing?.type ?? split?.type ?? '');
         const playerSettingImport = sourceKind === 'setting-import';
+        const playerManualMerge = sourceKind === 'manual-merge' && existing && manualAuthorized.has(String(existing.uid));
         if (!playerSettingImport && type === '基础设定' && (sourceKind === 'extraction' || summaryKind === 'small')) {
-            return asNoop(operation, '基础设定只允许玩家设定导入或大总结修改');
+            return asNoop(operation, '基础设定只允许玩家设定导入或大总结处理');
         }
-        if (playerSettingImport) return operation;
-        if (sourceEntry?.bedrockLocked === true && !playerAuthorized.has(String(sourceEntry.uid))) return asNoop(operation, '基石锁：系统不可自动合并该来源条目');
-        if (!existing) return operation;
-        if (existing.bedrockLocked === true && !playerAuthorized.has(String(existing.uid))) return asNoop(operation, '基石锁：系统不可自动改变该条目');
+        if (playerSettingImport || !existing || playerManualMerge) return operation;
+        if (existing.bedrockLocked === true) return asNoop(operation, '基石锁：系统完全只读');
         return operation;
     });
 }
@@ -17596,7 +17587,7 @@ function parseEntries(data) {
         const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称'], split.type));
         const extension = readExtension(raw);
         const storedKeywords = (0, util_1.normalizeStringArray)(extension.recallKeywords);
-        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, bedrockLocked: extension.bedrockLocked === true, locked: extension.bedrockLocked === true, initialFoundation: extension.initialFoundation === true, evolvedFoundation: extension.evolvedFoundation === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
+        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, bedrockLocked: extension.bedrockLocked === true, locked: extension.bedrockLocked === true, initialFoundation: extension.initialFoundation === true, settingImportLocked: extension.settingImportLocked === true, evolvedFoundation: extension.evolvedFoundation === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
 }
@@ -17615,10 +17606,10 @@ function hydrateRaw(raw, entry, sourceMessageKey, operationId) {
     raw.keysecondary ?? (raw.keysecondary = []);
     const extension = markManaged(raw, sourceMessageKey, entry.title, operationId);
     delete extension.locked;
-    delete extension.settingImportLocked;
     extension.bedrockLocked = entry.bedrockLocked === true;
     extension.focus = entry.focus;
     if (entry.initialFoundation === true) extension.initialFoundation = true;
+    if (entry.settingImportLocked === true) extension.settingImportLocked = true;
     if (entry.evolvedFoundation === true) extension.evolvedFoundation = true;
 }
 function markManaged(raw, sourceMessageKey, title, operationId) {
