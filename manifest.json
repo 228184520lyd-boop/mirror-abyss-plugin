@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.100-summary-protocol-parser",
+  "version": "3.0.0-lite.ui.1-event-timeline",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜UID级隐藏标点、基石锁、局部/整体规律总结、独立手动结构合并与先写后删沉降"
+  "description": "世界书单通道｜可连线变化事实、场景事件时间线、局部/整体规律结算、系统定性+模型抽象的包含归并"
 }
