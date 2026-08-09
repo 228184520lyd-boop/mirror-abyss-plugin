@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.98-semantic-lifecycle-manual-merge — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.99-notify-scope-fix — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1314,7 +1314,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.98-semantic-lifecycle-manual-merge';
+exports.VERSION = '2.0.0-lite.ui.99-notify-scope-fix';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -7268,6 +7268,11 @@ const governance_1 = require("./governance");
 const model_request_1 = require("./model-request");
 const util_1 = require("./util");
 const information_point_1 = require("./domain/information-point");
+function summaryNotify(kind, message) {
+    const toast = globalThis.toastr?.[kind];
+    if (typeof toast === 'function') toast(message);
+    else console[kind === 'error' ? 'error' : 'info'](`[MirrorAbyss] ${message}`);
+}
 class MemoryRunner {
     constructor(host, worldbook, getSettings, onProgress = null) {
         this.host = host;
@@ -7322,7 +7327,7 @@ class MemoryRunner {
         if (kind === 'smallSummary') {
             const cursor = this.host.cursor();
             const marks = mergeSummaryMarks(cursor.failedSmallSummaryMarks, cursor.pendingSmallSummaryMarks);
-            notify('info', `镜渊：开始手动小总结（${marks.length}个条目）`);
+            summaryNotify('info', `镜渊：开始手动小总结（${marks.length}个条目）`);
             const result = await this.summarize('small', settings, snapshot, { marks });
             const producedMarks = summaryMarksFromResult(result);
             const processed = result.processedPendingUids ?? [];
@@ -7341,13 +7346,13 @@ class MemoryRunner {
                 await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '小总结回合');
             }
             this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : '小总结完成，无新增写入');
-            notify('success', `镜渊：手动小总结完成（处理${processed.length}个条目）`);
+            summaryNotify('success', `镜渊：手动小总结完成（处理${processed.length}个条目）`);
             return taskResultEntries(result);
         }
 
         const cursor = this.host.cursor();
         const marks = mergeSummaryMarks(cursor.failedLargeSummaryMarks, cursor.pendingLargeSummaryMarks);
-        notify('info', `镜渊：开始手动大总结（${marks.length}个条目）`);
+        summaryNotify('info', `镜渊：开始手动大总结（${marks.length}个条目）`);
         const result = await this.summarize('large', settings, snapshot, { marks });
         const processed = result.processedPendingUids ?? [];
         const nextCursor = {
@@ -7363,7 +7368,7 @@ class MemoryRunner {
             await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '大总结回合');
         }
         this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结完成，无新增写入');
-        notify('success', `镜渊：手动大总结完成（处理${processed.length}个条目）`);
+        summaryNotify('success', `镜渊：手动大总结完成（处理${processed.length}个条目）`);
         return taskResultEntries(result);
     }
 
@@ -7389,7 +7394,7 @@ class MemoryRunner {
                 } else {
                     smallRanThisTurn = true;
                     this.progress('running', `正文累计${smallTurnThreshold}回合，开始小总结：本批${pendingSmallSummaryMarks.length}个条目`, { titles: ['总结｜当前事件'], turnsSinceSmall });
-                    notify('info', `镜渊：开始小总结（${pendingSmallSummaryMarks.length}个条目）`);
+                    summaryNotify('info', `镜渊：开始小总结（${pendingSmallSummaryMarks.length}个条目）`);
                     const beforeReceiptIds = this.currentReceiptIds();
                     try {
                         const small = await this.summarize('small', settings, snapshot, { marks: pendingSmallSummaryMarks });
@@ -7401,7 +7406,7 @@ class MemoryRunner {
                             smallCountSinceLarge += 1;
                             pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
                         }
-                        notify('success', `镜渊：小总结完成（处理${small.processedPendingUids?.length || 0}个条目）`);
+                        summaryNotify('success', `镜渊：小总结完成（处理${small.processedPendingUids?.length || 0}个条目）`);
                     } catch (error) {
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
                         // 自动批次失败后不跨回合追赶：移入仅供手动总结使用的内部 UID 集，新变化重新累计。
@@ -7410,7 +7415,7 @@ class MemoryRunner {
                         turnsSinceSmall = 0;
                         summaryWarning = `小总结失败；本批已即时重试一次并退出自动队列，可由玩家手动小总结再次处理：${(0, util_1.errorText)(error)}`;
                         this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
-                        notify('error', `镜渊：小总结失败：${(0, util_1.errorText)(error)}`);
+                        summaryNotify('error', `镜渊：小总结失败：${(0, util_1.errorText)(error)}`);
                     }
                 }
             }
@@ -7420,14 +7425,14 @@ class MemoryRunner {
                 } else {
                     largeRanThisTurn = true;
                     this.progress('running', `已形成${largeThreshold}次有效小总结，开始大总结：本批${pendingLargeSummaryMarks.length}个条目`, { titles: ['总结｜世界历史'], smallCountSinceLarge });
-                    notify('info', `镜渊：开始大总结（${pendingLargeSummaryMarks.length}个条目）`);
+                    summaryNotify('info', `镜渊：开始大总结（${pendingLargeSummaryMarks.length}个条目）`);
                     const beforeReceiptIds = this.currentReceiptIds();
                     try {
                         const large = await this.summarize('large', settings, snapshot, { marks: pendingLargeSummaryMarks });
                         committed.push(large);
                         pendingLargeSummaryMarks = subtractSummaryMarks(pendingLargeSummaryMarks, large.processedPendingUids ?? []);
                         smallCountSinceLarge = 0;
-                        notify('success', `镜渊：大总结完成（处理${large.processedPendingUids?.length || 0}个条目）`);
+                        summaryNotify('success', `镜渊：大总结完成（处理${large.processedPendingUids?.length || 0}个条目）`);
                     } catch (error) {
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '大总结');
                         failedLargeSummaryMarks = mergeSummaryMarks(failedLargeSummaryMarks, pendingLargeSummaryMarks);
@@ -7435,7 +7440,7 @@ class MemoryRunner {
                         smallCountSinceLarge = 0;
                         summaryWarning = `大总结失败；本批已即时重试一次并退出自动队列，可由玩家手动大总结再次处理：${(0, util_1.errorText)(error)}`;
                         this.progress('warning', summaryWarning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
-                        notify('error', `镜渊：大总结失败：${(0, util_1.errorText)(error)}`);
+                        summaryNotify('error', `镜渊：大总结失败：${(0, util_1.errorText)(error)}`);
                     }
                 }
             }
@@ -7832,7 +7837,7 @@ class MemoryRunner {
             await this.rollbackCommittedResults(settings, snapshot, [applied], applied.previousGameTime, cursor, error, label);
         }
         this.setStatus(snapshot.chatKey, 'complete', `${label}完成：写入${distributionBlocks.length}个目标`);
-        notify('success', `镜渊：手动合并完成（整理${selected.length}个来源）`);
+        summaryNotify('success', `镜渊：手动合并完成（整理${selected.length}个来源）`);
         return applied;
     }
 

@@ -1,6 +1,6 @@
-# Mirror Abyss 2.0.0-lite.ui.98-semantic-lifecycle-manual-merge
+# Mirror Abyss 2.0.0-lite.ui.99-notify-scope-fix
 
-## 2.0.0-lite.ui.98-semantic-lifecycle-manual-merge
+## 2.0.0-lite.ui.99-notify-scope-fix
 
 - 冻结正文提取机制：UI98 的 `extractionPrompts()` 与 UI97 字节级一致，不改变既有提取职责与协议。
 - 修复小/大总结固定格式与解析器错位：`【分发事实】` 现在兼容 `-`、`*`、`•`、`1.`、`2)` 等常见列表前缀，避免模型按提示词输出却被判定为“没有可执行分发内容”。
