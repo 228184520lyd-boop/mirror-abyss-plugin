@@ -1,4 +1,4 @@
-/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.99-notify-scope-fix. */
+/** Mirror Abyss mobile-safe floating loader 2.0.0-lite.ui.100-summary-protocol-parser. */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
@@ -43,7 +43,7 @@ function showError(error) {
 
 function load() {
   mount();
-  return loaded ??= import('./app.js?ui=99-notify-scope-fix').catch(error => {
+  return loaded ??= import('./app.js?ui=100-summary-protocol-parser').catch(error => {
     loaded = undefined;
     showError(error);
     throw error;

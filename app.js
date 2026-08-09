@@ -1,4 +1,4 @@
-/** Mirror Abyss 2.0.0-lite.ui.99-notify-scope-fix — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
+/** Mirror Abyss 2.0.0-lite.ui.100-summary-protocol-parser — layered runtime prompts, optional game-time tracking, deterministic lifecycle settlement, and native recall. */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
@@ -1314,7 +1314,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
-exports.VERSION = '2.0.0-lite.ui.99-notify-scope-fix';
+exports.VERSION = '2.0.0-lite.ui.100-summary-protocol-parser';
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
@@ -8035,6 +8035,10 @@ function parseManualMergeWithRecovery(raw) {
     try { blocks = (0, parser_1.parseInformationPoints)(text); } catch { blocks = []; }
     let block = blocks.find((item) => /^(?:总结|合并)[｜|丨](?:手动合并|人工合并|手动整理)$/u.test((0, util_1.normalizeTitle)(item.title)));
     if (!block && blocks.length === 1) block = blocks[0];
+    if (!block) {
+        const direct = parseSummaryProtocolSections(raw, 'small');
+        if (direct) block = { ...direct, rawTitle: '合并｜手动整理', title: '合并｜手动整理', type: '合并', name: '手动整理', keywords: ['手动整理', '合并'] };
+    }
     return { block: block || null };
 }
 
@@ -8054,7 +8058,7 @@ function distributionBlocksFromSummary(summaryBlock) {
     if (!section || section.empty) return [];
     const blocks = new Map();
     for (const line of section.lines) {
-        const match = String(line ?? '').match(/^\s*(?:[-*•]+|\d+[.)、])?\s*(人物|角色|场景|地点|物品|事件|世界|全局变化|基础设定|世界设定)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*(.+)$/u);
+        const match = String(line ?? '').match(/^\s*(?:[-*•]+|\d+[.)、])?\s*(人物|角色|NPC|场景|地点|地区|区域|物品|道具|装备|事件|事件链|世界|全局|全局状态|全局变化|基础设定|基础规则|世界设定)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*([^｜|丨]+?)\s*[｜|丨]\s*(.+)$/u);
         if (!match) continue;
         const type = (0, parser_1.canonicalExtractionType)(match[1].trim());
         const name = match[2].trim();
@@ -8116,6 +8120,46 @@ function normalizeCurrentSummarySurface(raw, kind) {
     }
     return lines.join('\n').trim();
 }
+function parseSummaryProtocolSections(raw, kind) {
+    const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
+    const source = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '');
+    const sections = new Map();
+    let current = '';
+    const add = (name, value) => {
+        const target = sections.get(name) ?? { name, lines: [], empty: false };
+        const line = String(value ?? '').replace(/^\s*(?:[-*•·]+|\d+[.)、])\s*/u, '').trim();
+        if (line && !/^(?:无|没有)$/u.test(line)) target.lines.push(line);
+        target.lines = (0, util_1.unique)(target.lines);
+        target.empty = target.lines.length === 0;
+        sections.set(name, target);
+    };
+    const distributionPattern = /^\s*(?:[-*•·]+|\d+[.)、])?\s*(?:人物|角色|NPC|场景|地点|地区|区域|物品|道具|装备|事件|事件链|世界|全局|全局状态|全局变化|基础设定|基础规则|世界设定)\s*[｜|丨]\s*[^｜|丨]+?\s*[｜|丨]\s*[^｜|丨]+?\s*[｜|丨]\s*.+$/u;
+    const sedimentPattern = /^\s*(?:[-*•·]+|\d+[.)、])?\s*来源\s*[:：].+[；;]\s*目标\s*[:：].+$/u;
+    for (const rawLine of source.split('\n')) {
+        let line = String(rawLine ?? '').trim();
+        if (!line) continue;
+        line = line.replace(/^#{1,6}\s*/u, '').replace(/^\*\*(.*?)\*\*$/u, '$1').replace(/^__(.*?)__$/u, '$1').trim();
+        const inlineSection = line.match(/^【\s*(分发事实|条目分发|沉降来源|融合来源|删除来源)\s*】\s*[：:]?\s*(.*)$/u);
+        if (inlineSection) {
+            current = /^(?:分发事实|条目分发)$/u.test(inlineSection[1]) ? '分发事实' : '沉降来源';
+            if (!sections.has(current)) sections.set(current, { name: current, lines: [], empty: true });
+            if (inlineSection[2]) add(current, inlineSection[2]);
+            continue;
+        }
+        const plainSection = line.match(/^(分发事实|条目分发|沉降来源|融合来源|删除来源)\s*[：:]?\s*$/u);
+        if (plainSection) {
+            current = /^(?:分发事实|条目分发)$/u.test(plainSection[1]) ? '分发事实' : '沉降来源';
+            if (!sections.has(current)) sections.set(current, { name: current, lines: [], empty: true });
+            continue;
+        }
+        if (distributionPattern.test(line)) { add('分发事实', line); if (!current) current = '分发事实'; continue; }
+        if (sedimentPattern.test(line)) { add('沉降来源', line); if (!current) current = '沉降来源'; continue; }
+        if (current === '分发事实' || current === '沉降来源') add(current, line);
+    }
+    const useful = [...sections.values()].filter((section) => section.lines.length > 0);
+    if (!useful.length) return null;
+    return { rawTitle: expectedTitle, title: expectedTitle, type: '总结', name: kind === 'small' ? '当前事件' : '世界历史', keywords: [kind === 'small' ? '当前事件' : '世界历史', '总结'], sections: useful };
+}
 function parseSummaryWithRecovery(raw, kind) {
     const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
     const sanitized = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '').trim();
@@ -8140,7 +8184,11 @@ function parseSummaryWithRecovery(raw, kind) {
         candidates.push(blocks[0]);
         repaired += 1;
     }
-    if (!candidates.length) return { block: null, explicitNone: false, repaired, skipped: blocks.map((block) => block.title) };
+    if (!candidates.length) {
+        const direct = parseSummaryProtocolSections(raw, kind);
+        if (direct) return { block: direct, explicitNone: false, repaired: repaired + 1, skipped: blocks.map((block) => block.title) };
+        return { block: null, explicitNone: false, repaired, skipped: blocks.map((block) => block.title) };
+    }
     const merged = { rawTitle: expectedTitle, title: expectedTitle, type: '总结', name: kind === 'small' ? '当前事件' : '世界历史', keywords: [kind === 'small' ? '当前事件' : '世界历史', '总结'], sections: [] };
     const sectionMap = new Map();
     for (const block of candidates) {
@@ -8157,6 +8205,13 @@ function parseSummaryWithRecovery(raw, kind) {
         }
     }
     merged.sections = [...sectionMap.values()];
+    if (!distributionBlocksFromSummary(merged).length) {
+        const direct = parseSummaryProtocolSections(raw, kind);
+        if (direct && distributionBlocksFromSummary(direct).length) {
+            repaired += 1;
+            return { block: direct, explicitNone: false, repaired, skipped: blocks.filter((block) => !candidates.includes(block)).map((block) => block.title) };
+        }
+    }
     if (candidates.length > 1) repaired += candidates.length - 1;
     return { block: merged, explicitNone: false, repaired, skipped: blocks.filter((block) => !candidates.includes(block)).map((block) => block.title) };
 }
