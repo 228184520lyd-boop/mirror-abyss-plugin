@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "2.0.0-lite.ui.93-semantic-summary-prompts",
+  "version": "2.0.0-lite.ui.95-summary-single-retry",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书单通道｜语义目标式小/大总结、场景召回线、玩家确认覆盖、先写后删沉降与召回映射人工合并/删除"
+  "description": "世界书单通道｜语义目标式小/大总结、单次即时重试、失败批次停止追踪、玩家确认覆盖、先写后删沉降与召回映射修改模式"
 }
