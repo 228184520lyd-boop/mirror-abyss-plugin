@@ -1351,6 +1351,7 @@ class ControlPanel {
         this.recallEditButton = null;
         this.recallEditActionsNode = null;
         this.recallEditMode = false;
+        this.recallSelectedUids = new Set();
         this.managementNode = null;
         this.managementStatusNode = null;
         this.managementRefreshButton = null;
@@ -1493,6 +1494,7 @@ class ControlPanel {
         this.recallEditButton = null;
         this.recallEditActionsNode = null;
         this.recallEditMode = false;
+        this.recallSelectedUids = new Set();
         this.managementNode = null;
         this.managementStatusNode = null;
         this.managementRefreshButton = null;
@@ -2622,9 +2624,11 @@ class ControlPanel {
     }
 
     selectedManagementUids() {
-        if (!this.recallNode) return [];
-        return [...this.recallNode.querySelectorAll('input[data-entry-uid]:checked')]
-            .map((node) => String(node.dataset.entryUid || '')).filter(Boolean);
+        const valid = new Set((this.recallModel?.entries ?? []).map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean));
+        for (const uid of [...this.recallSelectedUids]) {
+            if (!valid.has(uid)) this.recallSelectedUids.delete(uid);
+        }
+        return [...this.recallSelectedUids];
     }
     async mergeSelectedEntries() {
         const uids = this.selectedManagementUids();
@@ -2636,6 +2640,7 @@ class ControlPanel {
             const result = await this.actions.mergeEntries?.(uids);
             const detail = `合并完成：写入${Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0)}，沉降删除${Number(result?.warehouse?.deletedCount || 0)}`;
             this.setStatus(detail); if (this.recallStatusNode) this.recallStatusNode.textContent = detail;
+            this.recallSelectedUids.clear();
             await this.refreshWorldbookPage(true);
         } catch (error) {
             const text = `合并失败：${(0, util_1.errorText)(error)}`; this.setStatus(text, true); if (this.recallStatusNode) this.recallStatusNode.textContent = text;
@@ -2651,6 +2656,7 @@ class ControlPanel {
             const result = await this.actions.deleteEntries?.(uids);
             const detail = `已删除${Number(result?.deletedCount || result?.warehouse?.deletedCount || 0)}个条目`;
             this.setStatus(detail); if (this.recallStatusNode) this.recallStatusNode.textContent = detail;
+            this.recallSelectedUids.clear();
             await this.refreshWorldbookPage(true);
         } catch (error) {
             const text = `删除失败：${(0, util_1.errorText)(error)}`; this.setStatus(text, true); if (this.recallStatusNode) this.recallStatusNode.textContent = text;
@@ -2780,6 +2786,10 @@ class ControlPanel {
     renderRecallMap(model, worldbookName) {
         this.recallModel = model;
         this.recallWorldbookName = worldbookName;
+        const validUids = new Set((model?.entries ?? []).map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean));
+        for (const uid of [...this.recallSelectedUids]) {
+            if (!validUids.has(uid)) this.recallSelectedUids.delete(uid);
+        }
         const pageCount = Math.max(1, Math.ceil(Number(model?.total || 0) / this.recallPageSize));
         this.recallPage = Math.min(Math.max(1, this.recallPage), pageCount);
         this.renderRecallPage();
@@ -2823,7 +2833,14 @@ class ControlPanel {
                 const select = document.createElement('input');
                 select.type = 'checkbox';
                 select.dataset.entryUid = String(item.uid || '');
+                select.checked = this.recallSelectedUids.has(String(item.uid || ''));
                 select.setAttribute('aria-label', `选择${item.title}`);
+                select.addEventListener('change', () => {
+                    const uid = String(item.uid || '').trim();
+                    if (!uid) return;
+                    if (select.checked) this.recallSelectedUids.add(uid);
+                    else this.recallSelectedUids.delete(uid);
+                });
                 head.append(select);
             }
             head.append(title);
@@ -7786,20 +7803,24 @@ class MemoryRunner {
         const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
         if (!selected.length) throw new Error(`${label}当前没有待整理条目`);
         const promptOptions = { requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null, timeline: options.timeline || null };
-        const prompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', promptOptions);
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
         const sourceContext = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
-        const requestSummaryRaw = async (compactRetry = false) => (0, model_request_1.callModel)({
+        const summaryStage = kind === 'small' ? 'smallSummary' : 'largeSummary';
+        // 总结是后台维护任务，固定行协议不需要用大输入/大输出预算试探网关。
+        // 过去首轮使用 23k/25k 材料预算与 4k/6k 输出预算，504 后才切紧凑请求；
+        // 真实网关表现为“第一次固定 504、第二次成功”。现在首轮直接采用原来的安全重试预算，
+        // 业务级第二次尝试仍保留，用于固定协议未形成等非网络问题。
+        const safeSummaryTokens = Math.max(2048, Math.floor((0, model_request_1.stageResponseTokens)(summaryStage, settings, sourceContext) * 0.75));
+        const requestSummaryRaw = async (_compactRetry = false) => (0, model_request_1.callModel)({
             host: this.host,
-            stage: kind === 'small' ? 'smallSummary' : 'largeSummary',
-            prompt: compactRetry
-                ? (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: true })
-                : prompt,
+            stage: summaryStage,
+            prompt: (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: true }),
             fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: true }),
             settings,
             snapshot,
             profileId: profile,
             sourceText: sourceContext,
+            responseTokens: safeSummaryTokens,
             onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'summary' }),
         });
         // 一个总结批次最多两次总结级尝试：首次 + 一次即时重试。
@@ -8103,8 +8124,8 @@ function sceneSummaryGroupKey(entry) {
     const split = (0, util_1.splitTitle)(String(entry.title ?? ''));
     const rawName = String(split?.name || entry.name || entry.title || '').trim();
     if (!rawName) return '';
-    // 大场景只按带空格的层级分隔符取父场景，避免误拆 B4-01 这类编号。
-    const root = rawName.split(/\s+(?:[-–—―＞>\/])\s+/u)[0]?.trim() || rawName;
+    // 只匹配场景标题；带空格的层级分隔符或模型输出的转场箭头只表示同一标题包含关系中的子地点。
+    const root = rawName.split(/\s*(?:→|＞|>)\s*|\s+(?:[-–—―\/])\s+/u)[0]?.trim() || rawName;
     return (0, util_1.normalizeFact)(root);
 }
 function currentSceneSummaryGroupKey(entries) {
@@ -8114,13 +8135,47 @@ function currentSceneUidKey(entries) {
     return currentSceneEntries(entries).map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean).sort().join('|');
 }
 function currentSceneBoundaryChanged(beforeEntries, afterEntries) {
-    const beforeUid = currentSceneUidKey(beforeEntries);
-    const afterUid = currentSceneUidKey(afterEntries);
-    if (beforeUid && beforeUid === afterUid) return false;
-    const beforeGroup = currentSceneSummaryGroupKey(beforeEntries);
-    const afterGroup = currentSceneSummaryGroupKey(afterEntries);
-    if (!beforeGroup) return false;
-    return Boolean(afterGroup) && beforeGroup !== afterGroup;
+    const beforeScenes = currentSceneEntries(beforeEntries);
+    const afterScenes = currentSceneEntries(afterEntries);
+    if (!beforeScenes.length || !afterScenes.length) return false;
+
+    const sameSceneOrFamily = (before, after) => {
+        const beforeTitle = (0, util_1.normalizeTitle)(String(before?.title ?? ''));
+        const afterTitle = (0, util_1.normalizeTitle)(String(after?.title ?? ''));
+        if (beforeTitle && beforeTitle === afterTitle) return true;
+
+        const beforeGroup = sceneSummaryGroupKey(before);
+        const afterGroup = sceneSummaryGroupKey(after);
+        if (beforeGroup && beforeGroup === afterGroup) return true;
+
+        // 标题只是补充/缩写同一地点时不关闭大场景；完全不相关的标题即使误复用了同一 UID，
+        // 也仍应视为真正换场景，避免 UID 保护把真实转场吞掉。
+        const nameVariants = (entry) => (0, util_1.unique)([
+            (0, util_1.splitTitle)(String(entry?.title ?? ''))?.name || '',
+            String(entry?.name ?? ''),
+            ...(entry?.aliases ?? []),
+        ].map((value) => (0, util_1.normalizeFact)(String(value ?? ''))).filter(Boolean));
+        const beforeNames = nameVariants(before);
+        const afterNames = nameVariants(after);
+        for (const beforeName of beforeNames) {
+            for (const afterName of afterNames) {
+                if (beforeName === afterName) return true;
+                if (Math.min(beforeName.length, afterName.length) >= 3
+                    && (beforeName.includes(afterName) || afterName.includes(beforeName))) return true;
+            }
+        }
+
+        return false;
+    };
+
+    // 当前通常只有一条场景；若宿主短暂保留多条 current 标记，只要新旧集合中存在明确连续关系，
+    // 就不因为投影抖动误关事件线。
+    for (const before of beforeScenes) {
+        for (const after of afterScenes) {
+            if (sameSceneOrFamily(before, after)) return false;
+        }
+    }
+    return true;
 }
 function normalizeEventTimeline(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
