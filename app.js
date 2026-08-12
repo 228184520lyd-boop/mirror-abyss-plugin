@@ -82,7 +82,7 @@ class MirrorAbyssApplication {
             testApiProbe: () => this.testApiProbe(),
             cancel: () => this.cancel(),
             taskStatus: () => this.status(),
-            loadWorkspace: () => this.loadWorkspace(),
+            loadWorkspace: (forceFresh = false) => this.loadWorkspace(forceFresh),
             replanRecall: () => this.replanRecall(),
             updateEntry: (uid, patch) => this.updateEntry(uid, patch),
             setFocus: (uid, enabled) => this.setFocus(uid, enabled),
@@ -127,6 +127,11 @@ class MirrorAbyssApplication {
         // [MA-DIALOGUE-01] 优先等待完整生成结束；旧版宿主没有该事件时，由稳定检测兜底。
         this.listen('GENERATION_ENDED', (value) => this.scheduleMessage(messageIndexFromEvent(value), true));
         for (const event of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED']) this.listen(event, (value) => this.onScopeChanged(event, value));
+        // [MA-RUNTIME-MEMORY-03] 宿主若公开任何 world-info / lorebook 变更事件，
+        // 统一使热内存失效；不依赖某个 SillyTavern 版本的固定事件名。
+        const worldbookEvents = Object.keys(this.host.context()?.eventTypes ?? {})
+            .filter((event) => /(?:WORLD.*INFO|WORLD.*BOOK|LOREBOOK)/iu.test(String(event)));
+        for (const event of worldbookEvents) this.listen(event, () => this.worldbook.invalidateRuntimeMemory());
         this.controlPanel.mount();
         this.started = true;
         this.resumeInterruptedMaintenance();
@@ -144,6 +149,7 @@ class MirrorAbyssApplication {
         this.clearPendingMessageTimers();
         this.clearPendingSourceReconcileTimers();
         this.host.clearInternalMessageMutations();
+        this.worldbook.invalidateRuntimeMemory();
         this.controlPanel.unmount();
     }
     isStarted() { return this.started; }
@@ -460,12 +466,12 @@ class MirrorAbyssApplication {
     publishTaskStatus() {
         this.controlPanel.setGlobalTaskState?.(this.status());
     }
-    async loadWorkspace() {
+    async loadWorkspace(forceFresh = false) {
         const settings = this.settings();
         const token = { cancelled: false, reason: '' };
         const snapshot = this.host.captureMaintenanceSnapshot(settings, 'loadWorkspace', token);
         const validate = () => this.host.assertSnapshot(snapshot, this.settings());
-        const worldbook = await this.worldbook.read(settings, snapshot, validate);
+        const worldbook = await this.worldbook.read(settings, snapshot, validate, { fresh: forceFresh === true });
         validate();
         const currentGameTime = this.host.getCurrentGameTime();
         const management = (0, worldbook_management_1.buildWorldbookManagementView)(worldbook.entries, currentGameTime, settings);
@@ -598,6 +604,7 @@ class MirrorAbyssApplication {
         if (eventName === 'CHAT_CHANGED') {
             this.clearPendingSourceReconcileTimers();
             this.cancelAll(reason);
+            this.worldbook.invalidateRuntimeMemory();
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
             this.migrationService.clearPreview?.();
             this.worldSettingImportService.clearPreview?.();
@@ -2536,7 +2543,7 @@ class ControlPanel {
         if (this.managementStatusNode) this.managementStatusNode.textContent = '正在读取当前绑定世界书…';
         if (this.recallStatusNode) this.recallStatusNode.textContent = '正在读取同一权威快照…';
         try {
-            const workspace = await this.actions.loadWorkspace();
+            const workspace = await this.actions.loadWorkspace(force);
             if (managementSerial !== this.managementLoadSerial || recallSerial !== this.recallLoadSerial) return;
             this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? []);
             const recallModel = buildRecallViewModel(workspace?.entries ?? []);
@@ -2562,7 +2569,7 @@ class ControlPanel {
         if (this.managementRefreshButton) this.managementRefreshButton.disabled = true;
         if (this.managementStatusNode) this.managementStatusNode.textContent = '正在读取世界书管理视图…';
         try {
-            const workspace = await this.actions.loadWorkspace();
+            const workspace = await this.actions.loadWorkspace(force);
             if (serial !== this.managementLoadSerial || !this.managementNode) return;
             this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? []);
         }
@@ -2802,7 +2809,7 @@ class ControlPanel {
         if (this.recallReplanButton) this.recallReplanButton.disabled = true;
         if (this.recallStatusNode) this.recallStatusNode.textContent = '正在读取当前世界书…';
         try {
-            const workspace = await this.actions.loadWorkspace();
+            const workspace = await this.actions.loadWorkspace(force);
             if (serial !== this.recallLoadSerial || !this.recallNode) return;
             const model = buildRecallViewModel(workspace?.entries ?? []);
             this.renderRecallMap(model, workspace?.worldbookName || '');
@@ -17418,9 +17425,51 @@ class WorldbookAdapter {
         this.context = context;
         this.chatKey = chatKey ?? (() => '');
         this.apiPromise = null;
+        // [MA-RUNTIME-MEMORY-01] 运行期热内存只缓存当前世界书的已解析快照。
+        // 世界书仍是唯一长期事实源；所有写入、冲突校验与回滚继续走权威接口。
+        this.runtimeMemory = null;
+        this.runtimeMemoryCounters = { hits: 0, misses: 0, rebuilds: 0 };
     }
-    async list(settings, snapshot, validate) {
-        return (await this.read(settings, snapshot, validate)).entries;
+    runtimeMemoryKey(chatKey, name) { return `${String(chatKey ?? '')}\u0000${String(name ?? '')}`; }
+    runtimeMemorySnapshot(chatKey, name) {
+        const memory = this.runtimeMemory;
+        if (!memory || memory.key !== this.runtimeMemoryKey(chatKey, name)) return null;
+        return memory;
+    }
+    rememberRuntimeMemory(name, data, chatKey = this.chatKey()) {
+        if (!name || !data) return null;
+        const entries = parseEntries(data);
+        const memory = {
+            key: this.runtimeMemoryKey(chatKey, name),
+            chatKey: String(chatKey ?? ''),
+            name: String(name ?? ''),
+            digest: digestWorldbook(data),
+            entries,
+            cachedAt: Date.now(),
+        };
+        this.runtimeMemory = memory;
+        this.runtimeMemoryCounters.rebuilds += 1;
+        return memory;
+    }
+    invalidateRuntimeMemory(chatKey = '', name = '') {
+        if (!this.runtimeMemory) return false;
+        if (chatKey && this.runtimeMemory.chatKey !== String(chatKey)) return false;
+        if (name && this.runtimeMemory.name !== String(name)) return false;
+        this.runtimeMemory = null;
+        return true;
+    }
+    runtimeMemoryStatus() {
+        return {
+            warm: Boolean(this.runtimeMemory),
+            chatKey: this.runtimeMemory?.chatKey ?? '',
+            worldbookName: this.runtimeMemory?.name ?? '',
+            entryCount: this.runtimeMemory?.entries?.length ?? 0,
+            cachedAt: this.runtimeMemory?.cachedAt ?? 0,
+            ...this.runtimeMemoryCounters,
+        };
+    }
+    async list(settings, snapshot, validate, options = {}) {
+        return (await this.read(settings, snapshot, validate, options)).entries;
     }
     // [MA-RECALL-03] 只按现有世界书内容重算原生召回字段，不调用模型、不改写条目正文。
     async replanRecall(settings, snapshot, validate) {
@@ -17435,12 +17484,25 @@ class WorldbookAdapter {
             };
         });
     }
-    async read(settings, snapshot, validate) {
+    async read(settings, snapshot, validate, options = {}) {
         validate?.();
+        this.assertChat(snapshot?.chatKey ?? '');
+        const chatKey = String(snapshot?.chatKey ?? this.chatKey() ?? '');
+        const expectedName = String(snapshot?.worldbookName ?? '');
+        if (options?.fresh !== true && expectedName) {
+            const memory = this.runtimeMemorySnapshot(chatKey, expectedName);
+            if (memory) {
+                this.runtimeMemoryCounters.hits += 1;
+                validate?.();
+                return { name: memory.name, entries: (0, util_1.clone)(memory.entries), runtimeMemory: true };
+            }
+        }
+        this.runtimeMemoryCounters.misses += 1;
         const { data, name } = await this.open(settings, false, validate, snapshot?.chatKey, snapshot?.worldbookName);
         if (snapshot?.worldbookName && name !== snapshot.worldbookName) throw new Error('读取到的世界书与任务快照不一致');
         validate?.();
-        return { name, entries: parseEntries(data) };
+        const memory = this.rememberRuntimeMemory(name, data, chatKey);
+        return { name, entries: memory ? (0, util_1.clone)(memory.entries) : parseEntries(data), runtimeMemory: false };
     }
     async readRaw(settings, snapshot, validate) {
         validate?.();
@@ -17449,6 +17511,7 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName)
             throw new Error('读取到的世界书与任务快照不一致');
         validate?.();
+        this.rememberRuntimeMemory(opened.name, opened.data, snapshot?.chatKey ?? this.chatKey());
         return { name: opened.name, data: (0, util_1.clone)(opened.data) };
     }
     async replaceRaw(settings, expectedName, nextData, snapshot, validate, expectedCurrentData) {
@@ -17655,6 +17718,13 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName) throw new Error('目标世界书已经变化，拒绝提交');
         validate?.();
         const beforeVersion = digestWorldbook(opened.data);
+        const hotBaseline = this.runtimeMemorySnapshot(snapshot?.chatKey ?? this.chatKey(), opened.name);
+        // [MA-RUNTIME-MEMORY-02] 如果宿主世界书在模型处理期间被外部编辑，
+        // 不允许拿旧热内存生成的计划覆盖新权威状态；先重建内存并要求本任务重来。
+        if (hotBaseline && hotBaseline.digest !== beforeVersion) {
+            this.rememberRuntimeMemory(opened.name, opened.data, snapshot?.chatKey ?? this.chatKey());
+            throw new Error('世界书已在后台任务期间被外部修改；运行时内存已刷新，请重新执行本次任务');
+        }
         const beforeData = (0, util_1.clone)(opened.data);
         const receiptBefore = snapshotRawEntries(opened.data);
         const legacyProjectionRemoved = removeLegacyRuntimeProjection(opened.data);
@@ -17819,6 +17889,7 @@ class WorldbookAdapter {
         const businessChanged = writeOperations.length > 0 || deletedCount > 0;
         const changed = businessChanged || legacyProjectionRemoved;
         if (!changed) {
+            this.rememberRuntimeMemory(opened.name, opened.data, snapshot?.chatKey ?? this.chatKey());
             const result = parseEntries(opened.data);
             result.changed = false;
             result.businessChanged = false;
@@ -18005,6 +18076,7 @@ class WorldbookAdapter {
             const actualDigest = digestWorldbook(verified);
             if (saveError && actualDigest !== intendedDigest) throw saveError;
             verify?.(verified);
+            this.rememberRuntimeMemory(opened.name, verified, opened.chatKey ?? this.chatKey());
             return verified;
         }
         catch (error) {
@@ -18014,6 +18086,7 @@ class WorldbookAdapter {
                 catch { }
             }
             if (current && digestWorldbook(current) === beforeDigest) {
+                this.rememberRuntimeMemory(opened.name, current, opened.chatKey ?? this.chatKey());
                 const primary = saveError || error;
                 throw new Error(`${failureLabel}失败，后端保持${snapshotLabel}：${(0, util_1.errorText)(primary)}`);
             }
@@ -18023,6 +18096,7 @@ class WorldbookAdapter {
                 const restored = await loadWorldInfoAuthoritative(opened.api, opened.name);
                 if (!restored || digestWorldbook(restored) !== beforeDigest)
                     throw new Error('恢复后快照不一致');
+                this.rememberRuntimeMemory(opened.name, restored, opened.chatKey ?? this.chatKey());
             }
             catch (rollbackError) {
                 throw new Error(`${failureLabel}失败，且${snapshotLabel}恢复失败：${(0, util_1.errorText)(saveError || error)}；${(0, util_1.errorText)(rollbackError)}`);
@@ -18153,7 +18227,7 @@ class WorldbookAdapter {
                 throw new Error(`世界书已经创建，但聊天绑定保存失败；已恢复并重新保存旧绑定：${(0, util_1.errorText)(error)}`);
             }
         }
-        return { api, name, data };
+        return { api, name, data, chatKey: String(expectedChatKey || this.chatKey() || '') };
     }
     createEntry(api, name, data) {
         if (typeof api.createWorldInfoEntry !== 'function') throw new Error('SillyTavern 未提供 createWorldInfoEntry');
