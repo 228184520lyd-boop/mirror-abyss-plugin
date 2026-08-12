@@ -75,6 +75,7 @@ class MirrorAbyssApplication {
             extract: () => this.extract(),
             smallSummary: () => this.smallSummary(),
             largeSummary: () => this.largeSummary(),
+            summarizeEntries: (kind, uids) => this.summarizeEntries(kind, uids),
             mergeEntries: (uids) => this.mergeEntries(uids),
             deleteEntries: (uids) => this.deleteEntries(uids),
             organizeWorldbook: () => this.organizeWorldbook(),
@@ -161,6 +162,13 @@ class MirrorAbyssApplication {
     largeSummary() {
         return this.enqueueMaintenance('largeSummary', async (settings, snapshot) => this.memoryRunner.runTask('largeSummary', settings, snapshot, { allowCascade: false }));
     }
+    summarizeEntries(kind, uids) {
+        const summaryKind = kind === 'large' ? 'large' : 'small';
+        const selectedUids = [...new Set((uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
+        if (!selectedUids.length) throw new Error('至少选择一个条目才能总结');
+        const taskType = summaryKind === 'large' ? 'selectedLargeSummary' : 'selectedSmallSummary';
+        return this.enqueueMaintenance(taskType, async (settings, snapshot) => this.memoryRunner.summarizeSelected(summaryKind, settings, snapshot, selectedUids));
+    }
     mergeEntries(uids) {
         const selectedUids = [...new Set((uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
         if (selectedUids.length < 2) throw new Error('至少选择两个条目才能合并');
@@ -208,14 +216,14 @@ class MirrorAbyssApplication {
             try {
                 const small = await this.memoryRunner.runTask('smallSummary', settings, snapshot, { allowCascade: false });
                 validate();
-                const large = await this.memoryRunner.runTask('largeSummary', settings, snapshot, { allowCascade: false });
-                validate();
+                // 大总结只能由玩家显式点击“立即大总结”或“选中大总结”。
+                // “整理世界书”不再暗含大总结，避免一次人工维护动作连续向网关提交两个重型总结请求。
                 const recall = await this.worldbook.replanRecall(settings, snapshot, validate);
                 validate();
                 await this.host.clearMaintenanceTransaction?.(transaction.id, snapshot, this.settings());
                 return {
                     smallEntries: Array.isArray(small) ? small.length : 0,
-                    largeEntries: Array.isArray(large) ? large.length : 0,
+                    largeEntries: 0,
                     recallEntries: Array.isArray(recall) ? recall.length : 0,
                     transactional: true,
                 };
@@ -1742,22 +1750,20 @@ class ControlPanel {
             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取。'),
             this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
             this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '大场景结束时触发；沿该场景的变化时间线抽象局部规则并清理确定冗余。'),
-            this.makeSwitch('autoLargeSummary', '自动大总结', '累计成功完成的小总结次数；达到设定次数后把局部层继续上升为整体层。'),
+            this.makeSwitch('autoSmallSummary', '自动小总结', '大场景结束时触发；按该场景涉及的当前世界书条目抽象局部规律并清理确定冗余。'),
             this.makeSwitch('entryBudgetEnabled', '总结后容量防护', '提取阶段先保留可连线事实点；小总结、大总结与整理完成后再按类型和栏目收束容量。'),
         );
         const gameTimeAnchor = this.makeGameTimeInput('游戏时间（可选）', '需要时为当前聊天填写世界内时间锚点，例如“第三日 14:30”或“春季第12日清晨”；留空则当前聊天不启用。后续时间推进由AI判断。', '例如：第三日 14:30');
         const thresholds = document.createElement('div');
         thresholds.className = 'ma-lite-thresholds';
         thresholds.append(
-            this.makeNumberInput('largeSummaryCount', '大总结所需小总结数', 2, 30),
             this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
         );
         const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；不读取角色卡或世界书；修正失败或疑似截断时保留原正文。');
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
         note.textContent = '四阶段状态固定为：审核 → 修正 → 提取 → 写入。任一阶段失败都会停止后续步骤，不推进处理游标。';
-        settingsPage.append(apiSection, this.wrapToolSection('自动化与功能开关', switches, true), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与大总结阈值', thresholds, false), note);
+        settingsPage.append(apiSection, this.wrapToolSection('自动化与功能开关', switches, true), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与队列', thresholds, false), note);
 
         const rebuild = this.buildRebuildSection();
         const diagnostic = this.buildDiagnosticSection();
@@ -2410,7 +2416,7 @@ class ControlPanel {
         section.className = 'ma-lite-worldbook-quick';
         const head = document.createElement('div');
         head.className = 'ma-lite-worldbook-quick-head';
-        head.innerHTML = '<strong>总结控制</strong><small>立即处理当前待总结变化；解析成功后直接分发。人工合并与删除位于“召回映射”。</small>';
+        head.innerHTML = '<strong>总结控制</strong><small>自动链只执行小总结；大总结仅由玩家手动触发。选定部分条目总结、人工合并与删除位于“召回映射”。</small>';
         const actions = document.createElement('div');
         actions.className = 'ma-lite-worldbook-quick-actions';
         for (const [kind, label, title] of [
@@ -2429,7 +2435,7 @@ class ControlPanel {
         const status = document.createElement('div');
         status.className = 'ma-lite-worldbook-quick-status';
         status.setAttribute('aria-live', 'polite');
-        status.textContent = '自动总结按设置中的触发阈值运行；这里仅用于立即执行单层总结。';
+        status.textContent = '自动小总结按场景关闭运行；大总结不会自动触发，这里可手动处理全部待大总结条目。';
         section.append(head, actions, status);
         this.worldbookQuickStatusNode = status;
         return section;
@@ -2450,7 +2456,7 @@ class ControlPanel {
         const labels = { smallSummary: '小总结', largeSummary: '大总结', organizeWorldbook: '世界书整理', testApiProbe: 'API 探针' };
         const label = labels[kind] || '操作';
         if (kind === 'organizeWorldbook' && typeof globalThis.confirm === 'function') {
-            const confirmed = globalThis.confirm('整理世界书将作为一个父事务依次运行小总结、大总结和召回重排。取消或任一步失败会恢复操作前状态；中途切换聊天时，返回原聊天后会先自动恢复。是否继续？');
+            const confirmed = globalThis.confirm('整理世界书将作为一个父事务运行小总结和召回重排；大总结只由玩家单独手动触发。取消或任一步失败会恢复操作前状态；中途切换聊天时，返回原聊天后会先自动恢复。是否继续？');
             if (!confirmed) return;
         }
         this.pendingActions.add(kind);
@@ -2630,6 +2636,27 @@ class ControlPanel {
         }
         return [...this.recallSelectedUids];
     }
+    async summarizeSelectedEntries(kind) {
+        const uids = this.selectedManagementUids();
+        if (!uids.length) { this.setStatus('至少选择一个条目才能总结', true); return; }
+        const summaryKind = kind === 'large' ? 'large' : 'small';
+        const actionKey = summaryKind === 'large' ? 'selectedLargeSummary' : 'selectedSmallSummary';
+        const label = summaryKind === 'large' ? '大总结' : '小总结';
+        if (this.pendingActions.has(actionKey)) return;
+        this.pendingActions.add(actionKey); this.syncDisabledState();
+        if (this.recallStatusNode) this.recallStatusNode.textContent = `正在对玩家选中的${uids.length}个条目执行${label}…`;
+        try {
+            const result = await this.actions.summarizeEntries?.(summaryKind, uids);
+            const detail = `选中${label}完成：处理${Number(result?.processedPendingUids?.length || uids.length)}个条目`;
+            this.setStatus(detail); if (this.recallStatusNode) this.recallStatusNode.textContent = detail;
+            this.recallSelectedUids.clear();
+            await this.refreshWorldbookPage(true);
+        } catch (error) {
+            const text = `选中${label}失败：${(0, util_1.errorText)(error)}`;
+            this.setStatus(text, true); if (this.recallStatusNode) this.recallStatusNode.textContent = `${text}；已保留当前选择，可调整后重试。`;
+        } finally { this.pendingActions.delete(actionKey); this.syncDisabledState(); }
+    }
+
     async mergeSelectedEntries() {
         const uids = this.selectedManagementUids();
         if (uids.length < 2) { this.setStatus('至少选择两个条目才能合并', true); return; }
@@ -2701,13 +2728,21 @@ class ControlPanel {
         const manageActions = document.createElement('div');
         manageActions.className = 'ma-lite-worldbook-quick-actions ma-lite-recall-edit-actions';
         manageActions.hidden = true;
+        const selectedSmall = document.createElement('button');
+        selectedSmall.type = 'button'; selectedSmall.textContent = '选中小总结'; selectedSmall.title = '只读取玩家当前选中的世界书条目，以小总结协议进行局部抽象；成功后只结算与本次选择重叠的待处理标记';
+        selectedSmall.addEventListener('click', () => void this.summarizeSelectedEntries('small'));
+        const selectedLarge = document.createElement('button');
+        selectedLarge.type = 'button'; selectedLarge.textContent = '选中大总结'; selectedLarge.title = '只读取玩家当前选中的世界书条目，以大总结协议进行长期整体抽象；大总结不会自动触发';
+        selectedLarge.addEventListener('click', () => void this.summarizeSelectedEntries('large'));
         const merge = document.createElement('button');
         merge.type = 'button'; merge.textContent = '合并'; merge.title = '整理玩家选中的条目结构，理解真实归属、承接与演化关系并消除冗余；不按小总结/大总结颗粒度判断';
         merge.addEventListener('click', () => void this.mergeSelectedEntries());
         const remove = document.createElement('button');
         remove.type = 'button'; remove.textContent = '删除'; remove.title = '批量删除玩家明确选中的条目';
         remove.addEventListener('click', () => void this.deleteSelectedEntries());
-        manageActions.append(merge, remove);
+        manageActions.append(selectedSmall, selectedLarge, merge, remove);
+        this.buttons.selectedSmallSummary = selectedSmall;
+        this.buttons.selectedLargeSummary = selectedLarge;
         this.buttons.mergeEntries = merge;
         this.buttons.deleteEntries = remove;
         const content = document.createElement('div');
@@ -2731,7 +2766,7 @@ class ControlPanel {
         }
         if (this.recallEditActionsNode) this.recallEditActionsNode.hidden = !this.recallEditMode;
         if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode
-            ? '修改模式：可选择条目合并/删除，也可逐条设置基石锁。'
+            ? '修改模式：可选择条目执行小总结/大总结、合并或删除，也可逐条设置基石锁。'
             : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}仅显示镜渊管理条目，共 ${Number(this.recallModel?.total || 0)} 条。`;
         this.renderRecallPage();
     }
@@ -2799,7 +2834,7 @@ class ControlPanel {
         const model = this.recallModel;
         this.recallNode.className = '';
         this.recallNode.replaceChildren();
-        if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode ? '修改模式：可选择条目合并/删除，也可逐条设置基石锁。' : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}仅显示镜渊管理条目，共 ${model.total} 条。`;
+        if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode ? '修改模式：可选择条目执行小总结/大总结、合并或删除，也可逐条设置基石锁。' : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}仅显示镜渊管理条目，共 ${model.total} 条。`;
         if (!model.total) {
             this.recallNode.className = 'ma-lite-recall-empty';
             this.recallNode.textContent = '当前世界书没有镜渊管理条目';
@@ -3141,9 +3176,7 @@ class ControlPanel {
         if (this.inputs.autoAudit) this.inputs.autoAudit.checked = settings.autoAudit === true;
         if (this.inputs.autoExtraction) this.inputs.autoExtraction.checked = settings.autoExtraction === true;
         if (this.inputs.autoSmallSummary) this.inputs.autoSmallSummary.checked = settings.autoSmallSummary !== false;
-        if (this.inputs.autoLargeSummary) this.inputs.autoLargeSummary.checked = settings.autoLargeSummary !== false;
         if (this.inputs.smallSummaryTurns) this.inputs.smallSummaryTurns.value = String(settings.smallSummaryTurns ?? 15);
-        if (this.inputs.largeSummaryCount) this.inputs.largeSummaryCount.value = String(settings.largeSummaryCount ?? 4);
         if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
         if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
         if (this.inputs.extractionEnabled) this.inputs.extractionEnabled.checked = settings.extractionEnabled !== false;
@@ -3186,6 +3219,8 @@ class ControlPanel {
         if (this.buttons.extract) this.buttons.extract.disabled = busy || !master || settings.extractionEnabled === false;
         if (this.buttons.smallSummary) this.buttons.smallSummary.disabled = busy || !master;
         if (this.buttons.largeSummary) this.buttons.largeSummary.disabled = busy || !master;
+        if (this.buttons.selectedSmallSummary) this.buttons.selectedSmallSummary.disabled = busy || !master;
+        if (this.buttons.selectedLargeSummary) this.buttons.selectedLargeSummary.disabled = busy || !master;
         if (this.buttons.mergeEntries) this.buttons.mergeEntries.disabled = busy || !master;
         if (this.buttons.deleteEntries) this.buttons.deleteEntries.disabled = busy || !master;
         if (this.recallEditButton) this.recallEditButton.disabled = busy || !master;
@@ -4150,8 +4185,8 @@ function configuredModelRoutes(settings) {
         ['审核', settings.auditEnabled !== false ? settings.auditProfileId : null],
         ['修正', settings.auditEnabled !== false ? settings.revisionProfileId : null],
         ['提取', settings.extractionEnabled !== false ? settings.extractionProfileId : null],
-        ['小总结', settings.autoSmallSummary !== false ? settings.smallSummaryProfileId : null],
-        ['大总结', settings.autoLargeSummary !== false ? settings.largeSummaryProfileId : null],
+        ['小总结', settings.smallSummaryProfileId],
+        ['大总结', settings.largeSummaryProfileId],
         ['重建', settings.migrationProfileId],
     ].filter(([, value]) => value !== null);
     const grouped = new Map();
@@ -6690,6 +6725,7 @@ function exposeApi() {
         extract: async () => (await requireApplication()).extract(),
         smallSummary: async () => (await requireApplication()).smallSummary(),
         largeSummary: async () => (await requireApplication()).largeSummary(),
+        summarizeEntries: async (kind, uids) => (await requireApplication()).summarizeEntries(kind, uids),
         organizeWorldbook: async () => (await requireApplication()).organizeWorldbook(),
         replanRecall: async () => (await requireApplication()).replanRecall(),
         previewWorldbookRebuild: async () => (await requireApplication()).migrate(),
@@ -7445,7 +7481,6 @@ class MemoryRunner {
         let failedSmallSummaryMarks = normalizeSummaryMarks(cursor.failedSmallSummaryMarks);
         let failedLargeSummaryMarks = normalizeSummaryMarks(cursor.failedLargeSummaryMarks);
         let smallCountSinceLarge = Math.max(0, Number(cursor.smallCountSinceLarge || 0));
-        const largeThreshold = Math.max(2, Number(settings.largeSummaryCount || 4));
         let activeEventTimeline = normalizeEventTimeline(cursor.activeEventTimeline);
         let closedEventTimelines = (cursor.closedEventTimelines ?? []).map(normalizeEventTimeline).filter(Boolean);
         let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map(normalizeEventTimeline).filter(Boolean).slice(-48);
@@ -7525,31 +7560,9 @@ class MemoryRunner {
                 }
             }
 
-            if (settings.autoLargeSummary !== false && smallCountSinceLarge >= largeThreshold) {
-                if (!pendingLargeSummaryMarks.length) {
-                    smallCountSinceLarge = 0;
-                } else {
-                    largeRanThisTurn = true;
-                    this.progress('running', `已完成${largeThreshold}个局部场景结算，开始大总结：本批${pendingLargeSummaryMarks.length}个条目`, { titles: ['总结｜世界历史'], smallCountSinceLarge });
-                    summaryNotify('info', `镜渊：开始大总结（${pendingLargeSummaryMarks.length}个条目）`);
-                    const beforeReceiptIds = this.currentReceiptIds();
-                    try {
-                        const large = await this.summarize('large', settings, snapshot, { marks: pendingLargeSummaryMarks });
-                        committed.push(large);
-                        pendingLargeSummaryMarks = subtractSummaryMarks(pendingLargeSummaryMarks, large.processedPendingUids ?? []);
-                        smallCountSinceLarge = 0;
-                        summaryNotify('success', `镜渊：大总结完成（处理${large.processedPendingUids?.length || 0}个条目）`);
-                    } catch (error) {
-                        await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '大总结');
-                        failedLargeSummaryMarks = mergeSummaryMarks(failedLargeSummaryMarks, pendingLargeSummaryMarks);
-                        pendingLargeSummaryMarks = [];
-                        smallCountSinceLarge = 0;
-                        summaryWarning = `大总结失败；本批保留给手动大总结处理：${(0, util_1.errorText)(error)}`;
-                        this.progress('warning', summaryWarning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
-                        summaryNotify('error', `镜渊：大总结失败：${(0, util_1.errorText)(error)}`);
-                    }
-                }
-            }
+            // 大总结固定为玩家手动触发。自动小总结形成的上层候选只进入 pendingLargeSummaryMarks，
+            // 不在正文处理回合、场景边界或任何阈值条件下自动调用模型，避免系统误判和连续重型请求卡住网关。
+            largeRanThisTurn = false;
             const nextCursor = {
                 ...cursor,
                 lastProcessedMessageKey: snapshot.messageKey,
@@ -7791,6 +7804,50 @@ class MemoryRunner {
         }
         if (skipped) this.setStatus(snapshot.chatKey, 'matching', `本地语义解析器跳过 ${skipped} 条重复事实`);
     }
+    async summarizeSelected(kind, settings, snapshot, selectedUids) {
+        const summaryKind = kind === 'large' ? 'large' : 'small';
+        const label = summaryKind === 'large' ? '选中大总结' : '选中小总结';
+        const marks = normalizeSummaryMarks((selectedUids ?? []).map((uid) => ({ uid: String(uid ?? '').trim() })).filter((mark) => mark.uid));
+        if (!marks.length) throw new Error(`${label}至少需要一个有效条目`);
+        const cursor = this.host.cursor();
+        summaryNotify('info', `镜渊：开始${label}（${marks.length}个条目）`);
+        const result = await this.summarize(summaryKind, settings, snapshot, { marks });
+        const processed = result.processedPendingUids ?? [];
+        let nextCursor = { ...cursor };
+        if (summaryKind === 'small') {
+            const producedMarks = summaryMarksFromResult(result);
+            const fullyProcessedClosed = (cursor.closedEventTimelines ?? []).map(normalizeEventTimeline).filter(Boolean)
+                .filter((timeline) => timelineUids(timeline).length && timelineUids(timeline).every((uid) => processed.includes(uid)))
+                .map((timeline) => ({ ...timeline, settledAt: Date.now() }));
+            nextCursor = {
+                ...cursor,
+                turnsSinceSmall: 0,
+                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (processed.length ? 1 : 0),
+                pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
+                failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
+                pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
+                closedEventTimelines: (cursor.closedEventTimelines ?? []).filter((timeline) => timelineUids(timeline).some((uid) => !processed.includes(uid))),
+                eventTimelineArchive: [...(cursor.eventTimelineArchive ?? []).map(normalizeEventTimeline).filter(Boolean), ...fullyProcessedClosed].slice(-48),
+            };
+        } else {
+            // 选中大总结只结算与本次玩家选择实际重叠的待处理标记；未选条目继续保留。
+            nextCursor = {
+                ...cursor,
+                pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, processed),
+                failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, processed),
+            };
+        }
+        try {
+            await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
+            await this.finalizeReceiptStates([result], nextCursor);
+        } catch (error) {
+            await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, label);
+        }
+        this.setStatus(snapshot.chatKey, 'complete', result.changed ? `${label}完成` : `${label}完成，无新增写入`);
+        summaryNotify('success', `镜渊：${label}完成（处理${processed.length}个条目）`);
+        return result;
+    }
+
     async summarize(kind, settings, snapshot, options = {}) {
         const label = kind === 'small' ? '小总结' : '大总结';
         this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', label);
@@ -7818,26 +7875,40 @@ class MemoryRunner {
         // 输入保持同一批当前有效世界书条目；独立 Profile 若只返回推理，第二次从干净上下文重新开始，
         // 不附带第一次 reasoning、不缩短业务材料，也不再依赖第三次救援才能形成最终协议。
         const summaryResponseTokens = (0, model_request_1.stageResponseTokens)(summaryStage, settings, sourceContext);
-        const requestSummaryRaw = async (_retry = false) => (0, model_request_1.callModel)({
-            host: this.host,
-            stage: summaryStage,
-            prompt: (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: false }),
-            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: false }),
-            settings,
-            snapshot,
-            profileId: profile,
-            sourceText: sourceContext,
-            responseTokens: summaryResponseTokens,
-            cleanRestartOnEmpty: Boolean(profile),
-            onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'summary' }),
-        });
+        const baseSummaryPrompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: false });
+        const requestSummaryRaw = async (retry = false) => {
+            const requestPrompt = retry
+                ? {
+                    system: `${String(baseSummaryPrompt?.system ?? '').trim()}
+
+【重新开始】这是一次全新的总结请求。不要承接、复述或继续上一次内部推理；直接形成最终固定协议。`.trim(),
+                    user: String(baseSummaryPrompt?.user ?? ''),
+                }
+                : baseSummaryPrompt;
+            return (0, model_request_1.callModel)({
+                host: this.host,
+                stage: summaryStage,
+                prompt: requestPrompt,
+                fallbackPrompt: requestPrompt,
+                settings,
+                snapshot,
+                profileId: profile,
+                sourceText: sourceContext,
+                responseTokens: summaryResponseTokens,
+                // 总结级重试由 summarize() 统一控制：一次正式请求 + 一次干净重开。
+                // 禁止 callModel 再叠加网关/空响应/推理救援重试，否则一个总结批次会膨胀成多次重请求。
+                singleAttempt: true,
+                generationOptions: retry && profile ? { includePreset: false } : undefined,
+                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'summary' }),
+            });
+        };
         // 一个总结批次最多两次总结级尝试：首次 + 一次即时重试。
         let raw = '';
         let summaryRetryUsed = false;
         try {
             raw = await requestSummaryRaw(false);
         } catch (error) {
-            if (error?.cleanRestartExhausted === true) throw error;
+            if (error?.cleanRestartExhausted === true || error?.summaryRetryExhausted === true) throw error;
             summaryRetryUsed = true;
             this.progress('running', `${label}首次请求失败，正在从同一批原始世界书材料重新开始一次`, { titles: [expectedTitle], phase: 'summary-retry', error: (0, util_1.errorText)(error) });
             raw = await requestSummaryRaw(true);
@@ -12901,6 +12972,8 @@ async function callModel(options) {
         onRetry,
         responseTokens = 0,
         cleanRestartOnEmpty = false,
+        singleAttempt = false,
+        generationOptions = undefined,
     } = options;
     const configuredOverride = Number(responseTokens || 0);
     const responseLength = configuredOverride > 0
@@ -12910,12 +12983,17 @@ async function callModel(options) {
     let firstError = null;
     let firstGatewayRetry = false;
     try {
-        return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId);
+        return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId, generationOptions);
     }
     catch (error) {
         firstError = error;
         const emptyResponse = isEmptyModelResponseError(error);
         firstGatewayRetry = isRetryableGatewayError(error);
+        if (singleAttempt) {
+            const salvaged = salvageStrictFinalProtocol(stage, String(error?.reasoningText || ''));
+            if (salvaged) return salvaged;
+            throw error;
+        }
         if (snapshot?.token?.cancelled || (!firstGatewayRetry && !emptyResponse))
             throw error;
     }
@@ -16455,7 +16533,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     autoAudit: false,
     autoExtraction: false,
     autoSmallSummary: true,
-    autoLargeSummary: true,
+    autoLargeSummary: false,
     entryBudgetEnabled: true,
     auditEnabled: true,
     extractionEnabled: true,
@@ -16571,7 +16649,8 @@ function parseSettings(value) {
         autoAudit: candidate.autoAudit === true || (candidate.autoProcess === true && candidate.auditEnabled !== false),
         autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
         autoSmallSummary: candidate.autoSmallSummary !== false,
-        autoLargeSummary: candidate.autoLargeSummary !== false,
+        // 大总结固定为玩家手动触发；保留兼容键但不允许旧设置重新开启自动大总结。
+        autoLargeSummary: false,
         entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
         auditEnabled: candidate.auditEnabled !== false,
         extractionEnabled: candidate.extractionEnabled !== false,
