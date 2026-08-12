@@ -4611,11 +4611,20 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
         return { blocks, diagnostics, currentSceneTitle: blocks.find((block) => block.type === '场景')?.title ?? '' };
     }
     const explicitSceneName = explicitCurrentSceneName(contextText);
-    if (explicitSceneName && !blocks.some((block) => block.type === '场景')) {
-        blocks.unshift({
-            type: '场景', name: explicitSceneName, title: `场景｜${explicitSceneName}`,
-            keywords: [explicitSceneName], sections: [],
-        });
+    if (explicitSceneName) {
+        const sceneBlocks = blocks.filter((block) => block.type === '场景');
+        const matchingScene = sceneBlocks.find((block) => (0, util_1.sceneLocationSimilarity)(block.name || block.title, explicitSceneName) >= 0.72);
+        if (!matchingScene) {
+            // dialogueContext 在 turnText 之前；明确场景必须取整段材料中最后一次声明/转场目标。
+            // 若提取模型仍回写旧场景，正文末端的明确地点优先，避免旧上下文把真实转场压住一轮。
+            for (let index = blocks.length - 1; index >= 0; index -= 1) {
+                if (blocks[index]?.type === '场景') blocks.splice(index, 1);
+            }
+            blocks.unshift({
+                type: '场景', name: explicitSceneName, title: `场景｜${explicitSceneName}`,
+                keywords: [explicitSceneName], sections: [],
+            });
+        }
     }
     synthesizeDocumentItemUpdates(blocks, entries, contextText);
     enforceExplicitDialogueFacts(blocks, contextText);
@@ -4791,8 +4800,7 @@ function synthesizeDocumentItemUpdates(blocks, entries, contextText) {
 }
 
 function explicitCurrentSceneName(contextText) {
-    const match = String(contextText ?? '').match(/(?:当前场景|当前地点)[ \t]*(?:为|是|[：:])[ \t]*[“”"']?([^,，。；;\n“”"']+)/u);
-    return String(match?.[1] ?? '').trim();
+    return (0, util_1.extractLatestSceneLocation)(contextText);
 }
 
 // Models occasionally put structured current-scene facts inside one natural
@@ -4807,10 +4815,10 @@ function normalizeSceneSnapshot(block, contextText = '', options = {}) {
         inferred.push(...splitNames(match[1]));
     }
     const context = String(contextText ?? '');
-    const currentSceneMatch = context.match(/(?:当前场景|当前地点)[ \t]*(?:为|是|[：:])[ \t]*[“”"']?([^,，。；;\n“”"']+)/u);
+    const currentSceneName = explicitCurrentSceneName(context);
     const contextNamesMatch = context.match(/(?:当前)?在场(?:者|人物)?[ \t]*(?:只有|为|是|有|包括|包含|[：:])[ \t]*([^,，。；;\n]+)/u);
-    const sceneMatches = currentSceneMatch
-        && (0, util_1.normalizeFact)(currentSceneMatch[1]).includes((0, util_1.normalizeFact)(block.name));
+    const sceneMatches = currentSceneName
+        && (0, util_1.sceneLocationSimilarity)(currentSceneName, block.name) >= 0.72;
     if (sceneMatches && contextNamesMatch) inferred.push(...splitNames(contextNamesMatch[1]));
     let present = (block.sections ?? []).find((section) => String(section.name ?? '') === '在场');
     if (present || inferred.length) {
@@ -7802,25 +7810,25 @@ class MemoryRunner {
         const scope = summaryScope(kind, validMarks);
         const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
         if (!selected.length) throw new Error(`${label}当前没有待整理条目`);
-        const promptOptions = { requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null, timeline: options.timeline || null };
+        const promptOptions = { requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null };
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
         const sourceContext = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
         const summaryStage = kind === 'small' ? 'smallSummary' : 'largeSummary';
-        // 总结是后台维护任务，固定行协议不需要用大输入/大输出预算试探网关。
-        // 过去首轮使用 23k/25k 材料预算与 4k/6k 输出预算，504 后才切紧凑请求；
-        // 真实网关表现为“第一次固定 504、第二次成功”。现在首轮直接采用原来的安全重试预算，
-        // 业务级第二次尝试仍保留，用于固定协议未形成等非网络问题。
-        const safeSummaryTokens = Math.max(2048, Math.floor((0, model_request_1.stageResponseTokens)(summaryStage, settings, sourceContext) * 0.75));
-        const requestSummaryRaw = async (_compactRetry = false) => (0, model_request_1.callModel)({
+        // 总结首轮先根据真实材料规模分配输出预算，避免推理模型把固定 4k 预算全部耗在 reasoning。
+        // 输入保持同一批当前有效世界书条目；独立 Profile 若只返回推理，第二次从干净上下文重新开始，
+        // 不附带第一次 reasoning、不缩短业务材料，也不再依赖第三次救援才能形成最终协议。
+        const summaryResponseTokens = (0, model_request_1.stageResponseTokens)(summaryStage, settings, sourceContext);
+        const requestSummaryRaw = async (_retry = false) => (0, model_request_1.callModel)({
             host: this.host,
             stage: summaryStage,
-            prompt: (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: true }),
-            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: true }),
+            prompt: (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: false }),
+            fallbackPrompt: () => (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: false }),
             settings,
             snapshot,
             profileId: profile,
             sourceText: sourceContext,
-            responseTokens: safeSummaryTokens,
+            responseTokens: summaryResponseTokens,
+            cleanRestartOnEmpty: Boolean(profile),
             onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, `${label}模型`), { titles: [expectedTitle], phase: 'summary' }),
         });
         // 一个总结批次最多两次总结级尝试：首次 + 一次即时重试。
@@ -7829,8 +7837,9 @@ class MemoryRunner {
         try {
             raw = await requestSummaryRaw(false);
         } catch (error) {
+            if (error?.cleanRestartExhausted === true) throw error;
             summaryRetryUsed = true;
-            this.progress('running', `${label}首次请求失败，正在使用同一批输入即时重试一次`, { titles: [expectedTitle], phase: 'summary-retry', error: (0, util_1.errorText)(error) });
+            this.progress('running', `${label}首次请求失败，正在从同一批原始世界书材料重新开始一次`, { titles: [expectedTitle], phase: 'summary-retry', error: (0, util_1.errorText)(error) });
             raw = await requestSummaryRaw(true);
         }
         this.validate(snapshot);
@@ -8123,10 +8132,7 @@ function sceneSummaryGroupKey(entry) {
     if (!entry) return '';
     const split = (0, util_1.splitTitle)(String(entry.title ?? ''));
     const rawName = String(split?.name || entry.name || entry.title || '').trim();
-    if (!rawName) return '';
-    // 只匹配场景标题；带空格的层级分隔符或模型输出的转场箭头只表示同一标题包含关系中的子地点。
-    const root = rawName.split(/\s*(?:→|＞|>)\s*|\s+(?:[-–—―\/])\s+/u)[0]?.trim() || rawName;
-    return (0, util_1.normalizeFact)(root);
+    return (0, util_1.normalizeSceneLocation)(rawName);
 }
 function currentSceneSummaryGroupKey(entries) {
     return currentSceneEntries(entries).map(sceneSummaryGroupKey).filter(Boolean).sort().join('|');
@@ -8139,40 +8145,21 @@ function currentSceneBoundaryChanged(beforeEntries, afterEntries) {
     const afterScenes = currentSceneEntries(afterEntries);
     if (!beforeScenes.length || !afterScenes.length) return false;
 
-    const sameSceneOrFamily = (before, after) => {
-        const beforeTitle = (0, util_1.normalizeTitle)(String(before?.title ?? ''));
-        const afterTitle = (0, util_1.normalizeTitle)(String(after?.title ?? ''));
-        if (beforeTitle && beforeTitle === afterTitle) return true;
+    const variants = (entry) => (0, util_1.unique)([
+        (0, util_1.splitTitle)(String(entry?.title ?? ''))?.name || '',
+        String(entry?.name ?? ''),
+        ...(entry?.aliases ?? []),
+    ].map((value) => String(value ?? '').trim()).filter(Boolean));
 
-        const beforeGroup = sceneSummaryGroupKey(before);
-        const afterGroup = sceneSummaryGroupKey(after);
-        if (beforeGroup && beforeGroup === afterGroup) return true;
-
-        // 标题只是补充/缩写同一地点时不关闭大场景；完全不相关的标题即使误复用了同一 UID，
-        // 也仍应视为真正换场景，避免 UID 保护把真实转场吞掉。
-        const nameVariants = (entry) => (0, util_1.unique)([
-            (0, util_1.splitTitle)(String(entry?.title ?? ''))?.name || '',
-            String(entry?.name ?? ''),
-            ...(entry?.aliases ?? []),
-        ].map((value) => (0, util_1.normalizeFact)(String(value ?? ''))).filter(Boolean));
-        const beforeNames = nameVariants(before);
-        const afterNames = nameVariants(after);
-        for (const beforeName of beforeNames) {
-            for (const afterName of afterNames) {
-                if (beforeName === afterName) return true;
-                if (Math.min(beforeName.length, afterName.length) >= 3
-                    && (beforeName.includes(afterName) || afterName.includes(beforeName))) return true;
-            }
-        }
-
-        return false;
-    };
-
-    // 当前通常只有一条场景；若宿主短暂保留多条 current 标记，只要新旧集合中存在明确连续关系，
-    // 就不因为投影抖动误关事件线。
+    // 老逻辑恢复：完全相同或文本高度相似才属于同一场景；无法证明相似就视为已经换场景。
+    // UID 只负责内部索引，不参与地点语义判断；即使误复用同一 UID，不同地点仍必须关闭旧场景线。
     for (const before of beforeScenes) {
         for (const after of afterScenes) {
-            if (sameSceneOrFamily(before, after)) return false;
+            for (const beforeName of variants(before)) {
+                for (const afterName of variants(after)) {
+                    if ((0, util_1.sceneLocationSimilarity)(beforeName, afterName) >= 0.72) return false;
+                }
+            }
         }
     }
     return true;
@@ -12913,6 +12900,7 @@ async function callModel(options) {
         sourceText = '',
         onRetry,
         responseTokens = 0,
+        cleanRestartOnEmpty = false,
     } = options;
     const configuredOverride = Number(responseTokens || 0);
     const responseLength = configuredOverride > 0
@@ -12936,6 +12924,39 @@ async function callModel(options) {
         ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
         : prompt;
     const emptyResponse = isEmptyModelResponseError(firstError);
+
+    // 总结使用独立 Profile 时，仅推理/空正文不再走“缩短上下文 → 再救援”的三段式。
+    // 首轮预算已按材料规模预调；第二次直接从原始业务输入重新开始，并去掉生成 preset。
+    if (emptyResponse && cleanRestartOnEmpty && profileId && !snapshot?.token?.cancelled) {
+        const restartBase = {
+            system: `${String(fallbackValue?.system ?? '').trim()}\n\n【重新开始】这是一次全新的总结请求。不要承接、复述或继续上一次内部推理；直接形成最终固定协议。`.trim(),
+            user: String(fallbackValue?.user ?? ''),
+        };
+        const restart = limitPromptPair(withOutputContract(restartBase, stage, responseLength, sourceText), stage, false);
+        const notice = new Error('模型首轮只返回推理或空正文；已按预调预算从干净上下文重新开始一次');
+        notice.code = 'MA_CLEAN_RESTART';
+        try { onRetry?.(notice); }
+        catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
+        try {
+            return await host.generate(
+                restart.system,
+                restart.user,
+                responseLength,
+                snapshot,
+                settings,
+                settings.requestTimeoutMs,
+                profileId,
+                { includePreset: false },
+            );
+        }
+        catch (restartError) {
+            const salvaged = salvageStrictFinalProtocol(stage, String(restartError?.reasoningText || ''));
+            if (salvaged) return salvaged;
+            try { Object.defineProperty(restartError, 'cleanRestartExhausted', { value: true, enumerable: false, configurable: true }); }
+            catch { restartError.cleanRestartExhausted = true; }
+            throw restartError;
+        }
+    }
     const fallbackTokens = emptyResponse
         ? emptyResponseRetryTokens(stage, settings, responseLength)
         : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
@@ -13069,8 +13090,16 @@ function stageResponseTokens(stage, settings, sourceText = '') {
     if (stage === 'extractionRepair') return Math.min(configured, 4096);
     if (stage === 'summaryRepair') return Math.min(configured, 4096);
     if (stage === 'worldSettingImport') return Math.min(configured, 8192);
-    if (stage === 'smallSummary') return Math.min(configured, 4096);
-    if (stage === 'largeSummary') return Math.min(configured, 6144);
+    if (stage === 'smallSummary') {
+        const chars = String(sourceText ?? '').length;
+        const estimated = chars >= 18000 ? 8192 : chars >= 9000 ? 6144 : 4096;
+        return Math.min(configured, estimated);
+    }
+    if (stage === 'largeSummary') {
+        const chars = String(sourceText ?? '').length;
+        const estimated = chars >= 22000 ? 10240 : chars >= 12000 ? 8192 : 6144;
+        return Math.min(configured, estimated);
+    }
     if (stage === 'manualMerge') return Math.min(configured, 6144);
     if (stage === 'migration') return Math.min(configured, 1792);
     if (stage === 'migrationPlan') return Math.min(configured, 4096);
@@ -13223,8 +13252,9 @@ function salvageStrictFinalProtocol(stage, reasoningText) {
 
 function describeRetryReason(error, label = '模型请求') {
     const text = (0, util_1.errorText)(error);
-    if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；已扩大输出预算并缩短上下文重试一次`;
-    if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；已扩大输出预算并缩短上下文重试一次`;
+    if (error?.code === 'MA_CLEAN_RESTART') return `${label}首轮只有推理或空正文；已按预调预算从干净上下文重新开始一次`;
+    if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；正在执行受控重试`;
+    if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；正在执行受控重试`;
     if (error?.code === 'MA_NETWORK_RETRY_EXHAUSTED') return `${label}连续3次网络请求失败：${text}`;
     if (isTransientNetworkError(error)) return `${label}遇到瞬时网络中断：${text}；已缩短上下文并退避重试，最多3次`;
     if (isRetryableGatewayError(error)) return `${label}遇到网关或网络异常：${text}；已缩短上下文重试一次`;
@@ -15585,34 +15615,17 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
         ? [
             '把系统选中的本批具体事实整理为局部范围内持续成立的规律；先理解材料之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。',
             '沿已经结束的大场景变化时间线恢复条件、变化与结果，再抽象这个局部范围内持续成立的规律；保留必要历史锚点，确定冗余和旧状态才沉降。',
+            '把系统选中的当前有效世界书条目作为本场景结算材料，跨条目理解它们共同形成的局部规律；保留必要历史锚点，确定冗余和旧状态才沉降。',
         ]
         : [
             '把系统选中的多个局部规律整理为更高层、长期成立的整体规律；先理解局部之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。',
             '把多个已经结算的局部规律按长期承接与演化继续抽象为整体规律；只沉降已经被更高层结果完整包含的确定冗余。',
         ];
     const custom = customRaw && !builtinDefaults.includes(customRaw) ? clipText(customRaw, compact ? 900 : 1800) : '';
-    const byUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
-    const timeline = options.timeline && typeof options.timeline === 'object' ? options.timeline : null;
-    const timelineText = isSmall && timeline?.stages?.length
-        ? [`场景：${timeline.sceneTitle || timeline.sceneGroup || '未命名局部'}`,
-            ...timeline.stages.map((stage, index) => {
-                const pointLines = [];
-                for (const point of stage.points || []) {
-                    const entry = byUid.get(String(point.uid));
-                    if (!entry) continue;
-                    const candidates = entry.sections?.values?.[point.section] ?? [];
-                    const fact = candidates.find((line) => (0, util_1.hashText)((0, util_1.normalizeFact)(line)) === String(point.factHash || '')) || '';
-                    if (fact) pointLines.push(`${entry.title}｜${point.change || '变化'}｜${fact}`);
-                }
-                if (pointLines.length) return `阶段${index + 1}：\n${pointLines.map((line) => `  ${line}`).join('\n')}`;
-                const titles = [...new Set((stage.uids || []).map((uid) => byUid.get(String(uid))?.title).filter(Boolean))];
-                return `阶段${index + 1}：${titles.join('、') || '无有效变化点'}`;
-            })].join('\n')
-        : '';
     const system = isSmall
-        ? `职责：把一个已经结束的大场景中，由正文提取形成的分散事实点按时间线重新理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统已经把同一大场景中的变化按发生阶段排好。不同人物、场景、物品、事件条目可能只是同一经历的不同投影；先沿时间线恢复“条件 → 变化 → 结果”，再抽象局部规则。\n\n【整理原则】\n- 只使用提供的事实点，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被后续状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 先写新结果，只有确定被完整承接的旧来源才允许沉降。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被后续状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
+        ? `职责：把系统选中的、在刚结束场景中被触及的当前有效世界书条目进行整体理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统内部已经完成本批选材和场景生命周期判断；提供给你的只有这些宿主在场景结束时的当前有效状态。不同人物、场景、物品、事件条目可能是同一经历在不同宿主上的当前投影；应跨条目整体理解后再抽象。\n\n【整理原则】\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被当前有效状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 先写新结果，只有确定被完整承接的旧来源才允许沉降。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被当前状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
         : `职责：把多个已经形成的局部规则继续沿其演化关系整理为更高层、长期成立的整体规律。\n\n【整理原则】\n- 只依据系统提供的局部规则与有效条目，不重新读取原正文。\n- 先理解多个局部结果之间的承接、包含和长期演化，再抽象整体规律。\n- 可以清理已经被更高层结果完整包含的确定冗余；无法确定时保留。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留必要的历史召回锚点。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入里确实存在且已经被更高层规律明确替代或包含的旧事实。没有形成更高层规律时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
-    const user = `${timelineText ? `【局部变化时间线】\n${timelineText}\n\n` : ''}【处理范围】\n${subject || (isSmall ? '当前已结束大场景' : '当前待整理的局部规则')}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n只输出固定模板。`;
+    const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n只输出固定模板。`;
     return { system, user };
 }
 
@@ -16414,7 +16427,7 @@ const LEGACY_SMALL_SUMMARY_PROMPT_UI87 = `逐来源结算本期实际变更条�
 const LEGACY_SMALL_SUMMARY_PROMPT_UI91 = `把本阶段细事实转换为局部结果：丢弃不再影响后续的过程细节，保留关键场景名、已形成结果、持续状态、资源与路径变化、关系变化及后续可作用条件；提高颗粒度但不降低关键事实覆盖率。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI92 = `把本阶段固定事实做局部状态结算：丢弃事件经过，保留关键场景名，并记录该局部对场景、人物、物品、关系、资源、路径、威胁及后续条件造成的已成立变化。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI100 = `把系统选中的本批具体事实整理为局部范围内持续成立的规律；先理解材料之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。`;
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `沿已经结束的大场景变化时间线恢复条件、变化与结果，再抽象这个局部范围内持续成立的规律；保留必要历史锚点，确定冗余和旧状态才沉降。`;
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = `把系统选中的当前有效世界书条目作为本场景结算材料，跨条目理解它们共同形成的局部规律；保留必要历史锚点，确定冗余和旧状态才沉降。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI55 = `以最近若干次小总结后实际变更的运行条目为主材料，将已经跨场景、跨阶段或明确永久成立的内容继续抽象为长期人物变化、重要事件结果、长期关系、组织制度和系统规则；覆盖旧世界历史，只分发长期有效的较粗结果。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI87 = `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；只有已有【行为倾向】、稳定关系、事件结果/持续影响、场景永久结构/固定资源/世界影响等中长期证据才允许继续抽象。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人格、长期场景特征或持续影响。`;
 const LEGACY_LARGE_SUMMARY_PROMPT_UI91 = `把多个局部结果继续上升为整体状态与结构性影响：保留关键旧场景名作为召回锚点，保留关键因果、重大结果、人物与资源去向、持续异常及后续阶段条件；只降低描述分辨率，不降低关键事实覆盖率。`;
@@ -16568,7 +16581,7 @@ function parseSettings(value) {
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
         extractionPrompt: migrateBuiltinPrompt(candidate.extractionPrompt, [LEGACY_EXTRACTION_PROMPT_UI23, LEGACY_EXTRACTION_PROMPT_UI46, LEGACY_EXTRACTION_PROMPT_UI50, LEGACY_EXTRACTION_PROMPT_UI66, LEGACY_EXTRACTION_PROMPT_UI100], exports.DEFAULT_EXTRACTION_PROMPT),
-        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55, LEGACY_SMALL_SUMMARY_PROMPT_UI66, LEGACY_SMALL_SUMMARY_PROMPT_UI86, LEGACY_SMALL_SUMMARY_PROMPT_UI87, LEGACY_SMALL_SUMMARY_PROMPT_UI91, LEGACY_SMALL_SUMMARY_PROMPT_UI92, LEGACY_SMALL_SUMMARY_PROMPT_UI100, `把本阶段已经发生的固定事实整理为局部状态：关注这段事情结束或推进后留下的变化和后续条件；事件经过可以淡化，相关场景名继续作为召回线索。`, `把本阶段已经提取进世界书的细事实上升为对应主体的局部层内容；保留直接宿主边界，删除过程性重复，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，跨阶段重复且可观察的语言习惯才写【表达方式】；人物长期行为层只使用这两个栏目；必要事实完整承接后才吸收来源。`], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, [LEGACY_SMALL_SUMMARY_PROMPT_UI23, LEGACY_SMALL_SUMMARY_PROMPT_UI51, LEGACY_SMALL_SUMMARY_PROMPT_UI55, LEGACY_SMALL_SUMMARY_PROMPT_UI66, LEGACY_SMALL_SUMMARY_PROMPT_UI86, LEGACY_SMALL_SUMMARY_PROMPT_UI87, LEGACY_SMALL_SUMMARY_PROMPT_UI91, LEGACY_SMALL_SUMMARY_PROMPT_UI92, LEGACY_SMALL_SUMMARY_PROMPT_UI100, `沿已经结束的大场景变化时间线恢复条件、变化与结果，再抽象这个局部范围内持续成立的规律；保留必要历史锚点，确定冗余和旧状态才沉降。`, `把本阶段已经发生的固定事实整理为局部状态：关注这段事情结束或推进后留下的变化和后续条件；事件经过可以淡化，相关场景名继续作为召回线索。`, `把本阶段已经提取进世界书的细事实上升为对应主体的局部层内容；保留直接宿主边界，删除过程性重复，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算本期实际变更条目：每条事实先确定唯一直接宿主；人物短期现状只写人物【当前】，场景资源、场景活动和离场快照只写场景；离场快照最多保留一个“离场时状态：”单值槽；重复行为才提炼为【行为倾向】，跨阶段重复且可观察的语言习惯才写【表达方式】；人物长期行为层只使用这两个栏目；必要事实完整承接后才吸收来源。`], exports.DEFAULT_SMALL_SUMMARY_PROMPT),
         largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66, LEGACY_LARGE_SUMMARY_PROMPT_UI86, LEGACY_LARGE_SUMMARY_PROMPT_UI87, LEGACY_LARGE_SUMMARY_PROMPT_UI91, LEGACY_LARGE_SUMMARY_PROMPT_UI92, LEGACY_LARGE_SUMMARY_PROMPT_UI100, `把多个已经形成的局部状态整理为更高层的整体状态：关注这些局部共同使阶段、区域或事件链变成了什么，以及由此留下的后续条件；局部经过可以淡化，相关历史场景名继续作为召回线索。`, `把已经形成的局部层内容继续上升为对应主体的整体层内容；跨阶段压缩为整体结果与稳定事实，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；【行为倾向】本身就是长期行为层，可保留、合并或修正，不要求继续升格；【表达方式】只依据跨阶段重复且可观察的语言习惯。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人物性质、长期场景特征或持续影响；人物长期行为层只使用【行为倾向】与【表达方式】。`], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
@@ -16711,6 +16724,9 @@ exports.stripBatchTitleId = stripBatchTitleId;
 exports.isUidKeyword = isUidKeyword;
 exports.splitTitle = splitTitle;
 exports.normalizeFact = normalizeFact;
+exports.normalizeSceneLocation = normalizeSceneLocation;
+exports.sceneLocationSimilarity = sceneLocationSimilarity;
+exports.extractLatestSceneLocation = extractLatestSceneLocation;
 exports.safeId = safeId;
 function clone(value) { return value === undefined ? value : structuredClone(value); }
 function hashText(value) {
@@ -16800,6 +16816,103 @@ function normalizeFact(value) {
         .replace(/拥有着|持有着/gu, '持有')
         .trim();
 }
+
+function cleanSceneLocationText(value) {
+    let text = String(value ?? '').normalize('NFKC').trim();
+    if (!text) return '';
+    const titled = splitTitle(text);
+    if (titled && /^(?:场景|地点|地区|区域|当前场景|当前地点)$/u.test(String(titled.type ?? ''))) text = String(titled.name ?? '').trim();
+    text = text
+        .replace(/^#{1,6}\s*/u, '')
+        .replace(/^\s*(?:[-*•·]+|\d+[.)、])\s*/u, '')
+        .replace(/^\*{1,3}|\*{1,3}$/gu, '')
+        .replace(/^<(?:当前场景|当前地点|当前位置|场景|地点)>\s*/u, '')
+        .replace(/\s*<\/(?:当前场景|当前地点|当前位置|场景|地点)>$/u, '')
+        .trim();
+    // 【当前场景：A】 / [地点:B] / 【当前场景】A / （转场）A→B。
+    text = text
+        .replace(/^[【\[（(<「『]\s*(当前场景|当前地点|当前位置|场景切换|地点切换|场景转换|地点转换|转场|场景|地点|位置)\s*[:：]\s*(.*?)\s*[】\]）)>」』]$/u, '$2')
+        .replace(/^[【\[（(<「『]\s*(当前场景|当前地点|当前位置|场景切换|地点切换|场景转换|地点转换|转场|场景|地点|位置)\s*[】\]）)>」』]\s*/u, '$1：');
+    text = text.replace(/^(?:当前场景|当前地点|当前位置|场景切换|地点切换|场景转换|地点转换|转场|场景|地点|位置)\s*(?:为|是)?\s*(?:[:：|｜]|[-—―]{1,}|→|->|=>|⇒|⟶|⟹|＞|>)\s*/u, '');
+    // 箭头/双破折号/竖线表示明确转换时，最终地点在最后一段；普通单连字符保留为地点名称的一部分。
+    const transitionParts = text.split(/\s*(?:→|->|=>|⇒|⟶|⟹|＞|>|——+|――+|--+|｜|\|)\s*/u).map((part) => part.trim()).filter(Boolean);
+    if (transitionParts.length > 1) text = transitionParts.at(-1) || text;
+    let previous = '';
+    while (text && previous !== text) {
+        previous = text;
+        text = text
+            .replace(/^[【\[（(<「『《〈“”"'`]+/u, '')
+            .replace(/[】\]）)>」』》〉“”"'`]+$/u, '')
+            .trim();
+    }
+    return text.replace(/^[：:、，,；;。.!！?？\s]+|[：:、，,；;。.!！?？\s]+$/gu, '').trim().slice(0, 120);
+}
+function normalizeSceneLocation(value) {
+    return normalizeFact(cleanSceneLocationText(value))
+        .replace(/[【】\[\]（）()<>《》〈〉「」『』_~]+/gu, '')
+        .replace(/(?:的|所在|内部|里面|内侧)/gu, '')
+        .replace(/祭台/gu, '祭坛')
+        .replace(/房间/gu, '房')
+        .replace(/(?:门口|门前|床边|桌边|书桌旁|窗边|角落|拐角)$/gu, '');
+}
+function sceneLocationSimilarity(left, right) {
+    const a = normalizeSceneLocation(left);
+    const b = normalizeSceneLocation(right);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    const numsA = [...a.matchAll(/\d+/gu)].map((match) => match[0]);
+    const numsB = [...b.matchAll(/\d+/gu)].map((match) => match[0]);
+    // 两边都带明确地点编号时，完整编号序列必须一致；B4-01 与 B4-02 不能仅因共享“4”被判成同地点。
+    if (numsA.length && numsB.length && numsA.join('|') !== numsB.join('|')) return 0;
+    const shorter = a.length <= b.length ? a : b;
+    const longer = a.length > b.length ? a : b;
+    if (shorter.length >= 2 && longer.includes(shorter) && shorter.length / Math.max(1, longer.length) >= 0.55) return 0.9;
+    const grams = (text) => text.length < 2 ? [text] : Array.from({ length: text.length - 1 }, (_, index) => text.slice(index, index + 2));
+    const aa = grams(a);
+    const bb = grams(b);
+    const counts = new Map();
+    for (const item of aa) counts.set(item, (counts.get(item) ?? 0) + 1);
+    let overlap = 0;
+    for (const item of bb) {
+        const count = counts.get(item) ?? 0;
+        if (count > 0) { overlap += 1; counts.set(item, count - 1); }
+    }
+    return aa.length && bb.length ? (2 * overlap) / (aa.length + bb.length) : 0;
+}
+function extractLatestSceneLocation(contextText) {
+    const source = String(contextText ?? '').normalize('NFKC').replace(/\r/g, '');
+    if (!source.trim()) return '';
+    const candidates = [];
+    for (const match of source.matchAll(/<(?:当前场景|当前地点|当前位置|场景|地点)>\s*([^<\n]{1,120})\s*<\/(?:当前场景|当前地点|当前位置|场景|地点)>/gu)) {
+        const value = cleanSceneLocationText(match[1]);
+        if (value) candidates.push({ index: Number(match.index || 0), value });
+    }
+    let offset = 0;
+    for (const rawLine of source.split('\n')) {
+        const lineIndex = offset;
+        offset += rawLine.length + 1;
+        let line = String(rawLine ?? '').trim();
+        if (!line) continue;
+        line = line.replace(/^#{1,6}\s*/u, '').replace(/^\s*(?:[-*•·]+)\s*/u, '').replace(/^\*{1,3}|\*{1,3}$/gu, '').trim();
+        line = line
+            .replace(/^[【\[（(<「『]\s*(当前场景|当前地点|当前位置|场景切换|地点切换|场景转换|地点转换|转场|场景|地点|位置)\s*[:：]\s*(.*?)\s*[】\]）)>」』]$/u, '$1：$2')
+            .replace(/^[【\[（(<「『]\s*(当前场景|当前地点|当前位置|场景切换|地点切换|场景转换|地点转换|转场|场景|地点|位置)\s*[】\]）)>」』]\s*/u, '$1：');
+        const labeled = line.match(/^(?:当前场景|当前地点|当前位置|场景切换|地点切换|场景转换|地点转换|转场|场景|地点|位置)\s*(?:为|是)?\s*(?:[:：|｜]|[-—―]{1,}|→|->|=>|⇒|⟶|⟹|＞|>)\s*(.{1,120})$/u);
+        if (labeled) {
+            const value = cleanSceneLocationText(labeled[1]);
+            if (value) candidates.push({ index: lineIndex, value });
+            continue;
+        }
+        // AI 常用 “A → B / A——B / A｜B” 作为独立转场占位行。只接受短行且没有完整句终止符，避免把普通叙述误当地点。
+        if (line.length <= 100 && /(?:→|->|=>|⇒|⟶|⟹|＞|>|——+|――+|--+|｜|\|)/u.test(line) && !/[。！？!?；;]/u.test(line)) {
+            const value = cleanSceneLocationText(line);
+            if (value && value !== cleanSceneLocationText(line.split(/(?:→|->|=>|⇒|⟶|⟹|＞|>|——+|――+|--+|｜|\|)/u)[0] || '')) candidates.push({ index: lineIndex, value });
+        }
+    }
+    candidates.sort((a, b) => a.index - b.index);
+    return candidates.at(-1)?.value || '';
+}
+
 function safeId(value) {
     return String(value ?? '').trim().replace(/[^\p{L}\p{N}_:.-]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 120);
 }
