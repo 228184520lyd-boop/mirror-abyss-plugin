@@ -7940,7 +7940,9 @@ class MemoryRunner {
         if (!recovered.block) throw new Error(`${label}第二次尝试后仍无法识别固定分发格式`);
         if (!distributionBlocks.length && !removalOperations.length && !sedimentationOperations.length) throw new Error(`${label}第二次尝试后仍没有形成可执行的结算内容`);
         const plan = (0, operations_1.buildOperationPlan)(distributionBlocks, entries, settings, sourceContext, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
-        plan.operations.push(...sedimentationOperations);
+        // 总结协议中的“移除”和“沉降”都属于正式结算操作。旧实现只提交沉降，
+        // 导致模型已经明确输出的旧事实移除被静默丢失，表现为大总结写回了新事实却没有真正收束来源。
+        plan.operations.push(...removalOperations, ...sedimentationOperations);
         const summaryText = distributionBlocks.map((block) => `${block.title}\n${block.sections.map((section) => `【${section.name}】${(section.lines ?? []).join('；')}`).join('\n')}`).join('\n\n');
         if (!plan.operations.some((operation) => operation.kind !== 'noop')) {
             return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedMarks.map((mark) => mark.uid), processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
@@ -13425,10 +13427,16 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
         const resolvedProvisionalCandidates = candidates
             .filter((candidate) => (0, matcher_1.isProvisionalEntry)(candidate.entry))
             .filter((candidate) => candidate.evidence?.some((item) => item.kind === 'context-identity'));
-        const target = (0, matcher_1.selectBestCandidate)(candidates, 80);
+        let target = (0, matcher_1.selectBestCandidate)(candidates, 80);
         const exactClosedEvent = block.type === '事件'
             ? entries.find((entry) => entry.type === '事件' && (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(block.title) && (0, semantic_1.isEventClosed)(entry))
             : null;
+        // 匹配器为防止正文提取重新打开已结束事件，会默认排除 closed event。
+        // 总结/人工合并处理的是历史状态收束：若模型按稳定标题精确写回同一已结束事件，
+        // 应允许命中原条目并保留其既有【结果】，而不是在提交前把整个事件块判成“无法识别”。
+        if (!target && exactClosedEvent && ['summary', 'manual-merge'].includes(String(options.sourceKind || ''))) {
+            target = { entry: exactClosedEvent, score: 100, evidence: [{ kind: 'exact-closed-event-summary', score: 100, detail: '总结按稳定标题命中已结束事件' }] };
+        }
         if (!target && exactClosedEvent && (0, governance_1.currentEventState)(block) !== 'completed') {
             operations.push(noop(exactClosedEvent.title, exactClosedEvent.uid, '事件状态', '已完成事件不能重新变为活动；新的事件必须使用新的事件标题与因果签名'));
             continue;
@@ -13497,7 +13505,8 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
         // [MA-EVENT-SM-01] 状态机只管理当前事件。总结不得把已完成事件重新写成活动进展；
         // 真正的新事件必须拥有不同的参与、场景或因果签名并建立新条目。
         if (block.type === '事件' && (0, semantic_1.isEventClosed)(entry)
-            && (0, governance_1.currentEventState)(block) !== 'completed') {
+            && (0, governance_1.currentEventState)(block) !== 'completed'
+            && !['summary', 'manual-merge'].includes(String(options.sourceKind || ''))) {
             operations.push(noop(entry.title, entry.uid, '事件状态', '已完成事件不能重新变为活动；新的事件必须使用新的事件标题与因果签名', target.score, target.evidence));
             continue;
         }
@@ -15702,7 +15711,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
     const custom = customRaw && !builtinDefaults.includes(customRaw) ? clipText(customRaw, compact ? 900 : 1800) : '';
     const system = isSmall
         ? `职责：把系统选中的、在刚结束场景中被触及的当前有效世界书条目进行整体理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统内部已经完成本批选材和场景生命周期判断；提供给你的只有这些宿主在场景结束时的当前有效状态。不同人物、场景、物品、事件条目可能是同一经历在不同宿主上的当前投影；应跨条目整体理解后再抽象。\n\n【整理原则】\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被当前有效状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 先写新结果，只有确定被完整承接的旧来源才允许沉降。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被当前状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
-        : `职责：把多个已经形成的局部规则继续沿其演化关系整理为更高层、长期成立的整体规律。\n\n【整理原则】\n- 只依据系统提供的局部规则与有效条目，不重新读取原正文。\n- 先理解多个局部结果之间的承接、包含和长期演化，再抽象整体规律。\n- 可以清理已经被更高层结果完整包含的确定冗余；无法确定时保留。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留必要的历史召回锚点。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入里确实存在且已经被更高层规律明确替代或包含的旧事实。没有形成更高层规律时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
+        : `职责：把玩家本次指定的多个有效世界书条目沿其真实承接、包含和演化关系整理为更高层、长期成立的整体规律，并完成能够安全确认的来源收束。\n\n【整理原则】\n- 只依据系统提供的有效世界书条目，不重新读取原正文。事件条目也是合法历史材料；已结束事件只能作为已经发生的历史状态理解，不把它重新写成新的活动任务。\n- 先理解多个局部结果之间的承接、包含和长期演化，再抽象整体规律。不要只逐条改写原条目。\n- 当多个低层事实已经被一个更高层结果完整承接时：先用“写回”把上层结果落到明确目标，再用“移除”清掉目标/来源中已经被替代的旧事实；若某个来源条目的独立召回身份也已被目标完整承接，再用“沉降”把该来源并入目标。\n- “沉降”不是强制删除：只有来源内容与召回身份都已被目标完整覆盖时才输出；无法确定时保留。每条沉降的目标必须同时出现在本次“写回”结果中。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留必要的历史召回锚点，避免为了减少条目而丢失仍有独立检索价值的事件、人物、场景或物品。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入里确实存在且已经被更高层规律明确替代或包含的旧事实。没有形成更高层规律时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
     const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n只输出固定模板。`;
     return { system, user };
 }
