@@ -127,11 +127,10 @@ class MirrorAbyssApplication {
         // [MA-DIALOGUE-01] 优先等待完整生成结束；旧版宿主没有该事件时，由稳定检测兜底。
         this.listen('GENERATION_ENDED', (value) => this.scheduleMessage(messageIndexFromEvent(value), true));
         for (const event of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED']) this.listen(event, (value) => this.onScopeChanged(event, value));
-        // [MA-RUNTIME-MEMORY-03] 宿主若公开任何 world-info / lorebook 变更事件，
-        // 统一使热内存失效；不依赖某个 SillyTavern 版本的固定事件名。
-        const worldbookEvents = Object.keys(this.host.context()?.eventTypes ?? {})
-            .filter((event) => /(?:WORLD.*INFO|WORLD.*BOOK|LOREBOOK)/iu.test(String(event)));
-        for (const event of worldbookEvents) this.listen(event, () => this.worldbook.invalidateRuntimeMemory());
+        // [MA-HOT-INDEX-03] 只监听 SillyTavern 明确的世界书内容更新事件。
+        // WORLDINFO_SCAN_DONE / WORLDINFO_ENTRIES_LOADED 只是扫描/加载，不代表内容修改，不能清掉热索引。
+        if (this.host.context()?.eventTypes?.WORLDINFO_UPDATED)
+            this.listen('WORLDINFO_UPDATED', () => this.worldbook.invalidateRuntimeMemory());
         this.controlPanel.mount();
         this.started = true;
         this.resumeInterruptedMaintenance();
@@ -6831,33 +6830,20 @@ const HONORIFIC_SUFFIXES = Object.freeze([
 ]);
 
 function buildEntryIndex(entries) {
+    // [MA-EXACT-MATCH-01] 正常世界书身份只使用 UID / 稳定标题。
+    // 别名、关键词、正文包含、名称变体和事件相似度不再参与自动覆盖。
     const byUid = new Map();
     const byExactTitle = new Map();
     const byTitle = new Map();
-    const byTypeAndName = new Map();
-    const byAlias = new Map();
-    const byKeyword = new Map();
-    const byVariantName = new Map();
     for (const entry of entries) {
         byUid.set(String(entry.uid), entry);
         add(byExactTitle, String(entry.title ?? ''), entry);
         add(byTitle, normalizeTitleLookup(entry.title), entry);
-        add(byTypeAndName, typeNameKey(entry.type, entry.name), entry);
-        for (const alias of entry.aliases ?? []) add(byAlias, typedLookup(entry.type, alias), entry);
-        for (const keyword of entry.triggerKeywords ?? entry.keywords ?? []) {
-            if ((0, util_1.isUidKeyword)(keyword)) continue;
-            add(byKeyword, typedLookup(entry.type, keyword), entry);
-        }
-        const identityNames = [entry.name, ...(entry.aliases ?? []), ...(entry.triggerKeywords ?? entry.keywords ?? [])];
-        for (const identityName of identityNames) {
-            if ((0, util_1.isUidKeyword)(identityName)) continue;
-            for (const variant of nameVariants(identityName)) add(byVariantName, typedLookup(entry.type, variant), entry);
-        }
     }
-    return { entries, byUid, byExactTitle, byTitle, byTypeAndName, byAlias, byKeyword, byVariantName };
+    return { entries, byUid, byExactTitle, byTitle };
 }
 
-function matchBlock(block, index, contextText, weights = {}) {
+function matchBlock(block, index, _contextText, weights = {}) {
     const scores = { ...DEFAULT_SCORES, ...weights };
     const collected = [];
     if (block.uid) {
@@ -6865,69 +6851,10 @@ function matchBlock(block, index, contextText, weights = {}) {
         if (entry) collected.push(candidate(entry, scores.uid, 'uid', `UID ${block.uid} 精确命中`));
     }
     collected.push(...candidates(index.byExactTitle.get(String(block.title ?? '')) ?? [], scores.exactTitle, 'exact-title', '标题完全相同'));
-    collected.push(...candidates(index.byTitle.get(normalizeTitleLookup(block.title)) ?? [], scores.normalizedTitle, 'normalized-title', '标准化标题相同'));
-    collected.push(...candidates(index.byTypeAndName.get(typeNameKey(block.type, block.name)) ?? [], scores.typeAndName, 'type-name', '类型与名称相同'));
-    const provisionalBlock = canonicalTypeLookup(block.type) === '人物' && isProvisionalName(block.name);
-    const identitySafe = (entries) => provisionalBlock ? entries.filter((entry) => isProvisionalEntry(entry)) : entries;
-    collected.push(...candidates(identitySafe(index.byAlias.get(typedLookup(block.type, block.name)) ?? []), scores.alias, 'alias', `同类型正式别名“${block.name}”命中`));
-    for (const variant of nameVariants(block.name)) {
-        collected.push(...candidates(identitySafe(index.byVariantName.get(typedLookup(block.type, variant)) ?? []), scores.nameVariant, 'name-variant', `称谓或标题轻微变化归一为“${variant}”`));
-    }
-    if (canonicalTypeLookup(block.type) === '场景') {
-        for (const entry of index.entries) {
-            if (canonicalTypeLookup(entry.type) !== '场景') continue;
-            const affinity = sceneNameAffinity(block, entry);
-            if (affinity.score >= 82) collected.push(candidate(entry, affinity.score, 'scene-name-affinity', affinity.detail));
-        }
-    }
-    collected.push(...candidates(identitySafe(index.byKeyword.get(typedLookup(block.type, block.name)) ?? []), scores.keyword, 'keyword', `同类型关键词“${block.name}”命中`));
-
-    if (String(contextText ?? '').trim()) {
-        for (const entry of index.entries) {
-            if (canonicalTypeLookup(entry.type) !== canonicalTypeLookup(block.type)) continue;
-            if (explicitContextIdentity(block.name, entry, contextText)) {
-                const identityScore = provisionalBlock && !isProvisionalEntry(entry)
-                    ? scores.contextIdentity
-                    : (!provisionalBlock && isProvisionalEntry(entry) ? 79 : 88);
-                collected.push(candidate(entry, identityScore, 'context-identity', `本轮正文明确说明“${block.name}”与“${entry.name}”为同一身份`));
-            }
-        }
-    }
-
-    // [MA-EVENT-01] 事件按同一目标、参与者与场景形成的生命周期匹配，不再只靠每轮标题。
-    // 已结束事件不会被新的活动过程重新打开；标题变化只作为辅助证据。
-    if (canonicalTypeLookup(block.type) === '事件') {
-        for (const entry of index.entries) {
-            if (canonicalTypeLookup(entry.type) !== '事件' || (0, semantic_1.isEventClosed)(entry)) continue;
-            const lifecycle = eventLifecycleScore(block, entry);
-            if (lifecycle.score >= 80) {
-                collected.push(candidate(entry, lifecycle.score, 'event-lifecycle', lifecycle.detail));
-            }
-        }
-    }
-
-    const name = normalizeLookup(block.name);
-    if (name.length >= 2) {
-        for (const entry of index.entries) {
-            if (canonicalTypeLookup(entry.type) !== canonicalTypeLookup(block.type)) continue;
-            const haystack = normalizeLookup(`${entry.content ?? ''}\n${(entry.keywords ?? []).join(' ')}\n${(entry.aliases ?? []).join(' ')}`);
-            if (haystack.includes(name) && (!provisionalBlock || isProvisionalEntry(entry))) collected.push(candidate(entry, scores.content, 'content', `正文或关键词包含名称“${block.name}”，仅作辅助`));
-        }
-    }
+    collected.push(...candidates(index.byTitle.get(normalizeTitleLookup(block.title)) ?? [], scores.normalizedTitle, 'normalized-title', '规范化完整标题相同'));
 
     const byUid = new Map();
     for (const item of collected) {
-        const explicitUidMatch = item.evidence.some((evidence) => evidence.kind === 'uid');
-        if (canonicalTypeLookup(block.type) === '事件' && (0, semantic_1.isEventClosed)(item.entry) && !explicitUidMatch) continue;
-        const hasStrongIdentity = item.evidence.some((evidence) => ['uid', 'context-identity'].includes(evidence.kind));
-        if (!hasStrongIdentity && identityConflict(block, item.entry)) {
-            item.score = Math.min(Number(item.score), 40);
-            item.evidence.push({ kind: 'identity-conflict', score: 0, detail: '稳定区分锚点或多个身份字段冲突，禁止按相似名称覆盖' });
-        }
-        else if (!hasStrongIdentity && anchorNeedsConfirmation(block, item.entry, item.evidence)) {
-            item.score = Math.min(Number(item.score), 60);
-            item.evidence.push({ kind: 'anchor-unconfirmed', score: 0, detail: '名称只在去除区分锚点后相同，缺少同一身份确认' });
-        }
         const current = byUid.get(item.entry.uid);
         if (!current || item.score > current.score) byUid.set(item.entry.uid, item);
         else if (current && item.score === current.score) current.evidence.push(...item.evidence);
@@ -7504,8 +7431,9 @@ class MemoryRunner {
         let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map(normalizeEventTimeline).filter(Boolean).slice(-48);
         const currentGroup = String(rootResult?.currentSceneGroup || activeEventTimeline?.sceneGroup || '').trim();
         const currentTitle = String(rootResult?.currentSceneTitle || activeEventTimeline?.sceneTitle || '').trim();
+        // [MA-SCENE-IDENTITY-02] 场景边界只接受 currentSceneBoundaryChanged 的统一判定。
+        // 禁止再用 sceneGroup 字符串不等做第二次覆盖，否则逗号后的轻微字段变化会误触发小总结。
         let sceneBoundary = rootResult?.sceneBoundaryChanged === true;
-        if (activeEventTimeline?.sceneGroup && currentGroup && activeEventTimeline.sceneGroup !== currentGroup) sceneBoundary = true;
 
         // 从旧版本升级时没有事件线，但可能已有 pending 标点；把它们作为首条轻量阶段接入当前线，避免静默遗失。
         if (!activeEventTimeline && normalizeSummaryMarks(cursor.pendingSmallSummaryMarks).length) {
@@ -13455,7 +13383,8 @@ const util_1 = require("./util");
 function buildOperationPlan(blocks, entries, settings, contextText, options = {}) {
     const governed = (0, governance_1.governInformationBlocks)(blocks, entries, contextText, { ...options, gameTimeEnabled: options.gameTimeEnabled === true });
     blocks = coalesceEventBlocks((0, information_point_1.prepareInformationBlocks)(governed.blocks));
-    blocks = ensureDisambiguatedTitles(blocks, entries);
+    // [MA-EXACT-MATCH-02] 正常提取/总结不自动改标题；标题变化只来自显式合并/总结治理结果。
+    if (String(options.sourceKind || '') === 'setting-import') blocks = ensureDisambiguatedTitles(blocks, entries);
     blocks = suppressStateProjectionNarratives(blocks);
     const index = (0, matcher_1.buildEntryIndex)(entries);
     const operations = [];
@@ -13466,9 +13395,6 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             continue;
         }
         const candidates = (0, matcher_1.matchBlock)(block, index, contextText);
-        const resolvedProvisionalCandidates = candidates
-            .filter((candidate) => (0, matcher_1.isProvisionalEntry)(candidate.entry))
-            .filter((candidate) => candidate.evidence?.some((item) => item.kind === 'context-identity'));
         let target = (0, matcher_1.selectBestCandidate)(candidates, 80);
         const exactClosedEvent = block.type === '事件'
             ? entries.find((entry) => entry.type === '事件' && (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(block.title) && (0, semantic_1.isEventClosed)(entry))
@@ -13484,11 +13410,6 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             continue;
         }
         if (!target) {
-            const auxiliary = candidates[0];
-            if (auxiliary && auxiliary.score >= 50 && !resolvedProvisionalCandidates.length) {
-                operations.push(noop(block.title, auxiliary.entry.uid, '', `仅得到 ${auxiliary.score} 分辅助匹配，低于自动覆盖阈值 80；保留世界书并等待人工确认`, auxiliary.score, auxiliary.evidence));
-                continue;
-            }
             const substantive = block.sections.some((section) => isBusinessFactSection(section.name) && !section.empty && section.lines.length > 0);
             if (!substantive) {
                 operations.push(noop(block.title, undefined, '', '所有业务小标题均为“无”，不创建空条目'));
@@ -13508,15 +13429,6 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             if (shouldMarkTemporary(block)) initialKeywords.push('临时', '身份未明');
             for (const keyword of (0, util_1.unique)(initialKeywords)) {
                 operations.push(op('merge-keywords', block.title, undefined, '关键词', undefined, keyword, keyword === '临时' ? '插件按身份未明对象规则标记临时条目' : keyword === '身份未明' ? '插件标记该人物身份尚未揭示' : '新条目关键词写入'));
-            }
-            for (const provisional of [...new Map(resolvedProvisionalCandidates.map((candidate) => [candidate.entry.uid, candidate.entry])).values()]) {
-                operations.push({
-                    id: operationId('merge-entry', block.title, `new|${provisional.uid}`),
-                    kind: 'merge-entry', operation: 'merge', title: block.title, sourceUid: provisional.uid,
-                    newValue: provisional.title, reason: `正文已经揭示身份，临时档“${provisional.title}”合并到新主档“${block.title}”`,
-                    score: candidates[0]?.score, matchEvidence: candidates[0]?.evidence,
-                });
-                operations.push({ ...op('delete-entry', provisional.title, provisional.uid, '身份揭示合并', undefined, '删除', `身份已经归入主档“${block.title}”`), mergedIntoTitle: block.title, requiresDistributionProof: false, distributionTargets: [] });
             }
             for (const section of block.sections) {
                 if (/(关键词|触发词|标签|分类)/u.test(section.name))
@@ -13552,33 +13464,7 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             operations.push(noop(entry.title, entry.uid, '事件状态', '已完成事件不能重新变为活动；新的事件必须使用新的事件标题与因果签名', target.score, target.evidence));
             continue;
         }
-        // [MA-MATCH-02] 同一身份出现多个镜渊管理档案时，先把非锁定重复档合并到确定性主档，再删除重复档。
-        const duplicates = candidates
-            .filter((candidate) => candidate.entry.uid !== entry.uid)
-            .filter((candidate) => Number(candidate.score) >= 80 || ((0, matcher_1.isProvisionalEntry)(candidate.entry) && candidate.evidence?.some((item) => item.kind === 'context-identity')))
-            .map((candidate) => candidate.entry)
-            .filter((candidate) => candidate.managed === true && candidate.locked !== true && candidate.focus !== true)
-            .filter((candidate) => (0, matcher_1.sameEntryIdentity)(entry, candidate) || (entry.type === '事件' && candidate.type === '事件' && (0, matcher_1.sameEventLifecycle)(entry, candidate)) || ((0, matcher_1.isProvisionalEntry)(candidate) && !(0, matcher_1.isProvisionalEntry)(entry) && (0, matcher_1.explicitContextIdentity)(block.name, entry, contextText)));
-        for (const duplicate of [...new Map(duplicates.map((candidate) => [candidate.uid, candidate])).values()]) {
-            operations.push({
-                id: operationId('merge-entry', entry.title, `${entry.uid}|${duplicate.uid}`),
-                kind: 'merge-entry',
-                operation: 'merge',
-                title: entry.title,
-                targetUid: entry.uid,
-                sourceUid: duplicate.uid,
-                newValue: duplicate.title,
-                reason: `同一身份重复档“${duplicate.title}”合并到主档“${entry.title}”`,
-                score: target.score,
-                matchEvidence: target.evidence,
-            });
-            operations.push({
-                ...op('delete-entry', duplicate.title, duplicate.uid, '重复档合并', undefined, '删除', `内容已合并到主档“${entry.title}”`),
-                mergedIntoUid: entry.uid,
-                requiresDistributionProof: false,
-                distributionTargets: [],
-            });
-        }
+        // [MA-EXACT-MATCH-03] 自动流程不再按相似身份合并重复档；合并只由总结/人工显式操作产生。
         for (const keyword of block.keywords) {
             operations.push(entry.keywords.some((item) => (0, util_1.normalizeFact)(item) === (0, util_1.normalizeFact)(keyword))
                 ? noop(entry.title, entry.uid, '关键词', `关键词“${keyword}”已存在`, target.score, target.evidence)
@@ -16143,8 +16029,7 @@ function sceneStageMap(entries) {
 }
 
 function sceneExplicitActivityTime(entry) {
-    const extension = entry?.raw?.extensions?.mirrorAbyssInfoPoint;
-    return Number(extension?.sceneLastActiveAt || 0);
+    return Number(entry?.sceneLastActiveAt || entry?.raw?.extensions?.mirrorAbyssInfoPoint?.sceneLastActiveAt || 0);
 }
 
 function sceneActivityTime(entry) {
@@ -16975,7 +16860,11 @@ function cleanSceneLocationText(value) {
             .replace(/[】\]）)>」』》〉“”"'`]+$/u, '')
             .trim();
     }
-    return text.replace(/^[：:、，,；;。.!！?？\s]+|[：:、，,；;。.!！?？\s]+$/gu, '').trim().slice(0, 120);
+    text = text.replace(/^[：:、，,；;。.!！?？\s]+|[：:、，,；;。.!！?？\s]+$/gu, '').trim();
+    // [MA-SCENE-IDENTITY-01] 场景字段允许“稳定地点，动态描述/时段/状态”。
+    // 逗号后的字段变化不改变场景身份；明确箭头/转场已在上方先取最终地点。
+    const stableField = text.split(/[，,]/u).map((part) => part.trim()).filter(Boolean)[0] || text;
+    return stableField.slice(0, 120);
 }
 function normalizeSceneLocation(value) {
     return normalizeFact(cleanSceneLocationText(value))
@@ -17455,12 +17344,23 @@ const governance_1 = require("./governance");
 const entry_section_1 = require("./domain/entry-section");
 const util_1 = require("./util");
 const LEGACY_RUNTIME_PROJECTION_TITLE = '运行包｜当前活动';
+
+function runtimeEntryProjection(entry) {
+    // [MA-HOT-INDEX-01] 热索引不保存 raw 世界书对象，只保留业务读取需要的解析字段。
+    // 正式写入始终重新打开权威世界书，因此 raw 只存在于提交路径的 fresh parseEntries 中。
+    const { raw: _raw, ...projected } = entry ?? {};
+    return projected;
+}
+function runtimeEntryView(entries) {
+    // 只浅拷贝数组和顶层对象，避免 structuredClone 整本世界书及 raw 扩展。
+    return (entries ?? []).map((entry) => ({ ...entry }));
+}
 class WorldbookAdapter {
     constructor(context, chatKey) {
         this.context = context;
         this.chatKey = chatKey ?? (() => '');
         this.apiPromise = null;
-        // [MA-RUNTIME-MEMORY-01] 运行期热内存只缓存当前世界书的已解析快照。
+        // [MA-HOT-INDEX-01] 简单运行时热索引：只缓存去 raw 的解析条目与 UID/标题 Map。
         // 世界书仍是唯一长期事实源；所有写入、冲突校验与回滚继续走权威接口。
         this.runtimeMemory = null;
         this.runtimeMemoryCounters = { hits: 0, misses: 0, rebuilds: 0 };
@@ -17473,13 +17373,17 @@ class WorldbookAdapter {
     }
     rememberRuntimeMemory(name, data, chatKey = this.chatKey()) {
         if (!name || !data) return null;
-        const entries = parseEntries(data);
+        const parsed = parseEntries(data);
+        const entries = parsed.map(runtimeEntryProjection);
+        const byUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
+        const byTitle = new Map(entries.map((entry) => [(0, util_1.normalizeTitle)(entry.title).toLocaleLowerCase(), entry]));
         const memory = {
             key: this.runtimeMemoryKey(chatKey, name),
             chatKey: String(chatKey ?? ''),
             name: String(name ?? ''),
+            // digest 只在权威读/写后重建时计算一次，用于防止模型处理期间的外部编辑覆盖；缓存命中不重复计算。
             digest: digestWorldbook(data),
-            entries,
+            entries, byUid, byTitle,
             cachedAt: Date.now(),
         };
         this.runtimeMemory = memory;
@@ -17499,6 +17403,8 @@ class WorldbookAdapter {
             chatKey: this.runtimeMemory?.chatKey ?? '',
             worldbookName: this.runtimeMemory?.name ?? '',
             entryCount: this.runtimeMemory?.entries?.length ?? 0,
+            uidIndexSize: this.runtimeMemory?.byUid?.size ?? 0,
+            titleIndexSize: this.runtimeMemory?.byTitle?.size ?? 0,
             cachedAt: this.runtimeMemory?.cachedAt ?? 0,
             ...this.runtimeMemoryCounters,
         };
@@ -17529,7 +17435,7 @@ class WorldbookAdapter {
             if (memory) {
                 this.runtimeMemoryCounters.hits += 1;
                 validate?.();
-                return { name: memory.name, entries: (0, util_1.clone)(memory.entries), runtimeMemory: true };
+                return { name: memory.name, entries: runtimeEntryView(memory.entries), runtimeMemory: true };
             }
         }
         this.runtimeMemoryCounters.misses += 1;
@@ -17537,7 +17443,7 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && name !== snapshot.worldbookName) throw new Error('读取到的世界书与任务快照不一致');
         validate?.();
         const memory = this.rememberRuntimeMemory(name, data, chatKey);
-        return { name, entries: memory ? (0, util_1.clone)(memory.entries) : parseEntries(data), runtimeMemory: false };
+        return { name, entries: memory ? runtimeEntryView(memory.entries) : parseEntries(data).map(runtimeEntryProjection), runtimeMemory: false };
     }
     async readRaw(settings, snapshot, validate) {
         validate?.();
@@ -18393,7 +18299,7 @@ function parseEntries(data) {
         const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称'], split.type));
         const extension = readExtension(raw);
         const storedKeywords = (0, util_1.normalizeStringArray)(extension.recallKeywords);
-        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, bedrockLocked: extension.bedrockLocked === true, locked: extension.bedrockLocked === true, initialFoundation: extension.initialFoundation === true, settingImportLocked: extension.settingImportLocked === true, evolvedFoundation: extension.evolvedFoundation === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), parentUid: String(extension.parentUid ?? ''), childUids: Array.isArray(extension.childUids) ? extension.childUids.map(String) : [], relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
+        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, bedrockLocked: extension.bedrockLocked === true, locked: extension.bedrockLocked === true, initialFoundation: extension.initialFoundation === true, settingImportLocked: extension.settingImportLocked === true, evolvedFoundation: extension.evolvedFoundation === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), sceneLastActiveAt: Number(extension.sceneLastActiveAt) || 0, parentUid: String(extension.parentUid ?? ''), childUids: Array.isArray(extension.childUids) ? extension.childUids.map(String) : [], relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
 }
