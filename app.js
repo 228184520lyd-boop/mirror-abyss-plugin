@@ -2654,7 +2654,12 @@ class ControlPanel {
         if (this.recallStatusNode) this.recallStatusNode.textContent = `正在对玩家选中的${uids.length}个条目执行${label}…`;
         try {
             const result = await this.actions.summarizeEntries?.(summaryKind, uids);
-            const detail = `选中${label}完成：处理${Number(result?.processedPendingUids?.length || uids.length)}个条目`;
+            const settlement = result?.summarySettlement || {};
+            const writes = Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0);
+            const deleted = Number(result?.warehouse?.deletedCount || settlement.deletedEntries || 0);
+            const detail = result?.changed
+                ? `选中${label}完成：处理${Number(result?.processedPendingUids?.length || 0)}个条目，写入${writes}，沉降删除${deleted}`
+                : `选中${label}完成，但本批没有形成可写回/合并/沉降变化`;
             this.setStatus(detail); if (this.recallStatusNode) this.recallStatusNode.textContent = detail;
             this.recallSelectedUids.clear();
             await this.refreshWorldbookPage(true);
@@ -7452,8 +7457,14 @@ class MemoryRunner {
             } catch (error) {
                 await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '小总结回合');
             }
-            this.setStatus(snapshot.chatKey, 'complete', result.changed ? '小总结完成' : '小总结完成，无新增写入');
-            summaryNotify('success', `镜渊：手动小总结完成（处理${processed.length}个条目）`);
+            const smallWrites = Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0);
+            const smallDeleted = Number(result?.warehouse?.deletedCount || 0);
+            this.setStatus(snapshot.chatKey, 'complete', result.changed
+                ? `小总结完成：写入${smallWrites}，沉降删除${smallDeleted}`
+                : '小总结结算完成，但未形成写回/合并/沉降变化');
+            summaryNotify(result.changed ? 'success' : 'info', result.changed
+                ? `镜渊：手动小总结完成（处理${processed.length}个条目，写入${smallWrites}，沉降删除${smallDeleted}）`
+                : `镜渊：手动小总结结算完成，但未形成结构变化（处理${processed.length}个条目）`);
             return taskResultEntries(result);
         }
 
@@ -7554,7 +7565,11 @@ class MemoryRunner {
                         }
                         eventTimelineArchive = [...eventTimelineArchive, { ...newlyClosedTimeline, settledAt: Date.now() }].slice(-48);
                         closedEventTimelines = closedEventTimelines.filter((timeline) => timeline.id !== newlyClosedTimeline.id);
-                        summaryNotify('success', `镜渊：小总结完成（处理${processed.length}个变化点）`);
+                        const smallWrites = Number(small?.warehouse?.createdCount || 0) + Number(small?.warehouse?.updatedCount || 0);
+                        const smallDeleted = Number(small?.warehouse?.deletedCount || 0);
+                        summaryNotify(small?.changed ? 'success' : 'info', small?.changed
+                            ? `镜渊：小总结完成（处理${processed.length}个变化点，写入${smallWrites}，沉降删除${smallDeleted}）`
+                            : `镜渊：小总结结算完成，但本批未形成写回/合并/沉降变化（处理${processed.length}个变化点）`);
                     } catch (error) {
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
                         const failedUids = timelineUids(newlyClosedTimeline);
@@ -7869,9 +7884,9 @@ class MemoryRunner {
         const existingUids = new Set(entries.map((entry) => String(entry.uid)));
         const validMarks = requestedMarks.filter((mark) => existingUids.has(mark.uid));
         const stalePendingUids = requestedMarks.filter((mark) => !existingUids.has(mark.uid)).map((mark) => mark.uid);
-        const validPendingUids = validMarks.map((mark) => mark.uid);
         const selected = summaryEntries(entries, validMarks);
-        const scope = summaryScope(kind, validMarks);
+        const selectedPendingUids = selected.map((entry) => String(entry.uid));
+        const scope = summaryScope(kind, selectedPendingUids.map((uid) => ({ uid })));
         const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
         if (!selected.length) throw new Error(`${label}当前没有待整理条目`);
         const promptOptions = { requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null };
@@ -7924,8 +7939,8 @@ class MemoryRunner {
         let recovered = parseSummaryWithRecovery(raw, kind);
         let summaryBlock = recovered.block ? ensureSummarySnapshotSections(recovered.block, kind) : null;
         let distributionBlocks = summaryBlock ? distributionBlocksFromSummary(summaryBlock) : [];
-        let removalOperations = summaryBlock ? removalOperationsFromSummary(summaryBlock, entries, validPendingUids, kind) : [];
-        let sedimentationOperations = summaryBlock ? sedimentationOperationsFromSummary(summaryBlock, entries, validPendingUids, kind) : [];
+        let removalOperations = summaryBlock ? removalOperationsFromSummary(summaryBlock, entries, selectedPendingUids, kind) : [];
+        let sedimentationOperations = summaryBlock ? sedimentationOperationsFromSummary(summaryBlock, entries, selectedPendingUids, kind) : [];
         const technicalFailure = () => !recovered.explicitNone && (!recovered.block || (!distributionBlocks.length && !removalOperations.length && !sedimentationOperations.length));
         if (technicalFailure() && !summaryRetryUsed) {
             const firstReason = !recovered.block ? '未识别固定分发格式' : '未形成可执行分发内容';
@@ -7936,13 +7951,13 @@ class MemoryRunner {
             recovered = parseSummaryWithRecovery(raw, kind);
             summaryBlock = recovered.block ? ensureSummarySnapshotSections(recovered.block, kind) : null;
             distributionBlocks = summaryBlock ? distributionBlocksFromSummary(summaryBlock) : [];
-            removalOperations = summaryBlock ? removalOperationsFromSummary(summaryBlock, entries, validPendingUids, kind) : [];
-            sedimentationOperations = summaryBlock ? sedimentationOperationsFromSummary(summaryBlock, entries, validPendingUids, kind) : [];
+            removalOperations = summaryBlock ? removalOperationsFromSummary(summaryBlock, entries, selectedPendingUids, kind) : [];
+            sedimentationOperations = summaryBlock ? sedimentationOperationsFromSummary(summaryBlock, entries, selectedPendingUids, kind) : [];
         }
         if (recovered.explicitNone) {
             const detail = `${label}模型判断本批变化无需新增上层事实`;
             this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', raw, emptyPlan());
-            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedMarks.map((mark) => mark.uid), processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
+            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedMarks.map((mark) => mark.uid), processedPendingUids: selectedPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
         }
         if (!recovered.block) throw new Error(`${label}第二次尝试后仍无法识别固定分发格式`);
         if (!distributionBlocks.length && !removalOperations.length && !sedimentationOperations.length) throw new Error(`${label}第二次尝试后仍没有形成可执行的结算内容`);
@@ -7952,13 +7967,19 @@ class MemoryRunner {
         plan.operations.push(...removalOperations, ...sedimentationOperations);
         const summaryText = distributionBlocks.map((block) => `${block.title}\n${block.sections.map((section) => `【${section.name}】${(section.lines ?? []).join('；')}`).join('\n')}`).join('\n\n');
         if (!plan.operations.some((operation) => operation.kind !== 'noop')) {
-            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedMarks.map((mark) => mark.uid), processedPendingUids: validPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
+            return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedMarks.map((mark) => mark.uid), processedPendingUids: selectedPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
         }
         const applied = await this.apply(settings, plan, snapshot, sourceContext, label, raw, { rebalanceKind: kind, summaryText });
+        applied.summarySettlement = {
+            distributedTargets: distributionBlocks.length,
+            requestedRemovals: removalOperations.length,
+            requestedSediments: sedimentationOperations.length,
+            deletedEntries: Number(applied?.warehouse?.deletedCount || 0),
+        };
         applied.settled = true;
         applied.previousGameTime = previousGameTime;
         applied.stalePendingUids = stalePendingUids;
-        applied.processedPendingUids = validPendingUids;
+        applied.processedPendingUids = selectedPendingUids;
         applied.resolvedSourceUids = requestedMarks.map((mark) => mark.uid);
         this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', `${label}已直接分发`, '', raw, plan);
         return applied;
@@ -7970,7 +7991,8 @@ class MemoryRunner {
         this.validate(snapshot);
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         const wanted = new Set((selectedUids ?? []).map((uid) => String(uid)));
-        const selected = entries.filter((entry) => wanted.has(String(entry.uid)) && entry.activation?.disabled !== true);
+        // 玩家显式选择的历史条目即使已退出正文召回（disabled）也必须参加人工合并。
+        const selected = entries.filter((entry) => wanted.has(String(entry.uid)) && entry?.managed !== false);
         if (selected.length < 2) throw new Error('选中的可用条目不足两个');
         const selectedIds = selected.map((entry) => String(entry.uid));
         const mergeTarget = determineManualMergeTarget(selected);
@@ -8059,8 +8081,13 @@ class MemoryRunner {
         } catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, [applied], applied.previousGameTime, cursor, error, label);
         }
-        this.setStatus(snapshot.chatKey, 'complete', `${label}完成：写入${distributionBlocks.length}个目标`);
-        summaryNotify('success', `镜渊：手动合并完成（整理${selected.length}个来源）`);
+        const mergeDeleted = Number(applied?.warehouse?.deletedCount || 0);
+        const mergeWrites = Number(applied?.warehouse?.createdCount || 0) + Number(applied?.warehouse?.updatedCount || 0);
+        const mergeDetail = applied?.changed
+            ? `${label}完成：写入${mergeWrites}，沉降删除${mergeDeleted}`
+            : `${label}未产生实际写入或沉降`;
+        this.setStatus(snapshot.chatKey, 'complete', mergeDetail);
+        summaryNotify(applied?.changed ? 'success' : 'info', `镜渊：${mergeDetail}`);
         return applied;
     }
 
@@ -8373,7 +8400,9 @@ function removalOperationsFromSummary(summaryBlock, entries, allowedSourceUids =
         const title = `${type}｜${match[2].trim()}`;
         const entry = byTitle.get((0, util_1.normalizeTitle)(title));
         if (!entry || (allowed.size && !allowed.has(String(entry.uid)))) continue;
-        if ((kind !== 'manual' && entry.bedrockLocked === true) || entry.focus === true || entry.activation?.disabled === true) continue;
+        // 总结/人工合并可以整理不再参与正文召回的历史条目；disabled 不是事实删除锁。
+        // 基石锁和玩家焦点仍然保持保护。
+        if ((kind !== 'manual' && entry.bedrockLocked === true) || entry.focus === true) continue;
         const sectionName = (0, information_point_1.canonicalSectionName)(match[3].trim(), type);
         if (!sectionName) continue;
         const requested = (0, util_1.normalizeFact)(match[4]);
@@ -8407,7 +8436,9 @@ function sedimentationOperationsFromSummary(summaryBlock, entries, allowedSource
         if (!distributedTargets.has((0, util_1.normalizeTitle)(targetTitle))) continue;
         const source = byTitle.get((0, util_1.normalizeTitle)(sourceTitle));
         if (!source || (allowed.size && !allowed.has(String(source.uid)))) continue;
-        if ((kind !== 'manual' && source.locked === true) || source.focus === true || source.activation?.disabled === true) continue;
+        // 已结束事件/离场对象常被置为 disabled 以退出正文召回，但它们仍可在总结中被完整承接后沉降。
+        // 这里只保留真正的写保护：自动总结尊重基石锁，人工合并由玩家选择视为本次明确授权。
+        if ((kind !== 'manual' && source.bedrockLocked === true) || source.focus === true) continue;
         const target = byTitle.get((0, util_1.normalizeTitle)(targetTitle));
         operations.push({
             id: `summary-sediment:${kind}:${source.uid}:${(0, util_1.hashText)(targetTitle)}`,
@@ -8520,9 +8551,13 @@ function parseManualMergeWithRecovery(raw) {
 
 
 function summaryEntries(entries, marks = []) {
-    const active = entries.filter((entry) => !entry.activation.disabled && !/^总结｜/u.test(String(entry.title ?? '')));
     const wanted = new Set(normalizeSummaryMarks(marks).map((mark) => mark.uid));
-    return active.filter((entry) => wanted.has(String(entry.uid)));
+    // 总结处理的是被系统明确打点/玩家明确选择的当前世界书宿主。
+    // activation.disabled 只表示该条目不参与正文召回；已结束事件、已离场对象仍然是合法历史材料，
+    // 不能在总结选材阶段把它们静默过滤，否则模型没看到来源，游标却会误报“已处理”。
+    return (entries ?? []).filter((entry) => wanted.has(String(entry.uid))
+        && entry?.managed !== false
+        && !/^总结｜/u.test(String(entry.title ?? '')));
 }
 function summaryScope(kind, marks = []) {
     const count = normalizeSummaryMarks(marks).length;
@@ -15717,7 +15752,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
         ];
     const custom = customRaw && !builtinDefaults.includes(customRaw) ? clipText(customRaw, compact ? 900 : 1800) : '';
     const system = isSmall
-        ? `职责：把系统选中的、在刚结束场景中被触及的当前有效世界书条目进行整体理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统内部已经完成本批选材和场景生命周期判断；提供给你的只有这些宿主在场景结束时的当前有效状态。不同人物、场景、物品、事件条目可能是同一经历在不同宿主上的当前投影；应跨条目整体理解后再抽象。\n\n【整理原则】\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被当前有效状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 先写新结果，只有确定被完整承接的旧来源才允许沉降。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被当前状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
+        ? `职责：把系统选中的、在刚结束场景中被触及的当前有效世界书条目进行整体理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统内部已经完成本批选材和场景生命周期判断；提供给你的只有这些宿主在场景结束时的当前有效状态。不同人物、场景、物品、事件条目可能是同一经历在不同宿主上的当前投影；应跨条目整体理解后再抽象。\n\n【整理原则】\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被当前有效状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 先写新结果，只有确定被完整承接的旧来源才允许沉降。\n- 当多个条目只是同一局部经历在不同阶段形成的重复/旧状态投影，且新的局部规律已经完整承接其事实与必要召回锚点时，应输出“沉降”完成真实收束；不要只追加一条新规律后把已经完全冗余的来源全部原样保留。仍有独立召回价值或承接不完整时必须保留。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被当前状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
         : `职责：把玩家本次指定的多个有效世界书条目沿其真实承接、包含和演化关系整理为更高层、长期成立的整体规律，并完成能够安全确认的来源收束。\n\n【整理原则】\n- 只依据系统提供的有效世界书条目，不重新读取原正文。事件条目也是合法历史材料；已结束事件只能作为已经发生的历史状态理解，不把它重新写成新的活动任务。\n- 先理解多个局部结果之间的承接、包含和长期演化，再抽象整体规律。不要只逐条改写原条目。\n- 当多个低层事实已经被一个更高层结果完整承接时：先用“写回”把上层结果落到明确目标，再用“移除”清掉目标/来源中已经被替代的旧事实；若某个来源条目的独立召回身份也已被目标完整承接，再用“沉降”把该来源并入目标。\n- “沉降”不是强制删除：只有来源内容与召回身份都已被目标完整覆盖时才输出；无法确定时保留。每条沉降的目标必须同时出现在本次“写回”结果中。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留必要的历史召回锚点，避免为了减少条目而丢失仍有独立检索价值的事件、人物、场景或物品。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入里确实存在且已经被更高层规律明确替代或包含的旧事实。没有形成更高层规律时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
     const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n只输出固定模板。`;
     return { system, user };
