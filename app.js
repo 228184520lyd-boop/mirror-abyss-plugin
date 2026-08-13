@@ -1748,16 +1748,18 @@ class ControlPanel {
         );
 
         const apiSection = this.buildApiSection();
-        const switches = document.createElement('div');
-        switches.className = 'ma-lite-switches';
-        switches.append(
+        const automationSwitches = document.createElement('div');
+        automationSwitches.className = 'ma-lite-switches';
+        automationSwitches.append(
+            this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核；关闭后仍可手动审核。'),
+            this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取；关闭后仍可手动提取。'),
+            this.makeSwitch('autoSmallSummary', '自动小总结', '场景组关闭后按时间顺序后台处理；关闭只暂停总结执行，不停止 SceneGroup UID 归组。'),
+        );
+        const featureSwitches = document.createElement('div');
+        featureSwitches.className = 'ma-lite-switches';
+        featureSwitches.append(
             this.makeSwitch('enabled', '总开关', '关闭后镜渊不执行任何处理。'),
-            this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核。'),
-            this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取。'),
-            this.makeSwitch('auditEnabled', '审核功能', '控制手动与自动审核。'),
-            this.makeSwitch('extractionEnabled', '提取功能', '控制手动与自动提取。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '大场景结束时触发；按该场景涉及的当前世界书条目抽象局部规律并清理确定冗余。'),
-            this.makeSwitch('entryBudgetEnabled', '总结后容量防护', '提取阶段先保留可连线事实点；小总结、大总结与整理完成后再按类型和栏目收束容量。'),
+            this.makeSwitch('entryBudgetEnabled', '总结后容量防护', '提取阶段先保留可连线事实点；总结与整理完成后再按类型和栏目收束容量。'),
         );
         const gameTimeAnchor = this.makeGameTimeInput('游戏时间（可选）', '需要时为当前聊天填写世界内时间锚点，例如“第三日 14:30”或“春季第12日清晨”；留空则当前聊天不启用。后续时间推进由AI判断。', '例如：第三日 14:30');
         const thresholds = document.createElement('div');
@@ -1769,7 +1771,7 @@ class ControlPanel {
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
         note.textContent = '四阶段状态固定为：审核 → 修正 → 提取 → 写入。任一阶段失败都会停止后续步骤，不推进处理游标。';
-        settingsPage.append(apiSection, this.wrapToolSection('自动化与功能开关', switches, true), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与队列', thresholds, false), note);
+        settingsPage.append(apiSection, this.wrapToolSection('自动化', automationSwitches, true), this.wrapToolSection('功能开关', featureSwitches, false), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与队列', thresholds, false), note);
 
         const rebuild = this.buildRebuildSection();
         const diagnostic = this.buildDiagnosticSection();
@@ -2426,7 +2428,7 @@ class ControlPanel {
         const actions = document.createElement('div');
         actions.className = 'ma-lite-worldbook-quick-actions';
         for (const [kind, label, title] of [
-            ['smallSummary', '立即小总结', '把本批被系统选中的具体事实整理为局部范围内持续成立的规律，并保留可召回的历史锚点'],
+            ['smallSummary', '立即小总结', '优先处理最早一个已关闭 SceneGroup；只拉取该主 UID 包含的世界书条目进行局部粗化'],
             ['largeSummary', '立即大总结', '把多个局部规律整理为更高层、长期成立的整体规律，并保留可召回的历史锚点'],
         ]) {
             const button = document.createElement('button');
@@ -2441,7 +2443,7 @@ class ControlPanel {
         const status = document.createElement('div');
         status.className = 'ma-lite-worldbook-quick-status';
         status.setAttribute('aria-live', 'polite');
-        status.textContent = '自动小总结按场景关闭运行；大总结不会自动触发，这里可手动处理全部待大总结条目。';
+        status.textContent = '自动小总结按 SceneGroup 关闭顺序运行；关闭自动小总结只暂停模型执行，UID 归组仍持续。大总结不会自动触发。';
         section.append(head, actions, status);
         this.worldbookQuickStatusNode = status;
         return section;
@@ -4659,7 +4661,8 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
     const explicitSceneName = explicitCurrentSceneName(contextText);
     if (explicitSceneName) {
         const sceneBlocks = blocks.filter((block) => block.type === '场景');
-        const matchingScene = sceneBlocks.find((block) => (0, util_1.sceneLocationSimilarity)(block.name || block.title, explicitSceneName) >= 0.72);
+        const explicitSceneKey = (0, util_1.normalizeSceneLocation)(explicitSceneName);
+        const matchingScene = sceneBlocks.find((block) => (0, util_1.normalizeSceneLocation)(block.name || block.title) === explicitSceneKey);
         if (!matchingScene) {
             // dialogueContext 在 turnText 之前；明确场景必须取整段材料中最后一次声明/转场目标。
             // 若提取模型仍回写旧场景，正文末端的明确地点优先，避免旧上下文把真实转场压住一轮。
@@ -4864,7 +4867,7 @@ function normalizeSceneSnapshot(block, contextText = '', options = {}) {
     const currentSceneName = explicitCurrentSceneName(context);
     const contextNamesMatch = context.match(/(?:当前)?在场(?:者|人物)?[ \t]*(?:只有|为|是|有|包括|包含|[：:])[ \t]*([^,，。；;\n]+)/u);
     const sceneMatches = currentSceneName
-        && (0, util_1.sceneLocationSimilarity)(currentSceneName, block.name) >= 0.72;
+        && (0, util_1.normalizeSceneLocation)(currentSceneName) === (0, util_1.normalizeSceneLocation)(block.name);
     if (sceneMatches && contextNamesMatch) inferred.push(...splitNames(contextNamesMatch[1]));
     let present = (block.sections ?? []).find((section) => String(section.name ?? '') === '在场');
     if (present || inferred.length) {
@@ -5778,7 +5781,7 @@ class HostAdapter {
             for (const uid of Array.isArray(legacyUids) ? legacyUids : []) add(uid);
             return [...output.values()];
         };
-        const normalizeTimeline = (raw) => {
+        const normalizeTimeline = (raw, defaultStatus = 'pending') => {
             if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
             const stages = [];
             for (const stage of Array.isArray(raw.stages) ? raw.stages : []) {
@@ -5799,8 +5802,26 @@ class HostAdapter {
             }
             const sceneGroup = String(raw.sceneGroup ?? '').trim();
             const sceneTitle = String(raw.sceneTitle ?? '').trim();
-            if (!stages.length && !sceneGroup && !sceneTitle) return null;
-            return { id: String(raw.id ?? ''), sceneGroup, sceneTitle, stages, settledAt: Number(raw.settledAt || 0) };
+            const memberUids = [...new Set([...(raw.memberUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean), ...stages.flatMap((stage) => stage.uids)])];
+            if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length) return null;
+            const groupUid = String(raw.groupUid ?? raw.id ?? '').trim();
+            const settledAt = Number(raw.settledAt || 0);
+            const rawStatus = String(raw.summaryStatus ?? '').trim();
+            const summaryStatus = /^(?:active|pending|failed|settled)$/u.test(rawStatus)
+                ? rawStatus
+                : settledAt > 0 ? 'settled' : defaultStatus;
+            return {
+                id: groupUid,
+                groupUid,
+                sceneGroup,
+                sceneTitle,
+                memberUids,
+                stages,
+                summaryStatus,
+                openedAtMessageKey: String(raw.openedAtMessageKey ?? stages[0]?.messageKey ?? ''),
+                closedAtMessageKey: String(raw.closedAtMessageKey ?? ''),
+                settledAt,
+            };
         };
         return {
             lastProcessedMessageKey: String(value.lastProcessedMessageKey ?? ''),
@@ -5813,9 +5834,10 @@ class HostAdapter {
             pendingLargeSummaryMarks: normalizeMarks(value.pendingLargeSummaryMarks, value.pendingLargeSummaryUids),
             failedSmallSummaryMarks: normalizeMarks(value.failedSmallSummaryMarks),
             failedLargeSummaryMarks: normalizeMarks(value.failedLargeSummaryMarks),
-            activeEventTimeline: normalizeTimeline(value.activeEventTimeline),
-            closedEventTimelines: (Array.isArray(value.closedEventTimelines) ? value.closedEventTimelines : []).map(normalizeTimeline).filter(Boolean).slice(-12),
-            eventTimelineArchive: (Array.isArray(value.eventTimelineArchive) ? value.eventTimelineArchive : []).map(normalizeTimeline).filter(Boolean).slice(-48),
+            activeEventTimeline: normalizeTimeline(value.activeEventTimeline, 'active'),
+            // 未总结 SceneGroup 是正式待处理队列，不能因为数量达到 12 就静默丢失。
+            closedEventTimelines: (Array.isArray(value.closedEventTimelines) ? value.closedEventTimelines : []).map((item) => normalizeTimeline(item, 'pending')).filter(Boolean),
+            eventTimelineArchive: (Array.isArray(value.eventTimelineArchive) ? value.eventTimelineArchive : []).map((item) => normalizeTimeline(item, 'settled')).filter(Boolean).slice(-128),
         };
     }
     async saveCursor(cursor, snapshot, currentSettings) {
@@ -7289,6 +7311,10 @@ exports.__testParseManualMergeWithRecovery = parseManualMergeWithRecovery;
 exports.__testSceneSummaryGroupKey = sceneSummaryGroupKey;
 exports.__testCurrentSceneBoundaryChanged = currentSceneBoundaryChanged;
 exports.__testNormalizeEventTimeline = normalizeEventTimeline;
+exports.__testTimelineUids = timelineUids;
+exports.__testUnresolvedSceneGroupMarks = unresolvedSceneGroupMarks;
+exports.__testFailedSceneGroupMarks = failedSceneGroupMarks;
+exports.__testNextPendingSceneGroup = nextPendingSceneGroup;
 exports.__testDetermineManualMergeTarget = determineManualMergeTarget;
 exports.__testExtractionPointsFromBlocks = extractionPointsFromBlocks;
 const matcher_1 = require("./matcher");
@@ -7358,25 +7384,35 @@ class MemoryRunner {
         }
         if (kind === 'smallSummary') {
             const cursor = this.host.cursor();
-            const marks = mergeSummaryMarks(cursor.failedSmallSummaryMarks, cursor.pendingSmallSummaryMarks);
-            summaryNotify('info', `镜渊：开始手动小总结（${marks.length}个条目）`);
-            const manualTimeline = timelinesForMarks(cursor, marks);
+            // “立即小总结”优先处理最早的已关闭 SceneGroup（failed 也允许玩家手动重试）。
+            // 没有关闭组时才回退到当前兼容工作集。
+            const targetGroup = nextPendingSceneGroup(cursor.closedEventTimelines, true);
+            const marks = targetGroup
+                ? timelineUids(targetGroup).map((uid) => ({ uid }))
+                : mergeSummaryMarks(cursor.failedSmallSummaryMarks, cursor.pendingSmallSummaryMarks);
+            summaryNotify('info', `镜渊：开始手动小总结（${marks.length}个条目${targetGroup?.groupUid ? `，${targetGroup.groupUid}` : ''}）`);
+            const manualTimeline = targetGroup || timelinesForMarks(cursor, marks);
             const result = await this.summarize('small', settings, snapshot, { marks, timeline: manualTimeline });
             const producedMarks = summaryMarksFromResult(result);
             const processed = result.processedPendingUids ?? [];
-            const fullyProcessedClosed = (cursor.closedEventTimelines ?? []).map(normalizeEventTimeline).filter(Boolean)
-                .filter((timeline) => timelineUids(timeline).length && timelineUids(timeline).every((uid) => processed.includes(uid)))
-                .map((timeline) => ({ ...timeline, settledAt: Date.now() }));
-            const nextArchive = [...(cursor.eventTimelineArchive ?? []).map(normalizeEventTimeline).filter(Boolean), ...fullyProcessedClosed].slice(-48);
+            let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
+            let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
+            if (targetGroup) {
+                const settledTimeline = normalizeEventTimeline({ ...targetGroup, summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
+                if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
+                closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (targetGroup.groupUid || targetGroup.id));
+            }
+            const groupedPending = unresolvedSceneGroupMarks(cursor.activeEventTimeline, closedEventTimelines);
+            const groupedFailed = failedSceneGroupMarks(closedEventTimelines);
             const nextCursor = {
                 ...cursor,
                 turnsSinceSmall: 0,
-                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (producedMarks.length ? 1 : 0),
-                pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
-                failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
+                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + 1,
+                pendingSmallSummaryMarks: targetGroup ? groupedPending : subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
+                failedSmallSummaryMarks: targetGroup ? groupedFailed : subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
                 pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
-                closedEventTimelines: (cursor.closedEventTimelines ?? []).filter((timeline) => timelineUids(timeline).some((uid) => !processed.includes(uid))),
-                eventTimelineArchive: nextArchive,
+                closedEventTimelines,
+                eventTimelineArchive,
             };
             try {
                 await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
@@ -7420,98 +7456,137 @@ class MemoryRunner {
     async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0, rootResult = null) {
         const committed = rootResult ? [rootResult] : [];
         const previousGameTime = rootResult?.previousGameTime ?? (typeof this.host.getCurrentGameTime === 'function' ? this.host.getCurrentGameTime() : null);
-        const changedMarksThisTurn = summaryMarksFromResult(rootResult);
-        let pendingSmallSummaryMarks = mergeSummaryMarks(cursor.pendingSmallSummaryMarks, changedMarksThisTurn);
         let pendingLargeSummaryMarks = normalizeSummaryMarks(cursor.pendingLargeSummaryMarks);
-        let failedSmallSummaryMarks = normalizeSummaryMarks(cursor.failedSmallSummaryMarks);
         let failedLargeSummaryMarks = normalizeSummaryMarks(cursor.failedLargeSummaryMarks);
         let smallCountSinceLarge = Math.max(0, Number(cursor.smallCountSinceLarge || 0));
-        let activeEventTimeline = normalizeEventTimeline(cursor.activeEventTimeline);
-        let closedEventTimelines = (cursor.closedEventTimelines ?? []).map(normalizeEventTimeline).filter(Boolean);
-        let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map(normalizeEventTimeline).filter(Boolean).slice(-48);
+        let activeEventTimeline = normalizeEventTimeline(cursor.activeEventTimeline, 'active');
+        let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
+        let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean).slice(-128);
         const currentGroup = String(rootResult?.currentSceneGroup || activeEventTimeline?.sceneGroup || '').trim();
         const currentTitle = String(rootResult?.currentSceneTitle || activeEventTimeline?.sceneTitle || '').trim();
-        // [MA-SCENE-IDENTITY-02] 场景边界只接受 currentSceneBoundaryChanged 的统一判定。
-        // 禁止再用 sceneGroup 字符串不等做第二次覆盖，否则逗号后的轻微字段变化会误触发小总结。
-        let sceneBoundary = rootResult?.sceneBoundaryChanged === true;
+        const sceneBoundary = rootResult?.sceneBoundaryChanged === true;
 
-        // 从旧版本升级时没有事件线，但可能已有 pending 标点；把它们作为首条轻量阶段接入当前线，避免静默遗失。
-        if (!activeEventTimeline && normalizeSummaryMarks(cursor.pendingSmallSummaryMarks).length) {
+        // 旧版本只有平铺 pending UID。升级时把尚未归属任何 SceneGroup 的 UID 接到当前主组，
+        // 之后所有新变化都只靠“SceneGroup 主 UID → member UID”包含关系维护。
+        const legacyMarks = mergeSummaryMarks(cursor.pendingSmallSummaryMarks, cursor.failedSmallSummaryMarks);
+        const alreadyOwned = new Set([
+            ...timelineUids(activeEventTimeline),
+            ...closedEventTimelines.flatMap((timeline) => timelineUids(timeline)),
+        ]);
+        const unownedLegacyUids = legacyMarks.map((mark) => mark.uid).filter((uid) => !alreadyOwned.has(uid));
+        if (!activeEventTimeline && unownedLegacyUids.length) {
+            const seed = `${snapshot.chatKey}|legacy|${currentGroup || currentTitle || 'scene'}|${snapshot.messageKey}`;
+            const groupUid = `SG-${(0, util_1.hashText)(seed).slice(0, 10)}`;
             activeEventTimeline = {
-                id: `E-${(0, util_1.hashText)(`${snapshot.chatKey}|legacy|${currentGroup || currentTitle || snapshot.messageKey}`).slice(0, 10)}`,
+                id: groupUid,
+                groupUid,
                 sceneGroup: currentGroup,
                 sceneTitle: currentTitle,
-                stages: [{ seq: 1, messageKey: 'legacy', uids: normalizeSummaryMarks(cursor.pendingSmallSummaryMarks).map((mark) => mark.uid) }],
+                memberUids: [],
+                stages: [],
+                summaryStatus: 'active',
+                openedAtMessageKey: String(snapshot.messageKey ?? ''),
+                closedAtMessageKey: '',
+                settledAt: 0,
             };
         }
+        if (activeEventTimeline && unownedLegacyUids.length) {
+            activeEventTimeline.memberUids = [...new Set([...(activeEventTimeline.memberUids ?? []), ...unownedLegacyUids])];
+            activeEventTimeline.stages.push({
+                seq: activeEventTimeline.stages.length + 1,
+                messageKey: 'legacy',
+                uids: [...new Set(unownedLegacyUids)],
+                points: [],
+            });
+        }
 
-        let newlyClosedTimeline = null;
-        if (sceneBoundary && activeEventTimeline?.stages?.length) {
-            newlyClosedTimeline = normalizeEventTimeline(activeEventTimeline);
-            closedEventTimelines.push(newlyClosedTimeline);
+        // 地点稳定名发生变化时，冻结旧主 UID。关闭动作与自动小总结开关完全解耦：
+        // 自动小总结关闭时只是 summaryStatus=pending，UID 归组和场景生命周期仍持续运行。
+        if (sceneBoundary && activeEventTimeline) {
+            if (timelineUids(activeEventTimeline).length) {
+                const closed = normalizeEventTimeline({
+                    ...activeEventTimeline,
+                    summaryStatus: 'pending',
+                    closedAtMessageKey: String(snapshot.messageKey ?? ''),
+                }, 'pending');
+                if (closed) closedEventTimelines.push(closed);
+            }
+            // 没有任何被动过 UID 的空场景组无需总结，但仍必须结束，不能把新场景的 UID 挂到旧父组。
             activeEventTimeline = null;
         }
         if (!activeEventTimeline) {
+            const seed = `${snapshot.chatKey}|${currentGroup || currentTitle || 'scene'}|${snapshot.messageKey}`;
+            const groupUid = `SG-${(0, util_1.hashText)(seed).slice(0, 10)}`;
             activeEventTimeline = {
-                id: `E-${(0, util_1.hashText)(`${snapshot.chatKey}|${currentGroup || currentTitle || snapshot.messageKey}`).slice(0, 10)}`,
+                id: groupUid,
+                groupUid,
                 sceneGroup: currentGroup,
                 sceneTitle: currentTitle,
+                memberUids: [],
                 stages: [],
+                summaryStatus: 'active',
+                openedAtMessageKey: String(snapshot.messageKey ?? ''),
+                closedAtMessageKey: '',
+                settledAt: 0,
             };
         }
         activeEventTimeline.sceneGroup ||= currentGroup;
         activeEventTimeline.sceneTitle ||= currentTitle;
+        activeEventTimeline.summaryStatus = 'active';
         activeEventTimeline = appendTimelineStage(activeEventTimeline, rootResult, snapshot);
-        if (closedEventTimelines.length > 12) closedEventTimelines = closedEventTimelines.slice(-12);
+
+        // 未结算 SceneGroup 保持原时间顺序，不按地点或旧 ID 去重；同一地点以后再次进入必须形成新的时间窗口。
+        closedEventTimelines = closedEventTimelines.map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
 
         let smallRanThisTurn = false;
         let largeRanThisTurn = false;
         let summaryWarning = '';
         try {
-            // 3.0：小总结只跟随“大场景族关闭”，不再按固定正文回合数切断事件。
-            if (settings.autoSmallSummary !== false && newlyClosedTimeline?.stages?.length) {
-                const timelineMarks = timelineUids(newlyClosedTimeline).map((uid) => ({ uid }));
-                const marks = normalizeSummaryMarks(timelineMarks).filter((mark) => pendingSmallSummaryMarks.some((pending) => pending.uid === mark.uid));
+            // 自动链每个正文回合最多处理一个已关闭 SceneGroup。积压时按原时间顺序逐组消化，
+            // 不把多个场景合成一次大请求；失败组标为 failed，不自动重试，也不阻塞后续 pending 组。
+            const summaryGroup = settings.autoSmallSummary !== false ? nextPendingSceneGroup(closedEventTimelines, false) : null;
+            if (summaryGroup) {
+                const marks = timelineUids(summaryGroup).map((uid) => ({ uid }));
                 if (marks.length) {
                     smallRanThisTurn = true;
-                    this.progress('running', `大场景“${newlyClosedTimeline.sceneTitle || newlyClosedTimeline.sceneGroup || '未命名'}”结束，开始小总结：${marks.length}个变化点`, { titles: ['总结｜当前事件'], sceneBoundary: true });
-                    summaryNotify('info', `镜渊：大场景结束，开始小总结（${marks.length}个变化点）`);
+                    const groupLabel = summaryGroup.sceneTitle || summaryGroup.sceneGroup || summaryGroup.groupUid || '未命名场景';
+                    this.progress('running', `场景组“${groupLabel}”开始小总结：${marks.length}个条目`, { titles: ['总结｜当前事件'], sceneBoundary: true, sceneGroupUid: summaryGroup.groupUid });
+                    summaryNotify('info', `镜渊：场景组结束，开始小总结（${marks.length}个条目）`);
                     const beforeReceiptIds = this.currentReceiptIds();
                     try {
-                        const small = await this.summarize('small', settings, snapshot, { marks, timeline: newlyClosedTimeline });
+                        const small = await this.summarize('small', settings, snapshot, { marks, timeline: summaryGroup });
                         committed.push(small);
                         const processed = small.processedPendingUids ?? [];
-                        pendingSmallSummaryMarks = subtractSummaryMarks(pendingSmallSummaryMarks, processed);
-                        failedSmallSummaryMarks = subtractSummaryMarks(failedSmallSummaryMarks, processed);
                         const producedMarks = summaryMarksFromResult(small);
-                        if (producedMarks.length) {
-                            smallCountSinceLarge += 1;
-                            pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
-                        } else {
-                            // 即使模型判断无需新增局部规律，该大场景也已经完成一次有效结算。
-                            smallCountSinceLarge += 1;
-                        }
-                        eventTimelineArchive = [...eventTimelineArchive, { ...newlyClosedTimeline, settledAt: Date.now() }].slice(-48);
-                        closedEventTimelines = closedEventTimelines.filter((timeline) => timeline.id !== newlyClosedTimeline.id);
+                        smallCountSinceLarge += 1;
+                        if (producedMarks.length) pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
+                        const settledTimeline = normalizeEventTimeline({ ...summaryGroup, summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
+                        if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
+                        closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id));
                         const smallWrites = Number(small?.warehouse?.createdCount || 0) + Number(small?.warehouse?.updatedCount || 0);
                         const smallDeleted = Number(small?.warehouse?.deletedCount || 0);
                         summaryNotify(small?.changed ? 'success' : 'info', small?.changed
-                            ? `镜渊：小总结完成（处理${processed.length}个变化点，写入${smallWrites}，沉降删除${smallDeleted}）`
-                            : `镜渊：小总结结算完成，但本批未形成写回/合并/沉降变化（处理${processed.length}个变化点）`);
+                            ? `镜渊：小总结完成（场景组${summaryGroup.groupUid || ''}，处理${processed.length}个条目，写入${smallWrites}，沉降删除${smallDeleted}）`
+                            : `镜渊：小总结结算完成（场景组${summaryGroup.groupUid || ''}，处理${processed.length}个条目，无结构变化）`);
                     } catch (error) {
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
-                        const failedUids = timelineUids(newlyClosedTimeline);
-                        failedSmallSummaryMarks = mergeSummaryMarks(failedSmallSummaryMarks, failedUids.map((uid) => ({ uid })));
-                        pendingSmallSummaryMarks = subtractSummaryMarks(pendingSmallSummaryMarks, failedUids);
-                        summaryWarning = `小总结失败；该已关闭场景线保留给手动小总结处理：${(0, util_1.errorText)(error)}`;
-                        this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
+                        closedEventTimelines = closedEventTimelines.map((timeline) => {
+                            if ((timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id)) return timeline;
+                            return normalizeEventTimeline({ ...timeline, summaryStatus: 'failed' }, 'failed');
+                        }).filter(Boolean);
+                        summaryWarning = `小总结失败；场景组 ${summaryGroup.groupUid || summaryGroup.id || ''} 已保留给手动处理：${(0, util_1.errorText)(error)}`;
+                        this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], error: (0, util_1.errorText)(error), autoRetryStopped: true, sceneGroupUid: summaryGroup.groupUid });
                         summaryNotify('error', `镜渊：小总结失败：${(0, util_1.errorText)(error)}`);
                     }
                 }
             }
 
-            // 大总结固定为玩家手动触发。自动小总结形成的上层候选只进入 pendingLargeSummaryMarks，
-            // 不在正文处理回合、场景边界或任何阈值条件下自动调用模型，避免系统误判和连续重型请求卡住网关。
+            // 平铺 marks 只保留为兼容/人工选择索引，不再决定某个 SceneGroup 是否有资格总结。
+            // 同一条目 UID 可以同时存在于多个历史场景组；结算 A 组不会清掉 B 组的包含关系。
+            const pendingSmallSummaryMarks = unresolvedSceneGroupMarks(activeEventTimeline, closedEventTimelines);
+            const failedSmallSummaryMarks = failedSceneGroupMarks(closedEventTimelines);
+
+            // 大总结固定为玩家手动触发。
             largeRanThisTurn = false;
             const nextCursor = {
                 ...cursor,
@@ -7766,18 +7841,26 @@ class MemoryRunner {
         let nextCursor = { ...cursor };
         if (summaryKind === 'small') {
             const producedMarks = summaryMarksFromResult(result);
-            const fullyProcessedClosed = (cursor.closedEventTimelines ?? []).map(normalizeEventTimeline).filter(Boolean)
+            const closed = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
+            const fullyProcessedClosed = closed
                 .filter((timeline) => timelineUids(timeline).length && timelineUids(timeline).every((uid) => processed.includes(uid)))
-                .map((timeline) => ({ ...timeline, settledAt: Date.now() }));
+                .map((timeline) => normalizeEventTimeline({ ...timeline, summaryStatus: 'settled', settledAt: Date.now() }, 'settled'))
+                .filter(Boolean);
+            const settledIds = new Set(fullyProcessedClosed.map((timeline) => timeline.groupUid || timeline.id));
+            const remainingClosed = closed.filter((timeline) => !settledIds.has(timeline.groupUid || timeline.id));
+            const groupedPending = unresolvedSceneGroupMarks(cursor.activeEventTimeline, remainingClosed);
+            const groupedFailed = failedSceneGroupMarks(remainingClosed);
+            const hasSceneGroups = Boolean(normalizeEventTimeline(cursor.activeEventTimeline, 'active')) || closed.length > 0;
             nextCursor = {
                 ...cursor,
                 turnsSinceSmall: 0,
                 smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (processed.length ? 1 : 0),
-                pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
-                failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
+                // 选中总结不能因为 UID 与别的场景组重叠就清掉别组成员；有 SceneGroup 时始终从剩余组重算。
+                pendingSmallSummaryMarks: hasSceneGroups ? groupedPending : subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
+                failedSmallSummaryMarks: hasSceneGroups ? groupedFailed : subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
                 pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
-                closedEventTimelines: (cursor.closedEventTimelines ?? []).filter((timeline) => timelineUids(timeline).some((uid) => !processed.includes(uid))),
-                eventTimelineArchive: [...(cursor.eventTimelineArchive ?? []).map(normalizeEventTimeline).filter(Boolean), ...fullyProcessedClosed].slice(-48),
+                closedEventTimelines: remainingClosed,
+                eventTimelineArchive: [...(cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean), ...fullyProcessedClosed].slice(-128),
             };
         } else {
             // 选中大总结只结算与本次玩家选择实际重叠的待处理标记；未选条目继续保留。
@@ -8176,30 +8259,14 @@ function currentSceneUidKey(entries) {
     return currentSceneEntries(entries).map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean).sort().join('|');
 }
 function currentSceneBoundaryChanged(beforeEntries, afterEntries) {
-    const beforeScenes = currentSceneEntries(beforeEntries);
-    const afterScenes = currentSceneEntries(afterEntries);
-    if (!beforeScenes.length || !afterScenes.length) return false;
-
-    const variants = (entry) => (0, util_1.unique)([
-        (0, util_1.splitTitle)(String(entry?.title ?? ''))?.name || '',
-        String(entry?.name ?? ''),
-        ...(entry?.aliases ?? []),
-    ].map((value) => String(value ?? '').trim()).filter(Boolean));
-
-    // 老逻辑恢复：完全相同或文本高度相似才属于同一场景；无法证明相似就视为已经换场景。
-    // UID 只负责内部索引，不参与地点语义判断；即使误复用同一 UID，不同地点仍必须关闭旧场景线。
-    for (const before of beforeScenes) {
-        for (const after of afterScenes) {
-            for (const beforeName of variants(before)) {
-                for (const afterName of variants(after)) {
-                    if ((0, util_1.sceneLocationSimilarity)(beforeName, afterName) >= 0.72) return false;
-                }
-            }
-        }
-    }
-    return true;
+    const beforeKey = currentSceneSummaryGroupKey(beforeEntries);
+    const afterKey = currentSceneSummaryGroupKey(afterEntries);
+    if (!beforeKey || !afterKey) return false;
+    // SceneGroup 边界直接使用主预设稳定地点名。主预设负责保持同一主场景名称不变，
+    // 插件只做机械精确比较，不再用相似度猜测两个地点是否属于同一场景。
+    return beforeKey !== afterKey;
 }
-function normalizeEventTimeline(value) {
+function normalizeEventTimeline(value, defaultStatus = 'pending') {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const stages = [];
     for (const raw of Array.isArray(value.stages) ? value.stages : []) {
@@ -8221,28 +8288,90 @@ function normalizeEventTimeline(value) {
     }
     const sceneGroup = String(value.sceneGroup ?? '').trim();
     const sceneTitle = String(value.sceneTitle ?? '').trim();
-    if (!stages.length && !sceneGroup && !sceneTitle) return null;
-    return { id: String(value.id ?? ''), sceneGroup, sceneTitle, stages, settledAt: Number(value.settledAt || 0) };
+    const stageUids = stages.flatMap((stage) => stage.uids);
+    const memberUids = [...new Set([...(value.memberUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean), ...stageUids])];
+    if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length) return null;
+    const openedAtMessageKey = String(value.openedAtMessageKey ?? stages[0]?.messageKey ?? '');
+    const explicitGroupUid = String(value.groupUid ?? '').trim();
+    const legacyId = String(value.id ?? '').trim();
+    // 旧版 E-* 只按地点生成，同一地点二次进入可能撞 ID；迁移为“旧ID + 开始消息”派生的唯一 SceneGroup UID。
+    const groupUid = explicitGroupUid || (legacyId.startsWith('SG-')
+        ? legacyId
+        : `SG-${(0, util_1.hashText)(`${legacyId}|${sceneGroup}|${openedAtMessageKey}`).slice(0, 10)}`);
+    const settledAt = Number(value.settledAt || 0);
+    const rawStatus = String(value.summaryStatus ?? '').trim();
+    const summaryStatus = /^(?:active|pending|failed|settled)$/u.test(rawStatus)
+        ? rawStatus
+        : settledAt > 0 ? 'settled' : defaultStatus;
+    return {
+        id: groupUid,
+        groupUid,
+        sceneGroup,
+        sceneTitle,
+        memberUids,
+        stages,
+        summaryStatus,
+        openedAtMessageKey,
+        closedAtMessageKey: String(value.closedAtMessageKey ?? ''),
+        settledAt,
+    };
 }
 function timelineUids(timeline) {
-    return [...new Set((normalizeEventTimeline(timeline)?.stages ?? []).flatMap((stage) => stage.uids).map(String).filter(Boolean))];
+    const normalized = normalizeEventTimeline(timeline);
+    if (!normalized) return [];
+    return [...new Set([...(normalized.memberUids ?? []), ...normalized.stages.flatMap((stage) => stage.uids)].map(String).filter(Boolean))];
 }
 function appendTimelineStage(timeline, rootResult, snapshot) {
     const changed = summaryMarksFromResult(rootResult).map((mark) => mark.uid);
     const points = (rootResult?.extractionPoints ?? []).filter((point) => changed.includes(String(point?.uid ?? '')));
-    const base = normalizeEventTimeline(timeline) ?? {
-        id: `E-${(0, util_1.hashText)(`${snapshot.chatKey}|${rootResult?.currentSceneGroup || rootResult?.currentSceneTitle || snapshot.messageKey}`).slice(0, 10)}`,
+    const base = normalizeEventTimeline(timeline, 'active') ?? {
+        id: `SG-${(0, util_1.hashText)(`${snapshot.chatKey}|${rootResult?.currentSceneGroup || rootResult?.currentSceneTitle || 'scene'}|${snapshot.messageKey}`).slice(0, 10)}`,
+        groupUid: `SG-${(0, util_1.hashText)(`${snapshot.chatKey}|${rootResult?.currentSceneGroup || rootResult?.currentSceneTitle || 'scene'}|${snapshot.messageKey}`).slice(0, 10)}`,
         sceneGroup: String(rootResult?.currentSceneGroup ?? ''),
         sceneTitle: String(rootResult?.currentSceneTitle ?? ''),
+        memberUids: [],
         stages: [],
+        summaryStatus: 'active',
+        openedAtMessageKey: String(snapshot.messageKey ?? ''),
+        closedAtMessageKey: '',
+        settledAt: 0,
     };
-    if (!changed.length) return base;
+    base.summaryStatus = 'active';
     base.sceneGroup ||= String(rootResult?.currentSceneGroup ?? '');
     base.sceneTitle ||= String(rootResult?.currentSceneTitle ?? '');
+    if (!changed.length) return base;
+    base.memberUids = [...new Set([...(base.memberUids ?? []), ...changed])];
     base.stages.push({ seq: base.stages.length + 1, messageKey: String(snapshot.messageKey ?? ''), uids: [...new Set(changed)], points });
-    // 只保存 UID、事实哈希与阶段关系，不保存正文或事实副本；极端长场景最多保留 160 个变化阶段。
+    // SceneGroup 永久保存“主 UID → 本场被动过 UID”的包含关系；阶段只保留 UID、事实哈希与关系，不保存正文副本。
     if (base.stages.length > 160) base.stages = base.stages.slice(-160).map((stage, index) => ({ ...stage, seq: index + 1 }));
     return base;
+}
+function unresolvedSceneGroupMarks(activeTimeline, closedTimelines = []) {
+    const uids = [];
+    const active = normalizeEventTimeline(activeTimeline, 'active');
+    if (active) uids.push(...timelineUids(active));
+    for (const raw of Array.isArray(closedTimelines) ? closedTimelines : []) {
+        const timeline = normalizeEventTimeline(raw, 'pending');
+        if (!timeline || timeline.summaryStatus === 'settled') continue;
+        uids.push(...timelineUids(timeline));
+    }
+    return normalizeSummaryMarks([...new Set(uids)].map((uid) => ({ uid })));
+}
+function failedSceneGroupMarks(closedTimelines = []) {
+    const uids = [];
+    for (const raw of Array.isArray(closedTimelines) ? closedTimelines : []) {
+        const timeline = normalizeEventTimeline(raw, 'pending');
+        if (timeline?.summaryStatus === 'failed') uids.push(...timelineUids(timeline));
+    }
+    return normalizeSummaryMarks([...new Set(uids)].map((uid) => ({ uid })));
+}
+function nextPendingSceneGroup(closedTimelines = [], includeFailed = false) {
+    for (const raw of Array.isArray(closedTimelines) ? closedTimelines : []) {
+        const timeline = normalizeEventTimeline(raw, 'pending');
+        if (!timeline || !timelineUids(timeline).length) continue;
+        if (timeline.summaryStatus === 'pending' || (includeFailed && timeline.summaryStatus === 'failed')) return timeline;
+    }
+    return null;
 }
 
 function timelinesForMarks(cursor, marks) {
@@ -16588,8 +16717,10 @@ function parseSettings(value) {
         // 大总结固定为玩家手动触发；保留兼容键但不允许旧设置重新开启自动大总结。
         autoLargeSummary: false,
         entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
-        auditEnabled: candidate.auditEnabled !== false,
-        extractionEnabled: candidate.extractionEnabled !== false,
+        // 3.0 SceneGroup：审核/提取不再同时暴露“自动化”和“功能开关”两套重复 UI。
+        // 手动功能始终可用；autoAudit/autoExtraction 只控制自动触发，总开关负责全局停用。
+        auditEnabled: true,
+        extractionEnabled: true,
         // [MA-WB-SCOPE-01] 旧版全局目标世界书字段只保留兼容键，不再允许覆盖当前聊天绑定。
         targetLorebook: '',
         autoCreateLorebook: candidate.autoCreateLorebook === true,
