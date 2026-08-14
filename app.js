@@ -133,7 +133,6 @@ class MirrorAbyssApplication {
             this.listen('WORLDINFO_UPDATED', () => this.worldbook.invalidateRuntimeMemory());
         this.controlPanel.mount();
         this.started = true;
-        this.resumeInterruptedMaintenance();
     }
     stop() {
         if (!this.started) return;
@@ -201,103 +200,10 @@ class MirrorAbyssApplication {
         });
     }
     organizeWorldbook() {
-        return this.enqueueMaintenance('organizeWorldbook', async (settings, snapshot) => {
-            const validate = () => this.host.assertSnapshot(snapshot, this.settings());
-            validate();
-            const beforeCursor = this.host.cursor();
-            const beforeGameTime = this.host.getCurrentGameTime();
-            const beforeReceiptIds = (this.host.getCommitReceipts?.() ?? []).map((item) => String(item?.id ?? '')).filter(Boolean);
-            const transaction = {
-                id: `organize-${snapshot.taskId || Date.now()}-${Math.random().toString(36).slice(2)}`,
-                kind: 'organizeWorldbook',
-                chatKey: snapshot.chatKey,
-                worldbookName: snapshot.worldbookName,
-                beforeCursor: (0, util_1.clone)(beforeCursor),
-                beforeGameTime: (0, util_1.clone)(beforeGameTime),
-                beforeReceiptIds,
-                createdAt: Date.now(),
-            };
-            await this.host.setMaintenanceTransaction?.(transaction, snapshot, this.settings());
-            try {
-                const small = await this.memoryRunner.runTask('smallSummary', settings, snapshot, { allowCascade: false });
-                validate();
-                // 大总结只能由玩家显式点击“立即大总结”或“选中大总结”。
-                // “整理世界书”不再暗含大总结，避免一次人工维护动作连续向网关提交两个重型总结请求。
-                const recall = await this.worldbook.replanRecall(settings, snapshot, validate);
-                validate();
-                await this.host.clearMaintenanceTransaction?.(transaction.id, snapshot, this.settings());
-                return {
-                    smallEntries: Array.isArray(small) ? small.length : 0,
-                    largeEntries: 0,
-                    recallEntries: Array.isArray(recall) ? recall.length : 0,
-                    transactional: true,
-                };
-            }
-            catch (error) {
-                if (safeChatKey(this.host) !== snapshot.chatKey) {
-                    const deferred = new Error(`整理世界书已中断；恢复标记保留在原聊天，返回原聊天后会先自动回滚：${(0, util_1.errorText)(error)}`);
-                    deferred.code = 'MA_TASK_CANCELLED';
-                    throw deferred;
-                }
-                try {
-                    await this.restoreMaintenanceTransaction(transaction, settings, snapshot);
-                }
-                catch (rollbackError) {
-                    throw new Error(`整理世界书失败，且父事务恢复不完整：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
-                }
-                const cancelled = snapshot.token?.cancelled === true;
-                const restored = new Error(`${cancelled ? '整理世界书已取消' : '整理世界书失败'}，已恢复操作前的世界书、游标、回执与游戏时间：${(0, util_1.errorText)(error)}`);
-                if (cancelled) restored.code = 'MA_TASK_CANCELLED';
-                throw restored;
-            }
-        });
+        // [MA-ARCH-06] 兼容旧入口，但不再建立重复父事务；整理世界书等价于一次显式小总结。
+        return this.smallSummary();
     }
-    async restoreMaintenanceTransaction(transaction, settings, snapshot) {
-        if (!transaction || transaction.kind !== 'organizeWorldbook') return false;
-        const validate = () => this.host.assertSnapshot(snapshot, this.settings());
-        validate();
-        if (transaction.chatKey !== snapshot.chatKey || transaction.worldbookName !== snapshot.worldbookName)
-            throw new Error('待恢复事务与当前聊天或世界书不一致');
-        const beforeIds = new Set((transaction.beforeReceiptIds ?? []).map((value) => String(value ?? '')).filter(Boolean));
-        const receipts = (this.host.getCommitReceipts?.() ?? []).filter((receipt) => {
-            const id = String(receipt?.id ?? '');
-            return id && !beforeIds.has(id) && (!receipt?.worldbookName || receipt.worldbookName === transaction.worldbookName);
-        });
-        const receiptIds = receipts.map((receipt) => String(receipt.id ?? '')).filter(Boolean);
-        if (receipts.length) {
-            await this.worldbook.rollbackReceipts(settings, receipts, this.host.getFocusUid(), snapshot, validate);
-        }
-        await this.host.saveCursor((0, util_1.clone)(transaction.beforeCursor ?? {}), snapshot, this.settings());
-        await this.host.setCurrentGameTime((0, util_1.clone)(transaction.beforeGameTime ?? null), snapshot, this.settings());
-        if (receiptIds.length) await this.host.removeCommitReceipts(receiptIds);
-        await this.host.clearMaintenanceTransaction?.(transaction.id, snapshot, this.settings());
-        return true;
-    }
-    resumeInterruptedMaintenance() {
-        if (!this.started || typeof this.host.getMaintenanceTransaction !== 'function') return false;
-        let transaction;
-        try { transaction = this.host.getMaintenanceTransaction(); }
-        catch { return false; }
-        if (!transaction?.id || transaction.kind !== 'organizeWorldbook') return false;
-        if (this.pendingRecoveryIds.has(transaction.id)) return true;
-        this.pendingRecoveryIds.add(transaction.id);
-        void this.enqueueMaintenance('organizeWorldbookRecovery', async (settings, snapshot) => {
-            try {
-                await this.restoreMaintenanceTransaction(transaction, settings, snapshot);
-                this.controlPanel.setStatus('检测到中断的世界书整理，已先恢复操作前状态');
-                await this.controlPanel.refreshWorldbookPage?.(true);
-                return { recovered: true, transactionId: transaction.id };
-            }
-            finally {
-                this.pendingRecoveryIds.delete(transaction.id);
-            }
-        }).catch((error) => {
-            this.pendingRecoveryIds.delete(transaction.id);
-            this.controlPanel.setStatus(`中断事务恢复失败：${(0, util_1.errorText)(error)}；未继续执行新的整理`, true);
-            console.error('[MirrorAbyss] deferred maintenance recovery failed', error);
-        });
-        return true;
-    }
+
     migrate() { return this.enqueueTask('migration', undefined, false); }
     commitMigration() { return this.enqueueTask('commitMigration', undefined, false); }
     undoMigration() { return this.enqueueTask('undoMigration', undefined, false); }
@@ -613,8 +519,7 @@ class MirrorAbyssApplication {
             this.controlPanel.setStatus('聊天已经切换，旧聊天任务与预览已清理');
             this.controlPanel.rebindHostDom?.();
             this.publishTaskStatus();
-            this.resumeInterruptedMaintenance();
-            return;
+                return;
         }
         const index = messageIndexFromEvent(eventValue);
         if (!Number.isInteger(index)) {
@@ -1095,7 +1000,6 @@ function maintenanceTaskLabel(taskType) {
         apiProbe: 'API 探针',
         smallSummary: '小总结',
         largeSummary: '大总结',
-        organizeWorldbook: '整理世界书',
         sourceRollback: '来源回滚',
         editEntry: '世界书条目编辑',
         setFocus: '焦点更新',
@@ -1103,7 +1007,6 @@ function maintenanceTaskLabel(taskType) {
         worldSettingPreview: '世界设定预览',
         worldSettingCommit: '世界设定提交',
         acceptance: '自动验收',
-        organizeWorldbookRecovery: '中断整理恢复',
     })[taskType] || '世界书操作';
 }
 function notify(kind, message) {
@@ -2461,12 +2364,8 @@ class ControlPanel {
             this.setStatus('总开关已关闭', true);
             return;
         }
-        const labels = { smallSummary: '小总结', largeSummary: '大总结', organizeWorldbook: '世界书整理', testApiProbe: 'API 探针' };
+        const labels = { smallSummary: '小总结', largeSummary: '大总结', testApiProbe: 'API 探针' };
         const label = labels[kind] || '操作';
-        if (kind === 'organizeWorldbook' && typeof globalThis.confirm === 'function') {
-            const confirmed = globalThis.confirm('整理世界书将作为一个父事务运行小总结和召回重排；大总结只由玩家单独手动触发。取消或任一步失败会恢复操作前状态；中途切换聊天时，返回原聊天后会先自动恢复。是否继续？');
-            if (!confirmed) return;
-        }
         this.pendingActions.add(kind);
         this.syncDisabledState();
         if (this.worldbookQuickStatusNode) {
@@ -2484,9 +2383,7 @@ class ControlPanel {
                 this.setStatus(detail);
             }
             else {
-                const detail = kind === 'organizeWorldbook'
-                    ? '世界书整理已完成'
-                    : `${label}已完成；世界书状态已回读`;
+                const detail = `${label}已完成；世界书状态已回读`;
                 if (this.worldbookQuickStatusNode) this.worldbookQuickStatusNode.textContent = detail;
                 this.setStatus(detail);
                 await this.refreshWorldbookPage(true);
@@ -4654,199 +4551,33 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
     const blocks = (sourceBlocks ?? []).map((block) => structuredClone(block));
     const diagnostics = { attached: [], filtered: [], promoted: [], warnings: [] };
     // Summary output is already a system-selected higher-level distribution.
-    // Do not run extraction-only evidence filters on it or valid settled state can be removed.
     if (options.sourceKind === 'summary') {
         return { blocks, diagnostics, currentSceneTitle: blocks.find((block) => block.type === '场景')?.title ?? '' };
     }
+    // [MA-ARCH-02] 场景语义只由主预设“地点：”字段决定。插件不再用正文正则二次理解
+    // 人物、转交、关系、计划等剧情含义。若模型返回了场景块，只把其稳定身份机械对齐到地点栏，
+    // 保留模型已经提取出的场景事实；没有场景事实时不凭空制造业务条目。
     const explicitSceneName = explicitCurrentSceneName(contextText);
     if (explicitSceneName) {
         const sceneBlocks = blocks.filter((block) => block.type === '场景');
-        const explicitSceneKey = (0, util_1.normalizeSceneLocation)(explicitSceneName);
-        const matchingScene = sceneBlocks.find((block) => (0, util_1.normalizeSceneLocation)(block.name || block.title) === explicitSceneKey);
-        if (!matchingScene) {
-            // dialogueContext 在 turnText 之前；明确场景必须取整段材料中最后一次声明/转场目标。
-            // 若提取模型仍回写旧场景，正文末端的明确地点优先，避免旧上下文把真实转场压住一轮。
+        if (sceneBlocks.length) {
+            const primary = sceneBlocks[0];
+            primary.type = '场景';
+            primary.name = explicitSceneName;
+            primary.title = `场景｜${explicitSceneName}`;
+            primary.keywords = (0, util_1.unique)([explicitSceneName, ...(primary.keywords ?? []).filter((key) => (0, util_1.normalizeSceneLocation)(key) === (0, util_1.normalizeSceneLocation)(explicitSceneName))]);
             for (let index = blocks.length - 1; index >= 0; index -= 1) {
-                if (blocks[index]?.type === '场景') blocks.splice(index, 1);
+                if (blocks[index]?.type === '场景' && blocks[index] !== primary) blocks.splice(index, 1);
             }
-            blocks.unshift({
-                type: '场景', name: explicitSceneName, title: `场景｜${explicitSceneName}`,
-                keywords: [explicitSceneName], sections: [],
-            });
         }
     }
-    synthesizeDocumentItemUpdates(blocks, entries, contextText);
-    enforceExplicitDialogueFacts(blocks, contextText);
-    const currentScene = blocks.find((block) => block.type === '场景') ?? null;
-    const output = [];
-    for (const block of blocks) {
-        if (!/^(?:人物|角色|NPC)$/u.test(String(block.type ?? ''))) {
-            output.push(block);
-            continue;
-        }
-        if (!isGenericBackgroundPerson(block)) {
-            output.push(block);
-            continue;
-        }
-        if (revealsExistingIdentity(block, entries, contextText)) {
-            diagnostics.promoted.push(block.title);
-            output.push(block);
-            continue;
-        }
-        const body = blockText(block);
-        const independent = INDEPENDENT_MARKER.test(body)
-            || hasIndependentPersonMaterial(block)
-            || hasStableProperName(block.name);
-        if (independent) {
-            diagnostics.promoted.push(block.title);
-            output.push(block);
-            continue;
-        }
-        if (currentScene && isFixedSceneRole(block, currentScene, contextText)) {
-            attachFixedRole(currentScene, block);
-            diagnostics.attached.push({ title: block.title, host: currentScene.title });
-            continue;
-        }
-        diagnostics.filtered.push(block.title);
-    }
-    for (const block of output) if (block.type === '场景') normalizeSceneSnapshot(block, contextText, { gameTimeEnabled: options.gameTimeEnabled !== false });
-    return { blocks: output, diagnostics, currentSceneTitle: currentScene?.title ?? '' };
+    return {
+        blocks,
+        diagnostics,
+        currentSceneTitle: explicitSceneName ? `场景｜${explicitSceneName}` : (blocks.find((block) => block.type === '场景')?.title ?? ''),
+    };
 }
 
-function enforceExplicitDialogueFacts(blocks, contextText) {
-    const context = String(contextText ?? '');
-    const explicitScene = explicitCurrentSceneName(context);
-    const hasUndecidedFuture = /(?:明天|明日|次日|未来)[^。；\n]{0,80}(?:提议|计划|调查|前往)[^。；\n]{0,80}(?:尚未.{0,12}(?:决定|定案)|未决定|未定案)|(?:提议|计划)[^。；\n]{0,80}(?:尚未.{0,12}(?:决定|定案)|未决定|未定案)/u.test(context);
-    const hasExplicitRelationship = /(?:朋友|同伴|恋人|夫妻|兄弟|姐妹|亲属|盟友|敌人|仇敌|合作关系|隶属|上下级|信任关系|敌对关系|结盟|搭档)/u.test(context);
-    const transfer = context.match(/([\p{Script=Han}A-Za-z0-9·]{2,16})把([^，。；;\n]{2,20}?)(?:转交|交给|递给)([\p{Script=Han}A-Za-z0-9·]{2,16})/u);
-    if (transfer) {
-        const [, from, itemName, to] = transfer.map(value => String(value ?? '').trim());
-        let item = blocks.find(block => block.type === '物品' && (0, util_1.normalizeFact)(block.name) === (0, util_1.normalizeFact)(itemName));
-        if (!item) {
-            item = { type: '物品', name: itemName, title: `物品｜${itemName}`, keywords: [itemName], sections: [] };
-            blocks.push(item);
-        }
-        // A transfer sentence is authoritative only for ownership.  Rebuild
-        // the candidate from that evidence so the model cannot invent a
-        // material, purpose, condition or duplicate wording around it.
-        item.sections = [
-            { name: '当前', lines: [`当前持有者：${to}`], empty: false },
-            { name: '固定事实', lines: [`${itemName}已由${from}转交给${to}`], empty: false },
-        ];
-        for (const block of blocks) {
-            if (block === item) continue;
-            for (const section of block.sections ?? []) {
-                section.lines = (section.lines ?? []).filter(line => {
-                    const text = String(line ?? '');
-                    if (text.includes(itemName)) return false;
-                    return true;
-                });
-                section.empty = !(section.lines ?? []).length;
-            }
-        }
-    }
-    const relocation = context.match(/([^，。；;\n]{2,20}?)(?:已经|已)?从([^，。；;\n]{2,20}?)转移到(?:了)?([^，。；;\n]{2,20})/u);
-    if (relocation) {
-        const [, subject, from, to] = relocation.map(value => String(value ?? '').trim());
-        let world = blocks.find(block => block.type === '世界' && (0, util_1.normalizeFact)(block.name) === (0, util_1.normalizeFact)(subject));
-        if (!world) {
-            world = { type: '世界', name: subject, title: `世界｜${subject}`, keywords: [subject], sections: [] };
-            blocks.push(world);
-        }
-        // The relocation clause likewise defines exactly one current state
-        // and one historical transition; unrelated model prose is discarded.
-        world.sections = [
-            { name: '公开局势', lines: [`${subject}当前位置：${to}`], empty: false },
-            { name: '固定事实', lines: [`${subject}已从${from}转移到${to}`], empty: false },
-        ];
-        for (const block of blocks) {
-            if (block === world) continue;
-            for (const section of block.sections ?? []) {
-                section.lines = (section.lines ?? []).filter(line => {
-                    const text = String(line ?? '');
-                    if (text.includes(subject) || text.includes(to)) return false;
-                    return true;
-                });
-                section.empty = !(section.lines ?? []).length;
-            }
-        }
-        if (!explicitScene && !new RegExp(`(?:抵达|进入|来到|位于|身处)${escapeRegExp(to)}`, 'u').test(context)) {
-            for (let index = blocks.length - 1; index >= 0; index -= 1) {
-                if (blocks[index].type === '场景' && (0, util_1.normalizeFact)(blocks[index].name) === (0, util_1.normalizeFact)(to)) blocks.splice(index, 1);
-            }
-        }
-    }
-    for (let index = blocks.length - 1; index >= 0; index -= 1) {
-        if (hasUndecidedFuture && /^(?:事件|世界)$/u.test(String(blocks[index].type ?? ''))
-            && (/(?:行动安排|未来计划|调查计划|后续安排)/u.test(String(blocks[index].name ?? ''))
-                || /(?:行动计划|明天|明日|调查北门|尚未.{0,12}(?:决定|定案)|未决定|未定案)/u.test(blockText(blocks[index])))) blocks.splice(index, 1);
-        else if (blocks[index].type === '世界' && /^(?:局部局势|当前行动|行动局面|行动链)$/u.test(String(blocks[index].name ?? '').trim())
-            && !context.includes(String(blocks[index].name ?? '').trim())) blocks.splice(index, 1);
-    }
-    for (const block of blocks) {
-        for (const section of block.sections ?? []) {
-            section.lines = (section.lines ?? []).filter(line => {
-                const text = String(line ?? '');
-                if (block.type === '人物' && /^(?:关系|关系立场)$/u.test(section.name) && !hasExplicitRelationship) return false;
-                if (/^(?:未明|身份未明|未明身份|身份不明|身份未明者|未明身份者)(?:的)?(?:男性|女性|者)?[.。]?$/u.test(text)) return false;
-                if ((0, util_1.normalizeFact)(text) === (0, util_1.normalizeFact)(block.name)) return false;
-                if (/(?:明天|明日|次日|未来).*(?:提议|计划|调查|前往)|(?:提议|计划).*(?:尚未.{0,12}(?:决定|定案)|未决定|未定案)/u.test(text)) return false;
-                if (/(?:尚未.{0,12}(?:决定|定案)|未决定|未定案|后续调查建议|行动计划)/u.test(text) && hasUndecidedFuture) return false;
-                if (/(?:下雨|降雨|雨势|雨水)|(?:斗篷|衣物|衣服).*(?:湿透|打湿|淋湿)/u.test(text)
-                    && !/(?:导致|阻断|危险|无法|受限|积水|洪水|损坏)/u.test(text)) return false;
-                if (/(?:斗篷|衣物|衣服)/u.test(text) && /(?:斗篷|衣物|衣服).*(?:湿透|打湿|淋湿)/u.test(context)
-                    && !/(?:导致|阻断|危险|无法|受限|损坏)/u.test(context)) return false;
-                if (!explicitScene && block.type === '人物' && section.name === '当前' && /(?:位于|身处|同处)/u.test(text)) return false;
-                if (transfer && block.type === '人物' && /^(?:当前|关系|关系立场|持有|固定事实)$/u.test(section.name)
-                    && /(?:同行|同伴|钥匙|交付|转交|接收|收到|获得|持有|告知转移|继续商议|当前行动链|接受其说明|继续对话|合作关系)/u.test(text)) return false;
-                if (block.type === '人物' && /^(?:身份|关系|关系立场)$/u.test(section.name)
-                    && /(?:协作对象|同行者|同伴|对话对象|共同处于|共同使用|共同藏身处|进行协商|参与后续讨论|听取其信息|当前行动链|接受其说明|继续对话|合作关系)/u.test(text)) return false;
-                return true;
-            });
-            section.empty = !(section.lines ?? []).length;
-        }
-    }
-    for (let index = blocks.length - 1; index >= 0; index -= 1) {
-        const block = blocks[index];
-        if (block.type === '事件' && !eventBlockHasLandedFact(block)) {
-            blocks.splice(index, 1);
-            continue;
-        }
-        const preservesExplicitScene = block.type === '场景'
-            && explicitScene && (0, util_1.normalizeFact)(block.name) === (0, util_1.normalizeFact)(explicitScene);
-        if (!preservesExplicitScene && (block.sections ?? []).every(section => !(section.lines ?? []).length)) blocks.splice(index, 1);
-    }
-}
-function eventBlockHasLandedFact(block) {
-    return (block?.sections ?? []).some((section) => /^(?:已发生进展|结果)$/u.test(String(section.name ?? ''))
-        && (section.lines ?? []).some((line) => String(line ?? '').trim()));
-}
-
-function escapeRegExp(value) {
-    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-}
-
-function synthesizeDocumentItemUpdates(blocks, entries, contextText) {
-    const context = String(contextText ?? '');
-    if (!/(?:标注|记录|写入|刻入|登记)/u.test(context)) return;
-    const quotes = [...context.matchAll(/[“"]([^”"\n]{2,160})[”"]/gu)];
-    if (!quotes.length) return;
-    for (const item of (entries ?? []).filter((entry) => entry.type === '物品' && entry.name && context.includes(String(entry.name)))) {
-        const quote = [...quotes].reverse().find((match) => {
-            const tail = context.slice(Number(match.index || 0) + match[0].length, Number(match.index || 0) + match[0].length + 96);
-            return /(?:标注|记录|写入|刻入|登记)/u.test(tail) && tail.includes(String(item.name));
-        });
-        if (!quote) continue;
-        let block = blocks.find((candidate) => candidate.type === '物品' && (0, util_1.normalizeFact)(candidate.name) === (0, util_1.normalizeFact)(item.name));
-        if (!block) {
-            block = { type: '物品', name: item.name, title: item.title, keywords: [item.name], sections: [] };
-            blocks.push(block);
-        }
-        const section = ensureSection(block, '固定事实');
-        section.lines = (0, util_1.unique)([...(section.lines ?? []), `已记录：${String(quote[1]).trim()}`]);
-        section.empty = false;
-    }
-}
 
 function explicitCurrentSceneName(contextText) {
     return (0, util_1.extractLatestSceneLocation)(contextText);
@@ -4855,42 +4586,6 @@ function explicitCurrentSceneName(contextText) {
 // Models occasionally put structured current-scene facts inside one natural
 // sentence.  Normalize the two fields that drive the production projection so
 // recall and the management panel observe the same state.
-function normalizeSceneSnapshot(block, contextText = '', options = {}) {
-    const current = (block.sections ?? []).filter((section) => /^(?:当前状态|定义)$/u.test(String(section.name ?? ''))).flatMap((section) => section.lines ?? []);
-    const inferred = [];
-    for (const line of current) {
-        const match = String(line ?? '').match(/(?:当前)?在场(?:者|人物)?\s*(?:为|是|有|包括|包含|：|:)\s*([^，。；;]+)/u);
-        if (!match) continue;
-        inferred.push(...splitNames(match[1]));
-    }
-    const context = String(contextText ?? '');
-    const currentSceneName = explicitCurrentSceneName(context);
-    const contextNamesMatch = context.match(/(?:当前)?在场(?:者|人物)?[ \t]*(?:只有|为|是|有|包括|包含|[：:])[ \t]*([^,，。；;\n]+)/u);
-    const sceneMatches = currentSceneName
-        && (0, util_1.normalizeSceneLocation)(currentSceneName) === (0, util_1.normalizeSceneLocation)(block.name);
-    if (sceneMatches && contextNamesMatch) inferred.push(...splitNames(contextNamesMatch[1]));
-    let present = (block.sections ?? []).find((section) => String(section.name ?? '') === '在场');
-    if (present || inferred.length) {
-        present ??= ensureSection(block, '在场');
-        present.lines = (0, util_1.unique)([...(present.lines ?? []), ...inferred]);
-        present.empty = !(present.lines ?? []).length;
-    }
-    const gameTimeEnabled = options.gameTimeEnabled !== false;
-    if (!gameTimeEnabled) {
-        for (const section of (block.sections ?? []).filter((item) => /^(?:当前状态|定义)$/u.test(String(item.name ?? '')))) {
-            section.lines = (section.lines ?? []).filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(String(line ?? '')));
-            section.empty = !(section.lines ?? []).length;
-        }
-    }
-    if (!sceneMatches) return;
-    const snapshot = ensureSection(block, '当前状态');
-    const facts = [
-        `当前场景为${block.name}`,
-        inferred.length ? `当前在场者为${(0, util_1.unique)(inferred).join('、')}` : '',
-    ].filter(Boolean);
-    if (facts.length) snapshot.lines = (0, util_1.unique)([...(snapshot.lines ?? []), ...facts]);
-    snapshot.empty = !(snapshot.lines ?? []).length;
-}
 
 function revealsExistingIdentity(block, entries, contextText) {
     const provisional = String(block?.name ?? '').trim();
@@ -5803,7 +5498,8 @@ class HostAdapter {
             const sceneGroup = String(raw.sceneGroup ?? '').trim();
             const sceneTitle = String(raw.sceneTitle ?? '').trim();
             const memberUids = [...new Set([...(raw.memberUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean), ...stages.flatMap((stage) => stage.uids)])];
-            if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length) return null;
+            const summaryUids = [...new Set((raw.summaryUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
+            if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length && !summaryUids.length) return null;
             const groupUid = String(raw.groupUid ?? raw.id ?? '').trim();
             const settledAt = Number(raw.settledAt || 0);
             const rawStatus = String(raw.summaryStatus ?? '').trim();
@@ -5816,6 +5512,7 @@ class HostAdapter {
                 sceneGroup,
                 sceneTitle,
                 memberUids,
+                summaryUids,
                 stages,
                 summaryStatus,
                 openedAtMessageKey: String(raw.openedAtMessageKey ?? stages[0]?.messageKey ?? ''),
@@ -5878,34 +5575,7 @@ class HostAdapter {
         const receipts = this.chatNamespace().commitReceipts;
         return Array.isArray(receipts) ? structuredClone(receipts) : [];
     }
-    getMaintenanceTransaction() {
-        const value = this.chatNamespace().maintenanceTransaction;
-        return value && typeof value === 'object' && !Array.isArray(value) ? structuredClone(value) : null;
-    }
-    async setMaintenanceTransaction(value, snapshot, currentSettings) {
-        if (!value || typeof value !== 'object' || !String(value.id || '').trim()) throw new Error('维护事务标记无效');
-        if (snapshot) this.assertSnapshot(snapshot, currentSettings);
-        const root = this.chatNamespace();
-        const hadValue = Object.prototype.hasOwnProperty.call(root, 'maintenanceTransaction');
-        const previous = hadValue ? structuredClone(root.maintenanceTransaction) : undefined;
-        root.maintenanceTransaction = structuredClone(value);
-        await this.persistMetadataMutation(() => {
-            if (hadValue) root.maintenanceTransaction = previous;
-            else delete root.maintenanceTransaction;
-        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '维护事务标记保存');
-        return true;
-    }
-    async clearMaintenanceTransaction(id = '', snapshot, currentSettings) {
-        if (snapshot) this.assertSnapshot(snapshot, currentSettings);
-        const root = this.chatNamespace();
-        const current = root.maintenanceTransaction;
-        if (!current || typeof current !== 'object') return false;
-        if (id && String(current.id || '') !== String(id)) throw new Error('维护事务标记已经变化，拒绝清理');
-        const previous = structuredClone(current);
-        delete root.maintenanceTransaction;
-        await this.persistMetadataMutation(() => { root.maintenanceTransaction = previous; }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '维护事务标记清理');
-        return true;
-    }
+
     async appendCommitReceipt(receipt, limit = 0) {
         if (!receipt || typeof receipt !== 'object' || !Array.isArray(receipt.changes) || !receipt.changes.length) return false;
         const root = this.chatNamespace();
@@ -7297,8 +6967,6 @@ function add(map, key, entry) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryRunner = void 0;
-exports.segmentedExtractionRescue = segmentedExtractionRescue;
-exports.splitExtractionSource = splitExtractionSource;
 exports.__testSummaryEntries = summaryEntries;
 exports.__testNormalizeSummaryMarks = normalizeSummaryMarks;
 exports.__testMergeSummaryMarks = mergeSummaryMarks;
@@ -7398,7 +7066,7 @@ class MemoryRunner {
             let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
             let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
             if (targetGroup) {
-                const settledTimeline = normalizeEventTimeline({ ...targetGroup, summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
+                const settledTimeline = normalizeEventTimeline({ ...targetGroup, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
                 if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
                 closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (targetGroup.groupUid || targetGroup.id));
             }
@@ -7434,7 +7102,7 @@ class MemoryRunner {
         const cursor = this.host.cursor();
         const marks = mergeSummaryMarks(cursor.failedLargeSummaryMarks, cursor.pendingLargeSummaryMarks);
         summaryNotify('info', `镜渊：开始手动大总结（${marks.length}个条目）`);
-        const result = await this.summarize('large', settings, snapshot, { marks });
+        const result = await this.summarize('large', settings, snapshot, { marks, timeline: timelinesForMarks(cursor, marks) });
         const processed = result.processedPendingUids ?? [];
         const nextCursor = {
             ...cursor,
@@ -7560,7 +7228,7 @@ class MemoryRunner {
                         const producedMarks = summaryMarksFromResult(small);
                         smallCountSinceLarge += 1;
                         if (producedMarks.length) pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
-                        const settledTimeline = normalizeEventTimeline({ ...summaryGroup, summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
+                        const settledTimeline = normalizeEventTimeline({ ...summaryGroup, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
                         if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
                         closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id));
                         const smallWrites = Number(small?.warehouse?.createdCount || 0) + Number(small?.warehouse?.updatedCount || 0);
@@ -7719,86 +7387,75 @@ class MemoryRunner {
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
         const dialogueInput = [snapshot.dialogueContext, snapshot.turnText || `${snapshot.playerText}\n${snapshot.assistantText}`].filter(Boolean).join('\n\n');
-        const prompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { dialogueContext: snapshot.dialogueContext, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null });
-        // [MA-MEMORY-01] 提取只通过通用请求模块调用模型；504 时改用更短的既有条目上下文重试一次。
-        let raw = options.deterministicOnly === true ? 'EMPTY' : '';
-        try {
-            if (options.deterministicOnly !== true) raw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'extraction',
-                prompt,
-                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { compact: true, dialogueContext: snapshot.dialogueContext, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: snapshot.turnText || snapshot.assistantText,
-                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '提取模型'), { titles: [], phase: 'extract' }),
-            });
-        }
-        catch (error) {
-            if (!isReasoningOrEmptyError(error) || !settings.extractionProfileId) throw error;
-            this.progress('running', '提取模型连续只返回推理；切分正文并逐段提交最终协议', { titles: [], phase: 'extract' });
-            raw = await segmentedExtractionRescue(this.host, settings, snapshot, entries, this.getSettings, (detail) => this.progress('running', detail, { titles: [], phase: 'extract' }));
-        }
-        this.validate(snapshot);
-        let blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
-        let diagnostics = blocks.diagnostics ?? { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
-        let repairRaw = '';
-        if (!blocks.length && diagnostics.hadInput) {
-            this.progress('running', '提取结果不是可识别的条目格式，启动一次格式修复', { titles: [], phase: 'extract' });
-            const repairPrompt = (0, prompts_1.extractionRepairPrompts)(raw);
-            repairRaw = await (0, model_request_1.callModel)({
-                host: this.host,
-                stage: 'extractionRepair',
-                prompt: repairPrompt,
-                fallbackPrompt: () => (0, prompts_1.extractionRepairPrompts)(raw, { compact: true }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: raw,
-                onRetry: (error) => this.progress('running', (0, model_request_1.describeRetryReason)(error, '格式修复模型'), { titles: [], phase: 'extract' }),
-            });
-            this.validate(snapshot);
-            blocks = (0, parser_1.parseExtractionWithRecovery)(repairRaw);
-            const next = blocks.diagnostics ?? {};
-            diagnostics = {
-                repaired: Number(diagnostics.repaired || 0) + Number(next.repaired || 0) + 1,
-                merged: [...(diagnostics.merged || []), ...(next.merged || [])],
-                skipped: [...(diagnostics.skipped || []), ...(next.skipped || [])],
-                warnings: [...(diagnostics.warnings || []), '已执行一次模型格式修复', ...(next.warnings || [])],
-                hadInput: true,
-            };
-        }
-        let explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
-        if (!blocks.length && explicitNone) {
-            const deterministicBlocks = (0, governance_1.governInformationBlocks)([], entries, dialogueInput, { gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) }).blocks;
-            if (deterministicBlocks.length) blocks = deterministicBlocks;
+        const promptOptions = { dialogueContext: snapshot.dialogueContext, requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null };
+        let raw = options.deterministicOnly === true ? '无' : '';
+        let blocks = [];
+        let diagnostics = { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
+        let explicitNone = options.deterministicOnly === true;
+        let lastError = null;
+        if (options.deterministicOnly !== true) {
+            // [MA-ARCH-05] 提取只允许两次明确尝试：正常请求 + 一次干净紧凑重开。
+            // 语法恢复全部在本地 parser；不再分段救援、不再调用第二个“格式修复模型”。
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                const compact = attempt === 1;
+                const requestPrompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { ...promptOptions, compact });
+                try {
+                    raw = await (0, model_request_1.callModel)({
+                        host: this.host,
+                        stage: 'extraction',
+                        prompt: requestPrompt,
+                        fallbackPrompt: requestPrompt,
+                        settings,
+                        snapshot,
+                        profileId: settings.extractionProfileId,
+                        sourceText: snapshot.turnText || snapshot.assistantText,
+                        singleAttempt: true,
+                        generationOptions: compact && settings.extractionProfileId ? { includePreset: false } : undefined,
+                    });
+                    this.validate(snapshot);
+                    blocks = (0, parser_1.parseExtractionWithRecovery)(raw);
+                    diagnostics = blocks.diagnostics ?? diagnostics;
+                    explicitNone = /^(?:无|EMPTY)$/u.test(String(raw ?? '').trim());
+                    if (blocks.length || explicitNone) break;
+                    lastError = new Error((diagnostics.skipped || []).map((item) => item.reason).filter(Boolean).slice(0, 3).join('；') || '提取返回未形成固定事实协议');
+                } catch (error) {
+                    lastError = error;
+                }
+                if (attempt === 0) {
+                    this.progress('running', `提取首次未形成可提交协议，使用同一正文干净重开一次：${(0, util_1.errorText)(lastError)}`, { titles: [], phase: 'extract-retry' });
+                }
+            }
+            if (!blocks.length && !explicitNone && lastError && !diagnostics.hadInput) throw lastError;
         }
         if (!blocks.length) {
             const skippedTitles = (diagnostics.skipped || []).map((item) => item.title || '异常片段');
-            const detail = explicitNone ? '本轮明确返回“无”，世界书零写入' : `没有可安全提交的条目；已隔离${skippedTitles.length}个异常片段`;
-            this.setStatus(snapshot.chatKey, 'matching', detail, '', repairRaw || raw, emptyPlan());
+            const detail = explicitNone ? '本轮明确无有效变化，世界书零写入' : `没有可安全提交的固定事实；已隔离${skippedTitles.length}个异常片段`;
+            this.setStatus(snapshot.chatKey, 'matching', detail, '', raw, emptyPlan());
             this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0, phase: 'extract' });
             if (!explicitNone) {
                 const reasons = (diagnostics.skipped || []).map((item) => `${item.title || '异常片段'}：${item.reason || '协议不完整'}`).slice(0, 4).join('；');
-                throw new Error(`提取未形成可识别的条目格式，世界书未写入且处理游标未推进${reasons ? `：${reasons}` : ''}`);
+                throw new Error(`提取连续两次未形成可识别的固定事实协议，世界书未写入且处理游标未推进${reasons ? `：${reasons}` : ''}`);
             }
-            return { entries, changed: false, diagnostics };
+            return { entries, changed: false, diagnostics, factChanges: [], extractionPoints: [] };
         }
         const titles = blocks.map((block) => block.title);
-        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；格式修复${diagnostics.repaired || 0}处`, '', repairRaw || raw);
-        this.progress('running', `已提取 ${titles.length} 个，正在匹配；修复${diagnostics.repaired || 0}处`, { phase: 'extract', titles, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
+        this.setStatus(snapshot.chatKey, 'matching', `已提取 ${titles.length} 个条目：${titles.join('、')}；本地语法修复${diagnostics.repaired || 0}处`, '', raw);
+        this.progress('running', `已提取 ${titles.length} 个，正在精确匹配；本地修复${diagnostics.repaired || 0}处`, { phase: 'extract', titles, repaired: diagnostics.repaired || 0, skipped: (diagnostics.skipped || []).map((item) => item.title || '异常片段') });
         const plan = (0, operations_1.buildOperationPlan)(blocks, entries, settings, dialogueInput, { sourceKind: 'extraction', gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
-        await this.resolveSemanticDuplicates(plan, entries, settings, snapshot);
         const created = [...new Set(plan.operations.filter((operation) => operation.kind === 'create-entry').map((operation) => operation.title))];
         const updated = [...new Set(plan.operations.filter((operation) => operation.kind !== 'create-entry' && operation.kind !== 'noop').map((operation) => operation.title))];
         const skipped = [...new Set([...(diagnostics.skipped || []).map((item) => item.title || '异常片段'), ...plan.operations.filter((operation) => operation.kind === 'noop').map((operation) => operation.title)])];
-        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、合并${(diagnostics.merged || []).length}、修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { phase: 'write', titles, created, updated, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0 });
+        this.progress('running', `准备写入：新建${created.length}、更新${updated.length}、本地修复${diagnostics.repaired || 0}、跳过${skipped.length}`, { phase: 'write', titles, created, updated, skipped, repaired: diagnostics.repaired || 0 });
+        const previousCursor = typeof this.host.cursor === 'function' ? this.host.cursor() : null;
         const result = await this.apply(settings, plan, snapshot, dialogueInput, '提取', raw);
-        result.sceneBoundaryChanged = currentSceneBoundaryChanged(entries, result.entries);
-        result.currentSceneGroup = currentSceneSummaryGroupKey(result.entries);
-        result.currentSceneTitle = currentSceneEntries(result.entries)[0]?.title || plan.currentSceneTitle || '';
-        result.extractionPoints = extractionPointsFromBlocks(blocks, result.entries);
+        const beforeGroup = String(previousCursor?.activeEventTimeline?.sceneGroup || currentSceneSummaryGroupKey(entries) || '').trim();
+        const explicitSceneTitle = String(plan.currentSceneTitle || '').trim();
+        const splitScene = (0, util_1.splitTitle)(explicitSceneTitle);
+        const explicitGroup = explicitSceneTitle ? (0, util_1.normalizeSceneLocation)(splitScene?.name || explicitSceneTitle) : '';
+        result.currentSceneGroup = explicitGroup || currentSceneSummaryGroupKey(result.entries);
+        result.currentSceneTitle = explicitSceneTitle || currentSceneEntries(result.entries)[0]?.title || '';
+        result.sceneBoundaryChanged = Boolean(beforeGroup && result.currentSceneGroup && beforeGroup !== result.currentSceneGroup);
+        result.extractionPoints = extractionPointsFromCommittedChanges(result.factChanges);
         result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
         const destination = result.worldbookName || snapshot.worldbookName || '当前绑定世界书';
         const actualCreated = result.warehouse?.created ?? [];
@@ -7808,27 +7465,11 @@ class MemoryRunner {
         const detail = businessWrites > 0
             ? `已写入世界书“${destination}”：新建${actualCreated.length}、更新${actualUpdated.length}、删除${actualDeleted.length}`
             : `世界书“${destination}”业务条目零写入`;
-        this.progress('success', detail, { phase: 'write', titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, merged: diagnostics.merged || [], repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites });
+        this.progress('success', detail, { phase: 'write', titles, created: actualCreated, updated: actualUpdated, deleted: actualDeleted, skipped, repaired: diagnostics.repaired || 0, criticalChanges: result.criticalChanges, worldbookName: destination, businessWriteCount: businessWrites });
         return result;
     }
-    async resolveSemanticDuplicates(plan, entries, settings, snapshot) {
-        const byUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
-        let skipped = 0;
-        for (const operation of plan.operations) {
-            if (operation.kind !== 'append-line' || !operation.targetUid || !operation.section || !operation.newValue) continue;
-            const entry = byUid.get(String(operation.targetUid));
-            const oldLines = entry?.sections?.values?.[operation.section] ?? [];
-            const threshold = /(固定事实|关键进展|已发生进展|持续经历|持续变化|世界变化|事件进程|近期经历|变化记录|历史事实)/u.test(operation.section) ? 0.93 : 0.86;
-            const best = oldLines.reduce((score, oldValue) => distinctNumericFacts(oldValue, operation.newValue) ? score : Math.max(score, localSemanticSimilarity(oldValue, operation.newValue)), 0);
-            if (best >= threshold) {
-                operation.kind = 'noop';
-                operation.operation = 'no-op';
-                operation.reason = `本地语义解析器判定与已有事实相似度 ${(best * 100).toFixed(0)}%，跳过追加`;
-                skipped += 1;
-            }
-        }
-        if (skipped) this.setStatus(snapshot.chatKey, 'matching', `本地语义解析器跳过 ${skipped} 条重复事实`);
-    }
+
+
     async summarizeSelected(kind, settings, snapshot, selectedUids) {
         const summaryKind = kind === 'large' ? 'large' : 'small';
         const label = summaryKind === 'large' ? '选中大总结' : '选中小总结';
@@ -7836,7 +7477,7 @@ class MemoryRunner {
         if (!marks.length) throw new Error(`${label}至少需要一个有效条目`);
         const cursor = this.host.cursor();
         summaryNotify('info', `镜渊：开始${label}（${marks.length}个条目）`);
-        const result = await this.summarize(summaryKind, settings, snapshot, { marks });
+        const result = await this.summarize(summaryKind, settings, snapshot, { marks, timeline: timelinesForMarks(cursor, marks) });
         const processed = result.processedPendingUids ?? [];
         let nextCursor = { ...cursor };
         if (summaryKind === 'small') {
@@ -7844,7 +7485,7 @@ class MemoryRunner {
             const closed = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
             const fullyProcessedClosed = closed
                 .filter((timeline) => timelineUids(timeline).length && timelineUids(timeline).every((uid) => processed.includes(uid)))
-                .map((timeline) => normalizeEventTimeline({ ...timeline, summaryStatus: 'settled', settledAt: Date.now() }, 'settled'))
+                .map((timeline) => normalizeEventTimeline({ ...timeline, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now() }, 'settled'))
                 .filter(Boolean);
             const settledIds = new Set(fullyProcessedClosed.map((timeline) => timeline.groupUid || timeline.id));
             const remainingClosed = closed.filter((timeline) => !settledIds.has(timeline.groupUid || timeline.id));
@@ -7900,7 +7541,7 @@ class MemoryRunner {
         const scope = summaryScope(kind, selectedPendingUids.map((uid) => ({ uid })));
         const expectedTitle = kind === 'small' ? '总结｜当前事件' : '总结｜世界历史';
         if (!selected.length) throw new Error(`${label}当前没有待整理条目`);
-        const promptOptions = { requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null };
+        const promptOptions = { requestTime: snapshot.capturedAt, currentGameTime: this.host.getCurrentGameTime?.() || null, timeline: options.timeline || null };
         const profile = kind === 'small' ? settings.smallSummaryProfileId : settings.largeSummaryProfileId;
         const sourceContext = selected.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n');
         const summaryStage = kind === 'small' ? 'smallSummary' : 'largeSummary';
@@ -8207,6 +7848,16 @@ function taskResultEntries(result) {
 }
 
 
+function extractionPointsFromCommittedChanges(changes) {
+    return (changes ?? []).map((change) => ({
+        uid: String(change?.uid ?? ''),
+        section: String(change?.section ?? ''),
+        factHash: String(change?.factHash ?? ''),
+        change: /^(?:建立|变化|结束)$/u.test(String(change?.change ?? '')) ? String(change.change) : '变化',
+        relatedUids: [...new Set((change?.relatedUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean))],
+    })).filter((point) => point.uid && point.section && point.factHash);
+}
+
 function extractionPointsFromBlocks(blocks, entries) {
     const byTitle = new Map((entries ?? []).map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
     const byName = new Map();
@@ -8290,7 +7941,8 @@ function normalizeEventTimeline(value, defaultStatus = 'pending') {
     const sceneTitle = String(value.sceneTitle ?? '').trim();
     const stageUids = stages.flatMap((stage) => stage.uids);
     const memberUids = [...new Set([...(value.memberUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean), ...stageUids])];
-    if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length) return null;
+    const summaryUids = [...new Set((value.summaryUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
+    if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length && !summaryUids.length) return null;
     const openedAtMessageKey = String(value.openedAtMessageKey ?? stages[0]?.messageKey ?? '');
     const explicitGroupUid = String(value.groupUid ?? '').trim();
     const legacyId = String(value.id ?? '').trim();
@@ -8309,6 +7961,7 @@ function normalizeEventTimeline(value, defaultStatus = 'pending') {
         sceneGroup,
         sceneTitle,
         memberUids,
+        summaryUids,
         stages,
         summaryStatus,
         openedAtMessageKey,
@@ -8320,6 +7973,11 @@ function timelineUids(timeline) {
     const normalized = normalizeEventTimeline(timeline);
     if (!normalized) return [];
     return [...new Set([...(normalized.memberUids ?? []), ...normalized.stages.flatMap((stage) => stage.uids)].map(String).filter(Boolean))];
+}
+function timelineMatchUids(timeline) {
+    const normalized = normalizeEventTimeline(timeline);
+    if (!normalized) return [];
+    return [...new Set([...timelineUids(normalized), ...(normalized.summaryUids ?? [])].map(String).filter(Boolean))];
 }
 function appendTimelineStage(timeline, rootResult, snapshot) {
     const changed = summaryMarksFromResult(rootResult).map((mark) => mark.uid);
@@ -8381,13 +8039,14 @@ function timelinesForMarks(cursor, marks) {
         ...(Array.isArray(cursor?.eventTimelineArchive) ? cursor.eventTimelineArchive : []),
         cursor?.activeEventTimeline,
     ].map(normalizeEventTimeline).filter(Boolean);
-    const matched = candidates.filter((timeline) => timelineUids(timeline).some((uid) => wanted.has(uid)));
+    const matched = candidates.filter((timeline) => timelineMatchUids(timeline).some((uid) => wanted.has(uid)));
     if (!matched.length) return null;
     if (matched.length === 1) return matched[0];
     return {
         id: `E-MULTI-${matched.length}`,
         sceneGroup: matched.map((item) => item.sceneGroup).filter(Boolean).join(' → '),
         sceneTitle: matched.map((item) => item.sceneTitle).filter(Boolean).join(' → '),
+        summaryUids: [...new Set(matched.flatMap((item) => item.summaryUids ?? []))],
         stages: matched.flatMap((item) => item.stages).map((stage, index) => ({ ...stage, seq: index + 1 })),
     };
 }
@@ -8786,113 +8445,10 @@ function parseSummaryWithRecovery(raw, kind) {
     return { block: merged, explicitNone: false, repaired, skipped: blocks.filter((block) => !candidates.includes(block)).map((block) => block.title) };
 }
 
-async function segmentedExtractionRescue(host, settings, snapshot, entries, getSettings, onProgress = () => undefined) {
-    const segments = splitExtractionSource(snapshot.assistantText, 420, 6);
-    if (!segments.length) throw new Error('提取救援没有可处理的正文片段');
-    const outputs = [];
-    for (let index = 0; index < segments.length; index += 1) {
-        host.assertSnapshot(snapshot, getSettings());
-        const segment = segments[index];
-        const prompt = (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, entries, { compact: true, dialogueContext: '', requestTime: snapshot.capturedAt, currentGameTime: host.getCurrentGameTime?.() || null });
-        try {
-            const output = await (0, model_request_1.callModel)({
-                host,
-                stage: 'extraction',
-                prompt,
-                fallbackPrompt: () => (0, prompts_1.extractionPrompts)(settings, index === 0 ? snapshot.playerText : '', segment, entries, { compact: true, dialogueContext: '' }),
-                settings,
-                snapshot,
-                profileId: settings.extractionProfileId,
-                sourceText: segment,
-                responseTokens: 4096,
-                onRetry: (error) => onProgress(`分段提取 ${index + 1}/${segments.length}：${(0, model_request_1.describeRetryReason)(error, '模型')}`),
-            });
-            outputs.push(String(output ?? '').trim());
-        }
-        catch (error) {
-            throw new Error(`分段提取 ${index + 1}/${segments.length} 仍失败：${(0, util_1.errorText)(error)}`);
-        }
-    }
-    const nonEmpty = outputs.filter((value) => value && !/^(?:无|EMPTY)$/u.test(value));
-    return nonEmpty.length ? nonEmpty.join('\n\n') : '无';
-}
-
-function splitExtractionSource(value, maxChars = 420, maxSegments = 6) {
-    const text = String(value ?? '').trim();
-    if (!text) return [];
-    const units = text.split(/(?<=[。！？!?…])\s*|\n+/u).map((item) => item.trim()).filter(Boolean);
-    const segments = [];
-    let current = '';
-    const flush = () => {
-        if (!current.trim()) return;
-        segments.push(current.trim());
-        current = '';
-    };
-    for (const unit of units) {
-        if (unit.length > maxChars) {
-            flush();
-            for (let offset = 0; offset < unit.length; offset += maxChars) segments.push(unit.slice(offset, offset + maxChars));
-            continue;
-        }
-        const next = current ? `${current}${unit}` : unit;
-        if (next.length > maxChars) flush();
-        current += unit;
-    }
-    flush();
-    if (segments.length <= maxSegments) return segments;
-    const kept = segments.slice(0, maxSegments - 1);
-    kept.push(segments.slice(maxSegments - 1).join('').slice(0, maxChars));
-    return kept;
-}
-
-function isReasoningOrEmptyError(error) {
-    return error?.code === 'MA_REASONING_ONLY' || error?.code === 'MA_EMPTY_MODEL_RESPONSE'
-        || /只返回了推理内容|没有最终文本|未解析出最终文本/u.test((0, util_1.errorText)(error));
-}
-
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
 
 
-function distinctNumericFacts(left, right) {
-    const values = (value) => [...String(value ?? '').matchAll(/\d+(?:\.\d+)?/gu)].map((match) => match[0]);
-    const leftValues = values(left);
-    const rightValues = values(right);
-    if (!leftValues.length && !rightValues.length) return false;
-    return JSON.stringify(leftValues) !== JSON.stringify(rightValues);
-}
-function localSemanticSimilarity(left, right) {
-    const a = localBigrams(left);
-    const b = localBigrams(right);
-    if (!a.length || !b.length) return localNormalizeSemantic(left) === localNormalizeSemantic(right) ? 1 : 0;
-    const counts = new Map();
-    for (const value of a) counts.set(value, (counts.get(value) ?? 0) + 1);
-    let overlap = 0;
-    for (const value of b) {
-        const count = counts.get(value) ?? 0;
-        if (count > 0) {
-            overlap += 1;
-            counts.set(value, count - 1);
-        }
-    }
-    return (2 * overlap) / (a.length + b.length);
-}
-function localBigrams(value) {
-    const text = localNormalizeSemantic(value);
-    if (text.length < 2) return text ? [text] : [];
-    const output = [];
-    for (let index = 0; index < text.length - 1; index += 1) output.push(text.slice(index, index + 2));
-    return output;
-}
-function localNormalizeSemantic(value) {
-    return String(value ?? '')
-        .toLocaleLowerCase()
-        .replace(/(?:目前|当前|此时|现在)/gu, '')
-        .replace(/(?:取得|拿到|得到)/gu, '获得')
-        .replace(/(?:拥有着|持有着)/gu, '持有')
-        .replace(/(?:身处于|处在|位在)/gu, '位于')
-        .replace(/[\s，。！？；：、“”‘’（）()《》〈〉【】\[\]—…·,.!?:;'"`~|｜]/gu, '');
-}
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 },"migration":function(module,exports,require){
 "use strict";
@@ -13511,10 +13067,9 @@ const semantic_1 = require("./semantic");
 const util_1 = require("./util");
 function buildOperationPlan(blocks, entries, settings, contextText, options = {}) {
     const governed = (0, governance_1.governInformationBlocks)(blocks, entries, contextText, { ...options, gameTimeEnabled: options.gameTimeEnabled === true });
-    blocks = coalesceEventBlocks((0, information_point_1.prepareInformationBlocks)(governed.blocks));
+    blocks = (0, information_point_1.prepareInformationBlocks)(governed.blocks);
     // [MA-EXACT-MATCH-02] 正常提取/总结不自动改标题；标题变化只来自显式合并/总结治理结果。
     if (String(options.sourceKind || '') === 'setting-import') blocks = ensureDisambiguatedTitles(blocks, entries);
-    blocks = suppressStateProjectionNarratives(blocks);
     const index = (0, matcher_1.buildEntryIndex)(entries);
     const operations = [];
     for (const block of blocks) {
@@ -13640,18 +13195,21 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     const primaryOperations = dedupeOperations(operations);
     // [MA-REL-01] 独立物品条目是物品状态的权威宿主；人物【持有】与场景【当前资源】只做最短引用。
     // 只对本轮触及的物品做机械一致性校正，不扫描或重写无关条目。
-    const projectedEntries = applyPlanToEntries({ operations: primaryOperations }, entries, settings);
+    const planningSettings = ['setting-import', 'extraction'].includes(String(options.sourceKind || ''))
+        ? { ...settings, entryBudgetEnabled: false }
+        : settings;
+    const projectedEntries = applyPlanToEntries({ operations: primaryOperations }, entries, planningSettings);
     const relationOperations = relationshipConsistencyOperations(blocks, projectedEntries);
     let plannedOperations = dedupeOperations([...primaryOperations, ...relationOperations]);
     // A create operation is emitted before section-level governance finishes.
     // If every candidate fact is later rejected or absorbed, do not leave a
     // newly-created empty shell in the real worldbook.
-    const blankCreatedTitles = new Set(applyPlanToEntries({ operations: plannedOperations }, entries, settings)
+    const blankCreatedTitles = new Set(applyPlanToEntries({ operations: plannedOperations }, entries, planningSettings)
         .filter((entry) => String(entry.uid ?? '').startsWith('new:'))
         .filter((entry) => !Object.values(entry.sections?.values ?? {}).flat().some((line) => String(line ?? '').trim()))
         .map((entry) => (0, util_1.normalizeTitle)(entry.title)));
     if (blankCreatedTitles.size) plannedOperations = plannedOperations.filter((operation) => !blankCreatedTitles.has((0, util_1.normalizeTitle)(operation.title)));
-    const reconciledEntries = applyPlanToEntries({ operations: plannedOperations }, entries, settings);
+    const reconciledEntries = applyPlanToEntries({ operations: plannedOperations }, entries, planningSettings);
     const cleanupOperations = emptyEntryCleanupOperations(reconciledEntries, settings);
     return { blocks, operations: dedupeOperations([...plannedOperations, ...cleanupOperations]), governance: governed.diagnostics, currentSceneTitle: governed.currentSceneTitle, createdAt: Date.now() };
 }
@@ -13687,44 +13245,6 @@ function disambiguationAnchor(block) {
         if (value && !/^(?:无|未知|未说明)$/u.test((0, util_1.normalizeFact)(value))) return value.slice(0, 20);
     }
     return '';
-}
-function coalesceEventBlocks(blocks) {
-    const output = [];
-    for (const incoming of blocks) {
-        if (String(incoming?.type ?? '') !== '事件') {
-            output.push(structuredClone(incoming));
-            continue;
-        }
-        const current = output.find((candidate) => candidate.type === '事件' && (0, matcher_1.sameEventLifecycle)(candidate, incoming));
-        if (!current) {
-            output.push(structuredClone(incoming));
-            continue;
-        }
-        current.keywords = (0, util_1.unique)([...(current.keywords ?? []), ...(incoming.keywords ?? []), incoming.name].filter(Boolean));
-        const byName = new Map(current.sections.map((section) => [section.name, section]));
-        for (const section of incoming.sections ?? []) {
-            const target = byName.get(section.name);
-            if (!target) {
-                current.sections.push(structuredClone(section));
-                byName.set(section.name, current.sections.at(-1));
-            }
-            else {
-                target.lines = (0, information_point_1.mergeCanonicalLines)(section.name, target.lines, section.lines);
-                target.empty = target.lines.length === 0;
-            }
-        }
-        if ((0, util_1.normalizeFact)(current.name) !== (0, util_1.normalizeFact)(incoming.name)) {
-            let aliases = byName.get('别名');
-            if (!aliases) {
-                aliases = { name: '别名', lines: [], empty: false };
-                current.sections.push(aliases);
-                byName.set('别名', aliases);
-            }
-            aliases.lines = (0, util_1.unique)([...aliases.lines, incoming.name]);
-            aliases.empty = false;
-        }
-    }
-    return output;
 }
 
 function applyPlanToEntries(plan, entries, settings = undefined) {
@@ -14255,94 +13775,33 @@ function compressOlderEventProgress(lines, limit) {
     return (0, util_1.unique)([digest, ...recent]).slice(0, limit);
 }
 
-function suppressStateProjectionNarratives(blocks) {
-    const claims = blocks
-        .filter((block) => block.type === '物品')
-        .map((block) => ({
-            item: block.name,
-            holder: blockStateValue(block, '当前持有者'),
-            location: blockStateValue(block, '当前位置'),
-        }))
-        .filter((claim) => claim.item && (claim.holder || claim.location));
-    if (!claims.length) return blocks;
-    return blocks.map((block) => {
-        if (block.type === '物品') return block;
-        const next = structuredClone(block);
-        for (const section of next.sections ?? []) {
-            if (!/^(固定事实|已发生进展|关键进展|结果)$/u.test(section.name)) continue;
-            section.lines = (section.lines ?? []).filter((line) => !claims.some((claim) => isPureStateProjection(line, claim)));
-            section.empty = section.lines.length === 0;
-        }
-        return next;
-    });
-}
-function blockStateValue(block, label) {
-    const section = (block.sections ?? []).find((item) => /^(当前|当前状态)$/u.test(item.name));
-    const line = section?.lines?.find((item) => canonicalInformationLabel(item.match(/^\s*([^：:]{1,24})\s*[：:]/u)?.[1] ?? '', section.name) === label);
-    return String(line?.match(/^\s*[^：:]{1,24}\s*[：:]\s*(.*)$/u)?.[1] ?? '').trim();
-}
-function isPureStateProjection(line, claim) {
-    const normalized = (0, util_1.normalizeFact)(line);
-    const item = (0, util_1.normalizeFact)(claim.item);
-    const holder = (0, util_1.normalizeFact)(claim.holder);
-    const location = (0, util_1.normalizeFact)(claim.location);
-    if (!normalized || !item || !normalized.includes(item)) return false;
-    // 含有独立事件结果时保留，只删除“换角度重述物品状态”的短句。
-    if (/(击败|杀死|死亡|受伤|获胜|失败|逃离|摧毁|签署|解散|建立|发现|结束战斗|冲突结束)/u.test(normalized)) return false;
-    if (normalized.length > item.length + holder.length + location.length + 14) return false;
-    if (holder && !isNoneStateValue(holder)) {
-        const patterns = [
-            `${holder}把${item}收回`, `${holder}将${item}收回`, `${holder}收回${item}`,
-            `${holder}拿回${item}`, `${holder}带走${item}`, `${holder}携带${item}`, `${holder}持有${item}`,
-            `${item}由${holder}持有`, `${item}由${holder}携带`, `${item}被${holder}收回`,
-        ];
-        if (patterns.some((value) => normalized === value || normalized.startsWith(value))) return true;
-    }
-    if (location) {
-        const patterns = [`${item}位于${location}`, `${item}留在${location}`, `${item}被放回${location}`, `${item}已归还${location}`];
-        if (patterns.some((value) => normalized === value || normalized.startsWith(value))) return true;
-    }
-    // 即使人物角度写出的动作与最终物品快照矛盾，独立物品当前状态仍是权威宿主。
-    const transferVerbs = ['收回', '拿回', '带走', '携带', '持有', '放回', '归还', '交还', '取走'];
-    if (transferVerbs.some((verb) => normalized.endsWith(`${verb}${item}`) || normalized.includes(`把${item}${verb}`) || normalized.includes(`将${item}${verb}`))) return true;
-    return false;
-}
 
 function relationshipConsistencyOperations(blocks, projectedEntries) {
-    const directItems = blocks.filter((block) => block.type === '物品').map((block) => block.name).filter(Boolean);
-    const referencedItems = projectedEntries
-        .filter((entry) => entry.type === '物品')
-        .filter((item) => blocks.some((block) => block.sections?.some((section) => /^(?:持有|当前资源)$/u.test(section.name)
-            && section.lines?.some((line) => referencesObject(line, item.name)))))
-        .map((item) => item.name);
-    // Terminal item states are globally authoritative even when the model does
-    // not repeat the old scene/person reference in the same extraction block.
-    const unavailableItems = projectedEntries.filter((entry) => entry.type === '物品' && itemIsUnavailable(entry)).map((entry) => entry.name);
-    const touchedItems = (0, util_1.unique)([...directItems, ...referencedItems, ...unavailableItems]);
+    // [MA-ARCH-03] 关系投影只消费结构化权威槽位。系统不再从自然语言判断“已销毁/共享/专属”等语义。
+    // 独立物品被本轮模型显式触及时，按【当前】中的“当前持有者/当前位置”做精确稳定名称映射；
+    // 人物【持有】和场景【当前资源】只是最短引用。
+    const touchedItems = (0, util_1.unique)(blocks.filter((block) => block.type === '物品').map((block) => block.name).filter(Boolean));
     if (!touchedItems.length) return [];
     const operations = [];
     for (const itemName of touchedItems) {
         const item = findEntryByName(projectedEntries, '物品', itemName);
         if (!item || item.locked) continue;
-        const unavailable = itemIsUnavailable(item);
         const holderValue = entryStateValue(item, '当前持有者');
         const locationValue = entryStateValue(item, '当前位置');
-        const holder = unavailable || isNoneStateValue(holderValue) ? null : findEntryByName(projectedEntries, '人物', holderValue);
-        const scene = unavailable || holder ? null : findContainingEntry(projectedEntries, '场景', locationValue);
-        const projectToHolder = !unavailable && holder ? itemProjectsToPerson(item, holderValue) : false;
+        const holder = isNoneStateValue(holderValue) ? null : findEntryByName(projectedEntries, '人物', holderValue);
+        const scene = holder || isNoneStateValue(locationValue) ? null : findEntryByName(projectedEntries, '场景', locationValue);
 
         for (const person of projectedEntries.filter((entry) => entry.type === '人物' && !entry.locked)) {
             const current = [...(person.sections?.values?.['持有'] ?? [])];
             const withoutItem = current.filter((line) => !referencesObject(line, item.name));
-            const shouldHold = projectToHolder && holder?.uid === person.uid;
+            const shouldHold = holder?.uid === person.uid;
             const next = shouldHold ? (0, util_1.unique)([...withoutItem, item.name]) : withoutItem;
             if ((0, util_1.normalizeFact)(current.join('\n')) !== (0, util_1.normalizeFact)(next.join('\n'))) {
                 operations.push(op('replace-section', person.title, person.uid, '持有', current.join('\n'), next.join('\n'), shouldHold
-                    ? `独立物品“${item.name}”当前由该人物持有，人物卡只保留最短引用`
-                    : `独立物品“${item.name}”的权威持有状态不在该人物，移除旧引用`));
+                    ? `独立物品“${item.name}”当前持有者精确命中该人物，人物只保留最短引用`
+                    : `独立物品“${item.name}”的结构化当前持有者不是该人物，移除系统投影引用`));
             }
         }
-
         for (const candidate of projectedEntries.filter((entry) => entry.type === '场景' && !entry.locked)) {
             const current = [...(candidate.sections?.values?.['当前资源'] ?? [])];
             const withoutItem = current.filter((line) => !referencesObject(line, item.name));
@@ -14350,20 +13809,15 @@ function relationshipConsistencyOperations(blocks, projectedEntries) {
             const next = shouldContain ? (0, util_1.unique)([...withoutItem, item.name]) : withoutItem;
             if ((0, util_1.normalizeFact)(current.join('\n')) !== (0, util_1.normalizeFact)(next.join('\n'))) {
                 operations.push(op('replace-section', candidate.title, candidate.uid, '当前资源', current.join('\n'), next.join('\n'), shouldContain
-                    ? `独立物品“${item.name}”无人持有且位于本场景，场景仅保留资源引用`
-                    : `独立物品“${item.name}”已不属于本场景当前资源，移除旧引用`));
+                    ? `独立物品“${item.name}”当前位置精确命中该场景，场景只保留最短引用`
+                    : `独立物品“${item.name}”的结构化当前位置不是该场景，移除系统投影引用`));
             }
         }
     }
     return operations;
 }
-function itemIsUnavailable(item) {
-    const text = (0, util_1.normalizeFact)(Object.values(item?.sections?.values ?? {}).flat().join('；'));
-    if (!text) return false;
-    const terminal = /(?:已消耗|消耗完毕|已经用尽|已用尽|已碎裂|彻底碎裂|已销毁|已经销毁|已失效|碎裂失效|不复存在|已不存在|永久遗失)/u.test(text);
-    const restored = /(?:已修复|恢复可用|重新获得|再次持有|找回|重铸|复原)/u.test(text);
-    return terminal && !restored;
-}
+
+
 function emptyEntryCleanupOperations(entries, settings) {
     const context = (0, governance_1.activeContext)(entries ?? [], entries.find((entry) => entry.focus)?.uid || '');
     const protectedUids = new Set([
@@ -14384,21 +13838,7 @@ function emptyEntryCleanupOperations(entries, settings) {
         requiresDistributionProof: false, distributionTargets: [],
     }));
 }
-function itemProjectsToPerson(item, holderValue) {
-    const holder = (0, util_1.normalizeFact)(holderValue);
-    if (!holder) return false;
-    const owner = (0, util_1.normalizeFact)(entryStateValue(item, '所有权'));
-    const keeper = (0, util_1.normalizeFact)(entryStateValue(item, '保管者'));
-    const permission = (0, util_1.normalizeFact)(entryStateValue(item, '使用权限'));
-    const text = (0, util_1.normalizeFact)(Object.values(item.sections?.values ?? {}).flat().join('；'));
-    const shared = /(?:公用|公共|共享|共用|任何人|所有人|全体|合格学员|组织成员|授权人员)/u.test(`${permission}${text}`)
-        || Boolean(owner && owner !== holder)
-        || Boolean(keeper && keeper !== holder);
-    if (!shared) return true;
-    if (owner === holder || keeper === holder) return true;
-    const escaped = holder.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-    return new RegExp(`(?:正式分配给|授予|专属(?:于)?|长期由|绑定(?:于)?|归)${escaped}|${escaped}(?:个人所有|长期保管|专属使用)`, 'u').test(text);
-}
+
 function entryStateValue(entry, label) {
     const lines = entry.sections?.values?.['当前'] ?? entry.sections?.values?.['当前状态'] ?? [];
     for (const line of lines) {
@@ -14409,26 +13849,15 @@ function entryStateValue(entry, label) {
     return '';
 }
 function findEntryByName(entries, type, value) {
-    const target = (0, util_1.normalizeFact)(String(value ?? '').replace(/(?:随身|手中|身上|腰间|背包中)$/u, ''));
+    const target = (0, util_1.normalizeFact)(String(value ?? ''));
     if (!target) return null;
-    return entries.find((entry) => entry.type === type && [entry.name, ...(entry.aliases ?? []), ...(entry.keywords ?? [])]
-        .some((name) => (0, util_1.normalizeFact)(name) === target)) ?? null;
+    return entries.find((entry) => entry.type === type && (0, util_1.normalizeFact)(entry.name) === target) ?? null;
 }
-function findContainingEntry(entries, type, value) {
-    const target = (0, util_1.normalizeFact)(value);
-    if (!target) return null;
-    return entries
-        .filter((entry) => entry.type === type)
-        .sort((left, right) => (0, util_1.normalizeFact)(right.name).length - (0, util_1.normalizeFact)(left.name).length)
-        .find((entry) => {
-            const names = [entry.name, ...(entry.aliases ?? []), ...(entry.keywords ?? [])].map(util_1.normalizeFact).filter((name) => name.length >= 2);
-            return names.some((name) => target.includes(name) || name.includes(target));
-        }) ?? null;
-}
+
 function referencesObject(line, name) {
     const target = (0, util_1.normalizeFact)(name);
     const value = (0, util_1.normalizeFact)(line);
-    return Boolean(target && value && (value === target || value.includes(target)));
+    return Boolean(target && value && value === target);
 }
 function isNoneStateValue(value) {
     return /^(?:无|没有|无人|空|未持有|未使用|不适用|null|none)$/iu.test((0, util_1.normalizeFact)(value));
@@ -14685,8 +14114,21 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
     const rows = [];
     let sawFixedLine = false;
     for (const rawLine of source.split('\n')) {
-        const line = stripListMarker(String(rawLine ?? '').trim());
+        let line = stripListMarker(String(rawLine ?? '').trim());
         if (!line) continue;
+        // [MA-ARCH-01] 固定事实协议只做语法级容错：模型若完整给出
+        // “类型｜稳定名称｜建立/变化/结束｜关联对象｜事实”但漏掉最前面的“事实｜”，
+        // 插件机械补齐前缀；不改写字段、不猜语义，也不再调用第二个模型修格式。
+        if (!/^事实\s*[｜|丨]/u.test(line)) {
+            const parts = line.split(/[｜|丨]/u).map((item) => String(item ?? '').trim());
+            const candidateType = canonicalExtractionType(parts[0]);
+            const candidateChange = String(parts[2] ?? '').trim();
+            if (parts.length >= 5 && STRICT_TYPES.has(candidateType) && candidateType !== '基础设定' && /^(?:建立|变化|结束)$/u.test(candidateChange)) {
+                line = `事实｜${line}`;
+                diagnostics.repaired += 1;
+                diagnostics.warnings.push('固定事实行缺少“事实｜”前缀，已机械补齐');
+            }
+        }
         if (/^事实\s*[｜|丨]/u.test(line)) sawFixedLine = true;
         const match = line.match(FIXED_FACT_LINE_PATTERN);
         if (!match) continue;
@@ -14733,7 +14175,7 @@ function parseExtractionWithRecovery(raw) {
     diagnostics.hadInput = Boolean(text.trim());
     const starts = [...text.matchAll(/<<<ENTRY\s*[:：]\s*([^:\r\n>]+)\s*[:：]\s*([^>\r\n]+)>>>/giu)];
     if (!starts.length) {
-        diagnostics.skipped.push({ title: '未知条目', reason: '缺少可识别的条目起始行（“条目”或旧 ENTRY）', raw: text.slice(0, 600) });
+        diagnostics.skipped.push({ title: '未知条目', reason: '缺少可识别的固定事实行（事实｜类型｜稳定名称｜建立/变化/结束｜关联对象｜完整事实）', raw: text.slice(0, 600) });
         return attachDiagnostics([], diagnostics);
     }
     const parsedBlocks = [];
@@ -15696,7 +15138,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
     ]);
     const custom = builtinExtractionPrompts.has(extractionCustomRaw) ? '' : clipText(extractionCustomRaw, compact ? 420 : 760);
     const gameTimeClause = gameTimeEnabled ? '\n- 若正文明确推进了世界内时间，把时间变化写进当前场景对应事实；没有明确推进就不要补时间。' : '';
-    const system = `职责：比较上一轮有效世界书与本轮实际发生的内容，提取本轮建立、改变或结束的世界事实。\n\n【判断顺序】\n上一轮有效条目 = 变化前基线。\n玩家输入 = 本轮行动、表达与信息起点，不代表行动必然成功。\n本轮AI最终回复 = 世界实际发生的结果，最终状态以正文明确呈现为准。\n按“旧状态 → 玩家发起 → 正文结果 → 新状态”判断本轮变化。\n\n【提取原则】\n1. 只提取已经发生、已经成立或已经明确结束，并会影响之后世界状态的事实。\n2. 同一经历可以分别投影到人物、场景、物品、事件或世界等多个宿主；允许少量合理冗余，也允许暂时价值不高但确实发生变化的对象先进入提取。\n3. 每个事实点只写该宿主需要记住的部分，但必须保留足以与同一经历其他事实重新连接的必要对象、动作、关系或结果。不要只写“受伤”“获得”“离开”这类脱离来龙去脉的孤立状态。\n4. 不为了精简漏掉有效变化；后续小总结会沿场景时间线清理确定冗余、旧状态和低价值点。\n5. 不从一次行为推断人格、倾向或隐藏设定；不把玩家预期、尝试、可能性、计划或推测升级成既成结果。\n6. 普通正文提取不新增或修改基础设定。基石锁条目只读；若世界发生了后续变化，写到合适的普通条目。${gameTimeClause}\n\n【唯一输出模板】\n每个事实严格一行，只允许以下三种：\n事实｜类型｜稳定名称｜建立｜关联对象｜完整事实\n事实｜类型｜稳定名称｜变化｜关联对象｜完整事实\n事实｜类型｜稳定名称｜结束｜关联对象｜完整事实\n\n格式要求：\n- 类型只能写：人物、场景、物品、事件、世界。\n- 关联对象只写正文或上一轮条目中明确存在、与该事实直接相关的稳定名称；多个名称用“、”分隔，没有直接关联时写“无”。\n- 完整事实必须是一句能够独立理解的已发生事实，并保留重新连线所需的最小关系。\n- 同一主体本轮可以有多条事实，但每条只描述一个明确变化。\n- 不输出标题、栏目、关键词、UID、项目符号、JSON、代码块、解释、前言或后记。\n- 没有有效变化时只输出：无。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
+    const system = `职责：比较上一轮有效世界书与本轮实际发生的内容，提取本轮建立、改变或结束的世界事实。\n\n【判断顺序】\n上一轮有效条目 = 变化前基线。\n玩家输入 = 本轮行动、表达与信息起点，不代表行动必然成功。\n本轮AI最终回复 = 世界实际发生的结果，最终状态以正文明确呈现为准。\n按“旧状态 → 玩家发起 → 正文结果 → 新状态”判断本轮变化。\n\n【提取原则】\n1. 只提取已经发生、已经成立或已经明确结束，并会影响之后世界状态的事实。\n2. 同一经历只把真正需要持续追踪的变化写给直接宿主；跨宿主可以保留必要关联，但不要把同一过程全文复制到多处。无稳定名称、无独立持续状态的路人/工作人员/临时角色不要建立人物条目。\n3. 每个事实点只写该宿主需要记住的部分，但必须保留足以与同一经历其他事实重新连接的必要对象、动作、关系或结果。不要只写“受伤”“获得”“离开”这类脱离来龙去脉的孤立状态。\n4. 不为了精简漏掉有效变化；同时不要把纯过程动作、瞬时情绪、没有持续影响的临时细节升级为长期事实。小总结只负责沿场景时间窗口降低已有有效事实的颗粒度，不负责替提取阶段纠错。\n5. 不从一次行为推断人格、倾向或隐藏设定；不把玩家预期、尝试、可能性、计划或推测升级成既成结果。\n6. 普通正文提取不新增或修改基础设定。基石锁条目只读；若世界发生了后续变化，写到合适的普通条目。${gameTimeClause}\n\n【唯一输出模板】\n每个事实严格一行，只允许以下三种：\n事实｜类型｜稳定名称｜建立｜关联对象｜完整事实\n事实｜类型｜稳定名称｜变化｜关联对象｜完整事实\n事实｜类型｜稳定名称｜结束｜关联对象｜完整事实\n\n格式要求：\n- 类型只能写：人物、场景、物品、事件、世界。\n- 关联对象只写正文或上一轮条目中明确存在、与该事实直接相关的稳定名称；多个名称用“、”分隔，没有直接关联时写“无”。\n- 完整事实必须是一句能够独立理解的已发生事实，并保留重新连线所需的最小关系。\n- 同一主体本轮可以有多条事实，但每条只描述一个明确变化。\n- 不输出标题、栏目、关键词、UID、项目符号、JSON、代码块、解释、前言或后记。\n- 没有有效变化时只输出：无。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
     const user = `【上一轮有效世界书条目】\n${clipText(existing || '（无）', compact ? 7200 : 13800)}\n\n【本轮玩家输入】\n${clipText(playerText || '（空）', compact ? 2800 : 5200)}\n\n【本轮AI最终回复】\n${clipText(assistantText || '（空）', compact ? 7200 : 11000)}\n\n比较前后状态，只输出本轮真正建立、变化或结束的事实行。`;
     return { system, user };
 }
@@ -15766,10 +15208,29 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
             '把多个已经结算的局部规律按长期承接与演化继续抽象为整体规律；只沉降已经被更高层结果完整包含的确定冗余。',
         ];
     const custom = customRaw && !builtinDefaults.includes(customRaw) ? clipText(customRaw, compact ? 900 : 1800) : '';
+    const timeline = options.timeline && typeof options.timeline === 'object' ? options.timeline : null;
+    const byUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
+    const timelineText = timeline?.stages?.length
+        ? [`场景时间线：${timeline.sceneTitle || timeline.sceneGroup || '当前局部'}`,
+            ...timeline.stages.map((stage, index) => {
+                const pointLines = [];
+                for (const point of stage.points || []) {
+                    const entry = byUid.get(String(point.uid));
+                    if (!entry) continue;
+                    const candidates = entry.sections?.values?.[point.section] ?? [];
+                    const fact = candidates.find((line) => (0, util_1.hashText)((0, util_1.normalizeFact)(line)) === String(point.factHash || '')) || '';
+                    if (fact) pointLines.push(`${entry.title}｜${point.change || '变化'}｜${fact}`);
+                }
+                if (pointLines.length) return `阶段${index + 1}：\n${pointLines.map((line) => `  ${line}`).join('\n')}`;
+                const titles = [...new Set((stage.uids || []).map((uid) => byUid.get(String(uid))?.title).filter(Boolean))];
+                return `阶段${index + 1}：${titles.join('、') || '该阶段事实已被后续状态替代'}`;
+            })].join('\n')
+        : '';
     const system = isSmall
         ? `职责：把系统选中的、在刚结束场景中被触及的当前有效世界书条目进行整体理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统内部已经完成本批选材和场景生命周期判断；提供给你的只有这些宿主在场景结束时的当前有效状态。不同人物、场景、物品、事件条目可能是同一经历在不同宿主上的当前投影；应跨条目整体理解后再抽象。\n\n【整理原则】\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被当前有效状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 先写新结果，只有确定被完整承接的旧来源才允许沉降。\n- 当多个条目只是同一局部经历在不同阶段形成的重复/旧状态投影，且新的局部规律已经完整承接其事实与必要召回锚点时，应输出“沉降”完成真实收束；不要只追加一条新规律后把已经完全冗余的来源全部原样保留。仍有独立召回价值或承接不完整时必须保留。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被当前状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
         : `职责：把玩家本次指定的多个有效世界书条目沿其真实承接、包含和演化关系整理为更高层、长期成立的整体规律，并完成能够安全确认的来源收束。\n\n【整理原则】\n- 只依据系统提供的有效世界书条目，不重新读取原正文。事件条目也是合法历史材料；已结束事件只能作为已经发生的历史状态理解，不把它重新写成新的活动任务。\n- 先理解多个局部结果之间的承接、包含和长期演化，再抽象整体规律。不要只逐条改写原条目。\n- 当多个低层事实已经被一个更高层结果完整承接时：先用“写回”把上层结果落到明确目标，再用“移除”清掉目标/来源中已经被替代的旧事实；若某个来源条目的独立召回身份也已被目标完整承接，再用“沉降”把该来源并入目标。\n- “沉降”不是强制删除：只有来源内容与召回身份都已被目标完整覆盖时才输出；无法确定时保留。每条沉降的目标必须同时出现在本次“写回”结果中。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留必要的历史召回锚点，避免为了减少条目而丢失仍有独立检索价值的事件、人物、场景或物品。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入里确实存在且已经被更高层规律明确替代或包含的旧事实。没有形成更高层规律时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
-    const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n只输出固定模板。`;
+    const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}${timelineText ? `\n\n【时间窗口 / 承接顺序】\n${timelineText}` : ''}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n只输出固定模板。`;
+
     return { system, user };
 }
 
@@ -17970,6 +17431,7 @@ class WorldbookAdapter {
             result.deleteCount = 0;
             result.warehouse = { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 };
             result.businessChanges = [];
+            result.factChanges = [];
             result.receipt = null;
             return result;
         }
@@ -18021,6 +17483,7 @@ class WorldbookAdapter {
             ...result.filter((entry) => touchedUids.has(String(entry.uid)) && !createdUids.has(String(entry.uid))).map((entry) => ({ uid: String(entry.uid), action: 'update', title: String(entry.title), type: String(entry.type || '') })),
             ...deleted.map((entry) => ({ uid: String(entry.uid), action: 'delete', title: String(entry.title), type: String(entry.type || '') })),
         ];
+        result.factChanges = committedFactChanges(before, result, result.businessChanges);
         result.receipt = buildCommitReceipt(receiptBefore, verifiedData, {
             id: operationId,
             sourceMessageKey,
@@ -18434,6 +17897,51 @@ function parseEntries(data) {
     }
     return output.sort((left, right) => left.title.localeCompare(right.title));
 }
+function committedFactChanges(beforeEntries, afterEntries, businessChanges = []) {
+    // [MA-ARCH-04] 权威事实谱系来自“提交前权威状态 → 提交后验证状态”，而不是模型候选。
+    const changedUids = new Set((businessChanges ?? []).map((change) => String(change?.uid ?? '')).filter(Boolean));
+    const beforeByUid = new Map((beforeEntries ?? []).map((entry) => [String(entry.uid), entry]));
+    const afterByUid = new Map((afterEntries ?? []).map((entry) => [String(entry.uid), entry]));
+    const changes = [];
+    const push = (entry, section, change, fact) => {
+        const text = String(fact ?? '').trim();
+        if (!entry || !section || !text) return;
+        changes.push({
+            uid: String(entry.uid), title: String(entry.title || ''), type: String(entry.type || ''),
+            section: String(section), change, fact: text,
+            factHash: (0, util_1.hashText)((0, util_1.normalizeFact)(text)), relatedUids: [],
+        });
+    };
+    for (const uid of changedUids) {
+        const before = beforeByUid.get(uid);
+        const after = afterByUid.get(uid);
+        if (!before && after) {
+            for (const [section, lines] of Object.entries(after.sections?.values ?? {})) for (const line of lines ?? []) push(after, section, '建立', line);
+            continue;
+        }
+        if (before && !after) {
+            for (const [section, lines] of Object.entries(before.sections?.values ?? {})) for (const line of lines ?? []) push(before, section, '结束', line);
+            continue;
+        }
+        if (!before || !after) continue;
+        const sections = new Set([...Object.keys(before.sections?.values ?? {}), ...Object.keys(after.sections?.values ?? {})]);
+        for (const section of sections) {
+            const oldLines = before.sections?.values?.[section] ?? [];
+            const newLines = after.sections?.values?.[section] ?? [];
+            const oldMap = new Map(oldLines.map((line) => [(0, util_1.normalizeFact)(line), line]));
+            const newMap = new Map(newLines.map((line) => [(0, util_1.normalizeFact)(line), line]));
+            for (const [key, line] of newMap) if (!oldMap.has(key)) push(after, section, '变化', line);
+            for (const [key, line] of oldMap) if (!newMap.has(key)) push(before, section, '结束', line);
+        }
+    }
+    const seen = new Set();
+    return changes.filter((item) => {
+        const key = `${item.uid}|${item.section}|${item.change}|${item.factHash}`;
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+    });
+}
+
 function hydrateRaw(raw, entry, sourceMessageKey, operationId) {
     const split = (0, util_1.splitTitle)(entry.title);
     raw.comment = entry.title;
