@@ -905,7 +905,7 @@ class MirrorAbyssApplication {
     }
     compactAutomaticQueue(chatKey, queue, settings, latestTurn) {
         const candidates = queue.items.filter((item) => item.automatic && ['full', 'extraction'].includes(item.taskType));
-        const threshold = Math.max(2, Number(settings.queueCompactThreshold || settings.smallSummaryTurns || 6));
+        const threshold = Math.max(2, Number(settings.queueCompactThreshold || 6));
         if (candidates.length < threshold) return;
         // [MA-QUEUE-05] 不再把尚未执行的逐轮提取替换成小总结/大总结。
         // 每个正文回合的事实提取都必须先完成；总结只能由提取完成后的正式总结调度触发。
@@ -1097,45 +1097,9 @@ class AuditRunner {
                 onRetry: (error) => this.setStatus(snapshot.chatKey, 'audit', (0, model_request_1.describeRetryReason)(error, '审核模型')),
             });
             this.host.assertSnapshot(snapshot, this.getSettings());
-            let result;
-            try {
-                result = parseAuditResult(raw);
-            }
-            catch (protocolError) {
-                if (/越权返回了修正版正文/u.test((0, util_1.errorText)(protocolError))) throw protocolError;
-                this.setStatus(snapshot.chatKey, 'audit', '审核结论格式不完整，正在进行一次自然格式重试');
-                const repairPrompt = {
-                    system: `职责：整理审核结论。
-重新检查给定审核规则与本轮回复，只提交最终结论。
-通过时只写“审核结论：通过”。
-不通过时写“审核结论：需要修正”，随后写“问题：”并列出最多8条具体原因。
-禁止输出修正版正文、分析、前言和后记。`,
-                    user: `玩家审核规则：
-${String(settings.auditPrompt || '（无）').slice(0, 5200)}
-
-本轮玩家输入：
-${String(snapshot.playerText || '（空）').slice(0, 3000)}
-
-本轮AI最终回复：
-${String(snapshot.assistantText || '').slice(0, 14000)}
-
-上一次未能解析的审核返回：
-${String(raw || '').slice(0, 2400)}`,
-                };
-                raw = await (0, model_request_1.callModel)({
-                    host: this.host,
-                    stage: 'audit',
-                    prompt: repairPrompt,
-                    fallbackPrompt: () => repairPrompt,
-                    settings,
-                    snapshot,
-                    profileId: settings.auditProfileId,
-                    sourceText: snapshot.turnText || snapshot.assistantText,
-                    onRetry: (error) => this.setStatus(snapshot.chatKey, 'audit', (0, model_request_1.describeRetryReason)(error, '审核格式重试')),
-                });
-                this.host.assertSnapshot(snapshot, this.getSettings());
-                result = parseAuditResult(raw);
-            }
+            // [MA-SOURCE-FIRST-01] 审核模型只负责一次语义判定；格式宽容由本地 parser 负责。
+            // 若仍无法解析，明确失败，不再启动第二个“审核格式修复”模型重新理解同一正文。
+            const result = parseAuditResult(raw);
             let finalSnapshot = snapshot;
             if (result.decision === 'revision') {
                 this.setStatus(snapshot.chatKey, 'revision', '审核不通过，生成一次完整修正版');
@@ -1657,6 +1621,7 @@ class ControlPanel {
             this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核；关闭后仍可手动审核。'),
             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取；关闭后仍可手动提取。'),
             this.makeSwitch('autoSmallSummary', '自动小总结', '场景组关闭后按时间顺序后台处理；关闭只暂停总结执行，不停止 SceneGroup UID 归组。'),
+            this.makeSwitch('autoLargeSummary', '自动大总结', '累计若干个成功小总结后的 SceneGroup，再按原时间顺序上卷一次；不会与小总结在同一回合连续请求。'),
         );
         const featureSwitches = document.createElement('div');
         featureSwitches.className = 'ma-lite-switches';
@@ -1668,7 +1633,8 @@ class ControlPanel {
         const thresholds = document.createElement('div');
         thresholds.className = 'ma-lite-thresholds';
         thresholds.append(
-            this.makeNumberInput('queueCompactThreshold', '队列压缩阈值', 2, 50),
+            this.makeNumberInput('largeSummaryCount', '自动大总结所需小总结数', 2, 30),
+            this.makeNumberInput('queueCompactThreshold', '队列积压提示阈值', 2, 50),
         );
         const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；不读取角色卡或世界书；修正失败或疑似截断时保留原正文。');
         const note = document.createElement('div');
@@ -2346,7 +2312,7 @@ class ControlPanel {
         const status = document.createElement('div');
         status.className = 'ma-lite-worldbook-quick-status';
         status.setAttribute('aria-live', 'polite');
-        status.textContent = '自动小总结按 SceneGroup 关闭顺序运行；关闭自动小总结只暂停模型执行，UID 归组仍持续。大总结不会自动触发。';
+        status.textContent = '自动小总结按 SceneGroup 关闭顺序运行；UID 归组始终持续。自动大总结按“已成功小总结的 SceneGroup”计数，达到阈值后在没有小总结运行的下一回合触发一次。';
         section.append(head, actions, status);
         this.worldbookQuickStatusNode = status;
         return section;
@@ -3086,7 +3052,8 @@ class ControlPanel {
         if (this.inputs.autoAudit) this.inputs.autoAudit.checked = settings.autoAudit === true;
         if (this.inputs.autoExtraction) this.inputs.autoExtraction.checked = settings.autoExtraction === true;
         if (this.inputs.autoSmallSummary) this.inputs.autoSmallSummary.checked = settings.autoSmallSummary !== false;
-        if (this.inputs.smallSummaryTurns) this.inputs.smallSummaryTurns.value = String(settings.smallSummaryTurns ?? 15);
+        if (this.inputs.autoLargeSummary) this.inputs.autoLargeSummary.checked = settings.autoLargeSummary !== false;
+        if (this.inputs.largeSummaryCount) this.inputs.largeSummaryCount.value = String(settings.largeSummaryCount ?? 4);
         if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
         if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
         if (this.inputs.extractionEnabled) this.inputs.extractionEnabled.checked = settings.extractionEnabled !== false;
@@ -4525,22 +4492,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.governInformationBlocks = governInformationBlocks;
 exports.sceneSettlementOperations = sceneSettlementOperations;
 exports.currentEventState = currentEventState;
-exports.canTransitionCurrentEvent = canTransitionCurrentEvent;
 exports.deriveCurrentGameTime = deriveCurrentGameTime;
 exports.activeContext = activeContext;
 exports.isGenericBackgroundPerson = isGenericBackgroundPerson;
-exports.isFixedSceneRole = isFixedSceneRole;
 exports.buildDirectRelationIndex = buildDirectRelationIndex;
 const semantic_1 = require("./semantic");
 const util_1 = require("./util");
-
-const EVENT_TRANSITIONS = Object.freeze({
-    active: new Set(['active', 'blocked', 'completed', 'terminated']),
-    blocked: new Set(['active', 'blocked', 'completed', 'terminated']),
-    completed: new Set(['completed', 'archived']),
-    terminated: new Set(['terminated', 'archived']),
-    archived: new Set(['archived']),
-});
 
 const GENERIC_PERSON_PATTERN = /(?:路人|行人|群众|围观者|学生|同学|顾客|客人|乘客|司机|店员|服务员|工作人员|办事员|职员|管理员|门卫|保安|守卫|士兵|侍卫|仆人|侍者|医生|护士|药师|监考|裁判|主持人|接待员|售货员|收银员|快递员|邻居|居民|村民|市民|男人|女人|男子|女子|青年|老人|小孩|孩子|声音|账号)$/u;
 const TEMPORARY_MARKER = /(?:临时|一次性|路过|偶遇|无名|不知名|陌生|普通|随机|现场一名|某个|一位|一名)/u;
@@ -4587,34 +4544,6 @@ function explicitCurrentSceneName(contextText) {
 // sentence.  Normalize the two fields that drive the production projection so
 // recall and the management panel observe the same state.
 
-function revealsExistingIdentity(block, entries, contextText) {
-    const provisional = String(block?.name ?? '').trim();
-    const text = String(contextText ?? '');
-    if (!provisional || !text.includes(provisional) || !/(?:就是|原来是|身份(?:为|是)|真实身份|摘下伪装|承认身份)/u.test(text)) return false;
-    return (entries ?? []).some((entry) => /^(?:人物|角色|NPC)$/u.test(String(entry?.type ?? ''))
-        && entry.name && text.includes(String(entry.name)) && !governanceNameIsGeneric(entry.name));
-}
-function governanceNameIsGeneric(value) {
-    const name = String(value ?? '').replace(/(?:甲|乙|丙|丁|A|B|C|D|\d+)$/iu, '');
-    return TEMPORARY_MARKER.test(name) || GENERIC_PERSON_PATTERN.test(name);
-}
-
-function hasIndependentPersonMaterial(block) {
-    const sections = new Map((block.sections ?? []).map((section) => [String(section.name ?? ''), section.lines ?? []]));
-    return ['关系', '已知', '误信', '行为倾向', '表达方式']
-        .some((name) => (sections.get(name) ?? []).length > 0)
-        || (sections.get('当前') ?? []).some((line) => /(?:当前目标|独立目标|持续任务|关键线索|掌握|追查|调查)/u.test(String(line ?? '')));
-}
-
-function hasStableProperName(name) {
-    const text = String(name ?? '').trim();
-    const roleName = text.replace(/(?:甲|乙|丙|丁|A|B|C|D|\d+)$/iu, '');
-    if (!text || TEMPORARY_MARKER.test(text) || GENERIC_PERSON_PATTERN.test(roleName)) return false;
-    if (/^身份未明/u.test(text)) return true;
-    // 中文专名、账号或编号可独立追踪；纯岗位称呼不算专名。
-    return text.length >= 2 && !/(?:老师|主任|经理|队长|老板|店长|管理员|工作人员)$/u.test(text);
-}
-
 function isGenericBackgroundPerson(block) {
     if (!block) return false;
     const name = String(block.name ?? '').trim();
@@ -4626,42 +4555,8 @@ function isGenericBackgroundPerson(block) {
 }
 
 
-function isFixedSceneRole(block, currentScene, _contextText = '') {
-    if (!block || !currentScene) return false;
-    const body = blockText(block);
-    const sceneName = String(currentScene.name ?? '').trim();
-    if (FIXED_SCENE_MARKER.test(body)) return true;
-    if (sceneName && body.includes(sceneName) && /(?:负责|管理|值班|驻守|工作|看守|经营)/u.test(body)) return true;
-    return false;
-}
-
-function attachFixedRole(sceneBlock, personBlock) {
-    const section = ensureSection(sceneBlock, '常驻角色');
-    const identity = firstUsefulLine(personBlock, ['身份', '稳定', '当前']) || '固定承担本场景岗位职责。';
-    const line = `${personBlock.name}：${stripSlot(identity)}`;
-    section.lines = (0, util_1.unique)([...(section.lines ?? []), line]);
-    section.empty = false;
-}
-
-function firstUsefulLine(block, names) {
-    for (const name of names) {
-        const section = (block.sections ?? []).find((item) => String(item.name ?? '') === name);
-        const line = (section?.lines ?? []).find((item) => String(item ?? '').trim());
-        if (line) return String(line).trim();
-    }
-    return '';
-}
 function stripSlot(value) {
     return String(value ?? '').replace(/^\s*[^：:]{1,24}\s*[：:]\s*/u, '').trim();
-}
-function ensureSection(block, name) {
-    let section = (block.sections ?? []).find((item) => String(item.name ?? '') === name);
-    if (!section) {
-        section = { name, lines: [], empty: true };
-        block.sections ??= [];
-        block.sections.push(section);
-    }
-    return section;
 }
 function blockText(block) {
     return [block?.name, ...(block?.sections ?? []).flatMap((section) => section.lines ?? [])].filter(Boolean).join('\n');
@@ -4674,11 +4569,6 @@ function currentEventState(value) {
     if (/(?:终止|取消|放弃|失败结束|不再进行)/u.test(text)) return 'terminated';
     if (/(?:受阻|暂停|卡住|无法推进|等待条件)/u.test(text)) return 'blocked';
     return 'active';
-}
-function canTransitionCurrentEvent(from, to) {
-    const source = String(from || 'active');
-    const target = String(to || 'active');
-    return EVENT_TRANSITIONS[source]?.has(target) === true;
 }
 function eventText(value) {
     if (Array.isArray(value?.sections)) return value.sections.flatMap((section) => section.lines ?? []).join('\n');
@@ -5520,11 +5410,22 @@ class HostAdapter {
                 settledAt,
             };
         };
+        const eventTimelineArchive = (Array.isArray(value.eventTimelineArchive) ? value.eventTimelineArchive : []).map((item) => normalizeTimeline(item, 'settled')).filter(Boolean).slice(-128);
+        const largeSummaryPolicyVersion = Math.max(0, Number(value.largeSummaryPolicyVersion || 0));
+        const explicitLargeWatermark = Math.max(0, Number(value.lastLargeSummaryAt || 0));
+        // [MA-AUTO-LARGE-01] 升级前 archive 没有“大总结已消费到哪里”的水位。
+        // 只在首次迁移时把旧 archive 视为历史已消费；一旦 policyVersion=1，即使水位仍为0也不能再次迁移，
+        // 否则新安装后的第一个小总结会被误当成旧历史跳过。
+        const migratedLargeWatermark = largeSummaryPolicyVersion >= 1
+            ? explicitLargeWatermark
+            : Math.max(0, ...eventTimelineArchive.map((timeline) => Number(timeline?.settledAt || 0)));
         return {
             lastProcessedMessageKey: String(value.lastProcessedMessageKey ?? ''),
             lastProcessedHash: String(value.lastProcessedHash ?? ''),
             turnsSinceSmall: Math.max(0, Number(value.turnsSinceSmall) || 0),
-            smallCountSinceLarge: Math.max(0, Number(value.smallCountSinceLarge) || 0),
+            smallCountSinceLarge: largeSummaryPolicyVersion >= 1 ? Math.max(0, Number(value.smallCountSinceLarge) || 0) : 0,
+            lastLargeSummaryAt: migratedLargeWatermark,
+            largeSummaryPolicyVersion: 1,
             // ui.96: summary marks only exist in chat-level internal metadata. Legacy pending UIDs are migrated once,
             // 不写入世界书，也不在玩家界面展示。
             pendingSmallSummaryMarks: normalizeMarks(value.pendingSmallSummaryMarks, value.pendingSmallSummaryUids),
@@ -5534,7 +5435,7 @@ class HostAdapter {
             activeEventTimeline: normalizeTimeline(value.activeEventTimeline, 'active'),
             // 未总结 SceneGroup 是正式待处理队列，不能因为数量达到 12 就静默丢失。
             closedEventTimelines: (Array.isArray(value.closedEventTimelines) ? value.closedEventTimelines : []).map((item) => normalizeTimeline(item, 'pending')).filter(Boolean),
-            eventTimelineArchive: (Array.isArray(value.eventTimelineArchive) ? value.eventTimelineArchive : []).map((item) => normalizeTimeline(item, 'settled')).filter(Boolean).slice(-128),
+            eventTimelineArchive,
         };
     }
     async saveCursor(cursor, snapshot, currentSettings) {
@@ -5546,7 +5447,7 @@ class HostAdapter {
         await this.persistMetadataMutation(() => {
             if (hadCursor) root.cursor = previous;
             else delete root.cursor;
-        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '处理游标保存');
+        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '处理游标保存', ['cursor']);
     }
     getCurrentGameTime() {
         const value = this.chatNamespace().currentGameTime;
@@ -5568,7 +5469,7 @@ class HostAdapter {
         await this.persistMetadataMutation(() => {
             if (previous) root.currentGameTime = previous;
             else delete root.currentGameTime;
-        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '游戏时间保存');
+        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '游戏时间保存', ['currentGameTime']);
         return true;
     }
     getCommitReceipts() {
@@ -5587,7 +5488,7 @@ class HostAdapter {
         await this.persistMetadataMutation(() => {
             if (previous.length) root.commitReceipts = previous;
             else delete root.commitReceipts;
-        }, null, '写入回执保存');
+        }, null, '写入回执保存', ['commitReceipts']);
         return true;
     }
     async removeCommitReceipts(ids = []) {
@@ -5602,7 +5503,7 @@ class HostAdapter {
         await this.persistMetadataMutation(() => {
             if (previous.length) root.commitReceipts = previous;
             else delete root.commitReceipts;
-        }, null, '写入回执删除');
+        }, null, '写入回执删除', ['commitReceipts']);
         return true;
     }
     getFocusUid() { return String(this.chatNamespace().focusUid ?? '').trim(); }
@@ -5619,7 +5520,7 @@ class HostAdapter {
             else delete root.focusUid;
             if (hadTitle) root.focusTitle = previousTitle;
             else delete root.focusTitle;
-        }, null, '焦点 UID 保存');
+        }, null, '焦点 UID 保存', ['focusUid', 'focusTitle']);
     }
     async saveMetadata() {
         const context = this.context();
@@ -5695,27 +5596,62 @@ class HostAdapter {
         if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('原聊天事务元数据恢复后权威回读不一致');
         return true;
     }
-    async verifyPersistedExtensionNamespace(expectedNamespace) {
+    async verifyPersistedExtensionNamespace(expectedNamespace, persistedFields = null, softMismatch = false) {
         const persisted = await this.readPersistedChatMetadata();
-        if (persisted === null) return false;
+        // 某些宿主/临时聊天没有可用的权威回读接口；保持与旧行为一致，此时只能依赖 ST 自身 saveMetadata。
+        if (persisted === null) return null;
         const actual = persisted?.[constants_1.EXTENSION_NAMESPACE];
         const expected = expectedNamespace && typeof expectedNamespace === 'object' ? expectedNamespace : undefined;
-        const normalizeNamespace = (value) => value && typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length ? null : (value === undefined ? null : value);
-        const actualText = JSON.stringify(normalizeNamespace(actual));
-        const expectedText = JSON.stringify(normalizeNamespace(expected));
-        if (actualText !== expectedText) throw new Error('聊天元数据保存后权威回读不一致');
+        const normalizeNamespace = (value) => value && typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length
+            ? null
+            : (value === undefined ? null : value);
+        const fieldState = (namespace, key) => {
+            const source = namespace && typeof namespace === 'object' && !Array.isArray(namespace) ? namespace : {};
+            return Object.prototype.hasOwnProperty.call(source, key)
+                ? { present: true, value: source[key] }
+                : { present: false };
+        };
+        const fields = Array.isArray(persistedFields) && persistedFields.length ? [...new Set(persistedFields.map(String))] : null;
+        const actualComparable = fields ? fields.map((key) => [key, fieldState(actual, key)]) : normalizeNamespace(actual);
+        const expectedComparable = fields ? fields.map((key) => [key, fieldState(expected, key)]) : normalizeNamespace(expected);
+        const actualText = JSON.stringify(actualComparable);
+        const expectedText = JSON.stringify(expectedComparable);
+        if (actualText !== expectedText) {
+            if (softMismatch) return false;
+            throw new Error(fields
+                ? `聊天元数据保存后字段权威回读不一致：${fields.join(', ')}`
+                : '聊天元数据保存后权威回读不一致');
+        }
         return true;
     }
-    async persistMetadataMutation(rollback, verify, label) {
+    async persistMetadataMutation(rollback, verify, label, persistedFields = null) {
         const expectedChatKey = this.chatKey();
         const expectedMetadata = this.context().chatMetadata;
-        const expectedNamespace = structuredClone(expectedMetadata?.[constants_1.EXTENSION_NAMESPACE] ?? null);
-        try {
-            await this.saveMetadata();
+        const ensureSameScope = () => {
             if (this.chatKey() !== expectedChatKey || this.context().chatMetadata !== expectedMetadata)
                 throw new Error('元数据保存期间聊天作用域已经变化');
-            verify?.();
-            await this.verifyPersistedExtensionNamespace(expectedNamespace);
+        };
+        const persistAndConfirm = async (expectedNamespace, phaseLabel) => {
+            const attempts = 3;
+            for (let attempt = 1; attempt <= attempts; attempt++) {
+                ensureSameScope();
+                await this.saveMetadata();
+                ensureSameScope();
+                verify?.();
+                const confirmed = await this.verifyPersistedExtensionNamespace(expectedNamespace, persistedFields, true);
+                // null 表示宿主无法权威回读；沿用 ST 自身保存契约，不额外制造失败。
+                if (confirmed !== false) return true;
+                if (attempt < attempts)
+                    await new Promise((resolve) => globalThis.setTimeout(resolve, 100 * attempt));
+            }
+            const detail = Array.isArray(persistedFields) && persistedFields.length
+                ? `字段 ${persistedFields.join(', ')}`
+                : '镜渊元数据命名空间';
+            throw new Error(`${phaseLabel}后${detail}连续${attempts}次未通过权威回读确认`);
+        };
+        const expectedNamespace = structuredClone(expectedMetadata?.[constants_1.EXTENSION_NAMESPACE] ?? null);
+        try {
+            await persistAndConfirm(expectedNamespace, label);
         }
         catch (error) {
             try { rollback?.(); }
@@ -5723,11 +5659,9 @@ class HostAdapter {
                 throw new Error(`${label}失败，且内存回滚失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackMutationError)}`);
             }
             try {
-                if (this.chatKey() !== expectedChatKey || this.context().chatMetadata !== expectedMetadata)
-                    throw new Error('聊天作用域已经变化；已恢复原聊天内存，未向新聊天执行反向保存');
+                ensureSameScope();
                 const rollbackNamespace = structuredClone(expectedMetadata?.[constants_1.EXTENSION_NAMESPACE] ?? null);
-                await this.saveMetadata();
-                await this.verifyPersistedExtensionNamespace(rollbackNamespace);
+                await persistAndConfirm(rollbackNamespace, `${label}回滚保存`);
             }
             catch (rollbackSaveError) {
                 throw new Error(`${label}失败，且旧元数据反向保存失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackSaveError)}`);
@@ -6560,7 +6494,9 @@ function selectBestCandidate(candidates, minimumScore = 80) {
     const topScore = eligible[0].score;
     const top = eligible.filter((item) => item.score === topScore);
     if (top.length === 1) return top[0];
-    if (!top.every((item) => sameEntryIdentity(item.entry, top[0].entry) || (canonicalTypeLookup(item.entry.type) === '事件' && canonicalTypeLookup(top[0].entry.type) === '事件' && sameEventLifecycle(item.entry, top[0].entry)))) return null;
+    // [MA-SOURCE-FIRST-03] 正常身份链只处理同一规范化完整标题的重复宿主；
+    // 不再用事件生命周期相似度证明两个候选“其实是同一条目”。
+    if (!top.every((item) => normalizeTitleLookup(item.entry.title) === normalizeTitleLookup(top[0].entry.title))) return null;
     const selected = [...top].sort((left, right) => compareEntryPriority(left.entry, right.entry))[0];
     return {
         ...selected,
@@ -7075,7 +7011,7 @@ class MemoryRunner {
             const nextCursor = {
                 ...cursor,
                 turnsSinceSmall: 0,
-                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + 1,
+                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (producedMarks.length ? 1 : 0),
                 pendingSmallSummaryMarks: targetGroup ? groupedPending : subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
                 failedSmallSummaryMarks: targetGroup ? groupedFailed : subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
                 pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
@@ -7100,14 +7036,24 @@ class MemoryRunner {
         }
 
         const cursor = this.host.cursor();
-        const marks = mergeSummaryMarks(cursor.failedLargeSummaryMarks, cursor.pendingLargeSummaryMarks);
-        summaryNotify('info', `镜渊：开始手动大总结（${marks.length}个条目）`);
-        const result = await this.summarize('large', settings, snapshot, { marks, timeline: timelinesForMarks(cursor, marks) });
+        const failedMarks = normalizeSummaryMarks(cursor.failedLargeSummaryMarks);
+        const availableGroups = pendingLargeSceneGroups(cursor);
+        const groupLimit = Math.max(1, Number(settings.largeSummaryCount || 4));
+        const targetGroups = failedMarks.length ? [] : availableGroups.slice(0, groupLimit);
+        const marks = failedMarks.length
+            ? mergeSummaryMarks(failedMarks, cursor.pendingLargeSummaryMarks)
+            : (targetGroups.length ? largeSummaryMarksFromGroups(targetGroups) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks));
+        const timeline = targetGroups.length ? combineSceneGroupTimelines(targetGroups) : timelinesForMarks(cursor, marks);
+        summaryNotify('info', `镜渊：开始手动大总结（${marks.length}个条目${targetGroups.length ? `，${targetGroups.length}个SceneGroup` : ''}）`);
+        const result = await this.summarize('large', settings, snapshot, { marks, timeline });
         const processed = result.processedPendingUids ?? [];
+        const nextWatermark = targetGroups.length ? largeSummaryWatermark(targetGroups, cursor.lastLargeSummaryAt) : Number(cursor.lastLargeSummaryAt || 0);
+        const remainingGroups = targetGroups.length ? pendingLargeSceneGroups({ ...cursor, lastLargeSummaryAt: nextWatermark }) : [];
         const nextCursor = {
             ...cursor,
-            smallCountSinceLarge: 0,
-            pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, processed),
+            lastLargeSummaryAt: nextWatermark,
+            smallCountSinceLarge: targetGroups.length ? remainingGroups.length : 0,
+            pendingLargeSummaryMarks: targetGroups.length ? largeSummaryMarksFromGroups(remainingGroups) : subtractSummaryMarks(cursor.pendingLargeSummaryMarks, processed),
             failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, processed),
         };
         try {
@@ -7127,6 +7073,7 @@ class MemoryRunner {
         let pendingLargeSummaryMarks = normalizeSummaryMarks(cursor.pendingLargeSummaryMarks);
         let failedLargeSummaryMarks = normalizeSummaryMarks(cursor.failedLargeSummaryMarks);
         let smallCountSinceLarge = Math.max(0, Number(cursor.smallCountSinceLarge || 0));
+        let lastLargeSummaryAt = Math.max(0, Number(cursor.lastLargeSummaryAt || 0));
         let activeEventTimeline = normalizeEventTimeline(cursor.activeEventTimeline, 'active');
         let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
         let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean).slice(-128);
@@ -7226,8 +7173,10 @@ class MemoryRunner {
                         committed.push(small);
                         const processed = small.processedPendingUids ?? [];
                         const producedMarks = summaryMarksFromResult(small);
-                        smallCountSinceLarge += 1;
-                        if (producedMarks.length) pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
+                        if (producedMarks.length) {
+                            smallCountSinceLarge += 1;
+                            pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
+                        }
                         const settledTimeline = normalizeEventTimeline({ ...summaryGroup, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
                         if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
                         closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id));
@@ -7254,14 +7203,61 @@ class MemoryRunner {
             const pendingSmallSummaryMarks = unresolvedSceneGroupMarks(activeEventTimeline, closedEventTimelines);
             const failedSmallSummaryMarks = failedSceneGroupMarks(closedEventTimelines);
 
-            // 大总结固定为玩家手动触发。
-            largeRanThisTurn = false;
+            // [MA-AUTO-LARGE-02] 大总结只消费“成功小总结后形成的 SceneGroup 层级”，而不是平铺 UID 计数。
+            // 为避免一个正文回合连续轰炸模型，小总结刚运行过时绝不紧接大总结；达到阈值后等下一次没有小总结运行的回合。
+            if (!smallRanThisTurn && settings.autoLargeSummary !== false) {
+                const candidateCursor = { ...cursor, eventTimelineArchive, lastLargeSummaryAt };
+                const pendingGroups = pendingLargeSceneGroups(candidateCursor, eventTimelineArchive);
+                const threshold = Math.max(2, Number(settings.largeSummaryCount || 4));
+                if (pendingGroups.length >= threshold) {
+                    const batch = pendingGroups.slice(0, threshold);
+                    const marks = largeSummaryMarksFromGroups(batch);
+                    if (marks.length) {
+                        const timeline = combineSceneGroupTimelines(batch);
+                        const label = `${batch.length}个局部场景`;
+                        this.progress('running', `达到自动大总结阈值：${label}，开始上卷`, { titles: ['总结｜世界历史'], phase: 'large-summary', sceneGroupUids: batch.map((item) => item.groupUid) });
+                        summaryNotify('info', `镜渊：累计${batch.length}次有效小总结，开始自动大总结（${marks.length}个条目）`);
+                        const beforeReceiptIds = this.currentReceiptIds();
+                        try {
+                            const large = await this.summarize('large', settings, snapshot, { marks, timeline });
+                            committed.push(large);
+                            const processed = large.processedPendingUids ?? [];
+                            largeRanThisTurn = true;
+                            lastLargeSummaryAt = largeSummaryWatermark(batch, lastLargeSummaryAt);
+                            const remainingGroups = pendingLargeSceneGroups({ ...candidateCursor, lastLargeSummaryAt }, eventTimelineArchive);
+                            smallCountSinceLarge = remainingGroups.length;
+                            pendingLargeSummaryMarks = largeSummaryMarksFromGroups(remainingGroups);
+                            failedLargeSummaryMarks = subtractSummaryMarks(failedLargeSummaryMarks, processed);
+                            const largeWrites = Number(large?.warehouse?.createdCount || 0) + Number(large?.warehouse?.updatedCount || 0);
+                            const largeDeleted = Number(large?.warehouse?.deletedCount || 0);
+                            summaryNotify(large?.changed ? 'success' : 'info', large?.changed
+                                ? `镜渊：自动大总结完成（${batch.length}个SceneGroup，处理${processed.length}个条目，写入${largeWrites}，沉降删除${largeDeleted}）`
+                                : `镜渊：自动大总结结算完成（${batch.length}个SceneGroup，无结构变化）`);
+                        }
+                        catch (error) {
+                            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '自动大总结');
+                            // 本批失败后不在下一回合自动重复轰炸。把本批移入人工失败工作集并推进自动水位；
+                            // 后续新的 SceneGroup 仍可继续累计到下一批。
+                            failedLargeSummaryMarks = mergeSummaryMarks(failedLargeSummaryMarks, marks);
+                            lastLargeSummaryAt = largeSummaryWatermark(batch, lastLargeSummaryAt);
+                            const remainingGroups = pendingLargeSceneGroups({ ...candidateCursor, lastLargeSummaryAt }, eventTimelineArchive);
+                            smallCountSinceLarge = remainingGroups.length;
+                            pendingLargeSummaryMarks = largeSummaryMarksFromGroups(remainingGroups);
+                            const warning = `自动大总结失败；本批已转入手动大总结，不自动重试：${(0, util_1.errorText)(error)}`;
+                            summaryWarning = summaryWarning ? `${summaryWarning}；${warning}` : warning;
+                            this.progress('warning', warning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
+                            summaryNotify('error', `镜渊：自动大总结失败，已保留给手动处理：${(0, util_1.errorText)(error)}`);
+                        }
+                    }
+                }
+            }
             const nextCursor = {
                 ...cursor,
                 lastProcessedMessageKey: snapshot.messageKey,
                 lastProcessedHash: snapshot.contentHash,
                 turnsSinceSmall: 0,
                 smallCountSinceLarge,
+                lastLargeSummaryAt,
                 pendingSmallSummaryMarks,
                 pendingLargeSummaryMarks,
                 failedSmallSummaryMarks,
@@ -7495,7 +7491,7 @@ class MemoryRunner {
             nextCursor = {
                 ...cursor,
                 turnsSinceSmall: 0,
-                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (processed.length ? 1 : 0),
+                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (producedMarks.length ? 1 : 0),
                 // 选中总结不能因为 UID 与别的场景组重叠就清掉别组成员；有 SceneGroup 时始终从剩余组重算。
                 pendingSmallSummaryMarks: hasSceneGroups ? groupedPending : subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
                 failedSmallSummaryMarks: hasSceneGroups ? groupedFailed : subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
@@ -8032,6 +8028,39 @@ function nextPendingSceneGroup(closedTimelines = [], includeFailed = false) {
     return null;
 }
 
+
+function pendingLargeSceneGroups(cursor, archiveOverride = null) {
+    const watermark = Math.max(0, Number(cursor?.lastLargeSummaryAt || 0));
+    const archive = (Array.isArray(archiveOverride) ? archiveOverride : cursor?.eventTimelineArchive ?? [])
+        .map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean)
+        .filter((timeline) => timeline.summaryStatus === 'settled' && Number(timeline.settledAt || 0) > watermark && (timeline.summaryUids ?? []).length > 0)
+        .sort((left, right) => Number(left.settledAt || 0) - Number(right.settledAt || 0));
+    return archive;
+}
+function largeSummaryMarksFromGroups(groups) {
+    return normalizeSummaryMarks([...new Set((groups ?? []).flatMap((timeline) => timeline?.summaryUids ?? []).map(String).filter(Boolean))].map((uid) => ({ uid })));
+}
+function combineSceneGroupTimelines(groups) {
+    const matched = (groups ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
+    if (!matched.length) return null;
+    if (matched.length === 1) return matched[0];
+    return {
+        id: `L2-${(0, util_1.hashText)(matched.map((item) => item.groupUid).join('|')).slice(0, 10)}`,
+        groupUid: `L2-${(0, util_1.hashText)(matched.map((item) => item.groupUid).join('|')).slice(0, 10)}`,
+        sceneGroup: matched.map((item) => item.sceneGroup).filter(Boolean).join(' → '),
+        sceneTitle: matched.map((item) => item.sceneTitle).filter(Boolean).join(' → '),
+        summaryUids: [...new Set(matched.flatMap((item) => item.summaryUids ?? []))],
+        stages: matched.flatMap((item) => item.stages).map((stage, index) => ({ ...stage, seq: index + 1 })),
+        summaryStatus: 'settled',
+        openedAtMessageKey: matched[0]?.openedAtMessageKey || '',
+        closedAtMessageKey: matched.at(-1)?.closedAtMessageKey || '',
+        settledAt: Math.max(...matched.map((item) => Number(item.settledAt || 0))),
+    };
+}
+function largeSummaryWatermark(groups, fallback = 0) {
+    return Math.max(Number(fallback || 0), ...(groups ?? []).map((timeline) => Number(timeline?.settledAt || 0)));
+}
+
 function timelinesForMarks(cursor, marks) {
     const wanted = new Set(normalizeSummaryMarks(marks).map((mark) => mark.uid));
     const candidates = [
@@ -8139,6 +8168,10 @@ function sedimentationOperationsFromSummary(summaryBlock, entries, allowedSource
     const section = summaryBlock.sections?.find((item) => /^(?:沉降来源|融合来源|删除来源)$/u.test(String(item.name ?? '').trim()));
     if (!section || section.empty) return [];
     const allowed = new Set((allowedSourceUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
+    // [MA-SETTLE-01] “沉降”本身就是模型对“来源已被目标完整承接”的语义声明。
+    // 插件只验证结构事实：来源属于本批、目标真实存在或会在本批写回后存在、锁状态允许。
+    // 旧实现额外要求目标必须在同一批再次“写回”，这并不能证明语义覆盖，反而会把
+    // “目标早已完整存在、无需重复写回”的合法沉降静默丢弃。
     const distributedTargets = new Set(distributionBlocksFromSummary(summaryBlock).map((block) => (0, util_1.normalizeTitle)(block.title)));
     const byTitle = new Map(entries.map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
     const operations = [];
@@ -8149,13 +8182,15 @@ function sedimentationOperationsFromSummary(summaryBlock, entries, allowedSource
         const sourceTitle = canonicalHistoryTitle(match[1]);
         const targetTitle = canonicalHistoryTitle(match[2]);
         if (!sourceTitle || !targetTitle || (0, util_1.normalizeTitle)(sourceTitle) === (0, util_1.normalizeTitle)(targetTitle)) continue;
-        if (!distributedTargets.has((0, util_1.normalizeTitle)(targetTitle))) continue;
+        const normalizedTargetTitle = (0, util_1.normalizeTitle)(targetTitle);
+        // 目标可以是当前世界书中已经存在的条目，也可以是本次“写回”将创建/更新的条目。
+        // 不再强迫已有目标制造一次重复写回来换取沉降资格。
+        if (!byTitle.has(normalizedTargetTitle) && !distributedTargets.has(normalizedTargetTitle)) continue;
         const source = byTitle.get((0, util_1.normalizeTitle)(sourceTitle));
         if (!source || (allowed.size && !allowed.has(String(source.uid)))) continue;
         // 已结束事件/离场对象常被置为 disabled 以退出正文召回，但它们仍可在总结中被完整承接后沉降。
         // 这里只保留真正的写保护：自动总结尊重基石锁，人工合并由玩家选择视为本次明确授权。
         if ((kind !== 'manual' && source.bedrockLocked === true) || source.focus === true) continue;
-        const target = byTitle.get((0, util_1.normalizeTitle)(targetTitle));
         operations.push({
             id: `summary-sediment:${kind}:${source.uid}:${(0, util_1.hashText)(targetTitle)}`,
             kind: 'delete-entry', operation: 'delete', title: source.title, targetUid: source.uid,
@@ -12592,7 +12627,6 @@ exports.limitPromptPair = limitPromptPair;
 exports.outputContractForStage = outputContractForStage;
 exports.describeRetryReason = describeRetryReason;
 exports.salvageStrictFinalProtocol = salvageStrictFinalProtocol;
-exports.protocolRescuePrompt = protocolRescuePrompt;
 const util_1 = require("./util");
 
 // [MA-MODEL-01] 每个模型阶段只声明输入/输出预算；网关失败使用紧凑请求，瞬时断线最多再退避重放一次。
@@ -12628,7 +12662,6 @@ async function callModel(options) {
         sourceText = '',
         onRetry,
         responseTokens = 0,
-        cleanRestartOnEmpty = false,
         singleAttempt = false,
         generationOptions = undefined,
     } = options;
@@ -12638,69 +12671,38 @@ async function callModel(options) {
         : stageResponseTokens(stage, settings, sourceText);
     const primary = limitPromptPair(withOutputContract(prompt, stage, responseLength, sourceText), stage);
     let firstError = null;
-    let firstGatewayRetry = false;
     try {
         return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId, generationOptions);
     }
     catch (error) {
         firstError = error;
-        const emptyResponse = isEmptyModelResponseError(error);
-        firstGatewayRetry = isRetryableGatewayError(error);
         if (singleAttempt) {
             const salvaged = salvageStrictFinalProtocol(stage, String(error?.reasoningText || ''));
             if (salvaged) return salvaged;
             throw error;
         }
-        if (snapshot?.token?.cancelled || (!firstGatewayRetry && !emptyResponse))
-            throw error;
+        const retryable = isRetryableGatewayError(error) || isEmptyModelResponseError(error);
+        if (snapshot?.token?.cancelled || !retryable) throw error;
     }
 
     const fallbackValue = fallbackPrompt
         ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
         : prompt;
     const emptyResponse = isEmptyModelResponseError(firstError);
-
-    // 总结使用独立 Profile 时，仅推理/空正文不再走“缩短上下文 → 再救援”的三段式。
-    // 首轮预算已按材料规模预调；第二次直接从原始业务输入重新开始，并去掉生成 preset。
-    if (emptyResponse && cleanRestartOnEmpty && profileId && !snapshot?.token?.cancelled) {
-        const restartBase = {
-            system: `${String(fallbackValue?.system ?? '').trim()}\n\n【重新开始】这是一次全新的总结请求。不要承接、复述或继续上一次内部推理；直接形成最终固定协议。`.trim(),
-            user: String(fallbackValue?.user ?? ''),
-        };
-        const restart = limitPromptPair(withOutputContract(restartBase, stage, responseLength, sourceText), stage, false);
-        const notice = new Error('模型首轮只返回推理或空正文；已按预调预算从干净上下文重新开始一次');
-        notice.code = 'MA_CLEAN_RESTART';
-        try { onRetry?.(notice); }
-        catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
-        try {
-            return await host.generate(
-                restart.system,
-                restart.user,
-                responseLength,
-                snapshot,
-                settings,
-                settings.requestTimeoutMs,
-                profileId,
-                { includePreset: false },
-            );
-        }
-        catch (restartError) {
-            const salvaged = salvageStrictFinalProtocol(stage, String(restartError?.reasoningText || ''));
-            if (salvaged) return salvaged;
-            try { Object.defineProperty(restartError, 'cleanRestartExhausted', { value: true, enumerable: false, configurable: true }); }
-            catch { restartError.cleanRestartExhausted = true; }
-            throw restartError;
-        }
-    }
     const fallbackTokens = emptyResponse
         ? emptyResponseRetryTokens(stage, settings, responseLength)
         : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
-    const fallback = limitPromptPair(withOutputContract(fallbackValue, stage, fallbackTokens, sourceText), stage, true);
+    const restartBase = emptyResponse
+        ? {
+            system: `${String(fallbackValue?.system ?? '').trim()}\n\n【重新开始】这是一次全新的请求。不要承接、复述或继续上一次内部推理；直接形成最终固定协议。`.trim(),
+            user: String(fallbackValue?.user ?? ''),
+        }
+        : fallbackValue;
+    const fallback = limitPromptPair(withOutputContract(restartBase, stage, fallbackTokens, sourceText), stage, true);
     try { onRetry?.(firstError); }
     catch (callbackError) { console.warn('[MirrorAbyss] model retry callback failed', callbackError); }
-    if (firstGatewayRetry) await waitForGatewayRetry(firstError, 1, settings, snapshot);
+    if (isRetryableGatewayError(firstError)) await waitForGatewayRetry(firstError, 1, settings, snapshot);
 
-    let secondError = null;
     try {
         return await host.generate(
             fallback.system,
@@ -12710,86 +12712,21 @@ async function callModel(options) {
             settings,
             settings.requestTimeoutMs,
             profileId,
-            undefined,
+            emptyResponse && profileId ? { includePreset: false } : undefined,
         );
     }
-    catch (error) {
-        secondError = error;
-    }
-
-    // [MA-MODEL-NETWORK-RETRY-01]
-    // 移动端浏览器与反向代理常把瞬时断线抛成 TypeError: Failed to fetch。
-    // 该错误过去没有命中“fetch failed”规则，导致本应重试的请求直接失败。
-    // 只对明确的瞬时网络错误增加一次退避重试；协议错误、仅推理和取消不进入此分支。
-    if (isTransientNetworkError(secondError) && !snapshot?.token?.cancelled) {
-        try { onRetry?.(Object.assign(new Error('瞬时网络错误仍存在，退避后执行最后一次紧凑请求'), { code: 'MA_TRANSIENT_NETWORK_RETRY' })); }
-        catch { }
-        await waitForGatewayRetry(secondError, 2, settings, snapshot);
-        try {
-            return await host.generate(
-                fallback.system,
-                fallback.user,
-                fallbackTokens,
-                snapshot,
-                settings,
-                settings.requestTimeoutMs,
-                profileId,
-                undefined,
-            );
+    catch (secondError) {
+        // [MA-SOURCE-FIRST-02] 两次真实请求已经耗尽。只允许从已经返回的 reasoning 中
+        // 隔离“明确标记且可严格解析”的最终协议；这不产生额外 API 请求，也不猜测自由推理文本。
+        const reasoning = String(secondError?.reasoningText || firstError?.reasoningText || '');
+        const salvaged = salvageStrictFinalProtocol(stage, reasoning);
+        if (salvaged) {
+            try { onRetry?.(Object.assign(new Error('已从现有推理字段隔离出完整最终协议'), { code: 'MA_REASONING_PROTOCOL_SALVAGED' })); }
+            catch { }
+            return salvaged;
         }
-        catch (error) {
-            if (!isTransientNetworkError(error)) throw error;
-            const detail = (0, util_1.errorText)(error);
-            const exhausted = new Error(`瞬时网络请求连续3次失败：${detail}`);
-            exhausted.code = 'MA_NETWORK_RETRY_EXHAUSTED';
-            exhausted.cause = error;
-            exhausted.retryAttempts = 3;
-            exhausted.diagnosticEvidence = {
-                ...(error?.diagnosticEvidence || {}),
-                retryAttempts: 3,
-                transientNetwork: true,
-            };
-            secondError = exhausted;
-        }
+        throw secondError;
     }
-
-    // [MA-MODEL-REASONING-RESCUE-01]
-    // 部分推理模型会把整个响应预算都放进 reasoning 字段。先只从 reasoning 中提取
-    // 已经完整出现的严格协议；绝不把自由推理文本当作正文或事实提交。
-    const reasoning = String(secondError?.reasoningText || firstError?.reasoningText || '');
-    const salvaged = salvageStrictFinalProtocol(stage, reasoning);
-    if (salvaged) {
-        try { onRetry?.(Object.assign(new Error('已从推理字段隔离出完整最终协议'), { code: 'MA_REASONING_PROTOCOL_SALVAGED' })); }
-        catch { }
-        return salvaged;
-    }
-
-    // 第三次只在独立 Connection Profile 上执行：去掉生成 preset，使用最短最终协议提示。
-    // 这不会改写玩家主连接，也不会把供应商私有 reasoning 参数硬编码进请求。
-    if (profileId && isEmptyModelResponseError(secondError) && !snapshot?.token?.cancelled) {
-        const rescueTokens = reasoningRescueTokens(stage, settings, fallbackTokens);
-        const rescue = protocolRescuePrompt(stage, fallbackValue, sourceText, rescueTokens);
-        try { onRetry?.(Object.assign(new Error('模型连续只返回推理，切换无 preset 最终协议救援'), { code: 'MA_REASONING_RESCUE' })); }
-        catch { }
-        try {
-            return await host.generate(
-                rescue.system,
-                rescue.user,
-                rescueTokens,
-                snapshot,
-                settings,
-                settings.requestTimeoutMs,
-                profileId,
-                { includePreset: false },
-            );
-        }
-        catch (rescueError) {
-            const finalSalvage = salvageStrictFinalProtocol(stage, String(rescueError?.reasoningText || ''));
-            if (finalSalvage) return finalSalvage;
-            throw rescueError;
-        }
-    }
-    throw secondError;
 }
 
 function isEmptyModelResponseError(error) {
@@ -12882,56 +12819,6 @@ function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
 
 
 
-function reasoningRescueTokens(stage, settings, previousTokens) {
-    const configured = Math.max(2048, Number(settings?.responseTokens) || 8192);
-    const minimums = {
-        audit: 2048,
-        revision: 8192,
-        extraction: 6144,
-        extractionRepair: 4096,
-        summaryRepair: 4096,
-        worldSettingImport: 8192,
-        smallSummary: 4096,
-        largeSummary: 6144,
-        manualMerge: 6144,
-        migration: 4096,
-        migrationPlan: 8192,
-        migrationReview: 2048,
-    };
-    return Math.min(16384, Math.max(Math.min(configured, Number(previousTokens) || 0), minimums[stage] || 4096));
-}
-
-function protocolRescuePrompt(stage, fallbackValue, sourceText, responseTokens) {
-    const source = String(sourceText ?? '').trim();
-    const fallbackSystem = String(fallbackValue?.system ?? '').trim();
-    const fallbackUser = String(fallbackValue?.user ?? '').trim();
-    const stageInstructions = {
-        audit: '判断输入是否违反审核规则。通过只写“审核结论：通过”；不通过写“审核结论：需要修正”并列出短原因。',
-        revision: '输出可直接替换的完整修正版正文，从开头写到结尾。',
-        extraction: '比较旧状态、玩家输入和本轮正文，只输出统一事实行“事实｜类型｜稳定名称｜建立/变化/结束｜关联对象｜完整事实”或“无”。',
-        extractionRepair: '只把已有候选修复为统一事实行，不新增事实。',
-        summaryRepair: '只把已有总结候选修复成写回/移除/沉降固定行，不重新判断语义内容。',
-        worldSettingImport: '只输出完整 ENTRY 协议或“无”。',
-        smallSummary: '只输出写回/移除/沉降固定行或“无”，不得输出总结标题。',
-        largeSummary: '只输出写回/移除/沉降固定行或“无”，不得输出总结标题。',
-        manualMerge: '只输出系统指定目标类型的写回/移除/沉降固定行。',
-        migrationReview: '只输出 PASS 或 FAIL 协议。',
-        migrationPlan: '只输出 ANCHOR、GROUP、DROP 协议行。',
-        migration: '只输出完整重建条目协议。',
-    };
-    const system = [
-        '你是最终答案提交器。上一次请求只产生了内部推理，没有形成最终文本。',
-        '禁止继续分析、解释或输出任何思考过程。直接提交最终答案；第一字符就必须属于最终协议。',
-        stageInstructions[stage] || '只输出原任务规定的最终协议。',
-        outputContractForStage(stage, responseTokens, source),
-        fallbackSystem ? `原任务约束摘要：\n${clipMiddle(fallbackSystem, 3200)}` : '',
-    ].filter(Boolean).join('\n\n');
-    const user = source
-        ? `需要处理的原始内容：\n${clipMiddle(source, 7000)}`
-        : `原任务输入：\n${clipMiddle(fallbackUser, 7000)}`;
-    return limitPromptPair({ system, user }, stage, true);
-}
-
 function salvageStrictFinalProtocol(stage, reasoningText) {
     const text = String(reasoningText ?? '').trim();
     if (!text) return '';
@@ -12991,7 +12878,7 @@ function describeRetryReason(error, label = '模型请求') {
     if (error?.code === 'MA_REASONING_ONLY') return `${label}只返回推理，没有最终协议；正在执行受控重试`;
     if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') return `${label}请求完成但没有最终正文；正在执行受控重试`;
     if (error?.code === 'MA_NETWORK_RETRY_EXHAUSTED') return `${label}连续3次网络请求失败：${text}`;
-    if (isTransientNetworkError(error)) return `${label}遇到瞬时网络中断：${text}；已缩短上下文并退避重试，最多3次`;
+    if (isTransientNetworkError(error)) return `${label}遇到瞬时网络中断：${text}；已缩短上下文并退避重试，最多2次`;
     if (isRetryableGatewayError(error)) return `${label}遇到网关或网络异常：${text}；已缩短上下文重试一次`;
     return `${label}失败：${text}；已执行一次安全重试`;
 }
@@ -13073,11 +12960,6 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     const index = (0, matcher_1.buildEntryIndex)(entries);
     const operations = [];
     for (const block of blocks) {
-        // [MA-ITEM-02] 二次防线：即使候选来自总结或迁移，也不允许集合物品创建独立条目。
-        if (block.type === '物品' && isCollectiveItemTitle(block.name)) {
-            operations.push(noop(block.title, undefined, '', '物品条目只允许单个可追踪实例；同类集合应保留在场景资源'));
-            continue;
-        }
         const candidates = (0, matcher_1.matchBlock)(block, index, contextText);
         let target = (0, matcher_1.selectBestCandidate)(candidates, 80);
         const exactClosedEvent = block.type === '事件'
@@ -13863,13 +13745,6 @@ function isNoneStateValue(value) {
     return /^(?:无|没有|无人|空|未持有|未使用|不适用|null|none)$/iu.test((0, util_1.normalizeFact)(value));
 }
 
-function isCollectiveItemTitle(name) {
-    const text = String(name ?? '').trim();
-    const normalized = (0, util_1.normalizeFact)(text);
-    if (!text) return true;
-    if (new Set(['物品','道具','装备','武器','工具','家具','桌椅','餐具','衣物','服装','食物','食品','药品','药物','物资','用品','器材','车辆','书籍','文件','货物','资源']).has(normalized)) return true;
-    return /[、,，]|(?:若干|多个|数个|几(?:个|件|把|瓶|辆|本|枚|支|套|张)|多(?:个|件|把|瓶|辆|本|枚|支|套|张)|一批|一组|一堆|大量|成排|所有|各种|各类|同类)/u.test(text);
-}
 function isMultiValueLabel(label) {
     return /^(持有物|物品|装备|关系|关联对象|关联条目|资源列表|成员)$/u.test(String(label ?? '').trim());
 }
@@ -15227,8 +15102,8 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
             })].join('\n')
         : '';
     const system = isSmall
-        ? `职责：把系统选中的、在刚结束场景中被触及的当前有效世界书条目进行整体理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统内部已经完成本批选材和场景生命周期判断；提供给你的只有这些宿主在场景结束时的当前有效状态。不同人物、场景、物品、事件条目可能是同一经历在不同宿主上的当前投影；应跨条目整体理解后再抽象。\n\n【整理原则】\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被当前有效状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 先写新结果，只有确定被完整承接的旧来源才允许沉降。\n- 当多个条目只是同一局部经历在不同阶段形成的重复/旧状态投影，且新的局部规律已经完整承接其事实与必要召回锚点时，应输出“沉降”完成真实收束；不要只追加一条新规律后把已经完全冗余的来源全部原样保留。仍有独立召回价值或承接不完整时必须保留。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被当前状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
-        : `职责：把玩家本次指定的多个有效世界书条目沿其真实承接、包含和演化关系整理为更高层、长期成立的整体规律，并完成能够安全确认的来源收束。\n\n【整理原则】\n- 只依据系统提供的有效世界书条目，不重新读取原正文。事件条目也是合法历史材料；已结束事件只能作为已经发生的历史状态理解，不把它重新写成新的活动任务。\n- 先理解多个局部结果之间的承接、包含和长期演化，再抽象整体规律。不要只逐条改写原条目。\n- 当多个低层事实已经被一个更高层结果完整承接时：先用“写回”把上层结果落到明确目标，再用“移除”清掉目标/来源中已经被替代的旧事实；若某个来源条目的独立召回身份也已被目标完整承接，再用“沉降”把该来源并入目标。\n- “沉降”不是强制删除：只有来源内容与召回身份都已被目标完整覆盖时才输出；无法确定时保留。每条沉降的目标必须同时出现在本次“写回”结果中。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留必要的历史召回锚点，避免为了减少条目而丢失仍有独立检索价值的事件、人物、场景或物品。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入里确实存在且已经被更高层规律明确替代或包含的旧事实。没有形成更高层规律时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
+        ? `职责：把系统选中的、在刚结束场景中被触及的当前有效世界书条目进行整体理解，并抽象成这个局部范围内持续成立的规则。\n\n【材料含义】\n系统内部已经完成本批选材和场景生命周期判断；提供给你的只有这些宿主在场景结束时的当前有效状态。不同人物、场景、物品、事件条目可能是同一经历在不同宿主上的当前投影；应跨条目整体理解后再抽象。\n\n【整理原则】\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 提取阶段允许少量冗余、旧状态和低价值点；本阶段可以清理被当前有效状态明确替代、被上级结果完整包含或确定没有独立长期价值的内容。无法确定时保留。\n- 保留足以重新召回历史的稳定名称和必要锚点。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 对本批每个来源都明确判断最终去向：仍有独立价值则保留；只有局部旧事实被替代则用“移除”；来源内容与独立召回身份都已被目标完整承接则必须用“沉降”完成真实收束。\n- 沉降目标如果本次需要新增或修改，先用“写回”落下新结果再沉降；如果目标条目当前内容已经完整承接来源，则不要为了满足格式重复写回，直接输出“沉降”即可。\n- 当多个条目只是同一局部经历在不同阶段形成的重复/旧状态投影，已经完全冗余的来源不要原样保留；仍有独立召回价值或承接不完整时必须保留。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入中确实存在且已被当前状态替代、被上级结果包含或确定无独立长期价值的旧事实，不能改写后再移除。没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
+        : `职责：把玩家本次指定的多个有效世界书条目沿其真实承接、包含和演化关系整理为更高层、长期成立的整体规律，并完成能够安全确认的来源收束。\n\n【整理原则】\n- 只依据系统提供的有效世界书条目，不重新读取原正文。事件条目也是合法历史材料；已结束事件只能作为已经发生的历史状态理解，不把它重新写成新的活动任务。\n- 先理解多个局部结果之间的承接、包含和长期演化，再抽象整体规律。不要只逐条改写原条目。\n- 当多个低层事实已经被一个更高层结果完整承接时：需要新增或修改上层结果则先用“写回”落到明确目标，再用“移除”清掉被替代的旧事实；若来源条目的内容与独立召回身份都已被目标完整承接，再用“沉降”把来源并入目标。\n- “沉降”不是强制删除：只有来源内容与召回身份都已被目标完整覆盖时才输出；无法确定时保留。目标若当前已经完整承接来源，可直接沉降，不要求为了沉降资格重复写回同一事实。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留必要的历史召回锚点，避免为了减少条目而丢失仍有独立检索价值的事件、人物、场景或物品。\n\n【唯一输出模板】\n写回｜类型｜稳定名称｜栏目名称｜整理后的事实\n移除｜类型｜稳定名称｜栏目名称｜必须原样复制的旧事实\n沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称\n\n只允许逐行复制这三种格式。可以有多条；“移除”只能原样复制输入里确实存在且已经被更高层规律明确替代或包含的旧事实。没有形成更高层规律时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
     const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}${timelineText ? `\n\n【时间窗口 / 承接顺序】\n${timelineText}` : ''}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n只输出固定模板。`;
 
     return { system, user };
@@ -16059,7 +15934,8 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     autoAudit: false,
     autoExtraction: false,
     autoSmallSummary: true,
-    autoLargeSummary: false,
+    autoLargeSummary: true,
+    automationPolicyVersion: 1,
     entryBudgetEnabled: true,
     auditEnabled: true,
     extractionEnabled: true,
@@ -16072,7 +15948,6 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     largeSummaryPrompt: exports.DEFAULT_LARGE_SUMMARY_PROMPT,
     responseTokens: 8192,
     requestTimeoutMs: 90000,
-    smallSummaryTurns: 15,
     largeSummaryCount: 4,
     queueCompactThreshold: 6,
     keywordDefinitions: exports.DEFAULT_KEYWORDS,
@@ -16147,9 +16022,7 @@ class SettingsStore {
 exports.SettingsStore = SettingsStore;
 function parseSettings(value) {
     const candidate = (0, util_1.isPlainObject)(value) ? value : {};
-    // ui.96: 旧默认 10/5 迁移到新的 15 回合 / 4 次小总结节奏；玩家自定义的其他数值保持不变。
-    const rawSmallSummaryTurns = Number(candidate.smallSummaryTurns);
-    const normalizedSmallSummaryTurns = (0, util_1.clampNumber)(!Number.isFinite(rawSmallSummaryTurns) || rawSmallSummaryTurns === 10 ? 15 : rawSmallSummaryTurns, 15, 2, 50);
+    // 自动大总结只按成功小总结的 SceneGroup 数量触发；不再保留旧“多少回合触发小总结”调度。
     const rawLargeSummaryCount = Number(candidate.largeSummaryCount);
     const normalizedLargeSummaryCount = (0, util_1.clampNumber)(!Number.isFinite(rawLargeSummaryCount) || rawLargeSummaryCount === 5 ? 4 : rawLargeSummaryCount, 4, 2, 30);
     const sectionPolicies = { ...(0, util_1.clone)(exports.DEFAULT_SETTINGS.sectionPolicies) };
@@ -16175,8 +16048,10 @@ function parseSettings(value) {
         autoAudit: candidate.autoAudit === true || (candidate.autoProcess === true && candidate.auditEnabled !== false),
         autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
         autoSmallSummary: candidate.autoSmallSummary !== false,
-        // 大总结固定为玩家手动触发；保留兼容键但不允许旧设置重新开启自动大总结。
-        autoLargeSummary: false,
+        // 旧版把 autoLargeSummary 强制写成 false 且 UI 不可配置；第一次升级不能把这个历史强制值误当成玩家选择。
+        // 写入 automationPolicyVersion 后，后续严格尊重玩家开关。
+        autoLargeSummary: Number(candidate.automationPolicyVersion || 0) >= 1 ? candidate.autoLargeSummary !== false : true,
+        automationPolicyVersion: 1,
         entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
         // 3.0 SceneGroup：审核/提取不再同时暴露“自动化”和“功能开关”两套重复 UI。
         // 手动功能始终可用；autoAudit/autoExtraction 只控制自动触发，总开关负责全局停用。
@@ -16192,7 +16067,6 @@ function parseSettings(value) {
         largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66, LEGACY_LARGE_SUMMARY_PROMPT_UI86, LEGACY_LARGE_SUMMARY_PROMPT_UI87, LEGACY_LARGE_SUMMARY_PROMPT_UI91, LEGACY_LARGE_SUMMARY_PROMPT_UI92, LEGACY_LARGE_SUMMARY_PROMPT_UI100, `把多个已经形成的局部状态整理为更高层的整体状态：关注这些局部共同使阶段、区域或事件链变成了什么，以及由此留下的后续条件；局部经过可以淡化，相关历史场景名继续作为召回线索。`, `把已经形成的局部层内容继续上升为对应主体的整体层内容；跨阶段压缩为整体结果与稳定事实，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；【行为倾向】本身就是长期行为层，可保留、合并或修正，不要求继续升格；【表达方式】只依据跨阶段重复且可观察的语言习惯。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人物性质、长期场景特征或持续影响；人物长期行为层只使用【行为倾向】与【表达方式】。`], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
-        smallSummaryTurns: normalizedSmallSummaryTurns,
         largeSummaryCount: normalizedLargeSummaryCount,
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
         keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions, candidate.tables),
