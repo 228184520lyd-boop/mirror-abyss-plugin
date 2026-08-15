@@ -7635,7 +7635,7 @@ class MemoryRunner {
         result.currentSceneGroup = explicitGroup || currentSceneSummaryGroupKey(result.entries);
         result.currentSceneTitle = explicitSceneTitle || currentSceneEntries(result.entries)[0]?.title || '';
         result.sceneBoundaryChanged = Boolean(beforeGroup && result.currentSceneGroup && beforeGroup !== result.currentSceneGroup);
-        result.extractionPoints = extractionPointsFromBlocks(blocks, result, result.businessChanges);
+        result.extractionPoints = extractionPointsFromBlocks(blocks, result.entries, result.businessChanges);
         result.criticalChanges = (0, semantic_1.countCriticalChanges)(plan);
         const destination = result.worldbookName || snapshot.worldbookName || '当前绑定世界书';
         const actualCreated = result.warehouse?.created ?? [];
@@ -7998,7 +7998,8 @@ function taskResultEntries(result) {
 
 
 function extractionPointsFromBlocks(blocks, entries, businessChanges = []) {
-    const byTitle = new Map((entries ?? []).map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
+    if (!Array.isArray(entries)) throw new TypeError('extractionPointsFromBlocks: entries 必须是世界书条目数组');
+    const byTitle = new Map(entries.map((entry) => [(0, util_1.normalizeTitle)(entry.title), entry]));
     const byName = new Map();
     for (const entry of entries ?? []) {
         const key = (0, util_1.normalizeFact)(entry.name || '');

@@ -1,3 +1,12 @@
+# Mirror Abyss 3.0.0-lite.ui.1 — realtest candidate（single standard）
+
+## 2026-08-16 实机修复：Extraction Timeline 参数契约
+
+- 修复提取成功提交后 `extractionPointsFromBlocks()` 误接收整个任务结果对象，导致 `(entries ?? []).map is not a function`。
+- 唯一正确契约：该函数只接收 `result.entries` 世界书条目数组。
+- 函数入口现在对非数组直接抛出明确开发错误，不再用对象转数组之类防御性兼容掩盖调用错误。
+- 未改变世界书数据结构、提取协议、SceneGroup 生命周期或召回逻辑。
+
 # Mirror Abyss 3.0.0-lite.ui.1 — 实机候选基准
 
 本包是当前唯一运行基准。本文只描述当前标准，不保留历代实现规则。
