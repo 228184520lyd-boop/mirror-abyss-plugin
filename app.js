@@ -58,6 +58,7 @@ class MirrorAbyssApplication {
             }
             const detail = String(progress?.detail || '').trim();
             if (detail) this.controlPanel?.setStatus?.(detail, progress?.state === 'error');
+            if (progress?.autoRetryStopped === true) this.controlPanel?.refreshSummaryFailures?.();
         });
         this.migrationService = new migration_1.MigrationService(this.host, this.worldbook, () => this.settings(), (progress) => {
             this.controlPanel?.setMigrationProgress?.(progress);
@@ -75,6 +76,8 @@ class MirrorAbyssApplication {
             extract: () => this.extract(),
             smallSummary: () => this.smallSummary(),
             largeSummary: () => this.largeSummary(),
+            retryFailedSmallSummary: (taskId = '') => this.retryFailedSmallSummary(taskId),
+            summaryFailureState: () => this.memoryRunner.summaryFailureState(),
             summarizeEntries: (kind, uids) => this.summarizeEntries(kind, uids),
             mergeEntries: (uids) => this.mergeEntries(uids),
             deleteEntries: (uids) => this.deleteEntries(uids),
@@ -166,6 +169,10 @@ class MirrorAbyssApplication {
     largeSummary() {
         return this.enqueueMaintenance('largeSummary', async (settings, snapshot) => this.memoryRunner.runTask('largeSummary', settings, snapshot, { allowCascade: false }));
     }
+    retryFailedSmallSummary(taskId = '') {
+        const targetId = String(taskId ?? '').trim();
+        return this.enqueueMaintenance('retrySmallSummary', async (settings, snapshot) => this.memoryRunner.retryFailedSmallSummary(settings, snapshot, targetId));
+    }
     summarizeEntries(kind, uids) {
         const summaryKind = kind === 'large' ? 'large' : 'small';
         const selectedUids = [...new Set((uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
@@ -192,7 +199,6 @@ class MirrorAbyssApplication {
                     pendingSmallSummaryMarks: subtractSummaryMarks(cursor.pendingSmallSummaryMarks, deletedUids),
                     failedSmallSummaryMarks: subtractSummaryMarks(cursor.failedSmallSummaryMarks, deletedUids),
                     pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, deletedUids),
-                    failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, deletedUids),
                 };
                 await this.host.saveCursor(nextCursor, snapshot, this.settings());
             }
@@ -1000,6 +1006,7 @@ function maintenanceTaskLabel(taskType) {
         apiProbe: 'API 探针',
         smallSummary: '小总结',
         largeSummary: '大总结',
+        retrySmallSummary: '失败小总结重试',
         sourceRollback: '来源回滚',
         editEntry: '世界书条目编辑',
         setFocus: '焦点更新',
@@ -1231,6 +1238,7 @@ class ControlPanel {
         this.recallReplanButton = null;
         this.recallEditButton = null;
         this.recallEditActionsNode = null;
+        this.recallLockHelpNode = null;
         this.recallEditMode = false;
         this.recallSelectedUids = new Set();
         this.managementNode = null;
@@ -1258,12 +1266,18 @@ class ControlPanel {
         this.recallWorldbookName = '';
         this.recallPage = 1;
         this.recallPageSize = 12;
+        this.recallQuery = '';
+        this.recallFilter = 'all';
         this.pageNodes = {};
         this.pageButtons = {};
         this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
         this.worldbookQuickStatusNode = null;
+        this.summaryFailureNode = null;
+        this.summaryFailureCountNode = null;
+        this.summaryFailureListNode = null;
+        this.summaryFailureSmallButton = null;
         this.globalTaskNode = null;
         this.profileDropdownBound = false;
         this.profileSelectionRevision = 0;
@@ -1374,6 +1388,7 @@ class ControlPanel {
         this.recallReplanButton = null;
         this.recallEditButton = null;
         this.recallEditActionsNode = null;
+        this.recallLockHelpNode = null;
         this.recallEditMode = false;
         this.recallSelectedUids = new Set();
         this.managementNode = null;
@@ -1400,12 +1415,18 @@ class ControlPanel {
         this.recallModel = null;
         this.recallWorldbookName = '';
         this.recallPage = 1;
+        this.recallQuery = '';
+        this.recallFilter = 'all';
         this.pageNodes = {};
         this.pageButtons = {};
         this.activePage = 'run';
         this.apiProfileSelect = null;
         this.apiProfileStatusNode = null;
         this.worldbookQuickStatusNode = null;
+        this.summaryFailureNode = null;
+        this.summaryFailureCountNode = null;
+        this.summaryFailureListNode = null;
+        this.summaryFailureSmallButton = null;
         this.globalTaskNode = null;
         this.profileDropdownBound = false;
         this.profileSelectionRevision = 0;
@@ -1525,7 +1546,7 @@ class ControlPanel {
 .ma-lite-launcher:hover,.ma-lite-launcher:focus-visible{transform:scale(1.06)}
 #${ROOT_ID}.is-dragging .ma-lite-launcher{transform:none!important;cursor:grabbing}
 .ma-lite-launcher span{display:none}
-#${PANEL_ID}{position:fixed;top:max(8px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:10051;box-sizing:border-box;width:min(360px,calc(100vw - 20px));max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#${PANEL_ID}{position:fixed;top:max(8px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:10051;box-sizing:border-box;width:min(396px,calc(100vw - 20px));max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #${PANEL_ID}[hidden]{display:none!important}
 .ma-lite-header{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:10px;padding:12px;border-bottom:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none;box-shadow:0 4px 10px rgba(0,0,0,.22)}
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
@@ -1536,13 +1557,15 @@ class ControlPanel {
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{box-sizing:border-box;display:flex;align-items:center;gap:9px;min-height:44px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
-.ma-lite-thresholds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-text-setting{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-text-setting b{font-size:13px}.ma-lite-text-setting small{font-size:11px;line-height:1.35;opacity:.58}.ma-lite-text-setting input{box-sizing:border-box;width:100%;min-height:40px;padding:7px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
+.ma-lite-thresholds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-text-setting{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-text-setting b{font-size:13px}.ma-lite-text-setting small{font-size:11px;line-height:1.35;opacity:.58}.ma-lite-text-setting input{box-sizing:border-box;width:100%;min-height:40px;padding:7px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
 .ma-lite-status{min-height:38px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:8px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);font-size:12px;font-weight:500;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{box-sizing:border-box;display:flex;align-items:center;min-height:44px;padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{border-color:rgba(255,126,126,.38);border-left:3px solid rgba(255,126,126,.72);background:linear-gradient(90deg,rgba(255,96,96,.10),rgba(0,0,0,.07));color:var(--SmartThemeBodyColor,#fff);font-weight:520;box-shadow:none}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:44px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:44px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
-.ma-lite-worldbook-quick{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-worldbook-quick-head{display:flex;flex-direction:column;gap:2px}.ma-lite-worldbook-quick-head strong{font-size:13px}.ma-lite-worldbook-quick-head small{font-size:10px;line-height:1.4;opacity:.62}.ma-lite-worldbook-advanced{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px}.ma-lite-worldbook-advanced>summary{min-height:44px;box-sizing:border-box;padding:12px;cursor:pointer;font-size:11px}.ma-lite-worldbook-quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 7px 7px}.ma-lite-worldbook-quick button{min-height:44px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-worldbook-quick button[data-kind="organizeWorldbook"]{border-color:rgba(111,214,164,.42);background:rgba(40,130,88,.13);font-weight:700}.ma-lite-worldbook-quick button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-worldbook-quick-status{font-size:10px;line-height:1.45;opacity:.76}.ma-lite-worldbook-quick-status[data-error="true"]{color:#ffb4b4;opacity:1}.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-management-refresh{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}.ma-lite-management .ma-lite-worldbook-quick-actions{padding:0}.ma-lite-management .ma-lite-worldbook-quick-actions button{min-height:40px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-management .ma-lite-worldbook-quick-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management-entry-list{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;padding:4px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.09));border-radius:8px}.ma-lite-management-entry{display:flex;align-items:flex-start;gap:7px;padding:6px;border-radius:6px;font-size:10px;line-height:1.35;cursor:pointer}.ma-lite-management-entry:hover{background:rgba(255,255,255,.05)}.ma-lite-management-entry input{margin-top:1px;flex:0 0 auto}
+.ma-lite-worldbook-quick{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-worldbook-quick-head{display:flex;flex-direction:column;gap:2px}.ma-lite-worldbook-quick-head strong{font-size:13px}.ma-lite-worldbook-quick-head small{font-size:10px;line-height:1.4;opacity:.62}.ma-lite-worldbook-advanced{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px}.ma-lite-worldbook-advanced>summary{min-height:44px;box-sizing:border-box;padding:12px;cursor:pointer;font-size:11px}.ma-lite-worldbook-quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 7px 7px}.ma-lite-worldbook-quick button{min-height:44px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-worldbook-quick button[data-kind="organizeWorldbook"]{border-color:rgba(111,214,164,.42);background:rgba(40,130,88,.13);font-weight:700}.ma-lite-worldbook-quick button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-worldbook-quick-status{font-size:10px;line-height:1.45;opacity:.76}.ma-lite-worldbook-quick-status[data-error="true"]{color:#ffb4b4;opacity:1}.ma-lite-summary-failures{display:flex;flex-direction:column;gap:7px;padding:8px;border:1px solid rgba(255,164,84,.25);border-radius:8px;background:rgba(255,164,84,.055)}.ma-lite-summary-failures[hidden]{display:none!important}.ma-lite-summary-failure-head{display:flex;align-items:center;gap:8px}.ma-lite-summary-failure-head strong{min-width:0;flex:1;font-size:11px}.ma-lite-summary-failure-count{font-size:10px;opacity:.68}.ma-lite-summary-failure-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-summary-failure-actions button{min-height:40px;padding:6px 7px;border:1px solid rgba(255,164,84,.34);border-radius:7px;background:rgba(255,164,84,.09);color:inherit;font-size:10px;cursor:pointer}.ma-lite-summary-failure-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-summary-failure-detail{border-top:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.08));padding-top:6px}.ma-lite-summary-failure-detail>summary{min-height:34px;display:flex;align-items:center;cursor:pointer;font-size:10px;opacity:.8}.ma-lite-summary-failure-list{display:flex;flex-direction:column;gap:5px;padding-top:5px}.ma-lite-summary-failure-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:center;padding:6px 7px;border-radius:7px;background:rgba(0,0,0,.12)}.ma-lite-summary-failure-main{min-width:0}.ma-lite-summary-failure-main strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.ma-lite-summary-failure-main small{display:block;margin-top:2px;font-size:9px;line-height:1.35;opacity:.62;overflow-wrap:anywhere}.ma-lite-summary-failure-row button{min-width:52px;min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:6px;background:rgba(0,0,0,.16);color:inherit;font-size:9px;cursor:pointer}.ma-lite-summary-failure-row button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-section-spacer{min-width:0;flex:1}.ma-lite-management-refresh{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}.ma-lite-management .ma-lite-worldbook-quick-actions{padding:0}.ma-lite-management .ma-lite-worldbook-quick-actions button{min-height:40px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-management .ma-lite-worldbook-quick-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management-entry-list{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;padding:4px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.09));border-radius:8px}.ma-lite-management-entry{display:flex;align-items:flex-start;gap:7px;padding:6px;border-radius:6px;font-size:10px;line-height:1.35;cursor:pointer}.ma-lite-management-entry:hover{background:rgba(255,255,255,.05)}.ma-lite-management-entry input{margin-top:1px;flex:0 0 auto}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:44px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan,.ma-lite-recall-edit{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-lock-help{padding:7px 8px;border:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:7px;font-size:10px;line-height:1.45;opacity:.78}.ma-lite-lock-help strong{opacity:1}.ma-lite-recall-locks{display:flex;flex-wrap:wrap;gap:5px;margin-left:auto}.ma-lite-recall-lock{flex:0 0 auto;min-height:36px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-lock[data-active="true"]{border-color:rgba(255,195,74,.62);background:rgba(255,195,74,.15);font-weight:700}.ma-lite-recall-lock[data-mode="bedrock"][data-active="true"]{border-color:rgba(232,126,126,.62);background:rgba(232,126,126,.14)}.ma-lite-recall-lock:disabled{opacity:.45;cursor:not-allowed}.ma-lite-badge[data-kind="bedrock"]{background:rgba(232,126,126,.16)}.ma-lite-recall-edit[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13);font-weight:700}.ma-lite-recall-edit-actions[hidden]{display:none!important}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{flex:1 1 160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;flex-wrap:wrap;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:44px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
+.ma-lite-recall-toolbar{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:7px}.ma-lite-recall-search,.ma-lite-recall-filter{box-sizing:border-box;width:100%;min-height:40px;padding:6px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:7px;background:rgba(0,0,0,.18);color:inherit;font-size:10px}.ma-lite-recall-summary-chip{cursor:pointer;color:inherit}.ma-lite-recall-summary-chip[data-active="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-recall-main{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:7px}.ma-lite-recall-mode{display:inline-flex;align-items:center;min-height:22px;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.07);font-size:9px;font-weight:700;white-space:nowrap}.ma-lite-recall-mode[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-recall-mode[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-recall-mode[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-recall-mode[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-recall-mode[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-recall-reason{min-width:0;font-size:10px;line-height:1.45;opacity:.76}.ma-lite-recall-relations{padding:5px 7px;border-radius:6px;background:rgba(112,181,255,.07);font-size:9px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ma-lite-recall-details{border-top:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.1));padding-top:3px}.ma-lite-recall-details>summary{min-height:30px;display:flex;align-items:center;cursor:pointer;font-size:9px;opacity:.6}.ma-lite-recall-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:3px 0 2px}.ma-lite-recall-detail-grid>div{min-width:0;padding:5px 6px;border-radius:6px;background:rgba(0,0,0,.12)}.ma-lite-recall-detail-grid span{display:block;font-size:8px;opacity:.5}.ma-lite-recall-detail-grid b{display:block;margin-top:2px;font-size:9px;font-weight:500;line-height:1.35;overflow-wrap:anywhere}
+
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
 .ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
 .${INDICATOR_CLASS}{display:flex!important;visibility:visible!important;align-items:center;gap:8px;width:fit-content;max-width:100%;margin:7px 0 2px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.86!important;position:relative;z-index:1;user-select:none}
@@ -1561,7 +1584,7 @@ class ControlPanel {
         header.className = 'ma-lite-header';
         const title = document.createElement('div');
         title.className = 'ma-lite-title';
-        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>正文处理、世界书与维护</small>';
+        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 世界书 · 设置 · 维护</small>';
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'ma-lite-close';
@@ -1603,15 +1626,15 @@ class ControlPanel {
         status.setAttribute('aria-live', 'polite');
         this.statusNode = status;
         const worldbookQuickActions = this.buildWorldbookQuickActions();
-        runPage.append(pipeline, actions, this.wrapToolSection('总结控制', worldbookQuickActions, false), status);
+        runPage.append(globalTask, pipeline, actions, this.wrapToolSection('总结', worldbookQuickActions, true), status);
 
         const management = this.buildManagementSection();
         const recall = this.buildRecallSection();
         const worldSetting = this.buildWorldSettingSection();
         worldbookPage.append(
-            this.wrapToolSection('世界书状态', management, false),
-            this.wrapToolSection('召回映射', recall, true),
-            this.wrapToolSection('导入世界基础设定', worldSetting, false),
+            this.wrapToolSection('状态概览', management, false),
+            this.wrapToolSection('条目与召回', recall, true),
+            this.wrapToolSection('导入基础设定', worldSetting, false),
         );
 
         const apiSection = this.buildApiSection();
@@ -1620,8 +1643,7 @@ class ControlPanel {
         automationSwitches.append(
             this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核；关闭后仍可手动审核。'),
             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取；关闭后仍可手动提取。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '场景组关闭后按时间顺序后台处理；关闭只暂停总结执行，不停止 SceneGroup UID 归组。'),
-            this.makeSwitch('autoLargeSummary', '自动大总结', '累计若干个成功小总结后的 SceneGroup，再按原时间顺序上卷一次；不会与小总结在同一回合连续请求。'),
+            this.makeSwitch('autoSmallSummary', '自动小总结', '场景组关闭后按时间顺序后台处理；关闭只暂停总结执行，不停止场景组归组与排队。'),
         );
         const featureSwitches = document.createElement('div');
         featureSwitches.className = 'ma-lite-switches';
@@ -1633,20 +1655,19 @@ class ControlPanel {
         const thresholds = document.createElement('div');
         thresholds.className = 'ma-lite-thresholds';
         thresholds.append(
-            this.makeNumberInput('largeSummaryCount', '自动大总结所需小总结数', 2, 30),
             this.makeNumberInput('queueCompactThreshold', '队列积压提示阈值', 2, 50),
         );
         const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；不读取角色卡或世界书；修正失败或疑似截断时保留原正文。');
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
         note.textContent = '四阶段状态固定为：审核 → 修正 → 提取 → 写入。任一阶段失败都会停止后续步骤，不推进处理游标。';
-        settingsPage.append(apiSection, this.wrapToolSection('自动化', automationSwitches, true), this.wrapToolSection('功能开关', featureSwitches, false), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('审核规则', auditPromptEditor, false), this.wrapToolSection('容量与队列', thresholds, false), note);
+        settingsPage.append(this.wrapToolSection('模型连接', apiSection, false), this.wrapToolSection('自动化', automationSwitches, true), this.wrapToolSection('基础开关', featureSwitches, false), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('容量与队列', thresholds, false), this.wrapToolSection('高级审核规则', auditPromptEditor, false), note);
 
         const rebuild = this.buildRebuildSection();
         const diagnostic = this.buildDiagnosticSection();
         const reset = this.buildResetSection();
-        maintenancePage.append(this.wrapToolSection('自动验收与诊断', diagnostic, true), this.wrapToolSection('世界书重建', rebuild, false), this.wrapToolSection('重置与故障恢复', reset, false));
-        body.append(pageNav, globalTask, runPage, worldbookPage, settingsPage, maintenancePage);
+        maintenancePage.append(this.wrapToolSection('诊断与验收', diagnostic, false), this.wrapToolSection('世界书重建', rebuild, false), this.wrapToolSection('重置与故障恢复', reset, false));
+        body.append(pageNav, runPage, worldbookPage, settingsPage, maintenancePage);
         panel.append(header, body);
         this.showPage('run', false);
         return panel;
@@ -2293,11 +2314,11 @@ class ControlPanel {
         section.className = 'ma-lite-worldbook-quick';
         const head = document.createElement('div');
         head.className = 'ma-lite-worldbook-quick-head';
-        head.innerHTML = '<strong>总结控制</strong><small>自动链只执行小总结；大总结仅由玩家手动触发。选定部分条目总结、人工合并与删除位于“召回映射”。</small>';
+        head.innerHTML = '<small>小总结可按场景组自动运行；大总结仅由玩家手动触发。选定条目的总结、合并与删除在“世界书 → 条目与召回”。</small>';
         const actions = document.createElement('div');
         actions.className = 'ma-lite-worldbook-quick-actions';
         for (const [kind, label, title] of [
-            ['smallSummary', '立即小总结', '优先处理最早一个已关闭 SceneGroup；只拉取该主 UID 包含的世界书条目进行局部粗化'],
+            ['smallSummary', '立即小总结', '优先处理最早一个已关闭场景组；只读取该场景组关联的世界书条目进行局部粗化'],
             ['largeSummary', '立即大总结', '把多个局部规律整理为更高层、长期成立的整体规律，并保留可召回的历史锚点'],
         ]) {
             const button = document.createElement('button');
@@ -2312,10 +2333,124 @@ class ControlPanel {
         const status = document.createElement('div');
         status.className = 'ma-lite-worldbook-quick-status';
         status.setAttribute('aria-live', 'polite');
-        status.textContent = '自动小总结按 SceneGroup 关闭顺序运行；UID 归组始终持续。自动大总结按“已成功小总结的 SceneGroup”计数，达到阈值后在没有小总结运行的下一回合触发一次。';
-        section.append(head, actions, status);
+        status.textContent = '自动小总结按场景组关闭顺序运行；大总结不会自动触发，点击“立即大总结”时按尚未上卷的已结算场景组时间顺序处理。';
+        const failures = this.buildSummaryFailureSection();
+        section.append(head, actions, status, failures);
         this.worldbookQuickStatusNode = status;
         return section;
+    }
+
+    buildSummaryFailureSection() {
+        const section = document.createElement('section');
+        section.className = 'ma-lite-summary-failures';
+        section.hidden = true;
+        const head = document.createElement('div');
+        head.className = 'ma-lite-summary-failure-head';
+        const title = document.createElement('strong');
+        title.textContent = '自动小总结失败';
+        const count = document.createElement('span');
+        count.className = 'ma-lite-summary-failure-count';
+        head.append(title, count);
+        const actions = document.createElement('div');
+        actions.className = 'ma-lite-summary-failure-actions';
+        const small = document.createElement('button');
+        small.type = 'button';
+        small.textContent = '重试失败小总结';
+        small.addEventListener('click', () => void this.runSummaryRetryAction('small'));
+        actions.append(small);
+        const details = document.createElement('details');
+        details.className = 'ma-lite-summary-failure-detail';
+        const summary = document.createElement('summary');
+        summary.textContent = '查看失败明细';
+        const list = document.createElement('div');
+        list.className = 'ma-lite-summary-failure-list';
+        details.append(summary, list);
+        section.append(head, actions, details);
+        this.summaryFailureNode = section;
+        this.summaryFailureCountNode = count;
+        this.summaryFailureListNode = list;
+        this.summaryFailureSmallButton = small;
+        return section;
+    }
+
+    refreshSummaryFailures() {
+        if (!this.summaryFailureNode || typeof this.actions.summaryFailureState !== 'function') return;
+        let state = null;
+        try { state = this.actions.summaryFailureState(); }
+        catch { state = null; }
+        const smallTasks = Array.isArray(state?.small) ? state.small : [];
+        this.summaryFailureNode.hidden = smallTasks.length === 0;
+        if (this.summaryFailureCountNode) this.summaryFailureCountNode.textContent = `${smallTasks.length}项`;
+        if (this.summaryFailureSmallButton) {
+            this.summaryFailureSmallButton.hidden = smallTasks.length === 0;
+            this.summaryFailureSmallButton.textContent = `重试失败小总结（${smallTasks.length}）`;
+        }
+        if (!this.summaryFailureListNode) return;
+        this.summaryFailureListNode.replaceChildren();
+        const formatTime = (value) => {
+            const time = Number(value || 0);
+            if (!time) return '失败时间未记录';
+            try { return new Date(time).toLocaleString(); } catch { return '失败时间未记录'; }
+        };
+        const appendTask = (kind, task, index) => {
+            const row = document.createElement('div');
+            row.className = 'ma-lite-summary-failure-row';
+            const main = document.createElement('div');
+            main.className = 'ma-lite-summary-failure-main';
+            const strong = document.createElement('strong');
+            const label = String(task?.label || task?.sceneTitle || task?.sceneGroup || '').trim() || `失败场景 ${index + 1}`;
+            strong.textContent = `小总结｜${label}`;
+            const small = document.createElement('small');
+            const count = Math.max(0, Number(task?.entryCount || 0));
+            const reason = String(task?.error || '').trim();
+            small.textContent = `${count}个条目 · ${formatTime(task?.failedAt)}${reason ? ` · ${reason}` : ''}`;
+            main.append(strong, small);
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.textContent = '重试';
+            retry.addEventListener('click', () => void this.runSummaryRetryAction(kind, String(task?.id || '')));
+            row.append(main, retry);
+            this.summaryFailureListNode.append(row);
+        };
+        smallTasks.forEach((task, index) => appendTask('small', task, index));
+        this.syncDisabledState();
+    }
+
+    async runSummaryRetryAction(kind, taskId = '') {
+        const actionKey = 'retryFailedSmallSummary';
+        if (kind !== 'small') return;
+        if (this.pendingActions.has(actionKey)) return;
+        const action = this.actions[actionKey];
+        if (typeof action !== 'function') { this.setStatus('失败小总结重试功能未连接', true); return; }
+        if (this.getSettings().enabled === false) { this.setStatus('总开关已关闭', true); return; }
+        const label = '失败小总结';
+        this.pendingActions.add(actionKey);
+        this.syncDisabledState();
+        if (this.worldbookQuickStatusNode) {
+            this.worldbookQuickStatusNode.dataset.error = 'false';
+            this.worldbookQuickStatusNode.textContent = `${label}正在重试…`;
+        }
+        try {
+            await action(taskId);
+            const detail = `${label}重试完成；失败状态已更新`;
+            if (this.worldbookQuickStatusNode) this.worldbookQuickStatusNode.textContent = detail;
+            this.setStatus(detail);
+            await this.refreshWorldbookPage(true);
+        }
+        catch (error) {
+            const cancelled = error?.code === 'MA_TASK_CANCELLED';
+            const text = cancelled ? `${label}重试已取消` : `${label}重试失败：${(0, util_1.errorText)(error)}`;
+            if (this.worldbookQuickStatusNode) {
+                this.worldbookQuickStatusNode.dataset.error = cancelled ? 'false' : 'true';
+                this.worldbookQuickStatusNode.textContent = text;
+            }
+            this.setStatus(text, !cancelled);
+        }
+        finally {
+            this.pendingActions.delete(actionKey);
+            this.refreshSummaryFailures();
+            this.syncDisabledState();
+        }
     }
 
     async runWorldbookQuickAction(kind) {
@@ -2367,6 +2502,7 @@ class ControlPanel {
         }
         finally {
             this.pendingActions.delete(kind);
+            this.refreshSummaryFailures();
             this.syncDisabledState();
         }
     }
@@ -2375,8 +2511,8 @@ class ControlPanel {
         section.className = 'ma-lite-management';
         const head = document.createElement('div');
         head.className = 'ma-lite-management-head';
-        const title = document.createElement('strong');
-        title.textContent = '三维世界书状态';
+        const title = document.createElement('span');
+        title.className = 'ma-lite-section-spacer';
         const refresh = document.createElement('button');
         refresh.type = 'button';
         refresh.className = 'ma-lite-management-refresh';
@@ -2387,7 +2523,7 @@ class ControlPanel {
         head.append(title, refresh);
         const status = document.createElement('div');
         status.className = 'ma-lite-management-status';
-        status.textContent = '这里仅显示世界书结构状态；人工合并与删除已移到“召回映射”。';
+        status.textContent = '当前绑定世界书的结构健康度与关键计数。';
         const content = document.createElement('div');
         content.className = 'ma-lite-management-empty';
         content.textContent = '尚未读取';
@@ -2571,8 +2707,8 @@ class ControlPanel {
         section.className = 'ma-lite-recall';
         const head = document.createElement('div');
         head.className = 'ma-lite-recall-head';
-        const title = document.createElement('strong');
-        title.textContent = '世界书语义与召回状态';
+        const title = document.createElement('span');
+        title.className = 'ma-lite-section-spacer';
         const edit = document.createElement('button');
         edit.type = 'button';
         edit.className = 'ma-lite-recall-edit';
@@ -2597,10 +2733,12 @@ class ControlPanel {
         head.append(title, edit, replan, refresh);
         const status = document.createElement('div');
         status.className = 'ma-lite-recall-status';
-        status.textContent = '读取场景阶段与原生召回字段；需要维护条目时点击“修改”。';
+        status.textContent = '查看镜渊管理条目；需要人工维护时进入“修改”模式。';
         const lockHelp = document.createElement('div');
         lockHelp.className = 'ma-lite-lock-help';
-        lockHelp.innerHTML = '<strong>基石锁：</strong>开启后系统不会自动追加、修改、删减、重写、压缩或沉降该条目；玩家可随时解除。玩家主动执行合并或删除时，视为对本次操作的明确授权。通过“世界设定”入口建立的初始【基础设定】默认开启基石锁。';
+        lockHelp.innerHTML = '<strong>基石锁：</strong>开启后该条目对自动流程完全只读；玩家可手动解除。人工合并或删除视为本次明确授权。';
+        lockHelp.hidden = true;
+        this.recallLockHelpNode = lockHelp;
         const manageActions = document.createElement('div');
         manageActions.className = 'ma-lite-worldbook-quick-actions ma-lite-recall-edit-actions';
         manageActions.hidden = true;
@@ -2608,7 +2746,7 @@ class ControlPanel {
         selectedSmall.type = 'button'; selectedSmall.textContent = '选中小总结'; selectedSmall.title = '只读取玩家当前选中的世界书条目，以小总结协议进行局部抽象；成功后只结算与本次选择重叠的待处理标记';
         selectedSmall.addEventListener('click', () => void this.summarizeSelectedEntries('small'));
         const selectedLarge = document.createElement('button');
-        selectedLarge.type = 'button'; selectedLarge.textContent = '选中大总结'; selectedLarge.title = '只读取玩家当前选中的世界书条目，以大总结协议进行长期整体抽象；大总结不会自动触发';
+        selectedLarge.type = 'button'; selectedLarge.textContent = '选中大总结'; selectedLarge.title = '只读取玩家当前选中的世界书条目，以大总结协议进行长期整体抽象；这是显式人工治理，不进入自动调度';
         selectedLarge.addEventListener('click', () => void this.summarizeSelectedEntries('large'));
         const merge = document.createElement('button');
         merge.type = 'button'; merge.textContent = '合并'; merge.title = '整理玩家选中的条目结构，理解真实归属、承接与演化关系并消除冗余；不按小总结/大总结颗粒度判断';
@@ -2641,6 +2779,7 @@ class ControlPanel {
             this.recallEditButton.setAttribute('aria-pressed', this.recallEditMode ? 'true' : 'false');
         }
         if (this.recallEditActionsNode) this.recallEditActionsNode.hidden = !this.recallEditMode;
+        if (this.recallLockHelpNode) this.recallLockHelpNode.hidden = !this.recallEditMode;
         if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode
             ? '修改模式：可选择条目执行小总结/大总结、合并或删除，也可逐条设置基石锁。'
             : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}仅显示镜渊管理条目，共 ${Number(this.recallModel?.total || 0)} 条。`;
@@ -2710,30 +2849,83 @@ class ControlPanel {
         const model = this.recallModel;
         this.recallNode.className = '';
         this.recallNode.replaceChildren();
-        if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode ? '修改模式：可选择条目执行小总结/大总结、合并或删除，也可逐条设置基石锁。' : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}仅显示镜渊管理条目，共 ${model.total} 条。`;
+        const normalizedQuery = (0, util_1.normalizeFact)(String(this.recallQuery || ''));
+        const filteredEntries = model.entries.filter((item) => recallFilterMatches(item, this.recallFilter) && (!normalizedQuery || String(item.searchText || '').includes(normalizedQuery)));
+        if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode
+            ? '修改模式：选择条目后可执行小总结/大总结、合并或删除，也可逐条设置基石锁。'
+            : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}显示 ${filteredEntries.length} / ${model.total} 条。主界面只展示“如何召回、为什么、关联谁”。`;
         if (!model.total) {
             this.recallNode.className = 'ma-lite-recall-empty';
             this.recallNode.textContent = '当前世界书没有镜渊管理条目';
             return;
         }
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'ma-lite-recall-toolbar';
+        const search = document.createElement('input');
+        search.type = 'search';
+        search.className = 'ma-lite-recall-search';
+        search.placeholder = '搜索条目、关键词或关联对象';
+        search.value = this.recallQuery;
+        search.setAttribute('aria-label', '搜索召回映射条目');
+        search.addEventListener('input', () => {
+            this.recallQuery = search.value;
+            this.recallPage = 1;
+            this.renderRecallPage();
+            const next = this.recallNode?.querySelector?.('.ma-lite-recall-search');
+            next?.focus?.();
+            try { next?.setSelectionRange?.(this.recallQuery.length, this.recallQuery.length); } catch { }
+        });
+        const filter = document.createElement('select');
+        filter.className = 'ma-lite-recall-filter';
+        filter.setAttribute('aria-label', '筛选召回映射');
+        for (const [value, label] of [
+            ['all', '全部映射'], ['current', '当前'], ['recent', '近期'], ['history', '历史'],
+            ['constant', '常驻'], ['keyword', '关键词'], ['vector', '含向量'], ['related', '有关联'], ['disabled', '停用'],
+        ]) {
+            const option = document.createElement('option');
+            option.value = value; option.textContent = label; option.selected = this.recallFilter === value;
+            filter.append(option);
+        }
+        filter.addEventListener('change', () => { this.recallFilter = filter.value; this.recallPage = 1; this.renderRecallPage(); });
+        toolbar.append(search, filter);
+
         const summary = document.createElement('div');
         summary.className = 'ma-lite-recall-summary';
         for (const item of model.summary) {
-            const chip = document.createElement('span');
-            chip.className = 'ma-lite-chip';
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'ma-lite-chip ma-lite-recall-summary-chip';
+            chip.dataset.active = this.recallFilter === item.key ? 'true' : 'false';
             chip.textContent = `${item.label} ${item.count}`;
-            chip.title = item.description;
+            chip.title = `${item.description}；点击筛选`;
+            chip.addEventListener('click', () => {
+                this.recallFilter = this.recallFilter === item.key ? 'all' : item.key;
+                this.recallPage = 1;
+                this.renderRecallPage();
+            });
             summary.append(chip);
         }
-        const pageCount = Math.max(1, Math.ceil(model.entries.length / this.recallPageSize));
+
+        this.recallNode.append(toolbar, summary);
+        if (!filteredEntries.length) {
+            const empty = document.createElement('div');
+            empty.className = 'ma-lite-recall-empty';
+            empty.textContent = '当前搜索或筛选条件下没有条目';
+            this.recallNode.append(empty);
+            return;
+        }
+
+        const pageCount = Math.max(1, Math.ceil(filteredEntries.length / this.recallPageSize));
         this.recallPage = Math.min(Math.max(1, this.recallPage), pageCount);
         const start = (this.recallPage - 1) * this.recallPageSize;
-        const visibleEntries = model.entries.slice(start, start + this.recallPageSize);
+        const visibleEntries = filteredEntries.slice(start, start + this.recallPageSize);
         const list = document.createElement('div');
         list.className = 'ma-lite-recall-list';
         for (const item of visibleEntries) {
             const row = document.createElement('div');
             row.className = 'ma-lite-recall-row';
+            row.dataset.mode = item.mappingKind;
             const head = document.createElement('div');
             head.className = 'ma-lite-recall-row-head';
             const title = document.createElement('div');
@@ -2758,25 +2950,23 @@ class ControlPanel {
             if (this.recallEditMode && typeof this.actions.setBedrockLocked === 'function') {
                 const locks = document.createElement('div');
                 locks.className = 'ma-lite-recall-locks';
-                if (typeof this.actions.setBedrockLocked === 'function') {
-                    const bedrock = document.createElement('button');
-                    bedrock.type = 'button';
-                    bedrock.className = 'ma-lite-recall-lock';
-                    bedrock.dataset.mode = 'bedrock';
-                    bedrock.dataset.active = item.bedrockLocked ? 'true' : 'false';
-                    bedrock.textContent = item.bedrockLocked ? '基石锁✓' : '基石锁';
-                    bedrock.title = item.bedrockLocked ? '已开启基石锁：系统完全只读，连追加也不允许；点击解除' : '开启基石锁：系统对该条目完全只读，只有玩家手动编辑或解锁后才能改变';
-                    bedrock.addEventListener('click', async () => {
-                        bedrock.disabled = true;
-                        try {
-                            await this.actions.setBedrockLocked(item.uid, !item.bedrockLocked);
-                            this.setStatus(item.bedrockLocked ? `已解除基石锁：${item.title}` : `已开启基石锁：${item.title}`);
-                            await this.refreshRecallMap(true);
-                        } catch (error) { this.setStatus(`基石锁设置失败：${(0, util_1.errorText)(error)}`, true); }
-                        finally { bedrock.disabled = false; }
-                    });
-                    locks.append(bedrock);
-                }
+                const bedrock = document.createElement('button');
+                bedrock.type = 'button';
+                bedrock.className = 'ma-lite-recall-lock';
+                bedrock.dataset.mode = 'bedrock';
+                bedrock.dataset.active = item.bedrockLocked ? 'true' : 'false';
+                bedrock.textContent = item.bedrockLocked ? '基石锁✓' : '基石锁';
+                bedrock.title = item.bedrockLocked ? '已开启基石锁：系统完全只读；点击解除' : '开启基石锁：系统对该条目完全只读';
+                bedrock.addEventListener('click', async () => {
+                    bedrock.disabled = true;
+                    try {
+                        await this.actions.setBedrockLocked(item.uid, !item.bedrockLocked);
+                        this.setStatus(item.bedrockLocked ? `已解除基石锁：${item.title}` : `已开启基石锁：${item.title}`);
+                        await this.refreshRecallMap(true);
+                    } catch (error) { this.setStatus(`基石锁设置失败：${(0, util_1.errorText)(error)}`, true); }
+                    finally { bedrock.disabled = false; }
+                });
+                locks.append(bedrock);
                 head.append(locks);
             }
             if (item.type === '人物' && typeof this.actions.setFocus === 'function') {
@@ -2798,9 +2988,21 @@ class ControlPanel {
                 });
                 head.append(focus);
             }
+
+            const main = document.createElement('div');
+            main.className = 'ma-lite-recall-main';
+            const mapping = document.createElement('span');
+            mapping.className = 'ma-lite-recall-mode';
+            mapping.dataset.kind = item.mappingKind;
+            mapping.textContent = item.mappingMode;
+            const reason = document.createElement('span');
+            reason.className = 'ma-lite-recall-reason';
+            reason.textContent = item.reason;
+            main.append(mapping, reason);
+
             const meta = document.createElement('div');
             meta.className = 'ma-lite-recall-meta';
-            for (const badge of item.badges) {
+            for (const badge of item.badges.slice(1)) {
                 const node = document.createElement('span');
                 node.className = 'ma-lite-badge';
                 node.dataset.kind = badge.kind;
@@ -2814,16 +3016,44 @@ class ControlPanel {
                 node.textContent = item.lifecycleLabel;
                 meta.append(node);
             }
-            for (const text of [item.position, `顺序 ${item.order}`, item.scanDepth == null ? '扫描 继承' : `扫描 ${item.scanDepth}`]) {
-                const node = document.createElement('span');
-                node.className = 'ma-lite-badge';
-                node.textContent = text;
-                meta.append(node);
+
+            let relations = null;
+            if (item.relationCount > 0) {
+                relations = document.createElement('div');
+                relations.className = 'ma-lite-recall-relations';
+                const shown = item.relationTitles.slice(0, 3);
+                relations.textContent = `直接关联：${shown.join(' · ')}${item.relationCount > shown.length ? ` ＋${item.relationCount - shown.length}` : ''}`;
+                relations.title = item.relationTitles.join('\n');
             }
-            row.append(head, meta);
+
+            const details = document.createElement('details');
+            details.className = 'ma-lite-recall-details';
+            const detailsSummary = document.createElement('summary');
+            detailsSummary.textContent = '映射参数';
+            const detailBody = document.createElement('div');
+            detailBody.className = 'ma-lite-recall-detail-grid';
+            const technical = [
+                ['规则', item.profileName || '未记录'],
+                ['触发词', item.triggerKeywords.length ? item.triggerKeywords.join('、') : '无'],
+                ['递归', item.recursionLabel],
+                ['位置', item.position],
+                ['顺序', String(item.order)],
+                ['深度', String(item.depth)],
+                ['扫描', item.scanDepth == null ? '继承' : String(item.scanDepth)],
+            ];
+            for (const [label, value] of technical) {
+                const cell = document.createElement('div');
+                const key = document.createElement('span'); key.textContent = label;
+                const val = document.createElement('b'); val.textContent = value;
+                cell.append(key, val); detailBody.append(cell);
+            }
+            details.append(detailsSummary, detailBody);
+            row.append(head, main, meta);
+            if (relations) row.append(relations);
+            row.append(details);
             list.append(row);
         }
-        this.recallNode.append(summary, list);
+        this.recallNode.append(list);
         if (pageCount > 1) {
             const pager = document.createElement('div');
             pager.className = 'ma-lite-recall-pager';
@@ -3052,8 +3282,6 @@ class ControlPanel {
         if (this.inputs.autoAudit) this.inputs.autoAudit.checked = settings.autoAudit === true;
         if (this.inputs.autoExtraction) this.inputs.autoExtraction.checked = settings.autoExtraction === true;
         if (this.inputs.autoSmallSummary) this.inputs.autoSmallSummary.checked = settings.autoSmallSummary !== false;
-        if (this.inputs.autoLargeSummary) this.inputs.autoLargeSummary.checked = settings.autoLargeSummary !== false;
-        if (this.inputs.largeSummaryCount) this.inputs.largeSummaryCount.value = String(settings.largeSummaryCount ?? 4);
         if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
         if (this.inputs.auditEnabled) this.inputs.auditEnabled.checked = settings.auditEnabled !== false;
         if (this.inputs.extractionEnabled) this.inputs.extractionEnabled.checked = settings.extractionEnabled !== false;
@@ -3073,6 +3301,7 @@ class ControlPanel {
         }
         this.renderPipeline();
         this.renderDiagnosticReport(this.actions.getDiagnostics?.());
+        this.refreshSummaryFailures();
         this.scheduleIndicatorRefresh();
     }
     setGlobalTaskState(state = {}) {
@@ -3096,6 +3325,8 @@ class ControlPanel {
         if (this.buttons.extract) this.buttons.extract.disabled = busy || !master || settings.extractionEnabled === false;
         if (this.buttons.smallSummary) this.buttons.smallSummary.disabled = busy || !master;
         if (this.buttons.largeSummary) this.buttons.largeSummary.disabled = busy || !master;
+        if (this.summaryFailureSmallButton) this.summaryFailureSmallButton.disabled = busy || !master;
+        if (this.summaryFailureListNode) this.summaryFailureListNode.querySelectorAll('button').forEach((button) => { button.disabled = busy || !master; });
         if (this.buttons.selectedSmallSummary) this.buttons.selectedSmallSummary.disabled = busy || !master;
         if (this.buttons.selectedLargeSummary) this.buttons.selectedLargeSummary.disabled = busy || !master;
         if (this.buttons.mergeEntries) this.buttons.mergeEntries.disabled = busy || !master;
@@ -3360,11 +3591,30 @@ function buildUnifiedProfilePatch(profileId) {
 }
 function buildRecallViewModel(entries) {
     const managed = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.managed === true);
+    const byUid = new Map(managed.map((entry) => [String(entry.uid ?? ''), entry]));
+    const byTitle = new Map(managed.map((entry) => [(0, util_1.normalizeTitle)(String(entry.title ?? '')).toLocaleLowerCase(), entry]));
+    const directRelations = new Map(managed.map((entry) => [String(entry.uid ?? ''), new Set()]));
+    const addRelation = (sourceUid, targetUid) => {
+        const source = String(sourceUid ?? '').trim();
+        const target = String(targetUid ?? '').trim();
+        if (!source || !target || source === target || !byUid.has(source) || !byUid.has(target)) return;
+        directRelations.get(source)?.add(target);
+        directRelations.get(target)?.add(source);
+    };
+    for (const entry of managed) {
+        const sourceUid = String(entry.uid ?? '');
+        for (const targetUid of [entry.parentUid, ...(entry.childUids ?? []), ...(entry.relatedIds ?? [])]) addRelation(sourceUid, targetUid);
+        for (const reference of entry.references ?? []) {
+            const target = byTitle.get((0, util_1.normalizeTitle)(String(reference ?? '')).toLocaleLowerCase());
+            if (target) addRelation(sourceUid, target.uid);
+        }
+    }
     const mapped = managed.map((entry) => {
         const activation = entry.activation ?? {};
         const constant = activation.constant === true;
         // [MA-UI-RECALL-01] 关键词统计只读取 raw.key 的真实非 UID 触发词，不能用用于匹配的逻辑关键词冒充触发。
-        const trigger = !constant && (entry.triggerKeywords ?? []).some((keyword) => !(0, util_1.isUidKeyword)(keyword));
+        const triggerKeywords = (entry.triggerKeywords ?? []).filter((keyword) => !(0, util_1.isUidKeyword)(keyword));
+        const trigger = !constant && triggerKeywords.length > 0;
         const vector = activation.vectorized === true;
         const prevent = activation.preventRecursion === true;
         const exclude = activation.excludeRecursion === true;
@@ -3379,16 +3629,24 @@ function buildRecallViewModel(entries) {
         const position = Number(activation.position ?? 0);
         const depth = Math.max(0, Number(activation.depth ?? 0));
         const positionLabel = position === 0 ? '角色定义前' : position === 1 ? '角色定义后' : position === 4 ? `对话深度 ${depth}` : `位置 ${position}${depth ? ` / 深度 ${depth}` : ''}`;
-        const badges = [];
-        if (activation.disabled === true || activation.enabled === false) badges.push({ label: '停用', kind: 'isolated' });
-        if (constant) badges.push({ label: '常驻', kind: 'constant' });
-        else if (trigger) badges.push({ label: '关键词触发', kind: 'trigger' });
-        if (vector) badges.push({ label: '纯向量', kind: 'vector' });
+        const disabled = activation.disabled === true || activation.enabled === false;
+        const mappingMode = disabled ? '停用' : constant ? '常驻' : trigger && vector ? '关键词 + 向量' : trigger ? '关键词召回' : vector ? '向量召回' : '被关联召回';
+        const mappingKind = disabled ? 'isolated' : constant ? 'constant' : trigger ? 'active' : vector ? 'vector' : 'bridge';
+        const profileName = String(entry.recallProfile || '');
+        const reason = recallReason({ disabled, constant, trigger, vector, semanticRole, sceneStage, recursion: recursion.key, profileName, lifecycle });
+        const relationTitles = [...(directRelations.get(String(entry.uid ?? '')) ?? [])]
+            .map((uid) => byUid.get(uid)?.title)
+            .filter(Boolean)
+            .sort((left, right) => String(left).localeCompare(String(right), 'zh-CN'));
+        const badges = [{ label: mappingMode, kind: mappingKind }];
         if (sceneStage) badges.push({ label: sceneStage === 'current' ? '当前场景' : sceneStage === 'previous' ? '上一场景' : '远期场景', kind: 'scene' });
         if (semanticRole === 'world-state') badges.push({ label: '世界变化', kind: 'scene' });
         if (entry.bedrockLocked === true) badges.push({ label: '基石锁', kind: 'bedrock' });
-        if (Number(activation.delayUntilRecursion || 0) > 0) badges.push({ label: `仅递归 ${activation.delayUntilRecursion}`, kind: 'bridge' });
         badges.push({ label: recursion.label, kind: recursion.kind });
+        const searchText = (0, util_1.normalizeFact)([
+            entry.title, entry.type, mappingMode, lifecycleInfo.label, profileName, reason,
+            ...triggerKeywords, ...relationTitles,
+        ].filter(Boolean).join(' '));
         return {
             uid: String(entry.uid ?? ''),
             type: String(entry.type ?? ''),
@@ -3404,8 +3662,17 @@ function buildRecallViewModel(entries) {
             trigger,
             vector,
             recursion: recursion.key,
-            disabled: activation.disabled === true || activation.enabled === false,
+            recursionLabel: recursion.label,
+            disabled,
+            mappingMode,
+            mappingKind,
+            profileName,
+            reason,
             badges,
+            relationTitles,
+            relationCount: relationTitles.length,
+            triggerKeywords,
+            searchText,
             position: positionLabel,
             depth,
             order: Number(activation.order ?? 400),
@@ -3413,20 +3680,54 @@ function buildRecallViewModel(entries) {
             updatedAt: Number(entry.updatedAt || 0),
         };
     });
-    mapped.sort((left, right) => Number(left.disabled) - Number(right.disabled) || Number(right.constant) - Number(left.constant) || Number(right.sceneStage === 'current') - Number(left.sceneStage === 'current') || Number(right.recursion === 'bridge') - Number(left.recursion === 'bridge') || right.order - left.order || right.updatedAt - left.updatedAt || left.title.localeCompare(right.title, 'zh-CN'));
+    mapped.sort((left, right) => Number(left.disabled) - Number(right.disabled) || Number(right.constant) - Number(left.constant) || Number(right.sceneStage === 'current') - Number(left.sceneStage === 'current') || Number(right.sceneStage === 'previous') - Number(left.sceneStage === 'previous') || right.order - left.order || right.updatedAt - left.updatedAt || left.title.localeCompare(right.title, 'zh-CN'));
     const summary = [
-        { label: '当前场景', count: mapped.filter((item) => item.sceneStage === 'current').length, description: '常驻并负责关联当前局部世界' },
-        { label: '上一场景', count: mapped.filter((item) => item.sceneStage === 'previous').length, description: '通过稳定场景名触发并恢复关联' },
-        { label: '远期场景', count: mapped.filter((item) => item.sceneStage === 'remote').length, description: '通过纯向量召回并恢复场景关联' },
-        { label: '焦点/基础', count: mapped.filter((item) => ['focus', 'foundation'].includes(item.semanticRole)).length, description: '长期常驻且完全递归隔离' },
-        { label: '世界变化', count: mapped.filter((item) => item.semanticRole === 'world-state').length, description: '跨场景整体变化，可被场景关联并继续关联' },
-        { label: '关键词', count: mapped.filter((item) => item.trigger).length, description: '真实存在非 UID 关键词的触发条目' },
-        { label: '纯向量', count: mapped.filter((item) => item.vector && !item.trigger).length, description: '只通过 Vector Storage 语义召回' },
-        { label: '关联入口', count: mapped.filter((item) => ['source', 'bridge'].includes(item.recursion)).length, description: '场景与世界变化可以继续带出关联条目' },
-        { label: '关联终点', count: mapped.filter((item) => item.recursion === 'terminal').length, description: '人物、物品和活动事件被带出后停止' },
-        { label: '隔离', count: mapped.filter((item) => item.recursion === 'isolated').length, description: '基础设定、焦点与历史容器不参与递归' },
+        { key: 'current', label: '当前', count: mapped.filter((item) => item.sceneStage === 'current' || item.lifecycle === 'active').length, description: '当前场景或当前活动条目' },
+        { key: 'recent', label: '近期', count: mapped.filter((item) => item.sceneStage === 'previous' || ['recent', 'recent-summary'].includes(item.lifecycle)).length, description: '上一场景或近期记忆' },
+        { key: 'history', label: '历史', count: mapped.filter((item) => item.sceneStage === 'remote' || ['long-term', 'historical', 'historical-summary', 'closed'].includes(item.lifecycle)).length, description: '远期、长期或已经关闭的记忆' },
+        { key: 'constant', label: '常驻', count: mapped.filter((item) => item.constant && !item.disabled).length, description: '直接进入上下文的条目' },
+        { key: 'keyword', label: '关键词', count: mapped.filter((item) => item.trigger && !item.disabled).length, description: '依靠稳定关键词触发的条目' },
+        { key: 'vector', label: '纯向量', count: mapped.filter((item) => item.vector && !item.trigger && !item.constant && !item.disabled).length, description: '主要依靠 Vector Storage 语义召回的条目' },
+        { key: 'related', label: '有关联', count: mapped.filter((item) => item.relationCount > 0).length, description: '存在确定性直接关联的条目' },
+        { key: 'disabled', label: '停用', count: mapped.filter((item) => item.disabled).length, description: '当前不参与召回的条目' },
     ];
     return { total: mapped.length, summary, entries: mapped, omitted: 0 };
+}
+
+function recallReason(item) {
+    if (item.disabled) return '条目已停用，不参与当前召回。';
+    if (item.semanticRole === 'foundation') return '基础设定长期常驻，并与递归链隔离。';
+    if (item.semanticRole === 'focus') return '玩家焦点长期常驻，只改变可见性，不改变事实内容。';
+    if (item.semanticRole === 'scene-current' || item.sceneStage === 'current') return '当前场景直接常驻，作为当前局部世界的召回入口。';
+    if (item.semanticRole === 'scene-previous' || item.sceneStage === 'previous') return '上一场景由稳定场景关键词触发，用于恢复最近的局部关联。';
+    if (item.semanticRole === 'scene-remote' || item.sceneStage === 'remote') return '远期场景主要通过向量语义回忆，需要时再恢复场景关联。';
+    if (item.semanticRole === 'event-active') return '活动事件由稳定关键词触发，被召回后停止继续扩散。';
+    if (item.semanticRole === 'event-history') return '已结束事件降为历史向量记忆，不占用当前关键词入口。';
+    if (item.semanticRole === 'world-state') return '世界变化通过稳定关键词进入，并作为关联终点避免世界条目互相递归扩散。';
+    if (item.semanticRole === 'role-object') return '人物由稳定名称或关键词召回；被场景带出后不继续扩散。';
+    if (item.semanticRole === 'item-object') return '物品由稳定名称或关键词召回；被场景带出后不继续扩散。';
+    if (item.semanticRole === 'summary-container') return '总结容器只通过向量语义回忆，不作为关键词或递归入口。';
+    if (item.semanticRole === 'legacy-object') return '旧类型仅保留稳定关键词入口，不参与自动扩散。';
+    if (item.profileName) return `当前采用“${item.profileName}”映射规则。`;
+    if (item.constant) return '该条目当前直接常驻。';
+    if (item.trigger && item.vector) return '该条目可由稳定关键词或向量语义召回。';
+    if (item.trigger) return '该条目由稳定关键词触发。';
+    if (item.vector) return '该条目主要通过向量语义召回。';
+    return '该条目只能通过已有确定性关联进入上下文。';
+}
+
+function recallFilterMatches(item, filter) {
+    switch (String(filter || 'all')) {
+        case 'current': return item.sceneStage === 'current' || item.lifecycle === 'active';
+        case 'recent': return item.sceneStage === 'previous' || ['recent', 'recent-summary'].includes(item.lifecycle);
+        case 'history': return item.sceneStage === 'remote' || ['long-term', 'historical', 'historical-summary', 'closed'].includes(item.lifecycle);
+        case 'constant': return item.constant && !item.disabled;
+        case 'keyword': return item.trigger && !item.disabled;
+        case 'vector': return item.vector && !item.constant && !item.disabled;
+        case 'related': return item.relationCount > 0;
+        case 'disabled': return item.disabled;
+        default: return true;
+    }
 }
 
 function lifecycleBadge(value) {
@@ -4830,13 +5131,9 @@ class HostAdapter {
             extractionPrompt: settings.extractionPrompt,
             smallSummaryPrompt: settings.smallSummaryPrompt,
             largeSummaryPrompt: settings.largeSummaryPrompt,
-            smallSummaryTurns: settings.smallSummaryTurns,
-            largeSummaryCount: settings.largeSummaryCount,
             entryBudgetEnabled: settings.entryBudgetEnabled,
             keywordDefinitions: settings.keywordDefinitions,
             sectionPolicies: settings.sectionPolicies,
-            bodyMatchThreshold: settings.bodyMatchThreshold,
-            matchWeights: settings.matchWeights,
             connectionState: this.connectionStateSignature(settings),
         }));
     }
@@ -5408,30 +5705,31 @@ class HostAdapter {
                 openedAtMessageKey: String(raw.openedAtMessageKey ?? stages[0]?.messageKey ?? ''),
                 closedAtMessageKey: String(raw.closedAtMessageKey ?? ''),
                 settledAt,
+                failedAt: Math.max(0, Number(raw.failedAt || 0)),
+                summaryError: String(raw.summaryError ?? raw.error ?? '').trim().slice(0, 800),
             };
         };
         const eventTimelineArchive = (Array.isArray(value.eventTimelineArchive) ? value.eventTimelineArchive : []).map((item) => normalizeTimeline(item, 'settled')).filter(Boolean).slice(-128);
-        const largeSummaryPolicyVersion = Math.max(0, Number(value.largeSummaryPolicyVersion || 0));
-        const explicitLargeWatermark = Math.max(0, Number(value.lastLargeSummaryAt || 0));
-        // [MA-AUTO-LARGE-01] 升级前 archive 没有“大总结已消费到哪里”的水位。
-        // 只在首次迁移时把旧 archive 视为历史已消费；一旦 policyVersion=1，即使水位仍为0也不能再次迁移，
-        // 否则新安装后的第一个小总结会被误当成旧历史跳过。
-        const migratedLargeWatermark = largeSummaryPolicyVersion >= 1
-            ? explicitLargeWatermark
-            : Math.max(0, ...eventTimelineArchive.map((timeline) => Number(timeline?.settledAt || 0)));
+        const lastLargeSummaryAt = Math.max(0, Number(value.lastLargeSummaryAt || 0));
+        // 从曾经短暂存在的“自动大总结失败队列”升级时，不继续保留该队列结构。
+        // 只把其中尚未结算的 UID 一次性并回手动大总结兼容工作集；玩家无需修补内部队列。
+        const legacyFailedLargeMarks = normalizeMarks(value.failedLargeSummaryMarks);
+        const legacyFailedBatchMarks = normalizeMarks((Array.isArray(value.failedLargeSummaryBatches) ? value.failedLargeSummaryBatches : [])
+            .flatMap((batch) => Array.isArray(batch?.marks) ? batch.marks : Array.isArray(batch?.uids) ? batch.uids.map((uid) => ({ uid })) : []));
+        const migratedPendingLargeMarks = normalizeMarks([
+            ...normalizeMarks(value.pendingLargeSummaryMarks, value.pendingLargeSummaryUids),
+            ...legacyFailedLargeMarks,
+            ...legacyFailedBatchMarks,
+        ]);
         return {
             lastProcessedMessageKey: String(value.lastProcessedMessageKey ?? ''),
             lastProcessedHash: String(value.lastProcessedHash ?? ''),
-            turnsSinceSmall: Math.max(0, Number(value.turnsSinceSmall) || 0),
-            smallCountSinceLarge: largeSummaryPolicyVersion >= 1 ? Math.max(0, Number(value.smallCountSinceLarge) || 0) : 0,
-            lastLargeSummaryAt: migratedLargeWatermark,
-            largeSummaryPolicyVersion: 1,
+            lastLargeSummaryAt,
             // ui.96: summary marks only exist in chat-level internal metadata. Legacy pending UIDs are migrated once,
             // 不写入世界书，也不在玩家界面展示。
             pendingSmallSummaryMarks: normalizeMarks(value.pendingSmallSummaryMarks, value.pendingSmallSummaryUids),
-            pendingLargeSummaryMarks: normalizeMarks(value.pendingLargeSummaryMarks, value.pendingLargeSummaryUids),
+            pendingLargeSummaryMarks: migratedPendingLargeMarks,
             failedSmallSummaryMarks: normalizeMarks(value.failedSmallSummaryMarks),
-            failedLargeSummaryMarks: normalizeMarks(value.failedLargeSummaryMarks),
             activeEventTimeline: normalizeTimeline(value.activeEventTimeline, 'active'),
             // 未总结 SceneGroup 是正式待处理队列，不能因为数量达到 12 就静默丢失。
             closedEventTimelines: (Array.isArray(value.closedEventTimelines) ? value.closedEventTimelines : []).map((item) => normalizeTimeline(item, 'pending')).filter(Boolean),
@@ -6964,6 +7262,72 @@ class MemoryRunner {
         this.setStatus(snapshot.chatKey, 'complete', '诊断提取与写入完成');
         return taskResultEntries(result);
     }
+    summaryFailureState() {
+        const cursor = this.host.cursor();
+        const small = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter((timeline) => timeline?.summaryStatus === 'failed').map((timeline) => ({
+            id: timeline.groupUid || timeline.id,
+            sceneGroup: timeline.sceneGroup,
+            sceneTitle: timeline.sceneTitle,
+            label: timeline.sceneTitle || timeline.sceneGroup || '未命名场景',
+            entryCount: timelineUids(timeline).length,
+            failedAt: Math.max(0, Number(timeline.failedAt || 0)),
+            error: String(timeline.summaryError || '').trim(),
+        }));
+        return { small };
+    }
+    async retryFailedSmallSummary(settings, snapshot, taskId = '') {
+        const cursor = this.host.cursor();
+        const failed = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter((timeline) => timeline?.summaryStatus === 'failed');
+        const target = taskId ? failed.find((timeline) => (timeline.groupUid || timeline.id) === taskId) : failed[0];
+        if (!target) throw new Error('当前没有可重试的失败小总结');
+        const marks = timelineUids(target).map((uid) => ({ uid }));
+        if (!marks.length) throw new Error('该失败小总结没有可处理条目');
+        const label = target.sceneTitle || target.sceneGroup || '未命名场景';
+        summaryNotify('info', `镜渊：重试失败小总结“${label}”（${marks.length}个条目）`);
+        const beforeReceiptIds = this.currentReceiptIds();
+        let result;
+        try {
+            result = await this.summarize('small', settings, snapshot, { marks, timeline: target });
+        }
+        catch (error) {
+            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '失败小总结重试');
+            const failedAt = Date.now();
+            const summaryError = String((0, util_1.errorText)(error) || '').trim();
+            const nextClosed = (cursor.closedEventTimelines ?? []).map((timeline) => {
+                const normalized = normalizeEventTimeline(timeline, 'pending');
+                if (!normalized || (normalized.groupUid || normalized.id) !== (target.groupUid || target.id)) return normalized;
+                return normalizeEventTimeline({ ...normalized, summaryStatus: 'failed', failedAt, summaryError }, 'failed');
+            }).filter(Boolean);
+            const failedCursor = { ...cursor, closedEventTimelines: nextClosed, failedSmallSummaryMarks: failedSceneGroupMarks(nextClosed) };
+            try { await this.host.saveCursor(failedCursor, snapshot, this.getSettings()); } catch { }
+            summaryNotify('error', `镜渊：失败小总结重试仍失败：${summaryError}`);
+            throw error;
+        }
+        const producedMarks = summaryMarksFromResult(result);
+        const processed = result.processedPendingUids ?? [];
+        let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean)
+            .filter((timeline) => (timeline.groupUid || timeline.id) !== (target.groupUid || target.id));
+        let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
+        const settledTimeline = normalizeEventTimeline({ ...target, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now(), failedAt: 0, summaryError: '' }, 'settled');
+        if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
+        const nextCursor = {
+            ...cursor,
+            pendingSmallSummaryMarks: unresolvedSceneGroupMarks(cursor.activeEventTimeline, closedEventTimelines),
+            failedSmallSummaryMarks: failedSceneGroupMarks(closedEventTimelines),
+            pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
+            closedEventTimelines,
+            eventTimelineArchive,
+        };
+        try {
+            await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
+            await this.finalizeReceiptStates([result], nextCursor);
+        } catch (error) {
+            await this.rollbackCommittedResults(settings, snapshot, [result], result.previousGameTime, cursor, error, '失败小总结重试');
+        }
+        this.setStatus(snapshot.chatKey, 'complete', '失败小总结重试完成');
+        summaryNotify('success', `镜渊：失败小总结重试完成（处理${processed.length}个条目）`);
+        return taskResultEntries(result);
+    }
     async runTask(kind, settings, snapshot, options = {}) {
         if (kind === 'extraction') {
             if (settings.extractionEnabled === false) {
@@ -6976,25 +7340,24 @@ class MemoryRunner {
             const schedule = await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0, result);
             const completionDetail = schedule?.warning
                 ? `提取完成；${schedule.warning}`
-                : schedule?.ranSmall && schedule?.ranLarge
-                    ? '提取完成；本回合已依次执行小总结与大总结'
-                    : schedule?.ranSmall
-                        ? '提取完成；本回合已执行小总结'
-                        : schedule?.ranLarge
-                            ? '提取完成；本回合已执行大总结'
-                            : '提取完成';
+                : schedule?.ranSmall
+                    ? '提取完成；本回合已执行小总结'
+                    : '提取完成';
             this.setStatus(snapshot.chatKey, 'complete', completionDetail);
             return taskResultEntries(result);
         }
         if (kind === 'smallSummary') {
             const cursor = this.host.cursor();
-            // “立即小总结”优先处理最早的已关闭 SceneGroup（failed 也允许玩家手动重试）。
-            // 没有关闭组时才回退到当前兼容工作集。
-            const targetGroup = nextPendingSceneGroup(cursor.closedEventTimelines, true);
+            // “立即小总结”只处理正常待处理工作集；自动失败任务由独立重试入口恢复，避免语义混在一起。
+            // 没有 pending SceneGroup 时仍允许玩家立即整理当前兼容工作集，但会排除 failed SceneGroup 的 UID。
+            const targetGroup = nextPendingSceneGroup(cursor.closedEventTimelines, false);
             const marks = targetGroup
                 ? timelineUids(targetGroup).map((uid) => ({ uid }))
-                : mergeSummaryMarks(cursor.failedSmallSummaryMarks, cursor.pendingSmallSummaryMarks);
-            summaryNotify('info', `镜渊：开始手动小总结（${marks.length}个条目${targetGroup?.groupUid ? `，${targetGroup.groupUid}` : ''}）`);
+                : subtractSummaryMarks(cursor.pendingSmallSummaryMarks, normalizeSummaryMarks(cursor.failedSmallSummaryMarks).map((mark) => mark.uid));
+            if (!marks.length && (cursor.closedEventTimelines ?? []).some((timeline) => normalizeEventTimeline(timeline, 'pending')?.summaryStatus === 'failed'))
+                throw new Error('当前只有失败小总结任务，请使用“重试失败小总结”');
+            const targetGroupLabel = targetGroup ? (targetGroup.sceneTitle || targetGroup.sceneGroup || '未命名场景') : '';
+            summaryNotify('info', `镜渊：开始手动小总结（${marks.length}个条目${targetGroupLabel ? `，${targetGroupLabel}` : ''}）`);
             const manualTimeline = targetGroup || timelinesForMarks(cursor, marks);
             const result = await this.summarize('small', settings, snapshot, { marks, timeline: manualTimeline });
             const producedMarks = summaryMarksFromResult(result);
@@ -7002,7 +7365,7 @@ class MemoryRunner {
             let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
             let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
             if (targetGroup) {
-                const settledTimeline = normalizeEventTimeline({ ...targetGroup, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
+                const settledTimeline = normalizeEventTimeline({ ...targetGroup, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now(), failedAt: 0, summaryError: '' }, 'settled');
                 if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
                 closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (targetGroup.groupUid || targetGroup.id));
             }
@@ -7010,8 +7373,6 @@ class MemoryRunner {
             const groupedFailed = failedSceneGroupMarks(closedEventTimelines);
             const nextCursor = {
                 ...cursor,
-                turnsSinceSmall: 0,
-                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (producedMarks.length ? 1 : 0),
                 pendingSmallSummaryMarks: targetGroup ? groupedPending : subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
                 failedSmallSummaryMarks: targetGroup ? groupedFailed : subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
                 pendingLargeSummaryMarks: producedMarks.length ? mergeSummaryMarks(cursor.pendingLargeSummaryMarks, producedMarks) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks),
@@ -7036,25 +7397,33 @@ class MemoryRunner {
         }
 
         const cursor = this.host.cursor();
-        const failedMarks = normalizeSummaryMarks(cursor.failedLargeSummaryMarks);
         const availableGroups = pendingLargeSceneGroups(cursor);
-        const groupLimit = Math.max(1, Number(settings.largeSummaryCount || 4));
-        const targetGroups = failedMarks.length ? [] : availableGroups.slice(0, groupLimit);
-        const marks = failedMarks.length
-            ? mergeSummaryMarks(failedMarks, cursor.pendingLargeSummaryMarks)
-            : (targetGroups.length ? largeSummaryMarksFromGroups(targetGroups) : normalizeSummaryMarks(cursor.pendingLargeSummaryMarks));
+        const groupMarks = largeSummaryMarksFromGroups(availableGroups);
+        const flatMarks = normalizeSummaryMarks(cursor.pendingLargeSummaryMarks);
+        // 冻结基线：大总结仅手动触发，正常工作单位保持 settled SceneGroup / 时间层级。
+        // 若旧版本留下了不再属于当前上卷水位的平铺工作集（含曾经的失败自动大总结），先单独结算它，
+        // 不把旧失败材料和新的 SceneGroup 强行拼成一个请求；结算后下一次点击再处理正常 SceneGroup 窗口。
+        const legacyOnlyMarks = subtractSummaryMarks(flatMarks, groupMarks.map((mark) => mark.uid));
+        const targetGroups = legacyOnlyMarks.length ? [] : availableGroups;
+        const marks = legacyOnlyMarks.length ? legacyOnlyMarks : groupMarks;
         const timeline = targetGroups.length ? combineSceneGroupTimelines(targetGroups) : timelinesForMarks(cursor, marks);
-        summaryNotify('info', `镜渊：开始手动大总结（${marks.length}个条目${targetGroups.length ? `，${targetGroups.length}个SceneGroup` : ''}）`);
-        const result = await this.summarize('large', settings, snapshot, { marks, timeline });
+        summaryNotify('info', `镜渊：开始手动大总结（${marks.length}个条目${targetGroups.length ? `，${targetGroups.length}个场景组` : ''}）`);
+        const beforeReceiptIds = this.currentReceiptIds();
+        let result;
+        try {
+            result = await this.summarize('large', settings, snapshot, { marks, timeline });
+        } catch (error) {
+            // 手动大总结失败不推进水位、不创建失败队列；下次点击会自然重试同一批 SceneGroup。
+            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '手动大总结');
+            throw error;
+        }
         const processed = result.processedPendingUids ?? [];
         const nextWatermark = targetGroups.length ? largeSummaryWatermark(targetGroups, cursor.lastLargeSummaryAt) : Number(cursor.lastLargeSummaryAt || 0);
         const remainingGroups = targetGroups.length ? pendingLargeSceneGroups({ ...cursor, lastLargeSummaryAt: nextWatermark }) : [];
         const nextCursor = {
             ...cursor,
             lastLargeSummaryAt: nextWatermark,
-            smallCountSinceLarge: targetGroups.length ? remainingGroups.length : 0,
-            pendingLargeSummaryMarks: targetGroups.length ? largeSummaryMarksFromGroups(remainingGroups) : subtractSummaryMarks(cursor.pendingLargeSummaryMarks, processed),
-            failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, processed),
+            pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, processed),
         };
         try {
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
@@ -7071,9 +7440,6 @@ class MemoryRunner {
         const committed = rootResult ? [rootResult] : [];
         const previousGameTime = rootResult?.previousGameTime ?? (typeof this.host.getCurrentGameTime === 'function' ? this.host.getCurrentGameTime() : null);
         let pendingLargeSummaryMarks = normalizeSummaryMarks(cursor.pendingLargeSummaryMarks);
-        let failedLargeSummaryMarks = normalizeSummaryMarks(cursor.failedLargeSummaryMarks);
-        let smallCountSinceLarge = Math.max(0, Number(cursor.smallCountSinceLarge || 0));
-        let lastLargeSummaryAt = Math.max(0, Number(cursor.lastLargeSummaryAt || 0));
         let activeEventTimeline = normalizeEventTimeline(cursor.activeEventTimeline, 'active');
         let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
         let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean).slice(-128);
@@ -7154,7 +7520,6 @@ class MemoryRunner {
         closedEventTimelines = closedEventTimelines.map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
 
         let smallRanThisTurn = false;
-        let largeRanThisTurn = false;
         let summaryWarning = '';
         try {
             // 自动链每个正文回合最多处理一个已关闭 SceneGroup。积压时按原时间顺序逐组消化，
@@ -7164,7 +7529,7 @@ class MemoryRunner {
                 const marks = timelineUids(summaryGroup).map((uid) => ({ uid }));
                 if (marks.length) {
                     smallRanThisTurn = true;
-                    const groupLabel = summaryGroup.sceneTitle || summaryGroup.sceneGroup || summaryGroup.groupUid || '未命名场景';
+                    const groupLabel = summaryGroup.sceneTitle || summaryGroup.sceneGroup || '未命名场景';
                     this.progress('running', `场景组“${groupLabel}”开始小总结：${marks.length}个条目`, { titles: ['总结｜当前事件'], sceneBoundary: true, sceneGroupUid: summaryGroup.groupUid });
                     summaryNotify('info', `镜渊：场景组结束，开始小总结（${marks.length}个条目）`);
                     const beforeReceiptIds = this.currentReceiptIds();
@@ -7173,25 +7538,22 @@ class MemoryRunner {
                         committed.push(small);
                         const processed = small.processedPendingUids ?? [];
                         const producedMarks = summaryMarksFromResult(small);
-                        if (producedMarks.length) {
-                            smallCountSinceLarge += 1;
-                            pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
-                        }
+                        if (producedMarks.length) pendingLargeSummaryMarks = mergeSummaryMarks(pendingLargeSummaryMarks, producedMarks);
                         const settledTimeline = normalizeEventTimeline({ ...summaryGroup, summaryUids: producedMarks.map((mark) => mark.uid), summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
                         if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline].slice(-128);
                         closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id));
                         const smallWrites = Number(small?.warehouse?.createdCount || 0) + Number(small?.warehouse?.updatedCount || 0);
                         const smallDeleted = Number(small?.warehouse?.deletedCount || 0);
                         summaryNotify(small?.changed ? 'success' : 'info', small?.changed
-                            ? `镜渊：小总结完成（场景组${summaryGroup.groupUid || ''}，处理${processed.length}个条目，写入${smallWrites}，沉降删除${smallDeleted}）`
-                            : `镜渊：小总结结算完成（场景组${summaryGroup.groupUid || ''}，处理${processed.length}个条目，无结构变化）`);
+                            ? `镜渊：小总结完成（${groupLabel}，处理${processed.length}个条目，写入${smallWrites}，沉降删除${smallDeleted}）`
+                            : `镜渊：小总结结算完成（${groupLabel}，处理${processed.length}个条目，无结构变化）`);
                     } catch (error) {
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
                         closedEventTimelines = closedEventTimelines.map((timeline) => {
                             if ((timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id)) return timeline;
-                            return normalizeEventTimeline({ ...timeline, summaryStatus: 'failed' }, 'failed');
+                            return normalizeEventTimeline({ ...timeline, summaryStatus: 'failed', failedAt: Date.now(), summaryError: (0, util_1.errorText)(error) }, 'failed');
                         }).filter(Boolean);
-                        summaryWarning = `小总结失败；场景组 ${summaryGroup.groupUid || summaryGroup.id || ''} 已保留给手动处理：${(0, util_1.errorText)(error)}`;
+                        summaryWarning = `小总结失败；场景“${groupLabel}”已保留给手动处理：${(0, util_1.errorText)(error)}`;
                         this.progress('warning', summaryWarning, { titles: ['总结｜当前事件'], error: (0, util_1.errorText)(error), autoRetryStopped: true, sceneGroupUid: summaryGroup.groupUid });
                         summaryNotify('error', `镜渊：小总结失败：${(0, util_1.errorText)(error)}`);
                     }
@@ -7203,65 +7565,14 @@ class MemoryRunner {
             const pendingSmallSummaryMarks = unresolvedSceneGroupMarks(activeEventTimeline, closedEventTimelines);
             const failedSmallSummaryMarks = failedSceneGroupMarks(closedEventTimelines);
 
-            // [MA-AUTO-LARGE-02] 大总结只消费“成功小总结后形成的 SceneGroup 层级”，而不是平铺 UID 计数。
-            // 为避免一个正文回合连续轰炸模型，小总结刚运行过时绝不紧接大总结；达到阈值后等下一次没有小总结运行的回合。
-            if (!smallRanThisTurn && settings.autoLargeSummary !== false) {
-                const candidateCursor = { ...cursor, eventTimelineArchive, lastLargeSummaryAt };
-                const pendingGroups = pendingLargeSceneGroups(candidateCursor, eventTimelineArchive);
-                const threshold = Math.max(2, Number(settings.largeSummaryCount || 4));
-                if (pendingGroups.length >= threshold) {
-                    const batch = pendingGroups.slice(0, threshold);
-                    const marks = largeSummaryMarksFromGroups(batch);
-                    if (marks.length) {
-                        const timeline = combineSceneGroupTimelines(batch);
-                        const label = `${batch.length}个局部场景`;
-                        this.progress('running', `达到自动大总结阈值：${label}，开始上卷`, { titles: ['总结｜世界历史'], phase: 'large-summary', sceneGroupUids: batch.map((item) => item.groupUid) });
-                        summaryNotify('info', `镜渊：累计${batch.length}次有效小总结，开始自动大总结（${marks.length}个条目）`);
-                        const beforeReceiptIds = this.currentReceiptIds();
-                        try {
-                            const large = await this.summarize('large', settings, snapshot, { marks, timeline });
-                            committed.push(large);
-                            const processed = large.processedPendingUids ?? [];
-                            largeRanThisTurn = true;
-                            lastLargeSummaryAt = largeSummaryWatermark(batch, lastLargeSummaryAt);
-                            const remainingGroups = pendingLargeSceneGroups({ ...candidateCursor, lastLargeSummaryAt }, eventTimelineArchive);
-                            smallCountSinceLarge = remainingGroups.length;
-                            pendingLargeSummaryMarks = largeSummaryMarksFromGroups(remainingGroups);
-                            failedLargeSummaryMarks = subtractSummaryMarks(failedLargeSummaryMarks, processed);
-                            const largeWrites = Number(large?.warehouse?.createdCount || 0) + Number(large?.warehouse?.updatedCount || 0);
-                            const largeDeleted = Number(large?.warehouse?.deletedCount || 0);
-                            summaryNotify(large?.changed ? 'success' : 'info', large?.changed
-                                ? `镜渊：自动大总结完成（${batch.length}个SceneGroup，处理${processed.length}个条目，写入${largeWrites}，沉降删除${largeDeleted}）`
-                                : `镜渊：自动大总结结算完成（${batch.length}个SceneGroup，无结构变化）`);
-                        }
-                        catch (error) {
-                            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '自动大总结');
-                            // 本批失败后不在下一回合自动重复轰炸。把本批移入人工失败工作集并推进自动水位；
-                            // 后续新的 SceneGroup 仍可继续累计到下一批。
-                            failedLargeSummaryMarks = mergeSummaryMarks(failedLargeSummaryMarks, marks);
-                            lastLargeSummaryAt = largeSummaryWatermark(batch, lastLargeSummaryAt);
-                            const remainingGroups = pendingLargeSceneGroups({ ...candidateCursor, lastLargeSummaryAt }, eventTimelineArchive);
-                            smallCountSinceLarge = remainingGroups.length;
-                            pendingLargeSummaryMarks = largeSummaryMarksFromGroups(remainingGroups);
-                            const warning = `自动大总结失败；本批已转入手动大总结，不自动重试：${(0, util_1.errorText)(error)}`;
-                            summaryWarning = summaryWarning ? `${summaryWarning}；${warning}` : warning;
-                            this.progress('warning', warning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error), autoRetryStopped: true });
-                            summaryNotify('error', `镜渊：自动大总结失败，已保留给手动处理：${(0, util_1.errorText)(error)}`);
-                        }
-                    }
-                }
-            }
+            // 冻结基线：大总结不进入自动正文主链；这里只维护供玩家手动上卷的 SceneGroup/summaryUids。
             const nextCursor = {
                 ...cursor,
                 lastProcessedMessageKey: snapshot.messageKey,
                 lastProcessedHash: snapshot.contentHash,
-                turnsSinceSmall: 0,
-                smallCountSinceLarge,
-                lastLargeSummaryAt,
                 pendingSmallSummaryMarks,
                 pendingLargeSummaryMarks,
                 failedSmallSummaryMarks,
-                failedLargeSummaryMarks,
                 activeEventTimeline,
                 closedEventTimelines,
                 eventTimelineArchive,
@@ -7269,10 +7580,9 @@ class MemoryRunner {
             delete nextCursor.pendingSmallSummaryUids;
             delete nextCursor.pendingLargeSummaryUids;
             delete nextCursor.smallSummaryRetryCooldown;
-            delete nextCursor.largeSummaryRetryCooldown;
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
             await this.finalizeReceiptStates(committed, nextCursor);
-            return { warning: summaryWarning, cursor: nextCursor, ranSmall: smallRanThisTurn, ranLarge: largeRanThisTurn };
+            return { warning: summaryWarning, cursor: nextCursor, ranSmall: smallRanThisTurn };
         } catch (error) {
             await this.rollbackCommittedResults(settings, snapshot, committed, previousGameTime, cursor, error, '正文处理回合');
         }
@@ -7490,8 +7800,6 @@ class MemoryRunner {
             const hasSceneGroups = Boolean(normalizeEventTimeline(cursor.activeEventTimeline, 'active')) || closed.length > 0;
             nextCursor = {
                 ...cursor,
-                turnsSinceSmall: 0,
-                smallCountSinceLarge: Math.max(0, Number(cursor.smallCountSinceLarge || 0)) + (producedMarks.length ? 1 : 0),
                 // 选中总结不能因为 UID 与别的场景组重叠就清掉别组成员；有 SceneGroup 时始终从剩余组重算。
                 pendingSmallSummaryMarks: hasSceneGroups ? groupedPending : subtractSummaryMarks(cursor.pendingSmallSummaryMarks, processed),
                 failedSmallSummaryMarks: hasSceneGroups ? groupedFailed : subtractSummaryMarks(cursor.failedSmallSummaryMarks, processed),
@@ -7504,7 +7812,6 @@ class MemoryRunner {
             nextCursor = {
                 ...cursor,
                 pendingLargeSummaryMarks: subtractSummaryMarks(cursor.pendingLargeSummaryMarks, processed),
-                failedLargeSummaryMarks: subtractSummaryMarks(cursor.failedLargeSummaryMarks, processed),
             };
         }
         try {
@@ -7692,7 +7999,6 @@ class MemoryRunner {
         const wasPendingSmall = normalizeSummaryMarks(cursor.pendingSmallSummaryMarks).some((mark) => selectedSet.has(mark.uid));
         const wasFailedSmall = normalizeSummaryMarks(cursor.failedSmallSummaryMarks).some((mark) => selectedSet.has(mark.uid));
         const wasPendingLarge = normalizeSummaryMarks(cursor.pendingLargeSummaryMarks).some((mark) => selectedSet.has(mark.uid));
-        const wasFailedLarge = normalizeSummaryMarks(cursor.failedLargeSummaryMarks).some((mark) => selectedSet.has(mark.uid));
         const inheritBedrockLock = selected.some((entry) => entry.bedrockLocked === true);
         const applied = await this.apply(settings, plan, snapshot, selectedText, label, raw, {
             sourceKind: 'manual-merge',
@@ -7708,21 +8014,18 @@ class MemoryRunner {
         let nextPendingSmall = removeSelected(cursor.pendingSmallSummaryMarks);
         let nextFailedSmall = removeSelected(cursor.failedSmallSummaryMarks);
         let nextPendingLarge = removeSelected(cursor.pendingLargeSummaryMarks);
-        let nextFailedLarge = removeSelected(cursor.failedLargeSummaryMarks);
         // 手动合并只整理结构，不改变这些事实原本所处的总结生命周期。
         if (producedMarks.length && (wasPendingSmall || wasFailedSmall)) nextPendingSmall = mergeSummaryMarks(nextPendingSmall, producedMarks);
-        if (producedMarks.length && (wasPendingLarge || wasFailedLarge)) nextPendingLarge = mergeSummaryMarks(nextPendingLarge, producedMarks);
+        if (producedMarks.length && wasPendingLarge) nextPendingLarge = mergeSummaryMarks(nextPendingLarge, producedMarks);
         const nextCursor = {
             ...cursor,
             pendingSmallSummaryMarks: nextPendingSmall,
             failedSmallSummaryMarks: nextFailedSmall,
             pendingLargeSummaryMarks: nextPendingLarge,
-            failedLargeSummaryMarks: nextFailedLarge,
         };
         delete nextCursor.pendingSmallSummaryUids;
         delete nextCursor.pendingLargeSummaryUids;
         delete nextCursor.smallSummaryRetryCooldown;
-        delete nextCursor.largeSummaryRetryCooldown;
         try {
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
             await this.finalizeReceiptStates([applied], nextCursor);
@@ -7963,6 +8266,8 @@ function normalizeEventTimeline(value, defaultStatus = 'pending') {
         openedAtMessageKey,
         closedAtMessageKey: String(value.closedAtMessageKey ?? ''),
         settledAt,
+        failedAt: Math.max(0, Number(value.failedAt || 0)),
+        summaryError: String(value.summaryError ?? value.error ?? '').trim().slice(0, 800),
     };
 }
 function timelineUids(timeline) {
@@ -15956,12 +16261,9 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     autoAudit: false,
     autoExtraction: false,
     autoSmallSummary: true,
-    autoLargeSummary: true,
-    automationPolicyVersion: 1,
     entryBudgetEnabled: true,
     auditEnabled: true,
     extractionEnabled: true,
-    targetLorebook: '',
     autoCreateLorebook: false,
     auditPrompt: exports.DEFAULT_AUDIT_PROMPT,
     revisionPrompt: exports.DEFAULT_REVISION_PROMPT,
@@ -15970,7 +16272,6 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     largeSummaryPrompt: exports.DEFAULT_LARGE_SUMMARY_PROMPT,
     responseTokens: 8192,
     requestTimeoutMs: 90000,
-    largeSummaryCount: 4,
     queueCompactThreshold: 6,
     keywordDefinitions: exports.DEFAULT_KEYWORDS,
     sectionPolicies: {
@@ -16044,9 +16345,6 @@ class SettingsStore {
 exports.SettingsStore = SettingsStore;
 function parseSettings(value) {
     const candidate = (0, util_1.isPlainObject)(value) ? value : {};
-    // 自动大总结只按成功小总结的 SceneGroup 数量触发；不再保留旧“多少回合触发小总结”调度。
-    const rawLargeSummaryCount = Number(candidate.largeSummaryCount);
-    const normalizedLargeSummaryCount = (0, util_1.clampNumber)(!Number.isFinite(rawLargeSummaryCount) || rawLargeSummaryCount === 5 ? 4 : rawLargeSummaryCount, 4, 2, 30);
     const sectionPolicies = { ...(0, util_1.clone)(exports.DEFAULT_SETTINGS.sectionPolicies) };
     if ((0, util_1.isPlainObject)(candidate.sectionPolicies)) {
         for (const [key, policy] of Object.entries(candidate.sectionPolicies)) {
@@ -16070,17 +16368,11 @@ function parseSettings(value) {
         autoAudit: candidate.autoAudit === true || (candidate.autoProcess === true && candidate.auditEnabled !== false),
         autoExtraction: candidate.autoExtraction === true || (candidate.autoProcess === true && candidate.extractionEnabled !== false),
         autoSmallSummary: candidate.autoSmallSummary !== false,
-        // 旧版把 autoLargeSummary 强制写成 false 且 UI 不可配置；第一次升级不能把这个历史强制值误当成玩家选择。
-        // 写入 automationPolicyVersion 后，后续严格尊重玩家开关。
-        autoLargeSummary: Number(candidate.automationPolicyVersion || 0) >= 1 ? candidate.autoLargeSummary !== false : true,
-        automationPolicyVersion: 1,
         entryBudgetEnabled: candidate.entryBudgetEnabled !== false,
         // 3.0 SceneGroup：审核/提取不再同时暴露“自动化”和“功能开关”两套重复 UI。
         // 手动功能始终可用；autoAudit/autoExtraction 只控制自动触发，总开关负责全局停用。
         auditEnabled: true,
         extractionEnabled: true,
-        // [MA-WB-SCOPE-01] 旧版全局目标世界书字段只保留兼容键，不再允许覆盖当前聊天绑定。
-        targetLorebook: '',
         autoCreateLorebook: candidate.autoCreateLorebook === true,
         auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
@@ -16089,7 +16381,6 @@ function parseSettings(value) {
         largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, [LEGACY_LARGE_SUMMARY_PROMPT_UI23, LEGACY_LARGE_SUMMARY_PROMPT_UI51, LEGACY_LARGE_SUMMARY_PROMPT_UI55, LEGACY_LARGE_SUMMARY_PROMPT_UI66, LEGACY_LARGE_SUMMARY_PROMPT_UI86, LEGACY_LARGE_SUMMARY_PROMPT_UI87, LEGACY_LARGE_SUMMARY_PROMPT_UI91, LEGACY_LARGE_SUMMARY_PROMPT_UI92, LEGACY_LARGE_SUMMARY_PROMPT_UI100, `把多个已经形成的局部状态整理为更高层的整体状态：关注这些局部共同使阶段、区域或事件链变成了什么，以及由此留下的后续条件；局部经过可以淡化，相关历史场景名继续作为召回线索。`, `把已经形成的局部层内容继续上升为对应主体的整体层内容；跨阶段压缩为整体结果与稳定事实，不自动生成人格判断；只在旧条目内容已经被目标完整融合时声明沉降。`, `逐来源结算中层权威条目：长期抽象仍必须写入唯一直接宿主；【行为倾向】本身就是长期行为层，可保留、合并或修正，不要求继续升格；【表达方式】只依据跨阶段重复且可观察的语言习惯。人物【当前/持有】、场景【当前状态/当前资源/活动关联/离场时状态】以及单次观察、使用、移动、情绪和选择不得升级为长期人物性质、长期场景特征或持续影响；人物长期行为层只使用【行为倾向】与【表达方式】。`], exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(migrateResponseTokens(candidate.responseTokens), 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
-        largeSummaryCount: normalizedLargeSummaryCount,
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
         keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions, candidate.tables),
         sectionPolicies,
