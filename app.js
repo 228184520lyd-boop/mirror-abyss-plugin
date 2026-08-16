@@ -1,7 +1,8 @@
-/** Mirror Abyss 3.0.0-lite.ui.1-event-timeline — reconnectable fact extraction, scene event timelines, local-rule settlement, and deterministic containment. */
+/** Mirror Abyss 3.0.0-lite.ui.1-exact-match — 世界书唯一事实源｜单一模型协议｜SceneGroup｜确定性匹配（无相似度猜测）。 */
 var MA_MODULES={"application":function(module,exports,require){
 
 "use strict";
+// 应用入口与主流程编排
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MirrorAbyssApplication = void 0;
 exports.receiptAffectedBySourceChange = receiptAffectedBySourceChange;
@@ -1025,9 +1026,11 @@ function messageIndexFromEvent(value) {
     const number = Number(value);
     return Number.isInteger(number) ? number : undefined;
 }
+
 },"audit":function(module,exports,require){
 
 "use strict";
+// 正文审核固定协议
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuditRunner = void 0;
 exports.parseAuditResult = parseAuditResult;
@@ -1125,9 +1128,11 @@ function parseAuditResult(raw) {
 function nonEmptyLines(lines = []) { return lines.map((line) => (0, parser_1.stripListMarker)(line).trim()).filter(Boolean); }
 function isNone(value) { return /^\s*(?:无|没有|无问题)\s*[。.]?\s*$/u.test(String(value ?? '')); }
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
+
 },"constants":function(module,exports,require){
 
 "use strict";
+// 全局常量
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 exports.VERSION = '3.0.0-lite.ui.1-event-timeline';
@@ -1136,9 +1141,11 @@ exports.EXTENSION_NAMESPACE = 'mirrorAbyssLite';
 exports.WORLD_INFO_EXTENSION_KEY = 'mirrorAbyssInfoPoint';
 exports.MAX_CONTEXT_CHARS = 48000;
 exports.MANAGED_VERSION = 21;
+
 },"protocols":function(module,exports,require){
 
 "use strict";
+// 唯一模型输出协议
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NONE = exports.SUMMARY_TYPES = exports.EXTRACTION_TYPES = exports.WORLD_TYPES = exports.AUDIT = exports.EXTRACTION = exports.SUMMARY = void 0;
 exports.protocolTextForStage = protocolTextForStage;
@@ -1163,9 +1170,11 @@ function protocolTextForStage(stage) {
     if (['smallSummary', 'largeSummary', 'manualMerge'].includes(stage)) return `${exports.SUMMARY.write}\n${exports.SUMMARY.remove}\n${exports.SUMMARY.settle}\n或\n${exports.NONE}`;
     return '';
 }
+
 },"control-panel":function(module,exports,require){
 
 "use strict";
+// 控制面板 UI
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ControlPanel = void 0;
 exports.buildRecallViewModel = buildRecallViewModel;
@@ -3688,8 +3697,11 @@ function clamp01(value) {
     return Math.min(1, Math.max(0, Number(value) || 0));
 }
 exports.ControlPanel = ControlPanel;
+
 },"diagnostics":function(module,exports,require){
+
 "use strict";
+// 诊断与验收
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DiagnosticsService = void 0;
 exports.buildDiagnosticFilename = buildDiagnosticFilename;
@@ -4480,9 +4492,11 @@ function sanitizeEvidence(value) {
     catch { return { value: String(value) }; }
 }
 function finiteValue(value) { const number = Number(value); return Number.isFinite(number) ? number : null; }
+
 },"domain/entry-section":function(module,exports,require){
 
 "use strict";
+// 条目栏目结构
 const { parseEntrySections, serializeEntrySections } = require("../parser");
 const { canonicalSectionName, mergeCanonicalLines } = require("./information-point");
 const { normalizeTitle, splitTitle, unique } = require("../util");
@@ -4526,9 +4540,11 @@ exports.parseEntrySections = (content, type = '') => normalizeEntrySections(pars
 exports.serializeEntrySections = serializeEntrySections;
 exports.sectionLines = sectionLines;
 exports.extractReferences = extractReferences;
+
 },"domain/information-point":function(module,exports,require){
 
 "use strict";
+// TYPE_SECTION_ORDER 与信息点
 const { unique } = require("../util");
 
 // [MA-SECTION-01] 小标题必须先按条目类型归一化。
@@ -4719,8 +4735,11 @@ exports.isCanonicalSectionName = isCanonicalSectionName;
 exports.canonicalSectionName = canonicalSectionName;
 exports.mergeCanonicalLines = mergeCanonicalLines;
 exports.prepareInformationBlocks = prepareInformationBlocks;
+
 },"governance":function(module,exports,require){
+
 "use strict";
+// 基石锁与焦点保护
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.governInformationBlocks = governInformationBlocks;
 exports.sceneSettlementOperations = sceneSettlementOperations;
@@ -4955,9 +4974,11 @@ function relationText(entry) {
                     : [];
     return selected.flatMap((section) => sections[section] ?? []).join('\n');
 }
+
 },"host":function(module,exports,require){
 
 "use strict";
+// SillyTavern 宿主适配
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HostAdapter = void 0;
 exports.extractModelText = extractModelText;
@@ -6540,9 +6561,11 @@ function sanitizeConnectionValue(value, depth = 0) {
     }
     return output;
 }
+
 },"index":function(module,exports,require){
 
 "use strict";
+// 生命周期钩子
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.onActivate = onActivate;
 exports.onEnable = onEnable;
@@ -6672,8 +6695,11 @@ function onUpdate() { exposeApi(); }
 function onClean() { }
 
 // SillyTavern 1.18 loads this module, then invokes the manifest activate hook.
+
 },"matcher":function(module,exports,require){
+
 "use strict";
+// 精确身份匹配
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildEntryIndex = buildEntryIndex;
 exports.matchBlock = matchBlock;
@@ -6925,7 +6951,8 @@ function splitEventValues(lines) {
 
 function tokenSetsOverlap(left, right) {
     if (!left.length || !right.length) return false;
-    return left.some((a) => right.some((b) => a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a)))));
+    // 精确 token 命中；不再用子串包含猜测同一事件/对象。
+    return left.some((a) => right.some((b) => a === b));
 }
 function phraseSetsOverlap(left, right) {
     if (!left.length || !right.length) return false;
@@ -6935,25 +6962,8 @@ function phraseSimilar(left, right) {
     const a = cleanEventPhrase(left);
     const b = cleanEventPhrase(right);
     if (!a || !b) return false;
-    if (a === b) return true;
-    if (Math.min(a.length, b.length) >= 4 && (a.includes(b) || b.includes(a))) return true;
-    const aa = bigrams(a);
-    const bb = bigrams(b);
-    if (!aa.length || !bb.length) return false;
-    const counts = new Map();
-    for (const item of aa) counts.set(item, (counts.get(item) ?? 0) + 1);
-    let overlap = 0;
-    for (const item of bb) {
-        const count = counts.get(item) ?? 0;
-        if (count > 0) { overlap += 1; counts.set(item, count - 1); }
-    }
-    return (2 * overlap) / (aa.length + bb.length) >= 0.46;
-}
-function bigrams(text) {
-    if (text.length < 2) return text ? [text] : [];
-    const output = [];
-    for (let index = 0; index < text.length - 1; index += 1) output.push(text.slice(index, index + 2));
-    return output;
+    // 只接受规范化后的精确相等，不再用包含或 bigram 相似度猜测。
+    return a === b;
 }
 function cleanEventPhrase(value) {
     return normalizeLookup(String(value ?? ''))
@@ -6981,13 +6991,7 @@ function sceneNameAffinity(left, right) {
                 best = { score: 88, detail: `地点编号与类型一致：“${rawLeft}”≈“${rawRight}”` };
                 continue;
             }
-            if (kindA && kindA === kindB && Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a))) {
-                best = { score: Math.max(best.score, 85), detail: `主体地点名称包含关系：“${rawLeft}”≈“${rawRight}”` };
-                continue;
-            }
-            if (kindA && kindA === kindB && Math.min(a.length, b.length) >= 5 && phraseSimilar(a, b)) {
-                best = { score: Math.max(best.score, 82), detail: `地点稳定名称高度相似：“${rawLeft}”≈“${rawRight}”` };
-            }
+            // 地点只接受归一化精确相等或编号+类型一致；不再用包含/相似度猜测同一地点。
         }
     }
     return best;
@@ -7114,7 +7118,8 @@ function stableIdentitySlots(value) {
 }
 function compatibleIdentityValue(left, right) {
     if (!left || !right) return true;
-    return left === right || (Math.min(left.length, right.length) >= 3 && (left.includes(right) || right.includes(left)));
+    // 身份字段只接受精确相等，不再用子串包含猜测同一身份。
+    return left === right;
 }
 function compareEntryPriority(left, right) {
     const leftScore = entryPriority(left);
@@ -7149,9 +7154,11 @@ function add(map, key, entry) {
     if (!list.some((candidate) => candidate.uid === entry.uid)) list.push(entry);
     map.set(key, list);
 }
+
 },"memory":function(module,exports,require){
 
 "use strict";
+// MemoryRunner 与 SceneGroup
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryRunner = void 0;
 exports.__testSummaryEntries = summaryEntries;
@@ -8565,8 +8572,11 @@ function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now(
 
 
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
+
 },"migration":function(module,exports,require){
+
 "use strict";
+// 重建与迁移（精确证据）
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.INFORMATION_BOUNDARY_TITLE = exports.MigrationService = void 0;
 exports.isRebuildCandidate = isRebuildCandidate;
@@ -10126,10 +10136,10 @@ function restoreUncoveredRebuildSourceLines(blocks, sourceIndex, droppedRefs = [
 function rebuildSourceLineRepresented(item, blocks) {
     const source = normalizeMigrationEvidenceText(stripGenericFactLabel(item?.text ?? ''));
     if (!source) return true;
-    const sourceGrams = migrationBigrams(source);
     const uidCandidates = (blocks ?? []).filter((block) => (block.sourceUids ?? []).includes(String(item.uid)));
     const exactRefCandidates = uidCandidates.filter((block) => (block.sourceRefs ?? []).includes(String(item.ref)));
     const candidates = exactRefCandidates.length ? exactRefCandidates : uidCandidates;
+    // 只认显式来源引用或规范化精确相等的事实行；不再用 bigram/包含覆盖率猜测“已被承接”。
     for (const block of candidates) {
         const explicit = (block.lineEvidence ?? []).some((evidence) => evidence.explicit === true && (evidence.refs ?? []).includes(String(item.ref)));
         if (explicit) return true;
@@ -10142,19 +10152,12 @@ function rebuildSourceLineRepresented(item, blocks) {
         ];
         for (const line of evidenceLines) {
             const fact = normalizeMigrationEvidenceText(stripGenericFactLabel(line));
-            if (!fact) continue;
-            if (fact === source || fact.includes(source) || source.includes(fact)) return true;
-            const factGrams = migrationBigrams(fact);
-            const shared = [...sourceGrams].filter((gram) => factGrams.has(gram)).length;
-            const coverage = sourceGrams.size ? shared / sourceGrams.size : 0;
-            const reverseCoverage = factGrams.size ? shared / factGrams.size : 0;
-            const anchors = migrationEvidenceAnchors(source);
-            const anchorHits = anchors.filter((anchor) => fact.includes(anchor)).length;
-            if (Math.max(coverage, reverseCoverage) >= 0.58 || (anchorHits >= 2 && Math.max(coverage, reverseCoverage) >= 0.34)) return true;
+            if (fact && fact === source) return true;
         }
     }
     return false;
 }
+
 
 function isLocallyDiscardableSourceLine(item) {
     const text = String(item?.text ?? '').trim();
@@ -10282,32 +10285,8 @@ function coalesceEventClusters(clusters) {
 }
 
 function eventClustersShouldMerge(left, right) {
-    if (semanticClusterMatch(left.entry, right.entry)) return true;
-    const a = eventClusterSignature(left.entry);
-    const b = eventClusterSignature(right.entry);
-    const participantHit = a.participants.some((value) => b.participants.includes(value));
-    const sceneHit = a.scenes.some((value) => b.scenes.includes(value));
-    const nameHit = a.names.some((value) => b.names.some((other) => value === other || (Math.min(value.length, other.length) >= 4 && (value.includes(other) || other.includes(value)))));
-    const strongNameHit = a.names.some((value) => b.names.some((other) => eventNameAffinity(value, other)));
-    const narrativeA = (0, util_1.normalizeFact)(`${left.entry?.content ?? ''}`);
-    const narrativeB = (0, util_1.normalizeFact)(`${right.entry?.content ?? ''}`);
-    const narrativeHit = Math.min(narrativeA.length, narrativeB.length) >= 12 && bigramSimilarity(narrativeA, narrativeB) >= 0.5;
-    if (participantHit && sceneHit && (nameHit || strongNameHit || narrativeHit)) return true;
-    if ((nameHit || strongNameHit) && narrativeHit && (participantHit || sceneHit)) return true;
-    // 旧事件经常缺少参与者和场景；标题共享多个稳定二字片段时仍视为同一生命周期。
-    if (strongNameHit && !participantHit && !sceneHit) return true;
-    return false;
-}
-
-function eventNameAffinity(left, right) {
-    const a = (0, util_1.normalizeFact)(left);
-    const b = (0, util_1.normalizeFact)(right);
-    if (!a || !b || Math.min(a.length, b.length) < 4) return false;
-    const gramsA = migrationBigrams(a);
-    const gramsB = migrationBigrams(b);
-    let shared = 0;
-    for (const gram of gramsA) if (gramsB.has(gram)) shared += 1;
-    return shared >= 3 && bigramSimilarity(a, b) >= 0.44;
+    // 只认 deterministic 身份匹配；不再用名称包含、bigram 或叙事相似度猜测“同一事件”。
+    return semanticClusterMatch(left.entry, right.entry);
 }
 
 function isGenericEventName(value) {
@@ -10583,11 +10562,10 @@ function recordAsEntry(record) {
 function safeMigrationIdentityAliases(type, name, aliases) {
     if (type !== '场景') return aliases;
     const base = (0, util_1.normalizeFact)(name);
+    // 场景别名只保留与稳定名称精确相等的项；不再用包含/相似度猜测。
     return (aliases ?? []).filter((alias) => {
         const value = (0, util_1.normalizeFact)(alias);
-        if (!value || !base) return false;
-        if (value === base || (Math.min(value.length, base.length) >= 3 && (value.includes(base) || base.includes(value)))) return true;
-        return Math.min(value.length, base.length) >= 5 && bigramSimilarity(value, base) >= 0.45;
+        return Boolean(value && base && value === base);
     });
 }
 
@@ -11152,19 +11130,12 @@ function migrationLineSupportedBySources(line, sourceUids, recordByUid) {
     const coreLine = String(line ?? '').replace(/\s*｜\s*(?:信息来源|认知来源)\s*[：:].*$/u, '').trim();
     const fact = normalizeMigrationEvidenceText(stripGenericFactLabel(coreLine));
     if (!fact || fact.length < 4) return true;
-    const factGrams = migrationBigrams(fact);
+    // 只认来源正文精确包含该事实；不再用 bigram/锚点覆盖率猜测同义承接。
     for (const uid of sourceUids ?? []) {
         const record = recordByUid.get(String(uid));
         if (!record) continue;
         const source = normalizeMigrationEvidenceText(`${record.title}\n${record.content}\n${(record.keywords ?? []).join(' ')}`);
-        if (!source) continue;
-        if (source.includes(fact) || (fact.length >= 8 && fact.includes(source))) return true;
-        const shared = [...factGrams].filter((gram) => source.includes(gram)).length;
-        const coverage = factGrams.size ? shared / factGrams.size : 0;
-        const anchors = migrationEvidenceAnchors(fact);
-        const anchorHits = anchors.filter((anchor) => source.includes(anchor)).length;
-        // 短结果允许通过一个明确二字锚点完成同义改写；长句仍要求更高覆盖率，避免无关扩写。
-        if ((fact.length <= 12 && shared >= 1) || coverage >= 0.35 || (anchorHits >= 2 && coverage >= 0.2) || (anchorHits >= 1 && coverage >= 0.34)) return true;
+        if (source && source.includes(fact)) return true;
     }
     return false;
 }
@@ -11173,20 +11144,6 @@ function normalizeMigrationEvidenceText(value) {
     return (0, util_1.normalizeFact)(String(value ?? ''))
         .replace(/(?:已经|目前|当前|仍然|曾经|此前|后来|最终|明确|确认|形成|相关|主要|负责|属于)/gu, '')
         .replace(/[“”‘’"'（）()【】\[\]，,。；;：:\s]/gu, '');
-}
-
-function migrationEvidenceAnchors(value) {
-    const generic = new Set(['世界', '人物', '角色', '物品', '事件', '场景', '状态', '结果', '情况', '规则', '内容', '相关', '当前', '已经']);
-    return (0, util_1.unique)(String(value ?? '').match(/[\p{Script=Han}A-Za-z0-9·-]{2,16}/gu) ?? [])
-        .filter((item) => item.length >= 2 && !generic.has(item))
-        .slice(0, 12);
-}
-
-function migrationBigrams(value) {
-    const text = String(value ?? '');
-    const out = new Set();
-    for (let index = 0; index < text.length - 1; index += 1) out.add(text.slice(index, index + 2));
-    return out;
 }
 
 function isGeneralizedRebuildRuleLine(type, section, line) {
@@ -11201,25 +11158,10 @@ function rebuildRuleLineSupported(line, refs, policy = {}) {
     if (!sourceLineByRef?.size) return true;
     const sourceItems = (refs ?? []).map((ref) => sourceLineByRef.get(ref)).filter(Boolean);
     if (!sourceItems.length) return false;
-    const explicitRule = sourceItems.some((item) => /(?:每当|一旦|只要|必须|不得|只能|固定|通常|触发|条件|约定|制度|规则|机制|流程|权限|限制)/u.test(String(item.text ?? '')));
-    if (explicitRule) return true;
-    const refToAnchor = new Map();
-    const catalog = policy.anchorCatalog instanceof Map ? [...policy.anchorCatalog.values()] : (policy.anchorCatalog ?? []);
-    for (const anchor of catalog) for (const ref of anchor.refs ?? []) refToAnchor.set(ref, anchor.id);
-    const anchors = new Set((refs ?? []).map((ref) => refToAnchor.get(ref)).filter(Boolean));
-    if (anchors.size < 2) return false;
-    const fact = normalizeMigrationEvidenceText(stripGenericFactLabel(line));
-    const factAnchors = migrationEvidenceAnchors(fact);
-    const factGrams = migrationBigrams(fact);
-    const repeatedSupport = sourceItems.filter((item) => {
-        const source = normalizeMigrationEvidenceText(item.text);
-        const anchorHit = factAnchors.some((anchor) => source.includes(anchor));
-        const shared = [...factGrams].filter((gram) => source.includes(gram)).length;
-        const coverage = factGrams.size ? shared / factGrams.size : 0;
-        return anchorHit || coverage >= 0.28;
-    }).length;
-    return repeatedSupport >= 2;
+    // 规则行只接受来源中明确出现规则标记的材料；不再用 bigram 覆盖率猜测“反复证明”。
+    return sourceItems.some((item) => /(?:每当|一旦|只要|必须|不得|只能|固定|通常|触发|条件|约定|制度|规则|机制|流程|权限|限制)/u.test(String(item.text ?? '')));
 }
+
 
 function applyRebuildTemporalSettlement(rawBlock, diagnostics = { warnings: [] }) {
     const block = (0, util_1.clone)(rawBlock);
@@ -11362,9 +11304,8 @@ function dedupeMigrationLines(lines) {
         if (!normalized) continue;
         const duplicate = output.some((current) => {
             const existing = (0, util_1.normalizeFact)(stripGenericFactLabel(current));
-            return existing === normalized
-                || (Math.min(existing.length, normalized.length) >= 8 && (existing.includes(normalized) || normalized.includes(existing)))
-                || (Math.min(existing.length, normalized.length) >= 12 && bigramSimilarity(existing, normalized) >= 0.82);
+            // 去重只认规范化精确相等，不再用包含或相似度猜测近义行。
+            return existing === normalized;
         });
         if (!duplicate) output.push(line);
     }
@@ -11620,7 +11561,8 @@ function resolveUniversalFieldSection(type, rawField, schema, proposed = false) 
         const candidates = [...allowed].filter((section) => section !== '别名');
         const direct = candidates.find((section) => {
             const left = (0, util_1.normalizeFact)(section);
-            return left === normalized || (Math.min(left.length, normalized.length) >= 2 && (left.includes(normalized) || normalized.includes(left)));
+            // 栏目名只认精确归一化命中，不猜测近义栏目。
+            return left === normalized;
         });
         if (direct) return direct;
     }
@@ -11813,7 +11755,8 @@ function sameEventNarrative(left, right) {
 function convergenceNameRelated(left, right) {
     const leftNames = (0, util_1.unique)([left.name, ...(left.keywords ?? []), ...sectionLines(left, '别名')].map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
     const rightNames = (0, util_1.unique)([right.name, ...(right.keywords ?? []), ...sectionLines(right, '别名')].map((value) => (0, util_1.normalizeFact)(value)).filter(Boolean));
-    return leftNames.some((a) => rightNames.some((b) => a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a)))));
+    // 名称/别名只接受规范化后的精确命中，不再用子串包含猜测同一对象。
+    return leftNames.some((a) => rightNames.some((b) => a === b));
 }
 
 function convergenceFactOverlap(left, right) {
@@ -11823,22 +11766,8 @@ function convergenceFactOverlap(left, right) {
 function listFactOverlap(leftLines = [], rightLines = []) {
     const left = (leftLines ?? []).map((line) => (0, util_1.normalizeFact)(stripGenericFactLabel(line))).filter((line) => line.length >= 4);
     const right = (rightLines ?? []).map((line) => (0, util_1.normalizeFact)(stripGenericFactLabel(line))).filter((line) => line.length >= 4);
-    return left.some((a) => right.some((b) => a === b || (Math.min(a.length, b.length) >= 5 && (a.includes(b) || b.includes(a))) || bigramSimilarity(a, b) >= 0.62));
-}
-
-function bigramSimilarity(left, right) {
-    const grams = (value) => {
-        const text = String(value ?? '');
-        const out = new Set();
-        for (let i = 0; i < text.length - 1; i += 1) out.add(text.slice(i, i + 2));
-        return out;
-    };
-    const a = grams(left);
-    const b = grams(right);
-    if (!a.size || !b.size) return 0;
-    let shared = 0;
-    for (const gram of a) if (b.has(gram)) shared += 1;
-    return (2 * shared) / (a.size + b.size);
+    // 事实重叠只认精确相等，不再用包含或 bigram 相似度猜测。
+    return left.some((a) => right.some((b) => a === b));
 }
 
 function sectionLines(block, name) {
@@ -12000,9 +11929,8 @@ function normalizeRebuildFact(line) {
 
 function equivalentRebuildFacts(left, right) {
     if (!left || !right) return false;
-    if (left === right) return true;
-    if (Math.min(left.length, right.length) >= 9 && (left.includes(right) || right.includes(left))) return true;
-    return Math.min(left.length, right.length) >= 14 && bigramSimilarity(left, right) >= 0.86;
+    // 重建事实等价只认精确相等，不再用包含或 bigram 猜测。
+    return left === right;
 }
 
 function rebuildSectionPriority(type, section) {
@@ -12037,11 +11965,12 @@ function applyAbsorptionProposals(blocks, diagnostics) {
     const ordered = [...output].sort((a, b) => Number(b.migrationOrder ?? 0) - Number(a.migrationOrder ?? 0));
     for (const child of ordered) {
         if (removed.has(child)) continue;
+        // 只执行模型明确给出的并入/归并；不再本地推断从属目标。
         const explicit = /(?:并入|归并|附属|不独立)/u.test(String(child.retentionMode ?? '')) && child.mergeIntoTitle;
-        const inferred = !explicit ? inferDependentTarget(child, output, removed) : null;
-        const target = explicit ? findConvergenceTarget(child.mergeIntoTitle, child, output, removed) : inferred;
+        if (!explicit) continue;
+        const target = findConvergenceTarget(child.mergeIntoTitle, child, output, removed);
         if (!target || target === child) {
-            if (explicit) diagnostics.warnings.push(`${child.title}要求并入“${child.mergeIntoTitle}”，但没有找到有效目标，已暂时保留独立条目`);
+            diagnostics.warnings.push(`${child.title}要求并入“${child.mergeIntoTitle}”，但没有找到有效目标，已暂时保留独立条目`);
             continue;
         }
         const sectionName = resolveAbsorptionSection(target, child.mergeIntoSection);
@@ -12081,106 +12010,20 @@ function findConvergenceTarget(rawTitle, child, blocks, removed) {
         && convergenceNameRelated(block, { name: split?.name || rawTitle, keywords: [], sections: [] }));
 }
 
-function inferDependentTarget(child, blocks, removed) {
-    if (child.type !== '物品') return null;
-    const state = migrationItemState(child);
-    const locationValue = state.get('当前位置') || '';
-    const inferredHolder = inferMigrationHolderFromLocation(locationValue);
-    const holder = state.get('当前持有者') || inferredHolder;
-    const owner = state.get('所有权') || '';
-    const keeper = state.get('保管者') || '';
-    const location = locationValue;
-    const permission = state.get('使用权限') || '';
-    const fullText = (0, util_1.normalizeFact)(`${child.name}；${allBlockFactLines(child).join('；')}；${permission}`);
-    const publicItem = /(?:公用|公共|共享|共用|任何人|所有人|全体|组织成员|授权人员|合格学员|固定设施|场地设施)/u.test(fullText)
-        || (owner && holder && !migrationIdentityValueMatches(owner, holder))
-        || (keeper && holder && !migrationIdentityValueMatches(keeper, holder));
-    const independent = isIndependentMigrationItem(child);
-    const simplePublicFacility = publicItem && sectionLines(child, '固定事实').length === 0 && sectionLines(child, '限制').length === 0 && sectionLines(child, '功能').length <= 1;
-    if (independent && !simplePublicFacility) return null;
-    const active = blocks.filter((candidate) => candidate !== child && !removed.has(candidate));
-    const personByName = (value) => active.find((candidate) => candidate.type === '人物' && migrationBlockNameMatches(candidate, value));
-    const sceneByName = (value) => active.find((candidate) => candidate.type === '场景' && migrationBlockNameMatches(candidate, value));
-    const worldByName = (value) => active.find((candidate) => (candidate.type === '世界' || candidate.migrationPhase === 'custom') && migrationBlockNameMatches(candidate, value));
-    if (!publicItem) {
-        const person = personByName(holder) || personByName(owner) || personByName(keeper);
-        if (person) return person;
-    }
-    const scene = sceneByName(location);
-    if (scene) return scene;
-    const world = worldByName(owner) || worldByName(keeper) || worldByName(location);
-    if (world) return world;
-    if (publicItem) {
-        const anyScene = active.find((candidate) => candidate.type === '场景' && (child.sourceUids ?? []).some((uid) => (candidate.sourceUids ?? []).includes(uid)));
-        if (anyScene) return anyScene;
-    }
-    // 最后才采用旧的强证据规则：后续规则或地区条目覆盖全部来源并点名该物品。
-    const facts = allBlockFactLines(child);
-    const sourceUids = child.sourceUids ?? [];
-    if (!facts.length || facts.length > 4 || !sourceUids.length) return null;
-    const name = (0, util_1.normalizeFact)(child.name);
-    return active.find((candidate) => {
-        if (!['世界', '基础设定', '场景'].includes(candidate.type) && candidate.migrationPhase !== 'custom') return false;
-        if (Number(candidate.migrationOrder ?? -1) <= Number(child.migrationOrder ?? -1)) return false;
-        if (!sourceUids.every((uid) => (candidate.sourceUids ?? []).includes(uid))) return false;
-        const text = (0, util_1.normalizeFact)(`${candidate.title}\n${allBlockFactLines(candidate).join('\n')}`);
-        return Boolean(name && text.includes(name));
-    }) || null;
-}
-
-function isIndependentMigrationItem(block) {
-    const name = String(block?.name ?? '');
-    if (/(?:唯一|编号|序列号|型号|专属|核心|封印|神器|遗物|王冠|徽章|日记|信件|契约|钥匙卡|[A-Za-z]*\d+[A-Za-z0-9-]*)/u.test(name)) return true;
-    const important = new Set(['功能', '限制', '固定事实']);
-    if ((block.sections ?? []).some((section) => important.has(section.name) && (section.lines?.length ?? 0) > 0)) return true;
-    const definition = sectionLines(block, '定义');
-    if (definition.some((line) => /(?:唯一|编号|序列号|型号|独特|专属|不可替代|跨场景|持续追踪|长期使用|长期携带|重要物品)/u.test(String(line)))) return true;
-    const state = migrationItemState(block);
-    return [...state.keys()].some((label) => /^(?:完整性|可用性|能力状态|损坏状态|封印状态)$/u.test(label));
-}
-
-function migrationItemState(block) {
-    const map = new Map();
-    for (const line of sectionLines(block, '当前')) {
-        const match = String(line ?? '').match(/^\s*([^：:]{1,24})\s*[：:]\s*(.*)$/u);
-        if (!match) continue;
-        const raw = (0, util_1.normalizeFact)(match[1]);
-        const label = [
-            [/^(?:所有权|所有者|产权方|归属方)$/u, '所有权'],
-            [/^(?:保管者|保管方|管理者)$/u, '保管者'],
-            [/^(?:当前持有者|持有者|携带者)$/u, '当前持有者'],
-            [/^(?:当前使用者|使用者|操作者)$/u, '当前使用者'],
-            [/^(?:使用权限|可使用者|授权对象)$/u, '使用权限'],
-            [/^(?:当前位置|位置|所在地)$/u, '当前位置'],
-            [/^(?:完整性|损坏状态)$/u, '完整性'],
-            [/^(?:可用性)$/u, '可用性'],
-            [/^(?:当前状态|状态)$/u, '当前状态'],
-            [/^(?:能力状态)$/u, '能力状态'],
-            [/^(?:封印状态)$/u, '封印状态'],
-        ].find(([pattern]) => pattern.test(raw))?.[1];
-        if (label) map.set(label, String(match[2] ?? '').trim());
-    }
-    return map;
-}
-
-function inferMigrationHolderFromLocation(value) {
-    const text = String(value ?? '').trim();
-    const match = text.match(/(?:被)?([\p{Script=Han}A-Za-z0-9·]{2,16})(?:收回|随身携带|持有|收入(?:背包|卡槽|卡槎|腰侧)|带走)/u);
-    return match?.[1] ?? '';
-}
-
 function migrationBlockNameMatches(block, value) {
     const target = (0, util_1.normalizeFact)(String(value ?? '').replace(/(?:随身|手中|身上|腰间|背包中|武器架上|仓库中)$/u, ''));
     if (!target) return false;
+    // 只认精确名称/别名，不再用子串包含猜测持有者或对象。
     return [block.name, ...(block.keywords ?? []), ...sectionLines(block, '别名')]
         .map((item) => (0, util_1.normalizeFact)(item))
-        .some((name) => name && (name === target || (Math.min(name.length, target.length) >= 3 && (name.includes(target) || target.includes(name)))));
+        .some((name) => name && name === target);
 }
 
 function migrationIdentityValueMatches(left, right) {
     const a = (0, util_1.normalizeFact)(left);
     const b = (0, util_1.normalizeFact)(right);
-    return Boolean(a && b && (a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a)))));
+    // 身份值只接受精确相等。
+    return Boolean(a && b && a === b);
 }
 
 function resolveAbsorptionSection(target, requested) {
@@ -12480,9 +12323,11 @@ function trimPrompt(value) {
         ? value
         : `${value.slice(0, constants_1.MAX_CONTEXT_CHARS)}\n[已按字符上限截断]`;
 }
+
 },"model-request":function(module,exports,require){
 
 "use strict";
+// 模型请求与受控重试
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.callModel = callModel;
 exports.stageResponseTokens = stageResponseTokens;
@@ -12723,10 +12568,11 @@ function clipMiddle(value, maxChars) {
     const tail = Math.floor(remaining * 0.38);
     return `${text.slice(0, head)}${marker}${text.slice(text.length - tail)}`;
 }
+
 },"operations":function(module,exports,require){
 
-
 "use strict";
+// 事务与回执
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildOperationPlan = buildOperationPlan;
 exports.applyPlanToEntries = applyPlanToEntries;
@@ -13453,10 +13299,11 @@ function businessOperationKind(kind) {
         noop: 'no-op',
     })[kind] ?? kind;
 }
+
 },"parser":function(module,exports,require){
 
-
 "use strict";
+// 固定协议解析
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.parseExtractionProtocol = parseExtractionProtocol;
 exports.parseWorldSettingImportProtocol = parseWorldSettingImportProtocol;
@@ -13707,9 +13554,11 @@ function matchPlainSection(line) {
     const compact = match[1].replace(/\s+/gu, '').trim();
     return PLAIN_SECTION_NAMES.has(compact) ? match : null;
 }
+
 },"prompts":function(module,exports,require){
 
 "use strict";
+// 提示词构造
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractionPrompts = extractionPrompts;
 exports.manualMergePrompts = manualMergePrompts;
@@ -14307,9 +14156,11 @@ function clipText(value, maxChars) {
     const tail = Math.floor(remaining * 0.38);
     return `${text.slice(0, head)}${marker}${text.slice(text.length - tail)}`;
 }
+
 },"recall-policy":function(module,exports,require){
 
 "use strict";
+// 召回映射
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildRecallPlan = buildRecallPlan;
 exports.sceneStageMap = sceneStageMap;
@@ -14474,9 +14325,11 @@ function sanitizeRecallKeywords(name, values, type = '', max = 4) {
     if (!output.length && normalizedName) output.push(normalizedName);
     return output;
 }
+
 },"revision":function(module,exports,require){
 
 "use strict";
+// 修正文
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RevisionService = void 0;
 exports.parseRevisionResult = parseRevisionResult;
@@ -14586,9 +14439,11 @@ function revisionTailLooksIncomplete(value) {
     if (/[，、：:；;（(\[【“‘《〈—-]$/u.test(tail)) return true;
     return /(?:因为|所以|但是|并且|而且|以及|或者|如果|虽然|尽管|由于|随着|为了|通过|随后|然后|并|却|而|把|将|向|从|在|对|与|和|或)$/u.test(tail);
 }
+
 },"semantic":function(module,exports,require){
 
 "use strict";
+// 轻量规范化辅助
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.describeEntry = describeEntry;
 exports.isEventClosed = isEventClosed;
@@ -14659,10 +14514,11 @@ function isFoundationEntry(entry, settings) {
     const names = definition ? [definition.label, ...(definition.aliases ?? [])] : ['基础设定'];
     return (entry.keywords ?? []).some((keyword) => names.some((name) => (0, util_1.normalizeFact)(keyword) === (0, util_1.normalizeFact)(name)));
 }
+
 },"settings":function(module,exports,require){
 
-
 "use strict";
+// 设置与迁移
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SettingsStore = exports.DEFAULT_SETTINGS = exports.DEFAULT_LARGE_SUMMARY_PROMPT = exports.DEFAULT_SMALL_SUMMARY_PROMPT = exports.DEFAULT_EXTRACTION_PROMPT = exports.DEFAULT_REVISION_PROMPT = exports.DEFAULT_AUDIT_PROMPT = exports.DEFAULT_KEYWORDS = void 0;
 exports.parseSettings = parseSettings;
@@ -15024,10 +14880,11 @@ function parseFields(value) {
 function isPolicy(value) {
     return ['semantic-upsert', 'replace-by-anchor', 'append-chain', 'replace-section', 'merge-titles', 'merge-keywords'].includes(String(value));
 }
+
 },"util":function(module,exports,require){
 
-
 "use strict";
+// 通用工具
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.clone = clone;
 exports.hashText = hashText;
@@ -15238,8 +15095,11 @@ function extractLatestSceneLocation(contextText) {
 function safeId(value) {
     return String(value ?? '').trim().replace(/[^\p{L}\p{N}_:.-]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 120);
 }
+
 },"world-setting-import":function(module,exports,require){
+
 "use strict";
+// 世界设定导入
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorldSettingImportService = void 0;
 exports.sanitizeWorldSettingBlocks = sanitizeWorldSettingBlocks;
@@ -15426,8 +15286,11 @@ function worldSettingPreviewSummary(preview) {
         generatedAt: preview.generatedAt,
     };
 }
+
 },"worldbook-management":function(module,exports,require){
+
 "use strict";
+// 世界书管理
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildWorldbookManagementView = buildWorldbookManagementView;
 const governance_1 = require("./governance");
@@ -15570,9 +15433,11 @@ function sectionBlocks(entry) {
     return Object.entries(entry?.sections?.values ?? {}).map(([name, values]) => ({ name, lines: values ?? [], empty: !(values ?? []).length }));
 }
 function issue(level, code, message, entries) { return { level, code, message, entries }; }
+
 },"worldbook":function(module,exports,require){
 
 "use strict";
+// 世界书读写与事务
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WorldbookAdapter = void 0;
 exports.parseEntries = parseEntries;
@@ -16778,6 +16643,7 @@ function finiteNumber(value, fallback) {
     const number = Number(value);
     return Number.isFinite(number) ? number : fallback;
 }
+
 }};
 var MA_CACHE=Object.create(null);
 function maResolve(from,spec){if(!spec.startsWith('.'))return spec;var base=from.split('/');base.pop();for(var part of spec.split('/')){if(!part||part==='.')continue;if(part==='..')base.pop();else base.push(part)}return base.join('/')}

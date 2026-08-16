@@ -1,4 +1,12 @@
-/** Mirror Abyss mobile-safe floating loader 3.0.0-lite.ui.1-event-timeline. */
+/**
+ * Mirror Abyss — 移动端安全浮动加载器
+ *
+ * 职责：在宿主页面挂载启动按钮，按需动态 import('./app.js')，
+ * 再转发 SillyTavern 扩展生命周期钩子到核心包。
+ * 不包含业务语义；核心逻辑在 app.js（源码见 src/）。
+ *
+ * 版本：3.0.0-lite.ui.1-exact-match
+ */
 const LOADER_ID = 'mirror-abyss-loader-control';
 const APP_ROOT_ID = 'mirror-abyss-core-control';
 let loaded;
