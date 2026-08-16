@@ -4748,19 +4748,7 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
     // 人物、转交、关系、计划等剧情含义。若模型返回了场景块，只把其稳定身份机械对齐到地点栏，
     // 保留模型已经提取出的场景事实；没有场景事实时不凭空制造业务条目。
     const explicitSceneName = explicitCurrentSceneName(contextText);
-    if (explicitSceneName) {
-        const sceneBlocks = blocks.filter((block) => block.type === '场景');
-        if (sceneBlocks.length) {
-            const primary = sceneBlocks[0];
-            primary.type = '场景';
-            primary.name = explicitSceneName;
-            primary.title = `场景｜${explicitSceneName}`;
-            primary.keywords = (0, util_1.unique)([explicitSceneName, ...(primary.keywords ?? []).filter((key) => (0, util_1.normalizeSceneLocation)(key) === (0, util_1.normalizeSceneLocation)(explicitSceneName))]);
-            for (let index = blocks.length - 1; index >= 0; index -= 1) {
-                if (blocks[index]?.type === '场景' && blocks[index] !== primary) blocks.splice(index, 1);
-            }
-        }
-    }
+    // 提取层不改写、合并或删除模型已经输出的场景事实；地点字段只作为当前场景标签使用。
     return {
         blocks,
         diagnostics,
@@ -12763,12 +12751,8 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
         // 匹配器为防止正文提取重新打开已结束事件，会默认排除 closed event。
         // 总结/人工合并处理的是历史状态收束：若模型按稳定标题精确写回同一已结束事件，
         // 应允许命中原条目并保留其既有【结果】，而不是在提交前把整个事件块判成“无法识别”。
-        if (!target && exactClosedEvent && ['summary', 'manual-merge'].includes(String(options.sourceKind || ''))) {
-            target = { entry: exactClosedEvent, score: 100, evidence: [{ kind: 'exact-closed-event-summary', score: 100, detail: '总结按稳定标题命中已结束事件' }] };
-        }
-        if (!target && exactClosedEvent && (0, governance_1.currentEventState)(block) !== 'completed') {
-            operations.push(noop(exactClosedEvent.title, exactClosedEvent.uid, '事件状态', '已完成事件不能重新变为活动；新的事件必须使用新的事件标题与因果签名'));
-            continue;
+        if (!target && exactClosedEvent) {
+            target = { entry: exactClosedEvent, score: 100, evidence: [{ kind: 'exact-closed-event', score: 100, detail: '按稳定标题精确命中已有事件' }] };
         }
         if (!target) {
             const substantive = block.sections.some((section) => isBusinessFactSection(section.name) && !section.empty && section.lines.length > 0);
@@ -12800,7 +12784,7 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                     operations.push(noop(block.title, undefined, section.name, 'AI填写“无”，不执行写入'));
                     continue;
                 }
-                const lines = linesWithoutCrossSectionDuplicates(block, section);
+                const lines = options.sourceKind === 'extraction' ? section.lines : linesWithoutCrossSectionDuplicates(block, section);
                 if (!lines.length) { operations.push(noop(block.title, undefined, section.name, '该信息已在同一对象的主要归属小标题中表达')); continue; }
                 if (/(事件进程|关键进展|已发生进展|未发生进展)/u.test(section.name) && block.type !== '事件') { operations.push(noop(block.title, undefined, section.name, '事件过程只能写入事件条目')); continue; }
                 let sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
@@ -12812,19 +12796,13 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 // 有明确锚点时仍会替换同槽事实，无锚点时按事实追加并接受权威回读。
                 if (options.sourceKind === 'summary' && block.type === '人物' && section.name === '当前') sectionPolicy = 'semantic-upsert';
                 else if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
-                operations.push(...operationsForNewSection(block.title, block.type, section.name, lines, sectionPolicy));
+                operations.push(...operationsForNewSection(block.title, block.type, section.name, lines, sectionPolicy, false, options.sourceKind === 'extraction'));
             }
             continue;
         }
         const entry = target.entry;
         // [MA-EVENT-SM-01] 状态机只管理当前事件。总结不得把已完成事件重新写成活动进展；
         // 真正的新事件必须拥有不同的参与、场景或因果签名并建立新条目。
-        if (block.type === '事件' && (0, semantic_1.isEventClosed)(entry)
-            && (0, governance_1.currentEventState)(block) !== 'completed'
-            && !['summary', 'manual-merge'].includes(String(options.sourceKind || ''))) {
-            operations.push(noop(entry.title, entry.uid, '事件状态', '已完成事件不能重新变为活动；新的事件必须使用新的事件标题与因果签名', target.score, target.evidence));
-            continue;
-        }
         // [MA-EXACT-MATCH-03] 自动流程不再按相似身份合并重复档；合并只由总结/人工显式操作产生。
         for (const keyword of block.keywords) {
             operations.push(entry.keywords.some((item) => (0, util_1.normalizeFact)(item) === (0, util_1.normalizeFact)(keyword))
@@ -12846,7 +12824,7 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 else operations.push(noop(entry.title, entry.uid, section.name, '非快照栏目填写“无”，不执行写入', target.score, target.evidence));
                 continue;
             }
-            const lines = linesWithoutCrossSectionDuplicates(block, section);
+            const lines = options.sourceKind === 'extraction' ? section.lines : linesWithoutCrossSectionDuplicates(block, section);
             if (!lines.length) { operations.push(noop(entry.title, entry.uid, section.name, '该信息已在同一对象的主要归属小标题中表达', target.score, target.evidence)); continue; }
             if (/(事件进程|关键进展|已发生进展|未发生进展)/u.test(section.name) && block.type !== '事件') { operations.push(noop(entry.title, entry.uid, section.name, '事件过程只能写入事件条目', target.score, target.evidence)); continue; }
             let sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
@@ -12857,7 +12835,7 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             // 因此人物总结必须按明确状态槽增量更新，不能用整段替换擦掉未参与本次总结的位置/目标等现状。
             if (options.sourceKind === 'summary' && block.type === '人物' && section.name === '当前') sectionPolicy = 'semantic-upsert';
             else if (options.sourceKind === 'summary' && sectionPolicy === 'replace-by-anchor') sectionPolicy = 'semantic-upsert';
-            operations.push(...operationsForExisting(entry, section.name, lines, sectionPolicy, target.score, target.evidence));
+            operations.push(...operationsForExisting(entry, section.name, lines, sectionPolicy, target.score, target.evidence, options.sourceKind === 'extraction'));
         }
         if (options.compactEventProgressFromSummary === true && block.type === '事件') {
             for (const legacySection of ['目标', '阶段', '关键进展', '事件进程', '未决']) {
@@ -13036,14 +13014,14 @@ function mergeEntryData(target, source) {
     }
 }
 
-function operationsForNewSection(title, type, section, lines, policy, normalized = false) {
+function operationsForNewSection(title, type, section, lines, policy, normalized = false, trustModelWrite = false) {
     if (type === '总结') policy = 'replace-section';
-    if (!normalized && type === '人物' && /^(当前|当前状态)$/u.test(section)) {
+    if (!trustModelWrite && !normalized && type === '人物' && /^(当前|当前状态)$/u.test(section)) {
         const multiValue = lines.filter(isMultiValueFact);
         const scalar = lines.filter((line) => !isMultiValueFact(line));
         return [
             ...multiValue.map(() => noop(title, undefined, section, '该事实应写入人物【关系】、【持有】或【稳定】，不写入人物【当前】状态槽')),
-            ...operationsForNewSection(title, type, section, scalar, policy, true),
+            ...operationsForNewSection(title, type, section, scalar, policy, true, trustModelWrite),
         ];
     }
     if (policy === 'merge-keywords') {
@@ -13062,12 +13040,14 @@ function operationsForNewSection(title, type, section, lines, policy, normalized
             const anchor = informationAnchor(line);
             return anchor
                 ? op('append-line', title, undefined, section, undefined, line, `新条目写入明确状态槽“${anchor}”`)
-                : noop(title, undefined, section, '当前状态缺少明确字段标签，拒绝写入可能无法更新的冲突状态');
+                : trustModelWrite
+                    ? op('append-line', title, undefined, section, undefined, line, '模型事实直接写入')
+                    : noop(title, undefined, section, '当前状态缺少明确字段标签，拒绝写入可能无法更新的冲突状态');
         });
     }
     return lines.map((line) => op('append-line', title, undefined, section, undefined, line, '新条目信息点写入'));
 }
-function operationsForExisting(entry, section, lines, policy, score, evidence) {
+function operationsForExisting(entry, section, lines, policy, score, evidence, trustModelWrite = false) {
     if (entry.type === '总结') policy = 'replace-section';
     const current = entry.sections.values[section] ?? [];
     if (policy === 'replace-section') {
@@ -13094,13 +13074,13 @@ function operationsForExisting(entry, section, lines, policy, score, evidence) {
     for (const incomingRaw of incomingLines) {
         const point = (0, parser_1.normalizePointLine)(incomingRaw);
         const incoming = policy === 'replace-by-anchor' ? normalizeStateLine(section, point) : point;
-        if (entry.type === '人物' && /^(当前|当前状态)$/u.test(section) && isMultiValueFact(point)) {
+        if (!trustModelWrite && entry.type === '人物' && /^(当前|当前状态)$/u.test(section) && isMultiValueFact(point)) {
             result.push(noop(entry.title, entry.uid, section, '该事实应写入人物【关系】、【持有】或【稳定】，不写入人物【当前】状态槽', score, evidence));
             continue;
         }
         const normalizedIncoming = (0, util_1.normalizeFact)(point);
         const duplicateElsewhere = otherFacts.find((line) => (0, util_1.normalizeFact)(line) === normalizedIncoming);
-        if (duplicateElsewhere) {
+        if (!trustModelWrite && duplicateElsewhere) {
             result.push(noop(entry.title, entry.uid, section, '相同事实已存在于该条目的其他主要归属小标题，拒绝重复写入', score, evidence));
             continue;
         }
@@ -13110,7 +13090,7 @@ function operationsForExisting(entry, section, lines, policy, score, evidence) {
             continue;
         }
         const anchor = informationAnchor(incoming);
-        if (entry.type === '人物' && /^(已知|误信)$/u.test(section) && anchor) {
+        if (!trustModelWrite && entry.type === '人物' && /^(已知|误信)$/u.test(section) && anchor) {
             const oppositeSection = section === '已知' ? '误信' : '已知';
             const opposite = entry.sections.values[oppositeSection] ?? [];
             for (const oldLine of opposite.filter((line) => informationAnchor(line) === anchor)) {
@@ -13120,7 +13100,8 @@ function operationsForExisting(entry, section, lines, policy, score, evidence) {
         const anchoredOld = anchor ? current.find((line) => informationAnchor(line) === anchor) : undefined;
         if (policy === 'replace-by-anchor') {
             if (!anchor) {
-                result.push(noop(entry.title, entry.uid, section, '当前状态缺少明确字段标签，拒绝追加可能冲突的状态；应使用“字段：当前值”格式', score, evidence));
+                if (trustModelWrite) result.push(op('append-line', entry.title, entry.uid, section, undefined, incoming, '模型事实直接写入', score, evidence));
+                else result.push(noop(entry.title, entry.uid, section, '当前状态缺少明确字段标签，拒绝追加可能冲突的状态；应使用“字段：当前值”格式', score, evidence));
                 continue;
             }
             if (anchoredOld) {
@@ -13557,10 +13538,6 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
         grouped.set(key, block);
     }
     const blocks = [...grouped.values()];
-    if (blocks.length > 32) {
-        diagnostics.skipped.push({ title: '协议错误', reason: `提取返回${blocks.length}个事实宿主，超过唯一协议单次32个上限；拒绝部分提交` });
-        return attachDiagnostics([], diagnostics);
-    }
     return attachDiagnostics(blocks, diagnostics);
 }
 function parseExtractionProtocol(raw) {
@@ -13851,7 +13828,25 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
     ]);
     const custom = builtinExtractionPrompts.has(extractionCustomRaw) ? '' : clipText(extractionCustomRaw, compact ? 420 : 760);
     const gameTimeClause = gameTimeEnabled ? '\n- 若正文明确推进了世界内时间，把时间变化写进当前场景对应事实；没有明确推进就不要补时间。' : '';
-    const system = `职责：比较上一轮有效世界书与本轮实际发生的内容，提取本轮建立、改变或结束的世界事实。\n\n【判断顺序】\n上一轮有效条目 = 变化前基线。\n玩家输入 = 本轮行动、表达与信息起点，不代表行动必然成功。\n本轮AI最终回复 = 世界实际发生的结果，最终状态以正文明确呈现为准。\n按“旧状态 → 玩家发起 → 正文结果 → 新状态”判断本轮变化。\n\n【提取原则】\n1. 只提取已经发生、已经成立或已经明确结束，并会影响之后世界状态的事实。\n2. 同一经历只把真正需要持续追踪的变化写给直接宿主；跨宿主可以保留必要关联，但不要把同一过程全文复制到多处。无稳定名称、无独立持续状态的路人/工作人员/临时角色不要建立人物条目。\n3. 每个事实点只写该宿主需要记住的部分，但必须保留足以与同一经历其他事实重新连接的必要对象、动作、关系或结果。不要只写“受伤”“获得”“离开”这类脱离来龙去脉的孤立状态。\n4. 不为了精简漏掉有效变化；同时不要把纯过程动作、瞬时情绪、没有持续影响的临时细节升级为长期事实。小总结只负责沿场景时间窗口降低已有有效事实的颗粒度，不负责替提取阶段纠错。\n5. 不从一次行为推断人格、倾向或隐藏设定；不把玩家预期、尝试、可能性、计划或推测升级成既成结果。\n6. 普通正文提取不新增或修改基础设定。基石锁条目只读；若世界发生了后续变化，写到合适的普通条目。${gameTimeClause}\n\n【唯一输出协议】\n${(0, protocols_1.protocolTextForStage)('extraction')}\n\n格式要求：\n- 类型只能写：人物、场景、物品、事件、世界。\n- 关联对象只写正文或上一轮条目中明确存在、与该事实直接相关的稳定名称；多个名称用“、”分隔，没有直接关联时写“无”。\n- 完整事实必须是一句能够独立理解的已发生事实，并保留重新连线所需的最小关系。\n- 同一主体本轮可以有多条事实，但每条只描述一个明确变化。\n- 不输出标题、栏目、关键词、UID、项目符号、JSON、代码块、解释、前言或后记。\n- 没有有效变化时只输出：无。不得输出“无。”、EMPTY或其他同义写法。${custom ? `\n\n【附加要求】\n${custom}` : ''}`;
+    const system = `职责：提取本轮正文中已经建立、变化或结束的世界事实。
+
+上一轮有效世界书是变化前基线。玩家输入是本轮行动或表达的起点，不代表结果已经成立；本轮AI最终回复是实际结果。
+
+只按正文提取已经明确发生或成立的事实。不要总结、抽象、筛选长期价值、替后续小总结提前整理，也不要因为事实短期、局部、普通或细碎而主动省略。不要把玩家预期、尝试、可能性或推测写成既成结果。${gameTimeClause}
+
+【唯一输出协议】
+${(0, protocols_1.protocolTextForStage)('extraction')}
+
+格式要求：
+- 类型只能写：人物、场景、物品、事件、世界。
+- 关联对象写与该事实直接相关的稳定名称；多个名称用“、”分隔，没有时写“无”。
+- 完整事实写正文已经成立的事实本身。
+- 同一主体可以输出多条事实。
+- 不输出标题、栏目、关键词、UID、项目符号、JSON、代码块或解释。
+- 没有有效变化时只输出“无”。${custom ? `
+
+【附加要求】
+${custom}` : ''}`;
     const user = `【上一轮有效世界书条目】\n${clipText(existing || '（无）', compact ? 7200 : 13800)}\n\n【本轮玩家输入】\n${clipText(playerText || '（空）', compact ? 2800 : 5200)}\n\n【本轮AI最终回复】\n${clipText(assistantText || '（空）', compact ? 7200 : 11000)}\n\n比较前后状态，只输出本轮真正建立、变化或结束的事实行。`;
     return { system, user };
 }
@@ -13959,9 +13954,33 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
         : '';
     const structureOverview = summaryPromptStructureOverview(entries);
     const system = isSmall
-        ? `职责：对刚结束 SceneGroup 内被触及的当前有效世界书宿主执行一次“先收束、后粗化”的局部结算。\n\n【材料含义】\n系统只负责选出本场景真正被触及的宿主并按类型层级排列；系统没有替你判断谁属于谁。人物、场景、物品、事件、世界条目可能只是同一经历在不同宿主上的原子投影。\n\n【第一阶段：宿主收束】\n- 必须先判断低层条目是否仍拥有独立世界生命周期，再决定是否继续作为独立条目存在；不要一上来逐条摘要。\n- 结构层级只用于寻找候选上级：世界 > 场景 > 事件 > 人物 > 物品。层级不是自动包含关系；只有材料明确支持真实承接时才能归入。\n- 物品优先检查独立性：普通装备、随身用品、一次性资源、只作为某人物持有物/某场景资源/某事件结果存在的物品，如果没有跨场景独立追踪、独立能力或限制、持续争夺/归属流转、独立召回价值，应写回真实上级宿主后沉降物品条目。具有独立生命周期的唯一物品必须保留独立条目。\n- 背景人物、局部场景、临时事件同理：只有在其独立身份、状态或后续作用已经没有单独召回价值，并被上级宿主完整承接时才沉降。\n- 收束不是按类型强行删除；找不到确定宿主、承接不完整或仍有独立生命周期时必须保留。\n\n【第二阶段：颗粒度粗化】\n- 完成宿主收束后，再对剩余宿主中属于本场景的重复、旧状态和局部过程做抽象。\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 每个来源都要判断最终去向，但“保留”只是内部判断，不是输出动作：独立价值仍在且无需修改时保持原样，不输出任何协议行；仅局部旧事实被替代才输出“移除”；内容与独立召回身份都已被目标完整承接才输出“沉降”。\n- 目标需要新增/修改时先“写回”再沉降；目标当前已完整承接时直接输出“沉降”即可，不制造重复写回。\n- 禁止输出“保留｜…”、保留说明或逐来源结论。只有真正需要执行的写回、移除、沉降才输出协议行；若整批都无需执行任何操作，只输出“无”。\n\n【唯一输出协议】\n${(0, protocols_1.protocolTextForStage)('smallSummary')}\n\n类型只能写：${protocols_1.SUMMARY_TYPES.join('、')}。\n栏目名称必须严格从对应类型的合法栏目中选择，不得自行改写、扩展或使用近义栏目：\n${summarySectionSchemaText()}\n分隔符必须使用协议中显示的全角竖线“｜”。只允许逐行输出该协议；无需修改的来源不要输出任何行；没有任何需要执行的写回、移除或沉降时只输出“无”。不输出“保留”、标题、解释、UID、项目符号、JSON或代码块。`
-        : `职责：把多个已经完成小总结的 SceneGroup 结果先做跨场景结构收束，再抽象为更高层、长期成立的整体规律。\n\n【第一阶段：跨场景收束】\n- 输入来自不同已结算 SceneGroup；先寻找这些局部结果是否共同属于同一个更大的场景、事件、人物长期状态、世界状态或基础规律。不要把平铺 UID 当成彼此无关的条目逐条总结。\n- 只有存在真实承接/包含关系时才形成上级宿主。低层来源内容和独立召回身份均被完整覆盖后才沉降；无法确定时保留。\n- 不因条目类型高低机械合并，不因名称相似推断同一对象。\n\n【第二阶段：长期粗化】\n- 在完成跨场景收束后，再把多个局部结果之间稳定的承接、演化和长期影响抽象为整体规律；不要只逐条改写原条目。\n- 只依据系统提供的有效世界书条目，不重新读取原正文；事件条目也是合法历史材料，已结束事件只能作为历史结果理解，不重新写成活动任务。\n- 需要新增或修改上层结果时先“写回”；旧事实被替代用“移除”；来源条目已被上层完整承接用“沉降”。目标若当前已经完整承接来源，可直接沉降，不要求重复写回。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留仍有独立检索价值的人物、事件、场景、物品和历史锚点。\n\n【唯一输出协议】\n${(0, protocols_1.protocolTextForStage)('largeSummary')}\n\n类型只能写：${protocols_1.SUMMARY_TYPES.join('、')}。\n栏目名称必须严格从对应类型的合法栏目中选择，不得自行改写、扩展或使用近义栏目：\n${summarySectionSchemaText()}\n只允许逐行输出该协议；没有形成更高层结构时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
-    const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}${timelineText ? `\n\n【时间窗口 / 承接顺序】\n${timelineText}` : ''}${structureOverview ? `\n\n【宿主层级视图（仅结构提示，不代表自动包含）】\n${structureOverview}` : ''}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n先收束，再粗化。无需修改的来源保持原样且不要输出“保留”行；最后只输出真正可执行的固定协议行，整批无操作时只输出“无”。`;
+        ? `职责：你负责小总结。输入是一个已结束 SceneGroup 的事实变化及相关世界书条目。
+
+将本场零散、重复、连续的细节整理为少量局部事实，保留本场结束后仍成立的状态、结果和影响；被新概括覆盖的旧细节应删除或替换。
+
+不逐条重述来源，不跨场景做长期总结，不补写未发生内容。
+
+【唯一输出协议】
+${(0, protocols_1.protocolTextForStage)('smallSummary')}
+
+类型只能写：${protocols_1.SUMMARY_TYPES.join('、')}。
+栏目名称必须严格从对应类型的合法栏目中选择：
+${summarySectionSchemaText()}
+只输出固定协议行；没有需要执行的操作时只输出“无”。`
+        : `职责：你负责大总结。输入是若干已经完成小总结的场景结果及相关世界书条目。
+
+将这些局部结果进一步整理为更高层的阶段性事实，合并重复和近义内容，删除已失效或被新状态覆盖的信息，必要时调整内容归属或合并条目。
+
+保留仍有独立价值的人物、事件、物品、组织和场景，不为了减少条目数量强行合并。不重述场景细节，不补写未发生内容。
+
+【唯一输出协议】
+${(0, protocols_1.protocolTextForStage)('largeSummary')}
+
+类型只能写：${protocols_1.SUMMARY_TYPES.join('、')}。
+栏目名称必须严格从对应类型的合法栏目中选择：
+${summarySectionSchemaText()}
+只输出固定协议行；没有需要执行的操作时只输出“无”。`;
+    const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}${timelineText ? `\n\n【时间窗口 / 承接顺序】\n${timelineText}` : ''}${structureOverview ? `\n\n【宿主层级视图（仅结构提示，不代表自动包含）】\n${structureOverview}` : ''}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n先收束，再粗化；最后只输出需要实际执行的固定协议行。`;
 
     return { system, user };
 }
@@ -14761,7 +14780,7 @@ const LEGACY_LARGE_SUMMARY_PROMPT_UI92 = `把多个局部状态变化做整体�
 const LEGACY_LARGE_SUMMARY_PROMPT_UI100 = `把系统选中的多个局部规律整理为更高层、长期成立的整体规律；先理解局部之间真实的连续关系，再做抽象，并保留足以让玩家重新召回相关历史的锚点。`;
 exports.DEFAULT_LARGE_SUMMARY_PROMPT = `把多个已经结算的局部规律按长期承接与演化继续抽象为整体规律；只沉降已经被更高层结果完整包含的确定冗余。`;
 const LEGACY_EXTRACTION_PROMPT_UI100 = `只追加本轮正文已经明确发生或明确成立的精简事实；沿用已有主体稳定标题，同一事实写入最直接宿主；不删除旧事实，不做人格抽象。`;
-exports.DEFAULT_EXTRACTION_PROMPT = `比较上一轮有效条目、玩家输入与本轮正文，提取已经建立、变化或结束且能与同一经历其它事实重新连线的世界事实；允许少量合理冗余，不做人格抽象。`;
+exports.DEFAULT_EXTRACTION_PROMPT = `按唯一协议提取本轮正文已经明确建立、变化或结束的事实；不总结、不抽象、不按长期价值筛选。`;
 const LEGACY_EXTRACTION_PROMPT_UI23 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。未知人物不得猜成已知人物；身份未揭示时建立身份未明临时档，明确揭示后再合并。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。场景稳定知识持续补全，当前栏目完整替换；事件只保存必要过程。事实必须精简、完整、无推测、无解释且不跨条目复述；人物只留少量关键特征，物品只建单体实例。`;
 const LEGACY_EXTRACTION_PROMPT_UI46 = `严格使用人物、场景、物品、事件、世界、基础设定六类固定格式。临时NPC、路人和一次性工作人员默认不建立长期人物条目；只有固定属于当前场景的岗位角色可写入场景【常驻角色】，真正拥有独立持续职责、关键认知或长期关系的对象才建立人物条目。关系写入对应人物，地点知识写入场景；可变化的全局状态写入世界，不随普通剧情变化的世界框架写入基础设定。人物必须优先保留性格核心、表达方式、决策倾向与当前状态。场景当前栏目完整替换，离开场景后由插件结算；事件只记录已经造成状态变化的进展，普通动作过滤。当前场景【当前状态】应在正文明确时写“游戏时间：内容”，只表示当前游戏内时间。事实必须精简、完整、无推测、无解释且不跨条目复述；物品只建单体实例。`;
 const LEGACY_SMALL_SUMMARY_PROMPT_UI51 = `压缩当前事件已经发生的状态变化；区分已发生进展与未发生进展，过滤普通动作，覆盖旧事件进展，并把稳定影响分发到人物、场景、物品或世界。`;
