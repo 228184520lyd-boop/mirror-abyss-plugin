@@ -12178,6 +12178,9 @@ class MemoryRunner {
         let explicitNone = options.deterministicOnly === true;
         // [MA-LOCK] 数据来源锁：lastError 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let lastError = null;
+        // [MA-PROTOCOL-RETRY-DIAGNOSTIC] 只保存第一次尝试得到的确定性“为何没形成固定协议”说明，供第二次干净重试。
+        // 不保存/回灌第一次模型正文或 reasoning；网络错误也不伪装成协议缺字段。
+        let extractionRetryReason = '';
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (options.deterministicOnly !== true) {
             // [MA-ARCH-05] 提取只允许两次明确尝试：正常请求 + 一次干净紧凑重开。
@@ -12187,7 +12190,7 @@ class MemoryRunner {
                 // [MA-LOCK] 数据来源锁：compact 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const compact = attempt === 1;
                 // [MA-LOCK] 数据来源锁：requestPrompt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const requestPrompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { ...promptOptions, compact });
+                const requestPrompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { ...promptOptions, compact, retryReason: compact ? extractionRetryReason : '' });
                 // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
                 try {
                     raw = await (0, model_request_1.callModel)({
@@ -12208,9 +12211,13 @@ class MemoryRunner {
                     explicitNone = (0, parser_1.sanitizeModelText)(raw).trim() === protocols_1.NONE;
                     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                     if (blocks.length || explicitNone) break;
-                    lastError = new Error((diagnostics.skipped || []).map((item) => item.reason).filter(Boolean).slice(0, 3).join('；') || '提取返回未形成固定事实协议');
+                    extractionRetryReason = (diagnostics.skipped || []).map((item) => item.reason).filter(Boolean).slice(0, 3).join('；') || '最终文本未形成固定事实协议';
+                    lastError = new Error(extractionRetryReason);
                 } catch (error) {
                     lastError = error;
+                    // 只有“没有最终协议文本”这一类确定性响应形态可告诉模型；HTTP/网关错误不属于模型格式错误。
+                    if (error?.code === 'MA_REASONING_ONLY') extractionRetryReason = '上一次只返回推理内容，没有最终固定协议';
+                    else if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') extractionRetryReason = '上一次最终文本为空，没有任何固定协议行';
                 }
                 // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (attempt === 0) {
@@ -12423,7 +12430,9 @@ class MemoryRunner {
         // [MA-LOCK] 数据来源锁：requestSummaryRaw 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const requestSummaryRaw = async (retry = false, retryReason = '') => {
             // [MA-LOCK] 数据来源锁：retryDiagnostic 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const retryDiagnostic = String(retryReason || '').trim();
+            // [MA-PROTOCOL-RETRY-DIAGNOSTIC] 小/大总结第二次请求只携带第一次确定性协议诊断，不携带旧 reasoning。
+            // parser 可以指出缺少字段、非法栏目、错误分隔符或动作模板；代码不得据此替模型重写总结语义。
+            const retryDiagnostic = String(retryReason || '').split('；原文：')[0].trim().slice(0, 1200);
             // [MA-LOCK] 数据来源锁：requestPrompt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const requestPrompt = retry
                 ? {
@@ -12467,7 +12476,12 @@ ${retryDiagnostic}
             if (error?.cleanRestartExhausted === true || error?.summaryRetryExhausted === true) throw error;
             summaryRetryUsed = true;
             this.progress('running', `${label}首次请求失败，正在从同一批原始世界书材料重新开始一次`, { titles: [expectedTitle], phase: 'summary-retry', error: (0, util_1.errorText)(error) });
-            raw = await requestSummaryRaw(true);
+            const responseFailureReason = error?.code === 'MA_REASONING_ONLY'
+                ? '上一次只返回推理内容，没有最终固定协议'
+                : error?.code === 'MA_EMPTY_MODEL_RESPONSE'
+                    ? '上一次最终文本为空，没有任何固定协议行'
+                    : '';
+            raw = await requestSummaryRaw(true, responseFailureReason);
         }
         this.validate(snapshot);
         // [MA-LOCK] 数据来源锁：recovered 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -13485,6 +13499,49 @@ function determineManualMergeTarget(selectedEntries) {
     };
 }
 
+// [MA-PROTOCOL-RETRY-DIAGNOSTIC] 总结协议失败时只做字段级机械诊断，供同一批材料的唯一一次干净重试。
+// 这里只能指出“缺少哪个字段/字段数不对”，不得根据总结内容猜模型本来想写什么。
+function diagnoseFixedSummaryOperationLine(rawLine) {
+    const line = String(rawLine ?? '').trim();
+    const parts = line.split('｜');
+    const action = String(parts[0] ?? '').trim();
+    const allowedTypes = new Set(protocols_1.SUMMARY_TYPES);
+    if (action === '写回' || action === '移除') {
+        const fieldNames = ['动作', '类型', '稳定名称', '栏目名称', action === '移除' ? '原事实' : '事实'];
+        const errors = [];
+        const type = String(parts[1] ?? '').trim();
+        const name = String(parts[2] ?? '').trim();
+        const section = String(parts[3] ?? '').trim();
+        const fact = String(parts[4] ?? '').trim();
+        if (parts.length > 1 && !allowedTypes.has(type)) errors.push(`${action}的类型“${type || '（空）'}”不合法；允许：${protocols_1.SUMMARY_TYPES.join('、')}`);
+        if (parts.length > 2 && !name) errors.push(`${action}缺少稳定名称`);
+        if (parts.length > 3 && !section) errors.push(`${action}缺少栏目名称`);
+        if (parts.length > 3 && section && allowedTypes.has(type) && !(0, information_point_1.isCanonicalSectionName)(type, section)) {
+            const allowedSections = information_point_1.TYPE_SECTION_ORDER[type] ?? [];
+            errors.push(`${type}不允许栏目“${section}”；合法栏目：${allowedSections.join('、') || '（无）'}`);
+        }
+        if (parts.length > 4 && !fact) errors.push(`${action}缺少${action === '移除' ? '原事实' : '事实'}`);
+        if (parts.length < 5) errors.push(`${action}字段不足（当前${parts.length}段，应为5段）；缺少后续字段：${fieldNames.slice(parts.length).join('、')}`);
+        else if (parts.length > 5) errors.push(`${action}字段数量不正确（当前${parts.length}段，应为5段）`);
+        return `${errors.join('；') || `${action}固定模板不完整`}；模板必须是“${action}｜类型｜稳定名称｜栏目名称｜${action === '移除' ? '原事实' : '事实'}”`;
+    }
+    if (action === '沉降') {
+        const fieldNames = ['动作', '来源类型', '来源稳定名称', '目标类型', '目标稳定名称'];
+        const errors = [];
+        const sourceType = String(parts[1] ?? '').trim();
+        const sourceName = String(parts[2] ?? '').trim();
+        const targetType = String(parts[3] ?? '').trim();
+        const targetName = String(parts[4] ?? '').trim();
+        if (parts.length > 1 && !allowedTypes.has(sourceType)) errors.push(`沉降来源类型“${sourceType || '（空）'}”不合法；允许：${protocols_1.SUMMARY_TYPES.join('、')}`);
+        if (parts.length > 2 && !sourceName) errors.push('沉降缺少来源稳定名称');
+        if (parts.length > 3 && !allowedTypes.has(targetType)) errors.push(`沉降目标类型“${targetType || '（空）'}”不合法；允许：${protocols_1.SUMMARY_TYPES.join('、')}`);
+        if (parts.length > 4 && !targetName) errors.push('沉降缺少目标稳定名称');
+        if (parts.length < 5) errors.push(`沉降字段不足（当前${parts.length}段，应为5段）；缺少后续字段：${fieldNames.slice(parts.length).join('、')}`);
+        else if (parts.length > 5) errors.push(`沉降字段数量不正确（当前${parts.length}段，应为5段）`);
+        return `${errors.join('；') || '沉降固定模板不完整'}；模板必须是“沉降｜来源类型｜来源稳定名称｜目标类型｜目标稳定名称”`;
+    }
+    return '未知输出动作；只允许“写回”“移除”“沉降”，无需修改的来源不要输出';
+}
 // [MA-LOCK] 函数职责锁：parseFixedSummaryOperationDetailed 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function parseFixedSummaryOperationDetailed(rawLine) {
     // [MA-LOCK] 数据来源锁：line 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -13561,10 +13618,10 @@ function parseFixedSummaryOperationDetailed(rawLine) {
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (/^(?:写回|移除|沉降)/u.test(line)) {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return { operation: null, error: '协议字段数量或顺序不正确；必须严格使用“写回/移除/沉降”固定模板' };
+        return { operation: null, error: diagnoseFixedSummaryOperationLine(line) };
     }
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return { operation: null, error: '未知输出动作；只允许“写回”“移除”“沉降”，无需修改的来源不要输出' };
+    return { operation: null, error: diagnoseFixedSummaryOperationLine(line) };
 }
 // [MA-LOCK] 函数职责锁：parseFixedSummaryOperation 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function parseFixedSummaryOperation(rawLine) {
@@ -20075,6 +20132,33 @@ const CONTROL_LINE_PATTERNS = [
     /^(?:禁止JSON、代码块|禁止解释、JSON|多个条目连续输出|每个来源行只能出现一次)/u,
 ];
 const FIXED_FACT_LINE_PATTERN = /^事实｜(人物|场景|物品|事件|世界)｜([^｜]+)｜(建立|变化|结束)｜([^｜]*)｜(.+)$/u;
+// [MA-PROTOCOL-RETRY-DIAGNOSTIC] 这里只诊断固定协议的机械字段错误，供唯一一次干净重试使用。
+// 诊断只能回答“哪一个协议字段缺失/非法”，不得从失败文本推断剧情语义、自动补事实或改写模型答案。
+function diagnoseFixedFactLine(line) {
+    const text = String(line ?? '').trim();
+    if (!text) return '协议行为空';
+    if (!text.includes('｜') && text.includes('|')) return '分隔符必须使用全角竖线“｜”，不能使用半角“|”';
+    const parts = text.split('｜');
+    const errors = [];
+    const action = String(parts[0] ?? '').trim();
+    const type = String(parts[1] ?? '').trim();
+    const name = String(parts[2] ?? '').trim();
+    const change = String(parts[3] ?? '').trim();
+    const fact = String(parts[5] ?? '').trim();
+    if (action !== '事实') errors.push(`第1字段必须是“事实”，当前为“${action || '（空）'}”`);
+    if (parts.length > 1 && !protocols_1.EXTRACTION_TYPES.includes(type)) errors.push(`第2字段类型“${type || '（空）'}”不合法；允许：${protocols_1.EXTRACTION_TYPES.join('、')}`);
+    if (parts.length > 2 && !name) errors.push('缺少稳定名称（第3字段）');
+    if (parts.length > 3 && !['建立', '变化', '结束'].includes(change)) errors.push(`第4字段必须是“建立”“变化”或“结束”，当前为“${change || '（空）'}”`);
+    // 关联对象字段沿用现有解析契约：空字符串仍可被 parser 接受，不在诊断阶段偷偷收紧协议。
+    if (parts.length > 5 && !fact) errors.push('缺少完整事实（第6字段）');
+    if (parts.length < 6) {
+        const names = ['动作“事实”', '类型', '稳定名称', '建立/变化/结束', '关联对象', '完整事实'];
+        errors.push(`固定事实协议字段不足（当前${parts.length}段，应为6段）；缺少后续字段：${names.slice(parts.length).join('、')}`);
+    } else if (parts.length > 6) {
+        errors.push(`固定事实协议字段过多（当前${parts.length}段，应为6段）`);
+    }
+    return errors.join('；') || '不符合唯一固定事实协议；必须严格使用“事实｜类型｜稳定名称｜建立/变化/结束｜关联对象｜完整事实”';
+}
 function parseFixedFactExtractionProtocol(raw, diagnostics) {
     const source = sanitizeModelText(raw).replace(/\r/g, '').trim();
     if (source === protocols_1.NONE) { diagnostics.hadInput = true; return attachDiagnostics([], diagnostics); }
@@ -20086,7 +20170,7 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
     for (const line of lines) {
         const match = line.match(FIXED_FACT_LINE_PATTERN);
         if (!match) {
-            diagnostics.skipped.push({ title: '协议错误', reason: '提取返回存在不符合唯一事实协议的行', raw: line.slice(0, 600) });
+            diagnostics.skipped.push({ title: '协议错误', reason: diagnoseFixedFactLine(line), raw: line.slice(0, 600) });
             return attachDiagnostics([], diagnostics);
         }
         const type = match[1];
@@ -20455,6 +20539,9 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
     const compact = options.compact === true;
     // [MA-LOCK] 数据来源锁：gameTimeEnabled 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const gameTimeEnabled = Boolean(options.currentGameTime?.label);
+    // [MA-PROTOCOL-RETRY-DIAGNOSTIC] 第二次提取只接收第一次 parser/最终响应得到的确定性格式诊断。
+    // 这里不接收第一次模型正文或 reasoning，不让插件据此补事实；诊断只帮助模型修正固定协议。
+    const retryReason = String(options.retryReason || '').trim();
     // [MA-LOCK] 数据来源锁：stripTimeLines 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const stripTimeLines = (text) => String(text ?? '').split('\n').filter((line) => !/(?:当前游戏时间|游戏时间|当前时间|时间|日期|时段)\s*(?:为|是|[：:])/u.test(line)).join('\n');
     // [MA-LOCK] 数据来源锁：rawExisting 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -20488,7 +20575,11 @@ ${(0, protocols_1.protocolTextForStage)('extraction')}
 - 完整事实写正文已经成立的事实本身。
 - 同一主体可以输出多条事实。
 - 不输出标题、栏目、关键词、UID、项目符号、JSON、代码块或解释。
-- 没有有效变化时只输出“无”。${custom ? `
+- 没有有效变化时只输出“无”。${retryReason ? `
+
+【上一次最终文本未通过固定协议校验】
+${clipText(retryReason, 1200)}
+这是 parser 的机械格式诊断。请只修正指出的字段/分隔符/协议结构，重新从同一份原始材料生成完整最终协议；不要承接上一次推理，不要因为修格式而改变事实判断。` : ''}${custom ? `
 
 【附加要求】
 ${custom}` : ''}`;
