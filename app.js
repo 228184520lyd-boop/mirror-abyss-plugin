@@ -7736,12 +7736,16 @@ class MemoryRunner {
         // 不附带第一次 reasoning、不缩短业务材料，也不再依赖第三次救援才能形成最终协议。
         const summaryResponseTokens = (0, model_request_1.stageResponseTokens)(summaryStage, settings, sourceContext);
         const baseSummaryPrompt = (0, prompts_1.summaryPrompts)(kind, settings, selected, scope, '', { ...promptOptions, compact: false });
-        const requestSummaryRaw = async (retry = false) => {
+        const requestSummaryRaw = async (retry = false, retryReason = '') => {
+            const retryDiagnostic = String(retryReason || '').trim();
             const requestPrompt = retry
                 ? {
                     system: `${String(baseSummaryPrompt?.system ?? '').trim()}
 
-【重新开始】这是一次全新的总结请求。不要承接、复述或继续上一次内部推理；直接形成最终固定协议。`.trim(),
+【重新开始】这是一次全新的总结请求。不要承接、复述或继续上一次内部推理；直接形成最终固定协议。${retryDiagnostic ? `
+【上一次最终文本未通过协议校验】
+${retryDiagnostic}
+请修正该格式问题；不要输出“保留”行，也不要改变本批材料。` : ''}`.trim(),
                     user: String(baseSummaryPrompt?.user ?? ''),
                 }
                 : baseSummaryPrompt;
@@ -7781,10 +7785,10 @@ class MemoryRunner {
         let sedimentationOperations = summaryBlock ? sedimentationOperationsFromSummary(summaryBlock, entries, selectedPendingUids, kind) : [];
         const technicalFailure = () => !recovered.explicitNone && (!recovered.block || (!distributionBlocks.length && !removalOperations.length && !sedimentationOperations.length));
         if (technicalFailure() && !summaryRetryUsed) {
-            const firstReason = !recovered.block ? '未识别固定分发格式' : '未形成可执行分发内容';
+            const firstReason = !recovered.block ? (recovered.failureReason || '未识别固定分发格式') : '协议可解析，但未形成可执行分发内容';
             summaryRetryUsed = true;
             this.progress('running', `${label}${firstReason}，正在用同一批输入即时重试一次`, { titles: [expectedTitle], phase: 'summary-retry' });
-            raw = await requestSummaryRaw(true);
+            raw = await requestSummaryRaw(true, firstReason);
             this.validate(snapshot);
             recovered = parseSummaryProtocol(raw, kind);
             summaryBlock = recovered.block ? ensureSummarySnapshotSections(recovered.block, kind) : null;
@@ -7797,7 +7801,7 @@ class MemoryRunner {
             this.setStatus(snapshot.chatKey, kind === 'small' ? 'small-summary' : 'large-summary', detail, '', raw, emptyPlan());
             return { entries, changed: false, settled: true, previousGameTime, stalePendingUids, resolvedSourceUids: requestedMarks.map((mark) => mark.uid), processedPendingUids: selectedPendingUids, warehouse: { created: [], updated: [], deleted: [] } };
         }
-        if (!recovered.block) throw new Error(`${label}第二次尝试后仍无法识别固定分发格式`);
+        if (!recovered.block) throw new Error(`${label}第二次尝试后仍无法识别固定分发格式：${recovered.failureReason || '未知协议错误'}`);
         if (!distributionBlocks.length && !removalOperations.length && !sedimentationOperations.length) throw new Error(`${label}第二次尝试后仍没有形成可执行的结算内容`);
         const plan = (0, operations_1.buildOperationPlan)(distributionBlocks, entries, settings, sourceContext, { sourceKind: 'summary', cleanupTemporaryAfterSummary: false, consumeSmallSummaryAfterLarge: false, compactEventProgressFromSummary: true, gameTimeEnabled: Boolean(this.host.getCurrentGameTime?.()?.label) });
         // 总结协议中的“移除”和“沉降”都属于正式结算操作。旧实现只提交沉降，
@@ -8411,10 +8415,16 @@ function determineManualMergeTarget(selectedEntries) {
     };
 }
 
-function parseFixedSummaryOperation(rawLine) {
+function parseFixedSummaryOperationDetailed(rawLine) {
     const line = String(rawLine ?? '').trim();
-    if (!line) return null;
+    if (!line) return { operation: null, error: '空行不是协议操作' };
     const allowedTypes = new Set(protocols_1.SUMMARY_TYPES);
+    if (/^保留(?:｜|\s|$)/u.test(line)) {
+        return { operation: null, error: '“保留”不是输出动作；无需修改的来源应保持原样且不输出任何协议行' };
+    }
+    if (!line.includes('｜') && line.includes('|')) {
+        return { operation: null, error: '分隔符必须使用全角竖线“｜”，不能使用半角“|”' };
+    }
     const writeOrRemove = line.match(/^(写回|移除)｜([^｜]+)｜([^｜]+)｜([^｜]+)｜(.+)$/u);
     if (writeOrRemove) {
         const [, action, typeRaw, nameRaw, sectionRaw, factRaw] = writeOrRemove;
@@ -8422,33 +8432,56 @@ function parseFixedSummaryOperation(rawLine) {
         const name = nameRaw.trim();
         const section = sectionRaw.trim();
         const fact = factRaw.trim();
-        if (!allowedTypes.has(type) || !name || !section || !fact) return null;
-        if (!(0, information_point_1.isCanonicalSectionName)(type, section)) return null;
-        return { action, type, name, section, fact };
+        if (!allowedTypes.has(type)) return { operation: null, error: `${action}的类型“${type || '（空）'}”不合法；允许：${protocols_1.SUMMARY_TYPES.join('、')}` };
+        if (!name) return { operation: null, error: `${action}缺少稳定名称` };
+        if (!section) return { operation: null, error: `${action}缺少栏目名称` };
+        if (!fact) return { operation: null, error: `${action}缺少${action === '移除' ? '原事实' : '事实'}` };
+        if (!(0, information_point_1.isCanonicalSectionName)(type, section)) {
+            const allowedSections = information_point_1.TYPE_SECTION_ORDER[type] ?? [];
+            return { operation: null, error: `${type}不允许栏目“${section}”；合法栏目：${allowedSections.join('、') || '（无）'}` };
+        }
+        return { operation: { action, type, name, section, fact }, error: '' };
     }
     const settle = line.match(/^沉降｜([^｜]+)｜([^｜]+)｜([^｜]+)｜([^｜]+)$/u);
-    if (!settle) return null;
-    const [, sourceTypeRaw, sourceNameRaw, targetTypeRaw, targetNameRaw] = settle;
-    const sourceType = sourceTypeRaw.trim();
-    const sourceName = sourceNameRaw.trim();
-    const targetType = targetTypeRaw.trim();
-    const targetName = targetNameRaw.trim();
-    if (!allowedTypes.has(sourceType) || !sourceName || !allowedTypes.has(targetType) || !targetName) return null;
-    return { action: '沉降', sourceType, sourceName, targetType, targetName };
+    if (settle) {
+        const [, sourceTypeRaw, sourceNameRaw, targetTypeRaw, targetNameRaw] = settle;
+        const sourceType = sourceTypeRaw.trim();
+        const sourceName = sourceNameRaw.trim();
+        const targetType = targetTypeRaw.trim();
+        const targetName = targetNameRaw.trim();
+        if (!allowedTypes.has(sourceType)) return { operation: null, error: `沉降来源类型“${sourceType || '（空）'}”不合法；允许：${protocols_1.SUMMARY_TYPES.join('、')}` };
+        if (!sourceName) return { operation: null, error: '沉降缺少来源稳定名称' };
+        if (!allowedTypes.has(targetType)) return { operation: null, error: `沉降目标类型“${targetType || '（空）'}”不合法；允许：${protocols_1.SUMMARY_TYPES.join('、')}` };
+        if (!targetName) return { operation: null, error: '沉降缺少目标稳定名称' };
+        return { operation: { action: '沉降', sourceType, sourceName, targetType, targetName }, error: '' };
+    }
+    if (/^(?:写回|移除|沉降)/u.test(line)) {
+        return { operation: null, error: '协议字段数量或顺序不正确；必须严格使用“写回/移除/沉降”固定模板' };
+    }
+    return { operation: null, error: '未知输出动作；只允许“写回”“移除”“沉降”，无需修改的来源不要输出' };
 }
-function parseFixedSummaryProtocol(raw, kind = 'small') {
+function parseFixedSummaryOperation(rawLine) {
+    return parseFixedSummaryOperationDetailed(rawLine).operation;
+}
+function parseFixedSummaryProtocolDetailed(raw, kind = 'small') {
     const expectedTitle = kind === 'large' ? '总结｜世界历史' : '总结｜当前事件';
     const source = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '').trim();
-    if (source === protocols_1.NONE) return { block: null, explicitNone: true };
-    if (!source) return null;
+    // “无。”只做句末标点归一化，不解释自由文本语义。
+    if (/^无[。.]?$/u.test(source)) return { result: { block: null, explicitNone: true }, error: '' };
+    if (!source) return { result: null, error: '模型最终文本为空' };
     const distribution = [];
     const removals = [];
     const sediment = [];
     const lines = source.split('\n').map((line) => line.trim()).filter(Boolean);
-    if (!lines.length) return null;
-    for (const line of lines) {
-        const operation = parseFixedSummaryOperation(line);
-        if (!operation) return null;
+    if (!lines.length) return { result: null, error: '模型最终文本没有协议行' };
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const parsed = parseFixedSummaryOperationDetailed(line);
+        if (!parsed.operation) {
+            const preview = line.length > 180 ? `${line.slice(0, 180)}…` : line;
+            return { result: null, error: `第${index + 1}行无法解析：${parsed.error}；原文：${preview}` };
+        }
+        const operation = parsed.operation;
         if (operation.action === '写回') distribution.push(`${operation.type}｜${operation.name}｜${operation.section}｜${operation.fact}`);
         else if (operation.action === '移除') removals.push(`${operation.type}｜${operation.name}｜${operation.section}｜${operation.fact}`);
         else sediment.push(`来源：${operation.sourceType}｜${operation.sourceName}；目标：${operation.targetType}｜${operation.targetName}`);
@@ -8457,7 +8490,10 @@ function parseFixedSummaryProtocol(raw, kind = 'small') {
     if (distribution.length) sections.push({ name: '分发事实', lines: (0, util_1.unique)(distribution), empty: false });
     if (removals.length) sections.push({ name: '移除事实', lines: (0, util_1.unique)(removals), empty: false });
     if (sediment.length) sections.push({ name: '沉降来源', lines: (0, util_1.unique)(sediment), empty: false });
-    return { block: { rawTitle: expectedTitle, title: expectedTitle, type: '总结', name: kind === 'large' ? '世界历史' : '当前事件', keywords: [kind === 'large' ? '世界历史' : '当前事件', '总结'], sections }, explicitNone: false };
+    return { result: { block: { rawTitle: expectedTitle, title: expectedTitle, type: '总结', name: kind === 'large' ? '世界历史' : '当前事件', keywords: [kind === 'large' ? '世界历史' : '当前事件', '总结'], sections }, explicitNone: false }, error: '' };
+}
+function parseFixedSummaryProtocol(raw, kind = 'small') {
+    return parseFixedSummaryProtocolDetailed(raw, kind).result;
 }
 function parseManualMergeProtocol(raw) {
     const fixed = parseFixedSummaryProtocol(raw, 'small');
@@ -8529,9 +8565,10 @@ function mergeDistributionBlock(blocks, record) {
     blocks.set(key, block);
 }
 function parseSummaryProtocol(raw, kind) {
-    const fixed = parseFixedSummaryProtocol(raw, kind);
-    if (!fixed) return { block: null, explicitNone: false, repaired: 0, skipped: [] };
-    return { block: fixed.block, explicitNone: fixed.explicitNone === true, repaired: 0, skipped: [] };
+    const detailed = parseFixedSummaryProtocolDetailed(raw, kind);
+    const fixed = detailed.result;
+    if (!fixed) return { block: null, explicitNone: false, repaired: 0, skipped: [], failureReason: detailed.error || '未知固定协议错误' };
+    return { block: fixed.block, explicitNone: fixed.explicitNone === true, repaired: 0, skipped: [], failureReason: '' };
 }
 
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
@@ -12617,7 +12654,7 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
         revision: [`- 只输出可直接替换的完整正文。必须从原文开头写到原文结尾，不得中途停止、缺段或用省略号代替剩余内容。除删除明确违规内容外，修正版应保留原文至少85%的有效正文；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
         extraction: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('extraction')}\n最多32个事实宿主；不得输出旧 ENTRY 外壳。`],
         worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
-        smallSummary: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('smallSummary')}\n以完整表达本场景形成的局部规律为准。`],
+        smallSummary: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('smallSummary')}\n“保留”不是输出动作；无需修改的来源不输出任何行，整批无执行动作时只输出“无”。分隔符必须使用全角“｜”。以完整表达本场景形成的局部规律为准。`],
         largeSummary: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('largeSummary')}\n以完整表达长期整体规律为准。`],
         manualMerge: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('manualMerge')}\n模型只做语义抽象，不决定 UID、目标类型或包含关系。`],
         migrationReview: ['- 最终结论必须首先出现。通过只输出 PASS；不通过只输出 FAIL 协议行；总长度不超过800个中文字符。'],
@@ -13922,9 +13959,9 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
         : '';
     const structureOverview = summaryPromptStructureOverview(entries);
     const system = isSmall
-        ? `职责：对刚结束 SceneGroup 内被触及的当前有效世界书宿主执行一次“先收束、后粗化”的局部结算。\n\n【材料含义】\n系统只负责选出本场景真正被触及的宿主并按类型层级排列；系统没有替你判断谁属于谁。人物、场景、物品、事件、世界条目可能只是同一经历在不同宿主上的原子投影。\n\n【第一阶段：宿主收束】\n- 必须先判断低层条目是否仍拥有独立世界生命周期，再决定是否继续作为独立条目存在；不要一上来逐条摘要。\n- 结构层级只用于寻找候选上级：世界 > 场景 > 事件 > 人物 > 物品。层级不是自动包含关系；只有材料明确支持真实承接时才能归入。\n- 物品优先检查独立性：普通装备、随身用品、一次性资源、只作为某人物持有物/某场景资源/某事件结果存在的物品，如果没有跨场景独立追踪、独立能力或限制、持续争夺/归属流转、独立召回价值，应写回真实上级宿主后沉降物品条目。具有独立生命周期的唯一物品必须保留独立条目。\n- 背景人物、局部场景、临时事件同理：只有在其独立身份、状态或后续作用已经没有单独召回价值，并被上级宿主完整承接时才沉降。\n- 收束不是按类型强行删除；找不到确定宿主、承接不完整或仍有独立生命周期时必须保留。\n\n【第二阶段：颗粒度粗化】\n- 完成宿主收束后，再对剩余宿主中属于本场景的重复、旧状态和局部过程做抽象。\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 每个来源都明确判断最终去向：独立价值仍在则保留；仅局部旧事实被替代则“移除”；内容与独立召回身份都已被目标完整承接则“沉降”。\n- 目标需要新增/修改时先“写回”再沉降；目标当前已完整承接时直接输出“沉降”即可，不制造重复写回。\n\n【唯一输出协议】\n${(0, protocols_1.protocolTextForStage)('smallSummary')}\n\n类型只能写：${protocols_1.SUMMARY_TYPES.join('、')}。\n栏目名称必须严格从对应类型的合法栏目中选择，不得自行改写、扩展或使用近义栏目：\n${summarySectionSchemaText()}\n只允许逐行输出该协议；没有需要结算的内容时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`
+        ? `职责：对刚结束 SceneGroup 内被触及的当前有效世界书宿主执行一次“先收束、后粗化”的局部结算。\n\n【材料含义】\n系统只负责选出本场景真正被触及的宿主并按类型层级排列；系统没有替你判断谁属于谁。人物、场景、物品、事件、世界条目可能只是同一经历在不同宿主上的原子投影。\n\n【第一阶段：宿主收束】\n- 必须先判断低层条目是否仍拥有独立世界生命周期，再决定是否继续作为独立条目存在；不要一上来逐条摘要。\n- 结构层级只用于寻找候选上级：世界 > 场景 > 事件 > 人物 > 物品。层级不是自动包含关系；只有材料明确支持真实承接时才能归入。\n- 物品优先检查独立性：普通装备、随身用品、一次性资源、只作为某人物持有物/某场景资源/某事件结果存在的物品，如果没有跨场景独立追踪、独立能力或限制、持续争夺/归属流转、独立召回价值，应写回真实上级宿主后沉降物品条目。具有独立生命周期的唯一物品必须保留独立条目。\n- 背景人物、局部场景、临时事件同理：只有在其独立身份、状态或后续作用已经没有单独召回价值，并被上级宿主完整承接时才沉降。\n- 收束不是按类型强行删除；找不到确定宿主、承接不完整或仍有独立生命周期时必须保留。\n\n【第二阶段：颗粒度粗化】\n- 完成宿主收束后，再对剩余宿主中属于本场景的重复、旧状态和局部过程做抽象。\n- 只使用提供的当前有效世界书材料，不回读原正文，不补写缺失剧情。\n- 小总结不得新增或修改基础设定；基石锁条目只读。\n- 每个来源都要判断最终去向，但“保留”只是内部判断，不是输出动作：独立价值仍在且无需修改时保持原样，不输出任何协议行；仅局部旧事实被替代才输出“移除”；内容与独立召回身份都已被目标完整承接才输出“沉降”。\n- 目标需要新增/修改时先“写回”再沉降；目标当前已完整承接时直接输出“沉降”即可，不制造重复写回。\n- 禁止输出“保留｜…”、保留说明或逐来源结论。只有真正需要执行的写回、移除、沉降才输出协议行；若整批都无需执行任何操作，只输出“无”。\n\n【唯一输出协议】\n${(0, protocols_1.protocolTextForStage)('smallSummary')}\n\n类型只能写：${protocols_1.SUMMARY_TYPES.join('、')}。\n栏目名称必须严格从对应类型的合法栏目中选择，不得自行改写、扩展或使用近义栏目：\n${summarySectionSchemaText()}\n分隔符必须使用协议中显示的全角竖线“｜”。只允许逐行输出该协议；无需修改的来源不要输出任何行；没有任何需要执行的写回、移除或沉降时只输出“无”。不输出“保留”、标题、解释、UID、项目符号、JSON或代码块。`
         : `职责：把多个已经完成小总结的 SceneGroup 结果先做跨场景结构收束，再抽象为更高层、长期成立的整体规律。\n\n【第一阶段：跨场景收束】\n- 输入来自不同已结算 SceneGroup；先寻找这些局部结果是否共同属于同一个更大的场景、事件、人物长期状态、世界状态或基础规律。不要把平铺 UID 当成彼此无关的条目逐条总结。\n- 只有存在真实承接/包含关系时才形成上级宿主。低层来源内容和独立召回身份均被完整覆盖后才沉降；无法确定时保留。\n- 不因条目类型高低机械合并，不因名称相似推断同一对象。\n\n【第二阶段：长期粗化】\n- 在完成跨场景收束后，再把多个局部结果之间稳定的承接、演化和长期影响抽象为整体规律；不要只逐条改写原条目。\n- 只依据系统提供的有效世界书条目，不重新读取原正文；事件条目也是合法历史材料，已结束事件只能作为历史结果理解，不重新写成活动任务。\n- 需要新增或修改上层结果时先“写回”；旧事实被替代用“移除”；来源条目已被上层完整承接用“沉降”。目标若当前已经完整承接来源，可直接沉降，不要求重复写回。\n- 只有材料已经稳定形成长期世界运行规律时，才允许写入未被基石锁保护的基础设定。\n- 保留仍有独立检索价值的人物、事件、场景、物品和历史锚点。\n\n【唯一输出协议】\n${(0, protocols_1.protocolTextForStage)('largeSummary')}\n\n类型只能写：${protocols_1.SUMMARY_TYPES.join('、')}。\n栏目名称必须严格从对应类型的合法栏目中选择，不得自行改写、扩展或使用近义栏目：\n${summarySectionSchemaText()}\n只允许逐行输出该协议；没有形成更高层结构时只输出“无”。不输出标题、解释、UID、项目符号、JSON或代码块。`;
-    const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}${timelineText ? `\n\n【时间窗口 / 承接顺序】\n${timelineText}` : ''}${structureOverview ? `\n\n【宿主层级视图（仅结构提示，不代表自动包含）】\n${structureOverview}` : ''}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n先收束，再粗化；只输出固定模板。`;
+    const user = `【处理范围】\n${subject || (isSmall ? '当前已结束场景' : '当前待整理的局部规则')}${timelineText ? `\n\n【时间窗口 / 承接顺序】\n${timelineText}` : ''}${structureOverview ? `\n\n【宿主层级视图（仅结构提示，不代表自动包含）】\n${structureOverview}` : ''}\n\n【有效世界书材料】\n${entries.map((entry) => entryForPrompt(entry, perEntryLimit)).join('\n\n') || '（无）'}${custom ? `\n\n【附加要求】\n${custom}` : ''}\n\n先收束，再粗化。无需修改的来源保持原样且不要输出“保留”行；最后只输出真正可执行的固定协议行，整批无操作时只输出“无”。`;
 
     return { system, user };
 }
