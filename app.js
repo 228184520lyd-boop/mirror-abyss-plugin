@@ -12683,13 +12683,15 @@ function timelineMatchUids(timeline) {
 }
 // [MA-LOCK] 函数职责锁：appendTimelineStage 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function appendTimelineStage(timeline, rootResult, snapshot) {
-    // [MA-LOCK] 数据来源锁：hasExtractionPoints 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const hasExtractionPoints = Array.isArray(rootResult?.extractionPoints);
-    // [MA-LOCK] 数据来源锁：semanticUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const semanticUids = [...new Set((rootResult?.extractionPoints ?? []).map((point) => String(point?.uid ?? '').trim()).filter(Boolean))];
-    // 正文提取存在 extractionPoints 时，它们就是本轮唯一语义变化工作集；事务层的投影/清理写入不再扩大 SceneGroup。
+    // [MA-FREEZE][SceneGroup 小总结输入批次]
+    // 本轮 stage.uids 的唯一来源是同一次权威 commit 的真实业务变更回执（summaryMarksFromResult(rootResult)）。
+    // 它表示“这一轮真正成功创建/更新、且提交后仍存在的世界书 UID”；同一次 commit 得到的 UID 必须整批进入 stage，不得再拆分。
+    // 代码在这里只负责把材料完整交给 SceneGroup：不得按人物/事件/场景等类型、重要度、相似度、关联强弱或其他语义再次筛选。
+    // extractionPoints/point.relatedUids 只保存模型提取时的主宿主与关系谱系，不能替代业务 commit 回执，也不能据此补入或剔除 stage UID。
+    // stage.uids = 单次 commit 的历史批次；memberUids = 当前 SceneGroup 各 stage.uids 的去重并集，并且是后续小总结取材的唯一权威。
+    // 小总结触发后应沿 timelineUids() 读取完整 memberUids，再一次性取这些 UID 对应的当前有效世界书条目交给模型；代码不在批内判断“该不该总结”。
     // [MA-LOCK] 数据来源锁：changed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const changed = hasExtractionPoints ? semanticUids : summaryMarksFromResult(rootResult).map((mark) => mark.uid);
+    const changed = summaryMarksFromResult(rootResult).map((mark) => mark.uid);
     // [MA-LOCK] 数据来源锁：points 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const points = (rootResult?.extractionPoints ?? []).filter((point) => changed.includes(String(point?.uid ?? '')));
     // [MA-LOCK] 数据来源锁：base 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -12714,7 +12716,7 @@ function appendTimelineStage(timeline, rootResult, snapshot) {
     // [MA-LOCK] 状态写入锁：base.memberUids 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
     base.memberUids = [...new Set([...(base.memberUids ?? []), ...changed])];
     base.stages.push({ seq: base.stages.length + 1, messageKey: String(snapshot.messageKey ?? ''), uids: [...new Set(changed)], points });
-    // SceneGroup 永久保存“主 UID → 本场被动过 UID”的包含关系；阶段只保留 UID、事实哈希与关系，不保存正文副本。
+    // stages 只保存每次 commit 的 UID 批次与提取关系谱系，不保存正文副本；memberUids 持续累计本 SceneGroup 实际被动过的 UID。
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (base.stages.length > 160) base.stages = base.stages.slice(-160).map((stage, index) => ({ ...stage, seq: index + 1 }));
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
