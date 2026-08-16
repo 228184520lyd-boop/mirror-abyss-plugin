@@ -7408,9 +7408,11 @@ class MemoryRunner {
         let smallRanThisTurn = false;
         let summaryWarning = '';
         try {
-            // 自动链每个正文回合最多处理一个已关闭 SceneGroup。积压时按原时间顺序逐组消化，
-            // 不把多个场景合成一次大请求；失败组标为 failed，不自动重试，也不阻塞后续 pending 组。
-            const summaryGroup = settings.autoSmallSummary !== false ? nextPendingSceneGroup(closedEventTimelines, false) : null;
+            // 自动小总结只响应本轮真实场景切换。历史 pending 不在同场景正文回合里自动消化；
+            // 失败组保持 failed，交由玩家手动重试。
+            const summaryGroup = sceneBoundary && settings.autoSmallSummary !== false
+                ? nextPendingSceneGroup(closedEventTimelines, false)
+                : null;
             if (summaryGroup) {
                 const marks = timelineUids(summaryGroup).map((uid) => ({ uid }));
                 if (marks.length) {
