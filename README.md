@@ -1,3 +1,10 @@
+# 2026-08-16 实机修复：总结栏目协议对齐
+
+- 修复小总结 Prompt 只声明“栏目名称”却未提供各类型合法栏目，导致模型输出 `人物｜当前状态` 等表面合法但 parser 不接受的栏目。
+- 小总结与大总结 Prompt 现在直接读取 `TYPE_SECTION_ORDER` 生成合法栏目表，与 `isCanonicalSectionName()` 使用同一份栏目定义。
+- parser 不放宽、不增加近义词猜测；模型输出仍必须使用系统标准栏目。
+- 失败小总结的第二次干净重试复用同一 Prompt，因此同样获得完整栏目约束。
+
 # Mirror Abyss 3.0.0-lite.ui.1 — realtest candidate（single standard）
 
 ## 2026-08-16 实机修复：Extraction Timeline 参数契约
