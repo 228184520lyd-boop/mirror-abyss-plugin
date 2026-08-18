@@ -3993,7 +3993,7 @@ class DiagnosticsService {
                         profileId: settings.modelProfileId,
                         sourceText: `${playerText}\n${assistantText}`,
                     });
-                    const blocks = (0, parser_1.parseExtractionProtocol)(raw);
+                    const blocks = (0, parser_1.parseExtractionProtocol)(raw, []);
                     if (!blocks.length) {
                         const diagnostics = blocks.diagnostics || {};
                         throw new Error(`合成状态变化未形成可识别条目格式；异常片段${(diagnostics.skipped || []).length}个`);
@@ -4564,6 +4564,12 @@ function extractReferences(content, type = '') {
             if (splitTitle(title)) output.push(title);
         }
     }
+    // 只有正文明确写出的“详见「完整条目标题」”才建立显式引用；不做相似度或语义猜测。
+    const source = String(content ?? '');
+    for (const match of source.matchAll(/详见\s*[「『《]([^」』》]+)[」』》]/gu)) {
+        const title = normalizeTitle(String(match[1] ?? ''));
+        if (splitTitle(title)) output.push(title);
+    }
     return unique(output);
 }
 exports.canonicalSectionName = canonicalSectionName;
@@ -4596,7 +4602,7 @@ const COMMON_SECTION_ALIASES = {
     '称号': '别名',
 };
 const TYPE_SECTION_ORDER = Object.freeze({
-    人物: Object.freeze(['身份', '稳定', '行为倾向', '表达方式', '当前', '关系', '关系立场', '持有', '已知', '误信', '固定事实', '别名']),
+    人物: Object.freeze(['身份', '稳定', '当前', '关系', '关系立场', '持有', '已知', '误信', '固定事实', '别名']),
     场景: Object.freeze(['定义', '空间结构', '固定资源', '固定设施', '常驻角色', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
     物品: Object.freeze(['定义', '功能', '当前', '限制', '固定事实', '别名']),
     事件: Object.freeze(['参与', '附属人员', '场景', '已发生进展', '未发生进展', '结果', '别名']),
@@ -4604,7 +4610,8 @@ const TYPE_SECTION_ORDER = Object.freeze({
     基础设定: Object.freeze(['世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名']),
 });
 function isCanonicalSectionName(type, section) {
-    return (TYPE_SECTION_ORDER[String(type ?? '').trim()] ?? []).includes(String(section ?? '').trim());
+    // 栏目格式固定、栏目名称开放；TYPE_SECTION_ORDER 只提供基础语义锚点与首选顺序，不再充当白名单。
+    return Boolean(String(section ?? '').trim());
 }
 
 const TYPE_SECTION_ALIASES = {
@@ -4724,9 +4731,10 @@ const TYPE_SECTION_ALIASES = {
 function canonicalSectionName(value, type = '') {
     const raw = String(value ?? '').trim();
     const compact = raw.replace(/\s+/gu, '');
-    return TYPE_SECTION_ALIASES[String(type ?? '')]?.[compact]
-        ?? COMMON_SECTION_ALIASES[compact]
-        ?? raw;
+    const mapped = TYPE_SECTION_ALIASES[String(type ?? '')]?.[compact]
+        ?? COMMON_SECTION_ALIASES[compact];
+    // 只做基础语义同义归一。旧版把部分栏目映射为空会直接丢内容；现在无有效映射时原样保留。
+    return String(mapped ?? '').trim() || raw;
 }
 
 function sectionSlot(line) {
@@ -7623,17 +7631,17 @@ class MemoryRunner {
                         generationOptions: compact && settings.modelProfileId ? { includePreset: false } : undefined,
                     });
                     this.validate(snapshot);
-                    blocks = (0, parser_1.parseExtractionProtocol)(raw);
+                    blocks = (0, parser_1.parseExtractionProtocol)(raw, entries);
                     diagnostics = blocks.diagnostics ?? diagnostics;
                     explicitNone = (0, parser_1.sanitizeModelText)(raw).trim() === protocols_1.NONE;
                     if (blocks.length || explicitNone) break;
-                    extractionRetryReason = (diagnostics.skipped || []).map((item) => item.reason).filter(Boolean).slice(0, 3).join('；') || '最终文本未形成固定事实协议';
+                    extractionRetryReason = (diagnostics.skipped || []).map((item) => item.reason).filter(Boolean).slice(0, 3).join('；') || '最终文本未形成条目协议';
                     lastError = new Error(extractionRetryReason);
                 } catch (error) {
                     lastError = error;
                     // 只有“没有最终协议文本”这一类确定性响应形态可告诉模型；HTTP/网关错误不属于模型格式错误。
-                    if (error?.code === 'MA_REASONING_ONLY') extractionRetryReason = '上一次只返回推理内容，没有最终固定协议';
-                    else if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') extractionRetryReason = '上一次最终文本为空，没有任何固定协议行';
+                    if (error?.code === 'MA_REASONING_ONLY') extractionRetryReason = '上一次只返回推理内容，没有最终条目协议';
+                    else if (error?.code === 'MA_EMPTY_MODEL_RESPONSE') extractionRetryReason = '上一次最终文本为空，没有任何条目协议';
                 }
                 if (attempt === 0) {
                     this.progress('running', `提取首次未形成可提交协议，使用同一正文干净重开一次：${(0, util_1.errorText)(lastError)}`, { titles: [], phase: 'extract-retry' });
@@ -7643,12 +7651,12 @@ class MemoryRunner {
         }
         if (!blocks.length) {
             const skippedTitles = (diagnostics.skipped || []).map((item) => item.title || '异常片段');
-            const detail = explicitNone ? '本轮明确无有效变化，世界书零写入' : `没有可安全提交的固定事实；已隔离${skippedTitles.length}个异常片段`;
+            const detail = explicitNone ? '本轮明确无有效变化，世界书零写入' : `没有可提交的条目栏目；已隔离${skippedTitles.length}个异常片段`;
             this.setStatus(snapshot.chatKey, 'matching', detail, '', raw, emptyPlan());
             this.progress(explicitNone ? 'success' : 'error', detail, { titles: [], created: [], updated: [], skipped: skippedTitles, repaired: diagnostics.repaired || 0, phase: 'extract' });
             if (!explicitNone) {
                 const reasons = (diagnostics.skipped || []).map((item) => `${item.title || '异常片段'}：${item.reason || '协议不完整'}`).slice(0, 4).join('；');
-                throw new Error(`提取连续两次未形成可识别的固定事实协议，世界书未写入且处理游标未推进${reasons ? `：${reasons}` : ''}`);
+                throw new Error(`提取连续两次未形成可识别的条目协议，世界书未写入且处理游标未推进${reasons ? `：${reasons}` : ''}`);
             }
             return { entries, changed: false, diagnostics, extractionPoints: [] };
         }
@@ -8317,7 +8325,6 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
     const output = [];
     const seenExisting = new Set();
     const seenNew = new Set();
-    const allowedTypes = new Set(protocols_1.SUMMARY_TYPES);
     for (let index = 0; index < lines.length;) {
         const line = String(lines[index] ?? '').trim();
         if (!line) { index += 1; continue; }
@@ -8336,7 +8343,7 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
             if (seenNew.has(number)) return { entries: [], error: `新条目${number}重复返回` };
             seenNew.add(number);
         }
-        if (!allowedTypes.has(type)) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}的类型“${type}”不合法` };
+        if (!type) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}缺少类型` };
         if (!name) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}缺少稳定名称` };
         index += 1;
         const body = [];
@@ -8346,12 +8353,11 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
         if (index >= lines.length) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}缺少“结束条目”` };
         index += 1;
         const parsed = (0, parser_1.parseEntrySections)(body.join('\n'));
-        const allowedSections = new Set(information_point_1.TYPE_SECTION_ORDER[type] ?? []);
         const order = [];
         const values = {};
         for (const rawSection of parsed.order ?? []) {
             const section = (0, information_point_1.canonicalSectionName)(rawSection, type);
-            if (!section || !allowedSections.has(section)) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}的栏目“${rawSection}”不属于${type}` };
+            if (!section) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}存在空栏目名` };
             if (!values[section]) { values[section] = []; order.push(section); }
             for (const rawFact of parsed.values?.[rawSection] ?? []) {
                 const fact = (0, parser_1.sanitizeWorldbookLine)(rawFact);
@@ -8574,12 +8580,10 @@ function sortEntries(entries) {
 }
 
 function wholeBookPrompt(settings, entries, retryReason = '') {
-    const schema = Object.entries(information_point_1.TYPE_SECTION_ORDER)
-        .map(([type, sections]) => `${type}：${sections.join('、')}`).join('\n');
     const protocol = (0, protocols_1.protocolTextForStage)('migration');
     const input = entries.map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
     return {
-        system: `职责：整理整本世界书的信息归属与颗粒度，使每条信息处在合适层级，并保留所有仍然具有长期影响的有效内容。目标不是缩短字数。\n\n整理原则：\n- 同一件事被拆成多个过碎条目时，可以合并到更合适的主体条目。\n- 某条信息只是另一条长期事实或规则的附属时，可以收回到更合适的宿主。\n- 一个条目混入多个不同颗粒度或不同主体的信息时，可以在确有必要时拆分成更清楚的独立条目。\n- 具体过程可以整理为已经形成并会继续影响后续的结果，但不能因为追求简短而丢掉仍然有效的事实。\n- 已经能够自然形成更高层规律的内容可以向上整理；材料不足时不要强行拔高。\n- 不编造、不预测、不为了变少而合并本来应该独立存在的信息。\n\n你看到的“条目1、条目2……”只是本次请求用于对应输入条目的临时编号。\n原条目保留或改写：使用原临时编号返回完整最终条目。\n原条目被其他条目完整吸收后不再需要独立存在：不要返回它。\n确实需要拆出或形成新的独立条目：使用“新条目N”。\n返回什么系统保存什么，未返回的原条目会删除。\n不要输出删除命令，不要解释过程，不要编造。\n\n【合法类型与栏目】\n${schema}\n\n【输出格式】\n${protocol}${retryReason ? `\n\n【上一次失败原因】\n${retryReason}\n请使用同一整本世界书重新输出正确最终协议。` : ''}`,
+        system: `职责：整理整本世界书的信息归属与颗粒度，使每条信息处在合适层级，并保留所有仍然具有长期影响的有效内容。目标不是缩短字数。\n\n整理原则：\n- 同一件事被拆成多个过碎条目时，可以合并到更合适的主体条目。\n- 某条信息只是另一条长期事实或规则的附属时，可以收回到更合适的宿主。\n- 一个条目混入多个不同颗粒度或不同主体的信息时，可以在确有必要时拆分成更清楚的独立条目。\n- 具体过程可以整理为已经形成并会继续影响后续的结果，但不能因为追求简短而丢掉仍然有效的事实。\n- 已经能够自然形成更高层规律的内容可以向上整理；材料不足时不要强行拔高。\n- 不编造、不预测、不为了变少而合并本来应该独立存在的信息。\n\n你看到的“条目1、条目2……”只是本次请求用于对应输入条目的临时编号。\n原条目保留或改写：使用原临时编号返回完整最终条目。\n原条目被其他条目完整吸收后不再需要独立存在：不要返回它。\n确实需要拆出或形成新的独立条目：使用“新条目N”。\n返回什么系统保存什么，未返回的原条目会删除。\n不要输出删除命令，不要解释过程，不要编造。\n\n【基础格式与语义】\n- 标题保持“类型｜稳定名称”。\n- 正文保持“【栏目】”后接“- 完整事实”。\n- 【当前】/【当前状态】表示当前时间面的有效状态。\n- 【固定事实】表示已经成立且仍持续有效的长期事实。\n- 【已发生进展】表示事件已经实际发生的进展。\n- 其他类型和栏目允许按原材料保留或整理，不因名称未预设而删除。\n\n【输出格式】\n${protocol}${retryReason ? `\n\n【上一次失败原因】\n${retryReason}\n请使用同一整本世界书重新输出正确最终协议。` : ''}`,
         user: `【完整世界书】\n${input}\n\n直接输出按信息归属与颗粒度整理后的整本世界书最终条目。`,
     };
 }
@@ -8591,7 +8595,6 @@ function parseOrganizerResult(raw, selectedEntries) {
     const output = [];
     const seenExisting = new Set();
     const seenNew = new Set();
-    const allowedTypes = new Set(protocols_1.SUMMARY_TYPES);
     for (let index = 0; index < lines.length;) {
         const line = String(lines[index] ?? '').trim();
         if (!line) { index += 1; continue; }
@@ -8610,7 +8613,7 @@ function parseOrganizerResult(raw, selectedEntries) {
             if (seenNew.has(number)) return { entries: [], error: `新条目${number}重复返回` };
             seenNew.add(number);
         }
-        if (!allowedTypes.has(type)) return { entries: [], error: `条目${number}类型“${type}”不合法` };
+        if (!type) return { entries: [], error: `条目${number}缺少类型` };
         if (!name) return { entries: [], error: `条目${number}缺少稳定名称` };
         index += 1;
         const body = [];
@@ -8618,12 +8621,11 @@ function parseOrganizerResult(raw, selectedEntries) {
         if (index >= lines.length) return { entries: [], error: `条目${number}缺少“结束条目”` };
         index += 1;
         const parsed = (0, parser_1.parseEntrySections)(body.join('\n'));
-        const allowedSections = new Set(information_point_1.TYPE_SECTION_ORDER[type] ?? []);
         const order = [];
         const values = {};
         for (const rawSection of parsed.order ?? []) {
             const section = (0, information_point_1.canonicalSectionName)(rawSection, type);
-            if (!section || !allowedSections.has(section)) return { entries: [], error: `条目${number}栏目“${rawSection}”不属于${type}` };
+            if (!section) return { entries: [], error: `条目${number}存在空栏目名` };
             if (!values[section]) { values[section] = []; order.push(section); }
             for (const rawFact of parsed.values?.[rawSection] ?? []) {
                 const fact = (0, parser_1.sanitizeWorldbookLine)(rawFact);
@@ -8696,7 +8698,6 @@ const protocols_1 = require("./protocols");
 const INPUT_LIMITS = Object.freeze({
     audit: 24000,
     revision: 30000,
-    extraction: 160000,
     worldSettingImport: 42000,
     smallSummary: 160000,
     largeSummary: 160000,
@@ -8836,11 +8837,8 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
     const stageRules = {
         audit: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('audit')}\n总长度不超过300个中文字符。`],
         revision: [`- 只输出可直接替换的完整正文。必须从原文开头写到原文结尾，不得中途停止、缺段或用省略号代替剩余内容。除删除明确违规内容外，修正版应保留原文至少85%的有效正文；总长度原则上不超过原输入的110%（当前参考长度约${sourceLength || 0}字符）。`],
-        extraction: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('extraction')}\n最多32个事实宿主；不得输出旧 ENTRY 外壳。`],
         worldSettingImport: ['- 只输出规定的 ENTRY 协议或“无”。最多16条，最终协议总长度不超过8000个中文字符。'],
-        smallSummary: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('smallSummary')}\n“保留”不是输出动作；无需修改的来源不输出任何行，整批无执行动作时只输出“无”。分隔符必须使用全角“｜”。以完整表达本场景形成的局部规律为准。`],
-        largeSummary: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('largeSummary')}\n以完整表达长期整体规律为准。`],
-        manualMerge: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('manualMerge')}\n模型只做语义抽象，不决定 UID、目标类型或包含关系。`],
+        manualMerge: [`- 唯一输出协议：\n${(0, protocols_1.protocolTextForStage)('manualMerge')}\n仍需保留的输入条目必须返回完整最终正文；未返回的输入条目会删除。`],
         migrationReview: ['- 最终结论必须首先出现。通过只输出 PASS；不通过只输出 FAIL 协议行；总长度不超过800个中文字符。'],
         migrationPlan: ['- 只输出 ANCHOR、GROUP、DROP 协议行；覆盖全部来源后立即停止，不输出说明。'],
         migration: ['- 只输出规定的重建条目协议；完成本批全部对象后立即停止，不输出说明。'],
@@ -8849,6 +8847,9 @@ function outputContractForStage(stage, responseTokens, sourceText = '') {
 }
 
 function withOutputContract(prompt, stage, responseTokens, sourceText = '') {
+    if (stage === 'extraction' || stage === 'smallSummary' || stage === 'largeSummary') {
+        return { system: String(prompt?.system ?? '').trim(), user: String(prompt?.user ?? '') };
+    }
     const contract = outputContractForStage(stage, responseTokens, sourceText);
     return {
         system: `${String(prompt?.system ?? '').trim()}\n\n${contract}`.trim(),
@@ -9121,42 +9122,34 @@ function applyPlanToEntries(plan, entries, settings = undefined) {
 }
 // 条目长期老化只由 SceneGroup 总结负责；运行层不再执行第二套自动压缩/删除预算。
 function normalizeEntryTemplate(entry) {
-    const order = information_point_1.TYPE_SECTION_ORDER[String(entry?.type ?? '')];
-    if (!order || !entry?.sections?.values) return entry;
-    const allowed = new Set(order);
-    const next = Object.fromEntries(order.map((name) => [name, []]));
+    if (!entry?.sections?.values) return entry;
+    const preferred = information_point_1.TYPE_SECTION_ORDER[String(entry?.type ?? '')] ?? [];
+    const next = {};
+    const seenOrder = [];
     const append = (section, line) => {
-        if (!section || !line) return;
-        next[section] = (0, util_1.unique)([...(next[section] ?? []), String(line).trim()]);
+        const name = String(section ?? '').trim();
+        const value = String(line ?? '').trim();
+        if (!name || !value) return;
+        if (!next[name]) { next[name] = []; seenOrder.push(name); }
+        next[name] = (0, util_1.unique)([...next[name], value]);
     };
     for (const rawName of (0, util_1.unique)([...(entry.sections.order ?? []), ...Object.keys(entry.sections.values)])) {
-        const canonical = (0, information_point_1.canonicalSectionName)(rawName, entry.type);
-        // ui.89: retired person columns are intentionally discarded, never migrated into 【固定事实】.
-        if (entry.type === '人物' && !canonical && /^(?:性格核心|决策倾向|性格|人格|稳定性格|人格核心|核心性格|决策模式|判断倾向|判断模式|选择倾向)$/u.test(String(rawName ?? '').trim())) continue;
+        const canonical = (0, information_point_1.canonicalSectionName)(rawName, entry.type) || String(rawName ?? '').trim();
         for (const rawLine of entry.sections.values[rawName] ?? []) {
             const inline = String(rawLine ?? '').match(/^\s*【\s*([^】]+?)\s*】\s*(.+)$/u);
-            const inlineSection = inline ? (0, information_point_1.canonicalSectionName)(inline[1], entry.type) : '';
-            const target = allowed.has(inlineSection) ? inlineSection : allowed.has(canonical) ? canonical : fallbackTemplateSection(entry.type, rawName);
+            const target = inline
+                ? ((0, information_point_1.canonicalSectionName)(inline[1], entry.type) || String(inline[1] ?? '').trim())
+                : canonical;
             append(target, inline ? inline[2] : rawLine);
         }
     }
-    entry.sections.order = order.filter((name) => (next[name] ?? []).length);
+    const ordered = [
+        ...preferred.filter((name) => (next[name] ?? []).length),
+        ...seenOrder.filter((name) => !preferred.includes(name) && (next[name] ?? []).length),
+    ];
+    entry.sections.order = (0, util_1.unique)(ordered);
     entry.sections.values = Object.fromEntries(entry.sections.order.map((name) => [name, next[name]]));
     return entry;
-}
-function fallbackTemplateSection(type, rawName) {
-    const name = String(rawName ?? '');
-    if (type === '人物') {
-        if (/(?:稳定名称|身份|职业|阵营)/u.test(name)) return '身份';
-        if (/(?:立场|关系|同行|盟友|信任|照看|护卫)/u.test(name)) return '关系立场';
-        return '固定事实';
-    }
-    if (type === '场景') return '固定事实';
-    if (type === '物品') return '固定事实';
-    if (type === '事件') return '已发生进展';
-    if (type === '世界') return '固定事实';
-    if (type === '基础设定') return '世界常识';
-    return '';
 }
 function mergeEntryData(target, source) {
     target.keywords = (0, util_1.unique)([...(target.keywords ?? []), ...(source.keywords ?? [])]);
@@ -9577,7 +9570,6 @@ const PLAIN_SECTION_NAMES = new Set([
     '世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名',
     '固定事实', '近期经历', '事件进程', '变化记录', '最终结果', '关联条目', '关键词', '触发词', '标签', '分类',
 ]);
-const STRICT_TYPES = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
 // [MA-CONTROL-01] 模型控制层文本不得进入世界书。这里仅过滤插件自身的协议、任务说明和来源标记，
 // 不按普通“规则/禁止”字样泛删，避免误伤真实世界设定。
 const CONTROL_LINE_PATTERNS = [
@@ -9590,92 +9582,86 @@ const CONTROL_LINE_PATTERNS = [
     /^【\s*(?:新条目|内容|角色认知|过去结果|关键词|唯一输出格式|任务说明|重建规则)\s*】$/u,
     /^(?:禁止JSON、代码块|禁止解释、JSON|多个条目连续输出|每个来源行只能出现一次)/u,
 ];
-// [MA-GRANULARITY-LADDER][提取栏目契约] 固定事实协议包含栏目：模型决定语义栏目，parser 只做机械合法性校验。
-const FIXED_FACT_LINE_PATTERN = /^事实｜(人物|场景|物品|事件|世界)｜([^｜]+)｜([^｜]+)｜(建立|变化|结束)｜([^｜]*)｜(.+)$/u;
-// [MA-PROTOCOL-RETRY-DIAGNOSTIC] 这里只诊断固定协议的机械字段错误，供唯一一次干净重试使用。
-// 诊断只能回答“哪一个协议字段缺失/非法”，不得从失败文本推断剧情语义、自动补事实或改写模型答案。
-function diagnoseFixedFactLine(line) {
-    const text = String(line ?? '').trim();
-    if (!text) return '协议行为空';
-    if (!text.includes('｜') && text.includes('|')) return '分隔符必须使用全角竖线“｜”，不能使用半角“|”';
-    const parts = text.split('｜');
-    const errors = [];
-    const action = String(parts[0] ?? '').trim();
-    const type = String(parts[1] ?? '').trim();
-    const name = String(parts[2] ?? '').trim();
-    const section = String(parts[3] ?? '').trim();
-    const change = String(parts[4] ?? '').trim();
-    const fact = String(parts[6] ?? '').trim();
-    if (action !== '事实') errors.push(`第1字段必须是“事实”，当前为“${action || '（空）'}”`);
-    if (parts.length > 1 && !protocols_1.EXTRACTION_TYPES.includes(type)) errors.push(`第2字段类型“${type || '（空）'}”不合法；允许：${protocols_1.EXTRACTION_TYPES.join('、')}`);
-    if (parts.length > 2 && !name) errors.push('缺少稳定名称（第3字段）');
-    if (parts.length > 3 && !section) errors.push('缺少栏目名称（第4字段）');
-    if (parts.length > 3 && section && protocols_1.EXTRACTION_TYPES.includes(type) && !(0, information_point_1.isCanonicalSectionName)(type, section)) {
-        const allowedSections = information_point_1.TYPE_SECTION_ORDER[type] ?? [];
-        errors.push(`${type}不允许栏目“${section}”；合法栏目：${allowedSections.join('、') || '（无）'}`);
-    }
-    if (parts.length > 4 && !['建立', '变化', '结束'].includes(change)) errors.push(`第5字段必须是“建立”“变化”或“结束”，当前为“${change || '（空）'}”`);
-    // 关联对象字段沿用现有解析契约：空字符串仍可被 parser 接受，不在诊断阶段偷偷收紧协议。
-    if (parts.length > 6 && !fact) errors.push('缺少完整事实（第7字段）');
-    if (parts.length < 7) {
-        const names = ['动作“事实”', '类型', '稳定名称', '栏目', '建立/变化/结束', '关联对象', '完整事实'];
-        errors.push(`固定事实协议字段不足（当前${parts.length}段，应为7段）；缺少后续字段：${names.slice(parts.length).join('、')}`);
-    } else if (parts.length > 7) {
-        errors.push(`固定事实协议字段过多（当前${parts.length}段，应为7段）`);
-    }
-    return errors.join('；') || '不符合唯一固定事实协议；必须严格使用“事实｜类型｜稳定名称｜栏目｜建立/变化/结束｜关联对象｜完整事实”';
-}
-function parseFixedFactExtractionProtocol(raw, diagnostics) {
+// 提取与总结使用同一“条目N｜类型｜稳定名称 + 【栏目】-内容 + 结束条目”外壳。
+// 区别只在提交方式：提取只写返回的栏目；总结把返回内容视为完整最终条目。
+function parseExtractionProtocol(raw, existingEntries = []) {
+    const diagnostics = { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
     const source = sanitizeModelText(raw).replace(/\r/g, '').trim();
     if (source === protocols_1.NONE) { diagnostics.hadInput = true; return attachDiagnostics([], diagnostics); }
-    if (!source) return null;
-    diagnostics.hadInput = true;
-    const rows = [];
-    const lines = source.split('\n').map((line) => line.trim()).filter(Boolean);
-    if (!lines.length) return null;
-    for (const line of lines) {
-        const match = line.match(FIXED_FACT_LINE_PATTERN);
-        if (!match) {
-            diagnostics.skipped.push({ title: '协议错误', reason: diagnoseFixedFactLine(line), raw: line.slice(0, 600) });
+    diagnostics.hadInput = Boolean(source);
+    if (!source) return attachDiagnostics([], diagnostics);
+    const lines = source.split('\n');
+    const blocks = [];
+    const seenExisting = new Set();
+    const seenNew = new Set();
+    for (let index = 0; index < lines.length;) {
+        const line = String(lines[index] ?? '').trim();
+        if (!line) { index += 1; continue; }
+        const header = line.match(/^(条目|新条目)(\d+)｜([^｜]+)｜(.+)$/u);
+        if (!header) {
+            diagnostics.skipped.push({ title: '协议错误', reason: `无法识别的条目行：${line.slice(0, 160)}`, raw: line.slice(0, 600) });
             return attachDiagnostics([], diagnostics);
         }
-        const type = match[1];
-        const name = String(match[2] ?? '').trim();
-        const sectionName = (0, information_point_1.canonicalSectionName)(String(match[3] ?? '').trim(), type);
-        const change = String(match[4] ?? '').trim();
-        const relations = String(match[5] ?? '').split('、').map((item) => item.trim()).filter((item) => item && item !== protocols_1.NONE);
-        const fact = sanitizeWorldbookLine(String(match[6] ?? '').trim()).trim();
-        if (!protocols_1.EXTRACTION_TYPES.includes(type) || !name || !sectionName || !(0, information_point_1.isCanonicalSectionName)(type, sectionName) || !fact) {
-            diagnostics.skipped.push({ title: `${type || '未知'}｜${name || '未命名'}`, reason: '固定事实行缺少合法类型、名称、栏目或内容', raw: line.slice(0, 600) });
+        const kind = header[1] === '新条目' ? 'new' : 'existing';
+        const number = Number(header[2]);
+        let type = String(header[3] ?? '').trim();
+        let name = String(header[4] ?? '').trim();
+        if (!Number.isInteger(number) || number <= 0 || !type || !name) {
+            diagnostics.skipped.push({ title: '协议错误', reason: '条目编号、类型或标题为空', raw: line.slice(0, 600) });
             return attachDiagnostics([], diagnostics);
         }
-        rows.push({ type, name, section: sectionName, change, relations, fact });
+        if (kind === 'existing') {
+            if (number > existingEntries.length) {
+                diagnostics.skipped.push({ title: `条目${number}`, reason: '条目编号不属于本轮输入', raw: line.slice(0, 600) });
+                return attachDiagnostics([], diagnostics);
+            }
+            if (seenExisting.has(number)) {
+                diagnostics.skipped.push({ title: `条目${number}`, reason: '同一已有条目重复返回', raw: line.slice(0, 600) });
+                return attachDiagnostics([], diagnostics);
+            }
+            seenExisting.add(number);
+            const current = existingEntries[number - 1];
+            const expected = String(current?.title ?? '').trim();
+            if (`${type}｜${name}` !== expected) {
+                diagnostics.skipped.push({ title: `条目${number}`, reason: `已有条目标题必须保持“${expected}”`, raw: line.slice(0, 600) });
+                return attachDiagnostics([], diagnostics);
+            }
+        } else {
+            if (seenNew.has(number)) {
+                diagnostics.skipped.push({ title: `新条目${number}`, reason: '同一新条目编号重复返回', raw: line.slice(0, 600) });
+                return attachDiagnostics([], diagnostics);
+            }
+            seenNew.add(number);
+        }
+        index += 1;
+        const body = [];
+        while (index < lines.length && String(lines[index] ?? '').trim() !== '结束条目') {
+            body.push(lines[index]); index += 1;
+        }
+        if (index >= lines.length) {
+            diagnostics.skipped.push({ title: `${kind === 'new' ? '新条目' : '条目'}${number}`, reason: '缺少“结束条目”', raw: body.join('\n').slice(0, 600) });
+            return attachDiagnostics([], diagnostics);
+        }
+        index += 1;
+        const parsed = parseEntrySections(body.join('\n'));
+        const sections = [];
+        for (const rawSection of parsed.order ?? []) {
+            const sectionName = (0, information_point_1.canonicalSectionName)(rawSection, type);
+            if (!sectionName) continue;
+            const facts = (0, util_1.unique)((parsed.values?.[rawSection] ?? []).map((fact) => sanitizeWorldbookLine(fact)).filter(Boolean));
+            if (!facts.length) continue;
+            sections.push({ name: sectionName, lines: facts, empty: false });
+        }
+        if (!sections.length) {
+            diagnostics.skipped.push({ title: `${type}｜${name}`, reason: '条目没有“【栏目】”和“- 内容”', raw: body.join('\n').slice(0, 600) });
+            return attachDiagnostics([], diagnostics);
+        }
+        const change = kind === 'new' ? '建立' : '变化';
+        const factRows = sections.flatMap((section) => section.lines.map((fact) => ({ section: section.name, change, relations: [], fact })));
+        blocks.push({ rawTitle: `${type}｜${name}`, title: `${type}｜${name}`, type, name, sections, keywords: [name], factRows, sourceIndex: kind === 'existing' ? number - 1 : -1 });
     }
-    const grouped = new Map();
-    for (const row of rows) {
-        const title = `${row.type}｜${row.name}`;
-        const key = (0, util_1.normalizeFact)(title);
-        // [MA-GRANULARITY-LADDER][提取栏目契约] 使用模型明确给出的合法栏目；禁止把非事件重新挤回【固定事实】。
-        const sectionName = row.section;
-        const block = grouped.get(key) ?? { rawTitle: title, title, type: row.type, name: row.name, sections: [], keywords: [row.name], factRows: [] };
-        let section = block.sections.find((item) => item.name === sectionName);
-        if (!section) { section = { name: sectionName, lines: [], empty: false }; block.sections.push(section); }
-        section.lines = (0, util_1.unique)([...section.lines, row.fact]);
-        section.empty = section.lines.length === 0;
-        block.factRows.push({ section: row.section, change: row.change, relations: row.relations, fact: row.fact });
-        grouped.set(key, block);
-    }
-    const blocks = [...grouped.values()];
+    if (!blocks.length) diagnostics.skipped.push({ title: '协议错误', reason: '没有返回任何条目' });
     return attachDiagnostics(blocks, diagnostics);
-}
-function parseExtractionProtocol(raw) {
-    const diagnostics = { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
-    const fixed = parseFixedFactExtractionProtocol(raw, diagnostics);
-    if (fixed) return fixed;
-    const text = sanitizeModelText(raw).replace(/\r/g, '').trim();
-    diagnostics.hadInput = Boolean(text);
-    if (text) diagnostics.skipped.push({ title: '协议错误', reason: '缺少唯一事实协议（事实｜类型｜稳定名称｜栏目｜建立/变化/结束｜关联对象｜完整事实）', raw: text.slice(0, 600) });
-    return attachDiagnostics([], diagnostics);
 }
 function parseWorldSettingImportProtocol(raw) {
     const diagnostics = { repaired: 0, merged: [], skipped: [], warnings: [], hadInput: false };
@@ -9696,7 +9682,7 @@ function parseWorldSettingImportProtocol(raw) {
         const type = String(match[1] ?? '').trim();
         const name = String(match[2] ?? '').trim();
         const title = `${type}｜${name}`;
-        if (!STRICT_TYPES.has(type) || !name || /[<>\r\n]/u.test(name)) {
+        if (!type || !name || /[<>\r\n]/u.test(type) || /[<>\r\n]/u.test(name)) {
             diagnostics.skipped.push({ title: title || '未知条目', reason: 'ENTRY 类型或稳定名称不符合唯一协议', raw: match[0].slice(0, 600) });
             return attachDiagnostics([], diagnostics);
         }
@@ -9706,7 +9692,6 @@ function parseWorldSettingImportProtocol(raw) {
             return attachDiagnostics([], diagnostics);
         }
         const keywords = (0, util_1.unique)(keywordLines.map((line) => line.replace(/^-\s+/u, '').trim()).filter(Boolean));
-        const allowedSections = new Set(information_point_1.TYPE_SECTION_ORDER[type] ?? []);
         const sections = [];
         let current = null;
         for (const rawLine of String(match[4] ?? '').split('\n')) {
@@ -9714,10 +9699,6 @@ function parseWorldSettingImportProtocol(raw) {
             if (!line) continue;
             const heading = line.match(/^【([^】]+)】$/u)?.[1]?.trim();
             if (heading) {
-                if (!allowedSections.has(heading)) {
-                    diagnostics.skipped.push({ title, reason: `栏目“${heading}”不属于 ${type} 的唯一栏目模板`, raw: match[4].slice(0, 600) });
-                    return attachDiagnostics([], diagnostics);
-                }
                 current = { name: heading, lines: [], empty: false };
                 sections.push(current);
                 continue;
@@ -9861,9 +9842,11 @@ const protocols_1 = require("./protocols");
 const information_point_1 = require("./domain/information-point");
 
 function summarySectionSchemaText() {
-    return protocols_1.SUMMARY_TYPES
-        .map((type) => `${type}：${(information_point_1.TYPE_SECTION_ORDER[type] ?? []).join('、')}`)
-        .join('\n');
+    return `基础语义锚点（不是白名单）：
+- 【当前】/【当前状态】：当前时间面的有效状态；发生变化时写本轮结束后仍成立的当前值。
+- 【固定事实】：已经成立且仍持续有效的长期事实。
+- 【已发生进展】：事件已经实际发生的进展或结果。
+- 其他【栏目名】允许按材料原意保留、新建或重新整理；不得仅因栏目名未预设而删除事实。`;
 }
 
 function auditPrompts(settings, playerText, assistantText, options = {}) {
@@ -9906,39 +9889,28 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
     const retryReason = String(options.retryReason || '').trim();
     const existing = extractionWorldbookIndex(relevant, compact);
     const custom = clipText(String(settings.extractionPrompt || '').trim(), compact ? 420 : 760);
-    const system = `职责：比较本轮处理前的当前世界书、玩家本轮回复和当前AI正文，提取当前正文已经明确建立、变化或结束的事实。
+    const system = `根据世界书标题索引、玩家本轮回复和当前AI正文，写出本轮已经成立或发生变化的信息。
 
-玩家回复只代表玩家做了什么或表达了什么；事实是否真正成立，以当前AI正文为准。
-不要总结，不要提前粗化，不要预测，不要把可能性写成事实。
+- 已有对象使用索引中的“条目N｜完整标题”；新对象使用“新条目N｜类型｜标题”。
+- 已有条目只写本轮需要新增或更新的栏目；【当前】/【当前状态】写本轮结束时仍成立的完整状态。
+- 其他栏目按内容使用；没有变化时输出“无”。
 
-【唯一输出协议】
-${(0, protocols_1.protocolTextForStage)('extraction')}
+【输出格式】
+${(0, protocols_1.protocolTextForStage)('extraction')}${retryReason ? `
 
-格式要求：
-- 类型只能写：人物、场景、物品、事件、世界。
-- 栏目必须使用对应类型的合法栏目。
-- 完整快照栏目发生变化时，输出该栏目在本轮结束时仍成立的完整当前值。
-- 只输出规定的事实协议，不输出标题、关键词、JSON、代码块或解释。
-
-【合法栏目】
-${summarySectionSchemaText()}${retryReason ? `
-
-【上一次失败原因】
-${clipText(retryReason, 1200)}
-请根据同一份原始材料重新输出正确协议。` : ''}${custom ? `
+【上一次格式错误】
+${clipText(retryReason, 900)}` : ''}${custom ? `
 
 【附加要求】
 ${custom}` : ''}`;
-    const user = `【本轮处理前的当前世界书】
+    const user = `【世界书标题索引】
 ${existing || '（无）'}
 
 【玩家本轮回复】
 ${playerText || '（空）'}
 
 【当前AI正文】
-${assistantText || '（空）'}
-
-只输出当前正文实际造成的事实变化。`;
+${assistantText || '（空）'}`;
     return { system, user };
 }
 
@@ -9946,12 +9918,11 @@ function worldSettingImportPrompts(settings, sourceText, relevant, options = {})
     const compact = options.compact === true;
     const contextEntries = promptContextEntries(relevant, compact ? 4 : 8);
     const existing = contextEntries.map((entry) => entryForPrompt(entry, compact ? 360 : 620)).join('\n\n');
-    const schema = keywordTemplate(settings.keywordDefinitions ?? []).trim();
     const system = `职责：把玩家提交的世界设定结构化为世界书候选。
 
 玩家已经明确点击“导入世界设定”。只把玩家粘贴的设定文档结构化为世界书候选，不处理普通聊天，不把玩家的愿望误当成剧情行动。
 
-允许类型：基础设定、世界、场景、人物、物品、事件。
+推荐基础类型：基础设定、世界、场景、人物、物品、事件。材料已有明确其他类型时可以保留该类型；类型名称本身不是白名单。
 
 分流规则：
 1. 【基础设定】只提炼这个世界长期如何运行：从玩家明确给出的材料中总结稳定的运行规律，不把局部状态、一次性结果或具体对象说明升级成基础规律。
@@ -9977,8 +9948,11 @@ function worldSettingImportPrompts(settings, sourceText, relevant, options = {})
 
 多个条目连续输出。禁止JSON、代码块、序号、解释、前言、后记和标记外文本。没有可导入事实时只输出“无”。单次最多16条。
 
-可用类型与栏目：
-${schema || '使用基础设定、世界、场景、人物、物品、事件的标准栏目。'}`;
+基础格式与语义：
+- 标题保持“类型｜稳定名称”。
+- 正文保持“【栏目】”后接“- 完整事实”。
+- 【当前】/【当前状态】、【固定事实】、【已发生进展】保持基础语义一致；其他栏目允许按原材料使用。
+- 不因为栏目名未预设而改名、丢弃或迁移已有事实。`;
     const sourceLimit = 24000;
     const user = `玩家主动提交的世界设定文档（唯一事实来源）：
 ${clipText(sourceText, sourceLimit)}
@@ -10000,36 +9974,19 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 
     // [MA-SUMMARY-PROMPTS] 小总结与大总结各自只有一套独立提示词；不再存在第三套共享核心提示词。
     // 两者都不向模型解释内部组集结构，也不枚举可选类型；插件只负责临时编号、UID 映射和最终提交边界。
-    const smallSummaryRules = `整理当前内容，提炼这个局部阶段已经形成、并且会继续影响后续的有效结果。
+    const smallSummaryRules = `整理本批完整条目，输出这个场景结束后的最终条目。
 
-规则：
-- 不复述流水账，不把动作过程换一种说法重新写一遍。
-- 保留已经形成且会长期影响后续的人物变化、关系变化、事件后果、资源与权限变化、持续环境条件以及其他仍然有效的结果。
-- 一次性过程、已经失去后续影响的细节可以不再保留；但不要为了变短而删除仍然有长期作用的信息。
-- 不强行总结；没有自然形成可整理结果的内容时，可以保留现状，不新增。
-- 不把局部结果继续拔高成世界整体规律。
-- 不编造、不预测、不增加当前内容中没有的事实。
-- 带“条目N”编号的内容需要保留或改写时，用原编号返回完整最终条目；被其他内容完整吸收后可以不返回。
-- 真正需要新增独立结果时，使用“新条目1、新条目2……”。
-- 每个返回条目都必须给出完整最终正文，不是补丁。
+- 原条目沿用“条目N｜类型｜标题”；新条目使用“新条目N｜类型｜标题”。
+- 返回的原条目写完整最终正文；不再需要的原条目不返回。
+- 保留场景结束后仍成立的信息，整理重复内容和已经失效的过程。
+- 普通栏目可以调整；【当前】/【当前状态】、【固定事实】、【已发生进展】保持原有含义。`;
 
-【错误示范】
-原内容是某人进入封锁区域、经过核验后取得长期通行权限。错误写法：“某人进入区域并通过核验。”这只是复述过程，丢失了以后仍然有效的“长期通行权限”。另一个错误是直接写成“这个世界所有地区都实行统一通行制度”，这是把局部结果强行拔高。`;
+    const largeSummaryRules = `把若干已经整理过的条目进一步整理成长期基础设定。
 
-    const largeSummaryRules = `整理当前内容，在已有结果之上继续抽象、提炼更基础、更整体、更稳定的世界运行规律。
-
-规则：
-- 不复述具体剧情，不把若干局部结果简单拼接或换一种说法重写。
-- 只在材料自然支持时形成或修正更基础的整体规律；材料不足时不强行提取、不为了凑数量新增。
-- 保留会长期决定世界如何继续运行的机制、约束、关系和稳定规律。
-- 不把一次性、偶然或单个局部现象直接扩大成普遍规则。
-- 不编造、不预测、不增加当前内容中没有的事实。
-- 带“条目N”编号的内容需要保留或改写时，用原编号返回完整最终条目；被其他内容完整吸收后可以不返回。
-- 真正需要新增独立结果时，使用“新条目1、新条目2……”。
-- 每个返回条目都必须给出完整最终正文，不是补丁。
-
-【错误示范】
-若材料只是某个地点一次核验失败，错误写法：“这个世界实行严格身份许可制度。”这把单次局部现象强行提升成整体规律。若材料不足以支持更基础的规律，应当不新增。`;
+- 原基础设定沿用“条目N｜类型｜标题”；需要新增时使用“新条目N｜基础设定｜标题”。
+- 返回的原基础设定写完整最终正文；不再需要的原基础设定不返回。
+- 保留材料已经形成的长期、稳定、整体规律，不复述具体过程。
+- 普通栏目可以调整；基础栏目保持原有含义。`;
 
     // [MA-LARGE-GROUP-PROMPT] 大总结使用当前大组集的数据契约，但只使用上面的独立大总结提示词。
     if (kind === 'large' && options.largeGroup && typeof options.largeGroup === 'object') {
@@ -10079,7 +10036,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 - 不编造，不预测，不增加材料里没有的事实。
 - 每个返回条目都必须给出完整最终正文，不是补丁。
 
-【合法类型与栏目】
+【基础栏目语义】
 ${summarySectionSchemaText()}
 
 【输出格式】
@@ -10105,9 +10062,7 @@ function keywordTemplate(definitions) {
 }
 
 function extractionWorldbookIndex(entries, compact = false) {
-    const allowed = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
-    const source = (entries ?? []).filter((entry) => allowed.has(String(entry?.type ?? '').trim()));
-    return source.map((entry) => `标题：${entry.title}\n正文：\n${String(entry.content || '（空）')}`).join('\n\n');
+    return (entries ?? []).map((entry, index) => `条目${index + 1}｜${String(entry.title || '').trim()}`).filter((line) => !/｜$/u.test(line)).join('\n');
 }
 
 function promptContextEntries(relevant, limit) {
@@ -10150,18 +10105,14 @@ function clipText(value, maxChars) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NONE = exports.SUMMARY_TYPES = exports.EXTRACTION_TYPES = exports.WORLD_TYPES = exports.AUDIT = exports.EXTRACTION = exports.SUMMARY = exports.SUMMARY_REWRITE = void 0;
+exports.NONE = exports.AUDIT = exports.EXTRACTION = exports.SUMMARY = exports.SUMMARY_REWRITE = void 0;
 exports.protocolTextForStage = protocolTextForStage;
 exports.NONE = '无';
-exports.WORLD_TYPES = Object.freeze(['人物', '场景', '物品', '事件', '世界', '基础设定']);
-exports.EXTRACTION_TYPES = Object.freeze(['人物', '场景', '物品', '事件', '世界']);
-exports.SUMMARY_TYPES = exports.WORLD_TYPES;
 exports.AUDIT = Object.freeze({ pass: '审核结论：通过', revision: '审核结论：需要修正', issues: '问题：', issuePrefix: '- ' });
 exports.EXTRACTION = Object.freeze({
-    // [MA-GRANULARITY-LADDER][提取栏目契约] 细颗粒事实必须由模型直接声明语义栏目；插件只校验合法栏目，禁止下游再猜。
-    establish: '事实｜类型｜稳定名称｜栏目｜建立｜关联对象｜完整事实',
-    change: '事实｜类型｜稳定名称｜栏目｜变化｜关联对象｜完整事实',
-    end: '事实｜类型｜稳定名称｜栏目｜结束｜关联对象｜完整事实',
+    existing: '条目N｜类型｜稳定名称',
+    created: '新条目N｜类型｜稳定名称',
+    end: '结束条目',
 });
 // [MA-SUMMARY-SLOT] 总结、人工合并和整本整理都只让模型看到本次请求的临时“条目N”编号。
 // UID 永远留在插件内部；模型不输出 UID、不输出删除命令。未返回的原条目由系统按临时编号删除。
@@ -10175,15 +10126,15 @@ exports.SUMMARY = exports.SUMMARY_REWRITE;
 
 function protocolTextForStage(stage) {
     if (stage === 'audit') return `${exports.AUDIT.pass}\n或\n${exports.AUDIT.revision}\n${exports.AUDIT.issues}\n${exports.AUDIT.issuePrefix}明确问题`;
-    if (stage === 'extraction') return `${exports.EXTRACTION.establish}\n${exports.EXTRACTION.change}\n${exports.EXTRACTION.end}\n或\n${exports.NONE}`;
+    if (stage === 'extraction') return `${exports.EXTRACTION.existing}\n【栏目】\n- 本轮需要写入的事实\n${exports.EXTRACTION.end}\n\n需要新建时：\n${exports.EXTRACTION.created}\n【栏目】\n- 本轮已经成立的事实\n${exports.EXTRACTION.end}\n\n或\n${exports.NONE}`;
     if (['smallSummary', 'largeSummary', 'manualMerge', 'migration'].includes(stage)) return `${exports.SUMMARY_REWRITE.existing}
-【合法栏目】
+【栏目】
 - 完整最终事实
 ${exports.SUMMARY_REWRITE.end}
 
 需要新建时：
 ${exports.SUMMARY_REWRITE.created}
-【合法栏目】
+【栏目】
 - 完整最终事实
 ${exports.SUMMARY_REWRITE.end}`;
     return '';
@@ -10271,9 +10222,26 @@ function sceneActivityTime(entry) {
 function buildRecallPlan(entries, settings, focusUid = '') {
     const stages = sceneStageMap(entries);
     const profiles = new Map();
-    for (const entry of entries ?? []) {
-        const focus = String(focusUid || '') ? String(entry.uid) === String(focusUid) : entry.focus === true;
-        profiles.set(String(entry.uid), profileFor(entry, settings, stages.get(String(entry.uid)) || '', focus));
+    const source = Array.isArray(entries) ? entries : [];
+    const byTitle = new Map(source.map((entry) => [(0, util_1.normalizeTitle)(String(entry?.title ?? '')).toLocaleLowerCase(), entry]));
+    const explicitSources = new Set();
+    const explicitTargets = new Set();
+    for (const entry of source) {
+        for (const reference of entry?.references ?? []) {
+            const target = byTitle.get((0, util_1.normalizeTitle)(String(reference ?? '')).toLocaleLowerCase());
+            if (!target) continue;
+            explicitSources.add(String(entry.uid));
+            explicitTargets.add(String(target.uid));
+        }
+    }
+    for (const entry of source) {
+        const uid = String(entry.uid);
+        const focus = String(focusUid || '') ? uid === String(focusUid) : entry.focus === true;
+        const planned = profileFor(entry, settings, stages.get(uid) || '', focus);
+        // “详见「完整条目标题」”或明确引用栏目是唯一递归授权：源可继续扫描，目标可被递归命中。
+        if (explicitSources.has(uid)) planned.preventRecursion = false;
+        if (explicitTargets.has(uid)) planned.excludeRecursion = false;
+        profiles.set(uid, planned);
     }
     return { profiles, sceneStages: stages };
 }
@@ -10509,8 +10477,6 @@ exports.DEFAULT_KEYWORDS = [
     keyword('character', '人物', '角色身份、稳定能力、当前状态、角色自身关系、关键持有物与固定事实；人物描写只保留少量影响识别或剧情判断的客观特征。', ['角色', 'NPC'], false, [
         { key: 'identity', label: '身份', policy: 'semantic-upsert' },
         { key: 'stable', label: '稳定', policy: 'semantic-upsert' },
-        { key: 'behaviorTendency', label: '行为倾向', policy: 'semantic-upsert' },
-        { key: 'expression', label: '表达方式', policy: 'semantic-upsert' },
         { key: 'current', label: '当前', policy: 'replace-section' },
         { key: 'relations', label: '关系', policy: 'replace-by-anchor' },
         { key: 'relationshipStance', label: '关系立场', policy: 'replace-by-anchor' },
@@ -10581,28 +10547,11 @@ exports.DEFAULT_AUDIT_PROMPT = `只审核当前AI正文；不要读取或推断�
 2. AI正文输出选项栏、行动列表、攻略、内部检查、系统规则、自我解释、管理标签、回合编号或作者总结。
 3. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。`;
 exports.DEFAULT_REVISION_PROMPT = `只修改审核指出的明确违规部分。保留合规内容、原事件顺序、人物关系、叙事视角、语气和有效信息；不得续写、全面重写、新增人物、秘密、因果或结论。修正版必须是可直接替换原正文的完整自然正文，不得添加标签、解释、审核报告、选项或系统提示。`;
-// 只兼容紧邻上一个部署包的默认提示词；更早历史版本不再迁移。
-const PREVIOUS_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判定 FAIL：
-1. AI不得替玩家新增玩家未输入的台词、主动行动、重要决定、明确心理结论或价值判断。
-2. AI不得把玩家已表达的动作、语言或选择扩大成新的关键决定。
-3. AI回复不得与当前可见对话中的明确事实直接矛盾。
-4. AI回复不得输出选项栏、行动列表、攻略、内部检查、系统规则、自我解释、管理标签、回合编号或作者总结。
-5. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。
-只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
-// [MA-SUMMARY-PROMPTS] 总结系统只有小总结和大总结两套核心提示词；这里的设置项只保留玩家可选附加要求。
-// 紧邻上一部署包的旧默认值会迁移为空；玩家自己修改过的附加要求保持不动。
-const PREVIOUS_SMALL_SUMMARY_PROMPT = [
-    `把本场细颗粒事实整理成更少、更完整的中颗粒结果；保留继续游玩需要的已成立状态、结果与必要历史锚点。`,
-    `优先抽象局部稳定结果，压缩重复与过程细节；没有可自然收束的内容时不强行总结。`,
-];
+// 当前版本只使用当前提示词；不再迁移或识别旧版本内置提示词。
 exports.DEFAULT_SMALL_SUMMARY_PROMPT = ``;
-const PREVIOUS_LARGE_SUMMARY_PROMPT = [
-    `把多个中颗粒结果继续整理成更少、更完整的粗颗粒长期结果；保留跨阶段仍成立的变化、关系、结果与影响。`,
-    `根据当前大组集中的若干个已完成小总结，继续向上抽象这个世界已经稳定形成的整体运行逻辑；只建立或更新基础设定，不复述具体剧情。`,
-    `继续抽象更基础、更整体、更稳定的运行规律；材料不足时不新增，不把局部现象硬拔高成整体规律。`,
-];
+
 exports.DEFAULT_LARGE_SUMMARY_PROMPT = ``;
-exports.DEFAULT_EXTRACTION_PROMPT = `按唯一协议提取本轮正文已经明确建立、变化或结束的事实；不总结、不抽象、不按长期价值筛选。`;
+exports.DEFAULT_EXTRACTION_PROMPT = ``;
 exports.DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     modelProfileId: '',
@@ -10628,7 +10577,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
         常驻角色: 'semantic-upsert', 固定设施: 'semantic-upsert',
         持有: 'replace-section', 参与: 'replace-section', 场景: 'replace-section', 结果: 'replace-section',
         当前: 'replace-section', 当前状态: 'replace-section', 关系: 'replace-by-anchor', 关系立场: 'replace-by-anchor',
-        固定事实: 'semantic-upsert', 行为倾向: 'semantic-upsert', 表达方式: 'semantic-upsert', 已发生进展: 'semantic-upsert', 未发生进展: 'replace-section',
+        固定事实: 'semantic-upsert', 已发生进展: 'semantic-upsert', 未发生进展: 'replace-section',
     },
 });
 class SettingsStore {
@@ -10713,11 +10662,11 @@ function parseSettings(value) {
         automationPolicyVersion: 2,
         largeSummaryCount: (0, util_1.clampNumber)(candidate.largeSummaryCount, 4, 2, 30),
         autoCreateLorebook: candidate.autoCreateLorebook === true,
-        auditPrompt: migrateBuiltinPrompt(candidate.auditPrompt, PREVIOUS_AUDIT_PROMPT, exports.DEFAULT_AUDIT_PROMPT),
+        auditPrompt: String(candidate.auditPrompt ?? exports.DEFAULT_AUDIT_PROMPT) || exports.DEFAULT_AUDIT_PROMPT,
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
         extractionPrompt: String(candidate.extractionPrompt ?? exports.DEFAULT_EXTRACTION_PROMPT) || exports.DEFAULT_EXTRACTION_PROMPT,
-        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, PREVIOUS_SMALL_SUMMARY_PROMPT, exports.DEFAULT_SMALL_SUMMARY_PROMPT),
-        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, PREVIOUS_LARGE_SUMMARY_PROMPT, exports.DEFAULT_LARGE_SUMMARY_PROMPT),
+        smallSummaryPrompt: String(candidate.smallSummaryPrompt ?? exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        largeSummaryPrompt: String(candidate.largeSummaryPrompt ?? exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(candidate.responseTokens, 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
@@ -10726,12 +10675,6 @@ function parseSettings(value) {
     };
 }
 
-function migrateBuiltinPrompt(value, legacyValue, currentDefault) {
-    const text = String(value ?? '').trim();
-    const legacyValues = Array.isArray(legacyValue) ? legacyValue : [legacyValue];
-    if (!text || legacyValues.some((item) => text === String(item ?? '').trim())) return currentDefault;
-    return text;
-}
 function parseKeywordDefinitions(value) {
     const source = Array.isArray(value) ? value : [];
     if (!Array.isArray(source) || !source.length)
@@ -12286,10 +12229,25 @@ function applyKeywordPolicy(raw, entry, profile, extension) {
 function verifyRecallConstraints(entries) {
     const currentScenes = entries.filter((entry) => entry.managed && /^(?:scene-current|scene-current-storage)$/u.test(entry.semanticRole));
     if (currentScenes.length > 1) throw new Error('当前场景超过一条');
-    for (const entry of entries.filter((item) => item.managed)) {
-        if (entry.focus && (!entry.activation.constant || !entry.activation.preventRecursion || !entry.activation.excludeRecursion)) throw new Error(`长期焦点未保持常驻递归隔离：${entry.title}`);
+    const source = entries.filter((item) => item?.managed);
+    const byTitle = new Map(source.map((entry) => [(0, util_1.normalizeTitle)(String(entry?.title ?? '')).toLocaleLowerCase(), entry]));
+    const explicitSources = new Set();
+    const explicitTargets = new Set();
+    for (const entry of source) {
+        for (const reference of entry.references ?? []) {
+            const target = byTitle.get((0, util_1.normalizeTitle)(String(reference ?? '')).toLocaleLowerCase());
+            if (!target) continue;
+            explicitSources.add(String(entry.uid));
+            explicitTargets.add(String(target.uid));
+        }
+    }
+    for (const entry of source) {
+        const uid = String(entry.uid);
+        const explicitSource = explicitSources.has(uid);
+        const explicitTarget = explicitTargets.has(uid);
+        if (entry.focus && !explicitSource && !explicitTarget && (!entry.activation.constant || !entry.activation.preventRecursion || !entry.activation.excludeRecursion)) throw new Error(`长期焦点未保持常驻递归隔离：${entry.title}`);
         if (entry.activation.vectorized && entry.triggerKeywords?.length) throw new Error(`纯向量条目仍保留关键词：${entry.title}`);
-        const maySpread = /^(scene-|world-state)/u.test(entry.semanticRole || '');
+        const maySpread = /^(scene-|world-state)/u.test(entry.semanticRole || '') || explicitSource;
         if (!maySpread && entry.activation.preventRecursion !== true) throw new Error(`非场景/世界条目仍可继续递归：${entry.title}`);
     }
 }
