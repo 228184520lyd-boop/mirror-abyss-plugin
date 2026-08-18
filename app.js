@@ -1579,11 +1579,11 @@ class ControlPanel {
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{box-sizing:border-box;display:flex;align-items:center;gap:9px;min-height:44px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
 .ma-lite-switch input{width:18px;height:18px;margin:0;flex:0 0 auto}.ma-lite-switch-text{min-width:0;flex:1}.ma-lite-switch-text b{display:block;font-size:13px}.ma-lite-switch-text small{display:block;margin-top:2px;opacity:.58;font-size:11px;line-height:1.35}
-.ma-lite-thresholds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-text-setting{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-text-setting b{font-size:13px}.ma-lite-text-setting small{font-size:11px;line-height:1.35;opacity:.58}.ma-lite-text-setting input{box-sizing:border-box;width:100%;min-height:40px;padding:7px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
+.ma-lite-thresholds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-thresholds-single{grid-template-columns:1fr}.ma-lite-number{display:flex;flex-direction:column;gap:4px;padding:7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;font-size:10px}.ma-lite-number input{box-sizing:border-box;width:100%;min-height:30px;padding:4px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:6px;background:rgba(0,0,0,.2);color:inherit}.ma-lite-text-setting{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-text-setting b{font-size:13px}.ma-lite-text-setting small{font-size:11px;line-height:1.35;opacity:.58}.ma-lite-text-setting input{box-sizing:border-box;width:100%;min-height:40px;padding:7px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.ma-lite-action{min-height:46px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.16));border-radius:9px;background:var(--black50a,rgba(255,255,255,.08));color:inherit;font-weight:700;cursor:pointer;touch-action:manipulation;pointer-events:auto!important;-webkit-tap-highlight-color:transparent}.ma-lite-action:disabled{opacity:.42;cursor:not-allowed}.ma-lite-action[data-kind="process"]{grid-column:1/-1;border-color:rgba(111,214,164,.65);background:rgba(111,214,164,.1)}.ma-lite-action[data-kind="audit"]{border-color:rgba(112,181,255,.5)}.ma-lite-action[data-kind="extract"]{border-color:rgba(111,214,164,.5)}.ma-lite-action[data-kind="cancel"]{border-color:rgba(255,150,120,.45);font-weight:500}
 .ma-lite-status{min-height:38px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:8px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);font-size:12px;font-weight:500;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}.ma-lite-pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ma-lite-stage{min-width:0;padding:8px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);text-align:center}.ma-lite-stage-head{display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px;font-weight:700}.ma-lite-stage-detail{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;opacity:.62}.ma-lite-tool-group{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:rgba(0,0,0,.08)}.ma-lite-tool-group>summary{box-sizing:border-box;display:flex;align-items:center;min-height:44px;padding:10px;cursor:pointer;font-size:12px;font-weight:700}.ma-lite-tool-group>.ma-lite-tool-content{display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}.ma-lite-status[data-error="true"]{border-color:rgba(255,126,126,.38);border-left:3px solid rgba(255,126,126,.72);background:linear-gradient(90deg,rgba(255,96,96,.10),rgba(0,0,0,.07));color:var(--SmartThemeBodyColor,#fff);font-weight:520;box-shadow:none}.ma-lite-note{font-size:11px;line-height:1.5;opacity:.58}
 .ma-lite-reset{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(255,150,120,.28);border-radius:9px;background:rgba(120,30,20,.08)}.ma-lite-reset-head{font-size:13px}.ma-lite-reset-help{font-size:10px;line-height:1.45;opacity:.65}.ma-lite-reset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-reset-actions button{min-height:44px;border:1px solid rgba(255,150,120,.35);border-radius:8px;background:rgba(80,20,15,.18);color:inherit;cursor:pointer}.ma-lite-reset-actions button:disabled{opacity:.42;cursor:not-allowed}
 .ma-lite-diagnostic{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid rgba(111,214,164,.28);border-radius:9px;background:rgba(20,100,70,.07)}.ma-lite-diagnostic-help{font-size:10px;line-height:1.5;opacity:.68}.ma-lite-diagnostic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ma-lite-diagnostic-actions button{min-height:44px;border:1px solid rgba(111,214,164,.38);border-radius:8px;background:rgba(20,100,70,.12);color:inherit;cursor:pointer}.ma-lite-diagnostic-actions button:disabled{opacity:.42;cursor:not-allowed}.ma-lite-diagnostic-status{font-size:11px;line-height:1.45}.ma-lite-diagnostic-report{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;border-radius:7px;background:rgba(0,0,0,.2);font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
-.ma-lite-worldbook-quick{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-worldbook-quick-head{display:flex;flex-direction:column;gap:2px}.ma-lite-worldbook-quick-head strong{font-size:13px}.ma-lite-worldbook-quick-head small{font-size:10px;line-height:1.4;opacity:.62}.ma-lite-worldbook-advanced{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px}.ma-lite-worldbook-advanced>summary{min-height:44px;box-sizing:border-box;padding:12px;cursor:pointer;font-size:11px}.ma-lite-worldbook-quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 7px 7px}.ma-lite-worldbook-quick button{min-height:44px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-worldbook-quick button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-worldbook-quick-status{font-size:10px;line-height:1.45;opacity:.76}.ma-lite-worldbook-quick-status[data-error="true"]{color:#ffb4b4;opacity:1}.ma-lite-summary-failures{display:flex;flex-direction:column;gap:7px;padding:8px;border:1px solid rgba(255,164,84,.25);border-radius:8px;background:rgba(255,164,84,.055)}.ma-lite-summary-failures[hidden]{display:none!important}.ma-lite-summary-failure-head{display:flex;align-items:center;gap:8px}.ma-lite-summary-failure-head strong{min-width:0;flex:1;font-size:11px}.ma-lite-summary-failure-count{font-size:10px;opacity:.68}.ma-lite-summary-failure-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-summary-failure-actions button{min-height:40px;padding:6px 7px;border:1px solid rgba(255,164,84,.34);border-radius:7px;background:rgba(255,164,84,.09);color:inherit;font-size:10px;cursor:pointer}.ma-lite-summary-failure-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-summary-failure-detail{border-top:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.08));padding-top:6px}.ma-lite-summary-failure-detail>summary{min-height:34px;display:flex;align-items:center;cursor:pointer;font-size:10px;opacity:.8}.ma-lite-summary-failure-list{display:flex;flex-direction:column;gap:5px;padding-top:5px}.ma-lite-summary-failure-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:center;padding:6px 7px;border-radius:7px;background:rgba(0,0,0,.12)}.ma-lite-summary-failure-main{min-width:0}.ma-lite-summary-failure-main strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.ma-lite-summary-failure-main small{display:block;margin-top:2px;font-size:9px;line-height:1.35;opacity:.62;overflow-wrap:anywhere}.ma-lite-summary-failure-row button{min-width:52px;min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:6px;background:rgba(0,0,0,.16);color:inherit;font-size:9px;cursor:pointer}.ma-lite-summary-failure-row button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-section-spacer{min-width:0;flex:1}.ma-lite-management-refresh{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}.ma-lite-management .ma-lite-worldbook-quick-actions{padding:0}.ma-lite-management .ma-lite-worldbook-quick-actions button{min-height:40px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-management .ma-lite-worldbook-quick-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management-entry-list{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;padding:4px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.09));border-radius:8px}.ma-lite-management-entry{display:flex;align-items:flex-start;gap:7px;padding:6px;border-radius:6px;font-size:10px;line-height:1.35;cursor:pointer}.ma-lite-management-entry:hover{background:rgba(255,255,255,.05)}.ma-lite-management-entry input{margin-top:1px;flex:0 0 auto}
+.ma-lite-worldbook-quick{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-worldbook-quick-head{display:flex;flex-direction:column;gap:2px}.ma-lite-worldbook-quick-head strong{font-size:13px}.ma-lite-worldbook-quick-head small{font-size:10px;line-height:1.4;opacity:.62}.ma-lite-worldbook-advanced{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px}.ma-lite-worldbook-advanced>summary{min-height:44px;box-sizing:border-box;padding:12px;cursor:pointer;font-size:11px}.ma-lite-worldbook-quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 7px 7px}.ma-lite-worldbook-quick button{min-height:44px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-worldbook-quick button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-worldbook-quick-status{font-size:10px;line-height:1.45;opacity:.76}.ma-lite-worldbook-quick-status[data-error="true"]{color:#ffb4b4;opacity:1}.ma-lite-summary-failures{display:flex;flex-direction:column;gap:7px;padding:8px;border:1px solid rgba(255,164,84,.25);border-radius:8px;background:rgba(255,164,84,.055)}.ma-lite-summary-failures[hidden]{display:none!important}.ma-lite-summary-failure-head{display:flex;align-items:center;gap:8px}.ma-lite-summary-failure-head strong{min-width:0;flex:1;font-size:11px}.ma-lite-summary-failure-count{font-size:10px;opacity:.68}.ma-lite-summary-failure-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-summary-failure-actions button{min-height:40px;padding:6px 7px;border:1px solid rgba(255,164,84,.34);border-radius:7px;background:rgba(255,164,84,.09);color:inherit;font-size:10px;cursor:pointer}.ma-lite-summary-failure-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-summary-failure-detail{border-top:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.08));padding-top:6px}.ma-lite-summary-failure-detail>summary{min-height:34px;display:flex;align-items:center;cursor:pointer;font-size:10px;opacity:.8}.ma-lite-summary-failure-list{display:flex;flex-direction:column;gap:5px;padding-top:5px}.ma-lite-summary-failure-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:center;padding:6px 7px;border-radius:7px;background:rgba(0,0,0,.12)}.ma-lite-summary-failure-main{min-width:0}.ma-lite-summary-failure-main strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.ma-lite-summary-failure-main small{display:block;margin-top:2px;font-size:9px;line-height:1.35;opacity:.62;overflow-wrap:anywhere}.ma-lite-summary-failure-row button{min-width:52px;min-height:36px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:6px;background:rgba(0,0,0,.16);color:inherit;font-size:9px;cursor:pointer}.ma-lite-summary-failure-row button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-management-head{display:flex;align-items:center;gap:8px}.ma-lite-management-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-section-spacer{min-width:0;flex:1}.ma-lite-management-refresh{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-management-status{font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ma-lite-management-card{padding:8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.12)}.ma-lite-management-card strong{display:block;font-size:11px}.ma-lite-management-card small{display:block;margin-top:3px;font-size:10px;line-height:1.4;opacity:.65}.ma-lite-management-card[data-kind="primary"]{grid-column:1/-1;border-color:rgba(112,181,255,.34);background:rgba(112,181,255,.08)}.ma-lite-management-card[data-kind="update"]{border-color:rgba(111,214,164,.34);background:rgba(111,214,164,.07)}.ma-lite-management-issue{padding:7px 8px;border-radius:7px;background:rgba(255,190,90,.08);font-size:10px;line-height:1.4}.ma-lite-management-issue[data-level="error"]{background:rgba(255,100,100,.1)}.ma-lite-management-relation{padding:6px 8px;border-left:2px solid rgba(120,180,255,.45);font-size:10px;line-height:1.4;opacity:.86}.ma-lite-management-empty{padding:9px;text-align:center;font-size:10px;opacity:.56}.ma-lite-management .ma-lite-worldbook-quick-actions{padding:0}.ma-lite-management .ma-lite-worldbook-quick-actions button{min-height:40px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;font-size:10px;cursor:pointer}.ma-lite-management .ma-lite-worldbook-quick-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-management-entry-list{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;padding:4px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.09));border-radius:8px}.ma-lite-management-entry{display:flex;align-items:flex-start;gap:7px;padding:6px;border-radius:6px;font-size:10px;line-height:1.35;cursor:pointer}.ma-lite-management-entry:hover{background:rgba(255,255,255,.05)}.ma-lite-management-entry input{margin-top:1px;flex:0 0 auto}
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:44px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan,.ma-lite-recall-edit{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-lock-help{padding:7px 8px;border:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:7px;font-size:10px;line-height:1.45;opacity:.78}.ma-lite-lock-help strong{opacity:1}.ma-lite-recall-locks{display:flex;flex-wrap:wrap;gap:5px;margin-left:auto}.ma-lite-recall-lock{flex:0 0 auto;min-height:36px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-lock[data-active="true"]{border-color:rgba(255,195,74,.62);background:rgba(255,195,74,.15);font-weight:700}.ma-lite-recall-lock[data-mode="bedrock"][data-active="true"]{border-color:rgba(232,126,126,.62);background:rgba(232,126,126,.14)}.ma-lite-recall-lock:disabled{opacity:.45;cursor:not-allowed}.ma-lite-badge[data-kind="bedrock"]{background:rgba(232,126,126,.16)}.ma-lite-recall-edit[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13);font-weight:700}.ma-lite-recall-edit-actions[hidden]{display:none!important}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{flex:1 1 160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;flex-wrap:wrap;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:44px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-badge[data-kind="update"]{font-weight:700}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-recall-toolbar{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:7px}.ma-lite-recall-search,.ma-lite-recall-filter{box-sizing:border-box;width:100%;min-height:40px;padding:6px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:7px;background:rgba(0,0,0,.18);color:inherit;font-size:10px}.ma-lite-recall-summary-chip{cursor:pointer;color:inherit}.ma-lite-recall-summary-chip[data-active="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-recall-main{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:7px}.ma-lite-recall-mode{display:inline-flex;align-items:center;min-height:22px;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.07);font-size:9px;font-weight:700;white-space:nowrap}.ma-lite-recall-mode[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-recall-mode[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-recall-mode[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-recall-mode[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-recall-mode[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-recall-reason{min-width:0;font-size:10px;line-height:1.45;opacity:.76}.ma-lite-recall-relations{padding:5px 7px;border-radius:6px;background:rgba(112,181,255,.07);font-size:9px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ma-lite-recall-details{border-top:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.1));padding-top:3px}.ma-lite-recall-details>summary{min-height:30px;display:flex;align-items:center;cursor:pointer;font-size:9px;opacity:.6}.ma-lite-recall-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:3px 0 2px}.ma-lite-recall-detail-grid>div{min-width:0;padding:5px 6px;border-radius:6px;background:rgba(0,0,0,.12)}.ma-lite-recall-detail-grid span{display:block;font-size:8px;opacity:.5}.ma-lite-recall-detail-grid b{display:block;margin-top:2px;font-size:9px;font-weight:500;line-height:1.35;overflow-wrap:anywhere}
@@ -1606,7 +1606,7 @@ class ControlPanel {
         header.className = 'ma-lite-header';
         const title = document.createElement('div');
         title.className = 'ma-lite-title';
-        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 世界书 · 设置 · 维护</small>';
+        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 条目 · 设置 · 维护</small>';
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'ma-lite-close';
@@ -1621,7 +1621,7 @@ class ControlPanel {
         pageNav.setAttribute('aria-label', '镜渊面板分页');
         pageNav.append(
             this.makePageButton('run', '运行'),
-            this.makePageButton('worldbook', '世界书'),
+            this.makePageButton('worldbook', '条目'),
             this.makePageButton('settings', '设置'),
             this.makePageButton('maintenance', '维护'),
         );
@@ -1648,48 +1648,41 @@ class ControlPanel {
         status.setAttribute('aria-live', 'polite');
         this.statusNode = status;
         const worldbookQuickActions = this.buildWorldbookQuickActions();
-        runPage.append(globalTask, pipeline, actions, this.wrapToolSection('总结', worldbookQuickActions, true), status);
+        runPage.append(globalTask, pipeline, status, actions, this.wrapToolSection('总结操作', worldbookQuickActions, true));
 
         const management = this.buildManagementSection();
         const recall = this.buildRecallSection();
         const worldSetting = this.buildWorldSettingSection();
         worldbookPage.append(
-            this.wrapToolSection('状态概览', management, false),
-            this.wrapToolSection('条目与召回', recall, true),
+            this.wrapToolSection('当前状态', management, true),
+            this.wrapToolSection('世界书条目', recall, true),
             this.wrapToolSection('导入基础设定', worldSetting, false),
         );
 
         const apiSection = this.buildApiSection();
-        const automationSwitches = document.createElement('div');
-        automationSwitches.className = 'ma-lite-switches';
-        automationSwitches.append(
-            this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核；关闭后仍可手动审核。'),
-            this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取；关闭后仍可手动提取。'),
-            this.makeSwitch('autoSmallSummary', '自动小总结', '场景组关闭后按时间顺序后台处理；关闭只暂停总结执行，不停止场景组归组与排队。'),
-            this.makeSwitch('autoLargeSummary', '自动大总结', '累计若干个已完成的小总结组集达到阈值后立即自动上卷；每个小总结组集保持独立边界。'),
-        );
-        const featureSwitches = document.createElement('div');
-        featureSwitches.className = 'ma-lite-switches';
-        featureSwitches.append(
+        const runSwitches = document.createElement('div');
+        runSwitches.className = 'ma-lite-switches';
+        runSwitches.append(
             this.makeSwitch('enabled', '总开关', '关闭后镜渊不执行任何处理。'),
+            this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核；关闭后仍可手动审核。'),
+            this.makeSwitch('autoExtraction', '自动提取', '正文完成后自动提取；开启审核时会在审核/修正完成后再提取。'),
         );
-        const gameTimeAnchor = this.makeGameTimeInput('游戏时间（可选）', '需要时为当前聊天填写世界内时间锚点，例如“第三日 14:30”或“春季第12日清晨”；留空则当前聊天不启用。后续时间推进由AI判断。', '例如：第三日 14:30');
+        const gameTimeAnchor = this.makeGameTimeInput('游戏时间（可选）', '需要时为当前聊天填写世界内时间锚点；留空则不启用。后续时间推进由 AI 根据正文判断。', '例如：第三日 14:30');
         const thresholds = document.createElement('div');
-        thresholds.className = 'ma-lite-thresholds';
+        thresholds.className = 'ma-lite-thresholds ma-lite-thresholds-single';
         thresholds.append(
-            this.makeNumberInput('largeSummaryCount', '自动大总结所需场景组数', 2, 30),
-            this.makeNumberInput('queueCompactThreshold', '队列积压提示阈值', 2, 50),
+            this.makeNumberInput('largeSummaryCount', '大总结累计场景组数', 2, 30),
         );
-        const auditPromptEditor = this.makePromptEditor('auditPrompt', '基础审核提示词', '只审核当前可见对话；不读取角色卡或世界书；修正失败或疑似截断时保留原正文。');
+        const auditPromptEditor = this.makePromptEditor('auditPrompt', '审核附加规则', '只在需要时补充审核边界；默认审核规则由插件内置。');
         const note = document.createElement('div');
         note.className = 'ma-lite-note';
-        note.textContent = '四阶段状态固定为：审核 → 修正 → 提取 → 写入。任一阶段失败都会停止后续步骤，不推进处理游标。';
-        settingsPage.append(this.wrapToolSection('模型连接', apiSection, false), this.wrapToolSection('自动化', automationSwitches, true), this.wrapToolSection('基础开关', featureSwitches, false), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('容量与队列', thresholds, false), this.wrapToolSection('高级审核规则', auditPromptEditor, false), note);
+        note.textContent = '固定流程：审核（可选）→ 提取 → 写入 → 场景组 → 小总结 S → 若干场景组 → 大总结 L。';
+        settingsPage.append(this.wrapToolSection('运行设置', runSwitches, true), this.wrapToolSection('总结设置', thresholds, true), this.wrapToolSection('游戏时间', gameTimeAnchor, false), this.wrapToolSection('模型连接', apiSection, false), this.wrapToolSection('审核附加规则', auditPromptEditor, false), note);
 
         const rebuild = this.buildRebuildSection();
         const diagnostic = this.buildDiagnosticSection();
         const reset = this.buildResetSection();
-        maintenancePage.append(this.wrapToolSection('诊断与验收', diagnostic, false), this.wrapToolSection('世界书重建', rebuild, false), this.wrapToolSection('重置与故障恢复', reset, false));
+        maintenancePage.append(this.wrapToolSection('世界书整体整理', rebuild, true), this.wrapToolSection('诊断', diagnostic, false), this.wrapToolSection('重置与故障恢复', reset, false));
         body.append(pageNav, runPage, worldbookPage, settingsPage, maintenancePage);
         panel.append(header, body);
         this.showPage('run', false);
@@ -2034,10 +2027,10 @@ class ControlPanel {
         section.className = 'ma-lite-world-setting';
         const head = document.createElement('strong');
         head.className = 'ma-lite-world-setting-head';
-        head.textContent = '玩家世界设定初始化';
+        head.textContent = '导入基础设定';
         const help = document.createElement('div');
         help.className = 'ma-lite-world-setting-help';
-        help.textContent = '只在玩家明确点击后读取下方文本。普通聊天仍保持防误触：玩家输入只用于理解行动，不会自动写成世界设定。先生成预览，确认后再写入当前绑定世界书。';
+        help.textContent = '只在玩家明确点击后读取下方文本。确认写入后，导入的基础设定作为初始基石锁保存；普通聊天不会自动把玩家输入写成基础设定。';
         const textarea = document.createElement('textarea');
         textarea.maxLength = 24000;
         textarea.placeholder = '粘贴世界框架、自然规则、种族、能力体系、地区组织、制度、开局地点与已存在人物。写作要求、文风和未来剧情计划不会进入世界书。';
@@ -2195,7 +2188,7 @@ class ControlPanel {
         section.className = 'ma-lite-rebuild';
         const head = document.createElement('strong');
         head.className = 'ma-lite-rebuild-head';
-        head.textContent = 'AI辅助世界书重建';
+        head.textContent = '世界书整体整理';
         const help = document.createElement('div');
         help.className = 'ma-lite-rebuild-help';
         help.textContent = '整本当前世界书一次交给模型，按信息归属与颗粒度整理；预览阶段不修改世界书，确认后再提交。';
@@ -2203,11 +2196,11 @@ class ControlPanel {
         actions.className = 'ma-lite-rebuild-actions';
         const preview = document.createElement('button');
         preview.type = 'button';
-        preview.textContent = '生成AI重建预览';
+        preview.textContent = '生成整理预览';
         preview.addEventListener('click', () => void this.runRebuildAction('migrate'));
         const commit = document.createElement('button');
         commit.type = 'button';
-        commit.textContent = '提交并替换旧表';
+        commit.textContent = '提交新结构';
         commit.addEventListener('click', () => void this.runRebuildAction('commitMigration'));
         const undo = document.createElement('button');
         undo.type = 'button';
@@ -2309,7 +2302,7 @@ class ControlPanel {
         section.className = 'ma-lite-worldbook-quick';
         const head = document.createElement('div');
         head.className = 'ma-lite-worldbook-quick-head';
-        head.innerHTML = '<small>立即小总结处理最早一个已关闭场景组；立即大总结不等待阈值，直接收拢当前大组集的全部小总结组。选中条目的人工总结在下方修改模式单独执行。</small>';
+        head.innerHTML = '<small>小总结整理一个已结束场景留下的长期有效结果；大总结立刻收拢当前累计的小总结组，形成或更新基础设定。</small>';
         const actions = document.createElement('div');
         actions.className = 'ma-lite-worldbook-quick-actions';
         for (const [kind, label, title] of [
@@ -2518,7 +2511,7 @@ class ControlPanel {
         head.append(title, refresh);
         const status = document.createElement('div');
         status.className = 'ma-lite-management-status';
-        status.textContent = '当前绑定世界书的结构健康度与关键计数。';
+        status.textContent = '当前场景、条目和总结层级。';
         const content = document.createElement('div');
         content.className = 'ma-lite-management-empty';
         content.textContent = '尚未读取';
@@ -2540,7 +2533,7 @@ class ControlPanel {
         try {
             const workspace = await this.actions.loadWorkspace(force);
             if (managementSerial !== this.managementLoadSerial || recallSerial !== this.recallLoadSerial) return;
-            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? []);
+            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? [], workspace?.updatedEntryUids ?? []);
             const recallModel = buildRecallViewModel(workspace?.entries ?? [], workspace?.updatedEntryUids ?? []);
             this.renderRecallMap(recallModel, workspace?.worldbookName || '');
             this.refreshWorldSettingState();
@@ -2566,7 +2559,7 @@ class ControlPanel {
         try {
             const workspace = await this.actions.loadWorkspace(force);
             if (serial !== this.managementLoadSerial || !this.managementNode) return;
-            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? []);
+            this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? [], workspace?.updatedEntryUids ?? []);
         }
         catch (error) {
             if (serial !== this.managementLoadSerial || !this.managementNode) return;
@@ -2578,7 +2571,7 @@ class ControlPanel {
             if (serial === this.managementLoadSerial && this.managementRefreshButton) this.managementRefreshButton.disabled = false;
         }
     }
-    renderManagement(model, worldbookName, entries = []) {
+    renderManagement(model, worldbookName, entries = [], updatedEntryUids = []) {
         if (!this.managementNode) return;
         this.managementNode.className = '';
         this.managementNode.replaceChildren();
@@ -2587,20 +2580,29 @@ class ControlPanel {
             this.managementNode.textContent = '没有管理数据';
             return;
         }
-        if (this.managementStatusNode) this.managementStatusNode.textContent = `${worldbookName ? `世界书：${worldbookName}；` : ''}${model.healthy ? '硬约束未发现阻断问题' : '存在需要处理的硬约束问题'}。`;
+        const currentEntries = Array.isArray(entries) ? entries : [];
+        const managedEntries = currentEntries.filter((entry) => entry?.managed === true);
+        const updatedUidSet = new Set((updatedEntryUids ?? []).map((uid) => String(uid ?? '')).filter(Boolean));
+        const updatedCount = managedEntries.filter((entry) => updatedUidSet.has(String(entry?.uid ?? ''))).length;
+        const smallCount = managedEntries.filter((entry) => String(entry?.summaryMark || '') === 'S').length;
+        const largeCount = managedEntries.filter((entry) => String(entry?.summaryMark || '') === 'L').length;
+        const foundationCount = managedEntries.filter((entry) => String(entry?.type || '') === '基础设定').length;
+        const bedrockCount = managedEntries.filter((entry) => entry?.bedrockLocked === true || entry?.locked === true).length;
+        if (this.managementStatusNode) this.managementStatusNode.textContent = `${worldbookName ? `世界书：${worldbookName}；` : ''}${managedEntries.length} 条镜渊条目`;
         const grid = document.createElement('div');
         grid.className = 'ma-lite-management-grid';
         const cards = [
-            ['当前游戏时间', model.gameTime?.label || '未知', model.gameTime?.sceneTitle || '尚未从当前场景取得游戏时间'],
-            ['当前场景', model.currentScene?.title || '未识别', `在场${model.currentScene?.present?.length || 0}；固定角色${model.currentScene?.fixedSceneRoles?.length || 0}；固定设施${model.currentScene?.fixedFacilities?.length || 0}`],
-            ['活动事件', String(model.counts?.activeEvents || 0), (model.activeEvents || []).map((item) => item.title).slice(0, 3).join('、') || '无'],
-            ['人物投影', `当前${model.counts?.currentPeople || 0} / 沉降${model.counts?.settledPeople || 0}`, '按当前场景、事件和焦点生成运行投影'],
-            ['镜渊条目', String(model.counts?.managed || 0), `已关闭事件${model.counts?.closedEvents || 0}；直接关联${model.counts?.directRelations || 0}`],
-            ['数据健康', model.healthy ? '通过' : model.hasErrors ? '有阻断项' : '有警告', `问题${model.issues?.length || 0}项`],
+            ['当前场景', model.currentScene?.title || '未识别', '换场后自动开启新的场景组', 'primary'],
+            ['本轮更新', String(updatedCount), updatedCount ? '对应条目列表中显示“更新”' : '本轮没有世界书变化', updatedCount ? 'update' : ''],
+            ['世界书条目', String(managedEntries.length), '世界书是当前正文唯一事实源', ''],
+            ['总结层级', `S ${smallCount} / L ${largeCount}`, 'S=已小总结；L=已大总结', ''],
+            ['基础设定', String(foundationCount), '大总结形成或更新的整体运行规律', ''],
+            ['基石锁', String(bedrockCount), '锁定条目只由玩家明确操作', ''],
         ];
-        for (const [label, value, detail] of cards) {
+        for (const [label, value, detail, kind] of cards) {
             const card = document.createElement('div');
             card.className = 'ma-lite-management-card';
+            if (kind) card.dataset.kind = kind;
             const strong = document.createElement('strong');
             strong.textContent = `${label}：${value}`;
             const small = document.createElement('small');
@@ -2609,26 +2611,7 @@ class ControlPanel {
             grid.append(card);
         }
         this.managementNode.append(grid);
-        if (model.directRelations?.length) {
-            const title = document.createElement('strong');
-            title.textContent = '一层直接关联';
-            this.managementNode.append(title);
-            for (const relation of model.directRelations.slice(0, 12)) {
-                const node = document.createElement('div');
-                node.className = 'ma-lite-management-relation';
-                node.textContent = `${relation.sourceTitle} ↔ ${relation.targetTitle}`;
-                this.managementNode.append(node);
-            }
-        }
-        this.managementEntries = Array.isArray(entries) ? entries : [];
-        for (const issue of model.issues || []) {
-            const node = document.createElement('div');
-            node.className = 'ma-lite-management-issue';
-            node.dataset.level = issue.level || 'info';
-            node.textContent = issue.message;
-            if (issue.entries?.length) node.title = issue.entries.join('\n');
-            this.managementNode.append(node);
-        }
+        this.managementEntries = currentEntries;
     }
 
     selectedManagementUids() {
@@ -2709,7 +2692,7 @@ class ControlPanel {
         edit.className = 'ma-lite-recall-edit';
         edit.textContent = '修改';
         edit.title = '进入条目修改模式后再显示选择框、合并与删除';
-        edit.setAttribute('aria-label', '修改召回映射条目');
+        edit.setAttribute('aria-label', '修改世界书条目');
         edit.addEventListener('click', () => this.toggleRecallEditMode());
         const replan = document.createElement('button');
         replan.type = 'button';
@@ -2728,7 +2711,7 @@ class ControlPanel {
         head.append(title, edit, replan, refresh);
         const status = document.createElement('div');
         status.className = 'ma-lite-recall-status';
-        status.textContent = '查看镜渊管理条目；需要人工维护时进入“修改”模式。';
+        status.textContent = '查看当前镜渊世界书条目；人工维护时进入“修改”模式。';
         const lockHelp = document.createElement('div');
         lockHelp.className = 'ma-lite-lock-help';
         lockHelp.innerHTML = '<strong>基石锁：</strong>开启后该条目对自动流程完全只读；玩家可手动解除。人工合并或删除视为本次明确授权。';
@@ -2848,7 +2831,7 @@ class ControlPanel {
         const filteredEntries = model.entries.filter((item) => recallFilterMatches(item, this.recallFilter) && (!normalizedQuery || String(item.searchText || '').includes(normalizedQuery)));
         if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode
             ? '修改模式：选择条目后可执行小总结/大总结、合并或删除，也可逐条设置基石锁。'
-            : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}显示 ${filteredEntries.length} / ${model.total} 条。主界面只展示“如何召回、为什么、关联谁”。`;
+            : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}显示 ${filteredEntries.length} / ${model.total} 条。显示当前条目与召回状态。`;
         if (!model.total) {
             this.recallNode.className = 'ma-lite-recall-empty';
             this.recallNode.textContent = '当前世界书没有镜渊管理条目';
@@ -2862,7 +2845,7 @@ class ControlPanel {
         search.className = 'ma-lite-recall-search';
         search.placeholder = '搜索条目、关键词或关联对象';
         search.value = this.recallQuery;
-        search.setAttribute('aria-label', '搜索召回映射条目');
+        search.setAttribute('aria-label', '搜索世界书条目');
         search.addEventListener('input', () => {
             this.recallQuery = search.value;
             this.recallPage = 1;
@@ -2873,9 +2856,9 @@ class ControlPanel {
         });
         const filter = document.createElement('select');
         filter.className = 'ma-lite-recall-filter';
-        filter.setAttribute('aria-label', '筛选召回映射');
+        filter.setAttribute('aria-label', '筛选世界书条目');
         for (const [value, label] of [
-            ['all', '全部映射'], ['current', '当前'], ['recent', '近期'], ['history', '历史'],
+            ['all', '全部条目'], ['current', '当前'], ['recent', '近期'], ['history', '历史'],
             ['constant', '常驻'], ['keyword', '关键词'], ['vector', '含向量'], ['related', '有关联'], ['disabled', '停用'],
         ]) {
             const option = document.createElement('option');
@@ -3274,11 +3257,7 @@ class ControlPanel {
         if (this.inputs.enabled) this.inputs.enabled.checked = settings.enabled !== false;
         if (this.inputs.autoAudit) this.inputs.autoAudit.checked = settings.autoAudit === true;
         if (this.inputs.autoExtraction) this.inputs.autoExtraction.checked = settings.autoExtraction === true;
-        if (this.inputs.autoSmallSummary) this.inputs.autoSmallSummary.checked = settings.autoSmallSummary !== false;
-        // [MA-AUTO-LARGE-RESTORE] 自动大总结开关与阈值属于玩家可见调度设置，不参与语义判断。
-        if (this.inputs.autoLargeSummary) this.inputs.autoLargeSummary.checked = settings.autoLargeSummary !== false;
         if (this.inputs.largeSummaryCount) this.inputs.largeSummaryCount.value = String(settings.largeSummaryCount ?? 4);
-        if (this.inputs.queueCompactThreshold) this.inputs.queueCompactThreshold.value = String(settings.queueCompactThreshold ?? 6);
         if (this.gameTimeInput && (typeof document === 'undefined' || document.activeElement !== this.gameTimeInput)) this.gameTimeInput.value = String(this.actions.getGameTimeAnchor?.()?.label || '');
         if (this.inputs.auditPrompt && (typeof document === 'undefined' || document.activeElement !== this.inputs.auditPrompt)) {
             this.inputs.auditPrompt.value = String(settings.auditPrompt || '');
@@ -7191,12 +7170,10 @@ class MemoryRunner {
         if (!marks.length) throw new Error('该失败小总结没有可处理条目');
         const label = target.sceneTitle || target.sceneGroup || '未命名场景';
         summaryNotify('info', `镜渊：重试失败小总结“${label}”（${marks.length}个条目）${target.summaryError ? `；上次失败：${String(target.summaryError).slice(0, 240)}` : ''}`);
-        const beforeReceiptIds = this.currentReceiptIds();
         let result;
         try {
             result = await this.summarize('small', settings, snapshot, { marks, timeline: target, previousFailureReason: target.summaryError || '' });
         } catch (error) {
-            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '失败小总结重试');
             const failedAt = Date.now();
             const summaryError = String((0, util_1.errorText)(error) || '').trim();
             const nextClosed = (cursor.closedEventTimelines ?? []).map((timeline) => {
@@ -7335,12 +7312,10 @@ class MemoryRunner {
         if (!marks.length) throw new Error('当前大组集的 S 场景组没有可用条目');
         const largeGroupForRun = { ...activeLargeSummaryGroup, sceneGroups: targetGroups.map((group) => structuredClone(group)) };
         summaryNotify('info', `镜渊：开始大总结（收拢${targetGroups.length}个小总结组；已有基础设定${largeGroupForRun.foundationUids.length}）`);
-        const beforeReceiptIds = this.currentReceiptIds();
         let result;
         try {
             result = await this.summarize('large', settings, snapshot, { marks, timelines: targetGroups, largeGroup: largeGroupForRun });
         } catch (error) {
-            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '大总结');
             // 自动触发失败只记录本批场景组，避免下一正文回合反复自动请求；大组集本身保持原样。
             if (options.fromCounter === true) {
                 const failedIds = [...new Set([...(cursor.failedLargeSummaryGroupUids ?? []).map(String), ...targetGroups.map((group) => String(group.groupUid || group.id))])];
@@ -7444,8 +7419,7 @@ class MemoryRunner {
                     const groupLabel = summaryGroup.sceneTitle || summaryGroup.sceneGroup || '未命名场景';
                     this.progress('running', `场景组“${groupLabel}”开始小总结：${marks.length}个条目`, { titles: ['小总结'], sceneBoundary: true, sceneGroupUid: summaryGroup.groupUid });
                     summaryNotify('info', `镜渊：场景组结束，开始小总结（${marks.length}个条目）`);
-                    const beforeReceiptIds = this.currentReceiptIds();
-                    try {
+                                try {
                         const small = await this.summarize('small', settings, snapshot, { marks, timeline: summaryGroup });
                         committed.push(small);
                         const processed = small.processedPendingUids ?? [];
@@ -7464,7 +7438,6 @@ class MemoryRunner {
                         summaryNotify(small?.changed ? 'success' : 'info',
                             `镜渊：小总结完成（${groupLabel}，处理${processed.length}个条目，写入${smallWrites}，删除${smallDeleted}；大组集场景计数${accumulatedSceneGroups.length}）`);
                     } catch (error) {
-                        await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
                         closedEventTimelines = closedEventTimelines.map((timeline) => {
                             if ((timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id)) return timeline;
                             return normalizeEventTimeline({ ...timeline, summaryStatus: 'failed', failedAt: Date.now(), summaryError: (0, util_1.errorText)(error) }, 'failed');
@@ -7488,8 +7461,7 @@ class MemoryRunner {
                         if (marks.length) {
                             this.progress('running', `大组集场景计数达到${threshold}：开始大总结`, { titles: ['基础设定'], phase: 'large-summary', sceneGroupUids: batch.map((item) => item.groupUid) });
                             summaryNotify('info', `镜渊：大组集达到${threshold}个小总结场景，开始自动大总结`);
-                            const beforeReceiptIds = this.currentReceiptIds();
-                            try {
+                                                try {
                                 const largeGroupForRun = { ...activeLargeSummaryGroup, sceneGroups: batch.map((group) => structuredClone(group)) };
                                 const large = await this.summarize('large', settings, snapshot, { marks, timelines: batch, largeGroup: largeGroupForRun });
                                 committed.push(large);
@@ -7509,7 +7481,6 @@ class MemoryRunner {
                                 summaryNotify(large?.changed ? 'success' : 'info',
                                     `镜渊：自动大总结完成（${batch.length}个场景组 S→L；基础设定写入${largeWrites}；下一大组集场景计数${accumulatedSceneGroups.length}）`);
                             } catch (error) {
-                                await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '自动大总结');
                                 failedLargeSummaryGroupUids = [...new Set([...failedLargeSummaryGroupUids, ...batch.map((group) => String(group.groupUid || group.id))])];
                                 const warning = `自动大总结失败；当前大组集保持原样，等待手动大总结：${(0, util_1.errorText)(error)}`;
                                 summaryWarning = summaryWarning ? `${summaryWarning}；${warning}` : warning;
@@ -7617,19 +7588,11 @@ class MemoryRunner {
     async extract(settings, snapshot, options = {}) {
         this.setStatus(snapshot.chatKey, 'extracting', '提取事实与状态');
         this.validate(snapshot);
-        // [MA-EXTRACT-CONTEXT] 整本世界书只留在插件内部做精确标题→UID匹配；禁止继续整本塞给提取模型。
+        // [MA-EXTRACT-CONTEXT] 提取不再筛“上一批 UID / 当前场景 UID”。
+        // 每轮只从当前世界书读取一次，并把当前全部业务条目的最新正文交给提取模型；UID 仍只留在插件内部。
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
-        // 提取模型只读取“上一批实际写入 UID”在当前场景组中的当前世界书正文。UID 只用于插件定位，不暴露给模型。
-        const runtimeCursor = typeof this.host.cursor === 'function' ? this.host.cursor() : {};
-        const previousBatchUids = new Set((runtimeCursor?.lastExtractionUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
-        const currentSceneUids = new Set(timelineUids(runtimeCursor?.activeEventTimeline));
-        const previousBatchEntries = entries
-            .filter((entry) => {
-                const uid = String(entry?.uid ?? '').trim();
-                return uid && previousBatchUids.has(uid) && currentSceneUids.has(uid);
-            })
-            .map((entry) => structuredClone(entry));
+        const extractionEntries = entries.map((entry) => structuredClone(entry));
         const dialogueInput = [snapshot.playerText, snapshot.assistantText].filter(Boolean).join('\n\n');
         const promptOptions = { requestTime: snapshot.capturedAt };
         let raw = options.deterministicOnly === true ? '无' : '';
@@ -7645,7 +7608,7 @@ class MemoryRunner {
             // 语法恢复全部在本地 parser；不再分段救援、不再调用第二个“格式修复模型”。
             for (let attempt = 0; attempt < 2; attempt += 1) {
                 const compact = attempt === 1;
-                const requestPrompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, previousBatchEntries, { ...promptOptions, compact, retryReason: compact ? extractionRetryReason : '' });
+                const requestPrompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, extractionEntries, { ...promptOptions, compact, retryReason: compact ? extractionRetryReason : '' });
                 try {
                     raw = await (0, model_request_1.callModel)({
                         host: this.host,
@@ -9941,7 +9904,7 @@ function extractionPrompts(settings, playerText, assistantText, relevant, option
     const retryReason = String(options.retryReason || '').trim();
     const existing = extractionWorldbookIndex(relevant, compact);
     const custom = clipText(String(settings.extractionPrompt || '').trim(), compact ? 420 : 760);
-    const system = `职责：比较上一轮世界书、玩家本轮回复和当前AI正文，提取当前正文已经明确建立、变化或结束的事实。
+    const system = `职责：比较本轮处理前的当前世界书、玩家本轮回复和当前AI正文，提取当前正文已经明确建立、变化或结束的事实。
 
 玩家回复只代表玩家做了什么或表达了什么；事实是否真正成立，以当前AI正文为准。
 不要总结，不要提前粗化，不要预测，不要把可能性写成事实。
@@ -9964,7 +9927,7 @@ ${clipText(retryReason, 1200)}
 
 【附加要求】
 ${custom}` : ''}`;
-    const user = `【上一轮世界书】
+    const user = `【本轮处理前的当前世界书】
 ${existing || '（无）'}
 
 【玩家本轮回复】
@@ -10743,8 +10706,8 @@ function parseSettings(value) {
         modelProfileId: String(candidate.modelProfileId ?? '').trim(),
         autoAudit: candidate.autoAudit === true,
         autoExtraction: candidate.autoExtraction === true,
-        autoSmallSummary: candidate.autoSmallSummary !== false,
-        autoLargeSummary: candidate.autoLargeSummary !== false,
+        autoSmallSummary: true,
+        autoLargeSummary: true,
         automationPolicyVersion: 2,
         largeSummaryCount: (0, util_1.clampNumber)(candidate.largeSummaryCount, 4, 2, 30),
         autoCreateLorebook: candidate.autoCreateLorebook === true,
