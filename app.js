@@ -192,10 +192,34 @@ class MirrorAbyssApplication {
         this.pendingMessageTimers = new Map();
         // [MA-LOCK] 状态写入锁：this.pendingSourceReconcileTimers 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.pendingSourceReconcileTimers = new Map();
+        // [MA-ROLLBACK-RESET-01] Edit / Swipe / Delete 回滚期间，当前聊天只允许恢复世界书，不允许产生新的旧链任务。
+        // 这是回滚事务的单一冻结边界；回滚完成后立即解除，不建立第二套任务状态机。
+        this.reconcilingChats = new Set();
         // [MA-LOCK] 状态写入锁：this.acceptanceMode 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.acceptanceMode = false;
         // [MA-LOCK] 状态写入锁：this.started 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.started = false;
+    }
+    // [MA-UID-BASELINE-01] 首次进入当前聊天时只扫描世界书此刻真实存在的 UID，直接作为新运行结构的起点。
+    // 不推断过去是否做过小/大总结，也不修改现有世界书条目；从本版本之后重新记录 S/L、场景组、计数器与回滚快照。
+    async initializeUidRuntimeState() {
+        const chatKey = safeChatKey(this.host);
+        if (!chatKey) return { initialized: false, reason: 'no-chat' };
+        if (this.host.uidRuntimeStateReady?.()) return { initialized: false, reason: 'ready' };
+        const settings = this.settings();
+        const token = { cancelled: false, reason: '' };
+        const snapshot = this.host.captureMaintenanceSnapshot(settings, 'uidRuntimeBootstrap', token);
+        const validate = () => this.host.assertSnapshot(snapshot, this.settings());
+        let worldbook = { entries: [] };
+        if (String(snapshot.worldbookName || '').trim()) {
+            worldbook = await this.worldbook.read(settings, snapshot, validate, { fresh: true });
+            validate();
+        }
+        const baselineEntries = (worldbook.entries ?? []).map((entry) => structuredClone(entry));
+        const baselineUids = [...new Set(baselineEntries.map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean))];
+        await this.host.initializeUidRuntimeState(baselineEntries, snapshot, this.settings());
+        this.worldbook.invalidateRuntimeMemory();
+        return { initialized: true, uidCount: baselineUids.length };
     }
     // [MA-LOCK] 方法职责锁：start 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     start() {
@@ -232,6 +256,7 @@ class MirrorAbyssApplication {
         this.activeSnapshots.clear();
         this.clearPendingMessageTimers();
         this.clearPendingSourceReconcileTimers();
+        this.reconcilingChats.clear();
         this.host.clearInternalMessageMutations();
         this.worldbook.invalidateRuntimeMemory();
         this.controlPanel.unmount();
@@ -503,6 +528,7 @@ class MirrorAbyssApplication {
             this.activeSnapshots.clear();
             this.activeTokens.clear();
             this.runningByChat.clear();
+            this.reconcilingChats.clear();
             this.host.clearInternalMessageMutations();
             this.worldbook.invalidateRuntimeMemory();
             this.controlPanel.resetTaskStates?.('插件与当前世界书已重置');
@@ -518,28 +544,14 @@ class MirrorAbyssApplication {
     processLatest() { return this.enqueueTask('full', undefined, false); }
     // [MA-LOCK] 方法职责锁：cancel 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     cancel() {
-        // [MA-LOCK] 数据来源锁：key 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const key = this.host.chatKey();
-        // [MA-LOCK] 数据来源锁：token 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const token = this.activeTokens.get(key);
-        // [MA-LOCK] 数据来源锁：queued 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const queued = this.rejectQueuedTasks('用户已取消排队任务', key);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!token && !queued) {
+        const cancelled = this.cancelAndClearChatTasks('用户已取消任务', key);
+        if (!cancelled) {
             this.controlPanel.setStatus('当前聊天没有正在执行或排队的任务');
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return false;
         }
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (token) {
-            // [MA-LOCK] 状态写入锁：token.cancelled 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            token.cancelled = true;
-            // [MA-LOCK] 状态写入锁：token.reason 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            token.reason = '用户已取消任务';
-        }
-        this.controlPanel.setStatus(`已取消${token ? '当前任务' : ''}${token && queued ? '及' : ''}${queued ? `${queued}个排队任务` : ''}`);
+        this.controlPanel.setStatus('当前聊天任务已取消并清空');
         this.publishTaskStatus();
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return true;
     }
     // [MA-LOCK] 方法职责锁：status 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -663,6 +675,8 @@ class MirrorAbyssApplication {
         try { turn = this.host.latestTurn(index); }
         // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
         catch { return; }
+        // [MA-ROLLBACK-RESET-02] 回滚事务未完成时不接收任何正文重排；恢复完成后由回滚入口统一重新调度。
+        if (this.reconcilingChats.has(String(turn.chatKey ?? ''))) return;
         // [MA-LOCK] 数据来源锁：key 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const key = `${turn.chatKey}|${turn.messageIndex}`;
         // [MA-LOCK] 数据来源锁：previous 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -775,48 +789,57 @@ class MirrorAbyssApplication {
     }
     // [MA-LOCK] 方法职责锁：onScopeChanged 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     onScopeChanged(eventName, eventValue) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.host.consumeInternalScopeEvent(eventName, eventValue)) return;
-        this.clearPendingMessageTimers();
-        // [MA-LOCK] 数据来源锁：reason 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const reason = `SillyTavern 事件 ${eventName} 使源对话失效`;
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (eventName === 'CHAT_CHANGED') {
+            this.clearPendingMessageTimers();
             this.clearPendingSourceReconcileTimers();
+            this.reconcilingChats.clear();
             this.cancelAll(reason);
             this.worldbook.invalidateRuntimeMemory();
-            // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
             this.migrationService.clearPreview?.();
             this.worldSettingImportService.clearPreview?.();
             this.diagnostics.clear();
             this.controlPanel.renderDiagnosticReport?.(null);
             this.controlPanel.resetTaskStates?.('聊天已经切换');
-            this.controlPanel.setStatus('聊天已经切换，旧聊天任务与预览已清理');
+            const nextChatKey = safeChatKey(this.host);
+            if (nextChatKey && !this.host.uidRuntimeStateReady?.()) {
+                this.reconcilingChats.add(nextChatKey);
+                this.controlPanel.setStatus('聊天已经切换，正在以当前世界书 UID 建立新运行基线');
+                void this.initializeUidRuntimeState().then((result) => {
+                    if (result?.initialized) this.controlPanel.setStatus(`新运行基线已建立（${result.uidCount}个 UID）`);
+                }).catch((error) => {
+                    this.controlPanel.setStatus(`UID 运行基线初始化失败：${(0, util_1.errorText)(error)}`, true);
+                    console.error('[MirrorAbyss] UID runtime bootstrap failed', error);
+                }).finally(() => {
+                    this.reconcilingChats.delete(nextChatKey);
+                    this.publishTaskStatus();
+                });
+            } else {
+                this.controlPanel.setStatus('聊天已经切换，旧聊天任务与预览已清理');
+            }
             this.controlPanel.rebindHostDom?.();
             this.publishTaskStatus();
-                // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-                return;
-        }
-        // [MA-LOCK] 数据来源锁：index 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const index = messageIndexFromEvent(eventValue);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!Number.isInteger(index)) {
-            this.cancelAll(reason);
-            // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
-            try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
-            this.controlPanel.resetTaskStates?.('正文范围发生无法定位的变化');
-            this.controlPanel.setStatus('正文范围发生无法定位的变化，旧任务已取消');
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return;
         }
-        // [MA-LOCK] 数据来源锁：affected 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const affected = this.cancelAffectedMessageTasks(eventName, index, reason);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (affected > 0) {
-            this.controlPanel.resetTaskStates?.('源正文已被修改、切换或删除');
-            this.controlPanel.setStatus(`源正文已变化，已取消${affected}个受影响任务；其他后台任务继续运行`);
+
+        const index = messageIndexFromEvent(eventValue);
+        const chatKey = safeChatKey(this.host);
+        if (!Number.isInteger(index) || !chatKey) {
+            this.cancelAndClearChatTasks(reason, chatKey);
+            try { this.host.bumpScopeRevision(chatKey); } catch { }
+            this.controlPanel.resetTaskStates?.('正文范围发生无法定位的变化');
+            this.controlPanel.setStatus('正文范围发生无法定位的变化，当前聊天任务已取消并清空');
+            return;
         }
+
+        // [MA-ROLLBACK-RESET-05] Edit / Swipe / Delete 的唯一任务动作：当前聊天任务域整体取消并清空。
+        // 不再判断“小总结是否受影响”“某个排队任务属于哪一回合”；旧对话链上的任务全部失效。
+        this.reconcilingChats.add(chatKey);
+        this.cancelAndClearChatTasks(reason, chatKey);
+        this.controlPanel.resetTaskStates?.('源正文已变化，当前聊天任务已取消并清空');
+        this.controlPanel.setStatus('源正文已变化，当前聊天任务已取消并清空；准备按 UID 回合快照恢复世界书');
         this.scheduleSourceReconcile(eventName, index);
     }
 
@@ -857,56 +880,61 @@ class MirrorAbyssApplication {
     }
     // [MA-LOCK] 方法职责锁：reconcileCommittedSource 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async reconcileCommittedSource(eventName, index, chatKey) {
-        if (!this.started || this.host.chatKey() !== chatKey) return;
-        const editedAssistantIndex = eventName === 'MESSAGE_EDITED' ? this.assistantIndexForEditedMessage(index) : null;
-        // [MA-TURN-UID-ROLLBACK] 先等被撤回的旧任务真正停下，再读取最终的 20 回合 UID 快照。
-        // 这样不会出现“先读回执，旧任务随后又写入一次”的漏回滚窗口。
-        await this.waitForChatIdle(chatKey);
-        if (!this.started || this.host.chatKey() !== chatKey) return;
-        const turnSnapshots = typeof this.host.getTurnRollbackSnapshots === 'function' ? this.host.getTurnRollbackSnapshots() : [];
-        const affected = turnSnapshots.filter((snapshot) => receiptAffectedBySourceChange(snapshot, eventName, index));
-        if (!affected.length) {
-            if (Number.isInteger(editedAssistantIndex)) this.scheduleMessage(editedAssistantIndex, false);
+        if (!this.started || this.host.chatKey() !== chatKey) {
+            this.reconcilingChats.delete(chatKey);
             return;
         }
-        const sourceKeys = [...new Set(affected.map((snapshot) => String(snapshot.sourceMessageKey ?? '')).filter(Boolean))];
-        const ids = affected.map((snapshot) => String(snapshot.id ?? '')).filter(Boolean);
-        const receiptIds = [...new Set(affected.flatMap((snapshot) => snapshot.receiptIds ?? []).map((value) => String(value ?? '')).filter(Boolean))];
-        // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-        await this.enqueueMaintenance('sourceRollback', async (settings, snapshot) => {
-            // [MA-LOCK] 数据来源锁：focusUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const focusUid = this.host.getFocusUid();
-            // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const result = await this.worldbook.rollbackReceipts(settings, affected, focusUid, snapshot, () => this.host.assertSnapshot(snapshot, this.settings()));
-            // [MA-LOCK] 数据来源锁：cursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const cursor = this.host.cursor();
-            // [MA-LOCK] 数据来源锁：ordered 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const ordered = [...affected].sort((left, right) => Number(left?.createdAt || 0) - Number(right?.createdAt || 0));
-            // [MA-LOCK] 数据来源锁：stateBefore 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const stateBefore = ordered.find((receipt) => receipt?.stateBefore?.cursor)?.stateBefore || null;
-            // [MA-LOCK] 数据来源锁：restoredCursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const restoredCursor = stateBefore?.cursor && typeof stateBefore.cursor === 'object'
-                ? stateBefore.cursor
-                : { ...cursor, lastProcessedMessageKey: '', lastProcessedHash: '' };
-            // 本次撤回只恢复这些回合实际碰过的 UID；随后删除对应 20 回合快照与内部提交记录。
-            await this.host.saveCursor(restoredCursor, snapshot, this.settings());
-            if (receiptIds.length && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts(receiptIds);
-            if (ids.length && typeof this.host.removeTurnRollbackSnapshots === 'function') await this.host.removeTurnRollbackSnapshots(ids);
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-            return result;
-        });
-        this.controlPanel.resetTaskStates?.('源对话已变化，近期写入已回滚');
-        this.controlPanel.setStatus(`已回滚${affected.length}个近期回合涉及的 UID，正在按当前对话重新排队`);
-        // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-        await this.controlPanel.refreshRecallMap?.();
-        // [MA-LOCK] 数据来源锁：indexes 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const indexes = sourceKeys
-            .map((messageKey) => this.host.assistantIndexByMessageKey(messageKey))
-            .filter((value) => Number.isInteger(value) && value >= 0)
-            .concat(Number.isInteger(editedAssistantIndex) ? [editedAssistantIndex] : [])
-            .filter((value, position, values) => values.indexOf(value) === position)
-            .sort((left, right) => left - right);
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
+        const editedAssistantIndex = eventName === 'MESSAGE_EDITED' ? this.assistantIndexForEditedMessage(index) : null;
+        let indexes = [];
+        try {
+            // [MA-ROLLBACK-RESET-07] 任务域已经在事件入口整体取消并清空；这里只等待运行中的旧请求真正退出。
+            await this.waitForChatIdle(chatKey);
+            if (!this.started || this.host.chatKey() !== chatKey) return;
+
+            const turnSnapshots = typeof this.host.getTurnRollbackSnapshots === 'function' ? this.host.getTurnRollbackSnapshots() : [];
+            const affected = turnSnapshots.filter((snapshot) => receiptAffectedBySourceChange(snapshot, eventName, index));
+            const sourceKeys = [...new Set(affected.map((snapshot) => String(snapshot.sourceMessageKey ?? '')).filter(Boolean))];
+
+            if (affected.length) {
+                const ids = affected.map((snapshot) => String(snapshot.id ?? '')).filter(Boolean);
+                const receiptIds = [...new Set(affected.flatMap((snapshot) => snapshot.receiptIds ?? []).map((value) => String(value ?? '')).filter(Boolean))];
+                const settings = this.settings();
+                const token = { cancelled: false, reason: '' };
+                const rollbackSnapshot = this.host.captureMaintenanceSnapshot(settings, 'sourceRollback', token);
+                const validate = () => this.host.assertSnapshot(rollbackSnapshot, this.settings());
+                const focusUid = this.host.getFocusUid();
+
+                // [MA-ROLLBACK-RESET-08] 世界书恢复不重新进入普通任务队列；任务系统保持空，直接按回合 UID 快照倒序恢复原文。
+                await this.worldbook.rollbackReceipts(settings, affected, focusUid, rollbackSnapshot, validate);
+
+                const cursor = this.host.cursor();
+                const ordered = [...affected].sort((left, right) => Number(left?.createdAt || 0) - Number(right?.createdAt || 0));
+                const stateBefore = ordered.find((receipt) => receipt?.stateBefore?.cursor)?.stateBefore || null;
+                const restoredCursor = stateBefore?.cursor && typeof stateBefore.cursor === 'object'
+                    ? stateBefore.cursor
+                    : { ...cursor, lastProcessedMessageKey: '', lastProcessedHash: '' };
+                await this.host.saveCursor(restoredCursor, rollbackSnapshot, this.settings());
+
+                // 回滚完成后删除已经失效的 UID 回合历史，并同步清掉这些新版本回合对应的内部提交回执。
+                if (receiptIds.length && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts(receiptIds);
+                if (ids.length && typeof this.host.removeTurnRollbackSnapshots === 'function') await this.host.removeTurnRollbackSnapshots(ids);
+
+                this.controlPanel.resetTaskStates?.('源对话已变化，UID 回合快照已恢复');
+                this.controlPanel.setStatus(`已恢复${affected.length}个近期回合涉及的 UID，准备按当前对话重新排队`);
+                await this.controlPanel.refreshRecallMap?.();
+            }
+
+            indexes = sourceKeys
+                .map((messageKey) => this.host.assistantIndexByMessageKey(messageKey))
+                .filter((value) => Number.isInteger(value) && value >= 0)
+                .concat(Number.isInteger(editedAssistantIndex) ? [editedAssistantIndex] : [])
+                .filter((value, position, values) => values.indexOf(value) === position)
+                .sort((left, right) => left - right);
+        } finally {
+            // [MA-ROLLBACK-RESET-09] UID 原文恢复结束后才重新开放当前聊天任务入口。
+            this.reconcilingChats.delete(chatKey);
+        }
+
         for (const messageIndex of indexes) this.scheduleMessage(messageIndex, false);
     }
     // [MA-LOCK] 方法职责锁：assistantIndexForEditedMessage 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -938,55 +966,23 @@ class MirrorAbyssApplication {
             await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
         }
         // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
-        throw new Error('受影响的旧任务尚未停止');
+        throw new Error('当前聊天旧任务尚未停止');
     }
 
-    // [MA-LOCK] 方法职责锁：cancelAffectedMessageTasks 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    cancelAffectedMessageTasks(eventName, index, reason) {
-        // [MA-LOCK] 数据来源锁：affectedSnapshot 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const affectedSnapshot = (snapshot) => {
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!snapshot || snapshot.maintenance || !Number.isInteger(snapshot.messageIndex)) return false;
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (eventName === 'MESSAGE_DELETED') return snapshot.messageIndex >= index || snapshot.messageIndex - 1 >= index;
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (eventName === 'MESSAGE_EDITED') return snapshot.messageIndex === index || snapshot.messageIndex - 1 === index;
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-            return snapshot.messageIndex === index;
-        };
-        // [MA-LOCK] 数据来源锁：count 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+    // [MA-ROLLBACK-RESET-06] 当前聊天任务域的唯一“取消并清空”入口。
+    // 运行中的任务收到同一个取消信号，等待中的任务直接从队列移除；调用方不再按消息、总结类型或影响范围拆分判断。
+    cancelAndClearChatTasks(reason, chatKey = '') {
+        const key = String(chatKey || safeChatKey(this.host));
         let count = 0;
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const [chatKey, snapshot] of this.activeSnapshots.entries()) {
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!affectedSnapshot(snapshot)) continue;
-            // [MA-LOCK] 数据来源锁：token 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const token = this.activeTokens.get(chatKey);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (token && !token.cancelled) { token.cancelled = true; token.reason = reason; count += 1; }
+        const token = this.activeTokens.get(key);
+        if (token && !token.cancelled) {
+            token.cancelled = true;
+            token.reason = reason;
+            count += 1;
         }
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const [chatKey, queue] of this.taskQueues.entries()) {
-            // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-            for (let position = queue.items.length - 1; position >= 0; position -= 1) {
-                // [MA-LOCK] 数据来源锁：item 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const item = queue.items[position];
-                // [MA-LOCK] 数据来源锁：affected 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const affected = item.maintenance !== true && Number.isInteger(item.index)
-                    && (eventName === 'MESSAGE_DELETED' ? item.index >= index || item.index - 1 >= index
-                        : eventName === 'MESSAGE_EDITED' ? item.index === index || item.index - 1 === index
-                            : item.index === index);
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                if (!affected) continue;
-                queue.items.splice(position, 1);
-                this.pendingTaskKeys.delete(item.taskKey);
-                item.reject(new Error(reason));
-                count += 1;
-            }
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!queue.running && !queue.items.length) this.taskQueues.delete(chatKey);
-        }
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
+        count += this.rejectQueuedTasks(reason, key);
+        this.clearPendingMessageTimers(key);
+        this.publishTaskStatus();
         return count;
     }
     // [MA-LOCK] 方法职责锁：enqueueTask 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -995,6 +991,8 @@ class MirrorAbyssApplication {
         const maintenance = ['migration', 'commitMigration', 'undoMigration'].includes(taskType);
         // [MA-LOCK] 数据来源锁：chatKey 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const chatKey = this.host.chatKey();
+        // [MA-ROLLBACK-RESET-03] 当前聊天处于 Edit / Swipe / Delete 恢复阶段时，旧任务域已经被取消并清空；禁止新任务插入恢复事务。
+        if (this.reconcilingChats.has(chatKey)) return Promise.reject(new Error('当前聊天正在回滚世界书，暂不接受新任务'));
         // [MA-LOCK] 数据来源锁：turn 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const turn = maintenance
             ? { messageIndex: -1, messageKey: `maintenance:${taskType}`, contentHash: '' }
@@ -1268,6 +1266,8 @@ class MirrorAbyssApplication {
     enqueueMaintenance(taskType, action) {
         // [MA-LOCK] 数据来源锁：chatKey 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const chatKey = this.host.chatKey();
+        // [MA-ROLLBACK-RESET-04] 回滚期间世界书恢复本身不走普通维护队列；其他维护请求统一拒绝，保证任务系统保持空。
+        if (this.reconcilingChats.has(chatKey)) return Promise.reject(new Error('当前聊天正在回滚世界书，暂不接受维护任务'));
         // [MA-LOCK] 数据来源锁：resolveTask 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let resolveTask;
         // [MA-LOCK] 数据来源锁：rejectTask 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -2518,7 +2518,7 @@ class ControlPanel {
             this.makeSwitch('autoAudit', '自动审核', '正文完成后自动审核；关闭后仍可手动审核。'),
             this.makeSwitch('autoExtraction', '自动提取', '审核通过或修正完成后自动提取；关闭后仍可手动提取。'),
             this.makeSwitch('autoSmallSummary', '自动小总结', '场景组关闭后按时间顺序后台处理；关闭只暂停总结执行，不停止场景组归组与排队。'),
-            this.makeSwitch('autoLargeSummary', '自动大总结', '累计若干个已完成小总结的场景组后，在后续没有小总结运行的正文回合自动上卷；多个场景组保持独立边界。'),
+            this.makeSwitch('autoLargeSummary', '自动大总结', '累计若干个已完成的小总结组集达到阈值后立即自动上卷；每个小总结组集保持独立边界。'),
         );
         // [MA-LOCK] 数据来源锁：featureSwitches 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const featureSwitches = document.createElement('div');
@@ -3385,7 +3385,7 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：help.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         help.className = 'ma-lite-rebuild-help';
         // [MA-LOCK] 状态写入锁：help.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        help.textContent = '整本当前世界书一次交给模型，按大总结标准整理颗粒度；预览阶段不修改世界书，确认后再提交。';
+        help.textContent = '整本当前世界书一次交给模型，按信息归属与颗粒度整理；预览阶段不修改世界书，确认后再提交。';
         // [MA-LOCK] 数据来源锁：actions 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const actions = document.createElement('div');
         // [MA-LOCK] 状态写入锁：actions.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -3564,15 +3564,15 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：head.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         head.className = 'ma-lite-worldbook-quick-head';
         // [MA-LOCK] 状态写入锁：head.innerHTML 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        head.innerHTML = '<small>小总结按同一批条目运行；大总结按条目更新时间与UID确定顺序继续粗化。手动总结只处理玩家选中的条目。</small>';
+        head.innerHTML = '<small>立即小总结处理最早一个已关闭场景组；立即大总结不等待阈值，直接收拢当前大组集的全部小总结组。选中条目的人工总结在下方修改模式单独执行。</small>';
         // [MA-LOCK] 数据来源锁：actions 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const actions = document.createElement('div');
         // [MA-LOCK] 状态写入锁：actions.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         actions.className = 'ma-lite-worldbook-quick-actions';
         // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
         for (const [kind, label, title] of [
-            ['smallSummary', '立即小总结', '优先处理最早一个已关闭场景组；只读取该场景组关联的世界书条目进行局部粗化'],
-            ['largeSummary', '立即大总结', '把已完成小总结的中颗粒条目继续整理成更粗的长期结果'],
+            ['smallSummary', '立即小总结', '优先处理最早一个已关闭场景组；整理该场景已经形成并会继续影响后续的有效结果'],
+            ['largeSummary', '立即大总结', '不等待阈值，立刻收拢当前大组集里已经累计的全部小总结组，并抽象为基础设定'],
         ]) {
             // [MA-LOCK] 数据来源锁：button 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const button = document.createElement('button');
@@ -3593,7 +3593,7 @@ class ControlPanel {
         status.className = 'ma-lite-worldbook-quick-status';
         status.setAttribute('aria-live', 'polite');
         // [MA-LOCK] 状态写入锁：status.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        status.textContent = '自动小总结按场景组关闭顺序运行；达到自动大总结阈值后，在后续没有小总结运行的正文回合按多个独立场景组顺序上卷。';
+        status.textContent = '换场后自动小总结；累计的小总结组达到阈值后立即自动大总结。点击“立即大总结”则不等阈值，直接收拢当前大组集。';
         // [MA-LOCK] 数据来源锁：failures 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const failures = this.buildSummaryFailureSection();
         section.append(head, actions, status, failures);
@@ -5693,6 +5693,9 @@ function buildRecallViewModel(entries, updatedEntryUids = []) {
         const badges = [{ label: mappingMode, kind: mappingKind }];
         // [MA-ENTRY-UPDATED-BADGE] 最近一次完整处理回合真正改过该 UID 时，只显示“更新”二字。
         if (updatedUidSet.has(String(entry.uid ?? ''))) badges.push({ label: '更新', kind: 'update' });
+        // [MA-SUMMARY-UID-MARK-02] UI 只显示处理痕迹；S/L 不生成新 UID，也不改变条目身份。
+        if (entry.summaryMark === 'S') badges.push({ label: 'S', kind: 'summary' });
+        else if (entry.summaryMark === 'L') badges.push({ label: 'L', kind: 'summary' });
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (sceneStage) badges.push({ label: sceneStage === 'current' ? '当前场景' : sceneStage === 'previous' ? '上一场景' : '远期场景', kind: 'scene' });
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -8683,100 +8686,252 @@ class HostAdapter {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return true;
     }
+    // [MA-LARGE-GROUP-BASELINE] 新运行结构只认 v2：场景小总结组直接归入一个当前大组集；
+    // 大组集保存当前基础设定、玩家手动维护的基石锁记录，以及已完成小总结的组集；自动大总结只读取基础设定与小总结组。旧运行结构不做兼容推断。
+    uidRuntimeStateReady() {
+        return Number(this.chatNamespace()?.cursor?.runtimeStateVersion || 0) === 3 && this.chatNamespace()?.cursor?.oneTimeBaselineMigrationCompleted === true;
+    }
+    // 一次性建立新运行基线：当前世界书 UID 是事实起点；基础设定与玩家手动维护的基石锁记录进入当前大组集，
+    // 不推断旧 S/L，不修改任何世界书条目。
+    async initializeUidRuntimeState(baselineEntries, snapshot, currentSettings) {
+        if (snapshot) this.assertSnapshot(snapshot, currentSettings);
+        const root = this.chatNamespace();
+        if (Number(root?.cursor?.runtimeStateVersion || 0) === 3 && root?.cursor?.oneTimeBaselineMigrationCompleted === true) return false;
+        const previous = {
+            cursor: Object.prototype.hasOwnProperty.call(root, 'cursor') ? structuredClone(root.cursor) : undefined,
+            commitReceipts: Object.prototype.hasOwnProperty.call(root, 'commitReceipts') ? structuredClone(root.commitReceipts) : undefined,
+            turnRollbackSnapshots: Object.prototype.hasOwnProperty.call(root, 'turnRollbackSnapshots') ? structuredClone(root.turnRollbackSnapshots) : undefined,
+        };
+        const sourceEntries = (Array.isArray(baselineEntries) ? baselineEntries : []).filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+        const uids = [...new Set(sourceEntries.map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean))];
+        const bedrockMap = new Map();
+        const foundationMap = new Map();
+        for (const entry of sourceEntries) {
+            const uid = String(entry?.uid ?? '').trim();
+            if (!uid) continue;
+            if (entry.bedrockLocked === true || entry.locked === true) {
+                bedrockMap.set(uid, structuredClone(entry));
+                continue;
+            }
+            if (String(entry.type ?? '').trim() === '基础设定') foundationMap.set(uid, structuredClone(entry));
+        }
+        const capturedAt = Date.now();
+        // [MA-ONE-TIME-BASELINE] 升级迁移只执行一次：旧世界书 UID 只是事实基线；当前聊天最后一个明确“地点：”只负责建立空的当前场景组起点。
+        // 不把旧 UID 塞进当前场景组，也不推断旧 S/L。完成后由 oneTimeBaselineMigrationCompleted 永久跳过后续启动初始化。
+        const chat = this.context()?.chat ?? [];
+        let currentSceneName = '';
+        let currentSceneMessageKey = '';
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            const message = chat[index];
+            if (!isAssistant(message)) continue;
+            const sceneName = (0, util_1.extractLatestSceneLocation)(String(message?.mes ?? ''));
+            if (!sceneName) continue;
+            currentSceneName = sceneName;
+            currentSceneMessageKey = readMessageKey(message);
+            break;
+        }
+        const currentSceneGroup = currentSceneName ? (0, util_1.normalizeSceneLocation)(currentSceneName) : '';
+        const initialSceneUid = currentSceneGroup || currentSceneName
+            ? `SG-${(0, util_1.hashText)(`${this.chatKey()}|baseline|${currentSceneGroup || currentSceneName}`).slice(0, 10)}`
+            : '';
+        const initialSceneTimeline = initialSceneUid ? {
+            id: initialSceneUid,
+            groupUid: initialSceneUid,
+            sceneGroup: currentSceneGroup,
+            sceneTitle: `场景｜${currentSceneName}`,
+            memberEntries: [],
+            summaryStatus: 'active',
+            openedAtMessageKey: currentSceneMessageKey,
+            closedAtMessageKey: '',
+        } : null;
+        root.cursor = {
+            runtimeStateVersion: 3,
+            oneTimeBaselineMigrationCompleted: true,
+            baselineUids: uids,
+            baselineCapturedAt: capturedAt,
+            lastProcessedMessageKey: '',
+            lastProcessedHash: '',
+            lastExtractionUids: [],
+            failedLargeSummaryGroupUids: [],
+            activeEventTimeline: initialSceneTimeline,
+            closedEventTimelines: [],
+            activeLargeSummaryGroup: {
+                id: `LG-${capturedAt.toString(36)}`,
+                groupUid: `LG-${capturedAt.toString(36)}`,
+                foundationEntries: [...foundationMap.values()],
+                bedrockEntries: [...bedrockMap.values()],
+                sceneGroups: [],
+                openedAt: capturedAt,
+            },
+            smallSummarySceneCounter: 0,
+        };
+        delete root.commitReceipts;
+        delete root.turnRollbackSnapshots;
+        await this.persistMetadataMutation(() => {
+            if (previous.cursor !== undefined) root.cursor = previous.cursor; else delete root.cursor;
+            if (previous.commitReceipts !== undefined) root.commitReceipts = previous.commitReceipts; else delete root.commitReceipts;
+            if (previous.turnRollbackSnapshots !== undefined) root.turnRollbackSnapshots = previous.turnRollbackSnapshots; else delete root.turnRollbackSnapshots;
+        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, 'UID运行基线初始化', ['cursor', 'commitReceipts', 'turnRollbackSnapshots']);
+        return true;
+    }
+    // [MA-REBUILD-BASELINE] 这是玩家显式整本重建后的新起点，不是升级迁移；可显式再次执行，但不会重新触发一次性升级迁移。
+    async resetUidRuntimeStateAfterRebuild(baselineEntries, snapshot, currentSettings) {
+        if (snapshot) this.assertSnapshot(snapshot, currentSettings);
+        const root = this.chatNamespace();
+        const previous = {
+            cursor: Object.prototype.hasOwnProperty.call(root, 'cursor') ? structuredClone(root.cursor) : undefined,
+            commitReceipts: Object.prototype.hasOwnProperty.call(root, 'commitReceipts') ? structuredClone(root.commitReceipts) : undefined,
+            turnRollbackSnapshots: Object.prototype.hasOwnProperty.call(root, 'turnRollbackSnapshots') ? structuredClone(root.turnRollbackSnapshots) : undefined,
+        };
+        const sourceEntries = (Array.isArray(baselineEntries) ? baselineEntries : []).filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+        const uids = [...new Set(sourceEntries.map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean))];
+        const foundationEntries = sourceEntries.filter((entry) => String(entry?.type ?? '').trim() === '基础设定').map((entry) => structuredClone(entry));
+        const bedrockEntries = sourceEntries.filter((entry) => entry?.bedrockLocked === true || entry?.locked === true).map((entry) => structuredClone(entry));
+        const chat = this.context()?.chat ?? [];
+        let currentSceneName = '';
+        let currentSceneMessageKey = '';
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            const message = chat[index];
+            if (!isAssistant(message)) continue;
+            const sceneName = (0, util_1.extractLatestSceneLocation)(String(message?.mes ?? ''));
+            if (!sceneName) continue;
+            currentSceneName = sceneName;
+            currentSceneMessageKey = readMessageKey(message);
+            break;
+        }
+        const currentSceneGroup = currentSceneName ? (0, util_1.normalizeSceneLocation)(currentSceneName) : '';
+        const capturedAt = Date.now();
+        const sceneUid = currentSceneGroup || currentSceneName
+            ? `SG-${(0, util_1.hashText)(`${this.chatKey()}|rebuild|${currentSceneGroup || currentSceneName}|${capturedAt}`).slice(0, 10)}`
+            : '';
+        root.cursor = {
+            runtimeStateVersion: 3,
+            oneTimeBaselineMigrationCompleted: true,
+            baselineUids: uids,
+            baselineCapturedAt: capturedAt,
+            lastProcessedMessageKey: '',
+            lastProcessedHash: '',
+            lastExtractionUids: [],
+            failedLargeSummaryGroupUids: [],
+            activeEventTimeline: sceneUid ? {
+                id: sceneUid, groupUid: sceneUid, sceneGroup: currentSceneGroup, sceneTitle: `场景｜${currentSceneName}`,
+                memberEntries: [], summaryStatus: 'active', openedAtMessageKey: currentSceneMessageKey, closedAtMessageKey: '',
+            } : null,
+            closedEventTimelines: [],
+            activeLargeSummaryGroup: {
+                id: `LG-${capturedAt.toString(36)}`, groupUid: `LG-${capturedAt.toString(36)}`,
+                foundationEntries, bedrockEntries, sceneGroups: [], openedAt: capturedAt,
+            },
+            smallSummarySceneCounter: 0,
+        };
+        delete root.commitReceipts;
+        delete root.turnRollbackSnapshots;
+        await this.persistMetadataMutation(() => {
+            if (previous.cursor !== undefined) root.cursor = previous.cursor; else delete root.cursor;
+            if (previous.commitReceipts !== undefined) root.commitReceipts = previous.commitReceipts; else delete root.commitReceipts;
+            if (previous.turnRollbackSnapshots !== undefined) root.turnRollbackSnapshots = previous.turnRollbackSnapshots; else delete root.turnRollbackSnapshots;
+        }, () => { if (snapshot) this.assertSnapshot(snapshot, currentSettings); }, '整本重建运行基线重置', ['cursor', 'commitReceipts', 'turnRollbackSnapshots']);
+        return true;
+    }
     // [MA-LOCK] 方法职责锁：cursor 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     cursor() {
-        // [MA-LOCK] 数据来源锁：root 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const root = this.chatNamespace();
-        // [MA-LOCK] 数据来源锁：value 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const value = root.cursor && typeof root.cursor === 'object' ? root.cursor : {};
-        // [MA-LOCK] 数据来源锁：normalizeTimeline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+        const value = root.cursor && typeof root.cursor === 'object' && !Array.isArray(root.cursor) ? root.cursor : {};
+        // 旧运行结构不再兼容。没有 v3 一次性迁移完成标记时只返回空的新结构，启动初始化负责从当前世界书建立事实基线。
+        if (Number(value.runtimeStateVersion || 0) !== 3 || value.oneTimeBaselineMigrationCompleted !== true) {
+            return {
+                runtimeStateVersion: 3,
+                oneTimeBaselineMigrationCompleted: false,
+                baselineUids: [],
+                baselineCapturedAt: 0,
+                lastProcessedMessageKey: '',
+                lastProcessedHash: '',
+                lastExtractionUids: [],
+                failedLargeSummaryGroupUids: [],
+                activeEventTimeline: null,
+                closedEventTimelines: [],
+                activeLargeSummaryGroup: {
+                    id: '',
+                    groupUid: '',
+                    foundationEntries: [],
+                    bedrockEntries: [],
+                    sceneGroups: [],
+                    openedAt: 0,
+                },
+                smallSummarySceneCounter: 0,
+            };
+        }
         const normalizeTimeline = (raw, defaultStatus = 'pending') => {
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-            // [MA-LOCK] 数据来源锁：stages 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const stages = [];
-            // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-            for (const stage of Array.isArray(raw.stages) ? raw.stages : []) {
-                // [MA-LOCK] 数据来源锁：points 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const points = [];
-                // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-                for (const point of Array.isArray(stage?.points) ? stage.points : []) {
-                    // [MA-LOCK] 数据来源锁：uid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                    const uid = String(point?.uid ?? '').trim();
-                    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                    if (!uid) continue;
-                    points.push({
-                        uid,
-                        section: String(point?.section ?? ''),
-                        factHash: String(point?.factHash ?? ''),
-                        change: /^(?:建立|变化|结束)$/u.test(String(point?.change ?? '')) ? String(point.change) : '变化',
-                        relatedUids: [...new Set((point?.relatedUids ?? []).map((item) => String(item ?? '').trim()).filter(Boolean))],
-                    });
-                }
-                // [MA-LOCK] 数据来源锁：uids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const uids = [...new Set([...(stage?.uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean), ...points.map((point) => point.uid)])];
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                if (uids.length) stages.push({ seq: stages.length + 1, messageKey: String(stage?.messageKey ?? ''), uids, points });
+            const memberEntryMap = new Map();
+            for (const entry of Array.isArray(raw.memberEntries) ? raw.memberEntries : []) {
+                const uid = String(entry?.uid ?? '').trim();
+                if (!uid || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+                memberEntryMap.set(uid, structuredClone({ ...entry, uid }));
             }
-            // [MA-LOCK] 数据来源锁：sceneGroup 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+            const memberEntries = [...memberEntryMap.values()];
             const sceneGroup = String(raw.sceneGroup ?? '').trim();
-            // [MA-LOCK] 数据来源锁：sceneTitle 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const sceneTitle = String(raw.sceneTitle ?? '').trim();
-            // [MA-LOCK] 数据来源锁：hasMemberUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const hasMemberUids = Object.prototype.hasOwnProperty.call(raw, 'memberUids') && Array.isArray(raw.memberUids);
-            // [MA-LOCK] 数据来源锁：memberUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const memberUids = [...new Set((hasMemberUids ? raw.memberUids : stages.flatMap((stage) => stage.uids)).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
-            // [MA-LOCK] 数据来源锁：summaryUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const summaryUids = [...new Set((raw.summaryUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length && !summaryUids.length) return null;
-            // [MA-LOCK] 数据来源锁：groupUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const groupUid = String(raw.groupUid ?? raw.id ?? '').trim();
-            // [MA-LOCK] 数据来源锁：settledAt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const settledAt = Number(raw.settledAt || 0);
-            // [MA-LOCK] 数据来源锁：rawStatus 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+            if (!groupUid && !sceneGroup && !sceneTitle && !memberEntries.length) return null;
             const rawStatus = String(raw.summaryStatus ?? '').trim();
-            // [MA-LOCK] 数据来源锁：summaryStatus 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const summaryStatus = /^(?:active|pending|failed|settled)$/u.test(rawStatus)
-                ? rawStatus
-                : settledAt > 0 ? 'settled' : defaultStatus;
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
+            const summaryStatus = /^(?:active|pending|failed)$/u.test(rawStatus) ? rawStatus : defaultStatus;
             return {
                 id: groupUid,
                 groupUid,
                 sceneGroup,
                 sceneTitle,
-                memberUids,
-                summaryUids,
-                stages,
+                memberEntries,
                 summaryStatus,
-                openedAtMessageKey: String(raw.openedAtMessageKey ?? stages[0]?.messageKey ?? ''),
+                openedAtMessageKey: String(raw.openedAtMessageKey ?? ''),
                 closedAtMessageKey: String(raw.closedAtMessageKey ?? ''),
-                settledAt,
                 failedAt: Math.max(0, Number(raw.failedAt || 0)),
                 summaryError: String(raw.summaryError ?? raw.error ?? '').trim().slice(0, 800),
             };
         };
-        // [MA-LOCK] 数据来源锁：activeEventTimeline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        let activeEventTimeline = normalizeTimeline(value.activeEventTimeline, 'active');
-        // [MA-LOCK] 数据来源锁：closedEventTimelines 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        let closedEventTimelines = (Array.isArray(value.closedEventTimelines) ? value.closedEventTimelines : []).map((item) => normalizeTimeline(item, 'pending')).filter(Boolean);
-        // [MA-LOCK] 数据来源锁：eventTimelineArchive 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        let eventTimelineArchive = (Array.isArray(value.eventTimelineArchive) ? value.eventTimelineArchive : []).map((item) => normalizeTimeline(item, 'settled')).filter(Boolean);
-        // [MA-LOCK] 数据来源锁：lastLargeSummaryAt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        let lastLargeSummaryAt = Math.max(0, Number(value.lastLargeSummaryAt || 0));
-        // 只接受当前/紧邻上一版本已经使用的 SceneGroup 游标结构；更早平铺 marks 不再迁移。
+        const normalizeEntryFolder = (items) => {
+            const map = new Map();
+            for (const entry of Array.isArray(items) ? items : []) {
+                const uid = String(entry?.uid ?? '').trim();
+                if (!uid || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+                map.set(uid, structuredClone({ ...entry, uid }));
+            }
+            return [...map.values()];
+        };
+        const activeEventTimeline = normalizeTimeline(value.activeEventTimeline, 'active');
+        const closedEventTimelines = (Array.isArray(value.closedEventTimelines) ? value.closedEventTimelines : [])
+            .map((item) => normalizeTimeline(item, 'pending')).filter(Boolean);
+        const rawLarge = value.activeLargeSummaryGroup && typeof value.activeLargeSummaryGroup === 'object' && !Array.isArray(value.activeLargeSummaryGroup)
+            ? value.activeLargeSummaryGroup : {};
+        const largeId = String(rawLarge.groupUid ?? rawLarge.id ?? '').trim() || `LG-${Math.max(0, Number(value.baselineCapturedAt || 0)).toString(36)}`;
+        const sceneGroups = (Array.isArray(rawLarge.sceneGroups) ? rawLarge.sceneGroups : [])
+            .map((item) => normalizeTimeline(item, 'pending')).filter((item) => item?.memberEntries?.length);
+        const bedrockEntries = normalizeEntryFolder(rawLarge.bedrockEntries);
+        const bedrockUids = new Set(bedrockEntries.map((entry) => String(entry.uid)));
+        const foundationEntries = normalizeEntryFolder(rawLarge.foundationEntries)
+            .filter((entry) => String(entry.type ?? '') === '基础设定' && !bedrockUids.has(String(entry.uid)));
+        const activeLargeSummaryGroup = {
+            id: largeId,
+            groupUid: largeId,
+            foundationEntries,
+            bedrockEntries,
+            sceneGroups,
+            openedAt: Math.max(0, Number(rawLarge.openedAt || value.baselineCapturedAt || 0)),
+        };
         const failedLargeSummaryGroupUids = [...new Set((value.failedLargeSummaryGroupUids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))];
-
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return {
+            runtimeStateVersion: 3,
+            oneTimeBaselineMigrationCompleted: true,
+            baselineUids: [...new Set((value.baselineUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))],
+            baselineCapturedAt: Math.max(0, Number(value.baselineCapturedAt || 0)),
             lastProcessedMessageKey: String(value.lastProcessedMessageKey ?? ''),
             lastProcessedHash: String(value.lastProcessedHash ?? ''),
-            lastLargeSummaryAt,
+            lastExtractionUids: [...new Set((value.lastExtractionUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))],
             failedLargeSummaryGroupUids,
             activeEventTimeline,
             closedEventTimelines,
-            eventTimelineArchive,
+            activeLargeSummaryGroup,
+            smallSummarySceneCounter: sceneGroups.length,
         };
     }
     // [MA-LOCK] 方法职责锁：saveCursor 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -8796,7 +8951,18 @@ class HostAdapter {
             'pendingSmallSummaryMarks', 'pendingSmallSummaryUids', 'failedSmallSummaryMarks',
             'pendingLargeSummaryMarks', 'pendingLargeSummaryUids', 'failedLargeSummaryMarks', 'failedLargeSummaryBatches',
             'smallSummaryRetryCooldown',
+            'eventTimelineArchive', 'lastLargeSummaryAt',
         ]) delete canonicalCursor[key];
+        canonicalCursor.runtimeStateVersion = 3;
+        canonicalCursor.oneTimeBaselineMigrationCompleted = true;
+        delete canonicalCursor.smallSummarySceneGroups;
+        const rawLarge = canonicalCursor.activeLargeSummaryGroup && typeof canonicalCursor.activeLargeSummaryGroup === 'object' && !Array.isArray(canonicalCursor.activeLargeSummaryGroup)
+            ? canonicalCursor.activeLargeSummaryGroup : {};
+        rawLarge.sceneGroups = Array.isArray(rawLarge.sceneGroups) ? rawLarge.sceneGroups : [];
+        rawLarge.foundationEntries = Array.isArray(rawLarge.foundationEntries) ? rawLarge.foundationEntries : [];
+        rawLarge.bedrockEntries = Array.isArray(rawLarge.bedrockEntries) ? rawLarge.bedrockEntries : [];
+        canonicalCursor.activeLargeSummaryGroup = rawLarge;
+        canonicalCursor.smallSummarySceneCounter = rawLarge.sceneGroups.length;
         // [MA-LOCK] 状态写入锁：root.cursor 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         root.cursor = canonicalCursor;
         // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
@@ -8837,37 +9003,9 @@ class HostAdapter {
     }
     getTurnRollbackSnapshots() {
         const root = this.chatNamespace();
+        // [MA-UID-BASELINE-06] 回滚历史只认本版本之后真实建立的回合 UID 快照；不再从旧 commitReceipts 推导兼容历史。
         const stored = Array.isArray(root.turnRollbackSnapshots) ? structuredClone(root.turnRollbackSnapshots) : [];
-        // 只兼容紧邻上一个版本：旧版还没有 turnRollbackSnapshots 时，用旧 commitReceipts 临时折成回合快照。
-        const source = stored.length ? stored : (() => {
-            const grouped = [];
-            for (const receipt of Array.isArray(root.commitReceipts) ? root.commitReceipts : []) {
-                const turnKey = this.turnRollbackKey(receipt);
-                if (!turnKey || !Array.isArray(receipt?.changes) || !receipt.changes.length) continue;
-                let turn = grouped.find((item) => item.turnKey === turnKey);
-                if (!turn) {
-                    turn = {
-                        id: `turn:${turnKey}`,
-                        turnKey,
-                        sourceMessageKey: String(receipt.sourceMessageKey ?? ''),
-                        messageIndex: Number(receipt.messageIndex),
-                        playerMessageIndex: Number(receipt.playerMessageIndex),
-                        worldbookName: String(receipt.worldbookName ?? ''),
-                        createdAt: Number(receipt.createdAt) || Date.now(),
-                        stateBefore: receipt?.stateBefore ? structuredClone(receipt.stateBefore) : null,
-                        contributions: [],
-                    };
-                    grouped.push(turn);
-                }
-                turn.contributions.push({
-                    receiptId: String(receipt.id ?? ''),
-                    createdAt: Number(receipt.createdAt) || Date.now(),
-                    changes: structuredClone(receipt.changes),
-                });
-            }
-            return grouped.slice(-20);
-        })();
-        return source.slice(-20).map((snapshot) => ({
+        return stored.slice(-20).map((snapshot) => ({
             ...structuredClone(snapshot),
             changes: this.turnRollbackChanges(snapshot),
             receiptIds: [...new Set((snapshot.contributions ?? []).map((item) => String(item?.receiptId ?? '')).filter(Boolean))],
@@ -10456,6 +10594,7 @@ async function initialize() {
         // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
         await waitForContext();
         application ?? (application = new application_1.MirrorAbyssApplication());
+        await application.initializeUidRuntimeState();
         application.start();
         removeStartupIndicator();
         console.info(`[MirrorAbyss] ${constants_1.VERSION} ready`);
@@ -11401,351 +11540,292 @@ class MemoryRunner {
     }
     // [MA-LOCK] 方法职责锁：retryFailedSmallSummary 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async retryFailedSmallSummary(settings, snapshot, taskId = '') {
-        // [MA-LOCK] 数据来源锁：cursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+        // [MA-SUMMARY-COUNTER] 失败小总结重试仍然只处理原关闭场景；成功后进入新的 S 场景累计组，不再进入 settled/archive。
         const cursor = this.host.cursor();
-        // [MA-LOCK] 数据来源锁：failed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const failed = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter((timeline) => timeline?.summaryStatus === 'failed');
-        // [MA-LOCK] 数据来源锁：target 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const target = taskId ? failed.find((timeline) => (timeline.groupUid || timeline.id) === taskId) : failed[0];
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!target) throw new Error('当前没有可重试的失败小总结');
-        // [MA-LOCK] 数据来源锁：marks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const marks = timelineUids(target).map((uid) => ({ uid }));
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!marks.length) throw new Error('该失败小总结没有可处理条目');
-        // [MA-LOCK] 数据来源锁：label 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const label = target.sceneTitle || target.sceneGroup || '未命名场景';
         summaryNotify('info', `镜渊：重试失败小总结“${label}”（${marks.length}个条目）${target.summaryError ? `；上次失败：${String(target.summaryError).slice(0, 240)}` : ''}`);
-        // [MA-LOCK] 数据来源锁：beforeReceiptIds 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const beforeReceiptIds = this.currentReceiptIds();
-        // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let result;
-        // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
         try {
             result = await this.summarize('small', settings, snapshot, { marks, timeline: target, previousFailureReason: target.summaryError || '' });
-        }
-        // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
-        catch (error) {
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
+        } catch (error) {
             await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '失败小总结重试');
-            // [MA-LOCK] 数据来源锁：failedAt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const failedAt = Date.now();
-            // [MA-LOCK] 数据来源锁：summaryError 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const summaryError = String((0, util_1.errorText)(error) || '').trim();
-            // [MA-LOCK] 数据来源锁：nextClosed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const nextClosed = (cursor.closedEventTimelines ?? []).map((timeline) => {
-                // [MA-LOCK] 数据来源锁：normalized 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const normalized = normalizeEventTimeline(timeline, 'pending');
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (!normalized || (normalized.groupUid || normalized.id) !== (target.groupUid || target.id)) return normalized;
-                // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
                 return normalizeEventTimeline({ ...normalized, summaryStatus: 'failed', failedAt, summaryError }, 'failed');
             }).filter(Boolean);
-            // [MA-LOCK] 数据来源锁：failedCursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const failedCursor = { ...cursor, closedEventTimelines: nextClosed };
-            // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
-            try { await this.host.saveCursor(failedCursor, snapshot, this.getSettings()); } catch { }
+            try { await this.host.saveCursor({ ...cursor, closedEventTimelines: nextClosed }, snapshot, this.getSettings()); } catch { }
             summaryNotify('error', `镜渊：失败小总结重试仍失败：${summaryError}`);
-            // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
             throw error;
         }
-        // [MA-LOCK] 数据来源锁：producedMarks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const summaryOutputUids = result.summaryOutputUids ?? summaryOutputUidsFromResult(result, marks.map((mark) => mark.uid));
-        // [MA-LOCK] 数据来源锁：processed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const processed = result.processedPendingUids ?? [];
-        // [MA-LOCK] 数据来源锁：closedEventTimelines 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean)
+        const closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean)
             .filter((timeline) => (timeline.groupUid || timeline.id) !== (target.groupUid || target.id));
-        // [MA-LOCK] 数据来源锁：eventTimelineArchive 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
-        // [MA-LOCK] 数据来源锁：settledTimeline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const settledTimeline = normalizeEventTimeline({ ...target, summaryUids: summaryOutputUids, summaryStatus: 'settled', settledAt: Date.now(), failedAt: 0, summaryError: '' }, 'settled');
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline];
-        // [MA-LOCK] 数据来源锁：nextCursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const nextCursor = { ...cursor, closedEventTimelines, eventTimelineArchive };
-        // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
+        let activeLargeSummaryGroup = refreshLargeSummaryGroupReferences(cursor.activeLargeSummaryGroup, result.entries);
+        let smallSummarySceneGroups = activeLargeSummaryGroup.sceneGroups.map((group) => structuredClone(group));
+        const summarizedGroup = summarizedSceneGroupFolder(target, result, summaryOutputUids);
+        if (summarizedGroup?.memberEntries?.length) {
+            const targetId = String(summarizedGroup.groupUid || summarizedGroup.id);
+            smallSummarySceneGroups = [...smallSummarySceneGroups.filter((group) => String(group.groupUid || group.id) !== targetId), summarizedGroup];
+        }
+        activeLargeSummaryGroup = { ...activeLargeSummaryGroup, sceneGroups: smallSummarySceneGroups };
+        const nextCursor = {
+            ...cursor,
+            closedEventTimelines,
+            activeLargeSummaryGroup,
+            smallSummarySceneCounter: smallSummarySceneGroups.length,
+        };
         try {
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.finalizeReceiptStates([result], nextCursor);
         } catch (error) {
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.rollbackCommittedResults(settings, snapshot, [result], cursor, error, '失败小总结重试');
         }
         this.setStatus(snapshot.chatKey, 'complete', result.changed ? '失败小总结重试完成' : '失败小总结重试完成，本批无结构变化');
         summaryNotify(result.changed ? 'success' : 'info', result.changed
-            ? `镜渊：失败小总结重试完成（处理${processed.length}个条目）`
-            : `镜渊：失败小总结重试已处理，但本批没有形成结构变化（处理${processed.length}个条目）`);
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
+            ? `镜渊：失败小总结重试完成（处理${processed.length}个条目；S场景计数${smallSummarySceneGroups.length}）`
+            : `镜渊：失败小总结重试已处理，但本批没有形成结构变化（处理${processed.length}个条目；S场景计数${smallSummarySceneGroups.length}）`);
+        const threshold = Math.max(2, Math.min(30, Number(settings.largeSummaryCount || 4)));
+        const failedSet = new Set((nextCursor.failedLargeSummaryGroupUids ?? []).map(String));
+        const oldestBatch = smallSummarySceneGroups.slice(0, threshold);
+        if (settings.autoLargeSummary !== false && smallSummarySceneGroups.length >= threshold
+            && !oldestBatch.some((group) => failedSet.has(String(group.groupUid || group.id)))) {
+            try { await this.runTask('largeSummary', settings, snapshot, { fromCounter: true }); }
+            catch (error) { summaryNotify('error', `镜渊：S场景计数达到阈值，但大总结失败并保留当前累计组：${(0, util_1.errorText)(error)}`); }
+        }
         return taskResultEntries(result);
     }
-    // [MA-LOCK] 方法职责锁：runTask 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async runTask(kind, settings, snapshot, options = {}) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (kind === 'extraction') {
-            // [MA-LOCK] 数据来源锁：cursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const cursor = this.host.cursor();
-            // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const result = await this.extract(settings, snapshot);
-            // [MA-LOCK] 数据来源锁：schedule 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const schedule = await this.advanceSummarySchedule(settings, snapshot, cursor, result.criticalChanges || 0, result);
-            // [MA-LOCK] 数据来源锁：completionDetail 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const completionDetail = schedule?.warning
                 ? `提取完成；${schedule.warning}`
                 : schedule?.ranSmall
                     ? '提取完成；本回合已执行小总结'
                     : '提取完成';
             this.setStatus(snapshot.chatKey, 'complete', completionDetail);
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-            return taskResultEntries(result);
-        }
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (kind === 'smallSummary') {
-            // [MA-LOCK] 数据来源锁：cursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const cursor = this.host.cursor();
-            // “立即小总结”只处理最早 pending SceneGroup；失败 SceneGroup 只由独立重试入口恢复。
-            // [MA-LOCK] 数据来源锁：targetGroup 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const targetGroup = nextPendingSceneGroup(cursor.closedEventTimelines, false);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!targetGroup) {
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                if ((cursor.closedEventTimelines ?? []).some((timeline) => normalizeEventTimeline(timeline, 'pending')?.summaryStatus === 'failed'))
-                    // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
-                    throw new Error('当前只有失败小总结任务，请使用“重试失败小总结”');
-                // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
-                throw new Error('当前没有待处理的已关闭 SceneGroup');
-            }
-            // [MA-LOCK] 数据来源锁：marks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const marks = timelineUids(targetGroup).map((uid) => ({ uid }));
-            // [MA-LOCK] 数据来源锁：targetGroupLabel 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const targetGroupLabel = targetGroup ? (targetGroup.sceneTitle || targetGroup.sceneGroup || '未命名场景') : '';
-            summaryNotify('info', `镜渊：开始手动小总结（${marks.length}个条目${targetGroupLabel ? `，${targetGroupLabel}` : ''}）`);
-            // [MA-LOCK] 数据来源锁：manualTimeline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const manualTimeline = targetGroup || timelinesForMarks(cursor, marks);
-            // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const result = await this.summarize('small', settings, snapshot, { marks, timeline: manualTimeline });
-            // [MA-LOCK] 数据来源锁：producedMarks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const summaryOutputUids = result.summaryOutputUids ?? summaryOutputUidsFromResult(result, marks.map((mark) => mark.uid));
-            // [MA-LOCK] 数据来源锁：processed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const processed = result.processedPendingUids ?? [];
-            // [MA-LOCK] 数据来源锁：closedEventTimelines 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
-            // [MA-LOCK] 数据来源锁：eventTimelineArchive 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (targetGroup) {
-                // [MA-LOCK] 数据来源锁：settledTimeline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const settledTimeline = normalizeEventTimeline({ ...targetGroup, summaryUids: summaryOutputUids, summaryStatus: 'settled', settledAt: Date.now(), failedAt: 0, summaryError: '' }, 'settled');
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline];
-                closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (targetGroup.groupUid || targetGroup.id));
-            }
-            // [MA-LOCK] 数据来源锁：nextCursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const nextCursor = { ...cursor, closedEventTimelines, eventTimelineArchive };
-            // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
-            try {
-                // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-                await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
-                // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-                await this.finalizeReceiptStates([result], nextCursor);
-            } catch (error) {
-                // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-                await this.rollbackCommittedResults(settings, snapshot, [result], cursor, error, '小总结回合');
-            }
-            // [MA-LOCK] 数据来源锁：smallWrites 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const smallWrites = Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0);
-            // [MA-LOCK] 数据来源锁：smallDeleted 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const smallDeleted = Number(result?.warehouse?.deletedCount || 0);
-            this.setStatus(snapshot.chatKey, 'complete', result.changed
-                ? `小总结完成：写入${smallWrites}，删除${smallDeleted}`
-                : '小总结结算完成，但没有产生世界书变化');
-            summaryNotify(result.changed ? 'success' : 'info', result.changed
-                ? `镜渊：手动小总结完成（处理${processed.length}个条目，写入${smallWrites}，删除${smallDeleted}）`
-                : `镜渊：手动小总结结算完成，但未形成结构变化（处理${processed.length}个条目）`);
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return taskResultEntries(result);
         }
 
-        // [MA-LOCK] 数据来源锁：cursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+        if (kind === 'smallSummary') {
+            // [MA-SUMMARY-COUNTER] 手动小总结仍然处理最早一个已关闭场景组；成功后直接进入 S 场景累计组。
+            const cursor = this.host.cursor();
+            const targetGroup = nextPendingSceneGroup(cursor.closedEventTimelines, false);
+            if (!targetGroup) {
+                if ((cursor.closedEventTimelines ?? []).some((timeline) => normalizeEventTimeline(timeline, 'pending')?.summaryStatus === 'failed'))
+                    throw new Error('当前只有失败小总结任务，请使用“重试失败小总结”');
+                throw new Error('当前没有待处理的已关闭 SceneGroup');
+            }
+            const marks = timelineUids(targetGroup).map((uid) => ({ uid }));
+            const targetGroupLabel = targetGroup.sceneTitle || targetGroup.sceneGroup || '未命名场景';
+            summaryNotify('info', `镜渊：开始手动小总结（${marks.length}个条目，${targetGroupLabel}）`);
+            const result = await this.summarize('small', settings, snapshot, { marks, timeline: targetGroup });
+            const summaryOutputUids = result.summaryOutputUids ?? summaryOutputUidsFromResult(result, marks.map((mark) => mark.uid));
+            const processed = result.processedPendingUids ?? [];
+            const closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean)
+                .filter((timeline) => (timeline.groupUid || timeline.id) !== (targetGroup.groupUid || targetGroup.id));
+            let activeLargeSummaryGroup = refreshLargeSummaryGroupReferences(cursor.activeLargeSummaryGroup, result.entries);
+            let smallSummarySceneGroups = activeLargeSummaryGroup.sceneGroups.map((group) => structuredClone(group));
+            const summarizedGroup = summarizedSceneGroupFolder(targetGroup, result, summaryOutputUids);
+            if (summarizedGroup?.memberEntries?.length) {
+                const groupId = String(summarizedGroup.groupUid || summarizedGroup.id);
+                smallSummarySceneGroups = [...smallSummarySceneGroups.filter((group) => String(group.groupUid || group.id) !== groupId), summarizedGroup];
+            }
+            activeLargeSummaryGroup = { ...activeLargeSummaryGroup, sceneGroups: smallSummarySceneGroups };
+            const nextCursor = {
+                ...cursor,
+                closedEventTimelines,
+                activeLargeSummaryGroup,
+                smallSummarySceneCounter: smallSummarySceneGroups.length,
+            };
+            try {
+                await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
+                await this.finalizeReceiptStates([result], nextCursor);
+            } catch (error) {
+                await this.rollbackCommittedResults(settings, snapshot, [result], cursor, error, '小总结回合');
+            }
+            const smallWrites = Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0);
+            const smallDeleted = Number(result?.warehouse?.deletedCount || 0);
+            this.setStatus(snapshot.chatKey, 'complete', result.changed
+                ? `小总结完成：写入${smallWrites}，删除${smallDeleted}；S场景计数${smallSummarySceneGroups.length}`
+                : `小总结结算完成；S场景计数${smallSummarySceneGroups.length}`);
+            summaryNotify(result.changed ? 'success' : 'info', result.changed
+                ? `镜渊：手动小总结完成（处理${processed.length}个条目，S场景计数${smallSummarySceneGroups.length}）`
+                : `镜渊：手动小总结结算完成（处理${processed.length}个条目，S场景计数${smallSummarySceneGroups.length}）`);
+
+            // 手动小总结也遵守同一个计数器；达到阈值且自动大总结开启时立即上卷，不等下一正文回合。
+            const threshold = Math.max(2, Math.min(30, Number(settings.largeSummaryCount || 4)));
+            const failedSet = new Set((nextCursor.failedLargeSummaryGroupUids ?? []).map(String));
+            const oldestBatch = smallSummarySceneGroups.slice(0, threshold);
+            if (settings.autoLargeSummary !== false && smallSummarySceneGroups.length >= threshold
+                && !oldestBatch.some((group) => failedSet.has(String(group.groupUid || group.id)))) {
+                try { await this.runTask('largeSummary', settings, snapshot, { fromCounter: true }); }
+                catch (error) { summaryNotify('error', `镜渊：S场景计数达到阈值，但大总结失败并保留当前累计组：${(0, util_1.errorText)(error)}`); }
+            }
+            return taskResultEntries(result);
+        }
+
+        // [MA-LARGE-GROUP] 大总结只处理当前大组集：若干已完成小总结的组集作为新材料，已有基础设定作为长期层。基石锁由玩家手动治理，不自动进入大总结提示词。
         const cursor = this.host.cursor();
-        // [MA-AUTO-LARGE-FAILURE] 自动失败批次不再自动重试，但必须仍能由“立即大总结”人工接回。
-        const failedLargeIds = new Set((cursor.failedLargeSummaryGroupUids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean));
-        const archivedGroups = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
-        const failedGroups = failedLargeIds.size
-            ? archivedGroups.filter((timeline) => failedLargeIds.has(String(timeline.groupUid || timeline.id)))
-            : [];
-        // [MA-LOCK] 数据来源锁：targetGroups 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const targetGroups = failedGroups.length ? failedGroups : pendingLargeSceneGroups(cursor);
-        if (!targetGroups.length) throw new Error('当前没有待上卷的已结算 SceneGroup');
+        const latestEntries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
+        this.validate(snapshot);
+        let activeLargeSummaryGroup = refreshLargeSummaryGroupReferences(cursor.activeLargeSummaryGroup, latestEntries);
+        const accumulatedGroups = activeLargeSummaryGroup.sceneGroups;
+        // 自动触发只收拢达到阈值的最早一批；玩家点击“立即大总结”时不看阈值、不缩成失败子集，直接收拢当前大组集的全部小总结组。
+        let targetGroups = accumulatedGroups;
+        if (options.fromCounter === true) {
+            const threshold = Math.max(2, Math.min(30, Number(settings.largeSummaryCount || 4)));
+            targetGroups = accumulatedGroups.slice(0, threshold);
+        }
+        if (!targetGroups.length) throw new Error('当前大组集没有待大总结的 S 场景组');
         const marks = largeSummaryMarksFromGroups(targetGroups);
-        if (!marks.length) throw new Error('待上卷 SceneGroup 当前没有可用总结条目');
-        // [MA-SUMMARY-GROUP-BOUNDARY] 大总结把多个 SceneGroup 作为独立时间窗口交给模型；不再 combine 成一个伪 SceneGroup。
-        summaryNotify('info', `镜渊：开始手动大总结（${marks.length}个条目${targetGroups.length ? `，${targetGroups.length}个场景组` : ''}）`);
-        // [MA-LOCK] 数据来源锁：beforeReceiptIds 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+        if (!marks.length) throw new Error('当前大组集的 S 场景组没有可用条目');
+        const largeGroupForRun = { ...activeLargeSummaryGroup, sceneGroups: targetGroups.map((group) => structuredClone(group)) };
+        summaryNotify('info', `镜渊：开始大总结（收拢${targetGroups.length}个小总结组；已有基础设定${largeGroupForRun.foundationEntries.length}）`);
         const beforeReceiptIds = this.currentReceiptIds();
-        // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let result;
-        // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
         try {
-            result = await this.summarize('large', settings, snapshot, { marks, timelines: targetGroups });
+            result = await this.summarize('large', settings, snapshot, { marks, timelines: targetGroups, largeGroup: largeGroupForRun });
         } catch (error) {
-            // 手动大总结失败不推进水位、不创建失败队列；下次点击会自然重试同一批 SceneGroup。
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '手动大总结');
-            // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
+            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '大总结');
+            // 自动触发失败只记录本批场景组，避免下一正文回合反复自动请求；大组集本身保持原样。
+            if (options.fromCounter === true) {
+                const failedIds = [...new Set([...(cursor.failedLargeSummaryGroupUids ?? []).map(String), ...targetGroups.map((group) => String(group.groupUid || group.id))])];
+                try { await this.host.saveCursor({ ...cursor, activeLargeSummaryGroup, failedLargeSummaryGroupUids: failedIds }, snapshot, this.getSettings()); } catch { }
+            }
             throw error;
         }
-        // [MA-LOCK] 数据来源锁：processed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const processed = result.processedPendingUids ?? [];
-        // [MA-LOCK] 数据来源锁：nextWatermark 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        // [MA-SUMMARY-CONSUME] 正常待上卷批次成功后推进 chronological 水位；自动失败批次由 groupUid 单独保留，
-        // 手动补处理成功只清除失败标记，不反向改写已经越过的自动水位。代码不判断模型语义覆盖率。
-        const nextWatermark = failedGroups.length
-            ? Number(cursor.lastLargeSummaryAt || 0)
-            : largeSummaryWatermark(targetGroups, cursor.lastLargeSummaryAt);
         const processedGroupIds = new Set(targetGroups.map((group) => String(group.groupUid || group.id)));
+        const remainingSceneGroups = accumulatedGroups.filter((group) => !processedGroupIds.has(String(group.groupUid || group.id)));
+        const refreshedReferences = refreshLargeSummaryGroupReferences(activeLargeSummaryGroup, result.entries);
+        const nextLargeId = `LG-${Date.now().toString(36)}`;
+        activeLargeSummaryGroup = {
+            ...refreshedReferences,
+            id: nextLargeId,
+            groupUid: nextLargeId,
+            sceneGroups: remainingSceneGroups.map((group) => structuredClone(group)),
+            openedAt: Date.now(),
+        };
         const nextFailedLarge = (cursor.failedLargeSummaryGroupUids ?? []).map(String).filter((id) => !processedGroupIds.has(id));
-        const nextCursor = { ...cursor, lastLargeSummaryAt: nextWatermark, failedLargeSummaryGroupUids: nextFailedLarge };
-        // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
+        const nextCursor = {
+            ...cursor,
+            activeLargeSummaryGroup,
+            smallSummarySceneCounter: remainingSceneGroups.length,
+            failedLargeSummaryGroupUids: nextFailedLarge,
+        };
         try {
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.finalizeReceiptStates([result], nextCursor);
         } catch (error) {
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.rollbackCommittedResults(settings, snapshot, [result], cursor, error, '大总结回合');
         }
-        this.setStatus(snapshot.chatKey, 'complete', result.changed ? '大总结完成' : '大总结已处理，本批无可进一步粗化内容');
-        summaryNotify(result.changed ? 'success' : 'info', result.changed
-            ? `镜渊：手动大总结完成（处理${processed.length}个条目）`
-            : `镜渊：手动大总结已处理，但本批没有形成结构变化（处理${processed.length}个条目）`);
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
+        this.setStatus(snapshot.chatKey, 'complete', '大总结完成；本轮大组集已结算');
+        summaryNotify(result.changed ? 'success' : 'info', `镜渊：大总结完成（基础设定写入完成；${targetGroups.length}个场景组 S→L；下一大组集场景计数${remainingSceneGroups.length}）`);
         return taskResultEntries(result);
     }
 
+
     // [MA-LOCK] 方法职责锁：advanceSummarySchedule 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async advanceSummarySchedule(settings, snapshot, cursor, criticalChanges = 0, rootResult = null) {
-        // [MA-LOCK] 数据来源锁：committed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const committed = rootResult ? [rootResult] : [];
-        // [MA-LOCK] 数据来源锁：activeEventTimeline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let activeEventTimeline = normalizeEventTimeline(cursor.activeEventTimeline, 'active');
-        // [MA-LOCK] 数据来源锁：closedEventTimelines 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let closedEventTimelines = (cursor.closedEventTimelines ?? []).map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
-        // [MA-LOCK] 数据来源锁：eventTimelineArchive 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        let eventTimelineArchive = (cursor.eventTimelineArchive ?? []).map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean);
-        // [MA-AUTO-LARGE-STATE] 大总结调度只记 chronological 水位和失败场景组 UID；不保存第二份剧情正文。
-        let lastLargeSummaryAt = Math.max(0, Number(cursor.lastLargeSummaryAt || 0));
+        let activeLargeSummaryGroup = refreshLargeSummaryGroupReferences(cursor.activeLargeSummaryGroup, rootResult?.entries ?? []);
+        let smallSummarySceneGroups = activeLargeSummaryGroup.sceneGroups.map((group) => structuredClone(group));
         let failedLargeSummaryGroupUids = [...new Set((cursor.failedLargeSummaryGroupUids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))];
-        // [MA-LOCK] 数据来源锁：currentGroup 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+
+        // S 只代表 UID 当前状态。正常提取再次改动 UID 时，旧 S 材料立即从当前大组集的旧场景文件夹退出。
+        const changedByCurrentExtraction = (rootResult?.businessChanges ?? []).map((change) => String(change?.uid ?? '').trim()).filter(Boolean);
+        smallSummarySceneGroups = invalidateAccumulatedSummaryUids(smallSummarySceneGroups, changedByCurrentExtraction);
+        activeLargeSummaryGroup = { ...activeLargeSummaryGroup, sceneGroups: smallSummarySceneGroups };
+        const survivingAccumulatorIds = new Set(smallSummarySceneGroups.map((group) => String(group.groupUid || group.id)));
+        failedLargeSummaryGroupUids = failedLargeSummaryGroupUids.filter((id) => survivingAccumulatorIds.has(String(id)));
+
         const currentGroup = String(rootResult?.currentSceneGroup || activeEventTimeline?.sceneGroup || '').trim();
-        // [MA-LOCK] 数据来源锁：currentTitle 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const currentTitle = String(rootResult?.currentSceneTitle || activeEventTimeline?.sceneTitle || '').trim();
-        // [MA-LOCK] 数据来源锁：sceneBoundary 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const sceneBoundary = rootResult?.sceneBoundaryChanged === true;
 
-        // 地点稳定名发生变化时，冻结旧主 UID。关闭动作与自动小总结开关完全解耦：
-        // 自动小总结关闭时只是 summaryStatus=pending，UID 归组和场景生命周期仍持续运行。
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
+        // 当前场景组就是当前连续场景的条目文件夹；换场时关闭旧文件夹并立即创建新文件夹。
         if (sceneBoundary && activeEventTimeline) {
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (timelineUids(activeEventTimeline).length) {
-                // [MA-LOCK] 数据来源锁：closed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const closed = normalizeEventTimeline({
                     ...activeEventTimeline,
                     summaryStatus: 'pending',
                     closedAtMessageKey: String(snapshot.messageKey ?? ''),
                 }, 'pending');
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (closed) closedEventTimelines.push(closed);
             }
-            // 没有任何被动过 UID 的空场景组无需总结，但仍必须结束，不能把新场景的 UID 挂到旧父组。
             activeEventTimeline = null;
         }
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!activeEventTimeline) {
-            // [MA-LOCK] 数据来源锁：seed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const seed = `${snapshot.chatKey}|${currentGroup || currentTitle || 'scene'}|${snapshot.messageKey}`;
-            // [MA-LOCK] 数据来源锁：groupUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const groupUid = `SG-${(0, util_1.hashText)(seed).slice(0, 10)}`;
             activeEventTimeline = {
                 id: groupUid,
                 groupUid,
                 sceneGroup: currentGroup,
                 sceneTitle: currentTitle,
-                memberUids: [],
-                stages: [],
+                memberEntries: [],
                 summaryStatus: 'active',
                 openedAtMessageKey: String(snapshot.messageKey ?? ''),
                 closedAtMessageKey: '',
-                settledAt: 0,
             };
         }
         activeEventTimeline.sceneGroup ||= currentGroup;
         activeEventTimeline.sceneTitle ||= currentTitle;
-        // [MA-LOCK] 状态写入锁：activeEventTimeline.summaryStatus 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         activeEventTimeline.summaryStatus = 'active';
-        activeEventTimeline = appendTimelineStage(activeEventTimeline, rootResult, snapshot);
-
-        // 未结算 SceneGroup 保持原时间顺序，不按地点或旧 ID 去重；同一地点以后再次进入必须形成新的时间窗口。
+        activeEventTimeline = appendSceneGroupMembers(activeEventTimeline, rootResult, snapshot);
         closedEventTimelines = closedEventTimelines.map((timeline) => normalizeEventTimeline(timeline, 'pending')).filter(Boolean);
 
-        // [MA-LOCK] 数据来源锁：smallRanThisTurn 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let smallRanThisTurn = false;
-        // [MA-LOCK] 数据来源锁：summaryWarning 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let summaryWarning = '';
-        // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
         try {
-            // 自动小总结只响应本轮真实场景切换。历史 pending 不在同场景正文回合里自动消化；
-            // 失败组保持 failed，交由玩家手动重试。
-            // [MA-LOCK] 数据来源锁：summaryGroup 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+            // 真实换场后，刚关闭的完整场景文件夹直接交给小总结。
             const summaryGroup = sceneBoundary && settings.autoSmallSummary !== false
                 ? nextPendingSceneGroup(closedEventTimelines, false)
                 : null;
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (summaryGroup) {
-                // [MA-LOCK] 数据来源锁：marks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const marks = timelineUids(summaryGroup).map((uid) => ({ uid }));
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (marks.length) {
                     smallRanThisTurn = true;
-                    // [MA-LOCK] 数据来源锁：groupLabel 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                     const groupLabel = summaryGroup.sceneTitle || summaryGroup.sceneGroup || '未命名场景';
                     this.progress('running', `场景组“${groupLabel}”开始小总结：${marks.length}个条目`, { titles: ['总结｜当前事件'], sceneBoundary: true, sceneGroupUid: summaryGroup.groupUid });
                     summaryNotify('info', `镜渊：场景组结束，开始小总结（${marks.length}个条目）`);
-                    // [MA-LOCK] 数据来源锁：beforeReceiptIds 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                     const beforeReceiptIds = this.currentReceiptIds();
-                    // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
                     try {
-                        // [MA-LOCK] 数据来源锁：small 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                         const small = await this.summarize('small', settings, snapshot, { marks, timeline: summaryGroup });
                         committed.push(small);
-                        // [MA-LOCK] 数据来源锁：processed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                         const processed = small.processedPendingUids ?? [];
-                        // [MA-LOCK] 数据来源锁：producedMarks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                        // [MA-SUMMARY-LINEAGE] summaryUids 不是“本次写动的 UID”，而是小总结后仍应继续进入下一层的有效材料。
-                        // 输入中未被改动但模型选择保留的条目仍属于结果层；沉降删除的来源退出，确定性目标接替。
                         const summaryOutputUids = small.summaryOutputUids ?? summaryOutputUidsFromResult(small, marks.map((mark) => mark.uid));
-                        const settledTimeline = normalizeEventTimeline({ ...summaryGroup, summaryUids: summaryOutputUids, summaryStatus: 'settled', settledAt: Date.now() }, 'settled');
-                        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                        if (settledTimeline) eventTimelineArchive = [...eventTimelineArchive, settledTimeline];
+                        const summarizedGroup = summarizedSceneGroupFolder(summaryGroup, small, summaryOutputUids);
+                        activeLargeSummaryGroup = refreshLargeSummaryGroupReferences(activeLargeSummaryGroup, small.entries);
+                        smallSummarySceneGroups = activeLargeSummaryGroup.sceneGroups.map((group) => structuredClone(group));
+                        if (summarizedGroup?.memberEntries?.length) {
+                            const groupId = String(summarizedGroup.groupUid || summarizedGroup.id);
+                            smallSummarySceneGroups = [...smallSummarySceneGroups.filter((group) => String(group.groupUid || group.id) !== groupId), summarizedGroup];
+                        }
+                        activeLargeSummaryGroup = { ...activeLargeSummaryGroup, sceneGroups: smallSummarySceneGroups };
                         closedEventTimelines = closedEventTimelines.filter((timeline) => (timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id));
-                        // [MA-LOCK] 数据来源锁：smallWrites 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                         const smallWrites = Number(small?.warehouse?.createdCount || 0) + Number(small?.warehouse?.updatedCount || 0);
-                        // [MA-LOCK] 数据来源锁：smallDeleted 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                         const smallDeleted = Number(small?.warehouse?.deletedCount || 0);
-                        summaryNotify(small?.changed ? 'success' : 'info', small?.changed
-                            ? `镜渊：小总结完成（${groupLabel}，处理${processed.length}个条目，写入${smallWrites}，删除${smallDeleted}）`
-                            : `镜渊：小总结结算完成（${groupLabel}，处理${processed.length}个条目，无结构变化）`);
+                        summaryNotify(small?.changed ? 'success' : 'info',
+                            `镜渊：小总结完成（${groupLabel}，处理${processed.length}个条目，写入${smallWrites}，删除${smallDeleted}；大组集场景计数${smallSummarySceneGroups.length}）`);
                     } catch (error) {
-                        // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
                         await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '小总结');
                         closedEventTimelines = closedEventTimelines.map((timeline) => {
-                            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                             if ((timeline.groupUid || timeline.id) !== (summaryGroup.groupUid || summaryGroup.id)) return timeline;
-                            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
                             return normalizeEventTimeline({ ...timeline, summaryStatus: 'failed', failedAt: Date.now(), summaryError: (0, util_1.errorText)(error) }, 'failed');
                         }).filter(Boolean);
                         summaryWarning = `小总结失败；场景“${groupLabel}”已保留给手动处理：${(0, util_1.errorText)(error)}`;
@@ -11755,110 +11835,74 @@ class MemoryRunner {
                 }
             }
 
-            // [MA-AUTO-LARGE-RESTORE] 自动大总结只以“已完成小总结且保有有效 summaryUids 的 SceneGroup 数量”为阈值。
-            // 小总结刚运行的同一正文回合不连锁调用大总结；代码只负责按时间顺序把多个完整 SceneGroup 材料交给模型。
-            // 模型负责是否继续保留/替换/沉降；代码不做覆盖率、重要度或相似度判断。
-            if (!smallRanThisTurn && settings.autoLargeSummary !== false) {
-                const candidateCursor = { ...cursor, eventTimelineArchive, lastLargeSummaryAt };
-                const pendingGroups = pendingLargeSceneGroups(candidateCursor, eventTimelineArchive);
+            // 当前大组集累计的小总结场景达到阈值后立即大总结。
+            if (settings.autoLargeSummary !== false) {
                 const threshold = Math.max(2, Math.min(30, Number(settings.largeSummaryCount || 4)));
-                if (pendingGroups.length >= threshold) {
-                    const batch = pendingGroups.slice(0, threshold);
-                    const marks = largeSummaryMarksFromGroups(batch);
-                    if (marks.length) {
-                        this.progress('running', `达到自动大总结阈值：${batch.length}个场景组，开始上卷`, { titles: ['总结｜世界历史'], phase: 'large-summary', sceneGroupUids: batch.map((item) => item.groupUid) });
-                        summaryNotify('info', `镜渊：累计${batch.length}个已结算场景组，开始自动大总结（${marks.length}个条目）`);
-                        const beforeReceiptIds = this.currentReceiptIds();
-                        try {
-                            // 多个 SceneGroup 保持独立边界；禁止先压平为一个 L2 伪组。
-                            const large = await this.summarize('large', settings, snapshot, { marks, timelines: batch });
-                            committed.push(large);
-                            lastLargeSummaryAt = largeSummaryWatermark(batch, lastLargeSummaryAt);
-                            const batchIds = new Set(batch.map((group) => String(group.groupUid || group.id)));
-                            failedLargeSummaryGroupUids = failedLargeSummaryGroupUids.filter((id) => !batchIds.has(id));
-                            const largeWrites = Number(large?.warehouse?.createdCount || 0) + Number(large?.warehouse?.updatedCount || 0);
-                            const largeDeleted = Number(large?.warehouse?.deletedCount || 0);
-                            summaryNotify(large?.changed ? 'success' : 'info', large?.changed
-                                ? `镜渊：自动大总结完成（${batch.length}个场景组，写入${largeWrites}，删除${largeDeleted}）`
-                                : `镜渊：自动大总结完成（${batch.length}个场景组，无结构变化）`);
-                        } catch (error) {
-                            await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '自动大总结');
-                            // 自动失败只停止这一批的自动重试：推进自动水位，同时保留 groupUid 给“立即大总结”人工接回。
-                            lastLargeSummaryAt = largeSummaryWatermark(batch, lastLargeSummaryAt);
-                            failedLargeSummaryGroupUids = [...new Set([...failedLargeSummaryGroupUids, ...batch.map((group) => String(group.groupUid || group.id))])];
-                            const warning = `自动大总结失败；本批已保留给手动大总结，不自动重试：${(0, util_1.errorText)(error)}`;
-                            summaryWarning = summaryWarning ? `${summaryWarning}；${warning}` : warning;
-                            this.progress('warning', warning, { titles: ['总结｜世界历史'], error: (0, util_1.errorText)(error), autoRetryStopped: true, sceneGroupUids: batch.map((item) => item.groupUid) });
-                            summaryNotify('error', `镜渊：自动大总结失败，已保留给手动处理：${(0, util_1.errorText)(error)}`);
+                if (smallSummarySceneGroups.length >= threshold) {
+                    const batch = smallSummarySceneGroups.slice(0, threshold);
+                    const failedSet = new Set(failedLargeSummaryGroupUids.map(String));
+                    const blockedByPreviousFailure = batch.some((group) => failedSet.has(String(group.groupUid || group.id)));
+                    if (!blockedByPreviousFailure) {
+                        const marks = largeSummaryMarksFromGroups(batch);
+                        if (marks.length) {
+                            this.progress('running', `大组集场景计数达到${threshold}：开始大总结`, { titles: ['基础设定'], phase: 'large-summary', sceneGroupUids: batch.map((item) => item.groupUid) });
+                            summaryNotify('info', `镜渊：大组集达到${threshold}个小总结场景，开始自动大总结`);
+                            const beforeReceiptIds = this.currentReceiptIds();
+                            try {
+                                const largeGroupForRun = { ...activeLargeSummaryGroup, sceneGroups: batch.map((group) => structuredClone(group)) };
+                                const large = await this.summarize('large', settings, snapshot, { marks, timelines: batch, largeGroup: largeGroupForRun });
+                                committed.push(large);
+                                const batchIds = new Set(batch.map((group) => String(group.groupUid || group.id)));
+                                smallSummarySceneGroups = smallSummarySceneGroups.filter((group) => !batchIds.has(String(group.groupUid || group.id)));
+                                failedLargeSummaryGroupUids = failedLargeSummaryGroupUids.filter((id) => !batchIds.has(String(id)));
+                                const refreshed = refreshLargeSummaryGroupReferences(activeLargeSummaryGroup, large.entries);
+                                const nextLargeId = `LG-${Date.now().toString(36)}`;
+                                activeLargeSummaryGroup = {
+                                    ...refreshed,
+                                    id: nextLargeId,
+                                    groupUid: nextLargeId,
+                                    sceneGroups: smallSummarySceneGroups.map((group) => structuredClone(group)),
+                                    openedAt: Date.now(),
+                                };
+                                const largeWrites = Number(large?.warehouse?.createdCount || 0) + Number(large?.warehouse?.updatedCount || 0);
+                                summaryNotify(large?.changed ? 'success' : 'info',
+                                    `镜渊：自动大总结完成（${batch.length}个场景组 S→L；基础设定写入${largeWrites}；下一大组集场景计数${smallSummarySceneGroups.length}）`);
+                            } catch (error) {
+                                await this.rollbackSummaryAttemptReceipts(settings, snapshot, beforeReceiptIds, '自动大总结');
+                                failedLargeSummaryGroupUids = [...new Set([...failedLargeSummaryGroupUids, ...batch.map((group) => String(group.groupUid || group.id))])];
+                                const warning = `自动大总结失败；当前大组集保持原样，等待手动大总结：${(0, util_1.errorText)(error)}`;
+                                summaryWarning = summaryWarning ? `${summaryWarning}；${warning}` : warning;
+                                this.progress('warning', warning, { titles: ['基础设定'], error: (0, util_1.errorText)(error), autoRetryStopped: true, sceneGroupUids: batch.map((item) => item.groupUid) });
+                                summaryNotify('error', `镜渊：自动大总结失败，大组集计数未清零：${(0, util_1.errorText)(error)}`);
+                            }
                         }
                     }
                 }
             }
 
-            // [MA-SUMMARY-LIFECYCLE] SceneGroup 是小总结工作集；settled archive 是大总结来源。
-            // lastLargeSummaryAt 只表示自动/正常上卷的 chronological 消费水位；失败组另以 groupUid 保留，不复制剧情正文。
-            // [MA-LOCK] 数据来源锁：nextCursor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+            activeLargeSummaryGroup = { ...activeLargeSummaryGroup, sceneGroups: smallSummarySceneGroups };
+            const writtenThisExtraction = [...new Set((rootResult?.businessChanges ?? [])
+                .filter((change) => change?.action === 'create' || change?.action === 'update')
+                .map((change) => String(change?.uid ?? '').trim()).filter(Boolean))];
             const nextCursor = {
                 ...cursor,
                 lastProcessedMessageKey: snapshot.messageKey,
                 lastProcessedHash: snapshot.contentHash,
+                lastExtractionUids: writtenThisExtraction.length ? writtenThisExtraction : [...new Set((cursor.lastExtractionUids ?? []).map(String).filter(Boolean))],
                 activeEventTimeline,
                 closedEventTimelines,
-                eventTimelineArchive,
-                lastLargeSummaryAt,
+                activeLargeSummaryGroup,
+                smallSummarySceneCounter: smallSummarySceneGroups.length,
                 failedLargeSummaryGroupUids,
             };
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.host.saveCursor(nextCursor, snapshot, this.getSettings());
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.finalizeReceiptStates(committed, nextCursor);
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return { warning: summaryWarning, cursor: nextCursor, ranSmall: smallRanThisTurn };
         } catch (error) {
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.rollbackCommittedResults(settings, snapshot, committed, cursor, error, '正文处理回合');
         }
     }
-    // [MA-LOCK] 方法职责锁：currentReceiptIds 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    currentReceiptIds() {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (typeof this.host.getCommitReceipts !== 'function') return new Set();
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return new Set((this.host.getCommitReceipts() ?? []).map((receipt) => String(receipt?.id ?? '')).filter(Boolean));
-    }
-    // [MA-LOCK] 方法职责锁：rollbackSummaryAttemptReceipts 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    async rollbackSummaryAttemptReceipts(settings, snapshot, beforeIds, label) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (typeof this.host.getCommitReceipts !== 'function' || typeof this.host.removeCommitReceipts !== 'function') return 0;
-        // [MA-LOCK] 数据来源锁：known 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const known = beforeIds instanceof Set ? beforeIds : new Set();
-        // [MA-LOCK] 数据来源锁：added 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const added = (this.host.getCommitReceipts() ?? []).filter((receipt) => {
-            // [MA-LOCK] 数据来源锁：id 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const id = String(receipt?.id ?? '');
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-            return id && !known.has(id) && (!receipt?.sourceKind || receipt.sourceKind === 'summary');
-        });
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!added.length) return 0;
-        // [MA-LOCK] 数据来源锁：focusUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
-        // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
-        try {
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-            await this.worldbook.rollbackReceipts(settings, added, focusUid, snapshot, () => this.validate(snapshot));
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-            const addedIds = added.map((receipt) => String(receipt.id ?? '')).filter(Boolean);
-            await this.host.removeCommitReceipts(addedIds);
-            if (typeof this.host.removeTurnRollbackContributions === 'function') await this.host.removeTurnRollbackContributions(addedIds);
-            return added.length;
-        }
-        // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
-        catch (error) {
-            // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
-            throw new Error(`${label}失败后的局部事务回滚失败：${(0, util_1.errorText)(error)}`);
-        }
-    }
+
     // [MA-LOCK] 方法职责锁：finalizeReceiptStates 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async finalizeReceiptStates(results, cursor) {
         for (const result of results ?? []) {
@@ -11973,9 +12017,18 @@ class MemoryRunner {
     async extract(settings, snapshot, options = {}) {
         this.setStatus(snapshot.chatKey, 'extracting', '提取事实与状态');
         this.validate(snapshot);
-        // [MA-LOCK] 数据来源锁：entries 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+        // [MA-EXTRACT-CONTEXT] 整本世界书只留在插件内部做精确标题→UID匹配；禁止继续整本塞给提取模型。
         const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
+        // 提取模型只读取“上一批实际写入 UID”在当前场景组文件夹中的最新完整条目。UID 只用于插件定位，不暴露给模型。
+        const runtimeCursor = typeof this.host.cursor === 'function' ? this.host.cursor() : {};
+        const previousBatchUids = new Set((runtimeCursor?.lastExtractionUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
+        const currentSceneEntries = Array.isArray(runtimeCursor?.activeEventTimeline?.memberEntries)
+            ? runtimeCursor.activeEventTimeline.memberEntries
+            : [];
+        const previousBatchEntries = currentSceneEntries
+            .filter((entry) => previousBatchUids.has(String(entry?.uid ?? '').trim()))
+            .map((entry) => structuredClone(entry));
         // [MA-LOCK] 数据来源锁：dialogueInput 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const dialogueInput = [snapshot.playerText, snapshot.assistantText].filter(Boolean).join('\n\n');
         // [MA-LOCK] 数据来源锁：promptOptions 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -12002,7 +12055,7 @@ class MemoryRunner {
                 // [MA-LOCK] 数据来源锁：compact 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const compact = attempt === 1;
                 // [MA-LOCK] 数据来源锁：requestPrompt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const requestPrompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, entries, { ...promptOptions, compact, retryReason: compact ? extractionRetryReason : '' });
+                const requestPrompt = (0, prompts_1.extractionPrompts)(settings, snapshot.playerText, snapshot.assistantText, previousBatchEntries, { ...promptOptions, compact, retryReason: compact ? extractionRetryReason : '' });
                 // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
                 try {
                     raw = await (0, model_request_1.callModel)({
@@ -12139,22 +12192,59 @@ class MemoryRunner {
     }
 
     async summarize(kind, settings, snapshot, options = {}) {
-        const label = kind === 'small' ? '小总结' : kind === 'large' ? '大总结' : '人工合并';
-        const stage = kind === 'small' ? 'smallSummary' : kind === 'large' ? 'largeSummary' : 'manualMerge';
+        if (kind === 'large') return this.summarizeLargeGroup(settings, snapshot, options);
+        const label = kind === 'small' ? '小总结' : '人工合并';
+        const stage = kind === 'small' ? 'smallSummary' : 'manualMerge';
         this.setStatus(snapshot.chatKey, kind === 'large' ? 'large-summary' : 'small-summary', label);
         this.validate(snapshot);
-        const entries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
+        // [MA-SCENE-GROUP-FOLDER] 场景总结只吃场景组集自身保存的完整条目；不再存在旧 UID 二次回查世界书的兼容路径。
+        const smallDirectEntries = kind === 'small' ? timelineEntries(options.timeline) : [];
+        const largeGroups = kind === 'large' && Array.isArray(options.timelines) ? options.timelines.map((item) => normalizeEventTimeline(item)).filter(Boolean) : [];
+        const largeDirectEntries = largeGroups.length
+            ? [...new Map(largeGroups.flatMap((group) => timelineEntries(group)).map((entry) => [String(entry.uid), structuredClone(entry)])).values()]
+            : [];
+        const sceneFolderSummary = (kind === 'small' && options.timeline) || (kind === 'large' && Array.isArray(options.timelines));
+        const directSceneEntries = smallDirectEntries.length ? smallDirectEntries : largeDirectEntries;
+        if (sceneFolderSummary && !directSceneEntries.length) throw new Error(`${label}场景组没有可处理的完整条目`);
+        const entries = sceneFolderSummary
+            ? directSceneEntries
+            : await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
         this.validate(snapshot);
         const cursor = this.host.cursor();
         const defaultMarks = kind === 'small'
             ? timelineUids(nextPendingSceneGroup(cursor.closedEventTimelines, false)).map((uid) => ({ uid }))
             : largeSummaryMarksFromGroups(pendingLargeSceneGroups(cursor));
         const requestedMarks = normalizeSummaryMarks(Array.isArray(options.marks) ? options.marks : defaultMarks);
-        const existingUids = new Set(entries.map((entry) => String(entry.uid)));
+        const entryByUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
+        const existingUids = new Set(entryByUid.keys());
         const stalePendingUids = requestedMarks.filter((mark) => !existingUids.has(mark.uid)).map((mark) => mark.uid);
-        const selected = summaryEntries(entries, requestedMarks.filter((mark) => existingUids.has(mark.uid)));
+        // [MA-SUMMARY-UID-MARK-04] 同一 UID 当前状态只总结一次：小总结只接收无 S/L 的状态；大总结只接收 S 状态；L 不重复大总结。
+        // 正常提取再次改动该 UID 时写入层会清除旧标记，它会重新成为可总结材料。
+        const eligibleMarks = requestedMarks.filter((mark) => {
+            const entry = entryByUid.get(mark.uid);
+            if (!entry) return false;
+            if (kind === 'small') return entry.summaryMark !== 'S' && entry.summaryMark !== 'L';
+            if (kind === 'large') return entry.summaryMark === 'S';
+            return true;
+        });
+        const selected = summaryEntries(entries, eligibleMarks);
         const selectedPendingUids = selected.map((entry) => String(entry.uid));
-        if (!selected.length) throw new Error(`${label}当前没有待整理条目`);
+        if (!selected.length) {
+            const alreadyProcessed = requestedMarks.filter((mark) => {
+                const entry = entryByUid.get(mark.uid);
+                if (!entry) return false;
+                return kind === 'small' ? (entry.summaryMark === 'S' || entry.summaryMark === 'L') : kind === 'large' ? entry.summaryMark === 'L' : false;
+            }).map((mark) => mark.uid);
+            if (alreadyProcessed.length) {
+                return {
+                    entries, changed: false, businessChanged: false, worldbookName: snapshot.worldbookName || '',
+                    warehouse: { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
+                    businessChanges: [], receipt: null, processedPendingUids: alreadyProcessed, stalePendingUids, retiredSourceUids: [],
+                    summaryOutputUids: [...new Set(alreadyProcessed)], summaryRetryUsed: false, summarySkippedAlreadyProcessed: true,
+                };
+            }
+            throw new Error(`${label}当前没有待整理条目`);
+        }
 
         const basePrompt = kind === 'merge'
             ? (0, prompts_1.manualMergePrompts)(settings, selected, {})
@@ -12203,7 +12293,7 @@ class MemoryRunner {
         }
         if (!parsed || parsed.error) throw new Error(`${label}连续两次未返回可执行的完整条目：${parsed?.error || '未知格式错误'}`);
 
-        const plan = wholeEntrySummaryPlan(parsed, selected);
+        const plan = wholeEntrySummaryPlan(parsed, selected, kind === 'small' || kind === 'large');
         this.setStatus(snapshot.chatKey, kind === 'large' ? 'large-summary' : 'small-summary', `${label}写入中`, '', raw, plan);
         const applyOptions = {
             sourceKind: kind === 'merge' ? 'manual-merge' : 'summary',
@@ -12216,6 +12306,152 @@ class MemoryRunner {
         const deletedUids = (applied?.businessChanges ?? []).filter((item) => item?.action === 'delete').map((item) => String(item.uid || '')).filter(Boolean);
         const retainedUids = parsed.entries.filter((item) => item.kind === 'existing').map((item) => selected[item.sourceIndex]?.uid).filter(Boolean).map(String);
         applied.processedPendingUids = selectedPendingUids;
+        applied.stalePendingUids = stalePendingUids;
+        applied.retiredSourceUids = deletedUids;
+        applied.summaryOutputUids = [...new Set([...retainedUids.filter((uid) => !deletedUids.includes(uid)), ...createdUids])];
+        applied.summaryRetryUsed = retryUsed;
+        return applied;
+    }
+
+
+    // [MA-LARGE-GROUP] 大总结从当前大组集里的若干个已完成小总结继续向上抽象；正式写回只允许基础设定。
+    // 基石锁由玩家手动治理，不自动进入大总结；成功后来源 S UID 在同一世界书事务中统一改成 L。
+    async summarizeLargeGroup(settings, snapshot, options = {}) {
+        const label = '大总结';
+        const stage = 'largeSummary';
+        this.setStatus(snapshot.chatKey, 'large-summary', label);
+        this.validate(snapshot);
+
+        const authoritativeEntries = await this.worldbook.list(settings, snapshot, () => this.validate(snapshot));
+        this.validate(snapshot);
+        const cursor = this.host.cursor();
+        const requestedMarks = normalizeSummaryMarks(Array.isArray(options.marks)
+            ? options.marks
+            : largeSummaryMarksFromGroups(pendingLargeSceneGroups(cursor)));
+
+        let sourceSceneGroups = [];
+        if (options.largeGroup && typeof options.largeGroup === 'object') {
+            sourceSceneGroups = (Array.isArray(options.largeGroup.sceneGroups) ? options.largeGroup.sceneGroups : [])
+                .map((group) => normalizeEventTimeline(group, 'pending')).filter(Boolean);
+        } else if (Array.isArray(options.timelines)) {
+            sourceSceneGroups = options.timelines.map((group) => normalizeEventTimeline(group, 'pending')).filter(Boolean);
+        }
+
+        const groupEntries = [...new Map(sourceSceneGroups
+            .flatMap((group) => timelineEntries(group))
+            .map((entry) => [String(entry?.uid ?? ''), structuredClone(entry)])
+            .filter(([uid]) => uid)).values()];
+        const groupEntryByUid = new Map(groupEntries.map((entry) => [String(entry.uid), entry]));
+        const authoritativeByUid = new Map(authoritativeEntries.map((entry) => [String(entry.uid), entry]));
+
+        // 自动/立即大总结直接使用大组集里的 S 小总结组文件夹；手动选中大总结仍只使用玩家选中的当前 S UID。
+        const sourceEntries = requestedMarks.map((mark) => groupEntryByUid.get(mark.uid) ?? authoritativeByUid.get(mark.uid))
+            .filter((entry) => entry && entry.summaryMark === 'S');
+        const sourceUidSet = new Set(sourceEntries.map((entry) => String(entry.uid)));
+        const stalePendingUids = requestedMarks.filter((mark) => !sourceUidSet.has(mark.uid)).map((mark) => mark.uid);
+        if (!sourceEntries.length) {
+            const alreadyLarge = requestedMarks.filter((mark) => authoritativeByUid.get(mark.uid)?.summaryMark === 'L').map((mark) => mark.uid);
+            if (alreadyLarge.length) {
+                return {
+                    entries: authoritativeEntries, changed: false, businessChanged: false, worldbookName: snapshot.worldbookName || '',
+                    warehouse: { created: [], updated: [], deleted: [], createdCount: 0, updatedCount: 0, deletedCount: 0, operationCount: 0 },
+                    businessChanges: [], receipt: null, processedPendingUids: alreadyLarge, stalePendingUids,
+                    retiredSourceUids: [], summaryOutputUids: [], summaryRetryUsed: false, summarySkippedAlreadyProcessed: true,
+                };
+            }
+            throw new Error('大总结当前没有可处理的 S 场景条目');
+        }
+
+        const baseLargeGroup = options.largeGroup && typeof options.largeGroup === 'object'
+            ? options.largeGroup
+            : { sceneGroups: sourceSceneGroups };
+        const largeGroup = refreshLargeSummaryGroupReferences(baseLargeGroup, authoritativeEntries);
+        largeGroup.sceneGroups = sourceSceneGroups.length
+            ? sourceSceneGroups.map((group) => structuredClone(group))
+            : [{
+                id: `SG-MANUAL-${Date.now().toString(36)}`,
+                groupUid: `SG-MANUAL-${Date.now().toString(36)}`,
+                sceneGroup: '手动选中',
+                sceneTitle: '手动选中',
+                memberEntries: sourceEntries.map((entry) => structuredClone(entry)),
+                summaryStatus: 'pending',
+                openedAtMessageKey: '',
+                closedAtMessageKey: '',
+            }];
+
+        // 大总结只改写基础设定；S 小总结组只做向上抽象材料。基石锁不自动进入本次大总结。
+        const foundationEntries = largeGroup.foundationEntries.map((entry) => structuredClone(entry));
+        const basePrompt = (0, prompts_1.summaryPrompts)('large', settings, foundationEntries, '', '', { largeGroup });
+        const sourceContext = [
+            ...foundationEntries.map((entry, index) => `【基础设定条目${index + 1}】\n${entry.title}\n${entry.content}`),
+            ...largeGroup.sceneGroups.flatMap((group, index) => [
+                `【小总结组${index + 1}】${group.sceneTitle || group.sceneGroup || group.groupUid || ''}`,
+                ...timelineEntries(group).map((entry) => `${entry.title}\n${entry.content}`),
+            ]),
+        ].join('\n\n');
+        const responseTokens = (0, model_request_1.stageResponseTokens)(stage, settings, sourceContext);
+
+        let parsed = null;
+        let raw = '';
+        let retryUsed = false;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            const reason = attempt === 0 ? '' : String(parsed?.error || '上一次返回格式不完整').trim();
+            const prompt = reason ? {
+                system: `${basePrompt.system}\n\n【上一次失败原因】\n${reason.slice(0, 1200)}\n请重新根据同一个大组集输出基础设定最终协议。`,
+                user: basePrompt.user,
+            } : basePrompt;
+            try {
+                raw = await (0, model_request_1.callModel)({
+                    host: this.host,
+                    stage,
+                    prompt,
+                    fallbackPrompt: prompt,
+                    settings,
+                    snapshot,
+                    profileId: settings.modelProfileId,
+                    sourceText: sourceContext,
+                    responseTokens,
+                    singleAttempt: true,
+                    generationOptions: attempt > 0 && settings.modelProfileId ? { includePreset: false } : undefined,
+                });
+            } catch (error) {
+                const requestReason = error?.code === 'MA_REASONING_ONLY'
+                    ? '上一次只有推理，没有最终基础设定条目'
+                    : error?.code === 'MA_EMPTY_MODEL_RESPONSE'
+                        ? '上一次最终文本为空'
+                        : (0, util_1.errorText)(error);
+                parsed = { error: requestReason };
+                if (attempt === 1) throw error;
+                retryUsed = true;
+                continue;
+            }
+            this.validate(snapshot);
+            parsed = parseWholeEntrySummaryProtocol(raw, foundationEntries);
+            if (!parsed.error) {
+                const invalid = (parsed.entries ?? []).find((item) => String(item?.type ?? '') !== '基础设定');
+                if (invalid) parsed = { entries: [], error: `大总结正式产物只允许“基础设定”，不能输出“${invalid.type || '未知类型'}”` };
+            }
+            if (!parsed.error) break;
+            if (attempt === 0) retryUsed = true;
+        }
+        if (!parsed || parsed.error) throw new Error(`大总结连续两次未返回可执行的基础设定：${parsed?.error || '未知格式错误'}`);
+
+        const plan = wholeEntrySummaryPlan(parsed, foundationEntries, true);
+        this.setStatus(snapshot.chatKey, 'large-summary', '大总结写入基础设定', '', raw, plan);
+        const applyOptions = {
+            sourceKind: 'summary',
+            rebalanceKind: 'large',
+            manualAuthorizedUids: [],
+            summaryText: '大总结：S 场景组抽象为基础设定',
+            largeSummarySourceUids: [...sourceUidSet],
+        };
+        const applied = await this.apply(settings, plan, snapshot, sourceContext, label, raw, applyOptions);
+        const createdUids = (applied?.businessChanges ?? []).filter((item) => item?.action === 'create').map((item) => String(item.uid || '')).filter(Boolean);
+        const deletedUids = (applied?.businessChanges ?? []).filter((item) => item?.action === 'delete').map((item) => String(item.uid || '')).filter(Boolean);
+        const retainedUids = parsed.entries.filter((item) => item.kind === 'existing')
+            .map((item) => foundationEntries[item.sourceIndex]?.uid).filter(Boolean).map(String);
+
+        applied.processedPendingUids = [...sourceUidSet];
         applied.stalePendingUids = stalePendingUids;
         applied.retiredSourceUids = deletedUids;
         applied.summaryOutputUids = [...new Set([...retainedUids.filter((uid) => !deletedUids.includes(uid)), ...createdUids])];
@@ -12433,140 +12669,85 @@ function currentSceneBoundaryChanged(beforeEntries, afterEntries) {
 }
 // [MA-LOCK] 函数职责锁：normalizeEventTimeline 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function normalizeEventTimeline(value, defaultStatus = 'pending') {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    // [MA-LOCK] 数据来源锁：stages 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const stages = [];
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const raw of Array.isArray(value.stages) ? value.stages : []) {
-        // [MA-LOCK] 数据来源锁：points 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const points = [];
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const point of Array.isArray(raw?.points) ? raw.points : []) {
-            // [MA-LOCK] 数据来源锁：uid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const uid = String(point?.uid ?? '').trim();
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!uid) continue;
-            points.push({
-                uid,
-                section: String(point?.section ?? ''),
-                factHash: String(point?.factHash ?? ''),
-                change: /^(?:建立|变化|结束)$/u.test(String(point?.change ?? '')) ? String(point.change) : '变化',
-                relatedUids: [...new Set((point?.relatedUids ?? []).map((item) => String(item ?? '').trim()).filter(Boolean))],
-            });
-        }
-        // [MA-LOCK] 数据来源锁：uids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const uids = [...new Set([...(raw?.uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean), ...points.map((point) => point.uid)])];
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!uids.length) continue;
-        stages.push({ seq: stages.length + 1, messageKey: String(raw?.messageKey ?? ''), uids, points });
+    const memberEntryMap = new Map();
+    for (const entry of Array.isArray(value.memberEntries) ? value.memberEntries : []) {
+        const uid = String(entry?.uid ?? '').trim();
+        if (!uid || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        memberEntryMap.set(uid, structuredClone({ ...entry, uid }));
     }
-    // [MA-LOCK] 数据来源锁：sceneGroup 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+    const memberEntries = [...memberEntryMap.values()];
     const sceneGroup = String(value.sceneGroup ?? '').trim();
-    // [MA-LOCK] 数据来源锁：sceneTitle 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const sceneTitle = String(value.sceneTitle ?? '').trim();
-    // [MA-LOCK] 数据来源锁：hasMemberUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const hasMemberUids = Object.prototype.hasOwnProperty.call(value, 'memberUids') && Array.isArray(value.memberUids);
-    // [MA-LOCK] 数据来源锁：memberUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const memberUids = [...new Set((hasMemberUids ? value.memberUids : stages.flatMap((stage) => stage.uids)).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
-    // [MA-LOCK] 数据来源锁：summaryUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const summaryUids = [...new Set((value.summaryUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!stages.length && !sceneGroup && !sceneTitle && !memberUids.length && !summaryUids.length) return null;
-    // [MA-LOCK] 数据来源锁：openedAtMessageKey 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const openedAtMessageKey = String(value.openedAtMessageKey ?? stages[0]?.messageKey ?? '');
-    // [MA-LOCK] 数据来源锁：explicitGroupUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const explicitGroupUid = String(value.groupUid ?? '').trim();
-    // [MA-LOCK] 数据来源锁：legacyId 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const legacyId = String(value.id ?? '').trim();
-    // 旧版 E-* 只按地点生成，同一地点二次进入可能撞 ID；迁移为“旧ID + 开始消息”派生的唯一 SceneGroup UID。
-    // [MA-LOCK] 数据来源锁：groupUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const groupUid = explicitGroupUid || (legacyId.startsWith('SG-')
-        ? legacyId
-        : `SG-${(0, util_1.hashText)(`${legacyId}|${sceneGroup}|${openedAtMessageKey}`).slice(0, 10)}`);
-    // [MA-LOCK] 数据来源锁：settledAt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const settledAt = Number(value.settledAt || 0);
-    // [MA-LOCK] 数据来源锁：rawStatus 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+    const groupUid = String(value.groupUid ?? value.id ?? '').trim();
+    if (!groupUid && !sceneGroup && !sceneTitle && !memberEntries.length) return null;
     const rawStatus = String(value.summaryStatus ?? '').trim();
-    // [MA-LOCK] 数据来源锁：summaryStatus 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const summaryStatus = /^(?:active|pending|failed|settled)$/u.test(rawStatus)
-        ? rawStatus
-        : settledAt > 0 ? 'settled' : defaultStatus;
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
+    const summaryStatus = /^(?:active|pending|failed)$/u.test(rawStatus) ? rawStatus : defaultStatus;
     return {
         id: groupUid,
         groupUid,
         sceneGroup,
         sceneTitle,
-        memberUids,
-        summaryUids,
-        stages,
+        memberEntries,
         summaryStatus,
-        openedAtMessageKey,
+        openedAtMessageKey: String(value.openedAtMessageKey ?? ''),
         closedAtMessageKey: String(value.closedAtMessageKey ?? ''),
-        settledAt,
         failedAt: Math.max(0, Number(value.failedAt || 0)),
         summaryError: String(value.summaryError ?? value.error ?? '').trim().slice(0, 800),
     };
 }
 // [MA-LOCK] 函数职责锁：timelineUids 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function timelineUids(timeline) {
-    // [MA-LOCK] 数据来源锁：normalized 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+function timelineEntries(timeline) {
     const normalized = normalizeEventTimeline(timeline);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (!normalized) return [];
-    // memberUids 是 SceneGroup 当前工作集的唯一权威；stages 只保存历史谱系，不反向复活已重映射/删除 UID。
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return [...new Set((normalized.memberUids ?? []).map(String).filter(Boolean))];
+    return (normalized.memberEntries ?? []).map((entry) => structuredClone(entry));
+}
+// [MA-LOCK] 函数职责锁：timelineUids 只负责读取场景组完整条目中的 UID；不再读取旧 memberUids/stages。
+function timelineUids(timeline) {
+    const normalized = normalizeEventTimeline(timeline);
+    if (!normalized) return [];
+    return [...new Set((normalized.memberEntries ?? []).map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean))];
 }
 // [MA-LOCK] 函数职责锁：timelineMatchUids 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function timelineMatchUids(timeline) {
-    // [MA-LOCK] 数据来源锁：normalized 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const normalized = normalizeEventTimeline(timeline);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!normalized) return [];
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return [...new Set([...timelineUids(normalized), ...(normalized.summaryUids ?? [])].map(String).filter(Boolean))];
+    return timelineUids(timeline);
 }
-// [MA-LOCK] 函数职责锁：appendTimelineStage 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function appendTimelineStage(timeline, rootResult, snapshot) {
-    // [MA-FREEZE][SceneGroup 小总结输入批次]
-    // 本轮 stage.uids 的唯一来源是同一次权威 commit 的真实业务变更回执（summaryMarksFromResult(rootResult)）。
-    // 它表示“这一轮真正成功创建/更新、且提交后仍存在的世界书 UID”；同一次 commit 得到的 UID 必须整批进入 stage，不得再拆分。
-    // 代码在这里只负责把材料完整交给 SceneGroup：不得按人物/事件/场景等类型、重要度、相似度、关联强弱或其他语义再次筛选。
-    // extractionPoints/point.relatedUids 只保存模型提取时的主宿主与关系谱系，不能替代业务 commit 回执，也不能据此补入或剔除 stage UID。
-    // stage.uids = 单次 commit 的历史批次；memberUids = 当前 SceneGroup 各 stage.uids 的去重并集，并且是后续小总结取材的唯一权威。
-    // 小总结触发后应沿 timelineUids() 读取完整 memberUids，再一次性取这些 UID 对应的当前有效世界书条目交给模型；代码不在批内判断“该不该总结”。
-    // [MA-LOCK] 数据来源锁：changed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const changed = summaryMarksFromResult(rootResult).map((mark) => mark.uid);
-    // [MA-LOCK] 数据来源锁：points 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const points = (rootResult?.extractionPoints ?? []).filter((point) => changed.includes(String(point?.uid ?? '')));
-    // [MA-LOCK] 数据来源锁：base 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+// [MA-LOCK] 函数职责锁：appendSceneGroupMembers 只负责把本轮真实写入后的完整条目放进当前场景组集；同 UID 更新即替换，删除即移出。
+function appendSceneGroupMembers(timeline, rootResult, snapshot) {
     const base = normalizeEventTimeline(timeline, 'active') ?? {
         id: `SG-${(0, util_1.hashText)(`${snapshot.chatKey}|${rootResult?.currentSceneGroup || rootResult?.currentSceneTitle || 'scene'}|${snapshot.messageKey}`).slice(0, 10)}`,
         groupUid: `SG-${(0, util_1.hashText)(`${snapshot.chatKey}|${rootResult?.currentSceneGroup || rootResult?.currentSceneTitle || 'scene'}|${snapshot.messageKey}`).slice(0, 10)}`,
         sceneGroup: String(rootResult?.currentSceneGroup ?? ''),
         sceneTitle: String(rootResult?.currentSceneTitle ?? ''),
-        memberUids: [],
-        stages: [],
+        memberEntries: [],
         summaryStatus: 'active',
         openedAtMessageKey: String(snapshot.messageKey ?? ''),
         closedAtMessageKey: '',
-        settledAt: 0,
     };
-    // [MA-LOCK] 状态写入锁：base.summaryStatus 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
     base.summaryStatus = 'active';
     base.sceneGroup ||= String(rootResult?.currentSceneGroup ?? '');
     base.sceneTitle ||= String(rootResult?.currentSceneTitle ?? '');
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!changed.length) return base;
-    // [MA-LOCK] 状态写入锁：base.memberUids 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-    base.memberUids = [...new Set([...(base.memberUids ?? []), ...changed])];
-    base.stages.push({ seq: base.stages.length + 1, messageKey: String(snapshot.messageKey ?? ''), uids: [...new Set(changed)], points });
-    // stages 只保存每次 commit 的 UID 批次与提取关系谱系，不保存正文副本；memberUids 持续累计本 SceneGroup 实际被动过的 UID。
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (base.stages.length > 160) base.stages = base.stages.slice(-160).map((stage, index) => ({ ...stage, seq: index + 1 }));
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
+
+    const latestByUid = new Map((rootResult?.entries ?? []).map((entry) => [String(entry?.uid ?? '').trim(), entry]).filter(([uid]) => uid));
+    const folder = new Map();
+    for (const entry of base.memberEntries ?? []) {
+        const uid = String(entry?.uid ?? '').trim();
+        if (uid) folder.set(uid, structuredClone(entry));
+    }
+    for (const change of Array.isArray(rootResult?.businessChanges) ? rootResult.businessChanges : []) {
+        const uid = String(change?.uid ?? '').trim();
+        if (!uid) continue;
+        if (change?.action === 'delete') {
+            folder.delete(uid);
+            continue;
+        }
+        if (change?.action === 'create' || change?.action === 'update') {
+            const latest = latestByUid.get(uid);
+            if (latest) folder.set(uid, structuredClone(latest));
+        }
+    }
+
+    base.memberEntries = [...folder.values()];
     return base;
 }
 // [MA-LOCK] 函数职责锁：nextPendingSceneGroup 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -12585,48 +12766,139 @@ function nextPendingSceneGroup(closedTimelines = [], includeFailed = false) {
 }
 
 
-// [MA-LOCK] 函数职责锁：largeSummaryWatermark 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function pendingLargeSceneGroups(cursor, archiveOverride = null) {
-    const watermark = Math.max(0, Number(cursor?.lastLargeSummaryAt || 0));
-    return (Array.isArray(archiveOverride) ? archiveOverride : cursor?.eventTimelineArchive ?? [])
-        .map((timeline) => normalizeEventTimeline(timeline, 'settled')).filter(Boolean)
-        .filter((timeline) => timeline.summaryStatus === 'settled'
-            && Number(timeline.settledAt || 0) > watermark
-            && (timeline.summaryUids ?? []).length > 0)
-        .sort((left, right) => Number(left.settledAt || 0) - Number(right.settledAt || 0));
+// [MA-LARGE-GROUP] 当前大组集是大总结唯一运行容器：基础设定 + 已完成小总结的组集；基石锁记录保留在组内但不自动进入大总结提示词。
+function normalizeLargeSummaryGroup(value, referenceEntries = null) {
+    const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const normalizeEntryFolder = (items) => {
+        const map = new Map();
+        for (const entry of Array.isArray(items) ? items : []) {
+            const uid = String(entry?.uid ?? '').trim();
+            if (!uid || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+            map.set(uid, structuredClone({ ...entry, uid }));
+        }
+        return [...map.values()];
+    };
+    let bedrockEntries = normalizeEntryFolder(raw.bedrockEntries);
+    let foundationEntries = normalizeEntryFolder(raw.foundationEntries);
+    if (Array.isArray(referenceEntries)) {
+        const bedrockMap = new Map();
+        const foundationMap = new Map();
+        for (const entry of referenceEntries) {
+            const uid = String(entry?.uid ?? '').trim();
+            if (!uid) continue;
+            if (entry.bedrockLocked === true || entry.locked === true) {
+                bedrockMap.set(uid, structuredClone(entry));
+                continue;
+            }
+            if (String(entry.type ?? '').trim() === '基础设定') foundationMap.set(uid, structuredClone(entry));
+        }
+        bedrockEntries = [...bedrockMap.values()];
+        foundationEntries = [...foundationMap.values()];
+    } else {
+        const bedrockUids = new Set(bedrockEntries.map((entry) => String(entry.uid)));
+        foundationEntries = foundationEntries.filter((entry) => String(entry.type ?? '') === '基础设定' && !bedrockUids.has(String(entry.uid)));
+    }
+    const sceneGroups = (Array.isArray(raw.sceneGroups) ? raw.sceneGroups : [])
+        .map((timeline) => normalizeEventTimeline(timeline, 'pending'))
+        .filter((timeline) => timeline?.memberEntries?.length);
+    const id = String(raw.groupUid ?? raw.id ?? '').trim() || `LG-${Date.now().toString(36)}`;
+    return {
+        id,
+        groupUid: id,
+        foundationEntries,
+        bedrockEntries,
+        sceneGroups,
+        openedAt: Math.max(0, Number(raw.openedAt || Date.now())),
+    };
 }
+
+function pendingLargeSceneGroups(cursor) {
+    return normalizeLargeSummaryGroup(cursor?.activeLargeSummaryGroup).sceneGroups;
+}
+
+function refreshLargeSummaryGroupReferences(group, entries) {
+    return normalizeLargeSummaryGroup(group, Array.isArray(entries) ? entries : []);
+}
+
 function largeSummaryMarksFromGroups(groups) {
     return normalizeSummaryMarks([...new Set((groups ?? [])
-        .flatMap((timeline) => timeline?.summaryUids ?? [])
+        .flatMap((timeline) => timelineUids(timeline))
         .map(String).filter(Boolean))]
         .map((uid) => ({ uid })));
 }
-function reconcileCursorSceneUids(cursor, removedUids = [], replacementUids = []) {
-    const removed = new Set((removedUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
-    const replacements = [...new Set((replacementUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
-    if (!removed.size) return { ...cursor };
-    const remap = (uids) => {
-        const source = [...new Set((uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
-        if (!source.some((uid) => removed.has(uid))) return source;
-        return [...new Set([...source.filter((uid) => !removed.has(uid)), ...replacements])];
+// [MA-SUMMARY-COUNTER] 小总结成功后，把世界书权威回读中的 S 条目直接写回该场景文件夹；这是大总结的真实材料。
+function summarizedSceneGroupFolder(timeline, result, outputUids = []) {
+    const normalized = normalizeEventTimeline(timeline, 'pending');
+    if (!normalized) return null;
+    const wanted = new Set((outputUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
+    const resultEntries = Array.isArray(result?.entries) ? result.entries : [];
+    const memberEntries = resultEntries
+        .filter((entry) => wanted.has(String(entry?.uid ?? '').trim()))
+        .map((entry) => structuredClone(entry));
+    return {
+        id: normalized.groupUid || normalized.id,
+        groupUid: normalized.groupUid || normalized.id,
+        sceneGroup: normalized.sceneGroup,
+        sceneTitle: normalized.sceneTitle,
+        memberEntries,
+        openedAtMessageKey: normalized.openedAtMessageKey,
+        closedAtMessageKey: normalized.closedAtMessageKey,
     };
-    const active = normalizeEventTimeline(cursor?.activeEventTimeline, 'active');
-    const nextActive = active ? normalizeEventTimeline({ ...active, memberUids: remap(active.memberUids) }, 'active') : null;
-    const nextClosed = (cursor?.closedEventTimelines ?? []).map((raw) => {
-        const timeline = normalizeEventTimeline(raw, 'pending');
-        return timeline ? normalizeEventTimeline({ ...timeline, memberUids: remap(timeline.memberUids) }, timeline.summaryStatus || 'pending') : null;
-    }).filter((timeline) => timeline && timelineUids(timeline).length > 0);
-    const nextArchive = (cursor?.eventTimelineArchive ?? []).map((raw) => {
-        const timeline = normalizeEventTimeline(raw, 'settled');
-        return timeline ? normalizeEventTimeline({ ...timeline, summaryUids: remap(timeline.summaryUids) }, 'settled') : null;
-    }).filter(Boolean);
-    return { ...cursor, activeEventTimeline: nextActive, closedEventTimelines: nextClosed, eventTimelineArchive: nextArchive };
 }
 
-function largeSummaryWatermark(groups, fallback = 0) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return Math.max(Number(fallback || 0), ...(groups ?? []).map((timeline) => Number(timeline?.settledAt || 0)));
+// [MA-SUMMARY-COUNTER] 正常剧情再次改动 UID 时，旧 S 只代表旧状态，必须从当前大组集里的旧场景文件夹退出。
+function invalidateAccumulatedSummaryUids(groups, changedUids = []) {
+    const changed = new Set((changedUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
+    if (!changed.size) return (groups ?? []).map((group) => structuredClone(group));
+    const output = [];
+    for (const raw of groups ?? []) {
+        const normalized = normalizeEventTimeline(raw, 'pending');
+        if (!normalized) continue;
+        const memberEntries = (normalized.memberEntries ?? [])
+            .filter((entry) => !changed.has(String(entry?.uid ?? '').trim()))
+            .map((entry) => structuredClone(entry));
+        if (!memberEntries.length) continue;
+        output.push({
+            id: normalized.groupUid || normalized.id,
+            groupUid: normalized.groupUid || normalized.id,
+            sceneGroup: normalized.sceneGroup,
+            sceneTitle: normalized.sceneTitle,
+            memberEntries,
+            openedAtMessageKey: normalized.openedAtMessageKey,
+            closedAtMessageKey: normalized.closedAtMessageKey,
+        });
+    }
+    return output;
 }
+
+function reconcileCursorSceneUids(cursor, removedUids = [], replacementUids = []) {
+    const removed = new Set((removedUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
+    if (!removed.size) return { ...cursor };
+    const cleanTimeline = (raw, status) => {
+        const timeline = normalizeEventTimeline(raw, status);
+        if (!timeline) return null;
+        const memberEntries = (timeline.memberEntries ?? [])
+            .filter((entry) => !removed.has(String(entry?.uid ?? '')))
+            .map((entry) => structuredClone(entry));
+        if (!memberEntries.length) return null;
+        return normalizeEventTimeline({ ...timeline, memberEntries }, status);
+    };
+    const nextActive = cleanTimeline(cursor?.activeEventTimeline, 'active');
+    const nextClosed = (cursor?.closedEventTimelines ?? []).map((raw) => cleanTimeline(raw, 'pending')).filter(Boolean);
+    const largeGroup = normalizeLargeSummaryGroup(cursor?.activeLargeSummaryGroup);
+    const sceneGroups = invalidateAccumulatedSummaryUids(largeGroup.sceneGroups, [...removed]);
+    const foundationEntries = largeGroup.foundationEntries.filter((entry) => !removed.has(String(entry?.uid ?? ''))).map((entry) => structuredClone(entry));
+    const bedrockEntries = largeGroup.bedrockEntries.filter((entry) => !removed.has(String(entry?.uid ?? ''))).map((entry) => structuredClone(entry));
+    return {
+        ...cursor,
+        activeEventTimeline: nextActive,
+        closedEventTimelines: nextClosed,
+        activeLargeSummaryGroup: { ...largeGroup, foundationEntries, bedrockEntries, sceneGroups },
+        smallSummarySceneCounter: sceneGroups.length,
+    };
+}
+
+
 
 // [MA-LOCK] 函数职责锁：timelinesForMarks 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function timelinesForMarks(cursor, marks) {
@@ -12635,7 +12907,7 @@ function timelinesForMarks(cursor, marks) {
     // [MA-LOCK] 数据来源锁：candidates 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const candidates = [
         ...(Array.isArray(cursor?.closedEventTimelines) ? cursor.closedEventTimelines : []),
-        ...(Array.isArray(cursor?.eventTimelineArchive) ? cursor.eventTimelineArchive : []),
+        ...pendingLargeSceneGroups(cursor),
         cursor?.activeEventTimeline,
     ].map(normalizeEventTimeline).filter(Boolean);
     // [MA-LOCK] 数据来源锁：matched 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -12646,11 +12918,14 @@ function timelinesForMarks(cursor, marks) {
     if (matched.length === 1) return matched[0];
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return {
-        id: `E-MULTI-${matched.length}`,
+        id: `SG-MULTI-${matched.length}`,
+        groupUid: `SG-MULTI-${matched.length}`,
         sceneGroup: matched.map((item) => item.sceneGroup).filter(Boolean).join(' → '),
         sceneTitle: matched.map((item) => item.sceneTitle).filter(Boolean).join(' → '),
-        summaryUids: [...new Set(matched.flatMap((item) => item.summaryUids ?? []))],
-        stages: matched.flatMap((item) => item.stages).map((stage, index) => ({ ...stage, seq: index + 1 })),
+        memberEntries: [...new Map(matched.flatMap((item) => timelineEntries(item)).map((entry) => [String(entry.uid), structuredClone(entry)])).values()],
+        summaryStatus: 'pending',
+        openedAtMessageKey: matched[0]?.openedAtMessageKey || '',
+        closedAtMessageKey: matched[matched.length - 1]?.closedAtMessageKey || '',
     };
 }
 // [MA-LOCK] 函数职责锁：resultChangedUids 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -12771,7 +13046,7 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
     return { entries: output, error: '' };
 }
 
-function wholeEntrySummaryPlan(parsed, entries) {
+function wholeEntrySummaryPlan(parsed, entries, touchReturned = false) {
     const operations = [];
     const returnedSourceIndexes = new Set();
     for (const item of parsed.entries ?? []) {
@@ -12782,11 +13057,11 @@ function wholeEntrySummaryPlan(parsed, entries) {
             if (current.bedrockLocked === true) continue;
             const sameTitle = (0, util_1.normalizeTitle)(current.title) === (0, util_1.normalizeTitle)(item.title);
             const sameContent = String(current.content ?? '').trim() === String(item.content ?? '').trim();
-            if (sameTitle && sameContent) continue;
+            if (sameTitle && sameContent && !touchReturned) continue;
             operations.push({
-                id: `replace-entry:${current.uid}:${(0, util_1.hashText)(`${item.title}|${item.content}`)}`,
+                id: `replace-entry:${current.uid}:${(0, util_1.hashText)(`${item.title}|${item.content}|${touchReturned ? 'summary-touch' : 'content'}`)}`,
                 kind: 'replace-entry', operation: 'replace-entry', targetUid: String(current.uid), title: item.title,
-                oldValue: current.content, newValue: item.content, reason: '模型返回该临时条目的完整最终内容',
+                oldValue: current.content, newValue: item.content, reason: sameTitle && sameContent ? '总结已处理该 UID，仅写入 S/L 处理标记' : '模型返回该临时条目的完整最终内容',
             });
             continue;
         }
@@ -12835,7 +13110,7 @@ function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; }
 },"migration":function(module,exports,require){
 /**
  * Mirror Abyss — whole-worldbook organizer
- * 玩家显式维护时：整本世界书一次交给模型，按大总结颗粒度整理。
+ * 玩家显式维护时：整本世界书一次交给模型，按信息归属与颗粒度重新整理。
  * UID 永远只在系统内部；模型只看临时“条目N”。
  */
 "use strict";
@@ -12902,7 +13177,8 @@ class MigrationService {
             if (attempt === 0) this.emitProgress({ state: 'running', current: 0, total: 1, detail: `首次整理失败，带上失败原因重新请求一次：${failure}` });
         }
         if (!parsed || parsed.error) throw new Error(`整本世界书整理连续两次失败：${parsed?.error || failure || '未知错误'}`);
-        const plan = buildPlan(parsed, entries, false);
+        // [MA-REBUILD-BEDROCK] 预览阶段也按基石锁生成计划，避免预览显示“会删除/改写”而提交时又不一致。
+        const plan = buildPlan(parsed, entries, true);
         const deleted = plan.operations.filter((item) => item.kind === 'delete-entry').length;
         const created = plan.operations.filter((item) => item.kind === 'create-entry').length;
         const updated = plan.operations.filter((item) => item.kind === 'replace-entry' && item.targetUid).length;
@@ -12935,12 +13211,7 @@ class MigrationService {
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         const preview = this.preview;
         const before = await this.worldbook.readRaw(settings, snapshot, validate);
-        const currentEntries = await this.worldbook.list(settings, snapshot, validate);
-        const sourceSet = new Set(preview.sourceUids.map(String));
-        for (const entry of currentEntries) {
-            if (!sourceSet.has(String(entry.uid))) continue;
-            if (entry.bedrockLocked === true || entry.locked === true) await this.worldbook.setBedrockLocked(settings, entry.uid, false, snapshot, validate);
-        }
+        // [MA-REBUILD-BEDROCK] 整本重建尊重玩家手动基石锁：不自动解锁、不允许重建删除或改写锁定条目。
         const result = await this.worldbook.apply(
             settings,
             preview.plan,
@@ -12951,8 +13222,12 @@ class MigrationService {
             validate,
             { sourceKind: 'manual-merge', manualAuthorizedUids: preview.sourceUids },
         );
+        // 整本重建改变了 UID 结构，旧 S/L 与旧场景/大组集关系全部失效。先清 S/L，再以权威世界书建立显式新基线。
+        await this.worldbook.clearSummaryMarks(settings, snapshot, validate);
         await this.worldbook.replanRecall(settings, snapshot, validate);
         const after = await this.worldbook.readRaw(settings, snapshot, validate);
+        const rebuiltEntries = await this.worldbook.list(settings, snapshot, validate, { fresh: true });
+        await this.host.resetUidRuntimeStateAfterRebuild(rebuiltEntries, snapshot, this.getSettings());
         this.backup = { chatKey: snapshot.chatKey, worldbookName: preview.worldbookName, data: before.data, afterData: after.data };
         this.preview = null;
         return { changed: result.changed === true, committed: true, ...preview.summary };
@@ -12964,7 +13239,10 @@ class MigrationService {
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         const backup = this.backup;
         await this.worldbook.replaceRaw(settings, backup.worldbookName, backup.data, snapshot, validate);
+        await this.worldbook.clearSummaryMarks(settings, snapshot, validate);
         await this.worldbook.replanRecall(settings, snapshot, validate);
+        const restoredEntries = await this.worldbook.list(settings, snapshot, validate, { fresh: true });
+        await this.host.resetUidRuntimeStateAfterRebuild(restoredEntries, snapshot, this.getSettings());
         this.backup = null;
         return { changed: true, restored: true };
     }
@@ -12986,12 +13264,11 @@ function sortEntries(entries) {
 function wholeBookPrompt(settings, entries, retryReason = '') {
     const schema = Object.entries(information_point_1.TYPE_SECTION_ORDER)
         .map(([type, sections]) => `${type}：${sections.join('、')}`).join('\n');
-    const protocol = (0, protocols_1.protocolTextForStage)('largeSummary');
-    const custom = String(settings?.largeSummaryPrompt || '').trim();
+    const protocol = (0, protocols_1.protocolTextForStage)('migration');
     const input = entries.map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
     return {
-        system: `职责：按大总结标准整理整本世界书，把过细、重复、已经可以收束的内容变成更少、更完整的长期条目。\n\n你看到的“条目1、条目2……”只是本次请求用于对应输入条目的临时编号。\n原条目保留或改写：使用原临时编号返回完整最终条目。\n原条目被完全合并：不要返回它。\n确实形成新的独立条目：使用“新条目N”。\n返回什么系统保存什么，未返回的原条目会删除。\n不要输出删除命令，不要解释过程，不要编造。\n\n【合法类型与栏目】\n${schema}\n\n【输出格式】\n${protocol}${custom ? `\n\n【大总结附加标准】\n${custom}` : ''}${retryReason ? `\n\n【上一次失败原因】\n${retryReason}\n请使用同一整本世界书重新输出正确最终协议。` : ''}`,
-        user: `【完整世界书】\n${input}\n\n直接输出整理后的整本世界书最终条目。`,
+        system: `职责：整理整本世界书的信息归属与颗粒度，使每条信息处在合适层级，并保留所有仍然具有长期影响的有效内容。目标不是缩短字数。\n\n整理原则：\n- 同一件事被拆成多个过碎条目时，可以合并到更合适的主体条目。\n- 某条信息只是另一条长期事实或规则的附属时，可以收回到更合适的宿主。\n- 一个条目混入多个不同颗粒度或不同主体的信息时，可以在确有必要时拆分成更清楚的独立条目。\n- 具体过程可以整理为已经形成并会继续影响后续的结果，但不能因为追求简短而丢掉仍然有效的事实。\n- 已经能够自然形成更高层规律的内容可以向上整理；材料不足时不要强行拔高。\n- 不编造、不预测、不为了变少而合并本来应该独立存在的信息。\n\n你看到的“条目1、条目2……”只是本次请求用于对应输入条目的临时编号。\n原条目保留或改写：使用原临时编号返回完整最终条目。\n原条目被其他条目完整吸收后不再需要独立存在：不要返回它。\n确实需要拆出或形成新的独立条目：使用“新条目N”。\n返回什么系统保存什么，未返回的原条目会删除。\n不要输出删除命令，不要解释过程，不要编造。\n\n【合法类型与栏目】\n${schema}\n\n【输出格式】\n${protocol}${retryReason ? `\n\n【上一次失败原因】\n${retryReason}\n请使用同一整本世界书重新输出正确最终协议。` : ''}`,
+        user: `【完整世界书】\n${input}\n\n直接输出按信息归属与颗粒度整理后的整本世界书最终条目。`,
     };
 }
 
@@ -15074,24 +15351,82 @@ function summaryPromptStructureOverview(entries) {
         .join('\n');
 }
 
-// [MA-SUMMARY-WHOLE-ENTRY][冻结] 小总结/大总结极简合同：
-// 1. 模型只看到本批完整条目和临时“条目N”，永远看不到 UID。
-// 2. 模型返回完整最终条目；原临时编号映射回系统内部旧 UID。
-// 3. 本批未返回的原条目由系统删除；“新条目N”才创建新 UID。
+// [MA-SUMMARY-WHOLE-ENTRY][冻结] 完整条目协议外壳：
+// 1. 小总结/人工合并：模型看到本批完整条目和临时“条目N”，未返回的原条目删除。
+// 2. 大总结：使用下方大组集专用分支；只有“已有基础设定”获得条目N，若干 S 小总结组只做向上抽象材料，基石锁不自动进入提示词。
+// 3. UID 永远留在插件内部；模型只返回完整最终条目，不输出 UID。
 // 4. 不做标题身份匹配、逐栏目 patch、逐句移除、沉降推断或语义覆盖检查。
 function summaryPrompts(kind, settings, entries, subject, recentConversation = '', options = {}) {
     const compact = options.compact === true;
-    const goal = kind === 'small'
-        ? '把这一批细颗粒条目整理成更少、更完整的中颗粒条目。'
-        : kind === 'large'
-            ? '把这一批中颗粒条目整理成更少、更完整的粗颗粒长期条目。'
-            : '把玩家选中的条目直接合并整理成更少、更完整的最终条目。';
+
+    // [MA-SUMMARY-PROMPTS] 小总结与大总结各自只有一套独立提示词；不再存在第三套共享核心提示词。
+    // 两者都不向模型解释内部组集结构，也不枚举可选类型；插件只负责临时编号、UID 映射和最终提交边界。
+    const smallSummaryRules = `整理当前内容，提炼这个局部阶段已经形成、并且会继续影响后续的有效结果。
+
+规则：
+- 不复述流水账，不把动作过程换一种说法重新写一遍。
+- 保留已经形成且会长期影响后续的人物变化、关系变化、事件后果、资源与权限变化、持续环境条件以及其他仍然有效的结果。
+- 一次性过程、已经失去后续影响的细节可以不再保留；但不要为了变短而删除仍然有长期作用的信息。
+- 不强行总结；没有自然形成可整理结果的内容时，可以保留现状，不新增。
+- 不把局部结果继续拔高成世界整体规律。
+- 不编造、不预测、不增加当前内容中没有的事实。
+- 带“条目N”编号的内容需要保留或改写时，用原编号返回完整最终条目；被其他内容完整吸收后可以不返回。
+- 真正需要新增独立结果时，使用“新条目1、新条目2……”。
+- 每个返回条目都必须给出完整最终正文，不是补丁。
+
+【错误示范】
+原内容是某人进入封锁区域、经过核验后取得长期通行权限。错误写法：“某人进入区域并通过核验。”这只是复述过程，丢失了以后仍然有效的“长期通行权限”。另一个错误是直接写成“这个世界所有地区都实行统一通行制度”，这是把局部结果强行拔高。`;
+
+    const largeSummaryRules = `整理当前内容，在已有结果之上继续抽象、提炼更基础、更整体、更稳定的世界运行规律。
+
+规则：
+- 不复述具体剧情，不把若干局部结果简单拼接或换一种说法重写。
+- 只在材料自然支持时形成或修正更基础的整体规律；材料不足时不强行提取、不为了凑数量新增。
+- 保留会长期决定世界如何继续运行的机制、约束、关系和稳定规律。
+- 不把一次性、偶然或单个局部现象直接扩大成普遍规则。
+- 不编造、不预测、不增加当前内容中没有的事实。
+- 带“条目N”编号的内容需要保留或改写时，用原编号返回完整最终条目；被其他内容完整吸收后可以不返回。
+- 真正需要新增独立结果时，使用“新条目1、新条目2……”。
+- 每个返回条目都必须给出完整最终正文，不是补丁。
+
+【错误示范】
+若材料只是某个地点一次核验失败，错误写法：“这个世界实行严格身份许可制度。”这把单次局部现象强行提升成整体规律。若材料不足以支持更基础的规律，应当不新增。`;
+
+    // [MA-LARGE-GROUP-PROMPT] 大总结使用当前大组集的数据契约，但只使用上面的独立大总结提示词。
+    if (kind === 'large' && options.largeGroup && typeof options.largeGroup === 'object') {
+        const largeGroup = options.largeGroup;
+        const foundationEntries = entries ?? [];
+        const summaryGroups = Array.isArray(largeGroup.sceneGroups) ? largeGroup.sceneGroups : [];
+        const custom = String(settings.largeSummaryPrompt || '').trim();
+        const system = `${largeSummaryRules}\n\n没有编号的内容只作为继续抽象的依据，不直接照抄成最终结果。正式结果写成基础设定。\n\n【输出格式】\n${(0, protocols_1.protocolTextForStage)('largeSummary')}${custom ? `\n\n【附加要求】\n${clipText(custom, compact ? 1000 : 2200)}` : ''}`;
+
+        const foundationInput = foundationEntries.length
+            ? foundationEntries.map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n')
+            : '';
+        const summaryInput = summaryGroups.length
+            ? summaryGroups.map((group, groupIndex) => {
+                const groupTitle = String(group?.sceneTitle || group?.sceneGroup || group?.groupUid || `内容${groupIndex + 1}`);
+                const members = Array.isArray(group?.memberEntries) ? group.memberEntries : [];
+                const body = members.length
+                    ? members.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n')
+                    : '（空）';
+                return `【内容${groupIndex + 1}｜${groupTitle}】\n${body}`;
+            }).join('\n\n')
+            : '';
+        const combinedInput = [foundationInput, summaryInput].filter(Boolean).join('\n\n');
+        const user = `【本次内容】\n${combinedInput || '（无）'}\n\n直接输出整理后的完整最终条目。`;
+        return { system, user };
+    }
+
     const custom = kind === 'small'
         ? String(settings.smallSummaryPrompt || '').trim()
         : kind === 'large'
             ? String(settings.largeSummaryPrompt || '').trim()
             : '';
-    const system = `职责：${goal}
+    const stageName = kind === 'small' ? 'smallSummary' : kind === 'large' ? 'largeSummary' : 'manualMerge';
+    const system = kind === 'small'
+        ? `${smallSummaryRules}\n\n【输出格式】\n${(0, protocols_1.protocolTextForStage)(stageName)}${custom ? `\n\n【附加要求】\n${clipText(custom, compact ? 1000 : 2200)}` : ''}`
+        : `职责：把玩家选中的内容直接合并整理成更少、更完整的最终条目。
 
 你看到的“条目1、条目2……”只是本次请求用于对应输入条目的临时编号。
 直接整理内容，不解释过程。
@@ -15109,15 +15444,9 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 ${summarySectionSchemaText()}
 
 【输出格式】
-${(0, protocols_1.protocolTextForStage)(kind === 'small' ? 'smallSummary' : kind === 'large' ? 'largeSummary' : 'manualMerge')}${custom ? `
-
-【附加要求】
-${clipText(custom, compact ? 1000 : 2200)}` : ''}`;
+${(0, protocols_1.protocolTextForStage)(stageName)}`;
     const input = (entries ?? []).map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
-    const user = `【本批完整条目】
-${input}
-
-直接输出整理后的完整最终条目。`;
+    const user = `【本次内容】\n${input}\n\n直接输出整理后的完整最终条目。`;
     return { system, user };
 }
 
@@ -15125,7 +15454,7 @@ function manualMergePrompts(settings, selectedEntries, options = {}) {
     return summaryPrompts('merge', settings, selectedEntries, '', '', options);
 }
 
-// 整本世界书整理已收缩为 src/migration.js 的单次“整本输入 → 大总结标准 → 完整最终条目”链。
+// 整本世界书整理已收缩为 src/migration.js 的单次“整本输入 → 颗粒度与归属整理 → 完整最终条目”链。
 // 旧的规划、分批、覆盖率、锚点与多轮重建提示词已删除。
 
 function keywordTemplate(definitions) {
@@ -15246,7 +15575,7 @@ exports.SUMMARY_REWRITE = Object.freeze({
     created: '新条目N｜类型｜稳定名称',
     end: '结束条目',
 });
-// 人工合并与小/大总结使用同一完整条目协议，不再保留写回/移除/沉降协议。
+// 人工合并、小总结与大总结共用“完整条目”输出外壳；大总结的可写范围由大组集提示词和提交层限制为基础设定。
 exports.SUMMARY = exports.SUMMARY_REWRITE;
 
 // [MA-LOCK] 函数职责锁：protocolTextForStage 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -15430,16 +15759,6 @@ function profileFor(entry, settings, sceneStage, focus) {
     if (focus) {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return profile('长期焦点', 'core', 'focus', 'none', true, false, true, true, 0, 840, 1, null);
-    }
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (entry.title === '总结｜当前事件') {
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return profile('小总结向量', 'recent-summary', 'summary-container', 'vector', false, true, true, true, 6, 450, 4, null, true);
-    }
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (entry.title === '总结｜世界历史') {
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return profile('大总结向量', 'historical-summary', 'summary-container', 'vector', false, true, true, true, 8, 360, 4, null, true);
     }
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (isSceneType(type)) {
@@ -15710,9 +16029,7 @@ function describeEntry(entry, settings, currentContinuityUids = new Set(), focus
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (foundation || focus) return { lifecycle: 'core', semanticRole: foundation ? 'foundation' : 'focus' };
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (entry.title === '总结｜当前事件') return { lifecycle: 'recent-summary', semanticRole: 'summary-container' };
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (entry.title === '总结｜世界历史') return { lifecycle: 'historical-summary', semanticRole: 'summary-container' };
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (['场景', '时空'].includes(entry.type)) return { lifecycle: currentContinuityUids.has(entry.uid) ? 'active' : 'historical', semanticRole: 'scene-container' };
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -15928,10 +16245,19 @@ const PREVIOUS_AUDIT_PROMPT = `只做基础审核；明确触发任一条时判�
 4. AI回复不得输出选项栏、行动列表、攻略、内部检查、系统规则、自我解释、管理标签、回合编号或作者总结。
 5. 正常叙事描写、NPC主动行动、NPC提问、自然段落和对白换行本身不构成违规。
 只依据当前提供的对话上下文审核；不审核角色卡、世界书或未提供的隐藏设定。`;
-// [MA-LOCK] 状态写入锁：exports.DEFAULT_SMALL_SUMMARY_PROMPT 的值来源以当前赋值链为准。
-exports.DEFAULT_SMALL_SUMMARY_PROMPT = `把本场细颗粒事实整理成更少、更完整的中颗粒结果；保留继续游玩需要的已成立状态、结果与必要历史锚点。`;
-// [MA-LOCK] 状态写入锁：exports.DEFAULT_LARGE_SUMMARY_PROMPT 的值来源以当前赋值链为准。
-exports.DEFAULT_LARGE_SUMMARY_PROMPT = `把多个中颗粒结果继续整理成更少、更完整的粗颗粒长期结果；保留跨阶段仍成立的变化、关系、结果与影响。`;
+// [MA-SUMMARY-PROMPTS] 总结系统只有小总结和大总结两套核心提示词；这里的设置项只保留玩家可选附加要求。
+// 紧邻上一部署包的旧默认值会迁移为空；玩家自己修改过的附加要求保持不动。
+const PREVIOUS_SMALL_SUMMARY_PROMPT = [
+    `把本场细颗粒事实整理成更少、更完整的中颗粒结果；保留继续游玩需要的已成立状态、结果与必要历史锚点。`,
+    `优先抽象局部稳定结果，压缩重复与过程细节；没有可自然收束的内容时不强行总结。`,
+];
+exports.DEFAULT_SMALL_SUMMARY_PROMPT = ``;
+const PREVIOUS_LARGE_SUMMARY_PROMPT = [
+    `把多个中颗粒结果继续整理成更少、更完整的粗颗粒长期结果；保留跨阶段仍成立的变化、关系、结果与影响。`,
+    `根据当前大组集中的若干个已完成小总结，继续向上抽象这个世界已经稳定形成的整体运行逻辑；只建立或更新基础设定，不复述具体剧情。`,
+    `继续抽象更基础、更整体、更稳定的运行规律；材料不足时不新增，不把局部现象硬拔高成整体规律。`,
+];
+exports.DEFAULT_LARGE_SUMMARY_PROMPT = ``;
 // [MA-LOCK] 状态写入锁：exports.DEFAULT_EXTRACTION_PROMPT 的值来源以当前赋值链为准。
 exports.DEFAULT_EXTRACTION_PROMPT = `按唯一协议提取本轮正文已经明确建立、变化或结束的事实；不总结、不抽象、不按长期价值筛选。`;
 // [MA-LOCK] 状态写入锁：exports.DEFAULT_SETTINGS 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -16096,8 +16422,8 @@ function parseSettings(value) {
         auditPrompt: migrateBuiltinPrompt(candidate.auditPrompt, PREVIOUS_AUDIT_PROMPT, exports.DEFAULT_AUDIT_PROMPT),
         revisionPrompt: String(candidate.revisionPrompt ?? exports.DEFAULT_REVISION_PROMPT) || exports.DEFAULT_REVISION_PROMPT,
         extractionPrompt: String(candidate.extractionPrompt ?? exports.DEFAULT_EXTRACTION_PROMPT) || exports.DEFAULT_EXTRACTION_PROMPT,
-        smallSummaryPrompt: String(candidate.smallSummaryPrompt ?? exports.DEFAULT_SMALL_SUMMARY_PROMPT) || exports.DEFAULT_SMALL_SUMMARY_PROMPT,
-        largeSummaryPrompt: String(candidate.largeSummaryPrompt ?? exports.DEFAULT_LARGE_SUMMARY_PROMPT) || exports.DEFAULT_LARGE_SUMMARY_PROMPT,
+        smallSummaryPrompt: migrateBuiltinPrompt(candidate.smallSummaryPrompt, PREVIOUS_SMALL_SUMMARY_PROMPT, exports.DEFAULT_SMALL_SUMMARY_PROMPT),
+        largeSummaryPrompt: migrateBuiltinPrompt(candidate.largeSummaryPrompt, PREVIOUS_LARGE_SUMMARY_PROMPT, exports.DEFAULT_LARGE_SUMMARY_PROMPT),
         responseTokens: (0, util_1.clampNumber)(candidate.responseTokens, 8192, 1024, 16384),
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
@@ -17245,6 +17571,20 @@ class WorldbookAdapter {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return (await this.read(settings, snapshot, validate, options)).entries;
     }
+    // [MA-REBUILD-BASELINE] 整本世界书显式重建后，旧 S/L 属于旧组集生命周期，必须一次性清除后再建立新基线。
+    async clearSummaryMarks(settings, snapshot, validate) {
+        return this.mutate(settings, snapshot, validate, (opened) => {
+            for (const raw of Object.values(opened.data?.entries ?? {})) {
+                if (!raw || typeof raw !== 'object') continue;
+                const extension = readExtension(raw);
+                delete extension.summaryMark;
+            }
+            return { verify(data) {
+                const marked = parseEntries(data).filter((entry) => entry.summaryMark === 'S' || entry.summaryMark === 'L');
+                if (marked.length) throw new Error(`整本重建新基线仍残留${marked.length}个 S/L 标记`);
+            } };
+        });
+    }
     // [MA-RECALL-03] 只按现有世界书内容重算原生召回字段，不调用模型、不改写条目正文。
     // [MA-LOCK] 方法职责锁：replanRecall 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async replanRecall(settings, snapshot, validate) {
@@ -17600,6 +17940,18 @@ class WorldbookAdapter {
         const touchedUids = new Set(writeOperations.filter((operation) => operation.targetUid).map((operation) => String(operation.targetUid)));
         // [MA-LOCK] 数据来源锁：createdUids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const createdUids = new Set();
+        // [MA-SUMMARY-UID-MARK-03] 正常提取更新代表 UID 内容进入了新剧情状态，因此清除旧 S/L；
+        // 小总结把本次实际输出标为 S，大总结把本次实际输出标为 L。其他人工维护不擅自改处理痕迹。
+        const summaryWriteMark = options.rebalanceKind === 'small' ? 'S' : options.rebalanceKind === 'large' ? 'L' : '';
+        const clearSummaryMarkOnWrite = options.sourceKind === 'extraction';
+        // [MA-LARGE-GROUP-MARK] 大总结来源 S 场景条目不参与正文改写；只在本次基础设定提交事务里统一 S→L。
+        const largeSummarySourceUids = new Set((options.largeSummarySourceUids ?? [])
+            .map((uid) => String(uid ?? '').trim()).filter(Boolean));
+        const applySummaryMarkToRaw = (raw) => {
+            const extension = readExtension(raw);
+            if (summaryWriteMark) extension.summaryMark = summaryWriteMark;
+            else if (clearSummaryMarkOnWrite) delete extension.summaryMark;
+        };
 
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (writeOperations.length) {
@@ -17625,6 +17977,7 @@ class WorldbookAdapter {
                     // [MA-LOCK] 数据来源锁：created 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                     const created = this.createEntry(opened.api, opened.name, opened.data);
                     hydrateRaw(created, entry, sourceMessageKey, operationId);
+                    applySummaryMarkToRaw(created);
                     // [MA-LOCK] 状态写入锁：entry.uid 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
                     entry.uid = String(created.uid);
                     // [MA-LOCK] 状态写入锁：entry.mapKey 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -17640,6 +17993,7 @@ class WorldbookAdapter {
                     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                     if (!original) throw new Error(`待更新条目 UID ${entry.uid} 不存在`);
                     hydrateRaw(original.raw, entry, sourceMessageKey, operationId);
+                    applySummaryMarkToRaw(original.raw);
                     // [MA-SCENE-REAL-01] 后续场景活动时间与扩展字段必须写到真实世界书对象，不能停留在投影副本。
                     // [MA-LOCK] 状态写入锁：entry.raw 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
                     entry.raw = original.raw;
@@ -17788,8 +18142,22 @@ class WorldbookAdapter {
             deletedCount = deleted.length;
         }
 
+        // [MA-LARGE-GROUP-MARK] 大总结成功写基础设定时，同一事务把本轮材料的当前 S 状态改成 L。
+        // 这里不碰标题/正文，也不把来源场景条目塞进大总结写回计划。
+        let largeSummaryMarkedCount = 0;
+        if (largeSummarySourceUids.size) {
+            const currentEntries = parseEntries(opened.data);
+            for (const entry of currentEntries) {
+                if (!largeSummarySourceUids.has(String(entry.uid ?? ''))) continue;
+                const extension = readExtension(entry.raw);
+                if (String(extension.summaryMark || '') !== 'S') continue;
+                extension.summaryMark = 'L';
+                largeSummaryMarkedCount += 1;
+            }
+        }
+
         // [MA-LOCK] 数据来源锁：businessChanged 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const businessChanged = writeOperations.length > 0 || deletedCount > 0;
+        const businessChanged = writeOperations.length > 0 || deletedCount > 0 || largeSummaryMarkedCount > 0;
         // [MA-LOCK] 数据来源锁：changed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const changed = businessChanged || legacyProjectionRemoved;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -17839,6 +18207,14 @@ class WorldbookAdapter {
             // to remain present in the authoritative reread.
             verifyWriteResults(data, expectedAfterWrites, plan.operations, operationId, settings, focusUid);
             verifyExitResults(data, deleted);
+            if (largeSummarySourceUids.size) {
+                const verifiedByUid = new Map(parseEntries(data).map((entry) => [String(entry.uid), entry]));
+                for (const uid of largeSummarySourceUids) {
+                    const sourceEntry = verifiedByUid.get(uid);
+                    if (!sourceEntry) throw new Error(`大总结来源 UID ${uid} 在提交后不存在`);
+                    if (String(sourceEntry.summaryMark || '') !== 'L') throw new Error(`大总结来源 UID ${uid} 未完成 S→L`);
+                }
+            }
         }, '世界书提交后验证', '提交前快照');
         // [MA-LOCK] 状态写入锁：opened.data 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         opened.data = verifiedData;
@@ -18358,9 +18734,7 @@ function applySummaryRebalance(adapter, data, settings, kind, summaryText, focus
         // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
         else if (profile?.semanticRole === 'scene-remote') extension.memoryTier = 'historical';
         // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
-        else if (entry.title === '总结｜当前事件') extension.memoryTier = 'recent-summary';
         // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
-        else if (entry.title === '总结｜世界历史') extension.memoryTier = 'historical-summary';
         // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
         else if (entry.type === '事件' && !(0, semantic_1.isEventClosed)(entry)) extension.memoryTier = 'active';
         // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
@@ -18513,9 +18887,12 @@ function parseEntries(data) {
         const aliases = (0, util_1.unique)((0, entry_section_1.sectionLines)(content, ['别名', '称号', '其他名称'], split.type));
         // [MA-LOCK] 数据来源锁：extension 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const extension = readExtension(raw);
+        // [MA-SUMMARY-UID-MARK-01] S/L 只是 UID 当前内容的处理痕迹：S=当前状态已小总结，L=当前状态已大总结。
+        // 标记不改变真实 UID，不进入模型正文；完整条目快照回滚时会随原始扩展字段一起恢复。
+        const summaryMark = /^(?:S|L)$/u.test(String(extension.summaryMark ?? '').trim()) ? String(extension.summaryMark).trim() : '';
         // [MA-LOCK] 数据来源锁：storedKeywords 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const storedKeywords = (0, util_1.normalizeStringArray)(extension.recallKeywords);
-        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, bedrockLocked: extension.bedrockLocked === true, locked: extension.bedrockLocked === true, initialFoundation: extension.initialFoundation === true, settingImportLocked: extension.settingImportLocked === true, evolvedFoundation: extension.evolvedFoundation === true, managed: extension.managed === true, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), sceneLastActiveAt: Number(extension.sceneLastActiveAt) || 0, parentUid: String(extension.parentUid ?? ''), childUids: Array.isArray(extension.childUids) ? extension.childUids.map(String) : [], relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
+        output.push({ uid: String(raw.uid ?? mapUid), mapKey: String(mapUid), title, normalizedTitle: title.toLocaleLowerCase(), type: split.type, name: split.name, content, sections, keywords: (0, util_1.unique)([split.name, ...triggerKeywords, ...storedKeywords]), triggerKeywords, aliases, references: (0, entry_section_1.extractReferences)(content, split.type), focus: extension.focus === true, bedrockLocked: extension.bedrockLocked === true, locked: extension.bedrockLocked === true, initialFoundation: extension.initialFoundation === true, settingImportLocked: extension.settingImportLocked === true, evolvedFoundation: extension.evolvedFoundation === true, managed: extension.managed === true, summaryMark, updatedAt: Number(extension.updatedAt) || 0, memoryTier: String(extension.memoryTier ?? ''), lifecycle: String(extension.lifecycle ?? ''), semanticRole: String(extension.semanticRole ?? ''), storageRole: String(extension.storageRole ?? ''), entityClass: String(extension.entityClass ?? ''), hostSceneTitle: String(extension.hostSceneTitle ?? ''), sceneLastActiveAt: Number(extension.sceneLastActiveAt) || 0, parentUid: String(extension.parentUid ?? ''), childUids: Array.isArray(extension.childUids) ? extension.childUids.map(String) : [], relatedIds: Array.isArray(extension.relatedIds) ? extension.relatedIds.map(String) : [], sceneStage: String(extension.sceneStage ?? ''), chatKey: String(extension.chatKey ?? ''), recallProfile: String(extension.recallProfile ?? ''), activation: { enabled: raw.disable !== true, constant: raw.constant === true, selective: raw.selective === true, vectorized: raw.vectorized === true, recursive: raw.recursive === true || (raw.preventRecursion !== true && raw.excludeRecursion !== true), preventRecursion: raw.preventRecursion === true, excludeRecursion: raw.excludeRecursion === true, delayUntilRecursion: finiteNumber(raw.delayUntilRecursion, 0), depth: Math.max(0, finiteNumber(raw.depth, 4)), order: finiteNumber(raw.order, 400), position: finiteNumber(raw.position, 0), role: finiteNumber(raw.role, 0), scanDepth: raw.scanDepth == null ? null : finiteNumber(raw.scanDepth, null), probability: finiteNumber(raw.probability, 100), useProbability: raw.useProbability !== false, disabled: raw.disable === true }, raw });
     }
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return output.sort((left, right) => left.title.localeCompare(right.title));
@@ -18761,6 +19138,8 @@ function semanticRawDigest(raw) {
         uid: String(raw.uid ?? ''),
         title: String(raw.comment ?? raw.name ?? raw.title ?? ''),
         content: String(raw.content ?? ''),
+        // [MA-SUMMARY-UID-MARK-05] S/L 属于 UID 当前版本的一部分；快照比较必须能看到标记变化，回滚才能恢复对应时点的处理状态。
+        summaryMark: /^(?:S|L)$/u.test(String(extension.summaryMark ?? '').trim()) ? String(extension.summaryMark).trim() : '',
         sourceMessageKey: String(extension.sourceMessageKey ?? ''),
         lastOperationId: String(extension.lastOperationId ?? ''),
     }));
