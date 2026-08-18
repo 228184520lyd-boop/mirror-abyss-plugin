@@ -8901,6 +8901,8 @@ async function waitForGatewayRetry(error, attempt, settings, snapshot) {
 function limitPromptPair(prompt, stage, retry = false) {
     const system = String(prompt?.system ?? '');
     const user = String(prompt?.user ?? '');
+    // 提取职责是把当前世界书完整交给模型；这里不再二次裁掉世界书中间条目。
+    if (stage === 'extraction') return { system, user };
     const baseLimit = INPUT_LIMITS[stage] ?? 30000;
     const totalLimit = retry ? Math.floor(baseLimit * 0.72) : baseLimit;
     const userLimit = Math.max(2000, totalLimit - system.length);
