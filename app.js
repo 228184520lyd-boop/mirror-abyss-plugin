@@ -99,7 +99,7 @@ class MirrorAbyssApplication {
             testApiProbe: () => this.testApiProbe(),
             cancel: () => this.cancel(),
             taskStatus: () => this.status(),
-            loadWorkspace: (forceFresh = false) => this.loadWorkspace(forceFresh),
+            loadWorkspace: () => this.loadWorkspace(),
             replanRecall: () => this.replanRecall(),
             updateEntry: (uid, patch) => this.updateEntry(uid, patch),
             setFocus: (uid, enabled) => this.setFocus(uid, enabled),
@@ -148,13 +148,12 @@ class MirrorAbyssApplication {
         const validate = () => this.host.assertSnapshot(snapshot, this.settings());
         let worldbook = { entries: [] };
         if (String(snapshot.worldbookName || '').trim()) {
-            worldbook = await this.worldbook.read(settings, snapshot, validate, { fresh: true });
+            worldbook = await this.worldbook.read(settings, snapshot, validate);
             validate();
         }
         const baselineEntries = (worldbook.entries ?? []).map((entry) => structuredClone(entry));
         const baselineUids = [...new Set(baselineEntries.map((entry) => String(entry?.uid ?? '').trim()).filter(Boolean))];
         await this.host.initializeUidRuntimeState(baselineEntries, snapshot, this.settings());
-        this.worldbook.invalidateRuntimeMemory();
         return { initialized: true, uidCount: baselineUids.length };
     }
     start() {
@@ -166,10 +165,6 @@ class MirrorAbyssApplication {
         // [MA-DIALOGUE-01] 优先等待完整生成结束；旧版宿主没有该事件时，由稳定检测兜底。
         this.listen('GENERATION_ENDED', (value) => this.scheduleMessage(messageIndexFromEvent(value), true));
         for (const event of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED']) this.listen(event, (value) => this.onScopeChanged(event, value));
-        // [MA-HOT-INDEX-03] 只监听 SillyTavern 明确的世界书内容更新事件。
-        // WORLDINFO_SCAN_DONE / WORLDINFO_ENTRIES_LOADED 只是扫描/加载，不代表内容修改，不能清掉热索引。
-        if (this.host.context()?.eventTypes?.WORLDINFO_UPDATED)
-            this.listen('WORLDINFO_UPDATED', () => this.worldbook.invalidateRuntimeMemory());
         this.controlPanel.mount();
         this.started = true;
     }
@@ -186,7 +181,6 @@ class MirrorAbyssApplication {
         this.clearPendingSourceReconcileTimers();
         this.reconcilingChats.clear();
         this.host.clearInternalMessageMutations();
-        this.worldbook.invalidateRuntimeMemory();
         this.controlPanel.unmount();
     }
     isStarted() { return this.started; }
@@ -397,7 +391,6 @@ class MirrorAbyssApplication {
             this.runningByChat.clear();
             this.reconcilingChats.clear();
             this.host.clearInternalMessageMutations();
-            this.worldbook.invalidateRuntimeMemory();
             this.controlPanel.resetTaskStates?.('插件与当前世界书已重置');
             return { settings, currentChatReset: Boolean(chatKey), worldbookPreserved: false };
         } catch (error) {
@@ -428,12 +421,12 @@ class MirrorAbyssApplication {
     publishTaskStatus() {
         this.controlPanel.setGlobalTaskState?.(this.status());
     }
-    async loadWorkspace(forceFresh = false) {
+    async loadWorkspace() {
         const settings = this.settings();
         const token = { cancelled: false, reason: '' };
         const snapshot = this.host.captureMaintenanceSnapshot(settings, 'loadWorkspace', token);
         const validate = () => this.host.assertSnapshot(snapshot, this.settings());
-        const worldbook = await this.worldbook.read(settings, snapshot, validate, { fresh: forceFresh === true });
+        const worldbook = await this.worldbook.read(settings, snapshot, validate);
         validate();
         const gameTimeEntry = worldbook.entries.find((entry) => String(entry.title || '') === '基础设定｜游戏时间');
         const gameTimeMatch = String(gameTimeEntry?.content || '').match(/当前游戏时间[：:]\s*(.+)/u);
@@ -578,7 +571,6 @@ class MirrorAbyssApplication {
             this.clearPendingSourceReconcileTimers();
             this.reconcilingChats.clear();
             this.cancelAll(reason);
-            this.worldbook.invalidateRuntimeMemory();
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
             this.migrationService.clearPreview?.();
             this.worldSettingImportService.clearPreview?.();
@@ -652,72 +644,37 @@ class MirrorAbyssApplication {
             this.reconcilingChats.delete(chatKey);
             return;
         }
-        const editedAssistantIndex = eventName === 'MESSAGE_EDITED' ? this.assistantIndexForEditedMessage(index) : null;
-        let indexes = [];
         try {
-            // [MA-ROLLBACK-RESET-07] 任务域已经在事件入口整体取消并清空；这里只等待运行中的旧请求真正退出。
+            // 回滚只做一件事：按受影响回合的 UID 快照恢复世界书，并清理这些失效历史。
             await this.waitForChatIdle(chatKey);
             if (!this.started || this.host.chatKey() !== chatKey) return;
 
-            const turnSnapshots = typeof this.host.getTurnRollbackSnapshots === 'function' ? this.host.getTurnRollbackSnapshots() : [];
-            const affected = turnSnapshots.filter((snapshot) => receiptAffectedBySourceChange(snapshot, eventName, index));
-            const sourceKeys = [...new Set(affected.map((snapshot) => String(snapshot.sourceMessageKey ?? '')).filter(Boolean))];
+            const affected = this.host.getTurnRollbackSnapshots()
+                .filter((snapshot) => receiptAffectedBySourceChange(snapshot, eventName, index));
+            if (!affected.length) return;
 
-            if (affected.length) {
-                const ids = affected.map((snapshot) => String(snapshot.id ?? '')).filter(Boolean);
-                const receiptIds = [...new Set(affected.flatMap((snapshot) => snapshot.receiptIds ?? []).map((value) => String(value ?? '')).filter(Boolean))];
-                const settings = this.settings();
-                const token = { cancelled: false, reason: '' };
-                const rollbackSnapshot = this.host.captureMaintenanceSnapshot(settings, 'sourceRollback', token);
-                const validate = () => this.host.assertSnapshot(rollbackSnapshot, this.settings());
-                const focusUid = this.host.getFocusUid();
+            const ids = affected.map((snapshot) => String(snapshot.id ?? '')).filter(Boolean);
+            const receiptIds = [...new Set(affected.flatMap((snapshot) => snapshot.receiptIds ?? []).map((value) => String(value ?? '')).filter(Boolean))];
+            const settings = this.settings();
+            const rollbackSnapshot = this.host.captureMaintenanceSnapshot(settings, 'sourceRollback', { cancelled: false, reason: '' });
+            const validate = () => this.host.assertSnapshot(rollbackSnapshot, this.settings());
 
-                // [MA-ROLLBACK-RESET-08] 世界书恢复不重新进入普通任务队列；任务系统保持空，直接按回合 UID 快照倒序恢复原文。
-                await this.worldbook.rollbackReceipts(settings, affected, focusUid, rollbackSnapshot, validate);
+            await this.worldbook.rollbackReceipts(settings, affected, this.host.getFocusUid(), rollbackSnapshot, validate);
 
-                const cursor = this.host.cursor();
-                const ordered = [...affected].sort((left, right) => Number(left?.createdAt || 0) - Number(right?.createdAt || 0));
-                const stateBefore = ordered.find((receipt) => receipt?.stateBefore?.cursor)?.stateBefore || null;
-                const restoredCursor = stateBefore?.cursor && typeof stateBefore.cursor === 'object'
-                    ? stateBefore.cursor
-                    : { ...cursor, lastProcessedMessageKey: '', lastProcessedHash: '' };
-                // cursor + 内部提交回执 + UID 回合快照一次性提交，避免回滚后连续三次聊天元数据保存/回读。
-                if (typeof this.host.applySourceRollbackMetadata === 'function') {
-                    await this.host.applySourceRollbackMetadata(restoredCursor, receiptIds, ids, rollbackSnapshot, this.settings());
-                } else {
-                    await this.host.saveCursor(restoredCursor, rollbackSnapshot, this.settings());
-                    if (receiptIds.length && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts(receiptIds);
-                    if (ids.length && typeof this.host.removeTurnRollbackSnapshots === 'function') await this.host.removeTurnRollbackSnapshots(ids);
-                }
+            const cursor = this.host.cursor();
+            const ordered = [...affected].sort((left, right) => Number(left?.createdAt || 0) - Number(right?.createdAt || 0));
+            const stateBefore = ordered.find((receipt) => receipt?.stateBefore?.cursor)?.stateBefore || null;
+            const restoredCursor = stateBefore?.cursor && typeof stateBefore.cursor === 'object'
+                ? stateBefore.cursor
+                : { ...cursor, lastProcessedMessageKey: '', lastProcessedHash: '' };
+            await this.host.applySourceRollbackMetadata(restoredCursor, receiptIds, ids, rollbackSnapshot, this.settings());
 
-                this.controlPanel.resetTaskStates?.('源对话已变化，UID 回合快照已恢复');
-                this.controlPanel.setStatus(`已恢复${affected.length}个近期回合涉及的 UID，准备按当前对话重新排队`);
-                await this.controlPanel.refreshRecallMap?.();
-            }
-
-            indexes = sourceKeys
-                .map((messageKey) => this.host.assistantIndexByMessageKey(messageKey))
-                .filter((value) => Number.isInteger(value) && value >= 0)
-                .concat(Number.isInteger(editedAssistantIndex) ? [editedAssistantIndex] : [])
-                .filter((value, position, values) => values.indexOf(value) === position)
-                .sort((left, right) => left - right);
+            this.controlPanel.resetTaskStates?.('源对话已变化，UID 回合快照已恢复');
+            this.controlPanel.setStatus(`已恢复${affected.length}个近期回合涉及的 UID`);
+            await this.controlPanel.refreshRecallMap?.();
         } finally {
-            // [MA-ROLLBACK-RESET-09] UID 原文恢复结束后才重新开放当前聊天任务入口。
             this.reconcilingChats.delete(chatKey);
         }
-
-        for (const messageIndex of indexes) this.scheduleMessage(messageIndex, false);
-    }
-    assistantIndexForEditedMessage(index) {
-        for (const candidate of [index, index + 1]) {
-            try {
-                if (!this.host.isAssistantIndex(candidate)) continue;
-                const turn = this.host.latestTurn(candidate);
-                if (turn.messageIndex === candidate && turn.playerMessageIndex >= 0) return candidate;
-            }
-            catch { }
-        }
-        return null;
     }
     async waitForChatIdle(chatKey) {
         for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -5318,15 +5275,6 @@ class HostAdapter {
         };
     }
     isAssistantIndex(index) { return isAssistant((this.context().chat ?? [])[index]); }
-    assistantIndexByMessageKey(messageKey) {
-        const target = String(messageKey ?? '');
-        if (!target) return -1;
-        const chat = this.context().chat ?? [];
-        for (let index = 0; index < chat.length; index += 1) {
-            if (isAssistant(chat[index]) && readMessageKey(chat[index]) === target) return index;
-        }
-        return -1;
-    }
     recentConversation(snapshot, turnCount) {
         this.assertSnapshot(snapshot);
         const chat = this.context().chat ?? [];
@@ -8627,7 +8575,7 @@ class MigrationService {
         await this.worldbook.clearSummaryMarks(settings, snapshot, validate);
         await this.worldbook.replanRecall(settings, snapshot, validate);
         const after = await this.worldbook.readRaw(settings, snapshot, validate);
-        const rebuiltEntries = await this.worldbook.list(settings, snapshot, validate, { fresh: true });
+        const rebuiltEntries = await this.worldbook.list(settings, snapshot, validate);
         await this.host.resetUidRuntimeStateAfterRebuild(rebuiltEntries, snapshot, this.getSettings());
         this.backup = { chatKey: snapshot.chatKey, worldbookName: preview.worldbookName, data: before.data, afterData: after.data };
         this.preview = null;
@@ -8642,7 +8590,7 @@ class MigrationService {
         await this.worldbook.replaceRaw(settings, backup.worldbookName, backup.data, snapshot, validate);
         await this.worldbook.clearSummaryMarks(settings, snapshot, validate);
         await this.worldbook.replanRecall(settings, snapshot, validate);
-        const restoredEntries = await this.worldbook.list(settings, snapshot, validate, { fresh: true });
+        const restoredEntries = await this.worldbook.list(settings, snapshot, validate);
         await this.host.resetUidRuntimeStateAfterRebuild(restoredEntries, snapshot, this.getSettings());
         this.backup = null;
         return { changed: true, restored: true };
@@ -9072,9 +9020,7 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 if (!lines.length) { operations.push(noop(block.title, undefined, section.name, '该信息已在同一对象的主要归属小标题中表达')); continue; }
                 if (/(事件进程|关键进展|已发生进展|未发生进展)/u.test(section.name) && block.type !== '事件') { operations.push(noop(block.title, undefined, section.name, '事件过程只能写入事件条目')); continue; }
                 let sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
-                    ?? (options.compactEventProgressFromSummary === true && block.type === '事件' && /^(已发生进展|未发生进展|结果)$/u.test(section.name)
-                        ? 'replace-section'
-                        : policyFor(section.name, settings));
+                    ?? policyFor(section.name, settings);
                 // [MA-GRANULARITY-LADDER][总结栏目重写]
                 // 总结模型对某栏目输出的全部“写回”行，就是该栏目粗化后的完整最终内容；普通业务栏目必须整栏替换，
                 // 才能真正实现“多条细事实 → 少量中/粗颗粒事实”，而不是把概括继续追加在旧细节后。
@@ -9116,9 +9062,7 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             if (!lines.length) { operations.push(noop(entry.title, entry.uid, section.name, '该信息已在同一对象的主要归属小标题中表达', target.score, target.evidence)); continue; }
             if (/(事件进程|关键进展|已发生进展|未发生进展)/u.test(section.name) && block.type !== '事件') { operations.push(noop(entry.title, entry.uid, section.name, '事件过程只能写入事件条目', target.score, target.evidence)); continue; }
             let sectionPolicy = authoritativeSnapshotPolicy(block.type, section.name)
-                ?? (options.compactEventProgressFromSummary === true && block.type === '事件' && /^(已发生进展|未发生进展|结果)$/u.test(section.name)
-                    ? 'replace-section'
-                    : policyFor(section.name, settings));
+                ?? policyFor(section.name, settings);
             // [MA-GRANULARITY-LADDER][总结栏目重写]
             // 写回到已有业务栏目时，普通栏目把模型给出的全部写回行视为“粗化后的完整最终栏目”并整栏替换。
             // 当前/持有/关系等状态槽仍做 semantic-upsert，只更新模型明确触及的槽位，保护未参与本次历史粗化的最新状态。
@@ -9128,13 +9072,6 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
                 else sectionPolicy = 'replace-section';
             }
             operations.push(...operationsForExisting(entry, section.name, lines, sectionPolicy, target.score, target.evidence, options.sourceKind === 'extraction'));
-        }
-        if (options.compactEventProgressFromSummary === true && block.type === '事件') {
-            for (const legacySection of ['目标', '阶段', '关键进展', '事件进程', '未决']) {
-                const current = entry.sections.values[legacySection] ?? [];
-                if (!current.length) continue;
-                operations.push(op('replace-section', entry.title, entry.uid, legacySection, current.join('\n'), '', '事件已按状态变化快照压缩，消费旧目标、阶段、未决和过程栏目', target.score, target.evidence));
-            }
         }
     }
     const primaryOperations = dedupeOperations(operations);
@@ -11502,74 +11439,18 @@ const recall_policy_1 = require("./recall-policy");
 const governance_1 = require("./governance");
 const entry_section_1 = require("./domain/entry-section");
 const util_1 = require("./util");
-const LEGACY_RUNTIME_PROJECTION_TITLE = '运行包｜当前活动';
-
-function runtimeEntryProjection(entry) {
-    // [MA-HOT-INDEX-01] 热索引不保存 raw 世界书对象，只保留业务读取需要的解析字段。
-    // 正式写入始终重新打开权威世界书，因此 raw 只存在于提交路径的 fresh parseEntries 中。
+function entryReadProjection(entry) {
     const { raw: _raw, ...projected } = entry ?? {};
     return projected;
-}
-function runtimeEntryView(entries) {
-    // 只浅拷贝数组和顶层对象，避免 structuredClone 整本世界书及 raw 扩展。
-    return (entries ?? []).map((entry) => ({ ...entry }));
 }
 class WorldbookAdapter {
     constructor(context, chatKey) {
         this.context = context;
         this.chatKey = chatKey ?? (() => '');
         this.apiPromise = null;
-        // [MA-HOT-INDEX-01] 简单运行时热索引：只缓存去 raw 的解析条目与 UID/标题 Map。
-        // 世界书仍是唯一长期事实源；所有写入、冲突校验与回滚继续走权威接口。
-        this.runtimeMemory = null;
-        this.runtimeMemoryCounters = { hits: 0, misses: 0, rebuilds: 0 };
     }
-    runtimeMemoryKey(chatKey, name) { return `${String(chatKey ?? '')}\u0000${String(name ?? '')}`; }
-    runtimeMemorySnapshot(chatKey, name) {
-        const memory = this.runtimeMemory;
-        if (!memory || memory.key !== this.runtimeMemoryKey(chatKey, name)) return null;
-        return memory;
-    }
-    rememberRuntimeMemory(name, data, chatKey = this.chatKey()) {
-        if (!name || !data) return null;
-        const parsed = parseEntries(data);
-        const entries = parsed.map(runtimeEntryProjection);
-        const byUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
-        const byTitle = new Map(entries.map((entry) => [(0, util_1.normalizeTitle)(entry.title).toLocaleLowerCase(), entry]));
-        const memory = {
-            key: this.runtimeMemoryKey(chatKey, name),
-            chatKey: String(chatKey ?? ''),
-            name: String(name ?? ''),
-            // digest 只在权威读/写后重建时计算一次，用于防止模型处理期间的外部编辑覆盖；缓存命中不重复计算。
-            digest: digestWorldbook(data),
-            entries, byUid, byTitle,
-            cachedAt: Date.now(),
-        };
-        this.runtimeMemory = memory;
-        this.runtimeMemoryCounters.rebuilds += 1;
-        return memory;
-    }
-    invalidateRuntimeMemory(chatKey = '', name = '') {
-        if (!this.runtimeMemory) return false;
-        if (chatKey && this.runtimeMemory.chatKey !== String(chatKey)) return false;
-        if (name && this.runtimeMemory.name !== String(name)) return false;
-        this.runtimeMemory = null;
-        return true;
-    }
-    runtimeMemoryStatus() {
-        return {
-            warm: Boolean(this.runtimeMemory),
-            chatKey: this.runtimeMemory?.chatKey ?? '',
-            worldbookName: this.runtimeMemory?.name ?? '',
-            entryCount: this.runtimeMemory?.entries?.length ?? 0,
-            uidIndexSize: this.runtimeMemory?.byUid?.size ?? 0,
-            titleIndexSize: this.runtimeMemory?.byTitle?.size ?? 0,
-            cachedAt: this.runtimeMemory?.cachedAt ?? 0,
-            ...this.runtimeMemoryCounters,
-        };
-    }
-    async list(settings, snapshot, validate, options = {}) {
-        return (await this.read(settings, snapshot, validate, options)).entries;
+    async list(settings, snapshot, validate) {
+        return (await this.read(settings, snapshot, validate)).entries;
     }
     // [MA-REBUILD-BASELINE] 整本世界书显式重建后，旧 S/L 属于旧组集生命周期，必须一次性清除后再建立新基线。
     async clearSummaryMarks(settings, snapshot, validate) {
@@ -11598,25 +11479,13 @@ class WorldbookAdapter {
             };
         });
     }
-    async read(settings, snapshot, validate, options = {}) {
+    async read(settings, snapshot, validate) {
         validate?.();
         this.assertChat(snapshot?.chatKey ?? '');
-        const chatKey = String(snapshot?.chatKey ?? this.chatKey() ?? '');
-        const expectedName = String(snapshot?.worldbookName ?? '');
-        if (options?.fresh !== true && expectedName) {
-            const memory = this.runtimeMemorySnapshot(chatKey, expectedName);
-            if (memory) {
-                this.runtimeMemoryCounters.hits += 1;
-                validate?.();
-                return { name: memory.name, entries: runtimeEntryView(memory.entries), runtimeMemory: true };
-            }
-        }
-        this.runtimeMemoryCounters.misses += 1;
         const { data, name } = await this.open(settings, false, validate, snapshot?.chatKey, snapshot?.worldbookName);
         if (snapshot?.worldbookName && name !== snapshot.worldbookName) throw new Error('读取到的世界书与任务快照不一致');
         validate?.();
-        const memory = this.rememberRuntimeMemory(name, data, chatKey);
-        return { name, entries: memory ? runtimeEntryView(memory.entries) : parseEntries(data).map(runtimeEntryProjection), runtimeMemory: false };
+        return { name, entries: parseEntries(data).map(entryReadProjection) };
     }
     async readRaw(settings, snapshot, validate) {
         validate?.();
@@ -11625,10 +11494,9 @@ class WorldbookAdapter {
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName)
             throw new Error('读取到的世界书与任务快照不一致');
         validate?.();
-        this.rememberRuntimeMemory(opened.name, opened.data, snapshot?.chatKey ?? this.chatKey());
         return { name: opened.name, data: (0, util_1.clone)(opened.data) };
     }
-    async replaceRaw(settings, expectedName, nextData, snapshot, validate, expectedCurrentData) {
+    async replaceRaw(settings, expectedName, nextData, snapshot, validate) {
         validate?.();
         this.assertChat(snapshot?.chatKey ?? '');
         const opened = await this.open(settings, false, validate, snapshot?.chatKey, snapshot?.worldbookName);
@@ -11777,13 +11645,8 @@ class WorldbookAdapter {
         const opened = await this.open(settings, false, validate, snapshot?.chatKey, snapshot?.worldbookName);
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName)
             throw new Error('目标世界书已经变化，拒绝编辑');
-        const beforeVersion = digestWorldbook(opened.data);
         const beforeData = (0, util_1.clone)(opened.data);
-        removeLegacyRuntimeProjection(opened.data);
         const verifier = mutate(opened) ?? {};
-        validate?.();
-        const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
-        if (!latest) throw new Error('世界书编辑前权威读取失败');
         validate?.();
         const verified = await this.commitWithRollback(opened, beforeData, validate, (data) => {
             verifier.verify?.(data);
@@ -11796,10 +11659,8 @@ class WorldbookAdapter {
         const opened = await this.open(settings, true, validate, snapshot?.chatKey, snapshot?.worldbookName);
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName) throw new Error('目标世界书已经变化，拒绝提交');
         validate?.();
-        const beforeVersion = digestWorldbook(opened.data);
         const beforeData = (0, util_1.clone)(opened.data);
         const receiptBefore = snapshotRawEntries(opened.data);
-        const legacyProjectionRemoved = removeLegacyRuntimeProjection(opened.data);
         const before = parseEntries(opened.data);
         plan = { ...plan, operations: guardSystemOperations(plan.operations, before, options) };
         const writeOperations = plan.operations.filter((operation) => !['noop', 'delete-entry'].includes(operation.kind));
@@ -11928,9 +11789,8 @@ class WorldbookAdapter {
         }
 
         const businessChanged = writeOperations.length > 0 || deletedCount > 0 || largeSummaryMarkedCount > 0;
-        const changed = businessChanged || legacyProjectionRemoved;
+        const changed = businessChanged;
         if (!changed) {
-            this.rememberRuntimeMemory(opened.name, opened.data, snapshot?.chatKey ?? this.chatKey());
             const result = parseEntries(opened.data);
             result.changed = false;
             result.businessChanged = false;
@@ -11950,9 +11810,6 @@ class WorldbookAdapter {
             this.applyNativeFields(parseEntries(opened.data), settings, focusUid, new Set([...touchedUids, ...createdUids]), createdUids);
         }
 
-        validate?.();
-        const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
-        if (!latest) throw new Error('世界书提交前权威读取失败');
         validate?.();
         const verifiedData = await this.commitWithRollback(opened, beforeData, validate, (data) => {
             // Verify against the complete plan so an entry intentionally
@@ -12033,7 +11890,6 @@ class WorldbookAdapter {
         }
         if (snapshot?.worldbookName && opened.name !== snapshot.worldbookName) throw new Error('目标世界书已经变化，拒绝回滚');
         if (ordered.some((item) => item.worldbookName && item.worldbookName !== opened.name)) throw new Error('近期写入回执属于其他世界书');
-        const beforeVersion = digestWorldbook(opened.data);
         const beforeData = (0, util_1.clone)(opened.data);
         const touchedUids = new Set();
         let changedCount = 0;
@@ -12085,7 +11941,6 @@ class WorldbookAdapter {
             if (!detached) validate?.();
             verified = await loadWorldInfoAuthoritative(opened.api, opened.name);
             if (!verified || digestWorldbook(verified) !== digestWorldbook(opened.data)) throw new Error('世界书回滚后权威回读不一致');
-            this.rememberRuntimeMemory(opened.name, verified, opened.chatKey ?? this.chatKey());
         } catch (error) {
             opened.data = (0, util_1.clone)(beforeData);
             try { await this.save(opened, { refreshEditor: false }); } catch { }
@@ -12116,7 +11971,6 @@ class WorldbookAdapter {
             const actualDigest = digestWorldbook(verified);
             if (saveError && actualDigest !== intendedDigest) throw saveError;
             verify?.(verified);
-            this.rememberRuntimeMemory(opened.name, verified, opened.chatKey ?? this.chatKey());
             return verified;
         }
         catch (error) {
@@ -12126,7 +11980,6 @@ class WorldbookAdapter {
                 catch { }
             }
             if (current && digestWorldbook(current) === beforeDigest) {
-                this.rememberRuntimeMemory(opened.name, current, opened.chatKey ?? this.chatKey());
                 const primary = saveError || error;
                 throw new Error(`${failureLabel}失败，后端保持${snapshotLabel}：${(0, util_1.errorText)(primary)}`);
             }
@@ -12136,7 +11989,6 @@ class WorldbookAdapter {
                 const restored = await loadWorldInfoAuthoritative(opened.api, opened.name);
                 if (!restored || digestWorldbook(restored) !== beforeDigest)
                     throw new Error('恢复后快照不一致');
-                this.rememberRuntimeMemory(opened.name, restored, opened.chatKey ?? this.chatKey());
             }
             catch (rollbackError) {
                 throw new Error(`${failureLabel}失败，且${snapshotLabel}恢复失败：${(0, util_1.errorText)(saveError || error)}；${(0, util_1.errorText)(rollbackError)}`);
@@ -12477,19 +12329,6 @@ function verifyRecallConstraints(entries) {
     }
 }
 
-function removeLegacyRuntimeProjection(data) {
-    let removed = false;
-    for (const [mapKey, raw] of Object.entries(data?.entries ?? {})) {
-        if (!raw || typeof raw !== 'object') continue;
-        const extension = readExtension(raw);
-        const legacy = String(raw.comment ?? '') === LEGACY_RUNTIME_PROJECTION_TITLE
-            || String(extension.semanticRole ?? '') === 'activity-pack';
-        if (!legacy) continue;
-        delete data.entries[mapKey];
-        removed = true;
-    }
-    return removed;
-}
 function ensureUidIdentity(raw, uid, logicalTitle) {
     const title = (0, util_1.stripUidSuffix)(logicalTitle || String(raw.comment ?? raw.name ?? raw.title ?? ''));
     const split = (0, util_1.splitTitle)(title);
