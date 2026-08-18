@@ -575,9 +575,15 @@ class MirrorAbyssApplication {
         this.gameTimeAnchorCache = currentGameTime;
         // [MA-LOCK] 数据来源锁：management 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const management = (0, worldbook_management_1.buildWorldbookManagementView)(worldbook.entries, currentGameTime, settings);
+        // [MA-ENTRY-UPDATED-BADGE] 只标记最近一次已经完整处理完的剧情回合真正改动过的 UID。
+        // 如果最近完成的回合没有世界书变化，则返回空集合，不沿用上一回合的“更新”标记。
+        const updatedEntryUids = typeof this.host.getLatestProcessedTurnUpdatedUids === 'function'
+            ? this.host.getLatestProcessedTurnUpdatedUids()
+            : [];
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return {
             entries: worldbook.entries,
+            updatedEntryUids,
             worldbookName: worldbook.name,
             settings,
             currentGameTime,
@@ -851,32 +857,21 @@ class MirrorAbyssApplication {
     }
     // [MA-LOCK] 方法职责锁：reconcileCommittedSource 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async reconcileCommittedSource(eventName, index, chatKey) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!this.started || this.host.chatKey() !== chatKey) return;
-        // [MA-LOCK] 数据来源锁：receipts 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const receipts = typeof this.host.getCommitReceipts === 'function' ? this.host.getCommitReceipts() : [];
-        // [MA-LOCK] 数据来源锁：affected 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const affected = receipts.filter((receipt) => receiptAffectedBySourceChange(receipt, eventName, index));
-        // [MA-LOCK] 数据来源锁：editedAssistantIndex 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const editedAssistantIndex = eventName === 'MESSAGE_EDITED' ? this.assistantIndexForEditedMessage(index) : null;
-        // An empty/failed assistant response has no commit receipt. If the user later repairs that
-        // message through SillyTavern's editor, there is nothing to roll back, but the repaired
-        // source still needs to enter the normal audit/extraction queue.
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
+        // [MA-TURN-UID-ROLLBACK] 先等被撤回的旧任务真正停下，再读取最终的 20 回合 UID 快照。
+        // 这样不会出现“先读回执，旧任务随后又写入一次”的漏回滚窗口。
+        await this.waitForChatIdle(chatKey);
+        if (!this.started || this.host.chatKey() !== chatKey) return;
+        const turnSnapshots = typeof this.host.getTurnRollbackSnapshots === 'function' ? this.host.getTurnRollbackSnapshots() : [];
+        const affected = turnSnapshots.filter((snapshot) => receiptAffectedBySourceChange(snapshot, eventName, index));
         if (!affected.length) {
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (Number.isInteger(editedAssistantIndex)) this.scheduleMessage(editedAssistantIndex, false);
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return;
         }
-        // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-        await this.waitForChatIdle(chatKey);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!this.started || this.host.chatKey() !== chatKey) return;
-        // [MA-LOCK] 数据来源锁：sourceKeys 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const sourceKeys = [...new Set(affected.map((receipt) => String(receipt.sourceMessageKey ?? '')).filter(Boolean))];
-        // [MA-LOCK] 数据来源锁：ids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const ids = affected.map((receipt) => String(receipt.id ?? '')).filter(Boolean);
+        const sourceKeys = [...new Set(affected.map((snapshot) => String(snapshot.sourceMessageKey ?? '')).filter(Boolean))];
+        const ids = affected.map((snapshot) => String(snapshot.id ?? '')).filter(Boolean);
+        const receiptIds = [...new Set(affected.flatMap((snapshot) => snapshot.receiptIds ?? []).map((value) => String(value ?? '')).filter(Boolean))];
         // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
         await this.enqueueMaintenance('sourceRollback', async (settings, snapshot) => {
             // [MA-LOCK] 数据来源锁：focusUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -893,15 +888,15 @@ class MirrorAbyssApplication {
             const restoredCursor = stateBefore?.cursor && typeof stateBefore.cursor === 'object'
                 ? stateBefore.cursor
                 : { ...cursor, lastProcessedMessageKey: '', lastProcessedHash: '' };
-            // 回执最后清理；这里只恢复处理游标。
+            // 本次撤回只恢复这些回合实际碰过的 UID；随后删除对应 20 回合快照与内部提交记录。
             await this.host.saveCursor(restoredCursor, snapshot, this.settings());
-            // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-            await this.host.removeCommitReceipts(ids);
+            if (receiptIds.length && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts(receiptIds);
+            if (ids.length && typeof this.host.removeTurnRollbackSnapshots === 'function') await this.host.removeTurnRollbackSnapshots(ids);
             // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return result;
         });
         this.controlPanel.resetTaskStates?.('源对话已变化，近期写入已回滚');
-        this.controlPanel.setStatus(`已回滚${affected.length}次近期世界书提交，正在按当前对话重新排队`);
+        this.controlPanel.setStatus(`已回滚${affected.length}个近期回合涉及的 UID，正在按当前对话重新排队`);
         // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
         await this.controlPanel.refreshRecallMap?.();
         // [MA-LOCK] 数据来源锁：indexes 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -3951,7 +3946,7 @@ class ControlPanel {
             if (managementSerial !== this.managementLoadSerial || recallSerial !== this.recallLoadSerial) return;
             this.renderManagement(workspace?.management ?? null, workspace?.worldbookName || '', workspace?.entries ?? []);
             // [MA-LOCK] 数据来源锁：recallModel 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const recallModel = buildRecallViewModel(workspace?.entries ?? []);
+            const recallModel = buildRecallViewModel(workspace?.entries ?? [], workspace?.updatedEntryUids ?? []);
             this.renderRecallMap(recallModel, workspace?.worldbookName || '');
             this.refreshWorldSettingState();
         }
@@ -4400,7 +4395,7 @@ class ControlPanel {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (serial !== this.recallLoadSerial || !this.recallNode) return;
             // [MA-LOCK] 数据来源锁：model 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const model = buildRecallViewModel(workspace?.entries ?? []);
+            const model = buildRecallViewModel(workspace?.entries ?? [], workspace?.updatedEntryUids ?? []);
             this.renderRecallMap(model, workspace?.worldbookName || '');
         }
         // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
@@ -5604,7 +5599,9 @@ function buildUnifiedProfilePatch(profileId) {
     return { modelProfileId: String(profileId || '') };
 }
 // [MA-LOCK] 函数职责锁：buildRecallViewModel 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function buildRecallViewModel(entries) {
+function buildRecallViewModel(entries, updatedEntryUids = []) {
+    // [MA-ENTRY-UPDATED-BADGE] UI 只消费系统内部给出的 UID 集合；不新增日志，也不把 UID 暴露给模型。
+    const updatedUidSet = new Set((Array.isArray(updatedEntryUids) ? updatedEntryUids : []).map((uid) => String(uid ?? '').trim()).filter(Boolean));
     // [MA-LOCK] 数据来源锁：managed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const managed = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.managed === true);
     // [MA-LOCK] 数据来源锁：byUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -5694,6 +5691,8 @@ function buildRecallViewModel(entries) {
             .sort((left, right) => String(left).localeCompare(String(right), 'zh-CN'));
         // [MA-LOCK] 数据来源锁：badges 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const badges = [{ label: mappingMode, kind: mappingKind }];
+        // [MA-ENTRY-UPDATED-BADGE] 最近一次完整处理回合真正改过该 UID 时，只显示“更新”二字。
+        if (updatedUidSet.has(String(entry.uid ?? ''))) badges.push({ label: '更新', kind: 'update' });
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (sceneStage) badges.push({ label: sceneStage === 'current' ? '当前场景' : sceneStage === 'previous' ? '上一场景' : '远期场景', kind: 'scene' });
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -7864,6 +7863,7 @@ class HostAdapter {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return {
             commitReceipts: pick('commitReceipts'),
+            turnRollbackSnapshots: pick('turnRollbackSnapshots'),
             cursor: pick('cursor'),
         };
     }
@@ -8814,6 +8814,173 @@ class HostAdapter {
         return Array.isArray(receipts) ? structuredClone(receipts) : [];
     }
 
+    // [MA-TURN-UID-ROLLBACK] 历史撤回只保存最近 20 个真实剧情回合的 UID 前态；不保存整本世界书快照。
+    // 同一回合内提取/小总结/大总结多次触及同一 UID 时，回滚只需要该 UID 在本回合第一次修改前的内容。
+    turnRollbackKey(receipt) {
+        const assistantIndex = Number(receipt?.messageIndex);
+        const playerIndex = Number(receipt?.playerMessageIndex);
+        const sourceMessageKey = String(receipt?.sourceMessageKey ?? '').trim();
+        if (!Number.isInteger(assistantIndex) || assistantIndex < 0) return '';
+        return sourceMessageKey ? `message:${sourceMessageKey}` : `index:${assistantIndex}|player:${Number.isInteger(playerIndex) ? playerIndex : -1}`;
+    }
+    turnRollbackChanges(snapshot) {
+        const byUid = new Map();
+        const contributions = Array.isArray(snapshot?.contributions) ? snapshot.contributions : [];
+        for (const contribution of contributions) {
+            for (const change of contribution?.changes ?? []) {
+                const uid = String(change?.uid ?? '');
+                if (!uid) continue;
+                if (!byUid.has(uid)) byUid.set(uid, structuredClone(change));
+            }
+        }
+        return [...byUid.values()];
+    }
+    getTurnRollbackSnapshots() {
+        const root = this.chatNamespace();
+        const stored = Array.isArray(root.turnRollbackSnapshots) ? structuredClone(root.turnRollbackSnapshots) : [];
+        // 只兼容紧邻上一个版本：旧版还没有 turnRollbackSnapshots 时，用旧 commitReceipts 临时折成回合快照。
+        const source = stored.length ? stored : (() => {
+            const grouped = [];
+            for (const receipt of Array.isArray(root.commitReceipts) ? root.commitReceipts : []) {
+                const turnKey = this.turnRollbackKey(receipt);
+                if (!turnKey || !Array.isArray(receipt?.changes) || !receipt.changes.length) continue;
+                let turn = grouped.find((item) => item.turnKey === turnKey);
+                if (!turn) {
+                    turn = {
+                        id: `turn:${turnKey}`,
+                        turnKey,
+                        sourceMessageKey: String(receipt.sourceMessageKey ?? ''),
+                        messageIndex: Number(receipt.messageIndex),
+                        playerMessageIndex: Number(receipt.playerMessageIndex),
+                        worldbookName: String(receipt.worldbookName ?? ''),
+                        createdAt: Number(receipt.createdAt) || Date.now(),
+                        stateBefore: receipt?.stateBefore ? structuredClone(receipt.stateBefore) : null,
+                        contributions: [],
+                    };
+                    grouped.push(turn);
+                }
+                turn.contributions.push({
+                    receiptId: String(receipt.id ?? ''),
+                    createdAt: Number(receipt.createdAt) || Date.now(),
+                    changes: structuredClone(receipt.changes),
+                });
+            }
+            return grouped.slice(-20);
+        })();
+        return source.slice(-20).map((snapshot) => ({
+            ...structuredClone(snapshot),
+            changes: this.turnRollbackChanges(snapshot),
+            receiptIds: [...new Set((snapshot.contributions ?? []).map((item) => String(item?.receiptId ?? '')).filter(Boolean))],
+        }));
+    }
+    // [MA-ENTRY-UPDATED-BADGE] 返回最近一次已经完整处理完的剧情回合实际改动过的 UID。
+    // cursor 决定“最近完成回合”；如果该回合没有产生 UID 快照，则返回空数组，避免上一回合标记残留。
+    getLatestProcessedTurnUpdatedUids() {
+        const root = this.chatNamespace();
+        const processedKey = String(root?.cursor?.lastProcessedMessageKey ?? '').trim();
+        if (!processedKey) return [];
+        const snapshots = this.getTurnRollbackSnapshots();
+        const turn = [...snapshots].reverse().find((item) => String(item?.sourceMessageKey ?? '').trim() === processedKey);
+        if (!turn) return [];
+        return [...new Set((turn.changes ?? []).map((change) => String(change?.uid ?? '').trim()).filter(Boolean))];
+    }
+    async appendTurnRollbackSnapshot(receipt, limit = 20) {
+        const turnKey = this.turnRollbackKey(receipt);
+        if (!turnKey || !Array.isArray(receipt?.changes) || !receipt.changes.length) return false;
+        const root = this.chatNamespace();
+        const previousSnapshots = Array.isArray(root.turnRollbackSnapshots) ? structuredClone(root.turnRollbackSnapshots) : [];
+        const previousReceipts = Array.isArray(root.commitReceipts) ? structuredClone(root.commitReceipts) : [];
+        const snapshots = previousSnapshots.length ? structuredClone(previousSnapshots) : this.getTurnRollbackSnapshots().map((item) => {
+            const copy = structuredClone(item);
+            delete copy.changes;
+            delete copy.receiptIds;
+            return copy;
+        });
+        let turn = snapshots.find((item) => item.turnKey === turnKey);
+        if (!turn) {
+            turn = {
+                id: `turn:${turnKey}`,
+                turnKey,
+                sourceMessageKey: String(receipt.sourceMessageKey ?? ''),
+                messageIndex: Number(receipt.messageIndex),
+                playerMessageIndex: Number(receipt.playerMessageIndex),
+                worldbookName: String(receipt.worldbookName ?? ''),
+                createdAt: Number(receipt.createdAt) || Date.now(),
+                stateBefore: receipt?.stateBefore ? structuredClone(receipt.stateBefore) : null,
+                contributions: [],
+            };
+            snapshots.push(turn);
+        }
+        turn.stateBefore ||= receipt?.stateBefore ? structuredClone(receipt.stateBefore) : null;
+        turn.worldbookName ||= String(receipt.worldbookName ?? '');
+        turn.sourceMessageKey ||= String(receipt.sourceMessageKey ?? '');
+        turn.messageIndex = Number.isInteger(Number(turn.messageIndex)) ? Number(turn.messageIndex) : Number(receipt.messageIndex);
+        turn.playerMessageIndex = Number.isInteger(Number(turn.playerMessageIndex)) ? Number(turn.playerMessageIndex) : Number(receipt.playerMessageIndex);
+        turn.contributions ??= [];
+        const receiptId = String(receipt.id ?? '');
+        const contribution = {
+            receiptId,
+            createdAt: Number(receipt.createdAt) || Date.now(),
+            changes: structuredClone(receipt.changes),
+        };
+        const oldContribution = turn.contributions.findIndex((item) => String(item?.receiptId ?? '') === receiptId && receiptId);
+        if (oldContribution >= 0) turn.contributions[oldContribution] = contribution;
+        else turn.contributions.push(contribution);
+        turn.updatedAt = Date.now();
+        const numericLimit = Math.max(1, Number(limit) || 20);
+        const next = snapshots.slice(-numericLimit);
+        root.turnRollbackSnapshots = next;
+        // commitReceipts 只保留这 20 个回合对应的内部提交，避免旧回执无限增长；手动维护回执不进入回合历史。
+        const allowedTurnKeys = new Set(next.map((item) => String(item.turnKey ?? '')).filter(Boolean));
+        const prunedReceipts = previousReceipts.filter((item) => {
+            const key = this.turnRollbackKey(item);
+            return !key || allowedTurnKeys.has(key);
+        });
+        root.commitReceipts = prunedReceipts;
+        await this.persistMetadataMutation(() => {
+            if (previousSnapshots.length) root.turnRollbackSnapshots = previousSnapshots;
+            else delete root.turnRollbackSnapshots;
+            if (previousReceipts.length) root.commitReceipts = previousReceipts;
+            else delete root.commitReceipts;
+        }, null, '20回合UID快照保存', ['turnRollbackSnapshots', 'commitReceipts']);
+        return true;
+    }
+    async removeTurnRollbackContributions(receiptIds = []) {
+        const targets = new Set((Array.isArray(receiptIds) ? receiptIds : [receiptIds]).map((value) => String(value ?? '')).filter(Boolean));
+        if (!targets.size) return false;
+        const root = this.chatNamespace();
+        const previous = Array.isArray(root.turnRollbackSnapshots) ? structuredClone(root.turnRollbackSnapshots) : [];
+        if (!previous.length) return false;
+        const next = previous.map((snapshot) => ({
+            ...snapshot,
+            contributions: (snapshot.contributions ?? []).filter((item) => !targets.has(String(item?.receiptId ?? ''))),
+        })).filter((snapshot) => (snapshot.contributions ?? []).length);
+        if (JSON.stringify(next) === JSON.stringify(previous)) return false;
+        if (next.length) root.turnRollbackSnapshots = next;
+        else delete root.turnRollbackSnapshots;
+        await this.persistMetadataMutation(() => {
+            if (previous.length) root.turnRollbackSnapshots = previous;
+            else delete root.turnRollbackSnapshots;
+        }, null, '回合UID快照贡献清理', ['turnRollbackSnapshots']);
+        return true;
+    }
+    async removeTurnRollbackSnapshots(ids = []) {
+        const targets = new Set((Array.isArray(ids) ? ids : [ids]).map((value) => String(value ?? '')).filter(Boolean));
+        if (!targets.size) return false;
+        const root = this.chatNamespace();
+        const previous = Array.isArray(root.turnRollbackSnapshots) ? structuredClone(root.turnRollbackSnapshots) : [];
+        if (!previous.length) return false;
+        const next = previous.filter((item) => !targets.has(String(item?.id ?? '')));
+        if (next.length === previous.length) return false;
+        if (next.length) root.turnRollbackSnapshots = next;
+        else delete root.turnRollbackSnapshots;
+        await this.persistMetadataMutation(() => {
+            if (previous.length) root.turnRollbackSnapshots = previous;
+            else delete root.turnRollbackSnapshots;
+        }, null, '回合UID快照删除', ['turnRollbackSnapshots']);
+        return true;
+    }
+
     // [MA-LOCK] 方法职责锁：appendCommitReceipt 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async appendCommitReceipt(receipt, limit = 0) {
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -8992,6 +9159,7 @@ class HostAdapter {
             else delete root[key];
         };
         restoreField('commitReceipts', before.commitReceipts);
+        restoreField('turnRollbackSnapshots', before.turnRollbackSnapshots);
         restoreField('cursor', before.cursor);
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (Object.keys(root).length) metadata[constants_1.EXTENSION_NAMESPACE] = root;
@@ -11680,8 +11848,9 @@ class MemoryRunner {
             // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.worldbook.rollbackReceipts(settings, added, focusUid, snapshot, () => this.validate(snapshot));
             // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
-            await this.host.removeCommitReceipts(added.map((receipt) => String(receipt.id ?? '')).filter(Boolean));
-            // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
+            const addedIds = added.map((receipt) => String(receipt.id ?? '')).filter(Boolean);
+            await this.host.removeCommitReceipts(addedIds);
+            if (typeof this.host.removeTurnRollbackContributions === 'function') await this.host.removeTurnRollbackContributions(addedIds);
             return added.length;
         }
         // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
@@ -11777,9 +11946,11 @@ class MemoryRunner {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (worldbookRestored && receiptIds.length) {
                 // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
-                try { if (typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts(receiptIds); }
-                // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
-                catch (error) { failures.push(`回执清理失败：${(0, util_1.errorText)(error)}`); }
+                try {
+                    if (typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts(receiptIds);
+                    if (typeof this.host.removeTurnRollbackContributions === 'function') await this.host.removeTurnRollbackContributions(receiptIds);
+                }
+                catch (error) { failures.push(`回执/回合UID快照清理失败：${(0, util_1.errorText)(error)}`); }
             }
             // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
             try {
@@ -12075,28 +12246,38 @@ class MemoryRunner {
         this.validate(snapshot);
         const focusUid = typeof this.host.getFocusUid === 'function' ? this.host.getFocusUid() : '';
         const previousCursor = typeof this.host.cursor === 'function' ? this.host.cursor() : null;
-        const entries = await this.worldbook.apply(
-            settings, plan, snapshot.messageKey, contextText, focusUid, snapshot,
-            () => this.validate(snapshot),
-            { sourceKind: label === '提取' ? 'extraction' : 'summary', ...options },
-        );
-        this.validate(snapshot);
-        if (entries.receipt && typeof this.host.appendCommitReceipt === 'function') {
-            entries.receipt.stateBefore = { cursor: structuredClone(previousCursor) };
-            try {
+        let entries = null;
+        try {
+            entries = await this.worldbook.apply(
+                settings, plan, snapshot.messageKey, contextText, focusUid, snapshot,
+                () => this.validate(snapshot),
+                { sourceKind: label === '提取' ? 'extraction' : 'summary', ...options },
+            );
+            // [MA-TURN-UID-ROLLBACK] worldbook.apply 一旦返回，说明世界书已经正式提交并生成 UID 前态 receipt。
+            // 先保存回滚记录，再检查源正文是否刚好被撤回；这样被打断也不会留下“已写入但没有回滚依据”的孤儿写入。
+            if (entries.receipt && typeof this.host.appendCommitReceipt === 'function') {
+                entries.receipt.stateBefore = { cursor: structuredClone(previousCursor) };
                 await this.host.appendCommitReceipt(entries.receipt);
-            } catch (error) {
+                if (typeof this.host.appendTurnRollbackSnapshot === 'function') await this.host.appendTurnRollbackSnapshot(entries.receipt, 20);
+            }
+            this.validate(snapshot);
+        } catch (error) {
+            if (entries?.receipt?.changes?.length) {
                 let detached = false;
                 try { detached = typeof this.host.chatKey === 'function' ? this.host.chatKey() !== snapshot.chatKey : false; } catch { detached = true; }
-                const recoverySnapshot = detached ? snapshot : this.recoverySnapshotForRollback(settings, snapshot, 'receipt-save-rollback');
+                const recoverySnapshot = detached ? snapshot : this.recoverySnapshotForRollback(settings, snapshot, 'interrupted-write-rollback');
                 try {
                     await this.worldbook.rollbackReceipts(settings, [entries.receipt], detached ? '' : focusUid, recoverySnapshot, detached ? null : () => this.validate(recoverySnapshot), { detached });
+                    const receiptId = String(entries.receipt.id ?? '');
+                    if (!detached && receiptId && typeof this.host.removeCommitReceipts === 'function') await this.host.removeCommitReceipts([receiptId]);
+                    if (!detached && receiptId && typeof this.host.removeTurnRollbackContributions === 'function') await this.host.removeTurnRollbackContributions([receiptId]);
                     if (detached && typeof this.host.restoreTransactionMetadataForSnapshot === 'function') await this.host.restoreTransactionMetadataForSnapshot(snapshot);
                 } catch (rollbackError) {
-                    throw new Error(`提交回执保存失败，且世界书自动回滚失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
+                    throw new Error(`${label}被打断或提交记录保存失败，且本次 UID 前态恢复失败：${(0, util_1.errorText)(error)}；${(0, util_1.errorText)(rollbackError)}`);
                 }
-                throw new Error(`提交回执保存失败，世界书已自动恢复提交前状态：${(0, util_1.errorText)(error)}`);
+                throw new Error(`${label}被打断或提交记录保存失败，本次涉及 UID 已恢复到修改前：${(0, util_1.errorText)(error)}`);
             }
+            throw error;
         }
         return {
             entries,
@@ -17772,62 +17953,25 @@ class WorldbookAdapter {
                 if (!uid) continue;
                 // [MA-LOCK] 数据来源锁：current 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const current = findRawEntry(opened.data, uid);
-                // [MA-LOCK] 数据来源锁：currentDigest 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const currentDigest = current ? semanticRawDigest(current.raw) : '';
-                // [MA-LOCK] 数据来源锁：beforeDigest 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const beforeDigest = change.before ? semanticRawDigest(change.before) : '';
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (currentDigest === beforeDigest) {
                     alreadyRolledBack += 1;
                     continue;
                 }
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                if (String(change.afterDigest ?? '') !== currentDigest) {
-                    // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
-                    throw new Error(`条目 UID ${uid} 在写入回执后又被修改，已停止自动回滚`);
-                }
+                // [MA-TURN-UID-ROLLBACK] 玩家撤回剧情时，历史 UID 前态就是回滚权威。
+                // 不再要求当前条目必须等于当时的 afterDigest；玩家后来手改过同一个 UID 也直接恢复该回合之前的快照。
                 // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (!change.before) {
-                    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                    if (!current) continue;
-                    // [MA-LOCK] 数据来源锁：extension 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                    const extension = readExtension(current.raw);
-                    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                    if (extension.focus === true || extension.locked === true || current.raw.locked === true)
-                        // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
-                        throw new Error(`条目“${current.raw.comment || uid}”已被设为焦点或锁定，不能自动删除`);
+                    // 本回合之前不存在这个 UID：撤回时直接删除，不再受后来锁定/焦点状态阻挡。
+                    if (!current) { alreadyRolledBack += 1; continue; }
                     delete opened.data.entries[current.mapKey];
                     changedCount += 1;
                     continue;
                 }
                 // [MA-LOCK] 数据来源锁：restored 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const restored = structuredClone(change.before);
-                // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                if (current) {
-                    // ui.72: 回滚应尽可能恢复写入前的原始快照。过去这里调用 markManaged() 会刷新 updatedAt，
-                    // 并无条件写入 locked:false，导致“业务内容已回滚、内部生命周期却被当成刚更新”。
-                    // 只有玩家在提交后确实手工改变了焦点/锁定时，才把这两个交互状态带回恢复快照。
-                    // [MA-LOCK] 数据来源锁：currentExtension 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                    const currentExtension = readExtension(current.raw);
-                    // [MA-LOCK] 数据来源锁：beforeExtension 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                    const beforeExtension = readExtension(change.before);
-                    // [MA-LOCK] 数据来源锁：ensureRestoredExtension 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                    const ensureRestoredExtension = () => {
-                        restored.extensions ?? (restored.extensions = {});
-                        // [MA-LOCK] 数据来源锁：existing 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                        const existing = restored.extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
-                        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                        if (!existing || typeof existing !== 'object') restored.extensions[constants_1.WORLD_INFO_EXTENSION_KEY] = structuredClone(beforeExtension || {});
-                        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-                        return restored.extensions[constants_1.WORLD_INFO_EXTENSION_KEY];
-                    };
-                    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                    if ((currentExtension.focus === true) !== (beforeExtension.focus === true)) ensureRestoredExtension().focus = currentExtension.focus === true;
-                    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                    if ((currentExtension.locked === true) !== (beforeExtension.locked === true)) ensureRestoredExtension().locked = currentExtension.locked === true;
-                    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-                    if ((current.raw.locked === true) !== (change.before.locked === true)) restored.locked = current.raw.locked === true;
-                }
+                // [MA-TURN-UID-ROLLBACK] 恢复该 UID 在本回合第一次修改前的完整原始条目；不保留后来人为改动的锁/焦点/正文。
                 // [MA-LOCK] 数据来源锁：mapKey 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const mapKey = current?.mapKey || String(change.beforeMapKey ?? restored.uid ?? uid);
                 opened.data.entries[mapKey] = restored;
@@ -17848,11 +17992,8 @@ class WorldbookAdapter {
             // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return unchanged;
         }
-        // [MA-LOCK] 数据来源锁：restoredEntries 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+        // UID 前态是完整原始条目快照；回滚不再二次重算召回字段，否则就不是“恢复到回合前”。
         const restoredEntries = parseEntries(opened.data);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!detached) this.applyNativeFields(restoredEntries, settings, focusUid, touchedUids);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!detached) validate?.();
         // [MA-LOCK] 数据来源锁：latest 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
