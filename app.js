@@ -796,6 +796,8 @@ class MirrorAbyssApplication {
             // [MA-QUEUE-04] 新正文只追加到当前聊天队列。正在处理的旧正文继续使用固定源快照，
             // 不再因为“出现更新的 AI 正文”而主动取消。聊天切换、源正文编辑/删除和用户取消仍会中断。
             void this.enqueueTask(automaticTaskType, turn.messageIndex, true).catch((error) => {
+                // Edit / Swipe / Delete 导致的任务取消是正常生命周期，不作为自动流程错误上报。
+                if (error?.code === 'MA_TASK_CANCELLED') return;
                 // [MA-LOCK] 数据来源锁：message 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const message = (0, util_1.errorText)(error);
                 // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -808,7 +810,13 @@ class MirrorAbyssApplication {
     // [MA-LOCK] 方法职责锁：onScopeChanged 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     onScopeChanged(eventName, eventValue) {
         if (this.host.consumeInternalScopeEvent(eventName, eventValue)) return;
-        const reason = `SillyTavern 事件 ${eventName} 使源对话失效`;
+        const reason = eventName === 'MESSAGE_DELETED'
+            ? '源正文已删除，当前镜渊任务需要重新对齐'
+            : eventName === 'MESSAGE_SWIPED'
+                ? '源正文已滑动，当前镜渊任务需要重新对齐'
+                : eventName === 'MESSAGE_EDITED'
+                    ? '源正文已编辑，当前镜渊任务需要重新对齐'
+                    : `SillyTavern 事件 ${eventName} 使当前镜渊任务失效`;
         if (eventName === 'CHAT_CHANGED') {
             const activeRollbackChats = new Set(this.sourceReconcileWorkers);
             for (const chatKey of activeRollbackChats) { try { this.host.bumpScopeRevision(chatKey); } catch { } }
@@ -1246,7 +1254,8 @@ class MirrorAbyssApplication {
             if ((snapshot.token?.cancelled && !/超时/u.test(snapshot.token.reason || '')) || effectiveError?.code === 'MA_TASK_CANCELLED') {
                 // [MA-LOCK] 数据来源锁：reason 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const reason = snapshot.token?.reason || text || '任务已取消';
-                this.controlPanel.setStatus(`任务已取消：${reason}`);
+                // 来源变化回滚期间，状态栏由 reconcile worker 持有；不要用“任务已取消”覆盖“正在回滚”。
+                if (!this.reconcilingChats.has(String(snapshot.chatKey ?? ''))) this.controlPanel.setStatus(`任务已取消：${reason}`);
                 // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (!automatic) notify('info', `镜渊：${reason}`);
                 // [MA-LOCK] 数据来源锁：cancelled 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -1464,7 +1473,9 @@ class MirrorAbyssApplication {
             // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
             for (const item of queue.items.splice(0)) {
                 this.pendingTaskKeys.delete(item.taskKey);
-                item.reject(new Error(reason));
+                const cancelled = new Error(reason);
+                cancelled.code = 'MA_TASK_CANCELLED';
+                item.reject(cancelled);
                 count += 1;
             }
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -1799,7 +1810,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.3-logic-cleanup';
+exports.VERSION = '3.0.0-lite.ui.5-source-event-cancel';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -11328,7 +11339,8 @@ function add(map, key, entry) {
  * - 世界书是唯一长期剧情事实源
  * - 模型是唯一主要语义解释层
  * - 插件只做确定性校验、精确匹配、事务提交与宿主边界保护
- * - 禁止相似度/包含式猜测同一对象；禁止本地推断从属吸收目标
+ * - 人物/事件/物品/世界书条目仍禁止相似度/包含式猜测同一对象；禁止本地推断从属吸收目标
+ * - 唯一例外：权威“地点：”字段的 SceneGroup 边界允许保守字符串容错，只用于抑制同一地点标签轻微漂移
  */
 "use strict";
 
@@ -11375,6 +11387,8 @@ const governance_1 = require("./governance");
 const model_request_1 = require("./model-request");
 // [MA-LOCK] 数据来源锁：util_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const util_1 = require("./util");
+// [MA-SCENE-LOCATION-STABILITY] 仅用于权威“地点：”字段之间的 SceneGroup 边界容错；不参与人物/事件/物品/世界书条目的对象匹配。
+const SCENE_LOCATION_STABILITY_THRESHOLD = 0.77;
 // [MA-LOCK] 数据来源锁：information_point_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const information_point_1 = require("./domain/information-point");
 // [MA-LOCK] 数据来源锁：protocols_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -12135,13 +12149,18 @@ class MemoryRunner {
         const splitScene = (0, util_1.splitTitle)(explicitSceneTitle);
         // [MA-LOCK] 数据来源锁：explicitGroup 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const explicitGroup = explicitSceneTitle ? (0, util_1.normalizeSceneLocation)(splitScene?.name || explicitSceneTitle) : '';
+        // [MA-SCENE-LOCATION-STABILITY] 仍然只允许权威“地点：”触发换场；这里仅对两个明确地点标签做保守字符串容错。
+        // 编号冲突由 sceneLocationSimilarity 直接返回 0；高相似只说明同一 SceneGroup 的详细/简写变化，不扩展到其他对象匹配。
+        const sameSceneGroup = Boolean(beforeGroup && explicitGroup
+            && (0, util_1.sceneLocationSimilarity)(beforeGroup, explicitGroup) >= SCENE_LOCATION_STABILITY_THRESHOLD);
         // [MA-LOCK] 状态写入锁：result.currentSceneGroup 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        result.currentSceneGroup = explicitGroup || beforeGroup;
+        // 同场景容错时保留已有稳定组名，避免标签轻微漂移逐轮改写 SceneGroup 身份。
+        result.currentSceneGroup = sameSceneGroup ? beforeGroup : (explicitGroup || beforeGroup);
         // [MA-SCENE-BOUNDARY-LOCK] 本轮没有权威“地点：”时沿用当前组；禁止用提取出的场景条目制造场景切换。
         // [MA-LOCK] 状态写入锁：result.currentSceneTitle 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         result.currentSceneTitle = explicitSceneTitle || String(previousCursor?.activeEventTimeline?.sceneTitle || '').trim();
         // [MA-LOCK] 状态写入锁：result.sceneBoundaryChanged 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        result.sceneBoundaryChanged = Boolean(beforeGroup && result.currentSceneGroup && beforeGroup !== result.currentSceneGroup);
+        result.sceneBoundaryChanged = Boolean(beforeGroup && explicitGroup && !sameSceneGroup);
         // [MA-LOCK] 状态写入锁：result.extractionPoints 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         result.extractionPoints = extractionPointsFromBlocks(blocks, result.entries, result.businessChanges);
         // [MA-LOCK] 状态写入锁：result.criticalChanges 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -12478,8 +12497,8 @@ function currentSceneBoundaryChanged(beforeEntries, afterEntries) {
     const afterKey = currentSceneSummaryGroupKey(afterEntries);
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (!beforeKey || !afterKey) return false;
-    // SceneGroup 边界直接使用主预设稳定地点名。主预设负责保持同一主场景名称不变，
-    // 插件只做机械精确比较，不再用相似度猜测两个地点是否属于同一场景。
+    // 这里只比较世界书 current-scene 条目集合，不是运行时“地点：”SceneGroup 边界。
+    // 运行时边界由 MemoryRunner 对权威地点字段执行保守地点容错；本 helper 保持集合精确比较。
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return beforeKey !== afterKey;
 }
@@ -16314,7 +16333,8 @@ function isPolicy(value) {
  * - 世界书是唯一长期剧情事实源
  * - 模型是唯一主要语义解释层
  * - 插件只做确定性校验、精确匹配、事务提交与宿主边界保护
- * - 禁止相似度/包含式猜测同一对象；禁止本地推断从属吸收目标
+ * - 对象匹配禁止相似度/包含式猜测；sceneLocationSimilarity 仅作为权威地点标签的机械边界容错工具
+ * - 禁止本地推断从属吸收目标
  */
 "use strict";
 

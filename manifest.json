@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "3.0.0-lite.ui.3-logic-cleanup",
+  "version": "3.0.0-lite.ui.5-source-event-cancel",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书唯一事实源｜单一模型协议｜SceneGroup｜精确匹配（无相似度猜测）｜确定性事务提交"
+  "description": "世界书唯一事实源｜单一模型协议｜SceneGroup保守地点容错｜条目精确匹配｜确定性事务提交"
 }
