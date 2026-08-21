@@ -7623,6 +7623,13 @@ function activeContext(entries, preferredSceneTitle = '') {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return { scene, activeEvents, characters, activeNames: names, focus };
 }
+// [MA-LOCK] 函数职责锁：eventText 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
+function eventText(entry) {
+    return Object.values(entry?.sections?.values ?? {})
+        .flatMap((items) => Array.isArray(items) ? items : [])
+        .join('\n');
+}
+
 // [MA-LOCK] 函数职责锁：selectCurrentEvents 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function selectCurrentEvents(events, scene, presentNames) {
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
