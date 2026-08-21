@@ -12468,7 +12468,7 @@ async function callModel(options) {
     // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
     try {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId, generationOptions);
+        return validateModelResponse(await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId, generationOptions));
     }
     // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
     catch (error) {
@@ -12510,7 +12510,7 @@ async function callModel(options) {
     // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
     try {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return await host.generate(
+        return validateModelResponse(await host.generate(
             fallback.system,
             fallback.user,
             fallbackTokens,
@@ -12519,7 +12519,7 @@ async function callModel(options) {
             settings.requestTimeoutMs,
             profileId,
             emptyResponse && profileId ? { includePreset: false } : undefined,
-        );
+        ));
     }
     // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
     catch (secondError) {
@@ -12529,6 +12529,18 @@ async function callModel(options) {
 }
 
 // [MA-LOCK] 函数职责锁：isEmptyModelResponseError 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
+
+// [MA-MODEL-RESPONSE-01] 只区分服务错误文本与模型最终文本，不参与业务判断。
+function validateModelResponse(value) {
+    const text = String(value ?? '');
+    if (/(?:prompt could not be submitted|policy|safety|prohibited use|blocked|responsible ai|content filter)/iu.test(text)) {
+        const error = new Error(`模型服务拒绝请求：${text.slice(0, 500)}`);
+        error.code = 'MA_MODEL_SERVICE_REJECTED';
+        throw error;
+    }
+    return value;
+}
+
 function isEmptyModelResponseError(error) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return error?.code === 'MA_EMPTY_MODEL_RESPONSE' || error?.code === 'MA_REASONING_ONLY';
@@ -13928,7 +13940,7 @@ function diagnoseFixedFactLine(line) {
     } else if (parts.length > 7) {
         errors.push(`固定事实协议字段过多（当前${parts.length}段，应为7段）`);
     }
-    return errors.join('；') || '不符合唯一固定事实协议；必须严格使用“事实｜类型｜稳定名称｜栏目｜建立/变化/结束｜关联对象｜完整事实”';
+    return errors.join('；') || `不符合唯一固定事实协议；必须严格使用：${Object.values(protocols_1.EXTRACTION).join(' / ')}`;
 }
 function unwrapExtractionProtocolEnvelope(line) {
     let text = stripListMarker(String(line ?? '').trim());
