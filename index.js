@@ -18,7 +18,7 @@
  * 再转发 SillyTavern 扩展生命周期钩子到核心包。
  * 不包含业务语义；核心逻辑在 app.js（源码见 src/）。
  *
- * 版本：3.0.0-lite.ui.6-extraction-chain-clean
+ * 版本：3.0.0-lite.ui.9.1-runtime-repair
  */
 // [MA-LOCK] 数据来源锁：LOADER_ID 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const LOADER_ID = 'mirror-abyss-loader-control';
@@ -88,7 +88,7 @@ function showError(error) {
 function load() {
   mount();
   // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-  return loaded ??= import('./app.js?ui=3.0.0-lite.ui.6-extraction-chain-clean').catch(error => {
+  return loaded ??= import('./app.js?ui=3.0.0-lite.ui.9.1-runtime-repair').catch(error => {
     loaded = undefined;
     showError(error);
     // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
