@@ -1,20 +1,18 @@
 {
   "display_name": "Mirror Abyss / 镜渊",
   "loading_order": 10,
+  "requires": [],
+  "optional": [],
   "dependencies": [],
   "js": "index.js",
+  "css": "style.css",
   "author": "228184520lyd-boop",
-  "version": "3.0.0-lite.ui.20-entry-cohesion",
-  "auto_update": false,
-  "minimum_client_version": "1.18.0",
+  "version": "4.0.0-clean.1",
+  "auto_update": true,
   "hooks": {
-    "install": "onInstall",
-    "update": "onUpdate",
-    "delete": "onDelete",
     "enable": "onEnable",
     "disable": "onDisable",
-    "activate": "onActivate",
-    "clean": "onClean"
+    "activate": "onActivate"
   },
-  "description": "世界书唯一事实源｜严格格式兼容与提取前薄清洗｜确定性事务提交"
+  "description": "世界书唯一事实源｜单一Schema｜确定性UID事务｜移动端游戏档案"
 }
