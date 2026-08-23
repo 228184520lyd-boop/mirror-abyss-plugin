@@ -59,6 +59,8 @@ const control_panel_1 = require("./control-panel");
 const worldbook_management_1 = require("./worldbook-management");
 // [MA-LOCK] 数据来源锁：diagnostics_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const diagnostics_1 = require("./diagnostics");
+// [MA-LOCK] 数据来源锁：model_request_adapter_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+const model_request_adapter_1 = require("./model-request");
 // [MA-LOCK] 类职责锁：MirrorAbyssApplication 只承担当前类已经实现的职责；不要把相邻模块职责并入这里。
 class MirrorAbyssApplication {
     // [MA-LOCK] 方法职责锁：constructor 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -216,11 +218,6 @@ class MirrorAbyssApplication {
         this.listen('GENERATION_ENDED', (value) => this.scheduleMessage(messageIndexFromEvent(value), true));
         // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
         for (const event of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED']) this.listen(event, (value) => this.onScopeChanged(event, value));
-        // [MA-HOT-INDEX-03] 只监听 SillyTavern 明确的世界书内容更新事件。
-        // WORLDINFO_SCAN_DONE / WORLDINFO_ENTRIES_LOADED 只是扫描/加载，不代表内容修改，不能清掉热索引。
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (this.host.context()?.eventTypes?.WORLDINFO_UPDATED)
-            this.listen('WORLDINFO_UPDATED', () => this.worldbook.invalidateRuntimeMemory());
         this.controlPanel.mount();
         // [MA-LOCK] 状态写入锁：this.started 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.started = true;
@@ -247,7 +244,6 @@ class MirrorAbyssApplication {
         // 已经开始的 worker 不能在这里伪装成“已不存在”；保留 barrier，等 worker 自己 finally 退出。
         for (const chatKey of activeRollbackChats) this.reconcilingChats.add(chatKey);
         this.host.clearInternalMessageMutations();
-        this.worldbook.invalidateRuntimeMemory();
         this.controlPanel.unmount();
     }
     isStarted() { return this.started; }
@@ -413,15 +409,10 @@ class MirrorAbyssApplication {
             // [MA-LOCK] 数据来源锁：startedAt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const startedAt = Date.now();
             // [MA-LOCK] 数据来源锁：raw 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const raw = await this.host.generate(
-                '职责：API连接探针。只输出 MA_PROBE_OK。',
-                '只输出 MA_PROBE_OK。',
-                512,
-                snapshot,
-                settings,
-                Math.min(Math.max(5000, Number(settings.requestTimeoutMs || 30000)), 45000),
-                profileId,
-            );
+            const raw = await (0, model_request_adapter_1.generateWithAdapter)(this.host, {
+                messages: [{ role: 'system', content: '职责：API连接探针。只输出 MA_PROBE_OK。' }, { role: 'user', content: '只输出 MA_PROBE_OK。' }],
+                options: { responseLength: 512, snapshot, settings, timeout: Math.min(Math.max(5000, Number(settings.requestTimeoutMs || 30000)), 45000), profileId },
+            });
             this.host.assertSnapshot(snapshot, this.settings());
             // [MA-LOCK] 数据来源锁：text 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const text = String(raw || '').trim();
@@ -528,7 +519,6 @@ class MirrorAbyssApplication {
             for (const rollbackChatKey of activeRollbackChats) this.reconcilingChats.add(rollbackChatKey);
             this.deferredRollbackMessageIndexes.clear();
             this.host.clearInternalMessageMutations();
-            this.worldbook.invalidateRuntimeMemory();
             this.controlPanel.resetTaskStates?.('插件与当前世界书已重置');
             return { settings, currentChatReset: Boolean(chatKey), worldbookPreserved: false };
         } catch (error) {
@@ -802,7 +792,6 @@ class MirrorAbyssApplication {
             // 如果旧聊天 rollback worker 仍在退出，切回旧聊天前继续保留它的 Mirror barrier。
             for (const chatKey of activeRollbackChats) this.reconcilingChats.add(chatKey);
             this.cancelAll(reason);
-            this.worldbook.invalidateRuntimeMemory();
             try { this.host.bumpScopeRevision(this.host.chatKey()); } catch { }
             this.migrationService.clearPreview?.();
             this.worldSettingImportService.clearPreview?.();
@@ -1779,7 +1768,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.9.1-runtime-repair';
+exports.VERSION = '3.0.0-lite.ui.10-final-candidate-v2';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2439,7 +2428,7 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：title.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         title.className = 'ma-lite-title';
         // [MA-LOCK] 状态写入锁：title.innerHTML 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 世界书 · 设置 · 维护</small>';
+        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 手记 · 设置 · 维护</small>';
         // [MA-LOCK] 数据来源锁：close 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const close = document.createElement('button');
         // [MA-LOCK] 状态写入锁：close.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2463,7 +2452,7 @@ class ControlPanel {
         pageNav.setAttribute('aria-label', '镜渊面板分页');
         pageNav.append(
             this.makePageButton('run', '运行'),
-            this.makePageButton('worldbook', '世界书'),
+            this.makePageButton('worldbook', '手记'),
             this.makePageButton('settings', '设置'),
             this.makePageButton('maintenance', '维护'),
         );
@@ -4751,6 +4740,7 @@ class ControlPanel {
             detailBody.className = 'ma-lite-recall-detail-grid';
             // [MA-LOCK] 数据来源锁：technical 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const technical = [
+                ['UID', String(item.uid || '无')],
                 ['规则', item.profileName || '未记录'],
                 ['触发词', item.triggerKeywords.length ? item.triggerKeywords.join('、') : '无'],
                 ['递归', item.recursionLabel],
@@ -6196,15 +6186,10 @@ class DiagnosticsService {
                     // [MA-LOCK] 数据来源锁：routeBefore 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                     const routeBefore = collectGenerationState(this.host, context, settings);
                     // [MA-LOCK] 数据来源锁：output 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                    const output = await this.host.generate(
-                        '你正在执行插件连接验收。不得解释、不得输出推理，只输出指定字符串。',
-                        '只输出：MA_ACCEPTANCE_OK',
-                        256,
-                        modelSnapshot,
-                        settings,
-                        Math.min(Math.max(10000, Number(settings.requestTimeoutMs) || 90000), 60000),
-                        route.id,
-                    );
+                    const output = await (0, model_request_adapter_1.generateWithAdapter)(this.host, {
+                        messages: [{ role: 'system', content: '你正在执行插件连接验收。不得解释、不得输出推理，只输出指定字符串。' }, { role: 'user', content: '只输出：MA_ACCEPTANCE_OK' }],
+                        options: { responseLength: 256, snapshot: modelSnapshot, settings, timeout: Math.min(Math.max(10000, Number(settings.requestTimeoutMs) || 90000), 60000), profileId: route.id },
+                    });
                     // [MA-LOCK] 数据来源锁：routeAfter 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                     const routeAfter = collectGenerationState(this.host, context, settings);
                     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -12409,6 +12394,8 @@ function buildPlan(parsed, entries, honorLocks = true) {
 Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.callModel 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.callModel = callModel;
+// [MA-LOCK] 状态写入锁：exports.generateWithAdapter 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
+exports.generateWithAdapter = generateWithAdapter;
 // [MA-LOCK] 状态写入锁：exports.stageResponseTokens 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.stageResponseTokens = stageResponseTokens;
 // [MA-LOCK] 状态写入锁：exports.isRetryableGatewayError 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -12447,6 +12434,27 @@ const INPUT_LIMITS = Object.freeze({
  * 模型空正文或仅返回推理时，使用更大的输出预算并保留 Profile 预设重试一次。
  */
 // [MA-LOCK] 函数职责锁：callModel 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
+// [MA-MODEL-ADAPTER-01] 薄接口：只负责把标准请求交给当前模型实现，不包含业务语义。
+/**
+ * ModelAdapter 契约：
+ * 输入：messages（模型消息）、options（生成控制参数）。
+ * 输出：模型最终文本。
+ * 不负责：提示词生成、重试、协议解析、业务判断、世界书操作。
+ */
+async function generateWithAdapter(host, request) {
+    const options = request.options ?? {};
+    return host.generate(
+        request.messages[0]?.content ?? '',
+        request.messages[1]?.content ?? '',
+        options.responseLength,
+        options.snapshot,
+        options.settings,
+        options.timeout,
+        options.profileId,
+        options.generationOptions,
+    );
+}
+
 async function callModel(options) {
     const {
         host,
@@ -12475,7 +12483,7 @@ async function callModel(options) {
     // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
     try {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return validateModelResponse(await host.generate(primary.system, primary.user, responseLength, snapshot, settings, settings.requestTimeoutMs, profileId, generationOptions));
+        return validateModelResponse(await generateWithAdapter(host, { messages: [{ role: 'system', content: primary.system }, { role: 'user', content: primary.user }], options: { responseLength, snapshot, settings, timeout: settings.requestTimeoutMs, profileId, generationOptions } }));
     }
     // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
     catch (error) {
@@ -12517,16 +12525,17 @@ async function callModel(options) {
     // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
     try {
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return validateModelResponse(await host.generate(
-            fallback.system,
-            fallback.user,
-            fallbackTokens,
-            snapshot,
-            settings,
-            settings.requestTimeoutMs,
-            profileId,
-            emptyResponse && profileId ? { includePreset: false } : undefined,
-        ));
+        return validateModelResponse(await generateWithAdapter(host, {
+            messages: [{ role: 'system', content: fallback.system }, { role: 'user', content: fallback.user }],
+            options: {
+                responseLength: fallbackTokens,
+                snapshot,
+                settings,
+                timeout: settings.requestTimeoutMs,
+                profileId,
+                generationOptions: emptyResponse && profileId ? { includePreset: false } : undefined,
+            },
+        }));
     }
     // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
     catch (secondError) {
@@ -12832,8 +12841,6 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
             });
             // [MA-LOCK] 数据来源锁：initialKeywords 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const initialKeywords = [...block.keywords];
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (shouldMarkTemporary(block)) initialKeywords.push('临时', '身份未明');
             // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
             for (const keyword of (0, util_1.unique)(initialKeywords)) {
                 operations.push(op('merge-keywords', block.title, undefined, '关键词', undefined, keyword, keyword === '临时' ? '插件按身份未明对象规则标记临时条目' : keyword === '身份未明' ? '插件标记该人物身份尚未揭示' : '新条目关键词写入'));
@@ -13441,15 +13448,6 @@ function isBusinessFactSection(section) {
         && !isControlSection(section)
         && !/(关键词|触发词|标签|分类|别名|称号|其他名称)/u.test(String(section));
 }
-// [MA-LOCK] 函数职责锁：shouldMarkTemporary 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function shouldMarkTemporary(block) {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (String(block.type ?? '').trim() !== '人物') return false;
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if ((0, matcher_1.isProvisionalName)(block.name)) return true;
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return block.keywords?.some((keyword) => /^(?:身份未明|未知身份|临时)$/u.test((0, util_1.normalizeFact)(keyword))) === true;
-}
 // [MA-LOCK] 函数职责锁：linesWithoutCrossSectionDuplicates 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function linesWithoutCrossSectionDuplicates(block, section) {
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -13968,28 +13966,76 @@ function unwrapExtractionProtocolEnvelope(line) {
 }
 
 // [MA-OUTPUT-NORMALIZER-01] 仅负责模型输出外形归一，不解释事实语义，不补字段。
+function firstCompleteJsonValue(text) {
+    const source = String(text ?? '');
+    for (let start = 0; start < source.length; start += 1) {
+        const opening = source[start];
+        if (opening !== '{' && opening !== '[') continue;
+        const stack = [opening];
+        let quoted = false;
+        let escaped = false;
+        for (let index = start + 1; index < source.length; index += 1) {
+            const character = source[index];
+            if (quoted) {
+                if (escaped) escaped = false;
+                else if (character === '\\') escaped = true;
+                else if (character === '"') quoted = false;
+                continue;
+            }
+            if (character === '"') { quoted = true; continue; }
+            if (character === '{' || character === '[') stack.push(character);
+            else if (character === '}' || character === ']') {
+                const expected = character === '}' ? '{' : '[';
+                if (stack.at(-1) !== expected) break;
+                stack.pop();
+                if (!stack.length) return source.slice(start, index + 1);
+            }
+        }
+    }
+    return '';
+}
+function jsonField(item, keys) {
+    for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(item, key)) return { present: true, value: item[key] };
+    }
+    return { present: false, value: undefined };
+}
+function jsonScalar(value) {
+    return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+}
 function normalizeExtractionModelOutput(raw) {
     let text = String(raw ?? '').trim();
     if (!text) return text;
     text = text.replace(/^```(?:json|JSON|javascript)?\s*/u, '').replace(/\s*```$/u, '').trim();
     text = text.replace(/^(?:以下是(?:提取结果|结果)|提取结果|结果)\s*[:：]?\s*/u, '').trim();
+    if (text === protocols_1.NONE || text.includes('事实｜')) return text;
+    const jsonText = firstCompleteJsonValue(text);
+    if (!jsonText) return text;
     try {
-        const parsed = JSON.parse(text);
+        const parsed = JSON.parse(jsonText);
         const items = Array.isArray(parsed) ? parsed : [parsed];
-        if (items.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+        if (items.length && items.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
             const lines = items.map((item) => {
-                const get = (...keys) => keys.map((key) => item[key]).find((value) => value !== undefined && value !== null && String(value).trim() !== '') ?? '';
-                const type = String(get('类型', 'type')).trim();
-                const name = String(get('名称', 'name', 'title')).trim();
-                const section = String(get('栏目', 'section', 'field')).trim();
-                const change = String(get('变化', 'change', 'action', '状态')).trim() || '变化';
-                const relationValue = get('关联对象', 'relations', 'relation', 'related');
-                const relation = Array.isArray(relationValue) ? relationValue.join('、') : String(relationValue).trim();
-                const fact = String(get('事实', 'fact', 'content', 'detail')).trim();
-                if (!type || !name || !section || !fact) return null;
+                const typeField = jsonField(item, ['类型', 'type']);
+                const nameField = jsonField(item, ['名称', 'name', 'title']);
+                const sectionField = jsonField(item, ['栏目', 'section', 'field']);
+                const changeField = jsonField(item, ['变化', 'change', 'action', '状态']);
+                const relationField = jsonField(item, ['关联对象', 'relations', 'relation', 'related']);
+                const factField = jsonField(item, ['事实', 'fact', 'content', 'detail']);
+                if (![typeField, nameField, sectionField, changeField, relationField, factField].every((field) => field.present)) return null;
+                const type = jsonScalar(typeField.value);
+                const name = jsonScalar(nameField.value);
+                const section = jsonScalar(sectionField.value);
+                const change = jsonScalar(changeField.value);
+                const relation = Array.isArray(relationField.value)
+                    ? relationField.value.map(jsonScalar).filter(Boolean).join('、')
+                    : relationField.value === null ? '' : jsonScalar(relationField.value);
+                const fact = jsonScalar(factField.value);
+                if (!type || !name || !section || !['建立', '变化', '结束'].includes(change) || !fact) return null;
+                if (relationField.value !== null && typeof relationField.value !== 'string' && typeof relationField.value !== 'number' && !Array.isArray(relationField.value)) return null;
                 return `事实｜${type}｜${name}｜${section}｜${change}｜${relation}｜${fact}`;
-            }).filter(Boolean);
-            if (lines.length === items.length) return lines.join('\n');
+            });
+            if (lines.every(Boolean)) return lines.join('\n');
         }
     }
     catch { }
@@ -14291,8 +14337,31 @@ ${clipText(assistantText || '（空）', compact ? 15000 : 22000)}
     return { system, user };
 }
 
+// [MA-EXTRACTION-SANITIZER-01] 只在提取模型的传输副本上做固定词面替换；原正文和世界书不修改。
+// 词表不使用上下文推断，避免把歧义词、普通身体描述或剧情事实擅自改写。
+function sanitizeExtractionPromptText(value) {
+    const replacements = [
+        ['阴茎', '男性生殖器'], ['鸡巴', '男性生殖器'], ['肉棒', '男性生殖器'], ['龟头', '男性生殖器末端'],
+        ['阴道', '女性生殖道'], ['小穴', '女性生殖道'], ['骚穴', '女性生殖道'], ['肉穴', '女性生殖道'],
+        ['精液', '男性生殖体液'], ['淫液', '生殖分泌体液'],
+        ['性交', '成人亲密行为'], ['做爱', '成人亲密行为'], ['交媾', '成人亲密行为'],
+        ['口交', '口部成人亲密行为'], ['肛交', '后部成人亲密行为'],
+    ];
+    let text = String(value ?? '');
+    for (const [source, neutral] of replacements) text = text.split(source).join(neutral);
+    return text
+        .replace(/\bpenis\b/giu, 'male reproductive organ')
+        .replace(/\bvagina\b/giu, 'female reproductive tract')
+        .replace(/\bsemen\b/giu, 'male reproductive fluid')
+        .replace(/\bsexual intercourse\b/giu, 'adult intimate contact')
+        .replace(/\boral sex\b/giu, 'oral adult intimate contact')
+        .replace(/\banal sex\b/giu, 'rear adult intimate contact');
+}
+
 function extractionPrompts(playerText, assistantText, relevant) {
-    const existing = extractionWorldbookIndex(relevant);
+    const existing = sanitizeExtractionPromptText(extractionWorldbookIndex(relevant));
+    const sanitizedPlayerText = sanitizeExtractionPromptText(playerText);
+    const sanitizedAssistantText = sanitizeExtractionPromptText(assistantText);
     const system = `职责：比较上一轮世界书、玩家本轮回复和当前AI正文，提取当前正文已经明确建立、变化或结束的事实。
 
 玩家回复只代表玩家做了什么或表达了什么；事实是否真正成立，以当前AI正文为准。
@@ -14313,10 +14382,10 @@ ${summarySectionSchemaText()}`;
 ${existing || '（无）'}
 
 【玩家本轮回复】
-${playerText || '（空）'}
+${sanitizedPlayerText || '（空）'}
 
 【当前AI正文】
-${assistantText || '（空）'}
+${sanitizedAssistantText || '（空）'}
 
 只输出当前正文实际造成的事实变化。`;
     return { system, user };
@@ -16364,17 +16433,10 @@ const entry_section_1 = require("./domain/entry-section");
 const util_1 = require("./util");
 // [MA-LOCK] 函数职责锁：runtimeEntryProjection 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function runtimeEntryProjection(entry) {
-    // [MA-HOT-INDEX-01] 热索引不保存 raw 世界书对象，只保留业务读取需要的解析字段。
-    // 正式写入始终重新打开权威世界书，因此 raw 只存在于提交路径的 fresh parseEntries 中。
+    // 业务读取只返回去 raw 的解析字段；每次读取仍重新打开权威世界书，不保留运行时事实副本。
     const { raw: _raw, ...projected } = entry ?? {};
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return projected;
-}
-// [MA-LOCK] 函数职责锁：runtimeEntryView 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function runtimeEntryView(entries) {
-    // 只浅拷贝数组和顶层对象，避免 structuredClone 整本世界书及 raw 扩展。
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return (entries ?? []).map((entry) => ({ ...entry }));
 }
 // [MA-LOCK] 类职责锁：WorldbookAdapter 只承担当前类已经实现的职责；不要把相邻模块职责并入这里。
 class WorldbookAdapter {
@@ -16386,63 +16448,6 @@ class WorldbookAdapter {
         this.chatKey = chatKey ?? (() => '');
         // [MA-LOCK] 状态写入锁：this.apiPromise 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.apiPromise = null;
-        // [MA-HOT-INDEX-01] 简单运行时热索引：只缓存去 raw 的解析条目与 UID/标题 Map。
-        // 世界书仍是唯一长期事实源；所有写入、冲突校验与回滚继续走权威接口。
-        // [MA-LOCK] 状态写入锁：this.runtimeMemory 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        this.runtimeMemory = null;
-        // [MA-LOCK] 状态写入锁：this.runtimeMemoryCounters 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        this.runtimeMemoryCounters = { hits: 0, misses: 0, rebuilds: 0 };
-    }
-    runtimeMemoryKey(chatKey, name) { return `${String(chatKey ?? '')}\u0000${String(name ?? '')}`; }
-    // [MA-LOCK] 方法职责锁：runtimeMemorySnapshot 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    runtimeMemorySnapshot(chatKey, name) {
-        // [MA-LOCK] 数据来源锁：memory 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const memory = this.runtimeMemory;
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!memory || memory.key !== this.runtimeMemoryKey(chatKey, name)) return null;
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return memory;
-    }
-    // [MA-LOCK] 方法职责锁：rememberRuntimeMemory 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    rememberRuntimeMemory(name, data, chatKey = this.chatKey()) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!name || !data) return null;
-        // [MA-LOCK] 数据来源锁：parsed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const parsed = parseEntries(data);
-        // [MA-LOCK] 数据来源锁：entries 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const entries = parsed.map(runtimeEntryProjection);
-        // [MA-LOCK] 数据来源锁：byUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const byUid = new Map(entries.map((entry) => [String(entry.uid), entry]));
-        // [MA-LOCK] 数据来源锁：byTitle 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const byTitle = new Map(entries.map((entry) => [(0, util_1.normalizeTitle)(entry.title).toLocaleLowerCase(), entry]));
-        // [MA-LOCK] 数据来源锁：memory 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const memory = {
-            key: this.runtimeMemoryKey(chatKey, name),
-            chatKey: String(chatKey ?? ''),
-            name: String(name ?? ''),
-            // digest 只在权威读/写后重建时计算一次，用于防止模型处理期间的外部编辑覆盖；缓存命中不重复计算。
-            digest: digestWorldbook(data),
-            entries, byUid, byTitle,
-            cachedAt: Date.now(),
-        };
-        // [MA-LOCK] 状态写入锁：this.runtimeMemory 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        this.runtimeMemory = memory;
-        this.runtimeMemoryCounters.rebuilds += 1;
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return memory;
-    }
-    // [MA-LOCK] 方法职责锁：invalidateRuntimeMemory 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    invalidateRuntimeMemory(chatKey = '', name = '') {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!this.runtimeMemory) return false;
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (chatKey && this.runtimeMemory.chatKey !== String(chatKey)) return false;
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (name && this.runtimeMemory.name !== String(name)) return false;
-        // [MA-LOCK] 状态写入锁：this.runtimeMemory 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        this.runtimeMemory = null;
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return true;
     }
     // [MA-LOCK] 方法职责锁：list 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async list(settings, snapshot, validate, options = {}) {
@@ -16467,34 +16472,15 @@ class WorldbookAdapter {
         });
     }
     // [MA-LOCK] 方法职责锁：read 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    async read(settings, snapshot, validate, options = {}) {
+    async read(settings, snapshot, validate, _options = {}) {
         validate?.();
         this.assertChat(snapshot?.chatKey ?? '');
-        // [MA-LOCK] 数据来源锁：chatKey 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const chatKey = String(snapshot?.chatKey ?? this.chatKey() ?? '');
-        // [MA-LOCK] 数据来源锁：expectedName 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const expectedName = String(snapshot?.worldbookName ?? '');
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (options?.fresh !== true && expectedName) {
-            // [MA-LOCK] 数据来源锁：memory 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const memory = this.runtimeMemorySnapshot(chatKey, expectedName);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (memory) {
-                this.runtimeMemoryCounters.hits += 1;
-                validate?.();
-                // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-                return { name: memory.name, entries: runtimeEntryView(memory.entries), runtimeMemory: true };
-            }
-        }
-        this.runtimeMemoryCounters.misses += 1;
         const { data, name } = await this.open(settings, false, validate, snapshot?.chatKey, snapshot?.worldbookName);
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (snapshot?.worldbookName && name !== snapshot.worldbookName) throw new Error('读取到的世界书与任务快照不一致');
         validate?.();
-        // [MA-LOCK] 数据来源锁：memory 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const memory = this.rememberRuntimeMemory(name, data, chatKey);
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return { name, entries: memory ? runtimeEntryView(memory.entries) : parseEntries(data).map(runtimeEntryProjection), runtimeMemory: false };
+        return { name, entries: parseEntries(data).map(runtimeEntryProjection) };
     }
     // [MA-LOCK] 方法职责锁：readRaw 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async readRaw(settings, snapshot, validate) {
@@ -16507,7 +16493,6 @@ class WorldbookAdapter {
             // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
             throw new Error('读取到的世界书与任务快照不一致');
         validate?.();
-        this.rememberRuntimeMemory(opened.name, opened.data, snapshot?.chatKey ?? this.chatKey());
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return { name: opened.name, data: (0, util_1.clone)(opened.data) };
     }
@@ -16974,7 +16959,6 @@ class WorldbookAdapter {
         const changed = businessChanged;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!changed) {
-            this.rememberRuntimeMemory(opened.name, opened.data, snapshot?.chatKey ?? this.chatKey());
             // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const result = parseEntries(opened.data);
             // [MA-LOCK] 状态写入锁：result.changed 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -17224,7 +17208,6 @@ class WorldbookAdapter {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (saveError && actualDigest !== intendedDigest) throw saveError;
             verify?.(verified);
-            this.rememberRuntimeMemory(opened.name, verified, opened.chatKey ?? this.chatKey());
             // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return verified;
         }
@@ -17241,7 +17224,6 @@ class WorldbookAdapter {
             }
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (current && digestWorldbook(current) === beforeDigest) {
-                this.rememberRuntimeMemory(opened.name, current, opened.chatKey ?? this.chatKey());
                 // [MA-LOCK] 数据来源锁：primary 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const primary = saveError || error;
                 // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
@@ -17259,7 +17241,6 @@ class WorldbookAdapter {
                 if (!restored || digestWorldbook(restored) !== beforeDigest)
                     // [MA-LOCK] 失败契约锁：当前 throw 表示不能安全继续；不要用猜测性兜底把明确失败改成静默成功。
                     throw new Error('恢复后快照不一致');
-                this.rememberRuntimeMemory(opened.name, restored, opened.chatKey ?? this.chatKey());
             }
             // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
             catch (rollbackError) {

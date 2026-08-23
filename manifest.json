@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "3.0.0-lite.ui.9.1-runtime-repair",
+  "version": "3.0.0-lite.ui.10-final-candidate-v2",
   "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
@@ -17,5 +17,5 @@
     "activate": "onActivate",
     "clean": "onClean"
   },
-  "description": "世界书唯一事实源｜修复自动触发兼容与提取协议括号包裹容错｜确定性事务提交"
+  "description": "世界书唯一事实源｜严格格式兼容与提取前薄清洗｜确定性事务提交"
 }
