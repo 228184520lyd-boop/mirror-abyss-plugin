@@ -6,7 +6,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "4.0.0-clean.7",
+  "version": "4.0.0-clean.8",
   "auto_update": true,
   "hooks": {
     "enable": "onEnable",

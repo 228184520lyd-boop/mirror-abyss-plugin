@@ -4,7 +4,7 @@ const __ma_style_id = 'mirror-abyss-clean-style';
 if (typeof document !== 'undefined' && !document.getElementById(__ma_style_id)) {
   const style = document.createElement('style');
   style.id = __ma_style_id;
-  style.textContent = ":root {\n  --ma-ink: #132536;\n  --ma-muted: #6d7c8b;\n  --ma-line: #dbe3ea;\n  --ma-soft: #f5f8fb;\n  --ma-blue: #236f9b;\n  --ma-danger: #a43b3b;\n}\n\nhtml.ma-panel-open { overflow: hidden; }\n.ma-root, .ma-root * { box-sizing: border-box; }\n.ma-root { color: var(--ma-ink); font: 16px/1.6 system-ui, -apple-system, \"Noto Sans SC\", sans-serif; }\n.ma-button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px; background: #fff; color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; }\n.ma-button:active { transform: translateY(1px); }\n.ma-button:disabled { opacity: .5; cursor: default; transform: none; }\n.ma-button.is-active { border-color: var(--ma-blue); background: #edf6fb; color: #155b84; }\n.ma-button.ma-quiet { border-color: transparent; background: transparent; }\n.ma-button.ma-danger { color: var(--ma-danger); }\n.ma-button.ma-mini { min-height: 34px; padding: 4px 8px; font-size: 14px; }\n.ma-launcher { position: fixed; right: max(12px, env(safe-area-inset-right)); top: 50dvh; z-index: 10050; width: 46px; min-width: 46px; height: 46px; padding: 0; border-radius: 50%; touch-action: none; user-select: none; border-color: #315269; background: #17384e; color: #fff; box-shadow: 0 5px 18px rgba(17, 40, 57, .28); }\n.ma-panel { position: fixed; z-index: 10051; right: max(12px, env(safe-area-inset-right)); top: 6dvh; width: min(720px, calc(100vw - 24px)); height: min(88dvh, 900px); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cad6df; border-radius: 18px; background: #fff; box-shadow: 0 20px 70px rgba(15, 31, 44, .25); }\n.ma-panel[hidden] { display: none; }\n.ma-header { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--ma-line); }\n.ma-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; }\n.ma-sigil { color: var(--ma-blue); font-size: 24px; }\n.ma-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ma-line); }\n.ma-tabs .ma-button { border: 0; border-radius: 0; border-bottom: 3px solid transparent; color: var(--ma-muted); }\n.ma-tabs .ma-button.is-active { border-bottom-color: var(--ma-blue); background: #fff; color: var(--ma-blue); }\n.ma-main { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px; background: #fff; }\n.ma-main h1, .ma-main h2, .ma-main h3, .ma-main p { margin-top: 0; }\n.ma-main h1 { margin-bottom: 2px; font-size: 25px; }\n.ma-main h2 { margin-bottom: 12px; font-size: 19px; }\n.ma-main h3 { font-size: 17px; }\n.ma-section { margin-bottom: 16px; padding: 16px; border: 1px solid var(--ma-line); border-radius: 14px; background: #fff; }\n.ma-scene-strip { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid var(--ma-blue); background: var(--ma-soft); font-weight: 650; }\n.ma-help, .ma-main small { color: var(--ma-muted); }\n.ma-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }\n.ma-status { padding: 12px 14px; border-radius: 10px; background: var(--ma-soft); }\n.ma-status.is-error, .ma-error { color: var(--ma-danger); background: #fff1f1; }\n.ma-queue { margin-bottom: 10px; padding: 10px 12px; border-left: 3px solid #90a9ba; background: var(--ma-soft); }\n.ma-queue.is-warning { border-left-color: #c87b21; color: #8b4d08; background: #fff8ec; }\n.ma-stage-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }\n.ma-stage-list span { padding: 7px; border: 1px solid var(--ma-line); border-radius: 8px; color: var(--ma-muted); text-align: center; font-size: 14px; }\n.ma-stage-list .is-success { color: #236b4b; background: #f1faf5; }\n.ma-stage-list .is-running { color: var(--ma-blue); background: #edf6fb; }\n.ma-stage-list .is-warning { color: #8b4d08; background: #fff8ec; }\n.ma-write-receipt { margin: 10px 0 0; color: #236b4b; font-size: 14px; }\n.ma-failure-list { display: grid; gap: 8px; }\n.ma-failure { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #edc8c8; border-radius: 10px; }\n.ma-failure > span { display: grid; min-width: 0; }\n.ma-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ma-line); }\n.ma-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }\n.ma-search, .ma-editor, .ma-import-text, .ma-folder-select, .ma-number, .ma-select, .ma-input { width: 100%; min-height: 46px; margin: 14px 0; padding: 10px 13px; border: 1px solid var(--ma-line); border-radius: 11px; background: #fff; color: var(--ma-ink); font: inherit; }\n.ma-editor, .ma-import-text { min-height: 180px; resize: vertical; }\n.ma-filters { display: flex; gap: 8px; overflow-x: auto; padding: 0 0 10px; scrollbar-width: thin; }\n.ma-filters .ma-button { flex: none; white-space: nowrap; }\n.ma-button.ma-chip { min-height: 38px; padding: 5px 12px; border-radius: 999px; font-weight: 500; }\n.ma-manage-bar { position: sticky; top: -18px; z-index: 2; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 0 -18px 14px; padding: 10px 18px; border-block: 1px solid var(--ma-line); background: rgba(255,255,255,.96); }\n.ma-selection-status { grid-column: 1 / -1; color: var(--ma-muted); font-size: 14px; }\n.ma-manage-bar .ma-button { min-width: 0; padding-inline: 8px; }\n.is-hidden { display: none !important; }\n.ma-folder { margin: 0 0 18px; border-left: 4px solid #9bb7c8; }\n.ma-folder-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 0 6px 14px; }\n.ma-folder-head h2 { margin: 0 auto 0 0; }\n.ma-entry { margin-left: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-entry.is-highlighted { background: #f2f8fc; box-shadow: inset 3px 0 var(--ma-blue); }\n.ma-entry-head { min-height: 58px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 6px; cursor: pointer; }\n.ma-entry-head::marker { color: var(--ma-muted); }\n.ma-entry-copy { display: grid; min-width: 0; }\n.ma-entry-copy strong { overflow-wrap: anywhere; font-size: 17px; }\n.ma-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }\n.ma-badges i { padding: 1px 6px; border-radius: 999px; background: #edf4f8; color: #31566f; font-size: 12px; font-style: normal; font-weight: 650; }\n.ma-entry-actions { display: flex; align-items: center; gap: 6px; }\n.ma-type-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--ma-soft); color: var(--ma-blue); font-weight: 800; }\n.ma-folder-select { width: auto; max-width: 150px; min-height: 38px; margin: 0; padding: 4px 8px; }\n.ma-entry-content { padding: 4px 10px 14px 42px; }\n.ma-entry-content pre, .ma-import-preview pre { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ma-ink); font: inherit; }\n.ma-relations { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 8px 0; padding-top: 8px; border-top: 1px solid var(--ma-line); }\n.ma-pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 10px 0; }\n.ma-setting-row { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-setting-row:last-child { border-bottom: 0; }\n.ma-setting-row span { display: grid; }\n.ma-root input[type=\"checkbox\"] { appearance: auto; accent-color: var(--ma-blue); }\n.ma-setting-row input[type=\"checkbox\"] { width: 22px; height: 22px; }\n.ma-number { width: 86px; margin: 0; }\n.ma-block-setting { display: grid; gap: 8px; margin-top: 14px; }\n.ma-small-editor { min-height: 110px; margin: 0; }\n.ma-select, .ma-input { margin-block: 8px; }\n.ma-inline-feedback { color: var(--ma-muted); font-size: 14px; }\n.ma-import-preview { margin-top: 14px; }\n.ma-import-status { min-height: 42px; margin-top: 10px; padding: 8px 11px; border-left: 3px solid var(--ma-line); background: var(--ma-soft); color: var(--ma-muted); }\n.ma-import-status.is-busy { border-left-color: var(--ma-blue); color: var(--ma-blue); }\n.ma-preview-item { padding: 9px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-report { margin-top: 12px; }\n.ma-check { padding: 8px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-check.is-pass { color: #236b4b; }\n.ma-check.is-fail { color: var(--ma-danger); }\n.ma-empty { padding: 12px 16px; color: var(--ma-muted); }\n.ma-chat-indicator { width: fit-content; max-width: min(88%, 520px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; cursor: pointer; }\n.ma-chat-indicator.is-history { min-height: 26px; margin-top: 4px; padding-block: 2px; border-color: transparent; background: transparent; color: var(--ma-muted); font-size: 12px; }\n\n@media (max-width: 720px) {\n  .ma-panel { inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; }\n  .ma-header { padding-top: max(10px, env(safe-area-inset-top)); }\n  .ma-main { padding: 14px; padding-bottom: max(18px, env(safe-area-inset-bottom)); }\n  .ma-manage-bar { top: -14px; margin-inline: -14px; padding-inline: 14px; }\n  .ma-manage-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); }\n  .ma-action-grid { grid-template-columns: 1fr 1fr; }\n  .ma-scene-strip { flex-direction: column; gap: 2px; }\n  .ma-entry { margin-left: 8px; }\n  .ma-entry-head { grid-template-columns: auto auto minmax(0, 1fr); }\n  .ma-entry-actions { grid-column: 2 / -1; width: 100%; }\n  .ma-folder-select { flex: 1; width: auto; max-width: none; }\n  .ma-entry-content { padding-left: 12px; }\n  .ma-stage-list { grid-template-columns: 1fr 1fr; }\n  .ma-failure { align-items: stretch; flex-direction: column; }\n  .ma-folder-head { flex-wrap: wrap; }\n}\n\n@media (max-width: 390px) {\n  .ma-root { font-size: 16px; }\n  .ma-action-grid { grid-template-columns: 1fr; }\n  .ma-header { min-height: 56px; padding-inline: 12px; }\n  .ma-main h1 { font-size: 23px; }\n}\n";
+  style.textContent = ":root {\n  --ma-ink: #132536;\n  --ma-muted: #6d7c8b;\n  --ma-line: #dbe3ea;\n  --ma-soft: #f5f8fb;\n  --ma-blue: #236f9b;\n  --ma-danger: #a43b3b;\n}\n\nhtml.ma-panel-open { overflow: hidden; }\n.ma-root, .ma-root * { box-sizing: border-box; }\n.ma-root { color: var(--ma-ink); font: 16px/1.6 system-ui, -apple-system, \"Noto Sans SC\", sans-serif; }\n.ma-button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px; background: #fff; color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; }\n.ma-button:active { transform: translateY(1px); }\n.ma-button:disabled { opacity: .5; cursor: default; transform: none; }\n.ma-button.is-active { border-color: var(--ma-blue); background: #edf6fb; color: #155b84; }\n.ma-button.ma-quiet { border-color: transparent; background: transparent; }\n.ma-button.ma-danger { color: var(--ma-danger); }\n.ma-button.ma-mini { min-height: 34px; padding: 4px 8px; font-size: 14px; }\n.ma-launcher { position: fixed; right: max(12px, env(safe-area-inset-right)); top: 50dvh; z-index: 10050; width: 46px; min-width: 46px; height: 46px; padding: 0; border-radius: 50%; touch-action: none; user-select: none; border-color: #315269; background: #17384e; color: #fff; box-shadow: 0 5px 18px rgba(17, 40, 57, .28); }\n.ma-panel { position: fixed; z-index: 10051; right: max(12px, env(safe-area-inset-right)); top: 6dvh; width: min(720px, calc(100vw - 24px)); height: min(88dvh, 900px); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cad6df; border-radius: 18px; background: #fff; box-shadow: 0 20px 70px rgba(15, 31, 44, .25); }\n.ma-panel[hidden] { display: none; }\n.ma-header { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--ma-line); }\n.ma-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; }\n.ma-sigil { color: var(--ma-blue); font-size: 24px; }\n.ma-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ma-line); }\n.ma-tabs .ma-button { border: 0; border-radius: 0; border-bottom: 3px solid transparent; color: var(--ma-muted); }\n.ma-tabs .ma-button.is-active { border-bottom-color: var(--ma-blue); background: #fff; color: var(--ma-blue); }\n.ma-main { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px; background: #fff; }\n.ma-main h1, .ma-main h2, .ma-main h3, .ma-main p { margin-top: 0; }\n.ma-main h1 { margin-bottom: 2px; font-size: 25px; }\n.ma-main h2 { margin-bottom: 12px; font-size: 19px; }\n.ma-main h3 { font-size: 17px; }\n.ma-section { margin-bottom: 16px; padding: 16px; border: 1px solid var(--ma-line); border-radius: 14px; background: #fff; }\n.ma-scene-strip { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid var(--ma-blue); background: var(--ma-soft); font-weight: 650; }\n.ma-help, .ma-main small { color: var(--ma-muted); }\n.ma-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }\n.ma-status { padding: 12px 14px; border-radius: 10px; background: var(--ma-soft); }\n.ma-status.is-error, .ma-error { color: var(--ma-danger); background: #fff1f1; }\n.ma-queue { margin-bottom: 10px; padding: 10px 12px; border-left: 3px solid #90a9ba; background: var(--ma-soft); }\n.ma-queue.is-warning { border-left-color: #c87b21; color: #8b4d08; background: #fff8ec; }\n.ma-stage-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }\n.ma-stage-list span { padding: 7px; border: 1px solid var(--ma-line); border-radius: 8px; color: var(--ma-muted); text-align: center; font-size: 14px; }\n.ma-stage-list .is-success { color: #236b4b; background: #f1faf5; }\n.ma-stage-list .is-running { color: var(--ma-blue); background: #edf6fb; }\n.ma-stage-list .is-warning { color: #8b4d08; background: #fff8ec; }\n.ma-write-receipt { margin: 10px 0 0; color: #236b4b; font-size: 14px; }\n.ma-failure-list { display: grid; gap: 8px; }\n.ma-failure { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #edc8c8; border-radius: 10px; }\n.ma-failure > span { display: grid; min-width: 0; }\n.ma-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ma-line); }\n.ma-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }\n.ma-search, .ma-editor, .ma-import-text, .ma-folder-select, .ma-number, .ma-select, .ma-input { width: 100%; min-height: 46px; margin: 14px 0; padding: 10px 13px; border: 1px solid var(--ma-line); border-radius: 11px; background: #fff; color: var(--ma-ink); font: inherit; }\n.ma-editor, .ma-import-text { min-height: 180px; resize: vertical; }\n.ma-filters { display: flex; gap: 8px; overflow-x: auto; padding: 0 0 10px; scrollbar-width: thin; }\n.ma-filters .ma-button { flex: none; white-space: nowrap; }\n.ma-button.ma-chip { min-height: 38px; padding: 5px 12px; border-radius: 999px; font-weight: 500; }\n.ma-manage-bar { position: sticky; top: -18px; z-index: 2; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 0 -18px 14px; padding: 10px 18px; border-block: 1px solid var(--ma-line); background: rgba(255,255,255,.96); }\n.ma-selection-status { grid-column: 1 / -1; color: var(--ma-muted); font-size: 14px; }\n.ma-manage-bar .ma-button { min-width: 0; padding-inline: 8px; }\n.is-hidden { display: none !important; }\n.ma-folder { margin: 0 0 18px; border-left: 4px solid #9bb7c8; }\n.ma-folder-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 0 6px 14px; }\n.ma-folder-head h2 { margin: 0 auto 0 0; }\n.ma-entry { margin-left: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-entry.is-highlighted { background: #f2f8fc; box-shadow: inset 3px 0 var(--ma-blue); }\n.ma-entry-head { min-height: 58px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 6px; cursor: pointer; }\n.ma-entry-head::marker { color: var(--ma-muted); }\n.ma-entry-copy { display: grid; min-width: 0; }\n.ma-entry-copy strong { overflow-wrap: anywhere; font-size: 17px; }\n.ma-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }\n.ma-badges i { padding: 1px 6px; border-radius: 999px; background: #edf4f8; color: #31566f; font-size: 12px; font-style: normal; font-weight: 650; }\n.ma-entry-actions { display: flex; align-items: center; gap: 6px; }\n.ma-type-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--ma-soft); color: var(--ma-blue); font-weight: 800; }\n.ma-folder-select { width: auto; max-width: 150px; min-height: 38px; margin: 0; padding: 4px 8px; }\n.ma-entry-content { padding: 4px 10px 14px 42px; }\n.ma-entry-content pre, .ma-import-preview pre { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ma-ink); font: inherit; }\n.ma-recall-summary { display: flex; flex-wrap: wrap; gap: 5px 12px; margin: 10px 0; padding: 9px 11px; border-left: 3px solid #9bb7c8; background: var(--ma-soft); color: var(--ma-muted); font-size: 14px; }\n.ma-recall-summary strong { width: 100%; color: var(--ma-ink); }\n.ma-recall-editor { display: grid; gap: 10px; }\n.ma-recall-editor .ma-input { margin: 6px 0 0; }\n.ma-check-field { min-height: 44px; display: flex; align-items: center; gap: 10px; }\n.ma-check-field input { width: 20px; height: 20px; }\n.ma-relations { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 8px 0; padding-top: 8px; border-top: 1px solid var(--ma-line); }\n.ma-pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 10px 0; }\n.ma-setting-row { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-setting-row:last-child { border-bottom: 0; }\n.ma-setting-row span { display: grid; }\n.ma-root input[type=\"checkbox\"] { appearance: auto; accent-color: var(--ma-blue); }\n.ma-setting-row input[type=\"checkbox\"] { width: 22px; height: 22px; }\n.ma-number { width: 86px; margin: 0; }\n.ma-block-setting { display: grid; gap: 8px; margin-top: 14px; }\n.ma-small-editor { min-height: 110px; margin: 0; }\n.ma-select, .ma-input { margin-block: 8px; }\n.ma-inline-feedback { color: var(--ma-muted); font-size: 14px; }\n.ma-import-preview { margin-top: 14px; }\n.ma-import-status { min-height: 42px; margin-top: 10px; padding: 8px 11px; border-left: 3px solid var(--ma-line); background: var(--ma-soft); color: var(--ma-muted); }\n.ma-import-status.is-busy { border-left-color: var(--ma-blue); color: var(--ma-blue); }\n.ma-preview-item { padding: 9px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-report { margin-top: 12px; }\n.ma-check { padding: 8px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-check.is-pass { color: #236b4b; }\n.ma-check.is-fail { color: var(--ma-danger); }\n.ma-empty { padding: 12px 16px; color: var(--ma-muted); }\n.ma-chat-indicator { width: fit-content; max-width: min(88%, 520px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; cursor: pointer; }\n.ma-chat-indicator.is-history { min-height: 26px; margin-top: 4px; padding-block: 2px; border-color: transparent; background: transparent; color: var(--ma-muted); font-size: 12px; }\n\n@media (max-width: 720px) {\n  .ma-panel { inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; }\n  .ma-header { padding-top: max(10px, env(safe-area-inset-top)); }\n  .ma-main { padding: 14px; padding-bottom: max(18px, env(safe-area-inset-bottom)); }\n  .ma-manage-bar { top: -14px; margin-inline: -14px; padding-inline: 14px; }\n  .ma-manage-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); }\n  .ma-action-grid { grid-template-columns: 1fr 1fr; }\n  .ma-scene-strip { flex-direction: column; gap: 2px; }\n  .ma-entry { margin-left: 8px; }\n  .ma-entry-head { grid-template-columns: auto auto minmax(0, 1fr); }\n  .ma-entry-actions { grid-column: 2 / -1; width: 100%; }\n  .ma-folder-select { flex: 1; width: auto; max-width: none; }\n  .ma-entry-content { padding-left: 12px; }\n  .ma-stage-list { grid-template-columns: 1fr 1fr; }\n  .ma-failure { align-items: stretch; flex-direction: column; }\n  .ma-folder-head { flex-wrap: wrap; align-items: center; }\n  .ma-folder-head h2 { flex: 1; min-width: 45%; }\n  .ma-folder-head .ma-button { min-height: 36px; }\n}\n\n@media (max-width: 390px) {\n  .ma-root { font-size: 16px; }\n  .ma-action-grid { grid-template-columns: 1fr; }\n  .ma-header { min-height: 56px; padding-inline: 12px; }\n  .ma-main h1 { font-size: 23px; }\n}\n";
   document.head.append(style);
 }
 
@@ -508,6 +508,9 @@ const __ma_module_3 = (() => {
       sections,
       content: serializeSections(title.type, sections),
       keywords: unique(raw.key),
+      constant: raw.constant === true,
+      recursable: raw.excludeRecursion !== true,
+      continuesRecursion: raw.preventRecursion !== true,
       cornerstone: raw?.extensions?.mirrorAbyss?.cornerstone === true,
       manualCornerstone: raw?.extensions?.mirrorAbyss?.cornerstone === true,
       focus: raw?.extensions?.mirrorAbyss?.focus === true,
@@ -543,19 +546,13 @@ const __ma_module_3 = (() => {
   function applyNativeEntryFields(raw, type, name, content, aliases = []) {
     ensureEntry(WORLD_TYPES.includes(type), `未知条目类型：${type}`, 'LORE_TYPE');
     const extension = raw?.extensions?.mirrorAbyss ?? {};
+    const managed = extension.managed === true;
     raw.comment = `${type}｜${name}`;
     raw.content = content;
-    raw.key = unique([name, ...aliases]);
+    raw.key = managed ? unique(aliases.length ? aliases : raw.key) : unique([name, ...aliases]);
     raw.keysecondary = [];
-    raw.constant = extension.focus === true || WORLD_SCHEMA[type].constant;
     raw.disable = false;
-    raw.vectorized = extension.focus !== true;
-    raw.selective = false;
-    raw.excludeRecursion = extension.focus === true;
-    raw.preventRecursion = extension.focus === true;
-    raw.order = extension.focus === true ? 900 : WORLD_SCHEMA[type].order;
-    raw.position = extension.focus === true ? 1 : 0;
-    raw.depth = 4;
+    if (!managed) applyRecallDefaults(raw, type, extension.focus === true);
     raw.extensions ??= {};
     raw.extensions.mirrorAbyss = { ...extension, managed: true, retired: false, cornerstone: extension.cornerstone === true };
     return raw;
@@ -572,7 +569,25 @@ const __ma_module_3 = (() => {
     const managed = parseManagedEntry(raw);
     ensureEntry(managed && managed.type === '人物', '只有人物条目可以设为主焦点', 'FOCUS_TYPE');
     raw.extensions.mirrorAbyss.focus = focused === true;
-    return applyNativeEntryFields(raw, managed.type, managed.name, managed.content, raw.key);
+    applyRecallDefaults(raw, managed.type, focused === true);
+    return raw;
+  }
+  
+  function updateNativeRecall(raw, { keywords, constant, recursable, continuesRecursion }) {
+    const managed = parseManagedEntry(raw);
+    ensureEntry(managed && !managed.retired, `UID ${raw?.uid ?? '未知'}不是可编辑的镜渊条目`, 'LORE_ITEM');
+    const keys = unique(keywords);
+    ensureEntry(constant === true || keys.length > 0, '关键词触发条目至少需要一个主要关键词', 'RECALL_KEY');
+    raw.key = keys;
+    raw.constant = constant === true;
+    raw.excludeRecursion = recursable !== true;
+    raw.preventRecursion = continuesRecursion !== true;
+    if (!raw.constant && managed.focus) {
+      raw.extensions.mirrorAbyss.focus = false;
+      raw.order = WORLD_SCHEMA[managed.type].order;
+      raw.position = 0;
+    }
+    return raw;
   }
   
   function markNativeActivity(raw, { messageIndex = -1, scene = '', relations = [] } = {}) {
@@ -588,9 +603,21 @@ const __ma_module_3 = (() => {
   function replanNativeRecall(raw) {
     const managed = parseManagedEntry(raw);
     ensureEntry(managed, `UID ${raw?.uid ?? '未知'}不是镜渊管理条目`, 'LORE_ITEM');
-    return applyNativeEntryFields(raw, managed.type, managed.name, managed.content, raw.key);
+    applyRecallDefaults(raw, managed.type, managed.focus);
+    return raw;
   }
-  return Object.freeze({ parseManagedTitle, identityKey, parseSections, serializeSections, mergeRows, parseManagedEntry, managedEntries, assertUniqueManagedIdentities, applyNativeEntryFields, setNativeCornerstone, setNativeFocus, markNativeActivity, replanNativeRecall });
+  
+  function applyRecallDefaults(raw, type, focused = false) {
+    raw.constant = focused || WORLD_SCHEMA[type].constant;
+    raw.vectorized = true;
+    raw.selective = false;
+    raw.excludeRecursion = false;
+    raw.preventRecursion = false;
+    raw.order = focused ? 900 : WORLD_SCHEMA[type].order;
+    raw.position = focused ? 1 : 0;
+    raw.depth = 4;
+  }
+  return Object.freeze({ parseManagedTitle, identityKey, parseSections, serializeSections, mergeRows, parseManagedEntry, managedEntries, assertUniqueManagedIdentities, applyNativeEntryFields, setNativeCornerstone, setNativeFocus, updateNativeRecall, markNativeActivity, replanNativeRecall });
 })();
 
 const __ma_module_4 = (() => {
@@ -1034,6 +1061,7 @@ const __ma_module_6 = (() => {
     gameTime() { return this.listEntries().then(opened => opened.managed.find(entry => entry.type === '世界' && entry.name === '游戏时间')?.content.match(/当前游戏时间：(.+)/u)?.[1] ?? ''); }
   
     updateEntry(uid, content) { return this.mutation(`entry:update:${uid}`, `更新UID ${uid}`, () => this.memory.updateEntry(this.settings(), uid, content)); }
+    updateRecall(uid, recall) { return this.mutation(`entry:recall:${uid}`, `更新UID ${uid}召回设置`, () => this.memory.updateRecall(this.settings(), uid, recall)); }
     setCornerstone(uids, locked) { return this.mutation(`cornerstone:${unique(uids).sort()}:${locked}`, `${locked ? '设置' : '解除'}基石`, () => this.memory.setCornerstone(this.settings(), uids, locked)); }
     setFocus(uid, focused) { return this.mutation(`focus:${uid}:${focused}`, `${focused ? '设置' : '解除'}主焦点`, () => this.memory.setFocus(this.settings(), uid, focused)); }
     deleteEntries(uids) { return this.mutation(`entry:delete:${unique(uids).sort()}`, `删除${uids.length}个条目`, () => this.memory.deleteEntries(this.settings(), uids)); }
@@ -1589,7 +1617,7 @@ const __ma_module_12 = (() => {
 })();
 
 const __ma_module_13 = (() => {
-  const { applyNativeEntryFields, identityKey, managedEntries, markNativeActivity, mergeRows, parseManagedEntry, parseSections, replanNativeRecall, serializeSections, setNativeCornerstone, setNativeFocus } = __ma_module_3;
+  const { applyNativeEntryFields, identityKey, managedEntries, markNativeActivity, mergeRows, parseManagedEntry, parseSections, replanNativeRecall, serializeSections, setNativeCornerstone, setNativeFocus, updateNativeRecall } = __ma_module_3;
   const { projectRelations } = __ma_module_12;
   const { EXTRACTION_TYPES } = __ma_module_2;
   const { parseAuditProtocol, parseFactProtocol, parseSummaryProtocol } = __ma_module_7;
@@ -1716,6 +1744,8 @@ const __ma_module_13 = (() => {
           ensureWorkflow(sourceEntries.every(Boolean), '总结来源编号已经失效', 'SUMMARY_REF');
           const targetKey = identityKey(group.type, group.name);
           const targetSource = sourceEntries.find(source => identityKey(source.type, source.name) === targetKey);
+          const focusedSource = sourceEntries.find(source => source.focus);
+          ensureWorkflow(!focusedSource || targetSource?.uid === focusedSource.uid, `主焦点“${focusedSource?.title}”不能被总结删除或改换身份`, 'FOCUS_PROTECTED');
           const collision = activeByIdentity.get(targetKey);
           ensureWorkflow(!collision || collision.uid === targetSource?.uid, `总结目标“${group.title}”与未参与整理的现有条目冲突`, 'SUMMARY_COLLISION');
           const targetRaw = targetSource ? data.entries[targetSource.uid] : createEntry();
@@ -1766,6 +1796,15 @@ const __ma_module_13 = (() => {
         ensureWorkflow(!managed.cornerstone, '基石条目为只读，请先解除基石锁', 'CORNERSTONE_READONLY');
         const sections = parseSections(content, managed.type);
         applyNativeEntryFields(raw, managed.type, managed.name, serializeSections(managed.type, sections), raw.key);
+      });
+    }
+  
+    async updateRecall(settings, uid, recall) {
+      const opened = await this.worldbook.read(settings);
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+        const raw = data.entries?.[uid];
+        ensureWorkflow(raw, `UID ${uid}不存在`, 'ITEM_MISSING');
+        updateNativeRecall(raw, recall);
       });
     }
   
@@ -1859,6 +1898,7 @@ const __ma_module_13 = (() => {
           const managed = parseManagedEntry(data.entries?.[uid]);
           ensureWorkflow(managed && !managed.retired, `UID ${uid}不存在`, 'ITEM_MISSING');
           ensureWorkflow(!managed.cornerstone, '基石条目为只读，请先解除基石锁', 'CORNERSTONE_READONLY');
+          ensureWorkflow(!managed.focus, '主焦点受保护，请先解除主焦点', 'FOCUS_PROTECTED');
           delete data.entries[uid];
         }
       });
@@ -2098,7 +2138,12 @@ const __ma_module_17 = (() => {
     if (window.toastr?.error) window.toastr.error(text, '镜渊');
     else console.error('[Mirror Abyss]', error);
   }
-  return Object.freeze({ element, button, notice });
+  
+  function inform(text) {
+    if (window.toastr?.success) window.toastr.success(String(text), '镜渊');
+    else console.info('[Mirror Abyss]', text);
+  }
+  return Object.freeze({ element, button, notice, inform });
 })();
 
 const __ma_module_18 = (() => {
@@ -2284,9 +2329,95 @@ const __ma_module_18 = (() => {
 })();
 
 const __ma_module_19 = (() => {
+  const { unique } = __ma_module_0;
+  const emptyLayout = () => ({ folders: [], assignments: {}, collapsed: [], entryOrder: [] });
+  
+  function folderNameKey(value) {
+    return String(value ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+  }
+  
+  function normalizeFolderLayout(value) {
+    const input = value && typeof value === 'object' ? value : emptyLayout();
+    const folders = [];
+    const aliases = new Map();
+    const byName = new Map();
+    const ids = new Set();
+    for (const candidate of Array.isArray(input.folders) ? input.folders : []) {
+      const id = String(candidate?.id ?? '');
+      const name = String(candidate?.name ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+      const key = folderNameKey(name);
+      if (!id || id === 'default' || !key) continue;
+      const sameName = byName.get(key);
+      if (sameName) {
+        aliases.set(id, sameName.id);
+        continue;
+      }
+      if (ids.has(id)) continue;
+      const folder = { id, name };
+      folders.push(folder);
+      ids.add(id);
+      byName.set(key, folder);
+    }
+    const assignments = {};
+    for (const [uid, rawId] of Object.entries(input.assignments ?? {})) {
+      const id = aliases.get(String(rawId)) ?? String(rawId);
+      if (ids.has(id)) assignments[String(uid)] = id;
+    }
+    const collapsed = unique((Array.isArray(input.collapsed) ? input.collapsed : [])
+      .map(id => aliases.get(String(id)) ?? String(id)).filter(id => id === 'default' || ids.has(id)));
+    const entryOrder = unique((Array.isArray(input.entryOrder) ? input.entryOrder : []).map(String));
+    return { folders, assignments, collapsed, entryOrder };
+  }
+  
+  function createOrReuseFolder(layout, name, id) {
+    const next = normalizeFolderLayout(layout);
+    const key = folderNameKey(name);
+    const existing = next.folders.find(folder => folderNameKey(folder.name) === key);
+    if (existing) return { layout: next, folderId: existing.id, reused: true };
+    const folder = { id: String(id), name: String(name).normalize('NFKC').trim().replace(/\s+/gu, ' ') };
+    next.folders.push(folder);
+    return { layout: next, folderId: folder.id, reused: false };
+  }
+  
+  function renameOrMergeFolder(layout, sourceId, name) {
+    const next = normalizeFolderLayout(layout);
+    const source = next.folders.find(folder => folder.id === String(sourceId));
+    if (!source) return { layout: next, folderId: '', merged: false };
+    const key = folderNameKey(name);
+    const target = next.folders.find(folder => folder.id !== source.id && folderNameKey(folder.name) === key);
+    if (!target) {
+      source.name = String(name).normalize('NFKC').trim().replace(/\s+/gu, ' ');
+      return { layout: next, folderId: source.id, merged: false };
+    }
+    for (const uid of Object.keys(next.assignments)) if (next.assignments[uid] === source.id) next.assignments[uid] = target.id;
+    next.folders = next.folders.filter(folder => folder.id !== source.id);
+    next.collapsed = next.collapsed.filter(id => id !== source.id);
+    return { layout: next, folderId: target.id, merged: true };
+  }
+  
+  function deleteFolder(layout, id) {
+    const next = normalizeFolderLayout(layout);
+    next.folders = next.folders.filter(folder => folder.id !== String(id));
+    next.collapsed = next.collapsed.filter(value => value !== String(id));
+    for (const uid of Object.keys(next.assignments)) if (next.assignments[uid] === String(id)) delete next.assignments[uid];
+    return next;
+  }
+  
+  function pageFolderEntries(entries, requestedPage, requestedSize) {
+    const total = entries.length;
+    const size = Math.max(1, Number(requestedSize) || 12);
+    const pages = Math.max(1, Math.ceil(total / size));
+    const page = Math.max(1, Math.min(Number(requestedPage) || 1, pages));
+    return { total, pages, page, entries: entries.slice((page - 1) * size, page * size) };
+  }
+  return Object.freeze({ folderNameKey, normalizeFolderLayout, createOrReuseFolder, renameOrMergeFolder, deleteFolder, pageFolderEntries });
+})();
+
+const __ma_module_20 = (() => {
   const { WORLD_SCHEMA, WORLD_TYPES } = __ma_module_2;
+  const { createOrReuseFolder, deleteFolder, normalizeFolderLayout, pageFolderEntries, renameOrMergeFolder } = __ma_module_19;
   const { fault } = __ma_module_0;
-  const { button, element, notice } = __ma_module_17;
+  const { button, element, inform, notice } = __ma_module_17;
   class NotesPage {
     constructor(panel) { this.panel = panel; }
   
@@ -2297,17 +2428,17 @@ const __ma_module_19 = (() => {
       const top = element('section', { className: 'ma-notes-head' }, [
         element('div', {}, [element('h1', { text: '世界设定集' }), element('small', { text: `${opened.name} · ${active.length}条管理资料` })]),
         element('div', { className: 'ma-inline-actions' }, [
-          button(this.panel.editing ? '完成' : '管理', () => { this.panel.editing = !this.panel.editing; this.panel.selected.clear(); void this.panel.render(); }, this.panel.editing ? 'is-active' : 'ma-quiet'),
+          button(this.panel.editing ? '完成' : '管理资料', () => { this.panel.editing = !this.panel.editing; this.panel.selected.clear(); void this.panel.render(); }, this.panel.editing ? 'is-active' : 'ma-quiet'),
           button('刷新', () => this.panel.render(), 'ma-quiet'),
         ]),
       ]);
       const search = element('input', { className: 'ma-search', type: 'search', value: this.panel.search, placeholder: '搜索人物、地点、物品、事件或正文' });
       const listHost = element('div', { className: 'ma-notes-list' });
-      search.addEventListener('input', () => { this.panel.search = search.value; this.panel.pageNumber = 1; void this.renderList(listHost, opened); });
+      search.addEventListener('input', () => { this.panel.search = search.value; this.panel.folderPages = {}; void this.renderList(listHost, opened); });
       const filters = element('div', { className: 'ma-filters' });
       for (const type of ['全部', ...WORLD_TYPES]) {
         const count = type === '全部' ? active.length : active.filter(entry => entry.type === type).length;
-        filters.append(button(`${type} ${count}`, () => { this.panel.typeFilter = type; this.panel.pageNumber = 1; void this.renderList(listHost, opened); }, type === this.panel.typeFilter ? 'is-active' : 'ma-chip'));
+        filters.append(button(`${type} ${count}`, () => { this.panel.typeFilter = type; this.panel.folderPages = {}; void this.renderList(listHost, opened); }, type === this.panel.typeFilter ? 'is-active' : 'ma-chip'));
       }
       main.append(top, search, filters, this.manageBar(opened), listHost);
       await this.renderList(listHost, opened);
@@ -2318,7 +2449,7 @@ const __ma_module_19 = (() => {
       const cornerstone = button('设为基石', () => this.toggleSelectedCornerstone());
       this.cornerstoneButton = cornerstone;
       return element('div', { className: `ma-manage-bar ${this.panel.editing ? '' : 'is-hidden'}` }, [
-        element('span', { className: 'ma-selection-status', text: '选择条目后执行批量操作' }),
+        element('span', { className: 'ma-selection-status', text: this.panel.notesFeedback || '选择条目后执行批量操作；文件夹改名为已有名称时会自动合并' }),
         cornerstone,
         button('＋ 文件夹', () => this.createFolder(opened.name)),
         button('小总结', () => this.runSelectedSummary('small')),
@@ -2335,26 +2466,31 @@ const __ma_module_19 = (() => {
       const query = this.panel.search.trim().toLocaleLowerCase();
       let entries = opened.managed.filter(entry => !entry.retired)
         .filter(entry => this.panel.typeFilter === '全部' || entry.type === this.panel.typeFilter)
-        .filter(entry => !query || `${entry.title}\n${entry.content}`.toLocaleLowerCase().includes(query));
+        .filter(entry => !query || `${entry.title}\n${entry.content}\n${entry.keywords.join(' ')}`.toLocaleLowerCase().includes(query));
       entries.sort((left, right) => orderOf(layout, left.uid) - orderOf(layout, right.uid) || Number(left.uid) - Number(right.uid));
       const pageSize = this.panel.controller.settings().pageSize || 12;
-      const pages = Math.max(1, Math.ceil(entries.length / pageSize));
-      const highlighted = entries.findIndex(entry => entry.uid === this.panel.highlightUid);
-      if (highlighted >= 0) this.panel.pageNumber = Math.floor(highlighted / pageSize) + 1;
-      this.panel.pageNumber = Math.min(this.panel.pageNumber, pages);
-      entries = entries.slice((this.panel.pageNumber - 1) * pageSize, this.panel.pageNumber * pageSize);
       const folders = [{ id: 'default', name: '默认分类' }, ...layout.folders];
+      const highlighted = entries.find(entry => entry.uid === this.panel.highlightUid);
+      if (highlighted) {
+        const folderId = layout.assignments[highlighted.uid] || 'default';
+        const peers = entries.filter(entry => (layout.assignments[entry.uid] || 'default') === folderId);
+        this.panel.folderPages[folderId] = Math.floor(peers.findIndex(entry => entry.uid === highlighted.uid) / pageSize) + 1;
+        layout.collapsed = layout.collapsed.filter(id => id !== folderId);
+      }
       for (let index = 0; index < folders.length; index += 1) {
         const folder = folders[index];
         const inFolder = entries.filter(entry => (layout.assignments[entry.uid] || 'default') === folder.id);
         if (!inFolder.length && !this.panel.editing) continue;
-        host.append(this.folderSection(opened.name, folder, folders, index, inFolder, layout));
+        const page = pageFolderEntries(inFolder, this.panel.folderPages[folder.id], pageSize);
+        this.panel.folderPages[folder.id] = page.page;
+        host.append(this.folderSection(host, opened, folder, folders, index, page, layout));
       }
-      host.append(this.pagination(pages));
+      if (!entries.length && !this.panel.editing) host.append(element('p', { className: 'ma-empty', text: '没有符合条件的条目' }));
       if (opened.external.length) host.append(element('p', { className: 'ma-help', text: `另有${opened.external.length}个外部原生条目；镜渊不会自动修改。` }));
     }
   
-    folderSection(worldbookName, folder, folders, index, entries, layout) {
+    folderSection(host, opened, folder, folders, index, page, layout) {
+      const worldbookName = opened.name;
       const section = element('section', { className: 'ma-folder' });
       const collapsed = layout.collapsed.includes(folder.id);
       const actions = [];
@@ -2362,15 +2498,17 @@ const __ma_module_19 = (() => {
         actions.push(button('↑', () => this.moveFolder(worldbookName, folder.id, -1), 'ma-mini'));
         actions.push(button('↓', () => this.moveFolder(worldbookName, folder.id, 1), 'ma-mini'));
         actions.push(button('改名', () => this.renameFolder(worldbookName, folder.id), 'ma-mini'));
-        actions.push(button('删除', () => this.removeFolder(worldbookName, folder.id), 'ma-mini ma-danger'));
+        actions.push(button('删文件夹', () => this.removeFolder(worldbookName, folder.id, folder.name), 'ma-mini ma-danger'));
       }
       section.append(element('div', { className: 'ma-folder-head' }, [
         button(collapsed ? '›' : '⌄', () => this.toggleFolder(worldbookName, folder.id), 'ma-mini ma-quiet'),
-        element('h2', { text: folder.name }), element('span', { text: `${entries.length} 条` }), ...actions,
+        element('h2', { text: folder.name }), element('span', { text: `${page.total} 条` }), ...actions,
       ]));
       if (!collapsed) {
-        entries.forEach((entry, entryIndex) => section.append(this.entryRow(worldbookName, entry, folders, layout, entryIndex, entries.length)));
-        if (!entries.length) section.append(element('p', { className: 'ma-empty', text: '此文件夹暂无条目' }));
+        page.entries.forEach((entry, entryIndex) => section.append(this.entryRow(worldbookName, entry, folders, layout, entryIndex, page.entries.length)));
+        if (!page.total) section.append(element('p', { className: 'ma-empty', text: '此文件夹暂无条目' }));
+        const pager = this.pagination(host, opened, folder.id, page.page, page.pages);
+        if (pager) section.append(pager);
       }
       return section;
     }
@@ -2384,16 +2522,22 @@ const __ma_module_19 = (() => {
         element('span', { className: 'ma-type-icon', text: WORLD_SCHEMA[entry.type].icon }),
         element('span', { className: 'ma-entry-copy' }, [
           element('strong', { text: entry.name }),
-          element('small', { text: `${entry.type} · ${entry.cornerstone ? '基石只读' : '可更新'}${entry.focus ? ' · 主焦点' : ''}` }),
+          element('small', { text: entryStatus(entry) }),
           badgeRow(entry.badges),
         ]),
       );
       if (this.panel.editing) summary.append(this.entryActions(worldbookName, entry, folders, layout, index, count));
-      const content = element('div', { className: 'ma-entry-content' }, [element('pre', { text: entry.content })]);
+      const content = element('div', { className: 'ma-entry-content' }, [
+        element('pre', { text: entry.content }),
+        this.recallSummary(entry),
+      ]);
       if (entry.related?.length) content.append(this.related(entry.related));
       if (this.panel.editing) {
-        if (entry.cornerstone) content.append(element('small', { text: '基石只读' }));
-        else content.append(button('编辑正文', () => this.editEntry(content, entry), 'ma-quiet'));
+        const actions = element('div', { className: 'ma-inline-actions' });
+        if (entry.cornerstone) actions.append(element('small', { text: '基石只读；召回字段仍可手动调整' }));
+        else actions.append(button('编辑正文', () => this.editEntry(content, entry), 'ma-quiet'));
+        actions.append(button('编辑召回', () => this.editRecall(content, entry), 'ma-quiet'));
+        content.append(actions);
       }
       details.append(summary, content);
       return details;
@@ -2431,11 +2575,20 @@ const __ma_module_19 = (() => {
       return row;
     }
   
-    pagination(pages) {
+    recallSummary(entry) {
+      return element('div', { className: 'ma-recall-summary' }, [
+        element('strong', { text: '召回设置' }),
+        element('span', { text: entry.constant ? '常驻' : '关键词触发' }),
+        element('span', { text: `关键词：${entry.keywords.length ? entry.keywords.join('、') : '无'}` }),
+        element('span', { text: entry.recursable ? '可被递归命中' : '不参与递归' }),
+        element('span', { text: entry.continuesRecursion ? '允许继续递归' : '命中后截止递归' }),
+      ]);
+    }
+  
+    pagination(host, opened, folderId, current, pages) {
       if (pages <= 1) return null;
-      const current = this.panel.pageNumber;
-      const previous = button('上一页', () => { this.panel.pageNumber -= 1; void this.panel.render(); }, 'ma-quiet');
-      const next = button('下一页', () => { this.panel.pageNumber += 1; void this.panel.render(); }, 'ma-quiet');
+      const previous = button('上一页', () => { this.panel.folderPages[folderId] = current - 1; void this.renderList(host, opened); }, 'ma-quiet');
+      const next = button('下一页', () => { this.panel.folderPages[folderId] = current + 1; void this.renderList(host, opened); }, 'ma-quiet');
       previous.disabled = current <= 1; next.disabled = current >= pages;
       return element('nav', { className: 'ma-pagination' }, [previous, element('span', { text: `${current} / ${pages}` }), next]);
     }
@@ -2448,25 +2601,60 @@ const __ma_module_19 = (() => {
       ]));
     }
   
-    layout(worldbookName) {
-      const current = this.panel.controller.settings().foldersByWorldbook?.[worldbookName];
-      return current && typeof current === 'object' ? {
-        folders: Array.isArray(current.folders) ? [...current.folders] : [],
-        assignments: { ...(current.assignments ?? {}) },
-        collapsed: Array.isArray(current.collapsed) ? [...current.collapsed] : [],
-        entryOrder: Array.isArray(current.entryOrder) ? [...current.entryOrder] : [],
-      } : { folders: [], assignments: {}, collapsed: [], entryOrder: [] };
+    editRecall(container, entry) {
+      const keywords = element('input', { className: 'ma-input', value: entry.keywords.join(', '), placeholder: '主要关键词，用逗号分隔' });
+      const constant = checkbox('常驻：无需关键词也会激活', entry.constant);
+      const recursable = checkbox('可被其他世界书条目递归命中', entry.recursable);
+      const continues = checkbox('命中后允许继续触发其他条目', entry.continuesRecursion);
+      container.replaceChildren(element('div', { className: 'ma-recall-editor' }, [
+        element('label', {}, [element('strong', { text: '主要关键词' }), keywords]),
+        constant.label, recursable.label, continues.label,
+        element('p', { className: 'ma-help', text: '关闭常驻后使用关键词触发；修改常驻为关闭会同时解除主焦点。' }),
+        element('div', { className: 'ma-inline-actions' }, [
+          button('保存召回', () => this.safe(() => this.panel.controller.updateRecall(entry.uid, {
+            keywords: keywords.value.split(/[,，\n]+/u),
+            constant: constant.input.checked,
+            recursable: recursable.input.checked,
+            continuesRecursion: continues.input.checked,
+          }))),
+          button('取消', () => this.panel.render(), 'ma-quiet'),
+        ]),
+      ]));
     }
   
-    saveLayout(worldbookName, layout) {
+    layout(worldbookName) {
+      const current = this.panel.controller.settings().foldersByWorldbook?.[worldbookName];
+      return normalizeFolderLayout(current);
+    }
+  
+    saveLayout(worldbookName, layout, feedback = '') {
       const settings = this.panel.controller.settings();
-      this.panel.controller.saveSettings({ foldersByWorldbook: { ...settings.foldersByWorldbook, [worldbookName]: layout } });
+      this.panel.notesFeedback = feedback;
+      this.panel.controller.saveSettings({ foldersByWorldbook: { ...settings.foldersByWorldbook, [worldbookName]: normalizeFolderLayout(layout) } });
+      if (feedback) inform(feedback);
       void this.panel.render();
     }
   
-    createFolder(name) { const value = window.prompt('新建文件夹名称')?.trim(); if (!value) return; const layout = this.layout(name); layout.folders.push({ id: `folder-${Date.now().toString(36)}`, name: value }); this.saveLayout(name, layout); }
-    renameFolder(name, id) { const layout = this.layout(name); const folder = layout.folders.find(item => item.id === id); const value = window.prompt('文件夹新名称', folder?.name)?.trim(); if (folder && value) { folder.name = value; this.saveLayout(name, layout); } }
-    removeFolder(name, id) { const layout = this.layout(name); layout.folders = layout.folders.filter(item => item.id !== id); layout.collapsed = layout.collapsed.filter(value => value !== id); for (const uid of Object.keys(layout.assignments)) if (layout.assignments[uid] === id) delete layout.assignments[uid]; this.saveLayout(name, layout); }
+    createFolder(name) {
+      const value = window.prompt('新建文件夹名称')?.trim();
+      if (!value) return;
+      const result = createOrReuseFolder(this.layout(name), value, `folder-${Date.now().toString(36)}`);
+      this.saveLayout(name, result.layout, result.reused ? `同名文件夹已存在，已使用“${value}”` : `已新建文件夹“${value}”`);
+    }
+  
+    renameFolder(name, id) {
+      const layout = this.layout(name);
+      const folder = layout.folders.find(item => item.id === id);
+      const value = window.prompt('文件夹新名称；与已有名称相同时自动合并', folder?.name)?.trim();
+      if (!folder || !value) return;
+      const result = renameOrMergeFolder(layout, id, value);
+      this.saveLayout(name, result.layout, result.merged ? `同名文件夹已合并到“${value}”` : `文件夹已改名为“${value}”`);
+    }
+  
+    removeFolder(name, id, folderName) {
+      if (!window.confirm(`删除文件夹“${folderName}”？其中条目将移回默认分类。`)) return;
+      this.saveLayout(name, deleteFolder(this.layout(name), id), `已删除文件夹“${folderName}”，其中条目已移回默认分类`);
+    }
     assignFolder(name, uid, id) { const layout = this.layout(name); if (id === 'default') delete layout.assignments[uid]; else layout.assignments[uid] = id; this.saveLayout(name, layout); }
     toggleFolder(name, id) { const layout = this.layout(name); layout.collapsed = layout.collapsed.includes(id) ? layout.collapsed.filter(value => value !== id) : [...layout.collapsed, id]; this.saveLayout(name, layout); }
     moveFolder(name, id, delta) { const layout = this.layout(name); move(layout.folders, layout.folders.findIndex(item => item.id === id), delta); this.saveLayout(name, layout); }
@@ -2493,7 +2681,7 @@ const __ma_module_19 = (() => {
       this.cornerstoneButton.textContent = unlock ? '解除基石' : '设为基石';
       this.cornerstoneButton.disabled = selected.length === 0;
       const status = this.cornerstoneButton.parentElement?.querySelector('.ma-selection-status');
-      if (status) status.textContent = selected.length ? `已选择 ${selected.length} 条` : '选择条目后执行批量操作';
+      if (status) status.textContent = selected.length ? `已选择 ${selected.length} 条` : this.panel.notesFeedback || '选择条目后执行批量操作；文件夹改名为已有名称时会自动合并';
     }
   
     async toggleSelectedCornerstone() { const selected = this.selectedEntries(); const locked = !selected.every(entry => entry.cornerstone); await this.safe(() => this.panel.controller.setCornerstone(selected.map(entry => entry.uid), locked)); this.panel.selected.clear(); }
@@ -2504,13 +2692,21 @@ const __ma_module_19 = (() => {
   }
   
   function badgeRow(badges) { if (!badges?.length) return null; return element('span', { className: 'ma-badges' }, badges.map(value => element('i', { text: value }))); }
+  function entryStatus(entry) {
+    return [entry.type, entry.cornerstone ? '基石只读' : '可更新', entry.constant ? '常驻' : '关键词触发', entry.recursable ? '可递归' : '不参与递归', entry.focus ? '主焦点' : ''].filter(Boolean).join(' · ');
+  }
+  function checkbox(text, checked) {
+    const input = element('input', { type: 'checkbox' });
+    input.checked = checked === true;
+    return { input, label: element('label', { className: 'ma-check-field' }, [input, element('span', { text })]) };
+  }
   function orderOf(layout, uid) { const index = layout.entryOrder.indexOf(uid); return index < 0 ? Number.MAX_SAFE_INTEGER : index; }
   function move(array, index, delta) { const target = index + delta; if (index < 0 || target < 0 || target >= array.length) return; [array[index], array[target]] = [array[target], array[index]]; }
   function stop(event, task) { event.preventDefault(); event.stopPropagation(); task(); }
   return Object.freeze({ NotesPage });
 })();
 
-const __ma_module_20 = (() => {
+const __ma_module_21 = (() => {
   const { button, element, notice } = __ma_module_17;
   class RunPage {
     constructor(panel) { this.panel = panel; }
@@ -2579,12 +2775,12 @@ const __ma_module_20 = (() => {
   return Object.freeze({ RunPage });
 })();
 
-const __ma_module_21 = (() => {
+const __ma_module_22 = (() => {
   const { describeError } = __ma_module_0;
   const { button, element } = __ma_module_17;
   const { MaintenancePage } = __ma_module_18;
-  const { NotesPage } = __ma_module_19;
-  const { RunPage } = __ma_module_20;
+  const { NotesPage } = __ma_module_20;
+  const { RunPage } = __ma_module_21;
   const ROOT_ID = 'mirror-abyss-clean-root';
   
   class MirrorAbyssPanel {
@@ -2598,8 +2794,9 @@ const __ma_module_21 = (() => {
       this.typeFilter = '全部';
       this.selected = new Set();
       this.entryData = null;
-      this.pageNumber = 1;
+      this.folderPages = {};
       this.highlightUid = '';
+      this.notesFeedback = '';
       this.importText = '';
       this.importBusy = '';
       this.importFeedback = '粘贴文本或选择TXT，然后由AI整理预览。';
@@ -2719,7 +2916,7 @@ const __ma_module_21 = (() => {
   return Object.freeze({ MirrorAbyssPanel });
 })();
 
-const __ma_module_22 = (() => {
+const __ma_module_23 = (() => {
   const { HostAdapter, SettingsStore } = __ma_module_1;
   const { WorldbookRepository } = __ma_module_4;
   const { MirrorAbyssController } = __ma_module_6;
@@ -2729,7 +2926,7 @@ const __ma_module_22 = (() => {
   const { MigrationService } = __ma_module_14;
   const { ModelGateway } = __ma_module_15;
   const { ChatIndicator } = __ma_module_16;
-  const { MirrorAbyssPanel } = __ma_module_21;
+  const { MirrorAbyssPanel } = __ma_module_22;
   function createApplication() {
     const host = new HostAdapter();
     const settingsStore = new SettingsStore();
@@ -2759,7 +2956,7 @@ const __ma_module_22 = (() => {
   return Object.freeze({ createApplication });
 })();
 
-const { createApplication } = __ma_module_22;
+const { createApplication } = __ma_module_23;
 
 export { createApplication };
 
