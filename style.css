@@ -68,9 +68,11 @@ html.ma-panel-open { overflow: hidden; }
 .ma-folder-head h2 { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .ma-folder-count { white-space: nowrap; color: var(--ma-muted); }
 .ma-folder-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
-.ma-entry-row { min-height: 72px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-left: 16px; padding: 9px 4px 9px 10px; border-bottom: 1px solid var(--ma-line); }
+.ma-entry-item { margin-left: 16px; border-bottom: 1px solid var(--ma-line); }
+.ma-entry-row { min-height: 72px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 4px 9px 10px; }
 .ma-entry-row.is-editing { grid-template-columns: auto auto minmax(0, 1fr) auto; }
 .ma-entry-row.is-activated { background: #f2f8fc; box-shadow: inset 3px 0 var(--ma-blue); }
+.ma-entry-item.is-expanded { background: #fbfdff; }
 .ma-entry-row > input[type="checkbox"] { width: 22px; height: 22px; }
 .ma-entry-copy { display: grid; min-width: 0; }
 .ma-entry-copy strong { overflow-wrap: anywhere; font-size: 17px; }
@@ -79,10 +81,8 @@ html.ma-panel-open { overflow: hidden; }
 .ma-entry-open { min-width: 58px; padding-inline: 8px; color: var(--ma-blue); }
 .ma-type-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--ma-soft); color: var(--ma-blue); font-weight: 800; }
 .ma-folder-select { width: 100%; min-height: 44px; margin: 6px 0 0; padding: 7px 10px; }
-.ma-detail-head { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--ma-line); }
-.ma-detail-title { min-width: 0; }
-.ma-detail-title h1 { overflow-wrap: anywhere; }
-.ma-detail-body { padding: 18px 2px 4px; }
+.ma-detail-body { padding: 4px 10px 14px 52px; }
+.ma-detail-meta { display: block; margin-bottom: 10px; }
 .ma-detail-copy pre, .ma-import-preview pre { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ma-ink); font: inherit; }
 .ma-detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--ma-line); }
 .ma-detail-note, .ma-detail-field { grid-column: 1 / -1; }
@@ -136,9 +136,10 @@ html.ma-panel-open { overflow: hidden; }
   .ma-filters { display: flex; overflow-x: auto; }
   .ma-filters .ma-button { flex: none; padding-inline: 10px; }
   .ma-folder-actions { grid-column: 1 / -1; }
-  .ma-entry-row { margin-left: 8px; padding-left: 8px; }
+  .ma-entry-item { margin-left: 8px; }
+  .ma-entry-row { padding-left: 8px; }
   .ma-entry-row.is-editing { grid-template-columns: auto auto minmax(0, 1fr) auto; }
-  .ma-detail-head { grid-template-columns: auto auto minmax(0, 1fr) auto; }
+  .ma-detail-body { padding-left: 42px; }
   .ma-detail-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ma-detail-field { grid-template-columns: 1fr; }
   .ma-order-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }

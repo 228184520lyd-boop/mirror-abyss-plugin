@@ -2764,9 +2764,13 @@ const __ma_module_20 = (() => {
         option.selected = profile.id === settings.modelProfileId;
         select.append(option);
       }
-      select.addEventListener('change', () => this.panel.controller.saveSettings({ modelProfileId: select.value }));
       const summary = settings.modelProfileId ? this.panel.host.profileSummary(settings.modelProfileId) : null;
       const feedback = element('div', { className: 'ma-inline-feedback', text: summary ? `当前：${summary.name}${summary.api ? ` · ${summary.api}` : ''}` : '当前：宿主默认连接' });
+      select.addEventListener('change', () => {
+        this.panel.controller.saveSettings({ modelProfileId: select.value });
+        const selected = select.value ? this.panel.host.profileSummary(select.value) : null;
+        feedback.textContent = selected ? `当前：${selected.name}${selected.api ? ` · ${selected.api}` : ''}` : '当前：宿主默认连接';
+      });
       return section('模型连接', [
         element('p', { className: 'ma-help', text: '选择连接配置不会切换SillyTavern的全局配置。' }),
         select,
@@ -2998,18 +3002,13 @@ const __ma_module_21 = (() => {
       this.activatedUids = new Set();
     }
     async render(main) {
-      // Every list/detail render starts from the host worldbook; UI state only
-      // controls navigation, filtering, selection and folder presentation.
+      // Every data refresh starts from the host worldbook. Expansion, filtering,
+      // selection and folders remain presentation state and never copy facts.
       const opened = await this.panel.controller.listEntries();
       this.panel.entryData = opened;
       this.activatedUids = await this.actualActivatedUids();
       const managed = opened.managed;
-      const detail = managed.find(entry => String(entry.uid) === this.panel.detailUid);
-      if (detail) {
-        this.renderDetail(main, opened, detail);
-        return;
-      }
-      this.panel.detailUid = '';
+      if (this.panel.expandedUid && !managed.some(entry => String(entry.uid) === this.panel.expandedUid)) this.panel.expandedUid = '';
       const top = element('section', { className: 'ma-notes-head' }, [
         element('div', {}, [
           element('h1', { text: '世界设定集' }),
@@ -3032,48 +3031,21 @@ const __ma_module_21 = (() => {
         void this.renderList(listHost, opened);
       });
       const filters = element('div', { className: 'ma-filters' });
+      const filterButtons = new Map();
       for (const type of ['全部', ...WORLD_TYPES]) {
         const count = type === '全部' ? managed.length : managed.filter(entry => entry.type === type).length;
-        filters.append(button(`${type} ${count}`, () => {
+        const control = button(`${type} ${count}`, () => {
           this.panel.typeFilter = type;
           this.panel.folderPages = {};
+          for (const [value, filter] of filterButtons) filter.classList.toggle('is-active', value === type);
           void this.renderList(listHost, opened);
-        }, type === this.panel.typeFilter ? 'is-active' : 'ma-chip'));
+        }, `ma-chip${type === this.panel.typeFilter ? ' is-active' : ''}`);
+        filterButtons.set(type, control);
+        filters.append(control);
       }
       main.append(top, search, filters, this.manageBar(opened), listHost);
       await this.renderList(listHost, opened);
       this.updateSelection();
-    }
-    renderDetail(main, opened, entry) {
-      const layout = this.layout(opened.name);
-      const folders = [{ id: 'default', name: '默认分类' }, ...layout.folders];
-      const activeNow = this.activatedUids.has(String(entry.uid));
-      const body = element('section', { className: 'ma-detail-body' }, [
-        element('div', { className: 'ma-detail-copy' }, [element('pre', { text: entry.content })]),
-        this.recallSummary(entry),
-      ]);
-      if (entry.related?.length) body.append(this.related(entry.related));
-      if (this.panel.editing) body.append(this.detailActions(opened.name, entry, folders, layout, body));
-  
-      main.append(
-        element('header', { className: 'ma-detail-head' }, [
-          button('‹ 返回', () => {
-            this.panel.detailUid = '';
-            this.panel.editing = false;
-            void this.panel.render();
-          }, 'ma-quiet'),
-          element('span', { className: 'ma-type-icon', text: WORLD_SCHEMA[entry.type].icon, title: entry.type, ariaLabel: entry.type }),
-          element('div', { className: 'ma-detail-title' }, [
-            element('h1', { text: entry.name }),
-            element('small', { text: `${detailStatus(entry)}${activeNow ? ' · 本轮实际激活' : ''} · UID ${entry.uid}` }),
-          ]),
-          button(this.panel.editing ? '完成' : '编辑', () => {
-            this.panel.editing = !this.panel.editing;
-            void this.panel.render();
-          }, this.panel.editing ? 'is-active' : 'ma-quiet'),
-        ]),
-        body,
-      );
     }
   
     detailActions(worldbookName, entry, folders, layout, body) {
@@ -3081,7 +3053,7 @@ const __ma_module_21 = (() => {
       if (entry.cornerstone) {
         actions.append(
           element('p', { className: 'ma-detail-note', text: '基石条目只读；解除基石后才能修改或删除条目。' }),
-          taskButton('解除基石', () => this.runAndRefresh(
+          taskButton('解除基石', () => this.runTask(
             () => this.panel.controller.setCornerstone([entry.uid], false),
             '已解除基石锁',
           ), 'is-active', '解除中…'),
@@ -3090,14 +3062,14 @@ const __ma_module_21 = (() => {
         actions.append(
           button('编辑正文', () => this.editEntry(body, entry)),
           button('编辑召回', () => this.editRecall(body, entry)),
-          taskButton('设为基石', () => this.runAndRefresh(
+          taskButton('设为基石', () => this.runTask(
             () => this.panel.controller.setCornerstone([entry.uid], true),
             '已设为基石只读',
           ), '', '设置中…'),
         );
         if (entry.type === '人物') {
           const focusLabel = entry.focus ? '解除焦点' : '设为主焦点';
-          actions.append(taskButton(focusLabel, () => this.runAndRefresh(
+          actions.append(taskButton(focusLabel, () => this.runTask(
             () => this.panel.controller.setFocus(entry.uid, !entry.focus),
             entry.focus ? '已解除主焦点' : '已设为主焦点',
           ), entry.focus ? 'is-active' : '', '处理中…'));
@@ -3134,6 +3106,7 @@ const __ma_module_21 = (() => {
         .filter(entry => this.panel.typeFilter === '全部' || entry.type === this.panel.typeFilter)
         .filter(entry => !query || `${entry.title}\n${entry.content}\n${entry.keywords.join(' ')}`.toLocaleLowerCase().includes(query))
         .sort((left, right) => orderOf(layout, left.uid) - orderOf(layout, right.uid) || Number(left.uid) - Number(right.uid));
+      if (this.panel.expandedUid && !entries.some(entry => String(entry.uid) === this.panel.expandedUid)) this.panel.expandedUid = '';
       const pageSize = this.panel.controller.settings().pageSize || 12;
       const folders = [{ id: 'default', name: '默认分类' }, ...layout.folders];
   
@@ -3141,6 +3114,8 @@ const __ma_module_21 = (() => {
         const folder = folders[index];
         const inFolder = entries.filter(entry => (layout.assignments[entry.uid] || 'default') === folder.id);
         if (!inFolder.length && !this.panel.editing) continue;
+        const expandedIndex = inFolder.findIndex(entry => String(entry.uid) === this.panel.expandedUid);
+        if (expandedIndex >= 0) this.panel.folderPages[folder.id] = Math.floor(expandedIndex / pageSize) + 1;
         const page = pageFolderEntries(inFolder, this.panel.folderPages[folder.id], pageSize);
         this.panel.folderPages[folder.id] = page.page;
         host.append(this.folderSection(host, opened, folder, page, layout));
@@ -3152,7 +3127,8 @@ const __ma_module_21 = (() => {
     folderSection(host, opened, folder, page, layout) {
       const worldbookName = opened.name;
       const section = element('section', { className: 'ma-folder' });
-      const collapsed = layout.collapsed.includes(folder.id);
+      const containsExpanded = page.entries.some(entry => String(entry.uid) === this.panel.expandedUid);
+      const collapsed = layout.collapsed.includes(folder.id) && !containsExpanded;
       const actions = [];
       if (this.panel.editing && folder.id !== 'default') {
         actions.push(button('上移', () => this.moveFolder(worldbookName, folder.id, -1), 'ma-mini'));
@@ -3167,18 +3143,24 @@ const __ma_module_21 = (() => {
         actions.length ? element('span', { className: 'ma-folder-actions' }, actions) : null,
       ]));
       if (!collapsed) {
-        page.entries.forEach(entry => section.append(this.entryRow(entry)));
+        page.entries.forEach(entry => section.append(this.entryRow(host, opened, entry, layout)));
         if (!page.total) section.append(element('p', { className: 'ma-empty', text: '此文件夹暂无条目' }));
-        const pager = this.pagination(host, opened, folder.id, page.page, page.pages);
+        const pager = this.pagination(host, opened, folder.id, page.page, page.pages, containsExpanded);
         if (pager) section.append(pager);
       }
       return section;
     }
   
-    entryRow(entry) {
+    entryRow(host, opened, entry, layout) {
       const activeNow = this.activatedUids.has(String(entry.uid));
-      const row = element('article', { className: `ma-entry-row${this.panel.editing ? ' is-editing' : ''}${activeNow ? ' is-activated' : ''}` });
+      const expanded = String(entry.uid) === this.panel.expandedUid;
+      const item = element('article', { className: `ma-entry-item${expanded ? ' is-expanded' : ''}` });
+      item.setAttribute('data-entry-uid', String(entry.uid));
+      const row = element('div', { className: `ma-entry-row${this.panel.editing ? ' is-editing' : ''}${activeNow ? ' is-activated' : ''}` });
       if (this.panel.editing) row.append(this.selection(entry));
+      const toggle = button(expanded ? '收起' : '展开', () => this.toggleEntry(host, opened, entry.uid), 'ma-entry-open ma-quiet');
+      toggle.setAttribute('aria-expanded', String(expanded));
+      toggle.setAttribute('aria-controls', `ma-entry-detail-${entry.uid}`);
       row.append(
         element('span', { className: 'ma-type-icon', text: WORLD_SCHEMA[entry.type].icon, title: entry.type, ariaLabel: entry.type }),
         element('span', { className: 'ma-entry-copy' }, [
@@ -3186,13 +3168,32 @@ const __ma_module_21 = (() => {
           element('small', { className: 'ma-entry-status', text: rowStatus(entry, activeNow) }),
           element('small', { className: 'ma-keywords', text: `关键词：${entry.keywords.length ? entry.keywords.join('、') : '无'}` }),
         ]),
-        button('查看', () => {
-          this.panel.detailUid = String(entry.uid);
-          this.panel.editing = false;
-          void this.panel.render();
-        }, 'ma-entry-open ma-quiet'),
+        toggle,
       );
-      return row;
+      item.append(row);
+      if (expanded) item.append(this.expandedEntry(opened, entry, layout, activeNow));
+      return item;
+    }
+  
+    expandedEntry(opened, entry, layout, activeNow) {
+      const body = element('section', { className: 'ma-detail-body ma-entry-detail' }, [
+        element('small', { className: 'ma-detail-meta', text: `${detailStatus(entry)}${activeNow ? ' · 本轮实际激活' : ''} · UID ${entry.uid}` }),
+        element('div', { className: 'ma-detail-copy' }, [element('pre', { text: entry.content })]),
+        this.recallSummary(entry),
+      ]);
+      body.id = `ma-entry-detail-${entry.uid}`;
+      if (entry.related?.length) body.append(this.related(entry.related));
+      if (this.panel.editing) {
+        const folders = [{ id: 'default', name: '默认分类' }, ...layout.folders];
+        body.append(this.detailActions(opened.name, entry, folders, layout, body));
+      }
+      return body;
+    }
+  
+    toggleEntry(host, opened, uid) {
+      const value = String(uid);
+      this.panel.expandedUid = this.panel.expandedUid === value ? '' : value;
+      void this.renderList(host, opened);
     }
   
     selection(entry) {
@@ -3246,13 +3247,15 @@ const __ma_module_21 = (() => {
       ]);
     }
   
-    pagination(host, opened, folderId, current, pages) {
+    pagination(host, opened, folderId, current, pages, containsExpanded = false) {
       if (pages <= 1) return null;
       const previous = button('上一页', () => {
+        if (containsExpanded) this.panel.expandedUid = '';
         this.panel.folderPages[folderId] = current - 1;
         void this.renderList(host, opened);
       }, 'ma-quiet');
       const next = button('下一页', () => {
+        if (containsExpanded) this.panel.expandedUid = '';
         this.panel.folderPages[folderId] = current + 1;
         void this.renderList(host, opened);
       }, 'ma-quiet');
@@ -3266,7 +3269,7 @@ const __ma_module_21 = (() => {
       container.replaceChildren(
         textarea,
         element('div', { className: 'ma-inline-actions' }, [
-          taskButton('保存正文', () => this.runAndRefresh(
+          taskButton('保存正文', () => this.runTask(
             () => this.panel.controller.updateEntry(entry.uid, textarea.value),
             '正文已保存并通过世界书回读',
           ), '', '保存中…'),
@@ -3287,7 +3290,7 @@ const __ma_module_21 = (() => {
         continues.label,
         element('p', { className: 'ma-help', text: '关键词负责确定性召回；向量仅标记远端历史场景资料。' }),
         element('div', { className: 'ma-inline-actions' }, [
-          taskButton('保存召回', () => this.runAndRefresh(
+          taskButton('保存召回', () => this.runTask(
             () => this.panel.controller.updateRecall(entry.uid, {
               keywords: keywords.value.split(/[,，\n]+/u),
               constant: constant.input.checked,
@@ -3347,7 +3350,11 @@ const __ma_module_21 = (() => {
   
     toggleFolder(name, id) {
       const layout = this.layout(name);
-      this.saveLayout(name, setFolderCollapsed(layout, id, !layout.collapsed.includes(id)));
+      const expandedFolder = layout.assignments[this.panel.expandedUid] || 'default';
+      const forcedOpen = this.panel.expandedUid && expandedFolder === id;
+      const visiblyCollapsed = layout.collapsed.includes(id) && !forcedOpen;
+      if (forcedOpen) this.panel.expandedUid = '';
+      this.saveLayout(name, setFolderCollapsed(layout, id, !visiblyCollapsed));
     }
   
     moveFolder(name, id, delta) {
@@ -3375,14 +3382,12 @@ const __ma_module_21 = (() => {
       await this.panel.controller.setCornerstone(selected.map(entry => entry.uid), locked);
       this.panel.selected.clear();
       inform(locked ? '所选条目已设为基石只读' : '所选条目已解除基石锁');
-      await this.panel.render();
     }
   
     async resetRecall() {
       if (!window.confirm('把全部可写条目恢复为类型默认召回？会重置常驻与递归，保留现有关键词和向量生命周期状态。')) return;
       await this.panel.controller.replanRecall();
       inform('可写条目的原生召回字段已重排');
-      await this.panel.render();
     }
   
     async runSelectedSummary(kind) {
@@ -3392,7 +3397,6 @@ const __ma_module_21 = (() => {
       await this.panel.controller.summarize(kind, selected.map(entry => entry.uid), requirement);
       this.panel.selected.clear();
       inform(kind === 'merge' ? '手动合并完成' : `${kind === 'large' ? '大' : '小'}总结完成`);
-      await this.panel.render();
     }
   
     async deleteSelected() {
@@ -3401,7 +3405,6 @@ const __ma_module_21 = (() => {
         await this.panel.controller.deleteEntries(selected.map(entry => entry.uid));
         this.panel.selected.clear();
         inform(`已删除${selected.length}个条目`);
-        await this.panel.render();
       }
     }
   
@@ -3409,9 +3412,8 @@ const __ma_module_21 = (() => {
       if (!window.confirm(`确认删除“${entry.title}”？`)) return;
       await this.panel.controller.deleteEntries([entry.uid]);
       this.panel.selected.delete(entry.uid);
-      this.panel.detailUid = '';
+      this.panel.expandedUid = '';
       inform(`已删除“${entry.title}”`);
-      await this.panel.render();
     }
   
     selectedEntries() {
@@ -3420,10 +3422,9 @@ const __ma_module_21 = (() => {
       return selected;
     }
   
-    async runAndRefresh(task, success) {
+    async runTask(task, success) {
       const result = await task();
       inform(success);
-      await this.panel.render();
       return result;
     }
   }
@@ -3456,16 +3457,10 @@ const __ma_module_22 = (() => {
   
     async render(main) {
       const { controller, host } = this.panel;
-      const state = host.state();
-      const queue = controller.queueStatus();
-      const settings = controller.settings();
       const activatedUids = typeof controller.activatedUids === 'function' ? await controller.activatedUids() : [];
-      const pending = queue.pending.length;
-      const queueText = queue.active ? `正在执行 · ${queue.active.label}${pending ? ` · 等待${pending}项` : ''}` : pending ? `等待${pending}项` : '队列空闲';
-      const queueClass = pending >= settings.queueCompactThreshold ? ' is-warning' : '';
       main.append(
         element('section', { className: 'ma-scene-strip' }, [
-          element('span', { text: state.currentScene ? `当前场景 · ${state.currentScene}` : '当前场景 · 未识别' }),
+          element('span', { text: host.state().currentScene ? `当前场景 · ${host.state().currentScene}` : '当前场景 · 未识别' }),
           element('span', { text: host.worldbookName() ? `世界书 · ${host.worldbookName()}` : '世界书 · 未绑定' }),
         ]),
         section('当前正文', element('div', { className: 'ma-action-grid' }, [
@@ -3479,15 +3474,34 @@ const __ma_module_22 = (() => {
           action('立即大总结', () => controller.summarize('large')),
           action('重试上次失败', () => controller.retryLast()),
         ])),
-        section('任务与状态', [
-          element('div', { className: `ma-queue${queueClass}`, text: queueText }),
-          element('div', { className: `ma-status is-${state.status?.phase || 'idle'}`, text: state.status?.detail || '等待处理' }),
-          state.lastWrite ? element('p', { className: 'ma-write-receipt', text: `已确认落盘 · ${state.lastWrite.created}新增 · ${state.lastWrite.updated}更新 · ${state.lastWrite.touchedUids?.length ?? 0}个UID` }) : null,
-          renderActivated(this.panel, activatedUids),
-          renderStages(state),
-        ]),
-        renderFailures(controller, state.summaryFailures ?? []),
+        this.statusSection(activatedUids),
+        renderFailures(controller, host.state().summaryFailures ?? []),
       );
+    }
+  
+    refreshStatus(main) {
+      const current = main?.querySelector?.('.ma-runtime-status');
+      if (!current) return;
+      const activated = typeof this.panel.controller.activatedUids === 'function' ? this.panel.controller.activatedUids() : [];
+      current.replaceWith(this.statusSection(activated));
+    }
+  
+    statusSection(activatedUids) {
+      const { controller, host } = this.panel;
+      const state = host.state();
+      const queue = controller.queueStatus();
+      const pending = queue.pending.length;
+      const queueText = queue.active ? `正在执行 · ${queue.active.label}${pending ? ` · 等待${pending}项` : ''}` : pending ? `等待${pending}项` : '队列空闲';
+      const queueClass = pending >= controller.settings().queueCompactThreshold ? ' is-warning' : '';
+      const block = section('任务与状态', [
+        element('div', { className: `ma-queue${queueClass}`, text: queueText }),
+        element('div', { className: `ma-status is-${state.status?.phase || 'idle'}`, text: state.status?.detail || '等待处理' }),
+        state.lastWrite ? element('p', { className: 'ma-write-receipt', text: `已确认落盘 · ${state.lastWrite.created}新增 · ${state.lastWrite.updated}更新 · ${state.lastWrite.touchedUids?.length ?? 0}个UID` }) : null,
+        renderActivated(this.panel, activatedUids),
+        renderStages(state),
+      ]);
+      block.classList.add('ma-runtime-status');
+      return block;
     }
   }
   
@@ -3548,7 +3562,8 @@ const __ma_module_23 = (() => {
       this.selected = new Set();
       this.entryData = null;
       this.folderPages = {};
-      this.detailUid = '';
+      this.expandedUid = '';
+      this.focusExpandedUid = '';
       this.notesFeedback = '';
       this.importText = '';
       this.importRevision = 0;
@@ -3557,13 +3572,31 @@ const __ma_module_23 = (() => {
       this.maintenanceFeedback = '';
       this.chatKey = null;
       this.suppressImportRefresh = false;
+      this.renderRevision = 0;
+      this.renderTimer = 0;
+      this.renderPromise = null;
+      this.renderResolve = null;
+      this.renderResetScroll = false;
+      this.renderedPage = '';
+      this.mounted = false;
       this.runPage = new RunPage(this);
       this.notesPage = new NotesPage(this);
       this.maintenancePage = new MaintenancePage(this);
       this.boundRefresh = event => {
         this.syncChatContext();
+        if (!this.opened) return;
+        // Queue and stage events are frequent. Only the run-page status block needs
+        // them; rebuilding a data page would discard button feedback and scroll.
+        if (event?.type === 'queue' || event?.type === 'status') {
+          if (this.page === 'run') this.runPage.refreshStatus(this.main);
+          return;
+        }
+        // The control that changed a setting already owns its visible value.
+        // Structural setting actions request one explicit render at their source.
+        if (event?.type === 'settings') return;
         const skipImportRefresh = event?.type === 'import-preview' && (this.suppressImportRefresh || this.importBusy === 'preview');
-        if (!skipImportRefresh) void this.refresh();
+        if (skipImportRefresh || (this.page === 'maintenance' && this.importBusy && event?.type === 'refresh')) return;
+        void this.refresh();
       };
     }
   
@@ -3580,25 +3613,50 @@ const __ma_module_23 = (() => {
       this.bindLauncherDrag();
       this.panel = element('section', { className: 'ma-panel', ariaLabel: '镜渊控制面板' });
       this.panel.hidden = true;
+      this.tabs = new Map();
+      const header = element('header', { className: 'ma-header' }, [
+        element('div', { className: 'ma-brand' }, [element('span', { className: 'ma-sigil', text: '◇' }), element('strong', { text: '镜渊' })]),
+        button('关闭', () => this.close(), 'ma-quiet'),
+      ]);
+      const nav = element('nav', { className: 'ma-tabs' });
+      for (const [key, label] of [['run', '运行'], ['notes', '手记'], ['maintenance', '维护']]) {
+        const tab = button(label, () => this.switchPage(key));
+        tab.setAttribute('role', 'tab');
+        this.tabs.set(key, tab);
+        nav.append(tab);
+      }
+      this.main = element('main', { className: 'ma-main' });
+      this.panel.append(header, nav, this.main);
       this.root.append(this.launcher, this.panel);
       document.body.append(this.root);
+      this.mounted = true;
       this.syncChatContext();
       for (const type of ['refresh', 'status', 'settings', 'import-preview', 'queue']) this.controller.addEventListener(type, this.boundRefresh);
     }
   
     unmount() {
       for (const type of ['refresh', 'status', 'settings', 'import-preview', 'queue']) this.controller.removeEventListener(type, this.boundRefresh);
+      this.mounted = false;
+      this.renderRevision += 1;
+      if (this.renderTimer) {
+        clearTimeout(this.renderTimer);
+        this.renderTimer = 0;
+        this.renderResolve?.();
+        this.renderPromise = null;
+        this.renderResolve = null;
+      }
       document.documentElement.classList.remove('ma-panel-open');
       this.root?.remove();
     }
   
     open(page = this.page) {
       this.syncChatContext();
+      const resetScroll = !this.opened || page !== this.page;
       this.page = page;
       this.opened = true;
       this.panel.hidden = false;
       document.documentElement.classList.add('ma-panel-open');
-      void this.render();
+      void this.render({ resetScroll });
     }
   
     close() {
@@ -3607,39 +3665,87 @@ const __ma_module_23 = (() => {
       document.documentElement.classList.remove('ma-panel-open');
     }
   
-    async refresh() { if (this.opened) await this.render(); }
+    refresh() { return this.opened ? this.render() : Promise.resolve(); }
   
-    async render() {
-      if (!this.panel) return;
-      this.panel.replaceChildren();
-      const header = element('header', { className: 'ma-header' }, [
-        element('div', { className: 'ma-brand' }, [element('span', { className: 'ma-sigil', text: '◇' }), element('strong', { text: '镜渊' })]),
-        button('关闭', () => this.close(), 'ma-quiet'),
-      ]);
-      const nav = element('nav', { className: 'ma-tabs' });
-      for (const [key, label] of [['run', '运行'], ['notes', '手记'], ['maintenance', '维护']]) {
-        const tab = button(label, () => { this.page = key; void this.render(); }, key === this.page ? 'is-active' : '');
-        tab.setAttribute('role', 'tab');
-        nav.append(tab);
+    /** Coalesces one event burst and serializes authoritative page reads. */
+    render({ resetScroll = false } = {}) {
+      if (!this.panel || !this.mounted) return Promise.resolve();
+      this.renderRevision += 1;
+      this.renderResetScroll ||= resetScroll;
+      if (!this.renderPromise) {
+        this.renderPromise = new Promise(resolve => { this.renderResolve = resolve; });
+        this.renderTimer = setTimeout(() => {
+          this.renderTimer = 0;
+          void this.flushRender();
+        }, 0);
       }
-      const main = element('main', { className: 'ma-main' });
-      this.panel.append(header, nav, main);
+      return this.renderPromise;
+    }
+  
+    async flushRender() {
+      const resolve = this.renderResolve;
       try {
-        if (this.page === 'run') await this.renderRun(main);
-        else if (this.page === 'notes') await this.renderNotes(main);
-        else await this.renderMaintenance(main);
-      } catch (error) { main.append(element('div', { className: 'ma-error', text: describeError(error) })); }
+        while (this.mounted) {
+          const revision = this.renderRevision;
+          const resetScroll = this.renderResetScroll;
+          this.renderResetScroll = false;
+          await this.renderPage(revision, resetScroll);
+          if (revision === this.renderRevision) break;
+        }
+      } finally {
+        if (this.renderResolve === resolve) {
+          this.renderPromise = null;
+          this.renderResolve = null;
+          resolve?.();
+        }
+      }
+    }
+  
+    async renderPage(revision, resetScroll) {
+      const page = this.page;
+      const previous = this.main;
+      const preserveScroll = !resetScroll && this.renderedPage === page;
+      const next = element('main', { className: 'ma-main' });
+      try {
+        if (page === 'run') await this.renderRun(next);
+        else if (page === 'notes') await this.renderNotes(next);
+        else await this.renderMaintenance(next);
+      } catch (error) { next.append(element('div', { className: 'ma-error', text: describeError(error) })); }
+      if (!this.mounted || revision !== this.renderRevision) return;
+      // The player can keep scrolling while the authoritative read is pending.
+      // Capture the position at commit time so a completed refresh never rewinds it.
+      const previousScroll = previous?.scrollTop ?? 0;
+      previous.replaceWith(next);
+      this.main = next;
+      this.renderedPage = page;
+      if (preserveScroll) next.scrollTop = previousScroll;
+      for (const [key, tab] of this.tabs) {
+        tab.classList.toggle('is-active', key === page);
+        tab.setAttribute('aria-selected', String(key === page));
+      }
+      if (page === 'notes' && this.focusExpandedUid) {
+        const target = next.querySelector?.(`[data-entry-uid="${this.focusExpandedUid}"]`);
+        target?.scrollIntoView?.({ block: 'nearest' });
+        this.focusExpandedUid = '';
+      }
     }
   
     renderRun(main) { return this.runPage.render(main); }
     renderNotes(main) { return this.notesPage.render(main); }
     renderMaintenance(main) { return this.maintenancePage.render(main); }
   
+    switchPage(page) {
+      if (page === this.page) return;
+      this.page = page;
+      void this.render({ resetScroll: true });
+    }
+  
     showEntry(uid) {
       this.page = 'notes';
       this.search = '';
       this.typeFilter = '全部';
-      this.detailUid = String(uid);
+      this.expandedUid = String(uid);
+      this.focusExpandedUid = String(uid);
       this.open('notes');
     }
   
@@ -3659,7 +3765,8 @@ const __ma_module_23 = (() => {
       this.selected.clear();
       this.entryData = null;
       this.folderPages = {};
-      this.detailUid = '';
+      this.expandedUid = '';
+      this.focusExpandedUid = '';
       this.notesFeedback = '';
       this.importText = '';
       this.importRevision += 1;
