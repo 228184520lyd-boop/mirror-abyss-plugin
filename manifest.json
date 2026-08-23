@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "3.0.0-lite.ui.19-mobile-layout",
+  "version": "3.0.0-lite.ui.20-entry-cohesion",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
   "hooks": {

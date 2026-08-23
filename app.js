@@ -83,7 +83,7 @@ class MirrorAbyssApplication {
         // [MA-LOCK] 状态写入锁：this.auditRunner 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.auditRunner = new audit_1.AuditRunner(this.host, () => this.settings(), (progress) => {
             // [MA-LOCK] 数据来源锁：snapshot 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const snapshot = this.activeSnapshots.get(progress?.chatKey || safeChatKey(this.host));
+            const snapshot = this.activeSnapshots.get(progress?.chatKey || (0, util_1.safeChatKey)(this.host));
             // [MA-LOCK] 数据来源锁：messageIndex 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const messageIndex = Number.isInteger(snapshot?.messageIndex) ? snapshot.messageIndex : null;
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -99,7 +99,7 @@ class MirrorAbyssApplication {
         // [MA-LOCK] 状态写入锁：this.memoryRunner 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.memoryRunner = new memory_1.MemoryRunner(this.host, this.worldbook, () => this.settings(), (progress) => {
             // [MA-LOCK] 数据来源锁：active 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const active = this.activeSnapshots.get(safeChatKey(this.host));
+            const active = this.activeSnapshots.get((0, util_1.safeChatKey)(this.host));
             // [MA-LOCK] 数据来源锁：phase 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const phase = String(progress?.phase || '');
             // [MA-LOCK] 数据来源锁：meta 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -477,7 +477,7 @@ class MirrorAbyssApplication {
     diagnosticsReport() { return this.diagnostics.currentReport(); }
     // [MA-LOCK] 方法职责锁：resetPlugin 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     async resetPlugin() {
-        const resetChatKey = safeChatKey(this.host);
+        const resetChatKey = (0, util_1.safeChatKey)(this.host);
         if (resetChatKey && this.reconcilingChats.has(resetChatKey))
             throw new Error('当前聊天正在回滚世界书，回滚完成前不执行插件重置');
         this.clearPendingMessageTimers();
@@ -486,7 +486,7 @@ class MirrorAbyssApplication {
         for (const chatKey of this.activeTokens.keys()) this.host.bumpScopeRevision(chatKey);
         const running = [...this.runningByChat.values()];
         if (running.length) await Promise.allSettled(running);
-        const chatKey = safeChatKey(this.host);
+        const chatKey = (0, util_1.safeChatKey)(this.host);
         const context = this.host.context();
         const settingsSnapshot = this.settingsStore.capture(context);
         const liveSettings = this.settings();
@@ -560,7 +560,7 @@ class MirrorAbyssApplication {
     // [MA-LOCK] 方法职责锁：status 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     status() {
         // [MA-LOCK] 数据来源锁：key 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const key = safeChatKey(this.host);
+        const key = (0, util_1.safeChatKey)(this.host);
         // [MA-LOCK] 数据来源锁：queue 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const queue = this.taskQueues.get(key);
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
@@ -806,7 +806,7 @@ class MirrorAbyssApplication {
         }
 
         const index = messageIndexFromEvent(eventValue);
-        const chatKey = safeChatKey(this.host);
+        const chatKey = (0, util_1.safeChatKey)(this.host);
         if (!Number.isInteger(index) || !chatKey) {
             this.cancelAndClearChatTasks(reason, chatKey);
             try { this.host.bumpScopeRevision(chatKey); } catch { }
@@ -845,7 +845,7 @@ class MirrorAbyssApplication {
             current.timer = null;
             void this.drainSourceReconcile(chatKey).catch((error) => {
                 // 聊天已经切走时，旧聊天回滚会因快照失效自然退出；不要反向污染新聊天 UI。
-                if (!this.started || safeChatKey(this.host) !== chatKey) return;
+                if (!this.started || (0, util_1.safeChatKey)(this.host) !== chatKey) return;
                 const text = (0, util_1.errorText)(error);
                 this.controlPanel.setStatus(`近期世界书回滚失败：${text}；可使用世界书重建重新收束`, true);
                 console.error('[MirrorAbyss] source reconciliation failed', error);
@@ -962,7 +962,7 @@ class MirrorAbyssApplication {
 
     // [MA-ROLLBACK-EXCLUSIVE-07] 当前聊天任务域唯一“取消并清空”入口。
     cancelAndClearChatTasks(reason, chatKey = '') {
-        const key = String(chatKey || safeChatKey(this.host));
+        const key = String(chatKey || (0, util_1.safeChatKey)(this.host));
         let count = 0;
         const token = this.activeTokens.get(key);
         if (token && !token.cancelled) {
@@ -1534,30 +1534,9 @@ function receiptAffectedBySourceChange(receipt, eventName, index) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return false;
 }
-// [MA-LOCK] 函数职责锁：safeChatKey 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 // [MA-LOCK] 函数职责锁：messageIndexFromEvent 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function messageIndexFromEvent(value) {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (Number.isInteger(value))
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return value;
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (value && typeof value === 'object') {
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const candidate of [value.messageIndex, value.messageId, value.index, value.id]) {
-            // [MA-LOCK] 数据来源锁：number 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const number = Number(candidate);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (Number.isInteger(number))
-                // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-                return number;
-        }
-    }
-    // [MA-LOCK] 数据来源锁：number 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const number = Number(value);
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return Number.isInteger(number) ? number : undefined;
+    return (0, util_1.messageIndexFromEvent)(value);
 }
 
 },"audit":function(module,exports,require){
@@ -1624,7 +1603,7 @@ class AuditRunner {
     // [MA-LOCK] 方法职责锁：currentStatus 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     currentStatus(chatKey = '') {
         // [MA-LOCK] 数据来源锁：key 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const key = chatKey || safeChatKey(this.host);
+        const key = chatKey || (0, util_1.safeChatKey)(this.host);
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return structuredClone(this.statusByChat.get(key) ?? { phase: 'idle', detail: '等待审核', error: '' });
     }
@@ -1734,8 +1713,6 @@ function parseAuditResult(raw) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return { decision: 'revision', issues };
 }
-// [MA-LOCK] 函数职责锁：safeChatKey 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 
 },"constants":function(module,exports,require){
 /**
@@ -1769,7 +1746,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.19-mobile-layout';
+exports.VERSION = '3.0.0-lite.ui.20-entry-cohesion';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -7418,8 +7395,8 @@ function findFreeDiagnosticUid(data) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return uid;
 }
-// [MA-LOCK] 函数职责锁：digestWorldbook 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function digestWorldbook(data) { return (0, util_1.hashText)(JSON.stringify(data?.entries ?? {})); }
+// 世界书摘要统一复用通用确定性实现，本模块不再维护第二算法。
+const digestWorldbook = util_1.digestWorldbookData;
 // [MA-LOCK] 函数职责锁：countStatuses 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function countStatuses(checks) {
     // [MA-LOCK] 数据来源锁：summary 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -7899,8 +7876,6 @@ exports.governInformationBlocks = governInformationBlocks;
 exports.currentEventState = currentEventState;
 // [MA-LOCK] 状态写入锁：exports.activeContext 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.activeContext = activeContext;
-// [MA-LOCK] 状态写入锁：exports.isGenericBackgroundPerson 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.isGenericBackgroundPerson = isGenericBackgroundPerson;
 // [MA-LOCK] 状态写入锁：exports.buildDirectRelationIndex 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.buildDirectRelationIndex = buildDirectRelationIndex;
 exports.resolveSceneStages = resolveSceneStages;
@@ -7908,15 +7883,6 @@ exports.resolveSceneStages = resolveSceneStages;
 const semantic_1 = require("./semantic");
 // [MA-LOCK] 数据来源锁：util_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const util_1 = require("./util");
-
-// [MA-LOCK] 数据来源锁：GENERIC_PERSON_PATTERN 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-const GENERIC_PERSON_PATTERN = /(?:路人|行人|群众|围观者|学生|同学|顾客|客人|乘客|司机|店员|服务员|工作人员|办事员|职员|管理员|门卫|保安|守卫|士兵|侍卫|仆人|侍者|医生|护士|药师|监考|裁判|主持人|接待员|售货员|收银员|快递员|邻居|居民|村民|市民|男人|女人|男子|女子|青年|老人|小孩|孩子|声音|账号)$/u;
-// [MA-LOCK] 数据来源锁：TEMPORARY_MARKER 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-const TEMPORARY_MARKER = /(?:临时|一次性|路过|偶遇|无名|不知名|陌生|普通|随机|现场一名|某个|一位|一名)/u;
-// [MA-LOCK] 数据来源锁：FIXED_SCENE_MARKER 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-const FIXED_SCENE_MARKER = /(?:常驻|固定|长期负责|日常负责|值班|驻守|驻场|本店|本楼|本校|该场景|负责此处|管理此处|看守此处)/u;
-// [MA-LOCK] 数据来源锁：INDEPENDENT_MARKER 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-const INDEPENDENT_MARKER = /(?:独立目标|持续职责|关键证人|核心线索|长期关系|长期任务|持续影响|独立行动线|必须单独追踪)/u;
 
 // [MA-LOCK] 函数职责锁：governInformationBlocks 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function governInformationBlocks(sourceBlocks, entries, contextText = '', options = {}) {
@@ -7950,35 +7916,6 @@ function governInformationBlocks(sourceBlocks, entries, contextText = '', option
 function explicitCurrentSceneName(contextText) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return (0, util_1.extractLatestSceneLocation)(contextText);
-}
-
-// Models occasionally put structured current-scene facts inside one natural
-// sentence.  Normalize the two fields that drive the production projection so
-// recall and the management panel observe the same state.
-
-// [MA-LOCK] 函数职责锁：isGenericBackgroundPerson 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function isGenericBackgroundPerson(block) {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!block) return false;
-    // [MA-LOCK] 数据来源锁：name 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const name = String(block.name ?? '').trim();
-    // [MA-LOCK] 数据来源锁：roleName 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const roleName = name.replace(/(?:甲|乙|丙|丁|A|B|C|D|\d+)$/iu, '');
-    // [MA-LOCK] 数据来源锁：body 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const body = blockText(block);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (/^身份未明/u.test(name)) return false;
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (TEMPORARY_MARKER.test(name) || TEMPORARY_MARKER.test(body)) return true;
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return GENERIC_PERSON_PATTERN.test(roleName);
-}
-
-
-// [MA-LOCK] 函数职责锁：blockText 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function blockText(block) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return [block?.name, ...(block?.sections ?? []).flatMap((section) => section.lines ?? [])].filter(Boolean).join('\n');
 }
 
 // [MA-LOCK] 函数职责锁：currentEventState 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -8527,7 +8464,7 @@ class HostAdapter {
         // [MA-LOCK] 数据来源锁：chat 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const chat = this.context().chat ?? [];
         // [MA-LOCK] 数据来源锁：eventIndex 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const eventIndex = messageIndexFromEvent(eventValue);
+        const eventIndex = (0, util_1.messageIndexFromEvent)(eventValue);
         // [MA-LOCK] 数据来源锁：currentChatFingerprint 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const currentChatFingerprint = Number.isInteger(eventIndex) ? '' : chatFingerprint(chat);
         // [MA-LOCK] 数据来源锁：candidates 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -10011,29 +9948,6 @@ function formatDialogueTurn(playerText, assistantText) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return `玩家：${String(playerText || '（空）').trim() || '（空）'}\n\nAI：${String(assistantText || '').trim()}`;
 }
-// [MA-LOCK] 函数职责锁：messageIndexFromEvent 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function messageIndexFromEvent(value) {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (Number.isInteger(value))
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return value;
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (value && typeof value === 'object') {
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const candidate of [value.messageIndex, value.messageId, value.index, value.id]) {
-            // [MA-LOCK] 数据来源锁：number 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const number = Number(candidate);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (Number.isInteger(number))
-                // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-                return number;
-        }
-    }
-    // [MA-LOCK] 数据来源锁：number 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const number = Number(value);
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return Number.isInteger(number) ? number : undefined;
-}
 // [MA-LOCK] 函数职责锁：chatFingerprint 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function chatFingerprint(chat) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
@@ -10767,33 +10681,13 @@ exports.matchBlock = matchBlock;
 exports.selectBestCandidate = selectBestCandidate;
 // [MA-LOCK] 状态写入锁：exports.relevantEntries 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.relevantEntries = relevantEntries;
-// [MA-LOCK] 状态写入锁：exports.isProvisionalName 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.isProvisionalName = isProvisionalName;
-// [MA-LOCK] 状态写入锁：exports.identityConflict 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.identityConflict = identityConflict;
 // [MA-LOCK] 数据来源锁：util_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const util_1 = require("./util");
-// [MA-LOCK] 数据来源锁：semantic_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-const semantic_1 = require("./semantic");
 
 // [MA-LOCK] 数据来源锁：DEFAULT_SCORES 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const DEFAULT_SCORES = Object.freeze({
-    uid: 100,
-    exactTitle: 95,
-    normalizedTitle: 90,
-    contextIdentity: 110,
-    alias: 85,
-    nameVariant: 84,
     typeAndName: 80,
-    keyword: 50,
-    content: 30,
 });
-// [MA-LOCK] 数据来源锁：HONORIFIC_SUFFIXES 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-const HONORIFIC_SUFFIXES = Object.freeze([
-    '老师', '教授', '医生', '主任', '队长', '会长', '店长', '老板',
-    '先生', '女士', '小姐', '大人', '殿下', '陛下', '学姐', '学长',
-    '师姐', '师兄', '姐姐', '哥哥', '前辈',
-]);
 
 // [MA-LOCK] 函数职责锁：buildEntryIndex 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function buildEntryIndex(entries) {
@@ -10924,11 +10818,6 @@ function relevantEntries(entries, text, limit = 24) {
     return merged.slice(0, limit);
 }
 
-// [MA-LOCK] 函数职责锁：candidates 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function candidates(entries, score, kind, detail) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return [...new Map(entries.map((entry) => [entry.uid, entry])).values()].map((entry) => candidate(entry, score, kind, detail));
-}
 // [MA-LOCK] 函数职责锁：candidate 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function candidate(entry, score, kind, detail) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
@@ -10936,166 +10825,6 @@ function candidate(entry, score, kind, detail) {
 }
 
 
-// [MA-LOCK] 函数职责锁：sectionMap 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function sectionMap(value) {
-    // [MA-LOCK] 数据来源锁：map 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const map = new Map();
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (Array.isArray(value?.sections)) {
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const section of value.sections) map.set(String(section?.name ?? '').trim(), section?.lines ?? []);
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return map;
-    }
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const [name, lines] of Object.entries(value?.sections?.values ?? {})) map.set(String(name).trim(), Array.isArray(lines) ? lines : []);
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return map;
-}
-
-// [MA-LOCK] 函数职责锁：isProvisionalName 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function isProvisionalName(value) {
-    // [MA-LOCK] 数据来源锁：text 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const text = normalizeLookup(value);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!text) return false;
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return /(?:身份未明|身份不明|未知身份|未识别|不明身份|陌生|神秘|匿名|未知)(?:的)?(?:人物|人|男人|女人|男子|女子|少年|少女|老人|孩子|来客|访客|账号|联系人|发信者|来电者|声音|身影)?/u.test(text)
-        || /^(?:黑衣|蒙面|戴面具|兜帽|遮脸)(?:人|男人|女人|男子|女子|身影)$/u.test(text);
-}
-// [MA-LOCK] 函数职责锁：identityConflict 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function identityConflict(left, right) {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!left || !right) return false;
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (canonicalTypeLookup(left.type) !== canonicalTypeLookup(right.type)) return true;
-    // [MA-LOCK] 数据来源锁：leftForms 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const leftForms = identityBodyForms(left);
-    // [MA-LOCK] 数据来源锁：rightForms 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const rightForms = identityBodyForms(right);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (leftForms.length && rightForms.length && !leftForms.some((value) => rightForms.includes(value))) return true;
-    // [MA-LOCK] 数据来源锁：leftAnchors 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const leftAnchors = parentheticalAnchors(left.name ?? left.title);
-    // [MA-LOCK] 数据来源锁：rightAnchors 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const rightAnchors = parentheticalAnchors(right.name ?? right.title);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (leftAnchors.length && rightAnchors.length && !leftAnchors.some((value) => rightAnchors.includes(value))) return true;
-    // [MA-LOCK] 数据来源锁：leftForm 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const leftForm = embodimentKind(left);
-    // [MA-LOCK] 数据来源锁：rightForm 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const rightForm = embodimentKind(right);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (leftForm && rightForm && leftForm !== rightForm) return true;
-    // [MA-LOCK] 数据来源锁：leftSlots 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const leftSlots = stableIdentitySlots(left);
-    // [MA-LOCK] 数据来源锁：rightSlots 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const rightSlots = stableIdentitySlots(right);
-    // [MA-LOCK] 数据来源锁：conflicts 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    let conflicts = 0;
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const [key, leftValue] of leftSlots.entries()) {
-        // [MA-LOCK] 数据来源锁：rightValue 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const rightValue = rightSlots.get(key);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!rightValue || compatibleIdentityValue(leftValue, rightValue)) continue;
-        // 唯一编号、种族、型号和类别属于强区分锚点，单项冲突即可确认不是同一对象。
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (/^(?:唯一编号|编号|序列号|账号id|id|种族|型号|类别|形态|身份形态|存在形态|身体形态|本体类型|本体关系|载体类型)$/u.test(key)) return true;
-        conflicts += 1;
-    }
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return conflicts >= 2;
-}
-
-// [MA-LOCK] 函数职责锁：embodimentKind 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function embodimentKind(value) {
-    // [MA-LOCK] 数据来源锁：text 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const text = normalizeLookup(`${value?.title ?? ''}
-${value?.name ?? ''}
-${value?.content ?? ''}`);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!text) return '';
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (/(?:假身|分身|替身|伪装体|复制体|投影体|傀儡体|化身|冒充身份)/u.test(text)) return 'proxy';
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (/(?:真身|本体|原身|真实身体|主体意识载体)/u.test(text)) return 'original';
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return '';
-}
-
-// [MA-LOCK] 函数职责锁：identityBodyForms 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function identityBodyForms(value) {
-    // [MA-LOCK] 数据来源锁：sections 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const sections = sectionMap(value);
-    // [MA-LOCK] 数据来源锁：source 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const source = [value?.name, value?.title, ...(value?.aliases ?? [])];
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const [section, lines] of sections.entries()) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!/^(?:身份|稳定|定义|当前)$/u.test(section)) continue;
-        source.push(...(lines ?? []));
-    }
-    // [MA-LOCK] 数据来源锁：forms 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const forms = [];
-    // [MA-LOCK] 数据来源锁：patterns 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const patterns = [
-        ['真身', /(?:真身|本体|本尊|原身|主体)/u],
-        ['假身', /(?:假身|替身|伪身|傀儡身|复制体)/u],
-        ['分身', /(?:分身|化身|投影|镜像体)/u],
-    ];
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const raw of source) {
-        // [MA-LOCK] 数据来源锁：text 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const text = normalizeLookup(raw);
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const [label, pattern] of patterns) if (pattern.test(text)) forms.push(label);
-    }
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return (0, util_1.unique)(forms);
-}
-
-// [MA-LOCK] 函数职责锁：parentheticalAnchors 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function parentheticalAnchors(value) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return [...String(value ?? '').matchAll(/[（(]([^）)]+)[）)]/gu)]
-        .map((match) => normalizeLookup(match[1]))
-        .filter(Boolean);
-}
-// [MA-LOCK] 函数职责锁：stableIdentitySlots 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function stableIdentitySlots(value) {
-    // [MA-LOCK] 数据来源锁：map 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const map = new Map();
-    // [MA-LOCK] 数据来源锁：sections 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const sections = sectionMap(value);
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const [section, lines] of sections.entries()) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!/^(?:身份|稳定|定义|当前)$/u.test(section)) continue;
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const line of lines ?? []) {
-            // [MA-LOCK] 数据来源锁：match 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const match = String(line ?? '').match(/^\s*([^：:]{1,24})\s*[：:]\s*(.+)$/u);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!match) continue;
-            // [MA-LOCK] 数据来源锁：key 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const key = normalizeLookup(match[1]);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!/^(?:唯一编号|编号|序列号|账号id|id|种族|职业|组织|阵营|身份|型号|类别|形态|身份形态|存在形态|身体形态|本体类型|本体关系|载体类型|载体)$/u.test(key)) continue;
-            map.set(key, normalizeLookup(match[2]));
-        }
-    }
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return map;
-}
-// [MA-LOCK] 函数职责锁：compatibleIdentityValue 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function compatibleIdentityValue(left, right) {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!left || !right) return true;
-    // 身份字段只接受精确相等，不再用子串包含猜测同一身份。
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return left === right;
-}
 // [MA-LOCK] 函数职责锁：compareEntryPriority 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function compareEntryPriority(left, right) {
     // [MA-LOCK] 数据来源锁：leftScore 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -11127,26 +10856,8 @@ function entryPriority(entry) {
         + Math.min(150, contentSize)
         + Math.min(50, sectionCount * 5);
 }
-// [MA-LOCK] 函数职责锁：canonicalTypeLookup 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function canonicalTypeLookup(type) {
-    // [MA-LOCK] 数据来源锁：value 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const value = normalizeLookup(type);
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return ({ 角色: '人物', npc: '人物', 地点: '场景', 地区: '场景', 区域: '场景', 全局: '世界', 全局状态: '世界', 全局变化: '世界', 当前局势: '世界', 世界局势: '世界', 世界变化: '世界', 基础规则: '基础设定', 世界设定: '基础设定' })[value] ?? value;
-}
-// [MA-LOCK] 函数职责锁：normalizeTitleLookup 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 // [MA-LOCK] 函数职责锁：normalizeLookup 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function normalizeLookup(value) { return (0, util_1.normalizeFact)(String(value ?? '')).replace(/[｜|]/gu, '').toLocaleLowerCase(); }
-// [MA-LOCK] 函数职责锁：add 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function add(map, key, entry) {
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!key) return;
-    // [MA-LOCK] 数据来源锁：list 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const list = map.get(key) ?? [];
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!list.some((candidate) => candidate.uid === entry.uid)) list.push(entry);
-    map.set(key, list);
-}
 
 },"memory":function(module,exports,require){
 /**
@@ -11236,7 +10947,7 @@ class MemoryRunner {
     // [MA-LOCK] 方法职责锁：currentStatus 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     currentStatus(chatKey = '') {
         // [MA-LOCK] 数据来源锁：key 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const key = chatKey || safeChatKey(this.host);
+        const key = chatKey || (0, util_1.safeChatKey)(this.host);
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return structuredClone(this.statusByChat.get(key) ?? { phase: 'idle', detail: '等待处理', error: '', rawResult: '', plan: null });
     }
@@ -12553,8 +12264,6 @@ function summaryEntries(entries, marks = []) {
 function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now() }; }
 
 
-// [MA-LOCK] 函数职责锁：safeChatKey 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 
 },"migration":function(module,exports,require){
 /** Mirror Abyss — deterministic one-time legacy structure migration. */
@@ -13262,67 +12971,6 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     const structuredSceneTitle = options.sourceKind === 'extraction' && sceneBlocks.length === 1 ? sceneBlocks[0].title : '';
     return { blocks, operations: dedupeOperations([...plannedOperations, ...cleanupOperations]), governance: governed.diagnostics, currentSceneTitle: structuredSceneTitle || governed.currentSceneTitle, createdAt: Date.now() };
 }
-// [MA-LOCK] 函数职责锁：ensureDisambiguatedTitles 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function ensureDisambiguatedTitles(blocks, entries) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return blocks.map((source) => {
-        // [MA-LOCK] 数据来源锁：block 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const block = structuredClone(source);
-        // [MA-LOCK] 数据来源锁：collisions 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const collisions = entries.filter((entry) => (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(block.title));
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!collisions.length || !collisions.some((entry) => (0, matcher_1.identityConflict)(block, entry))) return block;
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (/[（(][^）)]+[）)]/u.test(block.name)) return block;
-        // [MA-LOCK] 数据来源锁：anchor 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const anchor = disambiguationAnchor(block);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!anchor) return block;
-        // [MA-LOCK] 状态写入锁：block.name 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        block.name = `${block.name}（${anchor}）`;
-        // [MA-LOCK] 状态写入锁：block.title 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        block.title = `${block.type}｜${block.name}`;
-        // [MA-LOCK] 状态写入锁：block.keywords 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        block.keywords = (0, util_1.unique)([block.name, ...(block.keywords ?? [])]).slice(0, 4);
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return block;
-    });
-}
-// [MA-LOCK] 函数职责锁：disambiguationAnchor 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function disambiguationAnchor(block) {
-    // [MA-LOCK] 数据来源锁：priority 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const priority = ['唯一编号', '编号', '序列号', '型号', '种族', '职业', '组织', '阵营', '身份', '类别'];
-    // [MA-LOCK] 数据来源锁：values 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const values = new Map();
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const section of block.sections ?? []) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!/^(?:身份|稳定|定义|当前)$/u.test(section.name)) continue;
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const line of section.lines ?? []) {
-            // [MA-LOCK] 数据来源锁：match 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const match = String(line).match(/^\s*([^：:]{1,24})\s*[：:]\s*(.+)$/u);
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (!match) continue;
-            // [MA-LOCK] 数据来源锁：label 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const label = (0, util_1.normalizeFact)(match[1]).replace(/^所属/u, '');
-            // [MA-LOCK] 数据来源锁：canonical 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const canonical = ({ 账号id: '编号', id: '编号', 所属组织: '组织' })[label] ?? label;
-            // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (priority.includes(canonical) && !values.has(canonical)) values.set(canonical, String(match[2] ?? '').trim());
-        }
-    }
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const key of priority) {
-        // [MA-LOCK] 数据来源锁：value 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const value = values.get(key);
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (value && !/^(?:无|未知|未说明)$/u.test((0, util_1.normalizeFact)(value))) return value.slice(0, 20);
-    }
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return '';
-}
-
 // [MA-LOCK] 函数职责锁：applyPlanToEntries 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function applyPlanToEntries(plan, entries, settings = undefined) {
     // [MA-LOCK] 数据来源锁：output 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -14367,67 +14015,115 @@ function parseWorldSettingImportProtocol(raw) {
     if (text === protocols_1.NONE) return attachDiagnostics([], diagnostics);
     diagnostics.hadInput = Boolean(text);
     if (!text) return attachDiagnostics([], diagnostics);
+    const lines = text.split('\n');
     const blocks = [];
-    const blockPattern = /<<<ENTRY:([^:\n>]+):([^>\n]+)>>>\n<<<KEYWORDS>>>\n([\s\S]*?)\n<<<CONTENT>>>\n([\s\S]*?)\n<<<END_ENTRY>>>/gu;
-    let cursor = 0;
-    let match;
-    while ((match = blockPattern.exec(text))) {
-        if (text.slice(cursor, match.index).trim()) {
-            diagnostics.skipped.push({ title: '协议错误', reason: 'ENTRY 区块之间存在协议外文本', raw: text.slice(cursor, match.index).slice(0, 600) });
-            return attachDiagnostics([], diagnostics);
-        }
-        cursor = blockPattern.lastIndex;
-        const type = String(match[1] ?? '').trim();
-        const name = String(match[2] ?? '').trim();
+    let index = 0;
+    const skipBlankLines = () => {
+        while (index < lines.length && !lines[index].trim()) index += 1;
+    };
+    const reject = (title, reason, start = index, end = Math.min(lines.length, index + 12)) => {
+        diagnostics.skipped.push({ title, reason, raw: lines.slice(start, end).join('\n').slice(0, 600) });
+        return attachDiagnostics([], diagnostics);
+    };
+    skipBlankLines();
+    while (index < lines.length) {
+        const blockStart = index;
+        const headerLine = lines[index].trim();
+        const header = headerLine.match(/^<<<ENTRY\s*:\s*([^:\n>]+?)\s*:\s*([^>\n]+?)\s*>>>$/u);
+        if (!header) return reject('协议错误', `第${index + 1}行必须是“<<<ENTRY:类型:稳定名称>>>”`);
+        const type = String(header[1] ?? '').trim();
+        const name = String(header[2] ?? '').trim();
         const title = `${type}｜${name}`;
         if (!STRICT_TYPES.has(type) || !name || /[<>\r\n]/u.test(name)) {
-            diagnostics.skipped.push({ title: title || '未知条目', reason: 'ENTRY 类型或稳定名称不符合唯一协议', raw: match[0].slice(0, 600) });
-            return attachDiagnostics([], diagnostics);
+            return reject(title || '未知条目', 'ENTRY 类型或稳定名称不合法', blockStart);
         }
-        const keywordLines = String(match[3] ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
-        if (!keywordLines.length || keywordLines.some((line) => !/^-\s+\S/u.test(line))) {
-            diagnostics.skipped.push({ title, reason: 'KEYWORDS 必须逐行使用“- 关键词”', raw: match[3].slice(0, 600) });
-            return attachDiagnostics([], diagnostics);
+        index += 1;
+        skipBlankLines();
+        if (lines[index]?.trim() !== '<<<KEYWORDS>>>') {
+            return reject(title, `第${index + 1}行必须是“<<<KEYWORDS>>>”`, blockStart);
         }
-        const keywords = (0, util_1.unique)(keywordLines.map((line) => line.replace(/^-\s+/u, '').trim()).filter(Boolean));
+        index += 1;
+        const keywords = [];
+        while (index < lines.length) {
+            const line = lines[index].trim();
+            if (!line) { index += 1; continue; }
+            if (line === '<<<CONTENT>>>') break;
+            const keyword = line.match(/^-\s+(.+)$/u)?.[1]?.trim();
+            if (!keyword) return reject(title, `第${index + 1}行的KEYWORDS必须使用“- 关键词”`, blockStart);
+            keywords.push(keyword);
+            index += 1;
+        }
+        if (!keywords.length) return reject(title, 'KEYWORDS至少需要稳定名称', blockStart);
+        if (lines[index]?.trim() !== '<<<CONTENT>>>') return reject(title, '缺少“<<<CONTENT>>>”标记', blockStart);
+        index += 1;
         const allowedSections = new Set(information_point_1.TYPE_SECTION_ORDER[type] ?? []);
         const sections = [];
         let current = null;
-        for (const rawLine of String(match[4] ?? '').split('\n')) {
-            const line = rawLine.trim();
-            if (!line) continue;
+        let ended = false;
+        while (index < lines.length) {
+            const line = lines[index].trim();
+            if (!line) { index += 1; continue; }
+            if (line === '<<<END_ENTRY>>>') {
+                ended = true;
+                index += 1;
+                break;
+            }
             const heading = line.match(/^【([^】]+)】$/u)?.[1]?.trim();
             if (heading) {
                 if (!allowedSections.has(heading)) {
-                    diagnostics.skipped.push({ title, reason: `栏目“${heading}”不属于 ${type} 的唯一栏目模板`, raw: match[4].slice(0, 600) });
-                    return attachDiagnostics([], diagnostics);
+                    return reject(title, `第${index + 1}行栏目“${heading}”不属于${type}栏目模板`, blockStart);
                 }
                 current = { name: heading, lines: [], empty: false };
                 sections.push(current);
+                index += 1;
                 continue;
             }
             const fact = line.match(/^-\s+(.+)$/u)?.[1]?.trim();
             if (!fact || !current) {
-                diagnostics.skipped.push({ title, reason: 'CONTENT 必须使用“【栏目】”后接“- 完整事实”', raw: match[4].slice(0, 600) });
-                return attachDiagnostics([], diagnostics);
+                return reject(title, `第${index + 1}行的CONTENT必须位于“【栏目】”下并使用“- 完整事实”`, blockStart);
             }
             current.lines.push(fact);
+            index += 1;
         }
+        if (!ended) return reject(title, '缺少“<<<END_ENTRY>>>”标记', blockStart);
         if (!sections.length || sections.some((section) => !section.lines.length)) {
-            diagnostics.skipped.push({ title, reason: 'CONTENT 缺少完整栏目事实', raw: match[4].slice(0, 600) });
-            return attachDiagnostics([], diagnostics);
+            return reject(title, 'CONTENT存在空栏目或缺少完整栏目事实', blockStart, index);
         }
-        blocks.push({ rawTitle: title, title, type, name, sections, keywords });
+        blocks.push({ rawTitle: title, title, type, name, sections, keywords: (0, util_1.unique)(keywords) });
         if (blocks.length > 16) {
-            diagnostics.skipped.push({ title, reason: '超过世界设定导入单次16条上限' });
-            return attachDiagnostics([], diagnostics);
+            return reject(title, '超过世界设定导入单次16条上限', blockStart, index);
         }
+        skipBlankLines();
     }
-    if (!blocks.length || text.slice(cursor).trim()) {
-        diagnostics.skipped.push({ title: '协议错误', reason: '世界设定导入只接受唯一 ENTRY 协议', raw: text.slice(cursor).slice(0, 600) || text.slice(0, 600) });
-        return attachDiagnostics([], diagnostics);
+    if (!blocks.length) return reject('协议错误', '没有找到可执行的ENTRY区块', 0);
+    return attachDiagnostics(mergeWorldSettingBlocksByIdentity(blocks, diagnostics), diagnostics);
+}
+// 同一批内“类型＋稳定名称”只能形成一个候选条目；这里只做确定性栏目与事实行并集，不解释语义。
+function mergeWorldSettingBlocksByIdentity(blocks, diagnostics) {
+    const merged = [];
+    const byIdentity = new Map();
+    for (const block of blocks) {
+        const identity = (0, util_1.normalizeTitle)(`${block.type}｜${block.name}`).toLocaleLowerCase();
+        const current = byIdentity.get(identity);
+        if (!current) {
+            byIdentity.set(identity, block);
+            merged.push(block);
+            continue;
+        }
+        current.keywords = (0, util_1.unique)([...(current.keywords ?? []), ...(block.keywords ?? [])]);
+        for (const section of block.sections ?? []) {
+            let target = current.sections.find((item) => item.name === section.name);
+            if (!target) {
+                target = { name: section.name, lines: [], empty: false };
+                current.sections.push(target);
+            }
+            target.lines = (0, util_1.unique)([...(target.lines ?? []), ...(section.lines ?? [])]);
+            target.empty = target.lines.length === 0;
+        }
+        diagnostics.repaired += 1;
+        diagnostics.merged.push(block.title);
     }
-    return attachDiagnostics(blocks, diagnostics);
+    return merged;
 }
 const EXTRACTION_GENERIC_KEYWORDS = new Set(['人物','角色','npc','场景','地点','事件','活动','物品','道具','世界','当前','状态','关系','房间','区域','地方','男人','女人','男孩','女孩','少女','主角','配角','当前局势','世界局势','世界状态','世界变化']);
 function sanitizeWorldbookLine(value) {
@@ -15835,6 +15531,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.clone = clone;
 // [MA-LOCK] 状态写入锁：exports.hashText 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.hashText = hashText;
+// 共享的确定性边界工具：避免应用、宿主、诊断和世界书模块各自维护同一实现。
+exports.digestWorldbookData = digestWorldbookData;
+exports.safeChatKey = safeChatKey;
+exports.messageIndexFromEvent = messageIndexFromEvent;
 // [MA-SCENE-TIMELINE-SCHEMA] 当前 SceneGroup 游标结构的唯一机械归一化入口。
 exports.normalizeEventTimeline = normalizeEventTimeline;
 // [MA-LOCK] 状态写入锁：exports.errorText 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -15879,6 +15579,24 @@ function hashText(value) {
     }
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return (hash >>> 0).toString(36);
+}
+function digestWorldbookData(data) {
+    return hashText(JSON.stringify(data?.entries ?? {}));
+}
+function safeChatKey(host) {
+    try { return host.chatKey(); }
+    catch { return ''; }
+}
+function messageIndexFromEvent(value) {
+    if (Number.isInteger(value)) return value;
+    if (value && typeof value === 'object') {
+        for (const candidate of [value.messageIndex, value.messageId, value.index, value.id]) {
+            const number = Number(candidate);
+            if (Number.isInteger(number)) return number;
+        }
+    }
+    const number = Number(value);
+    return Number.isInteger(number) ? number : undefined;
 }
 function normalizeEventTimeline(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -16217,7 +15935,10 @@ class WorldSettingImportService {
             // [MA-LOCK] 数据来源锁：prompt 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const prompt = (0, prompts_1.worldSettingImportPrompts)(settings, source, selected, { compact: attempt === 1 });
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (attempt === 1) prompt.system = `${prompt.system}\n\n上一次请求没有形成可执行的唯一 ENTRY 协议。本次从头重新读取同一份设定，只输出规定协议，不修补或引用上一次答案。`;
+            if (attempt === 1) {
+                const reason = String(lastError?.message || '没有形成可执行的ENTRY区块').slice(0, 500);
+                prompt.system = `${prompt.system}\n\n上一次请求没有形成可执行的固定ENTRY区块。格式错误：${reason}\n本次从头重新读取同一份设定，只输出规定协议。`;
+            }
             // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
             try {
                 raw = await (0, model_request_1.callModel)({
@@ -16235,7 +15956,8 @@ class WorldSettingImportService {
                 diagnostics = blocks.diagnostics ?? diagnostics;
                 // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                 if (blocks.length || String(raw || '').trim() === '无') break;
-                lastError = new Error('世界设定导入返回不符合唯一 ENTRY 协议');
+                const reason = diagnostics.skipped?.[0]?.reason || '没有形成可执行的ENTRY区块';
+                lastError = new Error(`世界设定导入协议错误：${reason}`);
             }
             // [MA-LOCK] 异常处理锁：catch 只处理当前失败边界、回滚或反馈；不要把真实错误吞掉后伪装成功。
             catch (error) {
@@ -16370,6 +16092,7 @@ function sanitizeWorldSettingBlocks(blocks, source, diagnostics = {}) {
     // [MA-LOCK] 数据来源锁：output 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const output = (Array.isArray(blocks) ? blocks : []).slice(0, MAX_BLOCKS).map((block) => structuredClone(block));
     // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
+    const identities = new Set();
     for (const block of output) {
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!ALLOWED_TYPES.has(String(block?.type ?? ''))) throw new Error(`设定导入出现不允许的类型：${block?.type || '空'}`);
@@ -16377,6 +16100,9 @@ function sanitizeWorldSettingBlocks(blocks, source, diagnostics = {}) {
         if (!String(block?.name ?? '').trim()) throw new Error('设定导入出现缺少稳定名称的条目');
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!(block.sections ?? []).some((section) => (section.lines ?? []).length)) throw new Error(`设定条目“${block.title || block.name}”没有事实正文`);
+        const identity = (0, util_1.normalizeTitle)(`${block.type}｜${block.name}`).toLocaleLowerCase();
+        if (identities.has(identity)) throw new Error(`设定导入批次仍存在重复ENTRY：${block.type}｜${block.name}`);
+        identities.add(identity);
         // [MA-LOCK] 状态写入锁：block.keywords 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         block.keywords = (0, util_1.unique)((block.keywords ?? []).map((item) => String(item ?? '').trim()).filter(Boolean)).slice(0, 4);
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -16392,11 +16118,8 @@ function blockText(block) {
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return (block.sections ?? []).flatMap((section) => (section.lines ?? []).map((line) => `【${section.name}】${line}`)).join('\n');
 }
-// [MA-LOCK] 函数职责锁：digestWorldbook 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function digestWorldbook(data) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return (0, util_1.hashText)(JSON.stringify(data?.entries ?? {}));
-}
+// 世界书摘要统一复用通用确定性实现，本模块不再维护第二算法。
+const digestWorldbook = util_1.digestWorldbookData;
 // [MA-LOCK] 函数职责锁：worldSettingPreviewSummary 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function worldSettingPreviewSummary(preview) {
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -18164,8 +17887,8 @@ function semanticRawDigest(raw) {
         lastOperationId: String(extension.lastOperationId ?? ''),
     }));
 }
-// [MA-LOCK] 函数职责锁：digestWorldbook 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function digestWorldbook(data) { return (0, util_1.hashText)(JSON.stringify(data?.entries ?? {})); }
+// 世界书摘要统一复用通用确定性实现，本模块不再维护第二算法。
+const digestWorldbook = util_1.digestWorldbookData;
 // [MA-LOCK] 函数职责锁：commitOperationId 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function commitOperationId(sourceMessageKey, operations) { return (0, util_1.hashText)(`${sourceMessageKey}|${operations.map((operation) => operation.id).sort().join('|')}`); }
 // [MA-LOCK] 函数职责锁：findMapKey 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
