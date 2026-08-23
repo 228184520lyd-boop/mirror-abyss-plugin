@@ -29,7 +29,7 @@ core rules ← host/worldbook adapters ← application ← UI ← composition ro
 
 ## 宿主接口锚点
 
-聊天、元数据、模型和世界书读写优先使用 `SillyTavern.getContext()`。Context 不提供创建世界书和分配条目 UID，因此只有 `WorldbookRepository` 直接引用 `createNewWorldInfo` 和 `createWorldInfoEntry`。这两个函数不形成旁路，仍在同一事务边界内。
+聊天、元数据、模型和世界书读写统一使用 `SillyTavern.getContext()`。新世界书由同一保存接口建立；新条目按 SillyTavern 原生字段模板在事务草稿内分配空闲 UID。浏览器入口不静态导入 SillyTavern 内部源码，避免宿主分支或版本差异阻断整个扩展加载。
 
 ## 错误定性
 

@@ -53,8 +53,36 @@ test('Host contracts follow the documented extension boundary', async () => {
   const entry = await readFile(path.join(root, 'index.js'), 'utf8');
   assert.match(host, /globalThis\.SillyTavern\?\.getContext/u);
   assert.doesNotMatch(host, /from ['"]\/scripts\//u);
-  assert.match(worldbook, /createNewWorldInfo[\s\S]*createWorldInfoEntry[\s\S]*from ['"]\/scripts\/world-info\.js['"]/u);
+  assert.doesNotMatch(worldbook, /from ['"]\/scripts\//u);
+  assert.match(worldbook, /context\.saveWorldInfo\(name, \{ entries: \{\} \}, true\)/u);
+  assert.match(worldbook, /function createNativeEntry\(data\)/u);
   for (const hook of Object.values(manifest.hooks)) assert.match(entry, new RegExp(`export async function ${hook}\\b`, 'u'));
+});
+
+test('Manifest runtime assets exist at the GitHub repository root', async () => {
+  const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
+  for (const field of ['js', 'css']) {
+    const asset = manifest[field];
+    assert.equal(path.dirname(asset), '.', `manifest.${field} must point to a repository-root file`);
+    await readFile(path.join(root, asset), 'utf8');
+  }
+});
+
+test('Browser entry graph contains only packaged relative modules', async () => {
+  const pending = [path.join(root, 'index.js')];
+  const visited = new Set();
+  while (pending.length) {
+    const file = pending.pop();
+    if (visited.has(file)) continue;
+    visited.add(file);
+    const source = await readFile(file, 'utf8');
+    for (const match of source.matchAll(/from\s+['"]([^'"]+)['"]/gu)) {
+      assert.match(match[1], /^\.\.?\//u, `${path.relative(root, file)} imports host internals at module load: ${match[1]}`);
+      const target = path.resolve(path.dirname(file), match[1]);
+      await readFile(target, 'utf8');
+      pending.push(target);
+    }
+  }
 });
 
 test('Boundary failures are not created as anonymous Error values', async () => {

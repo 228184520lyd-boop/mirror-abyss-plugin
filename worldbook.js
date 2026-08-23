@@ -1,7 +1,3 @@
-import {
-  createNewWorldInfo,
-  createWorldInfoEntry,
-} from '/scripts/world-info.js';
 import { assertUniqueManagedIdentities, managedEntries } from '../core/entry.js';
 import { MirrorAbyssError, clone, digest, errorText, fault, invariant, stableStringify } from '../core/util.js';
 
@@ -23,13 +19,14 @@ export class WorldbookRepository {
     const names = new Set(this.host.worldbookNames());
     let name = base;
     for (let suffix = 2; names.has(name); suffix += 1) name = `${base}-${suffix}`;
-    let created;
+    const context = this.host.context();
+    ensureWorldbook(typeof context.saveWorldInfo === 'function', 'SillyTavern 未提供世界书保存接口', 'SAVE_API');
     try {
-      created = await createNewWorldInfo(name, { interactive: false });
+      await context.saveWorldInfo(name, { entries: {} }, true);
+      await context.updateWorldInfoList?.();
     } catch (error) {
       throw fault('worldbook', 'CREATE_FAILED', `创建聊天世界书失败：${errorText(error)}`, error);
     }
-    ensureWorldbook(created, '创建聊天世界书失败', 'CREATE_FAILED');
     await this.host.bindWorldbook(name);
     return name;
   }
@@ -66,9 +63,7 @@ export class WorldbookRepository {
       const result = await mutate({
         data: draft,
         createEntry: () => {
-          const entry = createWorldInfoEntry(name, draft);
-          ensureWorldbook(entry, '无法分配新的世界书 UID', 'UID_ALLOCATE');
-          return entry;
+          return createNativeEntry(draft);
         },
       });
       this.validateData(draft);
@@ -156,4 +151,54 @@ function buildReceipt(worldbookName, before, after, messageIndex = -1) {
 
 function entryDigest(entry) {
   return entry == null ? 'absent' : digest(entry);
+}
+
+function createNativeEntry(data) {
+  let uid = 0;
+  while (Object.hasOwn(data.entries, uid)) uid += 1;
+  const entry = {
+    uid,
+    key: [],
+    keysecondary: [],
+    comment: '',
+    content: '',
+    constant: false,
+    vectorized: false,
+    selective: true,
+    selectiveLogic: 0,
+    addMemo: false,
+    order: 100,
+    position: 0,
+    disable: false,
+    ignoreBudget: false,
+    excludeRecursion: false,
+    preventRecursion: false,
+    matchPersonaDescription: false,
+    matchCharacterDescription: false,
+    matchCharacterPersonality: false,
+    matchCharacterDepthPrompt: false,
+    matchScenario: false,
+    matchCreatorNotes: false,
+    delayUntilRecursion: 0,
+    probability: 100,
+    useProbability: true,
+    depth: 4,
+    outletName: '',
+    group: '',
+    groupOverride: false,
+    groupWeight: 100,
+    scanDepth: null,
+    caseSensitive: null,
+    matchWholeWords: null,
+    useGroupScoring: null,
+    automationId: '',
+    role: 0,
+    sticky: null,
+    cooldown: null,
+    delay: null,
+    triggers: [],
+    extensions: {},
+  };
+  data.entries[uid] = entry;
+  return entry;
 }
