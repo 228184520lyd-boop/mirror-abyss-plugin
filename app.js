@@ -1768,7 +1768,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.13-folder-ui';
+exports.VERSION = '3.0.0-lite.ui.14-safety-note-ui';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2412,7 +2412,16 @@ class ControlPanel {
 .${INDICATOR_CLASS}{display:flex!important;visibility:visible!important;align-items:center;gap:8px;width:fit-content;max-width:100%;margin:7px 0 2px;padding:5px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:var(--black30a,rgba(0,0,0,.18));font-size:10px;line-height:1.2;color:var(--SmartThemeBodyColor,#fff);opacity:.86!important;position:relative;z-index:1;user-select:none}
 .ma-lite-taskbar{min-height:34px;box-sizing:border-box;padding:7px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:8px;background:rgba(0,0,0,.12);font-size:10px;line-height:1.4;opacity:.76}
 .${INDICATOR_CLASS} .ma-ind-label{font-weight:700}.ma-ind-part{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.ma-ind-detail{display:none}.ma-ind-dot{width:7px;height:7px;border-radius:50%;background:#777;box-shadow:0 0 0 1px rgba(255,255,255,.14)}.ma-ind-dot[data-state="ready"]{background:#777}.ma-ind-dot[data-state="success"]{background:#5ed18a}.ma-ind-dot[data-state="queued"]{background:#68a7ff}.ma-ind-dot[data-state="running"]{background:#f0bc57;animation:ma-lite-pulse 1s infinite}.ma-ind-dot[data-state="warning"]{background:#f0a94f}.ma-ind-dot[data-state="error"]{background:#ff6868}.ma-ind-dot[data-state="disabled"]{background:#6c6c72}@keyframes ma-lite-pulse{50%{opacity:.35}}
-@media (max-width:480px){#${PANEL_ID}{left:max(6px,env(safe-area-inset-left));right:max(6px,env(safe-area-inset-right));width:auto;max-height:calc(100dvh - 12px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}.ma-lite-body{padding:9px}.ma-lite-thresholds,.ma-lite-management-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ma-lite-pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}.${INDICATOR_CLASS}{border-radius:10px;flex-wrap:wrap}.${INDICATOR_CLASS} .ma-ind-detail{display:inline;max-width:15ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.64}}
+/* ui.14: 现代笔记信息层级 + 文字旅程氛围。仅改变展示，不进入事实链。 */
+#${PANEL_ID}{width:min(680px,calc(100vw - 24px));border-radius:18px;background:color-mix(in srgb,var(--SmartThemeBlurTintColor,#17171c) 94%,#b59662 6%);box-shadow:0 22px 70px rgba(0,0,0,.52);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+.ma-lite-header{padding:16px 18px;border-bottom-color:color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.14)) 70%,#b99862 30%)}
+.ma-lite-title strong,.ma-lite-codex-title,.ma-lite-folder-title{font-family:ui-serif,"Noto Serif SC","Songti SC",serif;letter-spacing:.035em}.ma-lite-title strong{font-size:17px}.ma-lite-body{gap:14px;padding:16px}
+.ma-lite-page-nav{gap:4px;padding:4px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.11));border-radius:12px;background:rgba(0,0,0,.10)}.ma-lite-page-tab{border:0;border-radius:9px;background:transparent}.ma-lite-page-tab[aria-selected="true"]{border:0;background:color-mix(in srgb,#b99862 18%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,#b99862 42%,transparent)}
+.ma-lite-status,.ma-lite-recall,.ma-lite-worldbook-quick,.ma-lite-management,.ma-lite-api,.ma-lite-switch,.ma-lite-tool-group{border-color:color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.13)) 76%,#b99862 24%);background:color-mix(in srgb,var(--black30a,rgba(0,0,0,.12)) 90%,#b99862 10%)}
+.ma-lite-recall-row{padding:0;border-radius:12px;background:color-mix(in srgb,rgba(0,0,0,.12) 92%,#c8aa79 8%);overflow:hidden;transition:border-color .18s ease,background .18s ease,transform .18s ease}.ma-lite-recall-row[open]{border-color:color-mix(in srgb,#b99862 48%,var(--SmartThemeBorderColor,rgba(255,255,255,.18)));background:color-mix(in srgb,rgba(0,0,0,.13) 86%,#b99862 14%)}.ma-lite-recall-row-head{min-height:48px;padding:10px 12px}.ma-lite-codex-content{padding:12px 14px;border-top:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.08));font-size:12px;line-height:1.72;white-space:pre-wrap}.ma-lite-codex-footer,.ma-lite-recall-meta,.ma-lite-recall-relations{margin-inline:12px}.ma-lite-codex-footer{padding-bottom:11px}
+.ma-lite-inline-edit-bar{display:flex;justify-content:flex-end;margin-top:10px}.ma-lite-inline-edit-bar button,.ma-lite-inline-editor-actions button{min-height:36px;padding:6px 11px;border:1px solid color-mix(in srgb,#b99862 45%,transparent);border-radius:8px;background:rgba(185,152,98,.10);color:inherit;cursor:pointer}.ma-lite-inline-editor{box-sizing:border-box;width:100%;min-height:240px;padding:12px;border:1px solid color-mix(in srgb,#b99862 45%,transparent);border-radius:10px;background:rgba(0,0,0,.18);color:inherit;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}.ma-lite-inline-editor-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
+.${INDICATOR_CLASS}{width:auto;max-width:min(100%,620px);min-height:32px;margin:8px 0 3px;padding:6px 10px;border-radius:10px;border-color:color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.13)) 72%,#b99862 28%);background:linear-gradient(90deg,color-mix(in srgb,var(--black30a,rgba(0,0,0,.14)) 90%,#b99862 10%),var(--black30a,rgba(0,0,0,.12)));cursor:pointer;transition:background .18s ease,border-color .18s ease,transform .18s ease}.${INDICATOR_CLASS}:hover{border-color:color-mix(in srgb,#b99862 56%,transparent);background:color-mix(in srgb,var(--black30a,rgba(0,0,0,.14)) 84%,#b99862 16%)}.${INDICATOR_CLASS}:active{transform:translateY(1px)}.${INDICATOR_CLASS} .ma-ind-label{font-family:ui-serif,"Noto Serif SC","Songti SC",serif;letter-spacing:.08em}.${INDICATOR_CLASS} .ma-ind-summary{font-size:10px;opacity:.76}.${INDICATOR_CLASS} .ma-ind-steps{display:inline-flex;align-items:center;gap:6px;margin-left:auto}.${INDICATOR_CLASS} .ma-ind-open{font-size:16px;opacity:.52}
+@media (max-width:480px){#${PANEL_ID}{left:max(6px,env(safe-area-inset-left));right:max(6px,env(safe-area-inset-right));width:auto;max-height:calc(100dvh - 12px - env(safe-area-inset-top) - env(safe-area-inset-bottom));border-radius:14px}.ma-lite-body{padding:10px}.ma-lite-thresholds,.ma-lite-management-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ma-lite-pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}.${INDICATOR_CLASS}{border-radius:10px;flex-wrap:nowrap;width:100%;box-sizing:border-box}.${INDICATOR_CLASS} .ma-ind-steps{display:none}.${INDICATOR_CLASS} .ma-ind-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.${INDICATOR_CLASS} .ma-ind-open{margin-left:auto}.ma-lite-recall-toolbar{grid-template-columns:1fr}.ma-lite-inline-editor{min-height:45dvh}}
 `;
         document.head.append(style);
     }
@@ -4326,6 +4335,7 @@ class ControlPanel {
     toggleRecallEditMode(force = null) {
         // [MA-LOCK] 状态写入锁：this.recallEditMode 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.recallEditMode = force == null ? !this.recallEditMode : Boolean(force);
+        if (!this.recallEditMode) this.recallSelectedUids.clear();
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.recallEditButton) {
             this.recallEditButton.textContent = this.recallEditMode ? '完成' : '修改';
@@ -4778,13 +4788,14 @@ class ControlPanel {
         }
 
         // [MA-LOCK] 数据来源锁：pageCount 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const pageCount = 1;
+        const orderedEntries = this.orderedRecallEntries(filteredEntries);
+        const pageCount = Math.max(1, Math.ceil(orderedEntries.length / this.recallPageSize));
         // [MA-LOCK] 状态写入锁：this.recallPage 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.recallPage = Math.min(Math.max(1, this.recallPage), pageCount);
         // [MA-LOCK] 数据来源锁：start 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const start = 0;
+        const start = (this.recallPage - 1) * this.recallPageSize;
         // [MA-LOCK] 数据来源锁：visibleEntries 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const visibleEntries = this.orderedRecallEntries(filteredEntries);
+        const visibleEntries = orderedEntries.slice(start, start + this.recallPageSize);
         // [MA-LOCK] 数据来源锁：list 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const list = document.createElement('div');
         // [MA-LOCK] 状态写入锁：list.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4946,6 +4957,45 @@ class ControlPanel {
             const main = document.createElement('div');
             main.className = 'ma-lite-codex-content';
             main.textContent = item.content || '（暂无正文）';
+            if (this.recallEditMode && typeof this.actions.updateEntry === 'function') {
+                const editBar = document.createElement('div');
+                editBar.className = 'ma-lite-inline-edit-bar';
+                const editContent = document.createElement('button');
+                editContent.type = 'button';
+                editContent.textContent = '编辑正文';
+                editContent.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const original = String(item.content || '');
+                    const textarea = document.createElement('textarea');
+                    textarea.className = 'ma-lite-inline-editor';
+                    textarea.value = original;
+                    textarea.setAttribute('aria-label', `编辑${item.title}正文`);
+                    const actions = document.createElement('div');
+                    actions.className = 'ma-lite-inline-editor-actions';
+                    const save = document.createElement('button');
+                    save.type = 'button'; save.textContent = '保存';
+                    const cancel = document.createElement('button');
+                    cancel.type = 'button'; cancel.textContent = '取消';
+                    cancel.addEventListener('click', () => { main.textContent = original || '（暂无正文）'; main.append(editBar); });
+                    save.addEventListener('click', async () => {
+                        save.disabled = true; cancel.disabled = true;
+                        try {
+                            await this.actions.updateEntry(item.uid, { content: textarea.value });
+                            this.setStatus(`已保存：${item.title}`);
+                            await this.refreshRecallMap(true);
+                        } catch (error) {
+                            this.setStatus(`条目保存失败：${(0, util_1.errorText)(error)}`, true);
+                            save.disabled = false; cancel.disabled = false;
+                        }
+                    });
+                    actions.append(save, cancel);
+                    main.replaceChildren(textarea, actions);
+                    textarea.focus();
+                });
+                editBar.append(editContent);
+                main.append(editBar);
+            }
 
             // [MA-LOCK] 数据来源锁：meta 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const meta = document.createElement('div');
@@ -5762,7 +5812,27 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：indicator.title 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         indicator.title = titleLines.join('\n');
         // [MA-LOCK] 状态写入锁：indicator.innerHTML 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        indicator.innerHTML = `<span class="ma-ind-label">镜渊</span>${parts.join('')}`;
+        const stageStates = ['audit', 'revision', 'extract', 'write'].map((kind) => this.indicatorState(kind, enabled[kind], taskStates));
+        const failed = stageStates.includes('error');
+        const active = stageStates.some((state) => state === 'running' || state === 'queued');
+        const finished = taskStates.write?.state === 'success';
+        const writeCount = Math.max(0, Number(taskStates.write?.businessWriteCount || 0));
+        const summary = failed
+            ? '本轮尚未记录 · 点击查看'
+            : active
+                ? '正在整理本轮变化'
+                : finished
+                    ? (writeCount > 0 ? `已记录 ${writeCount} 项变化` : '本轮没有长期变化')
+                    : '等待处理';
+        indicator.innerHTML = `<span class="ma-ind-label">镜渊</span><span class="ma-ind-summary">${summary}</span><span class="ma-ind-steps">${parts.join('')}</span><span class="ma-ind-open">›</span>`;
+        indicator.setAttribute('role', 'button');
+        indicator.tabIndex = 0;
+        const openPanel = () => {
+            this.showPage('run', false);
+            if (this.panel?.hidden) this.togglePanel();
+        };
+        indicator.onclick = openPanel;
+        indicator.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPanel(); } };
     }
     // [MA-LOCK] 方法职责锁：indicatorState 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     indicatorState(kind, enabled, taskStates = this.taskStates) {
@@ -10604,16 +10674,23 @@ const HONORIFIC_SUFFIXES = Object.freeze([
 
 // [MA-LOCK] 函数职责锁：buildEntryIndex 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function buildEntryIndex(entries) {
-    // UID 是唯一身份。标题、稳定名称、别名和正文只用于展示/召回，不能参与写入目标匹配。
+    // 模型不读取或返回 UID。插件只用协议中明确的“类型＋稳定名称”机械定位，
+    // 唯一命中后再取回 UID；别名、关键词、标题相似度和正文均不参与写入目标匹配。
     // [MA-LOCK] 数据来源锁：byUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const byUid = new Map();
+    const byIdentity = new Map();
     // [MA-LOCK] 数据来源锁：byExactTitle 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
     for (const entry of entries) {
         byUid.set(String(entry.uid), entry);
+        const key = (0, util_1.normalizeTitle)(`${String(entry.type ?? '').trim()}｜${String(entry.name ?? '').trim()}`).toLocaleLowerCase();
+        if (!key) continue;
+        const list = byIdentity.get(key) ?? [];
+        list.push(entry);
+        byIdentity.set(key, list);
     }
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return { entries, byUid };
+    return { entries, byUid, byIdentity };
 }
 
 // [MA-LOCK] 函数职责锁：matchBlock 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -10623,11 +10700,9 @@ function matchBlock(block, index, _contextText, weights = {}) {
     // [MA-LOCK] 数据来源锁：collected 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const collected = [];
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (block.uid) {
-        // [MA-LOCK] 数据来源锁：entry 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const entry = index.byUid.get(String(block.uid));
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (entry) collected.push(candidate(entry, scores.uid, 'uid', `UID ${block.uid} 精确命中`));
+    const identityKey = (0, util_1.normalizeTitle)(`${String(block.type ?? '').trim()}｜${String(block.name ?? '').trim()}`).toLocaleLowerCase();
+    for (const entry of index.byIdentity.get(identityKey) ?? []) {
+        collected.push(candidate(entry, scores.typeAndName, 'type-and-name', '类型与稳定名称精确命中'));
     }
 
     // [MA-LOCK] 数据来源锁：byUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -10652,7 +10727,7 @@ function selectBestCandidate(candidates, minimumScore = 80) {
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (!eligible.length) return null;
     // [MA-LOCK] 数据来源锁：topScore 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    return eligible.length === 1 && eligible[0].evidence.some((item) => item.kind === 'uid') ? eligible[0] : null;
+    return eligible.length === 1 && eligible[0].evidence.some((item) => item.kind === 'type-and-name') ? eligible[0] : null;
 }
 
 // [MA-LOCK] 函数职责锁：relevantEntries 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -11652,7 +11727,8 @@ class MemoryRunner {
         // [MA-EXTRACT-SINGLE-CHAIN] 提取只有一个正式 Prompt 和一个正式解析器。
         // 首次协议失败时可以把同一请求原样重放一次；第二次不得切换 compact Prompt、附加失败提示词或进入诊断旁路。
         // 请求失败、任务取消与解析器自身异常不是协议失败，必须立即沿原错误边界上抛，禁止额外调用模型。
-        let requestPrompt = (0, prompts_1.extractionPrompts)(snapshot.playerText, snapshot.assistantText, entries);
+        const promptEntries = (0, matcher_1.relevantEntries)(entries, dialogueInput, 24);
+        let requestPrompt = (0, prompts_1.extractionPrompts)(snapshot.playerText, snapshot.assistantText, promptEntries);
         for (let attempt = 0; attempt < 2; attempt += 1) {
             raw = await (0, model_request_1.callModel)({
                 host: this.host,
@@ -11662,7 +11738,8 @@ class MemoryRunner {
                 snapshot,
                 profileId: settings.extractionModelProfileId || settings.modelProfileId,
                 sourceText: snapshot.turnText || snapshot.assistantText,
-                singleAttempt: true,
+                // 请求层允许对超时/网关故障做有限重试；外层两轮只负责协议格式纠正。
+                singleAttempt: false,
             });
             this.validate(snapshot);
             blocks = (0, parser_1.parseExtractionProtocol)(raw);
@@ -12231,13 +12308,13 @@ function summaryOutputUidsFromResult(result, selectedSourceUids = []) {
     for (const mark of summaryMarksFromResult(result)) if (existing.has(mark.uid)) output.add(mark.uid);
     return [...output];
 }
-// 总结协议显式携带 UID：保留沿用原 UID，合并创建新 UID 并沉降来源，新建创建新 UID。
+// 总结模型只看到本批临时编号；插件在解析后把临时编号机械映射回 UID。
 function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
     const source = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '').trim();
     if (!source) return { entries: [], error: '模型没有返回最终条目' };
     const lines = source.split('\n');
     const output = [];
-    const selectedByUid = new Map((selectedEntries ?? []).map((entry, index) => [String(entry.uid), { entry, index }]));
+    const selectedByRef = new Map((selectedEntries ?? []).map((entry, index) => [`条目${index + 1}`, { entry, index }]));
     const seenUids = new Set();
     const allowedTypes = new Set(protocols_1.SUMMARY_TYPES);
     for (let index = 0; index < lines.length;) {
@@ -12246,18 +12323,24 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
         const header = line.match(/^(保留|合并|新建)｜([^｜]+)｜([^｜]+)｜(.+)$/u);
         if (!header) return { entries: [], error: `无法识别的总结行：${line.slice(0, 160)}` };
         const kind = header[1] === '保留' ? 'existing' : header[1] === '合并' ? 'merge' : 'new';
-        const sourceUids = kind === 'new' ? [] : header[2].split(/[、,，]/u).map((uid) => uid.trim()).filter(Boolean);
+        const sourceRefs = kind === 'new' ? [] : header[2].split(/[、,，]/u).map((ref) => ref.trim()).filter(Boolean);
+        const sourceUids = sourceRefs.map((ref) => String(selectedByRef.get(ref)?.entry?.uid ?? '')).filter(Boolean);
         const type = header[3].trim();
         const name = header[4].trim();
-        if (kind === 'existing' && sourceUids.length !== 1) return { entries: [], error: '保留操作必须且只能指定一个UID' };
-        if (kind === 'merge' && sourceUids.length < 2) return { entries: [], error: '合并操作至少需要两个UID' };
+        if (kind === 'existing' && sourceRefs.length !== 1) return { entries: [], error: '保留操作必须且只能指定一个临时条目编号' };
+        if (kind === 'merge' && sourceRefs.length < 2) return { entries: [], error: '合并操作至少需要两个临时条目编号' };
+        if (sourceUids.length !== sourceRefs.length) return { entries: [], error: '总结引用了不属于本批输入的临时条目编号' };
         for (const uid of sourceUids) {
-            if (!selectedByUid.has(uid)) return { entries: [], error: `UID ${uid} 不属于本批输入` };
             if (seenUids.has(uid)) return { entries: [], error: `UID ${uid} 被重复处理` };
             seenUids.add(uid);
         }
         if (!allowedTypes.has(type)) return { entries: [], error: `类型“${type}”不合法` };
         if (!name) return { entries: [], error: '缺少稳定名称' };
+        if (kind === 'existing') {
+            const sourceEntry = selectedByRef.get(sourceRefs[0])?.entry;
+            if (!sourceEntry || String(sourceEntry.type) !== type || String(sourceEntry.name) !== name)
+                return { entries: [], error: '保留原条目时不得改变类型或稳定名称' };
+        }
         index += 1;
         const body = [];
         while (index < lines.length && String(lines[index] ?? '').trim() !== '结束条目') {
@@ -12278,6 +12361,8 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
             }
             values[section] = (0, util_1.unique)(values[section]);
         }
+        const baseSections = information_point_1.TYPE_SECTION_ORDER[type] ?? [];
+        if (baseSections.some((section) => !order.includes(section))) return { entries: [], error: `${type}条目缺少必须基础栏目：${baseSections.filter((section) => !order.includes(section)).join('、')}` };
         const content = (0, parser_1.serializeEntrySections)({ order, values }).trim();
         if (!content) return { entries: [], error: `${header[1]}条目没有完整最终正文` };
         output.push({ kind, sourceUids, type, name, title: `${type}｜${name}`, content });
@@ -12911,8 +12996,8 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
         const candidates = (0, matcher_1.matchBlock)(block, index, contextText);
         // [MA-LOCK] 数据来源锁：target 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let target = (0, matcher_1.selectBestCandidate)(candidates, 80);
-        if (block.uid && !target) {
-            operations.push(noop(block.title, String(block.uid), '', `模型返回的 UID ${block.uid} 不存在或已失效，拒绝按标题创建替代条目`));
+        if (!target && candidates.length > 1) {
+            operations.push(noop(block.title, undefined, '', '世界书存在重复的类型＋稳定名称，身份不唯一，拒绝自动写入'));
             continue;
         }
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -13050,7 +13135,9 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     // [MA-LOCK] 数据来源锁：cleanupOperations 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const cleanupOperations = emptyEntryCleanupOperations(reconciledEntries, settings);
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return { blocks, operations: dedupeOperations([...plannedOperations, ...cleanupOperations]), governance: governed.diagnostics, currentSceneTitle: governed.currentSceneTitle, createdAt: Date.now() };
+    const sceneBlocks = blocks.filter((block) => String(block.type) === '场景');
+    const structuredSceneTitle = options.sourceKind === 'extraction' && sceneBlocks.length === 1 ? sceneBlocks[0].title : '';
+    return { blocks, operations: dedupeOperations([...plannedOperations, ...cleanupOperations]), governance: governed.diagnostics, currentSceneTitle: structuredSceneTitle || governed.currentSceneTitle, createdAt: Date.now() };
 }
 // [MA-LOCK] 函数职责锁：ensureDisambiguatedTitles 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function ensureDisambiguatedTitles(blocks, entries) {
@@ -13226,8 +13313,8 @@ function normalizeEntryTemplate(entry) {
         }
     }
     const extensions = Object.keys(next).filter((name) => !baseOrder.includes(name));
-    entry.sections.order = [...baseOrder, ...extensions].filter((name) => (next[name] ?? []).length);
-    entry.sections.values = Object.fromEntries(entry.sections.order.map((name) => [name, next[name]]));
+    entry.sections.order = [...baseOrder, ...extensions];
+    entry.sections.values = Object.fromEntries(entry.sections.order.map((name) => [name, next[name] ?? []]));
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return entry;
 }
@@ -14119,18 +14206,16 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
             return attachDiagnostics([], diagnostics);
         }
         const type = match[1];
-        const identity = String(match[2] ?? '').trim().match(/^(.*?)\s*〔UID:([^〕]+)〕$/u);
-        const name = String(identity?.[1] ?? match[2] ?? '').trim();
-        const uid = String(identity?.[2] ?? '').trim();
+        const name = String(match[2] ?? '').trim();
         const sectionName = (0, information_point_1.canonicalSectionName)(String(match[3] ?? '').trim(), type);
         const change = String(match[4] ?? '').trim();
         const relations = String(match[5] ?? '').split('、').map((item) => item.trim()).filter((item) => item && item !== protocols_1.NONE);
         const fact = sanitizeWorldbookLine(String(match[6] ?? '').trim()).trim();
-        if (!protocols_1.EXTRACTION_TYPES.includes(type) || !name || !sectionName || !(0, information_point_1.isCanonicalSectionName)(type, sectionName) || !fact) {
+        if (!protocols_1.EXTRACTION_TYPES.includes(type) || !name || /〔\s*UID\s*:/iu.test(name) || !sectionName || !(0, information_point_1.isCanonicalSectionName)(type, sectionName) || !fact) {
             diagnostics.skipped.push({ title: `${type || '未知'}｜${name || '未命名'}`, reason: '固定事实行缺少合法类型、名称、栏目或内容', raw: normalizedLine.slice(0, 600) });
             return attachDiagnostics([], diagnostics);
         }
-        rows.push({ uid, type, name, section: sectionName, change, relations, fact });
+        rows.push({ type, name, section: sectionName, change, relations, fact });
     }
     const grouped = new Map();
     for (const row of rows) {
@@ -14138,7 +14223,7 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
         const key = (0, util_1.normalizeFact)(title);
         // [MA-GRANULARITY-LADDER][提取栏目契约] 使用模型明确给出的合法栏目；禁止把非事件重新挤回【固定事实】。
         const sectionName = row.section;
-        const block = grouped.get(key) ?? { rawTitle: title, title, uid: row.uid, type: row.type, name: row.name, sections: [], keywords: [row.name], factRows: [] };
+        const block = grouped.get(key) ?? { rawTitle: title, title, type: row.type, name: row.name, sections: [], keywords: [row.name], factRows: [] };
         let section = block.sections.find((item) => item.name === sectionName);
         if (!section) { section = { name: sectionName, lines: [], empty: false }; block.sections.push(section); }
         section.lines = (0, util_1.unique)([...section.lines, row.fact]);
@@ -14279,8 +14364,11 @@ function parseEntrySections(content) {
 function serializeEntrySections(sections) {
     const order = (0, util_1.unique)([...sections.order, ...Object.keys(sections.values)]);
     return order
-        .filter((name) => name && (sections.values[name]?.length ?? 0) > 0)
-        .map((name) => `【${name}】\n${(0, util_1.unique)(sections.values[name] ?? []).map((line) => `- ${line}`).join('\n')}`)
+        .filter((name) => name)
+        .map((name) => {
+            const lines = (0, util_1.unique)(sections.values[name] ?? []).map((line) => `- ${line}`).join('\n');
+            return `【${name}】${lines ? `\n${lines}` : ''}`;
+        })
         .join('\n\n');
 }
 function sanitizeModelText(raw) {
@@ -14427,10 +14515,11 @@ function extractionPrompts(playerText, assistantText, relevant) {
     const sanitizedAssistantText = sanitizeExtractionPromptText(assistantText);
     const system = `只完成事实提取。记录已明确发生、会影响后续世界运行的重要变化，以及位置和状态等连续性锚点。
 不记录普通过程、小动作、未确认信息、推测、未来目标或可能发生的事情。
-模型负责理解事实；不要处理UID事务、写入计划或界面逻辑。`;
+模型负责理解事实；不要读取、生成、选择或返回UID，也不要处理写入计划或界面逻辑。`;
     const user = `【任务】
 比较轻量世界书索引、玩家本轮回复与当前AI正文，输出本轮建立、变化或结束的事实。
-已有对象必须原样保留索引中的“稳定名称〔UID:…〕”；新对象只写稳定名称，不编造UID。
+已有对象必须原样保留索引中的类型和稳定名称；新对象只写稳定名称。
+正文已明确进入新地点时，只用一个“场景”条目表示正文结束时的当前场景；经过或离开的地点写入其他对象事实，不并列标为当前场景。
 
 【轻量世界书索引与相关栏目】
 ${existing || '（无）'}
@@ -14442,7 +14531,7 @@ ${sanitizedPlayerText || '（空）'}
 ${sanitizedAssistantText || '（空）'}
 
 【示范】
-事实｜人物｜陆沉〔UID:17〕｜当前状态｜变化｜无｜陆沉已从矿道移动到控制室。
+事实｜人物｜陆沉｜当前状态｜变化｜无｜陆沉已从矿道移动到控制室。
 
 【合法基础栏目】
 ${summarySectionSchemaText()}
@@ -14551,9 +14640,10 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
 直接整理内容，不解释过程。
 
 规则：
-- 保留一个条目：输出“保留｜原UID｜类型｜稳定名称”，UID不变。
-- 合并多个条目：输出“合并｜UID1、UID2｜类型｜稳定名称”，系统创建新UID并沉降旧UID。
-- 形成材料中原先没有的独立稳定条目：输出“新建｜NEW｜类型｜稳定名称”。
+- 保留一个条目：输出“保留｜条目N｜类型｜稳定名称”；系统保留其内部UID。
+- 合并多个条目：输出“合并｜条目N、条目M｜类型｜稳定名称”；系统创建新UID并沉降来源。
+- 形成材料中原先没有的独立稳定条目：输出“新建｜新条目N｜类型｜稳定名称”。
+- 条目N只是本批临时编号，不是UID；不得读取、生成或返回UID。
 - 未处理的输入条目保持原样；不得以省略表示删除。
 - 不编造，不预测，不增加材料里没有的事实。
 - 每个返回条目都必须给出完整最终正文，不是补丁。
@@ -14566,7 +14656,7 @@ ${(0, protocols_1.protocolTextForStage)(kind === 'small' ? 'smallSummary' : kind
 
 【附加要求】
 ${clipText(custom, compact ? 1000 : 2200)}` : ''}`;
-    const input = (entries ?? []).map((entry) => `【UID:${entry.uid}】\n${entry.title}\n${entry.content}`).join('\n\n');
+    const input = (entries ?? []).map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
     const user = `【本批完整条目】
 ${input}
 
@@ -14603,7 +14693,7 @@ function extractionWorldbookIndex(entries) {
             .filter((line) => !/：\s*$/u.test(line))
             .slice(0, 5)
             .join('\n');
-        return `稳定名称：${entry.name}〔UID:${entry.uid}〕\n类型：${entry.type}\n${sections || '栏目：（空）'}`;
+        return `类型：${entry.type}\n稳定名称：${entry.name}\n${sections || '栏目：（空）'}`;
     }).join('\n\n');
 }
 
@@ -14700,9 +14790,9 @@ exports.EXTRACTION = Object.freeze({
     end: '事实｜类型｜稳定名称｜栏目｜结束｜关联对象｜完整事实',
 });
 exports.SUMMARY_REWRITE = Object.freeze({
-    existing: '保留｜UID｜类型｜稳定名称',
-    merged: '合并｜UID1、UID2｜类型｜稳定名称',
-    created: '新建｜NEW｜类型｜稳定名称',
+    existing: '保留｜条目N｜类型｜稳定名称',
+    merged: '合并｜条目N、条目M｜类型｜稳定名称',
+    created: '新建｜新条目N｜类型｜稳定名称',
     end: '结束条目',
 });
 // 人工合并与小/大总结使用同一完整条目协议，不再保留写回/移除/沉降协议。
@@ -15262,7 +15352,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     smallSummaryModelProfileId: '',
     largeSummaryModelProfileId: '',
     autoAudit: false,
-    autoExtraction: false,
+    autoExtraction: true,
     autoSmallSummary: true,
     // [MA-AUTO-LARGE-RESTORE] 最新产品决定恢复 SceneGroup 自动大总结；默认开启，按已完成小总结的场景组数量触发。
     autoLargeSummary: true,
@@ -15413,7 +15503,8 @@ function parseSettings(value) {
         smallSummaryModelProfileId: String(candidate.smallSummaryModelProfileId ?? candidate.modelProfileId ?? '').trim(),
         largeSummaryModelProfileId: String(candidate.largeSummaryModelProfileId ?? candidate.modelProfileId ?? '').trim(),
         autoAudit: candidate.autoAudit === true,
-        autoExtraction: candidate.autoExtraction === true,
+        // 新安装默认开启；玩家明确关闭时继续尊重该选择。
+        autoExtraction: candidate.autoExtraction !== false,
         autoSmallSummary: candidate.autoSmallSummary !== false,
         autoLargeSummary: candidate.autoLargeSummary !== false,
         automationPolicyVersion: 2,
@@ -16779,6 +16870,7 @@ class WorldbookAdapter {
         const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!latest) throw new Error('世界书编辑前权威读取失败');
+        if (digestWorldbook(latest) !== beforeVersion) throw new Error('世界书在编辑任务运行期间已被修改，旧结果已取消');
         validate?.();
         // [MA-LOCK] 数据来源锁：verified 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const verified = await this.commitWithRollback(opened, beforeData, validate, (data) => {
@@ -17048,6 +17140,7 @@ class WorldbookAdapter {
         const latest = await loadWorldInfoAuthoritative(opened.api, opened.name);
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!latest) throw new Error('世界书提交前权威读取失败');
+        if (digestWorldbook(latest) !== beforeVersion) throw new Error('世界书在模型任务运行期间已被修改，旧结果已取消并等待重新处理');
         validate?.();
         // [MA-LOCK] 数据来源锁：verifiedData 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const verifiedData = await this.commitWithRollback(opened, beforeData, validate, (data) => {
