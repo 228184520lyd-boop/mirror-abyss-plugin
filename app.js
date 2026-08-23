@@ -150,7 +150,7 @@ class MirrorAbyssApplication {
             retryFailedSmallSummary: (taskId = '') => this.retryFailedSmallSummary(taskId),
             summaryFailureState: () => this.memoryRunner.summaryFailureState(),
             summarizeEntries: (kind, uids) => this.summarizeEntries(kind, uids),
-            mergeEntries: (uids) => this.mergeEntries(uids),
+            mergeEntries: (uids, requirement = '') => this.mergeEntries(uids, requirement),
             deleteEntries: (uids) => this.deleteEntries(uids),
             testApiProbe: () => this.testApiProbe(),
             cancel: () => this.cancel(),
@@ -325,12 +325,13 @@ class MirrorAbyssApplication {
             if (entry.bedrockLocked === true || entry.locked === true) await this.worldbook.setBedrockLocked(settings, entry.uid, false, snapshot, validate);
         }
     }
-    mergeEntries(uids) {
+    mergeEntries(uids, requirement = '') {
         const selectedUids = [...new Set((uids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
+        const manualRequirement = String(requirement ?? '').trim().slice(0, 2000);
         if (selectedUids.length < 2) throw new Error('至少选择两个条目才能合并');
         return this.enqueueMaintenance('mergeEntries', async (settings, snapshot) => {
             await this.unlockSelectedEntries(settings, snapshot, selectedUids);
-            return this.memoryRunner.mergeSelected(settings, snapshot, selectedUids);
+            return this.memoryRunner.mergeSelected(settings, snapshot, selectedUids, manualRequirement);
         });
     }
     // [MA-LOCK] 方法职责锁：deleteEntries 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -1768,7 +1769,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.14-safety-note-ui';
+exports.VERSION = '3.0.0-lite.ui.15-white-dossier-ui';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2422,6 +2423,21 @@ class ControlPanel {
 .ma-lite-inline-edit-bar{display:flex;justify-content:flex-end;margin-top:10px}.ma-lite-inline-edit-bar button,.ma-lite-inline-editor-actions button{min-height:36px;padding:6px 11px;border:1px solid color-mix(in srgb,#b99862 45%,transparent);border-radius:8px;background:rgba(185,152,98,.10);color:inherit;cursor:pointer}.ma-lite-inline-editor{box-sizing:border-box;width:100%;min-height:240px;padding:12px;border:1px solid color-mix(in srgb,#b99862 45%,transparent);border-radius:10px;background:rgba(0,0,0,.18);color:inherit;font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}.ma-lite-inline-editor-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
 .${INDICATOR_CLASS}{width:auto;max-width:min(100%,620px);min-height:32px;margin:8px 0 3px;padding:6px 10px;border-radius:10px;border-color:color-mix(in srgb,var(--SmartThemeBorderColor,rgba(255,255,255,.13)) 72%,#b99862 28%);background:linear-gradient(90deg,color-mix(in srgb,var(--black30a,rgba(0,0,0,.14)) 90%,#b99862 10%),var(--black30a,rgba(0,0,0,.12)));cursor:pointer;transition:background .18s ease,border-color .18s ease,transform .18s ease}.${INDICATOR_CLASS}:hover{border-color:color-mix(in srgb,#b99862 56%,transparent);background:color-mix(in srgb,var(--black30a,rgba(0,0,0,.14)) 84%,#b99862 16%)}.${INDICATOR_CLASS}:active{transform:translateY(1px)}.${INDICATOR_CLASS} .ma-ind-label{font-family:ui-serif,"Noto Serif SC","Songti SC",serif;letter-spacing:.08em}.${INDICATOR_CLASS} .ma-ind-summary{font-size:10px;opacity:.76}.${INDICATOR_CLASS} .ma-ind-steps{display:inline-flex;align-items:center;gap:6px;margin-left:auto}.${INDICATOR_CLASS} .ma-ind-open{font-size:16px;opacity:.52}
 @media (max-width:480px){#${PANEL_ID}{left:max(6px,env(safe-area-inset-left));right:max(6px,env(safe-area-inset-right));width:auto;max-height:calc(100dvh - 12px - env(safe-area-inset-top) - env(safe-area-inset-bottom));border-radius:14px}.ma-lite-body{padding:10px}.ma-lite-thresholds,.ma-lite-management-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ma-lite-pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}.${INDICATOR_CLASS}{border-radius:10px;flex-wrap:nowrap;width:100%;box-sizing:border-box}.${INDICATOR_CLASS} .ma-ind-steps{display:none}.${INDICATOR_CLASS} .ma-ind-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.${INDICATOR_CLASS} .ma-ind-open{margin-left:auto}.ma-lite-recall-toolbar{grid-template-columns:1fr}.ma-lite-inline-editor{min-height:45dvh}}
+/* ui.15: 白色游戏档案。保留原功能链，只收紧层级与操作距离。 */
+#${PANEL_ID}{--ma-paper:#fff;--ma-paper-soft:#f6f8fb;--ma-ink:#171a20;--ma-muted:#68707d;--ma-line:#dfe4ec;--ma-blue:#315d8a;--ma-blue-soft:#edf4fb;width:min(480px,calc(100vw - 20px));max-height:min(88dvh,820px);border:1px solid #cfd6e1;border-radius:12px;background:var(--ma-paper);color:var(--ma-ink);box-shadow:0 18px 55px rgba(24,32,45,.22);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+#${PANEL_ID} button,#${PANEL_ID} input,#${PANEL_ID} select,#${PANEL_ID} textarea{color:var(--ma-ink)}#${PANEL_ID} button{border-color:var(--ma-line);background:#fff}#${PANEL_ID} button:hover{border-color:#aebdce;background:var(--ma-paper-soft)}#${PANEL_ID} button:disabled{opacity:.38}
+.ma-lite-header{min-height:48px;padding:8px 12px;border-bottom:1px solid var(--ma-line);background:#fff}.ma-lite-title{gap:0}.ma-lite-title strong{font:700 17px/1.2 ui-serif,"Noto Serif SC","Songti SC",serif;color:#111923;letter-spacing:.08em}.ma-lite-title small{margin-top:2px;font-size:8px;color:var(--ma-muted);letter-spacing:.12em}.ma-lite-close{min-width:36px;min-height:36px;border:0!important;border-radius:8px!important;background:transparent!important;color:#3d4652!important}
+.ma-lite-body{gap:9px;padding:0 12px 12px;background:#fff;color:var(--ma-ink)}.ma-lite-page-nav{position:sticky;top:0;z-index:8;gap:0;padding:0;border:0;border-bottom:1px solid var(--ma-line);border-radius:0;background:#fff}.ma-lite-page-tab{min-height:40px;border:0!important;border-bottom:2px solid transparent!important;border-radius:0!important;background:transparent!important;color:#5c6571!important;font-size:12px}.ma-lite-page-tab[aria-selected="true"]{border-bottom-color:var(--ma-blue)!important;background:transparent!important;color:var(--ma-blue)!important;box-shadow:none!important;font-weight:700}
+.ma-lite-page{gap:8px}.ma-lite-taskbar,.ma-lite-status{min-height:0;padding:7px 9px;border:1px solid var(--ma-line);border-radius:7px;background:var(--ma-paper-soft);color:#48515e;font-size:10px;opacity:1}.ma-lite-pipeline{gap:6px}.ma-lite-stage{min-height:54px;padding:7px;border:1px solid var(--ma-line);border-radius:7px;background:#fff;box-shadow:none}.ma-lite-actions,.ma-lite-worldbook-quick-actions{gap:6px}.ma-lite-actions button,.ma-lite-worldbook-quick-actions button{min-height:38px;padding:6px 8px;border-radius:7px;font-size:11px}.ma-lite-actions button:first-child{border-color:#a9bfd6;background:var(--ma-blue-soft);color:#244c74;font-weight:700}.ma-lite-tool-group{border:1px solid var(--ma-line);border-radius:8px;background:#fff}.ma-lite-tool-group>summary{min-height:38px;padding:7px 9px;color:#313944}.ma-lite-tool-group-content{padding:0 8px 8px}
+.ma-lite-recall{gap:8px;padding:0;border:0;border-radius:0;background:#fff}.ma-lite-recall-head{min-height:44px;border-bottom:1px solid var(--ma-line)}.ma-lite-recall-head strong{font:700 16px/1.2 ui-serif,"Noto Serif SC","Songti SC",serif;color:#172230}.ma-lite-recall-edit,.ma-lite-recall-replan,.ma-lite-recall-refresh{min-width:34px;min-height:34px;padding:4px 8px;border:0;border-radius:7px;background:transparent;color:var(--ma-blue);font-size:11px}.ma-lite-recall-status{color:var(--ma-muted);opacity:1}.ma-lite-recall-toolbar{grid-template-columns:minmax(0,1fr) 102px;gap:6px}.ma-lite-recall-search,.ma-lite-recall-filter{min-height:38px;padding:6px 9px;border:1px solid var(--ma-line);border-radius:7px;background:#fff;color:var(--ma-ink);font-size:11px}.ma-lite-recall-summary{flex-wrap:nowrap;gap:4px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.ma-lite-recall-summary::-webkit-scrollbar{display:none}.ma-lite-recall-summary-chip{min-height:28px;padding:4px 8px;border-color:transparent;background:var(--ma-paper-soft);color:#59616d}.ma-lite-recall-summary-chip[data-active="true"]{border-color:#bfd0e1;background:var(--ma-blue-soft);color:var(--ma-blue)}
+.ma-lite-folder-toolbar{justify-content:flex-end}.ma-lite-folder-toolbar button{min-height:34px;border:0;background:transparent;color:var(--ma-blue)}.ma-lite-folder{border:0;border-bottom:1px solid var(--ma-line);border-radius:0;background:#fff}.ma-lite-folder>summary{min-height:38px;padding:5px 2px}.ma-lite-folder-title{font:700 13px/1.3 ui-serif,"Noto Serif SC","Songti SC",serif;color:#293443}.ma-lite-folder-count{color:var(--ma-muted);opacity:1}.ma-lite-folder-entries{gap:0;padding:0}.ma-lite-folder-empty{padding:7px;color:var(--ma-muted)}.ma-lite-folder-actions button{min-width:30px;min-height:30px;border:0;background:var(--ma-paper-soft);color:#4e5966}
+.ma-lite-recall-row{border:0;border-top:1px solid #edf0f4;border-left:3px solid #9ba8b7;border-radius:0;background:#fff;box-shadow:none;overflow:hidden}.ma-lite-recall-row:first-child{border-top:0}.ma-lite-recall-row[open]{border-color:#d7e0ea;background:#fbfcfe}.ma-lite-recall-row[data-entry-type="人物"]{border-left-color:#7568a7}.ma-lite-recall-row[data-entry-type="场景"]{border-left-color:#b46f3c}.ma-lite-recall-row[data-entry-type="物品"]{border-left-color:#3c806a}.ma-lite-recall-row[data-entry-type="事件"]{border-left-color:#a34f59}.ma-lite-recall-row[data-entry-type="世界"]{border-left-color:#315d8a}.ma-lite-recall-row[data-entry-type="基础设定"]{border-left-color:#8a7440}.ma-lite-recall-row-head{min-height:43px;padding:6px 8px;gap:7px;align-items:center}.ma-lite-type-icon{display:inline-grid;place-items:center;flex:0 0 22px;width:22px;height:22px;border-radius:6px;background:var(--ma-paper-soft);color:#526171;font-size:10px}.ma-lite-recall-title{font:650 13px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1c232c;white-space:nowrap}.ma-lite-codex-type{padding:2px 5px;background:transparent;color:#77808b;font-size:8px}.ma-lite-codex-content{margin:0 8px;padding:10px 10px;border-top:1px solid var(--ma-line);border-radius:0;background:#fff;color:#20252c;font-size:12px;line-height:1.72}.ma-lite-codex-footer,.ma-lite-recall-meta,.ma-lite-recall-relations{margin-inline:9px}.ma-lite-badge{background:var(--ma-paper-soft);color:#555f6c}.ma-lite-recall-relations{background:var(--ma-blue-soft);color:#365b80}.ma-lite-recall-pager{margin-top:6px}.ma-lite-recall-page-button{min-height:36px;border-color:var(--ma-line);background:#fff;color:#3d4652}
+.ma-lite-recall-edit-actions{position:sticky;bottom:-1px;z-index:7;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:0 -4px;padding:7px 4px calc(7px + env(safe-area-inset-bottom));border-top:1px solid var(--ma-line);background:rgba(255,255,255,.96);backdrop-filter:blur(8px)}.ma-lite-recall-edit-actions button{min-height:36px;padding:5px 4px;font-size:9px}.ma-lite-lock-help{padding:6px 8px;border-color:#cfdae6;background:var(--ma-blue-soft);color:#43566a;opacity:1}.ma-lite-entry-folder-controls select{background:#fff;color:var(--ma-ink);border-color:var(--ma-line)}
+.ma-lite-merge-dialog{position:absolute;inset:0;z-index:30;display:grid;place-items:center;padding:16px;background:rgba(25,32,43,.32)}.ma-lite-merge-dialog[hidden]{display:none}.ma-lite-merge-card{box-sizing:border-box;width:min(360px,100%);display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid #ccd5e0;border-radius:10px;background:#fff;box-shadow:0 18px 45px rgba(22,31,44,.25)}.ma-lite-merge-card>strong{font:700 16px/1.2 ui-serif,"Noto Serif SC",serif}.ma-lite-merge-selection{max-height:90px;overflow:auto;padding:8px;border-radius:7px;background:var(--ma-paper-soft);color:#4f5966;font-size:10px;line-height:1.5}.ma-lite-merge-card textarea{box-sizing:border-box;width:100%;min-height:90px;padding:8px;border:1px solid var(--ma-line);border-radius:7px;background:#fff;resize:vertical}.ma-lite-merge-buttons{display:flex;justify-content:flex-end;gap:6px}.ma-lite-merge-buttons button{min-height:36px;padding:6px 12px;border-radius:7px}.ma-lite-merge-buttons button:last-child{border-color:#9db6ce;background:var(--ma-blue-soft);color:#244d76;font-weight:700}
+.ma-lite-maintenance-home{display:flex;flex-direction:column;gap:8px}.ma-lite-maintenance-launcher,.ma-lite-child-back{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:42px;padding:8px 10px;border:1px solid var(--ma-line);border-radius:8px;background:#fff;color:#27313d}.ma-lite-maintenance-launcher span{display:flex;align-items:center;gap:9px}.ma-lite-maintenance-launcher span>i{color:var(--ma-blue)}.ma-lite-child-back{justify-content:flex-start;gap:6px;border:0;border-bottom:1px solid var(--ma-line);border-radius:0;color:var(--ma-blue)}.ma-lite-maintenance-child{display:flex;flex-direction:column;gap:8px}.ma-lite-maintenance-child[hidden],.ma-lite-maintenance-home[hidden]{display:none}.ma-lite-maintenance-settings{display:flex;flex-direction:column;gap:8px}
+.ma-lite-world-setting{gap:8px;padding:0;border:0;background:#fff}.ma-lite-world-setting-head{font:700 16px/1.2 ui-serif,"Noto Serif SC",serif}.ma-lite-world-setting-help{color:var(--ma-muted);opacity:1}.ma-lite-world-setting textarea{min-height:230px;padding:10px;border:1px solid var(--ma-line);border-radius:8px;background:#fff;color:var(--ma-ink);font:12px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.ma-lite-world-setting-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.ma-lite-world-setting-actions button{min-height:38px;border-color:var(--ma-line);border-radius:7px;background:#fff;color:#303945}.ma-lite-world-setting-actions button:first-child{grid-column:auto;border-color:var(--ma-line)}.ma-lite-world-setting-actions button:nth-child(2){border-color:#9fb8d0;background:var(--ma-blue-soft);color:#244e77;font-weight:700}.ma-lite-world-setting-status{color:var(--ma-muted);opacity:1}.ma-lite-world-setting-entry{border-color:var(--ma-line);background:#fff}.ma-lite-world-setting-entry pre{color:#303841;opacity:1}
+.${INDICATOR_CLASS}{box-sizing:border-box;width:fit-content;max-width:min(92%,430px);min-height:28px;margin:6px 0 2px;padding:4px 7px;border:1px solid #d7dee8;border-radius:8px;background:rgba(255,255,255,.96);color:#252b34;box-shadow:0 2px 8px rgba(28,36,48,.06);font-size:9px;opacity:.92!important}.${INDICATOR_CLASS}:hover{border-color:#aebfd0;background:#fff}.${INDICATOR_CLASS}[data-history="history"],.${INDICATOR_CLASS}[data-history="archived"]{min-height:22px;padding:3px 6px;border-color:transparent;background:transparent;box-shadow:none;opacity:.62!important}.${INDICATOR_CLASS}[data-history="archived"]{opacity:.42!important}.${INDICATOR_CLASS} .ma-ind-label{color:#294f75;letter-spacing:.06em}.${INDICATOR_CLASS} .ma-ind-summary{font-size:9px;color:#59636f;opacity:1}.${INDICATOR_CLASS} .ma-ind-steps{gap:4px}.${INDICATOR_CLASS} .ma-ind-open{font-size:13px;color:#73808e;opacity:1}.ma-ind-dot{width:6px;height:6px;box-shadow:0 0 0 1px rgba(35,45,58,.1)}
+@media (max-width:480px){#${PANEL_ID}{left:max(5px,env(safe-area-inset-left));right:max(5px,env(safe-area-inset-right));width:auto;max-height:calc(100dvh - 10px - env(safe-area-inset-top) - env(safe-area-inset-bottom));border-radius:10px}.ma-lite-header{padding:6px 9px}.ma-lite-body{padding:0 9px 9px}.ma-lite-recall-toolbar{grid-template-columns:1fr}.ma-lite-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.ma-lite-recall-edit-actions{grid-template-columns:repeat(4,minmax(0,1fr))}.${INDICATOR_CLASS}{width:fit-content;max-width:92%;border-radius:8px}.${INDICATOR_CLASS} .ma-ind-steps{display:none}.${INDICATOR_CLASS} .ma-ind-open{margin-left:auto}.ma-lite-inline-editor{min-height:42dvh}}
 `;
         document.head.append(style);
     }
@@ -2443,7 +2459,7 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：title.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         title.className = 'ma-lite-title';
         // [MA-LOCK] 状态写入锁：title.innerHTML 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 手记 · 维护</small>';
+        title.innerHTML = '<strong>镜渊</strong><small>MIRROR ABYSS · WORLD DOSSIER</small>';
         // [MA-LOCK] 数据来源锁：close 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const close = document.createElement('button');
         // [MA-LOCK] 状态写入锁：close.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2517,11 +2533,7 @@ class ControlPanel {
         const recall = this.buildRecallSection();
         // [MA-LOCK] 数据来源锁：worldSetting 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const worldSetting = this.buildWorldSettingSection();
-        worldbookPage.append(
-            this.wrapToolSection('世界设定集', recall, true),
-            this.wrapToolSection('状态概览', management, false),
-            this.wrapToolSection('导入基础设定', worldSetting, false),
-        );
+        worldbookPage.append(recall);
 
         // [MA-LOCK] 数据来源锁：apiSection 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const apiSection = this.buildApiSection();
@@ -2568,7 +2580,42 @@ class ControlPanel {
         const diagnostic = this.buildDiagnosticSection();
         // [MA-LOCK] 数据来源锁：reset 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const reset = this.buildResetSection();
-        maintenancePage.append(settingsPage, this.wrapToolSection('诊断与验收', diagnostic, false), this.wrapToolSection('旧格式迁移', rebuild, false), this.wrapToolSection('重置与故障恢复', reset, false));
+        const maintenanceHome = document.createElement('div');
+        maintenanceHome.className = 'ma-lite-maintenance-home';
+        const importLauncher = document.createElement('button');
+        importLauncher.type = 'button';
+        importLauncher.className = 'ma-lite-maintenance-launcher';
+        importLauncher.innerHTML = '<span><i class="fa-solid fa-book-atlas" aria-hidden="true"></i><b>导入世界设定</b></span><i class="fa-solid fa-chevron-right" aria-hidden="true"></i>';
+        const importView = document.createElement('section');
+        importView.className = 'ma-lite-maintenance-child';
+        importView.hidden = true;
+        const importBack = document.createElement('button');
+        importBack.type = 'button';
+        importBack.className = 'ma-lite-child-back';
+        importBack.innerHTML = '<i class="fa-solid fa-chevron-left" aria-hidden="true"></i> 返回维护';
+        importView.append(importBack, worldSetting);
+        let maintenanceScrollTop = 0;
+        importLauncher.addEventListener('click', () => {
+            maintenanceScrollTop = this.panel?.querySelector?.('.ma-lite-body')?.scrollTop || 0;
+            maintenanceHome.hidden = true;
+            importView.hidden = false;
+            this.panel?.querySelector?.('.ma-lite-body')?.scrollTo?.({ top: 0 });
+            this.worldSettingTextarea?.focus?.();
+        });
+        importBack.addEventListener('click', () => {
+            importView.hidden = true;
+            maintenanceHome.hidden = false;
+            this.panel?.querySelector?.('.ma-lite-body')?.scrollTo?.({ top: maintenanceScrollTop });
+        });
+        maintenanceHome.append(
+            importLauncher,
+            this.wrapToolSection('状态概览', management, true),
+            settingsPage,
+            this.wrapToolSection('诊断与验收', diagnostic, false),
+            this.wrapToolSection('旧格式迁移', rebuild, false),
+            this.wrapToolSection('重置与故障恢复', reset, false),
+        );
+        maintenancePage.append(maintenanceHome, importView);
         body.append(pageNav, runPage, worldbookPage, maintenancePage);
         panel.append(header, body);
         this.showPage('run', false);
@@ -3139,13 +3186,13 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：help.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         help.className = 'ma-lite-world-setting-help';
         // [MA-LOCK] 状态写入锁：help.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        help.textContent = '只在玩家明确点击后读取下方文本。普通聊天仍保持防误触：玩家输入只用于理解行动，不会自动写成世界设定。先生成预览，确认后再写入当前绑定世界书。';
+        help.textContent = 'AI 整理 · 预览 · 确认写入';
         // [MA-LOCK] 数据来源锁：textarea 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const textarea = document.createElement('textarea');
         // [MA-LOCK] 状态写入锁：textarea.maxLength 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         textarea.maxLength = 24000;
         // [MA-LOCK] 状态写入锁：textarea.placeholder 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        textarea.placeholder = '粘贴世界框架、自然规则、种族、能力体系、地区组织、制度、开局地点与已存在人物。写作要求、文风和未来剧情计划不会进入世界书。';
+        textarea.placeholder = '在此粘贴世界设定，或导入 TXT……';
         textarea.setAttribute('aria-label', '玩家世界设定文本');
         textarea.addEventListener('input', () => {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -3161,6 +3208,26 @@ class ControlPanel {
         const actions = document.createElement('div');
         // [MA-LOCK] 状态写入锁：actions.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         actions.className = 'ma-lite-world-setting-actions';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.txt,text/plain';
+        fileInput.hidden = true;
+        const importTxt = document.createElement('button');
+        importTxt.type = 'button';
+        importTxt.textContent = '导入 TXT';
+        importTxt.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', async () => {
+            const file = fileInput.files?.[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                textarea.value = text.slice(0, textarea.maxLength);
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                if (this.worldSettingStatusNode) this.worldSettingStatusNode.textContent = `已读取 ${file.name}，将使用与粘贴文本相同的 AI 整理流程。`;
+            } catch (error) {
+                if (this.worldSettingStatusNode) this.worldSettingStatusNode.textContent = `TXT 读取失败：${(0, util_1.errorText)(error)}`;
+            } finally { fileInput.value = ''; }
+        });
         // [MA-LOCK] 数据来源锁：preview 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const preview = document.createElement('button');
         // [MA-LOCK] 状态写入锁：preview.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -3182,7 +3249,7 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：clear.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         clear.textContent = '清空';
         clear.addEventListener('click', () => void this.runWorldSettingAction('clearWorldSettingsPreview'));
-        actions.append(preview, commit, clear);
+        actions.append(importTxt, preview, commit, clear, fileInput);
         // [MA-LOCK] 数据来源锁：status 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const status = document.createElement('div');
         // [MA-LOCK] 状态写入锁：status.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -3208,6 +3275,7 @@ class ControlPanel {
         this.worldSettingCommitButton = commit;
         // [MA-LOCK] 状态写入锁：this.worldSettingClearButton 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.worldSettingClearButton = clear;
+        this.worldSettingFileButton = importTxt;
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return section;
     }
@@ -4157,7 +4225,7 @@ class ControlPanel {
     }
 
     // [MA-LOCK] 方法职责锁：mergeSelectedEntries 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
-    async mergeSelectedEntries() {
+    async mergeSelectedEntries(requirement = '') {
         // [MA-LOCK] 数据来源锁：uids 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const uids = this.selectedManagementUids();
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -4170,7 +4238,7 @@ class ControlPanel {
         // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
         try {
             // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const result = await this.actions.mergeEntries?.(uids);
+            const result = await this.actions.mergeEntries?.(uids, String(requirement || '').trim());
             // [MA-LOCK] 数据来源锁：detail 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const detail = `合并完成：写入${Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0)}，删除${Number(result?.warehouse?.deletedCount || 0)}`;
             this.setStatus(detail); if (this.recallStatusNode) this.recallStatusNode.textContent = detail;
@@ -4298,7 +4366,7 @@ class ControlPanel {
         const merge = document.createElement('button');
         // [MA-LOCK] 状态写入锁：merge.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         merge.type = 'button'; merge.textContent = '合并'; merge.title = '把玩家选中的完整条目直接交给模型合并整理';
-        merge.addEventListener('click', () => void this.mergeSelectedEntries());
+        merge.addEventListener('click', () => this.openMergeDialog());
         // [MA-LOCK] 数据来源锁：remove 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const remove = document.createElement('button');
         // [MA-LOCK] 状态写入锁：remove.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4315,7 +4383,40 @@ class ControlPanel {
         content.className = 'ma-lite-recall-empty';
         // [MA-LOCK] 状态写入锁：content.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         content.textContent = '尚未读取';
-        section.append(head, status, lockHelp, manageActions, content);
+        const mergeDialog = document.createElement('div');
+        mergeDialog.className = 'ma-lite-merge-dialog';
+        mergeDialog.hidden = true;
+        mergeDialog.setAttribute('role', 'dialog');
+        mergeDialog.setAttribute('aria-modal', 'true');
+        const mergeCard = document.createElement('div');
+        mergeCard.className = 'ma-lite-merge-card';
+        const mergeTitle = document.createElement('strong');
+        mergeTitle.textContent = '手动合并';
+        const mergeSelection = document.createElement('div');
+        mergeSelection.className = 'ma-lite-merge-selection';
+        const mergeRequirement = document.createElement('textarea');
+        mergeRequirement.maxLength = 2000;
+        mergeRequirement.placeholder = '本次合并要求（可选）';
+        mergeRequirement.setAttribute('aria-label', '本次合并要求');
+        const mergeButtons = document.createElement('div');
+        mergeButtons.className = 'ma-lite-merge-buttons';
+        const mergeCancel = document.createElement('button');
+        mergeCancel.type = 'button'; mergeCancel.textContent = '取消';
+        const mergeStart = document.createElement('button');
+        mergeStart.type = 'button'; mergeStart.textContent = '开始合并';
+        mergeCancel.addEventListener('click', () => { mergeDialog.hidden = true; });
+        mergeStart.addEventListener('click', () => {
+            mergeDialog.hidden = true;
+            void this.mergeSelectedEntries(mergeRequirement.value);
+        });
+        mergeButtons.append(mergeCancel, mergeStart);
+        mergeCard.append(mergeTitle, mergeSelection, mergeRequirement, mergeButtons);
+        mergeDialog.append(mergeCard);
+        mergeDialog.addEventListener('click', (event) => { if (event.target === mergeDialog) mergeDialog.hidden = true; });
+        section.append(head, status, lockHelp, manageActions, content, mergeDialog);
+        this.mergeDialogNode = mergeDialog;
+        this.mergeSelectionNode = mergeSelection;
+        this.mergeRequirementNode = mergeRequirement;
         // [MA-LOCK] 状态写入锁：this.recallNode 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.recallNode = content;
         // [MA-LOCK] 状态写入锁：this.recallStatusNode 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4330,6 +4431,16 @@ class ControlPanel {
         this.recallEditActionsNode = manageActions;
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
         return section;
+    }
+    openMergeDialog() {
+        const uids = this.selectedManagementUids();
+        if (uids.length < 2) { this.setStatus('至少选择两个条目才能合并', true); return; }
+        const selected = new Set(uids);
+        const titles = (this.recallModel?.entries ?? []).filter((entry) => selected.has(String(entry.uid))).map((entry) => entry.title);
+        if (this.mergeSelectionNode) this.mergeSelectionNode.textContent = titles.join(' · ');
+        if (this.mergeRequirementNode) this.mergeRequirementNode.value = '';
+        if (this.mergeDialogNode) this.mergeDialogNode.hidden = false;
+        this.mergeRequirementNode?.focus?.();
     }
     // [MA-LOCK] 方法职责锁：toggleRecallEditMode 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     toggleRecallEditMode(force = null) {
@@ -4574,14 +4685,12 @@ class ControlPanel {
     buildRecallFolderToolbar() {
         const toolbar = document.createElement('div');
         toolbar.className = 'ma-lite-folder-toolbar';
+        toolbar.hidden = !this.recallEditMode;
         const create = document.createElement('button');
         create.type = 'button';
-        create.textContent = '新建文件夹';
+        create.textContent = '＋ 新建文件夹';
         create.addEventListener('click', () => this.createRecallFolder());
-        const help = document.createElement('span');
-        help.className = 'ma-lite-folder-help';
-        help.textContent = this.recallEditMode ? '已选条目会放入新文件夹；名称只机械预填共同场景或包含名称。' : '文件夹只改变手记显示。';
-        toolbar.append(create, help);
+        toolbar.append(create);
         return toolbar;
     }
     buildRecallFolderViews(list, entries) {
@@ -4836,6 +4945,11 @@ class ControlPanel {
             title.textContent = String(item.title || '').replace(/^[^｜]+｜/u, '') || item.title;
             // [MA-LOCK] 状态写入锁：title.title 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             title.title = item.title;
+            const typeIcons = { '人物': 'fa-user', '场景': 'fa-location-dot', '物品': 'fa-gem', '事件': 'fa-clock', '世界': 'fa-earth-asia', '基础设定': 'fa-scroll' };
+            const typeIcon = document.createElement('span');
+            typeIcon.className = 'ma-lite-type-icon';
+            typeIcon.title = item.type || '其他';
+            typeIcon.innerHTML = `<i class="fa-solid ${typeIcons[item.type] || 'fa-file-lines'}" aria-hidden="true"></i>`;
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (this.recallEditMode) {
                 // [MA-LOCK] 数据来源锁：select 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -4854,13 +4968,14 @@ class ControlPanel {
                     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
                     if (select.checked) this.recallSelectedUids.add(uid);
                     else this.recallSelectedUids.delete(uid);
+                    this.syncDisabledState();
                 });
                 head.append(select);
             }
             const type = document.createElement('span');
             type.className = 'ma-lite-codex-type';
             type.textContent = item.type || '其他';
-            head.append(title, type);
+            head.append(typeIcon, title, type);
             if (this.recallEditMode) {
                 const controls = document.createElement('div');
                 controls.className = 'ma-lite-entry-folder-controls';
@@ -5496,13 +5611,14 @@ class ControlPanel {
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.summaryFailureListNode) this.summaryFailureListNode.querySelectorAll('button').forEach((button) => { button.disabled = busy || !master; });
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (this.buttons.selectedSmallSummary) this.buttons.selectedSmallSummary.disabled = busy || !master;
+        const selectionCount = this.selectedManagementUids().length;
+        if (this.buttons.selectedSmallSummary) this.buttons.selectedSmallSummary.disabled = busy || !master || selectionCount < 1;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (this.buttons.selectedLargeSummary) this.buttons.selectedLargeSummary.disabled = busy || !master;
+        if (this.buttons.selectedLargeSummary) this.buttons.selectedLargeSummary.disabled = busy || !master || selectionCount < 1;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (this.buttons.mergeEntries) this.buttons.mergeEntries.disabled = busy || !master;
+        if (this.buttons.mergeEntries) this.buttons.mergeEntries.disabled = busy || !master || selectionCount < 2;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (this.buttons.deleteEntries) this.buttons.deleteEntries.disabled = busy || !master;
+        if (this.buttons.deleteEntries) this.buttons.deleteEntries.disabled = busy || !master || selectionCount < 1;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.recallEditButton) this.recallEditButton.disabled = busy || !master;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -5515,6 +5631,7 @@ class ControlPanel {
         if (this.worldSettingCommitButton) this.worldSettingCommitButton.disabled = busy || !master || this.worldSettingDirty || !this.actions.worldSettingsPreview?.();
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.worldSettingClearButton) this.worldSettingClearButton.disabled = busy || (!String(this.worldSettingTextarea?.value || '').trim() && !this.actions.worldSettingsPreview?.());
+        if (this.worldSettingFileButton) this.worldSettingFileButton.disabled = busy || !master;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.rebuildPreviewButton) this.rebuildPreviewButton.disabled = busy || !master;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -5824,7 +5941,13 @@ class ControlPanel {
                 : finished
                     ? (writeCount > 0 ? `已记录 ${writeCount} 项变化` : '本轮没有长期变化')
                     : '等待处理';
-        indicator.innerHTML = `<span class="ma-ind-label">镜渊</span><span class="ma-ind-summary">${summary}</span><span class="ma-ind-steps">${parts.join('')}</span><span class="ma-ind-open">›</span>`;
+        const knownIndexes = [...this.messageTaskStates.keys()].filter(Number.isInteger);
+        const latestMessageIndex = knownIndexes.length ? Math.max(...knownIndexes) : messageIndex;
+        const age = Math.max(0, latestMessageIndex - messageIndex);
+        indicator.dataset.history = age === 0 ? 'latest' : age > 20 ? 'archived' : 'history';
+        indicator.innerHTML = age === 0
+            ? `<span class="ma-ind-label">镜渊</span><span class="ma-ind-summary">${summary}</span><span class="ma-ind-steps">${parts.join('')}</span><span class="ma-ind-open">›</span>`
+            : `<span class="ma-ind-dot" data-state="${failed ? 'error' : finished ? 'success' : active ? 'running' : 'ready'}"></span><span class="ma-ind-label">镜渊</span>`;
         indicator.setAttribute('role', 'button');
         indicator.tabIndex = 0;
         const openPanel = () => {
@@ -11879,7 +12002,7 @@ class MemoryRunner {
         if (!selected.length) throw new Error(`${label}当前没有待整理条目`);
 
         const basePrompt = kind === 'merge'
-            ? (0, prompts_1.manualMergePrompts)(settings, selected, {})
+            ? (0, prompts_1.manualMergePrompts)(settings, selected, { manualRequirement: String(options.manualRequirement || '').trim() })
             : (0, prompts_1.summaryPrompts)(kind, settings, selected, '', '', {});
         const sourceContext = selected.map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
         const responseTokens = (0, model_request_1.stageResponseTokens)(stage, settings, sourceContext);
@@ -11947,11 +12070,11 @@ class MemoryRunner {
         return applied;
     }
 
-    async mergeSelected(settings, snapshot, selectedUids) {
+    async mergeSelected(settings, snapshot, selectedUids, requirement = '') {
         const selectedIds = [...new Set((selectedUids ?? []).map((uid) => String(uid ?? '').trim()).filter(Boolean))];
         if (selectedIds.length < 2) throw new Error('人工合并至少需要两个条目');
         summaryNotify('info', `镜渊：开始人工合并（${selectedIds.length}个条目）`);
-        const result = await this.summarize('merge', settings, snapshot, { marks: selectedIds.map((uid) => ({ uid })), manualSelection: true });
+        const result = await this.summarize('merge', settings, snapshot, { marks: selectedIds.map((uid) => ({ uid })), manualSelection: true, manualRequirement: String(requirement || '').trim().slice(0, 2000) });
         const writes = Number(result?.warehouse?.createdCount || 0) + Number(result?.warehouse?.updatedCount || 0);
         const deleted = Number(result?.warehouse?.deletedCount || 0);
         this.setStatus(snapshot.chatKey, 'complete', `人工合并完成：写入${writes}，删除${deleted}`);
@@ -14633,7 +14756,7 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
         ? String(settings.smallSummaryPrompt || '').trim()
         : kind === 'large'
             ? String(settings.largeSummaryPrompt || '').trim()
-            : '';
+            : String(options.manualRequirement || '').trim();
     const system = `职责：${goal}
 
 只压缩世界书已有事实，不规划未来，不生成任务、调查目标、剧情方向或建议。
