@@ -4,8 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "3.0.0-lite.ui.11-setting-codex-final-candidate-v3",
-  "homePage": "https://github.com/228184520lyd-boop/mirror-abyss-plugin",
+  "version": "3.0.0-lite.ui.13-folder-ui",
   "auto_update": false,
   "minimum_client_version": "1.18.0",
   "hooks": {

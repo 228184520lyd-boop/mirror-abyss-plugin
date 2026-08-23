@@ -104,7 +104,7 @@ class MirrorAbyssApplication {
             const phase = String(progress?.phase || '');
             // [MA-LOCK] 数据来源锁：meta 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const meta = { ...(progress || {}), messageIndex: progress?.messageIndex ?? active?.messageIndex ?? null };
-            // ui.73: 四阶段正文指示器只接收真正的提取/写入阶段。
+            // 四阶段正文指示器只接收真正的提取/写入阶段。
             // 小总结、大总结、来源补齐和生命周期 warning 都属于后台记忆维护，
             // 不能再伪装成“提取”状态，更不能把上一条正文染成需修正/失败。
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -1151,15 +1151,15 @@ class MirrorAbyssApplication {
             }
             // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
             else if (taskType === 'migration') {
-                this.controlPanel.setStatus(result?.previewReady ? `整本世界书整理预览已生成：${result.candidates ?? 0}条 → ${result.rebuiltEntries ?? 0}条；更新${result.updatedEntries ?? 0}、新建${result.createdEntries ?? 0}、删除${result.deletedEntries ?? 0}；提交前未修改旧表` : (result?.message || '没有可整理条目'));
+                this.controlPanel.setStatus(result?.previewReady ? `旧格式迁移预览已生成：扫描${result.candidates ?? 0}条，转换${result.updatedEntries ?? 0}条；UID与事实数量不变，提交前未修改世界书` : (result?.message || '没有需要迁移的条目'));
             }
             // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
             else if (taskType === 'commitMigration') {
-                this.controlPanel.setStatus(`整本世界书整理已提交：最终${result?.rebuiltEntries ?? 0}条`);
+                this.controlPanel.setStatus(`旧格式迁移已提交：最终${result?.rebuiltEntries ?? 0}条`);
             }
             // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
             else if (taskType === 'undoMigration') {
-                this.controlPanel.setStatus('上次整本世界书整理已撤销，旧表已恢复');
+                this.controlPanel.setStatus('上次旧格式迁移已撤销，迁移前快照已恢复');
             }
             // [MA-LOCK] 兜底分支锁：else 只处理前述条件未命中的现有情况；不要在这里塞入新的业务语义。
             else {
@@ -1768,7 +1768,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.11-setting-codex-final-candidate-v3';
+exports.VERSION = '3.0.0-lite.ui.13-folder-ui';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -1867,6 +1867,10 @@ class ControlPanel {
         this.recallEditMode = false;
         // [MA-LOCK] 状态写入锁：this.recallSelectedUids 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.recallSelectedUids = new Set();
+        // 一级文件夹只保存手记的显示编排，不写入世界书，也不参与召回与总结。
+        this.recallFolderState = { folders: [], folderByUid: {}, orderByFolder: { default: [] } };
+        this.recallEntryDragUid = '';
+        this.recallFolderDragId = '';
         // [MA-LOCK] 状态写入锁：this.managementNode 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.managementNode = null;
         // [MA-LOCK] 状态写入锁：this.managementStatusNode 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2387,7 +2391,7 @@ class ControlPanel {
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
 .ma-lite-close{min-width:44px;min-height:44px;border:0;border-radius:8px;background:var(--black30a,rgba(255,255,255,.08));color:inherit;cursor:pointer}
 .ma-lite-body{display:flex;flex-direction:column;gap:10px;padding:12px}
-.ma-lite-page-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding-bottom:2px;background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none}.ma-lite-page-tab{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
+.ma-lite-page-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding-bottom:2px;background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none}.ma-lite-page-tab{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:8px;background:rgba(0,0,0,.14);color:inherit;cursor:pointer}.ma-lite-page-tab[aria-selected="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-page{display:flex;flex-direction:column;gap:12px}.ma-lite-page[hidden]{display:none!important}
 .ma-lite-api{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-api-head{display:flex;align-items:center;gap:7px;font-size:13px}.ma-lite-api-head i{opacity:.72}.ma-lite-api-select{box-sizing:border-box;width:100%;min-height:44px;padding:6px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit}.ma-lite-api-probe{min-height:44px;border:1px solid rgba(112,181,255,.48);border-radius:8px;background:rgba(112,181,255,.1);color:inherit;cursor:pointer}.ma-lite-api-probe:disabled{opacity:.42;cursor:not-allowed}.ma-lite-api-status{font-size:11px;line-height:1.4;opacity:.72}.ma-lite-api-help{font-size:10px;line-height:1.4;opacity:.52}
 .ma-lite-switches{display:grid;grid-template-columns:1fr;gap:8px}
 .ma-lite-switch{box-sizing:border-box;display:flex;align-items:center;gap:9px;min-height:44px;padding:9px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04));cursor:pointer}
@@ -2400,6 +2404,7 @@ class ControlPanel {
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:44px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan,.ma-lite-recall-edit{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-lock-help{padding:7px 8px;border:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:7px;font-size:10px;line-height:1.45;opacity:.78}.ma-lite-lock-help strong{opacity:1}.ma-lite-recall-locks{display:flex;flex-wrap:wrap;gap:5px;margin-left:auto}.ma-lite-recall-lock{flex:0 0 auto;min-height:36px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-lock[data-active="true"]{border-color:rgba(255,195,74,.62);background:rgba(255,195,74,.15);font-weight:700}.ma-lite-recall-lock[data-mode="bedrock"][data-active="true"]{border-color:rgba(232,126,126,.62);background:rgba(232,126,126,.14)}.ma-lite-recall-lock:disabled{opacity:.45;cursor:not-allowed}.ma-lite-badge[data-kind="bedrock"]{background:rgba(232,126,126,.16)}.ma-lite-recall-edit[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13);font-weight:700}.ma-lite-recall-edit-actions[hidden]{display:none!important}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{flex:1 1 160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;flex-wrap:wrap;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:44px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-recall-toolbar{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:7px}.ma-lite-recall-search,.ma-lite-recall-filter{box-sizing:border-box;width:100%;min-height:40px;padding:6px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:7px;background:rgba(0,0,0,.18);color:inherit;font-size:10px}.ma-lite-recall-summary-chip{cursor:pointer;color:inherit}.ma-lite-recall-summary-chip[data-active="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-recall-main{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:7px}.ma-lite-recall-mode{display:inline-flex;align-items:center;min-height:22px;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.07);font-size:9px;font-weight:700;white-space:nowrap}.ma-lite-recall-mode[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-recall-mode[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-recall-mode[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-recall-mode[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-recall-mode[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-recall-reason{min-width:0;font-size:10px;line-height:1.45;opacity:.76}.ma-lite-recall-relations{padding:5px 7px;border-radius:6px;background:rgba(112,181,255,.07);font-size:9px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ma-lite-recall-details{border-top:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.1));padding-top:3px}.ma-lite-recall-details>summary{min-height:30px;display:flex;align-items:center;cursor:pointer;font-size:9px;opacity:.6}.ma-lite-recall-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:3px 0 2px}.ma-lite-recall-detail-grid>div{min-width:0;padding:5px 6px;border-radius:6px;background:rgba(0,0,0,.12)}.ma-lite-recall-detail-grid span{display:block;font-size:8px;opacity:.5}.ma-lite-recall-detail-grid b{display:block;margin-top:2px;font-size:9px;font-weight:500;line-height:1.35;overflow-wrap:anywhere}
+.ma-lite-folder-toolbar{display:flex;align-items:center;gap:7px}.ma-lite-folder-toolbar button{min-height:38px;padding:5px 10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-folder-help{font-size:9px;line-height:1.4;opacity:.55}.ma-lite-folder{border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:10px;background:rgba(0,0,0,.08)}.ma-lite-folder[data-dragging="true"]{opacity:.48}.ma-lite-folder>summary{display:flex;align-items:center;gap:7px;min-height:44px;padding:7px 9px;cursor:pointer;list-style:none}.ma-lite-folder>summary::-webkit-details-marker{display:none}.ma-lite-folder-title{min-width:0;flex:1;font:700 13px/1.35 Georgia,"Noto Serif SC",serif}.ma-lite-folder-count{font-size:9px;opacity:.55}.ma-lite-folder-actions{display:flex;gap:4px}.ma-lite-folder-actions button{min-width:32px;min-height:32px;padding:2px 5px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:6px;background:rgba(0,0,0,.16);color:inherit;font-size:9px;cursor:pointer}.ma-lite-folder-entries{display:flex;flex-direction:column;gap:8px;padding:0 8px 8px;min-height:12px}.ma-lite-folder-empty{padding:8px;text-align:center;font-size:9px;opacity:.46}.ma-lite-entry-folder-controls{display:flex;align-items:center;gap:4px;flex:1 1 100%;padding-top:3px}.ma-lite-entry-folder-controls select{min-width:0;flex:1;min-height:34px;padding:3px 5px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:6px;background:rgba(0,0,0,.2);color:inherit;font-size:9px}.ma-lite-entry-folder-controls button{min-width:34px;min-height:34px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:6px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}
 .ma-lite-codex-heading{display:flex;flex-direction:column;gap:2px}.ma-lite-codex-heading strong{font:700 16px/1.2 Georgia,"Noto Serif SC",serif;letter-spacing:.04em}.ma-lite-codex-heading small{font-size:9px;opacity:.52}.ma-lite-recall{gap:11px;padding:11px;background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(0,0,0,.10))}.ma-lite-recall-toolbar{grid-template-columns:minmax(0,1fr) 126px}.ma-lite-recall-search,.ma-lite-recall-filter{min-height:44px;font-size:11px}.ma-lite-recall-summary{gap:7px}.ma-lite-recall-summary-chip{min-height:30px;padding:5px 9px;background:rgba(255,255,255,.035)}.ma-lite-recall-list{gap:11px}.ma-lite-recall-row{position:relative;gap:9px;padding:13px 14px 12px;border-color:rgba(255,255,255,.12);border-left:3px solid rgba(150,165,185,.5);border-radius:10px;background:linear-gradient(155deg,rgba(255,255,255,.065),rgba(0,0,0,.10));box-shadow:0 5px 16px rgba(0,0,0,.14)}.ma-lite-recall-row[data-entry-type="人物"]{border-left-color:#d8a6ff}.ma-lite-recall-row[data-entry-type="场景"]{border-left-color:#ffad72}.ma-lite-recall-row[data-entry-type="物品"]{border-left-color:#78d7b0}.ma-lite-recall-row[data-entry-type="事件"]{border-left-color:#ff808f}.ma-lite-recall-row[data-entry-type="世界"]{border-left-color:#78b9ff}.ma-lite-recall-row[data-entry-type="基础设定"]{border-left-color:#e8cc72}.ma-lite-recall-row-head{align-items:flex-start}.ma-lite-recall-title{white-space:normal;font:700 15px/1.35 Georgia,"Noto Serif SC",serif;letter-spacing:.02em}.ma-lite-codex-type{flex:0 0 auto;padding:3px 7px;border-radius:999px;background:rgba(255,255,255,.08);font-size:9px;line-height:1.35;opacity:.78}.ma-lite-codex-content{margin:0;padding:10px 11px;border-radius:8px;background:rgba(0,0,0,.12);font:11px/1.75 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;color:inherit}.ma-lite-codex-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:2px;font-size:9px;opacity:.5}.ma-lite-codex-uid{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}.ma-lite-recall-relations{padding:7px 9px;border-left:2px solid rgba(112,181,255,.4);border-radius:0 7px 7px 0;background:rgba(112,181,255,.065);font-size:10px;white-space:normal}.ma-lite-recall-meta{gap:6px}.ma-lite-badge{padding:3px 7px;border-radius:999px;font-size:9px}
 
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
@@ -2429,7 +2434,7 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：title.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         title.className = 'ma-lite-title';
         // [MA-LOCK] 状态写入锁：title.innerHTML 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 手记 · 设置 · 维护</small>';
+        title.innerHTML = '<strong>Mirror Abyss｜镜渊</strong><small>运行 · 手记 · 维护</small>';
         // [MA-LOCK] 数据来源锁：close 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const close = document.createElement('button');
         // [MA-LOCK] 状态写入锁：close.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2454,7 +2459,6 @@ class ControlPanel {
         pageNav.append(
             this.makePageButton('run', '运行'),
             this.makePageButton('worldbook', '手记'),
-            this.makePageButton('settings', '设置'),
             this.makePageButton('maintenance', '维护'),
         );
         // [MA-LOCK] 数据来源锁：globalTask 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -2471,7 +2475,8 @@ class ControlPanel {
         // [MA-LOCK] 数据来源锁：worldbookPage 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const worldbookPage = this.makePage('worldbook');
         // [MA-LOCK] 数据来源锁：settingsPage 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const settingsPage = this.makePage('settings');
+        const settingsPage = document.createElement('div');
+        settingsPage.className = 'ma-lite-maintenance-settings';
         // [MA-LOCK] 数据来源锁：maintenancePage 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const maintenancePage = this.makePage('maintenance');
         // [MA-LOCK] 数据来源锁：pipeline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -2554,8 +2559,8 @@ class ControlPanel {
         const diagnostic = this.buildDiagnosticSection();
         // [MA-LOCK] 数据来源锁：reset 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const reset = this.buildResetSection();
-        maintenancePage.append(this.wrapToolSection('诊断与验收', diagnostic, false), this.wrapToolSection('世界书重建', rebuild, false), this.wrapToolSection('重置与故障恢复', reset, false));
-        body.append(pageNav, runPage, worldbookPage, settingsPage, maintenancePage);
+        maintenancePage.append(settingsPage, this.wrapToolSection('诊断与验收', diagnostic, false), this.wrapToolSection('旧格式迁移', rebuild, false), this.wrapToolSection('重置与故障恢复', reset, false));
+        body.append(pageNav, runPage, worldbookPage, maintenancePage);
         panel.append(header, body);
         this.showPage('run', false);
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
@@ -3321,7 +3326,7 @@ class ControlPanel {
         // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
         for (const entry of (summary.entries ?? []).slice(0, 16)) {
             // [MA-LOCK] 数据来源锁：row 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const row = document.createElement('div');
+            const row = document.createElement('details');
             // [MA-LOCK] 状态写入锁：row.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             row.className = 'ma-lite-world-setting-entry';
             // [MA-LOCK] 数据来源锁：title 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -3380,13 +3385,13 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：head.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         head.className = 'ma-lite-rebuild-head';
         // [MA-LOCK] 状态写入锁：head.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        head.textContent = 'AI辅助世界书重建';
+        head.textContent = '旧格式一次性迁移';
         // [MA-LOCK] 数据来源锁：help 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const help = document.createElement('div');
         // [MA-LOCK] 状态写入锁：help.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         help.className = 'ma-lite-rebuild-help';
         // [MA-LOCK] 状态写入锁：help.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        help.textContent = '整本当前世界书一次交给模型，按大总结标准整理颗粒度；预览阶段不修改世界书，确认后再提交。';
+        help.textContent = '只做确定性字段与栏目映射，保留原UID、事实内容和玩家管理状态；不调用模型重新理解世界。';
         // [MA-LOCK] 数据来源锁：actions 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const actions = document.createElement('div');
         // [MA-LOCK] 状态写入锁：actions.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -3396,21 +3401,21 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：preview.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         preview.type = 'button';
         // [MA-LOCK] 状态写入锁：preview.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        preview.textContent = '生成AI重建预览';
+        preview.textContent = '扫描旧格式';
         preview.addEventListener('click', () => void this.runRebuildAction('migrate'));
         // [MA-LOCK] 数据来源锁：commit 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const commit = document.createElement('button');
         // [MA-LOCK] 状态写入锁：commit.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         commit.type = 'button';
         // [MA-LOCK] 状态写入锁：commit.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        commit.textContent = '提交并替换旧表';
+        commit.textContent = '提交迁移';
         commit.addEventListener('click', () => void this.runRebuildAction('commitMigration'));
         // [MA-LOCK] 数据来源锁：undo 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const undo = document.createElement('button');
         // [MA-LOCK] 状态写入锁：undo.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         undo.type = 'button';
         // [MA-LOCK] 状态写入锁：undo.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        undo.textContent = '撤销上次重建';
+        undo.textContent = '撤销上次迁移';
         undo.addEventListener('click', () => void this.runRebuildAction('undoMigration'));
         actions.append(preview, commit, undo);
         // [MA-LOCK] 数据来源锁：status 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -3424,7 +3429,7 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：content.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         content.className = 'ma-lite-rebuild-empty';
         // [MA-LOCK] 状态写入锁：content.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        content.textContent = '尚未生成整本整理预览';
+        content.textContent = '尚未生成迁移预览';
         section.append(head, help, actions, status, content);
         // [MA-LOCK] 状态写入锁：this.rebuildNode 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.rebuildNode = content;
@@ -3447,14 +3452,14 @@ class ControlPanel {
         const action = this.actions[kind];
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (typeof action !== 'function') {
-            this.setStatus('世界书重建功能未连接', true);
+            this.setStatus('旧格式迁移功能未连接', true);
             // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return;
         }
         this.pendingActions.add(kind);
         this.syncDisabledState();
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = kind === 'migrate' ? '正在把整本世界书交给模型整理…' : kind === 'commitMigration' ? '正在原子提交新结构并回读校验…' : '正在恢复上次重建前的旧表…';
+        if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = kind === 'migrate' ? '正在机械扫描旧栏目…' : kind === 'commitMigration' ? '正在原子提交迁移并回读校验…' : '正在恢复迁移前快照…';
         // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
         try {
             // [MA-LOCK] 数据来源锁：result 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -3463,10 +3468,10 @@ class ControlPanel {
             const summary = kind === 'migrate' ? result : this.actions.migrationPreview?.();
             this.renderRebuildPreview(summary);
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (kind === 'migrate') this.setStatus(result?.previewReady ? '世界书重建预览已生成，旧表未修改' : (result?.message || '没有可重建条目'));
+            if (kind === 'migrate') this.setStatus(result?.previewReady ? '旧格式迁移预览已生成，世界书未修改' : (result?.message || '没有需要迁移的条目'));
             // [MA-LOCK] 条件门锁：当前 else-if 是既有互斥分支；不要增加模糊匹配或让多个分支同时承担同一职责。
-            else if (kind === 'commitMigration') this.setStatus('世界书重建已提交，旧表已由新结构替换');
-            else this.setStatus('上次世界书重建已撤销');
+            else if (kind === 'commitMigration') this.setStatus('旧格式迁移已提交并完成权威回读');
+            else this.setStatus('上次旧格式迁移已撤销');
             // [MA-LOCK] 异步顺序锁：当前 await 保证操作顺序/提交边界；不要随意并行化造成状态竞态。
             await this.refreshRecallMap(true);
         }
@@ -3474,7 +3479,7 @@ class ControlPanel {
         catch (error) {
             // [MA-LOCK] 数据来源锁：text 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const text = (0, util_1.errorText)(error);
-            this.setStatus(`世界书重建失败：${text}`, true);
+            this.setStatus(`旧格式迁移失败：${text}`, true);
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (this.rebuildStatusNode) this.rebuildStatusNode.textContent = `失败：${text}`;
         }
@@ -3512,7 +3517,7 @@ class ControlPanel {
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!summary?.previewReady && !summary?.worldbookName) {
             this.rebuildNode.className = 'ma-lite-rebuild-empty';
-            this.rebuildNode.textContent = '尚未生成整本整理预览';
+            this.rebuildNode.textContent = '尚未生成迁移预览';
             // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
             return;
         }
@@ -4419,6 +4424,224 @@ class ControlPanel {
             if (serial === this.recallLoadSerial && this.recallReplanButton) this.recallReplanButton.disabled = false;
         }
     }
+    recallFolderScopeKey() {
+        return `worldbook:${String(this.recallWorldbookName || 'unbound').trim()}`.slice(0, 160);
+    }
+    loadRecallFolderState(validUids = new Set()) {
+        const stored = this.getSettings()?.uiFoldersByWorldbook?.[this.recallFolderScopeKey()] ?? {};
+        const folders = Array.isArray(stored.folders) ? stored.folders.map((folder) => ({
+            id: String(folder?.id ?? '').trim(),
+            name: String(folder?.name ?? '').trim().slice(0, 40),
+            collapsed: folder?.collapsed === true,
+        })).filter((folder) => folder.id && folder.id !== 'default' && folder.name) : [];
+        const folderIds = new Set(['default', ...folders.map((folder) => folder.id)]);
+        const folderByUid = {};
+        for (const [uid, folderId] of Object.entries(stored.folderByUid ?? {})) {
+            if (validUids.has(uid) && folderIds.has(String(folderId))) folderByUid[uid] = String(folderId);
+        }
+        const orderByFolder = { default: [] };
+        for (const folderId of folderIds) {
+            orderByFolder[folderId] = (0, util_1.normalizeStringArray)(stored.orderByFolder?.[folderId]).filter((uid) => validUids.has(uid));
+        }
+        this.recallFolderState = { folders, folderByUid, orderByFolder };
+    }
+    saveRecallFolderState() {
+        const settings = this.getSettings();
+        const next = structuredClone(settings.uiFoldersByWorldbook ?? {});
+        next[this.recallFolderScopeKey()] = structuredClone(this.recallFolderState);
+        this.actions.configure?.({ uiFoldersByWorldbook: next });
+    }
+    folderIdForEntry(uid) {
+        const candidate = String(this.recallFolderState.folderByUid?.[String(uid)] ?? 'default');
+        return candidate === 'default' || this.recallFolderState.folders.some((folder) => folder.id === candidate) ? candidate : 'default';
+    }
+    orderedRecallEntries(entries) {
+        const byUid = new Map(entries.map((entry) => [String(entry.uid ?? ''), entry]));
+        const output = [];
+        for (const folderId of ['default', ...this.recallFolderState.folders.map((folder) => folder.id)]) {
+            const ordered = this.recallFolderState.orderByFolder?.[folderId] ?? [];
+            for (const uid of ordered) {
+                const entry = byUid.get(uid);
+                if (entry && this.folderIdForEntry(uid) === folderId) { output.push(entry); byUid.delete(uid); }
+            }
+            for (const entry of [...byUid.values()]) {
+                if (this.folderIdForEntry(entry.uid) === folderId) { output.push(entry); byUid.delete(String(entry.uid ?? '')); }
+            }
+        }
+        output.push(...byUid.values());
+        return output;
+    }
+    suggestRecallFolderName() {
+        const selected = (this.recallModel?.entries ?? []).filter((entry) => this.recallSelectedUids.has(String(entry.uid ?? '')));
+        const sceneRoots = (0, util_1.unique)(selected.filter((entry) => entry.type === '场景')
+            .map((entry) => (0, util_1.normalizeSceneLocation)(String(entry.title || '').replace(/^[^｜]+｜/u, ''))).filter(Boolean));
+        if (sceneRoots.length === 1) return sceneRoots[0];
+        const names = selected.map((entry) => String(entry.title || '').replace(/^[^｜]+｜/u, '').trim()).filter(Boolean);
+        return [...names].sort((left, right) => left.length - right.length).find((candidate) => names.every((name) => name.includes(candidate))) ?? '';
+    }
+    createRecallFolder() {
+        const selectedUids = [...this.recallSelectedUids];
+        const name = String(globalThis.prompt?.('新文件夹名称', this.suggestRecallFolderName()) ?? '').trim().slice(0, 40);
+        if (!name) return;
+        let id = `folder-${Date.now().toString(36)}`;
+        while (this.recallFolderState.folders.some((folder) => folder.id === id)) id += '-1';
+        this.recallFolderState.folders.push({ id, name, collapsed: false });
+        this.recallFolderState.orderByFolder[id] = selectedUids;
+        for (const uid of selectedUids) {
+            this.recallFolderState.folderByUid[uid] = id;
+            for (const folderId of Object.keys(this.recallFolderState.orderByFolder)) {
+                if (folderId !== id) this.recallFolderState.orderByFolder[folderId] = (this.recallFolderState.orderByFolder[folderId] ?? []).filter((item) => item !== uid);
+            }
+        }
+        this.saveRecallFolderState();
+        this.renderRecallPage();
+    }
+    renameRecallFolder(folderId) {
+        const folder = this.recallFolderState.folders.find((item) => item.id === folderId);
+        if (!folder) return;
+        const name = String(globalThis.prompt?.('重命名文件夹', folder.name) ?? '').trim().slice(0, 40);
+        if (!name) return;
+        folder.name = name;
+        this.saveRecallFolderState();
+        this.renderRecallPage();
+    }
+    deleteRecallFolder(folderId) {
+        const folder = this.recallFolderState.folders.find((item) => item.id === folderId);
+        if (!folder || globalThis.confirm?.(`删除文件夹“${folder.name}”？其中条目将移回默认分类。`) === false) return;
+        const moved = Object.keys(this.recallFolderState.folderByUid).filter((uid) => this.recallFolderState.folderByUid[uid] === folderId);
+        for (const uid of moved) this.recallFolderState.folderByUid[uid] = 'default';
+        this.recallFolderState.orderByFolder.default = (0, util_1.unique)([...(this.recallFolderState.orderByFolder.default ?? []), ...moved]);
+        delete this.recallFolderState.orderByFolder[folderId];
+        this.recallFolderState.folders = this.recallFolderState.folders.filter((item) => item.id !== folderId);
+        this.saveRecallFolderState();
+        this.renderRecallPage();
+    }
+    moveRecallFolder(folderId, beforeFolderId = '') {
+        const folders = this.recallFolderState.folders;
+        const index = folders.findIndex((folder) => folder.id === folderId);
+        if (index < 0) return;
+        const [folder] = folders.splice(index, 1);
+        const target = beforeFolderId ? folders.findIndex((item) => item.id === beforeFolderId) : folders.length;
+        folders.splice(target < 0 ? folders.length : target, 0, folder);
+        this.saveRecallFolderState();
+        this.renderRecallPage();
+    }
+    nudgeRecallFolder(folderId, delta) {
+        const folders = this.recallFolderState.folders;
+        const index = folders.findIndex((folder) => folder.id === folderId);
+        const target = index + delta;
+        if (index < 0 || target < 0 || target >= folders.length) return;
+        [folders[index], folders[target]] = [folders[target], folders[index]];
+        this.saveRecallFolderState();
+        this.renderRecallPage();
+    }
+    moveRecallEntry(uid, folderId, beforeUid = '') {
+        uid = String(uid ?? '').trim();
+        if (!uid) return;
+        const validFolder = folderId === 'default' || this.recallFolderState.folders.some((folder) => folder.id === folderId) ? folderId : 'default';
+        for (const id of Object.keys(this.recallFolderState.orderByFolder)) {
+            this.recallFolderState.orderByFolder[id] = (this.recallFolderState.orderByFolder[id] ?? []).filter((item) => item !== uid);
+        }
+        this.recallFolderState.folderByUid[uid] = validFolder;
+        const order = this.recallFolderState.orderByFolder[validFolder] ?? (this.recallFolderState.orderByFolder[validFolder] = []);
+        const target = beforeUid ? order.indexOf(String(beforeUid)) : -1;
+        order.splice(target < 0 ? order.length : target, 0, uid);
+        this.saveRecallFolderState();
+        this.renderRecallPage();
+    }
+    nudgeRecallEntry(uid, delta) {
+        const folderId = this.folderIdForEntry(uid);
+        const entries = this.orderedRecallEntries(this.recallModel?.entries ?? []).filter((entry) => this.folderIdForEntry(entry.uid) === folderId);
+        const index = entries.findIndex((entry) => String(entry.uid) === String(uid));
+        const target = index + delta;
+        if (index < 0 || target < 0 || target >= entries.length) return;
+        const order = entries.map((entry) => String(entry.uid));
+        [order[index], order[target]] = [order[target], order[index]];
+        this.recallFolderState.orderByFolder[folderId] = order;
+        this.saveRecallFolderState();
+        this.renderRecallPage();
+    }
+    buildRecallFolderToolbar() {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'ma-lite-folder-toolbar';
+        const create = document.createElement('button');
+        create.type = 'button';
+        create.textContent = '新建文件夹';
+        create.addEventListener('click', () => this.createRecallFolder());
+        const help = document.createElement('span');
+        help.className = 'ma-lite-folder-help';
+        help.textContent = this.recallEditMode ? '已选条目会放入新文件夹；名称只机械预填共同场景或包含名称。' : '文件夹只改变手记显示。';
+        toolbar.append(create, help);
+        return toolbar;
+    }
+    buildRecallFolderViews(list, entries) {
+        const views = new Map();
+        const definitions = [{ id: 'default', name: '默认分类', collapsed: false }, ...this.recallFolderState.folders];
+        for (const definition of definitions) {
+            const count = entries.filter((entry) => this.folderIdForEntry(entry.uid) === definition.id).length;
+            const folder = document.createElement('details');
+            folder.className = 'ma-lite-folder';
+            folder.dataset.folderId = definition.id;
+            folder.open = definition.id === 'default' || !definition.collapsed;
+            const head = document.createElement('summary');
+            head.draggable = this.recallEditMode && definition.id !== 'default';
+            const title = document.createElement('span');
+            title.className = 'ma-lite-folder-title';
+            title.textContent = definition.name;
+            const counter = document.createElement('span');
+            counter.className = 'ma-lite-folder-count';
+            counter.textContent = `${count} 条`;
+            head.append(title, counter);
+            if (this.recallEditMode && definition.id !== 'default') {
+                const actions = document.createElement('span');
+                actions.className = 'ma-lite-folder-actions';
+                for (const [label, titleText, action] of [
+                    ['↑', '上移文件夹', () => this.nudgeRecallFolder(definition.id, -1)],
+                    ['↓', '下移文件夹', () => this.nudgeRecallFolder(definition.id, 1)],
+                    ['改', '重命名文件夹', () => this.renameRecallFolder(definition.id)],
+                    ['删', '删除文件夹', () => this.deleteRecallFolder(definition.id)],
+                ]) {
+                    const button = document.createElement('button');
+                    button.type = 'button'; button.textContent = label; button.title = titleText;
+                    button.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); action(); });
+                    actions.append(button);
+                }
+                head.append(actions);
+                head.addEventListener('dragstart', () => { this.recallFolderDragId = definition.id; folder.dataset.dragging = 'true'; });
+                head.addEventListener('dragend', () => { this.recallFolderDragId = ''; delete folder.dataset.dragging; });
+            }
+            head.addEventListener('dragover', (event) => { if (this.recallFolderDragId) event.preventDefault(); });
+            head.addEventListener('drop', (event) => {
+                if (!this.recallFolderDragId || definition.id === 'default') return;
+                event.preventDefault();
+                const dragged = this.recallFolderDragId; this.recallFolderDragId = '';
+                if (dragged !== definition.id) this.moveRecallFolder(dragged, definition.id);
+            });
+            folder.addEventListener('toggle', () => {
+                if (definition.id === 'default') return;
+                const stored = this.recallFolderState.folders.find((item) => item.id === definition.id);
+                if (stored && stored.collapsed === folder.open) { stored.collapsed = !folder.open; this.saveRecallFolderState(); }
+            });
+            const body = document.createElement('div');
+            body.className = 'ma-lite-folder-entries';
+            body.addEventListener('dragover', (event) => { if (this.recallEntryDragUid) event.preventDefault(); });
+            body.addEventListener('drop', (event) => {
+                if (!this.recallEntryDragUid) return;
+                event.preventDefault();
+                const uid = this.recallEntryDragUid; this.recallEntryDragUid = '';
+                this.moveRecallEntry(uid, definition.id);
+            });
+            if (!count) {
+                const empty = document.createElement('div');
+                empty.className = 'ma-lite-folder-empty'; empty.textContent = '暂无条目';
+                body.append(empty);
+            }
+            folder.append(head, body);
+            list.append(folder);
+            views.set(definition.id, body);
+        }
+        return views;
+    }
     // [MA-LOCK] 方法职责锁：renderRecallMap 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     renderRecallMap(model, worldbookName) {
         // [MA-LOCK] 状态写入锁：this.recallModel 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4432,6 +4655,7 @@ class ControlPanel {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (!validUids.has(uid)) this.recallSelectedUids.delete(uid);
         }
+        this.loadRecallFolderState(validUids);
         // [MA-LOCK] 数据来源锁：pageCount 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const pageCount = Math.max(1, Math.ceil(Number(model?.total || 0) / this.recallPageSize));
         // [MA-LOCK] 状态写入锁：this.recallPage 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4538,7 +4762,8 @@ class ControlPanel {
             summary.append(chip);
         }
 
-        this.recallNode.append(toolbar, summary);
+        const folderToolbar = this.buildRecallFolderToolbar();
+        this.recallNode.append(toolbar, summary, folderToolbar);
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!filteredEntries.length) {
             // [MA-LOCK] 数据来源锁：empty 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -4553,27 +4778,43 @@ class ControlPanel {
         }
 
         // [MA-LOCK] 数据来源锁：pageCount 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const pageCount = Math.max(1, Math.ceil(filteredEntries.length / this.recallPageSize));
+        const pageCount = 1;
         // [MA-LOCK] 状态写入锁：this.recallPage 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.recallPage = Math.min(Math.max(1, this.recallPage), pageCount);
         // [MA-LOCK] 数据来源锁：start 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const start = (this.recallPage - 1) * this.recallPageSize;
+        const start = 0;
         // [MA-LOCK] 数据来源锁：visibleEntries 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const visibleEntries = filteredEntries.slice(start, start + this.recallPageSize);
+        const visibleEntries = this.orderedRecallEntries(filteredEntries);
         // [MA-LOCK] 数据来源锁：list 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const list = document.createElement('div');
         // [MA-LOCK] 状态写入锁：list.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         list.className = 'ma-lite-recall-list';
+        const folderViews = this.buildRecallFolderViews(list, visibleEntries);
         // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
         for (const item of visibleEntries) {
             // [MA-LOCK] 数据来源锁：row 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const row = document.createElement('div');
+            const row = document.createElement('details');
             // [MA-LOCK] 状态写入锁：row.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             row.className = 'ma-lite-recall-row';
             row.dataset.mode = item.mappingKind;
             row.dataset.entryType = item.type || '其他';
+            row.dataset.entryUid = String(item.uid || '');
+            row.draggable = this.recallEditMode;
+            row.addEventListener('dragstart', (event) => {
+                if (!this.recallEditMode) { event.preventDefault(); return; }
+                this.recallEntryDragUid = String(item.uid || '');
+                event.stopPropagation();
+            });
+            row.addEventListener('dragend', () => { this.recallEntryDragUid = ''; });
+            row.addEventListener('dragover', (event) => { if (this.recallEntryDragUid) event.preventDefault(); });
+            row.addEventListener('drop', (event) => {
+                if (!this.recallEntryDragUid) return;
+                event.preventDefault(); event.stopPropagation();
+                const uid = this.recallEntryDragUid; this.recallEntryDragUid = '';
+                if (uid !== String(item.uid || '')) this.moveRecallEntry(uid, this.folderIdForEntry(item.uid), String(item.uid || ''));
+            });
             // [MA-LOCK] 数据来源锁：head 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const head = document.createElement('div');
+            const head = document.createElement('summary');
             // [MA-LOCK] 状态写入锁：head.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             head.className = 'ma-lite-recall-row-head';
             // [MA-LOCK] 数据来源锁：title 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -4609,6 +4850,31 @@ class ControlPanel {
             type.className = 'ma-lite-codex-type';
             type.textContent = item.type || '其他';
             head.append(title, type);
+            if (this.recallEditMode) {
+                const controls = document.createElement('div');
+                controls.className = 'ma-lite-entry-folder-controls';
+                const folderSelect = document.createElement('select');
+                folderSelect.setAttribute('aria-label', `设置${item.title}的显示文件夹`);
+                for (const folder of [{ id: 'default', name: '默认分类' }, ...this.recallFolderState.folders]) {
+                    const option = document.createElement('option');
+                    option.value = folder.id; option.textContent = folder.name;
+                    option.selected = this.folderIdForEntry(item.uid) === folder.id;
+                    folderSelect.append(option);
+                }
+                folderSelect.addEventListener('click', (event) => event.stopPropagation());
+                folderSelect.addEventListener('change', (event) => {
+                    event.stopPropagation();
+                    this.moveRecallEntry(item.uid, folderSelect.value);
+                });
+                const up = document.createElement('button');
+                up.type = 'button'; up.textContent = '↑'; up.title = '在文件夹中上移';
+                up.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); this.nudgeRecallEntry(item.uid, -1); });
+                const down = document.createElement('button');
+                down.type = 'button'; down.textContent = '↓'; down.title = '在文件夹中下移';
+                down.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); this.nudgeRecallEntry(item.uid, 1); });
+                controls.append(folderSelect, up, down);
+                head.append(controls);
+            }
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (this.recallEditMode && typeof this.actions.setBedrockLocked === 'function') {
                 // [MA-LOCK] 数据来源锁：locks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -4735,7 +5001,7 @@ class ControlPanel {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (relations) row.append(relations);
             row.append(footer);
-            list.append(row);
+            (folderViews.get(this.folderIdForEntry(item.uid)) ?? folderViews.get('default')).append(row);
         }
         this.recallNode.append(list);
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -5280,7 +5546,7 @@ class ControlPanel {
     }
     // [MA-LOCK] 方法职责锁：resetLiveTaskStates 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
     resetLiveTaskStates(detail = '待命') {
-        // ui.73: 后台维护（小/大总结、整理、迁移等）没有正文 messageIndex，
+        // 后台维护（小/大总结、整理、迁移等）没有正文 messageIndex，
         // 只重置面板上的“当前四阶段”，保留每条正文已经完成的消息级状态。
         // [MA-LOCK] 状态写入锁：this.taskStates 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         this.taskStates = { audit: freshTaskState(detail), revision: freshTaskState(detail), extract: freshTaskState(detail), write: freshTaskState(detail) };
@@ -5717,12 +5983,8 @@ function buildRecallViewModel(entries, updatedEntryUids = []) {
     const summary = [
         { key: 'current', label: '当前', count: mapped.filter((item) => item.sceneStage === 'current' || item.lifecycle === 'active').length, description: '当前场景或当前活动条目' },
         { key: 'recent', label: '近期', count: mapped.filter((item) => item.sceneStage === 'previous' || ['recent', 'recent-summary'].includes(item.lifecycle)).length, description: '上一场景或近期记忆' },
-        { key: 'history', label: '历史', count: mapped.filter((item) => item.sceneStage === 'remote' || ['long-term', 'historical', 'historical-summary', 'closed'].includes(item.lifecycle)).length, description: '远期、长期或已经关闭的记忆' },
-        { key: 'constant', label: '常驻', count: mapped.filter((item) => item.constant && !item.disabled).length, description: '直接进入上下文的条目' },
-        { key: 'keyword', label: '关键词', count: mapped.filter((item) => item.trigger && !item.disabled).length, description: '依靠稳定关键词触发的条目' },
-        { key: 'vector', label: '纯向量', count: mapped.filter((item) => item.vector && !item.trigger && !item.constant && !item.disabled).length, description: '主要依靠 Vector Storage 语义召回的条目' },
-        { key: 'related', label: '有关联', count: mapped.filter((item) => item.relationCount > 0).length, description: '存在确定性直接关联的条目' },
-        { key: 'disabled', label: '停用', count: mapped.filter((item) => item.disabled).length, description: '当前不参与召回的条目' },
+        { key: 'related', label: '关联', count: mapped.filter((item) => item.relationCount > 0).length, description: '存在确定性直接关联的条目' },
+        { key: 'background', label: '背景', count: mapped.filter((item) => item.sceneStage === 'remote' || ['long-term', 'historical', 'historical-summary', 'closed', 'settled', 'background'].includes(item.lifecycle)).length, description: '长期背景、沉降或远期条目' },
     ];
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return { total: mapped.length, summary, entries: mapped, omitted: 0 };
@@ -5780,17 +6042,8 @@ function recallFilterMatches(item, filter) {
         // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
         case 'recent': return item.sceneStage === 'previous' || ['recent', 'recent-summary'].includes(item.lifecycle);
         // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
-        case 'history': return item.sceneStage === 'remote' || ['long-term', 'historical', 'historical-summary', 'closed'].includes(item.lifecycle);
-        // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
-        case 'constant': return item.constant && !item.disabled;
-        // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
-        case 'keyword': return item.trigger && !item.disabled;
-        // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
-        case 'vector': return item.vector && !item.constant && !item.disabled;
-        // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
         case 'related': return item.relationCount > 0;
-        // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
-        case 'disabled': return item.disabled;
+        case 'background': return item.sceneStage === 'remote' || ['long-term', 'historical', 'historical-summary', 'closed', 'settled', 'background'].includes(item.lifecycle);
         // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
         default: return true;
     }
@@ -7172,17 +7425,20 @@ const COMMON_SECTION_ALIASES = {
 };
 // [MA-LOCK] 数据来源锁：TYPE_SECTION_ORDER 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const TYPE_SECTION_ORDER = Object.freeze({
-    人物: Object.freeze(['身份', '稳定', '行为倾向', '表达方式', '当前', '关系', '关系立场', '持有', '已知', '误信', '固定事实', '别名']),
-    场景: Object.freeze(['定义', '空间结构', '固定资源', '固定设施', '常驻角色', '固定事实', '当前状态', '在场', '当前资源', '活动关联', '世界影响', '局部约束', '别名']),
-    物品: Object.freeze(['定义', '功能', '当前', '限制', '固定事实', '别名']),
-    事件: Object.freeze(['参与', '附属人员', '场景', '已发生进展', '未发生进展', '结果', '别名']),
-    世界: Object.freeze(['范围', '地理', '组织', '权力', '制度', '资源与交通', '公开局势', '固定事实', '持续影响', '别名']),
+    人物: Object.freeze(['身份', '经历', '当前状态']),
+    场景: Object.freeze(['位置', '状态', '场景阶段']),
+    物品: Object.freeze(['来源', '状态', '所属关系']),
+    事件: Object.freeze(['事件过程', '事件结果', '影响']),
+    世界: Object.freeze(['世界规则', '环境状态', '长期变化']),
     基础设定: Object.freeze(['世界常识', '自然规则', '种族与生命', '能力与技术', '社会规则', '地理框架', '别名']),
 });
 // [MA-LOCK] 函数职责锁：isCanonicalSectionName 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function isCanonicalSectionName(type, section) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return (TYPE_SECTION_ORDER[String(type ?? '').trim()] ?? []).includes(String(section ?? '').trim());
+    const name = String(section ?? '').trim();
+    if (!TYPE_SECTION_ORDER[String(type ?? '').trim()] || !name) return false;
+    // 基础栏目固定；扩展栏目由模型明确给出。这里只校验结构，不判断栏目语义。
+    return name.length <= 24 && !/[\r\n【】<>]/u.test(name)
+        && !/(?:删除命令|写入计划|UID处理|生命周期|沉降处理)/u.test(name);
 }
 
 // [MA-LOCK] 数据来源锁：TYPE_SECTION_ALIASES 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -7226,7 +7482,12 @@ const TYPE_SECTION_ALIASES = {
         '稳定关系': '关系',
         '关系变化': '关系',
         '长期关系立场': '关系立场',
-        '稳定关系立场': '关系立场',
+        '稳定关系立场': '',
+        '关系': '',
+        '关系立场': '',
+        '当前': '当前状态',
+        '当前状态': '当前状态',
+        '固定事实': '经历',
 
     },
     场景: {
@@ -7242,6 +7503,10 @@ const TYPE_SECTION_ALIASES = {
         '常驻人员': '常驻角色',
         '固定设备': '固定设施',
         '场景设施': '固定设施',
+        '定义': '位置',
+        '状态': '状态',
+        '当前状态': '状态',
+        '固定事实': '场景阶段',
     },
     物品: {
         '对象定义': '定义',
@@ -7254,6 +7519,11 @@ const TYPE_SECTION_ALIASES = {
         '常驻人员': '常驻角色',
         '固定设备': '固定设施',
         '场景设施': '固定设施',
+        '定义': '来源',
+        '当前': '状态',
+        '状态': '状态',
+        '当前状态': '状态',
+        '固定事实': '状态',
     },
     事件: {
         '事件进程': '已发生进展',
@@ -7266,6 +7536,9 @@ const TYPE_SECTION_ALIASES = {
         '最终结果': '结果',
         '当前结果': '结果',
         '结束结论': '结果',
+        '已发生进展': '事件过程',
+        '未发生进展': '事件过程',
+        '结果': '事件结果',
     },
     世界: {
         '对象范围': '范围',
@@ -7286,6 +7559,11 @@ const TYPE_SECTION_ALIASES = {
         '常驻人员': '常驻角色',
         '固定设备': '固定设施',
         '场景设施': '固定设施',
+        '固定事实': '长期变化',
+        '状态': '环境状态',
+        '当前状态': '环境状态',
+        '公开局势': '环境状态',
+        '持续影响': '长期变化',
     },
     基础设定: {
         '世界规则': '自然规则',
@@ -10326,22 +10604,16 @@ const HONORIFIC_SUFFIXES = Object.freeze([
 
 // [MA-LOCK] 函数职责锁：buildEntryIndex 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function buildEntryIndex(entries) {
-    // [MA-EXACT-MATCH-01] 正常世界书身份只使用 UID / 稳定标题。
-    // 别名、关键词、正文包含、名称变体和事件相似度不再参与自动覆盖。
+    // UID 是唯一身份。标题、稳定名称、别名和正文只用于展示/召回，不能参与写入目标匹配。
     // [MA-LOCK] 数据来源锁：byUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const byUid = new Map();
     // [MA-LOCK] 数据来源锁：byExactTitle 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const byExactTitle = new Map();
-    // [MA-LOCK] 数据来源锁：byTitle 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const byTitle = new Map();
     // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
     for (const entry of entries) {
         byUid.set(String(entry.uid), entry);
-        add(byExactTitle, String(entry.title ?? ''), entry);
-        add(byTitle, normalizeTitleLookup(entry.title), entry);
     }
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return { entries, byUid, byExactTitle, byTitle };
+    return { entries, byUid };
 }
 
 // [MA-LOCK] 函数职责锁：matchBlock 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -10357,8 +10629,6 @@ function matchBlock(block, index, _contextText, weights = {}) {
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (entry) collected.push(candidate(entry, scores.uid, 'uid', `UID ${block.uid} 精确命中`));
     }
-    collected.push(...candidates(index.byExactTitle.get(String(block.title ?? '')) ?? [], scores.exactTitle, 'exact-title', '标题完全相同'));
-    collected.push(...candidates(index.byTitle.get(normalizeTitleLookup(block.title)) ?? [], scores.normalizedTitle, 'normalized-title', '规范化完整标题相同'));
 
     // [MA-LOCK] 数据来源锁：byUid 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const byUid = new Map();
@@ -10382,22 +10652,7 @@ function selectBestCandidate(candidates, minimumScore = 80) {
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (!eligible.length) return null;
     // [MA-LOCK] 数据来源锁：topScore 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const topScore = eligible[0].score;
-    // [MA-LOCK] 数据来源锁：top 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const top = eligible.filter((item) => item.score === topScore);
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (top.length === 1) return top[0];
-    // [MA-SOURCE-FIRST-03] 正常身份链只处理同一规范化完整标题的重复宿主；
-    // 不再用事件生命周期相似度证明两个候选“其实是同一条目”。
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!top.every((item) => normalizeTitleLookup(item.entry.title) === normalizeTitleLookup(top[0].entry.title))) return null;
-    // [MA-LOCK] 数据来源锁：selected 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const selected = [...top].sort((left, right) => compareEntryPriority(left.entry, right.entry))[0];
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return {
-        ...selected,
-        evidence: [...selected.evidence, { kind: 'duplicate-primary', score: Number(topScore), detail: `发现${top.length}个同一身份候选，确定性选择主档 UID ${selected.entry.uid}` }],
-    };
+    return eligible.length === 1 && eligible[0].evidence.some((item) => item.kind === 'uid') ? eligible[0] : null;
 }
 
 // [MA-LOCK] 函数职责锁：relevantEntries 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -10682,7 +10937,6 @@ function canonicalTypeLookup(type) {
     return ({ 角色: '人物', npc: '人物', 地点: '场景', 地区: '场景', 区域: '场景', 全局: '世界', 全局状态: '世界', 全局变化: '世界', 当前局势: '世界', 世界局势: '世界', 世界变化: '世界', 基础规则: '基础设定', 世界设定: '基础设定' })[value] ?? value;
 }
 // [MA-LOCK] 函数职责锁：normalizeTitleLookup 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function normalizeTitleLookup(value) { return (0, util_1.stripBatchTitleId)(String(value ?? '')).toLocaleLowerCase(); }
 // [MA-LOCK] 函数职责锁：normalizeLookup 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function normalizeLookup(value) { return (0, util_1.normalizeFact)(String(value ?? '')).replace(/[｜|]/gu, '').toLocaleLowerCase(); }
 // [MA-LOCK] 函数职责锁：add 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -10747,7 +11001,6 @@ const model_request_1 = require("./model-request");
 // [MA-LOCK] 数据来源锁：util_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const util_1 = require("./util");
 // [MA-SCENE-LOCATION-STABILITY] 仅用于权威“地点：”字段之间的 SceneGroup 边界容错；不参与人物/事件/物品/世界书条目的对象匹配。
-const SCENE_LOCATION_STABILITY_THRESHOLD = 0.77;
 // [MA-LOCK] 数据来源锁：information_point_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
 const information_point_1 = require("./domain/information-point");
 // [MA-LOCK] 数据来源锁：protocols_1 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -11399,7 +11652,7 @@ class MemoryRunner {
         // [MA-EXTRACT-SINGLE-CHAIN] 提取只有一个正式 Prompt 和一个正式解析器。
         // 首次协议失败时可以把同一请求原样重放一次；第二次不得切换 compact Prompt、附加失败提示词或进入诊断旁路。
         // 请求失败、任务取消与解析器自身异常不是协议失败，必须立即沿原错误边界上抛，禁止额外调用模型。
-        const requestPrompt = (0, prompts_1.extractionPrompts)(snapshot.playerText, snapshot.assistantText, entries);
+        let requestPrompt = (0, prompts_1.extractionPrompts)(snapshot.playerText, snapshot.assistantText, entries);
         for (let attempt = 0; attempt < 2; attempt += 1) {
             raw = await (0, model_request_1.callModel)({
                 host: this.host,
@@ -11407,7 +11660,7 @@ class MemoryRunner {
                 prompt: requestPrompt,
                 settings,
                 snapshot,
-                profileId: settings.modelProfileId,
+                profileId: settings.extractionModelProfileId || settings.modelProfileId,
                 sourceText: snapshot.turnText || snapshot.assistantText,
                 singleAttempt: true,
             });
@@ -11419,7 +11672,11 @@ class MemoryRunner {
             const protocolError = (diagnostics.skipped || []).map((item) => item.reason).filter(Boolean).slice(0, 3).join('；') || '最终文本未形成固定事实协议';
             lastProtocolError = new Error(protocolError);
             if (attempt === 0) {
-                this.progress('running', `提取首次未形成可提交协议，原样重放同一请求一次：${(0, util_1.errorText)(lastProtocolError)}`, { titles: [], phase: 'extract-retry' });
+                requestPrompt = {
+                    system: requestPrompt.system,
+                    user: `${requestPrompt.user}\n\n【格式纠错】\n上一次输出未通过协议校验：${protocolError}\n上一次错误输出：\n${String(raw).slice(0, 4000)}\n事实判断与输入材料不变，只修正输出格式。`,
+                };
+                this.progress('running', `提取首次未形成可提交协议，附带错误输出进行一次格式纠正：${(0, util_1.errorText)(lastProtocolError)}`, { titles: [], phase: 'extract-retry' });
             }
         }
         if (!blocks.length && !explicitNone && lastProtocolError && !diagnostics.hadInput) throw lastProtocolError;
@@ -11467,10 +11724,9 @@ class MemoryRunner {
         const splitScene = (0, util_1.splitTitle)(explicitSceneTitle);
         // [MA-LOCK] 数据来源锁：explicitGroup 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const explicitGroup = explicitSceneTitle ? (0, util_1.normalizeSceneLocation)(splitScene?.name || explicitSceneTitle) : '';
-        // [MA-SCENE-LOCATION-STABILITY] 仍然只允许权威“地点：”触发换场；这里仅对两个明确地点标签做保守字符串容错。
-        // 编号冲突由 sceneLocationSimilarity 直接返回 0；高相似只说明同一 SceneGroup 的详细/简写变化，不扩展到其他对象匹配。
+        // 场景边界只比较结构化名称的最大包含层。主场景相同、子地点变化仍属于同一场景；主场景变化才换场。
         const sameSceneGroup = Boolean(beforeGroup && explicitGroup
-            && (0, util_1.sceneLocationSimilarity)(beforeGroup, explicitGroup) >= SCENE_LOCATION_STABILITY_THRESHOLD);
+            && (0, util_1.normalizeSceneLocation)(beforeGroup) === (0, util_1.normalizeSceneLocation)(explicitGroup));
         // [MA-LOCK] 状态写入锁：result.currentSceneGroup 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         // 同场景容错时保留已有稳定组名，避免标签轻微漂移逐轮改写 SceneGroup 身份。
         result.currentSceneGroup = sameSceneGroup ? beforeGroup : (explicitGroup || beforeGroup);
@@ -11568,11 +11824,13 @@ class MemoryRunner {
                     fallbackPrompt: prompt,
                     settings,
                     snapshot,
-                    profileId: settings.modelProfileId,
+                    profileId: kind === 'small'
+                        ? (settings.smallSummaryModelProfileId || settings.modelProfileId)
+                        : (settings.largeSummaryModelProfileId || settings.modelProfileId),
                     sourceText: sourceContext,
                     responseTokens,
                     singleAttempt: true,
-                    generationOptions: attempt > 0 && settings.modelProfileId ? { includePreset: false } : undefined,
+                    generationOptions: attempt > 0 && (kind === 'small' ? settings.smallSummaryModelProfileId : settings.largeSummaryModelProfileId) ? { includePreset: false } : undefined,
                 });
             } catch (error) {
                 const requestReason = error?.code === 'MA_REASONING_ONLY'
@@ -11973,50 +12231,46 @@ function summaryOutputUidsFromResult(result, selectedSourceUids = []) {
     for (const mark of summaryMarksFromResult(result)) if (existing.has(mark.uid)) output.add(mark.uid);
     return [...output];
 }
-// [MA-SUMMARY-WHOLE-ENTRY][冻结] 小/大总结只使用本次请求的临时“条目N”编号，模型看不到真实 UID。
-// 返回的原条目按系统内部映射更新；未返回的原条目删除；“新条目N”由系统创建新 UID。
+// 总结协议显式携带 UID：保留沿用原 UID，合并创建新 UID 并沉降来源，新建创建新 UID。
 function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
     const source = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '').trim();
     if (!source) return { entries: [], error: '模型没有返回最终条目' };
     const lines = source.split('\n');
     const output = [];
-    const seenExisting = new Set();
-    const seenNew = new Set();
+    const selectedByUid = new Map((selectedEntries ?? []).map((entry, index) => [String(entry.uid), { entry, index }]));
+    const seenUids = new Set();
     const allowedTypes = new Set(protocols_1.SUMMARY_TYPES);
     for (let index = 0; index < lines.length;) {
         const line = String(lines[index] ?? '').trim();
         if (!line) { index += 1; continue; }
-        const header = line.match(/^(条目|新条目)(\d+)｜([^｜]+)｜(.+)$/u);
+        const header = line.match(/^(保留|合并|新建)｜([^｜]+)｜([^｜]+)｜(.+)$/u);
         if (!header) return { entries: [], error: `无法识别的总结行：${line.slice(0, 160)}` };
-        const kind = header[1] === '新条目' ? 'new' : 'existing';
-        const number = Number(header[2]);
+        const kind = header[1] === '保留' ? 'existing' : header[1] === '合并' ? 'merge' : 'new';
+        const sourceUids = kind === 'new' ? [] : header[2].split(/[、,，]/u).map((uid) => uid.trim()).filter(Boolean);
         const type = header[3].trim();
         const name = header[4].trim();
-        if (!Number.isInteger(number) || number <= 0) return { entries: [], error: `临时条目编号不合法：${header[2]}` };
-        if (kind === 'existing') {
-            if (number > selectedEntries.length) return { entries: [], error: `条目${number}不属于本批输入` };
-            if (seenExisting.has(number)) return { entries: [], error: `条目${number}重复返回` };
-            seenExisting.add(number);
-        } else {
-            if (seenNew.has(number)) return { entries: [], error: `新条目${number}重复返回` };
-            seenNew.add(number);
+        if (kind === 'existing' && sourceUids.length !== 1) return { entries: [], error: '保留操作必须且只能指定一个UID' };
+        if (kind === 'merge' && sourceUids.length < 2) return { entries: [], error: '合并操作至少需要两个UID' };
+        for (const uid of sourceUids) {
+            if (!selectedByUid.has(uid)) return { entries: [], error: `UID ${uid} 不属于本批输入` };
+            if (seenUids.has(uid)) return { entries: [], error: `UID ${uid} 被重复处理` };
+            seenUids.add(uid);
         }
-        if (!allowedTypes.has(type)) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}的类型“${type}”不合法` };
-        if (!name) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}缺少稳定名称` };
+        if (!allowedTypes.has(type)) return { entries: [], error: `类型“${type}”不合法` };
+        if (!name) return { entries: [], error: '缺少稳定名称' };
         index += 1;
         const body = [];
         while (index < lines.length && String(lines[index] ?? '').trim() !== '结束条目') {
             body.push(lines[index]); index += 1;
         }
-        if (index >= lines.length) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}缺少“结束条目”` };
+        if (index >= lines.length) return { entries: [], error: `${header[1]}条目缺少“结束条目”` };
         index += 1;
         const parsed = (0, parser_1.parseEntrySections)(body.join('\n'));
-        const allowedSections = new Set(information_point_1.TYPE_SECTION_ORDER[type] ?? []);
         const order = [];
         const values = {};
         for (const rawSection of parsed.order ?? []) {
             const section = (0, information_point_1.canonicalSectionName)(rawSection, type);
-            if (!section || !allowedSections.has(section)) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}的栏目“${rawSection}”不属于${type}` };
+            if (!(0, information_point_1.isCanonicalSectionName)(type, section)) return { entries: [], error: `栏目“${rawSection}”结构不合法` };
             if (!values[section]) { values[section] = []; order.push(section); }
             for (const rawFact of parsed.values?.[rawSection] ?? []) {
                 const fact = (0, parser_1.sanitizeWorldbookLine)(rawFact);
@@ -12025,8 +12279,8 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
             values[section] = (0, util_1.unique)(values[section]);
         }
         const content = (0, parser_1.serializeEntrySections)({ order, values }).trim();
-        if (!content) return { entries: [], error: `${kind === 'new' ? '新条目' : '条目'}${number}没有完整最终正文` };
-        output.push({ kind, number, sourceIndex: kind === 'existing' ? number - 1 : -1, type, name, title: `${type}｜${name}`, content });
+        if (!content) return { entries: [], error: `${header[1]}条目没有完整最终正文` };
+        output.push({ kind, sourceUids, type, name, title: `${type}｜${name}`, content });
     }
     if (!output.length) return { entries: [], error: '模型没有返回任何完整最终条目' };
     return { entries: output, error: '' };
@@ -12034,12 +12288,11 @@ function parseWholeEntrySummaryProtocol(raw, selectedEntries = []) {
 
 function wholeEntrySummaryPlan(parsed, entries) {
     const operations = [];
-    const returnedSourceIndexes = new Set();
+    const byUid = new Map((entries ?? []).map((entry) => [String(entry.uid), entry]));
     for (const item of parsed.entries ?? []) {
         if (item.kind === 'existing') {
-            const current = entries[item.sourceIndex];
+            const current = byUid.get(item.sourceUids[0]);
             if (!current) continue;
-            returnedSourceIndexes.add(item.sourceIndex);
             if (current.bedrockLocked === true) continue;
             const sameTitle = (0, util_1.normalizeTitle)(current.title) === (0, util_1.normalizeTitle)(item.title);
             const sameContent = String(current.content ?? '').trim() === String(item.content ?? '').trim();
@@ -12047,18 +12300,20 @@ function wholeEntrySummaryPlan(parsed, entries) {
             operations.push({
                 id: `replace-entry:${current.uid}:${(0, util_1.hashText)(`${item.title}|${item.content}`)}`,
                 kind: 'replace-entry', operation: 'replace-entry', targetUid: String(current.uid), title: item.title,
-                oldValue: current.content, newValue: item.content, reason: '模型返回该临时条目的完整最终内容',
+                oldValue: current.content, newValue: item.content, reason: '模型明确保留该UID并返回完整最终内容',
             });
             continue;
         }
-        operations.push({ id: `create-entry:${item.number}:${(0, util_1.hashText)(item.title)}`, kind: 'create-entry', operation: 'create', title: item.title, reason: '模型明确返回新条目' });
-        operations.push({ id: `replace-entry:new:${item.number}:${(0, util_1.hashText)(item.content)}`, kind: 'replace-entry', operation: 'replace-entry', title: item.title, newValue: item.content, reason: '写入模型返回的新条目完整正文' });
-    }
-    for (let index = 0; index < (entries ?? []).length; index += 1) {
-        if (returnedSourceIndexes.has(index)) continue;
-        const current = entries[index];
-        if (!current || current.bedrockLocked === true) continue;
-        operations.push({ id: `delete-entry:${current.uid}`, kind: 'delete-entry', operation: 'delete', targetUid: String(current.uid), title: current.title, reason: '模型未返回该临时条目，本批最终状态中删除' });
+        const token = (0, util_1.hashText)(`${item.kind}|${item.title}|${item.content}`);
+        operations.push({ id: `create-entry:${token}`, kind: 'create-entry', operation: 'create', title: item.title, reason: item.kind === 'merge' ? '模型明确合并多个UID' : '模型明确新建条目' });
+        operations.push({ id: `replace-entry:new:${token}`, kind: 'replace-entry', operation: 'replace-entry', title: item.title, newValue: item.content, reason: '写入模型返回的新条目完整正文' });
+        if (item.kind === 'merge') {
+            for (const uid of item.sourceUids) {
+                const current = byUid.get(uid);
+                if (!current || current.bedrockLocked === true) continue;
+                operations.push({ id: `settle-entry:${uid}:${token}`, kind: 'settle-entry', operation: 'settle', targetUid: uid, title: current.title, reason: `内容已被新条目“${item.title}”吸收` });
+            }
+        }
     }
     return { blocks: [], operations, createdAt: Date.now() };
 }
@@ -12094,20 +12349,15 @@ function emptyPlan() { return { blocks: [], operations: [], createdAt: Date.now(
 function safeChatKey(host) { try { return host.chatKey(); } catch { return ''; } }
 
 },"migration":function(module,exports,require){
-/**
- * Mirror Abyss — whole-worldbook organizer
- * 玩家显式维护时：整本世界书一次交给模型，按大总结颗粒度整理。
- * UID 永远只在系统内部；模型只看临时“条目N”。
- */
+/** Mirror Abyss — deterministic one-time legacy structure migration. */
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MigrationService = void 0;
 
 const util_1 = require("./util");
 const parser_1 = require("./parser");
-const protocols_1 = require("./protocols");
-const information_point_1 = require("./domain/information-point");
-const model_request_1 = require("./model-request");
+const entry_section_1 = require("./domain/entry-section");
+const MIGRATION_VERSION = 22;
 
 class MigrationService {
     constructor(host, worldbook, getSettings, onProgress = null, saveSettings = null) {
@@ -12129,54 +12379,35 @@ class MigrationService {
     async migrate(settings, snapshot) {
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         validate();
+        const marker = Number(this.host.chatNamespace?.().migrationVersion || 0);
+        if (marker >= MIGRATION_VERSION) return { changed: false, previewReady: false, message: '当前世界书已完成结构迁移', candidates: 0 };
         const original = await this.worldbook.readRaw(settings, snapshot, validate);
         const listed = await this.worldbook.list(settings, snapshot, validate);
         const entries = sortEntries(listed);
-        if (!entries.length) {
-            this.preview = null;
-            return { changed: false, previewReady: false, message: '当前世界书为空', candidates: 0 };
+        const operations = [];
+        for (const entry of entries) {
+            const normalized = (0, entry_section_1.parseEntrySections)(entry.content, entry.type);
+            const content = (0, parser_1.serializeEntrySections)(normalized).trim();
+            const title = `${entry.type}｜${entry.name}`;
+            if (content === String(entry.content || '').trim() && title === entry.title) continue;
+            operations.push({
+                id: `migration:${entry.uid}:${(0, util_1.hashText)(title + '|' + content)}`,
+                kind: 'replace-entry', operation: 'replace-entry', targetUid: String(entry.uid), title,
+                oldValue: entry.content, newValue: content, reason: '一次性机械栏目映射；保留UID和事实内容',
+            });
         }
-        this.emitProgress({ state: 'running', current: 0, total: 1, detail: `正在把整本世界书（${entries.length}条）交给模型整理` });
-        let parsed = null;
-        let raw = '';
-        let failure = '';
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-            const prompt = wholeBookPrompt(settings, entries, attempt === 1 ? failure : '');
-            try {
-                raw = await (0, model_request_1.callModel)({
-                    host: this.host,
-                    stage: 'migration',
-                    prompt,
-                    fallbackPrompt: prompt,
-                    settings,
-                    snapshot,
-                    profileId: settings.modelProfileId,
-                    sourceText: entries.map((entry) => `${entry.title}\n${entry.content}`).join('\n\n'),
-                    singleAttempt: true,
-                });
-                parsed = parseOrganizerResult(raw, entries);
-                if (!parsed.error) break;
-                failure = parsed.error;
-            } catch (error) {
-                failure = (0, util_1.errorText)(error);
-            }
-            if (attempt === 0) this.emitProgress({ state: 'running', current: 0, total: 1, detail: `首次整理失败，带上失败原因重新请求一次：${failure}` });
-        }
-        if (!parsed || parsed.error) throw new Error(`整本世界书整理连续两次失败：${parsed?.error || failure || '未知错误'}`);
-        const plan = buildPlan(parsed, entries, false);
-        const deleted = plan.operations.filter((item) => item.kind === 'delete-entry').length;
-        const created = plan.operations.filter((item) => item.kind === 'create-entry').length;
-        const updated = plan.operations.filter((item) => item.kind === 'replace-entry' && item.targetUid).length;
-        const finalCount = Math.max(0, entries.length - deleted + created);
+        const plan = { blocks: [], operations, createdAt: Date.now() };
+        const updated = operations.length;
+        const finalCount = entries.length;
         const summary = {
             previewReady: true,
             worldbookName: original.name,
             candidates: entries.length,
             rebuiltEntries: finalCount,
             updatedEntries: updated,
-            deletedEntries: deleted,
-            createdEntries: created,
-            retried: Boolean(failure),
+            deletedEntries: 0,
+            createdEntries: 0,
+            migrationVersion: MIGRATION_VERSION,
         };
         this.preview = {
             chatKey: snapshot.chatKey,
@@ -12186,7 +12417,7 @@ class MigrationService {
             plan,
             summary,
         };
-        this.emitProgress({ state: 'complete', current: 1, total: 1, detail: `整本整理预览完成：${entries.length}条 → ${finalCount}条` });
+        this.emitProgress({ state: 'complete', current: 1, total: 1, detail: `旧格式迁移预览完成：扫描${entries.length}条，需转换${updated}条` });
         return { changed: plan.operations.length > 0, ...summary };
     }
 
@@ -12196,23 +12427,22 @@ class MigrationService {
         const validate = () => this.host.assertSnapshot(snapshot, this.getSettings());
         const preview = this.preview;
         const before = await this.worldbook.readRaw(settings, snapshot, validate);
-        const currentEntries = await this.worldbook.list(settings, snapshot, validate);
-        const sourceSet = new Set(preview.sourceUids.map(String));
-        for (const entry of currentEntries) {
-            if (!sourceSet.has(String(entry.uid))) continue;
-            if (entry.bedrockLocked === true || entry.locked === true) await this.worldbook.setBedrockLocked(settings, entry.uid, false, snapshot, validate);
-        }
         const result = await this.worldbook.apply(
             settings,
             preview.plan,
-            'manual:whole-worldbook-organize',
-            '整本世界书整理',
+            'maintenance:legacy-structure-migration',
+            '旧格式一次性迁移',
             snapshot,
             validate,
-            { sourceKind: 'manual-merge', manualAuthorizedUids: preview.sourceUids },
+            { sourceKind: 'migration' },
         );
         await this.worldbook.replanRecall(settings, snapshot, validate);
         const after = await this.worldbook.readRaw(settings, snapshot, validate);
+        const namespace = this.host.chatNamespace?.();
+        if (namespace) {
+            namespace.migrationVersion = MIGRATION_VERSION;
+            await this.host.saveMetadata?.();
+        }
         this.backup = { chatKey: snapshot.chatKey, worldbookName: preview.worldbookName, data: before.data, afterData: after.data };
         this.preview = null;
         return { changed: result.changed === true, committed: true, ...preview.summary };
@@ -12241,99 +12471,6 @@ function sortEntries(entries) {
         if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
         return a.localeCompare(b, 'zh-CN');
     });
-}
-
-function wholeBookPrompt(settings, entries, retryReason = '') {
-    const schema = Object.entries(information_point_1.TYPE_SECTION_ORDER)
-        .map(([type, sections]) => `${type}：${sections.join('、')}`).join('\n');
-    const protocol = (0, protocols_1.protocolTextForStage)('largeSummary');
-    const custom = String(settings?.largeSummaryPrompt || '').trim();
-    const input = entries.map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
-    return {
-        system: `职责：按大总结标准整理整本世界书，把过细、重复、已经可以收束的内容变成更少、更完整的长期条目。\n\n你看到的“条目1、条目2……”只是本次请求用于对应输入条目的临时编号。\n原条目保留或改写：使用原临时编号返回完整最终条目。\n原条目被完全合并：不要返回它。\n确实形成新的独立条目：使用“新条目N”。\n返回什么系统保存什么，未返回的原条目会删除。\n不要输出删除命令，不要解释过程，不要编造。\n\n【合法类型与栏目】\n${schema}\n\n【输出格式】\n${protocol}${custom ? `\n\n【大总结附加标准】\n${custom}` : ''}${retryReason ? `\n\n【上一次失败原因】\n${retryReason}\n请使用同一整本世界书重新输出正确最终协议。` : ''}`,
-        user: `【完整世界书】\n${input}\n\n直接输出整理后的整本世界书最终条目。`,
-    };
-}
-
-function parseOrganizerResult(raw, selectedEntries) {
-    const source = (0, parser_1.sanitizeModelText)(raw).replace(/\r/g, '').trim();
-    if (!source) return { entries: [], error: '模型没有返回最终条目' };
-    const lines = source.split('\n');
-    const output = [];
-    const seenExisting = new Set();
-    const seenNew = new Set();
-    const allowedTypes = new Set(protocols_1.SUMMARY_TYPES);
-    for (let index = 0; index < lines.length;) {
-        const line = String(lines[index] ?? '').trim();
-        if (!line) { index += 1; continue; }
-        const header = line.match(/^(条目|新条目)(\d+)｜([^｜]+)｜(.+)$/u);
-        if (!header) return { entries: [], error: `无法识别的整理行：${line.slice(0,160)}` };
-        const kind = header[1] === '新条目' ? 'new' : 'existing';
-        const number = Number(header[2]);
-        const type = header[3].trim();
-        const name = header[4].trim();
-        if (!Number.isInteger(number) || number <= 0) return { entries: [], error: `临时条目编号不合法：${header[2]}` };
-        if (kind === 'existing') {
-            if (number > selectedEntries.length) return { entries: [], error: `条目${number}不属于整本输入` };
-            if (seenExisting.has(number)) return { entries: [], error: `条目${number}重复返回` };
-            seenExisting.add(number);
-        } else {
-            if (seenNew.has(number)) return { entries: [], error: `新条目${number}重复返回` };
-            seenNew.add(number);
-        }
-        if (!allowedTypes.has(type)) return { entries: [], error: `条目${number}类型“${type}”不合法` };
-        if (!name) return { entries: [], error: `条目${number}缺少稳定名称` };
-        index += 1;
-        const body = [];
-        while (index < lines.length && String(lines[index] ?? '').trim() !== '结束条目') { body.push(lines[index]); index += 1; }
-        if (index >= lines.length) return { entries: [], error: `条目${number}缺少“结束条目”` };
-        index += 1;
-        const parsed = (0, parser_1.parseEntrySections)(body.join('\n'));
-        const allowedSections = new Set(information_point_1.TYPE_SECTION_ORDER[type] ?? []);
-        const order = [];
-        const values = {};
-        for (const rawSection of parsed.order ?? []) {
-            const section = (0, information_point_1.canonicalSectionName)(rawSection, type);
-            if (!section || !allowedSections.has(section)) return { entries: [], error: `条目${number}栏目“${rawSection}”不属于${type}` };
-            if (!values[section]) { values[section] = []; order.push(section); }
-            for (const rawFact of parsed.values?.[rawSection] ?? []) {
-                const fact = (0, parser_1.sanitizeWorldbookLine)(rawFact);
-                if (fact) values[section].push(fact);
-            }
-            values[section] = (0, util_1.unique)(values[section]);
-        }
-        const content = (0, parser_1.serializeEntrySections)({ order, values }).trim();
-        if (!content) return { entries: [], error: `条目${number}没有完整最终正文` };
-        output.push({ kind, number, sourceIndex: kind === 'existing' ? number - 1 : -1, title: `${type}｜${name}`, content });
-    }
-    if (!output.length) return { entries: [], error: '模型没有返回任何完整最终条目' };
-    return { entries: output, error: '' };
-}
-
-function buildPlan(parsed, entries, honorLocks = true) {
-    const operations = [];
-    const returned = new Set();
-    for (const item of parsed.entries || []) {
-        if (item.kind === 'existing') {
-            const current = entries[item.sourceIndex];
-            if (!current) continue;
-            returned.add(item.sourceIndex);
-            if (honorLocks && current.bedrockLocked === true) continue;
-            if ((0, util_1.normalizeTitle)(current.title) === (0, util_1.normalizeTitle)(item.title) && String(current.content || '').trim() === String(item.content || '').trim()) continue;
-            operations.push({ id: `whole:replace:${current.uid}:${(0, util_1.hashText)(item.title + '|' + item.content)}`, kind: 'replace-entry', operation: 'replace-entry', targetUid: String(current.uid), title: item.title, oldValue: current.content, newValue: item.content, reason: '整本整理返回的完整最终条目' });
-        } else {
-            operations.push({ id: `whole:create:${item.number}:${(0, util_1.hashText)(item.title)}`, kind: 'create-entry', operation: 'create', title: item.title, reason: '整本整理明确形成新条目' });
-            operations.push({ id: `whole:new-content:${item.number}:${(0, util_1.hashText)(item.content)}`, kind: 'replace-entry', operation: 'replace-entry', title: item.title, newValue: item.content, reason: '写入新条目完整正文' });
-        }
-    }
-    for (let index = 0; index < entries.length; index += 1) {
-        if (returned.has(index)) continue;
-        const current = entries[index];
-        if (!current || current.focus === true) continue;
-        if (honorLocks && current.bedrockLocked === true) continue;
-        operations.push({ id: `whole:delete:${current.uid}`, kind: 'delete-entry', operation: 'delete', targetUid: String(current.uid), title: current.title, reason: '整本整理最终结果未返回该原条目' });
-    }
-    return { blocks: [], operations, createdAt: Date.now() };
 }
 
 },"model-request":function(module,exports,require){
@@ -12470,9 +12607,8 @@ async function callModel(options) {
     }
 
     // [MA-LOCK] 数据来源锁：fallbackValue 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const fallbackValue = fallbackPrompt
-        ? (typeof fallbackPrompt === 'function' ? fallbackPrompt() : fallbackPrompt)
-        : prompt;
+    // 请求层重试保持同一任务、同一输入和同一 Prompt；业务格式纠错由业务层显式附加。
+    const fallbackValue = prompt;
     // [MA-LOCK] 数据来源锁：emptyResponse 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const emptyResponse = isEmptyModelResponseError(firstError);
     // [MA-LOCK] 数据来源锁：fallbackTokens 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -12480,12 +12616,7 @@ async function callModel(options) {
         ? emptyResponseRetryTokens(stage, settings, responseLength)
         : Math.max(256, Math.min(responseLength, Math.floor(responseLength * 0.75)));
     // [MA-LOCK] 数据来源锁：restartBase 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const restartBase = emptyResponse
-        ? {
-            system: `${String(fallbackValue?.system ?? '').trim()}\n\n【重新开始】这是一次全新的请求。不要承接、复述或继续上一次内部推理；直接形成最终固定协议。`.trim(),
-            user: String(fallbackValue?.user ?? ''),
-        }
-        : fallbackValue;
+    const restartBase = fallbackValue;
     // [MA-LOCK] 数据来源锁：fallback 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const fallback = limitPromptPair(withOutputContract(restartBase, stage, fallbackTokens, sourceText), stage, true);
     // [MA-LOCK] 异常边界锁：try 保护当前操作边界；不得借异常处理重新解释业务语义。
@@ -12769,9 +12900,7 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
     // [MA-LOCK] 数据来源锁：governed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const governed = (0, governance_1.governInformationBlocks)(blocks, entries, contextText, options);
     blocks = (0, information_point_1.prepareInformationBlocks)(governed.blocks);
-    // [MA-EXACT-MATCH-02] 正常提取/总结不自动改标题；标题变化只来自显式合并/总结治理结果。
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (String(options.sourceKind || '') === 'setting-import') blocks = ensureDisambiguatedTitles(blocks, entries);
+    // [MA-EXACT-MATCH-02] 所有入口都保留模型给出的稳定名称；代码不得按正文锚点改名或消歧。
     // [MA-LOCK] 数据来源锁：index 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const index = (0, matcher_1.buildEntryIndex)(entries);
     // [MA-LOCK] 数据来源锁：operations 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -12782,16 +12911,9 @@ function buildOperationPlan(blocks, entries, settings, contextText, options = {}
         const candidates = (0, matcher_1.matchBlock)(block, index, contextText);
         // [MA-LOCK] 数据来源锁：target 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         let target = (0, matcher_1.selectBestCandidate)(candidates, 80);
-        // [MA-LOCK] 数据来源锁：exactClosedEvent 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const exactClosedEvent = block.type === '事件'
-            ? entries.find((entry) => entry.type === '事件' && (0, util_1.normalizeTitle)(entry.title) === (0, util_1.normalizeTitle)(block.title) && (0, semantic_1.isEventClosed)(entry))
-            : null;
-        // 匹配器为防止正文提取重新打开已结束事件，会默认排除 closed event。
-        // 总结/人工合并处理的是历史状态收束：若模型按稳定标题精确写回同一已结束事件，
-        // 应允许命中原条目并保留其既有【结果】，而不是在提交前把整个事件块判成“无法识别”。
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!target && exactClosedEvent) {
-            target = { entry: exactClosedEvent, score: 100, evidence: [{ kind: 'exact-closed-event', score: 100, detail: '按稳定标题精确命中已有事件' }] };
+        if (block.uid && !target) {
+            operations.push(noop(block.title, String(block.uid), '', `模型返回的 UID ${block.uid} 不存在或已失效，拒绝按标题创建替代条目`));
+            continue;
         }
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!target) {
@@ -13059,6 +13181,12 @@ function applyPlanToEntries(plan, entries, settings = undefined) {
             target.sections = (0, parser_1.parseEntrySections)(target.content);
             target.keywords = (0, util_1.unique)([split.name, ...(target.keywords ?? []).filter((item) => (0, util_1.normalizeFact)(item) !== (0, util_1.normalizeFact)(target.type))]);
         }
+        else if (operation.kind === 'settle-entry') {
+            if (target.bedrockLocked === true) continue;
+            target.lifecycle = 'settled';
+            target.focus = false;
+            target.activation = { ...(target.activation ?? {}), enabled: false, disabled: true, constant: false };
+        }
         else if (operation.kind === 'merge-entry') {
             // [MA-LOCK] 数据来源锁：source 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const source = byUid.get(String(operation.sourceUid ?? ''));
@@ -13080,68 +13208,28 @@ function applyPlanToEntries(plan, entries, settings = undefined) {
 // 条目长期老化只由 SceneGroup 总结负责；运行层不再执行第二套自动压缩/删除预算。
 // [MA-LOCK] 函数职责锁：normalizeEntryTemplate 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function normalizeEntryTemplate(entry) {
-    // [MA-LOCK] 数据来源锁：order 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const order = information_point_1.TYPE_SECTION_ORDER[String(entry?.type ?? '')];
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (!order || !entry?.sections?.values) return entry;
-    // [MA-LOCK] 数据来源锁：allowed 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const allowed = new Set(order);
-    // [MA-LOCK] 数据来源锁：next 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const next = Object.fromEntries(order.map((name) => [name, []]));
-    // [MA-LOCK] 数据来源锁：append 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
+    const baseOrder = information_point_1.TYPE_SECTION_ORDER[String(entry?.type ?? '')];
+    if (!baseOrder || !entry?.sections?.values) return entry;
+    const next = {};
     const append = (section, line) => {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!section || !line) return;
         next[section] = (0, util_1.unique)([...(next[section] ?? []), String(line).trim()]);
     };
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
     for (const rawName of (0, util_1.unique)([...(entry.sections.order ?? []), ...Object.keys(entry.sections.values)])) {
-        // [MA-LOCK] 数据来源锁：canonical 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const canonical = (0, information_point_1.canonicalSectionName)(rawName, entry.type);
-        // ui.89: retired person columns are intentionally discarded, never migrated into 【固定事实】.
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (entry.type === '人物' && !canonical && /^(?:性格核心|决策倾向|性格|人格|稳定性格|人格核心|核心性格|决策模式|判断倾向|判断模式|选择倾向)$/u.test(String(rawName ?? '').trim())) continue;
-        // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
+        if (!(0, information_point_1.isCanonicalSectionName)(entry.type, canonical)) continue;
         for (const rawLine of entry.sections.values[rawName] ?? []) {
-            // [MA-LOCK] 数据来源锁：inline 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const inline = String(rawLine ?? '').match(/^\s*【\s*([^】]+?)\s*】\s*(.+)$/u);
-            // [MA-LOCK] 数据来源锁：inlineSection 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const inlineSection = inline ? (0, information_point_1.canonicalSectionName)(inline[1], entry.type) : '';
-            // [MA-LOCK] 数据来源锁：target 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const target = allowed.has(inlineSection) ? inlineSection : allowed.has(canonical) ? canonical : fallbackTemplateSection(entry.type, rawName);
+            const target = (0, information_point_1.isCanonicalSectionName)(entry.type, inlineSection) ? inlineSection : canonical;
             append(target, inline ? inline[2] : rawLine);
         }
     }
-    entry.sections.order = order.filter((name) => (next[name] ?? []).length);
+    const extensions = Object.keys(next).filter((name) => !baseOrder.includes(name));
+    entry.sections.order = [...baseOrder, ...extensions].filter((name) => (next[name] ?? []).length);
     entry.sections.values = Object.fromEntries(entry.sections.order.map((name) => [name, next[name]]));
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return entry;
-}
-// [MA-LOCK] 函数职责锁：fallbackTemplateSection 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function fallbackTemplateSection(type, rawName) {
-    // [MA-LOCK] 数据来源锁：name 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const name = String(rawName ?? '');
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (type === '人物') {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (/(?:稳定名称|身份|职业|阵营)/u.test(name)) return '身份';
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (/(?:立场|关系|同行|盟友|信任|照看|护卫)/u.test(name)) return '关系立场';
-        // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-        return '固定事实';
-    }
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (type === '场景') return '固定事实';
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (type === '物品') return '固定事实';
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (type === '事件') return '已发生进展';
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (type === '世界') return '固定事实';
-    // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-    if (type === '基础设定') return '世界常识';
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return '';
 }
 // [MA-LOCK] 函数职责锁：mergeEntryData 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function mergeEntryData(target, source) {
@@ -14031,7 +14119,9 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
             return attachDiagnostics([], diagnostics);
         }
         const type = match[1];
-        const name = String(match[2] ?? '').trim();
+        const identity = String(match[2] ?? '').trim().match(/^(.*?)\s*〔UID:([^〕]+)〕$/u);
+        const name = String(identity?.[1] ?? match[2] ?? '').trim();
+        const uid = String(identity?.[2] ?? '').trim();
         const sectionName = (0, information_point_1.canonicalSectionName)(String(match[3] ?? '').trim(), type);
         const change = String(match[4] ?? '').trim();
         const relations = String(match[5] ?? '').split('、').map((item) => item.trim()).filter((item) => item && item !== protocols_1.NONE);
@@ -14040,7 +14130,7 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
             diagnostics.skipped.push({ title: `${type || '未知'}｜${name || '未命名'}`, reason: '固定事实行缺少合法类型、名称、栏目或内容', raw: normalizedLine.slice(0, 600) });
             return attachDiagnostics([], diagnostics);
         }
-        rows.push({ type, name, section: sectionName, change, relations, fact });
+        rows.push({ uid, type, name, section: sectionName, change, relations, fact });
     }
     const grouped = new Map();
     for (const row of rows) {
@@ -14048,7 +14138,7 @@ function parseFixedFactExtractionProtocol(raw, diagnostics) {
         const key = (0, util_1.normalizeFact)(title);
         // [MA-GRANULARITY-LADDER][提取栏目契约] 使用模型明确给出的合法栏目；禁止把非事件重新挤回【固定事实】。
         const sectionName = row.section;
-        const block = grouped.get(key) ?? { rawTitle: title, title, type: row.type, name: row.name, sections: [], keywords: [row.name], factRows: [] };
+        const block = grouped.get(key) ?? { rawTitle: title, title, uid: row.uid, type: row.type, name: row.name, sections: [], keywords: [row.name], factRows: [] };
         let section = block.sections.find((item) => item.name === sectionName);
         if (!section) { section = { name: sectionName, lines: [], empty: false }; block.sections.push(section); }
         section.lines = (0, util_1.unique)([...section.lines, row.fact]);
@@ -14335,23 +14425,14 @@ function extractionPrompts(playerText, assistantText, relevant) {
     const existing = sanitizeExtractionPromptText(extractionWorldbookIndex(relevant));
     const sanitizedPlayerText = sanitizeExtractionPromptText(playerText);
     const sanitizedAssistantText = sanitizeExtractionPromptText(assistantText);
-    const system = `职责：比较上一轮世界书、玩家本轮回复和当前AI正文，提取当前正文已经明确建立、变化或结束的事实。
+    const system = `只完成事实提取。记录已明确发生、会影响后续世界运行的重要变化，以及位置和状态等连续性锚点。
+不记录普通过程、小动作、未确认信息、推测、未来目标或可能发生的事情。
+模型负责理解事实；不要处理UID事务、写入计划或界面逻辑。`;
+    const user = `【任务】
+比较轻量世界书索引、玩家本轮回复与当前AI正文，输出本轮建立、变化或结束的事实。
+已有对象必须原样保留索引中的“稳定名称〔UID:…〕”；新对象只写稳定名称，不编造UID。
 
-玩家回复只代表玩家做了什么或表达了什么；事实是否真正成立，以当前AI正文为准。
-不要总结，不要提前粗化，不要预测，不要把可能性写成事实。
-
-【唯一输出协议】
-${(0, protocols_1.protocolTextForStage)('extraction')}
-
-格式要求：
-- 类型只能写：人物、场景、物品、事件、世界。
-- 栏目必须使用对应类型的合法栏目。
-- 完整快照栏目发生变化时，输出该栏目在本轮结束时仍成立的完整当前值。
-- 只输出规定的事实协议，不输出标题、关键词、JSON、代码块或解释。
-
-【合法栏目】
-${summarySectionSchemaText()}`;
-    const user = `【上一轮世界书】
+【轻量世界书索引与相关栏目】
 ${existing || '（无）'}
 
 【玩家本轮回复】
@@ -14360,7 +14441,17 @@ ${sanitizedPlayerText || '（空）'}
 【当前AI正文】
 ${sanitizedAssistantText || '（空）'}
 
-只输出当前正文实际造成的事实变化。`;
+【示范】
+事实｜人物｜陆沉〔UID:17〕｜当前状态｜变化｜无｜陆沉已从矿道移动到控制室。
+
+【合法基础栏目】
+${summarySectionSchemaText()}
+允许模型根据事实类型给出明确且不重复的扩展栏目；人物不要使用“关系”栏目。
+
+【唯一输出协议】
+${(0, protocols_1.protocolTextForStage)('extraction')}
+
+只输出当前正文实际造成的事实变化；无可记录事实时只输出“无”。`;
     return { system, user };
 }
 
@@ -14442,11 +14533,6 @@ function summaryPromptStructureOverview(entries) {
         .join('\n');
 }
 
-// [MA-SUMMARY-WHOLE-ENTRY][冻结] 小总结/大总结极简合同：
-// 1. 模型只看到本批完整条目和临时“条目N”，永远看不到 UID。
-// 2. 模型返回完整最终条目；原临时编号映射回系统内部旧 UID。
-// 3. 本批未返回的原条目由系统删除；“新条目N”才创建新 UID。
-// 4. 不做标题身份匹配、逐栏目 patch、逐句移除、沉降推断或语义覆盖检查。
 function summaryPrompts(kind, settings, entries, subject, recentConversation = '', options = {}) {
     const compact = options.compact === true;
     const goal = kind === 'small'
@@ -14461,15 +14547,14 @@ function summaryPrompts(kind, settings, entries, subject, recentConversation = '
             : '';
     const system = `职责：${goal}
 
-你看到的“条目1、条目2……”只是本次请求用于对应输入条目的临时编号。
+只压缩世界书已有事实，不规划未来，不生成任务、调查目标、剧情方向或建议。
 直接整理内容，不解释过程。
 
 规则：
-- 原条目需要保留或改写：用原临时编号返回它的完整最终条目。
-- 原条目被其他内容完全合并、不再需要独立存在：不要返回它。
-- 真正需要新增一个新条目：使用“新条目1、新条目2……”。
-- 返回什么，系统就保存什么；本批原条目中没有返回的，系统会删除。
-- 不输出删除命令。
+- 保留一个条目：输出“保留｜原UID｜类型｜稳定名称”，UID不变。
+- 合并多个条目：输出“合并｜UID1、UID2｜类型｜稳定名称”，系统创建新UID并沉降旧UID。
+- 形成材料中原先没有的独立稳定条目：输出“新建｜NEW｜类型｜稳定名称”。
+- 未处理的输入条目保持原样；不得以省略表示删除。
 - 不编造，不预测，不增加材料里没有的事实。
 - 每个返回条目都必须给出完整最终正文，不是补丁。
 
@@ -14481,7 +14566,7 @@ ${(0, protocols_1.protocolTextForStage)(kind === 'small' ? 'smallSummary' : kind
 
 【附加要求】
 ${clipText(custom, compact ? 1000 : 2200)}` : ''}`;
-    const input = (entries ?? []).map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
+    const input = (entries ?? []).map((entry) => `【UID:${entry.uid}】\n${entry.title}\n${entry.content}`).join('\n\n');
     const user = `【本批完整条目】
 ${input}
 
@@ -14512,7 +14597,14 @@ function keywordTemplate(definitions) {
 function extractionWorldbookIndex(entries) {
     const allowed = new Set(['人物', '场景', '物品', '事件', '世界', '基础设定']);
     const source = (entries ?? []).filter((entry) => allowed.has(String(entry?.type ?? '').trim()));
-    return source.map((entry) => `标题：${entry.title}\n正文：\n${String(entry.content || '（空）')}`).join('\n\n');
+    return source.map((entry) => {
+        const sections = Object.entries(entry.sections?.values ?? {})
+            .map(([name, lines]) => `${name}：${(lines ?? []).slice(0, 3).join('；')}`)
+            .filter((line) => !/：\s*$/u.test(line))
+            .slice(0, 5)
+            .join('\n');
+        return `稳定名称：${entry.name}〔UID:${entry.uid}〕\n类型：${entry.type}\n${sections || '栏目：（空）'}`;
+    }).join('\n\n');
 }
 
 // [MA-LOCK] 函数职责锁：promptContextEntries 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -14607,11 +14699,10 @@ exports.EXTRACTION = Object.freeze({
     change: '事实｜类型｜稳定名称｜栏目｜变化｜关联对象｜完整事实',
     end: '事实｜类型｜稳定名称｜栏目｜结束｜关联对象｜完整事实',
 });
-// [MA-SUMMARY-SLOT] 总结、人工合并和整本整理都只让模型看到本次请求的临时“条目N”编号。
-// UID 永远留在插件内部；模型不输出 UID、不输出删除命令。未返回的原条目由系统按临时编号删除。
 exports.SUMMARY_REWRITE = Object.freeze({
-    existing: '条目N｜类型｜稳定名称',
-    created: '新条目N｜类型｜稳定名称',
+    existing: '保留｜UID｜类型｜稳定名称',
+    merged: '合并｜UID1、UID2｜类型｜稳定名称',
+    created: '新建｜NEW｜类型｜稳定名称',
     end: '结束条目',
 });
 // 人工合并与小/大总结使用同一完整条目协议，不再保留写回/移除/沉降协议。
@@ -14621,6 +14712,12 @@ function protocolTextForStage(stage) {
     if (stage === 'audit') return `${exports.AUDIT.pass}\n或\n${exports.AUDIT.revision}\n${exports.AUDIT.issues}\n${exports.AUDIT.issuePrefix}明确问题`;
     if (stage === 'extraction') return `${exports.EXTRACTION.establish}\n${exports.EXTRACTION.change}\n${exports.EXTRACTION.end}\n或\n${exports.NONE}`;
     if (['smallSummary', 'largeSummary', 'manualMerge', 'migration'].includes(stage)) return `${exports.SUMMARY_REWRITE.existing}
+【合法栏目】
+- 完整最终事实
+${exports.SUMMARY_REWRITE.end}
+
+需要合并时：
+${exports.SUMMARY_REWRITE.merged}
 【合法栏目】
 - 完整最终事实
 ${exports.SUMMARY_REWRITE.end}
@@ -15001,28 +15098,9 @@ function isEventClosed(entry) {
 
 // [MA-LOCK] 函数职责锁：countCriticalChanges 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function countCriticalChanges(plan) {
-    // ui.72: 关键变化按“正文回合”计 0/1，而不是按写入操作数量累加。
-    // 【当前】等易变快照属于正常流水刷新，不应推动小总结；只有身份、关系、稳定事实、
-    // 事件进展/结果、长期世界结构等会跨回合保留的变化才视为关键变化回合。
-    // [MA-LOCK] 数据来源锁：volatileSections 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const volatileSections = /^(?:当前|当前状态|在场|当前资源|活动关联|局部约束|持有|参与|场景|未发生进展)$/u;
-    // [MA-LOCK] 数据来源锁：durableSections 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-    const durableSections = /(?:身份|稳定|行为倾向|表达方式|关系立场|关系|固定事实|持续经历|定义|空间结构|持续变化|常驻角色|固定设施|附属人员|已发生进展|结果|时代|权力|制度|公开局势|世界变化|持续影响|范围|地理|组织|资源与交通|世界常识|自然规则|种族与生命|能力与技术|社会规则|地理框架)/u;
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const operation of plan?.operations ?? []) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!operation || operation.kind === 'noop' || operation.kind === 'merge-keywords' || operation.kind === 'merge-titles') continue;
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (operation.kind === 'create-entry' || operation.kind === 'delete-entry') return 1;
-        // [MA-LOCK] 数据来源锁：section 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-        const section = String(operation.section ?? '').trim();
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (!section || volatileSections.test(section)) continue;
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if (durableSections.test(section)) return 1;
-    }
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return 0;
+    // SL只记录本场景实际写入的提取量；不再用栏目词表判断剧情“重要性”。
+    return (plan?.operations ?? []).filter((operation) => operation
+        && !['noop', 'merge-keywords', 'merge-titles'].includes(operation.kind)).length;
 }
 
 // [MA-LOCK] 函数职责锁：isFoundationEntry 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -15180,6 +15258,9 @@ exports.DEFAULT_LARGE_SUMMARY_PROMPT = `把多个中颗粒结果继续整理成�
 exports.DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     modelProfileId: '',
+    extractionModelProfileId: '',
+    smallSummaryModelProfileId: '',
+    largeSummaryModelProfileId: '',
     autoAudit: false,
     autoExtraction: false,
     autoSmallSummary: true,
@@ -15196,6 +15277,7 @@ exports.DEFAULT_SETTINGS = Object.freeze({
     requestTimeoutMs: 90000,
     queueCompactThreshold: 6,
     keywordDefinitions: exports.DEFAULT_KEYWORDS,
+    uiFoldersByWorldbook: {},
     sectionPolicies: {
         在场: 'replace-section', 当前资源: 'replace-section', 活动关联: 'replace-section', 世界影响: 'replace-section', 局部约束: 'replace-section',
         常驻角色: 'semantic-upsert', 固定设施: 'semantic-upsert',
@@ -15327,6 +15409,9 @@ function parseSettings(value) {
         enabled: candidate.enabled !== false,
         // 单一模型路由：空值=当前 SillyTavern 连接；非空=唯一 Connection Profile。
         modelProfileId: String(candidate.modelProfileId ?? '').trim(),
+        extractionModelProfileId: String(candidate.extractionModelProfileId ?? candidate.modelProfileId ?? '').trim(),
+        smallSummaryModelProfileId: String(candidate.smallSummaryModelProfileId ?? candidate.modelProfileId ?? '').trim(),
+        largeSummaryModelProfileId: String(candidate.largeSummaryModelProfileId ?? candidate.modelProfileId ?? '').trim(),
         autoAudit: candidate.autoAudit === true,
         autoExtraction: candidate.autoExtraction === true,
         autoSmallSummary: candidate.autoSmallSummary !== false,
@@ -15342,8 +15427,42 @@ function parseSettings(value) {
         requestTimeoutMs: (0, util_1.clampNumber)(candidate.requestTimeoutMs, 90000, 10000, 300000),
         queueCompactThreshold: (0, util_1.clampNumber)(candidate.queueCompactThreshold, 6, 2, 50),
         keywordDefinitions: parseKeywordDefinitions(candidate.keywordDefinitions),
+        uiFoldersByWorldbook: parseUiFoldersByWorldbook(candidate.uiFoldersByWorldbook),
         sectionPolicies,
     };
+}
+
+function parseUiFoldersByWorldbook(value) {
+    if (!(0, util_1.isPlainObject)(value)) return {};
+    const output = {};
+    for (const [worldbookKey, rawState] of Object.entries(value)) {
+        if (!(0, util_1.isPlainObject)(rawState)) continue;
+        const folders = Array.isArray(rawState.folders) ? rawState.folders
+            .map((folder) => ({
+                id: String(folder?.id ?? '').trim(),
+                name: String(folder?.name ?? '').trim().slice(0, 40),
+                collapsed: folder?.collapsed === true,
+            }))
+            .filter((folder) => folder.id && folder.id !== 'default' && folder.name)
+            .slice(0, 80) : [];
+        const folderIds = new Set(['default', ...folders.map((folder) => folder.id)]);
+        const folderByUid = {};
+        if ((0, util_1.isPlainObject)(rawState.folderByUid)) {
+            for (const [uid, folderId] of Object.entries(rawState.folderByUid)) {
+                const normalizedUid = String(uid).trim();
+                const normalizedFolder = String(folderId).trim();
+                if (normalizedUid && folderIds.has(normalizedFolder)) folderByUid[normalizedUid] = normalizedFolder;
+            }
+        }
+        const orderByFolder = { default: [] };
+        if ((0, util_1.isPlainObject)(rawState.orderByFolder)) {
+            for (const folderId of folderIds) {
+                orderByFolder[folderId] = (0, util_1.normalizeStringArray)(rawState.orderByFolder[folderId]);
+            }
+        }
+        output[String(worldbookKey).slice(0, 160)] = { folders, folderByUid, orderByFolder };
+    }
+    return output;
 }
 
 // [MA-LOCK] 函数职责锁：parseKeywordDefinitions 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
@@ -15491,7 +15610,7 @@ function isPolicy(value) {
  * - 世界书是唯一长期剧情事实源
  * - 模型是唯一主要语义解释层
  * - 插件只做确定性校验、精确匹配、事务提交与宿主边界保护
- * - 对象匹配禁止相似度/包含式猜测；sceneLocationSimilarity 仅作为权威地点标签的机械边界容错工具
+ * - 对象匹配与场景边界都禁止相似度/包含式猜测
  * - 禁止本地推断从属吸收目标
  */
 "use strict";
@@ -15529,7 +15648,6 @@ exports.normalizeFact = normalizeFact;
 // [MA-LOCK] 状态写入锁：exports.normalizeSceneLocation 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.normalizeSceneLocation = normalizeSceneLocation;
 // [MA-LOCK] 状态写入锁：exports.sceneLocationSimilarity 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.sceneLocationSimilarity = sceneLocationSimilarity;
 // [MA-LOCK] 状态写入锁：exports.extractLatestSceneLocation 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.extractLatestSceneLocation = extractLatestSceneLocation;
 // [MA-LOCK] 状态写入锁：exports.safeId 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -15752,36 +15870,9 @@ function cleanSceneLocationText(value) {
     return stableField.slice(0, 120);
 }
 function normalizeSceneLocation(value) {
-    return normalizeFact(cleanSceneLocationText(value))
-        .replace(/[【】\[\]（）()<>《》〈〉「」『』_~]+/gu, '')
-        .replace(/(?:的|所在|内部|里面|内侧)/gu, '')
-        .replace(/祭台/gu, '祭坛')
-        .replace(/房间/gu, '房')
-        .replace(/(?:门口|门前|床边|桌边|书桌旁|窗边|角落|拐角)$/gu, '');
-}
-function sceneLocationSimilarity(left, right) {
-    const a = normalizeSceneLocation(left);
-    const b = normalizeSceneLocation(right);
-    if (!a || !b) return 0;
-    if (a === b) return 1;
-    const numsA = [...a.matchAll(/\d+/gu)].map((match) => match[0]);
-    const numsB = [...b.matchAll(/\d+/gu)].map((match) => match[0]);
-    // 两边都带明确地点编号时，完整编号序列必须一致；B4-01 与 B4-02 不能仅因共享“4”被判成同地点。
-    if (numsA.length && numsB.length && numsA.join('|') !== numsB.join('|')) return 0;
-    const shorter = a.length <= b.length ? a : b;
-    const longer = a.length > b.length ? a : b;
-    if (shorter.length >= 2 && longer.includes(shorter) && shorter.length / Math.max(1, longer.length) >= 0.55) return 0.9;
-    const grams = (text) => text.length < 2 ? [text] : Array.from({ length: text.length - 1 }, (_, index) => text.slice(index, index + 2));
-    const aa = grams(a);
-    const bb = grams(b);
-    const counts = new Map();
-    for (const item of aa) counts.set(item, (counts.get(item) ?? 0) + 1);
-    let overlap = 0;
-    for (const item of bb) {
-        const count = counts.get(item) ?? 0;
-        if (count > 0) { overlap += 1; counts.set(item, count - 1); }
-    }
-    return aa.length && bb.length ? (2 * overlap) / (aa.length + bb.length) : 0;
+    const cleaned = normalizeFact(cleanSceneLocationText(value));
+    // 名称可写成“主场景/子地点”或“主场景 > 子地点”；这里只机械复制最大包含名称。
+    return String(cleaned).split(/\s*(?:\/|＞|>|→|⇒|::)\s*/u)[0].trim();
 }
 function extractLatestSceneLocation(contextText) {
     // [MA-SCENE-BOUNDARY-LOCK] 场景边界唯一权威：只读取主预设稳定字段“地点：”。
@@ -16205,13 +16296,7 @@ function buildWorldbookManagementView(entries, gameTime = null, settings = {}) {
     const currentPeople = new Set((context.characters ?? []).map((entry) => String(entry.uid)));
     // [MA-LOCK] 数据来源锁：settledPeople 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const settledPeople = people.filter((entry) => !currentPeople.has(String(entry.uid)) && entry.focus !== true);
-    // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-    for (const entry of people) {
-        // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-        if ((0, governance_1.isGenericBackgroundPerson)({ type: entry.type, name: entry.name, sections: sectionBlocks(entry) })) {
-            issues.push(issue('warning', 'temporary-npc-entry', `${entry.title}看起来仍是临时NPC独立条目`, [entry.title]));
-        }
-    }
+    // 人物是否“临时”属于语义判断，维护诊断不再据名称或正文正则生成结论。
 
     // [MA-LOCK] 数据来源锁：closedEvents 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
     const closedEvents = managed.filter((entry) => entry.type === '事件' && (0, semantic_1.isEventClosed)(entry));
@@ -16346,11 +16431,6 @@ function managementReferences(line, name) {
     const target = String(name ?? '').replace(/\s+/gu, '').toLocaleLowerCase();
     // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
     return Boolean(source && target && source.includes(target));
-}
-// [MA-LOCK] 函数职责锁：sectionBlocks 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
-function sectionBlocks(entry) {
-    // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
-    return Object.entries(entry?.sections?.values ?? {}).map(([name, values]) => ({ name, lines: values ?? [], empty: !(values ?? []).length }));
 }
 // [MA-LOCK] 函数职责锁：issue 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function issue(level, code, message, entries) { return { level, code, message, entries }; }
@@ -16788,7 +16868,7 @@ class WorldbookAdapter {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
 
 
-            // ui.98: 玩家通过“世界设定”入口建立的初始基础设定默认基石锁；其他条目不自动锁。
+            // 玩家通过“世界设定”入口建立的初始基础设定默认基石锁；其他条目不自动锁。
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (options.sourceKind === 'setting-import') {
                 // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
@@ -16817,7 +16897,7 @@ class WorldbookAdapter {
                     }
                 }
             }
-            // ui.98: 大总结产生/更新的非初始基础设定标记为演化型基础设定。
+            // 大总结产生/更新的非初始基础设定标记为演化型基础设定。
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (options.sourceKind === 'summary' && options.rebalanceKind === 'large') {
                 // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
@@ -17674,6 +17754,11 @@ function hydrateRaw(raw, entry, sourceMessageKey, operationId) {
     extension.bedrockLocked = entry.bedrockLocked === true;
     // [MA-LOCK] 状态写入锁：extension.focus 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
     extension.focus = entry.focus;
+    if (entry.lifecycle) extension.lifecycle = String(entry.lifecycle);
+    if (entry.lifecycle === 'settled') {
+        raw.disable = true;
+        raw.constant = false;
+    }
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
     if (entry.initialFoundation === true) extension.initialFoundation = true;
     // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
