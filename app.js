@@ -1768,7 +1768,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.10-final-candidate-v2';
+exports.VERSION = '3.0.0-lite.ui.11-setting-codex-final-candidate-v3';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2381,7 +2381,7 @@ class ControlPanel {
 .ma-lite-launcher:hover,.ma-lite-launcher:focus-visible{transform:scale(1.06)}
 #${ROOT_ID}.is-dragging .ma-lite-launcher{transform:none!important;cursor:grabbing}
 .ma-lite-launcher span{display:none}
-#${PANEL_ID}{position:fixed;top:max(8px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:10051;box-sizing:border-box;width:min(396px,calc(100vw - 20px));max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#${PANEL_ID}{position:fixed;top:max(8px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:10051;box-sizing:border-box;width:min(520px,calc(100vw - 20px));max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));overflow:auto;padding:0;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.2));border-radius:12px;background:var(--SmartThemeBlurTintColor,#17171c);color:var(--SmartThemeBodyColor,#fff);box-shadow:0 12px 34px rgba(0,0,0,.48);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #${PANEL_ID}[hidden]{display:none!important}
 .ma-lite-header{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:10px;padding:12px;border-bottom:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));background:var(--SmartThemeBlurTintColor,#17171c);backdrop-filter:none;box-shadow:0 4px 10px rgba(0,0,0,.22)}
 .ma-lite-title{min-width:0;flex:1}.ma-lite-title strong{display:block;font-size:15px}.ma-lite-title small{display:block;margin-top:2px;opacity:.62;font-size:11px}
@@ -2400,6 +2400,7 @@ class ControlPanel {
 .ma-lite-prompt-editor{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:9px;background:var(--black30a,rgba(255,255,255,.04))}.ma-lite-prompt-editor strong{font-size:13px}.ma-lite-prompt-editor small{font-size:10px;line-height:1.45;opacity:.62}.ma-lite-prompt-editor textarea{box-sizing:border-box;width:100%;min-height:180px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-prompt-save{align-self:flex-end;min-height:44px;padding:5px 12px;border:1px solid rgba(112,181,255,.48);border-radius:7px;background:rgba(112,181,255,.1);color:inherit;font-weight:700;cursor:pointer}.ma-lite-prompt-save:disabled{opacity:.45;cursor:not-allowed}
 .ma-lite-recall{display:flex;flex-direction:column;gap:8px;padding:9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-recall-head{display:flex;align-items:center;gap:8px}.ma-lite-recall-head strong{min-width:0;flex:1;font-size:13px}.ma-lite-recall-refresh,.ma-lite-recall-replan,.ma-lite-recall-edit{min-width:44px;min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-status{font-size:10px;line-height:1.35;opacity:.62}.ma-lite-lock-help{padding:7px 8px;border:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:7px;font-size:10px;line-height:1.45;opacity:.78}.ma-lite-lock-help strong{opacity:1}.ma-lite-recall-locks{display:flex;flex-wrap:wrap;gap:5px;margin-left:auto}.ma-lite-recall-lock{flex:0 0 auto;min-height:36px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-lock[data-active="true"]{border-color:rgba(255,195,74,.62);background:rgba(255,195,74,.15);font-weight:700}.ma-lite-recall-lock[data-mode="bedrock"][data-active="true"]{border-color:rgba(232,126,126,.62);background:rgba(232,126,126,.14)}.ma-lite-recall-lock:disabled{opacity:.45;cursor:not-allowed}.ma-lite-badge[data-kind="bedrock"]{background:rgba(232,126,126,.16)}.ma-lite-recall-edit[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13);font-weight:700}.ma-lite-recall-edit-actions[hidden]{display:none!important}.ma-lite-recall-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.13));border-radius:999px;background:rgba(0,0,0,.14);font-size:10px;white-space:nowrap}.ma-lite-recall-list{display:flex;flex-direction:column;gap:6px}.ma-lite-recall-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-recall-title{flex:1 1 160px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.ma-lite-recall-row-head{display:flex;align-items:center;flex-wrap:wrap;gap:7px;min-width:0}.ma-lite-recall-focus{flex:0 0 auto;min-height:44px;padding:3px 7px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:6px;background:rgba(0,0,0,.18);color:inherit;font-size:9px;cursor:pointer}.ma-lite-recall-focus[data-active="true"]{border-color:rgba(255,195,74,.55);background:rgba(255,195,74,.13)}.ma-lite-recall-focus:disabled{opacity:.45;cursor:not-allowed}.ma-lite-recall-meta{display:flex;flex-wrap:wrap;gap:4px}.ma-lite-badge{display:inline-flex;padding:2px 5px;border-radius:5px;background:rgba(255,255,255,.07);font-size:9px;line-height:1.3}.ma-lite-badge[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-badge[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-badge[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-badge[data-kind="terminal"]{background:rgba(111,214,164,.14)}.ma-lite-badge[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-badge[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-badge[data-kind="closed"]{background:rgba(170,170,180,.16)}.ma-lite-badge[data-kind="history"]{background:rgba(116,150,210,.14)}.ma-lite-badge[data-kind="scene"]{background:rgba(255,160,100,.14)}.ma-lite-recall-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-recall-pager{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:7px;margin-top:2px}.ma-lite-recall-page-button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.14));border-radius:7px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-recall-page-button:disabled{opacity:.38;cursor:not-allowed}.ma-lite-recall-page-status{font-size:10px;white-space:nowrap;opacity:.68}
 .ma-lite-recall-toolbar{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:7px}.ma-lite-recall-search,.ma-lite-recall-filter{box-sizing:border-box;width:100%;min-height:40px;padding:6px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:7px;background:rgba(0,0,0,.18);color:inherit;font-size:10px}.ma-lite-recall-summary-chip{cursor:pointer;color:inherit}.ma-lite-recall-summary-chip[data-active="true"]{border-color:rgba(112,181,255,.55);background:rgba(112,181,255,.14);font-weight:700}.ma-lite-recall-main{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:7px}.ma-lite-recall-mode{display:inline-flex;align-items:center;min-height:22px;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.07);font-size:9px;font-weight:700;white-space:nowrap}.ma-lite-recall-mode[data-kind="constant"]{background:rgba(255,195,74,.16)}.ma-lite-recall-mode[data-kind="vector"]{background:rgba(112,181,255,.15)}.ma-lite-recall-mode[data-kind="active"]{background:rgba(92,205,139,.17)}.ma-lite-recall-mode[data-kind="bridge"]{background:rgba(196,123,255,.16)}.ma-lite-recall-mode[data-kind="isolated"]{background:rgba(160,160,170,.14)}.ma-lite-recall-reason{min-width:0;font-size:10px;line-height:1.45;opacity:.76}.ma-lite-recall-relations{padding:5px 7px;border-radius:6px;background:rgba(112,181,255,.07);font-size:9px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ma-lite-recall-details{border-top:1px dashed var(--SmartThemeBorderColor,rgba(255,255,255,.1));padding-top:3px}.ma-lite-recall-details>summary{min-height:30px;display:flex;align-items:center;cursor:pointer;font-size:9px;opacity:.6}.ma-lite-recall-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:3px 0 2px}.ma-lite-recall-detail-grid>div{min-width:0;padding:5px 6px;border-radius:6px;background:rgba(0,0,0,.12)}.ma-lite-recall-detail-grid span{display:block;font-size:8px;opacity:.5}.ma-lite-recall-detail-grid b{display:block;margin-top:2px;font-size:9px;font-weight:500;line-height:1.35;overflow-wrap:anywhere}
+.ma-lite-codex-heading{display:flex;flex-direction:column;gap:2px}.ma-lite-codex-heading strong{font:700 16px/1.2 Georgia,"Noto Serif SC",serif;letter-spacing:.04em}.ma-lite-codex-heading small{font-size:9px;opacity:.52}.ma-lite-recall{gap:11px;padding:11px;background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(0,0,0,.10))}.ma-lite-recall-toolbar{grid-template-columns:minmax(0,1fr) 126px}.ma-lite-recall-search,.ma-lite-recall-filter{min-height:44px;font-size:11px}.ma-lite-recall-summary{gap:7px}.ma-lite-recall-summary-chip{min-height:30px;padding:5px 9px;background:rgba(255,255,255,.035)}.ma-lite-recall-list{gap:11px}.ma-lite-recall-row{position:relative;gap:9px;padding:13px 14px 12px;border-color:rgba(255,255,255,.12);border-left:3px solid rgba(150,165,185,.5);border-radius:10px;background:linear-gradient(155deg,rgba(255,255,255,.065),rgba(0,0,0,.10));box-shadow:0 5px 16px rgba(0,0,0,.14)}.ma-lite-recall-row[data-entry-type="人物"]{border-left-color:#d8a6ff}.ma-lite-recall-row[data-entry-type="场景"]{border-left-color:#ffad72}.ma-lite-recall-row[data-entry-type="物品"]{border-left-color:#78d7b0}.ma-lite-recall-row[data-entry-type="事件"]{border-left-color:#ff808f}.ma-lite-recall-row[data-entry-type="世界"]{border-left-color:#78b9ff}.ma-lite-recall-row[data-entry-type="基础设定"]{border-left-color:#e8cc72}.ma-lite-recall-row-head{align-items:flex-start}.ma-lite-recall-title{white-space:normal;font:700 15px/1.35 Georgia,"Noto Serif SC",serif;letter-spacing:.02em}.ma-lite-codex-type{flex:0 0 auto;padding:3px 7px;border-radius:999px;background:rgba(255,255,255,.08);font-size:9px;line-height:1.35;opacity:.78}.ma-lite-codex-content{margin:0;padding:10px 11px;border-radius:8px;background:rgba(0,0,0,.12);font:11px/1.75 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;color:inherit}.ma-lite-codex-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:2px;font-size:9px;opacity:.5}.ma-lite-codex-uid{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}.ma-lite-recall-relations{padding:7px 9px;border-left:2px solid rgba(112,181,255,.4);border-radius:0 7px 7px 0;background:rgba(112,181,255,.065);font-size:10px;white-space:normal}.ma-lite-recall-meta{gap:6px}.ma-lite-badge{padding:3px 7px;border-radius:999px;font-size:9px}
 
 .ma-lite-world-setting{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-world-setting-head{font-size:13px}.ma-lite-world-setting-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-world-setting textarea{box-sizing:border-box;width:100%;min-height:220px;resize:vertical;padding:8px 9px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.18));border-radius:7px;background:rgba(0,0,0,.22);color:inherit;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.ma-lite-world-setting-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-world-setting-actions button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-world-setting-actions button:first-child{grid-column:1/-1;border-color:rgba(111,214,164,.5)}.ma-lite-world-setting-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-world-setting-status{font-size:10px;line-height:1.45;opacity:.7}.ma-lite-world-setting-preview{display:flex;flex-direction:column;gap:7px}.ma-lite-world-setting-entry{padding:7px 8px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.1));border-radius:8px;background:rgba(0,0,0,.11)}.ma-lite-world-setting-entry strong{display:block;font-size:11px}.ma-lite-world-setting-entry pre{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.72}.ma-lite-world-setting-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}.ma-lite-world-setting-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}
 .ma-lite-rebuild{display:flex;flex-direction:column;gap:9px;padding:10px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.12));border-radius:9px;background:var(--black30a,rgba(255,255,255,.035))}.ma-lite-rebuild-head{font-size:13px}.ma-lite-rebuild-help{font-size:10px;line-height:1.45;opacity:.64}.ma-lite-rebuild-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.ma-lite-rebuild-actions button{min-height:44px;border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.15));border-radius:8px;background:rgba(0,0,0,.16);color:inherit;cursor:pointer}.ma-lite-rebuild-actions button:first-child{grid-column:1/-1;border-color:rgba(112,181,255,.5)}.ma-lite-rebuild-actions button:disabled{opacity:.4;cursor:not-allowed}.ma-lite-rebuild-status{font-size:10px;line-height:1.45;opacity:.68}.ma-lite-rebuild-preview{display:flex;flex-direction:column;gap:6px}.ma-lite-rebuild-summary{display:flex;flex-wrap:wrap;gap:5px}.ma-lite-rebuild-warning{padding:6px 7px;border-radius:7px;background:rgba(255,190,90,.1);font-size:10px;line-height:1.4}.ma-lite-rebuild-empty{padding:8px;text-align:center;font-size:10px;opacity:.56}
@@ -2503,8 +2504,8 @@ class ControlPanel {
         // [MA-LOCK] 数据来源锁：worldSetting 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const worldSetting = this.buildWorldSettingSection();
         worldbookPage.append(
+            this.wrapToolSection('世界设定集', recall, true),
             this.wrapToolSection('状态概览', management, false),
-            this.wrapToolSection('条目与召回', recall, true),
             this.wrapToolSection('导入基础设定', worldSetting, false),
         );
 
@@ -4207,7 +4208,8 @@ class ControlPanel {
         // [MA-LOCK] 数据来源锁：title 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const title = document.createElement('span');
         // [MA-LOCK] 状态写入锁：title.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        title.className = 'ma-lite-section-spacer';
+        title.className = 'ma-lite-section-spacer ma-lite-codex-heading';
+        title.innerHTML = '<strong>世界设定集</strong><small>人物 · 场景 · 物品 · 事件 · 世界</small>';
         // [MA-LOCK] 数据来源锁：edit 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const edit = document.createElement('button');
         // [MA-LOCK] 状态写入锁：edit.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4217,8 +4219,8 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：edit.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         edit.textContent = '修改';
         // [MA-LOCK] 状态写入锁：edit.title 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        edit.title = '进入条目修改模式后再显示选择框、合并与删除';
-        edit.setAttribute('aria-label', '修改召回映射条目');
+        edit.title = '进入管理模式后显示选择、总结、合并、删除与锁定操作';
+        edit.setAttribute('aria-label', '管理设定集条目');
         edit.addEventListener('click', () => this.toggleRecallEditMode());
         // [MA-LOCK] 数据来源锁：replan 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const replan = document.createElement('button');
@@ -4231,6 +4233,7 @@ class ControlPanel {
         replan.setAttribute('aria-label', '重新规划世界书召回状态');
         // [MA-LOCK] 状态写入锁：replan.innerHTML 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         replan.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>';
+        replan.hidden = true;
         replan.addEventListener('click', () => void this.replanRecallMap());
         // [MA-LOCK] 数据来源锁：refresh 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const refresh = document.createElement('button');
@@ -4239,8 +4242,8 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：refresh.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         refresh.className = 'ma-lite-recall-refresh';
         // [MA-LOCK] 状态写入锁：refresh.title 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        refresh.title = '刷新召回状态';
-        refresh.setAttribute('aria-label', '刷新世界书召回状态');
+        refresh.title = '刷新设定集';
+        refresh.setAttribute('aria-label', '刷新世界设定集');
         // [MA-LOCK] 状态写入锁：refresh.innerHTML 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         refresh.innerHTML = '<i class="fa-solid fa-rotate" aria-hidden="true"></i>';
         refresh.addEventListener('click', () => void this.refreshRecallMap(true));
@@ -4250,7 +4253,7 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：status.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         status.className = 'ma-lite-recall-status';
         // [MA-LOCK] 状态写入锁：status.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        status.textContent = '查看镜渊管理条目；需要人工维护时进入“修改”模式。';
+        status.textContent = '从当前世界书读取，按设定类型整理展示。';
         // [MA-LOCK] 数据来源锁：lockHelp 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const lockHelp = document.createElement('div');
         // [MA-LOCK] 状态写入锁：lockHelp.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4326,12 +4329,13 @@ class ControlPanel {
         }
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.recallEditActionsNode) this.recallEditActionsNode.hidden = !this.recallEditMode;
+        if (this.recallReplanButton) this.recallReplanButton.hidden = !this.recallEditMode;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.recallLockHelpNode) this.recallLockHelpNode.hidden = !this.recallEditMode;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode
             ? '修改模式：可选择条目执行小总结/大总结、合并或删除，也可逐条设置基石锁。'
-            : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}仅显示镜渊管理条目，共 ${Number(this.recallModel?.total || 0)} 条。`;
+            : `${this.recallWorldbookName ? `设定集：${this.recallWorldbookName}；` : ''}共 ${Number(this.recallModel?.total || 0)} 条。`;
         this.renderRecallPage();
     }
     // [MA-LOCK] 方法职责锁：replanRecallMap 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -4449,7 +4453,7 @@ class ControlPanel {
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (this.recallStatusNode) this.recallStatusNode.textContent = this.recallEditMode
             ? '修改模式：选择条目后可执行小总结/大总结、合并或删除，也可逐条设置基石锁。'
-            : `${this.recallWorldbookName ? `世界书：${this.recallWorldbookName}；` : ''}显示 ${filteredEntries.length} / ${model.total} 条。主界面只展示“如何召回、为什么、关联谁”。`;
+            : `${this.recallWorldbookName ? `设定集：${this.recallWorldbookName}；` : ''}显示 ${filteredEntries.length} / ${model.total} 条。`;
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!model.total) {
             this.recallNode.className = 'ma-lite-recall-empty';
@@ -4469,10 +4473,10 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：search.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         search.className = 'ma-lite-recall-search';
         // [MA-LOCK] 状态写入锁：search.placeholder 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-        search.placeholder = '搜索条目、关键词或关联对象';
+        search.placeholder = '搜索人物、地点、物品、事件或正文';
         // [MA-LOCK] 状态写入锁：search.value 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         search.value = this.recallQuery;
-        search.setAttribute('aria-label', '搜索召回映射条目');
+        search.setAttribute('aria-label', '搜索世界设定集');
         search.addEventListener('input', () => {
             // [MA-LOCK] 状态写入锁：this.recallQuery 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             this.recallQuery = search.value;
@@ -4492,8 +4496,8 @@ class ControlPanel {
         filter.setAttribute('aria-label', '筛选召回映射');
         // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
         for (const [value, label] of [
-            ['all', '全部映射'], ['current', '当前'], ['recent', '近期'], ['history', '历史'],
-            ['constant', '常驻'], ['keyword', '关键词'], ['vector', '含向量'], ['related', '有关联'], ['disabled', '停用'],
+            ['all', '全部设定'], ['type:人物', '人物'], ['type:场景', '场景'], ['type:物品', '物品'],
+            ['type:事件', '事件'], ['type:世界', '世界'], ['type:基础设定', '基础设定'],
         ]) {
             // [MA-LOCK] 数据来源锁：option 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const option = document.createElement('option');
@@ -4509,7 +4513,10 @@ class ControlPanel {
         // [MA-LOCK] 状态写入锁：summary.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
         summary.className = 'ma-lite-recall-summary';
         // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-        for (const item of model.summary) {
+        const categorySummary = ['人物', '场景', '物品', '事件', '世界', '基础设定']
+            .map((type) => ({ key: `type:${type}`, label: type, count: model.entries.filter((entry) => entry.type === type).length }))
+            .filter((item) => item.count > 0);
+        for (const item of categorySummary) {
             // [MA-LOCK] 数据来源锁：chip 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const chip = document.createElement('button');
             // [MA-LOCK] 状态写入锁：chip.type 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4520,7 +4527,7 @@ class ControlPanel {
             // [MA-LOCK] 状态写入锁：chip.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             chip.textContent = `${item.label} ${item.count}`;
             // [MA-LOCK] 状态写入锁：chip.title 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            chip.title = `${item.description}；点击筛选`;
+            chip.title = `查看${item.label}设定`;
             chip.addEventListener('click', () => {
                 // [MA-LOCK] 状态写入锁：this.recallFilter 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
                 this.recallFilter = this.recallFilter === item.key ? 'all' : item.key;
@@ -4564,6 +4571,7 @@ class ControlPanel {
             // [MA-LOCK] 状态写入锁：row.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             row.className = 'ma-lite-recall-row';
             row.dataset.mode = item.mappingKind;
+            row.dataset.entryType = item.type || '其他';
             // [MA-LOCK] 数据来源锁：head 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const head = document.createElement('div');
             // [MA-LOCK] 状态写入锁：head.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4573,7 +4581,7 @@ class ControlPanel {
             // [MA-LOCK] 状态写入锁：title.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             title.className = 'ma-lite-recall-title';
             // [MA-LOCK] 状态写入锁：title.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            title.textContent = item.title;
+            title.textContent = String(item.title || '').replace(/^[^｜]+｜/u, '') || item.title;
             // [MA-LOCK] 状态写入锁：title.title 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             title.title = item.title;
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
@@ -4597,7 +4605,10 @@ class ControlPanel {
                 });
                 head.append(select);
             }
-            head.append(title);
+            const type = document.createElement('span');
+            type.className = 'ma-lite-codex-type';
+            type.textContent = item.type || '其他';
+            head.append(title, type);
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (this.recallEditMode && typeof this.actions.setBedrockLocked === 'function') {
                 // [MA-LOCK] 数据来源锁：locks 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
@@ -4667,29 +4678,15 @@ class ControlPanel {
 
             // [MA-LOCK] 数据来源锁：main 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const main = document.createElement('div');
-            // [MA-LOCK] 状态写入锁：main.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            main.className = 'ma-lite-recall-main';
-            // [MA-LOCK] 数据来源锁：mapping 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const mapping = document.createElement('span');
-            // [MA-LOCK] 状态写入锁：mapping.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            mapping.className = 'ma-lite-recall-mode';
-            mapping.dataset.kind = item.mappingKind;
-            // [MA-LOCK] 状态写入锁：mapping.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            mapping.textContent = item.mappingMode;
-            // [MA-LOCK] 数据来源锁：reason 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const reason = document.createElement('span');
-            // [MA-LOCK] 状态写入锁：reason.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            reason.className = 'ma-lite-recall-reason';
-            // [MA-LOCK] 状态写入锁：reason.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            reason.textContent = item.reason;
-            main.append(mapping, reason);
+            main.className = 'ma-lite-codex-content';
+            main.textContent = item.content || '（暂无正文）';
 
             // [MA-LOCK] 数据来源锁：meta 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
             const meta = document.createElement('div');
             // [MA-LOCK] 状态写入锁：meta.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
             meta.className = 'ma-lite-recall-meta';
             // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-            for (const badge of item.badges.slice(1)) {
+            for (const badge of item.badges.filter((badge) => ['更新', '当前场景', '上一场景', '远期场景', '世界变化', '基石锁'].includes(badge.label))) {
                 // [MA-LOCK] 数据来源锁：node 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const node = document.createElement('span');
                 // [MA-LOCK] 状态写入锁：node.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -4700,14 +4697,14 @@ class ControlPanel {
                 meta.append(node);
             }
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
-            if (item.lifecycleLabel) {
+            if (item.focus) {
                 // [MA-LOCK] 数据来源锁：node 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
                 const node = document.createElement('span');
                 // [MA-LOCK] 状态写入锁：node.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
                 node.className = 'ma-lite-badge';
-                node.dataset.kind = item.lifecycleKind;
+                node.dataset.kind = 'active';
                 // [MA-LOCK] 状态写入锁：node.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-                node.textContent = item.lifecycleLabel;
+                node.textContent = '主焦点';
                 meta.append(node);
             }
 
@@ -4726,44 +4723,18 @@ class ControlPanel {
                 relations.title = item.relationTitles.join('\n');
             }
 
-            // [MA-LOCK] 数据来源锁：details 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const details = document.createElement('details');
-            // [MA-LOCK] 状态写入锁：details.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            details.className = 'ma-lite-recall-details';
-            // [MA-LOCK] 数据来源锁：detailsSummary 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const detailsSummary = document.createElement('summary');
-            // [MA-LOCK] 状态写入锁：detailsSummary.textContent 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            detailsSummary.textContent = '映射参数';
-            // [MA-LOCK] 数据来源锁：detailBody 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const detailBody = document.createElement('div');
-            // [MA-LOCK] 状态写入锁：detailBody.className 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-            detailBody.className = 'ma-lite-recall-detail-grid';
-            // [MA-LOCK] 数据来源锁：technical 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-            const technical = [
-                ['UID', String(item.uid || '无')],
-                ['规则', item.profileName || '未记录'],
-                ['触发词', item.triggerKeywords.length ? item.triggerKeywords.join('、') : '无'],
-                ['递归', item.recursionLabel],
-                ['位置', item.position],
-                ['顺序', String(item.order)],
-                ['深度', String(item.depth)],
-                ['扫描', item.scanDepth == null ? '继承' : String(item.scanDepth)],
-            ];
-            // [MA-LOCK] 遍历锁：当前循环只遍历现有数据集合；不要在循环里悄悄改变集合身份、顺序或新增跨轮状态。
-            for (const [label, value] of technical) {
-                // [MA-LOCK] 数据来源锁：cell 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const cell = document.createElement('div');
-                // [MA-LOCK] 数据来源锁：key 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const key = document.createElement('span'); key.textContent = label;
-                // [MA-LOCK] 数据来源锁：val 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
-                const val = document.createElement('b'); val.textContent = value;
-                cell.append(key, val); detailBody.append(cell);
-            }
-            details.append(detailsSummary, detailBody);
+            const footer = document.createElement('div');
+            footer.className = 'ma-lite-codex-footer';
+            const uid = document.createElement('span');
+            uid.className = 'ma-lite-codex-uid';
+            uid.textContent = `UID ${item.uid || '无'}`;
+            const relationCount = document.createElement('span');
+            relationCount.textContent = item.relationCount ? `${item.relationCount} 项关联` : '独立条目';
+            footer.append(uid, relationCount);
             row.append(head, main, meta);
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (relations) row.append(relations);
-            row.append(details);
+            row.append(footer);
             list.append(row);
         }
         this.recallNode.append(list);
@@ -5703,7 +5674,7 @@ function buildRecallViewModel(entries, updatedEntryUids = []) {
         badges.push({ label: recursion.label, kind: recursion.kind });
         // [MA-LOCK] 数据来源锁：searchText 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const searchText = (0, util_1.normalizeFact)([
-            entry.title, entry.type, mappingMode, lifecycleInfo.label, profileName, reason,
+            entry.title, entry.type, entry.content, mappingMode, lifecycleInfo.label, profileName, reason,
             ...triggerKeywords, ...relationTitles,
         ].filter(Boolean).join(' '));
         // [MA-LOCK] 返回契约锁：保持当前返回值形态和语义；调用方可能依赖该类型、字段和空值约定。
@@ -5713,6 +5684,7 @@ function buildRecallViewModel(entries, updatedEntryUids = []) {
             focus: entry.focus === true,
             bedrockLocked: entry.bedrockLocked === true,
             title: String(entry.title || entry.name || entry.uid || '未命名条目'),
+            content: String(entry.content || ''),
             lifecycle,
             lifecycleLabel: lifecycleInfo.label,
             lifecycleKind: lifecycleInfo.kind,
@@ -5800,6 +5772,7 @@ function recallReason(item) {
 
 // [MA-LOCK] 函数职责锁：recallFilterMatches 保持当前签名、输入输出和调用职责；不要在函数内增加与其职责无关的第二逻辑。
 function recallFilterMatches(item, filter) {
+    if (String(filter || '').startsWith('type:')) return String(item.type || '') === String(filter).slice(5);
     // [MA-LOCK] 分派锁：switch 只按当前明确枚举分派；不要用自由文本近似值扩展隐式分支。
     switch (String(filter || 'all')) {
         // [MA-LOCK] 分支值锁：此 case/default 属于当前确定性分派；新增枚举必须来自明确协议或用户需求。
