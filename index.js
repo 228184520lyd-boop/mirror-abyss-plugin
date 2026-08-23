@@ -1,14 +1,22 @@
-import { createApplication } from './src/app.js';
+const BUNDLE_URL = './app.js?v=4.0.0-clean.3';
 
-let application = null;
+let bundlePromise;
+let application;
 
-export async function onActivate() {
+function loadBundle() {
+  return bundlePromise ??= import(BUNDLE_URL);
+}
+
+async function start() {
   if (application) return;
+  const { createApplication } = await loadBundle();
   application = createApplication();
   application.start();
 }
 
-export async function onEnable() { return onActivate(); }
+export async function onActivate() { return start(); }
+
+export async function onEnable() { return start(); }
 
 export async function onDisable() {
   application?.stop();
