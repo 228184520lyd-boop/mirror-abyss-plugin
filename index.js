@@ -1,24 +1,28 @@
-const BUNDLE_URL = './app.js?v=4.0.0-clean.8';
+import { createApplication } from './app.js';
 
-let bundlePromise;
 let application;
 
-function loadBundle() {
-  return bundlePromise ??= import(BUNDLE_URL);
-}
-
-async function start() {
+function start() {
   if (application) return;
-  const { createApplication } = await loadBundle();
-  application = createApplication();
-  application.start();
+  const next = createApplication();
+  try {
+    next.start();
+    application = next;
+  } catch (error) {
+    next.stop?.();
+    const startupError = error instanceof Error
+      ? error
+      : new Error(`Mirror Abyss启动失败：${error?.message ?? error?.type ?? String(error)}`, { cause: error });
+    console.error('[Mirror Abyss] startup failed', startupError);
+    throw startupError;
+  }
 }
 
-export async function onActivate() { return start(); }
+export function onActivate() { return start(); }
 
-export async function onEnable() { return start(); }
+export function onEnable() { return start(); }
 
-export async function onDisable() {
+export function onDisable() {
   application?.stop();
   application = null;
 }

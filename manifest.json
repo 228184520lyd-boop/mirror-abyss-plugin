@@ -1,17 +1,15 @@
 {
   "display_name": "Mirror Abyss / 镜渊",
   "loading_order": 10,
-  "requires": [],
-  "optional": [],
-  "dependencies": [],
   "js": "index.js",
+  "css": "style.css",
   "author": "228184520lyd-boop",
-  "version": "4.0.0-clean.8",
+  "version": "4.0.1",
   "auto_update": true,
   "hooks": {
     "enable": "onEnable",
     "disable": "onDisable",
     "activate": "onActivate"
   },
-  "description": "世界书唯一事实源｜单队列UID事务｜连接配置｜移动端游戏档案"
+  "description": "世界书唯一事实源｜单队列UID事务｜移动端游戏档案"
 }

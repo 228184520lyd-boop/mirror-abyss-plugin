@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.0-clean.8`
+版本：`4.0.1`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源；模型负责语义整理，插件只负责固定协议、精确身份、UID、单一事务入口、任务编排和界面。
 
@@ -19,12 +19,12 @@ UI或宿主事件 → TaskQueue → Controller → Memory/Import/Migration → M
 - 世界设定、提取和总结均使用自然事实行协议，不使用额外对象外壳。
 - 手记修改模式同时提供逐条“基石锁”和批量“设为/解除基石”；条目始终显示“可更新”或“基石只读”。
 
-## 4.0.0-clean.8 功能
+## 4.0.1 功能
 
 - 可选择 SillyTavern 连接配置并执行真实 API 测试；不会切换宿主全局连接。
 - 单执行队列统一自动处理、人工处理、总结、回滚与写入；可以取消当前及全部等待任务。
 - 聊天消息显示审核、修正、提取和写入状态；自动总结失败保留精确来源并可逐项重试。
-- Edit/Swipe 先按 UID 回滚受影响写入，再重新处理变更后的目标消息；Delete 只回滚。
+- AI 正文 Edit/Swipe 先按 UID 回滚再处理新正文；用户消息 Edit 与 Delete 只回滚受影响写入。
 - 世界书原生常驻、主要关键词与两项递归开关可查看和编辑；内容更新不会覆盖玩家设置。
 - 人物支持唯一主焦点；焦点只调整原生召回并防止删除或被总结改换身份，`【条目】`直接关联可跳转。
 - 手记支持文件夹折叠与排序、同名精确合并、安全删除、条目排序和文件夹内独立分页。
@@ -33,17 +33,20 @@ UI或宿主事件 → TaskQueue → Controller → Memory/Import/Migration → M
 - 旧格式迁移严格限定为当前标题和正文模板，先扫描预览、确认写入、保留 UID，并可撤销。
 - 维护页提供三轮真实验收、诊断 JSON 导出、自定义审核补充与完整重置。
 
-## 安装
+## GitHub 安装
 
-GitHub 部署包根目录即 SillyTavern 扩展目录。`index.js` 是生命周期薄入口，`app.js` 是由模块化源码生成的单一浏览器运行包；宿主加载阶段不请求源码子目录。样式已经写入运行包，不再产生独立 CSS 加载点。
+将源码包内 `Mirror-Abyss-4.0.1/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
 
-在 SillyTavern 中打开扩展面板，选择“安装扩展”，粘贴本 GitHub 仓库地址。安装完成后启用“Mirror Abyss / 镜渊”。
+`index.js` 是静态生命周期入口，加载构建产物 `app.js`；`style.css` 由宿主按清单加载。运行时不会请求 `src/`。请使用当前 SillyTavern release；项目没有虚构未经实机验证的最低客户端版本。
+
+部署包只包含宿主运行所需文件，可解压到 SillyTavern 的第三方扩展目录；源码包用于 GitHub 发布和继续开发。
 
 ## 验证
 
 ```bash
 npm run build
-node --test tests/*.test.mjs
+npm run verify
+npm run package
 ```
 
-架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。维护页的“三轮完整验收”会实际调用当前模型路由并执行临时世界书事务；会产生少量模型请求。
+不要直接编辑根目录 `app.js`；它由 `src/` 生成。架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。维护页的“三轮完整验收”会调用当前模型路由并执行可回滚的临时世界书事务，因此会产生少量模型请求。
