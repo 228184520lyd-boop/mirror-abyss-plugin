@@ -1769,7 +1769,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // [MA-LOCK] 状态写入锁：exports.MANAGED_VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.MANAGED_VERSION = exports.MAX_CONTEXT_CHARS = exports.WORLD_INFO_EXTENSION_KEY = exports.EXTENSION_NAMESPACE = exports.DISPLAY_NAME = exports.VERSION = void 0;
 // [MA-LOCK] 状态写入锁：exports.VERSION 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
-exports.VERSION = '3.0.0-lite.ui.15-white-dossier-ui';
+exports.VERSION = '3.0.0-lite.ui.16-mobile-edge-fix';
 // [MA-LOCK] 状态写入锁：exports.DISPLAY_NAME 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
 exports.DISPLAY_NAME = 'Mirror Abyss｜镜渊';
 // [MA-LOCK] 状态写入锁：exports.EXTENSION_NAMESPACE 的值来源以当前赋值链为准；不要在别处增加竞争写入或语义兜底。
@@ -2103,6 +2103,7 @@ class ControlPanel {
         this.panel?.remove();
         this.settingsEntry?.remove();
         document.querySelectorAll(`.${INDICATOR_CLASS}`).forEach((node) => node.remove());
+        document.documentElement?.classList?.remove('ma-lite-panel-open');
         this.messageTaskStates.clear();
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (removeStyle) document.getElementById(STYLE_ID)?.remove();
@@ -2436,8 +2437,9 @@ class ControlPanel {
 .ma-lite-merge-dialog{position:absolute;inset:0;z-index:30;display:grid;place-items:center;padding:16px;background:rgba(25,32,43,.32)}.ma-lite-merge-dialog[hidden]{display:none}.ma-lite-merge-card{box-sizing:border-box;width:min(360px,100%);display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid #ccd5e0;border-radius:10px;background:#fff;box-shadow:0 18px 45px rgba(22,31,44,.25)}.ma-lite-merge-card>strong{font:700 16px/1.2 ui-serif,"Noto Serif SC",serif}.ma-lite-merge-selection{max-height:90px;overflow:auto;padding:8px;border-radius:7px;background:var(--ma-paper-soft);color:#4f5966;font-size:10px;line-height:1.5}.ma-lite-merge-card textarea{box-sizing:border-box;width:100%;min-height:90px;padding:8px;border:1px solid var(--ma-line);border-radius:7px;background:#fff;resize:vertical}.ma-lite-merge-buttons{display:flex;justify-content:flex-end;gap:6px}.ma-lite-merge-buttons button{min-height:36px;padding:6px 12px;border-radius:7px}.ma-lite-merge-buttons button:last-child{border-color:#9db6ce;background:var(--ma-blue-soft);color:#244d76;font-weight:700}
 .ma-lite-maintenance-home{display:flex;flex-direction:column;gap:8px}.ma-lite-maintenance-launcher,.ma-lite-child-back{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:42px;padding:8px 10px;border:1px solid var(--ma-line);border-radius:8px;background:#fff;color:#27313d}.ma-lite-maintenance-launcher span{display:flex;align-items:center;gap:9px}.ma-lite-maintenance-launcher span>i{color:var(--ma-blue)}.ma-lite-child-back{justify-content:flex-start;gap:6px;border:0;border-bottom:1px solid var(--ma-line);border-radius:0;color:var(--ma-blue)}.ma-lite-maintenance-child{display:flex;flex-direction:column;gap:8px}.ma-lite-maintenance-child[hidden],.ma-lite-maintenance-home[hidden]{display:none}.ma-lite-maintenance-settings{display:flex;flex-direction:column;gap:8px}
 .ma-lite-world-setting{gap:8px;padding:0;border:0;background:#fff}.ma-lite-world-setting-head{font:700 16px/1.2 ui-serif,"Noto Serif SC",serif}.ma-lite-world-setting-help{color:var(--ma-muted);opacity:1}.ma-lite-world-setting textarea{min-height:230px;padding:10px;border:1px solid var(--ma-line);border-radius:8px;background:#fff;color:var(--ma-ink);font:12px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.ma-lite-world-setting-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.ma-lite-world-setting-actions button{min-height:38px;border-color:var(--ma-line);border-radius:7px;background:#fff;color:#303945}.ma-lite-world-setting-actions button:first-child{grid-column:auto;border-color:var(--ma-line)}.ma-lite-world-setting-actions button:nth-child(2){border-color:#9fb8d0;background:var(--ma-blue-soft);color:#244e77;font-weight:700}.ma-lite-world-setting-status{color:var(--ma-muted);opacity:1}.ma-lite-world-setting-entry{border-color:var(--ma-line);background:#fff}.ma-lite-world-setting-entry pre{color:#303841;opacity:1}
+.ma-lite-worldbook-quick{gap:7px;padding:0;border:0;border-radius:0;background:#fff}.ma-lite-worldbook-quick-head small{display:none}.ma-lite-worldbook-quick-actions{padding:0}.ma-lite-worldbook-advanced{border-color:var(--ma-line);background:#fff}.ma-lite-worldbook-advanced>summary{min-height:36px;padding:8px;color:#4b5562}.ma-lite-summary-failures{border-color:#ead6c2;background:#fffaf5}.ma-lite-summary-failure-row{background:#fff}.ma-lite-summary-failure-detail{border-top-color:var(--ma-line)}
 .${INDICATOR_CLASS}{box-sizing:border-box;width:fit-content;max-width:min(92%,430px);min-height:28px;margin:6px 0 2px;padding:4px 7px;border:1px solid #d7dee8;border-radius:8px;background:rgba(255,255,255,.96);color:#252b34;box-shadow:0 2px 8px rgba(28,36,48,.06);font-size:9px;opacity:.92!important}.${INDICATOR_CLASS}:hover{border-color:#aebfd0;background:#fff}.${INDICATOR_CLASS}[data-history="history"],.${INDICATOR_CLASS}[data-history="archived"]{min-height:22px;padding:3px 6px;border-color:transparent;background:transparent;box-shadow:none;opacity:.62!important}.${INDICATOR_CLASS}[data-history="archived"]{opacity:.42!important}.${INDICATOR_CLASS} .ma-ind-label{color:#294f75;letter-spacing:.06em}.${INDICATOR_CLASS} .ma-ind-summary{font-size:9px;color:#59636f;opacity:1}.${INDICATOR_CLASS} .ma-ind-steps{gap:4px}.${INDICATOR_CLASS} .ma-ind-open{font-size:13px;color:#73808e;opacity:1}.ma-ind-dot{width:6px;height:6px;box-shadow:0 0 0 1px rgba(35,45,58,.1)}
-@media (max-width:480px){#${PANEL_ID}{left:max(5px,env(safe-area-inset-left));right:max(5px,env(safe-area-inset-right));width:auto;max-height:calc(100dvh - 10px - env(safe-area-inset-top) - env(safe-area-inset-bottom));border-radius:10px}.ma-lite-header{padding:6px 9px}.ma-lite-body{padding:0 9px 9px}.ma-lite-recall-toolbar{grid-template-columns:1fr}.ma-lite-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.ma-lite-recall-edit-actions{grid-template-columns:repeat(4,minmax(0,1fr))}.${INDICATOR_CLASS}{width:fit-content;max-width:92%;border-radius:8px}.${INDICATOR_CLASS} .ma-ind-steps{display:none}.${INDICATOR_CLASS} .ma-ind-open{margin-left:auto}.ma-lite-inline-editor{min-height:42dvh}}
+@media (max-width:480px){html.ma-lite-panel-open,html.ma-lite-panel-open body{overflow:hidden!important}#${PANEL_ID}{top:0;bottom:0;left:0;right:0;width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;box-shadow:none;scrollbar-width:none}#${PANEL_ID}::-webkit-scrollbar{display:none;width:0;height:0}.ma-lite-header{padding:6px 9px}.ma-lite-body{padding:0 10px calc(10px + env(safe-area-inset-bottom))}.ma-lite-recall-toolbar{grid-template-columns:1fr}.ma-lite-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.ma-lite-recall-edit-actions{grid-template-columns:repeat(4,minmax(0,1fr))}.${INDICATOR_CLASS}{width:fit-content;max-width:92%;border-radius:8px}.${INDICATOR_CLASS} .ma-ind-steps{display:none}.${INDICATOR_CLASS} .ma-ind-open{margin-left:auto}.ma-lite-inline-editor{min-height:42dvh}}
 `;
         document.head.append(style);
     }
@@ -5735,6 +5737,7 @@ class ControlPanel {
         // [MA-LOCK] 数据来源锁：opening 只保存当前语句定义的数据来源/中间结果；不要让同一概念再出现第二来源或偷偷改类型。
         const opening = this.panel.hidden;
         this.panel.hidden = !opening;
+        document.documentElement?.classList?.toggle('ma-lite-panel-open', opening);
         this.launcher?.setAttribute('aria-expanded', opening ? 'true' : 'false');
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (opening) { this.refresh(); if (this.activePage === 'worldbook') void this.refreshWorldbookPage(true); }
@@ -5744,6 +5747,7 @@ class ControlPanel {
         // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
         if (!this.panel) return;
         this.panel.hidden = true;
+        document.documentElement?.classList?.remove('ma-lite-panel-open');
         this.launcher?.setAttribute('aria-expanded', 'false');
     }
     // [MA-LOCK] 方法职责锁：mountOfficialSettingsEntry 保持当前调用契约；修改时必须同步检查所有调用方，禁止新增隐式旁路。
@@ -5769,6 +5773,7 @@ class ControlPanel {
         button.addEventListener('click', () => {
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
             if (this.panel) this.panel.hidden = false;
+            document.documentElement?.classList?.add('ma-lite-panel-open');
             this.launcher?.setAttribute('aria-expanded', 'true');
             this.refresh();
             // [MA-LOCK] 条件门锁：当前 if 条件就是现有触发边界；没有明确需求，不得扩大、缩小或增加同义触发条件。
