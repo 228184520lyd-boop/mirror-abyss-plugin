@@ -6,12 +6,12 @@
   "dependencies": [],
   "js": "index.js",
   "author": "228184520lyd-boop",
-  "version": "4.0.0-clean.4",
+  "version": "4.0.0-clean.7",
   "auto_update": true,
   "hooks": {
     "enable": "onEnable",
     "disable": "onDisable",
     "activate": "onActivate"
   },
-  "description": "世界书唯一事实源｜单一Schema｜确定性UID事务｜移动端游戏档案"
+  "description": "世界书唯一事实源｜单队列UID事务｜连接配置｜移动端游戏档案"
 }

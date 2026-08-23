@@ -4,7 +4,7 @@ const __ma_style_id = 'mirror-abyss-clean-style';
 if (typeof document !== 'undefined' && !document.getElementById(__ma_style_id)) {
   const style = document.createElement('style');
   style.id = __ma_style_id;
-  style.textContent = ":root {\n  --ma-ink: #132536;\n  --ma-muted: #6d7c8b;\n  --ma-line: #dbe3ea;\n  --ma-soft: #f5f8fb;\n  --ma-blue: #236f9b;\n  --ma-danger: #a43b3b;\n}\n\nhtml.ma-panel-open { overflow: hidden; }\n.ma-root, .ma-root * { box-sizing: border-box; }\n.ma-root { color: var(--ma-ink); font: 16px/1.6 system-ui, -apple-system, \"Noto Sans SC\", sans-serif; }\n.ma-button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px; background: #fff; color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; }\n.ma-button:active { transform: translateY(1px); }\n.ma-button:disabled { opacity: .5; cursor: default; transform: none; }\n.ma-button.is-active { border-color: var(--ma-blue); background: #edf6fb; color: #155b84; }\n.ma-button.ma-quiet { border-color: transparent; background: transparent; }\n.ma-button.ma-danger { color: var(--ma-danger); }\n.ma-button.ma-mini { min-height: 34px; padding: 4px 8px; font-size: 14px; }\n.ma-launcher { position: fixed; right: max(12px, env(safe-area-inset-right)); top: 50dvh; z-index: 10050; width: 46px; min-width: 46px; height: 46px; padding: 0; border-radius: 50%; border-color: #315269; background: #17384e; color: #fff; box-shadow: 0 5px 18px rgba(17, 40, 57, .28); }\n.ma-panel { position: fixed; z-index: 10051; right: max(12px, env(safe-area-inset-right)); top: 6dvh; width: min(720px, calc(100vw - 24px)); height: min(88dvh, 900px); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cad6df; border-radius: 18px; background: #fff; box-shadow: 0 20px 70px rgba(15, 31, 44, .25); }\n.ma-panel[hidden] { display: none; }\n.ma-header { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--ma-line); }\n.ma-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; }\n.ma-sigil { color: var(--ma-blue); font-size: 24px; }\n.ma-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ma-line); }\n.ma-tabs .ma-button { border: 0; border-radius: 0; border-bottom: 3px solid transparent; color: var(--ma-muted); }\n.ma-tabs .ma-button.is-active { border-bottom-color: var(--ma-blue); background: #fff; color: var(--ma-blue); }\n.ma-main { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px; background: #fff; }\n.ma-main h1, .ma-main h2, .ma-main h3, .ma-main p { margin-top: 0; }\n.ma-main h1 { margin-bottom: 2px; font-size: 25px; }\n.ma-main h2 { margin-bottom: 12px; font-size: 19px; }\n.ma-main h3 { font-size: 17px; }\n.ma-section { margin-bottom: 16px; padding: 16px; border: 1px solid var(--ma-line); border-radius: 14px; background: #fff; }\n.ma-scene-strip { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid var(--ma-blue); background: var(--ma-soft); font-weight: 650; }\n.ma-help, .ma-main small { color: var(--ma-muted); }\n.ma-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }\n.ma-status { padding: 12px 14px; border-radius: 10px; background: var(--ma-soft); }\n.ma-status.is-error, .ma-error { color: var(--ma-danger); background: #fff1f1; }\n.ma-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ma-line); }\n.ma-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }\n.ma-search, .ma-editor, .ma-import-text, .ma-folder-select, .ma-number { width: 100%; min-height: 46px; margin: 14px 0; padding: 10px 13px; border: 1px solid var(--ma-line); border-radius: 11px; background: #fff; color: var(--ma-ink); font: inherit; }\n.ma-editor, .ma-import-text { min-height: 180px; resize: vertical; }\n.ma-filters { display: flex; gap: 8px; overflow-x: auto; padding: 0 0 10px; scrollbar-width: thin; }\n.ma-filters .ma-button { flex: none; white-space: nowrap; }\n.ma-button.ma-chip { min-height: 38px; padding: 5px 12px; border-radius: 999px; font-weight: 500; }\n.ma-manage-bar { position: sticky; top: -18px; z-index: 2; display: flex; gap: 8px; overflow-x: auto; margin: 0 -18px 14px; padding: 10px 18px; border-block: 1px solid var(--ma-line); background: rgba(255,255,255,.96); }\n.ma-manage-bar .ma-button { flex: none; }\n.is-hidden { display: none !important; }\n.ma-folder { margin: 0 0 18px; border-left: 4px solid #9bb7c8; }\n.ma-folder-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 0 6px 14px; }\n.ma-folder-head h2 { margin: 0 auto 0 0; }\n.ma-entry { margin-left: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-entry-head { min-height: 58px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 6px; cursor: pointer; }\n.ma-entry-head::marker { color: var(--ma-muted); }\n.ma-entry-head strong { font-size: 17px; }\n.ma-type-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--ma-soft); color: var(--ma-blue); font-weight: 800; }\n.ma-folder-select { width: auto; max-width: 150px; min-height: 38px; margin: 0; padding: 4px 8px; }\n.ma-entry-content { padding: 4px 10px 14px 42px; }\n.ma-entry-content pre, .ma-import-preview pre { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ma-ink); font: inherit; }\n.ma-setting-row { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-setting-row:last-child { border-bottom: 0; }\n.ma-setting-row span { display: grid; }\n.ma-root input[type=\"checkbox\"] { appearance: auto; accent-color: var(--ma-blue); }\n.ma-setting-row input[type=\"checkbox\"] { width: 22px; height: 22px; }\n.ma-number { width: 86px; margin: 0; }\n.ma-import-preview { margin-top: 14px; }\n.ma-import-status { min-height: 42px; margin-top: 10px; padding: 8px 11px; border-left: 3px solid var(--ma-line); background: var(--ma-soft); color: var(--ma-muted); }\n.ma-import-status.is-busy { border-left-color: var(--ma-blue); color: var(--ma-blue); }\n.ma-preview-item { padding: 9px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-report { margin-top: 12px; }\n.ma-check { padding: 8px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-check.is-pass { color: #236b4b; }\n.ma-check.is-fail { color: var(--ma-danger); }\n.ma-empty { padding: 12px 16px; color: var(--ma-muted); }\n.ma-chat-indicator { width: fit-content; max-width: min(88%, 520px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; cursor: pointer; }\n\n@media (max-width: 720px) {\n  .ma-panel { inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; }\n  .ma-header { padding-top: max(10px, env(safe-area-inset-top)); }\n  .ma-main { padding: 14px; padding-bottom: max(18px, env(safe-area-inset-bottom)); }\n  .ma-manage-bar { top: -14px; margin-inline: -14px; padding-inline: 14px; }\n  .ma-action-grid { grid-template-columns: 1fr 1fr; }\n  .ma-scene-strip { flex-direction: column; gap: 2px; }\n  .ma-entry { margin-left: 8px; }\n  .ma-entry-head { grid-template-columns: auto auto minmax(0, 1fr); }\n  .ma-entry-head small { grid-column: 3; }\n  .ma-folder-select { grid-column: 2 / -1; width: 100%; max-width: none; }\n  .ma-entry-content { padding-left: 12px; }\n}\n\n@media (max-width: 390px) {\n  .ma-root { font-size: 16px; }\n  .ma-action-grid { grid-template-columns: 1fr; }\n  .ma-header { min-height: 56px; padding-inline: 12px; }\n  .ma-main h1 { font-size: 23px; }\n}\n";
+  style.textContent = ":root {\n  --ma-ink: #132536;\n  --ma-muted: #6d7c8b;\n  --ma-line: #dbe3ea;\n  --ma-soft: #f5f8fb;\n  --ma-blue: #236f9b;\n  --ma-danger: #a43b3b;\n}\n\nhtml.ma-panel-open { overflow: hidden; }\n.ma-root, .ma-root * { box-sizing: border-box; }\n.ma-root { color: var(--ma-ink); font: 16px/1.6 system-ui, -apple-system, \"Noto Sans SC\", sans-serif; }\n.ma-button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px; background: #fff; color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; }\n.ma-button:active { transform: translateY(1px); }\n.ma-button:disabled { opacity: .5; cursor: default; transform: none; }\n.ma-button.is-active { border-color: var(--ma-blue); background: #edf6fb; color: #155b84; }\n.ma-button.ma-quiet { border-color: transparent; background: transparent; }\n.ma-button.ma-danger { color: var(--ma-danger); }\n.ma-button.ma-mini { min-height: 34px; padding: 4px 8px; font-size: 14px; }\n.ma-launcher { position: fixed; right: max(12px, env(safe-area-inset-right)); top: 50dvh; z-index: 10050; width: 46px; min-width: 46px; height: 46px; padding: 0; border-radius: 50%; touch-action: none; user-select: none; border-color: #315269; background: #17384e; color: #fff; box-shadow: 0 5px 18px rgba(17, 40, 57, .28); }\n.ma-panel { position: fixed; z-index: 10051; right: max(12px, env(safe-area-inset-right)); top: 6dvh; width: min(720px, calc(100vw - 24px)); height: min(88dvh, 900px); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cad6df; border-radius: 18px; background: #fff; box-shadow: 0 20px 70px rgba(15, 31, 44, .25); }\n.ma-panel[hidden] { display: none; }\n.ma-header { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--ma-line); }\n.ma-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; }\n.ma-sigil { color: var(--ma-blue); font-size: 24px; }\n.ma-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ma-line); }\n.ma-tabs .ma-button { border: 0; border-radius: 0; border-bottom: 3px solid transparent; color: var(--ma-muted); }\n.ma-tabs .ma-button.is-active { border-bottom-color: var(--ma-blue); background: #fff; color: var(--ma-blue); }\n.ma-main { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px; background: #fff; }\n.ma-main h1, .ma-main h2, .ma-main h3, .ma-main p { margin-top: 0; }\n.ma-main h1 { margin-bottom: 2px; font-size: 25px; }\n.ma-main h2 { margin-bottom: 12px; font-size: 19px; }\n.ma-main h3 { font-size: 17px; }\n.ma-section { margin-bottom: 16px; padding: 16px; border: 1px solid var(--ma-line); border-radius: 14px; background: #fff; }\n.ma-scene-strip { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid var(--ma-blue); background: var(--ma-soft); font-weight: 650; }\n.ma-help, .ma-main small { color: var(--ma-muted); }\n.ma-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }\n.ma-status { padding: 12px 14px; border-radius: 10px; background: var(--ma-soft); }\n.ma-status.is-error, .ma-error { color: var(--ma-danger); background: #fff1f1; }\n.ma-queue { margin-bottom: 10px; padding: 10px 12px; border-left: 3px solid #90a9ba; background: var(--ma-soft); }\n.ma-queue.is-warning { border-left-color: #c87b21; color: #8b4d08; background: #fff8ec; }\n.ma-stage-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }\n.ma-stage-list span { padding: 7px; border: 1px solid var(--ma-line); border-radius: 8px; color: var(--ma-muted); text-align: center; font-size: 14px; }\n.ma-stage-list .is-success { color: #236b4b; background: #f1faf5; }\n.ma-stage-list .is-running { color: var(--ma-blue); background: #edf6fb; }\n.ma-stage-list .is-warning { color: #8b4d08; background: #fff8ec; }\n.ma-write-receipt { margin: 10px 0 0; color: #236b4b; font-size: 14px; }\n.ma-failure-list { display: grid; gap: 8px; }\n.ma-failure { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #edc8c8; border-radius: 10px; }\n.ma-failure > span { display: grid; min-width: 0; }\n.ma-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ma-line); }\n.ma-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }\n.ma-search, .ma-editor, .ma-import-text, .ma-folder-select, .ma-number, .ma-select, .ma-input { width: 100%; min-height: 46px; margin: 14px 0; padding: 10px 13px; border: 1px solid var(--ma-line); border-radius: 11px; background: #fff; color: var(--ma-ink); font: inherit; }\n.ma-editor, .ma-import-text { min-height: 180px; resize: vertical; }\n.ma-filters { display: flex; gap: 8px; overflow-x: auto; padding: 0 0 10px; scrollbar-width: thin; }\n.ma-filters .ma-button { flex: none; white-space: nowrap; }\n.ma-button.ma-chip { min-height: 38px; padding: 5px 12px; border-radius: 999px; font-weight: 500; }\n.ma-manage-bar { position: sticky; top: -18px; z-index: 2; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 0 -18px 14px; padding: 10px 18px; border-block: 1px solid var(--ma-line); background: rgba(255,255,255,.96); }\n.ma-selection-status { grid-column: 1 / -1; color: var(--ma-muted); font-size: 14px; }\n.ma-manage-bar .ma-button { min-width: 0; padding-inline: 8px; }\n.is-hidden { display: none !important; }\n.ma-folder { margin: 0 0 18px; border-left: 4px solid #9bb7c8; }\n.ma-folder-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 0 6px 14px; }\n.ma-folder-head h2 { margin: 0 auto 0 0; }\n.ma-entry { margin-left: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-entry.is-highlighted { background: #f2f8fc; box-shadow: inset 3px 0 var(--ma-blue); }\n.ma-entry-head { min-height: 58px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 6px; cursor: pointer; }\n.ma-entry-head::marker { color: var(--ma-muted); }\n.ma-entry-copy { display: grid; min-width: 0; }\n.ma-entry-copy strong { overflow-wrap: anywhere; font-size: 17px; }\n.ma-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }\n.ma-badges i { padding: 1px 6px; border-radius: 999px; background: #edf4f8; color: #31566f; font-size: 12px; font-style: normal; font-weight: 650; }\n.ma-entry-actions { display: flex; align-items: center; gap: 6px; }\n.ma-type-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--ma-soft); color: var(--ma-blue); font-weight: 800; }\n.ma-folder-select { width: auto; max-width: 150px; min-height: 38px; margin: 0; padding: 4px 8px; }\n.ma-entry-content { padding: 4px 10px 14px 42px; }\n.ma-entry-content pre, .ma-import-preview pre { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ma-ink); font: inherit; }\n.ma-relations { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 8px 0; padding-top: 8px; border-top: 1px solid var(--ma-line); }\n.ma-pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 10px 0; }\n.ma-setting-row { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-setting-row:last-child { border-bottom: 0; }\n.ma-setting-row span { display: grid; }\n.ma-root input[type=\"checkbox\"] { appearance: auto; accent-color: var(--ma-blue); }\n.ma-setting-row input[type=\"checkbox\"] { width: 22px; height: 22px; }\n.ma-number { width: 86px; margin: 0; }\n.ma-block-setting { display: grid; gap: 8px; margin-top: 14px; }\n.ma-small-editor { min-height: 110px; margin: 0; }\n.ma-select, .ma-input { margin-block: 8px; }\n.ma-inline-feedback { color: var(--ma-muted); font-size: 14px; }\n.ma-import-preview { margin-top: 14px; }\n.ma-import-status { min-height: 42px; margin-top: 10px; padding: 8px 11px; border-left: 3px solid var(--ma-line); background: var(--ma-soft); color: var(--ma-muted); }\n.ma-import-status.is-busy { border-left-color: var(--ma-blue); color: var(--ma-blue); }\n.ma-preview-item { padding: 9px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-report { margin-top: 12px; }\n.ma-check { padding: 8px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-check.is-pass { color: #236b4b; }\n.ma-check.is-fail { color: var(--ma-danger); }\n.ma-empty { padding: 12px 16px; color: var(--ma-muted); }\n.ma-chat-indicator { width: fit-content; max-width: min(88%, 520px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; cursor: pointer; }\n.ma-chat-indicator.is-history { min-height: 26px; margin-top: 4px; padding-block: 2px; border-color: transparent; background: transparent; color: var(--ma-muted); font-size: 12px; }\n\n@media (max-width: 720px) {\n  .ma-panel { inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; }\n  .ma-header { padding-top: max(10px, env(safe-area-inset-top)); }\n  .ma-main { padding: 14px; padding-bottom: max(18px, env(safe-area-inset-bottom)); }\n  .ma-manage-bar { top: -14px; margin-inline: -14px; padding-inline: 14px; }\n  .ma-manage-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); }\n  .ma-action-grid { grid-template-columns: 1fr 1fr; }\n  .ma-scene-strip { flex-direction: column; gap: 2px; }\n  .ma-entry { margin-left: 8px; }\n  .ma-entry-head { grid-template-columns: auto auto minmax(0, 1fr); }\n  .ma-entry-actions { grid-column: 2 / -1; width: 100%; }\n  .ma-folder-select { flex: 1; width: auto; max-width: none; }\n  .ma-entry-content { padding-left: 12px; }\n  .ma-stage-list { grid-template-columns: 1fr 1fr; }\n  .ma-failure { align-items: stretch; flex-direction: column; }\n  .ma-folder-head { flex-wrap: wrap; }\n}\n\n@media (max-width: 390px) {\n  .ma-root { font-size: 16px; }\n  .ma-action-grid { grid-template-columns: 1fr; }\n  .ma-header { min-height: 56px; padding-inline: 12px; }\n  .ma-main h1 { font-size: 23px; }\n}\n";
   document.head.append(style);
 }
 
@@ -70,16 +70,20 @@ const __ma_module_0 = (() => {
       this.label = label;
       this.cancelled = false;
       this.reason = '';
+      this.controller = typeof AbortController === 'function' ? new AbortController() : null;
     }
   
     cancel(reason = '用户取消任务') {
       this.cancelled = true;
       this.reason = reason;
+      this.controller?.abort(reason);
     }
   
     assertActive() {
       if (this.cancelled) throw fault('workflow', 'CANCELLED', this.reason || '任务已取消');
     }
+  
+    get signal() { return this.controller?.signal; }
   }
   
   function debounce(fn, delay = 120) {
@@ -113,6 +117,11 @@ const __ma_module_1 = (() => {
     autoCreateLorebook: true,
     largeSummaryGroups: 4,
     responseTokens: 8192,
+    modelProfileId: '',
+    auditPrompt: '',
+    queueCompactThreshold: 6,
+    pageSize: 12,
+    launcherPosition: null,
     foldersByWorldbook: {},
   });
   
@@ -151,9 +160,20 @@ const __ma_module_1 = (() => {
       autoCreateLorebook: value.autoCreateLorebook !== false,
       largeSummaryGroups: clamp(value.largeSummaryGroups, 2, 20, 4),
       responseTokens: clamp(value.responseTokens, 1024, 16384, 8192),
+      modelProfileId: String(value.modelProfileId ?? ''),
+      auditPrompt: String(value.auditPrompt ?? '').slice(0, 6000),
+      queueCompactThreshold: clamp(value.queueCompactThreshold, 1, 40, 6),
+      pageSize: clamp(value.pageSize, 5, 50, 12),
+      launcherPosition: sanitizePosition(value.launcherPosition),
       foldersByWorldbook: value.foldersByWorldbook && typeof value.foldersByWorldbook === 'object'
         ? clone(value.foldersByWorldbook) : {},
     };
+  }
+  
+  function sanitizePosition(value) {
+    const x = Number(value?.x);
+    const y = Number(value?.y);
+    return Number.isFinite(x) && Number.isFinite(y) ? { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) } : null;
   }
   
   function clamp(value, min, max, fallback) {
@@ -183,6 +203,7 @@ const __ma_module_1 = (() => {
   
     async bindWorldbook(name) {
       const context = this.context();
+      context.chatMetadata ??= {};
       context.chatMetadata.world_info = name;
       try {
         await context.saveMetadata();
@@ -198,22 +219,29 @@ const __ma_module_1 = (() => {
     }
   
     captureLatest(token = new CancellationToken()) {
+      return this.captureAssistant(-1, token);
+    }
+  
+    captureAssistant(requestedIndex = -1, token = new CancellationToken()) {
       const chatSnapshot = this.captureChat(token);
       const context = this.context();
       const chat = Array.isArray(context.chat) ? context.chat : [];
-      let assistantIndex = -1;
-      for (let index = chat.length - 1; index >= 0; index -= 1) {
-        if (!chat[index]?.is_user && !chat[index]?.is_system && String(chat[index]?.mes ?? '').trim()) {
-          assistantIndex = index;
-          break;
+      let assistantIndex = Number.isInteger(requestedIndex) && requestedIndex >= 0 ? requestedIndex : -1;
+      if (assistantIndex < 0) {
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+          if (!chat[index]?.is_user && !chat[index]?.is_system && String(chat[index]?.mes ?? '').trim()) {
+            assistantIndex = index;
+            break;
+          }
         }
       }
-      ensureHost(assistantIndex >= 0, '当前聊天没有可处理的AI正文', 'MESSAGE_REQUIRED');
+      const assistant = chat[assistantIndex];
+      ensureHost(assistantIndex >= 0 && assistant && !assistant.is_user && !assistant.is_system && String(assistant.mes ?? '').trim(), '目标消息不是可处理的AI正文', 'MESSAGE_REQUIRED');
       let playerText = '';
       for (let index = assistantIndex - 1; index >= 0; index -= 1) {
         if (chat[index]?.is_user) { playerText = String(chat[index].mes ?? ''); break; }
       }
-      const assistantText = String(chat[assistantIndex].mes ?? '');
+      const assistantText = String(assistant.mes ?? '');
       return Object.freeze({
         ...chatSnapshot,
         messageIndex: assistantIndex,
@@ -252,18 +280,41 @@ const __ma_module_1 = (() => {
       return Object.freeze({ ...snapshot, assistantText: message.mes, messageDigest: digest(message.mes) });
     }
   
-    async generate({ system, user, responseTokens, token }) {
+    connectionProfilesAvailable() {
+      const context = this.context();
+      return Boolean(context.ConnectionManagerRequestService && !context.extensionSettings?.disabledExtensions?.includes?.('connection-manager'));
+    }
+  
+    connectionProfiles() {
+      const service = this.context().ConnectionManagerRequestService;
+      if (!this.connectionProfilesAvailable() || typeof service?.getSupportedProfiles !== 'function') return [];
+      return service.getSupportedProfiles().map(profile => ({ id: String(profile.id), name: String(profile.name ?? profile.id), api: String(profile.api ?? '') }));
+    }
+  
+    profileSummary(profileId) {
+      let profile;
+      try { profile = this.context().ConnectionManagerRequestService?.getProfile?.(profileId); } catch { return null; }
+      if (!profile) return null;
+      return { id: String(profileId), name: String(profile.name ?? profile.profileName ?? profileId), api: String(profile.api ?? profile.source ?? '') };
+    }
+  
+    async generate({ system, user, responseTokens, profileId, token }) {
       token.assertActive();
       const context = this.context();
-      ensureHost(typeof context.generateRaw === 'function', 'SillyTavern 未提供 generateRaw', 'MODEL_API');
-      const output = await context.generateRaw({
-        systemPrompt: String(system ?? ''),
-        prompt: String(user ?? ''),
-        responseLength: Number(responseTokens) || 8192,
-        trimNames: false,
-      });
+      let output;
+      if (profileId) {
+        const service = context.ConnectionManagerRequestService;
+        ensureHost(typeof service?.sendRequest === 'function', 'SillyTavern 连接配置服务不可用', 'PROFILE_API');
+        output = await service.sendRequest(profileId, [
+          { role: 'system', content: String(system ?? '') },
+          { role: 'user', content: String(user ?? '') },
+        ], Number(responseTokens) || 8192, { stream: false, signal: token.signal, extractData: true, includePreset: true, includeInstruct: true }, {});
+      } else {
+        ensureHost(typeof context.generateRaw === 'function', 'SillyTavern 未提供 generateRaw', 'MODEL_API');
+        output = await context.generateRaw({ systemPrompt: String(system ?? ''), prompt: String(user ?? ''), responseLength: Number(responseTokens) || 8192, trimNames: false });
+      }
       token.assertActive();
-      const text = String(output ?? '').trim();
+      const text = responseText(output);
       ensureHost(text, '模型没有返回最终文本', 'MODEL_EMPTY');
       return text;
     }
@@ -273,22 +324,25 @@ const __ma_module_1 = (() => {
       context.chatMetadata ??= {};
       const current = context.chatMetadata[EXTENSION_KEY];
       if (!current || typeof current !== 'object') context.chatMetadata[EXTENSION_KEY] = defaultChatState();
-      return context.chatMetadata[EXTENSION_KEY];
+      const state = context.chatMetadata[EXTENSION_KEY];
+      const defaults = defaultChatState();
+      for (const [key, value] of Object.entries(defaults)) if (state[key] === undefined) state[key] = clone(value);
+      return state;
     }
   
     async updateState(mutator) {
+      const context = this.context();
+      ensureHost(typeof context.saveMetadata === 'function', 'SillyTavern 未提供聊天元数据保存接口', 'METADATA_API');
+      const current = this.state();
+      mutator(current);
+      const result = clone(current);
       const update = this.metadataQueue.catch(() => undefined).then(async () => {
-        const context = this.context();
-        ensureHost(typeof context.saveMetadata === 'function', 'SillyTavern 未提供聊天元数据保存接口', 'METADATA_API');
-        const draft = clone(this.state());
-        mutator(draft);
-        context.chatMetadata[EXTENSION_KEY] = draft;
         try {
           await context.saveMetadata();
         } catch (error) {
           throw fault('host', 'METADATA_WRITE', `聊天运行状态保存失败：${errorText(error)}`, error);
         }
-        return clone(draft);
+        return result;
       });
       this.metadataQueue = update;
       return update;
@@ -317,7 +371,16 @@ const __ma_module_1 = (() => {
       closedGroups: [],
       summarizedGroups: [],
       receipts: [],
+      lastWrite: null,
+      messageStates: {},
+      summaryFailures: [],
     };
+  }
+  
+  function responseText(output) {
+    if (typeof output === 'string') return output.trim();
+    const value = output?.content ?? output?.text ?? output?.response ?? output?.choices?.[0]?.message?.content ?? output?.choices?.[0]?.text;
+    return String(value ?? '').trim();
   }
   return Object.freeze({ EXTENSION_KEY, DEFAULT_SETTINGS, SettingsStore, HostAdapter });
 })();
@@ -326,6 +389,7 @@ const __ma_module_2 = (() => {
   const defineType = (icon, sections, options = {}) => Object.freeze({
     icon,
     constant: options.constant === true,
+    order: Number(options.order ?? 100),
     sections: Object.freeze(Object.fromEntries(sections.map(([name, policy]) => [name, policy]))),
   });
   
@@ -334,15 +398,15 @@ const __ma_module_2 = (() => {
    * 提示词、协议校验、正文合并和界面均直接读取本对象，不各自维护栏目副本。
    */
   const WORLD_SCHEMA = Object.freeze({
-    人物: defineType('人', [['身份', 'append'], ['经历', 'append'], ['当前状态', 'replace']]),
-    场景: defineType('景', [['位置', 'append'], ['状态', 'replace'], ['场景阶段', 'replace']]),
-    物品: defineType('物', [['来源', 'append'], ['状态', 'replace'], ['所属关系', 'replace']]),
-    事件: defineType('事', [['事件过程', 'append'], ['事件结果', 'replace'], ['影响', 'append']]),
-    世界: defineType('界', [['世界规则', 'append'], ['环境状态', 'replace'], ['长期变化', 'append']]),
+    人物: defineType('人', [['身份', 'append'], ['经历', 'append'], ['当前状态', 'replace']], { order: 500 }),
+    场景: defineType('景', [['位置', 'append'], ['状态', 'replace'], ['场景阶段', 'replace']], { order: 600 }),
+    物品: defineType('物', [['来源', 'append'], ['状态', 'replace'], ['所属关系', 'replace']], { order: 400 }),
+    事件: defineType('事', [['事件过程', 'append'], ['事件结果', 'replace'], ['影响', 'append']], { order: 450 }),
+    世界: defineType('界', [['世界规则', 'append'], ['环境状态', 'replace'], ['长期变化', 'append']], { order: 700 }),
     基础设定: defineType('基', [
       ['世界常识', 'append'], ['自然规则', 'append'], ['种族与生命', 'append'],
       ['能力与技术', 'append'], ['社会规则', 'append'], ['地理框架', 'append'], ['别名', 'append'],
-    ], { constant: true }),
+    ], { constant: true, order: 800 }),
   });
   
   const WORLD_TYPES = Object.freeze(Object.keys(WORLD_SCHEMA));
@@ -444,6 +508,13 @@ const __ma_module_3 = (() => {
       sections,
       content: serializeSections(title.type, sections),
       keywords: unique(raw.key),
+      cornerstone: raw?.extensions?.mirrorAbyss?.cornerstone === true,
+      manualCornerstone: raw?.extensions?.mirrorAbyss?.cornerstone === true,
+      focus: raw?.extensions?.mirrorAbyss?.focus === true,
+      relations: unique(raw?.extensions?.mirrorAbyss?.relations),
+      updatedAt: Number(raw?.extensions?.mirrorAbyss?.updatedAt) || 0,
+      messageIndex: Number(raw?.extensions?.mirrorAbyss?.messageIndex ?? -1),
+      scene: String(raw?.extensions?.mirrorAbyss?.scene ?? ''),
       retired: raw?.extensions?.mirrorAbyss?.retired === true,
       raw,
     };
@@ -471,21 +542,55 @@ const __ma_module_3 = (() => {
   
   function applyNativeEntryFields(raw, type, name, content, aliases = []) {
     ensureEntry(WORLD_TYPES.includes(type), `未知条目类型：${type}`, 'LORE_TYPE');
+    const extension = raw?.extensions?.mirrorAbyss ?? {};
     raw.comment = `${type}｜${name}`;
     raw.content = content;
     raw.key = unique([name, ...aliases]);
     raw.keysecondary = [];
-    raw.constant = WORLD_SCHEMA[type].constant;
+    raw.constant = extension.focus === true || WORLD_SCHEMA[type].constant;
     raw.disable = false;
-    raw.vectorized = false;
+    raw.vectorized = extension.focus !== true;
     raw.selective = false;
-    raw.excludeRecursion = false;
-    raw.preventRecursion = false;
+    raw.excludeRecursion = extension.focus === true;
+    raw.preventRecursion = extension.focus === true;
+    raw.order = extension.focus === true ? 900 : WORLD_SCHEMA[type].order;
+    raw.position = extension.focus === true ? 1 : 0;
+    raw.depth = 4;
     raw.extensions ??= {};
-    raw.extensions.mirrorAbyss = { managed: true, retired: false };
+    raw.extensions.mirrorAbyss = { ...extension, managed: true, retired: false, cornerstone: extension.cornerstone === true };
     return raw;
   }
-  return Object.freeze({ parseManagedTitle, identityKey, parseSections, serializeSections, mergeRows, parseManagedEntry, managedEntries, assertUniqueManagedIdentities, applyNativeEntryFields });
+  
+  function setNativeCornerstone(raw, locked) {
+    raw.extensions ??= {};
+    raw.extensions.mirrorAbyss ??= { managed: true, retired: false };
+    raw.extensions.mirrorAbyss.cornerstone = locked === true;
+    return raw;
+  }
+  
+  function setNativeFocus(raw, focused) {
+    const managed = parseManagedEntry(raw);
+    ensureEntry(managed && managed.type === '人物', '只有人物条目可以设为主焦点', 'FOCUS_TYPE');
+    raw.extensions.mirrorAbyss.focus = focused === true;
+    return applyNativeEntryFields(raw, managed.type, managed.name, managed.content, raw.key);
+  }
+  
+  function markNativeActivity(raw, { messageIndex = -1, scene = '', relations = [] } = {}) {
+    raw.extensions ??= {};
+    raw.extensions.mirrorAbyss ??= { managed: true, retired: false };
+    raw.extensions.mirrorAbyss.updatedAt = Date.now();
+    raw.extensions.mirrorAbyss.messageIndex = Number(messageIndex);
+    raw.extensions.mirrorAbyss.scene = String(scene || '');
+    raw.extensions.mirrorAbyss.relations = unique([...(raw.extensions.mirrorAbyss.relations ?? []), ...relations]);
+    return raw;
+  }
+  
+  function replanNativeRecall(raw) {
+    const managed = parseManagedEntry(raw);
+    ensureEntry(managed, `UID ${raw?.uid ?? '未知'}不是镜渊管理条目`, 'LORE_ITEM');
+    return applyNativeEntryFields(raw, managed.type, managed.name, managed.content, raw.key);
+  }
+  return Object.freeze({ parseManagedTitle, identityKey, parseSections, serializeSections, mergeRows, parseManagedEntry, managedEntries, assertUniqueManagedIdentities, applyNativeEntryFields, setNativeCornerstone, setNativeFocus, markNativeActivity, replanNativeRecall });
 })();
 
 const __ma_module_4 = (() => {
@@ -513,6 +618,8 @@ const __ma_module_4 = (() => {
       ensureWorldbook(typeof context.saveWorldInfo === 'function', 'SillyTavern 未提供世界书保存接口', 'SAVE_API');
       try {
         await context.saveWorldInfo(name, { entries: {} }, true);
+        const persisted = await this.readFreshData(name);
+        ensureWorldbook(Object.keys(persisted.entries).length === 0, `世界书“${name}”创建后回读异常`, 'CREATE_VERIFY');
         await context.updateWorldInfoList?.();
       } catch (error) {
         throw fault('worldbook', 'CREATE_FAILED', `创建聊天世界书失败：${errorText(error)}`, error);
@@ -521,9 +628,9 @@ const __ma_module_4 = (() => {
       return name;
     }
   
-    async read(settings) {
+    async read(settings, options = {}) {
       const name = await this.ensureBound(settings);
-      const data = await this.readData(name);
+      const data = options.fresh ? await this.readFreshData(name) : await this.readData(name);
       this.validateData(data);
       return { name, data, ...managedEntries(data), digest: digest(data) };
     }
@@ -540,11 +647,32 @@ const __ma_module_4 = (() => {
       }
     }
   
+    async readFreshData(name) {
+      const context = this.host.context();
+      ensureWorldbook(typeof globalThis.fetch === 'function' && typeof context.getRequestHeaders === 'function', 'SillyTavern 未提供世界书权威回读接口', 'FRESH_READ_API');
+      try {
+        const response = await globalThis.fetch('/api/worldinfo/get', {
+          method: 'POST',
+          headers: context.getRequestHeaders(),
+          body: JSON.stringify({ name }),
+          cache: 'no-cache',
+        });
+        ensureWorldbook(response.ok, `世界书“${name}”权威回读失败：HTTP ${response.status}`, 'FRESH_READ_FAILED');
+        const data = clone(await response.json());
+        ensureWorldbook(data, `世界书“${name}”权威回读为空`, 'FRESH_READ_FAILED');
+        data.entries ??= {};
+        return data;
+      } catch (error) {
+        if (error instanceof MirrorAbyssError && error.source === 'worldbook') throw error;
+        throw fault('worldbook', 'FRESH_READ_FAILED', `无法权威回读世界书“${name}”：${errorText(error)}`, error);
+      }
+    }
+  
     async transact(settings, options, mutate) {
       const name = await this.ensureBound(settings);
       return this.withLock(name, async () => {
         options?.validate?.();
-        const before = await this.readData(name);
+        const before = await this.readFreshData(name);
         const beforeDigest = digest(before);
         if (options?.expectedName) ensureWorldbook(name === options.expectedName, '聊天绑定的世界书已经变化', 'BOOK_CHANGED');
         if (options?.expectedDigest) ensureWorldbook(beforeDigest === options.expectedDigest, '世界书已被其他操作修改，请刷新后重试', 'STALE_WRITE');
@@ -559,9 +687,9 @@ const __ma_module_4 = (() => {
         this.validateData(draft);
         const afterDigest = digest(draft);
         if (afterDigest === beforeDigest) return { changed: false, result, receipt: null, data: before };
+        options?.validate?.();
         const receipt = buildReceipt(name, before, draft, options?.messageIndex);
         await this.saveVerified(name, before, draft, afterDigest);
-        options?.validate?.();
         return { changed: true, result, receipt, data: draft };
       });
     }
@@ -571,7 +699,7 @@ const __ma_module_4 = (() => {
       const name = await this.ensureBound(settings);
       ensureWorldbook(name === receipt.worldbookName, '回滚记录属于其他世界书', 'RECEIPT_BOOK');
       return this.withLock(name, async () => {
-        const current = await this.readData(name);
+        const current = await this.readFreshData(name);
         for (const change of receipt.changes) {
           const raw = current.entries?.[change.uid];
           ensureWorldbook(entryDigest(raw) === change.afterDigest, `UID ${change.uid} 已被后续操作修改，拒绝覆盖回滚`, 'ROLLBACK_CONFLICT');
@@ -587,26 +715,21 @@ const __ma_module_4 = (() => {
       });
     }
   
-    async saveVerified(name, before, next, intendedDigest) {
+    async saveVerified(name, _before, next, intendedDigest) {
       const context = this.host.context();
+      let saveError = null;
       try {
         await context.saveWorldInfo(name, clone(next), true);
-        const verified = await this.readData(name);
-        ensureWorldbook(digest(verified) === intendedDigest, '世界书保存后权威回读不一致', 'VERIFY_FAILED');
       } catch (error) {
-        try {
-          const current = await this.readData(name);
-          if (digest(current) === intendedDigest) {
-            await context.saveWorldInfo(name, clone(before), true);
-            const restored = await this.readData(name);
-            ensureWorldbook(digest(restored) === digest(before), '世界书提交失败且自动回滚未通过回读校验', 'RESTORE_FAILED');
-          }
-        } catch (rollbackError) {
-          throw fault('worldbook', 'RESTORE_FAILED', `世界书提交与自动回滚均失败：${errorText(rollbackError)}`, new AggregateError([error, rollbackError]));
-        }
-        if (error instanceof MirrorAbyssError && error.source === 'worldbook') throw error;
-        throw fault('worldbook', 'SAVE_FAILED', `世界书保存失败：${errorText(error)}`, error);
+        saveError = error;
       }
+      const verified = await this.readFreshData(name);
+      if (digest(verified) !== intendedDigest) {
+        if (saveError) throw fault('worldbook', 'SAVE_FAILED', `世界书保存失败：${errorText(saveError)}`, saveError);
+        throw fault('worldbook', 'VERIFY_FAILED', '世界书保存后权威回读不一致；没有把缓存状态当成成功');
+      }
+      await context.updateWorldInfoList?.();
+      await context.reloadWorldInfoEditor?.(name, false);
     }
   
     validateData(data) {
@@ -696,31 +819,90 @@ const __ma_module_4 = (() => {
 })();
 
 const __ma_module_5 = (() => {
-  const { CancellationToken, describeError, invariant, unique } = __ma_module_0;
+  const { CancellationToken, fault } = __ma_module_0;
+  class TaskQueue extends EventTarget {
+    constructor() {
+      super();
+      this.active = null;
+      this.pending = [];
+      this.sequence = 0;
+    }
+  
+    snapshot() {
+      return {
+        active: this.active ? { key: this.active.key, label: this.active.label } : null,
+        pending: this.pending.map(task => ({ key: task.key, label: task.label })),
+      };
+    }
+  
+    enqueue({ key, label, priority = 0, run }) {
+      const duplicate = this.active?.key === key || this.pending.some(task => task.key === key);
+      if (duplicate) return Promise.reject(fault('workflow', 'TASK_DUPLICATE', `任务“${label}”已经在队列中`));
+      return new Promise((resolve, reject) => {
+        this.pending.push({ key, label, priority, run, resolve, reject, sequence: this.sequence += 1 });
+        this.pending.sort((left, right) => right.priority - left.priority || left.sequence - right.sequence);
+        this.changed();
+        void this.drain();
+      });
+    }
+  
+    cancel(reason = '用户取消任务') {
+      const cancelled = Boolean(this.active || this.pending.length);
+      this.active?.token.cancel(reason);
+      for (const task of this.pending.splice(0)) task.reject(fault('workflow', 'CANCELLED', reason));
+      this.changed();
+      return cancelled;
+    }
+  
+    async drain() {
+      if (this.active || !this.pending.length) return;
+      const task = this.pending.shift();
+      const token = new CancellationToken(task.label);
+      this.active = { ...task, token };
+      this.changed();
+      try {
+        task.resolve(await task.run(token));
+      } catch (error) {
+        task.reject(error);
+      } finally {
+        this.active = null;
+        this.changed();
+        void this.drain();
+      }
+    }
+  
+    changed() { this.dispatchEvent(new Event('change')); }
+  }
+  return Object.freeze({ TaskQueue });
+})();
+
+const __ma_module_6 = (() => {
+  const { describeError, invariant, unique } = __ma_module_0;
+  const { TaskQueue } = __ma_module_5;
   const ensureWorkflow = (condition, message, code = 'WORKFLOW') => invariant(condition, message, 'workflow', code);
+  const PRIORITY = Object.freeze({ rollback: 100, manual: 70, automatic: 40, small: 30, large: 10 });
   
   class MirrorAbyssController extends EventTarget {
-    constructor({ host, settingsStore, memory, importer }) {
+    constructor({ host, settingsStore, memory, importer, migration, diagnostics, queue = new TaskQueue() }) {
       super();
-      this.host = host;
-      this.settingsStore = settingsStore;
-      this.memory = memory;
-      this.importer = importer;
-      this.active = null;
-      this.lastFailedAction = null;
+      Object.assign(this, { host, settingsStore, memory, importer, migration, diagnostics, queue });
+      this.lastFailedTask = null;
       this.unsubscribers = [];
       this.autoTimer = 0;
+      this.queue.addEventListener('change', () => this.emit('queue', this.queue.snapshot()));
     }
   
     settings() { return this.settingsStore.load(); }
     saveSettings(patch) { const value = this.settingsStore.save(patch); this.emit('settings', value); return value; }
+    queueStatus() { return this.queue.snapshot(); }
   
     start() {
       const events = this.host.eventTypes();
       if (events.MESSAGE_RECEIVED) this.unsubscribers.push(this.host.subscribe(events.MESSAGE_RECEIVED, () => this.scheduleAutomatic()));
-      for (const eventName of [events.MESSAGE_EDITED, events.MESSAGE_SWIPED, events.MESSAGE_DELETED].filter(Boolean)) {
-        this.unsubscribers.push(this.host.subscribe(eventName, index => void this.rollbackFrom(Number(index))));
+      for (const eventName of [events.MESSAGE_EDITED, events.MESSAGE_SWIPED].filter(Boolean)) {
+        this.unsubscribers.push(this.host.subscribe(eventName, index => void this.rollbackFrom(eventIndex(index), true)));
       }
+      if (events.MESSAGE_DELETED) this.unsubscribers.push(this.host.subscribe(events.MESSAGE_DELETED, index => void this.rollbackFrom(eventIndex(index), false)));
       if (events.CHAT_CHANGED) this.unsubscribers.push(this.host.subscribe(events.CHAT_CHANGED, () => this.onChatChanged()));
     }
   
@@ -740,102 +922,106 @@ const __ma_module_5 = (() => {
   
     onChatChanged() {
       this.cancel('聊天已经切换');
+      this.lastFailedTask = null;
       this.importer.clear();
+      this.migration.clear();
       this.emit('refresh');
     }
   
     cancel(reason = '用户取消任务') {
-      if (!this.active) return false;
-      this.active.token.cancel(reason);
-      this.setStatus('cancelled', reason, this.active.snapshot?.messageIndex ?? -1);
-      return true;
+      const cancelled = this.queue.cancel(reason);
+      if (cancelled) this.setStatus('cancelled', reason);
+      return cancelled;
     }
   
     async retryLast() {
-      ensureWorkflow(this.lastFailedAction, '没有可重试的失败任务', 'RETRY_EMPTY');
-      return this.lastFailedAction();
+      const failed = this.lastFailedTask;
+      ensureWorkflow(failed, '没有可重试的失败任务', 'RETRY_EMPTY');
+      ensureWorkflow(failed.chatKey === this.host.chatKey() && failed.worldbookName === this.host.worldbookName(), '失败任务所属聊天或世界书已经变化', 'RETRY_CONTEXT');
+      return failed.action();
     }
   
-    async process(mode = 'full', automatic = false) {
-      return this.runExclusive(`${mode}:${automatic}`, async token => {
-        const settings = this.settings();
-        let snapshot = this.host.captureLatest(token);
-        this.active.snapshot = snapshot;
-        const useAudit = mode === 'audit' || (mode === 'full' && (!automatic || settings.autoAudit));
-        const useExtraction = mode === 'extract' || (mode === 'full' && (!automatic || settings.autoExtraction));
-        if (useAudit) {
-          this.setStatus('audit', '正在审核当前正文', snapshot.messageIndex);
-          const audited = await this.memory.audit(settings, snapshot);
-          snapshot = audited.snapshot;
-          this.active.snapshot = snapshot;
-        }
-        let extracted = { changed: false, factCount: 0, touchedUids: [], currentScene: '', receipt: null };
-        if (useExtraction) {
-          this.setStatus('extract', '正在提取世界事实', snapshot.messageIndex);
-          extracted = await this.memory.extract(settings, snapshot);
-          await this.recordExtraction(snapshot, extracted);
-        }
-        this.setStatus('complete', `处理完成：${extracted.factCount}条事实`, snapshot.messageIndex);
-        if (automatic) await this.runAutomaticSummaries(settings, snapshot);
-        this.emit('refresh');
-        return extracted;
-      }, () => this.process(mode, automatic));
+    process(mode = 'full', automatic = false, messageIndex = -1) {
+      const key = `process:${messageIndex}:${mode}:${automatic}`;
+      return this.enqueue(key, automatic ? '自动处理正文' : '处理当前正文', automatic ? PRIORITY.automatic : PRIORITY.manual,
+        token => this.processMessage(mode, automatic, messageIndex, token), () => this.process(mode, automatic, messageIndex));
     }
   
-    async summarize(kind, uids = [], requirement = '') {
-      return this.runExclusive(`summary:${kind}`, async token => {
-        const settings = this.settings();
+    async processMessage(mode, automatic, messageIndex, token) {
+      const settings = this.settings();
+      let snapshot = this.host.captureAssistant(messageIndex, token);
+      const progress = (stage, state, detail) => this.setMessageStage(snapshot.messageIndex, stage, state, detail);
+      const useAudit = mode === 'audit' || (mode === 'full' && (!automatic || settings.autoAudit));
+      const useExtraction = mode === 'extract' || (mode === 'full' && (!automatic || settings.autoExtraction));
+      if (useAudit) {
+        this.setStatus('audit', '正在审核当前正文', snapshot.messageIndex);
+        const audited = await this.memory.audit(settings, snapshot, progress);
+        snapshot = audited.snapshot;
+      }
+      let extracted = emptyWrite();
+      if (useExtraction) {
+        this.setStatus('extract', '正在提取世界事实', snapshot.messageIndex);
+        extracted = await this.memory.extract(settings, snapshot, progress);
+        await this.recordExtraction(snapshot, extracted);
+      }
+      this.setStatus('complete', writeStatus(extracted), snapshot.messageIndex);
+      this.setMessageStage(snapshot.messageIndex, 'complete', 'success', writeStatus(extracted));
+      if (automatic) await this.runAutomaticSummaries(settings, snapshot);
+      this.emit('refresh');
+      return extracted;
+    }
+  
+    summarize(kind, uids = [], requirement = '') {
+      const priority = kind === 'large' ? PRIORITY.large : kind === 'small' ? PRIORITY.small : PRIORITY.manual;
+      const key = `summary:${kind}:${unique(uids).sort().join(',') || 'operational'}`;
+      return this.enqueue(key, kind === 'merge' ? '手动合并' : `${kind === 'large' ? '大' : '小'}总结`, priority,
+        token => this.summarizeNow(kind, uids, requirement, token), () => this.summarize(kind, uids, requirement));
+    }
+  
+    async summarizeNow(kind, uids, requirement, token) {
+      const settings = this.settings();
+      const snapshot = this.host.captureChat(token);
+      let selected = unique(uids);
+      const operational = selected.length === 0;
+      if (operational) {
+        const state = this.host.state();
+        selected = kind === 'large' ? unique(state.summarizedGroups.flatMap(group => group.uids)) : unique(state.currentGroupUids);
+      }
+      ensureWorkflow(selected.length, '当前没有可总结条目', 'SUMMARY_EMPTY');
+      this.setStatus(kind === 'large' ? 'large-summary' : 'small-summary', kind === 'merge' ? '正在手动合并' : `正在${kind === 'large' ? '大' : '小'}总结`);
+      const result = await this.memory.summarize(kind, settings, snapshot, selected, requirement);
+      await this.host.updateState(state => {
+        addReceipt(state, result.receipt);
+        if (operational && kind === 'small') {
+          state.summarizedGroups.push({ scene: state.currentScene || '当前场景', uids: unique(result.outputUids) });
+          state.currentGroupUids = [];
+          state.currentGroupFacts = 0;
+        }
+        if (operational && kind === 'large') state.summarizedGroups = [{ scene: '长期', uids: unique(result.outputUids) }];
+      });
+      this.setStatus('complete', '整理完成');
+      this.emit('refresh');
+      return result;
+    }
+  
+    previewImport(sourceText) {
+      return this.enqueue('import:preview', '整理导入预览', PRIORITY.manual, async token => {
         const snapshot = this.host.captureChat(token);
-        this.active.snapshot = snapshot;
-        let selected = unique(uids);
-        const usesOperationalSelection = selected.length === 0;
-        if (usesOperationalSelection) {
-          const state = this.host.state();
-          selected = kind === 'large'
-            ? unique(state.summarizedGroups.flatMap(group => group.uids))
-            : unique(state.currentGroupUids);
-        }
-        ensureWorkflow(selected.length, '当前没有可总结条目', 'SUMMARY_EMPTY');
-        this.setStatus(kind === 'large' ? 'large-summary' : 'small-summary', kind === 'merge' ? '正在人工合并' : `正在${kind === 'large' ? '大' : '小'}总结`, snapshot.messageIndex);
-        const result = await this.memory.summarize(kind, settings, snapshot, selected, requirement);
-        await this.host.updateState(state => {
-          addReceipt(state, result.receipt);
-          if (usesOperationalSelection && kind === 'small') {
-            state.summarizedGroups.push({ scene: state.currentScene || '当前场景', uids: unique(result.outputUids) });
-            state.currentGroupUids = [];
-            state.currentGroupFacts = 0;
-          }
-          if (usesOperationalSelection && kind === 'large') {
-            state.summarizedGroups = [{ scene: '长期', uids: unique(result.outputUids) }];
-          }
-        });
-        this.setStatus('complete', '整理完成', snapshot.messageIndex);
-        this.emit('refresh');
-        return result;
-      }, () => this.summarize(kind, uids, requirement));
-    }
-  
-    async previewImport(sourceText) {
-      return this.runExclusive('import-preview', async token => {
-        const settings = this.settings();
-        const snapshot = this.host.captureChat(token);
-        this.active.snapshot = snapshot;
-        this.setStatus('import', 'AI正在整理世界设定', snapshot.messageIndex);
-        const preview = await this.importer.preview(settings, snapshot, sourceText);
-        this.setStatus('complete', `导入预览完成：${preview.groups.length}个对象`, snapshot.messageIndex);
+        this.setStatus('import', 'AI正在整理世界设定');
+        const preview = await this.importer.preview(this.settings(), snapshot, sourceText);
+        this.setStatus('complete', `导入预览完成：${preview.groups.length}个对象`);
         this.emit('import-preview', preview);
         return preview;
       }, () => this.previewImport(sourceText));
     }
   
-    async commitImport() {
-      return this.runExclusive('import-commit', async token => {
-        const settings = this.settings();
+    commitImport() {
+      return this.enqueue('import:commit', '写入世界设定', PRIORITY.manual, async token => {
         const snapshot = this.host.captureChat(token);
-        this.active.snapshot = snapshot;
-        this.setStatus('worldbook', '正在写入世界设定', snapshot.messageIndex);
-        const result = await this.importer.commit(settings, snapshot);
-        this.setStatus('complete', '世界设定导入完成', snapshot.messageIndex);
+        this.setStatus('worldbook', '正在写入世界设定');
+        const result = await this.importer.commit(this.settings(), snapshot);
+        await this.recordLastWrite(result);
+        this.setStatus('complete', `${writeStatus(result)} · 导入条目均为基石只读`);
         this.emit('refresh');
         return result;
       }, () => this.commitImport());
@@ -843,21 +1029,69 @@ const __ma_module_5 = (() => {
   
     importPreview() { return this.importer.previewValue(); }
     clearImportPreview() { this.importer.clear(); this.emit('import-preview', null); }
+    listEntries(options) { return this.memory.listEntries(this.settings(), options); }
+    overview() { return this.memory.overview(this.settings()); }
+    gameTime() { return this.listEntries().then(opened => opened.managed.find(entry => entry.type === '世界' && entry.name === '游戏时间')?.content.match(/当前游戏时间：(.+)/u)?.[1] ?? ''); }
   
-    async listEntries() {
-      return this.memory.listEntries(this.settings());
+    updateEntry(uid, content) { return this.mutation(`entry:update:${uid}`, `更新UID ${uid}`, () => this.memory.updateEntry(this.settings(), uid, content)); }
+    setCornerstone(uids, locked) { return this.mutation(`cornerstone:${unique(uids).sort()}:${locked}`, `${locked ? '设置' : '解除'}基石`, () => this.memory.setCornerstone(this.settings(), uids, locked)); }
+    setFocus(uid, focused) { return this.mutation(`focus:${uid}:${focused}`, `${focused ? '设置' : '解除'}主焦点`, () => this.memory.setFocus(this.settings(), uid, focused)); }
+    deleteEntries(uids) { return this.mutation(`entry:delete:${unique(uids).sort()}`, `删除${uids.length}个条目`, () => this.memory.deleteEntries(this.settings(), uids)); }
+    replanRecall() { return this.mutation('recall:replan', '重新规划世界书召回字段', () => this.memory.replanRecall(this.settings())); }
+    setGameTime(value) { return this.mutation('game-time', '设置游戏时间', () => this.memory.setGameTime(this.settings(), value)); }
+  
+    migrationPreview() { return this.migration.previewValue(); }
+    scanMigration() { return this.migration.scan(this.settings()).then(value => { this.emit('refresh'); return value; }); }
+    commitMigration() { return this.mutation('migration:commit', '迁移当前模板条目', () => this.migration.commit(this.settings())); }
+    undoMigration() { return this.mutation('migration:undo', '撤销条目迁移', () => this.migration.undo(this.settings())); }
+  
+    testApi() {
+      return this.enqueue('diagnostic:model', '测试模型连接', PRIORITY.manual, async token => {
+        return this.memory.testConnection(this.settings(), token);
+      });
     }
   
-    async updateEntry(uid, content) {
-      const transaction = await this.memory.updateEntry(this.settings(), uid, content);
-      this.emit('refresh');
-      return transaction;
+    runAcceptance() { return this.enqueue('diagnostic:acceptance', '三轮完整验收', PRIORITY.manual, () => this.diagnostics.run(this.settings(), { rounds: 3, includeModel: true })); }
+    diagnosticsReport() { return this.diagnostics.report(); }
+  
+    async rollbackFrom(messageIndex, reprocess) {
+      return this.enqueue(`rollback:${messageIndex}`, '回滚源消息写入', PRIORITY.rollback, async token => {
+        const settings = this.settings();
+        const state = this.host.state();
+        const receipts = state.receipts.filter(receipt => Number(receipt.messageIndex) >= messageIndex).sort((a, b) => b.createdAt - a.createdAt);
+        for (const receipt of receipts) { token.assertActive(); await this.memory.rollback(settings, receipt); }
+        await this.host.updateState(draft => resetAfterRollback(draft, receipts, messageIndex));
+        if (reprocess && settings.enabled && (settings.autoAudit || settings.autoExtraction)) await this.processMessage('full', true, messageIndex, token);
+        this.emit('refresh');
+      }).catch(error => this.setStatus('error', `回滚停止：${describeError(error)}`, messageIndex));
     }
   
-    async deleteEntries(uids) {
-      const transaction = await this.memory.deleteEntries(this.settings(), uids);
-      this.emit('refresh');
-      return transaction;
+    retrySummaryFailure(id) {
+      const failure = this.host.state().summaryFailures.find(item => item.id === id);
+      ensureWorkflow(failure, '该失败整理任务已经不存在', 'SUMMARY_FAILURE');
+      return this.summarize(failure.kind, failure.uids).then(async result => {
+        await this.host.updateState(state => { state.summaryFailures = state.summaryFailures.filter(item => item.id !== id); });
+        this.emit('refresh');
+        return result;
+      });
+    }
+  
+    async resetAll() {
+      this.cancel('正在重置插件');
+      return this.enqueue('reset:all', '重置镜渊', PRIORITY.manual, async () => {
+        const transaction = await this.memory.clearManaged(this.settings());
+        try {
+          await this.host.clearState();
+          this.settingsStore.reset();
+        } catch (error) {
+          if (transaction.receipt) await this.memory.rollback(this.settings(), transaction.receipt);
+          throw error;
+        }
+        this.importer.clear();
+        this.migration.clear();
+        this.diagnostics.clear();
+        this.emit('refresh');
+      });
     }
   
     async recordExtraction(snapshot, result) {
@@ -871,118 +1105,116 @@ const __ma_module_5 = (() => {
         if (result.currentScene) state.currentScene = result.currentScene;
         state.currentGroupUids = unique([...state.currentGroupUids, ...result.touchedUids]);
         state.currentGroupFacts += Number(result.factCount || 0);
-        state.status = { phase: 'complete', detail: `本轮更新${result.factCount}条`, messageIndex: snapshot.messageIndex, updated: Date.now() };
+        state.lastWrite = writeReceipt(result);
       });
     }
+  
+    async recordLastWrite(result) { await this.host.updateState(state => { state.lastWrite = writeReceipt(result); }); }
   
     async runAutomaticSummaries(settings, snapshot) {
       const state = this.host.state();
       if (settings.autoSmallSummary && state.closedGroups.length) {
         const group = state.closedGroups[0];
-        const result = await this.memory.summarize('small', settings, snapshot, group.uids);
-        await this.host.updateState(draft => {
-          draft.closedGroups.shift();
-          draft.summarizedGroups.push({ scene: group.scene, uids: unique(result.outputUids) });
-          addReceipt(draft, result.receipt);
-        });
+        try {
+          const result = await this.memory.summarize('small', settings, snapshot, group.uids);
+          await this.host.updateState(draft => { draft.closedGroups.shift(); draft.summarizedGroups.push({ scene: group.scene, uids: unique(result.outputUids) }); addReceipt(draft, result.receipt); });
+        } catch (error) {
+          await this.recordSummaryFailure('small', group.scene, group.uids, error);
+          this.setStatus('summary-error', `事实更新成功；小总结失败：${describeError(error)}`, snapshot.messageIndex);
+        }
       }
       const refreshed = this.host.state();
       if (settings.autoLargeSummary && refreshed.summarizedGroups.length >= settings.largeSummaryGroups) {
         const groups = refreshed.summarizedGroups.slice(0, settings.largeSummaryGroups);
-        const sourceUids = unique(groups.flatMap(group => group.uids));
-        const result = await this.memory.summarize('large', settings, snapshot, sourceUids);
-        await this.host.updateState(draft => {
-          draft.summarizedGroups.splice(0, settings.largeSummaryGroups, { scene: '长期', uids: unique(result.outputUids) });
-          addReceipt(draft, result.receipt);
-        });
+        const uids = unique(groups.flatMap(group => group.uids));
+        try {
+          const result = await this.memory.summarize('large', settings, snapshot, uids);
+          await this.host.updateState(draft => { draft.summarizedGroups.splice(0, settings.largeSummaryGroups, { scene: '长期', uids: unique(result.outputUids) }); addReceipt(draft, result.receipt); });
+        } catch (error) {
+          await this.recordSummaryFailure('large', '长期', uids, error);
+          this.setStatus('summary-error', `事实更新成功；大总结失败：${describeError(error)}`, snapshot.messageIndex);
+        }
       }
     }
   
-    async rollbackFrom(messageIndex) {
-      this.cancel('源消息已经变化');
-      const settings = this.settings();
-      const state = this.host.state();
-      const receipts = state.receipts.filter(receipt => Number(receipt.messageIndex) >= messageIndex).sort((a, b) => b.createdAt - a.createdAt);
-      if (!receipts.length) return;
-      try {
-        for (const receipt of receipts) await this.memory.rollback(settings, receipt);
-        await this.host.updateState(draft => {
-          const removed = new Set(receipts.map(receipt => receipt.createdAt));
-          draft.receipts = draft.receipts.filter(receipt => !removed.has(receipt.createdAt));
-          draft.currentScene = '';
-          draft.currentGroupUids = [];
-          draft.currentGroupFacts = 0;
-          draft.closedGroups = [];
-          draft.summarizedGroups = [];
-          draft.status = { phase: 'rolled-back', detail: '源消息变化，相关写入已回滚', messageIndex, updated: Date.now() };
-        });
+    async recordSummaryFailure(kind, scene, uids, error) {
+      await this.host.updateState(state => {
+        const key = `${kind}:${unique(uids).sort().join(',')}`;
+        state.summaryFailures = state.summaryFailures.filter(item => item.key !== key);
+        state.summaryFailures.push({ id: `${Date.now()}-${kind}`, key, kind, scene, uids: unique(uids), reason: describeError(error), failedAt: Date.now() });
+        state.summaryFailures = state.summaryFailures.slice(-12);
+      });
+    }
+  
+    setMessageStage(index, stage, stateValue, detail) {
+      void this.host.updateState(state => {
+        const current = state.messageStates[index] ?? { stages: {} };
+        current.stages[stage] = { state: stateValue, detail, updated: Date.now() };
+        current.updated = Date.now();
+        state.messageStates[index] = current;
+        const keep = Object.keys(state.messageStates).sort((a, b) => Number(b) - Number(a)).slice(0, 24);
+        state.messageStates = Object.fromEntries(keep.map(key => [key, state.messageStates[key]]));
+      }).catch(error => console.error('[Mirror Abyss]', describeError(error), error));
+      this.emit('status');
+    }
+  
+    mutation(key, label, task) {
+      return this.enqueue(key, label, PRIORITY.manual, async () => {
+        const result = await task();
+        this.setStatus('complete', `${label}完成并通过权威回读`);
         this.emit('refresh');
-      } catch (error) {
-        this.setStatus('error', `回滚停止：${describeError(error)}`, messageIndex);
-      }
-    }
-  
-    async resetOperationalState() {
-      this.cancel('运行状态正在重置');
-      await this.host.clearState();
-      this.importer.clear();
-      this.emit('refresh');
-    }
-  
-    async diagnostics() {
-      const context = this.host.context();
-      const checks = [];
-      checks.push({ name: '当前聊天', passed: Boolean(this.host.chatKey()), detail: this.host.chatKey() || '未打开聊天' });
-      checks.push({ name: '模型接口', passed: typeof context.generateRaw === 'function', detail: typeof context.generateRaw === 'function' ? '可用' : '缺失' });
-      try {
-        const opened = await this.memory.listEntries(this.settings());
-        checks.push({ name: '权威世界书', passed: true, detail: `${opened.name} · ${opened.managed.length}个管理条目 · ${opened.external.length}个外部条目` });
-      } catch (error) {
-        checks.push({ name: '权威世界书', passed: false, detail: describeError(error) });
-      }
-      return checks;
-    }
-  
-    async runExclusive(label, task, retry) {
-      ensureWorkflow(!this.active, '已有任务正在运行', 'TASK_BUSY');
-      const token = new CancellationToken(label);
-      this.active = { label, token, snapshot: null };
-      try {
-        const result = await task(token);
-        this.lastFailedAction = null;
         return result;
-      } catch (error) {
-        if (!token.cancelled) {
-          this.lastFailedAction = retry;
-          this.setStatus('error', describeError(error), this.active.snapshot?.messageIndex ?? -1);
+      }, () => this.mutation(key, label, task));
+    }
+  
+    enqueue(key, label, priority, run, retry = null) {
+      const chatKey = this.host.chatKey();
+      const worldbookName = this.host.worldbookName();
+      return this.queue.enqueue({ key, label, priority, run }).catch(error => {
+        if (error?.code !== 'CANCELLED' && error?.code !== 'TASK_DUPLICATE') {
+          if (retry) this.lastFailedTask = { chatKey, worldbookName, action: retry };
+          this.setStatus('error', describeError(error));
         }
         throw error;
-      } finally {
-        this.active = null;
-      }
+      });
     }
   
     setStatus(phase, detail, messageIndex = -1) {
       const status = { phase, detail, messageIndex, updated: Date.now() };
-      void this.host.updateState(state => { state.status = status; }).catch(error => {
-        console.error('[Mirror Abyss]', describeError(error), error);
-      });
+      void this.host.updateState(state => { state.status = status; }).catch(error => console.error('[Mirror Abyss]', describeError(error), error));
       this.emit('status', status);
     }
   
     emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
   }
   
+  function emptyWrite() { return { changed: false, factCount: 0, touchedUids: [], createdUids: [], updatedUids: [], currentScene: '', receipt: null }; }
+  function writeReceipt(result) { return { worldbookName: result.worldbookName, created: result.createdUids?.length ?? 0, updated: result.updatedUids?.length ?? 0, touchedUids: result.touchedUids ?? [], verifiedAt: Date.now() }; }
+  function writeStatus(result) { const created = result.createdUids?.length ?? 0; const updated = result.updatedUids?.length ?? 0; return created || updated ? `已写入世界书：新增${created}条，更新${updated}条` : '处理完成：世界书无需更新'; }
+  function eventIndex(value) { const raw = typeof value === 'object' ? value?.messageId ?? value?.mesId ?? value?.index : value; const index = Number(raw); return Number.isInteger(index) && index >= 0 ? index : 0; }
+  
   function addReceipt(state, receipt) {
     if (!receipt || Number(receipt.messageIndex) < 0) return;
     state.receipts.push(receipt);
-    const recentMessages = [...new Set(state.receipts.map(item => Number(item.messageIndex)))].sort((a, b) => b - a).slice(0, 20);
-    state.receipts = state.receipts.filter(item => recentMessages.includes(Number(item.messageIndex))).sort((a, b) => a.createdAt - b.createdAt);
+    const recent = [...new Set(state.receipts.map(item => Number(item.messageIndex)))].sort((a, b) => b - a).slice(0, 20);
+    state.receipts = state.receipts.filter(item => recent.includes(Number(item.messageIndex))).sort((a, b) => a.createdAt - b.createdAt);
+  }
+  
+  function resetAfterRollback(state, receipts, messageIndex) {
+    const removed = new Set(receipts.map(receipt => receipt.createdAt));
+    state.receipts = state.receipts.filter(receipt => !removed.has(receipt.createdAt));
+    state.currentScene = '';
+    state.currentGroupUids = [];
+    state.currentGroupFacts = 0;
+    state.closedGroups = [];
+    state.summarizedGroups = [];
+    for (const key of Object.keys(state.messageStates)) if (Number(key) >= messageIndex) delete state.messageStates[key];
+    state.status = { phase: 'rolled-back', detail: '源消息变化，相关写入已回滚', messageIndex, updated: Date.now() };
   }
   return Object.freeze({ MirrorAbyssController });
 })();
 
-const __ma_module_6 = (() => {
+const __ma_module_7 = (() => {
   const { EXTRACTION_TYPES, FACT_PROTOCOL, SUMMARY_PROTOCOL, WORLD_TYPES, hasSection, hasType } = __ma_module_2;
   const { fault, normalizeIdentity, unique } = __ma_module_0;
   const FACT_LINE = /^事实｜([^｜]+)｜([^｜]+)｜([^｜]+)｜(建立|变化|结束)｜([^｜]*)｜(.+)$/u;
@@ -992,16 +1224,71 @@ const __ma_module_6 = (() => {
     return String(raw ?? '').replace(/<think>[\s\S]*?<\/think>/giu, '').replace(/```(?:\w+)?/gu, '').trim();
   }
   
-  function linesOf(raw) {
+  function linesOf(raw, jsonAdapter = null) {
     const text = cleanOutput(raw);
     if (!text) throw fault('protocol', 'EMPTY_OUTPUT', '模型没有返回最终协议');
     if (text === '无') return [];
-    return text.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+    const compatible = jsonAdapter?.(text);
+    return (compatible ?? text.split(/\r?\n/u)).map(line => line.trim()).filter(Boolean);
+  }
+  
+  function jsonFactLines(text) {
+    if (!/^[\[{]/u.test(text)) return null;
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { return null; }
+    const rows = Array.isArray(parsed) ? parsed
+      : Array.isArray(parsed?.facts) ? parsed.facts
+        : Array.isArray(parsed?.entries) ? parsed.entries : [parsed];
+    return rows.map((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw fault('protocol', 'JSON_ROW', `JSON第${index + 1}项必须是事实对象`);
+      }
+      const type = required(row, ['类型', 'type'], index);
+      const name = required(row, ['稳定名称', 'name', 'title'], index);
+      const section = required(row, ['栏目', 'section'], index);
+      const change = required(row, ['变化', 'change', 'action'], index);
+      const relations = optional(row, ['关联对象', 'relations', 'relation', 'related']);
+      const fact = required(row, ['完整事实', 'fact', 'content', 'detail'], index);
+      const relationText = Array.isArray(relations) ? relations.join('、') : String(relations ?? '');
+      return `事实｜${type}｜${name}｜${section}｜${change}｜${relationText}｜${fact}`;
+    });
+  }
+  
+  function jsonSummaryLines(text) {
+    if (!/^[\[{]/u.test(text)) return null;
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { return null; }
+    const rows = Array.isArray(parsed) ? parsed
+      : Array.isArray(parsed?.summaries) ? parsed.summaries
+        : Array.isArray(parsed?.entries) ? parsed.entries : [parsed];
+    return rows.map((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw fault('protocol', 'JSON_ROW', `JSON第${index + 1}项必须是整理对象`);
+      const refsValue = required(row, ['条目编号', 'refs', 'sources'], index);
+      const refs = Array.isArray(refsValue) ? refsValue.join('、') : refsValue;
+      const type = required(row, ['类型', 'type'], index);
+      const name = required(row, ['稳定名称', 'name', 'title'], index);
+      const section = required(row, ['栏目', 'section'], index);
+      const fact = required(row, ['完整事实', 'fact', 'content', 'detail'], index);
+      return `整理｜${refs}｜${type}｜${name}｜${section}｜${fact}`;
+    });
+  }
+  
+  function required(row, names, index) {
+    const value = optional(row, names);
+    if (value == null || String(value).trim() === '') {
+      throw fault('protocol', 'JSON_FIELD', `JSON第${index + 1}项缺少字段“${names[0]}”`);
+    }
+    return String(value).trim();
+  }
+  
+  function optional(row, names) {
+    for (const name of names) if (Object.hasOwn(row, name)) return row[name];
+    return undefined;
   }
   
   function parseFactProtocol(raw, options = {}) {
     const allowedTypes = options.allowedTypes ?? EXTRACTION_TYPES;
-    const lines = linesOf(raw);
+    const lines = linesOf(raw, jsonFactLines);
     const groups = new Map();
     for (let index = 0; index < lines.length; index += 1) {
       const match = lines[index].match(FACT_LINE);
@@ -1025,7 +1312,7 @@ const __ma_module_6 = (() => {
   }
   
   function parseSummaryProtocol(raw, sources, options = {}) {
-    const lines = linesOf(raw);
+    const lines = linesOf(raw, jsonSummaryLines);
     if (!lines.length) {
       if (options.allowNone === true) return [];
       throw fault('protocol', 'MANUAL_EMPTY', '人工合并必须返回整理结果');
@@ -1075,13 +1362,94 @@ const __ma_module_6 = (() => {
   return Object.freeze({ parseFactProtocol, parseSummaryProtocol, parseAuditProtocol });
 })();
 
-const __ma_module_7 = (() => {
+const __ma_module_8 = (() => {
+  const { applyNativeEntryFields, serializeSections } = __ma_module_3;
+  const { parseAuditProtocol } = __ma_module_7;
+  const { CancellationToken, describeError } = __ma_module_0;
+  class DiagnosticsService {
+    constructor(host, worldbook, model) {
+      this.host = host;
+      this.worldbook = worldbook;
+      this.model = model;
+      this.lastReport = null;
+    }
+  
+    report() { return this.lastReport; }
+    clear() { this.lastReport = null; }
+  
+    async run(settings, { rounds = 3, includeModel = true } = {}) {
+      const report = { generatedAt: new Date().toISOString(), rounds: [], environment: {} };
+      report.environment = {
+        chat: this.host.chatKey(),
+        worldbook: this.host.worldbookName(),
+        modelRoute: settings.modelProfileId ? 'connection-profile' : 'generateRaw',
+      };
+      for (let round = 1; round <= rounds; round += 1) report.rounds.push(await this.runRound(settings, round, includeModel));
+      report.passed = report.rounds.every(item => item.checks.every(check => check.passed));
+      this.lastReport = report;
+      return report;
+    }
+  
+    async runRound(settings, round, includeModel) {
+      const checks = [];
+      const add = (name, passed, detail) => checks.push({ name, passed, detail });
+      add('当前聊天', Boolean(this.host.chatKey()), this.host.chatKey() || '未打开聊天');
+      add('模型路由', settings.modelProfileId ? this.host.connectionProfilesAvailable() : typeof this.host.context().generateRaw === 'function', settings.modelProfileId ? '连接配置' : '宿主默认连接');
+      try {
+        const opened = await this.worldbook.read(settings, { fresh: true });
+        add('权威回读', true, `${opened.name} · ${opened.managed.length}管理条目 · ${opened.external.length}外部条目`);
+        const transaction = await this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ createEntry }) => {
+          const raw = createEntry();
+          applyNativeEntryFields(raw, '基础设定', `镜渊验收-${Date.now()}-${round}`, serializeSections('基础设定', new Map([['世界常识', ['临时验收项，写入后立即回滚。']]])));
+        });
+        if (transaction.receipt) await this.worldbook.rollback(settings, transaction.receipt);
+        add('事务写入与回滚', true, '保存、权威回读和回滚均通过');
+      } catch (error) { add('世界书事务', false, describeError(error)); }
+      if (includeModel) {
+        try {
+          const token = new CancellationToken('诊断模型');
+          const raw = await this.model.text({ system: '只输出：审核结论：通过', user: '连接测试' }, settings, token);
+          parseAuditProtocol(raw);
+          add('模型实测', true, '返回并通过固定协议');
+        } catch (error) { add('模型实测', false, describeError(error)); }
+      }
+      return { round, checks };
+    }
+  }
+  return Object.freeze({ DiagnosticsService });
+})();
+
+const __ma_module_9 = (() => {
+  const REPLACEMENTS = Object.freeze([
+    ['阴茎', '男性生殖器'], ['鸡巴', '男性生殖器'], ['肉棒', '男性生殖器'], ['龟头', '男性生殖器末端'],
+    ['阴道', '女性生殖道'], ['小穴', '女性生殖道'], ['骚穴', '女性生殖道'], ['肉穴', '女性生殖道'],
+    ['精液', '男性生殖体液'], ['淫液', '生殖分泌体液'],
+    ['性交', '成人亲密行为'], ['做爱', '成人亲密行为'], ['交媾', '成人亲密行为'],
+    ['口交', '口部成人亲密行为'], ['肛交', '后部成人亲密行为'],
+  ]);
+  
+  function sanitizeExtractionCopy(value) {
+    let text = String(value ?? '');
+    for (const [source, replacement] of REPLACEMENTS) text = text.split(source).join(replacement);
+    return text
+      .replace(/\bpenis\b/giu, 'male reproductive organ')
+      .replace(/\bvagina\b/giu, 'female reproductive tract')
+      .replace(/\bsemen\b/giu, 'male reproductive fluid')
+      .replace(/\bsexual intercourse\b/giu, 'adult intimate contact')
+      .replace(/\boral sex\b/giu, 'oral adult intimate contact')
+      .replace(/\banal sex\b/giu, 'rear adult intimate contact');
+  }
+  return Object.freeze({ sanitizeExtractionCopy });
+})();
+
+const __ma_module_10 = (() => {
   const { EXTRACTION_TYPES, FACT_PROTOCOL, SUMMARY_PROTOCOL, WORLD_TYPES, renderSchema } = __ma_module_2;
+  const { sanitizeExtractionCopy } = __ma_module_9;
   const outputDiscipline = `只输出规定的最终协议。不要输出分析、推理过程、解释、前言、后记、代码块或JSON。`;
   
-  function auditPrompt(assistantText) {
+  function auditPrompt(assistantText, additionalRules = '') {
     return {
-      system: `你只审核当前AI正文是否越权替玩家行动。\n${outputDiscipline}\n合规时只输出：审核结论：通过\n需要修正时输出：\n审核结论：需要修正\n- 明确问题`,
+      system: `你只审核当前AI正文是否越权替玩家行动。${additionalRules ? `\n\n玩家审核规则：\n${additionalRules}` : ''}\n${outputDiscipline}\n合规时只输出：审核结论：通过\n需要修正时输出：\n审核结论：需要修正\n- 明确问题`,
       user: `当前AI正文：\n${assistantText}`,
     };
   }
@@ -1094,17 +1462,17 @@ const __ma_module_7 = (() => {
   }
   
   function extractionPrompt(playerText, assistantText, relevantEntries) {
-    const index = relevantEntries.map(entry => `${entry.title}\n${entry.content}`).join('\n\n');
+    const index = sanitizeExtractionCopy(relevantEntries.map(entry => `${entry.title}\n${entry.content}`).join('\n\n'));
     return {
       system: `你是世界事实整理员。只记录本轮正文已经明确成立、会影响后续连续性的事实；不补全、不预测、不写玩家愿望。\n\n允许类型与栏目：\n${renderSchema(EXTRACTION_TYPES)}\n\n每条事实严格使用：\n${FACT_PROTOCOL}\n没有可记录事实时只输出“无”。\n${outputDiscipline}`,
-      user: `相关世界书条目：\n${index || '（无）'}\n\n玩家本轮输入：\n${playerText || '（无）'}\n\n当前AI正文：\n${assistantText}`,
+      user: `相关世界书条目：\n${index || '（无）'}\n\n玩家本轮输入：\n${sanitizeExtractionCopy(playerText) || '（无）'}\n\n当前AI正文：\n${sanitizeExtractionCopy(assistantText)}`,
     };
   }
   
   function importPrompt(sourceText, relevantEntries) {
     const index = relevantEntries.map(entry => `${entry.title}\n${entry.content}`).join('\n\n');
     return {
-      system: `把玩家主动提交的世界设定整理为世界书事实。模型只决定语义类型、稳定名称、栏目与事实；插件决定UID、唯一身份和写入。不得把写作要求、提示规则、未来计划或未成立事件写成世界事实。世界长期通用规则、底层规律和不随剧情自然变化的设定归入“基础设定”，写入后由插件设置基石常驻；具体人物、场景、物品、事件和可变化的世界状态仍按对应类型整理。\n\n允许类型与栏目：\n${renderSchema(WORLD_TYPES)}\n\n每条事实严格使用：\n${FACT_PROTOCOL}\n本任务的变化字段统一写“建立”。同一“类型＋稳定名称”的多行会形成同一个候选条目。没有可导入事实时只输出“无”。最多16个候选对象。\n${outputDiscipline}`,
+      system: `把玩家主动提交的世界设定整理为世界书事实。模型只决定语义类型、稳定名称、栏目与事实；插件决定UID、唯一身份和写入。不得把写作要求、提示规则、未来计划或未成立事件写成世界事实。世界长期通用规则、底层规律和不随剧情自然变化的设定归入“基础设定”；具体人物、场景、物品、事件和可变化的世界状态仍按对应类型整理。所有本次导入条目写入后由插件设置为基石只读。\n\n允许类型与栏目：\n${renderSchema(WORLD_TYPES)}\n\n每条事实严格使用：\n${FACT_PROTOCOL}\n本任务的变化字段统一写“建立”。同一“类型＋稳定名称”的多行会形成同一个候选条目。没有可导入事实时只输出“无”。最多16个候选对象。\n${outputDiscipline}`,
       user: `玩家提交的世界设定（唯一来源）：\n${sourceText}\n\n已有相关条目（只用于复用稳定名称并避免重复）：\n${index || '（无）'}`,
     };
   }
@@ -1113,18 +1481,18 @@ const __ma_module_7 = (() => {
     const label = kind === 'small' ? '当前场景小总结' : kind === 'large' ? '长期大总结' : '玩家指定人工合并';
     const sourceText = sources.map((entry, index) => `【条目${index + 1}】\n${entry.title}\n${entry.content}`).join('\n\n');
     return {
-      system: `${label}：把来源事实整理成更少、更完整的结果，不生成任务、未来行动或剧情方向。每条输出严格使用：\n${SUMMARY_PROTOCOL}\n同一目标的多行必须使用完全相同的来源编号、类型和稳定名称。无需改变时，小总结和大总结可以只输出“无”；人工合并必须返回结果。\n\n允许类型与栏目：\n${renderSchema(WORLD_TYPES)}\n${outputDiscipline}`,
+      system: `${label}：把来源事实整理成更少、更完整的结果，不生成任务、未来行动或剧情方向。每条输出严格使用：\n${SUMMARY_PROTOCOL}\n同一目标的多行必须使用完全相同的来源编号、类型和稳定名称。只有小总结在确实无需整理时可以输出“无”；大总结和人工合并必须返回结果。\n\n允许类型与栏目：\n${renderSchema(WORLD_TYPES)}\n${outputDiscipline}`,
       user: `${requirement ? `玩家要求：\n${requirement}\n\n` : ''}来源条目：\n${sourceText}`,
     };
   }
   return Object.freeze({ auditPrompt, revisionPrompt, extractionPrompt, importPrompt, summaryPrompt });
 })();
 
-const __ma_module_8 = (() => {
-  const { parseFactProtocol } = __ma_module_6;
+const __ma_module_11 = (() => {
+  const { parseFactProtocol } = __ma_module_7;
   const { WORLD_TYPES } = __ma_module_2;
   const { invariant } = __ma_module_0;
-  const { importPrompt } = __ma_module_7;
+  const { importPrompt } = __ma_module_10;
   const ensureImport = (condition, message, code = 'IMPORT') => invariant(condition, message, 'workflow', code);
   
   class WorldSettingImportService {
@@ -1170,7 +1538,10 @@ const __ma_module_8 = (() => {
       const opened = await this.worldbook.read(settings);
       ensureImport(opened.name === preview.worldbookName, '导入预览后聊天绑定的世界书已变化', 'IMPORT_BOOK');
       ensureImport(opened.digest === preview.worldbookDigest, '世界书在预览后发生变化，请重新生成预览', 'IMPORT_STALE');
-      const result = await this.memory.writeFactGroups(settings, snapshot, opened, preview.groups);
+      const result = await this.memory.writeFactGroups(settings, snapshot, opened, preview.groups, {
+        allowCornerstone: true,
+        cornerstone: true,
+      });
       this.previewState = null;
       return result;
     }
@@ -1178,12 +1549,52 @@ const __ma_module_8 = (() => {
   return Object.freeze({ WorldSettingImportService });
 })();
 
-const __ma_module_9 = (() => {
-  const { applyNativeEntryFields, identityKey, managedEntries, mergeRows, parseManagedEntry, parseSections, serializeSections } = __ma_module_3;
+const __ma_module_12 = (() => {
+  const { sectionNames } = __ma_module_2;
+  const { normalizeIdentity, unique } = __ma_module_0;
+  function explicitReferences(content, type) {
+    const headings = new Set(sectionNames(type));
+    return unique([...String(content ?? '').matchAll(/【([^】]+)】/gu)]
+      .map(match => match[1].trim())
+      .filter(value => value && !headings.has(value)));
+  }
+  
+  function projectRelations(entries) {
+    const byTitle = new Map();
+    const byName = new Map();
+    for (const entry of entries) {
+      byTitle.set(normalizeIdentity(entry.title), entry);
+      const key = normalizeIdentity(entry.name);
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(entry);
+    }
+    return entries.map(entry => {
+      const references = unique([...entry.relations, ...explicitReferences(entry.content, entry.type)]);
+      const related = [];
+      for (const reference of references) {
+        const exact = byTitle.get(normalizeIdentity(reference));
+        const named = byName.get(normalizeIdentity(reference)) ?? [];
+        const target = exact ?? (named.length === 1 ? named[0] : null);
+        if (target && target.uid !== entry.uid) related.push({ uid: target.uid, title: target.title });
+      }
+      return { ...entry, references, related: uniqueByUid(related) };
+    });
+  }
+  
+  function uniqueByUid(values) {
+    const seen = new Set();
+    return values.filter(value => !seen.has(value.uid) && seen.add(value.uid));
+  }
+  return Object.freeze({ explicitReferences, projectRelations });
+})();
+
+const __ma_module_13 = (() => {
+  const { applyNativeEntryFields, identityKey, managedEntries, markNativeActivity, mergeRows, parseManagedEntry, parseSections, replanNativeRecall, serializeSections, setNativeCornerstone, setNativeFocus } = __ma_module_3;
+  const { projectRelations } = __ma_module_12;
   const { EXTRACTION_TYPES } = __ma_module_2;
-  const { parseAuditProtocol, parseFactProtocol, parseSummaryProtocol } = __ma_module_6;
+  const { parseAuditProtocol, parseFactProtocol, parseSummaryProtocol } = __ma_module_7;
   const { invariant, normalizeIdentity, unique } = __ma_module_0;
-  const { auditPrompt, extractionPrompt, revisionPrompt, summaryPrompt } = __ma_module_7;
+  const { auditPrompt, extractionPrompt, revisionPrompt, summaryPrompt } = __ma_module_10;
   const ensureWorkflow = (condition, message, code = 'MEMORY') => invariant(condition, message, 'workflow', code);
   
   class MemoryService {
@@ -1193,18 +1604,23 @@ const __ma_module_9 = (() => {
       this.model = model;
     }
   
-    async audit(settings, snapshot) {
-      const { raw, value } = await this.model.structured(auditPrompt(snapshot.assistantText), settings, snapshot.token, parseAuditProtocol);
+    async audit(settings, snapshot, progress = () => undefined) {
+      progress('audit', 'running', '正在审核');
+      const { raw, value } = await this.model.structured(auditPrompt(snapshot.assistantText, settings.auditPrompt), settings, snapshot.token, parseAuditProtocol);
+      progress('audit', value.passed ? 'success' : 'warning', value.passed ? '审核通过' : `发现${value.issues.length}项问题`);
       if (value.passed) return { snapshot, revised: false, raw, issues: [] };
+      progress('revision', 'running', '正在修正');
       const revisedText = await this.model.text(revisionPrompt(snapshot.assistantText, value.issues), settings, snapshot.token);
       const nextSnapshot = await this.host.replaceAssistantText(snapshot, revisedText);
+      progress('revision', 'success', '修正完成');
       return { snapshot: nextSnapshot, revised: true, raw, issues: value.issues };
     }
   
-    async extract(settings, snapshot) {
+    async extract(settings, snapshot, progress = () => undefined) {
       this.host.assertSnapshot(snapshot);
       const opened = await this.worldbook.read(settings);
       const relevant = selectRelevant(opened.managed, `${snapshot.playerText}\n${snapshot.assistantText}`, 10);
+      progress('extract', 'running', '正在提取');
       const response = await this.model.structured(
         extractionPrompt(snapshot.playerText, snapshot.assistantText, relevant),
         settings,
@@ -1212,12 +1628,15 @@ const __ma_module_9 = (() => {
         raw => parseFactProtocol(raw, { allowedTypes: EXTRACTION_TYPES, maxIdentities: 32 }),
       );
       this.host.assertSnapshot(snapshot);
+      progress('extract', 'success', response.value.length ? `提取${response.value.length}个对象` : '无需写入');
       if (!response.value.length) return { changed: false, factCount: 0, touchedUids: [], currentScene: '', receipt: null, raw: response.raw };
+      progress('write', 'running', '正在写入世界书');
       const written = await this.writeFactGroups(settings, snapshot, opened, response.value);
+      progress('write', 'success', `已确认${written.touchedUids.length}个UID`);
       return { ...written, raw: response.raw, factCount: response.value.reduce((sum, group) => sum + group.rows.length, 0) };
     }
   
-    async writeFactGroups(settings, snapshot, opened, groups) {
+    async writeFactGroups(settings, snapshot, opened, groups, options = {}) {
       const transaction = await this.worldbook.transact(settings, {
         expectedName: opened.name,
         expectedDigest: opened.digest,
@@ -1227,7 +1646,9 @@ const __ma_module_9 = (() => {
         const { managed } = managedEntries(data);
         const activeByIdentity = new Map(managed.filter(entry => !entry.retired).map(entry => [identityKey(entry.type, entry.name), entry]));
         const touchedUids = [];
-        let currentScene = '';
+        const createdUids = [];
+        const updatedUids = [];
+        let currentScene = groups.filter(group => group.type === '场景').at(-1)?.name ?? this.host.state().currentScene ?? '';
         for (const group of groups) {
           const key = identityKey(group.type, group.name);
           let target = activeByIdentity.get(key);
@@ -1239,19 +1660,30 @@ const __ma_module_9 = (() => {
             applyNativeEntryFields(raw, group.type, group.name, serializeSections(group.type, sections));
             target = { uid: String(raw.uid), type: group.type, name: group.name, title: group.title, sections, raw };
             activeByIdentity.set(key, target);
+            createdUids.push(String(raw.uid));
           } else {
+            ensureWorkflow(options.allowCornerstone === true || !target.cornerstone, `基石条目“${target.title}”为只读，请先解除基石锁`, 'CORNERSTONE_READONLY');
             const raw = data.entries[target.uid];
+            const previousContent = raw.content;
             const sections = mergeRows(group.type, parseSections(raw.content, group.type), group.rows);
             applyNativeEntryFields(raw, group.type, group.name, serializeSections(group.type, sections), raw.key);
             target = { ...target, sections, raw };
             activeByIdentity.set(key, target);
+            if (raw.content !== previousContent) updatedUids.push(String(raw.uid));
           }
+          if (options.cornerstone === true) {
+            if (!target.cornerstone && !createdUids.includes(String(target.uid))) updatedUids.push(String(target.uid));
+            setNativeCornerstone(data.entries[target.uid], true);
+            target = { ...target, cornerstone: true, manualCornerstone: true, raw: data.entries[target.uid] };
+            activeByIdentity.set(key, target);
+          }
+          const relations = unique(group.rows.flatMap(row => row.relations));
+          markNativeActivity(data.entries[target.uid], { messageIndex: snapshot.messageIndex, scene: currentScene, relations });
           touchedUids.push(String(target.uid));
-          if (group.type === '场景') currentScene = group.name;
         }
-        return { touchedUids: unique(touchedUids), currentScene };
+        return { touchedUids: unique(touchedUids), createdUids: unique(createdUids), updatedUids: unique(updatedUids), currentScene };
       });
-      return { changed: transaction.changed, receipt: transaction.receipt, ...transaction.result };
+      return { changed: transaction.changed, receipt: transaction.receipt, worldbookName: opened.name, ...transaction.result };
     }
   
     async summarize(kind, settings, snapshot, uids, requirement = '') {
@@ -1261,10 +1693,11 @@ const __ma_module_9 = (() => {
       const sourceByUid = new Map(opened.managed.filter(entry => !entry.retired).map(entry => [entry.uid, entry]));
       const sources = wanted.map(uid => sourceByUid.get(uid)).filter(Boolean);
       ensureWorkflow(sources.length === wanted.length && sources.length > 0, '总结来源已经变化，请刷新后重试', 'SUMMARY_SOURCE');
+      ensureWorkflow(sources.every(entry => !entry.cornerstone), '基石条目为只读，请先解除基石锁', 'CORNERSTONE_READONLY');
       if (kind === 'merge') ensureWorkflow(sources.length >= 2, '人工合并至少选择两个条目', 'MERGE_COUNT');
       const response = await this.model.structured(
         summaryPrompt(kind, sources, requirement), settings, snapshot.token,
-        raw => parseSummaryProtocol(raw, sources, { allowNone: kind !== 'merge' }),
+        raw => parseSummaryProtocol(raw, sources, { allowNone: kind === 'small' }),
       );
       this.host.assertSnapshot(snapshot);
       if (!response.value.length) return { changed: false, outputUids: sources.map(entry => entry.uid), receipt: null, raw: response.raw };
@@ -1295,7 +1728,7 @@ const __ma_module_9 = (() => {
             ensureWorkflow(sourceRaw && byUid.has(source.uid), `总结来源UID ${source.uid}已经不存在`, 'SUMMARY_UID');
             sourceRaw.disable = true;
             sourceRaw.extensions ??= {};
-            sourceRaw.extensions.mirrorAbyss = { managed: true, retired: true };
+            sourceRaw.extensions.mirrorAbyss = { ...sourceRaw.extensions.mirrorAbyss, managed: true, retired: true };
           }
         }
         return { outputUids: unique(outputUids) };
@@ -1303,8 +1736,24 @@ const __ma_module_9 = (() => {
       return { changed: transaction.changed, receipt: transaction.receipt, ...transaction.result, raw: response.raw };
     }
   
-    listEntries(settings) {
-      return this.worldbook.read(settings);
+    async listEntries(settings, options) {
+      const opened = await this.worldbook.read(settings, options);
+      const state = this.host.state();
+      const completed = [...(state.closedGroups ?? []), ...(state.summarizedGroups ?? [])];
+      const previous = new Set(completed.at(-1)?.uids ?? []);
+      const far = new Set(completed.slice(0, -1).flatMap(group => group.uids));
+      const touched = new Set(state.lastWrite?.touchedUids ?? []);
+      const managed = projectRelations(opened.managed).map(entry => ({
+        ...entry,
+        badges: unique([
+          touched.has(entry.uid) ? '更新' : '',
+          entry.type === '场景' && entry.name === state.currentScene ? '当前场景' : '',
+          previous.has(entry.uid) ? '上一场景' : '',
+          far.has(entry.uid) ? '远期场景' : '',
+          touched.has(entry.uid) && entry.type === '世界' ? '世界变化' : '',
+        ]),
+      }));
+      return { ...opened, managed };
     }
   
     async updateEntry(settings, uid, content) {
@@ -1314,9 +1763,91 @@ const __ma_module_9 = (() => {
         ensureWorkflow(raw, `UID ${uid}不存在`, 'ITEM_MISSING');
         const managed = parseManagedEntry(raw);
         ensureWorkflow(managed && !managed.retired, '该条目不属于当前可编辑模板', 'ITEM_READONLY');
+        ensureWorkflow(!managed.cornerstone, '基石条目为只读，请先解除基石锁', 'CORNERSTONE_READONLY');
         const sections = parseSections(content, managed.type);
         applyNativeEntryFields(raw, managed.type, managed.name, serializeSections(managed.type, sections), raw.key);
       });
+    }
+  
+    async setCornerstone(settings, uids, locked) {
+      const selected = unique(uids);
+      ensureWorkflow(selected.length, '没有选择可设置的条目', 'SELECTION_EMPTY');
+      const opened = await this.worldbook.read(settings);
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+        for (const uid of selected) {
+          const raw = data.entries?.[uid];
+          const managed = parseManagedEntry(raw);
+          ensureWorkflow(managed && !managed.retired, `UID ${uid}不属于当前可管理条目`, 'ITEM_READONLY');
+          setNativeCornerstone(raw, locked);
+        }
+      });
+    }
+  
+    async setFocus(settings, uid, focused) {
+      const opened = await this.worldbook.read(settings);
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+        for (const entry of managedEntries(data).managed.filter(entry => entry.type === '人物')) {
+          if (entry.focus && entry.uid !== String(uid)) setNativeFocus(data.entries[entry.uid], false);
+        }
+        const target = parseManagedEntry(data.entries?.[uid]);
+        ensureWorkflow(target && !target.retired, `UID ${uid}不存在`, 'ITEM_MISSING');
+        setNativeFocus(data.entries[uid], focused);
+      });
+    }
+  
+    async replanRecall(settings) {
+      const opened = await this.worldbook.read(settings);
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+        for (const entry of managedEntries(data).managed) replanNativeRecall(data.entries[entry.uid]);
+      });
+    }
+  
+    async setGameTime(settings, value) {
+      const time = String(value ?? '').trim();
+      const opened = await this.worldbook.read(settings);
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data, createEntry }) => {
+        const current = managedEntries(data).managed.find(entry => entry.type === '世界' && entry.name === '游戏时间' && !entry.retired);
+        if (!time) {
+          if (current) {
+            ensureWorkflow(!current.cornerstone, '游戏时间条目为基石只读，请先解除基石锁', 'CORNERSTONE_READONLY');
+            delete data.entries[current.uid];
+          }
+          return;
+        }
+        ensureWorkflow(!current?.cornerstone, '游戏时间条目为基石只读，请先解除基石锁', 'CORNERSTONE_READONLY');
+        const raw = current ? data.entries[current.uid] : createEntry();
+        const content = serializeSections('世界', new Map([['环境状态', [`当前游戏时间：${time}`]]]));
+        applyNativeEntryFields(raw, '世界', '游戏时间', content, ['当前时间', time]);
+        markNativeActivity(raw, { scene: this.host.state().currentScene });
+      });
+    }
+  
+    async overview(settings) {
+      const opened = await this.listEntries(settings, { fresh: true });
+      const active = opened.managed.filter(entry => !entry.retired);
+      return {
+        name: opened.name,
+        managed: active.length,
+        external: opened.external.length,
+        cornerstone: active.filter(entry => entry.cornerstone).length,
+        focus: active.find(entry => entry.focus)?.title ?? '',
+        directRelations: active.reduce((sum, entry) => sum + entry.related.length, 0),
+        unresolvedRelations: active.reduce((sum, entry) => sum + entry.references.length - entry.related.length, 0),
+        counts: Object.fromEntries(EXTRACTION_TYPES.concat('基础设定').map(type => [type, active.filter(entry => entry.type === type).length])),
+      };
+    }
+  
+    async clearManaged(settings) {
+      const opened = await this.worldbook.read(settings);
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+        for (const entry of managedEntries(data).managed) delete data.entries[entry.uid];
+      });
+    }
+  
+    async testConnection(settings, token) {
+      const raw = await this.model.text({ system: '只输出：审核结论：通过', user: '连接测试' }, settings, token);
+      parseAuditProtocol(raw);
+      return '连接与固定协议均通过';
     }
   
     async deleteEntries(settings, uids) {
@@ -1325,7 +1856,9 @@ const __ma_module_9 = (() => {
       const opened = await this.worldbook.read(settings);
       return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
         for (const uid of selected) {
-          ensureWorkflow(data.entries?.[uid], `UID ${uid}不存在`, 'ITEM_MISSING');
+          const managed = parseManagedEntry(data.entries?.[uid]);
+          ensureWorkflow(managed && !managed.retired, `UID ${uid}不存在`, 'ITEM_MISSING');
+          ensureWorkflow(!managed.cornerstone, '基石条目为只读，请先解除基石锁', 'CORNERSTONE_READONLY');
           delete data.entries[uid];
         }
       });
@@ -1350,7 +1883,73 @@ const __ma_module_9 = (() => {
   return Object.freeze({ MemoryService });
 })();
 
-const __ma_module_10 = (() => {
+const __ma_module_14 = (() => {
+  const { applyNativeEntryFields, parseManagedTitle, parseSections } = __ma_module_3;
+  const { invariant } = __ma_module_0;
+  const ensureMigration = (condition, message, code = 'MIGRATION') => invariant(condition, message, 'workflow', code);
+  
+  class MigrationService {
+    constructor(worldbook) {
+      this.worldbook = worldbook;
+      this.previewState = null;
+      this.undoReceipt = null;
+    }
+  
+    clear() { this.previewState = null; this.undoReceipt = null; }
+    previewValue() { return this.previewState; }
+    canUndo() { return Boolean(this.undoReceipt); }
+  
+    async scan(settings) {
+      const opened = await this.worldbook.read(settings, { fresh: true });
+      const candidates = [];
+      for (const raw of opened.external) {
+        const title = parseManagedTitle(raw?.comment);
+        if (!title) continue;
+        try {
+          parseSections(raw.content, title.type);
+          candidates.push({ uid: String(raw.uid), title: title.title, content: String(raw.content) });
+        } catch { /* current schema is the migration boundary */ }
+      }
+      this.previewState = { worldbookName: opened.name, worldbookDigest: opened.digest, candidates };
+      return this.previewState;
+    }
+  
+    async commit(settings) {
+      const preview = this.previewState;
+      ensureMigration(preview, '请先扫描可迁移条目', 'MIGRATION_PREVIEW');
+      ensureMigration(preview.candidates.length, '没有可迁移条目', 'MIGRATION_EMPTY');
+      const wanted = new Set(preview.candidates.map(item => item.uid));
+      const transaction = await this.worldbook.transact(settings, {
+        expectedName: preview.worldbookName,
+        expectedDigest: preview.worldbookDigest,
+      }, ({ data }) => {
+        for (const uid of wanted) {
+          const raw = data.entries?.[uid];
+          const title = parseManagedTitle(raw?.comment);
+          ensureMigration(title, `UID ${uid}已不再符合迁移标题`, 'MIGRATION_CHANGED');
+          const sections = parseSections(raw.content, title.type);
+          applyNativeEntryFields(raw, title.type, title.name, raw.content, raw.key);
+          ensureMigration(sections.size > 0, `UID ${uid}正文为空`, 'MIGRATION_CHANGED');
+        }
+        return { migrated: wanted.size };
+      });
+      this.undoReceipt = transaction.receipt;
+      this.previewState = null;
+      return transaction;
+    }
+  
+    async undo(settings) {
+      ensureMigration(this.undoReceipt, '没有可撤销的迁移', 'MIGRATION_UNDO');
+      const receipt = this.undoReceipt;
+      const result = await this.worldbook.rollback(settings, receipt);
+      this.undoReceipt = null;
+      return result;
+    }
+  }
+  return Object.freeze({ MigrationService });
+})();
+
+const __ma_module_15 = (() => {
   const { MirrorAbyssError, errorText, fault } = __ma_module_0;
   class ModelGateway {
     constructor(host) {
@@ -1358,12 +1957,15 @@ const __ma_module_10 = (() => {
     }
   
     async text(prompt, settings, token) {
-      try {
-        return await this.host.generate({ ...prompt, responseTokens: settings.responseTokens, token });
-      } catch (error) {
-        if (token.cancelled || error instanceof MirrorAbyssError) throw error;
-        throw fault('model', 'REQUEST', errorText(error), error);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          return await this.host.generate({ ...prompt, responseTokens: settings.responseTokens, profileId: settings.modelProfileId, token });
+        } catch (error) {
+          if (token.cancelled || (error instanceof MirrorAbyssError && !isTransient(error))) throw error;
+          if (attempt > 0) throw fault('model', 'REQUEST', errorText(error), error);
+        }
       }
+      throw fault('model', 'REQUEST', '模型请求失败');
     }
   
     async structured(prompt, settings, token, parse) {
@@ -1383,18 +1985,21 @@ const __ma_module_10 = (() => {
       throw fault('model', 'PROTOCOL', '模型协议校验失败');
     }
   }
+  
+  function isTransient(error) {
+    const text = errorText(error);
+    return /(?:HTTP\s*)?(?:502|503|504)|network|fetch|temporar|timeout|<html/iu.test(text);
+  }
   return Object.freeze({ ModelGateway });
 })();
 
-const __ma_module_11 = (() => {
+const __ma_module_16 = (() => {
   const { debounce } = __ma_module_0;
   const CLASS_NAME = 'ma-chat-indicator';
   
   class ChatIndicator {
     constructor(controller, host, panel) {
-      this.controller = controller;
-      this.host = host;
-      this.panel = panel;
+      Object.assign(this, { controller, host, panel });
       this.render = debounce(() => this.refresh(), 80);
     }
   
@@ -1418,15 +2023,19 @@ const __ma_module_11 = (() => {
       document.querySelectorAll(`.${CLASS_NAME}`).forEach(node => node.remove());
       const state = this.host.state();
       const messages = [...document.querySelectorAll('#chat .mes')].filter(node => node.getAttribute('is_user') !== 'true');
-      const latest = messages.at(-1);
-      if (!latest) return;
-      const indicator = document.createElement('button');
-      indicator.type = 'button';
-      indicator.className = CLASS_NAME;
-      indicator.textContent = `镜渊 · ${state.status?.detail || '等待处理'}${state.currentScene ? ` · ${state.currentScene}` : ''}`;
-      indicator.addEventListener('click', () => this.panel.open('run'));
-      const body = latest.querySelector('.mes_text') ?? latest;
-      body.insertAdjacentElement('afterend', indicator);
+      messages.forEach((message, order) => {
+        const index = messageIndex(message, order);
+        const messageState = state.messageStates?.[index];
+        const latest = order === messages.length - 1;
+        if (!messageState && !latest) return;
+        const indicator = document.createElement('button');
+        indicator.type = 'button';
+        indicator.className = `${CLASS_NAME}${latest ? ' is-latest' : ' is-history'}`;
+        indicator.textContent = latest ? latestText(state, messageState) : historyText(messageState);
+        indicator.addEventListener('click', () => this.panel.open('run'));
+        const body = message.querySelector('.mes_text') ?? message;
+        body.insertAdjacentElement('afterend', indicator);
+      });
     }
   
     bindChat() {
@@ -1437,10 +2046,33 @@ const __ma_module_11 = (() => {
       if (chat) this.observer.observe(chat, { childList: true, subtree: true });
     }
   }
+  
+  function messageIndex(node, fallback) {
+    for (const name of ['mesid', 'message-id', 'data-message-id']) {
+      const value = Number(node.getAttribute(name));
+      if (Number.isInteger(value) && value >= 0) return value;
+    }
+    return fallback;
+  }
+  
+  function latestText(state, messageState) {
+    const stages = messageState?.stages ?? {};
+    const stageText = [['audit', '审核'], ['revision', '修正'], ['extract', '提取'], ['write', '写入']]
+      .filter(([key]) => stages[key])
+      .map(([key, label]) => `${label}${symbol(stages[key].state)}`).join(' ');
+    return `镜渊 · ${stageText || state.status?.detail || '等待处理'}${state.currentScene ? ` · ${state.currentScene}` : ''}`;
+  }
+  
+  function historyText(messageState) {
+    const failed = Object.values(messageState?.stages ?? {}).some(stage => stage.state === 'error');
+    return failed ? '镜渊 · 处理失败' : '镜渊 · 已处理';
+  }
+  
+  function symbol(value) { return value === 'success' ? '✓' : value === 'warning' ? '!' : value === 'running' ? '…' : value === 'error' ? '×' : '·'; }
   return Object.freeze({ ChatIndicator });
 })();
 
-const __ma_module_12 = (() => {
+const __ma_module_17 = (() => {
   const { describeError } = __ma_module_0;
   function element(tag, options = {}, children = []) {
     const node = document.createElement(tag);
@@ -1469,10 +2101,490 @@ const __ma_module_12 = (() => {
   return Object.freeze({ element, button, notice });
 })();
 
-const __ma_module_13 = (() => {
-  const { WORLD_SCHEMA, WORLD_TYPES } = __ma_module_2;
+const __ma_module_18 = (() => {
   const { describeError, fault } = __ma_module_0;
-  const { button, element, notice } = __ma_module_12;
+  const { button, element, notice } = __ma_module_17;
+  class MaintenancePage {
+    constructor(panel) { this.panel = panel; }
+  
+    async render(main) {
+      const settings = this.panel.controller.settings();
+      main.append(
+        this.connection(settings),
+        this.automation(settings),
+        await this.gameTime(),
+        this.importSection(),
+        await this.worldbookTools(),
+        this.diagnostics(),
+        this.resetSection(),
+      );
+    }
+  
+    connection(settings) {
+      const select = element('select', { className: 'ma-select', ariaLabel: '模型连接配置' });
+      select.append(element('option', { value: '', text: '使用SillyTavern当前连接' }));
+      for (const profile of this.panel.host.connectionProfiles()) {
+        const option = element('option', { value: profile.id, text: profile.name });
+        option.selected = profile.id === settings.modelProfileId;
+        select.append(option);
+      }
+      select.addEventListener('change', () => this.panel.controller.saveSettings({ modelProfileId: select.value }));
+      const summary = settings.modelProfileId ? this.panel.host.profileSummary(settings.modelProfileId) : null;
+      const feedback = element('div', { className: 'ma-inline-feedback', text: summary ? `当前：${summary.name}${summary.api ? ` · ${summary.api}` : ''}` : '当前：宿主默认连接' });
+      return section('模型连接', [
+        element('p', { className: 'ma-help', text: '选择连接配置不会切换SillyTavern的全局配置。' }),
+        select,
+        element('div', { className: 'ma-inline-actions' }, [action('测试API', async () => { feedback.textContent = '正在测试连接与固定协议…'; feedback.textContent = await this.panel.controller.testApi(); }), feedback]),
+      ]);
+    }
+  
+    automation(settings) {
+      const body = [];
+      for (const [key, label, detail] of [
+        ['autoAudit', '自动审核', '每轮先检查AI正文'],
+        ['autoExtraction', '自动提取', '把已成立事实写入当前世界书'],
+        ['autoSmallSummary', '自动小总结', '按已关闭场景组顺序整理'],
+        ['autoLargeSummary', '自动大总结', '按已完成场景组阈值整理'],
+        ['autoCreateLorebook', '自动创建世界书', '聊天未绑定时创建并绑定'],
+      ]) body.push(this.toggle(key, label, detail, settings[key]));
+      body.push(this.numberSetting('largeSummaryGroups', '大总结场景组阈值', '完成多少个小总结后运行', settings.largeSummaryGroups, 2, 20));
+      body.push(this.numberSetting('queueCompactThreshold', '队列积压警告', '等待任务达到此数量时提醒', settings.queueCompactThreshold, 1, 40));
+      body.push(this.numberSetting('pageSize', '手记每页条目', '手机端建议8—16条', settings.pageSize, 5, 50));
+      const audit = element('textarea', { className: 'ma-editor ma-small-editor', value: settings.auditPrompt, placeholder: '可选：补充玩家自己的审核规则。固定审核协议仍由插件维护。' });
+      audit.addEventListener('change', () => this.panel.controller.saveSettings({ auditPrompt: audit.value }));
+      body.push(element('label', { className: 'ma-block-setting' }, [element('strong', { text: '自定义审核补充' }), audit]));
+      return section('自动运行', body);
+    }
+  
+    async gameTime() {
+      const current = await this.panel.controller.gameTime();
+      const input = element('input', { className: 'ma-input', value: current, placeholder: '例如：帝国历317年秋，第12日夜间' });
+      const feedback = element('span', { className: 'ma-inline-feedback', text: current ? `当前：${current}` : '尚未设置' });
+      return section('游戏时间锚点', [input, element('div', { className: 'ma-inline-actions' }, [
+        action('保存时间', async () => { await this.panel.controller.setGameTime(input.value); feedback.textContent = input.value.trim() ? '已写入世界书并通过回读' : '已清除'; }),
+        action('清除', async () => { input.value = ''; await this.panel.controller.setGameTime(''); feedback.textContent = '已清除'; }, 'ma-quiet'),
+        feedback,
+      ])]);
+    }
+  
+    importSection() {
+      const textarea = element('textarea', { className: 'ma-import-text', value: this.panel.importText, placeholder: '粘贴世界设定文本；与导入TXT使用同一条AI整理链。' });
+      textarea.addEventListener('input', () => { this.panel.importText = textarea.value; });
+      const file = element('input', { type: 'file', ariaLabel: '选择TXT文件' });
+      file.accept = '.txt,text/plain';
+      file.addEventListener('change', async () => {
+        try {
+          const selected = file.files?.[0];
+          if (selected) { this.panel.importText = await selected.text(); textarea.value = this.panel.importText; this.panel.importFeedback = `已读取 ${selected.name}，可以开始AI整理。`; await this.panel.render(); }
+        } catch (error) { notice(fault('ui', 'TXT_READ', `TXT读取失败：${error.message}`, error)); }
+      });
+      const preview = this.panel.controller.importPreview();
+      const previewButton = action(this.panel.importBusy === 'preview' ? 'AI整理中…' : 'AI整理预览', () => this.importPreview());
+      const commitButton = action(this.panel.importBusy === 'commit' ? '正在写入…' : `确认写入${preview ? ` · ${preview.groups.length}` : ''}`, () => this.importCommit());
+      previewButton.disabled = Boolean(this.panel.importBusy);
+      commitButton.disabled = Boolean(this.panel.importBusy) || !preview;
+      return section('世界设定导入', [
+        element('p', { className: 'ma-help', text: '纯文本与TXT进入同一条AI整理链；确认写入后全部成为基石只读。' }),
+        textarea, file,
+        element('div', { className: 'ma-inline-actions' }, [previewButton, commitButton, button('清空', () => this.clearImport(), 'ma-quiet')]),
+        element('div', { className: `ma-import-status${this.panel.importBusy ? ' is-busy' : ''}`, text: this.panel.importFeedback }),
+        renderImportPreview(preview),
+      ]);
+    }
+  
+    async importPreview() {
+      this.panel.importBusy = 'preview'; this.panel.importFeedback = 'AI正在整理世界设定…'; await this.panel.render();
+      try { const value = await this.panel.controller.previewImport(this.panel.importText); this.panel.importFeedback = `预览完成：${value.groups.length}个对象，写入后均为基石只读。`; }
+      catch (error) { this.panel.importFeedback = `整理失败：${describeError(error)}`; notice(error); }
+      finally { this.panel.importBusy = ''; await this.panel.render(); }
+    }
+  
+    async importCommit() {
+      this.panel.importBusy = 'commit'; this.panel.importFeedback = '正在写入当前世界书…'; await this.panel.render();
+      try { const value = await this.panel.controller.commitImport(); this.panel.importText = ''; this.panel.importFeedback = `写入完成：${value.touchedUids?.length ?? 0}个条目已确认落盘。`; }
+      catch (error) { this.panel.importFeedback = `写入失败：${describeError(error)}`; notice(error); }
+      finally { this.panel.importBusy = ''; await this.panel.render(); }
+    }
+  
+    clearImport() { this.panel.importText = ''; this.panel.importFeedback = '已清空导入内容。'; this.panel.controller.clearImportPreview(); void this.panel.render(); }
+  
+    async worldbookTools() {
+      const overview = await this.panel.controller.overview();
+      const migration = this.panel.controller.migrationPreview();
+      const overviewText = `${overview.managed}管理条目 · ${overview.cornerstone}基石 · ${overview.external}外部 · ${overview.directRelations}直接关联 · ${overview.unresolvedRelations}未解析关联${overview.focus ? ` · 主焦点 ${overview.focus}` : ''}`;
+      const migrationHost = element('div', { className: 'ma-report' });
+      if (migration) migrationHost.append(element('p', { text: `可迁移 ${migration.candidates.length} 条：${migration.candidates.map(item => item.title).join('、') || '无'}` }));
+      return section('世界书维护', [
+        element('p', { className: 'ma-help', text: `${overview.name} · ${overviewText}` }),
+        element('div', { className: 'ma-inline-actions' }, [
+          action('重排原生召回字段', () => this.panel.controller.replanRecall()),
+          action('扫描旧格式', async () => { await this.panel.controller.scanMigration(); await this.panel.render(); }),
+          action('确认迁移', () => this.panel.controller.commitMigration()),
+          action('撤销迁移', () => this.panel.controller.undoMigration(), 'ma-quiet'),
+        ]), migrationHost,
+      ]);
+    }
+  
+    diagnostics() {
+      const reportHost = element('div', { className: 'ma-report' });
+      renderReport(reportHost, this.panel.controller.diagnosticsReport());
+      return section('验收与诊断', [
+        element('p', { className: 'ma-help', text: '显式执行三轮：模型固定协议、世界书权威回读、临时事务写入与回滚。' }),
+        element('div', { className: 'ma-inline-actions' }, [
+          action('运行三轮完整验收', async () => { renderReport(reportHost, await this.panel.controller.runAcceptance()); }),
+          button('导出诊断JSON', () => exportReport(this.panel.controller.diagnosticsReport()), 'ma-quiet'),
+        ]), reportHost,
+      ]);
+    }
+  
+    resetSection() {
+      return section('重置', [element('p', { className: 'ma-help', text: '删除镜渊管理条目并重置插件设置与聊天运行状态；外部原生条目不动。' }), action('重置插件与管理世界书', async () => {
+        if (window.confirm('确认重置镜渊？此操作会删除当前世界书中的镜渊管理条目。')) await this.panel.controller.resetAll();
+      }, 'ma-danger')]);
+    }
+  
+    toggle(key, title, detail, checked) {
+      const input = element('input', { type: 'checkbox', ariaLabel: title });
+      input.checked = checked;
+      input.addEventListener('change', () => this.panel.controller.saveSettings({ [key]: input.checked }));
+      return element('label', { className: 'ma-setting-row' }, [element('span', {}, [element('strong', { text: title }), element('small', { text: detail })]), input]);
+    }
+  
+    numberSetting(key, title, detail, value, min, max) {
+      const input = element('input', { type: 'number', value, className: 'ma-number' });
+      input.min = String(min); input.max = String(max);
+      input.addEventListener('change', () => this.panel.controller.saveSettings({ [key]: Number(input.value) }));
+      return element('label', { className: 'ma-setting-row' }, [element('span', {}, [element('strong', { text: title }), element('small', { text: detail })]), input]);
+    }
+  }
+  
+  function section(title, children) { return element('section', { className: 'ma-section' }, [element('h2', { text: title }), ...children]); }
+  function action(label, task, className = '') { return button(label, async () => { try { await task(); } catch (error) { notice(error); } }, className); }
+  
+  function renderImportPreview(preview) {
+    if (!preview) return null;
+    const host = element('div', { className: 'ma-import-preview' }, [element('h3', { text: `待写入 ${preview.groups.length} 个对象 · 基石只读 ${preview.groups.length}` })]);
+    for (const group of preview.groups) host.append(element('details', { className: 'ma-preview-item' }, [element('summary', { text: `◇ 基石 · ${group.title}` }), element('pre', { text: group.rows.map(row => `【${row.section}】\n- ${row.fact}`).join('\n') })]));
+    return host;
+  }
+  
+  function renderReport(host, report) {
+    host.replaceChildren();
+    if (!report) return;
+    host.append(element('strong', { text: report.passed ? '完整验收通过' : '完整验收存在失败' }));
+    for (const round of report.rounds) for (const check of round.checks) host.append(element('div', { className: `ma-check ${check.passed ? 'is-pass' : 'is-fail'}`, text: `第${round.round}轮 · ${check.passed ? '通过' : '失败'} · ${check.name} · ${check.detail}` }));
+  }
+  
+  function exportReport(report) {
+    if (!report) { notice(fault('ui', 'DIAGNOSTIC_EMPTY', '请先运行完整验收')); return; }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `mirror-abyss-diagnostics-${Date.now()}.json`; anchor.click(); URL.revokeObjectURL(url);
+  }
+  return Object.freeze({ MaintenancePage });
+})();
+
+const __ma_module_19 = (() => {
+  const { WORLD_SCHEMA, WORLD_TYPES } = __ma_module_2;
+  const { fault } = __ma_module_0;
+  const { button, element, notice } = __ma_module_17;
+  class NotesPage {
+    constructor(panel) { this.panel = panel; }
+  
+    async render(main) {
+      const opened = await this.panel.controller.listEntries();
+      this.panel.entryData = opened;
+      const active = opened.managed.filter(entry => !entry.retired);
+      const top = element('section', { className: 'ma-notes-head' }, [
+        element('div', {}, [element('h1', { text: '世界设定集' }), element('small', { text: `${opened.name} · ${active.length}条管理资料` })]),
+        element('div', { className: 'ma-inline-actions' }, [
+          button(this.panel.editing ? '完成' : '管理', () => { this.panel.editing = !this.panel.editing; this.panel.selected.clear(); void this.panel.render(); }, this.panel.editing ? 'is-active' : 'ma-quiet'),
+          button('刷新', () => this.panel.render(), 'ma-quiet'),
+        ]),
+      ]);
+      const search = element('input', { className: 'ma-search', type: 'search', value: this.panel.search, placeholder: '搜索人物、地点、物品、事件或正文' });
+      const listHost = element('div', { className: 'ma-notes-list' });
+      search.addEventListener('input', () => { this.panel.search = search.value; this.panel.pageNumber = 1; void this.renderList(listHost, opened); });
+      const filters = element('div', { className: 'ma-filters' });
+      for (const type of ['全部', ...WORLD_TYPES]) {
+        const count = type === '全部' ? active.length : active.filter(entry => entry.type === type).length;
+        filters.append(button(`${type} ${count}`, () => { this.panel.typeFilter = type; this.panel.pageNumber = 1; void this.renderList(listHost, opened); }, type === this.panel.typeFilter ? 'is-active' : 'ma-chip'));
+      }
+      main.append(top, search, filters, this.manageBar(opened), listHost);
+      await this.renderList(listHost, opened);
+      this.updateSelection();
+    }
+  
+    manageBar(opened) {
+      const cornerstone = button('设为基石', () => this.toggleSelectedCornerstone());
+      this.cornerstoneButton = cornerstone;
+      return element('div', { className: `ma-manage-bar ${this.panel.editing ? '' : 'is-hidden'}` }, [
+        element('span', { className: 'ma-selection-status', text: '选择条目后执行批量操作' }),
+        cornerstone,
+        button('＋ 文件夹', () => this.createFolder(opened.name)),
+        button('小总结', () => this.runSelectedSummary('small')),
+        button('大总结', () => this.runSelectedSummary('large')),
+        button('手动合并', () => this.runSelectedSummary('merge')),
+        button('重排召回', () => this.safe(() => this.panel.controller.replanRecall())),
+        button('删除条目', () => this.deleteSelected(), 'ma-danger'),
+      ]);
+    }
+  
+    async renderList(host, opened) {
+      host.replaceChildren();
+      const layout = this.layout(opened.name);
+      const query = this.panel.search.trim().toLocaleLowerCase();
+      let entries = opened.managed.filter(entry => !entry.retired)
+        .filter(entry => this.panel.typeFilter === '全部' || entry.type === this.panel.typeFilter)
+        .filter(entry => !query || `${entry.title}\n${entry.content}`.toLocaleLowerCase().includes(query));
+      entries.sort((left, right) => orderOf(layout, left.uid) - orderOf(layout, right.uid) || Number(left.uid) - Number(right.uid));
+      const pageSize = this.panel.controller.settings().pageSize || 12;
+      const pages = Math.max(1, Math.ceil(entries.length / pageSize));
+      const highlighted = entries.findIndex(entry => entry.uid === this.panel.highlightUid);
+      if (highlighted >= 0) this.panel.pageNumber = Math.floor(highlighted / pageSize) + 1;
+      this.panel.pageNumber = Math.min(this.panel.pageNumber, pages);
+      entries = entries.slice((this.panel.pageNumber - 1) * pageSize, this.panel.pageNumber * pageSize);
+      const folders = [{ id: 'default', name: '默认分类' }, ...layout.folders];
+      for (let index = 0; index < folders.length; index += 1) {
+        const folder = folders[index];
+        const inFolder = entries.filter(entry => (layout.assignments[entry.uid] || 'default') === folder.id);
+        if (!inFolder.length && !this.panel.editing) continue;
+        host.append(this.folderSection(opened.name, folder, folders, index, inFolder, layout));
+      }
+      host.append(this.pagination(pages));
+      if (opened.external.length) host.append(element('p', { className: 'ma-help', text: `另有${opened.external.length}个外部原生条目；镜渊不会自动修改。` }));
+    }
+  
+    folderSection(worldbookName, folder, folders, index, entries, layout) {
+      const section = element('section', { className: 'ma-folder' });
+      const collapsed = layout.collapsed.includes(folder.id);
+      const actions = [];
+      if (this.panel.editing && folder.id !== 'default') {
+        actions.push(button('↑', () => this.moveFolder(worldbookName, folder.id, -1), 'ma-mini'));
+        actions.push(button('↓', () => this.moveFolder(worldbookName, folder.id, 1), 'ma-mini'));
+        actions.push(button('改名', () => this.renameFolder(worldbookName, folder.id), 'ma-mini'));
+        actions.push(button('删除', () => this.removeFolder(worldbookName, folder.id), 'ma-mini ma-danger'));
+      }
+      section.append(element('div', { className: 'ma-folder-head' }, [
+        button(collapsed ? '›' : '⌄', () => this.toggleFolder(worldbookName, folder.id), 'ma-mini ma-quiet'),
+        element('h2', { text: folder.name }), element('span', { text: `${entries.length} 条` }), ...actions,
+      ]));
+      if (!collapsed) {
+        entries.forEach((entry, entryIndex) => section.append(this.entryRow(worldbookName, entry, folders, layout, entryIndex, entries.length)));
+        if (!entries.length) section.append(element('p', { className: 'ma-empty', text: '此文件夹暂无条目' }));
+      }
+      return section;
+    }
+  
+    entryRow(worldbookName, entry, folders, layout, index, count) {
+      const details = element('details', { className: `ma-entry${entry.uid === this.panel.highlightUid ? ' is-highlighted' : ''}` });
+      if (entry.uid === this.panel.highlightUid) details.open = true;
+      const summary = element('summary', { className: 'ma-entry-head' });
+      if (this.panel.editing) summary.append(this.selection(entry));
+      summary.append(
+        element('span', { className: 'ma-type-icon', text: WORLD_SCHEMA[entry.type].icon }),
+        element('span', { className: 'ma-entry-copy' }, [
+          element('strong', { text: entry.name }),
+          element('small', { text: `${entry.type} · ${entry.cornerstone ? '基石只读' : '可更新'}${entry.focus ? ' · 主焦点' : ''}` }),
+          badgeRow(entry.badges),
+        ]),
+      );
+      if (this.panel.editing) summary.append(this.entryActions(worldbookName, entry, folders, layout, index, count));
+      const content = element('div', { className: 'ma-entry-content' }, [element('pre', { text: entry.content })]);
+      if (entry.related?.length) content.append(this.related(entry.related));
+      if (this.panel.editing) {
+        if (entry.cornerstone) content.append(element('small', { text: '基石只读' }));
+        else content.append(button('编辑正文', () => this.editEntry(content, entry), 'ma-quiet'));
+      }
+      details.append(summary, content);
+      return details;
+    }
+  
+    selection(entry) {
+      const check = element('input', { type: 'checkbox', ariaLabel: `选择${entry.title}` });
+      check.checked = this.panel.selected.has(entry.uid);
+      check.addEventListener('click', event => event.stopPropagation());
+      check.addEventListener('change', () => { check.checked ? this.panel.selected.add(entry.uid) : this.panel.selected.delete(entry.uid); this.updateSelection(); });
+      return check;
+    }
+  
+    entryActions(worldbookName, entry, folders, layout, index, count) {
+      const actions = element('span', { className: 'ma-entry-actions' });
+      actions.append(button('↑', event => stop(event, () => this.moveEntry(worldbookName, entry.uid, -1)), 'ma-mini'));
+      actions.append(button('↓', event => stop(event, () => this.moveEntry(worldbookName, entry.uid, 1)), 'ma-mini'));
+      actions.append(button(entry.cornerstone ? '解除基石' : '基石锁', event => stop(event, () => this.safe(() => this.panel.controller.setCornerstone([entry.uid], !entry.cornerstone))), `ma-mini ${entry.cornerstone ? 'is-active' : ''}`));
+      if (entry.type === '人物') actions.append(button(entry.focus ? '解除焦点' : '主焦点', event => stop(event, () => this.safe(() => this.panel.controller.setFocus(entry.uid, !entry.focus))), `ma-mini ${entry.focus ? 'is-active' : ''}`));
+      const select = element('select', { className: 'ma-folder-select', ariaLabel: '移动到文件夹' });
+      for (const folder of folders) {
+        const option = element('option', { text: folder.name, value: folder.id });
+        option.selected = (layout.assignments[entry.uid] || 'default') === folder.id;
+        select.append(option);
+      }
+      select.addEventListener('click', event => event.stopPropagation());
+      select.addEventListener('change', () => this.assignFolder(worldbookName, entry.uid, select.value));
+      actions.append(select);
+      return actions;
+    }
+  
+    related(relations) {
+      const row = element('div', { className: 'ma-relations' }, [element('strong', { text: '直接关联' })]);
+      for (const relation of relations) row.append(button(`【${relation.title}】`, () => this.panel.showEntry(relation.uid), 'ma-mini ma-quiet'));
+      return row;
+    }
+  
+    pagination(pages) {
+      if (pages <= 1) return null;
+      const current = this.panel.pageNumber;
+      const previous = button('上一页', () => { this.panel.pageNumber -= 1; void this.panel.render(); }, 'ma-quiet');
+      const next = button('下一页', () => { this.panel.pageNumber += 1; void this.panel.render(); }, 'ma-quiet');
+      previous.disabled = current <= 1; next.disabled = current >= pages;
+      return element('nav', { className: 'ma-pagination' }, [previous, element('span', { text: `${current} / ${pages}` }), next]);
+    }
+  
+    editEntry(container, entry) {
+      const textarea = element('textarea', { className: 'ma-editor', value: entry.content });
+      container.replaceChildren(textarea, element('div', { className: 'ma-inline-actions' }, [
+        button('保存', () => this.safe(() => this.panel.controller.updateEntry(entry.uid, textarea.value))),
+        button('取消', () => this.panel.render(), 'ma-quiet'),
+      ]));
+    }
+  
+    layout(worldbookName) {
+      const current = this.panel.controller.settings().foldersByWorldbook?.[worldbookName];
+      return current && typeof current === 'object' ? {
+        folders: Array.isArray(current.folders) ? [...current.folders] : [],
+        assignments: { ...(current.assignments ?? {}) },
+        collapsed: Array.isArray(current.collapsed) ? [...current.collapsed] : [],
+        entryOrder: Array.isArray(current.entryOrder) ? [...current.entryOrder] : [],
+      } : { folders: [], assignments: {}, collapsed: [], entryOrder: [] };
+    }
+  
+    saveLayout(worldbookName, layout) {
+      const settings = this.panel.controller.settings();
+      this.panel.controller.saveSettings({ foldersByWorldbook: { ...settings.foldersByWorldbook, [worldbookName]: layout } });
+      void this.panel.render();
+    }
+  
+    createFolder(name) { const value = window.prompt('新建文件夹名称')?.trim(); if (!value) return; const layout = this.layout(name); layout.folders.push({ id: `folder-${Date.now().toString(36)}`, name: value }); this.saveLayout(name, layout); }
+    renameFolder(name, id) { const layout = this.layout(name); const folder = layout.folders.find(item => item.id === id); const value = window.prompt('文件夹新名称', folder?.name)?.trim(); if (folder && value) { folder.name = value; this.saveLayout(name, layout); } }
+    removeFolder(name, id) { const layout = this.layout(name); layout.folders = layout.folders.filter(item => item.id !== id); layout.collapsed = layout.collapsed.filter(value => value !== id); for (const uid of Object.keys(layout.assignments)) if (layout.assignments[uid] === id) delete layout.assignments[uid]; this.saveLayout(name, layout); }
+    assignFolder(name, uid, id) { const layout = this.layout(name); if (id === 'default') delete layout.assignments[uid]; else layout.assignments[uid] = id; this.saveLayout(name, layout); }
+    toggleFolder(name, id) { const layout = this.layout(name); layout.collapsed = layout.collapsed.includes(id) ? layout.collapsed.filter(value => value !== id) : [...layout.collapsed, id]; this.saveLayout(name, layout); }
+    moveFolder(name, id, delta) { const layout = this.layout(name); move(layout.folders, layout.folders.findIndex(item => item.id === id), delta); this.saveLayout(name, layout); }
+    moveEntry(name, uid, delta) {
+      const layout = this.layout(name);
+      const all = this.panel.entryData.managed.filter(entry => !entry.retired).map(entry => entry.uid);
+      layout.entryOrder = [...new Set([...layout.entryOrder, ...all])];
+      const folder = layout.assignments[uid] || 'default';
+      const peers = layout.entryOrder.filter(value => (layout.assignments[value] || 'default') === folder);
+      const index = peers.indexOf(uid);
+      const target = peers[index + delta];
+      if (target) {
+        const left = layout.entryOrder.indexOf(uid);
+        const right = layout.entryOrder.indexOf(target);
+        [layout.entryOrder[left], layout.entryOrder[right]] = [layout.entryOrder[right], layout.entryOrder[left]];
+      }
+      this.saveLayout(name, layout);
+    }
+  
+    updateSelection() {
+      if (!this.cornerstoneButton || !this.panel.entryData) return;
+      const selected = this.panel.entryData.managed.filter(entry => this.panel.selected.has(entry.uid));
+      const unlock = selected.length > 0 && selected.every(entry => entry.cornerstone);
+      this.cornerstoneButton.textContent = unlock ? '解除基石' : '设为基石';
+      this.cornerstoneButton.disabled = selected.length === 0;
+      const status = this.cornerstoneButton.parentElement?.querySelector('.ma-selection-status');
+      if (status) status.textContent = selected.length ? `已选择 ${selected.length} 条` : '选择条目后执行批量操作';
+    }
+  
+    async toggleSelectedCornerstone() { const selected = this.selectedEntries(); const locked = !selected.every(entry => entry.cornerstone); await this.safe(() => this.panel.controller.setCornerstone(selected.map(entry => entry.uid), locked)); this.panel.selected.clear(); }
+    async runSelectedSummary(kind) { const selected = this.selectedEntries(); const requirement = kind === 'merge' ? window.prompt('可选：填写人工合并要求', '') ?? '' : ''; await this.safe(() => this.panel.controller.summarize(kind, selected.map(entry => entry.uid), requirement)); this.panel.selected.clear(); }
+    async deleteSelected() { const selected = this.selectedEntries(); if (window.confirm(`确认删除选中的${selected.length}个条目？`)) { await this.safe(() => this.panel.controller.deleteEntries(selected.map(entry => entry.uid))); this.panel.selected.clear(); } }
+    selectedEntries() { const selected = this.panel.entryData.managed.filter(entry => this.panel.selected.has(entry.uid)); if (!selected.length) throw fault('ui', 'SELECTION_EMPTY', '请先选择条目'); return selected; }
+    async safe(task) { try { const result = await task(); await this.panel.render(); return result; } catch (error) { notice(error); return null; } }
+  }
+  
+  function badgeRow(badges) { if (!badges?.length) return null; return element('span', { className: 'ma-badges' }, badges.map(value => element('i', { text: value }))); }
+  function orderOf(layout, uid) { const index = layout.entryOrder.indexOf(uid); return index < 0 ? Number.MAX_SAFE_INTEGER : index; }
+  function move(array, index, delta) { const target = index + delta; if (index < 0 || target < 0 || target >= array.length) return; [array[index], array[target]] = [array[target], array[index]]; }
+  function stop(event, task) { event.preventDefault(); event.stopPropagation(); task(); }
+  return Object.freeze({ NotesPage });
+})();
+
+const __ma_module_20 = (() => {
+  const { button, element, notice } = __ma_module_17;
+  class RunPage {
+    constructor(panel) { this.panel = panel; }
+  
+    render(main) {
+      const { controller, host } = this.panel;
+      const state = host.state();
+      const queue = controller.queueStatus();
+      const settings = controller.settings();
+      const pending = queue.pending.length;
+      const queueText = queue.active ? `正在执行 · ${queue.active.label}${pending ? ` · 等待${pending}项` : ''}` : pending ? `等待${pending}项` : '队列空闲';
+      const queueClass = pending >= settings.queueCompactThreshold ? ' is-warning' : '';
+      main.append(
+        element('section', { className: 'ma-scene-strip' }, [
+          element('span', { text: state.currentScene ? `当前场景 · ${state.currentScene}` : '当前场景 · 未识别' }),
+          element('span', { text: host.worldbookName() ? `世界书 · ${host.worldbookName()}` : '世界书 · 未绑定' }),
+        ]),
+        section('当前正文', element('div', { className: 'ma-action-grid' }, [
+          action('完整处理当前正文', () => controller.process('full')),
+          action('仅审核', () => controller.process('audit')),
+          action('仅提取', () => controller.process('extract')),
+          action('取消当前与等待任务', () => controller.cancel(), 'ma-danger'),
+        ])),
+        section('总结', element('div', { className: 'ma-action-grid' }, [
+          action('立即小总结', () => controller.summarize('small')),
+          action('立即大总结', () => controller.summarize('large')),
+          action('重试上次失败', () => controller.retryLast()),
+        ])),
+        section('任务与状态', [
+          element('div', { className: `ma-queue${queueClass}`, text: queueText }),
+          element('div', { className: `ma-status is-${state.status?.phase || 'idle'}`, text: state.status?.detail || '等待处理' }),
+          state.lastWrite ? element('p', { className: 'ma-write-receipt', text: `已确认落盘 · ${state.lastWrite.created}新增 · ${state.lastWrite.updated}更新 · ${state.lastWrite.touchedUids?.length ?? 0}个UID` }) : null,
+          renderStages(state),
+        ]),
+        renderFailures(controller, state.summaryFailures ?? []),
+      );
+    }
+  }
+  
+  function section(title, body) { return element('section', { className: 'ma-section' }, [element('h2', { text: title }), ...(Array.isArray(body) ? body : [body])]); }
+  
+  function action(label, task, className = '') {
+    return button(label, async () => { try { await task(); } catch (error) { notice(error); } }, className);
+  }
+  
+  function renderStages(state) {
+    const stages = state.messageStates?.[state.status?.messageIndex]?.stages;
+    if (!stages) return null;
+    const host = element('div', { className: 'ma-stage-list' });
+    for (const [key, label] of [['audit', '审核'], ['revision', '修正'], ['extract', '提取'], ['write', '写入']]) {
+      const stage = stages[key];
+      host.append(element('span', { className: `is-${stage?.state ?? 'idle'}`, text: `${label} · ${stage?.detail ?? '未运行'}` }));
+    }
+    return host;
+  }
+  
+  function renderFailures(controller, failures) {
+    if (!failures.length) return null;
+    const body = element('div', { className: 'ma-failure-list' });
+    for (const failure of failures) body.append(element('div', { className: 'ma-failure' }, [
+      element('span', {}, [element('strong', { text: `${failure.kind === 'large' ? '大' : '小'}总结 · ${failure.scene}` }), element('small', { text: failure.reason })]),
+      action('重试', () => controller.retrySummaryFailure(failure.id)),
+    ]));
+    return section('整理失败', body);
+  }
+  return Object.freeze({ RunPage });
+})();
+
+const __ma_module_21 = (() => {
+  const { describeError } = __ma_module_0;
+  const { button, element } = __ma_module_17;
+  const { MaintenancePage } = __ma_module_18;
+  const { NotesPage } = __ma_module_19;
+  const { RunPage } = __ma_module_20;
   const ROOT_ID = 'mirror-abyss-clean-root';
   
   class MirrorAbyssPanel {
@@ -1486,9 +2598,15 @@ const __ma_module_13 = (() => {
       this.typeFilter = '全部';
       this.selected = new Set();
       this.entryData = null;
+      this.pageNumber = 1;
+      this.highlightUid = '';
       this.importText = '';
       this.importBusy = '';
       this.importFeedback = '粘贴文本或选择TXT，然后由AI整理预览。';
+      this.maintenanceFeedback = '';
+      this.runPage = new RunPage(this);
+      this.notesPage = new NotesPage(this);
+      this.maintenancePage = new MaintenancePage(this);
       this.boundRefresh = () => void this.refresh();
     }
   
@@ -1496,18 +2614,22 @@ const __ma_module_13 = (() => {
       if (document.getElementById(ROOT_ID)) return;
       this.root = element('div', { className: 'ma-root' });
       this.root.id = ROOT_ID;
-      this.launcher = button('渊', () => this.open(), 'ma-launcher');
+      this.launcher = button('渊', () => {
+        if (this.draggedLauncher) { this.draggedLauncher = false; return; }
+        this.open();
+      }, 'ma-launcher');
       this.launcher.title = '打开镜渊';
+      this.restoreLauncherPosition();
+      this.bindLauncherDrag();
       this.panel = element('section', { className: 'ma-panel', ariaLabel: '镜渊控制面板' });
       this.panel.hidden = true;
       this.root.append(this.launcher, this.panel);
       document.body.append(this.root);
-      for (const type of ['refresh', 'status', 'settings', 'import-preview']) this.controller.addEventListener(type, this.boundRefresh);
-      void this.render();
+      for (const type of ['refresh', 'status', 'settings', 'import-preview', 'queue']) this.controller.addEventListener(type, this.boundRefresh);
     }
   
     unmount() {
-      for (const type of ['refresh', 'status', 'settings', 'import-preview']) this.controller.removeEventListener(type, this.boundRefresh);
+      for (const type of ['refresh', 'status', 'settings', 'import-preview', 'queue']) this.controller.removeEventListener(type, this.boundRefresh);
       document.documentElement.classList.remove('ma-panel-open');
       this.root?.remove();
     }
@@ -1526,10 +2648,7 @@ const __ma_module_13 = (() => {
       document.documentElement.classList.remove('ma-panel-open');
     }
   
-    async refresh() {
-      if (!this.opened) return;
-      await this.render();
-    }
+    async refresh() { if (this.opened) await this.render(); }
   
     async render() {
       if (!this.panel) return;
@@ -1550,356 +2669,67 @@ const __ma_module_13 = (() => {
         if (this.page === 'run') await this.renderRun(main);
         else if (this.page === 'notes') await this.renderNotes(main);
         else await this.renderMaintenance(main);
-      } catch (error) {
-        main.append(element('div', { className: 'ma-error', text: describeError(error) }));
-      }
+      } catch (error) { main.append(element('div', { className: 'ma-error', text: describeError(error) })); }
     }
   
-    async renderRun(main) {
-      const state = this.host.state();
-      main.append(
-        element('section', { className: 'ma-scene-strip' }, [
-          element('span', { text: state.currentScene ? `当前场景 · ${state.currentScene}` : '当前场景 · 未识别' }),
-          element('span', { text: `${state.currentGroupFacts || 0} 条待整理事实` }),
-        ]),
-        element('section', { className: 'ma-section' }, [
-          element('h2', { text: '当前正文' }),
-          element('div', { className: 'ma-action-grid' }, [
-            this.action('完整处理当前正文', () => this.controller.process('full')),
-            this.action('仅审核', () => this.controller.process('audit')),
-            this.action('仅提取', () => this.controller.process('extract')),
-            this.action('取消当前任务', () => this.controller.cancel(), 'ma-danger'),
-          ]),
-        ]),
-        element('section', { className: 'ma-section' }, [
-          element('h2', { text: '总结' }),
-          element('p', { className: 'ma-help', text: '小总结整理当前场景批次；大总结整理已完成的小总结结果。' }),
-          element('div', { className: 'ma-action-grid' }, [
-            this.action('立即小总结', () => this.controller.summarize('small')),
-            this.action('立即大总结', () => this.controller.summarize('large')),
-            this.action('重试上次失败', () => this.controller.retryLast()),
-          ]),
-        ]),
-        element('section', { className: 'ma-section' }, [
-          element('h2', { text: '运行状态' }),
-          element('div', { className: `ma-status is-${state.status?.phase || 'idle'}`, text: state.status?.detail || '等待处理' }),
-        ]),
-      );
+    renderRun(main) { return this.runPage.render(main); }
+    renderNotes(main) { return this.notesPage.render(main); }
+    renderMaintenance(main) { return this.maintenancePage.render(main); }
+  
+    showEntry(uid) {
+      this.page = 'notes';
+      this.search = '';
+      this.typeFilter = '全部';
+      this.highlightUid = String(uid);
+      this.open('notes');
     }
   
-    async renderNotes(main) {
-      const opened = await this.controller.listEntries();
-      this.entryData = opened;
-      const top = element('section', { className: 'ma-notes-head' }, [
-        element('div', {}, [element('h1', { text: '世界设定集' }), element('small', { text: `${opened.managed.filter(entry => !entry.retired).length} 条管理资料` })]),
-        element('div', { className: 'ma-inline-actions' }, [
-          button(this.editing ? '完成' : '修改', () => { this.editing = !this.editing; this.selected.clear(); void this.render(); }, this.editing ? 'is-active' : 'ma-quiet'),
-          button('刷新', () => this.render(), 'ma-quiet'),
-        ]),
-      ]);
-      const search = element('input', { className: 'ma-search', type: 'search', value: this.search, placeholder: '搜索人物、地点、物品、事件或正文' });
-      search.addEventListener('input', () => { this.search = search.value; void this.renderNotesList(listHost, opened); });
-      const filters = element('div', { className: 'ma-filters' });
-      for (const type of ['全部', ...WORLD_TYPES]) {
-        const count = type === '全部' ? opened.managed.filter(entry => !entry.retired).length : opened.managed.filter(entry => !entry.retired && entry.type === type).length;
-        filters.append(button(`${type} ${count}`, () => { this.typeFilter = type; void this.renderNotesList(listHost, opened); }, type === this.typeFilter ? 'is-active' : 'ma-chip'));
-      }
-      const toolbar = element('div', { className: `ma-manage-bar ${this.editing ? '' : 'is-hidden'}` }, [
-        button('＋ 文件夹', () => this.createFolder(opened.name)),
-        button('小总结', () => this.runSelectedSummary('small')),
-        button('大总结', () => this.runSelectedSummary('large')),
-        button('手动合并', () => this.runSelectedSummary('merge')),
-        button('删除条目', () => this.deleteSelected(), 'ma-danger'),
-      ]);
-      const listHost = element('div', { className: 'ma-notes-list' });
-      main.append(top, search, filters, toolbar, listHost);
-      await this.renderNotesList(listHost, opened);
-    }
-  
-    async renderNotesList(host, opened) {
-      host.replaceChildren();
-      const layout = this.folderLayout(opened.name);
-      const query = this.search.trim().toLocaleLowerCase();
-      const entries = opened.managed.filter(entry => !entry.retired)
-        .filter(entry => this.typeFilter === '全部' || entry.type === this.typeFilter)
-        .filter(entry => !query || `${entry.title}\n${entry.content}`.toLocaleLowerCase().includes(query));
-      const folders = [{ id: 'default', name: '默认分类' }, ...layout.folders];
-      for (const folder of folders) {
-        const inFolder = entries.filter(entry => (layout.assignments[entry.uid] || 'default') === folder.id);
-        if (!inFolder.length && folder.id === 'default' && entries.length) continue;
-        const section = element('section', { className: 'ma-folder' });
-        const headActions = [];
-        if (this.editing && folder.id !== 'default') {
-          headActions.push(button('重命名', () => this.renameFolder(opened.name, folder.id), 'ma-mini'));
-          headActions.push(button('删除', () => this.removeFolder(opened.name, folder.id), 'ma-mini ma-danger'));
-        }
-        section.append(element('div', { className: 'ma-folder-head' }, [
-          element('h2', { text: folder.name }),
-          element('span', { text: `${inFolder.length} 条` }),
-          ...headActions,
-        ]));
-        for (const entry of inFolder) section.append(this.entryRow(opened.name, entry, folders, layout));
-        if (!inFolder.length) section.append(element('p', { className: 'ma-empty', text: '此文件夹暂无条目' }));
-        host.append(section);
-      }
-      if (opened.external.length) host.append(element('p', { className: 'ma-help', text: `${opened.external.length}个原生条目不属于镜渊模板，保持只读且不会被自动修改。` }));
-    }
-  
-    entryRow(worldbookName, entry, folders, layout) {
-      const details = element('details', { className: 'ma-entry' });
-      const summary = element('summary', { className: 'ma-entry-head' });
-      if (this.editing) {
-        const check = element('input', { type: 'checkbox', ariaLabel: `选择${entry.title}` });
-        check.checked = this.selected.has(entry.uid);
-        check.addEventListener('click', event => event.stopPropagation());
-        check.addEventListener('change', () => check.checked ? this.selected.add(entry.uid) : this.selected.delete(entry.uid));
-        summary.append(check);
-      }
-      summary.append(
-        element('span', { className: 'ma-type-icon', text: WORLD_SCHEMA[entry.type].icon }),
-        element('strong', { text: entry.name }),
-        element('small', { text: entry.type === '基础设定' ? '基础设定 · 基石' : entry.type }),
-      );
-      if (this.editing) {
-        const select = element('select', { className: 'ma-folder-select', ariaLabel: '移动到文件夹' });
-        for (const folder of folders) {
-          const option = element('option', { text: folder.name, value: folder.id });
-          option.selected = (layout.assignments[entry.uid] || 'default') === folder.id;
-          select.append(option);
-        }
-        select.addEventListener('click', event => event.stopPropagation());
-        select.addEventListener('change', () => this.assignFolder(worldbookName, entry.uid, select.value));
-        summary.append(select);
-      }
-      const content = element('div', { className: 'ma-entry-content' });
-      const pre = element('pre', { text: entry.content });
-      content.append(pre);
-      if (this.editing) content.append(button('编辑正文', () => this.editEntry(content, entry), 'ma-quiet'));
-      details.append(summary, content);
-      return details;
-    }
-  
-    editEntry(container, entry) {
-      const textarea = element('textarea', { className: 'ma-editor', value: entry.content });
-      const actions = element('div', { className: 'ma-inline-actions' }, [
-        button('保存', async () => {
-          try { await this.controller.updateEntry(entry.uid, textarea.value); } catch (error) { notice(error); }
-        }),
-        button('取消', () => void this.render(), 'ma-quiet'),
-      ]);
-      container.replaceChildren(textarea, actions);
-    }
-  
-    async renderMaintenance(main) {
-      const settings = this.controller.settings();
-      const automation = element('section', { className: 'ma-section' }, [element('h2', { text: '自动运行' })]);
-      for (const [key, label, detail] of [
-        ['autoAudit', '自动审核', '每轮先检查AI正文'],
-        ['autoExtraction', '自动提取', '把已成立事实写入当前世界书'],
-        ['autoSmallSummary', '自动小总结', '按已关闭场景组顺序整理'],
-        ['autoLargeSummary', '自动大总结', '按已完成场景组阈值整理'],
-        ['autoCreateLorebook', '自动创建世界书', '聊天未绑定时创建并绑定'],
-      ]) automation.append(this.toggle(key, label, detail, settings[key]));
-  
-      const threshold = element('input', { type: 'number', value: settings.largeSummaryGroups, className: 'ma-number' });
-      threshold.min = '2'; threshold.max = '20';
-      threshold.addEventListener('change', () => this.controller.saveSettings({ largeSummaryGroups: Number(threshold.value) }));
-      automation.append(element('label', { className: 'ma-setting-row' }, [
-        element('span', {}, [element('strong', { text: '大总结场景组阈值' }), element('small', { text: '完成多少个小总结后运行' })]), threshold,
-      ]));
-  
-      const importSection = element('section', { className: 'ma-section' }, [element('h2', { text: '世界设定导入' })]);
-      const textarea = element('textarea', { className: 'ma-import-text', value: this.importText, placeholder: '粘贴世界设定文本；与导入TXT使用同一条AI整理链。' });
-      textarea.addEventListener('input', () => { this.importText = textarea.value; });
-      const file = element('input', { type: 'file', ariaLabel: '选择TXT文件' });
-      file.accept = '.txt,text/plain';
-      file.addEventListener('change', async () => {
-        try {
-          const selected = file.files?.[0];
-          if (selected) {
-            this.importText = await selected.text();
-            textarea.value = this.importText;
-            this.importFeedback = `已读取 ${selected.name}，可以开始AI整理。`;
-            await this.render();
-          }
-        } catch (error) {
-          notice(fault('ui', 'TXT_READ', `TXT读取失败：${error.message}`, error));
-        }
+    bindLauncherDrag() {
+      let drag = null;
+      this.launcher.addEventListener('pointerdown', event => {
+        drag = { x: event.clientX, y: event.clientY, left: this.launcher.offsetLeft, top: this.launcher.offsetTop, moved: false };
+        this.launcher.setPointerCapture?.(event.pointerId);
       });
-      const previewHost = element('div', { className: 'ma-import-preview' });
-      const preview = this.controller.importPreview();
-      const previewButton = button(this.importBusy === 'preview' ? 'AI整理中…' : 'AI整理预览', async () => {
-        this.importBusy = 'preview';
-        this.importFeedback = 'AI正在整理世界设定并识别基石条目…';
-        await this.render();
-        try {
-          const result = await this.controller.previewImport(this.importText);
-          const locked = result.groups.filter(group => group.type === '基础设定').length;
-          this.importFeedback = `预览完成：${result.groups.length}个对象，其中${locked}个带基石锁。`;
-        } catch (error) {
-          this.importFeedback = `整理失败：${describeError(error)}`;
-          notice(error);
-        } finally {
-          this.importBusy = '';
-          await this.render();
+      this.launcher.addEventListener('pointermove', event => {
+        if (!drag) return;
+        const dx = event.clientX - drag.x;
+        const dy = event.clientY - drag.y;
+        if (Math.abs(dx) + Math.abs(dy) < 5) return;
+        drag.moved = true;
+        const x = Math.max(0, Math.min(window.innerWidth - this.launcher.offsetWidth, drag.left + dx));
+        const y = Math.max(0, Math.min(window.innerHeight - this.launcher.offsetHeight, drag.top + dy));
+        Object.assign(this.launcher.style, { left: `${x}px`, top: `${y}px`, right: 'auto', bottom: 'auto' });
+      });
+      this.launcher.addEventListener('pointerup', event => {
+        if (!drag) return;
+        if (drag.moved) {
+          event.preventDefault();
+          this.draggedLauncher = true;
+          this.controller.saveSettings({ launcherPosition: { x: this.launcher.offsetLeft, y: this.launcher.offsetTop } });
         }
+        drag = null;
       });
-      const commitButton = button(this.importBusy === 'commit' ? '正在写入…' : `确认写入${preview ? ` · ${preview.groups.length}` : ''}`, async () => {
-        this.importBusy = 'commit';
-        this.importFeedback = '正在把预览结果写入当前世界书…';
-        await this.render();
-        try {
-          const result = await this.controller.commitImport();
-          this.importText = '';
-          this.importFeedback = `写入完成：更新${result.touchedUids?.length ?? 0}个世界书条目。`;
-        } catch (error) {
-          this.importFeedback = `写入失败：${describeError(error)}`;
-          notice(error);
-        } finally {
-          this.importBusy = '';
-          await this.render();
-        }
-      });
-      previewButton.disabled = Boolean(this.importBusy);
-      commitButton.disabled = Boolean(this.importBusy) || !preview;
-      const importActions = element('div', { className: 'ma-inline-actions' }, [
-        previewButton,
-        commitButton,
-        button('清空', () => {
-          this.importText = '';
-          this.importFeedback = '已清空导入内容。';
-          this.controller.clearImportPreview();
-          void this.render();
-        }, 'ma-quiet'),
-      ]);
-      const importStatus = element('div', {
-        className: `ma-import-status${this.importBusy ? ' is-busy' : ''}`,
-        text: this.importFeedback,
-      });
-      importSection.append(textarea, file, importActions, importStatus, previewHost);
-      this.renderImportPreview(previewHost);
-  
-      const diagnostics = element('section', { className: 'ma-section' }, [element('h2', { text: '维护' })]);
-      const report = element('div', { className: 'ma-report' });
-      diagnostics.append(element('div', { className: 'ma-inline-actions' }, [
-        button('运行诊断', async () => {
-          try {
-            const checks = await this.controller.diagnostics();
-            report.replaceChildren(...checks.map(check => element('div', { className: `ma-check ${check.passed ? 'is-pass' : 'is-fail'}`, text: `${check.passed ? '通过' : '失败'} · ${check.name} · ${check.detail}` })));
-          } catch (error) { notice(error); }
-        }),
-        button('重置运行状态', async () => { try { await this.controller.resetOperationalState(); } catch (error) { notice(error); } }, 'ma-danger'),
-      ]), report);
-      main.append(automation, importSection, diagnostics);
     }
   
-    renderImportPreview(host) {
-      const preview = this.controller.importPreview();
-      if (!preview) return;
-      const locked = preview.groups.filter(group => group.type === '基础设定').length;
-      host.replaceChildren(element('h3', { text: `待写入 ${preview.groups.length} 个对象 · 基石锁 ${locked}` }));
-      for (const group of preview.groups) {
-        host.append(element('details', { className: 'ma-preview-item' }, [
-          element('summary', { text: `${group.type === '基础设定' ? '◇ 基石 · ' : ''}${group.title}` }),
-          element('pre', { text: group.rows.map(row => `【${row.section}】\n- ${row.fact}`).join('\n') }),
-        ]));
-      }
-    }
-  
-    toggle(key, title, detail, checked) {
-      const input = element('input', { type: 'checkbox', ariaLabel: title });
-      input.checked = checked;
-      input.addEventListener('change', () => this.controller.saveSettings({ [key]: input.checked }));
-      return element('label', { className: 'ma-setting-row' }, [
-        element('span', {}, [element('strong', { text: title }), element('small', { text: detail })]), input,
-      ]);
-    }
-  
-    action(label, task, className = '') {
-      return button(label, async () => {
-        try { await task(); } catch (error) { notice(error); }
-      }, className);
-    }
-  
-    folderLayout(worldbookName) {
-      const settings = this.controller.settings();
-      const current = settings.foldersByWorldbook?.[worldbookName];
-      return current && typeof current === 'object'
-        ? { folders: Array.isArray(current.folders) ? current.folders : [], assignments: current.assignments ?? {} }
-        : { folders: [], assignments: {} };
-    }
-  
-    saveFolderLayout(worldbookName, layout) {
-      const settings = this.controller.settings();
-      this.controller.saveSettings({ foldersByWorldbook: { ...settings.foldersByWorldbook, [worldbookName]: layout } });
-      void this.render();
-    }
-  
-    createFolder(worldbookName) {
-      const name = window.prompt('新建文件夹名称')?.trim();
-      if (!name) return;
-      const layout = this.folderLayout(worldbookName);
-      const id = `folder-${Date.now().toString(36)}`;
-      layout.folders.push({ id, name });
-      this.saveFolderLayout(worldbookName, layout);
-    }
-  
-    renameFolder(worldbookName, id) {
-      const layout = this.folderLayout(worldbookName);
-      const folder = layout.folders.find(item => item.id === id);
-      if (!folder) return;
-      const name = window.prompt('文件夹新名称', folder.name)?.trim();
-      if (!name) return;
-      folder.name = name;
-      this.saveFolderLayout(worldbookName, layout);
-    }
-  
-    removeFolder(worldbookName, id) {
-      const layout = this.folderLayout(worldbookName);
-      layout.folders = layout.folders.filter(item => item.id !== id);
-      for (const [uid, folderId] of Object.entries(layout.assignments)) if (folderId === id) delete layout.assignments[uid];
-      this.saveFolderLayout(worldbookName, layout);
-    }
-  
-    assignFolder(worldbookName, uid, folderId) {
-      const layout = this.folderLayout(worldbookName);
-      if (folderId === 'default') delete layout.assignments[uid];
-      else layout.assignments[uid] = folderId;
-      this.saveFolderLayout(worldbookName, layout);
-    }
-  
-    async runSelectedSummary(kind) {
-      try {
-        const uids = [...this.selected];
-        if (!uids.length) throw fault('ui', 'SELECTION_EMPTY', '请先选择条目');
-        const requirement = kind === 'merge' ? window.prompt('可选：填写人工合并要求', '') ?? '' : '';
-        await this.controller.summarize(kind, uids, requirement);
-        this.selected.clear();
-      } catch (error) { notice(error); }
-    }
-  
-    async deleteSelected() {
-      try {
-        const uids = [...this.selected];
-        if (!uids.length) throw fault('ui', 'SELECTION_EMPTY', '请先选择条目');
-        if (!window.confirm(`确认删除选中的${uids.length}个条目？`)) return;
-        await this.controller.deleteEntries(uids);
-        this.selected.clear();
-      } catch (error) { notice(error); }
+    restoreLauncherPosition() {
+      const position = this.controller.settings().launcherPosition;
+      if (position) Object.assign(this.launcher.style, { left: `${position.x}px`, top: `${position.y}px`, right: 'auto', bottom: 'auto' });
     }
   }
   return Object.freeze({ MirrorAbyssPanel });
 })();
 
-const __ma_module_14 = (() => {
+const __ma_module_22 = (() => {
   const { HostAdapter, SettingsStore } = __ma_module_1;
   const { WorldbookRepository } = __ma_module_4;
-  const { MirrorAbyssController } = __ma_module_5;
-  const { WorldSettingImportService } = __ma_module_8;
-  const { MemoryService } = __ma_module_9;
-  const { ModelGateway } = __ma_module_10;
-  const { ChatIndicator } = __ma_module_11;
-  const { MirrorAbyssPanel } = __ma_module_13;
+  const { MirrorAbyssController } = __ma_module_6;
+  const { DiagnosticsService } = __ma_module_8;
+  const { WorldSettingImportService } = __ma_module_11;
+  const { MemoryService } = __ma_module_13;
+  const { MigrationService } = __ma_module_14;
+  const { ModelGateway } = __ma_module_15;
+  const { ChatIndicator } = __ma_module_16;
+  const { MirrorAbyssPanel } = __ma_module_21;
   function createApplication() {
     const host = new HostAdapter();
     const settingsStore = new SettingsStore();
@@ -1907,7 +2737,9 @@ const __ma_module_14 = (() => {
     const model = new ModelGateway(host);
     const memory = new MemoryService(host, worldbook, model);
     const importer = new WorldSettingImportService(host, worldbook, model, memory);
-    const controller = new MirrorAbyssController({ host, settingsStore, memory, importer });
+    const migration = new MigrationService(worldbook);
+    const diagnostics = new DiagnosticsService(host, worldbook, model);
+    const controller = new MirrorAbyssController({ host, settingsStore, memory, importer, migration, diagnostics });
     const panel = new MirrorAbyssPanel(controller, host);
     const indicator = new ChatIndicator(controller, host, panel);
   
@@ -1927,7 +2759,7 @@ const __ma_module_14 = (() => {
   return Object.freeze({ createApplication });
 })();
 
-const { createApplication } = __ma_module_14;
+const { createApplication } = __ma_module_22;
 
 export { createApplication };
 

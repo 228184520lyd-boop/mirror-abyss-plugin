@@ -1,21 +1,36 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.0-clean.4`
+版本：`4.0.0-clean.7`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源；模型负责语义整理，插件只负责固定协议、精确身份、UID、单一事务入口、任务编排和界面。
 
 ## 单一链路
 
 ```text
-UI或宿主事件 → Controller → Memory/Import → ModelGateway + Protocol → WorldbookRepository → SillyTavern
+UI或宿主事件 → TaskQueue → Controller → Memory/Import/Migration → ModelGateway + Protocol → WorldbookRepository → SillyTavern
 ```
 
 - 提示词、协议校验、正文栏目和界面类型均读取 `src/core/schema.js`。
 - 世界书读取、写入与回滚只经过 `WorldbookRepository`；只有带镜渊标记的世界书条目才归镜渊管理。
+- 每次提交前后都从后端权威回读；SillyTavern 内存缓存不能单独构成写入成功。
 - 条目身份严格使用“类型＋稳定名称”；不做相似度、包含关系或别名猜测。
 - 模型不读取或输出 UID。
 - 世界设定粘贴文本与 TXT 共用“AI整理 → 预览 → 确认写入”链。
 - 世界设定、提取和总结均使用自然事实行协议，不使用额外对象外壳。
+- 手记修改模式同时提供逐条“基石锁”和批量“设为/解除基石”；条目始终显示“可更新”或“基石只读”。
+
+## 4.0.0-clean.7 功能
+
+- 可选择 SillyTavern 连接配置并执行真实 API 测试；不会切换宿主全局连接。
+- 单执行队列统一自动处理、人工处理、总结、回滚与写入；可以取消当前及全部等待任务。
+- 聊天消息显示审核、修正、提取和写入状态；自动总结失败保留精确来源并可逐项重试。
+- Edit/Swipe 先按 UID 回滚受影响写入，再重新处理变更后的目标消息；Delete 只回滚。
+- 世界书原生召回字段可一键重排；人物支持唯一主焦点，`【条目】`直接关联可跳转。
+- 手记支持文件夹折叠与排序、条目排序、手机上下移动、分页和场景/更新状态标记。
+- 世界设定文本与 TXT 共用 AI 预览链并统一写为基石只读；手动条目使用同一基石锁。
+- 支持游戏时间锚点、世界书健康概览、严格 JSON 兼容、提取传输副本敏感词替换。
+- 旧格式迁移严格限定为当前标题和正文模板，先扫描预览、确认写入、保留 UID，并可撤销。
+- 维护页提供三轮真实验收、诊断 JSON 导出、自定义审核补充与完整重置。
 
 ## 安装
 
@@ -30,4 +45,4 @@ npm run build
 node --test tests/*.test.mjs
 ```
 
-架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。
+架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。维护页的“三轮完整验收”会实际调用当前模型路由并执行临时世界书事务；会产生少量模型请求。
