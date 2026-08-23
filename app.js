@@ -4,7 +4,7 @@ const __ma_style_id = 'mirror-abyss-clean-style';
 if (typeof document !== 'undefined' && !document.getElementById(__ma_style_id)) {
   const style = document.createElement('style');
   style.id = __ma_style_id;
-  style.textContent = ":root {\n  --ma-ink: #132536;\n  --ma-muted: #6d7c8b;\n  --ma-line: #dbe3ea;\n  --ma-soft: #f5f8fb;\n  --ma-blue: #236f9b;\n  --ma-danger: #a43b3b;\n}\n\nhtml.ma-panel-open { overflow: hidden; }\n.ma-root, .ma-root * { box-sizing: border-box; }\n.ma-root { color: var(--ma-ink); font: 16px/1.6 system-ui, -apple-system, \"Noto Sans SC\", sans-serif; }\n.ma-button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px; background: #fff; color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; }\n.ma-button:active { transform: translateY(1px); }\n.ma-button.is-active { border-color: var(--ma-blue); background: #edf6fb; color: #155b84; }\n.ma-button.ma-quiet { border-color: transparent; background: transparent; }\n.ma-button.ma-danger { color: var(--ma-danger); }\n.ma-button.ma-mini { min-height: 34px; padding: 4px 8px; font-size: 14px; }\n.ma-launcher { position: fixed; right: max(12px, env(safe-area-inset-right)); top: 50dvh; z-index: 10050; width: 46px; min-width: 46px; height: 46px; padding: 0; border-radius: 50%; border-color: #315269; background: #17384e; color: #fff; box-shadow: 0 5px 18px rgba(17, 40, 57, .28); }\n.ma-panel { position: fixed; z-index: 10051; right: max(12px, env(safe-area-inset-right)); top: 6dvh; width: min(720px, calc(100vw - 24px)); height: min(88dvh, 900px); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cad6df; border-radius: 18px; background: #fff; box-shadow: 0 20px 70px rgba(15, 31, 44, .25); }\n.ma-panel[hidden] { display: none; }\n.ma-header { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--ma-line); }\n.ma-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; }\n.ma-sigil { color: var(--ma-blue); font-size: 24px; }\n.ma-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ma-line); }\n.ma-tabs .ma-button { border: 0; border-radius: 0; border-bottom: 3px solid transparent; color: var(--ma-muted); }\n.ma-tabs .ma-button.is-active { border-bottom-color: var(--ma-blue); background: #fff; color: var(--ma-blue); }\n.ma-main { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px; background: #fff; }\n.ma-main h1, .ma-main h2, .ma-main h3, .ma-main p { margin-top: 0; }\n.ma-main h1 { margin-bottom: 2px; font-size: 25px; }\n.ma-main h2 { margin-bottom: 12px; font-size: 19px; }\n.ma-main h3 { font-size: 17px; }\n.ma-section { margin-bottom: 16px; padding: 16px; border: 1px solid var(--ma-line); border-radius: 14px; background: #fff; }\n.ma-scene-strip { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid var(--ma-blue); background: var(--ma-soft); font-weight: 650; }\n.ma-help, .ma-main small { color: var(--ma-muted); }\n.ma-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }\n.ma-status { padding: 12px 14px; border-radius: 10px; background: var(--ma-soft); }\n.ma-status.is-error, .ma-error { color: var(--ma-danger); background: #fff1f1; }\n.ma-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ma-line); }\n.ma-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }\n.ma-search, .ma-editor, .ma-import-text, .ma-folder-select, .ma-number { width: 100%; min-height: 46px; margin: 14px 0; padding: 10px 13px; border: 1px solid var(--ma-line); border-radius: 11px; background: #fff; color: var(--ma-ink); font: inherit; }\n.ma-editor, .ma-import-text { min-height: 180px; resize: vertical; }\n.ma-filters { display: flex; gap: 8px; overflow-x: auto; padding: 0 0 10px; scrollbar-width: thin; }\n.ma-filters .ma-button { flex: none; white-space: nowrap; }\n.ma-button.ma-chip { min-height: 38px; padding: 5px 12px; border-radius: 999px; font-weight: 500; }\n.ma-manage-bar { position: sticky; top: -18px; z-index: 2; display: flex; gap: 8px; overflow-x: auto; margin: 0 -18px 14px; padding: 10px 18px; border-block: 1px solid var(--ma-line); background: rgba(255,255,255,.96); }\n.ma-manage-bar .ma-button { flex: none; }\n.is-hidden { display: none !important; }\n.ma-folder { margin: 0 0 18px; border-left: 4px solid #9bb7c8; }\n.ma-folder-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 0 6px 14px; }\n.ma-folder-head h2 { margin: 0 auto 0 0; }\n.ma-entry { margin-left: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-entry-head { min-height: 58px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 6px; cursor: pointer; }\n.ma-entry-head::marker { color: var(--ma-muted); }\n.ma-entry-head strong { font-size: 17px; }\n.ma-type-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--ma-soft); color: var(--ma-blue); font-weight: 800; }\n.ma-folder-select { width: auto; max-width: 150px; min-height: 38px; margin: 0; padding: 4px 8px; }\n.ma-entry-content { padding: 4px 10px 14px 42px; }\n.ma-entry-content pre, .ma-import-preview pre { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ma-ink); font: inherit; }\n.ma-setting-row { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-setting-row:last-child { border-bottom: 0; }\n.ma-setting-row span { display: grid; }\n.ma-root input[type=\"checkbox\"] { appearance: auto; accent-color: var(--ma-blue); }\n.ma-setting-row input[type=\"checkbox\"] { width: 22px; height: 22px; }\n.ma-number { width: 86px; margin: 0; }\n.ma-import-preview { margin-top: 14px; }\n.ma-preview-item { padding: 9px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-report { margin-top: 12px; }\n.ma-check { padding: 8px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-check.is-pass { color: #236b4b; }\n.ma-check.is-fail { color: var(--ma-danger); }\n.ma-empty { padding: 12px 16px; color: var(--ma-muted); }\n.ma-chat-indicator { width: fit-content; max-width: min(88%, 520px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; cursor: pointer; }\n\n@media (max-width: 720px) {\n  .ma-panel { inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; }\n  .ma-header { padding-top: max(10px, env(safe-area-inset-top)); }\n  .ma-main { padding: 14px; padding-bottom: max(18px, env(safe-area-inset-bottom)); }\n  .ma-manage-bar { top: -14px; margin-inline: -14px; padding-inline: 14px; }\n  .ma-action-grid { grid-template-columns: 1fr 1fr; }\n  .ma-scene-strip { flex-direction: column; gap: 2px; }\n  .ma-entry { margin-left: 8px; }\n  .ma-entry-head { grid-template-columns: auto auto minmax(0, 1fr); }\n  .ma-entry-head small { grid-column: 3; }\n  .ma-folder-select { grid-column: 2 / -1; width: 100%; max-width: none; }\n  .ma-entry-content { padding-left: 12px; }\n}\n\n@media (max-width: 390px) {\n  .ma-root { font-size: 16px; }\n  .ma-action-grid { grid-template-columns: 1fr; }\n  .ma-header { min-height: 56px; padding-inline: 12px; }\n  .ma-main h1 { font-size: 23px; }\n}\n";
+  style.textContent = ":root {\n  --ma-ink: #132536;\n  --ma-muted: #6d7c8b;\n  --ma-line: #dbe3ea;\n  --ma-soft: #f5f8fb;\n  --ma-blue: #236f9b;\n  --ma-danger: #a43b3b;\n}\n\nhtml.ma-panel-open { overflow: hidden; }\n.ma-root, .ma-root * { box-sizing: border-box; }\n.ma-root { color: var(--ma-ink); font: 16px/1.6 system-ui, -apple-system, \"Noto Sans SC\", sans-serif; }\n.ma-button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px; background: #fff; color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; }\n.ma-button:active { transform: translateY(1px); }\n.ma-button:disabled { opacity: .5; cursor: default; transform: none; }\n.ma-button.is-active { border-color: var(--ma-blue); background: #edf6fb; color: #155b84; }\n.ma-button.ma-quiet { border-color: transparent; background: transparent; }\n.ma-button.ma-danger { color: var(--ma-danger); }\n.ma-button.ma-mini { min-height: 34px; padding: 4px 8px; font-size: 14px; }\n.ma-launcher { position: fixed; right: max(12px, env(safe-area-inset-right)); top: 50dvh; z-index: 10050; width: 46px; min-width: 46px; height: 46px; padding: 0; border-radius: 50%; border-color: #315269; background: #17384e; color: #fff; box-shadow: 0 5px 18px rgba(17, 40, 57, .28); }\n.ma-panel { position: fixed; z-index: 10051; right: max(12px, env(safe-area-inset-right)); top: 6dvh; width: min(720px, calc(100vw - 24px)); height: min(88dvh, 900px); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cad6df; border-radius: 18px; background: #fff; box-shadow: 0 20px 70px rgba(15, 31, 44, .25); }\n.ma-panel[hidden] { display: none; }\n.ma-header { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--ma-line); }\n.ma-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; }\n.ma-sigil { color: var(--ma-blue); font-size: 24px; }\n.ma-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ma-line); }\n.ma-tabs .ma-button { border: 0; border-radius: 0; border-bottom: 3px solid transparent; color: var(--ma-muted); }\n.ma-tabs .ma-button.is-active { border-bottom-color: var(--ma-blue); background: #fff; color: var(--ma-blue); }\n.ma-main { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px; background: #fff; }\n.ma-main h1, .ma-main h2, .ma-main h3, .ma-main p { margin-top: 0; }\n.ma-main h1 { margin-bottom: 2px; font-size: 25px; }\n.ma-main h2 { margin-bottom: 12px; font-size: 19px; }\n.ma-main h3 { font-size: 17px; }\n.ma-section { margin-bottom: 16px; padding: 16px; border: 1px solid var(--ma-line); border-radius: 14px; background: #fff; }\n.ma-scene-strip { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid var(--ma-blue); background: var(--ma-soft); font-weight: 650; }\n.ma-help, .ma-main small { color: var(--ma-muted); }\n.ma-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }\n.ma-status { padding: 12px 14px; border-radius: 10px; background: var(--ma-soft); }\n.ma-status.is-error, .ma-error { color: var(--ma-danger); background: #fff1f1; }\n.ma-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ma-line); }\n.ma-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }\n.ma-search, .ma-editor, .ma-import-text, .ma-folder-select, .ma-number { width: 100%; min-height: 46px; margin: 14px 0; padding: 10px 13px; border: 1px solid var(--ma-line); border-radius: 11px; background: #fff; color: var(--ma-ink); font: inherit; }\n.ma-editor, .ma-import-text { min-height: 180px; resize: vertical; }\n.ma-filters { display: flex; gap: 8px; overflow-x: auto; padding: 0 0 10px; scrollbar-width: thin; }\n.ma-filters .ma-button { flex: none; white-space: nowrap; }\n.ma-button.ma-chip { min-height: 38px; padding: 5px 12px; border-radius: 999px; font-weight: 500; }\n.ma-manage-bar { position: sticky; top: -18px; z-index: 2; display: flex; gap: 8px; overflow-x: auto; margin: 0 -18px 14px; padding: 10px 18px; border-block: 1px solid var(--ma-line); background: rgba(255,255,255,.96); }\n.ma-manage-bar .ma-button { flex: none; }\n.is-hidden { display: none !important; }\n.ma-folder { margin: 0 0 18px; border-left: 4px solid #9bb7c8; }\n.ma-folder-head { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 0 6px 14px; }\n.ma-folder-head h2 { margin: 0 auto 0 0; }\n.ma-entry { margin-left: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-entry-head { min-height: 58px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 6px; cursor: pointer; }\n.ma-entry-head::marker { color: var(--ma-muted); }\n.ma-entry-head strong { font-size: 17px; }\n.ma-type-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--ma-soft); color: var(--ma-blue); font-weight: 800; }\n.ma-folder-select { width: auto; max-width: 150px; min-height: 38px; margin: 0; padding: 4px 8px; }\n.ma-entry-content { padding: 4px 10px 14px 42px; }\n.ma-entry-content pre, .ma-import-preview pre { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ma-ink); font: inherit; }\n.ma-setting-row { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ma-line); }\n.ma-setting-row:last-child { border-bottom: 0; }\n.ma-setting-row span { display: grid; }\n.ma-root input[type=\"checkbox\"] { appearance: auto; accent-color: var(--ma-blue); }\n.ma-setting-row input[type=\"checkbox\"] { width: 22px; height: 22px; }\n.ma-number { width: 86px; margin: 0; }\n.ma-import-preview { margin-top: 14px; }\n.ma-import-status { min-height: 42px; margin-top: 10px; padding: 8px 11px; border-left: 3px solid var(--ma-line); background: var(--ma-soft); color: var(--ma-muted); }\n.ma-import-status.is-busy { border-left-color: var(--ma-blue); color: var(--ma-blue); }\n.ma-preview-item { padding: 9px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-report { margin-top: 12px; }\n.ma-check { padding: 8px 0; border-bottom: 1px solid var(--ma-line); }\n.ma-check.is-pass { color: #236b4b; }\n.ma-check.is-fail { color: var(--ma-danger); }\n.ma-empty { padding: 12px 16px; color: var(--ma-muted); }\n.ma-chat-indicator { width: fit-content; max-width: min(88%, 520px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; cursor: pointer; }\n\n@media (max-width: 720px) {\n  .ma-panel { inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; }\n  .ma-header { padding-top: max(10px, env(safe-area-inset-top)); }\n  .ma-main { padding: 14px; padding-bottom: max(18px, env(safe-area-inset-bottom)); }\n  .ma-manage-bar { top: -14px; margin-inline: -14px; padding-inline: 14px; }\n  .ma-action-grid { grid-template-columns: 1fr 1fr; }\n  .ma-scene-strip { flex-direction: column; gap: 2px; }\n  .ma-entry { margin-left: 8px; }\n  .ma-entry-head { grid-template-columns: auto auto minmax(0, 1fr); }\n  .ma-entry-head small { grid-column: 3; }\n  .ma-folder-select { grid-column: 2 / -1; width: 100%; max-width: none; }\n  .ma-entry-content { padding-left: 12px; }\n}\n\n@media (max-width: 390px) {\n  .ma-root { font-size: 16px; }\n  .ma-action-grid { grid-template-columns: 1fr; }\n  .ma-header { min-height: 56px; padding-inline: 12px; }\n  .ma-main h1 { font-size: 23px; }\n}\n";
   document.head.append(style);
 }
 
@@ -1104,7 +1104,7 @@ const __ma_module_7 = (() => {
   function importPrompt(sourceText, relevantEntries) {
     const index = relevantEntries.map(entry => `${entry.title}\n${entry.content}`).join('\n\n');
     return {
-      system: `把玩家主动提交的世界设定整理为世界书事实。模型只决定语义类型、稳定名称、栏目与事实；插件决定UID、唯一身份和写入。不得把写作要求、提示规则、未来计划或未成立事件写成世界事实。\n\n允许类型与栏目：\n${renderSchema(WORLD_TYPES)}\n\n每条事实严格使用：\n${FACT_PROTOCOL}\n本任务的变化字段统一写“建立”。同一“类型＋稳定名称”的多行会形成同一个候选条目。没有可导入事实时只输出“无”。最多16个候选对象。\n${outputDiscipline}`,
+      system: `把玩家主动提交的世界设定整理为世界书事实。模型只决定语义类型、稳定名称、栏目与事实；插件决定UID、唯一身份和写入。不得把写作要求、提示规则、未来计划或未成立事件写成世界事实。世界长期通用规则、底层规律和不随剧情自然变化的设定归入“基础设定”，写入后由插件设置基石常驻；具体人物、场景、物品、事件和可变化的世界状态仍按对应类型整理。\n\n允许类型与栏目：\n${renderSchema(WORLD_TYPES)}\n\n每条事实严格使用：\n${FACT_PROTOCOL}\n本任务的变化字段统一写“建立”。同一“类型＋稳定名称”的多行会形成同一个候选条目。没有可导入事实时只输出“无”。最多16个候选对象。\n${outputDiscipline}`,
       user: `玩家提交的世界设定（唯一来源）：\n${sourceText}\n\n已有相关条目（只用于复用稳定名称并避免重复）：\n${index || '（无）'}`,
     };
   }
@@ -1486,6 +1486,9 @@ const __ma_module_13 = (() => {
       this.typeFilter = '全部';
       this.selected = new Set();
       this.entryData = null;
+      this.importText = '';
+      this.importBusy = '';
+      this.importFeedback = '粘贴文本或选择TXT，然后由AI整理预览。';
       this.boundRefresh = () => void this.refresh();
     }
   
@@ -1655,7 +1658,7 @@ const __ma_module_13 = (() => {
       summary.append(
         element('span', { className: 'ma-type-icon', text: WORLD_SCHEMA[entry.type].icon }),
         element('strong', { text: entry.name }),
-        element('small', { text: entry.type }),
+        element('small', { text: entry.type === '基础设定' ? '基础设定 · 基石' : entry.type }),
       );
       if (this.editing) {
         const select = element('select', { className: 'ma-folder-select', ariaLabel: '移动到文件夹' });
@@ -1706,24 +1709,74 @@ const __ma_module_13 = (() => {
       ]));
   
       const importSection = element('section', { className: 'ma-section' }, [element('h2', { text: '世界设定导入' })]);
-      const textarea = element('textarea', { className: 'ma-import-text', placeholder: '粘贴世界设定文本；与导入TXT使用同一条AI整理链。' });
+      const textarea = element('textarea', { className: 'ma-import-text', value: this.importText, placeholder: '粘贴世界设定文本；与导入TXT使用同一条AI整理链。' });
+      textarea.addEventListener('input', () => { this.importText = textarea.value; });
       const file = element('input', { type: 'file', ariaLabel: '选择TXT文件' });
       file.accept = '.txt,text/plain';
       file.addEventListener('change', async () => {
         try {
           const selected = file.files?.[0];
-          if (selected) textarea.value = await selected.text();
+          if (selected) {
+            this.importText = await selected.text();
+            textarea.value = this.importText;
+            this.importFeedback = `已读取 ${selected.name}，可以开始AI整理。`;
+            await this.render();
+          }
         } catch (error) {
           notice(fault('ui', 'TXT_READ', `TXT读取失败：${error.message}`, error));
         }
       });
       const previewHost = element('div', { className: 'ma-import-preview' });
+      const preview = this.controller.importPreview();
+      const previewButton = button(this.importBusy === 'preview' ? 'AI整理中…' : 'AI整理预览', async () => {
+        this.importBusy = 'preview';
+        this.importFeedback = 'AI正在整理世界设定并识别基石条目…';
+        await this.render();
+        try {
+          const result = await this.controller.previewImport(this.importText);
+          const locked = result.groups.filter(group => group.type === '基础设定').length;
+          this.importFeedback = `预览完成：${result.groups.length}个对象，其中${locked}个带基石锁。`;
+        } catch (error) {
+          this.importFeedback = `整理失败：${describeError(error)}`;
+          notice(error);
+        } finally {
+          this.importBusy = '';
+          await this.render();
+        }
+      });
+      const commitButton = button(this.importBusy === 'commit' ? '正在写入…' : `确认写入${preview ? ` · ${preview.groups.length}` : ''}`, async () => {
+        this.importBusy = 'commit';
+        this.importFeedback = '正在把预览结果写入当前世界书…';
+        await this.render();
+        try {
+          const result = await this.controller.commitImport();
+          this.importText = '';
+          this.importFeedback = `写入完成：更新${result.touchedUids?.length ?? 0}个世界书条目。`;
+        } catch (error) {
+          this.importFeedback = `写入失败：${describeError(error)}`;
+          notice(error);
+        } finally {
+          this.importBusy = '';
+          await this.render();
+        }
+      });
+      previewButton.disabled = Boolean(this.importBusy);
+      commitButton.disabled = Boolean(this.importBusy) || !preview;
       const importActions = element('div', { className: 'ma-inline-actions' }, [
-        button('AI整理预览', async () => { try { await this.controller.previewImport(textarea.value); this.renderImportPreview(previewHost); } catch (error) { notice(error); } }),
-        button('确认写入', async () => { try { await this.controller.commitImport(); previewHost.replaceChildren(); } catch (error) { notice(error); } }),
-        button('清空', () => { textarea.value = ''; this.controller.clearImportPreview(); previewHost.replaceChildren(); }, 'ma-quiet'),
+        previewButton,
+        commitButton,
+        button('清空', () => {
+          this.importText = '';
+          this.importFeedback = '已清空导入内容。';
+          this.controller.clearImportPreview();
+          void this.render();
+        }, 'ma-quiet'),
       ]);
-      importSection.append(textarea, file, importActions, previewHost);
+      const importStatus = element('div', {
+        className: `ma-import-status${this.importBusy ? ' is-busy' : ''}`,
+        text: this.importFeedback,
+      });
+      importSection.append(textarea, file, importActions, importStatus, previewHost);
       this.renderImportPreview(previewHost);
   
       const diagnostics = element('section', { className: 'ma-section' }, [element('h2', { text: '维护' })]);
@@ -1743,10 +1796,11 @@ const __ma_module_13 = (() => {
     renderImportPreview(host) {
       const preview = this.controller.importPreview();
       if (!preview) return;
-      host.replaceChildren(element('h3', { text: `待写入 ${preview.groups.length} 个对象` }));
+      const locked = preview.groups.filter(group => group.type === '基础设定').length;
+      host.replaceChildren(element('h3', { text: `待写入 ${preview.groups.length} 个对象 · 基石锁 ${locked}` }));
       for (const group of preview.groups) {
         host.append(element('details', { className: 'ma-preview-item' }, [
-          element('summary', { text: group.title }),
+          element('summary', { text: `${group.type === '基础设定' ? '◇ 基石 · ' : ''}${group.title}` }),
           element('pre', { text: group.rows.map(row => `【${row.section}】\n- ${row.fact}`).join('\n') }),
         ]));
       }

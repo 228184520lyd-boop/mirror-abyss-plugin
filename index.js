@@ -1,4 +1,4 @@
-const BUNDLE_URL = './app.js?v=4.0.0-clean.3';
+const BUNDLE_URL = './app.js?v=4.0.0-clean.4';
 
 let bundlePromise;
 let application;
