@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`3.0.0-lite.ui.16-mobile-edge-fix`
+版本：`3.0.0-lite.ui.18-unified-ui`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源：模型负责理解和整理语义，插件只负责请求、协议、UID、事务、回滚与界面，SillyTavern 负责世界书记录和调取。
 
