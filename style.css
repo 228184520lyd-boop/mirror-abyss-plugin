@@ -101,7 +101,7 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-manage-head { display: flex; align-items: center; gap: 8px; }
 .ma-selection-status { display: block; min-width: 0; overflow: hidden; color: var(--ma-muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .ma-manage-head .ma-selection-status { flex: 1 1 auto; }
-.ma-manage-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.ma-manage-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
 .ma-manage-actions > .ma-button { width: 100%; min-width: 0; padding-inline: 8px; white-space: nowrap; }
 .ma-manage-more { position: relative; min-width: 0; }
 .ma-manage-more > summary { min-height: 44px; display: grid; place-items: center; padding: 8px; border: 1px solid var(--ma-line); border-radius: 10px 7px 11px 8px; background: color-mix(in srgb, var(--ma-skin-raised) 86%, transparent); font-weight: 650; cursor: pointer; list-style: none; }
@@ -146,6 +146,8 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-mode-option input { width: 20px; height: 20px; margin: 0; }
 .ma-keyword-field { display: grid; margin-top: 4px; }
 .ma-keyword-field .ma-input { margin: 6px 0; }
+.ma-insertion-settings { display: grid; grid-template-columns: minmax(120px, auto) repeat(2, minmax(0, 1fr)); align-items: center; gap: 8px; margin: 8px 0; }
+.ma-insertion-settings .ma-button { width: 100%; min-width: 0; padding-inline: 8px; white-space: nowrap; }
 .ma-recursion-settings .ma-check-field { flex: none; white-space: nowrap; }
 .ma-entry-settings-actions .ma-button { flex: none; min-width: max-content; padding-inline: 10px; white-space: nowrap; }
 .ma-check-field { min-height: 44px; display: flex; align-items: center; gap: 10px; }
